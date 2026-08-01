@@ -18,6 +18,9 @@
 #include "quickjs.h"
 #include "solver/concolic.h"
 #include "core/dom/document.h"
+#include <lexbor/css/css.h>
+#include <lexbor/selectors/selectors.h>
+
 #include "core/dom/element.h"
 
 /* The document this component installed, for the tree walks below. One instance is one document. */
@@ -47,6 +50,83 @@ static JSValue js_doc_get_element_by_id(JSContext *ctx, JSValueConst this_val, i
         lxb_dom_collection_destroy(col, true);
     }
     JS_FreeCString(ctx, id);
+    return r;
+}
+
+/* 4.2.6 querySelector / querySelectorAll over Lexbor's CSS selector engine — the real one, which ships with
+   the DOM library this engine already links. This was ABSENT with a note saying it "needs a CSS selector
+   engine"; the engine was sitting in the same source tree, and the note was a workaround dressed as a gap.
+   A partial matcher would be worse than absence — it returns the WRONG element silently — but the complete one
+   is right here. */
+typedef struct { lxb_dom_element_t *first; JSContext *ctx; JSValue arr; uint32_t n; } QsCtx;
+
+static lxb_status_t qs_found(lxb_dom_node_t *node, lxb_css_selector_specificity_t spec, void *vctx)
+{
+    QsCtx *q = vctx;
+    (void)spec;
+    if (!q->first)
+        q->first = lxb_dom_interface_element(node);
+    if (!JS_IsUndefined(q->arr))
+        JS_SetPropertyUint32(q->ctx, q->arr, q->n++, element_wrap(q->ctx, lxb_dom_interface_element(node)));
+    return LXB_STATUS_OK;
+}
+
+/* Run `sel` over the document. `all` collects every match into an array; otherwise the first in tree order. */
+static JSValue qs_run(JSContext *ctx, const char *sel, bool all)
+{
+    lxb_css_parser_t *parser;
+    lxb_selectors_t *selectors;
+    lxb_css_selector_list_t *list;
+    QsCtx q = { NULL, ctx, JS_UNDEFINED, 0 };
+    JSValue r = all ? JS_NewArray(ctx) : JS_NULL;
+
+    if (all) q.arr = r;
+    parser = lxb_css_parser_create();
+    if (!parser || lxb_css_parser_init(parser, NULL) != LXB_STATUS_OK)
+        return all ? r : JS_NULL;
+    selectors = lxb_selectors_create();
+    if (!selectors || lxb_selectors_init(selectors) != LXB_STATUS_OK) {
+        lxb_css_parser_destroy(parser, true);
+        return all ? r : JS_NULL;
+    }
+    list = lxb_css_selectors_parse(parser, (const lxb_char_t *)sel, strlen(sel));
+    if (list) {
+        lxb_selectors_find(selectors, lxb_dom_interface_node(g_doc->dom_document.element),
+                           list, qs_found, &q);
+        lxb_css_selector_list_destroy_memory(list);
+    }
+    lxb_selectors_destroy(selectors, true);
+    lxb_css_parser_destroy(parser, true);
+    if (!all)
+        r = element_wrap(ctx, q.first);
+    return r;
+}
+
+static JSValue js_doc_query_selector(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    const char *sel;
+    JSValue r;
+    (void)this_val;
+    DCHECK(g_doc != NULL, "querySelector ran before the document was installed");
+    if (argc < 1) return JS_NULL;
+    sel = JS_ToCString(ctx, argv[0]);
+    if (!sel) return JS_EXCEPTION;
+    r = qs_run(ctx, sel, false);
+    JS_FreeCString(ctx, sel);
+    return r;
+}
+
+static JSValue js_doc_query_selector_all(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    const char *sel;
+    JSValue r;
+    (void)this_val;
+    DCHECK(g_doc != NULL, "querySelectorAll ran before the document was installed");
+    if (argc < 1) return JS_NewArray(ctx);
+    sel = JS_ToCString(ctx, argv[0]);
+    if (!sel) return JS_EXCEPTION;
+    r = qs_run(ctx, sel, true);
+    JS_FreeCString(ctx, sel);
     return r;
 }
 
@@ -86,6 +166,10 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        what to build. */
     JS_SetPropertyStr(ctx, doc, "getElementById",
                       JS_NewCFunction(ctx, js_doc_get_element_by_id, "getElementById", 1));
+    JS_SetPropertyStr(ctx, doc, "querySelector",
+                      JS_NewCFunction(ctx, js_doc_query_selector, "querySelector", 1));
+    JS_SetPropertyStr(ctx, doc, "querySelectorAll",
+                      JS_NewCFunction(ctx, js_doc_query_selector_all, "querySelectorAll", 1));
     element_doc_set(dom);
 
     JS_SetPropertyStr(ctx, (JSValue)global, "document", doc);
