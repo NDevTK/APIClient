@@ -77,7 +77,6 @@ double flow_weight(const Flow *f) {
 Flow *flow_best(void) {
     Flow *best = NULL; double bw = 0.0;
     for (int i = 0; i < g_flows_n; i++) {
-        if (g_flows[i]->blocked) continue;   /* waiting on the host, not runnable */
         double w = flow_weight(g_flows[i]);
         if (!best || w > bw) { best = g_flows[i]; bw = w; }
     }

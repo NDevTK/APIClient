@@ -27,6 +27,13 @@ typedef struct { JSJobFunc *fn; int argc; JSValue *argv; } FlowJob;
    modelled body — which needs no host round trip and drains immediately. */
 typedef struct { JSValue resolve; JSValue value; char *url; int have_value; } FlowPending;
 
+/* WHAT ONE STEP OF A FLOW ANSWERED. OWED is not a third kind of flow — it is the same flow reporting that the
+   work it has left belongs to the host, so the scheduler can tell an exhausted frontier from a waiting one
+   without any member leaving the queue. */
+#define FLOW_STEP_MORE  0
+#define FLOW_STEP_DONE  1
+#define FLOW_STEP_OWED  2
+
 typedef struct Flow {
     JSValue fn;            /* the function this flow re-drives (JS_UNDEFINED for a boot/session flow) */
     signed char *dec;      /* the DECISION VECTOR — the arm (0/1) this flow takes at each branch, in order */
@@ -53,11 +60,6 @@ typedef struct Flow {
     void *pin_blob;        /* suspended pin state while paused (concolic_pins_suspend) */
     FlowJob *jobs; int njob, jobcap;   /* ASYNC-AS-FLOW: this flow's OWN queued microtask/reaction jobs, drained
                                           after its scripts under its live COW (correct ordering, per-flow isolated) */
-    /* BLOCKED: every remaining pending fetch is one only the trusted host can supply, so this flow has no work
-       until it does. It is NOT finished — its snapshot, delta and continuation are intact — and it is not
-       runnable either, so flow_best skips it and the scheduler can see the frontier is stalled rather than
-       exhausted. engine_provide clears it. */
-    int blocked;
     FlowPending *pending; int npend, pendcap;   /* FETCH-AWAIT: this flow's OWN live (pending) fetches, resolved when
                                                    the flow's scripts+microtasks stall (the network completing). */
     /* THE PARKED CONTINUATION, swapped with everything else on a context switch. A forced preempt inside

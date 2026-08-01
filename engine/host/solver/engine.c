@@ -75,7 +75,6 @@ int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
             JS_FreeValue(ctx, p->value);
             p->value = JS_DupValue(ctx, value);
             p->have_value = 1;
-            f->blocked = 0;   /* it has work again */
             n++;
         }
     }
@@ -230,12 +229,8 @@ static int flow_step(JSContext *ctx, Flow *f, char *const *bodies, int n) {
             if (f->script_i < n) body = bodies[f->script_i];
             else if (f->script_i - n < f->dyn_n) body = f->dyn[f->script_i - n];
             else if (f->njob > 0) { flow_run_one_job(ctx, f); return 0; }   /* scripts done -> drain a microtask, yield */
-            else if (f->npend > 0 && !flow_pending_ready(f)) {
-                /* Only host-owed replies remain: BLOCK rather than finish. The flow keeps its snapshot and its
-                   continuation; the scheduler stops picking it, sees no runnable flow, and reports STALLED. */
-                f->blocked = 1;
-                return 0;
-            }
+            else if (f->npend > 0 && !flow_pending_ready(f))
+                return FLOW_STEP_OWED;   /* only host-owed replies remain: no progress, and NOT finished */
             else if (flow_pending_ready(f)) {
                 /* FETCH-AWAIT: scripts + microtasks are drained, but a suspended async body is awaiting a LIVE
                    fetch (a pending promise). The network completes now: resolve THIS flow's pending fetches — each
@@ -387,6 +382,7 @@ int engine_sched_step(void) {
     int n = g_sess_n;
     Flow *cur = g_sess_cur;
     int64_t deadline = engine_now_ms() + ENGINE_QUANTUM_MS;
+    int owed = 0;   /* consecutive picks that could not progress; == flow_count() means every member is waiting */
     DCHECK(g_sess_live, "engine_sched_step with no live session");
     for (;;) {
         Flow *best = flow_best();           /* WFQ: highest value-of-information — a fresh fork (UCB) can preempt */
@@ -404,7 +400,20 @@ int engine_sched_step(void) {
             g_switches++;
         }
         flow_age_running(1);   /* this step burned CPU; flow_credit_emit resets it when the flow emits value */
-        if (flow_step(ctx, cur, bodies, n)) { flow_finish(ctx, cur); cur = NULL; }
+        {
+            int r = flow_step(ctx, cur, bodies, n);
+            if (r == FLOW_STEP_DONE) { flow_finish(ctx, cur); cur = NULL; owed = 0; }
+            else if (r == FLOW_STEP_OWED) {
+                /* This flow can make no progress until the host supplies a reply. It is NOT skipped and NOT
+                   removed — it stays in the WFQ at its own weight, and the scheduler simply observes that it
+                   picked it and got nowhere. Once EVERY member has answered that in a row, no member can
+                   progress and the frontier is stalled. Counting the answers is what makes this lossless: a
+                   flow that gains work is picked again and resets the count, and nothing was ever excluded. */
+                if (++owed >= flow_count())
+                    break;
+            }
+            else owed = 0;
+        }
         if (engine_now_ms() >= deadline) {   /* THREAD-SHARING, not value: hand the thread back, keep the frontier */
             g_sess_cur = cur;
             return ENGINE_STEP_YIELD;

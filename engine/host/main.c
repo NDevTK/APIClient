@@ -156,10 +156,10 @@ QJS_EXPORT const char *qjs_result(void)
 QJS_EXPORT void qjs_teardown(void)
 {
     DCHECK(g_dom != NULL, "qjs_teardown ran on an instance that was never initialised");
-    /* A BLOCKED flow is not a finished one: it holds a snapshot, a COW delta and a parked continuation, and it
-       is waiting on a reply the host said it would fetch. flow_finish asserts that a flow may not finish with a
-       continuation parked; tearing the instance down goes around that assert and frees the whole frontier, so
-       the same rule is stated where it would otherwise be evaded. The host owes what qjs_pending told it. */
+    /* A flow waiting on a reply is not a finished one: it holds a snapshot, a COW delta and a parked
+       continuation. flow_finish asserts that a flow may not finish with a continuation parked; tearing the
+       instance down goes around that assert and frees the whole frontier, so the same rule is stated where it
+       would otherwise be evaded. The host owes what qjs_pending told it. */
     DCHECK(*engine_pending_urls() == '\0',
            "qjs_teardown with replies still owed — every flow parked on one is dropped with its continuation. "
            "Provide them, or step to DONE, before ending the session");
