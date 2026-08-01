@@ -13,8 +13,13 @@ typedef struct DomUndo {
     lxb_char_t *cur; size_t cur_len; int cur_had;             /* kind 0: flow's attr VALUE (valid while parked) */
     JSValue sh_old; int sh_had;                               /* kind 0: baseline attr TAINT shadow (opaque, or none) */
     JSValue sh_cur; int sh_cur_had;                           /* kind 0: flow's attr TAINT shadow (valid while parked) */
-    lxb_dom_node_t *node, *parent, *next;                     /* kind 1: inserted node + detach position */
+    lxb_dom_node_t *node, *parent, *next;                     /* kind 1/2: the node + its position */
     int detached;                                             /* kind 1: currently detached (unapplied) */
+    /* kind 2: a node the BASELINE had and this flow REMOVED. The mirror of kind 1 in every direction: revert
+       and unapply put it back, apply takes it away again. innerHTML= is what needs it — it REPLACES the
+       children, and without a removal capture the old subtree would survive into the new markup and leak
+       across a context switch into a sibling flow that never removed it. */
+    int reinserted;                                           /* kind 2: currently back in the tree (unapplied) */
 } DomUndo;
 
 static DomUndo *g_dom_undo = NULL;
@@ -78,6 +83,20 @@ void dom_cow_set_attribute(lxb_dom_element_t *el, const char *name, const char *
     dom_attr_capture(el, name);   /* record baseline into the running flow's delta FIRST (no-op if !g_dom_capture) */
     lxb_dom_element_set_attribute(el, (const lxb_char_t *)name, strlen(name), (const lxb_char_t *)val, val_len);
 }
+/* Remove a node that the baseline may own. Capture its position FIRST, then detach — the same order the
+   attribute and insert chokepoints use, so a removal cannot bypass the per-flow delta either. */
+void dom_cow_remove_child(lxb_dom_node_t *node) {
+    if (!node) return;
+    if (g_dom_capture) {
+        DomUndo u; memset(&u, 0, sizeof u);
+        u.kind = 2; u.node = node;
+        u.parent = node->parent; u.next = node->next;
+        u.sh_old = u.sh_cur = JS_UNDEFINED;
+        dom_undo_push(u);
+    }
+    lxb_dom_node_remove(node);
+}
+
 void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
     dom_insert_capture(child);   /* record the insertion FIRST so it reverts per-flow (detached on unapply) */
     lxb_dom_node_insert_child(parent, child);
@@ -93,6 +112,9 @@ void dom_revert(void) {   /* DISCARD the running flow's DOM writes -> baseline (
             free(u->name); free(u->old); free(u->cur);
         } else if (u->kind == 1 && !u->detached) {   /* inserted node: detach it (baseline had none) */
             lxb_dom_node_remove(u->node);
+        } else if (u->kind == 2 && !u->reinserted) {   /* removed node: the baseline HAD it — put it back */
+            if (u->next) lxb_dom_node_insert_before(u->next, u->node);
+            else if (u->parent) lxb_dom_node_insert_child(u->parent, u->node);
         }
     }
     g_dom_undo_n = 0;
@@ -114,6 +136,11 @@ static void dom_unapply_entry(DomUndo *u) {
         u->parent = lxb_dom_interface_node(u->node)->parent;              /* remember re-insert position */
         u->next = lxb_dom_interface_node(u->node)->next;
         lxb_dom_node_remove(u->node); u->detached = 1;
+    } else if (u->kind == 2 && !u->reinserted) {
+        /* the baseline HAD this node and this flow removed it: parking restores the baseline. */
+        if (u->next) lxb_dom_node_insert_before(u->next, u->node);
+        else if (u->parent) lxb_dom_node_insert_child(u->parent, u->node);
+        u->reinserted = 1;
     }
 }
 /* per-entry APPLY (parked -> flow): restore the flow's value/taint over the baseline. */
@@ -122,6 +149,9 @@ static void dom_apply_entry(DomUndo *u) {
         if (u->cur_had && u->cur) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->cur, u->cur_len);
         else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
         shadow_restore(u->el, u->name, u->sh_cur, u->sh_cur_had);   /* restore the flow's taint */
+    } else if (u->kind == 2 && u->reinserted) {
+        /* resuming the flow: it had removed this node, so take it back out. */
+        lxb_dom_node_remove(u->node); u->reinserted = 0;
     } else if (u->kind == 1 && u->detached) {
         if (u->next) lxb_dom_node_insert_before(u->next, u->node);
         else if (u->parent) lxb_dom_node_insert_child(u->parent, u->node);

@@ -16,6 +16,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <lexbor/html/html.h>
+
 #include "check.h"
 #include "quickjs.h"
 #include "solver/attr_shadow.h"
@@ -92,13 +94,47 @@ static JSValue js_el_get_tag(JSContext *ctx, JSValueConst this_val)
     return t ? JS_NewStringLen(ctx, (const char *)t, n) : JS_UNDEFINED;
 }
 
-/* innerHTML= is an HTML-CONTEXT SINK: the assigned string is parsed as markup into this element, so an attacker
-   value reaching it is a breakout solved against the real parse context. The solver owns that decision. */
+/* innerHTML= is TWO things and it must do both.
+   It is an HTML-CONTEXT SINK, so the assigned value goes to the solver, which decides the breakout against the
+   real parse context. And it REPLACES this element's children with the parsed markup — a page that builds its
+   DOM this way and then queries it must find what it built, or every getElementById after it answers null and
+   the engine reports a surface the page never had. Reporting the sink and dropping the markup was the second
+   half missing.
+   Both halves go through the per-flow chokepoints: the old children are removed with a capture so they come
+   back on a context switch, and each parsed node is inserted with one, so two forked arms each see their own
+   subtree. A concolic value has no bytes to parse — the sink report IS the answer for it. */
 static JSValue js_el_set_inner_html(JSContext *ctx, JSValueConst this_val, JSValueConst val)
 {
     lxb_dom_element_t *el = elem_of(this_val);
+    const char *html;
+    lxb_dom_node_t *node, *next;
+
     if (!el) return JS_UNDEFINED;
     solve_html_sink(ctx, val);
+    if (concolic_is(val))
+        return JS_UNDEFINED;   /* nothing concrete to parse; the sink is what this write means */
+
+    html = JS_ToCString(ctx, val);
+    if (!html) return JS_EXCEPTION;
+
+    for (node = lxb_dom_interface_node(el)->first_child; node; node = next) {
+        next = node->next;
+        dom_cow_remove_child(node);
+    }
+    {
+        lxb_html_document_t *doc = lxb_html_interface_document(lxb_dom_interface_node(el)->owner_document);
+        lxb_dom_node_t *frag = lxb_html_document_parse_fragment(doc, el,
+                                   (const lxb_char_t *)html, strlen(html));
+        if (frag) {
+            for (node = frag->first_child; node; node = next) {
+                next = node->next;
+                lxb_dom_node_remove(node);              /* out of the fragment, which nothing else observes */
+                dom_cow_append_child(lxb_dom_interface_node(el), node);   /* into the tree, per flow */
+            }
+            lxb_dom_node_destroy(frag);
+        }
+    }
+    JS_FreeCString(ctx, html);
     return JS_UNDEFINED;
 }
 

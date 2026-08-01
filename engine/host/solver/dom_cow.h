@@ -31,6 +31,9 @@ void dom_cow_set_attribute(lxb_dom_element_t *el, const char *name, const char *
 /* node-insert chokepoint — the tree-structure twin of dom_cow_set_attribute: capture the insertion THEN attach
    the child, so a subtree a flow appends reverts per-flow (detached on context-switch, re-attached on resume). */
 void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child);
+/* Detach a node the BASELINE may own — captured so it comes back on revert/unapply. innerHTML= needs it:
+   it REPLACES children, and an uncaptured removal leaks the old subtree across a context switch. */
+void dom_cow_remove_child(lxb_dom_node_t *node);
 
 /* Lower-level capture primitives the chokepoint is built on (record a mutation BEFORE it happens). Direct use is
    reserved for the mutation ops that compose them (the chokepoint above, and node-insert once it lands). */
