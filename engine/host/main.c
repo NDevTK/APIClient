@@ -103,19 +103,10 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
        yet is absent, and the page's own throw on reading it names the next one to write. */
     {
         JSValue g = JS_GetGlobalObject(g_ctx);
-        /* WHAT THE PLATFORM OWNS, declared whether or not it is built yet. A name on this list is the
-           ENGINE's to provide, so an unbuilt one stays absent and the page's ReferenceError names the
-           component to write; everything else the page reads and nothing defines is the server's, and comes
-           back symbolic so the gate behind it forks. Without this every missing Web API would be mistaken for
-           app state and a flow would run past it reporting a surface it never reached. */
-        static const char *const PLATFORM[] = {
-            "fetch", "location", "document", "window", "navigator", "localStorage", "sessionStorage",
-            "history", "screen", "XMLHttpRequest", "WebSocket", "postMessage", "addEventListener",
-            "requestAnimationFrame", "IntersectionObserver", "MutationObserver", "getComputedStyle",
-            "customElements", "indexedDB", "crypto", "caches", "performance",
-        };
-        for (size_t pi = 0; pi < sizeof(PLATFORM) / sizeof(PLATFORM[0]); pi++)
-            absent_declare_platform(g_ctx, PLATFORM[pi]);
+        /* WHAT THE PLATFORM OWNS is WEB IDL's answer, not a list here: absent.c reads the generated
+           browser/platform_names.h (every name [Exposed=Window]). A list typed at this spot covered 22 names
+           of ~1300, so every interface it missed — Node, Element, Event, DOMException — was mistaken for
+           server-injected app state and a branch on it forked instead of throwing. */
 
         /* `window` IS the global object (7.2.2: the Window object's [[Get]] is the global's), so a bundle
            reading window.X and one reading X are the same read spelled two ways. It was on the platform list

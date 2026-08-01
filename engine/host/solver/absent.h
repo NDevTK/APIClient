@@ -6,8 +6,8 @@
 /* Install as JSConcolicHooks.absent. */
 JSValue absent_global_hook(JSContext *ctx, JSAtom name);
 
-/* Every name the web-platform surface installs, declared by the component that installs it. A name on this list
-   is the ENGINE's to provide, so its absence is a gap to build and the page's ReferenceError says so. */
-void absent_declare_platform(JSContext *ctx, const char *name);
+/* Is this global name one the WEB PLATFORM owns? Answered from the generated Web IDL table (every name
+   [Exposed=Window]), not from anything a component or a person declares — see browser/platform_names.h. */
+int absent_is_platform_name(const char *name);
 
 #endif
