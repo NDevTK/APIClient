@@ -52,6 +52,14 @@ typedef struct Flow {
     char *cand_src;        /* the source identity the payload replaces (owned) */
     char *cand_payload;    /* the breakout to try (owned) */
     const char *cand_sink; /* the sink name to record if it fires (static) */
+    /* DID THIS FLOW'S PoC FIRE, and is its substitution live? Both were globals in solve.c, which is only
+       correct while one candidate runs start-to-finish with nothing else scheduled — the shape the standalone
+       verify driver has and the BFS does not. As a flow among flows a candidate is preempted, parked and
+       resumed with ordinary flows in between, so a global `fired` records another flow's marker and a global
+       `verifying` leaves the substitution live for whoever runs next. They belong to the flow, and they swap
+       with it. */
+    int cand_fired;        /* this flow's X9 marker executed */
+    int cand_verifying;    /* this flow is a candidate run: the sink takes the concrete arg */
 
     int   started;         /* decide_enter has run (fresh) — else resume from the blobs below */
     void *frame;           /* the current script's live preemptible frame (JS_FlowNew handle), NULL between scripts */

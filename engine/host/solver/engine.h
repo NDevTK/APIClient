@@ -3,8 +3,8 @@
  * inside a run forks a sibling flow (decide.c); the loop keeps running the highest-value flow until the
  * frontier is empty. There is NO separate boot executor — the scripts ARE the first flow.
  *
- * `src`/`len` is the page's script source (boot_source). flow_exec_once compiles+runs it as a global-program
- * flow; the same primitive drives the scheduler AND @S candidate re-runs, so there is ONE executor. */
+ * A @S candidate re-fire is a FLOW seeded onto this same frontier (solve_seed_candidates), not a separate
+ * executor: one scheduler runs exploration and verification alike. */
 #ifndef ENGINE_HOST_SOLVER_ENGINE_H
 #define ENGINE_HOST_SOLVER_ENGINE_H
 
@@ -12,13 +12,12 @@
 
 /* Run the page's scripts as one code flow: each script `bodies[i]` is its OWN program (JS_FlowNew — faithful
    per-<script> scope, NEVER concatenated), run in document order, sharing globals + the flow's COW delta. */
-void flow_exec_once(JSContext *ctx, char *const *bodies, int n);
 
 /* Queue a DYNAMICALLY-LOADED script body (a lazy chunk / injected <script> / import()) to run in the CURRENT
    flow after the current script, sharing its globals + COW delta. Called from the script-load host-edge when
    forced execution reaches a load. Because a load sits behind a branch, the ONE BFS discovers different lazy
    scripts on different arms — lazy loading is not a separate system, just more code the flow runs and forks
-   through. The body is copied; the queue is per-run (rebuilt each replay) and drained by flow_exec_once. */
+   through. The body is copied; the queue is per-run and drained by the flow that owns it. */
 void engine_queue_script(const char *body);
 
 /* solver_decide calls this at a forking branch to stash the sibling's hot decision + pins; the interpreter's

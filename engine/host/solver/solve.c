@@ -14,8 +14,13 @@
 
 enum { SINK_EVAL = 0, SINK_HTML = 1, SINK_URL = 2 };   /* JS / HTML / URL context -> different candidate set + fire oracle */
 
-static int g_fired = 0;      /* set by the X9 marker when a constructed PoC executes */
-static int g_verifying = 0;  /* 1 during a candidate re-run: the sink executes/re-parses the (now concrete) arg */
+/* THE RUNNING FLOW's fire flag and candidate mode. These were file-scope globals, which is only correct while
+   one candidate runs start-to-finish with nothing else scheduled — the shape the verify driver has and the BFS
+   does not. Reached through the running flow so a preemption cannot cross them. A NULL flow (baseline setup)
+   has neither, and the accessors say so rather than inventing a value. */
+static int *fired_slot(void)     { Flow *f = flow_running(); return f ? &f->cand_fired : NULL; }
+static int  is_verifying(void)   { Flow *f = flow_running(); return f && f->cand_verifying; }
+static void set_fired(void)      { int *p = fired_slot(); if (p) *p = 1; }
 
 typedef struct { char *src; int sink; } Cand;   /* a detected sink awaiting fire-verification */
 static Cand *g_pending = NULL; static int g_pending_n = 0, g_pending_cap = 0;
@@ -23,7 +28,7 @@ static Cand *g_pending = NULL; static int g_pending_n = 0, g_pending_cap = 0;
 typedef struct { char *sink; char *source; char *poc; } Finding;   /* verified PoCs only */
 static Finding *g_sinks = NULL; static int g_sinks_n = 0, g_sinks_cap = 0;
 
-static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)ctx; (void)t; (void)c; (void)v; g_fired = 1; return JS_UNDEFINED; }
+static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)ctx; (void)t; (void)c; (void)v; set_fired(); return JS_UNDEFINED; }
 
 /* THE FIRE. A sink executes attacker-shaped code — `eval(s)`, a `javascript:` navigation, an auto-firing event
    handler in re-parsed HTML — and that code is the PAGE's, so it can hold a loop, an await, a recursion. Running
@@ -31,7 +36,7 @@ static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (
    engine's own DFAIL named it a drive-to-completion, and the whole @S verification was built on one.
    The sunk code is simply MORE CODE IN THIS FLOW — the same thing a lazy chunk is — so it is queued as another
    program of the running flow and the ONE BFS runs it, preemptible and parkable like every other. The candidate
-   re-run drains its queue before finishing, so `g_fired` still answers by the time solve_verify reads it. */
+   re-run drains its queue before finishing, so the flow's own fire flag still answers when it completes. */
 static void fire_js(const char *src, size_t len) {
     char *body = malloc(len + 1);
     CHECK(body, "solve: OOM queueing a fired PoC body");
@@ -43,7 +48,6 @@ static void fire_js(const char *src, size_t len) {
 void solve_init(JSContext *ctx) {
     g_pending = NULL; g_pending_n = g_pending_cap = 0;
     g_sinks = NULL; g_sinks_n = g_sinks_cap = 0;
-    g_fired = g_verifying = 0;
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "X9", JS_NewCFunction(ctx, js_x9, "X9", 0));
     JS_FreeValue(ctx, g);
@@ -93,7 +97,7 @@ static void record_sink(const char *sink, const char *source, const char *poc) {
 }
 
 void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
-    if (g_verifying) {                          /* candidate run: the arg is the injected+wrapped CONCRETE code */
+    if (is_verifying()) {                          /* candidate run: the arg is the injected+wrapped CONCRETE code */
         if (concolic_is(arg)) return;           /* injection didn't reach this read -> not our candidate */
         const char *code = JS_ToCString(ctx, arg);
         if (code) { fire_js(code, strlen(code)); JS_FreeCString(ctx, code); }
@@ -143,7 +147,7 @@ static void url_fire(JSContext *ctx, const char *url) {
 }
 /* location = arg (or el.href = arg): a URL-context sink. */
 void solve_url_sink(JSContext *ctx, JSValueConst arg) {
-    if (g_verifying) {
+    if (is_verifying()) {
         if (concolic_is(arg)) return;
         const char *url = JS_ToCString(ctx, arg);
         if (url) { url_fire(ctx, url); JS_FreeCString(ctx, url); }
@@ -158,7 +162,7 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg) {
 /* innerHTML = arg: an HTML-context sink. Detection records the source; the candidate run re-parses the injected
    HTML and fires its handlers. */
 void solve_html_sink(JSContext *ctx, JSValueConst arg) {
-    if (g_verifying) {
+    if (is_verifying()) {
         if (concolic_is(arg)) return;   /* injection didn't reach this write */
         const char *html = JS_ToCString(ctx, arg);
         if (html) { html_fire(ctx, html); JS_FreeCString(ctx, html); }
@@ -172,23 +176,43 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
 
 /* Fire-verify every pending source: SEARCH the candidate breakouts — inject each at the source, re-run the
    REAL program as a flow, and the FIRST that makes X9 fire is the replay-verified PoC (re-execution is the
-   oracle, so no static context detection is needed). The re-run uses the ONE flow executor (flow_exec_once),
+   oracle, so no static context detection is needed). The re-run is a FLOW on the one frontier,
    the same path the scheduler uses — there is no separate boot re-runner. */
-void solve_verify(JSContext *ctx, char *const *bodies, int n) {
-    endpoint_suppress(1);   /* candidate re-runs fire requests that are @S artifacts, not @H endpoints */
+/* SEED the candidate flows: one per (detected sink, breakout), each an ordinary member of the ONE frontier.
+   The scheduler runs them preemptibly and parkably like every other flow, which is what §solver requires — a
+   driver that runs a candidate start-to-finish cannot park an unbounded loop inside it. */
+void solve_seed_candidates(JSContext *ctx) {
     for (int i = 0; i < g_pending_n; i++) {
         const char **cands = cand_set(g_pending[i].sink);
-        const char *sink_name = g_pending[i].sink == SINK_HTML ? "innerHTML" : g_pending[i].sink == SINK_URL ? "location" : "eval";
+        const char *sink_name = g_pending[i].sink == SINK_HTML ? "innerHTML"
+                              : g_pending[i].sink == SINK_URL  ? "location" : "eval";
         for (int c = 0; cands[c]; c++) {
-            concolic_set_candidate(g_pending[i].src, cands[c]);
-            g_fired = 0; g_verifying = 1;
-            flow_exec_once(ctx, bodies, n);
-            g_verifying = 0;
-            concolic_set_candidate(NULL, NULL);
-            if (g_fired) { record_sink(sink_name, g_pending[i].src, cands[c]); break; }   /* this breakout fired -> the PoC */
+            Flow *f = flow_add(ctx, JS_UNDEFINED, NULL, 0);
+            f->cand_src     = strdup(g_pending[i].src);
+            f->cand_payload = strdup(cands[c]);
+            f->cand_sink    = sink_name;
+            CHECK(f->cand_src && f->cand_payload, "solve: OOM seeding a candidate flow");
         }
     }
+}
+
+/* Bracket the substitution around THIS flow's dispatch. The candidate is live only while its own flow runs, so
+   an ordinary flow scheduled in between is unaffected; the fire flag is the flow's, so a marker fired by one
+   candidate cannot be read as another's. */
+void solve_flow_begin(Flow *f) {
+    if (!f || !f->cand_src) return;
+    endpoint_suppress(1);
+    concolic_set_candidate(f->cand_src, f->cand_payload);
+    f->cand_verifying = 1;
+}
+
+void solve_flow_end(Flow *f) {
+    if (!f || !f->cand_src) return;
+    f->cand_verifying = 0;
+    concolic_set_candidate(NULL, NULL);
     endpoint_suppress(0);
+    if (f->cand_fired)
+        record_sink(f->cand_sink, f->cand_src, f->cand_payload);
 }
 
 /* ── @S JSON emit (C-native) ── */

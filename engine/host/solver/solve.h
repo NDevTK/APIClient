@@ -7,6 +7,7 @@
 #define ENGINE_HOST_SOLVER_SOLVE_H
 
 #include "quickjs.h"
+struct Flow;
 
 /* Install the X9 fire-marker + init the @S store. Call once at engine init (after the global exists). */
 void solve_init(JSContext *ctx);
@@ -20,7 +21,11 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg);
 
 /* After detection, SEARCH breakout candidates for every recorded source: inject each at the source, re-run the
    REAL program (`rerun`), and record the first that FIRES as the replay-verified PoC. */
-void solve_verify(JSContext *ctx, char *const *bodies, int n);
+/* SEED one candidate flow per (detected sink, breakout) onto the ONE frontier — the re-fire is a FLOW, never a
+   driver that runs the program to completion beside the BFS. */
+void solve_seed_candidates(JSContext *ctx);
+void solve_flow_begin(struct Flow *f);
+void solve_flow_end(struct Flow *f);
 
 /* The @S findings as a JSON ARRAY (caller frees): `[ {"sink":..,"source":..,"poc":..}, ... ]`. An array for
    the same reason the @H surface is one — result.h owns the document. */

@@ -1,5 +1,6 @@
 /* The dispatch loop — see engine.h. */
 #include "solver/engine.h"
+#include "solver/solve.h"
 #include "solver/flow.h"
 #include "solver/decide.h"
 #include "solver/concolic.h"
@@ -43,10 +44,15 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
 
 /* THE URLS THE HOST OWES, newline-joined across every live flow, or "" — one register, the flows' own. The
    buffer is this function's and is valid until the next call. */
+/* THE URLS THE HOST OWES, newline-joined across every live flow, DEDUPED. Several flows park on the same URL —
+   a candidate re-fire re-runs the same fetches the exploring flow made — and engine_provide fills every entry
+   that names it, so listing it twice makes the host provide twice and the second call finds nothing left. The
+   list is a set of requests, not a list of waiters. */
 const char *engine_pending_urls(void) {
     static char *join;
     size_t need = 1;
     Flow *f;
+
     free(join); join = NULL;
     for (int k = 0; (f = flow_at(k)) != NULL; k++)
         for (int i = 0; i < f->npend; i++)
@@ -55,10 +61,23 @@ const char *engine_pending_urls(void) {
     CHECK(join != NULL, "engine: OOM joining the pending URLs");
     join[0] = 0;
     for (int k = 0; (f = flow_at(k)) != NULL; k++)
-        for (int i = 0; i < f->npend; i++)
-            if (f->pending[i].url && !f->pending[i].have_value) {
-                strcat(join, f->pending[i].url); strcat(join, "\n");
+        for (int i = 0; i < f->npend; i++) {
+            const char *u = f->pending[i].url;
+            if (!u || f->pending[i].have_value) continue;
+            /* already listed? a linear scan over the answer being built, which is the set itself */
+            {
+                const char *p = join; int dup = 0; size_t ul = strlen(u);
+                while (*p) {
+                    const char *e = strchr(p, '\n');
+                    size_t l = e ? (size_t)(e - p) : strlen(p);
+                    if (l == ul && !memcmp(p, u, ul)) { dup = 1; break; }
+                    if (!e) break;
+                    p = e + 1;
+                }
+                if (dup) continue;
             }
+            strcat(join, u); strcat(join, "\n");
+        }
     return join;
 }
 
@@ -357,10 +376,12 @@ static char *const *g_sess_bodies;
 static int g_sess_n;
 static Flow *g_sess_cur;
 static int g_sess_live;
+static int g_cands_seeded;   /* the candidate flows are seeded once per session */
 
 void engine_sched_begin(JSContext *ctx, char *const *bodies, int n, int forking) {
     DCHECK(!g_sess_live, "engine_sched_begin while a session is already running — one scheduler, one session");
     g_sess_ctx = ctx; g_sess_bodies = bodies; g_sess_n = n; g_sess_cur = NULL; g_sess_live = 1;
+    g_cands_seeded = 0;
     flow_add(ctx, JS_UNDEFINED, NULL, 0);   /* the first flow: the page's scripts, empty decision vector */
     JS_SetFlowLocalMark(1);                 /* objects created while a flow runs are flow-local (discarded) */
     dom_cow_set_ctx(ctx);                   /* the DOM delta needs ctx for the attribute taint-shadow dup/free */
@@ -398,6 +419,7 @@ int engine_sched_step(void) {
         if (best != cur) {                  /* context switch: swap COW delta + decision + pins */
             if (cur) flow_switch_out(ctx, cur);
             flow_switch_in(ctx, best);
+            solve_flow_begin(best);   /* the substitution is live only while its own flow runs */
             best->visits++;
             cur = best;
             /* COUNTED, and it leaves in the result document. A scheduler that interleaves and one that runs
@@ -410,7 +432,7 @@ int engine_sched_step(void) {
         flow_age_running(1);   /* this step burned CPU; flow_credit_emit resets it when the flow emits value */
         {
             int r = flow_step(ctx, cur, bodies, n);
-            if (r == FLOW_STEP_DONE) { flow_finish(ctx, cur); cur = NULL; owed = 0; }
+            if (r == FLOW_STEP_DONE) { solve_flow_end(cur); flow_finish(ctx, cur); cur = NULL; owed = 0; }
             else if (r == FLOW_STEP_OWED) {
                 /* This flow can make no progress until the host supplies a reply. It is NOT skipped and NOT
                    removed — it stays in the WFQ at its own weight, and the scheduler simply observes that it
@@ -438,6 +460,14 @@ int engine_sched_step(void) {
         }
     }
     g_sess_cur = cur;
+    /* The exploration found sinks; each breakout is a FLOW on this same frontier, seeded once the exploring
+       flows are done so a candidate never re-fires against a half-explored page. Seeding adds members, so the
+       loop above has more to do — hence before the exhausted answer, not after it. */
+    if (!g_cands_seeded) {
+        g_cands_seeded = 1;
+        solve_seed_candidates(ctx);
+        if (flow_best()) return ENGINE_STEP_YIELD;
+    }
     /* STALLED, not exhausted: the run-queue is empty but flows are parked on something only the host can
        supply. Ask the one seam BEFORE closing — the session and every parked snapshot stay live, and the host
        steps again once it has provided. */
@@ -469,6 +499,3 @@ static void run_scheduler(JSContext *ctx, char *const *bodies, int n, int forkin
 /* EXPLORE: seed boot + drain the frontier, forking at every concolic branch. */
 void engine_run(JSContext *ctx, char *const *bodies, int n) { run_scheduler(ctx, bodies, n, 1); }
 
-/* @S CANDIDATE RE-FIRE: the SAME BFS loop with forking off — one concrete path (the injected candidate), still
-   preemptible + parkable. No separate executor, no drive-to-completion. */
-void flow_exec_once(JSContext *ctx, char *const *bodies, int n) { run_scheduler(ctx, bodies, n, 0); }
