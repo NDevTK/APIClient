@@ -178,8 +178,7 @@ static JSValue js_el_set_text_content(JSContext *ctx, JSValueConst this_val, JSV
     size_t len;
 
     if (!el) return JS_UNDEFINED;
-    attr_shadow_set(ctx, el, ATTR_SLOT_PROPERTY, "textContent",
-                    concolic_is(val) ? val : JS_UNDEFINED);
+    dom_cow_set_prop_taint(ctx, el, "textContent", concolic_is(val) ? val : JS_UNDEFINED);
     /* A concolic has no bytes: its coercion is the concolic hooks' and throws rather than producing a string,
        so the SHAPE is what the Text node carries while the shadow carries the value. */
     if (concolic_is(val)) {

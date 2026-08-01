@@ -34,6 +34,9 @@ void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child);
 /* Detach a node the BASELINE may own — captured so it comes back on revert/unapply. innerHTML= needs it:
    it REPLACES children, and an uncaptured removal leaks the old subtree across a context switch. */
 void dom_cow_remove_child(lxb_dom_node_t *node);
+/* A DOM PROPERTY's taint (textContent and its kind): the value half is already captured as Text nodes by the
+   insert/remove chokepoints, so this captures the taint shadow so it reverts with them. JS_UNDEFINED clears. */
+void dom_cow_set_prop_taint(JSContext *ctx, lxb_dom_element_t *el, const char *name, JSValueConst opaque);
 
 /* Lower-level capture primitives the chokepoint is built on (record a mutation BEFORE it happens). Direct use is
    reserved for the mutation ops that compose them (the chokepoint above, and node-insert once it lands). */

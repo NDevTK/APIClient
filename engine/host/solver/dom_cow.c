@@ -8,7 +8,13 @@
 #include <lexbor/dom/dom.h>
 
 typedef struct DomUndo {
-    int kind; lxb_dom_element_t *el; char *name;
+    /* kind 0 covers a NAMED STRING SLOT on an element, and `slot` says which namespace it is in:
+       ATTR_SLOT_ATTRIBUTE (a content attribute, whose VALUE lives in the Lexbor tree and whose TAINT lives in
+       the shadow) or ATTR_SLOT_PROPERTY (a DOM property like textContent, whose value is already captured as
+       Text NODES by kinds 1/2, so only its taint is here). One entry kind because it is one concept — without
+       it a `el.textContent = location.hash` in one arm was visible to every other arm, since the shadow write
+       bypassed the delta entirely. */
+    int kind; int slot; lxb_dom_element_t *el; char *name;
     lxb_char_t *old; size_t old_len; int had;                 /* kind 0: baseline attr VALUE */
     lxb_char_t *cur; size_t cur_len; int cur_had;             /* kind 0: flow's attr VALUE (valid while parked) */
     JSValue sh_old; int sh_had;                               /* kind 0: baseline attr TAINT shadow (opaque, or none) */
@@ -40,14 +46,14 @@ static void dom_seg_unref(DomSeg *s);
 void dom_cow_set_ctx(JSContext *ctx) { g_cow_ctx = ctx; }
 
 /* the current taint shadow for (el,name), dup'd (JS_UNDEFINED + *had=0 if none) */
-static JSValue shadow_snapshot(lxb_dom_element_t *el, const char *name, int *had) {
-    int si = attr_shadow_find(el, ATTR_SLOT_ATTRIBUTE, name);
+static JSValue shadow_snapshot(lxb_dom_element_t *el, int slot, const char *name, int *had) {
+    int si = attr_shadow_find(el, slot, name);
     *had = (si >= 0);
     return (si >= 0 && g_cow_ctx) ? JS_DupValue(g_cow_ctx, attr_shadow_opaque(si)) : JS_UNDEFINED;
 }
 /* set (el,name)'s taint shadow to `v` (borrowed; attr_shadow_set dups it), or clear it when !had */
-static void shadow_restore(lxb_dom_element_t *el, const char *name, JSValueConst v, int had) {
-    if (g_cow_ctx) attr_shadow_set(g_cow_ctx, el, ATTR_SLOT_ATTRIBUTE, name, had ? v : JS_UNDEFINED);
+static void shadow_restore(lxb_dom_element_t *el, int slot, const char *name, JSValueConst v, int had) {
+    if (g_cow_ctx) attr_shadow_set(g_cow_ctx, el, slot, name, had ? v : JS_UNDEFINED);
 }
 
 static void dom_undo_push(DomUndo u) {
@@ -65,12 +71,30 @@ void dom_attr_capture(lxb_dom_element_t *el, const char *name) {
     if (!g_dom_capture) return;
     size_t vl = 0; const lxb_char_t *cur = lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), &vl);
     DomUndo u; memset(&u, 0, sizeof u);
-    u.kind = 0; u.el = el; u.name = strdup(name); u.had = cur ? 1 : 0;
+    u.kind = 0; u.slot = ATTR_SLOT_ATTRIBUTE; u.el = el; u.name = strdup(name); u.had = cur ? 1 : 0;
     CHECK(u.name, "dom-cow-oom: attr name strdup failed");
     if (cur) { u.old = malloc(vl ? vl : 1); CHECK(u.old, "dom-cow-oom: baseline attr snapshot malloc failed — the delta could not restore its baseline"); memcpy(u.old, cur, vl); u.old_len = vl; }
-    u.sh_old = shadow_snapshot(el, name, &u.sh_had);   /* snapshot the baseline TAINT so it reverts with the value */
+    u.sh_old = shadow_snapshot(el, ATTR_SLOT_ATTRIBUTE, name, &u.sh_had);   /* baseline TAINT reverts with the value */
     u.sh_cur = JS_UNDEFINED;
     dom_undo_push(u);
+}
+
+/* The PROPERTY-slot twin of dom_attr_capture: a DOM property's taint, whose value half is already captured as
+   Text nodes. Same entry kind, same revert/unapply/apply arms — only the Lexbor value work is skipped. */
+static void dom_prop_taint_capture(lxb_dom_element_t *el, const char *name) {
+    if (!g_dom_capture) return;
+    DomUndo u; memset(&u, 0, sizeof u);
+    u.kind = 0; u.slot = ATTR_SLOT_PROPERTY; u.el = el; u.name = strdup(name); u.had = 0;
+    CHECK(u.name, "dom-cow-oom: property name strdup failed");
+    u.sh_old = shadow_snapshot(el, ATTR_SLOT_PROPERTY, name, &u.sh_had);
+    u.sh_cur = JS_UNDEFINED;
+    dom_undo_push(u);
+}
+
+/* THE PROPERTY-TAINT CHOKEPOINT — capture-then-set, like every other DOM write. `opaque` JS_UNDEFINED clears. */
+void dom_cow_set_prop_taint(JSContext *ctx, lxb_dom_element_t *el, const char *name, JSValueConst opaque) {
+    dom_prop_taint_capture(el, name);
+    attr_shadow_set(ctx, el, ATTR_SLOT_PROPERTY, name, opaque);
 }
 void dom_insert_capture(lxb_dom_node_t *node) {
     if (!g_dom_capture) return;
@@ -104,10 +128,12 @@ void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
 void dom_revert(void) {   /* DISCARD the running flow's DOM writes -> baseline (reverse order); empties the delta */
     for (int i = g_dom_undo_n - 1; i >= 0; i--) {
         DomUndo *u = &g_dom_undo[i];
-        if (u->kind == 0) {   /* attribute: restore old value + old taint shadow, or remove/clear if it didn't exist */
-            if (u->had && u->old) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->old, u->old_len);
-            else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
-            shadow_restore(u->el, u->name, u->sh_old, u->sh_had);
+        if (u->kind == 0) {   /* named slot: restore old value (attributes only) + old taint shadow */
+            if (u->slot == ATTR_SLOT_ATTRIBUTE) {
+                if (u->had && u->old) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->old, u->old_len);
+                else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
+            }
+            shadow_restore(u->el, u->slot, u->name, u->sh_old, u->sh_had);
             if (g_cow_ctx) { JS_FreeValue(g_cow_ctx, u->sh_old); JS_FreeValue(g_cow_ctx, u->sh_cur); }
             free(u->name); free(u->old); free(u->cur);
         } else if (u->kind == 1 && !u->detached) {   /* inserted node: detach it (baseline had none) */
@@ -124,14 +150,18 @@ void dom_revert(void) {   /* DISCARD the running flow's DOM writes -> baseline (
 /* per-entry UNAPPLY (flow -> parked): stash the flow's value/taint into cur, restore the baseline. */
 static void dom_unapply_entry(DomUndo *u) {
     if (u->kind == 0) {
-        size_t vl = 0; const lxb_char_t *c = lxb_dom_element_get_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), &vl);
-        free(u->cur); u->cur = NULL; u->cur_len = 0; u->cur_had = c ? 1 : 0;   /* stash the flow's attr value */
-        if (c) { u->cur = malloc(vl ? vl : 1); CHECK(u->cur, "dom-cow-oom: parked flow attr snapshot malloc failed — apply would lose the flow's DOM write"); memcpy(u->cur, c, vl); u->cur_len = vl; }
+        if (u->slot == ATTR_SLOT_ATTRIBUTE) {
+            size_t vl = 0; const lxb_char_t *c = lxb_dom_element_get_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), &vl);
+            free(u->cur); u->cur = NULL; u->cur_len = 0; u->cur_had = c ? 1 : 0;   /* stash the flow's attr value */
+            if (c) { u->cur = malloc(vl ? vl : 1); CHECK(u->cur, "dom-cow-oom: parked flow attr snapshot malloc failed — apply would lose the flow's DOM write"); memcpy(u->cur, c, vl); u->cur_len = vl; }
+        }
         if (g_cow_ctx) JS_FreeValue(g_cow_ctx, u->sh_cur);
-        u->sh_cur = shadow_snapshot(u->el, u->name, &u->sh_cur_had);   /* stash the flow's taint shadow */
-        if (u->had && u->old) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->old, u->old_len);
-        else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
-        shadow_restore(u->el, u->name, u->sh_old, u->sh_had);   /* restore the baseline taint */
+        u->sh_cur = shadow_snapshot(u->el, u->slot, u->name, &u->sh_cur_had);   /* stash the flow's taint shadow */
+        if (u->slot == ATTR_SLOT_ATTRIBUTE) {
+            if (u->had && u->old) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->old, u->old_len);
+            else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
+        }
+        shadow_restore(u->el, u->slot, u->name, u->sh_old, u->sh_had);   /* restore the baseline taint */
     } else if (u->kind == 1 && !u->detached) {
         u->parent = lxb_dom_interface_node(u->node)->parent;              /* remember re-insert position */
         u->next = lxb_dom_interface_node(u->node)->next;
@@ -146,9 +176,11 @@ static void dom_unapply_entry(DomUndo *u) {
 /* per-entry APPLY (parked -> flow): restore the flow's value/taint over the baseline. */
 static void dom_apply_entry(DomUndo *u) {
     if (u->kind == 0) {
-        if (u->cur_had && u->cur) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->cur, u->cur_len);
-        else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
-        shadow_restore(u->el, u->name, u->sh_cur, u->sh_cur_had);   /* restore the flow's taint */
+        if (u->slot == ATTR_SLOT_ATTRIBUTE) {
+            if (u->cur_had && u->cur) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->cur, u->cur_len);
+            else lxb_dom_element_remove_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name));
+        }
+        shadow_restore(u->el, u->slot, u->name, u->sh_cur, u->sh_cur_had);   /* restore the flow's taint */
     } else if (u->kind == 2 && u->reinserted) {
         /* resuming the flow: it had removed this node, so take it back out. */
         lxb_dom_node_remove(u->node); u->reinserted = 0;
