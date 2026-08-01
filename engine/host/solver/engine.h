@@ -67,6 +67,13 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
    an engine with no work never outranks one that has some. */
 double engine_top_weight(void);
 
+/* THE VALUE YIELD's floor: the weight of the best flow in the RUNNER-UP engine. The running flow hands the
+   thread back the moment its own weight falls below it, because from there the other document's work is worth
+   more — level-1 and level-2 are one policy. It is ORDER only and drops nothing: the flow keeps its snapshot
+   and resumes exactly where it was, which is what separates a yield from a cap. -inf (the default) means the
+   host has named no rival, so only the cooperative quantum yields. */
+void engine_set_yield_floor(double w);
+
 /* THE VALUE YIELD (§scheduler level-1). The host sets the RUNNER-UP ENGINE's best weight as this engine's
    floor; the moment this engine's own best flow no longer outranks that, it hands the thread back so the host
    can run the better document. It is not a slice and not a cap: nothing is dropped, reordered or forgotten —

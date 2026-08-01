@@ -377,7 +377,7 @@ static int (*g_stall_hook)(void);
 void engine_set_stall_hook(int (*owed)(void)) { g_stall_hook = owed; }
 
 static double g_yield_floor = -1.0 / 0.0;
-void engine_set_yield_floor(double floor) { g_yield_floor = floor; }
+void engine_set_yield_floor(double w) { g_yield_floor = w; }
 
 double engine_top_weight(void) {
     Flow *b = flow_best();
@@ -423,6 +423,12 @@ int engine_sched_step(void) {
             else owed = 0;
         }
         if (engine_now_ms() >= deadline) {   /* THREAD-SHARING, not value: hand the thread back, keep the frontier */
+            g_sess_cur = cur;
+            return ENGINE_STEP_YIELD;
+        }
+        /* VALUE: this engine's best is now worth less than the runner-up engine's, so the thread belongs there.
+           The flow keeps its snapshot and resumes where it stands — an order decision, never a drop. */
+        if (cur && flow_weight(cur) < g_yield_floor) {
             g_sess_cur = cur;
             return ENGINE_STEP_YIELD;
         }
