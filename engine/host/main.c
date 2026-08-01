@@ -25,6 +25,7 @@
 #include "browser/core/frame/location.h"
 #include "browser/core/loader/document_scripts.h"
 #include "browser/core/loader/module_loader.h"
+#include "solver/absent.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
 #include "solver/endpoint.h"
@@ -79,7 +80,8 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
     /* Concolic VALUE propagation stays installed across scheduling AND verification — taint must flow during a
        candidate re-fire too. The exploration hooks (branch/fork/preempt) are owned and scoped by the scheduler. */
     static const JSConcolicHooks CONCOLIC = {
-        .add = concolic_add_hook, .cmp = concolic_cmp_hook, .is = concolic_is };
+        .add = concolic_add_hook, .cmp = concolic_cmp_hook, .is = concolic_is,
+        .absent = absent_global_hook };
     JS_SetConcolicHooks(&CONCOLIC);
 
     g_dom = lxb_html_document_create();
@@ -98,6 +100,20 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
        yet is absent, and the page's own throw on reading it names the next one to write. */
     {
         JSValue g = JS_GetGlobalObject(g_ctx);
+        /* WHAT THE PLATFORM OWNS, declared whether or not it is built yet. A name on this list is the
+           ENGINE's to provide, so an unbuilt one stays absent and the page's ReferenceError names the
+           component to write; everything else the page reads and nothing defines is the server's, and comes
+           back symbolic so the gate behind it forks. Without this every missing Web API would be mistaken for
+           app state and a flow would run past it reporting a surface it never reached. */
+        static const char *const PLATFORM[] = {
+            "fetch", "location", "document", "window", "navigator", "localStorage", "sessionStorage",
+            "history", "screen", "XMLHttpRequest", "WebSocket", "postMessage", "addEventListener",
+            "requestAnimationFrame", "IntersectionObserver", "MutationObserver", "getComputedStyle",
+            "customElements", "indexedDB", "crypto", "caches", "performance",
+        };
+        for (size_t pi = 0; pi < sizeof(PLATFORM) / sizeof(PLATFORM[0]); pi++)
+            absent_declare_platform(g_ctx, PLATFORM[pi]);
+
         fetch_install(g_ctx, g);
         module_loader_install(g_rt);
         location_install(g_ctx, g, origin);

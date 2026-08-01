@@ -96,6 +96,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
   .concat([
     SOLVER("cow.c"), SOLVER("engine.c"), SOLVER("flow.c"), SOLVER("decide.c"),   // per-flow COW + interleaving scheduler + weight + fork
     SOLVER("concolic.c"), SOLVER("endpoint.c"), SOLVER("solve.c"),               // concolic value + @H surface + @S solver
+    SOLVER("absent.c"),                                                          // absent global: unknown app state vs a component this engine owes
     SOLVER("result.c"),                                                          // the ONE result document the host reads
     SOLVER("dom_cow.c"), SOLVER("attr_shadow.c"),                                // DOM time-travel delta + DOM-attribute taint shadow
     join(HOST, "browser", "core", "loader", "document_scripts.c"),               // Lexbor <script> inventory + bundle identity
