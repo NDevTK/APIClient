@@ -59,6 +59,20 @@ void result_page_error_value(JSContext *ctx, JSValueConst err) {
     result_page_error(buf);
 }
 
+/* Append RAW (a delimiter this file controls) or ESCAPED (page-supplied text). Escaping the delimiters too was
+   a bug: the quotes around each message came out as \" inside the JSON string. */
+static void errs_raw(char **buf, size_t *cap, size_t *len, const char *s) {
+    size_t k = strlen(s);
+    if (*len + k + 1 >= *cap) {
+        size_t nc = *cap ? *cap : 256;
+        while (*len + k + 1 >= nc) nc *= 2;
+        char *nb = realloc(*buf, nc);
+        if (!nb) return;
+        *buf = nb; *cap = nc;
+    }
+    memcpy(*buf + *len, s, k); *len += k; (*buf)[*len] = 0;
+}
+
 /* JSON-escape a page-supplied string (its own message text, so it can hold anything). */
 static void errs_append(char **buf, size_t *cap, size_t *len, const char *s) {
     for (const char *p = s; *p; p++) {
@@ -79,14 +93,14 @@ static void errs_append(char **buf, size_t *cap, size_t *len, const char *s) {
 
 static char *errs_json_array(void) {
     char *b = NULL; size_t cap = 0, len = 0;
-    errs_append(&b, &cap, &len, "[");
+    errs_raw(&b, &cap, &len, "[");
     for (int i = 0; i < g_errs_n; i++) {
-        if (i) errs_append(&b, &cap, &len, ",");
-        errs_append(&b, &cap, &len, "\"");
+        if (i) errs_raw(&b, &cap, &len, ",");
+        errs_raw(&b, &cap, &len, "\"");
         errs_append(&b, &cap, &len, g_errs[i]);
-        errs_append(&b, &cap, &len, "\"");
+        errs_raw(&b, &cap, &len, "\"");
     }
-    errs_append(&b, &cap, &len, "]");
+    errs_raw(&b, &cap, &len, "]");
     return b ? b : strdup("[]");
 }
 

@@ -98,6 +98,10 @@ void engine_pending_script_url(JSContext *ctx, const char *url) {
 /* THE SESSION'S SCRIPT SEQUENCE — the document's own scripts in order. Entry i is inline (bodies[i] is its text)
    or external (srcs[i] is its URL and bodies[i] is filled when the host replies). Declared here because the
    pending DRAIN writes into it: an external script's text is the DOCUMENT's, shared by every flow. */
+/* The browser layer's document-load lifecycle, asked when a flow has run everything the document gave it. */
+static int (*g_docdone_hook)(JSContext *ctx, int stage);
+void engine_set_document_done_hook(int (*fn)(JSContext *ctx, int stage)) { g_docdone_hook = fn; }
+
 static char **g_sess_bodies;
 static char **g_sess_srcs;
 
@@ -243,6 +247,7 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
         for (int i = 0; i < parent->dyn_n; i++) { sib->dyn[i] = strdup(parent->dyn[i]); CHECK(sib->dyn[i], "engine: OOM fork dyn body"); }
         sib->dyn_n = sib->dyn_cap = parent->dyn_n;
     }
+    sib->dom_stage = parent->dom_stage;   /* the sibling is at the same point in the document's lifecycle */
     /* THE REPLIES STILL IN FLIGHT ARE INHERITED TOO. A flow that forks while a request is outstanding — a
        fetch whose `.then` has not run, an injected <script src> whose body has not arrived — was leaving the
        sibling with an empty register, so the reply reached exactly one world and everything behind it was
@@ -369,7 +374,16 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                 flow_drain_pending(ctx, f);
                 continue;
             }
-            else return 1;   /* all scripts + chunks + microtask jobs + live fetches done */
+            else if (f->dom_stage < 2 && g_docdone_hook) {
+                /* THE DOCUMENT FINISHED LOADING, in this flow's world. DOMContentLoaded then load, in that
+                   order, each once per flow — the order IS the spec, and a page's real work is behind them:
+                   the half of a bundle that touches the DOM and calls the API runs here. Every listener is
+                   queued as a task, so the loop above picks them up like any other job. */
+                g_docdone_hook(ctx, f->dom_stage);
+                f->dom_stage++;
+                continue;
+            }
+            else return 1;   /* all scripts + chunks + microtask jobs + live fetches + load listeners done */
             /* NULL ScriptOrModule name: an inline page script's name is the DOCUMENT's URL, which this host does
                not model yet — nothing here has one to give. It is what a relative `import('./chunk.js')` resolves
                against, so the moat's lazy-chunk surface needs the document URL plumbed to this call. */

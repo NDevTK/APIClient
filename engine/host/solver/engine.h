@@ -26,6 +26,12 @@ void engine_pending_script_url(JSContext *ctx, const char *url);
    in document order, so the flow waits there, and the reply fills the shared slot every flow reads. */
 void engine_pending_docscript(JSContext *ctx, const char *url, int script_i);
 
+/* THE DOCUMENT'S LOAD LIFECYCLE, owned by the browser layer and asked by the scheduler. Called once per stage
+   per flow when that flow has run everything the document gave it: stage 0 fires DOMContentLoaded, stage 1
+   fires load. Returns how many listener tasks it scheduled. Registered by the host that owns a Document; a
+   scheduler with no document (the solver fixture) simply never has one. */
+void engine_set_document_done_hook(int (*fn)(JSContext *ctx, int stage));
+
 /* solver_decide calls this at a forking branch to stash the sibling's hot decision + pins; the interpreter's
    fork hook (engine_fork_finalize) assembles the sibling from the frame clone + these. */
 void engine_prepare_fork(void *dec_blob, void *pin_blob);

@@ -372,7 +372,8 @@ void cow_capture_varref(JSContext *ctx, void *vref) {
     e->obj = JS_UNDEFINED; e->atom = JS_ATOM_NULL; e->existed = 0;
     e->base = JS_VarRefGetValue(vref);   /* owned dup of the cell's current (baseline) value */
     e->cur = JS_UNDEFINED; e->cur_valid = 0;
-    e->vref = vref;                      /* the cell is kept alive by the shared function object */
+    e->vref = vref;
+    JS_VarRefRef(vref);                  /* the DELTA owns it: the cell's own frames may die before the delta does */
     e->is_gendata = 0;
     e->is_async = 0; e->mod = NULL; e->a_base = e->a_cur = NULL;
     e->is_map = 0;
@@ -529,7 +530,7 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
         /* Snapshot the CURRENT live value as the clone's restore point: at a branch the src flow's delta is
            APPLIED, so the heap/cell holds its branch-point value. Applying the clone later reproduces exactly
            that state for the forked sibling; the two then diverge, each capturing its own further writes. */
-        if (se->vref) { de->cur = JS_VarRefGetValue(se->vref); de->cur_valid = 1; continue; }
+        if (se->vref) { JS_VarRefRef(se->vref); de->cur = JS_VarRefGetValue(se->vref); de->cur_valid = 1; continue; }
         JS_GetOwnSlot(ctx, &de->cur, se->obj, se->atom);
         de->cur_valid = 1;
     }
@@ -558,6 +559,7 @@ void cow_delta_free(JSContext *ctx, CowDelta *d) {
         JS_FreeValue(ctx, d->e[i].obj);
         JS_FreeAtom(ctx, d->e[i].atom);
         JS_FreeValue(ctx, d->e[i].base);
+        if (d->e[i].vref) JS_VarRefUnref(ctx, d->e[i].vref);   /* the delta's own reference on the cell */
         if (d->e[i].cur_valid) JS_FreeValue(ctx, d->e[i].cur);
     }
     free(d->e);

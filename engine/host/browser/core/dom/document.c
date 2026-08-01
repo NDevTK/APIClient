@@ -17,6 +17,8 @@
 #include "check.h"
 #include "quickjs.h"
 #include "solver/concolic.h"
+#include "solver/engine.h"
+#include "core/events/event_target.h"
 #include "core/dom/document.h"
 #include <lexbor/css/css.h>
 #include <lexbor/selectors/selectors.h>
@@ -152,6 +154,30 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
     return r;
 }
 
+/* THE DOCUMENT'S LOAD LIFECYCLE. Stage 0 is DOMContentLoaded — fired at the DOCUMENT and bubbling to window,
+   which is where a page registers it — and stage 1 is load, fired at window. `readyState` moves with them,
+   because a page that missed the event reads it instead. Both are per-FLOW: the scheduler asks once per stage
+   for each flow that has run everything the document gave it, so an arm that reached the end of the document
+   fires its own listeners in its own world. */
+static JSValue g_doc_obj = JS_UNDEFINED, g_win_obj = JS_UNDEFINED;
+
+static void document_set_ready(JSContext *ctx, const char *state)
+{
+    if (JS_IsObject(g_doc_obj))
+        JS_SetPropertyStr(ctx, g_doc_obj, "readyState", JS_NewString(ctx, state));
+}
+
+static int document_done_stage(JSContext *ctx, int stage)
+{
+    if (stage == 0) {
+        document_set_ready(ctx, "interactive");
+        return event_target_fire(ctx, g_doc_obj, "DOMContentLoaded", g_win_obj);
+    }
+    DCHECK(stage == 1, "the document lifecycle was asked for a stage it does not have");
+    document_set_ready(ctx, "complete");
+    return event_target_fire(ctx, g_win_obj, "load", JS_UNDEFINED);
+}
+
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url)
 {
     JSValue doc;
@@ -211,5 +237,12 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
         JS_SetPropertyStr(ctx, doc, "head", element_wrap(ctx, lxb_dom_interface_element(head)));
     }
 
-    JS_SetPropertyStr(ctx, (JSValue)global, "document", doc);
+    /* A Document is an EventTarget, and "loading" until its scripts have run. */
+    event_target_install(ctx, doc);
+    JS_SetPropertyStr(ctx, doc, "readyState", JS_NewString(ctx, "loading"));
+
+    JS_SetPropertyStr(ctx, (JSValue)global, "document", JS_DupValue(ctx, doc));
+    g_doc_obj = doc;                                  /* owned by the global; borrowed here for the lifecycle */
+    g_win_obj = JS_DupValue(ctx, global);
+    engine_set_document_done_hook(document_done_stage);
 }

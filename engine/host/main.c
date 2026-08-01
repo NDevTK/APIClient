@@ -24,6 +24,7 @@
 #include "browser/core/fetch/fetch.h"
 #include "browser/core/dom/document.h"
 #include "browser/core/dom/element.h"
+#include "browser/core/events/event_target.h"
 #include "browser/core/frame/location.h"
 #include "browser/core/loader/document_scripts.h"
 #include "browser/core/loader/module_loader.h"
@@ -121,6 +122,8 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
            and never installed, which made every `window.__FLAGS` in a real bundle a ReferenceError. */
         JS_SetPropertyStr(g_ctx, g, "window", JS_DupValue(g_ctx, g));
         JS_SetPropertyStr(g_ctx, g, "self",   JS_DupValue(g_ctx, g));
+        event_target_init(g_ctx);
+        event_target_install(g_ctx, g);   /* window IS the global (7.2.2), so this is window.addEventListener */
         fetch_install(g_ctx, g);
         module_loader_install(g_rt);
         location_install(g_ctx, g, origin);

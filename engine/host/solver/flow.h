@@ -70,6 +70,10 @@ typedef struct Flow {
 
     int   started;         /* decide_enter has run (fresh) — else resume from the blobs below */
     void *frame;           /* the current script's live preemptible frame (JS_FlowNew handle), NULL between scripts */
+    /* THE DOCUMENT'S LOAD STAGE, in THIS flow's world: 0 = still running scripts, 1 = DOMContentLoaded fired,
+       2 = load fired. Per-flow because the listeners are (they are ordinary properties on the target, so the COW
+       delta isolates registration), and because a forked arm reaches the end of the document in its own time. */
+    int   dom_stage;
     int   script_i;        /* position in the script sequence: static [0,n), then this flow's dyn chunks [n, n+dyn_n) */
     char **dyn; int dyn_n, dyn_cap;   /* this flow's OWN lazily-loaded chunk bodies (per-flow, not global) */
     void *delta;           /* this flow's isolated HEAP COW delta (CowDelta*), applied while running */
