@@ -33,3 +33,7 @@ engine/.work/v8mjsunit/
 engine/.work/lexbor-src/
 engine/.work/lxnat/
 engine/.work/lxlist
+
+# emcc output: qjs.js / qjs.mjs / qjs.wasm, ~3MB rebuilt by every `node engine/build.mjs`.
+# Build output is never committed — it was, on twelve commits, because `git add -A` swept it up.
+engine/host/out/
