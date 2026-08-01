@@ -68,6 +68,11 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
     JS_SetMaxStackSize(g_rt, 4 * 1024 * 1024);   /* align quickjs's overflow check with the 8MB wasm stack */
     g_ctx = JS_NewContext(g_rt);
     CHECK(g_ctx != NULL, "the context allocation failed");
+    /* DOMException is a WEB IDL interface the DOM specs throw BY NAME — NotFoundError, NamespaceError,
+       InvalidCharacterError — and the fork already implements the whole intrinsic. Not installing it left the
+       components with nothing to throw, so each spec-mandated failure became a DCHECK saying "the spec throws
+       here and this engine cannot": a documented gap standing in for a capability that existed. */
+    CHECK(JS_AddIntrinsicDOMException(g_ctx) == 0, "the DOMException intrinsic failed to install");
 
     concolic_init(g_ctx);
     flow_registry_init();

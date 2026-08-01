@@ -325,9 +325,11 @@ static JSValue js_el_remove_child(JSContext *ctx, JSValueConst this_val, int arg
     child = elem_of(argv[0]);
     DCHECK(child != NULL, "removeChild was given something that is not an element wrapper");
     if (!child) return JS_UNDEFINED;
-    DCHECK(lxb_dom_interface_node(child)->parent == lxb_dom_interface_node(el),
-           "removeChild was given a node that is not a child of this element — the spec throws NotFoundError "
-           "there, and this engine has no DOMException to throw yet");
+    /* 4.2.3: removing a node that is not a child throws NotFoundError. It IS a DOMException now, so the page
+       gets the throw the spec promises instead of an assert standing in for one — a WPT test that checks the
+       throw was previously a document that stopped. */
+    if (lxb_dom_interface_node(child)->parent != lxb_dom_interface_node(el))
+        return JS_ThrowDOMException(ctx, "NotFoundError", "the node to remove is not a child of this node");
     dom_cow_remove_child(lxb_dom_interface_node(child));
     return JS_DupValue(ctx, argv[0]);
 }

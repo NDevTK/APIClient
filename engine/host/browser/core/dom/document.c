@@ -193,10 +193,62 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
    REPORTING of documents whose tests had all already run.
    Lexbor carries the namespace on the element, so this is its create with the namespace resolved, not a
    createElement in disguise: `el.namespaceURI` is what the page asked for. */
+/* DOM 4.5.3 "validate and extract" — the whole of it, because every one of its failures is a DOMException the
+   spec names and a page catches. `""` MEANS NULL: a namespace of the empty string is set to null before
+   anything else, and skipping that step handed Lexbor a zero-length namespace it refuses, which is what made
+   `document.createElementNS("", "div")` — a shape five WPT documents open with — produce no element at all.
+   Returns 0 and leaves an exception pending on failure; on success *local points into qname. */
+static int validate_and_extract(JSContext *ctx, const char **ns, const char *qname,
+                                const char **local, size_t *prefix_len)
+{
+    static const char XML_NS[]   = "http://www.w3.org/XML/1998/namespace";
+    static const char XMLNS_NS[] = "http://www.w3.org/2000/xmlns/";
+    const char *colon;
+
+    if (*ns && **ns == 0)
+        *ns = NULL;                       /* 1. "If namespace is the empty string, set it to null." */
+    if (!*qname) {
+        JS_ThrowDOMException(ctx, "InvalidCharacterError", "the qualified name is empty");
+        return 0;
+    }
+    colon = strchr(qname, ':');
+    *local = colon ? colon + 1 : qname;
+    *prefix_len = colon ? (size_t)(colon - qname) : 0;
+    if (colon && (*prefix_len == 0 || **local == 0 || strchr(*local, ':'))) {
+        JS_ThrowDOMException(ctx, "InvalidCharacterError", "'%s' is not a valid qualified name", qname);
+        return 0;
+    }
+    if (colon && !*ns) {
+        JS_ThrowDOMException(ctx, "NamespaceError", "a prefixed name needs a namespace");
+        return 0;
+    }
+    if (colon && *prefix_len == 3 && memcmp(qname, "xml", 3) == 0 && strcmp(*ns, XML_NS) != 0) {
+        JS_ThrowDOMException(ctx, "NamespaceError", "the xml prefix is bound to the XML namespace");
+        return 0;
+    }
+    {
+        int q_is_xmlns = strcmp(qname, "xmlns") == 0;
+        int p_is_xmlns = colon && *prefix_len == 5 && memcmp(qname, "xmlns", 5) == 0;
+        if ((q_is_xmlns || p_is_xmlns) && (!*ns || strcmp(*ns, XMLNS_NS) != 0)) {
+            JS_ThrowDOMException(ctx, "NamespaceError", "xmlns is bound to the XMLNS namespace");
+            return 0;
+        }
+        if (*ns && strcmp(*ns, XMLNS_NS) == 0 && !q_is_xmlns && !p_is_xmlns) {
+            JS_ThrowDOMException(ctx, "NamespaceError", "the XMLNS namespace only binds xmlns");
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* 4.5.3 createElementNS(namespace, qualifiedName). createElement's element creation over the validated triple —
+   the element carries the NAMESPACE the page asked for, so `el.namespaceURI` and a namespaced selector answer
+   what they should. testharness.js reaches it on every completed document (`createElementNS(xhtml_ns, "style")`
+   in Output.show_results), and a missing one threw inside the completion-callback list, silencing documents
+   whose tests had all already run. */
 static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
-    const char *ns = NULL, *qname;
-    const char *local, *colon;
+    const char *ns = NULL, *qname, *local;
     size_t prefix_len = 0;
     lxb_dom_element_t *el;
     JSValue r;
@@ -210,20 +262,22 @@ static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, i
     qname = JS_ToCString(ctx, argv[1]);
     if (!qname) { if (ns) JS_FreeCString(ctx, ns); return JS_EXCEPTION; }
 
-    /* "validate and extract" splits the qualified name at the first ':' into prefix and local name — which is
-       exactly the shape lxb_dom_element_create takes, so the split is all this has to do. */
-    colon = strchr(qname, ':');
-    local = colon ? colon + 1 : qname;
-    prefix_len = colon ? (size_t)(colon - qname) : 0;
-
-    el = lxb_dom_element_create(lxb_dom_interface_document(g_doc),
-                                (const lxb_char_t *)local, strlen(local),
-                                (const lxb_char_t *)ns, ns ? strlen(ns) : 0,
-                                colon ? (const lxb_char_t *)qname : NULL, prefix_len,
-                                NULL, 0, false);
-    DCHECK(el != NULL, "createElementNS produced no element — a page building its DOM would silently build "
-                       "nothing and every query after it would answer null");
-    if (ns) JS_FreeCString(ctx, ns);
+    {
+        const char *ns_in = ns;   /* validate_and_extract may null it; the ORIGINAL is what must be freed */
+        if (!validate_and_extract(ctx, &ns, qname, &local, &prefix_len)) {
+            if (ns_in) JS_FreeCString(ctx, ns_in);
+            JS_FreeCString(ctx, qname);
+            return JS_EXCEPTION;
+        }
+        el = lxb_dom_element_create(lxb_dom_interface_document(g_doc),
+                                    (const lxb_char_t *)local, strlen(local),
+                                    (const lxb_char_t *)ns, ns ? strlen(ns) : 0,
+                                    prefix_len ? (const lxb_char_t *)qname : NULL, prefix_len,
+                                    NULL, 0, false);
+        DCHECK(el != NULL, "createElementNS produced no element for a name the spec accepts — a page building "
+                           "its DOM would silently build nothing and every query after it would answer null");
+        if (ns_in) JS_FreeCString(ctx, ns_in);
+    }
     JS_FreeCString(ctx, qname);
     r = element_wrap(ctx, el);
     return r;
