@@ -14,6 +14,7 @@
  * they are honestly ABSENT rather than stubbed: a page reading a global this engine does not provide throws its
  * own TypeError, which is the forcing function that names the edge to build. A stub answering undefined would
  * let a flow run past the missing capability and report a surface it never actually reached. */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <lexbor/html/html.h>
@@ -225,8 +226,13 @@ QJS_EXPORT void qjs_request_park(void)
           "the host can write them to IndexedDB and resume them in a later session");
 }
 
+/* STREAM what is known so far. The host reads findings off the print sink, so this writes the same one result
+   document qjs_result returns, on the same @RESULT line the smoke entry uses — a long analysis reports as it
+   goes instead of only at the end. It READS: no flow is touched, nothing is drained, and the frontier the next
+   step resumes is the one this was called on. */
 QJS_EXPORT void qjs_emit_partial(void)
 {
-    DFAIL("qjs_emit_partial — build the streaming emit: append a fresh @RESULT for everything learned so far "
-          "without disturbing the frontier");
+    DCHECK(g_begun, "qjs_emit_partial was asked of an engine that never ran");
+    printf("@RESULT %s\n", result_json());
+    fflush(stdout);
 }
