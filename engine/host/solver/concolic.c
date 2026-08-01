@@ -183,6 +183,26 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
     return concolic_new(ctx, shape, shape, JS_UNDEFINED);
 }
 
+/* ORDERING over an unknown is unknown. < <= > >= coerce with ToPrimitive, which a concolic cannot satisfy —
+   it is an object whose coercion answers with another concolic — so the operator threw TypeError and took the
+   whole program with it: `document.cookie.indexOf("role=admin") >= 0` explored NEITHER arm, losing both the
+   session path and the anonymous one. The result is a concolic BOOL, so the branch forks exactly as an equality
+   gate does; it carries no {op,tok} constraint because an ordering does not PIN a value the way `=== 'admin'`
+   does — it narrows a domain, and the arm that is taken says which way. */
+int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
+    JSValue a = sp[-2], b = sp[-1];
+    int ca = concolic_is(a), cb = concolic_is(b);
+    if (!ca && !cb) return 0;
+    (void)op;
+    {
+        const char *src = concolic_src_c(ca ? a : b);
+        JSValue res = concolic_new(ctx, "{cmp}", src ? src : "{cmp}", JS_UNDEFINED);
+        JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
+        sp[-2] = res;
+    }
+    return 1;
+}
+
 /* `x in concolic` / property existence: a concolic collection "has" any key (so a membership gate still runs). */
 static int concolic_exotic_has(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     (void)ctx; (void)atom;

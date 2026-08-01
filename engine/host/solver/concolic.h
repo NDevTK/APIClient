@@ -42,7 +42,9 @@ void        concolic_set_candidate(const char *src, const char *payload);
 enum { OPCMP_NONE = 0, OPCMP_EQ = 1, OPCMP_NE = 2 };
 JSValue     concolic_new_cmp(JSContext *ctx, const char *src, int op, const char *tok);  /* a comparison-result bool */
 int         concolic_cmp(JSValueConst v, const char **psrc, const char **ptok);          /* OPCMP_* of a cmp result */
-int         concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq);                   /* == / === propagation (JSConcolicCmpHook) */
+int         concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq);
+/* JSConcolicHooks.rel for < <= > >= — the ordering twin of cmp. */
+int         concolic_rel_hook(JSContext *ctx, JSValue *sp, int op);                   /* == / === propagation (JSConcolicCmpHook) */
 void        concolic_pin(const char *src, const char *val);   /* EQ true-arm: this source now reads `val` (real @H value) */
 /* THE OTHER HALF OF THE PATH CONSTRAINT. A predicate that pins nothing still narrows: taking the true arm of
    `if (cfg.admin)` says the value is truthy FOR THIS FLOW, and a bundle tests the same flag over and over. The
