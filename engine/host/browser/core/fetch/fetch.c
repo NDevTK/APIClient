@@ -13,9 +13,9 @@
  * trap runs on the tramp where it can suspend and fork, and the machine is re-entered with the answer.
  *
  * IT DOES NOT FETCH. SECURITY.md puts every byte of network behind the trusted safeFetch chokepoint the sandbox
- * cannot reach, so the promise settles rather than pending: parking a flow on a reply this build has no way to
- * deliver would hang it, and a hang is not the honest shape of a missing capability — the missing capability is
- * reply provision, and it names itself at qjs_provide. */
+ * cannot reach, so the promise is PENDING and the URL goes on the flow's own register: the trusted host fetches
+ * it, qjs_provide fills the entry, and the flow's continuation resumes with the body. The flow cannot finish
+ * while a reply is owed, which is what keeps reply-gated code reachable. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -32,20 +32,6 @@
 static int    g_fetch_stepid = -1;
 static JSAtom g_atom_method, g_atom_url;
 static JSRuntime *g_fetch_rt;
-
-/* THE PENDING REGISTER. One entry per fetch whose promise has not been resolved: the URL the host must fetch
-   and the resolve capability that delivers the body into the flow parked on it. It grows and never compacts
-   below its high-water mark — the entries are the frontier's, and a bound on them would be a bound on how many
-   requests a page may have in flight, which is a cap. */
-typedef struct FetchPending {
-    char   *url;        /* owned */
-    JSValue resolve;    /* owned; JS_UNDEFINED once delivered */
-    int     is_script;  /* the body is JS to RUN in this flow, not data to hand back */
-} FetchPending;
-
-static FetchPending *g_pending;
-static int           g_pending_count, g_pending_size;
-static char         *g_pending_join;   /* the newline-joined answer fetch_pending_urls last built */
 
 typedef struct JSFetchState {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */

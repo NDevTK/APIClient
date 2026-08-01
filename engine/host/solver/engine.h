@@ -61,6 +61,17 @@ void engine_pending_fetch(JSContext *ctx, JSValueConst resolve, JSValueConst val
    until it does the flow cannot finish, which is what keeps reply-gated code reachable. ONE register — the
    flow's own — because the reaction the resolve enqueues belongs to that flow and to its COW delta. */
 void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst value, const char *url);
+/* THE FRONTIER'S BEST WEIGHT — what the host ranks this document's engine by against every other live one.
+   Level-1 and level-2 are ONE policy (§scheduler): the host orders engines by their best flow exactly as the
+   engine orders flows, so this is flow_weight of flow_best and nothing else. -inf when nothing is runnable, so
+   an engine with no work never outranks one that has some. */
+double engine_top_weight(void);
+
+/* THE VALUE YIELD (§scheduler level-1). The host sets the RUNNER-UP ENGINE's best weight as this engine's
+   floor; the moment this engine's own best flow no longer outranks that, it hands the thread back so the host
+   can run the better document. It is not a slice and not a cap: nothing is dropped, reordered or forgotten —
+   the frontier is exactly where it was and the next step resumes it. -inf (the default) means "run on". */
+void engine_set_yield_floor(double floor);
 const char *engine_pending_urls(void);                                  /* newline-joined, or "" */
 int engine_provide(JSContext *ctx, const char *url, JSValueConst value); /* entries filled */
 

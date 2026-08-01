@@ -210,16 +210,13 @@ QJS_EXPORT void qjs_provide(const char *url, const char *body)
 
 QJS_EXPORT double qjs_top_weight(void)
 {
-    DFAIL("qjs_top_weight — expose the WFQ's top-of-frontier weight so the host can rank this engine against "
-          "the other live documents");
-    return 0;
+    DCHECK(g_begun, "qjs_top_weight was asked of an engine whose frontier was never seeded");
+    return engine_top_weight();
 }
 
 QJS_EXPORT void qjs_set_yield_floor(double floor)
 {
-    (void)floor;
-    DFAIL("qjs_set_yield_floor — build the value yield: the running flow suspends the moment its weight drops "
-          "below this floor, which is the runner-up engine's best weight");
+    engine_set_yield_floor(floor);
 }
 
 QJS_EXPORT void qjs_request_park(void)

@@ -376,6 +376,14 @@ void engine_sched_begin(JSContext *ctx, char *const *bodies, int n, int forking)
 static int (*g_stall_hook)(void);
 void engine_set_stall_hook(int (*owed)(void)) { g_stall_hook = owed; }
 
+static double g_yield_floor = -1.0 / 0.0;
+void engine_set_yield_floor(double floor) { g_yield_floor = floor; }
+
+double engine_top_weight(void) {
+    Flow *b = flow_best();
+    return b ? flow_weight(b) : -1.0 / 0.0;
+}
+
 int engine_sched_step(void) {
     JSContext *ctx = g_sess_ctx;
     char *const *bodies = g_sess_bodies;
@@ -415,6 +423,10 @@ int engine_sched_step(void) {
             else owed = 0;
         }
         if (engine_now_ms() >= deadline) {   /* THREAD-SHARING, not value: hand the thread back, keep the frontier */
+            g_sess_cur = cur;
+            return ENGINE_STEP_YIELD;
+        }
+        if (engine_top_weight() < g_yield_floor) {   /* VALUE: a better DOCUMENT is waiting — same lossless yield */
             g_sess_cur = cur;
             return ENGINE_STEP_YIELD;
         }
