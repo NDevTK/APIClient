@@ -22,6 +22,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "browser/core/fetch/fetch.h"
+#include "browser/core/frame/location.h"
 #include "browser/core/loader/document_scripts.h"
 #include "browser/core/loader/module_loader.h"
 #include "solver/concolic.h"
@@ -99,10 +100,11 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
         JSValue g = JS_GetGlobalObject(g_ctx);
         fetch_install(g_ctx, g);
         module_loader_install(g_rt);
+        location_install(g_ctx, g, origin);
         JS_FreeValue(g_ctx, g);
     }
 
-    (void)code; (void)origin; (void)unused; (void)csp;
+    (void)code; (void)unused; (void)csp;
     return 0;
 }
 
