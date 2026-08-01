@@ -27,6 +27,7 @@
 #include "browser/core/events/event_target.h"
 #include "browser/core/frame/location.h"
 #include "browser/core/frame/window.h"
+#include "browser/core/timing/timer.h"
 #include "browser/core/loader/document_scripts.h"
 #include "browser/core/loader/module_loader.h"
 #include "solver/absent.h"
@@ -110,6 +111,7 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
            server-injected app state and a branch on it forked instead of throwing. */
 
         window_install(g_ctx, g, origin);   /* window/self/frames/parent/top/opener/closed/origin, and name */
+        timer_install(g_ctx, g);            /* setTimeout/setInterval/clearTimeout/clearInterval/queueMicrotask */
         event_target_init(g_ctx);
         event_target_install(g_ctx, g);   /* window IS the global (7.2.2), so this is window.addEventListener */
         fetch_install(g_ctx, g);

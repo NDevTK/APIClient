@@ -157,7 +157,7 @@ static JSValue make_event(JSContext *ctx, const char *type, JSValueConst target)
    call-root flow — the same base a promise reaction runs on, preemptible and forkable like any other program. */
 static void schedule_listener(JSContext *ctx, JSValueConst fn, JSValueConst ev)
 {
-    JS_EnqueueCallJob(ctx, fn, ev);
+    JS_EnqueueCallJob(ctx, fn, 1, &ev);
 }
 
 static int fire_at(JSContext *ctx, JSValueConst target, const char *type, JSValueConst ev)
