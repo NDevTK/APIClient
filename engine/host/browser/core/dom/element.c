@@ -23,6 +23,8 @@
 #include "solver/attr_shadow.h"
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
+#include "solver/endpoint.h"
+#include "solver/engine.h"
 #include "solver/solve.h"
 #include "core/dom/element.h"
 
@@ -204,15 +206,21 @@ static JSValue js_el_set_text_content(JSContext *ctx, JSValueConst this_val, JSV
     return JS_UNDEFINED;
 }
 
-/* [Reflect]ed content attributes: `id` and `class` ARE the attribute, so they go through the same read (taint
-   shadow first) and the same per-flow write. Spelling them out rather than reflecting from the IDL is the gap
-   engine/idlgen.mjs exists to report; what must not happen is a getter that answers something the attribute
-   does not say. */
+/* [Reflect]ed content attributes: the IDL property IS the attribute, so both directions go through the same
+   attribute read (taint shadow first) and the same per-flow write. The MAGIC IS AN INDEX INTO THIS TABLE and
+   nothing else — a boolean magic was fine for two and became a lie at three. Spelling the list out rather than
+   generating it from the IDL is the gap engine/idlgen.mjs exists to report; what must not happen is a property
+   that answers something its attribute does not say, which is exactly what `script.src` did: with no reflection
+   it became an ordinary JS property, the element carried no src attribute, and the injected script named a URL
+   nothing would ever fetch. */
+static const char *const EL_REFLECT[] = { "id", "class", "src" };
+
 static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    JSValueConst name = JS_UNDEFINED;
-    JSValue nv = JS_NewString(ctx, magic ? "class" : "id"), r;
-    (void)name;
+    JSValue nv, r;
+    DCHECK(magic >= 0 && magic < (int)(sizeof(EL_REFLECT) / sizeof(EL_REFLECT[0])),
+           "a reflected property was declared with a magic the attribute table does not name");
+    nv = JS_NewString(ctx, EL_REFLECT[magic]);
     r = js_el_get_attribute(ctx, this_val, 1, (JSValueConst *)&nv);
     JS_FreeValue(ctx, nv);
     return JS_IsNull(r) ? JS_NewStringLen(ctx, "", 0) : r;   /* a reflected string attribute defaults to "" */
@@ -222,12 +230,58 @@ static JSValue js_el_reflect_set(JSContext *ctx, JSValueConst this_val, JSValueC
 {
     JSValue args[2];
     JSValue r;
-    args[0] = JS_NewString(ctx, magic ? "class" : "id");
+    DCHECK(magic >= 0 && magic < (int)(sizeof(EL_REFLECT) / sizeof(EL_REFLECT[0])),
+           "a reflected property was declared with a magic the attribute table does not name");
+    args[0] = JS_NewString(ctx, EL_REFLECT[magic]);
     args[1] = JS_DupValue(ctx, val);
     r = js_el_set_attribute(ctx, this_val, 2, (JSValueConst *)args);
     JS_FreeValue(ctx, args[0]);
     JS_FreeValue(ctx, args[1]);
     return r;
+}
+
+/* 4.12.1 "prepare the script", the insertion half. A page loads code conditionally in three ways and this is the
+   second: `s = createElement("script"); s.src = u; body.appendChild(s)`. Before this the injection was a SILENT
+   no-op — the element went into the tree and the code it named was never fetched, never run, never even
+   reported, so every endpoint and sink behind an A/B flag or a feature gate was missing with nothing to say so.
+   The loaded code is more PROGRAM OF THE INJECTING FLOW: it joins that flow's script sequence, so it runs under
+   the delta, the pins and the position in the BFS of the world that injected it, and a sibling that never took
+   the branch never sees it.
+   INSERTION is the trigger, which is why this is here and not in the innerHTML path: markup parsed into
+   innerHTML does not execute its scripts, and that difference is load-bearing for the @S breakout contexts. */
+static void element_prepare_script(JSContext *ctx, lxb_dom_element_t *el)
+{
+    size_t n = 0, vl = 0;
+    const lxb_char_t *tag = lxb_dom_element_qualified_name(el, &n);
+    const lxb_char_t *src;
+    int si;
+
+    if (!tag || n != 6 || memcmp(tag, "script", 6) != 0)
+        return;
+    /* An UNKNOWN src is a URL this engine cannot fetch, but it is still a request the page makes — recorded so
+       it reaches the @H surface as the shape it is, rather than disappearing. */
+    si = attr_shadow_find(el, ATTR_SLOT_ATTRIBUTE, "src");
+    if (si >= 0) {
+        endpoint_record(ctx, "GET", attr_shadow_opaque(si));
+        return;
+    }
+    src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &vl);
+    if (src && vl) {
+        char *u = malloc(vl + 1);
+        CHECK(u, "element: OOM copying an injected script's URL");
+        memcpy(u, src, vl); u[vl] = 0;
+        engine_pending_script_url(ctx, u);
+        free(u);
+        return;
+    }
+    /* No src: the element's own text IS the program, and it runs on insertion. */
+    {
+        lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &n);
+        if (txt) {
+            if (n) engine_queue_script((const char *)txt);
+            lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
+        }
+    }
 }
 
 /* 4.2.3 appendChild / removeChild. The tree mutation a page performs after createElement — without them a built
@@ -244,6 +298,7 @@ static JSValue js_el_append_child(JSContext *ctx, JSValueConst this_val, int arg
                           "of what it built");
     if (!child) return JS_UNDEFINED;
     dom_cow_append_child(lxb_dom_interface_node(el), lxb_dom_interface_node(child));
+    element_prepare_script(ctx, child);
     return JS_DupValue(ctx, argv[0]);
 }
 
@@ -272,6 +327,7 @@ static const JSCFunctionListEntry js_element_proto[] = {
     JS_CGETSET_DEF("textContent", js_el_get_text_content, js_el_set_text_content),
     JS_CGETSET_MAGIC_DEF("id", js_el_reflect_get, js_el_reflect_set, 0),
     JS_CGETSET_MAGIC_DEF("className", js_el_reflect_get, js_el_reflect_set, 1),
+    JS_CGETSET_MAGIC_DEF("src", js_el_reflect_get, js_el_reflect_set, 2),
 };
 
 static void element_finalizer(JSRuntime *rt, JSValue val) { (void)rt; (void)val; }

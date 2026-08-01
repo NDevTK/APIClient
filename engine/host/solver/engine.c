@@ -39,7 +39,32 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
     f->pending[f->npend].url = url ? strdup(url) : NULL;
     CHECK(!url || f->pending[f->npend].url, "engine: OOM recording a pending fetch's URL");
     f->pending[f->npend].have_value = (url == NULL);
+    f->pending[f->npend].kind = FLOW_PENDING_RESOLVE;
     f->npend++;
+}
+
+/* PARK ON AN INJECTED SCRIPT. `document.body.appendChild(s)` with `s.src` set is the other way a page loads code
+   conditionally, and it has no promise for the reply to settle — the reply IS more program. The flow parks on
+   the URL exactly as a fetch does (same register, same dedup, same stall accounting) and the drain queues the
+   body as this flow's next script, so the loaded code runs in the world that injected it: its COW delta, its
+   pins, its position in the BFS. A sibling that never took that branch never sees the script. */
+void engine_pending_script_url(JSContext *ctx, const char *url) {
+    Flow *f = flow_running();
+    DCHECK(f != NULL, "a <script src> was injected outside a running flow");
+    DCHECK(url != NULL && *url, "a <script src> was injected with no URL");
+    if (f->npend >= f->pendcap) {
+        f->pendcap = f->pendcap ? f->pendcap * 2 : 8;
+        f->pending = realloc(f->pending, (size_t)f->pendcap * sizeof(FlowPending));
+        CHECK(f->pending, "engine: OOM growing the flow's pending list");
+    }
+    f->pending[f->npend].resolve = JS_UNDEFINED;
+    f->pending[f->npend].value = JS_UNDEFINED;
+    f->pending[f->npend].url = strdup(url);
+    CHECK(f->pending[f->npend].url, "engine: OOM recording an injected script's URL");
+    f->pending[f->npend].have_value = 0;
+    f->pending[f->npend].kind = FLOW_PENDING_SCRIPT;
+    f->npend++;
+    (void)ctx;
 }
 
 /* THE URLS THE HOST OWES, newline-joined across every live flow, or "" — one register, the flows' own. The
@@ -112,8 +137,15 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
     for (int i = 0; i < f->npend; i++) {
         FlowPending *p = &f->pending[i];
         if (!p->have_value) { f->pending[keep++] = *p; continue; }   /* the host still owes this one */
-        JSValue r = JS_Call(ctx, p->resolve, JS_UNDEFINED, 1, (JSValueConst *)&p->value);
-        JS_FreeValue(ctx, r);
+        if (p->kind == FLOW_PENDING_SCRIPT) {
+            /* the reply is PROGRAM: it joins this flow's script sequence, and the one BFS runs it */
+            const char *body = JS_ToCString(ctx, p->value);
+            DCHECK(body != NULL, "an injected script's body did not arrive as text");
+            if (body) { engine_queue_script(body); JS_FreeCString(ctx, body); }
+        } else {
+            JSValue r = JS_Call(ctx, p->resolve, JS_UNDEFINED, 1, (JSValueConst *)&p->value);
+            JS_FreeValue(ctx, r);
+        }
         JS_FreeValue(ctx, p->resolve);
         JS_FreeValue(ctx, p->value);
         free(p->url);
@@ -167,6 +199,27 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
         sib->dyn = malloc((size_t)parent->dyn_n * sizeof(char *)); CHECK(sib->dyn, "engine: OOM fork dyn");
         for (int i = 0; i < parent->dyn_n; i++) { sib->dyn[i] = strdup(parent->dyn[i]); CHECK(sib->dyn[i], "engine: OOM fork dyn body"); }
         sib->dyn_n = sib->dyn_cap = parent->dyn_n;
+    }
+    /* THE REPLIES STILL IN FLIGHT ARE INHERITED TOO. A flow that forks while a request is outstanding — a
+       fetch whose `.then` has not run, an injected <script src> whose body has not arrived — was leaving the
+       sibling with an empty register, so the reply reached exactly one world and everything behind it was
+       silently missing from the other. Both arms wait on the same URL (engine_pending_urls dedups it, and
+       engine_provide fills every entry that names it), and each then delivers on its OWN timeline: the resolve
+       function is shared, but its already_resolved latch and the promise's settlement are per-flow state the
+       COW delta captures, which is precisely what lets both arms settle one capability. */
+    if (parent->npend) {
+        sib->pending = malloc((size_t)parent->npend * sizeof(FlowPending));
+        CHECK(sib->pending, "engine: OOM inheriting the pending replies at a fork");
+        for (int i = 0; i < parent->npend; i++) {
+            FlowPending *sp = &parent->pending[i], *dp = &sib->pending[i];
+            dp->resolve = JS_DupValue(ctx, sp->resolve);
+            dp->value = JS_DupValue(ctx, sp->value);
+            dp->url = sp->url ? strdup(sp->url) : NULL;
+            CHECK(!sp->url || dp->url, "engine: OOM inheriting a pending URL at a fork");
+            dp->have_value = sp->have_value;
+            dp->kind = sp->kind;
+        }
+        sib->npend = sib->pendcap = parent->npend;
     }
 }
 

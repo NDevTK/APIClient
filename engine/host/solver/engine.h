@@ -19,6 +19,9 @@
    scripts on different arms — lazy loading is not a separate system, just more code the flow runs and forks
    through. The body is copied; the queue is per-run and drained by the flow that owns it. */
 void engine_queue_script(const char *body);
+/* Park the running flow on an injected <script src>: the host fetches it, and the reply becomes this flow's next
+   program rather than a promise's value. */
+void engine_pending_script_url(JSContext *ctx, const char *url);
 
 /* solver_decide calls this at a forking branch to stash the sibling's hot decision + pins; the interpreter's
    fork hook (engine_fork_finalize) assembles the sibling from the frame clone + these. */

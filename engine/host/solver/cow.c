@@ -10,9 +10,12 @@
 /* A delta entry is EITHER a property slot (vref==NULL: obj/atom/existed) OR a closure cell (vref!=NULL: the
    shared JSVarRef, whose value is read/written via JS_VarRefGet/SetValue; obj/atom/existed unused). base/cur
    hold the baseline/flow values either way. */
-/* A THIRD entry kind (is_gendata=1) swaps a shared GENERATOR object's execution-state pointer per flow: obj is
-   the generator object, g0 its object-owned original state, g1 the per-flow clone (owned by this delta via
-   JS_GenDataRef/Unref). Apply installs g1, unapply restores g0 — a fixed toggle, no cur/base value tracking. */
+/* A THIRD entry kind (is_gendata) swaps a shared COROUTINE object's execution-state pointer per flow: obj is
+   the object, g0 its original state, g1 the per-flow clone (owned by this delta). Apply installs g1, unapply
+   restores g0 — a fixed toggle, no cur/base value tracking. TWO OBJECT KINDS share it because they are one
+   concept — "which activation does this shared object name while I run" — and differ only in the setter: a
+   GENERATOR object (is_gendata=1) and an async resolve/reject CLOSURE (is_gendata=2), whose activation is
+   consumed by being resumed. */
 /* A FOURTH entry kind (is_map=1) is a reversible Set/Map record mutation by this flow (an UNDO-LOG entry, not a
    deduped slot): obj is the Set/Map, base holds the record's key, cur its new value, map_old its prior value.
    map_op selects the inverse pair — ADD (apply re-adds, unapply deletes), OVERWRITE (apply sets cur, unapply
@@ -99,7 +102,9 @@ CowDelta *cow_delta_new(void) {
     return d;
 }
 
-void cow_set_current(CowDelta *d) { g_current = d; }
+/* The engine asks the same shared-vs-private question this delta asks (JS_IsFlowShared), so the generation
+   travels with the delta: setting one without the other would have the two disagree about what is shared. */
+void cow_set_current(CowDelta *d) { g_current = d; JS_SetFlowForkGen(d ? d->fork_gen : 0); }
 
 /* The is_async entry's four operations, dispatched by TARGET. One mechanism, two things it captures — the
    alternative was a sixth entry kind whose unapply/apply/fork/free arms would be the same four lines again. */
@@ -285,6 +290,48 @@ void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
    bindings it wrote stayed private to it. The sibling then read exports nothing had written in its world. There
    is no flow-private skip here: a module record is reachable from the realm's module map the moment it loads, so
    it is shared state whoever created it. */
+/* The setter/ownership pair for a coroutine-state entry, chosen by its kind. */
+static void cow_gd_install(const CowEntry *e, void *gd) {
+    if (e->is_gendata == 2) JS_SetObjAsyncData(e->obj, gd);
+    else JS_SetObjGenData(e->obj, gd);
+}
+static void cow_gd_ref(const CowEntry *e, void *gd) {
+    if (e->is_gendata == 2) JS_AsyncDataRef(gd); else JS_GenDataRef(gd);
+}
+static void cow_gd_unref(JSContext *ctx, const CowEntry *e, void *gd) {
+    if (e->is_gendata == 2) JS_AsyncDataUnref(ctx, gd); else JS_GenDataUnref(ctx, gd);
+}
+
+/* JSTimeTravelHooks.async_fork — the async twin of the generator swap. The engine has already cloned the
+   activation; this records the toggle so the clone is what this flow's closure names and the original stays the
+   baseline every other arm finds. The delta ADOPTS the clone's creation reference. */
+void cow_capture_async_fork(JSContext *ctx, JSValueConst closure, void *base_data, void *cur_data) {
+    CowDelta *d = g_current;
+    if (!d) {
+        /* NO FLOW OWNS THE SWAP, so there is nothing to undo it and nothing to own the clone: DECLINE. The
+           closure keeps naming the original, which is correct — with no delta there is no sibling to isolate
+           from. The engine re-reads the closure and proceeds with whichever activation it finds. */
+        JS_AsyncDataUnref(ctx, cur_data);
+        (void)base_data;
+        return;
+    }
+    if (d->n >= d->cap) {
+        d->cap = d->cap ? d->cap * 2 : 32;
+        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
+        CHECK(d->e, "cow: OOM growing delta (async_fork) — a lost activation swap corrupts a flow's timeline");
+        cow_hash_rebuild(d);
+    }
+    CowEntry *e = &d->e[d->n++];
+    memset(e, 0, sizeof *e);
+    e->obj = JS_DupValue(ctx, closure);
+    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->map_old = JS_UNDEFINED;
+    /* The POINTER is swapped, not the ownership: the closure's own reference stays on the original exactly as a
+       generator object's stays on its object-owned state, and the delta owns the clone by adopting its creation
+       reference. */
+    e->is_gendata = 2; e->g0 = base_data; e->g1 = cur_data;
+    JS_SetObjAsyncData(closure, cur_data);
+}
+
 void cow_capture_module_eval(JSContext *ctx, void *mod) {
     if (g_capturing || !g_current || !mod) return;
     CowDelta *d = g_current;
@@ -365,7 +412,7 @@ void cow_unapply(JSContext *ctx, CowDelta *d) {
     g_capturing = 1;
     for (int i = d->n - 1; i >= 0; i--) {   /* reverse: symmetric with apply */
         CowEntry *e = &d->e[i];
-        if (e->is_gendata) { JS_SetObjGenData(e->obj, e->g0); continue; }   /* restore the object-owned original */
+        if (e->is_gendata) { cow_gd_install(e, e->g0); continue; }   /* restore the shared original */
         if (e->is_async) {   /* blob state: save what THIS flow produced, then rewind to the baseline */
             cow_state_free(JS_GetRuntime(ctx), e, e->a_cur);
             e->a_cur = cow_state_save(ctx, e);
@@ -406,7 +453,7 @@ void cow_apply(JSContext *ctx, CowDelta *d) {
     g_capturing = 1;
     for (int i = 0; i < d->n; i++) {   /* forward: replay the flow's writes over the pristine baseline */
         CowEntry *e = &d->e[i];
-        if (e->is_gendata) { JS_SetObjGenData(e->obj, e->g1); continue; }   /* install this flow's generator clone */
+        if (e->is_gendata) { cow_gd_install(e, e->g1); continue; }   /* install this flow's own clone */
         if (e->is_async) { cow_state_restore(ctx, e, e->a_cur); continue; }   /* re-install what this flow produced */
         if (e->is_map) {   /* replay the flow's record mutation: ADD/OVERWRITE->set new value, DELETE->delete */
             if (e->map_op == COW_MAP_DELETE) JS_MapDeleteRecord(ctx, e->obj, e->base);
@@ -432,6 +479,7 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
        are correctly treated as flow-private. Updating the parent's fork_gen (it may be > its previous value) is
        correct: the parent must isolate from its NEWEST sibling, which shares everything up to now. */
     src->fork_gen = d->fork_gen = JS_FlowGen();
+    JS_SetFlowForkGen(src->fork_gen);   /* the RUNNING flow's generation just changed without a switch */
     JS_FlowBumpGen();
     if (src->n == 0) return d;
     d->e = malloc((size_t)src->n * sizeof(CowEntry)); CHECK(d->e, "cow: OOM fork");
@@ -445,10 +493,10 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
            async settlement and dereferenced a wild blob. A zeroed JSValue is the integer 0, which is
            non-refcounted and safe to free, so this is a valid empty entry and not just a memset. */
         memset(de, 0, sizeof *de);
-        if (se->is_gendata) {   /* generator swap: the sibling shares the SAME per-flow clone (a ref), same toggle */
+        if (se->is_gendata) {   /* coroutine swap: the sibling shares the SAME per-flow clone (a ref), same toggle */
             de->obj = JS_DupValue(ctx, se->obj);
-            de->is_gendata = 1; de->g0 = se->g0; de->g1 = se->g1;
-            JS_GenDataRef(se->g1);   /* the copy holds its own ownership ref on the clone */
+            de->is_gendata = se->is_gendata; de->g0 = se->g0; de->g1 = se->g1;
+            cow_gd_ref(se, se->g1);   /* the copy holds its own ownership ref on the clone */
             continue;
         }
         if (se->is_async) {   /* blob state: the sibling inherits its OWN copy of both blobs — the two deltas
@@ -493,7 +541,7 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
 void cow_delta_free(JSContext *ctx, CowDelta *d) {
     if (!d) return;
     for (int i = 0; i < d->n; i++) {
-        if (d->e[i].is_gendata) { JS_FreeValue(ctx, d->e[i].obj); JS_GenDataUnref(ctx, d->e[i].g1); continue; }
+        if (d->e[i].is_gendata) { JS_FreeValue(ctx, d->e[i].obj); cow_gd_unref(ctx, &d->e[i], d->e[i].g1); continue; }
         if (d->e[i].is_async) {
             JS_FreeValue(ctx, d->e[i].obj);
             cow_state_free(JS_GetRuntime(ctx), &d->e[i], d->e[i].a_base);

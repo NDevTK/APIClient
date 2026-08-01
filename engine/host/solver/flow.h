@@ -25,7 +25,13 @@ typedef struct { JSJobFunc *fn; int argc; JSValue *argv; } FlowJob;
 /* ONE live fetch this flow issued. `url` is what the trusted host must fetch (the sandbox cannot), and `value`
    is what the continuation resumes with once it has. A NULL url is an engine-supplied reply — a fixture or a
    modelled body — which needs no host round trip and drains immediately. */
-typedef struct { JSValue resolve; JSValue value; char *url; int have_value; } FlowPending;
+/* WHAT THIS FLOW OWES ITSELF once the host supplies `url`. A fetch RESOLVES its promise with the reply; an
+   injected <script src> has no promise at all — its reply is more of this flow's PROGRAM, queued as another
+   script the one BFS runs. The kind is on the entry because it is the entry's business: the register, the
+   dedup and the stall accounting are identical either way, and only the delivery differs. */
+#define FLOW_PENDING_RESOLVE 0   /* fetch(): call `resolve` with the reply */
+#define FLOW_PENDING_SCRIPT  1   /* <script src>: queue the reply as this flow's next program */
+typedef struct { JSValue resolve; JSValue value; char *url; int have_value; int kind; } FlowPending;
 
 /* WHAT ONE STEP OF A FLOW ANSWERED. OWED is not a third kind of flow — it is the same flow reporting that the
    work it has left belongs to the host, so the scheduler can tell an exhausted frontier from a waiting one

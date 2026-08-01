@@ -61,6 +61,11 @@ void      cow_capture_async_state(JSContext *ctx, JSValueConst obj);
    chunk left it EVALUATED for every sibling and the siblings read its exports as TDZ. */
 void      cow_capture_module_eval(JSContext *ctx, void *mod);
 
+/* Install as JSTimeTravelHooks.async_fork: record the per-flow swap of a shared suspended ASYNC activation. The
+   engine cloned it because resuming CONSUMES it; this makes the clone what this flow's resolve/reject closure
+   names, leaving the original as the baseline every other arm still finds. */
+void      cow_capture_async_fork(JSContext *ctx, JSValueConst closure, void *base_data, void *cur_data);
+
 /* Record a per-flow GENERATOR-STATE swap into delta `d` (JSTimeTravelHooks.gen_fork): the shared generator
    object `genobj` must resolve to `cur_gd` (a per-flow clone `d` OWNS) while `d` runs and to `base_gd` (its
    object-owned original) otherwise. Applied/unapplied like any other slot on context-switch. Dedup-REPLACES an
