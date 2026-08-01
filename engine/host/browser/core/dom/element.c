@@ -132,8 +132,23 @@ static JSValue js_el_set_inner_html(JSContext *ctx, JSValueConst this_val, JSVal
     }
     {
         lxb_html_document_t *doc = lxb_html_interface_document(lxb_dom_interface_node(el)->owner_document);
-        lxb_dom_node_t *frag = lxb_html_document_parse_fragment(doc, el,
+        lxb_dom_node_t *frag;
+        /* LEXBOR MUST NOT RUN PAGE CODE. That is what lets a parser — a state machine with a great deal of
+           internal position — live inside an engine whose flows suspend and resume at any depth: the parse holds
+           no continuation across anything the page can preempt, so it never has to be suspended and never has to
+           be part of a snapshot. It completes inside one opcode over bytes, and any <script> it produces is
+           QUEUED as a flow by element_prepare_script rather than executed by the tree builder.
+           Re-entry is what a violation would look like: page code running mid-parse and reaching innerHTML
+           again. Asserted here rather than assumed, because the day it stops holding is the day a half-built
+           tree ends up inside another flow's delta. */
+        static int in_parse;
+        DCHECK(!in_parse, "a fragment parse re-entered itself — Lexbor ran page code mid-parse, and a parser "
+                          "that holds a continuation across the page cannot live in a suspending engine: give "
+                          "it the flow treatment or keep the script out of the tree builder");
+        in_parse = 1;
+        frag = lxb_html_document_parse_fragment(doc, el,
                                    (const lxb_char_t *)html, strlen(html));
+        in_parse = 0;
         if (frag) {
             for (node = frag->first_child; node; node = next) {
                 next = node->next;

@@ -185,6 +185,50 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
     return r;
 }
 
+/* 4.5.3 createElementNS(namespace, qualifiedName). Same element creation as createElement, plus the spec's
+   "validate and extract": a qualified name may carry a prefix (`svg:rect`), and the element is created in the
+   named NAMESPACE rather than the document's default. testharness.js reaches it on every completed document —
+   `output_document.createElementNS(xhtml_ns, "style")` in Output.show_results — and a missing one threw
+   "not a function" inside the completion callback, which aborted the callback list and so silenced the
+   REPORTING of documents whose tests had all already run.
+   Lexbor carries the namespace on the element, so this is its create with the namespace resolved, not a
+   createElement in disguise: `el.namespaceURI` is what the page asked for. */
+static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    const char *ns = NULL, *qname;
+    const char *local, *colon;
+    size_t prefix_len = 0;
+    lxb_dom_element_t *el;
+    JSValue r;
+
+    (void)this_val;
+    if (argc < 2) return JS_ThrowTypeError(ctx, "createElementNS requires a namespace and a qualified name");
+    if (!JS_IsNull(argv[0]) && !JS_IsUndefined(argv[0])) {
+        ns = JS_ToCString(ctx, argv[0]);
+        if (!ns) return JS_EXCEPTION;
+    }
+    qname = JS_ToCString(ctx, argv[1]);
+    if (!qname) { if (ns) JS_FreeCString(ctx, ns); return JS_EXCEPTION; }
+
+    /* "validate and extract" splits the qualified name at the first ':' into prefix and local name — which is
+       exactly the shape lxb_dom_element_create takes, so the split is all this has to do. */
+    colon = strchr(qname, ':');
+    local = colon ? colon + 1 : qname;
+    prefix_len = colon ? (size_t)(colon - qname) : 0;
+
+    el = lxb_dom_element_create(lxb_dom_interface_document(g_doc),
+                                (const lxb_char_t *)local, strlen(local),
+                                (const lxb_char_t *)ns, ns ? strlen(ns) : 0,
+                                colon ? (const lxb_char_t *)qname : NULL, prefix_len,
+                                NULL, 0, false);
+    DCHECK(el != NULL, "createElementNS produced no element — a page building its DOM would silently build "
+                       "nothing and every query after it would answer null");
+    if (ns) JS_FreeCString(ctx, ns);
+    JS_FreeCString(ctx, qname);
+    r = element_wrap(ctx, el);
+    return r;
+}
+
 /* THE DOCUMENT'S LOAD LIFECYCLE. Stage 0 is DOMContentLoaded — fired at the DOCUMENT and bubbling to window,
    which is where a page registers it — and stage 1 is load, fired at window. `readyState` moves with them,
    because a page that missed the event reads it instead. Both are per-FLOW: the scheduler asks once per stage
@@ -253,6 +297,8 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
                       JS_NewCFunction(ctx, js_doc_get_elements_by_tag_name, "getElementsByTagName", 1));
     JS_SetPropertyStr(ctx, doc, "createElement",
                       JS_NewCFunction(ctx, js_doc_create_element, "createElement", 1));
+    JS_SetPropertyStr(ctx, doc, "createElementNS",
+                      JS_NewCFunction(ctx, js_doc_create_element_ns, "createElementNS", 2));
     element_doc_set(dom);
 
     /* 3.1.1 documentElement / body / head — the three tree entry points every page starts from. Lexbor has
