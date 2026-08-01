@@ -18,6 +18,7 @@ const ENGINE = dirname(fileURLToPath(import.meta.url));
 const QJS = join(ENGINE, "qjs");
 const HOST = join(ENGINE, "host");
 const OUT = join(HOST, "out");
+const EXT_QJS = join(ENGINE, "..", "extension", "lib", "qjs");   // where bridge.js imports the engine from
 
 /* The recognizer ratchet runs BEFORE anything is compiled (CLAUDE.md §C-stack). The ban was written down and then
    violated four times in one session with the rule already in the file — so it is BUILT, not written. A detector
@@ -39,6 +40,7 @@ const EMCC = join(EMSDK, "upstream", "emscripten", process.platform === "win32" 
 
 if (!existsSync(EMCC)) { console.error("[build] emcc not found at " + EMCC); process.exit(1); }
 mkdirSync(OUT, { recursive: true });
+mkdirSync(EXT_QJS, { recursive: true });
 
 /* ── Lexbor DOM (HTML5 parser + DOM + CSS selectors) ─────────────────────────────
    The moat runs the page's real bundle against a real DOM. Lexbor is pure C, compiles
@@ -142,7 +144,11 @@ const args = [
          "-sEXPORTED_RUNTIME_METHODS=" + JSON.stringify(["ccall", "lengthBytesUTF8", "stringToUTF8"]),
          "-sMODULARIZE=1", "-sEXPORT_ES6=1", "-sEXPORT_NAME=createQJS", "-sINVOKE_RUN=0"]
       : ["-sEXIT_RUNTIME=1"]),
-  "-o", join(OUT, ABI ? "qjs.mjs" : "qjs.js"),
+  /* THE ABI ARTIFACT STAGES WHERE THE EXTENSION LOADS IT: bridge.js does import("./lib/qjs/qjs.mjs"), so that
+     is the output path, not engine/host/out. It also keeps the two targets from colliding — emcc derives the
+     .wasm name from the -o basename, so both emitting into out/qjs.* shared one qjs.wasm and overwrote each
+     other, leaving a loader pair that was valid only until the next smoke build. Two artifacts, two homes. */
+  "-o", ABI ? join(EXT_QJS, "qjs.mjs") : join(OUT, "qjs.js"),
 ];
 
 console.log("[build] emcc " + sources.length + " sources -> engine/host/out/qjs." + (ABI ? "mjs (production ABI)" : "js (new-world smoke test)"));
@@ -155,7 +161,7 @@ console.log("[build] OK -> " + resolve(join(OUT, "qjs.js")));
 // (The old ES6-module + qjs.wasm staging into extension/lib/qjs served the deleted qjs_* entry; it returns when
 // that entry is rebuilt.)
 if (ABI) {
-  console.log("[build] OK -> " + resolve(join(OUT, "qjs.mjs")) + " (no smoke run: the ABI entry has no main())");
+  console.log("[build] OK -> " + resolve(join(EXT_QJS, "qjs.mjs")) + " (no smoke run: the ABI entry has no main())");
 } else {
   const t = spawnSync(process.execPath, [join(OUT, "qjs.js")], { stdio: "inherit", shell: false });
   if (t.status !== 0) { console.error("[build] smoke test FAILED rc=" + (t.status ?? "signal")); process.exit(t.status || 1); }
