@@ -18,6 +18,37 @@
 #include "quickjs.h"
 #include "solver/concolic.h"
 #include "core/dom/document.h"
+#include "core/dom/element.h"
+
+/* The document this component installed, for the tree walks below. One instance is one document. */
+static lxb_html_document_t *g_doc;
+static void element_doc_set(lxb_html_document_t *d) { g_doc = d; }
+
+/* 4.5.3 getElementById: the first element in tree order whose id attribute matches. A pure Lexbor walk. */
+static JSValue js_doc_get_element_by_id(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    lxb_dom_collection_t *col;
+    const char *id;
+    JSValue r = JS_NULL;
+
+    (void)this_val;
+    DCHECK(g_doc != NULL, "getElementById ran before the document was installed");
+    if (argc < 1) return JS_NULL;
+    id = JS_ToCString(ctx, argv[0]);
+    if (!id) return JS_EXCEPTION;
+    col = lxb_dom_collection_make(&g_doc->dom_document, 8);
+    if (col) {
+        lxb_dom_element_t *root = lxb_dom_interface_element(g_doc->dom_document.element);
+        if (root &&
+            lxb_dom_elements_by_attr(root, col, (const lxb_char_t *)"id", 2,
+                                     (const lxb_char_t *)id, strlen(id), true) == LXB_STATUS_OK &&
+            lxb_dom_collection_length(col) > 0)
+            r = element_wrap(ctx, lxb_dom_collection_element(col, 0));
+        lxb_dom_collection_destroy(col, true);
+    }
+    JS_FreeCString(ctx, id);
+    return r;
+}
 
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url)
 {
@@ -48,6 +79,14 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        path unreachable — the same mistake as a concrete `undefined` for absent app state. */
     JS_SetPropertyStr(ctx, doc, "cookie",   concolic_new(ctx, "{document.cookie}",   "document.cookie",   JS_UNDEFINED));
     JS_SetPropertyStr(ctx, doc, "referrer", concolic_new(ctx, "{document.referrer}", "document.referrer", JS_UNDEFINED));
+
+    /* getElementById is a pure tree walk over the id attribute — no page code, and the REAL element, wrapped
+       once so identity holds. querySelector is still absent: it needs a CSS selector engine, and answering it
+       with a partial matcher would return the wrong element silently, which is worse than the throw that names
+       what to build. */
+    JS_SetPropertyStr(ctx, doc, "getElementById",
+                      JS_NewCFunction(ctx, js_doc_get_element_by_id, "getElementById", 1));
+    element_doc_set(dom);
 
     JS_SetPropertyStr(ctx, (JSValue)global, "document", doc);
 }
