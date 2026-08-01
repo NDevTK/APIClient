@@ -5,16 +5,19 @@
  * nothing at all — no module, no error, no record, and the `.then` never ran. A page asked to load code and the
  * engine answered silently, which is the one shape an unbuilt capability must not have.
  *
- * WHAT THIS DOES is record the specifier so qjs_chunks reports it and the trusted host can fetch it. WHAT IT
- * CANNOT DO YET is deliver the body: JSModuleLoaderFunc is synchronous C and the fetch is the host's, so there
- * is no point in it where the flow can park. Re-running the importing scope once the body arrives would be a
- * REPLAY, which is banned outright — the flow must SUSPEND and resume. So the import fails, loudly and by name,
- * and the import rejects the way a browser's does for a module whose fetch failed. */
+ * It records the specifier — qjs_chunks reports it and the trusted host fetches it, because SECURITY.md puts
+ * every byte of network behind safeFetch and this sandbox cannot reach it — and then PARKS the load. 16.2.1.9
+ * lets the host finish a load asynchronously, which is what a browser's module fetch is, so the loader hands
+ * the engine a promise of the SOURCE TEXT and returns. The promise is the flow's own pending register, exactly
+ * as core/fetch parks a request: qjs_provide settles it, and the load resumes on its reaction — compile, link,
+ * evaluate, and the page's `await import(...)` continues from where it suspended. Nothing re-runs; the
+ * importing scope is never re-entered, which would be a replay. */
 #include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
 #include "quickjs.h"
+#include "solver/engine.h"
 #include "core/loader/module_loader.h"
 
 /* THE CHUNK REGISTER: every specifier forced execution reached, in discovery order, deduped. It never forgets
@@ -56,14 +59,20 @@ const char *module_loader_chunks(void)
 
 static JSModuleDef *module_load(JSContext *ctx, const char *module_name, void *opaque)
 {
+    JSValue promise, resolving[2];
+
     (void)opaque;
     chunk_record(module_name);
-    /* A module the engine cannot fetch FAILS TO LOAD, which is what a browser does for one whose network
-       request did not succeed: the import promise rejects, the page's own catch runs, and everything after it
-       keeps exploring. That is faithful, not a stub — and the specifier is on the register either way, which is
-       the discovery this component is for. Delivering the body is the part that is missing, and it announces
-       itself where a body arrives with nothing to hand it to. */
-    JS_ThrowReferenceError(ctx, "module not provided: %s", module_name);
+    promise = JS_NewPromiseCapability(ctx, resolving);
+    if (JS_IsException(promise))
+        return NULL;   /* OOM building the capability: the throw is already in flight and rejects the import */
+    /* The URL goes on the FLOW's pending register, so the reaction that finishes the load belongs to the flow
+       that imported — and to its COW delta. The flow cannot finish while the chunk is owed, which is what keeps
+       a lazily-imported endpoint reachable. */
+    engine_pending_fetch_url(ctx, resolving[0], JS_UNDEFINED, module_name);
+    JS_FreeValue(ctx, resolving[0]);
+    JS_FreeValue(ctx, resolving[1]);
+    JS_ModuleLoadPending(ctx, promise);   /* ownership transfers */
     return NULL;
 }
 

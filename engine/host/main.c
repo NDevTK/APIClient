@@ -226,21 +226,17 @@ QJS_EXPORT const char *qjs_chunks(void)
 QJS_EXPORT void qjs_provide(const char *url, const char *body)
 {
     DCHECK(g_begun, "a body was provided to an engine that never ran");
-    /* A JS body is more of the CURRENT flow's program; anything else resumes the continuation awaiting it.
-       Which one it is, is the host's to say — it fetched it and knows what it asked for. */
+    /* ONE delivery for every parked request. A fetch's reply and a lazy CHUNK's source both settle a promise the
+       flow registered before it suspended — the chunk's is the module loader's source promise, so the load
+       finishes on its reaction and the page's `await import(...)` continues. Neither is the host's to
+       distinguish, and neither re-runs anything. */
     {
         JSValue v = body ? JS_NewString(g_ctx, body) : JS_UNDEFINED;
         int n = engine_provide(g_ctx, url, v);
         JS_FreeValue(g_ctx, v);
-        if (n == 0 && *module_loader_chunks() != '\0')
-            DFAIL("a body was provided for a URL no flow is parked on, and this engine has discovered lazy "
-                  "chunks — so it is probably a CHUNK body, and there is nowhere to deliver it: "
-                  "JSModuleLoaderFunc is synchronous C with no point to park at, and re-running the importing "
-                  "scope once the body arrives is a REPLAY. Build the parking loader: record, suspend the flow "
-                  "the way core/fetch does, and resume it with the compiled module");
         if (n == 0)
-        DFAIL("a body was provided for a URL no flow is parked on — the host's pending/provide pairing is off, "
-              "and resolving nothing would leave the flow that IS parked waiting forever");
+            DFAIL("a body was provided for a URL no flow is parked on — the host's pending/provide pairing is "
+                  "off, and resolving nothing would leave the flow that IS parked waiting forever");
     }
 }
 
