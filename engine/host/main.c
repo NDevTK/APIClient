@@ -45,6 +45,7 @@ static unsigned             g_bundle_id;
 static JSRuntime           *g_rt;
 static JSContext           *g_ctx;
 static int                  g_begun;
+static int                  g_done;
 
 /* PHASE 1 — parse and identify. No script runs, which is the whole point: the host reads the frontier key back
  * synchronously and looks up the prior session before any flow is seeded. */
@@ -125,8 +126,19 @@ QJS_EXPORT void qjs_begin(const char *recipes)
  * ENGINE_STEP_DONE means the frontier is empty. */
 QJS_EXPORT int qjs_step(void)
 {
+    int r;
+
     DCHECK(g_begun, "qjs_step ran before the frontier was seeded");
-    return engine_sched_step();
+    if (g_done)
+        return ENGINE_STEP_DONE;   /* the session is over; stepping it again is not a question to ask twice */
+    r = engine_sched_step();
+    if (r == ENGINE_STEP_DONE && *fetch_pending_urls(g_ctx))
+        DFAIL("the frontier reported DONE with flows still parked on replies the host owes. It is STALLED, not "
+              "exhausted — but engine_sched_step tears the session down on DONE (g_sess_live), so answering "
+              "YIELD here only aborts on the next step. The scheduler needs the third answer: a STALLED return "
+              "that keeps the session live while the host fetches, provides, and steps again");
+    g_done = (r == ENGINE_STEP_DONE);
+    return r;
 }
 
 /* The ONE result document, serialized directly from the C findings — the host does one JSON.parse of it. */
@@ -145,6 +157,7 @@ QJS_EXPORT void qjs_teardown(void)
     lxb_html_document_destroy(g_dom);
     g_dom = NULL;
     g_begun = 0;
+    g_done = 0;
 }
 
 /* ---- The capabilities this entry cannot reach yet -----------------------------------------------------
@@ -154,23 +167,28 @@ QJS_EXPORT void qjs_teardown(void)
 
 QJS_EXPORT const char *qjs_pending(void)
 {
-    DFAIL("qjs_pending — build the parked-fetch register: a flow awaiting a host fetch records its URL here, "
-          "and engine_pending_fetch delivers the body back into that flow's continuation");
-    return "";
+    DCHECK(g_begun, "qjs_pending was asked of an engine that never ran");
+    return fetch_pending_urls(g_ctx);
 }
 
+/* The lazily-loaded SCRIPT URLs — the headline moat surface, and a separate list from qjs_pending only because
+   the host fetches them differently (a JS body is executed, a data body is handed back). The script-load edge
+   that fills this is core/loader's, and it is the next component: until it exists a page's lazy chunk arrives
+   through fetch like any other URL, which is honest but misses `import()` and an injected <script>. */
 QJS_EXPORT const char *qjs_chunks(void)
 {
-    DFAIL("qjs_chunks — build the lazy-script register: the script-load host-edge records each discovered chunk "
-          "URL, and engine_queue_script runs the fetched body in the CURRENT flow");
+    DCHECK(g_begun, "qjs_chunks was asked of an engine that never ran");
     return "";
 }
 
 QJS_EXPORT void qjs_provide(const char *url, const char *body)
 {
-    (void)url; (void)body;
-    DFAIL("qjs_provide — build reply provision: enqueue a FORKING re-run of the fetch-initiating scope so a "
-          "reply-gated branch forks WITH its example, not merely a promise resolution");
+    DCHECK(g_begun, "a body was provided to an engine that never ran");
+    /* A JS body is more of the CURRENT flow's program; anything else resumes the continuation awaiting it.
+       Which one it is, is the host's to say — it fetched it and knows what it asked for. */
+    if (fetch_provide(g_ctx, url, body, /*is_script*/0) == 0)
+        DFAIL("a body was provided for a URL no flow is parked on — the host's pending/provide pairing is off, "
+              "and resolving nothing would leave the flow that IS parked waiting forever");
 }
 
 QJS_EXPORT double qjs_top_weight(void)

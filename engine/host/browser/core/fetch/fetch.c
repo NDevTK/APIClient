@@ -16,12 +16,14 @@
  * cannot reach, so the promise settles rather than pending: parking a flow on a reply this build has no way to
  * deliver would hang it, and a hang is not the honest shape of a missing capability — the missing capability is
  * reply provision, and it names itself at qjs_provide. */
+#include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "solver/endpoint.h"
+#include "solver/engine.h"
 #include "core/fetch/fetch.h"
 
 /* The id JS_RegisterStepDef handed this runtime, and the two IDL attribute names the machine reads by. Atoms
@@ -30,6 +32,20 @@
 static int    g_fetch_stepid = -1;
 static JSAtom g_atom_method, g_atom_url;
 static JSRuntime *g_fetch_rt;
+
+/* THE PENDING REGISTER. One entry per fetch whose promise has not been resolved: the URL the host must fetch
+   and the resolve capability that delivers the body into the flow parked on it. It grows and never compacts
+   below its high-water mark — the entries are the frontier's, and a bound on them would be a bound on how many
+   requests a page may have in flight, which is a cap. */
+typedef struct FetchPending {
+    char   *url;        /* owned */
+    JSValue resolve;    /* owned; JS_UNDEFINED once delivered */
+    int     is_script;  /* the body is JS to RUN in this flow, not data to hand back */
+} FetchPending;
+
+static FetchPending *g_pending;
+static int           g_pending_count, g_pending_size;
+static char         *g_pending_join;   /* the newline-joined answer fetch_pending_urls last built */
 
 typedef struct JSFetchState {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
@@ -48,24 +64,104 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->url);
 }
 
+/* Park a request: record the URL the host must fetch and the capability that delivers its body. */
+static JSValue fetch_park(JSContext *ctx, JSValueConst url)
+{
+    JSValue promise, resolving[2];
+    const char *u;
+    FetchPending *p;
+
+    promise = JS_NewPromiseCapability(ctx, resolving);
+    if (JS_IsException(promise))
+        return promise;
+    u = JS_ToCString(ctx, url);
+    if (!u) { JS_FreeValue(ctx, resolving[0]); JS_FreeValue(ctx, resolving[1]); return promise; }
+
+    if (g_pending_count == g_pending_size) {
+        int n = g_pending_size ? g_pending_size * 2 : 8;
+        FetchPending *a = realloc(g_pending, sizeof(*a) * (size_t)n);
+        CHECK(a != NULL, "the pending-fetch register allocation failed: a dropped request loses the flow "
+                         "parked on it, and the frontier cannot tell that from a request nobody made");
+        g_pending = a;
+        g_pending_size = n;
+    }
+    p = &g_pending[g_pending_count++];
+    p->url = strdup(u);
+    CHECK(p->url != NULL, "the pending-fetch URL allocation failed");
+    p->resolve = JS_DupValue(ctx, resolving[0]);
+    /* A body whose URL the page loaded as a SCRIPT is more code this flow runs; anything else is data. The
+       decision is the caller's edge (loadScript vs fetch), recorded here so provision does not have to guess. */
+    p->is_script = 0;
+    JS_FreeCString(ctx, u);
+    JS_FreeValue(ctx, resolving[0]);
+    JS_FreeValue(ctx, resolving[1]);
+    return promise;
+}
+
+const char *fetch_pending_urls(JSContext *ctx)
+{
+    size_t need = 1;
+    int i;
+
+    (void)ctx;
+    free(g_pending_join);
+    g_pending_join = NULL;
+    for (i = 0; i < g_pending_count; i++)
+        if (!JS_IsUndefined(g_pending[i].resolve))
+            need += strlen(g_pending[i].url) + 1;
+    g_pending_join = malloc(need);
+    CHECK(g_pending_join != NULL, "the pending-URL join allocation failed");
+    g_pending_join[0] = '\0';
+    for (i = 0; i < g_pending_count; i++) {
+        if (JS_IsUndefined(g_pending[i].resolve)) continue;
+        strcat(g_pending_join, g_pending[i].url);
+        strcat(g_pending_join, "\n");
+    }
+    return g_pending_join;
+}
+
+int fetch_provide(JSContext *ctx, const char *url, const char *body, int is_script)
+{
+    int i, n = 0;
+
+    DCHECK(url != NULL, "a body was provided for no URL");
+    for (i = 0; i < g_pending_count; i++) {
+        FetchPending *p = &g_pending[i];
+        if (JS_IsUndefined(p->resolve) || strcmp(p->url, url) != 0)
+            continue;
+        if (is_script || p->is_script) {
+            /* Code-loading async ALWAYS executes: the body is more of THIS flow's program, discovered behind
+               whatever branch reached the load, and it forks through the same one BFS. */
+            engine_queue_script(body ? body : "");
+        }
+        /* RESOLVE DIRECTLY, not through engine_pending_fetch. That one is for a fetch issued from INSIDE a
+           running flow — it asserts a live flow, and provision happens BETWEEN quanta, with none running. The
+           capability is the engine's own resolving function, so calling it runs no page code; it enqueues the
+           reaction, which is a first-class flow the next qjs_step schedules like any other.
+           The value is the body TEXT, not a Response: a Response is a real object with a real body-reading
+           state machine and belongs in core/fetch/response.c — a shape-only one with noop methods is the stub
+           the IDL audit exists to expose. */
+        {
+            JSValue arg = body ? JS_NewString(ctx, body) : JS_UNDEFINED;
+            JSValue r = JS_Call(ctx, p->resolve, JS_UNDEFINED, 1, (JSValueConst *)&arg);
+            DCHECK(!JS_IsException(r), "resolving a parked fetch threw — the capability is the engine's own");
+            JS_FreeValue(ctx, r);
+            JS_FreeValue(ctx, arg);
+        }
+        JS_FreeValue(ctx, p->resolve);
+        p->resolve = JS_UNDEFINED;
+        n++;
+    }
+    return n;
+}
+
 static JSValue js_fetch_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSFetchState *s = st;
-    JSValue promise = JS_UNDEFINED, resolving[2], r;
+    JSValue promise = JS_UNDEFINED;
 
-    if (take_result) {
-        /* The IDL says Promise<Response>. There is no Response until a body arrives, so this settles with
-           undefined: `await fetch(u)` continues and whatever the page reads off the result is absent rather
-           than wrong. A shape-only Response with noop methods is the stub the IDL audit exists to expose —
-           the real one belongs in core/fetch/response.c once bodies arrive. */
-        promise = JS_NewPromiseCapability(ctx, resolving);
-        if (!JS_IsException(promise)) {
-            r = JS_Call(ctx, resolving[0], JS_UNDEFINED, 0, NULL);
-            JS_FreeValue(ctx, r);
-            JS_FreeValue(ctx, resolving[0]);
-            JS_FreeValue(ctx, resolving[1]);
-        }
-    }
+    if (take_result)
+        promise = fetch_park(ctx, s->url);
     JS_FreeValue(ctx, s->method);
     JS_FreeValue(ctx, s->url);
     return promise;
