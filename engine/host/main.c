@@ -116,6 +116,11 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
         for (size_t pi = 0; pi < sizeof(PLATFORM) / sizeof(PLATFORM[0]); pi++)
             absent_declare_platform(g_ctx, PLATFORM[pi]);
 
+        /* `window` IS the global object (7.2.2: the Window object's [[Get]] is the global's), so a bundle
+           reading window.X and one reading X are the same read spelled two ways. It was on the platform list
+           and never installed, which made every `window.__FLAGS` in a real bundle a ReferenceError. */
+        JS_SetPropertyStr(g_ctx, g, "window", JS_DupValue(g_ctx, g));
+        JS_SetPropertyStr(g_ctx, g, "self",   JS_DupValue(g_ctx, g));
         fetch_install(g_ctx, g);
         module_loader_install(g_rt);
         location_install(g_ctx, g, origin);
