@@ -26,7 +26,11 @@ import { dirname, join } from "node:path";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BROWSER = join(HERE, "host", "browser");
 
-// interface -> the component .c that implements it. Add an interface here to audit its coverage against the spec.
+// interface -> the component .c that implements it, or the componentS: one interface's surface can be split
+// across components when the spec puts unrelated capabilities on one object. Window is the case that forces it —
+// its members are installed by window.c (browsing context), document.c, location.c, fetch.c and
+// event_target.c — and scanning only one of them reported every member the others install as ABSENT, which is
+// the audit lying in the direction that gets a real gap ignored.
 const INTERFACES = {
   AbortSignal:          "core/dom/abort.c",
   AbortController:      "core/dom/abort.c",
@@ -37,6 +41,8 @@ const INTERFACES = {
   Blob:                 "core/fileapi/blob.c",
   Response:             "core/loader/response.c",
   Notification:         "modules/notification.c",
+  Window:              ["core/frame/window.c", "core/dom/document.c", "core/frame/location.c",
+                        "core/fetch/fetch.c", "core/events/event_target.c", "core/loader/module_loader.c"],
   Navigator:            "core/frame/navigator.c",
   History:              "core/frame/history.c",
   Screen:               "core/frame/screen.c",
@@ -81,9 +87,15 @@ function members(name) {
 }
 
 let totalMissing = 0;
-for (const [iface, file] of Object.entries(INTERFACES)) {
-  let src;
-  try { src = readFileSync(join(BROWSER, file), "utf8"); } catch { console.warn(`[idl-audit] ${iface}: component ${file} not found`); continue; }
+for (const [iface, where] of Object.entries(INTERFACES)) {
+  const paths = Array.isArray(where) ? where : [where];
+  const file = paths.join(" + ");
+  let src = "", missing = [];
+  for (const one of paths) {
+    try { src += readFileSync(join(BROWSER, one), "utf8"); } catch { missing.push(one); }
+  }
+  if (missing.length === paths.length) { console.warn(`[idl-audit] ${iface}: component ${file} not found`); continue; }
+  if (missing.length) console.warn(`[idl-audit] ${iface}: ${missing.join(", ")} not found — audited without it`);
   // The property names the component actually installs appear as string literals (JS_SetPropertyStr / JS_NewAtom
   // / def_getset(..., "name", ...)). A member absent from every literal is unimplemented; a member wired to
   // js_noop is STUBBED (present but does nothing — the banned lazy stub the audit exists to expose).

@@ -26,6 +26,7 @@
 #include "browser/core/dom/element.h"
 #include "browser/core/events/event_target.h"
 #include "browser/core/frame/location.h"
+#include "browser/core/frame/window.h"
 #include "browser/core/loader/document_scripts.h"
 #include "browser/core/loader/module_loader.h"
 #include "solver/absent.h"
@@ -108,11 +109,7 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
            of ~1300, so every interface it missed — Node, Element, Event, DOMException — was mistaken for
            server-injected app state and a branch on it forked instead of throwing. */
 
-        /* `window` IS the global object (7.2.2: the Window object's [[Get]] is the global's), so a bundle
-           reading window.X and one reading X are the same read spelled two ways. It was on the platform list
-           and never installed, which made every `window.__FLAGS` in a real bundle a ReferenceError. */
-        JS_SetPropertyStr(g_ctx, g, "window", JS_DupValue(g_ctx, g));
-        JS_SetPropertyStr(g_ctx, g, "self",   JS_DupValue(g_ctx, g));
+        window_install(g_ctx, g, origin);   /* window/self/frames/parent/top/opener/closed/origin, and name */
         event_target_init(g_ctx);
         event_target_install(g_ctx, g);   /* window IS the global (7.2.2), so this is window.addEventListener */
         fetch_install(g_ctx, g);

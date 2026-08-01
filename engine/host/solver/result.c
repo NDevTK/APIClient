@@ -29,9 +29,10 @@ void result_page_error(const char *msg) {
    string is taken as-is; anything else is described by shape alone. */
 void result_page_error_value(JSContext *ctx, JSValueConst err) {
     char buf[320];
-    JSValue name = JS_UNDEFINED, msg = JS_UNDEFINED;
-    const char *ns = NULL, *ms = NULL;
+    JSValue name = JS_UNDEFINED, msg = JS_UNDEFINED, stk = JS_UNDEFINED;
+    const char *ns = NULL, *ms = NULL, *ss = NULL;
     JSAtom a_name, a_msg;
+    int n;
 
     if (JS_IsString(err)) {
         const char *s = JS_ToCString(ctx, err);   /* already a string: no coercion runs */
@@ -46,16 +47,35 @@ void result_page_error_value(JSContext *ctx, JSValueConst err) {
     if (JS_GetOwnSlot(ctx, &msg,  err, a_msg)  <= 0) msg  = JS_UNDEFINED;
     JS_FreeAtom(ctx, a_name);
     JS_FreeAtom(ctx, a_msg);
+    /* WHERE it threw. A genuine Error keeps its stack in the [[ErrorData]] internal slot behind an accessor on
+       Error.prototype, so JS_GetOwnSlot cannot see it and calling the getter would run page code (a page may
+       have replaced Error.prepareStackTrace, and this runs from OUTSIDE any flow). JS_GetErrorStackString reads
+       the slot directly, which is exactly the "a stored value, never an operation" rule the rest of this
+       function follows. Without it a message like "not a function" names a capability and nothing else — the
+       whole diagnostic is WHERE, and finding it by hand meant re-serving the library wrapped in a try/catch. */
+    stk = JS_GetErrorStackString(ctx, err);
     if (JS_IsString(name)) ns = JS_ToCString(ctx, name);
     if (JS_IsString(msg))  ms = JS_ToCString(ctx, msg);
-    if (ns && ms)      snprintf(buf, sizeof buf, "%s: %s", ns, ms);
-    else if (ms)       snprintf(buf, sizeof buf, "%s", ms);
-    else if (ns)       snprintf(buf, sizeof buf, "%s", ns);
-    else               snprintf(buf, sizeof buf, "an object with no own name/message was thrown");
+    if (JS_IsString(stk))  ss = JS_ToCString(ctx, stk);
+    if (ns && ms)      n = snprintf(buf, sizeof buf, "%s: %s", ns, ms);
+    else if (ms)       n = snprintf(buf, sizeof buf, "%s", ms);
+    else if (ns)       n = snprintf(buf, sizeof buf, "%s", ns);
+    else               n = snprintf(buf, sizeof buf, "an object with no own name/message was thrown");
+    if (ss && n > 0 && (size_t)n < sizeof buf) {
+        /* the first two frames, on one line — the site and its caller, which is what identifies the call. */
+        const char *l1 = ss + strspn(ss, " \t\n"), *l1e = l1 + strcspn(l1, "\n");
+        const char *l2 = *l1e ? l1e + 1 : l1e, *l2e;
+        l2 += strspn(l2, " \t");
+        l2e = l2 + strcspn(l2, "\n");
+        snprintf(buf + n, sizeof buf - (size_t)n, "  [%.*s%s%.*s]",
+                 (int)(l1e - l1), l1, (l2e > l2 ? " <- " : ""), (int)(l2e - l2), l2);
+    }
     if (ns) JS_FreeCString(ctx, ns);
     if (ms) JS_FreeCString(ctx, ms);
+    if (ss) JS_FreeCString(ctx, ss);
     JS_FreeValue(ctx, name);
     JS_FreeValue(ctx, msg);
+    JS_FreeValue(ctx, stk);
     result_page_error(buf);
 }
 

@@ -37,8 +37,13 @@ if (!existsSync(CORPUS)) {
 
 console.log("[test262] building native run-test262 (gcc, NDEBUG)…");
 const bin = join(mkdtempSync(join(tmpdir(), "t262-")), "run262.exe");
+/* THE SAME FLAGS THE ENGINE SHIPS WITH. ENABLE_DUMPS is not optional decoration — engine/build.mjs sets it on
+   every wasm build, and it changes the interpreter's own dispatch macros. Building the oracle without it tested
+   a DIFFERENT interpreter: a dangling-if in the per-opcode dump made every `if (cond) BREAK;` dispatch
+   unconditionally, so `typeof x === "function"` answered with its operand, and 43239 passing tests said nothing
+   about it because not one of them ran the code that shipped. A flag that changes the engine belongs here. */
 const cc = spawnSync("gcc", ["-O1", "-w", "-DNDEBUG", "-D_GNU_SOURCE", "-DCONFIG_VERSION=\"t262\"",
-  "-DAPICLIENT_DEV=1", "-I.", ...SRCS, "-o", bin, "-lm", "-lpthread"], { cwd: QJS, encoding: "utf8" });
+  "-DAPICLIENT_DEV=1", "-DENABLE_DUMPS", "-I.", ...SRCS, "-o", bin, "-lm", "-lpthread"], { cwd: QJS, encoding: "utf8" });
 if (cc.status !== 0) { console.error("[test262] build FAILED\n" + (cc.stderr || "")); process.exit(1); }
 
 console.log(`[test262] FEATURE run (forced time-travel, no fallback) on ${sub || "WHOLE CORPUS"}…`);
