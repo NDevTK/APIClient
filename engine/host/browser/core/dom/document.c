@@ -130,6 +130,28 @@ static JSValue js_doc_query_selector_all(JSContext *ctx, JSValueConst this_val, 
     return r;
 }
 
+/* 4.5.1 createElement. The element is created IN this document and returned DETACHED — a page builds a subtree
+   and attaches it later, and creating it already-attached would put nodes in the tree the page never inserted.
+   It is not a per-flow write for that reason: nothing observable changed until appendChild, which IS one. */
+static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    const char *tag;
+    lxb_dom_element_t *el;
+    JSValue r;
+
+    (void)this_val;
+    if (argc < 1) return JS_NULL;
+    tag = JS_ToCString(ctx, argv[0]);
+    if (!tag) return JS_EXCEPTION;
+    el = lxb_dom_document_create_element(lxb_dom_interface_document(g_doc),
+                                         (const lxb_char_t *)tag, strlen(tag), NULL);
+    JS_FreeCString(ctx, tag);
+    DCHECK(el != NULL, "createElement produced no element — a page building its DOM would silently build "
+                       "nothing and every query after it would answer null");
+    r = element_wrap(ctx, el);
+    return r;
+}
+
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url)
 {
     JSValue doc;
@@ -170,7 +192,24 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
                       JS_NewCFunction(ctx, js_doc_query_selector, "querySelector", 1));
     JS_SetPropertyStr(ctx, doc, "querySelectorAll",
                       JS_NewCFunction(ctx, js_doc_query_selector_all, "querySelectorAll", 1));
+    JS_SetPropertyStr(ctx, doc, "createElement",
+                      JS_NewCFunction(ctx, js_doc_create_element, "createElement", 1));
     element_doc_set(dom);
+
+    /* 3.1.1 documentElement / body / head — the three tree entry points every page starts from. Lexbor has
+       already parsed them, so these are the REAL elements wrapped once (identity holds: `el.parentNode ===
+       document.body` is a comparison pages make). A document with no body is a document this engine parsed
+       without one, which the HTML parser does not produce — so it is an invariant, not a case to answer null for. */
+    {
+        lxb_dom_element_t *root = lxb_dom_interface_element(dom->dom_document.element);
+        lxb_html_body_element_t *body = lxb_html_document_body_element(dom);
+        lxb_html_head_element_t *head = lxb_html_document_head_element(dom);
+        DCHECK(body != NULL, "the parsed document has no BODY element — HTML tree construction always creates "
+                             "one, so a document without it is a parse this engine should not have accepted");
+        JS_SetPropertyStr(ctx, doc, "documentElement", element_wrap(ctx, root));
+        JS_SetPropertyStr(ctx, doc, "body", element_wrap(ctx, lxb_dom_interface_element(body)));
+        JS_SetPropertyStr(ctx, doc, "head", element_wrap(ctx, lxb_dom_interface_element(head)));
+    }
 
     JS_SetPropertyStr(ctx, (JSValue)global, "document", doc);
 }

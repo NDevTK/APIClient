@@ -41,13 +41,13 @@ void dom_cow_set_ctx(JSContext *ctx) { g_cow_ctx = ctx; }
 
 /* the current taint shadow for (el,name), dup'd (JS_UNDEFINED + *had=0 if none) */
 static JSValue shadow_snapshot(lxb_dom_element_t *el, const char *name, int *had) {
-    int si = attr_shadow_find(el, name);
+    int si = attr_shadow_find(el, ATTR_SLOT_ATTRIBUTE, name);
     *had = (si >= 0);
     return (si >= 0 && g_cow_ctx) ? JS_DupValue(g_cow_ctx, attr_shadow_opaque(si)) : JS_UNDEFINED;
 }
 /* set (el,name)'s taint shadow to `v` (borrowed; attr_shadow_set dups it), or clear it when !had */
 static void shadow_restore(lxb_dom_element_t *el, const char *name, JSValueConst v, int had) {
-    if (g_cow_ctx) attr_shadow_set(g_cow_ctx, el, name, had ? v : JS_UNDEFINED);
+    if (g_cow_ctx) attr_shadow_set(g_cow_ctx, el, ATTR_SLOT_ATTRIBUTE, name, had ? v : JS_UNDEFINED);
 }
 
 static void dom_undo_push(DomUndo u) {
