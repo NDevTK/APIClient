@@ -22,6 +22,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "browser/core/fetch/fetch.h"
+#include "browser/core/dom/document.h"
 #include "browser/core/frame/location.h"
 #include "browser/core/loader/document_scripts.h"
 #include "browser/core/loader/module_loader.h"
@@ -117,6 +118,7 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
         fetch_install(g_ctx, g);
         module_loader_install(g_rt);
         location_install(g_ctx, g, origin);
+        document_install(g_ctx, g, g_dom, origin);
         JS_FreeValue(g_ctx, g);
     }
 
