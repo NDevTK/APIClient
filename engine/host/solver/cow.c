@@ -240,13 +240,13 @@ void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, 
     g_capturing = 0;
 }
 
-/* Capture a shared async object's SETTLEMENT before this flow changes it (JSTimeTravelHooks.async_settle). A
+/* Capture a shared async object's SETTLEMENT before this flow changes it (JSTimeTravelHooks.async_state). A
    promise created before a fork is baseline state whose settle is a write no property hook can see, and the
    resolving function's already_resolved latch is the other half of it: without capturing the latch, the first
    arm to call the shared `resolve` wins and every sibling's call returns silently, so a value that differs per
    arm is lost rather than isolated. Flow-private promises (created after the fork) are skipped by the same
    generational test as every other capture — nothing else can observe them. */
-void cow_capture_async_settle(JSContext *ctx, JSValueConst obj) {
+void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
     if (g_capturing || !g_current) return;
     CowDelta *d = g_current;
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
@@ -265,7 +265,7 @@ void cow_capture_async_settle(JSContext *ctx, JSValueConst obj) {
     if (d->n >= d->cap) {
         d->cap = d->cap ? d->cap * 2 : 32;
         d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
-        CHECK(d->e, "cow: OOM growing delta (async_settle) — a lost settlement leaks a flow's timeline");
+        CHECK(d->e, "cow: OOM growing delta (async_state) — a lost settlement leaks a flow's timeline");
         cow_hash_rebuild(d);
     }
     CowEntry *e = &d->e[d->n++];

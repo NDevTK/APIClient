@@ -50,10 +50,10 @@ void      cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key
    as an undo-log entry (apply replays it, unapply inverts it), completing cow_capture_map_add's add-only capture
    so ALL shared Set/Map mutations are per-flow isolated. op is JS_MAP_MUTATE_OVERWRITE / _DELETE. */
 void      cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst old_val, JSValueConst val, int op);
-/* Install as JSTimeTravelHooks.async_settle: capture a shared promise's settlement (state + result + pending
+/* Install as JSTimeTravelHooks.async_state: capture a shared promise's settlement (state + result + pending
    reactions) or a resolving-function pair's already_resolved latch before this flow changes it, so each arm of
    a fork settles a pre-fork promise on its OWN timeline. */
-void      cow_capture_async_settle(JSContext *ctx, JSValueConst obj);
+void      cow_capture_async_state(JSContext *ctx, JSValueConst obj);
 
 /* Install as JSTimeTravelHooks.module_eval: capture a MODULE record's evaluation state (status + capability +
    cycle fields) before this flow changes it. Its BINDINGS are closure cells cell_write already captures; this is
