@@ -114,7 +114,7 @@ QJS_EXPORT unsigned qjs_bundle_id(void)
    before it decides the frontier is exhausted. */
 static int qjs_owed(void)
 {
-    return *fetch_pending_urls(g_ctx) != '\0';
+    return *engine_pending_urls() != '\0';
 }
 
 /* PHASE 2 — seed the frontier. */
@@ -173,7 +173,7 @@ QJS_EXPORT void qjs_teardown(void)
 QJS_EXPORT const char *qjs_pending(void)
 {
     DCHECK(g_begun, "qjs_pending was asked of an engine that never ran");
-    return fetch_pending_urls(g_ctx);
+    return engine_pending_urls();
 }
 
 /* The lazily-loaded SCRIPT URLs — the headline moat surface, and a separate list from qjs_pending only because
@@ -191,9 +191,14 @@ QJS_EXPORT void qjs_provide(const char *url, const char *body)
     DCHECK(g_begun, "a body was provided to an engine that never ran");
     /* A JS body is more of the CURRENT flow's program; anything else resumes the continuation awaiting it.
        Which one it is, is the host's to say — it fetched it and knows what it asked for. */
-    if (fetch_provide(g_ctx, url, body, /*is_script*/0) == 0)
+    {
+        JSValue v = body ? JS_NewString(g_ctx, body) : JS_UNDEFINED;
+        int n = engine_provide(g_ctx, url, v);
+        JS_FreeValue(g_ctx, v);
+        if (n == 0)
         DFAIL("a body was provided for a URL no flow is parked on — the host's pending/provide pairing is off, "
               "and resolving nothing would leave the flow that IS parked waiting forever");
+    }
 }
 
 QJS_EXPORT double qjs_top_weight(void)

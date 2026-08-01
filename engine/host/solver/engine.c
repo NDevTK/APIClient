@@ -18,6 +18,12 @@
    enqueues as a job in that flow's queue — and resumes. Per-flow (not global) so one flow's drain never resolves
    another flow's fetch (which would route the reaction to the wrong flow's COW — a leak + contamination). */
 void engine_pending_fetch(JSContext *ctx, JSValueConst resolve, JSValueConst value) {
+    engine_pending_fetch_url(ctx, resolve, value, NULL);
+}
+
+/* The same park, with the URL the HOST must fetch. The value arrives later through engine_provide; until it
+   does the flow cannot finish, which is what keeps the reply-gated code reachable. */
+void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst value, const char *url) {
     Flow *f = flow_running();
     /* A live fetch is ALWAYS issued from a running flow — both explore and @S verify are the ONE scheduler now
        (run_scheduler), so flow_running() is set; the flow's stall drains it (flow_step). */
@@ -29,18 +35,73 @@ void engine_pending_fetch(JSContext *ctx, JSValueConst resolve, JSValueConst val
     }
     f->pending[f->npend].resolve = JS_DupValue(ctx, resolve);
     f->pending[f->npend].value = JS_DupValue(ctx, value);
+    f->pending[f->npend].url = url ? strdup(url) : NULL;
+    CHECK(!url || f->pending[f->npend].url, "engine: OOM recording a pending fetch's URL");
+    f->pending[f->npend].have_value = (url == NULL);
     f->npend++;
 }
-/* Resolve every pending fetch this flow issued (the network completed). Returns how many were drained. */
-static int flow_drain_pending(JSContext *ctx, Flow *f) {
-    int n = f->npend;
-    for (int i = 0; i < n; i++) {
-        JSValue r = JS_Call(ctx, f->pending[i].resolve, JS_UNDEFINED, 1, (JSValueConst *)&f->pending[i].value);
-        JS_FreeValue(ctx, r);
-        JS_FreeValue(ctx, f->pending[i].resolve);
-        JS_FreeValue(ctx, f->pending[i].value);
+
+/* THE URLS THE HOST OWES, newline-joined across every live flow, or "" — one register, the flows' own. The
+   buffer is this function's and is valid until the next call. */
+const char *engine_pending_urls(void) {
+    static char *join;
+    size_t need = 1;
+    Flow *f;
+    free(join); join = NULL;
+    for (int k = 0; (f = flow_at(k)) != NULL; k++)
+        for (int i = 0; i < f->npend; i++)
+            if (f->pending[i].url && !f->pending[i].have_value) need += strlen(f->pending[i].url) + 1;
+    join = malloc(need);
+    CHECK(join != NULL, "engine: OOM joining the pending URLs");
+    join[0] = 0;
+    for (int k = 0; (f = flow_at(k)) != NULL; k++)
+        for (int i = 0; i < f->npend; i++)
+            if (f->pending[i].url && !f->pending[i].have_value) {
+                strcat(join, f->pending[i].url); strcat(join, "\n");
+            }
+    return join;
+}
+
+/* Deliver a body for `url` into every flow parked on it. The value lands on the flow's OWN pending entry, so the
+   reaction the resolve enqueues belongs to that flow and to its COW delta — which is why this is here and not in
+   a register beside it. Returns how many entries it filled. */
+int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
+    int n = 0;
+    DCHECK(url != NULL, "a body was provided for no URL");
+    for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
+        for (int i = 0; i < f->npend; i++) {
+            FlowPending *p = &f->pending[i];
+            if (!p->url || p->have_value || strcmp(p->url, url) != 0) continue;
+            JS_FreeValue(ctx, p->value);
+            p->value = JS_DupValue(ctx, value);
+            p->have_value = 1;
+            f->blocked = 0;   /* it has work again */
+            n++;
+        }
     }
-    f->npend = 0;
+    return n;
+}
+/* Resolve every pending fetch this flow issued (the network completed). Returns how many were drained. */
+/* Is any of this flow's pending fetches deliverable? A flow with only host-owed entries has no work — it stalls
+   rather than spinning on a drain that would resolve nothing. */
+static int flow_pending_ready(const Flow *f) {
+    for (int i = 0; i < f->npend; i++) if (f->pending[i].have_value) return 1;
+    return 0;
+}
+
+static int flow_drain_pending(JSContext *ctx, Flow *f) {
+    int n = 0, keep = 0;
+    for (int i = 0; i < f->npend; i++) {
+        FlowPending *p = &f->pending[i];
+        if (!p->have_value) { f->pending[keep++] = *p; continue; }   /* the host still owes this one */
+        JSValue r = JS_Call(ctx, p->resolve, JS_UNDEFINED, 1, (JSValueConst *)&p->value);
+        JS_FreeValue(ctx, r);
+        JS_FreeValue(ctx, p->resolve);
+        JS_FreeValue(ctx, p->value);
+        free(p->url);
+        n++;
+    }
+    f->npend = keep;
     return n;
 }
 
@@ -169,7 +230,13 @@ static int flow_step(JSContext *ctx, Flow *f, char *const *bodies, int n) {
             if (f->script_i < n) body = bodies[f->script_i];
             else if (f->script_i - n < f->dyn_n) body = f->dyn[f->script_i - n];
             else if (f->njob > 0) { flow_run_one_job(ctx, f); return 0; }   /* scripts done -> drain a microtask, yield */
-            else if (f->npend > 0) {
+            else if (f->npend > 0 && !flow_pending_ready(f)) {
+                /* Only host-owed replies remain: BLOCK rather than finish. The flow keeps its snapshot and its
+                   continuation; the scheduler stops picking it, sees no runnable flow, and reports STALLED. */
+                f->blocked = 1;
+                return 0;
+            }
+            else if (flow_pending_ready(f)) {
                 /* FETCH-AWAIT: scripts + microtasks are drained, but a suspended async body is awaiting a LIVE
                    fetch (a pending promise). The network completes now: resolve THIS flow's pending fetches — each
                    awaiting async body's reaction is enqueued as a job in this flow's queue (we are switched in,
@@ -259,7 +326,7 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
     for (int i = 0; i < f->njob; i++) { for (int k = 0; k < f->jobs[i].argc; k++) JS_FreeValue(ctx, f->jobs[i].argv[k]); free(f->jobs[i].argv); }
     free(f->jobs); f->jobs = NULL; f->njob = f->jobcap = 0;
     /* FETCH-AWAIT: flow_step drains pending before finishing, but free any residual (resolve capabilities + values). */
-    for (int i = 0; i < f->npend; i++) { JS_FreeValue(ctx, f->pending[i].resolve); JS_FreeValue(ctx, f->pending[i].value); }
+    for (int i = 0; i < f->npend; i++) { JS_FreeValue(ctx, f->pending[i].resolve); JS_FreeValue(ctx, f->pending[i].value); free(f->pending[i].url); }
     free(f->pending); f->pending = NULL; f->npend = f->pendcap = 0;
     flow_set_running(NULL);
     flow_remove(ctx, f);

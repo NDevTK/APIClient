@@ -64,95 +64,25 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->url);
 }
 
-/* Park a request: record the URL the host must fetch and the capability that delivers its body. */
+/* Park the request on the FLOW that issued it: the URL the trusted host must fetch, and the capability that
+   delivers the body into this flow's continuation. There is ONE pending register and it is the flow's own —
+   a second one beside it cannot resolve into the flow that owns the reaction, which is the whole point. */
 static JSValue fetch_park(JSContext *ctx, JSValueConst url)
 {
     JSValue promise, resolving[2];
     const char *u;
-    FetchPending *p;
 
     promise = JS_NewPromiseCapability(ctx, resolving);
     if (JS_IsException(promise))
         return promise;
     u = JS_ToCString(ctx, url);
-    if (!u) { JS_FreeValue(ctx, resolving[0]); JS_FreeValue(ctx, resolving[1]); return promise; }
-
-    if (g_pending_count == g_pending_size) {
-        int n = g_pending_size ? g_pending_size * 2 : 8;
-        FetchPending *a = realloc(g_pending, sizeof(*a) * (size_t)n);
-        CHECK(a != NULL, "the pending-fetch register allocation failed: a dropped request loses the flow "
-                         "parked on it, and the frontier cannot tell that from a request nobody made");
-        g_pending = a;
-        g_pending_size = n;
+    if (u) {
+        engine_pending_fetch_url(ctx, resolving[0], JS_UNDEFINED, u);
+        JS_FreeCString(ctx, u);
     }
-    p = &g_pending[g_pending_count++];
-    p->url = strdup(u);
-    CHECK(p->url != NULL, "the pending-fetch URL allocation failed");
-    p->resolve = JS_DupValue(ctx, resolving[0]);
-    /* A body whose URL the page loaded as a SCRIPT is more code this flow runs; anything else is data. The
-       decision is the caller's edge (loadScript vs fetch), recorded here so provision does not have to guess. */
-    p->is_script = 0;
-    JS_FreeCString(ctx, u);
     JS_FreeValue(ctx, resolving[0]);
     JS_FreeValue(ctx, resolving[1]);
     return promise;
-}
-
-const char *fetch_pending_urls(JSContext *ctx)
-{
-    size_t need = 1;
-    int i;
-
-    (void)ctx;
-    free(g_pending_join);
-    g_pending_join = NULL;
-    for (i = 0; i < g_pending_count; i++)
-        if (!JS_IsUndefined(g_pending[i].resolve))
-            need += strlen(g_pending[i].url) + 1;
-    g_pending_join = malloc(need);
-    CHECK(g_pending_join != NULL, "the pending-URL join allocation failed");
-    g_pending_join[0] = '\0';
-    for (i = 0; i < g_pending_count; i++) {
-        if (JS_IsUndefined(g_pending[i].resolve)) continue;
-        strcat(g_pending_join, g_pending[i].url);
-        strcat(g_pending_join, "\n");
-    }
-    return g_pending_join;
-}
-
-int fetch_provide(JSContext *ctx, const char *url, const char *body, int is_script)
-{
-    int i, n = 0;
-
-    DCHECK(url != NULL, "a body was provided for no URL");
-    for (i = 0; i < g_pending_count; i++) {
-        FetchPending *p = &g_pending[i];
-        if (JS_IsUndefined(p->resolve) || strcmp(p->url, url) != 0)
-            continue;
-        if (is_script || p->is_script) {
-            /* Code-loading async ALWAYS executes: the body is more of THIS flow's program, discovered behind
-               whatever branch reached the load, and it forks through the same one BFS. */
-            engine_queue_script(body ? body : "");
-        }
-        /* RESOLVE DIRECTLY, not through engine_pending_fetch. That one is for a fetch issued from INSIDE a
-           running flow — it asserts a live flow, and provision happens BETWEEN quanta, with none running. The
-           capability is the engine's own resolving function, so calling it runs no page code; it enqueues the
-           reaction, which is a first-class flow the next qjs_step schedules like any other.
-           The value is the body TEXT, not a Response: a Response is a real object with a real body-reading
-           state machine and belongs in core/fetch/response.c — a shape-only one with noop methods is the stub
-           the IDL audit exists to expose. */
-        {
-            JSValue arg = body ? JS_NewString(ctx, body) : JS_UNDEFINED;
-            JSValue r = JS_Call(ctx, p->resolve, JS_UNDEFINED, 1, (JSValueConst *)&arg);
-            DCHECK(!JS_IsException(r), "resolving a parked fetch threw — the capability is the engine's own");
-            JS_FreeValue(ctx, r);
-            JS_FreeValue(ctx, arg);
-        }
-        JS_FreeValue(ctx, p->resolve);
-        p->resolve = JS_UNDEFINED;
-        n++;
-    }
-    return n;
 }
 
 static JSValue js_fetch_fini(JSContext *ctx, void *st, bool take_result)

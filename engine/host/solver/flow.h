@@ -22,7 +22,10 @@ typedef struct { JSJobFunc *fn; int argc; JSValue *argv; } FlowJob;
 /* FETCH-AWAIT: a live (async) fetch this flow issued — a PENDING promise whose resolve capability + the value the
    "network" will deliver are held until the flow stalls, then resolved (the fetch completing) so the awaiting
    async body resumes. Per-flow (not global) so one flow's drain never resolves another flow's fetch. */
-typedef struct { JSValue resolve; JSValue value; } FlowPending;
+/* ONE live fetch this flow issued. `url` is what the trusted host must fetch (the sandbox cannot), and `value`
+   is what the continuation resumes with once it has. A NULL url is an engine-supplied reply — a fixture or a
+   modelled body — which needs no host round trip and drains immediately. */
+typedef struct { JSValue resolve; JSValue value; char *url; int have_value; } FlowPending;
 
 typedef struct Flow {
     JSValue fn;            /* the function this flow re-drives (JS_UNDEFINED for a boot/session flow) */
@@ -50,6 +53,11 @@ typedef struct Flow {
     void *pin_blob;        /* suspended pin state while paused (concolic_pins_suspend) */
     FlowJob *jobs; int njob, jobcap;   /* ASYNC-AS-FLOW: this flow's OWN queued microtask/reaction jobs, drained
                                           after its scripts under its live COW (correct ordering, per-flow isolated) */
+    /* BLOCKED: every remaining pending fetch is one only the trusted host can supply, so this flow has no work
+       until it does. It is NOT finished — its snapshot, delta and continuation are intact — and it is not
+       runnable either, so flow_best skips it and the scheduler can see the frontier is stalled rather than
+       exhausted. engine_provide clears it. */
+    int blocked;
     FlowPending *pending; int npend, pendcap;   /* FETCH-AWAIT: this flow's OWN live (pending) fetches, resolved when
                                                    the flow's scripts+microtasks stall (the network completing). */
     /* THE PARKED CONTINUATION, swapped with everything else on a context switch. A forced preempt inside
@@ -91,5 +99,8 @@ void  flow_age_running(long units); /* CPU burned this step without emitting */
 void  flow_remove(JSContext *ctx, Flow *f);
 
 int   flow_count(void);
+/* The i'th flow in registry order, or NULL past the end — a WALK over the frontier's members, which is what a
+   register living on the flows needs. flow_best answers which one to RUN; this answers who exists. */
+Flow *flow_at(int i);
 
 #endif

@@ -9,6 +9,10 @@ static unsigned g_gen = 0;   /* bumped whenever the frontier's membership change
                                 value-yield recompute the rival only on a change, never per-opcode */
 static Flow *g_running = NULL;   /* the flow currently holding the worker (the scheduler sets it) */
 
+/* THE FRONTIER'S MEMBERS, in registry order. A walk, not a rank: the pending-fetch register lives on the flows,
+   so whoever asks what the host owes has to visit all of them. flow_best answers a different question. */
+Flow *flow_at(int i) { return (i >= 0 && i < g_flows_n) ? g_flows[i] : NULL; }
+
 void flow_registry_init(void) { g_flows = NULL; g_flows_n = 0; g_flows_cap = 0; g_gen = 0; g_running = NULL; }
 
 unsigned flow_frontier_gen(void) { return g_gen; }
@@ -73,6 +77,7 @@ double flow_weight(const Flow *f) {
 Flow *flow_best(void) {
     Flow *best = NULL; double bw = 0.0;
     for (int i = 0; i < g_flows_n; i++) {
+        if (g_flows[i]->blocked) continue;   /* waiting on the host, not runnable */
         double w = flow_weight(g_flows[i]);
         if (!best || w > bw) { best = g_flows[i]; bw = w; }
     }

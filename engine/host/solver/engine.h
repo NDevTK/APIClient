@@ -57,6 +57,13 @@ int  engine_sched_step(void);
    network completing). Called from a live-fetch host-edge that models an asynchronous GET. */
 void engine_pending_fetch(JSContext *ctx, JSValueConst resolve, JSValueConst value);
 
+/* The same park, with the URL only the TRUSTED HOST can fetch. The value arrives later through engine_provide;
+   until it does the flow cannot finish, which is what keeps reply-gated code reachable. ONE register — the
+   flow's own — because the reaction the resolve enqueues belongs to that flow and to its COW delta. */
+void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst value, const char *url);
+const char *engine_pending_urls(void);                                  /* newline-joined, or "" */
+int engine_provide(JSContext *ctx, const char *url, JSValueConst value); /* entries filled */
+
 /* Install as JSTimeTravelHooks.gen_fork: a concolic branch inside a synchronously-driven generator body forked
    the flow, and clone_deep_flow built a per-flow gen_data clone. Stash the swap; engine_fork_finalize drains it
    onto the new sibling's COW delta (so the shared generator object resolves per-flow). */
