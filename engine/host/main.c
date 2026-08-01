@@ -110,6 +110,13 @@ QJS_EXPORT unsigned qjs_bundle_id(void)
     return g_bundle_id;
 }
 
+/* What the host still owes the frontier: the replies parked flows are waiting on. The scheduler asks this
+   before it decides the frontier is exhausted. */
+static int qjs_owed(void)
+{
+    return *fetch_pending_urls(g_ctx) != '\0';
+}
+
 /* PHASE 2 — seed the frontier. */
 QJS_EXPORT void qjs_begin(const char *recipes)
 {
@@ -118,6 +125,7 @@ QJS_EXPORT void qjs_begin(const char *recipes)
     if (recipes && *recipes)
         DFAIL("qjs_begin was handed parked recipes — build the cold-tier resume that rebuilds each suspended "
               "flow's snapshot from its recipe and re-ranks it into the one frontier");
+    engine_set_stall_hook(qjs_owed);
     engine_sched_begin(g_ctx, g_scripts.bodies, g_scripts.n, /*forking*/1);
     g_begun = 1;
 }
@@ -132,11 +140,8 @@ QJS_EXPORT int qjs_step(void)
     if (g_done)
         return ENGINE_STEP_DONE;   /* the session is over; stepping it again is not a question to ask twice */
     r = engine_sched_step();
-    if (r == ENGINE_STEP_DONE && *fetch_pending_urls(g_ctx))
-        DFAIL("the frontier reported DONE with flows still parked on replies the host owes. It is STALLED, not "
-              "exhausted — but engine_sched_step tears the session down on DONE (g_sess_live), so answering "
-              "YIELD here only aborts on the next step. The scheduler needs the third answer: a STALLED return "
-              "that keeps the session live while the host fetches, provides, and steps again");
+    if (r == ENGINE_STEP_STALLED)
+        return ENGINE_STEP_YIELD;   /* the bridge speaks two values; a stall is "call me again", same as a slice */
     g_done = (r == ENGINE_STEP_DONE);
     return r;
 }

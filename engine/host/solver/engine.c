@@ -311,6 +311,9 @@ void engine_sched_begin(JSContext *ctx, char *const *bodies, int n, int forking)
    uninstalled) and ENGINE_STEP_YIELD when the slice expired with the frontier intact. The slice is wall-clock
    and it is NOT a cap: nothing is dropped, starved, reordered or forgotten across it — the next call resumes the
    same top flow on the same frontier, which is the razor §scheduler states. */
+static int (*g_stall_hook)(void);
+void engine_set_stall_hook(int (*owed)(void)) { g_stall_hook = owed; }
+
 int engine_sched_step(void) {
     JSContext *ctx = g_sess_ctx;
     char *const *bodies = g_sess_bodies;
@@ -341,6 +344,11 @@ int engine_sched_step(void) {
         }
     }
     g_sess_cur = cur;
+    /* STALLED, not exhausted: the run-queue is empty but flows are parked on something only the host can
+       supply. Ask the one seam BEFORE closing — the session and every parked snapshot stay live, and the host
+       steps again once it has provided. */
+    if (g_stall_hook && g_stall_hook())
+        return ENGINE_STEP_STALLED;
     /* ASYNC-AS-FLOW forcing function: every flow has run to completion, so NO microtask/promise reaction may
        still be queued. If one is, the scheduler DROPPED it — the not-yet-built async-as-flow capability (a
        reaction must become a first-class scheduler flow carrying the queuing flow's COW, which needs a fork

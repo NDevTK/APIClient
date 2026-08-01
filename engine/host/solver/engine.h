@@ -37,7 +37,18 @@ void engine_run(JSContext *ctx, char *const *bodies, int n);
    frontier is empty and the session's hooks are uninstalled. */
 #define ENGINE_STEP_DONE   0
 #define ENGINE_STEP_YIELD  2   /* the value the extension bridge's qjs_step already speaks */
+/* STALLED: every flow has run as far as it can, but the frontier is not exhausted — one or more are parked on
+   something only the HOST can supply (a reply the sandbox cannot fetch). The session stays LIVE and every
+   parked flow keeps its snapshot; the host supplies what is owed and steps again. Without this the scheduler
+   closes the session on an empty run-queue and those flows are never resumed, which is how a page whose config
+   gates its later endpoints loses everything after the first request. */
+#define ENGINE_STEP_STALLED 3
 #define ENGINE_QUANTUM_MS  12  /* a thread-sharing floor, not a cap: nothing is dropped across it */
+/* WHAT THE HOST IS OWED. The scheduler asks this ONE seam before it decides the frontier is exhausted; a
+   non-zero answer means STALLED rather than DONE. It is a question, not policy: the scheduler holds no idea of
+   what a reply is, and the host holds no idea of what a flow is. */
+void engine_set_stall_hook(int (*owed)(void));
+
 void engine_sched_begin(JSContext *ctx, char *const *bodies, int n, int forking);
 int  engine_sched_step(void);
 
