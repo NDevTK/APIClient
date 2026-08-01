@@ -96,7 +96,8 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     SOLVER("concolic.c"), SOLVER("endpoint.c"), SOLVER("solve.c"),               // concolic value + @H surface + @S solver
     SOLVER("result.c"),                                                          // the ONE result document the host reads
     SOLVER("dom_cow.c"), SOLVER("attr_shadow.c"),                                // DOM time-travel delta + DOM-attribute taint shadow
-    join(HOST, "browser", "core", "loader", "document_scripts.c"),               // the one live browser piece: Lexbor <script> inventory
+    join(HOST, "browser", "core", "loader", "document_scripts.c"),               // Lexbor <script> inventory + bundle identity
+    join(HOST, "browser", "core", "fetch", "fetch.c"),                           // the Fetch API: every reached request funnels into the @H surface
     // THE ENTRY. `abi` builds the production qjs_* surface the extension bridge drives; the default builds
     // test_forced.c's main() as the node smoke test. They are alternatives, never both: test_forced.c owns
     // main() and runs on load, which a bridge-loaded module must not do.

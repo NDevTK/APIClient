@@ -20,6 +20,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "browser/core/fetch/fetch.h"
 #include "browser/core/loader/document_scripts.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
@@ -87,6 +88,15 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
        cannot represent per-<script> scope and would shift with an inline script the page did not ship. */
     g_bundle_id = document_bundle_id(g_dom);
     g_scripts   = document_exec_scripts(g_dom);
+
+    /* The web-platform surface, installed on the BASELINE — before any flow runs, so these globals are
+       pre-flow state and never land in a delta. Each is a real component under browser/; what is not built
+       yet is absent, and the page's own throw on reading it names the next one to write. */
+    {
+        JSValue g = JS_GetGlobalObject(g_ctx);
+        fetch_install(g_ctx, g);
+        JS_FreeValue(g_ctx, g);
+    }
 
     (void)code; (void)origin; (void)unused; (void)csp;
     return 0;
