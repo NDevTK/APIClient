@@ -83,6 +83,7 @@ if (process.argv[2] === "lexbor") { console.log("[build] lexbor archive rebuilt;
 // is the node smoke-test main (build.mjs's milestone signal: does the new world compile + link + run + PASS its
 // @H/@S fixture). Rebuilding the production ABI entry that wraps engine.c's scheduler for the offscreen
 // document — and re-growing the browser components against the new fork — is the next keystone.
+const ABI = process.argv.includes("abi");          // build the production qjs_* entry instead of the smoke main()
 const SOLVER = (f) => join(HOST, "solver", f);     // the Time-Travel Solver (the novel half)
 const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
   .map((f) => join(QJS, f))
@@ -92,8 +93,17 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     SOLVER("result.c"),                                                          // the ONE result document the host reads
     SOLVER("dom_cow.c"), SOLVER("attr_shadow.c"),                                // DOM time-travel delta + DOM-attribute taint shadow
     join(HOST, "browser", "core", "loader", "document_scripts.c"),               // the one live browser piece: Lexbor <script> inventory
-    join(HOST, "test_forced.c"),                                                 // the node smoke-test entry (@H merge + @S sink fire-verify)
+    // THE ENTRY. `abi` builds the production qjs_* surface the extension bridge drives; the default builds
+    // test_forced.c's main() as the node smoke test. They are alternatives, never both: test_forced.c owns
+    // main() and runs on load, which a bridge-loaded module must not do.
+    join(HOST, ABI ? "main.c" : "test_forced.c"),
   ]);
+
+// The exports the bridge ccalls. Emscripten drops anything not named here, so a function missing from this
+// list is a runtime "no such symbol" in the extension rather than a link error — the list IS the ABI.
+const QJS_ABI = ["qjs_init", "qjs_bundle_id", "qjs_begin", "qjs_step", "qjs_result", "qjs_teardown",
+                 "qjs_pending", "qjs_chunks", "qjs_provide", "qjs_top_weight", "qjs_set_yield_floor",
+                 "qjs_request_park", "qjs_emit_partial"];
 
 const args = [
   ...sources,
@@ -120,11 +130,17 @@ const args = [
          ...(process.argv.includes("dwarf") ? ["-g"] : [])]
       : ["-sALLOW_MEMORY_GROWTH=1"]),
   "-sSTACK_SIZE=8388608",
-  "-sEXIT_RUNTIME=1",         // test_forced.c's main() runs on load and exits with the @H/@S pass code
-  "-o", join(OUT, "qjs.js"),
+  // The smoke entry RUNS on load and exits with the @H/@S pass code; the ABI entry is driven by the bridge
+  // through ccall, so its runtime must stay alive across qjs_step re-entries and be importable as an ES module.
+  ...(ABI
+      ? ["-sEXPORTED_FUNCTIONS=" + JSON.stringify(QJS_ABI.map((f) => "_" + f).concat(["_malloc", "_free"])),
+         "-sEXPORTED_RUNTIME_METHODS=" + JSON.stringify(["ccall", "lengthBytesUTF8", "stringToUTF8"]),
+         "-sMODULARIZE=1", "-sEXPORT_ES6=1", "-sEXPORT_NAME=createQJS", "-sINVOKE_RUN=0"]
+      : ["-sEXIT_RUNTIME=1"]),
+  "-o", join(OUT, ABI ? "qjs.mjs" : "qjs.js"),
 ];
 
-console.log("[build] emcc " + sources.length + " sources -> engine/host/out/qjs.js (new-world smoke test)");
+console.log("[build] emcc " + sources.length + " sources -> engine/host/out/qjs." + (ABI ? "mjs (production ABI)" : "js (new-world smoke test)"));
 const r = spawnSync(EMCC, args, { stdio: "inherit", shell: true, cwd: QJS });
 if (r.status !== 0) { console.error("[build] FAILED rc=" + r.status); process.exit(r.status || 1); }
 console.log("[build] OK -> " + resolve(join(OUT, "qjs.js")));
@@ -133,6 +149,10 @@ console.log("[build] OK -> " + resolve(join(OUT, "qjs.js")));
 // the design-correctness signal until the live-Chrome harness is re-wired to a rebuilt production ABI entry.
 // (The old ES6-module + qjs.wasm staging into extension/lib/qjs served the deleted qjs_* entry; it returns when
 // that entry is rebuilt.)
-const t = spawnSync(process.execPath, [join(OUT, "qjs.js")], { stdio: "inherit", shell: false });
-if (t.status !== 0) { console.error("[build] smoke test FAILED rc=" + (t.status ?? "signal")); process.exit(t.status || 1); }
-console.log("[build] smoke test PASS (new-world @H + @S)");
+if (ABI) {
+  console.log("[build] OK -> " + resolve(join(OUT, "qjs.mjs")) + " (no smoke run: the ABI entry has no main())");
+} else {
+  const t = spawnSync(process.execPath, [join(OUT, "qjs.js")], { stdio: "inherit", shell: false });
+  if (t.status !== 0) { console.error("[build] smoke test FAILED rc=" + (t.status ?? "signal")); process.exit(t.status || 1); }
+  console.log("[build] smoke test PASS (new-world @H + @S)");
+}
