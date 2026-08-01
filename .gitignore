@@ -33,3 +33,13 @@ engine/.work/v8mjsunit/
 engine/.work/lexbor-src/
 engine/.work/lxnat/
 engine/.work/lxlist
+
+# Scratch CLONES under .work — toolchains and side experiments (emsdk, depot_tools, z3, qemu-wasm,
+# unicorn-js, mini-rv32ima). Each is its own git repo, so `git add -A` recorded it as a GITLINK with no
+# .gitmodules entry, which makes `git submodule status` fatal for every clone. They are fetched, not vendored.
+engine/.work/depot_tools/
+engine/.work/emsdk/
+engine/.work/mini-rv32ima/
+engine/.work/qemu-wasm/
+engine/.work/unicorn-js/
+engine/.work/z3/
