@@ -123,7 +123,7 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
    the same reason the host check below it is. It stays where it was, the check stays failing, and the twelve
    are the work — `--list-blob` names them. */
 const CEILING_BLOB = 421     /* the interpreter cycle's size */
-const CEILING_OWN = 21       /* self-contained recursions */
+const CEILING_OWN = 20       /* self-contained recursions */
 /* 70 -> 65, the parser cycle 29 -> 24, as js_parse_descent's explicit frame stack absorbed the precedence
    ladder (expr_binary / logical_and_or / coalesce_expr / cond_expr) and then UnaryExpression (unary / delete).
    BE PRECISE ABOUT WHICH HALF PAID. The ladder was never deep: `a|b|c` is left-nested and the recursive version
@@ -164,9 +164,24 @@ const CEILING_OWN = 21       /* self-contained recursions */
    Each moved to the frame or was respelled from a field it derives from. The rule that catches all of them:
    converting a call site invalidates every liveness claim across it, so re-audit the WHOLE production, not
    the lines that changed.
-   What is LEFT of the parser cycle is js_parse_property_name, a signature adapter over PDS_PROPNAME.
-   next_token's js_check_stack_overflow is deleted when that is gone, not before. */
-const CEILING_OWN_FUNCS = 43 /* functions in them */
+   43 -> 42 deletes js_parse_property_name, the last signature adapter, so the parser's MUTUAL recursion is
+   gone: what remains is js_parse_descent as a SELF-loop, from six call sites inside the driver still spelled
+   js_parse_descent(s, ...) — a nested C ACTIVATION per nesting level, exactly the trap ArrayLiteral fell into
+   above. Those six (three PDS_DESTR, two PDS_CLASS, one PDS_EXPORT) are the work; next_token's
+   js_check_stack_overflow is deleted when they are PD_CALLs, not before.
+   The adapter's deletion was not free either: the class member's start_ptr spans the key descent AND the body
+   descent, so a computed key containing a class of its own would have overwritten the outer member's source
+   start. Same rule as the entry above — the conversion, not the code, is what invalidated the liveness.
+   42 -> 41 and the cycle count 21 -> 20 convert those six, so js_parse_descent leaves the list entirely and
+   THE PARSER HAS NO C RECURSION AT ALL. The one js_parse_descent(s, ...) left in the file is
+   js_parse_program's, which is the driver's C ENTRY — the base activation, not a nested one.
+   What this did NOT buy is the depth those paths still cap at, and the reason is worth recording because it
+   was almost mis-attributed to this work: `var {a:{…}}` still fails at ~255, identically before and after,
+   and a backtrace at the failure shows a FLAT C stack with one js_parse_descent frame. It is not recursion.
+   js_parse_skip_parens_token holds `char state[256]`, a fixed bracket stack that silently `goto done`s when
+   the nesting outruns it and returns a token the caller then mis-reports as "variable name expected". A
+   banned bound AND a wrong answer on valid source, and it is next. */
+const CEILING_OWN_FUNCS = 41 /* functions in them */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
