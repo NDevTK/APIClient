@@ -85,7 +85,10 @@ const wholeCorpus = !sub;
 /* WHICH TESTS FAILED, not just how many. The summary discarded the names, so a `1/43239 errors` result sent
    the next step into a directory-by-directory hunt for one file. run-test262 already names each failure as
    `<file>:<line>: <message>`; keep the first handful. */
-const failLines = (out.match(/^\S+\.js:\d+: (?!Memory leak)[^\n]*/gm) || []);
+/* `Memory leak` is excluded ANYWHERE in the line, not just right after the `:N: `. run-test262 is
+   multi-threaded and two workers can interleave mid-line, producing `fileA:1: fileB:1: Memory leak: …` — a
+   lookahead anchored at the prefix lets that through and the summary then lists non-failures as failures. */
+const failLines = (out.match(/^\S+\.js:\d+: [^\n]*/gm) || []).filter((l) => !/Memory leak/.test(l));
 /* FEATURE ENGAGEMENT: a passing result does NOT prove time-travel ran on the test logic. The engine reports
    preempt-requested vs fired; requested>fired means the feature was gated somewhere (nested async/generator
    activation) and the run passed tests it silently SKIPPED — a fake green. A well-engineered test for all
