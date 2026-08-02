@@ -124,7 +124,18 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
    are the work — `--list-blob` names them. */
 const CEILING_BLOB = 421     /* the interpreter cycle's size */
 const CEILING_OWN = 21       /* self-contained recursions */
-const CEILING_OWN_FUNCS = 70 /* functions in them */
+/* 70 -> 65, the parser cycle 29 -> 24, as js_parse_descent's explicit frame stack absorbed the precedence
+   ladder (expr_binary / logical_and_or / coalesce_expr / cond_expr) and then UnaryExpression (unary / delete).
+   BE PRECISE ABOUT WHICH HALF PAID. The ladder was never deep: `a|b|c` is left-nested and the recursive version
+   already looped over the operator, so 200 000 `|` operands parsed fine before AND after, and all it bought was
+   paren depth ~800 -> ~1000. UnaryExpression is the opposite — every prefix operator takes a UnaryExpression
+   operand, so it was one C frame per character: `"!".repeat(200000)` and `"typeof ".repeat(200000)` and
+   `"delete ".repeat(100000)` each threw RangeError before and each parses now.
+   What is LEFT is the bracket/statement cone — js_parse_expr_paren, js_parse_postfix_expr,
+   js_parse_statement_or_decl and the expr/assign_expr chain between them — which still caps at ~1000 nested
+   parens. next_token's js_check_stack_overflow is the bound reporting it, and it is deleted when that cone is
+   converted, not before. */
+const CEILING_OWN_FUNCS = 65 /* functions in them */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
