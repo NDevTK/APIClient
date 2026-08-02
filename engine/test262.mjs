@@ -94,9 +94,20 @@ if (notEngaged) {
 } else if (m) {
   console.log("  feature: NO ENGAGEMENT LINE — harness did not report engagement (FORK_PREEMPT off or old engine)");
 }
+/* WHAT THIS ZERO DOES AND DOES NOT SAY. The counter answers ONE question: was a BYTECODE BODY entered by C
+   recursion while a flow existed. It is blind to C-to-C recursion that never re-enters the interpreter — the
+   parser descending on nested parens, JS_ReadObjectRec on a nested structured clone, re_parse_disjunction on a
+   crafted pattern. Every one of those is C stack this engine cannot suspend, park or resume, and every one of
+   them leaves this counter at zero.
+   So it must NOT print "pure suspend/resume-at-any-depth". It did, and that label was read back as evidence of
+   resumability it cannot provide — a claim about the whole engine derived from a probe scoped to one path. The
+   number that covers the rest is engine/check_recursion.sh, which is STATIC and whole-program; this line now
+   says which question it answered and points at the one that answers the others. */
 const driveN = d2c ? +d2c[1] : 0;
 if (d2c) console.log(`  drive-to-completion: ${driveN}` +
-  (driveN > 0 ? "  <-- some coroutine body ran to COMPLETION off-tramp (not suspend/resume) — route it onto the tramp chain" : "  (pure suspend/resume-at-any-depth)"));
+  (driveN > 0 ? "  <-- some coroutine body ran to COMPLETION off-tramp (not suspend/resume) — route it onto the tramp chain"
+              : "  (no bytecode body was entered by C recursion under a flow — says NOTHING about C-to-C\n" +
+                "                          recursion, which only engine/check_recursion.sh measures)"));
 console.log("===========================================================");
 /* fail on: crash, spec errors, leaks, a NOT-ENGAGED run (0 back-edges proves nothing), fake-green (engagement
    < 100%), OR any drive-to-completion. */
