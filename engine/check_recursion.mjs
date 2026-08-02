@@ -123,7 +123,7 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
    the same reason the host check below it is. It stays where it was, the check stays failing, and the twelve
    are the work — `--list-blob` names them. */
 const CEILING_BLOB = 421     /* the interpreter cycle's size */
-const CEILING_OWN = 18       /* self-contained recursions */
+const CEILING_OWN = 17       /* self-contained recursions */
 /* 70 -> 65, the parser cycle 29 -> 24, as js_parse_descent's explicit frame stack absorbed the precedence
    ladder (expr_binary / logical_and_or / coalesce_expr / cond_expr) and then UnaryExpression (unary / delete).
    BE PRECISE ABOUT WHICH HALF PAID. The ladder was never deep: `a|b|c` is left-nested and the recursive version
@@ -193,8 +193,20 @@ const CEILING_OWN = 18       /* self-contained recursions */
    it takes a LIFO STACK rather than the cursor above. Popping and pushing the parents in REVERSE reproduces
    pre-order depth-first settlement precisely, so the constraint picks the data structure instead of forbidding
    the work. The recursion also allocated a JSValue per edge purely to re-enter through its own callback
-   signature; walking directly deletes that too. rejection-order.js and fulfillment-order.js are the oracle. */
-const CEILING_OWN_FUNCS = 39 /* functions in them */
+   signature; walking directly deletes that too. rejection-order.js and fulfillment-order.js are the oracle.
+   39 -> 30 is the whole nine-function bytecode WRITER cycle, converted to a work stack in BCWriterState and
+   its stack guard deleted. Output is a pre-order byte stream, so a LIFO stack reproduces it exactly: pop an
+   item, emit its header, push the children so the first pops next. Two things the shape forces, both of which
+   I got wrong first and fixed before testing rather than after — children are fetched ONE PER POP, because an
+   element getter must not run ahead of the previous element's own nested getters; and an owned value's release
+   is QUEUED, not done when its step returns, because the step leaves cursors on the stack still pointing at
+   it. Verified byte-identical against the previous writer over arrays, nested objects, Map, Set, typed arrays,
+   boxed primitives, Date, RegExp and object references: 938 bytes, same hash. Depth 20000 now writes where it
+   threw between 5000 and 20000 before.
+   What remains of that pair is the eleven-function READER, which is harder: the writer emits as it descends
+   while the reader must BUILD bottom-up, so its stack has to carry partially-built containers and place each
+   child into its parent. It still traps between depth 3000 and 5000. */
+const CEILING_OWN_FUNCS = 30 /* functions in them */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
