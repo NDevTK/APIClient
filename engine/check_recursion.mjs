@@ -123,7 +123,7 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
    the same reason the host check below it is. It stays where it was, the check stays failing, and the twelve
    are the work — `--list-blob` names them. */
 const CEILING_BLOB = 421     /* the interpreter cycle's size */
-const CEILING_OWN = 19       /* self-contained recursions */
+const CEILING_OWN = 18       /* self-contained recursions */
 /* 70 -> 65, the parser cycle 29 -> 24, as js_parse_descent's explicit frame stack absorbed the precedence
    ladder (expr_binary / logical_and_or / coalesce_expr / cond_expr) and then UnaryExpression (unary / delete).
    BE PRECISE ABOUT WHICH HALF PAID. The ladder was never deep: `a|b|c` is left-nested and the recursive version
@@ -180,7 +180,7 @@ const CEILING_OWN = 19       /* self-contained recursions */
    and a backtrace at the failure shows a FLAT C stack with one js_parse_descent frame. It is not recursion.
    js_parse_skip_parens_token holds `char state[256]`, a fixed bracket stack that silently `goto done`s when
    the nesting outruns it and returns a token the caller then mis-reports as "variable name expected". A
-   banned bound AND a wrong answer on valid source, and it is next. */
+   banned bound AND a wrong answer on valid source, and it is next.
    41 -> 40 converts gather_available_ancestors — GatherAvailableAncestors — from C recursion to a walk, and
    deletes its stack guard with it. The depth was the async module GRAPH's, which the imported source picks, so
    the guard turned a graph the algorithm answers into a RangeError. exec_list is its own worklist: every module
@@ -188,11 +188,13 @@ const CEILING_OWN = 19       /* self-contained recursions */
    into, so a cursor over this call's appends visits each once and no second array exists to get wrong. Order
    goes depth-first to breadth-first, which is not observable — same set reached, and the caller sorts by
    async_evaluation_timestamp before using it.
-   Its sibling js_async_module_execution_rejected is the SAME shape and is NOT converted: its own comment
-   records that rejection order is observable (leaf-to-root, and settling root-to-leaf is what a test measures),
-   so it needs the traversal order preserved rather than a worklist dropped in. That is the next one, and it is
-   named here so the next attempt starts from the ordering constraint instead of rediscovering it. */
-const CEILING_OWN_FUNCS = 40 /* functions in them */
+   40 -> 39 converts its sibling js_async_module_execution_rejected, which I had first declined on the grounds
+   that its rejection order is observable. That was the wrong conclusion from a true fact: order is exactly why
+   it takes a LIFO STACK rather than the cursor above. Popping and pushing the parents in REVERSE reproduces
+   pre-order depth-first settlement precisely, so the constraint picks the data structure instead of forbidding
+   the work. The recursion also allocated a JSValue per edge purely to re-enter through its own callback
+   signature; walking directly deletes that too. rejection-order.js and fulfillment-order.js are the oracle. */
+const CEILING_OWN_FUNCS = 39 /* functions in them */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
