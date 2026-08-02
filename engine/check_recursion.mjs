@@ -115,7 +115,7 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
 
 const CEILING_BLOB = 421     /* the interpreter cycle's size */
 const CEILING_OWN = 23       /* self-contained recursions */
-const CEILING_OWN_FUNCS = 74 /* functions in them */
+const CEILING_OWN_FUNCS = 72 /* functions in them — lowered as the audit found fewer; a ratchet gives nothing back */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)

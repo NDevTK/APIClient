@@ -17,12 +17,22 @@ $H/solver/concolic.c $H/solver/endpoint.c $H/solver/solve.c
 $H/solver/dom_cow.c $H/solver/attr_shadow.c
 $H/browser/core/loader/document_scripts.c $H/test_forced.c"
 
+# WHERE LEXBOR IS, asked of the tree rather than written down twice. This path was hardcoded to a location the
+# build stopped using, so every compile failed on a missing header and the audit had been UNRUNNABLE — which is
+# the exact failure its own header warns about: a checker that silently covers a fraction of the program is
+# worse than none, because its zero is believed. It had stopped covering all of it.
+LEXBOR="$ROOT/engine/.work/lexbor-src/source"
+if [ ! -d "$LEXBOR" ]; then
+  echo "check_recursion: lexbor headers not found at $LEXBOR — run 'node engine/build.mjs lexbor' first" >&2
+  exit 1
+fi
+
 n=0
 LLS=""
 for f in $UNITS; do
   b=$(basename "$f" .c)
   clang -O0 -w -S -emit-llvm -DNDEBUG -D_GNU_SOURCE -DCONFIG_VERSION='"t262"' -DAPICLIENT_DEV=1 \
-        -I"$Q" -I"$H" -I"$H/browser" -I"$ROOT/engine/lexbor/source" "$f" -o "$OUT/$b.ll"
+        -I"$Q" -I"$H" -I"$H/browser" -I"$LEXBOR" "$f" -o "$OUT/$b.ll"
   LLS="$LLS $OUT/$b.ll"
   n=$((n + 1))
 done
