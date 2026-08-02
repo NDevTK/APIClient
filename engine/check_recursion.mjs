@@ -151,6 +151,16 @@ if (process.argv.includes('--list-own')) { for (const c of own) console.log('[' 
    the drive-to-completion this engine exists to avoid — and unlike a size ceiling, this is a claim with a
    RIGHT answer, so it ratchets at zero and stays there. Measured over the whole linked program, so it covers
    paths no test happens to run. */
+/* WHY BOTH NUMBERS BELOW ARE THE QUEUE, AND NEITHER IS EXCUSED. An earlier version of this file was about to
+   single out the cycle members that call USER code from C, as though recursion mattered only when it ran the
+   page's own program. It does not. ALL RECURSION IS BANNED: a recursive descent through js_parse_expr on
+   attacker-controlled source, JS_ReadObjectRec on a nested structured clone, re_parse_disjunction on a crafted
+   pattern — none of them touch user code and every one of them is C stack this engine cannot suspend, park or
+   resume. A flow that cannot be snapshot at an arbitrary depth is not a flow.
+   So the interpreter cycle's 433 and the 72 functions across 23 self-contained cycles are one work queue, not
+   a headline and a footnote, and "it never re-enters the interpreter" is not a defence. --list-blob and
+   --list-own name every member. */
+
 const HOST_PREFIX = /^(document|element|node_|timer|window_|event_target|fetch_|response_|module_loader|engine_|concolic|solve|absent|endpoint|result_|decide|attr_shadow|dom_cow|qjs_)/
 const hostInBlob = [...blob].filter(f => HOST_PREFIX.test(f)).sort()
 
