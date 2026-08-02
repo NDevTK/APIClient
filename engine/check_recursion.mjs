@@ -131,11 +131,17 @@ const CEILING_OWN = 21       /* self-contained recursions */
    paren depth ~800 -> ~1000. UnaryExpression is the opposite — every prefix operator takes a UnaryExpression
    operand, so it was one C frame per character: `"!".repeat(200000)` and `"typeof ".repeat(200000)` and
    `"delete ".repeat(100000)` each threw RangeError before and each parses now.
+   65 -> 62 adds Expression and the parenthesized expression, and moved the descent's frame stack out of the
+   driver into JSParseState. That move was forced by a REGRESSION this conversion caused: a per-activation
+   inline array put the descent's working set back on the C stack, and because unconverted productions sit
+   between converted ones the driver pays for it twice per paren level — nested parens began failing at 800
+   where the pre-conversion parser passed. Shared stack, per-activation base index: 800 parses again, 1200
+   parses where the original failed.
    What is LEFT is the bracket/statement cone — js_parse_expr_paren, js_parse_postfix_expr,
    js_parse_statement_or_decl and the expr/assign_expr chain between them — which still caps at ~1000 nested
    parens. next_token's js_check_stack_overflow is the bound reporting it, and it is deleted when that cone is
    converted, not before. */
-const CEILING_OWN_FUNCS = 65 /* functions in them */
+const CEILING_OWN_FUNCS = 62 /* functions in them */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
