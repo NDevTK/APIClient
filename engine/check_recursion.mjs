@@ -113,15 +113,25 @@ const blob = MAIN >= 0 ? sccs[MAIN] : []
 const own = sccs.filter((_, i) => i !== MAIN)
 const ownFuncs = own.reduce((n, c) => n + c.length, 0)
 
-/* NOT RAISED. The audit was unrunnable for a long stretch (see check_recursion.sh: it compiled against a lexbor
-   path the build had stopped using), and when it was restored the interpreter cycle measured 433 against this
-   421. Twelve functions joined it unobserved; exactly one is attributable — an own-slot probe added for the
-   unknown-property-key read, measured by disabling it and watching 433 become 432.
-   The temptation is to call 421 stale and re-baseline, and that is wrong. QUICKJS INTERNALS ARE NOT EXEMPT:
-   the entire point of the trampoline is that the C stack is flat, and a quickjs function in this cycle is a C
-   path that can re-enter JS_CallInternal exactly as a host function would be. This number is load-bearing for
-   the same reason the host check below it is. It stays where it was, the check stays failing, and the twelve
-   are the work — `--list-blob` names them. */
+/* NOT RAISED, and the guidance that used to sit here was WRONG. It said twelve functions had joined the cycle
+   unobserved and that "the twelve are the work". That was a guess from a delta, and --why-blob now measures
+   the thing itself: recompute the SCC with one call edge deleted, and an edge whose removal collapses the
+   cycle IS the cycle's cause. The answer is not twelve functions and never was.
+
+     JS_CallFree -> JS_CallInternal      433 -> 16     (-417)
+     JS_ThrowError -> JS_ThrowError2     433 -> 163    (-270)
+     js_malloc -> JS_ThrowOutOfMemory    433 -> 336    (-97)
+
+   ONE edge holds 417 of the 433. JS_CallFree is a four-line wrapper — run the interpreter, free the callee —
+   so the edge is not a defect in it; it is the five C-DRIVES-JS callers that reach it: JS_ToPrimitiveFree
+   (valueOf/toString), JS_GetPropertyInternal (a getter read), call_setter (a setter write), JS_Invoke, and
+   JS_EvalFunctionInternal. Each is a place C runs JS instead of routing onto the trampoline, which is exactly
+   what the C-stack rules say a continuation-holding path must not do. Convert them and JS_CallFree has no
+   callers left; 417 passengers leave with it.
+   The second cluster is independent and cheaper to reason about: error CONSTRUCTION reaches back into the
+   interpreter, so every allocation failure path is transitively in the cycle. That is what drags js_malloc in.
+   So the work is five named call sites and an error-construction path, not a 433-line list, and the check
+   stays failing until they are done. */
 const CEILING_BLOB = 421     /* the interpreter cycle's size */
 const CEILING_OWN = 14       /* self-contained recursions */
 /* 70 -> 65, the parser cycle 29 -> 24, as js_parse_descent's explicit frame stack absorbed the precedence
@@ -247,6 +257,59 @@ if (linkedUnits !== EXPECTED_UNITS) {
    members, `--list-own` the self-contained ones. */
 if (process.argv.includes('--list-blob')) { for (const f of [...blob].sort()) console.log(f) }
 if (process.argv.includes('--list-own')) { for (const c of own) console.log('[' + c.length + '] ' + c.join(' ')) }
+
+/* WHICH EDGE HOLDS IT, which is the question `--list-blob` cannot answer. The interpreter cycle is a
+   TRANSITIVE artifact: naming its 433 members says nothing about which of them to touch, and the guidance
+   above this file used to carry — "twelve functions joined it unobserved, the twelve are the work" — was a
+   guess dressed as a work list. Recomputing the SCC with one call edge deleted says it exactly: an edge whose
+   removal collapses the cycle is the cycle's cause, and everything else in it is a passenger.
+   Run with --why-blob. The answer today is one line long: JS_CallFree -> JS_CallInternal, 433 -> 16. Every
+   other edge is worth at most one function. So the work is not 433 functions and never was — it is the five
+   C-drives-JS callers of JS_CallFree (ToPrimitive, a getter read, a setter write, JS_Invoke, eval), each of
+   which has to reach the trampoline instead of running the interpreter from C. When the last one does,
+   JS_CallFree goes and 417 passengers leave with it. */
+if (process.argv.includes('--why-blob')) {
+  const sccSize = (dropFrom, dropTo) => {
+    const ix = new Map(), lo = new Map(), st = [], onSt = new Set()
+    let n = 0, found = 0
+    for (const root of edges.keys()) {
+      if (ix.has(root)) continue
+      const work = [[root, 0]]
+      while (work.length) {
+        const fr = work[work.length - 1], v = fr[0]
+        if (fr[1] === 0) { ix.set(v, n); lo.set(v, n); n++; st.push(v); onSt.add(v) }
+        const outs = [...edges.get(v)].filter(w => !(v === dropFrom && w === dropTo))
+        if (fr[1] < outs.length) {
+          const w = outs[fr[1]++]
+          if (!ix.has(w)) work.push([w, 0])
+          else if (onSt.has(w)) lo.set(v, Math.min(lo.get(v), ix.get(w)))
+          continue
+        }
+        work.pop()
+        if (work.length) { const p = work[work.length - 1][0]; lo.set(p, Math.min(lo.get(p), lo.get(v))) }
+        if (lo.get(v) === ix.get(v)) {
+          const comp = []
+          for (;;) { const w = st.pop(); onSt.delete(w); comp.push(w); if (w === v) break }
+          if (comp.includes('JS_CallInternal')) found = comp.length
+        }
+      }
+    }
+    return found
+  }
+  const base = sccSize(null, null)
+  const seen = []
+  for (const [f, outs] of edges)
+    for (const t of outs)
+      if (blob.includes(t) && blob.includes(f)) {
+        const after = sccSize(f, t)
+        if (after < base) seen.push([base - after, f, t, after])
+      }
+  seen.sort((a, b) => b[0] - a[0])
+  console.log(`interpreter cycle ${base}; edges whose removal shrinks it:`)
+  for (const [d, f, t, after] of seen.slice(0, 10))
+    console.log(`  -${String(d).padEnd(5)} ${f} -> ${t}   => ${after}`)
+  if (!seen.length) console.log('  none individually — several edges hold it at once')
+}
 
 /* THE INVARIANT THAT ACTUALLY GUARDS THE LAYERING: not one browser or solver component may sit in the
    interpreter's own cycle. A host edge is C code the interpreter calls; if one of them could re-enter
