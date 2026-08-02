@@ -123,8 +123,8 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
    the same reason the host check below it is. It stays where it was, the check stays failing, and the twelve
    are the work — `--list-blob` names them. */
 const CEILING_BLOB = 421     /* the interpreter cycle's size */
-const CEILING_OWN = 23       /* self-contained recursions */
-const CEILING_OWN_FUNCS = 72 /* functions in them — lowered as the audit found fewer; a ratchet gives nothing back */
+const CEILING_OWN = 21       /* self-contained recursions */
+const CEILING_OWN_FUNCS = 70 /* functions in them */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)

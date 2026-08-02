@@ -229,8 +229,30 @@ static void dom_apply_entry(DomUndo *u) {
     }
 }
 /* apply a base chain FORWARD (deepest ancestor first, then up); unapply is the mirror. NULL-safe (flat delta). */
-static void dom_apply_seg(DomSeg *s) { if (!s) return; dom_apply_seg(s->base); for (int i = 0; i < s->n; i++) dom_apply_entry(&s->e[i]); }
-static void dom_unapply_seg(DomSeg *s) { if (!s) return; for (int i = s->n - 1; i >= 0; i--) dom_unapply_entry(&s->e[i]); dom_unapply_seg(s->base); }
+/* THE BASE CHAIN IS WALKED, NOT RECURSED. These two ran on every context switch, once per shared base segment,
+   and the chain's depth is the fork depth — so a deeply forked frontier put an unbounded C recursion on the
+   hottest path the scheduler has. All recursion is banned here for one reason: C stack cannot be suspended,
+   parked or resumed, and a switch that cannot be interrupted mid-way is a switch that cannot time-travel. That
+   neither of these runs any of the page's code makes no difference.
+   UNAPPLY is head-first, so it is a plain loop. APPLY is deepest-ancestor-first, which the recursion got by
+   unwinding; it gets it here by REVERSING the base pointers in place, walking forward, and reversing them back
+   — O(depth), no allocation, and nothing to fail on a path where a failed allocation would corrupt the swap. */
+static void dom_apply_seg(DomSeg *s)
+{
+    DomSeg *prev = NULL, *cur = s, *next;
+
+    while (cur) { next = cur->base; cur->base = prev; prev = cur; cur = next; }   /* reverse: deepest first */
+    cur = prev; prev = NULL;
+    while (cur) {
+        for (int i = 0; i < cur->n; i++) dom_apply_entry(&cur->e[i]);
+        next = cur->base; cur->base = prev; prev = cur; cur = next;               /* and restore as we go */
+    }
+}
+static void dom_unapply_seg(DomSeg *s)
+{
+    for (; s; s = s->base)
+        for (int i = s->n - 1; i >= 0; i--) dom_unapply_entry(&s->e[i]);
+}
 /* drop a chain reference: refcount--, free the segment's entries (parked: old/cur held) when it hits 0, recurse. */
 static void dom_seg_unref(DomSeg *s) {
     while (s && --s->refcount <= 0) {
