@@ -145,11 +145,15 @@ const CEILING_OWN = 21       /* self-contained recursions */
    60 -> 58, the parser cycle 19 -> 17, adds MemberExpression/CallExpression (js_parse_postfix_expr and
    js_parse_left_hand_side_expr) — the production nested parens, nested calls and nested index expressions all
    descend through, and so the last big holder of source-controlled depth in the EXPRESSION grammar.
+   58 -> 57 adds ArrayLiteral, which CLOSES `[[[[…]]]]` — 20000 nested `[` parses where the original throws.
+   Worth recording how that nearly did not happen: rewriting the call site to js_parse_descent(...) left it a
+   nested C ACTIVATION of the driver, one frame per level, and the depth probe was identical to the unconverted
+   parser. A converted production's call sites INSIDE the driver must be PD_CALLs.
    What is LEFT is the STATEMENT cone — js_parse_expr_paren, js_parse_postfix_expr,
    js_parse_statement_or_decl and the expr/assign_expr chain between them — which still caps at ~1000 nested
    parens. next_token's js_check_stack_overflow is the bound reporting it, and it is deleted when that cone is
    converted, not before. */
-const CEILING_OWN_FUNCS = 58 /* functions in them */
+const CEILING_OWN_FUNCS = 57 /* functions in them */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
