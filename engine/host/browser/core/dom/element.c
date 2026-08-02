@@ -28,6 +28,7 @@
 #include "solver/solve.h"
 #include "core/dom/element.h"
 #include "core/dom/node.h"
+#include "core/dom/document.h"
 
 /* IDENTITY AND THE TREE BASE LIVE IN node.c — one wrapper table for every node kind, because a tree whose only
    node kind is Element cannot represent the document it just parsed. This file is what makes a node an ELEMENT:
@@ -299,9 +300,62 @@ static void element_prepare_script(JSContext *ctx, lxb_dom_element_t *el)
     }
 }
 
+/* §4.2.6 THE ParentNode MIXIN, on the interface the spec puts it on. querySelector/querySelectorAll were on
+   Document only, so `section.querySelector("tbody")` — an ordinary scoped lookup, and where testharness.js
+   stopped once elements became EventTargets — was "not a function". The selector engine is Document's ONE
+   implementation, reached with this element as the root: a second copy here could disagree with it about what a
+   selector means, which is the kind of divergence nothing would ever notice. */
+static JSValue js_el_query_selector(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_element_t *el = elem_of(this_val);
+    const char *sel;
+    JSValue r;
+
+    if (!el) return magic ? JS_NewArray(ctx) : JS_NULL;
+    if (argc < 1) return magic ? JS_NewArray(ctx) : JS_NULL;
+    sel = JS_ToCString(ctx, argv[0]);
+    if (!sel) return JS_EXCEPTION;
+    r = document_qs_run(ctx, lxb_dom_interface_node(el), sel, magic);
+    JS_FreeCString(ctx, sel);
+    return r;
+}
+
+/* §4.2.6 children / firstElementChild / lastElementChild / childElementCount — the ELEMENT-only walk beside
+   Node's childNodes, which a page uses precisely to skip the whitespace Text nodes a parser leaves behind.
+   `children` is a STATIC array, the same named gap childNodes and querySelectorAll carry. */
+static JSValue js_el_children(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_element_t *el = elem_of(this_val);
+    lxb_dom_node_t *c, *first = NULL, *last = NULL;
+    uint32_t n = 0;
+    JSValue arr = JS_UNDEFINED;
+
+    if (!el) return magic == 0 ? JS_NewArray(ctx) : (magic == 3 ? JS_NewInt32(ctx, 0) : JS_NULL);
+    if (magic == 0) arr = JS_NewArray(ctx);
+    for (c = lxb_dom_interface_node(el)->first_child; c; c = c->next) {
+        if (c->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        if (!first) first = c;
+        last = c;
+        if (magic == 0) JS_SetPropertyUint32(ctx, arr, n, node_wrap(ctx, c));
+        n++;
+    }
+    switch (magic) {
+    case 0: return arr;
+    case 1: return node_wrap(ctx, first);
+    case 2: return node_wrap(ctx, last);
+    default: return JS_NewInt32(ctx, (int)n);
+    }
+}
+
 static const JSCFunctionListEntry js_element_proto[] = {
     JS_CFUNC_DEF("getAttribute", 1, js_el_get_attribute),
     JS_CFUNC_DEF("setAttribute", 2, js_el_set_attribute),
+    JS_CFUNC_MAGIC_DEF("querySelector", 1, js_el_query_selector, 0),
+    JS_CFUNC_MAGIC_DEF("querySelectorAll", 1, js_el_query_selector, 1),
+    JS_CGETSET_MAGIC_DEF("children", js_el_children, NULL, 0),
+    JS_CGETSET_MAGIC_DEF("firstElementChild", js_el_children, NULL, 1),
+    JS_CGETSET_MAGIC_DEF("lastElementChild", js_el_children, NULL, 2),
+    JS_CGETSET_MAGIC_DEF("childElementCount", js_el_children, NULL, 3),
     JS_CGETSET_DEF("tagName", js_el_get_tag, NULL),
     JS_CGETSET_DEF("innerHTML", NULL, js_el_set_inner_html),
     JS_CGETSET_DEF("textContent", js_el_get_text_content, js_el_set_text_content),

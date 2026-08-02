@@ -74,8 +74,11 @@ static lxb_status_t qs_found(lxb_dom_node_t *node, lxb_css_selector_specificity_
     return LXB_STATUS_OK;
 }
 
-/* Run `sel` over the document. `all` collects every match into an array; otherwise the first in tree order. */
-static JSValue qs_run(JSContext *ctx, const char *sel, bool all)
+/* Run `sel` over the subtree at `root`. `all` collects every match into an array; otherwise the first in tree
+   order. ONE implementation for the whole ParentNode mixin (§4.2.6) — Document, Element and DocumentFragment
+   differ only in the root they scope to, so element.c reaches this through document_qs_run rather than growing
+   a second copy that could disagree with this one about what a selector means. */
+static JSValue qs_run(JSContext *ctx, lxb_dom_node_t *root, const char *sel, bool all)
 {
     lxb_css_parser_t *parser;
     lxb_selectors_t *selectors;
@@ -94,8 +97,7 @@ static JSValue qs_run(JSContext *ctx, const char *sel, bool all)
     }
     list = lxb_css_selectors_parse(parser, (const lxb_char_t *)sel, strlen(sel));
     if (list) {
-        lxb_selectors_find(selectors, lxb_dom_interface_node(g_doc->dom_document.element),
-                           list, qs_found, &q);
+        lxb_selectors_find(selectors, root, list, qs_found, &q);
         lxb_css_selector_list_destroy_memory(list);
     }
     lxb_selectors_destroy(selectors, true);
@@ -103,6 +105,12 @@ static JSValue qs_run(JSContext *ctx, const char *sel, bool all)
     if (!all)
         r = element_wrap(ctx, q.first);
     return r;
+}
+
+/* The ParentNode mixin's one selector engine, for the components that scope it to their own subtree. */
+JSValue document_qs_run(JSContext *ctx, lxb_dom_node_t *root, const char *sel, int all)
+{
+    return qs_run(ctx, root, sel, all != 0);
 }
 
 static JSValue js_doc_query_selector(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -114,7 +122,7 @@ static JSValue js_doc_query_selector(JSContext *ctx, JSValueConst this_val, int 
     if (argc < 1) return JS_NULL;
     sel = JS_ToCString(ctx, argv[0]);
     if (!sel) return JS_EXCEPTION;
-    r = qs_run(ctx, sel, false);
+    r = qs_run(ctx, lxb_dom_interface_node(g_doc->dom_document.element), sel, false);
     JS_FreeCString(ctx, sel);
     return r;
 }
@@ -128,7 +136,7 @@ static JSValue js_doc_query_selector_all(JSContext *ctx, JSValueConst this_val, 
     if (argc < 1) return JS_NewArray(ctx);
     sel = JS_ToCString(ctx, argv[0]);
     if (!sel) return JS_EXCEPTION;
-    r = qs_run(ctx, sel, true);
+    r = qs_run(ctx, lxb_dom_interface_node(g_doc->dom_document.element), sel, true);
     JS_FreeCString(ctx, sel);
     return r;
 }
