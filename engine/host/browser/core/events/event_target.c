@@ -130,10 +130,26 @@ static JSValue js_remove_listener(JSContext *ctx, JSValueConst this_val, int arg
 
 /* The Event a listener receives. Enough of §2.2 to be USED rather than inspected for completeness: a page reads
    `type` and `target`, and calls the three no-op-in-a-headless-run methods. What is not here is absent. */
-static JSValue js_event_noop(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+/* §2.2 the event's own FLAGS, set on the event object the listener was handed. These were one shared no-op —
+   the lazy stub the IDL audit exists to expose — and a no-op preventDefault is not a small inaccuracy: whether
+   the default action was cancelled is the ONE thing dispatchEvent reports, and a page that branches on
+   `defaultPrevented` was reading a constant. Each now writes its flag, which is all the spec says they do.
+   magic: 0 = preventDefault, 1 = stopPropagation, 2 = stopImmediatePropagation. */
+static JSValue js_event_flag(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    (void)ctx; (void)this_val; (void)argc; (void)argv;
-    return JS_UNDEFINED;   /* preventDefault/stopPropagation on an event with no default action and one phase */
+    static const char *const FLAG[] = { "defaultPrevented", "cancelBubble", "cancelBubble" };
+    (void)argc; (void)argv;
+    /* 2.2: preventDefault does nothing unless the event is cancelable. */
+    if (magic == 0) {
+        JSValue c = JS_GetPropertyStr(ctx, this_val, "cancelable");
+        int can = JS_ToBool(ctx, c);
+        JS_FreeValue(ctx, c);
+        if (!can) return JS_UNDEFINED;
+    }
+    if (magic == 2)
+        JS_SetPropertyStr(ctx, (JSValue)this_val, "immediatePropagationStopped", JS_TRUE);
+    JS_SetPropertyStr(ctx, (JSValue)this_val, FLAG[magic], JS_TRUE);
+    return JS_UNDEFINED;
 }
 
 static JSValue make_event(JSContext *ctx, const char *type, JSValueConst target)
@@ -146,9 +162,13 @@ static JSValue make_event(JSContext *ctx, const char *type, JSValueConst target)
     JS_SetPropertyStr(ctx, ev, "bubbles", JS_NewBool(ctx, true));
     JS_SetPropertyStr(ctx, ev, "cancelable", JS_NewBool(ctx, false));
     JS_SetPropertyStr(ctx, ev, "defaultPrevented", JS_NewBool(ctx, false));
-    JS_SetPropertyStr(ctx, ev, "preventDefault", JS_NewCFunction(ctx, js_event_noop, "preventDefault", 0));
-    JS_SetPropertyStr(ctx, ev, "stopPropagation", JS_NewCFunction(ctx, js_event_noop, "stopPropagation", 0));
-    JS_SetPropertyStr(ctx, ev, "stopImmediatePropagation", JS_NewCFunction(ctx, js_event_noop, "stopImmediatePropagation", 0));
+    JS_SetPropertyStr(ctx, ev, "cancelBubble", JS_FALSE);
+    JS_SetPropertyStr(ctx, ev, "preventDefault",
+                      JS_NewCFunctionMagic(ctx, js_event_flag, "preventDefault", 0, JS_CFUNC_generic_magic, 0));
+    JS_SetPropertyStr(ctx, ev, "stopPropagation",
+                      JS_NewCFunctionMagic(ctx, js_event_flag, "stopPropagation", 0, JS_CFUNC_generic_magic, 1));
+    JS_SetPropertyStr(ctx, ev, "stopImmediatePropagation",
+                      JS_NewCFunctionMagic(ctx, js_event_flag, "stopImmediatePropagation", 0, JS_CFUNC_generic_magic, 2));
     return ev;
 }
 

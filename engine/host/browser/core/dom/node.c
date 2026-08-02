@@ -28,6 +28,7 @@
 #include "quickjs.h"
 #include "solver/dom_cow.h"
 #include "core/dom/node.h"
+#include "core/events/event_target.h"
 
 static JSClassID g_node_class;
 
@@ -193,6 +194,11 @@ void node_install_base(JSContext *ctx, JSValueConst obj)
 {
     JS_SetPropertyFunctionList(ctx, (JSValue)obj, js_node_base,
                                (int)(sizeof(js_node_base) / sizeof(js_node_base[0])));
+    /* §4.4: `interface Node : EventTarget`. Every node is one, and only the global was — so
+       `el.addEventListener(...)` was "not a function" on every element a page wired up, which is where
+       testharness.js stopped on eight documents (`getElementById("rerun").addEventListener`). Installed on the
+       base because it is a base member, not an Element one. */
+    event_target_install(ctx, obj);
 }
 
 /* The ELEMENT members are element.c's to install; the base and the character-data members are this file's. The
