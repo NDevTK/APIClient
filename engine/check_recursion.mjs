@@ -153,7 +153,7 @@ const CEILING_OWN = 21       /* self-contained recursions */
    js_parse_statement_or_decl and the expr/assign_expr chain between them — which still caps at ~1000 nested
    parens. next_token's js_check_stack_overflow is the bound reporting it, and it is deleted when that cone is
    converted, not before. */
-const CEILING_OWN_FUNCS = 56 /* functions in them */
+const CEILING_OWN_FUNCS = 55 /* functions in them */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
