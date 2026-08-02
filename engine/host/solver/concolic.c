@@ -321,6 +321,15 @@ JSValue concolic_tostr_hook(JSContext *ctx, JSValueConst v) {
     return concolic_new(ctx, shape, src ? src : shape, example);
 }
 
+/* THE NAME an unknown key denotes: its own SHAPE, as a real string. Stable per source, so every key-taking
+   operation agrees with every other — see the contract at JS_ToPropertyKeyInternal. */
+JSValue concolic_key_name_hook(JSContext *ctx, JSValueConst key) {
+    const char *sh;
+    if (!concolic_is(key)) return JS_UNINITIALIZED;
+    sh = concolic_shape_c(key);
+    return JS_NewString(ctx, sh ? sh : "{}");
+}
+
 /* `obj[x]` WITH AN UNKNOWN KEY. Not a coercion of the operand: nothing about x says WHICH slot was meant, so
    the read's result is unknown and the honest answer is a concolic that keeps the key's source — a gate on the
    value still forks, and a sink still solves for the key that would reach it. Example-free on purpose: which
