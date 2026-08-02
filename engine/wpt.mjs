@@ -136,7 +136,14 @@ const runOne = (rel) => new Promise((resolve) => {
 let ran = 0, pass = 0, fail = 0, noresult = 0;
 const gaps = new Map();          // distinct failure/abort message -> count
 const noResultFiles = [];
-const note = (msg) => gaps.set(String(msg).slice(0, 160), (gaps.get(String(msg).slice(0, 160)) || 0) + 1);
+/* The gap list says WHAT failed and how often; this says WHICH FILE, because every chase starts by finding one
+   document that reproduces and the list alone cannot answer that. Written to wpt-gaps.json beside the counts. */
+const byFile = {};
+const note = (msg, file) => {
+  const k = String(msg).slice(0, 160);
+  gaps.set(k, (gaps.get(k) || 0) + 1);
+  (byFile[k] || (byFile[k] = [])).push(file);
+};
 
 /* A CONTINUOUS pool, not batches. A batch is a barrier: the slowest document in it holds every other slot idle,
    and WPT documents differ by orders of magnitude in how long they run. Each slot takes the next file the moment
@@ -153,17 +160,17 @@ const takeNext = async () => {
       noResultFiles.push(f);
       /* The page's OWN uncaught errors are the real reason a document produced nothing: each names a capability
          the harness needed. They are the gap list. */
-      if (res.pageErrors.length) for (const e of res.pageErrors) note(e);
+      if (res.pageErrors.length) for (const e of res.pageErrors) note(e, f);
       else note(res.aborted
                 || (res.unfinished ? "the document was STILL WORKING after " + res.unfinished + " qjs_step calls "
                                      + "— the harness stopped pumping, the engine did not finish"
-                                   : "no result, no abort and no page error"));
+                                   : "no result, no abort and no page error"), f);
       continue;
     }
     ran++;
     for (const t of res.results) {
       if (t.status === "0") pass++;
-      else { fail++; note(t.message || "(no message)"); }
+      else { fail++; note(t.message || "(no message)", f); }
     }
   }
 };
@@ -178,4 +185,4 @@ for (const [msg, n] of [...gaps.entries()].sort((a, b) => b[1] - a[1]).slice(0, 
 console.log("===========================================================");
 writeFileSync(join(ENGINE, ".work", "wpt-gaps.json"),
               JSON.stringify({ sub, files: files.length, ran, noresult, pass, fail,
-                               gaps: [...gaps.entries()].sort((a,b)=>b[1]-a[1]), noResultFiles }, null, 1));
+                               gaps: [...gaps.entries()].sort((a,b)=>b[1]-a[1]), byFile, noResultFiles }, null, 1));
