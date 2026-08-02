@@ -149,11 +149,24 @@ const CEILING_OWN = 21       /* self-contained recursions */
    Worth recording how that nearly did not happen: rewriting the call site to js_parse_descent(...) left it a
    nested C ACTIVATION of the driver, one frame per level, and the depth probe was identical to the unconverted
    parser. A converted production's call sites INSIDE the driver must be PD_CALLs.
-   What is LEFT is the STATEMENT cone — js_parse_expr_paren, js_parse_postfix_expr,
-   js_parse_statement_or_decl and the expr/assign_expr chain between them — which still caps at ~1000 nested
-   parens. next_token's js_check_stack_overflow is the bound reporting it, and it is deleted when that cone is
-   converted, not before. */
-const CEILING_OWN_FUNCS = 45 /* functions in them */
+   45 -> 43, the parser cycle 4 -> 2, adds FunctionDeclaration/Expression/method/arrow — the LAST recursive
+   body in the parser. js_parse_function_decl2 and its js_parse_function_decl wrapper are both deleted; all
+   thirteen call sites are PD_CALL_Ps, so a function body no longer costs a C activation at any nesting depth.
+   `'function f(){'*n` parsed to 60 000 before and after; at 65 000 the old parser answers `SyntaxError:
+   missing formal parameter` — a WRONG error, not a clean stack report — where the new one parses.
+   THE EXPENSIVE HALF WAS NOT THE TRANSFORM, IT WAS THE DRIVER LOCALS THE TRANSFORM INVALIDATED. Six
+   productions kept state in C locals that were safe only because the function-body descent was a C recursion
+   giving each nesting level its own C frame. Making it a PD_CALL puts an inner function in the SAME driver
+   activation as the outer, so every one of those became a live-across-suspension hazard at once: the class
+   production's field table / constructor / source start, its is_set and method_fd, its func_type, the object
+   literal's is_getset, this production's own name / rest / idx / label, and — worst — the body's BlockEnv,
+   whose ADDRESS push_break_entry links into fd->top_break, so a nested function's pop unlinked the outer's.
+   Each moved to the frame or was respelled from a field it derives from. The rule that catches all of them:
+   converting a call site invalidates every liveness claim across it, so re-audit the WHOLE production, not
+   the lines that changed.
+   What is LEFT of the parser cycle is js_parse_property_name, a signature adapter over PDS_PROPNAME.
+   next_token's js_check_stack_overflow is deleted when that is gone, not before. */
+const CEILING_OWN_FUNCS = 43 /* functions in them */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
