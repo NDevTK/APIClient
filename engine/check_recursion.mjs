@@ -137,11 +137,16 @@ const CEILING_OWN = 21       /* self-contained recursions */
    between converted ones the driver pays for it twice per paren level — nested parens began failing at 800
    where the pre-conversion parser passed. Shared stack, per-activation base index: 800 parses again, 1200
    parses where the original failed.
+   62 -> 60, the parser cycle 21 -> 19, adds AssignmentExpression. Three of its productions take an
+   AssignmentExpression operand (`yield x`, `a = x`, `a ??= x`), so it was a C frame per `=` in `a=b=c=…` and
+   per `?:` in a ternary chain. 100 000 nested ternaries went from RangeError to parsing; a 100 000-deep
+   assignment chain went from RangeError (the PARSER's guard) to InternalError (the INTERPRETER's operand
+   stack) — the parse now succeeds and the remaining limit belongs to a different subsystem.
    What is LEFT is the bracket/statement cone — js_parse_expr_paren, js_parse_postfix_expr,
    js_parse_statement_or_decl and the expr/assign_expr chain between them — which still caps at ~1000 nested
    parens. next_token's js_check_stack_overflow is the bound reporting it, and it is deleted when that cone is
    converted, not before. */
-const CEILING_OWN_FUNCS = 62 /* functions in them */
+const CEILING_OWN_FUNCS = 60 /* functions in them */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
