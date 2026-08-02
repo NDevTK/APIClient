@@ -4,6 +4,7 @@
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <stdio.h>
 
 /* The per-value state hung off the JSObject via JS_SetOpaque. */
@@ -208,6 +209,118 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
    `typeof x === "function"` take an arm decided by the solver's representation rather than the value. The
    answer is a concolic STRING carrying the same source, so the comparison after it forks like every other gate
    over an unknown. */
+static char *cstr_dup(JSContext *ctx, JSValueConst v);   /* defined with the + hook below */
+
+/* 7.1.4 ToNumber AND 7.1.17 ToString OVER UNKNOWN INPUT — answered where the operator computes, never at the
+ * conversion boundary, which owes C a real primitive.
+ *
+ * The RESULT keeps the SOURCE, so `-location.hash` still forks a later branch and still solves at a later sink;
+ * a value that collapsed to NaN or "[object Object]" here would end the exploration at the first coercion, which
+ * is exactly what §Solver means by opacity surviving coercion.
+ *
+ * The EXAMPLE propagates by RUNNING THE REAL OP on the operands' examples — the engine actually negates, actually
+ * multiplies — which is what makes this the concolic TRIPLE rather than a taint label with a derived note. When
+ * an operand has no example there is nothing concrete to run and the result is example-free, which is the honest
+ * answer: @H never invents. */
+static const char *carith_name(int op, int *unary)
+{
+    *unary = (op <= JS_CARITH_DEC);
+    switch (op) {
+    case JS_CARITH_NEG:  return "-";
+    case JS_CARITH_PLUS: return "+";
+    case JS_CARITH_NOT:  return "~";
+    case JS_CARITH_INC:  return "++";
+    case JS_CARITH_DEC:  return "--";
+    case JS_CARITH_SUB:  return "-";
+    case JS_CARITH_MUL:  return "*";
+    case JS_CARITH_DIV:  return "/";
+    case JS_CARITH_MOD:  return "%";
+    case JS_CARITH_POW:  return "**";
+    default: DFAIL("concolic arithmetic with an unknown operator id"); return "?";
+    }
+}
+
+static int carith_apply(int op, double a, double b, double *out)
+{
+    switch (op) {
+    case JS_CARITH_NEG:  *out = -a; return 1;
+    case JS_CARITH_PLUS: *out = a; return 1;
+    case JS_CARITH_NOT:  *out = (double)(~(int32_t)a); return 1;
+    case JS_CARITH_INC:  *out = a + 1; return 1;
+    case JS_CARITH_DEC:  *out = a - 1; return 1;
+    case JS_CARITH_SUB:  *out = a - b; return 1;
+    case JS_CARITH_MUL:  *out = a * b; return 1;
+    case JS_CARITH_DIV:  *out = a / b; return 1;
+    case JS_CARITH_MOD:  *out = fmod(a, b); return 1;
+    case JS_CARITH_POW:  *out = pow(a, b); return 1;
+    default: return 0;
+    }
+}
+
+int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
+    JSValue a = sp[-nops], b = nops == 2 ? sp[-1] : JS_UNDEFINED;
+    int ca = concolic_is(a), cb = nops == 2 && concolic_is(b);
+    const char *name;
+    int unary = 0;
+    char shape[192];
+    const char *src;
+    JSValue example = JS_UNDEFINED, res;
+
+    if (!ca && !cb) return 0;
+    name = carith_name(op, &unary);
+    src = ca ? concolic_src_c(a) : concolic_src_c(b);
+
+    if (unary) {
+        snprintf(shape, sizeof shape, "%s%s", name, concolic_shape_c(a) ? concolic_shape_c(a) : "{}");
+    } else {
+        char *sa = ca ? strdup(concolic_shape_c(a) ? concolic_shape_c(a) : "{}") : cstr_dup(ctx, a);
+        char *sb = cb ? strdup(concolic_shape_c(b) ? concolic_shape_c(b) : "{}") : cstr_dup(ctx, b);
+        CHECK(sa && sb, "concolic arithmetic: OOM shape");
+        snprintf(shape, sizeof shape, "%s%s%s", sa, name, sb);
+        free(sa); free(sb);
+    }
+
+    /* RUN THE REAL OP on the examples when there are any — the concrete half of the triple. */
+    {
+        JSValue exa = ca ? concolic_example(ctx, a) : JS_DupValue(ctx, a);
+        JSValue exb = nops == 2 ? (cb ? concolic_example(ctx, b) : JS_DupValue(ctx, b)) : JS_UNDEFINED;
+        if (!JS_IsUndefined(exa) && (nops == 1 || !JS_IsUndefined(exb))) {
+            double da = 0, db = 0, out = 0;
+            if (JS_ToFloat64(ctx, &da, exa) == 0 &&
+                (nops == 1 || JS_ToFloat64(ctx, &db, exb) == 0) &&
+                carith_apply(op, da, db, &out))
+                example = JS_NewFloat64(ctx, out);
+        }
+        JS_FreeValue(ctx, exa); JS_FreeValue(ctx, exb);
+    }
+
+    res = concolic_new(ctx, shape, src ? src : shape, example);
+    JS_FreeValue(ctx, sp[-nops]);
+    if (nops == 2) JS_FreeValue(ctx, sp[-1]);
+    sp[-nops] = res;
+    return 1;
+}
+
+/* 7.1.17 ToString over unknown input: unknown, source kept, example computed by actually stringifying the
+   example when there is one. */
+JSValue concolic_tostr_hook(JSContext *ctx, JSValueConst v) {
+    const char *src, *sh;
+    char shape[192];
+    JSValue ex, example = JS_UNDEFINED;
+
+    if (!concolic_is(v)) return JS_UNINITIALIZED;
+    src = concolic_src_c(v);
+    sh = concolic_shape_c(v);
+    snprintf(shape, sizeof shape, "String(%s)", sh ? sh : "{}");
+    ex = concolic_example(ctx, v);
+    if (!JS_IsUndefined(ex)) {
+        const char *p = JS_ToCString(ctx, ex);
+        if (p) { example = JS_NewString(ctx, p); JS_FreeCString(ctx, p); }
+    }
+    JS_FreeValue(ctx, ex);
+    return concolic_new(ctx, shape, src ? src : shape, example);
+}
+
 JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
     const char *src;
     char shape[192];

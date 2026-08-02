@@ -47,6 +47,11 @@ int         concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq);
 int         concolic_rel_hook(JSContext *ctx, JSValue *sp, int op);
 /* JSConcolicHooks.type_of — `typeof` an unknown is an unknown string, so the comparison forks. */
 JSValue     concolic_typeof_hook(JSContext *ctx, JSValueConst v);   /* JS_UNINITIALIZED = not concolic, run the real typeof */
+/* JSConcolicHooks.arith / .to_str — ToNumber and ToString over unknown input, answered by the OPERATOR (the
+   conversion boundary owes C a real primitive). The result keeps the source; the example is the REAL op run on
+   the operands' examples, or absent when there is nothing concrete to run. */
+int         concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops);
+JSValue     concolic_tostr_hook(JSContext *ctx, JSValueConst v);
 void        concolic_pin(const char *src, const char *val);   /* EQ true-arm: this source now reads `val` (real @H value) */
 /* THE OTHER HALF OF THE PATH CONSTRAINT. A predicate that pins nothing still narrows: taking the true arm of
    `if (cfg.admin)` says the value is truthy FOR THIS FLOW, and a bundle tests the same flag over and over. The
