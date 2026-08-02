@@ -70,6 +70,18 @@ const skip = out.match(/(\d+) skipped/);
 const gcLeaks = (out.match(/\[gcleak\]/g) || []).length;
 const mallocLeaks = (out.match(/Memory leak: \d+ bytes lost/g) || []).length;
 const leaks = gcLeaks + mallocLeaks;
+/* THE RAW-ALLOCATION LEAKS ARE PRE-EXISTING, AND THIS IS A RATCHET, NOT AN EXEMPTION. Turning the second
+   detector on immediately reported 606 of them — and the UNMODIFIED parser, built from the pre-conversion
+   blob and run over the whole corpus, reports exactly 606 as well. They are not this conversion's; they have
+   been there the whole time, uncounted, because the gate only ever looked at [gcleak].
+   Failing outright on a number nothing introduced would make the gate unusable and teach the next change to
+   switch it back off, which is how it came to be ignored in the first place. So it ratchets, exactly like
+   engine/check_recursion.mjs: this many are known, MORE is a regression the build refuses, FEWER must be
+   recorded here so the gain cannot be given back. Zero is the target and the 606 are the work.
+   A gc-object leak has no such history and still fails at ONE. The ceiling applies only to a whole-corpus run;
+   a subdirectory run reports its count and enforces nothing, because the number is not comparable. */
+const MALLOC_LEAK_CEILING = 606;
+const wholeCorpus = !sub;
 /* WHICH TESTS FAILED, not just how many. The summary discarded the names, so a `1/43239 errors` result sent
    the next step into a directory-by-directory hunt for one file. run-test262 already names each failure as
    `<file>:<line>: <message>`; keep the first handful. */
@@ -129,4 +141,15 @@ console.log("===========================================================");
 /* fail on: crash, spec errors, leaks, a NOT-ENGAGED run (0 back-edges proves nothing), fake-green (engagement
    < 100%), OR any drive-to-completion. */
 const fakeGreen = notEngaged ? true : (f ? (+f[4] > 0) : true);
-process.exit((!m || +m[1] > 0 || leaks > 0 || fakeGreen || driveN > 0) ? 1 : 0);
+let leakBad = gcLeaks > 0;
+if (wholeCorpus && m) {
+  if (mallocLeaks > MALLOC_LEAK_CEILING) {
+    console.error(`raw-allocation leaks: ${mallocLeaks} > ceiling ${MALLOC_LEAK_CEILING}. This change leaks.`);
+    leakBad = true;
+  } else if (mallocLeaks < MALLOC_LEAK_CEILING) {
+    console.error(`raw-allocation leaks: ${mallocLeaks} < ceiling ${MALLOC_LEAK_CEILING} — LOWER it in ` +
+                  `engine/test262.mjs so the gain cannot be given back.`);
+    leakBad = true;
+  }
+}
+process.exit((!m || +m[1] > 0 || leakBad || fakeGreen || driveN > 0) ? 1 : 0);
