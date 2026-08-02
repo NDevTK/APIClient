@@ -123,7 +123,7 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
    the same reason the host check below it is. It stays where it was, the check stays failing, and the twelve
    are the work — `--list-blob` names them. */
 const CEILING_BLOB = 421     /* the interpreter cycle's size */
-const CEILING_OWN = 16       /* self-contained recursions */
+const CEILING_OWN = 14       /* self-contained recursions */
 /* 70 -> 65, the parser cycle 29 -> 24, as js_parse_descent's explicit frame stack absorbed the precedence
    ladder (expr_binary / logical_and_or / coalesce_expr / cond_expr) and then UnaryExpression (unary / delete).
    BE PRECISE ABOUT WHICH HALF PAID. The ladder was never deep: `a|b|c` is left-nested and the recursive version
@@ -216,8 +216,18 @@ const CEILING_OWN = 16       /* self-contained recursions */
    both preserved.
    Verified by ROUND TRIP, because byte-identical output only ever tested the writer: read the stream back and
    re-serialise the reconstruction. Same 938 bytes, same hash, over arrays, nested objects, Map, Set, typed
-   arrays, boxed primitives, Date, RegExp and object references. Depth 3000-5000 became 200000. */
-const CEILING_OWN_FUNCS = 19 /* functions in them */
+   arrays, boxed primitives, Date, RegExp and object references. Depth 3000-5000 became 200000.
+   19 -> 17 takes both rope walkers, and neither needed a state machine — which is the point of looking before
+   building one. string_rope_get's two descents were both TAIL calls, so the C frame carried nothing but the
+   argument and re-assigning it says the same thing. hash_string_rope was a duplicate traversal of a structure
+   that ALREADY had a flat one: string_rope_iter_next yields the leaves left to right, exactly the order the
+   recursion visited them. Writing a third walker there would have been the workaround.
+   NOT converted, and deliberately: lre_case_conv / lre_case_conv1 / lre_case_conv_entry are a mutual cycle
+   whose depth bottoms out at about two — a converted character converted once more. Flattening it would be
+   churn dressed as progress, and the audit counting it is the audit being honest about direct calls rather
+   than a debt. The same is true of rope DEPTH generally: JS_STRING_ROPE_MAX_DEPTH is 60 with a flatten above
+   it, so no rope walk was ever input-deep. */
+const CEILING_OWN_FUNCS = 17 /* functions in them */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
