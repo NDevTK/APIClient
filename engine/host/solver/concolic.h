@@ -52,6 +52,8 @@ JSValue     concolic_typeof_hook(JSContext *ctx, JSValueConst v);   /* JS_UNINIT
    the operands' examples, or absent when there is nothing concrete to run. */
 int         concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops);
 JSValue     concolic_tostr_hook(JSContext *ctx, JSValueConst v);
+/* JSConcolicHooks.key_read — `obj[x]` with an unknown key reads an unknown property. */
+JSValue     concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst key);
 void        concolic_pin(const char *src, const char *val);   /* EQ true-arm: this source now reads `val` (real @H value) */
 /* THE OTHER HALF OF THE PATH CONSTRAINT. A predicate that pins nothing still narrows: taking the true arm of
    `if (cfg.admin)` says the value is truthy FOR THIS FLOW, and a bundle tests the same flag over and over. The

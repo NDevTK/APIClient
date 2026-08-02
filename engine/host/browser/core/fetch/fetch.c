@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "check.h"
+#include "solver/concolic.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "solver/endpoint.h"
@@ -84,7 +85,19 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url)
     promise = JS_NewPromiseCapability(ctx, resolving);
     if (JS_IsException(promise))
         return promise;
-    u = JS_ToCString(ctx, url);
+    /* THE CONCRETE PROJECTION IS ASKED FOR EXPLICITLY. A URL built out of unknown external input is a CONCOLIC,
+       and the ToString boundary owes C a real string rather than one — so this edge reads the concolic's own
+       SHAPE, which is the display form the @H surface reports ("/api/{hash}"). Coercing it generically would
+       either crash at that boundary or, worse, quietly de-taint the URL. */
+    if (concolic_is(url)) {
+        /* the SHAPE, made a real string first, so there is exactly ONE ownership rule for `u` below. */
+        const char *sh = concolic_shape_c(url);
+        JSValue sv = JS_NewString(ctx, sh ? sh : "{}");
+        u = JS_ToCString(ctx, sv);
+        JS_FreeValue(ctx, sv);
+    } else {
+        u = JS_ToCString(ctx, url);
+    }
     if (u) {
         JSValue uv = JS_NewString(ctx, u);
         data[0] = resolving[0];

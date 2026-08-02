@@ -321,6 +321,21 @@ JSValue concolic_tostr_hook(JSContext *ctx, JSValueConst v) {
     return concolic_new(ctx, shape, src ? src : shape, example);
 }
 
+/* `obj[x]` WITH AN UNKNOWN KEY. Not a coercion of the operand: nothing about x says WHICH slot was meant, so
+   the read's result is unknown and the honest answer is a concolic that keeps the key's source — a gate on the
+   value still forks, and a sink still solves for the key that would reach it. Example-free on purpose: which
+   property the attacker names is exactly what is not known, and @H never invents one. */
+JSValue concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst key) {
+    const char *src;
+    char shape[192];
+
+    if (!concolic_is(key)) return JS_UNINITIALIZED;
+    src = concolic_src_c(key);
+    snprintf(shape, sizeof shape, "{}[%s]", concolic_shape_c(key) ? concolic_shape_c(key) : "{}");
+    (void)obj;
+    return concolic_new(ctx, shape, src ? src : shape, JS_UNDEFINED);
+}
+
 JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
     const char *src;
     char shape[192];
