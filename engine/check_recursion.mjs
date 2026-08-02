@@ -113,6 +113,15 @@ const blob = MAIN >= 0 ? sccs[MAIN] : []
 const own = sccs.filter((_, i) => i !== MAIN)
 const ownFuncs = own.reduce((n, c) => n + c.length, 0)
 
+/* NOT RAISED. The audit was unrunnable for a long stretch (see check_recursion.sh: it compiled against a lexbor
+   path the build had stopped using), and when it was restored the interpreter cycle measured 433 against this
+   421. Twelve functions joined it unobserved; exactly one is attributable — an own-slot probe added for the
+   unknown-property-key read, measured by disabling it and watching 433 become 432.
+   The temptation is to call 421 stale and re-baseline, and that is wrong. QUICKJS INTERNALS ARE NOT EXEMPT:
+   the entire point of the trampoline is that the C stack is flat, and a quickjs function in this cycle is a C
+   path that can re-enter JS_CallInternal exactly as a host function would be. This number is load-bearing for
+   the same reason the host check below it is. It stays where it was, the check stays failing, and the twelve
+   are the work — `--list-blob` names them. */
 const CEILING_BLOB = 421     /* the interpreter cycle's size */
 const CEILING_OWN = 23       /* self-contained recursions */
 const CEILING_OWN_FUNCS = 72 /* functions in them — lowered as the audit found fewer; a ratchet gives nothing back */
@@ -129,6 +138,22 @@ if (linkedUnits !== EXPECTED_UNITS) {
   console.error(`  any it cannot compile. A ceiling met over part of the program is not a result.`)
   bad = true
 }
+/* WHICH functions, not just how many. A ratchet that reports "433 > 421" and stops has the same defect the WPT
+   gap list had before it learned to name files: the number tells you something regressed and nothing about
+   where, so the next step is a bisection instead of a look. `--list-blob` prints the interpreter cycle's
+   members, `--list-own` the self-contained ones. */
+if (process.argv.includes('--list-blob')) { for (const f of [...blob].sort()) console.log(f) }
+if (process.argv.includes('--list-own')) { for (const c of own) console.log('[' + c.length + '] ' + c.join(' ')) }
+
+/* THE INVARIANT THAT ACTUALLY GUARDS THE LAYERING: not one browser or solver component may sit in the
+   interpreter's own cycle. A host edge is C code the interpreter calls; if one of them could re-enter
+   JS_CallInternal it would be running the page's code from inside a C activation with no flow base, which is
+   the drive-to-completion this engine exists to avoid — and unlike a size ceiling, this is a claim with a
+   RIGHT answer, so it ratchets at zero and stays there. Measured over the whole linked program, so it covers
+   paths no test happens to run. */
+const HOST_PREFIX = /^(document|element|node_|timer|window_|event_target|fetch_|response_|module_loader|engine_|concolic|solve|absent|endpoint|result_|decide|attr_shadow|dom_cow|qjs_)/
+const hostInBlob = [...blob].filter(f => HOST_PREFIX.test(f)).sort()
+
 const check = (name, got, want, what) => {
   if (got > want) { console.error(`${name}: ${got} > ceiling ${want}. ${what}`); bad = true }
   else if (got < want) {
@@ -136,6 +161,12 @@ const check = (name, got, want, what) => {
                   `cannot be given back.`)
     bad = true
   }
+}
+if (hostInBlob.length) {
+  console.error('host components inside the interpreter cycle: ' + hostInBlob.join(' ') +
+                '\n  A browser/solver component that can re-enter JS_CallInternal runs the page\'s code from a ' +
+                'C activation with no flow base. Route it through the flow machinery instead.')
+  bad = true
 }
 check('interpreter cycle', blob.length, CEILING_BLOB,
       'A new DIRECT call joined the interpreter\'s own cycle — a C path that can re-enter JS_CallInternal.')

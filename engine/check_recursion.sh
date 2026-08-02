@@ -8,7 +8,12 @@ set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 Q="$ROOT/engine/qjs"
 H="$ROOT/engine/host"
-OUT=${1:-"$ROOT/engine/.recursion-ir"}
+# The first argument is the IR directory ONLY when it is not a flag; every flag is passed through to the
+# checker. Reading a `--list-blob` as a directory name is how this script tried to mkdir it.
+case "${1:-}" in
+  -*|"") OUT="$ROOT/engine/.recursion-ir" ;;
+  *)     OUT="$1"; shift ;;
+esac
 mkdir -p "$OUT"
 
 UNITS="$Q/quickjs.c $Q/libregexp.c $Q/libunicode.c $Q/dtoa.c
@@ -37,4 +42,4 @@ for f in $UNITS; do
   n=$((n + 1))
 done
 llvm-link -S $LLS -o "$OUT/all.ll"
-exec node "$ROOT/engine/check_recursion.mjs" "$OUT/all.ll" --units "$n"
+exec node "$ROOT/engine/check_recursion.mjs" "$OUT/all.ll" --units "$n" "$@"
