@@ -61,7 +61,19 @@ const m = out.match(/Result: (\d+)\/(\d+) errors/);
    The numbers are printed so that gap is visible rather than inferred. */
 const excl = out.match(/errors?, (\d+) excluded/);
 const skip = out.match(/(\d+) skipped/);
-const leaks = (out.match(/\[gcleak\]/g) || []).length;
+/* TWO LEAK DETECTORS, AND THIS COUNTED ONLY ONE. `[gcleak]` is the gc_obj_list walk in JS_FreeRuntime — it
+   sees a leaked GC OBJECT. run-test262 keeps its OWN malloc accounting and prints `Memory leak: N bytes lost
+   in 1 block` for a raw allocation that never came back, which the gc walk cannot see because it is not a GC
+   object at all. A parser frame stack, a dbuf, a JSAtom table entry all leak that way.
+   Counting only [gcleak] printed "0 leaks" over runs that were emitting hundreds of the other kind. A gate
+   that reports a number it did not measure is worse than one that reports nothing. */
+const gcLeaks = (out.match(/\[gcleak\]/g) || []).length;
+const mallocLeaks = (out.match(/Memory leak: \d+ bytes lost/g) || []).length;
+const leaks = gcLeaks + mallocLeaks;
+/* WHICH TESTS FAILED, not just how many. The summary discarded the names, so a `1/43239 errors` result sent
+   the next step into a directory-by-directory hunt for one file. run-test262 already names each failure as
+   `<file>:<line>: <message>`; keep the first handful. */
+const failLines = (out.match(/^\S+\.js:\d+: (?!Memory leak)[^\n]*/gm) || []);
 /* FEATURE ENGAGEMENT: a passing result does NOT prove time-travel ran on the test logic. The engine reports
    preempt-requested vs fired; requested>fired means the feature was gated somewhere (nested async/generator
    activation) and the run passed tests it silently SKIPPED — a fake green. A well-engineered test for all
@@ -79,7 +91,12 @@ if (!m) { console.log("  DID-NOT-COMPLETE — a HARD crash before the summary (s
   console.log("---- last 60 lines of captured output ----\n" + out.split(/\r?\n/).slice(-60).join("\n"));
   console.log(`---- child signal=${r.signal} status=${r.status}` +
     (r.status === 3221225477 ? " (0xC0000005 ACCESS_VIOLATION — memory bug: run under ASan)" : "") + " ----"); }
-else {  console.log(`  ${m[1]}/${m[2]} errors, ${leaks} leaks   (errors = spec-wrong under time-travel; bisect vs d0c2272)`);
+else {  console.log(`  ${m[1]}/${m[2]} errors, ${leaks} leaks` +
+          (leaks ? ` (${gcLeaks} gc-object, ${mallocLeaks} raw-allocation)` : "") +
+          `   (errors = spec-wrong under time-travel; bisect vs d0c2272)`);
+        if (failLines.length)
+          console.log("  FAILING:\n" + failLines.slice(0, 12).map((l) => "    " + l).join("\n") +
+                      (failLines.length > 12 ? `\n    … and ${failLines.length - 12} more` : ""));
         if ((excl && +excl[1] > 0) || (skip && +skip[1] > 0))
           console.log(`  NOT RUN: ${excl ? excl[1] : 0} excluded by test262.conf, ${skip ? skip[1] : 0} skipped ` +
                       `for unlisted features — the count above is over what remained`);
