@@ -123,7 +123,7 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
    the same reason the host check below it is. It stays where it was, the check stays failing, and the twelve
    are the work — `--list-blob` names them. */
 const CEILING_BLOB = 421     /* the interpreter cycle's size */
-const CEILING_OWN = 17       /* self-contained recursions */
+const CEILING_OWN = 16       /* self-contained recursions */
 /* 70 -> 65, the parser cycle 29 -> 24, as js_parse_descent's explicit frame stack absorbed the precedence
    ladder (expr_binary / logical_and_or / coalesce_expr / cond_expr) and then UnaryExpression (unary / delete).
    BE PRECISE ABOUT WHICH HALF PAID. The ladder was never deep: `a|b|c` is left-nested and the recursive version
@@ -203,10 +203,21 @@ const CEILING_OWN = 17       /* self-contained recursions */
    it. Verified byte-identical against the previous writer over arrays, nested objects, Map, Set, typed arrays,
    boxed primitives, Date, RegExp and object references: 938 bytes, same hash. Depth 20000 now writes where it
    threw between 5000 and 20000 before.
-   What remains of that pair is the eleven-function READER, which is harder: the writer emits as it descends
-   while the reader must BUILD bottom-up, so its stack has to carry partially-built containers and place each
-   child into its parent. It still traps between depth 3000 and 5000. */
-const CEILING_OWN_FUNCS = 30 /* functions in them */
+   30 -> 19 finishes the pair: the eleven-function READER, and its stack guard with it. It needed a different
+   shape — the writer emits as it descends, so a work stack of pending items sufficed, while the reader BUILDS
+   and every child has to be placed into a half-made parent. So its frames carry the container AND a cursor,
+   the finished child arrives in a result register, and the whole thing lives in BCReaderState rather than in
+   C locals: everything live at a frame boundary is in the struct, which is what makes the walk re-enterable
+   rather than merely flat.
+   Two orderings the arms had to keep, neither of which a depth test would have caught. Object reference ids
+   are assigned by the ORDER of BC_add_object_ref, so an arm that registered its container before its children
+   still must, and the typed array still reserves its slot before reading the buffer and fills it after. And
+   Date reads its number BEFORE creating the object while Array creates the container FIRST — opposite orders,
+   both preserved.
+   Verified by ROUND TRIP, because byte-identical output only ever tested the writer: read the stream back and
+   re-serialise the reconstruction. Same 938 bytes, same hash, over arrays, nested objects, Map, Set, typed
+   arrays, boxed primitives, Date, RegExp and object references. Depth 3000-5000 became 200000. */
+const CEILING_OWN_FUNCS = 19 /* functions in them */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
