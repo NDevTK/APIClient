@@ -142,11 +142,14 @@ const CEILING_OWN = 21       /* self-contained recursions */
    per `?:` in a ternary chain. 100 000 nested ternaries went from RangeError to parsing; a 100 000-deep
    assignment chain went from RangeError (the PARSER's guard) to InternalError (the INTERPRETER's operand
    stack) — the parse now succeeds and the remaining limit belongs to a different subsystem.
-   What is LEFT is the bracket/statement cone — js_parse_expr_paren, js_parse_postfix_expr,
+   60 -> 58, the parser cycle 19 -> 17, adds MemberExpression/CallExpression (js_parse_postfix_expr and
+   js_parse_left_hand_side_expr) — the production nested parens, nested calls and nested index expressions all
+   descend through, and so the last big holder of source-controlled depth in the EXPRESSION grammar.
+   What is LEFT is the STATEMENT cone — js_parse_expr_paren, js_parse_postfix_expr,
    js_parse_statement_or_decl and the expr/assign_expr chain between them — which still caps at ~1000 nested
    parens. next_token's js_check_stack_overflow is the bound reporting it, and it is deleted when that cone is
    converted, not before. */
-const CEILING_OWN_FUNCS = 60 /* functions in them */
+const CEILING_OWN_FUNCS = 58 /* functions in them */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
