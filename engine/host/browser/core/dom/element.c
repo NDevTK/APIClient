@@ -27,6 +27,7 @@
 #include "solver/engine.h"
 #include "solver/solve.h"
 #include "core/dom/element.h"
+#include "core/idl_args.h"
 #include "core/dom/node.h"
 #include "core/dom/document.h"
 
@@ -40,8 +41,9 @@ static lxb_dom_element_t *elem_of(JSValueConst v)
     return lxb_dom_interface_element(n);
 }
 
-static JSValue js_el_get_attribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+static JSValue js_el_get_attribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
+    (void)magic;
     lxb_dom_element_t *el = elem_of(this_val);
     const char *name;
     JSValue r = JS_NULL;
@@ -64,8 +66,9 @@ static JSValue js_el_get_attribute(JSContext *ctx, JSValueConst this_val, int ar
     return r;
 }
 
-static JSValue js_el_set_attribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+static JSValue js_el_set_attribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
+    (void)magic;
     lxb_dom_element_t *el = elem_of(this_val);
     const char *name;
     const char *val;
@@ -237,7 +240,7 @@ static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magi
     DCHECK(magic >= 0 && magic < (int)(sizeof(EL_REFLECT) / sizeof(EL_REFLECT[0])),
            "a reflected property was declared with a magic the attribute table does not name");
     nv = JS_NewString(ctx, EL_REFLECT[magic]);
-    r = js_el_get_attribute(ctx, this_val, 1, (JSValueConst *)&nv);
+    r = js_el_get_attribute(ctx, this_val, 1, (JSValueConst *)&nv, 0);   /* a real string already: the reflected NAME is the engine's */
     JS_FreeValue(ctx, nv);
     return JS_IsNull(r) ? JS_NewStringLen(ctx, "", 0) : r;   /* a reflected string attribute defaults to "" */
 }
@@ -250,7 +253,7 @@ static JSValue js_el_reflect_set(JSContext *ctx, JSValueConst this_val, JSValueC
            "a reflected property was declared with a magic the attribute table does not name");
     args[0] = JS_NewString(ctx, EL_REFLECT[magic]);
     args[1] = JS_DupValue(ctx, val);
-    r = js_el_set_attribute(ctx, this_val, 2, (JSValueConst *)args);
+    r = js_el_set_attribute(ctx, this_val, 2, (JSValueConst *)args, 0);
     JS_FreeValue(ctx, args[0]);
     JS_FreeValue(ctx, args[1]);
     return r;
@@ -348,10 +351,6 @@ static JSValue js_el_children(JSContext *ctx, JSValueConst this_val, int magic)
 }
 
 static const JSCFunctionListEntry js_element_proto[] = {
-    JS_CFUNC_DEF("getAttribute", 1, js_el_get_attribute),
-    JS_CFUNC_DEF("setAttribute", 2, js_el_set_attribute),
-    JS_CFUNC_MAGIC_DEF("querySelector", 1, js_el_query_selector, 0),
-    JS_CFUNC_MAGIC_DEF("querySelectorAll", 1, js_el_query_selector, 1),
     JS_CGETSET_MAGIC_DEF("children", js_el_children, NULL, 0),
     JS_CGETSET_MAGIC_DEF("firstElementChild", js_el_children, NULL, 1),
     JS_CGETSET_MAGIC_DEF("lastElementChild", js_el_children, NULL, 2),
@@ -369,10 +368,20 @@ static const JSCFunctionListEntry js_element_proto[] = {
 
 /* node.c calls this when it builds a wrapper for an ELEMENT node — it owns identity and the Node base; this
    owns what makes the node an Element. */
+/* The step ids for the members whose arguments the spec COERCES. Declared once in element_init — these are
+   installed on every wrapper the tree hands out, and declaring there would mint a definition per element. */
+static int g_id_get_attr = -1, g_id_set_attr = -1, g_id_qs = -1, g_id_qsa = -1;
+
 static void element_install_members(JSContext *ctx, JSValueConst obj)
 {
     JS_SetPropertyFunctionList(ctx, (JSValue)obj, js_element_proto,
                                (int)(sizeof(js_element_proto) / sizeof(js_element_proto[0])));
+    /* `name`, `value` and `selectors` are DOMStrings, so each is ToString on whatever the page passed:
+       `el.getAttribute({toString(){ … }})` is the page's code and parks the machine on that argument. */
+    idl_install_method(ctx, obj, "getAttribute", 1, g_id_get_attr);
+    idl_install_method(ctx, obj, "setAttribute", 2, g_id_set_attr);
+    idl_install_method(ctx, obj, "querySelector", 1, g_id_qs);
+    idl_install_method(ctx, obj, "querySelectorAll", 1, g_id_qsa);
 }
 
 /* HTML 4.12.1: a <script> that has just been inserted is PREPARED. node.c asks for this on every insertion so
@@ -391,6 +400,12 @@ JSValue element_wrap(JSContext *ctx, lxb_dom_element_t *el)
 void element_init(JSContext *ctx)
 {
     node_init(ctx);
+    if (g_id_get_attr < 0) {
+        g_id_get_attr = idl_string_method_id(ctx, 0x1, js_el_get_attribute, 0);
+        g_id_set_attr = idl_string_method_id(ctx, 0x3, js_el_set_attribute, 0);   /* both name and value */
+        g_id_qs       = idl_string_method_id(ctx, 0x1, js_el_query_selector, 0);
+        g_id_qsa      = idl_string_method_id(ctx, 0x1, js_el_query_selector, 1);
+    }
     node_set_element_installer(element_install_members);
     node_set_inserted_hook(element_on_inserted);
 }

@@ -20,6 +20,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/idl_args.h"
 #include "core/events/event_target.h"
 
 /* The private key the listener map hangs off. A SYMBOL, so a page enumerating its own objects cannot see it and
@@ -32,7 +33,7 @@ static int g_ready;
 /* The ids JS_RegisterStepDef handed this runtime for add/removeEventListener. `type` is a Web IDL DOMString,
    so it is ToString on whatever the page passed and cannot be a JS_ToCString from C. */
 static int g_add_stepid = -1, g_remove_stepid = -1;
-static const JSTrampStepDef js_add_listener_def, js_remove_listener_def;
+static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
 
 void event_target_init(JSContext *ctx)
 {
@@ -41,9 +42,8 @@ void event_target_init(JSContext *ctx)
     CHECK(!JS_IsException(g_key), "the event-listener key allocation failed");
     g_ready = 1;
     if (g_add_stepid < 0) {
-        JSRuntime *rt = JS_GetRuntime(ctx);
-        g_add_stepid    = JS_RegisterStepDef(rt, &js_add_listener_def);
-        g_remove_stepid = JS_RegisterStepDef(rt, &js_remove_listener_def);
+        g_add_stepid    = idl_string_method_id(ctx, 0x1, idl_add_or_remove, 0);
+        g_remove_stepid = idl_string_method_id(ctx, 0x1, idl_add_or_remove, 1);
     }
 }
 
@@ -143,65 +143,30 @@ static JSValue remove_listener_with_type(JSContext *ctx, JSValueConst this_val, 
     return JS_UNDEFINED;
 }
 
-/* THE COERCION IS THE ONLY PART THAT REACHES THE PAGE. `type` is a Web IDL DOMString, so
-   `el.addEventListener({toString(){ for(;;){} }}, f)` is the page's loop: it parks on step_tostring_run and
-   resumes at the exact stage. Everything after it touches the component's own listener map and cannot.
-   arg 0 of the def selects add (0) or remove (1) — one machine, because the two differ only in the call they
-   finish with. */
-typedef struct JSListenerState {
-    JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
-    JSValue   type;     /* the coerced DOMString (owned) */
-} JSListenerState;
-
-static void js_listener_visit(JSContext *ctx, void *st, JSStepVisit *v)
+/* add/removeEventListener's `type` is a Web IDL DOMString, so it is ToString on whatever the page passed and
+   cannot be a JS_ToCString from C. They use the SHARED coerce-then-call machine rather than one of their own:
+   what they have in common with getAttribute and createElement is exactly the thing that needs a machine, and a
+   second copy is a second chance to get the resumption wrong.
+   IT ALSO FIXES AN ORDERING MISTAKE I MADE. A bespoke version checked 2.7's "if callback is null, return"
+   BEFORE the coercion, to avoid running a toString for a call that does nothing. That is backwards: Web IDL
+   converts arguments in ORDER at call time, so `type` is converted first and the null-callback step is part of
+   the algorithm that runs after. `addEventListener({toString(){ … }}, null)` DOES run that toString in a real
+   browser, and now here. */
+static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    JSListenerState *s = st;
-    v->val(ctx, &s->type);
-}
-
-static JSValue js_listener_fini(JSContext *ctx, void *st, bool take_result)
-{
-    JSListenerState *s = st;
-    (void)take_result;
-    JS_FreeValue(ctx, s->type);
-    s->type = JS_UNDEFINED;
-    return JS_UNDEFINED;   /* both operations return undefined */
-}
-
-static int js_listener_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
-{
-    JSListenerState *s = st;
-    JSValueConst cb = step_arg(&s->hdr, 1);
     const char *type;
-    int r;
+    JSValue r;
 
-    /* 2.7: a non-callable listener is ignored — and ignored BEFORE the coercion, which is what stops
-       `addEventListener({toString(){ … }}, null)` from running that toString for nothing. */
-    if (s->hdr.argc < 2 || !JS_IsFunction(ctx, cb)) {
-        JS_FreeValue(ctx, cb_result);
-        return JS_STEP_DONE;
-    }
-    r = step_tostring_run(ctx, &s->hdr, step_arg(&s->hdr, 0), cb_result, &s->type, out_cb, out_argc);
-    if (r > 0) return r;
-    if (r < 0) return JS_STEP_ABRUPT;
-
-    type = JS_ToCString(ctx, s->type);   /* a real string by now: this cannot reach the page */
+    if (argc < 2 || (magic == 0 && !JS_IsFunction(ctx, argv[1])))
+        return JS_UNDEFINED;   /* 2.7: a non-callable listener is ignored, not an error */
+    type = JS_ToCString(ctx, argv[0]);   /* a real string by now: this cannot reach the page */
     if (!type)
-        return JS_STEP_ABRUPT;
-    if (s->hdr.arg == 0)
-        JS_FreeValue(ctx, add_listener_with_type(ctx, s->hdr.this_val, cb, type));
-    else
-        JS_FreeValue(ctx, remove_listener_with_type(ctx, s->hdr.this_val, cb, type));
+        return JS_EXCEPTION;
+    r = (magic == 0) ? add_listener_with_type(ctx, this_val, argv[1], type)
+                     : remove_listener_with_type(ctx, this_val, argv[1], type);
     JS_FreeCString(ctx, type);
-    return JS_STEP_DONE;
+    return r;
 }
-
-static const JSTrampStepDef js_add_listener_def = {
-    sizeof(JSListenerState), js_listener_step, js_listener_fini, 0, .visit = js_listener_visit
-};
-static const JSTrampStepDef js_remove_listener_def = {
-    sizeof(JSListenerState), js_listener_step, js_listener_fini, 1, .visit = js_listener_visit
-};
 
 /* The Event a listener receives. Enough of §2.2 to be USED rather than inspected for completeness: a page reads
    `type` and `target`, and calls the three no-op-in-a-headless-run methods. What is not here is absent. */
@@ -293,8 +258,6 @@ int event_target_fire(JSContext *ctx, JSValueConst target, const char *type, JSV
 void event_target_install(JSContext *ctx, JSValueConst target)
 {
     DCHECK(JS_IsObject(target), "event_target_install was handed something that is not an object");
-    JS_SetPropertyStr(ctx, (JSValue)target, "addEventListener",
-                      JS_NewCFunction2(ctx, NULL, "addEventListener", 2, JS_CFUNC_step, g_add_stepid));
-    JS_SetPropertyStr(ctx, (JSValue)target, "removeEventListener",
-                      JS_NewCFunction2(ctx, NULL, "removeEventListener", 2, JS_CFUNC_step, g_remove_stepid));
+    idl_install_method(ctx, target, "addEventListener", 2, g_add_stepid);
+    idl_install_method(ctx, target, "removeEventListener", 2, g_remove_stepid);
 }

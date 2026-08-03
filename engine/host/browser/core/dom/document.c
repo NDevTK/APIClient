@@ -20,6 +20,7 @@
 #include "solver/engine.h"
 #include "core/events/event_target.h"
 #include "core/dom/document.h"
+#include "core/idl_args.h"
 #include "core/dom/node.h"
 #include <lexbor/css/css.h>
 #include <lexbor/selectors/selectors.h>
@@ -31,8 +32,9 @@ static lxb_html_document_t *g_doc;
 static void element_doc_set(lxb_html_document_t *d) { g_doc = d; }
 
 /* 4.5.3 getElementById: the first element in tree order whose id attribute matches. A pure Lexbor walk. */
-static JSValue js_doc_get_element_by_id(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+static JSValue js_doc_get_element_by_id(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
+    (void)magic;
     lxb_dom_collection_t *col;
     const char *id;
     JSValue r = JS_NULL;
@@ -113,8 +115,9 @@ JSValue document_qs_run(JSContext *ctx, lxb_dom_node_t *root, const char *sel, i
     return qs_run(ctx, root, sel, all != 0);
 }
 
-static JSValue js_doc_query_selector(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+static JSValue js_doc_query_selector(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
+    (void)magic;
     const char *sel;
     JSValue r;
     (void)this_val;
@@ -127,8 +130,9 @@ static JSValue js_doc_query_selector(JSContext *ctx, JSValueConst this_val, int 
     return r;
 }
 
-static JSValue js_doc_query_selector_all(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+static JSValue js_doc_query_selector_all(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
+    (void)magic;
     const char *sel;
     JSValue r;
     (void)this_val;
@@ -147,8 +151,9 @@ static JSValue js_doc_query_selector_all(JSContext *ctx, JSValueConst this_val, 
    so a page that inserts a matching element and re-reads `.length` sees the change; this does not. That is a
    fidelity gap named here rather than papered over — it is the same shape querySelectorAll already returns, and
    the live collection is its own component when a page needs one. */
-static JSValue js_doc_get_elements_by_tag_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+static JSValue js_doc_get_elements_by_tag_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
+    (void)magic;
     lxb_dom_collection_t *col;
     const char *name;
     JSValue arr;
@@ -175,8 +180,9 @@ static JSValue js_doc_get_elements_by_tag_name(JSContext *ctx, JSValueConst this
 /* 4.5.1 createElement. The element is created IN this document and returned DETACHED — a page builds a subtree
    and attaches it later, and creating it already-attached would put nodes in the tree the page never inserted.
    It is not a per-flow write for that reason: nothing observable changed until appendChild, which IS one. */
-static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
+    (void)magic;
     const char *tag;
     lxb_dom_element_t *el;
     JSValue r;
@@ -206,8 +212,9 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
    page could not put TEXT into the tree at all: testharness.js's make_dom_single does
    `output_document.createTextNode(template[i])` for every string in a template. Detached, like createElement —
    nothing is observable until appendChild, which IS the per-flow write. */
-static JSValue js_doc_create_text(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+static JSValue js_doc_create_text(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
+    (void)magic;
     const char *s;
     size_t len = 0;
     lxb_dom_text_t *t;
@@ -221,8 +228,9 @@ static JSValue js_doc_create_text(JSContext *ctx, JSValueConst this_val, int arg
     return node_wrap(ctx, lxb_dom_interface_node(t));
 }
 
-static JSValue js_doc_create_comment(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+static JSValue js_doc_create_comment(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
+    (void)magic;
     const char *s;
     size_t len = 0;
     lxb_dom_comment_t *c;
@@ -289,8 +297,9 @@ static int validate_and_extract(JSContext *ctx, const char **ns, const char *qna
    what they should. testharness.js reaches it on every completed document (`createElementNS(xhtml_ns, "style")`
    in Output.show_results), and a missing one threw inside the completion-callback list, silencing documents
    whose tests had all already run. */
-static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
+    (void)magic;
     const char *ns = NULL, *qname, *local;
     size_t prefix_len = 0;
     lxb_dom_element_t *el;
@@ -384,22 +393,15 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        once so identity holds. querySelector is still absent: it needs a CSS selector engine, and answering it
        with a partial matcher would return the wrong element silently, which is worse than the throw that names
        what to build. */
-    JS_SetPropertyStr(ctx, doc, "getElementById",
-                      JS_NewCFunction(ctx, js_doc_get_element_by_id, "getElementById", 1));
-    JS_SetPropertyStr(ctx, doc, "querySelector",
-                      JS_NewCFunction(ctx, js_doc_query_selector, "querySelector", 1));
-    JS_SetPropertyStr(ctx, doc, "querySelectorAll",
-                      JS_NewCFunction(ctx, js_doc_query_selector_all, "querySelectorAll", 1));
-    JS_SetPropertyStr(ctx, doc, "getElementsByTagName",
-                      JS_NewCFunction(ctx, js_doc_get_elements_by_tag_name, "getElementsByTagName", 1));
-    JS_SetPropertyStr(ctx, doc, "createElement",
-                      JS_NewCFunction(ctx, js_doc_create_element, "createElement", 1));
-    JS_SetPropertyStr(ctx, doc, "createTextNode",
-                      JS_NewCFunction(ctx, js_doc_create_text, "createTextNode", 1));
-    JS_SetPropertyStr(ctx, doc, "createComment",
-                      JS_NewCFunction(ctx, js_doc_create_comment, "createComment", 1));
-    JS_SetPropertyStr(ctx, doc, "createElementNS",
-                      JS_NewCFunction(ctx, js_doc_create_element_ns, "createElementNS", 2));
+    idl_install_method(ctx, doc, "getElementById", 1,
+                       idl_string_method_id(ctx, 0x1, js_doc_get_element_by_id, 0));
+    idl_install_method(ctx, doc, "querySelector", 1, idl_string_method_id(ctx, 0x1, js_doc_query_selector, 0));
+    idl_install_method(ctx, doc, "querySelectorAll", 1, idl_string_method_id(ctx, 0x1, js_doc_query_selector_all, 0));
+    idl_install_method(ctx, doc, "getElementsByTagName", 1, idl_string_method_id(ctx, 0x1, js_doc_get_elements_by_tag_name, 0));
+    idl_install_method(ctx, doc, "createElement", 1, idl_string_method_id(ctx, 0x1, js_doc_create_element, 0));
+    idl_install_method(ctx, doc, "createTextNode", 1, idl_string_method_id(ctx, 0x1, js_doc_create_text, 0));
+    idl_install_method(ctx, doc, "createComment", 1, idl_string_method_id(ctx, 0x1, js_doc_create_comment, 0));
+    idl_install_method(ctx, doc, "createElementNS", 2, idl_string_method_id(ctx, 0x3, js_doc_create_element_ns, 0));
     element_doc_set(dom);
 
     /* 3.1.1 documentElement / body / head — the three tree entry points every page starts from. Lexbor has
