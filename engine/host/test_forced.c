@@ -10,6 +10,7 @@
 #include "solver/cow.h"
 #include "core/loader/document_scripts.h"
 #include "core/frame/navigator.h"
+#include "core/frame/screen.h"
 #include "core/dom/abort.h"
 #include "core/events/event_target.h"
 #include "solver/endpoint.h"
@@ -170,7 +171,8 @@ static const char *HTML =
     "<script>"
     "fetch('/api/u?uid=' + state.id);"   /* concolic query param -> uid carries {state}.id */
     "if (navigator.userAgent.indexOf('Chrome') >= 0) { fetch('/api/uafork?v=chrome'); } else { fetch('/api/uafork?v=other'); }"   /* THE UA GATE: navigator.userAgent is concolic with a real Chrome example, so the string method computes on the example AND the comparison forks -> BOTH arms' endpoints are learned */
-    "if (navigator.maxTouchPoints > 0) { fetch('/api/touch?v=touch'); } else { fetch('/api/touch?v=mouse'); }"   /* the desktop-vs-touch gate, the same shape over a numeric member */
+    "if (navigator.maxTouchPoints > 0) { fetch('/api/touch?v=touch'); } else { fetch('/api/touch?v=mouse'); }"
+    "if (screen.width < 768) { fetch('/api/layout?v=mobile'); } else { fetch('/api/layout?v=desktop'); }"   /* THE responsive gate: a bundle routes, hosts assets and often bases its API on this, so both arms must be reached */   /* the desktop-vs-touch gate, the same shape over a numeric member */
     "if (cfg.admin) { setBodyAttr('data-tt','ttADMIN'); appendChild('kidADMIN'); rx.flag='flagADMIN'; fetch('/api/data?role=admin'); loadScript('/chunk/admin.js'); } else { setBodyAttr('data-tt','ttPUBLIC'); appendChild('kidPUBLIC'); rx.flag='flagPUBLIC'; fetch('/api/data?role=public'); }"   /* admin arm: same endpoint MERGES + a LAZY CHUNK loads. Each arm ALSO writes an attribute, appends a child node, AND assigns the ACCESSOR rx.flag (invokes the setter -> rx._f) -> per-flow DOM + heap-accessor writes across the EXISTING fork. */
     "fetch('/api/whoami?tt=' + getBodyAttr('data-tt'));"   /* DOM ATTR READ-BACK after the fork: per-flow -> admin flow reads ttADMIN, public flow reads ttPUBLIC */
     "fetch('/api/kid?mark=' + lastChildMark());"   /* DOM NODE READ-BACK: each flow's appended child is its OWN last child -> admin reads kidADMIN, public reads kidPUBLIC (neither's inserted node leaks) */
@@ -306,6 +308,7 @@ int main(void) {
     /* the REAL component, not a synthetic edge: a UA/touch gate is where a bundle hides its other endpoints,
        so this fixture exercises the interface the ABI build installs rather than a stand-in for it. */
     navigator_install(ctx, g);
+    screen_install(ctx, g);
     /* THE ABORT COMPONENTS ARE NOT INSTALLED HERE YET, AND THE REASON IS AN ENGINE LEAK, NOT A CHOICE.
        AbortSignal's reason IS a DOMException (DOM 3.2), so exercising abort.c requires
        JS_AddIntrinsicDOMException — and that intrinsic leaks its whole graph, INCLUDING THE JSCONTEXT ITSELF
@@ -488,12 +491,13 @@ int main(void) {
        arm and the sibling is never reached. Both arms present is the whole claim. */
     int uafork_tt = (strstr(js, "\"/api/uafork\"") && strstr(js, "chrome") && strstr(js, "other"));
     int touchfork_tt = (strstr(js, "\"/api/touch\"") && strstr(js, "touch") && strstr(js, "mouse"));
+    int layoutfork_tt = (strstr(js, "\"/api/layout\"") && strstr(js, "mobile") && strstr(js, "desktop"));
 
     int h_ok = asan_min
         ? (fefork_tt && owfork_tt && genfork_tt && gen2fork_tt && genofork_tt && afromfork_tt && spreadfork_tt && setaddfork_tt && setfork_tt && mapmutfork_tt && afsfork_tt && paffork_tt && paf2fork_tt && redfork_tt && rerepfork_tt && gcallfork_tt && gapplyfork_tt && grefapplyfork_tt)   /* MIN gate: just the clone/COW/generator paths */
-        : (has_uid_param && role_admin && role_public && merged && pinned && lazy && uafork_tt && touchfork_tt && dom_tt && accessor_tt && async_tt && await_tt && asynccall_tt && async_throw && async_preempt && fetch_await && pending_await && promise_state && delete_iso && floc_iso && fefork_tt && pushfork_tt && mapfork_tt && owfork_tt && genfork_tt && gen2fork_tt && genofork_tt && afromfork_tt && spreadfork_tt && setaddfork_tt && setfork_tt && mapmutfork_tt && afsfork_tt && paffork_tt && paf2fork_tt && redfork_tt && rerepfork_tt && gcallfork_tt && gapplyfork_tt && grefapplyfork_tt);
-    printf("@H %s (pinned=%d lazy=%d dom-attr=%d dom-node=%d accessor=%d async=%d await=%d asynccall=%d throw=%d preempt=%d fetch=%d pending=%d promise-state=%d delete-iso=%d floc-iso=%d fefork=%d pushfork=%d mapfork=%d owfork=%d genfork=%d gen2fork=%d genofork=%d afromfork=%d spreadfork=%d setaddfork=%d setfork=%d mapmutfork=%d afsfork=%d paffork=%d paf2fork=%d redfork=%d rerepfork=%d gcallfork=%d gapplyfork=%d grefapplyfork=%d ua=%d touch=%d)\n",
-           h_ok ? "OK" : "FAIL", pinned, lazy, dom_attr, dom_node, accessor_tt, async_tt, await_tt, asynccall_tt, async_throw, async_preempt, fetch_await, pending_await, promise_state, delete_iso, floc_iso, fefork_tt, pushfork_tt, mapfork_tt, owfork_tt, genfork_tt, gen2fork_tt, genofork_tt, afromfork_tt, spreadfork_tt, setaddfork_tt, setfork_tt, mapmutfork_tt, afsfork_tt, paffork_tt, paf2fork_tt, redfork_tt, rerepfork_tt, gcallfork_tt, gapplyfork_tt, grefapplyfork_tt, uafork_tt, touchfork_tt);
+        : (has_uid_param && role_admin && role_public && merged && pinned && lazy && uafork_tt && touchfork_tt && layoutfork_tt && dom_tt && accessor_tt && async_tt && await_tt && asynccall_tt && async_throw && async_preempt && fetch_await && pending_await && promise_state && delete_iso && floc_iso && fefork_tt && pushfork_tt && mapfork_tt && owfork_tt && genfork_tt && gen2fork_tt && genofork_tt && afromfork_tt && spreadfork_tt && setaddfork_tt && setfork_tt && mapmutfork_tt && afsfork_tt && paffork_tt && paf2fork_tt && redfork_tt && rerepfork_tt && gcallfork_tt && gapplyfork_tt && grefapplyfork_tt);
+    printf("@H %s (pinned=%d lazy=%d dom-attr=%d dom-node=%d accessor=%d async=%d await=%d asynccall=%d throw=%d preempt=%d fetch=%d pending=%d promise-state=%d delete-iso=%d floc-iso=%d fefork=%d pushfork=%d mapfork=%d owfork=%d genfork=%d gen2fork=%d genofork=%d afromfork=%d spreadfork=%d setaddfork=%d setfork=%d mapmutfork=%d afsfork=%d paffork=%d paf2fork=%d redfork=%d rerepfork=%d gcallfork=%d gapplyfork=%d grefapplyfork=%d ua=%d touch=%d layout=%d)\n",
+           h_ok ? "OK" : "FAIL", pinned, lazy, dom_attr, dom_node, accessor_tt, async_tt, await_tt, asynccall_tt, async_throw, async_preempt, fetch_await, pending_await, promise_state, delete_iso, floc_iso, fefork_tt, pushfork_tt, mapfork_tt, owfork_tt, genfork_tt, gen2fork_tt, genofork_tt, afromfork_tt, spreadfork_tt, setaddfork_tt, setfork_tt, mapmutfork_tt, afsfork_tt, paffork_tt, paf2fork_tt, redfork_tt, rerepfork_tt, gcallfork_tt, gapplyfork_tt, grefapplyfork_tt, uafork_tt, touchfork_tt, layoutfork_tt);
 
     /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified. Read from the
        ONE document above — there is no second line to keep in step with it. */

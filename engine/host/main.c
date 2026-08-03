@@ -28,6 +28,7 @@
 #include "browser/core/events/event_target.h"
 #include "browser/core/frame/location.h"
 #include "browser/core/frame/navigator.h"
+#include "browser/core/frame/screen.h"
 #include "browser/core/frame/window.h"
 #include "browser/core/timing/timer.h"
 #include "browser/core/loader/document_scripts.h"
@@ -116,7 +117,8 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
         location_install(g_ctx, g, origin);
         abort_init(g_ctx);
         abort_install(g_ctx, g);   /* AbortController/AbortSignal: fetch takes a signal, so a bundle mints one early */
-        navigator_install(g_ctx, g);        /* client identity: spec-fixed concrete, gated environment concolic */
+        navigator_install(g_ctx, g);
+        screen_install(g_ctx, g);           /* the responsive gate: screen.width decides which router a bundle uses */        /* client identity: spec-fixed concrete, gated environment concolic */
         element_init(g_ctx);
         document_install(g_ctx, g, g_dom, origin);
         JS_FreeValue(g_ctx, g);
