@@ -246,6 +246,22 @@ static const char *HTML =
     "st2.addEventListener('s', function(e){ sthit += 10; });"
     "st2.dispatchEvent(new Event('s'));"
     "fetch('/api/stopimmediate?v=' + (sthit === 1 ? 'isstop' : 'wrong'));"
+    /* HTML §8.1.7.2 EVENT HANDLER IDL ATTRIBUTES. The handler is NOT the listener: the slot keeps its POSITION
+       while its handler changes underneath it, so `onh = a; addEventListener(h, b); onh = c` runs c then b. A
+       run that registered the handler function itself would append it and get that backwards. */
+    "var hh = document.createElement('u'); var order = '';"
+    "hh.onclick = function(){ order += 'A'; };"
+    "hh.addEventListener('click', function(){ order += 'B'; });"
+    "hh.onclick = function(){ order += 'C'; };"
+    "hh.dispatchEvent(new Event('click'));"
+    "fetch('/api/handler?v=' + (order === 'CB' && typeof hh.onclick === 'function' ? 'ishandler' : 'wrong'));"
+    /* Assigning null is §8.1.7's "deactivate": the slot goes, and the addEventListener listener stays. */
+    "hh.onclick = null; order = ''; hh.dispatchEvent(new Event('click'));"
+    "fetch('/api/handlernull?v=' + (order === 'B' && hh.onclick === null ? 'isnull' : 'wrong'));"
+    /* The GLOBAL's set: window's IDL mixes in GlobalEventHandlers, and `onload` is how real code starts. */
+    "globalThis.onerror = function(){ }; document.onreadystatechange = function(){ };"
+    "fetch('/api/onglobal?v=' + (typeof globalThis.onerror === 'function' &&"
+    " typeof document.onreadystatechange === 'function' && globalThis.onload === null ? 'isglobal' : 'wrong'));"
     "if (cfg.admin) { setBodyAttr('data-tt','ttADMIN'); appendChild('kidADMIN'); rx.flag='flagADMIN'; fetch('/api/data?role=admin'); loadScript('/chunk/admin.js'); } else { setBodyAttr('data-tt','ttPUBLIC'); appendChild('kidPUBLIC'); rx.flag='flagPUBLIC'; fetch('/api/data?role=public'); }"   /* admin arm: same endpoint MERGES + a LAZY CHUNK loads. Each arm ALSO writes an attribute, appends a child node, AND assigns the ACCESSOR rx.flag (invokes the setter -> rx._f) -> per-flow DOM + heap-accessor writes across the EXISTING fork. */
     "fetch('/api/whoami?tt=' + getBodyAttr('data-tt'));"   /* DOM ATTR READ-BACK after the fork: per-flow -> admin flow reads ttADMIN, public flow reads ttPUBLIC */
     "fetch('/api/kid?mark=' + lastChildMark());"   /* DOM NODE READ-BACK: each flow's appended child is its OWN last child -> admin reads kidADMIN, public reads kidPUBLIC (neither's inserted node leaks) */
@@ -390,6 +406,9 @@ int main(void) {
     event_target_init(ctx);
     event_install(ctx, g);   /* the Event interface object — `new Event(...)` and every `instanceof Event` */
     event_target_install(ctx, g);
+    /* HTML §8.1.7.2: window's IDL mixes in GlobalEventHandlers AND WindowEventHandlers — `window.onload` is
+       how a great deal of real code starts. */
+    event_target_install_handlers(ctx, g, EH_GLOBAL | EH_WINDOW);
     abort_init(ctx);
     abort_install(ctx, g);
 
@@ -588,6 +607,9 @@ int main(void) {
         { "\"/api/evcancel\"",    "iscancel"},   /* preventDefault over the canceled slot */
         { "\"/api/dispatch\"",    "isdispatch"},/* §2.9 synchronous dispatch, suspended inside a listener */
         { "\"/api/stopimmediate\"", "isstop" },
+        { "\"/api/handler\"",     "ishandler"},  /* §8.1.7 the handler slot keeps its position */
+        { "\"/api/handlernull\"", "isnull"  },
+        { "\"/api/onglobal\"",    "isglobal"},   /* the mixins land on window and Document too */
     };
     int nodealgo_tt = !strstr(js, "wrong");
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)

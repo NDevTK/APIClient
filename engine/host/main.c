@@ -115,7 +115,8 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
         event_init(g_ctx);
     event_target_init(g_ctx);
         event_install(g_ctx, g);   /* the Event interface object */
-        event_target_install(g_ctx, g);   /* window IS the global (7.2.2), so this is window.addEventListener */
+        event_target_install(g_ctx, g);
+        event_target_install_handlers(g_ctx, g, EH_GLOBAL | EH_WINDOW);   /* window's on* set */   /* window IS the global (7.2.2), so this is window.addEventListener */
         fetch_install(g_ctx, g);
         module_loader_install(g_rt);
         location_install(g_ctx, g, origin);

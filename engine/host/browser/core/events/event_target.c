@@ -35,6 +35,10 @@ static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
    ran-twice assert on the FIRST call. A JSValue's emptiness is not the allocator's default. */
 static JSValue g_key;
 static int g_ready;
+/* HTML §8.1.7's handler map key, and the MARKER that holds the handler's place in a listener list — see the
+   event-handler section below. Declared here because event_target_init mints them. */
+static JSValue g_handler_key;
+static JSValue g_handler_marker;
 /* The ids JS_RegisterStepDef handed this runtime for add/removeEventListener. `type` is a Web IDL DOMString,
    so it is ToString on whatever the page passed and cannot be a JS_ToCString from C. */
 static int g_add_stepid = -1, g_remove_stepid = -1, g_dispatch_stepid = -1;
@@ -45,6 +49,10 @@ void event_target_init(JSContext *ctx)
     DCHECK(!g_ready, "event_target_init ran twice — one instance is one document");
     g_key = JS_NewSymbol(ctx, "eventListeners", false);
     CHECK(!JS_IsException(g_key), "the event-listener key allocation failed");
+    g_handler_key = JS_NewSymbol(ctx, "eventHandlers", false);
+    g_handler_marker = JS_NewObject(ctx);
+    CHECK(!JS_IsException(g_handler_key) && !JS_IsException(g_handler_marker),
+          "the event-handler key or marker allocation failed");
     g_ready = 1;
     if (g_add_stepid < 0) {
         g_add_stepid    = idl_method_id(ctx, IDL_1STR, 1, idl_add_or_remove, 0);   /* (DOMString type, EventListener?) */
@@ -58,7 +66,9 @@ void event_target_free(JSContext *ctx)
     if (!g_ready)
         return;
     JS_FreeValue(ctx, g_key);
-    g_key = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_handler_key);
+    JS_FreeValue(ctx, g_handler_marker);
+    g_key = g_handler_key = g_handler_marker = JS_UNDEFINED;
     g_ready = 0;
 }
 
@@ -182,6 +192,176 @@ static void schedule_listener(JSContext *ctx, JSValueConst fn, JSValueConst ev)
     JS_EnqueueCallJob(ctx, fn, 1, &ev);
 }
 
+/* ---- EVENT HANDLER IDL ATTRIBUTES — HTML §8.1.7.2 --------------------------------------------------------
+ *
+ * `el.onclick = f` is not a listener registration a page could have written itself with addEventListener; it is
+ * its own mechanism, and it was absent entirely. That absence is the single largest entry in this engine's IDL
+ * gap report — about 150 of Window's 227 missing members are `on*` attributes, and the same list repeats on
+ * Document and Element — and it is absent in the way that hurts most: `window.onload = init` is how a great
+ * deal of real code starts, and it silently became an ordinary JS property that nothing ever read.
+ *
+ * ONE MECHANISM, NOT ONE PER NAME. An event handler attribute is entirely determined by its NAME: `onfoo` is
+ * the handler for the event type `foo`. So the names are DATA — one X-macro list, from which the enum, the type
+ * strings and the accessor table are all generated — and the behaviour is written once. Spelling the names out
+ * rather than generating them from the IDL is the gap engine/idlgen.mjs exists to report; what must not happen
+ * is an attribute that answers something its spec does not say.
+ *
+ * THE HANDLER IS NOT THE LISTENER, and that distinction is the whole design. §8.1.7 registers ONE listener the
+ * first time a handler is set for a type, and later assignments change the HANDLER the listener reads — so the
+ * listener keeps its position in the list. `el.onclick = a; el.addEventListener('click', b); el.onclick = c`
+ * runs c then b, not b then c. Registering the handler function itself would append it and get that backwards.
+ * So the listener list holds a MARKER for the handler slot, and the list snapshot resolves the marker to
+ * whatever the handler is at dispatch time — a read of an engine-built map under a private Symbol, so it runs
+ * none of the page's code and needs no request. Setting null removes the marker, which is §8.1.7's "deactivate".
+ *
+ * The handler map is an own property under a private Symbol, for the reason the listener map is: it makes the
+ * handler per-flow for free, so `onclick` assigned in one arm of a fork is invisible to its sibling. */
+#define EVENT_HANDLERS(X)                                                                                     \
+    /* GlobalEventHandlers — HTML §8.1.7.2.1, on Window, Document and Element alike. */                       \
+    X("onabort", EH_GLOBAL | EH_SIGNAL) X("onauxclick", EH_GLOBAL) X("onbeforeinput", EH_GLOBAL)                    \
+    X("onbeforematch", EH_GLOBAL) X("onbeforetoggle", EH_GLOBAL) X("onblur", EH_GLOBAL) X("oncancel", EH_GLOBAL)      \
+    X("oncanplay", EH_GLOBAL) X("oncanplaythrough", EH_GLOBAL) X("onchange", EH_GLOBAL) X("onclick", EH_GLOBAL)       \
+    X("onclose", EH_GLOBAL) X("oncontextlost", EH_GLOBAL) X("oncontextmenu", EH_GLOBAL)                             \
+    X("oncontextrestored", EH_GLOBAL) X("oncuechange", EH_GLOBAL) X("ondblclick", EH_GLOBAL) X("ondrag", EH_GLOBAL)   \
+    X("ondragend", EH_GLOBAL) X("ondragenter", EH_GLOBAL) X("ondragleave", EH_GLOBAL) X("ondragover", EH_GLOBAL)      \
+    X("ondragstart", EH_GLOBAL) X("ondrop", EH_GLOBAL) X("ondurationchange", EH_GLOBAL) X("onemptied", EH_GLOBAL)     \
+    X("onended", EH_GLOBAL) X("onerror", EH_GLOBAL) X("onfocus", EH_GLOBAL) X("onformdata", EH_GLOBAL)                \
+    X("oninput", EH_GLOBAL) X("oninvalid", EH_GLOBAL) X("onkeydown", EH_GLOBAL) X("onkeypress", EH_GLOBAL)            \
+    X("onkeyup", EH_GLOBAL) X("onload", EH_GLOBAL) X("onloadeddata", EH_GLOBAL) X("onloadedmetadata", EH_GLOBAL)      \
+    X("onloadstart", EH_GLOBAL) X("onmousedown", EH_GLOBAL) X("onmouseenter", EH_GLOBAL) X("onmouseleave", EH_GLOBAL) \
+    X("onmousemove", EH_GLOBAL) X("onmouseout", EH_GLOBAL) X("onmouseover", EH_GLOBAL) X("onmouseup", EH_GLOBAL)      \
+    X("onpause", EH_GLOBAL) X("onplay", EH_GLOBAL) X("onplaying", EH_GLOBAL) X("onprogress", EH_GLOBAL)               \
+    X("onratechange", EH_GLOBAL) X("onreset", EH_GLOBAL) X("onresize", EH_GLOBAL) X("onscroll", EH_GLOBAL)            \
+    X("onscrollend", EH_GLOBAL) X("onsecuritypolicyviolation", EH_GLOBAL) X("onseeked", EH_GLOBAL)                  \
+    X("onseeking", EH_GLOBAL) X("onselect", EH_GLOBAL) X("onslotchange", EH_GLOBAL) X("onstalled", EH_GLOBAL)         \
+    X("onsubmit", EH_GLOBAL) X("onsuspend", EH_GLOBAL) X("ontimeupdate", EH_GLOBAL) X("ontoggle", EH_GLOBAL)          \
+    X("onvolumechange", EH_GLOBAL) X("onwaiting", EH_GLOBAL) X("onwheel", EH_GLOBAL)                                \
+    /* DocumentAndElementEventHandlers — §8.1.7.2.3, on Document and Element (and Window, which mixes it in). */\
+    X("oncopy", EH_GLOBAL) X("oncut", EH_GLOBAL) X("onpaste", EH_GLOBAL)                                            \
+    /* WindowEventHandlers — §8.1.7.2.2, on Window (and, per the mixin, Document's body-delegated set). */     \
+    X("onafterprint", EH_WINDOW) X("onbeforeprint", EH_WINDOW) X("onbeforeunload", EH_WINDOW)                       \
+    X("onhashchange", EH_WINDOW) X("onlanguagechange", EH_WINDOW) X("onmessage", EH_WINDOW)                          \
+    X("onmessageerror", EH_WINDOW) X("onoffline", EH_WINDOW) X("ononline", EH_WINDOW) X("onpagehide", EH_WINDOW)      \
+    X("onpagereveal", EH_WINDOW) X("onpageshow", EH_WINDOW) X("onpageswap", EH_WINDOW) X("onpopstate", EH_WINDOW)     \
+    X("onrejectionhandled", EH_WINDOW) X("onstorage", EH_WINDOW) X("onunhandledrejection", EH_WINDOW)               \
+    X("onunload", EH_WINDOW)                                                                                    \
+    /* Document's own — §3.1.1 and the Page Visibility API. */                                                 \
+    X("onreadystatechange", EH_DOCUMENT) X("onvisibilitychange", EH_DOCUMENT)
+
+/* The NAMES are string literals, not stringified identifiers, so the IDL gap auditor — which scans a component
+   for the property names it installs — can SEE them. Behind a `#n` it saw none of these and reported all ninety
+   as absent, which is the audit lying by omission: the same failure as leaving an interface out of its map. */
+static const char *const EH_NAME[] = {
+#define X(n, m) n,
+    EVENT_HANDLERS(X)
+#undef X
+};
+#define EH_COUNT ((int)(sizeof(EH_NAME) / sizeof(EH_NAME[0])))
+
+/* The EVENT TYPE each attribute handles: its own name past the `on`, which is what §8.1.7 says and why one
+   list produces both. */
+static const char *const EH_TYPE[] = {
+#define X(n, m) n + 2,
+    EVENT_HANDLERS(X)
+#undef X
+};
+
+static const int EH_MASK[] = {
+#define X(n, m) (m),
+    EVENT_HANDLERS(X)
+#undef X
+};
+
+
+/* The handler map (type -> handler) and the marker that stands for it in a listener list. The map is per
+   TARGET; the marker is ONE object for the whole runtime, because it carries no information — its identity is
+   the whole of what it means. */
+static JSValue handler_map(JSContext *ctx, JSValueConst target, int create)
+{
+    JSAtom k;
+    JSValue map;
+
+    DCHECK(g_ready, "an event-handler map was asked for before the key existed");
+    k = JS_ValueToAtom(ctx, g_handler_key);
+    if (k == JS_ATOM_NULL)
+        return JS_UNDEFINED;
+    if (JS_GetOwnSlot(ctx, &map, target, k) <= 0)   /* an own SLOT, never a lookup — see listener_map */
+        map = JS_UNDEFINED;
+    if (!JS_IsObject(map) && create) {
+        JS_FreeValue(ctx, map);
+        map = JS_NewObject(ctx);
+        if (!JS_IsException(map))
+            JS_SetProperty(ctx, (JSValue)target, k, JS_DupValue(ctx, map));
+    }
+    JS_FreeAtom(ctx, k);
+    return map;
+}
+
+/* The handler currently set for `type` on `target`, or JS_NULL. A map read, so no page code and no request —
+   which is what lets the dispatch walk resolve the marker in place. */
+static JSValue handler_current(JSContext *ctx, JSValueConst target, const char *type)
+{
+    JSValue map = handler_map(ctx, target, 0), h;
+
+    if (!JS_IsObject(map)) { JS_FreeValue(ctx, map); return JS_NULL; }
+    h = JS_GetPropertyStr(ctx, map, type);
+    JS_FreeValue(ctx, map);
+    return JS_IsFunction(ctx, h) ? h : (JS_FreeValue(ctx, h), JS_NULL);
+}
+
+static JSValue js_handler_get(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    DCHECK(magic >= 0 && magic < EH_COUNT, "an event handler was declared with a magic the list does not name");
+    return handler_current(ctx, this_val, EH_TYPE[magic]);
+}
+
+static JSValue js_handler_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    const char *type;
+    JSValue map;
+
+    DCHECK(magic >= 0 && magic < EH_COUNT, "an event handler was declared with a magic the list does not name");
+    type = EH_TYPE[magic];
+    map = handler_map(ctx, this_val, 1);
+    if (!JS_IsObject(map)) { JS_FreeValue(ctx, map); return JS_UNDEFINED; }
+    /* §8.1.7.1: anything that is not callable sets the handler to null. A page assigning a string here is
+       writing legacy markup-style code, which HTML compiles — this engine does not, and an uncompiled string
+       is honestly not a handler rather than one that silently never fires. */
+    if (JS_IsFunction(ctx, val)) {
+        JS_SetPropertyStr(ctx, map, type, JS_DupValue(ctx, val));
+        /* §8.1.7: the listener is registered ONCE, the first time a handler is set for this type. */
+        add_listener_with_type(ctx, this_val, g_handler_marker, type);
+    } else {
+        JS_SetPropertyStr(ctx, map, type, JS_NULL);
+        remove_listener_with_type(ctx, this_val, g_handler_marker, type);   /* §8.1.7 "deactivate" */
+    }
+    JS_FreeValue(ctx, map);
+    return JS_UNDEFINED;
+}
+
+void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask)
+{
+    int i;
+
+    DCHECK(JS_IsObject(target), "event handlers were installed on something that is not an object");
+    for (i = 0; i < EH_COUNT; i++) {
+        JSAtom a;
+        if (!(EH_MASK[i] & mask))
+            continue;
+        a = JS_NewAtom(ctx, EH_NAME[i]);
+        CHECK(a != JS_ATOM_NULL, "an event handler name could not be interned");
+        /* The getter/setter cprotos take their own signatures, which the magic-function constructor reaches
+           through one pointer type — the same cast every JS_CGETSET_MAGIC_DEF performs at compile time. */
+        JS_DefinePropertyGetSet(ctx, (JSValue)target, a,
+                                JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_handler_get, EH_NAME[i], 0,
+                                                     JS_CFUNC_getter_magic, i),
+                                JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_handler_set, EH_NAME[i], 1,
+                                                     JS_CFUNC_setter_magic, i),
+                                JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+        JS_FreeAtom(ctx, a);
+    }
+}
+
 /* §2.9 step 5: dispatch runs over a COPY of the listener list. That matters more here than in a browser — the
    walk suspends across every listener, so one that adds or removes a listener has arbitrarily long to do it.
    ONE list walk, so the engine's own firing and the page's dispatchEvent can never disagree about which
@@ -198,6 +378,12 @@ static JSValue listener_snapshot(JSContext *ctx, JSValueConst target, const char
         JS_ToUint32(ctx, &len, JS_GetPropertyStr(ctx, arr, "length"));
         for (uint32_t i = 0; i < len; i++) {
             JSValue fn = JS_GetPropertyUint32(ctx, arr, i);
+            /* §8.1.7: the HANDLER SLOT resolves HERE, at dispatch time, to whatever `ontype` currently is —
+               that is what keeps the slot's POSITION in the list while its handler changes underneath it. */
+            if (JS_VALUE_GET_PTR(fn) == JS_VALUE_GET_PTR(g_handler_marker)) {
+                JS_FreeValue(ctx, fn);
+                fn = handler_current(ctx, target, type);
+            }
             if (JS_IsFunction(ctx, fn)) JS_SetPropertyUint32(ctx, copy, k++, fn);
             else                        JS_FreeValue(ctx, fn);
         }

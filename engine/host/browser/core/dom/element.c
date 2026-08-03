@@ -28,6 +28,7 @@
 #include "solver/solve.h"
 #include "core/dom/element.h"
 #include "core/idl_args.h"
+#include "core/events/event_target.h"
 
 /* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
 static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
@@ -370,6 +371,9 @@ void element_init(JSContext *ctx)
         idl_install_accessor(ctx, proto, EL_REFLECT[i].idl, js_el_reflect_get, i,
                              idl_setter_id(ctx, IDL_DOMSTRING, false, js_el_reflect_set, i));
 
+    /* §4.9's IDL includes GlobalEventHandlers, so every element carries the `on*` set — `el.onclick = f` is how
+       a great deal of real code wires a handler, and it was an ordinary JS property nothing ever read. */
+    event_target_install_handlers(ctx, proto, EH_GLOBAL);
     node_set_proto(ctx, LXB_DOM_NODE_TYPE_ELEMENT, proto);
     node_set_inserted_hook(element_on_inserted);
 }

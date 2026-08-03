@@ -175,6 +175,7 @@ static JSValue signal_new(JSContext *ctx, JSValue aborted, JSValue reason)
 
     /* §3.2: AbortSignal inherits EventTarget, and `abort` is dispatched at it. */
     event_target_install(ctx, sig);
+    event_target_install_handlers(ctx, sig, EH_SIGNAL);   /* §3.2: `attribute EventHandler onabort` */
 
     JS_DefinePropertyGetSet(ctx, sig, JS_NewAtom(ctx, "aborted"),
                             JS_NewCFunction(ctx, js_sig_get_aborted, "get aborted", 0), JS_UNDEFINED,

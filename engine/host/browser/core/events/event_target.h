@@ -14,6 +14,11 @@ void event_target_free(JSContext *ctx);
    would be handed an answer before any listener had run. It is honestly absent until the dispatch is a step
    machine that drives its listeners through the trampoline — the page's own throw names it. */
 void event_target_install(JSContext *ctx, JSValueConst target);
+
+/* HTML §8.1.7.2 EVENT HANDLER IDL ATTRIBUTES — `onclick`, `onload`, `onabort`. Which set a target carries is
+   which MIXIN its IDL includes, so the caller names the mixin rather than the members. */
+enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8 };
+void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask);
 /* Fire `type` at `target` (bubbling to `bubble_to` when non-undefined, which is how a document event reaches
    window). Each listener runs as its own task on the RUNNING flow. Returns how many were scheduled. */
 int  event_target_fire(JSContext *ctx, JSValueConst target, const char *type, JSValueConst bubble_to);
