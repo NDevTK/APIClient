@@ -19,6 +19,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/events/event_target.h"
 
 /* The private key the listener map hangs off. A SYMBOL, so a page enumerating its own objects cannot see it and
@@ -28,6 +29,10 @@
    ran-twice assert on the FIRST call. A JSValue's emptiness is not the allocator's default. */
 static JSValue g_key;
 static int g_ready;
+/* The ids JS_RegisterStepDef handed this runtime for add/removeEventListener. `type` is a Web IDL DOMString,
+   so it is ToString on whatever the page passed and cannot be a JS_ToCString from C. */
+static int g_add_stepid = -1, g_remove_stepid = -1;
+static const JSTrampStepDef js_add_listener_def, js_remove_listener_def;
 
 void event_target_init(JSContext *ctx)
 {
@@ -35,6 +40,11 @@ void event_target_init(JSContext *ctx)
     g_key = JS_NewSymbol(ctx, "eventListeners", false);
     CHECK(!JS_IsException(g_key), "the event-listener key allocation failed");
     g_ready = 1;
+    if (g_add_stepid < 0) {
+        JSRuntime *rt = JS_GetRuntime(ctx);
+        g_add_stepid    = JS_RegisterStepDef(rt, &js_add_listener_def);
+        g_remove_stepid = JS_RegisterStepDef(rt, &js_remove_listener_def);
+    }
 }
 
 void event_target_free(JSContext *ctx)
@@ -73,19 +83,17 @@ static JSValue listener_map(JSContext *ctx, JSValueConst target, int create)
     return map;
 }
 
-static JSValue js_add_listener(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+/* The listener-list work, once `type` is a real string. Split from the coercion so the part that CAN reach the
+   page's code is a request and the part that cannot is ordinary C. */
+static JSValue add_listener_with_type(JSContext *ctx, JSValueConst this_val, JSValueConst cb, const char *type)
 {
     JSValue map, arr;
-    const char *type;
     uint32_t len = 0;
+    JSValueConst argv[2];
 
-    if (argc < 2 || !JS_IsFunction(ctx, argv[1]))
-        return JS_UNDEFINED;   /* 2.7: a non-callable listener is ignored, not an error */
-    type = JS_ToCString(ctx, argv[0]);
-    if (!type)
-        return JS_EXCEPTION;
+    argv[0] = JS_UNDEFINED; argv[1] = cb;
     map = listener_map(ctx, this_val, 1);
-    if (!JS_IsObject(map)) { JS_FreeCString(ctx, type); JS_FreeValue(ctx, map); return JS_UNDEFINED; }
+    if (!JS_IsObject(map)) { JS_FreeValue(ctx, map); return JS_UNDEFINED; }
     arr = JS_GetPropertyStr(ctx, map, type);
     if (!JS_IsArray(arr)) {
         JS_FreeValue(ctx, arr);
@@ -99,28 +107,26 @@ static JSValue js_add_listener(JSContext *ctx, JSValueConst this_val, int argc, 
         int same = JS_VALUE_GET_TAG(e) == JS_VALUE_GET_TAG(argv[1]) &&
                    JS_VALUE_GET_PTR(e) == JS_VALUE_GET_PTR(argv[1]);
         JS_FreeValue(ctx, e);
-        if (same) { JS_FreeValue(ctx, arr); JS_FreeValue(ctx, map); JS_FreeCString(ctx, type); return JS_UNDEFINED; }
+        if (same) { JS_FreeValue(ctx, arr); JS_FreeValue(ctx, map); return JS_UNDEFINED; }
     }
     JS_SetPropertyUint32(ctx, arr, len, JS_DupValue(ctx, argv[1]));
     JS_FreeValue(ctx, arr);
     JS_FreeValue(ctx, map);
-    JS_FreeCString(ctx, type);
+   
     return JS_UNDEFINED;
 }
 
-static JSValue js_remove_listener(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+static JSValue remove_listener_with_type(JSContext *ctx, JSValueConst this_val, JSValueConst cb, const char *type)
 {
     JSValue map, arr, kept;
-    const char *type;
     uint32_t len = 0, k = 0;
+    JSValueConst argv[2];
 
-    if (argc < 2) return JS_UNDEFINED;
-    type = JS_ToCString(ctx, argv[0]);
-    if (!type) return JS_EXCEPTION;
+    argv[0] = JS_UNDEFINED; argv[1] = cb;
     map = listener_map(ctx, this_val, 0);
-    if (!JS_IsObject(map)) { JS_FreeCString(ctx, type); JS_FreeValue(ctx, map); return JS_UNDEFINED; }
+    if (!JS_IsObject(map)) { JS_FreeValue(ctx, map); return JS_UNDEFINED; }
     arr = JS_GetPropertyStr(ctx, map, type);
-    if (!JS_IsArray(arr)) { JS_FreeValue(ctx, arr); JS_FreeValue(ctx, map); JS_FreeCString(ctx, type); return JS_UNDEFINED; }
+    if (!JS_IsArray(arr)) { JS_FreeValue(ctx, arr); JS_FreeValue(ctx, map); return JS_UNDEFINED; }
     JS_ToUint32(ctx, &len, JS_GetPropertyStr(ctx, arr, "length"));
     kept = JS_NewArray(ctx);
     for (uint32_t i = 0; i < len; i++) {
@@ -133,9 +139,69 @@ static JSValue js_remove_listener(JSContext *ctx, JSValueConst this_val, int arg
     JS_SetPropertyStr(ctx, map, type, kept);
     JS_FreeValue(ctx, arr);
     JS_FreeValue(ctx, map);
-    JS_FreeCString(ctx, type);
+   
     return JS_UNDEFINED;
 }
+
+/* THE COERCION IS THE ONLY PART THAT REACHES THE PAGE. `type` is a Web IDL DOMString, so
+   `el.addEventListener({toString(){ for(;;){} }}, f)` is the page's loop: it parks on step_tostring_run and
+   resumes at the exact stage. Everything after it touches the component's own listener map and cannot.
+   arg 0 of the def selects add (0) or remove (1) — one machine, because the two differ only in the call they
+   finish with. */
+typedef struct JSListenerState {
+    JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
+    JSValue   type;     /* the coerced DOMString (owned) */
+} JSListenerState;
+
+static void js_listener_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSListenerState *s = st;
+    v->val(ctx, &s->type);
+}
+
+static JSValue js_listener_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSListenerState *s = st;
+    (void)take_result;
+    JS_FreeValue(ctx, s->type);
+    s->type = JS_UNDEFINED;
+    return JS_UNDEFINED;   /* both operations return undefined */
+}
+
+static int js_listener_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSListenerState *s = st;
+    JSValueConst cb = step_arg(&s->hdr, 1);
+    const char *type;
+    int r;
+
+    /* 2.7: a non-callable listener is ignored — and ignored BEFORE the coercion, which is what stops
+       `addEventListener({toString(){ … }}, null)` from running that toString for nothing. */
+    if (s->hdr.argc < 2 || !JS_IsFunction(ctx, cb)) {
+        JS_FreeValue(ctx, cb_result);
+        return JS_STEP_DONE;
+    }
+    r = step_tostring_run(ctx, &s->hdr, step_arg(&s->hdr, 0), cb_result, &s->type, out_cb, out_argc);
+    if (r > 0) return r;
+    if (r < 0) return JS_STEP_ABRUPT;
+
+    type = JS_ToCString(ctx, s->type);   /* a real string by now: this cannot reach the page */
+    if (!type)
+        return JS_STEP_ABRUPT;
+    if (s->hdr.arg == 0)
+        JS_FreeValue(ctx, add_listener_with_type(ctx, s->hdr.this_val, cb, type));
+    else
+        JS_FreeValue(ctx, remove_listener_with_type(ctx, s->hdr.this_val, cb, type));
+    JS_FreeCString(ctx, type);
+    return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef js_add_listener_def = {
+    sizeof(JSListenerState), js_listener_step, js_listener_fini, 0, .visit = js_listener_visit
+};
+static const JSTrampStepDef js_remove_listener_def = {
+    sizeof(JSListenerState), js_listener_step, js_listener_fini, 1, .visit = js_listener_visit
+};
 
 /* The Event a listener receives. Enough of §2.2 to be USED rather than inspected for completeness: a page reads
    `type` and `target`, and calls the three no-op-in-a-headless-run methods. What is not here is absent. */
@@ -228,7 +294,7 @@ void event_target_install(JSContext *ctx, JSValueConst target)
 {
     DCHECK(JS_IsObject(target), "event_target_install was handed something that is not an object");
     JS_SetPropertyStr(ctx, (JSValue)target, "addEventListener",
-                      JS_NewCFunction(ctx, js_add_listener, "addEventListener", 2));
+                      JS_NewCFunction2(ctx, NULL, "addEventListener", 2, JS_CFUNC_step, g_add_stepid));
     JS_SetPropertyStr(ctx, (JSValue)target, "removeEventListener",
-                      JS_NewCFunction(ctx, js_remove_listener, "removeEventListener", 2));
+                      JS_NewCFunction2(ctx, NULL, "removeEventListener", 2, JS_CFUNC_step, g_remove_stepid));
 }
