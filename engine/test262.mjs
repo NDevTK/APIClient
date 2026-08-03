@@ -108,17 +108,20 @@ const skip = out.match(/(\d+) skipped/);
 const gcLeaks = (out.match(/\[gcleak\]/g) || []).length;
 const mallocLeaks = (out.match(/Memory leak: \d+ bytes lost/g) || []).length;
 const leaks = gcLeaks + mallocLeaks;
-/* THE RAW-ALLOCATION LEAKS ARE PRE-EXISTING, AND THIS IS A RATCHET, NOT AN EXEMPTION. Turning the second
-   detector on immediately reported 606 of them — and the UNMODIFIED parser, built from the pre-conversion
-   blob and run over the whole corpus, reports exactly 606 as well. They are not this conversion's; they have
-   been there the whole time, uncounted, because the gate only ever looked at [gcleak].
-   Failing outright on a number nothing introduced would make the gate unusable and teach the next change to
-   switch it back off, which is how it came to be ignored in the first place. So it ratchets, exactly like
-   engine/check_recursion.mjs: this many are known, MORE is a regression the build refuses, FEWER must be
-   recorded here so the gain cannot be given back. Zero is the target and the 606 are the work.
-   A gc-object leak has no such history and still fails at ONE. The ceiling applies only to a whole-corpus run;
-   a subdirectory run reports its count and enforces nothing, because the number is not comparable. */
-const MALLOC_LEAK_CEILING = 606;
+/* ZERO, AND THE 606 WERE ONE MISSING FREE. Turning the second detector on reported 606 raw-allocation leaks,
+   the same count the unmodified pre-conversion parser produced, so they were nobody's recent doing and the
+   comment here treated them as a body of work to chip away at. They were one line: js_create_function — the
+   SUCCESS path of compiling a function — released fd->using_decls and not fd->annexb_vars, while
+   js_free_function_def, the failure path, released both. Every compile that RECORDED an Annex B provisional
+   store leaked its table, which is any sloppy-mode block-level function declaration; `{ function f() {} }` at
+   top level was enough. 342 of the 606 came from annexB/language/eval-code alone.
+   The number being large said nothing about the number of causes, and treating it as a backlog is what kept
+   it unexamined — a single file bisected to the construct in five probes.
+   It ratchets like engine/check_recursion.mjs: MORE is a regression the build refuses, FEWER must be recorded
+   here so the gain cannot be given back. At zero the two detectors finally agree, and any raw-allocation leak
+   is now as loud as a gc-object one. The ceiling applies only to a whole-corpus run; a subdirectory run
+   reports its count and enforces nothing, because the number is not comparable. */
+const MALLOC_LEAK_CEILING = 0;
 const wholeCorpus = !sub;
 /* WHICH TESTS FAILED, not just how many. The summary discarded the names, so a `1/43239 errors` result sent
    the next step into a directory-by-directory hunt for one file. run-test262 already names each failure as
