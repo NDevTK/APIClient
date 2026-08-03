@@ -20,6 +20,7 @@
 #include "solver/engine.h"
 #include "core/events/event_target.h"
 #include "core/html/html_element.h"
+#include "core/css/css_style_declaration.h"
 #include "core/dom/document.h"
 #include "core/idl_args.h"
 
@@ -472,6 +473,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     node_install_interfaces(ctx, global);
     node_install_interface(ctx, global, "Element", element_proto());
     html_element_install(ctx, global);   /* HTMLElement and every per-tag interface object */
+    cssom_install(ctx, global);          /* CSSStyleDeclaration, and getComputedStyle on the Window */
     node_install_interface(ctx, global, "Document", node_type_proto(LXB_DOM_NODE_TYPE_DOCUMENT));
     engine_set_document_done_hook(document_done_stage);
 }

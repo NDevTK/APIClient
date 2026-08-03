@@ -30,6 +30,7 @@
 #include "core/idl_args.h"
 #include "core/events/event_target.h"
 #include "core/html/html_element.h"
+#include "core/css/css_style_declaration.h"
 #include <lexbor/ns/ns.h>
 
 /* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
@@ -530,6 +531,7 @@ void element_init(JSContext *ctx)
     g_element_proto = proto;
     node_set_proto(ctx, LXB_DOM_NODE_TYPE_ELEMENT, JS_DupValue(ctx, proto));
     node_set_inserted_hook(element_on_inserted);
+    cssom_init(ctx);          /* CSSStyleDeclaration.prototype, which HTMLElement's `style` attribute names */
     html_element_init(ctx);   /* the HTML half, which builds HTMLElement and the per-tag interfaces on this */
 }
 
@@ -538,6 +540,7 @@ JSValueConst element_proto(void) { DCHECK(JS_IsObject(g_element_proto), "Element
 void element_free(JSContext *ctx)
 {
     html_element_free(ctx);
+    cssom_free(ctx);
     JS_FreeValue(ctx, g_element_proto);
     g_element_proto = JS_UNDEFINED;
     g_reflect_n = 0;

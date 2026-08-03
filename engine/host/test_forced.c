@@ -168,7 +168,11 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
    cross-script concolic flow (fork on cfg.admin set by script 1), the moat (gated /api/admin), AND per-flow COW
    (both arms see n==1). */
 static const char *HTML =
-    "<!doctype html><html><body>"
+    "<!doctype html><html><head>"
+    /* Author CSS whose SPECIFICITY and DOCUMENT ORDER disagree: the id rule is written FIRST and must still
+       win. Order-only cascading answers `none` here, and every page puts its general rules last. */
+    "<style>#cs1 { display: block; color: rgb(1, 2, 3) } div { display: none }</style>"
+    "</head><body><div id=cs1 style=\"margin-top: 4px\"></div>"
     "<script>var cfg = { admin: state.admin };"
     "var delObj = { k: 'keepVAL' };"   /* a shared BASELINE object; a forked flow will DELETE its k -> must revert per-flow */
     "var rx = { _f: 'base' };"   /* a reactive-framework style object: `flag` is an ACCESSOR backed by _f (Vue does exactly this) */
@@ -289,6 +293,26 @@ static const char *HTML =
     "idv.click();"
     "fetch('/api/click?v=' + (ck === 1 && ckt.type === 'click' && ckt.isTrusted === false &&"
     " ckt.bubbles && ckt.cancelable && ckt.defaultPrevented && ckt.target === idv ? 'isclick' : 'wrong'));"
+    /* CSSOM. getComputedStyle layers inline over the author cascade over the UA default over the property's
+       initial value, all resolved from THIS flow's tree. */
+    "var cs = document.getElementById('cs1'); var csc = getComputedStyle(cs);"
+    "fetch('/api/cascade?v=' + (csc.display === 'block' ? 'isspec' : 'wrong'));"
+    "fetch('/api/cssinline?v=' + (csc.marginTop === '4px' && cs.style.marginTop === '4px' &&"
+    " cs.style.display === '' ? 'isinline' : 'wrong'));"
+    /* The UA default reaches an element no rule names, and an undeclared property reads its INITIAL value. */
+    "var csp = document.createElement('p'); document.body.appendChild(csp);"
+    "fetch('/api/cssua?v=' + (getComputedStyle(csp).display === 'block' &&"
+    " getComputedStyle(document.createElement('span')).display === 'inline' ? 'isua' : 'wrong'));"
+    /* element.style WRITES go through setAttribute's chokepoint, so an inline style time-travels like every
+       other DOM write — and [SameObject] means the page gets the same declaration back each read. */
+    "cs.style.color = 'red'; cs.style.setProperty('padding-left', '2px');"
+    "fetch('/api/cssset?v=' + (cs.style.color === 'red' && cs.getAttribute('style').indexOf('padding-left') >= 0"
+    " && cs.style === cs.style ? 'isset' : 'wrong'));"
+    "cs.style.removeProperty('color');"
+    "fetch('/api/cssdel?v=' + (cs.style.color === '' && cs.style.length >= 1 ? 'isdel' : 'wrong'));"
+    /* A computed declaration is READ-ONLY, which the spec makes an error rather than a silent no-op. */
+    "var csro = 'nothrow'; try { csc.setProperty('color', 'blue'); } catch (e) { csro = 'isro'; }"
+    "fetch('/api/cssro?v=' + csro);"
     "if (cfg.admin) { setBodyAttr('data-tt','ttADMIN'); appendChild('kidADMIN'); rx.flag='flagADMIN'; fetch('/api/data?role=admin'); loadScript('/chunk/admin.js'); } else { setBodyAttr('data-tt','ttPUBLIC'); appendChild('kidPUBLIC'); rx.flag='flagPUBLIC'; fetch('/api/data?role=public'); }"   /* admin arm: same endpoint MERGES + a LAZY CHUNK loads. Each arm ALSO writes an attribute, appends a child node, AND assigns the ACCESSOR rx.flag (invokes the setter -> rx._f) -> per-flow DOM + heap-accessor writes across the EXISTING fork. */
     "fetch('/api/whoami?tt=' + getBodyAttr('data-tt'));"   /* DOM ATTR READ-BACK after the fork: per-flow -> admin flow reads ttADMIN, public flow reads ttPUBLIC */
     "fetch('/api/kid?mark=' + lastChildMark());"   /* DOM NODE READ-BACK: each flow's appended child is its OWN last child -> admin reads kidADMIN, public reads kidPUBLIC (neither's inserted node leaks) */
@@ -642,6 +666,12 @@ int main(void) {
         { "\"/api/reflect2\"",   "isreflect2"},
         { "\"/api/reflectbool\"","isbool"  },   /* presence-based booleans, and removeAttribute */
         { "\"/api/click\"",      "isclick" },   /* §3.2.2 click() through the one dispatch machine */
+        { "\"/api/cascade\"",    "isspec"  },   /* specificity beats document order — the cascade, not a list */
+        { "\"/api/cssinline\"",  "isinline"},   /* inline layers over the author cascade */
+        { "\"/api/cssua\"",      "isua"    },   /* the UA default, and the initial value below it */
+        { "\"/api/cssset\"",     "isset"   },   /* writes land in the style attribute, [SameObject] holds */
+        { "\"/api/cssdel\"",     "isdel"   },
+        { "\"/api/cssro\"",      "isro"    },   /* a computed declaration throws rather than silently ignoring */
     };
     int nodealgo_tt = !strstr(js, "wrong");
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)

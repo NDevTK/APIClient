@@ -113,6 +113,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "dom", "document.c"),                         // Document: parsed facts concrete, cookie/referrer input
     join(HOST, "browser", "core", "dom", "node.c"),                             // Node: identity, the tree, and the CharacterData nodes
     join(HOST, "browser", "core", "dom", "element.c"),
+    join(HOST, "browser", "core", "css", "css_style_declaration.c"),           // CSSOM: element.style + getComputedStyle
     join(HOST, "browser", "core", "html", "html_element.c"),                    // HTMLElement + HTML's per-tag interface table
     join(HOST, "browser", "core", "events", "event.c"),                         // Event: §2.2, the object a listener receives
     join(HOST, "browser", "core", "events", "event_target.c"),                  // EventTarget: listeners + the load event                          // Element: node identity, taint-carrying attributes, innerHTML sink

@@ -31,6 +31,7 @@
 #include "core/dom/element.h"
 #include "core/events/event_target.h"
 #include "core/html/html_element.h"
+#include "core/css/css_style_declaration.h"
 
 static JSValue g_html_proto;          /* HTMLElement.prototype */
 static JSValue g_unknown_proto;       /* HTMLUnknownElement.prototype — HTML's answer for a tag it does not know */
@@ -308,6 +309,9 @@ void html_element_init(JSContext *ctx)
        so this is where they belong, and where `div.onclick = f` now reaches them. */
     event_target_install_handlers(ctx, g_html_proto, EH_GLOBAL);
     event_target_install_click(ctx, g_html_proto);
+    /* §3.2.2 `[SameObject] attribute CSSStyleDeclaration style` — the attribute is HTMLElement's, the object is
+       the CSSOM's, so each side owns its half. */
+    cssom_install_style_attribute(ctx, g_html_proto);
     JS_SetPropertyStr(ctx, g_html_proto, "focus",
                       JS_NewCFunctionMagic(ctx, js_html_focus, "focus", 0, JS_CFUNC_generic_magic, 0));
     JS_SetPropertyStr(ctx, g_html_proto, "blur",

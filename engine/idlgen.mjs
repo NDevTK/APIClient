@@ -34,7 +34,7 @@ const BROWSER = join(HERE, "host", "browser");
 /* Every HTML interface is built on the same four files: its own table in html_element.c, the reflection and
    attribute machinery in element.c, the Node base, and EventTarget. */
 const HTML_BASE = ["core/html/html_element.c", "core/dom/element.c", "core/dom/node.c",
-                   "core/events/event_target.c"];
+                   "core/events/event_target.c", "core/css/css_style_declaration.c"];
 
 const INTERFACES = {
   EventTarget:          "core/events/event_target.c",
@@ -50,11 +50,12 @@ const INTERFACES = {
   Window:              ["core/frame/window.c", "core/dom/document.c", "core/frame/location.c",
                         "core/fetch/fetch.c", "core/events/event_target.c", "core/loader/module_loader.c",
                         "core/timing/timer.c", "core/frame/navigator.c", "core/frame/screen.c",
-                        "core/dom/abort.c"],
+                        "core/dom/abort.c", "core/css/css_style_declaration.c"],
   Navigator:            "core/frame/navigator.c",
   History:              "core/frame/history.c",
   Screen:               "core/frame/screen.c",
   URLSearchParams:      "platform/urlobj.c",
+  CSSStyleDeclaration:  "core/css/css_style_declaration.c",
   /* The TREE. These were absent from the audit entirely — the interfaces a page touches most had no gap report
      at all, which is the audit lying by omission rather than by direction. They are auditable now because their
      members live on real prototypes rather than being copied onto each wrapper. */
