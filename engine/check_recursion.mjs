@@ -161,21 +161,34 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
    The count went 18 -> 19 for the same reason it went 14 -> 18: breaking an edge splits a blob, and the piece
    that came out (29 functions: JS_Throw frees the previous exception, freeing can enqueue a FinalizationRegistry
    job, enqueueing allocates) was inside the 176 all along.
-   TWO NAMED CYCLES REMAIN, and each is one edge, not a function list.
-      97  JS_MakeError2 -> build_backtrace (-90). Capturing a backtrace can throw — it renders strings and reads
-          the frames' own values — and a throw builds an error, which captures a backtrace. `in_build_stack_trace`
-          is the same re-entrancy flag the OOM path just lost, so the same treatment applies: make the capture
-          incapable of throwing. Two sources of it are already gone: Error.stackTraceLimit is read as a Number,
-          as V8 defines it, rather than coerced through the page's valueOf, and a CallSite is created from the
-          realm's intrinsic rather than through OrdinaryCreateFromConstructor's `prototype` read.
-          ASKED WITH --from=build_backtrace, no single one of its own calls carries the cycle: the best is worth
-          4 of 97. So the fix is not another leaf — it is the eager capture itself. V8 stores raw frames and
-          formats them on the `.stack` READ; this engine already does that for Error.prepareStackTrace (the
-          pending [prepare, callsites] pair) and renders eagerly only when no hook is installed. Extending the
-          same laziness to the default rendering is what leaves construction with nothing that can throw.
-      29  js_malloc -> JS_ThrowOutOfMemory -> JS_Throw -> free the old exception -> JS_EnqueueJob -> js_malloc. */
+   THE ERROR CYCLE IS GONE — 97 to nothing, and the whole of it was ONE invariant: A CAPTURE CANNOT THROW.
+   build_backtrace runs with an exception already in flight and has nowhere to throw to, so anything in it that
+   could throw built an error, which captured a stack, which is this. Every step was a general operation asked
+   a question whose answer was already fixed, and each one inherited every path that operation can take:
+     - It RENDERED the default stack during construction. V8 stores raw frames and formats on the `.stack`
+       read; this engine already did that for Error.prepareStackTrace and only rendered eagerly when no hook
+       was installed. Now it parks the frames in both cases and the accessor chooses.
+     - It BOXED a primitive receiver (10.2.1.2 step 5) during the walk, which allocates a wrapper and defines
+       its properties. The frame-dependent half stays at capture; the box moved to CallSite.getThis, which has
+       a caller to throw to.
+     - It read a function's `name` — already checked to be a flat string — through JS_ToCString, whose first
+       act is ToString, and then rebuilt a JS string from the C one. The record keeps the string it found.
+     - It built the filename, and JS_MakeError2 its message, with JS_NewStringLen, whose length RangeError is
+       itself an error to construct. Both use the non-throwing constructor; JS_MakeError2's retry with
+       "Invalid error message" was that recursion's brake and is unnecessary once nothing can throw.
+     - Error.stackTraceLimit is read as a Number, as V8 defines it, rather than coerced through the page's
+       valueOf; a CallSite comes from the realm's intrinsic rather than OrdinaryCreateFromConstructor's
+       `prototype` read; `message` and a DOMException's `stack` are own-slot adds rather than defines.
+   204 -> 78 functions. What is left is small and legible, which is the whole point of taking a blob apart —
+   every one of these was inside it and none could be named:
+      29  js_malloc -> JS_ThrowOutOfMemory -> JS_Throw -> free the old exception -> JS_EnqueueJob -> js_malloc
+      12  JS_ToCStringLen2 -> js_force_tostring -> JS_GetProperty -> JS_GetPropertyInternal -> ... -> ToNumber
+       6  the tramp step-chain teardown (tramp_step_chain_free / the abandon hooks)
+       4  JS_ToString -> js_linearize_string_rope -> string_buffer_concat_value
+       4  JS_DefineProperty -> JS_SetPropertyValue -> JS_SetPropertyInternal
+       3  lre_case_conv, 3 the rope rebalance, 2+2, and twelve single-function recursions. */
 const CEILING_BLOB = 16      /* the interpreter cycle's size */
-const CEILING_OWN = 19       /* self-contained recursions */
+const CEILING_OWN = 22       /* self-contained recursions */
 /* 70 -> 65, the parser cycle 29 -> 24, as js_parse_descent's explicit frame stack absorbed the precedence
    ladder (expr_binary / logical_and_or / coalesce_expr / cond_expr) and then UnaryExpression (unary / delete).
    BE PRECISE ABOUT WHICH HALF PAID. The ladder was never deep: `a|b|c` is left-nested and the recursive version
@@ -279,7 +292,7 @@ const CEILING_OWN = 19       /* self-contained recursions */
    churn dressed as progress, and the audit counting it is the audit being honest about direct calls rather
    than a debt. The same is true of rope DEPTH generally: JS_STRING_ROPE_MAX_DEPTH is 60 with a flatten above
    it, so no rope walk was ever input-deep. */
-const CEILING_OWN_FUNCS = 154 /* functions in them — 97 of these are the one error/property cycle, 29 the OOM/free one */
+const CEILING_OWN_FUNCS = 78 /* functions in them — the largest is 29, the free/OOM/enqueue cycle */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
