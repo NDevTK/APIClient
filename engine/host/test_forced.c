@@ -308,12 +308,26 @@ int main(void) {
     navigator_install(ctx, g);
     /* THE ABORT COMPONENTS ARE NOT INSTALLED HERE YET, AND THE REASON IS AN ENGINE LEAK, NOT A CHOICE.
        AbortSignal's reason IS a DOMException (DOM 3.2), so exercising abort.c requires
-       JS_AddIntrinsicDOMException — and that intrinsic leaks its whole graph. Narrowed to twelve lines with no
-       page and no lexbor: registering JS_CLASS_DOM_EXCEPTION and then storing ANY object (plain or
-       Error-classed, identically) into ctx->class_proto[JS_CLASS_DOM_EXCEPTION] stops JS_FreeContext's teardown
-       body from running at all, and 333 GC objects survive JS_FreeRuntime. Creating the same object and freeing
-       it instead of storing it leaks nothing. main.c installs the intrinsic, so production carries the leak
-       today; nothing had ever run the gc_obj_list check on a context that had it.
+       JS_AddIntrinsicDOMException — and that intrinsic leaks its whole graph, INCLUDING THE JSCONTEXT ITSELF
+       (gc_obj_type=5), which is what pins the other 332.
+
+       Narrowed to twelve lines with no page, no lexbor and no DOMException semantics at all:
+
+           JSContext *ctx = JS_NewContext(rt);
+           ctx->class_proto[JS_CLASS_DOM_EXCEPTION] = JS_NewObject(ctx);   // <- this line
+           JS_FreeContext(ctx); JS_FreeRuntime(rt);                        // 333 objects survive
+
+       It does NOT need the class registered (init_class_range is irrelevant), and it does not care whether the
+       object is plain or Error-classed — both leak identically. Create the same object and FREE it instead of
+       storing it: zero. Do everything except the store: zero. JS_FreeContext is refcount-gated
+       (`if (--JS_REF_COUNT(ctx) > 0) return;`) and with the store its body never runs at all, so the whole
+       teardown cascade never starts and the final GC does not collect the cycle. Both JS_MarkContext and
+       JS_FreeContext DO cover class_proto[i] for i < rt->class_count, and 65 < 70, so the slot is in range for
+       both — the accounting error is elsewhere.
+
+       main.c installs the intrinsic, so production carries this today; nothing had ever run the gc_obj_list
+       check on a context that had it, because JS_NewContext does not install DOMException and test262 therefore
+       never covers it.
        Installing them here would make this fixture red on a bug it did not cause. The order is: fix the leak,
        then install the pair here and give the page an abort() case. */
     JS_FreeValue(ctx, g);
