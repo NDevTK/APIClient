@@ -51,6 +51,12 @@ static JSValue response_settled(JSContext *ctx, JSValue value, int reject)
     JSValue promise, funcs[2], r;
     promise = JS_NewPromiseCapability(ctx, funcs);
     if (JS_IsException(promise)) { JS_FreeValue(ctx, value); return promise; }
+    /* Resolving with an OBJECT reads its `then` — the page's code — so this would be a C-driven trap the
+       moment a body value stopped being a primitive. It never is (the bytes are a string the host already
+       fetched), and saying so as an assert is what keeps this call from quietly becoming one. */
+    DCHECK(JS_VALUE_GET_TAG(value) != JS_TAG_OBJECT,
+           "a Response settled with an OBJECT — resolving one reads its `then` from C with no flow base; "
+           "route this through the promise machinery instead");
     r = JS_Call(ctx, funcs[reject ? 1 : 0], JS_UNDEFINED, 1, (JSValueConst *)&value);
     JS_FreeValue(ctx, r);
     JS_FreeValue(ctx, value);

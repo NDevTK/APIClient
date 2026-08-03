@@ -35,6 +35,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/timing/timer.h"
+#include "core/idl_args.h"
 #include "solver/engine.h"
 
 typedef struct {
@@ -173,9 +174,13 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "setTimeout requires a handler");
 
-    if (argc >= 2 && JS_ToFloat64(ctx, &delay, argv[1]) < 0)
-        return JS_EXCEPTION;
-    /* 8.6: a negative or non-finite timeout is clamped to 0. */
+    /* `timeout` is a Web IDL `long`, ALREADY converted by the declaration — so this reads a number and runs
+       none of the page's code. 8.6: a negative or non-finite timeout is clamped to 0. */
+    if (argc >= 2) {
+        DCHECK(JS_VALUE_GET_TAG(argv[1]) == JS_TAG_INT || JS_TAG_IS_FLOAT64(JS_VALUE_GET_TAG(argv[1])),
+               "setTimeout's `timeout` reached the body unconverted — the IDL declaration is what converts it");
+        JS_ToFloat64(ctx, &delay, argv[1]);
+    }
     if (!(delay >= 0))
         delay = 0;
 
@@ -184,7 +189,13 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
        running the page's source inside this C activation is exactly what the flow machinery exists to avoid.
        It has no cancellable entry because it is no longer a timer at that point; it is a script. */
     if (!JS_IsFunction(ctx, argv[0])) {
-        const char *src = JS_ToCString(ctx, argv[0]);
+        /* TimerHandler is `(DOMString or Function)`: the declaration converted the non-callable arm to a
+           string already, so this reads one rather than running the page's toString from C. */
+        const char *src;
+        DCHECK(JS_IsString(argv[0]),
+               "setTimeout's handler reached the body neither callable nor a string — the TimerHandler union's "
+               "conversion is the declaration's, not this body's");
+        src = JS_ToCString(ctx, argv[0]);
         if (!src)
             return JS_EXCEPTION;
         engine_queue_script(src);
@@ -209,14 +220,19 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
     return JS_NewInt32(ctx, t->id);
 }
 
-static JSValue js_clear_timer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+static JSValue js_clear_timer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     int32_t id = 0;
     int i;
 
     (void)this_val;
-    if (argc < 1 || JS_ToInt32(ctx, &id, argv[0]) < 0)
+    /* `handle` is a Web IDL `long`, converted by the declaration. */
+    if (argc < 1)
         return JS_UNDEFINED;   /* 8.6: clearing a handle that names nothing does nothing */
+    DCHECK(JS_VALUE_GET_TAG(argv[0]) == JS_TAG_INT || JS_TAG_IS_FLOAT64(JS_VALUE_GET_TAG(argv[0])),
+           "clearTimeout's `handle` reached the body unconverted");
+    if (JS_ToInt32(ctx, &id, argv[0]) < 0)
+        return JS_UNDEFINED;
     for (i = 0; i < g_timers_n; i++)
         if (g_timers[i].id == id) {
             timer_entry_free(ctx, &g_timers[i]);
@@ -238,14 +254,20 @@ static JSValue js_queue_microtask(JSContext *ctx, JSValueConst this_val, int arg
 void timer_install(JSContext *ctx, JSValueConst global)
 {
     JSValue g = (JSValue)global;
-    JS_SetPropertyStr(ctx, g, "setTimeout",
-                      JS_NewCFunctionMagic(ctx, js_set_timer, "setTimeout", 2, JS_CFUNC_generic_magic, 0));
-    JS_SetPropertyStr(ctx, g, "setInterval",
-                      JS_NewCFunctionMagic(ctx, js_set_timer, "setInterval", 2, JS_CFUNC_generic_magic, 1));
-    JS_SetPropertyStr(ctx, g, "clearTimeout",
-                      JS_NewCFunction(ctx, js_clear_timer, "clearTimeout", 1));
-    JS_SetPropertyStr(ctx, g, "clearInterval",
-                      JS_NewCFunction(ctx, js_clear_timer, "clearInterval", 1));
+    /* HTML 8.6's own IDL, declared rather than approximated:
+         long setTimeout(TimerHandler handler, optional long timeout = 0, any... arguments)
+         undefined clearTimeout(optional long handle = 0)
+       `handler` is a (DOMString or Function) union and `timeout` is a long, so BOTH can run the page's code —
+       a toString on the non-callable arm, a valueOf on the delay — and neither is a string. The `any...` tail
+       is simply not listed: a position the IDL does not name is passed through as it is. */
+    {
+        static const IdlArgType SET_TIMER[2] = { IDL_STRING_UNLESS_CALLABLE, IDL_LONG };
+        static const IdlArgType CLEAR_TIMER[1] = { IDL_LONG };
+        idl_install_method(ctx, g, "setTimeout", 2, idl_method_id(ctx, SET_TIMER, 2, js_set_timer, 0));
+        idl_install_method(ctx, g, "setInterval", 2, idl_method_id(ctx, SET_TIMER, 2, js_set_timer, 1));
+        idl_install_method(ctx, g, "clearTimeout", 1, idl_method_id(ctx, CLEAR_TIMER, 1, js_clear_timer, 0));
+        idl_install_method(ctx, g, "clearInterval", 1, idl_method_id(ctx, CLEAR_TIMER, 1, js_clear_timer, 0));
+    }
     JS_SetPropertyStr(ctx, g, "queueMicrotask",
                       JS_NewCFunction(ctx, js_queue_microtask, "queueMicrotask", 1));
 }

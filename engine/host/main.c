@@ -191,6 +191,8 @@ QJS_EXPORT void qjs_teardown(void)
     doc_scripts_free(&g_scripts);
     /* the runtime-lifetime values the browser components own — a component that mints one frees it. */
     abort_free(g_ctx);
+    document_free(g_ctx);   /* the Document and the window it fires `load` at — both HELD across the lifecycle */
+    element_free(g_ctx);    /* the wrapper identity table and the DOM interface prototypes */
     event_target_free(g_ctx);
     if (g_ctx) { JS_FreeContext(g_ctx); g_ctx = NULL; }
     if (g_rt)  { JS_FreeRuntime(g_rt);  g_rt  = NULL; }

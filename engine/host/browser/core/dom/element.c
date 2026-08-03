@@ -28,6 +28,10 @@
 #include "solver/solve.h"
 #include "core/dom/element.h"
 #include "core/idl_args.h"
+
+/* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
+static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
+static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
 #include "core/dom/node.h"
 #include "core/dom/document.h"
 
@@ -116,17 +120,21 @@ static JSValue js_el_get_tag(JSContext *ctx, JSValueConst this_val)
    Both halves go through the per-flow chokepoints: the old children are removed with a capture so they come
    back on a context switch, and each parsed node is inserted with one, so two forked arms each see their own
    subtree. A concolic value has no bytes to parse — the sink report IS the answer for it. */
-static JSValue js_el_set_inner_html(JSContext *ctx, JSValueConst this_val, JSValueConst val)
+static JSValue js_el_set_inner_html(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     lxb_dom_element_t *el = elem_of(this_val);
     const char *html;
     lxb_dom_node_t *node, *next;
 
+    (void)magic;
     if (!el) return JS_UNDEFINED;
     solve_html_sink(ctx, val);
     if (concolic_is(val))
         return JS_UNDEFINED;   /* nothing concrete to parse; the sink is what this write means */
 
+    DCHECK(JS_IsString(val), "innerHTML= reached the body unconverted — the IDL declaration is what converts "
+                             "it, and running the page's toString from here is the drive-to-completion the flow "
+                             "machinery exists to avoid");
     html = JS_ToCString(ctx, val);
     if (!html) return JS_EXCEPTION;
 
@@ -166,80 +174,31 @@ static JSValue js_el_set_inner_html(JSContext *ctx, JSValueConst this_val, JSVal
     return JS_UNDEFINED;
 }
 
-/* 4.4 Node.textContent. NOT a markup sink — the setter creates ONE Text node and the getter concatenates
-   descendant text — which is exactly why a page that has been told to stop using innerHTML uses it, and why an
-   engine that lacked it saw those pages build nothing. The taint travels the same way an attribute's does: the
-   assigned concolic is recorded on the element's property slot, so a source parked in the DOM as text and later
-   read back into a real sink is still solved. */
-static JSValue js_el_get_text_content(JSContext *ctx, JSValueConst this_val)
-{
-    lxb_dom_element_t *el = elem_of(this_val);
-    lxb_char_t *txt;
-    size_t len = 0;
-    JSValue r;
-    int si;
-
-    if (!el) return JS_NULL;
-    si = attr_shadow_find(el, ATTR_SLOT_PROPERTY, "textContent");
-    if (si >= 0)
-        return JS_DupValue(ctx, attr_shadow_opaque(si));
-    txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &len);
-    if (!txt) return JS_NewStringLen(ctx, "", 0);
-    r = JS_NewStringLen(ctx, (const char *)txt, len);
-    lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
-    return r;
-}
-
-static JSValue js_el_set_text_content(JSContext *ctx, JSValueConst this_val, JSValueConst val)
-{
-    lxb_dom_element_t *el = elem_of(this_val);
-    lxb_dom_node_t *node, *next, *n = lxb_dom_interface_node(el);
-    lxb_dom_text_t *text;
-    const char *str;
-    size_t len;
-
-    if (!el) return JS_UNDEFINED;
-    dom_cow_set_prop_taint(ctx, el, "textContent", concolic_is(val) ? val : JS_UNDEFINED);
-    /* A concolic has no bytes: its coercion is the concolic hooks' and throws rather than producing a string,
-       so the SHAPE is what the Text node carries while the shadow carries the value. */
-    if (concolic_is(val)) {
-        str = concolic_shape_c(val);
-        len = str ? strlen(str) : 0;
-        if (!str) str = "";
-    } else {
-        str = JS_ToCStringLen(ctx, &len, val);
-        if (!str) return JS_EXCEPTION;
-    }
-    /* "string replace all": every child goes, then ONE Text node — both through the per-flow chokepoints, so a
-       forked arm that sets different text reads back its own. */
-    for (node = n->first_child; node; node = next) {
-        next = node->next;
-        dom_cow_remove_child(node);
-    }
-    text = lxb_dom_document_create_text_node(n->owner_document, (const lxb_char_t *)str, len);
-    DCHECK(text != NULL, "textContent= produced no Text node — the page's text would silently not be there");
-    if (text)
-        dom_cow_append_child(n, lxb_dom_interface_node(text));
-    if (!concolic_is(val))
-        JS_FreeCString(ctx, str);   /* the shape is the concolic's own storage, not a C string to release */
-    return JS_UNDEFINED;
-}
-
 /* [Reflect]ed content attributes: the IDL property IS the attribute, so both directions go through the same
    attribute read (taint shadow first) and the same per-flow write. The MAGIC IS AN INDEX INTO THIS TABLE and
    nothing else — a boolean magic was fine for two and became a lie at three. Spelling the list out rather than
    generating it from the IDL is the gap engine/idlgen.mjs exists to report; what must not happen is a property
    that answers something its attribute does not say, which is exactly what `script.src` did: with no reflection
    it became an ordinary JS property, the element carried no src attribute, and the injected script named a URL
-   nothing would ever fetch. */
-static const char *const EL_REFLECT[] = { "id", "class", "src", "name", "content" };
+   nothing would ever fetch.
+   THE IDL NAME AND THE CONTENT-ATTRIBUTE NAME ARE TWO DIFFERENT STRINGS and the pair is what a reflection is —
+   `className` reflects `class`. They used to live apart, the attribute in this table and the property in the
+   member list, which is a spelling the two could disagree on with nothing to catch it. */
+static const struct { const char *idl; const char *attr; } EL_REFLECT[] = {
+    { "id",        "id"      },
+    { "className", "class"   },
+    { "src",       "src"     },
+    { "name",      "name"    },
+    { "content",   "content" },
+};
+#define EL_REFLECT_N ((int)(sizeof(EL_REFLECT) / sizeof(EL_REFLECT[0])))
 
 static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     JSValue nv, r;
-    DCHECK(magic >= 0 && magic < (int)(sizeof(EL_REFLECT) / sizeof(EL_REFLECT[0])),
+    DCHECK(magic >= 0 && magic < EL_REFLECT_N,
            "a reflected property was declared with a magic the attribute table does not name");
-    nv = JS_NewString(ctx, EL_REFLECT[magic]);
+    nv = JS_NewString(ctx, EL_REFLECT[magic].attr);
     r = js_el_get_attribute(ctx, this_val, 1, (JSValueConst *)&nv, 0);   /* a real string already: the reflected NAME is the engine's */
     JS_FreeValue(ctx, nv);
     return JS_IsNull(r) ? JS_NewStringLen(ctx, "", 0) : r;   /* a reflected string attribute defaults to "" */
@@ -249,9 +208,9 @@ static JSValue js_el_reflect_set(JSContext *ctx, JSValueConst this_val, JSValueC
 {
     JSValue args[2];
     JSValue r;
-    DCHECK(magic >= 0 && magic < (int)(sizeof(EL_REFLECT) / sizeof(EL_REFLECT[0])),
+    DCHECK(magic >= 0 && magic < EL_REFLECT_N,
            "a reflected property was declared with a magic the attribute table does not name");
-    args[0] = JS_NewString(ctx, EL_REFLECT[magic]);
+    args[0] = JS_NewString(ctx, EL_REFLECT[magic].attr);
     args[1] = JS_DupValue(ctx, val);
     r = js_el_set_attribute(ctx, this_val, 2, (JSValueConst *)args, 0);
     JS_FreeValue(ctx, args[0]);
@@ -350,39 +309,14 @@ static JSValue js_el_children(JSContext *ctx, JSValueConst this_val, int magic)
     }
 }
 
-static const JSCFunctionListEntry js_element_proto[] = {
+/* The READ-ONLY members: pure walks over the flow's own tree, so they are ordinary C getters. */
+static const JSCFunctionListEntry js_element_readonly[] = {
     JS_CGETSET_MAGIC_DEF("children", js_el_children, NULL, 0),
     JS_CGETSET_MAGIC_DEF("firstElementChild", js_el_children, NULL, 1),
     JS_CGETSET_MAGIC_DEF("lastElementChild", js_el_children, NULL, 2),
     JS_CGETSET_MAGIC_DEF("childElementCount", js_el_children, NULL, 3),
     JS_CGETSET_DEF("tagName", js_el_get_tag, NULL),
-    JS_CGETSET_DEF("innerHTML", NULL, js_el_set_inner_html),
-    JS_CGETSET_DEF("textContent", js_el_get_text_content, js_el_set_text_content),
-    JS_CGETSET_MAGIC_DEF("id", js_el_reflect_get, js_el_reflect_set, 0),
-    JS_CGETSET_MAGIC_DEF("className", js_el_reflect_get, js_el_reflect_set, 1),
-    JS_CGETSET_MAGIC_DEF("src", js_el_reflect_get, js_el_reflect_set, 2),
-    JS_CGETSET_MAGIC_DEF("name", js_el_reflect_get, js_el_reflect_set, 3),
-    JS_CGETSET_MAGIC_DEF("content", js_el_reflect_get, js_el_reflect_set, 4),
 };
-
-
-/* node.c calls this when it builds a wrapper for an ELEMENT node — it owns identity and the Node base; this
-   owns what makes the node an Element. */
-/* The step ids for the members whose arguments the spec COERCES. Declared once in element_init — these are
-   installed on every wrapper the tree hands out, and declaring there would mint a definition per element. */
-static int g_id_get_attr = -1, g_id_set_attr = -1, g_id_qs = -1, g_id_qsa = -1;
-
-static void element_install_members(JSContext *ctx, JSValueConst obj)
-{
-    JS_SetPropertyFunctionList(ctx, (JSValue)obj, js_element_proto,
-                               (int)(sizeof(js_element_proto) / sizeof(js_element_proto[0])));
-    /* `name`, `value` and `selectors` are DOMStrings, so each is ToString on whatever the page passed:
-       `el.getAttribute({toString(){ … }})` is the page's code and parks the machine on that argument. */
-    idl_install_method(ctx, obj, "getAttribute", 1, g_id_get_attr);
-    idl_install_method(ctx, obj, "setAttribute", 2, g_id_set_attr);
-    idl_install_method(ctx, obj, "querySelector", 1, g_id_qs);
-    idl_install_method(ctx, obj, "querySelectorAll", 1, g_id_qsa);
-}
 
 /* HTML 4.12.1: a <script> that has just been inserted is PREPARED. node.c asks for this on every insertion so
    it does not have to know what a script is. */
@@ -397,16 +331,46 @@ JSValue element_wrap(JSContext *ctx, lxb_dom_element_t *el)
     return node_wrap(ctx, el ? lxb_dom_interface_node(el) : NULL);
 }
 
+/* ELEMENT.PROTOTYPE — §4.9, `interface Element : Node`, built ONCE on top of the base node.c owns and handed to
+   node.c as the interface every element node wears. It used to be a per-wrapper INSTALLER callback, which minted
+   a fresh closure for every member of every element and made `a.getAttribute === b.getAttribute` false. */
 void element_init(JSContext *ctx)
 {
+    JSValue proto;
+    int i;
+
     node_init(ctx);
-    if (g_id_get_attr < 0) {
-        g_id_get_attr = idl_string_method_id(ctx, 0x1, js_el_get_attribute, 0);
-        g_id_set_attr = idl_string_method_id(ctx, 0x3, js_el_set_attribute, 0);   /* both name and value */
-        g_id_qs       = idl_string_method_id(ctx, 0x1, js_el_query_selector, 0);
-        g_id_qsa      = idl_string_method_id(ctx, 0x1, js_el_query_selector, 1);
-    }
-    node_set_element_installer(element_install_members);
+
+    /* `name`, `value` and `selectors` are DOMStrings, so each is ToString on whatever the page passed:
+       `el.getAttribute({toString(){ … }})` is the page's code, and the declaration parks the machine on that
+       argument rather than running it out of a C activation. */
+    proto = JS_NewObjectProto(ctx, node_proto());
+    CHECK(!JS_IsException(proto), "Element.prototype could not be allocated");
+    JS_SetPropertyFunctionList(ctx, proto, js_element_readonly,
+                               (int)(sizeof(js_element_readonly) / sizeof(js_element_readonly[0])));
+    idl_install_method(ctx, proto, "getAttribute", 1,
+                       idl_method_id(ctx, IDL_1STR, 1, js_el_get_attribute, 0));
+    idl_install_method(ctx, proto, "setAttribute", 2,
+                       idl_method_id(ctx, IDL_2STR, 2, js_el_set_attribute, 0));
+    idl_install_method(ctx, proto, "querySelector", 1,
+                       idl_method_id(ctx, IDL_1STR, 1, js_el_query_selector, 0));
+    idl_install_method(ctx, proto, "querySelectorAll", 1,
+                       idl_method_id(ctx, IDL_1STR, 1, js_el_query_selector, 1));
+
+    /* `[CEReactions] attribute [LegacyNullToEmptyString] DOMString innerHTML` — the extended attribute is part
+       of the TYPE, so `el.innerHTML = null` empties the element instead of parsing the markup `null`. WRITE-ONLY
+       here: the serialising getter is an HTML fragment serialiser this engine does not have yet, and answering
+       undefined is the honest absence the IDL audit names. */
+    idl_install_accessor(ctx, proto, "innerHTML", NULL, 0,
+                         idl_setter_id(ctx, IDL_DOMSTRING, true, js_el_set_inner_html, 0));
+
+    /* The reflections: `[CEReactions] attribute DOMString id` and friends — plain DOMString, so null really is
+       the string "null" the way the content attribute would hold it. */
+    for (i = 0; i < EL_REFLECT_N; i++)
+        idl_install_accessor(ctx, proto, EL_REFLECT[i].idl, js_el_reflect_get, i,
+                             idl_setter_id(ctx, IDL_DOMSTRING, false, js_el_reflect_set, i));
+
+    node_set_proto(ctx, LXB_DOM_NODE_TYPE_ELEMENT, proto);
     node_set_inserted_hook(element_on_inserted);
 }
 

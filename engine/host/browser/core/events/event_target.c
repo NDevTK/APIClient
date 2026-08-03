@@ -21,6 +21,10 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+
+/* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
+static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
+static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
 #include "core/events/event_target.h"
 
 /* The private key the listener map hangs off. A SYMBOL, so a page enumerating its own objects cannot see it and
@@ -42,8 +46,8 @@ void event_target_init(JSContext *ctx)
     CHECK(!JS_IsException(g_key), "the event-listener key allocation failed");
     g_ready = 1;
     if (g_add_stepid < 0) {
-        g_add_stepid    = idl_string_method_id(ctx, 0x1, idl_add_or_remove, 0);
-        g_remove_stepid = idl_string_method_id(ctx, 0x1, idl_add_or_remove, 1);
+        g_add_stepid    = idl_method_id(ctx, IDL_1STR, 1, idl_add_or_remove, 0);   /* (DOMString type, EventListener?) */
+        g_remove_stepid = idl_method_id(ctx, IDL_1STR, 1, idl_add_or_remove, 1);
     }
 }
 

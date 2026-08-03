@@ -12,6 +12,9 @@
 #include "core/frame/navigator.h"
 #include "core/frame/screen.h"
 #include "core/dom/abort.h"
+#include "core/dom/node.h"
+#include "core/dom/element.h"
+#include "core/dom/document.h"
 #include "core/events/event_target.h"
 #include "solver/endpoint.h"
 #include "solver/result.h"
@@ -179,6 +182,19 @@ static const char *HTML =
     "var ac = new AbortController(); ac.signal.addEventListener('abort', function(){ fetch('/api/aborted?v=fired'); }); ac.abort();"   /* the controller's signal is the REAL state machine: abort() reads [[Signal]] as an internal slot and fires `abort`, whose listener runs as its own task on this flow */
     "var tsig = AbortSignal.timeout({ valueOf: function(){ var n = 0; for (var i = 0; i < 2000; i++) { n += i; } return n; } });"   /* [EnforceRange] unsigned long long is ToNumber on the PAGE's object: the loop inside valueOf preempts, so the timeout machine must suspend and resume at the exact stage it parked on */
     "if (tsig.aborted) { fetch('/api/deadline?v=expired'); } else { fetch('/api/deadline?v=live'); }"   /* a timeout's aborted flag is UNKNOWN, so both arms run and the fallback path's endpoint is learned too */   /* THE responsive gate: a bundle routes, hosts assets and often bases its API on this, so both arms must be reached */   /* the desktop-vs-touch gate, the same shape over a numeric member */
+    /* THE REAL DOM, through document/Element/Node rather than a host-edge stand-in. Four things the tree
+       components must get right and had no fixture for: interface members live on a PROTOTYPE (so two elements
+       share one function object), `[LegacyNullToEmptyString] DOMString data` turns null into "" instead of the
+       four characters `null`, `DOMString? textContent` set to null leaves NO child, and `nodeValue` is a NODE
+       member that answers null on an element. */
+    "var e1 = document.createElement('div'); var e2 = document.createElement('span');"
+    "fetch('/api/protoid?v=' + (e1.getAttribute === e2.getAttribute ? 'shared' : 'percopy'));"
+    "var tx = document.createTextNode('base'); e1.appendChild(tx); tx.data = null;"
+    "fetch('/api/cdnull?v=' + (tx.data === '' ? 'empty' : 'wrong'));"
+    "e1.textContent = null;"
+    "fetch('/api/tcnull?v=' + (e1.childNodes.length === 0 ? 'nochild' : 'child'));"
+    "fetch('/api/nodeval?v=' + (e1.nodeValue === null ? 'null' : 'wrong'));"
+    "e1.textContent = 'tcSET'; fetch('/api/tcset?v=' + e1.textContent);"
     "if (cfg.admin) { setBodyAttr('data-tt','ttADMIN'); appendChild('kidADMIN'); rx.flag='flagADMIN'; fetch('/api/data?role=admin'); loadScript('/chunk/admin.js'); } else { setBodyAttr('data-tt','ttPUBLIC'); appendChild('kidPUBLIC'); rx.flag='flagPUBLIC'; fetch('/api/data?role=public'); }"   /* admin arm: same endpoint MERGES + a LAZY CHUNK loads. Each arm ALSO writes an attribute, appends a child node, AND assigns the ACCESSOR rx.flag (invokes the setter -> rx._f) -> per-flow DOM + heap-accessor writes across the EXISTING fork. */
     "fetch('/api/whoami?tt=' + getBodyAttr('data-tt'));"   /* DOM ATTR READ-BACK after the fork: per-flow -> admin flow reads ttADMIN, public flow reads ttPUBLIC */
     "fetch('/api/kid?mark=' + lastChildMark());"   /* DOM NODE READ-BACK: each flow's appended child is its OWN last child -> admin reads kidADMIN, public reads kidPUBLIC (neither's inserted node leaks) */
@@ -323,6 +339,22 @@ int main(void) {
     event_target_install(ctx, g);
     abort_init(ctx);
     abort_install(ctx, g);
+
+    /* Browser layer: parse the document with the real Lexbor HTML parser BEFORE the DOM interfaces install,
+       because `document` is a wrapper over this tree — the parse itself creates no JS object, so it belongs on
+       the baseline beside the globals rather than after the hooks. */
+    int asan_min = getenv("APICLIENT_ASAN_MIN") != NULL;   /* fast per-change memory gate: the minimal clone/COW doc */
+    const char *doc = asan_min ? HTML_MIN : HTML;
+    lxb_html_document_t *dom = lxb_html_document_create();
+    lxb_html_document_parse(dom, (const lxb_char_t *)doc, strlen(doc));
+    g_body = lxb_dom_interface_element(lxb_html_document_body_element(dom));   /* the DOM sink's target element */
+
+    /* THE REAL DOM, so the tree components are exercised by a fixture at all. They had none: the page above
+       reached the tree through host-edge stand-ins (setBodyAttr, appendChild), so node.c, element.c and
+       document.c — every wrapper, every prototype, every IDL coercion in them — ran only in the shipped ABI
+       build where nothing asserts on the result. */
+    element_init(ctx);
+    document_install(ctx, g, dom, "https://x.test");
     JS_FreeValue(ctx, g);
 
     /* The two hook SETS the solver owns, each declared by its own component. They were struct literals here
@@ -330,13 +362,6 @@ int main(void) {
     cow_install_time_travel_hooks();
     concolic_install_hooks();
 
-    /* Browser layer: parse the document with the real Lexbor HTML parser, then extract its executable inline
-       scripts as ONE flow program (document_scripts, Blink core/loader). No boot — the scripts ARE the first flow. */
-    int asan_min = getenv("APICLIENT_ASAN_MIN") != NULL;   /* fast per-change memory gate: the minimal clone/COW doc */
-    const char *doc = asan_min ? HTML_MIN : HTML;
-    lxb_html_document_t *dom = lxb_html_document_create();
-    lxb_html_document_parse(dom, (const lxb_char_t *)doc, strlen(doc));
-    g_body = lxb_dom_interface_element(lxb_html_document_body_element(dom));   /* the DOM sink's target element */
     DocScripts scripts = document_exec_scripts(dom);   /* each <script> its own program body — no concat */
     engine_run(ctx, scripts.bodies, scripts.srcs, scripts.n);         /* @H + @S detection */
     /* No verify call: the candidate re-fires are FLOWS on the same frontier, so engine_run already ran them. */
@@ -487,13 +512,21 @@ int main(void) {
     /* a DOMString argument coerced through the PAGE's toString (with a loop in it), then used as the real
        event type — the listener firing proves the coerced value was the one it registered under */
     int idlcoerce_tt = (strstr(js, "\"/api/idlcoerce\"") && strstr(js, "coerced"));
+    /* THE DOM INTERFACES. Each is one spec sentence the components used to get wrong, and each answers with a
+       token that only the correct behaviour can produce — `percopy`/`wrong`/`child` are what the old code said. */
+    int domproto_tt = (strstr(js, "\"/api/protoid\"") && strstr(js, "shared") && !strstr(js, "percopy"));
+    int cdnull_tt   = (strstr(js, "\"/api/cdnull\"")  && strstr(js, "empty"));
+    int tcnull_tt   = (strstr(js, "\"/api/tcnull\"")  && strstr(js, "nochild") && !strstr(js, "\"child\""));
+    int nodeval_tt  = (strstr(js, "\"/api/nodeval\"") && strstr(js, "\"null\""));
+    int tcset_tt    = (strstr(js, "\"/api/tcset\"")   && strstr(js, "tcSET"));
+    int domidl_tt   = domproto_tt && cdnull_tt && tcnull_tt && nodeval_tt && tcset_tt;
     int deadline_tt = (strstr(js, "\"/api/deadline\"") && strstr(js, "expired") && strstr(js, "live"));
 
     int h_ok = asan_min
         ? (fefork_tt && owfork_tt && genfork_tt && gen2fork_tt && genofork_tt && afromfork_tt && spreadfork_tt && setaddfork_tt && setfork_tt && mapmutfork_tt && afsfork_tt && paffork_tt && paf2fork_tt && redfork_tt && rerepfork_tt && gcallfork_tt && gapplyfork_tt && grefapplyfork_tt)   /* MIN gate: just the clone/COW/generator paths */
-        : (has_uid_param && role_admin && role_public && merged && pinned && lazy && uafork_tt && touchfork_tt && layoutfork_tt && abortfire_tt && deadline_tt && idlcoerce_tt && dom_tt && accessor_tt && async_tt && await_tt && asynccall_tt && async_throw && async_preempt && fetch_await && pending_await && promise_state && delete_iso && floc_iso && fefork_tt && pushfork_tt && mapfork_tt && owfork_tt && genfork_tt && gen2fork_tt && genofork_tt && afromfork_tt && spreadfork_tt && setaddfork_tt && setfork_tt && mapmutfork_tt && afsfork_tt && paffork_tt && paf2fork_tt && redfork_tt && rerepfork_tt && gcallfork_tt && gapplyfork_tt && grefapplyfork_tt);
-    printf("@H %s (pinned=%d lazy=%d dom-attr=%d dom-node=%d accessor=%d async=%d await=%d asynccall=%d throw=%d preempt=%d fetch=%d pending=%d promise-state=%d delete-iso=%d floc-iso=%d fefork=%d pushfork=%d mapfork=%d owfork=%d genfork=%d gen2fork=%d genofork=%d afromfork=%d spreadfork=%d setaddfork=%d setfork=%d mapmutfork=%d afsfork=%d paffork=%d paf2fork=%d redfork=%d rerepfork=%d gcallfork=%d gapplyfork=%d grefapplyfork=%d ua=%d touch=%d layout=%d abort=%d deadline=%d idl=%d)\n",
-           h_ok ? "OK" : "FAIL", pinned, lazy, dom_attr, dom_node, accessor_tt, async_tt, await_tt, asynccall_tt, async_throw, async_preempt, fetch_await, pending_await, promise_state, delete_iso, floc_iso, fefork_tt, pushfork_tt, mapfork_tt, owfork_tt, genfork_tt, gen2fork_tt, genofork_tt, afromfork_tt, spreadfork_tt, setaddfork_tt, setfork_tt, mapmutfork_tt, afsfork_tt, paffork_tt, paf2fork_tt, redfork_tt, rerepfork_tt, gcallfork_tt, gapplyfork_tt, grefapplyfork_tt, uafork_tt, touchfork_tt, layoutfork_tt, abortfire_tt, deadline_tt, idlcoerce_tt);
+        : (has_uid_param && role_admin && role_public && merged && pinned && lazy && uafork_tt && touchfork_tt && layoutfork_tt && abortfire_tt && deadline_tt && idlcoerce_tt && domidl_tt && dom_tt && accessor_tt && async_tt && await_tt && asynccall_tt && async_throw && async_preempt && fetch_await && pending_await && promise_state && delete_iso && floc_iso && fefork_tt && pushfork_tt && mapfork_tt && owfork_tt && genfork_tt && gen2fork_tt && genofork_tt && afromfork_tt && spreadfork_tt && setaddfork_tt && setfork_tt && mapmutfork_tt && afsfork_tt && paffork_tt && paf2fork_tt && redfork_tt && rerepfork_tt && gcallfork_tt && gapplyfork_tt && grefapplyfork_tt);
+    printf("@H %s (pinned=%d lazy=%d dom-attr=%d dom-node=%d accessor=%d async=%d await=%d asynccall=%d throw=%d preempt=%d fetch=%d pending=%d promise-state=%d delete-iso=%d floc-iso=%d fefork=%d pushfork=%d mapfork=%d owfork=%d genfork=%d gen2fork=%d genofork=%d afromfork=%d spreadfork=%d setaddfork=%d setfork=%d mapmutfork=%d afsfork=%d paffork=%d paf2fork=%d redfork=%d rerepfork=%d gcallfork=%d gapplyfork=%d grefapplyfork=%d ua=%d touch=%d layout=%d abort=%d deadline=%d idl=%d dom-idl=%d)\n",
+           h_ok ? "OK" : "FAIL", pinned, lazy, dom_attr, dom_node, accessor_tt, async_tt, await_tt, asynccall_tt, async_throw, async_preempt, fetch_await, pending_await, promise_state, delete_iso, floc_iso, fefork_tt, pushfork_tt, mapfork_tt, owfork_tt, genfork_tt, gen2fork_tt, genofork_tt, afromfork_tt, spreadfork_tt, setaddfork_tt, setfork_tt, mapmutfork_tt, afsfork_tt, paffork_tt, paf2fork_tt, redfork_tt, rerepfork_tt, gcallfork_tt, gapplyfork_tt, grefapplyfork_tt, uafork_tt, touchfork_tt, layoutfork_tt, abortfire_tt, deadline_tt, idlcoerce_tt, domidl_tt);
 
     /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified. Read from the
        ONE document above — there is no second line to keep in step with it. */
@@ -513,6 +546,8 @@ int main(void) {
     endpoint_free();
 
     abort_free(ctx);
+    document_free(ctx);   /* the window reference the lifecycle holds */
+    element_free(ctx);    /* the wrapper identity table and the DOM interface prototypes */
     event_target_free(ctx);
     flow_registry_free(ctx);
     JS_RunGC(rt);   /* collect flow-local garbage from the runs before teardown */

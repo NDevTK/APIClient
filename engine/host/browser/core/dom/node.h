@@ -13,15 +13,17 @@ void node_free(JSContext *ctx);
 JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n);
 /* The Lexbor node behind any wrapper, or NULL if `v` is not one. */
 lxb_dom_node_t *node_of(JSValueConst v);
-/* The members every node kind carries (tree accessors, appendChild/removeChild, textContent), installed on a
-   wrapper by whichever component builds it. */
-void node_install_base(JSContext *ctx, JSValueConst obj);
+/* Node.prototype — the base a derived DOM interface inherits from, borrowed. */
+JSValueConst node_proto(void);
+/* A derived interface claims the node type(s) it is the interface OF: element.c claims ELEMENT with the
+   Element.prototype it built on top of node_proto(). `proto` is CONSUMED — the table owns what it holds, and
+   claiming a type twice is a DCHECK because one of the two would silently lose. This is what keeps node_wrap
+   the ONE place a wrapper is built: two builders is two identity tables, which is no identity at all. */
+void node_set_proto(JSContext *ctx, int node_type, JSValue proto);
 /* The class id every node wrapper shares — components that need JS_NewObjectClass for one. */
 JSClassID node_class_id(void);
-/* element.c registers how an Element wrapper is furnished, and what to do with a node once it is inserted (a
-   <script> is PREPARED per HTML 4.12.1). node_wrap stays the ONE place a wrapper is built — two builders is two
-   identity tables, which is no identity at all. */
-void node_set_element_installer(void (*fn)(JSContext *ctx, JSValueConst obj));
+/* What to do with a node once it is inserted (a <script> is PREPARED per HTML 4.12.1) — element.c's rule, asked
+   for here so the base does not have to know what a script is. */
 void node_set_inserted_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n));
 
 #endif

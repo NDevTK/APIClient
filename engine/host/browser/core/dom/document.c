@@ -21,6 +21,10 @@
 #include "core/events/event_target.h"
 #include "core/dom/document.h"
 #include "core/idl_args.h"
+
+/* Every member here takes DOMStrings; createElementNS takes two. Declared, not masked. */
+static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
+static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
 #include "core/dom/node.h"
 #include <lexbor/css/css.h>
 #include <lexbor/selectors/selectors.h>
@@ -394,14 +398,14 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        with a partial matcher would return the wrong element silently, which is worse than the throw that names
        what to build. */
     idl_install_method(ctx, doc, "getElementById", 1,
-                       idl_string_method_id(ctx, 0x1, js_doc_get_element_by_id, 0));
-    idl_install_method(ctx, doc, "querySelector", 1, idl_string_method_id(ctx, 0x1, js_doc_query_selector, 0));
-    idl_install_method(ctx, doc, "querySelectorAll", 1, idl_string_method_id(ctx, 0x1, js_doc_query_selector_all, 0));
-    idl_install_method(ctx, doc, "getElementsByTagName", 1, idl_string_method_id(ctx, 0x1, js_doc_get_elements_by_tag_name, 0));
-    idl_install_method(ctx, doc, "createElement", 1, idl_string_method_id(ctx, 0x1, js_doc_create_element, 0));
-    idl_install_method(ctx, doc, "createTextNode", 1, idl_string_method_id(ctx, 0x1, js_doc_create_text, 0));
-    idl_install_method(ctx, doc, "createComment", 1, idl_string_method_id(ctx, 0x1, js_doc_create_comment, 0));
-    idl_install_method(ctx, doc, "createElementNS", 2, idl_string_method_id(ctx, 0x3, js_doc_create_element_ns, 0));
+                       idl_method_id(ctx, IDL_1STR, 1, js_doc_get_element_by_id, 0));
+    idl_install_method(ctx, doc, "querySelector", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_query_selector, 0));
+    idl_install_method(ctx, doc, "querySelectorAll", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_query_selector_all, 0));
+    idl_install_method(ctx, doc, "getElementsByTagName", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_get_elements_by_tag_name, 0));
+    idl_install_method(ctx, doc, "createElement", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_element, 0));
+    idl_install_method(ctx, doc, "createTextNode", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_text, 0));
+    idl_install_method(ctx, doc, "createComment", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_comment, 0));
+    idl_install_method(ctx, doc, "createElementNS", 2, idl_method_id(ctx, IDL_2STR, 2, js_doc_create_element_ns, 0));
     element_doc_set(dom);
 
     /* 3.1.1 documentElement / body / head — the three tree entry points every page starts from. Lexbor has
@@ -424,7 +428,24 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     JS_SetPropertyStr(ctx, doc, "readyState", JS_NewString(ctx, "loading"));
 
     JS_SetPropertyStr(ctx, (JSValue)global, "document", JS_DupValue(ctx, doc));
-    g_doc_obj = doc;                                  /* owned by the global; borrowed here for the lifecycle */
+    /* HELD, not borrowed: `doc` is this function's own reference and the global got a DUP of it, so the
+       component owns one of the two and document_free is what releases it. The comment here used to say
+       "borrowed", and a reference nobody released kept the Document — and through it the wrapped tree and the
+       window — alive: JS_FreeRuntime's gc_obj_list walk counted 751 surviving objects, one per object in the
+       page, from these two lines. */
+    g_doc_obj = doc;
     g_win_obj = JS_DupValue(ctx, global);
     engine_set_document_done_hook(document_done_stage);
+}
+
+/* THE DOCUMENT'S LIFECYCLE REFERENCES. Both are HELD across the lifecycle — `DOMContentLoaded` fires at the
+   Document and `load` at the window long after install returns — and a held reference to either keeps the whole
+   object graph alive. With no release, JS_FreeRuntime's gc_obj_list walk reported 751 surviving objects, which
+   is the entire page counted one object at a time. A component that holds a reference owns releasing it. */
+void document_free(JSContext *ctx)
+{
+    JS_FreeValue(ctx, g_win_obj);
+    JS_FreeValue(ctx, g_doc_obj);
+    g_win_obj = g_doc_obj = JS_UNDEFINED;
+    g_doc = NULL;
 }
