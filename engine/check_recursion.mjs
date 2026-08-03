@@ -203,9 +203,17 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
 
    THE QUEUE, each named by the edge that holds it:
       25  free_object -> free_property -> JS_FreeValueRT -> free_zero_refcount -> free_gc_object -> free_object.
-          The refcount teardown cascade, and its depth is the PAGE's: `for (;;) a = {next: a}` then drop it is
-          one C frame per link. It needs an explicit free worklist, which is the same shape as every other
-          flattening in this file.
+          THIS ONE IS ALREADY FLAT, and saying so is a measurement rather than a reading of the code. The
+          cascade IS an explicit worklist: a dying object's properties are released with gc_phase set to
+          DECREF, so js_free_value_rt only appends to gc_zero_ref_count_list and the outer loop drains it.
+          `for (;;) a = {next: a}` then dropped is one iteration per link and no C frames at all. A static walk
+          cannot see a phase flag, so the cycle is reported; free_zero_refcount now DCHECKs that it is never
+          re-entered, and that assert is silent over the whole corpus, which is what makes the claim measured.
+          What would remove the reported cycle is splitting the drain from the enqueue — a JS_FreeValueRT that
+          drains and a variant the cascade's own internals use that only enqueues — so nothing free_object
+          reaches can call the loop. That is a wide edit across every release inside teardown, and it buys a
+          number rather than a behaviour, so it is recorded here rather than done ahead of work that changes
+          what the engine can do.
        6  the tramp step-chain teardown (tramp_step_chain_free / the abandon hooks)
        4  JS_GetPropertyInternal -> JS_GetPropertyUint32, the fast-array arm reached through the general read
        4  JS_DefineProperty -> JS_SetPropertyValue -> JS_SetPropertyInternal
