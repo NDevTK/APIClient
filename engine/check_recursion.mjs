@@ -227,7 +227,8 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
           chain is detached before it is freed, so each link's release finds no delegate and the pair bottoms
           out at one level. The cycle remains because a static walk cannot see the detach, like
           free_zero_refcount's phase flag.
-       4  JS_GetPropertyInternal -> JS_GetPropertyUint32, the fast-array arm reached through the general read
+       (the fast-array read cycle is gone: JS_GetPropertyInternal reads the element itself instead of reaching
+          it back through the general indexed entry)
        4  JS_DefineProperty -> JS_SetPropertyValue -> JS_SetPropertyInternal
        4  js_new_string_rope <-> js_rebalance_string_rope. What this WAS is the rebalance's tree walk, a
           recursion over a structure the PAGE sizes — `s = s + x` in a loop adds a rope level per iteration —
@@ -237,7 +238,7 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
           out of buckets are balanced, so the depth never reaches the rebalance point again.
        3  lre_case_conv, 2+2, and eleven single-function recursions. */
 const CEILING_BLOB = 16      /* the interpreter cycle's size */
-const CEILING_OWN = 20       /* self-contained recursions */
+const CEILING_OWN = 19       /* self-contained recursions */
 /* 70 -> 65, the parser cycle 29 -> 24, as js_parse_descent's explicit frame stack absorbed the precedence
    ladder (expr_binary / logical_and_or / coalesce_expr / cond_expr) and then UnaryExpression (unary / delete).
    BE PRECISE ABOUT WHICH HALF PAID. The ladder was never deep: `a|b|c` is left-nested and the recursive version
@@ -341,7 +342,7 @@ const CEILING_OWN = 20       /* self-contained recursions */
    churn dressed as progress, and the audit counting it is the audit being honest about direct calls rather
    than a debt. The same is true of rope DEPTH generally: JS_STRING_ROPE_MAX_DEPTH is 60 with a flatten above
    it, so no rope walk was ever input-deep. */
-const CEILING_OWN_FUNCS = 56 /* functions in them — the largest is 25, the refcount teardown cascade */
+const CEILING_OWN_FUNCS = 52 /* functions in them — the largest is 25, the refcount teardown cascade */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
