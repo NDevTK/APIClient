@@ -217,7 +217,13 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
        6  the tramp step-chain teardown (tramp_step_chain_free / the abandon hooks)
        4  JS_GetPropertyInternal -> JS_GetPropertyUint32, the fast-array arm reached through the general read
        4  JS_DefineProperty -> JS_SetPropertyValue -> JS_SetPropertyInternal
-       3  lre_case_conv, 3 the rope rebalance, 2+2, and eleven single-function recursions. */
+       4  js_new_string_rope <-> js_rebalance_string_rope. What this WAS is the rebalance's tree walk, a
+          recursion over a structure the PAGE sizes — `s = s + x` in a loop adds a rope level per iteration —
+          and it is gone: the walk uses the flat leaf iterator that already existed for hash_string_rope. What
+          is left is the mutual pair, and it is bounded by construction rather than by a check: the leaf step
+          builds bucket concatenations, building a rope is what can ask for a rebalance, and the ropes built
+          out of buckets are balanced, so the depth never reaches the rebalance point again.
+       3  lre_case_conv, 2+2, and eleven single-function recursions. */
 const CEILING_BLOB = 16      /* the interpreter cycle's size */
 const CEILING_OWN = 22       /* self-contained recursions */
 /* 70 -> 65, the parser cycle 29 -> 24, as js_parse_descent's explicit frame stack absorbed the precedence
