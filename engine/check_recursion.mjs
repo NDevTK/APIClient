@@ -179,14 +179,28 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
      - Error.stackTraceLimit is read as a Number, as V8 defines it, rather than coerced through the page's
        valueOf; a CallSite comes from the realm's intrinsic rather than OrdinaryCreateFromConstructor's
        `prototype` read; `message` and a DOMException's `stack` are own-slot adds rather than defines.
-   204 -> 78 functions. What is left is small and legible, which is the whole point of taking a blob apart —
-   every one of these was inside it and none could be named:
-      29  js_malloc -> JS_ThrowOutOfMemory -> JS_Throw -> free the old exception -> JS_EnqueueJob -> js_malloc
-      12  JS_ToCStringLen2 -> js_force_tostring -> JS_GetProperty -> JS_GetPropertyInternal -> ... -> ToNumber
+   204 -> 67 functions. What is left is small and legible, which is the whole point of taking a blob apart —
+   every one of these was inside it and none could be named.
+
+   TWO MORE WENT THE SAME WAY, and they are the same defect a third and fourth time: a general operation asked
+   a question whose answer the caller already had.
+      12  ToNumber of a STRING reached ToString. Its string arm called JS_ToCStringLen, whose first act is
+          js_force_tostring — which for a non-string reads a `message` property — so converting "1" to a number
+          statically reached the whole property machinery, which reaches ToNumber. It encodes instead, and
+          linearizes a rope first because the encoder wants a flat string and says so.
+       4  LINEARIZING a rope reached ToString, which linearizes. string_buffer_concat_value coerces because
+          most of its callers hand it arbitrary values; the rope walk hands it strings and ropes by
+          construction. Split, and the walk itself is no longer recursive either — it uses the flat rope
+          ITERATOR that already existed for hash_string_rope, rather than a third traversal of the same tree.
+
+   THE QUEUE, each named by the edge that holds it:
+      29  js_malloc -> JS_ThrowOutOfMemory -> JS_Throw -> free the old exception -> JS_EnqueueJob -> js_malloc.
+          Throwing frees the previous exception, freeing can enqueue a FinalizationRegistry job, and enqueueing
+          allocates. V8 posts finalization callbacks from the GC epilogue, not from object teardown.
        6  the tramp step-chain teardown (tramp_step_chain_free / the abandon hooks)
-       4  JS_ToString -> js_linearize_string_rope -> string_buffer_concat_value
+       4  JS_GetPropertyInternal -> JS_GetPropertyUint32, the fast-array arm reached through the general read
        4  JS_DefineProperty -> JS_SetPropertyValue -> JS_SetPropertyInternal
-       3  lre_case_conv, 3 the rope rebalance, 2+2, and twelve single-function recursions. */
+       3  lre_case_conv, 3 the rope rebalance, 2+2, and eleven single-function recursions. */
 const CEILING_BLOB = 16      /* the interpreter cycle's size */
 const CEILING_OWN = 22       /* self-contained recursions */
 /* 70 -> 65, the parser cycle 29 -> 24, as js_parse_descent's explicit frame stack absorbed the precedence
@@ -292,7 +306,7 @@ const CEILING_OWN = 22       /* self-contained recursions */
    churn dressed as progress, and the audit counting it is the audit being honest about direct calls rather
    than a debt. The same is true of rope DEPTH generally: JS_STRING_ROPE_MAX_DEPTH is 60 with a flatten above
    it, so no rope walk was ever input-deep. */
-const CEILING_OWN_FUNCS = 78 /* functions in them — the largest is 29, the free/OOM/enqueue cycle */
+const CEILING_OWN_FUNCS = 67 /* functions in them — the largest is 29, the free/OOM/enqueue cycle */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
