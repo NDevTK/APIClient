@@ -32,7 +32,8 @@ const BROWSER = join(HERE, "host", "browser");
 // event_target.c — and scanning only one of them reported every member the others install as ABSENT, which is
 // the audit lying in the direction that gets a real gap ignored.
 const INTERFACES = {
-  AbortSignal:          "core/dom/abort.c",
+  EventTarget:          "core/events/event_target.c",
+  AbortSignal:         ["core/dom/abort.c", "core/events/event_target.c"],
   AbortController:      "core/dom/abort.c",
   IntersectionObserver: "core/intersection_observer/intersection_observer.c",
   MutationObserver:     "core/dom/mutation_observer.c",

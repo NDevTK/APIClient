@@ -21,6 +21,9 @@ bool    event_stop_immediate(JSContext *ctx, JSValueConst ev);  /* the stop-imme
 /* §2.9 "dispatch" sets these on the event as it walks: the target it was dispatched at, and the object whose
    listeners are running right now. */
 void    event_set_targets(JSContext *ctx, JSValueConst ev, JSValueConst target, JSValueConst current);
+/* §2.9 step 3 and "clean up": an event the page dispatches is untrusted, and the walk leaves no current target. */
+void    event_set_trusted(JSContext *ctx, JSValueConst ev, bool trusted);
+void    event_clear_current(JSContext *ctx, JSValueConst ev);
 /* §2.9: an event that has been dispatched cannot be re-dispatched while in flight. */
 bool    event_dispatch_flag(JSContext *ctx, JSValueConst ev);
 void    event_set_dispatch_flag(JSContext *ctx, JSValueConst ev, bool on);

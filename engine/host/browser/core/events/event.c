@@ -105,6 +105,23 @@ void event_set_dispatch_flag(JSContext *ctx, JSValueConst ev, bool on)
     event_write_flag(ctx, ev, "dispatch", on);
 }
 
+/* §2.9 step 3: an event the PAGE dispatches is not trusted, whatever it was when it was constructed. */
+void event_set_trusted(JSContext *ctx, JSValueConst ev, bool trusted)
+{
+    event_write_flag(ctx, ev, "isTrusted", trusted);
+}
+
+/* §2.9 "clean up": the walk is over, so there is no current target and no phase. `target` STAYS — a page reads
+   it after dispatchEvent returns, which is the difference between the two. */
+void event_clear_current(JSContext *ctx, JSValueConst ev)
+{
+    JSValue slots = event_slots(ctx, ev);
+    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return; }
+    JS_SetPropertyStr(ctx, slots, "currentTarget", JS_NULL);
+    JS_SetPropertyStr(ctx, slots, "eventPhase", JS_NewInt32(ctx, 0));
+    JS_FreeValue(ctx, slots);
+}
+
 void event_set_targets(JSContext *ctx, JSValueConst ev, JSValueConst target, JSValueConst current)
 {
     JSValue slots = event_slots(ctx, ev);

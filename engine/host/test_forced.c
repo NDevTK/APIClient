@@ -229,6 +229,23 @@ static const char *HTML =
        shared no-op over a public property the page could simply assign. */
     "ev.preventDefault();"
     "fetch('/api/evcancel?v=' + (ev.defaultPrevented && ev.returnValue === false ? 'iscancel' : 'wrong'));"
+    /* §2.9 DISPATCH — SYNCHRONOUS, and its answer depends on what the listeners did. The first listener holds a
+       LOOP, so the walk suspends inside it and resumes at the listener it was on; the second calls
+       preventDefault, which is what dispatchEvent's false return reports. A job-enqueued dispatch would answer
+       true here because nothing would have run yet. */
+    "var dt = document.createElement('button'); var dhit = 0;"
+    "dt.addEventListener('go', function(e){ var n = 0; for (var i = 0; i < 400; i++) { n += i; } dhit = n; });"
+    "dt.addEventListener('go', function(e){ e.preventDefault(); });"
+    "var dev = new Event('go', { cancelable: true });"
+    "var dres = dt.dispatchEvent(dev);"
+    "fetch('/api/dispatch?v=' + (dres === false && dhit === 79800 && dev.defaultPrevented &&"
+    " dev.target === dt && dev.currentTarget === null && dev.eventPhase === 0 ? 'isdispatch' : 'wrong'));"
+    /* stopImmediatePropagation ends the walk BETWEEN listeners, which is the only place it is observable. */
+    "var st2 = document.createElement('b'); var sthit = 0;"
+    "st2.addEventListener('s', function(e){ sthit += 1; e.stopImmediatePropagation(); });"
+    "st2.addEventListener('s', function(e){ sthit += 10; });"
+    "st2.dispatchEvent(new Event('s'));"
+    "fetch('/api/stopimmediate?v=' + (sthit === 1 ? 'isstop' : 'wrong'));"
     "if (cfg.admin) { setBodyAttr('data-tt','ttADMIN'); appendChild('kidADMIN'); rx.flag='flagADMIN'; fetch('/api/data?role=admin'); loadScript('/chunk/admin.js'); } else { setBodyAttr('data-tt','ttPUBLIC'); appendChild('kidPUBLIC'); rx.flag='flagPUBLIC'; fetch('/api/data?role=public'); }"   /* admin arm: same endpoint MERGES + a LAZY CHUNK loads. Each arm ALSO writes an attribute, appends a child node, AND assigns the ACCESSOR rx.flag (invokes the setter -> rx._f) -> per-flow DOM + heap-accessor writes across the EXISTING fork. */
     "fetch('/api/whoami?tt=' + getBodyAttr('data-tt'));"   /* DOM ATTR READ-BACK after the fork: per-flow -> admin flow reads ttADMIN, public flow reads ttPUBLIC */
     "fetch('/api/kid?mark=' + lastChildMark());"   /* DOM NODE READ-BACK: each flow's appended child is its OWN last child -> admin reads kidADMIN, public reads kidPUBLIC (neither's inserted node leaks) */
@@ -569,6 +586,8 @@ int main(void) {
         { "\"/api/iface\"",       "isiface" },   /* instanceof up the chain + inherited interface constants */
         { "\"/api/event\"",       "isevent" },   /* new Event(type, EventInit) with a dictionary getter */
         { "\"/api/evcancel\"",    "iscancel"},   /* preventDefault over the canceled slot */
+        { "\"/api/dispatch\"",    "isdispatch"},/* §2.9 synchronous dispatch, suspended inside a listener */
+        { "\"/api/stopimmediate\"", "isstop" },
     };
     int nodealgo_tt = !strstr(js, "wrong");
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)
