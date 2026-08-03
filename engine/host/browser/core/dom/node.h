@@ -34,5 +34,8 @@ JSClassID node_class_id(void);
 /* What to do with a node once it is inserted (a <script> is PREPARED per HTML 4.12.1) — element.c's rule, asked
    for here so the base does not have to know what a script is. */
 void node_set_inserted_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n));
+/* An ELEMENT's interface is decided by its TAG — HTML's element-interface table, which is the html layer's
+   knowledge. It registers the answer here; node_wrap asks it and stays the one place a wrapper is built. */
+void node_set_element_resolver(JSValueConst (*fn)(lxb_dom_element_t *el));
 
 #endif

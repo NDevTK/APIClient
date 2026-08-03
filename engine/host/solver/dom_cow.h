@@ -28,6 +28,8 @@ void dom_cow_set_ctx(JSContext *ctx);
    API on top of Lexbor and funnel every write through here — enforced structurally by poisoning the raw
    lxb_dom_* mutators in the component build. */
 void dom_cow_set_attribute(lxb_dom_element_t *el, const char *name, const char *val, size_t val_len);
+/* the attribute setter's twin — removeAttribute, and what a boolean reflection does when set to false. */
+void dom_cow_remove_attribute(lxb_dom_element_t *el, const char *name);
 /* node-insert chokepoint — the tree-structure twin of dom_cow_set_attribute: capture the insertion THEN attach
    the child, so a subtree a flow appends reverts per-flow (detached on context-switch, re-attached on resume). */
 void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child);

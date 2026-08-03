@@ -138,6 +138,13 @@ static JSValue js_node_remove_child(JSContext *ctx, JSValueConst this_val, int a
 
 /* A newly inserted <script> is PREPARED (HTML 4.12.1) by the element component, which owns that rule; the base
    asks for it through this hook so node.c does not have to know what a script is. */
+/* AN ELEMENT'S INTERFACE IS KEYED BY ITS TAG, which is HTML's mapping and not the DOM's — this table is keyed
+   by node TYPE and cannot answer it. So the html layer registers the answer and node_wrap ASKS, which keeps it
+   the ONE place a wrapper is built. Not a fallback and nothing to select against: there is exactly one answer
+   per element, and an element wrapped before the resolver exists is a DCHECK, not a degraded path. */
+static JSValueConst (*g_element_resolver)(lxb_dom_element_t *el);
+void node_set_element_resolver(JSValueConst (*fn)(lxb_dom_element_t *el)) { g_element_resolver = fn; }
+
 static void (*g_inserted_hook)(JSContext *ctx, lxb_dom_node_t *n);
 void node_set_inserted_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n)) { g_inserted_hook = fn; }
 
@@ -816,10 +823,13 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
     DCHECK(g_protos_ready, "a node was wrapped before the DOM interfaces existed");
     DCHECK((int)n->type > 0 && (int)n->type < LXB_DOM_NODE_TYPE_LAST_ENTRY,
            "a Lexbor node carries a type the DOM does not define");
-    DCHECK(n->type != LXB_DOM_NODE_TYPE_ELEMENT ||
-           JS_VALUE_GET_PTR(g_protos[n->type]) != JS_VALUE_GET_PTR(g_node_proto),
-           "an Element node was wrapped before element.c registered Element.prototype");
-    obj = JS_NewObjectProtoClass(ctx, g_protos[n->type], g_node_class);
+    DCHECK(n->type != LXB_DOM_NODE_TYPE_ELEMENT || g_element_resolver != NULL,
+           "an Element node was wrapped before the HTML layer registered its interface resolver");
+    obj = JS_NewObjectProtoClass(ctx,
+              (n->type == LXB_DOM_NODE_TYPE_ELEMENT && g_element_resolver)
+                  ? g_element_resolver(lxb_dom_interface_element(n))
+                  : g_protos[n->type],
+              g_node_class);
     if (JS_IsException(obj))
         return obj;
     JS_SetOpaque(obj, n);

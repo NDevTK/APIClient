@@ -11,6 +11,8 @@ void event_install(JSContext *ctx, JSValueConst global);
 /* Mint an event the ENGINE fires (`load`, `abort`, `DOMContentLoaded`). isTrusted is true for these, which is
    exactly the difference from one the page constructs. Returns a new owned Event. */
 JSValue event_new(JSContext *ctx, const char *type, bool bubbles, bool cancelable);
+/* The same, isTrusted FALSE — a synthetic event the PAGE caused (§3.2.2's click()). */
+JSValue event_new_untrusted(JSContext *ctx, const char *type, bool bubbles, bool cancelable);
 
 /* The internal slots §2.2's algorithms read. NULL/false for anything that is not an Event, which is the brand
    check dispatchEvent performs — the slots live under a private Symbol, so a page cannot forge one. */

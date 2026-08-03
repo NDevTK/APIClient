@@ -107,6 +107,14 @@ void dom_cow_set_attribute(lxb_dom_element_t *el, const char *name, const char *
     dom_attr_capture(el, name);   /* record baseline into the running flow's delta FIRST (no-op if !g_dom_capture) */
     lxb_dom_element_set_attribute(el, (const lxb_char_t *)name, strlen(name), (const lxb_char_t *)val, val_len);
 }
+/* Remove an ATTRIBUTE the baseline may own — the fourth thing a flow can change about the tree, and the one
+   that had no chokepoint, so a boolean reflection (`el.hidden = false`, `script.async = false`) had no way to
+   unset itself without going around the per-flow delta. Same capture-then-mutate order as the setter. */
+void dom_cow_remove_attribute(lxb_dom_element_t *el, const char *name) {
+    dom_attr_capture(el, name);
+    lxb_dom_element_remove_attribute(el, (const lxb_char_t *)name, strlen(name));
+}
+
 /* Remove a node that the baseline may own. Capture its position FIRST, then detach — the same order the
    attribute and insert chokepoints use, so a removal cannot bypass the per-flow delta either. */
 void dom_cow_remove_child(lxb_dom_node_t *node) {

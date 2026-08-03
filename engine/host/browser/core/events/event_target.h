@@ -18,6 +18,9 @@ void event_target_install(JSContext *ctx, JSValueConst target);
 /* HTML §8.1.7.2 EVENT HANDLER IDL ATTRIBUTES — `onclick`, `onload`, `onabort`. Which set a target carries is
    which MIXIN its IDL includes, so the caller names the mixin rather than the members. */
 enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8 };
+/* HTML §3.2.2 click() — "fire a synthetic pointer event named click", which IS §2.9 dispatch, so it is the same
+   machine under a second entry rather than a second implementation of it. */
+void event_target_install_click(JSContext *ctx, JSValueConst target);
 void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask);
 /* Fire `type` at `target` (bubbling to `bubble_to` when non-undefined, which is how a document event reaches
    window). Each listener runs as its own task on the RUNNING flow. Returns how many were scheduled. */

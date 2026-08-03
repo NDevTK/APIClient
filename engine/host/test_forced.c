@@ -262,6 +262,33 @@ static const char *HTML =
     "globalThis.onerror = function(){ }; document.onreadystatechange = function(){ };"
     "fetch('/api/onglobal?v=' + (typeof globalThis.onerror === 'function' &&"
     " typeof document.onreadystatechange === 'function' && globalThis.onload === null ? 'isglobal' : 'wrong'));"
+    /* HTML §4's ELEMENT-INTERFACE TABLE. The tag decides the interface, and the reflections belong to the
+       interface that DECLARES them — `src` used to be on every element and `form.action` did not exist. */
+    "var ia = document.createElement('a'); var isc = document.createElement('script');"
+    "var ifo = document.createElement('form'); var iin = document.createElement('input');"
+    "var idv = document.createElement('div'); var ixx = document.createElement('blink');"
+    "fetch('/api/iface2?v=' + (ia instanceof HTMLAnchorElement && ia instanceof HTMLElement &&"
+    " ia instanceof Element && ia instanceof Node && idv instanceof HTMLDivElement &&"
+    " !(idv instanceof HTMLAnchorElement) && ixx instanceof HTMLUnknownElement ? 'isiface2' : 'wrong'));"
+    /* The reflections are on their own interfaces now: a link has href, a div does not, and a div carrying an
+       `src` property would be the old flat table answering for an attribute its IDL never declared. */
+    "ia.href = '/api/reflected?v=isreflect'; ifo.action = '/api/formaction'; iin.name = 'q';"
+    "isc.src = '/chunk/iface.js';"
+    "fetch(ia.href);"
+    "fetch('/api/reflect2?v=' + (ifo.getAttribute('action') === '/api/formaction' && iin.name === 'q' &&"
+    " isc.getAttribute('src') === '/chunk/iface.js' && idv.href === undefined && idv.src === undefined"
+    " ? 'isreflect2' : 'wrong'));"
+    /* A BOOLEAN reflection is the attribute's PRESENCE, and it must be able to UNSET — which needs
+       removeAttribute, which had no implementation at all. */
+    "isc.async = true; iin.disabled = true; iin.disabled = false;"
+    "fetch('/api/reflectbool?v=' + (isc.async === true && isc.getAttribute('async') === '' &&"
+    " iin.disabled === false && iin.hasAttribute('disabled') === false ? 'isbool' : 'wrong'));"
+    /* §3.2.2 click() is "fire a synthetic pointer event named click" — the SAME dispatch, so a handler wired
+       with onclick sees an untrusted, cancelable, bubbling event and preventDefault reaches the caller. */
+    "var ck = 0; var ckt = null; idv.onclick = function(e){ ck++; ckt = e; e.preventDefault(); };"
+    "idv.click();"
+    "fetch('/api/click?v=' + (ck === 1 && ckt.type === 'click' && ckt.isTrusted === false &&"
+    " ckt.bubbles && ckt.cancelable && ckt.defaultPrevented && ckt.target === idv ? 'isclick' : 'wrong'));"
     "if (cfg.admin) { setBodyAttr('data-tt','ttADMIN'); appendChild('kidADMIN'); rx.flag='flagADMIN'; fetch('/api/data?role=admin'); loadScript('/chunk/admin.js'); } else { setBodyAttr('data-tt','ttPUBLIC'); appendChild('kidPUBLIC'); rx.flag='flagPUBLIC'; fetch('/api/data?role=public'); }"   /* admin arm: same endpoint MERGES + a LAZY CHUNK loads. Each arm ALSO writes an attribute, appends a child node, AND assigns the ACCESSOR rx.flag (invokes the setter -> rx._f) -> per-flow DOM + heap-accessor writes across the EXISTING fork. */
     "fetch('/api/whoami?tt=' + getBodyAttr('data-tt'));"   /* DOM ATTR READ-BACK after the fork: per-flow -> admin flow reads ttADMIN, public flow reads ttPUBLIC */
     "fetch('/api/kid?mark=' + lastChildMark());"   /* DOM NODE READ-BACK: each flow's appended child is its OWN last child -> admin reads kidADMIN, public reads kidPUBLIC (neither's inserted node leaks) */
@@ -610,6 +637,11 @@ int main(void) {
         { "\"/api/handler\"",     "ishandler"},  /* §8.1.7 the handler slot keeps its position */
         { "\"/api/handlernull\"", "isnull"  },
         { "\"/api/onglobal\"",    "isglobal"},   /* the mixins land on window and Document too */
+        { "\"/api/iface2\"",     "isiface2"},   /* HTML's element-interface table, up the whole chain */
+        { "\"/api/reflected\"",  "isreflect"},  /* a.href really is the href attribute */
+        { "\"/api/reflect2\"",   "isreflect2"},
+        { "\"/api/reflectbool\"","isbool"  },   /* presence-based booleans, and removeAttribute */
+        { "\"/api/click\"",      "isclick" },   /* §3.2.2 click() through the one dispatch machine */
     };
     int nodealgo_tt = !strstr(js, "wrong");
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)

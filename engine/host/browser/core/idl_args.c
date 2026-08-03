@@ -28,7 +28,10 @@
 #include "solver/concolic.h"
 #include "core/idl_args.h"
 
-#define IDL_MAX_MEMBERS 64
+/* Sized for the WHOLE platform surface, because every reflected content attribute is a declaration: HTML's
+   per-tag interfaces contribute about 190 between them, each with its own setter. The pool is static because
+   JS_RegisterStepDef BORROWS the definition, so it must outlive the runtime. */
+#define IDL_MAX_MEMBERS 384
 #define IDL_MAX_ARGS     8
 
 typedef struct {
@@ -242,8 +245,9 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
            "an IDL member was installed into a second runtime — its step ids belong to the first, and one WASM "
            "instance is one document");
     CHECK(g_n < IDL_MAX_MEMBERS,
-          "the IDL member pool is full — a member is being DECLARED more than once (Element installs its "
-          "members on every wrapper; declare in the component's init and install from the cached id)");
+          "the IDL member pool is full — either raise IDL_MAX_MEMBERS for a genuinely larger surface, or a "
+          "member is being DECLARED more than once (declare in the component's init, install from the cached "
+          "id; a per-wrapper install mints a definition per object)");
     g_rt = rt;
     idx = g_n++;
     CHECK(nargs >= 1 && nargs <= IDL_MAX_DECLARED,

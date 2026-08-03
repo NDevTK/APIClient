@@ -31,6 +31,11 @@ const BROWSER = join(HERE, "host", "browser");
 // its members are installed by window.c (browsing context), document.c, location.c, fetch.c and
 // event_target.c — and scanning only one of them reported every member the others install as ABSENT, which is
 // the audit lying in the direction that gets a real gap ignored.
+/* Every HTML interface is built on the same four files: its own table in html_element.c, the reflection and
+   attribute machinery in element.c, the Node base, and EventTarget. */
+const HTML_BASE = ["core/html/html_element.c", "core/dom/element.c", "core/dom/node.c",
+                   "core/events/event_target.c"];
+
 const INTERFACES = {
   EventTarget:          "core/events/event_target.c",
   AbortSignal:         ["core/dom/abort.c", "core/events/event_target.c"],
@@ -61,6 +66,21 @@ const INTERFACES = {
      in the direction that gets a real gap ignored. Document is listed the same way for the same reason — it is
      a node_wrap of the document node now, with Document.prototype chained to Node.prototype. */
   Element:             ["core/dom/element.c", "core/dom/node.c", "core/events/event_target.c"],
+  /* The HTML layer. Each interface's files are its own plus everything it INHERITS from — HTMLElement on
+     Element on Node — because a member installed on a base really is reachable, and reporting it absent is the
+     audit lying in the direction that gets a real gap ignored. */
+  HTMLElement:         [...HTML_BASE],
+  HTMLUnknownElement:  [...HTML_BASE],
+  HTMLAnchorElement:   [...HTML_BASE],
+  HTMLScriptElement:   [...HTML_BASE],
+  HTMLImageElement:    [...HTML_BASE],
+  HTMLIFrameElement:   [...HTML_BASE],
+  HTMLFormElement:     [...HTML_BASE],
+  HTMLInputElement:    [...HTML_BASE],
+  HTMLButtonElement:   [...HTML_BASE],
+  HTMLLinkElement:     [...HTML_BASE],
+  HTMLMetaElement:     [...HTML_BASE],
+  HTMLDivElement:      [...HTML_BASE],
   Document:            ["core/dom/document.c", "core/dom/node.c", "core/events/event_target.c"],
 };
 
@@ -102,6 +122,11 @@ function members(name) {
 }
 
 let totalMissing = 0;
+/* The DISTINCT names, because the per-interface counts legitimately repeat an inherited gap: HTMLElement's
+   getBoundingClientRect is absent on every one of the twelve HTML interfaces that inherit it, and one
+   implementation fixes all twelve. The per-interface list stays exact — it is what that interface's IDL says —
+   and the headline says how many things there are to BUILD. */
+const distinct = new Set();
 for (const [iface, where] of Object.entries(INTERFACES)) {
   const paths = Array.isArray(where) ? where : [where];
   const file = paths.join(" + ");
@@ -129,6 +154,8 @@ for (const [iface, where] of Object.entries(INTERFACES)) {
   const absent = members(iface).filter((n) => !installed.has(n));
   const noop = members(iface).filter((n) => stubbed.has(n));
   totalMissing += absent.length + noop.length;
+  for (const n of absent) distinct.add(n);
+  for (const n of noop) distinct.add(n);
   const parts = [];
   if (absent.length) parts.push(`ABSENT ${absent.length} — ${absent.join(", ")}`);
   if (noop.length) parts.push(`js_noop-STUB ${noop.length} — ${noop.join(", ")}`);
@@ -136,7 +163,9 @@ for (const [iface, where] of Object.entries(INTERFACES)) {
   if (parts.length) console.log(`[idl-audit] ${iface} (${file}): ${parts.join(" | ")}`);
   else console.log(`[idl-audit] ${iface}: complete`);
 }
-if (totalMissing) console.log(`[idl-audit] ${totalMissing} spec members not yet implemented — implement each at the root (never a stub).`);
+if (totalMissing)
+  console.log(`[idl-audit] ${distinct.size} distinct spec members not yet implemented (${totalMissing} across ` +
+              `all interfaces, since an inherited gap is absent on each) — implement each at the root, never a stub.`);
 
 /* ---------------------------------------------------------------------------------------------------------
  * THE PLATFORM SURFACE — every global name a browser exposes on Window, straight out of the IDL.

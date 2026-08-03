@@ -179,6 +179,16 @@ JSValue event_new(JSContext *ctx, const char *type, bool bubbles, bool cancelabl
     return ev;
 }
 
+/* The same event with isTrusted FALSE — §3.2.2's synthetic click, which the spec says is untrusted because the
+   page and not the user caused it, and which a page checks before acting on one. */
+JSValue event_new_untrusted(JSContext *ctx, const char *type, bool bubbles, bool cancelable)
+{
+    JSValue t = JS_NewString(ctx, type);
+    JSValue ev = event_make(ctx, t, bubbles, cancelable, false, /*trusted*/ false);
+    JS_FreeValue(ctx, t);
+    return ev;
+}
+
 /* §2.2 the read-only attributes, every one over a SLOT rather than over a property the page can assign.
    magic indexes SLOT_NAME. */
 static const char *const SLOT_NAME[] = {

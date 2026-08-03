@@ -18,6 +18,12 @@ engine/.work/llvm-mingw-extract/
 engine/.work/llvm-mingw.zip
 engine/.work/lxobj/
 engine/.work/lxobj_clang/
+# The emscripten lexbor build products. Every sibling artifact here was already ignored; these two were not,
+# and a COMMITTED liblexbor.o is a live trap: a container that provisions a different emcc links its fresh
+# headers against a stale archive and the engine takes a "memory access out of bounds" with nothing in the
+# source to explain it. build.mjs compiles it when missing, which is the only correct source for it.
+engine/.work/liblexbor.o
+engine/.work/lexbor.rsp
 engine/.work/liblexbor_asan.a
 engine/.work/liblexbor_clang.a
 engine/.work/test_asan.exe

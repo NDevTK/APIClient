@@ -423,6 +423,8 @@ static int fire_at(JSContext *ctx, JSValueConst target, const char *type, JSValu
  *
  * THE LIST IS SNAPSHOT FIRST, which the spec requires and which matters here more than in a browser: a listener
  * that runs mid-walk can add or remove listeners, and this walk is suspended across every one of them. */
+enum { DISPATCH_ARG = 0, CLICK_SYNTH = 1 };
+
 typedef struct JSDispatchState {
     JSStepHdr hdr;       /* FIRST — the driver writes the def and the operand bounds through it */
     uint8_t   stage;
@@ -479,7 +481,13 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         cb_result = JS_UNDEFINED;
         s->arr = s->ev = s->result = JS_UNDEFINED;
         s->cb[0] = s->cb[1] = s->cb[2] = JS_UNDEFINED;
-        s->ev = JS_DupValue(ctx, step_arg(&s->hdr, 0));
+        /* TWO ENTRIES, ONE MACHINE. `arg` is decided at registration and says where the event comes from:
+           DISPATCH_ARG takes the one the page passed, CLICK_SYNTH builds it — §3.2.2 click() is "fire a
+           synthetic pointer event named click", which IS this dispatch and must not be a second copy of it.
+           A synthetic click BUBBLES and is CANCELABLE, and it is untrusted, which is what the flag means. */
+        s->ev = (s->hdr.arg == CLICK_SYNTH)
+                    ? event_new_untrusted(ctx, "click", /*bubbles*/ true, /*cancelable*/ true)
+                    : JS_DupValue(ctx, step_arg(&s->hdr, 0));
         /* §2.9 step 1: the argument must BE an Event. The slot record is the brand — a page cannot forge the
            symbol it hangs off, so an object shaped like an event is still not one. */
         if (!event_is(ctx, s->ev)) {
@@ -540,8 +548,22 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 }
 
 static const JSTrampStepDef js_dispatch_def = {
-    sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, 0, .visit = js_dispatch_visit
+    sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, DISPATCH_ARG, .visit = js_dispatch_visit
 };
+/* §3.2.2 click(). The SAME machine — a click is a dispatch, and giving it its own would be two implementations
+   of §2.9 that could disagree about listener order, the handler slot or the canceled flag. */
+static const JSTrampStepDef js_click_def = {
+    sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, CLICK_SYNTH, .visit = js_dispatch_visit
+};
+static int g_click_stepid = -1;
+
+void event_target_install_click(JSContext *ctx, JSValueConst target)
+{
+    DCHECK(JS_IsObject(target), "click was installed on something that is not an object");
+    if (g_click_stepid < 0)
+        g_click_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_click_def);
+    idl_install_method(ctx, target, "click", 0, g_click_stepid);
+}
 
 int event_target_fire(JSContext *ctx, JSValueConst target, const char *type, JSValueConst bubble_to)
 {
