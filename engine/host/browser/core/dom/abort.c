@@ -20,11 +20,23 @@
  *
  * THE INTERNAL SLOTS ARE AN OWN PROPERTY UNDER A PRIVATE SYMBOL, for the reason EventTarget's listener map is:
  * a write to them is an ordinary property write, so the per-flow COW delta captures it with no new delta kind.
- * An abort in one arm of a fork is invisible to the sibling for free. */
+ * An abort in one arm of a fork is invisible to the sibling for free.
+ *
+ * WHICH MEMBERS ARE STEP MACHINES, AND WHY THE REST ARE PROVABLY NOT. A member that can reach the page's code
+ * is a machine; a member that cannot is a plain C function with an assert saying so, because a machine there
+ * would be ceremony and a plain function anywhere else would be a hole in the flow machinery.
+ *   - AbortSignal.timeout(ms) IS a machine: `[EnforceRange] unsigned long long` is ToNumber on whatever the
+ *     page passed, so `AbortSignal.timeout({valueOf(){ for(;;){} }})` is the page's loop and has to suspend.
+ *   - AbortController.abort() is NOT, and the reason is a spec correction rather than a concession: 3.2 uses
+ *     `this.[[Signal]]`, an INTERNAL SLOT, not Get(this, "signal"). Reading the public property (which is what
+ *     this file did) both ran a page getter from C and let a page that overrides `signal` redirect abort().
+ *   - throwIfAborted() and the `aborted`/`reason` getters touch OWN SLOTS ONLY, read with JS_GetOwnSlot, which
+ *     is by definition not a lookup and cannot reach an accessor or a proxy trap. */
 #include <string.h>
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "solver/concolic.h"
 #include "solver/decide.h"
 #include "core/events/event_target.h"
@@ -35,6 +47,10 @@
    zero-initialised and zero is not JS_UNDEFINED. */
 static JSValue g_key;
 static int g_ready;
+/* The id JS_RegisterStepDef handed this runtime for AbortSignal.timeout's machine. One WASM instance is one
+   document is one runtime, which is what the install DCHECK holds it to. */
+static int g_timeout_stepid = -1;
+static JSRuntime *g_abort_rt;
 
 void abort_init(JSContext *ctx)
 {
@@ -53,7 +69,8 @@ void abort_free(JSContext *ctx)
     g_ready = 0;
 }
 
-/* The `{ aborted, reason }` record on `sig`, or UNDEFINED when `sig` is not a signal. Read as an OWN SLOT,
+/* The internal-slot record on `o` — `{ aborted, reason }` for a signal, `{ signal }` for a controller — or
+   UNDEFINED when `o` has none. Read as an OWN SLOT,
    never a lookup: a miss on a property lookup is the solver's absent-state seam and would mint a concolic for
    an internal slot, which is right for the page's own reads and wrong here. */
 static JSValue signal_slots(JSContext *ctx, JSValueConst sig)
@@ -196,9 +213,18 @@ static void signal_abort(JSContext *ctx, JSValueConst sig, JSValue reason)
 
 static JSValue js_ctrl_abort(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
-    JSValue sig = JS_GetPropertyStr(ctx, this_val, "signal");
-    JSValue reason;
+    /* 3.2 step 1 is `this.[[Signal]]` — an INTERNAL SLOT. Read as an own slot, so no accessor and no proxy trap
+       can sit on it: a page that assigns over the public `signal` property does not redirect abort(), and this
+       function reaches none of the page's code and therefore needs no stage. */
+    JSValue slots = signal_slots(ctx, this_val);
+    JSValue sig, reason;
 
+    if (!JS_IsObject(slots)) {
+        JS_FreeValue(ctx, slots);
+        return JS_ThrowTypeError(ctx, "abort called on something that is not an AbortController");
+    }
+    sig = JS_GetPropertyStr(ctx, slots, "signal");
+    JS_FreeValue(ctx, slots);
     if (!JS_IsObject(sig)) {
         JS_FreeValue(ctx, sig);
         return JS_ThrowTypeError(ctx, "abort called on something that is not an AbortController");
@@ -223,8 +249,17 @@ static JSValue js_abort_controller_ctor(JSContext *ctx, JSValueConst new_target,
     if (JS_IsException(obj))
         return obj;
     sig = signal_new(ctx, JS_FALSE, JS_UNDEFINED);
-    /* [SameObject]: every read of `signal` is the same object, so it is a data slot and not a fresh one per
-       get — a bundle stores it, compares it, and passes it to fetch. */
+    /* [[Signal]], the slot abort() reads — and separately the [SameObject] `signal` property the page reads.
+       Two names for one object on purpose: the spec's algorithm uses the slot, the page uses the property, and
+       overwriting the property must not change what abort() aborts. */
+    {
+        JSValue st = JS_NewObject(ctx);
+        JSAtom k = JS_ValueToAtom(ctx, g_key);
+        CHECK(!JS_IsException(st) && k != JS_ATOM_NULL, "the AbortController slot record allocation failed");
+        JS_SetPropertyStr(ctx, st, "signal", JS_DupValue(ctx, sig));
+        JS_SetProperty(ctx, obj, k, st);
+        JS_FreeAtom(ctx, k);
+    }
     JS_SetPropertyStr(ctx, obj, "signal", sig);
     JS_SetPropertyStr(ctx, obj, "abort", JS_NewCFunction(ctx, js_ctrl_abort, "abort", 0));
     return obj;
@@ -240,18 +275,62 @@ static JSValue js_sig_static_abort(JSContext *ctx, JSValueConst this_val, int ar
     return signal_new(ctx, JS_TRUE, reason);
 }
 
-/* AbortSignal.timeout(ms) — the UNKNOWN one. Whether the deadline has passed when the page asks depends on
-   wall-clock this engine does not model, and both answers lead to code worth reaching, so the flag is concolic
-   with a fast machine's example. The reason is stored eagerly because it is what `reason` answers in the
-   aborted arm, and building it costs nothing in the other. */
-static JSValue js_sig_static_timeout(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+/* AbortSignal.timeout(ms) — the UNKNOWN one, and the one member of this interface that reaches the page's code.
+   The flag is concolic because whether the deadline has passed when the code asks depends on wall-clock this
+   engine does not model, and both answers lead to code worth reaching. The MACHINE is because
+   `[EnforceRange] unsigned long long milliseconds` is ToNumber on whatever was passed, so
+   `AbortSignal.timeout({ valueOf() { for(;;){} } })` is the page's loop: it has to suspend and resume at the
+   exact stage, which is what step_toint64_run parks on. */
+typedef struct JSTimeoutState {
+    JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
+    uint8_t   stage;
+    JSValue   result;   /* the signal, once built (owned) */
+} JSTimeoutState;
+
+/* WHAT THIS MACHINE OWNS: its answer. The coercion's own in-flight value lives on the header, which the shared
+   teardown releases. */
+static void js_timeout_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
+    JSTimeoutState *s = st;
+    v->val(ctx, &s->result);
+}
+
+static JSValue js_timeout_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSTimeoutState *s = st;
+    JSValue r = take_result ? s->result : JS_UNDEFINED;
+    if (take_result) s->result = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->result);
+    return r;
+}
+
+static int js_timeout_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSTimeoutState *s = st;
+    int64_t ms = 0;
     JSValue flag;
-    (void)this_val; (void)argc; (void)argv;
+    int r;
+
+    if (s->stage == 0) {
+        s->result = JS_UNDEFINED;
+        s->stage = 1;
+    }
+    /* The coercion runs whatever the page put in `valueOf`, and its SIDE EFFECTS are observable — so it runs
+       even though the duration itself does not change what this engine models. Dropping it would be a quieter
+       spec bug than getting the number wrong. */
+    r = step_toint64_run(ctx, &s->hdr, step_arg(&s->hdr, 0), cb_result, &ms, out_cb, out_argc);
+    if (r > 0) return r;
+    if (r < 0) return JS_STEP_ABRUPT;
+
     flag = concolic_new(ctx, "AbortSignal.timeout().aborted", "AbortSignal.timeout().aborted", JS_FALSE);
     CHECK(!JS_IsException(flag), "minting the timeout signal's aborted flag failed");
-    return signal_new(ctx, flag, abort_reason_default(ctx, "TimeoutError", "signal timed out"));
+    s->result = signal_new(ctx, flag, abort_reason_default(ctx, "TimeoutError", "signal timed out"));
+    return JS_STEP_DONE;
 }
+
+static const JSTrampStepDef js_timeout_def = {
+    sizeof(JSTimeoutState), js_timeout_step, js_timeout_fini, 0, .visit = js_timeout_visit
+};
 
 /* §3.2's IDL declares no constructor, so `new AbortSignal()` is a TypeError — and so is calling it. The
    interface object exists only to carry the statics and to be the thing `instanceof` names. */
@@ -267,6 +346,13 @@ void abort_install(JSContext *ctx, JSValueConst global)
 
     DCHECK(JS_IsObject(global), "abort_install was given something that is not the global object");
     DCHECK(g_ready, "abort_install ran before abort_init");
+    DCHECK(g_abort_rt == NULL || g_abort_rt == JS_GetRuntime(ctx),
+           "abort was installed into a second runtime — its step id belongs to the first, and one WASM instance "
+           "is one document");
+    if (g_timeout_stepid < 0) {
+        g_abort_rt = JS_GetRuntime(ctx);
+        g_timeout_stepid = JS_RegisterStepDef(g_abort_rt, &js_timeout_def);
+    }
 
     ctrl = JS_NewCFunction2(ctx, js_abort_controller_ctor, "AbortController", 0, JS_CFUNC_constructor, 0);
     CHECK(!JS_IsException(ctrl), "the AbortController constructor allocation failed");
@@ -277,6 +363,6 @@ void abort_install(JSContext *ctx, JSValueConst global)
     JS_SetPropertyStr(ctx, sigctor, "abort",
                       JS_NewCFunction(ctx, js_sig_static_abort, "abort", 0));
     JS_SetPropertyStr(ctx, sigctor, "timeout",
-                      JS_NewCFunction(ctx, js_sig_static_timeout, "timeout", 1));
+                      JS_NewCFunction2(ctx, NULL, "timeout", 1, JS_CFUNC_step, g_timeout_stepid));
     JS_SetPropertyStr(ctx, (JSValue)global, "AbortSignal", sigctor);
 }
