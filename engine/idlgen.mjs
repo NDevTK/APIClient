@@ -56,10 +56,10 @@ const INTERFACES = {
   CharacterData:       ["core/dom/node.c", "core/events/event_target.c"],
   /* Element's file list includes node.c because Element.prototype INHERITS from Node.prototype: a member
      installed on the base really is reachable on an element, and reporting it ABSENT would be the audit lying
-     in the direction that gets a real gap ignored. Document is NOT listed with node.c — it is a plain object
-     that inherits nothing, so its missing Node members are a REAL gap and the report says so. */
+     in the direction that gets a real gap ignored. Document is listed the same way for the same reason — it is
+     a node_wrap of the document node now, with Document.prototype chained to Node.prototype. */
   Element:             ["core/dom/element.c", "core/dom/node.c", "core/events/event_target.c"],
-  Document:            ["core/dom/document.c", "core/events/event_target.c"],
+  Document:            ["core/dom/document.c", "core/dom/node.c", "core/events/event_target.c"],
 };
 
 const all = await listAll();

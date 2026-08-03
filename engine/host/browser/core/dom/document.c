@@ -345,6 +345,14 @@ static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, i
    for each flow that has run everything the document gave it, so an arm that reached the end of the document
    fires its own listeners in its own world. */
 static JSValue g_doc_obj = JS_UNDEFINED, g_win_obj = JS_UNDEFINED;
+/* The document's address, which §4.4 baseURI reads through document_base_url(). */
+static char g_doc_url[2048];
+
+const char *document_base_url(void)
+{
+    DCHECK(g_doc_url[0] != '\0', "a node's baseURI was read before the document was installed");
+    return g_doc_url;
+}
 
 static void document_set_ready(JSContext *ctx, const char *state)
 {
@@ -363,6 +371,21 @@ static int document_done_stage(JSContext *ctx, int stage)
     return event_target_fire(ctx, g_win_obj, "load", JS_UNDEFINED);
 }
 
+/* The Document METHODS — on Document.prototype, so there is one of each rather than one per install, and so
+   `Document.prototype.querySelector` is a thing that exists. */
+static void document_install_members(JSContext *ctx, JSValueConst proto)
+{
+    idl_install_method(ctx, proto, "getElementById", 1,
+                       idl_method_id(ctx, IDL_1STR, 1, js_doc_get_element_by_id, 0));
+    idl_install_method(ctx, proto, "querySelector", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_query_selector, 0));
+    idl_install_method(ctx, proto, "querySelectorAll", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_query_selector_all, 0));
+    idl_install_method(ctx, proto, "getElementsByTagName", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_get_elements_by_tag_name, 0));
+    idl_install_method(ctx, proto, "createElement", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_element, 0));
+    idl_install_method(ctx, proto, "createTextNode", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_text, 0));
+    idl_install_method(ctx, proto, "createComment", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_comment, 0));
+    idl_install_method(ctx, proto, "createElementNS", 2, idl_method_id(ctx, IDL_2STR, 2, js_doc_create_element_ns, 0));
+}
+
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url)
 {
     JSValue doc;
@@ -371,8 +394,24 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     if (!url || !*url)
         return;   /* no address, no Document — the page's own throw is the honest answer */
 
-    doc = JS_NewObject(ctx);
-    CHECK(!JS_IsException(doc), "the Document allocation failed");
+    /* DOCUMENT.PROTOTYPE, and the Document as a real NODE. §4.4 `interface Document : Node`, and it was neither
+       — a plain JS_NewObject with the members copied onto it. So `document.nodeType` was undefined,
+       `document.appendChild` was not a function, `document.contains(el)` (which is how a page asks whether a
+       node is still in the tree) was absent, and `document.body.parentNode.parentNode === document` compared a
+       node wrapper against something that was not one. It is a node_wrap of the document node now, so it is in
+       the ONE identity table with everything else and its members come from a prototype chained to
+       Node.prototype rather than being installed per object. */
+    {
+        JSValue proto = JS_NewObjectProto(ctx, node_proto());
+        CHECK(!JS_IsException(proto), "Document.prototype could not be allocated");
+        document_install_members(ctx, proto);
+        node_set_proto(ctx, LXB_DOM_NODE_TYPE_DOCUMENT, proto);
+    }
+    element_doc_set(dom);   /* BEFORE the wrap: the tree accessors below read through it */
+    doc = node_wrap(ctx, lxb_dom_interface_node(dom));
+    CHECK(JS_IsObject(doc), "the Document wrapper allocation failed");
+
+    snprintf(g_doc_url, sizeof(g_doc_url), "%s", url);
 
     /* Facts about the document this engine parsed. */
     JS_SetPropertyStr(ctx, doc, "URL",         JS_NewString(ctx, url));
@@ -397,16 +436,6 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        once so identity holds. querySelector is still absent: it needs a CSS selector engine, and answering it
        with a partial matcher would return the wrong element silently, which is worse than the throw that names
        what to build. */
-    idl_install_method(ctx, doc, "getElementById", 1,
-                       idl_method_id(ctx, IDL_1STR, 1, js_doc_get_element_by_id, 0));
-    idl_install_method(ctx, doc, "querySelector", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_query_selector, 0));
-    idl_install_method(ctx, doc, "querySelectorAll", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_query_selector_all, 0));
-    idl_install_method(ctx, doc, "getElementsByTagName", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_get_elements_by_tag_name, 0));
-    idl_install_method(ctx, doc, "createElement", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_element, 0));
-    idl_install_method(ctx, doc, "createTextNode", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_text, 0));
-    idl_install_method(ctx, doc, "createComment", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_comment, 0));
-    idl_install_method(ctx, doc, "createElementNS", 2, idl_method_id(ctx, IDL_2STR, 2, js_doc_create_element_ns, 0));
-    element_doc_set(dom);
 
     /* 3.1.1 documentElement / body / head — the three tree entry points every page starts from. Lexbor has
        already parsed them, so these are the REAL elements wrapped once (identity holds: `el.parentNode ===
@@ -423,8 +452,8 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
         JS_SetPropertyStr(ctx, doc, "head", element_wrap(ctx, lxb_dom_interface_element(head)));
     }
 
-    /* A Document is an EventTarget, and "loading" until its scripts have run. */
-    event_target_install(ctx, doc);
+    /* §4.4 a Document is an EventTarget through Node, so addEventListener comes down the prototype chain now
+       rather than being installed here. "loading" until its scripts have run. */
     JS_SetPropertyStr(ctx, doc, "readyState", JS_NewString(ctx, "loading"));
 
     JS_SetPropertyStr(ctx, (JSValue)global, "document", JS_DupValue(ctx, doc));
@@ -435,6 +464,11 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        page, from these two lines. */
     g_doc_obj = doc;
     g_win_obj = JS_DupValue(ctx, global);
+    /* The interface OBJECTS, now that every prototype exists. Node's goes first because the derived ones
+       inherit from it; each component names the one it owns rather than node.c enumerating them. */
+    node_install_interfaces(ctx, global);
+    node_install_interface(ctx, global, "Element", node_type_proto(LXB_DOM_NODE_TYPE_ELEMENT));
+    node_install_interface(ctx, global, "Document", node_type_proto(LXB_DOM_NODE_TYPE_DOCUMENT));
     engine_set_document_done_hook(document_done_stage);
 }
 

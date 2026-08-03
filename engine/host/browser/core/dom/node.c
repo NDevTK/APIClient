@@ -37,6 +37,7 @@
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
+#include <lexbor/ns/ns.h>
 
 #include "check.h"
 #include "quickjs.h"
@@ -44,8 +45,12 @@
 #include "solver/concolic.h"
 #include "solver/attr_shadow.h"
 #include "core/dom/node.h"
+#include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/dom/document.h"
 #include "core/events/event_target.h"
+
+static const IdlArgType IDL_1NSTR[1] = { IDL_DOMSTRING_NULLABLE };
 
 static JSClassID g_node_class;
 
@@ -54,6 +59,11 @@ static JSClassID g_node_class;
 static JSValue g_protos[LXB_DOM_NODE_TYPE_LAST_ENTRY];
 static JSValue g_node_proto;
 static int     g_protos_ready;
+/* The step id getRootNode's option read was given, and the atom it reads. Both outlive every call — a parked
+   machine resumes into the same read — so both belong to the component, not to the call. */
+static int     g_rootnode_stepid = -1;
+static JSValue g_chardata_proto;
+static JSAtom  g_atom_composed = JS_ATOM_NULL;
 
 typedef struct { lxb_dom_node_t *n; JSValue obj; } NodeEntry;
 static NodeEntry *g_wraps;
@@ -231,9 +241,403 @@ static JSValue js_cd_get_length(JSContext *ctx, JSValueConst this_val)
     return JS_NewInt32(ctx, (int)lxb_dom_interface_character_data(n)->data.length);
 }
 
+/* ---- §4.4 THE NODE ALGORITHMS ---------------------------------------------------------------------------
+ *
+ * Every one of these is a pure walk over the flow's own tree, so they are ordinary C: no page code is reachable
+ * from any of them, and the DOM-mutating pair goes through the per-flow chokepoints like every other write.
+ *
+ * NONE OF THEM RECURSES. isEqualNode, normalize and cloneNode's subtree are naturally written as tree recursion
+ * and every one of them is a page-controlled depth — a document nests as deeply as its author nested it — so a
+ * recursive C walk is an unbounded C stack in a engine whose whole point is that the C stack is flat. They are
+ * explicit cursor walks with an explicit paired stack. */
+
+/* §4.4 "root": the topmost inclusive ancestor. Shadow trees do not exist in this engine yet, so a node's root
+   and its SHADOW-INCLUDING root are the same node. */
+static lxb_dom_node_t *node_root(lxb_dom_node_t *n)
+{
+    while (n->parent) n = n->parent;
+    return n;
+}
+
+/* §4.2 "inclusive ancestor": walk UP from the descendant, which is O(depth) with no allocation, rather than
+   down from the ancestor, which is O(subtree). */
+static bool node_is_inclusive_ancestor(const lxb_dom_node_t *a, const lxb_dom_node_t *b)
+{
+    for (; b; b = b->parent)
+        if (b == a) return true;
+    return false;
+}
+
+/* The PRE-ORDER successor within `root`'s subtree, or NULL at the end. This is the one traversal primitive the
+   spec's tree-order algorithms need, and having it once is what keeps them from each growing a walker. */
+static lxb_dom_node_t *node_next_in(lxb_dom_node_t *n, lxb_dom_node_t *root)
+{
+    if (n->first_child) return n->first_child;
+    while (n != root) {
+        if (n->next) return n->next;
+        n = n->parent;
+        if (!n) return NULL;
+    }
+    return NULL;
+}
+
+/* magic 0 = isConnected, 1 = ownerDocument, 2 = parentElement, 3 = baseURI */
+static JSValue js_node_facts(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+
+    if (!n) return JS_UNDEFINED;
+    switch (magic) {
+    case 0:
+        /* §4.4: connected iff the shadow-including root is a DOCUMENT. A node a page has created but not yet
+           inserted is NOT connected, which is the difference a component-mount check is asking about. */
+        return JS_NewBool(ctx, node_root(n)->type == LXB_DOM_NODE_TYPE_DOCUMENT);
+    case 1:
+        /* §4.4: a Document's ownerDocument is null; every other node's is its node document. */
+        if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT) return JS_NULL;
+        return node_wrap(ctx, lxb_dom_interface_node(n->owner_document));
+    case 2:
+        /* §4.4: the parent, but only when it is an ELEMENT — the difference from parentNode is exactly the
+           document and the fragment, which is why a walk-up loop uses this one and stops on its own. */
+        return (n->parent && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT) ? node_wrap(ctx, n->parent) : JS_NULL;
+    default:
+        /* §4.4: the node document's document base URL, serialized. There is one document per engine instance
+           and no <base> support yet, so this is its address — asked of the component that owns it rather than
+           re-derived here, because two answers to "what is this document's URL" is how they drift apart. */
+        DCHECK(magic == 3, "a Node fact was declared with a magic this table does not name");
+        return JS_NewString(ctx, document_base_url());
+    }
+}
+
+/* §4.4 hasChildNodes / isSameNode / contains — three one-line predicates that a page uses constantly and that
+   each had to be re-implemented by the page when they were absent. */
+static JSValue js_node_predicates(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+    lxb_dom_node_t *other = argc > 0 ? node_of(argv[0]) : NULL;
+
+    if (!n) return JS_FALSE;
+    switch (magic) {
+    case 0: return JS_NewBool(ctx, n->first_child != NULL);
+    case 1: return JS_NewBool(ctx, other == n);                      /* isSameNode: `Node?`, so null is false */
+    default:
+        DCHECK(magic == 2, "a Node predicate was declared with a magic this table does not name");
+        return JS_NewBool(ctx, other && node_is_inclusive_ancestor(n, other));   /* contains: INCLUSIVE */
+    }
+}
+
+/* §4.4 isEqualNode — STRUCTURAL equality, which is what a page comparing two rendered subtrees means and what
+   `===` cannot answer. Written as a paired cursor walk: the two trees advance in lockstep, so a mismatch at any
+   depth stops immediately and the C stack never grows with the document's nesting. */
+static bool node_shallow_equal(lxb_dom_node_t *a, lxb_dom_node_t *b)
+{
+    size_t la = 0, lb = 0;
+    const lxb_char_t *na, *nb;
+
+    if (a->type != b->type) return false;
+    if (a->ns != b->ns) return false;
+    if (node_is_chardata(a)) {
+        lxb_dom_character_data_t *ca = lxb_dom_interface_character_data(a);
+        lxb_dom_character_data_t *cb = lxb_dom_interface_character_data(b);
+        return ca->data.length == cb->data.length &&
+               memcmp(ca->data.data, cb->data.data, ca->data.length) == 0;
+    }
+    if (a->type != LXB_DOM_NODE_TYPE_ELEMENT)
+        return true;   /* a document or a fragment: the children below carry all of the identity */
+
+    na = lxb_dom_element_qualified_name(lxb_dom_interface_element(a), &la);
+    nb = lxb_dom_element_qualified_name(lxb_dom_interface_element(b), &lb);
+    if (la != lb || (la && memcmp(na, nb, la) != 0)) return false;
+
+    /* §4.4: the attribute LISTS must match as sets — same count, and each of A's present on B with the same
+       value. Order is not part of the comparison, which is why this is two passes and not a zip. */
+    {
+        lxb_dom_attr_t *at;
+        size_t ca = 0, cb = 0;
+        for (at = lxb_dom_interface_element(a)->first_attr; at; at = at->next) ca++;
+        for (at = lxb_dom_interface_element(b)->first_attr; at; at = at->next) cb++;
+        if (ca != cb) return false;
+        for (at = lxb_dom_interface_element(a)->first_attr; at; at = at->next) {
+            size_t kn = 0, vn = 0, ovn = 0;
+            const lxb_char_t *k = lxb_dom_attr_qualified_name(at, &kn);
+            const lxb_char_t *v = lxb_dom_attr_value(at, &vn);
+            const lxb_char_t *ov = lxb_dom_element_get_attribute(lxb_dom_interface_element(b), k, kn, &ovn);
+            if (!ov) return false;
+            if (vn != ovn || (vn && memcmp(v, ov, vn) != 0)) return false;
+        }
+    }
+    return true;
+}
+
+static JSValue js_node_is_equal(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    lxb_dom_node_t *a = node_of(this_val), *b = argc > 0 ? node_of(argv[0]) : NULL;
+    lxb_dom_node_t *ra, *rb;
+
+    if (!a || !b) return JS_FALSE;   /* `Node? otherNode`: null is never equal */
+    ra = a; rb = b;
+    for (;;) {
+        if (!node_shallow_equal(a, b)) return JS_FALSE;
+        /* the CHILD COUNTS must match, and comparing them here rather than at the end is what lets the two
+           cursors advance in lockstep below without one running off the end of the other. */
+        {
+            lxb_dom_node_t *ca = a->first_child, *cb = b->first_child;
+            while (ca && cb) { ca = ca->next; cb = cb->next; }
+            if (ca || cb) return JS_FALSE;
+        }
+        a = node_next_in(a, ra);
+        b = node_next_in(b, rb);
+        if (!a || !b) return JS_NewBool(ctx, a == NULL && b == NULL);
+    }
+}
+
+/* §4.4 compareDocumentPosition — the bitmask a page uses to sort nodes into document order. */
+enum {
+    NODE_POS_DISCONNECTED = 0x01, NODE_POS_PRECEDING = 0x02, NODE_POS_FOLLOWING = 0x04,
+    NODE_POS_CONTAINS = 0x08, NODE_POS_CONTAINED_BY = 0x10, NODE_POS_IMPLEMENTATION_SPECIFIC = 0x20,
+};
+
+static JSValue js_node_compare_position(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    lxb_dom_node_t *a = node_of(this_val), *b = argc > 0 ? node_of(argv[0]) : NULL, *p;
+
+    if (!a || !b)
+        return JS_ThrowTypeError(ctx, "compareDocumentPosition requires a Node");
+    if (a == b) return JS_NewInt32(ctx, 0);
+    if (node_root(a) != node_root(b))
+        /* §4.4: disconnected nodes get a consistent-but-arbitrary order, and it must be CONSISTENT — the same
+           pair must answer the same way every time or a page's sort never terminates. Pointer order is stable
+           for the lifetime of the two nodes, which is what the spec's "implementation-specific" allows for. */
+        return JS_NewInt32(ctx, NODE_POS_DISCONNECTED | NODE_POS_IMPLEMENTATION_SPECIFIC |
+                                (a < b ? NODE_POS_FOLLOWING : NODE_POS_PRECEDING));
+    if (node_is_inclusive_ancestor(a, b))
+        return JS_NewInt32(ctx, NODE_POS_CONTAINED_BY | NODE_POS_FOLLOWING);
+    if (node_is_inclusive_ancestor(b, a))
+        return JS_NewInt32(ctx, NODE_POS_CONTAINS | NODE_POS_PRECEDING);
+    /* Neither contains the other: whichever the pre-order walk reaches first PRECEDES. */
+    for (p = node_root(a); p; p = node_next_in(p, NULL)) {
+        if (p == a) return JS_NewInt32(ctx, NODE_POS_FOLLOWING);
+        if (p == b) return JS_NewInt32(ctx, NODE_POS_PRECEDING);
+    }
+    DFAIL("compareDocumentPosition walked a shared root without reaching either node — the tree is not a tree");
+    return JS_NewInt32(ctx, 0);
+}
+
+/* §4.4 getRootNode's answer, shared with the step machine that reads its option. */
+static JSValue js_node_root_of(JSContext *ctx, JSValueConst this_val)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+    return n ? node_wrap(ctx, node_root(n)) : JS_UNDEFINED;
+}
+
+/* §4.4 normalize — remove empty Text nodes and merge adjacent ones. A page calls it before comparing or
+   serialising a tree it built piecemeal, and both halves go through the per-flow chokepoints so a forked arm
+   normalising its own subtree does not normalise its sibling's. The walk is a cursor over the current node's
+   descendants with the next node taken BEFORE the current one can be removed. */
+static JSValue js_node_normalize(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    lxb_dom_node_t *root = node_of(this_val), *n, *next;
+
+    (void)ctx; (void)argc; (void)argv;
+    if (!root) return JS_UNDEFINED;
+    for (n = node_next_in(root, root); n; n = next) {
+        next = node_next_in(n, root);
+        if (n->type != LXB_DOM_NODE_TYPE_TEXT)
+            continue;
+        {
+            lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(n);
+            if (cd->data.length == 0) {
+                dom_cow_remove_child(n);
+                continue;
+            }
+            /* Absorb the contiguous following Text siblings into this one, then drop them. */
+            while (n->next && n->next->type == LXB_DOM_NODE_TYPE_TEXT) {
+                lxb_dom_node_t *sib = n->next;
+                lxb_dom_character_data_t *sd = lxb_dom_interface_character_data(sib);
+                size_t len = cd->data.length + sd->data.length;
+                char *buf = malloc(len ? len : 1);
+                CHECK(buf != NULL, "normalize: OOM merging two Text nodes — dropping the merge would leave the "
+                                   "page a tree it did not build");
+                memcpy(buf, cd->data.data, cd->data.length);
+                memcpy(buf + cd->data.length, sd->data.data, sd->data.length);
+                if (next == sib) next = node_next_in(sib, root);
+                dom_cow_set_text(n, buf, len);
+                dom_cow_remove_child(sib);
+                free(buf);
+            }
+        }
+    }
+    return JS_UNDEFINED;
+}
+
+/* §4.4 cloneNode. `optional boolean subtree = false` is a ToBoolean, which is total and runs none of the page's
+   code, so this is not a coercion the IDL machine has to carry. Lexbor owns the copy — a hand-rolled one here
+   would be a second answer to "what is a copy of this node" beside the tree builder's. The clone is NOT
+   inserted, so there is nothing to capture: an uninserted node is flow-private until an insert chokepoint puts
+   it in the shared tree. */
+static JSValue js_node_clone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    lxb_dom_node_t *n = node_of(this_val), *copy;
+    bool deep = argc > 0 && JS_ToBool(ctx, argv[0]);
+
+    if (!n) return JS_UNDEFINED;
+    if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT)
+        return JS_ThrowDOMException(ctx, "NotSupportedError", "cloning a Document is not supported");
+    copy = lxb_dom_node_clone(n, deep);
+    CHECK(copy != NULL, "cloneNode: the Lexbor node copy failed — returning nothing would hand the page a null "
+                        "it has no way to distinguish from a node it never asked for");
+    return node_wrap(ctx, copy);
+}
+
+/* §4.2.3 insertBefore / replaceChild — the two remaining mutating tree operations, through the same per-flow
+   chokepoints appendChild and removeChild already use. magic 0 = insertBefore, 1 = replaceChild. */
+static JSValue js_node_insert(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_node_t *parent = node_of(this_val);
+    lxb_dom_node_t *node = argc > 0 ? node_of(argv[0]) : NULL;
+    lxb_dom_node_t *child = argc > 1 ? node_of(argv[1]) : NULL;
+
+    if (!parent) return JS_UNDEFINED;
+    if (!node)
+        return JS_ThrowTypeError(ctx, magic ? "replaceChild requires a Node" : "insertBefore requires a Node");
+    /* §4.2.3 "pre-insert": the hierarchy check that keeps the tree a tree. A page that inserts an ancestor into
+       its own descendant would build a CYCLE, and every walk in this file loops forever on one. */
+    if (node_is_inclusive_ancestor(node, parent))
+        return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                    "a node cannot be inserted into its own descendant");
+    if (magic == 0 && !child) {
+        dom_cow_append_child(parent, node);       /* insertBefore(n, null) IS append */
+        return JS_DupValue(ctx, argv[0]);
+    }
+    if (!child || child->parent != parent)
+        return JS_ThrowDOMException(ctx, "NotFoundError",
+                                    "the reference child is not a child of this node");
+    dom_cow_insert_before(child, node);
+    if (magic == 1) {
+        dom_cow_remove_child(child);
+        return JS_DupValue(ctx, argv[1]);         /* replaceChild returns the node it REMOVED */
+    }
+    return JS_DupValue(ctx, argv[0]);
+}
+
+/* §4.4 lookupPrefix / lookupNamespaceURI / isDefaultNamespace — the three namespace lookups, one walk. Lexbor
+   interns both halves, so this reads the element's own namespace and prefix rather than re-deriving them from
+   an xmlns attribute the tree builder already consumed. magic 0 = lookupPrefix, 1 = lookupNamespaceURI,
+   2 = isDefaultNamespace. */
+static JSValue js_node_lookup_ns(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+    const char *arg = NULL;
+    JSValue r;
+
+    if (!n) return magic == 2 ? JS_FALSE : JS_NULL;
+    /* The argument is `DOMString?` and the declaration converted it, so this reads a string or the IDL null. */
+    if (argc > 0 && JS_IsString(argv[0]))
+        arg = JS_ToCString(ctx, argv[0]);
+
+    /* §4.4: the lookup starts at the nearest ELEMENT — a Text node's namespace is its parent element's. */
+    while (n && n->type != LXB_DOM_NODE_TYPE_ELEMENT)
+        n = n->parent;
+    if (!n) {
+        if (arg) JS_FreeCString(ctx, arg);
+        return magic == 2 ? JS_FALSE : JS_NULL;
+    }
+    {
+        lxb_dom_element_t *el = lxb_dom_interface_element(n);
+        size_t nl = 0, pl = 0;
+        const lxb_char_t *ns = lxb_ns_by_id(n->owner_document->ns, n->ns, &nl);
+        const lxb_char_t *px = lxb_dom_element_prefix(el, &pl);
+
+        if (magic == 1) {   /* lookupNamespaceURI(prefix): the namespace of the element carrying that prefix */
+            bool match = arg ? (pl == strlen(arg) && pl && memcmp(px, arg, pl) == 0)
+                             : (pl == 0);   /* a null prefix asks for the DEFAULT namespace */
+            r = (match && ns && nl) ? JS_NewStringLen(ctx, (const char *)ns, nl) : JS_NULL;
+        } else if (magic == 0) {   /* lookupPrefix(namespace): the prefix this element uses for it */
+            bool match = arg && ns && nl == strlen(arg) && memcmp(ns, arg, nl) == 0;
+            r = (match && px && pl) ? JS_NewStringLen(ctx, (const char *)px, pl) : JS_NULL;
+        } else {                   /* isDefaultNamespace(namespace) */
+            DCHECK(magic == 2, "a namespace lookup was declared with a magic this table does not name");
+            if (!arg || !*arg) r = JS_NewBool(ctx, !ns || nl == 0);
+            else               r = JS_NewBool(ctx, pl == 0 && ns && nl == strlen(arg) &&
+                                                   memcmp(ns, arg, nl) == 0);
+        }
+    }
+    if (arg) JS_FreeCString(ctx, arg);
+    return r;
+}
+
+/* §4.4 getRootNode(optional GetRootNodeOptions options = {}) — a MACHINE for one property read.
+ *
+ * The answer never depends on the option: `composed` chooses between the root and the SHADOW-INCLUDING root,
+ * and with no shadow trees in this engine those are the same node. Reading it is still page code —
+ * `getRootNode({ get composed(){ … } })` is a getter, and a Proxy makes even a plain object one — so the read
+ * is a REQUEST, and the value is discarded because that is what the spec computes with it here. Skipping the
+ * read because the result would not change is the shortcut this file does not take: the page's getter either
+ * runs or it does not, and a component that decides it need not run is deciding about the page's code. */
+typedef struct JSRootNodeState {
+    JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
+    uint8_t   stage;
+    JSValue   result;   /* the root's wrapper, once read (owned) */
+} JSRootNodeState;
+
+static void js_rootnode_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSRootNodeState *s = st;
+    v->val(ctx, &s->result);
+}
+
+static JSValue js_rootnode_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSRootNodeState *s = st;
+    JSValue r = take_result ? s->result : JS_UNDEFINED;
+    if (take_result) s->result = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->result);
+    s->result = JS_UNDEFINED;
+    return r;
+}
+
+static int js_rootnode_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSRootNodeState *s = st;
+    JSValueConst opts = step_arg(&s->hdr, 0);
+    JSValue composed = JS_UNDEFINED;
+    int r;
+
+    if (s->stage == 0) {
+        s->stage = 1;
+        s->result = JS_UNDEFINED;
+        if (!JS_IsObject(opts)) {
+            /* `optional … = {}`: a missing dictionary has no members to read, so there is no page code here. */
+            JS_FreeValue(ctx, cb_result);
+            s->result = js_node_root_of(ctx, s->hdr.this_val);
+            return JS_IsException(s->result) ? (s->result = JS_UNDEFINED, JS_STEP_ABRUPT) : JS_STEP_DONE;
+        }
+    }
+    r = step_getprop_run(ctx, &s->hdr, opts, g_atom_composed, cb_result, &composed, out_cb, out_argc);
+    if (r > 0) return r;
+    if (r < 0) return JS_STEP_ABRUPT;
+    JS_FreeValue(ctx, composed);   /* converted and DISCARDED: with no shadow trees both arms name one node */
+    s->result = js_node_root_of(ctx, s->hdr.this_val);
+    if (JS_IsException(s->result)) { s->result = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+    return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef js_rootnode_def = {
+    sizeof(JSRootNodeState), js_rootnode_step, js_rootnode_fini, 0, .visit = js_rootnode_visit
+};
+
 static const JSCFunctionListEntry js_node_base[] = {
     JS_CFUNC_DEF("appendChild", 1, js_node_append_child),
     JS_CFUNC_DEF("removeChild", 1, js_node_remove_child),
+    JS_CFUNC_MAGIC_DEF("insertBefore", 2, js_node_insert, 0),
+    JS_CFUNC_MAGIC_DEF("replaceChild", 2, js_node_insert, 1),
+    JS_CFUNC_DEF("cloneNode", 0, js_node_clone),
+    JS_CFUNC_DEF("normalize", 0, js_node_normalize),
+    JS_CFUNC_DEF("isEqualNode", 1, js_node_is_equal),
+    JS_CFUNC_DEF("compareDocumentPosition", 1, js_node_compare_position),
+    JS_CFUNC_MAGIC_DEF("hasChildNodes", 0, js_node_predicates, 0),
+    JS_CFUNC_MAGIC_DEF("isSameNode", 1, js_node_predicates, 1),
+    JS_CFUNC_MAGIC_DEF("contains", 1, js_node_predicates, 2),
     JS_CGETSET_DEF("nodeType", js_node_get_type, NULL),
     JS_CGETSET_DEF("nodeName", js_node_get_name, NULL),
     JS_CGETSET_DEF("childNodes", js_node_child_nodes, NULL),
@@ -242,7 +646,36 @@ static const JSCFunctionListEntry js_node_base[] = {
     JS_CGETSET_MAGIC_DEF("lastChild", js_node_tree, NULL, 2),
     JS_CGETSET_MAGIC_DEF("nextSibling", js_node_tree, NULL, 3),
     JS_CGETSET_MAGIC_DEF("previousSibling", js_node_tree, NULL, 4),
+    JS_CGETSET_MAGIC_DEF("isConnected", js_node_facts, NULL, 0),
+    JS_CGETSET_MAGIC_DEF("ownerDocument", js_node_facts, NULL, 1),
+    JS_CGETSET_MAGIC_DEF("parentElement", js_node_facts, NULL, 2),
+    JS_CGETSET_MAGIC_DEF("baseURI", js_node_facts, NULL, 3),
 };
+
+/* §4.4 the nodeType and DOCUMENT_POSITION_* constants. Web IDL puts a `const` on BOTH the interface object and
+   the prototype, so one table installs both — and a page writes `n.nodeType === Node.ELEMENT_NODE` far more
+   often than it writes the number. */
+static const JSCFunctionListEntry js_node_consts[] = {
+    JS_PROP_INT32_DEF("ELEMENT_NODE", 1, 0),
+    JS_PROP_INT32_DEF("ATTRIBUTE_NODE", 2, 0),
+    JS_PROP_INT32_DEF("TEXT_NODE", 3, 0),
+    JS_PROP_INT32_DEF("CDATA_SECTION_NODE", 4, 0),
+    JS_PROP_INT32_DEF("ENTITY_REFERENCE_NODE", 5, 0),
+    JS_PROP_INT32_DEF("ENTITY_NODE", 6, 0),
+    JS_PROP_INT32_DEF("PROCESSING_INSTRUCTION_NODE", 7, 0),
+    JS_PROP_INT32_DEF("COMMENT_NODE", 8, 0),
+    JS_PROP_INT32_DEF("DOCUMENT_NODE", 9, 0),
+    JS_PROP_INT32_DEF("DOCUMENT_TYPE_NODE", 10, 0),
+    JS_PROP_INT32_DEF("DOCUMENT_FRAGMENT_NODE", 11, 0),
+    JS_PROP_INT32_DEF("NOTATION_NODE", 12, 0),
+    JS_PROP_INT32_DEF("DOCUMENT_POSITION_DISCONNECTED", NODE_POS_DISCONNECTED, 0),
+    JS_PROP_INT32_DEF("DOCUMENT_POSITION_PRECEDING", NODE_POS_PRECEDING, 0),
+    JS_PROP_INT32_DEF("DOCUMENT_POSITION_FOLLOWING", NODE_POS_FOLLOWING, 0),
+    JS_PROP_INT32_DEF("DOCUMENT_POSITION_CONTAINS", NODE_POS_CONTAINS, 0),
+    JS_PROP_INT32_DEF("DOCUMENT_POSITION_CONTAINED_BY", NODE_POS_CONTAINED_BY, 0),
+    JS_PROP_INT32_DEF("DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC", NODE_POS_IMPLEMENTATION_SPECIFIC, 0),
+};
+
 
 /* §4.4 Node.textContent — a NODE member, which is where it now lives. It was an Element one, so
    `textNode.textContent` was undefined and `document.textContent` answered a string the spec says is null; and
@@ -343,6 +776,15 @@ static const JSCFunctionListEntry js_chardata_base[] = {
     JS_CGETSET_DEF("length", js_cd_get_length, NULL),
 };
 
+/* The interface a node TYPE wears, borrowed — what a component installing its interface object names. */
+JSValueConst node_type_proto(int node_type)
+{
+    DCHECK(g_protos_ready, "a node type's interface was asked for before node_init built the table");
+    DCHECK(node_type > 0 && node_type < LXB_DOM_NODE_TYPE_LAST_ENTRY,
+           "a node type the DOM does not have was asked for its interface");
+    return g_protos[node_type];
+}
+
 JSValueConst node_proto(void)
 {
     DCHECK(g_protos_ready, "Node.prototype was asked for before node_init built it");
@@ -418,6 +860,8 @@ void node_init(JSContext *ctx)
     CHECK(!JS_IsException(g_node_proto), "Node.prototype could not be allocated");
     JS_SetPropertyFunctionList(ctx, g_node_proto, js_node_base,
                                (int)(sizeof(js_node_base) / sizeof(js_node_base[0])));
+    JS_SetPropertyFunctionList(ctx, g_node_proto, js_node_consts,
+                               (int)(sizeof(js_node_consts) / sizeof(js_node_consts[0])));
     event_target_install(ctx, g_node_proto);
     g_protos_ready = 1;
 
@@ -443,9 +887,90 @@ void node_init(JSContext *ctx)
        body never sees a null and never has to remember the rule. */
     id_data = idl_setter_id(ctx, IDL_DOMSTRING, true, js_cd_set_data, 0);
     idl_install_accessor(ctx, cd, "data", js_cd_get_data, 0, id_data);
-    node_set_proto(ctx, LXB_DOM_NODE_TYPE_TEXT, JS_DupValue(ctx, cd));
-    node_set_proto(ctx, LXB_DOM_NODE_TYPE_COMMENT, cd);
+
+    /* §4.4 the three namespace lookups. Each takes a `DOMString?`, so each goes on the shared IDL machine —
+       `n.lookupPrefix({toString(){ … }})` is the page's code exactly like every other DOMString argument. */
+    idl_install_method(ctx, g_node_proto, "lookupPrefix", 1,
+                       idl_method_id(ctx, IDL_1NSTR, 1, js_node_lookup_ns, 0));
+    idl_install_method(ctx, g_node_proto, "lookupNamespaceURI", 1,
+                       idl_method_id(ctx, IDL_1NSTR, 1, js_node_lookup_ns, 1));
+    idl_install_method(ctx, g_node_proto, "isDefaultNamespace", 1,
+                       idl_method_id(ctx, IDL_1NSTR, 1, js_node_lookup_ns, 2));
+
+    /* getRootNode's dictionary read is its own machine, not an IDL argument type: a dictionary is a set of
+       property READS, which is a different request from a coercion. */
+    g_atom_composed = JS_NewAtom(ctx, "composed");
+    CHECK(g_atom_composed != JS_ATOM_NULL, "the `composed` atom could not be interned");
+    g_rootnode_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_rootnode_def);
+    idl_install_method(ctx, g_node_proto, "getRootNode", 0, g_rootnode_stepid);
+
+    /* Text and Comment are their own interfaces — `interface Text : CharacterData` and `Comment : CharacterData`
+       — so a page's `x instanceof Text` and `Text.prototype` have something to name, and the two do not share
+       one object that answers for both. */
+    {
+        JSValue text_proto = JS_NewObjectProto(ctx, cd);
+        JSValue comment_proto = JS_NewObjectProto(ctx, cd);
+        CHECK(!JS_IsException(text_proto) && !JS_IsException(comment_proto),
+              "a CharacterData-derived prototype could not be allocated");
+        node_set_proto(ctx, LXB_DOM_NODE_TYPE_TEXT, text_proto);
+        node_set_proto(ctx, LXB_DOM_NODE_TYPE_COMMENT, comment_proto);
+        g_chardata_proto = cd;   /* HELD: the interface objects below name it, and node_free releases it */
+    }
 }
+
+/* THE INTERFACE OBJECTS — `Node`, `CharacterData`, `Text`, `Comment` as globals with their prototypes. Without
+   them `Node.ELEMENT_NODE` (which is how a page spells a nodeType test) and `x instanceof Text` had nothing to
+   read, and the platform-names list made reading the global a THROW rather than app state, so a page that
+   feature-tested this way stopped there. §4.4's constants live on the interface object as well as the
+   prototype, which is why one table installs both.
+   None of the four is CONSTRUCTIBLE — the DOM gives Node and CharacterData no constructor at all, and Text and
+   Comment take a `DOMString data` this engine creates through document.createTextNode. Calling one is a
+   TypeError, which is what an interface object with no [Constructor] does. */
+static JSValue js_node_iface_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv)
+{
+    (void)nt; (void)argc; (void)argv;
+    return JS_ThrowTypeError(ctx, "Illegal constructor");
+}
+
+/* §4.4 an interface object INHERITS from its parent interface's object, which is what makes `Text.ELEMENT_NODE`
+   read. Node's is installed first and read back here rather than cached, so there is one of it. */
+static JSValue node_interface_object(JSContext *ctx, JSValueConst global)
+{
+    JSValue n = JS_GetPropertyStr(ctx, (JSValue)global, "Node");
+    DCHECK(JS_IsObject(n), "a derived DOM interface object was installed before `Node` was");
+    return n;
+}
+
+void node_install_interface(JSContext *ctx, JSValueConst global, const char *name, JSValueConst proto)
+{
+    JSValue ctor = JS_NewCFunction2(ctx, js_node_iface_ctor, name, 0, JS_CFUNC_constructor, 0);
+
+    DCHECK(JS_IsObject(proto), "a DOM interface object was installed with no prototype behind it");
+    CHECK(!JS_IsException(ctor), "a DOM interface object could not be allocated");
+    JS_SetConstructor(ctx, ctor, proto);   /* .prototype and .constructor, both directions, one call */
+    /* §4.4 puts its constants on the interface object as well as the prototype. Only Node declares any, and a
+       derived interface INHERITS them — `Text.ELEMENT_NODE` is a real read — so the chain carries them rather
+       than each object repeating the table. */
+    if (JS_VALUE_GET_PTR(proto) == JS_VALUE_GET_PTR(g_node_proto))
+        JS_SetPropertyFunctionList(ctx, ctor, js_node_consts,
+                                   (int)(sizeof(js_node_consts) / sizeof(js_node_consts[0])));
+    else {
+        JSValue base = node_interface_object(ctx, global);   /* OWNED by this read, and JS_SetPrototype borrows */
+        JS_SetPrototype(ctx, ctor, base);
+        JS_FreeValue(ctx, base);
+    }
+    JS_SetPropertyStr(ctx, (JSValue)global, name, ctor);
+}
+
+void node_install_interfaces(JSContext *ctx, JSValueConst global)
+{
+    DCHECK(g_protos_ready, "the DOM interface objects were installed before node_init built their prototypes");
+    node_install_interface(ctx, global, "Node", g_node_proto);
+    node_install_interface(ctx, global, "CharacterData", g_chardata_proto);
+    node_install_interface(ctx, global, "Text", g_protos[LXB_DOM_NODE_TYPE_TEXT]);
+    node_install_interface(ctx, global, "Comment", g_protos[LXB_DOM_NODE_TYPE_COMMENT]);
+}
+
 
 void node_free(JSContext *ctx)
 {
@@ -460,6 +985,10 @@ void node_free(JSContext *ctx)
         g_protos[i] = JS_UNDEFINED;
     }
     JS_FreeValue(ctx, g_node_proto);
-    g_node_proto = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_chardata_proto);
+    g_node_proto = g_chardata_proto = JS_UNDEFINED;
+    JS_FreeAtom(ctx, g_atom_composed);
+    g_atom_composed = JS_ATOM_NULL;
+    g_rootnode_stepid = -1;
     g_protos_ready = 0;
 }

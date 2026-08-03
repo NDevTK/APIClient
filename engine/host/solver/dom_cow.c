@@ -148,6 +148,13 @@ void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
     dom_insert_capture(child);   /* record the insertion FIRST so it reverts per-flow (detached on unapply) */
     lxb_dom_node_insert_child(parent, child);
 }
+/* §4.2.3 "insert before": the same capture, at a POSITION. The insert entry remembers where it landed at
+   unapply time rather than at capture time, so this differs from append only in the Lexbor call — which is
+   exactly why insertBefore must come through here and not reach lxb_dom_node_insert_before directly. */
+void dom_cow_insert_before(lxb_dom_node_t *ref, lxb_dom_node_t *child) {
+    dom_insert_capture(child);
+    lxb_dom_node_insert_before(ref, child);
+}
 void dom_revert(void) {   /* DISCARD the running flow's DOM writes -> baseline (reverse order); empties the delta */
     for (int i = g_dom_undo_n - 1; i >= 0; i--) {
         DomUndo *u = &g_dom_undo[i];

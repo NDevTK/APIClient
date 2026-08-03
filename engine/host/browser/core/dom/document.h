@@ -8,6 +8,9 @@
    installed; the tree-walking half is absent until Element exists, because a querySelector that answers null
    for an element the document HAS is a lie, and a lie is worse than a ReferenceError that names the gap. */
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url);
+/* §4.4 baseURI's answer: the document's address. ONE component owns what this document's URL is — two answers
+   to that question is how they drift apart. */
+const char *document_base_url(void);
 /* Release what the component HOLDS across the document's lifecycle — the window it fires `load` at. */
 void document_free(JSContext *ctx);
 
