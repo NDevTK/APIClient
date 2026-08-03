@@ -238,7 +238,7 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
           out of buckets are balanced, so the depth never reaches the rebalance point again.
        3  lre_case_conv, 2+2, and eleven single-function recursions. */
 const CEILING_BLOB = 16      /* the interpreter cycle's size */
-const CEILING_OWN = 15       /* self-contained recursions */
+const CEILING_OWN = 14       /* self-contained recursions */
 /* 70 -> 65, the parser cycle 29 -> 24, as js_parse_descent's explicit frame stack absorbed the precedence
    ladder (expr_binary / logical_and_or / coalesce_expr / cond_expr) and then UnaryExpression (unary / delete).
    BE PRECISE ABOUT WHICH HALF PAID. The ladder was never deep: `a|b|c` is left-nested and the recursive version
@@ -342,7 +342,7 @@ const CEILING_OWN = 15       /* self-contained recursions */
    churn dressed as progress, and the audit counting it is the audit being honest about direct calls rather
    than a debt. The same is true of rope DEPTH generally: JS_STRING_ROPE_MAX_DEPTH is 60 with a flatten above
    it, so no rope walk was ever input-deep. */
-const CEILING_OWN_FUNCS = 48 /* functions in them — the largest is 25, the refcount teardown cascade */
+const CEILING_OWN_FUNCS = 47 /* functions in them — the largest is 25, the refcount teardown cascade */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
