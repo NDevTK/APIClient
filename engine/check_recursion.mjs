@@ -162,11 +162,17 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
    that came out (29 functions: JS_Throw frees the previous exception, freeing can enqueue a FinalizationRegistry
    job, enqueueing allocates) was inside the 176 all along.
    TWO NAMED CYCLES REMAIN, and each is one edge, not a function list.
-     101  JS_MakeError2 -> build_backtrace (-94). Capturing a backtrace can throw — it renders strings and reads
+      97  JS_MakeError2 -> build_backtrace (-90). Capturing a backtrace can throw — it renders strings and reads
           the frames' own values — and a throw builds an error, which captures a backtrace. `in_build_stack_trace`
           is the same re-entrancy flag the OOM path just lost, so the same treatment applies: make the capture
-          incapable of throwing. One source of it is already gone (Error.stackTraceLimit is read as a Number, as
-          V8 defines it, rather than coerced through the page's valueOf); the string rendering is the rest.
+          incapable of throwing. Two sources of it are already gone: Error.stackTraceLimit is read as a Number,
+          as V8 defines it, rather than coerced through the page's valueOf, and a CallSite is created from the
+          realm's intrinsic rather than through OrdinaryCreateFromConstructor's `prototype` read.
+          ASKED WITH --from=build_backtrace, no single one of its own calls carries the cycle: the best is worth
+          4 of 97. So the fix is not another leaf — it is the eager capture itself. V8 stores raw frames and
+          formats them on the `.stack` READ; this engine already does that for Error.prepareStackTrace (the
+          pending [prepare, callsites] pair) and renders eagerly only when no hook is installed. Extending the
+          same laziness to the default rendering is what leaves construction with nothing that can throw.
       29  js_malloc -> JS_ThrowOutOfMemory -> JS_Throw -> free the old exception -> JS_EnqueueJob -> js_malloc. */
 const CEILING_BLOB = 16      /* the interpreter cycle's size */
 const CEILING_OWN = 19       /* self-contained recursions */
@@ -273,7 +279,7 @@ const CEILING_OWN = 19       /* self-contained recursions */
    churn dressed as progress, and the audit counting it is the audit being honest about direct calls rather
    than a debt. The same is true of rope DEPTH generally: JS_STRING_ROPE_MAX_DEPTH is 60 with a flatten above
    it, so no rope walk was ever input-deep. */
-const CEILING_OWN_FUNCS = 158 /* functions in them — 101 of these are the one error/property cycle, 29 the OOM/free one */
+const CEILING_OWN_FUNCS = 154 /* functions in them — 97 of these are the one error/property cycle, 29 the OOM/free one */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
@@ -339,16 +345,22 @@ if (whyArg || process.argv.includes('--why-blob')) {
     return found
   }
   const base = sccSize(null, null)
+  /* --from=NAME restricts the candidates to that function's OWN out-edges. The ranked list answers "what holds
+     this cycle"; once the answer is a function rather than a leaf edge — JS_MakeError2 -> build_backtrace is
+     worth 94 and build_backtrace is a hundred lines with a dozen callees — the next question is which of ITS
+     calls carries the cycle, and asking it with a grep over the member list is guessing again. */
+  const fromArg = process.argv.find(a => a.startsWith('--from='))
+  const from = fromArg ? fromArg.slice(7) : null
   const seen = []
   for (const [f, outs] of edges)
     for (const t of outs)
-      if (cycle.includes(t) && cycle.includes(f)) {
+      if (cycle.includes(t) && cycle.includes(f) && (!from || f === from)) {
         const after = sccSize(f, t)
         if (after < base) seen.push([base - after, f, t, after])
       }
   seen.sort((a, b) => b[0] - a[0])
   console.log(`cycle containing ${anchor}: ${base}; edges whose removal shrinks it:`)
-  for (const [d, f, t, after] of seen.slice(0, 10))
+  for (const [d, f, t, after] of seen.slice(0, from ? 40 : 10))
     console.log(`  -${String(d).padEnd(5)} ${f} -> ${t}   => ${after}`)
   if (!seen.length) console.log('  none individually — several edges hold it at once')
 }
