@@ -214,7 +214,17 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
           reaches can call the loop. That is a wide edit across every release inside teardown, and it buys a
           number rather than a behaviour, so it is recorded here rather than done ahead of work that changes
           what the engine can do.
-       6  the tramp step-chain teardown (tramp_step_chain_free / the abandon hooks)
+       6  the tramp step-chain teardown. Its ToPrimitive half is gone — that walk is one loop now, and the
+          STEP/TOPRIM alternation the page controls no longer costs a frame per link. What is left is
+          js_from_ctor_abandon -> js_iter_consume_end -> the walk: a consume machine's teardown WALKS its
+          requester chain instead of reporting it. Each link has exactly one successor, so the fix is a
+          successor variable and not a stack — but js_iter_consume_end has 22 callers and its own comment
+          explains why the chain teardown lives there rather than at the call sites, so this is a change of
+          contract for all of them, not a local edit. It is the next piece and it needs doing as one.
+       2  tramp_step_state_free <-> tramp_step_hdr_release, over a machine's `delegate`. The DEPTH is gone: the
+          chain is detached before it is freed, so each link's release finds no delegate and the pair bottoms
+          out at one level. The cycle remains because a static walk cannot see the detach, like
+          free_zero_refcount's phase flag.
        4  JS_GetPropertyInternal -> JS_GetPropertyUint32, the fast-array arm reached through the general read
        4  JS_DefineProperty -> JS_SetPropertyValue -> JS_SetPropertyInternal
        4  js_new_string_rope <-> js_rebalance_string_rope. What this WAS is the rebalance's tree walk, a
