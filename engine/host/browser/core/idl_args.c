@@ -38,6 +38,13 @@ typedef struct {
     IdlArgType types[IDL_MAX_DECLARED];
     int        nargs;      /* how many the IDL lists; a variadic tail repeats the last */
     int        magic;
+    /* An IDL_DICT_BOOLS argument's member names, INTERNED at registration. The atom must be live at both the
+       request and the answer — step_getprop_run is handed it twice, with a suspension in between — so it cannot
+       be created per read. The names are static strings known when the member declares itself, so one intern
+       per member serves every call. */
+    const char *const *dict;
+    JSAtom     dict_atoms[IDL_MAX_DICT];
+    int        dict_n;
 } IdlMember;
 
 static IdlMember      g_members[IDL_MAX_MEMBERS];
@@ -50,6 +57,7 @@ typedef struct {
     int       i;        /* THE RESUME POINT: the argument being coerced */
     int       n;        /* how many of them there are */
     JSValue   result;   /* the body's answer (owned) */
+    int       dict_i;   /* THE OTHER RESUME POINT: the dictionary member being read */
     int64_t   nums[IDL_MAX_ARGS];   /* the integer conversions, kept because the body wants numbers */
     JSValue   args[IDL_MAX_ARGS];
 } JSIdlArgsState;
@@ -101,14 +109,43 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            An IDL conversion is a BOUNDARY, not an ECMAScript operator: nothing observes its result except the
            component behind it, and every one of those bodies already asks explicitly for what it needs from a
            concolic (concolic_shape_c for the bytes a Text node carries, the attribute taint shadow for a value
-           parked in the DOM). Converting here would do the one thing that must never happen — hand ToString a
+           parked in the DOM). A DICTIONARY is excluded because it is not a value that crosses at all — it is a
+           bag of member READS, and those happen on a concolic exactly as they do on anything else.
+           Converting here would do the one thing that must never happen — hand ToString a
            concolic, which the C boundary asserts against because opacity has to SURVIVE a coercion or the value
            stops forking control flow and stops being solvable at a sink. This is the same answer JSON.stringify
            gives an opaque field: yield the opaque itself, never a de-tainting placeholder. */
-        if (t != IDL_ANY && concolic_is(a)) {
+        if (t != IDL_ANY && t != IDL_DICT_BOOLS && concolic_is(a)) {
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
             s->args[s->i] = JS_DupValue(ctx, a);
+            s->i++;
+            continue;
+        }
+
+        if (t == IDL_DICT_BOOLS) {
+            /* `optional D options = {}`: undefined and null have no members to read, so every one defaults and
+               no page code runs. An object's members are read IN ORDER, parking on each. */
+            if (JS_IsUndefined(s->args[s->i]))
+                s->args[s->i] = JS_NewObject(ctx);
+            if (!JS_IsObject(a)) {
+                JS_FreeValue(ctx, cb_result);
+                cb_result = JS_UNDEFINED;
+                s->dict_i = m->dict_n;
+            }
+            while (s->dict_i < m->dict_n) {
+                JSValue v = JS_UNDEFINED;
+                r = step_getprop_run(ctx, &s->hdr, a, m->dict_atoms[s->dict_i], cb_result, &v, out_cb, out_argc);
+                cb_result = JS_UNDEFINED;
+                if (r > 0) return r;      /* parked ON THIS MEMBER; the resume comes back to it */
+                if (r < 0) return JS_STEP_ABRUPT;
+                JS_SetPropertyStr(ctx, s->args[s->i], m->dict[s->dict_i], JS_NewBool(ctx, JS_ToBool(ctx, v)));
+                JS_FreeValue(ctx, v);
+                s->dict_i++;
+            }
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            s->dict_i = 0;
             s->i++;
             continue;
         }
@@ -192,6 +229,12 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
 
 int idl_method_id(JSContext *ctx, const IdlArgType *types, int nargs, IdlBody body, int magic)
 {
+    return idl_method_id_dict(ctx, types, nargs, NULL, body, magic);
+}
+
+int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
+                       const char *const *dict_members, IdlBody body, int magic)
+{
     JSRuntime *rt = JS_GetRuntime(ctx);
     int idx, k;
 
@@ -212,6 +255,23 @@ int idl_method_id(JSContext *ctx, const IdlArgType *types, int nargs, IdlBody bo
     g_members[idx].magic = magic;
     for (k = 0; k < nargs; k++)
         g_members[idx].types[k] = types[k];
+    g_members[idx].dict = dict_members;
+    g_members[idx].dict_n = 0;
+    if (dict_members) {
+        int ndict = 0;
+        for (k = 0; k < nargs; k++)
+            if (types[k] == IDL_DICT_BOOLS) ndict++;
+        DCHECK(ndict == 1, "a member declared dictionary members but not exactly one dictionary argument — the "
+                           "conversion cursor is per-member, so a second dictionary would read the first's "
+                           "names");
+        while (dict_members[g_members[idx].dict_n]) {
+            CHECK(g_members[idx].dict_n < IDL_MAX_DICT,
+                  "a dictionary declared more members than IDL_MAX_DICT holds");
+            g_members[idx].dict_atoms[g_members[idx].dict_n] =
+                JS_NewAtom(ctx, dict_members[g_members[idx].dict_n]);
+            g_members[idx].dict_n++;
+        }
+    }
     g_defs[idx].size  = sizeof(JSIdlArgsState);
     g_defs[idx].step  = js_idl_args_step;
     g_defs[idx].fini  = idl_args_result;
@@ -251,4 +311,17 @@ void idl_install_method(JSContext *ctx, JSValueConst target, const char *name, i
     DCHECK(stepid >= 0, "an IDL member was installed before it was declared");
     JS_SetPropertyStr(ctx, (JSValue)target, name,
                       JS_NewCFunction2(ctx, NULL, name, length, JS_CFUNC_step, stepid));
+}
+
+/* The pool interns one atom per dictionary member, for the runtime's life — release them with it. */
+void idl_args_free(JSContext *ctx)
+{
+    int i, k;
+    for (i = 0; i < g_n; i++)
+        for (k = 0; k < g_members[i].dict_n; k++)
+            JS_FreeAtom(ctx, g_members[i].dict_atoms[k]);
+    memset(g_members, 0, sizeof(g_members));
+    memset(g_defs, 0, sizeof(g_defs));
+    g_n = 0;
+    g_rt = NULL;
 }

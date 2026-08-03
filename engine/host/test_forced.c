@@ -14,7 +14,9 @@
 #include "core/dom/abort.h"
 #include "core/dom/node.h"
 #include "core/dom/element.h"
+#include "core/idl_args.h"
 #include "core/dom/document.h"
+#include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "solver/endpoint.h"
 #include "solver/result.h"
@@ -179,7 +181,7 @@ static const char *HTML =
     "var ac0c = new AbortController(); var ac0 = ac0c.signal;"
     "ac0.addEventListener({ toString: function(){ var n = 0; for (var i = 0; i < 500; i++) { n += i; } return 'abort'; } }, function(){ fetch('/api/idlcoerce?v=coerced'); });"   /* addEventListener's `type` is a Web IDL DOMString: the toString is the PAGE's code and has a loop in it, so the machine parks on step_tostring_run and resumes at the exact stage — and the listener is registered under the string that call RETURNED, which the abort below proves by firing it */
     "ac0c.abort();"
-    "var ac = new AbortController(); ac.signal.addEventListener('abort', function(){ fetch('/api/aborted?v=fired'); }); ac.abort();"   /* the controller's signal is the REAL state machine: abort() reads [[Signal]] as an internal slot and fires `abort`, whose listener runs as its own task on this flow */
+    "var ac = new AbortController(); ac.signal.addEventListener('abort', function(e){ fetch('/api/aborted?v=' + (e.isTrusted && e.type === 'abort' && e.target === ac.signal ? 'fired' : 'wrong')); }); ac.abort();"   /* the controller's signal is the REAL state machine: abort() reads [[Signal]] as an internal slot and fires `abort`, whose listener runs as its own task on this flow */
     "var tsig = AbortSignal.timeout({ valueOf: function(){ var n = 0; for (var i = 0; i < 2000; i++) { n += i; } return n; } });"   /* [EnforceRange] unsigned long long is ToNumber on the PAGE's object: the loop inside valueOf preempts, so the timeout machine must suspend and resume at the exact stage it parked on */
     "if (tsig.aborted) { fetch('/api/deadline?v=expired'); } else { fetch('/api/deadline?v=live'); }"   /* a timeout's aborted flag is UNKNOWN, so both arms run and the fallback path's endpoint is learned too */   /* THE responsive gate: a bundle routes, hosts assets and often bases its API on this, so both arms must be reached */   /* the desktop-vs-touch gate, the same shape over a numeric member */
     /* THE REAL DOM, through document/Element/Node rather than a host-edge stand-in. Four things the tree
@@ -217,6 +219,16 @@ static const char *HTML =
     "fetch('/api/iface?v=' + (document.body instanceof Element && document.body instanceof Node &&"
     " document instanceof Document && tx instanceof Text && tx instanceof CharacterData &&"
     " Text.ELEMENT_NODE === 1 ? 'isiface' : 'wrong'));"
+    /* §2.2 THE EVENT INTERFACE. EventInit is a DICTIONARY, so its members are property READS — the getter here
+       is the page's code with a loop in it, and the conversion parks on that member and resumes. */
+    "var ev = new Event('custom', { bubbles: true,"
+    " get cancelable(){ var n = 0; for (var i = 0; i < 300; i++) { n += i; } return true; } });"
+    "fetch('/api/event?v=' + (ev instanceof Event && ev.type === 'custom' && ev.bubbles && ev.cancelable &&"
+    " !ev.isTrusted && ev.eventPhase === Event.NONE ? 'isevent' : 'wrong'));"
+    /* preventDefault writes the CANCELED SLOT, which defaultPrevented and returnValue both read — they were a
+       shared no-op over a public property the page could simply assign. */
+    "ev.preventDefault();"
+    "fetch('/api/evcancel?v=' + (ev.defaultPrevented && ev.returnValue === false ? 'iscancel' : 'wrong'));"
     "if (cfg.admin) { setBodyAttr('data-tt','ttADMIN'); appendChild('kidADMIN'); rx.flag='flagADMIN'; fetch('/api/data?role=admin'); loadScript('/chunk/admin.js'); } else { setBodyAttr('data-tt','ttPUBLIC'); appendChild('kidPUBLIC'); rx.flag='flagPUBLIC'; fetch('/api/data?role=public'); }"   /* admin arm: same endpoint MERGES + a LAZY CHUNK loads. Each arm ALSO writes an attribute, appends a child node, AND assigns the ACCESSOR rx.flag (invokes the setter -> rx._f) -> per-flow DOM + heap-accessor writes across the EXISTING fork. */
     "fetch('/api/whoami?tt=' + getBodyAttr('data-tt'));"   /* DOM ATTR READ-BACK after the fork: per-flow -> admin flow reads ttADMIN, public flow reads ttPUBLIC */
     "fetch('/api/kid?mark=' + lastChildMark());"   /* DOM NODE READ-BACK: each flow's appended child is its OWN last child -> admin reads kidADMIN, public reads kidPUBLIC (neither's inserted node leaks) */
@@ -357,7 +369,9 @@ int main(void) {
        JS_AddIntrinsicDOMException fix: the intrinsic is per-context idempotent now, so JS_NewContext's own
        JS_AddIntrinsicAToB install plus this explicit one no longer overwrite one prototype with another. */
     CHECK(JS_AddIntrinsicDOMException(ctx) == 0, "the DOMException intrinsic failed to install");
+    event_init(ctx);
     event_target_init(ctx);
+    event_install(ctx, g);   /* the Event interface object — `new Event(...)` and every `instanceof Event` */
     event_target_install(ctx, g);
     abort_init(ctx);
     abort_install(ctx, g);
@@ -553,6 +567,8 @@ int main(void) {
         { "\"/api/connected\"",   "isconn"  },
         { "\"/api/position\"",    "isdisc"  },
         { "\"/api/iface\"",       "isiface" },   /* instanceof up the chain + inherited interface constants */
+        { "\"/api/event\"",       "isevent" },   /* new Event(type, EventInit) with a dictionary getter */
+        { "\"/api/evcancel\"",    "iscancel"},   /* preventDefault over the canceled slot */
     };
     int nodealgo_tt = !strstr(js, "wrong");
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)
@@ -587,6 +603,8 @@ int main(void) {
     document_free(ctx);   /* the window reference the lifecycle holds */
     element_free(ctx);    /* the wrapper identity table and the DOM interface prototypes */
     event_target_free(ctx);
+    event_free(ctx);
+    idl_args_free(ctx);   /* the dictionary member atoms the declaration pool interned */
     flow_registry_free(ctx);
     JS_RunGC(rt);   /* collect flow-local garbage from the runs before teardown */
     JS_FreeContext(ctx);

@@ -52,6 +52,7 @@ const INTERFACES = {
   /* The TREE. These were absent from the audit entirely — the interfaces a page touches most had no gap report
      at all, which is the audit lying by omission rather than by direction. They are auditable now because their
      members live on real prototypes rather than being copied onto each wrapper. */
+  Event:                "core/events/event.c",
   Node:                ["core/dom/node.c", "core/events/event_target.c"],
   CharacterData:       ["core/dom/node.c", "core/events/event_target.c"],
   /* Element's file list includes node.c because Element.prototype INHERITS from Node.prototype: a member

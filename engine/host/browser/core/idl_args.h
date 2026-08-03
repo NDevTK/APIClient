@@ -24,6 +24,14 @@ typedef enum {
        itself, anything else is a DOMString. Named for the rule rather than for the member, because the rule is
        what the IDL states. */
     IDL_STRING_UNLESS_CALLABLE,
+    /* A DICTIONARY whose members are all `boolean` defaulting to false — which is every dictionary this engine
+       takes: EventInit {bubbles, cancelable, composed}, AddEventListenerOptions {capture, once, passive},
+       GetRootNodeOptions {composed}. Web IDL converts one by READING each declared member IN ORDER, and a read
+       is one accessor or Proxy trap away from being the page's code, so it is a request exactly like a
+       coercion. The body receives a plain engine-built object carrying the converted booleans, which it reads
+       with an ordinary property get because nothing of the page's is on it.
+       The member NAMES are declared beside the types — see idl_method_id_dict. */
+    IDL_DICT_BOOLS,
 } IdlArgType;
 
 /* A position the IDL does not list is passed through unconverted, which is what a variadic `any...` tail means
@@ -34,6 +42,17 @@ typedef enum {
    step id, which the caller CACHES. Registration and installation are separate on purpose: Element's members
    are installed on every wrapper the tree hands out, so registering there would mint a definition per element. */
 int  idl_method_id(JSContext *ctx, const IdlArgType *types, int nargs, IdlBody body, int magic);
+
+/* The same declaration for a member that takes an IDL_DICT_BOOLS argument: `dict_members` is a NULL-terminated
+   list of the dictionary's member names, in the order the IDL declares them, which is the order Web IDL reads
+   them in. A member declares AT MOST ONE dictionary argument — every one in the platform does, and a second
+   would need its own cursor rather than sharing this one, which is a DCHECK rather than a silent second read. */
+#define IDL_MAX_DICT 6
+int  idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
+                        const char *const *dict_members, IdlBody body, int magic);
+
+/* Release what the pool interned — the dictionary member atoms. */
+void idl_args_free(JSContext *ctx);
 
 /* A SETTER's body, run once the assigned value has been converted. A setter is delivered differently from a
    method — one value, no argument vector — so it declares separately rather than being squeezed into the

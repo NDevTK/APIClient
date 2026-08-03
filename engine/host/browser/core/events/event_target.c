@@ -21,6 +21,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/events/event.h"
 
 /* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
 static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
@@ -172,50 +173,6 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
     return r;
 }
 
-/* The Event a listener receives. Enough of §2.2 to be USED rather than inspected for completeness: a page reads
-   `type` and `target`, and calls the three no-op-in-a-headless-run methods. What is not here is absent. */
-/* §2.2 the event's own FLAGS, set on the event object the listener was handed. These were one shared no-op —
-   the lazy stub the IDL audit exists to expose — and a no-op preventDefault is not a small inaccuracy: whether
-   the default action was cancelled is the ONE thing dispatchEvent reports, and a page that branches on
-   `defaultPrevented` was reading a constant. Each now writes its flag, which is all the spec says they do.
-   magic: 0 = preventDefault, 1 = stopPropagation, 2 = stopImmediatePropagation. */
-static JSValue js_event_flag(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    static const char *const FLAG[] = { "defaultPrevented", "cancelBubble", "cancelBubble" };
-    (void)argc; (void)argv;
-    /* 2.2: preventDefault does nothing unless the event is cancelable. */
-    if (magic == 0) {
-        JSValue c = JS_GetPropertyStr(ctx, this_val, "cancelable");
-        int can = JS_ToBool(ctx, c);
-        JS_FreeValue(ctx, c);
-        if (!can) return JS_UNDEFINED;
-    }
-    if (magic == 2)
-        JS_SetPropertyStr(ctx, (JSValue)this_val, "immediatePropagationStopped", JS_TRUE);
-    JS_SetPropertyStr(ctx, (JSValue)this_val, FLAG[magic], JS_TRUE);
-    return JS_UNDEFINED;
-}
-
-static JSValue make_event(JSContext *ctx, const char *type, JSValueConst target)
-{
-    JSValue ev = JS_NewObject(ctx);
-    if (JS_IsException(ev)) return ev;
-    JS_SetPropertyStr(ctx, ev, "type", JS_NewString(ctx, type));
-    JS_SetPropertyStr(ctx, ev, "target", JS_DupValue(ctx, target));
-    JS_SetPropertyStr(ctx, ev, "currentTarget", JS_DupValue(ctx, target));
-    JS_SetPropertyStr(ctx, ev, "bubbles", JS_NewBool(ctx, true));
-    JS_SetPropertyStr(ctx, ev, "cancelable", JS_NewBool(ctx, false));
-    JS_SetPropertyStr(ctx, ev, "defaultPrevented", JS_NewBool(ctx, false));
-    JS_SetPropertyStr(ctx, ev, "cancelBubble", JS_FALSE);
-    JS_SetPropertyStr(ctx, ev, "preventDefault",
-                      JS_NewCFunctionMagic(ctx, js_event_flag, "preventDefault", 0, JS_CFUNC_generic_magic, 0));
-    JS_SetPropertyStr(ctx, ev, "stopPropagation",
-                      JS_NewCFunctionMagic(ctx, js_event_flag, "stopPropagation", 0, JS_CFUNC_generic_magic, 1));
-    JS_SetPropertyStr(ctx, ev, "stopImmediatePropagation",
-                      JS_NewCFunctionMagic(ctx, js_event_flag, "stopImmediatePropagation", 0, JS_CFUNC_generic_magic, 2));
-    return ev;
-}
-
 /* Schedule ONE listener as a JOB on the running flow. Never a JS_Call: the listener is the page's code and holds
    loops, awaits and concolic branches, so a C activation cannot host it. JS_EnqueueCallJob runs it as a
    call-root flow — the same base a promise reaction runs on, preemptible and forkable like any other program. */
@@ -248,13 +205,19 @@ static int fire_at(JSContext *ctx, JSValueConst target, const char *type, JSValu
 
 int event_target_fire(JSContext *ctx, JSValueConst target, const char *type, JSValueConst bubble_to)
 {
-    JSValue ev = make_event(ctx, type, target);
+    /* A real Event (§2.2), TRUSTED because the engine fired it — that flag is the whole difference from one the
+       page constructs, and a page checks it. `load`/`abort`/`DOMContentLoaded` all bubble and none is
+       cancelable, which is what the HTML and DOM specs say for each of them. */
+    JSValue ev = event_new(ctx, type, /*bubbles*/ true, /*cancelable*/ false);
     int n;
 
     if (JS_IsException(ev)) return 0;
+    event_set_targets(ctx, ev, target, target);
     n = fire_at(ctx, target, type, ev);
-    if (JS_IsObject(bubble_to))
-        n += fire_at(ctx, bubble_to, type, ev);   /* §2.9 bubble: a document event also reaches window */
+    if (JS_IsObject(bubble_to)) {
+        event_set_targets(ctx, ev, target, bubble_to);   /* §2.9: currentTarget moves, target does not */
+        n += fire_at(ctx, bubble_to, type, ev);
+    }
     JS_FreeValue(ctx, ev);
     return n;
 }

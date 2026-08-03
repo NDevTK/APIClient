@@ -113,6 +113,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "dom", "document.c"),                         // Document: parsed facts concrete, cookie/referrer input
     join(HOST, "browser", "core", "dom", "node.c"),                             // Node: identity, the tree, and the CharacterData nodes
     join(HOST, "browser", "core", "dom", "element.c"),
+    join(HOST, "browser", "core", "events", "event.c"),                         // Event: §2.2, the object a listener receives
     join(HOST, "browser", "core", "events", "event_target.c"),                  // EventTarget: listeners + the load event                          // Element: node identity, taint-carrying attributes, innerHTML sink
     // THE ENTRY. `abi` builds the production qjs_* surface the extension bridge drives; the default builds
     // test_forced.c's main() as the node smoke test. They are alternatives, never both: test_forced.c owns

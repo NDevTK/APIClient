@@ -25,6 +25,8 @@
 #include "browser/core/dom/abort.h"
 #include "browser/core/dom/document.h"
 #include "browser/core/dom/element.h"
+#include "browser/core/idl_args.h"
+#include "browser/core/events/event.h"
 #include "browser/core/events/event_target.h"
 #include "browser/core/frame/location.h"
 #include "browser/core/frame/navigator.h"
@@ -110,7 +112,9 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
 
         window_install(g_ctx, g, origin);   /* window/self/frames/parent/top/opener/closed/origin, and name */
         timer_install(g_ctx, g);            /* setTimeout/setInterval/clearTimeout/clearInterval/queueMicrotask */
-        event_target_init(g_ctx);
+        event_init(g_ctx);
+    event_target_init(g_ctx);
+        event_install(g_ctx, g);   /* the Event interface object */
         event_target_install(g_ctx, g);   /* window IS the global (7.2.2), so this is window.addEventListener */
         fetch_install(g_ctx, g);
         module_loader_install(g_rt);
@@ -194,6 +198,8 @@ QJS_EXPORT void qjs_teardown(void)
     document_free(g_ctx);   /* the Document and the window it fires `load` at — both HELD across the lifecycle */
     element_free(g_ctx);    /* the wrapper identity table and the DOM interface prototypes */
     event_target_free(g_ctx);
+    event_free(g_ctx);
+    idl_args_free(g_ctx);   /* the dictionary member atoms the declaration pool interned */
     if (g_ctx) { JS_FreeContext(g_ctx); g_ctx = NULL; }
     if (g_rt)  { JS_FreeRuntime(g_rt);  g_rt  = NULL; }
     lxb_html_document_destroy(g_dom);

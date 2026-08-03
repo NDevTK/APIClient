@@ -52,6 +52,11 @@ static int    g_timers_n, g_timers_cap;
 static int    g_next_id = 1;
 static double g_now;          /* the virtual clock: the expiry of the timer that fired last */
 
+/* THE VIRTUAL CLOCK, for the components that need to stamp a moment (an Event's timeStamp). One clock: a second
+   time source would order events differently from the task queue that ran them, which is the one thing the
+   virtual clock exists to keep consistent. */
+double timer_now(void) { return g_now; }
+
 static void timer_entry_free(JSContext *ctx, Timer *t)
 {
     int i;
