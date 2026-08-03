@@ -193,10 +193,19 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
           construction. Split, and the walk itself is no longer recursive either — it uses the flat rope
           ITERATOR that already existed for hash_string_rope, rather than a third traversal of the same tree.
 
+   THE ALLOCATION HALF OF THE FREE CYCLE IS GONE, and it was 9.13 being performed in the wrong place: a
+   FinalizationRegistry cleanup job was enqueued where the target is FREED, so js_malloc failing ->
+   JS_ThrowOutOfMemory -> JS_Throw freeing the previous exception -> a finalizer -> JS_EnqueueJob -> js_malloc.
+   HostEnqueueFinalizationRegistryCleanupJob is the host's, "at some future time"; V8 posts it from the GC
+   epilogue. The dead entry is now MOVED onto a runtime list (no allocation at all, and the references it
+   already holds keep the callback and held value alive), and the job pump turns it into a job where allocating
+   is ordinary. js_malloc, JS_EnqueueJob, JS_Throw and JS_ThrowOutOfMemory all left the cycle.
+
    THE QUEUE, each named by the edge that holds it:
-      29  js_malloc -> JS_ThrowOutOfMemory -> JS_Throw -> free the old exception -> JS_EnqueueJob -> js_malloc.
-          Throwing frees the previous exception, freeing can enqueue a FinalizationRegistry job, and enqueueing
-          allocates. V8 posts finalization callbacks from the GC epilogue, not from object teardown.
+      25  free_object -> free_property -> JS_FreeValueRT -> free_zero_refcount -> free_gc_object -> free_object.
+          The refcount teardown cascade, and its depth is the PAGE's: `for (;;) a = {next: a}` then drop it is
+          one C frame per link. It needs an explicit free worklist, which is the same shape as every other
+          flattening in this file.
        6  the tramp step-chain teardown (tramp_step_chain_free / the abandon hooks)
        4  JS_GetPropertyInternal -> JS_GetPropertyUint32, the fast-array arm reached through the general read
        4  JS_DefineProperty -> JS_SetPropertyValue -> JS_SetPropertyInternal
@@ -306,7 +315,7 @@ const CEILING_OWN = 22       /* self-contained recursions */
    churn dressed as progress, and the audit counting it is the audit being honest about direct calls rather
    than a debt. The same is true of rope DEPTH generally: JS_STRING_ROPE_MAX_DEPTH is 60 with a flatten above
    it, so no rope walk was ever input-deep. */
-const CEILING_OWN_FUNCS = 67 /* functions in them — the largest is 29, the free/OOM/enqueue cycle */
+const CEILING_OWN_FUNCS = 63 /* functions in them — the largest is 25, the refcount teardown cascade */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
