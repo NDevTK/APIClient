@@ -83,4 +83,10 @@ void      cow_apply(JSContext *ctx, CowDelta *d);
 
 void      cow_free(JSContext *ctx);
 
+/* INSTALL THE TIME-TRAVEL RECORD BOUNDARY — the per-flow COW capture set, declared once for the reason the
+   concolic set is: two entries each spelled it out as a struct literal, which is a list that can drift, and one
+   of them already had. `.gen_fork` is the scheduler's, which is why this lives with the capture hooks that make
+   up the rest of it rather than at either entry. */
+void cow_install_time_travel_hooks(void);
+
 #endif

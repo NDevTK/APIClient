@@ -105,6 +105,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "loader", "module_loader.c"),                 // dynamic import: the lazy-chunk register                           // the Fetch API: every reached request funnels into the @H surface
     join(HOST, "browser", "core", "frame", "location.c"),                       // Location: concrete principal + concolic search/hash
     join(HOST, "browser", "core", "frame", "window.c"),                         // Window: which browsing context this is, and window.name as attacker input
+    join(HOST, "browser", "core", "frame", "navigator.c"),                      // Navigator: spec-fixed identity concrete, the gated environment concolic
     join(HOST, "browser", "core", "timing", "timer.c"),                         // Timers: the timer task source, each expiry a flow
     join(HOST, "browser", "core", "dom", "document.c"),                         // Document: parsed facts concrete, cookie/referrer input
     join(HOST, "browser", "core", "dom", "node.c"),                             // Node: identity, the tree, and the CharacterData nodes

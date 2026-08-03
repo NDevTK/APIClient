@@ -30,6 +30,13 @@ const char *concolic_src_c(JSValueConst v);           /* source identity (NULL i
 JSValue     concolic_example(JSContext *ctx, JSValueConst v);   /* the concrete example (dup'd) or JS_UNDEFINED */
 void        concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example);   /* attach/replace (consumes example) */
 
+/* INSTALL THE WHOLE HOOK SET. It exists because the set was written out as a struct literal at each entry —
+   main.c and test_forced.c — and the two DRIFTED: the fixture harness installed three of the ten, so every
+   targeted test in this repo ran against a weaker engine than the one that ships, and a relational compare on a
+   concolic reached the ToNumber boundary's DCHECK instead of the .rel hook that answers it. A capability the
+   solver owns is declared once BY the solver; an entry asks for it, it does not enumerate it. */
+void concolic_install_hooks(void);
+
 /* Propagation through `+` — install with JS_SetConcolicAddHook. */
 int         concolic_add_hook(JSContext *ctx, JSValue *sp);
 

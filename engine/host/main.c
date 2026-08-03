@@ -26,6 +26,7 @@
 #include "browser/core/dom/element.h"
 #include "browser/core/events/event_target.h"
 #include "browser/core/frame/location.h"
+#include "browser/core/frame/navigator.h"
 #include "browser/core/frame/window.h"
 #include "browser/core/timing/timer.h"
 #include "browser/core/loader/document_scripts.h"
@@ -79,23 +80,10 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
     endpoint_init();
     solve_init(g_ctx);
 
-    /* Per-flow isolation: the time-travel RECORD boundary. Installed AFTER the context's own globals exist, so
-       the baseline is pre-flow and nothing set up here lands in a delta. */
-    static const JSTimeTravelHooks TIME_TRAVEL = {
-        .prop_write = cow_capture_hook, .cell_write = cow_capture_varref,
-        .arr_append = cow_capture_arr_append, .gen_fork = engine_gen_fork,
-        .map_add = cow_capture_map_add, .map_mutate = cow_capture_map_mutate,
-        .async_state = cow_capture_async_state, .module_eval = cow_capture_module_eval, .async_fork = cow_capture_async_fork };
-    JS_SetTimeTravelHooks(&TIME_TRAVEL);
-    /* Concolic VALUE propagation stays installed across scheduling AND verification — taint must flow during a
-       candidate re-fire too. The exploration hooks (branch/fork/preempt) are owned and scoped by the scheduler. */
-    static const JSConcolicHooks CONCOLIC = {
-        .add = concolic_add_hook, .cmp = concolic_cmp_hook, .is = concolic_is,
-        .absent = absent_global_hook, .rel = concolic_rel_hook, .type_of = concolic_typeof_hook,
-        .arith = concolic_arith_hook, .to_str = concolic_tostr_hook,
-        .key_read = concolic_key_read_hook,
-        .key_name = concolic_key_name_hook };
-    JS_SetConcolicHooks(&CONCOLIC);
+    /* The two hook SETS the solver owns, each declared by its own component. They were struct literals here
+       and again in test_forced.c, and the pair had drifted. */
+    cow_install_time_travel_hooks();
+    concolic_install_hooks();
 
     g_dom = lxb_html_document_create();
     CHECK(g_dom != NULL, "the document allocation failed");
@@ -125,6 +113,7 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
         fetch_install(g_ctx, g);
         module_loader_install(g_rt);
         location_install(g_ctx, g, origin);
+        navigator_install(g_ctx, g);        /* client identity: spec-fixed concrete, gated environment concolic */
         element_init(g_ctx);
         document_install(g_ctx, g, g_dom, origin);
         JS_FreeValue(g_ctx, g);

@@ -1,5 +1,6 @@
 /* Per-flow swappable COW delta — see cow.h. */
 #include "solver/cow.h"
+#include "solver/engine.h"
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
@@ -568,3 +569,16 @@ void cow_delta_free(JSContext *ctx, CowDelta *d) {
 }
 
 void cow_free(JSContext *ctx) { (void)ctx; g_current = NULL; }
+
+/* THE time-travel hook set — see cow.h. Installed AFTER the context's own globals exist, so the baseline is
+   pre-flow and nothing set up before it lands in a delta. */
+void cow_install_time_travel_hooks(void)
+{
+    static const JSTimeTravelHooks HOOKS = {
+        .prop_write = cow_capture_hook, .cell_write = cow_capture_varref,
+        .arr_append = cow_capture_arr_append, .gen_fork = engine_gen_fork,
+        .map_add = cow_capture_map_add, .map_mutate = cow_capture_map_mutate,
+        .async_state = cow_capture_async_state, .module_eval = cow_capture_module_eval,
+        .async_fork = cow_capture_async_fork };
+    JS_SetTimeTravelHooks(&HOOKS);
+}

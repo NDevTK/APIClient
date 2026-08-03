@@ -8,6 +8,7 @@
 #include "solver/engine.h"
 #include "solver/cow.h"
 #include "core/loader/document_scripts.h"
+#include "core/frame/navigator.h"
 #include "solver/endpoint.h"
 #include "solver/result.h"
 #include "solver/solve.h"
@@ -165,6 +166,8 @@ static const char *HTML =
     "Object.defineProperty(rx, 'flag', { get: function(){ return this._f; }, set: function(v){ this._f = v; }, configurable: true });</script>"
     "<script>"
     "fetch('/api/u?uid=' + state.id);"   /* concolic query param -> uid carries {state}.id */
+    "if (navigator.userAgent.indexOf('Chrome') >= 0) { fetch('/api/uafork?v=chrome'); } else { fetch('/api/uafork?v=other'); }"   /* THE UA GATE: navigator.userAgent is concolic with a real Chrome example, so the string method computes on the example AND the comparison forks -> BOTH arms' endpoints are learned */
+    "if (navigator.maxTouchPoints > 0) { fetch('/api/touch?v=touch'); } else { fetch('/api/touch?v=mouse'); }"   /* the desktop-vs-touch gate, the same shape over a numeric member */
     "if (cfg.admin) { setBodyAttr('data-tt','ttADMIN'); appendChild('kidADMIN'); rx.flag='flagADMIN'; fetch('/api/data?role=admin'); loadScript('/chunk/admin.js'); } else { setBodyAttr('data-tt','ttPUBLIC'); appendChild('kidPUBLIC'); rx.flag='flagPUBLIC'; fetch('/api/data?role=public'); }"   /* admin arm: same endpoint MERGES + a LAZY CHUNK loads. Each arm ALSO writes an attribute, appends a child node, AND assigns the ACCESSOR rx.flag (invokes the setter -> rx._f) -> per-flow DOM + heap-accessor writes across the EXISTING fork. */
     "fetch('/api/whoami?tt=' + getBodyAttr('data-tt'));"   /* DOM ATTR READ-BACK after the fork: per-flow -> admin flow reads ttADMIN, public flow reads ttPUBLIC */
     "fetch('/api/kid?mark=' + lastChildMark());"   /* DOM NODE READ-BACK: each flow's appended child is its OWN last child -> admin reads kidADMIN, public reads kidPUBLIC (neither's inserted node leaks) */
@@ -297,17 +300,15 @@ int main(void) {
     JS_SetPropertyStr(ctx, g, "appendChild", JS_NewCFunction(ctx, js_append_child, "appendChild", 1));   /* DOM node insert (per-flow) */
     JS_SetPropertyStr(ctx, g, "lastChildMark", JS_NewCFunction(ctx, js_last_child_mark, "lastChildMark", 0));   /* DOM node read */
     JS_SetPropertyStr(ctx, g, "state", concolic_new(ctx, "{state}", "{state}", JS_UNDEFINED));   /* injected/unknown app state */
+    /* the REAL component, not a synthetic edge: a UA/touch gate is where a bundle hides its other endpoints,
+       so this fixture exercises the interface the ABI build installs rather than a stand-in for it. */
+    navigator_install(ctx, g);
     JS_FreeValue(ctx, g);
 
-    /* per-flow isolation: the time-travel RECORD boundary — capture shared property writes AND shared closure
-       CELL writes made DURING flows, so a flow can be rewound/replayed exactly (one structured registration). */
-    static const JSTimeTravelHooks TIME_TRAVEL = { .prop_write = cow_capture_hook, .cell_write = cow_capture_varref, .arr_append = cow_capture_arr_append, .gen_fork = engine_gen_fork, .map_add = cow_capture_map_add, .map_mutate = cow_capture_map_mutate, .async_state = cow_capture_async_state, .module_eval = cow_capture_module_eval, .async_fork = cow_capture_async_fork };
-    JS_SetTimeTravelHooks(&TIME_TRAVEL);
-    /* concolic VALUE propagation stays installed across BOTH scheduling and verification (taint must flow during
-       verify too): `+` builds URL shapes, == / === forks on equality gates + concretizes-on-pin. The exploration
-       hooks (branch/fork/preempt) are owned + scoped by the scheduler (engine_run), not installed here. */
-    static const JSConcolicHooks CONCOLIC = { .add = concolic_add_hook, .cmp = concolic_cmp_hook, .is = concolic_is };
-    JS_SetConcolicHooks(&CONCOLIC);
+    /* The two hook SETS the solver owns, each declared by its own component. They were struct literals here
+       and again in test_forced.c, and the pair had drifted. */
+    cow_install_time_travel_hooks();
+    concolic_install_hooks();
 
     /* Browser layer: parse the document with the real Lexbor HTML parser, then extract its executable inline
        scripts as ONE flow program (document_scripts, Blink core/loader). No boot — the scripts ARE the first flow. */
@@ -455,11 +456,17 @@ int main(void) {
     int gapplyfork_tt = (strstr(js, "\"/api/gapplyfork\"") && strstr(js, "gapA") && strstr(js, "gapP"));
     int grefapplyfork_tt = (strstr(js, "\"/api/grefapplyfork\"") && strstr(js, "graA") && strstr(js, "graP"));
 
+    /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
+       both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one
+       arm and the sibling is never reached. Both arms present is the whole claim. */
+    int uafork_tt = (strstr(js, "\"/api/uafork\"") && strstr(js, "chrome") && strstr(js, "other"));
+    int touchfork_tt = (strstr(js, "\"/api/touch\"") && strstr(js, "touch") && strstr(js, "mouse"));
+
     int h_ok = asan_min
         ? (fefork_tt && owfork_tt && genfork_tt && gen2fork_tt && genofork_tt && afromfork_tt && spreadfork_tt && setaddfork_tt && setfork_tt && mapmutfork_tt && afsfork_tt && paffork_tt && paf2fork_tt && redfork_tt && rerepfork_tt && gcallfork_tt && gapplyfork_tt && grefapplyfork_tt)   /* MIN gate: just the clone/COW/generator paths */
-        : (has_uid_param && role_admin && role_public && merged && pinned && lazy && dom_tt && accessor_tt && async_tt && await_tt && asynccall_tt && async_throw && async_preempt && fetch_await && pending_await && promise_state && delete_iso && floc_iso && fefork_tt && pushfork_tt && mapfork_tt && owfork_tt && genfork_tt && gen2fork_tt && genofork_tt && afromfork_tt && spreadfork_tt && setaddfork_tt && setfork_tt && mapmutfork_tt && afsfork_tt && paffork_tt && paf2fork_tt && redfork_tt && rerepfork_tt && gcallfork_tt && gapplyfork_tt && grefapplyfork_tt);
-    printf("@H %s (pinned=%d lazy=%d dom-attr=%d dom-node=%d accessor=%d async=%d await=%d asynccall=%d throw=%d preempt=%d fetch=%d pending=%d promise-state=%d delete-iso=%d floc-iso=%d fefork=%d pushfork=%d mapfork=%d owfork=%d genfork=%d gen2fork=%d genofork=%d afromfork=%d spreadfork=%d setaddfork=%d setfork=%d mapmutfork=%d afsfork=%d paffork=%d paf2fork=%d redfork=%d rerepfork=%d gcallfork=%d gapplyfork=%d grefapplyfork=%d)\n",
-           h_ok ? "OK" : "FAIL", pinned, lazy, dom_attr, dom_node, accessor_tt, async_tt, await_tt, asynccall_tt, async_throw, async_preempt, fetch_await, pending_await, promise_state, delete_iso, floc_iso, fefork_tt, pushfork_tt, mapfork_tt, owfork_tt, genfork_tt, gen2fork_tt, genofork_tt, afromfork_tt, spreadfork_tt, setaddfork_tt, setfork_tt, mapmutfork_tt, afsfork_tt, paffork_tt, paf2fork_tt, redfork_tt, rerepfork_tt, gcallfork_tt, gapplyfork_tt, grefapplyfork_tt);
+        : (has_uid_param && role_admin && role_public && merged && pinned && lazy && uafork_tt && touchfork_tt && dom_tt && accessor_tt && async_tt && await_tt && asynccall_tt && async_throw && async_preempt && fetch_await && pending_await && promise_state && delete_iso && floc_iso && fefork_tt && pushfork_tt && mapfork_tt && owfork_tt && genfork_tt && gen2fork_tt && genofork_tt && afromfork_tt && spreadfork_tt && setaddfork_tt && setfork_tt && mapmutfork_tt && afsfork_tt && paffork_tt && paf2fork_tt && redfork_tt && rerepfork_tt && gcallfork_tt && gapplyfork_tt && grefapplyfork_tt);
+    printf("@H %s (pinned=%d lazy=%d dom-attr=%d dom-node=%d accessor=%d async=%d await=%d asynccall=%d throw=%d preempt=%d fetch=%d pending=%d promise-state=%d delete-iso=%d floc-iso=%d fefork=%d pushfork=%d mapfork=%d owfork=%d genfork=%d gen2fork=%d genofork=%d afromfork=%d spreadfork=%d setaddfork=%d setfork=%d mapmutfork=%d afsfork=%d paffork=%d paf2fork=%d redfork=%d rerepfork=%d gcallfork=%d gapplyfork=%d grefapplyfork=%d ua=%d touch=%d)\n",
+           h_ok ? "OK" : "FAIL", pinned, lazy, dom_attr, dom_node, accessor_tt, async_tt, await_tt, asynccall_tt, async_throw, async_preempt, fetch_await, pending_await, promise_state, delete_iso, floc_iso, fefork_tt, pushfork_tt, mapfork_tt, owfork_tt, genfork_tt, gen2fork_tt, genofork_tt, afromfork_tt, spreadfork_tt, setaddfork_tt, setfork_tt, mapmutfork_tt, afsfork_tt, paffork_tt, paf2fork_tt, redfork_tt, rerepfork_tt, gcallfork_tt, gapplyfork_tt, grefapplyfork_tt, uafork_tt, touchfork_tt);
 
     /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified. Read from the
        ONE document above — there is no second line to keep in step with it. */

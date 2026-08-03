@@ -1,6 +1,7 @@
 /* The concolic value type — see concolic.h. A host component built on upstream quickjs's PUBLIC class API, so
    the qjs fork carries no value-type delta. */
 #include "solver/concolic.h"
+#include "solver/absent.h"
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
@@ -465,4 +466,18 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp) {
     JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
     sp[-2] = result;
     return 1;
+}
+
+/* THE hook set — see concolic.h. Concolic VALUE propagation stays installed across scheduling AND verification,
+   because taint must flow during a candidate re-fire too; the EXPLORATION hooks (branch/fork/preempt) are not
+   here, because the scheduler owns and scopes those. */
+void concolic_install_hooks(void)
+{
+    static const JSConcolicHooks HOOKS = {
+        .add = concolic_add_hook, .cmp = concolic_cmp_hook, .is = concolic_is,
+        .absent = absent_global_hook, .rel = concolic_rel_hook, .type_of = concolic_typeof_hook,
+        .arith = concolic_arith_hook, .to_str = concolic_tostr_hook,
+        .key_read = concolic_key_read_hook,
+        .key_name = concolic_key_name_hook };
+    JS_SetConcolicHooks(&HOOKS);
 }
