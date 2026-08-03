@@ -22,6 +22,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "browser/core/fetch/fetch.h"
+#include "browser/core/dom/abort.h"
 #include "browser/core/dom/document.h"
 #include "browser/core/dom/element.h"
 #include "browser/core/events/event_target.h"
@@ -113,6 +114,8 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
         fetch_install(g_ctx, g);
         module_loader_install(g_rt);
         location_install(g_ctx, g, origin);
+        abort_init(g_ctx);
+        abort_install(g_ctx, g);   /* AbortController/AbortSignal: fetch takes a signal, so a bundle mints one early */
         navigator_install(g_ctx, g);        /* client identity: spec-fixed concrete, gated environment concolic */
         element_init(g_ctx);
         document_install(g_ctx, g, g_dom, origin);
@@ -184,6 +187,9 @@ QJS_EXPORT void qjs_teardown(void)
            "qjs_teardown with replies still owed — every flow parked on one is dropped with its continuation. "
            "Provide them, or step to DONE, before ending the session");
     doc_scripts_free(&g_scripts);
+    /* the runtime-lifetime values the browser components own — a component that mints one frees it. */
+    abort_free(g_ctx);
+    event_target_free(g_ctx);
     if (g_ctx) { JS_FreeContext(g_ctx); g_ctx = NULL; }
     if (g_rt)  { JS_FreeRuntime(g_rt);  g_rt  = NULL; }
     lxb_html_document_destroy(g_dom);

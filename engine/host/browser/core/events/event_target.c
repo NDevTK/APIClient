@@ -37,6 +37,15 @@ void event_target_init(JSContext *ctx)
     g_ready = 1;
 }
 
+void event_target_free(JSContext *ctx)
+{
+    if (!g_ready)
+        return;
+    JS_FreeValue(ctx, g_key);
+    g_key = JS_UNDEFINED;
+    g_ready = 0;
+}
+
 /* The map of type -> listener array on `target`, created on first use. NULL only on allocation failure. */
 static JSValue listener_map(JSContext *ctx, JSValueConst target, int create)
 {

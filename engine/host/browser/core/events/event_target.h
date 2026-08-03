@@ -4,6 +4,11 @@
 #include "quickjs.h"
 
 void event_target_init(JSContext *ctx);                          /* the private listener key (install time) */
+/* Release that key. A component that mints a RUNTIME-LIFETIME value owns it, and this one did not free its
+   Symbol — so every instance leaked it. It was invisible while only the ABI entry installed listeners, because
+   nothing there runs the leak check; the moment the fixture harness installed the same components it ships
+   with, JS_FreeRuntime's gc_obj_list assert named it. */
+void event_target_free(JSContext *ctx);
 /* add/removeEventListener. NOT dispatchEvent: §2.9 dispatch is SYNCHRONOUS and reports whether the default
    action was cancelled, and this engine runs a listener as its own FLOW (never a JS_Call from C), so a caller
    would be handed an answer before any listener had run. It is honestly absent until the dispatch is a step

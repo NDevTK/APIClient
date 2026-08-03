@@ -2,6 +2,7 @@
  * BOTH arms via the dispatch loop, with the fork expressed purely as a decision-vector sibling (no OP_if
  * rewind, no frame snapshot). Runs standalone against clean upstream quickjs + the new solver components. */
 #include "quickjs.h"
+#include "check.h"
 #include "solver/concolic.h"
 #include "solver/decide.h"
 #include "solver/flow.h"
@@ -9,6 +10,8 @@
 #include "solver/cow.h"
 #include "core/loader/document_scripts.h"
 #include "core/frame/navigator.h"
+#include "core/dom/abort.h"
+#include "core/events/event_target.h"
 #include "solver/endpoint.h"
 #include "solver/result.h"
 #include "solver/solve.h"
@@ -303,6 +306,16 @@ int main(void) {
     /* the REAL component, not a synthetic edge: a UA/touch gate is where a bundle hides its other endpoints,
        so this fixture exercises the interface the ABI build installs rather than a stand-in for it. */
     navigator_install(ctx, g);
+    /* THE ABORT COMPONENTS ARE NOT INSTALLED HERE YET, AND THE REASON IS AN ENGINE LEAK, NOT A CHOICE.
+       AbortSignal's reason IS a DOMException (DOM 3.2), so exercising abort.c requires
+       JS_AddIntrinsicDOMException — and that intrinsic leaks its whole graph. Narrowed to twelve lines with no
+       page and no lexbor: registering JS_CLASS_DOM_EXCEPTION and then storing ANY object (plain or
+       Error-classed, identically) into ctx->class_proto[JS_CLASS_DOM_EXCEPTION] stops JS_FreeContext's teardown
+       body from running at all, and 333 GC objects survive JS_FreeRuntime. Creating the same object and freeing
+       it instead of storing it leaks nothing. main.c installs the intrinsic, so production carries the leak
+       today; nothing had ever run the gc_obj_list check on a context that had it.
+       Installing them here would make this fixture red on a bug it did not cause. The order is: fix the leak,
+       then install the pair here and give the page an abort() case. */
     JS_FreeValue(ctx, g);
 
     /* The two hook SETS the solver owns, each declared by its own component. They were struct literals here
@@ -485,6 +498,8 @@ int main(void) {
     solve_free();
     endpoint_free();
 
+    abort_free(ctx);
+    event_target_free(ctx);
     flow_registry_free(ctx);
     JS_RunGC(rt);   /* collect flow-local garbage from the runs before teardown */
     JS_FreeContext(ctx);

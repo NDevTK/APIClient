@@ -39,7 +39,7 @@ const INTERFACES = {
   ResizeObserver:       "core/resize_observer/resize_observer.c",
   PerformanceObserver:  "core/timing/performance_observer.c",
   Blob:                 "core/fileapi/blob.c",
-  Response:             "core/loader/response.c",
+  Response:             "core/fetch/response.c",
   Notification:         "modules/notification.c",
   Window:              ["core/frame/window.c", "core/dom/document.c", "core/frame/location.c",
                         "core/fetch/fetch.c", "core/events/event_target.c", "core/loader/module_loader.c",
