@@ -25,8 +25,23 @@ import { tmpdir } from "node:os";
 
 const QJS = join(import.meta.dirname, "qjs");
 const CORPUS = join(QJS, "test262", "test");
+/* A SUBDIRECTORY *OR* A SINGLE FILE, plus pass-through of anything after it. Confirming which test failed has
+   repeatedly gone wrong by reading a -vv listing, whose last line is the last SUCCESS and not the failure —
+   three separate mis-identifications are in this file's history. run-test262 takes `-f <file>` for exactly
+   this; it just had no way through from here, so the only tool available was the one that misleads.
+   A path ending in .js becomes -f; anything else is -d; extra argv goes to the binary verbatim. */
 const sub = process.argv[2] || "";
-const dir = sub ? join(CORPUS, sub) : null;
+const passthru = process.argv.slice(3);
+/* THE PATH MUST BE SPELLED THE WAY test262.conf SPELLS IT. Excludes are matched by string — a directory by
+   prefix, a file by equality — against the paths run-test262 enumerated, so passing an ABSOLUTE -d made every
+   exclusion in the conf silently inapplicable. The conf's own comment claimed a by-hand staging run honoured
+   "exclusions and all"; it did not, and an exclusion that quietly does nothing is worse than none, because the
+   run reports a number for a set nobody chose. cwd is the qjs directory, so the corpus-relative spelling
+   resolves and matches. An absolute path is still taken as-is, for a one-off probe that lives outside the
+   corpus rather than being written into it. */
+const target = sub ? (sub.startsWith("/") ? sub : join("test262", "test", sub)) : null;
+const isFile = sub.endsWith(".js");
+const dir = isFile ? null : target;
 const SRCS = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c", "quickjs-libc.c", "run-test262.c"];
 
 if (!existsSync(CORPUS)) {
@@ -47,10 +62,33 @@ const cc = spawnSync("gcc", ["-O1", "-w", "-DNDEBUG", "-D_GNU_SOURCE", "-DCONFIG
 if (cc.status !== 0) { console.error("[test262] build FAILED\n" + (cc.stderr || "")); process.exit(1); }
 
 console.log(`[test262] FEATURE run (forced time-travel, no fallback) on ${sub || "WHOLE CORPUS"}…`);
-const args = ["-c", "test262.conf", ...(dir ? ["-d", dir] : [])];   // cwd=QJS so relative harnessdir resolves
+/* NAMING A DIRECTORY IS ASKING FOR IT. The config excludes whole trees from the GATE — staging/sm asserts
+   SpiderMonkey extensions no spec pins — but they are still worth running by hand, which is the reason the
+   exclusion comment gives for keeping them. So a run that names a subdirectory re-includes it (-I) while every
+   FILE-level exclusion still applies: those are the per-file judgements, each with a stated reason, and they
+   are the ones that must survive. A whole-corpus run names nothing and gets every exclusion. */
+const args = ["-c", "test262.conf",
+              ...(isFile ? ["-f", target] : dir ? ["-d", dir, "-I", dir] : []), ...passthru];
+                                                    // cwd=QJS so relative harnessdir resolves
 const r = spawnSync(bin, args, { cwd: QJS, encoding: "utf8", maxBuffer: 1 << 30,
   env: { ...process.env, FORK_PREEMPT: "1" }, timeout: 590_000 });
 const out = (r.stdout || "") + (r.stderr || "");
+/* SINGLE-FILE MODE HAS NO SUMMARY LINE — run-test262 prints one only for a directory run, and a passing file
+   prints nothing at all. Reporting the absence of a summary as DID-NOT-COMPLETE told the exact lie this
+   harness exists to prevent: a clean run read as a crash. In -f mode the result IS the exit status plus
+   whatever the file printed. */
+if (isFile) {
+  const failed = r.status !== 0 || r.signal ||
+                 /^\S+\.js:\d+:/m.test(out) || /@WHY|@E /.test(out);
+  const body = out.split("\n").filter((l) => l && !/ignoring testdir/.test(l)).join("\n");
+  console.log("\n==================== test262 (feature, one file) ====================");
+  console.log(failed ? "  FAIL" : "  PASS");
+  if (body) console.log(body);
+  if (r.signal) console.log(`  signal=${r.signal}`);
+  console.log("====================================================================");
+  process.exit(failed ? 1 : 0);
+}
+
 const m = out.match(/Result: (\d+)\/(\d+) errors/);
 /* WHAT WAS NOT RUN. test262.conf carries an [exclude] list inherited from upstream (intl402, and staging as
    "frequently broken"), and `features` gates the rest — so a "0/43222 errors" summary was printed while
