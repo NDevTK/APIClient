@@ -214,13 +214,15 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
           reaches can call the loop. That is a wide edit across every release inside teardown, and it buys a
           number rather than a behaviour, so it is recorded here rather than done ahead of work that changes
           what the engine can do.
-       6  the tramp step-chain teardown. Its ToPrimitive half is gone — that walk is one loop now, and the
-          STEP/TOPRIM alternation the page controls no longer costs a frame per link. What is left is
-          js_from_ctor_abandon -> js_iter_consume_end -> the walk: a consume machine's teardown WALKS its
-          requester chain instead of reporting it. Each link has exactly one successor, so the fix is a
-          successor variable and not a stack — but js_iter_consume_end has 22 callers and its own comment
-          explains why the chain teardown lives there rather than at the call sites, so this is a change of
-          contract for all of them, not a local edit. It is the next piece and it needs doing as one.
+   THE STEP-CHAIN TEARDOWN CYCLE IS GONE, six functions and all of it depth the page picked. It was one shape
+   at three levels: a link's teardown WALKED its requester chain by calling the walk, which reached that link's
+   kind of teardown again. STEP/TOPRIM alternation went first, then the consume and from-ctor hooks.
+   The move that took the last two is worth stating, because "22 callers" looked like a reason not to: the
+   hooks keep their existing void contract for the eight sites outside the walk, and gained _upto forms that
+   REPORT the requester chain instead of walking it. The walk uses those and continues its own loop; the chain
+   teardown still lives in exactly one place, so what js_iter_consume_end's comment warns about — a list of
+   sites the next one added forgets — stays impossible. A contract change across 22 call sites was never the
+   only way to do it, and reading it as one is what deferred it twice.
        2  tramp_step_state_free <-> tramp_step_hdr_release, over a machine's `delegate`. The DEPTH is gone: the
           chain is detached before it is freed, so each link's release finds no delegate and the pair bottoms
           out at one level. The cycle remains because a static walk cannot see the detach, like
@@ -235,7 +237,7 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
           out of buckets are balanced, so the depth never reaches the rebalance point again.
        3  lre_case_conv, 2+2, and eleven single-function recursions. */
 const CEILING_BLOB = 16      /* the interpreter cycle's size */
-const CEILING_OWN = 22       /* self-contained recursions */
+const CEILING_OWN = 21       /* self-contained recursions */
 /* 70 -> 65, the parser cycle 29 -> 24, as js_parse_descent's explicit frame stack absorbed the precedence
    ladder (expr_binary / logical_and_or / coalesce_expr / cond_expr) and then UnaryExpression (unary / delete).
    BE PRECISE ABOUT WHICH HALF PAID. The ladder was never deep: `a|b|c` is left-nested and the recursive version
@@ -339,7 +341,7 @@ const CEILING_OWN = 22       /* self-contained recursions */
    churn dressed as progress, and the audit counting it is the audit being honest about direct calls rather
    than a debt. The same is true of rope DEPTH generally: JS_STRING_ROPE_MAX_DEPTH is 60 with a flatten above
    it, so no rope walk was ever input-deep. */
-const CEILING_OWN_FUNCS = 63 /* functions in them — the largest is 25, the refcount teardown cascade */
+const CEILING_OWN_FUNCS = 57 /* functions in them — the largest is 25, the refcount teardown cascade */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
