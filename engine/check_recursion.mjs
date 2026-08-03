@@ -148,12 +148,28 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
    builder — was INSIDE the interpreter blob and is now its own SCC. Nothing recursive was added; the blob was
    hiding it, exactly as the header says a blob does. It is the second cluster this comment already named: error
    CONSTRUCTION reaches back into property definition, so every allocation-failure path joins, and that is what
-   drags js_malloc and JS_RunGC in with it. Breaking THAT is the next piece of work, and it is one edge again
-   rather than 176 functions.
+   drags js_malloc and JS_RunGC in with it.
    Reverting to make the number look like 17 would put those 176 back under a blob that no longer has any
-   reason to exist. The ceilings therefore record what is actually there. */
+   reason to exist. The ceilings therefore record what is actually there.
+
+   THAT CYCLE IS NOW 101, AND THE PART OF IT THAT WAS REAL IS GONE. --why=JS_MakeError2 named one edge worth
+   most of it: js_malloc -> JS_ThrowOutOfMemory, where allocation failure BUILT an InternalError, whose object,
+   message and shape each allocate, each of which can fail again. Upstream suppressed that with an
+   `in_out_of_memory` re-entrancy flag — a recursion made not-to-happen rather than impossible. The error is
+   pre-allocated per context now, while there is still memory, so the throw is a refcount bump and the flag is
+   deleted. 204 -> 158 functions, and the error cycle 177 -> 101.
+   The count went 18 -> 19 for the same reason it went 14 -> 18: breaking an edge splits a blob, and the piece
+   that came out (29 functions: JS_Throw frees the previous exception, freeing can enqueue a FinalizationRegistry
+   job, enqueueing allocates) was inside the 176 all along.
+   TWO NAMED CYCLES REMAIN, and each is one edge, not a function list.
+     101  JS_MakeError2 -> build_backtrace (-94). Capturing a backtrace can throw — it renders strings and reads
+          the frames' own values — and a throw builds an error, which captures a backtrace. `in_build_stack_trace`
+          is the same re-entrancy flag the OOM path just lost, so the same treatment applies: make the capture
+          incapable of throwing. One source of it is already gone (Error.stackTraceLimit is read as a Number, as
+          V8 defines it, rather than coerced through the page's valueOf); the string rendering is the rest.
+      29  js_malloc -> JS_ThrowOutOfMemory -> JS_Throw -> free the old exception -> JS_EnqueueJob -> js_malloc. */
 const CEILING_BLOB = 16      /* the interpreter cycle's size */
-const CEILING_OWN = 18       /* self-contained recursions */
+const CEILING_OWN = 19       /* self-contained recursions */
 /* 70 -> 65, the parser cycle 29 -> 24, as js_parse_descent's explicit frame stack absorbed the precedence
    ladder (expr_binary / logical_and_or / coalesce_expr / cond_expr) and then UnaryExpression (unary / delete).
    BE PRECISE ABOUT WHICH HALF PAID. The ladder was never deep: `a|b|c` is left-nested and the recursive version
@@ -257,7 +273,7 @@ const CEILING_OWN = 18       /* self-contained recursions */
    churn dressed as progress, and the audit counting it is the audit being honest about direct calls rather
    than a debt. The same is true of rope DEPTH generally: JS_STRING_ROPE_MAX_DEPTH is 60 with a flatten above
    it, so no rope walk was ever input-deep. */
-const CEILING_OWN_FUNCS = 204 /* functions in them — 176 of these are the one property/error/alloc cycle */
+const CEILING_OWN_FUNCS = 158 /* functions in them — 101 of these are the one error/property cycle, 29 the OOM/free one */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
@@ -283,12 +299,18 @@ if (process.argv.includes('--list-own')) { for (const c of own) console.log('[' 
    above this file used to carry — "twelve functions joined it unobserved, the twelve are the work" — was a
    guess dressed as a work list. Recomputing the SCC with one call edge deleted says it exactly: an edge whose
    removal collapses the cycle is the cycle's cause, and everything else in it is a passenger.
-   Run with --why-blob. The answer today is one line long: JS_CallFree -> JS_CallInternal, 433 -> 16. Every
-   other edge is worth at most one function. So the work is not 433 functions and never was — it is the five
-   C-drives-JS callers of JS_CallFree (ToPrimitive, a getter read, a setter write, JS_Invoke, eval), each of
-   which has to reach the trampoline instead of running the interpreter from C. When the last one does,
-   JS_CallFree goes and 417 passengers leave with it. */
-if (process.argv.includes('--why-blob')) {
+   Run with --why-blob. The answer was one line long — JS_CallFree -> JS_CallInternal, 433 -> 16 — and acting
+   on it deleted JS_CallFree and the six C-drives-JS sites that reached it.
+   IT IS NOT ABOUT THE INTERPRETER, so it no longer hardcodes JS_CallInternal. --why-blob still anchors there;
+   --why=NAME anchors on any function, which is what the 176-function property/error/allocation cycle needs —
+   that one was a passenger of the interpreter blob until the blob went, and asking the same question of it is
+   the whole of the next step. A diagnostic that answers only for the cycle that happened to be biggest when it
+   was written has to be rewritten every time it succeeds. */
+const whyArg = process.argv.find(a => a.startsWith('--why='))
+if (whyArg || process.argv.includes('--why-blob')) {
+  const anchor = whyArg ? whyArg.slice(6) : 'JS_CallInternal'
+  const cycle = sccs.find(c => c.includes(anchor))
+  if (!cycle) { console.error(`--why: no cycle contains ${anchor}`); process.exit(1) }
   const sccSize = (dropFrom, dropTo) => {
     const ix = new Map(), lo = new Map(), st = [], onSt = new Set()
     let n = 0, found = 0
@@ -310,7 +332,7 @@ if (process.argv.includes('--why-blob')) {
         if (lo.get(v) === ix.get(v)) {
           const comp = []
           for (;;) { const w = st.pop(); onSt.delete(w); comp.push(w); if (w === v) break }
-          if (comp.includes('JS_CallInternal')) found = comp.length
+          if (comp.includes(anchor)) found = comp.length
         }
       }
     }
@@ -320,12 +342,12 @@ if (process.argv.includes('--why-blob')) {
   const seen = []
   for (const [f, outs] of edges)
     for (const t of outs)
-      if (blob.includes(t) && blob.includes(f)) {
+      if (cycle.includes(t) && cycle.includes(f)) {
         const after = sccSize(f, t)
         if (after < base) seen.push([base - after, f, t, after])
       }
   seen.sort((a, b) => b[0] - a[0])
-  console.log(`interpreter cycle ${base}; edges whose removal shrinks it:`)
+  console.log(`cycle containing ${anchor}: ${base}; edges whose removal shrinks it:`)
   for (const [d, f, t, after] of seen.slice(0, 10))
     console.log(`  -${String(d).padEnd(5)} ${f} -> ${t}   => ${after}`)
   if (!seen.length) console.log('  none individually — several edges hold it at once')
