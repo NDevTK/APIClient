@@ -121,8 +121,15 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
 /* HTML firing oracle: re-parse the sink output with the REAL Lexbor parser and FIRE the auto-firing event
    handlers (svg/body onload, img/script onerror) by eval'ing their JS — X9 fires iff a breakout placed
    executable JS in an auto-firing position. innerHTML does NOT run <script>, so those never fire (correct). */
-static void html_fire_walk(JSContext *ctx, lxb_dom_node_t *node) {
-    for (lxb_dom_node_t *n = node; n; n = n->next) {
+/* THE TREE'S DEPTH IS THE CANDIDATE'S DATA — a breakout that nests `<div>` a million times is exactly the kind
+   of input this walk exists to run — so descending by C frame made the oracle's own depth attacker-controlled.
+   Lexbor's nodes carry `parent`, so the traversal needs no stack at all: descend to first_child, else take
+   `next`, else climb until a `next` exists, never above the level the walk started at. */
+static void html_fire_walk(lxb_dom_node_t *node) {
+    lxb_dom_node_t *top = node->parent;   /* the level the walk must not climb above */
+    lxb_dom_node_t *n = node;
+
+    while (n) {
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
             lxb_dom_element_t *el = lxb_dom_interface_element(n);
             static const char *H[] = { "onload", "onerror", NULL };   /* AUTO-firing only (onmouseover needs interaction) */
@@ -132,15 +139,20 @@ static void html_fire_walk(JSContext *ctx, lxb_dom_node_t *node) {
                 if (v && vl) fire_js((const char *)v, vl);
             }
         }
-        if (n->first_child) html_fire_walk(ctx, n->first_child);
+        if (n->first_child) { n = n->first_child; continue; }
+        while (n && !n->next) {
+            n = n->parent;
+            if (n == top) n = NULL;
+        }
+        if (n) n = n->next;
     }
 }
-static void html_fire(JSContext *ctx, const char *html) {
+static void html_fire(const char *html) {
     lxb_html_document_t *doc = lxb_html_document_create();
     if (!doc) return;
     if (lxb_html_document_parse(doc, (const lxb_char_t *)html, strlen(html)) == LXB_STATUS_OK) {
         lxb_dom_element_t *root = lxb_dom_document_element(&doc->dom_document);
-        if (root) html_fire_walk(ctx, lxb_dom_interface_node(root));
+        if (root) html_fire_walk(lxb_dom_interface_node(root));
     }
     lxb_html_document_destroy(doc);
 }
@@ -174,7 +186,7 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
     if (is_verifying()) {
         if (concolic_is(arg)) return;   /* injection didn't reach this write */
         const char *html = JS_ToCString(ctx, arg);
-        if (html) { html_fire(ctx, html); JS_FreeCString(ctx, html); }
+        if (html) { html_fire(html); JS_FreeCString(ctx, html); }
         return;
     }
     if (!concolic_is(arg)) return;
