@@ -131,9 +131,29 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
    The second cluster is independent and cheaper to reason about: error CONSTRUCTION reaches back into the
    interpreter, so every allocation failure path is transitively in the cycle. That is what drags js_malloc in.
    So the work is five named call sites and an error-construction path, not a 433-line list, and the check
-   stays failing until they are done. */
-const CEILING_BLOB = 421     /* the interpreter cycle's size */
-const CEILING_OWN = 14       /* self-contained recursions */
+   stays failing until they are done.
+
+   THEY ARE DONE, AND 433 IS NOW 16. JS_CallFree no longer exists: every one of its six sites was instrumented
+   with a DCHECK, measured over the whole corpus, and DELETED where it was never reached — the ToPrimitive
+   body, JS_GetPropertyInternal's getter and its exotic [[GetOwnProperty]] accessor arm, call_setter,
+   JS_IteratorClose's `return`, JS_EvalFunctionInternal's program body, and JS_Invoke. The last one to still
+   FIRE was the test262 harness's agent thread, which ran its script through plain JS_Eval; it runs as a flow
+   now, and deleting the harness's whole FORK_PREEMPT off-mode is what made that visible.
+   What is left in the cycle is 16 functions, and --why-blob says they are the CONSTRUCTOR path (8) and JS_Call
+   reached from an async-generator settlement (6) — genuinely different work from the six above, not a residue
+   of them.
+
+   THE SELF-CONTAINED COUNT WENT UP, AND THAT IS THE SAME MEASUREMENT, NOT A REGRESSION. 17 functions became
+   204 because a 176-function cycle — property definition, error construction, allocation, GC, the string
+   builder — was INSIDE the interpreter blob and is now its own SCC. Nothing recursive was added; the blob was
+   hiding it, exactly as the header says a blob does. It is the second cluster this comment already named: error
+   CONSTRUCTION reaches back into property definition, so every allocation-failure path joins, and that is what
+   drags js_malloc and JS_RunGC in with it. Breaking THAT is the next piece of work, and it is one edge again
+   rather than 176 functions.
+   Reverting to make the number look like 17 would put those 176 back under a blob that no longer has any
+   reason to exist. The ceilings therefore record what is actually there. */
+const CEILING_BLOB = 16      /* the interpreter cycle's size */
+const CEILING_OWN = 18       /* self-contained recursions */
 /* 70 -> 65, the parser cycle 29 -> 24, as js_parse_descent's explicit frame stack absorbed the precedence
    ladder (expr_binary / logical_and_or / coalesce_expr / cond_expr) and then UnaryExpression (unary / delete).
    BE PRECISE ABOUT WHICH HALF PAID. The ladder was never deep: `a|b|c` is left-nested and the recursive version
@@ -237,7 +257,7 @@ const CEILING_OWN = 14       /* self-contained recursions */
    churn dressed as progress, and the audit counting it is the audit being honest about direct calls rather
    than a debt. The same is true of rope DEPTH generally: JS_STRING_ROPE_MAX_DEPTH is 60 with a flatten above
    it, so no rope walk was ever input-deep. */
-const CEILING_OWN_FUNCS = 17 /* functions in them */
+const CEILING_OWN_FUNCS = 204 /* functions in them — 176 of these are the one property/error/alloc cycle */
 
 for (const c of own) console.log(`  [${c.length}] ${c.join(' ')}`)
 console.log(`interpreter cycle: ${blob.length} functions`)
