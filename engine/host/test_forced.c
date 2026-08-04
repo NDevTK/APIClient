@@ -371,6 +371,32 @@ static const char *HTML =
     "var fo = document.createElement('form'); fo.action = '/api/didsubmit';"
     "var foi = document.createElement('input'); foi.name = 'ok'; fo.appendChild(foi);"
     "document.body.appendChild(fo); foi.value = 'rs'; fo.requestSubmit();"
+    /* §4.13 CUSTOM ELEMENTS — the reason this component exists: connectedCallback's body is code NOTHING ELSE IN
+       THE PROGRAM CALLS. The endpoints below are reachable only through the lifecycle, so their presence is the
+       whole claim. `extends HTMLElement` is what a real bundle writes, and after the upgrade `this.setAttribute`
+       must still resolve — that is the prototype CHAIN, not just the class's own prototype. */
+    "class XPanel extends HTMLElement { connectedCallback(){ this.setAttribute('data-up','ceUP');"
+    " fetch('/api/celife?v=' + (this.getAttribute('data-up') === 'ceUP' ? 'isce' : 'wrong')); } }"
+    "customElements.define('x-panel', XPanel);"
+    "document.body.appendChild(document.createElement('x-panel'));"
+    /* §4.13.3 the RETROACTIVE upgrade: this element was in the tree as a plain HTMLElement before the name was
+       defined. The expando set before the definition is still there afterwards, which is the identity half — the
+       upgrade re-points the SAME wrapper, it does not build a new one. */
+    "var ce0 = document.createElement('x-early'); ce0.marker = 'keptID'; document.body.appendChild(ce0);"
+    "class XEarly extends HTMLElement { connectedCallback(){"
+    " fetch('/api/ceearly?v=' + (this.marker === 'keptID' ? 'isearly' : 'wrong')); } }"
+    "customElements.define('x-early', XEarly);"
+    /* A reaction is a FLOW, not a C call: this one holds a loop AND an await, so it must park at both and resume.
+       s = 0+..+299 = 44850 proves the loop ran to its end across the preempts. */
+    "class XAsync extends HTMLElement { async connectedCallback(){ var n = 0; for (var i = 0; i < 300; i++) n += i;"
+    " var w = await Promise.resolve('ceAWAIT'); fetch('/api/ceasync?n=' + n + '&w=' + w); } }"
+    "customElements.define('x-async', XAsync);"
+    "document.body.appendChild(document.createElement('x-async'));"
+    /* §4.13.4 get(), and §4.13.1's name rule — a name with no hyphen is a SyntaxError, not a quiet registration. */
+    "var cename = 'wrong'; try { customElements.define('nohyphen', XPanel); } catch (e) { cename = 'issyntax'; }"
+    "fetch('/api/cename?v=' + cename);"
+    "fetch('/api/ceget?v=' + (customElements.get('x-panel') === XPanel"
+    " && customElements.get('x-none') === undefined ? 'isget' : 'wrong'));"
     "if (cfg.admin) { setBodyAttr('data-tt','ttADMIN'); appendChild('kidADMIN'); rx.flag='flagADMIN'; fetch('/api/data?role=admin'); loadScript('/chunk/admin.js'); } else { setBodyAttr('data-tt','ttPUBLIC'); appendChild('kidPUBLIC'); rx.flag='flagPUBLIC'; fetch('/api/data?role=public'); }"   /* admin arm: same endpoint MERGES + a LAZY CHUNK loads. Each arm ALSO writes an attribute, appends a child node, AND assigns the ACCESSOR rx.flag (invokes the setter -> rx._f) -> per-flow DOM + heap-accessor writes across the EXISTING fork. */
     "fetch('/api/whoami?tt=' + getBodyAttr('data-tt'));"   /* DOM ATTR READ-BACK after the fork: per-flow -> admin flow reads ttADMIN, public flow reads ttPUBLIC */
     "fetch('/api/kid?mark=' + lastChildMark());"   /* DOM NODE READ-BACK: each flow's appended child is its OWN last child -> admin reads kidADMIN, public reads kidPUBLIC (neither's inserted node leaks) */
@@ -737,6 +763,11 @@ int main(void) {
         { "\"/api/abortsync\"",  "issync"  },   /* §3.2 abort() has run its listeners before it returns */
         { "\"/api/abortonce\"",  "isonce"  },   /* and a second abort() fires nothing */
         { "\"/api/formstate\"",  "isform"  },   /* a control's value state, the form's listed elements */
+        { "\"/api/celife\"",     "isce"    },   /* §4.13 connectedCallback ran — code nothing else calls */
+        { "\"/api/ceearly\"",    "isearly" },   /* the retroactive upgrade, and the wrapper's identity surviving */
+        { "\"/api/ceasync\"",    "ceAWAIT" },   /* the reaction is a flow: it parked at a loop and at an await */
+        { "\"/api/cename\"",     "issyntax"},   /* §4.13.1 a name with no hyphen is refused */
+        { "\"/api/ceget\"",      "isget"   },
     };
     int nodealgo_tt = !strstr(js, "wrong");
     /* §4.10: submit() derived the GET; the named field carries its SOURCE rather than an invented value; a
@@ -748,6 +779,8 @@ int main(void) {
     /* requestSubmit(): the CANCELLED form's action must never appear, and the uncancelled one's must. */
     if (strstr(js, "/api/never")) nodealgo_tt = 0;
     if (!strstr(js, "\"/api/didsubmit\"") || !strstr(js, "\"rs\"")) nodealgo_tt = 0;
+    /* §4.13: the async reaction's loop ran to its END across the preempts, not to some suspended partial. */
+    if (!strstr(js, "\"44850\"")) nodealgo_tt = 0;
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)
         if (!strstr(js, NODE_ALGOS[ai][0]) || !strstr(js, NODE_ALGOS[ai][1])) nodealgo_tt = 0;
     int domidl_tt   = domproto_tt && cdnull_tt && tcnull_tt && nodeval_tt && tcset_tt;

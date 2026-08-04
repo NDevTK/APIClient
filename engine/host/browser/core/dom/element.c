@@ -30,6 +30,7 @@
 #include "core/idl_args.h"
 #include "core/events/event_target.h"
 #include "core/html/html_element.h"
+#include "core/html/custom_elements.h"
 #include "core/css/css_style_declaration.h"
 #include <lexbor/ns/ns.h>
 
@@ -455,8 +456,12 @@ static const JSCFunctionListEntry js_element_readonly[] = {
    it does not have to know what a script is. */
 static void element_on_inserted(JSContext *ctx, lxb_dom_node_t *n)
 {
-    if (n && n->type == LXB_DOM_NODE_TYPE_ELEMENT)
+    if (n && n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
         element_prepare_script(ctx, lxb_dom_interface_element(n));
+        /* §4.13.3: an element that ENTERS the tree is upgraded if its name is defined — the other half of
+           "learned by execution", beside the <script> preparation right above it. */
+        custom_elements_try_upgrade(ctx, lxb_dom_interface_element(n));
+    }
 }
 
 JSValue element_wrap(JSContext *ctx, lxb_dom_element_t *el)
@@ -531,6 +536,7 @@ void element_init(JSContext *ctx)
     g_element_proto = proto;
     node_set_proto(ctx, LXB_DOM_NODE_TYPE_ELEMENT, JS_DupValue(ctx, proto));
     node_set_inserted_hook(element_on_inserted);
+    custom_elements_init(ctx);
     cssom_init(ctx);          /* CSSStyleDeclaration.prototype, which HTMLElement's `style` attribute names */
     html_element_init(ctx);   /* the HTML half, which builds HTMLElement and the per-tag interfaces on this */
 }
@@ -541,6 +547,7 @@ void element_free(JSContext *ctx)
 {
     html_element_free(ctx);
     cssom_free(ctx);
+    custom_elements_free(ctx);
     JS_FreeValue(ctx, g_element_proto);
     g_element_proto = JS_UNDEFINED;
     g_reflect_n = 0;

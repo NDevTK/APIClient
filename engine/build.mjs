@@ -134,7 +134,8 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "dom", "element.c"),
     join(HOST, "browser", "core", "css", "css_style_declaration.c"),           // CSSOM: element.style + getComputedStyle
     join(HOST, "browser", "core", "html", "html_element.c"),
-    join(HOST, "browser", "core", "html", "html_form.c"),                       // §4.10: a control's value state + submission                    // HTMLElement + HTML's per-tag interface table
+    join(HOST, "browser", "core", "html", "html_form.c"),
+    join(HOST, "browser", "core", "html", "custom_elements.c"),                 // §4.13: the registry, upgrade and reactions                       // §4.10: a control's value state + submission                    // HTMLElement + HTML's per-tag interface table
     join(HOST, "browser", "core", "events", "event.c"),                         // Event: §2.2, the object a listener receives
     join(HOST, "browser", "core", "events", "event_target.c"),                  // EventTarget: listeners + the load event                          // Element: node identity, taint-carrying attributes, innerHTML sink
     // THE ENTRY. `abi` builds the production qjs_* surface the extension bridge drives; the default builds

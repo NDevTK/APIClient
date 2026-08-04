@@ -21,6 +21,7 @@
 #include "core/events/event_target.h"
 #include "core/html/html_element.h"
 #include "core/html/html_form.h"
+#include "core/html/custom_elements.h"
 #include "core/css/css_style_declaration.h"
 #include "core/dom/document.h"
 #include "core/idl_args.h"
@@ -351,6 +352,13 @@ static JSValue g_doc_obj = JS_UNDEFINED, g_win_obj = JS_UNDEFINED;
 /* The document's address, which §4.4 baseURI reads through document_base_url(). */
 static char g_doc_url[2048];
 
+/* The parsed document's ROOT node — what a whole-tree walk starts from. One component owns which document this
+   engine parsed; a second copy of that pointer is how the two drift apart. */
+lxb_dom_node_t *document_root_node(void)
+{
+    return g_doc ? lxb_dom_interface_node(g_doc->dom_document.element) : NULL;
+}
+
 const char *document_base_url(void)
 {
     DCHECK(g_doc_url[0] != '\0', "a node's baseURI was read before the document was installed");
@@ -481,7 +489,8 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     node_install_interfaces(ctx, global);
     node_install_interface(ctx, global, "Element", element_proto());
     html_element_install(ctx, global);   /* HTMLElement and every per-tag interface object */
-    cssom_install(ctx, global);          /* CSSStyleDeclaration, and getComputedStyle on the Window */
+    cssom_install(ctx, global);
+    custom_elements_install(ctx, global);   /* §4.13.4 window.customElements */          /* CSSStyleDeclaration, and getComputedStyle on the Window */
     node_install_interface(ctx, global, "Document", node_type_proto(LXB_DOM_NODE_TYPE_DOCUMENT));
     engine_set_document_done_hook(document_done_stage);
 }

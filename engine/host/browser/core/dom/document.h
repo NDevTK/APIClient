@@ -11,6 +11,8 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
 /* §4.4 baseURI's answer: the document's address. ONE component owns what this document's URL is — two answers
    to that question is how they drift apart. */
 const char *document_base_url(void);
+/* The parsed document's root node, for a component that walks the whole tree. */
+lxb_dom_node_t *document_root_node(void);
 /* Release what the component HOLDS across the document's lifecycle — the window it fires `load` at. */
 void document_free(JSContext *ctx);
 
