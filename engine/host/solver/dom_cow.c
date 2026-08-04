@@ -174,6 +174,78 @@ void dom_cow_remove_child(lxb_dom_node_t *node) {
     lxb_dom_node_remove(node);
 }
 
+/* A PRIVATE TREE — the DOM's half of the invariant the heap COW already keeps: a delta captures only SHARED
+   baseline state, because state the running flow created cannot be observed by another flow, and capturing it
+   would make the delta O(everything the flow built) instead of O(shared state it touched).
+   The fragment parse is where this became load-bearing. `el.innerHTML = markup` parses into a detached tree and
+   moves each top-level node into the real one: the MOVE is a shared write and goes through the chokepoint, but
+   taking a node OUT of the parse's tree, and destroying that tree afterwards, are writes to something the parse
+   itself built a moment ago and nothing else has ever seen.
+   IT IS A SCOPE AND NOT A PREDICATE, because no predicate on the node is sound. "Unparented" is what a detached
+   parse result and a subtree REMOVED from the document both look like, and the second one must never be
+   destroyed — another flow's baseline still holds it and that flow's unapply would re-insert freed memory. So
+   the caller DECLARES the tree it just built, and the declaration is what the operations assert against. The
+   declaration itself is checked against the delta: a root that appears in any live removal entry came out of the
+   shared tree and is not private, whoever says otherwise. */
+static lxb_dom_node_t *g_private_root;
+
+/* IS THIS NODE ACTUALLY IN ITS PARENT'S CHILD LIST? Not the same question as "does it have a parent pointer",
+   which is why this is a function and not `n->parent != NULL`. Lexbor's fragment parse ENDS by pointing its
+   detached root's `parent` at the document — `parser->root->parent = &doc->node` — without ever linking it as a
+   child, so the root can reach an owner document while being in nobody's tree. A linked child is either the
+   first one or has a previous sibling; a node that is neither is unattached however its parent pointer reads. */
+static bool dom_is_attached(const lxb_dom_node_t *n) {
+    return n->parent && (n->parent->first_child == n || n->prev != NULL);
+}
+
+/* The tree `n` belongs to, following only REAL attachment for the reason above. */
+static lxb_dom_node_t *dom_root_of(lxb_dom_node_t *n) {
+    while (dom_is_attached(n)) n = n->parent;
+    return n;
+}
+
+/* Is this node parked in some flow's delta as REMOVED? Then it is shared-tree state on loan, not private. The
+   whole chain, not just the head: a sibling's base segment holds its removals too. Dev-only and O(delta). */
+static bool dom_delta_removed(lxb_dom_node_t *n) {
+    for (int i = 0; i < g_dom_undo_n; i++)
+        if (g_dom_undo[i].kind == 2 && g_dom_undo[i].node == n) return true;
+    for (DomSeg *s = g_dom_base; s; s = s->base)
+        for (int i = 0; i < s->n; i++)
+            if (s->e[i].kind == 2 && s->e[i].node == n) return true;
+    return false;
+}
+
+void dom_cow_private_begin(lxb_dom_node_t *root) {
+    DCHECK(!g_private_root, "a private tree scope opened inside another — the operations inside assert against "
+                            "ONE declared root, so a nested scope would let the inner one's nodes be taken from "
+                            "the outer's tree");
+    DCHECK(root && !dom_is_attached(root), "a private tree was declared for a node that is in someone's tree");
+    DCHECK(!dom_delta_removed(root),
+           "a private tree was declared for a subtree that a flow REMOVED from the document — another flow's "
+           "baseline still holds it and that flow's unapply re-inserts it, so destroying it frees live tree");
+    g_private_root = root;
+}
+
+/* Take a node OUT of the declared private tree. No capture, because nothing shared changes: the node is about
+   to be handed to a capturing insert, and that insert is the write another flow could see. */
+void dom_cow_take_private(lxb_dom_node_t *node) {
+    DCHECK(node && g_private_root && dom_root_of(node) == g_private_root,
+           "dom_cow_take_private on a node outside the declared private tree — a detach of shared tree state "
+           "must be captured, or the flow that still has it in its baseline re-inserts freed memory on unapply");
+    lxb_dom_node_remove(node);
+}
+
+/* Close the scope and destroy the tree. Its children must already be gone: destroying one that still holds
+   nodes would free tree the caller is about to insert. */
+void dom_cow_private_end(void) {
+    DCHECK(g_private_root, "a private tree scope closed without being opened");
+    DCHECK(g_private_root->first_child == NULL,
+           "a private tree was destroyed with children still in it — those nodes are about to be freed under "
+           "whatever took a reference to them");
+    lxb_dom_node_destroy(g_private_root);
+    g_private_root = NULL;
+}
+
 /* A CHARACTER-DATA node's VALUE (§4.10 `data`). The third thing a flow can change about the tree, after an
    attribute and a node's presence: `text.data = x` mutates bytes the baseline owns, in place, on a node whose
    IDENTITY must survive the write — so it cannot be modelled as a remove+insert of a replacement node the way

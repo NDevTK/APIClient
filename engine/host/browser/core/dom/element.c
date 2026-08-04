@@ -324,13 +324,16 @@ static void fragment_place(JSContext *ctx, lxb_dom_element_t *context, lxb_dom_n
     frag = lxb_html_document_parse_fragment(doc, context, (const lxb_char_t *)html, strlen(html));
     in_parse = 0;
     if (!frag) return;
+    /* Everything below moves nodes OUT of what the parse just built, which nothing else has ever seen — see
+       dom_cow.h. The scope is what makes that a declared fact rather than an assumption about `frag`. */
+    dom_cow_private_begin(frag);
     /* The reference child is fixed BEFORE anything moves: inserting changes `anchor->next`. */
     ref = (where == PLACE_AFTER) ? anchor->next
         : (where == PLACE_FIRST_CHILD) ? anchor->first_child
         : anchor;
     for (node = frag->first_child; node; node = next) {
         next = node->next;
-        lxb_dom_node_remove(node);   /* out of the fragment, which nothing else observes */
+        dom_cow_take_private(node);   /* out of the private fragment; the INSERT below is the shared write */
         switch (where) {
         case PLACE_CHILDREN:    dom_cow_append_child(anchor, node); break;
         case PLACE_BEFORE:
@@ -344,7 +347,7 @@ static void fragment_place(JSContext *ctx, lxb_dom_element_t *context, lxb_dom_n
         default: DFAIL("a fragment was placed with an unknown position"); break;
         }
     }
-    lxb_dom_node_destroy(frag);
+    dom_cow_private_end();
     if (where == PLACE_REPLACE) dom_cow_remove_child(anchor);
 }
 

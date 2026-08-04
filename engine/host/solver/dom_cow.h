@@ -42,8 +42,8 @@ uint64_t dom_cow_version(void);
    tree ONLY through these, never through raw lxb_dom_* mutators + a separate capture, so a DOM write cannot
    bypass time-travel capture (the browser engineer's "one place to reason about"). This is the fork-free answer
    to unbypassable capture: rather than fork Lexbor to hook its internal write primitives, we OWN the mutation
-   API on top of Lexbor and funnel every write through here — enforced structurally by poisoning the raw
-   lxb_dom_* mutators in the component build. */
+   API on top of Lexbor and funnel every write through here — enforced structurally by engine/check_dom_chokepoint.mjs,
+   which fails the build if a browser component names a raw Lexbor mutator at all. */
 void dom_cow_set_attribute(lxb_dom_element_t *el, const char *name, const char *val, size_t val_len);
 /* the attribute setter's twin — removeAttribute, and what a boolean reflection does when set to false. */
 void dom_cow_remove_attribute(lxb_dom_element_t *el, const char *name);
@@ -61,6 +61,23 @@ void dom_cow_set_text(lxb_dom_node_t *node, const char *val, size_t val_len);
 /* A DOM PROPERTY's taint (textContent and its kind): the value half is already captured as Text nodes by the
    insert/remove chokepoints, so this captures the taint shadow so it reverts with them. JS_UNDEFINED clears. */
 void dom_cow_set_prop_taint(JSContext *ctx, lxb_dom_element_t *el, const char *name, JSValueConst opaque);
+
+/* FLOW-PRIVATE TREE OPERATIONS — the DOM's half of the invariant the heap COW already keeps: a delta captures
+   only SHARED baseline state, because state the running flow created cannot be observed by another flow and
+   capturing it would make the delta O(everything the flow built) rather than O(shared state it touched).
+   The fragment parse is where this became load-bearing. `el.innerHTML = markup` parses into a fragment and then
+   moves each top-level node into the real tree: the MOVE is a shared write and goes through the chokepoint above,
+   but taking the node out of the fragment first, and destroying the emptied fragment after, are writes to a tree
+   the parse itself just built and nothing else has ever seen. Routing those through the capturing chokepoint
+   would put the fragment's whole internal structure in the delta; calling Lexbor raw is what the check now
+   refuses. So they are chokepoint entries that DECLARE the state is private, and ASSERT it.
+   IT IS A SCOPE AND NOT A PREDICATE. No test on the node itself is sound: an unparented tree is what a detached
+   parse result and a subtree REMOVED from the document both look like, and destroying the second is what frees
+   tree another flow's unapply re-inserts. So the caller DECLARES the tree it just built, that declaration is
+   itself checked against every live removal entry, and the two operations assert against the declared root. */
+void dom_cow_private_begin(lxb_dom_node_t *root);   /* the tree this flow just built and nothing else has seen */
+void dom_cow_take_private(lxb_dom_node_t *node);    /* out of it, on its way to the real tree via the chokepoint */
+void dom_cow_private_end(void);                     /* close the scope and destroy the emptied tree */
 
 /* Lower-level capture primitives the chokepoint is built on (record a mutation BEFORE it happens). Direct use is
    reserved for the mutation ops that compose them (the chokepoint above, and node-insert once it lands). */

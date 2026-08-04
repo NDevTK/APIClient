@@ -34,6 +34,14 @@ const EXT_QJS = join(ENGINE, "..", "extension", "lib", "qjs");   // where bridge
   const r = spawnSync(process.execPath, [join(ENGINE, "check_step_visits.mjs")], { stdio: "inherit" });
   if (r.status !== 0) process.exit(r.status ?? 1);
 }
+/* The DOM chokepoint. dom_cow.h claimed the raw Lexbor mutators were "poisoned in the component build" and
+   nothing poisoned anything — the claim was what people read instead of looking, and two real bypasses were
+   sitting in element.c the first time this ran. A write that misses the chokepoint is invisible to the per-flow
+   delta, so a forked arm reads its sibling's write and the unapply cannot put the baseline back. */
+{
+  const r = spawnSync(process.execPath, [join(ENGINE, "check_dom_chokepoint.mjs")], { stdio: "inherit" });
+  if (r.status !== 0) process.exit(r.status ?? 1);
+}
 const WORK = join(ENGINE, ".work");
 const EMSDK = join(WORK, "emsdk");
 const EMCC = join(EMSDK, "upstream", "emscripten", process.platform === "win32" ? "emcc.bat" : "emcc");
