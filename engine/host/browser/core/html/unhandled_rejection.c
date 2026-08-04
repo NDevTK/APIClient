@@ -169,17 +169,14 @@ static JSValue js_pre_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVa
         return JS_ThrowTypeError(ctx, "constructor PromiseRejectionEvent requires 'new'");
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "PromiseRejectionEvent constructor requires a type");
-    {
-        JSValue b = JS_GetPropertyStr(ctx, init, "bubbles"), c = JS_GetPropertyStr(ctx, init, "cancelable");
-        bubbles = JS_ToBool(ctx, b); cancelable = JS_ToBool(ctx, c);
-        JS_FreeValue(ctx, b); JS_FreeValue(ctx, c);
-    }
+    bubbles = idl_dict_bool(ctx, init, "bubbles");
+    cancelable = idl_dict_bool(ctx, init, "cancelable");
     type = JS_ToCString(ctx, argv[0]);   /* a real string by now: this cannot reach the page */
     if (!type) return JS_EXCEPTION;
     ev = event_new_untrusted(ctx, type, bubbles, cancelable);   /* §2.2: what the PAGE constructs is untrusted */
     JS_FreeCString(ctx, type);
-    promise = JS_GetPropertyStr(ctx, init, "promise");
-    reason = JS_GetPropertyStr(ctx, init, "reason");
+    promise = idl_dict_get(ctx, init, "promise");
+    reason = idl_dict_get(ctx, init, "reason");
     ev = pre_new(ctx, ev, promise, reason);
     JS_FreeValue(ctx, promise);
     JS_FreeValue(ctx, reason);

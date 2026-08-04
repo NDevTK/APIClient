@@ -33,6 +33,11 @@ typedef enum {
        converted members, which it reads with an ordinary property get because nothing of the page's is on it.
        The members are declared beside the types — see idl_method_id_dict. */
     IDL_DICT,
+    /* `(AddEventListenerOptions or boolean)` — the one union of this shape in the DOM, and its rule is what
+       §2.7's "flatten" states: a value that is NOT an object IS the first declared member's boolean, and an
+       object is read as an ordinary dictionary. Named for the rule rather than for the member, because the
+       rule is what the IDL states — the same reason IDL_STRING_UNLESS_CALLABLE is named that way. */
+    IDL_DICT_OR_BOOL_FIRST,
 } IdlArgType;
 
 /* A DICTIONARY MEMBER, as its IDL declares it: the name, the type of its value, and whether the IDL marks it
@@ -56,6 +61,15 @@ int  idl_method_id(JSContext *ctx, const IdlArgType *types, int nargs, IdlBody b
 #define IDL_MAX_DICT 6
 int  idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
                         const IdlDictMember *members, int nmembers, IdlBody body, int magic);
+
+/* READ a member of the dictionary the declaration built. An `optional D options = {}` argument that the page
+   did not pass is not there at all, so a body that reads it with JS_GetPropertyStr calls a property get on
+   `undefined` — a pending TypeError, and a truthy JS_EXCEPTION where a `false` belonged. That is a mistake per
+   BODY, which is the thing this machine exists to have only one of, so reading a dictionary is part of the
+   declaration's contract: an absent dictionary has every member absent, and that is all it means.
+   Nothing of the page's is on the object these read, so neither runs any of its code. */
+JSValue idl_dict_get(JSContext *ctx, JSValueConst dict, const char *name);
+bool    idl_dict_bool(JSContext *ctx, JSValueConst dict, const char *name);
 
 /* Release what the pool interned — the dictionary member atoms. */
 void idl_args_free(JSContext *ctx);

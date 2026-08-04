@@ -336,6 +336,33 @@ static const char *HTML =
     "bpar.addEventListener('stp', function(e){ btrace += 'P'; });"
     "bkid.dispatchEvent(new Event('stp', { bubbles: true }));"
     "fetch('/api/nobubble?v=' + (nb === 'K2tc' && btrace === 'K' ? 'isnobub' : 'wrong'));"
+    /* §2.9's CAPTURING leg. A capturing listener on the ancestor runs BEFORE the target's, at eventPhase 1 —
+       the walk goes down the path and then back up it, which is why the target is its own leg and not an end
+       of one. A registration with no options is not capturing, so the two must interleave in that order. */
+    "btrace = '';"
+    "bpar.addEventListener('cap', function(e){ btrace += 'Pc' + e.eventPhase; }, true);"
+    "bpar.addEventListener('cap', function(e){ btrace += 'Pb' + e.eventPhase; });"
+    "bkid.addEventListener('cap', function(e){ btrace += 'K' + e.eventPhase; });"
+    "bkid.dispatchEvent(new Event('cap', { bubbles: true }));"
+    "fetch('/api/capture?v=' + (btrace === 'Pc1K2Pb3' ? 'iscap' : 'wrong'));"
+    /* §2.7's dedup key is (type, callback, CAPTURE), so ONE function registered both ways is TWO listeners —
+       and removing it with the wrong flag removes neither. */
+    "var dupn = 0; var dupf = function(){ dupn++; };"
+    "bpar.addEventListener('dup', dupf, true); bpar.addEventListener('dup', dupf);"
+    "bpar.addEventListener('dup', dupf, true);"   /* the exact same registration: does nothing */
+    "bpar.dispatchEvent(new Event('dup'));"
+    "var dup1 = dupn; bpar.removeEventListener('dup', dupf); dupn = 0;"
+    "bpar.dispatchEvent(new Event('dup'));"
+    "fetch('/api/dedup?v=' + (dup1 === 2 && dupn === 1 ? 'isdedup' : 'wrong'));"
+    /* §2.9 "inner invoke" step 2: `once` removes the listener BEFORE calling it, so a re-entrant dispatch from
+       inside the handler cannot run it a second time — which is exactly what `once` exists to prevent, and it
+       is also the only way to tell "removed before" from "removed after". */
+    "var oncen = 0;"
+    "bpar.addEventListener('one', function(){ oncen++; if (oncen < 5) bpar.dispatchEvent(new Event('one')); },"
+    " { once: true });"
+    "bpar.dispatchEvent(new Event('one'));"
+    "bpar.dispatchEvent(new Event('one'));"
+    "fetch('/api/once?v=' + (oncen === 1 ? 'isonce1' : 'wrong'));"
     /* THE ENGINE'S OWN FIRE goes through the SAME walk. DOMContentLoaded is fired AT THE DOCUMENT and bubbles
        to the window — which used to need the window passed in by hand as a second fire_at, and is now just the
        document's ancestor. A trusted event, which is what tells it from one the page dispatched. */
@@ -801,6 +828,9 @@ int main(void) {
         { "\"/api/cssro\"",      "isro"    },   /* a computed declaration throws rather than silently ignoring */
         { "\"/api/bubble\"",     "isbubble"},   /* §2.9's path: target fixed, currentTarget and phase moving */
         { "\"/api/nobubble\"",   "isnobub" },   /* a non-bubbling event, and stopPropagation */
+        { "\"/api/capture\"",    "iscap"   },   /* the CAPTURING leg, before the target and before bubbling */
+        { "\"/api/dedup\"",      "isdedup" },   /* §2.7's key is (type, callback, capture) */
+        { "\"/api/once\"",       "isonce1" },   /* removed BEFORE the call, so a re-entrant fire cannot re-run it */
         { "\"/api/dclbubble\"",  "isdcl"   },   /* the ENGINE's own fire walks the same path to the window */
         { "\"/api/abortsync\"",  "issync"  },   /* §3.2 abort() has run its listeners before it returns */
         { "\"/api/abortonce\"",  "isonce"  },   /* and a second abort() fires nothing */

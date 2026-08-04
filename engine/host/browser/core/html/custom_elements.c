@@ -225,7 +225,7 @@ static JSValue js_ce_define(JSContext *ctx, JSValueConst this_val, int argc, JSV
     /* §4.13.4 step 5: customized built-ins. Rejected rather than registered as autonomous — quietly treating
        `{extends:'button'}` as a new tag would define something the page never asked for and leave the button
        it did ask for un-upgraded. */
-    ext = JS_GetPropertyStr(ctx, argc > 2 ? argv[2] : JS_UNDEFINED, "extends");
+    ext = idl_dict_get(ctx, argc > 2 ? argv[2] : JS_UNDEFINED, "extends");
     if (JS_IsString(ext)) {
         JS_FreeValue(ctx, ext);
         return JS_ThrowDOMException(ctx, "NotSupportedError",

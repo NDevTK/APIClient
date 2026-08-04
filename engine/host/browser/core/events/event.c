@@ -337,14 +337,6 @@ static const IdlDictMember EVENT_INIT[] = {   /* EventInit, in the order the IDL
     { "bubbles", IDL_BOOLEAN }, { "cancelable", IDL_BOOLEAN }, { "composed", IDL_BOOLEAN },
 };
 
-static bool dict_bool(JSContext *ctx, JSValueConst d, const char *name)
-{
-    JSValue v = JS_GetPropertyStr(ctx, d, name);
-    bool b = JS_ToBool(ctx, v);
-    JS_FreeValue(ctx, v);
-    return b;
-}
-
 static JSValue js_event_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     JSValueConst init = argc > 1 ? argv[1] : JS_UNDEFINED;
@@ -358,9 +350,9 @@ static JSValue js_event_ctor(JSContext *ctx, JSValueConst this_val, int argc, JS
         return JS_ThrowTypeError(ctx, "Event constructor requires a type");
     /* §2.2: an event the PAGE constructs is not trusted, which is the whole point of the flag. */
     return event_make(ctx, argv[0],
-                      JS_IsObject(init) && dict_bool(ctx, init, "bubbles"),
-                      JS_IsObject(init) && dict_bool(ctx, init, "cancelable"),
-                      JS_IsObject(init) && dict_bool(ctx, init, "composed"),
+                      idl_dict_bool(ctx, init, "bubbles"),
+                      idl_dict_bool(ctx, init, "cancelable"),
+                      idl_dict_bool(ctx, init, "composed"),
                       /*trusted*/ false);
 }
 

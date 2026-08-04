@@ -63,8 +63,20 @@ void event_target_init(JSContext *ctx)
           "the event-handler key or marker allocation failed");
     g_ready = 1;
     if (g_add_stepid < 0) {
-        g_add_stepid    = idl_method_id(ctx, IDL_1STR, 1, idl_add_or_remove, 0);   /* (DOMString type, EventListener?) */
-        g_remove_stepid = idl_method_id(ctx, IDL_1STR, 1, idl_add_or_remove, 1);
+        /* (DOMString type, EventListener? callback, optional (AddEventListenerOptions or boolean) options) —
+           removeEventListener's third is (EventListenerOptions or boolean), which is the same union with only
+           `capture` in it, and reading a member the IDL does not declare there simply never happens. */
+        static const IdlArgType ADD_ARGS[3] = { IDL_DOMSTRING, IDL_ANY, IDL_DICT_OR_BOOL_FIRST };
+        static const IdlDictMember ADD_OPTS[] = {   /* `capture` FIRST: it is what the bare boolean means */
+            { "capture", IDL_BOOLEAN }, { "once", IDL_BOOLEAN }, { "passive", IDL_BOOLEAN },
+        };
+        static const IdlDictMember REMOVE_OPTS[] = { { "capture", IDL_BOOLEAN } };
+        g_add_stepid    = idl_method_id_dict(ctx, ADD_ARGS, 3, ADD_OPTS,
+                                             (int)(sizeof(ADD_OPTS) / sizeof(ADD_OPTS[0])),
+                                             idl_add_or_remove, 0);
+        g_remove_stepid = idl_method_id_dict(ctx, ADD_ARGS, 3, REMOVE_OPTS,
+                                             (int)(sizeof(REMOVE_OPTS) / sizeof(REMOVE_OPTS[0])),
+                                             idl_add_or_remove, 1);
     }
 
 }
@@ -121,63 +133,115 @@ static JSValue listener_map(JSContext *ctx, JSValueConst target, int create)
     return map;
 }
 
-/* The listener-list work, once `type` is a real string. Split from the coercion so the part that CAN reach the
-   page's code is a request and the part that cannot is ordinary C. */
-static JSValue add_listener_with_type(JSContext *ctx, JSValueConst this_val, JSValueConst cb, const char *type)
+/* §2.7 A LISTENER IS NOT A CALLBACK — it is a RECORD: {callback, capture, once, passive}. Storing the bare
+   callback made three of those four unrepresentable, so `once` fired every time (a real bundle's one-shot
+   init ran on every event), `capture` had no phase, and the dedup key was wrong — the spec's key is
+   (type, callback, capture), so the same function registered once capturing and once bubbling is TWO
+   listeners and used to be silently one. The record is an engine-built null-prototyped object, so reading it
+   back from C runs none of the page's code. */
+static JSValue listener_record(JSContext *ctx, JSValueConst cb, bool capture, bool once)
 {
-    JSValue map, arr;
-    uint32_t len = 0;
-    JSValueConst argv[2];
+    JSValue rec = JS_NewObjectProto(ctx, JS_NULL);
+    CHECK(!JS_IsException(rec), "event listeners: OOM recording a registration — a dropped listener is page "
+                                "code that never runs");
+    JS_SetPropertyStr(ctx, rec, "cb", JS_DupValue(ctx, cb));
+    JS_SetPropertyStr(ctx, rec, "capture", JS_NewBool(ctx, capture));
+    JS_SetPropertyStr(ctx, rec, "once", JS_NewBool(ctx, once));
+    return rec;
+}
 
-    argv[0] = JS_UNDEFINED; argv[1] = cb;
-    map = listener_map(ctx, this_val, 1);
+static bool rec_flag(JSContext *ctx, JSValueConst rec, const char *name)
+{
+    JSValue v = JS_GetPropertyStr(ctx, rec, name);
+    bool b = JS_ToBool(ctx, v);
+    JS_FreeValue(ctx, v);
+    return b;
+}
+
+/* The record's callback, or the handler MARKER — an owned value either way. */
+static JSValue rec_cb(JSContext *ctx, JSValueConst rec)
+{
+    return JS_GetPropertyStr(ctx, rec, "cb");
+}
+
+/* Does this record register `cb` with this capture flag? §2.7's identity, and the whole of it. */
+static bool rec_matches(JSContext *ctx, JSValueConst rec, JSValueConst cb, bool capture)
+{
+    JSValue c = rec_cb(ctx, rec);
+    bool same = JS_VALUE_GET_TAG(c) == JS_VALUE_GET_TAG(cb) && JS_VALUE_GET_PTR(c) == JS_VALUE_GET_PTR(cb);
+    JS_FreeValue(ctx, c);
+    return same && rec_flag(ctx, rec, "capture") == capture;
+}
+
+/* The live list for (target, type), created on demand. OWNED. */
+static JSValue listener_list(JSContext *ctx, JSValueConst target, const char *type, int create)
+{
+    JSValue map = listener_map(ctx, target, create), arr;
+
     if (!JS_IsObject(map)) { JS_FreeValue(ctx, map); return JS_UNDEFINED; }
     arr = JS_GetPropertyStr(ctx, map, type);
-    if (!JS_IsArray(arr)) {
+    if (!JS_IsArray(arr) && create) {
         JS_FreeValue(ctx, arr);
         arr = JS_NewArray(ctx);
         JS_SetPropertyStr(ctx, map, type, JS_DupValue(ctx, arr));
     }
-    /* "If the event listener list already contains a listener with the same callback, do nothing." */
-    JS_ToUint32(ctx, &len, JS_GetPropertyStr(ctx, arr, "length"));
-    for (uint32_t i = 0; i < len; i++) {
-        JSValue e = JS_GetPropertyUint32(ctx, arr, i);
-        int same = JS_VALUE_GET_TAG(e) == JS_VALUE_GET_TAG(argv[1]) &&
-                   JS_VALUE_GET_PTR(e) == JS_VALUE_GET_PTR(argv[1]);
-        JS_FreeValue(ctx, e);
-        if (same) { JS_FreeValue(ctx, arr); JS_FreeValue(ctx, map); return JS_UNDEFINED; }
-    }
-    JS_SetPropertyUint32(ctx, arr, len, JS_DupValue(ctx, argv[1]));
-    JS_FreeValue(ctx, arr);
     JS_FreeValue(ctx, map);
-   
+    return arr;
+}
+
+static uint32_t arr_len(JSContext *ctx, JSValueConst arr)
+{
+    JSValue v = JS_GetPropertyStr(ctx, arr, "length");
+    uint32_t n = 0;
+    JS_ToUint32(ctx, &n, v);
+    JS_FreeValue(ctx, v);
+    return n;
+}
+
+/* The listener-list work, once `type` is a real string. Split from the coercion so the part that CAN reach the
+   page's code is a request and the part that cannot is ordinary C. */
+static JSValue add_listener_with_type(JSContext *ctx, JSValueConst this_val, JSValueConst cb, const char *type,
+                                      bool capture, bool once)
+{
+    JSValue arr = listener_list(ctx, this_val, type, 1);
+    uint32_t len, i;
+
+    if (!JS_IsArray(arr)) { JS_FreeValue(ctx, arr); return JS_UNDEFINED; }
+    len = arr_len(ctx, arr);
+    /* "If the event listener list already contains a listener whose type, callback and capture are the same,
+       do nothing." The flags of the EXISTING one win — a second add does not change `once`. */
+    for (i = 0; i < len; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, arr, i);
+        bool same = JS_IsObject(e) && rec_matches(ctx, e, cb, capture);
+        JS_FreeValue(ctx, e);
+        if (same) { JS_FreeValue(ctx, arr); return JS_UNDEFINED; }
+    }
+    JS_SetPropertyUint32(ctx, arr, len, listener_record(ctx, cb, capture, once));
+    JS_FreeValue(ctx, arr);
     return JS_UNDEFINED;
 }
 
-static JSValue remove_listener_with_type(JSContext *ctx, JSValueConst this_val, JSValueConst cb, const char *type)
+static JSValue remove_listener_with_type(JSContext *ctx, JSValueConst this_val, JSValueConst cb, const char *type,
+                                         bool capture)
 {
     JSValue map, arr, kept;
-    uint32_t len = 0, k = 0;
-    JSValueConst argv[2];
+    uint32_t len, i, k = 0;
 
-    argv[0] = JS_UNDEFINED; argv[1] = cb;
     map = listener_map(ctx, this_val, 0);
     if (!JS_IsObject(map)) { JS_FreeValue(ctx, map); return JS_UNDEFINED; }
     arr = JS_GetPropertyStr(ctx, map, type);
     if (!JS_IsArray(arr)) { JS_FreeValue(ctx, arr); JS_FreeValue(ctx, map); return JS_UNDEFINED; }
-    JS_ToUint32(ctx, &len, JS_GetPropertyStr(ctx, arr, "length"));
+    len = arr_len(ctx, arr);
     kept = JS_NewArray(ctx);
-    for (uint32_t i = 0; i < len; i++) {
+    for (i = 0; i < len; i++) {
         JSValue e = JS_GetPropertyUint32(ctx, arr, i);
-        int same = JS_VALUE_GET_TAG(e) == JS_VALUE_GET_TAG(argv[1]) &&
-                   JS_VALUE_GET_PTR(e) == JS_VALUE_GET_PTR(argv[1]);
+        bool same = JS_IsObject(e) && rec_matches(ctx, e, cb, capture);
         if (same) JS_FreeValue(ctx, e);
         else JS_SetPropertyUint32(ctx, kept, k++, e);
     }
     JS_SetPropertyStr(ctx, map, type, kept);
     JS_FreeValue(ctx, arr);
     JS_FreeValue(ctx, map);
-   
     return JS_UNDEFINED;
 }
 
@@ -192,16 +256,22 @@ static JSValue remove_listener_with_type(JSContext *ctx, JSValueConst this_val, 
    browser, and now here. */
 static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
+    JSValueConst opts = argc > 2 ? argv[2] : JS_UNDEFINED;
     const char *type;
+    bool capture, once;
     JSValue r;
 
     if (argc < 2 || (magic == 0 && !JS_IsFunction(ctx, argv[1])))
         return JS_UNDEFINED;   /* 2.7: a non-callable listener is ignored, not an error */
+    /* The engine-built dictionary, whatever the page wrote: `{capture:true}`, a bare `true`, or nothing. The
+       union's flattening happened in the declaration, so there is one shape to read here. */
+    capture = idl_dict_bool(ctx, opts, "capture");
+    once = idl_dict_bool(ctx, opts, "once");
     type = JS_ToCString(ctx, argv[0]);   /* a real string by now: this cannot reach the page */
     if (!type)
         return JS_EXCEPTION;
-    r = (magic == 0) ? add_listener_with_type(ctx, event_target_receiver(this_val), argv[1], type)
-                     : remove_listener_with_type(ctx, event_target_receiver(this_val), argv[1], type);
+    r = (magic == 0) ? add_listener_with_type(ctx, event_target_receiver(this_val), argv[1], type, capture, once)
+                     : remove_listener_with_type(ctx, event_target_receiver(this_val), argv[1], type, capture);
     JS_FreeCString(ctx, type);
     return r;
 }
@@ -344,10 +414,10 @@ static JSValue js_handler_set(JSContext *ctx, JSValueConst this_val, JSValueCons
     if (JS_IsFunction(ctx, val)) {
         JS_SetPropertyStr(ctx, map, type, JS_DupValue(ctx, val));
         /* §8.1.7: the listener is registered ONCE, the first time a handler is set for this type. */
-        add_listener_with_type(ctx, this_val, g_handler_marker, type);
+        add_listener_with_type(ctx, this_val, g_handler_marker, type, /*capture*/ false, /*once*/ false);
     } else {
         JS_SetPropertyStr(ctx, map, type, JS_NULL);
-        remove_listener_with_type(ctx, this_val, g_handler_marker, type);   /* §8.1.7 "deactivate" */
+        remove_listener_with_type(ctx, this_val, g_handler_marker, type, /*capture*/ false);   /* §8.1.7 "deactivate" */
     }
     JS_FreeValue(ctx, map);
     return JS_UNDEFINED;
@@ -382,29 +452,42 @@ void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask
    listeners a target has; what differs between them is only how each listener is DELIVERED. */
 static JSValue listener_snapshot(JSContext *ctx, JSValueConst target, const char *type)
 {
-    JSValue map, arr, copy = JS_NewArray(ctx);
-    uint32_t len = 0, k = 0;
+    JSValue arr = listener_list(ctx, target, type, 0), copy = JS_NewArray(ctx);
+    uint32_t len, i, k = 0;
 
-    map = listener_map(ctx, target, 0);
-    if (!JS_IsObject(map)) { JS_FreeValue(ctx, map); return copy; }
+    if (!JS_IsArray(arr)) { JS_FreeValue(ctx, arr); return copy; }
+    len = arr_len(ctx, arr);
+    /* The RECORDS, copied as they stand. Resolving the handler marker and filtering by the capture flag both
+       belong to the walk: §2.9's "inner invoke" is where the spec does them, and the walk visits one list
+       TWICE (once per direction) with a different answer each time. */
+    for (i = 0; i < len; i++)
+        JS_SetPropertyUint32(ctx, copy, k++, JS_GetPropertyUint32(ctx, arr, i));
+    JS_FreeValue(ctx, arr);
+    return copy;
+}
+
+/* §2.9 "inner invoke" step 2: `once` REMOVES the listener from the live list before it is called, so a
+   listener that re-enters the same dispatch does not see itself. It is removed from the LIVE list, never from
+   the snapshot the walk is iterating — the snapshot is what makes a removal during dispatch not skip a
+   sibling, which is the whole reason §2.9 takes one. */
+static void listener_remove_record(JSContext *ctx, JSValueConst target, const char *type, JSValueConst rec)
+{
+    JSValue map = listener_map(ctx, target, 0), arr, kept;
+    uint32_t len, i, k = 0;
+
+    if (!JS_IsObject(map)) { JS_FreeValue(ctx, map); return; }
     arr = JS_GetPropertyStr(ctx, map, type);
-    if (JS_IsArray(arr)) {
-        JS_ToUint32(ctx, &len, JS_GetPropertyStr(ctx, arr, "length"));
-        for (uint32_t i = 0; i < len; i++) {
-            JSValue fn = JS_GetPropertyUint32(ctx, arr, i);
-            /* §8.1.7: the HANDLER SLOT resolves HERE, at dispatch time, to whatever `ontype` currently is —
-               that is what keeps the slot's POSITION in the list while its handler changes underneath it. */
-            if (JS_VALUE_GET_PTR(fn) == JS_VALUE_GET_PTR(g_handler_marker)) {
-                JS_FreeValue(ctx, fn);
-                fn = handler_current(ctx, target, type);
-            }
-            if (JS_IsFunction(ctx, fn)) JS_SetPropertyUint32(ctx, copy, k++, fn);
-            else                        JS_FreeValue(ctx, fn);
-        }
+    if (!JS_IsArray(arr)) { JS_FreeValue(ctx, arr); JS_FreeValue(ctx, map); return; }
+    len = arr_len(ctx, arr);
+    kept = JS_NewArray(ctx);
+    for (i = 0; i < len; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, arr, i);
+        if (JS_VALUE_GET_PTR(e) == JS_VALUE_GET_PTR(rec)) JS_FreeValue(ctx, e);
+        else JS_SetPropertyUint32(ctx, kept, k++, e);
     }
+    JS_SetPropertyStr(ctx, map, type, kept);
     JS_FreeValue(ctx, arr);
     JS_FreeValue(ctx, map);
-    return copy;
 }
 
 
@@ -430,7 +513,9 @@ typedef struct JSDispatchState {
     uint8_t   stage;
     uint8_t   cphase;    /* the call request's own phase, so a stage can hold a call across a suspension */
     uint32_t  i, n;      /* THE RESUME POINT: the listener being called, and how many there are */
-    uint32_t  ti, tn;    /* and which TARGET on the propagation path its list belongs to */
+    uint32_t  ti, tn;    /* THE OTHER: how far into the current LEG, and how long the whole path is */
+    uint8_t   leg;       /* §2.9's three legs — 0 capturing (root->target), 1 AT_TARGET, 2 bubbling */
+    JSValue   type;      /* the event's type, resolved once per target and needed by `once` (owned) */
     JSValue   path;      /* §2.9's propagation path — the target and its ancestors (owned) */
     JSValue   cur;       /* the target whose listeners are running (owned) */
     JSValue   arr;       /* that target's listener list SNAPSHOT (owned) */
@@ -446,6 +531,7 @@ static void js_dispatch_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSDispatchState *s = st;
     int k;
     v->val(ctx, &s->path);
+    v->val(ctx, &s->type);
     v->val(ctx, &s->cur);
     v->val(ctx, &s->arr);
     v->val(ctx, &s->ev);
@@ -463,10 +549,11 @@ static JSValue js_dispatch_fini(JSContext *ctx, void *st, bool take_result)
     if (take_result) s->result = JS_UNDEFINED;
     JS_FreeValue(ctx, s->result);
     JS_FreeValue(ctx, s->path);
+    JS_FreeValue(ctx, s->type);
     JS_FreeValue(ctx, s->cur);
     JS_FreeValue(ctx, s->arr);
     JS_FreeValue(ctx, s->ev);
-    s->result = s->path = s->cur = s->arr = s->ev = JS_UNDEFINED;
+    s->result = s->path = s->type = s->cur = s->arr = s->ev = JS_UNDEFINED;
     for (k = 0; k < 3; k++) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
@@ -474,10 +561,10 @@ static JSValue js_dispatch_fini(JSContext *ctx, void *st, bool take_result)
     return r;
 }
 
-/* §2.9 THE PROPAGATION PATH: the target, then its ancestors, then the window for a document. This engine has
-   no capture phase and no shadow trees, so the path is exactly the bubble chain — and computing it is what let
-   `bubble_to` go: event_target_fire used to pass window in by hand as a special case, which is the document's
-   ancestor stated twice, once in the spec and once in an argument. */
+/* §2.9 THE PROPAGATION PATH: the target, then its ancestors, then the window for a document. It is stored
+   target-first and walked in BOTH directions — computing it is what let `bubble_to` go: event_target_fire used
+   to pass window in by hand as a special case, which is the document's ancestor stated twice, once in the spec
+   and once in an argument. */
 static JSValue dispatch_path(JSContext *ctx, JSValueConst target)
 {
     JSValue path = JS_NewArray(ctx);
@@ -507,7 +594,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        s->path = s->cur = s->arr = s->ev = s->result = JS_UNDEFINED;
+        s->path = s->type = s->cur = s->arr = s->ev = s->result = JS_UNDEFINED;
         s->cb[0] = s->cb[1] = s->cb[2] = JS_UNDEFINED;
         /* THREE ENTRIES, ONE MACHINE, and `arg` is decided at REGISTRATION so no call site chooses:
              DISPATCH_ARG  — dispatchEvent: the receiver is the target, the page supplied the event.
@@ -543,24 +630,64 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         s->tn = 0;
         JS_ToUint32(ctx, &s->tn, JS_GetPropertyStr(ctx, s->path, "length"));
         s->ti = 0;
+        s->leg = 0;
         s->n = s->i = 0;
+        s->type = event_type(ctx, s->ev);
         s->stage = 1;
     }
 
     for (;;) {
         while (s->i < s->n) {
+            JSValue rec;
+            bool want_capture;
+
             /* §2.9: stopImmediatePropagation ends the walk between listeners, which is the only place it can
                be observed — the flag was set by a listener that has already returned. */
             if (s->cphase == 0 && event_stop_immediate(ctx, s->ev))
                 break;
-            fn = JS_GetPropertyUint32(ctx, s->arr, s->i);
-            if (!JS_IsFunction(ctx, fn)) {
-                JS_FreeValue(ctx, fn);
+            rec = JS_GetPropertyUint32(ctx, s->arr, s->i);
+            if (!JS_IsObject(rec)) {
+                JS_FreeValue(ctx, rec);
                 JS_FreeValue(ctx, cb_result);
                 cb_result = JS_UNDEFINED;
                 s->i++;
                 continue;
             }
+            /* §2.9 "invoke": the CAPTURING leg runs only capturing listeners and the BUBBLING leg only the
+               others; AT_TARGET runs both, which is why the target is its own leg rather than an end of one. */
+            want_capture = (s->leg == 0);
+            if (s->leg != 1 && rec_flag(ctx, rec, "capture") != want_capture) {
+                JS_FreeValue(ctx, rec);
+                JS_FreeValue(ctx, cb_result);
+                cb_result = JS_UNDEFINED;
+                s->i++;
+                continue;
+            }
+            fn = rec_cb(ctx, rec);
+            /* §8.1.7: the HANDLER SLOT resolves HERE, at dispatch time, to whatever `ontype` currently is —
+               that is what keeps the slot's POSITION in the list while its handler changes underneath it. */
+            if (JS_VALUE_GET_PTR(fn) == JS_VALUE_GET_PTR(g_handler_marker)) {
+                const char *t = JS_IsString(s->type) ? JS_ToCString(ctx, s->type) : NULL;
+                JS_FreeValue(ctx, fn);
+                fn = t ? handler_current(ctx, s->cur, t) : JS_UNDEFINED;
+                if (t) JS_FreeCString(ctx, t);
+            }
+            if (!JS_IsFunction(ctx, fn)) {
+                JS_FreeValue(ctx, fn);
+                JS_FreeValue(ctx, rec);
+                JS_FreeValue(ctx, cb_result);
+                cb_result = JS_UNDEFINED;
+                s->i++;
+                continue;
+            }
+            /* §2.9 "inner invoke" step 2: a `once` listener is removed BEFORE it is called, so a listener that
+               re-enters this dispatch cannot see itself. Removing it after would let a re-entrant fire run it
+               a second time, which is the exact bug `once` exists to prevent. */
+            if (s->cphase == 0 && rec_flag(ctx, rec, "once")) {
+                const char *t = JS_IsString(s->type) ? JS_ToCString(ctx, s->type) : NULL;
+                if (t) { listener_remove_record(ctx, s->cur, t, rec); JS_FreeCString(ctx, t); }
+            }
+            JS_FreeValue(ctx, rec);
             /* §2.9 "inner invoke": the listener is called with `this` = currentTarget and the event as its one
                argument. A CALL REQUEST, so the listener is ordinary preemptible page code and this machine
                parks — which is the whole reason the engine's own firing can share this walk. */
@@ -572,27 +699,46 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             JS_FreeValue(ctx, ignored);  /* §2.9: a listener's return value is discarded */
             s->i++;
         }
-        /* ON TO THE NEXT TARGET UP THE PATH — but only while the event bubbles and nothing stopped it. */
-        if (s->ti >= s->tn) break;
-        if (s->ti > 0 && (!event_bubbles(ctx, s->ev) || event_stop_propagation(ctx, s->ev))) break;
-        JS_FreeValue(ctx, s->cur);
-        JS_FreeValue(ctx, s->arr);
-        s->cur = JS_GetPropertyUint32(ctx, s->path, s->ti);
+        /* ON TO THE NEXT TARGET. §2.9 walks the path THREE times: down it for the capturing listeners, once at
+           the target for all of them, and back up it for the bubbling ones. `ti` counts within the current leg,
+           so advancing is "next in this leg, or the first of the next one" and nothing else.
+           stopPropagation ends the walk entirely — it is checked here because the flag is set by a listener
+           that has already returned, exactly like stopImmediatePropagation above. */
+        if (s->ti > 0 && event_stop_propagation(ctx, s->ev)) break;
+        for (;;) {
+            uint32_t legn = (s->leg == 1) ? 1 : (s->tn > 0 ? s->tn - 1 : 0);
+            if (s->ti < legn) break;
+            if (s->leg == 2) { legn = 0; break; }
+            s->leg++;
+            s->ti = 0;
+            /* §2.9: the bubbling leg happens only for an event that bubbles. AT_TARGET always does. */
+            if (s->leg == 2 && !event_bubbles(ctx, s->ev)) { s->leg = 3; }
+            if (s->leg >= 3) break;
+        }
+        if (s->leg >= 3) break;
+        if (s->leg == 2 && !event_bubbles(ctx, s->ev)) break;
         {
-            JSValue first = JS_GetPropertyUint32(ctx, s->path, 0);
-            JSValue tv = event_type(ctx, s->ev);
-            const char *type = JS_IsString(tv) ? JS_ToCString(ctx, tv) : NULL;
+            /* leg 0 walks the path BACKWARDS (root first); leg 1 is the target; leg 2 walks it forwards. */
+            uint32_t idx = (s->leg == 0) ? (s->tn - 1 - s->ti) : (s->leg == 1 ? 0 : s->ti + 1);
+            uint32_t legn = (s->leg == 1) ? 1 : (s->tn > 0 ? s->tn - 1 : 0);
+            JSValue first;
+            const char *type;
+
+            if (s->ti >= legn) break;
+            JS_FreeValue(ctx, s->cur);
+            JS_FreeValue(ctx, s->arr);
+            s->cur = JS_GetPropertyUint32(ctx, s->path, idx);
+            first = JS_GetPropertyUint32(ctx, s->path, 0);
+            type = JS_IsString(s->type) ? JS_ToCString(ctx, s->type) : NULL;
             /* §2.9: `target` is where the event was dispatched and does not move; `currentTarget` is whose
-               listeners are running now, and eventPhase says AT_TARGET only for the first. */
+               listeners are running now, and the phase is the leg. */
             event_set_targets(ctx, s->ev, first, s->cur);
-            event_set_phase(ctx, s->ev, s->ti == 0 ? 2 : 3);   /* AT_TARGET, then BUBBLING_PHASE */
+            event_set_phase(ctx, s->ev, s->leg == 0 ? 1 : (s->leg == 1 ? 2 : 3));
             s->arr = type ? listener_snapshot(ctx, s->cur, type) : JS_NewArray(ctx);
             if (type) JS_FreeCString(ctx, type);
-            JS_FreeValue(ctx, tv);
             JS_FreeValue(ctx, first);
         }
-        s->n = 0;
-        JS_ToUint32(ctx, &s->n, JS_GetPropertyStr(ctx, s->arr, "length"));
+        s->n = arr_len(ctx, s->arr);
         s->i = 0;
         s->ti++;
     }

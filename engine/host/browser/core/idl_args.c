@@ -123,7 +123,7 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            concolic, which the C boundary asserts against because opacity has to SURVIVE a coercion or the value
            stops forking control flow and stops being solvable at a sink. This is the same answer JSON.stringify
            gives an opaque field: yield the opaque itself, never a de-tainting placeholder. */
-        if (t != IDL_ANY && t != IDL_DICT && concolic_is(a)) {
+        if (t != IDL_ANY && t != IDL_DICT && t != IDL_DICT_OR_BOOL_FIRST && concolic_is(a)) {
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
             s->args[s->i] = JS_DupValue(ctx, a);
@@ -131,7 +131,7 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             continue;
         }
 
-        if (t == IDL_DICT) {
+        if (t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST) {
             /* `optional D options = {}`: undefined and null have no members to read, so every one defaults and
                no page code runs. An object's members are read IN ORDER and each is converted by ITS OWN type,
                parking on either half. A `required` member is checked here rather than in the body, because
@@ -141,6 +141,14 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             if (!JS_IsObject(a)) {
                 JS_FreeValue(ctx, cb_result);
                 cb_result = JS_UNDEFINED;
+                /* §2.7 "flatten": a non-object IS the first member's boolean. There is nothing to READ, so
+                   this runs none of the page's code either way. */
+                if (t == IDL_DICT_OR_BOOL_FIRST && m->dict_n > 0) {
+                    DCHECK(m->dict[0].type == IDL_BOOLEAN,
+                           "a (dictionary or boolean) union declared a non-boolean first member — the union's "
+                           "rule is that the bare value IS that member");
+                    JS_SetPropertyStr(ctx, s->args[s->i], m->dict[0].name, JS_NewBool(ctx, JS_ToBool(ctx, a)));
+                }
                 for (r = 0; r < m->dict_n; r++)
                     if (m->dict[r].required)
                         return JS_ThrowTypeError(ctx, "required member %s is undefined", m->dict[r].name),
@@ -291,6 +299,20 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
     return r;
 }
 
+JSValue idl_dict_get(JSContext *ctx, JSValueConst dict, const char *name)
+{
+    if (!JS_IsObject(dict)) return JS_UNDEFINED;
+    return JS_GetPropertyStr(ctx, dict, name);
+}
+
+bool idl_dict_bool(JSContext *ctx, JSValueConst dict, const char *name)
+{
+    JSValue v = idl_dict_get(ctx, dict, name);
+    bool b = JS_ToBool(ctx, v);
+    JS_FreeValue(ctx, v);
+    return b;
+}
+
 int idl_method_id(JSContext *ctx, const IdlArgType *types, int nargs, IdlBody body, int magic)
 {
     return idl_method_id_dict(ctx, types, nargs, NULL, 0, body, magic);
@@ -325,7 +347,7 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
     if (members) {
         int ndict = 0;
         for (k = 0; k < nargs; k++)
-            if (types[k] == IDL_DICT) ndict++;
+            if (types[k] == IDL_DICT || types[k] == IDL_DICT_OR_BOOL_FIRST) ndict++;
         DCHECK(ndict == 1, "a member declared dictionary members but not exactly one dictionary argument — the "
                            "conversion cursor is per-member, so a second dictionary would read the first's "
                            "names");
