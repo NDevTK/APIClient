@@ -439,6 +439,20 @@ static const char *HTML =
     /* insertBefore is the OTHER tree write, and it never ran the steps at all. */
     "var dref = document.createElement('i'); document.body.appendChild(dref);"
     "document.body.insertBefore(document.createElement('x-deep'), dref);"
+    /* §4.13.3 attributeChangedCallback. It runs only for a name the class declared as OBSERVED, which is why
+       observedAttributes is read at DEFINE time — and reading it is the page's code (a static getter whose
+       entries are themselves coerced), so the read and every entry's ToString are requests the declaration's
+       step body parks on. The unwatched attribute proves the filter: only an ABSENCE can. */
+    "class XAttr extends HTMLElement {"
+    " static get observedAttributes(){ var n = 0; for (var i = 0; i < 30; i++) n += i;"
+    "  return [{ toString: function(){ return n === 435 ? 'data-w' : 'bad'; } }]; }"
+    " attributeChangedCallback(nm, ov, nv){ fetch('/api/ceattr?n=' + nm + '&o=' + ov + '&v=' + nv); } }"
+    "customElements.define('x-attr', XAttr);"
+    "var xa = document.createElement('x-attr'); document.body.appendChild(xa);"
+    "xa.setAttribute('data-w', 'first');"
+    "xa.setAttribute('data-w', 'second');"
+    "xa.setAttribute('data-ignored', 'nope');"   /* not observed: no reaction, and only an absence proves it */
+    "xa.removeAttribute('data-w');"
     /* §4.13.4 get(), and §4.13.1's name rule — a name with no hyphen is a SyntaxError, not a quiet registration. */
     "var cename = 'wrong'; try { customElements.define('nohyphen', XPanel); } catch (e) { cename = 'issyntax'; }"
     "fetch('/api/cename?v=' + cename);"
@@ -858,6 +872,7 @@ int main(void) {
         { "\"/api/ceext\"",      "isext"   },   /* a DOMString dictionary member, read AND coerced as requests */
         { "\"/api/cedeep\"",     "isdeep"  },   /* the insertion steps walk the SUBTREE, and insertBefore runs them */
         { "\"/api/cegone\"",     "isgone"  },   /* …and the removing steps run disconnectedCallback */
+        { "\"/api/ceattr\"",     "data-w"  },   /* attributeChangedCallback, for the OBSERVED name only */
         { "\"/api/rejevent\"",  "isrej"   },   /* §8.1.7.5's cancelable event reached a page listener */
         { "\"/api/prereq\"",    "isreq"   },   /* a `required` dictionary member, enforced by the declaration */
         { "\"/api/prector\"",   "isctor"  },
@@ -876,6 +891,9 @@ int main(void) {
     if (!strstr(js, "\"44850\"")) nodealgo_tt = 0;
     /* The uncaught DOMException is NAMED in the report, not "an object with no own name/message". */
     if (!strstr(js, "SyntaxError: not a valid custom element name")) nodealgo_tt = 0;
+    /* §4.13.3: the old value, the new one, the removal's null — and NOTHING for the unobserved attribute. */
+    if (!strstr(js, "\"first\"") || !strstr(js, "\"second\"")) nodealgo_tt = 0;
+    if (strstr(js, "data-ignored") || strstr(js, "\"nope\"")) nodealgo_tt = 0;
     /* §8.1.7.5: the rejection nobody handled is reported, and the one handled a microtask later is NOT. */
     if (!strstr(js, "rejNOHANDLER")) nodealgo_tt = 0;
     if (strstr(js, "rejHANDLED")) nodealgo_tt = 0;

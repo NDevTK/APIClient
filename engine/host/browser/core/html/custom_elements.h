@@ -15,5 +15,9 @@ void custom_elements_try_upgrade(JSContext *ctx, lxb_dom_element_t *el);
 /* §4.13.3's disconnected reaction — the twin of the upgrade, for an element LEAVING a document. A no-op unless
    the element was upgraded, because only an upgraded element has a lifecycle to react with. */
 void custom_elements_disconnected(JSContext *ctx, lxb_dom_element_t *el);
+/* §4.13.3's attribute-changed reaction. Called BEFORE the write, so the element still holds the old value;
+   `val` is NULL for a removal. A no-op unless the element is upgraded and its definition OBSERVES this name. */
+void custom_elements_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, const char *name,
+                                       const char *val, size_t val_len);
 
 #endif

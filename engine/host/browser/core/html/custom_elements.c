@@ -49,6 +49,8 @@ static JSAtom g_atom_prototype = JS_ATOM_NULL;
 static JSAtom g_atom_upgraded = JS_ATOM_NULL;
 static JSAtom g_atom_ctor = JS_ATOM_NULL;
 static JSAtom g_atom_proto = JS_ATOM_NULL;
+static JSAtom g_atom_observed = JS_ATOM_NULL;      /* the definition's own key for the list */
+static JSAtom g_atom_observed_src = JS_ATOM_NULL;  /* the class's `observedAttributes` */
 static int    g_reaction_stepid = -1;
 static JSValue g_reaction_fn;
 
@@ -75,6 +77,9 @@ static bool ce_name_valid(const char *name, size_t len)
     return false;
 }
 
+/* attributeChangedCallback's (name, oldValue, newValue) — the widest lifecycle callback there is. */
+#define CE_MAX_REACTION_ARGS 3
+
 /* ---- the reaction ---------------------------------------------------------------------------------------- */
 /* THE REACTION FLOW: read the named callback off the element, and if it is callable, call it with the element
    as the receiver. Both steps are requests — the read because a class could define a callback as an accessor
@@ -86,7 +91,7 @@ typedef struct JSCeReaction {
     uint8_t   stage;
     uint8_t   cphase;   /* the call request's own phase */
     JSValue   fn;       /* the callback, once read (owned) */
-    JSValue   cb[2];    /* the call request buffer: [this, callback] — the reaction takes no arguments */
+    JSValue   cb[2 + CE_MAX_REACTION_ARGS];   /* the call request buffer: [this, callback, args…] */
 } JSCeReaction;
 
 static void js_ce_reaction_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -94,7 +99,7 @@ static void js_ce_reaction_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSCeReaction *s = st;
     int k;
     v->val(ctx, &s->fn);
-    for (k = 0; k < 2; k++)
+    for (k = 0; k < 2 + CE_MAX_REACTION_ARGS; k++)
         v->val(ctx, &s->cb[k]);
 }
 
@@ -105,7 +110,7 @@ static JSValue js_ce_reaction_fini(JSContext *ctx, void *st, bool take_result)
     (void)take_result;
     JS_FreeValue(ctx, s->fn);
     s->fn = JS_UNDEFINED;
-    for (k = 0; k < 2; k++) {
+    for (k = 0; k < 2 + CE_MAX_REACTION_ARGS; k++) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
     }
@@ -122,7 +127,7 @@ static int js_ce_reaction_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
 
     if (s->stage == 0) {
         s->fn = JS_UNDEFINED;
-        s->cb[0] = s->cb[1] = JS_UNDEFINED;
+        for (r = 0; r < 2 + CE_MAX_REACTION_ARGS; r++) s->cb[r] = JS_UNDEFINED;
         s->stage = 1;
         if (!JS_IsObject(el)) { JS_FreeValue(ctx, cb_result); return JS_STEP_DONE; }
     }
@@ -138,7 +143,10 @@ static int js_ce_reaction_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         /* §4.13.3: a definition that does not declare this callback simply has no reaction to run. */
         if (!JS_IsFunction(ctx, s->fn)) return JS_STEP_DONE;
     }
-    r = step_call_run(ctx, &s->cphase, s->cb, s->fn, el, 0, NULL, cb_result, &ignored, out_cb, out_argc);
+    /* Everything past the element and the callback NAME is the callback's own arguments. */
+    r = step_call_run(ctx, &s->cphase, s->cb, s->fn, el, s->hdr.argc - 2,
+                      s->hdr.argc > 2 ? (JSValueConst *)s->hdr.argv + 2 : NULL,
+                      cb_result, &ignored, out_cb, out_argc);
     if (r > 0) return r;
     JS_FreeValue(ctx, ignored);   /* §4.13.3: a reaction's return value is discarded */
     return JS_STEP_DONE;
@@ -154,17 +162,27 @@ static const JSTrampStepDef js_ce_reaction_def = {
 /* §4.13.3 "enqueue a custom element callback reaction". A JOB, so the callback runs as a call-root flow:
    preemptible, forkable and parkable like any other program. Calling it here would be a C activation hosting
    the page's loops, which is the drive-to-completion this engine aborts on. */
-static void ce_enqueue(JSContext *ctx, JSValueConst wrap, const char *callback)
+static void ce_enqueue_args(JSContext *ctx, JSValueConst wrap, const char *callback,
+                            int argc, JSValueConst *args)
 {
-    JSValueConst argv[2];
+    JSValueConst argv[2 + CE_MAX_REACTION_ARGS];
     JSValue name = JS_NewString(ctx, callback);
+    int i;
 
     DCHECK(JS_IsObject(g_reaction_fn),
            "a custom-element reaction was enqueued before custom_elements_init built its driver");
+    DCHECK(argc <= CE_MAX_REACTION_ARGS,
+           "a lifecycle callback was enqueued with more arguments than any of them takes");
     argv[0] = wrap;
     argv[1] = name;
-    JS_EnqueueCallJob(ctx, g_reaction_fn, 2, argv);
+    for (i = 0; i < argc; i++) argv[2 + i] = args[i];
+    JS_EnqueueCallJob(ctx, g_reaction_fn, 2 + argc, argv);
     JS_FreeValue(ctx, name);
+}
+
+static void ce_enqueue(JSContext *ctx, JSValueConst wrap, const char *callback)
+{
+    ce_enqueue_args(ctx, wrap, callback, 0, NULL);
 }
 
 static void ce_upgrade(JSContext *ctx, lxb_dom_element_t *el, JSValueConst def)
@@ -251,6 +269,51 @@ static void ce_upgrade_document(JSContext *ctx, const char *name, size_t nlen, J
     }
 }
 
+/* §4.13.3 "attribute changed": the reaction runs only for a name the definition declared as OBSERVED, which is
+   why observedAttributes is read at define time and stored — a class watching two attributes must not have its
+   callback run for the other fifty a page writes. Four arguments, which is what makes the generalised reaction
+   carry an argument vector rather than a name alone. */
+void custom_elements_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, const char *name,
+                                       const char *val, size_t val_len)
+{
+    JSValue wrap, def, observed, args[3];
+    size_t len = 0, old_len = 0;
+    const lxb_char_t *tag, *old;
+    uint32_t n = 0, i;
+    bool watched = false;
+
+    if (!g_ready) return;
+    wrap = node_wrap(ctx, lxb_dom_interface_node(el));
+    if (!ce_is_upgraded(ctx, wrap)) { JS_FreeValue(ctx, wrap); return; }
+    tag = lxb_dom_element_local_name(el, &len);
+    def = tag && len ? ce_find(ctx, (const char *)tag, len) : JS_UNDEFINED;
+    observed = JS_IsObject(def) ? JS_GetProperty(ctx, def, g_atom_observed) : JS_UNDEFINED;
+    JS_FreeValue(ctx, def);
+    if (JS_IsObject(observed)) {
+        JSValue lv = JS_GetPropertyStr(ctx, observed, "length");
+        JS_ToUint32(ctx, &n, lv);
+        JS_FreeValue(ctx, lv);
+        for (i = 0; i < n && !watched; i++) {
+            JSValue e = JS_GetPropertyUint32(ctx, observed, i);
+            const char *s = JS_ToCString(ctx, e);
+            if (s && strcmp(s, name) == 0) watched = true;
+            if (s) JS_FreeCString(ctx, s);
+            JS_FreeValue(ctx, e);
+        }
+    }
+    JS_FreeValue(ctx, observed);
+    if (!watched) { JS_FreeValue(ctx, wrap); return; }
+    /* §4.13.3's arguments: (name, oldValue, newValue). An attribute that was absent has a NULL old value and an
+       attribute being removed a NULL new one, and the page's code branches on exactly that. */
+    old = lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), &old_len);
+    args[0] = JS_NewString(ctx, name);
+    args[1] = old ? JS_NewStringLen(ctx, (const char *)old, old_len) : JS_NULL;
+    args[2] = val ? JS_NewStringLen(ctx, val, val_len) : JS_NULL;
+    ce_enqueue_args(ctx, wrap, "attributeChangedCallback", 3, (JSValueConst *)args);
+    for (i = 0; i < 3; i++) JS_FreeValue(ctx, args[i]);
+    JS_FreeValue(ctx, wrap);
+}
+
 /* ---- define() -------------------------------------------------------------------------------------------- */
 /* Every step that can reach the page's code is DECLARED, so the body is ordinary C: `name` is a DOMString
    (ToString on whatever was passed) and `options` is an ElementDefinitionOptions whose `extends` member is a
@@ -261,16 +324,41 @@ static void ce_upgrade_document(JSContext *ctx, const char *name, size_t nlen, J
 static const IdlArgType CE_DEFINE_ARGS[3] = { IDL_DOMSTRING, IDL_ANY, IDL_DICT };
 static const IdlDictMember CE_DEFINE_OPTS[] = { { "extends", IDL_DOMSTRING } };   /* ElementDefinitionOptions */
 
-static JSValue js_ce_define(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* §4.13.4 step 10 reads `constructor.observedAttributes` and converts it to a sequence<DOMString> — a static
+   GETTER and then an index read and a ToString per entry, all of it the page's code, all of it AFTER every
+   declared argument is already a real value. So the body is a STEP: the declaration converts the arguments and
+   this continues where it left off, parking on the getter and on each entry. */
+typedef struct {
+    uint8_t  stage;
+    uint32_t i, n;      /* THE RESUME POINT: the observed-attribute entry being converted */
+    JSValue  raw;       /* what the getter answered (owned) */
+    JSValue  names;     /* the converted sequence<DOMString> (owned) */
+} CeDefineState;
+
+static void ce_define_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    JSValueConst ctor = argc > 1 ? argv[1] : JS_UNDEFINED;
+    CeDefineState *s = st;
+    v->val(ctx, &s->raw);
+    v->val(ctx, &s->names);
+}
+
+static void ce_define_release(JSContext *ctx, void *st)
+{
+    CeDefineState *s = st;
+    JS_FreeValue(ctx, s->raw);
+    JS_FreeValue(ctx, s->names);
+    s->raw = s->names = JS_UNDEFINED;
+}
+
+/* The registration itself, once every value it needs is real. Plain C, and it stays that way: this is the part
+   that touches only the component's own state. */
+static JSValue ce_register(JSContext *ctx, int argc, JSValueConst *argv, JSValueConst names)
+{
+    JSValueConst ctor = argv[1];
     JSValue ext;
     const char *nm;
     size_t nlen;
 
-    (void)this_val; (void)magic;
-    if (argc < 2)
-        return JS_ThrowTypeError(ctx, "customElements.define requires a name and a constructor");
     /* §4.13.4 step 2: the constructor must be a constructor. */
     if (!JS_IsFunction(ctx, ctor))
         return JS_ThrowTypeError(ctx, "customElements.define requires a constructor");
@@ -311,6 +399,7 @@ static JSValue js_ce_define(JSContext *ctx, JSValueConst this_val, int argc, JSV
            reads it at definition time, so a page that reassigns it afterwards does not retroactively change
            what its already-defined elements are. */
         JS_SetProperty(ctx, def, g_atom_proto, JS_GetProperty(ctx, ctor, g_atom_prototype));
+        JS_SetProperty(ctx, def, g_atom_observed, JS_DupValue(ctx, names));
         a = JS_NewAtomLen(ctx, nm, nlen);
         CHECK(a != JS_ATOM_NULL, "custom elements: a name could not be interned");
         JS_SetProperty(ctx, g_defs, a, JS_DupValue(ctx, def));
@@ -321,6 +410,61 @@ static JSValue js_ce_define(JSContext *ctx, JSValueConst this_val, int argc, JSV
     JS_FreeCString(ctx, nm);
     return JS_UNDEFINED;
 }
+
+static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                        JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    CeDefineState *s = st;
+    JSValue item;
+    int r;
+
+    if (s->stage == 0) {
+        s->raw = s->names = JS_UNDEFINED;
+        s->stage = 1;
+        if (argc < 2) {
+            JS_FreeValue(ctx, cb_result);
+            JS_ThrowTypeError(ctx, "customElements.define requires a name and a constructor");
+            return -1;
+        }
+    }
+    if (s->stage == 1) {
+        r = step_getprop_run(ctx, hdr, argv[1], g_atom_observed_src, cb_result, &s->raw, out_cb, out_argc);
+        cb_result = JS_UNDEFINED;
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        s->stage = 2;
+        s->names = JS_NewArray(ctx);
+        s->i = 0;
+        s->n = 0;
+        /* §4.13.4: absent observedAttributes is not an error, it is no observed attributes. A present one is a
+           sequence, whose length is itself a read — of an engine-visible array in every real case, and of the
+           page's object when it is not, which is why the whole walk is on the trampoline. */
+        if (JS_IsObject(s->raw)) {
+            JSValue lv = JS_GetPropertyStr(ctx, s->raw, "length");
+            JS_ToUint32(ctx, &s->n, lv);
+            JS_FreeValue(ctx, lv);
+        }
+    }
+    while (s->i < s->n) {
+        JSValue entry = JS_GetPropertyUint32(ctx, s->raw, s->i);
+        item = JS_UNDEFINED;
+        r = step_tostring_run(ctx, hdr, entry, cb_result, &item, out_cb, out_argc);
+        JS_FreeValue(ctx, entry);
+        cb_result = JS_UNDEFINED;
+        if (r > 0) return r;          /* parked ON THIS ENTRY; the resume comes back to it */
+        if (r < 0) return -1;
+        JS_SetPropertyUint32(ctx, s->names, s->i, item);
+        s->i++;
+    }
+    JS_FreeValue(ctx, cb_result);
+    *presult = ce_register(ctx, argc, argv, s->names);
+    if (JS_IsException(*presult)) { *presult = JS_UNDEFINED; return -1; }
+    return 0;
+}
+
+static const IdlStepDecl CE_DEFINE_STEP = {
+    js_ce_define, sizeof(CeDefineState), ce_define_visit, ce_define_release
+};
 
 /* §4.13.4 get(name) — the constructor a name is defined as, or undefined. */
 static JSValue js_ce_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -347,8 +491,11 @@ void custom_elements_init(JSContext *ctx)
     g_atom_upgraded = JS_NewAtom(ctx, "apiclientUpgraded");
     g_atom_ctor = JS_NewAtom(ctx, "ctor");
     g_atom_proto = JS_NewAtom(ctx, "proto");
+    g_atom_observed = JS_NewAtom(ctx, "observed");
+    g_atom_observed_src = JS_NewAtom(ctx, "observedAttributes");
     CHECK(g_atom_prototype != JS_ATOM_NULL &&
-          g_atom_upgraded != JS_ATOM_NULL && g_atom_ctor != JS_ATOM_NULL && g_atom_proto != JS_ATOM_NULL,
+          g_atom_upgraded != JS_ATOM_NULL && g_atom_ctor != JS_ATOM_NULL && g_atom_proto != JS_ATOM_NULL &&
+          g_atom_observed != JS_ATOM_NULL && g_atom_observed_src != JS_ATOM_NULL,
           "a custom-element atom could not be interned");
     /* Built HERE, at init, so it belongs to the pre-boot BASELINE: a write to it during a flow is captured by
        the heap COW. A registry allocated lazily inside a flow would be that flow's private object and every
@@ -371,9 +518,9 @@ void custom_elements_install(JSContext *ctx, JSValueConst global)
     reg = JS_NewObject(ctx);
     CHECK(!JS_IsException(reg), "the CustomElementRegistry allocation failed");
     idl_install_method(ctx, reg, "define", 2,
-                       idl_method_id_dict(ctx, CE_DEFINE_ARGS, 3, CE_DEFINE_OPTS,
+                       idl_method_id_step(ctx, CE_DEFINE_ARGS, 3, CE_DEFINE_OPTS,
                                           (int)(sizeof(CE_DEFINE_OPTS) / sizeof(CE_DEFINE_OPTS[0])),
-                                          js_ce_define, 0));
+                                          &CE_DEFINE_STEP, 0));
     {
         static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
         idl_install_method(ctx, reg, "get", 1, idl_method_id(ctx, ONE_STR, 1, js_ce_get, 0));
@@ -392,8 +539,10 @@ void custom_elements_free(JSContext *ctx)
     JS_FreeAtom(ctx, g_atom_upgraded);
     JS_FreeAtom(ctx, g_atom_ctor);
     JS_FreeAtom(ctx, g_atom_proto);
+    JS_FreeAtom(ctx, g_atom_observed);
+    JS_FreeAtom(ctx, g_atom_observed_src);
     g_atom_prototype = g_atom_upgraded = JS_ATOM_NULL;
-    g_atom_ctor = g_atom_proto = JS_ATOM_NULL;
+    g_atom_ctor = g_atom_proto = g_atom_observed = g_atom_observed_src = JS_ATOM_NULL;
     g_reaction_stepid = -1;
     g_ready = 0;
 }

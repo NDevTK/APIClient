@@ -482,6 +482,15 @@ static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, int inser
     }
 }
 
+/* §4.9's attribute change steps, fired by the mutation chokepoint for the same reason the tree steps are:
+   `setAttribute`, a reflected IDL attribute, a boolean reflection unsetting itself and innerHTML's parse all
+   reach the tree through one function, and a per-caller notification would miss whichever one was added last. */
+static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *name,
+                                 const char *val, size_t val_len)
+{
+    custom_elements_attribute_changed(ctx, el, name, val, val_len);
+}
+
 JSValue element_wrap(JSContext *ctx, lxb_dom_element_t *el)
 {
     return node_wrap(ctx, el ? lxb_dom_interface_node(el) : NULL);
@@ -554,6 +563,7 @@ void element_init(JSContext *ctx)
     g_element_proto = proto;
     node_set_proto(ctx, LXB_DOM_NODE_TYPE_ELEMENT, JS_DupValue(ctx, proto));
     node_set_tree_hook(element_tree_changed);
+    dom_cow_set_attr_hook(element_attr_changed);
     custom_elements_init(ctx);
     cssom_init(ctx);          /* CSSStyleDeclaration.prototype, which HTMLElement's `style` attribute names */
     html_element_init(ctx);   /* the HTML half, which builds HTMLElement and the per-tag interfaces on this */

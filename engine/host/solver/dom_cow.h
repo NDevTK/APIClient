@@ -26,6 +26,10 @@ void dom_cow_set_ctx(JSContext *ctx);
    the one place a tree write happens, which is the only place that cannot be forgotten. `inserted` is 1 after
    a node entered the tree and 0 BEFORE one leaves it, because "was it connected" is only answerable then. */
 void dom_cow_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, int inserted));
+/* §4.9's ATTRIBUTE CHANGE STEPS, fired by the same chokepoint for the same reason. Called BEFORE the write,
+   because the OLD value is what the element still holds; `val` is NULL for a removal. */
+void dom_cow_set_attr_hook(void (*fn)(JSContext *ctx, lxb_dom_element_t *el, const char *name,
+                                      const char *val, size_t val_len));
 
 /* The DOM-mutation CHOKEPOINT — capture-then-mutate ATOMICALLY, in ONE call. A browser component mutates the
    tree ONLY through these, never through raw lxb_dom_* mutators + a separate capture, so a DOM write cannot

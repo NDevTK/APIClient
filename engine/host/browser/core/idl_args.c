@@ -48,6 +48,10 @@ typedef struct {
     const IdlDictMember *dict;
     JSAtom     dict_atoms[IDL_MAX_DICT];
     int        dict_n;
+    /* A member whose algorithm is itself page code runs as a STEP once the conversions are done — see
+       idl_method_id_step. Its state lives immediately after this machine's, which is why the def's size is
+       per-member and not a constant. */
+    const IdlStepDecl *step;
 } IdlMember;
 
 static IdlMember      g_members[IDL_MAX_MEMBERS];
@@ -73,11 +77,15 @@ typedef struct {
 static void js_idl_args_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSIdlArgsState *s = st;
+    const IdlMember *m;
     int i;
     v->val(ctx, &s->result);
     v->val(ctx, &s->dict_v);
     for (i = 0; i < IDL_MAX_ARGS; i++)
         v->val(ctx, &s->args[i]);
+    DCHECK(s->hdr.arg >= 0 && s->hdr.arg < g_n, "an IDL member's visit ran with no pool entry behind it");
+    m = &g_members[s->hdr.arg];
+    if (m->step && m->step->visit) m->step->visit(ctx, (char *)st + sizeof(JSIdlArgsState), v);
 }
 
 static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
@@ -264,13 +272,23 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         if (r < 0) return JS_STEP_ABRUPT;
         s->i++;
     }
-    JS_FreeValue(ctx, cb_result);
 
     /* THE BODY RUNS HERE, NOT IN fini. Every declared argument is a real string now, so it has no user code
        left to reach — the claim the declaration makes. It cannot run in fini because the shared teardown
        releases hdr.this_val BEFORE calling it, so a body that reads the receiver there reads a freed value:
        the listener registration silently found no receiver and registered nothing, with no throw to show for
        it. A machine's fini may yield what it already computed; it may not compute. */
+    if (!m->step) JS_FreeValue(ctx, cb_result);
+    if (m->step) {
+        /* The member's own algorithm, as a machine. It is re-entered on every resume with `i == n`, so the
+           conversion loop above is skipped and the resume lands back inside the body — which is what makes the
+           body's stage the SECOND resume point of this machine, beside the argument cursor. */
+        r = m->step->body(ctx, &s->hdr, (char *)s + sizeof(JSIdlArgsState), s->n, (JSValueConst *)s->args,
+                         cb_result, &s->result, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) { s->result = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        return JS_STEP_DONE;
+    }
     s->result = m->setter
         ? m->setter(ctx, s->hdr.this_val, s->n > 0 ? s->args[0] : JS_UNDEFINED, m->magic)
         : m->body(ctx, s->hdr.this_val, s->n, (JSValueConst *)s->args, m->magic);
@@ -285,7 +303,14 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
 {
     JSIdlArgsState *s = st;
     JSValue r = take_result ? s->result : JS_UNDEFINED;
+    const IdlMember *m;
     int i;
+
+    DCHECK(s->hdr.arg >= 0 && s->hdr.arg < g_n, "an IDL member's teardown ran with no pool entry behind it");
+    m = &g_members[s->hdr.arg];
+    /* The step body's state goes FIRST: it may hold values this machine's arguments are the only other
+       reference to, and a release that runs after they are freed reads what it no longer owns. */
+    if (m->step && m->step->release) m->step->release(ctx, (char *)st + sizeof(JSIdlArgsState));
 
     if (take_result) s->result = JS_UNDEFINED;
     JS_FreeValue(ctx, s->result);
@@ -356,12 +381,25 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
             g_members[idx].dict_atoms[k] = JS_NewAtom(ctx, members[k].name);
         g_members[idx].dict_n = nmembers;
     }
+    g_members[idx].step = NULL;
     g_defs[idx].size  = sizeof(JSIdlArgsState);
     g_defs[idx].step  = js_idl_args_step;
     g_defs[idx].fini  = idl_args_result;
     g_defs[idx].arg   = idx;
     g_defs[idx].visit = js_idl_args_visit;
     return JS_RegisterStepDef(rt, &g_defs[idx]);
+}
+
+int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
+                       const IdlDictMember *members, int nmembers,
+                       const IdlStepDecl *decl, int magic)
+{
+    int id = idl_method_id_dict(ctx, types, nargs, members, nmembers, NULL, magic);
+    /* the pool entry idl_method_id_dict just filled — a step member differs only in WHAT runs once the
+       conversions are done, and in needing room after this machine's state for that thing to run in. */
+    g_members[g_n - 1].step = decl;
+    g_defs[g_n - 1].size = sizeof(JSIdlArgsState) + decl->state_size;
+    return id;
 }
 
 int idl_setter_id(JSContext *ctx, IdlArgType type, bool null_to_empty, IdlSetter body, int magic)

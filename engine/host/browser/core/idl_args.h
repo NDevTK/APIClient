@@ -2,7 +2,9 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_IDL_ARGS_H
 #define ENGINE_HOST_BROWSER_CORE_IDL_ARGS_H
 #include <stdbool.h>
+#include <stddef.h>
 #include "quickjs.h"
+#include "quickjs-step.h"
 
 /* A member's body, run once its declared arguments are real strings. Same shape as JS_CFUNC_generic_magic, so
    an existing body becomes one by taking a magic it may ignore. */
@@ -61,6 +63,30 @@ int  idl_method_id(JSContext *ctx, const IdlArgType *types, int nargs, IdlBody b
 #define IDL_MAX_DICT 6
 int  idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
                         const IdlDictMember *members, int nmembers, IdlBody body, int magic);
+
+/* A MEMBER WHOSE ALGORITHM RUNS THE PAGE'S CODE AFTER ITS ARGUMENTS ARE CONVERTED. customElements.define is
+   the first: §4.13.4 reads `constructor.observedAttributes`, which is a static GETTER, and then converts what
+   it got — the page's code, twice, after every declared argument is already a real value. A plain body cannot
+   do that: reaching for JS_GetProperty there is a C activation hosting the page's loops, which is the
+   drive-to-completion this engine aborts on. Declaring the conversions and hand-rolling them so the member can
+   be a machine is the other wrong answer — that is the duplication one machine exists to prevent.
+   So the body is itself a STEP, with the converted arguments in place: same return contract as a
+   JSTrampStepDef's step, and its own state, whose SIZE the member declares and whose owned values its visit
+   names. The state is zeroed before the first entry, so a stage byte of 0 means "not started".
+   `presult` is where it leaves the member's answer. */
+typedef int (*IdlStepBody)(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                           JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc);
+/* The state's OWNERSHIP contract, and the two things every step state must state: what it holds (traced for the
+   GC and cloned at a deep fork) and how to release it (at teardown, including the throw path). */
+typedef struct {
+    IdlStepBody body;
+    size_t      state_size;
+    void      (*visit)(JSContext *ctx, void *state, JSStepVisit *v);
+    void      (*release)(JSContext *ctx, void *state);
+} IdlStepDecl;
+int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
+                       const IdlDictMember *members, int nmembers,
+                       const IdlStepDecl *decl, int magic);
 
 /* READ a member of the dictionary the declaration built. An `optional D options = {}` argument that the page
    did not pass is not there at all, so a body that reads it with JS_GetPropertyStr calls a property get on

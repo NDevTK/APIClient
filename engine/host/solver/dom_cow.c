@@ -50,6 +50,11 @@ void dom_cow_set_ctx(JSContext *ctx) { g_cow_ctx = ctx; }
 static void (*g_tree_hook)(JSContext *ctx, lxb_dom_node_t *n, int inserted);
 void dom_cow_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, int inserted)) { g_tree_hook = fn; }
 
+static void (*g_attr_hook)(JSContext *ctx, lxb_dom_element_t *el, const char *name,
+                           const char *val, size_t val_len);
+void dom_cow_set_attr_hook(void (*fn)(JSContext *ctx, lxb_dom_element_t *el, const char *name,
+                                      const char *val, size_t val_len)) { g_attr_hook = fn; }
+
 /* the current taint shadow for (el,name), dup'd (JS_UNDEFINED + *had=0 if none) */
 static JSValue shadow_snapshot(lxb_dom_element_t *el, int slot, const char *name, int *had) {
     int si = attr_shadow_find(el, slot, name);
@@ -110,6 +115,8 @@ void dom_insert_capture(lxb_dom_node_t *node) {
    is guaranteed in ONE place, not re-remembered at each call site. */
 void dom_cow_set_attribute(lxb_dom_element_t *el, const char *name, const char *val, size_t val_len) {
     dom_attr_capture(el, name);   /* record baseline into the running flow's delta FIRST (no-op if !g_dom_capture) */
+    /* BEFORE the write: the change steps take the OLD value, which the element still holds only until now. */
+    if (g_attr_hook && g_cow_ctx) g_attr_hook(g_cow_ctx, el, name, val, val_len);
     lxb_dom_element_set_attribute(el, (const lxb_char_t *)name, strlen(name), (const lxb_char_t *)val, val_len);
 }
 /* Remove an ATTRIBUTE the baseline may own — the fourth thing a flow can change about the tree, and the one
@@ -117,6 +124,7 @@ void dom_cow_set_attribute(lxb_dom_element_t *el, const char *name, const char *
    unset itself without going around the per-flow delta. Same capture-then-mutate order as the setter. */
 void dom_cow_remove_attribute(lxb_dom_element_t *el, const char *name) {
     dom_attr_capture(el, name);
+    if (g_attr_hook && g_cow_ctx) g_attr_hook(g_cow_ctx, el, name, NULL, 0);
     lxb_dom_element_remove_attribute(el, (const lxb_char_t *)name, strlen(name));
 }
 
