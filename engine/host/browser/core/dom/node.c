@@ -177,6 +177,70 @@ static JSValue js_node_remove_child(JSContext *ctx, JSValueConst this_val, int a
     return JS_DupValue(ctx, argv[0]);
 }
 
+/* §4.2.7/§4.2.8 THE ChildNode AND ParentNode CONVENIENCE MIXINS — `el.remove()`, `parent.append(a, b)`,
+   `el.before(node, 'text')`, `el.replaceWith(x)`, `parent.replaceChildren()`. They are on Element, on
+   CharacterData and on DocumentFragment, which is why they live here on the base rather than in element.c.
+   THEY ARE NOT SUGAR IN THIS ENGINE. A bundle that builds its UI with `append` and tears it down with
+   `remove()` had none of it: the page's own call threw, and every fetch behind that render never happened.
+   §4.2.4 "convert nodes into a node": a STRING argument becomes a Text node, which is the whole reason these
+   take `(Node or DOMString)...` — `el.append('hello')` is the ordinary way to write text.
+   Every insertion and removal goes through the per-flow chokepoints, so the tree steps run (a custom element
+   appended this way is upgraded) and the whole thing time-travels like any other DOM write.
+   magic 0 = remove, 1 = before, 2 = after, 3 = replaceWith, 4 = append, 5 = prepend, 6 = replaceChildren. */
+static lxb_dom_node_t *node_from_arg(JSContext *ctx, lxb_dom_node_t *owner, JSValueConst v)
+{
+    lxb_dom_node_t *n = node_of(v);
+    const char *s;
+    size_t slen = 0;
+    lxb_dom_text_t *text;
+
+    if (n) return n;
+    /* §4.2.4: anything that is not a Node is stringified into a Text node. The conversion is the page's code,
+       and it has already run — the member declares `any...`, and the ToString below is on a value the
+       declaration left alone, so it is done here where the argument is known not to be a Node. */
+    s = JS_ToCStringLen(ctx, &slen, v);
+    if (!s) return NULL;
+    text = lxb_dom_document_create_text_node(owner->owner_document, (const lxb_char_t *)s, slen);
+    JS_FreeCString(ctx, s);
+    return text ? lxb_dom_interface_node(text) : NULL;
+}
+
+static JSValue js_node_mixin(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val), *parent, *ref, *added;
+    int i;
+
+    if (!n) return JS_UNDEFINED;
+    parent = n->parent;
+    /* §4.2.7: a node with no parent has nothing to be removed from or inserted beside — and that is a no-op,
+       not an error, which is what lets a page call `el.remove()` twice. */
+    if (magic <= 3 && !parent) return JS_UNDEFINED;
+
+    if (magic == 6) {                       /* replaceChildren: empty first, then append */
+        lxb_dom_node_t *c = n->first_child, *next;
+        for (; c; c = next) { next = c->next; dom_cow_remove_child(c); }
+    }
+    /* `before`/`after` insert beside THIS node; `replaceWith` does that and then removes it. The reference
+       child is fixed BEFORE anything is inserted, because inserting moves `n->next`. */
+    ref = (magic == 1 || magic == 3) ? n : (magic == 2 ? n->next : NULL);
+    for (i = 0; i < argc; i++) {
+        added = node_from_arg(ctx, n, argv[i]);
+        if (!added) return JS_EXCEPTION;
+        if (added == n) continue;           /* inserting a node beside itself is its own removal first */
+        switch (magic) {
+        case 1: case 3: dom_cow_insert_before(ref, added); break;
+        case 2: if (ref) dom_cow_insert_before(ref, added); else dom_cow_append_child(parent, added); break;
+        case 4: case 6: dom_cow_append_child(n, added); break;
+        case 5: if (n->first_child) dom_cow_insert_before(n->first_child, added);
+                else dom_cow_append_child(n, added);
+                break;
+        default: DFAIL("a ChildNode/ParentNode member ran with an unknown magic"); break;
+        }
+    }
+    if (magic == 0 || magic == 3) dom_cow_remove_child(n);
+    return JS_UNDEFINED;
+}
+
 static bool node_is_chardata(const lxb_dom_node_t *n)
 {
     return n->type == LXB_DOM_NODE_TYPE_TEXT || n->type == LXB_DOM_NODE_TYPE_COMMENT;
@@ -589,6 +653,35 @@ static JSValue js_node_lookup_ns(JSContext *ctx, JSValueConst this_val, int argc
     return r;
 }
 
+/* §4.2.7 ChildNode — on Element, CharacterData and DocumentFragment, which is why it is a table the interfaces
+   that DECLARE it ask for rather than members on Node.prototype: `document.remove()` is not a thing. */
+static const JSCFunctionListEntry js_child_node_mixin[] = {
+    JS_CFUNC_MAGIC_DEF("remove", 0, js_node_mixin, 0),
+    JS_CFUNC_MAGIC_DEF("before", 1, js_node_mixin, 1),
+    JS_CFUNC_MAGIC_DEF("after", 1, js_node_mixin, 2),
+    JS_CFUNC_MAGIC_DEF("replaceWith", 1, js_node_mixin, 3),
+};
+
+/* §4.2.8 ParentNode's insertion half — on Element, Document and DocumentFragment. querySelector and children
+   are the same mixin and already live on the interfaces that declare them. */
+static const JSCFunctionListEntry js_parent_node_mixin[] = {
+    JS_CFUNC_MAGIC_DEF("append", 1, js_node_mixin, 4),
+    JS_CFUNC_MAGIC_DEF("prepend", 1, js_node_mixin, 5),
+    JS_CFUNC_MAGIC_DEF("replaceChildren", 0, js_node_mixin, 6),
+};
+
+void node_install_child_mixin(JSContext *ctx, JSValueConst proto)
+{
+    JS_SetPropertyFunctionList(ctx, (JSValue)proto, js_child_node_mixin,
+                               (int)(sizeof(js_child_node_mixin) / sizeof(js_child_node_mixin[0])));
+}
+
+void node_install_parent_mixin(JSContext *ctx, JSValueConst proto)
+{
+    JS_SetPropertyFunctionList(ctx, (JSValue)proto, js_parent_node_mixin,
+                               (int)(sizeof(js_parent_node_mixin) / sizeof(js_parent_node_mixin[0])));
+}
+
 static const JSCFunctionListEntry js_node_base[] = {
     JS_CFUNC_DEF("appendChild", 1, js_node_append_child),
     JS_CFUNC_DEF("removeChild", 1, js_node_remove_child),
@@ -882,6 +975,9 @@ void node_init(JSContext *ctx)
               "a CharacterData-derived prototype could not be allocated");
         node_set_proto(ctx, LXB_DOM_NODE_TYPE_TEXT, text_proto);
         node_set_proto(ctx, LXB_DOM_NODE_TYPE_COMMENT, comment_proto);
+        /* §4.10: `CharacterData includes ChildNode` — `textNode.remove()` is real, and a page that tears down
+           text with it had nothing. ParentNode is NOT included: character data has no children. */
+        node_install_child_mixin(ctx, cd);
         g_chardata_proto = cd;   /* HELD: the interface objects below name it, and node_free releases it */
     }
 }

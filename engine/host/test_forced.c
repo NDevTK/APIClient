@@ -318,6 +318,29 @@ static const char *HTML =
     /* A computed declaration is READ-ONLY, which the spec makes an error rather than a silent no-op. */
     "var csro = 'nothrow'; try { csc.setProperty('color', 'blue'); } catch (e) { csro = 'isro'; }"
     "fetch('/api/cssro?v=' + csro);"
+    /* §8.4 THE FRAGMENT SERIALISER. innerHTML was WRITE-ONLY, so every read answered undefined — and undefined
+       does not throw, it PROPAGATES: `wrap.innerHTML = head.innerHTML + row` builds the string "undefined…"
+       and the page carries on, so the engine reported a surface assembled out of a value the page never had.
+       outerHTML is the same serialiser over the element itself. */
+    "var sz = document.createElement('section');"
+    "sz.setAttribute('data-k', 'v');"
+    "sz.innerHTML = '<p class=\\'q\\'>hi<br></p>';"
+    "fetch('/api/serialize?in=' + encodeURIComponent(sz.innerHTML)"
+    " + '&out=' + encodeURIComponent(sz.outerHTML));"
+    /* §4.2.7/§4.2.8 the ChildNode and ParentNode mixins. A bundle that builds its UI with append() and tears it
+       down with remove() had NONE of it — the page's own call threw and every fetch behind that render never
+       happened. A STRING argument becomes a Text node, which is the whole reason they take (Node or DOMString). */
+    "var mx = document.createElement('ul'); document.body.appendChild(mx);"
+    "var li1 = document.createElement('li'); var li2 = document.createElement('li');"
+    "mx.append(li1, 'tail'); mx.prepend(li2);"
+    "li1.before(document.createElement('hr'));"
+    "var mid = document.createElement('em'); li1.after(mid);"
+    "fetch('/api/mixin?v=' + encodeURIComponent(mx.innerHTML));"
+    "mid.replaceWith(document.createElement('b'));"
+    "li2.remove();"
+    "fetch('/api/mixin2?v=' + encodeURIComponent(mx.innerHTML));"
+    "mx.replaceChildren(document.createElement('span'));"
+    "fetch('/api/mixin3?v=' + encodeURIComponent(mx.innerHTML));"
     /* §4.9 matches / closest, and §7.1's DOMTokenList — the two questions a router asks and the way a bundle
        gates a branch of its UI. classList holds NO tokens of its own: they are the `class` attribute split, so
        a write through the list and a write through setAttribute are the same write, and it time-travels
@@ -905,6 +928,10 @@ int main(void) {
         { "\"/api/clview\"",     "isview"  },   /* …and the list is a VIEW, with nothing to keep in step */
         { "\"/api/matches\"",    "ismatch" },   /* §4.9 matches, and closest walking INCLUSIVE ancestors */
         { "\"/api/matchbad\"",   "issyn"   },
+        { "\"/api/serialize\"",  "%3Cp%20class%3D%22q%22%3Ehi%3Cbr%3E%3C%2Fp%3E" },   /* §8.4, and `<br>` is void */
+        { "\"/api/mixin\"",      "%3Cli%3E%3C%2Fli%3E%3Chr%3E%3Cli%3E%3C%2Fli%3E%3Cem%3E%3C%2Fem%3Etail" },
+        { "\"/api/mixin2\"",     "%3Chr%3E%3Cli%3E%3C%2Fli%3E%3Cb%3E%3C%2Fb%3Etail" },
+        { "\"/api/mixin3\"",     "%3Cspan%3E%3C%2Fspan%3E" },
         { "\"/api/rejevent\"",  "isrej"   },   /* §8.1.7.5's cancelable event reached a page listener */
         { "\"/api/prereq\"",    "isreq"   },   /* a `required` dictionary member, enforced by the declaration */
         { "\"/api/prector\"",   "isctor"  },
@@ -923,6 +950,9 @@ int main(void) {
     if (!strstr(js, "\"44850\"")) nodealgo_tt = 0;
     /* The uncaught DOMException is NAMED in the report, not "an object with no own name/message". */
     if (!strstr(js, "SyntaxError: not a valid custom element name")) nodealgo_tt = 0;
+    /* §8.4 outerHTML is the same serialiser over the element ITSELF — its own tag and attributes included. */
+    if (!strstr(js, "%3Csection%20data-k%3D%22v%22%3E%3Cp%20class%3D%22q%22%3Ehi%3Cbr%3E%3C%2Fp%3E%3C%2Fsection%3E"))
+        nodealgo_tt = 0;
     /* §4.13.3: the old value, the new one, the removal's null — and NOTHING for the unobserved attribute. */
     if (!strstr(js, "\"first\"") || !strstr(js, "\"second\"")) nodealgo_tt = 0;
     if (strstr(js, "data-ignored") || strstr(js, "\"nope\"")) nodealgo_tt = 0;

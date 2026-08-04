@@ -38,6 +38,10 @@ JSClassID node_class_id(void);
    chokepoint already gives time-travel capture. `inserted` is 1 for a node that entered a document and 0 for
    one that is about to leave it; the callee walks the SUBTREE, because inserting a subtree connects every
    element in it. */
+/* §4.2.7 ChildNode and §4.2.8 ParentNode — the convenience mixins, installed on the interfaces whose IDL
+   INCLUDES them. Not on Node.prototype: `document.remove()` is not a member of anything. */
+void node_install_child_mixin(JSContext *ctx, JSValueConst proto);
+void node_install_parent_mixin(JSContext *ctx, JSValueConst proto);
 void node_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, int inserted));
 /* §4.4 isConnected — is this node's root a document. */
 bool node_is_connected(const lxb_dom_node_t *n);

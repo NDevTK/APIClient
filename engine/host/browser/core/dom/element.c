@@ -38,6 +38,7 @@
 /* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
 static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
 static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
+#include <lexbor/html/serialize.h>
 #include "core/dom/node.h"
 #include "core/dom/document.h"
 
@@ -115,6 +116,38 @@ static JSValue js_el_get_tag(JSContext *ctx, JSValueConst this_val)
     if (!el) return JS_UNDEFINED;
     t = lxb_dom_element_qualified_name(el, &n);
     return t ? JS_NewStringLen(ctx, (const char *)t, n) : JS_UNDEFINED;
+}
+
+/* §8.4 THE FRAGMENT SERIALISER — innerHTML and outerHTML as READS, which they were not: the accessor was
+   write-only and every `el.innerHTML` answered undefined. That is the worst shape a gap can take here, because
+   undefined does not throw — it PROPAGATES. `wrap.innerHTML = head.innerHTML + row` builds the string
+   "undefined…" and the page carries on, so the engine reports a surface assembled out of a value the page
+   never had, and nothing anywhere names the missing capability.
+   Lexbor owns the serialisation, which is the point: the algorithm is HTML's own (void elements, the raw-text
+   ones, attribute escaping, `<template>`'s content), and hand-rolling it here would be a second HTML
+   serialiser that disagrees with the parser sitting beside it.
+   magic 0 = innerHTML (the CHILDREN), 1 = outerHTML (the element itself). */
+static JSValue js_el_get_html(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_element_t *el = elem_of(this_val);
+    lxb_dom_node_t *n;
+    lexbor_str_t str = { 0 };
+    JSValue r;
+
+    if (!el) return JS_UNDEFINED;
+    n = lxb_dom_interface_node(el);
+    if (lexbor_str_init(&str, n->owner_document->text, 64) == NULL)
+        return JS_ThrowOutOfMemory(ctx);
+    if (magic == 0) {
+        lxb_dom_node_t *c;
+        for (c = n->first_child; c; c = c->next)
+            if (lxb_html_serialize_tree_str(c, &str) != LXB_STATUS_OK) break;
+    } else {
+        lxb_html_serialize_tree_str(n, &str);
+    }
+    r = JS_NewStringLen(ctx, (const char *)str.data, str.length);
+    lexbor_str_destroy(&str, n->owner_document->text, false);
+    return r;
 }
 
 /* innerHTML= is TWO things and it must do both.
@@ -561,13 +594,16 @@ void element_init(JSContext *ctx)
     }
     dom_token_list_init(ctx);   /* its prototype must exist before classList names it */
     dom_token_list_install_element(ctx, proto);   /* §4.9's [SameObject] classList */
+    node_install_child_mixin(ctx, proto);    /* remove / before / after / replaceWith */
+    node_install_parent_mixin(ctx, proto);   /* append / prepend / replaceChildren */
 
     /* `[CEReactions] attribute [LegacyNullToEmptyString] DOMString innerHTML` — the extended attribute is part
-       of the TYPE, so `el.innerHTML = null` empties the element instead of parsing the markup `null`. WRITE-ONLY
-       here: the serialising getter is an HTML fragment serialiser this engine does not have yet, and answering
-       undefined is the honest absence the IDL audit names. */
-    idl_install_accessor(ctx, proto, "innerHTML", NULL, 0,
+       of the TYPE, so `el.innerHTML = null` empties the element instead of parsing the markup `null`. */
+    idl_install_accessor(ctx, proto, "innerHTML", js_el_get_html, 0,
                          idl_setter_id(ctx, IDL_DOMSTRING, true, js_el_set_inner_html, 0));
+    /* `outerHTML` READ-ONLY here: its setter REPLACES the element in its parent, which is §4.9's "replace
+       with" over a parsed fragment — the ChildNode mixin's algorithm, absent until that mixin lands. */
+    idl_install_accessor(ctx, proto, "outerHTML", js_el_get_html, 1, -1);
 
     /* The rest of the attribute family. removeAttribute had no implementation at all, which is also why a
        boolean reflection could not unset itself. */

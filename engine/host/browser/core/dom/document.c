@@ -531,6 +531,9 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     cssom_install(ctx, global);          /* CSSStyleDeclaration, and getComputedStyle on the Window */
     custom_elements_install(ctx, global);   /* §4.13.4 window.customElements */
     dom_token_list_install(ctx, global);    /* §7.1 DOMTokenList */
+    /* §4.5: `Document includes ParentNode` — not ChildNode, because a document has no parent to be removed
+       from. `document.append(el)` is how a page adds to an empty document. */
+    node_install_parent_mixin(ctx, node_type_proto(LXB_DOM_NODE_TYPE_DOCUMENT));
     node_install_interface(ctx, global, "Document", node_type_proto(LXB_DOM_NODE_TYPE_DOCUMENT));
     engine_set_document_done_hook(document_done_stage);
 }
