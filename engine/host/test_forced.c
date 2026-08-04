@@ -430,6 +430,24 @@ static const char *HTML =
     " && lv.childNodes === lvc && lv.children === lve && lvq instanceof NodeList"
     " && lve instanceof HTMLCollection && lvc[0] === lv.firstChild && typeof lvc.map === 'undefined'"
     " ? 'islive' : 'wrong'));"
+    /* THE INDEX CACHE, and the two ways it can be wrong. A collection has nothing to cache the tree in, so
+       `list[i]` is a walk of i and the loop every page writes over one is quadratic in the page's own markup;
+       the cache is keyed on the tree version, exactly as Blink's CollectionIndexCache is on the document's.
+       (1) SEQUENTIAL: 200 children read forwards then backwards — 400 reads that were 40,000 link steps, and
+       a cursor that steps the wrong way or fails to move gives the wrong join. (2) INVALIDATION: insert at the
+       FRONT between two reads. Every index shifts by one, the cached member is still a child of the same owner
+       so no cheap check catches it, and only the version bump makes the second read right. */
+    "var ic = document.createElement('div'); document.body.appendChild(ic);"
+    "for (var ici = 0; ici < 200; ici++) {"
+      "var icn = document.createElement('b'); icn.setAttribute('id', 'n' + ici); ic.appendChild(icn); }"
+    "var icl = ic.children, icf = '', icb = '';"
+    "for (var icj = 0; icj < icl.length; icj++) icf += icl[icj].getAttribute('id');"
+    "for (var ick = icl.length - 1; ick >= 0; ick--) icb += icl[ick].getAttribute('id');"
+    "var icv = icl[7].getAttribute('id');"
+    "ic.insertBefore(document.createElement('b'), ic.firstChild);"
+    "fetch('/api/idxcache?f=' + (icf.indexOf('n0n1n2') === 0 && icf.lastIndexOf('n199') === icf.length - 4"
+    " ? 'fwd' : 'wrong') + '&b=' + (icb.indexOf('n199n198') === 0 ? 'back' : 'wrong')"
+    " + '&i=' + (icv === 'n7' && icl[7].getAttribute('id') === 'n6' && icl.length === 201 ? 'shifted' : 'stale'));"
     /* §4.2.11's NAMED getter: `children.foo` is how a great deal of older code reaches its own markup. */
     "var nb = document.createElement('u'); nb.setAttribute('id', 'namedkid'); lv.appendChild(nb);"
     "fetch('/api/named?v=' + (lv.children.namedItem('namedkid') === nb && lv.children.namedkid === nb"
@@ -1044,6 +1062,8 @@ int main(void) {
         { "\"/api/variadic\"",   "%3Cli%3E%3C%2Fli%3En1770abcdefg" },   /* nine arguments, one a page toString */
         { "\"/api/live\"",       "islive"  },   /* childNodes and children track the tree; qSA does not */
         { "\"/api/named\"",      "isnamed" },   /* §4.2.11's named property getter */
+        /* the index cache: forwards, backwards, and shifted by a front insertion between two reads */
+        { "\"/api/idxcache\"",   "shifted" },
         { "\"/api/adjacent\"",   "%3Ci%3Ebb%3C%2Fi%3E%3Cp%3ET%3Cb%3Eab%3C%2Fb%3E%3Cu%3Ebe%3C%2Fu%3E%3Cq%3E%3C%2Fq%3E%3C%2Fp%3E%3Cs%3Eae%3C%2Fs%3E" },
         { "\"/api/fragctx\"",    "%3Ctd%3Ecell%3C%2Ftd%3E" },   /* §13.4: parsed in the ROW's context */
         { "\"/api/outerset\"",   "%3Ch1%3Ereplaced%3C%2Fh1%3E" },

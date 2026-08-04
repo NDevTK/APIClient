@@ -49,9 +49,28 @@ static bool idx_of(const char *s, uint32_t *out)
     return true;
 }
 
+/* THE PER-OBJECT STATE. The decl alone used to be the opaque, which was right while an indexed object had
+   nothing of its own; an index cache is per-collection, so the object needs a place to keep one. The scratch
+   is allocated in the same block and handed out by idl_indexed_cache. */
+typedef struct { const IdlIndexedDecl *decl; } IdlIndexedObj;
+
 static const IdlIndexedDecl *decl_of(JSValueConst obj)
 {
-    return JS_GetOpaque(obj, g_class);
+    IdlIndexedObj *o = JS_GetOpaque(obj, g_class);
+    return o ? o->decl : NULL;
+}
+
+void *idl_indexed_cache(JSValueConst obj)
+{
+    IdlIndexedObj *o = JS_GetOpaque(obj, g_class);
+    if (!o || !o->decl->cache_size) return NULL;
+    return (char *)o + sizeof(IdlIndexedObj);
+}
+
+static void idl_indexed_finalizer(JSRuntime *rt, JSValue val)
+{
+    IdlIndexedObj *o = JS_GetOpaque(val, g_class);
+    js_free_rt(rt, o);
 }
 
 static int idl_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom prop)
@@ -129,7 +148,7 @@ static JSClassExoticMethods g_exotic = {
 };
 
 static JSClassDef g_class_def = {
-    "IndexedProperties", NULL, NULL, NULL, &g_exotic
+    "IndexedProperties", idl_indexed_finalizer, NULL, NULL, &g_exotic
 };
 
 void idl_indexed_init(JSContext *ctx)
@@ -156,9 +175,14 @@ JSValue idl_indexed_new(JSContext *ctx, JSValueConst proto, const IdlIndexedDecl
     DCHECK(decl && decl->length && decl->item, "an indexed interface must answer both length and item");
     obj = JS_NewObjectProtoClass(ctx, proto, g_class);
     if (JS_IsException(obj)) return obj;
-    /* BORROWED, and that is why it is a static per-interface constant: the object outlives no runtime and the
-       decl must outlive every object. */
-    JS_SetOpaque(obj, (void *)(uintptr_t)decl);
+    {
+        /* The decl is BORROWED, and that is why it is a static per-interface constant: it must outlive every
+           object. The CACHE is per object and zeroed, which is what "nothing cached yet" is spelled as. */
+        IdlIndexedObj *o = js_mallocz(ctx, sizeof(IdlIndexedObj) + decl->cache_size);
+        CHECK(o != NULL, "an indexed-property object could not allocate its per-object state");
+        o->decl = decl;
+        JS_SetOpaque(obj, o);
+    }
     return obj;
 }
 

@@ -30,6 +30,7 @@
 #include "core/idl_indexed.h"
 #include "core/dom/node.h"
 #include "core/dom/collections.h"
+#include "solver/dom_cow.h"
 
 static JSValue g_nodelist_proto = JS_UNDEFINED;
 static JSValue g_htmlcoll_proto = JS_UNDEFINED;
@@ -76,12 +77,44 @@ static bool coll_takes(int kind, const lxb_dom_node_t *c)
     return kind == COLL_CHILD_NODES || c->type == LXB_DOM_NODE_TYPE_ELEMENT;
 }
 
+/* THE INDEX CACHE — Blink's CollectionIndexCache, and the reason it has to exist here too.
+   A live collection has nothing to cache the tree IN, so counting it is a walk and reaching index `i` is a walk
+   of `i`. That makes the loop every page writes — `for (i = 0; i < el.children.length; i++) el.children[i]` —
+   quadratic in the page's own markup, and it runs inside an exotic [[GetOwnProperty]], which is a synchronous C
+   contract with nowhere to suspend. Being O(1) is what makes a body safe to leave un-parkable, so this is what
+   makes the indexed getter safe: not a way to yield out of the walk, but no walk to yield out of.
+   The cache is a MEMO, valid exactly while the tree version is unchanged — which the swap advances, so a cache
+   another flow filled is already invalid by the time this one runs. Nothing here is per-flow state; a miss
+   costs the walk that used to happen every time. */
+typedef struct {
+    uint64_t        version;      /* the tree this describes; never 0, because the version starts at 1 */
+    lxb_dom_node_t *owner;        /* whose child list — the same object can be re-read from a different flow */
+    lxb_dom_node_t *node;         /* the member at `index`, or NULL when only the length is known */
+    uint32_t        index;
+    uint32_t        length;
+    uint8_t         has_length;
+} CollCache;
+
+/* The cache for this collection, already checked against the tree it describes. NULL means walk from scratch. */
+static CollCache *coll_cache(JSValueConst self, lxb_dom_node_t *owner)
+{
+    CollCache *c = idl_indexed_cache(self);
+    if (!c) return NULL;
+    if (c->version != dom_cow_version() || c->owner != owner) {
+        memset(c, 0, sizeof *c);
+        c->version = dom_cow_version();
+        c->owner = owner;
+    }
+    return c;
+}
+
 static uint32_t coll_length(JSContext *ctx, JSValueConst self)
 {
     JSValue owner;
     int kind = coll_kind(ctx, self, &owner);
     lxb_dom_node_t *n, *c;
     uint32_t count = 0;
+    CollCache *cc;
 
     if (kind == COLL_STATIC) {
         JSValue lv = JS_GetPropertyStr(ctx, owner, "length");
@@ -93,11 +126,27 @@ static uint32_t coll_length(JSContext *ctx, JSValueConst self)
     n = node_of(owner);
     JS_FreeValue(ctx, owner);
     if (!n) return 0;
+    cc = coll_cache(self, n);
+    if (cc && cc->has_length) return cc->length;
     /* THE TREE AS IT IS NOW. That walk is the liveness — there is nothing here to invalidate or refresh,
-       because there is nothing cached to go stale. */
+       because the version says when what was counted stopped describing the tree. */
     for (c = n->first_child; c; c = c->next)
         if (coll_takes(kind, c)) count++;
+    if (cc) { cc->length = count; cc->has_length = 1; }
     return count;
+}
+
+/* Step `from` by `delta` members of the collection, in `dir`. The members are the children `coll_takes` accepts,
+   so a NodeList steps one child at a time and an HTMLCollection skips the text between elements. */
+static lxb_dom_node_t *coll_step(int kind, lxb_dom_node_t *from, uint32_t delta, int forward)
+{
+    lxb_dom_node_t *c = from;
+    while (delta) {
+        c = forward ? c->next : c->prev;
+        if (!c) return NULL;
+        if (coll_takes(kind, c)) delta--;
+    }
+    return c;
 }
 
 static JSValue coll_item(JSContext *ctx, JSValueConst self, uint32_t i)
@@ -107,6 +156,7 @@ static JSValue coll_item(JSContext *ctx, JSValueConst self, uint32_t i)
     lxb_dom_node_t *n, *c;
     uint32_t k = 0;
     JSValue r = JS_UNDEFINED;
+    CollCache *cc;
 
     if (kind == COLL_STATIC) {
         r = JS_GetPropertyUint32(ctx, owner, i);
@@ -116,9 +166,27 @@ static JSValue coll_item(JSContext *ctx, JSValueConst self, uint32_t i)
     n = node_of(owner);
     JS_FreeValue(ctx, owner);
     if (!n) return JS_UNDEFINED;
+    cc = coll_cache(self, n);
+    if (cc && cc->node) {
+        /* THE WHOLE POINT: a loop that reads 0, 1, 2… moves one member per call rather than i of them. A read
+           that goes BACKWARDS is the same walk through `prev`, because a child list is doubly linked and a page
+           iterating in reverse deserves the same answer as one iterating forwards. */
+        DCHECK(cc->node->parent == n,
+               "a cached collection member is no longer a child of the collection's owner — a tree mutation "
+               "did not advance dom_cow_version, so the cache is describing a tree that is gone");
+        c = i >= cc->index ? coll_step(kind, cc->node, i - cc->index, 1)
+                           : coll_step(kind, cc->node, cc->index - i, 0);
+        if (!c) return JS_UNDEFINED;
+        cc->index = i;
+        cc->node = c;
+        return node_wrap(ctx, c);
+    }
     for (c = n->first_child; c; c = c->next) {
         if (!coll_takes(kind, c)) continue;
-        if (k == i) return node_wrap(ctx, c);
+        if (k == i) {
+            if (cc) { cc->index = i; cc->node = c; }
+            return node_wrap(ctx, c);
+        }
         k++;
     }
     return JS_UNDEFINED;
@@ -148,8 +216,13 @@ static JSValue coll_named(JSContext *ctx, JSValueConst self, const char *name)
     return JS_UNDEFINED;
 }
 
-static const IdlIndexedDecl NODELIST_INDEXED = { "NodeList", coll_length, coll_item, NULL };
-static const IdlIndexedDecl HTMLCOLL_INDEXED = { "HTMLCollection", coll_length, coll_item, coll_named };
+/* A LIVE collection carries the index cache; the STATIC one does not, because its item() is already an array
+   read and a cache would be a second copy of the answer to keep in step. Both kinds share one decl per
+   interface, so the live decl's cache_size is what a static NodeList allocates too — a few bytes it never
+   reads, against a second decl that differs in one field. */
+static const IdlIndexedDecl NODELIST_INDEXED = { "NodeList", coll_length, coll_item, NULL, sizeof(CollCache) };
+static const IdlIndexedDecl HTMLCOLL_INDEXED = { "HTMLCollection", coll_length, coll_item, coll_named,
+                                                 sizeof(CollCache) };
 
 /* ---- the members ------------------------------------------------------------------------------------------ */
 static JSValue js_coll_length(JSContext *ctx, JSValueConst this_val, int magic)

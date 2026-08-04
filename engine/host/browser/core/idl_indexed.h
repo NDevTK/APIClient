@@ -13,7 +13,21 @@ typedef struct {
     uint32_t (*length)(JSContext *ctx, JSValueConst self);
     JSValue  (*item)(JSContext *ctx, JSValueConst self, uint32_t i);   /* owned; JS_UNDEFINED past the end */
     JSValue  (*named)(JSContext *ctx, JSValueConst self, const char *name);   /* owned; JS_UNDEFINED for none */
+    /* AN INDEX CACHE the backing keeps PER OBJECT. `length` and `item` are pure reads, but "pure" says nothing
+       about how LONG: a live collection has to count or walk the child list, so `list[i]` is O(i) and the loop
+       every page writes over one is O(n²) in the page's own markup. Blink carries CollectionIndexCache for
+       exactly this, and a cache is per-collection state, which a static per-interface decl cannot hold.
+       So the interface declares how many BYTES of scratch it wants and this allocates them with the object,
+       zeroed, freed with it. It holds NO JSValues and no atoms — nothing here is traced, and a backing that
+       needs to own a reference is asking for the wrong mechanism. 0 = no cache, which is right for a static
+       list whose item() is already an array read. */
+    size_t   cache_size;
 } IdlIndexedDecl;
+
+/* This object's cache scratch, or NULL when the interface declared none. Zeroed at construction, so an
+   all-zero state must mean "nothing cached" — and it does, because the tree version it is keyed on starts
+   at 1 and only grows. */
+void *idl_indexed_cache(JSValueConst obj);
 
 void idl_indexed_init(JSContext *ctx);
 void idl_indexed_free(JSContext *ctx);

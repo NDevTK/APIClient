@@ -145,10 +145,23 @@ void dom_cow_remove_attribute(lxb_dom_element_t *el, const char *name) {
     lxb_dom_element_remove_attribute(el, (const lxb_char_t *)name, strlen(name));
 }
 
+/* THE TREE VERSION — Blink's Document::dom_tree_version, and it is here rather than on the document for the
+   reason every other piece of this file is: the tree a flow sees is the baseline PLUS its delta, so "did the
+   tree change" has to include the swap. A live collection caches an index into the child list, and that cache
+   is valid exactly while this number is unchanged.
+   MONOTONIC AND GLOBAL, deliberately. A number that only ever grows can be wrong in one direction — it can say
+   "changed" when a particular flow's tree did not — and a spurious invalidation costs a re-walk, while a missed
+   one is a wrong answer. Bumping it on the SWAP is what makes a C-side cache sound without being per-flow: a
+   cache another flow filled is invalid the moment the swap that let this flow run happened. */
+static uint64_t g_dom_version = 1;
+
+uint64_t dom_cow_version(void) { return g_dom_version; }
+
 /* Remove a node that the baseline may own. Capture its position FIRST, then detach — the same order the
    attribute and insert chokepoints use, so a removal cannot bypass the per-flow delta either. */
 void dom_cow_remove_child(lxb_dom_node_t *node) {
     if (!node) return;
+    g_dom_version++;
     /* BEFORE the detach, because "was it connected" has no answer afterwards. */
     if (g_tree_hook && g_cow_ctx) g_tree_hook(g_cow_ctx, node, 0);
     if (g_dom_capture) {
@@ -185,6 +198,7 @@ void dom_cow_set_text(lxb_dom_node_t *node, const char *val, size_t val_len) {
 }
 
 void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
+    g_dom_version++;
     dom_insert_capture(child);   /* record the insertion FIRST so it reverts per-flow (detached on unapply) */
     lxb_dom_node_insert_child(parent, child);
     if (g_tree_hook && g_cow_ctx) g_tree_hook(g_cow_ctx, child, 1);   /* AFTER: connectedness is the new tree's */
@@ -193,11 +207,13 @@ void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
    unapply time rather than at capture time, so this differs from append only in the Lexbor call — which is
    exactly why insertBefore must come through here and not reach lxb_dom_node_insert_before directly. */
 void dom_cow_insert_before(lxb_dom_node_t *ref, lxb_dom_node_t *child) {
+    g_dom_version++;
     dom_insert_capture(child);
     lxb_dom_node_insert_before(ref, child);
     if (g_tree_hook && g_cow_ctx) g_tree_hook(g_cow_ctx, child, 1);
 }
 void dom_revert(void) {   /* DISCARD the running flow's DOM writes -> baseline (reverse order); empties the delta */
+    g_dom_version++;
     for (int i = g_dom_undo_n - 1; i >= 0; i--) {
         DomUndo *u = &g_dom_undo[i];
         if (u->kind == 0) {   /* named slot: restore old value (attributes only) + old taint shadow */
@@ -229,6 +245,7 @@ void dom_revert(void) {   /* DISCARD the running flow's DOM writes -> baseline (
 }
 /* per-entry UNAPPLY (flow -> parked): stash the flow's value/taint into cur, restore the baseline. */
 static void dom_unapply_entry(DomUndo *u) {
+    g_dom_version++;
     if (u->kind == 0) {
         if (u->slot == ATTR_SLOT_ATTRIBUTE) {
             size_t vl = 0; const lxb_char_t *c = lxb_dom_element_get_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), &vl);
@@ -263,6 +280,7 @@ static void dom_unapply_entry(DomUndo *u) {
 }
 /* per-entry APPLY (parked -> flow): restore the flow's value/taint over the baseline. */
 static void dom_apply_entry(DomUndo *u) {
+    g_dom_version++;
     if (u->kind == 0) {
         if (u->slot == ATTR_SLOT_ATTRIBUTE) {
             if (u->cur_had && u->cur) lxb_dom_element_set_attribute(u->el, (const lxb_char_t *)u->name, strlen(u->name), u->cur, u->cur_len);
