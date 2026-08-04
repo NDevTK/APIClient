@@ -33,6 +33,7 @@
 #include "core/html/custom_elements.h"
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
+#include "core/dom/document_fragment.h"
 #include "core/idl_indexed.h"
 #include "core/css/css_style_declaration.h"
 #include <lexbor/ns/ns.h>
@@ -876,6 +877,7 @@ void element_free(JSContext *ctx)
     custom_elements_free(ctx);
     dom_token_list_free(ctx);
     collections_free(ctx);
+    document_fragment_free(ctx);
     idl_indexed_free(ctx);
     JS_FreeValue(ctx, g_element_proto);
     g_element_proto = JS_UNDEFINED;

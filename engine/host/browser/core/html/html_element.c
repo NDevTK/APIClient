@@ -24,6 +24,8 @@
  * list gets HTMLUnknownElement, which is what HTML says for an unknown element — not a shrug. */
 #include <string.h>
 
+#include <lexbor/html/html.h>   /* <template>'s content fragment — §4.12.3 */
+
 #include "check.h"
 #include "quickjs.h"
 #include "core/idl_args.h"
@@ -307,6 +309,26 @@ static JSValue js_html_focus(JSContext *ctx, JSValueConst this_val, int argc, JS
     return JS_UNDEFINED;
 }
 
+/* §4.12.3 HTMLTemplateElement.content — the fragment the parser filled. Lexbor keeps it on the element's own
+   interface rather than in its child list, which is exactly what the DOM says: only the parser and `content`
+   itself reach those children. A pure read of the component's own tree. */
+static JSValue js_template_content(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+    lxb_html_template_element_t *t;
+
+    (void)magic;
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return JS_UNDEFINED;
+    DCHECK(lxb_html_tree_node_is(n, LXB_TAG_TEMPLATE),
+           "HTMLTemplateElement.content read on an element that is not a <template> — the accessor lives on the "
+           "per-tag prototype, so reaching it means the interface table handed out the wrong one");
+    t = lxb_html_interface_template(n);
+    DCHECK(t->content != NULL, "a <template> element has no content fragment — lexbor builds one in the "
+                               "template interface's constructor, so an element without it was made some "
+                               "other way");
+    return node_wrap(ctx, &t->content->node);
+}
+
 void html_element_init(JSContext *ctx)
 {
     int i, j;
@@ -342,6 +364,26 @@ void html_element_init(JSContext *ctx)
         CHECK(!JS_IsException(g_iface_proto[i]), "a per-tag interface prototype could not be allocated");
         if (HTML_IFACE[i].nrefl)
             element_install_reflections(ctx, g_iface_proto[i], HTML_IFACE[i].refl, HTML_IFACE[i].nrefl);
+    }
+
+        /* §4.12.3 `[SameObject] readonly attribute DocumentFragment content`. It goes on HTMLTemplateElement and
+       nowhere else, which is why it is here rather than on HTMLElement: a template's children are NOT under it,
+       and `content` is the only way a page reaches the ones the parser put in the fragment. It was absent, so
+       `t.content` was undefined and `t.content.querySelector(...)` — the ordinary way to use a template — threw
+       a TypeError naming a property of undefined instead of naming the missing member.
+       [SameObject] costs nothing to honour: node_wrap keeps one JS object per Lexbor node, so the fragment's
+       wrapper IS the same object every read, and it wears DocumentFragment.prototype because node.c's table now
+       has one to hand out. */
+    {
+        /* The atom is BORROWED by JS_DefinePropertyGetSet, so this owns it — an interned name nobody releases
+           survives the runtime and the gc_obj_list walk counts it. */
+        JSAtom a = JS_NewAtom(ctx, "content");
+        CHECK(a != JS_ATOM_NULL, "the `content` attribute name could not be interned");
+        JS_DefinePropertyGetSet(ctx, html_iface_proto("HTMLTemplateElement"), a,
+                                JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_template_content, "content", 0,
+                                                     JS_CFUNC_getter_magic, 0),
+                                JS_UNDEFINED, JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+        JS_FreeAtom(ctx, a);
     }
 
     /* §4.10's members go on the interfaces that DECLARE them, which is why the forms component is handed the

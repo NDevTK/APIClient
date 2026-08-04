@@ -70,6 +70,11 @@ const INTERFACES = {
      in the direction that gets a real gap ignored. Document is listed the same way for the same reason — it is
      a node_wrap of the document node now, with Document.prototype chained to Node.prototype. */
   DOMTokenList:        "core/dom/dom_token_list.c",
+  /* DocumentFragment's files are its own plus node.c, for the same reason Element's are: it inherits Node, and
+     node.c is also where the ParentNode mixin it INCLUDES is installed. It was missing from this map entirely,
+     so its gaps were not reported as zero — they were not reported at all, which is the audit lying by
+     omission rather than by direction. */
+  DocumentFragment:    ["core/dom/document_fragment.c", "core/dom/node.c", "core/events/event_target.c"],
   NodeList:            "core/dom/collections.c",
   HTMLCollection:      "core/dom/collections.c",
   Element:             ["core/dom/element.c", "core/dom/node.c", "core/events/event_target.c",
@@ -90,6 +95,7 @@ const INTERFACES = {
   HTMLMetaElement:     [...HTML_BASE],
   HTMLDivElement:      [...HTML_BASE],
   Document:            ["core/dom/document.c", "core/dom/node.c", "core/events/event_target.c"],
+  HTMLTemplateElement: [...HTML_BASE],
 };
 
 const all = await listAll();

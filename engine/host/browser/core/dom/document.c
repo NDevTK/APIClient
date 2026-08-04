@@ -27,6 +27,7 @@
 #include "core/dom/collections.h"
 #include "core/css/css_style_declaration.h"
 #include "core/dom/document.h"
+#include "core/dom/document_fragment.h"
 #include "core/idl_args.h"
 
 /* Every member here takes DOMStrings; createElementNS takes two. Declared, not masked. */
@@ -499,6 +500,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     g_win_obj = JS_DupValue(ctx, global);
     /* The interface OBJECTS, now that every prototype exists. Node's goes first because the derived ones
        inherit from it; each component names the one it owns rather than node.c enumerating them. */
+    document_fragment_init(ctx);         /* §4.7, before any fragment is wrapped as a bare Node */
     node_install_interfaces(ctx, global);
     node_install_interface(ctx, global, "Element", element_proto());
     html_element_install(ctx, global);   /* HTMLElement and every per-tag interface object */
@@ -506,6 +508,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     custom_elements_install(ctx, global);   /* §4.13.4 window.customElements */
     dom_token_list_install(ctx, global);    /* §7.1 DOMTokenList */
     collections_install(ctx, global);       /* §4.2.10 NodeList, §4.2.11 HTMLCollection */
+    document_fragment_install(ctx, global); /* §4.7 DocumentFragment, which IS constructible */
     /* §4.5: `Document includes ParentNode` — not ChildNode, because a document has no parent to be removed
        from. `document.append(el)` is how a page adds to an empty document. */
     node_install_parent_mixin(ctx, node_type_proto(LXB_DOM_NODE_TYPE_DOCUMENT));

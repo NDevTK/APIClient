@@ -524,6 +524,29 @@ static const char *HTML =
     /* the scope is the RECEIVER: `pn` has no <body> under it, the document does. */
     " + '&sc=' + (pn.querySelector('body') === null && document.querySelector('body') === document.body"
     " && pn.querySelectorAll('p').length === 1 ? 'scoped' : 'wrong'));"
+    /* §4.7 DocumentFragment. It was ABSENT in the worst shape a gap takes: a fragment node HAD a wrapper and
+       answered nodeType 11, while every member that makes one useful was undefined — nothing threw, the page
+       took the branch behind the undefined, and the engine reported that branch's surface. §4.12.3's
+       `template.content` was the same: `t.content.querySelector(...)`, the ordinary way to use a template,
+       threw about a property of undefined instead of naming the missing member.
+       The mixin is why this is short: DocumentFragment includes ParentNode, so consolidating that first is what
+       makes these members exist rather than a third copy of them. */
+    "var df = new DocumentFragment();"
+    "var dfa = document.createElement('p'); dfa.setAttribute('id', 'dfid');"
+    "df.appendChild(dfa); df.appendChild(document.createTextNode('t'));"
+    "df.append(document.createElement('b'));"
+    "var tq = document.createElement('div');"
+    "tq.innerHTML = '<template><p class=\"tc\">in</p><i></i></template>';"
+    "var tqe = tq.firstChild;"
+    "fetch('/api/fragment?i=' + (df instanceof DocumentFragment && df instanceof Node"
+    " && df.nodeType === 11 ? 'iface' : 'wrong')"
+    " + '&pn=' + (df.children.length === 2 && df.childNodes.length === 3"
+    " && df.querySelector('p') === dfa && df.querySelectorAll('p').length === 1"
+    " && df.getElementById('dfid') === dfa && df.getElementById('nope') === null ? 'mixin' : 'wrong')"
+    /* [SameObject]: the fragment's wrapper is ONE object, so a page stashing t.content still has it. */
+    " + '&tc=' + (tqe.content === tqe.content && tqe.content instanceof DocumentFragment"
+    " && tqe.content.querySelector('.tc').textContent === 'in'"
+    " && tqe.content.childElementCount === 2 && tqe.childNodes.length === 0 ? 'content' : 'wrong'));"
     /* §4.2.11's NAMED getter: `children.foo` is how a great deal of older code reaches its own markup. */
     "var nb = document.createElement('u'); nb.setAttribute('id', 'namedkid'); lv.appendChild(nb);"
     "fetch('/api/named?v=' + (lv.children.namedItem('namedkid') === nb && lv.children.namedkid === nb"
@@ -1145,7 +1168,9 @@ int main(void) {
         { "\"/api/named\"",      "isnamed" },
         /* §4.2.6 installed from ONE place: Document gets the reads it never had, and the lookups scope to
            whichever node they were called on rather than to the global document */
-        { "\"/api/parentmixin\"", "scoped" },   /* §4.2.11's named property getter */
+        { "\"/api/parentmixin\"", "scoped" },
+        /* §4.7's interface, its two mixins, and §4.12.3's [SameObject] content */
+        { "\"/api/fragment\"",   "content" },   /* §4.2.11's named property getter */
         /* the index cache: forwards, backwards, and shifted by a front insertion between two reads */
         { "\"/api/idxcache\"",   "shifted" },
         { "\"/api/adjacent\"",   "%3Ci%3Ebb%3C%2Fi%3E%3Cp%3ET%3Cb%3Eab%3C%2Fb%3E%3Cu%3Ebe%3C%2Fu%3E%3Cq%3E%3C%2Fq%3E%3C%2Fp%3E%3Cs%3Eae%3C%2Fs%3E" },
