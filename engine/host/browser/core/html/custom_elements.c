@@ -47,7 +47,6 @@ static JSValue g_defs;
 static int    g_ready;
 static JSAtom g_atom_prototype = JS_ATOM_NULL;
 static JSAtom g_atom_connected = JS_ATOM_NULL;
-static JSAtom g_atom_extends = JS_ATOM_NULL;
 static JSAtom g_atom_ctor = JS_ATOM_NULL;
 static JSAtom g_atom_proto = JS_ATOM_NULL;
 static int    g_reaction_stepid = -1;
@@ -201,87 +200,46 @@ static void ce_upgrade_document(JSContext *ctx, const char *name, size_t nlen, J
 }
 
 /* ---- define() -------------------------------------------------------------------------------------------- */
-/* A MACHINE, because two of its steps are the page's code: the name is a DOMString (ToString on whatever was
-   passed) and `options.extends` is a property READ that an accessor or a Proxy turns into a call. */
-typedef struct JSCeDefine {
-    JSStepHdr hdr;
-    uint8_t   stage;
-    JSValue   name;     /* the coerced name (owned) */
-    JSValue   ext;      /* options.extends, once read (owned) */
-} JSCeDefine;
+/* Every step that can reach the page's code is DECLARED, so the body is ordinary C: `name` is a DOMString
+   (ToString on whatever was passed) and `options` is an ElementDefinitionOptions whose `extends` member is a
+   property READ an accessor or a Proxy turns into a call. Both are requests the shared IDL machine performs
+   before this runs — it was a hand-rolled machine here only because the dictionary conversion could not yet
+   express a typed member, and a second implementation of a request the machine already makes is exactly the
+   duplication that machine exists to remove. */
+static const IdlArgType CE_DEFINE_ARGS[3] = { IDL_DOMSTRING, IDL_ANY, IDL_DICT };
+static const IdlDictMember CE_DEFINE_OPTS[] = { { "extends", IDL_DOMSTRING } };   /* ElementDefinitionOptions */
 
-static void js_ce_define_visit(JSContext *ctx, void *st, JSStepVisit *v)
+static JSValue js_ce_define(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    JSCeDefine *s = st;
-    v->val(ctx, &s->name);
-    v->val(ctx, &s->ext);
-}
-
-static JSValue js_ce_define_fini(JSContext *ctx, void *st, bool take_result)
-{
-    JSCeDefine *s = st;
-    (void)take_result;
-    JS_FreeValue(ctx, s->name);
-    JS_FreeValue(ctx, s->ext);
-    s->name = s->ext = JS_UNDEFINED;
-    return JS_UNDEFINED;
-}
-
-static int js_ce_define_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
-{
-    JSCeDefine *s = st;
-    JSValueConst ctor = step_arg(&s->hdr, 1);
-    JSValueConst opts = step_arg(&s->hdr, 2);
+    JSValueConst ctor = argc > 1 ? argv[1] : JS_UNDEFINED;
+    JSValue ext;
     const char *nm;
     size_t nlen;
-    int r;
 
-    if (s->stage == 0) {
-        s->name = s->ext = JS_UNDEFINED;
-        s->stage = 1;
-    }
-    if (s->stage == 1) {
-        r = step_tostring_run(ctx, &s->hdr, step_arg(&s->hdr, 0), cb_result, &s->name, out_cb, out_argc);
-        cb_result = JS_UNDEFINED;
-        if (r > 0) return r;
-        if (r < 0) return JS_STEP_ABRUPT;
-        s->stage = 2;
-    }
-    if (s->stage == 2) {
-        /* The stage advances only once the read has DELIVERED. Advancing before the request parks would skip
-           this block on resume, so `ext` would never be read out of the reply and the read's phase would stay
-           parked forever — the resume must re-enter the same call that suspended. */
-        if (JS_IsObject(opts)) {
-            r = step_getprop_run(ctx, &s->hdr, opts, g_atom_extends, cb_result, &s->ext, out_cb, out_argc);
-            cb_result = JS_UNDEFINED;
-            if (r > 0) return r;
-            if (r < 0) return JS_STEP_ABRUPT;
-        }
-        s->stage = 3;
-    }
-    JS_FreeValue(ctx, cb_result);
-
+    (void)this_val; (void)magic;
+    if (argc < 2)
+        return JS_ThrowTypeError(ctx, "customElements.define requires a name and a constructor");
     /* §4.13.4 step 2: the constructor must be a constructor. */
-    if (!JS_IsFunction(ctx, ctor)) {
-        JS_ThrowTypeError(ctx, "customElements.define requires a constructor");
-        return JS_STEP_ABRUPT;
-    }
+    if (!JS_IsFunction(ctx, ctor))
+        return JS_ThrowTypeError(ctx, "customElements.define requires a constructor");
     /* §4.13.4 step 5: customized built-ins. Rejected rather than registered as autonomous — quietly treating
        `{extends:'button'}` as a new tag would define something the page never asked for and leave the button
        it did ask for un-upgraded. */
-    if (JS_IsString(s->ext)) {
-        JS_ThrowDOMException(ctx, "NotSupportedError",
-                             "a customized built-in (`extends`) is not modelled: this engine has no built-in "
-                             "element to customize yet, and registering it as an autonomous element would "
-                             "define a tag the page never asked for");
-        return JS_STEP_ABRUPT;
+    ext = JS_GetPropertyStr(ctx, argc > 2 ? argv[2] : JS_UNDEFINED, "extends");
+    if (JS_IsString(ext)) {
+        JS_FreeValue(ctx, ext);
+        return JS_ThrowDOMException(ctx, "NotSupportedError",
+                                    "a customized built-in (`extends`) is not modelled: this engine has no "
+                                    "built-in element to customize yet, and registering it as an autonomous "
+                                    "element would define a tag the page never asked for");
     }
-    nm = JS_ToCStringLen(ctx, &nlen, s->name);   /* a real string by now */
-    if (!nm) return JS_STEP_ABRUPT;
+    JS_FreeValue(ctx, ext);
+
+    nm = JS_ToCStringLen(ctx, &nlen, argv[0]);   /* a real string by now: the declaration converted it */
+    if (!nm) return JS_EXCEPTION;
     if (!ce_name_valid(nm, nlen)) {
         JS_FreeCString(ctx, nm);
-        JS_ThrowDOMException(ctx, "SyntaxError", "not a valid custom element name");
-        return JS_STEP_ABRUPT;
+        return JS_ThrowDOMException(ctx, "SyntaxError", "not a valid custom element name");
     }
     {
         JSValue prev = ce_find(ctx, nm, nlen), def;
@@ -291,16 +249,15 @@ static int js_ce_define_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         JS_FreeValue(ctx, prev);
         if (taken) {
             JS_FreeCString(ctx, nm);
-            JS_ThrowDOMException(ctx, "NotSupportedError", "this name is already defined");
-            return JS_STEP_ABRUPT;
+            return JS_ThrowDOMException(ctx, "NotSupportedError", "this name is already defined");
         }
         def = JS_NewObjectProto(ctx, JS_NULL);
         CHECK(!JS_IsException(def), "custom elements: OOM allocating a definition — a dropped definition is a "
                                     "class whose lifecycle code never runs");
         JS_SetProperty(ctx, def, g_atom_ctor, JS_DupValue(ctx, ctor));
         /* The class's `prototype` is what the upgrade installs. Read ONCE here rather than per upgrade: §4.13.4
-           reads it at definition time, so a page that reassigns it afterwards does not retroactively change what
-           its already-defined elements are. */
+           reads it at definition time, so a page that reassigns it afterwards does not retroactively change
+           what its already-defined elements are. */
         JS_SetProperty(ctx, def, g_atom_proto, JS_GetProperty(ctx, ctor, g_atom_prototype));
         a = JS_NewAtomLen(ctx, nm, nlen);
         CHECK(a != JS_ATOM_NULL, "custom elements: a name could not be interned");
@@ -310,12 +267,8 @@ static int js_ce_define_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         JS_FreeValue(ctx, def);
     }
     JS_FreeCString(ctx, nm);
-    return JS_STEP_DONE;
+    return JS_UNDEFINED;
 }
-
-static const JSTrampStepDef js_ce_define_def = {
-    sizeof(JSCeDefine), js_ce_define_step, js_ce_define_fini, 0, .visit = js_ce_define_visit
-};
 
 /* §4.13.4 get(name) — the constructor a name is defined as, or undefined. */
 static JSValue js_ce_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -340,11 +293,10 @@ void custom_elements_init(JSContext *ctx)
     DCHECK(!g_ready, "custom_elements_init ran twice — one instance is one document");
     g_atom_prototype = JS_NewAtom(ctx, "prototype");
     g_atom_connected = JS_NewAtom(ctx, "connectedCallback");
-    g_atom_extends = JS_NewAtom(ctx, "extends");
     g_atom_ctor = JS_NewAtom(ctx, "ctor");
     g_atom_proto = JS_NewAtom(ctx, "proto");
     CHECK(g_atom_prototype != JS_ATOM_NULL && g_atom_connected != JS_ATOM_NULL &&
-          g_atom_extends != JS_ATOM_NULL && g_atom_ctor != JS_ATOM_NULL && g_atom_proto != JS_ATOM_NULL,
+          g_atom_ctor != JS_ATOM_NULL && g_atom_proto != JS_ATOM_NULL,
           "a custom-element atom could not be interned");
     /* Built HERE, at init, so it belongs to the pre-boot BASELINE: a write to it during a flow is captured by
        the heap COW. A registry allocated lazily inside a flow would be that flow's private object and every
@@ -367,7 +319,9 @@ void custom_elements_install(JSContext *ctx, JSValueConst global)
     reg = JS_NewObject(ctx);
     CHECK(!JS_IsException(reg), "the CustomElementRegistry allocation failed");
     idl_install_method(ctx, reg, "define", 2,
-                       JS_RegisterStepDef(JS_GetRuntime(ctx), &js_ce_define_def));
+                       idl_method_id_dict(ctx, CE_DEFINE_ARGS, 3, CE_DEFINE_OPTS,
+                                          (int)(sizeof(CE_DEFINE_OPTS) / sizeof(CE_DEFINE_OPTS[0])),
+                                          js_ce_define, 0));
     {
         static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
         idl_install_method(ctx, reg, "get", 1, idl_method_id(ctx, ONE_STR, 1, js_ce_get, 0));
@@ -384,10 +338,9 @@ void custom_elements_free(JSContext *ctx)
     g_reaction_fn = JS_UNDEFINED;
     JS_FreeAtom(ctx, g_atom_prototype);
     JS_FreeAtom(ctx, g_atom_connected);
-    JS_FreeAtom(ctx, g_atom_extends);
     JS_FreeAtom(ctx, g_atom_ctor);
     JS_FreeAtom(ctx, g_atom_proto);
-    g_atom_prototype = g_atom_connected = g_atom_extends = JS_ATOM_NULL;
+    g_atom_prototype = g_atom_connected = JS_ATOM_NULL;
     g_atom_ctor = g_atom_proto = JS_ATOM_NULL;
     g_reaction_stepid = -1;
     g_ready = 0;

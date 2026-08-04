@@ -412,6 +412,16 @@ static const char *HTML =
     "Promise.resolve().then(function(){ prh.catch(function(){}); });"
     "fetch('/api/ceget?v=' + (customElements.get('x-panel') === XPanel"
     " && customElements.get('x-none') === undefined ? 'isget' : 'wrong'));"
+    /* A TYPED DICTIONARY MEMBER, converted through the page's own code. `extends` is a DOMString member of
+       ElementDefinitionOptions, so Web IDL READS it (an accessor here, which a Proxy would make of any object)
+       and then runs ToString on what it got — two suspension points inside one member, and the page's toString
+       holds a loop, so the resume must come back to the CONVERSION and not re-run the read. The definition is
+       then refused as a customized built-in, which is what proves the converted value arrived. */
+    "var ceext = 'wrong';"
+    "try { customElements.define('x-ext', class {}, { get extends(){ return { toString: function(){"
+    " var n = 0; for (var i = 0; i < 120; i++) n += i; return n === 7140 ? 'button' : 'bad'; } }; } }); }"
+    " catch (e) { ceext = 'isext'; }"
+    "fetch('/api/ceext?v=' + ceext);"
     "if (cfg.admin) { setBodyAttr('data-tt','ttADMIN'); appendChild('kidADMIN'); rx.flag='flagADMIN'; fetch('/api/data?role=admin'); loadScript('/chunk/admin.js'); } else { setBodyAttr('data-tt','ttPUBLIC'); appendChild('kidPUBLIC'); rx.flag='flagPUBLIC'; fetch('/api/data?role=public'); }"   /* admin arm: same endpoint MERGES + a LAZY CHUNK loads. Each arm ALSO writes an attribute, appends a child node, AND assigns the ACCESSOR rx.flag (invokes the setter -> rx._f) -> per-flow DOM + heap-accessor writes across the EXISTING fork. */
     "fetch('/api/whoami?tt=' + getBodyAttr('data-tt'));"   /* DOM ATTR READ-BACK after the fork: per-flow -> admin flow reads ttADMIN, public flow reads ttPUBLIC */
     "fetch('/api/kid?mark=' + lastChildMark());"   /* DOM NODE READ-BACK: each flow's appended child is its OWN last child -> admin reads kidADMIN, public reads kidPUBLIC (neither's inserted node leaks) */
@@ -785,6 +795,7 @@ int main(void) {
         { "\"/api/ceasync\"",    "ceAWAIT" },   /* the reaction is a flow: it parked at a loop and at an await */
         { "\"/api/cename\"",     "issyntax"},   /* §4.13.1 a name with no hyphen is refused */
         { "\"/api/ceget\"",      "isget"   },
+        { "\"/api/ceext\"",      "isext"   },   /* a DOMString dictionary member, read AND coerced as requests */
     };
     int nodealgo_tt = !strstr(js, "wrong");
     /* §4.10: submit() derived the GET; the named field carries its SOURCE rather than an invented value; a

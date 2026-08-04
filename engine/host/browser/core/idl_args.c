@@ -41,11 +41,11 @@ typedef struct {
     IdlArgType types[IDL_MAX_DECLARED];
     int        nargs;      /* how many the IDL lists; a variadic tail repeats the last */
     int        magic;
-    /* An IDL_DICT_BOOLS argument's member names, INTERNED at registration. The atom must be live at both the
-       request and the answer — step_getprop_run is handed it twice, with a suspension in between — so it cannot
-       be created per read. The names are static strings known when the member declares itself, so one intern
-       per member serves every call. */
-    const char *const *dict;
+    /* An IDL_DICT argument's members, and their names INTERNED at registration. The atom must be live at both
+       the request and the answer — step_getprop_run is handed it twice, with a suspension in between — so it
+       cannot be created per read. The names are static strings known when the member declares itself, so one
+       intern per member serves every call. */
+    const IdlDictMember *dict;
     JSAtom     dict_atoms[IDL_MAX_DICT];
     int        dict_n;
 } IdlMember;
@@ -61,6 +61,9 @@ typedef struct {
     int       n;        /* how many of them there are */
     JSValue   result;   /* the body's answer (owned) */
     int       dict_i;   /* THE OTHER RESUME POINT: the dictionary member being read */
+    uint8_t   dict_phase;   /* 0 = read the member, 1 = convert what was read. Both can park, so a member needs
+                               two resume points, not one — a resume in the CONVERSION must not re-read. */
+    JSValue   dict_v;   /* the member's value between those two phases (owned) */
     int64_t   nums[IDL_MAX_ARGS];   /* the integer conversions, kept because the body wants numbers */
     JSValue   args[IDL_MAX_ARGS];
 } JSIdlArgsState;
@@ -72,6 +75,7 @@ static void js_idl_args_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSIdlArgsState *s = st;
     int i;
     v->val(ctx, &s->result);
+    v->val(ctx, &s->dict_v);
     for (i = 0; i < IDL_MAX_ARGS; i++)
         v->val(ctx, &s->args[i]);
 }
@@ -91,6 +95,7 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                "a DOM member was called with more arguments than this machine carries — raise IDL_MAX_ARGS "
                "rather than silently dropping the tail");
         s->result = JS_UNDEFINED;
+        s->dict_v = JS_UNDEFINED;
         for (r = 0; r < IDL_MAX_ARGS; r++)
             s->args[r] = JS_UNDEFINED;
         s->i = 0;
@@ -118,7 +123,7 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            concolic, which the C boundary asserts against because opacity has to SURVIVE a coercion or the value
            stops forking control flow and stops being solvable at a sink. This is the same answer JSON.stringify
            gives an opaque field: yield the opaque itself, never a de-tainting placeholder. */
-        if (t != IDL_ANY && t != IDL_DICT_BOOLS && concolic_is(a)) {
+        if (t != IDL_ANY && t != IDL_DICT && concolic_is(a)) {
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
             s->args[s->i] = JS_DupValue(ctx, a);
@@ -126,24 +131,78 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             continue;
         }
 
-        if (t == IDL_DICT_BOOLS) {
+        if (t == IDL_DICT) {
             /* `optional D options = {}`: undefined and null have no members to read, so every one defaults and
-               no page code runs. An object's members are read IN ORDER, parking on each. */
+               no page code runs. An object's members are read IN ORDER and each is converted by ITS OWN type,
+               parking on either half. A `required` member is checked here rather than in the body, because
+               `required` is part of the TYPE the declaration states. */
             if (JS_IsUndefined(s->args[s->i]))
                 s->args[s->i] = JS_NewObject(ctx);
             if (!JS_IsObject(a)) {
                 JS_FreeValue(ctx, cb_result);
                 cb_result = JS_UNDEFINED;
+                for (r = 0; r < m->dict_n; r++)
+                    if (m->dict[r].required)
+                        return JS_ThrowTypeError(ctx, "required member %s is undefined", m->dict[r].name),
+                               JS_STEP_ABRUPT;
                 s->dict_i = m->dict_n;
             }
             while (s->dict_i < m->dict_n) {
-                JSValue v = JS_UNDEFINED;
-                r = step_getprop_run(ctx, &s->hdr, a, m->dict_atoms[s->dict_i], cb_result, &v, out_cb, out_argc);
-                cb_result = JS_UNDEFINED;
-                if (r > 0) return r;      /* parked ON THIS MEMBER; the resume comes back to it */
-                if (r < 0) return JS_STEP_ABRUPT;
-                JS_SetPropertyStr(ctx, s->args[s->i], m->dict[s->dict_i], JS_NewBool(ctx, JS_ToBool(ctx, v)));
-                JS_FreeValue(ctx, v);
+                const IdlDictMember *dm = &m->dict[s->dict_i];
+                IdlArgType mt = dm->type;
+
+                if (s->dict_phase == 0) {
+                    r = step_getprop_run(ctx, &s->hdr, a, m->dict_atoms[s->dict_i], cb_result, &s->dict_v,
+                                         out_cb, out_argc);
+                    cb_result = JS_UNDEFINED;
+                    if (r > 0) return r;      /* parked ON THIS MEMBER's read; the resume comes back to it */
+                    if (r < 0) return JS_STEP_ABRUPT;
+                    s->dict_phase = 1;
+                    if (dm->required && JS_IsUndefined(s->dict_v))
+                        return JS_ThrowTypeError(ctx, "required member %s is undefined", dm->name),
+                               JS_STEP_ABRUPT;
+                }
+                DCHECK(mt != IDL_DICT, "a dictionary member was declared as a dictionary — the conversion "
+                                       "cursor is per-argument, so a nested one would read the outer's names");
+                /* An ABSENT member is not converted: `undefined` on a dictionary means the member is not
+                   there, and running ToString over it would write the four characters `undefined` where the
+                   spec puts nothing. A boolean is the exception only because ToBoolean(undefined) is false,
+                   which is the `= false` default every boolean member in this surface declares. */
+                if (JS_IsUndefined(s->dict_v) && mt != IDL_BOOLEAN)
+                    mt = IDL_ANY;
+                /* The same boundary rule the arguments follow: unknown external input crosses as ITSELF, so a
+                   concolic member keeps forking control flow instead of collapsing at a coercion. */
+                if (mt != IDL_ANY && concolic_is(s->dict_v))
+                    mt = IDL_ANY;
+                if (mt == IDL_BOOLEAN) {
+                    JSValue b = JS_NewBool(ctx, JS_ToBool(ctx, s->dict_v));
+                    JS_FreeValue(ctx, s->dict_v);
+                    s->dict_v = b;
+                }
+                else if (mt == IDL_LONG) {
+                    r = step_toint64_run(ctx, &s->hdr, s->dict_v, cb_result, &s->nums[s->i], out_cb, out_argc);
+                    cb_result = JS_UNDEFINED;
+                    if (r > 0) return r;   /* parked ON THIS MEMBER's conversion; the read does not re-run */
+                    if (r < 0) return JS_STEP_ABRUPT;
+                    JS_FreeValue(ctx, s->dict_v);
+                    s->dict_v = JS_NewInt64(ctx, s->nums[s->i]);
+                }
+                else if (mt == IDL_DOMSTRING || mt == IDL_DOMSTRING_NULLABLE) {
+                    if (mt == IDL_DOMSTRING_NULLABLE && JS_IsNull(s->dict_v)) {
+                        /* `DOMString?`: null is the IDL null, never the string "null". */
+                    } else {
+                        JSValue str = JS_UNDEFINED;
+                        r = step_tostring_run(ctx, &s->hdr, s->dict_v, cb_result, &str, out_cb, out_argc);
+                        cb_result = JS_UNDEFINED;
+                        if (r > 0) return r;
+                        if (r < 0) return JS_STEP_ABRUPT;
+                        JS_FreeValue(ctx, s->dict_v);
+                        s->dict_v = str;
+                    }
+                }
+                JS_SetPropertyStr(ctx, s->args[s->i], dm->name, s->dict_v);
+                s->dict_v = JS_UNDEFINED;
+                s->dict_phase = 0;
                 s->dict_i++;
             }
             JS_FreeValue(ctx, cb_result);
@@ -223,6 +282,8 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
     if (take_result) s->result = JS_UNDEFINED;
     JS_FreeValue(ctx, s->result);
     s->result = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->dict_v);   /* a member read whose conversion never completed — the throw path owns it */
+    s->dict_v = JS_UNDEFINED;
     for (i = 0; i < IDL_MAX_ARGS; i++) {
         JS_FreeValue(ctx, s->args[i]);
         s->args[i] = JS_UNDEFINED;
@@ -232,11 +293,11 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
 
 int idl_method_id(JSContext *ctx, const IdlArgType *types, int nargs, IdlBody body, int magic)
 {
-    return idl_method_id_dict(ctx, types, nargs, NULL, body, magic);
+    return idl_method_id_dict(ctx, types, nargs, NULL, 0, body, magic);
 }
 
 int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
-                       const char *const *dict_members, IdlBody body, int magic)
+                       const IdlDictMember *members, int nmembers, IdlBody body, int magic)
 {
     JSRuntime *rt = JS_GetRuntime(ctx);
     int idx, k;
@@ -259,22 +320,19 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
     g_members[idx].magic = magic;
     for (k = 0; k < nargs; k++)
         g_members[idx].types[k] = types[k];
-    g_members[idx].dict = dict_members;
+    g_members[idx].dict = members;
     g_members[idx].dict_n = 0;
-    if (dict_members) {
+    if (members) {
         int ndict = 0;
         for (k = 0; k < nargs; k++)
-            if (types[k] == IDL_DICT_BOOLS) ndict++;
+            if (types[k] == IDL_DICT) ndict++;
         DCHECK(ndict == 1, "a member declared dictionary members but not exactly one dictionary argument — the "
                            "conversion cursor is per-member, so a second dictionary would read the first's "
                            "names");
-        while (dict_members[g_members[idx].dict_n]) {
-            CHECK(g_members[idx].dict_n < IDL_MAX_DICT,
-                  "a dictionary declared more members than IDL_MAX_DICT holds");
-            g_members[idx].dict_atoms[g_members[idx].dict_n] =
-                JS_NewAtom(ctx, dict_members[g_members[idx].dict_n]);
-            g_members[idx].dict_n++;
-        }
+        CHECK(nmembers <= IDL_MAX_DICT, "a dictionary declared more members than IDL_MAX_DICT holds");
+        for (k = 0; k < nmembers; k++)
+            g_members[idx].dict_atoms[k] = JS_NewAtom(ctx, members[k].name);
+        g_members[idx].dict_n = nmembers;
     }
     g_defs[idx].size  = sizeof(JSIdlArgsState);
     g_defs[idx].step  = js_idl_args_step;

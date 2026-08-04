@@ -332,8 +332,10 @@ static JSValue js_event_init_event(JSContext *ctx, JSValueConst this_val, int ar
    an accessor or a Proxy trap turns into a call. It declares itself through the shared IDL machine rather than
    hand-rolling either, which is why there is no coercion code here at all — by the time this body runs, `type`
    is a real string and the dictionary is a plain object the engine built. */
-static const IdlArgType EVENT_CTOR_ARGS[2] = { IDL_DOMSTRING, IDL_DICT_BOOLS };
-static const char *const EVENT_INIT[] = { "bubbles", "cancelable", "composed", NULL };
+static const IdlArgType EVENT_CTOR_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };
+static const IdlDictMember EVENT_INIT[] = {   /* EventInit, in the order the IDL declares it */
+    { "bubbles", IDL_BOOLEAN }, { "cancelable", IDL_BOOLEAN }, { "composed", IDL_BOOLEAN },
+};
 
 static bool dict_bool(JSContext *ctx, JSValueConst d, const char *name)
 {
@@ -413,7 +415,9 @@ void event_init(JSContext *ctx)
         idl_install_method(ctx, g_proto, "initEvent", 3,
                            idl_method_id(ctx, INIT_ARGS, 3, js_event_init_event, 0));
     }
-    g_ctor_stepid = idl_method_id_dict(ctx, EVENT_CTOR_ARGS, 2, EVENT_INIT, js_event_ctor, 0);
+    g_ctor_stepid = idl_method_id_dict(ctx, EVENT_CTOR_ARGS, 2, EVENT_INIT,
+                                      (int)(sizeof(EVENT_INIT) / sizeof(EVENT_INIT[0])),
+                                      js_event_ctor, 0);
 }
 
 void event_install(JSContext *ctx, JSValueConst global)

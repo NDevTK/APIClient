@@ -1,6 +1,7 @@
 /* THE WEB IDL ARGUMENT COERCION, as one machine every member shares — see idl_args.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_IDL_ARGS_H
 #define ENGINE_HOST_BROWSER_CORE_IDL_ARGS_H
+#include <stdbool.h>
 #include "quickjs.h"
 
 /* A member's body, run once its declared arguments are real strings. Same shape as JS_CFUNC_generic_magic, so
@@ -24,15 +25,20 @@ typedef enum {
        itself, anything else is a DOMString. Named for the rule rather than for the member, because the rule is
        what the IDL states. */
     IDL_STRING_UNLESS_CALLABLE,
-    /* A DICTIONARY whose members are all `boolean` defaulting to false — which is every dictionary this engine
-       takes: EventInit {bubbles, cancelable, composed}, AddEventListenerOptions {capture, once, passive},
-       GetRootNodeOptions {composed}. Web IDL converts one by READING each declared member IN ORDER, and a read
-       is one accessor or Proxy trap away from being the page's code, so it is a request exactly like a
-       coercion. The body receives a plain engine-built object carrying the converted booleans, which it reads
-       with an ordinary property get because nothing of the page's is on it.
-       The member NAMES are declared beside the types — see idl_method_id_dict. */
-    IDL_DICT_BOOLS,
+    IDL_BOOLEAN,          /* ToBoolean. The conversion runs nothing; the READ that precedes it is the page's */
+    /* A DICTIONARY. Web IDL converts one by READING each declared member IN ORDER and converting each by ITS
+       OWN type — so a dictionary is that member list plus this very machine, not a second kind of thing. A read
+       is one accessor or Proxy trap away from being the page's code, and so is each member's conversion, so
+       both are requests exactly like an argument's. The body receives a plain engine-built object carrying the
+       converted members, which it reads with an ordinary property get because nothing of the page's is on it.
+       The members are declared beside the types — see idl_method_id_dict. */
+    IDL_DICT,
 } IdlArgType;
+
+/* A DICTIONARY MEMBER, as its IDL declares it: the name, the type of its value, and whether the IDL marks it
+   `required` (an absent required member is a TypeError, and for a dictionary `undefined` IS absent). A member
+   with no `required` written is optional, which is what leaving the field off an initialiser gives. */
+typedef struct { const char *name; IdlArgType type; bool required; } IdlDictMember;
 
 /* A position the IDL does not list is passed through unconverted, which is what a variadic `any...` tail means
    and what an optional argument beyond the listed ones means. `nargs` is how many the IDL lists. */
@@ -43,13 +49,13 @@ typedef enum {
    are installed on every wrapper the tree hands out, so registering there would mint a definition per element. */
 int  idl_method_id(JSContext *ctx, const IdlArgType *types, int nargs, IdlBody body, int magic);
 
-/* The same declaration for a member that takes an IDL_DICT_BOOLS argument: `dict_members` is a NULL-terminated
-   list of the dictionary's member names, in the order the IDL declares them, which is the order Web IDL reads
-   them in. A member declares AT MOST ONE dictionary argument — every one in the platform does, and a second
-   would need its own cursor rather than sharing this one, which is a DCHECK rather than a silent second read. */
+/* The same declaration for a member that takes an IDL_DICT argument: `members` lists the dictionary's members
+   in the order the IDL declares them, which is the order Web IDL reads them in. A member declares AT MOST ONE
+   dictionary argument — every one in the platform does, and a second would need its own cursor rather than
+   sharing this one, which is a DCHECK rather than a silent second read. */
 #define IDL_MAX_DICT 6
 int  idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
-                        const char *const *dict_members, IdlBody body, int magic);
+                        const IdlDictMember *members, int nmembers, IdlBody body, int magic);
 
 /* Release what the pool interned — the dictionary member atoms. */
 void idl_args_free(JSContext *ctx);

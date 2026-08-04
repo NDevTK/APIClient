@@ -59,11 +59,7 @@ static JSClassID g_node_class;
 static JSValue g_protos[LXB_DOM_NODE_TYPE_LAST_ENTRY];
 static JSValue g_node_proto;
 static int     g_protos_ready;
-/* The step id getRootNode's option read was given, and the atom it reads. Both outlive every call — a parked
-   machine resumes into the same read — so both belong to the component, not to the call. */
-static int     g_rootnode_stepid = -1;
 static JSValue g_chardata_proto;
-static JSAtom  g_atom_composed = JS_ATOM_NULL;
 
 typedef struct { lxb_dom_node_t *n; JSValue obj; } NodeEntry;
 static NodeEntry *g_wraps;
@@ -430,10 +426,19 @@ static JSValue js_node_compare_position(JSContext *ctx, JSValueConst this_val, i
     return JS_NewInt32(ctx, 0);
 }
 
-/* §4.4 getRootNode's answer, shared with the step machine that reads its option. */
-static JSValue js_node_root_of(JSContext *ctx, JSValueConst this_val)
+/* §4.4 getRootNode(optional GetRootNodeOptions options = {}).
+ *
+ * The answer never depends on the option: `composed` chooses between the root and the SHADOW-INCLUDING root,
+ * and with no shadow trees in this engine those are the same node. Reading it is still the page's code —
+ * `getRootNode({ get composed(){ … } })` is a getter, and a Proxy makes even a plain object one — so the read
+ * is a REQUEST, and the declaration is what performs it: by the time this body runs the dictionary is a plain
+ * engine-built object and there is no user code left to reach. Skipping the read because the result would not
+ * change is the shortcut this file does not take. It was a whole hand-rolled machine before the IDL dictionary
+ * conversion could express a typed member; a second implementation of a request the machine already makes. */
+static JSValue js_node_root(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     lxb_dom_node_t *n = node_of(this_val);
+    (void)argc; (void)argv; (void)magic;
     return n ? node_wrap(ctx, node_root(n)) : JS_UNDEFINED;
 }
 
@@ -572,66 +577,6 @@ static JSValue js_node_lookup_ns(JSContext *ctx, JSValueConst this_val, int argc
     if (arg) JS_FreeCString(ctx, arg);
     return r;
 }
-
-/* §4.4 getRootNode(optional GetRootNodeOptions options = {}) — a MACHINE for one property read.
- *
- * The answer never depends on the option: `composed` chooses between the root and the SHADOW-INCLUDING root,
- * and with no shadow trees in this engine those are the same node. Reading it is still page code —
- * `getRootNode({ get composed(){ … } })` is a getter, and a Proxy makes even a plain object one — so the read
- * is a REQUEST, and the value is discarded because that is what the spec computes with it here. Skipping the
- * read because the result would not change is the shortcut this file does not take: the page's getter either
- * runs or it does not, and a component that decides it need not run is deciding about the page's code. */
-typedef struct JSRootNodeState {
-    JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
-    uint8_t   stage;
-    JSValue   result;   /* the root's wrapper, once read (owned) */
-} JSRootNodeState;
-
-static void js_rootnode_visit(JSContext *ctx, void *st, JSStepVisit *v)
-{
-    JSRootNodeState *s = st;
-    v->val(ctx, &s->result);
-}
-
-static JSValue js_rootnode_fini(JSContext *ctx, void *st, bool take_result)
-{
-    JSRootNodeState *s = st;
-    JSValue r = take_result ? s->result : JS_UNDEFINED;
-    if (take_result) s->result = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->result);
-    s->result = JS_UNDEFINED;
-    return r;
-}
-
-static int js_rootnode_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
-{
-    JSRootNodeState *s = st;
-    JSValueConst opts = step_arg(&s->hdr, 0);
-    JSValue composed = JS_UNDEFINED;
-    int r;
-
-    if (s->stage == 0) {
-        s->stage = 1;
-        s->result = JS_UNDEFINED;
-        if (!JS_IsObject(opts)) {
-            /* `optional … = {}`: a missing dictionary has no members to read, so there is no page code here. */
-            JS_FreeValue(ctx, cb_result);
-            s->result = js_node_root_of(ctx, s->hdr.this_val);
-            return JS_IsException(s->result) ? (s->result = JS_UNDEFINED, JS_STEP_ABRUPT) : JS_STEP_DONE;
-        }
-    }
-    r = step_getprop_run(ctx, &s->hdr, opts, g_atom_composed, cb_result, &composed, out_cb, out_argc);
-    if (r > 0) return r;
-    if (r < 0) return JS_STEP_ABRUPT;
-    JS_FreeValue(ctx, composed);   /* converted and DISCARDED: with no shadow trees both arms name one node */
-    s->result = js_node_root_of(ctx, s->hdr.this_val);
-    if (JS_IsException(s->result)) { s->result = JS_UNDEFINED; return JS_STEP_ABRUPT; }
-    return JS_STEP_DONE;
-}
-
-static const JSTrampStepDef js_rootnode_def = {
-    sizeof(JSRootNodeState), js_rootnode_step, js_rootnode_fini, 0, .visit = js_rootnode_visit
-};
 
 static const JSCFunctionListEntry js_node_base[] = {
     JS_CFUNC_DEF("appendChild", 1, js_node_append_child),
@@ -907,12 +852,14 @@ void node_init(JSContext *ctx)
     idl_install_method(ctx, g_node_proto, "isDefaultNamespace", 1,
                        idl_method_id(ctx, IDL_1NSTR, 1, js_node_lookup_ns, 2));
 
-    /* getRootNode's dictionary read is its own machine, not an IDL argument type: a dictionary is a set of
-       property READS, which is a different request from a coercion. */
-    g_atom_composed = JS_NewAtom(ctx, "composed");
-    CHECK(g_atom_composed != JS_ATOM_NULL, "the `composed` atom could not be interned");
-    g_rootnode_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_rootnode_def);
-    idl_install_method(ctx, g_node_proto, "getRootNode", 0, g_rootnode_stepid);
+    {
+        static const IdlArgType ROOT_ARGS[1] = { IDL_DICT };
+        static const IdlDictMember ROOT_OPTS[] = { { "composed", IDL_BOOLEAN } };   /* GetRootNodeOptions */
+        idl_install_method(ctx, g_node_proto, "getRootNode", 0,
+                           idl_method_id_dict(ctx, ROOT_ARGS, 1, ROOT_OPTS,
+                                              (int)(sizeof(ROOT_OPTS) / sizeof(ROOT_OPTS[0])),
+                                              js_node_root, 0));
+    }
 
     /* Text and Comment are their own interfaces — `interface Text : CharacterData` and `Comment : CharacterData`
        — so a page's `x instanceof Text` and `Text.prototype` have something to name, and the two do not share
@@ -997,8 +944,5 @@ void node_free(JSContext *ctx)
     JS_FreeValue(ctx, g_node_proto);
     JS_FreeValue(ctx, g_chardata_proto);
     g_node_proto = g_chardata_proto = JS_UNDEFINED;
-    JS_FreeAtom(ctx, g_atom_composed);
-    g_atom_composed = JS_ATOM_NULL;
-    g_rootnode_stepid = -1;
     g_protos_ready = 0;
 }
