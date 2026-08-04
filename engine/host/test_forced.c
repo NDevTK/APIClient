@@ -56,6 +56,10 @@ static JSValue js_load_script(JSContext *ctx, JSValueConst this_val, int argc, J
         const char *url = JS_ToCString(ctx, argv[0]);
         if (url) {
             if (strstr(url, "admin")) engine_queue_script("fetch('/api/admin/audit-log');");   /* chunk-only endpoint */
+            /* A chunk that THROWS is what a page error IS — the report must name the capability. A DOMException
+               is the most common throw in a DOM engine and keeps its name and message behind prototype
+               accessors, so an own-property reader calls it "an object with no own name/message". */
+            if (strstr(url, "cethrow")) engine_queue_script("customElements.define('nohyphen', class {});");
             JS_FreeCString(ctx, url);
         }
     }
@@ -395,6 +399,8 @@ static const char *HTML =
     /* §4.13.4 get(), and §4.13.1's name rule — a name with no hyphen is a SyntaxError, not a quiet registration. */
     "var cename = 'wrong'; try { customElements.define('nohyphen', XPanel); } catch (e) { cename = 'issyntax'; }"
     "fetch('/api/cename?v=' + cename);"
+    /* …and the same throw UNCAUGHT, at a chunk's top level, where a page error is what it becomes. */
+    "loadScript('/chunk/cethrow.js');"
     "fetch('/api/ceget?v=' + (customElements.get('x-panel') === XPanel"
     " && customElements.get('x-none') === undefined ? 'isget' : 'wrong'));"
     "if (cfg.admin) { setBodyAttr('data-tt','ttADMIN'); appendChild('kidADMIN'); rx.flag='flagADMIN'; fetch('/api/data?role=admin'); loadScript('/chunk/admin.js'); } else { setBodyAttr('data-tt','ttPUBLIC'); appendChild('kidPUBLIC'); rx.flag='flagPUBLIC'; fetch('/api/data?role=public'); }"   /* admin arm: same endpoint MERGES + a LAZY CHUNK loads. Each arm ALSO writes an attribute, appends a child node, AND assigns the ACCESSOR rx.flag (invokes the setter -> rx._f) -> per-flow DOM + heap-accessor writes across the EXISTING fork. */
@@ -781,6 +787,8 @@ int main(void) {
     if (!strstr(js, "\"/api/didsubmit\"") || !strstr(js, "\"rs\"")) nodealgo_tt = 0;
     /* §4.13: the async reaction's loop ran to its END across the preempts, not to some suspended partial. */
     if (!strstr(js, "\"44850\"")) nodealgo_tt = 0;
+    /* The uncaught DOMException is NAMED in the report, not "an object with no own name/message". */
+    if (!strstr(js, "SyntaxError: not a valid custom element name")) nodealgo_tt = 0;
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)
         if (!strstr(js, NODE_ALGOS[ai][0]) || !strstr(js, NODE_ALGOS[ai][1])) nodealgo_tt = 0;
     int domidl_tt   = domproto_tt && cdnull_tt && tcnull_tt && nodeval_tt && tcset_tt;

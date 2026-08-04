@@ -47,6 +47,12 @@ void result_page_error_value(JSContext *ctx, JSValueConst err) {
     if (JS_GetOwnSlot(ctx, &msg,  err, a_msg)  <= 0) msg  = JS_UNDEFINED;
     JS_FreeAtom(ctx, a_name);
     JS_FreeAtom(ctx, a_msg);
+    /* A DOMException keeps BOTH behind accessors on its prototype, so the own-property read above finds nothing
+       and the report degenerates to "an object with no own name/message" — for the single most common throw in
+       a DOM engine. That cost a whole debugging cycle: an aborted sibling flow reported as an anonymous object
+       when it was a NotSupportedError naming exactly what was wrong. Read the slots instead. */
+    if (!JS_IsString(name)) { JS_FreeValue(ctx, name); name = JS_GetDOMExceptionName(ctx, err); }
+    if (!JS_IsString(msg))  { JS_FreeValue(ctx, msg);  msg  = JS_GetDOMExceptionMessage(ctx, err); }
     /* WHERE it threw. A genuine Error keeps its stack in the [[ErrorData]] internal slot behind an accessor on
        Error.prototype, so JS_GetOwnSlot cannot see it and calling the getter would run page code (a page may
        have replaced Error.prepareStackTrace, and this runs from OUTSIDE any flow). JS_GetErrorStackString reads
