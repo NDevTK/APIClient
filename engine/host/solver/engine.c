@@ -404,25 +404,14 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                 f->dom_stage++;
                 continue;
             }
-            else {
-                /* HTML §8.1.7.5 "notify about rejected promises". The flow has nothing left to run, so every
-                   rejection still on its list is one no handler will ever be attached to — the browser half
-                   keeps the lists, this half decides what a rejection MEANS here, which is the same thing a
-                   script that threw means: a capability the page needed. Taking clears the list, so a second
-                   poll of a finished flow reports nothing twice. */
-                JSValue pend = unhandled_rejection_take(ctx);
-                JSValue lv = JS_GetPropertyStr(ctx, pend, "length");
-                uint32_t nrej = 0, ri;
-                JS_ToUint32(ctx, &nrej, lv);
-                JS_FreeValue(ctx, lv);
-                for (ri = 0; ri < nrej; ri++) {
-                    JSValue reason = JS_GetPropertyUint32(ctx, pend, ri);
-                    result_page_error_value(ctx, reason);
-                    JS_FreeValue(ctx, reason);
-                }
-                JS_FreeValue(ctx, pend);
-                return 1;   /* all scripts + chunks + microtask jobs + live fetches + load listeners done */
-            }
+            /* HTML §8.1.7.5 "notify about rejected promises". The flow has nothing left to run, so every
+               rejection still on its list is one no handler will ever be attached to. The browser half keeps
+               the lists and fires `unhandledrejection`; those fires are JOBS, so the flow has work again and
+               the loop picks them up like any other. Only what the page did not cancel comes back through the
+               report hook — and what it means then is this half's answer, the same thing a script that threw
+               means: a capability the page needed. Notifying clears the list, so the next pass finds none. */
+            else if (unhandled_rejection_notify(ctx)) continue;
+            else return 1;   /* all scripts + chunks + microtask jobs + live fetches + load listeners done */
             /* NULL ScriptOrModule name: an inline page script's name is the DOCUMENT's URL, which this host does
                not model yet — nothing here has one to give. It is what a relative `import('./chunk.js')` resolves
                against, so the moat's lazy-chunk surface needs the document URL plumbed to this call. */
@@ -556,6 +545,9 @@ static int g_sess_live;
 void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int forking) {
     DCHECK(!g_sess_live, "engine_sched_begin while a session is already running — one scheduler, one session");
     g_sess_ctx = ctx; g_sess_bodies = bodies; g_sess_srcs = srcs; g_sess_n = n; g_sess_cur = NULL; g_sess_live = 1;
+    /* WHAT AN UNCANCELLED REJECTION MEANS is this half's answer: the browser half fires the event and honours
+       preventDefault, and a reason that survives that is a page error exactly like a script that threw. */
+    unhandled_rejection_set_report_hook(result_page_error_value);
     flow_add(ctx, JS_UNDEFINED, NULL, 0);   /* the first flow: the page's scripts, empty decision vector */
     JS_SetFlowLocalMark(1);                 /* objects created while a flow runs are flow-local (discarded) */
     dom_cow_set_ctx(ctx);                   /* the DOM delta needs ctx for the attribute taint-shadow dup/free */

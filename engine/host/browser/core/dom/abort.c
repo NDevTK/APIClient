@@ -39,6 +39,7 @@
 #include "quickjs-step.h"
 #include "solver/concolic.h"
 #include "solver/decide.h"
+#include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/dom/abort.h"
 
@@ -217,6 +218,7 @@ typedef struct JSAbortState {
     uint8_t   stage;
     uint8_t   fphase;   /* the fire request's own phase */
     JSValue   sig;      /* the signal being aborted (owned) */
+    JSValue   ev;       /* the event, minted once and held across the suspension (owned) */
     JSValue   cb[4];    /* the fire request buffer: [this, dispatch, target, event] */
 } JSAbortState;
 
@@ -225,6 +227,7 @@ static void js_abort_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSAbortState *s = st;
     int k;
     v->val(ctx, &s->sig);
+    v->val(ctx, &s->ev);
     for (k = 0; k < 4; k++)
         v->val(ctx, &s->cb[k]);
 }
@@ -235,7 +238,8 @@ static JSValue js_abort_fini(JSContext *ctx, void *st, bool take_result)
     int k;
     (void)take_result;
     JS_FreeValue(ctx, s->sig);
-    s->sig = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->ev);
+    s->sig = s->ev = JS_UNDEFINED;
     for (k = 0; k < 4; k++) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
@@ -255,7 +259,7 @@ static int js_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        s->sig = JS_UNDEFINED;
+        s->sig = s->ev = JS_UNDEFINED;
         s->cb[0] = s->cb[1] = s->cb[2] = s->cb[3] = JS_UNDEFINED;
         s->stage = 1;
         if (JS_IsObject(slots)) {
@@ -278,8 +282,9 @@ static int js_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     }
     /* §3.2 "fire an event named abort at signal" — the ONE §2.9 dispatch, as a REQUEST, so the listeners run
        as ordinary preemptible page code and abort() resumes after every one of them has returned. */
-    r = event_target_fire_run(ctx, &s->fphase, s->cb, s->sig, "abort",
-                              /*bubbles*/ false, /*cancelable*/ false, cb_result, NULL, out_cb, out_argc);
+    if (JS_IsUndefined(s->ev))
+        s->ev = event_new(ctx, "abort", /*bubbles*/ false, /*cancelable*/ false);
+    r = event_target_fire_run(ctx, &s->fphase, s->cb, s->sig, s->ev, cb_result, NULL, out_cb, out_argc);
     if (r > 0) return r;
     if (r < 0) return JS_STEP_ABRUPT;
     return JS_STEP_DONE;

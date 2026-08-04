@@ -60,6 +60,9 @@ const INTERFACES = {
      at all, which is the audit lying by omission rather than by direction. They are auditable now because their
      members live on real prototypes rather than being copied onto each wrapper. */
   Event:                "core/events/event.c",
+  /* PromiseRejectionEvent's files include event.c because its prototype CHAINS to Event.prototype — every
+     Event member really is reachable on one, so reporting them absent would be the audit lying. */
+  PromiseRejectionEvent: ["core/html/unhandled_rejection.c", "core/events/event.c"],
   Node:                ["core/dom/node.c", "core/events/event_target.c"],
   CharacterData:       ["core/dom/node.c", "core/events/event_target.c"],
   /* Element's file list includes node.c because Element.prototype INHERITS from Node.prototype: a member

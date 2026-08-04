@@ -22,17 +22,19 @@ enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8 };
    machine under a second entry rather than a second implementation of it. */
 void event_target_install_click(JSContext *ctx, JSValueConst target);
 void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask);
-/* Fire `type` at `target` (bubbling to `bubble_to` when non-undefined, which is how a document event reaches
-   window). Each listener runs as its own task on the RUNNING flow. Returns how many were scheduled. */
 /* The ENGINE firing its own event at `target`. One §2.9 dispatch, reached as a queued task because the callers
    are plain C the scheduler drives. The propagation path is derived from the target's ancestors — there is no
-   `bubble_to` to pass, because the window is the document's parent and the spec already says so. */
-void event_target_fire(JSContext *ctx, JSValueConst target, const char *type, bool bubbles, bool cancelable);
+   `bubble_to` to pass, because the window is the document's parent and the spec already says so.
+   It takes the EVENT, not a type and two flags: §2.9 dispatches an event, and a caller with a DERIVED one
+   (PromiseRejectionEvent) has no way to hand it over if this mints its own. `ev` is CONSUMED. */
+void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev);
 /* THE SAME FIRE for a caller that can park — §2.9 is synchronous, and §3.2's `abort` is specified that way. One
    dispatch, two reaches: this is the REQUEST form, event_target_fire is the queued one. `phase` and `cb` belong
-   to the calling machine and `cb` needs FOUR slots. Returns JS_STEP_CALL (return it) or 0 when it has answered. */
+   to the calling machine and `cb` needs FOUR slots, and so does `ev`: the CALLER owns it and holds it across
+   the suspension, because §2.9 dispatches an event that exists rather than one the dispatch invents. Returns
+   JS_STEP_CALL (return it) or 0 when it has answered. */
 int  event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, JSValueConst target,
-                           const char *type, bool bubbles, bool cancelable, JSValue in,
+                           JSValueConst ev, JSValue in,
                            bool *pnot_canceled, JSValue **out_cb, int *out_argc);
 /* §7.6: the window the propagation path ends at. */
 void event_target_set_window(JSContext *ctx, JSValueConst global);

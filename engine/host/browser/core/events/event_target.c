@@ -632,15 +632,13 @@ void event_target_install_click(JSContext *ctx, JSValueConst target)
    cancelled. There is one dispatch now; what differs between the two reach-paths is only whether the caller
    can park, which is a property of the CALLER and not of the algorithm.
    The event stays TRUSTED, which is what distinguishes one the engine fired from one the page dispatched. */
-void event_target_fire(JSContext *ctx, JSValueConst target, const char *type, bool bubbles, bool cancelable)
+void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev)
 {
     JSValueConst argv[2];
-    JSValue ev;
 
     DCHECK(JS_IsObject(g_dispatch_fn),
            "the engine fired an event before event_target_init built the dispatcher — there is one dispatch, "
            "and this is the only way a C caller reaches it");
-    ev = event_new(ctx, type, bubbles, cancelable);
     if (JS_IsException(ev)) { JS_FreeValue(ctx, ev); return; }
     argv[0] = target;
     argv[1] = ev;
@@ -659,22 +657,20 @@ void event_target_fire(JSContext *ctx, JSValueConst target, const char *type, bo
    `phase` and `cb` are the caller machine's own; `cb` needs FOUR slots ([this, func, target, event]).
      0 = done (*pnot_canceled set when asked), 3 = the caller must return that step code. */
 int event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, JSValueConst target,
-                          const char *type, bool bubbles, bool cancelable, JSValue in,
+                          JSValueConst ev, JSValue in,
                           bool *pnot_canceled, JSValue **out_cb, int *out_argc)
 {
     JSValueConst argv[2];
-    JSValue ev, out = JS_UNDEFINED;
+    JSValue out = JS_UNDEFINED;
     int r;
 
     DCHECK(JS_IsObject(g_dispatch_fn),
            "an event was fired synchronously before event_target_init built the dispatcher");
     if (*phase == 0) {
-        ev = event_new(ctx, type, bubbles, cancelable);
-        if (JS_IsException(ev)) { JS_FreeValue(ctx, in); return -1; }
+        DCHECK(JS_IsObject(ev), "a synchronous fire was handed no event — §2.9 dispatches one that exists");
         argv[0] = target;
         argv[1] = ev;
         r = step_call_run(ctx, phase, cb, g_dispatch_fn, JS_UNDEFINED, 2, argv, in, &out, out_cb, out_argc);
-        JS_FreeValue(ctx, ev);   /* the request dup'd both operands into cb */
         DCHECK(r == JS_STEP_CALL, "the dispatch request answered without parking");
         return r;
     }

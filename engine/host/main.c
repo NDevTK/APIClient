@@ -124,6 +124,7 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
         location_install(g_ctx, g, origin);
         /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
         unhandled_rejection_init(g_ctx);
+        unhandled_rejection_install(g_ctx, g);   /* PromiseRejectionEvent */
         abort_init(g_ctx);
         abort_install(g_ctx, g);   /* AbortController/AbortSignal: fetch takes a signal, so a bundle mints one early */
         navigator_install(g_ctx, g);

@@ -406,6 +406,20 @@ static const char *HTML =
        (1) A rejection nobody ever handles IS a page error: an async bundle delivers most of its errors this way
        and every one of them used to be silent. (2) A handler attached in a LATER microtask is ordinary correct
        code, so that rejection must never be reported — which only an ABSENCE can prove. */
+    /* §8.1.7.5 fires `unhandledrejection` at the global, CANCELABLE, before anything is reported. A page that
+       ships its own error reporter cancels it — and that reporter is code with a fetch in it, which is the
+       surface this engine exists to reach, so the event is worth more than the report. Cancelling must
+       SUPPRESS the report, which only the absence of the reason from the output can prove. */
+    "addEventListener('unhandledrejection', function(e){ if (e.reason === 'rejCANCEL') { e.preventDefault();"
+    " fetch('/api/rejevent?v=' + (e.promise && e instanceof PromiseRejectionEvent ? 'isrej' : 'wrong')); } });"
+    "Promise.reject('rejCANCEL');"
+    /* The interface a page can construct, and its REQUIRED member: PromiseRejectionEventInit.promise has no
+       default, so an init without it is a TypeError from the declaration rather than a check in a body. */
+    "var prereq = 'wrong'; try { new PromiseRejectionEvent('x', {}); } catch (e) { prereq = 'isreq'; }"
+    "fetch('/api/prereq?v=' + prereq);"
+    "var pe = new PromiseRejectionEvent('t', { promise: Promise.resolve(), reason: 'peREASON', cancelable: true });"
+    "fetch('/api/prector?v=' + (pe.reason === 'peREASON' && pe instanceof Event && pe.cancelable && !pe.isTrusted"
+    " ? 'isctor' : 'wrong'));"
     "Promise.reject('rejNOHANDLER');"
     "var prs = Promise.reject('rejSYNC'); prs.catch(function(){});"
     "var prh = Promise.reject('rejHANDLED');"
@@ -572,6 +586,7 @@ int main(void) {
     event_target_install_handlers(ctx, g, EH_GLOBAL | EH_WINDOW);
     /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
     unhandled_rejection_init(ctx);
+    unhandled_rejection_install(ctx, g);   /* PromiseRejectionEvent */
     abort_init(ctx);
     abort_install(ctx, g);
 
@@ -796,6 +811,9 @@ int main(void) {
         { "\"/api/cename\"",     "issyntax"},   /* §4.13.1 a name with no hyphen is refused */
         { "\"/api/ceget\"",      "isget"   },
         { "\"/api/ceext\"",      "isext"   },   /* a DOMString dictionary member, read AND coerced as requests */
+        { "\"/api/rejevent\"",  "isrej"   },   /* §8.1.7.5's cancelable event reached a page listener */
+        { "\"/api/prereq\"",    "isreq"   },   /* a `required` dictionary member, enforced by the declaration */
+        { "\"/api/prector\"",   "isctor"  },
     };
     int nodealgo_tt = !strstr(js, "wrong");
     /* §4.10: submit() derived the GET; the named field carries its SOURCE rather than an invented value; a
@@ -814,6 +832,8 @@ int main(void) {
     /* §8.1.7.5: the rejection nobody handled is reported, and the one handled a microtask later is NOT. */
     if (!strstr(js, "rejNOHANDLER")) nodealgo_tt = 0;
     if (strstr(js, "rejHANDLED")) nodealgo_tt = 0;
+    /* …and the one a listener CANCELLED is not reported either — the page answered for it. */
+    if (strstr(js, "rejCANCEL")) nodealgo_tt = 0;
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)
         if (!strstr(js, NODE_ALGOS[ai][0]) || !strstr(js, NODE_ALGOS[ai][1])) nodealgo_tt = 0;
     int domidl_tt   = domproto_tt && cdnull_tt && tcnull_tt && nodeval_tt && tcset_tt;

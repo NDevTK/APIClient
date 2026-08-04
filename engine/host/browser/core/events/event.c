@@ -420,6 +420,12 @@ void event_init(JSContext *ctx)
                                       js_event_ctor, 0);
 }
 
+JSValue event_proto(void)
+{
+    DCHECK(g_ready, "Event.prototype was asked for before event_init built it");
+    return g_proto;
+}
+
 void event_install(JSContext *ctx, JSValueConst global)
 {
     JSValue ctor;

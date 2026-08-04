@@ -27,6 +27,7 @@
 #include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/dom/node.h"
+#include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/html/html_form.h"
 #include "solver/attr_shadow.h"
@@ -284,6 +285,7 @@ typedef struct JSReqSubmitState {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
     uint8_t   stage;
     uint8_t   fphase;   /* the fire request's own phase */
+    JSValue   ev;       /* the event, minted once and held across the suspension (owned) */
     JSValue   cb[4];    /* the fire request buffer: [this, dispatch, target, event] */
 } JSReqSubmitState;
 
@@ -291,6 +293,7 @@ static void js_reqsubmit_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSReqSubmitState *s = st;
     int k;
+    v->val(ctx, &s->ev);
     for (k = 0; k < 4; k++)
         v->val(ctx, &s->cb[k]);
 }
@@ -300,6 +303,8 @@ static JSValue js_reqsubmit_fini(JSContext *ctx, void *st, bool take_result)
     JSReqSubmitState *s = st;
     int k;
     (void)take_result;
+    JS_FreeValue(ctx, s->ev);
+    s->ev = JS_UNDEFINED;
     for (k = 0; k < 4; k++) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
@@ -314,6 +319,7 @@ static int js_reqsubmit_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
     int r;
 
     if (s->stage == 0) {
+        s->ev = JS_UNDEFINED;
         s->cb[0] = s->cb[1] = s->cb[2] = s->cb[3] = JS_UNDEFINED;
         s->stage = 1;
         if (!form_elem_of(s->hdr.this_val)) {
@@ -324,8 +330,9 @@ static int js_reqsubmit_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
     /* §4.10.21.4 step 4: "fire an event named submit at form, with the cancelable attribute initialized to
        true" — the ONE §2.9 dispatch, as a REQUEST, so the handlers run as ordinary preemptible page code and
        this resumes after every one of them has returned. */
-    r = event_target_fire_run(ctx, &s->fphase, s->cb, s->hdr.this_val, "submit",
-                              /*bubbles*/ true, /*cancelable*/ true, cb_result, &not_canceled,
+    if (JS_IsUndefined(s->ev))
+        s->ev = event_new(ctx, "submit", /*bubbles*/ true, /*cancelable*/ true);
+    r = event_target_fire_run(ctx, &s->fphase, s->cb, s->hdr.this_val, s->ev, cb_result, &not_canceled,
                               out_cb, out_argc);
     if (r > 0) return r;
     if (r < 0) return JS_STEP_ABRUPT;

@@ -8,6 +8,9 @@ void event_free(JSContext *ctx);
 /* `Event` as a global: the interface object, its prototype, and §2.2's phase constants. */
 void event_install(JSContext *ctx, JSValueConst global);
 
+/* `Event.prototype`, for a DERIVED interface to chain from — `interface PromiseRejectionEvent : Event` is a
+   real prototype chain a page can walk, not a flag on Event. */
+JSValue event_proto(void);
 /* Mint an event the ENGINE fires (`load`, `abort`, `DOMContentLoaded`). isTrusted is true for these, which is
    exactly the difference from one the page constructs. Returns a new owned Event. */
 JSValue event_new(JSContext *ctx, const char *type, bool bubbles, bool cancelable);
