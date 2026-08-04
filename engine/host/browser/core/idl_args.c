@@ -52,6 +52,8 @@ typedef struct {
        idl_method_id_step. Its state lives immediately after this machine's, which is why the def's size is
        per-member and not a constant. */
     const IdlStepDecl *step;
+    bool       variadic;    /* the last declared type applies to every argument from there on */
+    JSClassID  iface;       /* the brand an IDL_STRING_UNLESS_IFACE position tests against */
 } IdlMember;
 
 static IdlMember      g_members[IDL_MAX_MEMBERS];
@@ -70,6 +72,15 @@ typedef struct {
     JSValue   dict_v;   /* the member's value between those two phases (owned) */
     int64_t   nums[IDL_MAX_ARGS];   /* the integer conversions, kept because the body wants numbers */
     JSValue   args[IDL_MAX_ARGS];
+    /* A VARIADIC member's converted arguments, which cannot live in the fixed array above and must not be
+       truncated to fit it: `ul.append(...items)` has as many as the page has items. It is an ARRAY rather than
+       a heap block because that is what `visit` can carry — a deep fork byte-copies the state and re-takes what
+       visit names, so a block pointer would be SHARED by two flows that both free it, and a pointer into the
+       state itself would survive the copy still aimed at the original. One owned value, one v->val, no new
+       ownership contract. Non-variadic members never touch it: their arguments are exactly the declared ones,
+       so the fixed array is always big enough by IDL_MAX_DECLARED. */
+    JSValue   conv;
+    JSValue   vstage;   /* the variadic argument being converted, before it joins `conv` */
 } JSIdlArgsState;
 
 /* WHAT THIS MACHINE OWNS: the coerced arguments so far. A concolic branch inside one page `toString` forks the
@@ -81,6 +92,8 @@ static void js_idl_args_visit(JSContext *ctx, void *st, JSStepVisit *v)
     int i;
     v->val(ctx, &s->result);
     v->val(ctx, &s->dict_v);
+    v->val(ctx, &s->conv);
+    v->val(ctx, &s->vstage);
     for (i = 0; i < IDL_MAX_ARGS; i++)
         v->val(ctx, &s->args[i]);
     DCHECK(s->hdr.arg >= 0 && s->hdr.arg < g_n, "an IDL member's visit ran with no pool entry behind it");
@@ -88,22 +101,37 @@ static void js_idl_args_visit(JSContext *ctx, void *st, JSStepVisit *v)
     if (m->step && m->step->visit) m->step->visit(ctx, (char *)st + sizeof(JSIdlArgsState), v);
 }
 
+static void idl_free_vec(JSContext *ctx, JSValue *vec, int n)
+{
+    int k;
+    if (!vec) return;
+    for (k = 0; k < n; k++) JS_FreeValue(ctx, vec[k]);
+    js_free(ctx, vec);
+}
+
 static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSIdlArgsState *s = st;
     const IdlMember *m;
+    JSValue *argv_vec = NULL;
     int r;
 
     DCHECK(s->hdr.arg >= 0 && s->hdr.arg < g_n, "an IDL member's step ran with no pool entry behind it");
     m = &g_members[s->hdr.arg];
 
     if (s->hdr.stage == 0) {
-        s->n = s->hdr.argc < IDL_MAX_ARGS ? s->hdr.argc : IDL_MAX_ARGS;
-        DCHECK(s->hdr.argc <= IDL_MAX_ARGS,
-               "a DOM member was called with more arguments than this machine carries — raise IDL_MAX_ARGS "
-               "rather than silently dropping the tail");
+        /* A NON-VARIADIC member's arguments ARE its declared ones: a position the IDL does not list is not
+           part of the member, so there is nothing past `nargs` to convert, to store, or to hand the body. A
+           VARIADIC one takes every argument the page passed, however many that is. */
+        s->n = m->variadic ? s->hdr.argc
+             : (s->hdr.argc < m->nargs ? s->hdr.argc : m->nargs);
+        DCHECK(m->variadic || s->n <= IDL_MAX_ARGS,
+               "a member declared more arguments than this machine carries — IDL_MAX_DECLARED bounds what a "
+               "member may declare, so this means the two have drifted apart");
         s->result = JS_UNDEFINED;
         s->dict_v = JS_UNDEFINED;
+        s->conv = m->variadic ? JS_NewArray(ctx) : JS_UNDEFINED;
+        s->vstage = JS_UNDEFINED;
         for (r = 0; r < IDL_MAX_ARGS; r++)
             s->args[r] = JS_UNDEFINED;
         s->i = 0;
@@ -112,14 +140,24 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 
     while (s->i < s->n) {
         JSValueConst a = step_arg(&s->hdr, s->i);
+        /* ONE STORE PER ARGUMENT, at the bottom of the loop. Every branch below writes the converted value
+           into `slot` and falls through to `placed`, so the variadic append happens in exactly one place and
+           cannot be forgotten by whichever branch is added next. */
+        JSValue *slot = m->variadic ? &s->vstage : &s->args[s->i];
         /* A POSITION THE IDL DOES NOT LIST IS NOT CONVERTED. Repeating the last declared type instead was a
            catch-all with a real victim: addEventListener declares one DOMString, so the repeat converted its
            CALLBACK to a string and every listener registered was the string "function () {…}". A variadic
            member's tail is `any...` in every case here, which is exactly what not-listed already means. */
-        IdlArgType t = (s->i < m->nargs) ? m->types[s->i] : IDL_ANY;
+        IdlArgType t = (s->i < m->nargs) ? m->types[s->i]
+                     : (m->variadic ? m->types[m->nargs - 1] : IDL_ANY);
 
         if (t == IDL_STRING_UNLESS_CALLABLE)
             t = JS_IsFunction(ctx, a) ? IDL_ANY : IDL_DOMSTRING;   /* the union's own rule */
+        if (t == IDL_STRING_UNLESS_IFACE) {
+            DCHECK(m->iface != 0, "a member declared an interface-or-string union with no interface to brand "
+                                  "against — the class is half of what that type states");
+            t = JS_GetOpaque(a, m->iface) ? IDL_ANY : IDL_DOMSTRING;
+        }
 
         /* UNKNOWN EXTERNAL INPUT CROSSES AS ITSELF, whatever the declared type says.
            An IDL conversion is a BOUNDARY, not an ECMAScript operator: nothing observes its result except the
@@ -134,12 +172,14 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         if (t != IDL_ANY && t != IDL_DICT && t != IDL_DICT_OR_BOOL_FIRST && concolic_is(a)) {
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
-            s->args[s->i] = JS_DupValue(ctx, a);
-            s->i++;
-            continue;
+            *slot = JS_DupValue(ctx, a);
+            goto placed;
         }
 
         if (t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST) {
+            DCHECK(!m->variadic || s->i < m->nargs,
+                   "a dictionary argument landed in a VARIADIC tail — the conversion cursor is per-member, so "
+                   "a dictionary repeated by the tail would read the first one's names");
             /* `optional D options = {}`: undefined and null have no members to read, so every one defaults and
                no page code runs. An object's members are read IN ORDER and each is converted by ITS OWN type,
                parking on either half. A `required` member is checked here rather than in the body, because
@@ -228,14 +268,14 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             continue;
         }
 
+
         /* `DOMString?`: null AND undefined become the IDL null before any ToString is reached. */
         if (t == IDL_DOMSTRING_NULLABLE) {
             if (JS_IsNull(a) || JS_IsUndefined(a)) {
                 JS_FreeValue(ctx, cb_result);
                 cb_result = JS_UNDEFINED;
-                s->args[s->i] = JS_NULL;
-                s->i++;
-                continue;
+                *slot = JS_NULL;
+                goto placed;
             }
             t = IDL_DOMSTRING;
         }
@@ -245,40 +285,41 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         if (t == IDL_DOMSTRING && m->null_to_empty && JS_IsNull(a)) {
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
-            s->args[s->i] = JS_NewStringLen(ctx, "", 0);
-            s->i++;
-            continue;
+            *slot = JS_NewStringLen(ctx, "", 0);
+            goto placed;
         }
         if (t == IDL_ANY) {
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
-            s->args[s->i] = JS_DupValue(ctx, a);   /* no conversion: it crosses as itself */
-            s->i++;
-            continue;
+            *slot = JS_DupValue(ctx, a);   /* no conversion: it crosses as itself */
+            goto placed;
         }
         if (t == IDL_BOOLEAN) {
             /* ToBoolean runs nothing, but the ARGUMENT still crosses converted: `toggle(t, 1)` forces on, and a
                body that got the 1 would have to remember to coerce it. */
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
-            s->args[s->i] = JS_IsUndefined(a) ? JS_UNDEFINED : JS_NewBool(ctx, JS_ToBool(ctx, a));
-            s->i++;
-            continue;
+            *slot = JS_IsUndefined(a) ? JS_UNDEFINED : JS_NewBool(ctx, JS_ToBool(ctx, a));
+            goto placed;
         }
         if (t == IDL_LONG) {
             r = step_toint64_run(ctx, &s->hdr, a, cb_result, &s->nums[s->i], out_cb, out_argc);
             cb_result = JS_UNDEFINED;
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
-            s->args[s->i] = JS_NewInt64(ctx, s->nums[s->i]);
-            s->i++;
-            continue;
+            *slot = JS_NewInt64(ctx, s->nums[s->i]);
+            goto placed;
         }
         DCHECK(t == IDL_DOMSTRING, "an IDL argument was declared with a type this machine does not convert");
-        r = step_tostring_run(ctx, &s->hdr, a, cb_result, &s->args[s->i], out_cb, out_argc);
+        r = step_tostring_run(ctx, &s->hdr, a, cb_result, slot, out_cb, out_argc);
         cb_result = JS_UNDEFINED;
         if (r > 0) return r;          /* parked ON THIS ARGUMENT; the resume comes back to it */
         if (r < 0) return JS_STEP_ABRUPT;
+    placed:
+        if (m->variadic) {
+            JS_SetPropertyUint32(ctx, s->conv, (uint32_t)s->i, s->vstage);
+            s->vstage = JS_UNDEFINED;
+        }
         s->i++;
     }
 
@@ -287,20 +328,44 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        releases hdr.this_val BEFORE calling it, so a body that reads the receiver there reads a freed value:
        the listener registration silently found no receiver and registered nothing, with no throw to show for
        it. A machine's fini may yield what it already computed; it may not compute. */
+    /* THE BODY TAKES A CONTIGUOUS VECTOR, so a variadic member's converted arguments are copied out of the
+       array into one. It lives only across the body call — the body cannot park, which is the whole reason
+       this vector needs no ownership contract of its own; the array keeps owning the values. */
+    if (m->variadic) {
+        int k;
+        /* Every converted argument reached the array, which is the one thing the single `placed:` store exists
+           to guarantee — an arm that returns without going through it leaves a hole the body reads as
+           undefined, and that is exactly what a missed one did. */
+        {
+            JSValue lv = JS_GetPropertyStr(ctx, s->conv, "length");
+            uint32_t have = 0;
+            JS_ToUint32(ctx, &have, lv);
+            JS_FreeValue(ctx, lv);
+            DCHECK((int)have == s->n,
+                   "a variadic member converted fewer arguments than it was given — an arm of the conversion "
+                   "returned without storing through `placed:`");
+        }
+        argv_vec = s->n ? js_malloc(ctx, sizeof(JSValue) * (size_t)s->n) : NULL;
+        if (s->n && !argv_vec) { JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
+        for (k = 0; k < s->n; k++) argv_vec[k] = JS_GetPropertyUint32(ctx, s->conv, (uint32_t)k);
+    }
     if (!m->step) JS_FreeValue(ctx, cb_result);
     if (m->step) {
         /* The member's own algorithm, as a machine. It is re-entered on every resume with `i == n`, so the
            conversion loop above is skipped and the resume lands back inside the body — which is what makes the
            body's stage the SECOND resume point of this machine, beside the argument cursor. */
-        r = m->step->body(ctx, &s->hdr, (char *)s + sizeof(JSIdlArgsState), s->n, (JSValueConst *)s->args,
-                         cb_result, &s->result, out_cb, out_argc);
+        r = m->step->body(ctx, &s->hdr, (char *)s + sizeof(JSIdlArgsState), s->n,
+                          (JSValueConst *)(argv_vec ? argv_vec : s->args),
+                          cb_result, &s->result, out_cb, out_argc);
+        idl_free_vec(ctx, argv_vec, s->n);
         if (r > 0) return r;
         if (r < 0) { s->result = JS_UNDEFINED; return JS_STEP_ABRUPT; }
         return JS_STEP_DONE;
     }
     s->result = m->setter
         ? m->setter(ctx, s->hdr.this_val, s->n > 0 ? s->args[0] : JS_UNDEFINED, m->magic)
-        : m->body(ctx, s->hdr.this_val, s->n, (JSValueConst *)s->args, m->magic);
+        : m->body(ctx, s->hdr.this_val, s->n, (JSValueConst *)(argv_vec ? argv_vec : s->args), m->magic);
+    idl_free_vec(ctx, argv_vec, s->n);
     if (JS_IsException(s->result)) {
         s->result = JS_UNDEFINED;
         return JS_STEP_ABRUPT;
@@ -325,7 +390,9 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
     JS_FreeValue(ctx, s->result);
     s->result = JS_UNDEFINED;
     JS_FreeValue(ctx, s->dict_v);   /* a member read whose conversion never completed — the throw path owns it */
-    s->dict_v = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->conv);
+    JS_FreeValue(ctx, s->vstage);
+    s->dict_v = s->conv = s->vstage = JS_UNDEFINED;
     for (i = 0; i < IDL_MAX_ARGS; i++) {
         JS_FreeValue(ctx, s->args[i]);
         s->args[i] = JS_UNDEFINED;
@@ -350,6 +417,15 @@ bool idl_dict_bool(JSContext *ctx, JSValueConst dict, const char *name)
 int idl_method_id(JSContext *ctx, const IdlArgType *types, int nargs, IdlBody body, int magic)
 {
     return idl_method_id_dict(ctx, types, nargs, NULL, 0, body, magic);
+}
+
+int idl_method_id_ext(JSContext *ctx, const IdlArgType *types, int nargs, bool variadic, JSClassID iface,
+                      IdlBody body, int magic)
+{
+    int id = idl_method_id_dict(ctx, types, nargs, NULL, 0, body, magic);
+    g_members[g_n - 1].variadic = variadic;
+    g_members[g_n - 1].iface = iface;
+    return id;
 }
 
 int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
@@ -391,6 +467,8 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
         g_members[idx].dict_n = nmembers;
     }
     g_members[idx].step = NULL;
+    g_members[idx].variadic = false;
+    g_members[idx].iface = 0;
     g_defs[idx].size  = sizeof(JSIdlArgsState);
     g_defs[idx].step  = js_idl_args_step;
     g_defs[idx].fini  = idl_args_result;

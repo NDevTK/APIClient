@@ -45,6 +45,7 @@
 #include "solver/concolic.h"
 #include "solver/attr_shadow.h"
 #include "core/dom/node.h"
+#include "core/dom/collections.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/dom/document.h"
@@ -111,20 +112,12 @@ static JSValue js_node_tree(JSContext *ctx, JSValueConst this_val, int magic)
     }
 }
 
-/* §4.4 childNodes. A STATIC array, not the spec's live NodeList: a page that inserts a child and re-reads
-   `.length` will not see the change. Named here rather than papered over — it is the same shape
-   querySelectorAll and getElementsByTagName already return, and the live collection is its own component. */
+/* §4.4 childNodes — a LIVE NodeList, [SameObject], counted off the tree at the moment it is asked. It was a
+   static array, which is wrong in the way that costs a page its render: read `.length`, append a row, read it
+   again, and the answer did not move. */
 static JSValue js_node_child_nodes(JSContext *ctx, JSValueConst this_val)
 {
-    lxb_dom_node_t *n = node_of(this_val), *c;
-    JSValue arr;
-    uint32_t i = 0;
-
-    if (!n) return JS_NewArray(ctx);
-    arr = JS_NewArray(ctx);
-    for (c = n->first_child; c; c = c->next)
-        JS_SetPropertyUint32(ctx, arr, i++, node_wrap(ctx, c));
-    return arr;
+    return collections_child_nodes(ctx, this_val);
 }
 
 /* §4.2.3 appendChild / removeChild — the per-flow chokepoints, and they return the node the spec returns
@@ -195,9 +188,14 @@ static lxb_dom_node_t *node_from_arg(JSContext *ctx, lxb_dom_node_t *owner, JSVa
     lxb_dom_text_t *text;
 
     if (n) return n;
-    /* §4.2.4: anything that is not a Node is stringified into a Text node. The conversion is the page's code,
-       and it has already run — the member declares `any...`, and the ToString below is on a value the
-       declaration left alone, so it is done here where the argument is known not to be a Node. */
+    /* §4.2.4 "convert nodes into a node": anything that is not a Node is a DOMString, and became one in the
+       DECLARATION — `(Node or DOMString)...` is a variadic union the IDL machine converts, brand-checking each
+       argument against the node class. It used to be a JS_ToCStringLen right here, which ran the page's
+       toString FROM C with no flow base to park into: `el.append({toString(){ for(;;){} }})` was the
+       drive-to-completion this engine exists not to have. */
+    DCHECK(JS_IsString(v), "a ChildNode/ParentNode argument reached the body unconverted — the declaration is "
+                           "what turns a non-Node into a DOMString, and doing it here runs the page's code "
+                           "from C");
     s = JS_ToCStringLen(ctx, &slen, v);
     if (!s) return NULL;
     text = lxb_dom_document_create_text_node(owner->owner_document, (const lxb_char_t *)s, slen);
@@ -447,27 +445,61 @@ static bool node_shallow_equal(lxb_dom_node_t *a, lxb_dom_node_t *b)
     return true;
 }
 
-static JSValue js_node_is_equal(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    lxb_dom_node_t *a = node_of(this_val), *b = argc > 0 ? node_of(argv[0]) : NULL;
-    lxb_dom_node_t *ra, *rb;
+/* §4.4 isEqualNode — A MACHINE, and the first walk converted to one, because the size of the work is the
+   PAGE'S: two whole subtrees, node by node. Running no user code is not what made the old loop acceptable and
+   nothing else did either — it held the scheduler for as long as the page's tree was deep, inside one opcode,
+   with every other flow waiting. Running no user code only means it needs no REQUEST; it still needs to yield.
+   The cursors are the state, so a resume continues at the pair it stopped on and re-walks nothing. */
+typedef struct {
+    uint8_t stage;
+    lxb_dom_node_t *a, *b, *ra, *rb;   /* the two cursors and the two roots they are bounded by */
+    bool result;
+} NodeEqualState;
 
-    if (!a || !b) return JS_FALSE;   /* `Node? otherNode`: null is never equal */
-    ra = a; rb = b;
-    for (;;) {
-        if (!node_shallow_equal(a, b)) return JS_FALSE;
-        /* the CHILD COUNTS must match, and comparing them here rather than at the end is what lets the two
-           cursors advance in lockstep below without one running off the end of the other. */
-        {
-            lxb_dom_node_t *ca = a->first_child, *cb = b->first_child;
-            while (ca && cb) { ca = ca->next; cb = cb->next; }
-            if (ca || cb) return JS_FALSE;
-        }
-        a = node_next_in(a, ra);
-        b = node_next_in(b, rb);
-        if (!a || !b) return JS_NewBool(ctx, a == NULL && b == NULL);
-    }
+static void node_equal_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    /* NOTHING OWNED. The cursors are Lexbor nodes, which belong to the document and outlive any flow; a fork
+       mid-walk gives both arms the same two positions in the same tree, which is what they should have. */
+    (void)ctx; (void)st; (void)v;
 }
+
+static int js_node_is_equal(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NodeEqualState *s = st;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    if (s->stage == 0) {
+        s->stage = 1;
+        s->a = node_of(hdr->this_val);
+        s->b = argc > 0 ? node_of(argv[0]) : NULL;
+        s->ra = s->a; s->rb = s->b;
+        /* `Node? otherNode`: null is never equal. */
+        if (!s->a || !s->b) { *presult = JS_FALSE; return JS_STEP_DONE; }
+    }
+    if (!node_shallow_equal(s->a, s->b)) { *presult = JS_FALSE; return JS_STEP_DONE; }
+    /* the CHILD COUNTS must match, and comparing them here rather than at the end is what lets the two
+       cursors advance in lockstep below without one running off the end of the other. */
+    {
+        lxb_dom_node_t *ca = s->a->first_child, *cb = s->b->first_child;
+        while (ca && cb) { ca = ca->next; cb = cb->next; }
+        if (ca || cb) { *presult = JS_FALSE; return JS_STEP_DONE; }
+    }
+    s->a = node_next_in(s->a, s->ra);
+    s->b = node_next_in(s->b, s->rb);
+    if (!s->a || !s->b) {
+        *presult = JS_NewBool(ctx, s->a == NULL && s->b == NULL);
+        return JS_STEP_DONE;
+    }
+    /* ONE PAIR PER STEP, and the yield is asked at every one — when no flow is waiting it is a predicted call
+       and the walk continues, and when one is it parks here with both cursors intact. */
+    return JS_STEP_YIELD;
+}
+
+static const IdlStepDecl NODE_EQUAL_STEP = {
+    js_node_is_equal, sizeof(NodeEqualState), node_equal_visit, NULL
+};
 
 /* §4.4 compareDocumentPosition — the bitmask a page uses to sort nodes into document order. */
 enum {
@@ -655,31 +687,47 @@ static JSValue js_node_lookup_ns(JSContext *ctx, JSValueConst this_val, int argc
 
 /* §4.2.7 ChildNode — on Element, CharacterData and DocumentFragment, which is why it is a table the interfaces
    that DECLARE it ask for rather than members on Node.prototype: `document.remove()` is not a thing. */
-static const JSCFunctionListEntry js_child_node_mixin[] = {
-    JS_CFUNC_MAGIC_DEF("remove", 0, js_node_mixin, 0),
-    JS_CFUNC_MAGIC_DEF("before", 1, js_node_mixin, 1),
-    JS_CFUNC_MAGIC_DEF("after", 1, js_node_mixin, 2),
-    JS_CFUNC_MAGIC_DEF("replaceWith", 1, js_node_mixin, 3),
+/* `undefined before((Node or DOMString)... nodes)` and the three beside it — the union and the variadic tail
+   are both DECLARED, so every argument is a Node or a real string by the time the body runs. */
+static const IdlArgType MIXIN_NODES[1] = { IDL_STRING_UNLESS_IFACE };
+typedef struct { const char *name; int len; int magic; } NodeMixinMember;
+static const NodeMixinMember CHILD_NODE_MIXIN[] = {
+    { "remove", 0, 0 }, { "before", 1, 1 }, { "after", 1, 2 }, { "replaceWith", 1, 3 },
 };
 
 /* §4.2.8 ParentNode's insertion half — on Element, Document and DocumentFragment. querySelector and children
    are the same mixin and already live on the interfaces that declare them. */
-static const JSCFunctionListEntry js_parent_node_mixin[] = {
-    JS_CFUNC_MAGIC_DEF("append", 1, js_node_mixin, 4),
-    JS_CFUNC_MAGIC_DEF("prepend", 1, js_node_mixin, 5),
-    JS_CFUNC_MAGIC_DEF("replaceChildren", 0, js_node_mixin, 6),
+static const NodeMixinMember PARENT_NODE_MIXIN[] = {
+    { "append", 1, 4 }, { "prepend", 1, 5 }, { "replaceChildren", 0, 6 },
 };
+
+/* The members that WALK, installed through the declaration because they are machines. */
+static void node_install_walkers(JSContext *ctx, JSValueConst proto)
+{
+    static const IdlArgType ONE_ANY[1] = { IDL_ANY };   /* `Node? otherNode` — an interface type crosses as itself */
+    idl_install_method(ctx, proto, "isEqualNode", 1,
+                       idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &NODE_EQUAL_STEP, 0));
+}
+
+static void mixin_install(JSContext *ctx, JSValueConst proto, const NodeMixinMember *tab, unsigned n)
+{
+    unsigned k;
+    for (k = 0; k < n; k++)
+        idl_install_method(ctx, proto, tab[k].name, tab[k].len,
+                           idl_method_id_ext(ctx, MIXIN_NODES, 1, /*variadic*/ true, node_class_id(),
+                                             js_node_mixin, tab[k].magic));
+}
 
 void node_install_child_mixin(JSContext *ctx, JSValueConst proto)
 {
-    JS_SetPropertyFunctionList(ctx, (JSValue)proto, js_child_node_mixin,
-                               (int)(sizeof(js_child_node_mixin) / sizeof(js_child_node_mixin[0])));
+    mixin_install(ctx, proto, CHILD_NODE_MIXIN,
+                  (unsigned)(sizeof(CHILD_NODE_MIXIN) / sizeof(CHILD_NODE_MIXIN[0])));
 }
 
 void node_install_parent_mixin(JSContext *ctx, JSValueConst proto)
 {
-    JS_SetPropertyFunctionList(ctx, (JSValue)proto, js_parent_node_mixin,
-                               (int)(sizeof(js_parent_node_mixin) / sizeof(js_parent_node_mixin[0])));
+    mixin_install(ctx, proto, PARENT_NODE_MIXIN,
+                  (unsigned)(sizeof(PARENT_NODE_MIXIN) / sizeof(PARENT_NODE_MIXIN[0])));
 }
 
 static const JSCFunctionListEntry js_node_base[] = {
@@ -689,7 +737,6 @@ static const JSCFunctionListEntry js_node_base[] = {
     JS_CFUNC_MAGIC_DEF("replaceChild", 2, js_node_insert, 1),
     JS_CFUNC_DEF("cloneNode", 0, js_node_clone),
     JS_CFUNC_DEF("normalize", 0, js_node_normalize),
-    JS_CFUNC_DEF("isEqualNode", 1, js_node_is_equal),
     JS_CFUNC_DEF("compareDocumentPosition", 1, js_node_compare_position),
     JS_CFUNC_MAGIC_DEF("hasChildNodes", 0, js_node_predicates, 0),
     JS_CFUNC_MAGIC_DEF("isSameNode", 1, js_node_predicates, 1),
@@ -917,6 +964,7 @@ void node_init(JSContext *ctx)
        on each. */
     g_node_proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_node_proto), "Node.prototype could not be allocated");
+    node_install_walkers(ctx, g_node_proto);
     JS_SetPropertyFunctionList(ctx, g_node_proto, js_node_base,
                                (int)(sizeof(js_node_base) / sizeof(js_node_base[0])));
     JS_SetPropertyFunctionList(ctx, g_node_proto, js_node_consts,

@@ -40,6 +40,11 @@ typedef enum {
        object is read as an ordinary dictionary. Named for the rule rather than for the member, because the
        rule is what the IDL states — the same reason IDL_STRING_UNLESS_CALLABLE is named that way. */
     IDL_DICT_OR_BOOL_FIRST,
+    /* `(T or DOMString)` where T is an INTERFACE type — the union §4.2.4 writes for every member that takes
+       "a node or some text", and `el.append('hi')` is the ordinary way to write the second half. Its rule is a
+       brand check: an object of the interface's CLASS crosses as itself, anything else is a DOMString. The
+       class is declared beside the type, so this file needs to know nothing about what a Node is. */
+    IDL_STRING_UNLESS_IFACE,
 } IdlArgType;
 
 /* A DICTIONARY MEMBER, as its IDL declares it: the name, the type of its value, and whether the IDL marks it
@@ -55,6 +60,14 @@ typedef struct { const char *name; IdlArgType type; bool required; } IdlDictMemb
    step id, which the caller CACHES. Registration and installation are separate on purpose: Element's members
    are installed on every wrapper the tree hands out, so registering there would mint a definition per element. */
 int  idl_method_id(JSContext *ctx, const IdlArgType *types, int nargs, IdlBody body, int magic);
+
+/* The same declaration for a member whose IDL tail is VARIADIC, and/or that takes an interface-or-string
+   union. `variadic` makes the LAST declared type apply to every argument from there on, which is what a `T...`
+   tail means — stated by the member rather than assumed for all of them, because assuming it once converted
+   addEventListener's CALLBACK to a string. `iface` is the class an object must be to cross an
+   IDL_STRING_UNLESS_IFACE position as itself. */
+int  idl_method_id_ext(JSContext *ctx, const IdlArgType *types, int nargs, bool variadic, JSClassID iface,
+                       IdlBody body, int magic);
 
 /* The same declaration for a member that takes an IDL_DICT argument: `members` lists the dictionary's members
    in the order the IDL declares them, which is the order Web IDL reads them in. A member declares AT MOST ONE

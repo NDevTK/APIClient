@@ -32,6 +32,7 @@
 #include "core/html/html_element.h"
 #include "core/html/custom_elements.h"
 #include "core/dom/dom_token_list.h"
+#include "core/dom/collections.h"
 #include "core/idl_indexed.h"
 #include "core/css/css_style_declaration.h"
 #include <lexbor/ns/ns.h>
@@ -585,7 +586,8 @@ static JSValue js_el_matches(JSContext *ctx, JSValueConst this_val, int argc, JS
 
 /* §4.2.6 children / firstElementChild / lastElementChild / childElementCount — the ELEMENT-only walk beside
    Node's childNodes, which a page uses precisely to skip the whitespace Text nodes a parser leaves behind.
-   `children` is a STATIC array, the same named gap childNodes and querySelectorAll carry. */
+   `children` is a LIVE HTMLCollection with a NAMED getter, which is how a great deal of older code reaches its
+   own markup (`form.children.email`); the rest are plain reads of the tree. */
 static JSValue js_el_children(JSContext *ctx, JSValueConst this_val, int magic)
 {
     lxb_dom_element_t *el = elem_of(this_val);
@@ -594,16 +596,14 @@ static JSValue js_el_children(JSContext *ctx, JSValueConst this_val, int magic)
     JSValue arr = JS_UNDEFINED;
 
     if (!el) return magic == 0 ? JS_NewArray(ctx) : (magic == 3 ? JS_NewInt32(ctx, 0) : JS_NULL);
-    if (magic == 0) arr = JS_NewArray(ctx);
+    if (magic == 0) return collections_children(ctx, this_val);
     for (c = lxb_dom_interface_node(el)->first_child; c; c = c->next) {
         if (c->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
         if (!first) first = c;
         last = c;
-        if (magic == 0) JS_SetPropertyUint32(ctx, arr, n, node_wrap(ctx, c));
         n++;
     }
     switch (magic) {
-    case 0: return arr;
     case 1: return node_wrap(ctx, first);
     case 2: return node_wrap(ctx, last);
     default: return JS_NewInt32(ctx, (int)n);
@@ -706,6 +706,7 @@ void element_init(JSContext *ctx)
                            idl_method_id(ctx, IDL_1STR, 1, js_el_matches, 1));
     }
     idl_indexed_init(ctx);      /* the exotic class every indexed interface is built on */
+    collections_init(ctx);      /* NodeList and HTMLCollection, which childNodes and children are */
     dom_token_list_init(ctx);   /* its prototype must exist before classList names it */
     dom_token_list_install_element(ctx, proto);   /* §4.9's [SameObject] classList */
     node_install_child_mixin(ctx, proto);    /* remove / before / after / replaceWith */
@@ -776,6 +777,7 @@ void element_free(JSContext *ctx)
     cssom_free(ctx);
     custom_elements_free(ctx);
     dom_token_list_free(ctx);
+    collections_free(ctx);
     idl_indexed_free(ctx);
     JS_FreeValue(ctx, g_element_proto);
     g_element_proto = JS_UNDEFINED;

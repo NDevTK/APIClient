@@ -24,6 +24,7 @@
 #include "core/html/html_form.h"
 #include "core/html/custom_elements.h"
 #include "core/dom/dom_token_list.h"
+#include "core/dom/collections.h"
 #include "core/css/css_style_declaration.h"
 #include "core/dom/document.h"
 #include "core/idl_args.h"
@@ -115,8 +116,13 @@ static JSValue qs_run(JSContext *ctx, lxb_dom_node_t *root, const char *sel, boo
     lxb_selectors_destroy(selectors, true);
     lxb_css_parser_destroy(parser, true);
     if (!all)
-        r = element_wrap(ctx, q.first);
-    return r;
+        return element_wrap(ctx, q.first);
+    /* §4.2.6: querySelectorAll answers a STATIC NodeList — a real one, so `instanceof NodeList` holds and the
+       interface's own members are there, and static because the spec says the result does not track the tree.
+       It was a bare Array, which is a different object with a different (larger) set of methods: a page
+       calling `.map` on it worked here and throws in a browser, so the engine reported a surface built out of
+       code the page cannot actually run. */
+    return collections_static(ctx, r);
 }
 
 /* The ParentNode mixin's one selector engine, for the components that scope it to their own subtree. */
@@ -531,6 +537,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     cssom_install(ctx, global);          /* CSSStyleDeclaration, and getComputedStyle on the Window */
     custom_elements_install(ctx, global);   /* §4.13.4 window.customElements */
     dom_token_list_install(ctx, global);    /* §7.1 DOMTokenList */
+    collections_install(ctx, global);       /* §4.2.10 NodeList, §4.2.11 HTMLCollection */
     /* §4.5: `Document includes ParentNode` — not ChildNode, because a document has no parent to be removed
        from. `document.append(el)` is how a page adds to an empty document. */
     node_install_parent_mixin(ctx, node_type_proto(LXB_DOM_NODE_TYPE_DOCUMENT));

@@ -70,6 +70,8 @@ const INTERFACES = {
      in the direction that gets a real gap ignored. Document is listed the same way for the same reason — it is
      a node_wrap of the document node now, with Document.prototype chained to Node.prototype. */
   DOMTokenList:        "core/dom/dom_token_list.c",
+  NodeList:            "core/dom/collections.c",
+  HTMLCollection:      "core/dom/collections.c",
   Element:             ["core/dom/element.c", "core/dom/node.c", "core/events/event_target.c",
                         "core/dom/dom_token_list.c"],
   /* The HTML layer. Each interface's files are its own plus everything it INHERITS from — HTMLElement on

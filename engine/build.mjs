@@ -133,6 +133,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "dom", "node.c"),                             // Node: identity, the tree, and the CharacterData nodes
     join(HOST, "browser", "core", "dom", "element.c"),
     join(HOST, "browser", "core", "idl_indexed.c"),                             // Web IDL's indexed property getter
+    join(HOST, "browser", "core", "dom", "collections.c"),                      // NodeList + HTMLCollection, live
     join(HOST, "browser", "core", "dom", "dom_token_list.c"),                   // DOMTokenList: §7.1, and classList
     join(HOST, "browser", "core", "css", "css_style_declaration.c"),           // CSSOM: element.style + getComputedStyle
     join(HOST, "browser", "core", "html", "html_element.c"),                    // HTMLElement + HTML's per-tag interface table

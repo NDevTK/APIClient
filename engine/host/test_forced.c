@@ -216,6 +216,17 @@ static const char *HTML =
     "fetch('/api/rootnode?v=' + (document.body.getRootNode({ get composed(){ var n=0; for (var i=0;i<400;i++) n+=i; return true; } }) === document ? 'isroot' : 'wrong'));"
     "var c1 = document.createElement('p'); c1.setAttribute('k','v'); var c2 = c1.cloneNode(true);"
     "fetch('/api/equalnode?v=' + (c1.isEqualNode(c2) && !c1.isSameNode(c2) ? 'iseq' : 'wrong'));"
+    /* THE WALK IS THE PAGE'S SIZE, so it is a MACHINE that yields at every pair. 12 nested nodes is 12
+       suspension points inside one member — the answer being right afterwards is the whole claim, because a
+       resume that lost its cursors would compare the wrong pair or re-walk from the top and never finish. */
+    "var dp = document.createElement('div'), dq = dp;"
+    "for (var di = 0; di < 12; di++) { var dn = document.createElement('span'); dn.setAttribute('k', 'v' + di);"
+    " dq.appendChild(dn); dq = dn; }"
+    "var dp2 = dp.cloneNode(true);"
+    "var deep1 = dp.isEqualNode(dp2);"
+    "dq.setAttribute('k', 'changed');"
+    "var deep2 = dp.isEqualNode(dp2);"
+    "fetch('/api/deepequal?v=' + (deep1 && !deep2 ? 'isdeep' : 'wrong'));"
     "var host = document.createElement('div');"
     "host.appendChild(document.createTextNode('A')); host.appendChild(document.createTextNode('B'));"
     "host.normalize();"
@@ -373,6 +384,14 @@ static const char *HTML =
     "var mx = document.createElement('ul'); document.body.appendChild(mx);"
     "var li1 = document.createElement('li'); var li2 = document.createElement('li');"
     "mx.append(li1, 'tail'); mx.prepend(li2);"
+    /* §4.2.4's union, through the DECLARATION. `(Node or DOMString)...` is variadic, so EVERY argument is
+       brand-checked and the non-Nodes are coerced before the body runs — and the coercion is the page's code
+       with a loop in it, which used to be a JS_ToCStringLen from C with no flow base to park into. Nine
+       arguments, because a fixed argument array is a cap and `ul.append(...items)` is how a list renders. */
+    "var mv = document.createElement('ol'); document.body.appendChild(mv);"
+    "var mvt = { toString: function(){ var n = 0; for (var i = 0; i < 60; i++) n += i; return 'n' + n; } };"
+    "mv.append(document.createElement('li'), mvt, 'a', 'b', 'c', 'd', 'e', 'f', 'g');"
+    "fetch('/api/variadic?v=' + encodeURIComponent(mv.innerHTML));"
     "li1.before(document.createElement('hr'));"
     "var mid = document.createElement('em'); li1.after(mid);"
     "fetch('/api/mixin?v=' + encodeURIComponent(mx.innerHTML));"
@@ -381,6 +400,23 @@ static const char *HTML =
     "fetch('/api/mixin2?v=' + encodeURIComponent(mx.innerHTML));"
     "mx.replaceChildren(document.createElement('span'));"
     "fetch('/api/mixin3?v=' + encodeURIComponent(mx.innerHTML));"
+    /* §4.2.10/§4.2.11: childNodes and children are LIVE, which is the difference a static array cannot express
+       — read the length, append, read it again. querySelectorAll is the one that is genuinely STATIC, and all
+       three are real interfaces now rather than Arrays, so `.map` is honestly absent as the spec has it. */
+    "var lv = document.createElement('div'); document.body.appendChild(lv);"
+    "lv.appendChild(document.createElement('i')); lv.appendChild(document.createTextNode('t'));"
+    "var lvc = lv.childNodes; var lve = lv.children; var lvq = lv.querySelectorAll('i');"
+    "var lvn0 = lvc.length + ':' + lve.length + ':' + lvq.length;"
+    "lv.appendChild(document.createElement('b'));"
+    "var lvn1 = lvc.length + ':' + lve.length + ':' + lvq.length;"
+    "fetch('/api/live?v=' + (lvn0 === '2:1:1' && lvn1 === '3:2:1'"
+    " && lv.childNodes === lvc && lv.children === lve && lvq instanceof NodeList"
+    " && lve instanceof HTMLCollection && lvc[0] === lv.firstChild && typeof lvc.map === 'undefined'"
+    " ? 'islive' : 'wrong'));"
+    /* §4.2.11's NAMED getter: `children.foo` is how a great deal of older code reaches its own markup. */
+    "var nb = document.createElement('u'); nb.setAttribute('id', 'namedkid'); lv.appendChild(nb);"
+    "fetch('/api/named?v=' + (lv.children.namedItem('namedkid') === nb && lv.children.namedkid === nb"
+    " && lv.children.nosuch === undefined ? 'isnamed' : 'wrong'));"
     /* §4.9 matches / closest, and §7.1's DOMTokenList — the two questions a router asks and the way a bundle
        gates a branch of its UI. classList holds NO tokens of its own: they are the `class` attribute split, so
        a write through the list and a write through setAttribute are the same write, and it time-travels
@@ -937,6 +973,7 @@ int main(void) {
         { "\"/api/baseuri\"",     "base"    },
         { "\"/api/rootnode\"",    "isroot"  },   /* the option read parked on a page getter and resumed */
         { "\"/api/equalnode\"",   "iseq"    },   /* cloneNode(true) then isEqualNode/isSameNode */
+        { "\"/api/deepequal\"",  "isdeep"  },   /* …and a nested chain of it, parking at every pair */
         { "\"/api/normalize\"",   "AB"      },   /* two Text children merged into one */
         { "\"/api/insertbefore\"","isfirst" },
         { "\"/api/connected\"",   "isconn"  },
@@ -987,6 +1024,9 @@ int main(void) {
         { "\"/api/mixin\"",      "%3Cli%3E%3C%2Fli%3E%3Chr%3E%3Cli%3E%3C%2Fli%3E%3Cem%3E%3C%2Fem%3Etail" },
         { "\"/api/mixin2\"",     "%3Chr%3E%3Cli%3E%3C%2Fli%3E%3Cb%3E%3C%2Fb%3Etail" },
         { "\"/api/mixin3\"",     "%3Cspan%3E%3C%2Fspan%3E" },
+        { "\"/api/variadic\"",   "%3Cli%3E%3C%2Fli%3En1770abcdefg" },   /* nine arguments, one a page toString */
+        { "\"/api/live\"",       "islive"  },   /* childNodes and children track the tree; qSA does not */
+        { "\"/api/named\"",      "isnamed" },   /* §4.2.11's named property getter */
         { "\"/api/adjacent\"",   "%3Ci%3Ebb%3C%2Fi%3E%3Cp%3ET%3Cb%3Eab%3C%2Fb%3E%3Cu%3Ebe%3C%2Fu%3E%3Cq%3E%3C%2Fq%3E%3C%2Fp%3E%3Cs%3Eae%3C%2Fs%3E" },
         { "\"/api/fragctx\"",    "%3Ctd%3Ecell%3C%2Ftd%3E" },   /* §13.4: parsed in the ROW's context */
         { "\"/api/outerset\"",   "%3Ch1%3Ereplaced%3C%2Fh1%3E" },
