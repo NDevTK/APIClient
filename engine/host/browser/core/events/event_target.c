@@ -650,6 +650,41 @@ void event_target_fire(JSContext *ctx, JSValueConst target, const char *type, bo
     JS_FreeValue(ctx, ev);
 }
 
+/* THE SAME FIRE, SYNCHRONOUSLY — for a caller that CAN park. §2.9 dispatch is synchronous, and some of the
+   engine's own fires are specified that way: §3.2's `abort` happens inside abort(), so a page that calls
+   ac.abort() and then reads a flag its listener set must see it already set. A queued fire answers the
+   question after the caller has returned.
+   It is the SAME machine through the same internal door — only the reach differs, which is the whole point of
+   there being one dispatch: a caller that can park calls it as a REQUEST, one that cannot enqueues it as a job.
+   `phase` and `cb` are the caller machine's own; `cb` needs FOUR slots ([this, func, target, event]).
+     0 = done (*pnot_canceled set when asked), 3 = the caller must return that step code. */
+int event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, JSValueConst target,
+                          const char *type, bool bubbles, bool cancelable, JSValue in,
+                          bool *pnot_canceled, JSValue **out_cb, int *out_argc)
+{
+    JSValueConst argv[2];
+    JSValue ev, out = JS_UNDEFINED;
+    int r;
+
+    DCHECK(JS_IsObject(g_dispatch_fn),
+           "an event was fired synchronously before event_target_init built the dispatcher");
+    if (*phase == 0) {
+        ev = event_new(ctx, type, bubbles, cancelable);
+        if (JS_IsException(ev)) { JS_FreeValue(ctx, in); return -1; }
+        argv[0] = target;
+        argv[1] = ev;
+        r = step_call_run(ctx, phase, cb, g_dispatch_fn, JS_UNDEFINED, 2, argv, in, &out, out_cb, out_argc);
+        JS_FreeValue(ctx, ev);   /* the request dup'd both operands into cb */
+        DCHECK(r == JS_STEP_CALL, "the dispatch request answered without parking");
+        return r;
+    }
+    r = step_call_run(ctx, phase, cb, JS_UNDEFINED, JS_UNDEFINED, 2, NULL, in, &out, out_cb, out_argc);
+    DCHECK(r == 0, "a synchronous fire resumed into something other than its answer");
+    if (pnot_canceled) *pnot_canceled = JS_ToBool(ctx, out);
+    JS_FreeValue(ctx, out);
+    return 0;
+}
+
 /* The window, which §7.6 makes the document's parent for event purposes — how a `load` listener on window
    hears an event fired at the document. Registered rather than passed per fire, because it is a property of
    the browsing context and not of any one dispatch. */

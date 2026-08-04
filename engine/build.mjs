@@ -38,7 +38,15 @@ const WORK = join(ENGINE, ".work");
 const EMSDK = join(WORK, "emsdk");
 const EMCC = join(EMSDK, "upstream", "emscripten", process.platform === "win32" ? "emcc.bat" : "emcc");
 
-if (!existsSync(EMCC)) { console.error("[build] emcc not found at " + EMCC); process.exit(1); }
+if (!existsSync(EMCC)) {
+  /* A fresh container has no toolchain, and "emcc not found" on its own sends whoever hits it hunting for the
+     version that was used. Say exactly what to run — the same reason the lexbor tag below is pinned here. */
+  console.error("[build] emcc not found at " + EMCC + "\n" +
+                "[build] provision it with:\n" +
+                "  git clone --depth 1 https://github.com/emscripten-core/emsdk.git " + EMSDK + "\n" +
+                "  " + join(EMSDK, "emsdk") + " install latest && " + join(EMSDK, "emsdk") + " activate latest");
+  process.exit(1);
+}
 mkdirSync(OUT, { recursive: true });
 mkdirSync(EXT_QJS, { recursive: true });
 
@@ -52,7 +60,18 @@ mkdirSync(EXT_QJS, { recursive: true });
    liblexbor.o was compiled from. It used to be named at engine/lexbor/source — a second, git-ignored location
    that is empty in a fresh container, so the build died on a missing <lexbor/html/html.h> while the headers sat
    in .work. One location, no fallback. */
-const LEXBOR_SRC = join(WORK, "lexbor-src", "source");
+/* PINNED, and provisioned here. Lexbor's C API moves between releases — a container that cloned its default
+   branch instead got a css_declaration_list_parse with a different arity and the build died in the CSSOM. The
+   version is part of the build, so it is stated in the build rather than in whoever's shell history. */
+const LEXBOR_TAG = "v2.4.0";
+const LEXBOR_DIR = join(WORK, "lexbor-src");
+if (!existsSync(join(LEXBOR_DIR, "source", "lexbor"))) {
+  console.log("[build] lexbor " + LEXBOR_TAG + " not present — cloning it");
+  const r = spawnSync("git", ["clone", "--depth", "1", "--branch", LEXBOR_TAG,
+                              "https://github.com/lexbor/lexbor.git", LEXBOR_DIR], { stdio: "inherit" });
+  if (r.status !== 0) { console.error("[build] could not clone lexbor " + LEXBOR_TAG); process.exit(1); }
+}
+const LEXBOR_SRC = join(LEXBOR_DIR, "source");
 const LEXBOR_LIB = join(WORK, "liblexbor.o");   // relocatable partial-link object (emcc -o .a doesn't archive from .c)
 const LEXBOR_INC = LEXBOR_SRC;
 function findC(dir, out) {

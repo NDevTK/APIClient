@@ -337,6 +337,18 @@ static const char *HTML =
     "addEventListener('DOMContentLoaded', function(e){"
     " fetch('/api/dclbubble?v=' + (e.target === document && e.currentTarget === globalThis && e.isTrusted"
     " && e.eventPhase === 3 ? 'isdcl' : 'wrong')); });"
+    /* §3.2 abort() is SYNCHRONOUS: the listener has run by the time abort() returns, so a flag it set is
+       already readable on the next line. A queued fire answers that question after the caller returned, which
+       is what this used to do. The listener holds a LOOP, so the dispatch suspends inside it and abort()
+       resumes at the listener it parked on — synchronous does not mean uninterruptible. */
+    "var sc = new AbortController(); var sflag = 0;"
+    "sc.signal.addEventListener('abort', function(){ var n = 0; for (var i = 0; i < 400; i++) { n += i; }"
+    " sflag = n; });"
+    "sc.abort();"
+    "fetch('/api/abortsync?v=' + (sflag === 79800 && sc.signal.aborted ? 'issync' : 'wrong'));"
+    /* §3.2: a second abort() fires nothing — the state half answers whether there is anything to fire. */
+    "var sonce = sflag; sc.abort();"
+    "fetch('/api/abortonce?v=' + (sflag === sonce ? 'isonce' : 'wrong'));"
     "if (cfg.admin) { setBodyAttr('data-tt','ttADMIN'); appendChild('kidADMIN'); rx.flag='flagADMIN'; fetch('/api/data?role=admin'); loadScript('/chunk/admin.js'); } else { setBodyAttr('data-tt','ttPUBLIC'); appendChild('kidPUBLIC'); rx.flag='flagPUBLIC'; fetch('/api/data?role=public'); }"   /* admin arm: same endpoint MERGES + a LAZY CHUNK loads. Each arm ALSO writes an attribute, appends a child node, AND assigns the ACCESSOR rx.flag (invokes the setter -> rx._f) -> per-flow DOM + heap-accessor writes across the EXISTING fork. */
     "fetch('/api/whoami?tt=' + getBodyAttr('data-tt'));"   /* DOM ATTR READ-BACK after the fork: per-flow -> admin flow reads ttADMIN, public flow reads ttPUBLIC */
     "fetch('/api/kid?mark=' + lastChildMark());"   /* DOM NODE READ-BACK: each flow's appended child is its OWN last child -> admin reads kidADMIN, public reads kidPUBLIC (neither's inserted node leaks) */
@@ -700,6 +712,8 @@ int main(void) {
         { "\"/api/bubble\"",     "isbubble"},   /* §2.9's path: target fixed, currentTarget and phase moving */
         { "\"/api/nobubble\"",   "isnobub" },   /* a non-bubbling event, and stopPropagation */
         { "\"/api/dclbubble\"",  "isdcl"   },   /* the ENGINE's own fire walks the same path to the window */
+        { "\"/api/abortsync\"",  "issync"  },   /* §3.2 abort() has run its listeners before it returns */
+        { "\"/api/abortonce\"",  "isonce"  },   /* and a second abort() fires nothing */
     };
     int nodealgo_tt = !strstr(js, "wrong");
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)

@@ -28,6 +28,12 @@ void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask
    are plain C the scheduler drives. The propagation path is derived from the target's ancestors — there is no
    `bubble_to` to pass, because the window is the document's parent and the spec already says so. */
 void event_target_fire(JSContext *ctx, JSValueConst target, const char *type, bool bubbles, bool cancelable);
+/* THE SAME FIRE for a caller that can park — §2.9 is synchronous, and §3.2's `abort` is specified that way. One
+   dispatch, two reaches: this is the REQUEST form, event_target_fire is the queued one. `phase` and `cb` belong
+   to the calling machine and `cb` needs FOUR slots. Returns JS_STEP_CALL (return it) or 0 when it has answered. */
+int  event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, JSValueConst target,
+                           const char *type, bool bubbles, bool cancelable, JSValue in,
+                           bool *pnot_canceled, JSValue **out_cb, int *out_argc);
 /* §7.6: the window the propagation path ends at. */
 void event_target_set_window(JSContext *ctx, JSValueConst global);
 
