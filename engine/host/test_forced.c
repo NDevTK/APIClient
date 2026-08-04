@@ -508,6 +508,22 @@ static const char *HTML =
     "fetch('/api/idxcache?f=' + (icf.indexOf('n0n1n2') === 0 && icf.lastIndexOf('n199') === icf.length - 4"
     " ? 'fwd' : 'wrong') + '&b=' + (icb.indexOf('n199n198') === 0 ? 'back' : 'wrong')"
     " + '&i=' + (icv === 'n7' && icl[7].getAttribute('id') === 'n6' && icl.length === 201 ? 'shifted' : 'stale'));"
+    /* §4.2.6 THE MIXIN IS ONE THING. Document had querySelector and querySelectorAll but NOT children,
+       firstElementChild, lastElementChild or childElementCount — the IDL puts all of them on ParentNode, so a
+       page reading `document.children` got undefined and took the branch behind it. And Document's
+       querySelector ignored its receiver entirely, scoping every lookup to the global document's root, so a
+       SCOPED lookup off an element that happened to reach document.c's copy searched the whole page. */
+    "var pn = document.createElement('div'); document.body.appendChild(pn);"
+    "pn.innerHTML = '<p id=\"pna\"></p>txt<span id=\"pnb\"></span>';"
+    "fetch('/api/parentmixin?dc=' + (document.children.length === 1"
+    " && document.firstElementChild === document.documentElement"
+    " && document.childElementCount === 1 ? 'doc' : 'wrong')"
+    " + '&el=' + (pn.children.length === 2 && pn.childNodes.length === 3"
+    " && pn.firstElementChild.getAttribute('id') === 'pna'"
+    " && pn.lastElementChild.getAttribute('id') === 'pnb' ? 'el' : 'wrong')"
+    /* the scope is the RECEIVER: `pn` has no <body> under it, the document does. */
+    " + '&sc=' + (pn.querySelector('body') === null && document.querySelector('body') === document.body"
+    " && pn.querySelectorAll('p').length === 1 ? 'scoped' : 'wrong'));"
     /* §4.2.11's NAMED getter: `children.foo` is how a great deal of older code reaches its own markup. */
     "var nb = document.createElement('u'); nb.setAttribute('id', 'namedkid'); lv.appendChild(nb);"
     "fetch('/api/named?v=' + (lv.children.namedItem('namedkid') === nb && lv.children.namedkid === nb"
@@ -1126,7 +1142,10 @@ int main(void) {
         { "\"/api/mixin3\"",     "%3Cspan%3E%3C%2Fspan%3E" },
         { "\"/api/variadic\"",   "%3Cli%3E%3C%2Fli%3En1770abcdefg" },   /* nine arguments, one a page toString */
         { "\"/api/live\"",       "islive"  },   /* childNodes and children track the tree; qSA does not */
-        { "\"/api/named\"",      "isnamed" },   /* §4.2.11's named property getter */
+        { "\"/api/named\"",      "isnamed" },
+        /* §4.2.6 installed from ONE place: Document gets the reads it never had, and the lookups scope to
+           whichever node they were called on rather than to the global document */
+        { "\"/api/parentmixin\"", "scoped" },   /* §4.2.11's named property getter */
         /* the index cache: forwards, backwards, and shifted by a front insertion between two reads */
         { "\"/api/idxcache\"",   "shifted" },
         { "\"/api/adjacent\"",   "%3Ci%3Ebb%3C%2Fi%3E%3Cp%3ET%3Cb%3Eab%3C%2Fb%3E%3Cu%3Ebe%3C%2Fu%3E%3Cq%3E%3C%2Fq%3E%3C%2Fp%3E%3Cs%3Eae%3C%2Fs%3E" },

@@ -687,26 +687,6 @@ static void element_prepare_script(JSContext *ctx, lxb_dom_element_t *el)
     }
 }
 
-/* §4.2.6 THE ParentNode MIXIN, on the interface the spec puts it on. querySelector/querySelectorAll were on
-   Document only, so `section.querySelector("tbody")` — an ordinary scoped lookup, and where testharness.js
-   stopped once elements became EventTargets — was "not a function". The selector engine is Document's ONE
-   implementation, reached with this element as the root: a second copy here could disagree with it about what a
-   selector means, which is the kind of divergence nothing would ever notice. */
-static JSValue js_el_query_selector(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    lxb_dom_element_t *el = elem_of(this_val);
-    const char *sel;
-    JSValue r;
-
-    if (!el) return magic ? JS_NewArray(ctx) : JS_NULL;
-    if (argc < 1) return magic ? JS_NewArray(ctx) : JS_NULL;
-    sel = JS_ToCString(ctx, argv[0]);
-    if (!sel) return JS_EXCEPTION;
-    r = document_qs_run(ctx, lxb_dom_interface_node(el), sel, magic);
-    JS_FreeCString(ctx, sel);
-    return r;
-}
-
 /* §4.9 matches / closest — the two questions a router asks. `matches` is the single-node match; `closest`
    walks INCLUSIVE ancestors and answers the first that matches, which is how a delegated click handler finds
    the row it belongs to. Both are the selector engine's, not a second reading of a selector.
@@ -734,32 +714,6 @@ static JSValue js_el_matches(JSContext *ctx, JSValueConst this_val, int argc, JS
     return JS_NewBool(ctx, m > 0);
 }
 
-/* §4.2.6 children / firstElementChild / lastElementChild / childElementCount — the ELEMENT-only walk beside
-   Node's childNodes, which a page uses precisely to skip the whitespace Text nodes a parser leaves behind.
-   `children` is a LIVE HTMLCollection with a NAMED getter, which is how a great deal of older code reaches its
-   own markup (`form.children.email`); the rest are plain reads of the tree. */
-static JSValue js_el_children(JSContext *ctx, JSValueConst this_val, int magic)
-{
-    lxb_dom_element_t *el = elem_of(this_val);
-    lxb_dom_node_t *c, *first = NULL, *last = NULL;
-    uint32_t n = 0;
-    JSValue arr = JS_UNDEFINED;
-
-    if (!el) return magic == 0 ? JS_NewArray(ctx) : (magic == 3 ? JS_NewInt32(ctx, 0) : JS_NULL);
-    if (magic == 0) return collections_children(ctx, this_val);
-    for (c = lxb_dom_interface_node(el)->first_child; c; c = c->next) {
-        if (c->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-        if (!first) first = c;
-        last = c;
-        n++;
-    }
-    switch (magic) {
-    case 1: return node_wrap(ctx, first);
-    case 2: return node_wrap(ctx, last);
-    default: return JS_NewInt32(ctx, (int)n);
-    }
-}
-
 /* The READ-ONLY members: pure walks over the flow's own tree, so they are ordinary C getters. */
 /* §4.9 the three parts of an element's name, each a pure Lexbor read. */
 static const JSCFunctionListEntry js_element_name_parts[] = {
@@ -769,10 +723,6 @@ static const JSCFunctionListEntry js_element_name_parts[] = {
 };
 
 static const JSCFunctionListEntry js_element_readonly[] = {
-    JS_CGETSET_MAGIC_DEF("children", js_el_children, NULL, 0),
-    JS_CGETSET_MAGIC_DEF("firstElementChild", js_el_children, NULL, 1),
-    JS_CGETSET_MAGIC_DEF("lastElementChild", js_el_children, NULL, 2),
-    JS_CGETSET_MAGIC_DEF("childElementCount", js_el_children, NULL, 3),
     JS_CGETSET_DEF("tagName", js_el_get_tag, NULL),
 };
 
@@ -842,10 +792,6 @@ void element_init(JSContext *ctx)
                        idl_method_id(ctx, IDL_1STR, 1, js_el_get_attribute, 0));
     idl_install_method(ctx, proto, "setAttribute", 2,
                        idl_method_id(ctx, IDL_2STR, 2, js_el_set_attribute, 0));
-    idl_install_method(ctx, proto, "querySelector", 1,
-                       idl_method_id(ctx, IDL_1STR, 1, js_el_query_selector, 0));
-    idl_install_method(ctx, proto, "querySelectorAll", 1,
-                       idl_method_id(ctx, IDL_1STR, 1, js_el_query_selector, 1));
     {
         /* §4.9: webkitMatchesSelector is `matches` under its historical name — the IDL declares it as the same
            operation, so it IS the same declaration and not a forwarding wrapper. */

@@ -972,6 +972,69 @@ static const NodeMixinMember PARENT_NODE_MIXIN[] = {
     { "append", 1, 4 }, { "prepend", 1, 5 }, { "replaceChildren", 0, 6 },
 };
 
+/* §4.2.6 THE ParentNode MIXIN'S READS AND LOOKUPS, over the node the mixin is ON.
+   They were TWO implementations: element.c's, which took `elem_of(this_val)`, and document.c's, which ignored
+   its receiver entirely and scoped every lookup to the global document's root element. Two consequences, both
+   silent. `otherDoc.querySelector(s)` searched THIS document. And Document had children / firstElementChild /
+   lastElementChild / childElementCount not at all — §4.2.6 puts them on the mixin, so a page reading
+   `document.children` got undefined and took the branch behind it.
+   ONE implementation, on the receiver, is also what makes DocumentFragment's members exist rather than being a
+   third copy: the mixin is what the IDL says these are, so it is what installs them.
+   The RECEIVER is any node the mixin is included by — Element, Document, DocumentFragment. Anything else is a
+   page calling a mixin member on a Text node, which the spec answers by simply not having the member there. */
+static bool node_is_parent_node(const lxb_dom_node_t *n)
+{
+    return n && (n->type == LXB_DOM_NODE_TYPE_ELEMENT ||
+                 n->type == LXB_DOM_NODE_TYPE_DOCUMENT ||
+                 n->type == LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT);
+}
+
+/* magic 0 = querySelector, 1 = querySelectorAll — the same engine, scoped to this node's subtree. */
+static JSValue js_node_query(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+    const char *sel;
+    JSValue r;
+
+    if (!node_is_parent_node(n) || argc < 1) return magic ? collections_static(ctx, JS_NewArray(ctx)) : JS_NULL;
+    sel = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
+    if (!sel) return JS_EXCEPTION;
+    r = document_qs_run(ctx, n, sel, magic);
+    JS_FreeCString(ctx, sel);
+    return r;
+}
+
+/* magic 0 = children, 1 = firstElementChild, 2 = lastElementChild, 3 = childElementCount. `children` is a LIVE
+   HTMLCollection with a NAMED getter, which is how a great deal of older code reaches its own markup
+   (`form.children.email`); the rest are plain reads of the tree. */
+static JSValue js_node_element_children(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val), *c, *first = NULL, *last = NULL;
+    uint32_t count = 0;
+
+    if (!node_is_parent_node(n))
+        return magic == 3 ? JS_NewInt32(ctx, 0) : (magic == 0 ? JS_UNDEFINED : JS_NULL);
+    if (magic == 0) return collections_children(ctx, this_val);
+    for (c = n->first_child; c; c = c->next) {
+        if (c->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        if (!first) first = c;
+        last = c;
+        count++;
+    }
+    switch (magic) {
+    case 1: return node_wrap(ctx, first);
+    case 2: return node_wrap(ctx, last);
+    default: return JS_NewInt32(ctx, (int)count);
+    }
+}
+
+static const JSCFunctionListEntry js_parent_node_reads[] = {
+    JS_CGETSET_MAGIC_DEF("children", js_node_element_children, NULL, 0),
+    JS_CGETSET_MAGIC_DEF("firstElementChild", js_node_element_children, NULL, 1),
+    JS_CGETSET_MAGIC_DEF("lastElementChild", js_node_element_children, NULL, 2),
+    JS_CGETSET_MAGIC_DEF("childElementCount", js_node_element_children, NULL, 3),
+};
+
 /* The members that WALK, installed through the declaration because they are machines. */
 static void node_install_walkers(JSContext *ctx, JSValueConst proto)
 {
@@ -1008,10 +1071,20 @@ void node_install_child_mixin(JSContext *ctx, JSValueConst proto)
                   (unsigned)(sizeof(CHILD_NODE_MIXIN) / sizeof(CHILD_NODE_MIXIN[0])));
 }
 
+/* THE WHOLE MIXIN, in one call. An interface that includes ParentNode gets everything §4.2.6 lists — not the
+   three insertion members while its reads and lookups are re-declared per interface, which is how Document
+   ended up without `children` and with a querySelector that ignored its receiver. */
 void node_install_parent_mixin(JSContext *ctx, JSValueConst proto)
 {
+    static const IdlArgType ONE_SEL[1] = { IDL_DOMSTRING };
     mixin_install(ctx, proto, PARENT_NODE_MIXIN,
                   (unsigned)(sizeof(PARENT_NODE_MIXIN) / sizeof(PARENT_NODE_MIXIN[0])));
+    JS_SetPropertyFunctionList(ctx, proto, js_parent_node_reads,
+                               (int)(sizeof(js_parent_node_reads) / sizeof(js_parent_node_reads[0])));
+    idl_install_method(ctx, proto, "querySelector", 1,
+                       idl_method_id(ctx, ONE_SEL, 1, js_node_query, 0));
+    idl_install_method(ctx, proto, "querySelectorAll", 1,
+                       idl_method_id(ctx, ONE_SEL, 1, js_node_query, 1));
 }
 
 static const JSCFunctionListEntry js_node_base[] = {

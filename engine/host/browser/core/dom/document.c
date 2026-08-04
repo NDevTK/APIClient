@@ -168,36 +168,6 @@ int document_sel_match(lxb_dom_node_t *node, const char *sel)
     return r;
 }
 
-static JSValue js_doc_query_selector(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    (void)magic;
-    const char *sel;
-    JSValue r;
-    (void)this_val;
-    DCHECK(g_doc != NULL, "querySelector ran before the document was installed");
-    if (argc < 1) return JS_NULL;
-    sel = JS_ToCString(ctx, argv[0]);
-    if (!sel) return JS_EXCEPTION;
-    r = qs_run(ctx, lxb_dom_interface_node(g_doc->dom_document.element), sel, false);
-    JS_FreeCString(ctx, sel);
-    return r;
-}
-
-static JSValue js_doc_query_selector_all(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    (void)magic;
-    const char *sel;
-    JSValue r;
-    (void)this_val;
-    DCHECK(g_doc != NULL, "querySelectorAll ran before the document was installed");
-    if (argc < 1) return JS_NewArray(ctx);
-    sel = JS_ToCString(ctx, argv[0]);
-    if (!sel) return JS_EXCEPTION;
-    r = qs_run(ctx, lxb_dom_interface_node(g_doc->dom_document.element), sel, true);
-    JS_FreeCString(ctx, sel);
-    return r;
-}
-
 /* 4.5 getElementsByTagName. A pure Lexbor walk, no page code — and the one method testharness.js needs before it
    can decide its own timeout, which is why every WPT document stopped at it.
    IT RETURNS A STATIC ARRAY, not a live HTMLCollection. The spec's collection re-walks the tree on every read,
@@ -439,8 +409,6 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
 {
     idl_install_method(ctx, proto, "getElementById", 1,
                        idl_method_id(ctx, IDL_1STR, 1, js_doc_get_element_by_id, 0));
-    idl_install_method(ctx, proto, "querySelector", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_query_selector, 0));
-    idl_install_method(ctx, proto, "querySelectorAll", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_query_selector_all, 0));
     idl_install_method(ctx, proto, "getElementsByTagName", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_get_elements_by_tag_name, 0));
     idl_install_method(ctx, proto, "createElement", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_element, 0));
     idl_install_method(ctx, proto, "createTextNode", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_text, 0));
