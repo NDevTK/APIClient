@@ -12,6 +12,7 @@
 #include "core/frame/navigator.h"
 #include "core/frame/screen.h"
 #include "core/dom/abort.h"
+#include "core/html/unhandled_rejection.h"
 #include "core/dom/node.h"
 #include "core/dom/element.h"
 #include "core/idl_args.h"
@@ -401,6 +402,14 @@ static const char *HTML =
     "fetch('/api/cename?v=' + cename);"
     /* …and the same throw UNCAUGHT, at a chunk's top level, where a page error is what it becomes. */
     "loadScript('/chunk/cethrow.js');"
+    /* HTML §8.1.7.5 — the two claims that make the two lists necessary, and neither can be proved by the other.
+       (1) A rejection nobody ever handles IS a page error: an async bundle delivers most of its errors this way
+       and every one of them used to be silent. (2) A handler attached in a LATER microtask is ordinary correct
+       code, so that rejection must never be reported — which only an ABSENCE can prove. */
+    "Promise.reject('rejNOHANDLER');"
+    "var prs = Promise.reject('rejSYNC'); prs.catch(function(){});"
+    "var prh = Promise.reject('rejHANDLED');"
+    "Promise.resolve().then(function(){ prh.catch(function(){}); });"
     "fetch('/api/ceget?v=' + (customElements.get('x-panel') === XPanel"
     " && customElements.get('x-none') === undefined ? 'isget' : 'wrong'));"
     "if (cfg.admin) { setBodyAttr('data-tt','ttADMIN'); appendChild('kidADMIN'); rx.flag='flagADMIN'; fetch('/api/data?role=admin'); loadScript('/chunk/admin.js'); } else { setBodyAttr('data-tt','ttPUBLIC'); appendChild('kidPUBLIC'); rx.flag='flagPUBLIC'; fetch('/api/data?role=public'); }"   /* admin arm: same endpoint MERGES + a LAZY CHUNK loads. Each arm ALSO writes an attribute, appends a child node, AND assigns the ACCESSOR rx.flag (invokes the setter -> rx._f) -> per-flow DOM + heap-accessor writes across the EXISTING fork. */
@@ -551,6 +560,8 @@ int main(void) {
     /* HTML §8.1.7.2: window's IDL mixes in GlobalEventHandlers AND WindowEventHandlers — `window.onload` is
        how a great deal of real code starts. */
     event_target_install_handlers(ctx, g, EH_GLOBAL | EH_WINDOW);
+    /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
+    unhandled_rejection_init(ctx);
     abort_init(ctx);
     abort_install(ctx, g);
 
@@ -789,6 +800,9 @@ int main(void) {
     if (!strstr(js, "\"44850\"")) nodealgo_tt = 0;
     /* The uncaught DOMException is NAMED in the report, not "an object with no own name/message". */
     if (!strstr(js, "SyntaxError: not a valid custom element name")) nodealgo_tt = 0;
+    /* §8.1.7.5: the rejection nobody handled is reported, and the one handled a microtask later is NOT. */
+    if (!strstr(js, "rejNOHANDLER")) nodealgo_tt = 0;
+    if (strstr(js, "rejHANDLED")) nodealgo_tt = 0;
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)
         if (!strstr(js, NODE_ALGOS[ai][0]) || !strstr(js, NODE_ALGOS[ai][1])) nodealgo_tt = 0;
     int domidl_tt   = domproto_tt && cdnull_tt && tcnull_tt && nodeval_tt && tcset_tt;
@@ -817,6 +831,7 @@ int main(void) {
     solve_free();
     endpoint_free();
 
+    unhandled_rejection_free(ctx);
     abort_free(ctx);
     document_free(ctx);   /* the window reference the lifecycle holds */
     element_free(ctx);    /* the wrapper identity table and the DOM interface prototypes */

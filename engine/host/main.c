@@ -23,6 +23,7 @@
 #include "quickjs.h"
 #include "browser/core/fetch/fetch.h"
 #include "browser/core/dom/abort.h"
+#include "browser/core/html/unhandled_rejection.h"
 #include "browser/core/dom/document.h"
 #include "browser/core/dom/element.h"
 #include "browser/core/idl_args.h"
@@ -121,6 +122,8 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
         fetch_install(g_ctx, g);
         module_loader_install(g_rt);
         location_install(g_ctx, g, origin);
+        /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
+        unhandled_rejection_init(g_ctx);
         abort_init(g_ctx);
         abort_install(g_ctx, g);   /* AbortController/AbortSignal: fetch takes a signal, so a bundle mints one early */
         navigator_install(g_ctx, g);

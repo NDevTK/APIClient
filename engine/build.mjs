@@ -133,11 +133,12 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "dom", "node.c"),                             // Node: identity, the tree, and the CharacterData nodes
     join(HOST, "browser", "core", "dom", "element.c"),
     join(HOST, "browser", "core", "css", "css_style_declaration.c"),           // CSSOM: element.style + getComputedStyle
-    join(HOST, "browser", "core", "html", "html_element.c"),
-    join(HOST, "browser", "core", "html", "html_form.c"),
-    join(HOST, "browser", "core", "html", "custom_elements.c"),                 // §4.13: the registry, upgrade and reactions                       // §4.10: a control's value state + submission                    // HTMLElement + HTML's per-tag interface table
+    join(HOST, "browser", "core", "html", "html_element.c"),                    // HTMLElement + HTML's per-tag interface table
+    join(HOST, "browser", "core", "html", "html_form.c"),                       // §4.10: a control's value state + submission
+    join(HOST, "browser", "core", "html", "custom_elements.c"),                 // §4.13: the registry, upgrade and reactions
+    join(HOST, "browser", "core", "html", "unhandled_rejection.c"),             // §8.1.7.5: rejections nobody handled
     join(HOST, "browser", "core", "events", "event.c"),                         // Event: §2.2, the object a listener receives
-    join(HOST, "browser", "core", "events", "event_target.c"),                  // EventTarget: listeners + the load event                          // Element: node identity, taint-carrying attributes, innerHTML sink
+    join(HOST, "browser", "core", "events", "event_target.c"),                  // EventTarget: listeners + the load event
     // THE ENTRY. `abi` builds the production qjs_* surface the extension bridge drives; the default builds
     // test_forced.c's main() as the node smoke test. They are alternatives, never both: test_forced.c owns
     // main() and runs on load, which a bridge-loaded module must not do.

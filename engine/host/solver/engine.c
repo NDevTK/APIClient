@@ -1,5 +1,6 @@
 /* The dispatch loop — see engine.h. */
 #include "solver/engine.h"
+#include "core/html/unhandled_rejection.h"   /* HTML §8.1.7.5: what the browser half owes this checkpoint */
 #include "solver/result.h"
 #include "solver/solve.h"
 #include "solver/flow.h"
@@ -255,6 +256,26 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
        engine_provide fills every entry that names it), and each then delivers on its OWN timeline: the resolve
        function is shared, but its already_resolved latch and the promise's settlement are per-flow state the
        COW delta captures, which is precisely what lets both arms settle one capability. */
+    /* THE QUEUED JOBS ARE INHERITED FOR THE SAME REASON THE REPLIES ARE, and their absence was the same bug
+       one layer down: a flow that forks with reactions still queued — a `.then` attached before the branch, a
+       custom-element reaction, a listener task — left the sibling with an EMPTY queue, so that arm silently
+       never ran them. Every one of those is a first-class flow in the one BFS, and dropping a work item is the
+       thing the WFQ is forbidden to do; a fork that drops them is the same violation with a different spelling.
+       It surfaced as a rejection reported unhandled in the arm whose `.catch` job never arrived — the report
+       was right about its own world, and its world was missing a job. */
+    if (parent->njob) {
+        sib->jobs = malloc((size_t)parent->njob * sizeof(FlowJob));
+        CHECK(sib->jobs, "engine: OOM inheriting the queued jobs at a fork");
+        for (int i = 0; i < parent->njob; i++) {
+            FlowJob *sj = &parent->jobs[i], *dj = &sib->jobs[i];
+            dj->fn = sj->fn;
+            dj->argc = sj->argc;
+            dj->argv = sj->argc ? malloc((size_t)sj->argc * sizeof(JSValue)) : NULL;
+            CHECK(!sj->argc || dj->argv, "engine: OOM inheriting a queued job's arguments at a fork");
+            for (int a = 0; a < sj->argc; a++) dj->argv[a] = JS_DupValue(ctx, sj->argv[a]);
+        }
+        sib->njob = sib->jobcap = parent->njob;
+    }
     if (parent->npend) {
         sib->pending = malloc((size_t)parent->npend * sizeof(FlowPending));
         CHECK(sib->pending, "engine: OOM inheriting the pending replies at a fork");
@@ -383,7 +404,25 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                 f->dom_stage++;
                 continue;
             }
-            else return 1;   /* all scripts + chunks + microtask jobs + live fetches + load listeners done */
+            else {
+                /* HTML §8.1.7.5 "notify about rejected promises". The flow has nothing left to run, so every
+                   rejection still on its list is one no handler will ever be attached to — the browser half
+                   keeps the lists, this half decides what a rejection MEANS here, which is the same thing a
+                   script that threw means: a capability the page needed. Taking clears the list, so a second
+                   poll of a finished flow reports nothing twice. */
+                JSValue pend = unhandled_rejection_take(ctx);
+                JSValue lv = JS_GetPropertyStr(ctx, pend, "length");
+                uint32_t nrej = 0, ri;
+                JS_ToUint32(ctx, &nrej, lv);
+                JS_FreeValue(ctx, lv);
+                for (ri = 0; ri < nrej; ri++) {
+                    JSValue reason = JS_GetPropertyUint32(ctx, pend, ri);
+                    result_page_error_value(ctx, reason);
+                    JS_FreeValue(ctx, reason);
+                }
+                JS_FreeValue(ctx, pend);
+                return 1;   /* all scripts + chunks + microtask jobs + live fetches + load listeners done */
+            }
             /* NULL ScriptOrModule name: an inline page script's name is the DOCUMENT's URL, which this host does
                not model yet — nothing here has one to give. It is what a relative `import('./chunk.js')` resolves
                against, so the moat's lazy-chunk surface needs the document URL plumbed to this call. */
