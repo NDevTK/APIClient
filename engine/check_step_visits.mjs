@@ -30,12 +30,26 @@
  * start undeclared is letting the ratchet slip. A machine that cannot be forked cannot be explored, and a
  * solver whose flows silently stop forking inside a builtin is the failure this whole series exists to remove.
  * The fork's DCHECK stays as the backstop for a state the build can no longer produce.
- */
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+ *
+ * AND THE HOST, which this checked NONE of. quickjs-step.h opened the declaration surface so a browser component
+ * could declare a machine, and every one it has declared since — the fragment serialiser, isEqualNode,
+ * compareDocumentPosition, normalize, customElements.define, the abort machines — was outside this file, which
+ * read one path and stopped. The bug it exists to catch is not a quickjs.c bug; it is a two-name pairing bug, and
+ * engine/host/browser has the same two names in a second spelling (IdlStepDecl's positional
+ * `{ body, sizeof(State), visit, release }`). A gate that covers the half of the codebase that is not currently
+ * growing is a gate that reports a number rather than holding a line.
+ *
+ * The host is also where a STRONGER check is available, and it is the direct form of the original bug: a host
+ * visit is a small local function that casts `void *st` to its state struct, so the struct it CASTS TO can be
+ * read and required to be the struct its definition declares. `js_iter_zip*_def` attaching JSIterZip's visit to
+ * JSIterZipKeyed's definition would have been caught by that on its own, without needing two definitions to
+ * disagree. */
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const SRC = join(dirname(fileURLToPath(import.meta.url)), 'qjs', 'quickjs.c');
+const ENGINE = dirname(fileURLToPath(import.meta.url));
+const SRC = join(ENGINE, 'qjs', 'quickjs.c');
 const src = readFileSync(SRC, 'utf8');
 
 /* A definition is found by its SHAPE — `{ sizeof(State), step, fini, …` — not by the declaration that holds it.
@@ -97,6 +111,80 @@ for (const [struct, visits] of byStruct)
 for (const [visit, structs] of byVisit)
   if (structs.size > 1) {
     console.error(`[step-visits] ${visit} is attached to definitions over different structs: ` +
+                  `${[...structs].join(', ')} — it reads one struct's fields at another's offsets`);
+    bad++;
+  }
+
+/* ---- THE HOST'S MACHINES ------------------------------------------------------------------------------------
+ * Two spellings, because a component declares one of two things: an IdlStepDecl (a Web IDL member whose
+ * algorithm is a machine — positional `{ body, sizeof(State), visit, release }`) or a raw JSTrampStepDef (a
+ * machine that is not a member, like a custom-element reaction). Both carry the same pairing and both are read. */
+function hostSources(dir) {
+  const out = [];
+  for (const e of readdirSync(dir)) {
+    const p = join(dir, e);
+    if (statSync(p).isDirectory()) out.push(...hostSources(p));
+    else if (e.endsWith('.c')) out.push(p);
+  }
+  return out;
+}
+
+const hostByStruct = new Map();   // state struct -> Set(visit)
+const hostByVisit = new Map();    // visit -> Set(state struct)
+const hostVisitBody = new Map();  // visit -> the struct(s) its body casts void* to
+let hostChecked = 0;
+
+for (const f of hostSources(join(ENGINE, 'host'))) {
+  const text = readFileSync(f, 'utf8');
+  const where = relative(ENGINE, f);
+
+  /* Every visit in this file, and what it actually casts its opaque state to. A visit that names no struct at
+     all owns nothing (the DOM walkers are all of them) and is exempt — there is no offset to get wrong. */
+  for (const m of text.matchAll(/static void (\w+)\(JSContext \*ctx, void \*st, JSStepVisit \*v\)\s*\n\{([\s\S]*?)\n\}/g)) {
+    const casts = new Set();
+    for (const c of m[2].matchAll(/\b([A-Z]\w+)\s*\*\s*\w+\s*=\s*(?:\(\s*\1\s*\*\s*\)\s*)?st\b/g)) casts.add(c[1]);
+    hostVisitBody.set(m[1], casts);
+  }
+
+  const found = [];
+  for (const m of text.matchAll(/IdlStepDecl\s+\w+\s*=\s*\{\s*(\w+)\s*,\s*sizeof\((\w+)\)\s*,\s*(\w+)\s*,/g))
+    found.push({ where, line: text.slice(0, m.index).split('\n').length, struct: m[2], visit: m[3] });
+  for (const m of text.matchAll(/JSTrampStepDef\s+\w+\s*=\s*\{\s*sizeof\((\w+)\)[\s\S]{0,300}?\.visit\s*=\s*(\w+)/g))
+    found.push({ where, line: text.slice(0, m.index).split('\n').length, struct: m[1], visit: m[2] });
+
+  for (const d of found) {
+    if (d.visit === 'NULL') {
+      console.error(`[step-visits] ${d.where}:${d.line}: a ${d.struct} machine declares no ownership — it cannot ` +
+                    `be forked, so a concolic branch inside it aborts the fork instead of exploring both arms`);
+      bad++;
+      continue;
+    }
+    hostChecked++;
+    if (!hostByStruct.has(d.struct)) hostByStruct.set(d.struct, new Set());
+    if (!hostByVisit.has(d.visit)) hostByVisit.set(d.visit, new Set());
+    hostByStruct.get(d.struct).add(d.visit);
+    hostByVisit.get(d.visit).add(d.struct);
+
+    /* THE DIRECT FORM: the visit reads its state at some struct's offsets, and that struct must be the one the
+       definition declares. Getting this wrong compiles cleanly — a visit takes void* — and passes any fixture
+       that does not happen to fork inside that machine. */
+    const casts = hostVisitBody.get(d.visit);
+    if (casts && casts.size && !casts.has(d.struct)) {
+      console.error(`[step-visits] ${d.where}:${d.line}: ${d.visit} reads ${[...casts].join('/')} but is ` +
+                    `declared over ${d.struct} — it would read one struct's fields at another's offsets`);
+      bad++;
+    }
+  }
+}
+
+for (const [struct, visits] of hostByStruct)
+  if (visits.size > 1) {
+    console.error(`[step-visits] host: ${struct} is declared by two different visits: ${[...visits].join(', ')}`);
+    bad++;
+  }
+for (const [visit, structs] of hostByVisit)
+  if (structs.size > 1) {
+    console.error(`[step-visits] host: ${visit} is attached to definitions over different structs: ` +
                   `${[...structs].join(', ')} — it reads one struct's fields at another's offsets`);
     bad++;
   }
@@ -213,4 +301,5 @@ for (const m of src.matchAll(/step_(setprop|defidx)_run\s*\(([\s\S]{0,400}?)\)\s
 }
 
 if (bad) process.exit(1);
-console.log(`[step-visits] ${checked} declarations, each paired with exactly one state struct`);
+console.log(`[step-visits] ${checked} engine + ${hostChecked} host declarations, each paired with exactly one ` +
+            `state struct; ${hostChecked} host visits also checked against the struct they cast to`);
