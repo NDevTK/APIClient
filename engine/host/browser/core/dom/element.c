@@ -125,32 +125,174 @@ static JSValue js_el_get_tag(JSContext *ctx, JSValueConst this_val)
    undefined does not throw — it PROPAGATES. `wrap.innerHTML = head.innerHTML + row` builds the string
    "undefined…" and the page carries on, so the engine reports a surface assembled out of a value the page
    never had, and nothing anywhere names the missing capability.
-   Lexbor owns the serialisation, which is the point: the algorithm is HTML's own (void elements, the raw-text
-   ones, attribute escaping, `<template>`'s content), and hand-rolling it here would be a second HTML
-   serialiser that disagrees with the parser sitting beside it.
+   Lexbor owns the serialisation OF ONE NODE, which is the point: the escaping, the attribute quoting and the
+   raw-text elements are HTML's own rules, and hand-rolling them here would be a second HTML serialiser that
+   disagrees with the parser sitting beside it. What this file owns is the WALK — because the walk is of the
+   PAGE'S SIZE, and `lxb_html_serialize_tree_str` runs it to completion inside one opcode. That is the
+   drive-to-completion this engine has no room for: `document.body.outerHTML` on a real page held the scheduler
+   for the whole document with every other flow parked behind it. So the walk is a machine that emits ONE node
+   per step and yields, and lexbor is asked for that one node.
+   The closing tag is the one piece lexbor does not export (`lxb_html_serialize_element_closed_cb` is static),
+   so it is emitted here from the same qualified name and gated on the same public `lxb_html_node_is_void`.
    magic 0 = innerHTML (the CHILDREN), 1 = outerHTML (the element itself). */
-static JSValue js_el_get_html(JSContext *ctx, JSValueConst this_val, int magic)
-{
-    lxb_dom_element_t *el = elem_of(this_val);
-    lxb_dom_node_t *n;
-    lexbor_str_t str = { 0 };
-    JSValue r;
 
-    if (!el) return JS_UNDEFINED;
-    n = lxb_dom_interface_node(el);
-    if (lexbor_str_init(&str, n->owner_document->text, 64) == NULL)
-        return JS_ThrowOutOfMemory(ctx);
-    if (magic == 0) {
-        lxb_dom_node_t *c;
-        for (c = n->first_child; c; c = c->next)
-            if (lxb_html_serialize_tree_str(c, &str) != LXB_STATUS_OK) break;
-    } else {
-        lxb_html_serialize_tree_str(n, &str);
+/* A LEVEL of the walk: `<template>`'s children live on a SEPARATE tree (its content fragment, whose node has no
+   parent), so serialising one means walking a second tree and coming back. Lexbor recurses for that; this
+   pushes, because a machine's C stack is gone at every suspension. */
+typedef struct { lxb_dom_node_t *node; lxb_dom_node_t *limit; } SerFrame;
+
+typedef struct {
+    lxb_dom_node_t *node;    /* the cursor; NULL once the walk is finished */
+    lxb_dom_node_t *limit;   /* the ascent stops HERE and does not close it — it is not part of the output */
+    /* THIS MACHINE'S OWN CURSOR. `hdr->stage` belongs to the argument machine that hosts this body and is
+       already 1 by the time the body is first entered, so a body reading it never runs its own start. */
+    uint8_t         stage;   /* 0 = the walk has not been set up */
+    uint8_t         phase;   /* 0 = emit `node`, 1 = advance from it */
+    SerFrame       *stack;   /* the template levels above this one */
+    int             sp, scap;
+    char           *out;     /* the accumulator: malloc'd, because a fork gives each arm its own */
+    size_t          out_len, out_cap;
+} ElHtmlState;
+
+static lxb_status_t el_ser_append(const lxb_char_t *data, size_t len, void *vctx)
+{
+    ElHtmlState *s = vctx;
+    if (s->out_len + len + 1 > s->out_cap) {
+        size_t want = s->out_cap ? s->out_cap * 2 : 256;
+        char *n;
+        while (want < s->out_len + len + 1) want *= 2;
+        n = realloc(s->out, want);
+        CHECK(n != NULL, "the HTML serialiser could not grow its accumulator");
+        s->out = n;
+        s->out_cap = want;
     }
-    r = JS_NewStringLen(ctx, (const char *)str.data, str.length);
-    lexbor_str_destroy(&str, n->owner_document->text, false);
-    return r;
+    memcpy(s->out + s->out_len, data, len);
+    s->out_len += len;
+    return LXB_STATUS_OK;
 }
+
+/* `</name>`, which lexbor emits from a static function. Void elements have none, and neither does anything that
+   is not an element — the same two conditions lexbor's own ascent tests. */
+static void el_ser_close(ElHtmlState *s, lxb_dom_node_t *n)
+{
+    const lxb_char_t *name;
+    size_t len = 0;
+    if (n->type != LXB_DOM_NODE_TYPE_ELEMENT || lxb_html_node_is_void(n)) return;
+    name = lxb_dom_element_qualified_name(lxb_dom_interface_element(n), &len);
+    DCHECK(name != NULL, "an element in the tree has no qualified name to close");
+    el_ser_append((const lxb_char_t *)"</", 2, s);
+    el_ser_append(name, len, s);
+    el_ser_append((const lxb_char_t *)">", 1, s);
+}
+
+static void el_ser_push(ElHtmlState *s, lxb_dom_node_t *node, lxb_dom_node_t *limit)
+{
+    if (s->sp == s->scap) {
+        int want = s->scap ? s->scap * 2 : 8;
+        SerFrame *n = realloc(s->stack, sizeof(SerFrame) * (size_t)want);
+        CHECK(n != NULL, "the HTML serialiser could not grow its template stack");
+        s->stack = n;
+        s->scap = want;
+    }
+    s->stack[s->sp].node = node;
+    s->stack[s->sp].limit = limit;
+    s->sp++;
+}
+
+static int js_el_get_html_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                               JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    ElHtmlState *s = st;
+    lxb_dom_element_t *el;
+    lxb_dom_node_t *n;
+
+    (void)argc; (void)argv; (void)cb_result; (void)out_cb; (void)out_argc;
+
+    if (s->stage == 0) {
+        el = elem_of(hdr->this_val);
+        if (!el) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+        n = lxb_dom_interface_node(el);
+        DCHECK(n->local_name != LXB_TAG__DOCUMENT,
+               "the fragment serialiser reached a DOCUMENT — this accessor lives on Element, and a document "
+               "serialises its children with no wrapper of its own");
+        /* magic 0 walks the CHILDREN with the element as the limit, so the element's own tags are not emitted;
+           magic 1 walks the element itself, limited by its parent. One walk, two starting points. */
+        int inner = idl_step_magic(hdr) == 0;
+        s->limit = inner ? n : n->parent;
+        s->node  = inner ? n->first_child : n;
+        s->phase = 0;
+        s->stage = 1;
+    }
+
+    if (!s->node) goto finished;
+
+    if (s->phase == 0) {
+        lxb_status_t status = lxb_html_serialize_cb(s->node, el_ser_append, s);
+        DCHECK(status == LXB_STATUS_OK, "lexbor refused to serialise a node kind this tree contains");
+        (void)status;
+        /* `<template>`'s children are on its content fragment, not under it. Descend there before the template
+           is closed, and come back to the template's ADVANCE when that level runs out. */
+        if (lxb_html_tree_node_is(s->node, LXB_TAG_TEMPLATE)) {
+            lxb_html_template_element_t *t = lxb_html_interface_template(s->node);
+            if (t->content && t->content->node.first_child) {
+                el_ser_push(s, s->node, s->limit);
+                s->limit = &t->content->node;
+                s->node  = t->content->node.first_child;
+                return JS_STEP_YIELD;
+            }
+        }
+        s->phase = 1;
+        return JS_STEP_YIELD;
+    }
+
+    /* ADVANCE. A void element has no children to descend into even when the tree gave it some. */
+    if (!lxb_html_node_is_void(s->node) && s->node->first_child) {
+        s->node = s->node->first_child;
+        s->phase = 0;
+        return JS_STEP_YIELD;
+    }
+    for (;;) {
+        el_ser_close(s, s->node);
+        if (s->node->next) { s->node = s->node->next; s->phase = 0; return JS_STEP_YIELD; }
+        s->node = s->node->parent;
+        if (s->node == s->limit) {
+            if (s->sp == 0) break;                       /* the walk itself is over */
+            s->sp--;                                     /* back to the template that owns this level */
+            s->node  = s->stack[s->sp].node;
+            s->limit = s->stack[s->sp].limit;
+            continue;                                    /* close the <template> and carry on from it */
+        }
+        DCHECK(s->node != NULL, "the serialiser walked off the top of the tree without reaching its limit — the "
+                                "cursor left the subtree the walk started in");
+    }
+finished:
+    *presult = JS_NewStringLen(ctx, s->out ? s->out : "", s->out_len);
+    return JS_STEP_DONE;
+}
+
+static void js_el_get_html_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    ElHtmlState *s = st;
+    /* Both are plain storage a forked arm must not share: the two arms append their own remaining nodes to the
+       accumulator, and each unwinds its own template stack. The DOM pointers inside are per-flow COW nodes,
+       which every arm reaches by the same address. */
+    v->buf(ctx, (void **)&s->out, s->out_cap);
+    v->buf(ctx, (void **)&s->stack, sizeof(SerFrame) * (size_t)s->scap);
+}
+
+static void js_el_get_html_release(JSContext *ctx, void *st)
+{
+    ElHtmlState *s = st;
+    (void)ctx;
+    free(s->out);
+    free(s->stack);
+    s->out = NULL;
+    s->stack = NULL;
+}
+
+static const IdlStepDecl EL_GET_HTML_STEP = {
+    js_el_get_html_step, sizeof(ElHtmlState), js_el_get_html_visit, js_el_get_html_release
+};
 
 /* §13.4 THE FRAGMENT PARSE, as ONE operation, because there are four members that do it and they differ only
    in where the result goes. `context` is the element whose parsing state the fragment is parsed IN — a `<tr>`
@@ -714,10 +856,12 @@ void element_init(JSContext *ctx)
 
     /* `[CEReactions] attribute [LegacyNullToEmptyString] DOMString innerHTML` — the extended attribute is part
        of the TYPE, so `el.innerHTML = null` empties the element instead of parsing the markup `null`. */
-    idl_install_accessor(ctx, proto, "innerHTML", js_el_get_html, 0,
-                         idl_setter_id(ctx, IDL_DOMSTRING, true, js_el_set_html, 0));
-    idl_install_accessor(ctx, proto, "outerHTML", js_el_get_html, 1,
-                         idl_setter_id(ctx, IDL_DOMSTRING, true, js_el_set_html, 1));
+    idl_install_accessor_step(ctx, proto, "innerHTML",
+                              idl_getter_id_step(ctx, &EL_GET_HTML_STEP, 0),
+                              idl_setter_id(ctx, IDL_DOMSTRING, true, js_el_set_html, 0));
+    idl_install_accessor_step(ctx, proto, "outerHTML",
+                              idl_getter_id_step(ctx, &EL_GET_HTML_STEP, 1),
+                              idl_setter_id(ctx, IDL_DOMSTRING, true, js_el_set_html, 1));
     {
         /* §4.9's three adjacent members. The HTML one takes two DOMStrings; the other two take a position and
            a value the IDL leaves alone (a Node, or a DOMString this stringifies into a Text node). */

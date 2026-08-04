@@ -371,6 +371,23 @@ static const char *HTML =
     "pz.innerHTML = '<h1>a</h1>tail';"
     "fetch('/api/heading?v=' + encodeURIComponent(pz.innerHTML)"
     " + '&d=' + encodeURIComponent(document.querySelector('#dh').innerHTML));"
+    /* §4.10 `<template>`'s CHILDREN ARE NOT UNDER IT. They live on its content fragment, whose node has no
+       parent, so the serialiser's walk has to leave the tree it is on and come back — lexbor recurses there,
+       and a machine whose C stack is gone at every suspension has to push instead. Nested, because one level
+       of that push proves nothing about the stack. */
+    "var tp = document.createElement('div');"
+    "tp.innerHTML = '<template><i>x</i><template><b>y</b></template>z</template>after';"
+    "fetch('/api/template?v=' + encodeURIComponent(tp.innerHTML));"
+    /* A WALK THAT SUSPENDS MANY TIMES. One node per step is only correct if the resume comes back to the node
+       it was on: a cursor that restarts duplicates the prefix, one that over-advances drops a node, and either
+       shows up as the wrong bytes. 64 nested elements is 128 steps and the same number of suspensions, and the
+       nesting is what makes an ascent bug visible — a flat list ascends once. */
+    "var dp = document.createElement('div'); var dpc = dp;"
+    "for (var dpi = 0; dpi < 64; dpi++) { var dpn = document.createElement('b'); dpc.appendChild(dpn); dpc = dpn; }"
+    "dpc.appendChild(document.createTextNode('deep'));"
+    "var dps = dp.innerHTML;"
+    "fetch('/api/serdeep?o=' + (dps.split('<b>').length - 1) + '&c=' + (dps.split('</b>').length - 1)"
+    " + '&t=' + (dps.indexOf('deep') > 0 ? 'once' : 'lost'));"
     /* §4.9: a position that is not one of the four is a SyntaxError, and an outside position with no element
        parent is a NoModificationAllowedError. Neither is a quiet no-op. */
     "var iaerr = 'wrong'; try { iac.insertAdjacentHTML('nowhere', 'x'); } catch (e) { iaerr = 'issyn'; }"
@@ -1032,6 +1049,10 @@ int main(void) {
         { "\"/api/outerset\"",   "%3Ch1%3Ereplaced%3C%2Fh1%3E" },
         { "\"/api/adjbad\"",     "issyn"   },
         { "\"/api/heading\"",    "%3Ch1%3Ea%3C%2Fh1%3Etail" },   /* the heading CLOSES; `tail` is its sibling */
+        /* §4.10 the walk LEAVES THE TREE for `<template>`'s content fragment and comes back, twice over. */
+        { "\"/api/template\"",   "%3Ctemplate%3E%3Ci%3Ex%3C%2Fi%3E%3Ctemplate%3E%3Cb%3Ey%3C%2Fb%3E"
+                                 "%3C%2Ftemplate%3Ez%3C%2Ftemplate%3Eafter" },
+        { "\"/api/serdeep\"",    "64" },   /* 64 open tags, 64 close tags, the text exactly once — 128 suspensions */
         { "\"/api/rejevent\"",  "isrej"   },   /* §8.1.7.5's cancelable event reached a page listener */
         { "\"/api/prereq\"",    "isreq"   },   /* a `required` dictionary member, enforced by the declaration */
         { "\"/api/prector\"",   "isctor"  },

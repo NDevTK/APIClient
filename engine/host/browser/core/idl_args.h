@@ -101,6 +101,12 @@ int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
                        const IdlDictMember *members, int nmembers,
                        const IdlStepDecl *decl, int magic);
 
+/* THE MAGIC THIS INVOCATION WAS DECLARED WITH. A plain body takes it as an argument; a step body cannot, because
+   its signature is the step contract and that is shared with every machine in the engine. It is read off the
+   header instead, which is the same place the receiver and the arguments come from — one declaration serving two
+   members (innerHTML and outerHTML are one walk with two starting points) is exactly what a magic is for. */
+int idl_step_magic(const JSStepHdr *hdr);
+
 /* READ a member of the dictionary the declaration built. An `optional D options = {}` argument that the page
    did not pass is not there at all, so a body that reads it with JS_GetPropertyStr calls a property get on
    `undefined` — a pending TypeError, and a truthy JS_EXCEPTION where a `false` belonged. That is a mistake per
@@ -130,6 +136,17 @@ typedef JSValue (*IdlGetter)(JSContext *ctx, JSValueConst this_val, int magic);
 /* Install a declared attribute: `getter` may be NULL for a write-only one, `setter_stepid` -1 for read-only. */
 void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
                           IdlGetter getter, int getter_magic, int setter_stepid);
+
+/* AN ACCESSOR WHOSE GETTER IS A MACHINE. A getter takes no arguments, so it has nothing to CONVERT — and that
+   is why it was a plain C function, which was the wrong conclusion: it may still have work of the PAGE'S size
+   to do. `innerHTML` serialises the whole document, `outerHTML` the same, `childNodes.length` counts every
+   child; none of it can reach the page's code and all of it held the scheduler for as long as the tree was big.
+   A getter declared this way is a function object of exactly the kind the SETTER already is, called the same
+   way by the property machinery, so it can yield at every step of its walk.
+   The plain-C form above is what remains to be converted, not a second way of doing this. */
+int  idl_getter_id_step(JSContext *ctx, const IdlStepDecl *decl, int magic);
+void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *name,
+                               int getter_stepid, int setter_stepid);
 
 /* Install a declared member on `target`. The coercion is a request, so a page's `toString` — loop, await and
    all — suspends and resumes at the exact argument it was on. */

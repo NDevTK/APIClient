@@ -443,8 +443,8 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
           "id; a per-wrapper install mints a definition per object)");
     g_rt = rt;
     idx = g_n++;
-    CHECK(nargs >= 1 && nargs <= IDL_MAX_DECLARED,
-          "a member declared more argument types than IDL_MAX_DECLARED holds");
+    CHECK(nargs >= 0 && nargs <= IDL_MAX_DECLARED,
+          "a member declared more argument types than IDL_MAX_DECLARED holds");   /* 0 = a getter, which takes none */
     g_members[idx].body          = body;
     g_members[idx].setter        = NULL;
     g_members[idx].null_to_empty = false;
@@ -489,6 +489,12 @@ int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
     return id;
 }
 
+int idl_step_magic(const JSStepHdr *hdr)
+{
+    DCHECK(hdr->arg >= 0 && hdr->arg < g_n, "a step body asked for its magic with no pool entry behind it");
+    return g_members[hdr->arg].magic;
+}
+
 int idl_setter_id(JSContext *ctx, IdlArgType type, bool null_to_empty, IdlSetter body, int magic)
 {
     int id = idl_method_id(ctx, &type, 1, NULL, magic);
@@ -497,6 +503,28 @@ int idl_setter_id(JSContext *ctx, IdlArgType type, bool null_to_empty, IdlSetter
     g_members[g_n - 1].setter        = body;
     g_members[g_n - 1].null_to_empty = null_to_empty;
     return id;
+}
+
+int idl_getter_id_step(JSContext *ctx, const IdlStepDecl *decl, int magic)
+{
+    return idl_method_id_step(ctx, NULL, 0, NULL, 0, decl, magic);
+}
+
+void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *name,
+                               int getter_stepid, int setter_stepid)
+{
+    JSAtom a = JS_NewAtom(ctx, name);
+    JSValue g = JS_UNDEFINED, st = JS_UNDEFINED;
+
+    DCHECK(a != JS_ATOM_NULL, "an IDL accessor name could not be interned");
+    DCHECK(getter_stepid >= 0, "idl_install_accessor_step with no getter — a write-only attribute installs "
+                               "through idl_install_accessor, which is the form that takes no getter at all");
+    g = JS_NewCFunction2(ctx, NULL, name, 0, JS_CFUNC_step, getter_stepid);
+    if (setter_stepid >= 0)
+        st = JS_NewCFunction2(ctx, NULL, name, 1, JS_CFUNC_step, setter_stepid);
+    JS_DefinePropertyGetSet(ctx, (JSValue)target, a, g, st,
+                            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+    JS_FreeAtom(ctx, a);
 }
 
 void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
