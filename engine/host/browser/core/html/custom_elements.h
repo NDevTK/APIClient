@@ -12,5 +12,8 @@ void custom_elements_install(JSContext *ctx, JSValueConst global);
 /* §4.13.3 "try to upgrade": called when an element enters the tree. A no-op unless its local name is defined
    and it has not been upgraded already. */
 void custom_elements_try_upgrade(JSContext *ctx, lxb_dom_element_t *el);
+/* §4.13.3's disconnected reaction — the twin of the upgrade, for an element LEAVING a document. A no-op unless
+   the element was upgraded, because only an upgraded element has a lifecycle to react with. */
+void custom_elements_disconnected(JSContext *ctx, lxb_dom_element_t *el);
 
 #endif

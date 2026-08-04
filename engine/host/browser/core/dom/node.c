@@ -141,8 +141,15 @@ static JSValue js_node_remove_child(JSContext *ctx, JSValueConst this_val, int a
 static JSValueConst (*g_element_resolver)(lxb_dom_element_t *el);
 void node_set_element_resolver(JSValueConst (*fn)(lxb_dom_element_t *el)) { g_element_resolver = fn; }
 
-static void (*g_inserted_hook)(JSContext *ctx, lxb_dom_node_t *n);
-void node_set_inserted_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n)) { g_inserted_hook = fn; }
+/* THE TREE HOOK IS INSTALLED INTO THE CHOKEPOINT, not called from each mutation site, and the difference is a
+   bug this file had: `element_on_inserted` was invoked from appendChild and NOWHERE else, so an element that
+   entered the tree by insertBefore, by replaceChild, or by an innerHTML parse was never prepared and never
+   upgraded. Eleven sites mutate the tree; one remembered. The chokepoint is the one place that cannot be
+   forgotten, which is the same argument that put capture there. */
+void node_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, int inserted))
+{
+    dom_cow_set_tree_hook(fn);
+}
 
 static JSValue js_node_append_child(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -153,7 +160,6 @@ static JSValue js_node_append_child(JSContext *ctx, JSValueConst this_val, int a
     if (!child)
         return JS_ThrowTypeError(ctx, "appendChild requires a Node");
     dom_cow_append_child(n, child);
-    if (g_inserted_hook) g_inserted_hook(ctx, child);
     return JS_DupValue(ctx, argv[0]);
 }
 
@@ -260,6 +266,11 @@ static lxb_dom_node_t *node_root(lxb_dom_node_t *n)
 {
     while (n->parent) n = n->parent;
     return n;
+}
+
+bool node_is_connected(const lxb_dom_node_t *n)
+{
+    return n && node_root((lxb_dom_node_t *)n)->type == LXB_DOM_NODE_TYPE_DOCUMENT;
 }
 
 /* §4.2 "inclusive ancestor": walk UP from the descendant, which is O(depth) with no allocation, rather than

@@ -33,7 +33,14 @@ void node_install_interface(JSContext *ctx, JSValueConst global, const char *nam
 JSClassID node_class_id(void);
 /* What to do with a node once it is inserted (a <script> is PREPARED per HTML 4.12.1) — element.c's rule, asked
    for here so the base does not have to know what a script is. */
-void node_set_inserted_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n));
+/* §4.2.3's INSERTION and REMOVING STEPS. Registered by the element component, fired by the DOM-mutation
+   chokepoint itself, so a tree write cannot reach the tree without them — the same structural guarantee the
+   chokepoint already gives time-travel capture. `inserted` is 1 for a node that entered a document and 0 for
+   one that is about to leave it; the callee walks the SUBTREE, because inserting a subtree connects every
+   element in it. */
+void node_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, int inserted));
+/* §4.4 isConnected — is this node's root a document. */
+bool node_is_connected(const lxb_dom_node_t *n);
 /* An ELEMENT's interface is decided by its TAG — HTML's element-interface table, which is the html layer's
    knowledge. It registers the answer here; node_wrap asks it and stays the one place a wrapper is built. */
 void node_set_element_resolver(JSValueConst (*fn)(lxb_dom_element_t *el));

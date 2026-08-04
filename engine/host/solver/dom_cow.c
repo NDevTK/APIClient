@@ -45,6 +45,11 @@ static void dom_seg_unref(DomSeg *s);
 
 void dom_cow_set_ctx(JSContext *ctx) { g_cow_ctx = ctx; }
 
+/* §4.2.3's insertion/removing steps. Fired from the chokepoint so a tree write cannot reach the tree without
+   them: the browser layer registers what they MEAN and this file guarantees they run. */
+static void (*g_tree_hook)(JSContext *ctx, lxb_dom_node_t *n, int inserted);
+void dom_cow_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, int inserted)) { g_tree_hook = fn; }
+
 /* the current taint shadow for (el,name), dup'd (JS_UNDEFINED + *had=0 if none) */
 static JSValue shadow_snapshot(lxb_dom_element_t *el, int slot, const char *name, int *had) {
     int si = attr_shadow_find(el, slot, name);
@@ -119,6 +124,8 @@ void dom_cow_remove_attribute(lxb_dom_element_t *el, const char *name) {
    attribute and insert chokepoints use, so a removal cannot bypass the per-flow delta either. */
 void dom_cow_remove_child(lxb_dom_node_t *node) {
     if (!node) return;
+    /* BEFORE the detach, because "was it connected" has no answer afterwards. */
+    if (g_tree_hook && g_cow_ctx) g_tree_hook(g_cow_ctx, node, 0);
     if (g_dom_capture) {
         DomUndo u; memset(&u, 0, sizeof u);
         u.kind = 2; u.node = node;
@@ -155,6 +162,7 @@ void dom_cow_set_text(lxb_dom_node_t *node, const char *val, size_t val_len) {
 void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
     dom_insert_capture(child);   /* record the insertion FIRST so it reverts per-flow (detached on unapply) */
     lxb_dom_node_insert_child(parent, child);
+    if (g_tree_hook && g_cow_ctx) g_tree_hook(g_cow_ctx, child, 1);   /* AFTER: connectedness is the new tree's */
 }
 /* §4.2.3 "insert before": the same capture, at a POSITION. The insert entry remembers where it landed at
    unapply time rather than at capture time, so this differs from append only in the Lexbor call — which is
@@ -162,6 +170,7 @@ void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
 void dom_cow_insert_before(lxb_dom_node_t *ref, lxb_dom_node_t *child) {
     dom_insert_capture(child);
     lxb_dom_node_insert_before(ref, child);
+    if (g_tree_hook && g_cow_ctx) g_tree_hook(g_cow_ctx, child, 1);
 }
 void dom_revert(void) {   /* DISCARD the running flow's DOM writes -> baseline (reverse order); empties the delta */
     for (int i = g_dom_undo_n - 1; i >= 0; i--) {

@@ -452,15 +452,33 @@ static const JSCFunctionListEntry js_element_readonly[] = {
     JS_CGETSET_DEF("tagName", js_el_get_tag, NULL),
 };
 
-/* HTML 4.12.1: a <script> that has just been inserted is PREPARED. node.c asks for this on every insertion so
-   it does not have to know what a script is. */
-static void element_on_inserted(JSContext *ctx, lxb_dom_node_t *n)
+/* §4.2.3's INSERTION and REMOVING STEPS, over the whole SUBTREE — inserting a subtree connects every element
+   in it, and a page building its UI off-tree and appending the root once is the ordinary case, not a corner.
+   Walking only the inserted node meant a custom element inside a built fragment was never upgraded and its
+   lifecycle code never ran, which is precisely the code this engine exists to reach.
+   Only a CONNECTED node has these steps run for it: §4.13.3 upgrades on entering a document, and a subtree
+   moved between two detached parents has entered nothing. */
+static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, int inserted)
 {
-    if (n && n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
-        element_prepare_script(ctx, lxb_dom_interface_element(n));
-        /* §4.13.3: an element that ENTERS the tree is upgraded if its name is defined — the other half of
-           "learned by execution", beside the <script> preparation right above it. */
-        custom_elements_try_upgrade(ctx, lxb_dom_interface_element(n));
+    lxb_dom_node_t *n = root;
+
+    if (!root || !node_is_connected(root)) return;
+    for (;;) {
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+            lxb_dom_element_t *el = lxb_dom_interface_element(n);
+            if (inserted) {
+                element_prepare_script(ctx, el);   /* HTML 4.12.1: an inserted <script> is PREPARED */
+                /* §4.13.3: an element that ENTERS a document is upgraded if its name is defined — the other
+                   half of "learned by execution", beside the <script> preparation right above it. */
+                custom_elements_try_upgrade(ctx, el);
+            } else {
+                custom_elements_disconnected(ctx, el);
+            }
+        }
+        if (n->first_child) { n = n->first_child; continue; }
+        while (n && !n->next) n = (n == root) ? NULL : n->parent;
+        n = n ? n->next : NULL;
+        if (!n) break;
     }
 }
 
@@ -535,7 +553,7 @@ void element_init(JSContext *ctx)
        now that that interface exists. */
     g_element_proto = proto;
     node_set_proto(ctx, LXB_DOM_NODE_TYPE_ELEMENT, JS_DupValue(ctx, proto));
-    node_set_inserted_hook(element_on_inserted);
+    node_set_tree_hook(element_tree_changed);
     custom_elements_init(ctx);
     cssom_init(ctx);          /* CSSStyleDeclaration.prototype, which HTMLElement's `style` attribute names */
     html_element_init(ctx);   /* the HTML half, which builds HTMLElement and the per-tag interfaces on this */

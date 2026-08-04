@@ -424,6 +424,21 @@ static const char *HTML =
     " var w = await Promise.resolve('ceAWAIT'); fetch('/api/ceasync?n=' + n + '&w=' + w); } }"
     "customElements.define('x-async', XAsync);"
     "document.body.appendChild(document.createElement('x-async'));"
+    /* §4.13.3 THE SUBTREE, and the removal reaction. A page that builds its UI off-tree and appends the ROOT
+       once is the ordinary case, and the insertion steps used to run for the appended node alone — so a custom
+       element inside a built fragment was never upgraded and its lifecycle code never ran. insertBefore did not
+       run them at all. Both are the same one hook now, at the mutation chokepoint. */
+    "class XDeep extends HTMLElement { connectedCallback(){ fetch('/api/cedeep?v=isdeep'); }"
+    " disconnectedCallback(){ fetch('/api/cegone?v=isgone'); } }"
+    "customElements.define('x-deep', XDeep);"
+    "var dwrap = document.createElement('div'); var dinner = document.createElement('span');"
+    "var ddeep = document.createElement('x-deep');"
+    "dwrap.appendChild(dinner); dinner.appendChild(ddeep);"   /* all OFF-TREE: nothing has entered a document */
+    "document.body.appendChild(dwrap);"                       /* one append, and the element two levels down runs */
+    "document.body.removeChild(dwrap);"
+    /* insertBefore is the OTHER tree write, and it never ran the steps at all. */
+    "var dref = document.createElement('i'); document.body.appendChild(dref);"
+    "document.body.insertBefore(document.createElement('x-deep'), dref);"
     /* §4.13.4 get(), and §4.13.1's name rule — a name with no hyphen is a SyntaxError, not a quiet registration. */
     "var cename = 'wrong'; try { customElements.define('nohyphen', XPanel); } catch (e) { cename = 'issyntax'; }"
     "fetch('/api/cename?v=' + cename);"
@@ -841,6 +856,8 @@ int main(void) {
         { "\"/api/cename\"",     "issyntax"},   /* §4.13.1 a name with no hyphen is refused */
         { "\"/api/ceget\"",      "isget"   },
         { "\"/api/ceext\"",      "isext"   },   /* a DOMString dictionary member, read AND coerced as requests */
+        { "\"/api/cedeep\"",     "isdeep"  },   /* the insertion steps walk the SUBTREE, and insertBefore runs them */
+        { "\"/api/cegone\"",     "isgone"  },   /* …and the removing steps run disconnectedCallback */
         { "\"/api/rejevent\"",  "isrej"   },   /* §8.1.7.5's cancelable event reached a page listener */
         { "\"/api/prereq\"",    "isreq"   },   /* a `required` dictionary member, enforced by the declaration */
         { "\"/api/prector\"",   "isctor"  },

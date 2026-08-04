@@ -21,6 +21,12 @@ extern int g_dom_capture;
    dup/free the shadow's opaque JSValues without threading a context through every host-edge/scheduler call. */
 void dom_cow_set_ctx(JSContext *ctx);
 
+/* §4.2.3's INSERTION and REMOVING STEPS, fired BY the chokepoint. The browser layer owns what they mean (a
+   <script> is prepared, a custom element is upgraded, its disconnected reaction is enqueued); this file owns
+   the one place a tree write happens, which is the only place that cannot be forgotten. `inserted` is 1 after
+   a node entered the tree and 0 BEFORE one leaves it, because "was it connected" is only answerable then. */
+void dom_cow_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, int inserted));
+
 /* The DOM-mutation CHOKEPOINT — capture-then-mutate ATOMICALLY, in ONE call. A browser component mutates the
    tree ONLY through these, never through raw lxb_dom_* mutators + a separate capture, so a DOM write cannot
    bypass time-travel capture (the browser engineer's "one place to reason about"). This is the fork-free answer

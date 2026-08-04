@@ -46,7 +46,7 @@
 static JSValue g_defs;
 static int    g_ready;
 static JSAtom g_atom_prototype = JS_ATOM_NULL;
-static JSAtom g_atom_connected = JS_ATOM_NULL;
+static JSAtom g_atom_upgraded = JS_ATOM_NULL;
 static JSAtom g_atom_ctor = JS_ATOM_NULL;
 static JSAtom g_atom_proto = JS_ATOM_NULL;
 static int    g_reaction_stepid = -1;
@@ -76,9 +76,11 @@ static bool ce_name_valid(const char *name, size_t len)
 }
 
 /* ---- the reaction ---------------------------------------------------------------------------------------- */
-/* THE REACTION FLOW: read the callback off the element, and if it is callable, call it with the element as the
-   receiver. Both steps are requests — the read because a class could define connectedCallback as an accessor
-   or sit behind a Proxy, and the call because the body is the page's code. */
+/* THE REACTION FLOW: read the named callback off the element, and if it is callable, call it with the element
+   as the receiver. Both steps are requests — the read because a class could define a callback as an accessor
+   or sit behind a Proxy, and the call because the body is the page's code.
+   ONE machine for every lifetime callback rather than one per name: what differs between connected and
+   disconnected is the NAME, which is data, and the reaction queue carries it as the job's second argument. */
 typedef struct JSCeReaction {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
     uint8_t   stage;
@@ -115,6 +117,7 @@ static int js_ce_reaction_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
     JSCeReaction *s = st;
     JSValueConst el = step_arg(&s->hdr, 0);
     JSValue ignored;
+    JSAtom name;
     int r;
 
     if (s->stage == 0) {
@@ -124,12 +127,15 @@ static int js_ce_reaction_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         if (!JS_IsObject(el)) { JS_FreeValue(ctx, cb_result); return JS_STEP_DONE; }
     }
     if (s->stage == 1) {
-        r = step_getprop_run(ctx, &s->hdr, el, g_atom_connected, cb_result, &s->fn, out_cb, out_argc);
+        name = JS_ValueToAtom(ctx, step_arg(&s->hdr, 1));
+        CHECK(name != JS_ATOM_NULL, "a custom-element reaction was queued with no callback name");
+        r = step_getprop_run(ctx, &s->hdr, el, name, cb_result, &s->fn, out_cb, out_argc);
+        JS_FreeAtom(ctx, name);
         cb_result = JS_UNDEFINED;
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         s->stage = 2;
-        /* §4.13.3: a definition with no connectedCallback simply has no reaction to run. */
+        /* §4.13.3: a definition that does not declare this callback simply has no reaction to run. */
         if (!JS_IsFunction(ctx, s->fn)) return JS_STEP_DONE;
     }
     r = step_call_run(ctx, &s->cphase, s->cb, s->fn, el, 0, NULL, cb_result, &ignored, out_cb, out_argc);
@@ -145,23 +151,61 @@ static const JSTrampStepDef js_ce_reaction_def = {
 /* ---- the upgrade ------------------------------------------------------------------------------------------ */
 /* §4.13.3 "upgrade": give the element the definition's prototype, then enqueue its connected reaction. The
    wrapper is the SAME object it always was, so every identity a page holds survives the upgrade. */
+/* §4.13.3 "enqueue a custom element callback reaction". A JOB, so the callback runs as a call-root flow:
+   preemptible, forkable and parkable like any other program. Calling it here would be a C activation hosting
+   the page's loops, which is the drive-to-completion this engine aborts on. */
+static void ce_enqueue(JSContext *ctx, JSValueConst wrap, const char *callback)
+{
+    JSValueConst argv[2];
+    JSValue name = JS_NewString(ctx, callback);
+
+    DCHECK(JS_IsObject(g_reaction_fn),
+           "a custom-element reaction was enqueued before custom_elements_init built its driver");
+    argv[0] = wrap;
+    argv[1] = name;
+    JS_EnqueueCallJob(ctx, g_reaction_fn, 2, argv);
+    JS_FreeValue(ctx, name);
+}
+
 static void ce_upgrade(JSContext *ctx, lxb_dom_element_t *el, JSValueConst def)
 {
     JSValue wrap = node_wrap(ctx, lxb_dom_interface_node(el));
     JSValue proto;
-    JSValueConst argv[1];
 
     if (!JS_IsObject(wrap)) { JS_FreeValue(ctx, wrap); return; }
     proto = JS_GetProperty(ctx, def, g_atom_proto);
     JS_SetPrototype(ctx, wrap, proto);
     JS_FreeValue(ctx, proto);
-    DCHECK(JS_IsObject(g_reaction_fn),
-           "a custom element upgraded before custom_elements_init built its reaction driver");
-    /* A JOB, so the callback runs as a call-root flow: preemptible, forkable and parkable like any other
-       program. Calling it here would be a C activation hosting the page's loops, which is the
-       drive-to-completion this engine aborts on. */
-    argv[0] = wrap;
-    JS_EnqueueCallJob(ctx, g_reaction_fn, 1, argv);
+    /* §4.13: an element is upgraded ONCE. The mark rides the WRAPPER, so it is per-flow like everything else
+       about that element — and it is what tells a re-insertion (which must fire connectedCallback again) from
+       a second upgrade (which must not). */
+    JS_DefinePropertyValue(ctx, (JSValue)wrap, g_atom_upgraded, JS_NewBool(ctx, true), 0);
+    ce_enqueue(ctx, wrap, "connectedCallback");
+    JS_FreeValue(ctx, wrap);
+}
+
+/* Has this element been upgraded — read off its wrapper's own slot, so no prototype lookup and no page code. */
+static bool ce_is_upgraded(JSContext *ctx, JSValueConst wrap)
+{
+    JSValue v;
+    bool up;
+
+    if (!JS_IsObject(wrap)) return false;
+    if (JS_GetOwnSlot(ctx, &v, wrap, g_atom_upgraded) <= 0) return false;
+    up = JS_ToBool(ctx, v);
+    JS_FreeValue(ctx, v);
+    return up;
+}
+
+void custom_elements_disconnected(JSContext *ctx, lxb_dom_element_t *el)
+{
+    JSValue wrap;
+
+    if (!g_ready) return;
+    wrap = node_wrap(ctx, lxb_dom_interface_node(el));
+    /* §4.13.3: only an UPGRADED element has a disconnected reaction. Asking the registry by name instead would
+       fire for an element that was never upgraded — one created before its definition and removed before it. */
+    if (ce_is_upgraded(ctx, wrap)) ce_enqueue(ctx, wrap, "disconnectedCallback");
     JS_FreeValue(ctx, wrap);
 }
 
@@ -175,7 +219,15 @@ void custom_elements_try_upgrade(JSContext *ctx, lxb_dom_element_t *el)
     tag = lxb_dom_element_local_name(el, &len);
     if (!tag || !len) return;
     def = ce_find(ctx, (const char *)tag, len);
-    if (JS_IsObject(def)) ce_upgrade(ctx, el, def);
+    if (JS_IsObject(def)) {
+        JSValue wrap = node_wrap(ctx, lxb_dom_interface_node(el));
+        /* §4.13.3: an element already upgraded is not upgraded again — but it DOES get a connected reaction
+           every time it re-enters a document, which is how a page that moves a node around keeps its
+           lifecycle running. Two different things behind one insertion. */
+        if (ce_is_upgraded(ctx, wrap)) ce_enqueue(ctx, wrap, "connectedCallback");
+        else ce_upgrade(ctx, el, def);
+        JS_FreeValue(ctx, wrap);
+    }
     JS_FreeValue(ctx, def);
 }
 
@@ -292,11 +344,11 @@ void custom_elements_init(JSContext *ctx)
 {
     DCHECK(!g_ready, "custom_elements_init ran twice — one instance is one document");
     g_atom_prototype = JS_NewAtom(ctx, "prototype");
-    g_atom_connected = JS_NewAtom(ctx, "connectedCallback");
+    g_atom_upgraded = JS_NewAtom(ctx, "apiclientUpgraded");
     g_atom_ctor = JS_NewAtom(ctx, "ctor");
     g_atom_proto = JS_NewAtom(ctx, "proto");
-    CHECK(g_atom_prototype != JS_ATOM_NULL && g_atom_connected != JS_ATOM_NULL &&
-          g_atom_ctor != JS_ATOM_NULL && g_atom_proto != JS_ATOM_NULL,
+    CHECK(g_atom_prototype != JS_ATOM_NULL &&
+          g_atom_upgraded != JS_ATOM_NULL && g_atom_ctor != JS_ATOM_NULL && g_atom_proto != JS_ATOM_NULL,
           "a custom-element atom could not be interned");
     /* Built HERE, at init, so it belongs to the pre-boot BASELINE: a write to it during a flow is captured by
        the heap COW. A registry allocated lazily inside a flow would be that flow's private object and every
@@ -337,10 +389,10 @@ void custom_elements_free(JSContext *ctx)
     JS_FreeValue(ctx, g_reaction_fn);
     g_reaction_fn = JS_UNDEFINED;
     JS_FreeAtom(ctx, g_atom_prototype);
-    JS_FreeAtom(ctx, g_atom_connected);
+    JS_FreeAtom(ctx, g_atom_upgraded);
     JS_FreeAtom(ctx, g_atom_ctor);
     JS_FreeAtom(ctx, g_atom_proto);
-    g_atom_prototype = g_atom_connected = JS_ATOM_NULL;
+    g_atom_prototype = g_atom_upgraded = JS_ATOM_NULL;
     g_atom_ctor = g_atom_proto = JS_ATOM_NULL;
     g_reaction_stepid = -1;
     g_ready = 0;
