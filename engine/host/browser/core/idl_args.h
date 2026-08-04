@@ -116,6 +116,27 @@ int idl_step_magic(const JSStepHdr *hdr);
 JSValue idl_dict_get(JSContext *ctx, JSValueConst dict, const char *name);
 bool    idl_dict_bool(JSContext *ctx, JSValueConst dict, const char *name);
 
+/* §4.2.3'S TREE STEPS, DRAINED WHERE THEY CAN YIELD.
+   A DOM mutation's insertion/removing steps are a walk of the whole changed subtree, and they used to run inside
+   the mutation chokepoint — inside a C member body, the deepest place in this engine with no way to suspend. The
+   spec runs them SYNCHRONOUSLY as part of the insertion, so they cannot become a deferred job: a page that
+   appends an element and then calls a method its upgrade installed depends on the ordering. So the DOM layer
+   records what changed and this machine drains the record before the member returns — no page code in between,
+   the spec's ordering intact, and a walk that yields per node.
+   IT IS DRAINED HERE AND NOWHERE ELSE, because this is the one point every declared member converges on. A
+   per-member drain would be per-member plumbing, and every member added afterwards would be a silent gap — the
+   same shape as a dispatch predicate at each call site. A member that mutates the tree WITHOUT being declared
+   leaves a record nobody consumes, which the machine asserts on rather than letting it rot.
+   The DOM layer registers these because this file must not know what a Node is; it knows only that something
+   was recorded and that it takes N steps to consume. */
+typedef struct {
+    void *(*take)(JSContext *ctx);                 /* everything recorded so far, or NULL; leaves none behind */
+    bool  (*step)(JSContext *ctx, void *buf);      /* ONE node; true while more remains */
+    void  (*release)(JSContext *ctx, void *buf);
+    bool  (*recorded)(void);                       /* is anything waiting to be taken */
+} IdlTreeSteps;
+void idl_set_tree_steps(const IdlTreeSteps *ops);
+
 /* Release what the pool interned — the dictionary member atoms. */
 void idl_args_free(JSContext *ctx);
 

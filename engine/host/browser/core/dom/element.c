@@ -733,29 +733,111 @@ static const JSCFunctionListEntry js_element_readonly[] = {
    lifecycle code never ran, which is precisely the code this engine exists to reach.
    Only a CONNECTED node has these steps run for it: §4.13.3 upgrades on entering a document, and a subtree
    moved between two detached parents has entered nothing. */
+/* §4.2.3 THE INSERTION AND REMOVING STEPS — RECORDED HERE, WALKED SOMEWHERE THAT CAN YIELD.
+ *
+ * The steps are a walk of the whole inserted (or removed) subtree, and `container.innerHTML = markup` inserts
+ * every node the parse produced in one go. It ran inside the mutation chokepoint, which is inside a C member
+ * body, which is the deepest place in this engine with no way to suspend — so the hottest walk in the DOM was
+ * also the least interruptible one, and it held the scheduler for as long as the page's markup was large.
+ * IT CANNOT SIMPLY BECOME A DEFERRED JOB. §4.2.3 runs these steps synchronously as part of the insertion, and a
+ * page that appends an element and then calls a method its upgrade installed depends on that. So the walk moves
+ * out of the chokepoint but stays inside the same member call: the chokepoint RECORDS what changed, and the
+ * machine every declared member converges on drains the record before the member returns. No page code runs in
+ * between, so the ordering the spec states is the ordering that happens — the only thing that changed is that
+ * the walk can now yield to another flow, which cannot observe it because a flow's DOM is its own.
+ * THE CONNECTEDNESS TEST STAYS HERE, at record time, and that is load-bearing: a REMOVAL fires the hook BEFORE
+ * the detach, because "was it connected" has no answer afterwards. The record carries the decision the spec
+ * made at mutation time, and the drain never re-derives it.
+ * EVERY PER-NODE EFFECT IS AN ENQUEUE — a script queued as a flow, an endpoint recorded, a custom-element
+ * reaction enqueued — so nothing the drain does reaches back into the chokepoint and no entry can appear while
+ * the walk that would consume it is running. */
+typedef struct {
+    lxb_dom_node_t *root;     /* the subtree the steps run over */
+    lxb_dom_node_t *cursor;   /* how far the walk has got — the resume point */
+    uint8_t         inserted;
+} TreeStepEntry;
+
+/* The buffer a machine takes ownership of. Per-machine and not global, because the drain YIELDS: a global list
+   would be appended to by whichever flow ran during the suspension, and the resuming one would then run another
+   flow's insertion steps over another flow's nodes. */
+typedef struct { TreeStepEntry *e; int n, i; } TreeStepBuf;
+
+static TreeStepEntry *g_ts;
+static int g_ts_n, g_ts_cap;
+
 static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, int inserted)
 {
-    lxb_dom_node_t *n = root;
-
+    (void)ctx;
     if (!root || !node_is_connected(root)) return;
-    for (;;) {
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
-            lxb_dom_element_t *el = lxb_dom_interface_element(n);
-            if (inserted) {
-                element_prepare_script(ctx, el);   /* HTML 4.12.1: an inserted <script> is PREPARED */
-                /* §4.13.3: an element that ENTERS a document is upgraded if its name is defined — the other
-                   half of "learned by execution", beside the <script> preparation right above it. */
-                custom_elements_try_upgrade(ctx, el);
-            } else {
-                custom_elements_disconnected(ctx, el);
-            }
-        }
-        if (n->first_child) { n = n->first_child; continue; }
-        while (n && !n->next) n = (n == root) ? NULL : n->parent;
-        n = n ? n->next : NULL;
-        if (!n) break;
+    if (g_ts_n == g_ts_cap) {
+        int want = g_ts_cap ? g_ts_cap * 2 : 8;
+        TreeStepEntry *a = realloc(g_ts, sizeof(*a) * (size_t)want);
+        CHECK(a != NULL, "the pending tree-steps list could not grow — dropping one means an inserted <script> "
+                         "never runs and a custom element never upgrades, silently");
+        g_ts = a; g_ts_cap = want;
     }
+    g_ts[g_ts_n].root = g_ts[g_ts_n].cursor = root;
+    g_ts[g_ts_n].inserted = (uint8_t)(inserted != 0);
+    g_ts_n++;
 }
+
+/* Hand the running member everything recorded so far, and leave the global empty. Called at every boundary a
+   body can return through, so nothing recorded outlives the member that caused it. */
+static void *element_tree_steps_take(JSContext *ctx)
+{
+    TreeStepBuf *b;
+    (void)ctx;
+    if (!g_ts_n) return NULL;
+    b = malloc(sizeof *b);
+    CHECK(b != NULL, "the tree-steps buffer could not be allocated");
+    b->e = g_ts; b->n = g_ts_n; b->i = 0;
+    g_ts = NULL; g_ts_n = g_ts_cap = 0;
+    return b;
+}
+
+/* ONE NODE. Returns true while there is more to do, which is what makes the caller's loop a yield per node. */
+static bool element_tree_steps_step(JSContext *ctx, void *vb)
+{
+    TreeStepBuf *b = vb;
+    TreeStepEntry *e;
+    lxb_dom_node_t *n;
+
+    DCHECK(b && b->i < b->n, "the tree-steps drain was stepped past its end");
+    e = &b->e[b->i];
+    n = e->cursor;
+    if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+        lxb_dom_element_t *el = lxb_dom_interface_element(n);
+        if (e->inserted) {
+            element_prepare_script(ctx, el);   /* HTML 4.12.1: an inserted <script> is PREPARED */
+            /* §4.13.3: an element that ENTERS a document is upgraded if its name is defined — the other half of
+               "learned by execution", beside the <script> preparation right above it. */
+            custom_elements_try_upgrade(ctx, el);
+        } else {
+            custom_elements_disconnected(ctx, el);
+        }
+    }
+    if (n->first_child) { e->cursor = n->first_child; return true; }
+    while (n && !n->next) n = (n == e->root) ? NULL : n->parent;
+    n = n ? n->next : NULL;
+    e->cursor = n;
+    if (n) return true;
+    return ++b->i < b->n;
+}
+
+static void element_tree_steps_free(JSContext *ctx, void *vb)
+{
+    TreeStepBuf *b = vb;
+    (void)ctx;
+    if (!b) return;
+    free(b->e);
+    free(b);
+}
+
+static bool element_tree_steps_recorded(void) { return g_ts_n != 0; }
+
+static const IdlTreeSteps ELEMENT_TREE_STEPS = {
+    element_tree_steps_take, element_tree_steps_step, element_tree_steps_free, element_tree_steps_recorded
+};
 
 /* §4.9's attribute change steps, fired by the mutation chokepoint for the same reason the tree steps are:
    `setAttribute`, a reflected IDL attribute, a boolean reflection unsetting itself and innerHTML's parse all
@@ -862,6 +944,7 @@ void element_init(JSContext *ctx)
     g_element_proto = proto;
     node_set_proto(ctx, LXB_DOM_NODE_TYPE_ELEMENT, JS_DupValue(ctx, proto));
     node_set_tree_hook(element_tree_changed);
+    idl_set_tree_steps(&ELEMENT_TREE_STEPS);
     dom_cow_set_attr_hook(element_attr_changed);
     custom_elements_init(ctx);
     cssom_init(ctx);          /* CSSStyleDeclaration.prototype, which HTMLElement's `style` attribute names */

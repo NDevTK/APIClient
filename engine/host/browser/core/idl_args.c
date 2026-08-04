@@ -56,6 +56,16 @@ typedef struct {
     JSClassID  iface;       /* the brand an IDL_STRING_UNLESS_IFACE position tests against */
 } IdlMember;
 
+/* The DOM layer's tree-steps edge — see idl_args.h. NULL until the DOM registers it, which is what the
+   platform-less test builds and the pre-DOM boot look like. */
+static const IdlTreeSteps *g_tree;
+
+void idl_set_tree_steps(const IdlTreeSteps *ops)
+{
+    DCHECK(g_tree == NULL || g_tree == ops, "two components registered the tree-steps edge");
+    g_tree = ops;
+}
+
 static IdlMember      g_members[IDL_MAX_MEMBERS];
 static JSTrampStepDef g_defs[IDL_MAX_MEMBERS];   /* not const: `arg` is filled at registration with the index */
 static int            g_n;
@@ -81,6 +91,10 @@ typedef struct {
        so the fixed array is always big enough by IDL_MAX_DECLARED. */
     JSValue   conv;
     JSValue   vstage;   /* the variadic argument being converted, before it joins `conv` */
+    /* §4.2.3's tree steps this member's body caused, taken from the DOM layer so the drain is per-machine: the
+       drain YIELDS, and a shared list would be appended to by whichever flow ran during the suspension. */
+    void     *tree;
+    uint8_t   tree_after_body;   /* 1 = the body is finished; the member ends when the drain does */
 } JSIdlArgsState;
 
 /* WHAT THIS MACHINE OWNS: the coerced arguments so far. A concolic branch inside one page `toString` forks the
@@ -97,6 +111,10 @@ static void js_idl_args_visit(JSContext *ctx, void *st, JSStepVisit *v)
     for (i = 0; i < IDL_MAX_ARGS; i++)
         v->val(ctx, &s->args[i]);
     DCHECK(s->hdr.arg >= 0 && s->hdr.arg < g_n, "an IDL member's visit ran with no pool entry behind it");
+    /* A FORK CANNOT HAPPEN MID-DRAIN, and that is why this buffer needs no clone contract. A fork is a concolic
+       branch, which is bytecode; the drain runs none — every per-node effect is an enqueue. If this ever fires,
+       the drain grew a call into the page and the buffer needs a real ownership declaration. */
+    DCHECK(s->tree == NULL, "an IDL member was forked while draining its tree steps");
     m = &g_members[s->hdr.arg];
     if (m->step && m->step->visit) m->step->visit(ctx, (char *)st + sizeof(JSIdlArgsState), v);
 }
@@ -109,6 +127,36 @@ static void idl_free_vec(JSContext *ctx, JSValue *vec, int n)
     js_free(ctx, vec);
 }
 
+/* A MEMBER THAT MUTATED THE TREE AND THEN THREW. Every mutating member in this engine validates BEFORE it
+   touches the tree — insertBefore's hierarchy check, replaceChild's NotFoundError, insertAdjacentHTML's
+   position — so this cannot happen today, and it is asserted rather than assumed because the two ways out of it
+   are both wrong. Dropping the records diverges from the spec, which ran the steps for whatever was already
+   inserted. Draining them here would have to hold the pending exception live across every yield of the walk.
+   The right answer is the third one: a member that needs to mutate and then throw splits into stages so the
+   drain happens between them, and this names that requirement at the moment it is first needed. */
+#define IDL_TREE_THREW \
+    "a member threw after mutating the tree — its insertion steps have nowhere to run: the spec ran them for " \
+    "whatever was already inserted, and draining them here would hold the exception live across the walk. " \
+    "Split the member so the mutation and the throw are different stages"
+
+/* Take whatever the mutation chokepoints recorded while the body ran. Called at EVERY boundary a body returns
+   through, so a record cannot outlive the member that caused it. */
+static void idl_tree_take(JSContext *ctx, JSIdlArgsState *s)
+{
+    if (!g_tree || s->tree) return;
+    s->tree = g_tree->take(ctx);
+}
+
+/* THE DRAIN, one node per entry. Returns JS_STEP_YIELD while it has work, or 0 when there is none left. */
+static int idl_tree_drain(JSContext *ctx, JSIdlArgsState *s)
+{
+    if (!s->tree) return 0;
+    if (g_tree->step(ctx, s->tree)) return JS_STEP_YIELD;
+    g_tree->release(ctx, s->tree);
+    s->tree = NULL;
+    return 0;
+}
+
 static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSIdlArgsState *s = st;
@@ -119,7 +167,25 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     DCHECK(s->hdr.arg >= 0 && s->hdr.arg < g_n, "an IDL member's step ran with no pool entry behind it");
     m = &g_members[s->hdr.arg];
 
+    /* THE DRAIN COMES FIRST ON EVERY RE-ENTRY, before the conversion loop or the body, because the steps the
+       previous step recorded must finish before anything else this member does. */
+    if (s->tree) {
+        JS_FreeValue(ctx, cb_result);
+        r = idl_tree_drain(ctx, s);
+        if (r) return r;
+        if (s->tree_after_body) return JS_STEP_DONE;
+        cb_result = JS_UNDEFINED;
+    }
+
     if (s->hdr.stage == 0) {
+        /* A RECORD NOBODY OWNS. Every tree mutation happens inside a declared member's body and is drained
+           before that member returns, so anything still waiting here was written by something that is not a
+           declared member — a raw JS_CFUNC_DEF that mutates the tree, which is the one shape this machine
+           cannot reach. Its insertion steps would never run: an inserted <script> would not execute and a
+           custom element would not upgrade, with nothing to show for it. */
+        DCHECK(!g_tree || !g_tree->recorded(),
+               "a DOM mutation recorded tree steps outside any declared member — declare that member so it "
+               "converges on this machine, which is the only thing that drains them");
         /* A NON-VARIADIC member's arguments ARE its declared ones: a position the IDL does not list is not
            part of the member, so there is nothing past `nargs` to convert, to store, or to hand the body. A
            VARIADIC one takes every argument the page passed, however many that is. */
@@ -135,6 +201,8 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         for (r = 0; r < IDL_MAX_ARGS; r++)
             s->args[r] = JS_UNDEFINED;
         s->i = 0;
+        s->tree = NULL;
+        s->tree_after_body = 0;
         s->hdr.stage = 1;
     }
 
@@ -358,9 +426,25 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                           (JSValueConst *)(argv_vec ? argv_vec : s->args),
                           cb_result, &s->result, out_cb, out_argc);
         idl_free_vec(ctx, argv_vec, s->n);
-        if (r > 0) return r;
-        if (r < 0) { s->result = JS_UNDEFINED; return JS_STEP_ABRUPT; }
-        return JS_STEP_DONE;
+        if (r < 0) {
+            s->result = JS_UNDEFINED;
+            DCHECK(!g_tree || !g_tree->recorded(), IDL_TREE_THREW);
+            return JS_STEP_ABRUPT;
+        }
+        /* A REQUEST carries operands in out_cb that only the driver's immediate read can honour, so the drain
+           cannot come first there. No step body both mutates the tree and asks the page for something — and if
+           one ever does, its steps would run AFTER that page code, which is the ordering §4.2.3 forbids. */
+        if (r > 0 && r != JS_STEP_YIELD) {
+            DCHECK(!g_tree || !g_tree->recorded(),
+                   "a step body mutated the tree and then parked on the page's code — the insertion steps would "
+                   "run after that code, which is not the order §4.2.3 states; split the mutation and the "
+                   "request into two stages");
+            return r;
+        }
+        idl_tree_take(ctx, s);
+        s->tree_after_body = (r == 0);
+        if (s->tree) { int d = idl_tree_drain(ctx, s); if (d) return d; }
+        return r ? r : JS_STEP_DONE;
     }
     s->result = m->setter
         ? m->setter(ctx, s->hdr.this_val, s->n > 0 ? s->args[0] : JS_UNDEFINED, m->magic)
@@ -368,8 +452,12 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     idl_free_vec(ctx, argv_vec, s->n);
     if (JS_IsException(s->result)) {
         s->result = JS_UNDEFINED;
+        DCHECK(!g_tree || !g_tree->recorded(), IDL_TREE_THREW);
         return JS_STEP_ABRUPT;
     }
+    idl_tree_take(ctx, s);
+    s->tree_after_body = 1;
+    if (s->tree) { int d = idl_tree_drain(ctx, s); if (d) return d; }
     return JS_STEP_DONE;
 }
 
@@ -385,6 +473,9 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
     /* The step body's state goes FIRST: it may hold values this machine's arguments are the only other
        reference to, and a release that runs after they are freed reads what it no longer owns. */
     if (m->step && m->step->release) m->step->release(ctx, (char *)st + sizeof(JSIdlArgsState));
+    /* An abandoned drain — the member threw, or the flow was dropped mid-walk. The remaining nodes' steps do
+       not run, which is what an abrupt completion means, but the buffer is still this machine's to free. */
+    if (s->tree && g_tree) { g_tree->release(ctx, s->tree); s->tree = NULL; }
 
     if (take_result) s->result = JS_UNDEFINED;
     JS_FreeValue(ctx, s->result);

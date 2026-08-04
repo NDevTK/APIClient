@@ -123,8 +123,8 @@ static JSValue js_node_child_nodes(JSContext *ctx, JSValueConst this_val)
 
 /* §4.2.3 appendChild / removeChild — the per-flow chokepoints, and they return the node the spec returns
    (pages chain on it). Any node kind, which is the whole point of this file. */
-static JSValue js_node_append_child(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-static JSValue js_node_remove_child(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+static JSValue js_node_child_op(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
+static bool node_is_inclusive_ancestor(const lxb_dom_node_t *a, const lxb_dom_node_t *b);
 
 /* A newly inserted <script> is PREPARED (HTML 4.12.1) by the element component, which owns that rule; the base
    asks for it through this hook so node.c does not have to know what a script is. */
@@ -145,29 +145,31 @@ void node_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, int insert
     dom_cow_set_tree_hook(fn);
 }
 
-static JSValue js_node_append_child(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+/* §4.5 appendChild / removeChild. DECLARED members, like every other one — they were raw JS_CFUNC_DEF entries,
+   which is a shape that cannot park at all and, more to the point here, does not pass through the machine every
+   declared member converges on. `Node node` is an interface type, so the IDL converts nothing; the declaration
+   is what puts them on that path. magic 0 = appendChild, 1 = removeChild. */
+static JSValue js_node_child_op(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     lxb_dom_node_t *n = node_of(this_val), *child;
 
     if (!n || argc < 1) return JS_UNDEFINED;
     child = node_of(argv[0]);
     if (!child)
-        return JS_ThrowTypeError(ctx, "appendChild requires a Node");
-    dom_cow_append_child(n, child);
-    return JS_DupValue(ctx, argv[0]);
-}
-
-static JSValue js_node_remove_child(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    lxb_dom_node_t *n = node_of(this_val), *child;
-
-    if (!n || argc < 1) return JS_UNDEFINED;
-    child = node_of(argv[0]);
-    if (!child)
-        return JS_ThrowTypeError(ctx, "removeChild requires a Node");
-    if (child->parent != n)
-        return JS_ThrowDOMException(ctx, "NotFoundError", "the node to remove is not a child of this node");
-    dom_cow_remove_child(child);
+        return JS_ThrowTypeError(ctx, magic ? "removeChild requires a Node" : "appendChild requires a Node");
+    if (magic) {
+        if (child->parent != n)
+            return JS_ThrowDOMException(ctx, "NotFoundError", "the node to remove is not a child of this node");
+        dom_cow_remove_child(child);
+    } else {
+        /* §4.2.3 "pre-insert": the hierarchy check that keeps the tree a tree, which insertBefore already made
+           and this one did not — `a.appendChild(a)` and `child.appendChild(ancestor)` both built a CYCLE, and
+           every walk in this file loops forever on one. */
+        if (node_is_inclusive_ancestor(child, n))
+            return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                        "a node cannot be inserted into its own descendant");
+        dom_cow_append_child(n, child);
+    }
     return JS_DupValue(ctx, argv[0]);
 }
 
@@ -1043,6 +1045,19 @@ static void node_install_walkers(JSContext *ctx, JSValueConst proto)
                        idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &NODE_EQUAL_STEP, 0));
     idl_install_method(ctx, proto, "compareDocumentPosition", 1,
                        idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &NODE_POS_STEP, 0));
+    {
+        /* §4.5's four MUTATING members. `Node node` / `Node? child` are interface types, so there is nothing to
+           coerce — the declaration is not about coercion here, it is about being a declared member at all. */
+        static const IdlArgType TWO_ANY[2] = { IDL_ANY, IDL_ANY };
+        idl_install_method(ctx, proto, "appendChild", 1,
+                           idl_method_id(ctx, ONE_ANY, 1, js_node_child_op, 0));
+        idl_install_method(ctx, proto, "removeChild", 1,
+                           idl_method_id(ctx, ONE_ANY, 1, js_node_child_op, 1));
+        idl_install_method(ctx, proto, "insertBefore", 2,
+                           idl_method_id(ctx, TWO_ANY, 2, js_node_insert, 0));
+        idl_install_method(ctx, proto, "replaceChild", 2,
+                           idl_method_id(ctx, TWO_ANY, 2, js_node_insert, 1));
+    }
     /* `undefined normalize()` — no arguments to convert and still three loops' worth of the page's tree. */
     idl_install_method(ctx, proto, "normalize", 0,
                        idl_method_id_step(ctx, NULL, 0, NULL, 0, &NODE_NORM_STEP, 0));
@@ -1088,10 +1103,6 @@ void node_install_parent_mixin(JSContext *ctx, JSValueConst proto)
 }
 
 static const JSCFunctionListEntry js_node_base[] = {
-    JS_CFUNC_DEF("appendChild", 1, js_node_append_child),
-    JS_CFUNC_DEF("removeChild", 1, js_node_remove_child),
-    JS_CFUNC_MAGIC_DEF("insertBefore", 2, js_node_insert, 0),
-    JS_CFUNC_MAGIC_DEF("replaceChild", 2, js_node_insert, 1),
     JS_CFUNC_MAGIC_DEF("hasChildNodes", 0, js_node_predicates, 0),
     JS_CFUNC_MAGIC_DEF("isSameNode", 1, js_node_predicates, 1),
     JS_CFUNC_MAGIC_DEF("contains", 1, js_node_predicates, 2),

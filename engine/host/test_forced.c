@@ -105,8 +105,8 @@ static JSValue js_get_body_attr(JSContext *ctx, JSValueConst this_val, int argc,
    and attach it through the insert chokepoint, so the appended subtree is per-flow TIME-TRAVEL state (tree
    structure, not just attributes). The mark attribute rides the inserted subtree — reverting the insertion
    removes the whole node, so it needs no separate capture. */
-static JSValue js_append_child(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    (void)this_val;
+static JSValue js_append_child(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic) {
+    (void)this_val; (void)magic;
     if (argc < 1 || !g_body) return JS_UNDEFINED;
     const char *mark = JS_ToCString(ctx, argv[0]);
     if (mark) {
@@ -524,6 +524,26 @@ static const char *HTML =
     /* the scope is the RECEIVER: `pn` has no <body> under it, the document does. */
     " + '&sc=' + (pn.querySelector('body') === null && document.querySelector('body') === document.body"
     " && pn.querySelectorAll('p').length === 1 ? 'scoped' : 'wrong'));"
+    /* §4.2.3 THE INSERTION STEPS, now drained by a machine instead of walked inside the chokepoint.
+       (1) ORDERING IS UNCHANGED, which is the whole constraint: the steps run synchronously as part of the
+       insertion, so an element is UPGRADED by the time appendChild returns and a method its constructor
+       installed is callable on the very next statement. A deferred job would fail this.
+       (2) THE WALK IS OF THE PAGE'S SIZE: 120 custom elements nested 120 deep, inserted by ONE appendChild, is
+       one call whose steps visit every one of them — and a resume that restarts or skips gives a wrong count. */
+    "var upN = 0, upSync = 'notyet';"
+    /* The count is reported by the LAST callback rather than read after the inserts: a connected reaction is
+       ENQUEUED, so nothing has run yet when appendChild returns. If the walk skips or repeats a node the count
+       never reaches 121 and this endpoint is simply never fetched, which is what the oracle checks. */
+    "customElements.define('up-x', class extends HTMLElement {"
+      "connectedCallback() { upN++; if (upN === 121) fetch('/api/insertsteps?sync=' + upSync + '&deep=' + upN); }"
+      "mark() { return 'up'; } });"
+    "var upHost = document.createElement('div'); document.body.appendChild(upHost);"
+    "var upOne = document.createElement('up-x'); upHost.appendChild(upOne);"
+    "upSync = (typeof upOne.mark === 'function') ? upOne.mark() : 'notyet';"
+    "var upDeep = document.createElement('div'), upCur = upDeep;"
+    "for (var upI = 0; upI < 120; upI++) {"
+      "var upE = document.createElement('up-x'); upCur.appendChild(upE); upCur = upE; }"
+    "document.body.appendChild(upDeep);"
     /* §4.7 DocumentFragment. It was ABSENT in the worst shape a gap takes: a fragment node HAD a wrapper and
        answered nodeType 11, while every member that makes one useful was undefined — nothing threw, the page
        took the branch behind the undefined, and the engine reported that branch's surface. §4.12.3's
@@ -896,7 +916,14 @@ int main(void) {
     JS_SetPropertyStr(ctx, g, "setBodyAttr", JS_NewCFunction(ctx, js_set_body_attr, "setBodyAttr", 2));   /* DOM attr write (per-flow) */
     JS_SetPropertyStr(ctx, g, "getBodyAttr", JS_NewCFunction(ctx, js_get_body_attr, "getBodyAttr", 1));   /* DOM attr read (per-flow) */
     JS_SetPropertyStr(ctx, g, "fetchJson", JS_NewCFunction(ctx, js_fetch_json, "fetchJson", 1));   /* safe GET -> awaited JSON body */
-    JS_SetPropertyStr(ctx, g, "appendChild", JS_NewCFunction(ctx, js_append_child, "appendChild", 1));   /* DOM node insert (per-flow) */
+    {
+        /* A DECLARED member, like every DOM member — this host-edge mutates the tree, and §4.2.3's insertion
+           steps are drained by the machine every declared member converges on. As a raw JS_CFUNC_DEF its steps
+           never ran at all; nothing showed it, because the <span> it appends is neither a script nor a custom
+           element. The engine asserts on exactly this now, which is what caught it. */
+        static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
+        idl_install_method(ctx, g, "appendChild", 1, idl_method_id(ctx, ONE_STR, 1, js_append_child, 0));
+    }
     JS_SetPropertyStr(ctx, g, "lastChildMark", JS_NewCFunction(ctx, js_last_child_mark, "lastChildMark", 0));   /* DOM node read */
     JS_SetPropertyStr(ctx, g, "state", concolic_new(ctx, "{state}", "{state}", JS_UNDEFINED));   /* injected/unknown app state */
     /* the REAL component, not a synthetic edge: a UA/touch gate is where a bundle hides its other endpoints,
@@ -1170,7 +1197,9 @@ int main(void) {
            whichever node they were called on rather than to the global document */
         { "\"/api/parentmixin\"", "scoped" },
         /* §4.7's interface, its two mixins, and §4.12.3's [SameObject] content */
-        { "\"/api/fragment\"",   "content" },   /* §4.2.11's named property getter */
+        { "\"/api/fragment\"",   "content" },
+        /* the upgrade is done by the time appendChild returns, and one insert ran 121 elements' steps */
+        { "\"/api/insertsteps\"", "121" },   /* §4.2.11's named property getter */
         /* the index cache: forwards, backwards, and shifted by a front insertion between two reads */
         { "\"/api/idxcache\"",   "shifted" },
         { "\"/api/adjacent\"",   "%3Ci%3Ebb%3C%2Fi%3E%3Cp%3ET%3Cb%3Eab%3C%2Fb%3E%3Cu%3Ebe%3C%2Fu%3E%3Cq%3E%3C%2Fq%3E%3C%2Fp%3E%3Cs%3Eae%3C%2Fs%3E" },
