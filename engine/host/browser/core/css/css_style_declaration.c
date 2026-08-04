@@ -122,7 +122,12 @@ static lxb_css_rule_declaration_list_t *cssd_parse_block(const char *text, size_
         *pmem = NULL;
         return NULL;
     }
-    list = lxb_css_declaration_list_parse(g_parser, mem, (const lxb_char_t *)text, len);
+    /* The ARENA IS THE PARSER'S, and it is swapped per parse rather than shared: lexbor moved the memory from
+       an argument onto the parser, and a parser-lifetime arena would accumulate every declaration this engine
+       ever parsed — a leak the whole point of one arena per read was to avoid. Set it, parse, take it back. */
+    lxb_css_parser_memory_set(g_parser, mem);
+    list = lxb_css_declaration_list_parse(g_parser, (const lxb_char_t *)text, len);
+    lxb_css_parser_memory_set(g_parser, NULL);
     *pmem = mem;
     return list;
 }
@@ -215,7 +220,14 @@ static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
                   ? lxb_dom_element_local_name(lxb_dom_interface_element(n), &nlen) : NULL;
         if (tag && nlen == 5 && memcmp(tag, "style", 5) == 0 &&
             (text = lxb_dom_node_text_content(n, &tlen)) != NULL) {
-            lxb_css_stylesheet_t *sst = lxb_css_stylesheet_parse(g_parser, text, tlen);
+            lxb_css_memory_t *smem = lxb_css_memory_create();
+            lxb_css_stylesheet_t *sst = NULL;
+            if (smem && lxb_css_memory_init(smem, 128) == LXB_STATUS_OK) {
+                sst = lxb_css_stylesheet_create(smem);
+                lxb_css_parser_memory_set(g_parser, smem);
+                if (sst && lxb_css_stylesheet_parse(sst, g_parser, text, tlen) != LXB_STATUS_OK) sst = NULL;
+                lxb_css_parser_memory_set(g_parser, NULL);
+            }
             if (sst && sst->root && sst->root->type == LXB_CSS_RULE_LIST) {
                 lxb_css_rule_t *r;
                 for (r = lxb_css_rule_list(sst->root)->first; r; r = r->next) {
@@ -247,7 +259,8 @@ static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
                     }
                 }
             }
-            if (sst) lxb_css_stylesheet_destroy(sst, true);
+            if (sst) lxb_css_stylesheet_destroy(sst, true);   /* takes its arena with it */
+            else if (smem) lxb_css_memory_destroy(smem, true);
             lxb_dom_document_destroy_text(n->owner_document, text);
         }
         /* A pre-order walk over the flow's own tree, with an explicit cursor — the same reason every walk in

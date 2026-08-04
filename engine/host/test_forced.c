@@ -177,7 +177,7 @@ static const char *HTML =
     /* Author CSS whose SPECIFICITY and DOCUMENT ORDER disagree: the id rule is written FIRST and must still
        win. Order-only cascading answers `none` here, and every page puts its general rules last. */
     "<style>#cs1 { display: block; color: rgb(1, 2, 3) } div { display: none }</style>"
-    "</head><body><div id=cs1 style=\"margin-top: 4px\"></div>"
+    "</head><body><div id=cs1 style=\"margin-top: 4px\"></div><h1 id=dh>doch</h1>"
     "<script>var cfg = { admin: state.admin };"
     "var delObj = { k: 'keepVAL' };"   /* a shared BASELINE object; a forked flow will DELETE its k -> must revert per-flow */
     "var rx = { _f: 'base' };"   /* a reactive-framework style object: `flag` is an ACCESSOR backed by _f (Vue does exactly this) */
@@ -327,6 +327,46 @@ static const char *HTML =
     "sz.innerHTML = '<p class=\\'q\\'>hi<br></p>';"
     "fetch('/api/serialize?in=' + encodeURIComponent(sz.innerHTML)"
     " + '&out=' + encodeURIComponent(sz.outerHTML));"
+    /* §4.9 THE OTHER HTML-CONTEXT SINKS. insertAdjacentHTML and outerHTML= parse markup exactly as innerHTML
+       does and were absent entirely — so a bundle using them had its DOM unbuilt AND its XSS invisible, which
+       is the pair this engine exists to report. The four positions are one algorithm; what differs is where
+       the fragment lands and, for the outside two, that it is parsed in the PARENT's context. */
+    "var ia = document.createElement('div'); document.body.appendChild(ia);"
+    "var iac = document.createElement('p'); ia.appendChild(iac);"
+    "iac.insertAdjacentHTML('beforebegin', '<i>bb</i>');"
+    "iac.insertAdjacentHTML('afterbegin', '<b>ab</b>');"
+    "iac.insertAdjacentHTML('beforeend', '<u>be</u>');"
+    "iac.insertAdjacentHTML('afterend', '<s>ae</s>');"
+    "iac.insertAdjacentText('afterbegin', 'T');"
+    "iac.insertAdjacentElement('beforeend', document.createElement('q'));"
+    "fetch('/api/adjacent?v=' + encodeURIComponent(ia.innerHTML));"
+    /* §13.4: the CONTEXT decides what survives. A `<td>` parsed against a `<tr>` is kept; the same markup
+       parsed against a `<div>` is dropped by the tree builder, which is why the context is not a caller's
+       choice. Only the row's own innerHTML can show it. */
+    "var tb = document.createElement('table'); var tr = document.createElement('tr');"
+    "tb.appendChild(tr); document.body.appendChild(tb);"
+    "tr.insertAdjacentHTML('beforeend', '<td>cell</td>');"
+    "fetch('/api/fragctx?v=' + encodeURIComponent(tr.innerHTML));"
+    /* outerHTML= REPLACES the element in its parent, so the old one is gone and the new markup is in its place. */
+    "var oh = document.createElement('div'); document.body.appendChild(oh);"
+    "var ohk = document.createElement('span'); ohk.setAttribute('id','goneid'); oh.appendChild(ohk);"
+    "ohk.outerHTML = '<h1>replaced</h1>';"
+    "fetch('/api/outerset?v=' + encodeURIComponent(oh.innerHTML));"
+    /* §13.2 A HEADING END TAG, which lexbor v2.4.0 mis-tokenised in FRAGMENT parsing only: `</h1>` lost its
+       digit to a bogus comment and never closed the heading, so everything after it was nested INSIDE it. The
+       document parse was clean, which is why nothing caught it until innerHTML could be READ. Both halves are
+       asserted, because the version pin is what makes them true. */
+    "var pz = document.createElement('div');"
+    "pz.innerHTML = '<h1>a</h1>tail';"
+    "fetch('/api/heading?v=' + encodeURIComponent(pz.innerHTML)"
+    " + '&d=' + encodeURIComponent(document.querySelector('#dh').innerHTML));"
+    /* §4.9: a position that is not one of the four is a SyntaxError, and an outside position with no element
+       parent is a NoModificationAllowedError. Neither is a quiet no-op. */
+    "var iaerr = 'wrong'; try { iac.insertAdjacentHTML('nowhere', 'x'); } catch (e) { iaerr = 'issyn'; }"
+    "fetch('/api/adjbad?v=' + iaerr);"
+    /* THE SINK HALF. Attacker input reaching insertAdjacentHTML is the same HTML-context breakout innerHTML
+       reports — a sink that was invisible because the member did not exist. */
+    "document.createElement('div').insertAdjacentHTML('beforeend', '<div>' + state.html2 + '</div>');"
     /* §4.2.7/§4.2.8 the ChildNode and ParentNode mixins. A bundle that builds its UI with append() and tears it
        down with remove() had NONE of it — the page's own call threw and every fetch behind that render never
        happened. A STRING argument becomes a Text node, which is the whole reason they take (Node or DOMString). */
@@ -932,6 +972,11 @@ int main(void) {
         { "\"/api/mixin\"",      "%3Cli%3E%3C%2Fli%3E%3Chr%3E%3Cli%3E%3C%2Fli%3E%3Cem%3E%3C%2Fem%3Etail" },
         { "\"/api/mixin2\"",     "%3Chr%3E%3Cli%3E%3C%2Fli%3E%3Cb%3E%3C%2Fb%3Etail" },
         { "\"/api/mixin3\"",     "%3Cspan%3E%3C%2Fspan%3E" },
+        { "\"/api/adjacent\"",   "%3Ci%3Ebb%3C%2Fi%3E%3Cp%3ET%3Cb%3Eab%3C%2Fb%3E%3Cu%3Ebe%3C%2Fu%3E%3Cq%3E%3C%2Fq%3E%3C%2Fp%3E%3Cs%3Eae%3C%2Fs%3E" },
+        { "\"/api/fragctx\"",    "%3Ctd%3Ecell%3C%2Ftd%3E" },   /* §13.4: parsed in the ROW's context */
+        { "\"/api/outerset\"",   "%3Ch1%3Ereplaced%3C%2Fh1%3E" },
+        { "\"/api/adjbad\"",     "issyn"   },
+        { "\"/api/heading\"",    "%3Ch1%3Ea%3C%2Fh1%3Etail" },   /* the heading CLOSES; `tail` is its sibling */
         { "\"/api/rejevent\"",  "isrej"   },   /* §8.1.7.5's cancelable event reached a page listener */
         { "\"/api/prereq\"",    "isreq"   },   /* a `required` dictionary member, enforced by the declaration */
         { "\"/api/prector\"",   "isctor"  },

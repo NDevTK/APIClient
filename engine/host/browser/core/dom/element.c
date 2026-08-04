@@ -150,67 +150,179 @@ static JSValue js_el_get_html(JSContext *ctx, JSValueConst this_val, int magic)
     return r;
 }
 
-/* innerHTML= is TWO things and it must do both.
-   It is an HTML-CONTEXT SINK, so the assigned value goes to the solver, which decides the breakout against the
-   real parse context. And it REPLACES this element's children with the parsed markup — a page that builds its
-   DOM this way and then queries it must find what it built, or every getElementById after it answers null and
-   the engine reports a surface the page never had. Reporting the sink and dropping the markup was the second
-   half missing.
-   Both halves go through the per-flow chokepoints: the old children are removed with a capture so they come
-   back on a context switch, and each parsed node is inserted with one, so two forked arms each see their own
-   subtree. A concolic value has no bytes to parse — the sink report IS the answer for it. */
-static JSValue js_el_set_inner_html(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+/* §13.4 THE FRAGMENT PARSE, as ONE operation, because there are four members that do it and they differ only
+   in where the result goes. `context` is the element whose parsing state the fragment is parsed IN — a `<tr>`
+   is dropped anywhere but inside a table, and that is the tree builder's rule, not something a caller chooses.
+   The parsed nodes are handed to `place`, which inserts each through the per-flow chokepoints.
+   LEXBOR MUST NOT RUN PAGE CODE. That is what lets a parser — a state machine with a great deal of internal
+   position — live inside an engine whose flows suspend and resume at any depth: the parse holds no continuation
+   across anything the page can preempt, so it never has to be suspended and never has to be part of a snapshot.
+   It completes inside one opcode over bytes, and any <script> it produces is QUEUED as a flow by
+   element_prepare_script rather than executed by the tree builder.
+   Re-entry is what a violation would look like: page code running mid-parse and reaching one of these again.
+   Asserted rather than assumed, because the day it stops holding is the day a half-built tree ends up inside
+   another flow's delta. */
+enum { PLACE_CHILDREN = 0, PLACE_BEFORE, PLACE_AFTER, PLACE_FIRST_CHILD, PLACE_REPLACE };
+
+static void fragment_place(JSContext *ctx, lxb_dom_element_t *context, lxb_dom_node_t *anchor, int where,
+                           const char *html)
+{
+    lxb_html_document_t *doc;
+    lxb_dom_node_t *frag, *node, *next, *ref;
+    static int in_parse;
+
+    (void)ctx;
+    doc = lxb_html_interface_document(lxb_dom_interface_node(context)->owner_document);
+    DCHECK(!in_parse, "a fragment parse re-entered itself — Lexbor ran page code mid-parse, and a parser that "
+                      "holds a continuation across the page cannot live in a suspending engine: give it the "
+                      "flow treatment or keep the script out of the tree builder");
+    in_parse = 1;
+    frag = lxb_html_document_parse_fragment(doc, context, (const lxb_char_t *)html, strlen(html));
+    in_parse = 0;
+    if (!frag) return;
+    /* The reference child is fixed BEFORE anything moves: inserting changes `anchor->next`. */
+    ref = (where == PLACE_AFTER) ? anchor->next
+        : (where == PLACE_FIRST_CHILD) ? anchor->first_child
+        : anchor;
+    for (node = frag->first_child; node; node = next) {
+        next = node->next;
+        lxb_dom_node_remove(node);   /* out of the fragment, which nothing else observes */
+        switch (where) {
+        case PLACE_CHILDREN:    dom_cow_append_child(anchor, node); break;
+        case PLACE_BEFORE:
+        case PLACE_REPLACE:     dom_cow_insert_before(anchor, node); break;
+        case PLACE_AFTER:       if (ref) dom_cow_insert_before(ref, node);
+                                else dom_cow_append_child(anchor->parent, node);
+                                break;
+        case PLACE_FIRST_CHILD: if (ref) dom_cow_insert_before(ref, node);
+                                else dom_cow_append_child(anchor, node);
+                                break;
+        default: DFAIL("a fragment was placed with an unknown position"); break;
+        }
+    }
+    lxb_dom_node_destroy(frag);
+    if (where == PLACE_REPLACE) dom_cow_remove_child(anchor);
+}
+
+/* An HTML-context sink is TWO things and it must do both.
+   It is a SINK, so the assigned value goes to the solver, which decides the breakout against the real parse
+   context. And it MUTATES THE TREE — a page that builds its DOM this way and then queries it must find what it
+   built, or every getElementById after it answers null and the engine reports a surface the page never had.
+   Reporting the sink and dropping the markup was the second half missing.
+   Both halves go through the per-flow chokepoints, so two forked arms each see their own subtree. A concolic
+   value has no bytes to parse — the sink report IS the answer for it.
+   magic 0 = innerHTML=, 1 = outerHTML=. */
+static JSValue js_el_set_html(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     lxb_dom_element_t *el = elem_of(this_val);
+    lxb_dom_node_t *n, *node, *next;
     const char *html;
-    lxb_dom_node_t *node, *next;
 
-    (void)magic;
     if (!el) return JS_UNDEFINED;
+    n = lxb_dom_interface_node(el);
+    /* §4.9: an element with no parent cannot be replaced — there is nothing to replace it IN. */
+    if (magic == 1 && (!n->parent || n->parent->type != LXB_DOM_NODE_TYPE_ELEMENT))
+        return JS_ThrowDOMException(ctx, "NoModificationAllowedError",
+                                    "outerHTML on an element with no element parent");
     solve_html_sink(ctx, val);
     if (concolic_is(val))
         return JS_UNDEFINED;   /* nothing concrete to parse; the sink is what this write means */
 
-    DCHECK(JS_IsString(val), "innerHTML= reached the body unconverted — the IDL declaration is what converts "
+    DCHECK(JS_IsString(val), "an HTML sink reached the body unconverted — the IDL declaration is what converts "
                              "it, and running the page's toString from here is the drive-to-completion the flow "
                              "machinery exists to avoid");
     html = JS_ToCString(ctx, val);
     if (!html) return JS_EXCEPTION;
-
-    for (node = lxb_dom_interface_node(el)->first_child; node; node = next) {
-        next = node->next;
-        dom_cow_remove_child(node);
-    }
-    {
-        lxb_html_document_t *doc = lxb_html_interface_document(lxb_dom_interface_node(el)->owner_document);
-        lxb_dom_node_t *frag;
-        /* LEXBOR MUST NOT RUN PAGE CODE. That is what lets a parser — a state machine with a great deal of
-           internal position — live inside an engine whose flows suspend and resume at any depth: the parse holds
-           no continuation across anything the page can preempt, so it never has to be suspended and never has to
-           be part of a snapshot. It completes inside one opcode over bytes, and any <script> it produces is
-           QUEUED as a flow by element_prepare_script rather than executed by the tree builder.
-           Re-entry is what a violation would look like: page code running mid-parse and reaching innerHTML
-           again. Asserted here rather than assumed, because the day it stops holding is the day a half-built
-           tree ends up inside another flow's delta. */
-        static int in_parse;
-        DCHECK(!in_parse, "a fragment parse re-entered itself — Lexbor ran page code mid-parse, and a parser "
-                          "that holds a continuation across the page cannot live in a suspending engine: give "
-                          "it the flow treatment or keep the script out of the tree builder");
-        in_parse = 1;
-        frag = lxb_html_document_parse_fragment(doc, el,
-                                   (const lxb_char_t *)html, strlen(html));
-        in_parse = 0;
-        if (frag) {
-            for (node = frag->first_child; node; node = next) {
-                next = node->next;
-                lxb_dom_node_remove(node);              /* out of the fragment, which nothing else observes */
-                dom_cow_append_child(lxb_dom_interface_node(el), node);   /* into the tree, per flow */
-            }
-            lxb_dom_node_destroy(frag);
+    if (magic == 0) {
+        for (node = n->first_child; node; node = next) {
+            next = node->next;
+            dom_cow_remove_child(node);
         }
+        fragment_place(ctx, el, n, PLACE_CHILDREN, html);
+    } else {
+        /* §4.9: the fragment is parsed in the PARENT's context, because that is where it is going to live. */
+        fragment_place(ctx, lxb_dom_interface_element(n->parent), n, PLACE_REPLACE, html);
     }
     JS_FreeCString(ctx, html);
     return JS_UNDEFINED;
+}
+
+/* §4.9 insertAdjacentHTML / insertAdjacentElement / insertAdjacentText — the SAME four positions, which is why
+   one body reads the position and three members differ only in what they place. insertAdjacentHTML is an
+   HTML-context sink exactly like innerHTML, and it was absent: a bundle using it had its DOM unbuilt AND its
+   XSS invisible, which is the pair this engine exists to report.
+   magic 0 = HTML, 1 = Element, 2 = Text. */
+static JSValue js_el_insert_adjacent(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                     int magic)
+{
+    lxb_dom_element_t *el = elem_of(this_val);
+    lxb_dom_node_t *n;
+    const char *pos;
+    int where;
+    bool outside;
+
+    if (!el || argc < 2) return JS_UNDEFINED;
+    n = lxb_dom_interface_node(el);
+    pos = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
+    if (!pos) return JS_EXCEPTION;
+    /* §4.9: the four positions, ASCII case-insensitively. Anything else is a SyntaxError, not a quiet no-op. */
+    if (!strcasecmp(pos, "beforebegin"))    { where = PLACE_BEFORE;      outside = true;  }
+    else if (!strcasecmp(pos, "afterbegin")) { where = PLACE_FIRST_CHILD; outside = false; }
+    else if (!strcasecmp(pos, "beforeend"))  { where = PLACE_CHILDREN;    outside = false; }
+    else if (!strcasecmp(pos, "afterend"))   { where = PLACE_AFTER;       outside = true;  }
+    else {
+        JS_FreeCString(ctx, pos);
+        return JS_ThrowDOMException(ctx, "SyntaxError", "not one of the four adjacent positions");
+    }
+    JS_FreeCString(ctx, pos);
+    if (outside && (!n->parent || n->parent->type != LXB_DOM_NODE_TYPE_ELEMENT))
+        return JS_ThrowDOMException(ctx, "NoModificationAllowedError",
+                                    "an adjacent position outside an element with no element parent");
+    if (magic == 0) {
+        const char *html;
+        solve_html_sink(ctx, argv[1]);
+        if (concolic_is(argv[1])) return JS_UNDEFINED;
+        DCHECK(JS_IsString(argv[1]), "insertAdjacentHTML reached the body unconverted");
+        html = JS_ToCString(ctx, argv[1]);
+        if (!html) return JS_EXCEPTION;
+        /* Parsed in the context it will LIVE in: the parent for the outside positions, this element for the
+           inside ones. A `<td>` inserted beforeend of a `<tr>` survives; parsed against the wrong context it
+           would be dropped by the tree builder and the page would find nothing it inserted. */
+        fragment_place(ctx, outside ? lxb_dom_interface_element(n->parent) : el, n, where, html);
+        JS_FreeCString(ctx, html);
+        return JS_UNDEFINED;
+    }
+    {
+        lxb_dom_node_t *added, *ref;
+        if (magic == 1) {
+            added = node_of(argv[1]);
+            if (!added) return JS_ThrowTypeError(ctx, "insertAdjacentElement requires an Element");
+        } else {
+            const char *s;
+            size_t slen = 0;
+            lxb_dom_text_t *t;
+            s = JS_ToCStringLen(ctx, &slen, argv[1]);
+            if (!s) return JS_EXCEPTION;
+            t = lxb_dom_document_create_text_node(n->owner_document, (const lxb_char_t *)s, slen);
+            JS_FreeCString(ctx, s);
+            if (!t) return JS_UNDEFINED;
+            added = lxb_dom_interface_node(t);
+        }
+        ref = (where == PLACE_AFTER) ? n->next : (where == PLACE_FIRST_CHILD ? n->first_child : n);
+        switch (where) {
+        case PLACE_BEFORE:      dom_cow_insert_before(n, added); break;
+        case PLACE_CHILDREN:    dom_cow_append_child(n, added); break;
+        case PLACE_AFTER:       if (ref) dom_cow_insert_before(ref, added);
+                                else dom_cow_append_child(n->parent, added);
+                                break;
+        case PLACE_FIRST_CHILD: if (ref) dom_cow_insert_before(ref, added);
+                                else dom_cow_append_child(n, added);
+                                break;
+        default: DFAIL("insertAdjacent ran with an unknown position"); break;
+        }
+        /* §4.9: insertAdjacentElement returns the inserted node; insertAdjacentText returns undefined. */
+        return magic == 1 ? JS_DupValue(ctx, argv[1]) : JS_UNDEFINED;
+    }
 }
 
 /* §4.9 removeAttribute / hasAttribute / toggleAttribute / hasAttributes / getAttributeNames — the rest of the
@@ -600,10 +712,20 @@ void element_init(JSContext *ctx)
     /* `[CEReactions] attribute [LegacyNullToEmptyString] DOMString innerHTML` — the extended attribute is part
        of the TYPE, so `el.innerHTML = null` empties the element instead of parsing the markup `null`. */
     idl_install_accessor(ctx, proto, "innerHTML", js_el_get_html, 0,
-                         idl_setter_id(ctx, IDL_DOMSTRING, true, js_el_set_inner_html, 0));
-    /* `outerHTML` READ-ONLY here: its setter REPLACES the element in its parent, which is §4.9's "replace
-       with" over a parsed fragment — the ChildNode mixin's algorithm, absent until that mixin lands. */
-    idl_install_accessor(ctx, proto, "outerHTML", js_el_get_html, 1, -1);
+                         idl_setter_id(ctx, IDL_DOMSTRING, true, js_el_set_html, 0));
+    idl_install_accessor(ctx, proto, "outerHTML", js_el_get_html, 1,
+                         idl_setter_id(ctx, IDL_DOMSTRING, true, js_el_set_html, 1));
+    {
+        /* §4.9's three adjacent members. The HTML one takes two DOMStrings; the other two take a position and
+           a value the IDL leaves alone (a Node, or a DOMString this stringifies into a Text node). */
+        static const IdlArgType ADJ_ANY[2] = { IDL_DOMSTRING, IDL_ANY };
+        idl_install_method(ctx, proto, "insertAdjacentHTML", 2,
+                           idl_method_id(ctx, IDL_2STR, 2, js_el_insert_adjacent, 0));
+        idl_install_method(ctx, proto, "insertAdjacentElement", 2,
+                           idl_method_id(ctx, ADJ_ANY, 2, js_el_insert_adjacent, 1));
+        idl_install_method(ctx, proto, "insertAdjacentText", 2,
+                           idl_method_id(ctx, IDL_2STR, 2, js_el_insert_adjacent, 2));
+    }
 
     /* The rest of the attribute family. removeAttribute had no implementation at all, which is also why a
        boolean reflection could not unset itself. */
