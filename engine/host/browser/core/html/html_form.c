@@ -24,8 +24,10 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/dom/node.h"
+#include "core/events/event_target.h"
 #include "core/html/html_form.h"
 #include "solver/attr_shadow.h"
 #include "solver/concolic.h"
@@ -239,17 +241,15 @@ static void form_entry_list(JSContext *ctx, lxb_dom_element_t *form, FormBuf *b)
 
 /* §4.10.21.4 "submit": DERIVE the request and record it. form.submit() does NOT fire `submit` and does not
    validate, which is exactly why it needs no machine — nothing on this path reaches the page's code. */
-static JSValue js_form_submit(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+static void form_submit_now(JSContext *ctx, lxb_dom_element_t *form)
 {
-    lxb_dom_element_t *form = form_elem_of(this_val);
     size_t alen = 0, mlen = 0;
     const char *action, *method;
     bool post;
     FormBuf b = { 0 };
     JSValue url;
 
-    (void)argc; (void)argv; (void)magic;
-    if (!form) return JS_UNDEFINED;
+    if (!form) return;
     action = attr_of(form, "action", &alen);
     method = attr_of(form, "method", &mlen);
     post = method && mlen == 4 && (method[0] == 'p' || method[0] == 'P');
@@ -264,8 +264,79 @@ static JSValue js_form_submit(JSContext *ctx, JSValueConst this_val, int argc, J
     endpoint_record(ctx, post ? "POST" : "GET", url);
     JS_FreeValue(ctx, url);
     free(b.s);
+}
+
+/* form.submit() — §4.10.21.4 without the event: it does NOT fire `submit` and does not validate, which is
+   exactly why it needs no machine. Nothing on this path reaches the page's code. */
+static JSValue js_form_submit(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    (void)argc; (void)argv; (void)magic;
+    form_submit_now(ctx, form_elem_of(this_val));
     return JS_UNDEFINED;
 }
+
+/* §4.10.21.4 requestSubmit() — fires a CANCELABLE `submit` event and submits only if nothing cancelled it.
+   That is what makes it a MACHINE where submit() is not: the handlers are the page's code, and their verdict
+   decides whether the request exists at all. A page that wires a submit handler and calls preventDefault is
+   doing its own fetch instead, and recording the form's request anyway would be a finding the page never
+   makes. */
+typedef struct JSReqSubmitState {
+    JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
+    uint8_t   stage;
+    uint8_t   fphase;   /* the fire request's own phase */
+    JSValue   cb[4];    /* the fire request buffer: [this, dispatch, target, event] */
+} JSReqSubmitState;
+
+static void js_reqsubmit_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSReqSubmitState *s = st;
+    int k;
+    for (k = 0; k < 4; k++)
+        v->val(ctx, &s->cb[k]);
+}
+
+static JSValue js_reqsubmit_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSReqSubmitState *s = st;
+    int k;
+    (void)take_result;
+    for (k = 0; k < 4; k++) {
+        JS_FreeValue(ctx, s->cb[k]);
+        s->cb[k] = JS_UNDEFINED;
+    }
+    return JS_UNDEFINED;   /* §4.10.21.4 returns undefined whatever the handlers did */
+}
+
+static int js_reqsubmit_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSReqSubmitState *s = st;
+    bool not_canceled = true;
+    int r;
+
+    if (s->stage == 0) {
+        s->cb[0] = s->cb[1] = s->cb[2] = s->cb[3] = JS_UNDEFINED;
+        s->stage = 1;
+        if (!form_elem_of(s->hdr.this_val)) {
+            JS_FreeValue(ctx, cb_result);
+            return JS_STEP_DONE;
+        }
+    }
+    /* §4.10.21.4 step 4: "fire an event named submit at form, with the cancelable attribute initialized to
+       true" — the ONE §2.9 dispatch, as a REQUEST, so the handlers run as ordinary preemptible page code and
+       this resumes after every one of them has returned. */
+    r = event_target_fire_run(ctx, &s->fphase, s->cb, s->hdr.this_val, "submit",
+                              /*bubbles*/ true, /*cancelable*/ true, cb_result, &not_canceled,
+                              out_cb, out_argc);
+    if (r > 0) return r;
+    if (r < 0) return JS_STEP_ABRUPT;
+    if (not_canceled)
+        form_submit_now(ctx, form_elem_of(s->hdr.this_val));
+    return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef js_reqsubmit_def = {
+    sizeof(JSReqSubmitState), js_reqsubmit_step, js_reqsubmit_fini, 0, .visit = js_reqsubmit_visit
+};
 
 /* §3.1.1 document.forms — every form in the document, in tree order. */
 static JSValue js_doc_forms(JSContext *ctx, JSValueConst this_val, int magic)
@@ -294,6 +365,8 @@ void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst inp
     DCHECK(JS_IsObject(form_proto), "the form members were installed with no HTMLFormElement.prototype");
     idl_install_accessor(ctx, form_proto, "elements", js_form_elements, 0, -1);
     idl_install_method(ctx, form_proto, "submit", 0, idl_method_id(ctx, NONE, 1, js_form_submit, 0));
+    idl_install_method(ctx, form_proto, "requestSubmit", 0,
+                       JS_RegisterStepDef(JS_GetRuntime(ctx), &js_reqsubmit_def));
 
     id = idl_setter_id(ctx, IDL_DOMSTRING, false, js_ctrl_set_value, CTRL_INPUT);
     idl_install_accessor(ctx, input_proto, "value", js_ctrl_get_value, CTRL_INPUT, id);

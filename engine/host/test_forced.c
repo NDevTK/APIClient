@@ -363,6 +363,14 @@ static const char *HTML =
        answers. The state's presence is proved by the submission carrying {state}.q; what this asserts is the
        tree-shaped half, which is concrete. */
     "fetch('/api/formstate?v=' + (fq.elements.length === 3 && document.forms.length >= 1 ? 'isform' : 'wrong'));"
+    /* §4.10.21.4 requestSubmit() fires a CANCELABLE `submit` FIRST, and submits only if nothing cancelled it —
+       a page that cancels is doing its own request instead, so recording the form's would be a finding the page
+       never makes. Only an ABSENCE can prove that half. */
+    "var fr = document.createElement('form'); fr.action = '/api/never'; document.body.appendChild(fr);"
+    "fr.addEventListener('submit', function(e){ e.preventDefault(); }); fr.requestSubmit();"
+    "var fo = document.createElement('form'); fo.action = '/api/didsubmit';"
+    "var foi = document.createElement('input'); foi.name = 'ok'; fo.appendChild(foi);"
+    "document.body.appendChild(fo); foi.value = 'rs'; fo.requestSubmit();"
     "if (cfg.admin) { setBodyAttr('data-tt','ttADMIN'); appendChild('kidADMIN'); rx.flag='flagADMIN'; fetch('/api/data?role=admin'); loadScript('/chunk/admin.js'); } else { setBodyAttr('data-tt','ttPUBLIC'); appendChild('kidPUBLIC'); rx.flag='flagPUBLIC'; fetch('/api/data?role=public'); }"   /* admin arm: same endpoint MERGES + a LAZY CHUNK loads. Each arm ALSO writes an attribute, appends a child node, AND assigns the ACCESSOR rx.flag (invokes the setter -> rx._f) -> per-flow DOM + heap-accessor writes across the EXISTING fork. */
     "fetch('/api/whoami?tt=' + getBodyAttr('data-tt'));"   /* DOM ATTR READ-BACK after the fork: per-flow -> admin flow reads ttADMIN, public flow reads ttPUBLIC */
     "fetch('/api/kid?mark=' + lastChildMark());"   /* DOM NODE READ-BACK: each flow's appended child is its OWN last child -> admin reads kidADMIN, public reads kidPUBLIC (neither's inserted node leaks) */
@@ -737,6 +745,9 @@ int main(void) {
     if (!strstr(js, "\"/api/search\"") || !strstr(js, "{state}.q")) nodealgo_tt = 0;
     if (strstr(js, "\"off\"")) nodealgo_tt = 0;
     if (!strstr(js, "\"agree\"")) nodealgo_tt = 0;
+    /* requestSubmit(): the CANCELLED form's action must never appear, and the uncancelled one's must. */
+    if (strstr(js, "/api/never")) nodealgo_tt = 0;
+    if (!strstr(js, "\"/api/didsubmit\"") || !strstr(js, "\"rs\"")) nodealgo_tt = 0;
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)
         if (!strstr(js, NODE_ALGOS[ai][0]) || !strstr(js, NODE_ALGOS[ai][1])) nodealgo_tt = 0;
     int domidl_tt   = domproto_tt && cdnull_tt && tcnull_tt && nodeval_tt && tcset_tt;
