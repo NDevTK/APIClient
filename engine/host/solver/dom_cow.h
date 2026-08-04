@@ -71,13 +71,15 @@ void dom_cow_set_prop_taint(JSContext *ctx, lxb_dom_element_t *el, const char *n
    the parse itself just built and nothing else has ever seen. Routing those through the capturing chokepoint
    would put the fragment's whole internal structure in the delta; calling Lexbor raw is what the check now
    refuses. So they are chokepoint entries that DECLARE the state is private, and ASSERT it.
-   IT IS A SCOPE AND NOT A PREDICATE. No test on the node itself is sound: an unparented tree is what a detached
-   parse result and a subtree REMOVED from the document both look like, and destroying the second is what frees
-   tree another flow's unapply re-inserts. So the caller DECLARES the tree it just built, that declaration is
-   itself checked against every live removal entry, and the two operations assert against the declared root. */
-void dom_cow_private_begin(lxb_dom_node_t *root);   /* the tree this flow just built and nothing else has seen */
-void dom_cow_take_private(lxb_dom_node_t *node);    /* out of it, on its way to the real tree via the chokepoint */
-void dom_cow_private_end(void);                     /* close the scope and destroy the emptied tree */
+   THE DECLARATION IS A PARAMETER, not a scope. It was a begin/end pair around a global, and that was wrong the
+   moment a MACHINE needed it: a clone of the page's subtree parks in the middle of building the copy, and a
+   scope held in a global is open while another flow runs and opens its own.
+   NO PREDICATE ON THE NODE WOULD DO. An unparented tree is what a detached parse result and a subtree REMOVED
+   from the document both look like, and the second must never be written raw — another flow's baseline still
+   holds it. The declared root is checked against every live removal entry, which is what tells them apart. */
+void dom_cow_take_private(lxb_dom_node_t *root, lxb_dom_node_t *node);   /* out, on its way to the real tree */
+void dom_cow_insert_private(lxb_dom_node_t *root, lxb_dom_node_t *parent, lxb_dom_node_t *child);  /* build it */
+void dom_cow_destroy_private(lxb_dom_node_t *root, bool with_children);  /* and drop it */
 
 /* Lower-level capture primitives the chokepoint is built on (record a mutation BEFORE it happens). Direct use is
    reserved for the mutation ops that compose them (the chokepoint above, and node-insert once it lands). */

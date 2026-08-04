@@ -134,6 +134,12 @@ static JSValue js_el_get_tag(JSContext *ctx, JSValueConst this_val)
    per step and yields, and lexbor is asked for that one node.
    The closing tag is the one piece lexbor does not export (`lxb_html_serialize_element_closed_cb` is static),
    so it is emitted here from the same qualified name and gated on the same public `lxb_html_node_is_void`.
+   ONE DELIBERATE DIVERGENCE FROM LEXBOR, and it is the SPEC that decides it. §13.3 step 2: "If current node is a
+   template element, then let current node instead be the template element's template contents" — the template is
+   REPLACED by its content, so its ordinary children (which `t.appendChild(x)` really does create, since only the
+   parser and `t.content` reach the fragment) are not serialised at all. Lexbor emits the content and THEN
+   descends into first_child, which prints them; this walk comes back from the content straight to the close tag.
+   Asserted by /api/tplboth, whose template has one of each.
    magic 0 = innerHTML (the CHILDREN), 1 = outerHTML (the element itself). */
 
 /* A LEVEL of the walk: `<template>`'s children live on a SEPARATE tree (its content fragment, whose node has no
@@ -325,15 +331,14 @@ static void fragment_place(JSContext *ctx, lxb_dom_element_t *context, lxb_dom_n
     in_parse = 0;
     if (!frag) return;
     /* Everything below moves nodes OUT of what the parse just built, which nothing else has ever seen — see
-       dom_cow.h. The scope is what makes that a declared fact rather than an assumption about `frag`. */
-    dom_cow_private_begin(frag);
+       dom_cow.h. `frag` is the declaration, passed to each operation. */
     /* The reference child is fixed BEFORE anything moves: inserting changes `anchor->next`. */
     ref = (where == PLACE_AFTER) ? anchor->next
         : (where == PLACE_FIRST_CHILD) ? anchor->first_child
         : anchor;
     for (node = frag->first_child; node; node = next) {
         next = node->next;
-        dom_cow_take_private(node);   /* out of the private fragment; the INSERT below is the shared write */
+        dom_cow_take_private(frag, node);   /* out of the private tree; the INSERT below is the shared write */
         switch (where) {
         case PLACE_CHILDREN:    dom_cow_append_child(anchor, node); break;
         case PLACE_BEFORE:
@@ -347,7 +352,7 @@ static void fragment_place(JSContext *ctx, lxb_dom_element_t *context, lxb_dom_n
         default: DFAIL("a fragment was placed with an unknown position"); break;
         }
     }
-    dom_cow_private_end();
+    dom_cow_destroy_private(frag, /*with_children*/ false);
     if (where == PLACE_REPLACE) dom_cow_remove_child(anchor);
 }
 

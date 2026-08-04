@@ -227,6 +227,40 @@ static const char *HTML =
     "dq.setAttribute('k', 'changed');"
     "var deep2 = dp.isEqualNode(dp2);"
     "fetch('/api/deepequal?v=' + (deep1 && !deep2 ? 'isdeep' : 'wrong'));"
+    /* §4.4 cloneNode is a WALK and a COPY, and the oracles only ever compared a clone to its original with
+       isEqualNode — which is itself a walk, so a matched pair of bugs in the two would agree with each other.
+       These assert the copy's own properties instead: shallow takes no children, deep takes the whole subtree,
+       attributes come with it, the copy is DETACHED and is not the original, and mutating the copy leaves the
+       original alone. */
+    "var cw = document.createElement('div'); cw.setAttribute('id', 'cwid');"
+    "cw.innerHTML = '<p class=\"a\">x<b>y</b></p><i>z</i>';"
+    "document.body.appendChild(cw);"
+    "var csh = cw.cloneNode(); var cdp = cw.cloneNode(true);"
+    "cdp.querySelector('b').setAttribute('k', 'v');"
+    "fetch('/api/clone?sh=' + (csh.childNodes.length === 0 && csh.getAttribute('id') === 'cwid' ? 'shallow' : 'wrong')"
+    " + '&dp=' + encodeURIComponent(cdp.innerHTML)"
+    " + '&det=' + (cdp.parentNode === null && cdp !== cw && !cdp.isConnected ? 'detached' : 'wrong')"
+    " + '&orig=' + (cw.querySelector('b').getAttribute('k') === null ? 'untouched' : 'shared'));"
+    /* §4.10 a `<template>`'s children are on its CONTENT fragment, not under it, so a walk that follows
+       first_child copies the template and none of its markup. Whatever this engine does, it should be stated by
+       a test rather than discovered by a page. */
+    "var ct = document.createElement('div');"
+    "ct.innerHTML = '<template><b>tc</b></template>';"
+    "var ctc = ct.cloneNode(true);"
+    "fetch('/api/clonetpl?v=' + encodeURIComponent(ctc.innerHTML));"
+    /* §4.10 a template has TWO child lists and both are real: the parser fills its content fragment, and
+       `t.appendChild(x)` appends to the ELEMENT — only the parser and `t.content` reach the fragment. So a walk
+       over a template must do the content AND then the ordinary children, which is why coming back from the
+       content has to resume between the two. Nested, because one level proves nothing about the stack. */
+    "var tt = document.createElement('div');"
+    "tt.innerHTML = '<template><i>c1</i><template><s>c2</s></template></template>';"
+    "var tte = tt.firstChild;"
+    "tte.appendChild(document.createElement('u'));"
+    "var ttc = tt.cloneNode(true);"
+    "fetch('/api/tplboth?ser=' + encodeURIComponent(tt.innerHTML)"
+    " + '&cl=' + encodeURIComponent(ttc.innerHTML)"
+    " + '&kids=' + tte.childNodes.length + ':' + ttc.firstChild.childNodes.length"
+    " + '&kn=' + (ttc.firstChild.firstChild ? ttc.firstChild.firstChild.nodeName : 'none'));"
     "var host = document.createElement('div');"
     "host.appendChild(document.createTextNode('A')); host.appendChild(document.createTextNode('B'));"
     "host.normalize();"
@@ -1103,7 +1137,12 @@ int main(void) {
         /* §4.10 the walk LEAVES THE TREE for `<template>`'s content fragment and comes back, twice over. */
         { "\"/api/template\"",   "%3Ctemplate%3E%3Ci%3Ex%3C%2Fi%3E%3Ctemplate%3E%3Cb%3Ey%3C%2Fb%3E"
                                  "%3C%2Ftemplate%3Ez%3C%2Ftemplate%3Eafter" },
-        { "\"/api/serdeep\"",    "64" },   /* 64 open tags, 64 close tags, the text exactly once — 128 suspensions */
+        { "\"/api/serdeep\"",    "64" },   /* 64 open, 64 close, the text once — 128 suspensions in one walk */
+        { "\"/api/clone\"",      "untouched" },   /* §4.4: shallow/deep, attributes, detached, original intact */
+        { "\"/api/clonetpl\"",   "%3Ctemplate%3E%3Cb%3Etc%3C%2Fb%3E%3C%2Ftemplate%3E" },
+        /* a template's TWO child lists. The clone copies both — 1 ordinary child in, 1 out, and it is the <u>.
+           The serialisation shows only the content, which is §13.3 replacing the template with its contents. */
+        { "\"/api/tplboth\"",    "1:1" },
         { "\"/api/rejevent\"",  "isrej"   },   /* §8.1.7.5's cancelable event reached a page listener */
         { "\"/api/prereq\"",    "isreq"   },   /* a `required` dictionary member, enforced by the declaration */
         { "\"/api/prector\"",   "isctor"  },

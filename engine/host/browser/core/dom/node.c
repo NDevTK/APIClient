@@ -37,6 +37,7 @@
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
+#include <lexbor/html/html.h>   /* <template>'s content fragment — see the clone walk */
 #include <lexbor/ns/ns.h>
 
 #include "check.h"
@@ -707,24 +708,176 @@ static const IdlStepDecl NODE_NORM_STEP = {
     js_node_normalize, sizeof(NodeNormState), node_norm_visit, NULL
 };
 
-/* §4.4 cloneNode. `optional boolean subtree = false` is a ToBoolean, which is total and runs none of the page's
-   code, so this is not a coercion the IDL machine has to carry. Lexbor owns the copy — a hand-rolled one here
-   would be a second answer to "what is a copy of this node" beside the tree builder's. The clone is NOT
-   inserted, so there is nothing to capture: an uninserted node is flow-private until an insert chokepoint puts
-   it in the shared tree. */
-static JSValue js_node_clone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    lxb_dom_node_t *n = node_of(this_val), *copy;
-    bool deep = argc > 0 && JS_ToBool(ctx, argv[0]);
+/* §4.4 cloneNode — A MACHINE, because a deep clone is a walk of the page's subtree and a COPY of it. Lexbor's
+   `lxb_dom_node_clone(n, true)` runs that walk to completion inside one opcode; it is iterative rather than
+   recursive, so it never blew the C stack, and that is exactly the kind of thing that hides how long it holds
+   the scheduler. `document.body.cloneNode(true)` is one opcode for the whole document.
+   LEXBOR STILL OWNS WHAT A COPY OF ONE NODE IS — `lxb_dom_node_clone(n, false)` is the document's own
+   clone_interface, so attributes, namespaces and per-interface fields are copied by the code the tree builder
+   uses. What moves here is the WALK, node by node, exactly as §8.4's serialiser did.
+   THE COPY IS A PRIVATE TREE. It is built by inserting into itself and it is in no document until the page
+   inserts it, so those inserts are declared private rather than captured — capturing them would put the whole
+   copy in the running flow's delta, when the delta exists to hold shared state the flow touched. */
+/* A LEVEL of the walk — see the `<template>` case below. */
+typedef struct { lxb_dom_node_t *src, *dst, *root, *croot, *cnode; } CloneFrame;
 
-    if (!n) return JS_UNDEFINED;
-    if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT)
-        return JS_ThrowDOMException(ctx, "NotSupportedError", "cloning a Document is not supported");
-    copy = lxb_dom_node_clone(n, deep);
-    CHECK(copy != NULL, "cloneNode: the Lexbor node copy failed — returning nothing would hand the page a null "
-                        "it has no way to distinguish from a node it never asked for");
-    return node_wrap(ctx, copy);
+typedef struct {
+    uint8_t stage;
+    lxb_dom_node_t *src;     /* the cursor in the original */
+    lxb_dom_node_t *root;    /* what bounds the CURRENT level of the walk */
+    lxb_dom_node_t *dst;     /* the copy the next child is inserted into */
+    lxb_dom_node_t *copy;    /* the copy's root — the answer */
+    /* THE PRIVATE-TREE DECLARATION FOR THE CURRENT LEVEL, which is not always `copy`. A `<template>`'s content
+       is a SEPARATE tree — reached through the element's `content` field, not through child links — so once the
+       walk descends into it, the tree being built into is that fragment. It is private for the same reason the
+       copy is: clone_interface made it a moment ago and nothing has ever seen it. */
+    lxb_dom_node_t *croot;
+    lxb_dom_node_t *cnode;   /* the copy of `src` — what its own children get inserted under */
+    CloneFrame *stack;       /* the template levels above this one */
+    int sp, scap;
+} NodeCloneState;
+
+static void node_clone_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    /* The cursors own nothing — every one is a Lexbor node: the originals belong to the document, and the copy
+       belongs to the document's memory pool from the moment clone_interface makes it. The template STACK is
+       plain storage, and a forked arm must not share it: each unwinds its own levels. */
+    NodeCloneState *s = st;
+    v->buf(ctx, (void **)&s->stack, sizeof(CloneFrame) * (size_t)s->scap);
 }
+
+static void node_clone_release(JSContext *ctx, void *st)
+{
+    NodeCloneState *s = st;
+    (void)ctx;
+    free(s->stack);
+    s->stack = NULL;
+}
+
+static void clone_push(NodeCloneState *s)
+{
+    if (s->sp == s->scap) {
+        int want = s->scap ? s->scap * 2 : 4;
+        CloneFrame *n = realloc(s->stack, sizeof(CloneFrame) * (size_t)want);
+        CHECK(n != NULL, "cloneNode could not grow its template stack");
+        s->stack = n;
+        s->scap = want;
+    }
+    s->stack[s->sp].src = s->src;
+    s->stack[s->sp].dst = s->dst;
+    s->stack[s->sp].root = s->root;
+    s->stack[s->sp].croot = s->croot;
+    s->stack[s->sp].cnode = s->cnode;
+    s->sp++;
+}
+
+/* A `<template>`'s content fragment, or NULL for anything else. The children of a template are NOT under it —
+   they hang off a separate fragment — so a walk that follows first_child copies the template and none of its
+   markup, which is exactly what this did before the case was added: `<template><b>tc</b></template>` cloned to
+   `<template></template>` and the page got an empty one with no error anywhere. §4.4 states the contents are
+   cloned too. A shallow clone of a template already HAS its own empty fragment, because lexbor's
+   clone_interface builds the template interface, so both sides have somewhere to go. */
+static lxb_dom_node_t *clone_template_content(lxb_dom_node_t *n)
+{
+    lxb_html_template_element_t *t;
+    if (n->type != LXB_DOM_NODE_TYPE_ELEMENT || !lxb_html_tree_node_is(n, LXB_TAG_TEMPLATE)) return NULL;
+    t = lxb_html_interface_template(n);
+    return t->content ? &t->content->node : NULL;
+}
+
+/* THE THREE STAGES, and why the template case forces three rather than two. A `<template>` can have BOTH: the
+   parser puts markup in its content fragment, and `t.appendChild(x)` appends to the ELEMENT — §4.10 is explicit
+   that only the parser and `t.content` reach the fragment. So a template's copy has two child lists to fill, and
+   coming back from the content walk must resume AFTER the content check and BEFORE the ordinary-children one, or
+   the template descends into its own content again and the walk never ends.
+   The invariant every stage keeps: `src` is the original being handled, `cnode` is its copy, and `dst` is the
+   copy of the node the NEXT child goes under. */
+enum { CLONE_COPY = 1, CLONE_TEMPLATE, CLONE_CHILDREN };
+
+static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NodeCloneState *s = st;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+
+    if (s->stage == 0) {
+        lxb_dom_node_t *n = node_of(hdr->this_val);
+        /* `optional boolean subtree = false` — the declaration converted it, so this is a real boolean. */
+        bool deep = argc > 0 && JS_ToBool(ctx, argv[0]);
+
+        if (!n) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+        if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT) {
+            JS_ThrowDOMException(ctx, "NotSupportedError", "cloning a Document is not supported");
+            return JS_STEP_ABRUPT;
+        }
+        s->copy = lxb_dom_node_clone(n, false);
+        CHECK(s->copy != NULL, "cloneNode: the Lexbor node copy failed — returning nothing would hand the page a "
+                               "null it has no way to distinguish from a node it never asked for");
+        if (!deep) { *presult = node_wrap(ctx, s->copy); return JS_STEP_DONE; }
+        s->root = s->src = n;
+        s->cnode = s->dst = s->croot = s->copy;   /* the root is already copied; the walk starts at its children */
+        s->stage = CLONE_TEMPLATE;
+        return JS_STEP_YIELD;
+    }
+
+    if (s->stage == CLONE_COPY) {
+        /* ONE NODE PER STEP: copy it and hang it under the copy of its parent. */
+        s->cnode = lxb_dom_node_clone(s->src, false);
+        CHECK(s->cnode != NULL, "cloneNode: a descendant's Lexbor copy failed — the page would get a subtree "
+                                "with a hole in it and no way to tell");
+        dom_cow_insert_private(s->croot, s->dst, s->cnode);
+        s->stage = CLONE_TEMPLATE;
+        return JS_STEP_YIELD;
+    }
+
+    if (s->stage == CLONE_TEMPLATE) {
+        lxb_dom_node_t *content = clone_template_content(s->src);
+        s->stage = CLONE_CHILDREN;
+        if (content && content->first_child) {
+            /* Leave this tree for the template's, on both sides at once. The frame is everything to come back
+               to; the copy's fragment is its own private tree, made by clone_interface a moment ago. */
+            clone_push(s);
+            s->root = content;
+            s->src = content->first_child;
+            s->dst = s->croot = clone_template_content(s->cnode);
+            DCHECK(s->dst != NULL, "a cloned <template> has no content fragment to copy into — lexbor's "
+                                   "clone_interface built something other than a template interface");
+            s->stage = CLONE_COPY;
+        }
+        return JS_STEP_YIELD;
+    }
+
+    DCHECK(s->stage == CLONE_CHILDREN, "cloneNode resumed into a stage it does not have");
+    if (s->src->first_child) {
+        s->src = s->src->first_child;
+        s->dst = s->cnode;
+        s->stage = CLONE_COPY;
+        return JS_STEP_YIELD;
+    }
+    for (;;) {
+        /* ASCEND IN LOCKSTEP. The two trees have the same shape by construction, so one loop moves both — and
+           it is bounded by the depth already walked, not by the page, which is why it is not its own stage. */
+        while (!s->src->next && s->src != s->root) {
+            s->src = s->src->parent;
+            s->dst = s->dst->parent;
+        }
+        if (s->src != s->root) { s->src = s->src->next; s->stage = CLONE_COPY; return JS_STEP_YIELD; }
+        if (s->sp == 0) { *presult = node_wrap(ctx, s->copy); return JS_STEP_DONE; }
+        s->sp--;                        /* back to the template that owns this level, PAST its content check */
+        s->src = s->stack[s->sp].src;
+        s->dst = s->stack[s->sp].dst;
+        s->root = s->stack[s->sp].root;
+        s->croot = s->stack[s->sp].croot;
+        s->cnode = s->stack[s->sp].cnode;
+        return JS_STEP_YIELD;
+    }
+}
+
+static const IdlStepDecl NODE_CLONE_STEP = {
+    js_node_clone, sizeof(NodeCloneState), node_clone_visit, node_clone_release
+};
 
 /* §4.2.3 insertBefore / replaceChild — the two remaining mutating tree operations, through the same per-flow
    chokepoints appendChild and removeChild already use. magic 0 = insertBefore, 1 = replaceChild. */
@@ -830,6 +983,14 @@ static void node_install_walkers(JSContext *ctx, JSValueConst proto)
     /* `undefined normalize()` — no arguments to convert and still three loops' worth of the page's tree. */
     idl_install_method(ctx, proto, "normalize", 0,
                        idl_method_id_step(ctx, NULL, 0, NULL, 0, &NODE_NORM_STEP, 0));
+    {
+        /* `[CEReactions] Node cloneNode(optional boolean subtree = false)`. ToBoolean is total and runs none of
+           the page's code, but the argument still crosses CONVERTED — a body handed the raw value would have to
+           remember to coerce it, which is the per-body mistake one declaration exists to have none of. */
+        static const IdlArgType ONE_BOOL[1] = { IDL_BOOLEAN };
+        idl_install_method(ctx, proto, "cloneNode", 0,
+                           idl_method_id_step(ctx, ONE_BOOL, 1, NULL, 0, &NODE_CLONE_STEP, 0));
+    }
 }
 
 static void mixin_install(JSContext *ctx, JSValueConst proto, const NodeMixinMember *tab, unsigned n)
@@ -858,7 +1019,6 @@ static const JSCFunctionListEntry js_node_base[] = {
     JS_CFUNC_DEF("removeChild", 1, js_node_remove_child),
     JS_CFUNC_MAGIC_DEF("insertBefore", 2, js_node_insert, 0),
     JS_CFUNC_MAGIC_DEF("replaceChild", 2, js_node_insert, 1),
-    JS_CFUNC_DEF("cloneNode", 0, js_node_clone),
     JS_CFUNC_MAGIC_DEF("hasChildNodes", 0, js_node_predicates, 0),
     JS_CFUNC_MAGIC_DEF("isSameNode", 1, js_node_predicates, 1),
     JS_CFUNC_MAGIC_DEF("contains", 1, js_node_predicates, 2),
