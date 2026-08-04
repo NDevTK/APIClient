@@ -23,7 +23,9 @@ void      cow_delta_free(JSContext *ctx, CowDelta *d);
 
 /* Fork a delta at a branch: freeze src's HEAD into a shared immutable base segment (refcount 2) that both src
    and the returned sibling reference, so the sibling inherits src's branch-point state in O(1) — NOT a copy —
-   then each diverges on its own head. The DOM twin is dom_cow_fork. Pairs with JS_FlowClone. */
+   then each diverges on its own head. The DOM twin is dom_cow_fork. Pairs with JS_FlowClone.
+   This is what it does NOW; it said so while COPYING every entry and cloning every async blob, and the swap
+   below then replayed that whole copied history on every context switch. */
 CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src);
 
 /* Route captures to `d` (the flow about to run). NULL = captures are dropped (baseline setup). */
@@ -73,12 +75,14 @@ void      cow_capture_async_fork(JSContext *ctx, JSValueConst closure, void *bas
    base. `d` takes ownership of one ref on `cur_gd` (freed via JS_GenDataUnref on delta free/replace). */
 void      cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, void *base_gd, void *cur_gd);
 
-/* Context-switch AWAY from `d`: save each slot's current (flow) value, then restore the baseline value. After
-   this the shared baseline is pristine for the next flow. */
+/* Context-switch AWAY from `d`: save each HEAD slot's current (flow) value and restore what the chain below it
+   holds. The shared base chain is left APPLIED — the incoming flow's cow_apply moves it only as far as the two
+   flows actually diverge, so a switch costs what they differ by rather than everything either has written. */
 void      cow_unapply(JSContext *ctx, CowDelta *d);
 
-/* Context-switch INTO `d`: replay the flow's saved writes over the pristine baseline (noop until the flow has
-   run once). After this the heap shows exactly what this flow last saw. */
+/* Context-switch INTO `d`: move the installed base chain to this flow's (touching only the segments above the
+   two chains' lowest common one), then replay its head on top. After this the heap shows exactly what this flow
+   last saw. */
 void      cow_apply(JSContext *ctx, CowDelta *d);
 
 void      cow_free(JSContext *ctx);

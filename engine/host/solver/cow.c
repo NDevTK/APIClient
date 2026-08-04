@@ -51,7 +51,20 @@ typedef struct { JSValue obj; JSAtom atom; int existed; JSValue base; JSValue cu
 /* hash/hash_cap: an open-addressing index over the entries (slot key -> entry index +1; 0 = empty) so a capture
    dedups in O(1). Without it the dedup was an O(n) linear scan — O(n^2) to build a delta that touches n distinct
    shared slots (a flow mutating many shared globals/objects). Rebuilt on entry-array grow and on fork. */
-struct CowDelta { CowEntry *e; int n, cap; uint32_t fork_gen; int *hash; int hash_cap; };
+/* THE HEAP'S BASE CHAIN — a mutable HEAD over IMMUTABLE, refcounted, structurally-shared segments, which is
+   what the DOM half has had all along and what this file's header has claimed all along without doing it: the
+   fork COPIED every entry, duplicating each value and CLONING each async blob, so N sibling flows each carried
+   the whole history and every switch between them replayed all of it. A frozen segment is never written again,
+   so two flows that reach the same segment agree about everything from there down and neither the fork nor the
+   swap has to look at it. */
+typedef struct CowSeg { CowEntry *e; int n; struct CowSeg *base; int refcount; } CowSeg;
+struct CowDelta { CowEntry *e; int n, cap; uint32_t fork_gen; int *hash; int hash_cap; CowSeg *base; };
+
+/* THE CHAIN CURRENTLY APPLIED TO THE HEAP — a property of the heap, not of any flow, exactly as the DOM's is of
+   the document. A switch moves it to the incoming flow's chain by walking to the two chains' lowest common
+   segment and touching only what lies above; the shared suffix is left alone. */
+static CowSeg *g_cow_installed = NULL;
+static void cow_install_chain(JSContext *ctx, CowSeg *want);   /* defined with the rest of the chain walk */
 
 static uint32_t cow_slot_hash(void *p, uint32_t atom) {
     uint64_t h = (uint64_t)(uintptr_t)p * 0x9E3779B97F4A7C15ull ^ ((uint64_t)atom * 0xC2B2AE3D27D4EB4Full);
@@ -409,11 +422,9 @@ void cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, voi
     e->is_map = 0;
 }
 
-void cow_unapply(JSContext *ctx, CowDelta *d) {
-    if (!d) return;
-    g_capturing = 1;
-    for (int i = d->n - 1; i >= 0; i--) {   /* reverse: symmetric with apply */
-        CowEntry *e = &d->e[i];
+static void cow_unapply_entries(JSContext *ctx, CowEntry *ents, int n) {
+    for (int i = n - 1; i >= 0; i--) {   /* reverse: symmetric with apply */
+        CowEntry *e = &ents[i];
         if (e->is_gendata) { cow_gd_install(e, e->g0); continue; }   /* restore the shared original */
         if (e->is_async) {   /* blob state: save what THIS flow produced, then rewind to the baseline */
             cow_state_free(JS_GetRuntime(ctx), e, e->a_cur);
@@ -447,14 +458,23 @@ void cow_unapply(JSContext *ctx, CowDelta *d) {
             JS_ArraySetLength(ctx, e->obj, ai);
         else JS_DeleteProperty(ctx, e->obj, e->atom, 0);
     }
-    g_capturing = 0;
 }
 
-void cow_apply(JSContext *ctx, CowDelta *d) {
+/* UNAPPLY (flow -> parked): ONLY THE HEAD. The base chain stays applied and g_cow_installed says so — the
+   incoming flow's apply decides how much of it has to move, which for a sibling is none of it. */
+void cow_unapply(JSContext *ctx, CowDelta *d) {
     if (!d) return;
     g_capturing = 1;
-    for (int i = 0; i < d->n; i++) {   /* forward: replay the flow's writes over the pristine baseline */
-        CowEntry *e = &d->e[i];
+    cow_unapply_entries(ctx, d->e, d->n);
+    g_capturing = 0;
+    DCHECK(g_cow_installed == d->base,
+           "the applied heap chain is not the running flow's — a delta was swapped without going through "
+           "cow_apply, so the heap is showing a chain nobody is running");
+}
+
+static void cow_apply_entries(JSContext *ctx, CowEntry *ents, int n) {
+    for (int i = 0; i < n; i++) {   /* forward: replay the writes over the chain below */
+        CowEntry *e = &ents[i];
         if (e->is_gendata) { cow_gd_install(e, e->g1); continue; }   /* install this flow's own clone */
         if (e->is_async) { cow_state_restore(ctx, e, e->a_cur); continue; }   /* re-install what this flow produced */
         if (e->is_map) {   /* replay the flow's record mutation: ADD/OVERWRITE->set new value, DELETE->delete */
@@ -466,15 +486,29 @@ void cow_apply(JSContext *ctx, CowDelta *d) {
         if (e->vref) JS_VarRefSetValue(ctx, e->vref, JS_DupValue(ctx, e->cur));   /* closure cell */
         else JS_SetProperty(ctx, e->obj, e->atom, JS_DupValue(ctx, e->cur));
     }
+}
+
+/* APPLY (parked -> flow): move the installed chain to this flow's, then its head on top. */
+void cow_apply(JSContext *ctx, CowDelta *d) {
+    if (!d) return;
+    g_capturing = 1;
+    cow_install_chain(ctx, d->base);
+    cow_apply_entries(ctx, d->e, d->n);
     g_capturing = 0;
 }
 
-/* Fork a delta at a branch (cow.h contract): an INDEPENDENT copy of src's captured slots whose restore point
-   is src's CURRENT (branch-point) heap/cell values, so the snapshot-forked sibling inherits src's branch-point
-   state then each diverges on its own writes. A full copy (not an O(1) shared base segment) — sound and simple;
-   the two deltas share NO mutable state, so a sibling's later capture/apply can never corrupt the other. */
+/* FORK a delta at a branch: FREEZE the running flow's head into a shared immutable segment BOTH flows
+   reference, exactly as the DOM half does — the sibling inherits the parent's whole history in O(1).
+   It used to COPY: every entry duplicated, every async blob CLONED, and the sibling's restore point read back
+   out of the live heap one slot at a time. So a delta was O(everything the flow had ever written) rather than
+   O(what this arm has written since it branched), and N siblings each carried the same history and replayed all
+   of it on every switch. Freezing gives the same semantics for nothing: the head is unapplied first, which is
+   what stashes each entry's branch-point value into `cur`, and THAT is the sibling's restore point — the same
+   state the copy went and fetched, already sitting in the entries being handed over. */
 CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
     CowDelta *d = cow_delta_new();
+    CowSeg *seg;
+
     /* Both flows now SHARE every object that existed at THIS fork (the frame snapshot dup'd their heap refs), so
        both must capture writes to any object with flow_gen <= this generation. Record the CURRENT generation as
        both deltas' fork_gen, then BUMP it so objects created after the fork get a strictly-higher generation and
@@ -483,89 +517,105 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
     src->fork_gen = d->fork_gen = JS_FlowGen();
     JS_SetFlowForkGen(src->fork_gen);   /* the RUNNING flow's generation just changed without a switch */
     JS_FlowBumpGen();
-    if (src->n == 0) return d;
-    d->e = malloc((size_t)src->n * sizeof(CowEntry)); CHECK(d->e, "cow: OOM fork");
-    d->cap = src->n; d->n = src->n;
-    g_capturing = 1;
-    for (int i = 0; i < src->n; i++) {
-        CowEntry *se = &src->e[i], *de = &d->e[i];
-        /* ZEROED FIRST, so a branch below states only the fields ITS kind uses. Each branch used to spell out
-           every field of every other kind, which made adding one an obligation at four sites — and the fifth
-           kind's flag was left as malloc garbage at two of them, so a plain property slot was replayed as an
-           async settlement and dereferenced a wild blob. A zeroed JSValue is the integer 0, which is
-           non-refcounted and safe to free, so this is a valid empty entry and not just a memset. */
-        memset(de, 0, sizeof *de);
-        if (se->is_gendata) {   /* coroutine swap: the sibling shares the SAME per-flow clone (a ref), same toggle */
-            de->obj = JS_DupValue(ctx, se->obj);
-            de->is_gendata = se->is_gendata; de->g0 = se->g0; de->g1 = se->g1;
-            cow_gd_ref(se, se->g1);   /* the copy holds its own ownership ref on the clone */
-            continue;
-        }
-        if (se->is_async) {   /* blob state: the sibling inherits its OWN copy of both blobs — the two deltas
-                                 must share no mutable state, and a blob is mutable (unapply rewrites cur) */
-            de->obj = JS_DupValue(ctx, se->obj);
-            de->is_async = 1;
-            de->mod = se->mod;
-            de->a_base = cow_state_clone(ctx, se, se->a_base);
-            /* the sibling's restore point is the branch-point state, which is LIVE right now (src's delta is
-               applied at a fork) — read it rather than copying src's cur, which is only valid after an unapply
-               has written it. */
-            de->a_cur = cow_state_save(ctx, de);
-            continue;
-        }
-        if (se->is_map) {   /* Set/Map record mutation: the sibling inherits the same reversible undo-log entry */
-            de->is_map = 1;
-            de->obj = JS_DupValue(ctx, se->obj);
-            de->base = JS_DupValue(ctx, se->base);   /* key */
-            de->cur = JS_DupValue(ctx, se->cur);     /* new value */
-            de->cur_valid = 1;
-            de->map_op = se->map_op;
-            de->map_old = JS_DupValue(ctx, se->map_old);   /* prior value (OVERWRITE/DELETE) */
-            continue;
-        }
-        de->obj = JS_DupValue(ctx, se->obj);
-        de->atom = JS_DupAtom(ctx, se->atom);
-        de->existed = se->existed;
-        de->base = JS_DupValue(ctx, se->base);
-        de->vref = se->vref;
-        /* Snapshot the CURRENT live value as the clone's restore point: at a branch the src flow's delta is
-           APPLIED, so the heap/cell holds its branch-point value. Applying the clone later reproduces exactly
-           that state for the forked sibling; the two then diverge, each capturing its own further writes. */
-        if (se->vref) { JS_VarRefRef(se->vref); de->cur = JS_VarRefGetValue(se->vref); de->cur_valid = 1; continue; }
-        JS_GetOwnSlot(ctx, &de->cur, se->obj, se->atom);
-        de->cur_valid = 1;
+    d->base = src->base;
+    if (src->n == 0) {                  /* nothing to freeze: the sibling just takes a reference on the chain */
+        if (d->base) d->base->refcount++;
+        return d;
     }
-    cow_hash_rebuild(d);   /* build the clone's O(1) dedup index over the copied entries */
+    g_capturing = 1;
+    cow_unapply_entries(ctx, src->e, src->n);   /* -> parked: each entry's branch-point value lands in `cur` */
+    seg = malloc(sizeof *seg);
+    CHECK(seg, "cow: OOM fork segment — a shared delta would be corrupted");
+    seg->e = src->e; seg->n = src->n; seg->base = src->base; seg->refcount = 2;   /* running flow + sibling */
+    src->e = NULL; src->n = 0; src->cap = 0;   /* fresh empty head for the running flow */
+    free(src->hash); src->hash = NULL; src->hash_cap = 0;
+    src->base = d->base = seg;
+    g_cow_installed = seg;                     /* the frozen head is part of the applied chain now */
+    cow_apply_entries(ctx, seg->e, seg->n);    /* re-apply -> the running flow continues byte-identically */
     g_capturing = 0;
     return d;
 }
 
+static void cow_entries_free(JSContext *ctx, CowEntry *e, int n);
+
+/* Drop a chain reference: refcount--, free the segment's entries at zero, continue into its base. A loop, not
+   recursion — the chain's depth is the fork depth and C stack cannot be parked. */
+static void cow_seg_unref(JSContext *ctx, CowSeg *s) {
+    while (s && --s->refcount <= 0) {
+        CowSeg *base = s->base;
+        cow_entries_free(ctx, s->e, s->n);
+        free(s->e); free(s);
+        s = base;
+    }
+}
+
+static int cow_seg_depth(const CowSeg *s) { int d = 0; for (; s; s = s->base) d++; return d; }
+
+/* The deepest segment BOTH chains hold — pointer identity, since a segment is frozen once and never rewritten. */
+static CowSeg *cow_seg_common(CowSeg *a, CowSeg *b) {
+    int da = cow_seg_depth(a), db = cow_seg_depth(b);
+    while (da > db) { a = a->base; da--; }
+    while (db > da) { b = b->base; db--; }
+    while (a != b) { a = a->base; b = b->base; }
+    return a;
+}
+
+/* Apply `s` down to (not including) `stop`, deepest-first, by reversing the base pointers in place and putting
+   them back — O(depth), no allocation, and no recursion on the hottest path the scheduler has. */
+static void cow_apply_seg_until(JSContext *ctx, CowSeg *s, CowSeg *stop) {
+    CowSeg *prev = stop, *cur = s, *next;
+    while (cur != stop) { next = cur->base; cur->base = prev; prev = cur; cur = next; }
+    cur = prev; prev = stop;
+    while (cur != stop) {
+        cow_apply_entries(ctx, cur->e, cur->n);
+        next = cur->base; cur->base = prev; prev = cur; cur = next;
+    }
+}
+
+/* Make `want` the installed chain: the ONE place the heap's applied state changes, and the reason a switch
+   between two related flows costs what they DIVERGED by rather than everything either of them has done. */
+static void cow_install_chain(JSContext *ctx, CowSeg *want) {
+    CowSeg *common = cow_seg_common(g_cow_installed, want), *s;
+    for (s = g_cow_installed; s != common; s = s->base)
+        cow_unapply_entries(ctx, s->e, s->n);
+    cow_apply_seg_until(ctx, want, common);
+    g_cow_installed = want;
+}
+
 void cow_delta_free(JSContext *ctx, CowDelta *d) {
     if (!d) return;
-    for (int i = 0; i < d->n; i++) {
-        if (d->e[i].is_gendata) { JS_FreeValue(ctx, d->e[i].obj); cow_gd_unref(ctx, &d->e[i], d->e[i].g1); continue; }
-        if (d->e[i].is_async) {
-            JS_FreeValue(ctx, d->e[i].obj);
-            cow_state_free(JS_GetRuntime(ctx), &d->e[i], d->e[i].a_base);
-            cow_state_free(JS_GetRuntime(ctx), &d->e[i], d->e[i].a_cur);
-            continue;
-        }
-        if (d->e[i].is_map) {   /* obj + key(base) + new(cur) + old(map_old); atom is NULL */
-            JS_FreeValue(ctx, d->e[i].obj);
-            JS_FreeValue(ctx, d->e[i].base);
-            JS_FreeValue(ctx, d->e[i].cur);
-            JS_FreeValue(ctx, d->e[i].map_old);
-            continue;
-        }
-        JS_FreeValue(ctx, d->e[i].obj);
-        JS_FreeAtom(ctx, d->e[i].atom);
-        JS_FreeValue(ctx, d->e[i].base);
-        if (d->e[i].vref) JS_VarRefUnref(ctx, d->e[i].vref);   /* the delta's own reference on the cell */
-        if (d->e[i].cur_valid) JS_FreeValue(ctx, d->e[i].cur);
+    /* The heap must be at the BASELINE once no flow is running, and these segments may be freed below — an
+       installed pointer into freed memory is what the next switch would walk. */
+    if (g_cow_installed == d->base) {
+        for (CowSeg *s = g_cow_installed; s; s = s->base) cow_unapply_entries(ctx, s->e, s->n);
+        g_cow_installed = NULL;
     }
-    free(d->e);
-    free(d->hash);
-    free(d);
+    cow_seg_unref(ctx, d->base); d->base = NULL;
+    cow_entries_free(ctx, d->e, d->n);
+}
+
+static void cow_entries_free(JSContext *ctx, CowEntry *e, int n) {
+    for (int i = 0; i < n; i++) {
+        if (e[i].is_gendata) { JS_FreeValue(ctx, e[i].obj); cow_gd_unref(ctx, &e[i], e[i].g1); continue; }
+        if (e[i].is_async) {
+            JS_FreeValue(ctx, e[i].obj);
+            cow_state_free(JS_GetRuntime(ctx), &e[i], e[i].a_base);
+            cow_state_free(JS_GetRuntime(ctx), &e[i], e[i].a_cur);
+            continue;
+        }
+        if (e[i].is_map) {   /* obj + key(base) + new(cur) + old(map_old); atom is NULL */
+            JS_FreeValue(ctx, e[i].obj);
+            JS_FreeValue(ctx, e[i].base);
+            JS_FreeValue(ctx, e[i].cur);
+            JS_FreeValue(ctx, e[i].map_old);
+            continue;
+        }
+        JS_FreeValue(ctx, e[i].obj);
+        JS_FreeAtom(ctx, e[i].atom);
+        JS_FreeValue(ctx, e[i].base);
+        if (e[i].vref) JS_VarRefUnref(ctx, e[i].vref);   /* the delta's own reference on the cell */
+        if (e[i].cur_valid) JS_FreeValue(ctx, e[i].cur);
+    }
 }
 
 void cow_free(JSContext *ctx) { (void)ctx; g_current = NULL; }
