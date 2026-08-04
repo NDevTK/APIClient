@@ -32,6 +32,7 @@
 #include "core/html/html_element.h"
 #include "core/html/custom_elements.h"
 #include "core/dom/dom_token_list.h"
+#include "core/idl_indexed.h"
 #include "core/css/css_style_declaration.h"
 #include <lexbor/ns/ns.h>
 
@@ -704,6 +705,7 @@ void element_init(JSContext *ctx)
         idl_install_method(ctx, proto, "closest", 1,
                            idl_method_id(ctx, IDL_1STR, 1, js_el_matches, 1));
     }
+    idl_indexed_init(ctx);      /* the exotic class every indexed interface is built on */
     dom_token_list_init(ctx);   /* its prototype must exist before classList names it */
     dom_token_list_install_element(ctx, proto);   /* §4.9's [SameObject] classList */
     node_install_child_mixin(ctx, proto);    /* remove / before / after / replaceWith */
@@ -774,6 +776,7 @@ void element_free(JSContext *ctx)
     cssom_free(ctx);
     custom_elements_free(ctx);
     dom_token_list_free(ctx);
+    idl_indexed_free(ctx);
     JS_FreeValue(ctx, g_element_proto);
     g_element_proto = JS_UNDEFINED;
     g_reflect_n = 0;

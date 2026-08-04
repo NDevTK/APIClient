@@ -28,6 +28,7 @@
 #include "quickjs.h"
 #include "solver/dom_cow.h"
 #include "core/idl_args.h"
+#include "core/idl_indexed.h"
 #include "core/dom/node.h"
 #include "core/dom/dom_token_list.h"
 
@@ -282,6 +283,30 @@ out:
     return result;
 }
 
+/* §7.1 `getter DOMString? item(unsigned long index)` — the INDEXED PROPERTY GETTER, which is what `list[0]`
+   is. Its backing is the same attribute every other member reads, so nothing here caches and nothing goes
+   stale: the index is resolved against the class attribute at the moment it is asked. */
+static uint32_t tl_length(JSContext *ctx, JSValueConst self)
+{
+    JSValue n = js_tl_length(ctx, self, 0);
+    uint32_t v = 0;
+    JS_ToUint32(ctx, &v, n);
+    JS_FreeValue(ctx, n);
+    return v;
+}
+
+static JSValue tl_item(JSContext *ctx, JSValueConst self, uint32_t i)
+{
+    JSValue idx = JS_NewUint32(ctx, i), r;
+    JSValueConst argv[1];
+    argv[0] = idx;
+    r = js_tl_item(ctx, self, 1, argv, 0);
+    JS_FreeValue(ctx, idx);
+    return JS_IsNull(r) ? (JS_FreeValue(ctx, r), JS_UNDEFINED) : r;   /* past the end is not a property */
+}
+
+static const IdlIndexedDecl TOKEN_LIST_INDEXED = { "DOMTokenList", tl_length, tl_item, NULL };
+
 /* ---- the interface ----------------------------------------------------------------------------------------- */
 /* §4.9 `[SameObject] readonly attribute DOMTokenList classList` — the SAME object every time, cached on the
    element's wrapper (so per-flow, like the wrapper). A fresh list per read would make `a.classList ===
@@ -299,7 +324,7 @@ static JSValue js_el_class_list(JSContext *ctx, JSValueConst this_val, int magic
     if (JS_GetOwnSlot(ctx, &list, this_val, k) <= 0) list = JS_UNDEFINED;
     if (!JS_IsObject(list)) {
         JS_FreeValue(ctx, list);
-        list = JS_NewObjectProto(ctx, g_proto);
+        list = idl_indexed_new(ctx, g_proto, &TOKEN_LIST_INDEXED);
         CHECK(!JS_IsException(list), "DOMTokenList: OOM allocating a classList");
         ok = JS_ValueToAtom(ctx, g_owner_key);
         CHECK(ok != JS_ATOM_NULL, "the DOMTokenList owner key could not be reached");
@@ -342,6 +367,9 @@ void dom_token_list_init(JSContext *ctx)
        casting one to the other reads `magic` out of `argc`. */
     idl_install_method(ctx, g_proto, "toString", 0,
                        idl_method_id(ctx, IDL_1STR, 1, js_tl_to_string, 0));
+    /* §3.7.10: an interface with an indexed getter is iterable through %Array.prototype.values%, which is why
+       `for (const c of el.classList)` is ordinary code — and had nothing. */
+    idl_indexed_install_iterable(ctx, g_proto);
     g_ready = 1;
 }
 

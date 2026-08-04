@@ -397,6 +397,20 @@ static const char *HTML =
     " && tg1 === true && tg2 === false && tg3 === true && rp === true"
     " && cll.contains('e') && !cll.contains('b') && cll.length === 2 && cll.item(0) === 'a'"
     " && cl.classList === cll ? 'iscl' : 'wrong'));"
+    /* §3.9's INDEXED PROPERTY GETTER — `list[0]` is a LOOKUP, not a property, which is the whole difference:
+       it answers against the attribute as it is NOW, so it cannot go stale the way a written-out index would.
+       And §3.7.10 gives an interface with one %Array.prototype.values% as its @@iterator, so `for..of` and
+       spread over a classList are ordinary code that had nothing. */
+    "var clj = [];"
+    "for (var cq = 0; cq < cll.length; cq++) clj.push(cll[cq]);"
+    "var clspread = [].concat.apply([], [[...cll]]);"
+    "var clfor = ''; for (var ct of cll) clfor += ct;"
+    "var clkeys = Object.keys(cll).join(',');"
+    "cll.add('z');"   /* the lookup is live: index 2 exists only after this */
+    "fetch('/api/clindex?v=' + (clj.join('') === 'ae' && clspread.join('') === 'ae' && clfor === 'ae'"
+    " && clkeys === '0,1' && cll[2] === 'z' && cll[9] === undefined && !(5 in cll) && (1 in cll)"
+    " ? 'isindex' : 'wrong'));"
+    "cll.remove('z');"
     /* The list is a VIEW: a write through the attribute is visible through the list, with nothing to sync. */
     "cl.setAttribute('class', 'x y'); "
     "fetch('/api/clview?v=' + (cll.length === 2 && cll.contains('y') && String(cll) === 'x y'"
@@ -966,6 +980,7 @@ int main(void) {
         { "\"/api/ceattr\"",     "data-w"  },   /* attributeChangedCallback, for the OBSERVED name only */
         { "\"/api/classlist\"",  "iscl"    },   /* §7.1 add/remove/toggle/replace over the class attribute */
         { "\"/api/clview\"",     "isview"  },   /* …and the list is a VIEW, with nothing to keep in step */
+        { "\"/api/clindex\"",    "isindex" },   /* §3.9 list[i], and §3.7.10's @@iterator */
         { "\"/api/matches\"",    "ismatch" },   /* §4.9 matches, and closest walking INCLUSIVE ancestors */
         { "\"/api/matchbad\"",   "issyn"   },
         { "\"/api/serialize\"",  "%3Cp%20class%3D%22q%22%3Ehi%3Cbr%3E%3C%2Fp%3E" },   /* §8.4, and `<br>` is void */
