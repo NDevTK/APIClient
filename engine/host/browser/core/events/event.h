@@ -20,6 +20,9 @@ bool    event_is(JSContext *ctx, JSValueConst v);
 JSValue event_type(JSContext *ctx, JSValueConst ev);            /* a new owned string, or JS_UNDEFINED */
 bool    event_canceled(JSContext *ctx, JSValueConst ev);        /* the canceled flag */
 bool    event_stop_immediate(JSContext *ctx, JSValueConst ev);  /* the stop-immediate-propagation flag */
+bool    event_bubbles(JSContext *ctx, JSValueConst ev);         /* does it travel up the propagation path */
+bool    event_stop_propagation(JSContext *ctx, JSValueConst ev);
+void    event_set_phase(JSContext *ctx, JSValueConst ev, int phase);   /* AT_TARGET, then BUBBLING_PHASE */
 /* §2.9 "dispatch" sets these on the event as it walks: the target it was dispatched at, and the object whose
    listeners are running right now. */
 void    event_set_targets(JSContext *ctx, JSValueConst ev, JSValueConst target, JSValueConst current);

@@ -98,6 +98,19 @@ static void event_write_flag(JSContext *ctx, JSValueConst ev, const char *name, 
 }
 
 bool event_canceled(JSContext *ctx, JSValueConst ev)       { return event_read_flag(ctx, ev, "canceled"); }
+/* §2.9 reads these while it walks: whether the event travels up the path at all, and whether a listener
+   stopped it between targets. */
+bool event_bubbles(JSContext *ctx, JSValueConst ev)        { return event_read_flag(ctx, ev, "bubbles"); }
+bool event_stop_propagation(JSContext *ctx, JSValueConst ev) { return event_read_flag(ctx, ev, "stopPropagation"); }
+
+/* §2.2 eventPhase, which the walk moves: AT_TARGET for the target itself, BUBBLING_PHASE for its ancestors. */
+void event_set_phase(JSContext *ctx, JSValueConst ev, int phase)
+{
+    JSValue slots = event_slots(ctx, ev);
+    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return; }
+    JS_SetPropertyStr(ctx, slots, "eventPhase", JS_NewInt32(ctx, phase));
+    JS_FreeValue(ctx, slots);
+}
 bool event_stop_immediate(JSContext *ctx, JSValueConst ev) { return event_read_flag(ctx, ev, "stopImmediate"); }
 bool event_dispatch_flag(JSContext *ctx, JSValueConst ev)  { return event_read_flag(ctx, ev, "dispatch"); }
 void event_set_dispatch_flag(JSContext *ctx, JSValueConst ev, bool on)
@@ -128,10 +141,7 @@ void event_set_targets(JSContext *ctx, JSValueConst ev, JSValueConst target, JSV
     if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return; }
     JS_SetPropertyStr(ctx, slots, "target", JS_DupValue(ctx, target));
     JS_SetPropertyStr(ctx, slots, "currentTarget", JS_DupValue(ctx, current));
-    /* §2.9: the phase is AT_TARGET while the target's own listeners run — this engine has no capture or bubble
-       walk yet, so that is the only phase a dispatched event is ever in, and saying so is honest. */
-    JS_SetPropertyStr(ctx, slots, "eventPhase", JS_NewInt32(ctx, 2));
-    JS_FreeValue(ctx, slots);
+    JS_FreeValue(ctx, slots);   /* the PHASE is the walk's to set — it knows which step of the path this is */
 }
 
 /* §2.2 "initialize": the slot record every Event carries. `isTrusted` is the one thing that distinguishes an

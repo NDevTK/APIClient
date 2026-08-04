@@ -22,6 +22,8 @@
 #include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/events/event.h"
+#include "core/dom/node.h"
+#include <lexbor/dom/dom.h>
 
 /* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
 static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
@@ -35,10 +37,16 @@ static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
    ran-twice assert on the FIRST call. A JSValue's emptiness is not the allocator's default. */
 static JSValue g_key;
 static int g_ready;
+/* The WINDOW — §7.6's document parent on a propagation path, and Web IDL's relevant global for a [Global]
+   operation called with no receiver. Declared here because both of those are read before the machine below. */
+static JSValue g_window;
 /* HTML §8.1.7's handler map key, and the MARKER that holds the handler's place in a listener list — see the
    event-handler section below. Declared here because event_target_init mints them. */
 static JSValue g_handler_key;
 static JSValue g_handler_marker;
+/* The internal DISPATCH_PAIR function object — the one door a C caller has into the §2.9 machine, and the
+   window the propagation path ends at. Neither is installed anywhere the page can reach. */
+static JSValue g_dispatch_fn;
 /* The ids JS_RegisterStepDef handed this runtime for add/removeEventListener. `type` is a Web IDL DOMString,
    so it is ToString on whatever the page passed and cannot be a JS_ToCString from C. */
 static int g_add_stepid = -1, g_remove_stepid = -1, g_dispatch_stepid = -1;
@@ -68,8 +76,22 @@ void event_target_free(JSContext *ctx)
     JS_FreeValue(ctx, g_key);
     JS_FreeValue(ctx, g_handler_key);
     JS_FreeValue(ctx, g_handler_marker);
-    g_key = g_handler_key = g_handler_marker = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_dispatch_fn);
+    JS_FreeValue(ctx, g_window);
+    g_key = g_handler_key = g_handler_marker = g_dispatch_fn = g_window = JS_UNDEFINED;
     g_ready = 0;
+}
+
+/* WEB IDL §3.6's [Global] RULE: an operation on the Window interface called with an undefined `this` uses the
+   RELEVANT GLOBAL OBJECT. That is not a nicety — `addEventListener('load', init)` written unqualified is how a
+   great deal of real code registers, and a bare call has an undefined this-binding, so without this rule every
+   one of those listeners was registered on nothing at all and silently never fired. It is applied at the shared
+   entry because that is where the receiver arrives; a non-global interface reached with undefined would
+   otherwise be an immediate TypeError, so there is nothing here for this to take away. */
+static JSValueConst event_target_receiver(JSValueConst this_val)
+{
+    if (JS_IsObject(this_val)) return this_val;
+    return g_window;
 }
 
 /* The map of type -> listener array on `target`, created on first use. NULL only on allocation failure. */
@@ -178,18 +200,10 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
     type = JS_ToCString(ctx, argv[0]);   /* a real string by now: this cannot reach the page */
     if (!type)
         return JS_EXCEPTION;
-    r = (magic == 0) ? add_listener_with_type(ctx, this_val, argv[1], type)
-                     : remove_listener_with_type(ctx, this_val, argv[1], type);
+    r = (magic == 0) ? add_listener_with_type(ctx, event_target_receiver(this_val), argv[1], type)
+                     : remove_listener_with_type(ctx, event_target_receiver(this_val), argv[1], type);
     JS_FreeCString(ctx, type);
     return r;
-}
-
-/* Schedule ONE listener as a JOB on the running flow. Never a JS_Call: the listener is the page's code and holds
-   loops, awaits and concolic branches, so a C activation cannot host it. JS_EnqueueCallJob runs it as a
-   call-root flow — the same base a promise reaction runs on, preemptible and forkable like any other program. */
-static void schedule_listener(JSContext *ctx, JSValueConst fn, JSValueConst ev)
-{
-    JS_EnqueueCallJob(ctx, fn, 1, &ev);
 }
 
 /* ---- EVENT HANDLER IDL ATTRIBUTES — HTML §8.1.7.2 --------------------------------------------------------
@@ -393,20 +407,6 @@ static JSValue listener_snapshot(JSContext *ctx, JSValueConst target, const char
     return copy;
 }
 
-static int fire_at(JSContext *ctx, JSValueConst target, const char *type, JSValueConst ev)
-{
-    JSValue arr = listener_snapshot(ctx, target, type);
-    uint32_t len = 0;
-
-    JS_ToUint32(ctx, &len, JS_GetPropertyStr(ctx, arr, "length"));
-    for (uint32_t i = 0; i < len; i++) {
-        JSValue fn = JS_GetPropertyUint32(ctx, arr, i);
-        schedule_listener(ctx, fn, ev);
-        JS_FreeValue(ctx, fn);
-    }
-    JS_FreeValue(ctx, arr);
-    return (int)len;
-}
 
 /* §2.9 DISPATCH, as a machine — and the reason dispatchEvent could not exist before.
  *
@@ -423,14 +423,17 @@ static int fire_at(JSContext *ctx, JSValueConst target, const char *type, JSValu
  *
  * THE LIST IS SNAPSHOT FIRST, which the spec requires and which matters here more than in a browser: a listener
  * that runs mid-walk can add or remove listeners, and this walk is suspended across every one of them. */
-enum { DISPATCH_ARG = 0, CLICK_SYNTH = 1 };
+enum { DISPATCH_ARG = 0, CLICK_SYNTH = 1, DISPATCH_PAIR = 2 };
 
 typedef struct JSDispatchState {
     JSStepHdr hdr;       /* FIRST — the driver writes the def and the operand bounds through it */
     uint8_t   stage;
     uint8_t   cphase;    /* the call request's own phase, so a stage can hold a call across a suspension */
     uint32_t  i, n;      /* THE RESUME POINT: the listener being called, and how many there are */
-    JSValue   arr;       /* the listener list SNAPSHOT (owned) */
+    uint32_t  ti, tn;    /* and which TARGET on the propagation path its list belongs to */
+    JSValue   path;      /* §2.9's propagation path — the target and its ancestors (owned) */
+    JSValue   cur;       /* the target whose listeners are running (owned) */
+    JSValue   arr;       /* that target's listener list SNAPSHOT (owned) */
     JSValue   ev;        /* the event (owned) */
     JSValue   result;    /* !canceled (owned) */
     JSValue   cb[3];     /* the call request buffer: [this, listener, event] */
@@ -442,6 +445,8 @@ static void js_dispatch_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSDispatchState *s = st;
     int k;
+    v->val(ctx, &s->path);
+    v->val(ctx, &s->cur);
     v->val(ctx, &s->arr);
     v->val(ctx, &s->ev);
     v->val(ctx, &s->result);
@@ -457,14 +462,38 @@ static JSValue js_dispatch_fini(JSContext *ctx, void *st, bool take_result)
 
     if (take_result) s->result = JS_UNDEFINED;
     JS_FreeValue(ctx, s->result);
+    JS_FreeValue(ctx, s->path);
+    JS_FreeValue(ctx, s->cur);
     JS_FreeValue(ctx, s->arr);
     JS_FreeValue(ctx, s->ev);
-    s->result = s->arr = s->ev = JS_UNDEFINED;
+    s->result = s->path = s->cur = s->arr = s->ev = JS_UNDEFINED;
     for (k = 0; k < 3; k++) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
     }
     return r;
+}
+
+/* §2.9 THE PROPAGATION PATH: the target, then its ancestors, then the window for a document. This engine has
+   no capture phase and no shadow trees, so the path is exactly the bubble chain — and computing it is what let
+   `bubble_to` go: event_target_fire used to pass window in by hand as a special case, which is the document's
+   ancestor stated twice, once in the spec and once in an argument. */
+static JSValue dispatch_path(JSContext *ctx, JSValueConst target)
+{
+    JSValue path = JS_NewArray(ctx);
+    lxb_dom_node_t *n = node_of(target);
+    uint32_t k = 0;
+
+    JS_SetPropertyUint32(ctx, path, k++, JS_DupValue(ctx, target));
+    if (n) {
+        for (n = n->parent; n; n = n->parent)
+            JS_SetPropertyUint32(ctx, path, k++, node_wrap(ctx, n));
+        /* §7.6: the window is the document's parent for event purposes, which is how a `load` listener on
+           window hears an event fired at the document. */
+        if (JS_IsObject(g_window))
+            JS_SetPropertyUint32(ctx, path, k++, JS_DupValue(ctx, g_window));
+    }
+    return path;
 }
 
 static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
@@ -474,20 +503,26 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     int r;
 
     if (s->stage == 0) {
-        JSValue tv;
-        const char *type;
+        JSValueConst target;
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        s->arr = s->ev = s->result = JS_UNDEFINED;
+        s->path = s->cur = s->arr = s->ev = s->result = JS_UNDEFINED;
         s->cb[0] = s->cb[1] = s->cb[2] = JS_UNDEFINED;
-        /* TWO ENTRIES, ONE MACHINE. `arg` is decided at registration and says where the event comes from:
-           DISPATCH_ARG takes the one the page passed, CLICK_SYNTH builds it — §3.2.2 click() is "fire a
-           synthetic pointer event named click", which IS this dispatch and must not be a second copy of it.
-           A synthetic click BUBBLES and is CANCELABLE, and it is untrusted, which is what the flag means. */
+        /* THREE ENTRIES, ONE MACHINE, and `arg` is decided at REGISTRATION so no call site chooses:
+             DISPATCH_ARG  — dispatchEvent: the receiver is the target, the page supplied the event.
+             CLICK_SYNTH   — §3.2.2 click(): the receiver is the target and the event is BUILT, because click
+                             is "fire a synthetic pointer event named click", which IS this dispatch.
+             DISPATCH_PAIR — the ENGINE firing its own event, where there is no receiver to be the target
+                             because the caller is C: both come in as arguments.
+           The third is what let the second DELIVERY go. The engine used to enqueue each listener as its own
+           job — a walk with no continuation, so it could not see stopImmediatePropagation, could not answer
+           whether anything cancelled, and was a second implementation of §2.9 beside this one. */
+        target = (s->hdr.arg == DISPATCH_PAIR) ? step_arg(&s->hdr, 0)
+                                              : event_target_receiver(s->hdr.this_val);
         s->ev = (s->hdr.arg == CLICK_SYNTH)
                     ? event_new_untrusted(ctx, "click", /*bubbles*/ true, /*cancelable*/ true)
-                    : JS_DupValue(ctx, step_arg(&s->hdr, 0));
+                    : JS_DupValue(ctx, step_arg(&s->hdr, s->hdr.arg == DISPATCH_PAIR ? 1 : 0));
         /* §2.9 step 1: the argument must BE an Event. The slot record is the brand — a page cannot forge the
            symbol it hangs off, so an object shaped like an event is still not one. */
         if (!event_is(ctx, s->ev)) {
@@ -500,43 +535,66 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             return JS_STEP_ABRUPT;
         }
         event_set_dispatch_flag(ctx, s->ev, true);
-        /* §2.9 step 3: isTrusted is false for an event the page dispatches, whatever it was when constructed. */
-        event_set_trusted(ctx, s->ev, false);
-        event_set_targets(ctx, s->ev, s->hdr.this_val, s->hdr.this_val);
-
-        tv = event_type(ctx, s->ev);
-        type = JS_IsString(tv) ? JS_ToCString(ctx, tv) : NULL;
-        s->arr = type ? listener_snapshot(ctx, s->hdr.this_val, type) : JS_NewArray(ctx);
-        if (type) JS_FreeCString(ctx, type);
-        JS_FreeValue(ctx, tv);
-        s->n = 0;
-        JS_ToUint32(ctx, &s->n, JS_GetPropertyStr(ctx, s->arr, "length"));
-        s->i = 0;
+        /* §2.9 step 3: an event the PAGE dispatches is untrusted, whatever it was when constructed. One the
+           ENGINE fires keeps the flag it was built with, which is the whole difference between them. */
+        if (s->hdr.arg != DISPATCH_PAIR)
+            event_set_trusted(ctx, s->ev, false);
+        s->path = dispatch_path(ctx, target);
+        s->tn = 0;
+        JS_ToUint32(ctx, &s->tn, JS_GetPropertyStr(ctx, s->path, "length"));
+        s->ti = 0;
+        s->n = s->i = 0;
         s->stage = 1;
     }
 
-    while (s->i < s->n) {
-        /* §2.9: stopImmediatePropagation ends the walk between listeners, which is the only place it can be
-           observed — and the flag was set by a listener that has already returned. */
-        if (s->cphase == 0 && event_stop_immediate(ctx, s->ev))
-            break;
-        fn = JS_GetPropertyUint32(ctx, s->arr, s->i);
-        if (!JS_IsFunction(ctx, fn)) {
+    for (;;) {
+        while (s->i < s->n) {
+            /* §2.9: stopImmediatePropagation ends the walk between listeners, which is the only place it can
+               be observed — the flag was set by a listener that has already returned. */
+            if (s->cphase == 0 && event_stop_immediate(ctx, s->ev))
+                break;
+            fn = JS_GetPropertyUint32(ctx, s->arr, s->i);
+            if (!JS_IsFunction(ctx, fn)) {
+                JS_FreeValue(ctx, fn);
+                JS_FreeValue(ctx, cb_result);
+                cb_result = JS_UNDEFINED;
+                s->i++;
+                continue;
+            }
+            /* §2.9 "inner invoke": the listener is called with `this` = currentTarget and the event as its one
+               argument. A CALL REQUEST, so the listener is ordinary preemptible page code and this machine
+               parks — which is the whole reason the engine's own firing can share this walk. */
+            r = step_call_run(ctx, &s->cphase, s->cb, fn, s->cur, 1, (JSValueConst *)&s->ev,
+                              cb_result, &ignored, out_cb, out_argc);
             JS_FreeValue(ctx, fn);
-            JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
+            if (r > 0) return r;         /* parked ON THIS LISTENER; the resume comes back to it */
+            JS_FreeValue(ctx, ignored);  /* §2.9: a listener's return value is discarded */
             s->i++;
-            continue;
         }
-        /* §2.9 "inner invoke": the listener is called with `this` = currentTarget and the event as its one
-           argument. A CALL REQUEST, so the listener is ordinary preemptible page code and this machine parks. */
-        r = step_call_run(ctx, &s->cphase, s->cb, fn, s->hdr.this_val, 1, (JSValueConst *)&s->ev,
-                          cb_result, &ignored, out_cb, out_argc);
-        JS_FreeValue(ctx, fn);
-        cb_result = JS_UNDEFINED;
-        if (r > 0) return r;         /* parked ON THIS LISTENER; the resume comes back to it */
-        JS_FreeValue(ctx, ignored);  /* §2.9: a listener's return value is discarded */
-        s->i++;
+        /* ON TO THE NEXT TARGET UP THE PATH — but only while the event bubbles and nothing stopped it. */
+        if (s->ti >= s->tn) break;
+        if (s->ti > 0 && (!event_bubbles(ctx, s->ev) || event_stop_propagation(ctx, s->ev))) break;
+        JS_FreeValue(ctx, s->cur);
+        JS_FreeValue(ctx, s->arr);
+        s->cur = JS_GetPropertyUint32(ctx, s->path, s->ti);
+        {
+            JSValue first = JS_GetPropertyUint32(ctx, s->path, 0);
+            JSValue tv = event_type(ctx, s->ev);
+            const char *type = JS_IsString(tv) ? JS_ToCString(ctx, tv) : NULL;
+            /* §2.9: `target` is where the event was dispatched and does not move; `currentTarget` is whose
+               listeners are running now, and eventPhase says AT_TARGET only for the first. */
+            event_set_targets(ctx, s->ev, first, s->cur);
+            event_set_phase(ctx, s->ev, s->ti == 0 ? 2 : 3);   /* AT_TARGET, then BUBBLING_PHASE */
+            s->arr = type ? listener_snapshot(ctx, s->cur, type) : JS_NewArray(ctx);
+            if (type) JS_FreeCString(ctx, type);
+            JS_FreeValue(ctx, tv);
+            JS_FreeValue(ctx, first);
+        }
+        s->n = 0;
+        JS_ToUint32(ctx, &s->n, JS_GetPropertyStr(ctx, s->arr, "length"));
+        s->i = 0;
+        s->ti++;
     }
     JS_FreeValue(ctx, cb_result);
 
@@ -565,32 +623,60 @@ void event_target_install_click(JSContext *ctx, JSValueConst target)
     idl_install_method(ctx, target, "click", 0, g_click_stepid);
 }
 
-int event_target_fire(JSContext *ctx, JSValueConst target, const char *type, JSValueConst bubble_to)
+/* THE ENGINE FIRING ITS OWN EVENT — `load`, `DOMContentLoaded`, `abort`. It builds the event and hands it to
+   the SAME §2.9 machine, reached as a queued task because its callers are plain C the scheduler drives and
+   cannot park. That is the whole fix: this used to walk the listener list ITSELF and enqueue each listener as
+   its own job, which was a second implementation of §2.9 beside the machine — one that could not see
+   stopImmediatePropagation (each listener was a separate job with no walk between them), could not bubble
+   properly (the caller passed the window in by hand as `bubble_to`), and could not answer whether anything
+   cancelled. There is one dispatch now; what differs between the two reach-paths is only whether the caller
+   can park, which is a property of the CALLER and not of the algorithm.
+   The event stays TRUSTED, which is what distinguishes one the engine fired from one the page dispatched. */
+void event_target_fire(JSContext *ctx, JSValueConst target, const char *type, bool bubbles, bool cancelable)
 {
-    /* A real Event (§2.2), TRUSTED because the engine fired it — that flag is the whole difference from one the
-       page constructs, and a page checks it. `load`/`abort`/`DOMContentLoaded` all bubble and none is
-       cancelable, which is what the HTML and DOM specs say for each of them. */
-    JSValue ev = event_new(ctx, type, /*bubbles*/ true, /*cancelable*/ false);
-    int n;
+    JSValueConst argv[2];
+    JSValue ev;
 
-    if (JS_IsException(ev)) return 0;
-    event_set_targets(ctx, ev, target, target);
-    n = fire_at(ctx, target, type, ev);
-    if (JS_IsObject(bubble_to)) {
-        event_set_targets(ctx, ev, target, bubble_to);   /* §2.9: currentTarget moves, target does not */
-        n += fire_at(ctx, bubble_to, type, ev);
-    }
+    DCHECK(JS_IsObject(g_dispatch_fn),
+           "the engine fired an event before event_target_init built the dispatcher — there is one dispatch, "
+           "and this is the only way a C caller reaches it");
+    ev = event_new(ctx, type, bubbles, cancelable);
+    if (JS_IsException(ev)) { JS_FreeValue(ctx, ev); return; }
+    argv[0] = target;
+    argv[1] = ev;
+    /* A JOB, so the dispatch runs as a call-root flow: preemptible, forkable and parkable like any other
+       program, which is what every listener body needs and what a C activation cannot host. */
+    JS_EnqueueCallJob(ctx, g_dispatch_fn, 2, argv);
     JS_FreeValue(ctx, ev);
-    return n;
 }
+
+/* The window, which §7.6 makes the document's parent for event purposes — how a `load` listener on window
+   hears an event fired at the document. Registered rather than passed per fire, because it is a property of
+   the browsing context and not of any one dispatch. */
+void event_target_set_window(JSContext *ctx, JSValueConst global)
+{
+    JS_FreeValue(ctx, g_window);
+    g_window = JS_DupValue(ctx, global);
+}
+
+static const JSTrampStepDef js_dispatch_pair_def = {
+    sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, DISPATCH_PAIR, .visit = js_dispatch_visit
+};
 
 void event_target_install(JSContext *ctx, JSValueConst target)
 {
     DCHECK(JS_IsObject(target), "event_target_install was handed something that is not an object");
     /* Declared HERE rather than in event_target_init because the machine is defined below it — and one
        declaration serves every target, which is what the id being cached says. */
-    if (g_dispatch_stepid < 0)
+    if (g_dispatch_stepid < 0) {
         g_dispatch_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_dispatch_def);
+        /* The C caller's door into the same machine: a step function object nobody installs, so the page can
+           neither see it nor replace it — which matters, because a page that overwrote `dispatchEvent` must
+           not redirect the engine's own `load`. */
+        g_dispatch_fn = JS_NewCFunction2(ctx, NULL, "dispatch", 2, JS_CFUNC_step,
+                                         JS_RegisterStepDef(JS_GetRuntime(ctx), &js_dispatch_pair_def));
+        CHECK(!JS_IsException(g_dispatch_fn), "the internal event dispatcher could not be allocated");
+    }
     idl_install_method(ctx, target, "addEventListener", 2, g_add_stepid);
     idl_install_method(ctx, target, "removeEventListener", 2, g_remove_stepid);
     idl_install_method(ctx, target, "dispatchEvent", 1, g_dispatch_stepid);

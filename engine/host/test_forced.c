@@ -313,6 +313,30 @@ static const char *HTML =
     /* A computed declaration is READ-ONLY, which the spec makes an error rather than a silent no-op. */
     "var csro = 'nothrow'; try { csc.setProperty('color', 'blue'); } catch (e) { csro = 'isro'; }"
     "fetch('/api/cssro?v=' + csro);"
+    /* §2.9 THE PROPAGATION PATH. One dispatch walks the target and then its ancestors: `target` stays put,
+       `currentTarget` moves, and the phase goes AT_TARGET then BUBBLING_PHASE. The old delivery enqueued each
+       listener as its own job with no walk between them, so none of this could be observed. */
+    "var bpar = document.createElement('section'); var bkid = document.createElement('em');"
+    "bpar.appendChild(bkid); document.body.appendChild(bpar); var btrace = '';"
+    "bkid.addEventListener('bub', function(e){ btrace += 'K' + e.eventPhase + (e.target === bkid ? 't' : '?')"
+    " + (e.currentTarget === bkid ? 'c' : '?'); });"
+    "bpar.addEventListener('bub', function(e){ btrace += 'P' + e.eventPhase + (e.target === bkid ? 't' : '?')"
+    " + (e.currentTarget === bpar ? 'c' : '?'); });"
+    "bkid.dispatchEvent(new Event('bub', { bubbles: true }));"
+    "fetch('/api/bubble?v=' + (btrace === 'K2tcP3tc' ? 'isbubble' : 'wrong'));"
+    /* An event that does not bubble reaches the target alone, and stopPropagation ends the walk after it. */
+    "btrace = ''; bkid.dispatchEvent(new Event('bub'));"
+    "var nb = btrace;"
+    "btrace = ''; bkid.addEventListener('stp', function(e){ btrace += 'K'; e.stopPropagation(); });"
+    "bpar.addEventListener('stp', function(e){ btrace += 'P'; });"
+    "bkid.dispatchEvent(new Event('stp', { bubbles: true }));"
+    "fetch('/api/nobubble?v=' + (nb === 'K2tc' && btrace === 'K' ? 'isnobub' : 'wrong'));"
+    /* THE ENGINE'S OWN FIRE goes through the SAME walk. DOMContentLoaded is fired AT THE DOCUMENT and bubbles
+       to the window — which used to need the window passed in by hand as a second fire_at, and is now just the
+       document's ancestor. A trusted event, which is what tells it from one the page dispatched. */
+    "addEventListener('DOMContentLoaded', function(e){"
+    " fetch('/api/dclbubble?v=' + (e.target === document && e.currentTarget === globalThis && e.isTrusted"
+    " && e.eventPhase === 3 ? 'isdcl' : 'wrong')); });"
     "if (cfg.admin) { setBodyAttr('data-tt','ttADMIN'); appendChild('kidADMIN'); rx.flag='flagADMIN'; fetch('/api/data?role=admin'); loadScript('/chunk/admin.js'); } else { setBodyAttr('data-tt','ttPUBLIC'); appendChild('kidPUBLIC'); rx.flag='flagPUBLIC'; fetch('/api/data?role=public'); }"   /* admin arm: same endpoint MERGES + a LAZY CHUNK loads. Each arm ALSO writes an attribute, appends a child node, AND assigns the ACCESSOR rx.flag (invokes the setter -> rx._f) -> per-flow DOM + heap-accessor writes across the EXISTING fork. */
     "fetch('/api/whoami?tt=' + getBodyAttr('data-tt'));"   /* DOM ATTR READ-BACK after the fork: per-flow -> admin flow reads ttADMIN, public flow reads ttPUBLIC */
     "fetch('/api/kid?mark=' + lastChildMark());"   /* DOM NODE READ-BACK: each flow's appended child is its OWN last child -> admin reads kidADMIN, public reads kidPUBLIC (neither's inserted node leaks) */
@@ -457,6 +481,7 @@ int main(void) {
     event_target_init(ctx);
     event_install(ctx, g);   /* the Event interface object — `new Event(...)` and every `instanceof Event` */
     event_target_install(ctx, g);
+    event_target_set_window(ctx, g);   /* §7.6: the document's parent on a propagation path */
     /* HTML §8.1.7.2: window's IDL mixes in GlobalEventHandlers AND WindowEventHandlers — `window.onload` is
        how a great deal of real code starts. */
     event_target_install_handlers(ctx, g, EH_GLOBAL | EH_WINDOW);
@@ -672,6 +697,9 @@ int main(void) {
         { "\"/api/cssset\"",     "isset"   },   /* writes land in the style attribute, [SameObject] holds */
         { "\"/api/cssdel\"",     "isdel"   },
         { "\"/api/cssro\"",      "isro"    },   /* a computed declaration throws rather than silently ignoring */
+        { "\"/api/bubble\"",     "isbubble"},   /* §2.9's path: target fixed, currentTarget and phase moving */
+        { "\"/api/nobubble\"",   "isnobub" },   /* a non-bubbling event, and stopPropagation */
+        { "\"/api/dclbubble\"",  "isdcl"   },   /* the ENGINE's own fire walks the same path to the window */
     };
     int nodealgo_tt = !strstr(js, "wrong");
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)

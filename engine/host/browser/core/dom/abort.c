@@ -209,7 +209,8 @@ static void signal_abort(JSContext *ctx, JSValueConst sig, JSValue reason)
     JS_FreeValue(ctx, slots);
     /* Each listener runs as its own task on the RUNNING flow — never a JS_Call from C, which is the
        drive-to-completion this engine aborts on. */
-    event_target_fire(ctx, sig, "abort", JS_UNDEFINED);
+    /* §3.2: "fire an event named abort at signal" — it neither bubbles nor is cancelable. */
+    event_target_fire(ctx, sig, "abort", /*bubbles*/ false, /*cancelable*/ false);
 }
 
 static JSValue js_ctrl_abort(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)

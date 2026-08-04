@@ -24,6 +24,11 @@ void event_target_install_click(JSContext *ctx, JSValueConst target);
 void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask);
 /* Fire `type` at `target` (bubbling to `bubble_to` when non-undefined, which is how a document event reaches
    window). Each listener runs as its own task on the RUNNING flow. Returns how many were scheduled. */
-int  event_target_fire(JSContext *ctx, JSValueConst target, const char *type, JSValueConst bubble_to);
+/* The ENGINE firing its own event at `target`. One §2.9 dispatch, reached as a queued task because the callers
+   are plain C the scheduler drives. The propagation path is derived from the target's ancestors — there is no
+   `bubble_to` to pass, because the window is the document's parent and the spec already says so. */
+void event_target_fire(JSContext *ctx, JSValueConst target, const char *type, bool bubbles, bool cancelable);
+/* §7.6: the window the propagation path ends at. */
+void event_target_set_window(JSContext *ctx, JSValueConst global);
 
 #endif

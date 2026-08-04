@@ -366,11 +366,17 @@ static int document_done_stage(JSContext *ctx, int stage)
 {
     if (stage == 0) {
         document_set_ready(ctx, "interactive");
-        return event_target_fire(ctx, g_doc_obj, "DOMContentLoaded", g_win_obj);
+        /* §3.1.1: DOMContentLoaded is fired AT THE DOCUMENT and BUBBLES, which is how a `window.onload`-style
+           listener registered on window hears it — the propagation path derives that from the document's
+           ancestors now rather than the caller naming the window. It is not cancelable. */
+        event_target_fire(ctx, g_doc_obj, "DOMContentLoaded", /*bubbles*/ true, /*cancelable*/ false);
+        return 1;
     }
     DCHECK(stage == 1, "the document lifecycle was asked for a stage it does not have");
     document_set_ready(ctx, "complete");
-    return event_target_fire(ctx, g_win_obj, "load", JS_UNDEFINED);
+    /* HTML: `load` is fired at the WINDOW and does not bubble — there is nothing above it to bubble to. */
+    event_target_fire(ctx, g_win_obj, "load", /*bubbles*/ false, /*cancelable*/ false);
+    return 1;
 }
 
 /* The Document METHODS — on Document.prototype, so there is one of each rather than one per install, and so
