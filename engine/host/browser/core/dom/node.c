@@ -507,31 +507,106 @@ enum {
     NODE_POS_CONTAINS = 0x08, NODE_POS_CONTAINED_BY = 0x10, NODE_POS_IMPLEMENTATION_SPECIFIC = 0x20,
 };
 
-static JSValue js_node_compare_position(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    lxb_dom_node_t *a = node_of(this_val), *b = argc > 0 ? node_of(argv[0]) : NULL, *p;
+/* A MACHINE, and it has THREE walks in it rather than one, which is why the stages are numbered rather than
+   folded together. Finding a node's root is O(depth); each "is one an inclusive ancestor of the other" is
+   O(depth) again; and if neither contains the other the answer comes from a pre-order walk of the WHOLE shared
+   tree looking for whichever comes first. Only the last is obviously of the page's size, and that is exactly
+   why the other two are converted too — "a document is never that deep" is a bound, and a bound nobody wrote
+   down is the kind that is wrong on the one page that matters.
+   ONE CURSOR serves all of them: each stage sets it and the next stage consumes it, so a resume comes back to
+   the position the walk was at and never to the start of a stage it already finished. */
+typedef struct {
+    uint8_t stage;
+    lxb_dom_node_t *a, *b;      /* the two nodes, resolved once */
+    lxb_dom_node_t *ra, *rb;    /* their roots, once each walk has found them */
+    lxb_dom_node_t *p;          /* the cursor the running stage is advancing */
+} NodePosState;
 
-    if (!a || !b)
-        return JS_ThrowTypeError(ctx, "compareDocumentPosition requires a Node");
-    if (a == b) return JS_NewInt32(ctx, 0);
-    if (node_root(a) != node_root(b))
-        /* §4.4: disconnected nodes get a consistent-but-arbitrary order, and it must be CONSISTENT — the same
-           pair must answer the same way every time or a page's sort never terminates. Pointer order is stable
-           for the lifetime of the two nodes, which is what the spec's "implementation-specific" allows for. */
-        return JS_NewInt32(ctx, NODE_POS_DISCONNECTED | NODE_POS_IMPLEMENTATION_SPECIFIC |
-                                (a < b ? NODE_POS_FOLLOWING : NODE_POS_PRECEDING));
-    if (node_is_inclusive_ancestor(a, b))
-        return JS_NewInt32(ctx, NODE_POS_CONTAINED_BY | NODE_POS_FOLLOWING);
-    if (node_is_inclusive_ancestor(b, a))
-        return JS_NewInt32(ctx, NODE_POS_CONTAINS | NODE_POS_PRECEDING);
-    /* Neither contains the other: whichever the pre-order walk reaches first PRECEDES. */
-    for (p = node_root(a); p; p = node_next_in(p, NULL)) {
-        if (p == a) return JS_NewInt32(ctx, NODE_POS_FOLLOWING);
-        if (p == b) return JS_NewInt32(ctx, NODE_POS_PRECEDING);
-    }
-    DFAIL("compareDocumentPosition walked a shared root without reaching either node — the tree is not a tree");
-    return JS_NewInt32(ctx, 0);
+static void node_pos_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    /* NOTHING OWNED — every field is a Lexbor node, which belongs to the document and outlives any flow. A fork
+       mid-walk gives both arms the same position in the same tree, which is what they should have. */
+    (void)ctx; (void)st; (void)v;
 }
+
+enum {
+    NODEPOS_ROOT_A = 1, NODEPOS_ROOT_B, NODEPOS_ANC_AB, NODEPOS_ANC_BA, NODEPOS_ORDER,
+};
+
+static int js_node_compare_position(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                    JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NodePosState *s = st;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+
+    switch (s->stage) {
+    case 0:
+        s->a = node_of(hdr->this_val);
+        s->b = argc > 0 ? node_of(argv[0]) : NULL;
+        if (!s->a || !s->b) {
+            JS_ThrowTypeError(ctx, "compareDocumentPosition requires a Node");
+            return JS_STEP_ABRUPT;
+        }
+        if (s->a == s->b) { *presult = JS_NewInt32(ctx, 0); return JS_STEP_DONE; }
+        s->p = s->a;
+        s->stage = NODEPOS_ROOT_A;
+        return JS_STEP_YIELD;
+
+    case NODEPOS_ROOT_A:
+        if (s->p->parent) { s->p = s->p->parent; return JS_STEP_YIELD; }
+        s->ra = s->p;
+        s->p = s->b;
+        s->stage = NODEPOS_ROOT_B;
+        return JS_STEP_YIELD;
+
+    case NODEPOS_ROOT_B:
+        if (s->p->parent) { s->p = s->p->parent; return JS_STEP_YIELD; }
+        s->rb = s->p;
+        if (s->ra != s->rb)
+            /* §4.4: disconnected nodes get a consistent-but-arbitrary order, and it must be CONSISTENT — the
+               same pair must answer the same way every time or a page's sort never terminates. Pointer order is
+               stable for the lifetime of the two nodes, which is what "implementation-specific" allows for. */
+            return *presult = JS_NewInt32(ctx, NODE_POS_DISCONNECTED | NODE_POS_IMPLEMENTATION_SPECIFIC |
+                                               (s->a < s->b ? NODE_POS_FOLLOWING : NODE_POS_PRECEDING)),
+                   JS_STEP_DONE;
+        s->p = s->b;                 /* walk UP from b looking for a: O(depth), not O(a's subtree) */
+        s->stage = NODEPOS_ANC_AB;
+        return JS_STEP_YIELD;
+
+    case NODEPOS_ANC_AB:
+        if (s->p == s->a)
+            return *presult = JS_NewInt32(ctx, NODE_POS_CONTAINED_BY | NODE_POS_FOLLOWING), JS_STEP_DONE;
+        if (s->p) { s->p = s->p->parent; return JS_STEP_YIELD; }
+        s->p = s->a;
+        s->stage = NODEPOS_ANC_BA;
+        return JS_STEP_YIELD;
+
+    case NODEPOS_ANC_BA:
+        if (s->p == s->b)
+            return *presult = JS_NewInt32(ctx, NODE_POS_CONTAINS | NODE_POS_PRECEDING), JS_STEP_DONE;
+        if (s->p) { s->p = s->p->parent; return JS_STEP_YIELD; }
+        s->p = s->ra;                /* neither contains the other: tree order decides */
+        s->stage = NODEPOS_ORDER;
+        return JS_STEP_YIELD;
+
+    case NODEPOS_ORDER:
+        /* Whichever the pre-order walk reaches first PRECEDES. */
+        if (s->p == s->a) return *presult = JS_NewInt32(ctx, NODE_POS_FOLLOWING), JS_STEP_DONE;
+        if (s->p == s->b) return *presult = JS_NewInt32(ctx, NODE_POS_PRECEDING), JS_STEP_DONE;
+        s->p = node_next_in(s->p, NULL);
+        DCHECK(s->p != NULL, "compareDocumentPosition walked a shared root without reaching either node — the "
+                             "tree is not a tree");
+        return JS_STEP_YIELD;
+    }
+    DFAIL("compareDocumentPosition resumed into a stage it does not have");
+    return JS_STEP_ABRUPT;
+}
+
+static const IdlStepDecl NODE_POS_STEP = {
+    js_node_compare_position, sizeof(NodePosState), node_pos_visit, NULL
+};
 
 /* §4.4 getRootNode(optional GetRootNodeOptions options = {}).
  *
@@ -551,43 +626,86 @@ static JSValue js_node_root(JSContext *ctx, JSValueConst this_val, int argc, JSV
 
 /* §4.4 normalize — remove empty Text nodes and merge adjacent ones. A page calls it before comparing or
    serialising a tree it built piecemeal, and both halves go through the per-flow chokepoints so a forked arm
-   normalising its own subtree does not normalise its sibling's. The walk is a cursor over the current node's
-   descendants with the next node taken BEFORE the current one can be removed. */
-static JSValue js_node_normalize(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    lxb_dom_node_t *root = node_of(this_val), *n, *next;
+   normalising its own subtree does not normalise its sibling's.
+   A MACHINE with TWO cursors and two stages, because there are two loops and both are of the page's size: the
+   walk over the subtree, and the absorption of a run of adjacent Text siblings into the first of them. A page
+   that built its text a chunk at a time has runs as long as the number of chunks, so folding the inner loop
+   into one step would be a walk hiding inside a step of a walk.
+   `next` is taken BEFORE the current node can be removed, and it lives in the state for the same reason the
+   cursor does — the merge stage adjusts it when it absorbs the very node `next` was pointing at. */
+typedef struct {
+    uint8_t stage;                        /* 0 = start, 1 = at a node, 2 = absorbing a run of Text siblings */
+    lxb_dom_node_t *root, *n, *next;
+} NodeNormState;
 
-    (void)ctx; (void)argc; (void)argv;
-    if (!root) return JS_UNDEFINED;
-    for (n = node_next_in(root, root); n; n = next) {
-        next = node_next_in(n, root);
-        if (n->type != LXB_DOM_NODE_TYPE_TEXT)
-            continue;
-        {
-            lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(n);
-            if (cd->data.length == 0) {
-                dom_cow_remove_child(n);
-                continue;
-            }
-            /* Absorb the contiguous following Text siblings into this one, then drop them. */
-            while (n->next && n->next->type == LXB_DOM_NODE_TYPE_TEXT) {
-                lxb_dom_node_t *sib = n->next;
-                lxb_dom_character_data_t *sd = lxb_dom_interface_character_data(sib);
-                size_t len = cd->data.length + sd->data.length;
-                char *buf = malloc(len ? len : 1);
-                CHECK(buf != NULL, "normalize: OOM merging two Text nodes — dropping the merge would leave the "
-                                   "page a tree it did not build");
-                memcpy(buf, cd->data.data, cd->data.length);
-                memcpy(buf + cd->data.length, sd->data.data, sd->data.length);
-                if (next == sib) next = node_next_in(sib, root);
-                dom_cow_set_text(n, buf, len);
-                dom_cow_remove_child(sib);
-                free(buf);
-            }
-        }
-    }
-    return JS_UNDEFINED;
+static void node_norm_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    /* NOTHING OWNED — Lexbor nodes, which belong to the document. The MUTATIONS this makes are captured by the
+       chokepoints into the running flow's delta, which is what a forked arm's isolation is made of; the cursors
+       themselves are just positions. */
+    (void)ctx; (void)st; (void)v;
 }
+
+static int js_node_normalize(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NodeNormState *s = st;
+    lxb_dom_character_data_t *cd;
+
+    (void)argc; (void)argv; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+
+    if (s->stage == 0) {
+        s->root = node_of(hdr->this_val);
+        if (!s->root) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+        s->n = node_next_in(s->root, s->root);
+        s->stage = 1;
+        return JS_STEP_YIELD;
+    }
+
+    if (s->stage == 1) {
+        if (!s->n) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+        s->next = node_next_in(s->n, s->root);
+        if (s->n->type != LXB_DOM_NODE_TYPE_TEXT) { s->n = s->next; return JS_STEP_YIELD; }
+        cd = lxb_dom_interface_character_data(s->n);
+        if (cd->data.length == 0) {
+            dom_cow_remove_child(s->n);
+            s->n = s->next;
+            return JS_STEP_YIELD;
+        }
+        s->stage = 2;
+        return JS_STEP_YIELD;
+    }
+
+    DCHECK(s->stage == 2, "normalize resumed into a stage it does not have");
+    /* ONE SIBLING PER STEP. Absorb it into `n`, drop it, and come back here for the next one. */
+    if (s->n->next && s->n->next->type == LXB_DOM_NODE_TYPE_TEXT) {
+        lxb_dom_node_t *sib = s->n->next;
+        lxb_dom_character_data_t *sd = lxb_dom_interface_character_data(sib);
+        size_t len;
+        char *buf;
+        cd = lxb_dom_interface_character_data(s->n);
+        len = cd->data.length + sd->data.length;
+        buf = malloc(len ? len : 1);
+        CHECK(buf != NULL, "normalize: OOM merging two Text nodes — dropping the merge would leave the page a "
+                           "tree it did not build");
+        memcpy(buf, cd->data.data, cd->data.length);
+        memcpy(buf + cd->data.length, sd->data.data, sd->data.length);
+        /* the successor was computed before this sibling was absorbed; if it WAS this sibling, move it on. */
+        if (s->next == sib) s->next = node_next_in(sib, s->root);
+        dom_cow_set_text(s->n, buf, len);
+        dom_cow_remove_child(sib);
+        free(buf);
+        return JS_STEP_YIELD;
+    }
+    s->n = s->next;
+    s->stage = 1;
+    return JS_STEP_YIELD;
+}
+
+static const IdlStepDecl NODE_NORM_STEP = {
+    js_node_normalize, sizeof(NodeNormState), node_norm_visit, NULL
+};
 
 /* §4.4 cloneNode. `optional boolean subtree = false` is a ToBoolean, which is total and runs none of the page's
    code, so this is not a coercion the IDL machine has to carry. Lexbor owns the copy — a hand-rolled one here
@@ -707,6 +825,11 @@ static void node_install_walkers(JSContext *ctx, JSValueConst proto)
     static const IdlArgType ONE_ANY[1] = { IDL_ANY };   /* `Node? otherNode` — an interface type crosses as itself */
     idl_install_method(ctx, proto, "isEqualNode", 1,
                        idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &NODE_EQUAL_STEP, 0));
+    idl_install_method(ctx, proto, "compareDocumentPosition", 1,
+                       idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &NODE_POS_STEP, 0));
+    /* `undefined normalize()` — no arguments to convert and still three loops' worth of the page's tree. */
+    idl_install_method(ctx, proto, "normalize", 0,
+                       idl_method_id_step(ctx, NULL, 0, NULL, 0, &NODE_NORM_STEP, 0));
 }
 
 static void mixin_install(JSContext *ctx, JSValueConst proto, const NodeMixinMember *tab, unsigned n)
@@ -736,8 +859,6 @@ static const JSCFunctionListEntry js_node_base[] = {
     JS_CFUNC_MAGIC_DEF("insertBefore", 2, js_node_insert, 0),
     JS_CFUNC_MAGIC_DEF("replaceChild", 2, js_node_insert, 1),
     JS_CFUNC_DEF("cloneNode", 0, js_node_clone),
-    JS_CFUNC_DEF("normalize", 0, js_node_normalize),
-    JS_CFUNC_DEF("compareDocumentPosition", 1, js_node_compare_position),
     JS_CFUNC_MAGIC_DEF("hasChildNodes", 0, js_node_predicates, 0),
     JS_CFUNC_MAGIC_DEF("isSameNode", 1, js_node_predicates, 1),
     JS_CFUNC_MAGIC_DEF("contains", 1, js_node_predicates, 2),

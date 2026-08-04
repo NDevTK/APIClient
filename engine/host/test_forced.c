@@ -235,6 +235,32 @@ static const char *HTML =
     "fetch('/api/insertbefore?v=' + (host.firstChild === ib && ib.parentElement === host ? 'isfirst' : 'wrong'));"
     "fetch('/api/connected?v=' + (document.body.isConnected && !host.isConnected ? 'isconn' : 'wrong'));"
     "fetch('/api/position?v=' + ((document.body.compareDocumentPosition(c1) & Node.DOCUMENT_POSITION_DISCONNECTED) ? 'isdisc' : 'wrong'));"
+    /* §4.4 compareDocumentPosition is FIVE walks behind one answer — two to the roots, two up the ancestor
+       chains, and a pre-order walk of the whole shared tree when neither contains the other. Only the
+       disconnected arm was asserted, so four of the five could have been anything. Each is a machine stage now,
+       so a wrong resume in any of them is a wrong bit here. */
+    "var pw = document.createElement('div'); document.body.appendChild(pw);"
+    "var pa = document.createElement('p'); var pb = document.createElement('q');"
+    "pw.appendChild(pa); pw.appendChild(pb);"
+    "var pd = document.createElement('b'); pa.appendChild(pd);"
+    "var P = Node;"
+    "fetch('/api/posbits?anc=' + (pw.compareDocumentPosition(pd) === (P.DOCUMENT_POSITION_CONTAINED_BY | P.DOCUMENT_POSITION_FOLLOWING) ? 'contains' : 'wrong')"
+    " + '&desc=' + (pd.compareDocumentPosition(pw) === (P.DOCUMENT_POSITION_CONTAINS | P.DOCUMENT_POSITION_PRECEDING) ? 'containedby' : 'wrong')"
+    " + '&ord=' + (pa.compareDocumentPosition(pb) === P.DOCUMENT_POSITION_FOLLOWING"
+    " && pb.compareDocumentPosition(pa) === P.DOCUMENT_POSITION_PRECEDING"
+    " && pd.compareDocumentPosition(pb) === P.DOCUMENT_POSITION_FOLLOWING ? 'order' : 'wrong')"
+    " + '&self=' + (pa.compareDocumentPosition(pa) === 0 ? 'zero' : 'wrong'));"
+    /* §4.4 normalize's second loop: a RUN of adjacent Text siblings absorbed into the first, which is as long
+       as the number of chunks a page appended. 40 of them, with empty ones interleaved so the drop arm runs
+       too, and one non-Text node in the middle so the run has to STOP rather than swallow the tree. */
+    "var nz = document.createElement('div');"
+    "for (var nzi = 0; nzi < 40; nzi++) {"
+      "nz.appendChild(document.createTextNode('' + (nzi % 10)));"
+      "nz.appendChild(document.createTextNode('')); }"
+    "nz.appendChild(document.createElement('hr'));"
+    "for (var nzj = 0; nzj < 5; nzj++) nz.appendChild(document.createTextNode('z'));"
+    "nz.normalize();"
+    "fetch('/api/normrun?n=' + nz.childNodes.length + '&a=' + nz.firstChild.data + '&b=' + nz.lastChild.data);"
     /* The interface OBJECTS: `instanceof` up the whole chain, and a derived one inheriting Node's constants. */
     "fetch('/api/iface?v=' + (document.body instanceof Element && document.body instanceof Node &&"
     " document instanceof Document && tx instanceof Text && tx instanceof CharacterData &&"
@@ -1013,6 +1039,11 @@ int main(void) {
         { "\"/api/insertbefore\"","isfirst" },
         { "\"/api/connected\"",   "isconn"  },
         { "\"/api/position\"",    "isdisc"  },
+        /* the four arms of compareDocumentPosition the disconnected assertion never reached */
+        { "\"/api/posbits\"",    "containedby" },
+        /* normalize's inner run: 3 children left (the merged text, the <hr>, the merged tail), and the two
+           merged strings are the 40 digits and the 5 z's — an off-by-one in the run gives a shorter one */
+        { "\"/api/normrun\"",    "0123456789012345678901234567890123456789" },
         { "\"/api/iface\"",       "isiface" },   /* instanceof up the chain + inherited interface constants */
         { "\"/api/event\"",       "isevent" },   /* new Event(type, EventInit) with a dictionary getter */
         { "\"/api/evcancel\"",    "iscancel"},   /* preventDefault over the canceled slot */
