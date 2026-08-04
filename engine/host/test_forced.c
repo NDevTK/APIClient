@@ -349,6 +349,20 @@ static const char *HTML =
     /* §3.2: a second abort() fires nothing — the state half answers whether there is anything to fire. */
     "var sonce = sflag; sc.abort();"
     "fetch('/api/abortonce?v=' + (sflag === sonce ? 'isonce' : 'wrong'));"
+    /* §4.10 FORMS — a submission is a REQUEST the page's own code composes, and submit() DERIVES it without
+       sending anything, which is the rule for a state-mutating request. The value a field carries is the
+       endpoint's example value, and when it is an ATTACKER SOURCE the finding says so rather than inventing
+       one — which is why the value STATE holds a JSValue and not bytes. */
+    "var fq = document.createElement('form'); fq.action = '/api/search';"
+    "var fi = document.createElement('input'); fi.name = 'q'; fq.appendChild(fi); fi.value = state.q;"
+    "var fd = document.createElement('input'); fd.name = 'off'; fd.setAttribute('disabled',''); fq.appendChild(fd);"
+    "var fc = document.createElement('input'); fc.name = 'agree'; fc.setAttribute('type','checkbox');"
+    "fq.appendChild(fc); document.body.appendChild(fq); fq.submit();"
+    "fc.checked = true; fq.submit();"
+    /* NOT `fi.value === state.q` — that compares two CONCOLICS, which forks both ways and reports both
+       answers. The state's presence is proved by the submission carrying {state}.q; what this asserts is the
+       tree-shaped half, which is concrete. */
+    "fetch('/api/formstate?v=' + (fq.elements.length === 3 && document.forms.length >= 1 ? 'isform' : 'wrong'));"
     "if (cfg.admin) { setBodyAttr('data-tt','ttADMIN'); appendChild('kidADMIN'); rx.flag='flagADMIN'; fetch('/api/data?role=admin'); loadScript('/chunk/admin.js'); } else { setBodyAttr('data-tt','ttPUBLIC'); appendChild('kidPUBLIC'); rx.flag='flagPUBLIC'; fetch('/api/data?role=public'); }"   /* admin arm: same endpoint MERGES + a LAZY CHUNK loads. Each arm ALSO writes an attribute, appends a child node, AND assigns the ACCESSOR rx.flag (invokes the setter -> rx._f) -> per-flow DOM + heap-accessor writes across the EXISTING fork. */
     "fetch('/api/whoami?tt=' + getBodyAttr('data-tt'));"   /* DOM ATTR READ-BACK after the fork: per-flow -> admin flow reads ttADMIN, public flow reads ttPUBLIC */
     "fetch('/api/kid?mark=' + lastChildMark());"   /* DOM NODE READ-BACK: each flow's appended child is its OWN last child -> admin reads kidADMIN, public reads kidPUBLIC (neither's inserted node leaks) */
@@ -714,8 +728,15 @@ int main(void) {
         { "\"/api/dclbubble\"",  "isdcl"   },   /* the ENGINE's own fire walks the same path to the window */
         { "\"/api/abortsync\"",  "issync"  },   /* §3.2 abort() has run its listeners before it returns */
         { "\"/api/abortonce\"",  "isonce"  },   /* and a second abort() fires nothing */
+        { "\"/api/formstate\"",  "isform"  },   /* a control's value state, the form's listed elements */
     };
     int nodealgo_tt = !strstr(js, "wrong");
+    /* §4.10: submit() derived the GET; the named field carries its SOURCE rather than an invented value; a
+       DISABLED control contributed nothing and an UNCHECKED box contributed nothing, both of which only an
+       absence can prove; and the second submit AFTER checking it does include it. */
+    if (!strstr(js, "\"/api/search\"") || !strstr(js, "{state}.q")) nodealgo_tt = 0;
+    if (strstr(js, "\"off\"")) nodealgo_tt = 0;
+    if (!strstr(js, "\"agree\"")) nodealgo_tt = 0;
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)
         if (!strstr(js, NODE_ALGOS[ai][0]) || !strstr(js, NODE_ALGOS[ai][1])) nodealgo_tt = 0;
     int domidl_tt   = domproto_tt && cdnull_tt && tcnull_tt && nodeval_tt && tcset_tt;
