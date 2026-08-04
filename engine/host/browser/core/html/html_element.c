@@ -32,6 +32,7 @@
 #include "core/events/event_target.h"
 #include "core/html/html_element.h"
 #include "core/css/css_style_declaration.h"
+#include "core/html/html_form.h"
 
 static JSValue g_html_proto;          /* HTMLElement.prototype */
 static JSValue g_unknown_proto;       /* HTMLUnknownElement.prototype — HTML's answer for a tag it does not know */
@@ -285,6 +286,17 @@ static JSValueConst html_proto_for(lxb_dom_element_t *el)
     return g_unknown_proto;
 }
 
+/* The prototype an interface NAME was built for. A lookup rather than a stored handful, because this table is
+   the single source of which interfaces exist and a second list of them could disagree with it. */
+static JSValueConst html_iface_proto(const char *iface)
+{
+    int i;
+    for (i = 0; i < HTML_IFACE_N; i++)
+        if (strcmp(HTML_IFACE[i].iface, iface) == 0) return g_iface_proto[i];
+    DFAIL("an interface prototype was asked for by a name the element-interface table does not list");
+    return JS_UNDEFINED;
+}
+
 /* §3.2.2 focus() and blur(). A headless run has no focus ring, and the spec defines no scriptable result for
    either beyond moving the focus — which is a state this engine does not model — so each is a documented
    no-effect rather than a value invented for it. click() is NOT one of these: it fires a real event, so it is
@@ -331,6 +343,11 @@ void html_element_init(JSContext *ctx)
         if (HTML_IFACE[i].nrefl)
             element_install_reflections(ctx, g_iface_proto[i], HTML_IFACE[i].refl, HTML_IFACE[i].nrefl);
     }
+
+    /* §4.10's members go on the interfaces that DECLARE them, which is why the forms component is handed the
+       prototypes rather than reaching for them: this file owns the table, that one owns the algorithms. */
+    html_form_install(ctx, html_iface_proto("HTMLFormElement"), html_iface_proto("HTMLInputElement"),
+                      html_iface_proto("HTMLTextAreaElement"), html_iface_proto("HTMLOptionElement"));
 
     /* node.c keys its prototype table by node TYPE; an element's interface is keyed by its LOCAL NAME, which is
        HTML's mapping and not the DOM's. So the base ASKS, and stays the one place a wrapper is built. */

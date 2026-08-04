@@ -20,6 +20,7 @@
 #include "solver/engine.h"
 #include "core/events/event_target.h"
 #include "core/html/html_element.h"
+#include "core/html/html_form.h"
 #include "core/css/css_style_declaration.h"
 #include "core/dom/document.h"
 #include "core/idl_args.h"
@@ -415,6 +416,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
         document_install_members(ctx, proto);
         /* §3.1.1's IDL includes GlobalEventHandlers and adds onreadystatechange / onvisibilitychange. */
         event_target_install_handlers(ctx, proto, EH_GLOBAL | EH_DOCUMENT);
+        html_form_install_document_members(ctx, proto);   /* §3.1.1 document.forms */
         node_set_proto(ctx, LXB_DOM_NODE_TYPE_DOCUMENT, proto);
     }
     element_doc_set(dom);   /* BEFORE the wrap: the tree accessors below read through it */
