@@ -59,19 +59,46 @@ Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n) {
     CHECK(f, "flow_add: OOM allocating a flow — a dropped flow corrupts the frontier");
     f->fn = JS_DupValue(ctx, fn);
     f->dec = dec; f->dec_n = dec_n;
-    f->val = 0.0; f->cpu = 0; f->visits = 0;
+    f->val = 0.0; f->cpu = 0;
     f->cand_src = NULL; f->cand_payload = NULL; f->cand_sink = NULL;
     g_flows[g_flows_n++] = f;
     g_gen++;   /* frontier changed */
     return f;
 }
 
+/* THE SERVICE QUANTUM — why the rank moves in steps rather than continuously.
+ *
+ * Aging was applied per SCHEDULER STEP, so the running flow's weight fell by a hair after every single step. Two
+ * flows of equal value — the ordinary case, since most flows have emitted the same amount and very often none —
+ * therefore traded places after ONE step each, forever. That is a fair-share scheduler with an infinitesimal
+ * quantum, which thrashes by construction, and here every trade pays a full COW swap: the smoke fixture spent
+ * 4.4 MILLION context switches on work that needed a few thousand, and the cost of each grew with the size of
+ * the document, so a page with a few hundred DOM writes could not finish at all.
+ *
+ * The rate is UNCHANGED — a flow still ages by exactly cpu * FLOW_AGE_RATE in the long run, so which flow wins
+ * over any real interval is the same decision it always was. What is gone is the sub-quantum RESOLUTION: rank
+ * moves one notch per quantum of service, so the flow that holds the lead keeps it for a quantum and a tied
+ * rival then takes its turn. Nothing is dropped, nothing is truncated and no flow is skipped — it is an ORDER
+ * decision, which is the only thing the WFQ is allowed to be.
+ *
+ * AN EMIT STILL PREEMPTS IMMEDIATELY. flow_credit_emit zeroes cpu and bumps the generation, so a flow that
+ * produces value jumps the queue within the quantum — the quantum bounds thrash between EQUALS, never the
+ * response to something that actually changed the ranking. */
+#define FLOW_SERVICE_QUANTUM 4096
+#define FLOW_AGE_RATE 1e-6
+
 /* Anytime-bandit priority: reward + UCB optimism − CPU aging. Additive (never a value/cpu ratio — the aging
    term already yields value-per-CPU behaviour without the 0/0 degeneracy on an unrun flow). */
 double flow_weight(const Flow *f) {
     double reward = f->val;
-    double ucb    = 1.0 / (double)(f->visits + 1);   /* a never-run flow (visits 0) gets the full bonus */
-    double aging  = (double)f->cpu * 1e-6;            /* CPU burned without emitting sinks the flow */
+    /* OPTIMISM DECAYS WITH SERVICE, NOT WITH BEING PICKED. Keyed on the DISPATCH COUNT it fell by 0.167 the first time the
+       scheduler chose a flow — forty times a quantum of aging — so the act of switching to a flow was enough to
+       make it no longer the best one, and the scheduler switched straight back. The guarantee is unchanged and
+       is what the term is for: a flow that has never RUN has no service, so it carries the full bonus and
+       cannot be starved. What is gone is a rank that moves because of a decision rather than because of work. */
+    double ucb    = 1.0 / (1.0 + (double)(f->cpu / FLOW_SERVICE_QUANTUM));
+    double aging  = (double)(f->cpu / FLOW_SERVICE_QUANTUM)
+                  * (FLOW_SERVICE_QUANTUM * FLOW_AGE_RATE);   /* same rate, quantised — see above */
     return reward + ucb - aging;
 }
 

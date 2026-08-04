@@ -40,6 +40,23 @@ static JSContext *g_cow_ctx = NULL;   /* for the shadow's JSValue dup/free (set 
    until the first fork -> the base-chain walks are no-ops and behaviour is byte-identical to the flat buffer. */
 typedef struct DomSeg { DomUndo *e; int n; struct DomSeg *base; int refcount; } DomSeg;
 static DomSeg *g_dom_base = NULL;
+
+/* THE CHAIN THAT IS CURRENTLY APPLIED TO THE DOCUMENT, and the whole reason a switch is not O(delta).
+ *
+ * The segments are already immutable, refcounted and structurally SHARED — two flows that forked from a common
+ * point hold the same suffix by POINTER — and the swap threw all of that away: it unapplied the outgoing flow's
+ * entire chain and applied the incoming flow's entire chain, redoing by hand the part they agree on. For a flow
+ * that had appended three hundred nodes that is six hundred node detach/re-attach operations per switch, and
+ * the scheduler switches often, so the cost of one scheduling DECISION grew with the size of the document —
+ * exactly backwards for an engine whose whole point is interleaving flows over a real page.
+ *
+ * What is applied is a property of the DOCUMENT, not of any flow, so it is tracked here: everything from
+ * `g_dom_installed` downward is live in the tree. A switch moves that pointer to the incoming flow's chain by
+ * walking to the two chains' lowest common segment and touching only what lies above it. The shared suffix is
+ * never unapplied and never re-applied, because both flows agree about it by construction — a segment is frozen
+ * at a fork and immutable after, so any two holders read the same values from it.
+ * The HEAD is different and is always swapped: it is mutable and private to one flow. */
+static DomSeg *g_dom_installed = NULL;
 static void dom_unapply_seg(DomSeg *s);   /* fwd: dom_revert (defined earlier) walks the base chain */
 static void dom_seg_unref(DomSeg *s);
 
@@ -203,7 +220,11 @@ void dom_revert(void) {   /* DISCARD the running flow's DOM writes -> baseline (
         }
     }
     g_dom_undo_n = 0;
-    dom_unapply_seg(g_dom_base);   /* restore baseline through the (now head-reverted) base chain */
+    /* A DISCARD, so the document goes all the way back to the baseline and NOTHING stays installed — the
+       segments this flow held may be freed below, and an installed pointer into freed memory is what the next
+       switch would walk. */
+    dom_unapply_seg(g_dom_installed);
+    g_dom_installed = NULL;
     dom_seg_unref(g_dom_base); g_dom_base = NULL;   /* drop this flow's reference; base freed iff no sibling holds it */
 }
 /* per-entry UNAPPLY (flow -> parked): stash the flow's value/taint into cur, restore the baseline. */
@@ -269,17 +290,53 @@ static void dom_apply_entry(DomUndo *u) {
    UNAPPLY is head-first, so it is a plain loop. APPLY is deepest-ancestor-first, which the recursion got by
    unwinding; it gets it here by REVERSING the base pointers in place, walking forward, and reversing them back
    — O(depth), no allocation, and nothing to fail on a path where a failed allocation would corrupt the swap. */
-static void dom_apply_seg(DomSeg *s)
-{
-    DomSeg *prev = NULL, *cur = s, *next;
+/* How deep a chain is — the number of FORKS behind it, never the number of entries. Both walks below are
+   O(depth) for that reason, and depth is the shape of the frontier rather than the size of the page. */
+static int dom_seg_depth(DomSeg *s) { int d = 0; for (; s; s = s->base) d++; return d; }
 
-    while (cur) { next = cur->base; cur->base = prev; prev = cur; cur = next; }   /* reverse: deepest first */
-    cur = prev; prev = NULL;
-    while (cur) {
+/* The deepest segment BOTH chains hold. Pointer identity is the whole test: a segment is frozen once and never
+   written again, so two chains that reach the same pointer agree about everything from there down. */
+static DomSeg *dom_seg_common(DomSeg *a, DomSeg *b)
+{
+    int da = dom_seg_depth(a), db = dom_seg_depth(b);
+    while (da > db) { a = a->base; da--; }
+    while (db > da) { b = b->base; db--; }
+    while (a != b) { a = a->base; b = b->base; }
+    return a;
+}
+
+/* Apply `s` down to (not including) `stop`, deepest-first. `stop` stands in for NULL as the end of the part
+   being reversed, so the shared suffix below it is not touched at all — not read, not written, not walked.
+   UNAPPLY is head-first, so it is a plain loop. APPLY is deepest-ancestor-first, which a recursion would get by
+   unwinding; it gets it here by REVERSING the base pointers in place, walking forward, and reversing them back
+   — O(depth), no allocation, and nothing to fail on a path where a failed allocation would corrupt the swap.
+   All recursion is banned here for one reason: C stack cannot be suspended, parked or resumed, and a switch
+   that cannot be interrupted mid-way is a switch that cannot time-travel. */
+static void dom_apply_seg_until(DomSeg *s, DomSeg *stop)
+{
+    DomSeg *prev = stop, *cur = s, *next;
+
+    while (cur != stop) { next = cur->base; cur->base = prev; prev = cur; cur = next; }
+    cur = prev; prev = stop;
+    while (cur != stop) {
         for (int i = 0; i < cur->n; i++) dom_apply_entry(&cur->e[i]);
-        next = cur->base; cur->base = prev; prev = cur; cur = next;               /* and restore as we go */
+        next = cur->base; cur->base = prev; prev = cur; cur = next;
     }
 }
+
+/* Make `want` the installed chain: the ONE place the document's applied state changes, and the reason a switch
+   between two related flows costs what they DIVERGED by rather than everything either of them has done. */
+static void dom_install_chain(DomSeg *want)
+{
+    DomSeg *common = dom_seg_common(g_dom_installed, want);
+    DomSeg *s;
+
+    for (s = g_dom_installed; s != common; s = s->base)      /* head-first, as unapply always is */
+        for (int i = s->n - 1; i >= 0; i--) dom_unapply_entry(&s->e[i]);
+    dom_apply_seg_until(want, common);
+    g_dom_installed = want;
+}
+
 static void dom_unapply_seg(DomSeg *s)
 {
     for (; s; s = s->base)
@@ -297,12 +354,16 @@ static void dom_seg_unref(DomSeg *s) {
 }
 /* UNAPPLY (flow -> parked): head reverse, then the shared base chain. Restores the baseline DOM+taint. */
 void dom_unapply(void) {
+    /* ONLY THE HEAD. The base chain stays applied and `g_dom_installed` says so — the incoming flow's apply
+       decides how much of it actually has to move, which for a sibling is none of it. */
     for (int i = g_dom_undo_n - 1; i >= 0; i--) dom_unapply_entry(&g_dom_undo[i]);
-    dom_unapply_seg(g_dom_base);   /* NULL until a fork shares a base -> no-op (flat behavior) */
+    DCHECK(g_dom_installed == g_dom_base,
+           "the applied chain is not the running flow's — a base was loaded or taken without going through "
+           "dom_apply, so the document is showing a chain nobody is running");
 }
 /* APPLY (parked -> flow): base chain forward (deepest first), then the head on top. */
 void dom_apply(void) {
-    dom_apply_seg(g_dom_base);
+    dom_install_chain(g_dom_base);
     for (int i = 0; i < g_dom_undo_n; i++) dom_apply_entry(&g_dom_undo[i]);
 }
 /* FORK the DOM delta: freeze the running flow's HEAD into a shared immutable base segment that BOTH the running
@@ -319,6 +380,7 @@ void *dom_cow_fork(void) {
     seg->e = g_dom_undo; seg->n = g_dom_undo_n; seg->base = g_dom_base; seg->refcount = 2;   /* running flow + sibling */
     g_dom_undo = NULL; g_dom_undo_n = 0; g_dom_undo_cap = 0;   /* fresh empty head for the running flow */
     g_dom_base = seg;
+    g_dom_installed = seg;   /* the frozen head belongs to the applied chain now, not to anyone's head */
     for (int i = 0; i < seg->n; i++) dom_apply_entry(&seg->e[i]);   /* re-apply head -> running flow continues */
     g_dom_capture = sv;
     return seg;

@@ -586,7 +586,6 @@ int engine_sched_step(void) {
             if (cur) flow_switch_out(ctx, cur);
             flow_switch_in(ctx, best);
             solve_flow_begin(best);   /* the substitution is live only while its own flow runs */
-            best->visits++;
             cur = best;
             /* COUNTED, and it leaves in the result document. A scheduler that interleaves and one that runs
                its flows FIFO produce the same endpoints on an easy page and diverge on every hard one, so

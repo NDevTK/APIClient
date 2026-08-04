@@ -216,11 +216,11 @@ static const char *HTML =
     "fetch('/api/rootnode?v=' + (document.body.getRootNode({ get composed(){ var n=0; for (var i=0;i<400;i++) n+=i; return true; } }) === document ? 'isroot' : 'wrong'));"
     "var c1 = document.createElement('p'); c1.setAttribute('k','v'); var c2 = c1.cloneNode(true);"
     "fetch('/api/equalnode?v=' + (c1.isEqualNode(c2) && !c1.isSameNode(c2) ? 'iseq' : 'wrong'));"
-    /* THE WALK IS THE PAGE'S SIZE, so it is a MACHINE that yields at every pair. 12 nested nodes is 12
+    /* THE WALK IS THE PAGE'S SIZE, so it is a MACHINE that yields at every pair. 300 nested nodes is 300
        suspension points inside one member — the answer being right afterwards is the whole claim, because a
        resume that lost its cursors would compare the wrong pair or re-walk from the top and never finish. */
     "var dp = document.createElement('div'), dq = dp;"
-    "for (var di = 0; di < 12; di++) { var dn = document.createElement('span'); dn.setAttribute('k', 'v' + di);"
+    "for (var di = 0; di < 300; di++) { var dn = document.createElement('span'); dn.setAttribute('k', 'v' + di);"
     " dq.appendChild(dn); dq = dn; }"
     "var dp2 = dp.cloneNode(true);"
     "var deep1 = dp.isEqualNode(dp2);"

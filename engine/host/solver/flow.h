@@ -8,7 +8,7 @@
  * flow is just (fn, decision vector), frame-agnostic by construction.
  *
  * The WFQ orders flows by an anytime-bandit priority: accumulated emitted VALUE + a UCB optimism bonus
- * (∝ 1/(visits+1) so a never-run flow is never starved) − CPU aging (a monopolizer that burns CPU without
+ * (∝ 1/(1 + service) so a never-run flow is never starved) − CPU aging (a monopolizer that burns CPU without
  * emitting sinks below productive+unrun flows). ORDER-only: it never drops a work item. */
 #ifndef ENGINE_HOST_SOLVER_FLOW_H
 #define ENGINE_HOST_SOLVER_FLOW_H
@@ -47,7 +47,6 @@ typedef struct Flow {
     int dec_n;             /* length of dec */
     double val;            /* accumulated emitted VALUE (new @H + @S) — the WFQ's reward term */
     long cpu;              /* CPU units consumed since last emit — the WFQ's aging term */
-    int visits;            /* dispatch count — the WFQ's UCB optimism denominator */
 
     /* INTERLEAVING STATE — persisted while this flow is PAUSED so the scheduler can run another flow and come
        back. A flow is preempted mid-execution (cooperative quantum) and resumed byte-identically; its COW
