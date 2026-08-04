@@ -23,6 +23,7 @@
 #include "core/html/html_element.h"
 #include "core/html/html_form.h"
 #include "core/html/custom_elements.h"
+#include "core/dom/dom_token_list.h"
 #include "core/css/css_style_declaration.h"
 #include "core/dom/document.h"
 #include "core/idl_args.h"
@@ -122,6 +123,43 @@ static JSValue qs_run(JSContext *ctx, lxb_dom_node_t *root, const char *sel, boo
 JSValue document_qs_run(JSContext *ctx, lxb_dom_node_t *root, const char *sel, int all)
 {
     return qs_run(ctx, root, sel, all != 0);
+}
+
+static lxb_status_t sel_match_cb(lxb_dom_node_t *node, lxb_css_selector_specificity_t spec, void *vctx)
+{
+    (void)node; (void)spec;
+    *(bool *)vctx = true;
+    return LXB_STATUS_OK;
+}
+
+/* §4.9 "match a selector against an element" — the SINGLE-NODE question, where find answers it for a subtree.
+   The same parser and the same selector engine, because a second copy could disagree with the first about what
+   a selector means and nothing would ever notice. -1 means the selector did not parse, which §4.9 makes a
+   SyntaxError rather than a silent no-match. */
+int document_sel_match(lxb_dom_node_t *node, const char *sel)
+{
+    lxb_css_parser_t *parser;
+    lxb_selectors_t *selectors;
+    lxb_css_selector_list_t *list;
+    bool hit = false;
+    int r = -1;
+
+    parser = lxb_css_parser_create();
+    if (!parser || lxb_css_parser_init(parser, NULL) != LXB_STATUS_OK) return -1;
+    selectors = lxb_selectors_create();
+    if (!selectors || lxb_selectors_init(selectors) != LXB_STATUS_OK) {
+        lxb_css_parser_destroy(parser, true);
+        return -1;
+    }
+    list = lxb_css_selectors_parse(parser, (const lxb_char_t *)sel, strlen(sel));
+    if (list) {
+        lxb_selectors_match_node(selectors, node, list, sel_match_cb, &hit);
+        lxb_css_selector_list_destroy_memory(list);
+        r = hit ? 1 : 0;
+    }
+    lxb_selectors_destroy(selectors, true);
+    lxb_css_parser_destroy(parser, true);
+    return r;
 }
 
 static JSValue js_doc_query_selector(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -490,8 +528,9 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     node_install_interfaces(ctx, global);
     node_install_interface(ctx, global, "Element", element_proto());
     html_element_install(ctx, global);   /* HTMLElement and every per-tag interface object */
-    cssom_install(ctx, global);
-    custom_elements_install(ctx, global);   /* §4.13.4 window.customElements */          /* CSSStyleDeclaration, and getComputedStyle on the Window */
+    cssom_install(ctx, global);          /* CSSStyleDeclaration, and getComputedStyle on the Window */
+    custom_elements_install(ctx, global);   /* §4.13.4 window.customElements */
+    dom_token_list_install(ctx, global);    /* §7.1 DOMTokenList */
     node_install_interface(ctx, global, "Document", node_type_proto(LXB_DOM_NODE_TYPE_DOCUMENT));
     engine_set_document_done_hook(document_done_stage);
 }

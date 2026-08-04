@@ -31,6 +31,7 @@
 #include "core/events/event_target.h"
 #include "core/html/html_element.h"
 #include "core/html/custom_elements.h"
+#include "core/dom/dom_token_list.h"
 #include "core/css/css_style_declaration.h"
 #include <lexbor/ns/ns.h>
 
@@ -409,6 +410,33 @@ static JSValue js_el_query_selector(JSContext *ctx, JSValueConst this_val, int a
     return r;
 }
 
+/* §4.9 matches / closest — the two questions a router asks. `matches` is the single-node match; `closest`
+   walks INCLUSIVE ancestors and answers the first that matches, which is how a delegated click handler finds
+   the row it belongs to. Both are the selector engine's, not a second reading of a selector.
+   magic 0 = matches, 1 = closest. */
+static JSValue js_el_matches(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_element_t *el = elem_of(this_val);
+    lxb_dom_node_t *n;
+    const char *sel;
+    int m = 0;
+
+    if (!el || argc < 1) return magic ? JS_NULL : JS_FALSE;
+    sel = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
+    if (!sel) return JS_EXCEPTION;
+    for (n = lxb_dom_interface_node(el); n; n = n->parent) {
+        if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) break;
+        m = document_sel_match(n, sel);
+        if (m != 0) break;                 /* matched, or the selector is invalid */
+        if (!magic) break;                 /* `matches` asks about this element alone */
+    }
+    JS_FreeCString(ctx, sel);
+    /* §4.9: an unparseable selector is a SyntaxError, never a quiet "no". */
+    if (m < 0) return JS_ThrowDOMException(ctx, "SyntaxError", "not a valid selector");
+    if (magic) return m > 0 ? node_wrap(ctx, n) : JS_NULL;
+    return JS_NewBool(ctx, m > 0);
+}
+
 /* §4.2.6 children / firstElementChild / lastElementChild / childElementCount — the ELEMENT-only walk beside
    Node's childNodes, which a page uses precisely to skip the whitespace Text nodes a parser leaves behind.
    `children` is a STATIC array, the same named gap childNodes and querySelectorAll carry. */
@@ -522,6 +550,17 @@ void element_init(JSContext *ctx)
                        idl_method_id(ctx, IDL_1STR, 1, js_el_query_selector, 0));
     idl_install_method(ctx, proto, "querySelectorAll", 1,
                        idl_method_id(ctx, IDL_1STR, 1, js_el_query_selector, 1));
+    {
+        /* §4.9: webkitMatchesSelector is `matches` under its historical name — the IDL declares it as the same
+           operation, so it IS the same declaration and not a forwarding wrapper. */
+        int m = idl_method_id(ctx, IDL_1STR, 1, js_el_matches, 0);
+        idl_install_method(ctx, proto, "matches", 1, m);
+        idl_install_method(ctx, proto, "webkitMatchesSelector", 1, m);
+        idl_install_method(ctx, proto, "closest", 1,
+                           idl_method_id(ctx, IDL_1STR, 1, js_el_matches, 1));
+    }
+    dom_token_list_init(ctx);   /* its prototype must exist before classList names it */
+    dom_token_list_install_element(ctx, proto);   /* §4.9's [SameObject] classList */
 
     /* `[CEReactions] attribute [LegacyNullToEmptyString] DOMString innerHTML` — the extended attribute is part
        of the TYPE, so `el.innerHTML = null` empties the element instead of parsing the markup `null`. WRITE-ONLY
@@ -576,6 +615,7 @@ void element_free(JSContext *ctx)
     html_element_free(ctx);
     cssom_free(ctx);
     custom_elements_free(ctx);
+    dom_token_list_free(ctx);
     JS_FreeValue(ctx, g_element_proto);
     g_element_proto = JS_UNDEFINED;
     g_reflect_n = 0;

@@ -318,6 +318,34 @@ static const char *HTML =
     /* A computed declaration is READ-ONLY, which the spec makes an error rather than a silent no-op. */
     "var csro = 'nothrow'; try { csc.setProperty('color', 'blue'); } catch (e) { csro = 'isro'; }"
     "fetch('/api/cssro?v=' + csro);"
+    /* §4.9 matches / closest, and §7.1's DOMTokenList — the two questions a router asks and the way a bundle
+       gates a branch of its UI. classList holds NO tokens of its own: they are the `class` attribute split, so
+       a write through the list and a write through setAttribute are the same write, and it time-travels
+       because the attribute does. `classList === classList` is [SameObject] and a page relies on it. */
+    "var cl = document.createElement('div'); cl.className = 'a b'; document.body.appendChild(cl);"
+    "var cll = cl.classList;"
+    "cll.add('c'); cll.add('a');"          /* already present: a set, so no duplicate */
+    "cll.remove('b');"
+    "var tg1 = cll.toggle('d'); var tg2 = cll.toggle('d');"        /* on, then off */
+    "var tg3 = cll.toggle('a', true);"     /* force keeps it, and answers force */
+    "var rp = cll.replace('c', 'e');"
+    /* 'a b' +c +a(dup) -b +d -d a(force) c->e  ==>  'a e' */
+    "fetch('/api/classlist?v=' + (cl.getAttribute('class') === 'a e'"
+    " && tg1 === true && tg2 === false && tg3 === true && rp === true"
+    " && cll.contains('e') && !cll.contains('b') && cll.length === 2 && cll.item(0) === 'a'"
+    " && cl.classList === cll ? 'iscl' : 'wrong'));"
+    /* The list is a VIEW: a write through the attribute is visible through the list, with nothing to sync. */
+    "cl.setAttribute('class', 'x y'); "
+    "fetch('/api/clview?v=' + (cll.length === 2 && cll.contains('y') && String(cll) === 'x y'"
+    " ? 'isview' : 'wrong'));"
+    "var m1 = cl.matches('div.x'); var m2 = cl.matches('span');"
+    "var inner = document.createElement('b'); cl.appendChild(inner);"
+    "var c1 = inner.closest('div'); var c2 = inner.closest('nav');"
+    "fetch('/api/matches?v=' + (m1 && !m2 && c1 === cl && c2 === null"
+    " && inner.closest('b') === inner ? 'ismatch' : 'wrong'));"
+    /* §4.9: a selector that does not parse is a SyntaxError, never a quiet `false`. */
+    "var msy = 'wrong'; try { cl.matches('!!!'); } catch (e) { msy = 'issyn'; }"
+    "fetch('/api/matchbad?v=' + msy);"
     /* §2.9 THE PROPAGATION PATH. One dispatch walks the target and then its ancestors: `target` stays put,
        `currentTarget` moves, and the phase goes AT_TARGET then BUBBLING_PHASE. The old delivery enqueued each
        listener as its own job with no walk between them, so none of this could be observed. */
@@ -873,6 +901,10 @@ int main(void) {
         { "\"/api/cedeep\"",     "isdeep"  },   /* the insertion steps walk the SUBTREE, and insertBefore runs them */
         { "\"/api/cegone\"",     "isgone"  },   /* …and the removing steps run disconnectedCallback */
         { "\"/api/ceattr\"",     "data-w"  },   /* attributeChangedCallback, for the OBSERVED name only */
+        { "\"/api/classlist\"",  "iscl"    },   /* §7.1 add/remove/toggle/replace over the class attribute */
+        { "\"/api/clview\"",     "isview"  },   /* …and the list is a VIEW, with nothing to keep in step */
+        { "\"/api/matches\"",    "ismatch" },   /* §4.9 matches, and closest walking INCLUSIVE ancestors */
+        { "\"/api/matchbad\"",   "issyn"   },
         { "\"/api/rejevent\"",  "isrej"   },   /* §8.1.7.5's cancelable event reached a page listener */
         { "\"/api/prereq\"",    "isreq"   },   /* a `required` dictionary member, enforced by the declaration */
         { "\"/api/prector\"",   "isctor"  },

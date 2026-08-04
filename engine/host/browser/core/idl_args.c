@@ -256,6 +256,15 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             s->i++;
             continue;
         }
+        if (t == IDL_BOOLEAN) {
+            /* ToBoolean runs nothing, but the ARGUMENT still crosses converted: `toggle(t, 1)` forces on, and a
+               body that got the 1 would have to remember to coerce it. */
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            s->args[s->i] = JS_IsUndefined(a) ? JS_UNDEFINED : JS_NewBool(ctx, JS_ToBool(ctx, a));
+            s->i++;
+            continue;
+        }
         if (t == IDL_LONG) {
             r = step_toint64_run(ctx, &s->hdr, a, cb_result, &s->nums[s->i], out_cb, out_argc);
             cb_result = JS_UNDEFINED;

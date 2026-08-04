@@ -19,5 +19,7 @@ void document_free(JSContext *ctx);
 /* The ParentNode mixin's ONE selector engine (§4.2.6), scoped to any root — Document, Element and
    DocumentFragment differ only in what they scope to. `all` != 0 returns an array, else the first match or null. */
 JSValue document_qs_run(JSContext *ctx, lxb_dom_node_t *root, const char *sel, int all);
+/* §4.9's single-node match: 1 matched, 0 did not, -1 the selector did not parse (a SyntaxError to the caller). */
+int document_sel_match(lxb_dom_node_t *node, const char *sel);
 
 #endif

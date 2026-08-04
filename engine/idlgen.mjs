@@ -69,7 +69,9 @@ const INTERFACES = {
      installed on the base really is reachable on an element, and reporting it ABSENT would be the audit lying
      in the direction that gets a real gap ignored. Document is listed the same way for the same reason — it is
      a node_wrap of the document node now, with Document.prototype chained to Node.prototype. */
-  Element:             ["core/dom/element.c", "core/dom/node.c", "core/events/event_target.c"],
+  DOMTokenList:        "core/dom/dom_token_list.c",
+  Element:             ["core/dom/element.c", "core/dom/node.c", "core/events/event_target.c",
+                        "core/dom/dom_token_list.c"],
   /* The HTML layer. Each interface's files are its own plus everything it INHERITS from — HTMLElement on
      Element on Node — because a member installed on a base really is reachable, and reporting it absent is the
      audit lying in the direction that gets a real gap ignored. */
