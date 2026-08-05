@@ -673,10 +673,21 @@ int engine_sched_step(void) {
             {
                 int64_t spent = engine_now_ms() - t0;
                 if (spent > ENGINE_QUANTUM_MS * 400) {
-                    char why[192];
+                    char why[448];
                     int wi = 0;
                     const char *sk = cur && cur->cand_sink ? cur->cand_sink : "(exploration flow)";
                     const char *pl = cur ? cur->cand_payload : NULL;
+                    /* WHICH PROGRAM. "a resume ran 5s" is still a symptom until the JS it was running is named,
+                       and the flow already knows: script_i indexes the document's scripts and then the flow's own
+                       dynamic bodies (a lazy chunk, an injected <script>, a fired PoC). Without this the only way
+                       left to find the code is bisecting the fixture by hand, which is the thing this assertion
+                       exists to replace. */
+                    const char *bodytxt = NULL;
+                    int si = cur ? cur->script_i : -1;
+                    if (cur) {
+                        if (si < n) bodytxt = bodies[si];
+                        else if (si - n < cur->dyn_n) bodytxt = cur->dyn[si - n];
+                    }
                     uint64_t pq = 0, pf = 0;
                     JS_FlowPreemptStats(&pq, &pf);
                     /* REQUESTED vs FIRED across the offending step is the discriminator between the two very
@@ -687,13 +698,19 @@ int engine_sched_step(void) {
                     wi += snprintf(why, sizeof why,
                                    "a flow ran %d ms with no suspend point (preempts requested=%llu fired=%llu "
                                    "across this step) — this path has no suspend/resume seam and the scheduler "
-                                   "cannot park it; unit=%s flow=%s payload=",
+                                   "cannot park it; unit=%s script_i=%d flow=%s payload=",
                                    (int)spent, (unsigned long long)(pq - pq0),
-                                   (unsigned long long)(pf - pf0), g_step_unit, sk);
+                                   (unsigned long long)(pf - pf0), g_step_unit, si, sk);
                     /* The payload is attacker-shaped bytes and the message lands inside JSON unescaped, so
                        anything that would break the line is replaced rather than emitted. */
                     for (; pl && *pl && wi < (int)sizeof why - 2; pl++, wi++)
                         why[wi] = (*pl < 0x20 || *pl > 0x7E || *pl == '"' || *pl == '\\') ? '.' : *pl;
+                    if (bodytxt) {
+                        const char *b = bodytxt;
+                        wi += snprintf(why + wi, sizeof why - (size_t)wi, " body=");
+                        for (; *b && wi < (int)sizeof why - 2; b++, wi++)
+                            why[wi] = (*b < 0x20 || *b > 0x7E || *b == '"' || *b == '\\') ? '.' : *b;
+                    }
                     why[wi] = 0;
                     DFAIL(why);
                 }
