@@ -1,6 +1,7 @@
 /* The dispatch loop — see engine.h. */
 #include "solver/engine.h"
-#include "core/html/unhandled_rejection.h"   /* HTML §8.1.7.5: what the browser half owes this checkpoint */
+#include "core/html/unhandled_rejection.h"
+#include "core/idl_args.h"   /* the one point every Web API member passes through — see idl_slowest_step */   /* HTML §8.1.7.5: what the browser half owes this checkpoint */
 #include "solver/result.h"
 #include "solver/solve.h"
 #include "solver/flow.h"
@@ -688,6 +689,7 @@ int engine_sched_step(void) {
             uint64_t pq0 = 0, pf0 = 0, pa0 = g_preempt_asked;
             JS_FlowPreemptStats(&pq0, &pf0);
             g_max_gap = 0; g_last_ask = t0;   /* this step's gaps, measured from the moment it starts */
+            idl_slowest_reset();              /* ...and this step's slowest single Web API member step */
 #endif
             int r = flow_step(ctx, cur, bodies, n);
             /* THE COOPERATIVE-QUANTUM CONTRACT, ASSERTED AT ITS SITE. A flow_step is supposed to reach a
@@ -727,6 +729,8 @@ int engine_sched_step(void) {
                         else if (si - n < cur->dyn_n) bodytxt = cur->dyn[si - n];
                     }
                     uint64_t pq = 0, pf = 0;
+                    const char *slow_name = "(none)";
+                    int64_t slow_ms = idl_slowest_step(&slow_name);
                     JS_FlowPreemptStats(&pq, &pf);
                     /* THREE numbers, because two of them cannot separate the roots. `asked` is how many suspend
                        points the path OFFERED (every consultation of the hook); `requested` is how many of those
@@ -737,11 +741,13 @@ int engine_sched_step(void) {
                        preempt was wanted, and it was DROPPED because no driver at that depth adopts the seam. */
                     wi += snprintf(why, sizeof why,
                                    "%d ms passed with NO suspend point offered (step ran %d ms, points "
-                                   "asked=%llu, preempts wanted=%llu fired=%llu) — this stretch has no "
-                                   "suspend/resume seam; unit=%s script_i=%d flow=%s payload=",
+                                   "asked=%llu, preempts wanted=%llu fired=%llu; slowest Web API member step: "
+                                   "%s %dms) — this stretch has no suspend/resume seam; unit=%s script_i=%d "
+                                   "flow=%s payload=",
                                    (int)gap, (int)spent, (unsigned long long)(g_preempt_asked - pa0),
                                    (unsigned long long)(pq - pq0),
-                                   (unsigned long long)(pf - pf0), g_step_unit, si, sk);
+                                   (unsigned long long)(pf - pf0), slow_name, (int)slow_ms,
+                                   g_step_unit, si, sk);
                     /* The payload is attacker-shaped bytes and the message lands inside JSON unescaped, so
                        anything that would break the line is replaced rather than emitted. */
                     for (; pl && *pl && wi < (int)sizeof why - 2; pl++, wi++)

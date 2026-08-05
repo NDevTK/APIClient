@@ -3,6 +3,7 @@
 #define ENGINE_HOST_BROWSER_CORE_IDL_ARGS_H
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include "quickjs.h"
 #include "quickjs-step.h"
 
@@ -161,6 +162,20 @@ int  idl_setter_id_step(JSContext *ctx, IdlArgType type, bool null_to_empty, con
 typedef JSValue (*IdlGetter)(JSContext *ctx, JSValueConst this_val, int magic);
 
 /* Install a declared attribute: `getter` may be NULL for a write-only one, `setter_stepid` -1 for read-only. */
+/* THE SLOWEST SINGLE IDL-MEMBER STEP since the last reset, and which member it was. A step machine's contract
+   is that one step is short, so this is how a scheduler assertion that can only say "this flow went N ms
+   without offering a suspend point" finds out what the flow was inside. Every declared member passes through
+   the one args machine, so a native call that never returned names itself here — and a small answer says the
+   culprit is not an IDL member, which is equally an answer. Dev-only; a release build reports 0. */
+/* THE ONE MINT for a step member's function value, and the only thing that can name its pool entry. Use it
+   instead of JS_NewCFunction2(..., JS_CFUNC_step, stepid) — a hand-written copy leaves the member anonymous in
+   every diagnostic, and there is nothing to notice that until one of them is the thing you are looking for. */
+JSValue idl_step_function(JSContext *ctx, const char *name, int length, int stepid);
+JSValue idl_step_constructor(JSContext *ctx, const char *name, int length, int stepid);
+
+void idl_slowest_reset(void);
+int64_t idl_slowest_step(const char **name);
+
 void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
                           IdlGetter getter, int getter_magic, int setter_stepid);
 
@@ -178,5 +193,9 @@ void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *
 /* Install a declared member on `target`. The coercion is a request, so a page's `toString` — loop, await and
    all — suspends and resumes at the exact argument it was on. */
 void idl_install_method(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid);
+/* The installer for a method whose algorithm is a step machine of its OWN (its own JSTrampStepDef) rather than
+   a member of the args machine — `click` and `dispatchEvent` today. Separate from idl_install_method because
+   they are separate things, and each asserts it was handed its own kind. */
+void idl_install_step_method(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid);
 
 #endif

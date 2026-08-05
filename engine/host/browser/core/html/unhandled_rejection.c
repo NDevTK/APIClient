@@ -304,7 +304,7 @@ void unhandled_rejection_install(JSContext *ctx, JSValueConst global)
     JSValue ctor;
 
     DCHECK(g_ready, "PromiseRejectionEvent was installed before its prototype was built");
-    ctor = JS_NewCFunction2(ctx, NULL, "PromiseRejectionEvent", 2, JS_CFUNC_step_ctor,
+    ctor = idl_step_constructor(ctx, "PromiseRejectionEvent", 2,
                             idl_method_id_dict(ctx, PRE_CTOR_ARGS, 2, PRE_INIT,
                                                (int)(sizeof(PRE_INIT) / sizeof(PRE_INIT[0])),
                                                js_pre_ctor, 0));

@@ -425,7 +425,7 @@ void event_install(JSContext *ctx, JSValueConst global)
     DCHECK(g_ready, "Event was installed before event_init built its prototype");
     /* A step machine that is also a CONSTRUCTOR: `new Event(type, init)` converts two page-reachable arguments
        before the body runs, and JS_CFUNC_step_ctor is what makes the declaration usable with `new`. */
-    ctor = JS_NewCFunction2(ctx, NULL, "Event", 2, JS_CFUNC_step_ctor, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "Event", 2, g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the Event interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, g_proto);
     JS_SetPropertyFunctionList(ctx, ctor, js_event_consts,

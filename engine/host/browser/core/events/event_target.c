@@ -766,7 +766,7 @@ void event_target_install_click(JSContext *ctx, JSValueConst target)
     DCHECK(JS_IsObject(target), "click was installed on something that is not an object");
     if (g_click_stepid < 0)
         g_click_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_click_def);
-    idl_install_method(ctx, target, "click", 0, g_click_stepid);
+    idl_install_step_method(ctx, target, "click", 0, g_click_stepid);
 }
 
 /* THE ENGINE FIRING ITS OWN EVENT — `load`, `DOMContentLoaded`, `abort`. It builds the event and hands it to
@@ -856,5 +856,5 @@ void event_target_install(JSContext *ctx, JSValueConst target)
     }
     idl_install_method(ctx, target, "addEventListener", 2, g_add_stepid);
     idl_install_method(ctx, target, "removeEventListener", 2, g_remove_stepid);
-    idl_install_method(ctx, target, "dispatchEvent", 1, g_dispatch_stepid);
+    idl_install_step_method(ctx, target, "dispatchEvent", 1, g_dispatch_stepid);
 }

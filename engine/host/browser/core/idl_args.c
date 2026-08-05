@@ -27,6 +27,9 @@
 #include "quickjs-step.h"
 #include "solver/concolic.h"
 #include "core/idl_args.h"
+#include <time.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 /* Sized for the WHOLE platform surface, because every reflected content attribute is a declaration: HTML's
    per-tag interfaces contribute about 190 between them, each with its own setter. The pool is static because
@@ -54,6 +57,7 @@ typedef struct {
     const IdlStepDecl *step;
     bool       variadic;    /* the last declared type applies to every argument from there on */
     JSClassID  iface;       /* the brand an IDL_STRING_UNLESS_IFACE position tests against */
+    const char *name;       /* what to call this member in a diagnostic; set when it is installed */
 } IdlMember;
 
 /* The DOM layer's tree-steps edge — see idl_args.h. NULL until the DOM registers it, which is what the
@@ -67,6 +71,30 @@ void idl_set_tree_steps(const IdlTreeSteps *ops)
 }
 
 static IdlMember      g_members[IDL_MAX_MEMBERS];
+/* STEP ID -> POOL INDEX. A member's DECLARE returns what JS_RegisterStepDef gave it, which is the RUNTIME's id
+   for the definition and not this pool's index for the member — the pool index travels separately, inside the
+   def as `arg`, which is why the step reads s->hdr.arg rather than its own id. Indexing g_members by the step
+   id therefore lands on some other member, or off the end. It did: naming members by step id reported the
+   wrong ones and then tripped the range DCHECK, which is the only reason the confusion surfaced at all.
+   The two meet at exactly one place — the single JS_RegisterStepDef call below — so that is where the mapping
+   is recorded, and nothing else has to know the two numbers are different. */
+static int  *g_step2mem;
+static int   g_step2mem_cap;
+static void idl_map_step(int stepid, int idx) {
+    CHECK(stepid >= 0, "JS_RegisterStepDef returned no id for an IDL member");
+    if (stepid >= g_step2mem_cap) {
+        int c = g_step2mem_cap ? g_step2mem_cap * 2 : 64, i;
+        while (stepid >= c) c *= 2;
+        g_step2mem = realloc(g_step2mem, (size_t)c * sizeof *g_step2mem);
+        CHECK(g_step2mem != NULL, "idl: OOM mapping a step id to its member");
+        for (i = g_step2mem_cap; i < c; i++) g_step2mem[i] = -1;
+        g_step2mem_cap = c;
+    }
+    g_step2mem[stepid] = idx;
+}
+static int idl_member_of_step(int stepid) {
+    return (stepid >= 0 && stepid < g_step2mem_cap) ? g_step2mem[stepid] : -1;
+}
 static JSTrampStepDef g_defs[IDL_MAX_MEMBERS];   /* not const: `arg` is filled at registration with the index */
 static int            g_n;
 static JSRuntime     *g_rt;
@@ -157,7 +185,53 @@ static int idl_tree_drain(JSContext *ctx, JSIdlArgsState *s)
     return 0;
 }
 
+/* THE SLOWEST SINGLE STEP of any IDL member this scheduler-step ran, because a step machine's whole contract
+   is that ONE step is short. The engine's seam assertion can say a flow went five seconds without offering a
+   suspend point; it cannot say what the flow was inside, and a call point is now offered before every call, so
+   a gap that survives is by elimination INSIDE one native call that never returned. Every declared Web API
+   member passes through this one function, so this is where such a call names itself — and if the answer comes
+   back small, the culprit is not an IDL member and that is information too.
+   Dev-only: two clock reads per member step is not a cost a release build should carry to answer a question
+   only a development assertion asks. */
+#if APICLIENT_DEV
+static int64_t     g_slow_ms;
+static const char *g_slow_name;
+static int64_t idl_now_ms(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+void idl_slowest_reset(void) { g_slow_ms = 0; g_slow_name = NULL; }
+int64_t idl_slowest_step(const char **name) {
+    if (name) *name = g_slow_name ? g_slow_name : "(none)";
+    return g_slow_ms;
+}
+#else
+void idl_slowest_reset(void) { }
+int64_t idl_slowest_step(const char **name) { if (name) *name = "(release)"; return 0; }
+#endif
+
+static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc);
+
 static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+#if APICLIENT_DEV
+    int64_t t0 = idl_now_ms();
+    int rr = js_idl_args_step_inner(ctx, st, cb_result, out_cb, out_argc);
+    int64_t d = idl_now_ms() - t0;
+    if (d > g_slow_ms) {
+        JSIdlArgsState *ss = st;
+        g_slow_ms = d;
+        g_slow_name = (ss->hdr.arg >= 0 && ss->hdr.arg < g_n && g_members[ss->hdr.arg].name)
+                    ? g_members[ss->hdr.arg].name : "(a member installed by neither install path)";
+    }
+    return rr;
+#else
+    return js_idl_args_step_inner(ctx, st, cb_result, out_cb, out_argc);
+#endif
+}
+
+static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSIdlArgsState *s = st;
     const IdlMember *m;
@@ -166,6 +240,13 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 
     DCHECK(s->hdr.arg >= 0 && s->hdr.arg < g_n, "an IDL member's step ran with no pool entry behind it");
     m = &g_members[s->hdr.arg];
+    /* EVERY MEMBER IS NAMED, and this is what makes that true rather than hoped. A name is set by the one mint
+       (idl_step_function / idl_step_constructor), so an unnamed member is one that was minted by a hand-written
+       JS_NewCFunction2 instead — which is invisible until some diagnostic needs to say what the engine was
+       inside and can only answer "(none)". Crashing here names the mint site to convert; a diagnostic that
+       shrugs does not. */
+    DCHECK(m->name != NULL, "an IDL member reached its step with no name — it was minted by a hand-written "
+                            "JS_NewCFunction2 instead of idl_step_function/idl_step_constructor");
 
     /* THE DRAIN COMES FIRST ON EVERY RE-ENTRY, before the conversion loop or the body, because the steps the
        previous step recorded must finish before anything else this member does. */
@@ -565,7 +646,11 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
     g_defs[idx].fini  = idl_args_result;
     g_defs[idx].arg   = idx;
     g_defs[idx].visit = js_idl_args_visit;
-    return JS_RegisterStepDef(rt, &g_defs[idx]);
+    {
+        int sid = JS_RegisterStepDef(rt, &g_defs[idx]);
+        idl_map_step(sid, idx);   /* the one place the runtime's id and this pool's index are both in hand */
+        return sid;
+    }
 }
 
 int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
@@ -619,9 +704,11 @@ void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *
     DCHECK(a != JS_ATOM_NULL, "an IDL accessor name could not be interned");
     DCHECK(getter_stepid >= 0, "idl_install_accessor_step with no getter — a write-only attribute installs "
                                "through idl_install_accessor, which is the form that takes no getter at all");
-    g = JS_NewCFunction2(ctx, NULL, name, 0, JS_CFUNC_step, getter_stepid);
+    /* Through the ONE mint, like every other member — an accessor's getter and setter are pool members too, and
+       minting them by hand here is what left an attribute reporting itself as "(none)" in a diagnostic. */
+    g = idl_step_function(ctx, name, 0, getter_stepid);
     if (setter_stepid >= 0)
-        st = JS_NewCFunction2(ctx, NULL, name, 1, JS_CFUNC_step, setter_stepid);
+        st = idl_step_function(ctx, name, 1, setter_stepid);
     JS_DefinePropertyGetSet(ctx, (JSValue)target, a, g, st,
                             JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
     JS_FreeAtom(ctx, a);
@@ -636,16 +723,70 @@ void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
     DCHECK(a != JS_ATOM_NULL, "an IDL accessor name could not be interned");
     if (getter)
         g = JS_NewCFunction2(ctx, (JSCFunction *)getter, name, 0, JS_CFUNC_getter_magic, getter_magic);
+    /* The GETTER here is a plain C function with no pool entry (this is the form for an attribute whose read
+       runs none of the page's code), but the SETTER is a step member exactly like any other, so it is minted
+       the same way and named the same way. It was the fourth hand-written mint. */
     if (setter_stepid >= 0)
-        st = JS_NewCFunction2(ctx, NULL, name, 1, JS_CFUNC_step, setter_stepid);
+        st = idl_step_function(ctx, name, 1, setter_stepid);
     JS_DefinePropertyGetSet(ctx, (JSValue)target, a, g, st,
                             JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
     JS_FreeAtom(ctx, a);
 }
 
+/* THE ONE PLACE A STEP MEMBER IS MINTED. A member is DECLARED (which builds its pool entry) before it is
+   given a name, and stepid ties the two together — so whoever mints the function is the only one who can tell
+   the pool what to call itself. There were THREE ways to mint one: this file's install helper, and a bare
+   JS_NewCFunction2(..., JS_CFUNC_step, stepid) written out at six other sites. Only the first named anything,
+   which is how a five-second member step reported itself as "(none)" and stayed anonymous through two rebuilds.
+   Six hand-written copies of one call is the same shape as one builtin answering differently depending on which
+   spelling reached it: the fix is not to name them one by one, it is for there to be one mint. */
+JSValue idl_step_function(JSContext *ctx, const char *name, int length, int stepid)
+{
+    int idx = idl_member_of_step(stepid);
+    /* NAMING THE OFFENDER IS THE POINT. "some member was never declared" sends whoever hits it grepping every
+       install site; the name is right here in the argument, so the assert says it. */
+    if (idx < 0) {
+        char why[160];
+        snprintf(why, sizeof why,
+                 "step function '%s' was minted for a member this pool never declared — a step machine that is "
+                 "not an args-machine member installs through idl_install_step_method", name ? name : "?");
+        DFAIL(why);
+    }
+    DCHECK(name != NULL && *name, "a step function was minted with no name — the pool has nothing to call it");
+    g_members[idx].name = name;
+    return JS_NewCFunction2(ctx, NULL, name, length, JS_CFUNC_step, stepid);
+}
+
+/* The same mint for a member reached with `new`. JS_CFUNC_step_ctor differs only in how the receiver slot
+   carries new.target; the pool entry and its name are the same thing. */
+JSValue idl_step_constructor(JSContext *ctx, const char *name, int length, int stepid)
+{
+    int idx = idl_member_of_step(stepid);
+    DCHECK(idx >= 0, "a step constructor was minted for a member this pool never declared");
+    DCHECK(name != NULL && *name, "a step constructor was minted with no name");
+    g_members[idx].name = name;
+    return JS_NewCFunction2(ctx, NULL, name, length, JS_CFUNC_step_ctor, stepid);
+}
+
 void idl_install_method(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid)
 {
     DCHECK(stepid >= 0, "an IDL member was installed before it was declared");
+    JS_SetPropertyStr(ctx, (JSValue)target, name, idl_step_function(ctx, name, length, stepid));
+}
+
+/* A DOM METHOD WHOSE ALGORITHM IS A STEP MACHINE BUT WHOSE ARGUMENTS ARE NOT THIS MACHINE'S. `click` and
+   `dispatchEvent` register their own JSTrampStepDef and have no entry in this pool, so there is nothing here to
+   name and nothing to convert — they are a genuinely different thing, not a member that skipped a step, and
+   collapsing them into idl_install_method is what made a five-second member report itself as "(none)".
+   Two installers because there are two kinds; each asserts it was handed its own kind, so neither can be used
+   for the other by mistake. The IDL-shaped future for these is to declare their arguments through the args
+   machine like every other member — at which point they move to idl_install_method and this loses a caller. */
+void idl_install_step_method(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid)
+{
+    DCHECK(stepid >= 0, "a step method was installed before its definition was registered");
+    DCHECK(idl_member_of_step(stepid) < 0,
+           "a DECLARED IDL member was installed through idl_install_step_method — it has a pool entry, so it "
+           "installs through idl_install_method, which is what names it");
     JS_SetPropertyStr(ctx, (JSValue)target, name,
                       JS_NewCFunction2(ctx, NULL, name, length, JS_CFUNC_step, stepid));
 }
