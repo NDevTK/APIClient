@@ -631,11 +631,15 @@ static const char *HTML =
          - an HTML-context sink fed from the same source is NOT (the `<` arrives as %3C and parses as text).
        Before the delivery transform existed the solver handed the payload over raw and would report BOTH as
        working, which is a false PoC — the thing this half of the engine must never produce.
-       ASSERTED HERE IS THE POSITIVE HALF, and it is the half that proves the transform is APPLIED and right:
-       the apostrophe survives the fragment set, the breakout fires, and it fires through a value carrying the
-       leading `#` the browser puts there — `'#';X9();//'` is what the page evaluates. The negative half is
-       MEASURED but not asserted here; see the commit for why. */
+       BOTH HALVES ARE ASSERTED, through ONE source into TWO sink contexts, which is the only arrangement that
+       can tell "the transform is applied" apart from "the solver is failing to solve": the apostrophe survives
+       the fragment set so the JS sink FIRES (through `'#';X9();//'` — the leading `#` included), while `<` does
+       not survive so the HTML sink CANNOT, and it is reported as a PARKED SEARCH rather than omitted. The
+       negative half costs the run five extra candidate re-fires that are known not to fire; that cost buys the
+       one property the @S half must never lose, so it is paid on every build. */
     "eval(\"'\" + location.hash + \"'\");"
+    "var lhHost = document.createElement('div'); document.body.appendChild(lhHost);"
+    "lhHost.innerHTML = location.hash;"
     "fetch('/api/locsrc?o=' + location.origin + '&pn=' + location.pathname);"
     /* §3.1.5's element shortcuts and §4.5's createDocumentFragment. All five shortcuts are LIVE
        HTMLCollections over the document — a bundle scanner reaches for document.scripts and document.forms in
@@ -1466,10 +1470,19 @@ int main(void) {
        Before the transform existed the payload was handed over raw, so this fired for the wrong reason and an
        HTML-context breakout through the same source would have fired too, which a browser would not. */
     int s_loc = strstr(ss, "\"source\":\"location.hash\"") && strstr(ss, "';X9();//");
-    int s_ok = s_eval && s_html && s_url && s_loc;
+    /* THE NEGATIVE HALF, and it is an assertion about the REPORT, not about a missing line. The same source
+       into an HTML sink must produce NO PoC — the fragment set encodes `<`, so every HTML candidate arrives as
+       `%3C` and parses as text — and must still be REPORTED, as a parked search carrying the encode set that
+       defeated it. Asserting only "no PoC" would also pass if the sink were never detected, which is the false
+       negative this half exists to catch; asserting the parked entry says the sink WAS reached and searched. */
+    int s_park = strstr(ss, "\"sink\":\"innerHTML\",\"source\":\"location.hash\",\"search\":\"parked\"")
+              && strstr(ss, "\"sourceEncodes\":\" \\\"<>`\"")
+              && !strstr(ss, "\"source\":\"location.hash\",\"poc\":\"<");
+    int s_ok = s_eval && s_html && s_url && s_loc && s_park;
 
     printf("%s\n", (h_ok && s_ok)
-        ? "PASS: @H merge AND @S eval + innerHTML + location + a REAL Location source — fire-verified"
+        ? "PASS: @H merge AND @S eval + innerHTML + location + a REAL Location source — fired where the source's"
+          " transform permits, parked where it does not"
         : "FAIL: @H or @S incorrect");
 
     free(js);

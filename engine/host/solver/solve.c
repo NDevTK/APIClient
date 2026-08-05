@@ -32,8 +32,15 @@ static void set_fired(void)      { int *p = fired_slot(); if (p) *p = 1; }
    inside a lazily-imported chunk, inside an injected <script src> — is discovered after the frontier has already
    drained once, and a one-shot "the candidates are seeded" latch meant it never got any. That latch was a cap:
    it bounded verification by WHEN a sink was found rather than by whether it had been searched. */
-typedef struct { char *src; int sink; int seeded; } Cand;
+/* `tried` is the COUNT of breakouts this sink's search has run, not a bit: a sink with no PoC is REPORTED as a
+   parked search, and "parked after 0 candidates" and "parked after 5" are different states of the search that a
+   flag cannot tell apart. Non-zero also means seeded, so the idempotence the re-seed depends on is unchanged. */
+typedef struct { char *src; int sink; int tried; } Cand;
 static Cand *g_pending = NULL; static int g_pending_n = 0, g_pending_cap = 0;
+
+static const char *sink_name(int sink) {
+    return sink == SINK_HTML ? "innerHTML" : sink == SINK_URL ? "location" : "eval";
+}
 
 typedef struct { char *sink; char *source; char *poc; } Finding;   /* verified PoCs only */
 static Finding *g_sinks = NULL; static int g_sinks_n = 0, g_sinks_cap = 0;
@@ -96,16 +103,26 @@ static const char **cand_set(int sink) {
 static void add_pending(const char *src, int sink) {
     for (int i = 0; i < g_pending_n; i++) if (g_pending[i].sink == sink && !strcmp(g_pending[i].src, src)) return;   /* dedup */
     if (g_pending_n >= g_pending_cap) { g_pending_cap = g_pending_cap ? g_pending_cap * 2 : 8; g_pending = realloc(g_pending, (size_t)g_pending_cap * sizeof(Cand)); CHECK(g_pending, "solve: OOM pending"); }
-    /* EVERY field, because the array is realloc'd and never zeroed: leaving `seeded` as whatever the allocator
+    /* EVERY field, because the array is realloc'd and never zeroed: leaving `tried` as whatever the allocator
        held made a sink look already-searched and it got no candidate at all. */
     g_pending[g_pending_n].src = strdup(src);
     g_pending[g_pending_n].sink = sink;
-    g_pending[g_pending_n].seeded = 0;
+    g_pending[g_pending_n].tried = 0;
     g_pending_n++;
     flow_credit_emit(1.0);   /* a NEW attacker-source-reaches-sink: value-of-information for the running flow */
 }
 
 static void record_sink(const char *sink, const char *source, const char *poc) {
+    /* A finding is a pending sink that SOLVED, so the two lists are one list in two states — the parked-search
+       emit subtracts one from the other by (sink, source) and a finding with no pending twin would report as
+       both fired and parked. Asserted at the origin because a future detector that records a PoC without first
+       calling add_pending would otherwise corrupt the report rather than crash. */
+    {
+        int have = 0;
+        for (int i = 0; i < g_pending_n; i++)
+            if (!strcmp(sink_name(g_pending[i].sink), sink) && !strcmp(g_pending[i].src, source)) { have = 1; break; }
+        DCHECK(have, "an @S finding was recorded for a sink that was never detected as pending");
+    }
     for (int i = 0; i < g_sinks_n; i++) if (!strcmp(g_sinks[i].sink, sink) && !strcmp(g_sinks[i].source, source)) return;
     if (g_sinks_n >= g_sinks_cap) { g_sinks_cap = g_sinks_cap ? g_sinks_cap * 2 : 8; g_sinks = realloc(g_sinks, (size_t)g_sinks_cap * sizeof(Finding)); CHECK(g_sinks, "solve: OOM @S store"); }
     Finding *f = &g_sinks[g_sinks_n++];
@@ -226,39 +243,46 @@ int solve_seed_candidates(JSContext *ctx) {
     int added = 0;
     for (int i = 0; i < g_pending_n; i++) {
         const char **cands;
-        if (g_pending[i].seeded) continue;
-        g_pending[i].seeded = 1;
+        if (g_pending[i].tried) continue;
         cands = cand_set(g_pending[i].sink);
-        const char *sink_name = g_pending[i].sink == SINK_HTML ? "innerHTML"
-                              : g_pending[i].sink == SINK_URL  ? "location" : "eval";
         for (int c = 0; cands[c]; c++) {
             Flow *f = flow_add(ctx, JS_UNDEFINED, NULL, 0);
             f->cand_src     = strdup(g_pending[i].src);
             f->cand_payload = strdup(cands[c]);
-            f->cand_sink    = sink_name;
+            f->cand_sink    = sink_name(g_pending[i].sink);
             CHECK(f->cand_src && f->cand_payload, "solve: OOM seeding a candidate flow");
             added++;
             g_cands_seeded++;
+            g_pending[i].tried++;
         }
+        DCHECK(g_pending[i].tried > 0, "a detected sink was marked searched with no candidate seeded");
     }
     return added;
 }
 
-/* Bracket the substitution around THIS flow's dispatch. The candidate is live only while its own flow runs, so
-   an ordinary flow scheduled in between is unaffected; the fire flag is the flow's, so a marker fired by one
-   candidate cannot be read as another's. */
+/* THE SUBSTITUTION MIRRORS THE RUNNING FLOW — it is not a bracket someone opens and closes.
+   Written as a bracket it was WRONG, and silently: the entry returned early for a flow with no candidate, so
+   switching from a candidate flow to an ordinary one left the previous candidate's payload installed and
+   endpoint recording suppressed. The exploring flow then read the attacker's concrete string where its concolic
+   source belonged — so it stopped forking at the gates that value feeds, its sinks stopped being detected (a
+   concrete value is not a concolic one), and every endpoint it learned was dropped. The comment that used to
+   sit here asserted the opposite ("an ordinary flow scheduled in between is unaffected"), which is exactly the
+   sort of claim that survives because nothing tests it.
+   The scheduler calls this on EVERY switch-in, so the fix is for it to install the incoming flow's state
+   unconditionally — a flow with no candidate installs "no candidate", which is the clearing that was missing.
+   There is then no close to forget, and no ordering between two calls to get wrong. */
 void solve_flow_begin(Flow *f) {
-    if (!f || !f->cand_src) return;
-    endpoint_suppress(1);
-    concolic_set_candidate(f->cand_src, f->cand_payload);
-    f->cand_verifying = 1;
+    concolic_set_candidate(f ? f->cand_src : NULL, f ? f->cand_payload : NULL);
+    endpoint_suppress(f && f->cand_src ? 1 : 0);
+    if (f && f->cand_src) f->cand_verifying = 1;
 }
 
+/* FINISHING is a different event from switching out, and only it records. The globals are deliberately NOT
+   cleared here: the next switch-in installs the next flow's state, and clearing in two places is how the
+   asymmetry above got in. */
 void solve_flow_end(Flow *f) {
     if (!f || !f->cand_src) return;
     f->cand_verifying = 0;
-    concolic_set_candidate(NULL, NULL);
-    endpoint_suppress(0);
     if (f->cand_fired)
         record_sink(f->cand_sink, f->cand_src, f->cand_payload);
 }
@@ -276,14 +300,44 @@ static void buf_json_str(Buf *b, const char *s) {
         else { buf_ensure(b, 1); b->b[b->n++] = (char)c; } }
     buf_ensure(b, 1); b->b[b->n++] = '"';
 }
+static int solved(const char *sink, const char *src) {
+    for (int i = 0; i < g_sinks_n; i++)
+        if (!strcmp(g_sinks[i].sink, sink) && !strcmp(g_sinks[i].source, src)) return 1;
+    return 0;
+}
+
+/* EVERY DETECTED SINK IS REPORTED — the ones with a fire-verified PoC, AND the ones whose search has not solved.
+   Emitting only the solved ones made the report say nothing at all about a sink an attacker source demonstrably
+   REACHES, and a reader cannot tell that silence apart from "no attacker input gets here" — which is the
+   "safe"/"verified:false" verdict solve.h forbids, arrived at by omission instead of by claim. A sink without a
+   PoC is a PARKED SEARCH: reached, searched this far, not broken out of YET.
+   It carries the two facts that make it actionable rather than a shrug: how many breakouts have been run, and
+   the bytes the source's own component percent-encodes — the constraint every candidate had to survive. For
+   `innerHTML` fed from `location.hash` that set contains `<`, which is why no HTML-context candidate can fire
+   and why the same source's JS-context sink does; the entry states the constraint, it does not claim the sink
+   is safe, because an app that percent-DECODES its fragment would break out with the same candidate. */
 char *solve_json_array(void) {
     Buf b = { 0 };
+    int n = 0;
     buf_puts(&b, "[");
     for (int i = 0; i < g_sinks_n; i++) {
-        if (i) buf_puts(&b, ",");
+        if (n++) buf_puts(&b, ",");
         buf_puts(&b, "{\"sink\":"); buf_json_str(&b, g_sinks[i].sink);
         buf_puts(&b, ",\"source\":"); buf_json_str(&b, g_sinks[i].source);
         buf_puts(&b, ",\"poc\":"); buf_json_str(&b, g_sinks[i].poc);
+        buf_puts(&b, "}");
+    }
+    for (int i = 0; i < g_pending_n; i++) {
+        const char *sk = sink_name(g_pending[i].sink), *enc;
+        char t[32];
+        if (solved(sk, g_pending[i].src)) continue;
+        if (n++) buf_puts(&b, ",");
+        buf_puts(&b, "{\"sink\":"); buf_json_str(&b, sk);
+        buf_puts(&b, ",\"source\":"); buf_json_str(&b, g_pending[i].src);
+        buf_puts(&b, ",\"search\":\"parked\",\"tried\":");
+        snprintf(t, sizeof t, "%d", g_pending[i].tried); buf_puts(&b, t);
+        enc = concolic_source_encodes(g_pending[i].src);
+        if (enc) { buf_puts(&b, ",\"sourceEncodes\":"); buf_json_str(&b, enc); }
         buf_puts(&b, "}");
     }
     buf_puts(&b, "]");

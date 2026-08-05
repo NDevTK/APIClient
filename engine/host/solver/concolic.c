@@ -2,6 +2,7 @@
    the qjs fork carries no value-type delta. */
 #include "solver/concolic.h"
 #include "solver/absent.h"
+#include "solver/flow.h"
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
@@ -140,6 +141,14 @@ void concolic_declare_source(const char *src, const char *encode, char prefix)
     g_srcs_n++;
 }
 
+const char *concolic_source_encodes(const char *src)
+{
+    int i;
+    for (i = 0; i < g_srcs_n; i++)
+        if (src && !strcmp(g_srcs[i].src, src)) return g_srcs[i].encode;
+    return NULL;
+}
+
 /* THE CANDIDATE AS THE PAGE READS IT. The solver's payload is what the ATTACKER puts in the URL; this is what
    the browser hands the page, which is the only thing re-execution can honestly decide a breakout against. */
 static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *payload)
@@ -175,10 +184,22 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *pay
         return r;
     }
 }
+/* THE INSTALLED SUBSTITUTION BELONGS TO THE RUNNING FLOW — asserted here because this is where it is installed
+   and the scheduler is the only caller. An installed candidate that is not the running flow's means an
+   exploring flow is about to read an attacker payload where its concolic source belongs: it silently stops
+   forking and stops being a detectable sink, which produces a smaller learned surface and no error at all.
+   Two-sided on purpose — a candidate flow must have its own payload installed, and any other flow must have
+   none — so neither direction of the mismatch can return. */
 void concolic_set_candidate(const char *src, const char *payload) {
     free(g_cand_src); free(g_cand_payload);
     g_cand_src = src ? strdup(src) : NULL;
     g_cand_payload = payload ? strdup(payload) : NULL;
+    {
+        const Flow *f = flow_running();
+        DCHECK(!!src == !!(f && f->cand_src),
+               "the installed @S substitution does not match the running flow — an exploring flow would read "
+               "the previous candidate's payload in place of its concolic source");
+    }
 }
 
 /* Exotic [[Get]]: reading ANY field of a concolic value yields a DERIVED concolic — unknown injected/attacker

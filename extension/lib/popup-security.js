@@ -28,18 +28,28 @@ function renderSecurityPanel() {
 
   container.innerHTML = "";
 
-  var allItems = [];
+  // TWO STATES, NEVER ONE LIST. The engine reports every sink an attacker source REACHES, and a sink whose
+  // breakout has not been solved carries "search":"parked" instead of a poc. Rendering both as "Working XSS
+  // PoCs" would badge a parked search HIGH with an empty payload — a claim the engine never made. They are
+  // separated here for the same reason the engine emits them apart: a fired PoC is proof, a parked search is
+  // an open lead, and neither is a statement that the sink is safe.
+  var allItems = [], parked = [];
   for (var fi = 0; fi < findings.length; fi++) {
     var f = findings[fi];
     var srcLabel = f.sourceUrl ? _shortUrl(f.sourceUrl) : "(unknown)";
-    for (var si = 0; si < (f.securitySinks || []).length; si++)
-      allItems.push({ item: f.securitySinks[si], sourceUrl: f.sourceUrl, srcLabel: srcLabel, pageUrl: f.pageUrl });
+    for (var si = 0; si < (f.securitySinks || []).length; si++) {
+      var it = f.securitySinks[si];
+      var e = { item: it, sourceUrl: f.sourceUrl, srcLabel: srcLabel, pageUrl: f.pageUrl };
+      (it && it.search === "parked" ? parked : allItems).push(e);
+    }
   }
 
-  if (!allItems.length) { empty.style.display = "block"; return; }
+  if (!allItems.length && !parked.length) { empty.style.display = "block"; return; }
   empty.style.display = "none";
 
-  var html = '<div class="section-header">Working XSS PoCs <span class="badge badge-status">' + allItems.length + '</span></div>';
+  var html = allItems.length
+    ? '<div class="section-header">Working XSS PoCs <span class="badge badge-status">' + allItems.length + '</span></div>'
+    : "";
 
   for (var i = 0; i < allItems.length; i++) {
     var entry = allItems[i];
@@ -89,6 +99,32 @@ function renderSecurityPanel() {
       + '<div class="card-meta">' + srcLink + '</div>'
       + verifyHtml
       + '</div>';
+  }
+
+  // PARKED SEARCHES — reached, searched this far, not broken out of YET. Shown because the alternative is
+  // silence, and silence reads as "nothing is here" for a sink attacker input demonstrably reaches. The card
+  // states what constrained the search — the bytes the source's own component percent-encodes — which is the
+  // fact that tells a reader what would change the answer (an app that decodes its fragment breaks out with a
+  // candidate that is parked here). It is deliberately not a severity: there is no verdict to render.
+  if (parked.length) {
+    html += '<div class="section-header">Reached, search parked <span class="badge badge-status">' + parked.length + '</span></div>';
+    for (var pi = 0; pi < parked.length; pi++) {
+      var pe = parked[pi], pit = pe.item;
+      var pSrc = pe.sourceUrl && /^https?:\/\//i.test(pe.sourceUrl)
+        ? '<a href="' + esc(pe.sourceUrl) + '" target="_blank" title="' + esc(pe.sourceUrl) + '">' + esc(pe.srcLabel) + '</a>'
+        : esc(pe.srcLabel);
+      html += '<div class="card">'
+        + '<div class="card-label"><span class="badge badge-status" title="an attacker source reaches this sink; no breakout has fired yet — this is NOT a finding that the sink is safe">PARKED</span> '
+        + esc(pit.sink || "?") + ' &larr; <code>' + esc(pit.source || "?") + '</code></div>'
+        + '<div class="card-dims">' + esc(String(pit.tried || 0)) + ' breakout' + (pit.tried === 1 ? "" : "s")
+        + ' run, none fired'
+        + (pit.sourceEncodes
+            ? ' — the browser percent-encodes <code>' + esc(pit.sourceEncodes) + '</code> in this source, so a candidate needing those bytes arrives escaped'
+            : "")
+        + '</div>'
+        + '<div class="card-meta">' + pSrc + '</div>'
+        + '</div>';
+    }
   }
 
   container.innerHTML = html;

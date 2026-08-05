@@ -31,8 +31,15 @@ int  solve_candidate_count(void);
 void solve_flow_begin(struct Flow *f);
 void solve_flow_end(struct Flow *f);
 
-/* The @S findings as a JSON ARRAY (caller frees): `[ {"sink":..,"source":..,"poc":..}, ... ]`. An array for
-   the same reason the @H surface is one — result.h owns the document. */
+/* EVERY DETECTED SINK as a JSON ARRAY (caller frees). Two entry shapes, because a sink is in one of two states
+   and they must never be confused:
+     fire-verified  `{"sink":..,"source":..,"poc":..}`
+     parked search  `{"sink":..,"source":..,"search":"parked","tried":N[,"sourceEncodes":".."]}`
+   The parked shape exists because absence is never a "safe" verdict: a sink an attacker source REACHES is
+   reported whether or not its breakout has been solved, and it carries how far the search got plus the bytes
+   the source's component percent-encodes. There is deliberately no "verified":false — the entry states what was
+   searched, never that the sink is safe. An array for the same reason the @H surface is one — result.h owns the
+   document. */
 char *solve_json_array(void);
 int   solve_count(void);
 

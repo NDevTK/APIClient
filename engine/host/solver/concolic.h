@@ -57,6 +57,10 @@ void        concolic_set_candidate(const char *src, const char *payload);
    not listed); `prefix` is the character the component's value carries — `#` for a fragment, `?` for a query,
    0 for none. Data rather than code, because that is what differs between sources. */
 void        concolic_declare_source(const char *src, const char *encode, char prefix);
+/* The bytes this source's component percent-encodes, or NULL if the source declared no delivery (it is handed
+   over as-is). A PARKED @S search reports it because it is the constraint every candidate had to survive, and
+   it is a FACT read from the declaration rather than a guess at why nothing fired. */
+const char *concolic_source_encodes(const char *src);
 
 /* Comparison constraint domain: `x === 'admin'` on a concolic must FORK (not collapse to concrete false), and
    the taken arm pins/negates. */

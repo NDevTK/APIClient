@@ -379,6 +379,23 @@ static void flow_run_one_job(JSContext *ctx, Flow *f) {
     free(j.argv);
 }
 
+/* ONE UNIT OF WORK, THEN RETURN — flow_step is a step, and it used to be a drain.
+   Every branch below that finished something looped back inside this call instead of returning: a completed
+   script advanced to the next one and ran it, a drained fetch ran the continuation, a fired load stage ran its
+   listeners, a candidate that failed to compile went straight to the next candidate. So a flow holding many
+   short programs — none of them long enough to hit a back-edge preempt — ran ALL of them back-to-back with no
+   return to the scheduler, which is a drive-to-completion at the C level even though every individual program
+   was perfectly preemptible. The scheduler could not interleave, could not re-rank, and could not honour its
+   own wall-clock quantum, because none of them are consulted until this returns.
+   Making each unit a return puts the scheduler back in charge of the pump, which is what §scheduler requires of
+   it, and costs only loop iterations: the switch counter moves when a DIFFERENT flow is picked, so re-picking
+   the same flow is the same execution with the scheduler given the chance to choose otherwise. Nothing is
+   dropped, skipped or reordered by it — every branch that returns here made progress first. */
+/* WHICH UNIT, when one of them turns out to have no suspend point. The scheduler's assertion can say that a
+   flow ran too long but not what it was doing, and "one of seven branches" is not a localisation — the label is
+   set by the branch that is about to run, so a step with no seam names itself. */
+static const char *g_step_unit = "(none)";
+
 static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
     for (;;) {
         /* THE PARKED CONTINUATION OUTRANKS EVERYTHING ELSE THIS FLOW COULD DO — that is the park's whole
@@ -386,6 +403,7 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
            job it has queued. Yielding after one resume keeps the scheduler in charge of fairness; the park (if
            it parks again immediately) rides the switch-out with the flow. Without this the solver host never
            pumped the slot at all: the continuation sat there until a second flow parked and asserted. */
+        g_step_unit = "resume-parked-continuation";
         if (JS_ResumeParkedFlow(JS_GetRuntime(ctx))) return 0;
         if (!f->frame) {
             const char *body;
@@ -401,14 +419,14 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                     /* A reply that has already arrived is delivered FIRST — this branch returns before the
                        drain below, so parking without checking would leave the flow owed forever on a URL the
                        host had already answered. */
-                    if (flow_pending_ready(f)) { flow_drain_pending(ctx, f); continue; }
+                    if (flow_pending_ready(f)) { flow_drain_pending(ctx, f); return 0; }
                     engine_pending_docscript(ctx, g_sess_srcs[f->script_i], f->script_i);
                     return FLOW_STEP_OWED;
                 }
             }
             else if (f->script_i - n < f->dyn_n) { body = f->dyn[f->script_i - n];
                                                    is_cand = f->dyn_cand[f->script_i - n]; }
-            else if (f->njob > 0) { flow_run_one_job(ctx, f); return 0; }   /* scripts done -> drain a microtask, yield */
+            else if (f->njob > 0) { g_step_unit = "run-one-job"; flow_run_one_job(ctx, f); return 0; }   /* scripts done -> drain a microtask, yield */
             else if (f->npend > 0 && !flow_pending_ready(f))
                 return FLOW_STEP_OWED;   /* only host-owed replies remain: no progress, and NOT finished */
             else if (flow_pending_ready(f)) {
@@ -416,17 +434,19 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                    fetch (a pending promise). The network completes now: resolve THIS flow's pending fetches — each
                    awaiting async body's reaction is enqueued as a job in this flow's queue (we are switched in,
                    flow_running == f) — then loop to run those jobs and resume the continuations. */
+                g_step_unit = "drain-pending-fetch";
                 flow_drain_pending(ctx, f);
-                continue;
+                return 0;
             }
             else if (f->dom_stage < 2 && g_docdone_hook) {
                 /* THE DOCUMENT FINISHED LOADING, in this flow's world. DOMContentLoaded then load, in that
                    order, each once per flow — the order IS the spec, and a page's real work is behind them:
                    the half of a bundle that touches the DOM and calls the API runs here. Every listener is
                    queued as a task, so the loop above picks them up like any other job. */
+                g_step_unit = "document-done-stage";
                 g_docdone_hook(ctx, f->dom_stage);
                 f->dom_stage++;
-                continue;
+                return 0;
             }
             /* HTML §8.1.7.5 "notify about rejected promises". The flow has nothing left to run, so every
                rejection still on its list is one no handler will ever be attached to. The browser half keeps
@@ -434,11 +454,12 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                the loop picks them up like any other. Only what the page did not cancel comes back through the
                report hook — and what it means then is this half's answer, the same thing a script that threw
                means: a capability the page needed. Notifying clears the list, so the next pass finds none. */
-            else if (unhandled_rejection_notify(ctx)) continue;
+            else if ((g_step_unit = "unhandled-rejection-notify", unhandled_rejection_notify(ctx))) return 0;
             else return 1;   /* all scripts + chunks + microtask jobs + live fetches + load listeners done */
             /* NULL ScriptOrModule name: an inline page script's name is the DOCUMENT's URL, which this host does
                not model yet — nothing here has one to give. It is what a relative `import('./chunk.js')` resolves
                against, so the moat's lazy-chunk surface needs the document URL plumbed to this call. */
+            g_step_unit = "compile-program";
             f->frame = JS_FlowNew(ctx, body, strlen(body), NULL, 0);   /* page <script>/chunk: classic non-strict global */
             if (f->frame == NULL) {
                 /* AN @S CANDIDATE THAT DOES NOT PARSE is a dead candidate and nothing more — the search tries
@@ -446,13 +467,14 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                    does not compile is a different thing entirely and still asserts. */
                 DCHECK(is_cand, "flow_step: a page <script>/chunk did not compile");
                 JS_FreeValue(ctx, JS_GetException(ctx));
-                continue;
+                return 0;
             }
         }
         {
             /* A <script>'s completion value is not observable to the page (only an eval API surfaces one), so it is
                taken and released here — never DISCARDED by the engine, which would hide a live value from the host. */
             JSValue cv = JS_UNDEFINED;
+            g_step_unit = "resume-program";
             int r = JS_FlowResume(ctx, (JSValue *)f->frame, &cv);
             /* A SCRIPT THAT THREW names a capability the page needed and this engine does not have. Ending the
                flow there is intentional; losing WHICH capability was not. */
@@ -467,10 +489,11 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                 /* the base registered itself as a continuation elsewhere (a module body's top-level await): it
                    is no longer this flow's to free, and the awaited promise will drive it from here. */
                 f->frame = NULL; f->script_i++;
-                continue;
+                return 0;
             }
         }
         JS_FlowFree(ctx, (JSValue *)f->frame); f->frame = NULL; f->script_i++;   /* this script done -> next */
+        return 0;
     }
 }
 
@@ -545,8 +568,6 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
     flow_remove(ctx, f);
 }
 
-/* Run ONE flow start-to-finish (no interleaving) — the @S candidate re-run path, where a single candidate must
-   execute fully to observe whether it fires. Uses the flow machinery + a transient COW delta. */
 /* THE ONE BFS SCHEDULER — explore and @S candidate-verify are the SAME loop, differing ONLY in whether a concolic
    branch FORKS. A separate verify executor (a `while(JS_FlowResume){}` driving one candidate to completion with
    preemption off) is the cardinal violation twice over — a second scheduler beside the BFS AND a drive-to-
@@ -629,7 +650,55 @@ int engine_sched_step(void) {
         }
         flow_age_running(1);   /* this step burned CPU; flow_credit_emit resets it when the flow emits value */
         {
+#if APICLIENT_DEV
+            int64_t t0 = engine_now_ms();
+            uint64_t pq0 = 0, pf0 = 0;
+            JS_FlowPreemptStats(&pq0, &pf0);
+#endif
             int r = flow_step(ctx, cur, bodies, n);
+            /* THE COOPERATIVE-QUANTUM CONTRACT, ASSERTED AT ITS SITE. A flow_step is supposed to reach a
+               suspend point — a bytecode back-edge where the preempt hook runs, a step machine's boundary —
+               within the quantum, which is what makes the frontier parkable at all. A path with NO suspend
+               point on it does not slow the run down, it STOPS it: the deadline below is never reached, the
+               scheduler never returns, and the whole engine spins at 100% with the switch count frozen.
+               Nothing else catches that. The preempt-fired-vs-requested stat cannot: a pure C loop reaches no
+               back-edge, so no preempt is ever REQUESTED and the ratio stays a perfect 100% while the engine
+               hangs. So the hang was silent, and localising one meant bisecting the fixture by hand.
+               This is NOT a bound — it truncates nothing, drops no flow and is compiled out of release. It
+               asserts that the path the flow just ran HAS the suspend/resume seam the design requires, and it
+               names the flow so the missing seam identifies itself instead of having to be hunted. The margin
+               is deliberately enormous (400x the 12ms quantum): anything under it is merely slow, anything over
+               it has no seam at all. */
+#if APICLIENT_DEV
+            {
+                int64_t spent = engine_now_ms() - t0;
+                if (spent > ENGINE_QUANTUM_MS * 400) {
+                    char why[192];
+                    int wi = 0;
+                    const char *sk = cur && cur->cand_sink ? cur->cand_sink : "(exploration flow)";
+                    const char *pl = cur ? cur->cand_payload : NULL;
+                    uint64_t pq = 0, pf = 0;
+                    JS_FlowPreemptStats(&pq, &pf);
+                    /* REQUESTED vs FIRED across the offending step is the discriminator between the two very
+                       different roots this can have, and without it the message names a symptom only:
+                       requested==0 means the path reached no suspend POINT at all (no routable back-edge),
+                       while requested>fired means the points were reached and the preempt was DROPPED because
+                       no driver at that depth adopts the seam. */
+                    wi += snprintf(why, sizeof why,
+                                   "a flow ran %d ms with no suspend point (preempts requested=%llu fired=%llu "
+                                   "across this step) — this path has no suspend/resume seam and the scheduler "
+                                   "cannot park it; unit=%s flow=%s payload=",
+                                   (int)spent, (unsigned long long)(pq - pq0),
+                                   (unsigned long long)(pf - pf0), g_step_unit, sk);
+                    /* The payload is attacker-shaped bytes and the message lands inside JSON unescaped, so
+                       anything that would break the line is replaced rather than emitted. */
+                    for (; pl && *pl && wi < (int)sizeof why - 2; pl++, wi++)
+                        why[wi] = (*pl < 0x20 || *pl > 0x7E || *pl == '"' || *pl == '\\') ? '.' : *pl;
+                    why[wi] = 0;
+                    DFAIL(why);
+                }
+            }
+#endif
             if (r == FLOW_STEP_DONE) { solve_flow_end(cur); flow_finish(ctx, cur); cur = NULL; owed = 0; }
             else if (r == FLOW_STEP_OWED) {
                 /* This flow can make no progress until the host supplies a reply. It is NOT skipped and NOT
@@ -681,6 +750,10 @@ int engine_sched_step(void) {
     JS_SetJobEnqueueHook(NULL);
     JS_SetFlowControlHooks(&FC_OFF);
     JS_SetFlowLocalMark(0);
+    /* No flow is running, so no candidate substitution may be installed — the same mirror the switch-in keeps,
+       completed at the one point where the answer is "none". Without it the LAST flow to run leaves its
+       payload and its endpoint suppression standing over everything that reads the frontier afterwards. */
+    solve_flow_begin(NULL);
     g_dom_capture = 0;
     g_sess_live = 0;
     return ENGINE_STEP_DONE;
@@ -711,8 +784,24 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
         if (g_switches >= next || solve_candidate_count() != last_cands) {
             while (g_switches >= next) next += ENGINE_PROGRESS_EVERY;
             last_cands = solve_candidate_count();
-            printf("@PROGRESS {\"switches\":%d,\"flows\":%ld,\"candidates\":%d}\n",
-                   g_switches, flow_created_count(), last_cands);
+            /* WHAT IS RUNNING, not just how much has run. A run that stops advancing is the one thing this
+               stream exists to make visible, and a line of pure counters cannot name the flow it stopped in —
+               it says a stall happened and nothing about where, which leaves bisecting the fixture as the only
+               way to localise it. A candidate flow is identified by the (sink, payload) it is verifying, so the
+               last line before a stall names the search that entered it. */
+            printf("@PROGRESS {\"switches\":%d,\"flows\":%ld,\"candidates\":%d,\"running\":\"%s\"",
+                   g_switches, flow_created_count(), last_cands,
+                   g_sess_cur && g_sess_cur->cand_sink ? g_sess_cur->cand_sink : "-");
+            if (g_sess_cur && g_sess_cur->cand_payload) {
+                printf(",\"payload\":\"");
+                for (const char *p = g_sess_cur->cand_payload; *p; p++) {
+                    if (*p == '"' || *p == '\\') printf("\\%c", *p);
+                    else if ((unsigned char)*p < 0x20) printf("\\u%04x", (unsigned char)*p);
+                    else putchar(*p);
+                }
+                printf("\"");
+            }
+            printf("}\n");
             fflush(stdout);
         }
     }
