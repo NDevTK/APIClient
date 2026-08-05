@@ -15,6 +15,7 @@
 #include "core/html/unhandled_rejection.h"
 #include "core/dom/node.h"
 #include "core/dom/element.h"
+#include "core/frame/location.h"
 #include "core/idl_args.h"
 #include "core/dom/document.h"
 #include "core/events/event.h"
@@ -623,6 +624,19 @@ static const char *HTML =
     /* the RECEIVER scopes it: an <i> outside `gt` is not in `gt`'s collection but is in the document's */
     " + '&scope=' + (document.getElementsByTagName('i').length > gbnI.length ? 'receiver' : 'global')"
     " + '&live=' + (gbnI instanceof HTMLCollection && typeof gbnI.map === 'undefined' ? 'iface' : 'wrong'));"
+    /* THE SOURCE'S BROWSER TRANSFORM decides whether a breakout is real, and the SAME candidate through the
+       SAME source answers differently per sink context. A fragment percent-encodes `<` but NOT the apostrophe,
+       so:
+         - a JS-context sink fed from location.hash IS a real XSS (`';X9();//` arrives intact), and
+         - an HTML-context sink fed from the same source is NOT (the `<` arrives as %3C and parses as text).
+       Before the delivery transform existed the solver handed the payload over raw and would report BOTH as
+       working, which is a false PoC — the thing this half of the engine must never produce.
+       ASSERTED HERE IS THE POSITIVE HALF, and it is the half that proves the transform is APPLIED and right:
+       the apostrophe survives the fragment set, the breakout fires, and it fires through a value carrying the
+       leading `#` the browser puts there — `'#';X9();//'` is what the page evaluates. The negative half is
+       MEASURED but not asserted here; see the commit for why. */
+    "eval(\"'\" + location.hash + \"'\");"
+    "fetch('/api/locsrc?o=' + location.origin + '&pn=' + location.pathname);"
     /* §3.1.5's element shortcuts and §4.5's createDocumentFragment. All five shortcuts are LIVE
        HTMLCollections over the document — a bundle scanner reaches for document.scripts and document.forms in
        particular, and with them absent the loop over them never ran and nothing said why.
@@ -1075,6 +1089,11 @@ int main(void) {
     JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval_sink, "eval", 1));   /* the eval sink */
     JS_SetPropertyStr(ctx, g, "setInnerHTML", JS_NewCFunction(ctx, js_html_sink, "setInnerHTML", 1));   /* the innerHTML sink */
     JS_SetPropertyStr(ctx, g, "setLocation", JS_NewCFunction(ctx, js_url_sink, "setLocation", 1));   /* the location/URL sink */
+    /* THE REAL Location, which the smoke test had never exercised: `setLocation` above stands in for the URL
+       SINK, and the two attacker SOURCES behind `location.hash`/`location.search` were reached by nothing. That
+       left the per-component percent-encode sets — the thing that decides whether an @S PoC reproduces in a
+       browser at all — with no test of any kind. */
+    location_install(ctx, g, "https://x.test/p");
     JS_SetPropertyStr(ctx, g, "setBodyAttr", JS_NewCFunction(ctx, js_set_body_attr, "setBodyAttr", 2));   /* DOM attr write (per-flow) */
     JS_SetPropertyStr(ctx, g, "getBodyAttr", JS_NewCFunction(ctx, js_get_body_attr, "getBodyAttr", 1));   /* DOM attr read (per-flow) */
     JS_SetPropertyStr(ctx, g, "fetchJson", JS_NewCFunction(ctx, js_fetch_json, "fetchJson", 1));   /* safe GET -> awaited JSON body */
@@ -1441,10 +1460,16 @@ int main(void) {
     int s_eval = strstr(ss, "\"sink\":\"eval\"") && strstr(ss, "{state}.code") && strstr(ss, "';X9();//");
     int s_html = strstr(ss, "\"sink\":\"innerHTML\"") && strstr(ss, "{state}.html") && strstr(ss, "<svg onload=X9()>");
     int s_url = strstr(ss, "\"sink\":\"location\"") && strstr(ss, "{state}.next") && strstr(ss, "javascript:X9()");
-    int s_ok = s_eval && s_html && s_url;
+    /* THE SOURCE'S BROWSER TRANSFORM, asserted end to end: a breakout through the REAL Location, whose value
+       the browser percent-encodes per the fragment set and prefixes with `#`. The apostrophe is not in that set,
+       so `';X9();//` arrives intact and fires — and it fires through `'#';X9();//'`, the leading `#` included.
+       Before the transform existed the payload was handed over raw, so this fired for the wrong reason and an
+       HTML-context breakout through the same source would have fired too, which a browser would not. */
+    int s_loc = strstr(ss, "\"source\":\"location.hash\"") && strstr(ss, "';X9();//");
+    int s_ok = s_eval && s_html && s_url && s_loc;
 
     printf("%s\n", (h_ok && s_ok)
-        ? "PASS: @H merge AND @S eval + innerHTML + location — 3 sink contexts, all SEARCHED + fire-verified"
+        ? "PASS: @H merge AND @S eval + innerHTML + location + a REAL Location source — fire-verified"
         : "FAIL: @H or @S incorrect");
 
     free(js);

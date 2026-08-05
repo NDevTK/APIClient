@@ -45,7 +45,7 @@ static void fire_js(const char *src, size_t len) {
     char *body = malloc(len + 1);
     CHECK(body, "solve: OOM queueing a fired PoC body");
     memcpy(body, src, len); body[len] = 0;
-    engine_queue_script(body);
+    engine_queue_candidate(body);
     free(body);
 }
 
@@ -186,7 +186,17 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
     if (is_verifying()) {
         if (concolic_is(arg)) return;   /* injection didn't reach this write */
         const char *html = JS_ToCString(ctx, arg);
-        if (html) { html_fire(html); JS_FreeCString(ctx, html); }
+        if (html) {
+            /* ONLY THE MARKER CAN FIRE, so a string without it cannot — and this is EXACT rather than a
+               heuristic: html_fire's only path to a report is an auto-firing handler whose code calls X9, and a
+               parse cannot invent the marker out of bytes that do not contain it.
+               It matters because "the injection did not reach this write" was being tested by "the value is not
+               concolic", which is also true of every literal the page writes. So each candidate flow built a
+               whole document and parsed EVERY innerHTML in the page — the fixture's own markup, once per
+               candidate — and the cost is the page's markup times the number of breakouts tried. */
+            if (strstr(html, "X9")) html_fire(html);
+            JS_FreeCString(ctx, html);
+        }
         return;
     }
     if (!concolic_is(arg)) return;

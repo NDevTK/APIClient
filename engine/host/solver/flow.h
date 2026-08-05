@@ -75,6 +75,12 @@ typedef struct Flow {
     int   dom_stage;
     int   script_i;        /* position in the script sequence: static [0,n), then this flow's dyn chunks [n, n+dyn_n) */
     char **dyn; int dyn_n, dyn_cap;   /* this flow's OWN lazily-loaded chunk bodies (per-flow, not global) */
+    /* WHICH OF THOSE ARE @S CANDIDATES rather than the page's own script. A page script that does not compile is
+       a real problem and asserts; a CANDIDATE that does not compile is the ordinary case — most breakouts do not
+       fit most sink contexts, which is why the solver tries several and keeps the one that FIRES. CLAUDE.md
+       names it: an unsolved @S candidate is a parked search, never a @WHY. Kept as a parallel array so the
+       page-script assert stays fully armed inside a candidate flow, which still loads real chunks. */
+    unsigned char *dyn_cand;
     void *delta;           /* this flow's isolated HEAP COW delta (CowDelta*), applied while running */
     void *dom; int dom_n, dom_cap;   /* this flow's isolated DOM COW delta HEAD buffer (dom_cow), swapped with the
                                         heap delta on every context-switch so the DOCUMENT is a per-flow time-travel

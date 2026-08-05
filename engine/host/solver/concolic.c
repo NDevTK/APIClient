@@ -110,6 +110,71 @@ static void concolic_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_
 /* @S CANDIDATE injection: during a verification re-run, the attacker source identified by g_cand_src returns
    the concrete breakout payload instead of a concolic, so the REAL code builds the exploit and it fires. */
 static char *g_cand_src = NULL, *g_cand_payload = NULL;
+
+/* THE DECLARED SOURCES and what their component does to an attacker's bytes. Small and fixed: a source that
+   declares nothing delivers as-is, which is right for injected server state (`window.__STATE`) — the attacker
+   writes that JSON directly and no component transforms it. */
+typedef struct { char *src; char *encode; char prefix; } SourceDelivery;
+static SourceDelivery *g_srcs;
+static int g_srcs_n, g_srcs_cap;
+
+void concolic_declare_source(const char *src, const char *encode, char prefix)
+{
+    int i;
+    CHECK(src != NULL, "a source was declared with no identity");
+    for (i = 0; i < g_srcs_n; i++)
+        if (!strcmp(g_srcs[i].src, src)) {
+            DCHECK(0, "a source declared its browser delivery twice — one component owns one source");
+            return;
+        }
+    if (g_srcs_n == g_srcs_cap) {
+        int c = g_srcs_cap ? g_srcs_cap * 2 : 8;
+        SourceDelivery *a = realloc(g_srcs, (size_t)c * sizeof *a);
+        CHECK(a != NULL, "concolic: OOM declaring a source's delivery");
+        g_srcs = a; g_srcs_cap = c;
+    }
+    g_srcs[g_srcs_n].src = strdup(src);
+    g_srcs[g_srcs_n].encode = strdup(encode ? encode : "");
+    g_srcs[g_srcs_n].prefix = prefix;
+    CHECK(g_srcs[g_srcs_n].src && g_srcs[g_srcs_n].encode, "concolic: OOM declaring a source's delivery");
+    g_srcs_n++;
+}
+
+/* THE CANDIDATE AS THE PAGE READS IT. The solver's payload is what the ATTACKER puts in the URL; this is what
+   the browser hands the page, which is the only thing re-execution can honestly decide a breakout against. */
+static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *payload)
+{
+    const SourceDelivery *d = NULL;
+    const unsigned char *p;
+    char *out;
+    size_t o = 0, n;
+    int i;
+
+    if (!payload) payload = "";
+    for (i = 0; i < g_srcs_n; i++)
+        if (src && !strcmp(g_srcs[i].src, src)) { d = &g_srcs[i]; break; }
+    if (!d) return JS_NewString(ctx, payload);   /* an undeclared source is delivered as itself */
+
+    n = strlen(payload);
+    out = malloc(n * 3 + 2);
+    CHECK(out != NULL, "concolic: OOM delivering a candidate");
+    if (d->prefix) out[o++] = d->prefix;
+    for (p = (const unsigned char *)payload; *p; p++) {
+        /* C0 controls and DEL are percent-encoded by every URL component, so they are not in any declared set. */
+        if (*p < 0x20 || *p == 0x7F || strchr(d->encode, (char)*p)) {
+            static const char HEX[] = "0123456789ABCDEF";
+            out[o++] = '%'; out[o++] = HEX[*p >> 4]; out[o++] = HEX[*p & 15];
+        } else {
+            out[o++] = (char)*p;
+        }
+    }
+    out[o] = 0;
+    {
+        JSValue r = JS_NewStringLen(ctx, out, o);
+        free(out);
+        return r;
+    }
+}
 void concolic_set_candidate(const char *src, const char *payload) {
     free(g_cand_src); free(g_cand_payload);
     g_cand_src = src ? strdup(src) : NULL;
@@ -129,7 +194,7 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
     snprintf(shape, sizeof shape, "%s.%s", c->shape ? c->shape : "{}", field ? field : "?");
     if (field) JS_FreeCString(ctx, field);
     if (g_cand_src && !strcmp(shape, g_cand_src))            /* candidate run: this source -> the concrete breakout */
-        return JS_NewString(ctx, g_cand_payload ? g_cand_payload : "");
+        return concolic_deliver(ctx, shape, g_cand_payload);
     const char *pv = pin_of(shape);                          /* an EQ gate pinned this source -> the real value */
     if (pv) return JS_NewString(ctx, pv);
     return concolic_new(ctx, shape, shape, JS_UNDEFINED);    /* src = the field path (precise @S identity) */
@@ -387,7 +452,7 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue
        and never passed through it: its candidate could not be delivered and the sink never fired. Minting is
        the one place every source goes through, whichever way it is reached. */
     if (g_cand_src && src && !strcmp(src, g_cand_src))
-        return JS_NewString(ctx, g_cand_payload ? g_cand_payload : "");
+        return concolic_deliver(ctx, src, g_cand_payload);
     DCHECK(g_concolic_class != 0, "concolic_new before concolic_init — the class is unregistered");
     JSValue obj = JS_NewObjectClass(ctx, g_concolic_class);
     if (JS_IsException(obj)) { JS_FreeValue(ctx, example); return obj; }

@@ -245,7 +245,14 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
     sib->pin_blob = g_fork_pins; g_fork_pins = NULL;
     if (parent->dyn_n) {              /* inherit the lazy chunks loaded up to the branch */
         sib->dyn = malloc((size_t)parent->dyn_n * sizeof(char *)); CHECK(sib->dyn, "engine: OOM fork dyn");
-        for (int i = 0; i < parent->dyn_n; i++) { sib->dyn[i] = strdup(parent->dyn[i]); CHECK(sib->dyn[i], "engine: OOM fork dyn body"); }
+        /* THE FLAGS COME WITH THE BODIES. A field added to the queue is an obligation at every clone, free and
+           finish site; the sibling inheriting bodies without knowing which are candidates would re-arm the
+           page-script assert on a dead breakout it inherited. */
+        sib->dyn_cand = malloc((size_t)parent->dyn_n); CHECK(sib->dyn_cand, "engine: OOM fork dyn flags");
+        for (int i = 0; i < parent->dyn_n; i++) {
+            sib->dyn[i] = strdup(parent->dyn[i]); CHECK(sib->dyn[i], "engine: OOM fork dyn body");
+            sib->dyn_cand[i] = parent->dyn_cand ? parent->dyn_cand[i] : 0;
+        }
         sib->dyn_n = sib->dyn_cap = parent->dyn_n;
     }
     sib->dom_stage = parent->dom_stage;   /* the sibling is at the same point in the document's lifecycle */
@@ -297,12 +304,27 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
    body on the tramp chain now DFAILs in the engine (see branch_arm_fork) until the sound async-frame snapshot
    is built; there is no re-run fallback to hide that gap. */
 
-void engine_queue_script(const char *body) {
+static void engine_queue(const char *body, int is_candidate) {
     Flow *f = flow_running();   /* the running flow owns the lazy chunk it loads */
     if (!body || !f) return;
-    if (f->dyn_n >= f->dyn_cap) { f->dyn_cap = f->dyn_cap ? f->dyn_cap * 2 : 8; f->dyn = realloc(f->dyn, (size_t)f->dyn_cap * sizeof(char *)); CHECK(f->dyn, "engine: OOM dynamic-script queue"); }
-    f->dyn[f->dyn_n] = strdup(body); CHECK(f->dyn[f->dyn_n], "engine: OOM dynamic-script body"); f->dyn_n++;
+    if (f->dyn_n >= f->dyn_cap) {
+        f->dyn_cap = f->dyn_cap ? f->dyn_cap * 2 : 8;
+        f->dyn = realloc(f->dyn, (size_t)f->dyn_cap * sizeof(char *));
+        f->dyn_cand = realloc(f->dyn_cand, (size_t)f->dyn_cap);
+        CHECK(f->dyn && f->dyn_cand, "engine: OOM dynamic-script queue");
+    }
+    f->dyn[f->dyn_n] = strdup(body); CHECK(f->dyn[f->dyn_n], "engine: OOM dynamic-script body");
+    f->dyn_cand[f->dyn_n] = (unsigned char)(is_candidate != 0);
+    f->dyn_n++;
 }
+
+void engine_queue_script(const char *body) { engine_queue(body, 0); }
+
+/* AN @S CANDIDATE, queued as the program it would be if it fired. It is the same queue because it IS the same
+   thing — code the page caused to run — but it carries the one difference that matters: it is allowed not to
+   compile. Most breakouts do not fit most sink contexts, which is exactly why the solver tries several and
+   keeps whichever FIRES; a candidate that does not parse simply never fires. */
+void engine_queue_candidate(const char *body) { engine_queue(body, 1); }
 
 /* Preempt hook, two orthogonal yield decisions at the one per-back-edge check:
    (1) VALUE yield — suspend the running flow the MOMENT a parked flow outranks it (the WFQ, not a clock,
@@ -367,6 +389,7 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
         if (JS_ResumeParkedFlow(JS_GetRuntime(ctx))) return 0;
         if (!f->frame) {
             const char *body;
+            int is_cand = 0;   /* an @S candidate is allowed not to parse; a page script is not */
             if (f->script_i < n) {
                 body = bodies[f->script_i];
                 if (!body) {
@@ -383,7 +406,8 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                     return FLOW_STEP_OWED;
                 }
             }
-            else if (f->script_i - n < f->dyn_n) body = f->dyn[f->script_i - n];
+            else if (f->script_i - n < f->dyn_n) { body = f->dyn[f->script_i - n];
+                                                   is_cand = f->dyn_cand[f->script_i - n]; }
             else if (f->njob > 0) { flow_run_one_job(ctx, f); return 0; }   /* scripts done -> drain a microtask, yield */
             else if (f->npend > 0 && !flow_pending_ready(f))
                 return FLOW_STEP_OWED;   /* only host-owed replies remain: no progress, and NOT finished */
@@ -416,7 +440,14 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                not model yet — nothing here has one to give. It is what a relative `import('./chunk.js')` resolves
                against, so the moat's lazy-chunk surface needs the document URL plumbed to this call. */
             f->frame = JS_FlowNew(ctx, body, strlen(body), NULL, 0);   /* page <script>/chunk: classic non-strict global */
-            DCHECK(f->frame != NULL, "flow_step: a page <script>/chunk did not compile");
+            if (f->frame == NULL) {
+                /* AN @S CANDIDATE THAT DOES NOT PARSE is a dead candidate and nothing more — the search tries
+                   several breakouts per sink precisely because most do not fit most contexts. A PAGE script that
+                   does not compile is a different thing entirely and still asserts. */
+                DCHECK(is_cand, "flow_step: a page <script>/chunk did not compile");
+                JS_FreeValue(ctx, JS_GetException(ctx));
+                continue;
+            }
         }
         {
             /* A <script>'s completion value is not observable to the page (only an eval API surfaces one), so it is
@@ -501,7 +532,9 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
     { int dn, dc; free(dom_buf_take(&dn, &dc)); }
     f->dom = NULL; f->dom_n = f->dom_cap = 0; f->dom_base = NULL;
     for (int i = 0; i < f->dyn_n; i++) free(f->dyn[i]);
-    free(f->dyn); f->dyn = NULL; f->dyn_n = f->dyn_cap = 0;
+    free(f->dyn); f->dyn = NULL;
+    free(f->dyn_cand); f->dyn_cand = NULL;
+    f->dyn_n = f->dyn_cap = 0;
     /* flow_step returns 1 (finished) only with an empty job queue, but free any residual defensively. */
     for (int i = 0; i < f->njob; i++) { for (int k = 0; k < f->jobs[i].argc; k++) JS_FreeValue(ctx, f->jobs[i].argv[k]); free(f->jobs[i].argv); }
     free(f->jobs); f->jobs = NULL; f->njob = f->jobcap = 0;

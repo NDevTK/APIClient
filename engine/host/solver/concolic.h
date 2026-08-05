@@ -44,6 +44,20 @@ int         concolic_add_hook(JSContext *ctx, JSValue *sp);
    "{state}.code") returns the concrete `payload` instead of a concolic. NULL/NULL clears it. */
 void        concolic_set_candidate(const char *src, const char *payload);
 
+/* A SOURCE'S BROWSER DELIVERY — what the browser does to the attacker's bytes before the page ever reads them,
+   declared by the component that owns the source.
+   This was MISSING, and its absence is a false-PoC generator rather than a gap. The solver invents a breakout
+   and hands it to the source RAW, so a candidate containing `<` looked like it broke out of an HTML sink fed
+   from `location.hash` — when a real browser percent-encodes `<` in a fragment, so the page would have read
+   `%3C` and nothing would have happened. CLAUDE.md states the consequence directly: a raw-hash HTML breakout is
+   a FALSE PoC unless the app decodes it, while a JS-context one (`';X9();//`) is REAL, because the fragment set
+   encodes backtick and NOT the apostrophe. Those two outcomes are the same candidate through the same source;
+   only the delivery tells them apart.
+   `encode` lists the bytes this component percent-encodes (C0 controls and DEL are always encoded, so they are
+   not listed); `prefix` is the character the component's value carries — `#` for a fragment, `?` for a query,
+   0 for none. Data rather than code, because that is what differs between sources. */
+void        concolic_declare_source(const char *src, const char *encode, char prefix);
+
 /* Comparison constraint domain: `x === 'admin'` on a concolic must FORK (not collapse to concrete false), and
    the taken arm pins/negates. */
 enum { OPCMP_NONE = 0, OPCMP_EQ = 1, OPCMP_NE = 2 };
