@@ -623,6 +623,32 @@ static const char *HTML =
     /* the RECEIVER scopes it: an <i> outside `gt` is not in `gt`'s collection but is in the document's */
     " + '&scope=' + (document.getElementsByTagName('i').length > gbnI.length ? 'receiver' : 'global')"
     " + '&live=' + (gbnI instanceof HTMLCollection && typeof gbnI.map === 'undefined' ? 'iface' : 'wrong'));"
+    /* §4.9/§4.9.1/§4.9.2 attributes, NamedNodeMap and Attr. `el.attributes` was absent and so was every object
+       behind it, which is a gap with a particular shape: the loops a page writes over an element's attributes
+       — copying them onto a clone, deciding which to forward — are `for (const a of el.attributes)`, and with
+       no attributes there is no iteration and no error either. The loop body simply never ran.
+       An Attr IS a node, so it gets identity from the one wrapper table for free; what was missing was a
+       PROTOTYPE for node type 2, so an attribute answered nodeType 2 with `name` and `value` undefined. */
+    "var atE = document.createElement('div'); document.body.appendChild(atE);"
+    "atE.setAttribute('id', 'atid'); atE.setAttribute('data-k', 'v');"
+    "var atM = atE.attributes, atSeen = [];"
+    "for (var atI = 0; atI < atM.length; atI++) atSeen.push(atM[atI].name + '=' + atM[atI].value);"
+    "var atIter = []; for (const a of atE.attributes) atIter.push(a.name);"
+    "atM.getNamedItem('data-k').value = 'w';"
+    "var atRm = 'none';"
+    "try { atM.removeNamedItem('nope'); } catch (e) { atRm = e.name; }"
+    "atM.removeNamedItem('id');"
+    "fetch('/api/attrs?list=' + atSeen.join(',')"
+    " + '&iter=' + atIter.join(',')"
+    /* the value setter is setAttribute's change steps, so the element really changed */
+    " + '&set=' + atE.getAttribute('data-k')"
+    /* §4.9.1: a name that is not there is a NotFoundError, not a quiet no-op */
+    " + '&miss=' + atRm + '&removed=' + (atE.getAttribute('id') === null ? 'gone' : 'stayed')"
+    /* an Attr is a Node with identity, and [SameObject] holds for the map */
+    " + '&iface=' + (atE.attributes === atM && atM instanceof NamedNodeMap"
+    " && atM[0] instanceof Attr && atM[0] instanceof Node && atM[0].nodeType === 2"
+    " && atM[0] === atM[0] && atM[0].ownerElement === atE ? 'node' : 'wrong')"
+    " + '&names=' + atE.getAttributeNames().join(','));"
     /* §3.2.2 dataset. It was ABSENT, so `el.dataset.userId` read undefined — and undefined does not throw, so a
        page storing its routing on data-* took the branch behind it and the engine reported THAT branch's
        surface. The mapping is the spec and it is asymmetric on purpose: `data-user-id` is `userId`, an
@@ -1323,6 +1349,8 @@ int main(void) {
         { "\"/api/scopesel\"",   "SyntaxError:SyntaxError" },
         /* §3.2.2's mapping both ways, its two refusals, [SameObject], and the deleter */
         { "\"/api/dataset\"",    "roleName,userId,x" },
+        /* the map, its iterator, the value setter, the NotFoundError, and an Attr's node identity */
+        { "\"/api/attrs\"",      "node" },
         /* the index cache: forwards, backwards, and shifted by a front insertion between two reads */
         { "\"/api/idxcache\"",   "shifted" },
         { "\"/api/adjacent\"",   "%3Ci%3Ebb%3C%2Fi%3E%3Cp%3ET%3Cb%3Eab%3C%2Fb%3E%3Cu%3Ebe%3C%2Fu%3E%3Cq%3E%3C%2Fq%3E%3C%2Fp%3E%3Cs%3Eae%3C%2Fs%3E" },

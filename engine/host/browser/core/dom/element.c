@@ -33,12 +33,15 @@
 #include "core/html/custom_elements.h"
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
+#include "core/dom/attr.h"
 #include "core/dom/document_fragment.h"
 #include "core/idl_indexed.h"
 #include "core/css/css_style_declaration.h"
 #include <lexbor/ns/ns.h>
 
 /* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
+static JSAtom g_attrs_key = JS_ATOM_NULL;   /* the [SameObject] NamedNodeMap cache slot on an element's wrapper */
+
 static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
 static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
 #include <lexbor/html/serialize.h>
@@ -978,6 +981,45 @@ static const IdlTreeSteps ELEMENT_TREE_STEPS = {
     element_tree_steps_take, element_tree_steps_step, element_tree_steps_free, element_tree_steps_recorded
 };
 
+/* §4.9 `[SameObject] readonly attribute NamedNodeMap attributes`. [SameObject] is an identity the IDL states,
+   so the map is cached on the element's own wrapper — a page that stashes `el.attributes` and re-reads it must
+   be holding the same object. The cache lives on the wrapper because that is per-flow state the COW already
+   isolates. */
+static JSValue js_el_attributes(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue cached;
+
+    (void)magic;
+    if (!elem_of(this_val)) return JS_UNDEFINED;
+    if (JS_GetOwnSlot(ctx, &cached, this_val, g_attrs_key) > 0 && JS_IsObject(cached))
+        return cached;
+    JS_FreeValue(ctx, cached);
+    cached = attr_named_node_map_new(ctx, this_val);
+    JS_DefinePropertyValue(ctx, (JSValue)this_val, g_attrs_key, JS_DupValue(ctx, cached), 0);
+    return cached;
+}
+
+/* §4.9 getAttributeNames() — the qualified names, in order. The cheap half of the same capability: a page that
+   only wants the names should not have to build an Attr for each of them. */
+static JSValue js_el_attribute_names(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                     int magic)
+{
+    lxb_dom_element_t *el = elem_of(this_val);
+    lxb_dom_attr_t *a;
+    JSValue arr;
+    uint32_t n = 0;
+
+    (void)argc; (void)argv; (void)magic;
+    arr = JS_NewArray(ctx);
+    if (!el) return arr;
+    for (a = lxb_dom_element_first_attribute(el); a; a = lxb_dom_element_next_attribute(a)) {
+        size_t len = 0;
+        const lxb_char_t *q = lxb_dom_attr_qualified_name(a, &len);
+        if (q) JS_SetPropertyUint32(ctx, arr, n++, JS_NewStringLen(ctx, (const char *)q, len));
+    }
+    return arr;
+}
+
 /* §4.9's attribute change steps, fired by the mutation chokepoint for the same reason the tree steps are:
    `setAttribute`, a reflected IDL attribute, a boolean reflection unsetting itself and innerHTML's parse all
    reach the tree through one function, and a per-caller notification would miss whichever one was added last. */
@@ -1025,6 +1067,9 @@ void element_init(JSContext *ctx)
                            idl_method_id_step(ctx, IDL_1STR, 1, NULL, 0, document_qs_decl(), 3));
     }
     idl_indexed_init(ctx);      /* the exotic class every indexed interface is built on */
+    attr_init(ctx);             /* §4.9.2 Attr — registered for node type 2, which node_wrap had no interface for */
+    g_attrs_key = JS_NewAtom(ctx, "__attributesSlot");
+    CHECK(g_attrs_key != JS_ATOM_NULL, "the attributes slot key could not be interned");
     collections_init(ctx);      /* NodeList and HTMLCollection, which childNodes and children are */
     dom_token_list_init(ctx);   /* its prototype must exist before classList names it */
     dom_token_list_install_element(ctx, proto);   /* §4.9's [SameObject] classList */
@@ -1053,6 +1098,9 @@ void element_init(JSContext *ctx)
 
     /* The rest of the attribute family. removeAttribute had no implementation at all, which is also why a
        boolean reflection could not unset itself. */
+    idl_install_accessor(ctx, proto, "attributes", js_el_attributes, 0, -1);
+    idl_install_method(ctx, proto, "getAttributeNames", 0,
+                       idl_method_id(ctx, NULL, 0, js_el_attribute_names, 0));
     idl_install_method(ctx, proto, "removeAttribute", 1,
                        idl_method_id(ctx, IDL_1STR, 1, js_el_attr_op, 0));
     idl_install_method(ctx, proto, "hasAttribute", 1,
@@ -1100,6 +1148,8 @@ void element_free(JSContext *ctx)
     custom_elements_free(ctx);
     dom_token_list_free(ctx);
     collections_free(ctx);
+    attr_free(ctx);
+    if (g_attrs_key != JS_ATOM_NULL) { JS_FreeAtom(ctx, g_attrs_key); g_attrs_key = JS_ATOM_NULL; }
     document_fragment_free(ctx);
     idl_indexed_free(ctx);
     JS_FreeValue(ctx, g_element_proto);

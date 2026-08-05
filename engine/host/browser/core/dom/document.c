@@ -25,6 +25,7 @@
 #include "core/html/custom_elements.h"
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
+#include "core/dom/attr.h"
 #include "core/css/css_style_declaration.h"
 #include "core/dom/document.h"
 #include "core/dom/document_fragment.h"
@@ -511,6 +512,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     custom_elements_install(ctx, global);   /* §4.13.4 window.customElements */
     dom_token_list_install(ctx, global);    /* §7.1 DOMTokenList */
     collections_install(ctx, global);       /* §4.2.10 NodeList, §4.2.11 HTMLCollection */
+    attr_install(ctx, global);              /* §4.9.1/§4.9.2 NamedNodeMap and Attr */
     document_fragment_install(ctx, global); /* §4.7 DocumentFragment, which IS constructible */
     /* §4.5: `Document includes ParentNode` — not ChildNode, because a document has no parent to be removed
        from. `document.append(el)` is how a page adds to an empty document. */
