@@ -689,10 +689,33 @@ int engine_sched_step(void) {
 /* A host that has nothing else to do between quanta — the node smoke test — drives the SAME steps in a loop.
    That is a HOST's loop over the one scheduler, not a second scheduler: the state machine is unchanged and a
    quantum boundary is invisible to it. */
+/* THE HOST STREAMS WHAT THE RUN IS COSTING, because a run that does not finish reports nothing at all.
+   The three cost numbers are published in the result document, which is built when the frontier drains — so a
+   run that takes twenty minutes instead of three says exactly nothing about why, which is the state the last
+   attempt to measure one ended in. Emitting them as the run goes is the host's own job: between returns from
+   the scheduler it pumps messages, interleaves engines, streams findings and snapshots, and this is a finding.
+   THE CADENCE IS A COUNT, NOT A CLOCK. A wall-clock cadence would make the output differ run to run for a
+   reason that has nothing to do with the engine; a switch count is what the engine actually did, so two runs of
+   the same page emit the same lines. It is a reporting interval and not a bound: nothing is dropped, skipped or
+   reordered by it, and the loop it sits in is unchanged. */
+/* Sized against what a run actually costs rather than guessed: this fixture's whole exploration is under six
+   thousand switches, so a cadence in the hundreds of thousands emits nothing and tells nobody anything. */
+#define ENGINE_PROGRESS_EVERY 1000
+
 static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int forking) {
+    int next = ENGINE_PROGRESS_EVERY, last_cands = -1;
     engine_sched_begin(ctx, bodies, srcs, n, forking);
-    while (engine_sched_step() != ENGINE_STEP_DONE)
-        ;
+    while (engine_sched_step() != ENGINE_STEP_DONE) {
+        /* Either enough work has happened to be worth a line, or the SEARCH grew — a new candidate is the event
+           that changes what the rest of the run will cost, so it is worth saying when it happens. */
+        if (g_switches >= next || solve_candidate_count() != last_cands) {
+            while (g_switches >= next) next += ENGINE_PROGRESS_EVERY;
+            last_cands = solve_candidate_count();
+            printf("@PROGRESS {\"switches\":%d,\"flows\":%ld,\"candidates\":%d}\n",
+                   g_switches, flow_created_count(), last_cands);
+            fflush(stdout);
+        }
+    }
 }
 
 /* EXPLORE: seed boot + drain the frontier, forking at every concolic branch. */
