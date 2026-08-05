@@ -1070,6 +1070,25 @@ static JSValue js_node_element_children(JSContext *ctx, JSValueConst this_val, i
     }
 }
 
+/* §4.5/§4.9 getElementsByTagName / getElementsByClassName — over the RECEIVER, and LIVE. Document's copy did
+   neither: it searched a global root and answered with a static Array, which its own comment named as a
+   fidelity gap ("the spec's collection re-walks the tree on every read... this does not"). It also did not
+   exist on Element at all, where §4.9 puts it. The gap closed by the collection component growing a descendant
+   kind rather than by a second walk here. magic 0 = by tag name, 1 = by class name. */
+static JSValue js_node_by_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+    const char *name;
+    JSValue r;
+
+    if (!node_is_parent_node(n) || argc < 1) return JS_UNDEFINED;
+    name = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
+    if (!name) return JS_EXCEPTION;
+    r = collections_by_name(ctx, this_val, name, magic != 0);
+    JS_FreeCString(ctx, name);
+    return r;
+}
+
 static const JSCFunctionListEntry js_parent_node_reads[] = {
     JS_CGETSET_MAGIC_DEF("children", js_node_element_children, NULL, 0),
     JS_CGETSET_MAGIC_DEF("firstElementChild", js_node_element_children, NULL, 1),
@@ -1229,6 +1248,14 @@ void node_install_parent_mixin(JSContext *ctx, JSValueConst proto)
                        idl_method_id(ctx, ONE_SEL, 1, js_node_query, 0));
     idl_install_method(ctx, proto, "querySelectorAll", 1,
                        idl_method_id(ctx, ONE_SEL, 1, js_node_query, 1));
+    /* Not part of ParentNode in the IDL — §4.5 puts these on Document and §4.9 on Element, which between them
+       is every interface that includes ParentNode except DocumentFragment. Installed here because that is one
+       place rather than two, and a fragment answering them is a superset nothing can observe as wrong: its
+       subtree is exactly what the walk would search. */
+    idl_install_method(ctx, proto, "getElementsByTagName", 1,
+                       idl_method_id(ctx, ONE_SEL, 1, js_node_by_name, 0));
+    idl_install_method(ctx, proto, "getElementsByClassName", 1,
+                       idl_method_id(ctx, ONE_SEL, 1, js_node_by_name, 1));
 }
 
 static const JSCFunctionListEntry js_node_base[] = {

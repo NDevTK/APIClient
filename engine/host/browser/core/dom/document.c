@@ -142,38 +142,6 @@ int document_sel_match(lxb_dom_node_t *node, const char *sel)
     return r;
 }
 
-/* 4.5 getElementsByTagName. A pure Lexbor walk, no page code — and the one method testharness.js needs before it
-   can decide its own timeout, which is why every WPT document stopped at it.
-   IT RETURNS A STATIC ARRAY, not a live HTMLCollection. The spec's collection re-walks the tree on every read,
-   so a page that inserts a matching element and re-reads `.length` sees the change; this does not. That is a
-   fidelity gap named here rather than papered over — it is the same shape querySelectorAll already returns, and
-   the live collection is its own component when a page needs one. */
-static JSValue js_doc_get_elements_by_tag_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    (void)magic;
-    lxb_dom_collection_t *col;
-    const char *name;
-    JSValue arr;
-    uint32_t k = 0;
-
-    (void)this_val;
-    DCHECK(g_doc != NULL, "getElementsByTagName ran before the document was installed");
-    if (argc < 1) return JS_NewArray(ctx);
-    name = JS_ToCString(ctx, argv[0]);
-    if (!name) return JS_EXCEPTION;
-    arr = JS_NewArray(ctx);
-    col = lxb_dom_collection_make(&g_doc->dom_document, 16);
-    if (col) {
-        lxb_dom_element_t *root = lxb_dom_interface_element(g_doc->dom_document.element);
-        if (root && lxb_dom_elements_by_tag_name(root, col, (const lxb_char_t *)name, strlen(name)) == LXB_STATUS_OK)
-            for (size_t i = 0; i < lxb_dom_collection_length(col); i++)
-                JS_SetPropertyUint32(ctx, arr, k++, element_wrap(ctx, lxb_dom_collection_element(col, i)));
-        lxb_dom_collection_destroy(col, true);
-    }
-    JS_FreeCString(ctx, name);
-    return arr;
-}
-
 /* 4.5.1 createElement. The element is created IN this document and returned DETACHED — a page builds a subtree
    and attaches it later, and creating it already-attached would put nodes in the tree the page never inserted.
    It is not a per-flow write for that reason: nothing observable changed until appendChild, which IS one. */
@@ -381,7 +349,6 @@ static int document_done_stage(JSContext *ctx, int stage)
    `Document.prototype.querySelector` is a thing that exists. */
 static void document_install_members(JSContext *ctx, JSValueConst proto)
 {
-    idl_install_method(ctx, proto, "getElementsByTagName", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_get_elements_by_tag_name, 0));
     idl_install_method(ctx, proto, "createElement", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_element, 0));
     idl_install_method(ctx, proto, "createTextNode", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_text, 0));
     idl_install_method(ctx, proto, "createComment", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_comment, 0));

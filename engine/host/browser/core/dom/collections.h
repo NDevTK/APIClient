@@ -2,6 +2,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_COLLECTIONS_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_COLLECTIONS_H
 #include <lexbor/dom/dom.h>
+#include <stdbool.h>
 #include "quickjs.h"
 
 void collections_init(JSContext *ctx);
@@ -18,5 +19,9 @@ JSValue collections_children(JSContext *ctx, JSValueConst owner);
    it does not track the tree afterwards, which is the whole difference from the two above. `nodes` is an array
    of wrappers this takes ownership of. */
 JSValue collections_static(JSContext *ctx, JSValue nodes);
+
+/* §4.5/§4.9's two by-name collections, LIVE over `owner`'s subtree. A new one per call — the spec does not
+   mark these [SameObject], because the query is part of what the collection is. */
+JSValue collections_by_name(JSContext *ctx, JSValueConst owner, const char *name, bool by_class);
 
 #endif

@@ -111,13 +111,21 @@ static JSValue js_el_set_attribute(JSContext *ctx, JSValueConst this_val, int ar
     return JS_UNDEFINED;
 }
 
+/* §4.9 tagName is the HTML-UPPERCASED qualified name: for an element in the HTML namespace whose document is an
+   HTML document, the qualified name in ASCII uppercase. This returned the qualified name itself, so `p` where
+   every browser says `P` — and `el.tagName === 'DIV'` is one of the most common things a page writes, silently
+   false in every one of them.
+   The engine already had the right answer in the next member along: nodeName goes through lxb_dom_node_name,
+   which calls lxb_dom_element_tag_name, which IS this rule. So `el.nodeName` said `P` while `el.tagName` said
+   `p` — two members of one interface that must agree, disagreeing, because one of them reached past the
+   function that knows the rule. */
 static JSValue js_el_get_tag(JSContext *ctx, JSValueConst this_val)
 {
     lxb_dom_element_t *el = elem_of(this_val);
     size_t n = 0;
     const lxb_char_t *t;
     if (!el) return JS_UNDEFINED;
-    t = lxb_dom_element_qualified_name(el, &n);
+    t = lxb_dom_element_tag_name(el, &n);
     return t ? JS_NewStringLen(ctx, (const char *)t, n) : JS_UNDEFINED;
 }
 

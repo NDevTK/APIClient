@@ -600,6 +600,29 @@ static const char *HTML =
     " + '&tc=' + (tqe.content === tqe.content && tqe.content instanceof DocumentFragment"
     " && tqe.content.querySelector('.tc').textContent === 'in'"
     " && tqe.content.childElementCount === 2 && tqe.childNodes.length === 0 ? 'content' : 'wrong'));"
+    /* §4.5/§4.9 getElementsByTagName / getElementsByClassName — LIVE and over the RECEIVER, both of which the
+       old Document-only copy got wrong: it searched a global root and answered with a static Array, which its
+       own comment named as a gap, and Element did not have them at all. Liveness is the half a static snapshot
+       cannot express: read the length, insert a matching element, read it again. */
+    "var gbn = document.createElement('div'); document.body.appendChild(gbn);"
+    "gbn.innerHTML = '<i class=\"a b\">1</i><p><i class=\"a\">2</i></p><i class=\"b\">3</i>';"
+    "var gbnI = gbn.getElementsByTagName('i'), gbnA = gbn.getElementsByClassName('a');"
+    "var gbnAB = gbn.getElementsByClassName('b a'), gbnStar = gbn.getElementsByTagName('*');"
+    "var gbn0 = gbnI.length + ':' + gbnA.length + ':' + gbnAB.length + ':' + gbnStar.length;"
+    "var gbnNew = document.createElement('i'); gbnNew.setAttribute('class', 'a b'); gbn.appendChild(gbnNew);"
+    "var gbn1 = gbnI.length + ':' + gbnA.length + ':' + gbnAB.length + ':' + gbnStar.length;"
+    "fetch('/api/byname?before=' + gbn0 + '&after=' + gbn1"
+    /* descendant, not children: the <i> inside the <p> counts, and the <p> itself does not match 'i' */
+    /* descendant, not children: the <i> inside the <p> counts, and the <p> itself does not match 'i' */
+    " + '&deep=' + (gbnI[1].textContent === '2' && gbnI[1].parentNode.tagName === 'P' ? 'descend' : 'wrong')"
+    /* §4.5 matches the query case-insensitively in an HTML document — `DIV` is how a lot of older code spells it */
+    " + '&ci=' + (gbn.getElementsByTagName('I').length === gbnI.length ? 'nocase' : 'wrong')"
+    /* §4.9 tagName is the HTML-UPPERCASED qualified name, and must agree with nodeName, which already was */
+    " + '&tag=' + (gbnNew.tagName === 'I' && gbnNew.tagName === gbnNew.nodeName"
+    " && gbnNew.localName === 'i' ? 'upper' : 'wrong')"
+    /* the RECEIVER scopes it: an <i> outside `gt` is not in `gt`'s collection but is in the document's */
+    " + '&scope=' + (document.getElementsByTagName('i').length > gbnI.length ? 'receiver' : 'global')"
+    " + '&live=' + (gbnI instanceof HTMLCollection && typeof gbnI.map === 'undefined' ? 'iface' : 'wrong'));"
     /* §4.2.11's NAMED getter: `children.foo` is how a great deal of older code reaches its own markup. */
     "var nb = document.createElement('u'); nb.setAttribute('id', 'namedkid'); lv.appendChild(nb);"
     "fetch('/api/named?v=' + (lv.children.namedItem('namedkid') === nb && lv.children.namedkid === nb"
@@ -1237,6 +1260,8 @@ int main(void) {
         { "\"/api/bigparse\"",   "448" },
         /* one JS object per node, over 34 of them reached two different ways */
         { "\"/api/nodeident\"",  "same" },
+        /* 3 <i>, 2 with class a, 1 with both, 4 elements — then one more of each after an insert */
+        { "\"/api/byname\"",     "4:3:2:5" },
         /* the index cache: forwards, backwards, and shifted by a front insertion between two reads */
         { "\"/api/idxcache\"",   "shifted" },
         { "\"/api/adjacent\"",   "%3Ci%3Ebb%3C%2Fi%3E%3Cp%3ET%3Cb%3Eab%3C%2Fb%3E%3Cu%3Ebe%3C%2Fu%3E%3Cq%3E%3C%2Fq%3E%3C%2Fp%3E%3Cs%3Eae%3C%2Fs%3E" },

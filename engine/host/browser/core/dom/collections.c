@@ -23,6 +23,7 @@
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
+#include <lexbor/ns/ns.h>
 
 #include "check.h"
 #include "quickjs.h"
@@ -40,7 +41,12 @@ static int     g_ready;
 
 /* WHAT A COLLECTION IS OVER. The live kinds hold the owner and walk it per read; the static one holds an array
    and never looks at the tree again. */
-enum { COLL_CHILD_NODES = 0, COLL_CHILDREN, COLL_STATIC };
+/* The live kinds differ in TWO things and nothing else: which nodes they traverse, and which of those they
+   take. The two child kinds walk the owner's child list; the two by-name kinds walk its whole subtree, which is
+   what makes getElementsByTagName's result track a page that inserts a matching element anywhere under it. */
+enum { COLL_CHILD_NODES = 0, COLL_CHILDREN, COLL_STATIC, COLL_BY_TAG, COLL_BY_CLASS };
+
+static bool coll_is_descendant(int kind) { return kind == COLL_BY_TAG || kind == COLL_BY_CLASS; }
 
 static JSValue coll_slots(JSContext *ctx, JSValueConst v)
 {
@@ -71,10 +77,116 @@ static int coll_kind(JSContext *ctx, JSValueConst v, JSValue *powner)
     return kind;
 }
 
-/* Is this child one the collection counts? A NodeList counts every node; an HTMLCollection counts elements. */
-static bool coll_takes(int kind, const lxb_dom_node_t *c)
+/* §4.9's class matching: the element must carry EVERY token the query asks for. Both sides are ASCII-whitespace
+   separated token lists, which is why this is a nested scan and not a string compare — `getElementsByClassName
+   ('a b')` matches `class="b x a"`. */
+static bool coll_is_space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'; }
+
+static bool coll_token_in(const char *hay, size_t hlen, const char *tok, size_t tlen)
 {
-    return kind == COLL_CHILD_NODES || c->type == LXB_DOM_NODE_TYPE_ELEMENT;
+    size_t i = 0;
+    while (i < hlen) {
+        size_t st;
+        while (i < hlen && coll_is_space(hay[i])) i++;
+        st = i;
+        while (i < hlen && !coll_is_space(hay[i])) i++;
+        if (i - st == tlen && memcmp(hay + st, tok, tlen) == 0) return true;
+    }
+    return false;
+}
+
+static bool coll_has_all_classes(const lxb_dom_element_t *el, const char *q, size_t qlen)
+{
+    size_t vlen = 0, i = 0;
+    const lxb_char_t *v = lxb_dom_element_get_attribute((lxb_dom_element_t *)el,
+                                                        (const lxb_char_t *)"class", 5, &vlen);
+    bool any = false;
+    if (!v) return false;
+    while (i < qlen) {
+        size_t st;
+        while (i < qlen && coll_is_space(q[i])) i++;
+        st = i;
+        while (i < qlen && !coll_is_space(q[i])) i++;
+        if (i == st) continue;
+        any = true;
+        if (!coll_token_in((const char *)v, vlen, q + st, i - st)) return false;
+    }
+    /* §4.9: an EMPTY token list matches nothing, which is not the same as matching everything. */
+    return any;
+}
+
+/* ASCII case-insensitive compare — §4.5's rule is ASCII-only, so a locale-aware one would be wrong. */
+static bool coll_ascii_ieq(const char *a, const char *b, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n; i++) {
+        char x = a[i], y = b[i];
+        if (x >= 'A' && x <= 'Z') x += 32;
+        if (y >= 'A' && y <= 'Z') y += 32;
+        if (x != y) return false;
+    }
+    return true;
+}
+
+/* Is this node one the collection counts? A NodeList counts every node; an HTMLCollection counts elements; a
+   by-name collection counts the elements whose name matches what it was built with. */
+static bool coll_takes(int kind, const char *name, size_t nlen, const lxb_dom_node_t *c)
+{
+    if (kind == COLL_CHILD_NODES) return true;
+    if (c->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    if (kind == COLL_BY_TAG) {
+        size_t qn = 0;
+        const lxb_char_t *q;
+        /* §4.5: `*` is every element, and it is the form a page uses to count a subtree. */
+        if (nlen == 1 && name[0] == '*') return true;
+        q = lxb_dom_element_qualified_name((lxb_dom_element_t *)c, &qn);
+        if (!q || qn != nlen) return false;
+        /* §4.5: in an HTML document the query is matched against the qualified name LOWERCASED, for elements in
+           the HTML namespace. Lexbor already stores those lowercased, so what this has to do is accept an
+           uppercase query — `getElementsByTagName('I')` found nothing until it did, and `DIV` is how a great
+           deal of older code spells it. A non-HTML element matches exactly, which is the other half of the
+           same sentence. */
+        if (c->ns == LXB_NS_HTML) return coll_ascii_ieq((const char *)q, name, nlen);
+        return memcmp(q, name, nlen) == 0;
+    }
+    if (kind == COLL_BY_CLASS)
+        return coll_has_all_classes(lxb_dom_interface_element((lxb_dom_node_t *)c), name, nlen);
+    return true;
+}
+
+/* THE PRE-ORDER SUCCESSOR AND PREDECESSOR within `root`'s subtree — the traversal a descendant collection uses,
+   and it needs BOTH because the index cache steps backwards when a page iterates in reverse. */
+static lxb_dom_node_t *coll_pre_next(lxb_dom_node_t *n, lxb_dom_node_t *root)
+{
+    if (n->first_child) return n->first_child;
+    while (n != root) {
+        if (n->next) return n->next;
+        n = n->parent;
+        if (!n) return NULL;
+    }
+    return NULL;
+}
+
+static lxb_dom_node_t *coll_pre_prev(lxb_dom_node_t *n, lxb_dom_node_t *root)
+{
+    lxb_dom_node_t *p;
+    if (n == root) return NULL;
+    if (!n->prev) return n->parent == root ? NULL : n->parent;
+    /* the previous sibling's DEEPEST LAST descendant is what pre-order visited just before this node */
+    for (p = n->prev; p->last_child; p = p->last_child) { }
+    return p;
+}
+
+/* The first candidate, and the next/previous one — the only place a kind's traversal is decided. */
+static lxb_dom_node_t *coll_first_node(int kind, lxb_dom_node_t *root)
+{
+    return coll_is_descendant(kind) ? coll_pre_next(root, root) : root->first_child;
+}
+
+static lxb_dom_node_t *coll_adv(int kind, lxb_dom_node_t *root, lxb_dom_node_t *n, int forward)
+{
+    if (coll_is_descendant(kind)) return forward ? coll_pre_next(n, root) : coll_pre_prev(n, root);
+    return forward ? n->next : n->prev;
 }
 
 /* THE INDEX CACHE — Blink's CollectionIndexCache, and the reason it has to exist here too.
@@ -95,7 +207,32 @@ typedef struct {
     uint8_t         has_length;
 } CollCache;
 
+/* Is `n` inside `root`'s subtree — the invariant a cached member has to keep. */
+static bool coll_in_subtree(const lxb_dom_node_t *n, const lxb_dom_node_t *root)
+{
+    for (; n; n = n->parent)
+        if (n == root) return true;
+    return false;
+}
+
 /* The cache for this collection, already checked against the tree it describes. NULL means walk from scratch. */
+/* The name a by-name collection was built with. Read once per call rather than per node — the walk is the
+   node-shaped part, and a CString per node would make the constant bigger than the algorithm. */
+static const char *coll_query(JSContext *ctx, JSValueConst self, int kind, size_t *plen)
+{
+    JSValue slots, nv;
+    const char *r;
+
+    *plen = 0;
+    if (!coll_is_descendant(kind)) return NULL;
+    slots = coll_slots(ctx, self);
+    nv = JS_GetPropertyStr(ctx, slots, "name");
+    JS_FreeValue(ctx, slots);
+    r = JS_ToCStringLen(ctx, plen, nv);
+    JS_FreeValue(ctx, nv);
+    return r;
+}
+
 static CollCache *coll_cache(JSValueConst self, lxb_dom_node_t *owner)
 {
     CollCache *c = idl_indexed_cache(self);
@@ -130,21 +267,27 @@ static uint32_t coll_length(JSContext *ctx, JSValueConst self)
     if (cc && cc->has_length) return cc->length;
     /* THE TREE AS IT IS NOW. That walk is the liveness — there is nothing here to invalidate or refresh,
        because the version says when what was counted stopped describing the tree. */
-    for (c = n->first_child; c; c = c->next)
-        if (coll_takes(kind, c)) count++;
+    {
+        size_t qlen = 0;
+        const char *q = coll_query(ctx, self, kind, &qlen);
+        for (c = coll_first_node(kind, n); c; c = coll_adv(kind, n, c, 1))
+            if (coll_takes(kind, q, qlen, c)) count++;
+        if (q) JS_FreeCString(ctx, q);
+    }
     if (cc) { cc->length = count; cc->has_length = 1; }
     return count;
 }
 
 /* Step `from` by `delta` members of the collection, in `dir`. The members are the children `coll_takes` accepts,
    so a NodeList steps one child at a time and an HTMLCollection skips the text between elements. */
-static lxb_dom_node_t *coll_step(int kind, lxb_dom_node_t *from, uint32_t delta, int forward)
+static lxb_dom_node_t *coll_step(int kind, const char *q, size_t qlen, lxb_dom_node_t *root,
+                                 lxb_dom_node_t *from, uint32_t delta, int forward)
 {
     lxb_dom_node_t *c = from;
     while (delta) {
-        c = forward ? c->next : c->prev;
+        c = coll_adv(kind, root, c, forward);
         if (!c) return NULL;
-        if (coll_takes(kind, c)) delta--;
+        if (coll_takes(kind, q, qlen, c)) delta--;
     }
     return c;
 }
@@ -167,27 +310,38 @@ static JSValue coll_item(JSContext *ctx, JSValueConst self, uint32_t i)
     JS_FreeValue(ctx, owner);
     if (!n) return JS_UNDEFINED;
     cc = coll_cache(self, n);
+    {
+    size_t qlen = 0;
+    const char *q = coll_query(ctx, self, kind, &qlen);
     if (cc && cc->node) {
         /* THE WHOLE POINT: a loop that reads 0, 1, 2… moves one member per call rather than i of them. A read
            that goes BACKWARDS is the same walk through `prev`, because a child list is doubly linked and a page
            iterating in reverse deserves the same answer as one iterating forwards. */
-        DCHECK(cc->node->parent == n,
-               "a cached collection member is no longer a child of the collection's owner — a tree mutation "
-               "did not advance dom_cow_version, so the cache is describing a tree that is gone");
-        c = i >= cc->index ? coll_step(kind, cc->node, i - cc->index, 1)
-                           : coll_step(kind, cc->node, cc->index - i, 0);
+        /* THE CACHED MEMBER IS STILL IN THE COLLECTION'S SUBTREE. For the child kinds that is one pointer; for
+           a descendant kind it is a walk up to the owner, which is O(depth) and dev-only. Writing it as
+           `parent == n` was right for the two kinds that existed and silently wrong for the two that did not —
+           a descendant is not a child, and the assert fired on the first by-name collection built. */
+        DCHECK(coll_in_subtree(cc->node, n),
+               "a cached collection member has left the collection's owner — a tree mutation did not advance "
+               "dom_cow_version, so the cache is describing a tree that is gone");
+        c = i >= cc->index ? coll_step(kind, q, qlen, n, cc->node, i - cc->index, 1)
+                           : coll_step(kind, q, qlen, n, cc->node, cc->index - i, 0);
+        if (q) JS_FreeCString(ctx, q);
         if (!c) return JS_UNDEFINED;
         cc->index = i;
         cc->node = c;
         return node_wrap(ctx, c);
     }
-    for (c = n->first_child; c; c = c->next) {
-        if (!coll_takes(kind, c)) continue;
+    for (c = coll_first_node(kind, n); c; c = coll_adv(kind, n, c, 1)) {
+        if (!coll_takes(kind, q, qlen, c)) continue;
         if (k == i) {
             if (cc) { cc->index = i; cc->node = c; }
+            if (q) JS_FreeCString(ctx, q);
             return node_wrap(ctx, c);
         }
         k++;
+    }
+    if (q) JS_FreeCString(ctx, q);
     }
     return JS_UNDEFINED;
 }
@@ -204,8 +358,9 @@ static JSValue coll_named(JSContext *ctx, JSValueConst self, const char *name)
 
     n = node_of(owner);
     JS_FreeValue(ctx, owner);
-    if (kind != COLL_CHILDREN || !n) return JS_UNDEFINED;
-    for (c = n->first_child; c; c = c->next) {
+    /* §4.2.11's named getter belongs to HTMLCollection, which is every kind here except the two NodeLists. */
+    if (!n || (kind != COLL_CHILDREN && !coll_is_descendant(kind))) return JS_UNDEFINED;
+    for (c = coll_first_node(kind, n); c; c = coll_adv(kind, n, c, 1)) {
         const lxb_char_t *v;
         if (c->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
         v = lxb_dom_element_get_attribute(lxb_dom_interface_element(c), (const lxb_char_t *)"id", 2, &vlen);
@@ -261,7 +416,7 @@ static JSValue js_coll_named_item(JSContext *ctx, JSValueConst this_val, int arg
 
 /* ---- construction ------------------------------------------------------------------------------------------ */
 static JSValue coll_new(JSContext *ctx, JSValueConst proto, const IdlIndexedDecl *decl, int kind,
-                        JSValueConst owner)
+                        JSValueConst owner, const char *name)
 {
     JSValue obj = idl_indexed_new(ctx, proto, decl), slots;
     JSAtom k;
@@ -271,6 +426,7 @@ static JSValue coll_new(JSContext *ctx, JSValueConst proto, const IdlIndexedDecl
     CHECK(!JS_IsException(slots), "collections: OOM allocating a collection's slots");
     JS_SetPropertyStr(ctx, slots, "kind", JS_NewInt32(ctx, kind));
     JS_SetPropertyStr(ctx, slots, "owner", JS_DupValue(ctx, owner));
+    if (name) JS_SetPropertyStr(ctx, slots, "name", JS_NewString(ctx, name));
     k = JS_ValueToAtom(ctx, g_key);
     CHECK(k != JS_ATOM_NULL, "the collection slot key could not be reached");
     JS_DefinePropertyValue(ctx, obj, k, slots, 0);
@@ -301,7 +457,7 @@ static JSValue coll_cached(JSContext *ctx, JSValueConst owner, int kind, JSValue
     coll = JS_GetPropertyUint32(ctx, cache, (uint32_t)kind);
     if (!JS_IsObject(coll)) {
         JS_FreeValue(ctx, coll);
-        coll = coll_new(ctx, proto, decl, kind, owner);
+        coll = coll_new(ctx, proto, decl, kind, owner, NULL);
         JS_SetPropertyUint32(ctx, cache, (uint32_t)kind, JS_DupValue(ctx, coll));
     }
     JS_FreeValue(ctx, cache);
@@ -318,12 +474,21 @@ JSValue collections_children(JSContext *ctx, JSValueConst owner)
     return coll_cached(ctx, owner, COLL_CHILDREN, g_htmlcoll_proto, &HTMLCOLL_INDEXED);
 }
 
+/* §4.5/§4.9 getElementsByTagName / getElementsByClassName — LIVE, and not [SameObject]: the spec returns a new
+   collection per call (unlike childNodes), because the query is part of what the collection IS. */
+JSValue collections_by_name(JSContext *ctx, JSValueConst owner, const char *name, bool by_class)
+{
+    DCHECK(g_ready, "a by-name collection was built before collections_init ran");
+    return coll_new(ctx, g_htmlcoll_proto, &HTMLCOLL_INDEXED,
+                    by_class ? COLL_BY_CLASS : COLL_BY_TAG, owner, name);
+}
+
 JSValue collections_static(JSContext *ctx, JSValue nodes)
 {
     JSValue coll;
 
     DCHECK(g_ready, "a static NodeList was built before collections_init ran");
-    coll = coll_new(ctx, g_nodelist_proto, &NODELIST_INDEXED, COLL_STATIC, nodes);
+    coll = coll_new(ctx, g_nodelist_proto, &NODELIST_INDEXED, COLL_STATIC, nodes, NULL);
     JS_FreeValue(ctx, nodes);   /* the slots hold their own reference */
     return coll;
 }
