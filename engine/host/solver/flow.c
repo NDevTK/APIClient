@@ -49,7 +49,14 @@ void flow_registry_free(JSContext *ctx) {
     free(g_flows); g_flows = NULL; g_flows_n = g_flows_cap = 0;
 }
 
+/* EVERY FLOW EVER CREATED. Reported beside the switch count for the same reason that one is: without it, a run
+   that takes twenty minutes instead of three is a number with no decomposition — "the frontier grew" and "each
+   flow got slower" look identical from outside, and they need opposite fixes. */
+static long g_flows_created;
+long flow_created_count(void) { return g_flows_created; }
+
 Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n) {
+    g_flows_created++;
     if (g_flows_n >= g_flows_cap) {
         g_flows_cap = g_flows_cap ? g_flows_cap * 2 : 32;
         g_flows = realloc(g_flows, (size_t)g_flows_cap * sizeof(Flow *));

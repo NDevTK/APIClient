@@ -109,6 +109,9 @@ void  flow_registry_free(JSContext *ctx);
    (dec_n 0) for a from-baseline flow. Returns the stored Flow* (stable until removed). Never fails (OOM aborts
    via CHECK — a dropped flow corrupts the frontier). */
 Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n);
+/* How many flows this document ever created — the other half of the switch count. A run whose cost jumped needs
+   to say WHICH grew: the frontier, or the work per flow. */
+long flow_created_count(void);
 
 /* The WFQ priority of a flow (higher = run sooner). Pure function of the flow's reward/aging/visit state. */
 double flow_weight(const Flow *f);

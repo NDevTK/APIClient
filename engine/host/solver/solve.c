@@ -18,6 +18,12 @@ enum { SINK_EVAL = 0, SINK_HTML = 1, SINK_URL = 2 };   /* JS / HTML / URL contex
    one candidate runs start-to-finish with nothing else scheduled — the shape the verify driver has and the BFS
    does not. Reached through the running flow so a preemption cannot cross them. A NULL flow (baseline setup)
    has neither, and the accessors say so rather than inventing a value. */
+/* EVERY @S CANDIDATE FLOW SEEDED. A candidate RE-RUNS the page, so this number times the page's cost is most of
+   what an @S search spends — and it is what says whether a run got slower because there were more searches or
+   because each search grew. Reported beside the switch count for that reason: one number cannot decompose. */
+static int g_cands_seeded;
+int solve_candidate_count(void) { return g_cands_seeded; }
+
 static int *fired_slot(void)     { Flow *f = flow_running(); return f ? &f->cand_fired : NULL; }
 static int  is_verifying(void)   { Flow *f = flow_running(); return f && f->cand_verifying; }
 static void set_fired(void)      { int *p = fired_slot(); if (p) *p = 1; }
@@ -51,6 +57,7 @@ static void fire_js(const char *src, size_t len) {
 
 void solve_init(JSContext *ctx) {
     g_pending = NULL; g_pending_n = g_pending_cap = 0;
+    g_cands_seeded = 0;
     g_sinks = NULL; g_sinks_n = g_sinks_cap = 0;
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "X9", JS_NewCFunction(ctx, js_x9, "X9", 0));
@@ -231,6 +238,7 @@ int solve_seed_candidates(JSContext *ctx) {
             f->cand_sink    = sink_name;
             CHECK(f->cand_src && f->cand_payload, "solve: OOM seeding a candidate flow");
             added++;
+            g_cands_seeded++;
         }
     }
     return added;

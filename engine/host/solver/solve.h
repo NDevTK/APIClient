@@ -24,6 +24,10 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg);
 /* SEED one candidate flow per (detected sink, breakout) onto the ONE frontier — the re-fire is a FLOW, never a
    driver that runs the program to completion beside the BFS. */
 int  solve_seed_candidates(JSContext *ctx);   /* seeds the not-yet-seeded sinks; returns how many flows it added */
+/* How many candidate flows this document has seeded in total. Each one RE-RUNS the page, so this number times
+   the page's cost is most of what an @S search spends — and it is what says whether a run got slower because
+   there were more searches or because each search grew. */
+int  solve_candidate_count(void);
 void solve_flow_begin(struct Flow *f);
 void solve_flow_end(struct Flow *f);
 

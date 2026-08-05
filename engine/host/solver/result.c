@@ -6,6 +6,7 @@
 #include "solver/endpoint.h"
 #include "solver/solve.h"
 #include "solver/engine.h"
+#include "solver/flow.h"
 
 /* THE PAGE'S OWN UNCAUGHT ERRORS, deduped. See result.h: a script that throws is the forcing function naming an
    unbuilt capability, and it was silent. This is a plain string set — the message is the page's own, so nothing
@@ -142,11 +143,14 @@ char *result_json(void) {
     char *out;
 
     if (!eps || !sinks || !errs) { free(eps); free(sinks); free(errs); return NULL; }
-    n = strlen(eps) + strlen(sinks) + strlen(errs) + 128;
+    n = strlen(eps) + strlen(sinks) + strlen(errs) + 192;
     out = malloc(n);
     if (out)
-        snprintf(out, n, "{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,\"_switches\":%d}",
-                 eps, sinks, errs, engine_switch_count());
+        /* THE THREE COST NUMBERS, together. A switch count on its own cannot say whether a run that took six
+           times as long grew its frontier or grew the work inside each flow, and those need opposite fixes. */
+        snprintf(out, n, "{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
+                         "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d}",
+                 eps, sinks, errs, engine_switch_count(), flow_created_count(), solve_candidate_count());
     free(eps);
     free(sinks);
     free(errs);
