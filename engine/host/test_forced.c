@@ -524,6 +524,17 @@ static const char *HTML =
     /* the scope is the RECEIVER: `pn` has no <body> under it, the document does. */
     " + '&sc=' + (pn.querySelector('body') === null && document.querySelector('body') === document.body"
     " && pn.querySelectorAll('p').length === 1 ? 'scoped' : 'wrong'));"
+    /* §13.4 A PARSE OF THE PAGE'S SIZE. The tokeniser is fed ONE BYTE per step, so this assignment suspends
+       about two thousand times — and a resume that loses the tokeniser's position gives a DIFFERENT TREE, not
+       a slower one, which is what the counts below catch. The markup is built by doubling rather than by a
+       60-iteration loop because the loop is what forced execution explores, not the parse. */
+    "var bigOne = '<li class=\"r\"><b>c</b>t</li>';"
+    "for (var bpI = 0; bpI < 4; bpI++) bigOne += bigOne;"
+    "var bigHost = document.createElement('ul'); document.body.appendChild(bigHost);"
+    "bigHost.innerHTML = bigOne + '<li class=\"last\"><b>z</b></li>';"
+    "fetch('/api/bigparse?n=' + bigHost.children.length + '&b=' + bigHost.querySelectorAll('b').length"
+    " + '&last=' + bigHost.lastElementChild.getAttribute('class')"
+    " + '&len=' + bigOne.length);"
     /* §4.2.3 THE INSERTION STEPS, now drained by a machine instead of walked inside the chokepoint.
        (1) ORDERING IS UNCHANGED, which is the whole constraint: the steps run synchronously as part of the
        insertion, so an element is UPGRADED by the time appendChild returns and a method its constructor
@@ -1199,7 +1210,9 @@ int main(void) {
         /* §4.7's interface, its two mixins, and §4.12.3's [SameObject] content */
         { "\"/api/fragment\"",   "content" },
         /* the upgrade is done by the time appendChild returns, and one insert ran 121 elements' steps */
-        { "\"/api/insertsteps\"", "121" },   /* §4.2.11's named property getter */
+        { "\"/api/insertsteps\"", "121" },
+        /* 17 <li>, 17 <b>, the tail element's class, and 448 bytes of markup = 448 suspensions in one parse */
+        { "\"/api/bigparse\"",   "448" },
         /* the index cache: forwards, backwards, and shifted by a front insertion between two reads */
         { "\"/api/idxcache\"",   "shifted" },
         { "\"/api/adjacent\"",   "%3Ci%3Ebb%3C%2Fi%3E%3Cp%3ET%3Cb%3Eab%3C%2Fb%3E%3Cu%3Ebe%3C%2Fu%3E%3Cq%3E%3C%2Fq%3E%3C%2Fp%3E%3Cs%3Eae%3C%2Fs%3E" },

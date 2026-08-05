@@ -149,6 +149,12 @@ typedef JSValue (*IdlSetter)(JSContext *ctx, JSValueConst this_val, JSValueConst
    `[LegacyNullToEmptyString]` is the innerHTML/textContent spelling and is part of the TYPE, not the body. */
 int  idl_setter_id(JSContext *ctx, IdlArgType type, bool null_to_empty, IdlSetter body, int magic);
 
+/* AN ATTRIBUTE SETTER WHOSE ALGORITHM IS A MACHINE — the setter shape of idl_method_id_step. `innerHTML =` is
+   the member that needs it: assigning markup PARSES it, and a parse is work of the page's size, so the body has
+   to be able to yield. It carries `null_to_empty` for the same reason the plain setter does — the
+   [LegacyNullToEmptyString] is part of the TYPE, so no body has to remember it. */
+int  idl_setter_id_step(JSContext *ctx, IdlArgType type, bool null_to_empty, const IdlStepDecl *decl, int magic);
+
 /* An attribute GETTER. It takes a magic exactly as a body does, because a reflected attribute is ONE function
    over a table of names and the getters that need no magic simply ignore it. A getter runs none of the page's
    code — it reads the component's own tree — so it is an ordinary C function and not a machine. */

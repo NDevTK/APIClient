@@ -580,6 +580,15 @@ int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
     return id;
 }
 
+int idl_setter_id_step(JSContext *ctx, IdlArgType type, bool null_to_empty, const IdlStepDecl *decl, int magic)
+{
+    int id = idl_method_id_step(ctx, &type, 1, NULL, 0, decl, magic);
+    /* the pool entry idl_method_id_step just filled. A step setter is delivered as a ONE-ARGUMENT call, so its
+       body reads argv[0]; what it needs from the setter form is the type's null rule. */
+    g_members[g_n - 1].null_to_empty = null_to_empty;
+    return id;
+}
+
 int idl_step_magic(const JSStepHdr *hdr)
 {
     DCHECK(hdr->arg >= 0 && hdr->arg < g_n, "a step body asked for its magic with no pool entry behind it");
