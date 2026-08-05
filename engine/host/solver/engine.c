@@ -740,7 +740,17 @@ int engine_sched_step(void) {
                     uint64_t pq = 0, pf = 0;
                     const char *slow_name = "(none)";
                     int64_t slow_ms = idl_slowest_step(&slow_name);
+                    JSMemoryUsage mem;
                     JS_FlowPreemptStats(&pq, &pf);
+                    /* THE LIVE HEAP, because a garbage collection is the one thing reachable from an ordinary
+                       Web API call whose cost is the size of everything ELSE. createElement allocates — a
+                       wrapper, a shape — so it can trigger a collection, and a collection marks the whole live
+                       set. That makes ONE call arbitrarily slow while every other call of the same member is
+                       fast, which is exactly the shape measured: 5142 ms for one createElement against a few
+                       hundred milliseconds for the other seven thousand. The object count says whether the live
+                       set is big enough for that to be the explanation, and it is read from the runtime's own
+                       accounting rather than estimated. */
+                    JS_ComputeMemoryUsage(JS_GetRuntime(ctx), &mem);
                     /* THREE numbers, because two of them cannot separate the roots. `asked` is how many suspend
                        points the path OFFERED (every consultation of the hook); `requested` is how many of those
                        the WFQ wanted to take; `fired` is how many actually parked. asked==0 means the path has
@@ -751,11 +761,13 @@ int engine_sched_step(void) {
                     wi += snprintf(why, sizeof why,
                                    "%d ms passed with NO suspend point offered (step ran %d ms, points "
                                    "asked=%llu, preempts wanted=%llu fired=%llu; slowest Web API member step: "
-                                   "%s %dms) — this stretch has no suspend/resume seam; unit=%s script_i=%d "
+                                   "%s %dms; live objects %lld, heap %lld KiB) — this stretch has no "
+                                   "suspend/resume seam; unit=%s script_i=%d "
                                    "flow=%s payload=",
                                    (int)gap, (int)spent, (unsigned long long)(g_preempt_asked - pa0),
                                    (unsigned long long)(pq - pq0),
                                    (unsigned long long)(pf - pf0), slow_name, (int)slow_ms,
+                                   (long long)mem.obj_count, (long long)(mem.malloc_size / 1024),
                                    g_step_unit, si, sk);
                     /* The payload is attacker-shaped bytes and the message lands inside JSON unescaped, so
                        anything that would break the line is replaced rather than emitted. */
