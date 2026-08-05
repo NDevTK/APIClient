@@ -208,6 +208,38 @@ static const IdlStepDecl QS_STEP = { js_document_qs, sizeof(QsState), qs_visit, 
 
 const IdlStepDecl *document_qs_decl(void) { return &QS_STEP; }
 
+/* §3.1.5 THE DOCUMENT'S ELEMENT SHORTCUTS — forms, images, scripts, embeds and links. Every one is a LIVE
+   HTMLCollection the spec defines as "the elements of type X in the document", so each is the by-name
+   collection over the document with a tag baked in, and `links` is the one that is a predicate instead
+   (`a`/`area` WITH an href). A page uses these to find its own markup, and a bundle scanner uses
+   `document.scripts` and `document.forms` in particular — with them absent the loop over them never ran and
+   nothing said why.
+   magic 0 = forms, 1 = images, 2 = scripts, 3 = embeds, 4 = links. */
+static JSValue js_doc_shortcut(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    static const char *const TAGS[] = { "form", "img", "script", "embed" };
+    if (magic == 4) return collections_links(ctx, this_val);
+    DCHECK(magic >= 0 && magic < (int)(sizeof(TAGS) / sizeof(TAGS[0])),
+           "a document element-shortcut ran with a magic it does not have");
+    return collections_by_name(ctx, this_val, TAGS[magic], false);
+}
+
+/* §4.5 createDocumentFragment(). A page batches inserts into one and attaches it once, which is the ordinary
+   way to add many nodes — and it is the same object `new DocumentFragment()` builds, so this is the member
+   name for a constructor that already exists rather than a second way to make one. */
+static JSValue js_doc_create_fragment(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                      int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+    lxb_dom_document_fragment_t *frag;
+
+    (void)argc; (void)argv; (void)magic;
+    DCHECK(n != NULL, "createDocumentFragment ran on something that is not the document");
+    frag = lxb_dom_document_fragment_interface_create(n->owner_document);
+    CHECK(frag != NULL, "createDocumentFragment: the Lexbor fragment allocation failed");
+    return node_wrap(ctx, lxb_dom_interface_node(frag));
+}
+
 /* 4.5.1 createElement. The element is created IN this document and returned DETACHED — a page builds a subtree
    and attaches it later, and creating it already-attached would put nodes in the tree the page never inserted.
    It is not a per-flow write for that reason: nothing observable changed until appendChild, which IS one. */
@@ -418,6 +450,15 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     idl_install_method(ctx, proto, "createElement", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_element, 0));
     idl_install_method(ctx, proto, "createTextNode", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_text, 0));
     idl_install_method(ctx, proto, "createComment", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_comment, 0));
+    idl_install_method(ctx, proto, "createDocumentFragment", 0,
+                       idl_method_id(ctx, NULL, 0, js_doc_create_fragment, 0));
+    {
+        /* §3.1.5's five element shortcuts, each a LIVE HTMLCollection over the document. */
+        static const char *const NAMES[] = { "forms", "images", "scripts", "embeds", "links" };
+        unsigned k;
+        for (k = 0; k < sizeof(NAMES) / sizeof(NAMES[0]); k++)
+            idl_install_accessor(ctx, proto, NAMES[k], js_doc_shortcut, (int)k, -1);
+    }
     idl_install_method(ctx, proto, "createElementNS", 2, idl_method_id(ctx, IDL_2STR, 2, js_doc_create_element_ns, 0));
 }
 
@@ -442,7 +483,6 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
         document_install_members(ctx, proto);
         /* §3.1.1's IDL includes GlobalEventHandlers and adds onreadystatechange / onvisibilitychange. */
         event_target_install_handlers(ctx, proto, EH_GLOBAL | EH_DOCUMENT);
-        html_form_install_document_members(ctx, proto);   /* §3.1.1 document.forms */
         node_set_proto(ctx, LXB_DOM_NODE_TYPE_DOCUMENT, proto);
     }
     element_doc_set(dom);   /* BEFORE the wrap: the tree accessors below read through it */

@@ -185,6 +185,32 @@ void node_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, int insert
     dom_cow_set_tree_hook(fn);
 }
 
+/* §4.2.3 "insert" — A DocumentFragment IS NOT INSERTED; ITS CHILDREN ARE, in order, and the fragment is left
+   empty. That is not a detail: `createDocumentFragment` exists so a page can batch nodes and attach them in one
+   call, so every use of it went wrong — the fragment NODE landed in the tree, `frag.childNodes.length` stayed
+   what it was, and the page's markup was one level deeper than it built. Nothing threw, because a fragment is a
+   node and appending one is a legal thing to do.
+   One helper, used by every member that inserts, because "which node actually goes in" is the same question for
+   appendChild, insertBefore, replaceChild and the four ChildNode/ParentNode mixins — and a member that forgot to
+   ask it would be the one place fragments quietly stopped working again.
+   The children come OUT through the capturing chokepoint rather than a private detach: a fragment can be older
+   than the fork that is running, so another flow's baseline may hold it. */
+static void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref)
+{
+    if (node->type == LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT) {
+        lxb_dom_node_t *c, *next;
+        for (c = node->first_child; c; c = next) {
+            next = c->next;
+            dom_cow_remove_child(c);
+            if (ref) dom_cow_insert_before(ref, c);
+            else     dom_cow_append_child(parent, c);
+        }
+        return;
+    }
+    if (ref) dom_cow_insert_before(ref, node);
+    else     dom_cow_append_child(parent, node);
+}
+
 /* §4.5 appendChild / removeChild. DECLARED members, like every other one — they were raw JS_CFUNC_DEF entries,
    which is a shape that cannot park at all and, more to the point here, does not pass through the machine every
    declared member converges on. `Node node` is an interface type, so the IDL converts nothing; the declaration
@@ -208,7 +234,7 @@ static JSValue js_node_child_op(JSContext *ctx, JSValueConst this_val, int argc,
         if (node_is_inclusive_ancestor(child, n))
             return JS_ThrowDOMException(ctx, "HierarchyRequestError",
                                         "a node cannot be inserted into its own descendant");
-        dom_cow_append_child(n, child);
+        node_insert_at(n, child, NULL);
     }
     return JS_DupValue(ctx, argv[0]);
 }
@@ -269,11 +295,10 @@ static JSValue js_node_mixin(JSContext *ctx, JSValueConst this_val, int argc, JS
         if (!added) return JS_EXCEPTION;
         if (added == n) continue;           /* inserting a node beside itself is its own removal first */
         switch (magic) {
-        case 1: case 3: dom_cow_insert_before(ref, added); break;
-        case 2: if (ref) dom_cow_insert_before(ref, added); else dom_cow_append_child(parent, added); break;
-        case 4: case 6: dom_cow_append_child(n, added); break;
-        case 5: if (n->first_child) dom_cow_insert_before(n->first_child, added);
-                else dom_cow_append_child(n, added);
+        case 1: case 3: node_insert_at(parent, added, ref); break;
+        case 2: node_insert_at(parent, added, ref); break;
+        case 4: case 6: node_insert_at(n, added, NULL); break;
+        case 5: node_insert_at(n, added, n->first_child);
                 break;
         default: DFAIL("a ChildNode/ParentNode member ran with an unknown magic"); break;
         }
@@ -938,13 +963,13 @@ static JSValue js_node_insert(JSContext *ctx, JSValueConst this_val, int argc, J
         return JS_ThrowDOMException(ctx, "HierarchyRequestError",
                                     "a node cannot be inserted into its own descendant");
     if (magic == 0 && !child) {
-        dom_cow_append_child(parent, node);       /* insertBefore(n, null) IS append */
+        node_insert_at(parent, node, NULL);       /* insertBefore(n, null) IS append */
         return JS_DupValue(ctx, argv[0]);
     }
     if (!child || child->parent != parent)
         return JS_ThrowDOMException(ctx, "NotFoundError",
                                     "the reference child is not a child of this node");
-    dom_cow_insert_before(child, node);
+    node_insert_at(parent, node, child);
     if (magic == 1) {
         dom_cow_remove_child(child);
         return JS_DupValue(ctx, argv[1]);         /* replaceChild returns the node it REMOVED */

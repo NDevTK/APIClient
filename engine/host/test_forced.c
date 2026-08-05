@@ -623,6 +623,31 @@ static const char *HTML =
     /* the RECEIVER scopes it: an <i> outside `gt` is not in `gt`'s collection but is in the document's */
     " + '&scope=' + (document.getElementsByTagName('i').length > gbnI.length ? 'receiver' : 'global')"
     " + '&live=' + (gbnI instanceof HTMLCollection && typeof gbnI.map === 'undefined' ? 'iface' : 'wrong'));"
+    /* §3.1.5's element shortcuts and §4.5's createDocumentFragment. All five shortcuts are LIVE
+       HTMLCollections over the document — a bundle scanner reaches for document.scripts and document.forms in
+       particular, and with them absent the loop over them never ran and nothing said why.
+       `links` is the one that is a PREDICATE rather than a tag: `a`/`area` WITH an href, so an anchor used as a
+       scroll target is not a link. */
+    "var scHost = document.createElement('div'); document.body.appendChild(scHost);"
+    "scHost.innerHTML = '<form></form><img><a href=\"/l1\">l</a><a name=\"nolink\">n</a>'"
+      "+ '<area href=\"/l2\"><embed>';"
+    "var scF = document.forms, scL = document.links;"
+    "var scBefore = scF.length + ':' + document.images.length + ':' + scL.length"
+      "+ ':' + document.embeds.length;"
+    "var scMore = document.createElement('form'); scHost.appendChild(scMore);"
+    "var scFrag = document.createDocumentFragment();"
+    "scFrag.appendChild(document.createElement('b')); scFrag.appendChild(document.createElement('i'));"
+    "var scFragN = scFrag.childNodes.length; scHost.appendChild(scFrag);"
+    "fetch('/api/docshort?before=' + scBefore + '&after=' + scF.length"
+    /* §4.2.3: appending a fragment inserts its CHILDREN, so the last child is the <i> element and not the
+       fragment itself — nodeType 1, which was 11 when the fragment node went into the tree instead. */
+    " + '&fragnode=' + scHost.lastChild.nodeType"
+    /* the anchor with no href is NOT a link, and the <area> with one IS */
+    " + '&links=' + scL[0].getAttribute('href') + ',' + scL[1].getAttribute('href')"
+    " + '&iface=' + (scF instanceof HTMLCollection && scFrag instanceof DocumentFragment ? 'live' : 'wrong')"
+    /* §4.2.3: appending a fragment moves its CHILDREN, leaving the fragment empty */
+    " + '&frag=' + scFragN + ':' + scFrag.childNodes.length"
+    " + ':' + scHost.getElementsByTagName('b').length);"
     /* §4.9/§4.9.1/§4.9.2 attributes, NamedNodeMap and Attr. `el.attributes` was absent and so was every object
        behind it, which is a gap with a particular shape: the loops a page writes over an element's attributes
        — copying them onto a clone, deciding which to forward — are `for (const a of el.attributes)`, and with
@@ -1351,6 +1376,8 @@ int main(void) {
         { "\"/api/dataset\"",    "roleName,userId,x" },
         /* the map, its iterator, the value setter, the NotFoundError, and an Attr's node identity */
         { "\"/api/attrs\"",      "node" },
+        /* 1 form -> 2 after an insert (live), the two hrefs, and a fragment that empties when appended */
+        { "\"/api/docshort\"",   "/l1,/l2" },
         /* the index cache: forwards, backwards, and shifted by a front insertion between two reads */
         { "\"/api/idxcache\"",   "shifted" },
         { "\"/api/adjacent\"",   "%3Ci%3Ebb%3C%2Fi%3E%3Cp%3ET%3Cb%3Eab%3C%2Fb%3E%3Cu%3Ebe%3C%2Fu%3E%3Cq%3E%3C%2Fq%3E%3C%2Fp%3E%3Cs%3Eae%3C%2Fs%3E" },

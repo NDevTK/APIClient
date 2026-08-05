@@ -24,4 +24,7 @@ JSValue collections_static(JSContext *ctx, JSValue nodes);
    mark these [SameObject], because the query is part of what the collection is. */
 JSValue collections_by_name(JSContext *ctx, JSValueConst owner, const char *name, bool by_class);
 
+/* §3.1.5 `document.links` — `a`/`area` elements that HAVE an href. A predicate, not a name. */
+JSValue collections_links(JSContext *ctx, JSValueConst owner);
+
 #endif

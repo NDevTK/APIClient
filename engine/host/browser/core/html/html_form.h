@@ -8,6 +8,5 @@
 void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst input_proto,
                        JSValueConst textarea_proto, JSValueConst option_proto);
 /* `document.forms` — a Document member, so document.c installs it on its prototype. */
-void html_form_install_document_members(JSContext *ctx, JSValueConst doc_proto);
 
 #endif

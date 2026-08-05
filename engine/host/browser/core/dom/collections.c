@@ -44,9 +44,12 @@ static int     g_ready;
 /* The live kinds differ in TWO things and nothing else: which nodes they traverse, and which of those they
    take. The two child kinds walk the owner's child list; the two by-name kinds walk its whole subtree, which is
    what makes getElementsByTagName's result track a page that inserts a matching element anywhere under it. */
-enum { COLL_CHILD_NODES = 0, COLL_CHILDREN, COLL_STATIC, COLL_BY_TAG, COLL_BY_CLASS };
+enum { COLL_CHILD_NODES = 0, COLL_CHILDREN, COLL_STATIC, COLL_BY_TAG, COLL_BY_CLASS, COLL_LINKS };
 
-static bool coll_is_descendant(int kind) { return kind == COLL_BY_TAG || kind == COLL_BY_CLASS; }
+static bool coll_is_descendant(int kind)
+{
+    return kind == COLL_BY_TAG || kind == COLL_BY_CLASS || kind == COLL_LINKS;
+}
 
 static JSValue coll_slots(JSContext *ctx, JSValueConst v)
 {
@@ -151,6 +154,15 @@ static bool coll_takes(int kind, const char *name, size_t nlen, const lxb_dom_no
     }
     if (kind == COLL_BY_CLASS)
         return coll_has_all_classes(lxb_dom_interface_element((lxb_dom_node_t *)c), name, nlen);
+    if (kind == COLL_LINKS) {
+        /* §3.1.5 `document.links` is `a` AND `area` elements THAT HAVE AN href — the attribute is half the
+           definition, so an anchor used as a scroll target is not a link. */
+        size_t qn = 0, vl = 0;
+        const lxb_char_t *q = lxb_dom_element_qualified_name((lxb_dom_element_t *)c, &qn);
+        if (!q || !((qn == 1 && q[0] == 'a') || (qn == 4 && memcmp(q, "area", 4) == 0))) return false;
+        return lxb_dom_element_get_attribute((lxb_dom_element_t *)c,
+                                             (const lxb_char_t *)"href", 4, &vl) != NULL;
+    }
     return true;
 }
 
@@ -481,6 +493,14 @@ JSValue collections_by_name(JSContext *ctx, JSValueConst owner, const char *name
     DCHECK(g_ready, "a by-name collection was built before collections_init ran");
     return coll_new(ctx, g_htmlcoll_proto, &HTMLCOLL_INDEXED,
                     by_class ? COLL_BY_CLASS : COLL_BY_TAG, owner, name);
+}
+
+/* §3.1.5's `document.links` — `a`/`area` WITH an href, which is a predicate rather than a name, so it is its
+   own kind rather than a by-tag collection that would also count the anchors with no href. */
+JSValue collections_links(JSContext *ctx, JSValueConst owner)
+{
+    DCHECK(g_ready, "a links collection was built before collections_init ran");
+    return coll_new(ctx, g_htmlcoll_proto, &HTMLCOLL_INDEXED, COLL_LINKS, owner, NULL);
 }
 
 JSValue collections_static(JSContext *ctx, JSValue nodes)

@@ -346,22 +346,6 @@ static const JSTrampStepDef js_reqsubmit_def = {
 };
 
 /* §3.1.1 document.forms — every form in the document, in tree order. */
-static JSValue js_doc_forms(JSContext *ctx, JSValueConst this_val, int magic)
-{
-    lxb_dom_node_t *root = node_of(this_val), *n;
-    JSValue arr = JS_NewArray(ctx);
-    uint32_t k = 0;
-
-    (void)magic;
-    if (!root) return arr;
-    for (n = root; n; ) {
-        if (tag_is(n, "form")) JS_SetPropertyUint32(ctx, arr, k++, node_wrap(ctx, n));
-        if (n->first_child) { n = n->first_child; continue; }
-        while (n && !n->next) n = (n == root) ? NULL : n->parent;
-        n = n ? n->next : NULL;
-    }
-    return arr;
-}
 
 void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst input_proto,
                        JSValueConst textarea_proto, JSValueConst option_proto)
@@ -386,7 +370,4 @@ void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst inp
     idl_install_accessor(ctx, input_proto, "checked", js_ctrl_get_checked, 0, id);
 }
 
-void html_form_install_document_members(JSContext *ctx, JSValueConst doc_proto)
-{
-    idl_install_accessor(ctx, doc_proto, "forms", js_doc_forms, 0, -1);
-}
+
