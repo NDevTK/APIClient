@@ -360,7 +360,10 @@ static uint64_t g_preempt_asked = 0;
    consultation, and closed off with the tail after the last one. */
 static int64_t g_last_ask = 0, g_max_gap = 0;
 
-static int preempt_hook(void) {
+/* The solver's policy does not care WHICH kind of point it was offered — its two decisions are the WFQ ranking
+   and the wall-clock slice, and both ask whether this flow should still hold the thread. */
+static int preempt_hook(int kind) {
+    (void)kind;
     Flow *cur = flow_running();
     int64_t now = engine_now_ms();
     g_preempt_asked++;
