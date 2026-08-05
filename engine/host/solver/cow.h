@@ -93,4 +93,8 @@ void      cow_free(JSContext *ctx);
    up the rest of it rather than at either entry. */
 void cow_install_time_travel_hooks(void);
 
+/* What the delta swaps have cost so far: how many chain installs, how many entries they touched in total, and
+   the worst single one. A switch is supposed to be O(divergence); this says what the divergence actually is. */
+void cow_swap_stats(long *count, long *total, long *max);
+
 #endif

@@ -196,19 +196,25 @@ static int idl_tree_drain(JSContext *ctx, JSIdlArgsState *s)
 #if APICLIENT_DEV
 static int64_t     g_slow_ms;
 static const char *g_slow_name;
+/* The MAX alone cannot tell one five-second call apart from a hundred thousand short ones, and those are
+   different bugs with different fixes. The count and the total say which. */
+static int64_t     g_step_total;
+static long        g_step_count;
 static int64_t idl_now_ms(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
 }
-void idl_slowest_reset(void) { g_slow_ms = 0; g_slow_name = NULL; }
+void idl_slowest_reset(void) { g_slow_ms = 0; g_slow_name = NULL; g_step_total = 0; g_step_count = 0; }
 int64_t idl_slowest_step(const char **name) {
     if (name) *name = g_slow_name ? g_slow_name : "(none)";
     return g_slow_ms;
 }
+int64_t idl_step_total(long *count) { if (count) *count = g_step_count; return g_step_total; }
 #else
 void idl_slowest_reset(void) { }
 int64_t idl_slowest_step(const char **name) { if (name) *name = "(release)"; return 0; }
+int64_t idl_step_total(long *count) { if (count) *count = 0; return 0; }
 #endif
 
 static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc);
@@ -219,6 +225,8 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     int64_t t0 = idl_now_ms();
     int rr = js_idl_args_step_inner(ctx, st, cb_result, out_cb, out_argc);
     int64_t d = idl_now_ms() - t0;
+    g_step_total += d;
+    g_step_count++;
     if (d > g_slow_ms) {
         JSIdlArgsState *ss = st;
         g_slow_ms = d;

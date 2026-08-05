@@ -105,4 +105,9 @@ void dom_base_load(void *base); /* install a parked flow's base chain (before do
 void dom_base_free(void *base); /* drop a flow's reference to a base chain (free iff last) */
 void dom_base_ref(void *base);  /* add ONE ref (each orphan forks the document flow's shared DOM delta) */
 
+/* THIS FLOW CREATED THIS NODE. Called from every place a node is made, so the delta owns it and destroys it
+   when the delta is discarded. Inert while capture is off — a boot-time creation is baseline and outlives
+   every delta. */
+void dom_cow_note_created(lxb_dom_node_t *node);
+
 #endif

@@ -56,4 +56,13 @@ bool node_is_connected(const lxb_dom_node_t *n);
    knowledge. It registers the answer here; node_wrap asks it and stays the one place a wrapper is built. */
 void node_set_element_resolver(JSValueConst (*fn)(lxb_dom_element_t *el));
 
+/* THE NODE IS BEING DESTROYED — drop the wrapper the map holds for it. Called from the DOM's destroy
+   chokepoint, which is the only place a node's lifetime ends, so the map stays bounded by the nodes that
+   actually exist rather than by every node ever created. */
+void node_wrap_forget(JSContext *ctx, lxb_dom_node_t *n);
+
+/* The wrapper identity map's size: how many nodes it names and how many slots it has. Reported by the seam
+   assertion because a table that has grown out of proportion to the live document is the shape of a leak. */
+void node_wrap_stats(long *n, long *cap);
+
 #endif

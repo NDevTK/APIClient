@@ -574,12 +574,34 @@ static void cow_apply_seg_until(JSContext *ctx, CowSeg *s, CowSeg *stop) {
 
 /* Make `want` the installed chain: the ONE place the heap's applied state changes, and the reason a switch
    between two related flows costs what they DIVERGED by rather than everything either of them has done. */
+/* WHAT A CONTEXT SWITCH COSTS, counted where it is paid. The design says a switch "touches only what lies
+   above the common segment", which is O(divergence) and cheap between siblings — but a breadth-first rotation
+   picks the next flow from anywhere in the fork TREE, and two distant cousins diverge near the root, so the
+   walk covers most of both histories. Whether that is tens of entries or hundreds of thousands decides whether
+   the scheduler's ordering policy needs to change or the swap does, and it was being argued about rather than
+   measured. Counted, not sampled: every entry this walk touches is one slot restored in the live heap. */
+static long g_swap_entries, g_swap_max;
+static long g_swap_count;
+void cow_swap_stats(long *count, long *total, long *max) {
+    if (count) *count = g_swap_count;
+    if (total) *total = g_swap_entries;
+    if (max)   *max   = g_swap_max;
+}
+
 static void cow_install_chain(JSContext *ctx, CowSeg *want) {
     CowSeg *common = cow_seg_common(g_cow_installed, want), *s;
-    for (s = g_cow_installed; s != common; s = s->base)
+    long touched = 0;
+    for (s = g_cow_installed; s != common; s = s->base) {
+        touched += s->n;
         cow_unapply_entries(ctx, s->e, s->n);
+    }
+    for (s = want; s != common; s = s->base)
+        touched += s->n;
     cow_apply_seg_until(ctx, want, common);
     g_cow_installed = want;
+    g_swap_count++;
+    g_swap_entries += touched;
+    if (touched > g_swap_max) g_swap_max = touched;
 }
 
 void cow_delta_free(JSContext *ctx, CowDelta *d) {

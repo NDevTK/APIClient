@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "check.h"
+#include "solver/dom_cow.h"   /* dom_cow_note_created — a created node belongs to the flow's delta */
 #include "quickjs.h"
 #include "solver/concolic.h"
 #include "solver/engine.h"
@@ -257,6 +258,7 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
     el = lxb_dom_document_create_element(lxb_dom_interface_document(g_doc),
                                          (const lxb_char_t *)tag, strlen(tag), NULL);
     JS_FreeCString(ctx, tag);
+    dom_cow_note_created(el ? lxb_dom_interface_node(el) : NULL);   /* this flow made it: the delta owns it */
     DCHECK(el != NULL, "createElement produced no element — a page building its DOM would silently build "
                        "nothing and every query after it would answer null");
     r = element_wrap(ctx, el);
@@ -286,6 +288,7 @@ static JSValue js_doc_create_text(JSContext *ctx, JSValueConst this_val, int arg
     s = argc >= 1 ? JS_ToCStringLen(ctx, &len, argv[0]) : JS_ToCStringLen(ctx, &len, JS_UNDEFINED);
     if (!s) return JS_EXCEPTION;
     t = lxb_dom_document_create_text_node(lxb_dom_interface_document(g_doc), (const lxb_char_t *)s, len);
+    dom_cow_note_created(t ? lxb_dom_interface_node(t) : NULL);   /* this flow made it */
     JS_FreeCString(ctx, s);
     DCHECK(t != NULL, "createTextNode produced no node — a page building its DOM would silently build nothing");
     return node_wrap(ctx, lxb_dom_interface_node(t));
@@ -302,6 +305,7 @@ static JSValue js_doc_create_comment(JSContext *ctx, JSValueConst this_val, int 
     s = argc >= 1 ? JS_ToCStringLen(ctx, &len, argv[0]) : JS_ToCStringLen(ctx, &len, JS_UNDEFINED);
     if (!s) return JS_EXCEPTION;
     c = lxb_dom_document_create_comment(lxb_dom_interface_document(g_doc), (const lxb_char_t *)s, len);
+    dom_cow_note_created(c ? lxb_dom_interface_node(c) : NULL);   /* this flow made it */
     JS_FreeCString(ctx, s);
     DCHECK(c != NULL, "createComment produced no node — a page building its DOM would silently build nothing");
     return node_wrap(ctx, lxb_dom_interface_node(c));

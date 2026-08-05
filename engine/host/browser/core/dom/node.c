@@ -90,12 +90,39 @@ static unsigned node_wrap_slot(const NodeEntry *tab, int cap, const lxb_dom_node
     return i;
 }
 
-/* Grow and rehash. At half full, so a probe stays short — the map only ever grows, so the load factor is the
-   whole of what keeps a lookup O(1). */
+/* Grow and rehash. At half full, so a probe stays short.
+   THE MAP HOLDS ITS WRAPPERS WEAKLY, which is the whole reason it can stay small. It used to keep a
+   JS_DupValue of every wrapper and never remove anything — "the map only ever grows" was written here as if it
+   were a property rather than a defect. It meant every node ever wrapped was pinned for the runtime's life, so
+   a page re-run by two thousand exploration flows accumulated two thousand copies of its DOM, and one doubling
+   of a table that size is a single calloc-plus-rehash that measured FIVE SECONDS inside one createElement —
+   with no suspend point in it, because it is one C call.
+   It was also a correctness trap. A Lexbor node that is destroyed left its entry behind, and a pool allocator
+   reuses addresses: the next node at that address found the DEAD node's wrapper and got another node's
+   identity and another node's prototype.
+   So the entry is weak and the finalizer removes it — the ordinary DOM wrapper-map design. Identity holds for
+   exactly as long as someone holds the wrapper, which is the only span in which identity is observable. */
+void node_wrap_stats(long *n, long *cap) { if (n) *n = g_wrap_n; if (cap) *cap = g_wrap_cap; }
+
 static void node_wrap_grow(void)
 {
     int cap = g_wrap_cap ? g_wrap_cap * 2 : 256, i;
-    NodeEntry *tab = calloc((size_t)cap, sizeof *tab);
+    NodeEntry *tab;
+    /* THE COUNT AND THE OCCUPANCY ARE THE SAME NUMBER, and the growth policy is the only thing keeping a probe
+       short, so it is worth saying so where it matters. A removal that decremented the count without actually
+       freeing its slot would leave the table filling up while it believed itself half empty — and the probe in
+       node_wrap_slot walks until it finds an empty slot, so the failure mode is not a slow lookup, it is a walk
+       over the whole table on every insert, and finally one that never terminates. */
+#if APICLIENT_DEV
+    {
+        long occ = 0;
+        for (i = 0; i < g_wrap_cap; i++) if (g_wraps[i].n) occ++;
+        DCHECK(occ == g_wrap_n, "the wrapper table's occupancy and its count disagree — a removal freed the "
+                                "count but not the slot, so the probe walks a table that is fuller than the "
+                                "load factor claims");
+    }
+#endif
+    tab = calloc((size_t)cap, sizeof *tab);
 
     CHECK(tab != NULL, "the node wrapper table could not grow: a dropped wrapper breaks node identity, and "
                        "every `n === other` the page makes after it is silently false");
@@ -880,6 +907,7 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
             return JS_STEP_ABRUPT;
         }
         s->copy = lxb_dom_node_clone(n, false);
+        dom_cow_note_created(s->copy);   /* the clone ROOT only — its descendants are reachable only through it */
         CHECK(s->copy != NULL, "cloneNode: the Lexbor node copy failed — returning nothing would hand the page a "
                                "null it has no way to distinguish from a node it never asked for");
         if (!deep) { *presult = node_wrap(ctx, s->copy); return JS_STEP_DONE; }
@@ -1541,13 +1569,73 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
                                         "then found, which is two JS objects for one node and every identity "
                                         "comparison between them false");
         g_wraps[slot].n = n;
-        g_wraps[slot].obj = JS_DupValue(ctx, obj);
+        g_wraps[slot].obj = JS_DupValue(ctx, obj);   /* the map holds it; node_wrap_forget releases it */
         g_wrap_n++;
     }
     return obj;
 }
 
+/* REMOVE an entry, keeping the probe chains intact. Open addressing with linear probing cannot simply blank a
+   slot: every entry after it that probed PAST it would become unreachable, and a lookup would miss a node that
+   is still in the table and hand out a second wrapper for it. Backward-shift deletion moves each following
+   entry that belongs at or before the hole into it, which restores the invariant without tombstones — and no
+   tombstones is what keeps the table from degrading back into the thing this replaced. */
+static void node_wrap_remove(const lxb_dom_node_t *n)
+{
+    unsigned i, j, k, mask;
+
+    if (!g_wrap_cap)
+        return;
+    mask = (unsigned)(g_wrap_cap - 1);
+    i = node_wrap_slot(g_wraps, g_wrap_cap, n);
+    if (g_wraps[i].n != n)
+        return;                      /* already gone: a wrapper outliving its node is the flow's teardown order */
+    g_wraps[i].n = NULL;
+    g_wrap_n--;
+    for (j = (i + 1) & mask; g_wraps[j].n; j = (j + 1) & mask) {
+        /* its HOME slot — where it WOULD hash to — not the slot it currently occupies, which is the whole
+           question being asked. node_wrap_slot answers the second and would make this always continue. */
+        k = (unsigned)(((uintptr_t)g_wraps[j].n * 2654435769u) >> 16) & mask;
+        if ((i <= j) ? (i < k && k <= j) : (i < k || k <= j))
+            continue;                /* j is reachable from its home without passing the hole — leave it */
+        g_wraps[i] = g_wraps[j];
+        g_wraps[j].n = NULL;
+        i = j;
+    }
+}
+
+/* THE NODE OWNS ITS WRAPPER, so nothing is released here — the entry holds a reference and the DOM releases it
+   when the NODE dies (node_wrap_forget, from the destroy chokepoint). A purely weak map was the other way round
+   and it is measurably worse: the wrapper is then collected whenever no JS reference happens to be live, so the
+   next `el.firstChild` allocates a fresh object and re-resolves its prototype, and a DOM-heavy page pays that
+   on nearly every access. Measured on the smoke fixture: the same exploration went from ~200 s to over 1500 s
+   of execution. Identity is also cheaper to reason about this way — a node's wrapper is the same object for as
+   long as the node exists, which is what the DOM says. */
 static void node_finalizer(JSRuntime *rt, JSValue val) { (void)rt; (void)val; }
+
+/* THE NODE IS GONE, so its wrapper entry goes with it. This is what was missing: the map only ever grew, so
+   every node any of thousands of exploration flows ever created stayed in it forever — the table reached a size
+   where ONE doubling was a five-second calloc-and-rehash inside a single createElement, with no suspend point
+   in it. It was also a correctness trap, because a pool allocator reuses addresses and the next node at a dead
+   node's address inherited its wrapper and its prototype. */
+void node_wrap_forget(JSContext *ctx, lxb_dom_node_t *n)
+{
+    unsigned slot;
+
+    if (!n || !g_wrap_cap)
+        return;
+    slot = node_wrap_slot(g_wraps, g_wrap_cap, n);
+    if (g_wraps[slot].n != n)
+        return;                       /* never wrapped: the common case for a node no script ever touched */
+    /* NEUTER IT FIRST. The map's reference is not necessarily the last one — page code in the flow being
+       discarded may still hold the wrapper, and its refcount keeps the JSObject alive after this. Leaving the
+       freed node in its opaque makes the next property access a use-after-free that reads as an out-of-bounds
+       somewhere else entirely; nulling it makes that access hit the DCHECK the accessors already carry, at the
+       site that made it. */
+    JS_SetOpaque(g_wraps[slot].obj, NULL);
+    JS_FreeValue(ctx, g_wraps[slot].obj);
+    node_wrap_remove(n);
+}
 
 void node_init(JSContext *ctx)
 {

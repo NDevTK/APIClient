@@ -175,6 +175,9 @@ JSValue idl_step_constructor(JSContext *ctx, const char *name, int length, int s
 
 void idl_slowest_reset(void);
 int64_t idl_slowest_step(const char **name);
+/* The same window's TOTAL across every member step, and how many there were. The max alone cannot separate one
+   very slow call from very many short ones. */
+int64_t idl_step_total(long *count);
 
 void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
                           IdlGetter getter, int getter_magic, int setter_stepid);

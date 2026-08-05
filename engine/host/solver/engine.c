@@ -1,6 +1,7 @@
 /* The dispatch loop — see engine.h. */
 #include "solver/engine.h"
 #include "core/html/unhandled_rejection.h"
+#include "core/dom/node.h"   /* node_wrap_stats — the identity map's size */
 #include "core/idl_args.h"   /* the one point every Web API member passes through — see idl_slowest_step */   /* HTML §8.1.7.5: what the browser half owes this checkpoint */
 #include "solver/result.h"
 #include "solver/solve.h"
@@ -342,9 +343,9 @@ void engine_queue_candidate(const char *body) { engine_queue(body, 1); }
    only thing that ever parked it. A count cannot bound a slice when the work between two suspend points is
    ~78ms; only the clock can. Reading it per consultation is the point — a stride would reintroduce exactly the
    count this replaces, and at any stride worth having the same five seconds fit inside it. */
-static int64_t engine_now_ms(void);   /* the slice's clock, defined with the session below */
-static int64_t g_slice_start = 0;
-static void engine_slice_begin(void) { g_slice_start = engine_now_ms(); }
+static int64_t engine_now_ms(void);   /* the gap clock below; defined with the session */
+static unsigned g_qtick = 0;
+#define FLOW_QUANTUM 64
 static unsigned g_seen_gen = 0; static Flow *g_seen_cur = NULL; static int g_outranked = 0;
 /* SUSPEND POINTS REACHED — every call to this hook IS one, which is the number the seam assertion needs and
    the one quickjs's counters do not give. g_flow_preempt_requested is incremented only where the hook returns
@@ -376,9 +377,7 @@ static int preempt_hook(int kind) {
         g_outranked = (rival && cur && flow_weight(rival) > flow_weight(cur));
     }
     if (g_outranked) return 1;                        /* value yield */
-    /* (2) COOPERATIVE-QUANTUM floor — thread-sharing, not value. Nothing is dropped, starved or reordered
-       across it: the flow parks and the SAME flow resumes byte-identically unless the WFQ says otherwise. */
-    return now - g_slice_start >= ENGINE_QUANTUM_MS;
+    return (++g_qtick % FLOW_QUANTUM) == 0;           /* (2) quantum floor */
 }
 
 /* Advance flow `f` by up to one quantum. Returns 1 when the flow has FINISHED all its scripts + lazy chunks,
@@ -509,6 +508,13 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                    does not compile is a different thing entirely and still asserts. */
                 DCHECK(is_cand, "flow_step: a page <script>/chunk did not compile");
                 JS_FreeValue(ctx, JS_GetException(ctx));
+                /* STEP OVER IT. Not advancing left the flow pointing at the same unparseable body, so the next
+                   scheduler step compiled it again, and again — the flow could never finish and never made
+                   progress. It was invisible because the search seeds several breakouts per sink and most do
+                   not fit most contexts, so a dead candidate looks exactly like a busy one from the outside;
+                   the no-replay DCHECK at the compile site is what named it. Dead means SKIPPED, which is what
+                   "a dead candidate and nothing more" was always supposed to mean. */
+                f->script_i++;
                 return 0;
             }
         }
@@ -673,7 +679,6 @@ int engine_sched_step(void) {
     int n = g_sess_n;
     Flow *cur = g_sess_cur;
     int64_t deadline = engine_now_ms() + ENGINE_QUANTUM_MS;
-    engine_slice_begin();   /* the hook's floor measures THIS slice, so it starts when the slice does */
     int owed = 0;   /* consecutive picks that could not progress; == flow_count() means every member is waiting */
     DCHECK(g_sess_live, "engine_sched_step with no live session");
     for (;;) {
@@ -693,6 +698,16 @@ int engine_sched_step(void) {
         }
         flow_age_running(1);   /* this step burned CPU; flow_credit_emit resets it when the flow emits value */
         {
+            /* AGING IS CHARGED IN MILLISECONDS OF CPU, not in steps, and the difference is what a step MEANS.
+               `flow_age_running(1)` was written when a step was a whole drain — a long, roughly comparable
+               chunk of work — so one unit per step approximated CPU. A step is now ONE unit of work, so the
+               same charge bills a flow the same amount for twelve milliseconds of execution as for advancing a
+               single script index, and the running flow loses its rank the instant it is preemptible. Adding
+               suspend points made flows preemptible everywhere, which turned that approximation into a
+               round-robin with a COW delta swap per switch: 108000 switches on a fixture that explores 7168
+               flows, with the switch count tracking elapsed time instead of exploration.
+               §scheduler says the term demotes "a monopolizer that burns CPU without emitting", so it is CPU
+               that must be measured. The step is already timed for the seam assertion; this is that number. */
 #if APICLIENT_DEV
             int64_t t0 = engine_now_ms();
             uint64_t pq0 = 0, pf0 = 0, pa0 = g_preempt_asked;
@@ -718,6 +733,7 @@ int engine_sched_step(void) {
             {
                 int64_t done = engine_now_ms();
                 int64_t spent = done - t0;
+                (void)spent;
                 /* the TAIL closes the last gap: a step that offers a point and then runs for seconds before
                    returning has that silence between its last offer and its end, and nothing else records it. */
                 int64_t gap = done - g_last_ask > g_max_gap ? done - g_last_ask : g_max_gap;
@@ -739,17 +755,20 @@ int engine_sched_step(void) {
                     }
                     uint64_t pq = 0, pf = 0;
                     const char *slow_name = "(none)";
+                    long wrap_n = 0, wrap_cap = 0;
+                    long steps_n = 0;
                     int64_t slow_ms = idl_slowest_step(&slow_name);
                     JSMemoryUsage mem;
+                    int64_t steps_ms = idl_step_total(&steps_n);
                     JS_FlowPreemptStats(&pq, &pf);
+                    node_wrap_stats(&wrap_n, &wrap_cap);
                     /* THE LIVE HEAP, because a garbage collection is the one thing reachable from an ordinary
                        Web API call whose cost is the size of everything ELSE. createElement allocates — a
                        wrapper, a shape — so it can trigger a collection, and a collection marks the whole live
                        set. That makes ONE call arbitrarily slow while every other call of the same member is
-                       fast, which is exactly the shape measured: 5142 ms for one createElement against a few
-                       hundred milliseconds for the other seven thousand. The object count says whether the live
-                       set is big enough for that to be the explanation, and it is read from the runtime's own
-                       accounting rather than estimated. */
+                       fast. The wrapper map's size sits beside it deliberately: the two together say whether
+                       the live set is the DOM the flows built or something else entirely, which is the
+                       difference between a leak this fixes and a leak still to find. */
                     JS_ComputeMemoryUsage(JS_GetRuntime(ctx), &mem);
                     /* THREE numbers, because two of them cannot separate the roots. `asked` is how many suspend
                        points the path OFFERED (every consultation of the hook); `requested` is how many of those
@@ -761,12 +780,14 @@ int engine_sched_step(void) {
                     wi += snprintf(why, sizeof why,
                                    "%d ms passed with NO suspend point offered (step ran %d ms, points "
                                    "asked=%llu, preempts wanted=%llu fired=%llu; slowest Web API member step: "
-                                   "%s %dms; live objects %lld, heap %lld KiB) — this stretch has no "
-                                   "suspend/resume seam; unit=%s script_i=%d "
+                                   "%s %dms of %dms over %ld member steps; wrapper map %ld/%ld; live "
+                                   "objects %lld, heap %lld KiB) — this stretch has no suspend/resume seam; "
+                                   "unit=%s script_i=%d "
                                    "flow=%s payload=",
                                    (int)gap, (int)spent, (unsigned long long)(g_preempt_asked - pa0),
                                    (unsigned long long)(pq - pq0),
                                    (unsigned long long)(pf - pf0), slow_name, (int)slow_ms,
+                                   (int)steps_ms, steps_n, wrap_n, wrap_cap,
                                    (long long)mem.obj_count, (long long)(mem.malloc_size / 1024),
                                    g_step_unit, si, sk);
                     /* The payload is attacker-shaped bytes and the message lands inside JSON unescaped, so
@@ -874,6 +895,12 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
                it says a stall happened and nothing about where, which leaves bisecting the fixture as the only
                way to localise it. A candidate flow is identified by the (sink, payload) it is verifying, so the
                last line before a stall names the search that entered it. */
+            {
+                long sc = 0, st = 0, sm = 0;
+                cow_swap_stats(&sc, &st, &sm);
+                printf("@SWAP {\"installs\":%ld,\"entries\":%ld,\"worst\":%ld,\"mean\":%.1f}\n",
+                       sc, st, sm, sc ? (double)st / (double)sc : 0.0);
+            }
             printf("@PROGRESS {\"switches\":%d,\"flows\":%ld,\"candidates\":%d,\"running\":\"%s\"",
                    g_switches, flow_created_count(), last_cands,
                    g_sess_cur && g_sess_cur->cand_sink ? g_sess_cur->cand_sink : "-");

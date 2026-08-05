@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include "check.h"        /* CHECK — an OOM here corrupts DOM isolation, fatal in every build */
 #include "solver/dom_cow.h"
+#include "core/dom/node.h"   /* node_wrap_forget — a destroyed node hands back its wrapper */
 #include "solver/attr_shadow.h"   /* the taint shadow rides the attribute delta (per-flow isolation of stashed taint) */
 #include <lexbor/dom/dom.h>
 
@@ -234,6 +235,10 @@ void dom_cow_take_private(lxb_dom_node_t *root, lxb_dom_node_t *node) {
            "dom_cow_take_private on a node outside the declared private tree — a detach of shared tree state "
            "must be captured, or the flow that still has it in its baseline re-inserts freed memory on unapply");
     lxb_dom_node_remove(node);
+    /* It was reachable only through the private root, which the parse destroys; out of that tree it stands on
+       its own, so this is where it becomes a node the FLOW owns. Parsed markup enters the document exactly
+       here, which is why the entry belongs at this seam rather than at each caller. */
+    dom_cow_note_created(node);
 }
 
 /* Insert INTO the private tree — what building a clone is. The child must be nowhere at all: a node that is in
@@ -250,12 +255,105 @@ void dom_cow_insert_private(lxb_dom_node_t *root, lxb_dom_node_t *parent, lxb_do
 
 /* Destroy the tree. For the fragment parse its children must already be gone — destroying one that still holds
    nodes would free tree the caller is about to insert — so the caller says which it means. */
+/* Every node in the subtree about to be freed, so each can hand back the wrapper the identity map holds for
+   it. The walk carries no C recursion for the reason every other tree walk here does not: the depth is the
+   page's data, so it descends by first_child and climbs by parent, never above the root it was given. */
+/* Every node in the subtree, and NOTHING outside it. The bound is `root`, not root's PARENT: this walk runs on
+   a DETACHED subtree, whose root can perfectly well have siblings — a fragment's children are siblings of each
+   other — and stopping at the parent let the climb step past root into them. It then handed back wrappers for
+   nodes that were never destroyed, leaving live nodes holding freed JSValues, which is an out-of-bounds access
+   the moment one of them is touched again. Climbing only while `n != root` cannot leave the subtree.
+   No C recursion: depth here is the page's data. */
+static void dom_forget_wrappers(JSContext *ctx, lxb_dom_node_t *root)
+{
+    lxb_dom_node_t *n = root;
+
+    for (;;) {
+        node_wrap_forget(ctx, n);
+        if (n->first_child) { n = n->first_child; continue; }
+        while (n != root && !n->next) n = n->parent;
+        if (n == root) return;
+        n = n->next;
+    }
+}
+
+/* THE NODE OWNERSHIP CONTRACT: a node a flow CREATED dies with that flow's delta.
+ *
+ * dom_buf_free said it outright — "its nodes stay detached, owned by the doc" — and that is the leak underneath
+ * everything else. Nothing ever destroyed them, so every node any of thousands of exploration flows ever built
+ * stayed alive for the whole run, and the wrapper identity map that names them grew with it until one doubling
+ * was a five-second calloc-and-rehash inside a single createElement, with no suspend point in it. The stall was
+ * the symptom; this is the cause.
+ *
+ * WHICH NODES ARE OURS TO DESTROY is the whole question, and the delta already answers it without a per-node
+ * generation. A kind-1 entry records an INSERTION, which covers two different things: a node this flow created,
+ * and a BASELINE node this flow moved (a move is a kind-2 removal plus a kind-1 insertion). Destroying the
+ * second would free tree the baseline still owns. But by the time a delta is discarded it has been unapplied,
+ * and unapply is exactly what tells them apart: the moved node was RE-INSERTED where the baseline had it, so it
+ * is attached; the created node was detached and nothing put it back. So `attached` is the discriminator, and
+ * it is a property the tree already carries rather than bookkeeping that could drift out of step.
+ * The DCHECK covers the one way that reasoning could be wrong — a detached node that some other delta holds
+ * parked as removed is the baseline's on loan, and freeing it would hand that flow freed memory on resume.
+ *
+ * DEEP, because a created subtree has ONE entry: its interior was built through dom_cow_insert_private, which
+ * captures nothing precisely because nothing shared changed. Deep is safe here for the same reason `attached`
+ * is the right test — a baseline node parked under a created one was pulled back out by the reverse-order
+ * revert before this runs. */
+static void dom_release_created(DomUndo *u)
+{
+    if (u->kind != 4 || !u->node)
+        return;
+    /* Nothing may still hold it. After a discard the document is back at its baseline, so a node this flow
+       created is detached by construction; one that is not means an insertion was never unapplied, and freeing
+       it would take live tree out of the document under whoever is still reading it. */
+    DCHECK(!dom_is_attached(u->node),
+           "a flow's created node was still IN THE TREE when its delta was discarded — an insertion of it was "
+           "never unapplied, so freeing it would remove live tree from the document");
+    /* A kind-2 entry for this node is NOT a reason to keep it, and asserting that it was is a mistake this
+       DCHECK caught on its first run: kind-2 records that a REMOVAL was captured, not that the baseline owned
+       the node. A flow that creates a node, inserts it and then removes it records all three, and the node is
+       still entirely its own. The creation entry is the authoritative statement of ownership, which is exactly
+       why ownership is recorded at creation rather than inferred from positions.
+       A SIBLING cannot lose tree this way either, and for a structural reason rather than a check: a creation
+       made before a fork lives in the frozen segment BOTH flows reference, so its refcount holds it alive until
+       the last of them is gone. Only a creation genuinely private to the discarded delta is reached here. */
+    if (g_cow_ctx)
+        dom_forget_wrappers(g_cow_ctx, u->node);
+    lxb_dom_node_destroy_deep(u->node);
+    u->node = NULL;   /* the entry has spent its claim; nothing may act on it twice */
+}
+
+/* THIS FLOW CREATED THIS NODE — the delta's third kind of record, beside a mutation and a position.
+ * §state-isolation says the delta captures MUTATIONS and CREATIONS, and only the first half was built: a node's
+ * creation was inferred from the INSERTION that put it somewhere, which is a different fact. An insertion also
+ * covers a baseline node being MOVED, and one node can be inserted, removed and re-inserted, so the inference
+ * both over-claimed (freeing tree the baseline owns) and double-counted (freeing the same node twice — an
+ * out-of-bounds access on the first run that tried it).
+ * Recorded where the node is actually made, it is exact: one entry per node, no entry for a node the flow
+ * merely moved, and no entry at all when capture is off — which is precisely the boot flow, whose creations
+ * ARE the baseline and must outlive every delta. The entry is inert to apply/unapply (creating a node changes
+ * nothing shared; its VISIBILITY is the insertion's job) and rides the existing head/fork/free machinery, so
+ * sharing and refcounting need no new mechanism. */
+void dom_cow_note_created(lxb_dom_node_t *node)
+{
+    DomUndo u;
+    if (!g_dom_capture || !node)
+        return;
+    memset(&u, 0, sizeof u);
+    u.kind = 4; u.node = node; u.sh_old = u.sh_cur = JS_UNDEFINED;
+    dom_undo_push(u);
+}
+
 void dom_cow_destroy_private(lxb_dom_node_t *root, bool with_children) {
     dom_private_check(root);
     DCHECK(with_children || root->first_child == NULL,
            "a private tree was destroyed with children still in it — those nodes are about to be freed under "
            "whatever took a reference to them");
     (void)with_children;
+    /* BEFORE the free, because after it the nodes are gone and the map would be left naming freed memory —
+       which is the state a pool allocator turns into another node inheriting this one's wrapper. */
+    if (g_cow_ctx)
+        dom_forget_wrappers(g_cow_ctx, root);
     lxb_dom_node_destroy(root);
 }
 
@@ -320,6 +418,9 @@ void dom_revert(void) {   /* DISCARD the running flow's DOM writes -> baseline (
             else if (u->parent) lxb_dom_node_insert_child(u->parent, u->node);
         }
     }
+    /* The head's creations die here, BEFORE the base segments below: a head node inserted into a segment's
+       node is the child, and a child must be freed before the parent it hangs under is freed deep. */
+    for (int i = 0; i < g_dom_undo_n; i++) dom_release_created(&g_dom_undo[i]);
     g_dom_undo_n = 0;
     /* A DISCARD, so the document goes all the way back to the baseline and NOTHING stays installed — the
        segments this flow held may be freed below, and an installed pointer into freed memory is what the next
@@ -449,7 +550,8 @@ static void dom_unapply_seg(DomSeg *s)
 static void dom_seg_unref(DomSeg *s) {
     while (s && --s->refcount <= 0) {
         DomSeg *base = s->base;
-        for (int i = 0; i < s->n; i++) { DomUndo *u = &s->e[i]; free(u->name); free(u->old); free(u->cur);
+        for (int i = 0; i < s->n; i++) { DomUndo *u = &s->e[i]; dom_release_created(u);
+            free(u->name); free(u->old); free(u->cur);
             if (g_cow_ctx) { JS_FreeValue(g_cow_ctx, u->sh_old); JS_FreeValue(g_cow_ctx, u->sh_cur); } }
         free(s->e); free(s);
         s = base;
@@ -493,9 +595,12 @@ void *dom_base_take(void) { void *b = g_dom_base; g_dom_base = NULL; return b; }
 void dom_base_load(void *base) { g_dom_base = (DomSeg *)base; }
 void dom_base_free(void *base) { if (base) dom_seg_unref((DomSeg *)base); }
 void dom_base_ref(void *base) { if (base) ((DomSeg *)base)->refcount++; }   /* each orphan forks the document flow's shared DOM delta */
-void dom_buf_free(void *buf, int n) {   /* free a parked DOM delta buffer (its nodes stay detached, owned by the doc) */
+/* Free a parked DOM delta buffer — and the nodes the flow CREATED go with it. The comment here used to read
+   "its nodes stay detached, owned by the doc", which was the leak stated as if it were a design. */
+void dom_buf_free(void *buf, int n) {
     DomUndo *b = (DomUndo *)buf;
     for (int i = 0; i < n; i++) {
+        dom_release_created(&b[i]);
         free(b[i].name); free(b[i].old); free(b[i].cur);
         if (g_cow_ctx) { JS_FreeValue(g_cow_ctx, b[i].sh_old); JS_FreeValue(g_cow_ctx, b[i].sh_cur); }
     }
