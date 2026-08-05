@@ -334,18 +334,36 @@ void engine_queue_candidate(const char *body) { engine_queue(body, 1); }
    (2) COOPERATIVE-QUANTUM yield — a thread-sharing floor: even a top-ranked flow breathes every Q back-edges
        so the host loop can interleave / pump / snapshot. NOT a step cap: it drops/reorders no flow and the
        flow resumes byte-identically. */
-static unsigned g_qtick = 0;
-#define FLOW_QUANTUM 64
+/* THE COOPERATIVE QUANTUM IS WALL-CLOCK, and it was a COUNT — which §scheduler bans by name: the yield comes
+   "after a bounded wall-clock slice", "never after N opcodes (an opcode-budget counter is a step cap, banned)".
+   The difference is not academic. Measured on the fixture's main program: 64 suspend points were offered over
+   FIVE SECONDS, the WFQ declined 63 of them because no sibling outranked the runner, and the 64th tick was the
+   only thing that ever parked it. A count cannot bound a slice when the work between two suspend points is
+   ~78ms; only the clock can. Reading it per consultation is the point — a stride would reintroduce exactly the
+   count this replaces, and at any stride worth having the same five seconds fit inside it. */
+static int64_t engine_now_ms(void);   /* the slice's clock, defined with the session below */
+static int64_t g_slice_start = 0;
+static void engine_slice_begin(void) { g_slice_start = engine_now_ms(); }
 static unsigned g_seen_gen = 0; static Flow *g_seen_cur = NULL; static int g_outranked = 0;
+/* SUSPEND POINTS REACHED — every call to this hook IS one, which is the number the seam assertion needs and
+   the one quickjs's counters do not give. g_flow_preempt_requested is incremented only where the hook returns
+   TRUE, so it counts preempts WANTED, not points offered: a step showing requested=1 may have reached one
+   suspend point or a million with the WFQ declining every one of them. Reading it as the latter is a mistake I
+   made and wrote into a commit message; this counter is what tells the two apart. */
+static uint64_t g_preempt_asked = 0;
+
 static int preempt_hook(void) {
     Flow *cur = flow_running();
+    g_preempt_asked++;
     if (flow_frontier_gen() != g_seen_gen || cur != g_seen_cur) {   /* (1) recompute rival only on change */
         g_seen_gen = flow_frontier_gen(); g_seen_cur = cur;
         Flow *rival = cur ? flow_best_other(cur) : NULL;
         g_outranked = (rival && cur && flow_weight(rival) > flow_weight(cur));
     }
     if (g_outranked) return 1;                        /* value yield */
-    return (++g_qtick % FLOW_QUANTUM) == 0;           /* (2) quantum floor */
+    /* (2) COOPERATIVE-QUANTUM floor — thread-sharing, not value. Nothing is dropped, starved or reordered
+       across it: the flow parks and the SAME flow resumes byte-identically unless the WFQ says otherwise. */
+    return engine_now_ms() - g_slice_start >= ENGINE_QUANTUM_MS;
 }
 
 /* Advance flow `f` by up to one quantum. Returns 1 when the flow has FINISHED all its scripts + lazy chunks,
@@ -631,6 +649,7 @@ int engine_sched_step(void) {
     int n = g_sess_n;
     Flow *cur = g_sess_cur;
     int64_t deadline = engine_now_ms() + ENGINE_QUANTUM_MS;
+    engine_slice_begin();   /* the hook's floor measures THIS slice, so it starts when the slice does */
     int owed = 0;   /* consecutive picks that could not progress; == flow_count() means every member is waiting */
     DCHECK(g_sess_live, "engine_sched_step with no live session");
     for (;;) {
@@ -652,7 +671,7 @@ int engine_sched_step(void) {
         {
 #if APICLIENT_DEV
             int64_t t0 = engine_now_ms();
-            uint64_t pq0 = 0, pf0 = 0;
+            uint64_t pq0 = 0, pf0 = 0, pa0 = g_preempt_asked;
             JS_FlowPreemptStats(&pq0, &pf0);
 #endif
             int r = flow_step(ctx, cur, bodies, n);
@@ -690,16 +709,19 @@ int engine_sched_step(void) {
                     }
                     uint64_t pq = 0, pf = 0;
                     JS_FlowPreemptStats(&pq, &pf);
-                    /* REQUESTED vs FIRED across the offending step is the discriminator between the two very
-                       different roots this can have, and without it the message names a symptom only:
-                       requested==0 means the path reached no suspend POINT at all (no routable back-edge),
-                       while requested>fired means the points were reached and the preempt was DROPPED because
-                       no driver at that depth adopts the seam. */
+                    /* THREE numbers, because two of them cannot separate the roots. `asked` is how many suspend
+                       points the path OFFERED (every consultation of the hook); `requested` is how many of those
+                       the WFQ wanted to take; `fired` is how many actually parked. asked==0 means the path has
+                       no suspend point on it at all — the seam is missing and must be built. asked>0 with
+                       requested==0 means the points were there and the scheduler declined every one, which is a
+                       ranking question, not a missing seam. requested>fired means a point was reached, the
+                       preempt was wanted, and it was DROPPED because no driver at that depth adopts the seam. */
                     wi += snprintf(why, sizeof why,
-                                   "a flow ran %d ms with no suspend point (preempts requested=%llu fired=%llu "
-                                   "across this step) — this path has no suspend/resume seam and the scheduler "
-                                   "cannot park it; unit=%s script_i=%d flow=%s payload=",
-                                   (int)spent, (unsigned long long)(pq - pq0),
+                                   "a flow ran %d ms without parking (suspend points asked=%llu, preempts "
+                                   "wanted=%llu fired=%llu across this step) — the scheduler could not park it; "
+                                   "unit=%s script_i=%d flow=%s payload=",
+                                   (int)spent, (unsigned long long)(g_preempt_asked - pa0),
+                                   (unsigned long long)(pq - pq0),
                                    (unsigned long long)(pf - pf0), g_step_unit, si, sk);
                     /* The payload is attacker-shaped bytes and the message lands inside JSON unescaped, so
                        anything that would break the line is replaced rather than emitted. */
