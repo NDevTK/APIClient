@@ -351,10 +351,21 @@ static unsigned g_seen_gen = 0; static Flow *g_seen_cur = NULL; static int g_out
    suspend point or a million with the WFQ declining every one of them. Reading it as the latter is a mistake I
    made and wrote into a commit message; this counter is what tells the two apart. */
 static uint64_t g_preempt_asked = 0;
+/* THE GAP BETWEEN SUSPEND POINTS is the quantity the contract is about, and it is not the same as how long a
+   step ran. A step that offers the scheduler a point every few milliseconds and still runs for ten seconds is
+   BEHAVING — the scheduler was asked and declined, which is a ranking decision and lossless. A step that runs
+   five seconds between two consecutive offers is the violation, whatever its total. Asserting on the total
+   conflated the two and cost several rounds of chasing a "missing seam" in a step that turned out to offer 22
+   points quickly and then one long gap. Measured per step: reset when the step starts, updated at each
+   consultation, and closed off with the tail after the last one. */
+static int64_t g_last_ask = 0, g_max_gap = 0;
 
 static int preempt_hook(void) {
     Flow *cur = flow_running();
+    int64_t now = engine_now_ms();
     g_preempt_asked++;
+    if (now - g_last_ask > g_max_gap) g_max_gap = now - g_last_ask;
+    g_last_ask = now;
     if (flow_frontier_gen() != g_seen_gen || cur != g_seen_cur) {   /* (1) recompute rival only on change */
         g_seen_gen = flow_frontier_gen(); g_seen_cur = cur;
         Flow *rival = cur ? flow_best_other(cur) : NULL;
@@ -363,7 +374,7 @@ static int preempt_hook(void) {
     if (g_outranked) return 1;                        /* value yield */
     /* (2) COOPERATIVE-QUANTUM floor — thread-sharing, not value. Nothing is dropped, starved or reordered
        across it: the flow parks and the SAME flow resumes byte-identically unless the WFQ says otherwise. */
-    return engine_now_ms() - g_slice_start >= ENGINE_QUANTUM_MS;
+    return now - g_slice_start >= ENGINE_QUANTUM_MS;
 }
 
 /* Advance flow `f` by up to one quantum. Returns 1 when the flow has FINISHED all its scripts + lazy chunks,
@@ -673,6 +684,7 @@ int engine_sched_step(void) {
             int64_t t0 = engine_now_ms();
             uint64_t pq0 = 0, pf0 = 0, pa0 = g_preempt_asked;
             JS_FlowPreemptStats(&pq0, &pf0);
+            g_max_gap = 0; g_last_ask = t0;   /* this step's gaps, measured from the moment it starts */
 #endif
             int r = flow_step(ctx, cur, bodies, n);
             /* THE COOPERATIVE-QUANTUM CONTRACT, ASSERTED AT ITS SITE. A flow_step is supposed to reach a
@@ -690,8 +702,12 @@ int engine_sched_step(void) {
                it has no seam at all. */
 #if APICLIENT_DEV
             {
-                int64_t spent = engine_now_ms() - t0;
-                if (spent > ENGINE_QUANTUM_MS * 400) {
+                int64_t done = engine_now_ms();
+                int64_t spent = done - t0;
+                /* the TAIL closes the last gap: a step that offers a point and then runs for seconds before
+                   returning has that silence between its last offer and its end, and nothing else records it. */
+                int64_t gap = done - g_last_ask > g_max_gap ? done - g_last_ask : g_max_gap;
+                if (gap > ENGINE_QUANTUM_MS * 400) {
                     char why[448];
                     int wi = 0;
                     const char *sk = cur && cur->cand_sink ? cur->cand_sink : "(exploration flow)";
@@ -717,10 +733,10 @@ int engine_sched_step(void) {
                        ranking question, not a missing seam. requested>fired means a point was reached, the
                        preempt was wanted, and it was DROPPED because no driver at that depth adopts the seam. */
                     wi += snprintf(why, sizeof why,
-                                   "a flow ran %d ms without parking (suspend points asked=%llu, preempts "
-                                   "wanted=%llu fired=%llu across this step) — the scheduler could not park it; "
-                                   "unit=%s script_i=%d flow=%s payload=",
-                                   (int)spent, (unsigned long long)(g_preempt_asked - pa0),
+                                   "%d ms passed with NO suspend point offered (step ran %d ms, points "
+                                   "asked=%llu, preempts wanted=%llu fired=%llu) — this stretch has no "
+                                   "suspend/resume seam; unit=%s script_i=%d flow=%s payload=",
+                                   (int)gap, (int)spent, (unsigned long long)(g_preempt_asked - pa0),
                                    (unsigned long long)(pq - pq0),
                                    (unsigned long long)(pf - pf0), g_step_unit, si, sk);
                     /* The payload is attacker-shaped bytes and the message lands inside JSON unescaped, so
