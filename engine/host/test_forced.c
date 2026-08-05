@@ -623,6 +623,14 @@ static const char *HTML =
     /* the RECEIVER scopes it: an <i> outside `gt` is not in `gt`'s collection but is in the document's */
     " + '&scope=' + (document.getElementsByTagName('i').length > gbnI.length ? 'receiver' : 'global')"
     " + '&live=' + (gbnI instanceof HTMLCollection && typeof gbnI.map === 'undefined' ? 'iface' : 'wrong'));"
+    /* §4.4 textContent's READ is a walk of the SUBTREE, so it is a machine now. What it must reproduce exactly
+       is WHICH nodes count: Text nodes only, over child links — so a comment contributes nothing, and a
+       `<template>`'s content is not part of its element's text because it is not under it. */
+    "var tcx = document.createElement('div');"
+    "tcx.innerHTML = 'a<b>B</b><!--no--><template>HID</template>c';"
+    "fetch('/api/textwalk?v=' + tcx.textContent"
+    " + '&deep=' + gbn.textContent"
+    " + '&big=' + bigHost.textContent.length);"
     /* §4.2.11's NAMED getter: `children.foo` is how a great deal of older code reaches its own markup. */
     "var nb = document.createElement('u'); nb.setAttribute('id', 'namedkid'); lv.appendChild(nb);"
     "fetch('/api/named?v=' + (lv.children.namedItem('namedkid') === nb && lv.children.namedkid === nb"
@@ -1262,6 +1270,8 @@ int main(void) {
         { "\"/api/nodeident\"",  "same" },
         /* 3 <i>, 2 with class a, 1 with both, 4 elements — then one more of each after an insert */
         { "\"/api/byname\"",     "4:3:2:5" },
+        /* Text nodes only: the comment and the <template>'s content are both absent from `aBc` */
+        { "\"/api/textwalk\"",   "aBc" },
         /* the index cache: forwards, backwards, and shifted by a front insertion between two reads */
         { "\"/api/idxcache\"",   "shifted" },
         { "\"/api/adjacent\"",   "%3Ci%3Ebb%3C%2Fi%3E%3Cp%3ET%3Cb%3Eab%3C%2Fb%3E%3Cu%3Ebe%3C%2Fu%3E%3Cq%3E%3C%2Fq%3E%3C%2Fp%3E%3Cs%3Eae%3C%2Fs%3E" },

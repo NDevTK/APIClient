@@ -1315,31 +1315,101 @@ static bool node_has_children_as_text(const lxb_dom_node_t *n)
     return n->type == LXB_DOM_NODE_TYPE_ELEMENT || n->type == LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT;
 }
 
-static JSValue js_node_get_text_content(JSContext *ctx, JSValueConst this_val, int magic)
-{
-    lxb_dom_node_t *n = node_of(this_val);
-    lxb_char_t *txt;
-    size_t len = 0;
-    JSValue r;
-    int si;
+/* §4.4 textContent's READ — A MACHINE, and the same shape as §8.4's serialiser: the answer is the concatenated
+   data of every Text node under this one, so the work is the SUBTREE, and it was a plain C accessor.
+   `document.body.textContent` on a real page is the whole document inside one opcode.
+   Lexbor's lxb_dom_node_text_content walks it TWICE — once to measure, once to copy — into a buffer from the
+   document's memory. One pass into a growing buffer is what a resumable walk needs anyway, and it is strictly
+   less work; what it has to reproduce exactly is WHICH nodes count, which is Text nodes and nothing else, over
+   child links — so a `<template>`'s content is not part of its element's text. */
+typedef struct {
+    uint8_t stage;
+    lxb_dom_node_t *root, *cursor;
+    char   *out;
+    size_t  out_len, out_cap;
+} NodeTextState;
 
-    (void)magic;
-    if (!n) return JS_NULL;
-    if (node_is_chardata(n))
-        return js_cd_get_data(ctx, this_val, 1);
-    if (!node_has_children_as_text(n))
-        return JS_NULL;                        /* §4.4 "otherwise: null" — a Document's is null, not "" */
-    if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
-        si = attr_shadow_find(lxb_dom_interface_element(n), ATTR_SLOT_PROPERTY, "textContent");
-        if (si >= 0)
-            return JS_DupValue(ctx, attr_shadow_opaque(si));
+static void node_text_append(NodeTextState *s, const char *data, size_t len)
+{
+    if (s->out_len + len + 1 > s->out_cap) {
+        size_t want = s->out_cap ? s->out_cap * 2 : 128;
+        char *n;
+        while (want < s->out_len + len + 1) want *= 2;
+        n = realloc(s->out, want);
+        CHECK(n != NULL, "textContent could not grow its accumulator");
+        s->out = n;
+        s->out_cap = want;
     }
-    txt = lxb_dom_node_text_content(n, &len);
-    if (!txt) return JS_NewStringLen(ctx, "", 0);
-    r = JS_NewStringLen(ctx, (const char *)txt, len);
-    lxb_dom_document_destroy_text(n->owner_document, txt);
-    return r;
+    memcpy(s->out + s->out_len, data, len);
+    s->out_len += len;
 }
+
+static void node_text_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    NodeTextState *s = st;
+    /* The cursors are Lexbor nodes, which belong to the document. The accumulator is this machine's own: two
+       forked arms each append their own remaining text, so neither can share the other's buffer. */
+    v->buf(ctx, (void **)&s->out, s->out_cap);
+}
+
+static void node_text_release(JSContext *ctx, void *st)
+{
+    NodeTextState *s = st;
+    (void)ctx;
+    free(s->out);
+    s->out = NULL;
+}
+
+static int js_node_get_text_content(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                    JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NodeTextState *s = st;
+    lxb_dom_node_t *n;
+
+    (void)argc; (void)argv; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+
+    if (s->stage == 0) {
+        n = node_of(hdr->this_val);
+        *presult = JS_NULL;
+        if (!n) return JS_STEP_DONE;
+        /* Every O(1) answer is given here rather than walked to: a CharacterData node IS its data, and §4.4
+           says a node with no children-as-text has textContent null — a Document's is null, not "". */
+        if (node_is_chardata(n)) {
+            *presult = js_cd_get_data(ctx, hdr->this_val, 1);
+            return JS_STEP_DONE;
+        }
+        if (!node_has_children_as_text(n)) return JS_STEP_DONE;
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+            int si = attr_shadow_find(lxb_dom_interface_element(n), ATTR_SLOT_PROPERTY, "textContent");
+            if (si >= 0) {
+                /* A source parked here as TEXT comes back as the same concolic, not as the bytes its shape
+                   wrote into the tree — that is what keeps it solvable at a later sink. */
+                *presult = JS_DupValue(ctx, attr_shadow_opaque(si));
+                return JS_STEP_DONE;
+            }
+        }
+        s->root = n;
+        s->cursor = node_next_in(n, n);
+        s->stage = 1;
+        return JS_STEP_YIELD;
+    }
+
+    if (!s->cursor) {
+        *presult = JS_NewStringLen(ctx, s->out ? s->out : "", s->out_len);
+        return JS_STEP_DONE;
+    }
+    if (s->cursor->type == LXB_DOM_NODE_TYPE_TEXT) {
+        lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(s->cursor);
+        node_text_append(s, (const char *)cd->data.data, cd->data.length);
+    }
+    s->cursor = node_next_in(s->cursor, s->root);
+    return JS_STEP_YIELD;
+}
+
+static const IdlStepDecl NODE_TEXT_STEP = {
+    js_node_get_text_content, sizeof(NodeTextState), node_text_visit, node_text_release
+};
 
 static JSValue js_node_set_text_content(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
@@ -1506,7 +1576,8 @@ void node_init(JSContext *ctx)
     id_nodevalue = idl_setter_id(ctx, IDL_DOMSTRING_NULLABLE, false, js_cd_set_data, 1);
     idl_install_accessor(ctx, g_node_proto, "nodeValue", js_cd_get_data, 1, id_nodevalue);
     id_textcontent = idl_setter_id(ctx, IDL_DOMSTRING_NULLABLE, false, js_node_set_text_content, 0);
-    idl_install_accessor(ctx, g_node_proto, "textContent", js_node_get_text_content, 0, id_textcontent);
+    idl_install_accessor_step(ctx, g_node_proto, "textContent",
+                              idl_getter_id_step(ctx, &NODE_TEXT_STEP, 0), id_textcontent);
 
     /* CharacterData.prototype — §4.10, `interface CharacterData : Node`, so it INHERITS from Node.prototype
        rather than repeating its members. */
