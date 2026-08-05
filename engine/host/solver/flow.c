@@ -68,6 +68,7 @@ Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n) {
     f->dec = dec; f->dec_n = dec_n;
     f->val = 0.0; f->cpu = 0;
     f->cand_src = NULL; f->cand_payload = NULL; f->cand_sink = NULL;
+    f->last_compiled = -1;   /* nothing compiled yet; see the no-replay DCHECK at the compile site */
     g_flows[g_flows_n++] = f;
     g_gen++;   /* frontier changed */
     return f;

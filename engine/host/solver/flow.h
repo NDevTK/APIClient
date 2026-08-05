@@ -74,6 +74,11 @@ typedef struct Flow {
        delta isolates registration), and because a forked arm reaches the end of the document in its own time. */
     int   dom_stage;
     int   script_i;        /* position in the script sequence: static [0,n), then this flow's dyn chunks [n, n+dyn_n) */
+    /* THE HIGHEST SCRIPT INDEX THIS FLOW HAS COMPILED, so that compiling one twice can be caught. A flow runs
+       each program in its sequence ONCE; a preempted flow RESUMES its suspended frame and never re-enters
+       JS_FlowNew for a program it already started. Re-compiling is a REPLAY, which this engine does not do — a
+       replay re-executes side effects the flow already performed against a delta that already holds them. */
+    int   last_compiled;   /* -1 until the flow compiles its first program */
     char **dyn; int dyn_n, dyn_cap;   /* this flow's OWN lazily-loaded chunk bodies (per-flow, not global) */
     /* WHICH OF THOSE ARE @S CANDIDATES rather than the page's own script. A page script that does not compile is
        a real problem and asserts; a CANDIDATE that does not compile is the ordinary case — most breakouts do not

@@ -493,6 +493,15 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                not model yet — nothing here has one to give. It is what a relative `import('./chunk.js')` resolves
                against, so the moat's lazy-chunk surface needs the document URL plumbed to this call. */
             g_step_unit = "compile-program";
+            /* NO REPLAY, asserted at the only place a program can start. A flow compiles each entry of its
+               sequence once and thereafter RESUMES the suspended frame; reaching this line again for an index
+               it already started means the resume path lost the frame and the flow is re-executing a program —
+               re-running side effects it already performed, against a delta that already holds them. That is
+               the one thing this scheduler must never do, and nothing was checking it. */
+            DCHECK(f->script_i > f->last_compiled,
+                   "a flow compiled a program it had already started — the suspended frame was lost and the "
+                   "flow is REPLAYING it, re-running side effects against a delta that already holds them");
+            f->last_compiled = f->script_i;
             f->frame = JS_FlowNew(ctx, body, strlen(body), NULL, 0);   /* page <script>/chunk: classic non-strict global */
             if (f->frame == NULL) {
                 /* AN @S CANDIDATE THAT DOES NOT PARSE is a dead candidate and nothing more — the search tries
