@@ -35,9 +35,11 @@
 #include "core/html/html_element.h"
 #include "core/css/css_style_declaration.h"
 #include "core/html/html_form.h"
+#include "core/html/dom_string_map.h"
 
 static JSValue g_html_proto;          /* HTMLElement.prototype */
-static JSValue g_unknown_proto;       /* HTMLUnknownElement.prototype — HTML's answer for a tag it does not know */
+static JSValue g_unknown_proto;   /* HTMLUnknownElement.prototype — HTML's answer for a tag it does not know */
+static JSAtom  g_dataset_key = JS_ATOM_NULL;   /* the [SameObject] dataset cache slot on an element's wrapper */
 
 /* HTMLElement's OWN reflections — §3.2.6's global attributes. */
 static const ElReflect R_HTML[] = {
@@ -309,6 +311,26 @@ static JSValue js_html_focus(JSContext *ctx, JSValueConst this_val, int argc, JS
     return JS_UNDEFINED;
 }
 
+/* §3.2.2 `[SameObject] readonly attribute DOMStringMap dataset`. [SameObject] is an IDENTITY the IDL states, so
+   the map is cached on the element's own wrapper: a page that stashes `el.dataset` and a later `el.dataset` must
+   be holding the same object, and a fresh one per read makes every `===` against the stash false. The cache
+   lives on the wrapper rather than in this component because the wrapper is per-flow state the COW already
+   isolates — two arms that each read `dataset` get their own map over their own attributes. */
+static JSValue js_html_dataset(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+    JSValue cached;
+
+    (void)magic;
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return JS_UNDEFINED;
+    if (JS_GetOwnSlot(ctx, &cached, this_val, g_dataset_key) > 0 && JS_IsObject(cached))
+        return cached;
+    JS_FreeValue(ctx, cached);
+    cached = dom_string_map_new(ctx, lxb_dom_interface_element(n));
+    JS_DefinePropertyValue(ctx, (JSValue)this_val, g_dataset_key, JS_DupValue(ctx, cached), 0);
+    return cached;
+}
+
 /* §4.12.3 HTMLTemplateElement.content — the fragment the parser filled. Lexbor keeps it on the element's own
    interface rather than in its child list, which is exactly what the DOM says: only the parser and `content`
    itself reach those children. A pure read of the component's own tree. */
@@ -346,6 +368,11 @@ void html_element_init(JSContext *ctx)
     /* §3.2.2 `[SameObject] attribute CSSStyleDeclaration style` — the attribute is HTMLElement's, the object is
        the CSSOM's, so each side owns its half. */
     cssom_install_style_attribute(ctx, g_html_proto);
+    /* §3.2.2 dataset — on HTMLElement, which is where the IDL puts it. */
+    dom_string_map_init(ctx);
+    g_dataset_key = JS_NewAtom(ctx, "__datasetSlot");
+    CHECK(g_dataset_key != JS_ATOM_NULL, "the dataset slot key could not be interned");
+    idl_install_accessor(ctx, g_html_proto, "dataset", js_html_dataset, 0, -1);
     JS_SetPropertyStr(ctx, g_html_proto, "focus",
                       JS_NewCFunctionMagic(ctx, js_html_focus, "focus", 0, JS_CFUNC_generic_magic, 0));
     JS_SetPropertyStr(ctx, g_html_proto, "blur",
@@ -402,6 +429,7 @@ void html_element_install(JSContext *ctx, JSValueConst global)
 
     DCHECK(JS_IsObject(g_html_proto), "the HTML interface objects were installed before their prototypes existed");
     node_install_interface(ctx, global, "HTMLElement", g_html_proto);
+    dom_string_map_install(ctx, global);   /* §3.2.2 DOMStringMap, which `dataset` is one of */
     node_install_interface(ctx, global, "HTMLUnknownElement", g_unknown_proto);
     for (i = 0; i < HTML_IFACE_N; i++) {
         for (j = 0; j < i; j++)
@@ -413,6 +441,8 @@ void html_element_install(JSContext *ctx, JSValueConst global)
 
 void html_element_free(JSContext *ctx)
 {
+    dom_string_map_free(ctx);
+    if (g_dataset_key != JS_ATOM_NULL) { JS_FreeAtom(ctx, g_dataset_key); g_dataset_key = JS_ATOM_NULL; }
     int i;
 
     for (i = 0; i < HTML_IFACE_N; i++) {

@@ -623,6 +623,33 @@ static const char *HTML =
     /* the RECEIVER scopes it: an <i> outside `gt` is not in `gt`'s collection but is in the document's */
     " + '&scope=' + (document.getElementsByTagName('i').length > gbnI.length ? 'receiver' : 'global')"
     " + '&live=' + (gbnI instanceof HTMLCollection && typeof gbnI.map === 'undefined' ? 'iface' : 'wrong'));"
+    /* §3.2.2 dataset. It was ABSENT, so `el.dataset.userId` read undefined — and undefined does not throw, so a
+       page storing its routing on data-* took the branch behind it and the engine reported THAT branch's
+       surface. The mapping is the spec and it is asymmetric on purpose: `data-user-id` is `userId`, an
+       property name with a dash before a lowercase letter is a SyntaxError rather than a new attribute.
+       `data-X` is NOT a counter-example to the uppercase rule: §4.9's setAttribute lowercases the qualified
+       name in an HTML document, so it is stored as `data-x` and is exposed as `x`, which is what a browser does
+       too. The rule about an uppercase surviving `data-` is about a name that could only arrive through a
+       namespace-aware setter, and it is implemented for when one lands. */
+    "var dsE = document.createElement('div'); document.body.appendChild(dsE);"
+    "dsE.setAttribute('data-user-id', 'u7');"
+    "dsE.setAttribute('data-X', 'hidden');"
+    "dsE.setAttribute('title', 'notdata');"
+    "dsE.dataset.roleName = 'admin';"
+    "var dsBad = 'none';"
+    "try { dsE.dataset['a-b'] = 'x'; } catch (e) { dsBad = e.name; }"
+    "var dsKeys = Object.keys(dsE.dataset).sort().join(',');"
+    "fetch('/api/dataset?read=' + dsE.dataset.userId"
+    /* the write went through setAttribute's chokepoint, so it is a real attribute with the mangled name */
+    " + '&wrote=' + dsE.getAttribute('data-role-name')"
+    " + '&keys=' + dsKeys"
+    /* an uppercase after data- is not a supported property name, and a non-data attribute is not one either */
+    /* the case §4.9 lowercased, and an attribute that is not data-* at all */
+    " + '&skip=' + (dsE.dataset.X === undefined && dsE.dataset.x === 'hidden'"
+    " && dsE.dataset.title === undefined ? 'unexposed' : 'leaked')"
+    " + '&bad=' + dsBad"
+    " + '&same=' + (dsE.dataset === dsE.dataset ? 'sameobject' : 'fresh')"
+    " + '&del=' + ((delete dsE.dataset.userId), dsE.getAttribute('data-user-id') === null ? 'gone' : 'stayed'));"
     /* PROBE §4.2.6 scoped matching: `el.querySelectorAll('div p')` must match a <p> inside el whose <div>
        ancestor is OUTSIDE el — the selector is evaluated against the whole document and only the RESULTS are
        filtered to el's subtree. An implementation that walks el's subtree in isolation misses it. */
@@ -1294,6 +1321,8 @@ int main(void) {
         { "\"/api/textwalk\"",   "aBc" },
         /* §4.2.6 scoped matching, the SyntaxError all four members owe, and closest's inclusive walk */
         { "\"/api/scopesel\"",   "SyntaxError:SyntaxError" },
+        /* §3.2.2's mapping both ways, its two refusals, [SameObject], and the deleter */
+        { "\"/api/dataset\"",    "roleName,userId,x" },
         /* the index cache: forwards, backwards, and shifted by a front insertion between two reads */
         { "\"/api/idxcache\"",   "shifted" },
         { "\"/api/adjacent\"",   "%3Ci%3Ebb%3C%2Fi%3E%3Cp%3ET%3Cb%3Eab%3C%2Fb%3E%3Cu%3Ebe%3C%2Fu%3E%3Cq%3E%3C%2Fq%3E%3C%2Fp%3E%3Cs%3Eae%3C%2Fs%3E" },
