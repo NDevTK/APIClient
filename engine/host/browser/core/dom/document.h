@@ -3,6 +3,7 @@
 #define ENGINE_HOST_BROWSER_CORE_DOM_DOCUMENT_H
 #include <lexbor/html/html.h>
 #include "quickjs.h"
+#include "core/idl_args.h"
 
 /* Install `document` for `dom`, addressed at `url`. Only the members this engine can answer TRUTHFULLY are
    installed; the tree-walking half is absent until Element exists, because a querySelector that answers null
@@ -16,10 +17,10 @@ lxb_dom_node_t *document_root_node(void);
 /* Release what the component HOLDS across the document's lifecycle — the window it fires `load` at. */
 void document_free(JSContext *ctx);
 
-/* The ParentNode mixin's ONE selector engine (§4.2.6), scoped to any root — Document, Element and
-   DocumentFragment differ only in what they scope to. `all` != 0 returns an array, else the first match or null. */
-JSValue document_qs_run(JSContext *ctx, lxb_dom_node_t *root, const char *sel, int all);
-/* §4.9's single-node match: 1 matched, 0 did not, -1 the selector did not parse (a SyntaxError to the caller). */
-int document_sel_match(lxb_dom_node_t *node, const char *sel);
+/* §4.2.6/§4.9's FOUR selector members as ONE declaration — querySelector, querySelectorAll, matches, closest.
+   They differ in where the cursor goes and what a match yields, which is the magic: 0 = querySelector,
+   1 = querySelectorAll, 2 = matches, 3 = closest. Installed by whoever owns the interface the IDL puts them on;
+   the compiled selector and the walk live here, where the selector engine already did. */
+const IdlStepDecl *document_qs_decl(void);
 
 #endif

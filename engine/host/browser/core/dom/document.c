@@ -43,104 +43,169 @@ static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
 static lxb_html_document_t *g_doc;
 static void element_doc_set(lxb_html_document_t *d) { g_doc = d; }
 
-/* 4.2.6 querySelector / querySelectorAll over Lexbor's CSS selector engine — the real one, which ships with
-   the DOM library this engine already links. This was ABSENT with a note saying it "needs a CSS selector
-   engine"; the engine was sitting in the same source tree, and the note was a workaround dressed as a gap.
-   A partial matcher would be worse than absence — it returns the WRONG element silently — but the complete one
-   is right here. */
-typedef struct { lxb_dom_element_t *first; JSContext *ctx; JSValue arr; uint32_t n; } QsCtx;
+/* §4.2.6 / §4.9 THE SELECTOR MEMBERS, AS ONE MACHINE — querySelector, querySelectorAll, matches, closest.
+ *
+ * They were two implementations with two different defects, and the defects were the same shape twice: work
+ * done per node that belongs to the query.
+ *
+ *   - qs_run reached lxb_selectors_find, which walks the whole subtree to completion inside one opcode. It is
+ *     the most-called query in a modern page and it was the last drive-to-completion in this component.
+ *   - document_sel_match CREATED AND DESTROYED a CSS parser, a selectors context and a compiled selector list
+ *     on EVERY CALL — and `closest` calls it once per ancestor, so walking up ten levels compiled the same
+ *     selector ten times.
+ *
+ * Compiling once and then walking is what both of them wanted, and it is also exactly what a machine needs: the
+ * compiled list is the thing that survives the suspension, and the cursor is the resume point. So there is one
+ * of these, and what the four members differ in is WHERE the cursor goes and WHAT is done with a match —
+ * declared as a magic, not as four bodies.
+ *
+ * lxb_selectors_match_node is what makes the walk equivalent to lxb_selectors_find rather than an approximation
+ * of it: a combinator is resolved by walking UP from the candidate, through the whole document, so
+ * §4.2.6's scoped matching still holds — `el.querySelectorAll('div p')` finds a <p> under `el` whose <div>
+ * ancestor is OUTSIDE `el`, because the selector is evaluated against the document and only the RESULTS are
+ * filtered to the subtree. That is asserted rather than assumed; it is the case an implementation that walks a
+ * subtree in isolation gets wrong. */
+enum { QS_FIRST = 0, QS_ALL, QS_MATCHES, QS_CLOSEST };
 
-static lxb_status_t qs_found(lxb_dom_node_t *node, lxb_css_selector_specificity_t spec, void *vctx)
-{
-    QsCtx *q = vctx;
-    (void)spec;
-    if (!q->first)
-        q->first = lxb_dom_interface_element(node);
-    if (!JS_IsUndefined(q->arr))
-        JS_SetPropertyUint32(q->ctx, q->arr, q->n++, element_wrap(q->ctx, lxb_dom_interface_element(node)));
-    return LXB_STATUS_OK;
-}
-
-/* Run `sel` over the subtree at `root`. `all` collects every match into an array; otherwise the first in tree
-   order. ONE implementation for the whole ParentNode mixin (§4.2.6) — Document, Element and DocumentFragment
-   differ only in the root they scope to, so element.c reaches this through document_qs_run rather than growing
-   a second copy that could disagree with this one about what a selector means. */
-static JSValue qs_run(JSContext *ctx, lxb_dom_node_t *root, const char *sel, bool all)
-{
-    lxb_css_parser_t *parser;
-    lxb_selectors_t *selectors;
+typedef struct {
+    uint8_t stage;
+    lxb_css_parser_t       *parser;
+    lxb_selectors_t        *selectors;
     lxb_css_selector_list_t *list;
-    QsCtx q = { NULL, ctx, JS_UNDEFINED, 0 };
-    JSValue r = all ? JS_NewArray(ctx) : JS_NULL;
+    lxb_dom_node_t *root, *cursor;
+    JSValue arr;      /* QS_ALL's collected matches (owned) */
+    uint32_t n;
+} QsState;
 
-    if (all) q.arr = r;
-    parser = lxb_css_parser_create();
-    if (!parser || lxb_css_parser_init(parser, NULL) != LXB_STATUS_OK)
-        return all ? r : JS_NULL;
-    selectors = lxb_selectors_create();
-    if (!selectors || lxb_selectors_init(selectors) != LXB_STATUS_OK) {
-        lxb_css_parser_destroy(parser, true);
-        return all ? r : JS_NULL;
-    }
-    list = lxb_css_selectors_parse(parser, (const lxb_char_t *)sel, strlen(sel));
-    if (list) {
-        lxb_selectors_find(selectors, root, list, qs_found, &q);
-        lxb_css_selector_list_destroy_memory(list);
-    }
-    lxb_selectors_destroy(selectors, true);
-    lxb_css_parser_destroy(parser, true);
-    if (!all)
-        return element_wrap(ctx, q.first);
-    /* §4.2.6: querySelectorAll answers a STATIC NodeList — a real one, so `instanceof NodeList` holds and the
-       interface's own members are there, and static because the spec says the result does not track the tree.
-       It was a bare Array, which is a different object with a different (larger) set of methods: a page
-       calling `.map` on it worked here and throws in a browser, so the engine reported a surface built out of
-       code the page cannot actually run. */
-    return collections_static(ctx, r);
-}
-
-/* The ParentNode mixin's one selector engine, for the components that scope it to their own subtree. */
-JSValue document_qs_run(JSContext *ctx, lxb_dom_node_t *root, const char *sel, int all)
-{
-    return qs_run(ctx, root, sel, all != 0);
-}
-
-static lxb_status_t sel_match_cb(lxb_dom_node_t *node, lxb_css_selector_specificity_t spec, void *vctx)
+static lxb_status_t qs_hit_cb(lxb_dom_node_t *node, lxb_css_selector_specificity_t spec, void *vctx)
 {
     (void)node; (void)spec;
     *(bool *)vctx = true;
     return LXB_STATUS_OK;
 }
 
-/* §4.9 "match a selector against an element" — the SINGLE-NODE question, where find answers it for a subtree.
-   The same parser and the same selector engine, because a second copy could disagree with the first about what
-   a selector means and nothing would ever notice. -1 means the selector did not parse, which §4.9 makes a
-   SyntaxError rather than a silent no-match. */
-int document_sel_match(lxb_dom_node_t *node, const char *sel)
+static void qs_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    lxb_css_parser_t *parser;
-    lxb_selectors_t *selectors;
-    lxb_css_selector_list_t *list;
-    bool hit = false;
-    int r = -1;
-
-    parser = lxb_css_parser_create();
-    if (!parser || lxb_css_parser_init(parser, NULL) != LXB_STATUS_OK) return -1;
-    selectors = lxb_selectors_create();
-    if (!selectors || lxb_selectors_init(selectors) != LXB_STATUS_OK) {
-        lxb_css_parser_destroy(parser, true);
-        return -1;
-    }
-    list = lxb_css_selectors_parse(parser, (const lxb_char_t *)sel, strlen(sel));
-    if (list) {
-        lxb_selectors_match_node(selectors, node, list, sel_match_cb, &hit);
-        lxb_css_selector_list_destroy_memory(list);
-        r = hit ? 1 : 0;
-    }
-    lxb_selectors_destroy(selectors, true);
-    lxb_css_parser_destroy(parser, true);
-    return r;
+    QsState *s = st;
+    /* A FORK CANNOT REACH A SELECTOR WALK. It runs none of the page's code, so no concolic branch can happen
+       under it — which is what lets the compiled list be held as a bare pointer: there is no such thing as half
+       a selector context to hand a second flow. */
+    DCHECK(s->parser == NULL || s->stage == 0, "a selector walk was forked mid-walk");
+    v->val(ctx, &s->arr);
 }
+
+static void qs_release(JSContext *ctx, void *st)
+{
+    QsState *s = st;
+    (void)ctx;
+    /* The throw path owns these too — a flow dropped mid-walk would otherwise leak a compiled selector list and
+       the two contexts behind it. */
+    if (s->list) lxb_css_selector_list_destroy_memory(s->list);
+    if (s->selectors) lxb_selectors_destroy(s->selectors, true);
+    if (s->parser) lxb_css_parser_destroy(s->parser, true);
+    s->list = NULL; s->selectors = NULL; s->parser = NULL;
+}
+
+/* Does the compiled selector match this node? The one place lexbor is asked, so the four members cannot
+   disagree about what a selector means. */
+static bool qs_matches(QsState *s, lxb_dom_node_t *node)
+{
+    bool hit = false;
+    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    lxb_selectors_match_node(s->selectors, node, s->list, qs_hit_cb, &hit);
+    return hit;
+}
+
+static int js_document_qs(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                          JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    QsState *s = st;
+    int magic = idl_step_magic(hdr);
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+
+    if (s->stage == 0) {
+        lxb_dom_node_t *n = node_of(hdr->this_val);
+        const char *sel;
+
+        if (!n || argc < 1) {
+            *presult = magic == QS_ALL ? collections_static(ctx, JS_NewArray(ctx))
+                     : magic == QS_MATCHES ? JS_FALSE : JS_NULL;
+            return JS_STEP_DONE;
+        }
+        sel = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
+        if (!sel) return JS_STEP_ABRUPT;
+        s->parser = lxb_css_parser_create();
+        s->selectors = lxb_selectors_create();
+        if (!s->parser || lxb_css_parser_init(s->parser, NULL) != LXB_STATUS_OK ||
+            !s->selectors || lxb_selectors_init(s->selectors) != LXB_STATUS_OK) {
+            JS_FreeCString(ctx, sel);
+            CHECK_FAIL("the CSS selector engine could not be initialised");
+        }
+        s->list = lxb_css_selectors_parse(s->parser, (const lxb_char_t *)sel, strlen(sel));
+        JS_FreeCString(ctx, sel);
+        if (!s->list) {
+            /* §4.2.6 AND §4.9: an unparseable selector is a SyntaxError from ALL FOUR members. matches and
+               closest already threw; querySelector and querySelectorAll answered null and an empty list, so a
+               page with a typo in a selector got "no such element" instead of being told, and the branch behind
+               that answer ran. */
+            JS_ThrowDOMException(ctx, "SyntaxError", "not a valid selector");
+            return JS_STEP_ABRUPT;
+        }
+        s->root = n;
+        /* WHERE THE CURSOR GOES is the whole of what the four members differ in: a subtree for the two queries,
+           the node itself for matches, and the node plus its ancestors for closest. */
+        s->cursor = (magic == QS_FIRST || magic == QS_ALL) ? node_next_in(n, n) : n;
+        if (magic == QS_ALL) {
+            s->arr = JS_NewArray(ctx);
+            CHECK(!JS_IsException(s->arr), "querySelectorAll could not allocate its result");
+        }
+        s->stage = 1;
+        return JS_STEP_YIELD;
+    }
+
+    if (!s->cursor) {
+        /* Ran out without a match. */
+        switch (magic) {
+        case QS_ALL:
+            /* §4.2.6: a STATIC NodeList, because the spec says the result does not track the tree — and a real
+               one, so `instanceof NodeList` holds and `.map` is honestly absent as it is in a browser. */
+            *presult = collections_static(ctx, s->arr);
+            s->arr = JS_UNDEFINED;
+            break;
+        case QS_MATCHES: *presult = JS_FALSE; break;
+        default:         *presult = JS_NULL;  break;
+        }
+        return JS_STEP_DONE;
+    }
+
+    if (qs_matches(s, s->cursor)) {
+        switch (magic) {
+        case QS_ALL:
+            JS_SetPropertyUint32(ctx, s->arr, s->n++, node_wrap(ctx, s->cursor));
+            break;
+        case QS_MATCHES:
+            *presult = JS_TRUE;
+            return JS_STEP_DONE;
+        default:
+            *presult = node_wrap(ctx, s->cursor);   /* the FIRST in tree order, or the nearest ancestor */
+            return JS_STEP_DONE;
+        }
+    }
+
+    switch (magic) {
+    case QS_FIRST:
+    case QS_ALL:     s->cursor = node_next_in(s->cursor, s->root); break;
+    case QS_MATCHES: s->cursor = NULL;                             break;   /* this node alone */
+    default:         s->cursor = s->cursor->parent;                break;   /* INCLUSIVE ancestors */
+    }
+    return JS_STEP_YIELD;
+}
+
+static const IdlStepDecl QS_STEP = { js_document_qs, sizeof(QsState), qs_visit, qs_release };
+
+const IdlStepDecl *document_qs_decl(void) { return &QS_STEP; }
 
 /* 4.5.1 createElement. The element is created IN this document and returned DETACHED — a page builds a subtree
    and attaches it later, and creating it already-attached would put nodes in the tree the page never inserted.

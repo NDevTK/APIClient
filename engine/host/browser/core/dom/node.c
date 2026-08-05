@@ -389,7 +389,7 @@ static bool node_is_inclusive_ancestor(const lxb_dom_node_t *a, const lxb_dom_no
 
 /* The PRE-ORDER successor within `root`'s subtree, or NULL at the end. This is the one traversal primitive the
    spec's tree-order algorithms need, and having it once is what keeps them from each growing a walker. */
-static lxb_dom_node_t *node_next_in(lxb_dom_node_t *n, lxb_dom_node_t *root)
+lxb_dom_node_t *node_next_in(lxb_dom_node_t *n, lxb_dom_node_t *root)
 {
     if (n->first_child) return n->first_child;
     while (n != root) {
@@ -1031,21 +1031,6 @@ static bool node_is_parent_node(const lxb_dom_node_t *n)
                  n->type == LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT);
 }
 
-/* magic 0 = querySelector, 1 = querySelectorAll — the same engine, scoped to this node's subtree. */
-static JSValue js_node_query(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    lxb_dom_node_t *n = node_of(this_val);
-    const char *sel;
-    JSValue r;
-
-    if (!node_is_parent_node(n) || argc < 1) return magic ? collections_static(ctx, JS_NewArray(ctx)) : JS_NULL;
-    sel = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
-    if (!sel) return JS_EXCEPTION;
-    r = document_qs_run(ctx, n, sel, magic);
-    JS_FreeCString(ctx, sel);
-    return r;
-}
-
 /* magic 0 = children, 1 = firstElementChild, 2 = lastElementChild, 3 = childElementCount. `children` is a LIVE
    HTMLCollection with a NAMED getter, which is how a great deal of older code reaches its own markup
    (`form.children.email`); the rest are plain reads of the tree. */
@@ -1245,9 +1230,9 @@ void node_install_parent_mixin(JSContext *ctx, JSValueConst proto)
     JS_SetPropertyFunctionList(ctx, proto, js_parent_node_reads,
                                (int)(sizeof(js_parent_node_reads) / sizeof(js_parent_node_reads[0])));
     idl_install_method(ctx, proto, "querySelector", 1,
-                       idl_method_id(ctx, ONE_SEL, 1, js_node_query, 0));
+                       idl_method_id_step(ctx, ONE_SEL, 1, NULL, 0, document_qs_decl(), 0));
     idl_install_method(ctx, proto, "querySelectorAll", 1,
-                       idl_method_id(ctx, ONE_SEL, 1, js_node_query, 1));
+                       idl_method_id_step(ctx, ONE_SEL, 1, NULL, 0, document_qs_decl(), 1));
     /* Not part of ParentNode in the IDL — §4.5 puts these on Document and §4.9 on Element, which between them
        is every interface that includes ParentNode except DocumentFragment. Installed here because that is one
        place rather than two, and a fragment answering them is a superset nothing can observe as wrong: its

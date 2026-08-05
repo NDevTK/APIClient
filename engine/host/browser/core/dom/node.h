@@ -46,6 +46,10 @@ void node_install_child_mixin(JSContext *ctx, JSValueConst proto);
 void node_install_nonelement_parent_mixin(JSContext *ctx, JSValueConst proto);
 void node_install_parent_mixin(JSContext *ctx, JSValueConst proto);
 void node_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, int inserted));
+/* THE PRE-ORDER SUCCESSOR within `root`'s subtree, or NULL at the end — the one traversal primitive the spec's
+   tree-order algorithms need. Exported for the same reason it exists: having it once is what keeps every
+   algorithm that walks in tree order from growing its own walker that disagrees at the edges. */
+lxb_dom_node_t *node_next_in(lxb_dom_node_t *n, lxb_dom_node_t *root);
 /* §4.4 isConnected — is this node's root a document. */
 bool node_is_connected(const lxb_dom_node_t *n);
 /* An ELEMENT's interface is decided by its TAG — HTML's element-interface table, which is the html layer's

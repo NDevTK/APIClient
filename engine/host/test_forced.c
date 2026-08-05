@@ -623,6 +623,26 @@ static const char *HTML =
     /* the RECEIVER scopes it: an <i> outside `gt` is not in `gt`'s collection but is in the document's */
     " + '&scope=' + (document.getElementsByTagName('i').length > gbnI.length ? 'receiver' : 'global')"
     " + '&live=' + (gbnI instanceof HTMLCollection && typeof gbnI.map === 'undefined' ? 'iface' : 'wrong'));"
+    /* PROBE §4.2.6 scoped matching: `el.querySelectorAll('div p')` must match a <p> inside el whose <div>
+       ancestor is OUTSIDE el — the selector is evaluated against the whole document and only the RESULTS are
+       filtered to el's subtree. An implementation that walks el's subtree in isolation misses it. */
+    "var scOuter = document.createElement('div'); document.body.appendChild(scOuter);"
+    "var scMid = document.createElement('section'); scOuter.appendChild(scMid);"
+    "scMid.innerHTML = '<p id=\"scp\">x</p>';"
+    "var qsThrew = 'none';"
+    "try { scMid.querySelector('###'); } catch (e) { qsThrew = e.name; }"
+    "var qaThrew = 'none';"
+    "try { document.querySelectorAll(':::'); } catch (e) { qaThrew = e.name; }"
+    "fetch('/api/scopesel?anc=' + scMid.querySelectorAll('div p').length"
+    " + '&self=' + scMid.querySelectorAll('section p').length"
+    " + '&plain=' + scMid.querySelectorAll('p').length"
+    /* §4.2.6: an unparseable selector is a SyntaxError from ALL FOUR members. matches and closest already
+       threw; the two queries answered null and an empty list, so a page with a typo in a selector was told
+       "no such element" and ran the branch behind that answer. */
+    " + '&bad=' + qsThrew + ':' + qaThrew"
+    /* closest walks INCLUSIVE ancestors and compiles the selector ONCE now, not once per level */
+    " + '&closest=' + (scMid.querySelector('p').closest('div') === scOuter"
+    " && scMid.querySelector('p').closest('p').tagName === 'P' ? 'up' : 'wrong'));"
     /* §4.4 textContent's READ is a walk of the SUBTREE, so it is a machine now. What it must reproduce exactly
        is WHICH nodes count: Text nodes only, over child links — so a comment contributes nothing, and a
        `<template>`'s content is not part of its element's text because it is not under it. */
@@ -1272,6 +1292,8 @@ int main(void) {
         { "\"/api/byname\"",     "4:3:2:5" },
         /* Text nodes only: the comment and the <template>'s content are both absent from `aBc` */
         { "\"/api/textwalk\"",   "aBc" },
+        /* §4.2.6 scoped matching, the SyntaxError all four members owe, and closest's inclusive walk */
+        { "\"/api/scopesel\"",   "SyntaxError:SyntaxError" },
         /* the index cache: forwards, backwards, and shifted by a front insertion between two reads */
         { "\"/api/idxcache\"",   "shifted" },
         { "\"/api/adjacent\"",   "%3Ci%3Ebb%3C%2Fi%3E%3Cp%3ET%3Cb%3Eab%3C%2Fb%3E%3Cu%3Ebe%3C%2Fu%3E%3Cq%3E%3C%2Fq%3E%3C%2Fp%3E%3Cs%3Eae%3C%2Fs%3E" },
