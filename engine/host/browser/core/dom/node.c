@@ -1077,6 +1077,95 @@ static const JSCFunctionListEntry js_parent_node_reads[] = {
     JS_CGETSET_MAGIC_DEF("childElementCount", js_node_element_children, NULL, 3),
 };
 
+/* §4.2.4 THE NonElementParentNode MIXIN — getElementById, and nothing else is in it.
+   IT WAS TWO IMPLEMENTATIONS, and the second one's comment argued that it had to be: "same algorithm, different
+   scope". That was a rationalisation of a duplicate. Different scope is exactly what a mixin member over its
+   RECEIVER already is, which is what the ParentNode consolidation established — and the two had drifted in both
+   of the ways duplicates do. Document's ignored its receiver entirely and searched a global, so
+   `otherDoc.getElementById(x)` searched this one. And it reached for lxb_dom_elements_by_attr, which collects
+   EVERY match into a collection and then takes the first, so it walked the whole document after already having
+   the answer — for a member whose entire definition is "the FIRST element in tree order".
+   A MACHINE, because that walk is the document's size. One node per step, and the first match ends it. */
+typedef struct {
+    uint8_t stage;
+    lxb_dom_node_t *root, *cursor;
+    char   *id;
+    size_t  idlen;
+} NodeByIdState;
+
+static void node_byid_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    NodeByIdState *s = st;
+    /* The cursors are Lexbor nodes, which belong to the document. The id is this machine's own copy — the
+       JSString it came from is released before the first suspension, and two forked arms must not share one
+       buffer that either of them frees. */
+    v->buf(ctx, (void **)&s->id, s->id ? s->idlen + 1 : 0);
+}
+
+static void node_byid_release(JSContext *ctx, void *st)
+{
+    NodeByIdState *s = st;
+    (void)ctx;
+    free(s->id);
+    s->id = NULL;
+}
+
+static int js_node_get_element_by_id(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                     JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NodeByIdState *s = st;
+    lxb_dom_node_t *n;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+
+    if (s->stage == 0) {
+        lxb_dom_node_t *self = node_of(hdr->this_val);
+        const char *id;
+
+        *presult = JS_NULL;
+        if (!self || argc < 1) return JS_STEP_DONE;
+        id = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
+        if (!id) return JS_STEP_ABRUPT;
+        s->idlen = strlen(id);
+        s->id = malloc(s->idlen + 1);
+        CHECK(s->id != NULL, "getElementById could not copy the id it was asked for");
+        memcpy(s->id, id, s->idlen + 1);
+        JS_FreeCString(ctx, id);
+        s->root = self;
+        s->cursor = self->first_child;
+        s->stage = 1;
+        return JS_STEP_YIELD;
+    }
+
+    n = s->cursor;
+    if (!n) { *presult = JS_NULL; return JS_STEP_DONE; }
+    if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+        size_t vlen = 0;
+        const lxb_char_t *v = lxb_dom_element_get_attribute(lxb_dom_interface_element(n),
+                                                            (const lxb_char_t *)"id", 2, &vlen);
+        if (v && vlen == s->idlen && memcmp(v, s->id, s->idlen) == 0) {
+            *presult = node_wrap(ctx, n);   /* the FIRST in tree order — the walk stops here */
+            return JS_STEP_DONE;
+        }
+    }
+    s->cursor = node_next_in(n, s->root);
+    return JS_STEP_YIELD;
+}
+
+static const IdlStepDecl NODE_BYID_STEP = {
+    js_node_get_element_by_id, sizeof(NodeByIdState), node_byid_visit, node_byid_release
+};
+
+/* §4.2.4, installed on the interfaces whose IDL INCLUDES it: Document and DocumentFragment. Not Element —
+   `el.getElementById` is not a member of anything, which is why this is a mixin and not a Node member. */
+void node_install_nonelement_parent_mixin(JSContext *ctx, JSValueConst proto)
+{
+    static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
+    idl_install_method(ctx, proto, "getElementById", 1,
+                       idl_method_id_step(ctx, ONE_STR, 1, NULL, 0, &NODE_BYID_STEP, 0));
+}
+
 /* The members that WALK, installed through the declaration because they are machines. */
 static void node_install_walkers(JSContext *ctx, JSValueConst proto)
 {

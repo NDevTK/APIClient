@@ -43,33 +43,6 @@ static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
 static lxb_html_document_t *g_doc;
 static void element_doc_set(lxb_html_document_t *d) { g_doc = d; }
 
-/* 4.5.3 getElementById: the first element in tree order whose id attribute matches. A pure Lexbor walk. */
-static JSValue js_doc_get_element_by_id(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    (void)magic;
-    lxb_dom_collection_t *col;
-    const char *id;
-    JSValue r = JS_NULL;
-
-    (void)this_val;
-    DCHECK(g_doc != NULL, "getElementById ran before the document was installed");
-    if (argc < 1) return JS_NULL;
-    id = JS_ToCString(ctx, argv[0]);
-    if (!id) return JS_EXCEPTION;
-    col = lxb_dom_collection_make(&g_doc->dom_document, 8);
-    if (col) {
-        lxb_dom_element_t *root = lxb_dom_interface_element(g_doc->dom_document.element);
-        if (root &&
-            lxb_dom_elements_by_attr(root, col, (const lxb_char_t *)"id", 2,
-                                     (const lxb_char_t *)id, strlen(id), true) == LXB_STATUS_OK &&
-            lxb_dom_collection_length(col) > 0)
-            r = element_wrap(ctx, lxb_dom_collection_element(col, 0));
-        lxb_dom_collection_destroy(col, true);
-    }
-    JS_FreeCString(ctx, id);
-    return r;
-}
-
 /* 4.2.6 querySelector / querySelectorAll over Lexbor's CSS selector engine — the real one, which ships with
    the DOM library this engine already links. This was ABSENT with a note saying it "needs a CSS selector
    engine"; the engine was sitting in the same source tree, and the note was a workaround dressed as a gap.
@@ -408,8 +381,6 @@ static int document_done_stage(JSContext *ctx, int stage)
    `Document.prototype.querySelector` is a thing that exists. */
 static void document_install_members(JSContext *ctx, JSValueConst proto)
 {
-    idl_install_method(ctx, proto, "getElementById", 1,
-                       idl_method_id(ctx, IDL_1STR, 1, js_doc_get_element_by_id, 0));
     idl_install_method(ctx, proto, "getElementsByTagName", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_get_elements_by_tag_name, 0));
     idl_install_method(ctx, proto, "createElement", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_element, 0));
     idl_install_method(ctx, proto, "createTextNode", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_text, 0));
@@ -512,6 +483,8 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     /* §4.5: `Document includes ParentNode` — not ChildNode, because a document has no parent to be removed
        from. `document.append(el)` is how a page adds to an empty document. */
     node_install_parent_mixin(ctx, node_type_proto(LXB_DOM_NODE_TYPE_DOCUMENT));
+    /* §4.5: `Document includes NonElementParentNode` — the same getElementById DocumentFragment includes. */
+    node_install_nonelement_parent_mixin(ctx, node_type_proto(LXB_DOM_NODE_TYPE_DOCUMENT));
     node_install_interface(ctx, global, "Document", node_type_proto(LXB_DOM_NODE_TYPE_DOCUMENT));
     engine_set_document_done_hook(document_done_stage);
 }

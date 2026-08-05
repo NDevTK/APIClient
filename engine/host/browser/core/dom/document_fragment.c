@@ -8,7 +8,7 @@
  *
  * §4.7's IDL is four lines and three of them are includes:
  *     interface DocumentFragment : Node { constructor(); };
- *     DocumentFragment includes NonElementParentNode;   // getElementById
+ *     DocumentFragment includes NonElementParentNode;   // getElementById, node.c's, over this receiver
  *     DocumentFragment includes ParentNode;             // children, the element reads, prepend/append/
  *                                                       // replaceChildren, querySelector, querySelectorAll
  * So almost all of this file is two mixin installs. That is the point of having consolidated the ParentNode
@@ -33,43 +33,6 @@
 static JSValue g_frag_proto = JS_UNDEFINED;
 static int     g_ready;
 
-/* §4.2.4 NonElementParentNode.getElementById — the same question Document answers, over this fragment's subtree.
-   A pure Lexbor walk over the id attribute: no page code, and the REAL element, wrapped once so identity holds.
-   It is NOT Document's implementation reached with a different root, because Document's is `id` over the whole
-   document and this one is over a subtree that is not in a document at all — same algorithm, different scope,
-   and the scope is the whole of what NonElementParentNode says. */
-static JSValue js_frag_get_element_by_id(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                         int magic)
-{
-    lxb_dom_node_t *root = node_of(this_val), *n;
-    const char *id;
-    size_t idlen, vlen = 0;
-    JSValue r = JS_NULL;
-
-    (void)magic;
-    if (!root || argc < 1) return JS_NULL;
-    id = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
-    if (!id) return JS_EXCEPTION;
-    idlen = strlen(id);
-    /* Pre-order over the fragment, which is tree order — §4.2.4 wants the FIRST such element. */
-    for (n = root->first_child; n; ) {
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
-            const lxb_char_t *v = lxb_dom_element_get_attribute(lxb_dom_interface_element(n),
-                                                                (const lxb_char_t *)"id", 2, &vlen);
-            if (v && vlen == idlen && memcmp(v, id, idlen) == 0) {
-                r = node_wrap(ctx, n);
-                break;
-            }
-        }
-        if (n->first_child) { n = n->first_child; continue; }
-        while (n != root && !n->next) n = n->parent;
-        if (n == root) break;
-        n = n->next;
-    }
-    JS_FreeCString(ctx, id);
-    return r;
-}
-
 /* `constructor()` — §4.7. The fragment belongs to the document's memory, and is in no tree until the page puts
    it in one, so there is nothing to capture: an uninserted node is flow-private. */
 static JSValue js_frag_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
@@ -87,14 +50,11 @@ static JSValue js_frag_ctor(JSContext *ctx, JSValueConst new_target, int argc, J
 
 void document_fragment_init(JSContext *ctx)
 {
-    static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
-
     DCHECK(!g_ready, "document_fragment_init ran twice — one instance is one document");
     g_frag_proto = JS_NewObjectProto(ctx, node_proto());
     CHECK(!JS_IsException(g_frag_proto), "DocumentFragment.prototype could not be allocated");
     node_install_parent_mixin(ctx, g_frag_proto);
-    idl_install_method(ctx, g_frag_proto, "getElementById", 1,
-                       idl_method_id(ctx, ONE_STR, 1, js_frag_get_element_by_id, 0));
+    node_install_nonelement_parent_mixin(ctx, g_frag_proto);   /* §4.2.4, the same one Document includes */
     /* CONSUMED by the table, which is what makes node_wrap hand a fragment this interface from now on. */
     node_set_proto(ctx, LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT, JS_DupValue(ctx, g_frag_proto));
     g_ready = 1;

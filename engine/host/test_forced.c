@@ -580,6 +580,8 @@ static const char *HTML =
     "var dfa = document.createElement('p'); dfa.setAttribute('id', 'dfid');"
     "df.appendChild(dfa); df.appendChild(document.createTextNode('t'));"
     "df.append(document.createElement('b'));"
+    "var dupHost = document.createElement('div'); document.body.appendChild(dupHost);"
+    "dupHost.innerHTML = '<i id=\"dup\">1</i><u id=\"dup\">2</u>';"
     "var tq = document.createElement('div');"
     "tq.innerHTML = '<template><p class=\"tc\">in</p><i></i></template>';"
     "var tqe = tq.firstChild;"
@@ -588,7 +590,13 @@ static const char *HTML =
     " + '&pn=' + (df.children.length === 2 && df.childNodes.length === 3"
     " && df.querySelector('p') === dfa && df.querySelectorAll('p').length === 1"
     " && df.getElementById('dfid') === dfa && df.getElementById('nope') === null ? 'mixin' : 'wrong')"
+    /* §4.2.4 is ONE member over its RECEIVER. Document's copy searched a global instead, so a scope that is
+       not the document had no way to be wrong — and it took the FIRST in tree order by collecting every match
+       and then indexing 0, which is a different algorithm wearing the same name. Both are asserted: the
+       fragment's id is invisible to the document, and a DUPLICATE id answers with the first. */
+    " + '&scope=' + (document.getElementById('dfid') === null ? 'receiver' : 'global')"
     /* [SameObject]: the fragment's wrapper is ONE object, so a page stashing t.content still has it. */
+    " + '&first=' + (document.getElementById('dup').textContent === '1' ? 'tree-order' : 'wrong')"
     " + '&tc=' + (tqe.content === tqe.content && tqe.content instanceof DocumentFragment"
     " && tqe.content.querySelector('.tc').textContent === 'in'"
     " && tqe.content.childElementCount === 2 && tqe.childNodes.length === 0 ? 'content' : 'wrong'));"
