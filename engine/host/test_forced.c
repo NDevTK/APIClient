@@ -535,6 +535,20 @@ static const char *HTML =
     "fetch('/api/bigparse?n=' + bigHost.children.length + '&b=' + bigHost.querySelectorAll('b').length"
     " + '&last=' + bigHost.lastElementChild.getAttribute('class')"
     " + '&len=' + bigOne.length);"
+    /* IDENTITY AT SCALE. One JS object per Lexbor node is what makes `n === n` true, and the map behind it is
+       keyed by the node's address — so a hash that mishandles a collision hands out a SECOND object for a node
+       and every comparison against the first is silently false. A page hits this constantly (a Set of visited
+       nodes, a WeakMap keyed by node, `el.parentNode === container`), and nothing throws when it breaks.
+       Two independent walks over the same 34 nodes, compared both ways. */
+    "var idSeen = new Set(), idAll = [], idOk = 1;"
+    "var idW = function(el) { idSeen.add(el); idAll.push(el);"
+      "for (var c = el.firstElementChild; c; c = c.nextElementSibling) idW(c); };"
+    "for (var idI = 0; idI < bigHost.children.length; idI++) idW(bigHost.children[idI]);"
+    "for (var idJ = 0; idJ < idAll.length; idJ++) if (!idSeen.has(idAll[idJ])) idOk = 0;"
+    "var idB = bigHost.querySelectorAll('b');"
+    "for (var idK = 0; idK < idB.length; idK++) if (!idSeen.has(idB[idK])) idOk = 0;"
+    "fetch('/api/nodeident?n=' + idSeen.size + '&all=' + idAll.length"
+    " + '&ok=' + (idOk && bigHost.firstElementChild === bigHost.children[0] ? 'same' : 'split'));"
     /* §4.2.3 THE INSERTION STEPS, now drained by a machine instead of walked inside the chokepoint.
        (1) ORDERING IS UNCHANGED, which is the whole constraint: the steps run synchronously as part of the
        insertion, so an element is UPGRADED by the time appendChild returns and a method its constructor
@@ -1213,6 +1227,8 @@ int main(void) {
         { "\"/api/insertsteps\"", "121" },
         /* 17 <li>, 17 <b>, the tail element's class, and 448 bytes of markup = 448 suspensions in one parse */
         { "\"/api/bigparse\"",   "448" },
+        /* one JS object per node, over 34 of them reached two different ways */
+        { "\"/api/nodeident\"",  "same" },
         /* the index cache: forwards, backwards, and shifted by a front insertion between two reads */
         { "\"/api/idxcache\"",   "shifted" },
         { "\"/api/adjacent\"",   "%3Ci%3Ebb%3C%2Fi%3E%3Cp%3ET%3Cb%3Eab%3C%2Fb%3E%3Cu%3Ebe%3C%2Fu%3E%3Cq%3E%3C%2Fq%3E%3C%2Fp%3E%3Cs%3Eae%3C%2Fs%3E" },

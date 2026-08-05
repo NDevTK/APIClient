@@ -63,9 +63,49 @@ static JSValue g_node_proto;
 static int     g_protos_ready;
 static JSValue g_chardata_proto;
 
+/* THE IDENTITY MAP, keyed by the Lexbor node's ADDRESS.
+   It was a linear scan, and that is O(document) on the single hottest path in the DOM. Every `parentNode`,
+   every `firstChild`, every element a selector matches, every node an insertion step visits goes through
+   node_wrap, so a scan made the whole engine O(n^2) in the size of the page it is reading — the same defect the
+   live collections had, in the one place that cannot be worked around by caching an index. Adding seventeen
+   elements to the fixture's document cost about seventy-five seconds of smoke time, and cutting the markup that
+   built them by four made almost no difference, which is what a cost that is not proportional to the work looks
+   like.
+   OPEN ADDRESSING WITH LINEAR PROBING, and no deletion — a wrapper is never removed, because the map is what
+   makes `n === n` true and dropping one silently breaks every identity comparison a page makes afterwards. No
+   deletion means no tombstones, so a probe stops at the first empty slot and nothing else.
+   FIBONACCI HASHING on the pointer: node addresses come from Lexbor's mraw pool and are therefore highly
+   regular — consecutive nodes differ by a fixed stride — so the low bits alone would collide in runs. */
 typedef struct { lxb_dom_node_t *n; JSValue obj; } NodeEntry;
-static NodeEntry *g_wraps;
+static NodeEntry *g_wraps;        /* g_wrap_cap slots, a power of two; a NULL `n` is empty */
 static int        g_wrap_n, g_wrap_cap;
+
+static unsigned node_wrap_slot(const NodeEntry *tab, int cap, const lxb_dom_node_t *n)
+{
+    /* 2^32 / phi. The multiply spreads the pointer's HIGH bits down, which is where a pool allocator's
+       addresses actually differ. */
+    unsigned i = (unsigned)(((uintptr_t)n * 2654435769u) >> 16) & (unsigned)(cap - 1);
+    while (tab[i].n && tab[i].n != n)
+        i = (i + 1) & (unsigned)(cap - 1);
+    return i;
+}
+
+/* Grow and rehash. At half full, so a probe stays short — the map only ever grows, so the load factor is the
+   whole of what keeps a lookup O(1). */
+static void node_wrap_grow(void)
+{
+    int cap = g_wrap_cap ? g_wrap_cap * 2 : 256, i;
+    NodeEntry *tab = calloc((size_t)cap, sizeof *tab);
+
+    CHECK(tab != NULL, "the node wrapper table could not grow: a dropped wrapper breaks node identity, and "
+                       "every `n === other` the page makes after it is silently false");
+    for (i = 0; i < g_wrap_cap; i++)
+        if (g_wraps[i].n)
+            tab[node_wrap_slot(tab, cap, g_wraps[i].n)] = g_wraps[i];
+    free(g_wraps);
+    g_wraps = tab;
+    g_wrap_cap = cap;
+}
 
 JSClassID node_class_id(void) { return g_node_class; }
 
@@ -1277,9 +1317,11 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
 
     if (!n)
         return JS_NULL;
-    for (i = 0; i < g_wrap_n; i++)
-        if (g_wraps[i].n == n)
-            return JS_DupValue(ctx, g_wraps[i].obj);
+    if (g_wrap_cap) {
+        unsigned slot = node_wrap_slot(g_wraps, g_wrap_cap, n);
+        if (g_wraps[slot].n)
+            return JS_DupValue(ctx, g_wraps[slot].obj);
+    }
 
     DCHECK(g_protos_ready, "a node was wrapped before the DOM interfaces existed");
     DCHECK((int)n->type > 0 && (int)n->type < LXB_DOM_NODE_TYPE_LAST_ENTRY,
@@ -1295,16 +1337,17 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
         return obj;
     JS_SetOpaque(obj, n);
 
-    if (g_wrap_n == g_wrap_cap) {
-        int c = g_wrap_cap ? g_wrap_cap * 2 : 16;
-        NodeEntry *a = realloc(g_wraps, sizeof(*a) * (size_t)c);
-        CHECK(a != NULL, "the node wrapper table allocation failed: a dropped wrapper breaks node identity, and "
-                         "every `n === other` the page makes after it is silently false");
-        g_wraps = a; g_wrap_cap = c;
+    if ((g_wrap_n + 1) * 2 > g_wrap_cap)
+        node_wrap_grow();
+    {
+        unsigned slot = node_wrap_slot(g_wraps, g_wrap_cap, n);
+        DCHECK(g_wraps[slot].n == NULL, "a node was wrapped twice — the lookup above missed an entry the insert "
+                                        "then found, which is two JS objects for one node and every identity "
+                                        "comparison between them false");
+        g_wraps[slot].n = n;
+        g_wraps[slot].obj = JS_DupValue(ctx, obj);
+        g_wrap_n++;
     }
-    g_wraps[g_wrap_n].n = n;
-    g_wraps[g_wrap_n].obj = JS_DupValue(ctx, obj);
-    g_wrap_n++;
     return obj;
 }
 
@@ -1452,8 +1495,9 @@ void node_install_interfaces(JSContext *ctx, JSValueConst global)
 void node_free(JSContext *ctx)
 {
     int i;
-    for (i = 0; i < g_wrap_n; i++)
-        JS_FreeValue(ctx, g_wraps[i].obj);
+    for (i = 0; i < g_wrap_cap; i++)
+        if (g_wraps[i].n)
+            JS_FreeValue(ctx, g_wraps[i].obj);
     free(g_wraps);
     g_wraps = NULL; g_wrap_n = g_wrap_cap = 0;
     /* Each derived prototype is held once per node type that maps to it; the base is held by the table too. */
