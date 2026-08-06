@@ -73,6 +73,7 @@ static void request_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_f
 {
     RequestData *d = JS_GetOpaque(val, g_request_class);
     if (d) { JS_MarkValue(rt, d->headers, mark_func); JS_MarkValue(rt, d->blob_entry, mark_func); }
+    if (d) body_state_mark(rt, &d->body, mark_func);
 }
 
 static RequestData *request_of(JSValueConst v) { return JS_GetOpaque(v, g_request_class); }

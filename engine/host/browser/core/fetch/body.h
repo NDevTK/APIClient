@@ -9,7 +9,9 @@
 /* §5.2's BODY, as the state an including interface holds. `has` is not `len != 0`: the spec distinguishes a
    NULL body from an empty one — `new Response()` has the first and `new Response("")` the second — and `.body`
    reports null for exactly one of them. `used` is the single-use latch, which a page's retry path tests. */
-typedef struct { char *bytes; size_t len; int used; int has; } BodyState;
+/* `stream` is §5.2's `body`, built ON DEMAND and then held: the attribute answers the SAME stream every time,
+   and a second one would give a page two independent readers over one body. JS_UNDEFINED until asked for. */
+typedef struct { char *bytes; size_t len; int used; int has; JSValue stream; } BodyState;
 
 void body_state_free(JSContext *ctx, BodyState *b);
 
@@ -31,5 +33,9 @@ int  body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueCo
                   char *(*mime)(JSContext *ctx, JSValueConst v), const char *iface);
 /* INSTALL text/json/arrayBuffer/bytes and `bodyUsed` on the interface's prototype. */
 void body_install(JSContext *ctx, JSValueConst proto, int handle);
+
+/* Trace and release the stream a BodyState may hold — the including interface owns the state, so its gc_mark
+   and its finalizer are where this belongs. */
+void body_state_mark(JSRuntime *rt, BodyState *b, JS_MarkFunc *mark_func);
 
 #endif

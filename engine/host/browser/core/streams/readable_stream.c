@@ -127,6 +127,12 @@ JSValue readable_stream_from_bytes(JSContext *ctx, const char *bytes, size_t len
     return obj;
 }
 
+bool readable_stream_disturbed(JSValueConst v)
+{
+    StreamData *d = g_stream_class ? JS_GetOpaque(v, g_stream_class) : NULL;
+    return d != NULL && d->disturbed != 0;
+}
+
 /* ---- §4.3's reader ---------------------------------------------------------------------------------------- */
 
 /* §4.3's `read()`. A MACHINE, because settling the promise it returns is the PAGE'S code: 27.2.1.3.2 step 8

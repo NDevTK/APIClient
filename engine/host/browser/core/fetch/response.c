@@ -92,6 +92,7 @@ static void response_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_
 {
     ResponseData *d = JS_GetOpaque(val, g_response_class);
     if (d) JS_MarkValue(rt, d->headers, mark_func);
+    if (d) body_state_mark(rt, &d->body, mark_func);
 }
 
 static ResponseData *response_of(JSValueConst v) { return JS_GetOpaque(v, g_response_class); }

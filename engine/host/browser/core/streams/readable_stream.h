@@ -1,6 +1,7 @@
 /* ReadableStream — the Streams Standard §4. See readable_stream.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_STREAMS_READABLE_STREAM_H
 #define ENGINE_HOST_BROWSER_CORE_STREAMS_READABLE_STREAM_H
+#include <stdbool.h>
 #include <stddef.h>
 
 #include "quickjs.h"
@@ -13,5 +14,9 @@ void readable_stream_free(JSContext *ctx);
    stream whose source is not the page's. The bytes are enqueued as one chunk and the stream is closed, which is
    what "a byte sequence" means when there is nothing left to arrive. */
 JSValue readable_stream_from_bytes(JSContext *ctx, const char *bytes, size_t len);
+
+/* §4.2's `disturbed` flag, which Fetch §5.2 defines `bodyUsed` over: a body is used when its stream has been
+   READ FROM, not when the stream was merely handed out. Returns false for a value that is not a stream. */
+bool readable_stream_disturbed(JSValueConst v);
 
 #endif

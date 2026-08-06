@@ -23,6 +23,7 @@
 #include "core/file/blob.h"
 #include "core/html/form_data.h"
 #include "core/url/url.h"
+#include "core/streams/readable_stream.h"
 #include "core/url/url_search_params.h"
 
 /* One interface that includes Body. There are two in the platform (Request and Response), so the table is
@@ -39,8 +40,15 @@ typedef struct {
 static BodyIface g_body_iface[BODY_IFACE_MAX];
 static int g_body_iface_n;
 
+void body_state_mark(JSRuntime *rt, BodyState *b, JS_MarkFunc *mark_func)
+{
+    JS_MarkValue(rt, b->stream, mark_func);
+}
+
 void body_state_free(JSContext *ctx, BodyState *b)
 {
+    JS_FreeValue(ctx, b->stream);
+    b->stream = JS_UNDEFINED;
     js_free(ctx, b->bytes);
     b->bytes = NULL;
     b->len = 0;
@@ -49,6 +57,12 @@ void body_state_free(JSContext *ctx, BodyState *b)
 
 int body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len)
 {
+    /* THE STREAM SLOT IS SPELLED, not left zeroed. An including interface allocates its record with js_mallocz,
+       and a zeroed JSValue is the INTEGER 0 — not JS_UNDEFINED — so "has a stream been built yet" read off the
+       slot answers YES before one ever was. Every field of this state is set here, which is the one place a
+       body is ever filled. */
+    if (!b->has && !b->bytes && JS_VALUE_GET_TAG(b->stream) == JS_TAG_INT)
+        b->stream = JS_UNDEFINED;
     js_free(ctx, b->bytes);
     b->bytes = NULL;
     b->len = 0;
@@ -317,13 +331,30 @@ int body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueCon
     return handle;
 }
 
-/* §5.2's `bodyUsed`. One getter for every including interface, told apart by the same handle. */
+/* §5.2's `bodyUsed`: the body is non-null AND its stream is DISTURBED. The latch this component sets when a
+   reader consumes the bytes is one way to disturb it; reading the `body` stream directly is the other, and a
+   page that does the second and asks the first must be told the truth. */
 static JSValue js_body_get_used(JSContext *ctx, JSValueConst this_val, int magic)
 {
     const BodyIface *f = &g_body_iface[magic];
     BodyState *b = f->of(this_val);
     if (!b) return JS_ThrowTypeError(ctx, "not a %s", f->iface);
-    return JS_NewBool(ctx, b->used != 0);
+    return JS_NewBool(ctx, b->used != 0 || readable_stream_disturbed(b->stream));
+}
+
+/* §5.2's `body`. NULL for a null body — which is not an empty one — and otherwise the SAME stream every time,
+   because a second would give the page two independent readers over one byte sequence. */
+static JSValue js_body_get_body(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    const BodyIface *f = &g_body_iface[magic];
+    BodyState *b = f->of(this_val);
+    if (!b) return JS_ThrowTypeError(ctx, "not a %s", f->iface);
+    if (!b->has) return JS_NULL;
+    if (JS_IsUndefined(b->stream)) {
+        b->stream = readable_stream_from_bytes(ctx, b->bytes ? b->bytes : "", b->len);
+        if (JS_IsException(b->stream)) { b->stream = JS_UNDEFINED; return JS_EXCEPTION; }
+    }
+    return JS_DupValue(ctx, b->stream);
 }
 
 void body_install(JSContext *ctx, JSValueConst proto, int handle)
@@ -331,8 +362,11 @@ void body_install(JSContext *ctx, JSValueConst proto, int handle)
     DCHECK(handle >= 0 && handle < g_body_iface_n, "Body was installed with a handle nothing declared");
     byte_reader_install(ctx, proto, g_body_iface[handle].reader_handle);
     {
-        JSCFunctionListEntry e = JS_CGETSET_MAGIC_DEF("bodyUsed", js_body_get_used, NULL, 0);
-        e.magic = (int16_t)handle;
-        JS_SetPropertyFunctionList(ctx, (JSValue)proto, &e, 1);
+        JSCFunctionListEntry e[2] = {
+            JS_CGETSET_MAGIC_DEF("bodyUsed", js_body_get_used, NULL, 0),
+            JS_CGETSET_MAGIC_DEF("body", js_body_get_body, NULL, 0),
+        };
+        e[0].magic = e[1].magic = (int16_t)handle;
+        JS_SetPropertyFunctionList(ctx, (JSValue)proto, e, 2);
     }
 }
