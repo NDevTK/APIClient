@@ -46,6 +46,9 @@ const INTERFACES = {
   PerformanceObserver:  "core/timing/performance_observer.c",
   Blob:                 "core/fileapi/blob.c",
   Response:             "core/fetch/response.c",
+  /* Headers exists and had no row, so the audit said nothing about it at all — which is the lying-by-omission
+     this map's own comment names, and it was silent from the moment the component landed. */
+  Headers:              "core/fetch/headers.c",
   Notification:         "modules/notification.c",
   Window:              ["core/frame/window.c", "core/dom/document.c", "core/frame/location.c",
                         "core/fetch/fetch.c", "core/events/event_target.c", "core/loader/module_loader.c",
@@ -125,12 +128,39 @@ function flatten(name, seen = new Set()) {
   const base = inheritanceOf.get(name);
   return [...(base ? flatten(base, seen) : []), ...node.members];
 }
+/* AN `iterable<>` DECLARATION IS MEMBERS. Web IDL §3.7.10 says a pair-iterable interface gets `entries`,
+   `keys`, `values`, `forEach` and @@iterator, and a value-iterable one gets the same minus `entries`/`keys` —
+   they are as real as anything spelled out in the members list, and `for (const [k, v] of headers)` is how
+   half the code that touches one is written. The audit read only the spelled-out members, so it reported
+   Headers as COMPLETE while all five were missing: an interface could declare its iteration and the gap
+   report would never mention it. `maplike`/`setlike` carry the same rule and are expanded for the same
+   reason. @@iterator is left out of the diff because the scan looks for property NAMES in the component and a
+   symbol-keyed one has none — the four named members are what it can honestly check. */
+function iterationMembers(node) {
+  const out = [];
+  for (const m of node.members) {
+    if (m.type !== "iterable" && m.type !== "maplike" && m.type !== "setlike") continue;
+    const pair = m.type === "maplike" || (m.idlType && m.idlType.length === 2);
+    out.push("forEach", "values");
+    if (pair) out.push("entries", "keys");
+    if (m.type === "maplike" || m.type === "setlike") out.push("has");
+    if (m.type === "maplike") out.push("get");
+  }
+  return out;
+}
+
 function members(name) {
   const out = [], seen = new Set();
+  const add = (n) => { if (n && !seen.has(n)) { seen.add(n); out.push(n); } };
   for (const m of flatten(name)) {
     if (m.special === "static") continue;
-    if (m.type === "attribute" && !seen.has(m.name)) { seen.add(m.name); out.push(m.name); }
-    else if (m.type === "operation" && m.name && !seen.has(m.name)) { seen.add(m.name); out.push(m.name); }
+    if (m.type === "attribute") add(m.name);
+    else if (m.type === "operation") add(m.name);
+  }
+  /* the iteration members of this interface AND of everything it inherits from, which is what flatten walks */
+  for (const m of flatten(name)) {
+    if (m.type === "iterable" || m.type === "maplike" || m.type === "setlike")
+      for (const n of iterationMembers({ members: [m] })) add(n);
   }
   return out;
 }
