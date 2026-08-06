@@ -458,6 +458,25 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         DCHECK(m->variadic || s->n <= IDL_MAX_ARGS,
                "a member declared more arguments than this machine carries — IDL_MAX_DECLARED bounds what a "
                "member may declare, so this means the two have drifted apart");
+        {
+            /* §3.6.2 STEP 1: a call with fewer arguments than the member has REQUIRED ones is a TypeError, and
+               it is thrown before any conversion runs. `new File()` built a File out of nothing; `new File([])`
+               built one with the name "undefined". The count is the same `first_optional` the declaration
+               already states, capped at what the IDL lists — a member that never declares an optional position
+               requires every argument it declared, which is what the IDL means by writing them. */
+            /* A VARIADIC ARGUMENT IS OPTIONAL — that is part of what the tail MEANS, so `el.remove()` and
+               `el.append()` require nothing even though the member declares the tail's type. Stated here
+               rather than per member: a variadic member that had to remember to say so is a member whose
+               forgetting turns into a TypeError the spec does not have. */
+            int declared = m->variadic ? m->nargs - 1 : m->nargs;
+            int required = m->first_optional < declared ? m->first_optional : declared;
+            if (s->hdr.argc < required) {
+                JS_FreeValue(ctx, cb_result);
+                JS_ThrowTypeError(ctx, "%d argument%s required, but only %d present",
+                                  required, required == 1 ? "" : "s", s->hdr.argc);
+                return JS_STEP_ABRUPT;
+            }
+        }
         s->result = JS_UNDEFINED;
         s->dict_v = JS_UNDEFINED;
         s->conv = m->variadic ? JS_NewArray(ctx) : JS_UNDEFINED;
@@ -698,7 +717,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                `new Response(blob)` stringified to the thirteen bytes of "[object Blob]" while three of those
                interfaces existed, because the test was written when none of them did. */
             t = (JS_IsArrayBuffer(a) || JS_GetTypedArrayType(a) >= 0 || JS_IsDataView(a) ||
-                 blob_is(a) || form_data_list_of(a) || usp_list_of(a))
+                 blob_is(a) || form_data_is(a) || usp_list_of(a))
               ? IDL_ANY : IDL_DOMSTRING;
         }
 
@@ -928,6 +947,10 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
     idl_member(idx)->null_to_empty = false;
     idl_member(idx)->nargs = nargs;
     idl_member(idx)->first_optional = IDL_MAX_DECLARED + 1;   /* none, until the member says otherwise */
+    /* HOW MANY THE CALLER MUST PASS. §3.6.2 throws a TypeError before ANY conversion when a call has fewer
+       arguments than the member has required ones — `new File()` throws rather than building a File with no
+       bits. It is the same number `first_optional` already states, capped at what the IDL declares, so a member
+       that never calls idl_optional_from requires every argument it listed. */
     idl_member(idx)->magic = magic;
     for (k = 0; k < nargs; k++)
         idl_member(idx)->types[k] = types[k];
@@ -949,11 +972,13 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
                `endings` while the spec reads `endings` first. The machine reads in DECLARED order, so the
                declaration must BE that order, and this is what makes that a crash rather than something each
                component remembers. A dictionary that INHERITS another reads the inherited members first and
-               each level sorted, which no flat list can express — the first one to need it splits this list
-               into levels rather than relaxing the check. */
-            DCHECK(k == 0 || strcmp(members[k - 1].name, members[k].name) < 0,
-                   "a dictionary's members were declared out of lexicographic order — §3.2.18 reads them "
-                   "sorted, and the machine reads them as declared");
+               each level sorted, which a single sorted list cannot express — so the member states its LEVEL and
+               the check is over both. */
+            DCHECK(k == 0 || members[k].level > members[k - 1].level ||
+                       (members[k].level == members[k - 1].level &&
+                        strcmp(members[k - 1].name, members[k].name) < 0),
+                   "a dictionary's members were declared out of §3.2.18's read order — inherited levels first, "
+                   "and each level's own members lexicographically among themselves");
             idl_member(idx)->dict_atoms[k] = JS_NewAtom(ctx, members[k].name);
         }
         idl_member(idx)->dict_n = nmembers;

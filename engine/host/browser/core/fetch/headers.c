@@ -961,6 +961,7 @@ void headers_init(JSContext *ctx)
     idl_install_method(ctx, g_proto, "getSetCookie", 0,
                        idl_method_id(ctx, TWO_STR, 0, js_headers_member, HDR_GETSETCOOKIE));
     g_ctor_stepid = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &js_headers_ctor_decl, 0);
+    idl_optional_from(0);   /* §5.1: `constructor(optional HeadersInit init)` */
 
     /* §5.2's `iterable<ByteString, ByteString>` — the shared default iterator object over the two operations
        above, so the six members it defines exist once for every such interface rather than once per. */

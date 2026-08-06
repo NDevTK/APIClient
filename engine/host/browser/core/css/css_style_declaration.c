@@ -676,6 +676,7 @@ void cssom_init(JSContext *ctx)
                            idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 2));
         idl_install_method(ctx, g_proto, "setProperty", 2,
                            idl_method_id(ctx, THREE_STR, 3, js_cssd_set_property, 0));
+        idl_optional_from(2);   /* CSSOM §6.7: `setProperty(property, value, optional priority)` */
         idl_install_method(ctx, g_proto, "item", 1,
                            idl_method_id(ctx, ONE_LONG, 1, js_cssd_item, 0));
     }
@@ -718,6 +719,7 @@ void cssom_install(JSContext *ctx, JSValueConst global)
         static const IdlArgType TWO[2] = { IDL_ANY, IDL_DOMSTRING };
         idl_install_method(ctx, global, "getComputedStyle", 1,
                            idl_method_id(ctx, TWO, 2, js_get_computed_style, 0));
+        idl_optional_from(1);   /* CSSOM §7.1: `getComputedStyle(elt, optional pseudoElt)` */
     }
 }
 

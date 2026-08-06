@@ -439,6 +439,7 @@ void response_init(JSContext *ctx)
     /* §5.2's mixin: the four readers and `bodyUsed`, from the one component Request includes too. */
     body_install(ctx, g_response_proto, g_body_handle);
     g_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, RESPONSE_INIT, 3, &js_response_ctor_decl, 0);
+    idl_optional_from(0);   /* §6.4: `constructor(optional BodyInit? body = null, optional ResponseInit init = {})` */
 }
 
 void response_install(JSContext *ctx, JSValueConst global)

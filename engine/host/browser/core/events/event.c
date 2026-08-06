@@ -407,10 +407,12 @@ void event_init(JSContext *ctx)
         static const IdlArgType INIT_ARGS[3] = { IDL_DOMSTRING, IDL_ANY, IDL_ANY };
         idl_install_method(ctx, g_proto, "initEvent", 3,
                            idl_method_id(ctx, INIT_ARGS, 3, js_event_init_event, 0));
+        idl_optional_from(1);   /* §2.2: `initEvent(type, optional bubbles, optional cancelable)` */
     }
     g_ctor_stepid = idl_method_id_dict(ctx, EVENT_CTOR_ARGS, 2, EVENT_INIT,
                                       (int)(sizeof(EVENT_INIT) / sizeof(EVENT_INIT[0])),
                                       js_event_ctor, 0);
+    idl_optional_from(1);   /* §2.2: `constructor(DOMString type, optional EventInit eventInitDict = {})` */
 }
 
 JSValue event_proto(void)

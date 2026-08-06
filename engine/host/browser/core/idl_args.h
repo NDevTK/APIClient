@@ -92,12 +92,18 @@ typedef enum {
 /* A DICTIONARY MEMBER, as its IDL declares it: the name, the type of its value, and whether the IDL marks it
    `required` (an absent required member is a TypeError, and for a dictionary `undefined` IS absent). A member
    with no `required` written is optional, which is what leaving the field off an initialiser gives. */
-/* `values` is the NULL-terminated list an IDL_ENUM member's IDL lists, and is read by nothing else. */
+/* `values` is the NULL-terminated list an IDL_ENUM member's IDL lists, and is read by nothing else.
+   `level` is WHICH DICTIONARY IN THE INHERITANCE CHAIN declares the member — 0 for the most-derived one's
+   BASE, counting up to the dictionary itself. §3.2.18 reads the INHERITED members first and each dictionary's
+   own members lexicographically among themselves, so `FilePropertyBag : BlobPropertyBag` reads endings, type,
+   then lastModified — an order no single sorted list produces, because `lastModified` sorts before `type`.
+   Stating the level is what lets the declaration express that AND still be checkable. */
 typedef struct {
     const char *name;
     IdlArgType  type;
     bool        required;
     const char *const *values;
+    uint8_t     level;
 } IdlDictMember;
 
 /* A position the IDL does not list is passed through unconverted, which is what a variadic `any...` tail means

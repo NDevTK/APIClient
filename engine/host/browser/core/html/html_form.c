@@ -356,6 +356,7 @@ void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst inp
     DCHECK(JS_IsObject(form_proto), "the form members were installed with no HTMLFormElement.prototype");
     idl_install_accessor(ctx, form_proto, "elements", js_form_elements, 0, -1);
     idl_install_method(ctx, form_proto, "submit", 0, idl_method_id(ctx, NONE, 1, js_form_submit, 0));
+    idl_optional_from(0);   /* 4.10.21: `submit()` takes no arguments */
     /* requestSubmit registers its own step definition rather than declaring its arguments to the args machine,
        so it installs through the installer for that kind — see idl_install_step_method. */
     idl_install_step_method(ctx, form_proto, "requestSubmit", 0,

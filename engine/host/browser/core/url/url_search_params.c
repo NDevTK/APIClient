@@ -532,6 +532,7 @@ void usp_init(JSContext *ctx)
     idl_pair_iter_install(ctx, g_usp_proto, g_usp_pair_handle);
 
     g_usp_ctor_stepid = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &js_usp_ctor_decl, 0);
+    idl_optional_from(0);   /* §6.2: `constructor(optional init = "")` */
 }
 
 void usp_install(JSContext *ctx, JSValueConst global)

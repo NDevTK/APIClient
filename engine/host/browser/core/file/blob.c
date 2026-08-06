@@ -19,28 +19,39 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "cutils.h"
 #include "core/byte_reader.h"
 #include "core/file/blob.h"
 #include "core/idl_args.h"
 #include "core/idl_iter.h"
 
+/* ONE STRUCT FOR BOTH INTERFACES, and one class id, because §4 says `interface File : Blob` — a File IS a Blob,
+   so every brand test that accepts a Blob must accept it, and there is exactly one byte sequence for both to be
+   about. What tells them apart is the PROTOTYPE the instance wears and `name` being non-NULL. */
 typedef struct {
-    char  *bytes;      /* the byte sequence; NULL only when `len` is 0 */
-    size_t len;
-    char  *type;       /* §3.1's normalised MIME type, never NULL — "" is "no type" */
+    char   *bytes;     /* the byte sequence; NULL only when `len` is 0 */
+    size_t  len;
+    char   *type;      /* §3.1's normalised MIME type, never NULL — "" is "no type" */
+    char   *name;      /* §4.1's file name — NULL for a plain Blob, which is what tells the two apart */
+    int64_t last_modified;
 } BlobObj;
 
 static JSClassID g_blob_class;
 static JSValue   g_blob_proto = JS_UNDEFINED;
+static JSValue   g_file_proto = JS_UNDEFINED;
+static int       g_file_ctor_stepid = -1;
 static JSRuntime *g_blob_rt;
 static int       g_blob_ctor_stepid = -1;
 static int       g_blob_reader_handle = -1;
+
+static JSValue blob_alloc(JSContext *ctx, JSValueConst proto, const char *bytes, size_t len,
+                          const char *type, size_t type_len);
 
 static void blob_finalizer(JSRuntime *rt, JSValue val)
 {
     BlobObj *b = JS_GetOpaque(val, g_blob_class);
     (void)rt;
-    if (b) { free(b->bytes); free(b->type); free(b); }
+    if (b) { free(b->bytes); free(b->type); free(b->name); free(b); }
 }
 
 bool blob_is(JSValueConst v)
@@ -55,6 +66,18 @@ const char *blob_bytes_of(JSValueConst v, size_t *plen, const char **ptype)
     if (plen)  *plen  = b->len;
     if (ptype) *ptype = b->type;
     return b->bytes ? b->bytes : "";
+}
+
+const char *blob_file_name_of(JSValueConst v)
+{
+    BlobObj *b = g_blob_class ? JS_GetOpaque(v, g_blob_class) : NULL;
+    return b ? b->name : NULL;
+}
+
+int64_t blob_last_modified_of(JSValueConst v)
+{
+    BlobObj *b = g_blob_class ? JS_GetOpaque(v, g_blob_class) : NULL;
+    return b ? b->last_modified : 0;
 }
 
 /* §3.1's TYPE NORMALISATION, which both the constructor and `slice` perform: a type carrying any character
@@ -85,11 +108,36 @@ JSValue blob_new(JSContext *ctx, const char *bytes, size_t len, const char *type
    `image/gif\0` by handing over a C string. */
 JSValue blob_new_len(JSContext *ctx, const char *bytes, size_t len, const char *type, size_t type_len)
 {
+    return blob_alloc(ctx, g_blob_proto, bytes, len, type, type_len);
+}
+
+/* §4.1's File, which is §3.1's Blob wearing File.prototype and carrying a name. `name` is NOT optional here —
+   a File without one is a Blob, and this is the one place that distinction is made. */
+JSValue file_new(JSContext *ctx, const char *bytes, size_t len, const char *type, size_t type_len,
+                 const char *name, size_t name_len, int64_t last_modified)
+{
+    JSValue obj = blob_alloc(ctx, g_file_proto, bytes, len, type, type_len);
+    BlobObj *b;
+
+    if (JS_IsException(obj))
+        return obj;
+    b = JS_GetOpaque(obj, g_blob_class);
+    b->name = malloc(name_len + 1);
+    CHECK(b->name, "blob: OOM naming a File");
+    memcpy(b->name, name, name_len);
+    b->name[name_len] = 0;
+    b->last_modified = last_modified;
+    return obj;
+}
+
+static JSValue blob_alloc(JSContext *ctx, JSValueConst proto, const char *bytes, size_t len,
+                          const char *type, size_t type_len)
+{
     BlobObj *b;
     JSValue obj;
 
     DCHECK(g_blob_class != 0, "a Blob was built before the class existed — blob_init runs at install");
-    obj = JS_NewObjectProtoClass(ctx, g_blob_proto, g_blob_class);
+    obj = JS_NewObjectProtoClass(ctx, proto, g_blob_class);
     if (JS_IsException(obj))
         return obj;
     b = calloc(1, sizeof *b);
@@ -137,15 +185,26 @@ static const ByteReaderIface BLOB_READER_IFACE = {
 
 /* ---- §3.1's attributes and slice() ------------------------------------------------------------------------ */
 
-enum { BLOB_SIZE = 0, BLOB_TYPE };
+enum { BLOB_SIZE = 0, BLOB_TYPE, FILE_NAME, FILE_LAST_MODIFIED };
 
 static JSValue js_blob_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     BlobObj *b = JS_GetOpaque(this_val, g_blob_class);
     if (!b) return JS_ThrowTypeError(ctx, "not a Blob");
-    if (magic == BLOB_SIZE) return JS_NewInt64(ctx, (int64_t)b->len);
-    DCHECK(magic == BLOB_TYPE, "a Blob attribute was declared with a magic this component does not answer");
-    return JS_NewString(ctx, b->type);
+    switch (magic) {
+    case BLOB_SIZE: return JS_NewInt64(ctx, (int64_t)b->len);
+    case BLOB_TYPE: return JS_NewString(ctx, b->type);
+    /* §4's two attributes are on File.prototype, so a plain Blob cannot reach them through the chain — but
+       `File.prototype.name` read off a Blob can, and that is the receiver check every IDL attribute makes. */
+    case FILE_NAME:
+        if (!b->name) return JS_ThrowTypeError(ctx, "not a File");
+        return JS_NewString(ctx, b->name);
+    default:
+        DCHECK(magic == FILE_LAST_MODIFIED,
+               "a Blob attribute was declared with a magic this component does not answer");
+        if (!b->name) return JS_ThrowTypeError(ctx, "not a File");
+        return JS_NewInt64(ctx, b->last_modified);
+    }
 }
 
 /* §3.1's slice(). The relative-index arithmetic is the spec's, and it is over the CONVERTED arguments — the
@@ -155,6 +214,7 @@ static JSValue js_blob_slice(JSContext *ctx, JSValueConst this_val, int argc, JS
     BlobObj *b = JS_GetOpaque(this_val, g_blob_class);
     int64_t size, start = 0, end, span;
     const char *ctype = "";
+    size_t ctype_len = 0;
     JSValue r;
 
     (void)magic;
@@ -171,13 +231,16 @@ static JSValue js_blob_slice(JSContext *ctx, JSValueConst this_val, int argc, JS
     }
     span = end - start > 0 ? end - start : 0;
     if (argc > 2 && !JS_IsUndefined(argv[2])) {
-        ctype = JS_ToCString(ctx, argv[2]);
+        /* WITH ITS LENGTH, for the reason the constructor reads its type that way: §3.1 drops a content type
+           carrying any character outside U+0020..U+007E, and NUL is one — read as a C string, `"te\0xt/plain"`
+           is `te` and passes the check the spec fails it on. */
+        ctype = JS_ToCStringLen(ctx, &ctype_len, argv[2]);
         if (!ctype) return JS_EXCEPTION;
     }
     /* The slice's bytes are COPIED, because a Blob owns its byte sequence: sharing the parent's storage would
        make one object's lifetime decide another's, and §3.1 gives no way to observe that they came from the
        same place. */
-    r = blob_new(ctx, (b->bytes ? b->bytes : "") + start, (size_t)span, ctype);
+    r = blob_new_len(ctx, (b->bytes ? b->bytes : "") + start, (size_t)span, ctype, ctype_len);
     if (argc > 2 && !JS_IsUndefined(argv[2])) JS_FreeCString(ctx, ctype);
     return r;
 }
@@ -223,8 +286,14 @@ static char *blob_native_endings(const char *s, size_t n, size_t *out_len)
 static int js_blob_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                              JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
+    /* ONE MACHINE FOR BOTH CONSTRUCTORS. §4.1's File constructor IS §3.1's Blob constructor with a name
+       argument in the middle and one more dictionary member — the parts walk, the endings transform and the
+       type normalisation are the same steps, so they are the same code and the magic says which shape the
+       arguments are in. */
+    bool is_file = idl_step_magic(hdr) != 0;
     JSValueConst parts = argc > 0 ? argv[0] : JS_UNDEFINED;
-    JSValueConst options = argc > 1 ? argv[1] : JS_UNDEFINED;
+    JSValueConst options = argc > (is_file ? 2 : 1) ? argv[is_file ? 2 : 1] : JS_UNDEFINED;
+    JSValueConst fname = is_file && argc > 1 ? argv[1] : JS_UNDEFINED;
     JSValue type_v, endings_v;
     const char *type = NULL, *endings = NULL;
     size_t type_len = 0;
@@ -236,7 +305,7 @@ static int js_blob_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     (void)st; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
     if (JS_IsUndefined(hdr->this_val)) {
-        JS_ThrowTypeError(ctx, "constructor Blob requires 'new'");
+        JS_ThrowTypeError(ctx, "constructor %s requires 'new'", is_file ? "File" : "Blob");
         return -1;
     }
     /* NOTHING BELOW RUNS THE PAGE'S CODE: the parts list holds only strings, Blobs and BufferSources the args
@@ -320,7 +389,28 @@ static int js_blob_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         JS_FreeValue(ctx, view_buf);
         JS_FreeValue(ctx, part);
     }
-    *presult = blob_new_len(ctx, buf ? buf : "", total, type ? type : "", type_len);
+    if (is_file) {
+        /* §4.1: `lastModified` defaults to NOW. It is a real clock read — a File the page builds and then
+           inspects has a real timestamp, and answering 0 would be a value this engine invented. */
+        JSValue lm_v = idl_dict_get(ctx, options, "lastModified");
+        int64_t lm = js__gettimeofday_us() / 1000;
+        size_t nlen = 0;
+        const char *n_str;
+
+        if (!JS_IsUndefined(lm_v) && JS_ToInt64(ctx, &lm, lm_v) < 0) {
+            JS_FreeValue(ctx, lm_v);
+            goto fail;
+        }
+        JS_FreeValue(ctx, lm_v);
+        /* The declaration converted `fileName` to a USVString, so this is its bytes — with the LENGTH, because
+           a name may carry an interior NUL exactly as a type may. */
+        n_str = JS_ToCStringLen(ctx, &nlen, fname);
+        if (!n_str) goto fail;
+        *presult = file_new(ctx, buf ? buf : "", total, type ? type : "", type_len, n_str, nlen, lm);
+        JS_FreeCString(ctx, n_str);
+    } else {
+        *presult = blob_new_len(ctx, buf ? buf : "", total, type ? type : "", type_len);
+    }
     free(buf);
     JS_FreeCString(ctx, type);
     JS_FreeCString(ctx, endings);
@@ -351,11 +441,21 @@ static const IdlDictMember BLOB_OPTIONS[] = {
     { "type",    IDL_DOMSTRING },
 };
 
+/* §4's `dictionary FilePropertyBag : BlobPropertyBag`. §3.2.18 reads the INHERITED members first — endings and
+   type, sorted among themselves — and only then the derived dictionary's own, which is why `lastModified` comes
+   last despite sorting before `type`. The level is what states that. */
+static const IdlDictMember FILE_OPTIONS[] = {
+    { "endings",      IDL_ENUM, false, BLOB_ENDINGS, 0 },
+    { "type",         IDL_DOMSTRING, false, NULL, 0 },
+    { "lastModified", IDL_LONG_LONG, false, NULL, 1 },
+};
+
 void blob_init(JSContext *ctx)
 {
     JSClassDef def = { "Blob", .finalizer = blob_finalizer };
     JSRuntime *rt = JS_GetRuntime(ctx);
     static const IdlArgType CTOR_ARGS[2] = { IDL_SEQUENCE_BLOBPART, IDL_DICT };
+    static const IdlArgType FILE_CTOR_ARGS[3] = { IDL_SEQUENCE_BLOBPART, IDL_USVSTRING, IDL_DICT };
     static const IdlArgType SLICE_ARGS[3] = { IDL_LONG_LONG_CLAMP, IDL_LONG_LONG_CLAMP, IDL_DOMSTRING };
 
     DCHECK(g_blob_rt == NULL || g_blob_rt == rt,
@@ -383,6 +483,19 @@ void blob_init(JSContext *ctx)
                                             (int)(sizeof BLOB_OPTIONS / sizeof BLOB_OPTIONS[0]),
                                             &js_blob_ctor_decl, 0);
     idl_optional_from(0);   /* §3.1: both constructor arguments are optional */
+
+    /* §4: `interface File : Blob`. The prototype CHAINS to Blob.prototype, so a File's `slice`, `text` and
+       `size` are the same functions rather than copies — and its instances wear the same class id, so every
+       brand test that accepts a Blob accepts a File, which is what the inheritance MEANS. */
+    g_file_proto = JS_NewObjectProto(ctx, g_blob_proto);
+    CHECK(!JS_IsException(g_file_proto), "File.prototype could not be allocated");
+    idl_interface_tag(ctx, g_file_proto, "File");
+    idl_install_accessor(ctx, g_file_proto, "name", js_blob_get, FILE_NAME, -1);
+    idl_install_accessor(ctx, g_file_proto, "lastModified", js_blob_get, FILE_LAST_MODIFIED, -1);
+    g_file_ctor_stepid = idl_method_id_step(ctx, FILE_CTOR_ARGS, 3, FILE_OPTIONS,
+                                            (int)(sizeof FILE_OPTIONS / sizeof FILE_OPTIONS[0]),
+                                            &js_blob_ctor_decl, 1);
+    idl_optional_from(2);   /* §4.1: `fileBits` and `fileName` are REQUIRED; only `options` is optional */
 }
 
 void blob_install(JSContext *ctx, JSValueConst global)
@@ -393,6 +506,11 @@ void blob_install(JSContext *ctx, JSValueConst global)
     CHECK(!JS_IsException(ctor), "the Blob interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, g_blob_proto);
     JS_SetPropertyStr(ctx, (JSValue)global, "Blob", ctor);
+
+    ctor = idl_step_constructor(ctx, "File", 2, g_file_ctor_stepid);
+    CHECK(!JS_IsException(ctor), "the File interface object could not be allocated");
+    JS_SetConstructor(ctx, ctor, g_file_proto);
+    JS_SetPropertyStr(ctx, (JSValue)global, "File", ctor);
 }
 
 void blob_free(JSContext *ctx)
@@ -400,7 +518,8 @@ void blob_free(JSContext *ctx)
     if (!g_blob_rt)
         return;
     JS_FreeValue(ctx, g_blob_proto);
-    g_blob_proto = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_file_proto);
+    g_blob_proto = g_file_proto = JS_UNDEFINED;
     g_blob_rt = NULL;
-    g_blob_ctor_stepid = -1;
+    g_blob_ctor_stepid = g_file_ctor_stepid = -1;
 }

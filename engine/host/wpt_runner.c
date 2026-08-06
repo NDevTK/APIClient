@@ -161,6 +161,21 @@ static char *wpt_serve(const char *url, size_t *plen)
     url_record_free(&base);
     url_record_free(&rec);
     if (!path) return NULL;
+    {
+        /* A `.py` PATH IS A wptserve HANDLER, not a file. WPT's own server IMPORTS it and calls its `main`,
+           which is how a test that uploads a form reads back what the server received. This runner serves the
+           corpus off disk, so it cannot run one — and answering with the handler's SOURCE is worse than
+           answering with nothing, because the test then compares its upload against a Python file and reports
+           the engine as wrong. It says so instead: a gate limitation named as one, which is the same thing the
+           missing-META-script check does. */
+        size_t n = strlen(path);
+        if (n > 3 && !strcmp(path + n - 3, ".py")) {
+            printf("@WPTHANDLER %s\n", path);
+            fflush(stdout);
+            free(path);
+            return NULL;
+        }
+    }
     full = malloc(strlen(g_wpt_root) + strlen(path) + 2);
     CHECK(full, "wpt: OOM building a corpus path");
     sprintf(full, "%s%s", g_wpt_root, path);

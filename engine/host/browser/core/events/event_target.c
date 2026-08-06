@@ -74,9 +74,11 @@ void event_target_init(JSContext *ctx)
         g_add_stepid    = idl_method_id_dict(ctx, ADD_ARGS, 3, ADD_OPTS,
                                              (int)(sizeof(ADD_OPTS) / sizeof(ADD_OPTS[0])),
                                              idl_add_or_remove, 0);
+        idl_optional_from(2);   /* §2.7: `addEventListener(type, callback, optional options)` */
         g_remove_stepid = idl_method_id_dict(ctx, ADD_ARGS, 3, REMOVE_OPTS,
                                              (int)(sizeof(REMOVE_OPTS) / sizeof(REMOVE_OPTS[0])),
                                              idl_add_or_remove, 1);
+        idl_optional_from(2);   /* §2.7: `removeEventListener(type, callback, optional options)` */
     }
 
 }

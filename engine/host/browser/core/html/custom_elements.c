@@ -521,6 +521,7 @@ void custom_elements_install(JSContext *ctx, JSValueConst global)
                        idl_method_id_step(ctx, CE_DEFINE_ARGS, 3, CE_DEFINE_OPTS,
                                           (int)(sizeof(CE_DEFINE_OPTS) / sizeof(CE_DEFINE_OPTS[0])),
                                           &CE_DEFINE_STEP, 0));
+    idl_optional_from(2);   /* §4.13.4: `define(name, constructor, optional ElementDefinitionOptions options)` */
     {
         static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
         idl_install_method(ctx, reg, "get", 1, idl_method_id(ctx, ONE_STR, 1, js_ce_get, 0));

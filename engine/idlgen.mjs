@@ -50,7 +50,11 @@ const INTERFACES = {
   Response:            ["core/fetch/response.c", "core/fetch/body.c", "core/byte_reader.c"],
   Request:             ["core/fetch/request.c", "core/fetch/body.c", "core/byte_reader.c"],
   FormData:            ["core/html/form_data.c", "core/idl_iter.c"],
+  /* §4's `interface File : Blob` shares blob.c with the interface it inherits: one struct, one class id, and
+     a prototype chained to Blob.prototype — which is what the inheritance MEANS, so the members it inherits
+     are found in the same file. */
   Blob:                ["core/file/blob.c", "core/byte_reader.c"],
+  File:                ["core/file/blob.c", "core/byte_reader.c"],
   /* Headers exists and had no row, so the audit said nothing about it at all — which is the lying-by-omission
      this map's own comment names, and it was silent from the moment the component landed. */
   /* An `iterable<>` interface's keys/values/entries/forEach are installed by the SHARED default iterator

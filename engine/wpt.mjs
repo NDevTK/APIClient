@@ -29,7 +29,7 @@ const WPT_REV = "bf4714d";
 /* WHAT IS CHECKED OUT. A sparse list rather than the whole 1 GB tree, and it grows as areas are covered — an
    area absent here is honestly untested, which is a different statement from "passes". */
 const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetch/api/resources", "url", "common",
-                   "FileAPI/blob", "FileAPI/support"];
+                   "FileAPI/blob", "FileAPI/file", "FileAPI/support"];
 
 if (!existsSync(join(WPT, "resources", "testharness.js"))) {
   /* NO --depth 1. The corpus is PINNED, and a depth-1 clone has only the tip — `git checkout bf4714d` in it
@@ -159,6 +159,16 @@ for (const f of files) {
   if (why || r.signal) {
     aborted++;
     failures.push(`  ABORT  ${rel}\n         ${why ? why[1].slice(0, 160) : "signal " + r.signal}`);
+    continue;
+  }
+  /* A TEST THAT ASKS FOR A wptserve HANDLER cannot run here, and that is the GATE's limitation rather than a
+     result about the engine. WPT's server imports the named `.py` and calls its `main`; this runner serves the
+     corpus off disk. Counting those as engine failures would put a number on this runner's reach and call it
+     the browser's. */
+  const handler = out.match(/^@WPTHANDLER (.*)$/m);
+  if (handler) {
+    aborted++;
+    failures.push(`  ABORT  ${rel}\n         needs the wptserve handler ${handler[1]}, which this runner cannot execute`);
     continue;
   }
   let filePass = 0, fileFail = 0;

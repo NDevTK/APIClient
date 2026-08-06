@@ -1110,6 +1110,7 @@ void element_init(JSContext *ctx)
         static const IdlArgType TOGGLE[2] = { IDL_DOMSTRING, IDL_ANY };   /* `optional boolean force` is ToBoolean */
         idl_install_method(ctx, proto, "toggleAttribute", 1,
                            idl_method_id(ctx, TOGGLE, 2, js_el_attr_op, 2));
+        idl_optional_from(1);   /* §4.9: `toggleAttribute(qualifiedName, optional force)` */
     }
     JS_SetPropertyStr(ctx, proto, "hasAttributes",
                       JS_NewCFunctionMagic(ctx, js_el_attr_list, "hasAttributes", 0, JS_CFUNC_generic_magic, 0));

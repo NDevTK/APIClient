@@ -1254,6 +1254,7 @@ static void node_install_walkers(JSContext *ctx, JSValueConst proto)
         static const IdlArgType ONE_BOOL[1] = { IDL_BOOLEAN };
         idl_install_method(ctx, proto, "cloneNode", 0,
                            idl_method_id_step(ctx, ONE_BOOL, 1, NULL, 0, &NODE_CLONE_STEP, 0));
+        idl_optional_from(0);   /* §4.4: `cloneNode(optional deep = false)` */
     }
 }
 
@@ -1706,6 +1707,7 @@ void node_init(JSContext *ctx)
                            idl_method_id_dict(ctx, ROOT_ARGS, 1, ROOT_OPTS,
                                               (int)(sizeof(ROOT_OPTS) / sizeof(ROOT_OPTS[0])),
                                               js_node_root, 0));
+        idl_optional_from(0);   /* §4.4: `getRootNode(optional GetRootNodeOptions options = {})` */
     }
 
     /* Text and Comment are their own interfaces — `interface Text : CharacterData` and `Comment : CharacterData`

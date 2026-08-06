@@ -361,6 +361,7 @@ void dom_token_list_init(JSContext *ctx)
                        idl_method_id(ctx, IDL_1STR, 1, js_tl_mutate, 1));
     idl_install_method(ctx, g_proto, "toggle", 1,
                        idl_method_id(ctx, IDL_STR_BOOL, 2, js_tl_mutate, 2));
+    idl_optional_from(1);   /* §7.1: `toggle(token, optional force)` */
     idl_install_method(ctx, g_proto, "replace", 2,
                        idl_method_id(ctx, IDL_2STR, 2, js_tl_mutate, 3));
     /* §7.1's stringifier IS `value` — the same attribute under the operation's name, so it reads the same
@@ -368,6 +369,7 @@ void dom_token_list_init(JSContext *ctx)
        casting one to the other reads `magic` out of `argc`. */
     idl_install_method(ctx, g_proto, "toString", 0,
                        idl_method_id(ctx, IDL_1STR, 1, js_tl_to_string, 0));
+    idl_optional_from(0);   /* §7.1's stringifier takes NO arguments — the declared one is `value`'s */
     /* §3.7.10: an interface with an indexed getter is iterable through %Array.prototype.values%, which is why
        `for (const c of el.classList)` is ordinary code — and had nothing. */
     idl_indexed_install_iterable(ctx, g_proto);

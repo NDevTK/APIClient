@@ -269,9 +269,13 @@ void timer_install(JSContext *ctx, JSValueConst global)
         static const IdlArgType SET_TIMER[2] = { IDL_STRING_UNLESS_CALLABLE, IDL_LONG };
         static const IdlArgType CLEAR_TIMER[1] = { IDL_LONG };
         idl_install_method(ctx, g, "setTimeout", 2, idl_method_id(ctx, SET_TIMER, 2, js_set_timer, 0));
+        idl_optional_from(1);   /* 8.6: `setTimeout(handler, optional timeout, ...arguments)` */
         idl_install_method(ctx, g, "setInterval", 2, idl_method_id(ctx, SET_TIMER, 2, js_set_timer, 1));
+        idl_optional_from(1);   /* 8.6: `setInterval(handler, optional timeout, ...arguments)` */
         idl_install_method(ctx, g, "clearTimeout", 1, idl_method_id(ctx, CLEAR_TIMER, 1, js_clear_timer, 0));
+        idl_optional_from(0);   /* 8.6: `clearTimeout(optional long id = 0)` */
         idl_install_method(ctx, g, "clearInterval", 1, idl_method_id(ctx, CLEAR_TIMER, 1, js_clear_timer, 0));
+        idl_optional_from(0);   /* 8.6: `clearInterval(optional long id = 0)` */
     }
     JS_SetPropertyStr(ctx, g, "queueMicrotask",
                       JS_NewCFunction(ctx, js_queue_microtask, "queueMicrotask", 1));

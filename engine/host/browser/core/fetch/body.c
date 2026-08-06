@@ -94,10 +94,12 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, char **out_mim
             return body_state_set(ctx, b, bytes, blen);
         }
     }
-    if ((list = form_data_list_of(init)) != NULL) {
+    if (form_data_is(init)) {
         char boundary[FORM_DATA_BOUNDARY_MAX];
-        char *body = form_data_serialize_multipart(list, boundary, &len);
-        size_t n = strlen(boundary) + sizeof("multipart/form-data; boundary=");
+        char *body = form_data_serialize_multipart(ctx, init, boundary, &len);
+        size_t n;
+        if (!body) return -1;
+        n = strlen(boundary) + sizeof("multipart/form-data; boundary=");
         r = body_state_set(ctx, b, body, len);
         free(body);
         *out_mime = malloc(n);
@@ -246,15 +248,12 @@ static JSValue body_read_form_data(JSContext *ctx, JSValueConst recv, const char
                !strncasecmp(essence, "multipart/form-data", elen)) {
         /* The BOUNDARY is the Content-Type's own parameter; without one there is nothing to split on and §5.2
            says failure, which is the same TypeError a wrong type gives. */
-        UrlEncodedList entries = { 0 };
         size_t blen = 0;
-        const char *b = body_mime_param(essence, strlen(essence), "boundary", &blen);
-        if (b && form_data_parse_multipart(body, len, b, blen, &entries) == 0) {
-            r = form_data_new(ctx, &entries);
-            url_encoded_list_free(&entries);
-        } else {
-            JS_ThrowTypeError(ctx, "the multipart/form-data body could not be parsed");
-        }
+        const char *bd = body_mime_param(essence, strlen(essence), "boundary", &blen);
+        if (bd)
+            r = form_data_parse_multipart(ctx, body, len, bd, blen);
+        else
+            JS_ThrowTypeError(ctx, "the multipart Content-Type names no boundary");
     } else {
         JS_ThrowTypeError(ctx, "the body's Content-Type is not a form encoding");
     }
