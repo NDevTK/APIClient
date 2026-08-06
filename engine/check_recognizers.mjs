@@ -519,6 +519,31 @@ if (enumOnlyCallers !== 2) {
  * JS_GetOwnPropertyNamesInternal) on a possibly-Proxy receiver and asks for a request instead drops this count
  * by one, and when it reaches the C hooks' own sites those hooks — and js_obj_to_desc, and the C forms of every
  * invariant above — go with them. Every ROUTED path is done; what remains is reached only from C. */
+/* A C-SIDE CONSTRUCT OF A BYTECODE CONSTRUCTOR — the last edge in the interpreter's own recursion cycle.
+ *
+ * JS_CallConstructorInternal runs a bytecode constructor's body by calling JS_CallInternal, which is a C-stack
+ * re-entry: that constructor cannot suspend, and a loop in it drives to completion. Every ROUTED path is already
+ * gone — the interpreter's construct point sends a bytecode ctor to do_construct_tramp, and a bound target is
+ * flattened at the operator site and re-dispatched — so what remains is reached only from C, through the public
+ * JS_CallConstructor entry.
+ *
+ * It is COUNTED rather than argued, for the reason every counter beside it is: "only one site left" is a survey,
+ * and a survey is what gets read instead of the code. The live one is js_typed_array_create
+ * (TypedArraySpeciesCreate), whose ctor is the page's subclass for ta.filter/slice/map/subarray. Retiring it
+ * means those builtins ask for the Construct as a request at that point, exactly as the interpreter's own site
+ * does; when this reaches zero the bytecode branch inside JS_CallConstructorInternal is dead and goes with it,
+ * and the interpreter cycle drops from 10 to 8. */
+const constructFromC =
+  (src.match(/JS_CallConstructor2?\(/g) || []).length
+  - (src.match(/JSValue JS_CallConstructor2?\(/g) || []).length;
+if (constructFromC !== 3) {
+  console.error(`C-side Construct call sites: ${constructFromC}, expected 3.`);
+  console.error(constructFromC > 3
+    ? `  A new C caller can run a bytecode constructor's body on the C stack, where it cannot suspend.`
+    : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
+  process.exit(1);
+}
+
 const gopdFromC =
   (src.match(/JS_GetOwnPropertyInternal\(/g) || []).length
   - (src.match(/static int JS_GetOwnPropertyInternal\(/g) || []).length;
@@ -2546,5 +2571,6 @@ if (names.size < CEILING) {
 console.log(`recognizer ratchet ok: ${names.size}/${CEILING} recognizers, ${callSitePredicates} call + ` +
             `${constructSitePredicates} construct convergence point, ${modeWrites} per-site mode writes, ` +
             `iterator-protocol C reads done/value/next 0/0/0, ToPropertyDescriptor C reads ${descReads}, ` +
-            `C enum-only key walks ${enumOnlyCallers}, C-side [[GetOwnProperty]] ${gopdFromC}, ` +
+            `C enum-only key walks ${enumOnlyCallers}, C-side Construct ${constructFromC}, ` +
+            `C-side [[GetOwnProperty]] ${gopdFromC}, ` +
             `C-side [[IsExtensible]] ${extFromC}, C-side [[HasProperty]] ${hasFromC}`);
