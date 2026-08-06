@@ -150,7 +150,8 @@ static JSValue js_fetch_body(JSContext *ctx, JSValueConst this_val, int argc, JS
     const char *url = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
     if (argc > 0) endpoint_record(ctx, "GET", argv[0]);
     /* the host's BYTES, as they arrive off the wire — the Response parses them, this edge does not */
-    JSValue reply = response_new(ctx, url ? url : "", "{\"region\":\"us-west-2\"}");
+    static const char REPLY[] = "{\"region\":\"us-west-2\"}";
+    JSValue reply = response_new(ctx, url ? url : "", REPLY, sizeof(REPLY) - 1);
     if (url) JS_FreeCString(ctx, url);
     JSValue resolving[2];
     JSValue promise = JS_NewPromiseCapability(ctx, resolving);
@@ -998,6 +999,14 @@ static const char *HTML =
       " var a = await c.json(); var b = await r.json();"
       " var thrown = 'no'; try { r.clone(); } catch (e) { thrown = 'sync'; }"
       " fetch('/api/clonebody?copy=' + a.region + '&orig=' + b.region + '&used=' + thrown); })();"
+    /* §6.4.1 arrayBuffer() / §6.4.2 bytes(): the reply as the BYTE SEQUENCE it is. They read the same reply two
+       ways and report the SAME length and the SAME first byte ('{'), which is what says the two are one body and
+       not two decodings of it — and a length that survives says the record carries one rather than recovering it
+       with a strlen. Two clones, because reading is single-use. */
+    "(async function(){ var r = await fetchBody('/api/config');"
+      " var ab = await r.clone().arrayBuffer(); var by = await r.clone().bytes();"
+      " fetch('/api/bodybytes?len=' + ab.byteLength + '&n=' + by.length + '&b0=' + by[0]"
+      "   + '&kind=' + (ab instanceof ArrayBuffer) + (by instanceof Uint8Array)); })();"
     "(async function(){ var p = new Promise(function(res){ Promise.resolve().then(function(){ res('lazyRegion'); }); }); var c = await p; fetch('/api/lazy?r=' + c); })();"   /* PENDING await: the promise resolves LATER via a microtask (stands in for the network) -> park + resume */
     "var _spr; var _sp = new Promise(function(r){ _spr = r; }); _sp.then(function(v){ fetch('/api/shared?v=' + v); }); _spr(state.beta ? 'shBETA' : 'shSTABLE');"   /* PROBE: _sp created BEFORE the state.beta snapshot fork -> shared; settled per-flow. If promise state is NOT per-flow COW, only ONE value survives (contamination) */
     "if (state.gamma) { delete delObj.k; } fetch('/api/tok?t=' + (delObj.k ? delObj.k : 'wasDeleted'));"   /* DELETE time-travel: the gamma-true flow deletes delObj.k; the gamma-false flow must STILL see keepVAL (the delete is per-flow) */
@@ -1237,6 +1246,11 @@ int main(void) {
        reply — and every endpoint behind it — was lost at that line. */
     int clone_body = (strstr(js, "\"/api/clonebody\"") && strstr(js, "\"copy\"") &&
                       strstr(js, "\"orig\"") && strstr(js, "sync"));
+    /* §6.4.1/§6.4.2: the reply read as BYTES. 22 is the fixture reply's length and 123 is its leading '{' — the
+       two agreeing is what says arrayBuffer() and bytes() are two views of ONE byte sequence, and a length the
+       record carried rather than one a strlen guessed. */
+    int body_bytes = (strstr(js, "\"/api/bodybytes\"") && strstr(js, "\"22\"") &&
+                      strstr(js, "\"123\"") && strstr(js, "truetrue"));
     /* PENDING await: the awaited promise resolved LATER (via a microtask, standing in for the network); the flow
        parked at the await and resumed when it settled -> /api/lazy?r=lazyRegion. The real fetch-parking path. */
     int pending_await = (strstr(js, "\"/api/lazy\"") && strstr(js, "lazyRegion"));
@@ -1475,11 +1489,48 @@ int main(void) {
     int domidl_tt   = domproto_tt && cdnull_tt && tcnull_tt && nodeval_tt && tcset_tt;
     int deadline_tt = (strstr(js, "\"/api/deadline\"") && strstr(js, "expired") && strstr(js, "live"));
 
-    int h_ok = asan_min
-        ? (fefork_tt && owfork_tt && genfork_tt && gen2fork_tt && genofork_tt && afromfork_tt && spreadfork_tt && setaddfork_tt && setfork_tt && mapmutfork_tt && afsfork_tt && paffork_tt && paf2fork_tt && redfork_tt && rerepfork_tt && gcallfork_tt && gapplyfork_tt && grefapplyfork_tt)   /* MIN gate: just the clone/COW/generator paths */
-        : (has_uid_param && role_admin && role_public && merged && pinned && lazy && uafork_tt && touchfork_tt && layoutfork_tt && abortfire_tt && deadline_tt && idlcoerce_tt && domidl_tt && nodealgo_tt && dom_tt && accessor_tt && async_tt && await_tt && asynccall_tt && async_throw && async_preempt && fetch_await && pending_await && promise_state && delete_iso && floc_iso && fefork_tt && pushfork_tt && mapfork_tt && owfork_tt && genfork_tt && gen2fork_tt && genofork_tt && afromfork_tt && spreadfork_tt && setaddfork_tt && setfork_tt && mapmutfork_tt && afsfork_tt && paffork_tt && paf2fork_tt && redfork_tt && rerepfork_tt && gcallfork_tt && gapplyfork_tt && grefapplyfork_tt);
-    printf("@H %s (pinned=%d lazy=%d dom-attr=%d dom-node=%d accessor=%d async=%d await=%d asynccall=%d throw=%d preempt=%d fetch=%d pending=%d promise-state=%d delete-iso=%d floc-iso=%d fefork=%d pushfork=%d mapfork=%d owfork=%d genfork=%d gen2fork=%d genofork=%d afromfork=%d spreadfork=%d setaddfork=%d setfork=%d mapmutfork=%d afsfork=%d paffork=%d paf2fork=%d redfork=%d rerepfork=%d gcallfork=%d gapplyfork=%d grefapplyfork=%d ua=%d touch=%d layout=%d abort=%d deadline=%d idl=%d dom-idl=%d node-algo=%d)\n",
-           h_ok ? "OK" : "FAIL", pinned, lazy, dom_attr, dom_node, accessor_tt, async_tt, await_tt, asynccall_tt, async_throw, async_preempt, fetch_await, pending_await, promise_state, delete_iso, floc_iso, fefork_tt, pushfork_tt, mapfork_tt, owfork_tt, genfork_tt, gen2fork_tt, genofork_tt, afromfork_tt, spreadfork_tt, setaddfork_tt, setfork_tt, mapmutfork_tt, afsfork_tt, paffork_tt, paf2fork_tt, redfork_tt, rerepfork_tt, gcallfork_tt, gapplyfork_tt, grefapplyfork_tt, uafork_tt, touchfork_tt, layoutfork_tt, abortfire_tt, deadline_tt, idlcoerce_tt, domidl_tt, nodealgo_tt);
+    /* THE PROBES, DECLARED ONCE. This was a 46-term conjunction and a separate printf listing 43 of them, which
+       is two hand-maintained lists of the same thing — so a probe could be computed and joined to NEITHER, and
+       one immediately was: `clone_body` asserted §6.4 clone() and the gate never read it, so the fixture
+       reported PASS on a result nothing had checked. A row here is what makes a probe a probe: the gate walks
+       it and the report walks it, and a probe that is not declared does not exist rather than silently
+       passing. `min` marks the subset the ASAN gate runs (the clone/COW/generator paths). */
+    struct { const char *name; int ok; unsigned char min; } probes[] = {
+        { "uid-param", has_uid_param, 0 }, { "role-admin", role_admin, 0 },
+        { "role-public", role_public, 0 }, { "merged", merged, 0 },
+        { "pinned", pinned, 0 },           { "lazy", lazy, 0 },
+        { "dom-attr", dom_attr, 0 },       { "dom-node", dom_node, 0 },
+        { "dom-tt", dom_tt, 0 },           { "accessor", accessor_tt, 0 },
+        { "async", async_tt, 0 },          { "await", await_tt, 0 },
+        { "asynccall", asynccall_tt, 0 },  { "throw", async_throw, 0 },
+        { "preempt", async_preempt, 0 },   { "fetch", fetch_await, 0 },
+        { "clone-body", clone_body, 0 },   { "body-bytes", body_bytes, 0 },
+        { "pending", pending_await, 0 },   { "promise-state", promise_state, 0 },
+        { "delete-iso", delete_iso, 0 },   { "floc-iso", floc_iso, 0 },
+        { "ua", uafork_tt, 0 },            { "touch", touchfork_tt, 0 },
+        { "layout", layoutfork_tt, 0 },    { "abort", abortfire_tt, 0 },
+        { "deadline", deadline_tt, 0 },    { "idl", idlcoerce_tt, 0 },
+        { "dom-idl", domidl_tt, 0 },       { "node-algo", nodealgo_tt, 0 },
+        { "pushfork", pushfork_tt, 0 },    { "mapfork", mapfork_tt, 0 },
+        { "fefork", fefork_tt, 1 },        { "owfork", owfork_tt, 1 },
+        { "genfork", genfork_tt, 1 },      { "gen2fork", gen2fork_tt, 1 },
+        { "genofork", genofork_tt, 1 },    { "afromfork", afromfork_tt, 1 },
+        { "spreadfork", spreadfork_tt, 1 },{ "setaddfork", setaddfork_tt, 1 },
+        { "setfork", setfork_tt, 1 },      { "mapmutfork", mapmutfork_tt, 1 },
+        { "afsfork", afsfork_tt, 1 },      { "paffork", paffork_tt, 1 },
+        { "paf2fork", paf2fork_tt, 1 },    { "redfork", redfork_tt, 1 },
+        { "rerepfork", rerepfork_tt, 1 },  { "gcallfork", gcallfork_tt, 1 },
+        { "gapplyfork", gapplyfork_tt, 1 },{ "grefapplyfork", grefapplyfork_tt, 1 },
+    };
+    int h_ok = 1;
+    printf("@H ");
+    for (unsigned pi = 0; pi < sizeof(probes) / sizeof(probes[0]); pi++) {
+        if (asan_min && !probes[pi].min)
+            continue;
+        h_ok = h_ok && probes[pi].ok;
+        printf("%s=%d ", probes[pi].name, probes[pi].ok);
+    }
+    printf("=> %s\n", h_ok ? "OK" : "FAIL");
 
     /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified. Read from the
        ONE document above — there is no second line to keep in step with it. */

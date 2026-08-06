@@ -62,11 +62,14 @@ static JSValue fetch_deliver(JSContext *ctx, JSValueConst this_val, int argc, JS
                              int magic, JSValueConst *func_data)
 {
     const char *u = JS_ToCString(ctx, func_data[1]);
-    const char *body = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
+    /* WITH ITS LENGTH: a reply is a byte sequence, and the interior NUL a strlen stops at is exactly what
+       `arrayBuffer()` would then have under-reported. */
+    size_t body_len = 0;
+    const char *body = argc > 0 ? JS_ToCStringLen(ctx, &body_len, argv[0]) : NULL;
     JSValue resp, r;
 
     (void)this_val; (void)magic;
-    resp = response_new(ctx, u ? u : "", body ? body : "");
+    resp = response_new(ctx, u ? u : "", body ? body : "", body ? body_len : 0);
     if (u) JS_FreeCString(ctx, u);
     if (body) JS_FreeCString(ctx, body);
     if (JS_IsException(resp))

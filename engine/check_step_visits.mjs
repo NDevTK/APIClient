@@ -69,7 +69,7 @@ function defs(text) {
       if (text[i] === '{') depth++;
       else if (text[i] === '}' && --depth === 0) break;
     }
-    out.push({ struct: m[1], fini: m[3], body: text.slice(m.index, i + 1) });
+    out.push({ struct: m[1], fini: m[3], body: text.slice(m.index, i + 1), index: m.index });
   }
   return out;
 }
@@ -149,8 +149,14 @@ for (const f of hostSources(join(ENGINE, 'host'))) {
   const found = [];
   for (const m of text.matchAll(/IdlStepDecl\s+\w+\s*=\s*\{\s*(\w+)\s*,\s*sizeof\((\w+)\)\s*,\s*(\w+)\s*,/g))
     found.push({ where, line: text.slice(0, m.index).split('\n').length, struct: m[2], visit: m[3] });
-  for (const m of text.matchAll(/JSTrampStepDef\s+\w+\s*=\s*\{\s*sizeof\((\w+)\)[\s\S]{0,300}?\.visit\s*=\s*(\w+)/g))
-    found.push({ where, line: text.slice(0, m.index).split('\n').length, struct: m[1], visit: m[2] });
+  /* BY SHAPE, exactly as the engine half is found, and for the reason written there. Keyed on the declaration
+     `JSTrampStepDef <name> =` this read one spelling and stopped: Response's four body readers are one def per
+     body kind held in a table of `{ name, def }` rows, which is a definition with no `=` of its own — so all
+     four were invisible here, visit-less or not. A gate that only sees the spelling that happened to exist when
+     it was written is the gate this file's own header calls worse than none. */
+  for (const d of defs(text))
+    found.push({ where, line: text.slice(0, d.index).split('\n').length, struct: d.struct,
+                 visit: (d.body.match(/\.visit\s*=\s*(\w+)/) || [, 'NULL'])[1] });
 
   for (const d of found) {
     if (d.visit === 'NULL') {
