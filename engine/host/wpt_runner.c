@@ -58,6 +58,13 @@ static const JSFlowControlHooks WPT_HOOKS_OFF = { .branch = NULL, .fork = NULL, 
 
 /* testharness.js reports through a callback; the callback reports through this. One line per subtest, so the
    driver never has to parse prose. */
+static JSValue js_wpt_gc(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val; (void)argc; (void)argv;
+    JS_RunGC(JS_GetRuntime(ctx));
+    return JS_UNDEFINED;
+}
+
 static JSValue js_wpt_print(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     int i;
@@ -425,6 +432,10 @@ int main(int argc, char **argv)
        C rather than in WPT_PROLOGUE because the prologue itself is written against `self`. */
     JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
     JS_SetPropertyStr(ctx, global, "print", JS_NewCFunction(ctx, js_wpt_print, "print", 1));
+    /* `gc` — what /common/gc.js reaches for first, and the only way a test that asserts a stream survives
+       COLLECTION can assert anything at all. It is the runner's, never the browser's: a page-visible collector
+       is fingerprintable and this engine does not ship one. quickjs's own JS_RunGC is the whole of it. */
+    JS_SetPropertyStr(ctx, global, "gc", JS_NewCFunction(ctx, js_wpt_gc, "gc", 0));
 
     /* THE COMPONENTS UNDER TEST. Named one by one rather than "everything", because a component that is not
        installed makes its tests fail LOUDLY on a missing global — which is the honest report — while quietly

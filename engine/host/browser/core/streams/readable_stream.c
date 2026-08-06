@@ -66,6 +66,11 @@ typedef struct {
     JSValue stream;
     JSValue pull_fn;          /* the page's `pull`, or JS_UNDEFINED */
     JSValue cancel_fn;        /* the page's `cancel`, or JS_UNDEFINED */
+    /* §4.9.4 builds each algorithm with CreateAlgorithmFromUnderlyingMethod, which INVOKES the method on the
+       underlying source — so `start`, `pull` and `cancel` see it as their receiver, and a source written with
+       methods that use `this` works. (The strategy's `size` is the exception: §4.2's ExtractSizeAlgorithm
+       Calls it with undefined, which is why it is not held here.) */
+    JSValue source;
     JSValue size_fn;          /* the strategy's `size`, or JS_UNDEFINED for the implicit one-per-chunk */
     double  hwm;              /* §4.2's high-water mark, 1 for a default stream with no strategy */
     uint8_t started;
@@ -139,6 +144,7 @@ static void ctrl_finalizer(JSRuntime *rt, JSValue val)
     JS_FreeValueRT(rt, c->stream);
     JS_FreeValueRT(rt, c->pull_fn);
     JS_FreeValueRT(rt, c->cancel_fn);
+    JS_FreeValueRT(rt, c->source);
     JS_FreeValueRT(rt, c->size_fn);
     js_free_rt(rt, c);
 }
@@ -150,6 +156,7 @@ static void ctrl_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func
     JS_MarkValue(rt, c->stream, mark_func);
     JS_MarkValue(rt, c->pull_fn, mark_func);
     JS_MarkValue(rt, c->cancel_fn, mark_func);
+    JS_MarkValue(rt, c->source, mark_func);
     JS_MarkValue(rt, c->size_fn, mark_func);
 }
 
@@ -285,7 +292,7 @@ static JSValue controller_new(JSContext *ctx, JSValueConst stream)
     if (JS_IsException(obj)) return obj;
     c = js_mallocz(ctx, sizeof *c);
     if (!c) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
-    c->pull_fn = c->cancel_fn = c->size_fn = JS_UNDEFINED;
+    c->pull_fn = c->cancel_fn = c->size_fn = c->source = JS_UNDEFINED;
     c->hwm = 1;                                  /* §4.2's default mark for a default-controller stream */
     c->stream = JS_DupValue(ctx, stream);
     JS_SetOpaque(obj, c);
@@ -717,7 +724,7 @@ static int ctrl_pull_run(JSContext *ctx, CtrlWork *w, JSValueConst ctrl_v, JSVal
     if (w->pull == P_CALL) {
         JSValueConst arg = ctrl_v;
         JSValue res;
-        r = step_call_run(ctx, &w->phase, w->cb, c->pull_fn, JS_UNDEFINED, 1, &arg, in, &res,
+        r = step_call_run(ctx, &w->phase, w->cb, c->pull_fn, c->source, 1, &arg, in, &res,
                           out_cb, out_argc);
         if (r > 0) return r;
         JS_FreeValue(ctx, w->value);
@@ -1308,7 +1315,7 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         }
         if (c && !JS_IsUndefined(c->cancel_fn)) {
             arg = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
-            r = step_call_run(ctx, &s->w.phase, s->w.cb, c->cancel_fn, JS_UNDEFINED, 1, &arg, cb_result, &out,
+            r = step_call_run(ctx, &s->w.phase, s->w.cb, c->cancel_fn, c->source, 1, &arg, cb_result, &out,
                               out_cb, out_argc);
             if (r > 0) return r;
             /* §4.9.4 builds the cancel algorithm with PromiseCall too: a throwing `cancel` becomes a REJECTED
@@ -1378,13 +1385,18 @@ enum { CS_START = 0, CS_SIZE, CS_ENQUEUE, CS_SETTLE, CS_SETTLE_ALL, CS_PULL, CS_
 typedef struct {
     JSStepHdr hdr;
     CtrlWork  w;
-    double    size;   /* what the strategy said this chunk weighs, held across its call */
+    double    size;      /* what the strategy said this chunk weighs, held across its call */
+    /* §4.5: a bad chunk size errors the stream AND "returns chunkSize" — the ORIGINAL abrupt, not the stream's
+       stored error. A `size` that errors the controller itself and then throws must re-raise ITS throw while
+       the stream keeps the reason it was errored with; re-raising the stored error conflates the two. */
+    JSValue   rethrow;
 } JSCtrlState;
 
 static void js_ctrl_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSCtrlState *s = st;
     ctrl_work_visit(ctx, &s->w, v);
+    v->val(ctx, &s->rethrow);
 }
 
 static JSValue js_ctrl_fini(JSContext *ctx, void *st, bool take_result)
@@ -1392,6 +1404,8 @@ static JSValue js_ctrl_fini(JSContext *ctx, void *st, bool take_result)
     JSCtrlState *s = st;
     (void)take_result;
     ctrl_work_release(ctx, &s->w);
+    JS_FreeValue(ctx, s->rethrow);
+    s->rethrow = JS_UNDEFINED;
     return JS_UNDEFINED;
 }
 
@@ -1417,6 +1431,7 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
         JSValueConst a0 = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
 
         ctrl_work_start(&s->w);
+        s->rethrow = JS_UNDEFINED;
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         if (op == CTRL_ENQUEUE) {
@@ -1474,6 +1489,7 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
             JS_ThrowRangeError(ctx, "a queuing strategy's size must be a finite, non-negative number");
         size_bad:
             s->w.err = JS_GetException(ctx);
+            s->rethrow = JS_DupValue(ctx, s->w.err);
             s->w.settle = S_ERR_SET;
             s->w.stage = CS_RETHROW;
             s->w.pull = P_IDLE;
@@ -1493,7 +1509,8 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
            re-raise, which is the order §4.5 states and the order a page observes */
         r = stream_settle_run(ctx, &s->w, d, cb_result, out_cb, out_argc);
         if (r > 0) return r;
-        JS_Throw(ctx, JS_DupValue(ctx, d->stored_error));
+        JS_Throw(ctx, s->rethrow);
+        s->rethrow = JS_UNDEFINED;
         return JS_STEP_ABRUPT;
     }
 
@@ -1527,6 +1544,17 @@ static const JSTrampStepDef js_ctrl_defs[3] = {
     CTRL_DEF(CTRL_ENQUEUE), CTRL_DEF(CTRL_CLOSE), CTRL_DEF(CTRL_ERROR),
 };
 #undef CTRL_DEF
+
+/* An interface with NO constructor still has an INTERFACE OBJECT — Web IDL puts one on the global for every
+   [Exposed] interface, and it is where the prototype's `constructor` property comes from. A page reads that
+   property list directly (`Object.getOwnPropertyNames(Object.getPrototypeOf(controller))`), so leaving the
+   object out is not "one global missing", it is a prototype with the wrong shape. Calling it is a TypeError,
+   which is what an interface object with no constructor operation does. */
+static JSValue js_illegal_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValueConst *argv)
+{
+    (void)nt; (void)argc; (void)argv;
+    return JS_ThrowTypeError(ctx, "Illegal constructor");
+}
 
 /* §4.5's `desiredSize`. With the default strategy the high-water mark is 1, so it is 1 minus what is queued —
    a page uses it to decide whether to enqueue more, and answering a constant would make that decision wrong. */
@@ -2796,7 +2824,7 @@ static const IdlStepDecl js_from_call_decl = {
  *
  * A `start` that THROWS propagates out of the constructor, which is why this machine does not declare
  * catches_abrupt: §4.9.4 invokes it directly rather than through PromiseCall, unlike `pull`. */
-enum { RSC_START = 0, RSC_READ, RSC_TYPE, RSC_BUILD, RSC_CALL, RSC_RESOLVE, RSC_THEN };
+enum { RSC_START = 0, RSC_PROTO, RSC_READ, RSC_TYPE, RSC_BUILD, RSC_CALL, RSC_RESOLVE, RSC_THEN };
 /* UnderlyingSource's members, in the order Web IDL reads them. */
 enum { SRC_CHUNKSIZE = 0, SRC_CANCEL, SRC_PULL, SRC_START, SRC_TYPE, SRC_N };
 
@@ -2807,6 +2835,8 @@ typedef struct {
     JSValue  stream;
     JSValue  controller;
     JSValue  start_fn;
+    JSValue  source;      /* the receiver `start` is invoked on */
+    JSValue  proto;       /* new.target's `prototype`, so a SUBCLASS gets its own */
 } JSRsCtorState;
 
 static void js_rs_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -2818,6 +2848,8 @@ static void js_rs_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->stream);
     v->val(ctx, &s->controller);
     v->val(ctx, &s->start_fn);
+    v->val(ctx, &s->source);
+    v->val(ctx, &s->proto);
 }
 
 static void js_rs_ctor_release(JSContext *ctx, void *st)
@@ -2829,7 +2861,9 @@ static void js_rs_ctor_release(JSContext *ctx, void *st)
     JS_FreeValue(ctx, s->stream);
     JS_FreeValue(ctx, s->controller);
     JS_FreeValue(ctx, s->start_fn);
-    s->stream = s->controller = s->start_fn = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->source);
+    JS_FreeValue(ctx, s->proto);
+    s->stream = s->controller = s->start_fn = s->source = s->proto = JS_UNDEFINED;
 }
 
 /* A `T? callback` member of UnderlyingSource: absent, or something the page can call. Anything else is the
@@ -2862,9 +2896,33 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             JS_ThrowTypeError(ctx, "constructor ReadableStream requires 'new'");
             return -1;
         }
+        /* §4.2 step 2 converts it to the UnderlyingSource DICTIONARY, and Web IDL's dictionary conversion
+           refuses anything that is not undefined, null or an Object. `new ReadableStream(5)` is a TypeError. */
+        if (!JS_IsUndefined(source) && !JS_IsObject(source)) {
+            /* `optional object underlyingSource` — Web IDL's `object` type admits neither a primitive nor
+               NULL, and only a MISSING argument is absent. `new ReadableStream(null)` is a TypeError. */
+            JS_ThrowTypeError(ctx, "the underlying source must be an object");
+            return -1;
+        }
         for (k = 0; k < SRC_N; k++) s->src[k] = JS_UNDEFINED;
         s->stream = s->controller = s->start_fn = JS_UNDEFINED;
+        s->source = JS_DupValue(ctx, source);
+        s->proto = JS_UNDEFINED;
         s->member = 0;
+        s->w.stage = RSC_PROTO;
+    }
+
+    if (s->w.stage == RSC_PROTO) {
+        /* Web IDL §3.7.1: the object is created with `? Get(newTarget, "prototype")` when that is an Object,
+           and with the interface prototype object otherwise. That read is what makes `class S extends
+           ReadableStream {}` produce an S — and it is the page's code, because new.target can be any
+           constructor a `Reflect.construct` names. */
+        JSAtom a = JS_NewAtom(ctx, "prototype");
+        r = step_getprop_run(ctx, hdr, hdr->this_val, a, cb_result, &s->proto, out_cb, out_argc);
+        JS_FreeAtom(ctx, a);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        cb_result = JS_UNDEFINED;
         s->w.stage = JS_IsObject(source) ? RSC_READ : RSC_BUILD;
     }
 
@@ -2929,6 +2987,7 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
            record held the page's `size` function, and one page function roots everything it can see. */
         s->stream = readable_stream_empty(ctx);
         if (JS_IsException(s->stream)) return -1;
+        if (JS_IsObject(s->proto) && JS_SetPrototype(ctx, s->stream, s->proto) < 0) return -1;
         d = stream_of(s->stream);
         s->controller = controller_new(ctx, s->stream);
         if (JS_IsException(s->controller)) return -1;
@@ -2939,6 +2998,7 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         s->src[SRC_PULL] = JS_UNDEFINED;
         c->cancel_fn = s->src[SRC_CANCEL];
         s->src[SRC_CANCEL] = JS_UNDEFINED;
+        c->source = JS_DupValue(ctx, source);
         /* §4.2 steps 6 and 7: ExtractSizeAlgorithm, then ExtractHighWaterMark with a default of 1. Both read
            the strategy dictionary the IDL layer has ALREADY converted — which is why a throwing `get size` is
            seen before a throwing `get start`, the ordering §4.2 states and a page pins. */
@@ -2964,7 +3024,7 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     if (s->w.stage == RSC_CALL) {
         JSValue res;
         arg = s->controller;
-        r = step_call_run(ctx, &s->w.phase, s->w.cb, s->start_fn, JS_UNDEFINED, 1, &arg,
+        r = step_call_run(ctx, &s->w.phase, s->w.cb, s->start_fn, s->source, 1, &arg,
                           cb_result, &res, out_cb, out_argc);
         if (r > 0) return r;
         JS_FreeValue(ctx, s->w.value);
@@ -3165,6 +3225,12 @@ void readable_stream_install(JSContext *ctx, JSValueConst global)
     CHECK(!JS_IsException(ctor), "the reader interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, g_reader_proto);
     JS_SetPropertyStr(ctx, (JSValue)global, "ReadableStreamDefaultReader", ctor);
+
+    ctor = JS_NewCFunction2(ctx, js_illegal_ctor, "ReadableStreamDefaultController", 0,
+                            JS_CFUNC_constructor, 0);
+    CHECK(!JS_IsException(ctor), "the controller interface object could not be allocated");
+    JS_SetConstructor(ctx, ctor, g_ctrl_proto);   /* .prototype and .constructor, both directions */
+    JS_SetPropertyStr(ctx, (JSValue)global, "ReadableStreamDefaultController", ctor);
 }
 
 void readable_stream_free(JSContext *ctx)
