@@ -27,6 +27,15 @@
 #include "core/frame/location.h"
 #include "core/url/url.h"
 
+/* HTML's "API base URL", kept because the address is the only thing that answers it and this is where the
+   address arrives. It is the SERIALIZED record rather than the caller's string, so every consumer parses
+   against the same normalized address the principal above was built from. */
+static char *g_api_base_url;
+
+const char *location_api_base_url(void) { return g_api_base_url; }
+
+void location_free(void) { free(g_api_base_url); g_api_base_url = NULL; }
+
 /* Install a member from a malloc'd serialization and take ownership of it — every one of Location's concrete
    members is one of these, so the free belongs here rather than at six call sites. */
 static void loc_put(JSContext *ctx, JSValueConst loc, const char *name, char *owned)
@@ -85,6 +94,9 @@ void location_install(JSContext *ctx, JSValueConst global, const char *url)
     CHECK(url_parse(&rec, url, strlen(url), NULL),
           "the document address is not a URL — the host captured something this engine cannot make a "
           "principal out of");
+
+    free(g_api_base_url);
+    g_api_base_url = url_serialize(&rec, false);
 
     loc = JS_NewObject(ctx);
     CHECK(!JS_IsException(loc), "the Location allocation failed");

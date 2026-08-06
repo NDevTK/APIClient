@@ -1688,6 +1688,7 @@ int main(void) {
     url_free(ctx);
     usp_free(ctx);
     blob_free(ctx);
+    location_free();   /* the API base URL the document's address produced */
     encoding_free(ctx);
     form_data_free(ctx);        /* URLSearchParams.prototype */
     response_free(ctx);

@@ -18,6 +18,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/fetch/fetch.h"
 #include "core/fetch/request.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/body.h"
@@ -276,7 +277,9 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
             if (!in) return -1;
-            ok = url_parse(&rec, in, n, NULL);
+            /* AGAINST THE API BASE URL, through Fetch's one parse. `new Request("/api/users")` is how a
+               bundle names its own endpoints, and with a NULL base every one of them was a TypeError. */
+            ok = fetch_parse_url(&rec, in, n);
             JS_FreeCString(ctx, in);
             if (!ok) {
                 url_record_free(&rec);

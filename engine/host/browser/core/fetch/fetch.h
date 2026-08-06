@@ -2,6 +2,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_FETCH_H
 #define ENGINE_HOST_BROWSER_CORE_FETCH_H
 #include "quickjs.h"
+#include "core/url/url.h"
 
 /* Install `fetch` on `global`. Every request forced execution reaches funnels one endpoint into the @H
    surface; the network itself is the trusted bridge's, never this sandbox's. */
@@ -23,5 +24,12 @@ typedef struct {
     void (*owe)(JSContext *ctx, JSValueConst deliver, JSValueConst value, const char *url);
 } FetchProvider;
 void fetch_set_provider(const FetchProvider *p);
+
+/* PARSE A URL A PAGE WROTE, against HTML's API base URL — the one operation every Fetch entry point performs
+   on a URL string, so `new Request("/api/users")` and `Response.redirect("/there")` resolve the same address by
+   the same rule rather than each reaching for url_parse with whatever base it remembered. Fills `*rec` and
+   returns true; on failure `*rec` is already freed and the caller throws whichever error its spec names — a
+   TypeError for both of today's two, but the spec says so at each site rather than here. */
+bool fetch_parse_url(UrlRecord *rec, const char *url, size_t len);
 
 #endif

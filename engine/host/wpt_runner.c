@@ -33,6 +33,7 @@
 #include "core/url/url_search_params.h"
 #include "core/html/form_data.h"
 #include "core/file/blob.h"
+#include "core/frame/location.h"
 #include "core/encoding/encoding.h"
 #include "core/idl_args.h"
 
@@ -355,6 +356,7 @@ int main(int argc, char **argv)
     usp_free(ctx);
     form_data_free(ctx);
     blob_free(ctx);
+    location_free();   /* the API base URL the document's address produced */
     encoding_free(ctx);
     idl_args_free(ctx);
     JS_FreeContext(ctx);

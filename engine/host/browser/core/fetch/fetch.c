@@ -25,6 +25,7 @@
 #include "quickjs-step.h"
 #include "solver/endpoint.h"
 #include "core/fetch/fetch.h"
+#include "core/frame/location.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/response.h"
 #include "core/fetch/request.h"
@@ -33,6 +34,24 @@
    belong to a runtime, and SECURITY.md gives this build one WASM instance per DOCUMENT — one runtime — so these
    are that runtime's. The DCHECK at install is what makes a second one impossible rather than merely unlikely. */
 static const FetchProvider *g_provider;
+
+/* §4.4's URL parse, against HTML's API base URL. Both of Fetch's entry points that take a URL STRING come
+   here, so a relative endpoint — which is how a bundle names its own API — resolves the same way from both.
+   A document with no address has no base, and the parse is then absolute-only: that is the honest answer for a
+   platform-less build rather than a base this component invented. */
+bool fetch_parse_url(UrlRecord *rec, const char *url, size_t len)
+{
+    const char *base_str = location_api_base_url();
+    UrlRecord base;
+    bool ok;
+
+    if (!base_str)
+        return url_parse(rec, url, len, NULL);
+    url_record_init(&base);
+    ok = url_parse(&base, base_str, strlen(base_str), NULL) && url_parse(rec, url, len, &base);
+    url_record_free(&base);
+    return ok;
+}
 
 void fetch_set_provider(const FetchProvider *p) { g_provider = p; }
 

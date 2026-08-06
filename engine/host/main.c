@@ -225,6 +225,7 @@ QJS_EXPORT void qjs_teardown(void)
     url_free(g_ctx);
     usp_free(g_ctx);
     blob_free(g_ctx);
+    location_free();   /* the API base URL the document's address produced */
     encoding_free(g_ctx);
     form_data_free(g_ctx);        /* URLSearchParams.prototype */
     idl_args_free(g_ctx);   /* the dictionary member atoms the declaration pool interned */
