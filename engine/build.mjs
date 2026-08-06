@@ -187,7 +187,9 @@ const args = [
   "-I", QJS,
   "-I", HOST, "-I", join(HOST, "browser"),   // include by FULL path from the host root: a browser component is "core/dom/dom_element.h", a solver component "solver/concolic.h" — the layer is always explicit (no bare-name -I solver shortcut, so a cross-layer include names its layer)
   "-I", LEXBOR_INC,           // <lexbor/html/html.h> etc for main.c's DOM host-edges
-  "-O1", "-w",
+  /* -Werror on implicit declarations: -w would otherwise let a missing #include truncate a returned
+     pointer to 32 bits, which is a segfault with no diagnostic. See the same note in test262.mjs. */
+  "-O1", "-w", "-Werror=implicit-function-declaration",
   "-D_GNU_SOURCE", "-DENABLE_DUMPS",
   // Offensive-programming build mode (check.h): DEV (default) keeps every DCHECK live so a should-never-happen
   // aborts LOUD at its origin; a `release` arg compiles them out (the release exemption — the user is not

@@ -16,8 +16,8 @@
  * Usage:  node engine/wpt.mjs [subdir-or-file]
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, mkdtempSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, readdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { tmpdir } from "node:os";
 
 const ENGINE = import.meta.dirname;
@@ -51,7 +51,12 @@ const SRCS = [
 
 console.log("[wpt] building the native runner…");
 const bin = join(mkdtempSync(join(tmpdir(), "wpt-")), "wpt.exe");
-const cc = spawnSync("gcc", ["-O1", "-w", "-DNDEBUG", "-D_GNU_SOURCE", '-DCONFIG_VERSION="wpt"',
+/* `-w` SILENCES STYLE, NEVER A MISSING PROTOTYPE. C89's implicit-declaration rule assumes `int (...)`, so a
+   function whose header was not included returns a 32-bit value — and a 64-bit POINTER comes back TRUNCATED.
+   That is not a warning-shaped problem: it segfaulted the whole corpus with no output, and it read as a crash
+   in the engine rather than as a missing #include, which is the most expensive shape a diagnostic can take.
+   -Werror on that one diagnostic makes it a build failure naming the function. */
+const cc = spawnSync("gcc", ["-O1", "-w", "-Werror=implicit-function-declaration", "-DNDEBUG", "-D_GNU_SOURCE", '-DCONFIG_VERSION="wpt"',
   "-DAPICLIENT_DEV=1", "-DENABLE_DUMPS",
   "-I" + join(ENGINE, "qjs"), "-I" + join(ENGINE, "host"), "-I" + join(ENGINE, "host", "browser"),
   ...SRCS, "-o", bin, "-lm", "-lpthread"], { encoding: "utf8" });
@@ -73,12 +78,51 @@ const files = arg.endsWith(".js") ? [root] : collect(root, []).sort();
 if (!files.length) { console.error(`[wpt] no .any.js under ${root}`); process.exit(1); }
 
 const HARNESS = join(WPT, "resources", "testharness.js");
+
+/* WPT's server does not serve every path from a file of that name. This is its rewrite table (tools/serve's
+   `rewrites`), reproduced for the entries the corpus actually asks for: /resources/WebIDLParser.js is the
+   webidl2 library under its historical name. A driver that skipped this would report the file as missing —
+   which is what it did — rather than as served from somewhere else. */
+const SERVER_REWRITES = {
+  "/resources/WebIDLParser.js": "/resources/webidl2/lib/webidl2.js",
+};
+
+/* `// META: script=` IS PART OF THE FILE. WPT's server reads those lines and emits a wrapper that loads each
+   named script before the test — a file whose META names idlharness.js is not a file that happens to want it,
+   it is a file that does not run without it. Reading them here is what makes the corpus run AS WRITTEN; the
+   runner keeps its one job of executing a list of programs in order.
+   A `/`-rooted path is WPT-root-relative and anything else is relative to the test's own directory, which is
+   the server's own resolution rule. */
+function metaScripts(file) {
+  const src = readFileSync(file, "utf8");
+  const out = [];
+  for (const line of src.split("\n")) {
+    if (!line.startsWith("// META:")) {
+      if (line.startsWith("//") || line.trim() === "") continue;
+      break;   /* the META block is a prefix; past it the file is code */
+    }
+    const m = line.match(/^\/\/ META:\s*script=(.*)$/);
+    if (!m) continue;
+    const ref = SERVER_REWRITES[m[1].trim()] || m[1].trim();
+    out.push(ref.startsWith("/") ? join(WPT, ref.slice(1)) : join(dirname(file), ref));
+  }
+  return out;
+}
 let pass = 0, fail = 0, aborted = 0;
 const failures = [];
 
 for (const f of files) {
   const rel = relative(WPT, f);
-  const r = spawnSync(bin, [HARNESS, f], { encoding: "utf8", maxBuffer: 1 << 28, timeout: 60_000 });
+  const deps = metaScripts(f);
+  const missing = deps.filter((d) => !existsSync(d));
+  if (missing.length) {
+    /* A META script the sparse checkout does not have is a GATE defect, not a test result: the file would run
+       against a corpus it was not written for. Name the paths so WPT_PATHS can be widened. */
+    aborted++;
+    failures.push(`  ABORT  ${rel}\n         META script not checked out: ${missing.map((d) => relative(WPT, d)).join(", ")}`);
+    continue;
+  }
+  const r = spawnSync(bin, [HARNESS, ...deps, f], { encoding: "utf8", maxBuffer: 1 << 28, timeout: 60_000 });
   const out = (r.stdout || "") + (r.stderr || "");
   /* An ABORT is a result about this file, not an accident: it is a DCHECK naming a capability the browser half
      does not have, which is exactly what this gate is for. It is counted apart from a FAIL because the two ask

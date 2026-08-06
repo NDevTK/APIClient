@@ -57,7 +57,12 @@ const bin = join(mkdtempSync(join(tmpdir(), "t262-")), "run262.exe");
    a DIFFERENT interpreter: a dangling-if in the per-opcode dump made every `if (cond) BREAK;` dispatch
    unconditionally, so `typeof x === "function"` answered with its operand, and 43239 passing tests said nothing
    about it because not one of them ran the code that shipped. A flag that changes the engine belongs here. */
-const cc = spawnSync("gcc", ["-O1", "-w", "-DNDEBUG", "-D_GNU_SOURCE", "-DCONFIG_VERSION=\"t262\"",
+/* `-w` SILENCES STYLE, NEVER A MISSING PROTOTYPE. C89's implicit-declaration rule assumes `int (...)`, so a
+   function whose header was not included returns a 32-bit value — and a 64-bit POINTER comes back TRUNCATED.
+   That is not a warning-shaped problem: it segfaulted the whole corpus with no output, and it read as a crash
+   in the engine rather than as a missing #include, which is the most expensive shape a diagnostic can take.
+   -Werror on that one diagnostic makes it a build failure naming the function. */
+const cc = spawnSync("gcc", ["-O1", "-w", "-Werror=implicit-function-declaration", "-DNDEBUG", "-D_GNU_SOURCE", "-DCONFIG_VERSION=\"t262\"",
   "-DAPICLIENT_DEV=1", "-DENABLE_DUMPS", "-I.", ...SRCS, "-o", bin, "-lm", "-lpthread"], { cwd: QJS, encoding: "utf8" });
 if (cc.status !== 0) { console.error("[test262] build FAILED\n" + (cc.stderr || "")); process.exit(1); }
 

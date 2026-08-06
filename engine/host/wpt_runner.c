@@ -24,6 +24,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/fetch/headers.h"
 #include "core/idl_args.h"
 
@@ -74,6 +75,22 @@ static char *read_file(const char *path, size_t *plen)
     return buf;
 }
 
+/* THE PROLOGUE — the `.any.js` wrapper WPT's server generates around every such file, and which a runner that
+   loads the file directly has to supply itself. `self` IS the global (the one spelling a window and a worker
+   share) and `GLOBAL` names WHICH global scope this is; a file's `// META: global=` line lists the variants it
+   is written for, and each variant runs with GLOBAL answering for itself.
+   This runner declares the WORKER variant, because that is what it accurately IS: a global carrying fetch and
+   Headers with no document under it. Claiming `window` would make files run their document-dependent arms
+   against a runner that has no document — a wrong answer dressed as coverage — and the choice is not a way to
+   skip work, since every variant runs the whole file minus the arms upstream itself marks window-only. When
+   this runner grows a document, the variant becomes `window` and those arms start running. */
+static const char WPT_PROLOGUE[] =
+    "self.GLOBAL = {\n"
+    "  isWindow: function () { return false; },\n"
+    "  isWorker: function () { return true; },\n"
+    "  isShadowRealm: function () { return false; },\n"
+    "};\n";
+
 /* THE EPILOGUE. testharness.js hands its results to a completion callback and, outside a browser, needs to be
    TOLD the page is done — there is no load event here. Both are three lines of the harness's own public API
    rather than anything reimplemented. */
@@ -88,6 +105,19 @@ static const char WPT_EPILOGUE[] =
     "});\n"
     "done();\n";
 
+/* Report the pending exception. JS_ToCString would run the thrown object's own `toString` from C — which is
+   the drive-to-completion the engine aborts on, and did abort on here, so the report of a failure became a
+   crash that hid it. JS_DiagCString is the engine's answer for a host with no flow to run page code on. */
+static void wpt_report_exception(JSContext *ctx, const char *name, const char *what)
+{
+    JSValue e = JS_GetException(ctx);
+    char *owned = NULL;
+    const char *msg = JS_DiagCString(ctx, e, &owned);
+    printf("@WPTERR %s: %s%s\n", name, what, msg ? msg : "?");
+    JS_DiagFreeCString(ctx, msg, owned);
+    JS_FreeValue(ctx, e);
+}
+
 /* Run one program as a FLOW, exactly as the test262 harness does: park and rebuild the whole frame chain at
    every back-edge. A throw is reported and ends the file — a test file that cannot run is a failure, never a
    skip. */
@@ -98,20 +128,12 @@ static int run_program(JSContext *ctx, const char *src, size_t len, const char *
     int failed = 0;
 
     if (!flow) {
-        JSValue e = JS_GetException(ctx);
-        const char *msg = JS_ToCString(ctx, e);
-        printf("@WPTERR %s: compile: %s\n", name, msg ? msg : "?");
-        if (msg) JS_FreeCString(ctx, msg);
-        JS_FreeValue(ctx, e);
+        wpt_report_exception(ctx, name, "compile: ");
         return 1;
     }
     while (JS_FlowResume(ctx, flow, &res)) { }
     if (JS_IsException(res)) {
-        JSValue e = JS_GetException(ctx);
-        const char *msg = JS_ToCString(ctx, e);
-        printf("@WPTERR %s: %s\n", name, msg ? msg : "?");
-        if (msg) JS_FreeCString(ctx, msg);
-        JS_FreeValue(ctx, e);
+        wpt_report_exception(ctx, name, "");
         failed = 1;
     }
     JS_FreeValue(ctx, res);
@@ -135,8 +157,8 @@ int main(int argc, char **argv)
     ctx = JS_NewContext(rt);
 
     global = JS_GetGlobalObject(ctx);
-    /* `self` IS the global — testharness.js and every .any.js test reach the global through it, because that is
-       the one spelling shared by a window and a worker. */
+    /* `self` IS the global — testharness.js and every .any.js test reach the global through it. It is set from
+       C rather than in WPT_PROLOGUE because the prologue itself is written against `self`. */
     JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
     JS_SetPropertyStr(ctx, global, "print", JS_NewCFunction(ctx, js_wpt_print, "print", 1));
 
@@ -149,6 +171,7 @@ int main(int argc, char **argv)
     JS_FreeValue(ctx, global);
 
     JS_SetFlowControlHooks(&WPT_HOOKS_ON);
+    failed = run_program(ctx, WPT_PROLOGUE, strlen(WPT_PROLOGUE), "<wpt-prologue>");
     for (i = 1; i < argc && !failed; i++) {
         size_t len = 0;
         char *src = read_file(argv[i], &len);

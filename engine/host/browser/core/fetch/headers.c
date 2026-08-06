@@ -156,12 +156,114 @@ JSValue headers_new(JSContext *ctx, const HeaderList *src)
 /* §5.2's members. Every argument is a ByteString, which the IDL machine has already made a real string by the
    time a body runs — so what is left here is the BYTE range, which ToString does not enforce and which is the
    whole of what makes a ByteString different from a DOMString. */
-static int header_is_bytestring(const char *s)
+/* EVERY CHECK HERE IS LENGTH-DELIMITED, because U+0000 IS A ByteString CHARACTER. These read a C string and
+   stopped at the first NUL, so `new Headers({"set-cookie": "\0"})` presented an EMPTY value, normalized to
+   empty, validated clean, and was stored — where the spec forbids 0x00 in a header value and wpt asserts the
+   TypeError. A NUL cannot be excluded by the shape of the buffer; it has to be looked for.
+   What survives validation is provably NUL-free (a name is a token, a value forbids 0x00), which is why the
+   LIST may still hold plain C strings — and header_check DCHECKs exactly that before handing one over. */
+
+/* IT IS A RANGE OVER CODE UNITS, NOT OVER BYTES. This rejected every byte above 0x7f, which is not the rule — a
+   ByteString is 0x00..0xFF — so `new Headers({x: "newLine\xa0"})` was refused for a character the spec keeps.
+   The string arrives UTF-8-encoded, so the check DECODES it: one code point per character, each of which must
+   fit in a byte. Storing the UTF-8 stays right, because JS_NewString decodes it again on the way out. */
+static int header_is_bytestring(const char *s, size_t len)
 {
-    for (; *s; s++)
-        if ((unsigned char)*s > 0x7f)   /* a UTF-8 lead byte: the code unit was > 255, or is not one byte */
-            return 0;
+    const unsigned char *p = (const unsigned char *)s, *end = p + len;
+    while (p < end) {
+        unsigned c = *p++;
+        if (c < 0x80) continue;                       /* 0x00..0x7f: one byte, in range */
+        if ((c & 0xe0) == 0xc0) {                     /* two bytes: U+0080..U+07FF */
+            unsigned cp;
+            if (p >= end) return 0;
+            cp = ((c & 0x1f) << 6) | (*p & 0x3f);
+            p++;
+            if (cp > 0xff) return 0;                  /* U+0100 and up is not a byte */
+            continue;
+        }
+        return 0;                                     /* three or more bytes: far past 0xff */
+    }
     return 1;
+}
+
+/* §5.1 "HTTP whitespace" — these FOUR and not isspace()'s set. \f is not one of them, which is what makes
+   wpt's "\t\f\tnewLine\n" normalize to "\f\tnewLine" rather than to "newLine". */
+static int header_is_ws(unsigned char c) { return c == 0x09 || c == 0x0a || c == 0x0d || c == 0x20; }
+
+/* §5.1 "normalize a header value": strip LEADING and TRAILING HTTP whitespace, never inner. Caller frees.
+   `*pn` is the normalized LENGTH, which is not strlen(out) when the value carries an embedded NUL — the case
+   the validation below exists to reject. */
+static char *header_normalize_value(const char *v, size_t len, size_t *pn)
+{
+    const char *b = v, *e = v + len;
+    char *out;
+    size_t n;
+    while (b < e && header_is_ws((unsigned char)*b)) b++;
+    while (e > b && header_is_ws((unsigned char)e[-1])) e--;
+    n = (size_t)(e - b);
+    out = malloc(n + 1);
+    CHECK(out, "headers: OOM normalizing a header value");
+    memcpy(out, b, n);
+    out[n] = 0;
+    *pn = n;
+    return out;
+}
+
+/* §5.1 "a header name is a NAME": an RFC 7230 token — one or more tchar and nothing else. `{}` reaches this as
+   "[object Object]", and the space and brackets are what make it a TypeError rather than a header. */
+static int header_name_is_valid(const char *s, size_t len)
+{
+    const unsigned char *p = (const unsigned char *)s, *end = p + len;
+    if (len == 0) return 0;
+    for (; p < end; p++) {
+        unsigned char c = *p;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) continue;
+        if (c && strchr("!#$%&'*+-.^_`|~", (char)c)) continue;   /* c == 0 is not a tchar */
+        return 0;
+    }
+    return 1;
+}
+
+/* §5.1 "a header value is a VALUE": no NUL, CR or LF anywhere. The leading/trailing whitespace the definition
+   also forbids is what normalization has already removed. */
+static int header_value_is_valid(const char *s, size_t len)
+{
+    size_t i;
+    for (i = 0; i < len; i++)
+        if (s[i] == 0x00 || s[i] == 0x0a || s[i] == 0x0d) return 0;
+    return 1;
+}
+
+/* §5.1's guard as ONE operation, because every entry point performs the same one: normalize the value, then
+   reject a bad name or a bad value with a TypeError. `*pnorm` is the normalized value (caller frees), left NULL
+   for the name-only members. 0 on success, -1 with a TypeError live. */
+static int header_check(JSContext *ctx, const char *name, size_t name_len,
+                       const char *value, size_t value_len, char **pnorm)
+{
+    char *norm;
+    size_t norm_len;
+    if (pnorm) *pnorm = NULL;
+    if (!header_is_bytestring(name, name_len) || (value && !header_is_bytestring(value, value_len))) {
+        JS_ThrowTypeError(ctx, "a header name or value is not a ByteString");
+        return -1;
+    }
+    if (!header_name_is_valid(name, name_len)) {
+        JS_ThrowTypeError(ctx, "invalid header name");
+        return -1;
+    }
+    DCHECK(strlen(name) == name_len, "a header name passed validation while carrying an embedded NUL");
+    if (!value) return 0;
+    norm = header_normalize_value(value, value_len, &norm_len);
+    if (!header_value_is_valid(norm, norm_len)) {
+        free(norm);
+        JS_ThrowTypeError(ctx, "invalid header value");
+        return -1;
+    }
+    /* THE LIST MAY HOLD A C STRING because of this: a value that got here has no 0x00 in it, so nothing is
+       lost by dropping the length. The assert is what keeps that true if the rule above ever changes. */
+    DCHECK(strlen(norm) == norm_len, "a header value passed validation while carrying an embedded NUL");
+    *pnorm = norm;
+    return 0;
 }
 
 enum { HDR_APPEND = 0, HDR_SET, HDR_DELETE, HDR_GET, HDR_HAS, HDR_GETSETCOOKIE };
@@ -170,6 +272,8 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
 {
     HeaderList *l = headers_of(ctx, this_val);
     const char *name = NULL, *value = NULL;
+    size_t name_len = 0, value_len = 0;
+    char *norm = NULL;
     JSValue r = JS_UNDEFINED;
 
     if (!l)
@@ -187,20 +291,23 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
         return arr;
     }
     DCHECK(argc >= 1, "a Headers member was declared with fewer arguments than its IDL lists");
-    name = JS_ToCString(ctx, argv[0]);
+    name = JS_ToCStringLen(ctx, &name_len, argv[0]);
     if (!name) return JS_EXCEPTION;
     if (magic == HDR_APPEND || magic == HDR_SET) {
-        value = JS_ToCString(ctx, argv[1]);
+        value = JS_ToCStringLen(ctx, &value_len, argv[1]);
         if (!value) { JS_FreeCString(ctx, name); return JS_EXCEPTION; }
     }
-    if (!header_is_bytestring(name) || (value && !header_is_bytestring(value))) {
+    /* §5.1's guard, on EVERY member and not just the two that write. `headers.get({})` reads a name of
+       "[object Object]", which is not a token, and the spec makes that a TypeError rather than a miss — wpt
+       asserts it by name for get, has, delete and set alike. */
+    if (header_check(ctx, name, name_len, value, value_len, value ? &norm : NULL) < 0) {
         JS_FreeCString(ctx, name);
         if (value) JS_FreeCString(ctx, value);
-        return JS_ThrowTypeError(ctx, "a header name or value is not a ByteString");
+        return JS_EXCEPTION;
     }
     switch (magic) {
-    case HDR_APPEND: header_list_append(l, name, value); break;
-    case HDR_SET:    header_list_set(l, name, value); break;
+    case HDR_APPEND: header_list_append(l, name, norm); break;
+    case HDR_SET:    header_list_set(l, name, norm); break;
     case HDR_DELETE: header_list_delete(l, name); break;
     case HDR_HAS: {
         char *v = header_list_get(l, name);
@@ -218,6 +325,7 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
     }
     JS_FreeCString(ctx, name);
     if (value) JS_FreeCString(ctx, value);
+    free(norm);
     return r;
 }
 
@@ -334,12 +442,6 @@ static JSValue js_headers_iter_next(JSContext *ctx, JSValueConst this_val, int a
     return res;
 }
 
-static JSValue js_headers_iter_self(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    (void)ctx; (void)argc; (void)argv;
-    return JS_DupValue(ctx, this_val);
-}
-
 static JSValue js_headers_iter_make(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                     int magic)
 {
@@ -438,7 +540,7 @@ static int g_foreach_stepid = -1;
 /* ---- the fill (HeadersInit -> a header list) ------------------------------------------------------------ */
 
 enum { FILL_START = 0, FILL_ITER_ASKED, FILL_SEQ_PAIR, FILL_SEQ_ITEM,
-       FILL_KEYS_ASKED, FILL_VALUE_ASKED, FILL_NAME_STR, FILL_VALUE_STR };
+       FILL_KEYS_ASKED, FILL_DESC_ASKED, FILL_VALUE_ASKED, FILL_NAME_STR, FILL_VALUE_STR };
 
 /* ---- the iterable cursor ---------------------------------------------------------------------------------- */
 
@@ -584,7 +686,6 @@ void headers_fill_release(JSContext *ctx, HeadersFill *f)
 int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst init, HeaderList *out,
                      JSValue in, JSValue **out_cb, int *out_argc)
 {
-    const HeaderList *src;
     int r;
 
     if (f->phase == FILL_START) {
@@ -598,17 +699,12 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
             JS_ThrowTypeError(ctx, "a Headers init is not an object");
             return -1;
         }
-        /* A Headers ALREADY: §5.1 fill copies its list. Web IDL would reach the same pairs by ITERATING it —
-           Headers declares `iterable<ByteString, ByteString>` — so this is the same answer by a shorter route,
-           and it is the route that works today because that iterator is one of the members still to build. */
-        src = headers_list_of(init);
-        if (src) {
-            int i;
-            JS_FreeValue(ctx, in);
-            for (i = 0; i < src->n; i++)
-                header_list_append(out, src->e[i].name, src->e[i].value);
-            return 0;
-        }
+        /* THERE IS NO "IT IS ALREADY A HEADERS" CASE. A shortcut copying the list stood here while the iterator
+           was unbuilt, and it was WRONG in two ways the spec is explicit about: `new Headers(h)` resolves the
+           `HeadersInit` union like any other object, so it takes the SEQUENCE arm through h's own @@iterator —
+           which the page may have replaced (wpt installs a generator and expects its pairs, not h's list), and
+           which COMBINES duplicate names the way iteration does. The route it dodged now exists, so it is gone
+           rather than kept as the fast path for the common shape. */
         JS_FreeValue(ctx, in);   /* nothing here asked for it; the arm below starts its own request */
         in = JS_UNDEFINED;
         f->phase = FILL_ITER_ASKED;
@@ -673,22 +769,22 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
             return -1;
         }
         {
-            const char *kn = JS_ToCString(ctx, f->item[0]);
-            const char *kv = JS_ToCString(ctx, f->item[1]);
+            size_t kn_len = 0, kv_len = 0;
+            const char *kn = JS_ToCStringLen(ctx, &kn_len, f->item[0]);
+            const char *kv = JS_ToCStringLen(ctx, &kv_len, f->item[1]);
+            char *norm = NULL;
             int bad;
             if (!kn || !kv) {
                 if (kn) JS_FreeCString(ctx, kn);
                 if (kv) JS_FreeCString(ctx, kv);
                 return -1;
             }
-            bad = !header_is_bytestring(kn) || !header_is_bytestring(kv);
-            if (!bad) header_list_append(out, kn, kv);
+            bad = header_check(ctx, kn, kn_len, kv, kv_len, &norm) < 0;
+            if (!bad) header_list_append(out, kn, norm);
+            free(norm);
             JS_FreeCString(ctx, kn);
             JS_FreeCString(ctx, kv);
-            if (bad) {
-                JS_ThrowTypeError(ctx, "a header name or value is not a ByteString");
-                return -1;
-            }
+            if (bad) return -1;   /* §5.1's guard already threw */
         }
         f->phase = FILL_SEQ_PAIR;
     }
@@ -715,17 +811,64 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
     for (;;) {
         JSValue key;
         const char *kname, *kval;
+        size_t kname_len = 0, kval_len = 0;
 
         if (f->phase == FILL_NAME_STR) {
             if (f->i >= f->n) { JS_FreeValue(ctx, in); return 0; }
             key = JS_GetPropertyUint32(ctx, f->keys, (uint32_t)f->i);
             if (JS_IsException(key)) { JS_FreeValue(ctx, in); return -1; }
-            /* A SYMBOL key is not a record key: Web IDL's record<> conversion takes the string ones. */
-            if (!JS_IsString(key)) { JS_FreeValue(ctx, key); f->i++; continue; }
             JS_FreeValue(ctx, f->name);
             f->name = key;
-            f->phase = FILL_VALUE_ASKED;
+            f->phase = FILL_DESC_ASKED;
             in = JS_UNDEFINED;
+        }
+        /* §es-to-record step 5.1: the key's DESCRIPTOR, for EVERY key including symbols — on a Proxy that is the
+           page's getOwnPropertyDescriptor trap, so it is a request. Skipping it did not merely lose the trap: a
+           non-enumerable own property was silently included, and wpt pins the operation SEQUENCE, so the omission
+           showed up as every ordering test counting one call short. */
+        if (f->phase == FILL_DESC_ASKED) {
+            JSValue desc;
+            JSAtom a = JS_ValueToAtom(ctx, f->name);
+            int keep;
+            if (a == JS_ATOM_NULL) { JS_FreeValue(ctx, in); return -1; }
+            r = step_getownprop_run(ctx, h, init, a, in, &desc, out_cb, out_argc);
+            JS_FreeAtom(ctx, a);
+            if (r > 0) return r;
+            if (r < 0) return -1;
+            in = JS_UNDEFINED;
+            /* step 5.2: present AND enumerable, or the key is not part of the record. The descriptor is the
+               engine's own object, so reading it reaches nothing of the page's. */
+            keep = JS_IsObject(desc);
+            if (keep) {
+                JSValue en = JS_GetPropertyStr(ctx, desc, "enumerable");
+                keep = JS_ToBool(ctx, en);
+                JS_FreeValue(ctx, en);
+            }
+            JS_FreeValue(ctx, desc);
+            if (!keep) { f->i++; f->phase = FILL_NAME_STR; continue; }
+            /* step 5.2's `typedKey = key converted to K`, and K is ByteString. A SYMBOL cannot be one, so an
+               ENUMERABLE symbol key is a TypeError — skipping it was the older, wrong answer. */
+            if (JS_IsSymbol(f->name)) {
+                JS_ThrowTypeError(ctx, "a Symbol is not a valid header name");
+                return -1;
+            }
+            /* AND IT HAPPENS BEFORE THE VALUE IS READ. The conversion is step 5.2's first act, so a key that
+               cannot be a ByteString throws with the value's [[Get]] never issued — wpt counts the operations
+               and a record of {a:"b", "\uFFFF":"d"} must produce five, not six. Converting after the Get would
+               reach the same TypeError by a route the page can observe as one trap too many. */
+            {
+                size_t kn_len = 0;
+                const char *kn = JS_ToCStringLen(ctx, &kn_len, f->name);
+                int ok;
+                if (!kn) return -1;
+                ok = header_is_bytestring(kn, kn_len);
+                JS_FreeCString(ctx, kn);
+                if (!ok) {
+                    JS_ThrowTypeError(ctx, "a header name is not a ByteString");
+                    return -1;
+                }
+            }
+            f->phase = FILL_VALUE_ASKED;
         }
         if (f->phase == FILL_VALUE_ASKED) {
             JSAtom a = JS_ValueToAtom(ctx, f->name);
@@ -762,19 +905,22 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
             JS_FreeValue(ctx, f->value);
             f->value = s;
         }
-        kname = JS_ToCString(ctx, f->name);
-        kval = JS_ToCString(ctx, f->value);
+        kname = JS_ToCStringLen(ctx, &kname_len, f->name);
+        kval = JS_ToCStringLen(ctx, &kval_len, f->value);
         if (!kname || !kval) {
             if (kname) JS_FreeCString(ctx, kname);
             if (kval) JS_FreeCString(ctx, kval);
             return -1;
         }
-        if (!header_is_bytestring(kname) || !header_is_bytestring(kval)) {
-            JS_FreeCString(ctx, kname); JS_FreeCString(ctx, kval);
-            JS_ThrowTypeError(ctx, "a header name or value is not a ByteString");
-            return -1;
+        {
+            char *knorm = NULL;
+            if (header_check(ctx, kname, kname_len, kval, kval_len, &knorm) < 0) {
+                JS_FreeCString(ctx, kname); JS_FreeCString(ctx, kval);
+                return -1;   /* §5.1's guard already threw */
+            }
+            header_list_append(out, kname, knorm);
+            free(knorm);
         }
-        header_list_append(out, kname, kval);
         JS_FreeCString(ctx, kname);
         JS_FreeCString(ctx, kval);
         f->i++;
@@ -867,19 +1013,25 @@ void headers_init(JSContext *ctx)
        code, so they are ordinary members; forEach CALLS the page and is a machine. */
     {
         JSClassDef idef = { "Headers Iterator", .finalizer = headers_iter_finalizer };
-        static const JSCFunctionListEntry iter_proto[] = {
-            JS_CFUNC_DEF("next", 0, js_headers_iter_next),
-        };
         JS_NewClassID(rt, &g_iter_class);
         JS_NewClass(rt, g_iter_class, &idef);
-        g_iter_proto = JS_NewObject(ctx);
+        /* §3.7.10: the ITERATOR PROTOTYPE OBJECT inherits from %IteratorPrototype%. That is not decoration —
+           it is where `@@iterator` returning `this` comes from (so `for (const e of h.entries())` works), and
+           where the ES2025 iterator helpers come from. A component-owned @@iterator returning `this` used to
+           stand here; it was one member of an inherited surface, re-declared, and is deleted. */
+        JSValue iter_intrinsic = JS_GetIteratorPrototype(ctx);
+        g_iter_proto = JS_NewObjectProto(ctx, iter_intrinsic);
+        JS_FreeValue(ctx, iter_intrinsic);
         CHECK(!JS_IsException(g_iter_proto), "the Headers iterator prototype could not be allocated");
-        JS_SetPropertyFunctionList(ctx, g_iter_proto, iter_proto,
-                                   (int)(sizeof(iter_proto) / sizeof(iter_proto[0])));
-        /* §3.7.10: an iterator object IS iterable, returning itself — which is what lets `for (const e of
-           h.entries())` work as well as `for (const e of h)`. */
-        JS_SetProperty(ctx, g_iter_proto, JS_DupAtom(ctx, JS_WellKnownSymbolAtom(JS_WKS_ITERATOR)),
-                       JS_NewCFunction(ctx, js_headers_iter_self, "[Symbol.iterator]", 0));
+        /* §3.7.10 gives the iterator prototype object's `next` all three attributes — ENUMERABLE included,
+           unlike an interface prototype's members. JS_SetPropertyFunctionList would install the
+           interface-member shape (writable+configurable), so the triple is spelled out. */
+        JS_DefinePropertyValueStr(ctx, g_iter_proto, "next",
+                                  JS_NewCFunction(ctx, js_headers_iter_next, "next", 0),
+                                  JS_PROP_WRITABLE | JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE);
+        /* §3.7.10's @@toStringTag: the interface identifier followed by " Iterator", configurable only. */
+        JS_DefinePropertyValue(ctx, g_iter_proto, JS_DupAtom(ctx, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG)),
+                               JS_NewString(ctx, "Headers Iterator"), JS_PROP_CONFIGURABLE);
     }
     {
         static const IdlArgType NONE[1] = { IDL_ANY };
