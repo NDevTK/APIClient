@@ -57,7 +57,10 @@ const INTERFACES = {
   Navigator:            "core/frame/navigator.c",
   History:              "core/frame/history.c",
   Screen:               "core/frame/screen.c",
-  URLSearchParams:      "platform/urlobj.c",
+  URL:                  "core/url/url.c",
+  /* URLSearchParams has no component yet; the row names where it will live so the audit reports its whole
+     member list as absent rather than saying nothing about it — which is what a missing row does. */
+  URLSearchParams:      "core/url/url_search_params.c",
   CSSStyleDeclaration:  "core/css/css_style_declaration.c",
   /* The TREE. These were absent from the audit entirely — the interfaces a page touches most had no gap report
      at all, which is the audit lying by omission rather than by direction. They are auditable now because their

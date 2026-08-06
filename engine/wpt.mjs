@@ -28,7 +28,7 @@ const WPT = join(WORK, "wpt");
 const WPT_REV = "bf4714d";
 /* WHAT IS CHECKED OUT. A sparse list rather than the whole 1 GB tree, and it grows as areas are covered — an
    area absent here is honestly untested, which is a different statement from "passes". */
-const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetch/api/resources"];
+const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetch/api/resources", "url", "common"];
 
 if (!existsSync(join(WPT, "resources", "testharness.js"))) {
   console.error("[wpt] corpus missing — provision it with:\n" +
@@ -51,6 +51,7 @@ const SRCS = [
   "host/browser/core/idl_args.c",
   "host/browser/core/fetch/headers.c",
   "host/browser/core/fetch/response.c",
+  "host/browser/core/url/url.c",
   "host/wpt_runner.c",
 ].map((f) => join(ENGINE, f));
 
@@ -78,8 +79,15 @@ function collect(dir, out) {
   return out;
 }
 const arg = process.argv[2] || "";
-const root = arg ? join(WPT, arg) : join(WPT, "fetch");
-const files = arg.endsWith(".js") ? [root] : collect(root, []).sort();
+/* A NO-ARGUMENT RUN IS EVERY PATH THAT IS CHECKED OUT, not one hard-coded directory. It said "fetch", so
+   widening WPT_PATHS to `url` checked the corpus out and then never ran it — the gate reported the same number
+   as before and looked like the new component had changed nothing. The default is derived from WPT_PATHS for
+   the same reason the META scripts are read from the file: the two must not be able to disagree. */
+const root = arg ? join(WPT, arg) : WPT;
+const files = arg.endsWith(".js") ? [root]
+            : arg ? collect(root, []).sort()
+            : WPT_PATHS.filter((p) => p !== "resources" && p !== "common")
+                       .flatMap((p) => collect(join(WPT, p), [])).sort();
 if (!files.length) { console.error(`[wpt] no .any.js under ${root}`); process.exit(1); }
 
 const HARNESS = join(WPT, "resources", "testharness.js");

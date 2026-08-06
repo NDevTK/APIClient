@@ -27,6 +27,7 @@
 #include "quickjs-step.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/response.h"
+#include "core/url/url.h"
 #include "core/idl_args.h"
 
 /* Forced preemption at every back-edge, sampled at calls — the same policy run-test262 arms, and for the same
@@ -170,6 +171,8 @@ int main(int argc, char **argv)
     headers_install(ctx, global);
     response_init(ctx);
     response_install(ctx, global);
+    url_init(ctx);
+    url_install(ctx, global);
     idl_args_seal();
     JS_FreeValue(ctx, global);
 
@@ -200,6 +203,7 @@ int main(int argc, char **argv)
 
     headers_free(ctx);
     response_free(ctx);
+    url_free(ctx);
     idl_args_free(ctx);
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);

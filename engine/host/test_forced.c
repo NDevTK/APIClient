@@ -21,6 +21,7 @@
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/fetch/response.h"
+#include "core/url/url.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/fetch.h"
 #include "solver/endpoint.h"
@@ -1676,6 +1677,7 @@ int main(void) {
     event_target_free(ctx);
     event_free(ctx);
     headers_free(ctx);    /* Headers.prototype and the name it interned */
+    url_free(ctx);        /* URL.prototype */
     response_free(ctx);   /* Response.prototype — one object, held for the runtime's life */
     idl_args_free(ctx);   /* the dictionary member atoms the declaration pool interned */
     flow_registry_free(ctx);

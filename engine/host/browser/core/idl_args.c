@@ -50,6 +50,12 @@ typedef struct {
     IdlBody    body;
     IdlArgType types[IDL_MAX_DECLARED];
     int        nargs;      /* how many the IDL lists; a variadic tail repeats the last */
+    /* THE FIRST OPTIONAL ARGUMENT's index. §3.6.2 resolves an `undefined` passed for an optional argument with
+       no default as the argument being ABSENT — `new URL("aaa:b", undefined)` is a one-argument call, not a
+       call with the base "undefined". Declared per member rather than assumed, because the same undefined at a
+       REQUIRED position is the string "undefined" and collapsing the two is wrong in one direction or the
+       other. Defaults past the end, so a member that does not declare it converts every position as before. */
+    int        first_optional;
     int        magic;
     /* An IDL_DICT argument's members, and their names INTERNED at registration. The atom must be live at both
        the request and the answer — step_getprop_run is handed it twice, with a suspension in between — so it
@@ -385,6 +391,15 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            member's tail is `any...` in every case here, which is exactly what not-listed already means. */
         IdlArgType t = (s->i < m->nargs) ? m->types[s->i]
                      : (m->variadic ? m->types[m->nargs - 1] : IDL_ANY);
+
+        /* §3.6.2: an optional argument given `undefined` is ABSENT, so nothing is converted and the body sees
+           undefined — which is what lets it tell "no base" from the base "undefined". */
+        if (s->i >= m->first_optional && JS_IsUndefined(a)) {
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            *slot = JS_UNDEFINED;
+            goto placed;
+        }
 
         if (t == IDL_STRING_UNLESS_CALLABLE)
             t = JS_IsFunction(ctx, a) ? IDL_ANY : IDL_DOMSTRING;   /* the union's own rule */
@@ -736,6 +751,7 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
     idl_member(idx)->setter        = NULL;
     idl_member(idx)->null_to_empty = false;
     idl_member(idx)->nargs = nargs;
+    idl_member(idx)->first_optional = IDL_MAX_DECLARED + 1;   /* none, until the member says otherwise */
     idl_member(idx)->magic = magic;
     for (k = 0; k < nargs; k++)
         idl_member(idx)->types[k] = types[k];
@@ -778,6 +794,16 @@ int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
     idl_member(g_n - 1)->step = decl;
     idl_def(g_n - 1)->size = sizeof(JSIdlArgsState) + decl->state_size;
     return id;
+}
+
+/* See idl_args.h. It names the member the LAST declaration made, the way idl_method_id_ext sets `variadic` and
+   `iface` — the id a declaration returns is the RUNTIME's step id and not this pool's index, so reaching the
+   entry through the id was reading past the pool. */
+void idl_optional_from(int id, int first_optional)
+{
+    DCHECK(id > 0, "an optional-argument index was declared for a member that was never declared");
+    DCHECK(g_n > 0, "an optional-argument index was declared before any member was");
+    idl_member(g_n - 1)->first_optional = first_optional;
 }
 
 int idl_setter_id_step(JSContext *ctx, IdlArgType type, bool null_to_empty, const IdlStepDecl *decl, int magic)

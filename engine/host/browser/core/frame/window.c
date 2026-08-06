@@ -29,6 +29,7 @@
 #include "quickjs.h"
 #include "solver/concolic.h"
 #include "core/frame/window.h"
+#include "core/url/url.h"
 
 static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -41,6 +42,11 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     JSValue g = (JSValue)global;
 
     DCHECK(JS_IsObject(global), "window_install was given something that is not the global object");
+
+    /* §5's URL interface is a plain platform global, not part of any one component's surface — a bundle builds
+       request URLs with it long before it fetches one. */
+    url_init(ctx);
+    url_install(ctx, global);
 
     /* 7.2.2: window, self and frames all return THIS Window's proxy, and the global object IS that proxy here —
        so `window.X`, `self.X` and a bare `X` are one read spelled three ways. */

@@ -119,6 +119,13 @@ typedef struct {
     void      (*visit)(JSContext *ctx, void *state, JSStepVisit *v);
     void      (*release)(JSContext *ctx, void *state);
 } IdlStepDecl;
+/* DECLARE WHERE THE OPTIONAL ARGUMENTS START. §3.6.2 makes an `undefined` passed for an optional argument with
+   no default mean the argument is ABSENT — `new URL("aaa:b", undefined)` is a one-argument call, and
+   converting that undefined would give the base URL the string "undefined" and throw. Set after the
+   declaration, as idl_method_id_ext sets `variadic`; a member that never calls this converts every declared
+   position, which is right for a member whose arguments are all required. */
+void idl_optional_from(int id, int first_optional);
+
 int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
                        const IdlDictMember *members, int nmembers,
                        const IdlStepDecl *decl, int magic);
