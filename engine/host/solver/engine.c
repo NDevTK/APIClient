@@ -44,10 +44,10 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
         f->pending = realloc(f->pending, (size_t)f->pendcap * sizeof(FlowPending));
         CHECK(f->pending, "engine: OOM growing the flow's pending-fetch list");
     }
+    memset(&f->pending[f->npend], 0, sizeof f->pending[f->npend]);
     f->pending[f->npend].resolve = JS_DupValue(ctx, resolve);
     f->pending[f->npend].value = JS_DupValue(ctx, value);
     f->pending[f->npend].url = url ? strdup(url) : NULL;
-    CHECK(!url || f->pending[f->npend].url, "engine: OOM recording a pending fetch's URL");
     f->pending[f->npend].have_value = (url == NULL);
     f->pending[f->npend].kind = FLOW_PENDING_RESOLVE;
     f->pending[f->npend].script_i = -1;
@@ -68,6 +68,7 @@ void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
         f->pending = realloc(f->pending, (size_t)f->pendcap * sizeof(FlowPending));
         CHECK(f->pending, "engine: OOM growing the flow's pending list");
     }
+    memset(&f->pending[f->npend], 0, sizeof f->pending[f->npend]);
     f->pending[f->npend].resolve = JS_UNDEFINED;
     f->pending[f->npend].value = JS_UNDEFINED;
     f->pending[f->npend].url = strdup(url);
@@ -93,6 +94,7 @@ void engine_pending_script_url(JSContext *ctx, const char *url) {
         f->pending = realloc(f->pending, (size_t)f->pendcap * sizeof(FlowPending));
         CHECK(f->pending, "engine: OOM growing the flow's pending list");
     }
+    memset(&f->pending[f->npend], 0, sizeof f->pending[f->npend]);
     f->pending[f->npend].resolve = JS_UNDEFINED;
     f->pending[f->npend].value = JS_UNDEFINED;
     f->pending[f->npend].url = strdup(url);
