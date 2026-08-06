@@ -35,6 +35,12 @@ typedef struct {
     JSValue reader;       /* the ReadableStreamDefaultReader holding the lock, or JS_UNDEFINED */
     JSValue queue;        /* an Array of chunks not yet read */
     uint32_t head;        /* how many of them have been */
+    /* §4.2's READ REQUESTS: a read on a readable stream with an empty queue PARKS, and is answered when the
+       controller enqueues or closes. Two parallel Arrays of the capabilities' resolving functions, because a
+       promise is settled by CALLING one of them and both must survive until it is. */
+    JSValue read_resolve, read_reject;
+    uint32_t rhead;
+    JSValue controller;   /* §4.5's controller, or JS_UNDEFINED for a host-byte stream that needs none */
 } StreamData;
 
 typedef struct {
@@ -55,6 +61,9 @@ static void stream_finalizer(JSRuntime *rt, JSValue val)
     JS_FreeValueRT(rt, d->stored_error);
     JS_FreeValueRT(rt, d->reader);
     JS_FreeValueRT(rt, d->queue);
+    JS_FreeValueRT(rt, d->read_resolve);
+    JS_FreeValueRT(rt, d->read_reject);
+    JS_FreeValueRT(rt, d->controller);
     js_free_rt(rt, d);
 }
 
@@ -67,6 +76,9 @@ static void stream_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fu
     JS_MarkValue(rt, d->stored_error, mark_func);
     JS_MarkValue(rt, d->reader, mark_func);
     JS_MarkValue(rt, d->queue, mark_func);
+    JS_MarkValue(rt, d->read_resolve, mark_func);
+    JS_MarkValue(rt, d->read_reject, mark_func);
+    JS_MarkValue(rt, d->controller, mark_func);
 }
 
 static void reader_finalizer(JSRuntime *rt, JSValue val)
@@ -103,10 +115,23 @@ static uint32_t stream_queued(JSContext *ctx, StreamData *d)
     return n - d->head;
 }
 
-JSValue readable_stream_from_bytes(JSContext *ctx, const char *bytes, size_t len)
+/* How many read requests are parked. */
+static uint32_t stream_read_pending(JSContext *ctx, StreamData *d)
+{
+    JSValue len_v = JS_GetPropertyStr(ctx, d->read_resolve, "length");
+    uint32_t n = 0;
+    JS_ToUint32(ctx, &n, len_v);
+    JS_FreeValue(ctx, len_v);
+    return n - d->rhead;
+}
+
+/* AN EMPTY READABLE STREAM. Both entry points build one: the host-byte source fills and closes it, the
+   constructor hands it to `start`. One allocation, so a field added to the record cannot be initialised by one
+   and forgotten by the other — the same obligation the flow's fork taught. */
+static JSValue readable_stream_empty(JSContext *ctx)
 {
     StreamData *d;
-    JSValue obj, chunk;
+    JSValue obj;
 
     DCHECK(g_stream_class != 0, "a ReadableStream was built before the class existed");
     obj = JS_NewObjectProtoClass(ctx, g_stream_proto, g_stream_class);
@@ -115,9 +140,26 @@ JSValue readable_stream_from_bytes(JSContext *ctx, const char *bytes, size_t len
     if (!d) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
     d->stored_error = JS_UNDEFINED;
     d->reader = JS_UNDEFINED;
+    d->controller = JS_UNDEFINED;
     d->queue = JS_NewArray(ctx);
+    d->read_resolve = JS_NewArray(ctx);
+    d->read_reject = JS_NewArray(ctx);
     JS_SetOpaque(obj, d);
-    if (JS_IsException(d->queue)) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
+    if (JS_IsException(d->queue) || JS_IsException(d->read_resolve) || JS_IsException(d->read_reject)) {
+        JS_FreeValue(ctx, obj);
+        return JS_EXCEPTION;
+    }
+    return obj;
+}
+
+JSValue readable_stream_from_bytes(JSContext *ctx, const char *bytes, size_t len)
+{
+    StreamData *d;
+    JSValue obj, chunk;
+
+    obj = readable_stream_empty(ctx);
+    if (JS_IsException(obj)) return obj;
+    d = stream_of(obj);
     /* ONE CHUNK, then closed. A byte sequence the host already holds has nothing left to arrive, and §4.2's
        "close" is exactly that statement — not an empty queue, which is a stream that may still be fed. */
     chunk = JS_NewUint8ArrayCopy(ctx, (const uint8_t *)(bytes ? bytes : ""), len);
@@ -219,13 +261,18 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
             } else if (d->state == RS_CLOSED) {
                 s->value = read_result(ctx, JS_UNDEFINED, true);
             } else {
-                /* A READABLE STREAM WITH AN EMPTY QUEUE parks the read request until something is enqueued —
-                   and nothing can be, because the only source this component builds is the host's bytes, which
-                   are all present before the stream exists. A page-supplied source is what makes this
-                   reachable, and it is the piece this file does not have yet. */
-                DFAIL("a read found a readable stream with an empty queue — build the parked read-request "
-                      "queue, which is what a page-supplied underlying source needs and what §4.5's controller "
-                      "fills");
+                /* §4.2: a READABLE stream with an empty queue PARKS the read request. The promise is returned
+                   unsettled and the controller answers it later — which is the whole reason a stream is not
+                   just a queue, and why this machine returns without a settle rather than blocking. */
+                JSValue funcs[2];
+                JSValue p = JS_NewPromiseCapability(ctx, funcs);
+                uint32_t at;
+                if (JS_IsException(p)) return JS_STEP_ABRUPT;
+                at = stream_read_pending(ctx, d) + d->rhead;
+                JS_SetPropertyUint32(ctx, d->read_resolve, at, funcs[0]);
+                JS_SetPropertyUint32(ctx, d->read_reject, at, funcs[1]);
+                s->promise = p;
+                return JS_STEP_DONE;   /* nothing to settle yet: the controller owns the answer */
             }
             if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
         }
@@ -408,26 +455,292 @@ static const JSTrampStepDef js_cancel_def = {
     sizeof(JSCancelState), js_cancel_step, js_cancel_fini, 0, .visit = js_cancel_visit
 };
 
+/* ---- §4.5's DEFAULT CONTROLLER ------------------------------------------------------------------------------
+ *
+ * `enqueue`, `close` and `error` are each MACHINES, because each may answer a PARKED READ — and answering one
+ * settles a promise, which is the page's code. That is the whole reason this component is machines rather than
+ * functions, and it is why the controller could not exist before `read()` could park.
+ *
+ * `pull` IS NOT CALLED FROM HERE YET. §4.5's CallPullIfNeeded reacts to the pull promise by calling `pull`
+ * again and, on rejection, by erroring the controller — reactions that must be machines with the controller
+ * captured, which JS_NewStepClosure now allows, attached with JS_PerformPromiseThen, which now exists. What is
+ * missing is only the wiring, and a source whose chunks all arrive in `start` — the shape the corpus and real
+ * bundles overwhelmingly use — needs none of it. A source that relies on `pull` gets the DFAIL at the
+ * constructor, which names it. */
+typedef struct { JSValue stream; } ControllerData;
+
+static JSClassID g_ctrl_class;
+static JSValue   g_ctrl_proto = JS_UNDEFINED;
+
+static void ctrl_finalizer(JSRuntime *rt, JSValue val)
+{
+    ControllerData *c = JS_GetOpaque(val, g_ctrl_class);
+    if (!c) return;
+    JS_FreeValueRT(rt, c->stream);
+    js_free_rt(rt, c);
+}
+
+static void ctrl_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+{
+    ControllerData *c = JS_GetOpaque(val, g_ctrl_class);
+    if (c) JS_MarkValue(rt, c->stream, mark_func);
+}
+
+enum { CTRL_ENQUEUE = 0, CTRL_CLOSE, CTRL_ERROR };
+
+typedef struct {
+    JSStepHdr hdr;
+    uint8_t   stage;
+    uint8_t   cphase;
+    uint8_t   op;
+    JSValue   func;    /* the parked capability being answered, or JS_UNDEFINED when there was none */
+    JSValue   value;
+    JSValue   cb[3];
+} JSCtrlState;
+
+static void js_ctrl_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSCtrlState *s = st;
+    int k;
+    v->val(ctx, &s->func);
+    v->val(ctx, &s->value);
+    for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
+}
+
+static JSValue js_ctrl_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSCtrlState *s = st;
+    int k;
+    (void)take_result;
+    JS_FreeValue(ctx, s->func);
+    JS_FreeValue(ctx, s->value);
+    s->func = s->value = JS_UNDEFINED;
+    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
+    return JS_UNDEFINED;
+}
+
+/* TAKE the next parked read request's resolve (or reject), or JS_UNDEFINED when none is parked. */
+static JSValue stream_take_read(JSContext *ctx, StreamData *d, int reject)
+{
+    JSValue f;
+    if (stream_read_pending(ctx, d) == 0) return JS_UNDEFINED;
+    f = JS_GetPropertyUint32(ctx, reject ? d->read_reject : d->read_resolve, d->rhead);
+    /* the sibling capability of the pair is dropped with it: one read is answered once */
+    JS_SetPropertyUint32(ctx, d->read_resolve, d->rhead, JS_UNDEFINED);
+    JS_SetPropertyUint32(ctx, d->read_reject, d->rhead, JS_UNDEFINED);
+    d->rhead++;
+    return f;
+}
+
+static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSCtrlState *s = st;
+    JSValue settled;
+    int r;
+
+    if (s->stage == 0) {
+        ControllerData *c = JS_GetOpaque(s->hdr.this_val, g_ctrl_class);
+        StreamData *d;
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        if (!c) {
+            JS_ThrowTypeError(ctx, "not a ReadableStreamDefaultController");
+            return JS_STEP_ABRUPT;
+        }
+        d = stream_of(c->stream);
+        DCHECK(d != NULL, "a controller's stream stopped being a ReadableStream");
+        s->op = (uint8_t)s->hdr.arg;
+        s->func = JS_UNDEFINED;
+        if (s->op == CTRL_ENQUEUE) {
+            JSValueConst chunk = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
+            if (d->state != RS_READABLE) {
+                JS_ThrowTypeError(ctx, "this stream is no longer readable");
+                return JS_STEP_ABRUPT;
+            }
+            /* §4.5: a chunk goes to a WAITING READER if there is one, and to the queue otherwise. Queuing it
+               when a read is parked would answer that read out of order, or never. */
+            s->func = stream_take_read(ctx, d, 0);
+            if (JS_IsUndefined(s->func)) {
+                JSValue len_v = JS_GetPropertyStr(ctx, d->queue, "length");
+                uint32_t n = 0;
+                JS_ToUint32(ctx, &n, len_v);
+                JS_FreeValue(ctx, len_v);
+                JS_SetPropertyUint32(ctx, d->queue, n, JS_DupValue(ctx, chunk));
+                return JS_STEP_DONE;
+            }
+            s->value = read_result(ctx, JS_DupValue(ctx, chunk), false);
+        } else if (s->op == CTRL_CLOSE) {
+            if (d->state != RS_READABLE) {
+                JS_ThrowTypeError(ctx, "this stream is no longer readable");
+                return JS_STEP_ABRUPT;
+            }
+            d->state = RS_CLOSED;
+            /* Every parked read is answered `{ undefined, true }`. One per entry into this machine, so a
+               settle that runs the page's code cannot be interleaved with the next by accident. */
+            s->func = stream_take_read(ctx, d, 0);
+            if (JS_IsUndefined(s->func)) return JS_STEP_DONE;
+            s->value = read_result(ctx, JS_UNDEFINED, true);
+        } else {
+            DCHECK(s->op == CTRL_ERROR, "a controller member ran with an operation this component does not have");
+            if (d->state == RS_READABLE) {
+                d->state = RS_ERRORED;
+                JS_FreeValue(ctx, d->stored_error);
+                d->stored_error = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
+            }
+            s->func = stream_take_read(ctx, d, 1);
+            if (JS_IsUndefined(s->func)) return JS_STEP_DONE;
+            s->value = JS_DupValue(ctx, d->stored_error);
+        }
+        if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
+        s->stage = 1;
+    }
+
+    DCHECK(s->stage == 1, "a controller member was re-entered at a stage it never parks in");
+    r = step_call_run(ctx, &s->cphase, s->cb, s->func, JS_UNDEFINED, 1, (JSValueConst *)&s->value,
+                      cb_result, &settled, out_cb, out_argc);
+    if (r > 0) return r;
+    JS_FreeValue(ctx, settled);
+    return JS_STEP_DONE;
+}
+
+#define CTRL_DEF(i) { sizeof(JSCtrlState), js_ctrl_step, js_ctrl_fini, (i), .visit = js_ctrl_visit }
+static const JSTrampStepDef js_ctrl_defs[3] = {
+    { sizeof(JSCtrlState), js_ctrl_step, js_ctrl_fini, CTRL_ENQUEUE, .visit = js_ctrl_visit },
+    { sizeof(JSCtrlState), js_ctrl_step, js_ctrl_fini, CTRL_CLOSE,   .visit = js_ctrl_visit },
+    { sizeof(JSCtrlState), js_ctrl_step, js_ctrl_fini, CTRL_ERROR,   .visit = js_ctrl_visit },
+};
+#undef CTRL_DEF
+static int g_ctrl_stepids[3] = { -1, -1, -1 };
+
+/* §4.5's `desiredSize`. With the default strategy the high-water mark is 1, so it is 1 minus what is queued —
+   a page uses it to decide whether to enqueue more, and answering a constant would make that decision wrong. */
+static JSValue js_ctrl_desired(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    ControllerData *c = JS_GetOpaque(this_val, g_ctrl_class);
+    StreamData *d;
+    (void)magic;
+    if (!c) return JS_ThrowTypeError(ctx, "not a ReadableStreamDefaultController");
+    d = stream_of(c->stream);
+    DCHECK(d != NULL, "a controller's stream stopped being a ReadableStream");
+    if (d->state == RS_ERRORED) return JS_NULL;
+    if (d->state == RS_CLOSED) return JS_NewInt32(ctx, 0);
+    return JS_NewInt32(ctx, 1 - (int)stream_queued(ctx, d));
+}
+
 /* ---- the constructors -------------------------------------------------------------------------------------- */
 
-typedef struct { uint8_t unused; } JSRsCtorState;
-static void js_rs_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
-static void js_rs_ctor_release(JSContext *ctx, void *st) { (void)ctx; (void)st; }
+/* §4.2's constructor. A MACHINE because `start(controller)` is the page's code, reached as a call request.
+ *
+ * WHAT IT REFUSES. A source declaring `pull` needs §4.5's CallPullIfNeeded, whose reactions call `pull` again
+ * and error the controller — machines with the controller captured, attached with JS_PerformPromiseThen. Both
+ * of those primitives now exist and the wiring is the next step, so a `pull` source gets a DFAIL naming
+ * exactly that rather than a stream that silently never pulls. A source whose chunks all arrive in `start` —
+ * what the corpus and real bundles overwhelmingly write — needs none of it.
+ * A `start` that returns a THENABLE is the same refusal for the same reason: §4.2 chains on it. */
+typedef struct {
+    uint8_t  stage;
+    uint8_t  cphase;
+    JSValue  stream;
+    JSValue  controller;
+    JSValue  start_fn;
+    JSValue  cb[3];
+} JSRsCtorState;
+
+static void js_rs_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSRsCtorState *s = st;
+    int k;
+    v->val(ctx, &s->stream);
+    v->val(ctx, &s->controller);
+    v->val(ctx, &s->start_fn);
+    for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
+}
+
+static void js_rs_ctor_release(JSContext *ctx, void *st)
+{
+    JSRsCtorState *s = st;
+    int k;
+    JS_FreeValue(ctx, s->stream);
+    JS_FreeValue(ctx, s->controller);
+    JS_FreeValue(ctx, s->start_fn);
+    s->stream = s->controller = s->start_fn = JS_UNDEFINED;
+    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
+}
+
+enum { RSC_START = 0, RSC_CALL, RSC_DONE };
 
 static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    (void)st; (void)argc; (void)argv; (void)out_cb; (void)out_argc; (void)presult;
-    JS_FreeValue(ctx, cb_result);
-    if (JS_IsUndefined(hdr->this_val)) {
-        JS_ThrowTypeError(ctx, "constructor ReadableStream requires 'new'");
-        return -1;
+    JSRsCtorState *s = st;
+    JSValueConst source = argc > 0 ? argv[0] : JS_UNDEFINED;
+    int r;
+
+    if (s->stage == RSC_START) {
+        StreamData *d;
+        ControllerData *c;
+        JSValue pull_fn;
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        if (JS_IsUndefined(hdr->this_val)) {
+            JS_ThrowTypeError(ctx, "constructor ReadableStream requires 'new'");
+            return -1;
+        }
+        /* An EMPTY stream first: §4.2 builds the stream and its controller before `start` runs, because
+           `start` is handed that controller and may enqueue into it immediately. */
+        s->stream = readable_stream_empty(ctx);
+        if (JS_IsException(s->stream)) return -1;
+        d = stream_of(s->stream);
+        s->controller = JS_NewObjectProtoClass(ctx, g_ctrl_proto, g_ctrl_class);
+        if (JS_IsException(s->controller)) return -1;
+        c = js_mallocz(ctx, sizeof *c);
+        if (!c) return -1;
+        c->stream = JS_DupValue(ctx, s->stream);
+        JS_SetOpaque(s->controller, c);
+        d->controller = JS_DupValue(ctx, s->controller);
+
+        if (JS_IsObject(source)) {
+            pull_fn = JS_GetPropertyStr(ctx, source, "pull");
+            if (JS_IsFunction(ctx, pull_fn)) {
+                JS_FreeValue(ctx, pull_fn);
+                DFAIL("an underlying source declared `pull` — wire §4.5's CallPullIfNeeded: its reactions are "
+                      "machines with the controller captured (JS_NewStepClosure) attached with "
+                      "JS_PerformPromiseThen, both of which exist now");
+            }
+            JS_FreeValue(ctx, pull_fn);
+            s->start_fn = JS_GetPropertyStr(ctx, source, "start");
+        } else {
+            s->start_fn = JS_UNDEFINED;
+        }
+        s->stage = JS_IsFunction(ctx, s->start_fn) ? RSC_CALL : RSC_DONE;
     }
-    DFAIL("new ReadableStream(underlyingSource) — build §4.5's default controller and the pull chaining it "
-          "needs: CallPullIfNeeded reacts to the pull promise by calling the page's `pull` again and, on "
-          "rejection, by erroring the controller, so the reactions must be machines with the controller "
-          "captured, attached with PerformPromiseThen rather than a page-visible `.then` read");
-    return -1;
+
+    if (s->stage == RSC_CALL) {
+        JSValue res;
+        JSValueConst arg = s->controller;
+        r = step_call_run(ctx, &s->cphase, s->cb, s->start_fn, JS_UNDEFINED, 1, &arg,
+                          cb_result, &res, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        /* §4.2 chains on start's result. A thenable would need that chain; anything else is already done. */
+        if (JS_IsObject(res)) {
+            JSValue then_v = JS_GetPropertyStr(ctx, res, "then");
+            int thenable = JS_IsFunction(ctx, then_v);
+            JS_FreeValue(ctx, then_v);
+            if (thenable)
+                DFAIL("an underlying source's `start` returned a thenable — §4.2 chains on it, which is the "
+                      "same JS_PerformPromiseThen wiring `pull` needs");
+        }
+        JS_FreeValue(ctx, res);
+        s->stage = RSC_DONE;
+    }
+
+    JS_FreeValue(ctx, cb_result);
+    *presult = s->stream;
+    s->stream = JS_UNDEFINED;
+    return 0;
 }
 
 static const IdlStepDecl js_rs_ctor_decl = {
@@ -483,6 +796,25 @@ void readable_stream_init(JSContext *ctx)
     JS_SetPropertyStr(ctx, g_stream_proto, "cancel",
                       JS_NewCFunction2(ctx, NULL, "cancel", 0, JS_CFUNC_step, g_cancel_stepid));
 
+    {
+        JSClassDef cd = { "ReadableStreamDefaultController", .finalizer = ctrl_finalizer,
+                          .gc_mark = ctrl_gc_mark };
+        static const char *const NAMES[3] = { "enqueue", "close", "error" };
+        int i;
+        JS_NewClassID(rt, &g_ctrl_class);
+        JS_NewClass(rt, g_ctrl_class, &cd);
+        g_ctrl_proto = JS_NewObject(ctx);
+        CHECK(!JS_IsException(g_ctrl_proto), "the controller prototype could not be allocated");
+        idl_interface_tag(ctx, g_ctrl_proto, "ReadableStreamDefaultController");
+        idl_install_accessor(ctx, g_ctrl_proto, "desiredSize", js_ctrl_desired, 0, -1);
+        for (i = 0; i < 3; i++) {
+            g_ctrl_stepids[i] = JS_RegisterStepDef(rt, &js_ctrl_defs[i]);
+            CHECK(g_ctrl_stepids[i] >= 0, "streams: no step id for a controller member");
+            JS_SetPropertyStr(ctx, g_ctrl_proto, NAMES[i],
+                              JS_NewCFunction2(ctx, NULL, NAMES[i], 1, JS_CFUNC_step, g_ctrl_stepids[i]));
+        }
+    }
+
     g_reader_proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_reader_proto), "ReadableStreamDefaultReader.prototype could not be allocated");
     idl_interface_tag(ctx, g_reader_proto, "ReadableStreamDefaultReader");
@@ -521,7 +853,8 @@ void readable_stream_free(JSContext *ctx)
     if (!g_rs_rt) return;
     JS_FreeValue(ctx, g_stream_proto);
     JS_FreeValue(ctx, g_reader_proto);
-    g_stream_proto = g_reader_proto = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_ctrl_proto);
+    g_stream_proto = g_reader_proto = g_ctrl_proto = JS_UNDEFINED;
     g_rs_rt = NULL;
     g_ctor_stepid = g_reader_ctor_stepid = g_read_stepid = g_cancel_stepid = -1;
 }
