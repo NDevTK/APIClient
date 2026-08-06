@@ -14,6 +14,8 @@
 #ifndef ENGINE_HOST_SOLVER_COW_H
 #define ENGINE_HOST_SOLVER_COW_H
 
+#include <stddef.h>
+
 #include "quickjs.h"
 
 typedef struct CowDelta CowDelta;
@@ -62,6 +64,15 @@ void      cow_capture_async_state(JSContext *ctx, JSValueConst obj);
    the state that decides whether a flow evaluates the module at all, so without it the first flow to import a
    chunk left it EVALUATED for every sibling and the siblings read its exports as TDZ. */
 void      cow_capture_module_eval(JSContext *ctx, void *mod);
+
+/* Capture a BROWSER COMPONENT's own mutable C record (`n` bytes at `p`) before this flow changes it. A component
+   that keeps state in its class opaque writes it where no property hook and no engine hook can see, so that write
+   does not time-travel: Response's body-used latch, set by whichever arm of a fork read the reply first, left the
+   reply consumed for every sibling and the sibling's own first read threw. Called by the component at its
+   mutation point, exactly as a DOM write host-edge calls dom_attr_capture — the browser owns the API, the solver
+   owns the time travel. `owner` is the JS object the record belongs to and is HELD for the life of the entry,
+   because `p` points into storage that object owns and a parked flow can outlive every other reference to it. */
+void      cow_capture_host_state(JSContext *ctx, JSValueConst owner, void *p, size_t n);
 
 /* Install as JSTimeTravelHooks.async_fork: record the per-flow swap of a shared suspended ASYNC activation. The
    engine cloned it because resuming CONSUMES it; this makes the clone what this flow's resolve/reject closure

@@ -1007,6 +1007,15 @@ static const char *HTML =
       " var ab = await r.clone().arrayBuffer(); var by = await r.clone().bytes();"
       " fetch('/api/bodybytes?len=' + ab.byteLength + '&n=' + by.length + '&b0=' + by[0]"
       "   + '&kind=' + (ab instanceof ArrayBuffer) + (by instanceof Uint8Array)); })();"
+    /* THE BODY-USED LATCH TIME-TRAVELS. The Response is awaited BEFORE the concolic branch, so ONE reply object
+       is shared by both arms — and each then reads it. The latch is C state in the class opaque, which no
+       property hook can see, so without a COW capture the first arm to read left the reply consumed for the
+       other and the sibling's own first read threw. Both bodyADMIN and bodyPUBLIC present ⇒ each arm saw its own
+       unread reply, which is the same isolation every shared JS slot already had. */
+    "(async function(){ var r = await fetchBody('/api/config');"
+      " var tag = cfg.admin ? 'bodyADMIN' : 'bodyPUBLIC';"   /* THE FORK — before either arm has read `r` */
+      " var v = (await r.json()).region + '-' + tag;"        /* both arms read the SAME reply */
+      " fetch('/api/bodyiso?v=' + v); })();"
     "(async function(){ var p = new Promise(function(res){ Promise.resolve().then(function(){ res('lazyRegion'); }); }); var c = await p; fetch('/api/lazy?r=' + c); })();"   /* PENDING await: the promise resolves LATER via a microtask (stands in for the network) -> park + resume */
     "var _spr; var _sp = new Promise(function(r){ _spr = r; }); _sp.then(function(v){ fetch('/api/shared?v=' + v); }); _spr(state.beta ? 'shBETA' : 'shSTABLE');"   /* PROBE: _sp created BEFORE the state.beta snapshot fork -> shared; settled per-flow. If promise state is NOT per-flow COW, only ONE value survives (contamination) */
     "if (state.gamma) { delete delObj.k; } fetch('/api/tok?t=' + (delObj.k ? delObj.k : 'wasDeleted'));"   /* DELETE time-travel: the gamma-true flow deletes delObj.k; the gamma-false flow must STILL see keepVAL (the delete is per-flow) */
@@ -1251,6 +1260,11 @@ int main(void) {
        record carried rather than one a strlen guessed. */
     int body_bytes = (strstr(js, "\"/api/bodybytes\"") && strstr(js, "\"22\"") &&
                       strstr(js, "\"123\"") && strstr(js, "truetrue"));
+    /* THE LATCH TIME-TRAVELS: two arms forked BEFORE either read one shared reply, and BOTH read it. If the
+       body-used flag did not ride the COW delta, the second arm's read would throw and only one tag would be
+       here — which is exactly what it did, as a `body stream already read` page error. */
+    int body_iso = (strstr(js, "\"/api/bodyiso\"") && strstr(js, "us-west-2-bodyADMIN") &&
+                    strstr(js, "us-west-2-bodyPUBLIC"));
     /* PENDING await: the awaited promise resolved LATER (via a microtask, standing in for the network); the flow
        parked at the await and resumed when it settled -> /api/lazy?r=lazyRegion. The real fetch-parking path. */
     int pending_await = (strstr(js, "\"/api/lazy\"") && strstr(js, "lazyRegion"));
@@ -1505,6 +1519,7 @@ int main(void) {
         { "asynccall", asynccall_tt, 0 },  { "throw", async_throw, 0 },
         { "preempt", async_preempt, 0 },   { "fetch", fetch_await, 0 },
         { "clone-body", clone_body, 0 },   { "body-bytes", body_bytes, 0 },
+        { "body-iso", body_iso, 0 },
         { "pending", pending_await, 0 },   { "promise-state", promise_state, 0 },
         { "delete-iso", delete_iso, 0 },   { "floc-iso", floc_iso, 0 },
         { "ua", uafork_tt, 0 },            { "touch", touchfork_tt, 0 },

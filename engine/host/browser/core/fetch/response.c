@@ -17,6 +17,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "solver/cow.h"
 #include "core/fetch/response.h"
 
 static JSClassID g_response_class;
@@ -41,7 +42,12 @@ static void response_finalizer(JSRuntime *rt, JSValue val)
 static ResponseData *response_of(JSValueConst v) { return JS_GetOpaque(v, g_response_class); }
 
 /* 6.4 "consume body": the latch is per Response and the second read is a TypeError — a page's retry path tests
-   exactly that, so answering the body twice would hide the branch it takes. */
+   exactly that, so answering the body twice would hide the branch it takes.
+   THE LATCH IS PER FLOW, TOO. It lives in this component's class opaque, which no property hook and no engine
+   hook can see, so setting it was a write that did not time-travel: a Response created before a fork and read in
+   one arm came back CONSUMED in the sibling, whose own first read then threw `body stream already read`. Every
+   other kind of shared state a flow writes rides its COW delta, and so does this one now — the capture goes
+   immediately before the write, so the bytes the delta records are the ones this flow found. */
 static JSValue response_take_body(JSContext *ctx, JSValueConst this_val, const char **pbody, size_t *plen)
 {
     ResponseData *d = response_of(this_val);
@@ -49,6 +55,7 @@ static JSValue response_take_body(JSContext *ctx, JSValueConst this_val, const c
         return JS_ThrowTypeError(ctx, "not a Response");
     if (d->body_used)
         return JS_ThrowTypeError(ctx, "body stream already read");
+    cow_capture_host_state(ctx, this_val, &d->body_used, sizeof d->body_used);
     d->body_used = 1;
     *pbody = d->body ? d->body : "";
     *plen  = d->body ? d->body_len : 0;

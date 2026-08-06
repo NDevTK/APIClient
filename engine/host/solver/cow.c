@@ -23,21 +23,33 @@
    restores map_old), DELETE (apply deletes, unapply re-adds map_old). Entries replay forward on apply and invert
    in reverse on unapply, so a sequence of mutations to the same key reconstructs correctly with NO dedup and no
    SameValueZero key-hashing. Never slot-keyed (kept out of the hash index, like gendata). */
-/* A FIFTH entry kind (is_async=1) is an opaque STATE BLOB over internal fields no property hook can see:
+/* A FIFTH entry kind (is_state=1) is an opaque STATE BLOB over internal fields no property hook can see:
    a_base is the baseline state this flow found, a_cur the state this flow produced (saved at unapply, replayed
-   at apply) — the same base/cur shape as a property slot. TWO TARGETS share it because they are one concept,
-   "the state of this thing before this flow changed it": a shared ASYNC object's settlement (mod == NULL, obj
-   is the promise or the resolving function whose already_resolved latch it is) and a MODULE record's EVALUATION
-   state (mod != NULL, obj unused — a module is not a JSObject). A module's bindings are closure cells that
-   cell_write already captures; what was missing is the state deciding whether a flow evaluates AT ALL, so the
-   first flow to import a chunk left it EVALUATED for every sibling and the siblings read TDZ exports.
-   Not slot-keyed (kept out of the hash index, like gendata and map): each settles once per flow, nothing to dedup. */
+   at apply) — the same base/cur shape as a property slot. THREE TARGETS share it because they are one concept,
+   "the state of this thing before this flow changed it", and `state_kind` says which:
+     COW_STATE_ASYNC  — a shared ASYNC object's settlement (obj is the promise, or the resolving function whose
+                        already_resolved latch it is; target unused).
+     COW_STATE_MODULE — a MODULE record's EVALUATION state (target is the record; obj unused, a module is not a
+                        JSObject). Its bindings are closure cells cell_write already captures; what was missing
+                        is the state deciding whether a flow evaluates AT ALL, so the first flow to import a
+                        chunk left it EVALUATED for every sibling and the siblings read TDZ exports.
+     COW_STATE_HOST   — a BROWSER COMPONENT's own mutable C record (target is the bytes, a_len their count; obj
+                        is the JS object that owns them, held so the storage outlives this delta). A component
+                        that keeps state in its class opaque — Response's body-used latch is the first — writes
+                        it where no property hook can see, so one arm of a fork consumed the reply for its
+                        sibling and the sibling's own read threw. The field is not a JSValue and there is no
+                        engine call that saves it, so the blob IS a byte copy; everything else about the entry
+                        is what the other two targets already do.
+   `state_kind` rather than a nullness test on the target: a third target cannot be told from the second by
+   asking whether a pointer is set, and a fourth could not be told from any of them.
+   Not slot-keyed (kept out of the hash index, like gendata and map): each is captured once per flow. */
 #define COW_MAP_ADD       0
 #define COW_MAP_OVERWRITE 1
 #define COW_MAP_DELETE    2
+enum { COW_STATE_ASYNC = 0, COW_STATE_MODULE = 1, COW_STATE_HOST = 2 };
 typedef struct { JSValue obj; JSAtom atom; int existed; JSValue base; JSValue cur; int cur_valid; void *vref;
                  int is_gendata; void *g0; void *g1; int is_map; int map_op; JSValue map_old;
-                 int is_async; void *mod; void *a_base; void *a_cur; } CowEntry;
+                 int is_state; int state_kind; void *target; size_t a_len; void *a_base; void *a_cur; } CowEntry;
 
 /* forked = has this flow snapshot-forked a sibling yet? Until it has, every object it CREATED (flow_local) is
    truly private — no other flow can observe it — so capturing its mutations is pure waste (keeps the delta
@@ -86,7 +98,7 @@ static void cow_hash_rebuild(CowDelta *d) {   /* size to >= 2*n (power of two), 
     d->hash = realloc(d->hash, (size_t)d->hash_cap * sizeof(int));
     CHECK(d->hash, "cow: OOM hash index");
     memset(d->hash, 0, (size_t)d->hash_cap * sizeof(int));
-    for (int i = 0; i < d->n; i++) if (!d->e[i].is_gendata && !d->e[i].is_async) cow_hash_put(d, i);   /* gendata/async aren't slot-keyed */
+    for (int i = 0; i < d->n; i++) if (!d->e[i].is_gendata && !d->e[i].is_state) cow_hash_put(d, i);   /* gendata/async aren't slot-keyed */
 }
 /* Record entry (d->n-1) in the hash, growing/rebuilding the table when it would exceed half-full. */
 static void cow_hash_add_last(CowDelta *d) {
@@ -120,20 +132,53 @@ CowDelta *cow_delta_new(void) {
    travels with the delta: setting one without the other would have the two disagree about what is shared. */
 void cow_set_current(CowDelta *d) { g_current = d; JS_SetFlowForkGen(d ? d->fork_gen : 0); }
 
-/* The is_async entry's four operations, dispatched by TARGET. One mechanism, two things it captures — the
-   alternative was a sixth entry kind whose unapply/apply/fork/free arms would be the same four lines again. */
+/* The is_state entry's four operations, dispatched by TARGET KIND. One mechanism, three things it captures —
+   the alternative was another entry kind whose unapply/apply/fork/free arms would be the same four lines again.
+   The default arm asserts rather than falling through: a kind nobody wrote an arm for must abort at the
+   capture, not silently restore the wrong thing on the next context switch. */
 static void *cow_state_save(JSContext *ctx, const CowEntry *e) {
-    return e->mod ? JS_ModuleEvalStateSave(ctx, e->mod) : JS_AsyncStateSave(ctx, e->obj);
+    switch (e->state_kind) {
+    case COW_STATE_MODULE: return JS_ModuleEvalStateSave(ctx, e->target);
+    case COW_STATE_HOST: {
+        void *blob = malloc(e->a_len);
+        CHECK(blob, "cow: OOM saving a component's own state — a lost latch leaks one flow's read into another");
+        memcpy(blob, e->target, e->a_len);
+        return blob;
+    }
+    default:
+        DCHECK(e->state_kind == COW_STATE_ASYNC, "a COW state entry names a target kind with no save");
+        return JS_AsyncStateSave(ctx, e->obj);
+    }
 }
 static void cow_state_restore(JSContext *ctx, const CowEntry *e, void *blob) {
-    if (e->mod) JS_ModuleEvalStateRestore(ctx, e->mod, blob);
-    else JS_AsyncStateRestore(ctx, e->obj, blob);
+    switch (e->state_kind) {
+    case COW_STATE_MODULE: JS_ModuleEvalStateRestore(ctx, e->target, blob); break;
+    case COW_STATE_HOST:
+        /* A re-apply reads what the UNAPPLY recorded, so reaching here with nothing recorded means this flow
+           was switched INTO without ever having been switched out of — the swap is not a pair. The async arm
+           tolerates a NULL blob; this one must not, because a byte copy from NULL is a segfault whose cause is
+           two switches away from where it lands. */
+        DCHECK(blob != NULL, "a component's state was re-applied before any unapply had recorded one — the "
+                             "context switch that parked this flow did not run");
+        memcpy(e->target, blob, e->a_len);
+        break;
+    default:
+        DCHECK(e->state_kind == COW_STATE_ASYNC, "a COW state entry names a target kind with no restore");
+        JS_AsyncStateRestore(ctx, e->obj, blob);
+    }
 }
-static void *cow_state_clone(JSContext *ctx, const CowEntry *e, void *blob) {
-    return e->mod ? JS_ModuleEvalStateClone(ctx, blob) : JS_AsyncStateClone(ctx, blob);
-}
+/* There is no CLONE arm, and that is not an omission: a fork FREEZES the running flow's head into a segment both
+   arms reference, so no entry is ever copied and no blob ever duplicated. One was written here for the fork that
+   did copy, and it outlived that fork by long enough to be extended for a third target before anyone noticed it
+   had no caller. */
 static void cow_state_free(JSRuntime *rt, const CowEntry *e, void *blob) {
-    if (e->mod) JS_ModuleEvalStateFree(rt, blob); else JS_AsyncStateFree(rt, blob);
+    switch (e->state_kind) {
+    case COW_STATE_MODULE: JS_ModuleEvalStateFree(rt, blob); break;
+    case COW_STATE_HOST:   free(blob); break;
+    default:
+        DCHECK(e->state_kind == COW_STATE_ASYNC, "a COW state entry names a target kind with no free");
+        JS_AsyncStateFree(rt, blob);
+    }
 }
 
 void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
@@ -165,7 +210,7 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     e->cur_valid = 0;
     e->vref = NULL;
     e->is_gendata = 0;
-    e->is_async = 0; e->mod = NULL; e->a_base = e->a_cur = NULL;
+    e->is_state = 0; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = e->a_cur = NULL;
     e->is_map = 0;
     cow_hash_add_last(d);
     g_capturing = 0;
@@ -196,7 +241,7 @@ void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     e->cur = JS_UNDEFINED; e->cur_valid = 0;
     e->vref = NULL;
     e->is_gendata = 0;
-    e->is_async = 0; e->mod = NULL; e->a_base = e->a_cur = NULL;
+    e->is_state = 0; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = e->a_cur = NULL;
     e->is_map = 0;
     cow_hash_add_last(d);   /* in the index so a later OVERWRITE of this index dedups to the append entry */
     g_capturing = 0;
@@ -224,7 +269,7 @@ void cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key, JSV
     e->cur_valid = 1;
     e->vref = NULL;
     e->is_gendata = 0;
-    e->is_async = 0; e->mod = NULL; e->a_base = e->a_cur = NULL;
+    e->is_state = 0; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = e->a_cur = NULL;
     e->is_map = 1;                     /* not slot-keyed — kept out of the hash index, like gendata */
     e->map_op = COW_MAP_ADD; e->map_old = JS_UNDEFINED;
     g_capturing = 0;
@@ -252,7 +297,7 @@ void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, 
     e->cur_valid = 1;
     e->vref = NULL;
     e->is_gendata = 0;
-    e->is_async = 0; e->mod = NULL; e->a_base = e->a_cur = NULL;
+    e->is_state = 0; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = e->a_cur = NULL;
     e->is_map = 1;
     e->map_op = (op == JS_MAP_MUTATE_DELETE) ? COW_MAP_DELETE : COW_MAP_OVERWRITE;
     e->map_old = JS_DupValue(ctx, old_val);   /* the prior value, restored on unapply */
@@ -276,7 +321,8 @@ void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
        sibling, which is a corrupted frontier rather than a degraded one. */
     CHECK(blob, "cow: a shared async object's settlement could not be captured — the flow's timeline would leak");
     for (int i = 0; i < d->n; i++)                  /* one entry per object: the FIRST baseline is the baseline */
-        if (d->e[i].is_async && JS_VALUE_GET_PTR(d->e[i].obj) == JS_VALUE_GET_PTR(obj)) {
+        if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_ASYNC &&
+            JS_VALUE_GET_PTR(d->e[i].obj) == JS_VALUE_GET_PTR(obj)) {
             JS_AsyncStateFree(JS_GetRuntime(ctx), blob);
             g_capturing = 0;
             return;
@@ -294,7 +340,7 @@ void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
     e->vref = NULL;
     e->is_gendata = 0; e->g0 = e->g1 = NULL;
     e->is_map = 0; e->map_op = 0; e->map_old = JS_UNDEFINED;
-    e->is_async = 1; e->mod = NULL; e->a_base = blob; e->a_cur = NULL;
+    e->is_state = 1; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = blob; e->a_cur = NULL;
     g_capturing = 0;
 }
 
@@ -350,7 +396,7 @@ void cow_capture_module_eval(JSContext *ctx, void *mod) {
     if (g_capturing || !g_current || !mod) return;
     CowDelta *d = g_current;
     for (int i = 0; i < d->n; i++)                  /* one entry per module: the FIRST baseline is the baseline */
-        if (d->e[i].is_async && d->e[i].mod == mod) return;
+        if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_MODULE && d->e[i].target == mod) return;
     g_capturing = 1;
     void *blob = JS_ModuleEvalStateSave(ctx, mod);
     CHECK(blob, "cow: a module's evaluation state could not be captured — a sibling flow would inherit this "
@@ -368,7 +414,43 @@ void cow_capture_module_eval(JSContext *ctx, void *mod) {
     e->vref = NULL;
     e->is_gendata = 0; e->g0 = e->g1 = NULL;
     e->is_map = 0; e->map_op = 0; e->map_old = JS_UNDEFINED;
-    e->is_async = 1; e->mod = mod; e->a_base = blob; e->a_cur = NULL;
+    e->is_state = 1; e->state_kind = COW_STATE_MODULE; e->target = mod; e->a_len = 0; e->a_base = blob; e->a_cur = NULL;
+    g_capturing = 0;
+}
+
+/* Capture a BROWSER COMPONENT's own mutable C record before this flow changes it. A component that keeps state
+   in its class opaque writes it where no property hook and no engine hook can see, so the write does not
+   time-travel: Response's body-used latch, set by whichever arm of a fork read the reply first, left the reply
+   consumed for every sibling, and the sibling's own first read threw `body stream already read`. The flow that
+   read it is the only one that should see it read.
+   The OWNER is held for the life of the entry, because `p` points INTO the record that object owns and a parked
+   flow can outlive every other reference to it — a delta naming freed storage would write those bytes back over
+   whatever now occupies them. The flow-private skip is the same generational test every other capture uses. */
+void cow_capture_host_state(JSContext *ctx, JSValueConst owner, void *p, size_t n) {
+    if (g_capturing || !g_current) return;
+    CowDelta *d = g_current;
+    DCHECK(p != NULL && n > 0, "a component asked to capture no state — the call site has nothing to isolate");
+    DCHECK(JS_IsObject(owner), "a component's state was captured with no owning object — the storage it points "
+                               "into would be freed out from under a parked flow's delta");
+    if (JS_ObjFlowGen(owner) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
+    for (int i = 0; i < d->n; i++)                    /* one entry per record: the FIRST baseline is the baseline */
+        if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_HOST && d->e[i].target == p) return;
+    g_capturing = 1;
+    if (d->n >= d->cap) {
+        d->cap = d->cap ? d->cap * 2 : 32;
+        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
+        CHECK(d->e, "cow: OOM growing delta (host_state)");
+        cow_hash_rebuild(d);
+    }
+    CowEntry *e = &d->e[d->n++];
+    e->obj = JS_DupValue(ctx, owner);
+    e->atom = JS_ATOM_NULL; e->existed = 0;
+    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->cur_valid = 0;
+    e->vref = NULL;
+    e->is_gendata = 0; e->g0 = e->g1 = NULL;
+    e->is_map = 0; e->map_op = 0; e->map_old = JS_UNDEFINED;
+    e->is_state = 1; e->state_kind = COW_STATE_HOST; e->target = p; e->a_len = n; e->a_cur = NULL;
+    e->a_base = cow_state_save(ctx, e);   /* the bytes as this flow found them */
     g_capturing = 0;
 }
 
@@ -389,7 +471,7 @@ void cow_capture_varref(JSContext *ctx, void *vref) {
     e->vref = vref;
     JS_VarRefRef(vref);                  /* the DELTA owns it: the cell's own frames may die before the delta does */
     e->is_gendata = 0;
-    e->is_async = 0; e->mod = NULL; e->a_base = e->a_cur = NULL;
+    e->is_state = 0; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = e->a_cur = NULL;
     e->is_map = 0;
     cow_hash_add_last(d);
     g_capturing = 0;
@@ -418,7 +500,7 @@ void cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, voi
     e->atom = JS_ATOM_NULL; e->existed = 0; e->base = JS_UNDEFINED;
     e->cur = JS_UNDEFINED; e->cur_valid = 0; e->vref = NULL;
     e->is_gendata = 1; e->g0 = base_gd; e->g1 = cur_gd;
-    e->is_async = 0; e->mod = NULL; e->a_base = e->a_cur = NULL;   /* adopts cur_gd's creation ref (freed on delta free) */
+    e->is_state = 0; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = e->a_cur = NULL;   /* adopts cur_gd's creation ref (freed on delta free) */
     e->is_map = 0;
 }
 
@@ -426,7 +508,7 @@ static void cow_unapply_entries(JSContext *ctx, CowEntry *ents, int n) {
     for (int i = n - 1; i >= 0; i--) {   /* reverse: symmetric with apply */
         CowEntry *e = &ents[i];
         if (e->is_gendata) { cow_gd_install(e, e->g0); continue; }   /* restore the shared original */
-        if (e->is_async) {   /* blob state: save what THIS flow produced, then rewind to the baseline */
+        if (e->is_state) {   /* blob state: save what THIS flow produced, then rewind to the baseline */
             cow_state_free(JS_GetRuntime(ctx), e, e->a_cur);
             e->a_cur = cow_state_save(ctx, e);
             cow_state_restore(ctx, e, e->a_base);
@@ -476,7 +558,7 @@ static void cow_apply_entries(JSContext *ctx, CowEntry *ents, int n) {
     for (int i = 0; i < n; i++) {   /* forward: replay the writes over the chain below */
         CowEntry *e = &ents[i];
         if (e->is_gendata) { cow_gd_install(e, e->g1); continue; }   /* install this flow's own clone */
-        if (e->is_async) { cow_state_restore(ctx, e, e->a_cur); continue; }   /* re-install what this flow produced */
+        if (e->is_state) { cow_state_restore(ctx, e, e->a_cur); continue; }   /* re-install what this flow produced */
         if (e->is_map) {   /* replay the flow's record mutation: ADD/OVERWRITE->set new value, DELETE->delete */
             if (e->map_op == COW_MAP_DELETE) JS_MapDeleteRecord(ctx, e->obj, e->base);
             else JS_MapAddRecord(ctx, e->obj, e->base, e->cur);
@@ -619,7 +701,7 @@ void cow_delta_free(JSContext *ctx, CowDelta *d) {
 static void cow_entries_free(JSContext *ctx, CowEntry *e, int n) {
     for (int i = 0; i < n; i++) {
         if (e[i].is_gendata) { JS_FreeValue(ctx, e[i].obj); cow_gd_unref(ctx, &e[i], e[i].g1); continue; }
-        if (e[i].is_async) {
+        if (e[i].is_state) {
             JS_FreeValue(ctx, e[i].obj);
             cow_state_free(JS_GetRuntime(ctx), &e[i], e[i].a_base);
             cow_state_free(JS_GetRuntime(ctx), &e[i], e[i].a_cur);
