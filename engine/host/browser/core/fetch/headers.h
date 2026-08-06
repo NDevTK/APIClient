@@ -29,10 +29,26 @@ char *header_list_get(const HeaderList *l, const char *name);
    conversion and the spec states it once; a machine performing it embeds this cursor, declares it in its own
    `visit` (headers_fill_visit) and releases it in its teardown (headers_fill_release).
      Returns >0 (the caller returns it), 0 when the list is filled, or -1 with a throw live. */
+/* DRIVING A JS ITERABLE, one value per call, as a sub-sequence. Every step of the iterator protocol is the
+   page's code — the @@iterator read, its call, the `next` read, each `next()` call, and the `done`/`value` reads
+   off each result — so none of them can be a C loop. Web IDL NESTS it (a `sequence<sequence<ByteString>>` runs
+   the protocol over the outer value and again over each inner pair), which is why this is a cursor a caller
+   instantiates twice rather than a loop written once. */
+typedef struct {
+    uint8_t phase;
+    uint8_t cphase;                    /* the call request's own phase — a cursor holds a call across stages */
+    JSValue iterfn, iter, next_fn, res, value;   /* owned */
+    JSValue cb[2];                     /* 2 + 0: the protocol's calls take no arguments */
+    int     done;
+} IterCursor;
+
 typedef struct {
     uint8_t phase;
     int     i, n;               /* the cursor into the key list, and how many keys there are */
     JSValue keys, name, value;  /* owned: the key list, and the pair being read */
+    IterCursor outer, inner;    /* the sequence arm: the init's pairs, and the two items of one pair */
+    JSValue item[2];            /* owned: the pair's items as they arrive */
+    int     nitem;
 } HeadersFill;
 void headers_fill_init(HeadersFill *f);
 void headers_fill_visit(JSContext *ctx, HeadersFill *f, JSStepVisit *v);

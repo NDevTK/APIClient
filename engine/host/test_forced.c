@@ -1047,6 +1047,19 @@ static const char *HTML =
       " var es = ''; for (var e of h) { es += e[0] + '=' + e[1] + ';'; }"
       " var fe = ''; h.forEach(function(v, k, t){ fe += k + ':' + v + ';'; if (t !== h) fe += 'BADTHIS'; });"
       " fetch('/api/hdriter?k=' + ks + '&v=' + vs + '&e=' + es + '&f=' + fe); })();"
+    /* §5.1's SEQUENCE arm, which Web IDL picks because the init is ITERABLE. It is the iterator protocol twice
+       over — once for the pairs, once for each pair's two items — so a GENERATOR init proves it is the protocol
+       and not an array walk, and a MAP proves the same for the shape that is iterable without being an array.
+       A pair that is not exactly two items is a TypeError, and null is not "no init": HeadersInit is a union of
+       object types that Web IDL does not make nullable. */
+    "(function(){"
+      " function* g(){ yield ['x-gen', 'g1']; yield ['x-gen', 'g2']; }"
+      " var a = new Headers(g()).get('x-gen');"
+      " var b = new Headers(new Map([['x-map', 'm1']])).get('x-map');"
+      " var c = new Headers([['x-arr', 'a1']]).get('x-arr');"
+      " var bad = 'no'; try { new Headers([['only-one']]); } catch (e) { bad = 'threw'; }"
+      " var nul = 'no'; try { new Headers(null); } catch (e) { nul = 'threw'; }"
+      " fetch('/api/hdrseq?g=' + a + '&m=' + b + '&a=' + c + '&bad=' + bad + '&nul=' + nul); })();"
     /* THE TRANSPORT REQUIREMENT REACHES THE SURFACE. `init.headers` is read and converted, and the endpoint
        carries what the request needs — which is the half of "usable" the @H surface never had. The
        Authorization value is built out of `state`, so it is a CONCOLIC and reports its SHAPE: the `{hole}` is
@@ -1327,6 +1340,12 @@ int main(void) {
                    strstr(js, "set-cookie=c1;set-cookie=c2;x-a=1, 9;x-b=2;") &&
                    strstr(js, "set-cookie:c1;set-cookie:c2;x-a:1, 9;x-b:2;") &&
                    !strstr(js, "BADTHIS"));
+    /* §5.1's sequence arm: a generator init (the protocol, not an array walk), a Map (iterable, not an array),
+       an array, a malformed pair, and null — which is NOT "no init". */
+    int hdrseq = (strstr(js, "\"/api/hdrseq\"") && strstr(js, "g1, g2") && strstr(js, "\"m1\"") &&
+                  strstr(js, "\"a1\"") &&
+                  strstr(js, "\"bad\",\"validValues\":[\"threw\"]") &&
+                  strstr(js, "\"nul\",\"validValues\":[\"threw\"]"));
     /* THE ENDPOINT CARRIES ITS HEADERS: the two literals as the strings the code computed, and the
        Authorization as a SHAPE, because a value built out of unknown input is not one this engine may invent.
        The method comes from the same init, so a POST recorded as a GET would fail here too. */
@@ -1590,7 +1609,7 @@ int main(void) {
         { "clone-body", clone_body, 0 },   { "body-bytes", body_bytes, 0 },
         { "body-iso", body_iso, 0 },       { "hdrs", hdrs, 0 },
         { "hdr-proxy", hdrproxy, 0 },      { "needs-auth", needsauth, 0 },
-        { "hdr-iter", hdriter, 0 },
+        { "hdr-iter", hdriter, 0 },        { "hdr-seq", hdrseq, 0 },
         { "pending", pending_await, 0 },   { "promise-state", promise_state, 0 },
         { "delete-iso", delete_iso, 0 },   { "floc-iso", floc_iso, 0 },
         { "ua", uafork_tt, 0 },            { "touch", touchfork_tt, 0 },

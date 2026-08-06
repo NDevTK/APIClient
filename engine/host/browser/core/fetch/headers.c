@@ -437,12 +437,125 @@ static int g_foreach_stepid = -1;
 
 /* ---- the fill (HeadersInit -> a header list) ------------------------------------------------------------ */
 
-enum { FILL_START = 0, FILL_ITER_ASKED, FILL_KEYS_ASKED, FILL_VALUE_ASKED, FILL_NAME_STR, FILL_VALUE_STR };
+enum { FILL_START = 0, FILL_ITER_ASKED, FILL_SEQ_PAIR, FILL_SEQ_ITEM,
+       FILL_KEYS_ASKED, FILL_VALUE_ASKED, FILL_NAME_STR, FILL_VALUE_STR };
+
+/* ---- the iterable cursor ---------------------------------------------------------------------------------- */
+
+enum { IT_GET_ITERFN = 0, IT_CALL_ITERFN, IT_GET_NEXT, IT_CALL_NEXT, IT_GET_DONE, IT_GET_VALUE };
+
+static void iter_cursor_init(IterCursor *c)
+{
+    memset(c, 0, sizeof *c);
+    c->iterfn = c->iter = c->next_fn = c->res = c->value = JS_UNDEFINED;
+    c->cb[0] = c->cb[1] = JS_UNDEFINED;
+}
+
+static void iter_cursor_visit(JSContext *ctx, IterCursor *c, JSStepVisit *v)
+{
+    int k;
+    v->val(ctx, &c->iterfn); v->val(ctx, &c->iter); v->val(ctx, &c->next_fn);
+    v->val(ctx, &c->res);    v->val(ctx, &c->value);
+    for (k = 0; k < 2; k++) v->val(ctx, &c->cb[k]);
+}
+
+static void iter_cursor_release(JSContext *ctx, IterCursor *c)
+{
+    int k;
+    JS_FreeValue(ctx, c->iterfn); JS_FreeValue(ctx, c->iter); JS_FreeValue(ctx, c->next_fn);
+    JS_FreeValue(ctx, c->res);    JS_FreeValue(ctx, c->value);
+    c->iterfn = c->iter = c->next_fn = c->res = c->value = JS_UNDEFINED;
+    for (k = 0; k < 2; k++) { JS_FreeValue(ctx, c->cb[k]); c->cb[k] = JS_UNDEFINED; }
+}
+
+/* ONE VALUE per successful return: `c->done` says the iteration ended, otherwise `c->value` holds it (owned by
+   the cursor). Call it again for the next. Returns >0 (the caller returns it), 0, or -1 with a throw live. */
+static int iter_cursor_run(JSContext *ctx, JSStepHdr *h, IterCursor *c, JSValueConst src,
+                           JSValue in, JSValue **out_cb, int *out_argc)
+{
+    int r;
+
+    if (c->phase == IT_GET_ITERFN) {
+        r = step_getprop_run(ctx, h, src, JS_WellKnownSymbolAtom(JS_WKS_ITERATOR), in, &c->iterfn,
+                             out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        in = JS_UNDEFINED;
+        if (!JS_IsFunction(ctx, c->iterfn)) {
+            JS_ThrowTypeError(ctx, "the value is not iterable");
+            return -1;
+        }
+        c->phase = IT_CALL_ITERFN;
+    }
+    if (c->phase == IT_CALL_ITERFN) {
+        r = step_call_run(ctx, &c->cphase, c->cb, c->iterfn, src, 0, NULL, in, &c->iter, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        in = JS_UNDEFINED;
+        if (!JS_IsObject(c->iter)) {
+            JS_ThrowTypeError(ctx, "the iterator is not an object");
+            return -1;
+        }
+        c->phase = IT_GET_NEXT;
+    }
+    if (c->phase == IT_GET_NEXT) {
+        JSAtom a = JS_NewAtom(ctx, "next");
+        r = step_getprop_run(ctx, h, c->iter, a, in, &c->next_fn, out_cb, out_argc);
+        JS_FreeAtom(ctx, a);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        in = JS_UNDEFINED;
+        c->phase = IT_CALL_NEXT;
+    }
+    if (c->phase == IT_CALL_NEXT) {
+        JS_FreeValue(ctx, c->res);
+        c->res = JS_UNDEFINED;
+        r = step_call_run(ctx, &c->cphase, c->cb, c->next_fn, c->iter, 0, NULL, in, &c->res, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        in = JS_UNDEFINED;
+        if (!JS_IsObject(c->res)) {
+            JS_ThrowTypeError(ctx, "an iterator result is not an object");
+            return -1;
+        }
+        c->phase = IT_GET_DONE;
+    }
+    if (c->phase == IT_GET_DONE) {
+        JSValue d;
+        JSAtom a = JS_NewAtom(ctx, "done");
+        r = step_getprop_run(ctx, h, c->res, a, in, &d, out_cb, out_argc);
+        JS_FreeAtom(ctx, a);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        in = JS_UNDEFINED;
+        c->done = JS_ToBool(ctx, d);
+        JS_FreeValue(ctx, d);
+        if (c->done) { c->phase = IT_CALL_NEXT; return 0; }
+        c->phase = IT_GET_VALUE;
+    }
+    DCHECK(c->phase == IT_GET_VALUE, "the iterable cursor was re-entered at a phase it never parks in");
+    {
+        JSAtom a = JS_NewAtom(ctx, "value");
+        JS_FreeValue(ctx, c->value);
+        c->value = JS_UNDEFINED;
+        r = step_getprop_run(ctx, h, c->res, a, in, &c->value, out_cb, out_argc);
+        JS_FreeAtom(ctx, a);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+    }
+    c->phase = IT_CALL_NEXT;   /* the next call resumes the loop, not the setup */
+    return 0;
+}
+
+/* ---- the fill's own state ---------------------------------------------------------------------------------- */
 
 void headers_fill_init(HeadersFill *f)
 {
     memset(f, 0, sizeof *f);
     f->keys = f->name = f->value = JS_UNDEFINED;
+    f->item[0] = f->item[1] = JS_UNDEFINED;
+    iter_cursor_init(&f->outer);
+    iter_cursor_init(&f->inner);
 }
 
 void headers_fill_visit(JSContext *ctx, HeadersFill *f, JSStepVisit *v)
@@ -450,6 +563,10 @@ void headers_fill_visit(JSContext *ctx, HeadersFill *f, JSStepVisit *v)
     v->val(ctx, &f->keys);
     v->val(ctx, &f->name);
     v->val(ctx, &f->value);
+    v->val(ctx, &f->item[0]);
+    v->val(ctx, &f->item[1]);
+    iter_cursor_visit(ctx, &f->outer, v);
+    iter_cursor_visit(ctx, &f->inner, v);
 }
 
 void headers_fill_release(JSContext *ctx, HeadersFill *f)
@@ -457,7 +574,11 @@ void headers_fill_release(JSContext *ctx, HeadersFill *f)
     JS_FreeValue(ctx, f->keys);
     JS_FreeValue(ctx, f->name);
     JS_FreeValue(ctx, f->value);
-    f->keys = f->name = f->value = JS_UNDEFINED;
+    JS_FreeValue(ctx, f->item[0]);
+    JS_FreeValue(ctx, f->item[1]);
+    f->keys = f->name = f->value = f->item[0] = f->item[1] = JS_UNDEFINED;
+    iter_cursor_release(ctx, &f->outer);
+    iter_cursor_release(ctx, &f->inner);
 }
 
 int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst init, HeaderList *out,
@@ -467,7 +588,11 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
     int r;
 
     if (f->phase == FILL_START) {
-        if (JS_IsUndefined(init) || JS_IsNull(init)) { JS_FreeValue(ctx, in); return 0; }
+        /* UNDEFINED IS "NOT GIVEN"; NULL IS NOT. `HeadersInit` is a union of two object types and Web IDL does
+           not make it nullable, so `new Headers(null)` and `{headers: null}` are TypeErrors — while an absent
+           optional argument, and an init object with no `headers` member, are simply no init. Treating the two
+           alike accepted null silently, which wpt's headers-basic asserts against by name. */
+        if (JS_IsUndefined(init)) { JS_FreeValue(ctx, in); return 0; }
         if (!JS_IsObject(init)) {
             JS_FreeValue(ctx, in);
             JS_ThrowTypeError(ctx, "a Headers init is not an object");
@@ -500,16 +625,72 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
         if (r > 0) return r;
         if (r < 0) return -1;
         in = JS_UNDEFINED;
-        /* THE SEQUENCE ARM IS NOT BUILT YET. Its steps are the iterator protocol — call @@iterator, then `next`
-           until `done`, then convert each pair — and every one of those is a request that now exists, so this
-           is a capability to write and not a hole in the surface. It aborts naming itself rather than answering
-           with the record arm's empty list, which is the stub this engine does not write. */
-        DCHECK(!JS_IsFunction(ctx, itf),
-               "a Headers init is ITERABLE, so Web IDL converts it as sequence<sequence<ByteString>> — build "
-               "that arm of the fill (@@iterator is read, its result is called, and `next` is driven to `done`, "
-               "all of them requests the host step surface exports)");
-        JS_FreeValue(ctx, itf);
-        f->phase = FILL_KEYS_ASKED;
+        if (JS_IsFunction(ctx, itf)) {
+            JS_FreeValue(ctx, itf);
+            f->phase = FILL_SEQ_PAIR;
+        } else {
+            JS_FreeValue(ctx, itf);
+            f->phase = FILL_KEYS_ASKED;
+        }
+    }
+
+    /* THE SEQUENCE ARM: `sequence<sequence<ByteString>>`. The outer cursor yields one PAIR per turn and the
+       inner one yields that pair's items — Web IDL nests the protocol, so this nests the cursor rather than
+       assuming the pair is an array. §5.1: a pair that does not hold exactly two items is a TypeError, which is
+       why the inner runs one step PAST the second item rather than stopping at it. */
+    while (f->phase == FILL_SEQ_PAIR || f->phase == FILL_SEQ_ITEM) {
+        if (f->phase == FILL_SEQ_PAIR) {
+            r = iter_cursor_run(ctx, h, &f->outer, init, in, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return -1;
+            in = JS_UNDEFINED;
+            if (f->outer.done) return 0;
+            if (!JS_IsObject(f->outer.value)) {
+                JS_ThrowTypeError(ctx, "a Headers init pair is not a sequence");
+                return -1;
+            }
+            iter_cursor_release(ctx, &f->inner);   /* the previous pair's cursor still held its iterator */
+            iter_cursor_init(&f->inner);
+            JS_FreeValue(ctx, f->item[0]); JS_FreeValue(ctx, f->item[1]);
+            f->item[0] = f->item[1] = JS_UNDEFINED;
+            f->nitem = 0;
+            f->phase = FILL_SEQ_ITEM;
+        }
+        for (;;) {
+            r = iter_cursor_run(ctx, h, &f->inner, f->outer.value, in, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return -1;
+            in = JS_UNDEFINED;
+            if (f->inner.done)
+                break;
+            if (f->nitem >= 2) { f->nitem = 3; break; }   /* three or more: the same TypeError as one */
+            f->item[f->nitem] = f->inner.value;
+            f->inner.value = JS_UNDEFINED;
+            f->nitem++;
+        }
+        if (f->nitem != 2) {
+            JS_ThrowTypeError(ctx, "a Headers init pair does not contain exactly two items");
+            return -1;
+        }
+        {
+            const char *kn = JS_ToCString(ctx, f->item[0]);
+            const char *kv = JS_ToCString(ctx, f->item[1]);
+            int bad;
+            if (!kn || !kv) {
+                if (kn) JS_FreeCString(ctx, kn);
+                if (kv) JS_FreeCString(ctx, kv);
+                return -1;
+            }
+            bad = !header_is_bytestring(kn) || !header_is_bytestring(kv);
+            if (!bad) header_list_append(out, kn, kv);
+            JS_FreeCString(ctx, kn);
+            JS_FreeCString(ctx, kv);
+            if (bad) {
+                JS_ThrowTypeError(ctx, "a header name or value is not a ByteString");
+                return -1;
+            }
+        }
+        f->phase = FILL_SEQ_PAIR;
     }
     /* The RECORD arm: [[OwnPropertyKeys]], then a [[Get]] per key, both requests. The phase is the same on the
        way in and while parked, which is what the request's own cursor is for — it asks on the first call and
