@@ -250,7 +250,7 @@ const ownFuncs = own.reduce((n, c) => n + c.length, 0)
           builds bucket concatenations, building a rope is what can ask for a rebalance, and the ropes built
           out of buckets are balanced, so the depth never reaches the rebalance point again.
        3  lre_case_conv, 2+2, and eleven single-function recursions. */
-const CEILING_BLOB = 10      /* the interpreter cycle's size */
+const CEILING_BLOB = 8       /* the interpreter cycle's size */
 const CEILING_OWN = 4       /* self-contained recursions */
 /* 70 -> 65, the parser cycle 29 -> 24, as js_parse_descent's explicit frame stack absorbed the precedence
    ladder (expr_binary / logical_and_or / coalesce_expr / cond_expr) and then UnaryExpression (unary / delete).
