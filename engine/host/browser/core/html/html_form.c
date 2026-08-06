@@ -262,7 +262,7 @@ static void form_submit_now(JSContext *ctx, lxb_dom_element_t *form)
     form_entry_list(ctx, form, &b);
 
     url = JS_NewStringLen(ctx, b.s ? b.s : "", b.s ? b.n : 0);
-    endpoint_record(ctx, post ? "POST" : "GET", url);
+    endpoint_record(ctx, post ? "POST" : "GET", url, NULL, 0);
     JS_FreeValue(ctx, url);
     free(b.s);
 }

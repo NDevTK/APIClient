@@ -835,7 +835,7 @@ static void element_prepare_script(JSContext *ctx, lxb_dom_element_t *el)
        it reaches the @H surface as the shape it is, rather than disappearing. */
     si = attr_shadow_find(el, ATTR_SLOT_ATTRIBUTE, "src");
     if (si >= 0) {
-        endpoint_record(ctx, "GET", attr_shadow_opaque(si));
+        endpoint_record(ctx, "GET", attr_shadow_opaque(si), NULL, 0);
         return;
     }
     src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &vl);

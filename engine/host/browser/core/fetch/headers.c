@@ -24,6 +24,7 @@
 #include "quickjs-step.h"
 #include "core/fetch/headers.h"
 #include "core/idl_args.h"
+#include "solver/concolic.h"
 
 static JSClassID g_headers_class;
 static JSValue   g_proto = JS_UNDEFINED;
@@ -269,8 +270,9 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
                 header_list_append(out, src->e[i].name, src->e[i].value);
             return 0;
         }
-        f->phase = FILL_ITER_ASKED;
+        JS_FreeValue(ctx, in);   /* nothing here asked for it; the arm below starts its own request */
         in = JS_UNDEFINED;
+        f->phase = FILL_ITER_ASKED;
     }
     /* WHICH ARM: Web IDL picks `sequence<sequence<ByteString>>` over `record<ByteString, ByteString>` by whether
        the init is ITERABLE, and that is a [[Get]] of @@iterator — an accessor or a Proxy trap away from being
@@ -341,8 +343,22 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
             f->phase = FILL_VALUE_STR;
         }
         DCHECK(f->phase == FILL_VALUE_STR, "the headers fill was re-entered at a phase it never parks in");
-        /* The value is ByteString, so ToString on it is the page's code AGAIN — a third request per key. */
-        {
+        /* AN UNKNOWN VALUE KEEPS ITS SHAPE. A header built out of external input — `{'Authorization': 'Bearer '
+           + token}` where the token is server-injected — is a CONCOLIC, and coercing it would either abort at
+           the ToString boundary or, worse, quietly de-taint it into some concrete-looking string. Its shape is
+           the display form the @H surface reports, and the `{hole}` in it is exactly what marks the header as a
+           runtime value the reviewer has to supply. This is the same explicit projection fetch_park asks for on
+           the URL, for the same reason. */
+        if (concolic_is(f->value)) {
+            const char *sh = concolic_shape_c(f->value);
+            JSValue sv = JS_NewString(ctx, sh ? sh : "{}");
+            if (JS_IsException(sv)) return -1;
+            JS_FreeValue(ctx, f->value);
+            f->value = sv;
+            JS_FreeValue(ctx, in);
+            in = JS_UNDEFINED;
+        } else {
+            /* Otherwise it is ByteString, so ToString on it is the page's code AGAIN — a third request per key. */
             JSValue s;
             r = step_tostring_run(ctx, h, f->value, in, &s, out_cb, out_argc);
             if (r > 0) return r;

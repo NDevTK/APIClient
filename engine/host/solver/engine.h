@@ -64,13 +64,16 @@ void engine_run(JSContext *ctx, char **bodies, char **srcs, int n);
    what a reply is, and the host holds no idea of what a flow is. */
 void engine_set_stall_hook(int (*owed)(void));
 
+/* HOW THE HOST PAYS WHAT IT OWES, for the driver that runs the frontier to completion in one call
+   (engine_run). The stepping entry answers a stall by returning to its caller, which is what the extension's
+   qjs_step does; a one-call driver has no such caller, so a stall with nobody to answer it ended the run — and
+   a flow that had issued a request stopped at that request, its continuation never reaching the reply. The
+   provider fills what engine_pending_urls names and returns how many entries it filled; 0 ends the run, which
+   is the honest answer to "nobody can supply this". */
+void engine_set_provider(int (*provide)(JSContext *ctx));
+
 void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int forking);
 int  engine_sched_step(void);
-
-/* FETCH-AWAIT: a host fetch that returns a PENDING promise registers its resolve capability + the value it will
-   deliver. A flow that awaits it parks; when the frontier stalls, engine_run resolves these and un-parks (the
-   network completing). Called from a live-fetch host-edge that models an asynchronous GET. */
-void engine_pending_fetch(JSContext *ctx, JSValueConst resolve, JSValueConst value);
 
 /* The same park, with the URL only the TRUSTED HOST can fetch. The value arrives later through engine_provide;
    until it does the flow cannot finish, which is what keeps reply-gated code reachable. ONE register — the

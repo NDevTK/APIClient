@@ -16,23 +16,22 @@
 #include <stdio.h>
 #include <string.h>
 
-/* FETCH-AWAIT parking: a host fetch that is not synchronously available (a live network GET) returns a PENDING
-   promise and registers its resolve capability + the value it will deliver on THE RUNNING FLOW. A flow that awaits
-   it suspends its async body; when the flow's scripts + microtasks are drained but a live fetch is still pending,
-   flow_step resolves the flow's OWN pending fetches (the network completing) — each awaiting async body's reaction
-   enqueues as a job in that flow's queue — and resumes. Per-flow (not global) so one flow's drain never resolves
-   another flow's fetch (which would route the reaction to the wrong flow's COW — a leak + contamination). */
-void engine_pending_fetch(JSContext *ctx, JSValueConst resolve, JSValueConst value) {
-    engine_pending_fetch_url(ctx, resolve, value, NULL);
-}
-
+/* FETCH-AWAIT parking: a host fetch registers its resolve capability on THE RUNNING FLOW. A flow that awaits it
+   suspends its async body; the flow's own pending register is drained when the reply arrives — each awaiting
+   async body's reaction enqueues as a job in that flow's queue — and it resumes. Per-flow (not global) so one
+   flow's drain never resolves another flow's fetch (which would route the reaction to the wrong flow's COW — a
+   leak + contamination).
+   THERE IS ONE FORM, and it names a URL. A second form used to take the value UP FRONT, for an edge that
+   already had the bytes; nothing in the engine ever did — the Fetch component and the module loader both owe
+   theirs to the trusted host — and its only caller was a fixture stub standing in for a host that did not
+   answer. With the host answering, that stub and this form both go. */
 /* The same park, with the URL the HOST must fetch. The value arrives later through engine_provide; until it
    does the flow cannot finish, which is what keeps the reply-gated code reachable. */
 void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst value, const char *url) {
     Flow *f = flow_running();
     /* A live fetch is ALWAYS issued from a running flow — both explore and @S verify are the ONE scheduler now
        (run_scheduler), so flow_running() is set; the flow's stall drains it (flow_step). */
-    DCHECK(f != NULL, "engine_pending_fetch: a live fetch issued outside a running flow");
+    DCHECK(f != NULL, "engine_pending_fetch_url: a live fetch issued outside a running flow");
     if (f->npend >= f->pendcap) {
         f->pendcap = f->pendcap ? f->pendcap * 2 : 8;
         f->pending = realloc(f->pending, (size_t)f->pendcap * sizeof(FlowPending));
@@ -881,10 +880,24 @@ int engine_sched_step(void) {
    thousand switches, so a cadence in the hundreds of thousands emits nothing and tells nobody anything. */
 #define ENGINE_PROGRESS_EVERY 1000
 
+static int (*g_provider)(JSContext *ctx);
+void engine_set_provider(int (*provide)(JSContext *ctx)) { g_provider = provide; }
+
 static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int forking) {
-    int next = ENGINE_PROGRESS_EVERY, last_cands = -1;
+    int next = ENGINE_PROGRESS_EVERY, last_cands = -1, r;
     engine_sched_begin(ctx, bodies, srcs, n, forking);
-    while (engine_sched_step() != ENGINE_STEP_DONE) {
+    for (;;) {
+        r = engine_sched_step();
+        if (r == ENGINE_STEP_DONE)
+            break;
+        /* THE HOST OWES A REPLY, so this is where it pays. Without this seam the loop had nowhere to answer a
+           stall from and a request the trusted host must make simply ended the run: every flow that fetched
+           stopped at its fetch, and its continuation — the part that reads the reply — never ran at all. A
+           provider that fills nothing ends the run, which is the honest answer to "nobody can supply this". */
+        if (r == ENGINE_STEP_STALLED) {
+            if (!g_provider || g_provider(ctx) == 0)
+                break;
+        }
         /* Either enough work has happened to be worth a line, or the SEARCH grew — a new candidate is the event
            that changes what the rest of the run will cost, so it is worth saying when it happens. */
         if (g_switches >= next || solve_candidate_count() != last_cands) {

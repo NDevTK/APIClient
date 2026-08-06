@@ -33,7 +33,7 @@
    belong to a runtime, and SECURITY.md gives this build one WASM instance per DOCUMENT — one runtime — so these
    are that runtime's. The DCHECK at install is what makes a second one impossible rather than merely unlikely. */
 static int    g_fetch_stepid = -1;
-static JSAtom g_atom_method, g_atom_url;
+static JSAtom g_atom_method, g_atom_url, g_atom_headers;
 static JSRuntime *g_fetch_rt;
 
 typedef struct JSFetchState {
@@ -41,6 +41,9 @@ typedef struct JSFetchState {
     uint8_t   stage;
     JSValue   method;   /* the answer to the `init.method` read, or undefined */
     JSValue   url;      /* the answer to the `input.url` read, or the USVString input itself */
+    JSValue   hinit;    /* the answer to the `init.headers` read — a HeadersInit the fill converts */
+    HeadersFill fill;   /* the fill's cursor: it parks per key, so it cannot be a loop here */
+    HeaderList  hdrs;   /* what the request carries, which is half of what makes the endpoint usable */
 } JSFetchState;
 
 /* WHAT THIS MACHINE OWNS. Declared once and read by both consumers: the teardown releases each, and the
@@ -51,6 +54,8 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSFetchState *s = st;
     v->val(ctx, &s->method);
     v->val(ctx, &s->url);
+    v->val(ctx, &s->hinit);
+    headers_fill_visit(ctx, &s->fill, v);   /* the fill's own slots — it parks mid-conversion like any machine */
 }
 
 /* Park the request on the FLOW that issued it: the URL the trusted host must fetch, and the capability that
@@ -128,11 +133,15 @@ static JSValue js_fetch_fini(JSContext *ctx, void *st, bool take_result)
         promise = fetch_park(ctx, s->url);
     JS_FreeValue(ctx, s->method);
     JS_FreeValue(ctx, s->url);
+    JS_FreeValue(ctx, s->hinit);
+    headers_fill_release(ctx, &s->fill);
+    header_list_free(&s->hdrs);
     return promise;
 }
 
-/* Stage 0 reads `init.method`, stage 1 reads `input.url`, stage 2 records the endpoint. Each read is a request
-   the machine parks on; an argument that needs no read falls straight through to the next stage. */
+/* Stage 0 reads `init.method`, stage 1 `input.url`, stage 2 `init.headers`, stage 3 converts that HeadersInit,
+   and stage 4 records the endpoint. Each read is a request the machine parks on; an argument that needs no read
+   falls straight through to the next stage. */
 static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSFetchState *s = st;
@@ -147,6 +156,7 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
             if (r < 0) return JS_STEP_ABRUPT;
         } else {
             JS_FreeValue(ctx, cb_result);
+            s->method = JS_UNDEFINED;   /* the skipped read's answer, spelled — see stage 2 */
         }
         cb_result = JS_UNDEFINED;
         s->stage = 1;
@@ -162,15 +172,64 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
             JS_FreeValue(ctx, cb_result);
             s->url = JS_DupValue(ctx, input);
         }
+        /* THE DELIVERED VALUE IS CONSUMED HERE. Either branch above has taken it — the request answers with it
+           and the other frees it — so the local must be cleared before the next stage, which now hands it to
+           another request. It was left stale when this was the last stage and nothing read it again; the moment
+           a stage was added after it, that stale copy was freed a second time. */
+        cb_result = JS_UNDEFINED;
         s->stage = 2;
     }
+    /* 5.4 Request step 33: `init.headers`, whose value is a HeadersInit. The READ is the page's code like the
+       other two, and the CONVERSION is the page's code again — which is why the fill is a sub-sequence and not
+       a loop here. Without it the endpoint's transport requirement was simply invisible: every request that
+       needs an `Authorization` or an `X-Api-Version` was reported as if it needed nothing. */
+    if (s->stage == 2) {
+        if (JS_IsObject(init)) {
+            r = step_getprop_run(ctx, &s->hdr, init, g_atom_headers, cb_result, &s->hinit, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return JS_STEP_ABRUPT;
+        } else {
+            JS_FreeValue(ctx, cb_result);
+            /* NO init AT ALL, so there is no HeadersInit — and "no HeadersInit" has to be spelled `undefined`,
+               not left as the state's zero. A js_mallocz'd JSValue reads as the INTEGER 0, which is neither
+               undefined nor an object, so the fill rejected `fetch(url)` — every request with no init — with
+               "a Headers init is not an object". The other two answers are written by their reads on every
+               path that reaches them; this is the one a skipped read leaves behind. */
+            s->hinit = JS_UNDEFINED;
+        }
+        cb_result = JS_UNDEFINED;
+        headers_fill_init(&s->fill);
+        s->stage = 3;
+    }
+    if (s->stage == 3) {
+        r = headers_fill_run(ctx, &s->hdr, &s->fill, s->hinit, &s->hdrs, cb_result, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return JS_STEP_ABRUPT;
+        cb_result = JS_UNDEFINED;
+        s->stage = 4;
+    }
 
-    DCHECK(s->stage == 2, "the fetch machine was re-entered at a stage it never parks in");
+    DCHECK(s->stage == 4, "the fetch machine was re-entered at a stage it never parks in");
     if (JS_IsString(s->method)) {
         mc = JS_ToCString(ctx, s->method);
         if (mc) method = mc;
     }
-    endpoint_record(ctx, method, s->url);
+    {
+        /* The surface's own header shape, built from the list — two fields either way, so this is a projection
+           and not a second representation. The solver must not learn what a HeaderList is. */
+        EndpointHeader *eh = NULL;
+        int i;
+        if (s->hdrs.n) {
+            eh = js_malloc(ctx, sizeof(*eh) * (size_t)s->hdrs.n);
+            if (!eh) { if (mc) JS_FreeCString(ctx, mc); return JS_STEP_ABRUPT; }
+            for (i = 0; i < s->hdrs.n; i++) {
+                eh[i].name = s->hdrs.e[i].name;
+                eh[i].value = s->hdrs.e[i].value;
+            }
+        }
+        endpoint_record(ctx, method, s->url, eh, s->hdrs.n);
+        js_free(ctx, eh);
+    }
     if (mc) JS_FreeCString(ctx, mc);
     return JS_STEP_DONE;
 }
@@ -193,6 +252,7 @@ void fetch_install(JSContext *ctx, JSValueConst global)
         headers_init(ctx);
         g_atom_method = JS_NewAtom(ctx, "method");
         g_atom_url    = JS_NewAtom(ctx, "url");
+        g_atom_headers = JS_NewAtom(ctx, "headers");
         g_fetch_stepid = JS_RegisterStepDef(rt, &js_fetch_def);
     }
     headers_install(ctx, global);   /* §5's interface object — a page builds an init with it before it fetches */

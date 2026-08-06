@@ -8,7 +8,42 @@
 #include <stdio.h>
 
 typedef struct { char *name; char **vals; int nvals, vcap; } Param;   /* validValues merged across same-shape hits */
-typedef struct { char *method; char *path; Param *params; int np, pcap; } Endpoint;
+typedef struct { char *name; char *value; } EpHeader;   /* the transport half: what the request must carry */
+typedef struct { char *method; char *path; Param *params; int np, pcap;
+                 EpHeader *hdrs; int nh, hcap; } Endpoint;
+
+/* A value carrying a `{hole}` is a SHAPE — an unknown the code did not compute — and a hole-free one is the
+   real thing. The distinction decides the merge: a concrete value supersedes a shape for the same header, which
+   is exactly what a param's example values already do. */
+static int header_is_shape(const char *v) { return strchr(v, '{') != NULL; }
+
+static void endpoint_merge_headers(Endpoint *e, const EndpointHeader *hdrs, int nhdrs) {
+    for (int i = 0; i < nhdrs; i++) {
+        const char *n = hdrs[i].name, *v = hdrs[i].value ? hdrs[i].value : "";
+        int j, found = 0;
+        if (!n || !n[0]) continue;
+        for (j = 0; j < e->nh; j++) {
+            if (strcmp(e->hdrs[j].name, n)) continue;
+            found = 1;
+            if (header_is_shape(e->hdrs[j].value) && !header_is_shape(v)) {
+                free(e->hdrs[j].value);
+                e->hdrs[j].value = strdup(v);
+                CHECK(e->hdrs[j].value, "endpoint: OOM refining a header value");
+            }
+            break;
+        }
+        if (found) continue;
+        if (e->nh >= e->hcap) {
+            e->hcap = e->hcap ? e->hcap * 2 : 4;
+            e->hdrs = realloc(e->hdrs, (size_t)e->hcap * sizeof(EpHeader));
+            CHECK(e->hdrs, "endpoint: OOM growing an endpoint's headers");
+        }
+        e->hdrs[e->nh].name = strdup(n);
+        e->hdrs[e->nh].value = strdup(v);
+        CHECK(e->hdrs[e->nh].name && e->hdrs[e->nh].value, "endpoint: OOM copying a header");
+        e->nh++;
+    }
+}
 
 static Endpoint *g_eps = NULL;
 static int g_eps_n = 0, g_eps_cap = 0;
@@ -60,7 +95,8 @@ static int same_identity(Endpoint *e, const char *method, const char *path, KV *
     return 1;
 }
 
-void endpoint_record(JSContext *ctx, const char *method, JSValueConst url) {
+void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
+                     const EndpointHeader *hdrs, int nhdrs) {
     if (g_suppress) return;   /* candidate/verify run -> not a real @H endpoint */
     char *disp = url_display(ctx, url);
     char *path; KV *kv; int n;
@@ -70,6 +106,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url) {
     for (int i = 0; i < g_eps_n; i++) {                 /* merge into an existing same-identity endpoint */
         if (same_identity(&g_eps[i], method, path, kv, n)) {
             for (int j = 0; j < n; j++) param_add_val(&g_eps[i].params[j], kv[j].val);
+            endpoint_merge_headers(&g_eps[i], hdrs, nhdrs);
             goto done;
         }
     }
@@ -79,6 +116,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url) {
     e->method = strdup(method); e->path = strdup(path);
     if (n) { e->params = calloc(n, sizeof(Param)); CHECK(e->params, "endpoint: OOM params"); }
     for (int j = 0; j < n; j++) { e->params[e->np].name = strdup(kv[j].name); param_add_val(&e->params[e->np], kv[j].val); e->np++; }
+    endpoint_merge_headers(e, hdrs, nhdrs);
     flow_credit_emit(1.0);   /* a NEW endpoint: this flow just emitted value-of-information -> WFQ reward */
 done:
     free(path);
@@ -123,7 +161,21 @@ char *endpoint_json_array(void) {
             for (int k = 0; k < e->params[j].nvals; k++) { if (k) buf_puts(&b, ","); buf_json_str(&b, e->params[j].vals[k]); }
             buf_puts(&b, "]}");
         }
-        buf_puts(&b, "]}");
+        buf_puts(&b, "]");
+        /* The transport half, and ONLY when there is one — an endpoint with no learned header must not claim an
+           empty requirement, which reads as "needs nothing" rather than "nothing was observed". A record keyed
+           by header name, which is the shape the popup's Required Headers section already reads. */
+        if (e->nh) {
+            buf_puts(&b, ",\"headers\":{");
+            for (int j = 0; j < e->nh; j++) {
+                if (j) buf_puts(&b, ",");
+                buf_json_str(&b, e->hdrs[j].name);
+                buf_puts(&b, ":");
+                buf_json_str(&b, e->hdrs[j].value);
+            }
+            buf_puts(&b, "}");
+        }
+        buf_puts(&b, "}");
     }
     buf_puts(&b, "]");
     buf_ensure(&b, 1); b.b[b.n] = 0;
@@ -137,6 +189,8 @@ void endpoint_free(void) {
         free(g_eps[i].method); free(g_eps[i].path);
         for (int j = 0; j < g_eps[i].np; j++) { free(g_eps[i].params[j].name); for (int k = 0; k < g_eps[i].params[j].nvals; k++) free(g_eps[i].params[j].vals[k]); free(g_eps[i].params[j].vals); }
         free(g_eps[i].params);
+        for (int j = 0; j < g_eps[i].nh; j++) { free(g_eps[i].hdrs[j].name); free(g_eps[i].hdrs[j].value); }
+        free(g_eps[i].hdrs);
     }
     free(g_eps); g_eps = NULL; g_eps_n = g_eps_cap = 0;
 }
