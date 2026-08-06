@@ -95,6 +95,9 @@ static void enc_put(EncBuf *o, uint32_t cp)
 
 /* ---- §7.1's TextDecoder ------------------------------------------------------------------------------------ */
 
+/* §13.3.1's decoder MODES. They are the standard's own states, named as it names them. */
+enum { JIS_ASCII = 0, JIS_ROMAN, JIS_KATAKANA, JIS_LEAD, JIS_TRAIL, JIS_ESC_START, JIS_ESC };
+
 /* THE DECODER'S STATE, which is what makes `stream: true` work: a sequence split across two calls resumes in
    the middle, and §7.1's "serialize stream" only flushes an incomplete one when the last chunk arrives. */
 typedef struct {
@@ -112,6 +115,12 @@ typedef struct {
        so 0 IS the "nothing held" value rather than a separate flag — a byte of 0x00 never reaches them because
        the machine only holds bytes in 0x81..0xFE and 0x30..0x39. */
     uint8_t gb_first, gb_second, gb_third;
+    /* §12/§13/§14's single held LEAD byte, and EUC-JP's jis0212 flag — the one bit that decides which of two
+       indexes its pointer is looked up in. §13.3.1's ISO-2022-JP is the one with a state rather than a lead:
+       its escape sequences switch the whole decoder between ASCII, Roman, Katakana and two-byte modes, and
+       `jis_out` is the state it returns to when an escape turns out not to be one. */
+    uint8_t mb_lead, jis0212;
+    uint8_t jis_state, jis_out, jis_lead, jis_output_flag;
     /* THE STANDARD'S "prepend to the stream". Every decoder here has a step that re-reads a byte it has
        already taken — UTF-8 recovering from a truncated sequence, UTF-16 orphaning a lead surrogate, gb18030
        giving back a whole held sequence — and a byte's INDEX in the caller's buffer is the wrong way to say
@@ -151,6 +160,9 @@ static void decoder_reset(DecoderState *d)
     d->bom_seen = 0;
     d->gb_first = d->gb_second = d->gb_third = 0;
     d->nback = 0;
+    d->mb_lead = d->jis0212 = 0;
+    d->jis_state = d->jis_out = JIS_ASCII;
+    d->jis_lead = d->jis_output_flag = 0;
 }
 
 /* THE STANDARD'S "prepend to the stream", in order: the first byte pushed is the first re-read. */
@@ -324,6 +336,236 @@ static int gb18030_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
     return -1;
 }
 
+/* An index lookup that answers 0 for "maps to nothing", which is what every one of these indexes writes an
+   absent pointer as — U+0000 is not an entry in any of them. `n` is the index's own length, so a pointer past
+   its end is absent rather than a read off the end. */
+#define ENC_INDEX_CP(tbl, n, ptr) ((ptr) < (uint32_t)(n) ? (uint32_t)(tbl)[(ptr)] : 0u)
+
+/* §12.1.1's Big5 decoder. Four pointers answer TWO code points each — the standard writes them out rather than
+   putting them in the index, because an index maps a pointer to one — so this is the only decoder here that
+   emits twice from one step. */
+static int big5_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
+{
+    uint32_t pointer, cp;
+    uint8_t lead, offset;
+
+    if (d->mb_lead != 0) {
+        lead = d->mb_lead;
+        d->mb_lead = 0;
+        offset = b < 0x7F ? 0x40 : 0x62;
+        if ((b >= 0x40 && b <= 0x7E) || (b >= 0xA1 && b <= 0xFE)) {
+            pointer = ((uint32_t)(lead - 0x81)) * 157u + (uint32_t)(b - offset);
+            switch (pointer) {
+            case 1133: enc_put(o, 0x00CA); enc_put(o, 0x0304); return 0;
+            case 1134: enc_put(o, 0x00CA); enc_put(o, 0x030C); return 0;
+            case 1135: enc_put(o, 0x00EA); enc_put(o, 0x0304); return 0;
+            case 1136: enc_put(o, 0x00EA); enc_put(o, 0x030C); return 0;
+            default: break;
+            }
+            cp = ENC_INDEX_CP(ENCODING_BIG5, ENCODING_BIG5_N, pointer);
+            if (cp) { enc_put(o, cp); return 0; }
+        }
+        if (b < 0x80) dec_push_back(d, b);
+        if (!fatal) enc_put(o, 0xFFFD);
+        return -1;
+    }
+    if (b < 0x80) { enc_put(o, b); return 0; }
+    if (b >= 0x81 && b <= 0xFE) { d->mb_lead = b; return 0; }
+    if (!fatal) enc_put(o, 0xFFFD);
+    return -1;
+}
+
+/* §13.2.1's EUC-JP decoder. Its 0x8F lead selects the OTHER index for the pair that follows, which is what
+   `jis0212` carries: one flag, cleared by the step that reads it, exactly as the standard clears it. */
+static int euc_jp_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
+{
+    uint32_t pointer = 0, cp = 0;
+    uint8_t lead;
+
+    if (d->mb_lead == 0x8E && b >= 0xA1 && b <= 0xDF) {
+        d->mb_lead = 0;
+        enc_put(o, 0xFF61u - 0xA1u + b);   /* the half-width katakana block */
+        return 0;
+    }
+    if (d->mb_lead == 0x8F && b >= 0xA1 && b <= 0xFE) {
+        d->jis0212 = 1;
+        d->mb_lead = b;
+        return 0;
+    }
+    if (d->mb_lead != 0) {
+        lead = d->mb_lead;
+        d->mb_lead = 0;
+        if (lead >= 0xA1 && lead <= 0xFE && b >= 0xA1 && b <= 0xFE) {
+            pointer = ((uint32_t)(lead - 0xA1)) * 94u + (uint32_t)(b - 0xA1);
+            cp = d->jis0212 ? ENC_INDEX_CP(ENCODING_JIS0212, ENCODING_JIS0212_N, pointer)
+                            : ENC_INDEX_CP(ENCODING_JIS0208, ENCODING_JIS0208_N, pointer);
+        }
+        d->jis0212 = 0;
+        if (b < 0xA1 || b > 0xFE) dec_push_back(d, b);
+        if (cp) { enc_put(o, cp); return 0; }
+        if (!fatal) enc_put(o, 0xFFFD);
+        return -1;
+    }
+    if (b < 0x80) { enc_put(o, b); return 0; }
+    if (b == 0x8E || b == 0x8F || (b >= 0xA1 && b <= 0xFE)) { d->mb_lead = b; return 0; }
+    if (!fatal) enc_put(o, 0xFFFD);
+    return -1;
+}
+
+/* §13.4.1's Shift_JIS decoder. Its pointers 8836..10715 are the private use area rather than an index entry,
+   which is why that range is answered before the lookup rather than filled into the table. */
+static int shift_jis_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
+{
+    uint32_t pointer, cp;
+    uint8_t lead, offset, lead_offset;
+
+    if (d->mb_lead != 0) {
+        lead = d->mb_lead;
+        d->mb_lead = 0;
+        offset = b < 0x7F ? 0x40 : 0x41;
+        lead_offset = lead < 0xA0 ? 0x81 : 0xC1;
+        if ((b >= 0x40 && b <= 0x7E) || (b >= 0x80 && b <= 0xFC)) {
+            pointer = ((uint32_t)(lead - lead_offset)) * 188u + (uint32_t)(b - offset);
+            if (pointer >= 8836 && pointer <= 10715) {
+                enc_put(o, 0xE000u - 8836u + pointer);
+                return 0;
+            }
+            cp = ENC_INDEX_CP(ENCODING_JIS0208, ENCODING_JIS0208_N, pointer);
+            if (cp) { enc_put(o, cp); return 0; }
+        }
+        if (b < 0x80) dec_push_back(d, b);
+        if (!fatal) enc_put(o, 0xFFFD);
+        return -1;
+    }
+    if (b < 0x80 || b == 0x80) { enc_put(o, b); return 0; }
+    if (b >= 0xA1 && b <= 0xDF) { enc_put(o, 0xFF61u - 0xA1u + b); return 0; }
+    if ((b >= 0x81 && b <= 0x9F) || (b >= 0xE0 && b <= 0xFC)) { d->mb_lead = b; return 0; }
+    if (!fatal) enc_put(o, 0xFFFD);
+    return -1;
+}
+
+/* §14.1.1's EUC-KR decoder — the simplest of the five: one lead, one pointer, one index. */
+static int euc_kr_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
+{
+    uint32_t pointer, cp = 0;
+    uint8_t lead;
+
+    if (d->mb_lead != 0) {
+        lead = d->mb_lead;
+        d->mb_lead = 0;
+        if (b >= 0x41 && b <= 0xFE) {
+            pointer = ((uint32_t)(lead - 0x81)) * 190u + (uint32_t)(b - 0x41);
+            cp = ENC_INDEX_CP(ENCODING_EUC_KR, ENCODING_EUC_KR_N, pointer);
+        }
+        if (!cp && b < 0x80) dec_push_back(d, b);
+        if (cp) { enc_put(o, cp); return 0; }
+        if (!fatal) enc_put(o, 0xFFFD);
+        return -1;
+    }
+    if (b < 0x80) { enc_put(o, b); return 0; }
+    if (b >= 0x81 && b <= 0xFE) { d->mb_lead = b; return 0; }
+    if (!fatal) enc_put(o, 0xFFFD);
+    return -1;
+}
+
+/* §13.3.1's ISO-2022-JP decoder — the one encoding here that is a MODE MACHINE rather than a lead byte. Its
+ * escape sequences switch the whole decoder, and an escape that turns out not to be one has to unwind to the
+ * mode it interrupted, which is what `jis_out` holds. The `output` flag is the standard's own: an escape that
+ * lands on the mode already in force with nothing emitted since is an error, which is how it rejects
+ * `ESC ( B ESC ( B` while accepting the same pair around real text. */
+static int iso2022jp_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
+{
+    uint32_t pointer, cp;
+
+    switch (d->jis_state) {
+    case JIS_ASCII:
+        if (b == 0x1B) { d->jis_state = JIS_ESC_START; return 0; }
+        if (b < 0x80 && b != 0x0E && b != 0x0F) { d->jis_output_flag = 0; enc_put(o, b); return 0; }
+        d->jis_output_flag = 0;
+        if (!fatal) enc_put(o, 0xFFFD);
+        return -1;
+    case JIS_ROMAN:
+        if (b == 0x1B) { d->jis_state = JIS_ESC_START; return 0; }
+        if (b == 0x5C) { d->jis_output_flag = 0; enc_put(o, 0x00A5); return 0; }   /* the yen sign */
+        if (b == 0x7E) { d->jis_output_flag = 0; enc_put(o, 0x203E); return 0; }   /* the overline */
+        if (b < 0x80 && b != 0x0E && b != 0x0F && b != 0x1B) {
+            d->jis_output_flag = 0;
+            enc_put(o, b);
+            return 0;
+        }
+        d->jis_output_flag = 0;
+        if (!fatal) enc_put(o, 0xFFFD);
+        return -1;
+    case JIS_KATAKANA:
+        if (b == 0x1B) { d->jis_state = JIS_ESC_START; return 0; }
+        if (b >= 0x21 && b <= 0x5F) { d->jis_output_flag = 0; enc_put(o, 0xFF61u - 0x21u + b); return 0; }
+        d->jis_output_flag = 0;
+        if (!fatal) enc_put(o, 0xFFFD);
+        return -1;
+    case JIS_LEAD:
+        if (b == 0x1B) { d->jis_state = JIS_ESC_START; return 0; }
+        if (b == 0x24 || (b >= 0x21 && b <= 0x7E)) {
+            d->jis_output_flag = 0;
+            d->jis_lead = b;
+            d->jis_state = JIS_TRAIL;
+            return 0;
+        }
+        d->jis_output_flag = 0;
+        if (!fatal) enc_put(o, 0xFFFD);
+        return -1;
+    case JIS_TRAIL:
+        if (b == 0x1B) {
+            d->jis_state = JIS_ESC_START;
+            if (!fatal) enc_put(o, 0xFFFD);
+            return -1;
+        }
+        d->jis_state = JIS_LEAD;
+        if (b >= 0x21 && b <= 0x7E) {
+            pointer = ((uint32_t)(d->jis_lead - 0x21)) * 94u + (uint32_t)(b - 0x21);
+            cp = ENC_INDEX_CP(ENCODING_JIS0208, ENCODING_JIS0208_N, pointer);
+            if (cp) { enc_put(o, cp); return 0; }
+            if (!fatal) enc_put(o, 0xFFFD);
+            return -1;
+        }
+        if (!fatal) enc_put(o, 0xFFFD);
+        return -1;
+    case JIS_ESC_START:
+        if (b == 0x24 || b == 0x28) { d->jis_lead = b; d->jis_state = JIS_ESC; return 0; }
+        dec_push_back(d, b);
+        d->jis_output_flag = 0;
+        d->jis_state = d->jis_out;
+        if (!fatal) enc_put(o, 0xFFFD);
+        return -1;
+    default: {
+        uint8_t lead = d->jis_lead;
+        uint8_t state = 0xFF;
+        DCHECK(d->jis_state == JIS_ESC, "the ISO-2022-JP decoder ran in a state it does not have");
+        d->jis_lead = 0;
+        if (lead == 0x28 && b == 0x42) state = JIS_ASCII;
+        else if (lead == 0x28 && b == 0x4A) state = JIS_ROMAN;
+        else if (lead == 0x28 && b == 0x49) state = JIS_KATAKANA;
+        else if (lead == 0x24 && (b == 0x40 || b == 0x42)) state = JIS_LEAD;
+        if (state != 0xFF) {
+            d->jis_state = d->jis_out = state;
+            /* The standard's `output` flag: two escapes in a row with nothing between them is an error. */
+            if (d->jis_output_flag) {
+                d->jis_output_flag = 0;
+                if (!fatal) enc_put(o, 0xFFFD);
+                return -1;
+            }
+            d->jis_output_flag = 1;
+            return 0;
+        }
+        dec_push_back(d, lead);
+        dec_push_back(d, b);
+        d->jis_output_flag = 0;
+        d->jis_state = d->jis_out;
+        if (!fatal) enc_put(o, 0xFFFD);
+        return -1;
+    }
+    }
+}
+
 /* Run `len` bytes through the receiver's decoder. Returns -1 with a TypeError live in fatal mode. */
 static int decoder_run(JSContext *ctx, DecoderState *d, const uint8_t *p, size_t len, EncBuf *o)
 {
@@ -366,10 +608,20 @@ static int decoder_run(JSContext *ctx, DecoderState *d, const uint8_t *p, size_t
             /* §11.1.1 serves BOTH: gbk is gb18030 with an encoder difference, and the standard gives it no
                decoder of its own. */
             err = gb18030_step(d, b, o, d->fatal);
+        } else if (d->enc == ENC_BIG5) {
+            err = big5_step(d, b, o, d->fatal);
+        } else if (d->enc == ENC_EUC_JP) {
+            err = euc_jp_step(d, b, o, d->fatal);
+        } else if (d->enc == ENC_SHIFT_JIS) {
+            err = shift_jis_step(d, b, o, d->fatal);
+        } else if (d->enc == ENC_EUC_KR) {
+            err = euc_kr_step(d, b, o, d->fatal);
+        } else if (d->enc == ENC_ISO_2022_JP) {
+            err = iso2022jp_step(d, b, o, d->fatal);
         } else {
-            DFAIL("a page asked to decode a legacy multi-byte encoding — build its decoder: each of Big5, "
-                  "EUC-JP, EUC-KR, ISO-2022-JP and Shift_JIS is its own algorithm over its own index, and the "
-                  "label already resolves so only the decode is missing");
+            DFAIL("a page asked to decode an encoding this engine has no decoder for — every one the standard "
+                  "names now has one, so reaching this means a NEW encoding was added to the registry and the "
+                  "decode was not");
         }
         if (err && d->fatal) {
             JS_ThrowTypeError(ctx, "the encoded data was not valid %s", ENCODING_NAMES[d->enc]);
@@ -445,8 +697,14 @@ static JSValue js_decoder_decode(JSContext *ctx, JSValueConst this_val, int argc
            mid-character is not a character, and holding it silently would drop bytes the page handed over. */
         /* §11.1.1 step 1 counts gb18030's three held bytes for the same reason: a four-byte sequence cut short
            by the end of the stream is not a character either. */
+        /* Every decoder's held state counts: a sequence cut short by the end of the stream is not a character
+           whichever machine was holding it. §13.3.1 adds one of its own — ISO-2022-JP is incomplete when it is
+           mid-escape OR when it ends in a two-byte mode, because the mode itself is unfinished. */
         int incomplete = d->needed != 0 || d->half >= 0 || d->lead_surrogate >= 0 ||
-                         d->gb_first != 0 || d->gb_second != 0 || d->gb_third != 0;
+                         d->gb_first != 0 || d->gb_second != 0 || d->gb_third != 0 || d->mb_lead != 0 ||
+                         (d->enc == ENC_ISO_2022_JP &&
+                          (d->jis_state == JIS_ESC_START || d->jis_state == JIS_ESC ||
+                           d->jis_state == JIS_TRAIL));
         if (incomplete) {
             if (d->fatal) {
                 free(o.b);
@@ -454,7 +712,23 @@ static JSValue js_decoder_decode(JSContext *ctx, JSValueConst this_val, int argc
                 decoder_reset(d);
                 return JS_ThrowTypeError(ctx, "the encoded data ended mid-sequence");
             }
+            /* §13.3.1's escape states PREPEND what they were holding before returning the error, and the
+               standard says so for the EOF byte too — so `ESC $` at the end of a stream is U+FFFD followed by
+               the `$` it was holding, not U+FFFD alone. The flush is a STEP of the decoder, which means what
+               it pushes back is then decoded. */
+            if (d->enc == ENC_ISO_2022_JP) {
+                if (d->jis_state == JIS_ESC) dec_push_back(d, d->jis_lead);
+                d->jis_lead = 0;
+                d->jis_output_flag = 0;
+                d->jis_state = d->jis_out;
+            }
             enc_put(&o, 0xFFFD);
+            if (d->nback && decoder_run(ctx, d, NULL, 0, &o) < 0) {
+                free(o.b);
+                JS_FreeValue(ctx, buf);
+                decoder_reset(d);
+                return JS_EXCEPTION;
+            }
         }
         decoder_reset(d);
     }

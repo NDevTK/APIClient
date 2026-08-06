@@ -15,10 +15,10 @@
  * identifier, and each is EMITTED into the header beside its table: a moved index is then a visible diff in a
  * committed file rather than a decode that quietly changed.
  *
- * WHAT IS NOT GENERATED YET. The remaining multi-byte CJK indexes (jis0208, jis0212, big5, euc-kr) — each needs
- * its own decoder ALGORITHM as well as its table, so each arrives with that algorithm rather than ahead of it;
- * encoding.c crashes naming the encoding when a page asks for one, which is the honest state and the work
- * queue. §11's gb18030 index and its ranges ARE generated, because §11.1.1's decoder is built.
+ * THE MULTI-BYTE CJK INDEXES are here too — gb18030 and its ranges, jis0208, jis0212, Big5 and EUC-KR — each
+ * beside the decoder that reads it, because a table with no algorithm is a table nothing can be wrong about.
+ * They are emitted in the narrowest type that holds them, which for Big5 is 32 bits: its index reaches past
+ * U+FFFF, and the generator FAILS rather than truncating if any other one starts to.
  *
  * Usage:  node engine/encgen.mjs
  */
@@ -117,6 +117,41 @@ function parseRanges(text) {
   return out;
 }
 
+/* The multi-byte indexes, each a dense pointer -> code point map. 0 is absent, as everywhere here. */
+function parseDense(text) {
+  const rows = [];
+  for (const line of text.split("\n")) {
+    const m = /^\s*(\d+)\s+(0x[0-9A-Fa-f]+)/.exec(line);
+    if (m) rows.push([Number(m[1]), Number(m[2])]);
+  }
+  const out = new Uint32Array(Math.max(...rows.map((r) => r[0])) + 1);
+  for (const [ptr, cp] of rows) out[ptr] = cp;
+  return out;
+}
+
+const wide = [];
+for (const [name, file, expect, bits] of [
+  ["JIS0208", "index-jis0208.txt", 11104, 16],
+  ["JIS0212", "index-jis0212.txt", 7211, 16],
+  ["BIG5",    "index-big5.txt",    19782, 32],
+  ["EUC_KR",  "index-euc-kr.txt",  23750, 16],
+]) {
+  const src = await get(file);
+  const table = parseDense(src);
+  const id = /^#\s*Identifier:\s*(\S+)/m.exec(src);
+  const max = table.reduce((a, b) => (b > a ? b : a), 0);
+  if (table.length !== expect) {
+    console.error(`[encgen] ${file} now has ${table.length} pointers and this generator is pinned to ` +
+                  `${expect} — re-pin deliberately, as a commit of its own.`);
+    process.exit(1);
+  }
+  if (bits === 16 && max > 0xFFFF) {
+    console.error(`[encgen] ${file} reaches U+${max.toString(16)}, past the 16 bits this emits it in`);
+    process.exit(1);
+  }
+  wide.push({ name, table, id: id ? id[1] : "?", bits });
+}
+
 const gbSrc = await get("index-gb18030.txt");
 const gbRangesSrc = await get("index-gb18030-ranges.txt");
 const gbId = /^#\s*Identifier:\s*(\S+)/m.exec(gbSrc);
@@ -198,8 +233,22 @@ h += `/* §5's INDEX gb18030 RANGES, in the standard's own order because the loo
      `static const EncodingRange ENCODING_GB18030_RANGES[] = {\n`;
 for (const [ptr, cp] of gbRanges) h += `    { ${ptr}, 0x${cp.toString(16)} },\n`;
 h += `};\n#define ENCODING_GB18030_RANGES_N ` +
-     `((int)(sizeof ENCODING_GB18030_RANGES / sizeof ENCODING_GB18030_RANGES[0]))\n\n#endif\n`;
+     `((int)(sizeof ENCODING_GB18030_RANGES / sizeof ENCODING_GB18030_RANGES[0]))\n\n`;
+
+for (const ix of wide) {
+  const digits = ix.bits === 32 ? 8 : 4, per = ix.bits === 32 ? 8 : 12;
+  h += `/* The Encoding Standard's INDEX ${ix.name.toLowerCase().replace(/_/g, "-")}: pointer to code point, 0\n` +
+       ` * meaning the pointer maps to nothing.\n * ${ix.id}\n */\n` +
+       `static const uint${ix.bits}_t ENCODING_${ix.name}[${ix.table.length}] = {\n`;
+  for (let i = 0; i < ix.table.length; i += per)
+    h += "    " + Array.from(ix.table.slice(i, i + per))
+                       .map((v) => "0x" + v.toString(16).padStart(digits, "0")).join(", ") + ",\n";
+  h += `};\n#define ENCODING_${ix.name}_N ((int)(sizeof ENCODING_${ix.name} / sizeof ENCODING_${ix.name}[0]))\n\n`;
+}
+
+h += `#endif\n`;
 
 writeFileSync(OUT, h);
 console.log(`[encgen] ${OUT}: ${encodings.length} encodings, ${rows.length} labels, ${indexes.length} ` +
-            `single-byte indexes, gb18030 ${gb.length} pointers + ${gbRanges.length} ranges`);
+            `single-byte indexes, gb18030 ${gb.length} pointers + ${gbRanges.length} ranges, ` +
+            wide.map((w) => `${w.name} ${w.table.length}`).join(", "));
