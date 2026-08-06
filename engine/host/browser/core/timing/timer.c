@@ -36,7 +36,6 @@
 #include "quickjs.h"
 #include "core/timing/timer.h"
 #include "core/idl_args.h"
-#include "solver/engine.h"
 
 typedef struct {
     int     id;          /* the handle setTimeout returned; 0 = this slot is free */
@@ -110,6 +109,10 @@ static Timer *timer_earliest(void)
     }
     return best;
 }
+
+static void (*g_script_sink)(const char *src);
+
+void timer_set_script_sink(void (*queue)(const char *src)) { g_script_sink = queue; }
 
 static JSValue js_timer_step(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 
@@ -203,7 +206,10 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
         src = JS_ToCString(ctx, argv[0]);
         if (!src)
             return JS_EXCEPTION;
-        engine_queue_script(src);
+        DCHECK(g_script_sink != NULL,
+               "setTimeout was given a STRING handler and this host registered no way to evaluate one — HTML "
+               "8.6 evaluates it when the timer fires, and dropping it would lose whatever it was going to do");
+        g_script_sink(src);
         JS_FreeCString(ctx, src);
         return JS_NewInt32(ctx, g_next_id++);
     }

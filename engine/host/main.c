@@ -120,7 +120,8 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
            server-injected app state and a branch on it forked instead of throwing. */
 
         window_install(g_ctx, g, origin);   /* window/self/frames/parent/top/opener/closed/origin, and name */
-        timer_install(g_ctx, g);            /* setTimeout/setInterval/clearTimeout/clearInterval/queueMicrotask */
+        timer_install(g_ctx, g);
+        timer_set_script_sink(engine_queue_script);   /* HTML 8.6: a string handler is evaluated, as a flow */            /* setTimeout/setInterval/clearTimeout/clearInterval/queueMicrotask */
         event_init(g_ctx);
     event_target_init(g_ctx);
         event_install(g_ctx, g);   /* the Event interface object */

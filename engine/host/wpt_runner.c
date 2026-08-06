@@ -38,6 +38,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include "core/timing/timer.h"
 #include "core/frame/location.h"
 #include "core/encoding/encoding.h"
 #include "core/idl_args.h"
@@ -409,6 +410,11 @@ int main(int argc, char **argv)
     blob_install(ctx, global);
     encoding_init(ctx);
     encoding_install(ctx, global);
+    /* HTML 8.6's TIMER TASK SOURCE. The runner had none, so `setTimeout` was simply absent — and testharness
+       arms its own timeout with one, which is how a file whose tests were still pending ended a run with
+       nothing reported and every unsettled promise's reactions leaked. A timer enqueues a JOB, so the pump
+       below already drives them; what was missing was only the globals. */
+    timer_install(ctx, global);
     fetch_install(ctx, global);
     { static const FetchProvider P = { wpt_owe }; fetch_set_provider(&P); }
 
@@ -512,6 +518,7 @@ int main(int argc, char **argv)
         g_owed_n = 0;
     }
 
+    timer_reset(ctx);
     headers_free(ctx);
     response_free(ctx);
     request_free(ctx);
