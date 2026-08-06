@@ -98,8 +98,10 @@ int  idl_method_id_ext(JSContext *ctx, const IdlArgType *types, int nargs, bool 
 /* The same declaration for a member that takes an IDL_DICT argument: `members` lists the dictionary's members
    in the order the IDL declares them, which is the order Web IDL reads them in. A member declares AT MOST ONE
    dictionary argument — every one in the platform does, and a second would need its own cursor rather than
-   sharing this one, which is a DCHECK rather than a silent second read. */
-#define IDL_MAX_DICT 6
+   sharing this one, which is a DCHECK rather than a silent second read.
+   THERE IS NO CEILING ON `nmembers`. There was one, at six, and RequestInit's eleven walked past it — the same
+   ceiling-as-detector this pool already replaced once. `members` must outlive the declaration; every caller
+   passes a static, which is what lets the pool keep the pointer rather than a copy. */
 int  idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
                         const IdlDictMember *members, int nmembers, IdlBody body, int magic);
 

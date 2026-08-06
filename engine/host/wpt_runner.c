@@ -27,6 +27,7 @@
 #include "quickjs-step.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/response.h"
+#include "core/fetch/request.h"
 #include "core/url/url.h"
 #include "core/url/url_search_params.h"
 #include "core/idl_args.h"
@@ -172,6 +173,8 @@ int main(int argc, char **argv)
     headers_install(ctx, global);
     response_init(ctx);
     response_install(ctx, global);
+    request_init(ctx);
+    request_install(ctx, global);
     url_init(ctx);
     url_install(ctx, global);
     usp_init(ctx);
@@ -206,6 +209,7 @@ int main(int argc, char **argv)
 
     headers_free(ctx);
     response_free(ctx);
+    request_free(ctx);
     url_free(ctx);
     usp_free(ctx);
     idl_args_free(ctx);

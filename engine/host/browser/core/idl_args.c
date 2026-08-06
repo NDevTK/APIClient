@@ -61,8 +61,12 @@ typedef struct {
        the request and the answer — step_getprop_run is handed it twice, with a suspension in between — so it
        cannot be created per read. The names are static strings known when the member declares itself, so one
        intern per member serves every call. */
+    /* THE ATOM ARRAY IS ALLOCATED, not inline. It was `JSAtom[IDL_MAX_DICT]` with a CHECK, which is the
+       ceiling-as-detector this pool already replaced once: RequestInit declares eleven members and the
+       platform's largest declares more, so a fixed six was a number that a real interface walks past. The
+       array is malloc'd per member and freed with the pool. */
     const IdlDictMember *dict;
-    JSAtom     dict_atoms[IDL_MAX_DICT];
+    JSAtom    *dict_atoms;
     int        dict_n;
     /* A member whose algorithm is itself page code runs as a STEP once the conversions are done — see
        idl_method_id_step. Its state lives immediately after this machine's, which is why the def's size is
@@ -766,6 +770,7 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
         idl_member(idx)->types[k] = types[k];
     idl_member(idx)->dict = members;
     idl_member(idx)->dict_n = 0;
+    idl_member(idx)->dict_atoms = NULL;
     if (members) {
         int ndict = 0;
         for (k = 0; k < nargs; k++)
@@ -773,7 +778,8 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
         DCHECK(ndict == 1, "a member declared dictionary members but not exactly one dictionary argument — the "
                            "conversion cursor is per-member, so a second dictionary would read the first's "
                            "names");
-        CHECK(nmembers <= IDL_MAX_DICT, "a dictionary declared more members than IDL_MAX_DICT holds");
+        idl_member(idx)->dict_atoms = malloc(sizeof(JSAtom) * (size_t)nmembers);
+        CHECK(idl_member(idx)->dict_atoms, "idl: OOM interning a dictionary's member names");
         for (k = 0; k < nmembers; k++)
             idl_member(idx)->dict_atoms[k] = JS_NewAtom(ctx, members[k].name);
         idl_member(idx)->dict_n = nmembers;
@@ -944,9 +950,12 @@ void idl_install_step_method(JSContext *ctx, JSValueConst target, const char *na
 void idl_args_free(JSContext *ctx)
 {
     int i, k;
-    for (i = 0; i < g_n; i++)
+    for (i = 0; i < g_n; i++) {
         for (k = 0; k < idl_member(i)->dict_n; k++)
             JS_FreeAtom(ctx, idl_member(i)->dict_atoms[k]);
+        free(idl_member(i)->dict_atoms);
+        idl_member(i)->dict_atoms = NULL;
+    }
     for (i = 0; i < g_nchunks; i++)
         free(g_chunks[i]);
     free(g_chunks);

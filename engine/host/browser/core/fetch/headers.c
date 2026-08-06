@@ -337,6 +337,69 @@ static int header_is_forbidden_response(const char *lower_name)
     return header_ci_eq(lower_name, "set-cookie") || header_ci_eq(lower_name, "set-cookie2");
 }
 
+/* §5.1's "CORS-unsafe request-header byte": what a safelisted value may not contain. */
+static int header_is_cors_unsafe_byte(unsigned char c)
+{
+    return (c < 0x20 && c != 0x09) || c == 0x7f || !!strchr("\"():<>?@[\\]{}", (char)c);
+}
+
+/* §5.1's "CORS-safelisted request-header". The four names each have their OWN value rule — this is not a name
+   list with a length cap bolted on, and treating it as one would let `Content-Type: application/json` through
+   as safelisted, which is the whole difference between a preflighted request and one that is not. */
+static int header_is_cors_safelisted(const char *lower_name, const char *value)
+{
+    size_t i, n = strlen(value);
+
+    if (n > 128) return 0;
+    if (!strcmp(lower_name, "accept")) {
+        for (i = 0; i < n; i++) if (header_is_cors_unsafe_byte((unsigned char)value[i])) return 0;
+        return 1;
+    }
+    if (!strcmp(lower_name, "accept-language") || !strcmp(lower_name, "content-language")) {
+        for (i = 0; i < n; i++) {
+            unsigned char c = (unsigned char)value[i];
+            if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) continue;
+            if (c == 0x20 || c == '*' || c == ',' || c == '-' || c == '.' || c == ';' || c == '=') continue;
+            return 0;
+        }
+        return 1;
+    }
+    if (!strcmp(lower_name, "content-type")) {
+        const char *semi;
+        size_t essence;
+        for (i = 0; i < n; i++) if (header_is_cors_unsafe_byte((unsigned char)value[i])) return 0;
+        /* the MIME type's ESSENCE — everything before the first `;`, trimmed — must be one of three */
+        semi = strchr(value, ';');
+        essence = semi ? (size_t)(semi - value) : n;
+        while (essence > 0 && header_is_ws((unsigned char)value[essence - 1])) essence--;
+        {
+            static const char *const OK[] = { "application/x-www-form-urlencoded", "multipart/form-data",
+                                              "text/plain" };
+            size_t k;
+            for (k = 0; k < sizeof(OK) / sizeof(OK[0]); k++)
+                if (essence == strlen(OK[k]) && !strncasecmp(value, OK[k], essence)) return 1;
+        }
+        return 0;
+    }
+    return 0;
+}
+
+/* §5.1's "no-CORS-safelisted request-header": one of FOUR names, and then the CORS rule for its value. */
+static int header_is_no_cors_safelisted(const char *lower_name, const char *value)
+{
+    if (strcmp(lower_name, "accept") && strcmp(lower_name, "accept-language") &&
+        strcmp(lower_name, "content-language") && strcmp(lower_name, "content-type"))
+        return 0;
+    return header_is_cors_safelisted(lower_name, value);
+}
+
+/* §5.1's "privileged no-CORS request-header name" — the one header a no-cors Headers may not even DELETE,
+   because the browser owns it outright. */
+static int header_is_privileged_no_cors(const char *lower_name)
+{
+    return !strcmp(lower_name, "range");
+}
+
 /* §5.1 "validating (name, value) for headers", AFTER header_check has done the name/value syntax half.
    Returns 1 to write, 0 to silently do nothing, -1 with a TypeError live. */
 static int headers_guard_allows(JSContext *ctx, uint8_t guard, const char *name, const char *value)
@@ -399,7 +462,45 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
     /* §5.1's guard decides which of the three WRITES may proceed. A read is not guarded at all: the page can
        already see every one of these headers, so refusing to answer would hide state rather than protect it. */
     if (magic == HDR_APPEND || magic == HDR_SET || magic == HDR_DELETE) {
-        int allow = headers_guard_allows(ctx, h->guard, name, norm);
+        char *lower = header_lower(name);
+        int allow;
+        /* §5.1's delete step 2: a PRIVILEGED no-CORS header is refused before validating even runs — a no-cors
+           Headers may not remove `Range`, because the browser owns it outright. */
+        if (magic == HDR_DELETE && h->guard == HEADERS_GUARD_REQUEST_NO_CORS &&
+            header_is_privileged_no_cors(lower)) {
+            free(lower);
+            JS_FreeCString(ctx, name);
+            if (value) JS_FreeCString(ctx, value);
+            free(norm);
+            return JS_UNDEFINED;
+        }
+        allow = headers_guard_allows(ctx, h->guard, name, norm);
+        /* §5.1's append step 3 and set step 3: under "request-no-cors" the header must still be NO-CORS
+           SAFELISTED once written. append tests the COMBINED value it would produce — appending a second
+           127-byte `accept` makes 255 bytes, which is not safelisted, so the append does nothing — while set
+           tests the value on its own, because set replaces rather than joins. */
+        if (allow > 0 && h->guard == HEADERS_GUARD_REQUEST_NO_CORS &&
+            (magic == HDR_APPEND || magic == HDR_SET)) {
+            char *combined = NULL;
+            const char *test = norm;
+            if (magic == HDR_APPEND) {
+                char *existing = header_list_get(l, name);
+                if (existing) {
+                    size_t a = strlen(existing), b = strlen(norm);
+                    combined = malloc(a + b + 3);
+                    CHECK(combined, "headers: OOM joining a no-cors value");
+                    memcpy(combined, existing, a);
+                    combined[a] = ','; combined[a + 1] = ' ';
+                    memcpy(combined + a + 2, norm, b);
+                    combined[a + b + 2] = 0;
+                    test = combined;
+                }
+                free(existing);
+            }
+            if (!header_is_no_cors_safelisted(lower, test)) allow = 0;
+            free(combined);
+        }
+        free(lower);
         if (allow <= 0) {
             JS_FreeCString(ctx, name);
             if (value) JS_FreeCString(ctx, value);

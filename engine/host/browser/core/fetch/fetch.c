@@ -28,6 +28,7 @@
 #include "core/fetch/fetch.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/response.h"
+#include "core/fetch/request.h"
 
 /* The id JS_RegisterStepDef handed this runtime, and the two IDL attribute names the machine reads by. Atoms
    belong to a runtime, and SECURITY.md gives this build one WASM instance per DOCUMENT — one runtime — so these
@@ -253,6 +254,7 @@ void fetch_install(JSContext *ctx, JSValueConst global)
         g_fetch_rt    = rt;
         response_init(ctx);
         headers_init(ctx);
+        request_init(ctx);
         g_atom_method = JS_NewAtom(ctx, "method");
         g_atom_url    = JS_NewAtom(ctx, "url");
         g_atom_headers = JS_NewAtom(ctx, "headers");
@@ -260,6 +262,7 @@ void fetch_install(JSContext *ctx, JSValueConst global)
     }
     headers_install(ctx, global);   /* §5's interface object — a page builds an init with it before it fetches */
     response_install(ctx, global);  /* §6's — a page constructs one to seed a cache or a service-worker path */
+    request_install(ctx, global);   /* §5.3's — `fetch(new Request(u, init))` is how half of real code calls it */
     JS_SetPropertyStr(ctx, (JSValue)global, "fetch",
                       JS_NewCFunction2(ctx, NULL, "fetch", 1, JS_CFUNC_step, g_fetch_stepid));
 }

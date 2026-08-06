@@ -31,8 +31,12 @@ const WPT_REV = "bf4714d";
 const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetch/api/resources", "url", "common"];
 
 if (!existsSync(join(WPT, "resources", "testharness.js"))) {
+  /* NO --depth 1. The corpus is PINNED, and a depth-1 clone has only the tip — `git checkout bf4714d` in it
+     fails with "reference is not a tree", so the instructions this gate printed could not be followed. The
+     blob filter is what keeps a full-history clone cheap: it fetches commits and trees, and file contents only
+     for the paths the sparse checkout names. */
   console.error("[wpt] corpus missing — provision it with:\n" +
-    `  git clone --filter=blob:none --sparse --depth 1 https://github.com/web-platform-tests/wpt.git ${WPT}\n` +
+    `  git clone --filter=blob:none --sparse https://github.com/web-platform-tests/wpt.git ${WPT}\n` +
     `  cd ${WPT} && git sparse-checkout set ${WPT_PATHS.join(" ")} && git checkout ${WPT_REV}`);
   process.exit(1);
 }
@@ -51,7 +55,9 @@ const SRCS = [
   "host/browser/core/idl_args.c",
   "host/browser/core/idl_iter.c",
   "host/browser/core/fetch/headers.c",
+  "host/browser/core/fetch/body.c",
   "host/browser/core/fetch/response.c",
+  "host/browser/core/fetch/request.c",
   "host/browser/core/url/url.c",
   "host/browser/core/url/url_search_params.c",
   "host/wpt_runner.c",

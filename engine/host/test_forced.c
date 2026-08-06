@@ -21,6 +21,7 @@
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/fetch/response.h"
+#include "core/fetch/request.h"
 #include "core/url/url.h"
 #include "core/url/url_search_params.h"
 #include "core/fetch/headers.h"
@@ -1680,7 +1681,8 @@ int main(void) {
     headers_free(ctx);    /* Headers.prototype and the name it interned */
     url_free(ctx);
     usp_free(ctx);        /* URLSearchParams.prototype */
-    response_free(ctx);   /* Response.prototype — one object, held for the runtime's life */
+    response_free(ctx);
+    request_free(ctx);   /* Response.prototype — one object, held for the runtime's life */
     idl_args_free(ctx);   /* the dictionary member atoms the declaration pool interned */
     flow_registry_free(ctx);
     JS_RunGC(rt);   /* collect flow-local garbage from the runs before teardown */
