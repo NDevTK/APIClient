@@ -1031,6 +1031,15 @@ static const char *HTML =
       " fetch('/api/hdrs?acc=' + h.get('Accept') + '&sc=' + sc.length + ':' + sc[0] + ':' + sc[1]"
       "   + '&join=' + joined + '&set=' + h.get('X-Api-Key')"
       "   + '&has=' + h.has('accept') + h.has('nope') + '&miss=' + h.get('nope')); })();"
+    /* THE INIT'S ARM IS DECIDED BY @@iterator, which is a READ of the page's object and not a type test. A
+       plain bag with a PROXY in front of it still converts as a record — its `ownKeys` and its `get` are the
+       page's code, driven as requests — and the proxied reads are what the record arm is made of. If the read
+       of @@iterator were not part of the algorithm this would still pass; what it proves is that a trap-bearing
+       init survives the conversion with its headers intact. */
+    "(function(){ var seen = '';"
+      " var p = new Proxy({'X-Trap': 'tv'}, { get: function(t, k){ seen = 'trapped'; return t[k]; } });"
+      " var h2 = new Headers(p);"
+      " fetch('/api/hdrproxy?v=' + h2.get('x-trap') + '&t=' + seen); })();"
     "(async function(){ var p = new Promise(function(res){ Promise.resolve().then(function(){ res('lazyRegion'); }); }); var c = await p; fetch('/api/lazy?r=' + c); })();"   /* PENDING await: the promise resolves LATER via a microtask (stands in for the network) -> park + resume */
     "var _spr; var _sp = new Promise(function(r){ _spr = r; }); _sp.then(function(v){ fetch('/api/shared?v=' + v); }); _spr(state.beta ? 'shBETA' : 'shSTABLE');"   /* PROBE: _sp created BEFORE the state.beta snapshot fork -> shared; settled per-flow. If promise state is NOT per-flow COW, only ONE value survives (contamination) */
     "if (state.gamma) { delete delObj.k; } fetch('/api/tok?t=' + (delObj.k ? delObj.k : 'wasDeleted'));"   /* DELETE time-travel: the gamma-true flow deletes delObj.k; the gamma-false flow must STILL see keepVAL (the delete is per-flow) */
@@ -1291,6 +1300,9 @@ int main(void) {
     int hdrs = (strstr(js, "\"/api/hdrs\"") && strstr(js, "application/json") &&
                 strstr(js, "2:a=1:b=2") && strstr(js, "k1, k2") &&
                 strstr(js, "\"k3\"") && strstr(js, "truefalse") && strstr(js, "\"null\""));
+    /* The record arm through a PROXY: its ownKeys and its get ran as the page's code (seen == 'trapped') and
+       the header still arrived. */
+    int hdrproxy = (strstr(js, "\"/api/hdrproxy\"") && strstr(js, "\"tv\"") && strstr(js, "trapped"));
     /* PENDING await: the awaited promise resolved LATER (via a microtask, standing in for the network); the flow
        parked at the await and resumed when it settled -> /api/lazy?r=lazyRegion. The real fetch-parking path. */
     int pending_await = (strstr(js, "\"/api/lazy\"") && strstr(js, "lazyRegion"));
@@ -1546,6 +1558,7 @@ int main(void) {
         { "preempt", async_preempt, 0 },   { "fetch", fetch_await, 0 },
         { "clone-body", clone_body, 0 },   { "body-bytes", body_bytes, 0 },
         { "body-iso", body_iso, 0 },       { "hdrs", hdrs, 0 },
+        { "hdr-proxy", hdrproxy, 0 },
         { "pending", pending_await, 0 },   { "promise-state", promise_state, 0 },
         { "delete-iso", delete_iso, 0 },   { "floc-iso", floc_iso, 0 },
         { "ua", uafork_tt, 0 },            { "touch", touchfork_tt, 0 },

@@ -222,7 +222,7 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
 
 /* ---- the fill (HeadersInit -> a header list) ------------------------------------------------------------ */
 
-enum { FILL_START = 0, FILL_KEYS_ASKED, FILL_VALUE_ASKED, FILL_NAME_STR, FILL_VALUE_STR };
+enum { FILL_START = 0, FILL_ITER_ASKED, FILL_KEYS_ASKED, FILL_VALUE_ASKED, FILL_NAME_STR, FILL_VALUE_STR };
 
 void headers_fill_init(HeadersFill *f)
 {
@@ -258,8 +258,9 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
             JS_ThrowTypeError(ctx, "a Headers init is not an object");
             return -1;
         }
-        /* A Headers ALREADY: §5.1 fill copies its list, and reading it back through the page's own accessors
-           would be a different algorithm that a redefined `get` could answer for. */
+        /* A Headers ALREADY: §5.1 fill copies its list. Web IDL would reach the same pairs by ITERATING it —
+           Headers declares `iterable<ByteString, ByteString>` — so this is the same answer by a shorter route,
+           and it is the route that works today because that iterator is one of the members still to build. */
         src = headers_list_of(init);
         if (src) {
             int i;
@@ -268,19 +269,36 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
                 header_list_append(out, src->e[i].name, src->e[i].value);
             return 0;
         }
-        /* THE SEQUENCE ARM IS NOT BUILT. Web IDL picks between `sequence<sequence<ByteString>>` and
-           `record<ByteString, ByteString>` by whether the object is ITERABLE, which is a [[Get]] of
-           @@iterator and then the whole iterator protocol — every step of it the page's code, so every step of
-           it a request, and none of those requests exist on the host step surface yet (there is no indexed get
-           and no iterator-step). Answering `new Headers([['a','b']])` with an EMPTY list instead would be the
-           stub this engine does not write: the request would go out missing exactly the headers the page set.
-           It aborts naming what to build, which is the next thing to build. */
-        DCHECK(!JS_IsArray(init),
-               "a Headers init was a sequence<sequence<ByteString>> — build that arm of the fill (its @@iterator "
-               "read and the iterator protocol are requests the host step surface does not export yet)");
+        f->phase = FILL_ITER_ASKED;
+        in = JS_UNDEFINED;
     }
-    /* The RECORD arm: [[OwnPropertyKeys]], then a [[Get]] per key, both requests. */
-    if (f->phase == FILL_START || f->phase == FILL_KEYS_ASKED) {
+    /* WHICH ARM: Web IDL picks `sequence<sequence<ByteString>>` over `record<ByteString, ByteString>` by whether
+       the init is ITERABLE, and that is a [[Get]] of @@iterator — an accessor or a Proxy trap away from being
+       the page's code, so it is a request like every other read here. It was JS_IsArray, which is a DIFFERENT
+       question: `new Headers(new Map(...))` is iterable and is not an array, so it took the record arm, found no
+       own string keys, and produced an EMPTY header list — the request would have gone out missing exactly the
+       headers the page set. */
+    if (f->phase == FILL_ITER_ASKED) {
+        JSValue itf;
+        r = step_getprop_run(ctx, h, init, JS_WellKnownSymbolAtom(JS_WKS_ITERATOR), in, &itf, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        in = JS_UNDEFINED;
+        /* THE SEQUENCE ARM IS NOT BUILT YET. Its steps are the iterator protocol — call @@iterator, then `next`
+           until `done`, then convert each pair — and every one of those is a request that now exists, so this
+           is a capability to write and not a hole in the surface. It aborts naming itself rather than answering
+           with the record arm's empty list, which is the stub this engine does not write. */
+        DCHECK(!JS_IsFunction(ctx, itf),
+               "a Headers init is ITERABLE, so Web IDL converts it as sequence<sequence<ByteString>> — build "
+               "that arm of the fill (@@iterator is read, its result is called, and `next` is driven to `done`, "
+               "all of them requests the host step surface exports)");
+        JS_FreeValue(ctx, itf);
+        f->phase = FILL_KEYS_ASKED;
+    }
+    /* The RECORD arm: [[OwnPropertyKeys]], then a [[Get]] per key, both requests. The phase is the same on the
+       way in and while parked, which is what the request's own cursor is for — it asks on the first call and
+       answers on the second. */
+    if (f->phase == FILL_KEYS_ASKED) {
         r = step_ownkeys_run(ctx, h, init, in, &f->keys, out_cb, out_argc);
         if (r > 0) { f->phase = FILL_KEYS_ASKED; return r; }
         if (r < 0) return -1;
