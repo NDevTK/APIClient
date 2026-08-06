@@ -135,7 +135,8 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "fetch", "response.c"),                       // Response: the reply a fetch promises
     join(HOST, "browser", "core", "fetch", "headers.c"),                        // Headers: the header list an endpoint requires
     join(HOST, "browser", "core", "loader", "module_loader.c"),                 // dynamic import: the lazy-chunk register                           // the Fetch API: every reached request funnels into the @H surface
-    join(HOST, "browser", "core", "url", "url.c"),                              // WHATWG URL: the record and the basic URL parser every address goes through
+    join(HOST, "browser", "core", "url", "url.c"),
+    join(HOST, "browser", "core", "url", "url_search_params.c"),                // URLSearchParams: §5.1's urlencoded list, and the URL's live view of it                              // WHATWG URL: the record and the basic URL parser every address goes through
     join(HOST, "browser", "core", "frame", "location.c"),                       // Location: concrete principal + concolic search/hash
     join(HOST, "browser", "core", "frame", "window.c"),                         // Window: which browsing context this is, and window.name as attacker input
     join(HOST, "browser", "core", "idl_args.c"),

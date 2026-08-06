@@ -799,9 +799,8 @@ int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
 /* See idl_args.h. It names the member the LAST declaration made, the way idl_method_id_ext sets `variadic` and
    `iface` — the id a declaration returns is the RUNTIME's step id and not this pool's index, so reaching the
    entry through the id was reading past the pool. */
-void idl_optional_from(int id, int first_optional)
+void idl_optional_from(int first_optional)
 {
-    DCHECK(id > 0, "an optional-argument index was declared for a member that was never declared");
     DCHECK(g_n > 0, "an optional-argument index was declared before any member was");
     idl_member(g_n - 1)->first_optional = first_optional;
 }

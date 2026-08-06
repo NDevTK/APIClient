@@ -48,7 +48,10 @@ const INTERFACES = {
   Response:             "core/fetch/response.c",
   /* Headers exists and had no row, so the audit said nothing about it at all — which is the lying-by-omission
      this map's own comment names, and it was silent from the moment the component landed. */
-  Headers:              "core/fetch/headers.c",
+  /* An `iterable<>` interface's keys/values/entries/forEach are installed by the SHARED default iterator
+     object, so idl_iter.c is where the audit finds them — naming only the component would report four
+     members absent that every such interface has. */
+  Headers:             ["core/fetch/headers.c", "core/idl_iter.c"],
   Notification:         "modules/notification.c",
   Window:              ["core/frame/window.c", "core/dom/document.c", "core/frame/location.c",
                         "core/fetch/fetch.c", "core/events/event_target.c", "core/loader/module_loader.c",
@@ -58,9 +61,7 @@ const INTERFACES = {
   History:              "core/frame/history.c",
   Screen:               "core/frame/screen.c",
   URL:                  "core/url/url.c",
-  /* URLSearchParams has no component yet; the row names where it will live so the audit reports its whole
-     member list as absent rather than saying nothing about it — which is what a missing row does. */
-  URLSearchParams:      "core/url/url_search_params.c",
+  URLSearchParams:     ["core/url/url_search_params.c", "core/idl_iter.c"],
   CSSStyleDeclaration:  "core/css/css_style_declaration.c",
   /* The TREE. These were absent from the audit entirely — the interfaces a page touches most had no gap report
      at all, which is the audit lying by omission rather than by direction. They are auditable now because their

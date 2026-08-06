@@ -28,6 +28,7 @@
 #include "quickjs-step.h"
 #include "core/url/url.h"
 #include "core/idl_args.h"
+#include "core/url/url_search_params.h"
 
 /* ---- a growable byte string --------------------------------------------------------------------------- */
 
@@ -164,6 +165,10 @@ static void ustr_put_encoded(UStr *out, const char *s, size_t n, int set)
     size_t i;
     for (i = 0; i < n; i++) {
         unsigned char c = (unsigned char)s[i];
+        /* §5.1's urlencoded serializer maps 0x20 to `+` rather than percent-encoding it. It is part of THAT
+           SET's rule, so it is here — doing it in the caller means replacing spaces in an already-encoded
+           string, which finds none because the space is already `%20`. */
+        if (set == URL_SET_URLENCODED && c == ' ') { ustr_putc(out, '+'); continue; }
         if (in_encode_set(c, set)) {
             char buf[4];
             snprintf(buf, sizeof buf, "%%%02X", c);
@@ -182,8 +187,9 @@ char *url_percent_encode(const char *s, size_t len, int set)
     return ustr_take(&o);
 }
 
-/* §1.3 "percent-decode": `%` followed by two hex digits, and anything else is itself. */
-static char *percent_decode(const char *s, size_t n, size_t *out_n)
+/* §1.3 "percent-decode": `%` followed by two hex digits, and anything else is itself. Public because §5.1's
+   urlencoded parser is the other user, and it is one algorithm. */
+char *url_percent_decode(const char *s, size_t n, size_t *out_n)
 {
     UStr o;
     size_t i;
@@ -469,7 +475,7 @@ static bool parse_host(const char *s, size_t n, bool is_opaque, UrlHost *out)
         return parse_opaque_host(s, n, out);
     if (n == 0) { out->kind = URL_HOST_EMPTY; return true; }
 
-    decoded = percent_decode(s, n, &dn);
+    decoded = url_percent_decode(s, n, &dn);
     for (i = 0; i < dn; i++) {
         if ((unsigned char)decoded[i] >= 0x80) {
             DFAIL("a non-ASCII domain reached the URL host parser — build UTS-46 domain-to-ASCII (IDNA) plus "
@@ -1190,29 +1196,46 @@ static JSValue   g_url_proto = JS_UNDEFINED;
 static JSRuntime *g_url_rt;
 static int       g_url_ctor_stepid = -1;
 
+/* The wrapper holds the record AND the [SameObject] `searchParams` — §5.1 declares that attribute SameObject,
+   so the object is built at most once per URL and the two hold each other (the params write §6.1's update
+   steps back onto this record). A real cycle, which is what gc_mark is for. */
+typedef struct { UrlRecord rec; JSValue params; } UrlObj;
+
 static void url_finalizer(JSRuntime *rt, JSValue val)
 {
-    UrlRecord *u = JS_GetOpaque(val, g_url_class);
-    (void)rt;
-    if (u) { url_record_free(u); free(u); }
+    UrlObj *u = JS_GetOpaque(val, g_url_class);
+    if (u) { url_record_free(&u->rec); JS_FreeValueRT(rt, u->params); free(u); }
+}
+
+static void url_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+{
+    UrlObj *u = JS_GetOpaque(val, g_url_class);
+    if (u) JS_MarkValue(rt, u->params, mark_func);
+}
+
+UrlRecord *url_record_of(JSValueConst v)
+{
+    UrlObj *u = JS_GetOpaque(v, g_url_class);
+    return u ? &u->rec : NULL;
 }
 
 static UrlRecord *url_of(JSContext *ctx, JSValueConst v)
 {
-    UrlRecord *u = JS_GetOpaque(v, g_url_class);
+    UrlObj *u = JS_GetOpaque(v, g_url_class);
     if (!u) JS_ThrowTypeError(ctx, "not a URL");
-    return u;
+    return u ? &u->rec : NULL;
 }
 
 static JSValue url_wrap(JSContext *ctx, UrlRecord *rec)
 {
-    UrlRecord *held;
+    UrlObj *held;
     JSValue obj = JS_NewObjectProtoClass(ctx, g_url_proto, g_url_class);
     if (JS_IsException(obj))
         return obj;
     held = malloc(sizeof *held);
     CHECK(held, "url: OOM holding a URL record");
-    *held = *rec;
+    held->rec = *rec;
+    held->params = JS_UNDEFINED;
     url_record_init(rec);   /* the wrapper owns it now */
     JS_SetOpaque(obj, held);
     return obj;
@@ -1220,6 +1243,29 @@ static JSValue url_wrap(JSContext *ctx, UrlRecord *rec)
 
 enum { URL_HREF = 0, URL_ORIGIN, URL_PROTOCOL, URL_USERNAME, URL_PASSWORD, URL_HOST, URL_HOSTNAME,
        URL_PORT, URL_PATHNAME, URL_SEARCH, URL_HASH };
+
+/* §5.1's `searchParams`, [SameObject]: built on the first read from this URL's query and held afterwards, so
+   `u.searchParams === u.searchParams` and a mutation of it is a mutation of the URL. */
+static JSValue js_url_get_params(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    UrlObj *u = JS_GetOpaque(this_val, g_url_class);
+    (void)magic;
+    if (!u) return JS_ThrowTypeError(ctx, "not a URL");
+    if (JS_IsUndefined(u->params)) {
+        u->params = usp_new(ctx, this_val, u->rec.query, u->rec.query ? strlen(u->rec.query) : 0);
+        if (JS_IsException(u->params)) { u->params = JS_UNDEFINED; return JS_EXCEPTION; }
+    }
+    return JS_DupValue(ctx, u->params);
+}
+
+/* §5.1: `href` and `search` both re-initialise the query, and §6.1 says the associated params object is
+   re-initialised with it — otherwise `u.search = "?b=2"` would leave `u.searchParams` reporting the old pairs. */
+static void url_params_resync(JSContext *ctx, JSValueConst this_val)
+{
+    UrlObj *u = JS_GetOpaque(this_val, g_url_class);
+    if (!u || JS_IsUndefined(u->params)) return;
+    usp_reset(ctx, u->params, u->rec.query, u->rec.query ? strlen(u->rec.query) : 0);
+}
 
 static JSValue js_url_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -1453,6 +1499,8 @@ static JSValue js_url_set(JSContext *ctx, JSValueConst this_val, JSValueConst va
         }
         break;
     }
+    if (magic == URL_HREF || magic == URL_SEARCH)
+        url_params_resync(ctx, this_val);
     JS_FreeCString(ctx, v);
     return JS_UNDEFINED;
 }
@@ -1469,6 +1517,7 @@ static const JSCFunctionListEntry js_url_proto_funcs[] = {
     JS_CGETSET_MAGIC_DEF("pathname", js_url_get, js_url_set, URL_PATHNAME),
     JS_CGETSET_MAGIC_DEF("search", js_url_get, js_url_set, URL_SEARCH),
     JS_CGETSET_MAGIC_DEF("hash", js_url_get, js_url_set, URL_HASH),
+    JS_CGETSET_MAGIC_DEF("searchParams", js_url_get_params, NULL, 0),
     JS_CFUNC_DEF("toJSON", 0, js_url_tojson),
     JS_CFUNC_DEF("toString", 0, js_url_tojson),
 };
@@ -1480,7 +1529,7 @@ static const JSCFunctionListEntry js_url_static_funcs[] = {
 
 void url_init(JSContext *ctx)
 {
-    JSClassDef def = { "URL", .finalizer = url_finalizer };
+    JSClassDef def = { "URL", .finalizer = url_finalizer, .gc_mark = url_gc_mark };
     JSRuntime *rt = JS_GetRuntime(ctx);
     static const IdlArgType CTOR_ARGS[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
 
@@ -1497,7 +1546,7 @@ void url_init(JSContext *ctx)
     JS_SetPropertyFunctionList(ctx, g_url_proto, js_url_proto_funcs,
                                (int)(sizeof(js_url_proto_funcs) / sizeof(js_url_proto_funcs[0])));
     g_url_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, NULL, 0, &js_url_ctor_decl, 0);
-    idl_optional_from(g_url_ctor_stepid, 1);   /* §5.1: `constructor(USVString url, optional USVString base)` */
+    idl_optional_from(1);   /* §5.1: `constructor(USVString url, optional USVString base)` */
 }
 
 void url_install(JSContext *ctx, JSValueConst global)

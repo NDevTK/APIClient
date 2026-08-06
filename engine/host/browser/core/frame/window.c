@@ -30,6 +30,7 @@
 #include "solver/concolic.h"
 #include "core/frame/window.h"
 #include "core/url/url.h"
+#include "core/url/url_search_params.h"
 
 static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -47,6 +48,8 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
        request URLs with it long before it fetches one. */
     url_init(ctx);
     url_install(ctx, global);
+    usp_init(ctx);
+    usp_install(ctx, global);
 
     /* 7.2.2: window, self and frames all return THIS Window's proxy, and the global object IS that proxy here —
        so `window.X`, `self.X` and a bare `X` are one read spelled three ways. */

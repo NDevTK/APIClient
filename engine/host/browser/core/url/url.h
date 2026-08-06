@@ -76,6 +76,12 @@ int  url_default_port(const char *scheme);
 
 /* §5.1's URLENCODED SERIALIZER's encode set, exported because URLSearchParams is the other user of it. */
 char *url_percent_encode(const char *s, size_t len, int set);
+/* §1.3 "percent-decode". `*out_n` is the decoded LENGTH, which is not strlen when the input decodes a %00. */
+char *url_percent_decode(const char *s, size_t len, size_t *out_n);
+
+/* The RECORD behind a `URL` wrapper, or NULL when `v` is not one — how URLSearchParams writes §6.1's update
+   steps back onto the URL it belongs to. */
+UrlRecord *url_record_of(JSValueConst v);
 enum { URL_SET_C0 = 0, URL_SET_FRAGMENT, URL_SET_QUERY, URL_SET_SPECIAL_QUERY, URL_SET_PATH,
        URL_SET_USERINFO, URL_SET_COMPONENT, URL_SET_URLENCODED };
 
