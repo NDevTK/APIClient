@@ -251,6 +251,25 @@ static JSValue read_result(JSContext *ctx, JSValue value, bool done)
     return o;
 }
 
+/* §4.5's controller, EMPTY and already attached — the same discipline readable_stream_empty follows, and for
+   the reason its own comment gives: a record whose fields are placed before it is attached to its object is a
+   record that leaks on any failure in between. */
+static JSValue controller_new(JSContext *ctx, JSValueConst stream)
+{
+    ControllerData *c;
+    JSValue obj;
+
+    obj = JS_NewObjectProtoClass(ctx, g_ctrl_proto, g_ctrl_class);
+    if (JS_IsException(obj)) return obj;
+    c = js_mallocz(ctx, sizeof *c);
+    if (!c) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
+    c->pull_fn = c->cancel_fn = c->size_fn = c->source = JS_UNDEFINED;
+    c->hwm = 1;                                  /* §4.2's default mark for a default-controller stream */
+    c->stream = JS_DupValue(ctx, stream);
+    JS_SetOpaque(obj, c);
+    return obj;
+}
+
 /* AN EMPTY READABLE STREAM. Both entry points build one: the host-byte source fills and closes it, the
    constructor hands it to `start`. One allocation, so a field added to the record cannot be initialised by one
    and forgotten by the other — the same obligation the flow's fork taught. */
@@ -277,25 +296,16 @@ static JSValue readable_stream_empty(JSContext *ctx)
         JS_FreeValue(ctx, obj);
         return JS_EXCEPTION;
     }
-    return obj;
-}
-
-/* §4.5's controller, EMPTY and already attached — the same discipline readable_stream_empty follows, and for
-   the reason its own comment gives: a record whose fields are placed before it is attached to its object is a
-   record that leaks on any failure in between. */
-static JSValue controller_new(JSContext *ctx, JSValueConst stream)
-{
-    ControllerData *c;
-    JSValue obj;
-
-    obj = JS_NewObjectProtoClass(ctx, g_ctrl_proto, g_ctrl_class);
-    if (JS_IsException(obj)) return obj;
-    c = js_mallocz(ctx, sizeof *c);
-    if (!c) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
-    c->pull_fn = c->cancel_fn = c->size_fn = c->source = JS_UNDEFINED;
-    c->hwm = 1;                                  /* §4.2's default mark for a default-controller stream */
-    c->stream = JS_DupValue(ctx, stream);
-    JS_SetOpaque(obj, c);
+    /* THE CONTROLLER COMES WITH IT. §4.2 has no stream without one — the queue and the mark it is read
+       against belong to the controller — and the three callers that built one separately each had to remember
+       to, which is what left `readable_stream_from_bytes` with a stream that had none and a read path with a
+       guard for it. */
+    d->controller = controller_new(ctx, obj);
+    if (JS_IsException(d->controller)) {
+        d->controller = JS_UNDEFINED;
+        JS_FreeValue(ctx, obj);
+        return JS_EXCEPTION;
+    }
     return obj;
 }
 
@@ -313,7 +323,12 @@ JSValue readable_stream_from_bytes(JSContext *ctx, const char *bytes, size_t len
     if (JS_IsException(chunk)) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
     stream_enqueue(ctx, d, chunk, 1);
     JS_FreeValue(ctx, chunk);
-    d->state = RS_CLOSED;
+    /* ONE CHUNK, then CLOSE REQUESTED — which is `enqueue` followed by `close`, and not the same thing as
+       the CLOSED state: §4.2 answers a read on a closed stream `done` whatever is still queued, so marking
+       this one closed outright would hand back an empty body. The drain is what closes it, exactly as it is
+       for a page's own stream. */
+    ctrl_of(d->controller)->close_requested = 1;
+    ctrl_of(d->controller)->started = 1;
     return obj;
 }
 
@@ -900,25 +915,30 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
             DCHECK(d != NULL, "a reader's stream stopped being a ReadableStream while it held the lock");
             s->stream = JS_DupValue(ctx, rd->stream);
             d->disturbed = 1;
+            /* §4.2 asks the STATE first and the queue only after. A stream that has closed answers `done`
+               whatever is still in its controller's queue — which is what `close()` inside `size()` produces:
+               the state goes to closed while the chunk being weighed is still on its way in, and that chunk is
+               then unreadable. Reading the queue first handed it back. */
             if (d->state == RS_ERRORED) {
                 s->result = JS_DupValue(ctx, d->stored_error);
                 reject = 1;
+            } else if (d->state == RS_CLOSED) {
+                s->result = read_result(ctx, JS_UNDEFINED, true);
             } else if (stream_queued(ctx, d) > 0) {
-                ControllerData *c = JS_IsUndefined(d->controller) ? NULL : ctrl_of(d->controller);
+                ControllerData *c = ctrl_of(d->controller);
                 JSValue chunk = stream_dequeue(ctx, d);
                 s->result = read_result(ctx, chunk, false);
                 /* §4.5's PullSteps: draining the LAST chunk of a stream whose close was requested is what
                    actually closes it — a page that calls close() with chunks still queued must see every one
                    of them before `done`. Otherwise the drain is what makes room, so the source is pulled. */
-                if (c && c->close_requested && stream_queued(ctx, d) == 0) {
+                DCHECK(c != NULL, "a ReadableStream reached a read with no controller");
+                if (c->close_requested && stream_queued(ctx, d) == 0) {
                     s->w.stage = RD_CLOSE;
                     s->w.settle = S_CLOSE_SET;
-                } else if (c) {
+                } else {
                     s->w.stage = RD_PULL;
                     s->w.pull = P_TEST;
                 }
-            } else if (d->state == RS_CLOSED) {
-                s->result = read_result(ctx, JS_UNDEFINED, true);
             } else {
                 /* §4.2: a READABLE stream with an empty queue PARKS the read request. The promise is returned
                    unsettled and the controller answers it later — which is the whole reason a stream is not
@@ -930,10 +950,8 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                 at = stream_read_pending(ctx, d) + d->rhead;
                 JS_SetPropertyUint32(ctx, d->read_resolve, at, funcs[0]);
                 JS_SetPropertyUint32(ctx, d->read_reject, at, funcs[1]);
-                if (!JS_IsUndefined(d->controller)) {
-                    s->w.stage = RD_PULL;
-                    s->w.pull = P_TEST;
-                }
+                s->w.stage = RD_PULL;
+                s->w.pull = P_TEST;
                 goto have_promise;
             }
             if (JS_IsException(s->result)) return JS_STEP_ABRUPT;
@@ -2280,11 +2298,9 @@ static int tee_branch(JSContext *ctx, TeeData *t, JSValueConst tee_v, int i)
 
     t->branch[i] = readable_stream_empty(ctx);
     if (JS_IsException(t->branch[i])) return -1;
-    t->ctrl[i] = controller_new(ctx, t->branch[i]);
-    if (JS_IsException(t->ctrl[i])) return -1;
-    c = ctrl_of(t->ctrl[i]);
     d = stream_of(t->branch[i]);
-    d->controller = JS_DupValue(ctx, t->ctrl[i]);
+    t->ctrl[i] = JS_DupValue(ctx, d->controller);
+    c = ctrl_of(t->ctrl[i]);
     data[0] = tee_v;
     c->pull_fn = JS_NewStepClosure(ctx, g_tee_stepids[TEE_PULL], 0, 1, data);
     if (JS_IsException(c->pull_fn)) { c->pull_fn = JS_UNDEFINED; return -1; }
@@ -2772,11 +2788,6 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         s->stream = readable_stream_empty(ctx);
         if (JS_IsException(s->stream)) return -1;
         d = stream_of(s->stream);
-        {
-            JSValue ctrl = controller_new(ctx, s->stream);
-            if (JS_IsException(ctrl)) return -1;
-            d->controller = ctrl;
-        }
         c = ctrl_of(d->controller);
         f->controller = JS_DupValue(ctx, d->controller);
         c->hwm = 0;                        /* §4.2: `from` pulls only when asked */
@@ -2989,10 +3000,8 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         if (JS_IsException(s->stream)) return -1;
         if (JS_IsObject(s->proto) && JS_SetPrototype(ctx, s->stream, s->proto) < 0) return -1;
         d = stream_of(s->stream);
-        s->controller = controller_new(ctx, s->stream);
-        if (JS_IsException(s->controller)) return -1;
+        s->controller = JS_DupValue(ctx, d->controller);
         c = ctrl_of(s->controller);
-        d->controller = JS_DupValue(ctx, s->controller);
 
         c->pull_fn = s->src[SRC_PULL];
         s->src[SRC_PULL] = JS_UNDEFINED;
