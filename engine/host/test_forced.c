@@ -1179,6 +1179,9 @@ int main(void) {
 
     /* BASELINE setup (mark 0): the globals here must NOT be captured, so install the COW hook AFTER. */
     JSValue g = JS_GetGlobalObject(ctx);
+    /* THE HOST'S NETWORK. SECURITY.md puts every byte of it behind the trusted chokepoint, so this host's
+       answer is to PARK the request on the flow's pending register and let the trusted zone fetch it. */
+    { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
     fetch_install(ctx, g);   /* the REAL component: `fetch`, and with it Response and Headers */
     JS_SetPropertyStr(ctx, g, "loadScript", JS_NewCFunction(ctx, js_load_script, "loadScript", 1));   /* lazy-chunk load */
     JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval_sink, "eval", 1));   /* the eval sink */

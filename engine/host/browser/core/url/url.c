@@ -27,6 +27,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/url/url.h"
+#include "core/url/idna.h"
 #include "core/idl_args.h"
 #include "core/url/url_search_params.h"
 
@@ -476,11 +477,21 @@ static bool parse_host(const char *s, size_t n, bool is_opaque, UrlHost *out)
     if (n == 0) { out->kind = URL_HOST_EMPTY; return true; }
 
     decoded = url_percent_decode(s, n, &dn);
+    /* §4.2 step 4: DOMAIN TO ASCII. A non-ASCII domain is not lowercased and hoped for — `münchen.de` IS
+       `xn--mnchen-3ya.de` in the record, and every comparison a page makes against `location.host` is against
+       that A-label. The ASCII path stays here because UTS-46's answer for it is exactly this lowercase, and
+       running the whole of IDNA on `example.com` would allocate four times to reach the same bytes. */
+    for (i = 0; i < dn; i++) if ((unsigned char)decoded[i] >= 0x80) break;
+    if (i < dn) {
+        char *ascii = NULL;
+        size_t an = 0;
+        int r = idna_domain_to_ascii(decoded, dn, &ascii, &an);
+        free(decoded);
+        if (r < 0) return false;
+        decoded = ascii;
+        dn = an;
+    }
     for (i = 0; i < dn; i++) {
-        if ((unsigned char)decoded[i] >= 0x80) {
-            DFAIL("a non-ASCII domain reached the URL host parser — build UTS-46 domain-to-ASCII (IDNA) plus "
-                  "Punycode, which is what turns it into the A-label the record must hold");
-        }
         if (is_forbidden_domain((unsigned char)decoded[i])) { ok = false; break; }
         decoded[i] = (char)lower((unsigned char)decoded[i]);
     }

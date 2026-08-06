@@ -24,7 +24,6 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "solver/endpoint.h"
-#include "solver/engine.h"
 #include "core/fetch/fetch.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/response.h"
@@ -33,6 +32,10 @@
 /* The id JS_RegisterStepDef handed this runtime, and the two IDL attribute names the machine reads by. Atoms
    belong to a runtime, and SECURITY.md gives this build one WASM instance per DOCUMENT — one runtime — so these
    are that runtime's. The DCHECK at install is what makes a second one impossible rather than merely unlikely. */
+static const FetchProvider *g_provider;
+
+void fetch_set_provider(const FetchProvider *p) { g_provider = p; }
+
 static int    g_fetch_stepid = -1;
 static JSAtom g_atom_method, g_atom_url, g_atom_headers;
 static JSRuntime *g_fetch_rt;
@@ -62,13 +65,27 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
 /* Park the request on the FLOW that issued it: the URL the trusted host must fetch, and the capability that
    delivers the body into this flow's continuation. There is ONE pending register and it is the flow's own —
    a second one beside it cannot resolve into the flow that owns the reaction, which is the whole point. */
-/* THE REPLY BECOMES A RESPONSE HERE, in the component that promised one. The flow's pending register delivers
-   the host's bytes and knows nothing about the Fetch API; this closure sits between them, so `fetch()` keeps its
-   contract (a Promise<Response>) without the scheduler learning what a Response is. func_data = [resolve, url]. */
+/* THE REPLY BECOMES A RESPONSE HERE, in the component that promised one. The host delivers bytes and knows
+   nothing about the Fetch API; this closure sits between them, so `fetch()` keeps its contract (a
+   Promise<Response>) without the host learning what a Response is. func_data = [resolve, url, reject].
+   A NULL delivery is §5.5's NETWORK ERROR and REJECTS with a TypeError. It used to be stringified into the
+   body like any other value, so a request the host could not satisfy resolved with a Response reading "null"
+   — a page's `.catch` never ran, and the failure arrived disguised as data. */
 static JSValue fetch_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                              int magic, JSValueConst *func_data)
 {
-    const char *u = JS_ToCString(ctx, func_data[1]);
+    const char *u;
+
+    if (argc > 0 && JS_IsNull(argv[0])) {
+        JSValue err = JS_ThrowTypeError(ctx, "Failed to fetch");
+        JSValue exc = JS_GetException(ctx);
+        JSValue rr;
+        (void)err;
+        rr = JS_Call(ctx, func_data[2], JS_UNDEFINED, 1, (JSValueConst *)&exc);
+        JS_FreeValue(ctx, exc);
+        return rr;
+    }
+    u = JS_ToCString(ctx, func_data[1]);
     /* WITH ITS LENGTH: a reply is a byte sequence, and the interior NUL a strlen stops at is exactly what
        `arrayBuffer()` would then have under-reported. */
     size_t body_len = 0;
@@ -89,7 +106,7 @@ static JSValue fetch_deliver(JSContext *ctx, JSValueConst this_val, int argc, JS
 static JSValue fetch_park(JSContext *ctx, JSValueConst url)
 {
     JSValue promise, resolving[2], deliver;
-    JSValueConst data[2];
+    JSValueConst data[3];
     const char *u;
 
     promise = JS_NewPromiseCapability(ctx, resolving);
@@ -112,10 +129,14 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url)
         JSValue uv = JS_NewString(ctx, u);
         data[0] = resolving[0];
         data[1] = uv;
-        deliver = JS_NewCFunctionData(ctx, fetch_deliver, 1, 0, 2, data);
+        data[2] = resolving[1];
+        deliver = JS_NewCFunctionData(ctx, fetch_deliver, 1, 0, 3, data);
         JS_FreeValue(ctx, uv);
         if (!JS_IsException(deliver)) {
-            engine_pending_fetch_url(ctx, deliver, JS_UNDEFINED, u);
+            DCHECK(g_provider != NULL && g_provider->owe != NULL,
+                   "fetch() was called with no host network provider installed — the promise would be owed to "
+                   "nobody and the flow could never finish");
+            g_provider->owe(ctx, deliver, JS_UNDEFINED, u);
             JS_FreeValue(ctx, deliver);
         }
         JS_FreeCString(ctx, u);

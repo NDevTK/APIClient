@@ -124,7 +124,10 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
         event_target_install(g_ctx, g);
         event_target_set_window(g_ctx, g);   /* §7.6: the document's parent on a propagation path */
         event_target_install_handlers(g_ctx, g, EH_GLOBAL | EH_WINDOW);   /* window's on* set */   /* window IS the global (7.2.2), so this is window.addEventListener */
-        fetch_install(g_ctx, g);
+        /* THE HOST'S NETWORK. SECURITY.md puts every byte of it behind the trusted chokepoint, so this host's
+       answer is to PARK the request on the flow's pending register and let the trusted zone fetch it. */
+    { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
+    fetch_install(g_ctx, g);
         module_loader_install(g_rt);
         location_install(g_ctx, g, origin);
         /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */

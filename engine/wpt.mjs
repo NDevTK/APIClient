@@ -58,7 +58,10 @@ const SRCS = [
   "host/browser/core/fetch/body.c",
   "host/browser/core/fetch/response.c",
   "host/browser/core/fetch/request.c",
+  "host/browser/core/fetch/fetch.c",
+  "host/solver/endpoint.c",
   "host/browser/core/url/url.c",
+  "host/browser/core/url/idna.c",
   "host/browser/core/url/url_search_params.c",
   "host/wpt_runner.c",
 ].map((f) => join(ENGINE, f));

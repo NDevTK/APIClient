@@ -28,6 +28,7 @@
 #include "core/fetch/headers.h"
 #include "core/fetch/response.h"
 #include "core/fetch/request.h"
+#include "core/fetch/fetch.h"
 #include "core/url/url.h"
 #include "core/url/url_search_params.h"
 #include "core/idl_args.h"
@@ -109,6 +110,88 @@ static const char WPT_EPILOGUE[] =
     "});\n"
     "done();\n";
 
+/* ---- THE CORPUS AS THIS HOST'S NETWORK ------------------------------------------------------------------
+ *
+ * A wpt test that needs data FETCHES it — url-constructor reads its ~700 cases out of
+ * resources/urltestdata.json — and WPT's own server answers those requests off the checked-out tree. This
+ * host's network does the same, which is why it is the real fetch component and not a stand-in: the request
+ * goes through §5.5, §5.3's Request and §5.1's guards exactly as a page's would, and what differs is only who
+ * satisfies it.
+ *
+ * IT IS DRAINED FROM THE PUMP, not from `owe`. Calling the deliver closure inside `owe` would be a JS_Call
+ * from C with no flow base under it — the drive-to-completion this engine aborts on — so the owed reply is
+ * recorded and satisfied where the runner already re-enters JS. That is also what the trusted zone does. */
+/* The corpus root, derived from the harness path the driver passes — the runner is handed
+   `<root>/resources/testharness.js` as its first argument, so the root is what precedes it. */
+static char g_wpt_root[512];
+
+static void wpt_report_exception(JSContext *ctx, const char *name, const char *what);
+
+#define WPT_OWED_MAX 64
+static struct { JSValue deliver; char *url; } g_owed[WPT_OWED_MAX];
+static int g_owed_n;
+/* The document address of the file being run, which is what a relative fetch resolves against. */
+static char g_base_url[512];
+
+static void wpt_owe(JSContext *ctx, JSValueConst deliver, JSValueConst value, const char *url)
+{
+    (void)value;
+    CHECK(g_owed_n < WPT_OWED_MAX, "wpt: more replies owed at once than this runner tracks");
+    g_owed[g_owed_n].deliver = JS_DupValue(ctx, deliver);
+    g_owed[g_owed_n].url = strdup(url ? url : "");
+    CHECK(g_owed[g_owed_n].url, "wpt: OOM recording an owed reply");
+    g_owed_n++;
+}
+
+/* Resolve one owed URL against the running file's address and read it out of the corpus. NULL when the corpus
+   has no such file, which is a real 404 and is reported as one rather than as an empty body. */
+static char *wpt_serve(const char *url, size_t *plen)
+{
+    UrlRecord base, rec;
+    char *path = NULL, *full, *body = NULL;
+
+    url_record_init(&base);
+    url_record_init(&rec);
+    if (url_parse(&base, g_base_url, strlen(g_base_url), NULL) &&
+        url_parse(&rec, url, strlen(url), &base)) {
+        path = url_serialize_path(&rec);
+    }
+    url_record_free(&base);
+    url_record_free(&rec);
+    if (!path) return NULL;
+    full = malloc(strlen(g_wpt_root) + strlen(path) + 2);
+    CHECK(full, "wpt: OOM building a corpus path");
+    sprintf(full, "%s%s", g_wpt_root, path);
+    body = read_file(full, plen);
+    free(full);
+    free(path);
+    return body;
+}
+
+/* Satisfy every reply owed so far. Returns true if any were, so the pump keeps turning while a test's data
+   load unblocks the next one. */
+static bool wpt_drain_owed(JSContext *ctx)
+{
+    int i, n = g_owed_n;
+    if (!n) return false;
+    g_owed_n = 0;   /* taken first: satisfying one may owe another */
+    for (i = 0; i < n; i++) {
+        size_t len = 0;
+        char *body = wpt_serve(g_owed[i].url, &len);
+        JSValue arg = body ? JS_NewStringLen(ctx, body, len) : JS_NULL;
+        JSValue r = JS_Call(ctx, g_owed[i].deliver, JS_UNDEFINED, 1, (JSValueConst *)&arg);
+        if (JS_IsException(r)) {
+            wpt_report_exception(ctx, g_owed[i].url, "delivering: ");
+        }
+        JS_FreeValue(ctx, r);
+        JS_FreeValue(ctx, arg);
+        JS_FreeValue(ctx, g_owed[i].deliver);
+        free(body);
+        free(g_owed[i].url);
+    }
+    return true;
+}
+
 /* Report the pending exception. JS_ToCString would run the thrown object's own `toString` from C — which is
    the drive-to-completion the engine aborts on, and did abort on here, so the report of a failure became a
    crash that hid it. JS_DiagCString is the engine's answer for a host with no flow to run page code on. */
@@ -179,6 +262,34 @@ int main(int argc, char **argv)
     url_install(ctx, global);
     usp_init(ctx);
     usp_install(ctx, global);
+    fetch_install(ctx, global);
+    { static const FetchProvider P = { wpt_owe }; fetch_set_provider(&P); }
+
+    /* THE CORPUS ROOT AND THE DOCUMENT ADDRESS. The driver hands this runner
+       `<root>/resources/testharness.js` first and the test file second, so the root is what precedes the one
+       and the address is the other, made server-relative — which is exactly what WPT's server serves from and
+       resolves against. A worker's `location` is a real WorkerLocation; `search` is empty because this runner
+       runs the file with no variant query, which is a real variant and not a way to skip the others. */
+    {
+        const char *h = argv[1], *tail = strstr(h, "/resources/testharness.js");
+        size_t n = tail ? (size_t)(tail - h) : 0;
+        CHECK(n < sizeof g_wpt_root, "wpt: the corpus root is longer than this runner holds");
+        memcpy(g_wpt_root, h, n);
+        g_wpt_root[n] = 0;
+        /* THE LAST argument is the test; the ones between are its META scripts. Reading argv[2] made a file
+           with a META script resolve its data against that script's directory instead of its own. */
+        if (argc > 2 && !strncmp(argv[argc - 1], g_wpt_root, n))
+            snprintf(g_base_url, sizeof g_base_url, "http://web-platform.test%s", argv[argc - 1] + n);
+        else
+            snprintf(g_base_url, sizeof g_base_url, "http://web-platform.test/");
+        {
+            JSValue loc = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, loc, "href", JS_NewString(ctx, g_base_url));
+            JS_SetPropertyStr(ctx, loc, "search", JS_NewString(ctx, ""));
+            JS_SetPropertyStr(ctx, loc, "origin", JS_NewString(ctx, "http://web-platform.test"));
+            JS_SetPropertyStr(ctx, global, "location", loc);
+        }
+    }
     idl_args_seal();
     JS_FreeValue(ctx, global);
 
@@ -203,7 +314,13 @@ int main(int argc, char **argv)
         int r;
         while (JS_ResumeParkedFlow(rt)) ;
         r = JS_ExecutePendingJob(rt, &c1);
-        if (r <= 0) { if (r < 0) failed = 1; break; }
+        if (r > 0) continue;
+        if (r < 0) { failed = 1; break; }
+        /* NOTHING LEFT TO RUN IS NOT NOTHING LEFT TO DO. A promise_test parked on `fetch` has no job pending
+           and no flow parked — it is waiting on the HOST, exactly as a page waits on the network. Satisfying
+           the owed replies is what re-enters JS and gives the pump more to drain; only when a drain owes
+           nothing new is the file really finished. */
+        if (!wpt_drain_owed(ctx)) break;
     }
     JS_SetFlowControlHooks(&WPT_HOOKS_OFF);
 
