@@ -1,188 +1,114 @@
-/* WPT — the BROWSER half's oracle, the twin of engine/test262.mjs.
+/* WEB-PLATFORM-TESTS — the browser half's correctness gate.
  *
- * WHY THIS EXISTS. test262 is self-validating for the JS half: every file carries its own assertions, so a
- * failure means the engine got the SPEC answer wrong and nothing has to be maintained alongside it. The browser
- * half had no such thing — its only checks were hand-written probes and test_forced.c's fixture, which measure
- * what someone thought to ask. The Web Platform Tests are the same self-validating shape for DOM, Fetch, URL and
- * HTML: testharness.js carries the oracle, and a failure is a fidelity bug with the spec text attached.
+ * WHY: test262 is the JS half's oracle, and the browser half had nothing equivalent. Its only checks were the
+ * IDL audit, which measures COVERAGE and can only say what is ABSENT, and a fixture of probes written by
+ * whoever wrote the component — which tests what that person already thought of. Both missed the same things:
+ * the audit had no row for Headers at all, then reported it COMPLETE with four members missing, and the fixture
+ * agreed because I wrote both. WPT is written by the people who wrote the spec, so it disagrees.
  *
- * HOW A TEST IS RUN. A WPT file is an HTML document that loads /resources/testharness.js and then declares
- * tests. Each document runs in its OWN PROCESS, holding its OWN engine — the architecture's "one WASM instance
- * per DOCUMENT" taken literally. That is not a convenience: a shared process accumulated one never-released
- * 1 GiB-capable instance per file (2.3 GB resident by the end of one directory, most of the wall clock spent in
- * GC), and any document that aborted — a wasm trap, a DCHECK, a sanitizer report — took the whole run with it.
- * One process per document frees the engine with the process, isolates every abort to the file that caused it,
- * and lets documents run concurrently.
+ * ONE PROCESS PER TEST FILE, deliberately. A DCHECK is an abort — that is the whole point of it — so a runner
+ * that ran the corpus in one process would report the first unbuilt capability and nothing after it. Per-file
+ * isolation makes an abort a RESULT for that file and leaves the rest of the picture intact, which is the
+ * difference between a gate and a bisect.
  *
- * HOW RESULTS COME BACK. The engine has one output channel a page can reach without any new API: the endpoints
- * it reports. The shim below turns each test result into a fetch of /wpt-result, so the results arrive in the
- * same document qjs_result already produces. Nothing is added to the ABI for testing. */
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { fork } from "node:child_process";
-import { cpus } from "node:os";
+ * The corpus is pinned, like lexbor and test262: a moving corpus turns a regression into an argument.
+ *
+ * Usage:  node engine/wpt.mjs [subdir-or-file]
+ */
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, mkdtempSync } from "node:fs";
+import { join, relative } from "node:path";
+import { tmpdir } from "node:os";
 
-const ENGINE = dirname(fileURLToPath(import.meta.url));
-const WPT = join(ENGINE, ".work", "wpt");
-const ABI = join(ENGINE, "..", "extension", "lib", "qjs", "qjs.mjs");
+const ENGINE = import.meta.dirname;
+const WORK = join(ENGINE, ".work");
+const WPT = join(WORK, "wpt");
+/* PINNED. The corpus is an oracle, and an oracle that changes under you turns "this regressed" into "did it?".
+   Re-pin deliberately, as a commit of its own, so the diff in results has one cause. */
+const WPT_REV = "bf4714d";
+/* WHAT IS CHECKED OUT. A sparse list rather than the whole 1 GB tree, and it grows as areas are covered — an
+   area absent here is honestly untested, which is a different statement from "passes". */
+const WPT_PATHS = ["resources", "fetch/api/headers"];
 
-if (!existsSync(WPT)) {
-  console.error("[wpt] checkout missing — clone it:\n" +
-    "  git clone --filter=blob:none --sparse --depth 1 https://github.com/web-platform-tests/wpt.git engine/.work/wpt\n" +
-    "  cd engine/.work/wpt && git sparse-checkout set resources dom/nodes dom/events url fetch/api/basic html/dom");
+if (!existsSync(join(WPT, "resources", "testharness.js"))) {
+  console.error("[wpt] corpus missing — provision it with:\n" +
+    `  git clone --filter=blob:none --sparse --depth 1 https://github.com/web-platform-tests/wpt.git ${WPT}\n` +
+    `  cd ${WPT} && git sparse-checkout set ${WPT_PATHS.join(" ")} && git checkout ${WPT_REV}`);
   process.exit(1);
 }
-if (!existsSync(ABI)) { console.error("[wpt] build the ABI first: node engine/build.mjs abi"); process.exit(1); }
 
-const sub = process.argv[2] || "dom/nodes";
-/* How many qjs_step calls the harness pumps before it gives up on a document. This is the HARNESS's limit, not
-   the engine's — the engine has none, and a document that hits this is REPORTED as unfinished rather than
-   counted as silent. Raise it when a document legitimately needs more; never read it as "the engine stops here". */
-const STEP_LIMIT = 4000;
-const dir = join(WPT, sub);
-if (!existsSync(dir)) { console.error("[wpt] no such subdir: " + sub); process.exit(1); }
+/* THE RUNNER IS BUILT NATIVELY, like run-test262 and for the same reason: the gate is run per change, and an
+   eight-minute wasm link per iteration is a gate nobody runs. The flags mirror the shipped build where they
+   change the engine — ENABLE_DUMPS alters the interpreter's dispatch macros, and building the oracle without it
+   tested a different interpreter once already. */
+const SRCS = [
+  "qjs/quickjs.c", "qjs/libregexp.c", "qjs/libunicode.c", "qjs/dtoa.c",
+  "host/solver/concolic.c", "host/solver/flow.c", "host/solver/absent.c",
+  "host/browser/core/idl_args.c",
+  "host/browser/core/fetch/headers.c",
+  "host/wpt_runner.c",
+].map((f) => join(ENGINE, f));
 
-/* Inlined script text must not contain a literal `</script`, or the HTML parser ends the element in the middle
-   of it and the rest of the file becomes markup — which is what a browser does too, and is why WPT serves these
-   as separate files. Escaping is the inlining's business, not a workaround for the parser. */
+console.log("[wpt] building the native runner…");
+const bin = join(mkdtempSync(join(tmpdir(), "wpt-")), "wpt.exe");
+const cc = spawnSync("gcc", ["-O1", "-w", "-DNDEBUG", "-D_GNU_SOURCE", '-DCONFIG_VERSION="wpt"',
+  "-DAPICLIENT_DEV=1", "-DENABLE_DUMPS",
+  "-I" + join(ENGINE, "qjs"), "-I" + join(ENGINE, "host"), "-I" + join(ENGINE, "host", "browser"),
+  ...SRCS, "-o", bin, "-lm", "-lpthread"], { encoding: "utf8" });
+if (cc.status !== 0) { console.error("[wpt] runner build FAILED\n" + (cc.stderr || "")); process.exit(1); }
 
-/* The reporting shim, SERVED in place of /resources/testharnessreport.js. The engine has one output channel a
-   page can reach without any new API — the endpoints it reports — so each result becomes a fetch and arrives in
-   the document qjs_result already produces. Nothing is added to the ABI for testing. */
-const REPORT = `
-add_completion_callback(function(tests, status){
-  for (var i = 0; i < tests.length; i++) {
-    fetch("/wpt-result?i=" + i + "&s=" + tests[i].status + "&n=" + encodeURIComponent(tests[i].name) +
-          "&m=" + encodeURIComponent(String(tests[i].message).slice(0, 200)));
+/* Which files to run. A `.any.js` is the portable form — it carries no HTML around it, which is what lets a
+   non-browser host run the real file rather than a copy of it. */
+function collect(dir, out) {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) collect(p, out);
+    else if (e.name.endsWith(".any.js")) out.push(p);
   }
-  fetch("/wpt-done?n=" + tests.length + "&s=" + status.status + "&m=" + encodeURIComponent(String(status.message).slice(0,200)));
-});
-`;
+  return out;
+}
+const arg = process.argv[2] || "";
+const root = arg ? join(WPT, arg) : join(WPT, "fetch");
+const files = arg.endsWith(".js") ? [root] : collect(root, []).sort();
+if (!files.length) { console.error(`[wpt] no .any.js under ${root}`); process.exit(1); }
 
-/* THE SERVER. WPT documents load their resources by URL, and this engine now fetches a <script src> the way a
-   browser does — so the harness serves the checkout instead of inlining anything. Inlining was a workaround and
-   it was also WRONG: testharness.js contains the sequences that put an HTML tokenizer into its script-data
-   escaped states, so pasting it into a <script> element changes where the element ends. */
-const serve = (url, testFile) => {
-  const path = url.split("?")[0];
-  if (path === "/resources/testharnessreport.js") return REPORT;
-  const abs = path.startsWith("/") ? join(WPT, path.slice(1)) : join(WPT, dirname(testFile), path);
-  try { return readFileSync(abs, "utf8"); } catch { return ""; }
-};
+const HARNESS = join(WPT, "resources", "testharness.js");
+let pass = 0, fail = 0, aborted = 0;
+const failures = [];
 
-const files = readdirSync(dir).filter((f) => f.endsWith(".html") && !f.includes("-ref.") && !f.includes("manual"));
-
-/* ---- THE CHILD: one document, one engine, one process. It prints ONE @WPT line and exits. ---- */
-const ONE = process.argv[3] === "--one" ? process.argv[4] : null;
-if (ONE) {
-  const html = readFileSync(join(WPT, ONE), "utf8");
-  const createQJS = (await import(ABI)).default;
-  let out = "", aborted = "", unfinished = 0;
-  const emit = () => {
-    let doc = null;
-    try { doc = JSON.parse(out); } catch { /* no document at all */ }
-    const results = [];
-    for (const site of (doc && doc.fetchCallSites) || []) {
-      if (site.url !== "/wpt-result") continue;
-      const byName = (k) => (site.params.find((p) => p.name === k) || { validValues: [] }).validValues;
-      const st = byName("s"), nm = byName("n"), ms = byName("m");
-      for (let i = 0; i < st.length; i++)
-        results.push({ status: st[i], name: decodeURIComponent(nm[i] || ""), message: decodeURIComponent(ms[i] || "") });
-    }
-    process.stdout.write("@WPT " + JSON.stringify({ results, pageErrors: (doc && doc.pageErrors) || [], aborted, unfinished }) + "\n");
-  };
-  try {
-    const M = await createQJS({ noInitialRun: true, print: () => {}, printErr: (l) => { if (!aborted) aborted = String(l); } });
-    const cstr = (s2) => { const n = M.lengthBytesUTF8(s2 || "") + 1, p2 = M._malloc(n); M.stringToUTF8(s2 || "", p2, n); return p2; };
-    M.ccall("qjs_init", "number", ["number","number","number","number","number"],
-            [cstr(""), cstr(html), cstr("https://wpt.test/" + ONE), cstr(""), cstr("")]);
-    M.ccall("qjs_begin", "void", ["string"], [""]);
-    /* The ENGINE decides when a document is finished: qjs_step returns 0 when its frontier has drained. The
-       harness still has to terminate, so it stops pumping after STEP_LIMIT — and when it does, it SAYS SO. A
-       document that was still working reads identically to one that produced nothing, and reporting the two the
-       same way is how a stalled document hid inside "no result, no abort and no page error". */
-    let n = 0, r;
-    while ((r = M.ccall("qjs_step", "number", [], [])) !== 0 && ++n < STEP_LIMIT) {
-      const pend = String(M.ccall("qjs_pending", "string", [], [])).split("\n").filter(Boolean);
-      for (const u of pend) M.ccall("qjs_provide", "void", ["string","string"], [u, serve(u, ONE)]);
-    }
-    if (r !== 0) unfinished = n;
-    out = M.ccall("qjs_result", "string", [], []);
-  } catch (e) {
-    aborted = aborted || String((e && e.message) || e);
+for (const f of files) {
+  const rel = relative(WPT, f);
+  const r = spawnSync(bin, [HARNESS, f], { encoding: "utf8", maxBuffer: 1 << 28, timeout: 60_000 });
+  const out = (r.stdout || "") + (r.stderr || "");
+  /* An ABORT is a result about this file, not an accident: it is a DCHECK naming a capability the browser half
+     does not have, which is exactly what this gate is for. It is counted apart from a FAIL because the two ask
+     for different work — a fail is a wrong answer, an abort is a missing one. */
+  const why = out.match(/@WHY .*"reason":"([^"]*)/);
+  if (why || r.signal) {
+    aborted++;
+    failures.push(`  ABORT  ${rel}\n         ${why ? why[1].slice(0, 160) : "signal " + r.signal}`);
+    continue;
   }
-  emit();
-  process.exit(0);
+  let filePass = 0, fileFail = 0;
+  for (const line of out.split("\n")) {
+    const m = line.match(/^@WPT (\{.*\})$/);
+    if (!m) continue;
+    let t; try { t = JSON.parse(m[1]); } catch { continue; }
+    if (t.status === 0) { filePass++; }
+    else { fileFail++; failures.push(`  FAIL   ${rel} :: ${t.name}\n         ${(t.message || "").slice(0, 200)}`); }
+  }
+  const err = out.match(/^@WPTERR (.*)$/m);
+  if (err && !filePass && !fileFail) {
+    aborted++;
+    failures.push(`  ERROR  ${rel}\n         ${err[1].slice(0, 200)}`);
+    continue;
+  }
+  pass += filePass;
+  fail += fileFail;
 }
 
-/* ---- THE PARENT: fan the documents out, aggregate what comes back. ---- */
-const JOBS = Math.max(1, Math.min(cpus().length - 1, 8));
-const runOne = (rel) => new Promise((resolve) => {
-  const ch = fork(fileURLToPath(import.meta.url), [sub, "--one", rel], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
-  let sout = "", serr = "";
-  ch.stdout.on("data", (d) => { sout += d; });
-  ch.stderr.on("data", (d) => { serr += d; });
-  ch.on("exit", (code, sig) => {
-    const line = sout.split("\n").find((l) => l.startsWith("@WPT "));
-    if (line) { try { return resolve(JSON.parse(line.slice(5))); } catch { /* fall through */ } }
-    /* The child DIED before it could report — its own stderr is the only account of why, and it is exactly the
-       kind of failure that used to kill the whole run. Report it as this document's gap. */
-    resolve({ results: [], pageErrors: [], unfinished: 0,
-              aborted: (serr.split("\n").find(Boolean) || ("child exited " + (sig || code) + " with no output")) });
-  });
-});
-
-let ran = 0, pass = 0, fail = 0, noresult = 0;
-const gaps = new Map();          // distinct failure/abort message -> count
-const noResultFiles = [];
-/* The gap list says WHAT failed and how often; this says WHICH FILE, because every chase starts by finding one
-   document that reproduces and the list alone cannot answer that. Written to wpt-gaps.json beside the counts. */
-const byFile = {};
-const note = (msg, file) => {
-  const k = String(msg).slice(0, 160);
-  gaps.set(k, (gaps.get(k) || 0) + 1);
-  (byFile[k] || (byFile[k] = [])).push(file);
-};
-
-/* A CONTINUOUS pool, not batches. A batch is a barrier: the slowest document in it holds every other slot idle,
-   and WPT documents differ by orders of magnitude in how long they run. Each slot takes the next file the moment
-   it is free. */
-let next = 0;
-const takeNext = async () => {
-  for (;;) {
-    const i = next++;
-    if (i >= files.length) return;
-    const f = files[i];
-    const res = await runOne(join(sub, f));
-    if (!res.results.length) {
-      noresult++;
-      noResultFiles.push(f);
-      /* The page's OWN uncaught errors are the real reason a document produced nothing: each names a capability
-         the harness needed. They are the gap list. */
-      if (res.pageErrors.length) for (const e of res.pageErrors) note(e, f);
-      else note(res.aborted
-                || (res.unfinished ? "the document was STILL WORKING after " + res.unfinished + " qjs_step calls "
-                                     + "— the harness stopped pumping, the engine did not finish"
-                                   : "no result, no abort and no page error"), f);
-      continue;
-    }
-    ran++;
-    for (const t of res.results) {
-      if (t.status === "0") pass++;
-      else { fail++; note(t.message || "(no message)", f); }
-    }
-  }
-};
-await Promise.all(Array.from({ length: JOBS }, takeNext));
-
-console.log("\n==================== WPT (" + sub + ") ====================");
-console.log("  files: " + files.length + "  |  produced results: " + ran + "  |  produced NONE: " + noresult);
-console.log("  assertions: " + pass + " pass, " + fail + " fail");
-console.log("\n  THE GAP LIST — distinct reasons, most common first (this is the work queue):");
-for (const [msg, n] of [...gaps.entries()].sort((a, b) => b[1] - a[1]).slice(0, 25))
-  console.log("   " + String(n).padStart(4) + "x  " + msg);
+console.log("\n==================== web-platform-tests ====================");
+for (const l of failures) console.log(l);
+console.log(`  files ${files.length}   subtests ${pass + fail}   pass ${pass}   fail ${fail}   aborted-files ${aborted}`);
 console.log("===========================================================");
-writeFileSync(join(ENGINE, ".work", "wpt-gaps.json"),
-              JSON.stringify({ sub, files: files.length, ran, noresult, pass, fail,
-                               gaps: [...gaps.entries()].sort((a,b)=>b[1]-a[1]), byFile, noResultFiles }, null, 1));
+process.exit(fail || aborted ? 1 : 0);
