@@ -90,37 +90,92 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
    A NULL delivery is §5.5's NETWORK ERROR and REJECTS with a TypeError. It used to be stringified into the
    body like any other value, so a request the host could not satisfy resolved with a Response reading "null"
    — a page's `.catch` never ran, and the failure arrived disguised as data. */
-static JSValue fetch_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                             int magic, JSValueConst *func_data)
+/* THE REPLY'S DELIVERY IS A STEP MACHINE, because settling the promise is the PAGE'S code. 27.2.1.3.2 step 8
+ * reads `Get(resolution, "then")` off the value being resolved with, and the value here is a Response — an
+ * ordinary object whose prototype the page owns, so `Object.prototype.then = { get(){…} }` makes that read the
+ * page's, and prototype pollution is a gadget class this engine exists to RUN rather than assume away. It was a
+ * JS_Call out of the host's pump: an activation with no flow base, where a loop in that getter drives to
+ * completion. body.c fixed exactly this for its readers; this is the same defect one layer out.
+ *
+ * It is a CLOSURE machine — JS_NewStepClosure — because a reaction knows which promise it belongs to only by
+ * capture, and the work it does (settling) is work only a machine may do. Those two were mutually exclusive
+ * before: JS_NewCFunctionData gives capture without the machine, JS_CFUNC_step gives the machine without
+ * capture. What it captured is read back off the callee its own header carries. */
+enum { FETCH_DELIVER_RESOLVE = 0, FETCH_DELIVER_URL, FETCH_DELIVER_REJECT };
+
+typedef struct {
+    JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
+    uint8_t   stage;
+    uint8_t   cphase;   /* the settle call's own phase, held across a suspension */
+    uint8_t   reject;   /* which of the capability's two functions this delivery settles with */
+    JSValue   value;    /* the Response, or the TypeError a null delivery makes (owned) */
+    JSValue   cb[3];    /* the call request buffer: [this, resolving function, value] */
+} JSFetchDeliverState;
+
+static void js_fetch_deliver_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    const char *u;
-
-    if (argc > 0 && JS_IsNull(argv[0])) {
-        JSValue err = JS_ThrowTypeError(ctx, "Failed to fetch");
-        JSValue exc = JS_GetException(ctx);
-        JSValue rr;
-        (void)err;
-        rr = JS_Call(ctx, func_data[2], JS_UNDEFINED, 1, (JSValueConst *)&exc);
-        JS_FreeValue(ctx, exc);
-        return rr;
-    }
-    u = JS_ToCString(ctx, func_data[1]);
-    /* WITH ITS LENGTH: a reply is a byte sequence, and the interior NUL a strlen stops at is exactly what
-       `arrayBuffer()` would then have under-reported. */
-    size_t body_len = 0;
-    const char *body = argc > 0 ? JS_ToCStringLen(ctx, &body_len, argv[0]) : NULL;
-    JSValue resp, r;
-
-    (void)this_val; (void)magic;
-    resp = response_new(ctx, u ? u : "", body ? body : "", body ? body_len : 0);
-    if (u) JS_FreeCString(ctx, u);
-    if (body) JS_FreeCString(ctx, body);
-    if (JS_IsException(resp))
-        return resp;
-    r = JS_Call(ctx, func_data[0], JS_UNDEFINED, 1, (JSValueConst *)&resp);
-    JS_FreeValue(ctx, resp);
-    return r;
+    JSFetchDeliverState *s = st;
+    int k;
+    v->val(ctx, &s->value);
+    for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
 }
+
+static JSValue js_fetch_deliver_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSFetchDeliverState *s = st;
+    int k;
+    (void)take_result;   /* a resolving function's return value is undefined and unobservable */
+    JS_FreeValue(ctx, s->value);
+    s->value = JS_UNDEFINED;
+    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
+    return JS_UNDEFINED;
+}
+
+static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSFetchDeliverState *s = st;
+    JSValue settled;
+    int r;
+
+    if (s->stage == 0) {
+        JSValueConst body_v = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        if (JS_IsNull(body_v)) {
+            /* The host could not fetch it. §5.5 rejects with a TypeError, and the message is the one every
+               browser uses, because a page that matches on it is matching on that. */
+            JS_ThrowTypeError(ctx, "Failed to fetch");
+            s->value = JS_GetException(ctx);
+            s->reject = 1;
+        } else {
+            const char *u = JS_ToCString(ctx, JS_StepClosureData(&s->hdr, FETCH_DELIVER_URL));
+            /* WITH ITS LENGTH: a reply is a byte sequence, and the interior NUL a strlen stops at is exactly
+               what `arrayBuffer()` would then have under-reported. */
+            size_t body_len = 0;
+            const char *body = JS_ToCStringLen(ctx, &body_len, body_v);
+            s->value = response_new(ctx, u ? u : "", body ? body : "", body ? body_len : 0);
+            if (u) JS_FreeCString(ctx, u);
+            if (body) JS_FreeCString(ctx, body);
+            if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
+        }
+        s->stage = 1;
+    }
+
+    DCHECK(s->stage == 1, "the fetch delivery was re-entered at a stage it never parks in");
+    r = step_call_run(ctx, &s->cphase, s->cb,
+                      JS_StepClosureData(&s->hdr, s->reject ? FETCH_DELIVER_REJECT : FETCH_DELIVER_RESOLVE),
+                      JS_UNDEFINED, 1, (JSValueConst *)&s->value, cb_result, &settled, out_cb, out_argc);
+    if (r > 0) return r;          /* parked ON THE SETTLE; the `then` read runs with a flow base under it */
+    JS_FreeValue(ctx, settled);
+    return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef js_fetch_deliver_def = {
+    sizeof(JSFetchDeliverState), js_fetch_deliver_step, js_fetch_deliver_fini, 0,
+    .visit = js_fetch_deliver_visit
+};
+static int g_deliver_stepid = -1;
 
 static JSValue fetch_park(JSContext *ctx, JSValueConst url)
 {
@@ -149,7 +204,8 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url)
         data[0] = resolving[0];
         data[1] = uv;
         data[2] = resolving[1];
-        deliver = JS_NewCFunctionData(ctx, fetch_deliver, 1, 0, 3, data);
+        DCHECK(g_deliver_stepid >= 0, "fetch() parked a reply before its delivery machine was declared");
+        deliver = JS_NewStepClosure(ctx, g_deliver_stepid, 1, 3, data);
         JS_FreeValue(ctx, uv);
         if (!JS_IsException(deliver)) {
             DCHECK(g_provider != NULL && g_provider->owe != NULL,
@@ -292,6 +348,9 @@ void fetch_install(JSContext *ctx, JSValueConst global)
            "instance is one document");
     if (g_fetch_stepid < 0) {
         g_fetch_rt    = rt;
+        /* The reply's delivery, declared once for the runtime — every parked fetch mints a CLOSURE over this
+           one definition rather than a definition per request. */
+        g_deliver_stepid = JS_RegisterStepDef(rt, &js_fetch_deliver_def);
         response_init(ctx);
         headers_init(ctx);
         request_init(ctx);

@@ -192,8 +192,15 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
             DCHECK(body != NULL, "an injected script's body did not arrive as text");
             if (body) { engine_queue_script(body); JS_FreeCString(ctx, body); }
         } else {
-            JSValue r = JS_Call(ctx, p->resolve, JS_UNDEFINED, 1, (JSValueConst *)&p->value);
-            JS_FreeValue(ctx, r);
+            /* AS A FLOW, not a JS_Call. The delivery settles the page's promise, and 27.2.1.3.2 step 8 reads
+               `Get(resolution, "then")` off the Response — an ordinary object whose prototype the page owns, so
+               `Object.prototype.then = { get(){…} }` makes that read the page's code. Out of this drain it ran
+               in a C activation with no flow base, which is the drive-to-completion this engine aborts on;
+               prototype pollution is a gadget class the solver exists to RUN rather than assume away. */
+            if (JS_CallAsFlow(ctx, p->resolve, p->value) < 0) {
+                JSValue exc = JS_GetException(ctx);
+                JS_FreeValue(ctx, exc);   /* a rejected delivery is the page's to observe, not this drain's */
+            }
         }
         JS_FreeValue(ctx, p->resolve);
         JS_FreeValue(ctx, p->value);

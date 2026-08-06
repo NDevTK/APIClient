@@ -198,11 +198,10 @@ static bool wpt_drain_owed(JSContext *ctx)
         size_t len = 0;
         char *body = wpt_serve(g_owed[i].url, &len);
         JSValue arg = body ? JS_NewStringLen(ctx, body, len) : JS_NULL;
-        JSValue r = JS_Call(ctx, g_owed[i].deliver, JS_UNDEFINED, 1, (JSValueConst *)&arg);
-        if (JS_IsException(r)) {
+        /* AS A FLOW, not a JS_Call. Settling the promise reads `then` off the value, which the page can own —
+           out of the pump that would have run with no flow base under it. */
+        if (JS_CallAsFlow(ctx, g_owed[i].deliver, arg) < 0)
             wpt_report_exception(ctx, g_owed[i].url, "delivering: ");
-        }
-        JS_FreeValue(ctx, r);
         JS_FreeValue(ctx, arg);
         JS_FreeValue(ctx, g_owed[i].deliver);
         free(body);
