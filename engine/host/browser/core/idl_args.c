@@ -704,6 +704,19 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             goto placed;
         }
 
+        /* §3.2.25's `BufferSource`: the brand test, once, so no body performs it. */
+        if (t == IDL_BUFFERSOURCE) {
+            if (!JS_IsArrayBuffer(a) && JS_GetTypedArrayType(a) < 0 && !JS_IsDataView(a)) {
+                JS_FreeValue(ctx, cb_result);
+                JS_ThrowTypeError(ctx, "the argument is not a BufferSource");
+                return JS_STEP_ABRUPT;
+            }
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            *slot = JS_DupValue(ctx, a);
+            goto placed;
+        }
+
         /* `BodyInit?`: null and undefined are the IDL null; a BufferSource crosses as itself; anything else
            is the union's USVString arm. The brand test is the union's own rule, stated once. */
         if (t == IDL_BODYINIT_NULLABLE) {

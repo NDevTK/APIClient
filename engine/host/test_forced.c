@@ -26,6 +26,7 @@
 #include "core/url/url_search_params.h"
 #include "core/html/form_data.h"
 #include "core/file/blob.h"
+#include "core/encoding/encoding.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/fetch.h"
 #include "solver/endpoint.h"
@@ -1687,6 +1688,7 @@ int main(void) {
     url_free(ctx);
     usp_free(ctx);
     blob_free(ctx);
+    encoding_free(ctx);
     form_data_free(ctx);        /* URLSearchParams.prototype */
     response_free(ctx);
     request_free(ctx);   /* Response.prototype — one object, held for the runtime's life */

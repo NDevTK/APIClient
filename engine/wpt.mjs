@@ -29,7 +29,7 @@ const WPT_REV = "bf4714d";
 /* WHAT IS CHECKED OUT. A sparse list rather than the whole 1 GB tree, and it grows as areas are covered — an
    area absent here is honestly untested, which is a different statement from "passes". */
 const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetch/api/resources", "url", "common",
-                   "FileAPI/blob", "FileAPI/file", "FileAPI/support"];
+                   "FileAPI/blob", "FileAPI/file", "FileAPI/support", "encoding"];
 
 if (!existsSync(join(WPT, "resources", "testharness.js"))) {
   /* NO --depth 1. The corpus is PINNED, and a depth-1 clone has only the tip — `git checkout bf4714d` in it
@@ -57,6 +57,7 @@ const SRCS = [
   "host/browser/core/idl_iter.c",
   "host/browser/core/fetch/headers.c",
   "host/browser/core/byte_reader.c",
+  "host/browser/core/encoding/encoding.c",
   "host/browser/core/fetch/body.c",
   "host/browser/core/file/blob.c",
   "host/browser/core/html/form_data.c",

@@ -132,6 +132,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     SOLVER("dom_cow.c"), SOLVER("attr_shadow.c"),                                // DOM time-travel delta + DOM-attribute taint shadow
     join(HOST, "browser", "core", "loader", "document_scripts.c"),               // Lexbor <script> inventory + bundle identity
     join(HOST, "browser", "core", "fetch", "fetch.c"),
+    join(HOST, "browser", "core", "encoding", "encoding.c"),                  // TextEncoder/TextDecoder: the Encoding Standard's labels and decoders
     join(HOST, "browser", "core", "byte_reader.c"),                            // reading a byte sequence as a promise: Fetch §5.2's readers and File API §3.3's, one machine
     join(HOST, "browser", "core", "fetch", "body.c"),
     join(HOST, "browser", "core", "file", "blob.c"),                           // Blob: File API §3's immutable byte sequence

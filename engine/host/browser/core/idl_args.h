@@ -87,6 +87,11 @@ typedef enum {
        a sequence driven from the body runs after every later argument's conversion, which is observable the
        moment a later argument is a dictionary with a getter on it. */
     IDL_SEQUENCE_BLOBPART,
+    /* `BufferSource` — `(ArrayBuffer or ArrayBufferView)`, §3.2.25. An ArrayBuffer, a typed array or a DataView
+       crosses as itself and anything else is a TypeError, which is a check the body must not make: written by
+       hand it was right twice and wrong the third time, where a plain object reached JS_GetArrayBufferView and
+       tripped the engine's own "this is a typed array" assertion. */
+    IDL_BUFFERSOURCE,
 } IdlArgType;
 
 /* A DICTIONARY MEMBER, as its IDL declares it: the name, the type of its value, and whether the IDL marks it

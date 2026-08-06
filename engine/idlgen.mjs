@@ -53,6 +53,8 @@ const INTERFACES = {
   /* §4's `interface File : Blob` shares blob.c with the interface it inherits: one struct, one class id, and
      a prototype chained to Blob.prototype — which is what the inheritance MEANS, so the members it inherits
      are found in the same file. */
+  TextEncoder:          "core/encoding/encoding.c",
+  TextDecoder:          "core/encoding/encoding.c",
   Blob:                ["core/file/blob.c", "core/byte_reader.c"],
   File:                ["core/file/blob.c", "core/byte_reader.c"],
   /* Headers exists and had no row, so the audit said nothing about it at all — which is the lying-by-omission
