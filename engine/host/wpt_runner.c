@@ -222,7 +222,7 @@ static void wpt_send_all(int fd, const char *p, size_t n)
 
 /* Perform one request and return its BODY, or NULL. A non-2xx is a NULL body, which is what the delivery turns
    into `fetch`'s TypeError — the same answer a real network error gives. */
-static char *wpt_http(const FetchRequest *req, size_t *plen)
+static char *wpt_http(const FetchRequest *req, size_t *plen, int *pstatus, HeaderList *phdrs)
 {
     UrlRecord base, rec;
     char *path = NULL, *authority = NULL, *head;
@@ -286,8 +286,29 @@ static char *wpt_http(const FetchRequest *req, size_t *plen)
     /* HTTP/1.1 <status>, then headers, then a blank line. The body is what follows; `Connection: close` is why
        there is no chunked framing to unpick. */
     if (n > 12 && !memcmp(buf, "HTTP/1.", 7)) status = atoi(buf + 9);
+    *pstatus = status;
     {
         char *sep = memmem(buf, n, "\r\n\r\n", 4);
+        /* THE REPLY'S HEADERS, which were read past and dropped. A page reads them — `r.headers.get(...)` is
+           how it learns a reply's Content-Type — and every one of them answered null. Each line up to the
+           blank one is `name: value`; the status line is skipped because it is not one. */
+        if (sep) {
+            char *line = memchr(buf, '\n', n);
+            while (line && line + 1 < sep) {
+                char *end = memchr(line + 1, '\r', (size_t)(sep - line - 1));
+                char *colon;
+                if (!end) break;
+                *end = 0;
+                colon = strchr(line + 1, ':');
+                if (colon) {
+                    char *v = colon + 1;
+                    *colon = 0;
+                    while (*v == ' ' || *v == '\t') v++;
+                    header_list_append(phdrs, line + 1, v);
+                }
+                line = end + 1;
+            }
+        }
         if (sep && status >= 200 && status < 300) {
             size_t off = (size_t)(sep - buf) + 4;
             *plen = n - off;
@@ -312,13 +333,19 @@ static bool wpt_drain_owed(JSContext *ctx)
         size_t len = 0;
         FetchRequest req;
         char *body;
+        JSValue arg;
         req.method = g_owed[i].method;
         req.url = g_owed[i].url;
         req.headers = &g_owed[i].headers;
         req.body = g_owed[i].body;
         req.body_len = g_owed[i].body_len;
-        body = wpt_http(&req, &len);
-        JSValue arg = body ? JS_NewStringLen(ctx, body, len) : JS_NULL;
+        {
+            int status = 0;
+            HeaderList rh = { 0 };
+            body = wpt_http(&req, &len, &status, &rh);
+            arg = body ? fetch_reply_new(ctx, status, "", &rh, body, len) : JS_NULL;
+            header_list_free(&rh);
+        }
         /* AS A FLOW, not a JS_Call. Settling the promise reads `then` off the value, which the page can own —
            out of the pump that would have run with no flow base under it. */
         if (JS_CallAsFlow(ctx, g_owed[i].deliver, arg) < 0)

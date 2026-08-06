@@ -204,10 +204,18 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
                `Object.prototype.then = { get(){…} }` makes that read the page's code. Out of this drain it ran
                in a C activation with no flow base, which is the drive-to-completion this engine aborts on;
                prototype pollution is a gadget class the solver exists to RUN rather than assume away. */
-            if (JS_CallAsFlow(ctx, p->resolve, p->value) < 0) {
+            /* THE REPLY, in the one shape every host delivers. This host is handed the body by the trusted
+               zone; the status and headers safeFetch saw are what it owes next, and building the reply here is
+               what makes that a change in one place rather than a second delivery shape. */
+            size_t rlen = 0;
+            const char *rbody = JS_ToCStringLen(ctx, &rlen, p->value);
+            JSValue reply = fetch_reply_new(ctx, 200, "OK", NULL, rbody ? rbody : "", rbody ? rlen : 0);
+            if (rbody) JS_FreeCString(ctx, rbody);
+            if (JS_CallAsFlow(ctx, p->resolve, reply) < 0) {
                 JSValue exc = JS_GetException(ctx);
                 JS_FreeValue(ctx, exc);   /* a rejected delivery is the page's to observe, not this drain's */
             }
+            JS_FreeValue(ctx, reply);
         }
         JS_FreeValue(ctx, p->resolve);
         JS_FreeValue(ctx, p->value);

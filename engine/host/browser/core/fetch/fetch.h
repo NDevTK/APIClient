@@ -47,4 +47,12 @@ void fetch_set_provider(const FetchProvider *p);
    TypeError for both of today's two, but the spec says so at each site rather than here. */
 bool fetch_parse_url(UrlRecord *rec, const char *url, size_t len);
 
+/* THE REPLY, as the value a host DELIVERS. It was the body's bytes and nothing else, so every reply built from
+   it had no status but 200 and NO HEADERS AT ALL — `response.headers.get(...)` was null for everything a page
+   fetched, and with it went the Content-Type that decides whether `.formData()` parses a body and the
+   `Location` an endpoint's redirect is made of. A host builds one of these with whatever it knows; `headers`
+   may be NULL for a host that knows none, which is a different statement from a reply that HAD none. */
+JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, const HeaderList *headers,
+                        const char *body, size_t body_len);
+
 #endif

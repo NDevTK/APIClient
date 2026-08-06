@@ -171,14 +171,45 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
             s->value = JS_GetException(ctx);
             s->reject = 1;
         } else {
+            /* THE REPLY THE HOST BUILT. It is this engine's own object, so these reads run none of the page's
+               code — the value never passes through the page's hands between the host and here. */
             const char *u = JS_ToCString(ctx, JS_StepClosureData(&s->hdr, FETCH_DELIVER_URL));
+            JSValue st_v = JS_GetPropertyStr(ctx, body_v, "status");
+            JSValue stx_v = JS_GetPropertyStr(ctx, body_v, "statusText");
+            JSValue hs_v = JS_GetPropertyStr(ctx, body_v, "headers");
+            JSValue bd_v = JS_GetPropertyStr(ctx, body_v, "body");
+            const char *stx = JS_ToCString(ctx, stx_v);
             /* WITH ITS LENGTH: a reply is a byte sequence, and the interior NUL a strlen stops at is exactly
                what `arrayBuffer()` would then have under-reported. */
             size_t body_len = 0;
-            const char *body = JS_ToCStringLen(ctx, &body_len, body_v);
-            s->value = response_new(ctx, u ? u : "", body ? body : "", body ? body_len : 0, NULL);
+            const char *body = JS_ToCStringLen(ctx, &body_len, bd_v);
+            HeaderList hl = { 0 };
+            int32_t status = 200;
+            uint32_t hi, hn = 0;
+
+            JS_ToInt32(ctx, &status, st_v);
+            {
+                JSValue len_v = JS_GetPropertyStr(ctx, hs_v, "length");
+                JS_ToUint32(ctx, &hn, len_v);
+                JS_FreeValue(ctx, len_v);
+            }
+            for (hi = 0; hi < hn; hi++) {
+                JSValue pair = JS_GetPropertyUint32(ctx, hs_v, hi);
+                JSValue nv = JS_GetPropertyUint32(ctx, pair, 0), vv = JS_GetPropertyUint32(ctx, pair, 1);
+                const char *nn = JS_ToCString(ctx, nv), *vc = JS_ToCString(ctx, vv);
+                if (nn && vc) header_list_append(&hl, nn, vc);
+                if (nn) JS_FreeCString(ctx, nn);
+                if (vc) JS_FreeCString(ctx, vc);
+                JS_FreeValue(ctx, nv); JS_FreeValue(ctx, vv); JS_FreeValue(ctx, pair);
+            }
+            s->value = response_new(ctx, u ? u : "", (int)status, stx ? stx : "",
+                                    hn ? &hl : NULL, body ? body : "", body ? body_len : 0);
+            header_list_free(&hl);
             if (u) JS_FreeCString(ctx, u);
+            if (stx) JS_FreeCString(ctx, stx);
             if (body) JS_FreeCString(ctx, body);
+            JS_FreeValue(ctx, st_v); JS_FreeValue(ctx, stx_v);
+            JS_FreeValue(ctx, hs_v); JS_FreeValue(ctx, bd_v);
             if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
         }
         s->stage = 1;
@@ -198,6 +229,29 @@ static const JSTrampStepDef js_fetch_deliver_def = {
     .visit = js_fetch_deliver_visit
 };
 static int g_deliver_stepid = -1;
+
+/* §5.5's REPLY, as one engine-built object every host delivers. It is engine-built, so the reads on the other
+   side run none of the page's code — which is why this is an object and not a second provider callback. */
+JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, const HeaderList *headers,
+                        const char *body, size_t body_len)
+{
+    JSValue o = JS_NewObject(ctx), h;
+    int i;
+
+    if (JS_IsException(o)) return o;
+    JS_SetPropertyStr(ctx, o, "status", JS_NewInt32(ctx, status));
+    JS_SetPropertyStr(ctx, o, "statusText", JS_NewString(ctx, status_text ? status_text : ""));
+    JS_SetPropertyStr(ctx, o, "body", JS_NewStringLen(ctx, body ? body : "", body_len));
+    h = JS_NewArray(ctx);
+    for (i = 0; headers && i < headers->n; i++) {
+        JSValue pair = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, pair, 0, JS_NewString(ctx, headers->e[i].name));
+        JS_SetPropertyUint32(ctx, pair, 1, JS_NewString(ctx, headers->e[i].value));
+        JS_SetPropertyUint32(ctx, h, (uint32_t)i, pair);
+    }
+    JS_SetPropertyStr(ctx, o, "headers", h);
+    return o;
+}
 
 static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method, JSValueConst input,
                           const HeaderList *hdrs, const char *body, size_t body_len)
@@ -257,7 +311,10 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
             size_t blen = 0;
             const char *btype = NULL;
             const char *bytes = blob_bytes_of(blob, &blen, &btype);
-            value = response_new(ctx, u, bytes, blen, btype);
+            HeaderList bh = { 0 };
+            if (btype && *btype) header_list_append(&bh, "content-type", btype);
+            value = response_new(ctx, u, 200, "OK", btype && *btype ? &bh : NULL, bytes, blen);
+            header_list_free(&bh);
         }
         if (!JS_IsException(value)) {
             if (JS_CallAsFlow(ctx, resolving[reject], value) < 0) {
