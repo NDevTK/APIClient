@@ -55,6 +55,8 @@ const INTERFACES = {
      are found in the same file. */
   TextEncoder:          "core/encoding/encoding.c",
   TextDecoder:          "core/encoding/encoding.c",
+  ReadableStream:       "core/streams/readable_stream.c",
+  ReadableStreamDefaultReader: "core/streams/readable_stream.c",
   Blob:                ["core/file/blob.c", "core/byte_reader.c"],
   File:                ["core/file/blob.c", "core/byte_reader.c"],
   /* Headers exists and had no row, so the audit said nothing about it at all — which is the lying-by-omission

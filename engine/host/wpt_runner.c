@@ -33,6 +33,7 @@
 #include "core/url/url_search_params.h"
 #include "core/html/form_data.h"
 #include "core/file/blob.h"
+#include "core/streams/readable_stream.h"
 #include "solver/concolic.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -440,6 +441,8 @@ int main(int argc, char **argv)
     usp_install(ctx, global);
     form_data_init(ctx);
     form_data_install(ctx, global);
+    readable_stream_init(ctx);
+    readable_stream_install(ctx, global);
     blob_init(ctx);
     blob_install(ctx, global);
     encoding_init(ctx);
@@ -559,6 +562,7 @@ int main(int argc, char **argv)
     url_free(ctx);
     usp_free(ctx);
     form_data_free(ctx);
+    readable_stream_free(ctx);
     blob_free(ctx);
     location_free();   /* the API base URL the document's address produced */
     encoding_free(ctx);

@@ -33,6 +33,7 @@
 #include "core/url/url_search_params.h"
 #include "core/html/form_data.h"
 #include "core/file/blob.h"
+#include "core/streams/readable_stream.h"
 #include "core/encoding/encoding.h"
 
 static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -57,6 +58,8 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     form_data_install(ctx, global);
     /* File API §3's Blob is a plain platform global too, and Fetch's `blob()` reader answers with one — so it
        is installed BEFORE anything that can build one. */
+    readable_stream_init(ctx);
+    readable_stream_install(ctx, global);
     blob_init(ctx);
     blob_install(ctx, global);
     encoding_init(ctx);

@@ -24,6 +24,7 @@
 #include "core/file/blob.h"
 #include "core/idl_args.h"
 #include "core/idl_iter.h"
+#include "core/streams/readable_stream.h"
 #include "core/frame/location.h"
 #include "core/url/url.h"
 #include <stdio.h>
@@ -267,6 +268,19 @@ static int blob_take(JSContext *ctx, JSValueConst v, const char **bytes, size_t 
     *bytes = b->bytes ? b->bytes : "";
     *len = b->len;
     return 0;
+}
+
+/* §3.3's `stream()`. NOT a byte reader: those answer a PROMISE, and `stream()` answers the stream ITSELF,
+   synchronously — a page writes `blob.stream().getReader()` on one line. A Blob's bytes are all present, so the
+   stream carries them as one chunk and is closed, which is what a stream over an immutable byte sequence IS
+   rather than a simplification of one. */
+static JSValue js_blob_stream(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    size_t len = 0;
+    const char *bytes = blob_bytes_of(this_val, &len, NULL);
+    (void)argc; (void)argv; (void)magic;
+    if (!bytes) return JS_ThrowTypeError(ctx, "not a Blob");
+    return readable_stream_from_bytes(ctx, bytes, len);
 }
 
 static const ByteReader BLOB_READERS[] = {
@@ -568,6 +582,8 @@ void blob_init(JSContext *ctx)
 
     idl_install_accessor(ctx, g_blob_proto, "size", js_blob_get, BLOB_SIZE, -1);
     idl_install_accessor(ctx, g_blob_proto, "type", js_blob_get, BLOB_TYPE, -1);
+    idl_install_method(ctx, g_blob_proto, "stream", 0,
+                       idl_method_id(ctx, SLICE_ARGS, 0, js_blob_stream, 0));
     idl_install_method(ctx, g_blob_proto, "slice", 0,
                        idl_method_id(ctx, SLICE_ARGS, 3, js_blob_slice, 0));
     idl_optional_from(0);   /* §3.1: all three of slice's arguments are optional */
