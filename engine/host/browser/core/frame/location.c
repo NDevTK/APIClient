@@ -36,6 +36,22 @@ const char *location_api_base_url(void) { return g_api_base_url; }
 
 void location_free(void) { free(g_api_base_url); g_api_base_url = NULL; }
 
+void location_set_document_url(const char *url)
+{
+    UrlRecord rec;
+    if (!url || !*url)
+        return;
+    url_record_init(&rec);
+    /* THROUGH THE REAL PARSER, and stored SERIALIZED, so every consumer resolves against the same normalized
+       address the principal below is built from. */
+    CHECK(url_parse(&rec, url, strlen(url), NULL),
+          "the document address is not a URL — the host captured something this engine cannot make a "
+          "principal out of");
+    free(g_api_base_url);
+    g_api_base_url = url_serialize(&rec, false);
+    url_record_free(&rec);
+}
+
 /* Install a member from a malloc'd serialization and take ownership of it — every one of Location's concrete
    members is one of these, so the free belongs here rather than at six call sites. */
 static void loc_put(JSContext *ctx, JSValueConst loc, const char *name, char *owned)
@@ -95,8 +111,7 @@ void location_install(JSContext *ctx, JSValueConst global, const char *url)
           "the document address is not a URL — the host captured something this engine cannot make a "
           "principal out of");
 
-    free(g_api_base_url);
-    g_api_base_url = url_serialize(&rec, false);
+    location_set_document_url(url);
 
     loc = JS_NewObject(ctx);
     CHECK(!JS_IsException(loc), "the Location allocation failed");

@@ -10,6 +10,6 @@ void    response_install(JSContext *ctx, JSValueConst global);   /* the Response
 void    response_free(JSContext *ctx);   /* the prototype this component holds */
 /* A Response over the host's reply. The body is a BYTE SEQUENCE and carries its length: `arrayBuffer()` and
    `bytes()` hand those bytes back, and a strlen would have truncated the reply at its first interior NUL. */
-JSValue response_new(JSContext *ctx, const char *url, const char *body, size_t body_len);
+JSValue response_new(JSContext *ctx, const char *url, const char *body, size_t body_len, const char *mime);
 
 #endif

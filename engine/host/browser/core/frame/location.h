@@ -8,6 +8,14 @@
    page's own throw on reading it is the honest answer. */
 void location_install(JSContext *ctx, JSValueConst global, const char *url);
 
+/* RECORD THE DOCUMENT'S ADDRESS, without installing the interface. The two are different facts with different
+   audiences: the API BASE URL is what every spec that parses a page-written URL resolves against, and the
+   Location INTERFACE additionally declares `search` and `hash` as concolic attacker sources. A host that has an
+   address but is not exploring — a conformance runner, whose document genuinely has no query — needs the first
+   and must not have the second, because a concolic `search` is a value the harness's own coercion of it
+   refuses. location_install calls this first; a host that installs its own Location calls only this. */
+void location_set_document_url(const char *url);
+
 /* THE API BASE URL — HTML's "current settings object's API base URL", which is the document's own address.
    Every spec that parses a URL a page wrote parses it against this: `new Request("/api/users")`, `new URL(x)`'s
    implicit base, `Response.redirect("/there")`. Without it those all took a NULL base and a RELATIVE URL — the

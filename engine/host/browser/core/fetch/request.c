@@ -19,6 +19,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/fetch/fetch.h"
+#include "core/file/blob.h"
 #include "core/fetch/request.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/body.h"
@@ -42,6 +43,10 @@ typedef struct {
     int       keepalive;
     BodyState body;
     JSValue   headers;         /* [SameObject] */
+    /* §5.3: a Request built from a `blob:` URL CAPTURES its blob URL entry, so revoking the URL afterwards
+       does not stop that request — the entry is the Request's, not the store's. Without it, the ordinary
+       `new Request(u); URL.revokeObjectURL(u); fetch(req)` sequence a page uses to clean up eagerly failed. */
+    JSValue blob_entry;
 } RequestData;
 
 static JSClassID g_request_class;
@@ -55,6 +60,7 @@ static void request_finalizer(JSRuntime *rt, JSValue val)
     RequestData *d = JS_GetOpaque(val, g_request_class);
     if (!d) return;
     JS_FreeValueRT(rt, d->headers);
+    JS_FreeValueRT(rt, d->blob_entry);
     js_free_rt(rt, d->url); js_free_rt(rt, d->method); js_free_rt(rt, d->mode);
     js_free_rt(rt, d->credentials); js_free_rt(rt, d->cache); js_free_rt(rt, d->redirect);
     js_free_rt(rt, d->referrer); js_free_rt(rt, d->referrer_policy); js_free_rt(rt, d->integrity);
@@ -66,7 +72,7 @@ static void request_finalizer(JSRuntime *rt, JSValue val)
 static void request_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     RequestData *d = JS_GetOpaque(val, g_request_class);
-    if (d) JS_MarkValue(rt, d->headers, mark_func);
+    if (d) { JS_MarkValue(rt, d->headers, mark_func); JS_MarkValue(rt, d->blob_entry, mark_func); }
 }
 
 static RequestData *request_of(JSValueConst v) { return JS_GetOpaque(v, g_request_class); }
@@ -84,6 +90,13 @@ static BodyState *request_body_of(JSValueConst v)
 {
     RequestData *d = JS_GetOpaque(v, g_request_class);
     return d ? &d->body : NULL;
+}
+
+/* §5.3's captured blob URL entry, or JS_UNDEFINED — what a fetch of this Request answers from. Borrowed. */
+JSValueConst request_blob_entry(JSValueConst v)
+{
+    RequestData *d = g_request_class ? JS_GetOpaque(v, g_request_class) : NULL;
+    return d ? d->blob_entry : JS_UNDEFINED;
 }
 
 const char *request_url_of(JSValueConst v)
@@ -176,6 +189,9 @@ static JSValue js_request_clone(JSContext *ctx, JSValueConst this_val, int argc,
     if (!c) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
     c->headers = JS_UNDEFINED;
     JS_SetOpaque(obj, c);
+    /* §5.3 clone copies the request, and its blob URL ENTRY is part of what it is — a clone of a request built
+       from a since-revoked URL fetches exactly as the original does. */
+    c->blob_entry      = JS_DupValue(ctx, d->blob_entry);
     c->url             = js_strdup(ctx, d->url);
     c->method          = js_strdup(ctx, d->method);
     c->mode            = js_strdup(ctx, d->mode);
@@ -262,6 +278,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         d = js_mallocz(ctx, sizeof(*d));
         if (!d) { JS_FreeValue(ctx, obj); JS_FreeValue(ctx, cb_result); return -1; }
         d->headers = JS_UNDEFINED;
+        d->blob_entry = JS_UNDEFINED;
         JS_SetOpaque(obj, d);
         s->result = obj;
 
@@ -300,6 +317,15 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
                 char *ser = url_serialize(&rec, false);
                 d->url = js_strdup(ctx, ser);
                 free(ser);
+                /* §5.3: RESOLVE the blob URL now and hold what it named. A page that revokes eagerly —
+                   `const r = new Request(u); URL.revokeObjectURL(u); fetch(r)` — still fetches, because the
+                   entry belongs to the request from this moment. The FRAGMENT is not part of the entry's
+                   identity, which is why the lookup key excludes it. */
+                if (rec.scheme && !strcmp(rec.scheme, "blob")) {
+                    char *key = url_serialize(&rec, true);
+                    d->blob_entry = JS_DupValue(ctx, blob_url_lookup(key, strlen(key)));
+                    free(key);
+                }
             }
             url_record_free(&rec);
         }

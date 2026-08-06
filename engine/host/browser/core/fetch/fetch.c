@@ -25,6 +25,7 @@
 #include "quickjs-step.h"
 #include "solver/endpoint.h"
 #include "core/fetch/fetch.h"
+#include "core/file/blob.h"
 #include "core/frame/location.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/response.h"
@@ -64,6 +65,7 @@ typedef struct JSFetchState {
     uint8_t   stage;
     JSValue   method;   /* the answer to the `init.method` read, or undefined */
     JSValue   url;      /* the answer to the `input.url` read, or the USVString input itself */
+    JSValue   input;    /* the argument ITSELF — a Request carries a captured blob URL entry the URL cannot */
     JSValue   hinit;    /* the answer to the `init.headers` read — a HeadersInit the fill converts */
     HeadersFill fill;   /* the fill's cursor: it parks per key, so it cannot be a loop here */
     HeaderList  hdrs;   /* what the request carries, which is half of what makes the endpoint usable */
@@ -77,6 +79,7 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSFetchState *s = st;
     v->val(ctx, &s->method);
     v->val(ctx, &s->url);
+    v->val(ctx, &s->input);
     v->val(ctx, &s->hinit);
     headers_fill_visit(ctx, &s->fill, v);   /* the fill's own slots — it parks mid-conversion like any machine */
 }
@@ -154,7 +157,7 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
                what `arrayBuffer()` would then have under-reported. */
             size_t body_len = 0;
             const char *body = JS_ToCStringLen(ctx, &body_len, body_v);
-            s->value = response_new(ctx, u ? u : "", body ? body : "", body ? body_len : 0);
+            s->value = response_new(ctx, u ? u : "", body ? body : "", body ? body_len : 0, NULL);
             if (u) JS_FreeCString(ctx, u);
             if (body) JS_FreeCString(ctx, body);
             if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
@@ -177,7 +180,7 @@ static const JSTrampStepDef js_fetch_deliver_def = {
 };
 static int g_deliver_stepid = -1;
 
-static JSValue fetch_park(JSContext *ctx, JSValueConst url)
+static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method, JSValueConst input)
 {
     JSValue promise, resolving[2], deliver;
     JSValueConst data[3];
@@ -198,6 +201,55 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url)
         JS_FreeValue(ctx, sv);
     } else {
         u = JS_ToCString(ctx, url);
+    }
+    if (u && !strncmp(u, "blob:", 5)) {
+        /* §5: a `blob:` URL is answered from the BLOB URL STORE, not from the network — the whole point of
+           `URL.createObjectURL` is that the bytes are already here. The FRAGMENT is stripped before the lookup,
+           because a fragment names a place within a resource and not a different entry.
+           The settle goes through a FLOW like every other delivery: resolving reads `then` off the Response,
+           which the page can own. */
+        UrlRecord rec;
+        char *key = fetch_parse_url(&rec, u, strlen(u)) ? url_serialize(&rec, true) : NULL;
+        /* §5.3's CAPTURED ENTRY FIRST: a Request resolved its blob URL when it was built, so a page that
+           revoked the URL afterwards still fetches. The store is consulted only for a URL STRING, which has
+           nothing to have captured. */
+        JSValueConst captured = request_blob_entry(input);
+        JSValueConst blob = !JS_IsUndefined(captured) ? captured
+                          : (key ? blob_url_lookup(key, strlen(key)) : JS_UNDEFINED);
+        JSValue value;
+        int reject = 0;
+        /* §5: a blob fetch whose method is not GET is a NETWORK ERROR before the store is consulted. A blob URL
+           names bytes that are already here; there is nothing for a POST or a DELETE to mean. */
+        if (!JS_IsUndefined(method) && !JS_IsUndefined(blob)) {
+            const char *m = JS_ToCString(ctx, method);
+            if (m && strcmp(m, "GET")) blob = JS_UNDEFINED;
+            if (m) JS_FreeCString(ctx, m);
+        }
+
+        url_record_free(&rec);
+        free(key);
+        if (JS_IsUndefined(blob)) {
+            /* §5: no entry is a NETWORK ERROR, which `fetch` rejects with a TypeError. */
+            JS_ThrowTypeError(ctx, "Failed to fetch");
+            value = JS_GetException(ctx);
+            reject = 1;
+        } else {
+            size_t blen = 0;
+            const char *btype = NULL;
+            const char *bytes = blob_bytes_of(blob, &blen, &btype);
+            value = response_new(ctx, u, bytes, blen, btype);
+        }
+        if (!JS_IsException(value)) {
+            if (JS_CallAsFlow(ctx, resolving[reject], value) < 0) {
+                JSValue exc = JS_GetException(ctx);
+                JS_FreeValue(ctx, exc);   /* the page's own handler threw; that is its completion, not this call's */
+            }
+            JS_FreeValue(ctx, value);
+        }
+        JS_FreeCString(ctx, u);
+        JS_FreeValue(ctx, resolving[0]);
+        JS_FreeValue(ctx, resolving[1]);
+        return promise;
     }
     if (u) {
         JSValue uv = JS_NewString(ctx, u);
@@ -227,9 +279,10 @@ static JSValue js_fetch_fini(JSContext *ctx, void *st, bool take_result)
     JSValue promise = JS_UNDEFINED;
 
     if (take_result)
-        promise = fetch_park(ctx, s->url);
+        promise = fetch_park(ctx, s->url, s->method, s->input);
     JS_FreeValue(ctx, s->method);
     JS_FreeValue(ctx, s->url);
+    JS_FreeValue(ctx, s->input);
     JS_FreeValue(ctx, s->hinit);
     headers_fill_release(ctx, &s->fill);
     header_list_free(&s->hdrs);
@@ -247,6 +300,11 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     int r;
 
     if (s->stage == 0) {
+        /* THE INPUT ITSELF, kept from the first entry. A Request carries a captured blob URL entry that its
+           `url` string cannot express, and this is where every other answer slot is spelled out too. It cannot
+           be deferred behind an "is it set yet" test on the slot: a zeroed step state's JSValue is the INTEGER
+           0 and not JS_UNDEFINED, so such a test always reads as already-set. */
+        s->input = JS_DupValue(ctx, input);
         if (JS_IsObject(init)) {
             r = step_getprop_run(ctx, &s->hdr, init, g_atom_method, cb_result, &s->method, out_cb, out_argc);
             if (r > 0) return r;
@@ -260,7 +318,8 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     }
     if (s->stage == 1) {
         /* 5.4 Request: a USVString names the URL directly; a Request names it through its `url` attribute, and
-           THAT is the read that has to be a request. */
+           THAT is the read that has to be a request. The INPUT itself is kept too: a Request carries a captured
+           blob URL entry, which its `url` string cannot express. */
         if (JS_IsObject(input)) {
             r = step_getprop_run(ctx, &s->hdr, input, g_atom_url, cb_result, &s->url, out_cb, out_argc);
             if (r > 0) return r;

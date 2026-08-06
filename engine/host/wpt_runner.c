@@ -33,6 +33,7 @@
 #include "core/url/url_search_params.h"
 #include "core/html/form_data.h"
 #include "core/file/blob.h"
+#include "solver/concolic.h"
 #include "core/frame/location.h"
 #include "core/encoding/encoding.h"
 #include "core/idl_args.h"
@@ -306,11 +307,24 @@ int main(int argc, char **argv)
             snprintf(g_base_url, sizeof g_base_url, "http://web-platform.test%s", argv[argc - 1] + n);
         else
             snprintf(g_base_url, sizeof g_base_url, "http://web-platform.test/");
+        /* THROUGH THE COMPONENT, not hand-built. Three properties assembled here were three chances to
+           disagree with the Location the engine ships — and one of them mattered beyond `location.x`: the
+           component is where HTML's API base URL is derived from the address, so hand-building the object left
+           the base NULL and every relative URL in the corpus unparseable, `URL.createObjectURL` naming the
+           opaque origin "null" where the test asserts the document's own. */
+        /* THE ADDRESS, NOT THE INTERFACE. The base URL is what this runner needs from the address — every
+           relative URL in the corpus resolves against it, and `URL.createObjectURL` names its origin — while
+           the Location INTERFACE additionally declares `search` and `hash` as concolic attacker sources. This
+           document genuinely has no query: the runner runs one file with no variant, which is a real variant
+           and not a way to skip the others. A concolic `search` here is not a truth, and the harness's own
+           coercion of it refuses at the C boundary, which is the boundary doing its job. */
+        location_set_document_url(g_base_url);
         {
             JSValue loc = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, loc, "href", JS_NewString(ctx, g_base_url));
             JS_SetPropertyStr(ctx, loc, "search", JS_NewString(ctx, ""));
             JS_SetPropertyStr(ctx, loc, "origin", JS_NewString(ctx, "http://web-platform.test"));
+            JS_SetPropertyStr(ctx, loc, "protocol", JS_NewString(ctx, "http:"));
             JS_SetPropertyStr(ctx, global, "location", loc);
         }
     }

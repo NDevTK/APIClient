@@ -27,6 +27,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/url/url.h"
+#include "core/file/blob.h"
 #include "core/url/idna.h"
 #include "core/idl_args.h"
 #include "core/url/url_search_params.h"
@@ -1747,9 +1748,35 @@ static const JSCFunctionListEntry js_url_proto_funcs[] = {
     JS_CFUNC_DEF("toString", 0, js_url_tojson),
 };
 
+/* File API §8's two members, DECLARED on the URL interface and DEFINED by File API — so they install here and
+   the blob URL store lives with the component that knows what a Blob is. Neither runs the page's code: the
+   argument is brand-tested rather than converted, and the store is this engine's own. */
+static JSValue js_url_object_url(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    (void)this_val;
+    if (magic == 0) {
+        char *url = blob_url_create(ctx, argc > 0 ? argv[0] : JS_UNDEFINED);
+        JSValue r;
+        if (!url) return JS_EXCEPTION;
+        r = JS_NewString(ctx, url);
+        free(url);
+        return r;
+    }
+    {
+        size_t len = 0;
+        const char *url = JS_ToCStringLen(ctx, &len, argc > 0 ? argv[0] : JS_UNDEFINED);
+        if (!url) return JS_EXCEPTION;
+        blob_url_revoke(ctx, url, len);
+        JS_FreeCString(ctx, url);
+        return JS_UNDEFINED;
+    }
+}
+
 static const JSCFunctionListEntry js_url_static_funcs[] = {
     JS_CFUNC_MAGIC_DEF("parse", 1, js_url_static, URL_STATIC_PARSE),
     JS_CFUNC_MAGIC_DEF("canParse", 1, js_url_static, URL_STATIC_CANPARSE),
+    JS_CFUNC_MAGIC_DEF("createObjectURL", 1, js_url_object_url, 0),
+    JS_CFUNC_MAGIC_DEF("revokeObjectURL", 1, js_url_object_url, 1),
 };
 
 void url_init(JSContext *ctx)

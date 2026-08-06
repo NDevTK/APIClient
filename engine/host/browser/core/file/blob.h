@@ -33,4 +33,15 @@ bool        blob_is(JSValueConst v);
 const char *blob_file_name_of(JSValueConst v);
 int64_t     blob_last_modified_of(JSValueConst v);
 
+/* ---- File API §8's BLOB URL STORE ------------------------------------------------------------------------
+ *
+ * `URL.createObjectURL` and `URL.revokeObjectURL` are declared on the URL interface and defined by File API, so
+ * url.c installs them and this owns them: the store is a map from a `blob:` URL to the Blob it names, and only
+ * the component that knows what a Blob is can hold one alive.
+ * `create` returns a malloc'd URL string, or NULL with a TypeError live when the argument is not a Blob. */
+char *blob_url_create(JSContext *ctx, JSValueConst obj);
+void  blob_url_revoke(JSContext *ctx, const char *url, size_t len);
+/* THE BLOB A `blob:` URL NAMES, or JS_UNDEFINED — what a fetch of one resolves through. Borrowed. */
+JSValueConst blob_url_lookup(const char *url, size_t len);
+
 #endif

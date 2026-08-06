@@ -11,4 +11,8 @@ void request_free(JSContext *ctx);
    the value is not one. */
 const char *request_url_of(JSValueConst v);
 
+/* §5.3's captured blob URL entry, or JS_UNDEFINED — the Blob a Request built from a `blob:` URL holds, so
+   revoking the URL afterwards does not stop that request. Borrowed. */
+JSValueConst request_blob_entry(JSValueConst v);
+
 #endif

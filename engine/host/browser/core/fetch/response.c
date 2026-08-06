@@ -621,15 +621,24 @@ void response_free(JSContext *ctx)
 
 /* THE REPLY THE TRUSTED HOST FETCHED — type "basic", status 200, and headers the page may not write, which is
    the §6.4 "immutable" guard and the reason that guard exists at all. */
-JSValue response_new(JSContext *ctx, const char *url, const char *body, size_t body_len)
+JSValue response_new(JSContext *ctx, const char *url, const char *body, size_t body_len, const char *mime)
 {
     ResponseData *d;
+    HeaderList hl = { 0 };
     JSValue obj = response_alloc(ctx, &d);
+    int ok;
 
     if (JS_IsException(obj))
         return obj;
-    if (response_set(ctx, d, url, 200, "OK", RESPONSE_TYPE_BASIC, body ? body : "", body_len, NULL,
-                     HEADERS_GUARD_IMMUTABLE) < 0) {
+    /* `mime` is the reply's Content-Type where the caller knows one — a `blob:` fetch does, because §5 answers
+       it from the Blob's own type. It goes in the header LIST the response is built with, because the guard
+       that same call sets is "immutable" and would refuse it afterwards. */
+    if (mime && *mime)
+        header_list_append(&hl, "content-type", mime);
+    ok = response_set(ctx, d, url, 200, "OK", RESPONSE_TYPE_BASIC, body ? body : "", body_len,
+                      mime && *mime ? &hl : NULL, HEADERS_GUARD_IMMUTABLE) == 0;
+    header_list_free(&hl);
+    if (!ok) {
         JS_FreeValue(ctx, obj);
         return JS_EXCEPTION;
     }

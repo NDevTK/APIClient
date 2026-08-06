@@ -24,6 +24,9 @@
 #include "core/file/blob.h"
 #include "core/idl_args.h"
 #include "core/idl_iter.h"
+#include "core/frame/location.h"
+#include "core/url/url.h"
+#include <stdio.h>
 
 /* ONE STRUCT FOR BOTH INTERFACES, and one class id, because §4 says `interface File : Blob` — a File IS a Blob,
    so every brand test that accepts a Blob must accept it, and there is exactly one byte sequence for both to be
@@ -154,6 +157,99 @@ static JSValue blob_alloc(JSContext *ctx, JSValueConst proto, const char *bytes,
     b->type = blob_normalize_type(type, type_len);
     JS_SetOpaque(obj, b);
     return obj;
+}
+
+/* ---- File API §8's BLOB URL STORE -------------------------------------------------------------------------
+ *
+ * §8.1 mints an entry and §8.2 removes one. The store holds a REFERENCE to each Blob, which is the whole of
+ * what the URL is for: `URL.createObjectURL(blob)` is how a page keeps bytes alive under a name it can hand to
+ * an <img> or a fetch, and revoking is how it stops.
+ *
+ * THE URL IS DERIVED, NOT DRAWN AT RANDOM. §8.1 says the path is a UUID, and a browser generates one; this
+ * engine is deterministic on purpose — a time-travel resume must produce the byte-identical URL, or a flow that
+ * stored one and a flow that resumes to read it disagree about which entry they mean. A counter is unique for
+ * exactly as long as a random UUID is, and it is unique by construction rather than with high probability. */
+typedef struct { char *url; JSValue blob; } BlobUrlEntry;
+static BlobUrlEntry *g_blob_urls;
+static int g_blob_url_n, g_blob_url_cap;
+static unsigned g_blob_url_counter;
+
+static void blob_url_store_free(JSContext *ctx)
+{
+    int i;
+    for (i = 0; i < g_blob_url_n; i++) {
+        free(g_blob_urls[i].url);
+        JS_FreeValue(ctx, g_blob_urls[i].blob);
+    }
+    free(g_blob_urls);
+    g_blob_urls = NULL;
+    g_blob_url_n = g_blob_url_cap = 0;
+}
+
+char *blob_url_create(JSContext *ctx, JSValueConst obj)
+{
+    UrlRecord base;
+    const char *base_str = location_api_base_url();
+    char *origin = NULL, *url;
+    size_t n;
+
+    if (!blob_is(obj)) {
+        JS_ThrowTypeError(ctx, "createObjectURL requires a Blob");
+        return NULL;
+    }
+    /* §8.1: the URL's path is the ORIGIN of the settings object followed by the id. A document with no address
+       has an opaque origin, which serializes to "null" — the same answer §4.7 gives, and the same one a page
+       reading `location.origin` would see. */
+    if (base_str) {
+        url_record_init(&base);
+        if (url_parse(&base, base_str, strlen(base_str), NULL))
+            origin = url_serialize_origin(&base);
+        url_record_free(&base);
+    }
+    /* `blob:` + origin + `/` + a 36-character UUID + the NUL. It was 32 — the length of a UUID's HEX DIGITS
+       rather than of a UUID, which truncated the last group and made the path fail the shape the spec gives
+       it. */
+    n = strlen("blob:") + strlen(origin ? origin : "null") + 1 + 36 + 1;
+    url = malloc(n);
+    CHECK(url, "blob: OOM minting an object URL");
+    snprintf(url, n, "blob:%s/%08x-0000-4000-8000-%012x", origin ? origin : "null",
+             g_blob_url_counter, g_blob_url_counter);
+    g_blob_url_counter++;
+    free(origin);
+
+    if (g_blob_url_n == g_blob_url_cap) {
+        BlobUrlEntry *g = realloc(g_blob_urls,
+                                  sizeof *g * (size_t)(g_blob_url_cap = g_blob_url_cap ? g_blob_url_cap * 2 : 8));
+        CHECK(g, "blob: OOM growing the object-URL store");
+        g_blob_urls = g;
+    }
+    g_blob_urls[g_blob_url_n].url = strdup(url);
+    CHECK(g_blob_urls[g_blob_url_n].url, "blob: OOM recording an object URL");
+    g_blob_urls[g_blob_url_n].blob = JS_DupValue(ctx, obj);
+    g_blob_url_n++;
+    return url;
+}
+
+void blob_url_revoke(JSContext *ctx, const char *url, size_t len)
+{
+    int i;
+    /* §8.2: a URL that names no entry is a NO-OP, not an error — a page revoking twice is ordinary cleanup. */
+    for (i = 0; i < g_blob_url_n; i++) {
+        if (strlen(g_blob_urls[i].url) != len || memcmp(g_blob_urls[i].url, url, len)) continue;
+        free(g_blob_urls[i].url);
+        JS_FreeValue(ctx, g_blob_urls[i].blob);
+        g_blob_urls[i] = g_blob_urls[--g_blob_url_n];
+        return;
+    }
+}
+
+JSValueConst blob_url_lookup(const char *url, size_t len)
+{
+    int i;
+    for (i = 0; i < g_blob_url_n; i++)
+        if (strlen(g_blob_urls[i].url) == len && !memcmp(g_blob_urls[i].url, url, len))
+            return g_blob_urls[i].blob;
+    return JS_UNDEFINED;
 }
 
 /* ---- §3.3's readers ---------------------------------------------------------------------------------------
@@ -517,6 +613,7 @@ void blob_free(JSContext *ctx)
 {
     if (!g_blob_rt)
         return;
+    blob_url_store_free(ctx);
     JS_FreeValue(ctx, g_blob_proto);
     JS_FreeValue(ctx, g_file_proto);
     g_blob_proto = g_file_proto = JS_UNDEFINED;
