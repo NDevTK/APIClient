@@ -332,6 +332,11 @@ JSValue readable_stream_from_bytes(JSContext *ctx, const char *bytes, size_t len
     return obj;
 }
 
+bool readable_stream_is(JSValueConst v)
+{
+    return g_stream_class != 0 && JS_GetOpaque(v, g_stream_class) != NULL;
+}
+
 bool readable_stream_disturbed(JSValueConst v)
 {
     StreamData *d = g_stream_class ? JS_GetOpaque(v, g_stream_class) : NULL;
@@ -2817,6 +2822,260 @@ static const IdlStepDecl js_from_call_decl = {
     js_from_call_step, sizeof(JSFromCallState), js_from_call_visit, js_from_call_release
 };
 
+/* ---- FETCH §5.2's "FULLY READ" ---------------------------------------------------------------------------
+ *
+ * Draining a stream to a byte sequence. Every read answers a PROMISE, so the loop is a chain of reactions
+ * rather than a loop — which is why this lives here, beside the machinery that already does that, rather than
+ * in the byte reader that wants it. The caller acquires the reader and issues the first read (both are calls,
+ * and a caller reaching this is already a machine); this owns the buffer and the reactions.
+ *
+ * WHAT `make` IS. The value the page finally gets — a string, a parsed JSON, an ArrayBuffer, a Blob — is the
+ * CALLING spec's, not this one's, and it is one C function over the finished bytes. Carrying it here is what
+ * lets a drain answer `response.json()`'s promise directly rather than answering bytes that something else
+ * then has to react to a second time. */
+enum { DRAIN_OK = 0, DRAIN_ERR, DRAIN_N };
+
+typedef struct {
+    JSValue reader;
+    JSValue recv;          /* the object whose reader this is; `make` may need it (blob() reads its type) */
+    JSValue funcs[2];      /* the capability this drain settles */
+    uint8_t *buf;
+    size_t   len, cap;
+    JSValue (*make)(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len);
+} DrainData;
+
+static JSClassID g_drain_class;
+static int       g_drain_stepids[DRAIN_N];
+
+static void drain_finalizer(JSRuntime *rt, JSValue val)
+{
+    DrainData *dr = JS_GetOpaque(val, g_drain_class);
+    if (!dr) return;
+    JS_FreeValueRT(rt, dr->reader);
+    JS_FreeValueRT(rt, dr->recv);
+    JS_FreeValueRT(rt, dr->funcs[0]);
+    JS_FreeValueRT(rt, dr->funcs[1]);
+    free(dr->buf);
+    js_free_rt(rt, dr);
+}
+
+static void drain_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+{
+    DrainData *dr = JS_GetOpaque(val, g_drain_class);
+    if (!dr) return;
+    JS_MarkValue(rt, dr->reader, mark_func);
+    JS_MarkValue(rt, dr->recv, mark_func);
+    JS_MarkValue(rt, dr->funcs[0], mark_func);
+    JS_MarkValue(rt, dr->funcs[1], mark_func);
+}
+
+/* Append a chunk's bytes. §5.2 says a chunk that is not a Uint8Array is a TypeError, and the union of things
+   that ARE a byte view is what JS_GetArrayBufferView answers for. Returns -1 with a throw live. */
+static int drain_append(JSContext *ctx, DrainData *dr, JSValueConst chunk)
+{
+    size_t off = 0, n = 0, whole = 0;
+    JSValue buf;
+    uint8_t *base;
+
+    buf = JS_GetArrayBufferView(ctx, chunk, &off, &n);
+    if (JS_IsException(buf)) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        JS_ThrowTypeError(ctx, "a body stream answered with a chunk that is not a byte view");
+        return -1;
+    }
+    base = JS_GetArrayBuffer(ctx, &whole, buf);
+    if (!base) { JS_FreeValue(ctx, buf); return -1; }
+    if (dr->len + n > dr->cap) {
+        size_t want = dr->cap ? dr->cap * 2 : 256;
+        uint8_t *grown;
+        while (want < dr->len + n) want *= 2;
+        grown = realloc(dr->buf, want);
+        CHECK(grown != NULL, "fully read: OOM growing a body's byte sequence");
+        dr->buf = grown;
+        dr->cap = want;
+    }
+    memcpy(dr->buf + dr->len, base + off, n);
+    dr->len += n;
+    JS_FreeValue(ctx, buf);
+    return 0;
+}
+
+enum { DS_START = 0, DS_READ, DS_RELEASE, DS_SETTLE };
+
+typedef struct {
+    JSStepHdr hdr;
+    uint8_t   stage;
+    uint8_t   phase;
+    uint8_t   reject;
+    JSValue   drain;
+    JSValue   value;    /* the chunk, then the value the capability is settled with */
+    JSValue   cb[3];
+} JSDrainState;
+
+static void js_drain_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSDrainState *s = st;
+    int k;
+    v->val(ctx, &s->drain);
+    v->val(ctx, &s->value);
+    for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
+}
+
+static JSValue js_drain_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSDrainState *s = st;
+    int k;
+    (void)take_result;
+    JS_FreeValue(ctx, s->drain);
+    JS_FreeValue(ctx, s->value);
+    s->drain = s->value = JS_UNDEFINED;
+    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
+    return JS_UNDEFINED;
+}
+
+static int drain_react(JSContext *ctx, JSValueConst promise, JSValueConst drain)
+{
+    JSValueConst data[1];
+    data[0] = drain;
+    return stream_react(ctx, promise, g_drain_stepids[DRAIN_OK], g_drain_stepids[DRAIN_ERR], data, 1);
+}
+
+static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSDrainState *s = st;
+    DrainData *dr;
+    JSValue out;
+    int r;
+
+    if (s->stage == DS_START) {
+        int k;
+        s->drain = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 0));
+        s->value = JS_UNDEFINED;
+        for (k = 0; k < 3; k++) s->cb[k] = JS_UNDEFINED;
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        dr = JS_GetOpaque(s->drain, g_drain_class);
+        DCHECK(dr != NULL, "a drain reaction captured something that is not a drain record");
+        if (s->hdr.arg == DRAIN_ERR) {
+            /* The stream errored. §5.2 rejects the body's promise with the stream's reason, and the reader is
+               released with it — there is nothing left to read. */
+            s->reject = 1;
+            s->value = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
+            s->stage = DS_RELEASE;
+        } else {
+            JSValue done_v = JS_GetPropertyStr(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED, "done");
+            int done = JS_ToBool(ctx, done_v);
+            JS_FreeValue(ctx, done_v);
+            if (done) {
+                s->stage = DS_RELEASE;
+            } else {
+                JSValue chunk = JS_GetPropertyStr(ctx, s->hdr.argv[0], "value");
+                int bad = drain_append(ctx, dr, chunk) < 0;
+                JS_FreeValue(ctx, chunk);
+                if (bad) {
+                    s->reject = 1;
+                    s->value = JS_GetException(ctx);
+                    s->stage = DS_RELEASE;
+                } else {
+                    s->stage = DS_READ;
+                }
+            }
+        }
+    }
+
+    dr = JS_GetOpaque(s->drain, g_drain_class);
+    DCHECK(dr != NULL, "a drain machine's record stopped being one");
+
+    if (s->stage == DS_READ) {
+        r = step_call_run(ctx, &s->phase, s->cb, g_read_fn, dr->reader, 0, NULL, cb_result, &out,
+                          out_cb, out_argc);
+        if (r > 0) return r;
+        if (JS_IsException(out)) return JS_STEP_ABRUPT;
+        r = drain_react(ctx, out, s->drain);
+        JS_FreeValue(ctx, out);
+        return r < 0 ? JS_STEP_ABRUPT : JS_STEP_DONE;
+    }
+
+    if (s->stage == DS_RELEASE) {
+        r = step_call_run(ctx, &s->phase, s->cb, g_release_fn, dr->reader, 0, NULL, cb_result, &out,
+                          out_cb, out_argc);
+        if (r > 0) return r;
+        if (JS_IsException(out)) {
+            /* a release cannot fail on a reader this component acquired and still holds */
+            JS_FreeValue(ctx, JS_GetException(ctx));
+        } else {
+            JS_FreeValue(ctx, out);
+        }
+        cb_result = JS_UNDEFINED;
+        if (!s->reject) {
+            s->value = dr->make(ctx, dr->recv, dr->buf ? (const char *)dr->buf : "", dr->len);
+            if (JS_IsException(s->value)) {
+                /* §5.2: an abrupt completion INSIDE the read is what the promise rejects with — which is how
+                   `json()`'s SyntaxError reaches the page's `.catch` rather than the call site. */
+                s->value = JS_GetException(ctx);
+                s->reject = 1;
+            }
+        }
+        s->stage = DS_SETTLE;
+    }
+
+    DCHECK(s->stage == DS_SETTLE, "a drain machine resumed in a stage it never parks in");
+    {
+        JSValueConst arg = s->value;
+        r = step_call_run(ctx, &s->phase, s->cb, dr->funcs[s->reject], JS_UNDEFINED, 1, &arg, cb_result, &out,
+                          out_cb, out_argc);
+        if (r > 0) return r;
+        if (JS_IsException(out)) return JS_STEP_ABRUPT;
+        JS_FreeValue(ctx, out);
+    }
+    return JS_STEP_DONE;
+}
+
+#define DRAIN_DEF(i) { sizeof(JSDrainState), js_drain_step, js_drain_fini, (i), \
+                       .catches_abrupt = 1, .visit = js_drain_visit }
+static const JSTrampStepDef js_drain_defs[DRAIN_N] = { DRAIN_DEF(DRAIN_OK), DRAIN_DEF(DRAIN_ERR) };
+#undef DRAIN_DEF
+
+JSValue readable_stream_drain(JSContext *ctx, JSValueConst reader, JSValueConst read_promise,
+                              JSValueConst recv,
+                              JSValue (*make)(JSContext *ctx, JSValueConst recv, const char *bytes,
+                                              size_t len))
+{
+    DrainData *dr;
+    JSValue obj, promise;
+
+    DCHECK(make != NULL, "a drain was started with nothing to build from the bytes");
+    obj = JS_NewObjectClass(ctx, g_drain_class);
+    if (JS_IsException(obj)) return obj;
+    dr = js_mallocz(ctx, sizeof *dr);
+    if (!dr) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
+    dr->reader = dr->recv = dr->funcs[0] = dr->funcs[1] = JS_UNDEFINED;
+    JS_SetOpaque(obj, dr);                  /* attached before anything that can fail */
+    dr->reader = JS_DupValue(ctx, reader);
+    dr->recv = JS_DupValue(ctx, recv);
+    dr->make = make;
+    promise = JS_NewPromiseCapability(ctx, dr->funcs);
+    if (JS_IsException(promise)) { JS_FreeValue(ctx, obj); return promise; }
+    if (drain_react(ctx, read_promise, obj) < 0) {
+        JS_FreeValue(ctx, obj);
+        JS_FreeValue(ctx, promise);
+        return JS_EXCEPTION;
+    }
+    JS_FreeValue(ctx, obj);
+    return promise;
+}
+
+JSValueConst readable_stream_op(ReadableStreamOp which)
+{
+    switch (which) {
+    case RS_OP_GET_READER: return g_get_reader_fn;
+    case RS_OP_READ:       return g_read_fn;
+    default:
+        DCHECK(which == RS_OP_RELEASE, "a stream operation was asked for by a name this component does not map");
+        return g_release_fn;
+    }
+}
+
 /* ---- the constructors -------------------------------------------------------------------------------------- */
 
 /* §4.2's constructor, over §4.9.4's SetUpReadableStreamDefaultControllerFromUnderlyingSource. A MACHINE because
@@ -3197,6 +3456,18 @@ void readable_stream_init(JSContext *ctx)
                            idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tee_call_decl, 0));
     }
 
+    /* Fetch §5.2's "fully read", whose record is a class for the reason every other one here is: it is a
+       cycle (record -> reader -> stream) and the collector has to see it. */
+    {
+        JSClassDef dd = { "ReadableStream drain", .finalizer = drain_finalizer, .gc_mark = drain_gc_mark };
+        JS_NewClassID(rt, &g_drain_class);
+        JS_NewClass(rt, g_drain_class, &dd);
+        for (i = 0; i < DRAIN_N; i++) {
+            g_drain_stepids[i] = JS_RegisterStepDef(rt, &js_drain_defs[i]);
+            CHECK(g_drain_stepids[i] >= 0, "streams: no step id for a drain reaction");
+        }
+    }
+
     /* §4.2's `from`, whose source is any async or sync iterable. */
     {
         JSClassDef fd = { "ReadableStream from", .finalizer = from_finalizer, .gc_mark = from_gc_mark };
@@ -3259,6 +3530,7 @@ void readable_stream_free(JSContext *ctx)
     for (i = 0; i < AI_N; i++) g_aiter_stepids[i] = -1;
     for (i = 0; i < TEE_N; i++) g_tee_stepids[i] = -1;
     for (i = 0; i < FROM_N; i++) g_from_stepids[i] = -1;
+    for (i = 0; i < DRAIN_N; i++) g_drain_stepids[i] = -1;
     g_from_ctor_stepid = -1;
     for (i = 0; i < 3; i++) { JS_FreeValue(ctx, g_ctrl_fn[i]); g_ctrl_fn[i] = JS_UNDEFINED; }
     g_rs_rt = NULL;

@@ -24,6 +24,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/byte_reader.h"
+#include "core/streams/readable_stream.h"
 
 /* HOW MANY READERS ONE INTERFACE CAN DECLARE. The step defs are STATIC initialisers, one per reader INDEX,
    because engine/check_step_visits.mjs reads them out of the source — a def assembled at runtime is invisible to
@@ -47,6 +48,11 @@ static const ByteReaderIface *iface_of(JSValueConst v)
     return NULL;
 }
 
+/* A BODY THAT IS A STREAM takes two more stages before there are any bytes: acquire a reader and issue the
+   first read. Both are CALLS, which is precisely why they are here — this is a machine and can park on them —
+   and the LOOP after them is not, which is why readable_stream_drain owns that. */
+enum { BR_TAKE = 0, BR_ACQUIRE, BR_FIRST_READ, BR_SETTLE };
+
 typedef struct JSByteReaderState {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
     uint8_t   stage;
@@ -54,6 +60,8 @@ typedef struct JSByteReaderState {
     JSValue   promise;  /* the capability's promise — this machine's result (owned) */
     JSValue   func;     /* its resolve or its reject, whichever this read settles with (owned) */
     JSValue   value;    /* what it settles WITH: the text, the parsed body, or the error (owned) */
+    JSValue   stream;   /* the body's stream, when the body IS one (owned) */
+    JSValue   reader;   /* the reader acquired on it (owned) */
     JSValue   cb[3];    /* the call request buffer: [this, resolving function, value] */
 } JSByteReaderState;
 
@@ -66,6 +74,8 @@ static void js_byte_reader_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->promise);
     v->val(ctx, &s->func);
     v->val(ctx, &s->value);
+    v->val(ctx, &s->stream);
+    v->val(ctx, &s->reader);
     for (k = 0; k < 3; k++)
         v->val(ctx, &s->cb[k]);
 }
@@ -80,7 +90,9 @@ static JSValue js_byte_reader_fini(JSContext *ctx, void *st, bool take_result)
     JS_FreeValue(ctx, s->promise);
     JS_FreeValue(ctx, s->func);
     JS_FreeValue(ctx, s->value);
-    s->promise = s->func = s->value = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->stream);
+    JS_FreeValue(ctx, s->reader);
+    s->promise = s->func = s->value = s->stream = s->reader = JS_UNDEFINED;
     for (k = 0; k < 3; k++) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
@@ -97,13 +109,14 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
     JSValue settled, funcs[2];
     int reject = 0, r;
 
-    if (s->stage == 0) {
+    if (s->stage == BR_TAKE) {
         const char *bytes = NULL;
         size_t len = 0;
         const ByteReaderIface *f = iface_of(s->hdr.this_val);
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
+        s->promise = s->func = s->value = s->stream = s->reader = JS_UNDEFINED;
         if (!f) {
             /* THE RECEIVER CHECK, and it belongs to the reader rather than to the interface: every one of them
                is `Response.prototype.text.call({})`, and there is one answer. */
@@ -112,23 +125,51 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         }
         DCHECK(s->hdr.arg >= 0 && s->hdr.arg < f->nreaders,
                "a byte reader ran with an index its interface does not declare");
-        if (f->take(ctx, s->hdr.this_val, &bytes, &len) < 0) {
+        if (f->take(ctx, s->hdr.this_val, &bytes, &len, &s->stream) < 0) {
             s->value = JS_GetException(ctx);
             reject = 1;
+        } else if (!JS_IsUndefined(s->stream)) {
+            s->stage = BR_ACQUIRE;
         } else {
             s->value = f->readers[s->hdr.arg].make(ctx, s->hdr.this_val, bytes ? bytes : "", bytes ? len : 0);
             if (JS_IsException(s->value)) { s->value = JS_GetException(ctx); reject = 1; }
         }
-        /* The NATIVE capability: %Promise% with no subclass in sight, so building it constructs nothing of the
-           page's. Only the settle below is the page's, and that is the request. */
-        s->promise = JS_NewPromiseCapability(ctx, funcs);
-        if (JS_IsException(s->promise)) return JS_STEP_ABRUPT;
-        s->func = funcs[reject];
-        JS_FreeValue(ctx, funcs[reject ^ 1]);
-        s->stage = 1;
+        if (s->stage == BR_TAKE) {
+            /* The NATIVE capability: %Promise% with no subclass in sight, so building it constructs nothing of
+               the page's. Only the settle below is the page's, and that is the request. */
+            s->promise = JS_NewPromiseCapability(ctx, funcs);
+            if (JS_IsException(s->promise)) return JS_STEP_ABRUPT;
+            s->func = funcs[reject];
+            JS_FreeValue(ctx, funcs[reject ^ 1]);
+            s->stage = BR_SETTLE;
+        }
     }
 
-    DCHECK(s->stage == 1, "the byte-read machine was re-entered at a stage it never parks in");
+    if (s->stage == BR_ACQUIRE) {
+        r = step_call_run(ctx, &s->cphase, s->cb, readable_stream_op(RS_OP_GET_READER), s->stream, 0, NULL,
+                          cb_result, &s->reader, out_cb, out_argc);
+        if (r > 0) return r;
+        if (JS_IsException(s->reader)) return JS_STEP_ABRUPT;
+        cb_result = JS_UNDEFINED;
+        s->stage = BR_FIRST_READ;
+    }
+    if (s->stage == BR_FIRST_READ) {
+        const ByteReaderIface *f = iface_of(s->hdr.this_val);
+        JSValue read_promise;
+        DCHECK(f != NULL, "a byte reader lost its interface between two of its own stages");
+        r = step_call_run(ctx, &s->cphase, s->cb, readable_stream_op(RS_OP_READ), s->reader, 0, NULL,
+                          cb_result, &read_promise, out_cb, out_argc);
+        if (r > 0) return r;
+        if (JS_IsException(read_promise)) return JS_STEP_ABRUPT;
+        /* The DRAIN owns the settle from here: it holds the accumulating bytes, it reacts to each read, and it
+           resolves with what this reader's `make` builds. So this machine's result IS its promise. */
+        s->promise = readable_stream_drain(ctx, s->reader, read_promise, s->hdr.this_val,
+                                           f->readers[s->hdr.arg].make);
+        JS_FreeValue(ctx, read_promise);
+        return JS_IsException(s->promise) ? JS_STEP_ABRUPT : JS_STEP_DONE;
+    }
+
+    DCHECK(s->stage == BR_SETTLE, "the byte-read machine was re-entered at a stage it never parks in");
     r = step_call_run(ctx, &s->cphase, s->cb, s->func, JS_UNDEFINED, 1, (JSValueConst *)&s->value,
                       cb_result, &settled, out_cb, out_argc);
     if (r > 0) return r;          /* parked ON THE SETTLE; the `then` read runs with a flow base under it */

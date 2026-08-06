@@ -258,8 +258,10 @@ JSValueConst blob_url_lookup(const char *url, size_t len)
  * NO LATCH. §3.3 reads the Blob's byte sequence, which does not change and is not consumed — `await b.text()`
  * twice gives the text twice, where the same two calls on a Response are a TypeError. That one function is the
  * whole of what File API declares differently from Fetch. */
-static int blob_take(JSContext *ctx, JSValueConst v, const char **bytes, size_t *len)
+static int blob_take(JSContext *ctx, JSValueConst v, const char **bytes, size_t *len, JSValue *pstream)
 {
+    /* A Blob's bytes are always here: §3 makes it an immutable byte sequence, never a stream. */
+    *pstream = JS_UNDEFINED;
     BlobObj *b = JS_GetOpaque(v, g_blob_class);
     if (!b) {
         JS_ThrowTypeError(ctx, "not a Blob");

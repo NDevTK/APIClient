@@ -383,7 +383,7 @@ static JSValue js_fetch_fini(JSContext *ctx, void *st, bool take_result)
     JS_FreeValue(ctx, s->binit);
     JS_FreeValue(ctx, s->reject_promise);
     s->reject_promise = JS_UNDEFINED;
-    body_state_free(ctx, &s->body);
+    body_state_free(JS_GetRuntime(ctx), &s->body);
     JS_FreeValue(ctx, s->body_mime);
     s->body_mime = JS_UNDEFINED;
     headers_fill_release(ctx, &s->fill);

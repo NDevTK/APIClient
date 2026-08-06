@@ -45,11 +45,11 @@ void body_state_mark(JSRuntime *rt, BodyState *b, JS_MarkFunc *mark_func)
     JS_MarkValue(rt, b->stream, mark_func);
 }
 
-void body_state_free(JSContext *ctx, BodyState *b)
+void body_state_free(JSRuntime *rt, BodyState *b)
 {
-    JS_FreeValue(ctx, b->stream);
+    JS_FreeValueRT(rt, b->stream);
     b->stream = JS_UNDEFINED;
-    js_free(ctx, b->bytes);
+    js_free_rt(rt, b->bytes);
     b->bytes = NULL;
     b->len = 0;
     b->has = 0;
@@ -134,6 +134,18 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, char **out_mim
         if (!base) return -1;
         return body_state_set(ctx, b, (const char *)base, n);   /* §5.1: a BufferSource has no type */
     }
+    if (readable_stream_is(init)) {
+        /* §5.1's first arm: the body's stream IS this one. There are no bytes until it is read, and `.body`
+           answers the very stream the page handed in — which is what makes `new Response(rs).body === rs`
+           behave and what a page teeing a response's body depends on. A stream has no Content-Type. */
+        JS_FreeValue(ctx, b->stream);
+        b->stream = JS_DupValue(ctx, init);
+        free(b->bytes);
+        b->bytes = NULL;
+        b->len = 0;
+        b->has = 1;
+        return 0;
+    }
     if (JS_IsObject(init)) {
         size_t off = 0, n = 0, whole = 0;
         JSValue buf = JS_GetArrayBufferView(ctx, init, &off, &n);
@@ -206,11 +218,13 @@ static const char *body_mime_param(const char *s, size_t n, const char *key, siz
    read in one arm came back CONSUMED in the sibling, whose own first read then threw `body stream already
    read`. Every other kind of shared state a flow writes rides its COW delta, and so does this one — the capture
    goes immediately before the write, so the bytes the delta records are the ones this flow found. */
-static int body_take(JSContext *ctx, JSValueConst this_val, const char **pbody, size_t *plen)
+static int body_take(JSContext *ctx, JSValueConst this_val, const char **pbody, size_t *plen,
+                     JSValue *pstream)
 {
     const BodyIface *f = body_iface_of(this_val);
     BodyState *b;
 
+    *pstream = JS_UNDEFINED;
     if (!f) {
         JS_ThrowTypeError(ctx, "not a Request or a Response");
         return -1;
@@ -231,6 +245,11 @@ static int body_take(JSContext *ctx, JSValueConst this_val, const char **pbody, 
     }
     cow_capture_host_state(ctx, this_val, &b->used, sizeof b->used);
     b->used = 1;
+    /* §5.1's FIRST union arm: a body can BE a ReadableStream, and then there are no bytes to hand back — the
+       stream is fully read first. The latch is set either way, because it is set by the CONSUME and not by the
+       bytes arriving. */
+    if (!b->bytes && !JS_IsUndefined(b->stream) && readable_stream_is(b->stream))
+        *pstream = JS_DupValue(ctx, b->stream);
     return 0;
 }
 

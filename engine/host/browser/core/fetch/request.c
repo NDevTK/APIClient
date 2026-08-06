@@ -64,7 +64,7 @@ static void request_finalizer(JSRuntime *rt, JSValue val)
     js_free_rt(rt, d->url); js_free_rt(rt, d->method); js_free_rt(rt, d->mode);
     js_free_rt(rt, d->credentials); js_free_rt(rt, d->cache); js_free_rt(rt, d->redirect);
     js_free_rt(rt, d->referrer); js_free_rt(rt, d->referrer_policy); js_free_rt(rt, d->integrity);
-    js_free_rt(rt, d->destination); js_free_rt(rt, d->body.bytes);
+    js_free_rt(rt, d->destination); body_state_free(rt, &d->body);
     js_free_rt(rt, d);
 }
 

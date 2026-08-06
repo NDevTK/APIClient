@@ -80,7 +80,7 @@ static void response_finalizer(JSRuntime *rt, JSValue val)
     ResponseData *d = JS_GetOpaque(val, g_response_class);
     if (d) {
         JS_FreeValueRT(rt, d->headers);
-        js_free_rt(rt, d->body.bytes);
+        body_state_free(rt, &d->body);
         js_free_rt(rt, d->url); js_free_rt(rt, d->status_text); js_free_rt(rt, d);
     }
 }

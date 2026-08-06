@@ -20,9 +20,14 @@ typedef struct { const char *name; ByteReaderMake make; } ByteReader;
    on a second read because a body is a stream; File API §3.3's is a plain read, because a Blob is an immutable
    byte sequence that reads as many times as it is asked. Neither rule belongs in the shared machine. Return -1
    with a throw live. */
+/* `*pstream` IS THE OTHER ANSWER `take` CAN GIVE. A Fetch body can BE a ReadableStream — `new Response(stream)`
+   is §5.1's first union arm — and §5.2's "consume body" then FULLY READS that stream before a reader sees a
+   byte. Draining is a loop of reads, each one the page's code, so it cannot happen inside `take`: `take`
+   reports the stream (DUP'd) and the reader machine drains it. JS_UNDEFINED means the bytes are here, which is
+   every Blob and every body built from anything but a stream. */
 typedef struct {
     bool (*is)(JSValueConst v);
-    int  (*take)(JSContext *ctx, JSValueConst v, const char **bytes, size_t *len);
+    int  (*take)(JSContext *ctx, JSValueConst v, const char **bytes, size_t *len, JSValue *pstream);
     const char      *iface;
     const ByteReader *readers;
     int               nreaders;

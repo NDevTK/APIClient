@@ -27,6 +27,7 @@
 #include "quickjs-step.h"
 #include "solver/concolic.h"
 #include "core/idl_args.h"
+#include "core/streams/readable_stream.h"
 #include "core/idl_iter.h"
 #include "core/file/blob.h"
 #include "core/html/form_data.h"
@@ -751,7 +752,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                `new Response(blob)` stringified to the thirteen bytes of "[object Blob]" while three of those
                interfaces existed, because the test was written when none of them did. */
             t = (JS_IsArrayBuffer(a) || JS_GetTypedArrayType(a) >= 0 || JS_IsDataView(a) ||
-                 blob_is(a) || form_data_is(a) || usp_list_of(a))
+                 blob_is(a) || form_data_is(a) || usp_list_of(a) || readable_stream_is(a))
               ? IDL_ANY : IDL_DOMSTRING;
         }
 

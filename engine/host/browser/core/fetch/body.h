@@ -13,7 +13,11 @@
    and a second one would give a page two independent readers over one body. JS_UNDEFINED until asked for. */
 typedef struct { char *bytes; size_t len; int used; int has; JSValue stream; } BodyState;
 
-void body_state_free(JSContext *ctx, BodyState *b);
+/* RELEASE EVERYTHING A BodyState OWNS — the bytes AND the stream. It takes a RUNTIME because the place that
+   must call it is an including interface's FINALIZER, which has no context; the two that free the bytes by
+   hand instead each forgot the stream, and once a body could BE the page's stream that leak was the whole
+   runtime graph held by one Response. One declaration of what this owns, one release. */
+void body_state_free(JSRuntime *rt, BodyState *b);
 
 /* §5.1's "extract a body" — the ONE implementation of the BodyInit union, for both interfaces that take one.
    `*out_mime` is the arm's own Content-Type (malloc'd) or NULL for an arm that has none; the caller's remaining
