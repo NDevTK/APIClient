@@ -1239,7 +1239,7 @@ int main(void) {
 
     /* The two hook SETS the solver owns, each declared by its own component. They were struct literals here
        and again in test_forced.c, and the pair had drifted. */
-    cow_install_time_travel_hooks();
+    cow_install_time_travel_hooks(engine_gen_fork);
     concolic_install_hooks();
     /* The surface is installed, so every member the platform has is declared — a declaration from here on is a
        per-wrapper or per-flow mint, and that is what the pool asserts against. */
@@ -1676,6 +1676,7 @@ int main(void) {
     event_target_free(ctx);
     event_free(ctx);
     headers_free(ctx);    /* Headers.prototype and the name it interned */
+    response_free(ctx);   /* Response.prototype — one object, held for the runtime's life */
     idl_args_free(ctx);   /* the dictionary member atoms the declaration pool interned */
     flow_registry_free(ctx);
     JS_RunGC(rt);   /* collect flow-local garbage from the runs before teardown */

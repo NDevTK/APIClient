@@ -18,12 +18,21 @@ typedef JSValue (*IdlBody)(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 typedef enum {
     IDL_ANY = 0,          /* passed through unconverted (`any`, an interface type, a callback) */
     IDL_DOMSTRING,        /* ToString — the page's toString may run */
+    /* `ByteString`. ToString and then §3.2.10's RANGE: every code point must be 0x00..0xFF, and one above that
+       is a TypeError. That range IS the type — `new Response("", {statusText: "\u0100"})` throws — and it is
+       stated here so no body has to remember it. */
+    IDL_BYTESTRING,
     /* `DOMString?`. Web IDL converts null AND undefined to the IDL value null before ToString is ever reached,
        so the body receives JS_NULL and never the string "null". textContent is the member that makes this
        load-bearing: `el.textContent = null` is "replace all with null", which removes the children and adds NO
        Text node, and stringifying it wrote the four characters `null` into the page's DOM instead. */
     IDL_DOMSTRING_NULLABLE,
     IDL_LONG,             /* ToNumber, then the integer conversion — the page's valueOf may run */
+    /* `unsigned short`. Its §3.2.7 conversion is MODULO 2^16 — not a clamp and not a range error — which is
+       why it is its own type rather than an IDL_LONG a body range-checks: `new Response("", {status: 65736})`
+       is status 200 in every browser, and range-checking the raw number makes it a RangeError. A member that
+       ALSO has a legal range (Response's 200..599) checks that AFTER this conversion, because the spec does. */
+    IDL_UNSIGNED_SHORT,
     /* A `(DOMString or Function)` union, which is TimerHandler and nothing else so far: callable crosses as
        itself, anything else is a DOMString. Named for the rule rather than for the member, because the rule is
        what the IDL states. */
@@ -46,6 +55,13 @@ typedef enum {
        brand check: an object of the interface's CLASS crosses as itself, anything else is a DOMString. The
        class is declared beside the type, so this file needs to know nothing about what a Node is. */
     IDL_STRING_UNLESS_IFACE,
+    /* `BodyInit?` — Fetch's `(ReadableStream or Blob or BufferSource or FormData or URLSearchParams or
+       USVString)?`. Its rule is a BRAND check like the two above, but against the BUFFER SOURCE shape rather
+       than one class: an ArrayBuffer or any ArrayBufferView crosses as itself, null and undefined are the IDL
+       null, and everything else is the union's USVString arm. The other four members are interfaces this
+       engine does not have yet, so nothing can BE one — when Blob arrives it is one more brand test here, in
+       the one place the union is stated, and no body learns about it. */
+    IDL_BODYINIT_NULLABLE,
 } IdlArgType;
 
 /* A DICTIONARY MEMBER, as its IDL declares it: the name, the type of its value, and whether the IDL marks it
@@ -61,6 +77,11 @@ typedef struct { const char *name; IdlArgType type; bool required; } IdlDictMemb
    step id, which the caller CACHES. Registration and installation are separate on purpose: Element's members
    are installed on every wrapper the tree hands out, so registering there would mint a definition per element. */
 int  idl_method_id(JSContext *ctx, const IdlArgType *types, int nargs, IdlBody body, int magic);
+
+/* §3.2.10's ByteString RANGE over UTF-8 bytes: true when every code point is 0x00..0xFF. Public because a
+   conversion that happens OUTSIDE this machine needs the same answer — Headers' fill converts a record's keys
+   itself, one [[Get]] at a time, and the range is the type's rule rather than that component's. */
+bool idl_is_bytestring(const char *utf8, size_t len);
 
 /* The same declaration for a member whose IDL tail is VARIADIC, and/or that takes an interface-or-string
    union. `variadic` makes the LAST declared type apply to every argument from there on, which is what a `T...`

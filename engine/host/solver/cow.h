@@ -102,7 +102,9 @@ void      cow_free(JSContext *ctx);
    concolic set is: two entries each spelled it out as a struct literal, which is a list that can drift, and one
    of them already had. `.gen_fork` is the scheduler's, which is why this lives with the capture hooks that make
    up the rest of it rather than at either entry. */
-void cow_install_time_travel_hooks(void);
+/* `gen_fork` is the caller's: the eight other hooks are this file's capture points, and the ninth belongs to
+   whoever assembles the sibling flow. See the definition. */
+void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork);
 
 /* What the delta swaps have cost so far: how many chain installs, how many entries they touched in total, and
    the worst single one. A switch is supposed to be O(divergence); this says what the divergence actually is. */

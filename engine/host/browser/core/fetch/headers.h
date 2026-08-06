@@ -13,6 +13,19 @@
 typedef struct { char *name; char *value; } HeaderEntry;
 typedef struct { HeaderEntry *e; int n, cap; } HeaderList;
 
+/* §5.1: "A Headers object has an associated GUARD" — which of the page's writes the object refuses, and how.
+   "none" refuses nothing (a page's own `new Headers()`); "immutable" THROWS on every write (a Response the
+   engine handed the page); "request"/"request-no-cors" and "response" SILENTLY drop the names the browser
+   owns. The three answers are distinct in the spec and must stay distinct here. */
+typedef enum {
+    HEADERS_GUARD_NONE = 0,
+    HEADERS_GUARD_IMMUTABLE,
+    HEADERS_GUARD_REQUEST,
+    HEADERS_GUARD_REQUEST_NO_CORS,
+    HEADERS_GUARD_RESPONSE,
+} HeadersGuard;
+
+
 void  header_list_free(HeaderList *l);
 /* §5.1 append: lowercase the name, keep the pair. Both strings are COPIED. */
 void  header_list_append(HeaderList *l, const char *name, const char *value);
@@ -54,7 +67,7 @@ void headers_fill_init(HeadersFill *f);
 void headers_fill_visit(JSContext *ctx, HeadersFill *f, JSStepVisit *v);
 void headers_fill_release(JSContext *ctx, HeadersFill *f);
 int  headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst init, HeaderList *out,
-                      JSValue in, JSValue **out_cb, int *out_argc);
+                      HeadersGuard guard, JSValue in, JSValue **out_cb, int *out_argc);
 
 void    headers_init(JSContext *ctx);                       /* register the class + its machines (install time) */
 void    headers_install(JSContext *ctx, JSValueConst global);   /* the Headers interface object */
@@ -62,9 +75,12 @@ void    headers_free(JSContext *ctx);   /* the prototype and the interned name t
 /* A Headers over an existing list; the object takes a COPY, because a header list a component owns outlives
    nothing the page can reach and a page must not be able to mutate a reply's headers through the copy it was
    handed. */
-JSValue headers_new(JSContext *ctx, const HeaderList *src);
+JSValue headers_new(JSContext *ctx, const HeaderList *src, HeadersGuard guard);
 /* The list behind a Headers object, or NULL when `v` is not one — how `fetch` reads a `new Headers(...)` it was
    handed without going back through the page's own accessors. */
 const HeaderList *headers_list_of(JSValueConst v);
+/* The GUARD of a Headers object — what a clone of the thing holding it must give its own copy. It is the
+   object's state, so it cannot be recovered from the list. */
+HeadersGuard headers_guard_of(JSValueConst v);
 
 #endif

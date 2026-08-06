@@ -19,8 +19,12 @@
 #include "quickjs-step.h"
 #include "solver/cow.h"
 #include "core/fetch/response.h"
+#include "core/fetch/headers.h"
+#include "core/idl_args.h"
 
 static JSClassID g_response_class;
+static JSValue   g_response_proto = JS_UNDEFINED;
+static int       g_ctor_stepid = -1;
 /* One WASM instance is one document, so the class id and the body readers' step ids below are that runtime's;
    the DCHECK at install is what makes a second one impossible rather than merely unlikely. */
 static JSRuntime *g_response_rt;
@@ -30,16 +34,60 @@ static JSRuntime *g_response_rt;
    readers whose entire job is to hand those bytes back — would then have reported as the whole body. There is
    no length a strlen can recover once the buffer is copied, so the length rides the record from the call that
    builds it, and `text()`/`json()` read exactly as far. */
-typedef struct { char *url; char *body; size_t body_len; int body_used; } ResponseData;
+/* §6.4's RESPONSE, as the spec's fields and not as constants. `ok`/`status`/`statusText`/`type` were literals
+   here — 200, "OK", "basic" — which was right for the one Response this component could build (the reply the
+   trusted host had already fetched) and wrong the moment the page can build one: `new Response("", {status:
+   404})` is not 200, and every `if (r.ok)` in a page that constructs its own responses forked the wrong way.
+   `has_body` is not `body_len != 0`: §6.4 distinguishes a NULL body from an empty one, `new Response()` has
+   the first and `new Response("")` the second, and `.body` reports null for exactly one of them. */
+typedef struct {
+    char   *url;              /* the response's URL; "" when it has none, which is what `url` reports */
+    char   *body;
+    size_t  body_len;
+    int     body_used;
+    int     has_body;         /* §6.4: a null body is not an empty body */
+    int     status;
+    char   *status_text;      /* the response's "status message" */
+    uint8_t type;             /* RESPONSE_TYPE_* */
+    /* [SameObject]: §6.4 declares `headers` SameObject, so the Headers OBJECT is built once and held here
+       rather than minted per read — a page that does `const h = r.headers; h.set(...)` must be writing into
+       the response's own list, and `r.headers === r.headers` is asserted by wpt directly. */
+    JSValue headers;
+} ResponseData;
+
+/* §6.4's response types. "default" is what the CONSTRUCTOR makes; "basic" is a same-origin reply the host
+   fetched. The others arrive with CORS and opaque replies, which is where they will be set from. */
+enum { RESPONSE_TYPE_DEFAULT = 0, RESPONSE_TYPE_BASIC, RESPONSE_TYPE_CORS, RESPONSE_TYPE_ERROR,
+       RESPONSE_TYPE_OPAQUE, RESPONSE_TYPE_OPAQUEREDIRECT };
+static const char *const RESPONSE_TYPE_NAME[] = { "default", "basic", "cors", "error", "opaque",
+                                                  "opaqueredirect" };
 
 static void response_finalizer(JSRuntime *rt, JSValue val)
 {
     ResponseData *d = JS_GetOpaque(val, g_response_class);
-    (void)rt;
-    if (d) { js_free_rt(rt, d->url); js_free_rt(rt, d->body); js_free_rt(rt, d); }
+    if (d) {
+        JS_FreeValueRT(rt, d->headers);
+        js_free_rt(rt, d->url); js_free_rt(rt, d->status_text); js_free_rt(rt, d->body); js_free_rt(rt, d);
+    }
+}
+
+/* The Headers object a Response holds is a JSValue in the class opaque, which the collector cannot see through
+   — and a Headers can reach back (nothing today, but the cycle is the collector's problem to be told about,
+   not the component's to promise will not form). */
+static void response_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+{
+    ResponseData *d = JS_GetOpaque(val, g_response_class);
+    if (d) JS_MarkValue(rt, d->headers, mark_func);
 }
 
 static ResponseData *response_of(JSValueConst v) { return JS_GetOpaque(v, g_response_class); }
+
+/* Allocation and filling, declared here because clone() is written above them and because splitting them is
+   what lets the constructor allocate before it knows the body — see their definitions. */
+static JSValue response_alloc(JSContext *ctx, ResponseData **pd);
+static int response_set(JSContext *ctx, ResponseData *d, const char *url, int status, const char *status_text,
+                        int type, const char *body, size_t body_len, const HeaderList *headers,
+                        HeadersGuard guard);
 
 /* 6.4 "consume body": the latch is per Response and the second read is a TypeError — a page's retry path tests
    exactly that, so answering the body twice would hide the branch it takes.
@@ -198,13 +246,26 @@ static int g_body_stepid[BODY_READER_COUNT];
    readable, which is what the caching layer then does with it. */
 static JSValue js_response_clone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
-    ResponseData *d = response_of(this_val);
+    ResponseData *d = response_of(this_val), *c;
+    JSValue obj;
     (void)argc; (void)argv;
     if (!d)
         return JS_ThrowTypeError(ctx, "not a Response");
     if (d->body_used)
         return JS_ThrowTypeError(ctx, "cannot clone a Response whose body has been read");
-    return response_new(ctx, d->url, d->body, d->body_len);
+    obj = response_alloc(ctx, &c);
+    if (JS_IsException(obj))
+        return obj;
+    /* §6.4 clone COPIES the response, so every field goes — a clone that kept only the body reported status
+       200 and type "basic" for a 404 the page had just constructed. The headers are a NEW Headers over the
+       same list, because [SameObject] is per response and `r.clone().headers === r.headers` is false. */
+    if (response_set(ctx, c, d->url, d->status, d->status_text, d->type,
+                     d->has_body ? d->body : NULL, d->body_len, headers_list_of(d->headers),
+                     headers_guard_of(d->headers)) < 0) {
+        JS_FreeValue(ctx, obj);
+        return JS_EXCEPTION;
+    }
+    return obj;
 }
 
 static JSValue js_response_get(JSContext *ctx, JSValueConst this_val, int magic)
@@ -213,19 +274,26 @@ static JSValue js_response_get(JSContext *ctx, JSValueConst this_val, int magic)
     if (!d)
         return JS_ThrowTypeError(ctx, "not a Response");
     switch (magic) {
-    case 0: return JS_NewBool(ctx, true);                                    /* ok */
-    case 1: return JS_NewInt32(ctx, 200);                                    /* status */
-    case 2: return JS_NewString(ctx, "OK");                                  /* statusText */
-    case 3: return JS_NewString(ctx, d->url ? d->url : "");                  /* url */
-    case 4: return JS_NewBool(ctx, false);                                   /* redirected */
-    case 5: return JS_NewString(ctx, "basic");                               /* type */
+    /* §6.4 `ok` IS the 200..299 test, not a flag: a page's `if (r.ok)` and its `if (r.status < 400)` must
+       agree, and they only do when both read the same number. */
+    case 0: return JS_NewBool(ctx, d->status >= 200 && d->status <= 299);
+    case 1: return JS_NewInt32(ctx, d->status);
+    case 2: return JS_NewString(ctx, d->status_text ? d->status_text : "");
+    case 3: return JS_NewString(ctx, d->url ? d->url : "");
+    case 4: return JS_NewBool(ctx, false);                                   /* redirected: no redirect yet */
+    case 5: return JS_NewString(ctx, RESPONSE_TYPE_NAME[d->type]);
+    case 6: return JS_DupValue(ctx, d->headers);                             /* [SameObject] */
     default:
-        DCHECK(magic == 6, "a Response accessor was declared with a magic this component does not answer");
+        DCHECK(magic == 7, "a Response accessor was declared with a magic this component does not answer");
         return JS_NewBool(ctx, d->body_used != 0);                           /* bodyUsed */
     }
 }
 
-static const JSCFunctionListEntry js_response_proto[] = {
+/* §6.4's attributes and clone(). `body` IS NOT HERE, and its absence is the honest report: the spec's type is
+   `ReadableStream?`, this engine has no ReadableStream, and a getter answering null for a response that HAS a
+   body would be a lie the page cannot tell from the null-body case. `blob()` and `formData()` are absent for
+   the same reason — there is no Blob and no FormData to answer with. */
+static const JSCFunctionListEntry js_response_proto_funcs[] = {
     JS_CFUNC_DEF("clone", 0, js_response_clone),
     JS_CGETSET_MAGIC_DEF("ok", js_response_get, NULL, 0),
     JS_CGETSET_MAGIC_DEF("status", js_response_get, NULL, 1),
@@ -233,13 +301,294 @@ static const JSCFunctionListEntry js_response_proto[] = {
     JS_CGETSET_MAGIC_DEF("url", js_response_get, NULL, 3),
     JS_CGETSET_MAGIC_DEF("redirected", js_response_get, NULL, 4),
     JS_CGETSET_MAGIC_DEF("type", js_response_get, NULL, 5),
-    JS_CGETSET_MAGIC_DEF("bodyUsed", js_response_get, NULL, 6),
+    JS_CGETSET_MAGIC_DEF("headers", js_response_get, NULL, 6),
+    JS_CGETSET_MAGIC_DEF("bodyUsed", js_response_get, NULL, 7),
 };
+
+/* ---- the interface: one prototype, one instance shape ---------------------------------------------------- */
+
+/* An EMPTY Response over the interface prototype. Every field is set by response_set afterwards; splitting the
+   two is what lets the constructor allocate before it knows the status and lets clone copy field by field. */
+static JSValue response_alloc(JSContext *ctx, ResponseData **pd)
+{
+    ResponseData *d;
+    JSValue obj;
+
+    DCHECK(g_response_class != 0, "a Response was built before the class existed — response_init runs at install");
+    DCHECK(!JS_IsUndefined(g_response_proto), "a Response was built before its prototype existed");
+    obj = JS_NewObjectProtoClass(ctx, g_response_proto, g_response_class);
+    if (JS_IsException(obj))
+        return obj;
+    d = js_mallocz(ctx, sizeof(*d));
+    if (!d) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
+    d->headers = JS_UNDEFINED;
+    d->status = 200;
+    JS_SetOpaque(obj, d);
+    *pd = d;
+    return obj;
+}
+
+/* Fill a freshly allocated response. `body` NULL is the spec's NULL BODY, which is not the empty body. Returns
+   -1 with an exception live. */
+static int response_set(JSContext *ctx, ResponseData *d, const char *url, int status, const char *status_text,
+                        int type, const char *body, size_t body_len, const HeaderList *headers,
+                        HeadersGuard guard)
+{
+    d->url = js_strdup(ctx, url ? url : "");
+    d->status_text = js_strdup(ctx, status_text ? status_text : "");
+    if (!d->url || !d->status_text) return -1;
+    d->status = status;
+    d->type = (uint8_t)type;
+    d->has_body = body != NULL;
+    if (body) {
+        /* +1 and a NUL past the end, so the bytes can still be handed to a C string consumer; `body_len` is
+           what every read here uses, and it is what an interior NUL no longer truncates. */
+        d->body = js_mallocz(ctx, body_len + 1);
+        if (!d->body) return -1;
+        if (body_len) memcpy(d->body, body, body_len);
+        d->body_len = body_len;
+    }
+    JS_FreeValue(ctx, d->headers);
+    d->headers = headers_new(ctx, headers, guard);
+    return JS_IsException(d->headers) ? -1 : 0;
+}
+
+/* ---- §6.4's constructor ----------------------------------------------------------------------------------
+ *
+ * A MACHINE, because both of its arguments run the page's code: the `body` is a `BodyInit?` union whose
+ * USVString arm is a ToString the page may define, and `init` is a dictionary whose three members are three
+ * [[Get]]s — one Proxy trap away each — followed by the header fill, which is the whole iterator or record
+ * protocol over an object the page owns. The declaration converts both; what is left here is §6.4's own steps,
+ * in the order the spec writes them. */
+typedef struct {
+    uint8_t     stage;
+    HeadersFill fill;
+    HeaderList  list;
+    JSValue     result;
+} JSResponseCtorState;
+
+static void js_response_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSResponseCtorState *s = st;
+    headers_fill_visit(ctx, &s->fill, v);
+    v->val(ctx, &s->result);
+}
+
+static void js_response_ctor_release(JSContext *ctx, void *st)
+{
+    JSResponseCtorState *s = st;
+    headers_fill_release(ctx, &s->fill);
+    header_list_free(&s->list);
+    JS_FreeValue(ctx, s->result);
+    s->result = JS_UNDEFINED;
+}
+
+/* §6.4 "a null body status": the statuses HTTP defines as carrying no body, which a constructed Response may
+   therefore not be given one with. */
+static int response_is_null_body_status(int status)
+{
+    return status == 101 || status == 103 || status == 204 || status == 205 || status == 304;
+}
+
+/* §5.1's `reason-phrase` production: HTAB, SP, VCHAR and obs-text — and nothing else, which is what makes
+   `new Response("", {statusText: "\n"})` a TypeError. */
+static int response_status_text_is_valid(const char *s, size_t len)
+{
+    size_t i;
+    for (i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == 0x09 || (c >= 0x20 && c <= 0x7e) || c >= 0x80) continue;
+        return 0;
+    }
+    return 1;
+}
+
+static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                 JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    JSResponseCtorState *s = st;
+    JSValueConst body = argc > 0 ? argv[0] : JS_UNDEFINED;
+    JSValueConst init = argc > 1 ? argv[1] : JS_UNDEFINED;
+    JSValue v_status, v_text, v_headers;
+    ResponseData *d;
+    int status, r;
+
+    if (s->stage == 0) {
+        if (JS_IsUndefined(hdr->this_val)) {
+            JS_FreeValue(ctx, cb_result);
+            JS_ThrowTypeError(ctx, "constructor Response requires 'new'");
+            return -1;
+        }
+        /* §6.4 step 1: the RANGE check, after Web IDL's `unsigned short` conversion and never instead of it. */
+        v_status = idl_dict_get(ctx, init, "status");
+        status = 200;
+        if (!JS_IsUndefined(v_status)) {
+            int32_t n = 200;
+            JS_ToInt32(ctx, &n, v_status);   /* already an integer the declaration converted; this reads it */
+            status = (int)n;
+        }
+        JS_FreeValue(ctx, v_status);
+        if (status < 200 || status > 599) {
+            JS_FreeValue(ctx, cb_result);
+            JS_ThrowRangeError(ctx, "a Response status must be in the range 200 to 599");
+            return -1;
+        }
+        /* §6.4 step 2: statusText must match reason-phrase. */
+        v_text = idl_dict_get(ctx, init, "statusText");
+        {
+            const char *t = NULL;
+            size_t tlen = 0;
+            int ok = 1;
+            if (!JS_IsUndefined(v_text)) {
+                t = JS_ToCStringLen(ctx, &tlen, v_text);
+                if (!t) { JS_FreeValue(ctx, v_text); JS_FreeValue(ctx, cb_result); return -1; }
+                ok = response_status_text_is_valid(t, tlen);
+            }
+            if (!ok) {
+                JS_FreeCString(ctx, t);
+                JS_FreeValue(ctx, v_text);
+                JS_FreeValue(ctx, cb_result);
+                JS_ThrowTypeError(ctx, "a Response statusText is not a reason-phrase");
+                return -1;
+            }
+            /* §6.4 steps 3-6: the response exists now, with its status and its status message. The BODY and
+               the HEADERS are the two things still to come, and both may run the page's code. */
+            s->result = response_alloc(ctx, &d);
+            if (JS_IsException(s->result)) {
+                JS_FreeCString(ctx, t);
+                JS_FreeValue(ctx, v_text);
+                JS_FreeValue(ctx, cb_result);
+                return -1;
+            }
+            r = response_set(ctx, d, "", status, t ? t : "", RESPONSE_TYPE_DEFAULT, NULL, 0, NULL,
+                             HEADERS_GUARD_RESPONSE);
+            JS_FreeCString(ctx, t);
+            JS_FreeValue(ctx, v_text);
+            if (r < 0) { JS_FreeValue(ctx, cb_result); return -1; }
+        }
+        headers_fill_init(&s->fill);
+        s->stage = 1;
+    }
+
+    if (s->stage == 1) {
+        /* §6.4 step 7: fill the response's headers, which have guard "response" — so a page that puts
+           Set-Cookie on a Response it built silently gets nothing, which is the header wpt asserts by name. */
+        v_headers = idl_dict_get(ctx, init, "headers");
+        r = headers_fill_run(ctx, hdr, &s->fill, v_headers, &s->list, HEADERS_GUARD_RESPONSE,
+                             cb_result, out_cb, out_argc);
+        JS_FreeValue(ctx, v_headers);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        cb_result = JS_UNDEFINED;
+        d = response_of(s->result);
+        DCHECK(d != NULL, "the Response the constructor allocated stopped being one mid-construction");
+        JS_FreeValue(ctx, d->headers);
+        d->headers = headers_new(ctx, &s->list, HEADERS_GUARD_RESPONSE);
+        if (JS_IsException(d->headers)) return -1;
+        s->stage = 2;
+    }
+
+    DCHECK(s->stage == 2, "the Response constructor was re-entered at a stage it never parks in");
+    JS_FreeValue(ctx, cb_result);
+    d = response_of(s->result);
+    /* §6.4 step 8: a non-null body. The declaration has already run the union — a BufferSource crossed as
+       itself and everything else is a USVString — so what is left is the two things the SPEC does here: refuse
+       a body on a null-body status, and set Content-Type when the extracted body has one and the header list
+       does not already. */
+    if (!JS_IsNull(body) && !JS_IsUndefined(body)) {
+        const uint8_t *bytes = NULL;
+        size_t len = 0;
+        JSValue buf = JS_UNDEFINED;
+        const char *str = NULL;
+        const char *mime = NULL;
+
+        if (response_is_null_body_status(d->status)) {
+            JS_ThrowTypeError(ctx, "a Response with a null body status cannot be given a body");
+            return -1;
+        }
+        if (JS_IsArrayBuffer(body)) {
+            bytes = JS_GetArrayBuffer(ctx, &len, body);
+            if (!bytes) return -1;
+        } else if (JS_IsObject(body)) {
+            size_t off = 0;
+            buf = JS_GetArrayBufferView(ctx, body, &off, &len);
+            DCHECK(!JS_IsException(buf),
+                   "the BodyInit union let through an object that is neither a BufferSource nor a string — the "
+                   "declaration converts the USVString arm, so nothing else can reach here");
+            {
+                size_t whole = 0;
+                uint8_t *base = JS_GetArrayBuffer(ctx, &whole, buf);
+                if (!base) { JS_FreeValue(ctx, buf); return -1; }
+                bytes = base + off;
+            }
+        } else {
+            /* the USVString arm: the declaration already ran ToString, so this is the string's bytes */
+            str = JS_ToCStringLen(ctx, &len, body);
+            if (!str) return -1;
+            bytes = (const uint8_t *)str;
+            /* §6.4: a USVString body's Content-Type. A BufferSource has none, which is why this is set here
+               and not for every body. */
+            mime = "text/plain;charset=UTF-8";
+        }
+        d->body = js_mallocz(ctx, len + 1);
+        if (!d->body) { JS_FreeCString(ctx, str); JS_FreeValue(ctx, buf); return -1; }
+        if (len) memcpy(d->body, bytes, len);
+        d->body_len = len;
+        d->has_body = 1;
+        JS_FreeCString(ctx, str);
+        JS_FreeValue(ctx, buf);
+        if (mime) {
+            const HeaderList *hl = headers_list_of(d->headers);
+            char *existing = header_list_get(hl, "content-type");
+            if (!existing)
+                header_list_append((HeaderList *)hl, "content-type", mime);
+            free(existing);
+        }
+    }
+    *presult = s->result;
+    s->result = JS_UNDEFINED;
+    return 0;
+}
+
+/* §6.4 error(): "a new response whose type is 'error'". It runs none of the page's code — no arguments, no
+   init — so it is an ordinary member and not a machine. Its status is 0, which is outside the range the
+   CONSTRUCTOR enforces, because that range is the constructor's step and not the response's. */
+static JSValue js_response_error(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    ResponseData *d;
+    JSValue obj = response_alloc(ctx, &d);
+    (void)this_val; (void)argc; (void)argv;
+    if (JS_IsException(obj))
+        return obj;
+    if (response_set(ctx, d, "", 0, "", RESPONSE_TYPE_ERROR, NULL, 0, NULL, HEADERS_GUARD_IMMUTABLE) < 0) {
+        JS_FreeValue(ctx, obj);
+        return JS_EXCEPTION;
+    }
+    return obj;
+}
+
+static const JSCFunctionListEntry js_response_static_funcs[] = {
+    JS_CFUNC_DEF("error", 0, js_response_error),
+};
+
+static const IdlStepDecl js_response_ctor_decl = {
+    js_response_ctor_step, sizeof(JSResponseCtorState), js_response_ctor_visit, js_response_ctor_release
+};
+
+/* ---- install --------------------------------------------------------------------------------------------- */
 
 void response_init(JSContext *ctx)
 {
-    JSClassDef def = { "Response", .finalizer = response_finalizer };
+    JSClassDef def = { "Response", .finalizer = response_finalizer, .gc_mark = response_gc_mark };
     JSRuntime *rt = JS_GetRuntime(ctx);
+    /* `optional BodyInit? body = null, optional ResponseInit init = {}`. The dictionary's members are listed in
+       the order Web IDL reads them, which is lexicographic and not the order §6.4 uses them in. */
+    static const IdlArgType CTOR_ARGS[2] = { IDL_BODYINIT_NULLABLE, IDL_DICT };
+    static const IdlDictMember RESPONSE_INIT[3] = {
+        { "headers",    IDL_ANY,            false },   /* HeadersInit: the union the fill converts */
+        { "status",     IDL_UNSIGNED_SHORT, false },
+        { "statusText", IDL_BYTESTRING,     false },   /* the reason-phrase check on top is §6.4's */
+    };
     int i;
 
     DCHECK(g_response_rt == NULL || g_response_rt == rt,
@@ -254,36 +603,54 @@ void response_init(JSContext *ctx)
         g_body_stepid[i] = JS_RegisterStepDef(rt, &js_body_readers[i].def);
         CHECK(g_body_stepid[i] >= 0, "response: no step id for a body reader — the reply would be unreadable");
     }
+    /* ONE PROTOTYPE, not a copy of the members per instance. They were own properties of each Response, which
+       is not what Web IDL describes and is observable three ways: `Response.prototype.text` was absent,
+       `delete r.text` removed the method, and every reply paid for eight property installs. */
+    g_response_proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(g_response_proto), "Response.prototype could not be allocated");
+    JS_SetPropertyFunctionList(ctx, g_response_proto, js_response_proto_funcs,
+                               (int)(sizeof(js_response_proto_funcs) / sizeof(js_response_proto_funcs[0])));
+    for (i = 0; i < BODY_READER_COUNT; i++)
+        JS_SetPropertyStr(ctx, g_response_proto, js_body_readers[i].name,
+                          JS_NewCFunction2(ctx, NULL, js_body_readers[i].name, 0, JS_CFUNC_step,
+                                           g_body_stepid[i]));
+    g_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, RESPONSE_INIT, 3, &js_response_ctor_decl, 0);
 }
 
+void response_install(JSContext *ctx, JSValueConst global)
+{
+    JSValue ctor;
+
+    DCHECK(g_ctor_stepid >= 0, "Response was installed before response_init declared its constructor");
+    ctor = idl_step_constructor(ctx, "Response", 0, g_ctor_stepid);
+    CHECK(!JS_IsException(ctor), "the Response interface object could not be allocated");
+    JS_SetConstructor(ctx, ctor, g_response_proto);
+    JS_SetPropertyFunctionList(ctx, ctor, js_response_static_funcs,
+                               (int)(sizeof(js_response_static_funcs) / sizeof(js_response_static_funcs[0])));
+    JS_SetPropertyStr(ctx, (JSValue)global, "Response", ctor);
+}
+
+void response_free(JSContext *ctx)
+{
+    JS_FreeValue(ctx, g_response_proto);
+    g_response_proto = JS_UNDEFINED;
+    g_response_rt = NULL;
+    g_ctor_stepid = -1;
+}
+
+/* THE REPLY THE TRUSTED HOST FETCHED — type "basic", status 200, and headers the page may not write, which is
+   the §6.4 "immutable" guard and the reason that guard exists at all. */
 JSValue response_new(JSContext *ctx, const char *url, const char *body, size_t body_len)
 {
     ResponseData *d;
-    JSValue obj;
-    int i;
+    JSValue obj = response_alloc(ctx, &d);
 
-    DCHECK(g_response_class != 0, "a Response was built before the class existed — response_init runs at install");
-    obj = JS_NewObjectClass(ctx, g_response_class);
     if (JS_IsException(obj))
         return obj;
-    d = js_mallocz(ctx, sizeof(*d));
-    if (!d) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
-    d->url = js_strdup(ctx, url ? url : "");
-    /* +1 and a NUL past the end, so the bytes can still be handed to a C string consumer; `body_len` is what
-       every read here uses, and it is what an interior NUL no longer truncates. */
-    d->body = js_mallocz(ctx, body_len + 1);
-    CHECK(d->url && d->body, "response: OOM copying a reply — a dropped body loses everything behind the request");
-    if (body_len) memcpy(d->body, body, body_len);
-    d->body_len = body_len;
-    JS_SetOpaque(obj, d);
-    JS_SetPropertyFunctionList(ctx, obj, js_response_proto,
-                               (int)(sizeof(js_response_proto) / sizeof(js_response_proto[0])));
-    for (i = 0; i < BODY_READER_COUNT; i++) {
-        DCHECK(g_body_stepid[i] > 0,
-               "a Response was built before its body readers were registered — response_init runs at install");
-        JS_SetPropertyStr(ctx, obj, js_body_readers[i].name,
-                          JS_NewCFunction2(ctx, NULL, js_body_readers[i].name, 0, JS_CFUNC_step,
-                                           g_body_stepid[i]));
+    if (response_set(ctx, d, url, 200, "OK", RESPONSE_TYPE_BASIC, body ? body : "", body_len, NULL,
+                     HEADERS_GUARD_IMMUTABLE) < 0) {
+        JS_FreeValue(ctx, obj);
+        return JS_EXCEPTION;
     }
     return obj;
 }

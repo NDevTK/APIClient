@@ -119,25 +119,41 @@ char *header_list_get(const HeaderList *l, const char *name)
 
 /* ---- the interface ------------------------------------------------------------------------------------ */
 
+/* §5.1: "A Headers object has an associated GUARD." It is the object's, not the list's — the same header list
+   is reachable through a Response's immutable Headers and through the fetch machinery that built it, and only
+   the first refuses writes. So the class opaque is the pair. */
+typedef struct { HeaderList list; uint8_t guard; } HeadersObj;
+
 static void headers_finalizer(JSRuntime *rt, JSValue val)
 {
-    HeaderList *l = JS_GetOpaque(val, g_headers_class);
+    HeadersObj *h = JS_GetOpaque(val, g_headers_class);
     (void)rt;
-    if (l) { header_list_free(l); free(l); }
+    if (h) { header_list_free(&h->list); free(h); }
 }
 
-const HeaderList *headers_list_of(JSValueConst v) { return JS_GetOpaque(v, g_headers_class); }
-
-static HeaderList *headers_of(JSContext *ctx, JSValueConst v)
+const HeaderList *headers_list_of(JSValueConst v)
 {
-    HeaderList *l = JS_GetOpaque(v, g_headers_class);
-    if (!l) JS_ThrowTypeError(ctx, "not a Headers");
-    return l;
+    HeadersObj *h = JS_GetOpaque(v, g_headers_class);
+    return h ? &h->list : NULL;
 }
 
-JSValue headers_new(JSContext *ctx, const HeaderList *src)
+HeadersGuard headers_guard_of(JSValueConst v)
 {
-    HeaderList *l;
+    HeadersObj *h = JS_GetOpaque(v, g_headers_class);
+    DCHECK(h != NULL, "the guard of something that is not a Headers was asked for");
+    return (HeadersGuard)h->guard;
+}
+
+static HeadersObj *headers_of(JSContext *ctx, JSValueConst v)
+{
+    HeadersObj *h = JS_GetOpaque(v, g_headers_class);
+    if (!h) JS_ThrowTypeError(ctx, "not a Headers");
+    return h;
+}
+
+JSValue headers_new(JSContext *ctx, const HeaderList *src, HeadersGuard guard)
+{
+    HeadersObj *h;
     JSValue obj;
     int i;
 
@@ -145,11 +161,14 @@ JSValue headers_new(JSContext *ctx, const HeaderList *src)
     obj = JS_NewObjectProtoClass(ctx, g_proto, g_headers_class);
     if (JS_IsException(obj))
         return obj;
-    l = calloc(1, sizeof *l);
-    CHECK(l, "headers: OOM building a Headers");
+    h = calloc(1, sizeof *h);
+    CHECK(h, "headers: OOM building a Headers");
+    h->guard = (uint8_t)guard;
+    /* The list is copied ALREADY VALIDATED — it is a header list this engine built, never a page's. The guard
+       governs what the PAGE may then do to it, which is why "immutable" does not block this loop. */
     for (i = 0; src && i < src->n; i++)
-        header_list_append(l, src->e[i].name, src->e[i].value);
-    JS_SetOpaque(obj, l);
+        header_list_append(&h->list, src->e[i].name, src->e[i].value);
+    JS_SetOpaque(obj, h);
     return obj;
 }
 
@@ -163,28 +182,6 @@ JSValue headers_new(JSContext *ctx, const HeaderList *src)
    What survives validation is provably NUL-free (a name is a token, a value forbids 0x00), which is why the
    LIST may still hold plain C strings — and header_check DCHECKs exactly that before handing one over. */
 
-/* IT IS A RANGE OVER CODE UNITS, NOT OVER BYTES. This rejected every byte above 0x7f, which is not the rule — a
-   ByteString is 0x00..0xFF — so `new Headers({x: "newLine\xa0"})` was refused for a character the spec keeps.
-   The string arrives UTF-8-encoded, so the check DECODES it: one code point per character, each of which must
-   fit in a byte. Storing the UTF-8 stays right, because JS_NewString decodes it again on the way out. */
-static int header_is_bytestring(const char *s, size_t len)
-{
-    const unsigned char *p = (const unsigned char *)s, *end = p + len;
-    while (p < end) {
-        unsigned c = *p++;
-        if (c < 0x80) continue;                       /* 0x00..0x7f: one byte, in range */
-        if ((c & 0xe0) == 0xc0) {                     /* two bytes: U+0080..U+07FF */
-            unsigned cp;
-            if (p >= end) return 0;
-            cp = ((c & 0x1f) << 6) | (*p & 0x3f);
-            p++;
-            if (cp > 0xff) return 0;                  /* U+0100 and up is not a byte */
-            continue;
-        }
-        return 0;                                     /* three or more bytes: far past 0xff */
-    }
-    return 1;
-}
 
 /* §5.1 "HTTP whitespace" — these FOUR and not isspace()'s set. \f is not one of them, which is what makes
    wpt's "\t\f\tnewLine\n" normalize to "\f\tnewLine" rather than to "newLine". */
@@ -243,7 +240,7 @@ static int header_check(JSContext *ctx, const char *name, size_t name_len,
     char *norm;
     size_t norm_len;
     if (pnorm) *pnorm = NULL;
-    if (!header_is_bytestring(name, name_len) || (value && !header_is_bytestring(value, value_len))) {
+    if (!idl_is_bytestring(name, name_len) || (value && !idl_is_bytestring(value, value_len))) {
         JS_ThrowTypeError(ctx, "a header name or value is not a ByteString");
         return -1;
     }
@@ -266,17 +263,111 @@ static int header_check(JSContext *ctx, const char *name, size_t name_len,
     return 0;
 }
 
+/* ---- §5.1's guard: which writes a PAGE is allowed to make -------------------------------------------------
+ *
+ * A header list this engine builds is trusted; what the guard governs is what the page may do to it afterwards.
+ * The three answers are distinct and the spec is explicit about which is which: "immutable" THROWS a TypeError,
+ * a forbidden name under "request"/"response" is a SILENT no-op (validating returns false and the member simply
+ * returns), and everything else writes. Collapsing the silent case into a throw would break every page that
+ * sets `Host` defensively; collapsing it into a write would let a page forge headers the browser owns. */
+
+static int header_ci_eq(const char *lower_name, const char *lit)
+{
+    /* names arrive lowercased or are lowercased by the caller; the literal is written lowercase */
+    return !strcmp(lower_name, lit);
+}
+
+/* §5.1 "forbidden method": the three a page may never send, however it spells them. */
+static int header_is_forbidden_method(const char *m, size_t len)
+{
+    static const char *const METHODS[] = { "connect", "trace", "track" };
+    size_t i, k;
+    char buf[8];
+    if (len >= sizeof buf) return 0;
+    for (i = 0; i < len; i++)
+        buf[i] = (m[i] >= 'A' && m[i] <= 'Z') ? (char)(m[i] - 'A' + 'a') : m[i];
+    buf[len] = 0;
+    for (k = 0; k < sizeof(METHODS) / sizeof(METHODS[0]); k++)
+        if (!strcmp(buf, METHODS[k])) return 1;
+    return 0;
+}
+
+/* §5.1 "getting, decoding, and splitting" a value, for the method-override headers: split on ",", strip HTTP
+   whitespace around each token, and ask whether ANY of them is a forbidden method. `X-HTTP-Method: ",TRACE,"`
+   is forbidden for the same reason `X-HTTP-Method: TRACE` is — the server would see both. */
+static int header_value_has_forbidden_method(const char *v)
+{
+    const char *p = v;
+    for (;;) {
+        const char *comma = strchr(p, ',');
+        const char *b = p, *e = comma ? comma : p + strlen(p);
+        while (b < e && header_is_ws((unsigned char)*b)) b++;
+        while (e > b && header_is_ws((unsigned char)e[-1])) e--;
+        if (header_is_forbidden_method(b, (size_t)(e - b))) return 1;
+        if (!comma) return 0;
+        p = comma + 1;
+    }
+}
+
+/* §5.1 "forbidden request-header". The name arrives LOWERCASED (header_lower is what every entry point runs
+   first), so these comparisons are the spec's byte-case-insensitive match. */
+static int header_is_forbidden_request(const char *lower_name, const char *value)
+{
+    static const char *const NAMES[] = {
+        "accept-charset", "accept-encoding", "access-control-request-headers",
+        "access-control-request-method", "access-control-request-private-network", "connection",
+        "content-length", "cookie", "cookie2", "date", "dnt", "expect", "host", "keep-alive", "origin",
+        "referer", "set-cookie", "te", "trailer", "transfer-encoding", "upgrade", "via",
+    };
+    size_t i;
+    for (i = 0; i < sizeof(NAMES) / sizeof(NAMES[0]); i++)
+        if (header_ci_eq(lower_name, NAMES[i])) return 1;
+    /* the two PREFIXES the spec reserves for the browser and for the platform */
+    if (!strncmp(lower_name, "proxy-", 6) || !strncmp(lower_name, "sec-", 4)) return 1;
+    /* the method-override family is forbidden only for the VALUES that would smuggle a forbidden method */
+    if (header_ci_eq(lower_name, "x-http-method") || header_ci_eq(lower_name, "x-http-method-override") ||
+        header_ci_eq(lower_name, "x-method-override"))
+        return value && header_value_has_forbidden_method(value);
+    return 0;
+}
+
+/* §5.1 "forbidden response-header name": the two a page may not put on a response it did not receive. */
+static int header_is_forbidden_response(const char *lower_name)
+{
+    return header_ci_eq(lower_name, "set-cookie") || header_ci_eq(lower_name, "set-cookie2");
+}
+
+/* §5.1 "validating (name, value) for headers", AFTER header_check has done the name/value syntax half.
+   Returns 1 to write, 0 to silently do nothing, -1 with a TypeError live. */
+static int headers_guard_allows(JSContext *ctx, uint8_t guard, const char *name, const char *value)
+{
+    char *lower = header_lower(name);
+    int r = 1;
+    if (guard == HEADERS_GUARD_IMMUTABLE) {
+        JS_ThrowTypeError(ctx, "the headers are immutable");
+        r = -1;
+    } else if ((guard == HEADERS_GUARD_REQUEST || guard == HEADERS_GUARD_REQUEST_NO_CORS) &&
+               header_is_forbidden_request(lower, value)) {
+        r = 0;
+    } else if (guard == HEADERS_GUARD_RESPONSE && header_is_forbidden_response(lower)) {
+        r = 0;
+    }
+    free(lower);
+    return r;
+}
+
 enum { HDR_APPEND = 0, HDR_SET, HDR_DELETE, HDR_GET, HDR_HAS, HDR_GETSETCOOKIE };
 
 static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    HeaderList *l = headers_of(ctx, this_val);
+    HeadersObj *h = headers_of(ctx, this_val);
+    HeaderList *l = h ? &h->list : NULL;
     const char *name = NULL, *value = NULL;
     size_t name_len = 0, value_len = 0;
     char *norm = NULL;
     JSValue r = JS_UNDEFINED;
 
-    if (!l)
+    if (!h)
         return JS_EXCEPTION;
     if (magic == HDR_GETSETCOOKIE) {
         /* §5.2 getSetCookie(): every `set-cookie` value, each on its own — the one member for which the list's
@@ -304,6 +395,17 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
         JS_FreeCString(ctx, name);
         if (value) JS_FreeCString(ctx, value);
         return JS_EXCEPTION;
+    }
+    /* §5.1's guard decides which of the three WRITES may proceed. A read is not guarded at all: the page can
+       already see every one of these headers, so refusing to answer would hide state rather than protect it. */
+    if (magic == HDR_APPEND || magic == HDR_SET || magic == HDR_DELETE) {
+        int allow = headers_guard_allows(ctx, h->guard, name, norm);
+        if (allow <= 0) {
+            JS_FreeCString(ctx, name);
+            if (value) JS_FreeCString(ctx, value);
+            free(norm);
+            return allow < 0 ? JS_EXCEPTION : JS_UNDEFINED;   /* 0 is the spec's SILENT no-op */
+        }
     }
     switch (magic) {
     case HDR_APPEND: header_list_append(l, name, norm); break;
@@ -684,7 +786,7 @@ void headers_fill_release(JSContext *ctx, HeadersFill *f)
 }
 
 int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst init, HeaderList *out,
-                     JSValue in, JSValue **out_cb, int *out_argc)
+                     HeadersGuard guard, JSValue in, JSValue **out_cb, int *out_argc)
 {
     int r;
 
@@ -780,7 +882,13 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
                 return -1;
             }
             bad = header_check(ctx, kn, kn_len, kv, kv_len, &norm) < 0;
-            if (!bad) header_list_append(out, kn, norm);
+            if (!bad) {
+                /* §5.1 fill appends THROUGH the append algorithm, so the guard applies here too: a Request
+                   built with {headers:{Host:"x"}} silently drops it rather than sending it. */
+                int allow = headers_guard_allows(ctx, guard, kn, norm);
+                if (allow < 0) bad = 1;
+                else if (allow > 0) header_list_append(out, kn, norm);
+            }
             free(norm);
             JS_FreeCString(ctx, kn);
             JS_FreeCString(ctx, kv);
@@ -861,7 +969,7 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
                 const char *kn = JS_ToCStringLen(ctx, &kn_len, f->name);
                 int ok;
                 if (!kn) return -1;
-                ok = header_is_bytestring(kn, kn_len);
+                ok = idl_is_bytestring(kn, kn_len);
                 JS_FreeCString(ctx, kn);
                 if (!ok) {
                     JS_ThrowTypeError(ctx, "a header name is not a ByteString");
@@ -918,7 +1026,15 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
                 JS_FreeCString(ctx, kname); JS_FreeCString(ctx, kval);
                 return -1;   /* §5.1's guard already threw */
             }
-            header_list_append(out, kname, knorm);
+            {
+                int allow = headers_guard_allows(ctx, guard, kname, knorm);
+                if (allow < 0) {
+                    free(knorm);
+                    JS_FreeCString(ctx, kname); JS_FreeCString(ctx, kval);
+                    return -1;
+                }
+                if (allow > 0) header_list_append(out, kname, knorm);
+            }
             free(knorm);
         }
         JS_FreeCString(ctx, kname);
@@ -968,11 +1084,13 @@ static int js_headers_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         s->result = JS_UNDEFINED;
         s->stage = 1;
     }
+    /* §5.1: `new Headers(init)` sets the guard to "none" and then fills — a page's own Headers refuses
+       nothing, which is why the forbidden lists are unobservable until a Request or a Response owns one. */
     r = headers_fill_run(ctx, hdr, &s->fill, argc > 0 ? argv[0] : JS_UNDEFINED, &s->list,
-                         cb_result, out_cb, out_argc);
+                         HEADERS_GUARD_NONE, cb_result, out_cb, out_argc);
     if (r > 0) return r;
     if (r < 0) return -1;
-    *presult = headers_new(ctx, &s->list);
+    *presult = headers_new(ctx, &s->list, HEADERS_GUARD_NONE);
     return JS_IsException(*presult) ? -1 : 0;
 }
 

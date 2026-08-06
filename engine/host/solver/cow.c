@@ -1,6 +1,5 @@
 /* Per-flow swappable COW delta — see cow.h. */
 #include "solver/cow.h"
-#include "solver/engine.h"
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
@@ -725,14 +724,23 @@ static void cow_entries_free(JSContext *ctx, CowEntry *e, int n) {
 void cow_free(JSContext *ctx) { (void)ctx; g_current = NULL; }
 
 /* THE time-travel hook set — see cow.h. Installed AFTER the context's own globals exist, so the baseline is
-   pre-flow and nothing set up before it lands in a delta. */
-void cow_install_time_travel_hooks(void)
+   pre-flow and nothing set up before it lands in a delta.
+   `gen_fork` IS THE CALLER'S, and it is the only one of the nine that is: the other eight are this file's own
+   capture points, while a generator-state fork is stashed by whoever assembles the SIBLING FLOW — the
+   scheduler. Naming that function here made this primitive depend on the dispatch loop, and through it on the
+   whole DOM, so nothing could take the COW delta without taking the browser too. It is a parameter now, which
+   is what it always was. */
+void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork)
 {
-    static const JSTimeTravelHooks HOOKS = {
+    static JSTimeTravelHooks HOOKS = {
         .prop_write = cow_capture_hook, .cell_write = cow_capture_varref,
-        .arr_append = cow_capture_arr_append, .gen_fork = engine_gen_fork,
+        .arr_append = cow_capture_arr_append,
         .map_add = cow_capture_map_add, .map_mutate = cow_capture_map_mutate,
         .async_state = cow_capture_async_state, .module_eval = cow_capture_module_eval,
         .async_fork = cow_capture_async_fork };
+    DCHECK(gen_fork != NULL,
+           "the time-travel hooks were installed with no generator-fork handler — a concolic branch inside a "
+           "generator body would fork a sibling that shares the parent's execution state");
+    HOOKS.gen_fork = gen_fork;
     JS_SetTimeTravelHooks(&HOOKS);
 }

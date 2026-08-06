@@ -28,7 +28,7 @@ const WPT = join(WORK, "wpt");
 const WPT_REV = "bf4714d";
 /* WHAT IS CHECKED OUT. A sparse list rather than the whole 1 GB tree, and it grows as areas are covered — an
    area absent here is honestly untested, which is a different statement from "passes". */
-const WPT_PATHS = ["resources", "fetch/api/headers"];
+const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetch/api/resources"];
 
 if (!existsSync(join(WPT, "resources", "testharness.js"))) {
   console.error("[wpt] corpus missing — provision it with:\n" +
@@ -43,9 +43,14 @@ if (!existsSync(join(WPT, "resources", "testharness.js"))) {
    tested a different interpreter once already. */
 const SRCS = [
   "qjs/quickjs.c", "qjs/libregexp.c", "qjs/libunicode.c", "qjs/dtoa.c",
+  /* THE SOLVER HALF IS LINKED IN, not stubbed out. Response's body-used latch rides the COW delta, which is
+     cow.c, which needs engine.c's fork hook — and a no-op stand-in for that capture would make the gate agree
+     with a Response that does not time-travel. The gate runs the engine this project ships. */
   "host/solver/concolic.c", "host/solver/flow.c", "host/solver/absent.c",
+  "host/solver/cow.c",
   "host/browser/core/idl_args.c",
   "host/browser/core/fetch/headers.c",
+  "host/browser/core/fetch/response.c",
   "host/wpt_runner.c",
 ].map((f) => join(ENGINE, f));
 

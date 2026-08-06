@@ -277,6 +277,46 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 #endif
 }
 
+/* WEB IDL §3.2.10's `ByteString` RANGE, over the UTF-8 the engine hands out. A ByteString's code points are
+   0x00..0xFF and a value outside that is a TypeError — which is the whole of what makes the type different
+   from a DOMString, and what makes `new Response("", {statusText: "\u0100"})` throw. It is here rather than
+   in whichever component noticed it first because it is a TYPE's rule: Headers' fill needs the same answer for
+   a record key it converts outside this machine. */
+bool idl_is_bytestring(const char *utf8, size_t len)
+{
+    const unsigned char *p = (const unsigned char *)utf8, *end = p + len;
+    while (p < end) {
+        unsigned c = *p++;
+        if (c < 0x80) continue;                       /* 0x00..0x7f: one byte, in range */
+        if ((c & 0xe0) == 0xc0) {                     /* two bytes: U+0080..U+07FF */
+            unsigned cp;
+            if (p >= end) return false;
+            cp = ((c & 0x1f) << 6) | (*p & 0x3f);
+            p++;
+            if (cp > 0xff) return false;              /* U+0100 and up is not a byte */
+            continue;
+        }
+        return false;                                 /* three or more bytes: far past 0xff */
+    }
+    return true;
+}
+
+/* The conversion itself: the string is already made, so this is the range test plus the throw. */
+static int idl_bytestring_check(JSContext *ctx, JSValueConst str)
+{
+    size_t len = 0;
+    const char *u = JS_ToCStringLen(ctx, &len, str);
+    int ok;
+    if (!u) return -1;
+    ok = idl_is_bytestring(u, len);
+    JS_FreeCString(ctx, u);
+    if (!ok) {
+        JS_ThrowTypeError(ctx, "a ByteString argument has a code point above U+00FF");
+        return -1;
+    }
+    return 0;
+}
+
 static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSIdlArgsState *s = st;
@@ -430,15 +470,16 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     JS_FreeValue(ctx, s->dict_v);
                     s->dict_v = b;
                 }
-                else if (mt == IDL_LONG) {
+                else if (mt == IDL_LONG || mt == IDL_UNSIGNED_SHORT) {
                     r = step_toint64_run(ctx, &s->hdr, s->dict_v, cb_result, &s->nums[s->i], out_cb, out_argc);
                     cb_result = JS_UNDEFINED;
                     if (r > 0) return r;   /* parked ON THIS MEMBER's conversion; the read does not re-run */
                     if (r < 0) return JS_STEP_ABRUPT;
                     JS_FreeValue(ctx, s->dict_v);
-                    s->dict_v = JS_NewInt64(ctx, s->nums[s->i]);
+                    s->dict_v = JS_NewInt64(ctx, mt == IDL_UNSIGNED_SHORT ? (int64_t)(uint16_t)s->nums[s->i]
+                                                                          : s->nums[s->i]);
                 }
-                else if (mt == IDL_DOMSTRING || mt == IDL_DOMSTRING_NULLABLE) {
+                else if (mt == IDL_DOMSTRING || mt == IDL_DOMSTRING_NULLABLE || mt == IDL_BYTESTRING) {
                     if (mt == IDL_DOMSTRING_NULLABLE && JS_IsNull(s->dict_v)) {
                         /* `DOMString?`: null is the IDL null, never the string "null". */
                     } else {
@@ -449,6 +490,8 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                         if (r < 0) return JS_STEP_ABRUPT;
                         JS_FreeValue(ctx, s->dict_v);
                         s->dict_v = str;
+                        if (mt == IDL_BYTESTRING && idl_bytestring_check(ctx, s->dict_v) < 0)
+                            return JS_STEP_ABRUPT;
                     }
                 }
                 JS_SetPropertyStr(ctx, s->args[s->i], dm->name, s->dict_v);
@@ -463,6 +506,19 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             continue;
         }
 
+
+        /* `BodyInit?`: null and undefined are the IDL null; a BufferSource crosses as itself; anything else
+           is the union's USVString arm. The brand test is the union's own rule, stated once. */
+        if (t == IDL_BODYINIT_NULLABLE) {
+            if (JS_IsNull(a) || JS_IsUndefined(a)) {
+                JS_FreeValue(ctx, cb_result);
+                cb_result = JS_UNDEFINED;
+                *slot = JS_NULL;
+                goto placed;
+            }
+            t = (JS_IsArrayBuffer(a) || JS_GetTypedArrayType(a) >= 0 || JS_IsDataView(a))
+              ? IDL_ANY : IDL_DOMSTRING;
+        }
 
         /* `DOMString?`: null AND undefined become the IDL null before any ToString is reached. */
         if (t == IDL_DOMSTRING_NULLABLE) {
@@ -497,19 +553,25 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             *slot = JS_IsUndefined(a) ? JS_UNDEFINED : JS_NewBool(ctx, JS_ToBool(ctx, a));
             goto placed;
         }
-        if (t == IDL_LONG) {
+        if (t == IDL_LONG || t == IDL_UNSIGNED_SHORT) {
             r = step_toint64_run(ctx, &s->hdr, a, cb_result, &s->nums[s->i], out_cb, out_argc);
             cb_result = JS_UNDEFINED;
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
-            *slot = JS_NewInt64(ctx, s->nums[s->i]);
+            /* §3.2.7's integer conversion for `unsigned short` is MODULO 2^16, not a clamp and not a range
+               error — `new Response("", {status: 65736})` is status 200 in every browser, and a member that
+               range-checked the raw number would have made it a RangeError instead. */
+            *slot = JS_NewInt64(ctx, t == IDL_UNSIGNED_SHORT ? (int64_t)(uint16_t)s->nums[s->i]
+                                                             : s->nums[s->i]);
             goto placed;
         }
-        DCHECK(t == IDL_DOMSTRING, "an IDL argument was declared with a type this machine does not convert");
+        DCHECK(t == IDL_DOMSTRING || t == IDL_BYTESTRING,
+               "an IDL argument was declared with a type this machine does not convert");
         r = step_tostring_run(ctx, &s->hdr, a, cb_result, slot, out_cb, out_argc);
         cb_result = JS_UNDEFINED;
         if (r > 0) return r;          /* parked ON THIS ARGUMENT; the resume comes back to it */
         if (r < 0) return JS_STEP_ABRUPT;
+        if (t == IDL_BYTESTRING && idl_bytestring_check(ctx, *slot) < 0) return JS_STEP_ABRUPT;
     placed:
         if (m->variadic) {
             JS_SetPropertyUint32(ctx, s->conv, (uint32_t)s->i, s->vstage);

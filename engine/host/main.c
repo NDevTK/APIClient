@@ -23,6 +23,7 @@
 #include "quickjs.h"
 #include "browser/core/fetch/fetch.h"
 #include "browser/core/fetch/headers.h"
+#include "browser/core/fetch/response.h"
 #include "browser/core/dom/abort.h"
 #include "browser/core/html/unhandled_rejection.h"
 #include "browser/core/dom/document.h"
@@ -88,7 +89,7 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
 
     /* The two hook SETS the solver owns, each declared by its own component. They were struct literals here
        and again in test_forced.c, and the pair had drifted. */
-    cow_install_time_travel_hooks();
+    cow_install_time_travel_hooks(engine_gen_fork);
     concolic_install_hooks();
 
     g_dom = lxb_html_document_create();
@@ -210,6 +211,7 @@ QJS_EXPORT void qjs_teardown(void)
     event_target_free(g_ctx);
     event_free(g_ctx);
     headers_free(g_ctx);    /* Headers.prototype and the name it interned */
+    response_free(g_ctx);   /* Response.prototype — one object, held for the runtime's life */
     idl_args_free(g_ctx);   /* the dictionary member atoms the declaration pool interned */
     if (g_ctx) { JS_FreeContext(g_ctx); g_ctx = NULL; }
     if (g_rt)  { JS_FreeRuntime(g_rt);  g_rt  = NULL; }

@@ -202,7 +202,10 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         s->stage = 3;
     }
     if (s->stage == 3) {
-        r = headers_fill_run(ctx, &s->hdr, &s->fill, s->hinit, &s->hdrs, cb_result, out_cb, out_argc);
+        /* §5.1: a request's header list has guard "request" — the names the browser owns (Host, Cookie,
+           Origin, the method-override family carrying CONNECT/TRACE/TRACK) are dropped rather than sent. */
+        r = headers_fill_run(ctx, &s->hdr, &s->fill, s->hinit, &s->hdrs, HEADERS_GUARD_REQUEST,
+                             cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
@@ -256,6 +259,7 @@ void fetch_install(JSContext *ctx, JSValueConst global)
         g_fetch_stepid = JS_RegisterStepDef(rt, &js_fetch_def);
     }
     headers_install(ctx, global);   /* §5's interface object — a page builds an init with it before it fetches */
+    response_install(ctx, global);  /* §6's — a page constructs one to seed a cache or a service-worker path */
     JS_SetPropertyStr(ctx, (JSValue)global, "fetch",
                       JS_NewCFunction2(ctx, NULL, "fetch", 1, JS_CFUNC_step, g_fetch_stepid));
 }

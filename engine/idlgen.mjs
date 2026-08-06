@@ -153,7 +153,10 @@ function members(name) {
   const out = [], seen = new Set();
   const add = (n) => { if (n && !seen.has(n)) { seen.add(n); out.push(n); } };
   for (const m of flatten(name)) {
-    if (m.special === "static") continue;
+    /* STATIC MEMBERS COUNT. They were skipped, and the audit therefore called Response's member list complete
+       while `redirect` and `json` — two of its five operations — did not exist. A static lives on the
+       interface OBJECT rather than the prototype, which changes where a component installs it and nothing
+       about whether it is missing; the installed-name scan is by property name and reads both alike. */
     if (m.type === "attribute") add(m.name);
     else if (m.type === "operation") add(m.name);
   }
