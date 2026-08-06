@@ -22,6 +22,10 @@ typedef enum {
        is a TypeError. That range IS the type — `new Response("", {statusText: "\u0100"})` throws — and it is
        stated here so no body has to remember it. */
     IDL_BYTESTRING,
+    /* `USVString`. ToString and then §3.2.11's SCALAR VALUE conversion: every unpaired surrogate becomes
+       U+FFFD. That replacement is the whole of what makes the type different from a DOMString, and every
+       member of the URL surface takes one. */
+    IDL_USVSTRING,
     /* `DOMString?`. Web IDL converts null AND undefined to the IDL value null before ToString is ever reached,
        so the body receives JS_NULL and never the string "null". textContent is the member that makes this
        load-bearing: `el.textContent = null` is "replace all with null", which removes the children and adds NO

@@ -494,7 +494,8 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     s->dict_v = JS_NewInt64(ctx, mt == IDL_UNSIGNED_SHORT ? (int64_t)(uint16_t)s->nums[s->i]
                                                                           : s->nums[s->i]);
                 }
-                else if (mt == IDL_DOMSTRING || mt == IDL_DOMSTRING_NULLABLE || mt == IDL_BYTESTRING) {
+                else if (mt == IDL_DOMSTRING || mt == IDL_DOMSTRING_NULLABLE || mt == IDL_BYTESTRING ||
+                         mt == IDL_USVSTRING) {
                     if (mt == IDL_DOMSTRING_NULLABLE && JS_IsNull(s->dict_v)) {
                         /* `DOMString?`: null is the IDL null, never the string "null". */
                     } else {
@@ -507,6 +508,10 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                         s->dict_v = str;
                         if (mt == IDL_BYTESTRING && idl_bytestring_check(ctx, s->dict_v) < 0)
                             return JS_STEP_ABRUPT;
+                        if (mt == IDL_USVSTRING) {
+                            s->dict_v = JS_ToScalarValueString(ctx, s->dict_v);
+                            if (JS_IsException(s->dict_v)) return JS_STEP_ABRUPT;
+                        }
                     }
                 }
                 JS_SetPropertyStr(ctx, s->args[s->i], dm->name, s->dict_v);
@@ -580,13 +585,17 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                                                              : s->nums[s->i]);
             goto placed;
         }
-        DCHECK(t == IDL_DOMSTRING || t == IDL_BYTESTRING,
+        DCHECK(t == IDL_DOMSTRING || t == IDL_BYTESTRING || t == IDL_USVSTRING,
                "an IDL argument was declared with a type this machine does not convert");
         r = step_tostring_run(ctx, &s->hdr, a, cb_result, slot, out_cb, out_argc);
         cb_result = JS_UNDEFINED;
         if (r > 0) return r;          /* parked ON THIS ARGUMENT; the resume comes back to it */
         if (r < 0) return JS_STEP_ABRUPT;
         if (t == IDL_BYTESTRING && idl_bytestring_check(ctx, *slot) < 0) return JS_STEP_ABRUPT;
+        if (t == IDL_USVSTRING) {
+            *slot = JS_ToScalarValueString(ctx, *slot);
+            if (JS_IsException(*slot)) return JS_STEP_ABRUPT;
+        }
     placed:
         if (m->variadic) {
             JS_SetPropertyUint32(ctx, s->conv, (uint32_t)s->i, s->vstage);

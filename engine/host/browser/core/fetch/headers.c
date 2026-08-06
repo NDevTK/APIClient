@@ -753,7 +753,22 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
                     JS_FreeCString(ctx, kname); JS_FreeCString(ctx, kval);
                     return -1;
                 }
-                if (allow > 0) header_list_append(out, kname, knorm);
+                /* §3.2.21's MAP semantics: a record's keys are converted BEFORE they are stored, so two ES
+                   keys that convert to the same ByteString are ONE entry — the first's position, the last's
+                   value. The fill sees an already-deduped record, so at most one entry can match. */
+                if (allow > 0) {
+                    char *lo = header_lower(kname);
+                    int i, replaced = 0;
+                    for (i = 0; i < out->n; i++) {
+                        if (strcmp(out->e[i].name, lo)) continue;
+                        free(out->e[i].value);
+                        out->e[i].value = header_dup(knorm);
+                        replaced = 1;
+                        break;
+                    }
+                    free(lo);
+                    if (!replaced) header_list_append(out, kname, knorm);
+                }
             }
             free(knorm);
         }

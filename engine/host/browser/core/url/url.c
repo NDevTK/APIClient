@@ -1531,7 +1531,7 @@ void url_init(JSContext *ctx)
 {
     JSClassDef def = { "URL", .finalizer = url_finalizer, .gc_mark = url_gc_mark };
     JSRuntime *rt = JS_GetRuntime(ctx);
-    static const IdlArgType CTOR_ARGS[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
+    static const IdlArgType CTOR_ARGS[2] = { IDL_USVSTRING, IDL_USVSTRING };
 
     DCHECK(g_url_rt == NULL || g_url_rt == rt,
            "URL was installed into a second runtime — its class id and step id belong to the first, and one "
