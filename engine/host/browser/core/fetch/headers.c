@@ -221,6 +221,220 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
     return r;
 }
 
+/* ---- iteration: §5.2's `iterable<ByteString, ByteString>` ------------------------------------------------ */
+
+/* §5.2 "sort and combine": iteration does NOT walk the raw list. It yields each name ONCE, lowercased and in
+   byte order, with that name's values joined by ", " — so `for (const [k, v] of h)` over an append-append pair
+   sees one entry, not two. `Set-Cookie` is the exception the spec spells out: each of its values is yielded on
+   its own, which is the same reason the list keeps pairs at all.
+   Computed per call rather than cached, because the list is live: a callback that appends during forEach must
+   be seen by the steps after it, which is what the spec's "value pairs to iterate over" means. */
+static void header_sort_and_combine(const HeaderList *l, HeaderList *out)
+{
+    int i, j;
+    for (i = 0; i < l->n; i++) {
+        const char *name = l->e[i].name;
+        int seen = 0, first = 1;
+        char *joined = NULL;
+        size_t total = 0;
+        for (j = 0; j < i; j++) if (!strcmp(l->e[j].name, name)) { seen = 1; break; }
+        if (seen) continue;
+        if (!strcmp(name, "set-cookie")) {            /* each value on its own, per §5.2 */
+            for (j = 0; j < l->n; j++)
+                if (!strcmp(l->e[j].name, name)) header_list_append(out, name, l->e[j].value);
+            continue;
+        }
+        for (j = 0; j < l->n; j++)
+            if (!strcmp(l->e[j].name, name)) total += strlen(l->e[j].value) + 2;
+        joined = malloc(total + 1);
+        CHECK(joined, "headers: OOM combining a header's values for iteration");
+        joined[0] = 0;
+        for (j = 0; j < l->n; j++) {
+            if (strcmp(l->e[j].name, name)) continue;
+            if (!first) strcat(joined, ", ");
+            strcat(joined, l->e[j].value);
+            first = 0;
+        }
+        header_list_append(out, name, joined);
+        free(joined);
+    }
+    /* byte order over the names, which is what "sort" means for a header list */
+    for (i = 1; i < out->n; i++) {
+        HeaderEntry tmp = out->e[i];
+        for (j = i - 1; j >= 0 && strcmp(out->e[j].name, tmp.name) > 0; j--)
+            out->e[j + 1] = out->e[j];
+        out->e[j + 1] = tmp;
+    }
+}
+
+enum { ITER_KEYS = 0, ITER_VALUES, ITER_ENTRIES };
+
+/* The default iterator object Web IDL §3.7.10 defines: it holds the TARGET and an INDEX, not a snapshot, so a
+   list mutated between steps is seen. */
+typedef struct { JSValue target; int index; int kind; } HeadersIter;
+static JSClassID g_iter_class;
+static JSValue   g_iter_proto = JS_UNDEFINED;
+
+static void headers_iter_finalizer(JSRuntime *rt, JSValue val)
+{
+    HeadersIter *it = JS_GetOpaque(val, g_iter_class);
+    if (it) { JS_FreeValueRT(rt, it->target); js_free_rt(rt, it); }
+}
+
+static JSValue headers_iter_new(JSContext *ctx, JSValueConst target, int kind)
+{
+    HeadersIter *it;
+    JSValue obj = JS_NewObjectProtoClass(ctx, g_iter_proto, g_iter_class);
+    if (JS_IsException(obj))
+        return obj;
+    it = js_mallocz(ctx, sizeof(*it));
+    if (!it) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
+    it->target = JS_DupValue(ctx, target);
+    it->kind = kind;
+    JS_SetOpaque(obj, it);
+    return obj;
+}
+
+static JSValue js_headers_iter_next(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    HeadersIter *it = JS_GetOpaque(this_val, g_iter_class);
+    HeaderList combined = { 0 };
+    const HeaderList *src;
+    JSValue res, val;
+
+    (void)argc; (void)argv;
+    if (!it)
+        return JS_ThrowTypeError(ctx, "not a Headers iterator");
+    src = headers_list_of(it->target);
+    DCHECK(src != NULL, "a Headers iterator outlived the Headers it holds a reference to");
+    header_sort_and_combine(src, &combined);
+    res = JS_NewObject(ctx);
+    if (JS_IsException(res)) { header_list_free(&combined); return res; }
+    if (it->index >= combined.n) {
+        header_list_free(&combined);
+        JS_SetPropertyStr(ctx, res, "value", JS_UNDEFINED);
+        JS_SetPropertyStr(ctx, res, "done", JS_NewBool(ctx, true));
+        return res;
+    }
+    if (it->kind == ITER_KEYS) {
+        val = JS_NewString(ctx, combined.e[it->index].name);
+    } else if (it->kind == ITER_VALUES) {
+        val = JS_NewString(ctx, combined.e[it->index].value);
+    } else {
+        val = JS_NewArray(ctx);
+        if (!JS_IsException(val)) {
+            JS_SetPropertyUint32(ctx, val, 0, JS_NewString(ctx, combined.e[it->index].name));
+            JS_SetPropertyUint32(ctx, val, 1, JS_NewString(ctx, combined.e[it->index].value));
+        }
+    }
+    it->index++;
+    header_list_free(&combined);
+    JS_SetPropertyStr(ctx, res, "value", val);
+    JS_SetPropertyStr(ctx, res, "done", JS_NewBool(ctx, false));
+    return res;
+}
+
+static JSValue js_headers_iter_self(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)ctx; (void)argc; (void)argv;
+    return JS_DupValue(ctx, this_val);
+}
+
+static JSValue js_headers_iter_make(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                    int magic)
+{
+    (void)argc; (void)argv;
+    if (!headers_list_of(this_val))
+        return JS_ThrowTypeError(ctx, "not a Headers");
+    return headers_iter_new(ctx, this_val, magic);
+}
+
+/* §3.7.10 forEach(callback, thisArg): the callback is the PAGE'S CODE, called once per pair with
+   (value, key, this) — so this is a step machine with a call request, exactly like an event dispatch. Running
+   it from a C loop is the drive-to-completion the engine aborts on. The list is re-combined at each step, so a
+   callback that appends is seen by the steps after it. */
+typedef struct {
+    JSStepHdr hdr;
+    uint8_t   cphase;   /* the call request's own phase */
+    int       i;        /* THE RESUME POINT: the pair being handed to the callback */
+    /* 2 + argc, which the call request states and which is NOT the argument count: [this, callback] and then
+       the three the spec passes (value, key, headers). Sized at 4 it wrote one slot past the end of the state
+       on every entry — a buffer overflow whose visible symptom was the machine reading its own callback
+       argument back as undefined. */
+    JSValue   cb[5];
+} JSHeadersForEachState;
+
+#define FOREACH_CB_SLOTS 5
+
+static void js_headers_foreach_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSHeadersForEachState *s = st;
+    int k;
+    for (k = 0; k < FOREACH_CB_SLOTS; k++)
+        v->val(ctx, &s->cb[k]);
+}
+
+static JSValue js_headers_foreach_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSHeadersForEachState *s = st;
+    int k;
+    (void)take_result;
+    for (k = 0; k < FOREACH_CB_SLOTS; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
+    return JS_UNDEFINED;   /* forEach returns undefined */
+}
+
+static int js_headers_foreach_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSHeadersForEachState *s = st;
+    const HeaderList *src = headers_list_of(s->hdr.this_val);
+    JSValueConst fn = step_arg(&s->hdr, 0), this_arg = step_arg(&s->hdr, 1);
+    HeaderList combined = { 0 };
+    JSValue ignored;
+    int r, k;
+
+    if (s->cphase == 0 && s->i == 0)
+        for (k = 0; k < FOREACH_CB_SLOTS; k++) s->cb[k] = JS_UNDEFINED;   /* a zeroed state reads as INTEGER 0 */
+    if (!src) {
+        JS_FreeValue(ctx, cb_result);
+        JS_ThrowTypeError(ctx, "not a Headers");
+        return JS_STEP_ABRUPT;
+    }
+    if (!JS_IsFunction(ctx, fn)) {
+        JS_FreeValue(ctx, cb_result);
+        JS_ThrowTypeError(ctx, "Headers.forEach requires a callback");
+        return JS_STEP_ABRUPT;
+    }
+    for (;;) {
+        JSValueConst args[3];
+        header_sort_and_combine(src, &combined);
+        if (s->i >= combined.n) { header_list_free(&combined); JS_FreeValue(ctx, cb_result); return JS_STEP_DONE; }
+        if (s->cphase == 0) {
+            /* the operands are built fresh each entry; step_call_run dups them into its own buffer */
+            JSValue v = JS_NewString(ctx, combined.e[s->i].value);
+            JSValue k = JS_NewString(ctx, combined.e[s->i].name);
+            args[0] = v; args[1] = k; args[2] = s->hdr.this_val;
+            r = step_call_run(ctx, &s->cphase, s->cb, fn, this_arg, 3, args, cb_result, &ignored,
+                              out_cb, out_argc);
+            JS_FreeValue(ctx, v);
+            JS_FreeValue(ctx, k);
+        } else {
+            r = step_call_run(ctx, &s->cphase, s->cb, fn, this_arg, 3, NULL, cb_result, &ignored,
+                              out_cb, out_argc);
+        }
+        header_list_free(&combined);
+        cb_result = JS_UNDEFINED;
+        if (r > 0) return r;          /* parked ON THIS ENTRY; the resume comes back to it */
+        JS_FreeValue(ctx, ignored);   /* the callback's return value is discarded */
+        s->i++;
+    }
+}
+
+static const JSTrampStepDef js_headers_foreach_def = {
+    sizeof(JSHeadersForEachState), js_headers_foreach_step, js_headers_foreach_fini, 0,
+    .visit = js_headers_foreach_visit
+};
+static int g_foreach_stepid = -1;
+
 /* ---- the fill (HeadersInit -> a header list) ------------------------------------------------------------ */
 
 enum { FILL_START = 0, FILL_ITER_ASKED, FILL_KEYS_ASKED, FILL_VALUE_ASKED, FILL_NAME_STR, FILL_VALUE_STR };
@@ -467,6 +681,42 @@ void headers_init(JSContext *ctx)
     idl_install_method(ctx, g_proto, "getSetCookie", 0,
                        idl_method_id(ctx, TWO_STR, 0, js_headers_member, HDR_GETSETCOOKIE));
     g_ctor_stepid = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &js_headers_ctor_decl, 0);
+
+    /* §5.2's `iterable<ByteString, ByteString>`. The three getters take no arguments and run none of the page's
+       code, so they are ordinary members; forEach CALLS the page and is a machine. */
+    {
+        JSClassDef idef = { "Headers Iterator", .finalizer = headers_iter_finalizer };
+        static const JSCFunctionListEntry iter_proto[] = {
+            JS_CFUNC_DEF("next", 0, js_headers_iter_next),
+        };
+        JS_NewClassID(rt, &g_iter_class);
+        JS_NewClass(rt, g_iter_class, &idef);
+        g_iter_proto = JS_NewObject(ctx);
+        CHECK(!JS_IsException(g_iter_proto), "the Headers iterator prototype could not be allocated");
+        JS_SetPropertyFunctionList(ctx, g_iter_proto, iter_proto,
+                                   (int)(sizeof(iter_proto) / sizeof(iter_proto[0])));
+        /* §3.7.10: an iterator object IS iterable, returning itself — which is what lets `for (const e of
+           h.entries())` work as well as `for (const e of h)`. */
+        JS_SetProperty(ctx, g_iter_proto, JS_DupAtom(ctx, JS_WellKnownSymbolAtom(JS_WKS_ITERATOR)),
+                       JS_NewCFunction(ctx, js_headers_iter_self, "[Symbol.iterator]", 0));
+    }
+    {
+        static const IdlArgType NONE[1] = { IDL_ANY };
+        idl_install_method(ctx, g_proto, "keys", 0,
+                           idl_method_id(ctx, NONE, 0, js_headers_iter_make, ITER_KEYS));
+        idl_install_method(ctx, g_proto, "values", 0,
+                           idl_method_id(ctx, NONE, 0, js_headers_iter_make, ITER_VALUES));
+        idl_install_method(ctx, g_proto, "entries", 0,
+                           idl_method_id(ctx, NONE, 0, js_headers_iter_make, ITER_ENTRIES));
+    }
+    g_foreach_stepid = JS_RegisterStepDef(rt, &js_headers_foreach_def);
+    idl_install_step_method(ctx, g_proto, "forEach", 1, g_foreach_stepid);
+    /* §3.7.10: @@iterator on the interface itself IS `entries` — the same function object, so
+       `h[Symbol.iterator] === h.entries` the way the spec states it. */
+    {
+        JSValue entries = JS_GetPropertyStr(ctx, g_proto, "entries");
+        JS_SetProperty(ctx, g_proto, JS_DupAtom(ctx, JS_WellKnownSymbolAtom(JS_WKS_ITERATOR)), entries);
+    }
 }
 
 /* The prototype and the interned name are this component's for the runtime's life, so they are released WITH
@@ -477,7 +727,8 @@ void headers_free(JSContext *ctx)
     if (!g_headers_rt)
         return;
     JS_FreeValue(ctx, g_proto);
-    g_proto = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_iter_proto);
+    g_proto = g_iter_proto = JS_UNDEFINED;
     JS_FreeAtom(ctx, g_atom_length);
     g_atom_length = JS_ATOM_NULL;
     g_headers_rt = NULL;

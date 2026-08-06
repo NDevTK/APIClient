@@ -1035,6 +1035,18 @@ static const char *HTML =
       " var p = new Proxy({'X-Trap': 'tv'}, { get: function(t, k){ seen = 'trapped'; return t[k]; } });"
       " var h2 = new Headers(p);"
       " fetch('/api/hdrproxy?v=' + h2.get('x-trap') + '&t=' + seen); })();"
+    /* §5.2's iterable<>. Iteration is NOT the raw list: it SORTS by name and COMBINES each name's values, so
+       two `x-a` appends are ONE entry — while `set-cookie` stays one entry per value, which is the whole reason
+       the list keeps pairs. forEach hands the page (value, key) in that order, and its callback is the page's
+       code driven as a request. `for...of` over the Headers itself is `entries`, per §3.7.10. */
+    "(function(){ var h = new Headers({'x-b': '2'});"
+      " h.append('x-a', '1'); h.append('x-a', '9');"
+      " h.append('Set-Cookie', 'c1'); h.append('Set-Cookie', 'c2');"
+      " var ks = Array.from(h.keys()).join('|');"
+      " var vs = Array.from(h.values()).join('|');"
+      " var es = ''; for (var e of h) { es += e[0] + '=' + e[1] + ';'; }"
+      " var fe = ''; h.forEach(function(v, k, t){ fe += k + ':' + v + ';'; if (t !== h) fe += 'BADTHIS'; });"
+      " fetch('/api/hdriter?k=' + ks + '&v=' + vs + '&e=' + es + '&f=' + fe); })();"
     /* THE TRANSPORT REQUIREMENT REACHES THE SURFACE. `init.headers` is read and converted, and the endpoint
        carries what the request needs — which is the half of "usable" the @H surface never had. The
        Authorization value is built out of `state`, so it is a CONCOLIC and reports its SHAPE: the `{hole}` is
@@ -1307,6 +1319,14 @@ int main(void) {
     /* The record arm through a PROXY: its ownKeys and its get ran as the page's code (seen == 'trapped') and
        the header still arrived. */
     int hdrproxy = (strstr(js, "\"/api/hdrproxy\"") && strstr(js, "\"tv\"") && strstr(js, "trapped"));
+    /* §5.2's iterable<>: sorted names, values combined per name, set-cookie NOT combined, and forEach handing
+       (value, key, headers) in that order. `for...of` over the Headers is entries, so e and f agree. */
+    int hdriter = (strstr(js, "\"/api/hdriter\"") &&
+                   strstr(js, "set-cookie|set-cookie|x-a|x-b") &&
+                   strstr(js, "c1|c2|1, 9|2") &&
+                   strstr(js, "set-cookie=c1;set-cookie=c2;x-a=1, 9;x-b=2;") &&
+                   strstr(js, "set-cookie:c1;set-cookie:c2;x-a:1, 9;x-b:2;") &&
+                   !strstr(js, "BADTHIS"));
     /* THE ENDPOINT CARRIES ITS HEADERS: the two literals as the strings the code computed, and the
        Authorization as a SHAPE, because a value built out of unknown input is not one this engine may invent.
        The method comes from the same init, so a POST recorded as a GET would fail here too. */
@@ -1570,6 +1590,7 @@ int main(void) {
         { "clone-body", clone_body, 0 },   { "body-bytes", body_bytes, 0 },
         { "body-iso", body_iso, 0 },       { "hdrs", hdrs, 0 },
         { "hdr-proxy", hdrproxy, 0 },      { "needs-auth", needsauth, 0 },
+        { "hdr-iter", hdriter, 0 },
         { "pending", pending_await, 0 },   { "promise-state", promise_state, 0 },
         { "delete-iso", delete_iso, 0 },   { "floc-iso", floc_iso, 0 },
         { "ua", uafork_tt, 0 },            { "touch", touchfork_tt, 0 },
