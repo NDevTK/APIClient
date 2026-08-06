@@ -26,6 +26,9 @@
  * than guessed — but it is not modelled, and this file does not pretend otherwise.
  */
 import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const paths = process.argv.slice(2).filter(a => a.endsWith('.ll'))
 if (!paths.length) {
@@ -39,7 +42,17 @@ const ir = paths.map(p => readFileSync(p, 'utf8')).join('\n')
    linked. A mismatch here means the module is a FRACTION of the program, and a ceiling met over a fraction is
    not a result. Probing the linked module for witness function names instead was guesswork that reported units
    uncovered when they were present. */
-const EXPECTED_UNITS = 15
+/* ASKED, NOT WRITTEN DOWN. This was the literal 15, which is the same second copy of the program's unit list
+   that the driver script kept — and the driver's copy had drifted to a third of the program while this number
+   agreed with it, so the two wrong halves confirmed each other and the report read as complete. The count comes
+   from the file that defines what the program IS, so a source added anywhere raises the bar by itself. */
+const ENGINE_DIR = dirname(fileURLToPath(import.meta.url))
+const listed = spawnSync(process.execPath, [join(ENGINE_DIR, 'build.mjs'), '--list-sources'], { encoding: 'utf8' })
+if (listed.status !== 0) {
+  console.error('check_recursion: engine/build.mjs --list-sources failed — the unit list IS the program')
+  process.exit(2)
+}
+const EXPECTED_UNITS = listed.stdout.split('\n').filter(l => l.trim().endsWith('.c')).length
 const uIdx = process.argv.indexOf('--units')
 const linkedUnits = uIdx > 0 ? Number(process.argv[uIdx + 1]) : -1
 

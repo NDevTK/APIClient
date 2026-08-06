@@ -16,11 +16,16 @@ case "${1:-}" in
 esac
 mkdir -p "$OUT"
 
-UNITS="$Q/quickjs.c $Q/libregexp.c $Q/libunicode.c $Q/dtoa.c
-$H/solver/cow.c $H/solver/engine.c $H/solver/flow.c $H/solver/decide.c
-$H/solver/concolic.c $H/solver/endpoint.c $H/solver/solve.c
-$H/solver/dom_cow.c $H/solver/attr_shadow.c
-$H/browser/core/loader/document_scripts.c $H/test_forced.c"
+# THE UNIT LIST IS ASKED FOR, NOT COPIED. This was a hand-written list that said it mirrored engine/build.mjs
+# and had drifted to FIFTEEN of the program's forty-four: every browser component — the DOM tree walks, the HTML
+# serialiser, custom elements, fetch, Headers — was outside the check, so a clean report was a report about
+# quickjs and the solver and nothing else. That is exactly the failure this file's own header warns about, in
+# this file, about this list. There is one list now and it lives where the program is defined.
+UNITS=$(node "$ROOT/engine/build.mjs" --list-sources)
+if [ -z "$UNITS" ]; then
+  echo "check_recursion: engine/build.mjs --list-sources answered nothing — the unit list is the program" >&2
+  exit 1
+fi
 
 # WHERE LEXBOR IS, asked of the tree rather than written down twice. This path was hardcoded to a location the
 # build stopped using, so every compile failed on a missing header and the audit had been UNRUNNABLE — which is

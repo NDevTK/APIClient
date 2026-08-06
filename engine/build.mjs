@@ -20,17 +20,21 @@ const HOST = join(ENGINE, "host");
 const OUT = join(HOST, "out");
 const EXT_QJS = join(ENGINE, "..", "extension", "lib", "qjs");   // where bridge.js imports the engine from
 
+/* `--list-sources` answers WHAT THE PROGRAM IS and exits, before the gates run — one of those gates shells back
+   into this file to ask, and a list with three lines of gate output in front of it is not a list. */
+const LIST_SOURCES = process.argv.includes("--list-sources");
+
 /* The recognizer ratchet runs BEFORE anything is compiled (CLAUDE.md §C-stack). The ban was written down and then
    violated four times in one session with the rule already in the file — so it is BUILT, not written. A detector
    added back under any name fails the build here rather than needing to be caught in review. */
-{
+if (!LIST_SOURCES) {
   const r = spawnSync(process.execPath, [join(ENGINE, "check_recognizers.mjs")], { stdio: "inherit" });
   if (r.status !== 0) process.exit(r.status ?? 1);
 }
 /* The step-machine ownership declarations are paired with their state structs by editing pattern, in batches.
    That pairing is a type error C cannot see — a visit attached to the wrong struct compiles and passes the
    fixture — so it is asserted before anything is compiled, for the reason the ratchet above is. */
-{
+if (!LIST_SOURCES) {
   const r = spawnSync(process.execPath, [join(ENGINE, "check_step_visits.mjs")], { stdio: "inherit" });
   if (r.status !== 0) process.exit(r.status ?? 1);
 }
@@ -38,7 +42,7 @@ const EXT_QJS = join(ENGINE, "..", "extension", "lib", "qjs");   // where bridge
    nothing poisoned anything — the claim was what people read instead of looking, and two real bypasses were
    sitting in element.c the first time this ran. A write that misses the chokepoint is invisible to the per-flow
    delta, so a forked arm reads its sibling's write and the unapply cannot put the baseline back. */
-{
+if (!LIST_SOURCES) {
   const r = spawnSync(process.execPath, [join(ENGINE, "check_dom_chokepoint.mjs")], { stdio: "inherit" });
   if (r.status !== 0) process.exit(r.status ?? 1);
 }
@@ -159,6 +163,17 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     // main() and runs on load, which a bridge-loaded module must not do.
     join(HOST, ABI ? "main.c" : "test_forced.c"),
   ]);
+
+/* WHAT THE PROGRAM IS, asked rather than copied. check_recursion.sh needs exactly this list — its header says
+   "the unit list mirrors engine/build.mjs" — and it was a second copy that had drifted to a THIRD of it: every
+   browser component (the DOM tree walks, the HTML serialiser, custom elements, fetch, Headers) was outside the
+   check entirely, so its zero was a zero about quickjs and the solver and nothing else. A checker that covers a
+   fraction is worse than none, which is what that script's own header warns; the fix is that there is one list
+   and the checker reads it. */
+if (LIST_SOURCES) {
+  console.log(sources.join("\n"));
+  process.exit(0);
+}
 
 // The exports the bridge ccalls. Emscripten drops anything not named here, so a function missing from this
 // list is a runtime "no such symbol" in the extension rather than a link error — the list IS the ABI.
