@@ -48,6 +48,27 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
     f->pending[f->npend].resolve = JS_DupValue(ctx, resolve);
     f->pending[f->npend].value = JS_DupValue(ctx, value);
     f->pending[f->npend].url = url ? strdup(url) : NULL;
+    /* THE REST OF THE REQUEST, recorded rather than dropped between the seam and the trusted zone. */
+    f->pending[f->npend].method = (req && req->method) ? strdup(req->method) : NULL;
+    if (req && req->headers && req->headers->n > 0) {
+        int hi;
+        f->pending[f->npend].hdrs = calloc((size_t)req->headers->n, sizeof(FlowHeader));
+        CHECK(f->pending[f->npend].hdrs, "engine: OOM recording a pending request's headers");
+        for (hi = 0; hi < req->headers->n; hi++) {
+            f->pending[f->npend].hdrs[hi].name = strdup(req->headers->e[hi].name);
+            f->pending[f->npend].hdrs[hi].value = strdup(req->headers->e[hi].value);
+            CHECK(f->pending[f->npend].hdrs[hi].name && f->pending[f->npend].hdrs[hi].value,
+                  "engine: OOM recording a pending request's header");
+        }
+        f->pending[f->npend].nhdr = req->headers->n;
+    }
+    if (req && req->body) {
+        f->pending[f->npend].body = malloc(req->body_len + 1);
+        CHECK(f->pending[f->npend].body, "engine: OOM recording a pending request's body");
+        memcpy(f->pending[f->npend].body, req->body, req->body_len);
+        f->pending[f->npend].body[req->body_len] = 0;
+        f->pending[f->npend].body_len = req->body_len;
+    }
     f->pending[f->npend].have_value = (url == NULL);
     f->pending[f->npend].kind = FLOW_PENDING_RESOLVE;
     f->pending[f->npend].script_i = -1;
@@ -181,6 +202,19 @@ static int flow_pending_ready(const Flow *f) {
     return 0;
 }
 
+/* RELEASE ONE ENTRY. Both places that free one call this, so a field added to the record has ONE line to gain
+   rather than two to be forgotten at. */
+static void flow_pending_release(JSContext *ctx, FlowPending *p) {
+    int hi;
+    JS_FreeValue(ctx, p->resolve);
+    JS_FreeValue(ctx, p->value);
+    free(p->url);
+    free(p->method);
+    free(p->body);
+    for (hi = 0; hi < p->nhdr; hi++) { free(p->hdrs[hi].name); free(p->hdrs[hi].value); }
+    free(p->hdrs);
+}
+
 static int flow_drain_pending(JSContext *ctx, Flow *f) {
     int n = 0, keep = 0;
     for (int i = 0; i < f->npend; i++) {
@@ -219,9 +253,7 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
             }
             JS_FreeValue(ctx, reply);
         }
-        JS_FreeValue(ctx, p->resolve);
-        JS_FreeValue(ctx, p->value);
-        free(p->url);
+        flow_pending_release(ctx, p);
         n++;
     }
     f->npend = keep;
@@ -313,12 +345,36 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
         CHECK(sib->pending, "engine: OOM inheriting the pending replies at a fork");
         for (int i = 0; i < parent->npend; i++) {
             FlowPending *sp = &parent->pending[i], *dp = &sib->pending[i];
+            int hi;
+            /* THE WHOLE STRUCT FIRST. Copying field by field into a malloc'd slot left every field this list
+               forgot as uninitialised memory — `script_i` was already one, so a forked flow's document-script
+               entry indexed the shared body table with garbage. What follows re-owns the POINTERS, which is
+               the only part a copy cannot do. */
+            *dp = *sp;
             dp->resolve = JS_DupValue(ctx, sp->resolve);
             dp->value = JS_DupValue(ctx, sp->value);
             dp->url = sp->url ? strdup(sp->url) : NULL;
             CHECK(!sp->url || dp->url, "engine: OOM inheriting a pending URL at a fork");
-            dp->have_value = sp->have_value;
-            dp->kind = sp->kind;
+            dp->method = sp->method ? strdup(sp->method) : NULL;
+            CHECK(!sp->method || dp->method, "engine: OOM inheriting a pending method at a fork");
+            dp->body = NULL;
+            if (sp->body) {
+                dp->body = malloc(sp->body_len + 1);
+                CHECK(dp->body, "engine: OOM inheriting a pending body at a fork");
+                memcpy(dp->body, sp->body, sp->body_len);
+                dp->body[sp->body_len] = 0;
+            }
+            dp->hdrs = NULL;
+            if (sp->nhdr > 0) {
+                dp->hdrs = calloc((size_t)sp->nhdr, sizeof(FlowHeader));
+                CHECK(dp->hdrs, "engine: OOM inheriting pending headers at a fork");
+                for (hi = 0; hi < sp->nhdr; hi++) {
+                    dp->hdrs[hi].name = strdup(sp->hdrs[hi].name);
+                    dp->hdrs[hi].value = strdup(sp->hdrs[hi].value);
+                    CHECK(dp->hdrs[hi].name && dp->hdrs[hi].value,
+                          "engine: OOM inheriting a pending header at a fork");
+                }
+            }
         }
         sib->npend = sib->pendcap = parent->npend;
     }
@@ -633,7 +689,7 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
     for (int i = 0; i < f->njob; i++) { for (int k = 0; k < f->jobs[i].argc; k++) JS_FreeValue(ctx, f->jobs[i].argv[k]); free(f->jobs[i].argv); }
     free(f->jobs); f->jobs = NULL; f->njob = f->jobcap = 0;
     /* FETCH-AWAIT: flow_step drains pending before finishing, but free any residual (resolve capabilities + values). */
-    for (int i = 0; i < f->npend; i++) { JS_FreeValue(ctx, f->pending[i].resolve); JS_FreeValue(ctx, f->pending[i].value); free(f->pending[i].url); }
+    for (int i = 0; i < f->npend; i++) flow_pending_release(ctx, &f->pending[i]);
     free(f->pending); f->pending = NULL; f->npend = f->pendcap = 0;
     flow_set_running(NULL);
     flow_remove(ctx, f);

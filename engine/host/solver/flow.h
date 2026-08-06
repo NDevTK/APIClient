@@ -32,11 +32,23 @@ typedef struct { JSJobFunc *fn; int argc; JSValue *argv; } FlowJob;
 #define FLOW_PENDING_RESOLVE 0   /* fetch(): call `resolve` with the reply */
 #define FLOW_PENDING_SCRIPT  1   /* injected <script src>: queue the reply as this flow's next program */
 #define FLOW_PENDING_DOCSCRIPT 2 /* the document's OWN <script src>: the reply fills script slot `script_i` */
-/* A REQUEST THIS FLOW IS OWED AN ANSWER TO. It records WHERE only; the seam now hands this host the method,
-   headers and body too, and recording them is the next step here — safeFetch decides SOP, CORS, method and
-   credentials, and cannot decide about a method it was never told. Widening it is blocked on a crash in the
-   drain's free path that is isolated but not yet explained; see the commit that zeroed these slots. */
-typedef struct { JSValue resolve; JSValue value; char *url; int have_value; int kind; int script_i; } FlowPending;
+/* A REQUEST THIS FLOW IS OWED AN ANSWER TO. `method`, `hdrs`/`nhdr` and `body` are the rest of what the page
+   asked — not decoration: SECURITY.md puts all network behind the trusted zone's safeFetch, and safeFetch is
+   what decides SOP, CORS, method and credentials. It cannot decide about a method it was never told.
+   EVERY OWNED FIELD HERE IS AN OBLIGATION AT THREE SITES: the push that fills it, the FORK that inherits it,
+   and the free that releases it. The fork copied field by field into a malloc'd slot, so it already missed
+   `script_i` before this record grew anything — and a missed field there is not a leak, it is uninitialised
+   memory that the free path then walks. It copies the whole struct first now, so a field added later is
+   inherited by default and only a POINTER needs a line of its own. */
+typedef struct { char *name, *value; } FlowHeader;
+typedef struct {
+    JSValue resolve; JSValue value; char *url; int have_value; int kind; int script_i;
+    char       *method;
+    FlowHeader *hdrs;
+    int         nhdr;
+    char       *body;
+    size_t      body_len;
+} FlowPending;
 
 /* WHAT ONE STEP OF A FLOW ANSWERED. OWED is not a third kind of flow — it is the same flow reporting that the
    work it has left belongs to the host, so the scheduler can tell an exhausted frontier from a waiting one
