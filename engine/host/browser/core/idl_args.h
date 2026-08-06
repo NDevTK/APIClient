@@ -46,6 +46,15 @@ typedef enum {
        and round to the NEAREST integer, choosing the even one at a half. Blob's `slice(start, end)` is the
        member that carries it, and `slice(1.5)` starting at byte 2 rather than byte 1 is the difference. */
     IDL_LONG_LONG_CLAMP,
+    /* `unrestricted double` — §3.2.7. ToNumber and nothing else: NaN and the infinities are VALUES of this
+       type, which is exactly why QueuingStrategy's `highWaterMark` is declared with it and why the stream's
+       own RangeError for a NaN mark has to be the STREAM's check rather than the type's. */
+    IDL_UNRESTRICTED_DOUBLE,
+    /* A CALLBACK FUNCTION type — §3.2.22. The conversion is a brand check and nothing more: a callable crosses
+       as itself and anything else is a TypeError. Declared rather than checked in the body because an optional
+       member that is absent must NOT be rejected, and every body that wrote that test by hand is a body that
+       can get it wrong once. */
+    IDL_CALLBACK,
     /* AN ENUMERATION — §3.2.19. ToString, and then the result must be one of the values the IDL lists or it is
        a TypeError: `new Blob([], {endings: "bogus"})` throws, and an unrecognised value is never silently the
        default. The values are declared beside the member, because they are part of the type. */

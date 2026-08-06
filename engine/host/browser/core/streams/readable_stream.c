@@ -35,6 +35,11 @@ typedef struct {
     JSValue stored_error;
     JSValue reader;       /* the ReadableStreamDefaultReader holding the lock, or JS_UNDEFINED */
     JSValue queue;        /* an Array of chunks not yet read */
+    /* §4.5's queue is a list of (value, SIZE) pairs and its [[queueTotalSize]] is their sum — the strategy's
+       size algorithm decides what a chunk weighs, and desiredSize is the mark minus that total, not minus a
+       COUNT. A parallel array rather than a pair object per chunk: the collector already traces this one. */
+    JSValue queue_size;
+    double  queue_total;
     uint32_t head;        /* how many of them have been */
     /* §4.2's READ REQUESTS: a read on a readable stream with an empty queue PARKS, and is answered when the
        controller enqueues or closes. Two parallel Arrays of the capabilities' resolving functions, because a
@@ -60,6 +65,9 @@ typedef struct {
 typedef struct {
     JSValue stream;
     JSValue pull_fn;          /* the page's `pull`, or JS_UNDEFINED */
+    JSValue cancel_fn;        /* the page's `cancel`, or JS_UNDEFINED */
+    JSValue size_fn;          /* the strategy's `size`, or JS_UNDEFINED for the implicit one-per-chunk */
+    double  hwm;              /* §4.2's high-water mark, 1 for a default stream with no strategy */
     uint8_t started;
     uint8_t pulling;
     uint8_t pull_again;
@@ -81,6 +89,7 @@ static void stream_finalizer(JSRuntime *rt, JSValue val)
     JS_FreeValueRT(rt, d->stored_error);
     JS_FreeValueRT(rt, d->reader);
     JS_FreeValueRT(rt, d->queue);
+    JS_FreeValueRT(rt, d->queue_size);
     JS_FreeValueRT(rt, d->read_resolve);
     JS_FreeValueRT(rt, d->read_reject);
     JS_FreeValueRT(rt, d->controller);
@@ -96,6 +105,7 @@ static void stream_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fu
     JS_MarkValue(rt, d->stored_error, mark_func);
     JS_MarkValue(rt, d->reader, mark_func);
     JS_MarkValue(rt, d->queue, mark_func);
+    JS_MarkValue(rt, d->queue_size, mark_func);
     JS_MarkValue(rt, d->read_resolve, mark_func);
     JS_MarkValue(rt, d->read_reject, mark_func);
     JS_MarkValue(rt, d->controller, mark_func);
@@ -128,6 +138,8 @@ static void ctrl_finalizer(JSRuntime *rt, JSValue val)
     if (!c) return;
     JS_FreeValueRT(rt, c->stream);
     JS_FreeValueRT(rt, c->pull_fn);
+    JS_FreeValueRT(rt, c->cancel_fn);
+    JS_FreeValueRT(rt, c->size_fn);
     js_free_rt(rt, c);
 }
 
@@ -137,6 +149,8 @@ static void ctrl_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func
     if (!c) return;
     JS_MarkValue(rt, c->stream, mark_func);
     JS_MarkValue(rt, c->pull_fn, mark_func);
+    JS_MarkValue(rt, c->cancel_fn, mark_func);
+    JS_MarkValue(rt, c->size_fn, mark_func);
 }
 
 static StreamData *stream_of(JSValueConst v) { return JS_GetOpaque(v, g_stream_class); }
@@ -151,6 +165,48 @@ static uint32_t stream_queued(JSContext *ctx, StreamData *d)
     JS_ToUint32(ctx, &n, len_v);
     JS_FreeValue(ctx, len_v);
     return n - d->head;
+}
+
+/* §4.5's ResetQueue: the chunks, their sizes and the total go together, so they are dropped together. Every
+   site that empties the queue calls this — an error, a cancel, a fresh stream — because a total left behind
+   makes desiredSize answer for chunks that are gone. Returns -1 with an exception live. */
+static int stream_queue_reset(JSContext *ctx, StreamData *d)
+{
+    JS_FreeValue(ctx, d->queue);
+    JS_FreeValue(ctx, d->queue_size);
+    d->queue = JS_NewArray(ctx);
+    d->queue_size = JS_NewArray(ctx);
+    d->head = 0;
+    d->queue_total = 0;
+    return JS_IsException(d->queue) || JS_IsException(d->queue_size) ? -1 : 0;
+}
+
+/* §4.5's EnqueueValueWithSize, minus its own RangeError — the caller checks that, because the check's failure
+   is what errors the stream. */
+static void stream_enqueue(JSContext *ctx, StreamData *d, JSValueConst chunk, double size)
+{
+    JSValue len_v = JS_GetPropertyStr(ctx, d->queue, "length");
+    uint32_t n = 0;
+    JS_ToUint32(ctx, &n, len_v);
+    JS_FreeValue(ctx, len_v);
+    JS_SetPropertyUint32(ctx, d->queue, n, JS_DupValue(ctx, chunk));
+    JS_SetPropertyUint32(ctx, d->queue_size, n, JS_NewFloat64(ctx, size));
+    d->queue_total += size;
+}
+
+/* §4.5's DequeueValue: the chunk leaves and the total loses its size. The clamp at zero is the spec's own,
+   for the floating-point arithmetic a page can arrange with fractional sizes. */
+static JSValue stream_dequeue(JSContext *ctx, StreamData *d)
+{
+    JSValue chunk = JS_GetPropertyUint32(ctx, d->queue, d->head);
+    JSValue sz = JS_GetPropertyUint32(ctx, d->queue_size, d->head);
+    double x = 0;
+    JS_ToFloat64(ctx, &x, sz);
+    JS_FreeValue(ctx, sz);
+    d->head++;
+    d->queue_total -= x;
+    if (d->queue_total < 0) d->queue_total = 0;
+    return chunk;
 }
 
 /* How many read requests are parked. */
@@ -205,13 +261,34 @@ static JSValue readable_stream_empty(JSContext *ctx)
     d->reader = JS_UNDEFINED;
     d->controller = JS_UNDEFINED;
     d->queue = JS_NewArray(ctx);
+    d->queue_size = JS_NewArray(ctx);
     d->read_resolve = JS_NewArray(ctx);
     d->read_reject = JS_NewArray(ctx);
     JS_SetOpaque(obj, d);
-    if (JS_IsException(d->queue) || JS_IsException(d->read_resolve) || JS_IsException(d->read_reject)) {
+    if (JS_IsException(d->queue) || JS_IsException(d->queue_size) ||
+        JS_IsException(d->read_resolve) || JS_IsException(d->read_reject)) {
         JS_FreeValue(ctx, obj);
         return JS_EXCEPTION;
     }
+    return obj;
+}
+
+/* §4.5's controller, EMPTY and already attached — the same discipline readable_stream_empty follows, and for
+   the reason its own comment gives: a record whose fields are placed before it is attached to its object is a
+   record that leaks on any failure in between. */
+static JSValue controller_new(JSContext *ctx, JSValueConst stream)
+{
+    ControllerData *c;
+    JSValue obj;
+
+    obj = JS_NewObjectProtoClass(ctx, g_ctrl_proto, g_ctrl_class);
+    if (JS_IsException(obj)) return obj;
+    c = js_mallocz(ctx, sizeof *c);
+    if (!c) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
+    c->pull_fn = c->cancel_fn = c->size_fn = JS_UNDEFINED;
+    c->hwm = 1;                                  /* §4.2's default mark for a default-controller stream */
+    c->stream = JS_DupValue(ctx, stream);
+    JS_SetOpaque(obj, c);
     return obj;
 }
 
@@ -227,7 +304,8 @@ JSValue readable_stream_from_bytes(JSContext *ctx, const char *bytes, size_t len
        "close" is exactly that statement — not an empty queue, which is a stream that may still be fed. */
     chunk = JS_NewUint8ArrayCopy(ctx, (const uint8_t *)(bytes ? bytes : ""), len);
     if (JS_IsException(chunk)) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
-    JS_SetPropertyUint32(ctx, d->queue, 0, chunk);
+    stream_enqueue(ctx, d, chunk, 1);
+    JS_FreeValue(ctx, chunk);
     d->state = RS_CLOSED;
     return obj;
 }
@@ -267,6 +345,19 @@ typedef struct {
     JSValue cb[3];   /* step_call_run's buffer: [this, func, arg] */
 } CtrlWork;
 
+/* THE SLOTS ARE UNDEFINED BEFORE THEY ARE ANYTHING ELSE. A step state arrives ZEROED, and a zeroed JSValue is
+   the INTEGER 0 (JS_TAG_INT is 0) rather than undefined — so a slot read before it is written yields 0, which
+   is a real value the page can see. It has cost this project four bugs and it cost this component a fifth: the
+   `closed` promise of a drained stream fulfilled with the number 0. Every machine that owns one of these calls
+   this on its first entry, so the trap has one place to not be. `stage` is deliberately untouched: the machine
+   owns it, and it has usually already been set by the time this runs. */
+static void ctrl_work_start(CtrlWork *w)
+{
+    int k;
+    w->func = w->value = w->chain = w->err = JS_UNDEFINED;
+    for (k = 0; k < 3; k++) w->cb[k] = JS_UNDEFINED;
+}
+
 static void ctrl_work_visit(JSContext *ctx, CtrlWork *w, JSStepVisit *v)
 {
     int k;
@@ -293,19 +384,34 @@ static void ctrl_work_release(JSContext *ctx, CtrlWork *w)
  * other settle, so it is a call request. `rd` may be NULL (a stream nobody is reading) and `value` is read only
  * on the first entry, which is the only entry that has one. */
 static int reader_closed_run(JSContext *ctx, CtrlWork *w, ReaderData *rd, int reject, JSValueConst value,
-                             JSValue in, JSValue **out_cb, int *out_argc)
+                             bool replace_if_settled, JSValue in, JSValue **out_cb, int *out_argc)
 {
     JSValueConst arg;
     JSValue out;
     int r;
 
     if (w->phase == 0) {
-        if (!rd || rd->closed_settled) { JS_FreeValue(ctx, in); return 0; }
-        rd->closed_settled = 1;
+        JSValue funcs[2];
+        if (!rd) { JS_FreeValue(ctx, in); return 0; }
+        if (rd->closed_settled) {
+            JSValue p;
+            if (!replace_if_settled) { JS_FreeValue(ctx, in); return 0; }
+            /* §4.3's release, second arm: a reader whose stream had ALREADY finished gets a NEW `closed`
+               promise, already rejected. The identity change is observable — `assert_not_equals` on the two
+               promise objects is what the corpus checks — so it cannot be a no-op. */
+            p = JS_NewPromiseCapability(ctx, funcs);
+            if (JS_IsException(p)) { JS_FreeValue(ctx, in); return -1; }
+            JS_FreeValue(ctx, rd->closed);
+            rd->closed = p;
+        } else {
+            rd->closed_settled = 1;
+            funcs[0] = rd->closed_funcs[0];               /* the pair is HANDED OVER and dropped together */
+            funcs[1] = rd->closed_funcs[1];
+            rd->closed_funcs[0] = rd->closed_funcs[1] = JS_UNDEFINED;
+        }
         JS_FreeValue(ctx, w->func);
-        w->func = rd->closed_funcs[reject];               /* the pair is HANDED OVER and dropped together */
-        JS_FreeValue(ctx, rd->closed_funcs[reject ^ 1]);
-        rd->closed_funcs[0] = rd->closed_funcs[1] = JS_UNDEFINED;
+        w->func = funcs[reject];
+        JS_FreeValue(ctx, funcs[reject ^ 1]);
         JS_FreeValue(ctx, w->value);
         w->value = JS_DupValue(ctx, value);
     }
@@ -338,10 +444,8 @@ static int stream_settle_run(JSContext *ctx, CtrlWork *w, StreamData *d, JSValue
             JS_FreeValue(ctx, d->stored_error);
             d->stored_error = w->err;      /* the reason is HANDED OVER: the stream owns it from here */
             w->err = JS_UNDEFINED;
-            JS_FreeValue(ctx, d->queue);
-            d->queue = JS_NewArray(ctx);   /* §4.5's ResetQueue: an errored stream has no chunks left to give */
-            d->head = 0;
-            if (JS_IsException(d->queue)) { JS_FreeValue(ctx, in); return -1; }
+            /* §4.5's ResetQueue: an errored stream has no chunks left to give */
+            if (stream_queue_reset(ctx, d) < 0) { JS_FreeValue(ctx, in); return -1; }
         } else {
             JS_FreeValue(ctx, w->err);
             w->err = JS_UNDEFINED;
@@ -351,8 +455,12 @@ static int stream_settle_run(JSContext *ctx, CtrlWork *w, StreamData *d, JSValue
 
     if (w->settle == S_CLOSE_CLOSED || w->settle == S_ERR_CLOSED || w->settle == S_REL_CLOSED) {
         int reject = w->settle != S_CLOSE_CLOSED;
-        JSValueConst v = w->settle == S_ERR_CLOSED ? (JSValueConst)d->stored_error : (JSValueConst)w->err;
-        r = reader_closed_run(ctx, w, rd, reject, v, in, out_cb, out_argc);
+        /* a CLOSE resolves with undefined; an ERROR rejects with what the stream stored; a RELEASE rejects
+           with the TypeError the caller left in `err` */
+        JSValueConst v = w->settle == S_ERR_CLOSED ? (JSValueConst)d->stored_error
+                       : w->settle == S_REL_CLOSED ? (JSValueConst)w->err
+                                                   : JS_UNDEFINED;
+        r = reader_closed_run(ctx, w, rd, reject, v, w->settle == S_REL_CLOSED, in, out_cb, out_argc);
         if (r != 0) return r;
         in = JS_UNDEFINED;
         if (w->settle == S_REL_CLOSED) {
@@ -462,6 +570,81 @@ static int ctrl_react(JSContext *ctx, JSValueConst promise, JSValueConst ctrl, i
     return 0;
 }
 
+/* ---- A REACTION THAT SETTLES A CAPABILITY THIS COMPONENT HOLDS ----------------------------------------------
+ *
+ * §4.2's cancel hands back a promise that settles when the SOURCE'S cancel promise does — step 7 is "the result
+ * of reacting to sourceCancelPromise with a fulfilment step that returns undefined". So the reaction's whole job
+ * is to call one of this component's own resolving functions, which it knows only by CAPTURE, and calling it is
+ * the page's code. FWD_UNDEF discards the source's answer (which is what "returns undefined" states); FWD_ARG
+ * passes its own value through, which is how a rejection keeps its reason. */
+enum { FWD_UNDEF = 0, FWD_ARG };
+
+typedef struct {
+    JSStepHdr hdr;
+    uint8_t   phase;
+    JSValue   cb[3];
+} JSFwdState;
+
+static void js_fwd_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSFwdState *s = st;
+    int k;
+    for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
+}
+
+static JSValue js_fwd_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSFwdState *s = st;
+    int k;
+    (void)take_result;
+    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
+    return JS_UNDEFINED;
+}
+
+static int js_fwd_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSFwdState *s = st;
+    JSValueConst arg = s->hdr.arg == FWD_ARG && s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
+    JSValue out;
+    int r;
+
+    r = step_call_run(ctx, &s->phase, s->cb, JS_StepClosureData(&s->hdr, 0), JS_UNDEFINED, 1, &arg,
+                      cb_result, &out, out_cb, out_argc);
+    if (r > 0) return r;
+    if (JS_IsException(out)) return JS_STEP_ABRUPT;
+    JS_FreeValue(ctx, out);
+    return JS_STEP_DONE;
+}
+
+#define FWD_DEF(i) { sizeof(JSFwdState), js_fwd_step, js_fwd_fini, (i), \
+                     .catches_abrupt = 1, .visit = js_fwd_visit }
+static const JSTrampStepDef js_fwd_defs[2] = { FWD_DEF(FWD_UNDEF), FWD_DEF(FWD_ARG) };
+#undef FWD_DEF
+static int g_fwd_stepids[2] = { -1, -1 };
+
+/* Settle `on_ok`/`on_err` when `promise` does. PerformPromiseThen rather than a `.then` read, for the reason
+   ctrl_react gives. The two functions are BORROWED; each closure takes its own reference. */
+static int ctrl_forward(JSContext *ctx, JSValueConst promise, JSValueConst on_ok, JSValueConst on_err)
+{
+    JSValueConst d0[1], d1[1];
+    JSValue onf, onr, cap;
+
+    DCHECK(g_fwd_stepids[0] >= 0 && g_fwd_stepids[1] >= 0,
+           "a forwarding reaction was attached before its machines were registered");
+    d0[0] = on_ok;
+    d1[0] = on_err;
+    onf = JS_NewStepClosure(ctx, g_fwd_stepids[FWD_UNDEF], 1, 1, d0);
+    if (JS_IsException(onf)) return -1;
+    onr = JS_NewStepClosure(ctx, g_fwd_stepids[FWD_ARG], 1, 1, d1);
+    if (JS_IsException(onr)) { JS_FreeValue(ctx, onf); return -1; }
+    cap = JS_PerformPromiseThen(ctx, promise, onf, onr);
+    JS_FreeValue(ctx, onf);
+    JS_FreeValue(ctx, onr);
+    if (JS_IsException(cap)) return -1;
+    JS_FreeValue(ctx, cap);
+    return 0;
+}
+
 /* §4.5's ReadableStreamDefaultControllerCanCloseOrEnqueue. */
 static bool ctrl_can_close_or_enqueue(ControllerData *c, StreamData *d)
 {
@@ -476,7 +659,7 @@ static bool ctrl_should_pull(JSContext *ctx, ControllerData *c, StreamData *d)
     if (!ctrl_can_close_or_enqueue(c, d)) return false;
     if (!c->started) return false;
     if (!JS_IsUndefined(d->reader) && stream_read_pending(ctx, d) > 0) return true;
-    return stream_queued(ctx, d) < 1;
+    return c->hwm - d->queue_total > 0;
 }
 
 /* §4.5's ReadableStreamDefaultControllerCallPullIfNeeded. The caller sets `w->pull = P_TEST` and calls until it
@@ -590,6 +773,7 @@ static int js_rxn_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
 
     if (s->w.stage == 0) {
         int op = s->hdr.arg;
+        ctrl_work_start(&s->w);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         s->w.stage = 1;
@@ -683,6 +867,7 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
         JSValue funcs[2];
         int reject = 0;
 
+        ctrl_work_start(&s->w);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         s->promise = s->settle = s->result = s->stream = JS_UNDEFINED;
@@ -707,7 +892,7 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                 reject = 1;
             } else if (stream_queued(ctx, d) > 0) {
                 ControllerData *c = JS_IsUndefined(d->controller) ? NULL : ctrl_of(d->controller);
-                JSValue chunk = JS_GetPropertyUint32(ctx, d->queue, d->head++);
+                JSValue chunk = stream_dequeue(ctx, d);
                 s->result = read_result(ctx, chunk, false);
                 /* §4.5's PullSteps: draining the LAST chunk of a stream whose close was requested is what
                    actually closes it — a page that calls close() with chunks still queued must see every one
@@ -822,6 +1007,7 @@ static int js_release_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
 
     if (s->w.stage == 0) {
         ReaderData *rd = reader_of(s->hdr.this_val);
+        ctrl_work_start(&s->w);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         s->stream = JS_UNDEFINED;
@@ -871,6 +1057,13 @@ static JSValue js_stream_locked(JSContext *ctx, JSValueConst this_val, int magic
    value is "byob". DECLARED rather than read from the body: `mode` is one accessor away from being the page's
    code and its value is one `toString` away, and reading it from C ran both — which is an abort at
    JS_ToPrimitiveFree naming exactly this, on the very first test of the corpus's default-reader file. */
+/* §7's `dictionary QueuingStrategy { unrestricted double highWaterMark; QueuingStrategySize size; }`, whose
+   members Web IDL reads lexicographically. */
+static const IdlDictMember QUEUING_STRATEGY[] = {
+    { "highWaterMark", IDL_UNRESTRICTED_DOUBLE },
+    { "size",          IDL_CALLBACK },
+};
+
 static const char *const READER_MODES[] = { "byob", NULL };
 static const IdlDictMember GET_READER_OPTIONS[] = {
     { "mode", IDL_ENUM, false, READER_MODES },
@@ -920,6 +1113,7 @@ static int js_get_reader_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
         ReaderData *rd;
         JSValue obj;
 
+        ctrl_work_start(&s->w);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         s->reader = JS_UNDEFINED;
@@ -986,92 +1180,189 @@ static const IdlStepDecl js_get_reader_decl = {
     js_get_reader_step, sizeof(JSGetReaderState), js_get_reader_visit, js_get_reader_release
 };
 
-/* §4.2's `cancel(reason)`. It empties the queue and closes the stream, and answers a promise. The settle is the
-   page's code for the reason `read`'s is, so it is the same machine shape. */
+/* §4.2's ReadableStreamCancel, reached from the stream's `cancel(reason)` and from the reader's — §4.3 says
+ * a reader cancels the stream it holds, so the two ARE one operation and one machine.
+ *
+ * IT CALLS THE SOURCE'S OWN `cancel`, and the promise it hands back settles when the SOURCE'S does: §4.2 step 7
+ * is "the result of reacting to sourceCancelPromise with a fulfilment step that returns undefined". That
+ * reaction is a step closure over this component's own resolving function, the same shape §4.5's pull
+ * reactions are. Before this, the page's `cancel` was never invoked at all — a stream whose source releases a
+ * socket released nothing, and the returned promise settled ahead of the source rather than with it. */
+enum { CN_START = 0, CN_CLOSE, CN_CALL, CN_RESOLVE, CN_THEN, CN_SETTLE };
+
 typedef struct {
     JSStepHdr hdr;
-    uint8_t   stage;
-    uint8_t   cphase;
-    JSValue   promise;
-    JSValue   func;
-    JSValue   value;
-    JSValue   cb[3];
+    CtrlWork  w;
+    JSValue   promise;     /* the capability handed back to the page */
+    JSValue   funcs[2];    /* its resolve and reject, which the source's own promise settles through */
+    JSValue   settle;      /* the one of them a short-circuit path calls directly */
+    JSValue   stream;
 } JSCancelState;
 
 static void js_cancel_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSCancelState *s = st;
-    int k;
+    ctrl_work_visit(ctx, &s->w, v);
     v->val(ctx, &s->promise);
-    v->val(ctx, &s->func);
-    v->val(ctx, &s->value);
-    for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
+    v->val(ctx, &s->funcs[0]);
+    v->val(ctx, &s->funcs[1]);
+    v->val(ctx, &s->settle);
+    v->val(ctx, &s->stream);
 }
 
 static JSValue js_cancel_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSCancelState *s = st;
     JSValue r = take_result ? s->promise : JS_UNDEFINED;
-    int k;
     if (take_result) s->promise = JS_UNDEFINED;
+    ctrl_work_release(ctx, &s->w);
     JS_FreeValue(ctx, s->promise);
-    JS_FreeValue(ctx, s->func);
-    JS_FreeValue(ctx, s->value);
-    s->promise = s->func = s->value = JS_UNDEFINED;
-    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
+    JS_FreeValue(ctx, s->funcs[0]);
+    JS_FreeValue(ctx, s->funcs[1]);
+    JS_FreeValue(ctx, s->settle);
+    JS_FreeValue(ctx, s->stream);
+    s->promise = s->funcs[0] = s->funcs[1] = s->settle = s->stream = JS_UNDEFINED;
     return r;
 }
 
 static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSCancelState *s = st;
-    JSValue settled, funcs[2];
-    int r, reject = 0;
+    StreamData *d;
+    ControllerData *c;
+    JSValueConst arg;
+    JSValue out;
+    int r;
 
-    if (s->stage == 0) {
-        /* The receiver is the STREAM for `stream.cancel()` and the READER for `reader.cancel()`; a reader
-           cancels the stream it holds, which §4.3 says in as many words. */
-        StreamData *d = stream_of(s->hdr.this_val);
-        ReaderData *rd = d ? NULL : reader_of(s->hdr.this_val);
+    if (s->w.stage == CN_START) {
+        /* The receiver is the STREAM for `stream.cancel()` and the READER for `reader.cancel()`. */
+        ReaderData *rd;
+        int reject = 0;
 
+        ctrl_work_start(&s->w);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
+        s->promise = s->funcs[0] = s->funcs[1] = s->settle = s->stream = JS_UNDEFINED;
+        d = stream_of(s->hdr.this_val);
+        rd = d ? NULL : reader_of(s->hdr.this_val);
         if (!d && rd && !JS_IsUndefined(rd->stream)) d = stream_of(rd->stream);
+        s->promise = JS_NewPromiseCapability(ctx, s->funcs);
+        if (JS_IsException(s->promise)) return JS_STEP_ABRUPT;
+        s->w.stage = CN_SETTLE;
         if (!d) {
-            JS_ThrowTypeError(ctx, "cancel was called on neither a ReadableStream nor an active reader");
-            s->value = JS_GetException(ctx);
+            JS_ThrowTypeError(ctx, rd ? "this reader has been released"
+                                      : "cancel was called on neither a ReadableStream nor an active reader");
+            s->w.value = JS_GetException(ctx);
             reject = 1;
         } else if (!rd && !JS_IsUndefined(d->reader)) {
             /* §4.2: cancelling a LOCKED stream through the stream itself is a TypeError — the reader owns it. */
             JS_ThrowTypeError(ctx, "this stream is locked to a reader");
-            s->value = JS_GetException(ctx);
+            s->w.value = JS_GetException(ctx);
             reject = 1;
         } else {
             d->disturbed = 1;
-            d->state = RS_CLOSED;
-            JS_FreeValue(ctx, d->queue);
-            d->queue = JS_NewArray(ctx);
-            d->head = 0;
-            if (JS_IsException(d->queue)) return JS_STEP_ABRUPT;
-            s->value = JS_UNDEFINED;
+            s->stream = JS_DupValue(ctx, rd ? rd->stream : s->hdr.this_val);
+            if (d->state == RS_ERRORED) {
+                s->w.value = JS_DupValue(ctx, d->stored_error);
+                reject = 1;
+            } else if (d->state == RS_CLOSED) {
+                s->w.value = JS_UNDEFINED;   /* §4.2 step 2: already closed, and the source is not asked */
+            } else {
+                s->w.stage = CN_CLOSE;
+                s->w.settle = S_CLOSE_SET;
+            }
         }
-        s->promise = JS_NewPromiseCapability(ctx, funcs);
-        if (JS_IsException(s->promise)) return JS_STEP_ABRUPT;
-        s->func = funcs[reject];
-        JS_FreeValue(ctx, funcs[reject ^ 1]);
-        s->stage = 1;
+        if (s->w.stage == CN_SETTLE) {
+            s->settle = s->funcs[reject];
+            s->funcs[reject] = JS_UNDEFINED;
+        }
     }
 
-    DCHECK(s->stage == 1, "the cancel machine was re-entered at a stage it never parks in");
-    r = step_call_run(ctx, &s->cphase, s->cb, s->func, JS_UNDEFINED, 1, (JSValueConst *)&s->value,
-                      cb_result, &settled, out_cb, out_argc);
+    if (s->w.stage == CN_CLOSE) {
+        /* §4.2 step 4: the stream CLOSES before the source is asked to cancel, so a reader awaiting `closed`
+           or parked on a `read()` is answered first. */
+        r = stream_settle_run(ctx, &s->w, stream_of(s->stream), cb_result, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return JS_STEP_ABRUPT;
+        cb_result = JS_UNDEFINED;
+        s->w.stage = CN_CALL;
+    }
+
+    if (s->w.stage == CN_CALL) {
+        d = stream_of(s->stream);
+        DCHECK(d != NULL, "the cancel machine's stream stopped being a ReadableStream");
+        c = JS_IsUndefined(d->controller) ? NULL : ctrl_of(d->controller);
+        if (s->w.phase == 0) {
+            /* §4.5's CancelSteps: the queue is dropped first, so a source's `cancel` sees a stream with
+               nothing left to give. */
+            if (stream_queue_reset(ctx, d) < 0) return JS_STEP_ABRUPT;
+            JS_FreeValue(ctx, s->w.value);
+            s->w.value = JS_UNDEFINED;
+        }
+        if (c && !JS_IsUndefined(c->cancel_fn)) {
+            arg = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
+            r = step_call_run(ctx, &s->w.phase, s->w.cb, c->cancel_fn, JS_UNDEFINED, 1, &arg, cb_result, &out,
+                              out_cb, out_argc);
+            if (r > 0) return r;
+            if (JS_IsException(out)) {
+                /* §4.9.4 builds the cancel algorithm with PromiseCall too: a throwing `cancel` REJECTS the
+                   promise this member handed back rather than propagating out of it. */
+                JS_FreeValue(ctx, s->w.value);
+                s->w.value = JS_GetException(ctx);
+                s->settle = s->funcs[1];
+                s->funcs[1] = JS_UNDEFINED;
+                s->w.stage = CN_SETTLE;
+                cb_result = JS_UNDEFINED;
+                goto settle;
+            }
+            JS_FreeValue(ctx, s->w.value);
+            s->w.value = out;
+            cb_result = JS_UNDEFINED;
+        }
+        if (c) {
+            /* §4.5's "clear algorithms": a cancelled controller pulls no more and cancels no more. */
+            JS_FreeValue(ctx, c->pull_fn);
+            JS_FreeValue(ctx, c->cancel_fn);
+            c->pull_fn = c->cancel_fn = JS_UNDEFINED;
+        }
+        s->w.stage = CN_RESOLVE;
+    }
+
+    if (s->w.stage == CN_RESOLVE) {
+        r = step_promise_of_run(ctx, &s->w, cb_result, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return JS_STEP_ABRUPT;
+        cb_result = JS_UNDEFINED;
+        s->w.stage = CN_THEN;
+    }
+
+    if (s->w.stage == CN_THEN) {
+        JS_FreeValue(ctx, cb_result);
+        /* §4.2 step 7: this member's promise settles WITH the source's — fulfilling with undefined, because
+           whatever the source's cancel resolved to is not this operation's answer, and rejecting with its
+           reason. */
+        r = ctrl_forward(ctx, s->w.func, s->funcs[0], s->funcs[1]);
+        JS_FreeValue(ctx, s->w.func);
+        s->w.func = JS_UNDEFINED;
+        JS_FreeValue(ctx, s->funcs[0]);
+        JS_FreeValue(ctx, s->funcs[1]);
+        s->funcs[0] = s->funcs[1] = JS_UNDEFINED;
+        return r < 0 ? JS_STEP_ABRUPT : JS_STEP_DONE;
+    }
+
+settle:
+    DCHECK(s->w.stage == CN_SETTLE, "the cancel machine resumed in a stage it never parks in");
+    arg = s->w.value;
+    r = step_call_run(ctx, &s->w.phase, s->w.cb, s->settle, JS_UNDEFINED, 1, &arg, cb_result, &out,
+                      out_cb, out_argc);
     if (r > 0) return r;
-    JS_FreeValue(ctx, settled);
+    if (JS_IsException(out)) return JS_STEP_ABRUPT;
+    JS_FreeValue(ctx, out);
     return JS_STEP_DONE;
 }
 
 static const JSTrampStepDef js_cancel_def = {
-    sizeof(JSCancelState), js_cancel_step, js_cancel_fini, 0, .visit = js_cancel_visit
+    sizeof(JSCancelState), js_cancel_step, js_cancel_fini, 0, .catches_abrupt = 1, .visit = js_cancel_visit
 };
 
 /* ---- §4.5's DEFAULT CONTROLLER MEMBERS -----------------------------------------------------------------------
@@ -1080,11 +1371,12 @@ static const JSTrampStepDef js_cancel_def = {
  * settles a promise, which is the page's code. `enqueue` additionally ends in CallPullIfNeeded, which calls the
  * page's `pull`. That is the whole reason this component is machines rather than functions. */
 enum { CTRL_ENQUEUE = 0, CTRL_CLOSE, CTRL_ERROR };
-enum { CS_START = 0, CS_SETTLE, CS_SETTLE_ALL, CS_PULL };
+enum { CS_START = 0, CS_SIZE, CS_ENQUEUE, CS_SETTLE, CS_SETTLE_ALL, CS_PULL, CS_RETHROW };
 
 typedef struct {
     JSStepHdr hdr;
     CtrlWork  w;
+    double    size;   /* what the strategy said this chunk weighs, held across its call */
 } JSCtrlState;
 
 static void js_ctrl_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -1122,6 +1414,7 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
         int op = s->hdr.arg;
         JSValueConst a0 = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
 
+        ctrl_work_start(&s->w);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         if (op == CTRL_ENQUEUE) {
@@ -1130,15 +1423,12 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                 return JS_STEP_ABRUPT;
             }
             /* §4.5: a chunk goes to a WAITING READER if there is one, and to the queue otherwise. Queuing it
-               when a read is parked would answer that read out of order, or never. */
+               when a read is parked would answer that read out of order, or never — and a chunk handed
+               straight to a reader is never weighed, because it never enters the queue. */
             s->w.func = stream_take_read(ctx, d, 0);
             if (JS_IsUndefined(s->w.func)) {
-                JSValue len_v = JS_GetPropertyStr(ctx, d->queue, "length");
-                uint32_t n = 0;
-                JS_ToUint32(ctx, &n, len_v);
-                JS_FreeValue(ctx, len_v);
-                JS_SetPropertyUint32(ctx, d->queue, n, JS_DupValue(ctx, a0));
-                s->w.stage = CS_PULL;
+                s->w.stage = JS_IsUndefined(c->size_fn) ? CS_ENQUEUE : CS_SIZE;
+                s->size = 1;   /* the implicit strategy: one per chunk */
             } else {
                 s->w.value = read_result(ctx, JS_DupValue(ctx, a0), false);
                 if (JS_IsException(s->w.value)) return JS_STEP_ABRUPT;
@@ -1163,6 +1453,46 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
             s->w.stage = CS_SETTLE_ALL;
             s->w.settle = S_ERR_SET;
         }
+    }
+
+    if (s->w.stage == CS_SIZE) {
+        JSValueConst chunk = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
+        r = step_call_run(ctx, &s->w.phase, s->w.cb, c->size_fn, JS_UNDEFINED, 1, &chunk, cb_result, &out,
+                          out_cb, out_argc);
+        if (r > 0) return r;
+        cb_result = JS_UNDEFINED;
+        if (JS_IsException(out)) goto size_bad;
+        s->size = 0;
+        if (JS_ToFloat64(ctx, &s->size, out) < 0) { JS_FreeValue(ctx, out); goto size_bad; }
+        JS_FreeValue(ctx, out);
+        /* §4.5's EnqueueValueWithSize: a size that is not a FINITE NON-NEGATIVE number is a RangeError, and
+           §4.5 answers both that and a throwing size the same way — error the stream, then re-raise, so the
+           caller of enqueue() sees the failure AND every reader sees the stream die. */
+        if (!isfinite(s->size) || s->size < 0) {
+            JS_ThrowRangeError(ctx, "a queuing strategy's size must be a finite, non-negative number");
+        size_bad:
+            s->w.err = JS_GetException(ctx);
+            s->w.settle = S_ERR_SET;
+            s->w.stage = CS_RETHROW;
+            s->w.pull = P_IDLE;
+        } else {
+            s->w.stage = CS_ENQUEUE;
+        }
+    }
+    if (s->w.stage == CS_ENQUEUE) {
+        JSValueConst chunk = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        stream_enqueue(ctx, d, chunk, s->size);
+        s->w.stage = CS_PULL;
+    }
+    if (s->w.stage == CS_RETHROW) {
+        /* the stream errors first — every parked read is rejected — and only then does enqueue() itself
+           re-raise, which is the order §4.5 states and the order a page observes */
+        r = stream_settle_run(ctx, &s->w, d, cb_result, out_cb, out_argc);
+        if (r > 0) return r;
+        JS_Throw(ctx, JS_DupValue(ctx, d->stored_error));
+        return JS_STEP_ABRUPT;
     }
 
     if (s->w.stage == CS_SETTLE) {
@@ -1208,7 +1538,7 @@ static JSValue js_ctrl_desired(JSContext *ctx, JSValueConst this_val, int magic)
     DCHECK(d != NULL, "a controller's stream stopped being a ReadableStream");
     if (d->state == RS_ERRORED) return JS_NULL;
     if (d->state == RS_CLOSED) return JS_NewInt32(ctx, 0);
-    return JS_NewInt32(ctx, 1 - (int)stream_queued(ctx, d));
+    return JS_NewFloat64(ctx, c->hwm - d->queue_total);
 }
 
 /* ---- the constructors -------------------------------------------------------------------------------------- */
@@ -1288,6 +1618,7 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 
     if (s->w.stage == RSC_START) {
         int k;
+        ctrl_work_start(&s->w);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         if (JS_IsUndefined(hdr->this_val)) {
@@ -1296,7 +1627,6 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         }
         for (k = 0; k < SRC_N; k++) s->src[k] = JS_UNDEFINED;
         s->stream = s->controller = s->start_fn = JS_UNDEFINED;
-        s->w.value = JS_UNDEFINED;   /* the start result PromiseResolve sees when there is no `start` */
         s->member = 0;
         s->w.stage = JS_IsObject(source) ? RSC_READ : RSC_BUILD;
     }
@@ -1347,23 +1677,48 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     if (s->w.stage == RSC_BUILD) {
         StreamData *d;
         ControllerData *c;
+        JSValueConst strategy = argc > 1 ? argv[1] : JS_UNDEFINED;
+        JSValue hv;
+        int absent;
+        double h = 1;
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         /* §4.2 builds the stream and its controller before `start` runs, because `start` is handed that
-           controller and may enqueue into it immediately. */
+           controller and may enqueue into it immediately. Both are COMPLETE — every owned slot placed, the
+           record attached to its object, the two linked — before the first step that can FAIL, so a failure
+           after this point is torn down by the two finalizers and nothing is orphaned. Filling the record
+           first and attaching it last leaked the whole runtime graph on a bad highWaterMark: the orphaned
+           record held the page's `size` function, and one page function roots everything it can see. */
         s->stream = readable_stream_empty(ctx);
         if (JS_IsException(s->stream)) return -1;
         d = stream_of(s->stream);
-        s->controller = JS_NewObjectProtoClass(ctx, g_ctrl_proto, g_ctrl_class);
+        s->controller = controller_new(ctx, s->stream);
         if (JS_IsException(s->controller)) return -1;
-        c = js_mallocz(ctx, sizeof *c);
-        if (!c) return -1;
-        c->stream = JS_DupValue(ctx, s->stream);
+        c = ctrl_of(s->controller);
+        d->controller = JS_DupValue(ctx, s->controller);
+
         c->pull_fn = s->src[SRC_PULL];
         s->src[SRC_PULL] = JS_UNDEFINED;
-        JS_SetOpaque(s->controller, c);
-        d->controller = JS_DupValue(ctx, s->controller);
+        c->cancel_fn = s->src[SRC_CANCEL];
+        s->src[SRC_CANCEL] = JS_UNDEFINED;
+        /* §4.2 steps 6 and 7: ExtractSizeAlgorithm, then ExtractHighWaterMark with a default of 1. Both read
+           the strategy dictionary the IDL layer has ALREADY converted — which is why a throwing `get size` is
+           seen before a throwing `get start`, the ordering §4.2 states and a page pins. */
+        c->size_fn = idl_dict_get(ctx, strategy, "size");
+        hv = idl_dict_get(ctx, strategy, "highWaterMark");
+        absent = JS_IsUndefined(hv);
+        if (!absent && JS_ToFloat64(ctx, &h, hv) < 0) { JS_FreeValue(ctx, hv); return -1; }
+        JS_FreeValue(ctx, hv);
+        if (!absent) {
+            /* §4.2's own check, not the type's: `unrestricted double` accepts NaN, and the STREAM is what
+               rejects it. */
+            if (h != h || h < 0) {
+                JS_ThrowRangeError(ctx, "a queuing strategy's highWaterMark must not be negative or NaN");
+                return -1;
+            }
+            c->hwm = h;
+        }
         s->start_fn = s->src[SRC_START];
         s->src[SRC_START] = JS_UNDEFINED;
         s->w.stage = JS_IsFunction(ctx, s->start_fn) ? RSC_CALL : RSC_RESOLVE;
@@ -1409,7 +1764,10 @@ void readable_stream_init(JSContext *ctx)
     JSRuntime *rt = JS_GetRuntime(ctx);
     static const IdlArgType ONE_ANY[1] = { IDL_ANY };
     static const IdlArgType ONE_DICT[1] = { IDL_DICT };
-    static const IdlArgType TWO_ANY[2] = { IDL_ANY, IDL_ANY };
+    /* §4.2: `constructor(optional object underlyingSource, optional QueuingStrategy strategy = {})`. The
+       SOURCE crosses as an object and is converted in the body (step 2); the STRATEGY is a declared dictionary,
+       and that difference is the whole of what the corpus's first constructor test asserts. */
+    static const IdlArgType SOURCE_AND_STRATEGY[2] = { IDL_ANY, IDL_DICT };
     int i;
 
     DCHECK(g_rs_rt == NULL || g_rs_rt == rt, "ReadableStream was installed into a second runtime");
@@ -1454,6 +1812,10 @@ void readable_stream_init(JSContext *ctx)
         g_rxn_stepids[i] = JS_RegisterStepDef(rt, &js_rxn_defs[i]);
         CHECK(g_rxn_stepids[i] >= 0, "streams: no step id for a §4.5 reaction");
     }
+    for (i = 0; i < 2; i++) {
+        g_fwd_stepids[i] = JS_RegisterStepDef(rt, &js_fwd_defs[i]);
+        CHECK(g_fwd_stepids[i] >= 0, "streams: no step id for a forwarding reaction");
+    }
 
     g_reader_proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_reader_proto), "ReadableStreamDefaultReader.prototype could not be allocated");
@@ -1467,7 +1829,9 @@ void readable_stream_init(JSContext *ctx)
     idl_install_step_method(ctx, g_reader_proto, "read", 0, g_read_stepid);
     idl_install_step_method(ctx, g_reader_proto, "cancel", 0, g_cancel_stepid);
 
-    g_ctor_stepid = idl_method_id_step(ctx, TWO_ANY, 2, NULL, 0, &js_rs_ctor_decl, 0);
+    g_ctor_stepid = idl_method_id_step(ctx, SOURCE_AND_STRATEGY, 2, QUEUING_STRATEGY,
+                                       (int)(sizeof QUEUING_STRATEGY / sizeof *QUEUING_STRATEGY),
+                                       &js_rs_ctor_decl, 0);
     idl_optional_from(0);   /* §4.2: both constructor arguments are optional */
     /* §4.3's constructor IS getReader spelled the other way — SetUpReadableStreamDefaultReader reached with
        the stream in an argument instead of in the receiver, which is all the magic says. */
@@ -1501,4 +1865,5 @@ void readable_stream_free(JSContext *ctx)
     g_ctor_stepid = g_reader_ctor_stepid = g_read_stepid = g_cancel_stepid = g_release_stepid = -1;
     for (i = 0; i < 3; i++) g_ctrl_stepids[i] = -1;
     for (i = 0; i < 4; i++) g_rxn_stepids[i] = -1;
+    for (i = 0; i < 2; i++) g_fwd_stepids[i] = -1;
 }

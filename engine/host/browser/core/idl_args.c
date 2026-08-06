@@ -75,6 +75,7 @@ static bool idl_is_integer(IdlArgType t)
            t == IDL_LONG_LONG || t == IDL_LONG_LONG_CLAMP;
 }
 
+
 static int64_t idl_int_of(IdlArgType t, double x)
 {
     switch (t) {
@@ -86,6 +87,20 @@ static int64_t idl_int_of(IdlArgType t, double x)
         DCHECK(t == IDL_LONG_LONG_CLAMP, "a non-integer type reached the integer conversion");
         return idl_int_convert(x, 64, true, true);
     }
+}
+
+/* Every type whose conversion IS ToNumber, integer or not. They share one request and differ only in what is
+   done with the double it answers, which is what makes them one branch rather than two. */
+static bool idl_is_numeric(IdlArgType t)
+{
+    return idl_is_integer(t) || t == IDL_UNRESTRICTED_DOUBLE;
+}
+
+/* The value a numeric type places, given the double ToNumber produced. */
+static JSValue idl_num_of(JSContext *ctx, IdlArgType t, double x)
+{
+    if (t == IDL_UNRESTRICTED_DOUBLE) return JS_NewFloat64(ctx, x);
+    return JS_NewInt64(ctx, idl_int_of(t, x));
 }
 
 /* §3.2.19's ENUMERATION check, over the string ToString produced. Returns -1 with a TypeError live. */
@@ -603,13 +618,19 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     JS_FreeValue(ctx, s->dict_v);
                     s->dict_v = b;
                 }
-                else if (idl_is_integer(mt)) {
+                else if (mt == IDL_CALLBACK) {
+                    if (!JS_IsFunction(ctx, s->dict_v)) {
+                        JS_ThrowTypeError(ctx, "dictionary member `%s` is not callable", dm->name);
+                        return JS_STEP_ABRUPT;
+                    }
+                }
+                else if (idl_is_numeric(mt)) {
                     r = step_todouble_run(ctx, &s->hdr, s->dict_v, cb_result, &s->nums[s->i], out_cb, out_argc);
                     cb_result = JS_UNDEFINED;
                     if (r > 0) return r;   /* parked ON THIS MEMBER's conversion; the read does not re-run */
                     if (r < 0) return JS_STEP_ABRUPT;
                     JS_FreeValue(ctx, s->dict_v);
-                    s->dict_v = JS_NewInt64(ctx, idl_int_of(mt, s->nums[s->i]));
+                    s->dict_v = idl_num_of(ctx, mt, s->nums[s->i]);
                 }
                 else if (mt == IDL_DOMSTRING || mt == IDL_DOMSTRING_NULLABLE || mt == IDL_BYTESTRING ||
                          mt == IDL_USVSTRING || mt == IDL_ENUM) {
@@ -767,12 +788,22 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             *slot = JS_IsUndefined(a) ? JS_UNDEFINED : JS_NewBool(ctx, JS_ToBool(ctx, a));
             goto placed;
         }
-        if (idl_is_integer(t)) {
+        if (idl_is_numeric(t)) {
             r = step_todouble_run(ctx, &s->hdr, a, cb_result, &s->nums[s->i], out_cb, out_argc);
             cb_result = JS_UNDEFINED;
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
-            *slot = JS_NewInt64(ctx, idl_int_of(t, s->nums[s->i]));
+            *slot = idl_num_of(ctx, t, s->nums[s->i]);
+            goto placed;
+        }
+        if (t == IDL_CALLBACK) {
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            if (!JS_IsUndefined(a) && !JS_IsFunction(ctx, a)) {
+                JS_ThrowTypeError(ctx, "argument %d is not callable", s->i + 1);
+                return JS_STEP_ABRUPT;
+            }
+            *slot = JS_DupValue(ctx, a);
             goto placed;
         }
         DCHECK(t != IDL_ENUM,
