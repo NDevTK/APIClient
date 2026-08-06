@@ -15,10 +15,10 @@
  * identifier, and each is EMITTED into the header beside its table: a moved index is then a visible diff in a
  * committed file rather than a decode that quietly changed.
  *
- * WHAT IS NOT GENERATED. The multi-byte CJK indexes (jis0208, big5, gb18030, euc-kr) are hundreds of kilobytes
- * each and each needs its own decoder ALGORITHM rather than a table lookup, so they are absent rather than
- * half-present — encoding.c crashes naming the encoding when a page asks for one, which is the honest state and
- * the work queue.
+ * WHAT IS NOT GENERATED YET. The remaining multi-byte CJK indexes (jis0208, jis0212, big5, euc-kr) — each needs
+ * its own decoder ALGORITHM as well as its table, so each arrives with that algorithm rather than ahead of it;
+ * encoding.c crashes naming the encoding when a page asks for one, which is the honest state and the work
+ * queue. §11's gb18030 index and its ranges ARE generated, because §11.1.1's decoder is built.
  *
  * Usage:  node engine/encgen.mjs
  */
@@ -78,6 +78,52 @@ for (const e of singleByte) {
   indexes.push({ name: e.name, table: parseIndex(src), id: id ? id[1] : "?" });
 }
 
+/* §11's INDEX gb18030 — 23940 pointers, one code point each, and unlike the single-byte indexes it is DENSE
+   enough that a missing row is a real absence rather than a formatting accident. U+0000 is never an entry, so 0
+   reads as absent exactly as it does above. */
+function parseWideIndex(text, expect) {
+  const rows = [];
+  for (const line of text.split("\n")) {
+    const m = /^\s*(\d+)\s+(0x[0-9A-Fa-f]+)/.exec(line);
+    if (!m) continue;
+    rows.push([Number(m[1]), Number(m[2])]);
+  }
+  const max = Math.max(...rows.map((r) => r[0]));
+  const out = new Uint16Array(max + 1);
+  for (const [ptr, cp] of rows) {
+    if (cp > 0xFFFF) {
+      console.error(`[encgen] index gb18030 pointer ${ptr} is U+${cp.toString(16)}, past what a uint16 holds`);
+      process.exit(1);
+    }
+    out[ptr] = cp;
+  }
+  if (out.length !== expect) {
+    console.error(`[encgen] index gb18030 now has ${out.length} pointers and this generator is pinned to ` +
+                  `${expect} — re-pin deliberately, as a commit of its own.`);
+    process.exit(1);
+  }
+  return out;
+}
+
+/* §5's "index gb18030 ranges code point" walks these in order, so they are emitted in the standard's order and
+   the decoder does not sort them. The pairs are (pointer, code point) and the code points DO pass U+FFFF —
+   the whole point of the ranges is the astral planes — so this one is uint32. */
+function parseRanges(text) {
+  const out = [];
+  for (const line of text.split("\n")) {
+    const m = /^\s*(\d+)\s+(0x[0-9A-Fa-f]+)/.exec(line);
+    if (m) out.push([Number(m[1]), Number(m[2])]);
+  }
+  return out;
+}
+
+const gbSrc = await get("index-gb18030.txt");
+const gbRangesSrc = await get("index-gb18030-ranges.txt");
+const gbId = /^#\s*Identifier:\s*(\S+)/m.exec(gbSrc);
+const gbRangesId = /^#\s*Identifier:\s*(\S+)/m.exec(gbRangesSrc);
+const gb = parseWideIndex(gbSrc, 23940);
+const gbRanges = parseRanges(gbRangesSrc);
+
 /* ---- emit ---------------------------------------------------------------------------------------------- */
 
 const enumName = (n) => "ENC_" + n.toUpperCase().replace(/[^A-Z0-9]/g, "_");
@@ -136,7 +182,24 @@ for (const e of encodings) {
   const row = indexes.findIndex((ix) => ix.name === e.name);
   h += `    ${row}, /* ${e.name} */\n`;
 }
-h += `};\n\n#endif\n`;
+h += `};\n\n`;
+
+h += `/* §11's INDEX gb18030 — pointer to code point, 0 meaning the pointer maps to nothing.\n` +
+     ` * ${gbId ? gbId[1] : "?"}\n */\n` +
+     `static const uint16_t ENCODING_GB18030[${gb.length}] = {\n`;
+for (let i = 0; i < gb.length; i += 12)
+  h += "    " + Array.from(gb.slice(i, i + 12)).map((v) => "0x" + v.toString(16).padStart(4, "0")).join(", ") + ",\n";
+h += `};\n#define ENCODING_GB18030_N ((int)(sizeof ENCODING_GB18030 / sizeof ENCODING_GB18030[0]))\n\n`;
+
+h += `/* §5's INDEX gb18030 RANGES, in the standard's own order because the lookup walks them in it. The code\n` +
+     ` * points reach past U+FFFF, which is what the ranges exist for.\n` +
+     ` * ${gbRangesId ? gbRangesId[1] : "?"}\n */\n` +
+     `typedef struct { uint32_t pointer, code_point; } EncodingRange;\n` +
+     `static const EncodingRange ENCODING_GB18030_RANGES[] = {\n`;
+for (const [ptr, cp] of gbRanges) h += `    { ${ptr}, 0x${cp.toString(16)} },\n`;
+h += `};\n#define ENCODING_GB18030_RANGES_N ` +
+     `((int)(sizeof ENCODING_GB18030_RANGES / sizeof ENCODING_GB18030_RANGES[0]))\n\n#endif\n`;
 
 writeFileSync(OUT, h);
-console.log(`[encgen] ${OUT}: ${encodings.length} encodings, ${rows.length} labels, ${indexes.length} single-byte indexes`);
+console.log(`[encgen] ${OUT}: ${encodings.length} encodings, ${rows.length} labels, ${indexes.length} ` +
+            `single-byte indexes, gb18030 ${gb.length} pointers + ${gbRanges.length} ranges`);

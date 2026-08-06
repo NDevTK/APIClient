@@ -108,6 +108,17 @@ typedef struct {
     /* The UTF-16 machines' half-read unit and pending lead surrogate, for the same reason. */
     int16_t half;          /* -1 when no byte is held */
     int32_t lead_surrogate; /* -1 when none */
+    /* §11.1.1's three held bytes. The standard names them gb18030 first/second/third and tests each against 0,
+       so 0 IS the "nothing held" value rather than a separate flag — a byte of 0x00 never reaches them because
+       the machine only holds bytes in 0x81..0xFE and 0x30..0x39. */
+    uint8_t gb_first, gb_second, gb_third;
+    /* THE STANDARD'S "prepend to the stream". Every decoder here has a step that re-reads a byte it has
+       already taken — UTF-8 recovering from a truncated sequence, UTF-16 orphaning a lead surrogate, gb18030
+       giving back a whole held sequence — and a byte's INDEX in the caller's buffer is the wrong way to say
+       that: the byte may have come from a PREVIOUS decode() call, where there is no index to go back to. The
+       three of them held it as `i--` / `i -= 2` and a DCHECK that a stream split would have fired. This is a
+       queue, and it is where they push back to. Three bytes is gb18030's worst case, which is the platform's. */
+    uint8_t back[3], nback;
 } DecoderState;
 
 static JSClassID g_dec_class;
@@ -138,6 +149,15 @@ static void decoder_reset(DecoderState *d)
     d->half = -1;
     d->lead_surrogate = -1;
     d->bom_seen = 0;
+    d->gb_first = d->gb_second = d->gb_third = 0;
+    d->nback = 0;
+}
+
+/* THE STANDARD'S "prepend to the stream", in order: the first byte pushed is the first re-read. */
+static void dec_push_back(DecoderState *d, uint8_t b)
+{
+    DCHECK(d->nback < sizeof d->back, "a decoder pushed back more bytes than the queue holds");
+    d->back[d->nback++] = b;
 }
 
 /* §4.4's UTF-8 decoder, byte by byte. Returns 0 on success; -1 means the byte was an ERROR, and `*prepeat` says
@@ -192,10 +212,12 @@ static int utf8_step(DecoderState *d, uint8_t b, EncBuf *o, int *prepeat, int fa
 static int utf16_step(DecoderState *d, uint8_t b, EncBuf *o, int *prepeat, int fatal, int be)
 {
     uint32_t unit;
+    uint8_t first;
 
     *prepeat = 0;
     if (d->half < 0) { d->half = b; return 0; }
-    unit = be ? (uint32_t)(((uint32_t)d->half << 8) | b) : (uint32_t)(((uint32_t)b << 8) | (uint32_t)d->half);
+    first = (uint8_t)d->half;
+    unit = be ? (uint32_t)(((uint32_t)first << 8) | b) : (uint32_t)(((uint32_t)b << 8) | (uint32_t)first);
     d->half = -1;
     if (d->lead_surrogate >= 0) {
         int32_t lead = d->lead_surrogate;
@@ -204,8 +226,11 @@ static int utf16_step(DecoderState *d, uint8_t b, EncBuf *o, int *prepeat, int f
             enc_put(o, 0x10000 + ((uint32_t)(lead - 0xD800) << 10) + (unit - 0xDC00));
             return 0;
         }
-        /* A lead with no trail: the standard emits an error for the LEAD and reprocesses these two bytes. */
-        *prepeat = 2;
+        /* A lead with no trail: the standard emits an error for the LEAD and reprocesses these two bytes —
+           BOTH of them, which is why they are pushed back here, where they are still known. The caller used to
+           un-index them instead, and a unit split across two decode() calls has no index to go back to. */
+        dec_push_back(d, first);
+        dec_push_back(d, b);
         if (!fatal) enc_put(o, 0xFFFD);
         return -1;
     }
@@ -218,30 +243,112 @@ static int utf16_step(DecoderState *d, uint8_t b, EncBuf *o, int *prepeat, int f
     return 0;
 }
 
+/* §5's "index gb18030 ranges code point". The ranges are walked in the standard's own order, which is what
+   makes the two special cases in front of the walk the standard's rather than an optimisation: a pointer inside
+   the hole between the BMP and the astral ranges maps to nothing, and 7457 is the one entry the ranges
+   themselves get wrong. Returns 0 for "maps to nothing" — U+0000 is not a value this can answer. */
+static uint32_t gb18030_ranges_code_point(uint32_t pointer)
+{
+    uint32_t offset = 0, cp_offset = 0;
+    int i;
+
+    if ((pointer > 39419 && pointer < 189000) || pointer > 1237575) return 0;
+    if (pointer == 7457) return 0xE7C7;
+    for (i = 0; i < ENCODING_GB18030_RANGES_N; i++) {
+        if (ENCODING_GB18030_RANGES[i].pointer > pointer) break;
+        offset = ENCODING_GB18030_RANGES[i].pointer;
+        cp_offset = ENCODING_GB18030_RANGES[i].code_point;
+    }
+    return cp_offset + pointer - offset;
+}
+
+/* §11.1.1's gb18030 decoder, byte by byte — and the one in this file whose state is THREE held bytes, because
+ * the four-byte form is a range lookup that cannot be recognised until its fourth byte.
+ *
+ * Bytes the machine held but then finds do not belong to a sequence are PUSHED BACK rather than swallowed, so
+ * a truncated sequence followed by an ASCII byte emits an error AND that byte. Returns -1 for an error. */
+static int gb18030_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
+{
+    uint32_t pointer, cp;
+    uint8_t lead, offset;
+
+    if (d->gb_third != 0) {
+        if (b < 0x30 || b > 0x39) {
+            dec_push_back(d, d->gb_second);   /* §11.1.1 prepends second, third and this byte */
+            dec_push_back(d, d->gb_third);
+            dec_push_back(d, b);
+            d->gb_first = d->gb_second = d->gb_third = 0;
+            if (!fatal) enc_put(o, 0xFFFD);
+            return -1;
+        }
+        pointer = ((uint32_t)(d->gb_first - 0x81)) * (10u * 126u * 10u)
+                + ((uint32_t)(d->gb_second - 0x30)) * (10u * 126u)
+                + ((uint32_t)(d->gb_third - 0x81)) * 10u
+                + (uint32_t)(b - 0x30);
+        d->gb_first = d->gb_second = d->gb_third = 0;
+        cp = gb18030_ranges_code_point(pointer);
+        if (!cp) { if (!fatal) enc_put(o, 0xFFFD); return -1; }
+        enc_put(o, cp);
+        return 0;
+    }
+    if (d->gb_second != 0) {
+        if (b >= 0x81 && b <= 0xFE) { d->gb_third = b; return 0; }
+        dec_push_back(d, d->gb_second);   /* §11.1.1 prepends second and this byte */
+        dec_push_back(d, b);
+        d->gb_first = d->gb_second = 0;
+        if (!fatal) enc_put(o, 0xFFFD);
+        return -1;
+    }
+    if (d->gb_first != 0) {
+        if (b >= 0x30 && b <= 0x39) { d->gb_second = b; return 0; }
+        lead = d->gb_first;
+        d->gb_first = 0;
+        offset = b < 0x7F ? 0x40 : 0x41;
+        if ((b >= 0x40 && b <= 0x7E) || (b >= 0x80 && b <= 0xFE)) {
+            pointer = ((uint32_t)(lead - 0x81)) * 190u + (uint32_t)(b - offset);
+            if ((int)pointer < ENCODING_GB18030_N && ENCODING_GB18030[pointer]) {
+                enc_put(o, ENCODING_GB18030[pointer]);
+                return 0;
+            }
+        }
+        /* §11.1.1: an ASCII byte that ended a truncated sequence is RE-READ, so `\x81a` is an error followed
+           by `a` rather than an error that ate it. */
+        if (b < 0x80) dec_push_back(d, b);
+        if (!fatal) enc_put(o, 0xFFFD);
+        return -1;
+    }
+    if (b < 0x80) { enc_put(o, b); return 0; }
+    if (b == 0x80) { enc_put(o, 0x20AC); return 0; }   /* §11.1.1: the euro sign, which is not in the index */
+    if (b >= 0x81 && b <= 0xFE) { d->gb_first = b; return 0; }
+    if (!fatal) enc_put(o, 0xFFFD);
+    return -1;
+}
+
 /* Run `len` bytes through the receiver's decoder. Returns -1 with a TypeError live in fatal mode. */
 static int decoder_run(JSContext *ctx, DecoderState *d, const uint8_t *p, size_t len, EncBuf *o)
 {
     int row = ENCODING_SINGLE_BYTE_ROW[d->enc];
-    size_t i;
+    size_t i = 0;
 
-    for (i = 0; i < len; i++) {
-        uint8_t b = p[i];
+    /* THE QUEUE COMES FIRST. A byte pushed back is read before the caller's next one, and a byte pushed back
+       from a previous decode() call is read before this call's first — which is what makes a sequence split
+       across two chunks recover the same way an unsplit one does. */
+    while (i < len || d->nback > 0) {
+        uint8_t b;
         int repeat = 0, err = 0;
+
+        if (d->nback > 0) {
+            b = d->back[0];
+            d->nback--;
+            memmove(d->back, d->back + 1, d->nback);
+        } else {
+            b = p[i++];
+        }
 
         if (d->enc == ENC_UTF_8) {
             err = utf8_step(d, b, o, &repeat, d->fatal);
         } else if (d->enc == ENC_UTF_16LE || d->enc == ENC_UTF_16BE) {
             err = utf16_step(d, b, o, &repeat, d->fatal, d->enc == ENC_UTF_16BE);
-            if (repeat == 2) {
-                /* BOTH BYTES of the orphaned unit are reprocessed. The standard emits the error for the LEAD
-                   surrogate and then restarts on the unit that followed it, so a lead followed by U+0000 is
-                   U+FFFD then U+0000 — re-reading only the second byte made it U+FFFD then U+FFFD, because
-                   the first byte of that unit had already been eaten. */
-                DCHECK(i >= 1, "the UTF-16 decoder orphaned a lead surrogate with fewer than two bytes read");
-                d->half = -1;
-                i -= 2;
-                repeat = 0;
-            }
         } else if (d->enc == ENC_X_USER_DEFINED) {
             /* §14.6: a byte below 0x80 is itself, and everything else maps into the private use area. */
             enc_put(o, b < 0x80 ? b : (uint32_t)(0xF780 + b - 0x80));
@@ -255,16 +362,20 @@ static int decoder_run(JSContext *ctx, DecoderState *d, const uint8_t *p, size_t
                 if (cp) enc_put(o, cp);
                 else { if (!d->fatal) enc_put(o, 0xFFFD); err = -1; }
             }
+        } else if (d->enc == ENC_GB18030 || d->enc == ENC_GBK) {
+            /* §11.1.1 serves BOTH: gbk is gb18030 with an encoder difference, and the standard gives it no
+               decoder of its own. */
+            err = gb18030_step(d, b, o, d->fatal);
         } else {
             DFAIL("a page asked to decode a legacy multi-byte encoding — build its decoder: each of Big5, "
-                  "EUC-JP, EUC-KR, gb18030, ISO-2022-JP and Shift_JIS is its own algorithm over its own index, "
-                  "and the label already resolves so only the decode is missing");
+                  "EUC-JP, EUC-KR, ISO-2022-JP and Shift_JIS is its own algorithm over its own index, and the "
+                  "label already resolves so only the decode is missing");
         }
         if (err && d->fatal) {
             JS_ThrowTypeError(ctx, "the encoded data was not valid %s", ENCODING_NAMES[d->enc]);
             return -1;
         }
-        if (repeat) i--;
+        if (repeat) dec_push_back(d, b);
     }
     return 0;
 }
@@ -332,7 +443,10 @@ static JSValue js_decoder_decode(JSContext *ctx, JSValueConst this_val, int argc
     if (!stream) {
         /* THE FLUSH. An incomplete sequence held across the last chunk is an error here — a stream that ends
            mid-character is not a character, and holding it silently would drop bytes the page handed over. */
-        int incomplete = d->needed != 0 || d->half >= 0 || d->lead_surrogate >= 0;
+        /* §11.1.1 step 1 counts gb18030's three held bytes for the same reason: a four-byte sequence cut short
+           by the end of the stream is not a character either. */
+        int incomplete = d->needed != 0 || d->half >= 0 || d->lead_surrogate >= 0 ||
+                         d->gb_first != 0 || d->gb_second != 0 || d->gb_third != 0;
         if (incomplete) {
             if (d->fatal) {
                 free(o.b);
