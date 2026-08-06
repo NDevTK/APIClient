@@ -129,6 +129,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "loader", "document_scripts.c"),               // Lexbor <script> inventory + bundle identity
     join(HOST, "browser", "core", "fetch", "fetch.c"),
     join(HOST, "browser", "core", "fetch", "response.c"),                       // Response: the reply a fetch promises
+    join(HOST, "browser", "core", "fetch", "headers.c"),                        // Headers: the header list an endpoint requires
     join(HOST, "browser", "core", "loader", "module_loader.c"),                 // dynamic import: the lazy-chunk register                           // the Fetch API: every reached request funnels into the @H surface
     join(HOST, "browser", "core", "frame", "location.c"),                       // Location: concrete principal + concolic search/hash
     join(HOST, "browser", "core", "frame", "window.c"),                         // Window: which browsing context this is, and window.name as attacker input

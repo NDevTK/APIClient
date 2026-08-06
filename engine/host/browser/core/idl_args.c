@@ -31,10 +31,17 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-/* Sized for the WHOLE platform surface, because every reflected content attribute is a declaration: HTML's
-   per-tag interfaces contribute about 190 between them, each with its own setter. The pool is static because
-   JS_RegisterStepDef BORROWS the definition, so it must outlive the runtime. */
-#define IDL_MAX_MEMBERS 384
+/* THE POOL IS CHUNKED, AND HAS NO CEILING. It was one fixed array sized "for the whole platform surface", which
+   is a number nobody can know: every reflected content attribute is a declaration and HTML's per-tag interfaces
+   contribute about 190 between them, so the surface grows with every component built — and the ceiling was
+   reached by the six members of Headers, a component whose entire job is one header list. A ceiling on how much
+   of the platform this engine may implement is a cap on the work, and it fails at INSTALL time, which is the
+   worst place to find out.
+   It could not simply be realloc'd: JS_RegisterStepDef BORROWS the definition, so a definition that MOVES leaves
+   every registered id pointing at freed memory. So the pool is a list of BLOCKS that are allocated on demand and
+   never moved — an address handed out stays valid for the life of the runtime, which is the property the borrow
+   needs, and there is nothing left to run out of. */
+#define IDL_POOL_CHUNK 128
 #define IDL_MAX_ARGS     8
 
 typedef struct {
@@ -70,7 +77,36 @@ void idl_set_tree_steps(const IdlTreeSteps *ops)
     g_tree = ops;
 }
 
-static IdlMember      g_members[IDL_MAX_MEMBERS];
+/* One block of the pool. The member and its definition live together because they are allocated together and
+   indexed identically — two parallel block lists would be two chances to grow one and not the other. */
+typedef struct { IdlMember m[IDL_POOL_CHUNK]; JSTrampStepDef d[IDL_POOL_CHUNK]; } IdlChunk;
+static IdlChunk **g_chunks;
+static int        g_nchunks;
+
+/* Ensure the pool holds index `i`, allocating whole blocks. Called only from the declare path; every reader
+   below asks for an index that path has already made. */
+static void idl_pool_reserve(int i)
+{
+    while (i / IDL_POOL_CHUNK >= g_nchunks) {
+        IdlChunk **c = realloc(g_chunks, (size_t)(g_nchunks + 1) * sizeof *c);
+        CHECK(c, "idl: OOM growing the member pool — a member that cannot be declared is an API the page cannot "
+                 "call");
+        g_chunks = c;
+        g_chunks[g_nchunks] = calloc(1, sizeof **g_chunks);
+        CHECK(g_chunks[g_nchunks], "idl: OOM allocating a member-pool block");
+        g_nchunks++;
+    }
+}
+static IdlMember *idl_member(int i)
+{
+    DCHECK(i >= 0 && i / IDL_POOL_CHUNK < g_nchunks, "an IDL member was read at an index the pool never made");
+    return &g_chunks[i / IDL_POOL_CHUNK]->m[i % IDL_POOL_CHUNK];
+}
+static JSTrampStepDef *idl_def(int i)
+{
+    DCHECK(i >= 0 && i / IDL_POOL_CHUNK < g_nchunks, "an IDL definition was read at an index the pool never made");
+    return &g_chunks[i / IDL_POOL_CHUNK]->d[i % IDL_POOL_CHUNK];
+}
 /* STEP ID -> POOL INDEX. A member's DECLARE returns what JS_RegisterStepDef gave it, which is the RUNTIME's id
    for the definition and not this pool's index for the member — the pool index travels separately, inside the
    def as `arg`, which is why the step reads s->hdr.arg rather than its own id. Indexing g_members by the step
@@ -95,9 +131,11 @@ static void idl_map_step(int stepid, int idx) {
 static int idl_member_of_step(int stepid) {
     return (stepid >= 0 && stepid < g_step2mem_cap) ? g_step2mem[stepid] : -1;
 }
-static JSTrampStepDef g_defs[IDL_MAX_MEMBERS];   /* not const: `arg` is filled at registration with the index */
 static int            g_n;
 static JSRuntime     *g_rt;
+static bool           g_sealed;   /* the document's install is done, so no further declaration can be correct */
+
+void idl_args_seal(void) { g_sealed = true; }
 
 typedef struct {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
@@ -143,7 +181,7 @@ static void js_idl_args_visit(JSContext *ctx, void *st, JSStepVisit *v)
        branch, which is bytecode; the drain runs none — every per-node effect is an enqueue. If this ever fires,
        the drain grew a call into the page and the buffer needs a real ownership declaration. */
     DCHECK(s->tree == NULL, "an IDL member was forked while draining its tree steps");
-    m = &g_members[s->hdr.arg];
+    m = idl_member(s->hdr.arg);
     if (m->step && m->step->visit) m->step->visit(ctx, (char *)st + sizeof(JSIdlArgsState), v);
 }
 
@@ -230,8 +268,8 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     if (d > g_slow_ms) {
         JSIdlArgsState *ss = st;
         g_slow_ms = d;
-        g_slow_name = (ss->hdr.arg >= 0 && ss->hdr.arg < g_n && g_members[ss->hdr.arg].name)
-                    ? g_members[ss->hdr.arg].name : "(a member installed by neither install path)";
+        g_slow_name = (ss->hdr.arg >= 0 && ss->hdr.arg < g_n && idl_member(ss->hdr.arg)->name)
+                    ? idl_member(ss->hdr.arg)->name : "(a member installed by neither install path)";
     }
     return rr;
 #else
@@ -247,7 +285,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
     int r;
 
     DCHECK(s->hdr.arg >= 0 && s->hdr.arg < g_n, "an IDL member's step ran with no pool entry behind it");
-    m = &g_members[s->hdr.arg];
+    m = idl_member(s->hdr.arg);
     /* EVERY MEMBER IS NAMED, and this is what makes that true rather than hoped. A name is set by the one mint
        (idl_step_function / idl_step_constructor), so an unnamed member is one that was minted by a hand-written
        JS_NewCFunction2 instead — which is invisible until some diagnostic needs to say what the engine was
@@ -558,7 +596,7 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
     int i;
 
     DCHECK(s->hdr.arg >= 0 && s->hdr.arg < g_n, "an IDL member's teardown ran with no pool entry behind it");
-    m = &g_members[s->hdr.arg];
+    m = idl_member(s->hdr.arg);
     /* The step body's state goes FIRST: it may hold values this machine's arguments are the only other
        reference to, and a release that runs after they are freed reads what it no longer owns. */
     if (m->step && m->step->release) m->step->release(ctx, (char *)st + sizeof(JSIdlArgsState));
@@ -603,8 +641,8 @@ int idl_method_id_ext(JSContext *ctx, const IdlArgType *types, int nargs, bool v
                       IdlBody body, int magic)
 {
     int id = idl_method_id_dict(ctx, types, nargs, NULL, 0, body, magic);
-    g_members[g_n - 1].variadic = variadic;
-    g_members[g_n - 1].iface = iface;
+    idl_member(g_n - 1)->variadic = variadic;
+    idl_member(g_n - 1)->iface = iface;
     return id;
 }
 
@@ -617,23 +655,30 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
     DCHECK(g_rt == NULL || g_rt == rt,
            "an IDL member was installed into a second runtime — its step ids belong to the first, and one WASM "
            "instance is one document");
-    CHECK(g_n < IDL_MAX_MEMBERS,
-          "the IDL member pool is full — either raise IDL_MAX_MEMBERS for a genuinely larger surface, or a "
-          "member is being DECLARED more than once (declare in the component's init, install from the cached "
-          "id; a per-wrapper install mints a definition per object)");
+    /* THE CEILING WAS ALSO A DETECTOR, and this is what it was really detecting. A member declared more than
+       once — a per-wrapper install minting a definition per object — showed up as the pool filling, which is a
+       number standing in for the actual invariant: a component DECLARES at init and installs from the cached
+       id, so once the document's install is done no declaration can be correct. That is asserted directly now,
+       which catches the same bug at the first repeat instead of the 384th and cannot be reached by a platform
+       that simply has more members in it. */
+    DCHECK(!g_sealed,
+           "an IDL member was declared after the document was installed — a component declares in its init and "
+           "installs from the cached id; a declaration reached from a wrapper or a flow mints a definition per "
+           "object");
     g_rt = rt;
     idx = g_n++;
+    idl_pool_reserve(idx);   /* the pool grows to fit the platform; there is nothing here to run out of */
     CHECK(nargs >= 0 && nargs <= IDL_MAX_DECLARED,
           "a member declared more argument types than IDL_MAX_DECLARED holds");   /* 0 = a getter, which takes none */
-    g_members[idx].body          = body;
-    g_members[idx].setter        = NULL;
-    g_members[idx].null_to_empty = false;
-    g_members[idx].nargs = nargs;
-    g_members[idx].magic = magic;
+    idl_member(idx)->body          = body;
+    idl_member(idx)->setter        = NULL;
+    idl_member(idx)->null_to_empty = false;
+    idl_member(idx)->nargs = nargs;
+    idl_member(idx)->magic = magic;
     for (k = 0; k < nargs; k++)
-        g_members[idx].types[k] = types[k];
-    g_members[idx].dict = members;
-    g_members[idx].dict_n = 0;
+        idl_member(idx)->types[k] = types[k];
+    idl_member(idx)->dict = members;
+    idl_member(idx)->dict_n = 0;
     if (members) {
         int ndict = 0;
         for (k = 0; k < nargs; k++)
@@ -643,19 +688,19 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
                            "names");
         CHECK(nmembers <= IDL_MAX_DICT, "a dictionary declared more members than IDL_MAX_DICT holds");
         for (k = 0; k < nmembers; k++)
-            g_members[idx].dict_atoms[k] = JS_NewAtom(ctx, members[k].name);
-        g_members[idx].dict_n = nmembers;
+            idl_member(idx)->dict_atoms[k] = JS_NewAtom(ctx, members[k].name);
+        idl_member(idx)->dict_n = nmembers;
     }
-    g_members[idx].step = NULL;
-    g_members[idx].variadic = false;
-    g_members[idx].iface = 0;
-    g_defs[idx].size  = sizeof(JSIdlArgsState);
-    g_defs[idx].step  = js_idl_args_step;
-    g_defs[idx].fini  = idl_args_result;
-    g_defs[idx].arg   = idx;
-    g_defs[idx].visit = js_idl_args_visit;
+    idl_member(idx)->step = NULL;
+    idl_member(idx)->variadic = false;
+    idl_member(idx)->iface = 0;
+    idl_def(idx)->size  = sizeof(JSIdlArgsState);
+    idl_def(idx)->step  = js_idl_args_step;
+    idl_def(idx)->fini  = idl_args_result;
+    idl_def(idx)->arg   = idx;
+    idl_def(idx)->visit = js_idl_args_visit;
     {
-        int sid = JS_RegisterStepDef(rt, &g_defs[idx]);
+        int sid = JS_RegisterStepDef(rt, idl_def(idx));
         idl_map_step(sid, idx);   /* the one place the runtime's id and this pool's index are both in hand */
         return sid;
     }
@@ -668,8 +713,8 @@ int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
     int id = idl_method_id_dict(ctx, types, nargs, members, nmembers, NULL, magic);
     /* the pool entry idl_method_id_dict just filled — a step member differs only in WHAT runs once the
        conversions are done, and in needing room after this machine's state for that thing to run in. */
-    g_members[g_n - 1].step = decl;
-    g_defs[g_n - 1].size = sizeof(JSIdlArgsState) + decl->state_size;
+    idl_member(g_n - 1)->step = decl;
+    idl_def(g_n - 1)->size = sizeof(JSIdlArgsState) + decl->state_size;
     return id;
 }
 
@@ -678,14 +723,14 @@ int idl_setter_id_step(JSContext *ctx, IdlArgType type, bool null_to_empty, cons
     int id = idl_method_id_step(ctx, &type, 1, NULL, 0, decl, magic);
     /* the pool entry idl_method_id_step just filled. A step setter is delivered as a ONE-ARGUMENT call, so its
        body reads argv[0]; what it needs from the setter form is the type's null rule. */
-    g_members[g_n - 1].null_to_empty = null_to_empty;
+    idl_member(g_n - 1)->null_to_empty = null_to_empty;
     return id;
 }
 
 int idl_step_magic(const JSStepHdr *hdr)
 {
     DCHECK(hdr->arg >= 0 && hdr->arg < g_n, "a step body asked for its magic with no pool entry behind it");
-    return g_members[hdr->arg].magic;
+    return idl_member(hdr->arg)->magic;
 }
 
 int idl_setter_id(JSContext *ctx, IdlArgType type, bool null_to_empty, IdlSetter body, int magic)
@@ -693,8 +738,8 @@ int idl_setter_id(JSContext *ctx, IdlArgType type, bool null_to_empty, IdlSetter
     int id = idl_method_id(ctx, &type, 1, NULL, magic);
     /* the pool entry idl_method_id just filled — a setter differs only in which body it runs and in the
        null-to-empty rule its type carries. */
-    g_members[g_n - 1].setter        = body;
-    g_members[g_n - 1].null_to_empty = null_to_empty;
+    idl_member(g_n - 1)->setter        = body;
+    idl_member(g_n - 1)->null_to_empty = null_to_empty;
     return id;
 }
 
@@ -761,7 +806,7 @@ JSValue idl_step_function(JSContext *ctx, const char *name, int length, int step
         DFAIL(why);
     }
     DCHECK(name != NULL && *name, "a step function was minted with no name — the pool has nothing to call it");
-    g_members[idx].name = name;
+    idl_member(idx)->name = name;
     return JS_NewCFunction2(ctx, NULL, name, length, JS_CFUNC_step, stepid);
 }
 
@@ -772,7 +817,7 @@ JSValue idl_step_constructor(JSContext *ctx, const char *name, int length, int s
     int idx = idl_member_of_step(stepid);
     DCHECK(idx >= 0, "a step constructor was minted for a member this pool never declared");
     DCHECK(name != NULL && *name, "a step constructor was minted with no name");
-    g_members[idx].name = name;
+    idl_member(idx)->name = name;
     return JS_NewCFunction2(ctx, NULL, name, length, JS_CFUNC_step_ctor, stepid);
 }
 
@@ -804,10 +849,14 @@ void idl_args_free(JSContext *ctx)
 {
     int i, k;
     for (i = 0; i < g_n; i++)
-        for (k = 0; k < g_members[i].dict_n; k++)
-            JS_FreeAtom(ctx, g_members[i].dict_atoms[k]);
-    memset(g_members, 0, sizeof(g_members));
-    memset(g_defs, 0, sizeof(g_defs));
+        for (k = 0; k < idl_member(i)->dict_n; k++)
+            JS_FreeAtom(ctx, idl_member(i)->dict_atoms[k]);
+    for (i = 0; i < g_nchunks; i++)
+        free(g_chunks[i]);
+    free(g_chunks);
+    g_chunks = NULL;
+    g_nchunks = 0;
     g_n = 0;
     g_rt = NULL;
+    g_sealed = false;
 }

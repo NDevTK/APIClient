@@ -138,7 +138,12 @@ typedef struct {
 } IdlTreeSteps;
 void idl_set_tree_steps(const IdlTreeSteps *ops);
 
-/* Release what the pool interned — the dictionary member atoms. */
+/* THE DOCUMENT'S INSTALL IS DONE — no further member declaration can be correct. A component declares in its
+   init and installs from the cached id, so a declaration reached from a wrapper or from a running flow is the
+   per-object mint this asserts against. Called once by the entry, after the components are installed. */
+void idl_args_seal(void);
+
+/* Release what the pool interned — the dictionary member atoms — and the pool's blocks. */
 void idl_args_free(JSContext *ctx);
 
 /* A SETTER's body, run once the assigned value has been converted. A setter is delivered differently from a

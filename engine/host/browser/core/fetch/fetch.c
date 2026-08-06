@@ -26,6 +26,7 @@
 #include "solver/endpoint.h"
 #include "solver/engine.h"
 #include "core/fetch/fetch.h"
+#include "core/fetch/headers.h"
 #include "core/fetch/response.h"
 
 /* The id JS_RegisterStepDef handed this runtime, and the two IDL attribute names the machine reads by. Atoms
@@ -189,10 +190,12 @@ void fetch_install(JSContext *ctx, JSValueConst global)
     if (g_fetch_stepid < 0) {
         g_fetch_rt    = rt;
         response_init(ctx);
+        headers_init(ctx);
         g_atom_method = JS_NewAtom(ctx, "method");
         g_atom_url    = JS_NewAtom(ctx, "url");
         g_fetch_stepid = JS_RegisterStepDef(rt, &js_fetch_def);
     }
+    headers_install(ctx, global);   /* §5's interface object — a page builds an init with it before it fetches */
     JS_SetPropertyStr(ctx, (JSValue)global, "fetch",
                       JS_NewCFunction2(ctx, NULL, "fetch", 1, JS_CFUNC_step, g_fetch_stepid));
 }

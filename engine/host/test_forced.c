@@ -21,6 +21,7 @@
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/fetch/response.h"
+#include "core/fetch/headers.h"
 #include "solver/endpoint.h"
 #include "solver/result.h"
 #include "solver/solve.h"
@@ -1016,6 +1017,20 @@ static const char *HTML =
       " var tag = cfg.admin ? 'bodyADMIN' : 'bodyPUBLIC';"   /* THE FORK — before either arm has read `r` */
       " var v = (await r.json()).region + '-' + tag;"        /* both arms read the SAME reply */
       " fetch('/api/bodyiso?v=' + v); })();"
+    /* §5 Headers. The RECORD fill is the conversion `fetch(u, {headers: {...}})` performs, so it is exercised
+       through the interface that states it: a record init, then the members that read it back. The list keeps
+       PAIRS — two `set-cookie` appends stay two entries and getSetCookie reads both — while `get` combines them
+       per §2.2.4, which is the whole difference between a header list and a map. A name is lowercased on the
+       way in, an absent header is null rather than "", and `set` replaces every entry with that name. */
+    "(function(){ var h = new Headers({'X-Api-Key': 'k1', 'Accept': 'application/json'});"
+      " h.append('Set-Cookie', 'a=1'); h.append('Set-Cookie', 'b=2');"
+      " var sc = h.getSetCookie();"
+      " h.append('X-Api-Key', 'k2');"                       /* append KEEPS both -> get joins them */
+      " var joined = h.get('x-api-key');"                   /* case-insensitive: normalized on the way in */
+      " h.set('X-Api-Key', 'k3');"                          /* set REPLACES every entry with that name */
+      " fetch('/api/hdrs?acc=' + h.get('Accept') + '&sc=' + sc.length + ':' + sc[0] + ':' + sc[1]"
+      "   + '&join=' + joined + '&set=' + h.get('X-Api-Key')"
+      "   + '&has=' + h.has('accept') + h.has('nope') + '&miss=' + h.get('nope')); })();"
     "(async function(){ var p = new Promise(function(res){ Promise.resolve().then(function(){ res('lazyRegion'); }); }); var c = await p; fetch('/api/lazy?r=' + c); })();"   /* PENDING await: the promise resolves LATER via a microtask (stands in for the network) -> park + resume */
     "var _spr; var _sp = new Promise(function(r){ _spr = r; }); _sp.then(function(v){ fetch('/api/shared?v=' + v); }); _spr(state.beta ? 'shBETA' : 'shSTABLE');"   /* PROBE: _sp created BEFORE the state.beta snapshot fork -> shared; settled per-flow. If promise state is NOT per-flow COW, only ONE value survives (contamination) */
     "if (state.gamma) { delete delObj.k; } fetch('/api/tok?t=' + (delObj.k ? delObj.k : 'wasDeleted'));"   /* DELETE time-travel: the gamma-true flow deletes delObj.k; the gamma-false flow must STILL see keepVAL (the delete is per-flow) */
@@ -1136,6 +1151,8 @@ int main(void) {
     JS_SetPropertyStr(ctx, g, "setBodyAttr", JS_NewCFunction(ctx, js_set_body_attr, "setBodyAttr", 2));   /* DOM attr write (per-flow) */
     JS_SetPropertyStr(ctx, g, "getBodyAttr", JS_NewCFunction(ctx, js_get_body_attr, "getBodyAttr", 1));   /* DOM attr read (per-flow) */
     response_init(ctx);   /* the reply interface the GET edge below hands back — the ABI build gets it from fetch_install */
+    headers_init(ctx);    /* §5's header list + interface, likewise */
+    headers_install(ctx, g);
     JS_SetPropertyStr(ctx, g, "fetchBody", JS_NewCFunction(ctx, js_fetch_body, "fetchBody", 1));   /* safe GET -> awaited Response */
     {
         /* A DECLARED member, like every DOM member — this host-edge mutates the tree, and §4.2.3's insertion
@@ -1190,6 +1207,9 @@ int main(void) {
        and again in test_forced.c, and the pair had drifted. */
     cow_install_time_travel_hooks();
     concolic_install_hooks();
+    /* The surface is installed, so every member the platform has is declared — a declaration from here on is a
+       per-wrapper or per-flow mint, and that is what the pool asserts against. */
+    idl_args_seal();
 
     DocScripts scripts = document_exec_scripts(dom);   /* each <script> its own program body — no concat */
     engine_run(ctx, scripts.bodies, scripts.srcs, scripts.n);         /* @H + @S detection */
@@ -1265,6 +1285,12 @@ int main(void) {
        here — which is exactly what it did, as a `body stream already read` page error. */
     int body_iso = (strstr(js, "\"/api/bodyiso\"") && strstr(js, "us-west-2-bodyADMIN") &&
                     strstr(js, "us-west-2-bodyPUBLIC"));
+    /* §5 Headers: the record fill ran (acc), the list keeps repeats (sc=2 with both values), `get` combines
+       them (join=k1, k2), `set` replaces them all (set=k3), a name is matched case-insensitively (has=truefalse)
+       and an absent header is null rather than "". */
+    int hdrs = (strstr(js, "\"/api/hdrs\"") && strstr(js, "application/json") &&
+                strstr(js, "2:a=1:b=2") && strstr(js, "k1, k2") &&
+                strstr(js, "\"k3\"") && strstr(js, "truefalse") && strstr(js, "\"null\""));
     /* PENDING await: the awaited promise resolved LATER (via a microtask, standing in for the network); the flow
        parked at the await and resumed when it settled -> /api/lazy?r=lazyRegion. The real fetch-parking path. */
     int pending_await = (strstr(js, "\"/api/lazy\"") && strstr(js, "lazyRegion"));
@@ -1519,7 +1545,7 @@ int main(void) {
         { "asynccall", asynccall_tt, 0 },  { "throw", async_throw, 0 },
         { "preempt", async_preempt, 0 },   { "fetch", fetch_await, 0 },
         { "clone-body", clone_body, 0 },   { "body-bytes", body_bytes, 0 },
-        { "body-iso", body_iso, 0 },
+        { "body-iso", body_iso, 0 },       { "hdrs", hdrs, 0 },
         { "pending", pending_await, 0 },   { "promise-state", promise_state, 0 },
         { "delete-iso", delete_iso, 0 },   { "floc-iso", floc_iso, 0 },
         { "ua", uafork_tt, 0 },            { "touch", touchfork_tt, 0 },
@@ -1585,6 +1611,7 @@ int main(void) {
     element_free(ctx);    /* the wrapper identity table and the DOM interface prototypes */
     event_target_free(ctx);
     event_free(ctx);
+    headers_free(ctx);    /* Headers.prototype and the name it interned */
     idl_args_free(ctx);   /* the dictionary member atoms the declaration pool interned */
     flow_registry_free(ctx);
     JS_RunGC(rt);   /* collect flow-local garbage from the runs before teardown */

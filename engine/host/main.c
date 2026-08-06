@@ -22,6 +22,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "browser/core/fetch/fetch.h"
+#include "browser/core/fetch/headers.h"
 #include "browser/core/dom/abort.h"
 #include "browser/core/html/unhandled_rejection.h"
 #include "browser/core/dom/document.h"
@@ -133,6 +134,9 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
         document_install(g_ctx, g, g_dom, origin);
         JS_FreeValue(g_ctx, g);
     }
+    /* The surface is installed, so every member the platform has is declared — a declaration from here on is a
+       per-wrapper or per-flow mint, and that is what the pool asserts against. */
+    idl_args_seal();
 
     (void)code; (void)unused; (void)csp;
     return 0;
@@ -205,6 +209,7 @@ QJS_EXPORT void qjs_teardown(void)
     element_free(g_ctx);    /* the wrapper identity table and the DOM interface prototypes */
     event_target_free(g_ctx);
     event_free(g_ctx);
+    headers_free(g_ctx);    /* Headers.prototype and the name it interned */
     idl_args_free(g_ctx);   /* the dictionary member atoms the declaration pool interned */
     if (g_ctx) { JS_FreeContext(g_ctx); g_ctx = NULL; }
     if (g_rt)  { JS_FreeRuntime(g_rt);  g_rt  = NULL; }

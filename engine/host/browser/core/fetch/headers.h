@@ -1,0 +1,54 @@
+/* The Headers interface — WHATWG Fetch §5, and the HEADER LIST behind it. See headers.c. */
+#ifndef ENGINE_HOST_BROWSER_CORE_FETCH_HEADERS_H
+#define ENGINE_HOST_BROWSER_CORE_FETCH_HEADERS_H
+#include <stddef.h>
+
+#include "quickjs.h"
+#include "quickjs-step.h"
+
+/* §5.1's header list: (name, value) pairs, names lowercased on the way in and never combined into one entry —
+   `Set-Cookie` is the reason the spec keeps them separate, and `getSetCookie` is the member that reads them
+   back. It is public because two things need to build one without a JS object in sight: the Headers interface
+   itself, and `fetch`'s conversion of an `init.headers` bag into the set an endpoint requires. */
+typedef struct { char *name; char *value; } HeaderEntry;
+typedef struct { HeaderEntry *e; int n, cap; } HeaderList;
+
+void  header_list_free(HeaderList *l);
+/* §5.1 append: lowercase the name, keep the pair. Both strings are COPIED. */
+void  header_list_append(HeaderList *l, const char *name, const char *value);
+/* §5.1 set: replace every entry with this name by one. */
+void  header_list_set(HeaderList *l, const char *name, const char *value);
+void  header_list_delete(HeaderList *l, const char *name);
+/* §2.2.4 "get a structured header value": the entries with this name, joined by ", " (malloc'd; NULL when the
+   list has none, which is what `get` returns null for). */
+char *header_list_get(const HeaderList *l, const char *name);
+
+/* §5.1 "fill", AS A SUB-SEQUENCE. Converting a `HeadersInit` is [[OwnPropertyKeys]] and then a [[Get]] and a
+   ToString per key — every one of them the page's code on a Proxy or an accessor, so every one of them a
+   request. It lives outside the Headers constructor because `fetch(u, {headers: ...})` performs the SAME
+   conversion and the spec states it once; a machine performing it embeds this cursor, declares it in its own
+   `visit` (headers_fill_visit) and releases it in its teardown (headers_fill_release).
+     Returns >0 (the caller returns it), 0 when the list is filled, or -1 with a throw live. */
+typedef struct {
+    uint8_t phase;
+    int     i, n;               /* the cursor into the key list, and how many keys there are */
+    JSValue keys, name, value;  /* owned: the key list, and the pair being read */
+} HeadersFill;
+void headers_fill_init(HeadersFill *f);
+void headers_fill_visit(JSContext *ctx, HeadersFill *f, JSStepVisit *v);
+void headers_fill_release(JSContext *ctx, HeadersFill *f);
+int  headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst init, HeaderList *out,
+                      JSValue in, JSValue **out_cb, int *out_argc);
+
+void    headers_init(JSContext *ctx);                       /* register the class + its machines (install time) */
+void    headers_install(JSContext *ctx, JSValueConst global);   /* the Headers interface object */
+void    headers_free(JSContext *ctx);   /* the prototype and the interned name this component holds */
+/* A Headers over an existing list; the object takes a COPY, because a header list a component owns outlives
+   nothing the page can reach and a page must not be able to mutate a reply's headers through the copy it was
+   handed. */
+JSValue headers_new(JSContext *ctx, const HeaderList *src);
+/* The list behind a Headers object, or NULL when `v` is not one — how `fetch` reads a `new Headers(...)` it was
+   handed without going back through the page's own accessors. */
+const HeaderList *headers_list_of(JSValueConst v);
+
+#endif
