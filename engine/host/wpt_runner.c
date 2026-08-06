@@ -34,6 +34,10 @@
 #include "core/html/form_data.h"
 #include "core/file/blob.h"
 #include "solver/concolic.h"
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
 #include "core/frame/location.h"
 #include "core/encoding/encoding.h"
 #include "core/idl_args.h"
@@ -132,59 +136,167 @@ static char g_wpt_root[512];
 
 static void wpt_report_exception(JSContext *ctx, const char *name, const char *what);
 
+/* THE WHOLE REQUEST is recorded, not the URL: the corpus's own handlers answer a POST by its BODY and a header
+   probe by its HEADERS, so a record that kept only where-to-go could never satisfy them. The strings are this
+   runner's copies, because the request the component built is gone by the time the pump drains. */
 #define WPT_OWED_MAX 64
-static struct { JSValue deliver; char *url; } g_owed[WPT_OWED_MAX];
+static struct {
+    JSValue deliver;
+    char   *method, *url, *body;
+    size_t  body_len;
+    HeaderList headers;
+} g_owed[WPT_OWED_MAX];
 static int g_owed_n;
 /* The document address of the file being run, which is what a relative fetch resolves against. */
 static char g_base_url[512];
 
-static void wpt_owe(JSContext *ctx, JSValueConst deliver, JSValueConst value, const char *url)
+static void wpt_owe(JSContext *ctx, JSValueConst deliver, JSValueConst value, const FetchRequest *req)
 {
+    int i;
     (void)value;
     CHECK(g_owed_n < WPT_OWED_MAX, "wpt: more replies owed at once than this runner tracks");
     g_owed[g_owed_n].deliver = JS_DupValue(ctx, deliver);
-    g_owed[g_owed_n].url = strdup(url ? url : "");
-    CHECK(g_owed[g_owed_n].url, "wpt: OOM recording an owed reply");
+    g_owed[g_owed_n].method = strdup(req->method ? req->method : "GET");
+    g_owed[g_owed_n].url = strdup(req->url ? req->url : "");
+    CHECK(g_owed[g_owed_n].url && g_owed[g_owed_n].method, "wpt: OOM recording an owed reply");
+    memset(&g_owed[g_owed_n].headers, 0, sizeof g_owed[g_owed_n].headers);
+    for (i = 0; req->headers && i < req->headers->n; i++)
+        header_list_append(&g_owed[g_owed_n].headers, req->headers->e[i].name, req->headers->e[i].value);
+    g_owed[g_owed_n].body = NULL;
+    g_owed[g_owed_n].body_len = req->body_len;
+    if (req->body) {
+        g_owed[g_owed_n].body = malloc(req->body_len + 1);
+        CHECK(g_owed[g_owed_n].body, "wpt: OOM copying a request body");
+        memcpy(g_owed[g_owed_n].body, req->body, req->body_len);
+        g_owed[g_owed_n].body[req->body_len] = 0;
+    }
     g_owed_n++;
 }
 
 /* Resolve one owed URL against the running file's address and read it out of the corpus. NULL when the corpus
    has no such file, which is a real 404 and is reported as one rather than as an empty body. */
-static char *wpt_serve(const char *url, size_t *plen)
+/* THE CORPUS IS SERVED BY WPT'S OWN SERVER, over a socket, exactly as a browser gets it.
+ *
+ * It was read off disk here, and that was wrong in a way the numbers hid: a `.py` path is a wptserve HANDLER,
+ * which the server imports and calls, and answering with the handler's SOURCE made nine files compare their
+ * upload against a Python file and report the ENGINE as wrong. Reporting them as a gate limitation was honest
+ * about the number and wrong about the cause — the handlers are in the corpus and their dependencies are
+ * vendored, so the server runs (engine/wptserve.py) and this speaks HTTP to it.
+ *
+ * Serving EVERYTHING through it rather than only the handlers is the point: the rewrites, the directory
+ * listings and the content types are then wptserve's own, and engine/wpt.mjs's hand-copied rewrite table
+ * deletes. The Host header carries the URL's own authority while the socket goes to the loopback port, which is
+ * exactly what a hosts-file mapping does for a real browser. */
+static char g_server[64];   /* "127.0.0.1:PORT", from the driver */
+
+static int wpt_connect(void)
+{
+    struct sockaddr_in a;
+    char host[64];
+    const char *colon = strchr(g_server, ':');
+    int fd;
+
+    CHECK(colon != NULL, "wpt: the driver did not name a server to serve the corpus from");
+    CHECK((size_t)(colon - g_server) < sizeof host, "wpt: the server address is longer than this runner holds");
+    memcpy(host, g_server, (size_t)(colon - g_server));
+    host[colon - g_server] = 0;
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(fd >= 0, "wpt: no socket to reach the corpus server");
+    memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET;
+    a.sin_port = htons((uint16_t)atoi(colon + 1));
+    a.sin_addr.s_addr = inet_addr(host);
+    if (connect(fd, (struct sockaddr *)&a, sizeof a) < 0) { close(fd); return -1; }
+    return fd;
+}
+
+static void wpt_send_all(int fd, const char *p, size_t n)
+{
+    while (n) {
+        ssize_t w = write(fd, p, n);
+        if (w <= 0) return;
+        p += w; n -= (size_t)w;
+    }
+}
+
+/* Perform one request and return its BODY, or NULL. A non-2xx is a NULL body, which is what the delivery turns
+   into `fetch`'s TypeError — the same answer a real network error gives. */
+static char *wpt_http(const FetchRequest *req, size_t *plen)
 {
     UrlRecord base, rec;
-    char *path = NULL, *full, *body = NULL;
+    char *path = NULL, *authority = NULL, *head;
+    char *buf = NULL, *body = NULL;
+    size_t cap = 1 << 16, n = 0, hn;
+    int fd, status = 0, i;
 
     url_record_init(&base);
     url_record_init(&rec);
     if (url_parse(&base, g_base_url, strlen(g_base_url), NULL) &&
-        url_parse(&rec, url, strlen(url), &base)) {
-        path = url_serialize_path(&rec);
+        url_parse(&rec, req->url, strlen(req->url), &base)) {
+        /* THE REQUEST TARGET is the path and the query — the fragment never goes on the wire, which is what
+           `exclude_fragment` says, and the authority travels in the Host header instead. */
+        char *q = url_serialize_path(&rec);
+        size_t n2 = strlen(q) + (rec.query ? strlen(rec.query) : 0) + 2;
+        path = malloc(n2);
+        CHECK(path, "wpt: OOM building a request target");
+        snprintf(path, n2, "%s%s%s", q, rec.query ? "?" : "", rec.query ? rec.query : "");
+        free(q);
+        authority = url_serialize_host_port(&rec);
     }
     url_record_free(&base);
     url_record_free(&rec);
-    if (!path) return NULL;
+    if (!path) { free(authority); return NULL; }
+
+    fd = wpt_connect();
+    if (fd < 0) { free(path); free(authority); return NULL; }
+
+    hn = strlen(path) + strlen(authority ? authority : "") + 512
+       + (req->headers ? (size_t)req->headers->n * 512 : 0);
+    head = malloc(hn);
+    CHECK(head, "wpt: OOM building a request");
+    n = (size_t)snprintf(head, hn, "%s %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n",
+                         req->method ? req->method : "GET", path, authority ? authority : "127.0.0.1");
+    for (i = 0; req->headers && i < req->headers->n; i++)
+        n += (size_t)snprintf(head + n, hn - n, "%s: %s\r\n",
+                              req->headers->e[i].name, req->headers->e[i].value);
+    n += (size_t)snprintf(head + n, hn - n, "Content-Length: %zu\r\n\r\n", req->body ? req->body_len : 0);
+    wpt_send_all(fd, head, n);
+    if (req->body && req->body_len) wpt_send_all(fd, req->body, req->body_len);
+    free(head);
+    free(path);
+    free(authority);
+
+    buf = malloc(cap);
+    CHECK(buf, "wpt: OOM reading a reply");
+    n = 0;
+    for (;;) {
+        ssize_t got;
+        if (n + 4096 > cap) {
+            char *g = realloc(buf, cap *= 2);
+            CHECK(g, "wpt: OOM growing a reply");
+            buf = g;
+        }
+        got = read(fd, buf + n, cap - n);
+        if (got <= 0) break;
+        n += (size_t)got;
+    }
+    close(fd);
+
+    /* HTTP/1.1 <status>, then headers, then a blank line. The body is what follows; `Connection: close` is why
+       there is no chunked framing to unpick. */
+    if (n > 12 && !memcmp(buf, "HTTP/1.", 7)) status = atoi(buf + 9);
     {
-        /* A `.py` PATH IS A wptserve HANDLER, not a file. WPT's own server IMPORTS it and calls its `main`,
-           which is how a test that uploads a form reads back what the server received. This runner serves the
-           corpus off disk, so it cannot run one — and answering with the handler's SOURCE is worse than
-           answering with nothing, because the test then compares its upload against a Python file and reports
-           the engine as wrong. It says so instead: a gate limitation named as one, which is the same thing the
-           missing-META-script check does. */
-        size_t n = strlen(path);
-        if (n > 3 && !strcmp(path + n - 3, ".py")) {
-            printf("@WPTHANDLER %s\n", path);
-            fflush(stdout);
-            free(path);
-            return NULL;
+        char *sep = memmem(buf, n, "\r\n\r\n", 4);
+        if (sep && status >= 200 && status < 300) {
+            size_t off = (size_t)(sep - buf) + 4;
+            *plen = n - off;
+            body = malloc(*plen + 1);
+            CHECK(body, "wpt: OOM copying a reply body");
+            memcpy(body, buf + off, *plen);
+            body[*plen] = 0;
         }
     }
-    full = malloc(strlen(g_wpt_root) + strlen(path) + 2);
-    CHECK(full, "wpt: OOM building a corpus path");
-    sprintf(full, "%s%s", g_wpt_root, path);
-    body = read_file(full, plen);
-    free(full);
-    free(path);
+    free(buf);
     return body;
 }
 
@@ -197,7 +309,14 @@ static bool wpt_drain_owed(JSContext *ctx)
     g_owed_n = 0;   /* taken first: satisfying one may owe another */
     for (i = 0; i < n; i++) {
         size_t len = 0;
-        char *body = wpt_serve(g_owed[i].url, &len);
+        FetchRequest req;
+        char *body;
+        req.method = g_owed[i].method;
+        req.url = g_owed[i].url;
+        req.headers = &g_owed[i].headers;
+        req.body = g_owed[i].body;
+        req.body_len = g_owed[i].body_len;
+        body = wpt_http(&req, &len);
         JSValue arg = body ? JS_NewStringLen(ctx, body, len) : JS_NULL;
         /* AS A FLOW, not a JS_Call. Settling the promise reads `then` off the value, which the page can own —
            out of the pump that would have run with no flow base under it. */
@@ -207,6 +326,9 @@ static bool wpt_drain_owed(JSContext *ctx)
         JS_FreeValue(ctx, g_owed[i].deliver);
         free(body);
         free(g_owed[i].url);
+        free(g_owed[i].method);
+        free(g_owed[i].body);
+        header_list_free(&g_owed[i].headers);
     }
     return true;
 }
@@ -319,6 +441,17 @@ int main(int argc, char **argv)
            and not a way to skip the others. A concolic `search` here is not a truth, and the harness's own
            coercion of it refuses at the C boundary, which is the boundary doing its job. */
         location_set_document_url(g_base_url);
+        {
+            /* WHERE THE CORPUS IS SERVED FROM. The driver starts wptserve and names its loopback port here;
+               the runner speaks HTTP to it and sends the URL's own authority as the Host header, which is what
+               a hosts-file mapping does for a real browser. A run with no server has nothing to fetch from, and
+               that is a GATE defect rather than a result, so it fails loud. */
+            const char *sv = getenv("WPT_SERVER");
+            CHECK(sv && *sv && strchr(sv, ':'),
+                  "wpt: WPT_SERVER names no host:port — the driver must start engine/wptserve.py and pass it");
+            CHECK(strlen(sv) < sizeof g_server, "wpt: WPT_SERVER is longer than this runner holds");
+            snprintf(g_server, sizeof g_server, "%s", sv);
+        }
         {
             JSValue loc = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, loc, "href", JS_NewString(ctx, g_base_url));

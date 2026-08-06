@@ -15,7 +15,7 @@
  *
  * Usage:  node engine/wpt.mjs [subdir-or-file]
  */
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
 import { existsSync, readdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { tmpdir } from "node:os";
@@ -28,8 +28,11 @@ const WPT = join(WORK, "wpt");
 const WPT_REV = "bf4714d";
 /* WHAT IS CHECKED OUT. A sparse list rather than the whole 1 GB tree, and it grows as areas are covered — an
    area absent here is honestly untested, which is a different statement from "passes". */
+/* `tools` is not a test area — it is WPT'S OWN SERVER and its vendored dependencies. The corpus is SERVED by
+   it rather than read off disk, because a `.py` path is a handler the server imports and calls, and because
+   the rewrites and content types are then wptserve's own rather than a table copied into this file. */
 const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetch/api/resources", "url", "common",
-                   "FileAPI/blob", "FileAPI/file", "FileAPI/support", "FileAPI/url", "encoding"];
+                   "FileAPI/blob", "FileAPI/file", "FileAPI/support", "FileAPI/url", "encoding", "tools"];
 
 if (!existsSync(join(WPT, "resources", "testharness.js"))) {
   /* NO --depth 1. The corpus is PINNED, and a depth-1 clone has only the tip — `git checkout bf4714d` in it
@@ -109,6 +112,21 @@ if (!files.length) { console.error(`[wpt] no .any.js under ${root}`); process.ex
 
 const HARNESS = join(WPT, "resources", "testharness.js");
 
+/* WPT'S OWN SERVER, started once for the run. Everything the corpus fetches goes through it, so the handlers
+   are the real ones and the rewrites are the real ones. */
+const server = spawn("python3", [join(ENGINE, "wptserve.py"), WPT, "0"], { stdio: ["ignore", "pipe", "pipe"] });
+const serverAddr = await new Promise((resolve, reject) => {
+  let out = "";
+  const fail = setTimeout(() => reject(new Error("wptserve did not report READY within 60s")), 60_000);
+  server.stdout.on("data", (d) => {
+    out += d;
+    const m = /READY (\d+)/.exec(out);
+    if (m) { clearTimeout(fail); resolve("127.0.0.1:" + m[1]); }
+  });
+  server.on("exit", (c) => { clearTimeout(fail); reject(new Error("wptserve exited with " + c)); });
+}).catch((e) => { console.error("[wpt] " + e.message); process.exit(1); });
+process.on("exit", () => server.kill());
+
 /* WPT's server does not serve every path from a file of that name. This is its rewrite table (tools/serve's
    `rewrites`), reproduced for the entries the corpus actually asks for: /resources/WebIDLParser.js is the
    webidl2 library under its historical name. A driver that skipped this would report the file as missing —
@@ -133,7 +151,12 @@ function metaScripts(file) {
     }
     const m = line.match(/^\/\/ META:\s*script=(.*)$/);
     if (!m) continue;
-    const ref = SERVER_REWRITES[m[1].trim()] || m[1].trim();
+    /* THE REWRITE APPLIES HERE AND NOWHERE ELSE. A META script is a PROGRAM INPUT — the driver hands the runner
+     its file to execute before the test — so this path is resolved on disk and needs wptserve's rewrite table
+     to find /resources/WebIDLParser.js, which is the webidl2 library under its historical name. Everything the
+     test FETCHES goes through the real server, which applies its own rewrites; this table is not a second copy
+     of those, it is the one entry the driver itself must resolve. */
+  const ref = SERVER_REWRITES[m[1].trim()] || m[1].trim();
     out.push(ref.startsWith("/") ? join(WPT, ref.slice(1)) : join(dirname(file), ref));
   }
   return out;
@@ -152,7 +175,9 @@ for (const f of files) {
     failures.push(`  ABORT  ${rel}\n         META script not checked out: ${missing.map((d) => relative(WPT, d)).join(", ")}`);
     continue;
   }
-  const r = spawnSync(bin, [HARNESS, ...deps, f], { encoding: "utf8", maxBuffer: 1 << 28, timeout: 60_000 });
+  const r = spawnSync(bin, [HARNESS, ...deps, f],
+                      { encoding: "utf8", maxBuffer: 1 << 28, timeout: 60_000,
+                        env: { ...process.env, WPT_SERVER: serverAddr } });
   const out = (r.stdout || "") + (r.stderr || "");
   /* An ABORT is a result about this file, not an accident: it is a DCHECK naming a capability the browser half
      does not have, which is exactly what this gate is for. It is counted apart from a FAIL because the two ask

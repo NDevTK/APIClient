@@ -28,6 +28,7 @@
 #include "core/file/blob.h"
 #include "core/frame/location.h"
 #include "core/fetch/headers.h"
+#include "core/fetch/body.h"
 #include "core/fetch/response.h"
 #include "core/fetch/request.h"
 
@@ -57,7 +58,7 @@ bool fetch_parse_url(UrlRecord *rec, const char *url, size_t len)
 void fetch_set_provider(const FetchProvider *p) { g_provider = p; }
 
 static int    g_fetch_stepid = -1;
-static JSAtom g_atom_method, g_atom_url, g_atom_headers;
+static JSAtom g_atom_method, g_atom_url, g_atom_headers, g_atom_body;
 static JSRuntime *g_fetch_rt;
 
 typedef struct JSFetchState {
@@ -67,6 +68,12 @@ typedef struct JSFetchState {
     JSValue   url;      /* the answer to the `input.url` read, or the USVString input itself */
     JSValue   input;    /* the argument ITSELF — a Request carries a captured blob URL entry the URL cannot */
     JSValue   hinit;    /* the answer to the `init.headers` read — a HeadersInit the fill converts */
+    JSValue   binit;    /* the answer to the `init.body` read — a BodyInit §5.1's extraction turns into bytes */
+    BodyState body;     /* those bytes. A POST that dropped its body asked the server a different question */
+    /* §5.1's Content-Type for that body, as a JS STRING rather than a malloc'd one: a step state is BYTE-COPIED
+       at a deep fork and only what `visit` names is re-taken, so a heap pointer here would be freed by both
+       arms. JS_UNDEFINED for a body whose arm has no type. */
+    JSValue   body_mime;
     HeadersFill fill;   /* the fill's cursor: it parks per key, so it cannot be a loop here */
     HeaderList  hdrs;   /* what the request carries, which is half of what makes the endpoint usable */
 } JSFetchState;
@@ -81,6 +88,8 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->url);
     v->val(ctx, &s->input);
     v->val(ctx, &s->hinit);
+    v->val(ctx, &s->binit);
+    v->val(ctx, &s->body_mime);
     headers_fill_visit(ctx, &s->fill, v);   /* the fill's own slots — it parks mid-conversion like any machine */
 }
 
@@ -180,7 +189,8 @@ static const JSTrampStepDef js_fetch_deliver_def = {
 };
 static int g_deliver_stepid = -1;
 
-static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method, JSValueConst input)
+static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method, JSValueConst input,
+                          const HeaderList *hdrs, const char *body, size_t body_len)
 {
     JSValue promise, resolving[2], deliver;
     JSValueConst data[3];
@@ -263,7 +273,15 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
             DCHECK(g_provider != NULL && g_provider->owe != NULL,
                    "fetch() was called with no host network provider installed — the promise would be owed to "
                    "nobody and the flow could never finish");
-            g_provider->owe(ctx, deliver, JS_UNDEFINED, u);
+            FetchRequest req;
+            const char *m = JS_IsUndefined(method) ? NULL : JS_ToCString(ctx, method);
+            req.method = m ? m : "GET";
+            req.url = u;
+            req.headers = hdrs;
+            req.body = body;
+            req.body_len = body_len;
+            g_provider->owe(ctx, deliver, JS_UNDEFINED, &req);
+            if (m) JS_FreeCString(ctx, m);
             JS_FreeValue(ctx, deliver);
         }
         JS_FreeCString(ctx, u);
@@ -279,11 +297,22 @@ static JSValue js_fetch_fini(JSContext *ctx, void *st, bool take_result)
     JSValue promise = JS_UNDEFINED;
 
     if (take_result)
-        promise = fetch_park(ctx, s->url, s->method, s->input);
+        if (!JS_IsUndefined(s->body_mime)) {
+            char *have = header_list_get(&s->hdrs, "content-type");
+            const char *m = have ? NULL : JS_ToCString(ctx, s->body_mime);
+            if (m) { header_list_append(&s->hdrs, "content-type", m); JS_FreeCString(ctx, m); }
+            free(have);
+        }
+        promise = fetch_park(ctx, s->url, s->method, s->input, &s->hdrs,
+                             s->body.has ? s->body.bytes : NULL, s->body.len);
     JS_FreeValue(ctx, s->method);
     JS_FreeValue(ctx, s->url);
     JS_FreeValue(ctx, s->input);
     JS_FreeValue(ctx, s->hinit);
+    JS_FreeValue(ctx, s->binit);
+    body_state_free(ctx, &s->body);
+    JS_FreeValue(ctx, s->body_mime);
+    s->body_mime = JS_UNDEFINED;
     headers_fill_release(ctx, &s->fill);
     header_list_free(&s->hdrs);
     return promise;
@@ -314,6 +343,31 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
             s->method = JS_UNDEFINED;   /* the skipped read's answer, spelled — see stage 2 */
         }
         cb_result = JS_UNDEFINED;
+        s->stage = 5;
+    }
+    if (s->stage == 5) {
+        /* 5.4 Request step 36: `init.body`. It was never read at all, so `fetch(u, {method:"POST", body:x})`
+           asked the server a different question than the page did — and the endpoint this engine reports for it
+           carried no body either. The READ is the page's code; the EXTRACTION afterwards is §5.1's, which
+           body.c owns for every interface that takes a BodyInit. */
+        if (JS_IsObject(init)) {
+            r = step_getprop_run(ctx, &s->hdr, init, g_atom_body, cb_result, &s->binit, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return JS_STEP_ABRUPT;
+        } else {
+            JS_FreeValue(ctx, cb_result);
+            s->binit = JS_UNDEFINED;
+        }
+        cb_result = JS_UNDEFINED;
+        if (!JS_IsUndefined(s->binit) && !JS_IsNull(s->binit)) {
+            char *mime = NULL;
+            if (body_extract(ctx, &s->body, s->binit, &mime) < 0) { free(mime); return JS_STEP_ABRUPT; }
+            /* §5.1's type, recorded the way the constructor records it: only where the init's own headers do
+               not already name one, which stage 3's fill decides — so it is appended after that fill. */
+            JS_FreeValue(ctx, s->body_mime);
+            s->body_mime = mime ? JS_NewString(ctx, mime) : JS_UNDEFINED;
+            free(mime);
+        }
         s->stage = 1;
     }
     if (s->stage == 1) {
@@ -414,6 +468,7 @@ void fetch_install(JSContext *ctx, JSValueConst global)
         headers_init(ctx);
         request_init(ctx);
         g_atom_method = JS_NewAtom(ctx, "method");
+        g_atom_body   = JS_NewAtom(ctx, "body");
         g_atom_url    = JS_NewAtom(ctx, "url");
         g_atom_headers = JS_NewAtom(ctx, "headers");
         g_fetch_stepid = JS_RegisterStepDef(rt, &js_fetch_def);

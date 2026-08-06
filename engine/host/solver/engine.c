@@ -1,4 +1,5 @@
 /* The dispatch loop — see engine.h. */
+#include "core/fetch/fetch.h"
 #include "solver/engine.h"
 #include "core/html/unhandled_rejection.h"
 #include "core/dom/node.h"   /* node_wrap_stats — the identity map's size */
@@ -27,8 +28,14 @@
    answer. With the host answering, that stub and this form both go. */
 /* The same park, with the URL the HOST must fetch. The value arrives later through engine_provide; until it
    does the flow cannot finish, which is what keeps the reply-gated code reachable. */
-void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst value, const char *url) {
+void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst value, const FetchRequest *req) {
     Flow *f = flow_running();
+    /* THE URL IS WHAT THIS HOST PARKS ON TODAY. The seam now carries the whole request — method, headers and
+       body — because a host that actually answers one needs them, and the trusted zone this parks for is
+       exactly such a host: `safeFetch` decides SOP/CORS/method/credentials, and it cannot decide about a method
+       it was never told. Recording the rest is the next step here; naming it in the seam is what makes that a
+       change in one place rather than a signature every provider re-invents. */
+    const char *url = req ? req->url : NULL;
     /* A live fetch is ALWAYS issued from a running flow — both explore and @S verify are the ONE scheduler now
        (run_scheduler), so flow_running() is set; the flow's stall drains it (flow_step). */
     DCHECK(f != NULL, "engine_pending_fetch_url: a live fetch issued outside a running flow");

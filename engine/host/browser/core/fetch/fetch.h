@@ -3,6 +3,7 @@
 #define ENGINE_HOST_BROWSER_CORE_FETCH_H
 #include "quickjs.h"
 #include "core/url/url.h"
+#include "core/fetch/headers.h"
 
 /* Install `fetch` on `global`. Every request forced execution reaches funnels one endpoint into the @H
    surface; the network itself is the trusted bridge's, never this sandbox's. */
@@ -20,8 +21,22 @@ void fetch_install(JSContext *ctx, JSValueConst global);
  * runner serves the checked-out corpus off disk. Naming the solver's register here made the browser half
  * depend on the scheduler, and through it on the whole DOM, so nothing could take `fetch` without taking the
  * solver too. */
+/* WHAT THE HOST IS OWED, as the REQUEST and not as a URL. It was a URL string, which is the half of a request
+   that names WHERE — and a host that can actually answer needs the rest: a POST's method and body decide what
+   comes back, and a request's headers are what a handler echoes. The wpt runner reached the point of asking
+   (its corpus's `echo-content.py` and `inspect-headers.py` answer exactly those), and the extension's host has
+   always needed them to satisfy a real request through the trusted zone. `headers` is the request's own list,
+   borrowed; `body`/`body_len` are its bytes, NULL for a request that has none. */
 typedef struct {
-    void (*owe)(JSContext *ctx, JSValueConst deliver, JSValueConst value, const char *url);
+    const char   *method;
+    const char   *url;
+    const HeaderList *headers;
+    const char   *body;
+    size_t        body_len;
+} FetchRequest;
+
+typedef struct {
+    void (*owe)(JSContext *ctx, JSValueConst deliver, JSValueConst value, const FetchRequest *req);
 } FetchProvider;
 void fetch_set_provider(const FetchProvider *p);
 

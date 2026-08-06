@@ -8,6 +8,7 @@
 #ifndef ENGINE_HOST_SOLVER_ENGINE_H
 #define ENGINE_HOST_SOLVER_ENGINE_H
 
+#include "core/fetch/fetch.h"
 #include "quickjs.h"
 
 /* Run the page's scripts as one code flow: each script `bodies[i]` is its OWN program (JS_FlowNew — faithful
@@ -78,7 +79,8 @@ int  engine_sched_step(void);
 /* The same park, with the URL only the TRUSTED HOST can fetch. The value arrives later through engine_provide;
    until it does the flow cannot finish, which is what keeps reply-gated code reachable. ONE register — the
    flow's own — because the reaction the resolve enqueues belongs to that flow and to its COW delta. */
-void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst value, const char *url);
+void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst value,
+                              const FetchRequest *req);
 /* THE FRONTIER'S BEST WEIGHT — what the host ranks this document's engine by against every other live one.
    Level-1 and level-2 are ONE policy (§scheduler): the host orders engines by their best flow exactly as the
    engine orders flows, so this is flow_weight of flow_best and nothing else. -inf when nothing is runnable, so
