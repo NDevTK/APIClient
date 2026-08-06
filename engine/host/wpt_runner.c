@@ -495,6 +495,23 @@ int main(int argc, char **argv)
     }
     JS_SetFlowControlHooks(&WPT_HOOKS_OFF);
 
+    /* ANY REPLY STILL OWED IS THIS RUNNER'S TO RELEASE. The pump leaves none behind on its normal exit — it
+       stops only when a drain owes nothing new — but a file that FAILED breaks out with entries recorded, and
+       each one holds a delivery closure, which holds the capability, which holds every reaction the page
+       attached to it. Dropped on the floor they are a leak of the page's own functions, reported at teardown as
+       leaked bytecode with no hint of where it came from. */
+    {
+        int i;
+        for (i = 0; i < g_owed_n; i++) {
+            JS_FreeValue(ctx, g_owed[i].deliver);
+            free(g_owed[i].url);
+            free(g_owed[i].method);
+            free(g_owed[i].body);
+            header_list_free(&g_owed[i].headers);
+        }
+        g_owed_n = 0;
+    }
+
     headers_free(ctx);
     response_free(ctx);
     request_free(ctx);
