@@ -235,6 +235,15 @@ static void idl_pair_iter_finalizer(JSRuntime *rt, JSValue val)
     }
 }
 
+/* The declared interface whose instance `v` is, or NULL. */
+static const IdlPairIface *idl_pair_iface_of(JSContext *ctx, JSValueConst v)
+{
+    int i;
+    for (i = 0; i < g_pair_n; i++)
+        if (g_pair[i].ops->count(ctx, v) >= 0) return &g_pair[i];
+    return NULL;
+}
+
 static IdlPairIter *idl_pair_iter_of(JSValueConst v)
 {
     int i;
@@ -338,16 +347,20 @@ static JSValue js_idl_pair_foreach_fini(JSContext *ctx, void *st, bool take_resu
 static int js_idl_pair_foreach_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     IdlPairForEachState *s = st;
-    const IdlPairIface *f = &g_pair[s->hdr.arg];
+    /* WHICH INTERFACE THE RECEIVER BELONGS TO comes from the RECEIVER. One static def serves every interface,
+       so its `arg` is the same for all of them — reading the interface off it made URLSearchParams.forEach
+       run as Headers.forEach and throw "not a Headers". This is the same defect the body readers had, and it
+       has the same fix: ask the value, not the definition. */
+    const IdlPairIface *f = idl_pair_iface_of(ctx, s->hdr.this_val);
     JSValueConst fn = step_arg(&s->hdr, 0), this_arg = step_arg(&s->hdr, 1);
     JSValue ignored;
     int r, k, n;
 
     if (s->cphase == 0 && s->i == 0)
         for (k = 0; k < PAIR_FOREACH_CB_SLOTS; k++) s->cb[k] = JS_UNDEFINED;   /* a zeroed state reads as INTEGER 0 */
-    if (f->ops->count(ctx, s->hdr.this_val) < 0) {
+    if (!f) {
         JS_FreeValue(ctx, cb_result);
-        JS_ThrowTypeError(ctx, "not a %s", f->ops->iface);
+        JS_ThrowTypeError(ctx, "forEach was called on something that is not an iterable interface");
         return JS_STEP_ABRUPT;
     }
     if (!JS_IsFunction(ctx, fn)) {

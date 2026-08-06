@@ -476,9 +476,13 @@ static bool parse_host(const char *s, size_t n, bool is_opaque, UrlHost *out)
         out->kind = URL_HOST_IPV6;
         return true;
     }
+    /* THE EMPTY HOST IS THE EMPTY HOST, opaque scheme or not. Sending an empty opaque input through the
+       opaque-host parser produced URL_HOST_OPAQUE with an empty string, which serializes identically and is
+       therefore invisible — except to "cannot have a username/password/port", which tests for the empty host
+       and so let `sc:///`.username = "x" write `sc://x@/`. */
+    if (n == 0) { out->kind = URL_HOST_EMPTY; return true; }
     if (is_opaque)
         return parse_opaque_host(s, n, out);
-    if (n == 0) { out->kind = URL_HOST_EMPTY; return true; }
 
     decoded = url_percent_decode(s, n, &dn);
     /* §4.2 step 4: DOMAIN TO ASCII. A non-ASCII domain is not lowercased and hoped for — `münchen.de` IS
@@ -648,6 +652,24 @@ char *url_serialize_origin(const UrlRecord *u)
     UStr o;
     char *host;
     if (!u->scheme) return xstrdup("null");
+    /* §4.7's `blob:` case: the origin is the one of the URL its PATH spells. `blob:https://example.com/uuid`
+       is same-origin with example.com — which is the entire security property of a blob URL, and answering
+       "null" for it would make a page's own origin check against its own blob fail. */
+    if (!strcmp(u->scheme, "blob")) {
+        UrlRecord inner;
+        char *path = url_serialize_path(u);
+        char *r = NULL;
+        url_record_init(&inner);
+        /* §4.7 names THREE schemes, and only those: a `blob:` whose path spells ftp, ws, wss or another blob
+           has an OPAQUE origin. Returning the inner origin for any parseable path would have made
+           `blob:ws://example.org/` same-origin with a WebSocket endpoint. */
+        if (url_parse(&inner, path, strlen(path), NULL) && inner.scheme &&
+            (!strcmp(inner.scheme, "http") || !strcmp(inner.scheme, "https") || !strcmp(inner.scheme, "file")))
+            r = url_serialize_origin(&inner);
+        url_record_free(&inner);
+        free(path);
+        return r ? r : xstrdup("null");
+    }
     if (strcmp(u->scheme, "http") && strcmp(u->scheme, "https") && strcmp(u->scheme, "ftp") &&
         strcmp(u->scheme, "ws") && strcmp(u->scheme, "wss"))
         return xstrdup("null");   /* §4.7: every other scheme has an opaque origin */
@@ -1105,21 +1127,30 @@ bool url_parse_into(UrlRecord *url, const char *input_raw, size_t raw_len, const
                 if (url_scheme_is_special(url->scheme)) {
                     state = ST_PATH;
                     if (c != '/' && c != '\\') reprocess = 1;
-                } else if (c == '?') {
+                } else if (state_override < 0 && c == '?') {
                     free(url->query); url->query = xstrdup("");
                     state = ST_QUERY;
-                } else if (c == '#') {
+                } else if (state_override < 0 && c == '#') {
                     free(url->fragment); url->fragment = xstrdup("");
                     state = ST_FRAGMENT;
                 } else if (c != -1) {
                     state = ST_PATH;
                     if (c != '/') reprocess = 1;
+                } else if (state_override >= 0 && url->host.kind == URL_HOST_NULL) {
+                    /* §4.4's last path-start clause, which only a SETTER reaches: an empty pathname on a
+                       host-less URL is one EMPTY SEGMENT, not no path at all — `foo:/some/path` with
+                       `pathname = ""` is `foo:/`, and without this it collapsed to `foo:` and could never get
+                       a path back. */
+                    path_push(url, "", 0);
                 }
                 break;
 
             case ST_PATH:
+                /* §4.4: `?` and `#` end the path only when NO state override is given. A setter is writing one
+                   component, so they are ordinary path characters there and get percent-encoded —
+                   `u.pathname = "?"` is `/%3F`, and terminating on them made it `/?`, which is a query. */
                 if (c == -1 || c == '/' || (c == '\\' && url_scheme_is_special(url->scheme)) ||
-                    c == '?' || c == '#') {
+                    (state_override < 0 && (c == '?' || c == '#'))) {
                     const char *b = buffer.p ? buffer.p : "";
                     if (seg_is_dotdot(b)) {
                         path_shorten(url);
@@ -1169,7 +1200,8 @@ bool url_parse_into(UrlRecord *url, const char *input_raw, size_t raw_len, const
                 break;
 
             case ST_QUERY:
-                if (c == '#' || c == -1) {
+                /* Same rule: `#` ends the query only without a state override, so `u.search = "#"` encodes it. */
+                if ((state_override < 0 && c == '#') || c == -1) {
                     UStr t;
                     int set = url_scheme_is_special(url->scheme) ? URL_SET_SPECIAL_QUERY : URL_SET_QUERY;
                     ustr_init(&t);

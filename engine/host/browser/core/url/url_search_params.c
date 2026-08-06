@@ -43,14 +43,39 @@ static char *usp_strdup(const char *s, size_t n)
     return r;
 }
 
-/* Byte order over the names, with the lengths — a shorter name that is a prefix of a longer one sorts first,
-   and memcmp alone cannot say that. */
+/* §6.2 sorts by CODE UNITS, which is not UTF-8 byte order. The two disagree for exactly one range: a
+   supplementary code point (U+10000 and up) is a SURROGATE PAIR in UTF-16, so it sorts as 0xD800..0xDBFF —
+   BELOW U+E000..U+FFFF — while its UTF-8 encoding starts with 0xF0 and sorts above theirs. `ﬃ` (U+FB03) and
+   `🌈` (U+1F308) are that case, and byte order put them the wrong way round.
+   Decoding one code point at a time and mapping a supplementary to its HIGH SURROGATE is enough to order
+   them: two supplementaries with the same high surrogate differ in the low one, and the code point order
+   within a high-surrogate block matches the low-surrogate order. */
+static uint32_t usp_next_unit(const char *s, size_t n, size_t *i)
+{
+    unsigned char c = (unsigned char)s[*i];
+    uint32_t cp;
+    int extra;
+
+    if (c < 0x80)                { cp = c;          extra = 0; }
+    else if ((c & 0xe0) == 0xc0) { cp = c & 0x1f;   extra = 1; }
+    else if ((c & 0xf0) == 0xe0) { cp = c & 0x0f;   extra = 2; }
+    else                         { cp = c & 0x07;   extra = 3; }
+    (*i)++;
+    while (extra-- > 0 && *i < n && ((unsigned char)s[*i] & 0xc0) == 0x80)
+        cp = (cp << 6) | ((unsigned char)s[(*i)++] & 0x3f);
+    return cp >= 0x10000 ? 0xd800 + ((cp - 0x10000) >> 10) : cp;
+}
+
 static int usp_name_cmp(const UspPair *a, const UspPair *b)
 {
-    size_t n = a->nlen < b->nlen ? a->nlen : b->nlen;
-    int c = n ? memcmp(a->name, b->name, n) : 0;
-    if (c) return c;
-    return a->nlen < b->nlen ? -1 : (a->nlen > b->nlen ? 1 : 0);
+    size_t ia = 0, ib = 0;
+    while (ia < a->nlen && ib < b->nlen) {
+        uint32_t ua = usp_next_unit(a->name, a->nlen, &ia);
+        uint32_t ub = usp_next_unit(b->name, b->nlen, &ib);
+        if (ua != ub) return ua < ub ? -1 : 1;
+    }
+    /* a shorter name that is a prefix of a longer one sorts first */
+    return (ia < a->nlen) ? 1 : ((ib < b->nlen) ? -1 : 0);
 }
 
 static void usp_list_free(UspList *l)
