@@ -150,10 +150,10 @@ static int in_encode_set(unsigned char c, int set)
     if (c == '#') return 1;                                                    /* query */
     if (set == URL_SET_QUERY) return 0;
     if (set == URL_SET_SPECIAL_QUERY) return c == '\'';
-    if (c == '?' || c == '`' || c == '{' || c == '}') return 1;                /* path */
+    if (c == '?' || c == '^' || c == '`' || c == '{' || c == '}') return 1;    /* path */
     if (set == URL_SET_PATH) return 0;
     if (c == '/' || c == ':' || c == ';' || c == '=' || c == '@' ||            /* userinfo */
-        c == '[' || c == '\\' || c == ']' || c == '^' || c == '|') return 1;
+        c == '[' || c == '\\' || c == ']' || c == '|') return 1;              /* ^ is already in path */
     if (set == URL_SET_USERINFO) return 0;
     if (c == '$' || c == '%' || c == '&' || c == '+' || c == ',') return 1;    /* component */
     if (set == URL_SET_COMPONENT) return 0;
@@ -416,6 +416,10 @@ static bool parse_ipv6(const char *s, size_t n, uint16_t out[8])
                 if (numbers == 4) break;
             }
             if (numbers != 4) return false;
+            /* §4.2's IPv6 parser RETURNS after the embedded IPv4, so anything still in the input is a
+               FAILURE — `[::127.0.0.1.]`, `[::1.2.3.4x]` and `[::127.0.0.0.1]` all parsed as valid because
+               this loop merely stopped reading rather than refusing what it had not read. */
+            if (p != e) return false;
             break;
         }
         if (p < e && *p == ':') {
@@ -586,14 +590,15 @@ char *url_serialize_port(const UrlRecord *u)
     return xstrdup(b);
 }
 
+/* §4.5's "URL PATH SERIALIZING", which is what §5.1's `pathname` returns: the opaque path, or the segments
+   each preceded by a slash. The `/.` prefix is NOT here — that belongs to the whole-URL serializer, and
+   putting it here made `pathname` report `/.//path` where the spec says `//path`. */
 char *url_serialize_path(const UrlRecord *u)
 {
     UStr o;
     int i;
     ustr_init(&o);
     if (u->opaque_path) { ustr_puts(&o, u->opaque_path); return ustr_take(&o); }
-    if (u->host.kind == URL_HOST_NULL && u->npath > 1 && u->path[0][0] == 0)
-        ustr_puts(&o, "/.");
     for (i = 0; i < u->npath; i++) {
         ustr_putc(&o, '/');
         ustr_puts(&o, u->path[i]);
@@ -625,6 +630,11 @@ char *url_serialize(const UrlRecord *u, bool exclude_fragment)
             ustr_puts(&o, buf);
         }
     }
+    /* §4.5: a host-less URL whose first segment is empty gets `/.` in FRONT of its path, so the result cannot
+       be re-read as an authority — `/​/path` would parse back with the host `path`. It is the SERIALIZER's
+       step and not the path's, which is why `pathname` does not show it. */
+    if (u->host.kind == URL_HOST_NULL && !u->opaque_path && u->npath > 1 && u->path[0][0] == 0)
+        ustr_puts(&o, "/.");
     path = url_serialize_path(u);
     ustr_puts(&o, path);
     free(path);
@@ -1027,6 +1037,11 @@ bool url_parse_into(UrlRecord *url, const char *input_raw, size_t raw_len, const
                             while (url->npath) path_pop(url);
                         state = ST_PATH;
                         reprocess = 1;
+                    } else {
+                        /* EOF with a file base takes the base's QUERY too — §4.4 sets host, path AND query
+                           together, and leaving the query out made `new URL("", "file:///t?q#f")` come back
+                           as `file:///t`, silently dropping the query the base carried. */
+                        if (base->query) url->query = xstrdup(base->query);
                     }
                 } else {
                     state = ST_PATH;
@@ -1057,7 +1072,11 @@ bool url_parse_into(UrlRecord *url, const char *input_raw, size_t raw_len, const
                 if (c == -1 || c == '/' || c == '\\' || c == '?' || c == '#') {
                     pointer--;
                     if (is_windows_drive(buffer.p ? buffer.p : "", buffer.n)) {
-                        state = ST_PATH;   /* not a host at all: `file://c:/` is a path */
+                        /* NOT A HOST AT ALL: `file://C:/` is a PATH, and §4.4 keeps the buffer so the path
+                           state consumes it as the first segment. Freeing it here dropped the drive letter,
+                           so `file://C:/` came out as `file:////` — a different URL with an empty host. */
+                        state = ST_PATH;
+                        goto next_char;
                     } else if (buffer.n == 0) {
                         url_host_free(&url->host);
                         url->host.kind = URL_HOST_EMPTY;
@@ -1136,7 +1155,14 @@ bool url_parse_into(UrlRecord *url, const char *input_raw, size_t raw_len, const
                     UStr t;
                     ustr_init(&t);
                     ustr_puts(&t, url->opaque_path ? url->opaque_path : "");
-                    ustr_put_encoded(&t, (const char *)&(char){ (char)c }, 1, URL_SET_C0);
+                    /* §4.4's ONE special case in this state: a SPACE becomes `%20` when what REMAINS starts
+                       with `?` or `#`, and stays a literal space otherwise. The C0 control set does not encode
+                       space, so without this `non-special:opaque  ?hi` kept both spaces literal — and a
+                       trailing space before a terminator is exactly what re-parsing would strip. */
+                    if (c == ' ' && pointer + 1 < len && (input[pointer + 1] == '?' || input[pointer + 1] == '#'))
+                        ustr_puts(&t, "%20");
+                    else
+                        ustr_put_encoded(&t, (const char *)&(char){ (char)c }, 1, URL_SET_C0);
                     free(url->opaque_path);
                     url->opaque_path = ustr_take(&t);
                 }
