@@ -16,9 +16,15 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/fetch/response.h"
 
 static JSClassID g_response_class;
+/* The ids JS_RegisterStepDef handed this runtime for the two body readers. One WASM instance is one document,
+   so these are that runtime's; the DCHECK at install is what makes a second one impossible rather than
+   merely unlikely. */
+static int g_text_stepid = -1, g_json_stepid = -1;
+static JSRuntime *g_response_rt;
 
 typedef struct { char *url; char *body; int body_used; } ResponseData;
 
@@ -45,49 +51,128 @@ static JSValue response_take_body(JSContext *ctx, JSValueConst this_val, const c
     return JS_UNDEFINED;
 }
 
-/* A settled promise, because the bytes are already here: the host fetched them before this Response existed. */
-static JSValue response_settled(JSContext *ctx, JSValue value, int reject)
+/* 6.4 "consume body" AS A STEP MACHINE.
+ *
+ * The bytes are already here, so the promise this returns is settled before the page ever sees it — but SETTLING
+ * it is not a C-private act. 27.2.1.3.2 step 8 reads `Get(resolution, "then")` off the value, which for
+ * `json()`'s result is an ordinary object whose prototype the page owns: `Object.prototype.then = { get(){…} }`
+ * makes that read the page's code, and prototype pollution is a gadget class this engine exists to run rather
+ * than assume away. Performed with a JS_Call from C it would run in an activation with no flow base — a loop in
+ * that getter would drive to completion — which is what the assert here used to say instead of fixing, and
+ * `json()` therefore aborted on EVERY object body: `fetch(u).then(r => r.json())`, the shape every bundle is
+ * written in. The resolving function is a CALL REQUEST now, so the read happens on the tramp where it can
+ * suspend and fork, and both readers share the one machine because they differ only in how the value is
+ * computed. */
+enum { BODY_TEXT = 0, BODY_JSON = 1 };
+
+typedef struct JSBodyState {
+    JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
+    uint8_t   stage;
+    uint8_t   cphase;   /* the settle call's own phase, so the stage can hold it across a suspension */
+    JSValue   promise;  /* the capability's promise — this machine's result (owned) */
+    JSValue   func;     /* its resolve or its reject, whichever this body read settles with (owned) */
+    JSValue   value;    /* what it settles WITH: the text, the parsed body, or the error (owned) */
+    JSValue   cb[3];    /* the call request buffer: [this, resolving function, value] */
+} JSBodyState;
+
+/* WHAT THIS MACHINE OWNS. The call buffer is in here for the reason dispatch's is: a `then` getter that forks
+   the flow must not leave two arms sharing one invocation. */
+static void js_body_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    JSValue promise, funcs[2], r;
-    promise = JS_NewPromiseCapability(ctx, funcs);
-    if (JS_IsException(promise)) { JS_FreeValue(ctx, value); return promise; }
-    /* Resolving with an OBJECT reads its `then` — the page's code — so this would be a C-driven trap the
-       moment a body value stopped being a primitive. It never is (the bytes are a string the host already
-       fetched), and saying so as an assert is what keeps this call from quietly becoming one. */
-    DCHECK(JS_VALUE_GET_TAG(value) != JS_TAG_OBJECT,
-           "a Response settled with an OBJECT — resolving one reads its `then` from C with no flow base; "
-           "route this through the promise machinery instead");
-    r = JS_Call(ctx, funcs[reject ? 1 : 0], JS_UNDEFINED, 1, (JSValueConst *)&value);
-    JS_FreeValue(ctx, r);
-    JS_FreeValue(ctx, value);
-    JS_FreeValue(ctx, funcs[0]);
-    JS_FreeValue(ctx, funcs[1]);
-    return promise;
+    JSBodyState *s = st;
+    int k;
+    v->val(ctx, &s->promise);
+    v->val(ctx, &s->func);
+    v->val(ctx, &s->value);
+    for (k = 0; k < 3; k++)
+        v->val(ctx, &s->cb[k]);
 }
 
-static JSValue js_response_text(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+static JSValue js_body_fini(JSContext *ctx, void *st, bool take_result)
 {
-    const char *body = NULL;
-    JSValue err = response_take_body(ctx, this_val, &body);
-    (void)argc; (void)argv;
-    if (JS_IsException(err))
-        return response_settled(ctx, JS_GetException(ctx), 1);
-    return response_settled(ctx, JS_NewString(ctx, body), 0);
+    JSBodyState *s = st;
+    JSValue r = take_result ? s->promise : JS_UNDEFINED;
+    int k;
+
+    if (take_result) s->promise = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->promise);
+    JS_FreeValue(ctx, s->func);
+    JS_FreeValue(ctx, s->value);
+    s->promise = s->func = s->value = JS_UNDEFINED;
+    for (k = 0; k < 3; k++) {
+        JS_FreeValue(ctx, s->cb[k]);
+        s->cb[k] = JS_UNDEFINED;
+    }
+    return r;
 }
 
-/* 6.4.3 json(): parse the body with the REAL parser, so a malformed body rejects with the SyntaxError the page
-   would actually catch rather than a placeholder this engine invented. */
-static JSValue js_response_json(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+/* 6.4.3 json() parses with the REAL parser, so a malformed body rejects with the SyntaxError the page would
+   actually catch rather than a placeholder this engine invented. Nothing in here runs the page's code — the
+   body is the host's bytes and the latch is this component's — which is why it is one stage and not three. */
+static int js_body_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
-    const char *body = NULL;
-    JSValue err = response_take_body(ctx, this_val, &body), parsed;
+    JSBodyState *s = st;
+    JSValue settled, funcs[2];
+    int reject = 0, r;
+
+    if (s->stage == 0) {
+        const char *body = NULL;
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        settled = response_take_body(ctx, s->hdr.this_val, &body);
+        if (JS_IsException(settled)) {
+            s->value = JS_GetException(ctx);
+            reject = 1;
+        } else if (s->hdr.arg == BODY_JSON) {
+            s->value = JS_ParseJSON(ctx, body, strlen(body), "<response>");
+            if (JS_IsException(s->value)) { s->value = JS_GetException(ctx); reject = 1; }
+        } else {
+            s->value = JS_NewString(ctx, body);
+            if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
+        }
+        /* The NATIVE capability: %Promise% with no subclass in sight, so building it constructs nothing of the
+           page's. Only the settle below is the page's, and that is the request. */
+        s->promise = JS_NewPromiseCapability(ctx, funcs);
+        if (JS_IsException(s->promise)) return JS_STEP_ABRUPT;
+        s->func = funcs[reject];
+        JS_FreeValue(ctx, funcs[reject ^ 1]);
+        s->stage = 1;
+    }
+
+    DCHECK(s->stage == 1, "the body-read machine was re-entered at a stage it never parks in");
+    r = step_call_run(ctx, &s->cphase, s->cb, s->func, JS_UNDEFINED, 1, (JSValueConst *)&s->value,
+                      cb_result, &settled, out_cb, out_argc);
+    if (r > 0) return r;          /* parked ON THE SETTLE; the `then` read runs with a flow base under it */
+    JS_FreeValue(ctx, settled);   /* a resolving function's return value is undefined and unobservable */
+    return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef js_body_text_def = {
+    sizeof(JSBodyState), js_body_step, js_body_fini, BODY_TEXT, .visit = js_body_visit
+};
+static const JSTrampStepDef js_body_json_def = {
+    sizeof(JSBodyState), js_body_step, js_body_fini, BODY_JSON, .visit = js_body_visit
+};
+
+/* 6.4 clone(). A caching or interceptor layer is written as `const copy = res.clone()` before it reads the
+   body, because reading is single-use — so without this the FIRST thing such a bundle does with a reply is
+   throw, and every endpoint, example value and sink behind that request is lost. It is the same failure `json`
+   was added for, one layer further out.
+   The spec's two steps are both load-bearing here. "If this is unusable, throw a TypeError" is SYNCHRONOUS —
+   not a rejected promise — because clone is not a body-consuming method; a page that guards with try/catch
+   sees the throw where it wrote the catch. And the clone gets its OWN body-used latch: the point of cloning is
+   two independent reads, so sharing the latch would make the copy unreadable the moment the original was read
+   and defeat the only reason the call exists. It does NOT consume this response — `res.clone()` leaves `res`
+   readable, which is what the caching layer then does with it. */
+static JSValue js_response_clone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    ResponseData *d = response_of(this_val);
     (void)argc; (void)argv;
-    if (JS_IsException(err))
-        return response_settled(ctx, JS_GetException(ctx), 1);
-    parsed = JS_ParseJSON(ctx, body, strlen(body), "<response>");
-    if (JS_IsException(parsed))
-        return response_settled(ctx, JS_GetException(ctx), 1);
-    return response_settled(ctx, parsed, 0);
+    if (!d)
+        return JS_ThrowTypeError(ctx, "not a Response");
+    if (d->body_used)
+        return JS_ThrowTypeError(ctx, "cannot clone a Response whose body has been read");
+    return response_new(ctx, d->url, d->body);
 }
 
 static JSValue js_response_get(JSContext *ctx, JSValueConst this_val, int magic)
@@ -109,8 +194,7 @@ static JSValue js_response_get(JSContext *ctx, JSValueConst this_val, int magic)
 }
 
 static const JSCFunctionListEntry js_response_proto[] = {
-    JS_CFUNC_DEF("text", 0, js_response_text),
-    JS_CFUNC_DEF("json", 0, js_response_json),
+    JS_CFUNC_DEF("clone", 0, js_response_clone),
     JS_CGETSET_MAGIC_DEF("ok", js_response_get, NULL, 0),
     JS_CGETSET_MAGIC_DEF("status", js_response_get, NULL, 1),
     JS_CGETSET_MAGIC_DEF("statusText", js_response_get, NULL, 2),
@@ -123,8 +207,18 @@ static const JSCFunctionListEntry js_response_proto[] = {
 void response_init(JSContext *ctx)
 {
     JSClassDef def = { "Response", .finalizer = response_finalizer };
-    JS_NewClassID(JS_GetRuntime(ctx), &g_response_class);
-    JS_NewClass(JS_GetRuntime(ctx), g_response_class, &def);
+    JSRuntime *rt = JS_GetRuntime(ctx);
+
+    DCHECK(g_response_rt == NULL || g_response_rt == rt,
+           "Response was installed into a second runtime — its class id and step ids belong to the first, and "
+           "one WASM instance is one document");
+    if (g_response_rt == rt)
+        return;   /* IDEMPOTENT: the class and the two step defs are the runtime's, and it has them */
+    g_response_rt = rt;
+    JS_NewClassID(rt, &g_response_class);
+    JS_NewClass(rt, g_response_class, &def);
+    g_text_stepid = JS_RegisterStepDef(rt, &js_body_text_def);
+    g_json_stepid = JS_RegisterStepDef(rt, &js_body_json_def);
 }
 
 JSValue response_new(JSContext *ctx, const char *url, const char *body)
@@ -144,5 +238,11 @@ JSValue response_new(JSContext *ctx, const char *url, const char *body)
     JS_SetOpaque(obj, d);
     JS_SetPropertyFunctionList(ctx, obj, js_response_proto,
                                (int)(sizeof(js_response_proto) / sizeof(js_response_proto[0])));
+    DCHECK(g_text_stepid >= 0 && g_json_stepid >= 0,
+           "a Response was built before its body readers were registered — response_init runs at install");
+    JS_SetPropertyStr(ctx, obj, "text",
+                      JS_NewCFunction2(ctx, NULL, "text", 0, JS_CFUNC_step, g_text_stepid));
+    JS_SetPropertyStr(ctx, obj, "json",
+                      JS_NewCFunction2(ctx, NULL, "json", 0, JS_CFUNC_step, g_json_stepid));
     return obj;
 }

@@ -20,6 +20,7 @@
 #include "core/dom/document.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
+#include "core/fetch/response.h"
 #include "solver/endpoint.h"
 #include "solver/result.h"
 #include "solver/solve.h"
@@ -134,22 +135,28 @@ static JSValue js_last_child_mark(JSContext *ctx, JSValueConst this_val, int arg
     return v ? JS_NewStringLen(ctx, (const char *)v, vl) : JS_NULL;
 }
 
-/* the SAFE-GET fetch host-edge that RETURNS ITS RESULT: models `await fetch('/api/config').then(r=>r.json())`.
-   A real network GET is ASYNCHRONOUS, so it returns a PENDING promise + registers its resolve capability and the
-   JSON body it will deliver. A flow that awaits it PARKS (its async body suspends on the promise); when the
-   frontier stalls, engine_run resolves every pending fetch (the network completing) and the awaiting continuation
-   resumes with the body — so body.region flows into a later endpoint as a CONCRETE example. This is the real
-   fetch-await path (no bespoke JS global — the page bundle's own `await fetch(...)` drives it). */
-static JSValue js_fetch_json(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+/* the SAFE-GET fetch host-edge that RETURNS ITS RESULT: models `await fetch('/api/config')` and everything the
+   page then does with the reply. A real network GET is ASYNCHRONOUS, so it returns a PENDING promise + registers
+   its resolve capability and the REPLY it will deliver. A flow that awaits it PARKS (its async body suspends on
+   the promise); when the frontier stalls, engine_run resolves every pending fetch (the network completing) and
+   the awaiting continuation resumes with the reply — so the body's `region` flows into a later endpoint as a
+   CONCRETE example.
+   IT DELIVERS A Response, which is what core/fetch/fetch.c's own deliver closure builds, because the reply is
+   where a bundle's endpoint learning either continues or stops: `r.json()`, `r.clone()`, `r.ok` are the next
+   thing every one of them does. Handing back a bare object instead made this fixture agree with nothing that
+   ships, and left the whole Response component with no test — the `json()` abort below lived there unseen. */
+static JSValue js_fetch_body(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
+    const char *url = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
     if (argc > 0) endpoint_record(ctx, "GET", argv[0]);
-    JSValue body = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, body, "region", JS_NewString(ctx, "us-west-2"));   /* the fetched config's field */
+    /* the host's BYTES, as they arrive off the wire — the Response parses them, this edge does not */
+    JSValue reply = response_new(ctx, url ? url : "", "{\"region\":\"us-west-2\"}");
+    if (url) JS_FreeCString(ctx, url);
     JSValue resolving[2];
     JSValue promise = JS_NewPromiseCapability(ctx, resolving);
-    engine_pending_fetch(ctx, resolving[0], body);   /* live GET: resolved when the frontier stalls (fetch-await park) */
+    engine_pending_fetch(ctx, resolving[0], reply);   /* live GET: resolved when the frontier stalls (fetch-await park) */
     JS_FreeValue(ctx, resolving[0]); JS_FreeValue(ctx, resolving[1]);
-    JS_FreeValue(ctx, body);
+    JS_FreeValue(ctx, reply);
     return promise;   /* PENDING — awaiting it parks the flow until the scheduler drains the fetch */
 }
 
@@ -980,7 +987,17 @@ static const char *HTML =
     "(async function(){ function h(f){ return f ? 'acADMIN' : 'acPUBLIC'; } fetch('/api/asynccall?w=' + h(cfg.admin)); })();"   /* ASYNC body calls a HELPER whose concolic branch forks DEEP (chain base->async->helper): the async frame is a CALLER, not the deepest — exercises clone_deep_flow's async-as-caller buffer sourcing (tramp_buf_base/tramp_live_sf) -> both acADMIN and acPUBLIC */
     "(async function(){ throw 'asyncThrew'; })().catch(function(e){ fetch('/api/caught?e=' + e); });"   /* async THROW -> rejected promise -> .catch reaction fires */
     "(async function(){ var s=0; for(var i=0;i<2000;i++){ s=s+1; } fetch('/api/asyncloop?s='+s); })();"   /* async body with a LOOP -> preempt may fire inside the async tramp frame */
-    "(async function(){ var c = await fetchJson('/api/config'); fetch('/api/user?region=' + c.region); })();"   /* FETCH-AWAIT-RESULT: await a safe GET, its JSON body's field flows into a later endpoint as a concrete example */
+    "(async function(){ var c = await (await fetchBody('/api/config')).json(); fetch('/api/user?region=' + c.region); })();"   /* FETCH-AWAIT-RESULT: await a safe GET, then §6.4.3 json() over the host's bytes — the parsed body's field flows into a later endpoint as a concrete example */
+    /* §6.4 clone(), which is how a caching or interceptor layer is written: copy the reply, read the copy, and
+       still hand the original on. Both halves of the spec are asserted because both are the reason it exists —
+       the clone reads INDEPENDENTLY (its own body-used latch, or the copy would be dead the moment the original
+       was read), and cloning does NOT consume the original (or the layer would have nothing to pass along).
+       The throw is SYNCHRONOUS on an already-read body, not a rejected promise, so a page's try/catch sees it
+       where it was written. */
+    "(async function(){ var r = await fetchBody('/api/config'); var c = r.clone();"
+      " var a = await c.json(); var b = await r.json();"
+      " var thrown = 'no'; try { r.clone(); } catch (e) { thrown = 'sync'; }"
+      " fetch('/api/clonebody?copy=' + a.region + '&orig=' + b.region + '&used=' + thrown); })();"
     "(async function(){ var p = new Promise(function(res){ Promise.resolve().then(function(){ res('lazyRegion'); }); }); var c = await p; fetch('/api/lazy?r=' + c); })();"   /* PENDING await: the promise resolves LATER via a microtask (stands in for the network) -> park + resume */
     "var _spr; var _sp = new Promise(function(r){ _spr = r; }); _sp.then(function(v){ fetch('/api/shared?v=' + v); }); _spr(state.beta ? 'shBETA' : 'shSTABLE');"   /* PROBE: _sp created BEFORE the state.beta snapshot fork -> shared; settled per-flow. If promise state is NOT per-flow COW, only ONE value survives (contamination) */
     "if (state.gamma) { delete delObj.k; } fetch('/api/tok?t=' + (delObj.k ? delObj.k : 'wasDeleted'));"   /* DELETE time-travel: the gamma-true flow deletes delObj.k; the gamma-false flow must STILL see keepVAL (the delete is per-flow) */
@@ -1100,7 +1117,8 @@ int main(void) {
     location_install(ctx, g, "https://x.test/p");
     JS_SetPropertyStr(ctx, g, "setBodyAttr", JS_NewCFunction(ctx, js_set_body_attr, "setBodyAttr", 2));   /* DOM attr write (per-flow) */
     JS_SetPropertyStr(ctx, g, "getBodyAttr", JS_NewCFunction(ctx, js_get_body_attr, "getBodyAttr", 1));   /* DOM attr read (per-flow) */
-    JS_SetPropertyStr(ctx, g, "fetchJson", JS_NewCFunction(ctx, js_fetch_json, "fetchJson", 1));   /* safe GET -> awaited JSON body */
+    response_init(ctx);   /* the reply interface the GET edge below hands back — the ABI build gets it from fetch_install */
+    JS_SetPropertyStr(ctx, g, "fetchBody", JS_NewCFunction(ctx, js_fetch_body, "fetchBody", 1));   /* safe GET -> awaited Response */
     {
         /* A DECLARED member, like every DOM member — this host-edge mutates the tree, and §4.2.3's insertion
            steps are drained by the machine every declared member converges on. As a raw JS_CFUNC_DEF its steps
@@ -1210,9 +1228,15 @@ int main(void) {
     /* ASYNC LOOP + PREEMPT: an async body with a loop is preempted mid-iteration; the deep-preempt stashes and
        rebuilds the whole TrampFrame chain (incl. async_data), so it resumes correctly. s=0+..+24=300. */
     int async_preempt = (strstr(js, "\"/api/asyncloop\"") && strstr(js, "\"2000\""));
-    /* FETCH-AWAIT-RESULT: `await fetchJson('/api/config')` delivered the JSON body, whose .region flowed into
-       /api/user?region=us-west-2 as a CONCRETE example — a safe GET's result driving API-value learning. */
+    /* FETCH-AWAIT-RESULT: `await fetchBody('/api/config')` delivered the reply and §6.4.3 json() parsed it,
+       whose .region flowed into /api/user?region=us-west-2 as a CONCRETE example — a safe GET's result driving
+       API-value learning, through the Response the shipped fetch component actually hands back. */
     int fetch_await = (strstr(js, "\"/api/user\"") && strstr(js, "us-west-2"));
+    /* §6.4 clone(): the copy read the body, the ORIGINAL still read it afterwards, and cloning a read body
+       threw where the page put its catch. A caching layer's first move is `res.clone()`, so without it the
+       reply — and every endpoint behind it — was lost at that line. */
+    int clone_body = (strstr(js, "\"/api/clonebody\"") && strstr(js, "\"copy\"") &&
+                      strstr(js, "\"orig\"") && strstr(js, "sync"));
     /* PENDING await: the awaited promise resolved LATER (via a microtask, standing in for the network); the flow
        parked at the await and resumed when it settled -> /api/lazy?r=lazyRegion. The real fetch-parking path. */
     int pending_await = (strstr(js, "\"/api/lazy\"") && strstr(js, "lazyRegion"));
