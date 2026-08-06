@@ -63,20 +63,19 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     JS_SetPropertyStr(ctx, g, "closed", JS_FALSE);
 
     /* The Window's origin, serialized — the principal, concrete for the same reason Location's is: a bundle
-       compares it and builds URLs out of it, and a shape there loses every endpoint behind the comparison. */
+       compares it and builds URLs out of it, and a shape there loses every endpoint behind the comparison.
+       IT IS §4.7's SERIALIZATION, not a substring of the address. The scan that stood here took everything
+       before the first `/?#` after `://`, which is not an origin: it kept a default port that §4.7 drops, kept
+       userinfo that an origin never has, and had no answer at all for a scheme with an OPAQUE origin — a
+       `data:` document's `origin` is the string "null", and this gave it nothing. */
     if (url && *url) {
-        const char *scheme_end = strstr(url, "://");
-        if (scheme_end) {
-            const char *host_end = scheme_end + 3;
-            char origin[300];
-            size_t n;
-            host_end += strcspn(host_end, "/?#");
-            n = (size_t)(host_end - url);
-            CHECK(n < sizeof(origin), "the document's origin is longer than any real one");
-            memcpy(origin, url, n);
-            origin[n] = 0;
+        UrlRecord rec;
+        if (url_parse(&rec, url, strlen(url), NULL)) {
+            char *origin = url_serialize_origin(&rec);
             JS_SetPropertyStr(ctx, g, "origin", JS_NewString(ctx, origin));
+            free(origin);
         }
+        url_record_free(&rec);
     }
 
     JS_DefinePropertyGetSet(ctx, g, JS_NewAtom(ctx, "name"),

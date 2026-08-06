@@ -25,54 +25,25 @@
 #include "quickjs.h"
 #include "solver/concolic.h"
 #include "core/frame/location.h"
+#include "core/url/url.h"
 
-/* Split `url` into its concrete parts. Everything from `?` or `#` on is the attacker's and is not parsed here. */
-typedef struct {
-    char protocol[16];   /* "https:" */
-    char host[256];      /* "e.test:8443" */
-    char hostname[256];
-    char port[8];
-    char origin[300];    /* "https://e.test:8443" */
-    char pathname[512];  /* "/a/b" — "/" when the address names none */
-} LocParts;
-
-static void loc_split(const char *url, LocParts *p)
+/* Install a member from a malloc'd serialization and take ownership of it — every one of Location's concrete
+   members is one of these, so the free belongs here rather than at six call sites. */
+static void loc_put(JSContext *ctx, JSValueConst loc, const char *name, char *owned)
 {
-    const char *scheme_end, *host_start, *host_end, *colon, *path_end;
-    size_t n;
+    JS_SetPropertyStr(ctx, (JSValue)loc, name, JS_NewString(ctx, owned));
+    free(owned);
+}
 
-    memset(p, 0, sizeof(*p));
-    scheme_end = strstr(url, "://");
-    CHECK(scheme_end != NULL, "a document address with no scheme reached Location — the host captured a URL "
-                              "this engine cannot make a principal out of");
-    n = (size_t)(scheme_end - url) + 1;                    /* include the ':' */
-    CHECK(n < sizeof(p->protocol), "the document's scheme is longer than any real one");
-    memcpy(p->protocol, url, n);
-
-    host_start = scheme_end + 3;
-    host_end = host_start + strcspn(host_start, "/?#");
-    n = (size_t)(host_end - host_start);
-    CHECK(n < sizeof(p->host), "the document's host is longer than any real one");
-    memcpy(p->host, host_start, n);
-
-    /* hostname/port split on the LAST colon, which is what an IPv6 literal's brackets keep unambiguous. */
-    colon = strrchr(p->host, ':');
-    if (colon && !strchr(colon, ']')) {
-        memcpy(p->hostname, p->host, (size_t)(colon - p->host));
-        snprintf(p->port, sizeof(p->port), "%s", colon + 1);
-    } else {
-        snprintf(p->hostname, sizeof(p->hostname), "%s", p->host);
-    }
-    snprintf(p->origin, sizeof(p->origin), "%s//%s", p->protocol, p->host);
-
-    if (*host_end == '/') {
-        path_end = host_end + strcspn(host_end, "?#");
-        n = (size_t)(path_end - host_end);
-        CHECK(n < sizeof(p->pathname), "the document's path is longer than this engine models");
-        memcpy(p->pathname, host_end, n);
-    } else {
-        p->pathname[0] = '/';   /* 4.7.1: an address naming no path has "/" */
-    }
+static char *loc_concat(const char *a, const char *b)
+{
+    size_t na = strlen(a), nb = strlen(b);
+    char *r = malloc(na + nb + 1);
+    CHECK(r, "location: OOM building an address");
+    memcpy(r, a, na);
+    memcpy(r + na, b, nb);
+    r[na + nb] = 0;
+    return r;
 }
 
 static JSValue js_loc_get_search(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -98,22 +69,32 @@ void location_install(JSContext *ctx, JSValueConst global, const char *url)
     concolic_declare_source("location.hash", " \"<>`", '#');
     concolic_declare_source("location.search", " \"#<>'", '?');
 
-    LocParts p;
-    JSValue loc, search, hash;
+    UrlRecord rec;
+    JSValue loc;
+    char *s;
 
     if (!url || !*url)
         return;   /* no address, no Location — the page's own throw is the honest answer */
-    loc_split(url, &p);
+
+    /* THE ADDRESS GOES THROUGH THE REAL PARSER. A hand-rolled splitter stood here — strstr("://"),
+       strrchr(':'), fixed 256-byte buffers — and it was wrong wherever a URL is interesting: it CHECK-failed
+       on an address with no "://", it read `http://0x7f.1/` as the domain `0x7f.1` rather than the address
+       127.0.0.1, and its port split guessed at IPv6 brackets. It is deleted rather than kept for the common
+       case, because the common case is exactly where two parsers agree and the rare one is where the page's
+       origin comparison goes wrong. */
+    CHECK(url_parse(&rec, url, strlen(url), NULL),
+          "the document address is not a URL — the host captured something this engine cannot make a "
+          "principal out of");
 
     loc = JS_NewObject(ctx);
     CHECK(!JS_IsException(loc), "the Location allocation failed");
 
-    JS_SetPropertyStr(ctx, loc, "protocol", JS_NewString(ctx, p.protocol));
-    JS_SetPropertyStr(ctx, loc, "host",     JS_NewString(ctx, p.host));
-    JS_SetPropertyStr(ctx, loc, "hostname", JS_NewString(ctx, p.hostname));
-    JS_SetPropertyStr(ctx, loc, "port",     JS_NewString(ctx, p.port));
-    JS_SetPropertyStr(ctx, loc, "origin",   JS_NewString(ctx, p.origin));
-    JS_SetPropertyStr(ctx, loc, "pathname", JS_NewString(ctx, p.pathname));
+    loc_put(ctx, loc, "protocol", loc_concat(rec.scheme, ":"));
+    loc_put(ctx, loc, "host",     url_serialize_host_port(&rec));
+    loc_put(ctx, loc, "hostname", url_serialize_host(&rec.host));
+    loc_put(ctx, loc, "port",     url_serialize_port(&rec));
+    loc_put(ctx, loc, "origin",   url_serialize_origin(&rec));
+    loc_put(ctx, loc, "pathname", url_serialize_path(&rec));
 
     /* Attacker input, separate identities because the browser encodes them by different sets. Example-free:
        nothing about the address tells this engine what an attacker WILL put there, and inventing one would be
@@ -127,15 +108,16 @@ void location_install(JSContext *ctx, JSValueConst global, const char *url)
     JS_DefinePropertyGetSet(ctx, loc, JS_NewAtom(ctx, "hash"),
                             JS_NewCFunction(ctx, js_loc_get_hash, "get hash", 0), JS_UNDEFINED,
                             JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
-    (void)search; (void)hash;
 
-    /* href is origin + pathname + the two attacker parts. Built by the interpreter's own concatenation, so the
-       concolic halves propagate into it the way every other `+` propagates them — no special case. */
+    /* href is the address as loaded, which is the serialization with the query and the fragment left off —
+       those two are the attacker's and are read through their own getters. */
     {
-        char href[sizeof(p.origin) + sizeof(p.pathname)];
-        snprintf(href, sizeof(href), "%s%s", p.origin, p.pathname);
-        JS_SetPropertyStr(ctx, loc, "href", JS_NewString(ctx, href));
+        char *origin = url_serialize_origin(&rec), *path = url_serialize_path(&rec);
+        s = loc_concat(origin, path);
+        free(origin); free(path);
+        loc_put(ctx, loc, "href", s);
     }
 
+    url_record_free(&rec);
     JS_SetPropertyStr(ctx, (JSValue)global, "location", loc);
 }

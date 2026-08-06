@@ -545,6 +545,30 @@ char *url_serialize_host(const UrlHost *h)
     return ustr_take(&o);
 }
 
+/* `host` and `port` AS THEY ARE READ — the same serialization for URL and for Location, which is why they are
+   here and not written twice. §5.1's `host` is the host with the port appended when there is one; `port` is
+   the empty string when the port is null, which is what a default port becomes at parse time. */
+char *url_serialize_host_port(const UrlRecord *u)
+{
+    UStr o;
+    char *h;
+    ustr_init(&o);
+    if (u->host.kind == URL_HOST_NULL) return ustr_take(&o);
+    h = url_serialize_host(&u->host);
+    ustr_puts(&o, h);
+    free(h);
+    if (u->port >= 0) { char b[8]; snprintf(b, sizeof b, ":%d", u->port); ustr_puts(&o, b); }
+    return ustr_take(&o);
+}
+
+char *url_serialize_port(const UrlRecord *u)
+{
+    char b[8];
+    if (u->port < 0) return xstrdup("");
+    snprintf(b, sizeof b, "%d", u->port);
+    return xstrdup(b);
+}
+
 char *url_serialize_path(const UrlRecord *u)
 {
     UStr o;
@@ -1212,29 +1236,9 @@ static JSValue js_url_get(JSContext *ctx, JSValueConst this_val, int magic)
     }
     case URL_USERNAME: s = xstrdup(u->username); break;
     case URL_PASSWORD: s = xstrdup(u->password); break;
-    case URL_HOST: {
-        UStr o;
-        char *h;
-        if (u->host.kind == URL_HOST_NULL) return JS_NewString(ctx, "");
-        ustr_init(&o);
-        h = url_serialize_host(&u->host);
-        ustr_puts(&o, h);
-        free(h);
-        if (u->port >= 0) { char b[8]; snprintf(b, sizeof b, ":%d", u->port); ustr_puts(&o, b); }
-        s = ustr_take(&o);
-        break;
-    }
-    case URL_HOSTNAME:
-        if (u->host.kind == URL_HOST_NULL) return JS_NewString(ctx, "");
-        s = url_serialize_host(&u->host);
-        break;
-    case URL_PORT: {
-        char b[8];
-        if (u->port < 0) return JS_NewString(ctx, "");
-        snprintf(b, sizeof b, "%d", u->port);
-        s = xstrdup(b);
-        break;
-    }
+    case URL_HOST:     s = url_serialize_host_port(u); break;
+    case URL_HOSTNAME: s = url_serialize_host(&u->host); break;
+    case URL_PORT:     s = url_serialize_port(u); break;
     case URL_PATHNAME: s = url_serialize_path(u); break;
     case URL_SEARCH:
         /* §5.1: the empty query serializes to "" and not to "?", which is what makes `?` round-trip. */

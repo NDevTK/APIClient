@@ -60,6 +60,10 @@ bool url_parse_into(UrlRecord *url, const char *input, size_t len, const UrlReco
 /* §4.5 "URL serializer" — the whole record, or every part of it. Each returns a malloc'd string. */
 char *url_serialize(const UrlRecord *u, bool exclude_fragment);
 char *url_serialize_host(const UrlHost *h);
+/* `host` (the host with its port when there is one) and `port` (empty when null) as both URL and Location read
+   them — one serialization, because the two interfaces state the same one. */
+char *url_serialize_host_port(const UrlRecord *u);
+char *url_serialize_port(const UrlRecord *u);
 /* §4.7's `origin`: the tuple origin for a scheme that has one, and the string "null" for every other. */
 char *url_serialize_origin(const UrlRecord *u);
 /* The path, as `pathname` reports it: the opaque path, or "/" joined segments. */
