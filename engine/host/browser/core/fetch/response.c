@@ -351,56 +351,26 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
     DCHECK(s->stage == 2, "the Response constructor was re-entered at a stage it never parks in");
     JS_FreeValue(ctx, cb_result);
     d = response_of(s->result);
-    /* §6.4 step 8: a non-null body. The declaration has already run the union — a BufferSource crossed as
-       itself and everything else is a USVString — so what is left is the two things the SPEC does here: refuse
-       a body on a null-body status, and set Content-Type when the extracted body has one and the header list
-       does not already. */
+    /* §6.4 step 8: a non-null body. §5.1's extraction is body.c's — one implementation of the union for both
+       including interfaces — so what is left here is the two things §6.4 itself does: refuse a body on a
+       null-body status, and set Content-Type when the extraction produced one and the header list has none. */
     if (!JS_IsNull(body) && !JS_IsUndefined(body)) {
-        const uint8_t *bytes = NULL;
-        size_t len = 0;
-        JSValue buf = JS_UNDEFINED;
-        const char *str = NULL;
-        const char *mime = NULL;
+        char *mime = NULL;
 
         if (response_is_null_body_status(d->status)) {
             JS_ThrowTypeError(ctx, "a Response with a null body status cannot be given a body");
             return -1;
         }
-        if (JS_IsArrayBuffer(body)) {
-            bytes = JS_GetArrayBuffer(ctx, &len, body);
-            if (!bytes) return -1;
-        } else if (JS_IsObject(body)) {
-            size_t off = 0;
-            buf = JS_GetArrayBufferView(ctx, body, &off, &len);
-            DCHECK(!JS_IsException(buf),
-                   "the BodyInit union let through an object that is neither a BufferSource nor a string — the "
-                   "declaration converts the USVString arm, so nothing else can reach here");
-            {
-                size_t whole = 0;
-                uint8_t *base = JS_GetArrayBuffer(ctx, &whole, buf);
-                if (!base) { JS_FreeValue(ctx, buf); return -1; }
-                bytes = base + off;
-            }
-        } else {
-            /* the USVString arm: the declaration already ran ToString, so this is the string's bytes */
-            str = JS_ToCStringLen(ctx, &len, body);
-            if (!str) return -1;
-            bytes = (const uint8_t *)str;
-            /* §6.4: a USVString body's Content-Type. A BufferSource has none, which is why this is set here
-               and not for every body. */
-            mime = "text/plain;charset=UTF-8";
-        }
-        if (body_state_set(ctx, &d->body, (const char *)bytes, len) < 0) {
-            JS_FreeCString(ctx, str); JS_FreeValue(ctx, buf); return -1;
-        }
-        JS_FreeCString(ctx, str);
-        JS_FreeValue(ctx, buf);
+        if (body_extract(ctx, &d->body, body, &mime) < 0) { free(mime); return -1; }
+        /* §6.4 step 8.2: the extracted body's type is set ONLY when the header list does not already carry
+           one — an init that named a Content-Type wins over the arm's default. */
         if (mime) {
             const HeaderList *hl = headers_list_of(d->headers);
             char *existing = header_list_get(hl, "content-type");
             if (!existing)
                 header_list_append((HeaderList *)hl, "content-type", mime);
             free(existing);
+            free(mime);
         }
     }
     *presult = s->result;
@@ -463,6 +433,7 @@ void response_init(JSContext *ctx)
        `delete r.text` removed the method, and every reply paid for eight property installs. */
     g_response_proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_response_proto), "Response.prototype could not be allocated");
+    idl_interface_tag(ctx, g_response_proto, "Response");
     JS_SetPropertyFunctionList(ctx, g_response_proto, js_response_proto_funcs,
                                (int)(sizeof(js_response_proto_funcs) / sizeof(js_response_proto_funcs[0])));
     /* §5.2's mixin: the four readers and `bodyUsed`, from the one component Request includes too. */

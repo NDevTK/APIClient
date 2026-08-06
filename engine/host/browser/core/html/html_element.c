@@ -360,6 +360,7 @@ void html_element_init(JSContext *ctx)
     /* §3.2.2 `interface HTMLElement : Element`. */
     g_html_proto = JS_NewObjectProto(ctx, element_proto());
     CHECK(!JS_IsException(g_html_proto), "HTMLElement.prototype could not be allocated");
+    idl_interface_tag(ctx, g_html_proto, "HTMLElement");
     element_install_reflections(ctx, g_html_proto, R_HTML, (int)(sizeof(R_HTML) / sizeof(R_HTML[0])));
     /* HTML mixes GlobalEventHandlers and DocumentAndElementEventHandlers into HTMLElement, not into Element —
        so this is where they belong, and where `div.onclick = f` now reaches them. */
@@ -380,6 +381,7 @@ void html_element_init(JSContext *ctx)
 
     g_unknown_proto = JS_NewObjectProto(ctx, g_html_proto);   /* §4: `interface HTMLUnknownElement : HTMLElement` */
     CHECK(!JS_IsException(g_unknown_proto), "HTMLUnknownElement.prototype could not be allocated");
+    idl_interface_tag(ctx, g_unknown_proto, "HTMLUnknownElement");
 
     for (i = 0; i < HTML_IFACE_N; i++) {
         /* A row whose interface a previous row already built SHARES its prototype — `q` and `blockquote` are
@@ -389,6 +391,7 @@ void html_element_init(JSContext *ctx)
         if (j < i) { g_iface_proto[i] = JS_DupValue(ctx, g_iface_proto[j]); continue; }
         g_iface_proto[i] = JS_NewObjectProto(ctx, g_html_proto);
         CHECK(!JS_IsException(g_iface_proto[i]), "a per-tag interface prototype could not be allocated");
+        idl_interface_tag(ctx, g_iface_proto[i], HTML_IFACE[i].iface);
         if (HTML_IFACE[i].nrefl)
             element_install_reflections(ctx, g_iface_proto[i], HTML_IFACE[i].refl, HTML_IFACE[i].nrefl);
     }

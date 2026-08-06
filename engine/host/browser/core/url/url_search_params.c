@@ -56,6 +56,12 @@ static void usp_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
     if (u) JS_MarkValue(rt, u->owner, mark_func);
 }
 
+const UrlEncodedList *usp_list_of(JSValueConst v)
+{
+    UspObj *u = g_usp_class ? JS_GetOpaque(v, g_usp_class) : NULL;
+    return u ? &u->list : NULL;
+}
+
 static UspObj *usp_of(JSContext *ctx, JSValueConst v)
 {
     UspObj *u = JS_GetOpaque(v, g_usp_class);
@@ -500,6 +506,7 @@ void usp_init(JSContext *ctx)
     JS_NewClass(rt, g_usp_class, &def);
     g_usp_proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_usp_proto), "URLSearchParams.prototype could not be allocated");
+    idl_interface_tag(ctx, g_usp_proto, "URLSearchParams");
 
     idl_install_method(ctx, g_usp_proto, "append", 2,
                        idl_method_id(ctx, TWO_STR, 2, js_usp_member, USP_APPEND));

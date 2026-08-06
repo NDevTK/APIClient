@@ -366,24 +366,30 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
 
     DCHECK(s->stage == 2, "the Request constructor was re-entered at a stage it never parks in");
     JS_FreeValue(ctx, cb_result);
-    /* §5.3: a body on a GET or a HEAD is a TypeError. The body itself is the declaration's already-converted
-       BodyInit — a BufferSource as itself, everything else the union's USVString arm. */
+    /* §5.3: a body on a GET or a HEAD is a TypeError. The extraction itself is §5.1's, which body.c owns —
+       both including interfaces run the same six-armed union, and the Content-Type it produces is set only
+       where the header list has none. */
     {
         JSValue bv = idl_dict_get(ctx, init, "body");
         if (!JS_IsUndefined(bv) && !JS_IsNull(bv)) {
+            char *mime = NULL;
             if (!strcmp(d->method, "GET") || !strcmp(d->method, "HEAD")) {
                 JS_FreeValue(ctx, bv);
                 JS_ThrowTypeError(ctx, "a Request with a GET or HEAD method cannot have a body");
                 return -1;
             }
-            {
-                size_t n = 0;
-                const char *b = JS_ToCStringLen(ctx, &n, bv);
-                int bad;
-                if (!b) { JS_FreeValue(ctx, bv); return -1; }
-                bad = body_state_set(ctx, &d->body, b, n) < 0;
-                JS_FreeCString(ctx, b);
-                if (bad) { JS_FreeValue(ctx, bv); return -1; }
+            if (body_extract(ctx, &d->body, bv, &mime) < 0) {
+                free(mime);
+                JS_FreeValue(ctx, bv);
+                return -1;
+            }
+            if (mime) {
+                const HeaderList *hl = headers_list_of(d->headers);
+                char *existing = header_list_get(hl, "content-type");
+                if (!existing)
+                    header_list_append((HeaderList *)hl, "content-type", mime);
+                free(existing);
+                free(mime);
             }
         }
         JS_FreeValue(ctx, bv);
@@ -447,6 +453,7 @@ void request_init(JSContext *ctx)
     JS_NewClass(rt, g_request_class, &def);
     g_request_proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_request_proto), "Request.prototype could not be allocated");
+    idl_interface_tag(ctx, g_request_proto, "Request");
     JS_SetPropertyFunctionList(ctx, g_request_proto, js_request_proto_funcs,
                                (int)(sizeof(js_request_proto_funcs) / sizeof(js_request_proto_funcs[0])));
     g_request_body_handle = body_declare(ctx, g_request_class, request_body_of, request_body_mime, "Request");

@@ -12,6 +12,11 @@
 typedef struct { char *bytes; size_t len; int used; int has; } BodyState;
 
 void body_state_free(JSContext *ctx, BodyState *b);
+
+/* §5.1's "extract a body" — the ONE implementation of the BodyInit union, for both interfaces that take one.
+   `*out_mime` is the arm's own Content-Type (malloc'd) or NULL for an arm that has none; the caller's remaining
+   job is §6.4's "set it only if the header list has none". Returns -1 with a throw live. */
+int  body_extract(JSContext *ctx, BodyState *b, JSValueConst init, char **out_mime);
 /* Copy `len` bytes in, or NULL for the spec's null body. Returns -1 on OOM with an exception live. */
 int  body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len);
 

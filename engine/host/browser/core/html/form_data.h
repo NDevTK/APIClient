@@ -20,4 +20,14 @@ JSValue form_data_new(JSContext *ctx, const UrlEncodedList *entries);
 int form_data_parse_multipart(const char *body, size_t len, const char *boundary, size_t blen,
                               UrlEncodedList *entries);
 
+/* THE ENTRY LIST a FormData holds, or NULL when the value is not one. The brand test Fetch §5.1's BodyInit
+   union performs, and what its `multipart/form-data` SERIALIZER reads. */
+const UrlEncodedList *form_data_list_of(JSValueConst v);
+
+/* Fetch §5.1's `multipart/form-data` SERIALIZER — the other direction of the parser above, and the body a
+   `new Response(formData)` carries. `*out_n` is the length; the BOUNDARY it chose is written to `boundary`,
+   which must hold at least FORM_DATA_BOUNDARY_MAX bytes, because the Content-Type has to name it. */
+#define FORM_DATA_BOUNDARY_MAX 64
+char *form_data_serialize_multipart(const UrlEncodedList *l, char *boundary, size_t *out_n);
+
 #endif

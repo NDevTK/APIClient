@@ -657,6 +657,7 @@ void cssom_init(JSContext *ctx)
     g_proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_key) && !JS_IsException(g_proto),
           "the CSSStyleDeclaration key or prototype allocation failed");
+    idl_interface_tag(ctx, g_proto, "CSSStyleDeclaration");
     g_ready = 1;
 
     JS_SetPropertyStr(ctx, g_proto, "parentRule", JS_NULL);   /* no CSSRule objects yet, and null is the answer */

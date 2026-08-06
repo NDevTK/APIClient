@@ -32,6 +32,7 @@
 #include "core/url/url.h"
 #include "core/url/url_search_params.h"
 #include "core/html/form_data.h"
+#include "core/file/blob.h"
 #include "core/idl_args.h"
 
 /* Forced preemption at every back-edge, sampled at calls — the same policy run-test262 arms, and for the same
@@ -265,6 +266,8 @@ int main(int argc, char **argv)
     usp_install(ctx, global);
     form_data_init(ctx);
     form_data_install(ctx, global);
+    blob_init(ctx);
+    blob_install(ctx, global);
     fetch_install(ctx, global);
     { static const FetchProvider P = { wpt_owe }; fetch_set_provider(&P); }
 
@@ -333,6 +336,7 @@ int main(int argc, char **argv)
     url_free(ctx);
     usp_free(ctx);
     form_data_free(ctx);
+    blob_free(ctx);
     idl_args_free(ctx);
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);

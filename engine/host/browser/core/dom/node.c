@@ -1656,6 +1656,7 @@ void node_init(JSContext *ctx)
        on each. */
     g_node_proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_node_proto), "Node.prototype could not be allocated");
+    idl_interface_tag(ctx, g_node_proto, "Node");
     node_install_walkers(ctx, g_node_proto);
     JS_SetPropertyFunctionList(ctx, g_node_proto, js_node_base,
                                (int)(sizeof(js_node_base) / sizeof(js_node_base[0])));
@@ -1681,6 +1682,7 @@ void node_init(JSContext *ctx)
        rather than repeating its members. */
     cd = JS_NewObjectProto(ctx, g_node_proto);
     CHECK(!JS_IsException(cd), "CharacterData.prototype could not be allocated");
+    idl_interface_tag(ctx, cd, "CharacterData");
     JS_SetPropertyFunctionList(ctx, cd, js_chardata_base,
                                (int)(sizeof(js_chardata_base) / sizeof(js_chardata_base[0])));
     /* `attribute [LegacyNullToEmptyString] DOMString data` — the extended attribute is part of the TYPE, so the
@@ -1714,6 +1716,8 @@ void node_init(JSContext *ctx)
         JSValue comment_proto = JS_NewObjectProto(ctx, cd);
         CHECK(!JS_IsException(text_proto) && !JS_IsException(comment_proto),
               "a CharacterData-derived prototype could not be allocated");
+        idl_interface_tag(ctx, text_proto, "Text");
+        idl_interface_tag(ctx, comment_proto, "Comment");
         node_set_proto(ctx, LXB_DOM_NODE_TYPE_TEXT, text_proto);
         node_set_proto(ctx, LXB_DOM_NODE_TYPE_COMMENT, comment_proto);
         /* §4.10: `CharacterData includes ChildNode` — `textNode.remove()` is real, and a page that tears down

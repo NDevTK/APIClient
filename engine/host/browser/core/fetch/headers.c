@@ -952,6 +952,7 @@ void headers_init(JSContext *ctx)
     JS_NewClass(rt, g_headers_class, &def);
     g_proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_proto), "Headers.prototype could not be allocated");
+    idl_interface_tag(ctx, g_proto, "Headers");
     idl_install_method(ctx, g_proto, "append", 2, idl_method_id(ctx, TWO_STR, 2, js_headers_member, HDR_APPEND));
     idl_install_method(ctx, g_proto, "set", 2, idl_method_id(ctx, TWO_STR, 2, js_headers_member, HDR_SET));
     idl_install_method(ctx, g_proto, "delete", 1, idl_method_id(ctx, TWO_STR, 1, js_headers_member, HDR_DELETE));

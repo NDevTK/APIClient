@@ -31,12 +31,25 @@ typedef enum {
        load-bearing: `el.textContent = null` is "replace all with null", which removes the children and adds NO
        Text node, and stringifying it wrote the four characters `null` into the page's DOM instead. */
     IDL_DOMSTRING_NULLABLE,
-    IDL_LONG,             /* ToNumber, then the integer conversion — the page's valueOf may run */
-    /* `unsigned short`. Its §3.2.7 conversion is MODULO 2^16 — not a clamp and not a range error — which is
-       why it is its own type rather than an IDL_LONG a body range-checks: `new Response("", {status: 65736})`
-       is status 200 in every browser, and range-checking the raw number makes it a RangeError. A member that
-       ALSO has a legal range (Response's 200..599) checks that AFTER this conversion, because the spec does. */
-    IDL_UNSIGNED_SHORT,
+    /* THE INTEGER TYPES, each stating its WIDTH and its SIGN — which is all §3.2's conversion needs, and the
+       whole of what tells them apart. Every one of them is ToNumber (the page's valueOf may run) and then the
+       one arithmetic in idl_args.c: sign(x)·floor(|x|) taken MODULO 2^width, folded into range if the type is
+       signed, with a non-finite value becoming 0.
+       IT IS A MODULO AND NOT A CLAMP, for all of them. `new Response("", {status: 65736})` is status 200 in
+       every browser, and `list.item(2**32)` is item 0 — a saturating conversion answers 65736 and 4294967296,
+       and the range check that follows then throws or misses where the spec wraps. */
+    IDL_LONG,             /* `long` — 32, signed */
+    IDL_UNSIGNED_LONG,    /* `unsigned long` — 32, unsigned */
+    IDL_UNSIGNED_SHORT,   /* `unsigned short` — 16, unsigned */
+    IDL_LONG_LONG,        /* `long long` — 64, signed */
+    /* `[Clamp] long long`. The extended attribute REPLACES the modulo with §3.2.4.2: clamp to the type's range
+       and round to the NEAREST integer, choosing the even one at a half. Blob's `slice(start, end)` is the
+       member that carries it, and `slice(1.5)` starting at byte 2 rather than byte 1 is the difference. */
+    IDL_LONG_LONG_CLAMP,
+    /* AN ENUMERATION — §3.2.19. ToString, and then the result must be one of the values the IDL lists or it is
+       a TypeError: `new Blob([], {endings: "bogus"})` throws, and an unrecognised value is never silently the
+       default. The values are declared beside the member, because they are part of the type. */
+    IDL_ENUM,
     /* A `(DOMString or Function)` union, which is TimerHandler and nothing else so far: callable crosses as
        itself, anything else is a DOMString. Named for the rule rather than for the member, because the rule is
        what the IDL states. */
@@ -62,16 +75,30 @@ typedef enum {
     /* `BodyInit?` — Fetch's `(ReadableStream or Blob or BufferSource or FormData or URLSearchParams or
        USVString)?`. Its rule is a BRAND check like the two above, but against the BUFFER SOURCE shape rather
        than one class: an ArrayBuffer or any ArrayBufferView crosses as itself, null and undefined are the IDL
-       null, and everything else is the union's USVString arm. The other four members are interfaces this
-       engine does not have yet, so nothing can BE one — when Blob arrives it is one more brand test here, in
-       the one place the union is stated, and no body learns about it. */
+       null, and everything else is the union's USVString arm. Blob, FormData and URLSearchParams are brand
+       tests beside it now that those interfaces exist; ReadableStream is the one arm still absent, and it
+       becomes one more test in this same place. The body learns nothing either way — §5.1's extraction reads
+       the arm back off the value. */
     IDL_BODYINIT_NULLABLE,
+    /* `sequence<BlobPart>` — §3.2.20's iterator-protocol conversion with `(BufferSource or Blob or USVString)`
+       as the element type. Named for the IDL type it IS, the way IDL_BODYINIT_NULLABLE is: the union's brand
+       test lives in the one place the union is stated, and the member that takes it learns nothing.
+       IT IS A DECLARED TYPE and not something a body walks, because Web IDL converts arguments LEFT TO RIGHT —
+       a sequence driven from the body runs after every later argument's conversion, which is observable the
+       moment a later argument is a dictionary with a getter on it. */
+    IDL_SEQUENCE_BLOBPART,
 } IdlArgType;
 
 /* A DICTIONARY MEMBER, as its IDL declares it: the name, the type of its value, and whether the IDL marks it
    `required` (an absent required member is a TypeError, and for a dictionary `undefined` IS absent). A member
    with no `required` written is optional, which is what leaving the field off an initialiser gives. */
-typedef struct { const char *name; IdlArgType type; bool required; } IdlDictMember;
+/* `values` is the NULL-terminated list an IDL_ENUM member's IDL lists, and is read by nothing else. */
+typedef struct {
+    const char *name;
+    IdlArgType  type;
+    bool        required;
+    const char *const *values;
+} IdlDictMember;
 
 /* A position the IDL does not list is passed through unconverted, which is what a variadic `any...` tail means
    and what an optional argument beyond the listed ones means. `nargs` is how many the IDL lists. */
@@ -218,6 +245,10 @@ int64_t idl_slowest_step(const char **name);
 /* The same window's TOTAL across every member step, and how many there were. The max alone cannot separate one
    very slow call from very many short ones. */
 int64_t idl_step_total(long *count);
+
+/* §3.7.3's @@toStringTag on an interface PROTOTYPE object: the interface's identifier, non-writable,
+   non-enumerable, configurable. Every interface prototype has one, so every interface calls this. */
+void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface);
 
 void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
                           IdlGetter getter, int getter_magic, int setter_stepid);

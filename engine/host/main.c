@@ -28,6 +28,7 @@
 #include "browser/core/url/url.h"
 #include "browser/core/url/url_search_params.h"
 #include "browser/core/html/form_data.h"
+#include "browser/core/file/blob.h"
 #include "browser/core/dom/abort.h"
 #include "browser/core/html/unhandled_rejection.h"
 #include "browser/core/dom/document.h"
@@ -222,6 +223,7 @@ QJS_EXPORT void qjs_teardown(void)
     request_free(g_ctx);   /* Response.prototype — one object, held for the runtime's life */
     url_free(g_ctx);
     usp_free(g_ctx);
+    blob_free(g_ctx);
     form_data_free(g_ctx);        /* URLSearchParams.prototype */
     idl_args_free(g_ctx);   /* the dictionary member atoms the declaration pool interned */
     if (g_ctx) { JS_FreeContext(g_ctx); g_ctx = NULL; }

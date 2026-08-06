@@ -27,9 +27,81 @@
 #include "quickjs-step.h"
 #include "solver/concolic.h"
 #include "core/idl_args.h"
+#include "core/idl_iter.h"
+#include "core/file/blob.h"
+#include "core/html/form_data.h"
+#include "core/url/url_search_params.h"
 #include <time.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <math.h>
+
+/* §3.2'S INTEGER CONVERSION, ONCE, over the number ToNumber produced.
+ *
+ * The types differ only in WIDTH, in SIGN, and in whether a [Clamp] replaces the modulo — so this is one
+ * function and the declared type is its arguments. Writing it per type is how a surface ends up with `long`
+ * saturating and `unsigned short` wrapping, which is what it did.
+ *
+ * WITHOUT [Clamp]: a non-finite value (NaN, ±∞) and a zero are +0; otherwise sign(x)·floor(|x|) taken modulo
+ * 2^width, then folded into range if the type is signed. `fmod` is exact for doubles, and above 2^53 a double is
+ * already a multiple of a power of two, so the modulo is exact at 64 bits too.
+ * WITH [Clamp] (§3.2.4.2): NaN is +0, the value is clamped to the type's range, and then rounded to the NEAREST
+ * integer choosing the EVEN one at a half — which is `nearbyint` under the default rounding mode, and is why
+ * this is not a truncation. */
+static int64_t idl_int_convert(double x, int width, bool is_signed, bool clamp)
+{
+    double span = ldexp(1.0, width), half = ldexp(1.0, width - 1);
+
+    if (clamp) {
+        DCHECK(width == 64 && is_signed, "[Clamp] was declared on an integer type this conversion has no "
+                                         "range for — state the type's bounds here, they are the spec's");
+        if (isnan(x)) return 0;
+        if (x <= -half) return INT64_MIN;
+        if (x >= half)  return INT64_MAX;
+        return (int64_t)nearbyint(x);
+    }
+    if (!isfinite(x) || x == 0) return 0;
+    x = (x < 0 ? -1.0 : 1.0) * floor(fabs(x));
+    x = fmod(x, span);
+    if (x < 0) x += span;
+    if (is_signed && x >= half) x -= span;
+    return (int64_t)x;
+}
+
+/* WHAT AN INTEGER TYPE IS, read off the declaration rather than remembered per call site. */
+static bool idl_is_integer(IdlArgType t)
+{
+    return t == IDL_LONG || t == IDL_UNSIGNED_LONG || t == IDL_UNSIGNED_SHORT ||
+           t == IDL_LONG_LONG || t == IDL_LONG_LONG_CLAMP;
+}
+
+static int64_t idl_int_of(IdlArgType t, double x)
+{
+    switch (t) {
+    case IDL_LONG:            return idl_int_convert(x, 32, true,  false);
+    case IDL_UNSIGNED_LONG:   return idl_int_convert(x, 32, false, false);
+    case IDL_UNSIGNED_SHORT:  return idl_int_convert(x, 16, false, false);
+    case IDL_LONG_LONG:       return idl_int_convert(x, 64, true,  false);
+    default:
+        DCHECK(t == IDL_LONG_LONG_CLAMP, "a non-integer type reached the integer conversion");
+        return idl_int_convert(x, 64, true, true);
+    }
+}
+
+/* §3.2.19's ENUMERATION check, over the string ToString produced. Returns -1 with a TypeError live. */
+static int idl_enum_check(JSContext *ctx, JSValueConst v, const char *const *values, const char *member)
+{
+    const char *s = JS_ToCString(ctx, v);
+    int i;
+
+    DCHECK(values != NULL, "an IDL_ENUM member was declared with no value list — the list IS the type");
+    if (!s) return -1;
+    for (i = 0; values[i]; i++)
+        if (!strcmp(s, values[i])) { JS_FreeCString(ctx, s); return 0; }
+    JS_ThrowTypeError(ctx, "'%s' is not a valid value for the enumeration member %s", s, member);
+    JS_FreeCString(ctx, s);
+    return -1;
+}
 
 /* THE POOL IS CHUNKED, AND HAS NO CEILING. It was one fixed array sized "for the whole platform surface", which
    is a number nobody can know: every reflected content attribute is a declaration and HTML's per-tag interfaces
@@ -156,7 +228,9 @@ typedef struct {
     uint8_t   dict_phase;   /* 0 = read the member, 1 = convert what was read. Both can park, so a member needs
                                two resume points, not one — a resume in the CONVERSION must not re-read. */
     JSValue   dict_v;   /* the member's value between those two phases (owned) */
-    int64_t   nums[IDL_MAX_ARGS];   /* the integer conversions, kept because the body wants numbers */
+    /* WHAT ToNumber PRODUCED, before the type's arithmetic — kept as the NUMBER because that is what §3.2 says
+       to work from, and a saturating int64 has already lost the modulo and the half-to-even rounding. */
+    double    nums[IDL_MAX_ARGS];
     JSValue   args[IDL_MAX_ARGS];
     /* A VARIADIC member's converted arguments, which cannot live in the fixed array above and must not be
        truncated to fit it: `ul.append(...items)` has as many as the page has items. It is an ARRAY rather than
@@ -167,6 +241,17 @@ typedef struct {
        so the fixed array is always big enough by IDL_MAX_DECLARED. */
     JSValue   conv;
     JSValue   vstage;   /* the variadic argument being converted, before it joins `conv` */
+    /* §3.2.20's `sequence<T>` CONVERSION: the ES iterator protocol, whose every step is the page's code — so the
+       cursor and the list it fills are the machine's own state, and the resume comes back to the element it was
+       on. The list is a JS Array for the reason `conv` is one: a deep fork byte-copies the state and re-takes
+       only what `visit` names, so an owned heap block would be freed twice. */
+    IterCursor seq;
+    JSValue    seq_list;
+    uint32_t   seq_n;
+    /* 0 = NOT STARTED, 1 = pull the next element, 2 = convert the one just pulled. "Not started" is a stage of
+       its own rather than a null list, because a zeroed state's JSValue is the INTEGER 0 and not JS_UNDEFINED —
+       JS_TAG_INT is 0 — so "have I built the list yet" read off the value is always "yes". */
+    uint8_t    seq_phase;
     /* §4.2.3's tree steps this member's body caused, taken from the DOM layer so the drain is per-machine: the
        drain YIELDS, and a shared list would be appended to by whichever flow ran during the suspension. */
     void     *tree;
@@ -184,6 +269,8 @@ static void js_idl_args_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->dict_v);
     v->val(ctx, &s->conv);
     v->val(ctx, &s->vstage);
+    iter_cursor_visit(ctx, &s->seq, v);
+    v->val(ctx, &s->seq_list);
     for (i = 0; i < IDL_MAX_ARGS; i++)
         v->val(ctx, &s->args[i]);
     DCHECK(s->hdr.arg >= 0 && s->hdr.arg < g_n, "an IDL member's visit ran with no pool entry behind it");
@@ -440,6 +527,14 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                `required` is part of the TYPE the declaration states. */
             if (JS_IsUndefined(s->args[s->i]))
                 s->args[s->i] = JS_NewObject(ctx);
+            /* §3.2.18 step 2: a value that is NOT undefined, null or an Object is a TypeError before any member
+               is read — `new Blob([], 123)` throws, and reading `123.type` instead answered undefined and built
+               a Blob. The union form is exempt because its whole rule is that a non-object IS a member. */
+            if (t == IDL_DICT && !JS_IsObject(a) && !JS_IsUndefined(a) && !JS_IsNull(a)) {
+                JS_FreeValue(ctx, cb_result);
+                JS_ThrowTypeError(ctx, "the dictionary argument is neither an object, null nor undefined");
+                return JS_STEP_ABRUPT;
+            }
             if (!JS_IsObject(a)) {
                 JS_FreeValue(ctx, cb_result);
                 cb_result = JS_UNDEFINED;
@@ -489,17 +584,16 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     JS_FreeValue(ctx, s->dict_v);
                     s->dict_v = b;
                 }
-                else if (mt == IDL_LONG || mt == IDL_UNSIGNED_SHORT) {
-                    r = step_toint64_run(ctx, &s->hdr, s->dict_v, cb_result, &s->nums[s->i], out_cb, out_argc);
+                else if (idl_is_integer(mt)) {
+                    r = step_todouble_run(ctx, &s->hdr, s->dict_v, cb_result, &s->nums[s->i], out_cb, out_argc);
                     cb_result = JS_UNDEFINED;
                     if (r > 0) return r;   /* parked ON THIS MEMBER's conversion; the read does not re-run */
                     if (r < 0) return JS_STEP_ABRUPT;
                     JS_FreeValue(ctx, s->dict_v);
-                    s->dict_v = JS_NewInt64(ctx, mt == IDL_UNSIGNED_SHORT ? (int64_t)(uint16_t)s->nums[s->i]
-                                                                          : s->nums[s->i]);
+                    s->dict_v = JS_NewInt64(ctx, idl_int_of(mt, s->nums[s->i]));
                 }
                 else if (mt == IDL_DOMSTRING || mt == IDL_DOMSTRING_NULLABLE || mt == IDL_BYTESTRING ||
-                         mt == IDL_USVSTRING) {
+                         mt == IDL_USVSTRING || mt == IDL_ENUM) {
                     if (mt == IDL_DOMSTRING_NULLABLE && JS_IsNull(s->dict_v)) {
                         /* `DOMString?`: null is the IDL null, never the string "null". */
                     } else {
@@ -516,6 +610,9 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                             s->dict_v = JS_ToScalarValueString(ctx, s->dict_v);
                             if (JS_IsException(s->dict_v)) return JS_STEP_ABRUPT;
                         }
+                        if (mt == IDL_ENUM &&
+                            idl_enum_check(ctx, s->dict_v, dm->values, dm->name) < 0)
+                            return JS_STEP_ABRUPT;
                     }
                 }
                 JS_SetPropertyStr(ctx, s->args[s->i], dm->name, s->dict_v);
@@ -530,6 +627,63 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             continue;
         }
 
+        /* §3.2.20's `sequence<T>`: the ES ITERATOR PROTOCOL, and a value that is not an Object is a TypeError
+           BEFORE anything is read — `new Blob("fail")` throws even though a string is iterable, because the
+           check is on the TYPE and not on iterability, and `new Blob(null)` throws for the same reason.
+           IT IS CONVERTED HERE AND NOT IN THE BODY, which is the whole point of it being a declared type: Web
+           IDL converts arguments LEFT TO RIGHT, so a sequence that throws mid-iteration must run before the
+           dictionary after it is read at all. Driven from the body it ran after every other argument, and
+           `new Blob(throwingIterable, {get type(){…}})` called the type getter the spec never reaches. */
+        if (t == IDL_SEQUENCE_BLOBPART) {
+            if (!JS_IsObject(a)) {
+                JS_FreeValue(ctx, cb_result);
+                JS_ThrowTypeError(ctx, "the sequence argument is not an object");
+                return JS_STEP_ABRUPT;
+            }
+            if (s->seq_phase == 0) {
+                s->seq_list = JS_NewArray(ctx);
+                if (JS_IsException(s->seq_list)) return JS_STEP_ABRUPT;
+                iter_cursor_init(&s->seq);
+                s->seq_phase = 1;
+            }
+            for (;;) {
+                if (s->seq_phase == 1) {
+                    r = iter_cursor_run(ctx, &s->hdr, &s->seq, a, cb_result, out_cb, out_argc);
+                    cb_result = JS_UNDEFINED;
+                    if (r > 0) return r;   /* parked ON THIS ELEMENT; the resume comes back to it */
+                    if (r < 0) return JS_STEP_ABRUPT;
+                    if (s->seq.done) break;
+                    /* `BlobPart` is `(BufferSource or Blob or USVString)`, and its rule is a BRAND test: a
+                       BufferSource and a Blob cross as themselves, everything else takes the USVString arm,
+                       whose ToString is the page's code. Stated once, here, like BodyInit's. */
+                    if (blob_is(s->seq.value) || JS_IsArrayBuffer(s->seq.value) ||
+                        JS_GetTypedArrayType(s->seq.value) >= 0 || JS_IsDataView(s->seq.value)) {
+                        JS_SetPropertyUint32(ctx, s->seq_list, s->seq_n++, JS_DupValue(ctx, s->seq.value));
+                        continue;
+                    }
+                    s->seq_phase = 2;
+                }
+                {
+                    JSValue str = JS_UNDEFINED;
+                    DCHECK(s->seq_phase == 2, "the sequence conversion resumed at a phase it never parks in");
+                    r = step_tostring_run(ctx, &s->hdr, s->seq.value, cb_result, &str, out_cb, out_argc);
+                    cb_result = JS_UNDEFINED;
+                    if (r > 0) return r;
+                    if (r < 0) return JS_STEP_ABRUPT;
+                    str = JS_ToScalarValueString(ctx, str);   /* §3.2.11: lone surrogates become U+FFFD */
+                    if (JS_IsException(str)) return JS_STEP_ABRUPT;
+                    JS_SetPropertyUint32(ctx, s->seq_list, s->seq_n++, str);
+                    s->seq_phase = 1;
+                }
+            }
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            *slot = s->seq_list;
+            s->seq_list = JS_UNDEFINED;
+            s->seq_n = 0;
+            s->seq_phase = 0;
+            goto placed;
+        }
 
         /* `BodyInit?`: null and undefined are the IDL null; a BufferSource crosses as itself; anything else
            is the union's USVString arm. The brand test is the union's own rule, stated once. */
@@ -540,7 +694,11 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 *slot = JS_NULL;
                 goto placed;
             }
-            t = (JS_IsArrayBuffer(a) || JS_GetTypedArrayType(a) >= 0 || JS_IsDataView(a))
+            /* THE FOUR INTERFACE ARMS cross as themselves; only what is none of them takes the USVString arm.
+               `new Response(blob)` stringified to the thirteen bytes of "[object Blob]" while three of those
+               interfaces existed, because the test was written when none of them did. */
+            t = (JS_IsArrayBuffer(a) || JS_GetTypedArrayType(a) >= 0 || JS_IsDataView(a) ||
+                 blob_is(a) || form_data_list_of(a) || usp_list_of(a))
               ? IDL_ANY : IDL_DOMSTRING;
         }
 
@@ -577,18 +735,18 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             *slot = JS_IsUndefined(a) ? JS_UNDEFINED : JS_NewBool(ctx, JS_ToBool(ctx, a));
             goto placed;
         }
-        if (t == IDL_LONG || t == IDL_UNSIGNED_SHORT) {
-            r = step_toint64_run(ctx, &s->hdr, a, cb_result, &s->nums[s->i], out_cb, out_argc);
+        if (idl_is_integer(t)) {
+            r = step_todouble_run(ctx, &s->hdr, a, cb_result, &s->nums[s->i], out_cb, out_argc);
             cb_result = JS_UNDEFINED;
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
-            /* §3.2.7's integer conversion for `unsigned short` is MODULO 2^16, not a clamp and not a range
-               error — `new Response("", {status: 65736})` is status 200 in every browser, and a member that
-               range-checked the raw number would have made it a RangeError instead. */
-            *slot = JS_NewInt64(ctx, t == IDL_UNSIGNED_SHORT ? (int64_t)(uint16_t)s->nums[s->i]
-                                                             : s->nums[s->i]);
+            *slot = JS_NewInt64(ctx, idl_int_of(t, s->nums[s->i]));
             goto placed;
         }
+        DCHECK(t != IDL_ENUM,
+               "an ENUMERATION was declared as a positional argument — the value list lives on a dictionary "
+               "member, so a positional one has nothing to check against; give the declaration somewhere to "
+               "carry the list");
         DCHECK(t == IDL_DOMSTRING || t == IDL_BYTESTRING || t == IDL_USVSTRING,
                "an IDL argument was declared with a type this machine does not convert");
         r = step_tostring_run(ctx, &s->hdr, a, cb_result, slot, out_cb, out_argc);
@@ -701,6 +859,11 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
     JS_FreeValue(ctx, s->conv);
     JS_FreeValue(ctx, s->vstage);
     s->dict_v = s->conv = s->vstage = JS_UNDEFINED;
+    /* A sequence argument whose walk never finished — the iterator the cursor still holds, and the elements
+       converted so far. Both are this machine's, on the throw path exactly as on the normal one. */
+    iter_cursor_release(ctx, &s->seq);
+    JS_FreeValue(ctx, s->seq_list);
+    s->seq_list = JS_UNDEFINED;
     for (i = 0; i < IDL_MAX_ARGS; i++) {
         JS_FreeValue(ctx, s->args[i]);
         s->args[i] = JS_UNDEFINED;
@@ -780,8 +943,19 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
                            "names");
         idl_member(idx)->dict_atoms = malloc(sizeof(JSAtom) * (size_t)nmembers);
         CHECK(idl_member(idx)->dict_atoms, "idl: OOM interning a dictionary's member names");
-        for (k = 0; k < nmembers; k++)
+        for (k = 0; k < nmembers; k++) {
+            /* §3.2.18 READS A DICTIONARY'S MEMBERS IN LEXICOGRAPHIC ORDER, not in the order the IDL writes
+               them — a page can see which of two getters ran first, and BlobPropertyBag declares `type` before
+               `endings` while the spec reads `endings` first. The machine reads in DECLARED order, so the
+               declaration must BE that order, and this is what makes that a crash rather than something each
+               component remembers. A dictionary that INHERITS another reads the inherited members first and
+               each level sorted, which no flat list can express — the first one to need it splits this list
+               into levels rather than relaxing the check. */
+            DCHECK(k == 0 || strcmp(members[k - 1].name, members[k].name) < 0,
+                   "a dictionary's members were declared out of lexicographic order — §3.2.18 reads them "
+                   "sorted, and the machine reads them as declared");
             idl_member(idx)->dict_atoms[k] = JS_NewAtom(ctx, members[k].name);
+        }
         idl_member(idx)->dict_n = nmembers;
     }
     idl_member(idx)->step = NULL;
@@ -848,6 +1022,20 @@ int idl_setter_id(JSContext *ctx, IdlArgType type, bool null_to_empty, IdlSetter
 int idl_getter_id_step(JSContext *ctx, const IdlStepDecl *decl, int magic)
 {
     return idl_method_id_step(ctx, NULL, 0, NULL, 0, decl, magic);
+}
+
+/* §3.7.3: EVERY INTERFACE PROTOTYPE OBJECT CARRIES @@toStringTag, whose value is the interface's IDENTIFIER and
+   whose attributes are { writable: false, enumerable: false, configurable: true }. It is what makes
+   `Object.prototype.toString.call(new Blob())` answer "[object Blob]" — the brand check a page performs without
+   `instanceof`, and the one wpt's own assert_class_string makes about every interface it touches.
+   NOT ONE INTERFACE IN THIS ENGINE HAD IT. Every one of them answered "[object Object]", which is Web IDL's rule
+   missed twenty-two times over — the shape a per-component rule always ends up in, and why this is one call the
+   interface makes rather than a line each of them remembers. */
+void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface)
+{
+    DCHECK(JS_IsObject(proto), "an interface's @@toStringTag was installed on something that is not an object");
+    JS_DefinePropertyValue(ctx, (JSValue)proto, JS_DupAtom(ctx, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG)),
+                           JS_NewString(ctx, iface), JS_PROP_CONFIGURABLE);
 }
 
 void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *name,

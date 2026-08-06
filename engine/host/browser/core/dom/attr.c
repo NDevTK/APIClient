@@ -273,6 +273,7 @@ void attr_init(JSContext *ctx)
        hands an attribute THIS from now on instead of the bare Node it was giving. */
     g_attr_proto = JS_NewObjectProto(ctx, node_proto());
     CHECK(!JS_IsException(g_attr_proto), "Attr.prototype could not be allocated");
+    idl_interface_tag(ctx, g_attr_proto, "Attr");
     JS_SetPropertyFunctionList(ctx, g_attr_proto, js_attr_reads,
                                (int)(sizeof(js_attr_reads) / sizeof(js_attr_reads[0])));
     idl_install_accessor(ctx, g_attr_proto, "value", js_attr_get, 2,
@@ -281,6 +282,7 @@ void attr_init(JSContext *ctx)
 
     g_nnm_proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_nnm_proto), "NamedNodeMap.prototype could not be allocated");
+    idl_interface_tag(ctx, g_nnm_proto, "NamedNodeMap");
     idl_install_accessor(ctx, g_nnm_proto, "length", js_nnm_length, 0, -1);
     idl_install_method(ctx, g_nnm_proto, "item", 1, idl_method_id(ctx, ONE_LONG, 1, js_nnm_get, 0));
     idl_install_method(ctx, g_nnm_proto, "getNamedItem", 1,

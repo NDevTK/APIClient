@@ -1050,6 +1050,7 @@ void element_init(JSContext *ctx)
        argument rather than running it out of a C activation. */
     proto = JS_NewObjectProto(ctx, node_proto());
     CHECK(!JS_IsException(proto), "Element.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "Element");
     JS_SetPropertyFunctionList(ctx, proto, js_element_readonly,
                                (int)(sizeof(js_element_readonly) / sizeof(js_element_readonly[0])));
     idl_install_method(ctx, proto, "getAttribute", 1,

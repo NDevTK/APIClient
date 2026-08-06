@@ -32,6 +32,7 @@
 #include "core/url/url.h"
 #include "core/url/url_search_params.h"
 #include "core/html/form_data.h"
+#include "core/file/blob.h"
 
 static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -53,6 +54,10 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     usp_install(ctx, global);
     form_data_init(ctx);
     form_data_install(ctx, global);
+    /* File API §3's Blob is a plain platform global too, and Fetch's `blob()` reader answers with one — so it
+       is installed BEFORE anything that can build one. */
+    blob_init(ctx);
+    blob_install(ctx, global);
 
     /* 7.2.2: window, self and frames all return THIS Window's proxy, and the global object IS that proxy here —
        so `window.X`, `self.X` and a bare `X` are one read spelled three ways. */

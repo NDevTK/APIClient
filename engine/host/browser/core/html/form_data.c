@@ -14,6 +14,7 @@
  * the overload by asking whether the argument is a platform object of the Blob interface. This engine has no
  * Blob, so nothing can be one, and every value takes the USVString arm — the same reasoning BodyInit's union
  * follows. When Blob lands it is one brand test in this file and a File in the entry, not a redesign. */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -170,6 +171,67 @@ done:
     return ok;
 }
 
+const UrlEncodedList *form_data_list_of(JSValueConst v)
+{
+    FormDataObj *d = g_fd_class ? JS_GetOpaque(v, g_fd_class) : NULL;
+    return d ? &d->list : NULL;
+}
+
+/* Fetch §5.1's `multipart/form-data` SERIALIZER — the parser above, run backwards, and what a
+ * `new Response(formData)` carries. RFC 7578's shape: `--boundary CRLF` then each part's Content-Disposition,
+ * a blank line, its bytes, and a closing `--boundary--`.
+ *
+ * THE BOUNDARY MUST NOT OCCUR IN ANY PART, or the receiver splits the body in the wrong place. It is chosen by
+ * SCANNING the parts rather than by drawing a random number: this engine is deterministic on purpose — a
+ * time-travel resume must produce the byte-identical body — and a random boundary would make the same flow
+ * serialise differently on every run. A counter that stops at the first candidate no part contains is both
+ * deterministic AND correct, which a random string only ever is with high probability. */
+char *form_data_serialize_multipart(const UrlEncodedList *l, char *boundary, size_t *out_n)
+{
+    size_t cap = 256, n = 0;
+    char *out;
+    int i;
+    unsigned attempt;
+
+    for (attempt = 0; ; attempt++) {
+        int clash = 0;
+        snprintf(boundary, FORM_DATA_BOUNDARY_MAX, "----APIClientFormBoundary%u", attempt);
+        for (i = 0; l && i < l->n; i++)
+            if (memmem(l->e[i].name, l->e[i].nlen, boundary, strlen(boundary)) ||
+                memmem(l->e[i].value, l->e[i].vlen, boundary, strlen(boundary))) { clash = 1; break; }
+        if (!clash) break;
+    }
+
+    out = malloc(cap);
+    CHECK(out, "formdata: OOM serialising a multipart body");
+#define FD_PUT(p, len) do {                                                   \
+        size_t need_ = (len);                                                 \
+        while (n + need_ + 1 > cap) {                                         \
+            char *g_ = realloc(out, cap *= 2);                                \
+            CHECK(g_, "formdata: OOM growing a multipart body");              \
+            out = g_;                                                         \
+        }                                                                     \
+        memcpy(out + n, (p), need_);                                          \
+        n += need_;                                                           \
+    } while (0)
+#define FD_PUTS(str) FD_PUT((str), strlen(str))
+
+    for (i = 0; l && i < l->n; i++) {
+        FD_PUTS("--"); FD_PUTS(boundary); FD_PUTS("\r\n");
+        FD_PUTS("Content-Disposition: form-data; name=\"");
+        FD_PUT(l->e[i].name, l->e[i].nlen);
+        FD_PUTS("\"\r\n\r\n");
+        FD_PUT(l->e[i].value, l->e[i].vlen);
+        FD_PUTS("\r\n");
+    }
+    FD_PUTS("--"); FD_PUTS(boundary); FD_PUTS("--\r\n");
+#undef FD_PUTS
+#undef FD_PUT
+    out[n] = 0;
+    *out_n = n;
+    return out;
+}
+
 /* ---- §5's members ---------------------------------------------------------------------------------------- */
 
 enum { FD_APPEND = 0, FD_DELETE, FD_GET, FD_GETALL, FD_HAS, FD_SET };
@@ -324,6 +386,7 @@ void form_data_init(JSContext *ctx)
     JS_NewClass(rt, g_fd_class, &def);
     g_fd_proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_fd_proto), "FormData.prototype could not be allocated");
+    idl_interface_tag(ctx, g_fd_proto, "FormData");
 
     /* The value argument is IDL_ANY because §5's overload picks its type: a Blob crosses as itself and
        everything else is a USVString. With no Blob interface nothing is one, and the member's own

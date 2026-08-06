@@ -44,13 +44,13 @@ const INTERFACES = {
   MutationObserver:     "core/dom/mutation_observer.c",
   ResizeObserver:       "core/resize_observer/resize_observer.c",
   PerformanceObserver:  "core/timing/performance_observer.c",
-  Blob:                 "core/fileapi/blob.c",
   /* An interface that includes the BODY mixin has its readers and `bodyUsed` installed by the shared
      component, so body.c is where the audit finds them — naming only the interface's own file reported six
      members absent that both including interfaces have. */
-  Response:            ["core/fetch/response.c", "core/fetch/body.c"],
-  Request:             ["core/fetch/request.c", "core/fetch/body.c"],
+  Response:            ["core/fetch/response.c", "core/fetch/body.c", "core/byte_reader.c"],
+  Request:             ["core/fetch/request.c", "core/fetch/body.c", "core/byte_reader.c"],
   FormData:            ["core/html/form_data.c", "core/idl_iter.c"],
+  Blob:                ["core/file/blob.c", "core/byte_reader.c"],
   /* Headers exists and had no row, so the audit said nothing about it at all — which is the lying-by-omission
      this map's own comment names, and it was silent from the moment the component landed. */
   /* An `iterable<>` interface's keys/values/entries/forEach are installed by the SHARED default iterator

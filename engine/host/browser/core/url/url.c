@@ -1768,6 +1768,7 @@ void url_init(JSContext *ctx)
     JS_NewClass(rt, g_url_class, &def);
     g_url_proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_url_proto), "URL.prototype could not be allocated");
+    idl_interface_tag(ctx, g_url_proto, "URL");
     JS_SetPropertyFunctionList(ctx, g_url_proto, js_url_proto_funcs,
                                (int)(sizeof(js_url_proto_funcs) / sizeof(js_url_proto_funcs[0])));
     g_url_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, NULL, 0, &js_url_ctor_decl, 0);

@@ -289,6 +289,7 @@ void unhandled_rejection_init(JSContext *ctx)
        hold on one of these. */
     g_pre_proto = JS_NewObjectProto(ctx, event_proto());
     CHECK(!JS_IsException(g_pre_proto), "PromiseRejectionEvent.prototype could not be allocated");
+    idl_interface_tag(ctx, g_pre_proto, "PromiseRejectionEvent");
     idl_install_accessor(ctx, g_pre_proto, "promise", js_pre_get, 0, -1);
     idl_install_accessor(ctx, g_pre_proto, "reason", js_pre_get, 1, -1);
     /* The notification driver is a step function nobody installs, so a page can neither see it nor replace it. */

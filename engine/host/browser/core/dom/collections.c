@@ -524,6 +524,8 @@ void collections_init(JSContext *ctx)
     g_htmlcoll_proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_nodelist_proto) && !JS_IsException(g_htmlcoll_proto),
           "a collection prototype could not be allocated");
+    idl_interface_tag(ctx, g_nodelist_proto, "NodeList");
+    idl_interface_tag(ctx, g_htmlcoll_proto, "HTMLCollection");
     {
         static const IdlArgType ONE_LONG[1] = { IDL_LONG };
         static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };

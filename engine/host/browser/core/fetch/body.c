@@ -1,25 +1,29 @@
 /* THE BODY MIXIN — WHATWG Fetch §5.2, which BOTH Request and Response include.
  *
  * It lived inside response.c, which is where it was first needed and not where it belongs: `Request` includes
- * the same mixin, so the alternative was a second copy of the single-use latch, the four readers and the
+ * the same mixin, so the alternative was a second copy of the single-use latch, the readers and the
  * promise-settling machine — and the latch is COW-captured state, so two copies would be two places for a
  * time-travel bug to live.
  *
- * ONE SET OF READER MACHINES for the whole platform. A step def is registered per (interface, reader) pair
- * only because the def's `arg` is what the step reads to know both which reader it is and whose receiver it
- * has; the CODE is one function. */
+ * WHAT IS LEFT HERE IS WHAT IS FETCH'S. The machine that turns bytes into a settled promise moved to
+ * core/byte_reader.c when File API's Blob turned out to define the same three readers: `blob.text()` is
+ * `response.text()`, and Fetch is the spec that depends on File API rather than the other way round. What stays
+ * is the part no other spec shares — §5.2's "consume body" latch, the Content-Type dispatch `formData()`
+ * performs, and the `bodyUsed` attribute. */
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "solver/cow.h"
+#include "core/byte_reader.h"
 #include "core/fetch/body.h"
+#include "core/file/blob.h"
 #include "core/html/form_data.h"
 #include "core/url/url.h"
-
-/* §5.2's five readers. `arg` is which one; the INTERFACE comes from the receiver. */
-enum { BODY_TEXT = 0, BODY_JSON = 1, BODY_ARRAYBUFFER = 2, BODY_BYTES = 3, BODY_FORMDATA = 4, BODY_KINDS };
+#include "core/url/url_search_params.h"
 
 /* One interface that includes Body. There are two in the platform (Request and Response), so the table is
    fixed and full is a DCHECK rather than a growth path nobody exercises. */
@@ -29,7 +33,7 @@ typedef struct {
     BodyState *(*of)(JSValueConst v);
     char      *(*mime)(JSContext *ctx, JSValueConst v);
     const char  *iface;
-    int          stepid[BODY_KINDS];
+    int          reader_handle;
 } BodyIface;
 
 static BodyIface g_body_iface[BODY_IFACE_MAX];
@@ -58,6 +62,97 @@ int body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len)
     b->len = len;
     return 0;
 }
+
+/* §5.1'S "EXTRACT A BODY", ONCE, for both interfaces that take a BodyInit.
+ *
+ * It was written twice — in the Response constructor and in the Request one — and each copy knew TWO of the
+ * union's six arms: a BufferSource, and everything else stringified. That is why `new Response(blob)` carried
+ * the thirteen bytes of "[object Blob]" with a Content-Type of text/plain, and a FormData body carried
+ * "[object FormData]". Six arms in one place is the point of a union having one rule.
+ *
+ * The MIME type is the extraction's second output, not the caller's guess: §5.1 gives each arm its own type or
+ * none, and the constructor's only job with it is §6.4's "set Content-Type if the header list has none".
+ * `*out_mime` is malloc'd, or NULL for an arm with no type. Returns -1 with a throw live. */
+int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, char **out_mime)
+{
+    const UrlEncodedList *list;
+    size_t len = 0;
+    int r = -1;
+
+    *out_mime = NULL;
+    if (JS_IsNull(init) || JS_IsUndefined(init))
+        return body_state_set(ctx, b, NULL, 0);
+
+    {
+        size_t blen = 0;
+        const char *btype = NULL;
+        const char *bytes = blob_bytes_of(init, &blen, &btype);
+        if (bytes) {
+            /* §5.1: a Blob's type IS the Content-Type, and a Blob with no type contributes none — which is why
+               an empty type must give a NULL mime and not an empty header. */
+            if (btype && *btype) *out_mime = strdup(btype);
+            return body_state_set(ctx, b, bytes, blen);
+        }
+    }
+    if ((list = form_data_list_of(init)) != NULL) {
+        char boundary[FORM_DATA_BOUNDARY_MAX];
+        char *body = form_data_serialize_multipart(list, boundary, &len);
+        size_t n = strlen(boundary) + sizeof("multipart/form-data; boundary=");
+        r = body_state_set(ctx, b, body, len);
+        free(body);
+        *out_mime = malloc(n);
+        CHECK(*out_mime, "body: OOM naming a multipart boundary");
+        snprintf(*out_mime, n, "multipart/form-data; boundary=%s", boundary);
+        return r;
+    }
+    if ((list = usp_list_of(init)) != NULL) {
+        char *body = url_encoded_serialize(list, &len);
+        r = body_state_set(ctx, b, body, len);
+        free(body);
+        *out_mime = strdup("application/x-www-form-urlencoded;charset=UTF-8");
+        return r;
+    }
+    if (JS_IsArrayBuffer(init)) {
+        size_t n = 0;
+        const uint8_t *base = JS_GetArrayBuffer(ctx, &n, (JSValue)init);
+        if (!base) return -1;
+        return body_state_set(ctx, b, (const char *)base, n);   /* §5.1: a BufferSource has no type */
+    }
+    if (JS_IsObject(init)) {
+        size_t off = 0, n = 0, whole = 0;
+        JSValue buf = JS_GetArrayBufferView(ctx, init, &off, &n);
+        uint8_t *base;
+        DCHECK(!JS_IsException(buf),
+               "the BodyInit union let through an object that is none of its arms — the declaration converts "
+               "the USVString arm, and the four interface arms are brand-tested above");
+        base = JS_GetArrayBuffer(ctx, &whole, buf);
+        if (!base) { JS_FreeValue(ctx, buf); return -1; }
+        r = body_state_set(ctx, b, (const char *)base + off, n);
+        JS_FreeValue(ctx, buf);
+        return r;
+    }
+    {
+        /* The USVString arm: the declaration already ran ToString, so this is the string's bytes. */
+        const char *str = JS_ToCStringLen(ctx, &len, init);
+        if (!str) return -1;
+        r = body_state_set(ctx, b, str, len);
+        JS_FreeCString(ctx, str);
+        *out_mime = strdup("text/plain;charset=UTF-8");
+        return r;
+    }
+}
+
+/* WHICH INCLUDING INTERFACE the receiver belongs to./* WHICH INCLUDING INTERFACE the receiver belongs to. The reader machine finds the interface the same way and
+   for the same reason; this is the Fetch-side table, which knows about the latch and the headers. */
+static const BodyIface *body_iface_of(JSValueConst v)
+{
+    int i;
+    for (i = 0; i < g_body_iface_n; i++)
+        if (g_body_iface[i].of(v)) return &g_body_iface[i];
+    return NULL;
+}
+
+static bool body_iface_is(JSValueConst v) { return body_iface_of(v) != NULL; }
 
 /* A MIME type PARAMETER, which §5.2 needs exactly one of: `boundary`. Quoted or a token, and it must follow a
    `;` so `boundary` does not match inside a longer parameter name. NULL when absent. */
@@ -88,215 +183,119 @@ static const char *body_mime_param(const char *s, size_t n, const char *key, siz
 }
 
 /* §5.2 "consume body": the latch is per object and the second read is a TypeError — a page's retry path tests
-   exactly that, so answering the body twice would hide the branch it takes.
+   exactly that, so answering the body twice would hide the branch it takes. It is the whole of what Fetch's
+   read does differently from File API's, which is why the shared machine asks for it rather than holding it.
    THE LATCH IS PER FLOW, TOO. It lives in the including component's class opaque, which no property hook and no
    engine hook can see, so setting it was a write that did not time-travel: a Response created before a fork and
    read in one arm came back CONSUMED in the sibling, whose own first read then threw `body stream already
    read`. Every other kind of shared state a flow writes rides its COW delta, and so does this one — the capture
    goes immediately before the write, so the bytes the delta records are the ones this flow found. */
-static JSValue body_take(JSContext *ctx, const BodyIface *f, JSValueConst this_val,
-                         const char **pbody, size_t *plen)
+static int body_take(JSContext *ctx, JSValueConst this_val, const char **pbody, size_t *plen)
 {
-    BodyState *b = f->of(this_val);
-    if (!b)
-        return JS_ThrowTypeError(ctx, "not a %s", f->iface);
-    if (b->used)
-        return JS_ThrowTypeError(ctx, "body stream already read");
-    cow_capture_host_state(ctx, this_val, &b->used, sizeof b->used);
-    b->used = 1;
+    const BodyIface *f = body_iface_of(this_val);
+    BodyState *b;
+
+    if (!f) {
+        JS_ThrowTypeError(ctx, "not a Request or a Response");
+        return -1;
+    }
+    b = f->of(this_val);
     *pbody = b->bytes ? b->bytes : "";
     *plen  = b->bytes ? b->len : 0;
-    return JS_UNDEFINED;
-}
-
-/* §5.2's READERS AS ONE STEP MACHINE.
- *
- * The bytes are already here, so the promise this returns is settled before the page ever sees it — but SETTLING
- * it is not a C-private act. 27.2.1.3.2 step 8 reads `Get(resolution, "then")` off the value, which for
- * `json()`'s result is an ordinary object whose prototype the page owns: `Object.prototype.then = { get(){…} }`
- * makes that read the page's code, and prototype pollution is a gadget class this engine exists to run rather
- * than assume away. Performed with a JS_Call from C it would run in an activation with no flow base — a loop in
- * that getter would drive to completion — which is what the assert here used to say instead of fixing, and
- * `json()` therefore aborted on EVERY object body: `fetch(u).then(r => r.json())`, the shape every bundle is
- * written in. The resolving function is a CALL REQUEST now, so the read happens on the tramp where it can
- * suspend and fork, and both readers share the one machine because they differ only in how the value is
- * computed. */
-
-/* WHICH INTERFACE THE RECEIVER BELONGS TO is found from the receiver, not carried in the def's `arg`. Packing
-   the pair into `arg` needed a def per (interface, kind) built at RUNTIME, and a runtime-assembled def is
-   invisible to engine/check_step_visits.mjs — the gate that pairs every step declaration with the visit for
-   its state struct silently stopped covering these four. `arg` stays the KIND, the defs stay static
-   initialisers the gate can read, and the interface is a class-id lookup. */
-static const BodyIface *body_iface_of(JSValueConst v)
-{
-    int i;
-    for (i = 0; i < g_body_iface_n; i++)
-        if (g_body_iface[i].of(v)) return &g_body_iface[i];
-    return NULL;
-}
-
-typedef struct JSBodyState {
-    JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
-    uint8_t   stage;
-    uint8_t   cphase;   /* the settle call's own phase, so the stage can hold it across a suspension */
-    JSValue   promise;  /* the capability's promise — this machine's result (owned) */
-    JSValue   func;     /* its resolve or its reject, whichever this body read settles with (owned) */
-    JSValue   value;    /* what it settles WITH: the text, the parsed body, or the error (owned) */
-    JSValue   cb[3];    /* the call request buffer: [this, resolving function, value] */
-} JSBodyState;
-
-/* WHAT THIS MACHINE OWNS. The call buffer is in here for the reason dispatch's is: a `then` getter that forks
-   the flow must not leave two arms sharing one invocation. */
-static void js_body_visit(JSContext *ctx, void *st, JSStepVisit *v)
-{
-    JSBodyState *s = st;
-    int k;
-    v->val(ctx, &s->promise);
-    v->val(ctx, &s->func);
-    v->val(ctx, &s->value);
-    for (k = 0; k < 3; k++)
-        v->val(ctx, &s->cb[k]);
-}
-
-static JSValue js_body_fini(JSContext *ctx, void *st, bool take_result)
-{
-    JSBodyState *s = st;
-    JSValue r = take_result ? s->promise : JS_UNDEFINED;
-    int k;
-
-    if (take_result) s->promise = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->promise);
-    JS_FreeValue(ctx, s->func);
-    JS_FreeValue(ctx, s->value);
-    s->promise = s->func = s->value = JS_UNDEFINED;
-    for (k = 0; k < 3; k++) {
-        JS_FreeValue(ctx, s->cb[k]);
-        s->cb[k] = JS_UNDEFINED;
+    /* A NULL BODY IS NEVER DISTURBED. §5.2's consume returns an empty byte sequence without touching the
+       stream when the body is null, so `new Response()` reads as "" as many times as it is asked and its
+       `bodyUsed` stays FALSE — where `new Response("")`, whose body is EMPTY rather than null, latches on the
+       first read. The two are the same zero bytes and different objects, which is exactly the distinction
+       `has` exists to keep. */
+    if (!b->has)
+        return 0;
+    if (b->used) {
+        JS_ThrowTypeError(ctx, "body stream already read");
+        return -1;
     }
+    cow_capture_host_state(ctx, this_val, &b->used, sizeof b->used);
+    b->used = 1;
+    return 0;
+}
+
+/* §5.2's formData(): WHICH PARSER runs is decided by the Content-Type, and a body whose type is neither of the
+   two form encodings is a TypeError rather than an empty FormData — a page that calls formData() on a JSON reply
+   has a bug, and answering with no entries would hide it. Fetch's own reader, which is why it is declared here
+   and not beside the four that every byte sequence answers. */
+static JSValue body_read_form_data(JSContext *ctx, JSValueConst recv, const char *body, size_t len)
+{
+    const BodyIface *f = body_iface_of(recv);
+    char *mime;
+    const char *essence;
+    size_t elen;
+    JSValue r = JS_EXCEPTION;
+
+    DCHECK(f != NULL, "formData() reached its reader with a receiver of no including interface");
+    mime = f->mime ? f->mime(ctx, recv) : NULL;
+    essence = mime ? mime : "";
+    elen = strcspn(essence, ";");
+    while (elen && (essence[elen - 1] == ' ' || essence[elen - 1] == '\t')) elen--;
+
+    if (elen == (sizeof("application/x-www-form-urlencoded") - 1) &&
+        !strncasecmp(essence, "application/x-www-form-urlencoded", elen)) {
+        UrlEncodedList entries = { 0 };
+        url_encoded_parse(&entries, body, len);
+        r = form_data_new(ctx, &entries);
+        url_encoded_list_free(&entries);
+    } else if (elen == (sizeof("multipart/form-data") - 1) &&
+               !strncasecmp(essence, "multipart/form-data", elen)) {
+        /* The BOUNDARY is the Content-Type's own parameter; without one there is nothing to split on and §5.2
+           says failure, which is the same TypeError a wrong type gives. */
+        UrlEncodedList entries = { 0 };
+        size_t blen = 0;
+        const char *b = body_mime_param(essence, strlen(essence), "boundary", &blen);
+        if (b && form_data_parse_multipart(body, len, b, blen, &entries) == 0) {
+            r = form_data_new(ctx, &entries);
+            url_encoded_list_free(&entries);
+        } else {
+            JS_ThrowTypeError(ctx, "the multipart/form-data body could not be parsed");
+        }
+    } else {
+        JS_ThrowTypeError(ctx, "the body's Content-Type is not a form encoding");
+    }
+    free(mime);
     return r;
 }
 
-/* Stage 0 turns the bytes into the value this reader answers with; stage 1 settles the promise with it, which is
-   the request. Nothing in stage 0 runs the page's code — the body is the host's bytes and the latch is this
-   component's — which is why the four kinds are one stage and not four machines. json() parses with the REAL
-   parser, so a malformed body rejects with the SyntaxError the page would actually catch rather than a
-   placeholder this engine invented. */
-static int js_body_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+/* §5.2's READERS. `blob()` is declared here too, and is the same read as `arrayBuffer()` with a Blob around the
+   bytes — its MIME type comes from the including object's Content-Type, which is why File API cannot declare it
+   and Fetch can. */
+static JSValue body_read_blob(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
 {
-    JSBodyState *s = st;
-    JSValue settled, funcs[2];
-    int reject = 0, r;
+    const BodyIface *f = body_iface_of(recv);
+    char *mime;
+    JSValue r;
 
-    if (s->stage == 0) {
-        const char *body = NULL;
-        size_t len = 0;
-        JS_FreeValue(ctx, cb_result);
-        cb_result = JS_UNDEFINED;
-        {
-            const BodyIface *f = body_iface_of(s->hdr.this_val);
-            if (!f) {
-                JS_ThrowTypeError(ctx, "a body reader was called on something that does not include Body");
-                return JS_STEP_ABRUPT;
-            }
-            settled = body_take(ctx, f, s->hdr.this_val, &body, &len);
-        }
-        if (JS_IsException(settled)) {
-            s->value = JS_GetException(ctx);
-            reject = 1;
-        } else if (s->hdr.arg == BODY_JSON) {
-            s->value = JS_ParseJSON(ctx, body, len, "<response>");
-            if (JS_IsException(s->value)) { s->value = JS_GetException(ctx); reject = 1; }
-        } else if (s->hdr.arg == BODY_ARRAYBUFFER || s->hdr.arg == BODY_BYTES) {
-            /* §5.2's arrayBuffer() / bytes(): the byte sequence itself, the two readers the string body
-               could not have answered honestly. A COPY, because what the page gets is ITS OWN to detach,
-               transfer or write through — handing out this Response's storage would let one flow mutate a
-               reply another is still reading, and a detach would leave that flow reading freed memory. */
-            s->value = s->hdr.arg == BODY_BYTES
-                     ? JS_NewUint8ArrayCopy(ctx, (const uint8_t *)body, len)
-                     : JS_NewArrayBufferCopy(ctx, (const uint8_t *)body, len);
-            if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
-        } else if (s->hdr.arg == BODY_FORMDATA) {
-            /* §5.2's formData(): WHICH PARSER runs is decided by the Content-Type, and a body whose type is
-               neither of the two form encodings is a TypeError rather than an empty FormData — a page that
-               calls formData() on a JSON reply has a bug, and answering with no entries would hide it. */
-            const BodyIface *f = body_iface_of(s->hdr.this_val);
-            char *mime = (f && f->mime) ? f->mime(ctx, s->hdr.this_val) : NULL;
-            const char *essence = mime ? mime : "";
-            size_t elen = strcspn(essence, ";");
-            while (elen && (essence[elen - 1] == ' ' || essence[elen - 1] == '\t')) elen--;
-            if (elen == (sizeof("application/x-www-form-urlencoded") - 1) &&
-                !strncasecmp(essence, "application/x-www-form-urlencoded", elen)) {
-                UrlEncodedList entries = { 0 };
-                url_encoded_parse(&entries, body, len);
-                s->value = form_data_new(ctx, &entries);
-                url_encoded_list_free(&entries);
-                if (JS_IsException(s->value)) { free(mime); return JS_STEP_ABRUPT; }
-            } else if (elen == (sizeof("multipart/form-data") - 1) &&
-                       !strncasecmp(essence, "multipart/form-data", elen)) {
-                /* The BOUNDARY is the Content-Type's own parameter; without one there is nothing to split on
-                   and §5.2 says failure, which is the same TypeError a wrong type gives. */
-                UrlEncodedList entries = { 0 };
-                size_t blen = 0;
-                const char *b = body_mime_param(mime ? mime : "", mime ? strlen(mime) : 0,
-                                                "boundary", &blen);
-                if (b && form_data_parse_multipart(body, len, b, blen, &entries) == 0) {
-                    s->value = form_data_new(ctx, &entries);
-                    url_encoded_list_free(&entries);
-                    if (JS_IsException(s->value)) { free(mime); return JS_STEP_ABRUPT; }
-                } else {
-                    JS_ThrowTypeError(ctx, "the multipart/form-data body could not be parsed");
-                    s->value = JS_GetException(ctx);
-                    reject = 1;
-                }
-            } else {
-                JS_ThrowTypeError(ctx, "the body's Content-Type is not a form encoding");
-                s->value = JS_GetException(ctx);
-                reject = 1;
-            }
-            free(mime);
-        } else {
-            /* §5.2's text(): UTF-8 decode, which is what JS_NewStringLen performs over the host's bytes. */
-            DCHECK(s->hdr.arg == BODY_TEXT, "the body-read machine was declared with a kind it does not read");
-            s->value = JS_NewStringLen(ctx, body, len);
-            if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
-        }
-        /* The NATIVE capability: %Promise% with no subclass in sight, so building it constructs nothing of the
-           page's. Only the settle below is the page's, and that is the request. */
-        s->promise = JS_NewPromiseCapability(ctx, funcs);
-        if (JS_IsException(s->promise)) return JS_STEP_ABRUPT;
-        s->func = funcs[reject];
-        JS_FreeValue(ctx, funcs[reject ^ 1]);
-        s->stage = 1;
-    }
-
-    DCHECK(s->stage == 1, "the body-read machine was re-entered at a stage it never parks in");
-    r = step_call_run(ctx, &s->cphase, s->cb, s->func, JS_UNDEFINED, 1, (JSValueConst *)&s->value,
-                      cb_result, &settled, out_cb, out_argc);
-    if (r > 0) return r;          /* parked ON THE SETTLE; the `then` read runs with a flow base under it */
-    JS_FreeValue(ctx, settled);   /* a resolving function's return value is undefined and unobservable */
-    return JS_STEP_DONE;
+    DCHECK(f != NULL, "blob() reached its reader with a receiver of no including interface");
+    mime = f->mime ? f->mime(ctx, recv) : NULL;
+    r = blob_new(ctx, bytes, len, mime ? mime : "");
+    free(mime);
+    return r;
 }
 
-/* ONE machine, one def per (INTERFACE, KIND) pair — the code is one function and `arg` is the pair, which is
-   the whole of the difference between the eight. They are DECLARED as a list because that is what the
-   registration and the install both walk: a fifth reader (§5.2's blob(), once there is a Blob) is one row here
-   and nothing else, and a row that is added without a step arm reaches the step's own DCHECK. */
-static const char *const BODY_READER_NAME[BODY_KINDS] = { "text", "json", "arrayBuffer", "bytes",
-                                                         "formData" };
+static const ByteReader BODY_READERS[] = {
+    { "text",        byte_reader_text },
+    { "json",        byte_reader_json },
+    { "arrayBuffer", byte_reader_array_buffer },
+    { "bytes",       byte_reader_bytes },
+    { "blob",        body_read_blob },
+    { "formData",    body_read_form_data },
+};
 
-static const JSTrampStepDef js_body_defs[BODY_KINDS] = {
-    { sizeof(JSBodyState), js_body_step, js_body_fini, BODY_TEXT,        .visit = js_body_visit },
-    { sizeof(JSBodyState), js_body_step, js_body_fini, BODY_JSON,        .visit = js_body_visit },
-    { sizeof(JSBodyState), js_body_step, js_body_fini, BODY_ARRAYBUFFER, .visit = js_body_visit },
-    { sizeof(JSBodyState), js_body_step, js_body_fini, BODY_BYTES,       .visit = js_body_visit },
-    { sizeof(JSBodyState), js_body_step, js_body_fini, BODY_FORMDATA,    .visit = js_body_visit },
+static const ByteReaderIface BODY_READER_IFACE = {
+    body_iface_is, body_take, "Body", BODY_READERS,
+    (int)(sizeof BODY_READERS / sizeof BODY_READERS[0])
 };
 
 int body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueConst v),
                  char *(*mime)(JSContext *ctx, JSValueConst v), const char *iface)
 {
-    JSRuntime *rt = JS_GetRuntime(ctx);
-    int handle = g_body_iface_n, k;
+    int handle = g_body_iface_n;
     BodyIface *f;
 
     DCHECK(g_body_iface_n < BODY_IFACE_MAX,
@@ -307,15 +306,15 @@ int body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueCon
     f->of = of;
     f->mime = mime;
     f->iface = iface;
-    for (k = 0; k < BODY_KINDS; k++) {
-        /* ONE def per KIND, shared by every including interface — the step reads its receiver to know whose
-           body it has, so the def carries nothing interface-specific. Registering the same def twice hands
-           back the same behaviour under two ids, which is what lets each prototype install its own function
-           object without the defs multiplying. */
-        f->stepid[k] = JS_RegisterStepDef(rt, &js_body_defs[k]);
-        CHECK(f->stepid[k] >= 0, "body: no step id for a reader — the body would be unreadable");
-    }
     g_body_iface_n++;
+    /* ONE reader declaration for the mixin, shared by every including interface: the readers find their
+       receiver's bytes through the one `take` above, which is the mixin's own algorithm and not either
+       interface's. The declaration is made on the FIRST include and reused, so the two prototypes install the
+       same behaviour under their own function objects. */
+    if (handle == 0)
+        f->reader_handle = byte_reader_declare(ctx, &BODY_READER_IFACE);
+    else
+        f->reader_handle = g_body_iface[0].reader_handle;
     return handle;
 }
 
@@ -330,12 +329,8 @@ static JSValue js_body_get_used(JSContext *ctx, JSValueConst this_val, int magic
 
 void body_install(JSContext *ctx, JSValueConst proto, int handle)
 {
-    int k;
     DCHECK(handle >= 0 && handle < g_body_iface_n, "Body was installed with a handle nothing declared");
-    for (k = 0; k < BODY_KINDS; k++)
-        JS_SetPropertyStr(ctx, (JSValue)proto, BODY_READER_NAME[k],
-                          JS_NewCFunction2(ctx, NULL, BODY_READER_NAME[k], 0, JS_CFUNC_step,
-                                           g_body_iface[handle].stepid[k]));
+    byte_reader_install(ctx, proto, g_body_iface[handle].reader_handle);
     {
         JSCFunctionListEntry e = JS_CGETSET_MAGIC_DEF("bodyUsed", js_body_get_used, NULL, 0);
         e.magic = (int16_t)handle;

@@ -32,6 +32,7 @@
 #include "solver/attr_shadow.h"
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
+#include "core/idl_args.h"
 #include "core/dom/element.h"
 #include "core/dom/node.h"
 #include "core/html/dom_string_map.h"
@@ -286,6 +287,7 @@ void dom_string_map_init(JSContext *ctx)
           "the DOMStringMap class could not be registered");
     g_proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_proto), "DOMStringMap.prototype could not be allocated");
+    idl_interface_tag(ctx, g_proto, "DOMStringMap");
     g_ready = 1;
 }
 

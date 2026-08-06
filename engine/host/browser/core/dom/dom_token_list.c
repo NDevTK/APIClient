@@ -345,6 +345,7 @@ void dom_token_list_init(JSContext *ctx)
           "the DOMTokenList slot keys could not be allocated");
     g_proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_proto), "DOMTokenList.prototype could not be allocated");
+    idl_interface_tag(ctx, g_proto, "DOMTokenList");
     idl_install_accessor(ctx, g_proto, "length", js_tl_length, 0, -1);
     idl_install_accessor(ctx, g_proto, "value", js_tl_value, 0,
                          idl_setter_id(ctx, IDL_DOMSTRING, false, js_tl_set_value, 0));

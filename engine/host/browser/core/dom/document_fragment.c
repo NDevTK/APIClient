@@ -53,6 +53,7 @@ void document_fragment_init(JSContext *ctx)
     DCHECK(!g_ready, "document_fragment_init ran twice — one instance is one document");
     g_frag_proto = JS_NewObjectProto(ctx, node_proto());
     CHECK(!JS_IsException(g_frag_proto), "DocumentFragment.prototype could not be allocated");
+    idl_interface_tag(ctx, g_frag_proto, "DocumentFragment");
     node_install_parent_mixin(ctx, g_frag_proto);
     node_install_nonelement_parent_mixin(ctx, g_frag_proto);   /* §4.2.4, the same one Document includes */
     /* CONSUMED by the table, which is what makes node_wrap hand a fragment this interface from now on. */

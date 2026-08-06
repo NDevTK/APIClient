@@ -4,6 +4,7 @@
 #include <stddef.h>
 
 #include "quickjs.h"
+#include "core/url/url.h"
 
 void usp_init(JSContext *ctx);
 void usp_install(JSContext *ctx, JSValueConst global);
@@ -15,5 +16,9 @@ void usp_free(JSContext *ctx);
 JSValue usp_new(JSContext *ctx, JSValueConst owner, const char *query, size_t query_len);
 /* §5.1's `search` setter re-initialises the object's query, which §6.1 says re-initialises the list. */
 void    usp_reset(JSContext *ctx, JSValueConst usp, const char *query, size_t query_len);
+
+/* THE LIST one holds, or NULL when the value is not a URLSearchParams. The brand test Fetch §5.1's BodyInit
+   union performs, and what it serialises the body from. */
+const UrlEncodedList *usp_list_of(JSValueConst v);
 
 #endif

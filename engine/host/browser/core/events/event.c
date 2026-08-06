@@ -391,6 +391,7 @@ void event_init(JSContext *ctx)
     CHECK(!JS_IsException(g_key), "the Event slot key allocation failed");
     g_proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_proto), "Event.prototype could not be allocated");
+    idl_interface_tag(ctx, g_proto, "Event");
     g_ready = 1;
     JS_SetPropertyFunctionList(ctx, g_proto, js_event_proto,
                                (int)(sizeof(js_event_proto) / sizeof(js_event_proto[0])));
