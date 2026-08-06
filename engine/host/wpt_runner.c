@@ -443,6 +443,8 @@ int main(int argc, char **argv)
     form_data_install(ctx, global);
     readable_stream_init(ctx);
     readable_stream_install(ctx, global);
+    queuing_strategy_init(ctx);
+    queuing_strategy_install(ctx, global);
     blob_init(ctx);
     blob_install(ctx, global);
     encoding_init(ctx);
@@ -562,6 +564,7 @@ int main(int argc, char **argv)
     url_free(ctx);
     usp_free(ctx);
     form_data_free(ctx);
+    queuing_strategy_free(ctx);
     readable_stream_free(ctx);
     blob_free(ctx);
     location_free();   /* the API base URL the document's address produced */

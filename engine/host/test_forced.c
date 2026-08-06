@@ -27,6 +27,7 @@
 #include "core/html/form_data.h"
 #include "core/file/blob.h"
 #include "core/streams/readable_stream.h"
+#include "core/streams/queuing_strategy.h"
 #include "core/encoding/encoding.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/fetch.h"
@@ -1688,6 +1689,7 @@ int main(void) {
     headers_free(ctx);    /* Headers.prototype and the name it interned */
     url_free(ctx);
     usp_free(ctx);
+    queuing_strategy_free(ctx);
     readable_stream_free(ctx);
     blob_free(ctx);
     location_free();   /* the API base URL the document's address produced */

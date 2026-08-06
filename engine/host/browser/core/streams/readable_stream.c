@@ -331,7 +331,7 @@ enum { S_IDLE = 0,
        S_CLOSE_SET, S_CLOSE_CLOSED, S_CLOSE_LOOP,   /* §4.2's ReadableStreamClose */
        S_ERR_SET,   S_ERR_CLOSED,   S_ERR_LOOP,     /* §4.2's ReadableStreamError */
        S_REL_CLOSED, S_REL_LOOP };                  /* §4.3's release: the reader loses, the stream survives */
-enum { P_IDLE = 0, P_TEST, P_CALL, P_RESOLVE, P_THEN, P_ERROR };
+enum { P_IDLE = 0, P_TEST, P_CALL, P_RESOLVE, P_REJECT, P_THEN };
 
 typedef struct {
     uint8_t stage;   /* the owning MACHINE's own step */
@@ -515,7 +515,8 @@ static int stream_settle_run(JSContext *ctx, CtrlWork *w, StreamData *d, JSValue
  * step 8 reads `then` off the page's object. So it is a call request like every other run of the page's code,
  * rather than a `JS_IsFunction(then)` test that would answer a patched thenable wrongly.
  * Takes `w->value`; leaves the capability's promise in `w->func`. */
-static int step_promise_of_run(JSContext *ctx, CtrlWork *w, JSValue in, JSValue **out_cb, int *out_argc)
+static int step_promise_of_run(JSContext *ctx, CtrlWork *w, int reject, JSValue in,
+                               JSValue **out_cb, int *out_argc)
 {
     JSValueConst arg;
     JSValue out;
@@ -528,10 +529,8 @@ static int step_promise_of_run(JSContext *ctx, CtrlWork *w, JSValue in, JSValue 
         JS_FreeValue(ctx, w->func);
         w->func = p;
         JS_FreeValue(ctx, w->chain);
-        w->chain = funcs[0];
-        /* the reject half is dropped: 27.2.1.3.2 rejects through the resolve function's own steps when the
-           `then` read throws, so nothing outside them ever needs it */
-        JS_FreeValue(ctx, funcs[1]);
+        w->chain = funcs[reject];
+        JS_FreeValue(ctx, funcs[reject ^ 1]);
     }
     arg = w->value;
     r = step_call_run(ctx, &w->phase, w->cb, w->chain, JS_UNDEFINED, 1, &arg, in, &out, out_cb, out_argc);
@@ -680,12 +679,6 @@ static int ctrl_pull_run(JSContext *ctx, CtrlWork *w, JSValueConst ctrl_v, JSVal
     d = stream_of(c->stream);
     DCHECK(d != NULL, "a controller's stream stopped being a ReadableStream");
 
-    if (w->pull == P_ERROR) {
-        r = stream_settle_run(ctx, w, d, in, out_cb, out_argc);
-        if (r != 0) return r;
-        w->pull = P_IDLE;
-        return 0;
-    }
     if (w->pull == P_TEST) {
         if (JS_IsUndefined(c->pull_fn) || !ctrl_should_pull(ctx, c, d)) {
             JS_FreeValue(ctx, in);
@@ -710,26 +703,17 @@ static int ctrl_pull_run(JSContext *ctx, CtrlWork *w, JSValueConst ctrl_v, JSVal
         r = step_call_run(ctx, &w->phase, w->cb, c->pull_fn, JS_UNDEFINED, 1, &arg, in, &res,
                           out_cb, out_argc);
         if (r > 0) return r;
-        if (JS_IsException(res)) {
-            /* §4.9.4 builds the pull algorithm with PromiseCall, so a `pull` that THROWS rejects its promise
-               rather than propagating — and §4.5 answers that rejection by erroring the controller, which is
-               why these machines declare catches_abrupt. */
-            c->pulling = 0;
-            w->err = JS_GetException(ctx);
-            w->settle = S_ERR_SET;
-            w->pull = P_ERROR;
-            r = stream_settle_run(ctx, w, d, JS_UNDEFINED, out_cb, out_argc);
-            if (r != 0) return r;
-            w->pull = P_IDLE;
-            return 0;
-        }
         JS_FreeValue(ctx, w->value);
-        w->value = res;
-        w->pull = P_RESOLVE;
+        /* §4.9.4 builds the pull algorithm with PromiseCall: a `pull` that THROWS yields a REJECTED PROMISE,
+           and the controller is errored by the REACTION to it — not here, inline. The difference is one
+           microtask and it is observable: the tee delivers the chunk it had already dequeued in between, so
+           erroring inline lost that chunk. This is why these machines declare catches_abrupt. */
+        w->pull = JS_IsException(res) ? P_REJECT : P_RESOLVE;
+        w->value = JS_IsException(res) ? JS_GetException(ctx) : res;
         in = JS_UNDEFINED;
     }
-    if (w->pull == P_RESOLVE) {
-        r = step_promise_of_run(ctx, w, in, out_cb, out_argc);
+    if (w->pull == P_RESOLVE || w->pull == P_REJECT) {
+        r = step_promise_of_run(ctx, w, w->pull == P_REJECT, in, out_cb, out_argc);
         if (r != 0) return r;
         w->pull = P_THEN;
     }
@@ -1202,6 +1186,7 @@ typedef struct {
     JSValue   funcs[2];    /* its resolve and reject, which the source's own promise settles through */
     JSValue   settle;      /* the one of them a short-circuit path calls directly */
     JSValue   stream;
+    uint8_t   reject_algorithm;   /* the source's `cancel` threw, so its promise is a rejected one */
 } JSCancelState;
 
 static void js_cancel_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -1309,19 +1294,15 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
             r = step_call_run(ctx, &s->w.phase, s->w.cb, c->cancel_fn, JS_UNDEFINED, 1, &arg, cb_result, &out,
                               out_cb, out_argc);
             if (r > 0) return r;
-            if (JS_IsException(out)) {
-                /* §4.9.4 builds the cancel algorithm with PromiseCall too: a throwing `cancel` REJECTS the
-                   promise this member handed back rather than propagating out of it. */
-                JS_FreeValue(ctx, s->w.value);
-                s->w.value = JS_GetException(ctx);
-                s->settle = s->funcs[1];
-                s->funcs[1] = JS_UNDEFINED;
-                s->w.stage = CN_SETTLE;
-                cb_result = JS_UNDEFINED;
-                goto settle;
-            }
+            /* §4.9.4 builds the cancel algorithm with PromiseCall too: a throwing `cancel` becomes a REJECTED
+               PROMISE, which this member's own promise then adopts — one path, not a special case. */
             JS_FreeValue(ctx, s->w.value);
-            s->w.value = out;
+            if (JS_IsException(out)) {
+                s->w.value = JS_GetException(ctx);
+                s->reject_algorithm = 1;
+            } else {
+                s->w.value = out;
+            }
             cb_result = JS_UNDEFINED;
         }
         if (c) {
@@ -1334,7 +1315,7 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
     }
 
     if (s->w.stage == CN_RESOLVE) {
-        r = step_promise_of_run(ctx, &s->w, cb_result, out_cb, out_argc);
+        r = step_promise_of_run(ctx, &s->w, s->reject_algorithm, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
@@ -1355,7 +1336,6 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         return r < 0 ? JS_STEP_ABRUPT : JS_STEP_DONE;
     }
 
-settle:
     DCHECK(s->w.stage == CN_SETTLE, "the cancel machine resumed in a stage it never parks in");
     arg = s->w.value;
     r = step_call_run(ctx, &s->w.phase, s->w.cb, s->settle, JS_UNDEFINED, 1, &arg, cb_result, &out,
@@ -1916,6 +1896,441 @@ static const IdlStepDecl js_values_decl = {
     js_values_step, sizeof(JSValuesState), js_values_visit, js_values_release
 };
 
+/* ---- §4.2's TEE -----------------------------------------------------------------------------------------------
+ *
+ * ReadableStreamDefaultTee: one stream read once, its chunks handed to TWO. The two branches are ordinary
+ * ReadableStreams whose pull and cancel algorithms are the HOST'S rather than a page's — which needs nothing new
+ * from §4.5, because a controller calls whatever function it holds and a step closure is a function.
+ *
+ * THE SHARED STATE IS THE POINT. `reading`, `readAgain`, `canceled1/2` and one cancelPromise are read and
+ * written by five algorithms that run at different times, so they live in one GC-traced record both branches
+ * hold — which is also what makes the record a cycle (branch -> controller -> closure -> record -> branch) and
+ * why it has a gc_mark like every other one here.
+ *
+ * IT USES NO GLOBAL. §4.2 builds the branches with CreateReadableStream, not with the `ReadableStream`
+ * constructor, and the corpus asserts that a page which replaces the global sees no difference. Building them
+ * here from the same two allocations the constructor uses is what makes that true rather than lucky. */
+enum {
+    TEE_PULL = 0,     /* both branches' pull algorithm */
+    TEE_CANCEL1,      /* branch 1's cancel algorithm */
+    TEE_CANCEL2,
+    TEE_READ_OK,      /* what a read through the shared reader answered */
+    TEE_READ_ERR,
+    TEE_CLOSED_ERR,   /* the shared reader's `closed` promise rejecting */
+    TEE_N
+};
+
+typedef struct {
+    JSValue reader;
+    JSValue branch[2];
+    JSValue ctrl[2];
+    JSValue cancel_promise;
+    JSValue cancel_funcs[2];
+    JSValue reason[2];
+    uint8_t reading;
+    uint8_t read_again;
+    uint8_t canceled[2];
+} TeeData;
+
+static JSClassID g_tee_class;
+static int       g_tee_stepids[TEE_N];
+/* The controller members, as function objects — the same reason §4.4 holds the reader's. */
+static JSValue   g_ctrl_fn[3] = { JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED };
+
+static void tee_finalizer(JSRuntime *rt, JSValue val)
+{
+    TeeData *t = JS_GetOpaque(val, g_tee_class);
+    int i;
+    if (!t) return;
+    JS_FreeValueRT(rt, t->reader);
+    JS_FreeValueRT(rt, t->cancel_promise);
+    for (i = 0; i < 2; i++) {
+        JS_FreeValueRT(rt, t->branch[i]);
+        JS_FreeValueRT(rt, t->ctrl[i]);
+        JS_FreeValueRT(rt, t->cancel_funcs[i]);
+        JS_FreeValueRT(rt, t->reason[i]);
+    }
+    js_free_rt(rt, t);
+}
+
+static void tee_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+{
+    TeeData *t = JS_GetOpaque(val, g_tee_class);
+    int i;
+    if (!t) return;
+    JS_MarkValue(rt, t->reader, mark_func);
+    JS_MarkValue(rt, t->cancel_promise, mark_func);
+    for (i = 0; i < 2; i++) {
+        JS_MarkValue(rt, t->branch[i], mark_func);
+        JS_MarkValue(rt, t->ctrl[i], mark_func);
+        JS_MarkValue(rt, t->cancel_funcs[i], mark_func);
+        JS_MarkValue(rt, t->reason[i], mark_func);
+    }
+}
+
+static TeeData *tee_of(JSValueConst v) { return JS_GetOpaque(v, g_tee_class); }
+
+enum { TS_START = 0, TS_READ, TS_B0, TS_B1, TS_RESOLVE_CANCEL, TS_CANCEL_SOURCE, TS_CANCEL_ADOPT };
+enum { CF_ENQUEUE = 0, CF_CLOSE, CF_ERROR };
+
+typedef struct {
+    JSStepHdr hdr;
+    uint8_t   stage;
+    uint8_t   phase;
+    uint8_t   done;      /* what the read answered */
+    JSValue   tee;
+    JSValue   value;     /* the chunk, or the reason a cancel carries */
+    JSValue   result;    /* what this invocation answers */
+    JSValue   cb[3];
+} JSTeeState;
+
+static void js_tee_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSTeeState *s = st;
+    int k;
+    v->val(ctx, &s->tee);
+    v->val(ctx, &s->value);
+    v->val(ctx, &s->result);
+    for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
+}
+
+static JSValue js_tee_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSTeeState *s = st;
+    JSValue r = take_result ? s->result : JS_UNDEFINED;
+    int k;
+    if (take_result) s->result = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->tee);
+    JS_FreeValue(ctx, s->value);
+    JS_FreeValue(ctx, s->result);
+    s->tee = s->value = s->result = JS_UNDEFINED;
+    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
+    return r;
+}
+
+/* One branch's controller told to take, close or error. A CALL of the member's function object, so the
+   controller's own machine runs — the enqueue weighs the chunk, answers a parked read and pulls again, none of
+   which a direct write to the queue would do. */
+static int tee_ctrl_run(JSContext *ctx, JSTeeState *s, TeeData *t, int i, int which, JSValueConst arg,
+                        JSValue in, JSValue **out_cb, int *out_argc)
+{
+    JSValue out;
+    int r, argc = which == CF_CLOSE ? 0 : 1;
+
+    r = step_call_run(ctx, &s->phase, s->cb, g_ctrl_fn[which], t->ctrl[i], argc, &arg, in, &out,
+                      out_cb, out_argc);
+    if (r > 0) return r;
+    if (JS_IsException(out)) {
+        /* §4.2's tee ignores what a branch's own enqueue/close refuses: a branch that a page has already
+           closed or errored is not this algorithm's problem, and the other branch must still be fed. */
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        return 0;
+    }
+    JS_FreeValue(ctx, out);
+    return 0;
+}
+
+static int js_tee_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSTeeState *s = st;
+    int op = s->hdr.arg;
+    TeeData *t;
+    JSValue out;
+    int r;
+
+    if (s->stage == TS_START) {
+        int k;
+        s->tee = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 0));
+        s->value = s->result = JS_UNDEFINED;
+        for (k = 0; k < 3; k++) s->cb[k] = JS_UNDEFINED;
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        t = tee_of(s->tee);
+        DCHECK(t != NULL, "a tee machine captured something that is not a tee record");
+
+        switch (op) {
+        case TEE_PULL:
+            if (t->reading) {
+                /* §4.2: a pull asked for while a read is in flight is REMEMBERED, not dropped — the chunk
+                   steps run it when they finish. */
+                t->read_again = 1;
+                return JS_STEP_DONE;
+            }
+            t->reading = 1;
+            s->stage = TS_READ;
+            break;
+        case TEE_CANCEL1: case TEE_CANCEL2: {
+            int i = op == TEE_CANCEL1 ? 0 : 1;
+            t->canceled[i] = 1;
+            JS_FreeValue(ctx, t->reason[i]);
+            t->reason[i] = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
+            s->result = JS_DupValue(ctx, t->cancel_promise);
+            if (!t->canceled[i ^ 1]) return JS_STEP_DONE;   /* the other branch is still reading */
+            /* BOTH branches have cancelled, so the SOURCE is cancelled — with both reasons, as an array, in
+               branch order however the two calls were ordered in time. */
+            s->value = JS_NewArray(ctx);
+            if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
+            JS_SetPropertyUint32(ctx, s->value, 0, JS_DupValue(ctx, t->reason[0]));
+            JS_SetPropertyUint32(ctx, s->value, 1, JS_DupValue(ctx, t->reason[1]));
+            s->stage = TS_CANCEL_SOURCE;
+            break;
+        }
+        case TEE_READ_OK: {
+            JSValue done_v;
+            s->value = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
+            done_v = JS_GetPropertyStr(ctx, s->value, "done");
+            s->done = (uint8_t)JS_ToBool(ctx, done_v);
+            JS_FreeValue(ctx, done_v);
+            if (!s->done) {
+                JSValue chunk = JS_GetPropertyStr(ctx, s->value, "value");
+                JS_FreeValue(ctx, s->value);
+                s->value = chunk;
+                t->read_again = 0;
+            }
+            s->stage = TS_B0;
+            break;
+        }
+        default:
+            DCHECK(op == TEE_READ_ERR || op == TEE_CLOSED_ERR,
+                   "a tee machine ran with an operation this component does not have");
+            if (op == TEE_READ_ERR) {
+                /* §4.2's error steps do exactly one thing: the `closed` reaction below owns the erroring. */
+                t->reading = 0;
+                return JS_STEP_DONE;
+            }
+            s->value = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
+            s->done = 2;   /* the closed-rejection arm: both branches are ERRORED with the reason */
+            s->stage = TS_B0;
+            break;
+        }
+    }
+
+    t = tee_of(s->tee);
+    DCHECK(t != NULL, "a tee machine's record stopped being one");
+
+again:
+    if (s->stage == TS_READ) {
+        JSValueConst data[1];
+        r = step_call_run(ctx, &s->phase, s->cb, g_read_fn, t->reader, 0, NULL, cb_result, &out,
+                          out_cb, out_argc);
+        if (r > 0) return r;
+        if (JS_IsException(out)) return JS_STEP_ABRUPT;
+        data[0] = s->tee;
+        r = stream_react(ctx, out, g_tee_stepids[TEE_READ_OK], g_tee_stepids[TEE_READ_ERR], data, 1);
+        JS_FreeValue(ctx, out);
+        return r < 0 ? JS_STEP_ABRUPT : JS_STEP_DONE;
+    }
+
+    if (s->stage == TS_B0 || s->stage == TS_B1) {
+        int i = s->stage == TS_B1;
+        for (; i < 2; i++) {
+            s->stage = i ? TS_B1 : TS_B0;
+            /* §4.2: a branch the page has already cancelled is not fed, closed or errored. */
+            if (s->done != 2 && t->canceled[i]) continue;
+            r = tee_ctrl_run(ctx, s, t, i,
+                             s->done == 2 ? CF_ERROR : s->done ? CF_CLOSE : CF_ENQUEUE,
+                             s->value, cb_result, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return JS_STEP_ABRUPT;
+            cb_result = JS_UNDEFINED;
+        }
+        if (s->done == 0) {
+            t->reading = 0;
+            if (t->read_again) {
+                /* the pull that arrived while this read was in flight, run now — as a fresh READ rather than
+                   as a recursive call, so the machine's own stages stay flat */
+                t->read_again = 0;
+                t->reading = 1;
+                s->stage = TS_READ;
+                cb_result = JS_UNDEFINED;
+                goto again;   /* a LOOP, never a call: this machine may not recurse into itself */
+            }
+            return JS_STEP_DONE;
+        }
+        if (s->done == 1) t->reading = 0;
+        /* CLOSE and ERROR both settle the tee's own cancel promise, so a branch cancelled afterwards is not
+           left waiting on a source that is already finished. */
+        s->stage = TS_RESOLVE_CANCEL;
+    }
+
+    if (s->stage == TS_RESOLVE_CANCEL) {
+        JSValueConst undef = JS_UNDEFINED;
+        if (t->canceled[0] && t->canceled[1]) { JS_FreeValue(ctx, cb_result); return JS_STEP_DONE; }
+        r = step_call_run(ctx, &s->phase, s->cb, t->cancel_funcs[0], JS_UNDEFINED, 1, &undef, cb_result, &out,
+                          out_cb, out_argc);
+        if (r > 0) return r;
+        if (JS_IsException(out)) return JS_STEP_ABRUPT;
+        JS_FreeValue(ctx, out);
+        return JS_STEP_DONE;
+    }
+
+    if (s->stage == TS_CANCEL_SOURCE) {
+        JSValueConst arg = s->value;
+        r = step_call_run(ctx, &s->phase, s->cb, g_reader_cancel_fn, t->reader, 1, &arg, cb_result, &out,
+                          out_cb, out_argc);
+        if (r > 0) return r;
+        if (JS_IsException(out)) return JS_STEP_ABRUPT;
+        JS_FreeValue(ctx, s->value);
+        s->value = out;
+        cb_result = JS_UNDEFINED;
+        /* TWO CALLS, TWO STAGES. One `phase` byte serves one call at a time: writing the two in a row under a
+           single byte made the resume re-enter the FIRST call with the SECOND's phase, which issued the second
+           call again forever — a livelock the corpus found as a killed process, not as a failure. */
+        s->stage = TS_CANCEL_ADOPT;
+    }
+
+    DCHECK(s->stage == TS_CANCEL_ADOPT, "a tee machine resumed in a stage it never parks in");
+    {
+        /* §4.2 resolves cancelPromise WITH the source's cancel result, so the branches' cancel promises adopt
+           it rather than settling ahead of it. */
+        JSValueConst arg = s->value;
+        r = step_call_run(ctx, &s->phase, s->cb, t->cancel_funcs[0], JS_UNDEFINED, 1, &arg, cb_result, &out,
+                          out_cb, out_argc);
+        if (r > 0) return r;
+        if (JS_IsException(out)) return JS_STEP_ABRUPT;
+        JS_FreeValue(ctx, out);
+        return JS_STEP_DONE;
+    }
+}
+
+#define TEE_DEF(i) { sizeof(JSTeeState), js_tee_step, js_tee_fini, (i), \
+                     .catches_abrupt = 1, .visit = js_tee_visit }
+static const JSTrampStepDef js_tee_defs[TEE_N] = {
+    TEE_DEF(TEE_PULL), TEE_DEF(TEE_CANCEL1), TEE_DEF(TEE_CANCEL2),
+    TEE_DEF(TEE_READ_OK), TEE_DEF(TEE_READ_ERR), TEE_DEF(TEE_CLOSED_ERR),
+};
+#undef TEE_DEF
+
+/* §4.2's `tee()`. A MACHINE because it acquires a reader, and §4.3's acquisition settles `closed` at once on a
+   stream that has already finished. */
+typedef struct {
+    CtrlWork w;
+    JSValue  tee;
+    JSValue  reader;
+} JSTeeCallState;
+
+static void js_tee_call_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSTeeCallState *s = st;
+    ctrl_work_visit(ctx, &s->w, v);
+    v->val(ctx, &s->tee);
+    v->val(ctx, &s->reader);
+}
+
+static void js_tee_call_release(JSContext *ctx, void *st)
+{
+    JSTeeCallState *s = st;
+    ctrl_work_release(ctx, &s->w);
+    JS_FreeValue(ctx, s->tee);
+    JS_FreeValue(ctx, s->reader);
+    s->tee = s->reader = JS_UNDEFINED;
+}
+
+/* A BRANCH: a stream and a controller whose pull and cancel are the tee's, not a page's. */
+static int tee_branch(JSContext *ctx, TeeData *t, JSValueConst tee_v, int i)
+{
+    JSValueConst data[1];
+    ControllerData *c;
+    StreamData *d;
+
+    t->branch[i] = readable_stream_empty(ctx);
+    if (JS_IsException(t->branch[i])) return -1;
+    t->ctrl[i] = controller_new(ctx, t->branch[i]);
+    if (JS_IsException(t->ctrl[i])) return -1;
+    c = ctrl_of(t->ctrl[i]);
+    d = stream_of(t->branch[i]);
+    d->controller = JS_DupValue(ctx, t->ctrl[i]);
+    data[0] = tee_v;
+    c->pull_fn = JS_NewStepClosure(ctx, g_tee_stepids[TEE_PULL], 0, 1, data);
+    if (JS_IsException(c->pull_fn)) { c->pull_fn = JS_UNDEFINED; return -1; }
+    c->cancel_fn = JS_NewStepClosure(ctx, g_tee_stepids[i ? TEE_CANCEL2 : TEE_CANCEL1], 1, 1, data);
+    if (JS_IsException(c->cancel_fn)) { c->cancel_fn = JS_UNDEFINED; return -1; }
+    return 0;
+}
+
+static int js_tee_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    JSTeeCallState *s = st;
+    TeeData *t;
+    JSValue obj, arr;
+    int r, i;
+
+    (void)argc; (void)argv;
+    if (s->w.stage == 0) {
+        ctrl_work_start(&s->w);
+        s->tee = s->reader = JS_UNDEFINED;
+        s->w.stage = 1;
+        if (!stream_of(hdr->this_val)) {
+            JS_FreeValue(ctx, cb_result);
+            JS_ThrowTypeError(ctx, "not a ReadableStream");
+            return -1;
+        }
+    }
+    if (s->w.stage == 1) {
+        r = step_call_run(ctx, &s->w.phase, s->w.cb, g_get_reader_fn, hdr->this_val, 0, NULL,
+                          cb_result, &s->reader, out_cb, out_argc);
+        if (r > 0) return r;
+        if (JS_IsException(s->reader)) return -1;
+        cb_result = JS_UNDEFINED;
+
+        obj = JS_NewObjectClass(ctx, g_tee_class);
+        if (JS_IsException(obj)) return -1;
+        t = js_mallocz(ctx, sizeof *t);
+        if (!t) { JS_FreeValue(ctx, obj); return -1; }
+        t->reader = t->cancel_promise = JS_UNDEFINED;
+        for (i = 0; i < 2; i++)
+            t->branch[i] = t->ctrl[i] = t->cancel_funcs[i] = t->reason[i] = JS_UNDEFINED;
+        JS_SetOpaque(obj, t);
+        s->tee = obj;                      /* attached before anything that can fail, as everywhere here */
+        t->reader = JS_DupValue(ctx, s->reader);
+        t->cancel_promise = JS_NewPromiseCapability(ctx, t->cancel_funcs);
+        if (JS_IsException(t->cancel_promise)) return -1;
+        for (i = 0; i < 2; i++)
+            if (tee_branch(ctx, t, s->tee, i) < 0) return -1;
+        /* §4.2 step 18: the source's `closed` REJECTING is what errors both branches. */
+        {
+            JSValueConst data[1];
+            ReaderData *rd = reader_of(s->reader);
+            JSValue onr, cap;
+            DCHECK(rd != NULL, "tee acquired something that is not a ReadableStreamDefaultReader");
+            data[0] = s->tee;
+            onr = JS_NewStepClosure(ctx, g_tee_stepids[TEE_CLOSED_ERR], 1, 1, data);
+            if (JS_IsException(onr)) return -1;
+            cap = JS_PerformPromiseThen(ctx, rd->closed, JS_UNDEFINED, onr);
+            JS_FreeValue(ctx, onr);
+            if (JS_IsException(cap)) return -1;
+            JS_FreeValue(ctx, cap);
+        }
+        /* §4.5's set-up: neither branch is STARTED until a microtask has run, so a pull cannot happen inside
+           tee() itself. One resolved promise serves both, which is the same tick each would have had. */
+        s->w.value = JS_UNDEFINED;
+        s->w.stage = 2;
+    }
+    if (s->w.stage == 2) {
+        r = step_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        cb_result = JS_UNDEFINED;
+        s->w.stage = 3;
+    }
+    JS_FreeValue(ctx, cb_result);
+    t = tee_of(s->tee);
+    DCHECK(t != NULL, "the tee call's record stopped being one");
+    for (i = 0; i < 2; i++)
+        if (ctrl_react(ctx, s->w.func, t->ctrl[i], RXN_START_OK, RXN_START_ERR) < 0) return -1;
+    arr = JS_NewArray(ctx);
+    if (JS_IsException(arr)) return -1;
+    JS_SetPropertyUint32(ctx, arr, 0, JS_DupValue(ctx, t->branch[0]));
+    JS_SetPropertyUint32(ctx, arr, 1, JS_DupValue(ctx, t->branch[1]));
+    *presult = arr;
+    return 0;
+}
+
+static const IdlStepDecl js_tee_call_decl = {
+    js_tee_call_step, sizeof(JSTeeCallState), js_tee_call_visit, js_tee_call_release
+};
+
 /* ---- the constructors -------------------------------------------------------------------------------------- */
 
 /* §4.2's constructor, over §4.9.4's SetUpReadableStreamDefaultControllerFromUnderlyingSource. A MACHINE because
@@ -2111,7 +2526,7 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         s->w.stage = RSC_RESOLVE;
     }
     if (s->w.stage == RSC_RESOLVE) {
-        r = step_promise_of_run(ctx, &s->w, cb_result, out_cb, out_argc);
+        r = step_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
@@ -2246,6 +2661,26 @@ void readable_stream_init(JSContext *ctx)
                                JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
     }
 
+    /* §4.2's tee. Its branches' pull and cancel are step closures, so they need the controller's members as
+       function objects for the same reason §4.4 needs the reader's. */
+    {
+        JSClassDef td = { "ReadableStream tee", .finalizer = tee_finalizer, .gc_mark = tee_gc_mark };
+        static const char *const CTRL_NAMES[3] = { "enqueue", "close", "error" };
+        JS_NewClassID(rt, &g_tee_class);
+        JS_NewClass(rt, g_tee_class, &td);
+        for (i = 0; i < 3; i++) {
+            g_ctrl_fn[i] = JS_GetPropertyStr(ctx, g_ctrl_proto, CTRL_NAMES[i]);
+            CHECK(JS_IsFunction(ctx, g_ctrl_fn[i]),
+                  "streams: a controller member the tee performs was not installed before it was captured");
+        }
+        for (i = 0; i < TEE_N; i++) {
+            g_tee_stepids[i] = JS_RegisterStepDef(rt, &js_tee_defs[i]);
+            CHECK(g_tee_stepids[i] >= 0, "streams: no step id for a tee operation");
+        }
+        idl_install_method(ctx, g_stream_proto, "tee", 0,
+                           idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tee_call_decl, 0));
+    }
+
     g_ctor_stepid = idl_method_id_step(ctx, SOURCE_AND_STRATEGY, 2, QUEUING_STRATEGY,
                                        (int)(sizeof QUEUING_STRATEGY / sizeof *QUEUING_STRATEGY),
                                        &js_rs_ctor_decl, 0);
@@ -2285,6 +2720,8 @@ void readable_stream_free(JSContext *ctx)
     JS_FreeValue(ctx, g_get_reader_fn);
     g_read_fn = g_release_fn = g_reader_cancel_fn = g_get_reader_fn = JS_UNDEFINED;
     for (i = 0; i < AI_N; i++) g_aiter_stepids[i] = -1;
+    for (i = 0; i < TEE_N; i++) g_tee_stepids[i] = -1;
+    for (i = 0; i < 3; i++) { JS_FreeValue(ctx, g_ctrl_fn[i]); g_ctrl_fn[i] = JS_UNDEFINED; }
     g_rs_rt = NULL;
     g_ctor_stepid = g_reader_ctor_stepid = g_read_stepid = g_cancel_stepid = g_release_stepid = -1;
     for (i = 0; i < 3; i++) g_ctrl_stepids[i] = -1;

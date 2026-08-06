@@ -66,6 +66,7 @@ const SRCS = [
   "host/browser/core/fetch/headers.c",
   "host/browser/core/byte_reader.c",
   "host/browser/core/streams/readable_stream.c",
+  "host/browser/core/streams/queuing_strategy.c",
   "host/browser/core/encoding/encoding.c",
   "host/browser/core/timing/timer.c",
   "host/browser/core/fetch/body.c",
