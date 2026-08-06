@@ -183,11 +183,16 @@ for (const f of files) {
   /* An ABORT is a result about this file, not an accident: it is a DCHECK naming a capability the browser half
      does not have, which is exactly what this gate is for. It is counted apart from a FAIL because the two ask
      for different work — a fail is a wrong answer, an abort is a missing one. */
+  /* AN ABORT DOES NOT ERASE WHAT THE FILE ALREADY REPORTED. A DCHECK ends the process, but the results printed
+     before it are results — and discarding them here counted a file that had failed four subtests and then
+     leaked as a file that produced NOTHING, which is the "same failures with the count hidden" shape this gate
+     exists to avoid. It hid them from me, too: I diagnosed that file as ending with no results and went looking
+     for what it was waiting on. The abort is reported AND the subtests are counted; they are different facts. */
   const why = out.match(/@WHY .*"reason":"([^"]*)/);
-  if (why || r.signal) {
+  const abortedHere = Boolean(why || r.signal);
+  if (abortedHere) {
     aborted++;
     failures.push(`  ABORT  ${rel}\n         ${why ? why[1].slice(0, 160) : "signal " + r.signal}`);
-    continue;
   }
   /* A TEST THAT ASKS FOR A wptserve HANDLER cannot run here, and that is the GATE's limitation rather than a
      result about the engine. WPT's server imports the named `.py` and calls its `main`; this runner serves the
@@ -208,7 +213,7 @@ for (const f of files) {
     else { fileFail++; failures.push(`  FAIL   ${rel} :: ${t.name}\n         ${(t.message || "").slice(0, 200)}`); }
   }
   const err = out.match(/^@WPTERR (.*)$/m);
-  if (err && !filePass && !fileFail) {
+  if (!abortedHere && err && !filePass && !fileFail) {
     aborted++;
     failures.push(`  ERROR  ${rel}\n         ${err[1].slice(0, 200)}`);
     continue;

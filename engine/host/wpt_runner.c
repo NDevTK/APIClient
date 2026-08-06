@@ -372,6 +372,13 @@ static int run_program(JSContext *ctx, const char *src, size_t len, const char *
 
 int main(int argc, char **argv)
 {
+    /* LINE-BUFFERED, so an ABORT cannot throw away what the file already reported. A DCHECK ends the process
+       with abort(), which does not flush stdio — and stdout is a pipe here, so it is fully buffered. Every
+       result a file produced before it aborted was therefore lost, and the driver read the file as having
+       produced NOTHING. That is the "same failures with the count hidden" shape this gate exists to avoid, and
+       it hid them from ME: I diagnosed a file as ending with no results and went looking for what it was
+       waiting on, when it had reported four failures and then leaked. */
+    setvbuf(stdout, NULL, _IOLBF, 0);
     JSRuntime *rt;
     JSContext *ctx;
     JSValue global;
