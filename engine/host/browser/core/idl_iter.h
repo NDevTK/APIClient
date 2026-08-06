@@ -51,4 +51,30 @@ int  record_cursor_run(JSContext *ctx, JSStepHdr *h, RecordCursor *c, JSValueCon
                        int (*key_ok)(JSContext *ctx, JSValueConst key, void *user), void *user,
                        JSValue **out_cb, int *out_argc);
 
+/* ---- §3.7.10's DEFAULT ITERATOR OBJECT, for an interface declaring `iterable<K, V>` ----------------------
+ *
+ * `keys()`, `values()`, `entries()`, `forEach()`, `@@iterator` and the iterator object they hand out are the
+ * same six things for every such interface — Headers and URLSearchParams differ only in WHAT the pairs are.
+ * Shared for the reason the two conversion cursors are: the iterator prototype object's [[Prototype]] is
+ * %IteratorPrototype%, its `next` is writable+enumerable+configurable and its @@toStringTag is the interface
+ * name plus " Iterator", and getting any of that wrong once per interface is how a surface drifts.
+ *
+ * `pair` yields the i-th pair AS OF NOW: §3.7.10's "value pairs to iterate over" is recomputed at every step,
+ * so a callback that appends during forEach is seen by the steps after it, and `count` is asked again each
+ * time. `count` returns -1 when `target` is not an instance of the interface, which is the receiver check. */
+typedef struct {
+    int  (*count)(JSContext *ctx, JSValueConst target);
+    /* Fills *key and *value (owned by the caller). Only called with 0 <= i < count. */
+    void (*pair)(JSContext *ctx, JSValueConst target, int i, JSValue *key, JSValue *value);
+    const char *iface;   /* the interface's identifier, for the @@toStringTag and the class name */
+} IdlPairIterOps;
+
+/* DECLARE the iterator class, its prototype and the forEach machine for one interface. Returns a handle. */
+int  idl_pair_iter_declare(JSContext *ctx, const IdlPairIterOps *ops);
+/* INSTALL keys/values/entries/forEach/@@iterator on the interface's prototype. §3.7.10 makes @@iterator the
+   SAME function object as `entries`, which this does. */
+void idl_pair_iter_install(JSContext *ctx, JSValueConst proto, int handle);
+/* Release the iterator prototype the declaration minted. */
+void idl_pair_iter_free(JSContext *ctx, int handle);
+
 #endif
