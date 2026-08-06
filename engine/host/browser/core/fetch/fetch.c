@@ -61,7 +61,8 @@ static int    g_fetch_stepid = -1;
 static JSAtom g_atom_method, g_atom_url, g_atom_headers, g_atom_body;
 static JSRuntime *g_fetch_rt;
 
-typedef struct JSFetchState {
+typedef struct JSFetchState JSFetchState;
+struct JSFetchState {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
     uint8_t   stage;
     JSValue   method;   /* the answer to the `init.method` read, or undefined */
@@ -74,9 +75,17 @@ typedef struct JSFetchState {
        at a deep fork and only what `visit` names is re-taken, so a heap pointer here would be freed by both
        arms. JS_UNDEFINED for a body whose arm has no type. */
     JSValue   body_mime;
+    /* §5.5: the promise a FAILED request build settles into. `fetch` never throws, so an abrupt completion
+       becomes this and `fini` yields it instead of parking a request that was never valid. */
+    JSValue   reject_promise;
+    /* A FLAG, not a test on the slot. A zeroed step state's JSValue is the INTEGER 0 and not JS_UNDEFINED, so
+       "is there a rejection here" asked of the slot answers YES for every request that never failed — which
+       yielded the integer 0 where the promise belonged. Third time this trap has been paid for; the slot is
+       never the question. */
+    uint8_t   rejected;
     HeadersFill fill;   /* the fill's cursor: it parks per key, so it cannot be a loop here */
     HeaderList  hdrs;   /* what the request carries, which is half of what makes the endpoint usable */
-} JSFetchState;
+};
 
 /* WHAT THIS MACHINE OWNS. Declared once and read by both consumers: the teardown releases each, and the
    deep-fork clone takes a second reference — a concolic branch inside the `url` getter forks the flow at that
@@ -90,6 +99,7 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->hinit);
     v->val(ctx, &s->binit);
     v->val(ctx, &s->body_mime);
+    v->val(ctx, &s->reject_promise);
     headers_fill_visit(ctx, &s->fill, v);   /* the fill's own slots — it parks mid-conversion like any machine */
 }
 
@@ -296,7 +306,10 @@ static JSValue js_fetch_fini(JSContext *ctx, void *st, bool take_result)
     JSFetchState *s = st;
     JSValue promise = JS_UNDEFINED;
 
-    if (take_result)
+    if (take_result && s->rejected) {
+        promise = s->reject_promise;
+        s->reject_promise = JS_UNDEFINED;
+    } else if (take_result) {
         if (!JS_IsUndefined(s->body_mime)) {
             char *have = header_list_get(&s->hdrs, "content-type");
             const char *m = have ? NULL : JS_ToCString(ctx, s->body_mime);
@@ -305,11 +318,14 @@ static JSValue js_fetch_fini(JSContext *ctx, void *st, bool take_result)
         }
         promise = fetch_park(ctx, s->url, s->method, s->input, &s->hdrs,
                              s->body.has ? s->body.bytes : NULL, s->body.len);
+    }
     JS_FreeValue(ctx, s->method);
     JS_FreeValue(ctx, s->url);
     JS_FreeValue(ctx, s->input);
     JS_FreeValue(ctx, s->hinit);
     JS_FreeValue(ctx, s->binit);
+    JS_FreeValue(ctx, s->reject_promise);
+    s->reject_promise = JS_UNDEFINED;
     body_state_free(ctx, &s->body);
     JS_FreeValue(ctx, s->body_mime);
     s->body_mime = JS_UNDEFINED;
@@ -321,6 +337,31 @@ static JSValue js_fetch_fini(JSContext *ctx, void *st, bool take_result)
 /* Stage 0 reads `init.method`, stage 1 `input.url`, stage 2 `init.headers`, stage 3 converts that HeadersInit,
    and stage 4 records the endpoint. Each read is a request the machine parks on; an argument that needs no read
    falls straight through to the next stage. */
+/* §5.5 step 1-3: `fetch` NEVER THROWS. It creates the promise FIRST, and an exception from building the
+   request — an invalid header value, a bad method, a URL that will not parse — REJECTS that promise instead of
+   propagating. A page writes `fetch(u, init).catch(...)`, and a synchronous throw goes straight past the catch
+   it wrote; wpt asserts it directly, with `promise_rejects_js` over a fetch whose header value carries a NUL.
+   The reject is called AS A FLOW like every other settle: 27.2.1.3.1 runs none of the page's code, but the
+   rule that a settle has a flow base under it is not a per-call judgement about whether this one happens to. */
+static int fetch_reject_pending(JSContext *ctx, struct JSFetchState *s)
+{
+    JSValue exc = JS_GetException(ctx);
+    JSValue resolving[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+
+    if (JS_IsException(promise)) { JS_FreeValue(ctx, exc); return JS_STEP_ABRUPT; }
+    if (JS_CallAsFlow(ctx, resolving[1], exc) < 0) {
+        JSValue e2 = JS_GetException(ctx);
+        JS_FreeValue(ctx, e2);
+    }
+    JS_FreeValue(ctx, exc);
+    JS_FreeValue(ctx, resolving[0]);
+    JS_FreeValue(ctx, resolving[1]);
+    s->reject_promise = promise;
+    s->rejected = 1;
+    return JS_STEP_DONE;
+}
+
 static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSFetchState *s = st;
@@ -337,7 +378,7 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         if (JS_IsObject(init)) {
             r = step_getprop_run(ctx, &s->hdr, init, g_atom_method, cb_result, &s->method, out_cb, out_argc);
             if (r > 0) return r;
-            if (r < 0) return JS_STEP_ABRUPT;
+            if (r < 0) return fetch_reject_pending(ctx, s);
         } else {
             JS_FreeValue(ctx, cb_result);
             s->method = JS_UNDEFINED;   /* the skipped read's answer, spelled — see stage 2 */
@@ -353,7 +394,7 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         if (JS_IsObject(init)) {
             r = step_getprop_run(ctx, &s->hdr, init, g_atom_body, cb_result, &s->binit, out_cb, out_argc);
             if (r > 0) return r;
-            if (r < 0) return JS_STEP_ABRUPT;
+            if (r < 0) return fetch_reject_pending(ctx, s);
         } else {
             JS_FreeValue(ctx, cb_result);
             s->binit = JS_UNDEFINED;
@@ -361,7 +402,7 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         cb_result = JS_UNDEFINED;
         if (!JS_IsUndefined(s->binit) && !JS_IsNull(s->binit)) {
             char *mime = NULL;
-            if (body_extract(ctx, &s->body, s->binit, &mime) < 0) { free(mime); return JS_STEP_ABRUPT; }
+            if (body_extract(ctx, &s->body, s->binit, &mime) < 0) { free(mime); return fetch_reject_pending(ctx, s); }
             /* §5.1's type, recorded the way the constructor records it: only where the init's own headers do
                not already name one, which stage 3's fill decides — so it is appended after that fill. */
             JS_FreeValue(ctx, s->body_mime);
@@ -377,7 +418,7 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         if (JS_IsObject(input)) {
             r = step_getprop_run(ctx, &s->hdr, input, g_atom_url, cb_result, &s->url, out_cb, out_argc);
             if (r > 0) return r;
-            if (r < 0) return JS_STEP_ABRUPT;
+            if (r < 0) return fetch_reject_pending(ctx, s);
         } else {
             JS_FreeValue(ctx, cb_result);
             s->url = JS_DupValue(ctx, input);
@@ -397,7 +438,7 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         if (JS_IsObject(init)) {
             r = step_getprop_run(ctx, &s->hdr, init, g_atom_headers, cb_result, &s->hinit, out_cb, out_argc);
             if (r > 0) return r;
-            if (r < 0) return JS_STEP_ABRUPT;
+            if (r < 0) return fetch_reject_pending(ctx, s);
         } else {
             JS_FreeValue(ctx, cb_result);
             /* NO init AT ALL, so there is no HeadersInit — and "no HeadersInit" has to be spelled `undefined`,
@@ -417,7 +458,7 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         r = headers_fill_run(ctx, &s->hdr, &s->fill, s->hinit, &s->hdrs, HEADERS_GUARD_REQUEST,
                              cb_result, out_cb, out_argc);
         if (r > 0) return r;
-        if (r < 0) return JS_STEP_ABRUPT;
+        if (r < 0) return fetch_reject_pending(ctx, s);
         cb_result = JS_UNDEFINED;
         s->stage = 4;
     }
@@ -434,7 +475,7 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         int i;
         if (s->hdrs.n) {
             eh = js_malloc(ctx, sizeof(*eh) * (size_t)s->hdrs.n);
-            if (!eh) { if (mc) JS_FreeCString(ctx, mc); return JS_STEP_ABRUPT; }
+            if (!eh) { if (mc) JS_FreeCString(ctx, mc); return fetch_reject_pending(ctx, s); }
             for (i = 0; i < s->hdrs.n; i++) {
                 eh[i].name = s->hdrs.e[i].name;
                 eh[i].value = s->hdrs.e[i].value;
