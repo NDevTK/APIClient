@@ -24,6 +24,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/streams/stream_work.h"
 #include "core/streams/readable_stream.h"
 
 /* §4.2's states. A stream is readable until it is closed or errored, and those two are terminal. */
@@ -360,57 +361,11 @@ enum { S_IDLE = 0,
        S_REL_CLOSED, S_REL_LOOP };                  /* §4.3's release: the reader loses, the stream survives */
 enum { P_IDLE = 0, P_TEST, P_CALL, P_RESOLVE, P_REJECT, P_THEN };
 
-typedef struct {
-    uint8_t stage;   /* the owning MACHINE's own step */
-    uint8_t phase;   /* step_call_run's, for whichever call is in flight */
-    uint8_t settle;  /* ReadableStreamClose's / ReadableStreamError's */
-    uint8_t pull;    /* CallPullIfNeeded's */
-    JSValue func;    /* the function being called, or the promise a chain is being attached to */
-    JSValue value;   /* its argument */
-    JSValue chain;   /* a capability's resolve function, while PromiseResolve is in flight */
-    JSValue err;     /* the reason a ControllerError sequence is carrying, until the stream adopts it */
-    JSValue cb[3];   /* step_call_run's buffer: [this, func, arg] */
-} CtrlWork;
-
-/* THE SLOTS ARE UNDEFINED BEFORE THEY ARE ANYTHING ELSE. A step state arrives ZEROED, and a zeroed JSValue is
-   the INTEGER 0 (JS_TAG_INT is 0) rather than undefined — so a slot read before it is written yields 0, which
-   is a real value the page can see. It has cost this project four bugs and it cost this component a fifth: the
-   `closed` promise of a drained stream fulfilled with the number 0. Every machine that owns one of these calls
-   this on its first entry, so the trap has one place to not be. `stage` is deliberately untouched: the machine
-   owns it, and it has usually already been set by the time this runs. */
-static void ctrl_work_start(CtrlWork *w)
-{
-    int k;
-    w->func = w->value = w->chain = w->err = JS_UNDEFINED;
-    for (k = 0; k < 3; k++) w->cb[k] = JS_UNDEFINED;
-}
-
-static void ctrl_work_visit(JSContext *ctx, CtrlWork *w, JSStepVisit *v)
-{
-    int k;
-    v->val(ctx, &w->func);
-    v->val(ctx, &w->value);
-    v->val(ctx, &w->chain);
-    v->val(ctx, &w->err);
-    for (k = 0; k < 3; k++) v->val(ctx, &w->cb[k]);
-}
-
-static void ctrl_work_release(JSContext *ctx, CtrlWork *w)
-{
-    int k;
-    JS_FreeValue(ctx, w->func);
-    JS_FreeValue(ctx, w->value);
-    JS_FreeValue(ctx, w->chain);
-    JS_FreeValue(ctx, w->err);
-    w->func = w->value = w->chain = w->err = JS_UNDEFINED;
-    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, w->cb[k]); w->cb[k] = JS_UNDEFINED; }
-}
-
 /* §4.3's `closed` promise, settled EXACTLY ONCE: it RESOLVES when the stream closes, REJECTS when it errors,
  * and REJECTS with a TypeError when the reader is released. Settling it is a call of the page's code like every
  * other settle, so it is a call request. `rd` may be NULL (a stream nobody is reading) and `value` is read only
  * on the first entry, which is the only entry that has one. */
-static int reader_closed_run(JSContext *ctx, CtrlWork *w, ReaderData *rd, int reject, JSValueConst value,
+static int reader_closed_run(JSContext *ctx, StreamWork *w, ReaderData *rd, int reject, JSValueConst value,
                              bool replace_if_settled, JSValue in, JSValue **out_cb, int *out_argc)
 {
     JSValueConst arg;
@@ -456,7 +411,7 @@ static int reader_closed_run(JSContext *ctx, CtrlWork *w, ReaderData *rd, int re
  * page's code — so the tail is a LOOP OF CALL REQUESTS, one suspension per request. Answering only the first,
  * which is what this component did before the controller could pull, silently abandons the rest.
  * The caller sets `w->settle` (and `w->err` for the arms that carry a reason) and calls until it returns 0. */
-static int stream_settle_run(JSContext *ctx, CtrlWork *w, StreamData *d, JSValue in,
+static int stream_settle_run(JSContext *ctx, StreamWork *w, StreamData *d, JSValue in,
                              JSValue **out_cb, int *out_argc)
 {
     ReaderData *rd = JS_IsUndefined(d->reader) ? NULL : reader_of(d->reader);
@@ -536,39 +491,6 @@ static int stream_settle_run(JSContext *ctx, CtrlWork *w, StreamData *d, JSValue
     }
 }
 
-/* PromiseResolve(%Promise%, v) — 27.2.4.7 — as a sub-sequence. §4.5 reacts to what `start` and `pull` RETURNED,
- * which may be a plain value, a page THENABLE, or a promise; the one operation covering all three is a
- * capability whose RESOLVE function is called with it, and calling that function is exactly where 27.2.1.3.2
- * step 8 reads `then` off the page's object. So it is a call request like every other run of the page's code,
- * rather than a `JS_IsFunction(then)` test that would answer a patched thenable wrongly.
- * Takes `w->value`; leaves the capability's promise in `w->func`. */
-static int step_promise_of_run(JSContext *ctx, CtrlWork *w, int reject, JSValue in,
-                               JSValue **out_cb, int *out_argc)
-{
-    JSValueConst arg;
-    JSValue out;
-    int r;
-
-    if (w->phase == 0) {
-        JSValue funcs[2];
-        JSValue p = JS_NewPromiseCapability(ctx, funcs);
-        if (JS_IsException(p)) { JS_FreeValue(ctx, in); return -1; }
-        JS_FreeValue(ctx, w->func);
-        w->func = p;
-        JS_FreeValue(ctx, w->chain);
-        w->chain = funcs[reject];
-        JS_FreeValue(ctx, funcs[reject ^ 1]);
-    }
-    arg = w->value;
-    r = step_call_run(ctx, &w->phase, w->cb, w->chain, JS_UNDEFINED, 1, &arg, in, &out, out_cb, out_argc);
-    if (r > 0) return r;
-    if (JS_IsException(out)) return -1;
-    JS_FreeValue(ctx, out);
-    JS_FreeValue(ctx, w->chain);
-    w->chain = JS_UNDEFINED;
-    return 0;
-}
-
 /* §4.5's reactions, by what they react to. Each is a step closure capturing the controller. */
 enum { RXN_START_OK = 0, RXN_START_ERR, RXN_PULL_OK, RXN_PULL_ERR };
 
@@ -576,41 +498,6 @@ enum { RXN_START_OK = 0, RXN_START_ERR, RXN_PULL_OK, RXN_PULL_ERR };
  * rejects parked read requests — work only a machine may do — and knows its controller only by capture.
  * PerformPromiseThen rather than a `.then` read, because that is what §4.5 performs: a page that replaces
  * Promise.prototype.then changes what its own `.then()` does and changes nothing about what the stream does. */
-/* The reactions' own CAPABILITY, for a caller that must hand it on: §4.2's `from` returns "the result of
-   reacting to nextPromise" as its pull algorithm's answer, so §4.5 chains the next pull on THAT rather than on
-   the raw next promise. A step id of -1 means no handler for that side, which is how a rejection is left to
-   propagate through the capability instead of being caught. */
-static JSValue stream_react_cap(JSContext *ctx, JSValueConst promise, int ok_id, int err_id,
-                                JSValueConst *data, int n)
-{
-    JSValue onf = JS_UNDEFINED, onr = JS_UNDEFINED, cap;
-
-    if (ok_id >= 0) {
-        onf = JS_NewStepClosure(ctx, ok_id, 1, n, data);
-        if (JS_IsException(onf)) return onf;
-    }
-    if (err_id >= 0) {
-        onr = JS_NewStepClosure(ctx, err_id, 1, n, data);
-        if (JS_IsException(onr)) { JS_FreeValue(ctx, onf); return onr; }
-    }
-    cap = JS_PerformPromiseThen(ctx, promise, onf, onr);
-    JS_FreeValue(ctx, onf);
-    JS_FreeValue(ctx, onr);
-    return cap;
-}
-
-static int stream_react(JSContext *ctx, JSValueConst promise, int ok_id, int err_id,
-                        JSValueConst *data, int n)
-{
-    JSValue cap;
-
-    DCHECK(ok_id >= 0 && err_id >= 0, "a stream reaction was attached before its machines were registered");
-    cap = stream_react_cap(ctx, promise, ok_id, err_id, data, n);
-    if (JS_IsException(cap)) return -1;
-    JS_FreeValue(ctx, cap);
-    return 0;
-}
-
 static int ctrl_react(JSContext *ctx, JSValueConst promise, JSValueConst ctrl, int ok, int err)
 {
     JSValueConst data[1];
@@ -712,7 +599,7 @@ static bool ctrl_should_pull(JSContext *ctx, ControllerData *c, StreamData *d)
 
 /* §4.5's ReadableStreamDefaultControllerCallPullIfNeeded. The caller sets `w->pull = P_TEST` and calls until it
    returns 0; every machine that can change what ShouldCallPull answers runs it. */
-static int ctrl_pull_run(JSContext *ctx, CtrlWork *w, JSValueConst ctrl_v, JSValue in,
+static int ctrl_pull_run(JSContext *ctx, StreamWork *w, JSValueConst ctrl_v, JSValue in,
                          JSValue **out_cb, int *out_argc)
 {
     ControllerData *c = ctrl_of(ctrl_v);
@@ -757,7 +644,7 @@ static int ctrl_pull_run(JSContext *ctx, CtrlWork *w, JSValueConst ctrl_v, JSVal
         in = JS_UNDEFINED;
     }
     if (w->pull == P_RESOLVE || w->pull == P_REJECT) {
-        r = step_promise_of_run(ctx, w, w->pull == P_REJECT, in, out_cb, out_argc);
+        r = stream_promise_of_run(ctx, w, w->pull == P_REJECT, in, out_cb, out_argc);
         if (r != 0) return r;
         w->pull = P_THEN;
     }
@@ -775,20 +662,20 @@ static int ctrl_pull_run(JSContext *ctx, CtrlWork *w, JSValueConst ctrl_v, JSVal
  * three controller members have. `arg` selects; the captured value is the controller. */
 typedef struct {
     JSStepHdr hdr;
-    CtrlWork  w;
+    StreamWork  w;
 } JSRxnState;
 
 static void js_rxn_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSRxnState *s = st;
-    ctrl_work_visit(ctx, &s->w, v);
+    stream_work_visit(ctx, &s->w, v);
 }
 
 static JSValue js_rxn_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSRxnState *s = st;
     (void)take_result;
-    ctrl_work_release(ctx, &s->w);
+    stream_work_release(ctx, &s->w);
     return JS_UNDEFINED;
 }
 
@@ -806,7 +693,7 @@ static int js_rxn_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
 
     if (s->w.stage == 0) {
         int op = s->hdr.arg;
-        ctrl_work_start(&s->w);
+        stream_work_start(&s->w);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         s->w.stage = 1;
@@ -856,7 +743,7 @@ enum { RD_START = 0, RD_CLOSE, RD_PULL, RD_SETTLE };
 
 typedef struct {
     JSStepHdr hdr;
-    CtrlWork  w;
+    StreamWork  w;
     JSValue   promise;   /* the capability handed back to the page */
     JSValue   settle;    /* its resolve or reject function, or JS_UNDEFINED when the request PARKED */
     JSValue   result;    /* what to settle it with */
@@ -866,7 +753,7 @@ typedef struct {
 static void js_read_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSReadState *s = st;
-    ctrl_work_visit(ctx, &s->w, v);
+    stream_work_visit(ctx, &s->w, v);
     v->val(ctx, &s->promise);
     v->val(ctx, &s->settle);
     v->val(ctx, &s->result);
@@ -878,7 +765,7 @@ static JSValue js_read_fini(JSContext *ctx, void *st, bool take_result)
     JSReadState *s = st;
     JSValue r = take_result ? s->promise : JS_UNDEFINED;
     if (take_result) s->promise = JS_UNDEFINED;
-    ctrl_work_release(ctx, &s->w);
+    stream_work_release(ctx, &s->w);
     JS_FreeValue(ctx, s->promise);
     JS_FreeValue(ctx, s->settle);
     JS_FreeValue(ctx, s->result);
@@ -900,7 +787,7 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
         JSValue funcs[2];
         int reject = 0;
 
-        ctrl_work_start(&s->w);
+        stream_work_start(&s->w);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         s->promise = s->settle = s->result = s->stream = JS_UNDEFINED;
@@ -1012,7 +899,7 @@ static const JSTrampStepDef js_read_def = {
  * promise_test is still unsettled. */
 typedef struct {
     JSStepHdr hdr;
-    CtrlWork  w;
+    StreamWork  w;
     /* THE STREAM, HELD BY THE MACHINE. The release clears the reader's own pointer to it partway through the
        sequence — that IS the release — so a resume that read it back off the reader would find nothing. */
     JSValue   stream;
@@ -1021,7 +908,7 @@ typedef struct {
 static void js_release_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSReleaseState *s = st;
-    ctrl_work_visit(ctx, &s->w, v);
+    stream_work_visit(ctx, &s->w, v);
     v->val(ctx, &s->stream);
 }
 
@@ -1029,7 +916,7 @@ static JSValue js_release_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSReleaseState *s = st;
     (void)take_result;
-    ctrl_work_release(ctx, &s->w);
+    stream_work_release(ctx, &s->w);
     JS_FreeValue(ctx, s->stream);
     s->stream = JS_UNDEFINED;
     return JS_UNDEFINED;
@@ -1043,7 +930,7 @@ static int js_release_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
 
     if (s->w.stage == 0) {
         ReaderData *rd = reader_of(s->hdr.this_val);
-        ctrl_work_start(&s->w);
+        stream_work_start(&s->w);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         s->stream = JS_UNDEFINED;
@@ -1115,21 +1002,21 @@ static const IdlDictMember GET_READER_OPTIONS[] = {
 enum { GR_SELF = 0, GR_CTOR };   /* the magic: which argument the stream arrives in */
 
 typedef struct {
-    CtrlWork w;
+    StreamWork w;
     JSValue  reader;
 } JSGetReaderState;
 
 static void js_get_reader_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSGetReaderState *s = st;
-    ctrl_work_visit(ctx, &s->w, v);
+    stream_work_visit(ctx, &s->w, v);
     v->val(ctx, &s->reader);
 }
 
 static void js_get_reader_release(JSContext *ctx, void *st)
 {
     JSGetReaderState *s = st;
-    ctrl_work_release(ctx, &s->w);
+    stream_work_release(ctx, &s->w);
     JS_FreeValue(ctx, s->reader);
     s->reader = JS_UNDEFINED;
 }
@@ -1149,7 +1036,7 @@ static int js_get_reader_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
         ReaderData *rd;
         JSValue obj;
 
-        ctrl_work_start(&s->w);
+        stream_work_start(&s->w);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         s->reader = JS_UNDEFINED;
@@ -1228,7 +1115,7 @@ enum { CN_START = 0, CN_CLOSE, CN_CALL, CN_RESOLVE, CN_THEN, CN_SETTLE };
 
 typedef struct {
     JSStepHdr hdr;
-    CtrlWork  w;
+    StreamWork  w;
     JSValue   promise;     /* the capability handed back to the page */
     JSValue   funcs[2];    /* its resolve and reject, which the source's own promise settles through */
     JSValue   settle;      /* the one of them a short-circuit path calls directly */
@@ -1239,7 +1126,7 @@ typedef struct {
 static void js_cancel_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSCancelState *s = st;
-    ctrl_work_visit(ctx, &s->w, v);
+    stream_work_visit(ctx, &s->w, v);
     v->val(ctx, &s->promise);
     v->val(ctx, &s->funcs[0]);
     v->val(ctx, &s->funcs[1]);
@@ -1252,7 +1139,7 @@ static JSValue js_cancel_fini(JSContext *ctx, void *st, bool take_result)
     JSCancelState *s = st;
     JSValue r = take_result ? s->promise : JS_UNDEFINED;
     if (take_result) s->promise = JS_UNDEFINED;
-    ctrl_work_release(ctx, &s->w);
+    stream_work_release(ctx, &s->w);
     JS_FreeValue(ctx, s->promise);
     JS_FreeValue(ctx, s->funcs[0]);
     JS_FreeValue(ctx, s->funcs[1]);
@@ -1276,7 +1163,7 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         ReaderData *rd;
         int reject = 0;
 
-        ctrl_work_start(&s->w);
+        stream_work_start(&s->w);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         s->promise = s->funcs[0] = s->funcs[1] = s->settle = s->stream = JS_UNDEFINED;
@@ -1362,7 +1249,7 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
     }
 
     if (s->w.stage == CN_RESOLVE) {
-        r = step_promise_of_run(ctx, &s->w, s->reject_algorithm, cb_result, out_cb, out_argc);
+        r = stream_promise_of_run(ctx, &s->w, s->reject_algorithm, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
@@ -1407,7 +1294,7 @@ enum { CS_START = 0, CS_SIZE, CS_ENQUEUE, CS_SETTLE, CS_SETTLE_ALL, CS_PULL, CS_
 
 typedef struct {
     JSStepHdr hdr;
-    CtrlWork  w;
+    StreamWork  w;
     double    size;      /* what the strategy said this chunk weighs, held across its call */
     /* §4.5: a bad chunk size errors the stream AND "returns chunkSize" — the ORIGINAL abrupt, not the stream's
        stored error. A `size` that errors the controller itself and then throws must re-raise ITS throw while
@@ -1418,7 +1305,7 @@ typedef struct {
 static void js_ctrl_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSCtrlState *s = st;
-    ctrl_work_visit(ctx, &s->w, v);
+    stream_work_visit(ctx, &s->w, v);
     v->val(ctx, &s->rethrow);
 }
 
@@ -1426,7 +1313,7 @@ static JSValue js_ctrl_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSCtrlState *s = st;
     (void)take_result;
-    ctrl_work_release(ctx, &s->w);
+    stream_work_release(ctx, &s->w);
     JS_FreeValue(ctx, s->rethrow);
     s->rethrow = JS_UNDEFINED;
     return JS_UNDEFINED;
@@ -1453,7 +1340,7 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
         int op = s->hdr.arg;
         JSValueConst a0 = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
 
-        ctrl_work_start(&s->w);
+        stream_work_start(&s->w);
         s->rethrow = JS_UNDEFINED;
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
@@ -2272,7 +2159,7 @@ static const JSTrampStepDef js_tee_defs[TEE_N] = {
 /* §4.2's `tee()`. A MACHINE because it acquires a reader, and §4.3's acquisition settles `closed` at once on a
    stream that has already finished. */
 typedef struct {
-    CtrlWork w;
+    StreamWork w;
     JSValue  tee;
     JSValue  reader;
 } JSTeeCallState;
@@ -2280,7 +2167,7 @@ typedef struct {
 static void js_tee_call_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSTeeCallState *s = st;
-    ctrl_work_visit(ctx, &s->w, v);
+    stream_work_visit(ctx, &s->w, v);
     v->val(ctx, &s->tee);
     v->val(ctx, &s->reader);
 }
@@ -2288,7 +2175,7 @@ static void js_tee_call_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static void js_tee_call_release(JSContext *ctx, void *st)
 {
     JSTeeCallState *s = st;
-    ctrl_work_release(ctx, &s->w);
+    stream_work_release(ctx, &s->w);
     JS_FreeValue(ctx, s->tee);
     JS_FreeValue(ctx, s->reader);
     s->tee = s->reader = JS_UNDEFINED;
@@ -2324,7 +2211,7 @@ static int js_tee_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 
     (void)argc; (void)argv;
     if (s->w.stage == 0) {
-        ctrl_work_start(&s->w);
+        stream_work_start(&s->w);
         s->tee = s->reader = JS_UNDEFINED;
         s->w.stage = 1;
         if (!stream_of(hdr->this_val)) {
@@ -2374,7 +2261,7 @@ static int js_tee_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         s->w.stage = 2;
     }
     if (s->w.stage == 2) {
-        r = step_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
+        r = stream_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
@@ -2660,7 +2547,7 @@ static const JSTrampStepDef js_from_defs[FROM_N] = {
 enum { FC_START = 0, FC_ASYNC_CALL, FC_SYNC_GET, FC_SYNC_CALL, FC_NEXT, FC_BUILD, FC_STARTED };
 
 typedef struct {
-    CtrlWork w;
+    StreamWork w;
     uint8_t  is_sync;
     JSValue  method;
     JSValue  iterator;
@@ -2672,7 +2559,7 @@ typedef struct {
 static void js_from_call_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSFromCallState *s = st;
-    ctrl_work_visit(ctx, &s->w, v);
+    stream_work_visit(ctx, &s->w, v);
     v->val(ctx, &s->method);
     v->val(ctx, &s->iterator);
     v->val(ctx, &s->next_fn);
@@ -2683,7 +2570,7 @@ static void js_from_call_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static void js_from_call_release(JSContext *ctx, void *st)
 {
     JSFromCallState *s = st;
-    ctrl_work_release(ctx, &s->w);
+    stream_work_release(ctx, &s->w);
     JS_FreeValue(ctx, s->method);
     JS_FreeValue(ctx, s->iterator);
     JS_FreeValue(ctx, s->next_fn);
@@ -2701,7 +2588,7 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     int r;
 
     if (s->w.stage == FC_START) {
-        ctrl_work_start(&s->w);
+        stream_work_start(&s->w);
         s->method = s->iterator = s->next_fn = s->stream = s->from = JS_UNDEFINED;
         /* AN OBJECT, not merely something iterable. A STRING has @@iterator and would give a stream of its
            characters, and the corpus lists it among the INVALID iterables beside null, a number and a symbol —
@@ -2805,7 +2692,7 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         s->w.stage = FC_STARTED;
     }
     if (s->w.stage == FC_STARTED) {
-        r = step_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
+        r = stream_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
@@ -3099,7 +2986,7 @@ enum { RSC_START = 0, RSC_PROTO, RSC_READ, RSC_TYPE, RSC_BUILD, RSC_CALL, RSC_RE
 enum { SRC_CHUNKSIZE = 0, SRC_CANCEL, SRC_PULL, SRC_START, SRC_TYPE, SRC_N };
 
 typedef struct {
-    CtrlWork w;
+    StreamWork w;
     uint8_t  member;         /* which UnderlyingSource member the read loop is on */
     JSValue  src[SRC_N];     /* what each read answered, before any of them is type-checked */
     JSValue  stream;
@@ -3113,7 +3000,7 @@ static void js_rs_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSRsCtorState *s = st;
     int k;
-    ctrl_work_visit(ctx, &s->w, v);
+    stream_work_visit(ctx, &s->w, v);
     for (k = 0; k < SRC_N; k++) v->val(ctx, &s->src[k]);
     v->val(ctx, &s->stream);
     v->val(ctx, &s->controller);
@@ -3126,7 +3013,7 @@ static void js_rs_ctor_release(JSContext *ctx, void *st)
 {
     JSRsCtorState *s = st;
     int k;
-    ctrl_work_release(ctx, &s->w);
+    stream_work_release(ctx, &s->w);
     for (k = 0; k < SRC_N; k++) { JS_FreeValue(ctx, s->src[k]); s->src[k] = JS_UNDEFINED; }
     JS_FreeValue(ctx, s->stream);
     JS_FreeValue(ctx, s->controller);
@@ -3159,7 +3046,7 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 
     if (s->w.stage == RSC_START) {
         int k;
-        ctrl_work_start(&s->w);
+        stream_work_start(&s->w);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         if (JS_IsUndefined(hdr->this_val)) {
@@ -3301,7 +3188,7 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         s->w.stage = RSC_RESOLVE;
     }
     if (s->w.stage == RSC_RESOLVE) {
-        r = step_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
+        r = stream_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;

@@ -133,6 +133,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "loader", "document_scripts.c"),               // Lexbor <script> inventory + bundle identity
     join(HOST, "browser", "core", "fetch", "fetch.c"),
     join(HOST, "browser", "core", "encoding", "encoding.c"),                  // TextEncoder/TextDecoder: the Encoding Standard's labels and decoders
+    join(HOST, "browser", "core", "streams", "stream_work.c"),                     // the plumbing §4 and §5 share
     join(HOST, "browser", "core", "streams", "readable_stream.c"),                // ReadableStream: Streams §4.2-§4.5
     join(HOST, "browser", "core", "streams", "queuing_strategy.c"),               // Count/ByteLengthQueuingStrategy: Streams §7
     join(HOST, "browser", "core", "byte_reader.c"),                            // reading a byte sequence as a promise: Fetch §5.2's readers and File API §3.3's, one machine

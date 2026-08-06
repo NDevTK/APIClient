@@ -37,7 +37,7 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       fetch and FileAPI — which use a stream but assert almost nothing ABOUT one. A component
                       whose spec directory is not checked out is a component whose gate cannot fail, which is
                       the same defect as a gate that only reads the spelling that existed when it was written. */
-                   "streams/readable-streams", "streams/resources"];
+                   "streams/readable-streams", "streams/resources", "streams/writable-streams"];
 
 if (!existsSync(join(WPT, "resources", "testharness.js"))) {
   /* NO --depth 1. The corpus is PINNED, and a depth-1 clone has only the tip — `git checkout bf4714d` in it
@@ -65,6 +65,7 @@ const SRCS = [
   "host/browser/core/idl_iter.c",
   "host/browser/core/fetch/headers.c",
   "host/browser/core/byte_reader.c",
+  "host/browser/core/streams/stream_work.c",
   "host/browser/core/streams/readable_stream.c",
   "host/browser/core/streams/queuing_strategy.c",
   "host/browser/core/encoding/encoding.c",
