@@ -5,6 +5,7 @@
 
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/idl_iter.h"
 
 /* §5.1's header list: (name, value) pairs, names lowercased on the way in and never combined into one entry —
    `Set-Cookie` is the reason the spec keeps them separate, and `getSetCookie` is the member that reads them
@@ -42,26 +43,14 @@ char *header_list_get(const HeaderList *l, const char *name);
    conversion and the spec states it once; a machine performing it embeds this cursor, declares it in its own
    `visit` (headers_fill_visit) and releases it in its teardown (headers_fill_release).
      Returns >0 (the caller returns it), 0 when the list is filled, or -1 with a throw live. */
-/* DRIVING A JS ITERABLE, one value per call, as a sub-sequence. Every step of the iterator protocol is the
-   page's code — the @@iterator read, its call, the `next` read, each `next()` call, and the `done`/`value` reads
-   off each result — so none of them can be a C loop. Web IDL NESTS it (a `sequence<sequence<ByteString>>` runs
-   the protocol over the outer value and again over each inner pair), which is why this is a cursor a caller
-   instantiates twice rather than a loop written once. */
-typedef struct {
-    uint8_t phase;
-    uint8_t cphase;                    /* the call request's own phase — a cursor holds a call across stages */
-    JSValue iterfn, iter, next_fn, res, value;   /* owned */
-    JSValue cb[2];                     /* 2 + 0: the protocol's calls take no arguments */
-    int     done;
-} IterCursor;
 
 typedef struct {
-    uint8_t phase;
-    int     i, n;               /* the cursor into the key list, and how many keys there are */
-    JSValue keys, name, value;  /* owned: the key list, and the pair being read */
-    IterCursor outer, inner;    /* the sequence arm: the init's pairs, and the two items of one pair */
-    JSValue item[2];            /* owned: the pair's items as they arrive */
-    int     nitem;
+    uint8_t     phase;
+    JSValue     name, value;    /* owned: the pair being converted */
+    IterCursor  outer, inner;   /* the sequence arm: the init's pairs, and the two items of one pair */
+    RecordCursor rec;           /* the record arm */
+    JSValue     item[2];        /* owned: the pair's items as they arrive */
+    int         nitem;
 } HeadersFill;
 void headers_fill_init(HeadersFill *f);
 void headers_fill_visit(JSContext *ctx, HeadersFill *f, JSStepVisit *v);
@@ -71,7 +60,7 @@ int  headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst
 
 void    headers_init(JSContext *ctx);                       /* register the class + its machines (install time) */
 void    headers_install(JSContext *ctx, JSValueConst global);   /* the Headers interface object */
-void    headers_free(JSContext *ctx);   /* the prototype and the interned name this component holds */
+void    headers_free(JSContext *ctx);   /* the prototypes this component holds */
 /* A Headers over an existing list; the object takes a COPY, because a header list a component owns outlives
    nothing the page can reach and a page must not be able to mutate a reply's headers through the copy it was
    handed. */

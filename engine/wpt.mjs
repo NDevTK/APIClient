@@ -49,6 +49,7 @@ const SRCS = [
   "host/solver/concolic.c", "host/solver/flow.c", "host/solver/absent.c",
   "host/solver/cow.c",
   "host/browser/core/idl_args.c",
+  "host/browser/core/idl_iter.c",
   "host/browser/core/fetch/headers.c",
   "host/browser/core/fetch/response.c",
   "host/browser/core/url/url.c",

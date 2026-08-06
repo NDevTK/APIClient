@@ -24,13 +24,13 @@
 #include "quickjs-step.h"
 #include "core/fetch/headers.h"
 #include "core/idl_args.h"
+#include "core/idl_iter.h"
 #include "solver/concolic.h"
 
 static JSClassID g_headers_class;
 static JSValue   g_proto = JS_UNDEFINED;
 static int       g_ctor_stepid = -1;
 static JSRuntime *g_headers_rt;
-static JSAtom    g_atom_length;
 
 /* ---- the header list ---------------------------------------------------------------------------------- */
 
@@ -641,122 +641,15 @@ static int g_foreach_stepid = -1;
 
 /* ---- the fill (HeadersInit -> a header list) ------------------------------------------------------------ */
 
-enum { FILL_START = 0, FILL_ITER_ASKED, FILL_SEQ_PAIR, FILL_SEQ_ITEM,
-       FILL_KEYS_ASKED, FILL_DESC_ASKED, FILL_VALUE_ASKED, FILL_NAME_STR, FILL_VALUE_STR };
-
-/* ---- the iterable cursor ---------------------------------------------------------------------------------- */
-
-enum { IT_GET_ITERFN = 0, IT_CALL_ITERFN, IT_GET_NEXT, IT_CALL_NEXT, IT_GET_DONE, IT_GET_VALUE };
-
-static void iter_cursor_init(IterCursor *c)
-{
-    memset(c, 0, sizeof *c);
-    c->iterfn = c->iter = c->next_fn = c->res = c->value = JS_UNDEFINED;
-    c->cb[0] = c->cb[1] = JS_UNDEFINED;
-}
-
-static void iter_cursor_visit(JSContext *ctx, IterCursor *c, JSStepVisit *v)
-{
-    int k;
-    v->val(ctx, &c->iterfn); v->val(ctx, &c->iter); v->val(ctx, &c->next_fn);
-    v->val(ctx, &c->res);    v->val(ctx, &c->value);
-    for (k = 0; k < 2; k++) v->val(ctx, &c->cb[k]);
-}
-
-static void iter_cursor_release(JSContext *ctx, IterCursor *c)
-{
-    int k;
-    JS_FreeValue(ctx, c->iterfn); JS_FreeValue(ctx, c->iter); JS_FreeValue(ctx, c->next_fn);
-    JS_FreeValue(ctx, c->res);    JS_FreeValue(ctx, c->value);
-    c->iterfn = c->iter = c->next_fn = c->res = c->value = JS_UNDEFINED;
-    for (k = 0; k < 2; k++) { JS_FreeValue(ctx, c->cb[k]); c->cb[k] = JS_UNDEFINED; }
-}
-
-/* ONE VALUE per successful return: `c->done` says the iteration ended, otherwise `c->value` holds it (owned by
-   the cursor). Call it again for the next. Returns >0 (the caller returns it), 0, or -1 with a throw live. */
-static int iter_cursor_run(JSContext *ctx, JSStepHdr *h, IterCursor *c, JSValueConst src,
-                           JSValue in, JSValue **out_cb, int *out_argc)
-{
-    int r;
-
-    if (c->phase == IT_GET_ITERFN) {
-        r = step_getprop_run(ctx, h, src, JS_WellKnownSymbolAtom(JS_WKS_ITERATOR), in, &c->iterfn,
-                             out_cb, out_argc);
-        if (r > 0) return r;
-        if (r < 0) return -1;
-        in = JS_UNDEFINED;
-        if (!JS_IsFunction(ctx, c->iterfn)) {
-            JS_ThrowTypeError(ctx, "the value is not iterable");
-            return -1;
-        }
-        c->phase = IT_CALL_ITERFN;
-    }
-    if (c->phase == IT_CALL_ITERFN) {
-        r = step_call_run(ctx, &c->cphase, c->cb, c->iterfn, src, 0, NULL, in, &c->iter, out_cb, out_argc);
-        if (r > 0) return r;
-        if (r < 0) return -1;
-        in = JS_UNDEFINED;
-        if (!JS_IsObject(c->iter)) {
-            JS_ThrowTypeError(ctx, "the iterator is not an object");
-            return -1;
-        }
-        c->phase = IT_GET_NEXT;
-    }
-    if (c->phase == IT_GET_NEXT) {
-        JSAtom a = JS_NewAtom(ctx, "next");
-        r = step_getprop_run(ctx, h, c->iter, a, in, &c->next_fn, out_cb, out_argc);
-        JS_FreeAtom(ctx, a);
-        if (r > 0) return r;
-        if (r < 0) return -1;
-        in = JS_UNDEFINED;
-        c->phase = IT_CALL_NEXT;
-    }
-    if (c->phase == IT_CALL_NEXT) {
-        JS_FreeValue(ctx, c->res);
-        c->res = JS_UNDEFINED;
-        r = step_call_run(ctx, &c->cphase, c->cb, c->next_fn, c->iter, 0, NULL, in, &c->res, out_cb, out_argc);
-        if (r > 0) return r;
-        if (r < 0) return -1;
-        in = JS_UNDEFINED;
-        if (!JS_IsObject(c->res)) {
-            JS_ThrowTypeError(ctx, "an iterator result is not an object");
-            return -1;
-        }
-        c->phase = IT_GET_DONE;
-    }
-    if (c->phase == IT_GET_DONE) {
-        JSValue d;
-        JSAtom a = JS_NewAtom(ctx, "done");
-        r = step_getprop_run(ctx, h, c->res, a, in, &d, out_cb, out_argc);
-        JS_FreeAtom(ctx, a);
-        if (r > 0) return r;
-        if (r < 0) return -1;
-        in = JS_UNDEFINED;
-        c->done = JS_ToBool(ctx, d);
-        JS_FreeValue(ctx, d);
-        if (c->done) { c->phase = IT_CALL_NEXT; return 0; }
-        c->phase = IT_GET_VALUE;
-    }
-    DCHECK(c->phase == IT_GET_VALUE, "the iterable cursor was re-entered at a phase it never parks in");
-    {
-        JSAtom a = JS_NewAtom(ctx, "value");
-        JS_FreeValue(ctx, c->value);
-        c->value = JS_UNDEFINED;
-        r = step_getprop_run(ctx, h, c->res, a, in, &c->value, out_cb, out_argc);
-        JS_FreeAtom(ctx, a);
-        if (r > 0) return r;
-        if (r < 0) return -1;
-    }
-    c->phase = IT_CALL_NEXT;   /* the next call resumes the loop, not the setup */
-    return 0;
-}
+enum { FILL_START = 0, FILL_ITER_ASKED, FILL_SEQ_PAIR, FILL_SEQ_ITEM, FILL_KEY_PAIR, FILL_VALUE_STR };
 
 /* ---- the fill's own state ---------------------------------------------------------------------------------- */
 
 void headers_fill_init(HeadersFill *f)
 {
     memset(f, 0, sizeof *f);
-    f->keys = f->name = f->value = JS_UNDEFINED;
+    f->name = f->value = JS_UNDEFINED;
+    record_cursor_init(&f->rec);
     f->item[0] = f->item[1] = JS_UNDEFINED;
     iter_cursor_init(&f->outer);
     iter_cursor_init(&f->inner);
@@ -764,7 +657,7 @@ void headers_fill_init(HeadersFill *f)
 
 void headers_fill_visit(JSContext *ctx, HeadersFill *f, JSStepVisit *v)
 {
-    v->val(ctx, &f->keys);
+    record_cursor_visit(ctx, &f->rec, v);
     v->val(ctx, &f->name);
     v->val(ctx, &f->value);
     v->val(ctx, &f->item[0]);
@@ -775,14 +668,39 @@ void headers_fill_visit(JSContext *ctx, HeadersFill *f, JSStepVisit *v)
 
 void headers_fill_release(JSContext *ctx, HeadersFill *f)
 {
-    JS_FreeValue(ctx, f->keys);
+    record_cursor_release(ctx, &f->rec);
     JS_FreeValue(ctx, f->name);
     JS_FreeValue(ctx, f->value);
     JS_FreeValue(ctx, f->item[0]);
     JS_FreeValue(ctx, f->item[1]);
-    f->keys = f->name = f->value = f->item[0] = f->item[1] = JS_UNDEFINED;
+    f->name = f->value = f->item[0] = f->item[1] = JS_UNDEFINED;
     iter_cursor_release(ctx, &f->outer);
     iter_cursor_release(ctx, &f->inner);
+}
+
+/* §3.2.21 step 5.2's `typedKey = key converted to K`, and K is ByteString — run BEFORE the value's [[Get]] is
+   issued, which is what makes a record of {a:"b", "\uFFFF":"d"} five operations and not six. A SYMBOL cannot
+   be a ByteString, so an ENUMERABLE symbol key is a TypeError; skipping it was the older, wrong answer. */
+static int headers_record_key_ok(JSContext *ctx, JSValueConst key, void *user)
+{
+    size_t kn_len = 0;
+    const char *kn;
+    int ok;
+
+    (void)user;
+    if (JS_IsSymbol(key)) {
+        JS_ThrowTypeError(ctx, "a Symbol is not a valid header name");
+        return -1;
+    }
+    kn = JS_ToCStringLen(ctx, &kn_len, key);
+    if (!kn) return -1;
+    ok = idl_is_bytestring(kn, kn_len);
+    JS_FreeCString(ctx, kn);
+    if (!ok) {
+        JS_ThrowTypeError(ctx, "a header name is not a ByteString");
+        return -1;
+    }
+    return 0;
 }
 
 int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst init, HeaderList *out,
@@ -828,7 +746,7 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
             f->phase = FILL_SEQ_PAIR;
         } else {
             JS_FreeValue(ctx, itf);
-            f->phase = FILL_KEYS_ASKED;
+            f->phase = FILL_KEY_PAIR;
         }
     }
 
@@ -896,98 +814,30 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
         }
         f->phase = FILL_SEQ_PAIR;
     }
-    /* The RECORD arm: [[OwnPropertyKeys]], then a [[Get]] per key, both requests. The phase is the same on the
-       way in and while parked, which is what the request's own cursor is for — it asks on the first call and
-       answers on the second. */
-    if (f->phase == FILL_KEYS_ASKED) {
-        r = step_ownkeys_run(ctx, h, init, in, &f->keys, out_cb, out_argc);
-        if (r > 0) { f->phase = FILL_KEYS_ASKED; return r; }
-        if (r < 0) return -1;
-        in = JS_UNDEFINED;
-        /* The key list is the ARRAY the engine built from the validated keys, so reading its length reaches
-           nothing of the page's — the one read in this algorithm that is not a request. */
-        {
-            JSValue len = JS_GetProperty(ctx, f->keys, g_atom_length);
-            int32_t n = 0;
-            if (JS_IsException(len) || JS_ToInt32(ctx, &n, len) < 0) { JS_FreeValue(ctx, len); return -1; }
-            JS_FreeValue(ctx, len);
-            f->n = n;
-        }
-        f->phase = FILL_NAME_STR;
-    }
-
+    /* The RECORD arm is §3.2.21's own cursor — [[OwnPropertyKeys]], then a descriptor and a [[Get]] per key,
+       every one of them a request. It is shared with URLSearchParams because the conversion is Web IDL's and
+       not this component's; what stays here is the per-pair half, which is where the ByteString key check, the
+       §5.1 guard and the concolic shape live. */
     for (;;) {
-        JSValue key;
         const char *kname, *kval;
         size_t kname_len = 0, kval_len = 0;
 
-        if (f->phase == FILL_NAME_STR) {
-            if (f->i >= f->n) { JS_FreeValue(ctx, in); return 0; }
-            key = JS_GetPropertyUint32(ctx, f->keys, (uint32_t)f->i);
-            if (JS_IsException(key)) { JS_FreeValue(ctx, in); return -1; }
-            JS_FreeValue(ctx, f->name);
-            f->name = key;
-            f->phase = FILL_DESC_ASKED;
-            in = JS_UNDEFINED;
-        }
-        /* §es-to-record step 5.1: the key's DESCRIPTOR, for EVERY key including symbols — on a Proxy that is the
-           page's getOwnPropertyDescriptor trap, so it is a request. Skipping it did not merely lose the trap: a
-           non-enumerable own property was silently included, and wpt pins the operation SEQUENCE, so the omission
-           showed up as every ordering test counting one call short. */
-        if (f->phase == FILL_DESC_ASKED) {
-            JSValue desc;
-            JSAtom a = JS_ValueToAtom(ctx, f->name);
-            int keep;
-            if (a == JS_ATOM_NULL) { JS_FreeValue(ctx, in); return -1; }
-            r = step_getownprop_run(ctx, h, init, a, in, &desc, out_cb, out_argc);
-            JS_FreeAtom(ctx, a);
+        if (f->phase == FILL_KEY_PAIR) {
+            r = record_cursor_run(ctx, h, &f->rec, init, in, headers_record_key_ok, NULL, out_cb, out_argc);
             if (r > 0) return r;
             if (r < 0) return -1;
             in = JS_UNDEFINED;
-            /* step 5.2: present AND enumerable, or the key is not part of the record. The descriptor is the
-               engine's own object, so reading it reaches nothing of the page's. */
-            keep = JS_IsObject(desc);
-            if (keep) {
-                JSValue en = JS_GetPropertyStr(ctx, desc, "enumerable");
-                keep = JS_ToBool(ctx, en);
-                JS_FreeValue(ctx, en);
-            }
-            JS_FreeValue(ctx, desc);
-            if (!keep) { f->i++; f->phase = FILL_NAME_STR; continue; }
-            /* step 5.2's `typedKey = key converted to K`, and K is ByteString. A SYMBOL cannot be one, so an
-               ENUMERABLE symbol key is a TypeError — skipping it was the older, wrong answer. */
-            if (JS_IsSymbol(f->name)) {
-                JS_ThrowTypeError(ctx, "a Symbol is not a valid header name");
-                return -1;
-            }
-            /* AND IT HAPPENS BEFORE THE VALUE IS READ. The conversion is step 5.2's first act, so a key that
-               cannot be a ByteString throws with the value's [[Get]] never issued — wpt counts the operations
-               and a record of {a:"b", "\uFFFF":"d"} must produce five, not six. Converting after the Get would
-               reach the same TypeError by a route the page can observe as one trap too many. */
-            {
-                size_t kn_len = 0;
-                const char *kn = JS_ToCStringLen(ctx, &kn_len, f->name);
-                int ok;
-                if (!kn) return -1;
-                ok = idl_is_bytestring(kn, kn_len);
-                JS_FreeCString(ctx, kn);
-                if (!ok) {
-                    JS_ThrowTypeError(ctx, "a header name is not a ByteString");
-                    return -1;
-                }
-            }
-            f->phase = FILL_VALUE_ASKED;
-        }
-        if (f->phase == FILL_VALUE_ASKED) {
-            JSAtom a = JS_ValueToAtom(ctx, f->name);
-            if (a == JS_ATOM_NULL) { JS_FreeValue(ctx, in); return -1; }
-            r = step_getprop_run(ctx, h, init, a, in, &f->value, out_cb, out_argc);
-            JS_FreeAtom(ctx, a);
-            if (r > 0) return r;            /* parked ON THIS KEY; the resume comes back to it */
-            if (r < 0) return -1;
-            in = JS_UNDEFINED;
+            if (f->rec.done) return 0;
+            JS_FreeValue(ctx, f->name);  f->name = JS_DupValue(ctx, f->rec.name);
+            JS_FreeValue(ctx, f->value); f->value = JS_DupValue(ctx, f->rec.value);
             f->phase = FILL_VALUE_STR;
         }
+        /* AN UNKNOWN VALUE KEEPS ITS SHAPE. A header built out of external input — `{'Authorization': 'Bearer '
+           + token}` where the token is server-injected — is a CONCOLIC, and coercing it would either abort at
+           the ToString boundary or, worse, quietly de-taint it into some concrete-looking string. Its shape is
+           the display form the @H surface reports, and the `{hole}` in it is exactly what marks the header as a
+           runtime value the reviewer has to supply. This is the same explicit projection fetch_park asks for on
+           the URL, for the same reason. */
         DCHECK(f->phase == FILL_VALUE_STR, "the headers fill was re-entered at a phase it never parks in");
         /* AN UNKNOWN VALUE KEEPS ITS SHAPE. A header built out of external input — `{'Authorization': 'Bearer '
            + token}` where the token is server-injected — is a CONCOLIC, and coercing it would either abort at
@@ -1039,8 +889,7 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
         }
         JS_FreeCString(ctx, kname);
         JS_FreeCString(ctx, kval);
-        f->i++;
-        f->phase = FILL_NAME_STR;
+        f->phase = FILL_KEY_PAIR;
     }
 }
 
@@ -1115,7 +964,6 @@ void headers_init(JSContext *ctx)
     g_headers_rt = rt;
     JS_NewClassID(rt, &g_headers_class);
     JS_NewClass(rt, g_headers_class, &def);
-    g_atom_length = JS_NewAtom(ctx, "length");
     g_proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_proto), "Headers.prototype could not be allocated");
     idl_install_method(ctx, g_proto, "append", 2, idl_method_id(ctx, TWO_STR, 2, js_headers_member, HDR_APPEND));
@@ -1180,8 +1028,6 @@ void headers_free(JSContext *ctx)
     JS_FreeValue(ctx, g_proto);
     JS_FreeValue(ctx, g_iter_proto);
     g_proto = g_iter_proto = JS_UNDEFINED;
-    JS_FreeAtom(ctx, g_atom_length);
-    g_atom_length = JS_ATOM_NULL;
     g_headers_rt = NULL;
     g_ctor_stepid = -1;
 }

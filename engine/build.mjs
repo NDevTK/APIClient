@@ -138,7 +138,8 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "url", "url.c"),                              // WHATWG URL: the record and the basic URL parser every address goes through
     join(HOST, "browser", "core", "frame", "location.c"),                       // Location: concrete principal + concolic search/hash
     join(HOST, "browser", "core", "frame", "window.c"),                         // Window: which browsing context this is, and window.name as attacker input
-    join(HOST, "browser", "core", "idl_args.c"),                                // the ONE coerce-then-call machine every DOMString member shares
+    join(HOST, "browser", "core", "idl_args.c"),
+    join(HOST, "browser", "core", "idl_iter.c"),                                // Web IDL's sequence<T>: the ES iterator protocol as requests                                // the ONE coerce-then-call machine every DOMString member shares
     join(HOST, "browser", "core", "dom", "abort.c"),                            // AbortController/AbortSignal: the controller's flag real, a timeout's unknown
     join(HOST, "browser", "core", "frame", "navigator.c"),
     join(HOST, "browser", "core", "frame", "screen.c"),                         // Screen: every member the environment, so every member forks                      // Navigator: spec-fixed identity concrete, the gated environment concolic
