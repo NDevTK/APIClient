@@ -32,7 +32,12 @@ const WPT_REV = "bf4714d";
    it rather than read off disk, because a `.py` path is a handler the server imports and calls, and because
    the rewrites and content types are then wptserve's own rather than a table copied into this file. */
 const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetch/api/resources", "url", "common",
-                   "FileAPI/blob", "FileAPI/file", "FileAPI/support", "FileAPI/url", "encoding", "tools"];
+                   "FileAPI/blob", "FileAPI/file", "FileAPI/support", "FileAPI/url", "encoding", "tools",
+                   /* THE COMPONENT'S OWN SPEC TESTS. readable_stream.c was written, and then measured against
+                      fetch and FileAPI — which use a stream but assert almost nothing ABOUT one. A component
+                      whose spec directory is not checked out is a component whose gate cannot fail, which is
+                      the same defect as a gate that only reads the spelling that existed when it was written. */
+                   "streams/readable-streams", "streams/resources"];
 
 if (!existsSync(join(WPT, "resources", "testharness.js"))) {
   /* NO --depth 1. The corpus is PINNED, and a depth-1 clone has only the tip — `git checkout bf4714d` in it
