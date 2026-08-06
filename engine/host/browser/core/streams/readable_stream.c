@@ -78,7 +78,7 @@ static JSClassID g_stream_class, g_reader_class, g_ctrl_class;
 static JSValue   g_stream_proto = JS_UNDEFINED, g_reader_proto = JS_UNDEFINED, g_ctrl_proto = JS_UNDEFINED;
 static JSRuntime *g_rs_rt;
 static int       g_ctor_stepid = -1, g_reader_ctor_stepid = -1, g_read_stepid = -1, g_cancel_stepid = -1;
-static int       g_release_stepid = -1;
+static int       g_release_stepid = -1, g_from_ctor_stepid = -1;
 static int       g_ctrl_stepids[3] = { -1, -1, -1 };
 static int       g_rxn_stepids[4] = { -1, -1, -1, -1 };
 
@@ -549,19 +549,36 @@ enum { RXN_START_OK = 0, RXN_START_ERR, RXN_PULL_OK, RXN_PULL_ERR };
  * rejects parked read requests — work only a machine may do — and knows its controller only by capture.
  * PerformPromiseThen rather than a `.then` read, because that is what §4.5 performs: a page that replaces
  * Promise.prototype.then changes what its own `.then()` does and changes nothing about what the stream does. */
-static int stream_react(JSContext *ctx, JSValueConst promise, int ok_id, int err_id,
-                        JSValueConst *data, int n)
+/* The reactions' own CAPABILITY, for a caller that must hand it on: §4.2's `from` returns "the result of
+   reacting to nextPromise" as its pull algorithm's answer, so §4.5 chains the next pull on THAT rather than on
+   the raw next promise. A step id of -1 means no handler for that side, which is how a rejection is left to
+   propagate through the capability instead of being caught. */
+static JSValue stream_react_cap(JSContext *ctx, JSValueConst promise, int ok_id, int err_id,
+                                JSValueConst *data, int n)
 {
-    JSValue onf, onr, cap;
+    JSValue onf = JS_UNDEFINED, onr = JS_UNDEFINED, cap;
 
-    DCHECK(ok_id >= 0 && err_id >= 0, "a stream reaction was attached before its machines were registered");
-    onf = JS_NewStepClosure(ctx, ok_id, 1, n, data);
-    if (JS_IsException(onf)) return -1;
-    onr = JS_NewStepClosure(ctx, err_id, 1, n, data);
-    if (JS_IsException(onr)) { JS_FreeValue(ctx, onf); return -1; }
+    if (ok_id >= 0) {
+        onf = JS_NewStepClosure(ctx, ok_id, 1, n, data);
+        if (JS_IsException(onf)) return onf;
+    }
+    if (err_id >= 0) {
+        onr = JS_NewStepClosure(ctx, err_id, 1, n, data);
+        if (JS_IsException(onr)) { JS_FreeValue(ctx, onf); return onr; }
+    }
     cap = JS_PerformPromiseThen(ctx, promise, onf, onr);
     JS_FreeValue(ctx, onf);
     JS_FreeValue(ctx, onr);
+    return cap;
+}
+
+static int stream_react(JSContext *ctx, JSValueConst promise, int ok_id, int err_id,
+                        JSValueConst *data, int n)
+{
+    JSValue cap;
+
+    DCHECK(ok_id >= 0 && err_id >= 0, "a stream reaction was attached before its machines were registered");
+    cap = stream_react_cap(ctx, promise, ok_id, err_id, data, n);
     if (JS_IsException(cap)) return -1;
     JS_FreeValue(ctx, cap);
     return 0;
@@ -2331,6 +2348,436 @@ static const IdlStepDecl js_tee_call_decl = {
     js_tee_call_step, sizeof(JSTeeCallState), js_tee_call_visit, js_tee_call_release
 };
 
+/* ---- §4.2's `from` --------------------------------------------------------------------------------------------
+ *
+ * ReadableStreamFromIterable: a stream whose source is any ASYNC OR SYNC ITERABLE — an array, a Set, a
+ * generator, another ReadableStream. Its pull algorithm is one `next()` and its cancel algorithm is one
+ * `return()`, both of them the page's code, so both are step closures over a record holding the iterator.
+ *
+ * GetIterator(obj, ASYNC) IS PERFORMED, NOT APPROXIMATED. Its @@asyncIterator read, its fallback @@iterator
+ * read and its method call are requests like any other; its one remaining step — CreateAsyncFromSyncIterator —
+ * is an ECMAScript intrinsic whose `next` AWAITS the sync result's value, which is what makes
+ * `ReadableStream.from([Promise.resolve(1)])` yield 1 rather than the promise. That one is the engine's, newly
+ * exported, rather than written again here.
+ *
+ * THE HIGH-WATER MARK IS 0. §4.2 says so, and it is the difference between pulling one value ahead of the
+ * reader and pulling only when asked — which `from(array)` with a push during reading observes directly. */
+enum { FROM_PULL = 0, FROM_CANCEL, FROM_NEXT_OK, FROM_RET_OK, FROM_N };
+
+typedef struct {
+    JSValue iterator;
+    JSValue next_fn;
+    JSValue controller;
+} FromData;
+
+static JSClassID g_from_class;
+static int       g_from_stepids[FROM_N];
+
+static void from_finalizer(JSRuntime *rt, JSValue val)
+{
+    FromData *f = JS_GetOpaque(val, g_from_class);
+    if (!f) return;
+    JS_FreeValueRT(rt, f->iterator);
+    JS_FreeValueRT(rt, f->next_fn);
+    JS_FreeValueRT(rt, f->controller);
+    js_free_rt(rt, f);
+}
+
+static void from_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+{
+    FromData *f = JS_GetOpaque(val, g_from_class);
+    if (!f) return;
+    JS_MarkValue(rt, f->iterator, mark_func);
+    JS_MarkValue(rt, f->next_fn, mark_func);
+    JS_MarkValue(rt, f->controller, mark_func);
+}
+
+enum { FS_START = 0, FS_CALL, FS_RESOLVE, FS_REJECT, FS_REACT, FS_READ_DONE, FS_READ_VALUE, FS_FEED };
+
+typedef struct {
+    JSStepHdr hdr;
+    uint8_t   stage;
+    uint8_t   phase;
+    uint8_t   done;
+    JSValue   from;
+    JSValue   value;    /* the iteration result, then the value taken out of it */
+    JSValue   result;   /* what this invocation answers */
+    JSValue   chain;    /* a capability's resolving function, while §4.2's PromiseResolve is in flight */
+    JSValue   cb[3];
+} JSFromState;
+
+static void js_from_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSFromState *s = st;
+    int k;
+    v->val(ctx, &s->from);
+    v->val(ctx, &s->value);
+    v->val(ctx, &s->result);
+    v->val(ctx, &s->chain);
+    for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
+}
+
+static JSValue js_from_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSFromState *s = st;
+    JSValue r = take_result ? s->result : JS_UNDEFINED;
+    int k;
+    if (take_result) s->result = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->from);
+    JS_FreeValue(ctx, s->value);
+    JS_FreeValue(ctx, s->result);
+    JS_FreeValue(ctx, s->chain);
+    s->from = s->value = s->result = s->chain = JS_UNDEFINED;
+    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
+    return r;
+}
+
+static int js_from_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSFromState *s = st;
+    int op = s->hdr.arg;
+    FromData *f;
+    JSValue out;
+    JSAtom atom;
+    int r;
+
+    if (s->stage == FS_START) {
+        int k;
+        s->from = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 0));
+        s->value = s->result = s->chain = JS_UNDEFINED;
+        for (k = 0; k < 3; k++) s->cb[k] = JS_UNDEFINED;
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        if (op == FROM_NEXT_OK || op == FROM_RET_OK) {
+            /* §4.2: an iteration result that is not an OBJECT is a TypeError — for `next` it errors the
+               stream through the pull rejection, for `return` it rejects the cancel promise. */
+            s->value = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
+            if (!JS_IsObject(s->value)) {
+                JS_ThrowTypeError(ctx, "an iterator answered with something that is not an object");
+                return JS_STEP_ABRUPT;
+            }
+            if (op == FROM_RET_OK) return JS_STEP_DONE;   /* the value is discarded: §4.2 answers undefined */
+            s->stage = FS_READ_DONE;
+        } else {
+            s->value = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
+            s->stage = FS_CALL;
+        }
+    }
+
+    f = JS_GetOpaque(s->from, g_from_class);
+    DCHECK(f != NULL, "a §4.2 `from` machine captured something that is not its record");
+
+    if (s->stage == FS_CALL) {
+        if (op == FROM_CANCEL) {
+            /* §4.2's cancel algorithm: GetMethod(iterator, "return"), and an iterator that has none is simply
+               finished — the promise resolves with undefined and nothing is called. */
+            if (s->phase == 0) {
+                JSValue m;
+                atom = JS_NewAtom(ctx, "return");
+                r = step_getprop_run(ctx, &s->hdr, f->iterator, atom, cb_result, &m, out_cb, out_argc);
+                JS_FreeAtom(ctx, atom);
+                if (r > 0) return r;
+                if (r < 0) return JS_STEP_ABRUPT;
+                cb_result = JS_UNDEFINED;
+                if (JS_IsUndefined(m) || JS_IsNull(m)) { JS_FreeValue(ctx, m); return JS_STEP_DONE; }
+                if (!JS_IsFunction(ctx, m)) {
+                    /* 7.3.10 GetMethod throws for a non-callable, and §4.2 says an ABRUPT GetMethod here
+                       "returns a promise rejected with" it — so the cancel promise rejects rather than the
+                       member throwing at its caller. */
+                    JS_FreeValue(ctx, m);
+                    JS_ThrowTypeError(ctx, "an iterator's `return` is not callable");
+                    JS_FreeValue(ctx, s->value);
+                    s->value = JS_GetException(ctx);
+                    s->stage = FS_REJECT;
+                    goto settle_promise;
+                }
+                JS_FreeValue(ctx, s->result);
+                s->result = m;   /* held here only until the call is issued */
+            }
+            {
+                JSValueConst arg = s->value;
+                r = step_call_run(ctx, &s->phase, s->cb, s->result, f->iterator, 1, &arg, cb_result, &out,
+                                  out_cb, out_argc);
+            }
+        } else {
+            DCHECK(op == FROM_PULL, "a §4.2 `from` machine ran with an operation it does not have");
+            r = step_call_run(ctx, &s->phase, s->cb, f->next_fn, f->iterator, 0, NULL, cb_result, &out,
+                              out_cb, out_argc);
+        }
+        if (r > 0) return r;
+        if (JS_IsException(out)) {
+            /* §4.2, in as many words: "If nextResult is an abrupt completion, return a promise REJECTED with
+               nextResult.[[Value]]" — the algorithm answers a promise either way and never propagates, which
+               is what makes a synchronously-throwing `next` error the stream through the same pull rejection
+               a rejecting one takes. */
+            JS_FreeValue(ctx, s->value);
+            s->value = JS_GetException(ctx);
+            s->stage = FS_REJECT;
+        } else {
+            JS_FreeValue(ctx, s->value);
+            s->value = out;
+            s->stage = FS_RESOLVE;
+        }
+        cb_result = JS_UNDEFINED;
+    }
+
+settle_promise:
+    if (s->stage == FS_RESOLVE || s->stage == FS_REJECT) {
+        /* §4.2 reacts to PromiseResolve(nextResult) — so what `next` answered goes through a capability
+           FIRST, whatever it is. A sync iterator's plain `{value, done}` is not a promise, and reacting to it
+           directly reads reaction lists off an object that has none. */
+        JSValueConst arg = s->value;
+        if (s->phase == 0) {
+            JSValue funcs[2];
+            JSValue p = JS_NewPromiseCapability(ctx, funcs);
+            if (JS_IsException(p)) return JS_STEP_ABRUPT;
+            JS_FreeValue(ctx, s->result);
+            s->result = p;
+            JS_FreeValue(ctx, s->chain);
+            s->chain = funcs[s->stage == FS_REJECT];
+            JS_FreeValue(ctx, funcs[s->stage == FS_REJECT ? 0 : 1]);
+        }
+        r = step_call_run(ctx, &s->phase, s->cb, s->chain, JS_UNDEFINED, 1, &arg, cb_result, &out,
+                          out_cb, out_argc);
+        if (r > 0) return r;
+        if (JS_IsException(out)) return JS_STEP_ABRUPT;
+        JS_FreeValue(ctx, out);
+        JS_FreeValue(ctx, s->chain);
+        s->chain = JS_UNDEFINED;
+        cb_result = JS_UNDEFINED;
+        s->stage = FS_REACT;
+    }
+
+    if (s->stage == FS_REACT) {
+        /* The reaction's OWN capability is what the algorithm answers, so a later pull chains on THIS rather
+           than on what `next` happened to return. A rejected one carries the rejection straight through: with
+           no handler on that side it reaches §4.5's pull reaction, which errors the stream. */
+        JSValueConst data[1];
+        JSValue cap;
+        data[0] = s->from;
+        cap = stream_react_cap(ctx, s->result, g_from_stepids[op == FROM_PULL ? FROM_NEXT_OK : FROM_RET_OK],
+                               -1, data, 1);
+        if (JS_IsException(cap)) return JS_STEP_ABRUPT;
+        JS_FreeValue(ctx, s->result);
+        s->result = cap;
+        return JS_STEP_DONE;
+    }
+
+    if (s->stage == FS_READ_DONE) {
+        atom = JS_NewAtom(ctx, "done");
+        r = step_getprop_run(ctx, &s->hdr, s->value, atom, cb_result, &out, out_cb, out_argc);
+        JS_FreeAtom(ctx, atom);
+        if (r > 0) return r;
+        if (r < 0) return JS_STEP_ABRUPT;
+        cb_result = JS_UNDEFINED;
+        s->done = (uint8_t)JS_ToBool(ctx, out);
+        JS_FreeValue(ctx, out);
+        s->stage = s->done ? FS_FEED : FS_READ_VALUE;
+    }
+    if (s->stage == FS_READ_VALUE) {
+        JSValue v;
+        atom = JS_NewAtom(ctx, "value");
+        r = step_getprop_run(ctx, &s->hdr, s->value, atom, cb_result, &v, out_cb, out_argc);
+        JS_FreeAtom(ctx, atom);
+        if (r > 0) return r;
+        if (r < 0) return JS_STEP_ABRUPT;
+        cb_result = JS_UNDEFINED;
+        JS_FreeValue(ctx, s->value);
+        s->value = v;
+        s->stage = FS_FEED;
+    }
+
+    DCHECK(s->stage == FS_FEED, "a §4.2 `from` machine resumed in a stage it never parks in");
+    {
+        JSValueConst arg = s->value;
+        r = step_call_run(ctx, &s->phase, s->cb, g_ctrl_fn[s->done ? CF_CLOSE : CF_ENQUEUE], f->controller,
+                          s->done ? 0 : 1, &arg, cb_result, &out, out_cb, out_argc);
+        if (r > 0) return r;
+        if (JS_IsException(out)) return JS_STEP_ABRUPT;
+        JS_FreeValue(ctx, out);
+    }
+    return JS_STEP_DONE;
+}
+
+#define FROM_DEF(i) { sizeof(JSFromState), js_from_step, js_from_fini, (i), \
+                      .catches_abrupt = 1, .visit = js_from_visit }
+static const JSTrampStepDef js_from_defs[FROM_N] = {
+    FROM_DEF(FROM_PULL), FROM_DEF(FROM_CANCEL), FROM_DEF(FROM_NEXT_OK), FROM_DEF(FROM_RET_OK),
+};
+#undef FROM_DEF
+
+/* `static ReadableStream from(any asyncIterable)`. A MACHINE for GetIterator(obj, ASYNC): three of its four
+   steps are the page's code. */
+enum { FC_START = 0, FC_ASYNC_CALL, FC_SYNC_GET, FC_SYNC_CALL, FC_NEXT, FC_BUILD, FC_STARTED };
+
+typedef struct {
+    CtrlWork w;
+    uint8_t  is_sync;
+    JSValue  method;
+    JSValue  iterator;
+    JSValue  next_fn;
+    JSValue  stream;
+    JSValue  from;
+} JSFromCallState;
+
+static void js_from_call_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSFromCallState *s = st;
+    ctrl_work_visit(ctx, &s->w, v);
+    v->val(ctx, &s->method);
+    v->val(ctx, &s->iterator);
+    v->val(ctx, &s->next_fn);
+    v->val(ctx, &s->stream);
+    v->val(ctx, &s->from);
+}
+
+static void js_from_call_release(JSContext *ctx, void *st)
+{
+    JSFromCallState *s = st;
+    ctrl_work_release(ctx, &s->w);
+    JS_FreeValue(ctx, s->method);
+    JS_FreeValue(ctx, s->iterator);
+    JS_FreeValue(ctx, s->next_fn);
+    JS_FreeValue(ctx, s->stream);
+    JS_FreeValue(ctx, s->from);
+    s->method = s->iterator = s->next_fn = s->stream = s->from = JS_UNDEFINED;
+}
+
+static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    JSFromCallState *s = st;
+    JSValueConst src = argc > 0 ? argv[0] : JS_UNDEFINED;
+    JSValue out;
+    int r;
+
+    if (s->w.stage == FC_START) {
+        ctrl_work_start(&s->w);
+        s->method = s->iterator = s->next_fn = s->stream = s->from = JS_UNDEFINED;
+        /* AN OBJECT, not merely something iterable. A STRING has @@iterator and would give a stream of its
+           characters, and the corpus lists it among the INVALID iterables beside null, a number and a symbol —
+           so `from` requires an Object before GetIterator is reached at all. Nothing else in that list would
+           get past GetIterator anyway; the string is the one case that says where the check is. */
+        if (!JS_IsObject(src)) {
+            JS_FreeValue(ctx, cb_result);
+            JS_ThrowTypeError(ctx, "ReadableStream.from was given something that is not an object");
+            return -1;
+        }
+        /* 7.4.2 GetIterator with the ASYNC hint: @@asyncIterator first, and only a NULLISH one falls back. */
+        r = step_getprop_run(ctx, hdr, src, JS_WellKnownSymbolAtom(JS_WKS_ASYNC_ITERATOR), cb_result,
+                             &s->method, out_cb, out_argc);
+        if (r > 0) { s->w.stage = FC_START; return r; }
+        if (r < 0) return -1;
+        cb_result = JS_UNDEFINED;
+        s->is_sync = JS_IsUndefined(s->method) || JS_IsNull(s->method);
+        s->w.stage = s->is_sync ? FC_SYNC_GET : FC_ASYNC_CALL;
+    }
+    if (s->w.stage == FC_SYNC_GET) {
+        JS_FreeValue(ctx, s->method);
+        s->method = JS_UNDEFINED;
+        r = step_getprop_run(ctx, hdr, src, JS_WellKnownSymbolAtom(JS_WKS_ITERATOR), cb_result,
+                             &s->method, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        cb_result = JS_UNDEFINED;
+        if (JS_IsUndefined(s->method) || JS_IsNull(s->method)) {
+            JS_ThrowTypeError(ctx, "ReadableStream.from was given something that is not iterable");
+            return -1;
+        }
+        s->w.stage = FC_SYNC_CALL;
+    }
+    if (s->w.stage == FC_ASYNC_CALL || s->w.stage == FC_SYNC_CALL) {
+        if (!JS_IsFunction(ctx, s->method)) {
+            JS_FreeValue(ctx, cb_result);
+            JS_ThrowTypeError(ctx, "an iterable's iterator method is not callable");
+            return -1;
+        }
+        r = step_call_run(ctx, &s->w.phase, s->w.cb, s->method, src, 0, NULL, cb_result, &s->iterator,
+                          out_cb, out_argc);
+        if (r > 0) return r;
+        if (JS_IsException(s->iterator)) return -1;
+        cb_result = JS_UNDEFINED;
+        if (!JS_IsObject(s->iterator)) {
+            JS_ThrowTypeError(ctx, "an iterator method answered with something that is not an object");
+            return -1;
+        }
+        s->w.stage = FC_NEXT;
+    }
+    if (s->w.stage == FC_NEXT) {
+        JSAtom atom = JS_NewAtom(ctx, "next");
+        r = step_getprop_run(ctx, hdr, s->iterator, atom, cb_result, &s->next_fn, out_cb, out_argc);
+        JS_FreeAtom(ctx, atom);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        cb_result = JS_UNDEFINED;
+        if (s->is_sync) {
+            /* 27.1.4.1: the sync record is WRAPPED, so `next` awaits each value — the engine's intrinsic,
+               because writing that unwrap here would be a second copy of one. */
+            JSValue nextw;
+            JSValue wrapped = JS_NewAsyncFromSyncIterator(ctx, s->iterator, s->next_fn, &nextw);
+            s->iterator = s->next_fn = JS_UNDEFINED;   /* both were consumed */
+            if (JS_IsException(wrapped)) return -1;
+            s->iterator = wrapped;
+            s->next_fn = nextw;
+        }
+        s->w.stage = FC_BUILD;
+    }
+    if (s->w.stage == FC_BUILD) {
+        JSValueConst data[1];
+        ControllerData *c;
+        StreamData *d;
+        FromData *f;
+        JSValue obj;
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        obj = JS_NewObjectClass(ctx, g_from_class);
+        if (JS_IsException(obj)) return -1;
+        f = js_mallocz(ctx, sizeof *f);
+        if (!f) { JS_FreeValue(ctx, obj); return -1; }
+        f->iterator = f->next_fn = f->controller = JS_UNDEFINED;
+        JS_SetOpaque(obj, f);
+        s->from = obj;                     /* attached before anything that can fail */
+        f->iterator = JS_DupValue(ctx, s->iterator);
+        f->next_fn = JS_DupValue(ctx, s->next_fn);
+
+        s->stream = readable_stream_empty(ctx);
+        if (JS_IsException(s->stream)) return -1;
+        d = stream_of(s->stream);
+        {
+            JSValue ctrl = controller_new(ctx, s->stream);
+            if (JS_IsException(ctrl)) return -1;
+            d->controller = ctrl;
+        }
+        c = ctrl_of(d->controller);
+        f->controller = JS_DupValue(ctx, d->controller);
+        c->hwm = 0;                        /* §4.2: `from` pulls only when asked */
+        data[0] = s->from;
+        c->pull_fn = JS_NewStepClosure(ctx, g_from_stepids[FROM_PULL], 0, 1, data);
+        if (JS_IsException(c->pull_fn)) { c->pull_fn = JS_UNDEFINED; return -1; }
+        c->cancel_fn = JS_NewStepClosure(ctx, g_from_stepids[FROM_CANCEL], 1, 1, data);
+        if (JS_IsException(c->cancel_fn)) { c->cancel_fn = JS_UNDEFINED; return -1; }
+        s->w.value = JS_UNDEFINED;
+        s->w.stage = FC_STARTED;
+    }
+    if (s->w.stage == FC_STARTED) {
+        r = step_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        cb_result = JS_UNDEFINED;
+    }
+    JS_FreeValue(ctx, cb_result);
+    if (ctrl_react(ctx, s->w.func, stream_of(s->stream)->controller, RXN_START_OK, RXN_START_ERR) < 0)
+        return -1;
+    *presult = s->stream;
+    s->stream = JS_UNDEFINED;
+    return 0;
+}
+
+static const IdlStepDecl js_from_call_decl = {
+    js_from_call_step, sizeof(JSFromCallState), js_from_call_visit, js_from_call_release
+};
+
 /* ---- the constructors -------------------------------------------------------------------------------------- */
 
 /* §4.2's constructor, over §4.9.4's SetUpReadableStreamDefaultControllerFromUnderlyingSource. A MACHINE because
@@ -2681,6 +3128,19 @@ void readable_stream_init(JSContext *ctx)
                            idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tee_call_decl, 0));
     }
 
+    /* §4.2's `from`, whose source is any async or sync iterable. */
+    {
+        JSClassDef fd = { "ReadableStream from", .finalizer = from_finalizer, .gc_mark = from_gc_mark };
+        static const IdlArgType ONE_ANY_ARG[1] = { IDL_ANY };
+        JS_NewClassID(rt, &g_from_class);
+        JS_NewClass(rt, g_from_class, &fd);
+        for (i = 0; i < FROM_N; i++) {
+            g_from_stepids[i] = JS_RegisterStepDef(rt, &js_from_defs[i]);
+            CHECK(g_from_stepids[i] >= 0, "streams: no step id for a `from` operation");
+        }
+        g_from_ctor_stepid = idl_method_id_step(ctx, ONE_ANY_ARG, 1, NULL, 0, &js_from_call_decl, 0);
+    }
+
     g_ctor_stepid = idl_method_id_step(ctx, SOURCE_AND_STRATEGY, 2, QUEUING_STRATEGY,
                                        (int)(sizeof QUEUING_STRATEGY / sizeof *QUEUING_STRATEGY),
                                        &js_rs_ctor_decl, 0);
@@ -2697,6 +3157,8 @@ void readable_stream_install(JSContext *ctx, JSValueConst global)
     ctor = idl_step_constructor(ctx, "ReadableStream", 0, g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the ReadableStream interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, g_stream_proto);
+    /* §4.2's `from` is STATIC, so it lives on the interface object rather than the prototype. */
+    idl_install_method(ctx, ctor, "from", 1, g_from_ctor_stepid);
     JS_SetPropertyStr(ctx, (JSValue)global, "ReadableStream", ctor);
 
     ctor = idl_step_constructor(ctx, "ReadableStreamDefaultReader", 1, g_reader_ctor_stepid);
@@ -2721,6 +3183,8 @@ void readable_stream_free(JSContext *ctx)
     g_read_fn = g_release_fn = g_reader_cancel_fn = g_get_reader_fn = JS_UNDEFINED;
     for (i = 0; i < AI_N; i++) g_aiter_stepids[i] = -1;
     for (i = 0; i < TEE_N; i++) g_tee_stepids[i] = -1;
+    for (i = 0; i < FROM_N; i++) g_from_stepids[i] = -1;
+    g_from_ctor_stepid = -1;
     for (i = 0; i < 3; i++) { JS_FreeValue(ctx, g_ctrl_fn[i]); g_ctrl_fn[i] = JS_UNDEFINED; }
     g_rs_rt = NULL;
     g_ctor_stepid = g_reader_ctor_stepid = g_read_stepid = g_cancel_stepid = g_release_stepid = -1;
