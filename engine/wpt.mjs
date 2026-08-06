@@ -56,6 +56,7 @@ const SRCS = [
   "host/browser/core/idl_iter.c",
   "host/browser/core/fetch/headers.c",
   "host/browser/core/fetch/body.c",
+  "host/browser/core/html/form_data.c",
   "host/browser/core/fetch/response.c",
   "host/browser/core/fetch/request.c",
   "host/browser/core/fetch/fetch.c",

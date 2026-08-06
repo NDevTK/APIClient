@@ -647,29 +647,19 @@ char *url_serialize(const UrlRecord *u, bool exclude_fragment)
     return ustr_take(&o);
 }
 
-char *url_serialize_origin(const UrlRecord *u)
+/* §4.7's TUPLE origin, and nothing else — every scheme that is not one of the five special ones with an
+   authority has an opaque origin, `file` INCLUDED (the spec leaves file's origin to the implementation and says
+   to return a new opaque origin when in doubt).
+   THIS IS THE WHOLE OF §4.7 EXCEPT `blob:`, and it is a separate function for exactly that reason: blob's origin
+   is the origin of the URL its path spells, and expressing that as a self-call made §4.7 a C recursion. The
+   recursion was only ever one level deep — the inner URL is constrained to http/https/file, none of which is
+   blob — so the depth was a fiction the call graph could not see. Splitting the non-blob half out states that
+   constraint in the code: there is no call from here back to the blob case, so there is no depth. */
+static char *url_serialize_tuple_origin(const UrlRecord *u)
 {
     UStr o;
     char *host;
     if (!u->scheme) return xstrdup("null");
-    /* §4.7's `blob:` case: the origin is the one of the URL its PATH spells. `blob:https://example.com/uuid`
-       is same-origin with example.com — which is the entire security property of a blob URL, and answering
-       "null" for it would make a page's own origin check against its own blob fail. */
-    if (!strcmp(u->scheme, "blob")) {
-        UrlRecord inner;
-        char *path = url_serialize_path(u);
-        char *r = NULL;
-        url_record_init(&inner);
-        /* §4.7 names THREE schemes, and only those: a `blob:` whose path spells ftp, ws, wss or another blob
-           has an OPAQUE origin. Returning the inner origin for any parseable path would have made
-           `blob:ws://example.org/` same-origin with a WebSocket endpoint. */
-        if (url_parse(&inner, path, strlen(path), NULL) && inner.scheme &&
-            (!strcmp(inner.scheme, "http") || !strcmp(inner.scheme, "https") || !strcmp(inner.scheme, "file")))
-            r = url_serialize_origin(&inner);
-        url_record_free(&inner);
-        free(path);
-        return r ? r : xstrdup("null");
-    }
     if (strcmp(u->scheme, "http") && strcmp(u->scheme, "https") && strcmp(u->scheme, "ftp") &&
         strcmp(u->scheme, "ws") && strcmp(u->scheme, "wss"))
         return xstrdup("null");   /* §4.7: every other scheme has an opaque origin */
@@ -685,6 +675,32 @@ char *url_serialize_origin(const UrlRecord *u)
         ustr_puts(&o, buf);
     }
     return ustr_take(&o);
+}
+
+char *url_serialize_origin(const UrlRecord *u)
+{
+    if (!u->scheme) return xstrdup("null");
+    /* §4.7's `blob:` case: the origin is the one of the URL its PATH spells. `blob:https://example.com/uuid`
+       is same-origin with example.com — which is the entire security property of a blob URL, and answering
+       "null" for it would make a page's own origin check against its own blob fail. */
+    if (!strcmp(u->scheme, "blob")) {
+        UrlRecord inner;
+        char *path = url_serialize_path(u);
+        char *r = NULL;
+        url_record_init(&inner);
+        /* §4.7 names THREE schemes, and only those: a `blob:` whose path spells ftp, ws, wss or another blob
+           has an OPAQUE origin. Returning the inner origin for any parseable path would have made
+           `blob:ws://example.org/` same-origin with a WebSocket endpoint. `file` is named by the spec here and
+           still serializes to "null" below, because §4.7 gives `file` an opaque origin — the two rules compose,
+           and short-circuiting `file` to null here instead would state the same answer for the wrong reason. */
+        if (url_parse(&inner, path, strlen(path), NULL) && inner.scheme &&
+            (!strcmp(inner.scheme, "http") || !strcmp(inner.scheme, "https") || !strcmp(inner.scheme, "file")))
+            r = url_serialize_tuple_origin(&inner);
+        url_record_free(&inner);
+        free(path);
+        return r ? r : xstrdup("null");
+    }
+    return url_serialize_tuple_origin(u);
 }
 
 /* ---- §4.4's basic URL parser ------------------------------------------------------------------------------ */
@@ -1252,6 +1268,146 @@ bool url_parse(UrlRecord *out, const char *input, size_t len, const UrlRecord *b
 {
     return url_parse_into(out, input, len, base, -1);
 }
+
+
+/* ---- §5.1's `application/x-www-form-urlencoded` list ------------------------------------------------------
+ *
+ * It is the URL STANDARD's §5.1, not URLSearchParams' — that interface is one view over it, and `.formData()`
+ * is the other: a Request or a Response whose Content-Type says urlencoded parses its body with exactly this
+ * parser. It lived inside url_search_params.c, which is where it was first needed; a second copy for FormData
+ * would have been a second place for `+` decoding, the `%` rules and the code-unit ordering to drift. */
+char *url_encoded_strdup(const char *s, size_t n)
+{
+    char *r = malloc(n + 1);
+    CHECK(r, "url: OOM copying a pair");
+    if (n) memcpy(r, s, n);
+    r[n] = 0;
+    return r;
+}
+
+/* §6.2 sorts by CODE UNITS, which is not UTF-8 byte order. The two disagree for exactly one range: a
+   supplementary code point (U+10000 and up) is a SURROGATE PAIR in UTF-16, so it sorts as 0xD800..0xDBFF —
+   BELOW U+E000..U+FFFF — while its UTF-8 encoding starts with 0xF0 and sorts above theirs. `ﬃ` (U+FB03) and
+   `🌈` (U+1F308) are that case, and byte order put them the wrong way round.
+   Decoding one code point at a time and mapping a supplementary to its HIGH SURROGATE is enough to order
+   them: two supplementaries with the same high surrogate differ in the low one, and the code point order
+   within a high-surrogate block matches the low-surrogate order. */
+static uint32_t url_encoded_next_unit(const char *s, size_t n, size_t *i)
+{
+    unsigned char c = (unsigned char)s[*i];
+    uint32_t cp;
+    int extra;
+
+    if (c < 0x80)                { cp = c;          extra = 0; }
+    else if ((c & 0xe0) == 0xc0) { cp = c & 0x1f;   extra = 1; }
+    else if ((c & 0xf0) == 0xe0) { cp = c & 0x0f;   extra = 2; }
+    else                         { cp = c & 0x07;   extra = 3; }
+    (*i)++;
+    while (extra-- > 0 && *i < n && ((unsigned char)s[*i] & 0xc0) == 0x80)
+        cp = (cp << 6) | ((unsigned char)s[(*i)++] & 0x3f);
+    return cp >= 0x10000 ? 0xd800 + ((cp - 0x10000) >> 10) : cp;
+}
+
+int url_encoded_name_cmp(const UrlEncodedPair *a, const UrlEncodedPair *b)
+{
+    size_t ia = 0, ib = 0;
+    while (ia < a->nlen && ib < b->nlen) {
+        uint32_t ua = url_encoded_next_unit(a->name, a->nlen, &ia);
+        uint32_t ub = url_encoded_next_unit(b->name, b->nlen, &ib);
+        if (ua != ub) return ua < ub ? -1 : 1;
+    }
+    /* a shorter name that is a prefix of a longer one sorts first */
+    return (ia < a->nlen) ? 1 : ((ib < b->nlen) ? -1 : 0);
+}
+
+void url_encoded_list_free(UrlEncodedList *l)
+{
+    int i;
+    for (i = 0; i < l->n; i++) { free(l->e[i].name); free(l->e[i].value); }
+    free(l->e);
+    l->e = NULL; l->n = l->cap = 0;
+}
+
+void url_encoded_list_append(UrlEncodedList *l, const char *name, size_t nn, const char *value, size_t vn)
+{
+    if (l->n >= l->cap) {
+        l->cap = l->cap ? l->cap * 2 : 8;
+        l->e = realloc(l->e, (size_t)l->cap * sizeof(UrlEncodedPair));
+        CHECK(l->e, "url: OOM growing the list");
+    }
+    l->e[l->n].name = url_encoded_strdup(name, nn);
+    l->e[l->n].value = url_encoded_strdup(value, vn);
+    l->e[l->n].nlen = nn;
+    l->e[l->n].vlen = vn;
+    l->n++;
+}
+
+/* ---- §5.1's application/x-www-form-urlencoded ------------------------------------------------------------ */
+
+/* THE PARSER. Split on `&`; each sequence splits at its FIRST `=` (and is all-name when it has none); `+`
+   becomes a space in BOTH halves and only then is the percent-decoding run. Doing the two in the other order
+   would decode a `%2B` into a `+` and then turn that into a space, which is a different string. */
+void url_encoded_parse(UrlEncodedList *out, const char *s, size_t len)
+{
+    size_t i = 0;
+    while (i <= len) {
+        size_t start = i, eq = (size_t)-1, end;
+        while (i < len && s[i] != '&') {
+            if (s[i] == '=' && eq == (size_t)-1) eq = i;
+            i++;
+        }
+        end = i;
+        i++;   /* past the '&' */
+        if (end == start) { if (end >= len) break; else continue; }   /* an empty sequence is skipped */
+        {
+            const char *nb = s + start, *vb = s + end;
+            size_t nn = (eq == (size_t)-1) ? end - start : eq - start;
+            size_t vn = (eq == (size_t)-1) ? 0 : end - eq - 1;
+            char *nplus = url_encoded_strdup(nb, nn), *vplus;
+            char *ndec, *vdec;
+            size_t ndn = 0, vdn = 0, k;
+            if (eq != (size_t)-1) vb = s + eq + 1;
+            vplus = url_encoded_strdup(vb, vn);
+            for (k = 0; k < nn; k++) if (nplus[k] == '+') nplus[k] = ' ';
+            for (k = 0; k < vn; k++) if (vplus[k] == '+') vplus[k] = ' ';
+            ndec = url_percent_decode(nplus, nn, &ndn);
+            vdec = url_percent_decode(vplus, vn, &vdn);
+            url_encoded_list_append(out, ndec, ndn, vdec, vdn);
+            free(nplus); free(vplus); free(ndec); free(vdec);
+        }
+        if (end >= len) break;
+    }
+}
+
+/* THE SERIALIZER. `name=value` joined by `&`, each half through the urlencoded encode set — whose own rule
+   writes SPACE as `+`, which is why that is in the set and not here. */
+char *url_encoded_serialize(const UrlEncodedList *l, size_t *out_n)
+{
+    char *out = NULL;
+    size_t cap = 0, n = 0;
+    int i;
+
+    for (i = 0; i < l->n; i++) {
+        char *en = url_percent_encode(l->e[i].name, l->e[i].nlen, URL_SET_URLENCODED);
+        char *ev = url_percent_encode(l->e[i].value, l->e[i].vlen, URL_SET_URLENCODED);
+        size_t need = strlen(en) + strlen(ev) + 3;
+        if (n + need > cap) {
+            cap = (n + need) * 2;
+            out = realloc(out, cap);
+            CHECK(out, "url: OOM serializing");
+        }
+        if (i) out[n++] = '&';
+        memcpy(out + n, en, strlen(en)); n += strlen(en);
+        out[n++] = '=';
+        memcpy(out + n, ev, strlen(ev)); n += strlen(ev);
+        out[n] = 0;
+        free(en); free(ev);
+    }
+    if (!out) { out = malloc(1); CHECK(out, "url: OOM"); out[0] = 0; }
+    if (out_n) *out_n = n;
+    return out;
+}
+
 
 /* ---- §5's URL interface ------------------------------------------------------------------------------------
  *

@@ -82,6 +82,15 @@ static void response_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_
 static ResponseData *response_of(JSValueConst v) { return JS_GetOpaque(v, g_response_class); }
 
 /* How §5.2's shared readers find this interface's body. */
+/* §5.2's `formData()` asks the including interface for its Content-Type, because only it knows where its
+   headers live. NULL when there is none, which is a body with no form encoding and therefore a TypeError. */
+static char *response_body_mime(JSContext *ctx, JSValueConst v)
+{
+    ResponseData *d = JS_GetOpaque(v, g_response_class);
+    (void)ctx;
+    return d ? header_list_get(headers_list_of(d->headers), "content-type") : NULL;
+}
+
 static BodyState *response_body_of(JSValueConst v)
 {
     ResponseData *d = JS_GetOpaque(v, g_response_class);
@@ -448,7 +457,7 @@ void response_init(JSContext *ctx)
     g_response_rt = rt;
     JS_NewClassID(rt, &g_response_class);
     JS_NewClass(rt, g_response_class, &def);
-    g_body_handle = body_declare(ctx, g_response_class, response_body_of, "Response");
+    g_body_handle = body_declare(ctx, g_response_class, response_body_of, response_body_mime, "Response");
     /* ONE PROTOTYPE, not a copy of the members per instance. They were own properties of each Response, which
        is not what Web IDL describes and is observable three ways: `Response.prototype.text` was absent,
        `delete r.text` removed the method, and every reply paid for eight property installs. */

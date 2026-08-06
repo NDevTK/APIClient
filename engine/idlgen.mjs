@@ -50,6 +50,7 @@ const INTERFACES = {
      members absent that both including interfaces have. */
   Response:            ["core/fetch/response.c", "core/fetch/body.c"],
   Request:             ["core/fetch/request.c", "core/fetch/body.c"],
+  FormData:            ["core/html/form_data.c", "core/idl_iter.c"],
   /* Headers exists and had no row, so the audit said nothing about it at all — which is the lying-by-omission
      this map's own comment names, and it was silent from the moment the component landed. */
   /* An `iterable<>` interface's keys/values/entries/forEach are installed by the SHARED default iterator

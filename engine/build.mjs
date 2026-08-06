@@ -132,7 +132,8 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     SOLVER("dom_cow.c"), SOLVER("attr_shadow.c"),                                // DOM time-travel delta + DOM-attribute taint shadow
     join(HOST, "browser", "core", "loader", "document_scripts.c"),               // Lexbor <script> inventory + bundle identity
     join(HOST, "browser", "core", "fetch", "fetch.c"),
-    join(HOST, "browser", "core", "fetch", "body.c"),                          // §5.2's Body mixin: one implementation, included by Request and Response
+    join(HOST, "browser", "core", "fetch", "body.c"),
+    join(HOST, "browser", "core", "html", "form_data.c"),                      // FormData: XHR §5's entry list, and what .formData() answers with                          // §5.2's Body mixin: one implementation, included by Request and Response
     join(HOST, "browser", "core", "fetch", "response.c"),
     join(HOST, "browser", "core", "fetch", "request.c"),                       // Request: §5.3, and where the request guards become observable                       // Response: the reply a fetch promises
     join(HOST, "browser", "core", "fetch", "headers.c"),                        // Headers: the header list an endpoint requires

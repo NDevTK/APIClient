@@ -22,8 +22,15 @@
 
 /* A PAIR CARRIES ITS LENGTHS, because a name or a value may contain U+0000 — `?a=b%00c` is one pair whose
    value is three characters, and every strlen in this file would have made it one. */
-typedef struct { char *name, *value; size_t nlen, vlen; } UspPair;
-typedef struct { UspPair *e; int n, cap; } UspList;
+/* §5.1's list is the URL Standard's and lives with it; this file is the INTERFACE over one. */
+typedef UrlEncodedPair UspPair;
+typedef UrlEncodedList UspList;
+#define usp_list_free    url_encoded_list_free
+#define usp_list_append  url_encoded_list_append
+#define usp_parse        url_encoded_parse
+#define usp_serialize    url_encoded_serialize
+#define usp_name_cmp     url_encoded_name_cmp
+#define usp_strdup       url_encoded_strdup
 
 /* The class opaque. `owner` is the URL wrapper this belongs to, or JS_UNDEFINED — see the file comment. */
 typedef struct { UspList list; JSValue owner; } UspObj;
@@ -33,138 +40,6 @@ static JSValue   g_usp_proto = JS_UNDEFINED;
 static JSRuntime *g_usp_rt;
 static int       g_usp_ctor_stepid = -1;
 static int       g_usp_pair_handle = -1;
-
-static char *usp_strdup(const char *s, size_t n)
-{
-    char *r = malloc(n + 1);
-    CHECK(r, "urlsearchparams: OOM copying a pair");
-    if (n) memcpy(r, s, n);
-    r[n] = 0;
-    return r;
-}
-
-/* §6.2 sorts by CODE UNITS, which is not UTF-8 byte order. The two disagree for exactly one range: a
-   supplementary code point (U+10000 and up) is a SURROGATE PAIR in UTF-16, so it sorts as 0xD800..0xDBFF —
-   BELOW U+E000..U+FFFF — while its UTF-8 encoding starts with 0xF0 and sorts above theirs. `ﬃ` (U+FB03) and
-   `🌈` (U+1F308) are that case, and byte order put them the wrong way round.
-   Decoding one code point at a time and mapping a supplementary to its HIGH SURROGATE is enough to order
-   them: two supplementaries with the same high surrogate differ in the low one, and the code point order
-   within a high-surrogate block matches the low-surrogate order. */
-static uint32_t usp_next_unit(const char *s, size_t n, size_t *i)
-{
-    unsigned char c = (unsigned char)s[*i];
-    uint32_t cp;
-    int extra;
-
-    if (c < 0x80)                { cp = c;          extra = 0; }
-    else if ((c & 0xe0) == 0xc0) { cp = c & 0x1f;   extra = 1; }
-    else if ((c & 0xf0) == 0xe0) { cp = c & 0x0f;   extra = 2; }
-    else                         { cp = c & 0x07;   extra = 3; }
-    (*i)++;
-    while (extra-- > 0 && *i < n && ((unsigned char)s[*i] & 0xc0) == 0x80)
-        cp = (cp << 6) | ((unsigned char)s[(*i)++] & 0x3f);
-    return cp >= 0x10000 ? 0xd800 + ((cp - 0x10000) >> 10) : cp;
-}
-
-static int usp_name_cmp(const UspPair *a, const UspPair *b)
-{
-    size_t ia = 0, ib = 0;
-    while (ia < a->nlen && ib < b->nlen) {
-        uint32_t ua = usp_next_unit(a->name, a->nlen, &ia);
-        uint32_t ub = usp_next_unit(b->name, b->nlen, &ib);
-        if (ua != ub) return ua < ub ? -1 : 1;
-    }
-    /* a shorter name that is a prefix of a longer one sorts first */
-    return (ia < a->nlen) ? 1 : ((ib < b->nlen) ? -1 : 0);
-}
-
-static void usp_list_free(UspList *l)
-{
-    int i;
-    for (i = 0; i < l->n; i++) { free(l->e[i].name); free(l->e[i].value); }
-    free(l->e);
-    l->e = NULL; l->n = l->cap = 0;
-}
-
-static void usp_list_append(UspList *l, const char *name, size_t nn, const char *value, size_t vn)
-{
-    if (l->n >= l->cap) {
-        l->cap = l->cap ? l->cap * 2 : 8;
-        l->e = realloc(l->e, (size_t)l->cap * sizeof(UspPair));
-        CHECK(l->e, "urlsearchparams: OOM growing the list");
-    }
-    l->e[l->n].name = usp_strdup(name, nn);
-    l->e[l->n].value = usp_strdup(value, vn);
-    l->e[l->n].nlen = nn;
-    l->e[l->n].vlen = vn;
-    l->n++;
-}
-
-/* ---- §5.1's application/x-www-form-urlencoded ------------------------------------------------------------ */
-
-/* THE PARSER. Split on `&`; each sequence splits at its FIRST `=` (and is all-name when it has none); `+`
-   becomes a space in BOTH halves and only then is the percent-decoding run. Doing the two in the other order
-   would decode a `%2B` into a `+` and then turn that into a space, which is a different string. */
-static void usp_parse(UspList *out, const char *s, size_t len)
-{
-    size_t i = 0;
-    while (i <= len) {
-        size_t start = i, eq = (size_t)-1, end;
-        while (i < len && s[i] != '&') {
-            if (s[i] == '=' && eq == (size_t)-1) eq = i;
-            i++;
-        }
-        end = i;
-        i++;   /* past the '&' */
-        if (end == start) { if (end >= len) break; else continue; }   /* an empty sequence is skipped */
-        {
-            const char *nb = s + start, *vb = s + end;
-            size_t nn = (eq == (size_t)-1) ? end - start : eq - start;
-            size_t vn = (eq == (size_t)-1) ? 0 : end - eq - 1;
-            char *nplus = usp_strdup(nb, nn), *vplus;
-            char *ndec, *vdec;
-            size_t ndn = 0, vdn = 0, k;
-            if (eq != (size_t)-1) vb = s + eq + 1;
-            vplus = usp_strdup(vb, vn);
-            for (k = 0; k < nn; k++) if (nplus[k] == '+') nplus[k] = ' ';
-            for (k = 0; k < vn; k++) if (vplus[k] == '+') vplus[k] = ' ';
-            ndec = url_percent_decode(nplus, nn, &ndn);
-            vdec = url_percent_decode(vplus, vn, &vdn);
-            usp_list_append(out, ndec, ndn, vdec, vdn);
-            free(nplus); free(vplus); free(ndec); free(vdec);
-        }
-        if (end >= len) break;
-    }
-}
-
-/* THE SERIALIZER. `name=value` joined by `&`, each half through the urlencoded encode set — whose own rule
-   writes SPACE as `+`, which is why that is in the set and not here. */
-static char *usp_serialize(const UspList *l, size_t *out_n)
-{
-    char *out = NULL;
-    size_t cap = 0, n = 0;
-    int i;
-
-    for (i = 0; i < l->n; i++) {
-        char *en = url_percent_encode(l->e[i].name, l->e[i].nlen, URL_SET_URLENCODED);
-        char *ev = url_percent_encode(l->e[i].value, l->e[i].vlen, URL_SET_URLENCODED);
-        size_t need = strlen(en) + strlen(ev) + 3;
-        if (n + need > cap) {
-            cap = (n + need) * 2;
-            out = realloc(out, cap);
-            CHECK(out, "urlsearchparams: OOM serializing");
-        }
-        if (i) out[n++] = '&';
-        memcpy(out + n, en, strlen(en)); n += strlen(en);
-        out[n++] = '=';
-        memcpy(out + n, ev, strlen(ev)); n += strlen(ev);
-        out[n] = 0;
-        free(en); free(ev);
-    }
-    if (!out) { out = malloc(1); CHECK(out, "urlsearchparams: OOM"); out[0] = 0; }
-    if (out_n) *out_n = n;
-    return out;
-}
 
 /* ---- the object ------------------------------------------------------------------------------------------ */
 

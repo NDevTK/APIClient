@@ -70,6 +70,15 @@ static void request_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_f
 
 static RequestData *request_of(JSValueConst v) { return JS_GetOpaque(v, g_request_class); }
 
+/* §5.2's `formData()` asks the including interface for its Content-Type, because only it knows where its
+   headers live. NULL when there is none, which is a body with no form encoding and therefore a TypeError. */
+static char *request_body_mime(JSContext *ctx, JSValueConst v)
+{
+    RequestData *d = JS_GetOpaque(v, g_request_class);
+    (void)ctx;
+    return d ? header_list_get(headers_list_of(d->headers), "content-type") : NULL;
+}
+
 static BodyState *request_body_of(JSValueConst v)
 {
     RequestData *d = JS_GetOpaque(v, g_request_class);
@@ -440,7 +449,7 @@ void request_init(JSContext *ctx)
     CHECK(!JS_IsException(g_request_proto), "Request.prototype could not be allocated");
     JS_SetPropertyFunctionList(ctx, g_request_proto, js_request_proto_funcs,
                                (int)(sizeof(js_request_proto_funcs) / sizeof(js_request_proto_funcs[0])));
-    g_request_body_handle = body_declare(ctx, g_request_class, request_body_of, "Request");
+    g_request_body_handle = body_declare(ctx, g_request_class, request_body_of, request_body_mime, "Request");
     body_install(ctx, g_request_proto, g_request_body_handle);
     g_request_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, REQUEST_INIT,
                                                (int)(sizeof(REQUEST_INIT) / sizeof(REQUEST_INIT[0])),

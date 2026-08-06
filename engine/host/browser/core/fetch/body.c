@@ -15,6 +15,11 @@
 #include "quickjs-step.h"
 #include "solver/cow.h"
 #include "core/fetch/body.h"
+#include "core/html/form_data.h"
+#include "core/url/url.h"
+
+/* §5.2's five readers. `arg` is which one; the INTERFACE comes from the receiver. */
+enum { BODY_TEXT = 0, BODY_JSON = 1, BODY_ARRAYBUFFER = 2, BODY_BYTES = 3, BODY_FORMDATA = 4, BODY_KINDS };
 
 /* One interface that includes Body. There are two in the platform (Request and Response), so the table is
    fixed and full is a DCHECK rather than a growth path nobody exercises. */
@@ -22,8 +27,9 @@
 typedef struct {
     JSClassID    class_id;
     BodyState *(*of)(JSValueConst v);
+    char      *(*mime)(JSContext *ctx, JSValueConst v);
     const char  *iface;
-    int          stepid[4];   /* one per reader kind */
+    int          stepid[BODY_KINDS];
 } BodyIface;
 
 static BodyIface g_body_iface[BODY_IFACE_MAX];
@@ -51,6 +57,34 @@ int body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len)
     if (len) memcpy(b->bytes, bytes, len);
     b->len = len;
     return 0;
+}
+
+/* A MIME type PARAMETER, which §5.2 needs exactly one of: `boundary`. Quoted or a token, and it must follow a
+   `;` so `boundary` does not match inside a longer parameter name. NULL when absent. */
+static const char *body_mime_param(const char *s, size_t n, const char *key, size_t *out_len)
+{
+    size_t klen = strlen(key), i;
+    for (i = 0; i + klen + 1 <= n; i++) {
+        size_t j;
+        if (strncasecmp(s + i, key, klen) || s[i + klen] != '=') continue;
+        j = i;
+        while (j > 0 && (s[j - 1] == ' ' || s[j - 1] == '\t')) j--;
+        if (j == 0 || s[j - 1] != ';') continue;
+        {
+            const char *v = s + i + klen + 1;
+            size_t rest = n - (size_t)(v - s);
+            if (rest && *v == '"') {
+                const char *q = memchr(v + 1, '"', rest - 1);
+                if (!q) return NULL;
+                *out_len = (size_t)(q - (v + 1));
+                return v + 1;
+            }
+            *out_len = strcspn(v, ";");
+            if (*out_len > rest) *out_len = rest;
+            return v;
+        }
+    }
+    return NULL;
 }
 
 /* §5.2 "consume body": the latch is per object and the second read is a TypeError — a page's retry path tests
@@ -87,7 +121,6 @@ static JSValue body_take(JSContext *ctx, const BodyIface *f, JSValueConst this_v
  * written in. The resolving function is a CALL REQUEST now, so the read happens on the tramp where it can
  * suspend and fork, and both readers share the one machine because they differ only in how the value is
  * computed. */
-enum { BODY_TEXT = 0, BODY_JSON = 1, BODY_ARRAYBUFFER = 2, BODY_BYTES = 3, BODY_KINDS };
 
 /* WHICH INTERFACE THE RECEIVER BELONGS TO is found from the receiver, not carried in the def's `arg`. Packing
    the pair into `arg` needed a def per (interface, kind) built at RUNTIME, and a runtime-assembled def is
@@ -182,6 +215,45 @@ static int js_body_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                      ? JS_NewUint8ArrayCopy(ctx, (const uint8_t *)body, len)
                      : JS_NewArrayBufferCopy(ctx, (const uint8_t *)body, len);
             if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
+        } else if (s->hdr.arg == BODY_FORMDATA) {
+            /* §5.2's formData(): WHICH PARSER runs is decided by the Content-Type, and a body whose type is
+               neither of the two form encodings is a TypeError rather than an empty FormData — a page that
+               calls formData() on a JSON reply has a bug, and answering with no entries would hide it. */
+            const BodyIface *f = body_iface_of(s->hdr.this_val);
+            char *mime = (f && f->mime) ? f->mime(ctx, s->hdr.this_val) : NULL;
+            const char *essence = mime ? mime : "";
+            size_t elen = strcspn(essence, ";");
+            while (elen && (essence[elen - 1] == ' ' || essence[elen - 1] == '\t')) elen--;
+            if (elen == (sizeof("application/x-www-form-urlencoded") - 1) &&
+                !strncasecmp(essence, "application/x-www-form-urlencoded", elen)) {
+                UrlEncodedList entries = { 0 };
+                url_encoded_parse(&entries, body, len);
+                s->value = form_data_new(ctx, &entries);
+                url_encoded_list_free(&entries);
+                if (JS_IsException(s->value)) { free(mime); return JS_STEP_ABRUPT; }
+            } else if (elen == (sizeof("multipart/form-data") - 1) &&
+                       !strncasecmp(essence, "multipart/form-data", elen)) {
+                /* The BOUNDARY is the Content-Type's own parameter; without one there is nothing to split on
+                   and §5.2 says failure, which is the same TypeError a wrong type gives. */
+                UrlEncodedList entries = { 0 };
+                size_t blen = 0;
+                const char *b = body_mime_param(mime ? mime : "", mime ? strlen(mime) : 0,
+                                                "boundary", &blen);
+                if (b && form_data_parse_multipart(body, len, b, blen, &entries) == 0) {
+                    s->value = form_data_new(ctx, &entries);
+                    url_encoded_list_free(&entries);
+                    if (JS_IsException(s->value)) { free(mime); return JS_STEP_ABRUPT; }
+                } else {
+                    JS_ThrowTypeError(ctx, "the multipart/form-data body could not be parsed");
+                    s->value = JS_GetException(ctx);
+                    reject = 1;
+                }
+            } else {
+                JS_ThrowTypeError(ctx, "the body's Content-Type is not a form encoding");
+                s->value = JS_GetException(ctx);
+                reject = 1;
+            }
+            free(mime);
         } else {
             /* §5.2's text(): UTF-8 decode, which is what JS_NewStringLen performs over the host's bytes. */
             DCHECK(s->hdr.arg == BODY_TEXT, "the body-read machine was declared with a kind it does not read");
@@ -209,16 +281,19 @@ static int js_body_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
    the whole of the difference between the eight. They are DECLARED as a list because that is what the
    registration and the install both walk: a fifth reader (§5.2's blob(), once there is a Blob) is one row here
    and nothing else, and a row that is added without a step arm reaches the step's own DCHECK. */
-static const char *const BODY_READER_NAME[BODY_KINDS] = { "text", "json", "arrayBuffer", "bytes" };
+static const char *const BODY_READER_NAME[BODY_KINDS] = { "text", "json", "arrayBuffer", "bytes",
+                                                         "formData" };
 
 static const JSTrampStepDef js_body_defs[BODY_KINDS] = {
     { sizeof(JSBodyState), js_body_step, js_body_fini, BODY_TEXT,        .visit = js_body_visit },
     { sizeof(JSBodyState), js_body_step, js_body_fini, BODY_JSON,        .visit = js_body_visit },
     { sizeof(JSBodyState), js_body_step, js_body_fini, BODY_ARRAYBUFFER, .visit = js_body_visit },
     { sizeof(JSBodyState), js_body_step, js_body_fini, BODY_BYTES,       .visit = js_body_visit },
+    { sizeof(JSBodyState), js_body_step, js_body_fini, BODY_FORMDATA,    .visit = js_body_visit },
 };
 
-int body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueConst v), const char *iface)
+int body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueConst v),
+                 char *(*mime)(JSContext *ctx, JSValueConst v), const char *iface)
 {
     JSRuntime *rt = JS_GetRuntime(ctx);
     int handle = g_body_iface_n, k;
@@ -230,6 +305,7 @@ int body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueCon
     f = &g_body_iface[handle];
     f->class_id = class_id;
     f->of = of;
+    f->mime = mime;
     f->iface = iface;
     for (k = 0; k < BODY_KINDS; k++) {
         /* ONE def per KIND, shared by every including interface — the step reads its receiver to know whose
