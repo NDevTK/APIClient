@@ -223,7 +223,15 @@ const args = [
   ...(process.argv.includes("asan")
       ? ["-fsanitize=address", "--profiling-funcs", "-sINITIAL_MEMORY=1073741824",
          ...(process.argv.includes("dwarf") ? ["-g"] : [])]
-      : ["-sALLOW_MEMORY_GROWTH=1"]),
+      /* THE ARCHITECTURE'S CEILING, not a budget. wasm32 addresses 4 GiB and emscripten stops the heap at 2 GiB
+         unless told otherwise, so the growth flag alone was a 2 GiB cap wearing the word "growth". The smoke
+         fixture's forced multi-path run measures 3.1 GiB of peak RSS natively BEFORE any of this session's
+         changes — the frontier holds every flow's COW delta in RAM because the smoke has no IDB cold tier to
+         page the low-value tail into — so the 2 GiB stop was already the thing about to fail, and a 12%
+         increase from Fetch's clone-as-tee is what crossed it. Raising it to what the address space actually
+         holds is the platform floor; the real answer for a frontier this size is the cold tier, which is the
+         scheduler's work and not a flag. */
+      : ["-sALLOW_MEMORY_GROWTH=1", "-sMAXIMUM_MEMORY=4294967296"]),
   "-sSTACK_SIZE=8388608",
   // The smoke entry RUNS on load and exits with the @H/@S pass code; the ABI entry is driven by the bridge
   // through ccall, so its runtime must stay alive across qjs_step re-entries and be importable as an ES module.
