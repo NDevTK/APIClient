@@ -404,11 +404,6 @@ static void wpt_report_exception(JSContext *ctx, const char *name, const char *w
     JS_FreeValue(ctx, e);
 }
 
-/* Child document ids this runner has handed out. It is the host here, and only a host may mint one: an engine
-   that minted its own would collide with the host's namespace, and carving the id space to avoid that caps how
-   many documents can exist. Starts above this runner's own document (1). */
-static uint32_t g_wpt_child_doc = 1;
-
 /* THE HOST'S HALF, pumped between resumes. A member that suspends on the host — HTML §7.4's `window.open`,
    whose child document id only the host knows — parks the flow on the pending register and returns to whoever
    is driving it. Here that is the loop below, so the answer is supplied there and the very next resume finds
@@ -425,13 +420,17 @@ static void wpt_answer_host_requests(JSContext *ctx)
         if (!tab || !end) break;
         id = (uint32_t)strtoul(p, NULL, 10);
         if (!strncmp(tab + 1, "navigable.create\t", 17)) {
-            char num[16];
-            snprintf(num, sizeof num, "%u", ++g_wpt_child_doc);
-            {
-                JSValue v = JS_NewString(ctx, num);
-                engine_host_answer(ctx, id, v);
-                JS_FreeValue(ctx, v);
-            }
+            /* §7.4 RETURNS NULL WHEN THE NAVIGABLE IS NOT CREATED — a popup blocker, a sandboxed context, or a
+               host that cannot host another document. This runner is the last of those: one document per
+               instance, and 20 components hold per-document singletons, so a second document cannot live in
+               this process.
+               IT MINTED AN ID BEFORE, and that was a fabrication — an id for a document nothing runs, handed
+               back as a WindowProxy whose every read has no answerer. Those reads then parked their flows
+               forever and three spec files stopped completing at all. Saying "not created" is the truthful
+               answer for a host that cannot, and it is the same one the extension's offscreen gives. */
+            JSValue v = JS_NewString(ctx, "0");
+            engine_host_answer(ctx, id, v);
+            JS_FreeValue(ctx, v);
         }
         /* An operation this harness does not implement is left UNANSWERED rather than guessed: the asking flow
            stays parked, which is visible, where a wrong answer is not. */
@@ -567,6 +566,7 @@ int main(int argc, char **argv)
     }
     window_install(ctx, global, "http://web-platform.test");
     window_proxy_init(ctx);
+    window_proxy_install_members(ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
     window_message_install(ctx, global, "http://web-platform.test");
     navigable_install(ctx, global, "http://web-platform.test");   /* HTML 7.4 */
     message_port_init(ctx);

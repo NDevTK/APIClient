@@ -36,6 +36,10 @@
 #include "core/frame/window_proxy.h"
 #include "solver/cow.h"
 #include "solver/world.h"
+#include "solver/engine.h"
+#include "solver/flow.h"
+#include "core/idl_args.h"
+#include <stdio.h>
 
 /* §7.2.5.1's [[Window]] and the origin its same-origin check reads. BOTH are per-flow — see the file comment —
    which is the whole reason this is a record behind a class rather than a property on an object. */
@@ -216,6 +220,84 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSValueConst wind
     p->window = JS_DupValue(ctx, window);
     p->origin = proxy_strdup(origin ? origin : "null");
     p->doc = world_local_doc();
+}
+
+
+/* §7.2.5.1's [[Get]] ACROSS INSTANCES — the read this file's comment has named as "the seam" since it was
+ * written, built rather than crashed on.
+ *
+ * WHY IT IS A STEP MACHINE. `otherWindow.closed` must answer at its own call site, and the navigable's active
+ * document is in ANOTHER WASM instance, so the answer is not available in this turn. There is exactly one shape
+ * in this engine that can suspend and answer at the same call site, and this is it: post the question on the
+ * flow's pending register, return JS_STEP_YIELD, and the scheduler parks the flow — byte-identical, at any
+ * depth — while its siblings run. The host routes it to the instance holding that document, because SECURITY.md
+ * makes the trusted zone the only thing that knows which instance that is.
+ *
+ * THE WORLD TRAVELS WITH IT. The question is not "what is document 7's `closed`" but "what is it in THIS FLOW'S
+ * world" — two arms of a fork that closed the window differently must get different answers, which is the same
+ * reason a fork re-issues an unanswered request under its own world rather than sharing the id.
+ *
+ * A LOCAL PROXY DOES NOT COME HERE. It forwards to its Window with an ordinary read, in this turn, with no
+ * suspension at all — which is what §7.2.5.1 says for a same-origin, same-instance navigable and what makes
+ * `window.closed` cost nothing. */
+typedef struct { uint32_t req; } ProxyGetState;
+
+static void proxy_get_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
+
+/* The §7.2.5.1 members this proxy answers, by magic. The CROSS-ORIGIN whitelist is the set that must work
+   through a proxy whatever the origins are, so it is what the remote path carries. */
+static const char *const PROXY_MEMBER[] = { "closed", "length", "name", "opener" };
+
+static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                          JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    ProxyGetState *s = st;
+    JSValueConst answer;
+    int magic = idl_step_magic(hdr);
+    ProxyData *p;
+
+    (void)argc; (void)argv; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    DCHECK(magic >= 0 && magic < (int)(sizeof PROXY_MEMBER / sizeof PROXY_MEMBER[0]),
+           "a WindowProxy member was declared with a magic this component does not name");
+
+    p = JS_GetOpaque(hdr->this_val, g_proxy_class);
+    if (!p) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+
+    /* THE LOCAL CASE, answered in this turn: an ordinary read of the navigable's own Window. */
+    if (p->doc == world_local_doc()) {
+        DCHECK(!JS_IsUndefined(p->window),
+               "a local WindowProxy carries no Window — its document id and its binding disagree");
+        *presult = JS_GetPropertyStr(ctx, p->window, PROXY_MEMBER[magic]);
+        return JS_IsException(*presult) ? JS_STEP_ABRUPT : JS_STEP_DONE;
+    }
+
+    if (s->req == 0) {
+        char op[128];
+        Flow *f = flow_running();
+        DCHECK(f != NULL, "a cross-document read was issued outside a flow — there would be nothing to suspend");
+        /* (document, world, member). The world is the flow's, because the answer is only true in it. */
+        snprintf(op, sizeof op, "windowproxy.get\t%u\t%u:%u\t%s",
+                 p->doc, f->world.doc, f->world.serial, PROXY_MEMBER[magic]);
+        s->req = engine_host_request(ctx, op);
+        return JS_STEP_YIELD;   /* park; siblings run until the peer answers */
+    }
+    if (!engine_host_answered(s->req, &answer))
+        return JS_STEP_YIELD;
+    *presult = engine_host_take(ctx, s->req);
+    s->req = 0;
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl PROXY_GET_DECL = { proxy_get_step, sizeof(ProxyGetState), proxy_get_visit, NULL };
+
+void window_proxy_install_members(JSContext *ctx)
+{
+    size_t i;
+    DCHECK(g_wp_rt != NULL, "WindowProxy members were installed before window_proxy_init ran");
+    for (i = 0; i < sizeof PROXY_MEMBER / sizeof PROXY_MEMBER[0]; i++)
+        idl_install_accessor_step(ctx, g_proxy_proto, PROXY_MEMBER[i],
+                                  idl_getter_id_step(ctx, &PROXY_GET_DECL, (int)i), -1);
 }
 
 void window_proxy_init(JSContext *ctx)

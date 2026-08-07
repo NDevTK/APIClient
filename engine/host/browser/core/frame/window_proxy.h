@@ -21,6 +21,12 @@ JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const char *origin
    (postMessage) installs it where every proxy sees it, and `a.postMessage === b.postMessage` holds. */
 JSValueConst window_proxy_proto(void);
 
+/* §7.2.5.1's members on that prototype — `closed`, `length`, `name`, `opener`. A LOCAL proxy answers each by
+   reading its own Window in this turn; a REMOTE one SUSPENDS the flow on a host request carrying (document,
+   world, member) and resumes with the peer's answer. Installed separately from init because it needs the IDL
+   declaration machinery, which is not up when the class is registered. */
+void window_proxy_install_members(JSContext *ctx);
+
 /* IS THIS A WindowProxy? MessageEvent's `source` union names one, and §9.4.4's post takes one as its target. */
 bool window_proxy_is(JSValueConst v);
 

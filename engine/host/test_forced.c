@@ -1161,6 +1161,13 @@ static const char *HTML =
     /* §7.4: a child navigable. `open()` SUSPENDS — its document id can only come from the host — and resumes
        holding a WindowProxy for a document in ANOTHER instance, so the proxy reports itself remote. */
     "var _w = open(); fetch('/api/navopen?v=' + (_w ? 'proxy' : 'null'));"
+    /* §7.2.5.1 ACROSS INSTANCES: the child's document lives in another instance, so this read SUSPENDS the
+       flow, the peer answers, and the flow resumes with the value AT THE CALL SITE — `false`, not undefined. */
+    /* The TYPES matter as much as the values: an answer that came back as the string "false" would satisfy a
+       loose check and prove only that bytes moved. `=== false` and `=== 0` say the peer's value arrived as
+       itself. */
+    "fetch('/api/xdocread?v=' + (_w.closed === false && _w.length === 0 &&"
+    " typeof _w.closed === 'boolean' && typeof _w.length === 'number' ? 'xread' : 'wrong'));"
     "</script>"
     "</body></html>";
 
@@ -1458,16 +1465,35 @@ static int hostreq_answer_all(JSContext *ctx)
         id = (uint32_t)strtoul(p, NULL, 10);
         {
             JSValue v;
-            /* §7.4: THE HOST MINTS THE CHILD'S DOCUMENT ID, because only the host knows what ids exist. The
-               engine must not mint one — a local counter collides with the host's namespace, and carving the
-               id space to avoid that is a cap on how many documents there can be. */
-            if (!strncmp(tab + 1, "navigable.create\t", 17)) {
+            if (!strncmp(tab + 1, "windowproxy.get\t", 16)) {
+                /* THE PEER'S HALF of §7.2.5.1's cross-instance [[Get]]. A real host routes this to the
+                   instance holding that document and answers under the named world; this fixture stands in for
+                   that peer exactly as it stands in for the network, so the SUSPEND/RESUME path is exercised
+                   end to end without a second instance. The member is the last tab-separated field. */
+                /* BOUNDED TO THIS RECORD. The joined buffer is `id<TAB>op<NL>` repeated, so it is NOT
+                   NUL-terminated at the newline — an strrchr from the op start finds the last tab in every
+                   record that follows, and the member read was a field of some later request. Scan back from
+                   this record's end instead. */
+                const char *last = end;
+                size_t mlen;
+                while (last > tab && last[-1] != '\t') last--;
+                mlen = (size_t)(end - last);
+                v = (mlen == 6 && !memcmp(last, "closed", 6)) ? JS_FALSE
+                  : (mlen == 6 && !memcmp(last, "length", 6)) ? JS_NewInt32(ctx, 0)
+                                                              : JS_NULL;
+            } else if (!strncmp(tab + 1, "navigable.create\t", 17)) {
+                /* §7.4: THE HOST MINTS THE CHILD'S DOCUMENT ID, because only the host knows what ids exist. The
+                   engine must not mint one — a local counter collides with the host's namespace, and carving
+                   the id space to avoid that is a cap on how many documents there can be. */
                 char num[16];
                 snprintf(num, sizeof num, "%u", ++g_fixture_child_doc);
                 v = JS_NewString(ctx, num);
             } else {
                 v = JS_NewStringLen(ctx, tab + 1, (size_t)(end - tab - 1));
             }
+            /* ONE ANSWER PER REQUEST. Answering inside a branch AND here answered twice, which the engine's own
+               assert named at the site — a second answer would overwrite a value the asking machine may
+               already have read. */
             n += engine_host_answer(ctx, id, v);
             JS_FreeValue(ctx, v);
         }
@@ -1508,6 +1534,7 @@ int main(void) {
     /* §7.4's `window.open`, whose child document id can only come from the host — so the call SUSPENDS and the
        flow resumes holding a WindowProxy for a document in another instance. */
     window_proxy_init(ctx);
+    window_proxy_install_members(ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
     navigable_install(ctx, g, "https://x.test");
     /* THE SYNCHRONOUS HOST READ. A DECLARED step member, because suspending and answering at the same call
        site is the only thing a plain C body cannot do. */
@@ -1770,6 +1797,8 @@ int main(void) {
     int hostreqfork_tt = (strstr(js, "\"/api/hostreqfork\"") && strstr(js, "hrA") && strstr(js, "hrP"));
     /* §7.4 returned a WindowProxy for a child document the host minted, after suspending for it. */
     int navopen_tt = (strstr(js, "\"/api/navopen\"") && strstr(js, "proxy"));
+    /* A cross-document read suspended and resumed with the peer's answer. */
+    int xdocread_tt = (strstr(js, "\"/api/xdocread\"") && strstr(js, "xread"));
 
     /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
        both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one
@@ -1968,7 +1997,7 @@ int main(void) {
         { "rerepfork", rerepfork_tt, 1 },  { "gcallfork", gcallfork_tt, 1 },
         { "gapplyfork", gapplyfork_tt, 1 },{ "grefapplyfork", grefapplyfork_tt, 1 },
         { "hostreq", hostreq_tt, 1 }, { "hostreq-fork", hostreqfork_tt, 1 },
-        { "nav-open", navopen_tt, 1 },
+        { "nav-open", navopen_tt, 1 }, { "xdoc-read", xdocread_tt, 1 },
     };
     int h_ok = 1;
     printf("@H ");

@@ -179,6 +179,7 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
            the zone that knows what documents exist — and returns a WindowProxy for a document in another
            instance. The proxy class has to exist before any proxy is minted. */
         window_proxy_init(g_ctx);
+    window_proxy_install_members(g_ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
         navigable_install(g_ctx, g, origin);
         /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
         unhandled_rejection_init(g_ctx);
