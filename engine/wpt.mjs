@@ -282,6 +282,17 @@ for (const f of files) {
     failures.push(`  ERROR  ${rel}\n         ${err[1].slice(0, 200)}`);
     continue;
   }
+  /* A FILE THAT NEVER COMPLETED IS NOT A FILE WITH NOTHING IN IT. testharness reports through its completion
+     callback, so a run that ends without @WPTDONE — an async test that never settles, a harness that never
+     reached all_done — emitted no @WPT lines at all and contributed ZERO to every column. It read as though the
+     file held no tests, which is the same silent truncation as leaving a directory out of the checkout: the
+     number goes down and nothing says why. It is counted and NAMED. */
+  if (!abortedHere && !/^@WPTDONE /m.test(out)) {
+    aborted++;
+    failures.push(`  ABORT  ${rel}\n         the harness never completed — no @WPTDONE, so its ` +
+                  `${filePass + fileFail} reported subtest(s) are not the whole file`);
+    continue;
+  }
   pass += filePass;
   fail += fileFail;
 }

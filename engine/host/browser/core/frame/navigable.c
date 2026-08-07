@@ -40,12 +40,17 @@ static void open_release(JSContext *ctx, void *st)
 static char *child_origin(const char *url)
 {
     UrlRecord base, rec;
-    const char *base_url = document_base_url();
+    const char *base_url;
     char *o = NULL;
     bool have_base;
 
+    /* THE about:blank CASE ANSWERS WITHOUT A BASE, and must be checked FIRST. Reading the document's address
+       up here evaluated it even for `open()` with no argument — the one call that needs no address at all —
+       and in a host with no document installed that is an assert, not a value. It aborted sixteen spec files
+       whose only sin was calling open(). */
     if (!url || !*url || !strcmp(url, "about:blank"))
         return g_origin ? strdup(g_origin) : strdup("null");
+    base_url = document_base_url();
     /* RESOLVED AGAINST THE DOCUMENT'S BASE, because `open("/admin")` is how most of the real uses of this
        method are written and a relative URL has no origin of its own. */
     url_record_init(&base);
