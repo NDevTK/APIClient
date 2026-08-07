@@ -30,6 +30,7 @@
 #include "core/fetch/headers.h"
 #include "core/fetch/body.h"
 #include "core/fetch/response.h"
+#include "core/streams/readable_stream.h"
 #include "core/fetch/request.h"
 
 /* The id JS_RegisterStepDef handed this runtime, and the two IDL attribute names the machine reads by. Atoms
@@ -562,6 +563,12 @@ void fetch_install(JSContext *ctx, JSValueConst global)
         /* The reply's delivery, declared once for the runtime — every parked fetch mints a CLOSURE over this
            one definition rather than a definition per request. */
         g_deliver_stepid = JS_RegisterStepDef(rt, &js_fetch_deliver_def);
+        /* §5.2's BODY IS A STREAM — `.body` answers one, and "clone a body" tees one — so §4 is not an
+           optional neighbour of this component, it is a dependency. Each host installing it separately meant
+           the dependency held only where a host had remembered: test_forced's fixture reached `res.clone()`
+           with §4's class ids never minted and aborted at the DCHECK that says so. Init is idempotent per
+           runtime; the GLOBAL is still the host's to expose or not. */
+        readable_stream_init(ctx);
         response_init(ctx);
         headers_init(ctx);
         request_init(ctx);
