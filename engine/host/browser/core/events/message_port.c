@@ -35,15 +35,23 @@
 #include "core/events/message_port.h"
 #include "solver/cow.h"
 
-/* One queued message: the bytes StructuredSerialize produced, not the value. See the file comment. */
-typedef struct PortMsg { StructuredData data; struct PortMsg *next; } PortMsg;
-
 typedef struct {
     JSValue entangled;   /* §9.4.2's entangled port, or JS_UNDEFINED once closed (owned) */
-    /* §9.4.2's PORT MESSAGE QUEUE, and its enabled flag. A singly-linked list rather than a JS Array because
-       what it holds is not a JS value — it is a serialized record, which the collector has no business
-       tracing and which no page can reach. */
-    PortMsg *head, *tail;
+    /* §9.4.2's PORT MESSAGE QUEUE: an Array of ArrayBuffers, each one message as StructuredSerialize left it,
+       and `head` how many have been taken. §4.2's stream queue is the same shape for the same reasons, and the
+       reasons are why this is NOT the malloc'd linked list it started as:
+         - A QUEUED MESSAGE IS FRONTIER DATA. It is immutable, it belongs to the flow that will read it, and it
+           has to survive being parked to disk and resumed in another session. A malloc'd node can do none of
+           that; a JS value is exactly what the snapshot machinery already carries.
+         - IT HAS TO TIME-TRAVEL, and an Array does that for free — its mutations are property writes the COW
+           delta already captures, so one forked arm's post is invisible to its sibling. The record's own head
+           index rides the record capture. A raw `head`/`tail` pointer pair captured as bytes reverted the
+           POINTERS on a context switch and left the NODES reachable from nothing: every message a flow queued
+           was leaked when its delta was freed, and being C memory rather than GC objects, the runtime's own
+           leak walk could not see it.
+         - The collector owns the bytes, so there is no second ownership contract to get wrong. */
+    JSValue queue;
+    uint32_t head;
     uint8_t enabled;     /* §9.4.2: the queue starts DISABLED */
     uint8_t detached;    /* §9.4.2's [[Detached]], set by close() */
 } PortData;
@@ -61,8 +69,26 @@ static JSValue   g_deliver_fn = JS_UNDEFINED;   /* the queued delivery task's ca
    components give: a record a flow has reached is one it may write, and there is then no write site to miss.
    The offset list is the same list the finalizer frees. */
 #define MP_OFF(f) (uint16_t)offsetof(PortData, f)
-static const uint16_t PORT_VALS[] = { MP_OFF(entangled) };
-static const CowRecord PORT_REC = { sizeof(PortData), PORT_VALS, 1 };
+static const uint16_t PORT_VALS[] = { MP_OFF(entangled), MP_OFF(queue) };
+static const CowRecord PORT_REC = { sizeof(PortData), PORT_VALS, 2 };
+
+/* HOW MANY MESSAGES THE QUEUE HOLDS, building the Array on first use. Lazy because most ports never receive
+   one and an Array per port is not free; the record's slot is JS_UNDEFINED until then. Returns 0 with an
+   exception live. */
+static int port_queue_len(JSContext *ctx, PortData *d, uint32_t *pn)
+{
+    JSValue len;
+    if (JS_IsUndefined(d->queue)) {
+        d->queue = JS_NewArray(ctx);
+        if (JS_IsException(d->queue)) { d->queue = JS_UNDEFINED; return 0; }
+    }
+    len = JS_GetPropertyStr(ctx, d->queue, "length");
+    if (JS_IsException(len)) return 0;
+    *pn = 0;
+    if (JS_ToUint32(ctx, pn, len) < 0) { JS_FreeValue(ctx, len); return 0; }
+    JS_FreeValue(ctx, len);
+    return 1;
+}
 
 static PortData *port_of(JSValueConst v)
 {
@@ -76,29 +102,12 @@ bool message_port_is(JSValueConst v)
     return g_port_class != 0 && JS_GetOpaque(v, g_port_class) != NULL;
 }
 
-static void port_queue_free(JSRuntime *rt, PortData *d)
-{
-    JSContext *ctx = NULL;
-    PortMsg *m = d->head;
-    (void)rt;
-    while (m) {
-        PortMsg *next = m->next;
-        /* The bytes came from js_malloc through the CONTEXT, and a finalizer has none — the runtime's free is
-           the same allocator seen without one, which is what JS_FreeValueRT is to JS_FreeValue. */
-        js_free_rt(rt, m->data.buf);
-        free(m);
-        m = next;
-    }
-    d->head = d->tail = NULL;
-    (void)ctx;
-}
-
 static void port_finalizer(JSRuntime *rt, JSValue val)
 {
     PortData *d = JS_GetOpaque(val, g_port_class);
     if (!d) return;
     JS_FreeValueRT(rt, d->entangled);
-    port_queue_free(rt, d);
+    JS_FreeValueRT(rt, d->queue);
     free(d);
 }
 
@@ -109,6 +118,7 @@ static void port_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func
     /* THE PAIR IS A CYCLE: each port holds the other. Without this, an entangled pair is unreachable to the
        collector and every MessageChannel a page makes is a leak the runtime's own walk reports. */
     JS_MarkValue(rt, d->entangled, mark_func);
+    JS_MarkValue(rt, d->queue, mark_func);
 }
 
 /* ---- delivery ----------------------------------------------------------------------------------------------
@@ -121,21 +131,25 @@ static JSValue js_port_deliver(JSContext *ctx, JSValueConst this_val, int argc, 
 {
     JSValueConst port = argc > 0 ? argv[0] : JS_UNDEFINED;
     PortData *d = port_of(port);
-    PortMsg *m;
-    JSValue data, ev;
+    JSValue data, ev, buf;
+    StructuredData sd;
+    uint32_t n = 0;
+    size_t blen = 0;
 
     (void)this_val;
     /* The port may have been closed, or its queue disabled again, between the enqueue and now — the task is in
        the queue and the state is the port's, so the state is what decides. */
-    if (!d || !d->enabled || !d->head)
+    if (!d || !d->enabled || !port_queue_len(ctx, d, &n) || d->head >= n)
         return JS_UNDEFINED;
-    m = d->head;
-    d->head = m->next;
-    if (!d->head) d->tail = NULL;
-
-    data = structured_deserialize(ctx, &m->data);
-    js_free(ctx, m->data.buf);
-    free(m);
+    buf = JS_GetPropertyUint32(ctx, d->queue, d->head);
+    d->head++;
+    /* The Array's own element, read with no page code in the way: this component built the array and nothing
+       else can reach it. The bytes are BORROWED for the deserialize — the buffer owns them. */
+    sd.buf = JS_GetArrayBuffer(ctx, &blen, buf);
+    sd.len = blen;
+    DCHECK(sd.buf != NULL, "a port's queue held something that is not the serialized message it stored");
+    data = structured_deserialize(ctx, &sd);
+    JS_FreeValue(ctx, buf);
     if (JS_IsException(data)) {
         /* §9.4.2: a message that cannot be deserialized fires `messageerror` rather than `message`. This
            engine's deserializer only fails where its own writer and reader disagree, which crashes instead —
@@ -166,10 +180,11 @@ static void port_enqueue_delivery(JSContext *ctx, JSValueConst port)
 /* §9.4.2's "enable this's port message queue": everything already in it becomes a task, in order. */
 static void port_enable(JSContext *ctx, JSValueConst port, PortData *d)
 {
-    PortMsg *m;
+    uint32_t n = 0, i;
     if (d->enabled) return;
     d->enabled = 1;
-    for (m = d->head; m; m = m->next)
+    if (!port_queue_len(ctx, d, &n)) return;
+    for (i = d->head; i < n; i++)
         port_enqueue_delivery(ctx, port);
 }
 
@@ -181,7 +196,6 @@ static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
     PortData *d = port_of(this_val), *t;
     JSValueConst opts = argc > 1 ? argv[1] : JS_UNDEFINED;
     JSValueConst target;
-    PortMsg *m;
     StructuredData sd;
 
     (void)magic;
@@ -218,12 +232,17 @@ static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
     t = JS_IsUndefined(target) ? NULL : port_of(target);
     if (!t) { structured_data_free(ctx, &sd); return JS_UNDEFINED; }
 
-    m = malloc(sizeof *m);
-    CHECK(m != NULL, "message port: OOM queueing a message — a dropped message is a message the page sent");
-    m->data = sd;
-    m->next = NULL;
-    if (t->tail) t->tail->next = m; else t->head = m;
-    t->tail = m;
+    {
+        /* The bytes become an ArrayBuffer the collector owns — see the queue's comment. NewArrayBufferCopy
+           rather than handing the malloc'd block over, because the block is js_malloc'd and an ArrayBuffer
+           that adopts a pointer owns it with its own free. */
+        JSValue buf = JS_NewArrayBufferCopy(ctx, sd.buf, sd.len);
+        uint32_t n = 0;
+        structured_data_free(ctx, &sd);
+        if (JS_IsException(buf)) return JS_EXCEPTION;
+        if (!port_queue_len(ctx, t, &n)) { JS_FreeValue(ctx, buf); return JS_EXCEPTION; }
+        JS_SetPropertyUint32(ctx, t->queue, n, buf);
+    }
     if (t->enabled)
         port_enqueue_delivery(ctx, target);
     return JS_UNDEFINED;
@@ -282,7 +301,7 @@ static JSValue port_new(JSContext *ctx)
     if (JS_IsException(obj)) return obj;
     d = calloc(1, sizeof *d);
     CHECK(d != NULL, "message port: OOM building a MessagePort");
-    d->entangled = JS_UNDEFINED;
+    d->entangled = d->queue = JS_UNDEFINED;
     JS_SetOpaque(obj, d);
     return obj;
 }
