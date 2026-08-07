@@ -53,6 +53,14 @@ typedef struct {
 
 static JSClassID g_proxy_class;
 static JSRuntime *g_wp_rt;
+/* §7.2.5.1's member surface. A WindowProxy has no own properties — it FORWARDS to its navigable's active
+   Window — and what may be reached through it depends on whether the accessor and that Window are same origin.
+   The cross-origin-accessible surface is a fixed whitelist, and `postMessage` is the member of it that carries
+   this engine's whole cross-document story, so it is the one installed here. The same-origin case forwards
+   everything, and forwarding a read to a document in another instance is the suspend the engine does not have
+   yet — window_proxy_window crashes there naming it, rather than a prototype answering with the wrong Window.
+   Held so every proxy shares one, which is also what makes `a.postMessage === b.postMessage` true. */
+static JSValue g_proxy_proto = JS_UNINITIALIZED;
 
 #define WP_OFF(f) (uint16_t)offsetof(ProxyData, f)
 static const uint16_t PROXY_VALS[] = { WP_OFF(window) };
@@ -124,6 +132,7 @@ JSValue window_proxy_new(JSContext *ctx, JSValueConst window, const char *origin
     DCHECK(g_wp_rt != NULL, "a WindowProxy was minted before window_proxy_init ran");
     obj = JS_NewObjectClass(ctx, g_proxy_class);
     if (JS_IsException(obj)) return obj;
+    JS_SetPrototype(ctx, obj, g_proxy_proto);
     p = calloc(1, sizeof *p);
     CHECK(p != NULL, "window proxy: OOM building a WindowProxy");
     p->window = JS_DupValue(ctx, window);
@@ -146,6 +155,7 @@ JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const char *origin
            "carries the live Window");
     obj = JS_NewObjectClass(ctx, g_proxy_class);
     if (JS_IsException(obj)) return obj;
+    JS_SetPrototype(ctx, obj, g_proxy_proto);
     p = calloc(1, sizeof *p);
     CHECK(p != NULL, "window proxy: OOM building a remote WindowProxy");
     p->window = JS_UNDEFINED;   /* it lives in another instance; there is nothing local to hold */
@@ -218,14 +228,23 @@ void window_proxy_init(JSContext *ctx)
     g_wp_rt = rt;
     JS_NewClassID(rt, &g_proxy_class);
     JS_NewClass(rt, g_proxy_class, &d);
+    g_proxy_proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(g_proxy_proto), "the WindowProxy prototype could not be allocated");
+}
+
+JSValueConst window_proxy_proto(void)
+{
+    DCHECK(g_wp_rt != NULL, "the WindowProxy prototype was asked for before window_proxy_init ran");
+    return g_proxy_proto;
 }
 
 void window_proxy_free(JSContext *ctx)
 {
     OwnedStr *e = g_strings;
-    (void)ctx;
     if (!g_wp_rt) return;
     while (e) { OwnedStr *n = e->next; free(e->s); free(e); e = n; }
     g_strings = NULL;
+    JS_FreeValue(ctx, g_proxy_proto);
+    g_proxy_proto = JS_UNINITIALIZED;
     g_wp_rt = NULL;
 }

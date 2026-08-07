@@ -123,8 +123,15 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     JSValue list = JS_UNDEFINED, want = JS_NULL, entry, buf;
     StructuredWithTransfer swt;
     const char *to = NULL;
+    /* §9.4.4 POSTS TO THE WINDOW IT WAS CALLED ON, and the receiver is how that is known. This discarded
+       `this_val` and always delivered to THIS window, so `iframe.contentWindow.postMessage(m, "*")` — which is
+       most of the real uses of this method — fired the message at the sender. Nothing could be routed by a
+       target that was never read. `window.postMessage(...)` calls it on the global, which is this navigable's
+       own proxy; a call on a proxy targets that proxy. */
+    JSValueConst target = window_proxy_is(this_val) ? this_val : g_proxy;
 
-    (void)magic; (void)this_val;
+    (void)magic;
+    DCHECK(!JS_IsUndefined(target), "postMessage ran before this window's WindowProxy existed");
     /* THE TWO OVERLOADS. A STRING second argument is the legacy targetOrigin form, with the transfer list
        third; anything else is the options dictionary. A page still writing `postMessage(m, '*')` is most of
        the code that uses this at all, so it is not a legacy path in any practical sense. */
@@ -192,7 +199,18 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
        awaits observes its own continuation first, which is the ordering the event loop's two halves exist for. */
     {
         JSValueConst args[2];
-        args[0] = g_proxy;   /* the target navigable; the same-window case, which is what is built */
+        /* THE RESOLVED TARGET, not this window. A task in THIS instance can only deliver to a navigable this
+           instance holds; a proxy naming another document needs the message ROUTED there, which is an
+           EMISSION — the bytes are already serialized and immutable, so nothing has to un-send it when this
+           flow parks or is outranked, and it needs no COW capture. What it still needs is the host: only the
+           trusted zone knows which instance holds that document, and only it may stamp the sender's origin
+           (a forgeable event.origin would defeat every origin check in every bundle this solver reads). */
+        DCHECK(!window_proxy_is_remote(target),
+               "postMessage targets a navigable in ANOTHER WASM instance — build the outbound route: the "
+               "serialized bytes, the sender origin stamped by the trusted zone, and the SENDING FLOW'S WORLD "
+               "go to the host, which seeds a delivery flow in the peer whose world is receiver-baseline and "
+               "that vector, because two arms of a fork post two messages from two contradictory worlds");
+        args[0] = target;
         args[1] = entry;
         JS_EnqueueCallTask(ctx, g_deliver_fn, 2, args);
         JS_FreeValue(ctx, entry);
@@ -213,9 +231,16 @@ void window_message_install(JSContext *ctx, JSValueConst global, const char *ori
     CHECK(!JS_IsException(g_proxy), "this window's WindowProxy could not be allocated");
     g_deliver_fn = JS_NewCFunction(ctx, js_window_deliver, "", 2);
     CHECK(JS_IsFunction(ctx, g_deliver_fn), "the window delivery task's callee could not be allocated");
-    idl_install_method(ctx, global, "postMessage", 1,
-                       idl_method_id(ctx, POST_ARGS, 3, js_window_post, 0));
-    idl_optional_from(1);
+    {
+        /* ONE DECLARATION, TWO PLACES IT IS REACHED — the global (`window.postMessage`) and every WindowProxy
+           (`otherWindow.postMessage`). Declaring it twice would give the two spellings two members that can
+           drift, and `window.postMessage === self.postMessage` would stop holding. */
+        int id = idl_method_id(ctx, POST_ARGS, 3, js_window_post, 0);
+        idl_install_method(ctx, global, "postMessage", 1, id);
+        idl_optional_from(1);
+        idl_install_method(ctx, window_proxy_proto(), "postMessage", 1, id);
+        idl_optional_from(1);
+    }
 }
 
 JSValueConst window_message_proxy(void)

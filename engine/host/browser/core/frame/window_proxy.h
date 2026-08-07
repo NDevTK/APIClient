@@ -17,6 +17,10 @@ JSValue window_proxy_new(JSContext *ctx, JSValueConst window, const char *origin
    is no local object to hold — so every read through it is a cross-document operation the flow suspends on. */
 JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const char *origin);
 
+/* §7.2.5.1's shared member surface, so a component that owns one of the cross-origin-accessible members
+   (postMessage) installs it where every proxy sees it, and `a.postMessage === b.postMessage` holds. */
+JSValueConst window_proxy_proto(void);
+
 /* IS THIS A WindowProxy? MessageEvent's `source` union names one, and §9.4.4's post takes one as its target. */
 bool window_proxy_is(JSValueConst v);
 
