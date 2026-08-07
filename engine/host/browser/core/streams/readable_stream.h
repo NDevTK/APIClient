@@ -31,6 +31,18 @@ bool readable_stream_is(JSValueConst v);
 typedef enum { RS_OP_GET_READER = 0, RS_OP_READ, RS_OP_RELEASE, RS_OP_CANCEL, RS_OP_N } ReadableStreamOp;
 JSValueConst readable_stream_op(ReadableStreamOp which);
 
+/* §4.9.4's CreateReadableStream, and the START that is deliberately not part of it — see readable_stream.c.
+   The algorithms are the CALLER's function objects, called with the arguments the matching underlying-source
+   member takes and with `this` = undefined; §6's TransformStream is built out of exactly this, because a
+   transform stream's readable half has no source object at all. All are BORROWED; the answer is the stream
+   (owned) with its controller already attached. */
+JSValue readable_stream_create(JSContext *ctx, JSValueConst pull_fn, JSValueConst cancel_fn,
+                               double hwm, JSValueConst size_fn);
+
+/* React to the start algorithm's promise: on fulfilment the controller is STARTED and may pull, on rejection
+   the stream errors. Returns 0, or -1 with the exception live. */
+int readable_stream_start(JSContext *ctx, JSValueConst stream, JSValueConst start_promise);
+
 /* §4.2's [[state]], and whether a reader holds the lock. §4.2.4's pipeTo branches on both at half a dozen
    points — "if source.[[state]] is 'readable', cancel it", "if source is locked, reject" — and each of those
    is an INTERNAL slot read, so it cannot go through the page-visible `locked` accessor a page may have

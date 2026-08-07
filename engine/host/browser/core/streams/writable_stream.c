@@ -1528,7 +1528,6 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 
     if (s->w.stage == WSC_BUILD) {
         JSValueConst strategy = argc > 1 ? argv[1] : JS_UNDEFINED;
-        WsData *d;
         WsCtrlData *c;
         JSValue hv;
         double h = 1;
@@ -1536,61 +1535,36 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        /* The stream and its controller are COMPLETE — every owned slot placed, each attached to its object,
-           the two linked — before the first step that can fail, so a failure after this is torn down by the
-           two finalizers and nothing is orphaned. */
-        s->stream = JS_NewObjectProtoClass(ctx, JS_IsObject(s->proto) ? (JSValueConst)s->proto : g_ws_proto,
-                                           g_ws_class);
-        if (JS_IsException(s->stream)) return -1;
-        d = js_mallocz(ctx, sizeof *d);
-        if (!d) return -1;
-        d->stored_error = d->writer = d->controller = JS_UNDEFINED;
-        d->abort_p = d->abort_reason = JS_UNDEFINED;
-        d->in_flight_write[0] = d->in_flight_write[1] = JS_UNDEFINED;
-        d->in_flight_close[0] = d->in_flight_close[1] = JS_UNDEFINED;
-        d->close_request[0] = d->close_request[1] = JS_UNDEFINED;
-        d->abort_funcs[0] = d->abort_funcs[1] = JS_UNDEFINED;
-        d->write_resolve = JS_NewArray(ctx);
-        d->write_reject = JS_NewArray(ctx);
-        JS_SetOpaque(s->stream, d);
-        if (JS_IsException(d->write_resolve) || JS_IsException(d->write_reject)) return -1;
-
-        s->ctrl = JS_NewObjectProtoClass(ctx, g_wc_proto, g_wc_class);
-        if (JS_IsException(s->ctrl)) return -1;
-        c = js_mallocz(ctx, sizeof *c);
-        if (!c) return -1;
-        c->stream = c->sink = c->write_fn = c->close_fn = c->abort_fn = c->size_fn = JS_UNDEFINED;
-        c->signal = JS_UNDEFINED;
-        c->hwm = 1;
-        c->queue = JS_NewArray(ctx);
-        c->queue_size = JS_NewArray(ctx);
-        JS_SetOpaque(s->ctrl, c);
-        if (JS_IsException(c->queue) || JS_IsException(c->queue_size)) return -1;
-        c->stream = JS_DupValue(ctx, s->stream);
-        d->controller = JS_DupValue(ctx, s->ctrl);
-        c->signal = abort_signal_new(ctx);
-        if (JS_IsException(c->signal)) { c->signal = JS_UNDEFINED; return -1; }
-
-        c->sink = JS_DupValue(ctx, sink);
-        c->write_fn = s->snk[SNK_WRITE];  s->snk[SNK_WRITE] = JS_UNDEFINED;
-        c->close_fn = s->snk[SNK_CLOSE];  s->snk[SNK_CLOSE] = JS_UNDEFINED;
-        c->abort_fn = s->snk[SNK_ABORT];  s->snk[SNK_ABORT] = JS_UNDEFINED;
-        s->start_fn = s->snk[SNK_START];  s->snk[SNK_START] = JS_UNDEFINED;
-
-        c->size_fn = idl_dict_get(ctx, strategy, "size");
+        /* §5.2 steps 5 and 6: ExtractSizeAlgorithm, then ExtractHighWaterMark with a default of 1. Both read
+           the strategy dictionary the IDL layer has ALREADY converted, which is why a throwing `get size` is
+           seen before a throwing `get start` — the ordering §5.2 states and a page pins. */
         hv = idl_dict_get(ctx, strategy, "highWaterMark");
         absent = JS_IsUndefined(hv);
         if (!absent && JS_ToFloat64(ctx, &h, hv) < 0) { JS_FreeValue(ctx, hv); return -1; }
         JS_FreeValue(ctx, hv);
-        if (!absent) {
-            if (h != h || h < 0) {
-                JS_ThrowRangeError(ctx, "a queuing strategy's highWaterMark must not be negative or NaN");
-                return -1;
-            }
-            c->hwm = h;
+        if (!absent && (h != h || h < 0)) {
+            /* §5.2's own check, not the type's: `unrestricted double` accepts NaN and the STREAM rejects it. */
+            JS_ThrowRangeError(ctx, "a queuing strategy's highWaterMark must not be negative or NaN");
+            return -1;
         }
-        /* §5.2 step 6: the stream starts with backpressure exactly when its mark is already met. */
-        d->backpressure = (uint8_t)wc_backpressure(c);
+        {
+            JSValue size_fn = idl_dict_get(ctx, strategy, "size");
+            s->stream = writable_stream_create(ctx, s->snk[SNK_WRITE], s->snk[SNK_CLOSE], s->snk[SNK_ABORT],
+                                               absent ? 1 : h, size_fn);
+            JS_FreeValue(ctx, size_fn);
+        }
+        if (JS_IsException(s->stream)) return -1;
+        /* §3.7.1's prototype, applied to the object CreateWritableStream just built: the operation makes a
+           WritableStream and the CONSTRUCTOR decides which one a subclass gets. */
+        if (JS_IsObject(s->proto) && JS_SetPrototype(ctx, s->stream, s->proto) < 0) return -1;
+        s->ctrl = JS_DupValue(ctx, ws_of(s->stream)->controller);
+        c = wc_of(s->ctrl);
+        DCHECK(c != NULL, "CreateWritableStream answered a stream with no controller");
+        /* The SINK is the receiver §5.4 invokes the page's methods on — CreateWritableStream has no sink at
+           all, so it is set here rather than inside the operation. */
+        JS_FreeValue(ctx, c->sink);
+        c->sink = JS_DupValue(ctx, sink);
+        s->start_fn = s->snk[SNK_START];  s->snk[SNK_START] = JS_UNDEFINED;
         s->w.value = JS_UNDEFINED;
         s->w.stage = JS_IsFunction(ctx, s->start_fn) ? WSC_CALL : WSC_RESOLVE;
     }
@@ -1618,7 +1592,7 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 
     DCHECK(s->w.stage == WSC_THEN, "the WritableStream constructor resumed in a stage it never parks in");
     JS_FreeValue(ctx, cb_result);
-    if (ws_react(ctx, s->w.func, s->ctrl, OP_START_OK, OP_START_ERR) < 0) return -1;
+    if (writable_stream_start(ctx, s->stream, s->w.func) < 0) return -1;
     *presult = s->stream;
     s->stream = JS_UNDEFINED;
     return 0;
@@ -1627,6 +1601,78 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 static const IdlStepDecl js_ws_ctor_decl = {
     js_ws_ctor_step, sizeof(JSWsCtorState), js_ws_ctor_visit, js_ws_ctor_release
 };
+
+/* §5.4's CreateWritableStream — a stream whose ALGORITHMS are the caller's function objects rather than a
+   page's underlying sink. It is the operation §6's TransformStream is built out of: a transform stream's
+   writable half has no sink object at all, only closures over the transform stream itself.
+   The three algorithms are called with the arguments the matching underlying-sink member takes — `write(chunk)`,
+   `close()`, `abort(reason)` — and with `this` = the sink, which for this operation is undefined. `size_fn` may
+   be undefined for the implicit one-per-chunk strategy. All four are BORROWED.
+   THE START ALGORITHM IS NOT HERE. Starting is a separate operation because the caller decides what the start
+   promise is and when it settles; see writable_stream_start. Until it runs the controller is not started, which
+   is exactly the state §5.4 wants a stream to be in while its start algorithm is outstanding. */
+JSValue writable_stream_create(JSContext *ctx, JSValueConst write_fn, JSValueConst close_fn,
+                               JSValueConst abort_fn, double hwm, JSValueConst size_fn)
+{
+    JSValue obj, ctrl;
+    WsData *d;
+    WsCtrlData *c;
+
+    DCHECK(g_ws_rt != NULL, "a WritableStream was created before writable_stream_init ran");
+    /* The stream and its controller are COMPLETE — every owned slot placed, each attached to its object, the
+       two linked — before the first step that can fail, so a failure after this is torn down by the two
+       finalizers and nothing is orphaned. */
+    obj = JS_NewObjectProtoClass(ctx, g_ws_proto, g_ws_class);
+    if (JS_IsException(obj)) return obj;
+    d = js_mallocz(ctx, sizeof *d);
+    if (!d) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
+    d->stored_error = d->writer = d->controller = JS_UNDEFINED;
+    d->abort_p = d->abort_reason = JS_UNDEFINED;
+    d->in_flight_write[0] = d->in_flight_write[1] = JS_UNDEFINED;
+    d->in_flight_close[0] = d->in_flight_close[1] = JS_UNDEFINED;
+    d->close_request[0] = d->close_request[1] = JS_UNDEFINED;
+    d->abort_funcs[0] = d->abort_funcs[1] = JS_UNDEFINED;
+    d->write_resolve = JS_NewArray(ctx);
+    d->write_reject = JS_NewArray(ctx);
+    JS_SetOpaque(obj, d);
+    if (JS_IsException(d->write_resolve) || JS_IsException(d->write_reject)) goto fail;
+
+    ctrl = JS_NewObjectProtoClass(ctx, g_wc_proto, g_wc_class);
+    if (JS_IsException(ctrl)) goto fail;
+    c = js_mallocz(ctx, sizeof *c);
+    if (!c) { JS_FreeValue(ctx, ctrl); goto fail; }
+    c->stream = c->sink = c->write_fn = c->close_fn = c->abort_fn = c->size_fn = JS_UNDEFINED;
+    c->signal = JS_UNDEFINED;
+    c->hwm = 1;
+    c->queue = JS_NewArray(ctx);
+    c->queue_size = JS_NewArray(ctx);
+    JS_SetOpaque(ctrl, c);
+    d->controller = ctrl;                       /* the stream owns it from here */
+    if (JS_IsException(c->queue) || JS_IsException(c->queue_size)) goto fail;
+    c->stream = JS_DupValue(ctx, obj);
+    c->signal = abort_signal_new(ctx);
+    if (JS_IsException(c->signal)) { c->signal = JS_UNDEFINED; goto fail; }
+
+    c->write_fn = JS_DupValue(ctx, write_fn);
+    c->close_fn = JS_DupValue(ctx, close_fn);
+    c->abort_fn = JS_DupValue(ctx, abort_fn);
+    c->size_fn = JS_DupValue(ctx, size_fn);
+    c->hwm = hwm;
+    /* §5.2 step 6: the stream starts with backpressure exactly when its mark is already met. */
+    d->backpressure = (uint8_t)wc_backpressure(c);
+    return obj;
+
+fail:
+    JS_FreeValue(ctx, obj);
+    return JS_EXCEPTION;
+}
+
+int writable_stream_start(JSContext *ctx, JSValueConst stream, JSValueConst start_promise)
+{
+    WsData *d = ws_of(stream);
+    DCHECK(d != NULL, "a §5 start was reported for something that is not a WritableStream");
+    return ws_react(ctx, start_promise, d->controller, OP_START_OK, OP_START_ERR);
+}
 
 /* ---- install ------------------------------------------------------------------------------------------------ */
 

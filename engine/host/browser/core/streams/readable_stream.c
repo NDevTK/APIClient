@@ -2960,6 +2960,35 @@ JSValue readable_stream_drain(JSContext *ctx, JSValueConst reader, JSValueConst 
     return promise;
 }
 
+/* §4.9.4's CreateReadableStream — a stream whose ALGORITHMS are the caller's function objects rather than a
+   page's underlying source. It is the operation §6's TransformStream is built out of: a transform stream's
+   readable half has no source object at all, only closures over the transform stream itself.
+   `pull_fn` is called with the controller and `cancel_fn` with the reason, both with `this` = the source, which
+   for this operation is undefined; `size_fn` may be undefined for the implicit one-per-chunk strategy. All are
+   BORROWED. THE START ALGORITHM IS NOT HERE — see readable_stream_start, for the reason §5's twin gives. */
+JSValue readable_stream_create(JSContext *ctx, JSValueConst pull_fn, JSValueConst cancel_fn,
+                               double hwm, JSValueConst size_fn)
+{
+    JSValue obj = readable_stream_empty(ctx);
+    ControllerData *c;
+
+    if (JS_IsException(obj)) return obj;
+    c = ctrl_of(stream_of(obj)->controller);
+    DCHECK(c != NULL, "an empty ReadableStream came back without its controller");
+    c->pull_fn = JS_DupValue(ctx, pull_fn);
+    c->cancel_fn = JS_DupValue(ctx, cancel_fn);
+    c->size_fn = JS_DupValue(ctx, size_fn);
+    c->hwm = hwm;
+    return obj;
+}
+
+int readable_stream_start(JSContext *ctx, JSValueConst stream, JSValueConst start_promise)
+{
+    StreamData *d = stream_of(stream);
+    DCHECK(d != NULL, "a §4 start was reported for something that is not a ReadableStream");
+    return ctrl_react(ctx, start_promise, d->controller, RXN_START_OK, RXN_START_ERR);
+}
+
 JSValueConst readable_stream_op(ReadableStreamOp which)
 {
     switch (which) {
@@ -3159,50 +3188,44 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     }
 
     if (s->w.stage == RSC_BUILD) {
-        StreamData *d;
-        ControllerData *c;
         JSValueConst strategy = argc > 1 ? argv[1] : JS_UNDEFINED;
+        ControllerData *c;
         JSValue hv;
         int absent;
         double h = 1;
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        /* §4.2 builds the stream and its controller before `start` runs, because `start` is handed that
-           controller and may enqueue into it immediately. Both are COMPLETE — every owned slot placed, the
-           record attached to its object, the two linked — before the first step that can FAIL, so a failure
-           after this point is torn down by the two finalizers and nothing is orphaned. Filling the record
-           first and attaching it last leaked the whole runtime graph on a bad highWaterMark: the orphaned
-           record held the page's `size` function, and one page function roots everything it can see. */
-        s->stream = readable_stream_empty(ctx);
-        if (JS_IsException(s->stream)) return -1;
-        if (JS_IsObject(s->proto) && JS_SetPrototype(ctx, s->stream, s->proto) < 0) return -1;
-        d = stream_of(s->stream);
-        s->controller = JS_DupValue(ctx, d->controller);
-        c = ctrl_of(s->controller);
-
-        c->pull_fn = s->src[SRC_PULL];
-        s->src[SRC_PULL] = JS_UNDEFINED;
-        c->cancel_fn = s->src[SRC_CANCEL];
-        s->src[SRC_CANCEL] = JS_UNDEFINED;
-        c->source = JS_DupValue(ctx, source);
         /* §4.2 steps 6 and 7: ExtractSizeAlgorithm, then ExtractHighWaterMark with a default of 1. Both read
            the strategy dictionary the IDL layer has ALREADY converted — which is why a throwing `get size` is
            seen before a throwing `get start`, the ordering §4.2 states and a page pins. */
-        c->size_fn = idl_dict_get(ctx, strategy, "size");
         hv = idl_dict_get(ctx, strategy, "highWaterMark");
         absent = JS_IsUndefined(hv);
         if (!absent && JS_ToFloat64(ctx, &h, hv) < 0) { JS_FreeValue(ctx, hv); return -1; }
         JS_FreeValue(ctx, hv);
-        if (!absent) {
+        if (!absent && (h != h || h < 0)) {
             /* §4.2's own check, not the type's: `unrestricted double` accepts NaN, and the STREAM is what
                rejects it. */
-            if (h != h || h < 0) {
-                JS_ThrowRangeError(ctx, "a queuing strategy's highWaterMark must not be negative or NaN");
-                return -1;
-            }
-            c->hwm = h;
+            JS_ThrowRangeError(ctx, "a queuing strategy's highWaterMark must not be negative or NaN");
+            return -1;
         }
+        {
+            JSValue size_fn = idl_dict_get(ctx, strategy, "size");
+            s->stream = readable_stream_create(ctx, s->src[SRC_PULL], s->src[SRC_CANCEL],
+                                               absent ? 1 : h, size_fn);
+            JS_FreeValue(ctx, size_fn);
+        }
+        if (JS_IsException(s->stream)) return -1;
+        /* §3.7.1's prototype, applied to the object CreateReadableStream just built: the operation makes a
+           ReadableStream and the CONSTRUCTOR decides which one a subclass gets. */
+        if (JS_IsObject(s->proto) && JS_SetPrototype(ctx, s->stream, s->proto) < 0) return -1;
+        s->controller = JS_DupValue(ctx, stream_of(s->stream)->controller);
+        c = ctrl_of(s->controller);
+        DCHECK(c != NULL, "CreateReadableStream answered a stream with no controller");
+        /* The SOURCE is the receiver §4.9.4 invokes the page's methods on — CreateReadableStream has no source
+           at all, so it is set here rather than inside the operation. */
+        JS_FreeValue(ctx, c->source);
+        c->source = JS_DupValue(ctx, source);
         s->start_fn = s->src[SRC_START];
         s->src[SRC_START] = JS_UNDEFINED;
         s->w.stage = JS_IsFunction(ctx, s->start_fn) ? RSC_CALL : RSC_RESOLVE;
@@ -3229,7 +3252,7 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 
     DCHECK(s->w.stage == RSC_THEN, "the ReadableStream constructor resumed in a stage it never parks in");
     JS_FreeValue(ctx, cb_result);
-    if (ctrl_react(ctx, s->w.func, s->controller, RXN_START_OK, RXN_START_ERR) < 0) return -1;
+    if (readable_stream_start(ctx, s->stream, s->w.func) < 0) return -1;
     *presult = s->stream;
     s->stream = JS_UNDEFINED;
     return 0;

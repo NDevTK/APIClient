@@ -24,6 +24,19 @@ typedef enum {
 } WritableStreamOp;
 JSValueConst writable_stream_op(WritableStreamOp which);
 
+/* §5.4's CreateWritableStream, and the START that is deliberately not part of it — see writable_stream.c.
+   The three algorithms are the CALLER's function objects, called with the arguments the matching
+   underlying-sink member takes and with `this` = undefined; §6's TransformStream is built out of exactly this,
+   because a transform stream's writable half has no sink object at all. All four values are BORROWED, and the
+   answer is the stream (owned) with its controller already attached. */
+JSValue writable_stream_create(JSContext *ctx, JSValueConst write_fn, JSValueConst close_fn,
+                               JSValueConst abort_fn, double hwm, JSValueConst size_fn);
+
+/* React to the start algorithm's promise: on fulfilment the controller is STARTED and the queue advances, on
+   rejection the stream errors. §5.2's constructor hands the promise its `start` produced; a host that built the
+   stream itself hands its own. Returns 0, or -1 with the exception live. */
+int writable_stream_start(JSContext *ctx, JSValueConst stream, JSValueConst start_promise);
+
 /* §5.2's four states, and the two flags pipeTo reads beside them. `close_queued` is
    WritableStreamCloseQueuedOrInFlight, which decides both whether the pipe may still wait for writes to finish
    and whether the destination has already begun closing under it. Answers false for a non-stream. */
