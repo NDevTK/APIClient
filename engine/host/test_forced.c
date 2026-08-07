@@ -19,6 +19,7 @@
 #include "core/idl_args.h"
 #include "core/dom/document.h"
 #include "core/events/event.h"
+#include "core/events/message_event.h"
 #include "core/events/event_target.h"
 #include "core/fetch/response.h"
 #include "core/fetch/request.h"
@@ -1688,6 +1689,7 @@ int main(void) {
     document_free(ctx);   /* the window reference the lifecycle holds */
     element_free(ctx);    /* the wrapper identity table and the DOM interface prototypes */
     event_target_free(ctx);
+    message_event_free(ctx);
     event_free(ctx);
     headers_free(ctx);    /* Headers.prototype and the name it interned */
     url_free(ctx);

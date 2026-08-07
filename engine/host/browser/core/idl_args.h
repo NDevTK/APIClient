@@ -121,8 +121,15 @@ typedef struct {
 } IdlDictMember;
 
 /* A position the IDL does not list is passed through unconverted, which is what a variadic `any...` tail means
-   and what an optional argument beyond the listed ones means. `nargs` is how many the IDL lists. */
-#define IDL_MAX_DECLARED 4
+   and what an optional argument beyond the listed ones means. `nargs` is how many the IDL lists.
+   THE NUMBER IS A REAL MEMBER'S, not a guess: HTML 9.4.1's
+   `initMessageEvent(type, bubbles, cancelable, data, origin, lastEventId, source, ports)` declares eight, and
+   it is the widest the platform has. It was four, which is what the members written so far happened to need —
+   a limit that describes the past rather than the type system, and one whose CHECK fires at install time so a
+   member that outgrows it cannot ship silently. It matches IDL_MAX_ARGS, which is the machine's own per-call
+   storage: the two are the same bound seen from the declaration side and the call side, and they were allowed
+   to differ only while no member came close to either. */
+#define IDL_MAX_DECLARED 8
 
 /* DECLARE a member: the IDL types of its arguments, and the body to run once they are converted. Returns the
    step id, which the caller CACHES. Registration and installation are separate on purpose: Element's members

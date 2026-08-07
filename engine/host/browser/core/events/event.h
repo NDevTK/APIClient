@@ -1,6 +1,8 @@
 /* THE EVENT INTERFACE — DOM §2.2. The object every listener receives, and the thing dispatchEvent takes. */
 #ifndef ENGINE_HOST_BROWSER_CORE_EVENTS_EVENT_H
 #define ENGINE_HOST_BROWSER_CORE_EVENTS_EVENT_H
+#include <stdbool.h>
+
 #include "quickjs.h"
 
 void event_init(JSContext *ctx);
@@ -16,6 +18,22 @@ JSValue event_proto(void);
 JSValue event_new(JSContext *ctx, const char *type, bool bubbles, bool cancelable);
 /* The same, isTrusted FALSE — a synthetic event the PAGE caused (§3.2.2's click()). */
 JSValue event_new_untrusted(JSContext *ctx, const char *type, bool bubbles, bool cancelable);
+
+/* §2.2's INITIALISE, with a DERIVED interface's prototype in place of Event.prototype — the base half of a
+   subclass's constructor. `new MessageEvent(type, init)` runs Event's constructor steps and then its own, so
+   the derived component builds the object through this and then hangs its own slots on it. Doing it the other
+   way round — a derived interface minting a plain object and copying the base attributes onto it — is what
+   event_target.c did before Event existed, and it produced an object that answered `instanceof Event` false
+   and let a page assign to `defaultPrevented`.
+   `type` is a VALUE, not a C string, because a derived constructor's `type` arrives already converted by the
+   IDL declaration and re-stringifying it would run the page's toString a second time. */
+JSValue event_new_derived(JSContext *ctx, JSValueConst proto, JSValueConst type,
+                          bool bubbles, bool cancelable, bool composed, bool trusted);
+
+/* §2.2's initialise-an-existing-event steps — what `initEvent` performs, and what a derived interface's legacy
+   initialiser (`initMessageEvent`) performs before its own. Answers false when the dispatch flag is set, which
+   is the spec's early return the derived initialiser must honour before touching anything of its own. */
+bool event_reinit(JSContext *ctx, JSValueConst ev, JSValueConst type, bool bubbles, bool cancelable);
 
 /* The internal slots §2.2's algorithms read. NULL/false for anything that is not an Event, which is the brand
    check dispatchEvent performs — the slots live under a private Symbol, so a page cannot forge one. */

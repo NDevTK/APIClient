@@ -148,14 +148,14 @@ void event_set_targets(JSContext *ctx, JSValueConst ev, JSValueConst target, JSV
 /* §2.2 "initialize": the slot record every Event carries. `isTrusted` is the one thing that distinguishes an
    event the ENGINE fired from one the page constructed, and it is the reason this is a parameter rather than a
    constant — a page checks it. */
-static JSValue event_make(JSContext *ctx, JSValueConst type, bool bubbles, bool cancelable,
-                          bool composed, bool trusted)
+static JSValue event_make_proto(JSContext *ctx, JSValueConst proto, JSValueConst type, bool bubbles,
+                                bool cancelable, bool composed, bool trusted)
 {
     JSValue ev, slots;
     JSAtom k;
 
     DCHECK(g_ready, "an Event was minted before event_init ran");
-    ev = JS_NewObjectProto(ctx, g_proto);
+    ev = JS_NewObjectProto(ctx, proto);
     if (JS_IsException(ev))
         return ev;
     slots = idl_slots_new(ctx);
@@ -180,6 +180,20 @@ static JSValue event_make(JSContext *ctx, JSValueConst type, bool bubbles, bool 
     JS_SetProperty(ctx, ev, k, slots);
     JS_FreeAtom(ctx, k);
     return ev;
+}
+
+static JSValue event_make(JSContext *ctx, JSValueConst type, bool bubbles, bool cancelable,
+                          bool composed, bool trusted)
+{
+    return event_make_proto(ctx, g_proto, type, bubbles, cancelable, composed, trusted);
+}
+
+JSValue event_new_derived(JSContext *ctx, JSValueConst proto, JSValueConst type,
+                          bool bubbles, bool cancelable, bool composed, bool trusted)
+{
+    DCHECK(JS_IsObject(proto), "a derived event was minted with no prototype — the base steps put the object "
+                               "on the DERIVED interface's prototype, which is what makes it an instance of it");
+    return event_make_proto(ctx, proto, type, bubbles, cancelable, composed, trusted);
 }
 
 JSValue event_new(JSContext *ctx, const char *type, bool bubbles, bool cancelable)
@@ -304,27 +318,36 @@ static JSValue js_event_composed_path(JSContext *ctx, JSValueConst this_val, int
 /* §2.2 initEvent(type, bubbles, cancelable) — the legacy initializer, and it is NOT a no-op: it re-initialises
    an event that is not currently being dispatched. The booleans are ToBoolean, which is total and runs none of
    the page's code, so only `type` is a coercion and the shared machine performs it. */
-static JSValue js_event_init_event(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* §2.2's initialise-an-existing-event steps, without the receiver check — a DERIVED interface's legacy
+   initialiser (`initMessageEvent`) runs exactly these and then its own, so they are ONE implementation rather
+   than a second copy that drifts. Returns false when the dispatch flag says the walk owns the event right now,
+   which is the spec's early return and which the derived initialiser must honour before touching its own. */
+bool event_reinit(JSContext *ctx, JSValueConst ev, JSValueConst type, bool bubbles, bool cancelable)
 {
-    JSValue slots;
-
-    (void)magic;
-    slots = event_slots(ctx, this_val);
-    if (!JS_IsObject(slots)) {
-        JS_FreeValue(ctx, slots);
-        return JS_ThrowTypeError(ctx, "initEvent called on something that is not an Event");
-    }
+    JSValue slots = event_slots(ctx, ev);
+    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return false; }
     /* §2.2 step 1: "If this's dispatch flag is set, then return." */
-    if (slot_flag(ctx, slots, "dispatch")) { JS_FreeValue(ctx, slots); return JS_UNDEFINED; }
-    JS_SetPropertyStr(ctx, slots, "type", argc > 0 ? JS_DupValue(ctx, argv[0]) : JS_NewString(ctx, "undefined"));
-    JS_SetPropertyStr(ctx, slots, "bubbles", JS_NewBool(ctx, argc > 1 && JS_ToBool(ctx, argv[1])));
-    JS_SetPropertyStr(ctx, slots, "cancelable", JS_NewBool(ctx, argc > 2 && JS_ToBool(ctx, argv[2])));
+    if (slot_flag(ctx, slots, "dispatch")) { JS_FreeValue(ctx, slots); return false; }
+    JS_SetPropertyStr(ctx, slots, "type",
+                      JS_IsUndefined(type) ? JS_NewString(ctx, "undefined") : JS_DupValue(ctx, type));
+    JS_SetPropertyStr(ctx, slots, "bubbles", JS_NewBool(ctx, bubbles));
+    JS_SetPropertyStr(ctx, slots, "cancelable", JS_NewBool(ctx, cancelable));
     /* the spec's own re-init: the flags and the target go back to their initial state. */
     JS_SetPropertyStr(ctx, slots, "canceled", JS_FALSE);
     JS_SetPropertyStr(ctx, slots, "stopPropagation", JS_FALSE);
     JS_SetPropertyStr(ctx, slots, "stopImmediate", JS_FALSE);
     JS_SetPropertyStr(ctx, slots, "target", JS_NULL);
     JS_FreeValue(ctx, slots);
+    return true;
+}
+
+static JSValue js_event_init_event(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    (void)magic;
+    if (!event_is(ctx, this_val))
+        return JS_ThrowTypeError(ctx, "initEvent called on something that is not an Event");
+    event_reinit(ctx, this_val, argc > 0 ? argv[0] : JS_UNDEFINED,
+                 argc > 1 && JS_ToBool(ctx, argv[1]), argc > 2 && JS_ToBool(ctx, argv[2]));
     return JS_UNDEFINED;
 }
 

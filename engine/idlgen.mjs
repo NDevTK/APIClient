@@ -53,6 +53,9 @@ const INTERFACES = {
   /* §4's `interface File : Blob` shares blob.c with the interface it inherits: one struct, one class id, and
      a prototype chained to Blob.prototype — which is what the inheritance MEANS, so the members it inherits
      are found in the same file. */
+  /* HTML 9.4.1. Its two type-constrained members (source, ports) name interfaces that do not exist yet, so the
+     audit is what will notice the day they do and this file still answers only their empty value. */
+  MessageEvent:        ["core/events/message_event.c", "core/events/event.c"],
   TextEncoder:          "core/encoding/encoding.c",
   TextDecoder:          "core/encoding/encoding.c",
   /* §7.5 and §7.6 include the GenericTransformStream mixin, so `readable` and `writable` are members the audit
