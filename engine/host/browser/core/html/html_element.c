@@ -31,6 +31,7 @@
 #include "core/idl_args.h"
 #include "core/dom/node.h"
 #include "core/dom/element.h"
+#include "core/html/hyperlink.h"
 #include "core/events/event_target.h"
 #include "core/html/html_element.h"
 #include "core/css/css_style_declaration.h"
@@ -54,14 +55,16 @@ static const ElReflect R_HTML[] = {
 
 /* THE PER-INTERFACE REFLECTIONS. Each list is what that interface's IDL declares and nothing else — which is
    the whole point of splitting them off Element. */
+/* NO `href` HERE. §4.6.3's mixin owns it, because reading it RESOLVES against the document base and
+   re-serialises — `<a href="/x">` reads back as `http://host/x` — which a plain attribute mirror cannot do. */
 static const ElReflect R_ANCHOR[] = {
-    { "href", "href", REFLECT_STRING }, { "target", "target", REFLECT_STRING },
+    { "target", "target", REFLECT_STRING },
     { "rel", "rel", REFLECT_STRING }, { "download", "download", REFLECT_STRING },
     { "hreflang", "hreflang", REFLECT_STRING }, { "type", "type", REFLECT_STRING },
     { "referrerPolicy", "referrerpolicy", REFLECT_STRING },
 };
-static const ElReflect R_AREA[] = {
-    { "href", "href", REFLECT_STRING }, { "target", "target", REFLECT_STRING },
+static const ElReflect R_AREA[] = {   /* `href` is §4.6.3's, as on <a> */
+    { "target", "target", REFLECT_STRING },
     { "rel", "rel", REFLECT_STRING }, { "alt", "alt", REFLECT_STRING },
 };
 static const ElReflect R_LINK[] = {
@@ -394,6 +397,12 @@ void html_element_init(JSContext *ctx)
         idl_interface_tag(ctx, g_iface_proto[i], HTML_IFACE[i].iface);
         if (HTML_IFACE[i].nrefl)
             element_install_reflections(ctx, g_iface_proto[i], HTML_IFACE[i].refl, HTML_IFACE[i].nrefl);
+        /* §4.6.3's HTMLHyperlinkElementUtils, which the IDL says HTMLAnchorElement and HTMLAreaElement
+           INCLUDE. Named by interface rather than by tag because that is how the IDL states it, and because
+           two tags share one of them. */
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLAnchorElement") ||
+            !strcmp(HTML_IFACE[i].iface, "HTMLAreaElement"))
+            hyperlink_install(ctx, g_iface_proto[i]);
     }
 
         /* §4.12.3 `[SameObject] readonly attribute DocumentFragment content`. It goes on HTMLTemplateElement and

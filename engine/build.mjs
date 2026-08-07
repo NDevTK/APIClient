@@ -170,6 +170,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "dom", "dom_token_list.c"),                   // DOMTokenList: §7.1, and classList
     join(HOST, "browser", "core", "css", "css_style_declaration.c"),           // CSSOM: element.style + getComputedStyle
     join(HOST, "browser", "core", "html", "html_element.c"),                    // HTMLElement + HTML's per-tag interface table
+    join(HOST, "browser", "core", "html", "hyperlink.c"),                        // HTMLHyperlinkElementUtils: HTML 4.6.3
     join(HOST, "browser", "core", "html", "dom_string_map.c"),                  // HTML 3.2.2 dataset
     join(HOST, "browser", "core", "html", "html_form.c"),                       // §4.10: a control's value state + submission
     join(HOST, "browser", "core", "html", "custom_elements.c"),                 // §4.13: the registry, upgrade and reactions

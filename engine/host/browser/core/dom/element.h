@@ -24,4 +24,10 @@ typedef struct { const char *idl; const char *attr; int kind; } ElReflect;
    so the two bodies that implement every reflection still take exactly one index. */
 void element_install_reflections(JSContext *ctx, JSValueConst proto, const ElReflect *r, int n);
 
+/* AN ELEMENT'S CONTENT ATTRIBUTE, through the same chokepoint the reflections use — so a component that reads
+   and writes one (§4.6.3's hyperlink members re-serialise a URL back into `href`) stays captured in the
+   running flow's DOM delta. element_attr_get returns an OWNED string, or NULL when the attribute is absent. */
+char *element_attr_get(JSContext *ctx, JSValueConst el, const char *name);
+void  element_attr_set(JSContext *ctx, JSValueConst el, const char *name, const char *value);
+
 #endif

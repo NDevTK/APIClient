@@ -1815,7 +1815,11 @@ int main(void) {
         { "\"/api/handlernull\"", "isnull"  },
         { "\"/api/onglobal\"",    "isglobal"},   /* the mixins land on window and Document too */
         { "\"/api/iface2\"",     "isiface2"},   /* HTML's element-interface table, up the whole chain */
-        { "\"/api/reflected\"",  "isreflect"},  /* a.href really is the href attribute */
+        /* §4.6.3: `a.href` is NOT the attribute — it RESOLVES against the document base and re-serialises, so
+           `fetch(ia.href)` after `ia.href = '/api/reflected?v=isreflect'` requests the ABSOLUTE URL. This
+           expected the relative one, which is what an attribute MIRROR answers and what a browser does not;
+           the mirror is gone and the recorded endpoint is the resolved address. */
+        { "\"https://x.test/api/reflected\"",  "isreflect"},
         { "\"/api/reflect2\"",   "isreflect2"},
         { "\"/api/reflectbool\"","isbool"  },   /* presence-based booleans, and removeAttribute */
         { "\"/api/click\"",      "isclick" },   /* §3.2.2 click() through the one dispatch machine */

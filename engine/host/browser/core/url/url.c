@@ -1467,8 +1467,6 @@ static JSValue url_wrap(JSContext *ctx, UrlRecord *rec)
     return obj;
 }
 
-enum { URL_HREF = 0, URL_ORIGIN, URL_PROTOCOL, URL_USERNAME, URL_PASSWORD, URL_HOST, URL_HOSTNAME,
-       URL_PORT, URL_PATHNAME, URL_SEARCH, URL_HASH };
 
 /* §5.1's `searchParams`, [SameObject]: built on the first read from this URL's query and held afterwards, so
    `u.searchParams === u.searchParams` and a mutation of it is a mutation of the URL. */
@@ -1493,13 +1491,15 @@ static void url_params_resync(JSContext *ctx, JSValueConst this_val)
     usp_reset(ctx, u->params, u->rec.query, u->rec.query ? strlen(u->rec.query) : 0);
 }
 
-static JSValue js_url_get(JSContext *ctx, JSValueConst this_val, int magic)
+/* §4.4's PER-MEMBER READ, over a bare record. It is public because §4.6.3's HTMLHyperlinkElementUtils —
+   `a.protocol`, `area.hostname`, and the rest — is the SAME eleven algorithms over a URL that happens to live
+   in an element's href attribute instead of in a URL object. Two copies of these would be two answers to
+   "what is this URL's host", and the second one is always the one that is subtly wrong.
+   Returns an OWNED string. */
+char *url_member_get(const UrlRecord *u, int magic)
 {
-    UrlRecord *u = url_of(ctx, this_val);
     char *s;
-    JSValue r;
 
-    if (!u) return JS_EXCEPTION;
     switch (magic) {
     case URL_HREF:     s = url_serialize(u, false); break;
     case URL_ORIGIN:   s = url_serialize_origin(u); break;
@@ -1514,15 +1514,26 @@ static JSValue js_url_get(JSContext *ctx, JSValueConst this_val, int magic)
     case URL_PATHNAME: s = url_serialize_path(u); break;
     case URL_SEARCH:
         /* §5.1: the empty query serializes to "" and not to "?", which is what makes `?` round-trip. */
-        if (!u->query || !*u->query) return JS_NewString(ctx, "");
+        if (!u->query || !*u->query) return xstrdup("");
         { UStr o; ustr_init(&o); ustr_putc(&o, '?'); ustr_puts(&o, u->query); s = ustr_take(&o); }
         break;
     default:
         DCHECK(magic == URL_HASH, "a URL accessor was declared with a magic this component does not answer");
-        if (!u->fragment || !*u->fragment) return JS_NewString(ctx, "");
+        if (!u->fragment || !*u->fragment) return xstrdup("");
         { UStr o; ustr_init(&o); ustr_putc(&o, '#'); ustr_puts(&o, u->fragment); s = ustr_take(&o); }
         break;
     }
+    return s;
+}
+
+static JSValue js_url_get(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    UrlRecord *u = url_of(ctx, this_val);
+    char *s;
+    JSValue r;
+
+    if (!u) return JS_EXCEPTION;
+    s = url_member_get(u, magic);
     r = JS_NewString(ctx, s);
     free(s);
     return r;
@@ -1638,23 +1649,19 @@ static const IdlStepDecl js_url_ctor_decl = {
    opaque-path URL does nothing, `port` on a URL that cannot have one does nothing, and an empty `search` or
    `hash` sets the component to NULL rather than to the empty string — which is the difference between
    `http://x/` and `http://x/?`. */
-static JSValue js_url_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+/* §4.4's PER-MEMBER WRITE, over a bare record — the setter half of url_member_get and public for the same
+   reason. Returns 0, or -1 when `href` was handed something that is not a URL (the caller decides what that
+   means: the URL interface throws, §4.6.3's `a.href` does not).
+   EVERY OTHER MEMBER IS A NO-OP ON BAD INPUT, which is the spec's own answer — a setter's failure leaves the
+   URL alone rather than throwing, so `a.port = "x"` is silently ignored exactly as in a browser. */
+int url_member_set(UrlRecord *u, int magic, const char *v, size_t vlen)
 {
-    UrlRecord *u = url_of(ctx, this_val);
-    const char *v;
-    size_t vlen = 0;
-
-    if (!u) return JS_EXCEPTION;
-    v = JS_ToCStringLen(ctx, &vlen, val);
-    if (!v) return JS_EXCEPTION;
-
     switch (magic) {
     case URL_HREF: {
         UrlRecord fresh;
         if (!url_parse(&fresh, v, vlen, NULL)) {
             url_record_free(&fresh);
-            JS_FreeCString(ctx, v);
-            return JS_ThrowTypeError(ctx, "the string is not a valid URL");
+            return -1;
         }
         url_record_free(u);
         *u = fresh;
@@ -1725,9 +1732,24 @@ static JSValue js_url_set(JSContext *ctx, JSValueConst this_val, JSValueConst va
         }
         break;
     }
+    return 0;
+}
+
+static JSValue js_url_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    UrlRecord *u = url_of(ctx, this_val);
+    const char *v;
+    size_t vlen = 0;
+    int rc;
+
+    if (!u) return JS_EXCEPTION;
+    v = JS_ToCStringLen(ctx, &vlen, val);
+    if (!v) return JS_EXCEPTION;
+    rc = url_member_set(u, magic, v, vlen);
+    JS_FreeCString(ctx, v);
+    if (rc < 0) return JS_ThrowTypeError(ctx, "the string is not a valid URL");
     if (magic == URL_HREF || magic == URL_SEARCH)
         url_params_resync(ctx, this_val);
-    JS_FreeCString(ctx, v);
     return JS_UNDEFINED;
 }
 

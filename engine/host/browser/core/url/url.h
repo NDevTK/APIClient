@@ -58,6 +58,16 @@ bool url_parse(UrlRecord *out, const char *input, size_t len, const UrlRecord *b
 bool url_parse_into(UrlRecord *url, const char *input, size_t len, const UrlRecord *base, int state_override);
 
 /* §4.5 "URL serializer" — the whole record, or every part of it. Each returns a malloc'd string. */
+/* §4.4's ELEVEN MEMBERS, by index. Public because §4.6.3's HTMLHyperlinkElementUtils is the same eleven
+   algorithms over a URL that lives in an element's href attribute rather than in a URL object. */
+enum { URL_HREF = 0, URL_ORIGIN, URL_PROTOCOL, URL_USERNAME, URL_PASSWORD, URL_HOST, URL_HOSTNAME,
+       URL_PORT, URL_PATHNAME, URL_SEARCH, URL_HASH };
+/* Read one member. Returns an OWNED string. */
+char *url_member_get(const UrlRecord *u, int member);
+/* Write one member, per §4.4's setter algorithms. 0, or -1 when `href` was not a URL — every other member is a
+   NO-OP on input it cannot use, which is the spec's answer rather than a throw. */
+int url_member_set(UrlRecord *u, int member, const char *v, size_t vlen);
+
 char *url_serialize(const UrlRecord *u, bool exclude_fragment);
 char *url_serialize_host(const UrlHost *h);
 /* `host` (the host with its port when there is one) and `port` (empty when null) as both URL and Location read

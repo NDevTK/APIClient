@@ -796,6 +796,39 @@ static JSValue js_el_reflect_set(JSContext *ctx, JSValueConst this_val, JSValueC
     return r;
 }
 
+/* AN ELEMENT'S CONTENT ATTRIBUTE, for a component that is not a plain reflection. §4.6.3's
+   HTMLHyperlinkElementUtils is the case: `a.protocol = "https"` re-serialises a URL and writes it back to the
+   `href` ATTRIBUTE, which is a read and a write of the same attribute rather than a mirror of it.
+   BOTH GO THROUGH THE SAME CHOKEPOINT the reflection uses, so the write is captured into the running flow's
+   DOM delta like every other attribute write — a mixin reaching for lxb_dom_element_set_attribute directly
+   would be invisible to time travel, which is exactly what check_dom_chokepoint.mjs exists to prevent.
+   Returns an OWNED string, or NULL when the attribute is absent. */
+char *element_attr_get(JSContext *ctx, JSValueConst el, const char *name)
+{
+    JSValue nv = JS_NewString(ctx, name);
+    JSValue r = js_el_get_attribute(ctx, el, 1, (JSValueConst *)&nv, 0);
+    char *out = NULL;
+
+    JS_FreeValue(ctx, nv);
+    if (!JS_IsNull(r) && !JS_IsException(r)) {
+        const char *c = JS_ToCString(ctx, r);
+        if (c) { out = strdup(c); JS_FreeCString(ctx, c); }
+    }
+    JS_FreeValue(ctx, r);
+    return out;
+}
+
+void element_attr_set(JSContext *ctx, JSValueConst el, const char *name, const char *value)
+{
+    JSValue args[2];
+
+    args[0] = JS_NewString(ctx, name);
+    args[1] = JS_NewString(ctx, value ? value : "");
+    JS_FreeValue(ctx, js_el_set_attribute(ctx, el, 2, (JSValueConst *)args, 0));
+    JS_FreeValue(ctx, args[0]);
+    JS_FreeValue(ctx, args[1]);
+}
+
 void element_install_reflections(JSContext *ctx, JSValueConst proto, const ElReflect *r, int n)
 {
     int i;
