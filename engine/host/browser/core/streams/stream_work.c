@@ -14,7 +14,7 @@ void stream_work_start(StreamWork *w)
 {
     int k;
     w->func = w->value = w->chain = w->err = JS_UNDEFINED;
-    for (k = 0; k < 3; k++) w->cb[k] = JS_UNDEFINED;
+    for (k = 0; k < (int)(sizeof(w->cb) / sizeof(w->cb[0])); k++) w->cb[k] = JS_UNDEFINED;
 }
 
 void stream_work_visit(JSContext *ctx, StreamWork *w, JSStepVisit *v)
@@ -24,7 +24,7 @@ void stream_work_visit(JSContext *ctx, StreamWork *w, JSStepVisit *v)
     v->val(ctx, &w->value);
     v->val(ctx, &w->chain);
     v->val(ctx, &w->err);
-    for (k = 0; k < 3; k++) v->val(ctx, &w->cb[k]);
+    for (k = 0; k < (int)(sizeof(w->cb) / sizeof(w->cb[0])); k++) v->val(ctx, &w->cb[k]);
 }
 
 void stream_work_release(JSContext *ctx, StreamWork *w)
@@ -35,7 +35,7 @@ void stream_work_release(JSContext *ctx, StreamWork *w)
     JS_FreeValue(ctx, w->chain);
     JS_FreeValue(ctx, w->err);
     w->func = w->value = w->chain = w->err = JS_UNDEFINED;
-    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, w->cb[k]); w->cb[k] = JS_UNDEFINED; }
+    for (k = 0; k < (int)(sizeof(w->cb) / sizeof(w->cb[0])); k++) { JS_FreeValue(ctx, w->cb[k]); w->cb[k] = JS_UNDEFINED; }
 }
 /* PromiseResolve(%Promise%, v) — 27.2.4.7 — as a sub-sequence. §4.5 reacts to what `start` and `pull` RETURNED,
  * which may be a plain value, a page THENABLE, or a promise; the one operation covering all three is a
@@ -61,7 +61,7 @@ int stream_promise_of_run(JSContext *ctx, StreamWork *w, int reject, JSValue in,
         JS_FreeValue(ctx, funcs[reject ^ 1]);
     }
     arg = w->value;
-    r = step_call_run(ctx, &w->phase, w->cb, w->chain, JS_UNDEFINED, 1, &arg, in, &out, out_cb, out_argc);
+    r = step_call_run(ctx, &w->phase, STEP_CB(w->cb), w->chain, JS_UNDEFINED, 1, &arg, in, &out, out_cb, out_argc);
     if (r > 0) return r;
     if (JS_IsException(out)) return -1;
     JS_FreeValue(ctx, out);

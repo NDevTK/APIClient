@@ -50,6 +50,7 @@
 #include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/dom/document.h"
+#include "solver/engine.h"
 #include "core/events/event_target.h"
 
 static const IdlArgType IDL_1NSTR[1] = { IDL_DOMSTRING_NULLABLE };
@@ -207,6 +208,28 @@ void node_set_element_resolver(JSValueConst (*fn)(lxb_dom_element_t *el)) { g_el
    entered the tree by insertBefore, by replaceChild, or by an innerHTML parse was never prepared and never
    upgraded. Eleven sites mutate the tree; one remembered. The chokepoint is the one place that cannot be
    forgotten, which is the same argument that put capture there. */
+/* §2.9's propagation path, answered for the events layer: a node's ancestors, nearest first. Registered rather
+   than called across, because the tree is what knows this and a target with no tree — an AbortSignal — has an
+   empty one. */
+static JSValue node_ancestors(JSContext *ctx, JSValueConst target)
+{
+    lxb_dom_node_t *n = node_of(target);
+    JSValue arr;
+    uint32_t k = 0;
+
+    /* NOT A NODE AT ALL — an AbortSignal, a Request, anything that is an EventTarget without being in a tree.
+       UNDEFINED rather than an empty array, because the two answers are DIFFERENT questions and §7.6 turns on
+       the first: a DOCUMENT is in the tree and has NO ancestors, so "the array came back empty" cannot mean
+       "not in a tree". Conflating them cost the window its DOMContentLoaded — the one event whose whole point
+       is that it is fired at the document and heard on the window. */
+    if (!n)
+        return JS_UNDEFINED;
+    arr = JS_NewArray(ctx);
+    for (n = n->parent; n; n = n->parent)
+        JS_SetPropertyUint32(ctx, arr, k++, node_wrap(ctx, n));
+    return arr;
+}
+
 void node_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, int inserted))
 {
     dom_cow_set_tree_hook(fn);
@@ -1646,6 +1669,9 @@ void node_init(JSContext *ctx)
 
     if (g_protos_ready)
         return;    /* element.c asks for the base before building Element.prototype on top of it */
+    /* §2.9's dispatch walks the tree, and this is the file that has one. */
+    event_target_set_tree(node_ancestors);
+    engine_set_wrap_stats(node_wrap_stats);
 
     JS_NewClassID(JS_GetRuntime(ctx), &g_node_class);
     JS_NewClass(JS_GetRuntime(ctx), g_node_class, &def);

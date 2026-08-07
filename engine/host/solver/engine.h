@@ -112,4 +112,9 @@ void engine_gen_fork(JSContext *ctx, JSValueConst genobj, void *base_gd, void *c
    one, so the interleave has to be observable on its own. */
 int  engine_switch_count(void);
 
+/* WHO COUNTS THE DOM'S WRAPPERS. The scheduler's diagnostic line reports the identity map's size, and that map
+   is the DOM's — so the DOM registers the counter rather than the solver naming node.h and dragging lexbor in
+   behind it. */
+void engine_set_wrap_stats(void (*fn)(long *n, long *cap));
+
 #endif

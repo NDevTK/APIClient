@@ -216,7 +216,7 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
     }
 
     DCHECK(s->stage == 1, "the fetch delivery was re-entered at a stage it never parks in");
-    r = step_call_run(ctx, &s->cphase, s->cb,
+    r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb),
                       JS_StepClosureData(&s->hdr, s->reject ? FETCH_DELIVER_REJECT : FETCH_DELIVER_RESOLVE),
                       JS_UNDEFINED, 1, (JSValueConst *)&s->value, cb_result, &settled, out_cb, out_argc);
     if (r > 0) return r;          /* parked ON THE SETTLE; the `then` read runs with a flow base under it */

@@ -23,6 +23,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/idl_slots.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/events/event.h"
@@ -157,7 +158,7 @@ static JSValue event_make(JSContext *ctx, JSValueConst type, bool bubbles, bool 
     ev = JS_NewObjectProto(ctx, g_proto);
     if (JS_IsException(ev))
         return ev;
-    slots = JS_NewObject(ctx);
+    slots = idl_slots_new(ctx);
     k = JS_ValueToAtom(ctx, g_key);
     CHECK(!JS_IsException(slots) && k != JS_ATOM_NULL, "the Event slot record allocation failed");
     JS_SetPropertyStr(ctx, slots, "type", JS_DupValue(ctx, type));

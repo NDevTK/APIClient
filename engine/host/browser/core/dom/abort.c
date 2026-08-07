@@ -36,6 +36,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/idl_slots.h"
 #include "quickjs-step.h"
 #include "solver/concolic.h"
 #include "solver/decide.h"
@@ -48,6 +49,13 @@
    zero-initialised and zero is not JS_UNDEFINED. */
 static JSValue g_key;
 static int g_ready;
+/* THE INTERFACE PROTOTYPE OBJECTS — Web IDL §3.7. Every member of these two interfaces is declared on
+   `AbortSignal.prototype` / `AbortController.prototype`, not on the instance, and that is not decoration: it is
+   what makes `signal instanceof AbortSignal` true, what a page's `AbortSignal.prototype.throwIfAborted.call(x)`
+   reaches, and what `Object.getOwnPropertyNames(signal)` correctly reports as EMPTY. Building the members onto
+   each instance instead left the interface object with no `.prototype` at all, so `instanceof` threw
+   "operand 'prototype' property is not an object" — the page could not even ASK what a signal was. */
+static JSValue g_sig_proto, g_ctrl_proto;
 /* The id JS_RegisterStepDef handed this runtime for AbortSignal.timeout's machine. One WASM instance is one
    document is one runtime, which is what the install DCHECK holds it to. */
 static int g_timeout_stepid = -1;
@@ -58,6 +66,7 @@ void abort_init(JSContext *ctx)
     DCHECK(!g_ready, "abort_init ran twice — one instance is one document");
     g_key = JS_NewSymbol(ctx, "abortState", false);
     CHECK(!JS_IsException(g_key), "the AbortSignal slot key allocation failed");
+    g_sig_proto = g_ctrl_proto = JS_UNDEFINED;
     g_ready = 1;
 }
 
@@ -66,7 +75,9 @@ void abort_free(JSContext *ctx)
     if (!g_ready)
         return;
     JS_FreeValue(ctx, g_key);
-    g_key = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_sig_proto);
+    JS_FreeValue(ctx, g_ctrl_proto);
+    g_key = g_sig_proto = g_ctrl_proto = JS_UNDEFINED;
     g_ready = 0;
 }
 
@@ -110,6 +121,19 @@ static JSValue abort_reason_default(JSContext *ctx, const char *name, const char
 {
     JS_ThrowDOMException(ctx, name, "%s", msg);
     return JS_GetException(ctx);
+}
+
+/* §3.2 "signal abort" step 2: an UNDEFINED reason becomes a new "AbortError" DOMException. It lives here, in
+   the one operation, rather than at each caller counting its own arguments — `controller.abort()`, Streams
+   §5.2's WritableStreamAbort and `AbortSignal.abort()` all reach the same step, and a caller that forgot it
+   handed the page a signal whose `reason` was undefined AFTER it had aborted, which no real signal can be.
+   `reason` is CONSUMED. */
+static JSValue abort_reason_or_default(JSContext *ctx, JSValue reason)
+{
+    if (!JS_IsUndefined(reason))
+        return reason;
+    JS_FreeValue(ctx, reason);
+    return abort_reason_default(ctx, "AbortError", "signal is aborted without reason");
 }
 
 static JSValue js_sig_get_aborted(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -163,9 +187,12 @@ static JSValue signal_new(JSContext *ctx, JSValue aborted, JSValue reason)
     JSValue sig, st;
     JSAtom k;
 
-    sig = JS_NewObject(ctx);
+    DCHECK(JS_IsObject(g_sig_proto),
+           "an AbortSignal was minted before abort_install built AbortSignal.prototype — the members live "
+           "there, so a signal made earlier would have none of them");
+    sig = JS_NewObjectProto(ctx, g_sig_proto);
     CHECK(!JS_IsException(sig), "the AbortSignal allocation failed");
-    st = JS_NewObject(ctx);
+    st = idl_slots_new(ctx);
     CHECK(!JS_IsException(st), "the AbortSignal slot record allocation failed");
     JS_SetPropertyStr(ctx, st, "aborted", aborted);
     JS_SetPropertyStr(ctx, st, "reason", reason);
@@ -173,19 +200,7 @@ static JSValue signal_new(JSContext *ctx, JSValue aborted, JSValue reason)
     CHECK(k != JS_ATOM_NULL, "the AbortSignal slot key could not be interned");
     JS_SetProperty(ctx, sig, k, st);
     JS_FreeAtom(ctx, k);
-
-    /* §3.2: AbortSignal inherits EventTarget, and `abort` is dispatched at it. */
-    event_target_install(ctx, sig);
-    event_target_install_handlers(ctx, sig, EH_SIGNAL);   /* §3.2: `attribute EventHandler onabort` */
-
-    JS_DefinePropertyGetSet(ctx, sig, JS_NewAtom(ctx, "aborted"),
-                            JS_NewCFunction(ctx, js_sig_get_aborted, "get aborted", 0), JS_UNDEFINED,
-                            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
-    JS_DefinePropertyGetSet(ctx, sig, JS_NewAtom(ctx, "reason"),
-                            JS_NewCFunction(ctx, js_sig_get_reason, "get reason", 0), JS_UNDEFINED,
-                            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
-    JS_SetPropertyStr(ctx, sig, "throwIfAborted",
-                      JS_NewCFunction(ctx, js_sig_throw_if_aborted, "throwIfAborted", 0));
+    /* THE SLOT RECORD IS ALL AN INSTANCE CARRIES. Every member is on the prototype above. */
     return sig;
 }
 
@@ -204,7 +219,7 @@ static bool signal_abort_state(JSContext *ctx, JSValueConst sig, JSValue reason)
         return false;
     }
     JS_SetPropertyStr(ctx, slots, "aborted", JS_TRUE);
-    JS_SetPropertyStr(ctx, slots, "reason", reason);
+    JS_SetPropertyStr(ctx, slots, "reason", abort_reason_or_default(ctx, reason));
     JS_FreeValue(ctx, slots);
     return true;
 }
@@ -272,11 +287,9 @@ static int js_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
             JS_ThrowTypeError(ctx, "abort called on something that is not an AbortController");
             return JS_STEP_ABRUPT;
         }
-        /* §3.2: an absent reason becomes an "AbortError" DOMException. A PRESENT one is used verbatim,
-           including undefined passed explicitly — the spec distinguishes them by argument count. */
-        reason = (s->hdr.argc > 0) ? JS_DupValue(ctx, step_arg(&s->hdr, 0))
-                                   : abort_reason_default(ctx, "AbortError",
-                                                          "signal is aborted without reason");
+        /* The reason travels verbatim; "signal abort" is what turns an undefined one into an AbortError, and
+           it does that for every caller rather than once per call site. */
+        reason = JS_DupValue(ctx, step_arg(&s->hdr, 0));
         if (!signal_abort_state(ctx, s->sig, reason))
             return JS_STEP_DONE;   /* already aborted: §3.2 fires nothing a second time */
     }
@@ -284,7 +297,7 @@ static int js_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
        as ordinary preemptible page code and abort() resumes after every one of them has returned. */
     if (JS_IsUndefined(s->ev))
         s->ev = event_new(ctx, "abort", /*bubbles*/ false, /*cancelable*/ false);
-    r = event_target_fire_run(ctx, &s->fphase, s->cb, s->sig, s->ev, cb_result, NULL, out_cb, out_argc);
+    r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), s->sig, s->ev, cb_result, NULL, out_cb, out_argc);
     if (r > 0) return r;
     if (r < 0) return JS_STEP_ABRUPT;
     return JS_STEP_DONE;
@@ -296,6 +309,34 @@ static const JSTrampStepDef js_abort_def = {
 static int g_abort_stepid = -1;
 
 
+JSValue abort_signal_new(JSContext *ctx)
+{
+    return signal_new(ctx, JS_FALSE, JS_UNDEFINED);
+}
+
+bool abort_signal_state(JSContext *ctx, JSValueConst sig, JSValue reason)
+{
+    return signal_abort_state(ctx, sig, reason);
+}
+
+/* §3.2's `[SameObject] readonly attribute AbortSignal signal` — an ACCESSOR on the prototype reading the
+   [[Signal]] slot, which is where the IDL puts it. It was an own DATA property, and the difference is not
+   cosmetic: a page could assign over `controller.signal` and hand the next reader a different object while
+   abort() went on aborting the real one. [SameObject] is satisfied because the slot holds one signal for the
+   controller's whole life. */
+static JSValue js_ctrl_get_signal(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue slots = signal_slots(ctx, this_val), sig;
+    (void)magic;
+    if (!JS_IsObject(slots)) {
+        JS_FreeValue(ctx, slots);
+        return JS_ThrowTypeError(ctx, "not an AbortController");
+    }
+    sig = JS_GetPropertyStr(ctx, slots, "signal");
+    JS_FreeValue(ctx, slots);
+    return sig;
+}
+
 static JSValue js_abort_controller_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
 {
     JSValue obj, sig;
@@ -303,25 +344,20 @@ static JSValue js_abort_controller_ctor(JSContext *ctx, JSValueConst new_target,
 
     if (JS_IsUndefined(new_target))
         return JS_ThrowTypeError(ctx, "constructor AbortController requires 'new'");
-    obj = JS_NewObject(ctx);
+    DCHECK(JS_IsObject(g_ctrl_proto), "an AbortController was built before its prototype existed");
+    obj = JS_NewObjectProto(ctx, g_ctrl_proto);
     if (JS_IsException(obj))
         return obj;
     sig = signal_new(ctx, JS_FALSE, JS_UNDEFINED);
-    /* [[Signal]], the slot abort() reads — and separately the [SameObject] `signal` property the page reads.
-       Two names for one object on purpose: the spec's algorithm uses the slot, the page uses the property, and
-       overwriting the property must not change what abort() aborts. */
+    /* [[Signal]] — the ONE place the signal lives. Both abort() and the `signal` getter read it. */
     {
-        JSValue st = JS_NewObject(ctx);
+        JSValue st = idl_slots_new(ctx);
         JSAtom k = JS_ValueToAtom(ctx, g_key);
         CHECK(!JS_IsException(st) && k != JS_ATOM_NULL, "the AbortController slot record allocation failed");
-        JS_SetPropertyStr(ctx, st, "signal", JS_DupValue(ctx, sig));
+        JS_SetPropertyStr(ctx, st, "signal", sig);
         JS_SetProperty(ctx, obj, k, st);
         JS_FreeAtom(ctx, k);
     }
-    JS_SetPropertyStr(ctx, obj, "signal", sig);
-    DCHECK(g_abort_stepid >= 0, "an AbortController was built before abort_init declared abort()'s machine");
-    JS_SetPropertyStr(ctx, obj, "abort",
-                      JS_NewCFunction2(ctx, NULL, "abort", 0, JS_CFUNC_step, g_abort_stepid));
     return obj;
 }
 
@@ -330,8 +366,7 @@ static JSValue js_sig_static_abort(JSContext *ctx, JSValueConst this_val, int ar
 {
     JSValue reason;
     (void)this_val;
-    reason = (argc > 0) ? JS_DupValue(ctx, argv[0])
-                        : abort_reason_default(ctx, "AbortError", "signal is aborted without reason");
+    reason = abort_reason_or_default(ctx, (argc > 0) ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED);
     return signal_new(ctx, JS_TRUE, reason);
 }
 
@@ -415,8 +450,35 @@ void abort_install(JSContext *ctx, JSValueConst global)
         g_abort_stepid = JS_RegisterStepDef(g_abort_rt, &js_abort_def);
     }
 
+    /* AbortSignal.prototype FIRST: the controller's prototype does not need it, but a signal minted by
+       anything at all does, and `abort_signal_new` is reachable from §5.4 the moment this returns. */
+    g_sig_proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(g_sig_proto), "the AbortSignal.prototype allocation failed");
+    /* §3.2: AbortSignal INHERITS EventTarget, so `addEventListener` and the `onabort` handler attribute are
+       reached through the chain rather than copied onto each signal. */
+    event_target_install(ctx, g_sig_proto);
+    event_target_install_handlers(ctx, g_sig_proto, EH_SIGNAL);
+    JS_DefinePropertyGetSet(ctx, g_sig_proto, JS_NewAtom(ctx, "aborted"),
+                            JS_NewCFunction(ctx, js_sig_get_aborted, "get aborted", 0), JS_UNDEFINED,
+                            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+    JS_DefinePropertyGetSet(ctx, g_sig_proto, JS_NewAtom(ctx, "reason"),
+                            JS_NewCFunction(ctx, js_sig_get_reason, "get reason", 0), JS_UNDEFINED,
+                            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+    JS_SetPropertyStr(ctx, g_sig_proto, "throwIfAborted",
+                      JS_NewCFunction(ctx, js_sig_throw_if_aborted, "throwIfAborted", 0));
+
+    g_ctrl_proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(g_ctrl_proto), "the AbortController.prototype allocation failed");
+    JS_DefinePropertyGetSet(ctx, g_ctrl_proto, JS_NewAtom(ctx, "signal"),
+                            JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_ctrl_get_signal, "get signal", 0,
+                                                 JS_CFUNC_getter_magic, 0), JS_UNDEFINED,
+                            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+    JS_SetPropertyStr(ctx, g_ctrl_proto, "abort",
+                      JS_NewCFunction2(ctx, NULL, "abort", 0, JS_CFUNC_step, g_abort_stepid));
+
     ctrl = JS_NewCFunction2(ctx, js_abort_controller_ctor, "AbortController", 0, JS_CFUNC_constructor, 0);
     CHECK(!JS_IsException(ctrl), "the AbortController constructor allocation failed");
+    JS_SetConstructor(ctx, ctrl, g_ctrl_proto);   /* .prototype and .constructor, both directions */
     JS_SetPropertyStr(ctx, (JSValue)global, "AbortController", ctrl);
 
     sigctor = JS_NewCFunction2(ctx, js_abort_signal_ctor, "AbortSignal", 0, JS_CFUNC_constructor, 0);
@@ -425,5 +487,6 @@ void abort_install(JSContext *ctx, JSValueConst global)
                       JS_NewCFunction(ctx, js_sig_static_abort, "abort", 0));
     JS_SetPropertyStr(ctx, sigctor, "timeout",
                       JS_NewCFunction2(ctx, NULL, "timeout", 1, JS_CFUNC_step, g_timeout_stepid));
+    JS_SetConstructor(ctx, sigctor, g_sig_proto);
     JS_SetPropertyStr(ctx, (JSValue)global, "AbortSignal", sigctor);
 }

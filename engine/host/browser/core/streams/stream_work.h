@@ -27,7 +27,13 @@ typedef struct {
     JSValue value;   /* its argument */
     JSValue chain;   /* a capability's resolve function, while PromiseResolve is in flight */
     JSValue err;     /* the reason a ControllerError sequence is carrying, until the stream adopts it */
-    JSValue cb[3];   /* step_call_run's buffer: [this, func, arg] */
+    /* step_call_run's buffer, `[this, func, args...]` — so it must hold 2 PLUS the most arguments any caller
+       passes. Three was enough while every call here took one argument and §5's `write(chunk, controller)`
+       takes two: the extra dup landed one slot past the array, on whatever field the owning state had put
+       next, and a controller vanished mid-machine. The buffer is the CALLER's, so its size is the caller's
+       contract and nothing inside step_call_run can check it — which is why the number is stated here rather
+       than left to match by accident. */
+    JSValue cb[4];
 } StreamWork;
 
 /* THE SLOTS ARE UNDEFINED BEFORE THEY ARE ANYTHING ELSE. A step state arrives ZEROED, and a zeroed JSValue is

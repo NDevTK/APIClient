@@ -16,9 +16,19 @@
  * Usage:  node engine/wpt.mjs [subdir-or-file]
  */
 import { spawnSync, spawn } from "node:child_process";
-import { existsSync, readdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, mkdtempSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, cpus } from "node:os";
+
+function walk(dir) {
+  const out = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) out.push(...walk(p));
+    else if (e.name.endsWith(".c")) out.push(p);
+  }
+  return out;
+}
 
 const ENGINE = import.meta.dirname;
 const WORK = join(ENGINE, ".work");
@@ -54,33 +64,15 @@ if (!existsSync(join(WPT, "resources", "testharness.js"))) {
    eight-minute wasm link per iteration is a gate nobody runs. The flags mirror the shipped build where they
    change the engine — ENABLE_DUMPS alters the interpreter's dispatch macros, and building the oracle without it
    tested a different interpreter once already. */
+/* EVERY BROWSER AND SOLVER SOURCE, not a hand-picked list. The list was picked per component, and each new one
+   arrived by chasing undefined symbols until the link succeeded — which is a list that only ever describes what
+   was needed last time. Streams §5.4's AbortSignal is what made that untenable: it is an EventTarget, which
+   reaches the solver's decision hook, which reaches the scheduler, whose COW covers the DOM. The gate links
+   what the project SHIPS, and a component that cannot be linked is a component that cannot be tested. */
 const SRCS = [
   "qjs/quickjs.c", "qjs/libregexp.c", "qjs/libunicode.c", "qjs/dtoa.c",
-  /* THE SOLVER HALF IS LINKED IN, not stubbed out. Response's body-used latch rides the COW delta, which is
-     cow.c, which needs engine.c's fork hook — and a no-op stand-in for that capture would make the gate agree
-     with a Response that does not time-travel. The gate runs the engine this project ships. */
-  "host/solver/concolic.c", "host/solver/flow.c", "host/solver/absent.c",
-  "host/solver/cow.c",
-  "host/browser/core/idl_args.c",
-  "host/browser/core/idl_iter.c",
-  "host/browser/core/fetch/headers.c",
-  "host/browser/core/byte_reader.c",
-  "host/browser/core/streams/stream_work.c",
-  "host/browser/core/streams/readable_stream.c",
-  "host/browser/core/streams/queuing_strategy.c",
-  "host/browser/core/encoding/encoding.c",
-  "host/browser/core/timing/timer.c",
-  "host/browser/core/fetch/body.c",
-  "host/browser/core/file/blob.c",
-  "host/browser/core/html/form_data.c",
-  "host/browser/core/fetch/response.c",
-  "host/browser/core/fetch/request.c",
-  "host/browser/core/fetch/fetch.c",
-  "host/solver/endpoint.c",
-  "host/browser/core/frame/location.c",
-  "host/browser/core/url/url.c",
-  "host/browser/core/url/idna.c",
-  "host/browser/core/url/url_search_params.c",
+  ...walk(join(ENGINE, "host", "browser")).map((f) => relative(ENGINE, f)),
+  ...walk(join(ENGINE, "host", "solver")).map((f) => relative(ENGINE, f)),
   "host/wpt_runner.c",
 ].map((f) => join(ENGINE, f));
 
@@ -91,10 +83,30 @@ const bin = join(mkdtempSync(join(tmpdir(), "wpt-")), "wpt.exe");
    That is not a warning-shaped problem: it segfaulted the whole corpus with no output, and it read as a crash
    in the engine rather than as a missing #include, which is the most expensive shape a diagnostic can take.
    -Werror on that one diagnostic makes it a build failure naming the function. */
+/* LEXBOR, BUILT NATIVELY ONCE. Streams §5.4 gives every writable controller a real AbortSignal, which is an
+   EventTarget, which reaches the solver's decision hook and through it the scheduler — and the scheduler's COW
+   covers the DOM, so the gate needs the same tree the shipped build has. Vendored and built on first use, like
+   the corpus itself; the .a is committed to nothing and rebuilt if the source moves. */
+const LEXBOR_SRC = join(WORK, "lexbor-src");
+const LEXBOR_BUILD = join(WORK, "lexbor-native");
+const LEXBOR_LIB = join(LEXBOR_BUILD, "liblexbor_static.a");
+if (!existsSync(LEXBOR_LIB)) {
+  console.log("[wpt] building lexbor natively (once)…");
+  mkdirSync(LEXBOR_BUILD, { recursive: true });
+  for (const [cmd, args] of [["cmake", ["-DCMAKE_BUILD_TYPE=Release", "-DLEXBOR_BUILD_SHARED=OFF",
+                                        "-DLEXBOR_BUILD_STATIC=ON", "-DLEXBOR_BUILD_TESTS=OFF",
+                                        "-DLEXBOR_BUILD_EXAMPLES=OFF", LEXBOR_SRC]],
+                             ["make", ["-j" + (cpus().length || 4)]]]) {
+    const b = spawnSync(cmd, args, { cwd: LEXBOR_BUILD, encoding: "utf8" });
+    if (b.status !== 0) { console.error(`[wpt] lexbor ${cmd} FAILED\n` + (b.stderr || "")); process.exit(1); }
+  }
+}
+
 const cc = spawnSync("gcc", ["-O1", "-w", "-Werror=implicit-function-declaration", "-DNDEBUG", "-D_GNU_SOURCE", '-DCONFIG_VERSION="wpt"',
   "-DAPICLIENT_DEV=1", "-DENABLE_DUMPS",
   "-I" + join(ENGINE, "qjs"), "-I" + join(ENGINE, "host"), "-I" + join(ENGINE, "host", "browser"),
-  ...SRCS, "-o", bin, "-lm", "-lpthread"], { encoding: "utf8" });
+  "-I" + join(LEXBOR_SRC, "source"),
+  ...SRCS, LEXBOR_LIB, "-o", bin, "-lm", "-lpthread"], { encoding: "utf8" });
 if (cc.status !== 0) { console.error("[wpt] runner build FAILED\n" + (cc.stderr || "")); process.exit(1); }
 
 /* Which files to run. A `.any.js` is the portable form — it carries no HTML around it, which is what lets a

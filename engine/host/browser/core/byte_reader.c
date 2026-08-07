@@ -146,7 +146,7 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
     }
 
     if (s->stage == BR_ACQUIRE) {
-        r = step_call_run(ctx, &s->cphase, s->cb, readable_stream_op(RS_OP_GET_READER), s->stream, 0, NULL,
+        r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), readable_stream_op(RS_OP_GET_READER), s->stream, 0, NULL,
                           cb_result, &s->reader, out_cb, out_argc);
         if (r > 0) return r;
         if (JS_IsException(s->reader)) return JS_STEP_ABRUPT;
@@ -157,7 +157,7 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         const ByteReaderIface *f = iface_of(s->hdr.this_val);
         JSValue read_promise;
         DCHECK(f != NULL, "a byte reader lost its interface between two of its own stages");
-        r = step_call_run(ctx, &s->cphase, s->cb, readable_stream_op(RS_OP_READ), s->reader, 0, NULL,
+        r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), readable_stream_op(RS_OP_READ), s->reader, 0, NULL,
                           cb_result, &read_promise, out_cb, out_argc);
         if (r > 0) return r;
         if (JS_IsException(read_promise)) return JS_STEP_ABRUPT;
@@ -170,7 +170,7 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
     }
 
     DCHECK(s->stage == BR_SETTLE, "the byte-read machine was re-entered at a stage it never parks in");
-    r = step_call_run(ctx, &s->cphase, s->cb, s->func, JS_UNDEFINED, 1, (JSValueConst *)&s->value,
+    r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), s->func, JS_UNDEFINED, 1, (JSValueConst *)&s->value,
                       cb_result, &settled, out_cb, out_argc);
     if (r > 0) return r;          /* parked ON THE SETTLE; the `then` read runs with a flow base under it */
     JS_FreeValue(ctx, settled);   /* a resolving function's return value is undefined and unobservable */

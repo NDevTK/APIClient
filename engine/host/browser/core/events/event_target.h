@@ -9,6 +9,13 @@ void event_target_init(JSContext *ctx);                          /* the private 
    nothing there runs the leak check; the moment the fixture harness installed the same components it ships
    with, JS_FreeRuntime's gc_obj_list assert named it. */
 void event_target_free(JSContext *ctx);
+
+/* WHO KNOWS A TARGET'S ANCESTORS. §2.9's propagation path walks up the tree, and the tree is the DOM's — so the
+   DOM registers the walk rather than this file naming it. `ancestors` answers an Array of the target's
+   ancestors, nearest first, and an empty one for a target that is in no tree. A host that registers none — a
+   headless harness with no document — dispatches at the target and nowhere else, which is the whole of what
+   §2.9 says for a target with no parent. */
+void event_target_set_tree(JSValue (*ancestors)(JSContext *ctx, JSValueConst target));
 /* add/removeEventListener. NOT dispatchEvent: §2.9 dispatch is SYNCHRONOUS and reports whether the default
    action was cancelled, and this engine runs a listener as its own FLOW (never a JS_Call from C), so a caller
    would be handed an answer before any listener had run. It is honestly absent until the dispatch is a step
@@ -30,10 +37,11 @@ void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask
 void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev);
 /* THE SAME FIRE for a caller that can park — §2.9 is synchronous, and §3.2's `abort` is specified that way. One
    dispatch, two reaches: this is the REQUEST form, event_target_fire is the queued one. `phase` and `cb` belong
-   to the calling machine and `cb` needs FOUR slots, and so does `ev`: the CALLER owns it and holds it across
+   to the calling machine and `cb` needs FOUR slots — pass it through STEP_CB so its capacity comes with it, as
+   a forwarded buffer can no longer be measured. `ev` is the caller's too: the CALLER owns it and holds it across
    the suspension, because §2.9 dispatches an event that exists rather than one the dispatch invents. Returns
    JS_STEP_CALL (return it) or 0 when it has answered. */
-int  event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, JSValueConst target,
+int  event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, JSValueConst target,
                            JSValueConst ev, JSValue in,
                            bool *pnot_canceled, JSValue **out_cb, int *out_argc);
 /* §7.6: the window the propagation path ends at. */

@@ -39,6 +39,9 @@ engine/.work/v8mjsunit/
 engine/.work/lexbor-src/
 engine/.work/lxnat/
 engine/.work/lxlist
+# The same lexbor, built natively by the WPT gate (cmake + make into a static archive) so the gate's runner can
+# link the real DOM. Built on first use from the checkout above; regenerable, never committed.
+engine/.work/lexbor-native/
 
 # Scratch CLONES under .work — toolchains and side experiments (emsdk, depot_tools, z3, qemu-wasm,
 # unicorn-js, mini-rv32ima). Each is its own git repo, so `git add -A` recorded it as a GITLINK with no

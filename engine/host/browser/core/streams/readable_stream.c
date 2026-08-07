@@ -398,7 +398,7 @@ static int reader_closed_run(JSContext *ctx, StreamWork *w, ReaderData *rd, int 
         w->value = JS_DupValue(ctx, value);
     }
     arg = w->value;
-    r = step_call_run(ctx, &w->phase, w->cb, w->func, JS_UNDEFINED, 1, &arg, in, &out, out_cb, out_argc);
+    r = step_call_run(ctx, &w->phase, STEP_CB(w->cb), w->func, JS_UNDEFINED, 1, &arg, in, &out, out_cb, out_argc);
     if (r > 0) return r;
     if (JS_IsException(out)) return -1;
     JS_FreeValue(ctx, out);
@@ -483,7 +483,7 @@ static int stream_settle_run(JSContext *ctx, StreamWork *w, StreamData *d, JSVal
             if (JS_IsException(w->value)) { JS_FreeValue(ctx, in); return -1; }
         }
         arg = w->value;
-        r = step_call_run(ctx, &w->phase, w->cb, w->func, JS_UNDEFINED, 1, &arg, in, &out, out_cb, out_argc);
+        r = step_call_run(ctx, &w->phase, STEP_CB(w->cb), w->func, JS_UNDEFINED, 1, &arg, in, &out, out_cb, out_argc);
         if (r > 0) return r;
         if (JS_IsException(out)) return -1;
         JS_FreeValue(ctx, out);
@@ -543,7 +543,7 @@ static int js_fwd_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
     JSValue out;
     int r;
 
-    r = step_call_run(ctx, &s->phase, s->cb, JS_StepClosureData(&s->hdr, 0), JS_UNDEFINED, 1, &arg,
+    r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), JS_StepClosureData(&s->hdr, 0), JS_UNDEFINED, 1, &arg,
                       cb_result, &out, out_cb, out_argc);
     if (r > 0) return r;
     if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -631,7 +631,7 @@ static int ctrl_pull_run(JSContext *ctx, StreamWork *w, JSValueConst ctrl_v, JSV
     if (w->pull == P_CALL) {
         JSValueConst arg = ctrl_v;
         JSValue res;
-        r = step_call_run(ctx, &w->phase, w->cb, c->pull_fn, c->source, 1, &arg, in, &res,
+        r = step_call_run(ctx, &w->phase, STEP_CB(w->cb), c->pull_fn, c->source, 1, &arg, in, &res,
                           out_cb, out_argc);
         if (r > 0) return r;
         JS_FreeValue(ctx, w->value);
@@ -879,7 +879,7 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
         return JS_STEP_DONE;
     }
     arg = s->result;
-    r = step_call_run(ctx, &s->w.phase, s->w.cb, s->settle, JS_UNDEFINED, 1, &arg, cb_result, &out,
+    r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), s->settle, JS_UNDEFINED, 1, &arg, cb_result, &out,
                       out_cb, out_argc);
     if (r > 0) return r;
     if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -1086,7 +1086,7 @@ static int js_get_reader_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
 
     if (s->w.stage == 2) {
         arg = s->w.value;
-        r = step_call_run(ctx, &s->w.phase, s->w.cb, s->w.func, JS_UNDEFINED, 1, &arg, cb_result, &out,
+        r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), s->w.func, JS_UNDEFINED, 1, &arg, cb_result, &out,
                           out_cb, out_argc);
         if (r > 0) return r;
         JS_FreeValue(ctx, out);
@@ -1225,7 +1225,7 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         }
         if (c && !JS_IsUndefined(c->cancel_fn)) {
             arg = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
-            r = step_call_run(ctx, &s->w.phase, s->w.cb, c->cancel_fn, c->source, 1, &arg, cb_result, &out,
+            r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), c->cancel_fn, c->source, 1, &arg, cb_result, &out,
                               out_cb, out_argc);
             if (r > 0) return r;
             /* §4.9.4 builds the cancel algorithm with PromiseCall too: a throwing `cancel` becomes a REJECTED
@@ -1272,7 +1272,7 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
 
     DCHECK(s->w.stage == CN_SETTLE, "the cancel machine resumed in a stage it never parks in");
     arg = s->w.value;
-    r = step_call_run(ctx, &s->w.phase, s->w.cb, s->settle, JS_UNDEFINED, 1, &arg, cb_result, &out,
+    r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), s->settle, JS_UNDEFINED, 1, &arg, cb_result, &out,
                       out_cb, out_argc);
     if (r > 0) return r;
     if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -1384,7 +1384,7 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
 
     if (s->w.stage == CS_SIZE) {
         JSValueConst chunk = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
-        r = step_call_run(ctx, &s->w.phase, s->w.cb, c->size_fn, JS_UNDEFINED, 1, &chunk, cb_result, &out,
+        r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), c->size_fn, JS_UNDEFINED, 1, &chunk, cb_result, &out,
                           out_cb, out_argc);
         if (r > 0) return r;
         cb_result = JS_UNDEFINED;
@@ -1426,7 +1426,7 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
 
     if (s->w.stage == CS_SETTLE) {
         arg = s->w.value;
-        r = step_call_run(ctx, &s->w.phase, s->w.cb, s->w.func, JS_UNDEFINED, 1, &arg, cb_result, &out,
+        r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), s->w.func, JS_UNDEFINED, 1, &arg, cb_result, &out,
                           out_cb, out_argc);
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -1596,7 +1596,7 @@ static int aiter_call_run(JSContext *ctx, JSAiterState *s, JSValueConst fn, JSVa
                           int argc, JSValueConst *argv, JSValue in, JSValue *pout,
                           JSValue **out_cb, int *out_argc)
 {
-    return step_call_run(ctx, &s->phase, s->cb, fn, this_val, argc, argv, in, pout, out_cb, out_argc);
+    return step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, this_val, argc, argv, in, pout, out_cb, out_argc);
 }
 
 static int js_aiter_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
@@ -1829,7 +1829,7 @@ static int js_values_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         s->prevent_cancel = argc > 0 && idl_dict_bool(ctx, argv[0], "preventCancel");
         s->stage = 1;
     }
-    r = step_call_run(ctx, &s->phase, s->cb, g_get_reader_fn, hdr->this_val, 0, NULL,
+    r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), g_get_reader_fn, hdr->this_val, 0, NULL,
                       cb_result, &reader, out_cb, out_argc);
     if (r > 0) return r;
     if (JS_IsException(reader)) return -1;
@@ -1972,7 +1972,7 @@ static int tee_ctrl_run(JSContext *ctx, JSTeeState *s, TeeData *t, int i, int wh
     JSValue out;
     int r, argc = which == CF_CLOSE ? 0 : 1;
 
-    r = step_call_run(ctx, &s->phase, s->cb, g_ctrl_fn[which], t->ctrl[i], argc, &arg, in, &out,
+    r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), g_ctrl_fn[which], t->ctrl[i], argc, &arg, in, &out,
                       out_cb, out_argc);
     if (r > 0) return r;
     if (JS_IsException(out)) {
@@ -2066,7 +2066,7 @@ static int js_tee_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
 again:
     if (s->stage == TS_READ) {
         JSValueConst data[1];
-        r = step_call_run(ctx, &s->phase, s->cb, g_read_fn, t->reader, 0, NULL, cb_result, &out,
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), g_read_fn, t->reader, 0, NULL, cb_result, &out,
                           out_cb, out_argc);
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -2111,7 +2111,7 @@ again:
     if (s->stage == TS_RESOLVE_CANCEL) {
         JSValueConst undef = JS_UNDEFINED;
         if (t->canceled[0] && t->canceled[1]) { JS_FreeValue(ctx, cb_result); return JS_STEP_DONE; }
-        r = step_call_run(ctx, &s->phase, s->cb, t->cancel_funcs[0], JS_UNDEFINED, 1, &undef, cb_result, &out,
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), t->cancel_funcs[0], JS_UNDEFINED, 1, &undef, cb_result, &out,
                           out_cb, out_argc);
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -2121,7 +2121,7 @@ again:
 
     if (s->stage == TS_CANCEL_SOURCE) {
         JSValueConst arg = s->value;
-        r = step_call_run(ctx, &s->phase, s->cb, g_reader_cancel_fn, t->reader, 1, &arg, cb_result, &out,
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), g_reader_cancel_fn, t->reader, 1, &arg, cb_result, &out,
                           out_cb, out_argc);
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -2139,7 +2139,7 @@ again:
         /* §4.2 resolves cancelPromise WITH the source's cancel result, so the branches' cancel promises adopt
            it rather than settling ahead of it. */
         JSValueConst arg = s->value;
-        r = step_call_run(ctx, &s->phase, s->cb, t->cancel_funcs[0], JS_UNDEFINED, 1, &arg, cb_result, &out,
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), t->cancel_funcs[0], JS_UNDEFINED, 1, &arg, cb_result, &out,
                           out_cb, out_argc);
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -2221,7 +2221,7 @@ static int js_tee_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         }
     }
     if (s->w.stage == 1) {
-        r = step_call_run(ctx, &s->w.phase, s->w.cb, g_get_reader_fn, hdr->this_val, 0, NULL,
+        r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), g_get_reader_fn, hdr->this_val, 0, NULL,
                           cb_result, &s->reader, out_cb, out_argc);
         if (r > 0) return r;
         if (JS_IsException(s->reader)) return -1;
@@ -2432,12 +2432,12 @@ static int js_from_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
             }
             {
                 JSValueConst arg = s->value;
-                r = step_call_run(ctx, &s->phase, s->cb, s->result, f->iterator, 1, &arg, cb_result, &out,
+                r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), s->result, f->iterator, 1, &arg, cb_result, &out,
                                   out_cb, out_argc);
             }
         } else {
             DCHECK(op == FROM_PULL, "a §4.2 `from` machine ran with an operation it does not have");
-            r = step_call_run(ctx, &s->phase, s->cb, f->next_fn, f->iterator, 0, NULL, cb_result, &out,
+            r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), f->next_fn, f->iterator, 0, NULL, cb_result, &out,
                               out_cb, out_argc);
         }
         if (r > 0) return r;
@@ -2473,7 +2473,7 @@ settle_promise:
             s->chain = funcs[s->stage == FS_REJECT];
             JS_FreeValue(ctx, funcs[s->stage == FS_REJECT ? 0 : 1]);
         }
-        r = step_call_run(ctx, &s->phase, s->cb, s->chain, JS_UNDEFINED, 1, &arg, cb_result, &out,
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), s->chain, JS_UNDEFINED, 1, &arg, cb_result, &out,
                           out_cb, out_argc);
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -2526,7 +2526,7 @@ settle_promise:
     DCHECK(s->stage == FS_FEED, "a §4.2 `from` machine resumed in a stage it never parks in");
     {
         JSValueConst arg = s->value;
-        r = step_call_run(ctx, &s->phase, s->cb, g_ctrl_fn[s->done ? CF_CLOSE : CF_ENQUEUE], f->controller,
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), g_ctrl_fn[s->done ? CF_CLOSE : CF_ENQUEUE], f->controller,
                           s->done ? 0 : 1, &arg, cb_result, &out, out_cb, out_argc);
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -2628,7 +2628,7 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
             JS_ThrowTypeError(ctx, "an iterable's iterator method is not callable");
             return -1;
         }
-        r = step_call_run(ctx, &s->w.phase, s->w.cb, s->method, src, 0, NULL, cb_result, &s->iterator,
+        r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), s->method, src, 0, NULL, cb_result, &s->iterator,
                           out_cb, out_argc);
         if (r > 0) return r;
         if (JS_IsException(s->iterator)) return -1;
@@ -2874,7 +2874,7 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     DCHECK(dr != NULL, "a drain machine's record stopped being one");
 
     if (s->stage == DS_READ) {
-        r = step_call_run(ctx, &s->phase, s->cb, g_read_fn, dr->reader, 0, NULL, cb_result, &out,
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), g_read_fn, dr->reader, 0, NULL, cb_result, &out,
                           out_cb, out_argc);
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -2884,7 +2884,7 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     }
 
     if (s->stage == DS_RELEASE) {
-        r = step_call_run(ctx, &s->phase, s->cb, g_release_fn, dr->reader, 0, NULL, cb_result, &out,
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), g_release_fn, dr->reader, 0, NULL, cb_result, &out,
                           out_cb, out_argc);
         if (r > 0) return r;
         if (JS_IsException(out)) {
@@ -2909,7 +2909,7 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     DCHECK(s->stage == DS_SETTLE, "a drain machine resumed in a stage it never parks in");
     {
         JSValueConst arg = s->value;
-        r = step_call_run(ctx, &s->phase, s->cb, dr->funcs[s->reject], JS_UNDEFINED, 1, &arg, cb_result, &out,
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), dr->funcs[s->reject], JS_UNDEFINED, 1, &arg, cb_result, &out,
                           out_cb, out_argc);
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -3179,7 +3179,7 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     if (s->w.stage == RSC_CALL) {
         JSValue res;
         arg = s->controller;
-        r = step_call_run(ctx, &s->w.phase, s->w.cb, s->start_fn, s->source, 1, &arg,
+        r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), s->start_fn, s->source, 1, &arg,
                           cb_result, &res, out_cb, out_argc);
         if (r > 0) return r;
         JS_FreeValue(ctx, s->w.value);

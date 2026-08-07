@@ -144,7 +144,7 @@ static int js_ce_reaction_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         if (!JS_IsFunction(ctx, s->fn)) return JS_STEP_DONE;
     }
     /* Everything past the element and the callback NAME is the callback's own arguments. */
-    r = step_call_run(ctx, &s->cphase, s->cb, s->fn, el, s->hdr.argc - 2,
+    r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), s->fn, el, s->hdr.argc - 2,
                       s->hdr.argc > 2 ? (JSValueConst *)s->hdr.argv + 2 : NULL,
                       cb_result, &ignored, out_cb, out_argc);
     if (r > 0) return r;

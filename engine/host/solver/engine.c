@@ -2,7 +2,6 @@
 #include "core/fetch/fetch.h"
 #include "solver/engine.h"
 #include "core/html/unhandled_rejection.h"
-#include "core/dom/node.h"   /* node_wrap_stats — the identity map's size */
 #include "core/idl_args.h"   /* the one point every Web API member passes through — see idl_slowest_step */   /* HTML §8.1.7.5: what the browser half owes this checkpoint */
 #include "solver/result.h"
 #include "solver/solve.h"
@@ -16,6 +15,16 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+
+/* THE DOM IDENTITY MAP'S SIZE, for the diagnostic line below — REGISTERED rather than reached for. Including
+   the DOM's header here made the SOLVER depend on lexbor for one statistic, and through that on every host
+   that links the scheduler: the streams gate could not build a real AbortSignal because the chain from it
+   reached this line. A host with no document registers none and the diagnostic reports zero, which is what a
+   run with no wrapped nodes should say. */
+static void (*g_wrap_stats)(long *n, long *cap);
+
+void engine_set_wrap_stats(void (*fn)(long *n, long *cap)) { g_wrap_stats = fn; }
+
 
 /* FETCH-AWAIT parking: a host fetch registers its resolve capability on THE RUNNING FLOW. A flow that awaits it
    suspends its async body; the flow's own pending register is drained when the reply arrives — each awaiting
@@ -840,7 +849,7 @@ int engine_sched_step(void) {
                     JSMemoryUsage mem;
                     int64_t steps_ms = idl_step_total(&steps_n);
                     JS_FlowPreemptStats(&pq, &pf);
-                    node_wrap_stats(&wrap_n, &wrap_cap);
+                    if (g_wrap_stats) g_wrap_stats(&wrap_n, &wrap_cap);
                     /* THE LIVE HEAP, because a garbage collection is the one thing reachable from an ordinary
                        Web API call whose cost is the size of everything ELSE. createElement allocates — a
                        wrapper, a shape — so it can trigger a collection, and a collection marks the whole live

@@ -35,6 +35,7 @@
 #include "core/file/blob.h"
 #include "core/streams/readable_stream.h"
 #include "core/streams/queuing_strategy.h"
+#include "core/streams/writable_stream.h"
 #include "core/encoding/encoding.h"
 
 static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -63,6 +64,8 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     readable_stream_install(ctx, global);
     queuing_strategy_init(ctx);
     queuing_strategy_install(ctx, global);
+    writable_stream_init(ctx);
+    writable_stream_install(ctx, global);
     blob_init(ctx);
     blob_install(ctx, global);
     encoding_init(ctx);

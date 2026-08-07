@@ -31,6 +31,7 @@
 #include "browser/core/file/blob.h"
 #include "browser/core/streams/readable_stream.h"
 #include "browser/core/streams/queuing_strategy.h"
+#include "browser/core/streams/writable_stream.h"
 #include "browser/core/encoding/encoding.h"
 #include "browser/core/dom/abort.h"
 #include "browser/core/html/unhandled_rejection.h"
@@ -227,6 +228,7 @@ QJS_EXPORT void qjs_teardown(void)
     request_free(g_ctx);   /* Response.prototype — one object, held for the runtime's life */
     url_free(g_ctx);
     usp_free(g_ctx);
+    writable_stream_free(g_ctx);
     queuing_strategy_free(g_ctx);
     readable_stream_free(g_ctx);
     blob_free(g_ctx);

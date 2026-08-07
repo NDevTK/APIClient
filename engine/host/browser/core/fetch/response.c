@@ -326,7 +326,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
            algorithm on purpose, because a C entry beside the step machine would be a second implementation of
            it; the way to run it is the way a page does, as a CALL REQUEST on the tramp where a loop inside a
            `toJSON` suspends like any other. */
-        r = step_call_run(ctx, &s->cphase, s->cb, response_json_stringify(), JS_UNDEFINED,
+        r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), response_json_stringify(), JS_UNDEFINED,
                           argc > 0 ? 1 : 0, argc > 0 ? &argv[0] : NULL, cb_result, &s->json,
                           out_cb, out_argc);
         if (r > 0) return r;          /* parked INSIDE the page's toJSON */

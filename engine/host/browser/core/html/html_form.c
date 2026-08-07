@@ -332,7 +332,7 @@ static int js_reqsubmit_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
        this resumes after every one of them has returned. */
     if (JS_IsUndefined(s->ev))
         s->ev = event_new(ctx, "submit", /*bubbles*/ true, /*cancelable*/ true);
-    r = event_target_fire_run(ctx, &s->fphase, s->cb, s->hdr.this_val, s->ev, cb_result, &not_canceled,
+    r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), s->hdr.this_val, s->ev, cb_result, &not_canceled,
                               out_cb, out_argc);
     if (r > 0) return r;
     if (r < 0) return JS_STEP_ABRUPT;

@@ -19,11 +19,10 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/idl_slots.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/events/event.h"
-#include "core/dom/node.h"
-#include <lexbor/dom/dom.h>
 
 /* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
 static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
@@ -40,6 +39,12 @@ static int g_ready;
 /* The WINDOW — §7.6's document parent on a propagation path, and Web IDL's relevant global for a [Global]
    operation called with no receiver. Declared here because both of those are read before the machine below. */
 static JSValue g_window;
+/* §2.9's PROPAGATION PATH IS THE TREE'S QUESTION, not this component's. A target's ancestors are the DOM's,
+   and an EventTarget that is not a Node — an AbortSignal, which Streams §5.4 gives every writable controller —
+   has none. Naming node.c here made EVERY host that installs events link the whole DOM and lexbor with it,
+   which is why the streams gate could not build with a real AbortSignal in it. The tree registers the walk; a
+   host that registers none has a flat path, which is exactly right for one with no document. */
+static JSValue (*g_ancestors)(JSContext *ctx, JSValueConst target);
 /* HTML §8.1.7's handler map key, and the MARKER that holds the handler's place in a listener list — see the
    event-handler section below. Declared here because event_target_init mints them. */
 static JSValue g_handler_key;
@@ -81,6 +86,11 @@ void event_target_init(JSContext *ctx)
         idl_optional_from(2);   /* §2.7: `removeEventListener(type, callback, optional options)` */
     }
 
+}
+
+void event_target_set_tree(JSValue (*ancestors)(JSContext *ctx, JSValueConst target))
+{
+    g_ancestors = ancestors;
 }
 
 void event_target_free(JSContext *ctx)
@@ -127,7 +137,7 @@ static JSValue listener_map(JSContext *ctx, JSValueConst target, int create)
         map = JS_UNDEFINED;
     if (!JS_IsObject(map) && create) {
         JS_FreeValue(ctx, map);
-        map = JS_NewObject(ctx);
+        map = idl_slots_new(ctx);
         if (!JS_IsException(map))
             JS_SetProperty(ctx, (JSValue)target, k, JS_DupValue(ctx, map));
     }
@@ -375,7 +385,7 @@ static JSValue handler_map(JSContext *ctx, JSValueConst target, int create)
         map = JS_UNDEFINED;
     if (!JS_IsObject(map) && create) {
         JS_FreeValue(ctx, map);
-        map = JS_NewObject(ctx);
+        map = idl_slots_new(ctx);
         if (!JS_IsException(map))
             JS_SetProperty(ctx, (JSValue)target, k, JS_DupValue(ctx, map));
     }
@@ -570,17 +580,28 @@ static JSValue js_dispatch_fini(JSContext *ctx, void *st, bool take_result)
 static JSValue dispatch_path(JSContext *ctx, JSValueConst target)
 {
     JSValue path = JS_NewArray(ctx);
-    lxb_dom_node_t *n = node_of(target);
     uint32_t k = 0;
 
     JS_SetPropertyUint32(ctx, path, k++, JS_DupValue(ctx, target));
-    if (n) {
-        for (n = n->parent; n; n = n->parent)
-            JS_SetPropertyUint32(ctx, path, k++, node_wrap(ctx, n));
-        /* §7.6: the window is the document's parent for event purposes, which is how a `load` listener on
-           window hears an event fired at the document. */
-        if (JS_IsObject(g_window))
-            JS_SetPropertyUint32(ctx, path, k++, JS_DupValue(ctx, g_window));
+    if (g_ancestors) {
+        /* THE HOOK ANSWERS "IS THIS TARGET IN THE TREE", and the ancestor list is how it says yes. An
+           EventTarget that is in no tree — an AbortSignal, which Streams §5.4 gives every writable controller —
+           gets UNDEFINED and a path of one. A DOCUMENT gets an EMPTY array, which is a different answer: it IS
+           in the tree, it simply has nothing above it, and §7.6 still puts the window above THAT. Testing the
+           list's length instead of its presence collapsed the two and dropped the window off the document's
+           path, so `window.addEventListener('DOMContentLoaded', …)` — the way most bundles start — never ran. */
+        JSValue up = g_ancestors(ctx, target);
+        if (JS_IsArray(up)) {
+            uint32_t i, n = 0;
+            JSValue len_v = JS_GetPropertyStr(ctx, up, "length");
+            JS_ToUint32(ctx, &n, len_v);
+            JS_FreeValue(ctx, len_v);
+            for (i = 0; i < n; i++)
+                JS_SetPropertyUint32(ctx, path, k++, JS_GetPropertyUint32(ctx, up, i));
+            if (JS_IsObject(g_window))
+                JS_SetPropertyUint32(ctx, path, k++, JS_DupValue(ctx, g_window));
+        }
+        JS_FreeValue(ctx, up);
     }
     return path;
 }
@@ -693,7 +714,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             /* §2.9 "inner invoke": the listener is called with `this` = currentTarget and the event as its one
                argument. A CALL REQUEST, so the listener is ordinary preemptible page code and this machine
                parks — which is the whole reason the engine's own firing can share this walk. */
-            r = step_call_run(ctx, &s->cphase, s->cb, fn, s->cur, 1, (JSValueConst *)&s->ev,
+            r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), fn, s->cur, 1, (JSValueConst *)&s->ev,
                               cb_result, &ignored, out_cb, out_argc);
             JS_FreeValue(ctx, fn);
             cb_result = JS_UNDEFINED;
@@ -802,9 +823,11 @@ void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev)
    question after the caller has returned.
    It is the SAME machine through the same internal door — only the reach differs, which is the whole point of
    there being one dispatch: a caller that can park calls it as a REQUEST, one that cannot enqueues it as a job.
-   `phase` and `cb` are the caller machine's own; `cb` needs FOUR slots ([this, func, target, event]).
+   `phase` and `cb` are the caller machine's own; `cb` needs FOUR slots ([this, func, target, event]), and it
+   is FORWARDED, so its capacity is forwarded with it and the caller passes both through STEP_CB — a buffer
+   that has decayed to a pointer can no longer say how big it is.
      0 = done (*pnot_canceled set when asked), 3 = the caller must return that step code. */
-int event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, JSValueConst target,
+int event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, JSValueConst target,
                           JSValueConst ev, JSValue in,
                           bool *pnot_canceled, JSValue **out_cb, int *out_argc)
 {
@@ -818,11 +841,11 @@ int event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, JSValueCo
         DCHECK(JS_IsObject(ev), "a synchronous fire was handed no event — §2.9 dispatches one that exists");
         argv[0] = target;
         argv[1] = ev;
-        r = step_call_run(ctx, phase, cb, g_dispatch_fn, JS_UNDEFINED, 2, argv, in, &out, out_cb, out_argc);
+        r = step_call_run(ctx, phase, cb, cb_cap, g_dispatch_fn, JS_UNDEFINED, 2, argv, in, &out, out_cb, out_argc);
         DCHECK(r == JS_STEP_CALL, "the dispatch request answered without parking");
         return r;
     }
-    r = step_call_run(ctx, phase, cb, JS_UNDEFINED, JS_UNDEFINED, 2, NULL, in, &out, out_cb, out_argc);
+    r = step_call_run(ctx, phase, cb, cb_cap, JS_UNDEFINED, JS_UNDEFINED, 2, NULL, in, &out, out_cb, out_argc);
     DCHECK(r == 0, "a synchronous fire resumed into something other than its answer");
     if (pnot_canceled) *pnot_canceled = JS_ToBool(ctx, out);
     JS_FreeValue(ctx, out);

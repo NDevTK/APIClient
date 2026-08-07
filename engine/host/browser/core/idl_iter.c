@@ -54,7 +54,7 @@ int iter_cursor_run(JSContext *ctx, JSStepHdr *h, IterCursor *c, JSValueConst sr
         c->phase = IT_CALL_ITERFN;
     }
     if (c->phase == IT_CALL_ITERFN) {
-        r = step_call_run(ctx, &c->cphase, c->cb, c->iterfn, src, 0, NULL, in, &c->iter, out_cb, out_argc);
+        r = step_call_run(ctx, &c->cphase, STEP_CB(c->cb), c->iterfn, src, 0, NULL, in, &c->iter, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return -1;
         in = JS_UNDEFINED;
@@ -76,7 +76,7 @@ int iter_cursor_run(JSContext *ctx, JSStepHdr *h, IterCursor *c, JSValueConst sr
     if (c->phase == IT_CALL_NEXT) {
         JS_FreeValue(ctx, c->res);
         c->res = JS_UNDEFINED;
-        r = step_call_run(ctx, &c->cphase, c->cb, c->next_fn, c->iter, 0, NULL, in, &c->res, out_cb, out_argc);
+        r = step_call_run(ctx, &c->cphase, STEP_CB(c->cb), c->next_fn, c->iter, 0, NULL, in, &c->res, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return -1;
         in = JS_UNDEFINED;
@@ -377,7 +377,7 @@ static int js_idl_pair_foreach_step(JSContext *ctx, void *st, JSValue cb_result,
             /* the operands are built fresh each entry; step_call_run dups them into its own buffer */
             f->ops->pair(ctx, s->hdr.this_val, s->i, &key, &value);
             args[0] = value; args[1] = key; args[2] = s->hdr.this_val;
-            r = step_call_run(ctx, &s->cphase, s->cb, fn, this_arg, 3, args, cb_result, &ignored,
+            r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), fn, this_arg, 3, args, cb_result, &ignored,
                               out_cb, out_argc);
             JS_FreeValue(ctx, key);
             JS_FreeValue(ctx, value);
@@ -386,7 +386,7 @@ static int js_idl_pair_foreach_step(JSContext *ctx, void *st, JSValue cb_result,
                it back at that width, so handing it 0 here left the call half-built and the machine parked for
                ever — visible only as a runtime that would not tear down, because a parked flow holds its
                receiver. The operands are already in the buffer; NULL says "do not rebuild them". */
-            r = step_call_run(ctx, &s->cphase, s->cb, fn, this_arg, 3, NULL, cb_result, &ignored,
+            r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), fn, this_arg, 3, NULL, cb_result, &ignored,
                               out_cb, out_argc);
         }
         cb_result = JS_UNDEFINED;

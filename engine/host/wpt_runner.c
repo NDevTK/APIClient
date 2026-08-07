@@ -34,6 +34,10 @@
 #include "core/html/form_data.h"
 #include "core/file/blob.h"
 #include "core/streams/readable_stream.h"
+#include "core/streams/writable_stream.h"
+#include "core/events/event.h"
+#include "core/events/event_target.h"
+#include "core/dom/abort.h"
 #include "solver/concolic.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -456,6 +460,18 @@ int main(int argc, char **argv)
     readable_stream_install(ctx, global);
     queuing_strategy_init(ctx);
     queuing_strategy_install(ctx, global);
+    /* §5.4's controller carries an AbortSignal, which is an EventTarget that DISPATCHES — so the three
+       pieces that stack has to have all exist: the listener key, the Event class the `abort` event is an
+       instance of, and the signal's own slot. Installing the signal without the Event class left the abort
+       path minting an event out of a class that had never been built. */
+    event_target_init(ctx);
+    event_init(ctx);
+    event_install(ctx, global);
+    event_target_install(ctx, global);
+    abort_init(ctx);        /* the AbortSignal slot key §5.4's signal lives in */
+    abort_install(ctx, global);
+    writable_stream_init(ctx);
+    writable_stream_install(ctx, global);
     blob_init(ctx);
     blob_install(ctx, global);
     encoding_init(ctx);
@@ -575,6 +591,10 @@ int main(int argc, char **argv)
     url_free(ctx);
     usp_free(ctx);
     form_data_free(ctx);
+    writable_stream_free(ctx);
+    abort_free(ctx);
+    event_free(ctx);
+    event_target_free(ctx);
     queuing_strategy_free(ctx);
     readable_stream_free(ctx);
     blob_free(ctx);

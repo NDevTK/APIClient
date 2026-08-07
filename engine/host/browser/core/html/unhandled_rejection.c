@@ -234,7 +234,7 @@ static int js_reject_notify_step(JSContext *ctx, void *st, JSValue cb_result, JS
         if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
     }
     global = JS_GetGlobalObject(ctx);
-    r = event_target_fire_run(ctx, &s->fphase, s->cb, global, s->ev, cb_result, &s->not_canceled,
+    r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), global, s->ev, cb_result, &s->not_canceled,
                               out_cb, out_argc);
     JS_FreeValue(ctx, global);
     if (r > 0) return r;
