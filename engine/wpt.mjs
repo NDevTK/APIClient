@@ -51,7 +51,7 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                    "streams/piping", "streams/transform-streams",
                    /* HTML 9.4's MESSAGING. Cross-document and cross-worker messaging is where popups, iframes
                       and this engine's one-WASM-instance-per-DOCUMENT rule meet, and it is also where the
-                      solver's  attacker source comes from. None of it exists yet, so this
+                      solver's `message.origin` attacker source comes from. None of it exists yet, so this
                       directory is the honest measurement of that: a component whose spec directory is not
                       checked out is a component whose gate cannot fail. */
                    "webmessaging"];
@@ -65,6 +65,29 @@ if (!existsSync(join(WPT, "resources", "testharness.js"))) {
     `  git clone --filter=blob:none --sparse https://github.com/web-platform-tests/wpt.git ${WPT}\n` +
     `  cd ${WPT} && git sparse-checkout set ${WPT_PATHS.join(" ")} && git checkout ${WPT_REV}`);
   process.exit(1);
+}
+
+/* THE CHECKOUT IS ENFORCED, NOT ASSUMED. WPT_PATHS is this gate's statement of what it measures, and until now
+   nothing made the working tree agree with it: the presence of testharness.js was the whole test, so a corpus
+   missing an entire directory answered "provisioned" and every file in that directory silently stopped being
+   run. That is the same defect the list's own comment names one line up — a directory that is not checked out
+   is a directory whose gate cannot fail — except that here the gate LOOKED green rather than looking absent,
+   which is worse. It happened: `webmessaging` was added to this list, measured at 0/52, and then reverted out
+   of the working tree by an unrelated restore; the next run reported the same total as before and nothing said
+   the area had gone. `sparse-checkout set` is idempotent and takes about a second when the list already
+   matches, so it runs every time rather than being guarded by a check that can itself be wrong. */
+{
+  const set = spawnSync("git", ["sparse-checkout", "set", ...WPT_PATHS], { cwd: WPT, encoding: "utf8" });
+  if (set.status !== 0) {
+    console.error("[wpt] could not apply the sparse checkout this gate measures:\n" + (set.stderr || set.stdout));
+    process.exit(1);
+  }
+  const missing = WPT_PATHS.filter((p) => !existsSync(join(WPT, p)));
+  if (missing.length) {
+    console.error(`[wpt] the corpus has no ${missing.join(", ")} — the pinned revision ${WPT_REV} does not ` +
+                  "contain it, so this gate would report a total that silently excludes it");
+    process.exit(1);
+  }
 }
 
 /* THE RUNNER IS BUILT NATIVELY, like run-test262 and for the same reason: the gate is run per change, and an
