@@ -32,6 +32,7 @@
 #include "core/events/event.h"
 #include "core/events/message_event.h"
 #include "core/events/message_port.h"
+#include "core/frame/window_proxy.h"
 
 static JSValue g_key;        /* the private Symbol §9.4.1's own slots hang off */
 static JSValue g_proto = JS_UNDEFINED;
@@ -74,11 +75,11 @@ static int message_source_ok(JSContext *ctx, JSValueConst v)
 {
     if (JS_IsNull(v) || JS_IsUndefined(v))
         return 1;
-    if (message_port_is(v))
+    if (message_port_is(v) || window_proxy_is(v))
         return 1;
-    /* A WindowProxy and a ServiceWorker are the union's other two arms and neither exists yet, so a value that
-       is not a port matches no arm — which is the TypeError Web IDL raises for exactly that, not a rule this
-       file invents. */
+    /* A ServiceWorker is the union's remaining arm and does not exist yet, so a value that is neither a port
+       nor a WindowProxy matches no arm — which is the TypeError Web IDL raises for exactly that, not a rule
+       this file invents. */
     JS_ThrowTypeError(ctx, "a MessageEvent's `source` must be a WindowProxy, a MessagePort or a ServiceWorker");
     return 0;
 }
