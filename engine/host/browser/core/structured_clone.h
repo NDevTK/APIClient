@@ -25,4 +25,37 @@ int  structured_serialize(JSContext *ctx, JSValueConst v, StructuredData *out);
 JSValue structured_deserialize(JSContext *ctx, const StructuredData *in);
 void structured_data_free(JSContext *ctx, StructuredData *d);
 
+/* ---- §2.7's TRANSFERABLE OBJECTS -----------------------------------------------------------------------------
+ *
+ * A transferable is not cloned, it is MOVED: Web IDL gives its interface two algorithms — TRANSFER STEPS that
+ * empty the object into a data holder and detach the original, and TRANSFER-RECEIVING STEPS that build a new
+ * object in the target realm out of that holder. The interface that owns them registers them here, because the
+ * serializer must not know what a MessagePort is any more than it knows what a Response is.
+ *
+ * The HOLDER is a JS value of the registering component's own choosing — it is never seen by a page, and making
+ * it a JS value rather than a C record is what lets it ride the frontier and be parked like everything else. */
+typedef struct {
+    bool    (*is)(JSValueConst v);
+    JSValue (*out)(JSContext *ctx, JSValueConst v);        /* the holder, or JS_EXCEPTION with a throw live */
+    JSValue (*in)(JSContext *ctx, JSValueConst holder);    /* the new object in this realm */
+} StructuredTransferable;
+void structured_register_transferable(const StructuredTransferable *t);
+
+/* §2.7.1's StructuredSerializeWithTransfer and §2.7.2's StructuredDeserializeWithTransfer.
+ *
+ * ONE THING IS NOT BUILT AND IS NAMED RATHER THAN APPROXIMATED: the standard's `memory` map is pre-seeded with
+ * the transfer list, so a transferred object REFERENCED FROM INSIDE the message body deserializes to the new
+ * object. This engine's serializer has no seam to seed, so a port inside the body is refused — which is the
+ * right answer for a port that is not in the transfer list (a platform object is not serializable) and the
+ * wrong one for a port that is. A page that does `port.postMessage({p: other}, [other])` gets a DataCloneError
+ * instead of a message carrying the moved port. */
+typedef struct { StructuredData data; JSValue holders; } StructuredWithTransfer;
+/* `list` is the transfer list (a sequence) or JS_UNDEFINED. Returns 0, or -1 with a throw live. */
+int  structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst list,
+                                   StructuredWithTransfer *out);
+/* Answers the deserialized message; `*pvalues` receives the [[TransferredValues]] as an Array (owned), which
+   is what a MessageEvent's `ports` is built from. */
+JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTransfer *in, JSValue *pvalues);
+void structured_with_transfer_free(JSContext *ctx, StructuredWithTransfer *d);
+
 #endif

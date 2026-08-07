@@ -17,10 +17,11 @@ JSValue message_event_proto(void);
 bool message_event_is(JSContext *ctx, JSValueConst v);
 
 /* Mint one the ENGINE fires: isTrusted TRUE, neither bubbling nor cancelable, `lastEventId` empty and `ports`
-   the empty frozen array — which is what 9.4.2's "port message queue" and 9.4.4's window post message steps
-   both dispatch. `origin` is the sender's, and `source` is null or the sending WindowProxy/MessagePort.
-   `data` and `source` are BORROWED; the answer is a new owned MessageEvent. */
+   `lastEventId` empty — which is what 9.4.2's "port message queue" and 9.4.4's window post message steps both
+   dispatch. `origin` is the sender's, `source` is null or the sending WindowProxy/MessagePort, and `ports` is
+   the [[TransferredValues]] that arrived with the message (JS_UNDEFINED for none), which this FREEZES.
+   All three values are BORROWED; the answer is a new owned MessageEvent. */
 JSValue message_event_new(JSContext *ctx, const char *type, JSValueConst data, const char *origin,
-                          JSValueConst source);
+                          JSValueConst source, JSValueConst ports);
 
 #endif

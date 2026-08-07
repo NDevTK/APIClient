@@ -22,6 +22,7 @@
  * restriction this file invents: it is what the conversion DOES when nothing satisfies the type. When §9.4.2's
  * MessagePort lands, the brand test in message_source_ok/ports_from_sequence is where it plugs in, and the
  * TypeError stops being reachable for a real port. */
+#include <stdio.h>
 #include <string.h>
 
 #include "check.h"
@@ -30,6 +31,7 @@
 #include "core/idl_args.h"
 #include "core/events/event.h"
 #include "core/events/message_event.h"
+#include "core/events/message_port.h"
 
 static JSValue g_key;        /* the private Symbol §9.4.1's own slots hang off */
 static JSValue g_proto = JS_UNDEFINED;
@@ -72,8 +74,12 @@ static int message_source_ok(JSContext *ctx, JSValueConst v)
 {
     if (JS_IsNull(v) || JS_IsUndefined(v))
         return 1;
-    JS_ThrowTypeError(ctx, "a MessageEvent's `source` must be a WindowProxy, a MessagePort or a ServiceWorker "
-                           "— this engine has none of the three, so only null is a value it can take");
+    if (message_port_is(v))
+        return 1;
+    /* A WindowProxy and a ServiceWorker are the union's other two arms and neither exists yet, so a value that
+       is not a port matches no arm — which is the TypeError Web IDL raises for exactly that, not a rule this
+       file invents. */
+    JS_ThrowTypeError(ctx, "a MessageEvent's `source` must be a WindowProxy, a MessagePort or a ServiceWorker");
     return 0;
 }
 
@@ -85,6 +91,7 @@ static JSValue ports_from_sequence(JSContext *ctx, JSValueConst v)
 {
     JSValue arr;
     int64_t n = 0;
+    uint32_t i;
 
     if (JS_IsUndefined(v) || JS_IsNull(v)) {
         n = 0;
@@ -101,24 +108,44 @@ static JSValue ports_from_sequence(JSContext *ctx, JSValueConst v)
         if (JS_ToInt64(ctx, &n, len) < 0) { JS_FreeValue(ctx, len); return JS_EXCEPTION; }
         JS_FreeValue(ctx, len);
     }
-    if (n != 0)
-        return JS_ThrowTypeError(ctx, "a MessageEvent's `ports` must contain MessagePorts — this engine has no "
-                                      "MessagePort, so only an empty sequence is a value it can take");
     arr = JS_NewArray(ctx);
     if (JS_IsException(arr))
         return arr;
+    /* Every element must BE a MessagePort — `sequence<MessagePort>` is a brand test per entry, and a page
+       constructing an event with something else in `ports` gets the conversion's TypeError. */
+    for (i = 0; i < (uint32_t)n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, v, i);
+        if (JS_IsException(e)) { JS_FreeValue(ctx, arr); return JS_EXCEPTION; }
+        if (!message_port_is(e)) {
+            JS_FreeValue(ctx, e);
+            JS_FreeValue(ctx, arr);
+            return JS_ThrowTypeError(ctx, "a MessageEvent's `ports` must contain MessagePorts");
+        }
+        JS_SetPropertyUint32(ctx, arr, i, e);
+    }
     /* FROZEN, per the FrozenArray type — and an ARRAY is not frozen by preventing extensions, which is the
        trap this hit. `Object.isFrozen([])` was FALSE afterwards, because an array always carries an own
-       `length` and `length` is writable; SetIntegrityLevel("frozen") makes every own property non-writable and
-       `length` is one. So both steps run. (When §9.4.2's MessagePort makes a non-empty sequence reachable, each
-       index needs the same treatment, and this is the loop that grows.) */
+       `length` and `length` is writable; SetIntegrityLevel("frozen") makes every own property non-writable, and
+       `length` is one of them. So every index gets it too, now that there can be indices. */
     {
-        JSAtom len_atom = JS_NewAtom(ctx, "length");
-        int r;
-        if (len_atom == JS_ATOM_NULL) { JS_FreeValue(ctx, arr); return JS_EXCEPTION; }
-        r = JS_DefineProperty(ctx, arr, len_atom, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED,
-                              JS_PROP_HAS_WRITABLE);   /* writable BIT clear = non-writable */
-        JS_FreeAtom(ctx, len_atom);
+        int r = 0;
+        for (i = 0; i < (uint32_t)n && r >= 0; i++) {
+            char buf[16];
+            JSAtom k;
+            snprintf(buf, sizeof buf, "%u", i);
+            k = JS_NewAtom(ctx, buf);
+            if (k == JS_ATOM_NULL) { r = -1; break; }
+            r = JS_DefineProperty(ctx, arr, k, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED,
+                                  JS_PROP_HAS_WRITABLE | JS_PROP_HAS_CONFIGURABLE);
+            JS_FreeAtom(ctx, k);
+        }
+        if (r >= 0) {
+            JSAtom len_atom = JS_NewAtom(ctx, "length");
+            if (len_atom == JS_ATOM_NULL) { JS_FreeValue(ctx, arr); return JS_EXCEPTION; }
+            r = JS_DefineProperty(ctx, arr, len_atom, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED,
+                                  JS_PROP_HAS_WRITABLE);   /* writable BIT clear = non-writable */
+            JS_FreeAtom(ctx, len_atom);
+        }
         if (r < 0 || JS_PreventExtensions(ctx, arr) < 0) { JS_FreeValue(ctx, arr); return JS_EXCEPTION; }
     }
     return arr;
@@ -150,7 +177,7 @@ static int me_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst data, JSV
 }
 
 JSValue message_event_new(JSContext *ctx, const char *type, JSValueConst data, const char *origin,
-                          JSValueConst source)
+                          JSValueConst source, JSValueConst ports_in)
 {
     JSValue t, ev, ports, empty;
 
@@ -162,7 +189,7 @@ JSValue message_event_new(JSContext *ctx, const char *type, JSValueConst data, c
     ev = event_new_derived(ctx, g_proto, t, false, false, false, /*trusted*/ true);
     JS_FreeValue(ctx, t);
     if (JS_IsException(ev)) return ev;
-    ports = ports_from_sequence(ctx, JS_UNDEFINED);
+    ports = ports_from_sequence(ctx, ports_in);
     if (JS_IsException(ports)) { JS_FreeValue(ctx, ev); return JS_EXCEPTION; }
     empty = JS_NewString(ctx, "");
     {
