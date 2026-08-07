@@ -717,6 +717,7 @@ int main(int argc, char **argv)
     flow_registry_free(ctx);
     document_free(ctx);
     element_free(ctx);
+    window_free(ctx);
     window_proxy_free(ctx);
     world_registry_free(ctx);
     message_event_free(ctx);

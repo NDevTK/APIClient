@@ -265,6 +265,7 @@ QJS_EXPORT void qjs_teardown(void)
            "not to. Answer them, or step to DONE, before ending the session");
     doc_scripts_free(&g_scripts);
     navigable_free(g_ctx);
+    window_free(g_ctx);
     window_proxy_free(g_ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */
     /* the runtime-lifetime values the browser components own — a component that mints one frees it. */
     abort_free(g_ctx);

@@ -177,6 +177,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "frame", "policy_container.c"),                 // HTML 7.2.6: the policy container an about:blank child clones
     join(HOST, "browser", "core", "frame", "window_proxy.c"),                    // WindowProxy: HTML 7.2.5.1, the per-flow navigable binding
     join(HOST, "browser", "core", "frame", "window_message.c"),                  // window.postMessage: HTML 9.4.4
+    join(HOST, "browser", "core", "frame", "bar_prop.c"),                        // BarProp: HTML 7.2.5.3
     join(HOST, "browser", "core", "frame", "navigable.c"),                       // window.open: HTML 7.4, and the about:blank child's inherited policy
     join(HOST, "browser", "core", "structured_clone.c"),                       // HTML 2.7: StructuredSerialize/Deserialize
     join(HOST, "browser", "core", "events", "event.c"),                         // Event: §2.2, the object a listener receives

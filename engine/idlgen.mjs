@@ -89,7 +89,14 @@ const INTERFACES = {
   Window:              ["core/frame/window.c", "core/dom/document.c", "core/frame/location.c",
                         "core/fetch/fetch.c", "core/events/event_target.c", "core/loader/module_loader.c",
                         "core/timing/timer.c", "core/frame/navigator.c", "core/frame/screen.c",
-                        "core/dom/abort.c", "core/css/css_style_declaration.c"],
+                        "core/dom/abort.c", "core/css/css_style_declaration.c",
+                        /* §7.4's `open` lives with the navigable it creates, not with the Window it hangs off.
+                           Leaving it out reported `open` ABSENT while it was installed and working — a FALSE
+                           gap, which costs exactly what a hidden one does: the audit is only worth reading if
+                           every line of it is real. */
+                        "core/frame/navigable.c",
+                        /* §7.2.5's BarProp objects — locationbar, menubar and the rest. */
+                        "core/frame/bar_prop.c"],
   Navigator:            "core/frame/navigator.c",
   History:              "core/frame/history.c",
   Screen:               "core/frame/screen.c",

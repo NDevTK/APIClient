@@ -39,6 +39,49 @@
 #include "solver/concolic.h"
 #include "core/frame/window.h"
 #include "core/url/url.h"
+#include "core/frame/bar_prop.h"
+#include "core/idl_args.h"
+#include "solver/cow.h"
+
+/* §7.2.5's `closed`, and the reason it is not the plain `false` that stood here. `close()` CHANGES it, and a
+   page reads it to decide whether the window it is holding is still usable. It is therefore per-flow state:
+   the flow that closed the window is the only one whose timeline contains that, and a sibling arm that did not
+   must still see it open. A single byte with no JSValues in it, so the raw POD capture is the right one — the
+   record capture exists for state that OWNS values, and a byte does not. */
+static uint8_t g_closed;
+static JSValue g_closed_owner = JS_UNDEFINED;   /* what the delta keys the byte by (owned) */
+
+static uint8_t *closed_state(JSContext *ctx)
+{
+    DCHECK(!JS_IsUndefined(g_closed_owner), "the Window's closed state was reached before window_install ran");
+    cow_capture_host_state(ctx, g_closed_owner, &g_closed, sizeof g_closed);
+    return &g_closed;
+}
+
+static JSValue js_win_closed(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    (void)this_val; (void)magic;
+    return JS_NewBool(ctx, *closed_state(ctx));
+}
+
+/* §7.2.5.2 `close()`. A REAL STATE CHANGE, never a no-effect: the navigable is closed and `closed` reports it
+   from that point on, which is exactly what a page tests before touching a popup again. */
+static JSValue js_win_close(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    (void)this_val; (void)argc; (void)argv; (void)magic;
+    *closed_state(ctx) = 1;
+    return JS_UNDEFINED;
+}
+
+/* §7.2.5's `focus()` and `blur()` move SYSTEM focus between windows, and §7.2.5 defines no scriptable result
+   for either — nothing observable to a script changes. This is the documented no-effect the IDL audit permits,
+   not a stub standing in for a value: there is no value to compute. `stop()` is the same shape here, because
+   this engine has no in-flight navigation to abort. */
+static JSValue js_win_noeffect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    (void)ctx; (void)this_val; (void)argc; (void)argv; (void)magic;
+    return JS_UNDEFINED;
+}
 
 static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -63,8 +106,22 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
 
     /* The document was navigated to, not opened by a script in another navigable: 7.2.2 says null. */
     JS_SetPropertyStr(ctx, g, "opener", JS_NULL);
-    /* A window is closed only after close() ran; this one is running its own script. */
-    JS_SetPropertyStr(ctx, g, "closed", JS_FALSE);
+    /* §7.2.5.3's six user-interface bars. */
+    bar_prop_init(ctx);
+    bar_prop_install(ctx, global);
+
+    /* §7.2.5 `frameElement` — the element this navigable is nested THROUGH. A top-level navigable is nested
+       through nothing, so it is null: the real answer for what this is, not a placeholder for one. */
+    JS_SetPropertyStr(ctx, g, "frameElement", JS_NULL);
+
+    /* `closed` is a GETTER over per-flow state now, because close() changes it. */
+    g_closed = 0;
+    g_closed_owner = JS_DupValue(ctx, global);
+    idl_install_accessor(ctx, g, "closed", js_win_closed, 0, -1);
+    idl_install_method(ctx, g, "close", 0, idl_method_id(ctx, NULL, 0, js_win_close, 0));
+    idl_install_method(ctx, g, "focus", 0, idl_method_id(ctx, NULL, 0, js_win_noeffect, 0));
+    idl_install_method(ctx, g, "blur",  0, idl_method_id(ctx, NULL, 0, js_win_noeffect, 1));
+    idl_install_method(ctx, g, "stop",  0, idl_method_id(ctx, NULL, 0, js_win_noeffect, 2));
 
     /* The Window's origin, serialized — the principal, concrete for the same reason Location's is: a bundle
        compares it and builds URLs out of it, and a shape there loses every endpoint behind the comparison.
@@ -85,4 +142,11 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     JS_DefinePropertyGetSet(ctx, g, JS_NewAtom(ctx, "name"),
                             JS_NewCFunction(ctx, js_win_get_name, "get name", 0), JS_UNDEFINED,
                             JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+}
+
+void window_free(JSContext *ctx)
+{
+    JS_FreeValue(ctx, g_closed_owner);
+    g_closed_owner = JS_UNDEFINED;
+    bar_prop_free(ctx);
 }

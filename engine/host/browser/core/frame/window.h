@@ -7,5 +7,8 @@
    opener, closed, origin — plus `name`, which is attacker input. `origin` is the document address, the same
    one Location is built from. */
 void window_install(JSContext *ctx, JSValueConst global, const char *url);
+/* Release what this component HOLDS across the document's lifecycle — the object the per-flow `closed` byte is
+   keyed by, and the BarProp prototype. */
+void window_free(JSContext *ctx);
 
 #endif
