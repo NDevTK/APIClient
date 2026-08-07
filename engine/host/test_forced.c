@@ -21,6 +21,7 @@
 #include "core/events/event.h"
 #include "core/events/message_event.h"
 #include "core/events/message_port.h"
+#include "core/frame/policy_container.h"
 #include "core/events/event_target.h"
 #include "core/fetch/response.h"
 #include "core/fetch/request.h"
@@ -1177,8 +1178,61 @@ static const char *HTML_MIN =
     "</script>"
     "</body></html>";
 
+/* HTML §7.2.6 AND CSP §6.1, in C — the browser half's tests are C tests, and this one has no page to run.
+   What it pins is the pair of facts the rest of the platform will build on: what a policy PERMITS, and that a
+   child's container is a CLONE whose answers do not move when the parent's would. */
+static void policy_container_selftest(void)
+{
+    PolicyContainer *none, *self_only, *inline_ok, *nonced, *evals, *child;
+
+    none = policy_container_new(NULL, NULL);
+    /* No policy is not an empty policy: a document with no Content-Security-Policy permits everything, which
+       is the overwhelmingly common case and the one a wrong default would mis-report on every page. */
+    CHECK(policy_allows(none, POLICY_INLINE_HANDLER), "no policy must permit an inline handler");
+    CHECK(policy_allows(none, POLICY_EVAL), "no policy must permit eval");
+
+    self_only = policy_container_new("script-src 'self'", NULL);
+    /* §S's own example: an inline onerror is DEAD under `script-src 'self'`, and so is a javascript: URL. A
+       host source never permits inline execution — that is what 'unsafe-inline' is for. */
+    CHECK(!policy_allows(self_only, POLICY_INLINE_HANDLER), "'self' must not permit an inline handler");
+    CHECK(!policy_allows(self_only, POLICY_JAVASCRIPT_URL), "'self' must not permit a javascript: URL");
+    CHECK(!policy_allows(self_only, POLICY_EVAL), "'self' must not permit eval");
+
+    inline_ok = policy_container_new("default-src 'none'; script-src 'unsafe-inline'", NULL);
+    CHECK(policy_allows(inline_ok, POLICY_INLINE_HANDLER), "'unsafe-inline' must permit an inline handler");
+    CHECK(!policy_allows(inline_ok, POLICY_EVAL), "'unsafe-inline' must not permit eval");
+
+    /* CSP §6.1: a nonce source makes 'unsafe-inline' be IGNORED — the rule that makes adding a nonce to a
+       legacy policy actually tighten it rather than widen it. A handler can carry no nonce, so it stays dead. */
+    nonced = policy_container_new("script-src 'unsafe-inline' 'nonce-abc'", NULL);
+    CHECK(!policy_allows(nonced, POLICY_INLINE_SCRIPT), "a nonce source must make 'unsafe-inline' ignored");
+    CHECK(!policy_allows(nonced, POLICY_INLINE_HANDLER), "a handler carries no nonce, so it stays blocked");
+
+    evals = policy_container_new("script-src 'unsafe-eval'", NULL);
+    CHECK(policy_allows(evals, POLICY_EVAL), "'unsafe-eval' must permit eval");
+    CHECK(!policy_allows(evals, POLICY_INLINE_HANDLER), "'unsafe-eval' must not permit an inline handler");
+
+    /* §7.4: the initial about:blank's container is a CLONE of its creator's — which is the whole of how a
+       same-origin popup or iframe with no URL inherits CSP, and it is a deep copy so the child's answers do
+       not move when the parent is navigated. */
+    child = policy_container_clone(self_only);
+    CHECK(!policy_allows(child, POLICY_INLINE_HANDLER), "a cloned container must carry the creator's policy");
+    CHECK(policy_container_csp(child) != NULL &&
+          policy_container_csp(child) != policy_container_csp(self_only),
+          "a cloned container must own its own copy of the policy text");
+
+    policy_container_free(none);
+    policy_container_free(self_only);
+    policy_container_free(inline_ok);
+    policy_container_free(nonced);
+    policy_container_free(evals);
+    policy_container_free(child);
+}
+
 int main(void) {
-    JSRuntime *rt = JS_NewRuntime();
+    JSRuntime *rt;
+    policy_container_selftest();
+    rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);   /* align quickjs's overflow check with the emcc 8MB wasm stack */
     JSContext *ctx = JS_NewContext(rt);
 

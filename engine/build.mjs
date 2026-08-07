@@ -173,6 +173,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "html", "html_form.c"),                       // §4.10: a control's value state + submission
     join(HOST, "browser", "core", "html", "custom_elements.c"),                 // §4.13: the registry, upgrade and reactions
     join(HOST, "browser", "core", "html", "unhandled_rejection.c"),             // §8.1.7.5: rejections nobody handled
+    join(HOST, "browser", "core", "frame", "policy_container.c"),                 // HTML 7.2.6: the policy container an about:blank child clones
     join(HOST, "browser", "core", "frame", "window_proxy.c"),                    // WindowProxy: HTML 7.2.5.1, the per-flow navigable binding
     join(HOST, "browser", "core", "frame", "window_message.c"),                  // window.postMessage: HTML 9.4.4
     join(HOST, "browser", "core", "structured_clone.c"),                       // HTML 2.7: StructuredSerialize/Deserialize
