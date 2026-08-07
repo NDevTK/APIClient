@@ -48,7 +48,13 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       whose spec directory is not checked out is a component whose gate cannot fail, which is
                       the same defect as a gate that only reads the spelling that existed when it was written. */
                    "streams/readable-streams", "streams/resources", "streams/writable-streams",
-                   "streams/piping", "streams/transform-streams"];
+                   "streams/piping", "streams/transform-streams",
+                   /* HTML 9.4's MESSAGING. Cross-document and cross-worker messaging is where popups, iframes
+                      and this engine's one-WASM-instance-per-DOCUMENT rule meet, and it is also where the
+                      solver's  attacker source comes from. None of it exists yet, so this
+                      directory is the honest measurement of that: a component whose spec directory is not
+                      checked out is a component whose gate cannot fail. */
+                   "webmessaging"];
 
 if (!existsSync(join(WPT, "resources", "testharness.js"))) {
   /* NO --depth 1. The corpus is PINNED, and a depth-1 clone has only the tip — `git checkout bf4714d` in it
