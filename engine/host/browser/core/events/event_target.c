@@ -336,8 +336,8 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
     X("oncopy", EH_GLOBAL) X("oncut", EH_GLOBAL) X("onpaste", EH_GLOBAL)                                            \
     /* WindowEventHandlers — §8.1.7.2.2, on Window (and, per the mixin, Document's body-delegated set). */     \
     X("onafterprint", EH_WINDOW) X("onbeforeprint", EH_WINDOW) X("onbeforeunload", EH_WINDOW)                       \
-    X("onhashchange", EH_WINDOW) X("onlanguagechange", EH_WINDOW) X("onmessage", EH_WINDOW)                          \
-    X("onmessageerror", EH_WINDOW) X("onoffline", EH_WINDOW) X("ononline", EH_WINDOW) X("onpagehide", EH_WINDOW)      \
+    X("onhashchange", EH_WINDOW) X("onlanguagechange", EH_WINDOW) X("onmessage", EH_WINDOW | EH_PORT)                          \
+    X("onmessageerror", EH_WINDOW | EH_PORT) X("onoffline", EH_WINDOW) X("ononline", EH_WINDOW) X("onpagehide", EH_WINDOW)      \
     X("onpagereveal", EH_WINDOW) X("onpageshow", EH_WINDOW) X("onpageswap", EH_WINDOW) X("onpopstate", EH_WINDOW)     \
     X("onrejectionhandled", EH_WINDOW) X("onstorage", EH_WINDOW) X("onunhandledrejection", EH_WINDOW)               \
     X("onunload", EH_WINDOW)                                                                                    \
@@ -411,6 +411,19 @@ static JSValue js_handler_get(JSContext *ctx, JSValueConst this_val, int magic)
     return handler_current(ctx, this_val, EH_TYPE[magic]);
 }
 
+/* HTML §8.1.7.2's handler attributes are ordinarily pure state — assign a function, it is called when the event
+   fires, and nothing else happens. The platform has ONE exception: §9.4.2 says setting `onmessage` on a
+   MessagePort also STARTS the port, which is why a page that assigns onmessage never calls start() and a page
+   that only uses addEventListener must. A general side-effect mechanism for a single member would be more
+   machinery than the rule; instead the interested component registers here and decides for itself, by name and
+   by its own brand test, which keeps this file from knowing what a MessagePort is. */
+static void (*g_handler_set_hook)(JSContext *ctx, JSValueConst target, const char *name);
+
+void event_target_set_handler_hook(void (*after_set)(JSContext *ctx, JSValueConst target, const char *name))
+{
+    g_handler_set_hook = after_set;
+}
+
 static JSValue js_handler_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     const char *type;
@@ -418,6 +431,7 @@ static JSValue js_handler_set(JSContext *ctx, JSValueConst this_val, JSValueCons
 
     DCHECK(magic >= 0 && magic < EH_COUNT, "an event handler was declared with a magic the list does not name");
     type = EH_TYPE[magic];
+
     map = handler_map(ctx, this_val, 1);
     if (!JS_IsObject(map)) { JS_FreeValue(ctx, map); return JS_UNDEFINED; }
     /* §8.1.7.1: anything that is not callable sets the handler to null. A page assigning a string here is
@@ -431,6 +445,10 @@ static JSValue js_handler_set(JSContext *ctx, JSValueConst this_val, JSValueCons
         JS_SetPropertyStr(ctx, map, type, JS_NULL);
         remove_listener_with_type(ctx, this_val, g_handler_marker, type, /*capture*/ false);   /* §8.1.7 "deactivate" */
     }
+    /* AFTER the handler is registered, for the reason event_target.h gives: §9.4.2's start() delivers what is
+       already queued, and running it first would fire those events at a target with no listener yet. */
+    if (g_handler_set_hook)
+        g_handler_set_hook(ctx, this_val, EH_NAME[magic]);
     JS_FreeValue(ctx, map);
     return JS_UNDEFINED;
 }

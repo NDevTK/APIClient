@@ -24,11 +24,17 @@ void event_target_install(JSContext *ctx, JSValueConst target);
 
 /* HTML §8.1.7.2 EVENT HANDLER IDL ATTRIBUTES — `onclick`, `onload`, `onabort`. Which set a target carries is
    which MIXIN its IDL includes, so the caller names the mixin rather than the members. */
-enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8 };
+enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 16 };
 /* HTML §3.2.2 click() — "fire a synthetic pointer event named click", which IS §2.9 dispatch, so it is the same
    machine under a second entry rather than a second implementation of it. */
 void event_target_install_click(JSContext *ctx, JSValueConst target);
 void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask);
+/* A handler attribute whose SETTER has a side effect. HTML has one: §9.4.2's `onmessage` on a MessagePort also
+   starts the port, which is why assigning it is enough and addEventListener alone is not. The hook runs AFTER
+   the handler is registered — start() delivers what is already queued, and delivering it first would fire at a
+   target with no listener yet — and it is given the target and the attribute name so the registering component
+   decides with its own brand test rather than this file knowing what a MessagePort is. */
+void event_target_set_handler_hook(void (*after_set)(JSContext *ctx, JSValueConst target, const char *name));
 /* The ENGINE firing its own event at `target`. One §2.9 dispatch, reached as a queued task because the callers
    are plain C the scheduler drives. The propagation path is derived from the target's ancestors — there is no
    `bubble_to` to pass, because the window is the document's parent and the spec already says so.

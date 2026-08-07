@@ -56,6 +56,9 @@ const INTERFACES = {
   /* HTML 9.4.1. Its two type-constrained members (source, ports) name interfaces that do not exist yet, so the
      audit is what will notice the day they do and this file still answers only their empty value. */
   MessageEvent:        ["core/events/message_event.c", "core/events/event.c"],
+  /* HTML 9.4.2/9.4.3. MessagePort is an EventTarget, so its inherited members are event_target.c's. */
+  MessagePort:         ["core/events/message_port.c", "core/events/event_target.c"],
+  MessageChannel:       "core/events/message_port.c",
   TextEncoder:          "core/encoding/encoding.c",
   TextDecoder:          "core/encoding/encoding.c",
   /* §7.5 and §7.6 include the GenericTransformStream mixin, so `readable` and `writable` are members the audit

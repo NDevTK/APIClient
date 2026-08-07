@@ -38,6 +38,7 @@
 #include "core/streams/transform_stream.h"
 #include "core/events/event.h"
 #include "core/events/message_event.h"
+#include "core/events/message_port.h"
 #include "core/structured_clone.h"
 #include "core/events/event_target.h"
 #include "core/dom/abort.h"
@@ -475,6 +476,8 @@ int main(int argc, char **argv)
     structured_clone_install(ctx, global);   /* HTML 2.7.3, and what 9.4 and §4.9.7 clone through */
     message_event_init(ctx);
     message_event_install(ctx, global);
+    message_port_init(ctx);
+    message_port_install(ctx, global);   /* HTML 9.4.2/9.4.3 */
     abort_init(ctx);        /* the AbortSignal slot key §5.4's signal lives in */
     abort_install(ctx, global);
     writable_stream_init(ctx);
@@ -607,6 +610,7 @@ int main(int argc, char **argv)
     transform_stream_free(ctx);
     writable_stream_free(ctx);
     abort_free(ctx);
+    message_port_free(ctx);
     message_event_free(ctx);
     event_free(ctx);
     event_target_free(ctx);

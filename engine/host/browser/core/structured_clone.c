@@ -32,33 +32,47 @@
 #include "quickjs.h"
 #include "core/structured_clone.h"
 
-JSValue structured_clone(JSContext *ctx, JSValueConst v)
+int structured_serialize(JSContext *ctx, JSValueConst v, StructuredData *out)
 {
-    uint8_t *buf;
-    size_t len = 0;
-    JSValue out;
-
+    out->buf = NULL;
+    out->len = 0;
     /* §2.7.1 STEP 1: a Symbol is a "DataCloneError" DOMException, and it is checked HERE because the engine's
        writer has no arm that refuses one — it encodes the symbol and the clone silently succeeded, which is a
        value the standard says cannot cross a port. A primitive the writer handles correctly needs no such
        check; this is the one it does not. */
-    if (JS_IsSymbol(v))
-        return JS_ThrowDOMException(ctx, "DataCloneError", "a Symbol cannot be cloned");
+    if (JS_IsSymbol(v)) {
+        JS_ThrowDOMException(ctx, "DataCloneError", "a Symbol cannot be cloned");
+        return -1;
+    }
     /* §2.7.1 StructuredSerialize, then §2.7.2 StructuredDeserialize into THIS realm — which is the whole of
        §2.7.3's structuredClone(), and the whole of what a same-agent port delivery needs.
        JS_WRITE_OBJ_REFERENCE is `memory`: a value reached twice comes back as the SAME object on the other
        side, and a cycle terminates instead of recursing. Without it `const a = {}; a.self = a` is a hang. */
-    buf = JS_WriteObject(ctx, &len, v, JS_WRITE_OBJ_REFERENCE);
-    if (!buf) {
+    out->buf = JS_WriteObject(ctx, &out->len, v, JS_WRITE_OBJ_REFERENCE);
+    if (!out->buf) {
         /* THE ENGINE'S REFUSAL IS THE STANDARD'S, RE-REPORTED. The writer throws its own error for a value it
            cannot encode — a function, a Proxy, a Promise — and every one of those is a value §2.7 refuses with
            a "DataCloneError" DOMException. A page catches this by `.name`, so reporting the writer's own
            TypeError instead would be caught by nothing the standard describes. */
         JS_FreeValue(ctx, JS_GetException(ctx));
-        return JS_ThrowDOMException(ctx, "DataCloneError", "the value could not be cloned");
+        JS_ThrowDOMException(ctx, "DataCloneError", "the value could not be cloned");
+        return -1;
     }
-    out = JS_ReadObject(ctx, buf, len, JS_READ_OBJ_REFERENCE);
-    js_free(ctx, buf);
+    return 0;
+}
+
+void structured_data_free(JSContext *ctx, StructuredData *d)
+{
+    js_free(ctx, d->buf);
+    d->buf = NULL;
+    d->len = 0;
+}
+
+JSValue structured_deserialize(JSContext *ctx, const StructuredData *in)
+{
+    JSValue out;
+    DCHECK(in->buf != NULL, "a serialized record was deserialized after it had been freed");
+    out = JS_ReadObject(ctx, in->buf, in->len, JS_READ_OBJ_REFERENCE);
     if (JS_IsException(out)) {
         /* A GRAPH THE WRITER PRODUCED AND THE READER REFUSED is not a page error — it is these two halves
            disagreeing, which is a should-never-happen and is worth a crash rather than a DOMException that
@@ -66,6 +80,18 @@ JSValue structured_clone(JSContext *ctx, JSValueConst v)
         DFAIL("the engine serialized a value it could not then deserialize — the writer and the reader "
               "disagree about the format, which no page input can cause");
     }
+    return out;
+}
+
+JSValue structured_clone(JSContext *ctx, JSValueConst v)
+{
+    StructuredData d;
+    JSValue out;
+
+    if (structured_serialize(ctx, v, &d) < 0)
+        return JS_EXCEPTION;
+    out = structured_deserialize(ctx, &d);
+    structured_data_free(ctx, &d);
     return out;
 }
 

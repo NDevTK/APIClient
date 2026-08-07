@@ -41,6 +41,7 @@
 #include "browser/core/idl_args.h"
 #include "browser/core/events/event.h"
 #include "browser/core/events/message_event.h"
+#include "browser/core/events/message_port.h"
 #include "browser/core/structured_clone.h"
 #include "browser/core/events/event_target.h"
 #include "browser/core/frame/location.h"
@@ -133,6 +134,8 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
         event_install(g_ctx, g);   /* the Event interface object */
         message_event_init(g_ctx);
         message_event_install(g_ctx, g);   /* HTML 9.4.1: the event every messaging path dispatches */
+        message_port_init(g_ctx);
+        message_port_install(g_ctx, g);   /* HTML 9.4.2/9.4.3 */
         structured_clone_install(g_ctx, g);   /* HTML 2.7.3 */
         event_target_install(g_ctx, g);
         event_target_set_window(g_ctx, g);   /* §7.6: the document's parent on a propagation path */
@@ -228,6 +231,7 @@ QJS_EXPORT void qjs_teardown(void)
     document_free(g_ctx);   /* the Document and the window it fires `load` at — both HELD across the lifecycle */
     element_free(g_ctx);    /* the wrapper identity table and the DOM interface prototypes */
     event_target_free(g_ctx);
+    message_port_free(g_ctx);
     message_event_free(g_ctx);
     event_free(g_ctx);
     headers_free(g_ctx);    /* Headers.prototype and the name it interned */
