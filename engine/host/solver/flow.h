@@ -14,6 +14,7 @@
 #define ENGINE_HOST_SOLVER_FLOW_H
 
 #include "quickjs.h"
+#include "solver/world.h"
 
 /* One queued microtask/reaction job owned by a flow (routed here by the job-enqueue hook, not a global list):
    the quickjs job function + its dup'd arguments, run under the flow's COW after its scripts. */
@@ -62,6 +63,11 @@ typedef struct {
 #define FLOW_STEP_OWED  2
 
 typedef struct Flow {
+    /* THIS FLOW'S WORLD — its name in the ONE timeline it owns, valid in every document it touches. `delta`
+       below is only this instance's SEGMENT of that world; a flow that scripts an iframe or a popup writes in
+       another WASM instance, and that instance keys ITS segment by this id. A delta cannot travel (it names
+       its targets by live heap pointers), so the name is what crosses — see solver/world.h. */
+    WorldId world;
     JSValue fn;            /* the function this flow re-drives (JS_UNDEFINED for a boot/session flow) */
     signed char *dec;      /* the DECISION VECTOR — the arm (0/1) this flow takes at each branch, in order */
     int dec_n;             /* length of dec */
@@ -127,13 +133,17 @@ typedef struct Flow {
     void *park_ctx; void *park_fn; void *park_opaque;
 } Flow;
 
-void  flow_registry_init(void);
+/* `doc_id` is THIS INSTANCE'S DOCUMENT identity, and it is a parameter rather than a separate init call so a
+   frontier cannot exist without one: every flow is minted a world named by it, and two instances that shared an
+   id would hand each other's flows the same segment. The host assigns it, because the host is what knows there
+   is more than one document. */
+void  flow_registry_init(uint32_t doc_id);
 void  flow_registry_free(JSContext *ctx);
 
 /* Add a flow to the frontier. Takes ownership of `dec` (freed with the flow) and dups `fn`. `dec` may be NULL
    (dec_n 0) for a from-baseline flow. Returns the stored Flow* (stable until removed). Never fails (OOM aborts
    via CHECK — a dropped flow corrupts the frontier). */
-Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n);
+Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n, WorldId parent);
 /* How many flows this document ever created — the other half of the switch count. A run whose cost jumped needs
    to say WHICH grew: the frontier, or the work per flow. */
 long flow_created_count(void);

@@ -1,25 +1,26 @@
 /* THE POLICY CONTAINER — HTML §7.2.6. See policy_container.c.
  *
- * ONE INSTANCE PER AGENT, NOT PER DOCUMENT. This file is where that correction is written down, because it is
- * the initial about:blank that forces it. A same-origin child created with no URL — `window.open()`, an
- * `<iframe>` with no src — gets its Document SYNCHRONOUSLY, in the creator's own agent, and is scripted
- * synchronously: `iframe.contentWindow.document.body` must answer on the next line. No message-passing scheme
- * can do that, which is why a real browser does not use one: the child is created in place, and its policy
- * container is a CLONE of the creator's rather than something fetched.
+ * IT CROSSES INSTANCES, and the initial about:blank is what forces that. A child created with no URL —
+ * `window.open()`, an `<iframe>` with no src — gets its Document synchronously and has no response to take a
+ * policy from; §7.4 says its container is a CLONE OF THE CREATOR'S. One WASM instance is one DOCUMENT
+ * regardless of origin, so that clone is a CROSS-INSTANCE operation: the creator's container is serialized to
+ * the child's instance, and the requesting flow SUSPENDS across the boundary the same way it suspends at an
+ * await. Same-origin is not an exemption — co-locating two documents to make the clone a local memcpy is
+ * dodging the transport, and it is the one design this file must not encourage.
  *
- * So the boundary that deserves a separate WASM instance is the AGENT — the same-origin group — and not the
- * document. Two same-origin documents share a heap, a scheduler and a set of flows, and script each other
- * synchronously. A CROSS-ORIGIN document is the case that gets its own instance, and there HTML never asks for
- * synchronous access: the entire cross-origin surface is postMessage and a fixed whitelist, which is exactly
- * what survives being asynchronous and going over a message port. That is the shape of the cross-WASM work,
- * and it is much smaller than "any document might be remote" would have made it. */
+ * WHICH IS WHY IT IS A VALUE, NOT A POINTER GRAPH. Everything here is a flat parse over one owned string, so a
+ * container serializes to its `csp_text` and reconstitutes by parsing it again — the clone that crosses an
+ * instance and the clone that crosses a session are then the same operation, and neither needs a live heap. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FRAME_POLICY_CONTAINER_H
 #define ENGINE_HOST_BROWSER_CORE_FRAME_POLICY_CONTAINER_H
 #include <stdbool.h>
 
 typedef struct PolicyContainer PolicyContainer;
 
-/* From a document's own headers/meta. `csp_text` is the serialized policy list or NULL; both are copied. */
+/* From a document's own headers/meta. `csp_text` is a SERIALIZED CSP LIST — CSP §2.2, comma-delimited, which
+   is how several policies travel in one header and how several `<meta>` elements compose. It is a list rather
+   than a single policy because the policies are enforced INDEPENDENTLY: a resource must be allowed by every
+   one of them, so a second policy can only ever narrow. Both arguments are copied; either may be NULL. */
 PolicyContainer *policy_container_new(const char *csp_text, const char *referrer_policy);
 
 /* §7.2.6's "clone a policy container" — §7.4 performs this for a navigable created with a creator, which is

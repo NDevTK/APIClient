@@ -4,6 +4,7 @@
 #include <lexbor/html/html.h>
 #include "quickjs.h"
 #include "core/idl_args.h"
+#include "core/frame/policy_container.h"
 
 /* Install `document` for `dom`, addressed at `url`. Only the members this engine can answer TRUTHFULLY are
    installed; the tree-walking half is absent until Element exists, because a querySelector that answers null
@@ -14,6 +15,19 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
 const char *document_base_url(void);
 /* The parsed document's root node, for a component that walks the whole tree. */
 lxb_dom_node_t *document_root_node(void);
+
+/* CSP §3.3's `<meta http-equiv="Content-Security-Policy">`: the policy container a parsed tree declares for
+   itself. A REAL LEXBOR WALK rather than a regex over the source, for the reason the bundle id is a `<script>`
+   scan — a `content` attribute is parsed markup by the time it is here, so entity decoding and quoting are the
+   parser's answer rather than a second one. It lives on the DOM half because only that half may walk a tree,
+   and it RETURNS the container rather than installing one so it is exercisable with a document of its own.
+   OWNED by the caller. */
+PolicyContainer *document_meta_policy(lxb_html_document_t *dom);
+
+/* THIS DOCUMENT'S POLICY CONTAINER — HTML §7.2.6, built at install from the above. Built at install rather
+   than on demand because §7.4 clones it for an about:blank child at the moment that child is created, which
+   may be before anything else has asked. BORROWED. */
+const PolicyContainer *document_policy(void);
 /* Release what the component HOLDS across the document's lifecycle — the window it fires `load` at. */
 void document_free(JSContext *ctx);
 

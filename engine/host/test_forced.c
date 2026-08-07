@@ -6,6 +6,7 @@
 #include "solver/concolic.h"
 #include "solver/decide.h"
 #include "solver/flow.h"
+#include "solver/world.h"
 #include "solver/engine.h"
 #include "solver/cow.h"
 #include "core/loader/document_scripts.h"
@@ -1208,6 +1209,50 @@ static void policy_container_selftest(void)
     CHECK(!policy_allows(nonced, POLICY_INLINE_SCRIPT), "a nonce source must make 'unsafe-inline' ignored");
     CHECK(!policy_allows(nonced, POLICY_INLINE_HANDLER), "a handler carries no nonce, so it stays blocked");
 
+    /* CSP §6.1: a present `script-src` REPLACES `default-src` for scripts rather than adding to it. The first
+       version of this parser OR'd every script-governing directive's sources into one flag set, and this is
+       the case that exposes it — the handler came out ALLOWED because `default-src`'s 'unsafe-inline' survived
+       a `script-src` that does not carry it. */
+    {
+        PolicyContainer *overridden = policy_container_new("default-src 'unsafe-inline'; script-src 'self'", NULL);
+        CHECK(!policy_allows(overridden, POLICY_INLINE_HANDLER),
+              "a present script-src must REPLACE default-src for scripts, not inherit its 'unsafe-inline'");
+        policy_container_free(overridden);
+    }
+    /* §6.1's granular forms, and the fact that they are chosen per KIND: script-src-attr governs handlers and
+       javascript: URLs, script-src-elem governs script elements, and eval falls past both to script-src. */
+    {
+        PolicyContainer *granular =
+            policy_container_new("script-src 'unsafe-inline' 'unsafe-eval'; script-src-attr 'none'", NULL);
+        CHECK(!policy_allows(granular, POLICY_INLINE_HANDLER), "script-src-attr 'none' must kill a handler");
+        CHECK(!policy_allows(granular, POLICY_JAVASCRIPT_URL), "script-src-attr governs javascript: URLs too");
+        CHECK(policy_allows(granular, POLICY_INLINE_SCRIPT),
+              "script-src-attr must not govern a script ELEMENT — that is script-src-elem's fallback to script-src");
+        CHECK(policy_allows(granular, POLICY_EVAL), "eval has no granular form and reads script-src");
+        policy_container_free(granular);
+    }
+    /* §2.2.1: within ONE policy a repeated directive is IGNORED, so the first wins... */
+    {
+        PolicyContainer *dup = policy_container_new("script-src 'unsafe-inline'; script-src 'self'", NULL);
+        CHECK(policy_allows(dup, POLICY_INLINE_HANDLER), "a repeated directive in one policy must be ignored");
+        policy_container_free(dup);
+    }
+    /* ...but §2.2's policy LIST is comma-delimited and enforced INDEPENDENTLY, so the very same two directives
+       as two POLICIES must intersect instead. These two lines differ by one character and must not agree. */
+    {
+        PolicyContainer *list = policy_container_new("script-src 'unsafe-inline', script-src 'self'", NULL);
+        CHECK(!policy_allows(list, POLICY_INLINE_HANDLER),
+              "policies in a list are enforced independently — a second policy can only NARROW");
+        policy_container_free(list);
+    }
+    /* A policy that governs no script directive forbids nothing about scripts. */
+    {
+        PolicyContainer *unrelated = policy_container_new("img-src 'none'; frame-ancestors 'none'", NULL);
+        CHECK(policy_allows(unrelated, POLICY_INLINE_HANDLER), "img-src must not block a handler");
+        CHECK(policy_allows(unrelated, POLICY_EVAL), "frame-ancestors must not block eval");
+        policy_container_free(unrelated);
+    }
+
     evals = policy_container_new("script-src 'unsafe-eval'", NULL);
     CHECK(policy_allows(evals, POLICY_EVAL), "'unsafe-eval' must permit eval");
     CHECK(!policy_allows(evals, POLICY_INLINE_HANDLER), "'unsafe-eval' must not permit an inline handler");
@@ -1229,15 +1274,107 @@ static void policy_container_selftest(void)
     policy_container_free(child);
 }
 
+/* THE SCAN THAT MAKES THE CONTAINER LOAD-BEARING, which the parser test above does not reach: the parse can be
+   perfect and still answer for nothing if the document's own `<meta>` never gets to it. Its own tree, because
+   that is what makes it exercisable at all. */
+static void meta_policy_selftest(void)
+{
+    static const char *SRC =
+        "<html><head>"
+        "<meta charset=utf-8>"
+        "<meta http-equiv='Content-Security-Policy' content=\"script-src 'unsafe-inline'\">"
+        "<meta http-equiv='refresh' content='0'>"
+        /* CASE-INSENSITIVE, which is how a real page spells it, and a SECOND policy — CSP composes by
+           INTERSECTION, so a later policy can only narrow. Taking the last one instead would have reported
+           this page as permitting eval. */
+        "<meta HTTP-EQUIV='content-security-policy' content=\"script-src 'self'\">"
+        "</head><body></body></html>";
+    lxb_html_document_t *dom = lxb_html_document_create();
+    PolicyContainer *p, *empty;
+    lxb_html_document_t *plain;
+
+    lxb_html_document_parse(dom, (const lxb_char_t *)SRC, strlen(SRC));
+    p = document_meta_policy(dom);
+    CHECK(policy_container_csp(p) != NULL, "the meta scan found no policy in a document that declares two");
+    CHECK(!policy_allows(p, POLICY_INLINE_HANDLER),
+          "two meta policies must INTERSECT — the second's 'self' forbids what the first's 'unsafe-inline' "
+          "permits, and a scan that let the last one win would report a live handler on a page that blocks it");
+    CHECK(!policy_allows(p, POLICY_EVAL), "neither meta policy carries 'unsafe-eval'");
+
+    /* A page with no CSP at all is the overwhelmingly common one, and the scan must not invent a policy for
+       it — an empty container that answered "blocked" would suppress every real finding on every such page. */
+    plain = lxb_html_document_create();
+    lxb_html_document_parse(plain, (const lxb_char_t *)"<html><body></body></html>", 26);
+    empty = document_meta_policy(plain);
+    CHECK(policy_allows(empty, POLICY_INLINE_HANDLER), "a document with no meta CSP must permit everything");
+
+    policy_container_free(p);
+    policy_container_free(empty);
+    lxb_html_document_destroy(dom);
+    lxb_html_document_destroy(plain);
+}
+
+/* THE CROSS-INSTANCE HALF OF THE COW DELTA. One WASM instance is one document regardless of origin, so a flow
+   that scripts an iframe or a popup owns segments in two instances; the delta cannot travel (it names its
+   targets by live heap pointers) so the world's NAME travels and the peer builds its own segment.
+   This exercises the peer's half against worlds minted as if by another document — the sender's half is
+   exercised by every fork the fixture below performs, since flow_add mints and engine_fork_finalize forks. */
+static void world_registry_selftest(JSContext *ctx)
+{
+    /* Worlds minted "elsewhere": doc 7, a chain root -> parent -> child. This instance is doc 1. */
+    WorldId root = { 7, 1 }, parent = { 7, 2 }, child = { 7, 3 }, stranger = { 7, 99 };
+    WorldId anc_child[2], anc_parent[1];
+    CowDelta *d_root, *d_parent, *d_child, *d_stranger;
+
+    anc_child[0] = parent; anc_child[1] = root;   /* NEAREST FIRST, as world_ancestry writes it */
+    anc_parent[0] = root;
+
+    /* A world that has never written in this document starts from its BASELINE. That is the truth rather than
+       a default: an empty delta over the baseline is exactly what "wrote nothing here" means. */
+    CHECK(!world_has_segment(root), "a world that never reached this instance must have no segment");
+    d_root = world_segment(ctx, root, NULL, 0);
+    CHECK(d_root != NULL && world_has_segment(root), "a segment must be materialized on first use");
+    /* MATERIALIZED ONCE. A second lookup that built a second delta would give one world two timelines here,
+       and the writes captured into the first would vanish at the next context switch. */
+    CHECK(world_segment(ctx, root, NULL, 0) == d_root, "a world's segment must be materialized exactly once");
+
+    d_parent = world_segment(ctx, parent, anc_parent, 1);
+    CHECK(d_parent != d_root, "a child world must get its OWN segment, forked from its ancestor's");
+
+    /* THE RULE THAT FAILS SILENTLY. With BOTH the parent and the grandparent present, forking the grandparent
+       loses the parent's writes — and nothing reports it: the flow simply reads an older document than the one
+       it wrote. So the scan must stop at the NEAREST ancestor, which is why world_ancestry's nearest-first
+       ordering is asserted where it is produced. */
+    d_child = world_segment(ctx, child, anc_child, 2);
+    CHECK(d_child != d_parent && d_child != d_root, "a materialized world must not alias an ancestor's segment");
+
+    /* An ancestry naming only worlds this instance has never seen is not an error — that flow wrote nothing
+       here, so it starts from the baseline like any other. */
+    d_stranger = world_segment(ctx, stranger, anc_parent, 1);
+    CHECK(d_stranger != NULL, "an unknown ancestry must still yield a baseline segment");
+
+    world_release(ctx, child);
+    CHECK(!world_has_segment(child), "a released world must no longer hold a segment");
+    /* Releasing a world that never wrote here is a no-op: the sender cannot know which peers a flow reached,
+       and tracking that only to avoid a no-op is state kept for nothing. */
+    world_release(ctx, child);
+    world_release(ctx, root);
+    world_release(ctx, parent);
+    world_release(ctx, stranger);
+    CHECK(!world_has_segment(root) && !world_has_segment(parent), "every segment must be released");
+}
+
 int main(void) {
     JSRuntime *rt;
     policy_container_selftest();
+    meta_policy_selftest();
     rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);   /* align quickjs's overflow check with the emcc 8MB wasm stack */
     JSContext *ctx = JS_NewContext(rt);
 
     concolic_init(ctx);
-    flow_registry_init();
+    flow_registry_init(1);   /* one document in this fixture; the world namespace is named by it */
+    world_registry_selftest(ctx);   /* the peer half: worlds minted as if by another document */
     endpoint_init();
     solve_init(ctx);
 

@@ -1,6 +1,8 @@
 /* @S solver — see solve.h. Forced-exec candidate: derive the breakout from the sink's lexical CONTEXT, inject
    it at the source, re-run the REAL code, and verify it FIRES. */
 #include "solver/solve.h"
+#include "core/frame/policy_container.h"
+#include "core/dom/document.h"
 #include "solver/concolic.h"
 #include "solver/endpoint.h"
 #include "solver/engine.h"
@@ -246,7 +248,7 @@ int solve_seed_candidates(JSContext *ctx) {
         if (g_pending[i].tried) continue;
         cands = cand_set(g_pending[i].sink);
         for (int c = 0; cands[c]; c++) {
-            Flow *f = flow_add(ctx, JS_UNDEFINED, NULL, 0);
+            Flow *f = flow_add(ctx, JS_UNDEFINED, NULL, 0, WORLD_NONE);   /* a candidate session runs from the baseline */
             f->cand_src     = strdup(g_pending[i].src);
             f->cand_payload = strdup(cands[c]);
             f->cand_sink    = sink_name(g_pending[i].sink);
@@ -325,6 +327,21 @@ char *solve_json_array(void) {
         buf_puts(&b, "{\"sink\":"); buf_json_str(&b, g_sinks[i].sink);
         buf_puts(&b, ",\"source\":"); buf_json_str(&b, g_sinks[i].source);
         buf_puts(&b, ",\"poc\":"); buf_json_str(&b, g_sinks[i].poc);
+        /* §S: A FIRING BREAKOUT IN THE MODEL IS NOT YET A WORKING EXPLOIT. The PoC has to run under the page's
+           ACTUAL policy, and an inline `onerror` is dead under `script-src 'self'`. Reporting a bare XSS there
+           is a false positive a reader cannot tell from a real one; reporting nothing would hide a sink that IS
+           real. So the finding stays, and it CARRIES what blocks it — "sink REAL, CSP blocks", which is the
+           standard's own distinction and the only one that survives being read by someone else. */
+        {
+            const PolicyContainer *pc = document_policy();
+            PolicyScriptKind kind = !strcmp(g_sinks[i].sink, "eval")      ? POLICY_EVAL
+                                  : !strcmp(g_sinks[i].sink, "location")  ? POLICY_JAVASCRIPT_URL
+                                                                          : POLICY_INLINE_HANDLER;
+            if (!policy_allows(pc, kind)) {
+                buf_puts(&b, ",\"cspBlocks\":");
+                buf_json_str(&b, policy_container_csp(pc));
+            }
+        }
         buf_puts(&b, "}");
     }
     for (int i = 0; i < g_pending_n; i++) {

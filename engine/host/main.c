@@ -79,9 +79,16 @@ static int                  g_done;
 
 /* PHASE 1 — parse and identify. No script runs, which is the whole point: the host reads the frontier key back
  * synchronously and looks up the prior session before any flow is seeded. */
+/* `doc_id` NAMES THIS INSTANCE'S DOCUMENT, and the host assigns it because the host is what knows there is
+ * more than one. One instance is one document regardless of origin, so a flow that scripts an iframe or a
+ * popup writes state in a peer instance — and that peer keys its segment of the flow's world by an id minted
+ * here. Two instances sharing an id would hand each other's flows the same segment: one timeline wearing two
+ * names. It is decimal text because it crosses the ABI beside the other strings. */
 QJS_EXPORT int qjs_init(const char *code, const char *html,
-                        const char *origin, const char *unused, const char *csp)
+                        const char *origin, const char *doc_id, const char *csp)
 {
+    uint32_t did = doc_id ? (uint32_t)strtoul(doc_id, NULL, 10) : 0;
+
     CHECK(g_dom == NULL, "qjs_init ran twice in one WASM instance — one instance is one document");
 
     g_rt = JS_NewRuntime();
@@ -96,7 +103,12 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
     CHECK(JS_AddIntrinsicDOMException(g_ctx) == 0, "the DOMException intrinsic failed to install");
 
     concolic_init(g_ctx);
-    flow_registry_init();
+    /* NOT A DEFAULT. An instance that does not know which document it is cannot be reached by a peer, and a
+       silent 1 here would collide with every other instance that guessed the same. */
+    DCHECK(did != 0, "the host started this engine without a document id — one instance is one document, and a "
+                     "peer instance names this document's flows by that id when it materializes their COW "
+                     "segments, so an unnamed document cannot take part in cross-document time travel");
+    flow_registry_init(did);
     endpoint_init();
     solve_init(g_ctx);
 

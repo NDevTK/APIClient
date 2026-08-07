@@ -13,7 +13,13 @@ static Flow *g_running = NULL;   /* the flow currently holding the worker (the s
    so whoever asks what the host owes has to visit all of them. flow_best answers a different question. */
 Flow *flow_at(int i) { return (i >= 0 && i < g_flows_n) ? g_flows[i] : NULL; }
 
-void flow_registry_init(void) { g_flows = NULL; g_flows_n = 0; g_flows_cap = 0; g_gen = 0; g_running = NULL; }
+void flow_registry_init(uint32_t doc_id) {
+    g_flows = NULL; g_flows_n = 0; g_flows_cap = 0; g_gen = 0; g_running = NULL;
+    /* THE WORLD NAMESPACE COMES UP WITH THE FRONTIER, not beside it: every flow added below is minted a world
+       named by this document, and a frontier whose worlds were unnamed could not be reached from another
+       instance at all. */
+    world_registry_init(doc_id);
+}
 
 unsigned flow_frontier_gen(void) { return g_gen; }
 
@@ -36,6 +42,10 @@ void flow_credit_emit(double v) {
 void flow_age_running(long units) { if (g_running) g_running->cpu += units; }
 
 void flow_registry_free(JSContext *ctx) {
+    /* THE WORLD NAMESPACE GOES DOWN WITH THE FRONTIER, for the reason it came up with it. Any segment this
+       instance still holds for a PEER's world is a foreign flow's state in this document — nothing else is
+       going to free it, and it is malloc'd, so the runtime's GC walk would never name it. */
+    world_registry_free(ctx);
     for (int i = 0; i < g_flows_n; i++) {
         JS_FreeValue(ctx, g_flows[i]->fn);
         free(g_flows[i]->dec);
@@ -55,7 +65,7 @@ void flow_registry_free(JSContext *ctx) {
 static long g_flows_created;
 long flow_created_count(void) { return g_flows_created; }
 
-Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n) {
+Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n, WorldId parent) {
     g_flows_created++;
     if (g_flows_n >= g_flows_cap) {
         g_flows_cap = g_flows_cap ? g_flows_cap * 2 : 32;
@@ -69,6 +79,10 @@ Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n) {
     f->val = 0.0; f->cpu = 0;
     f->cand_src = NULL; f->cand_payload = NULL; f->cand_sink = NULL;
     f->last_compiled = -1;   /* nothing compiled yet; see the no-replay DCHECK at the compile site */
+    /* THE WORLD IS MINTED HERE so no flow can exist without one. A fork passes its parent's world and the
+       child records the edge, which is what lets another instance materialize this flow's segment by forking
+       the nearest ancestor it already holds. A from-baseline flow passes WORLD_NONE and gets a root. */
+    f->world = world_is_none(parent) ? world_mint() : world_mint_child(parent);
     g_flows[g_flows_n++] = f;
     g_gen++;   /* frontier changed */
     return f;

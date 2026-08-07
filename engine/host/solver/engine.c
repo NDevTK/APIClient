@@ -293,7 +293,10 @@ void engine_gen_fork(JSContext *ctx, JSValueConst genobj, void *base_gd, void *c
 static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
     Flow *parent = flow_running();
     DCHECK(parent != NULL && g_fork_dec != NULL, "engine_fork_finalize: fork without a running flow / prepared state");
-    Flow *sib = flow_add(ctx, parent->fn, NULL, 0);
+    /* THE SIBLING'S WORLD IS A CHILD OF THE PARENT'S, and the edge is recorded so another instance that
+   already holds a segment for the parent can materialize the sibling's by forking it — the same O(1)
+   shared-base-segment fork this line performs locally, performed there. */
+    Flow *sib = flow_add(ctx, parent->fn, NULL, 0, parent->world);
     sib->started = 1;                 /* HOT: resume from the cloned frame + blobs, never a fresh re-run */
     sib->frame = clone;               /* the frame snapshot taken AT the branch */
     sib->script_i = parent->script_i; /* same position in the script sequence */
@@ -745,7 +748,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int f
     /* WHAT AN UNCANCELLED REJECTION MEANS is this half's answer: the browser half fires the event and honours
        preventDefault, and a reason that survives that is a page error exactly like a script that threw. */
     unhandled_rejection_set_report_hook(result_page_error_value);
-    flow_add(ctx, JS_UNDEFINED, NULL, 0);   /* the first flow: the page's scripts, empty decision vector */
+    flow_add(ctx, JS_UNDEFINED, NULL, 0, WORLD_NONE);   /* the first flow: the page's scripts, empty decision vector */
     JS_SetFlowLocalMark(1);                 /* objects created while a flow runs are flow-local (discarded) */
     dom_cow_set_ctx(ctx);                   /* the DOM delta needs ctx for the attribute taint-shadow dup/free */
     cow_set_ctx(ctx);                       /* …and the heap delta needs one for the component records it captures */

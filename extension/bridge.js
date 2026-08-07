@@ -11,6 +11,9 @@
 /* The engine WASM factory is an ES module; this bridge lives in the CLASSIC offscreen-brain.js, so load
    it via dynamic import() (cached), NOT a static top-level import. Same-origin under the offscreen CSP. */
 let _createQJSp = null;
+// Monotonic DOCUMENT identity for the engines this offscreen owns — see the qjs_init call below. Starts at 0
+// so the first id is 1: the engine reserves 0 as "no world", and rejects a document named by it.
+let nextDocumentId = 0;
 function getCreateQJS() { return (_createQJSp || (_createQJSp = import("./lib/qjs/qjs.mjs").then((m) => m.default))); }
 
 /* A URL with an opaque HOLE ("{}"/"{tag}") is not concretely fetchable (used to gate reply/chunk fetch).
@@ -166,8 +169,16 @@ async function engineCreate(code, html, msg, persist) {
   // lowercased) is the PRIMARY policy the engine uses for policy-relative XSS verdicts — header-CSP overrides
   // the <meta> scan, which alone missed the header entirely (a header-CSP-blocked sink was reported exploitable).
   const _csp = (msg && msg.responseHeaders && msg.responseHeaders["content-security-policy"]) || "";
+  // THE DOCUMENT ID. One WASM instance is one DOCUMENT regardless of origin, so a flow that scripts an iframe
+  // or a popup writes state in a PEER instance, and that peer keys its segment of the flow's world by an id
+  // minted here. The offscreen mints it because SECURITY.md makes the offscreen the only zone that knows which
+  // instance holds which document — the same reason it owns the routing. The engine rejects 0.
+  // SCOPE, stated rather than assumed: this counter is unique across the instances ALIVE in this offscreen,
+  // which is exactly the set that can message each other today. It is not yet persisted, because a parked
+  // foreign segment does not yet outlive a session; when segments park, this becomes a persisted allocator.
+  const _docId = String(++nextDocumentId);
   M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number"],
-    [arg(code || ""), arg(html || ""), arg(originOf(msg && msg.sourceUrl)), arg(""), arg(_csp)]);
+    [arg(code || ""), arg(html || ""), arg(originOf(msg && msg.sourceUrl)), arg(_docId), arg(_csp)]);
   const _bid = (M.ccall("qjs_bundle_id", "number", [], []) >>> 0).toString(36);
   const fkey = originOf(msg && msg.sourceUrl) + "|" + _bid;
   const prior = persist ? await frontierGet(fkey) : null;

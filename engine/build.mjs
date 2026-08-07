@@ -126,6 +126,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
   .map((f) => join(QJS, f))
   .concat([
     SOLVER("cow.c"), SOLVER("engine.c"), SOLVER("flow.c"), SOLVER("decide.c"),   // per-flow COW + interleaving scheduler + weight + fork
+    SOLVER("world.c"),                                                           // the delta's CROSS-INSTANCE half: a flow's world spans documents
     SOLVER("concolic.c"), SOLVER("endpoint.c"), SOLVER("solve.c"),               // concolic value + @H surface + @S solver
     SOLVER("absent.c"),                                                          // absent global: unknown app state vs a component this engine owes
     SOLVER("result.c"),                                                          // the ONE result document the host reads

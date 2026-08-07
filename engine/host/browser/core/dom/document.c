@@ -466,11 +466,81 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     idl_install_method(ctx, proto, "createElementNS", 2, idl_method_id(ctx, IDL_2STR, 2, js_doc_create_element_ns, 0));
 }
 
+/* HTML §7.2.6's container for THIS document, from the `<meta http-equiv="Content-Security-Policy">` the tree
+   carries. A REAL LEXBOR WALK, not a regex over the source: a `content` attribute is parsed markup by the time
+   it is here, so entity decoding and quoting are the parser's answer rather than a second one — the same
+   reason the bundle id is a `<script>` scan.
+   The HEADER-borne policy is the other half and is the HOST's: it arrives with the response, which the trusted
+   zone fetched, and this component never sees it. When that is plumbed it joins the same container. */
+static PolicyContainer *g_policy;
+
+PolicyContainer *document_meta_policy(lxb_html_document_t *dom)
+{
+    lxb_dom_node_t *cur;
+    char *acc = NULL;
+    size_t acc_len = 0;
+
+    /* No guard for a missing tree: document_install has already asserted there is one, and a second, softer
+       answer here would be the defensive branch that hides the case the assert exists to catch. */
+    for (cur = lxb_dom_interface_node(dom)->first_child; cur; ) {
+        if (cur->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+            size_t qn = 0;
+            const lxb_char_t *q = lxb_dom_element_qualified_name((lxb_dom_element_t *)cur, &qn);
+            if (q && qn == 4 && !memcmp(q, "meta", 4)) {
+                size_t hl = 0, cl = 0;
+                const lxb_char_t *he = lxb_dom_element_get_attribute((lxb_dom_element_t *)cur,
+                                                                     (const lxb_char_t *)"http-equiv", 10, &hl);
+                /* The equivalence is ASCII case-insensitive, which is how every real page spells it. */
+                if (he && hl == 23 && !strncasecmp((const char *)he, "content-security-policy", 23)) {
+                    const lxb_char_t *cv = lxb_dom_element_get_attribute((lxb_dom_element_t *)cur,
+                                                                         (const lxb_char_t *)"content", 7, &cl);
+                    if (cv && cl) {
+                        /* SEVERAL META POLICIES ALL APPLY, and they are joined with a COMMA because that is
+                           CSP §2.2's serialization of a policy LIST. A ';' join would have made them one
+                           policy, where a repeated directive is ignored and `script-src` overrides
+                           `default-src` — so the narrowing second policy would have silently vanished. */
+                        size_t add = cl + (acc_len ? 1 : 0);
+                        char *g = realloc(acc, acc_len + add + 1);
+                        CHECK(g != NULL, "document: OOM collecting a policy");
+                        acc = g;
+                        if (acc_len) acc[acc_len++] = ',';
+                        memcpy(acc + acc_len, cv, cl);
+                        acc_len += cl;
+                        acc[acc_len] = 0;
+                    }
+                }
+            }
+        }
+        if (cur->first_child) { cur = cur->first_child; continue; }
+        while (cur && !cur->next) cur = cur->parent;
+        if (cur) cur = cur->next;
+    }
+    {
+        PolicyContainer *p = policy_container_new(acc, NULL);
+        free(acc);
+        return p;
+    }
+}
+
+const PolicyContainer *document_policy(void) { return g_policy; }
+
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url)
 {
     JSValue doc;
 
     DCHECK(dom != NULL, "the Document install was handed no parsed document");
+    /* BEFORE ANYTHING ELSE, and before the no-address return below: the policy is a property of the parsed
+       TREE, not of the address, and §7.4 clones it for an about:blank child at the moment that child is
+       created — which can be the first thing a boot script does.
+       ONCE, ON THE BASELINE. One instance is one document, so a second install means a NAVIGATION, and a
+       navigation's container is per-flow: the flow that navigated sees the new policy and its siblings still
+       see the old one. Replacing a global here would answer for whichever world ran last, so the second
+       install crashes naming the COW record to build instead. */
+    DCHECK(g_policy == NULL,
+           "a document's policy container was installed twice — that is a NAVIGATION, and its container is "
+           "per-flow state: build it as a COW record (like ProxyData's PROXY_REC) captured in its accessor, so "
+           "the flow that navigated and the sibling that did not each read their own");
+    g_policy = document_meta_policy(dom);
     if (!url || !*url)
         return;   /* no address, no Document — the page's own throw is the honest answer */
 
@@ -578,4 +648,6 @@ void document_free(JSContext *ctx)
     JS_FreeValue(ctx, g_doc_obj);
     g_win_obj = g_doc_obj = JS_UNDEFINED;
     g_doc = NULL;
+    policy_container_free(g_policy);   /* malloc'd, so the GC walk would never have named it */
+    g_policy = NULL;
 }
