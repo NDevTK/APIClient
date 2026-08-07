@@ -174,6 +174,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "html", "custom_elements.c"),                 // §4.13: the registry, upgrade and reactions
     join(HOST, "browser", "core", "html", "unhandled_rejection.c"),             // §8.1.7.5: rejections nobody handled
     join(HOST, "browser", "core", "frame", "window_proxy.c"),                    // WindowProxy: HTML 7.2.5.1, the per-flow navigable binding
+    join(HOST, "browser", "core", "frame", "window_message.c"),                  // window.postMessage: HTML 9.4.4
     join(HOST, "browser", "core", "structured_clone.c"),                       // HTML 2.7: StructuredSerialize/Deserialize
     join(HOST, "browser", "core", "events", "event.c"),                         // Event: §2.2, the object a listener receives
     join(HOST, "browser", "core", "events", "message_event.c"),
