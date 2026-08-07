@@ -12,8 +12,16 @@
  *
  * A TIMER'S TASK IS A FLOW, never a JS_Call. The callback is the page's own code — loops, awaits, concolic
  * branches — so a C activation cannot host it (that is the drive-to-completion the engine aborts on). Each
- * expiry is enqueued through JS_EnqueueCallJob, which runs it as a call-root flow: preemptible, forkable and
+ * expiry is enqueued through JS_EnqueueCallTask, which runs it as a call-root flow: preemptible, forkable and
  * parkable like any other program.
+ *
+ * IT IS A TASK, AND THE WORD IS LOAD-BEARING. 8.6 says "queue a global task on the timer task source", and
+ * 8.1.7 says the event loop performs a MICROTASK CHECKPOINT between one task and the next — so every promise
+ * reaction outstanding when a timer expires runs BEFORE the callback does. Enqueued as a microtask instead, a
+ * `setTimeout(f, 0)` cut into the middle of a promise chain: `delay(0)` observed a stream write that the chain
+ * had not settled yet, and the failure looked like a stream bug rather than an event-loop one. Both hops are
+ * tasks — the step that picks the earliest expiry and the callback it fires — so two timers set for the same
+ * moment still run in the order they were set.
  *
  * TIME IS VIRTUAL, AND THAT IS THE SPEC'S OWN MODEL. HTML orders the timer task source by expiry, and this
  * engine has no wall clock to wait on: nothing else advances while a timer is outstanding, so the clock jumps to
@@ -122,7 +130,7 @@ static void timer_enqueue_step(JSContext *ctx)
 {
     JSValue step = JS_NewCFunction(ctx, js_timer_step, "", 0);
     CHECK(!JS_IsException(step), "timer: the step closure allocation failed");
-    JS_EnqueueCallJob(ctx, step, 0, NULL);
+    JS_EnqueueCallTask(ctx, step, 0, NULL);
     JS_FreeValue(ctx, step);
 }
 
@@ -163,7 +171,7 @@ static JSValue js_timer_step(JSContext *ctx, JSValueConst this_val, int argc, JS
         timer_entry_free(ctx, t);
     }
 
-    JS_EnqueueCallJob(ctx, fn, n, (JSValueConst *)args);
+    JS_EnqueueCallTask(ctx, fn, n, (JSValueConst *)args);
     JS_FreeValue(ctx, fn);
     for (i = 0; i < n; i++)
         JS_FreeValue(ctx, args[i]);
@@ -252,7 +260,8 @@ static JSValue js_clear_timer(JSContext *ctx, JSValueConst this_val, int argc, J
     return JS_UNDEFINED;
 }
 
-/* HTML 8.6.4 queueMicrotask: the callback runs as its own task on the one queue, like every other job here. */
+/* HTML 8.6.4 queueMicrotask: a MICROTASK, which is the whole of what it is for — it runs inside the current
+   checkpoint, ahead of every task, including a timer set for zero. */
 static JSValue js_queue_microtask(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)this_val;

@@ -63,6 +63,8 @@ const INTERFACES = {
   WritableStream:       "core/streams/writable_stream.c",
   WritableStreamDefaultWriter: "core/streams/writable_stream.c",
   WritableStreamDefaultController: "core/streams/writable_stream.c",
+  TransformStream:      "core/streams/transform_stream.c",
+  TransformStreamDefaultController: "core/streams/transform_stream.c",
   Blob:                ["core/file/blob.c", "core/byte_reader.c"],
   File:                ["core/file/blob.c", "core/byte_reader.c"],
   /* Headers exists and had no row, so the audit said nothing about it at all — which is the lying-by-omission

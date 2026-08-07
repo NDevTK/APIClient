@@ -51,6 +51,13 @@ void stream_work_visit(JSContext *ctx, StreamWork *w, JSStepVisit *v)
 void stream_work_release(JSContext *ctx, StreamWork *w)
 ;
 
+/* A CALLBACK MEMBER of an underlying source, sink or transformer: ABSENT, or something the page can call.
+   Anything else is the TypeError Web IDL's callback-function type states, and taking it would leave a stream
+   that silently never starts. `kind` names which dictionary it came from, because that is the whole of what
+   the three call sites differed by — the check itself was written out three times. Returns 0, or -1 with the
+   TypeError live. */
+int stream_callback_member(JSContext *ctx, JSValueConst v, const char *kind, const char *name);
+
 /* PromiseResolve(%Promise%, v) — 27.2.4.7 — as a sub-sequence. §4.5 reacts to what `start` and `pull` RETURNED,
  * which may be a plain value, a page THENABLE, or a promise; the one operation covering all three is a
  * capability whose RESOLVE function is called with it, and calling that function is exactly where 27.2.1.3.2

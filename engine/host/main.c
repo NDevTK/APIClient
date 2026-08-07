@@ -228,6 +228,7 @@ QJS_EXPORT void qjs_teardown(void)
     request_free(g_ctx);   /* Response.prototype — one object, held for the runtime's life */
     url_free(g_ctx);
     usp_free(g_ctx);
+    transform_stream_free(g_ctx);
     writable_stream_free(g_ctx);
     queuing_strategy_free(g_ctx);
     readable_stream_free(g_ctx);

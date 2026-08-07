@@ -31,6 +31,27 @@ bool readable_stream_is(JSValueConst v);
 typedef enum { RS_OP_GET_READER = 0, RS_OP_READ, RS_OP_RELEASE, RS_OP_CANCEL, RS_OP_N } ReadableStreamOp;
 JSValueConst readable_stream_op(ReadableStreamOp which);
 
+/* §4.5's CONTROLLER, and the three of its operations a host performs — as the ORIGINAL function objects, for
+   the reason readable_stream_op gives. §6's TransformStream enqueues into, closes and errors the readable half
+   it owns, and it must reach those operations rather than whatever a page has since put on the prototype.
+   They are STEP METHODS, so a caller reaches them the way it reaches any of the page's code: as a request. */
+typedef enum { RS_CTRL_ENQUEUE = 0, RS_CTRL_CLOSE, RS_CTRL_ERROR, RS_CTRL_N } ReadableControllerOp;
+JSValueConst readable_stream_ctrl_op(ReadableControllerOp which);
+
+/* §4.5's controller for a stream this component built. BORROWED. */
+JSValueConst readable_stream_controller(JSValueConst stream);
+
+/* §4.5's ReadableStreamDefaultControllerCanCloseOrEnqueue and …HasBackpressure — the two predicates §6.3 reads
+   off the readable half before it enqueues and after it has. Both answer false for a non-controller. */
+bool readable_ctrl_can_close_or_enqueue(JSContext *ctx, JSValueConst ctrl);
+bool readable_ctrl_has_backpressure(JSContext *ctx, JSValueConst ctrl);
+
+/* §4.5's ReadableStreamDefaultControllerGetDesiredSize — the VALUE, not the member. §6.4's `desiredSize` is
+   defined as this operation on the readable half's controller, and a getter is the one thing a host may not
+   reach for: reading the accessor from C runs page code off the tramp chain, which the engine aborts on. The
+   answer is the spec's number-or-null, already a JSValue because null is one of the two answers. */
+JSValue readable_ctrl_desired_size(JSContext *ctx, JSValueConst ctrl);
+
 /* §4.9.4's CreateReadableStream, and the START that is deliberately not part of it — see readable_stream.c.
    The algorithms are the CALLER's function objects, called with the arguments the matching underlying-source
    member takes and with `this` = undefined; §6's TransformStream is built out of exactly this, because a

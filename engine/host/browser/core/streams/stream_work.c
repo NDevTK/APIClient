@@ -37,6 +37,13 @@ void stream_work_release(JSContext *ctx, StreamWork *w)
     w->func = w->value = w->chain = w->err = JS_UNDEFINED;
     for (k = 0; k < (int)(sizeof(w->cb) / sizeof(w->cb[0])); k++) { JS_FreeValue(ctx, w->cb[k]); w->cb[k] = JS_UNDEFINED; }
 }
+int stream_callback_member(JSContext *ctx, JSValueConst v, const char *kind, const char *name)
+{
+    if (JS_IsUndefined(v) || JS_IsFunction(ctx, v)) return 0;
+    JS_ThrowTypeError(ctx, "underlying %s member `%s` is not callable", kind, name);
+    return -1;
+}
+
 /* PromiseResolve(%Promise%, v) — 27.2.4.7 — as a sub-sequence. §4.5 reacts to what `start` and `pull` RETURNED,
  * which may be a plain value, a page THENABLE, or a promise; the one operation covering all three is a
  * capability whose RESOLVE function is called with it, and calling that function is exactly where 27.2.1.3.2

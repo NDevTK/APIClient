@@ -1474,19 +1474,33 @@ static JSValue js_illegal_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValu
     return JS_ThrowTypeError(ctx, "Illegal constructor");
 }
 
-/* §4.5's `desiredSize`. With the default strategy the high-water mark is 1, so it is 1 minus what is queued —
-   a page uses it to decide whether to enqueue more, and answering a constant would make that decision wrong. */
-static JSValue js_ctrl_desired(JSContext *ctx, JSValueConst this_val, int magic)
+/* §4.5's ReadableStreamDefaultControllerGetDesiredSize. With the default strategy the high-water mark is 1, so
+   it is 1 minus what is queued — a page uses it to decide whether to enqueue more, and answering a constant
+   would make that decision wrong. An errored stream has no room to describe, which is why null is a value here
+   and not an error. */
+static JSValue ctrl_desired_size(JSContext *ctx, ControllerData *c)
 {
-    ControllerData *c = ctrl_of(this_val);
-    StreamData *d;
-    (void)magic;
-    if (!c) return JS_ThrowTypeError(ctx, "not a ReadableStreamDefaultController");
-    d = stream_of(c->stream);
+    StreamData *d = stream_of(c->stream);
     DCHECK(d != NULL, "a controller's stream stopped being a ReadableStream");
     if (d->state == RS_ERRORED) return JS_NULL;
     if (d->state == RS_CLOSED) return JS_NewInt32(ctx, 0);
     return JS_NewFloat64(ctx, c->hwm - d->queue_total);
+}
+
+/* §4.5's `desiredSize` member — the brand test, then the operation. */
+static JSValue js_ctrl_desired(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    ControllerData *c = ctrl_of(this_val);
+    (void)magic;
+    if (!c) return JS_ThrowTypeError(ctx, "not a ReadableStreamDefaultController");
+    return ctrl_desired_size(ctx, c);
+}
+
+JSValue readable_ctrl_desired_size(JSContext *ctx, JSValueConst ctrl)
+{
+    ControllerData *c = ctrl_of(ctrl);
+    DCHECK(c != NULL, "the desired size of something that is not a §4.5 controller was asked for");
+    return ctrl_desired_size(ctx, c);
 }
 
 /* ---- §4.4's ASYNCHRONOUS ITERATION ---------------------------------------------------------------------------
@@ -3001,6 +3015,38 @@ JSValueConst readable_stream_op(ReadableStreamOp which)
     }
 }
 
+JSValueConst readable_stream_ctrl_op(ReadableControllerOp which)
+{
+    DCHECK(which >= 0 && which < RS_CTRL_N,
+           "a §4.5 controller operation was asked for by a name this component does not map");
+    return g_ctrl_fn[which];
+}
+
+JSValueConst readable_stream_controller(JSValueConst stream)
+{
+    StreamData *d = stream_of(stream);
+    DCHECK(d != NULL, "the controller of something that is not a ReadableStream was asked for");
+    return d->controller;
+}
+
+bool readable_ctrl_can_close_or_enqueue(JSContext *ctx, JSValueConst ctrl)
+{
+    ControllerData *c = ctrl_of(ctrl);
+    (void)ctx;
+    if (!c) return false;
+    return ctrl_can_close_or_enqueue(c, stream_of(c->stream));
+}
+
+bool readable_ctrl_has_backpressure(JSContext *ctx, JSValueConst ctrl)
+{
+    ControllerData *c = ctrl_of(ctrl);
+    /* §4.5: HasBackpressure is the NEGATION of ShouldCallPull — the readable half wants no more exactly when
+       it would not pull. §6.3 reads it after every enqueue to decide whether the writable half must push
+       back, which is the only channel between the two halves of a transform stream. */
+    if (!c) return false;
+    return !ctrl_should_pull(ctx, c, stream_of(c->stream));
+}
+
 bool readable_stream_query(JSValueConst v, ReadableStreamState *pstate, bool *plocked)
 {
     StreamData *d = stream_of(v);
@@ -3084,15 +3130,6 @@ static void js_rs_ctor_release(JSContext *ctx, void *st)
     s->stream = s->controller = s->start_fn = s->source = s->proto = JS_UNDEFINED;
 }
 
-/* A `T? callback` member of UnderlyingSource: absent, or something the page can call. Anything else is the
-   TypeError Web IDL's callback-function type states, and taking it would leave a stream that silently never
-   starts. `*pv` is left owned by the state either way. */
-static int ctor_callback_member(JSContext *ctx, JSValueConst v, const char *name)
-{
-    if (JS_IsUndefined(v) || JS_IsFunction(ctx, v)) return 0;
-    JS_ThrowTypeError(ctx, "underlying source member `%s` is not callable", name);
-    return -1;
-}
 
 static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
@@ -3180,9 +3217,9 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         if (!JS_IsUndefined(s->src[SRC_CHUNKSIZE]))
             DFAIL("an underlying source declared `autoAllocateChunkSize`, which only the BYTE stream "
                   "controller has — build ReadableByteStreamController");
-        if (ctor_callback_member(ctx, s->src[SRC_CANCEL], "cancel") < 0) return -1;
-        if (ctor_callback_member(ctx, s->src[SRC_PULL], "pull") < 0) return -1;
-        if (ctor_callback_member(ctx, s->src[SRC_START], "start") < 0) return -1;
+        if (stream_callback_member(ctx, s->src[SRC_CANCEL], "source", "cancel") < 0) return -1;
+        if (stream_callback_member(ctx, s->src[SRC_PULL], "source", "pull") < 0) return -1;
+        if (stream_callback_member(ctx, s->src[SRC_START], "source", "start") < 0) return -1;
         cb_result = JS_UNDEFINED;
         s->w.stage = RSC_BUILD;
     }

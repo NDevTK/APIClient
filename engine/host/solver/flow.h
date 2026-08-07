@@ -17,7 +17,11 @@
 
 /* One queued microtask/reaction job owned by a flow (routed here by the job-enqueue hook, not a global list):
    the quickjs job function + its dup'd arguments, run under the flow's COW after its scripts. */
-typedef struct { JSJobFunc *fn; int argc; JSValue *argv; } FlowJob;
+/* A queued job of this flow's, and WHICH of HTML 8.1.7's two queues it came from. `task` is not a label: the
+   event loop performs a microtask checkpoint between one task and the next, so a task may not run while this
+   flow still holds a microtask. One array keeps the two in a single arrival order — which is what a task source
+   needs among its own tasks — and the pick applies the checkpoint rule. */
+typedef struct { JSJobFunc *fn; int argc; JSValue *argv; int task; } FlowJob;
 
 /* FETCH-AWAIT: a live (async) fetch this flow issued — a PENDING promise whose resolve capability + the value the
    "network" will deliver are held until the flow stalls, then resolved (the fetch completing) so the awaiting
@@ -111,7 +115,7 @@ typedef struct Flow {
                               forked sibling references the parent's O(N) DOM delta in O(1). NULL until a fork. */
     void *dec_blob;        /* suspended decision state while paused (decide_suspend) */
     void *pin_blob;        /* suspended pin state while paused (concolic_pins_suspend) */
-    FlowJob *jobs; int njob, jobcap;   /* ASYNC-AS-FLOW: this flow's OWN queued microtask/reaction jobs, drained
+    FlowJob *jobs; int njob, jobcap;   /* ASYNC-AS-FLOW: this flow's OWN queued microtasks AND tasks, drained
                                           after its scripts under its live COW (correct ordering, per-flow isolated) */
     FlowPending *pending; int npend, pendcap;   /* FETCH-AWAIT: this flow's OWN live (pending) fetches, resolved when
                                                    the flow's scripts+microtasks stall (the network completing). */

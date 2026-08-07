@@ -35,6 +35,7 @@
 #include "core/file/blob.h"
 #include "core/streams/readable_stream.h"
 #include "core/streams/writable_stream.h"
+#include "core/streams/transform_stream.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/dom/abort.h"
@@ -472,6 +473,8 @@ int main(int argc, char **argv)
     abort_install(ctx, global);
     writable_stream_init(ctx);
     writable_stream_install(ctx, global);
+    transform_stream_init(ctx);
+    transform_stream_install(ctx, global);
     blob_init(ctx);
     blob_install(ctx, global);
     encoding_init(ctx);
@@ -591,6 +594,7 @@ int main(int argc, char **argv)
     url_free(ctx);
     usp_free(ctx);
     form_data_free(ctx);
+    transform_stream_free(ctx);
     writable_stream_free(ctx);
     abort_free(ctx);
     event_free(ctx);

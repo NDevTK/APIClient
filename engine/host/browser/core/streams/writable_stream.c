@@ -274,6 +274,13 @@ bool writable_stream_query(JSValueConst v, WritableStreamState *pstate, bool *pl
     return true;
 }
 
+JSValueConst writable_stream_controller(JSValueConst stream)
+{
+    WsData *d = ws_of(stream);
+    DCHECK(d != NULL, "the controller of something that is not a WritableStream was asked for");
+    return d->controller;
+}
+
 JSValue writable_stream_stored_error(JSContext *ctx, JSValueConst v)
 {
     WsData *d = ws_of(v);
@@ -1451,12 +1458,6 @@ static void js_ws_ctor_release(JSContext *ctx, void *st)
     s->stream = s->ctrl = s->start_fn = s->sink = s->proto = JS_UNDEFINED;
 }
 
-static int ctor_callback_member(JSContext *ctx, JSValueConst v, const char *name)
-{
-    if (JS_IsUndefined(v) || JS_IsFunction(ctx, v)) return 0;
-    JS_ThrowTypeError(ctx, "underlying sink member `%s` is not callable", name);
-    return -1;
-}
 
 static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
@@ -1509,10 +1510,10 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                 JS_ThrowRangeError(ctx, "an underlying sink may not declare a `type`");
                 return -1;
             }
-            if (ctor_callback_member(ctx, s->snk[SNK_ABORT], "abort") < 0 ||
-                ctor_callback_member(ctx, s->snk[SNK_CLOSE], "close") < 0 ||
-                ctor_callback_member(ctx, s->snk[SNK_START], "start") < 0 ||
-                ctor_callback_member(ctx, s->snk[SNK_WRITE], "write") < 0)
+            if (stream_callback_member(ctx, s->snk[SNK_ABORT], "sink", "abort") < 0 ||
+                stream_callback_member(ctx, s->snk[SNK_CLOSE], "sink", "close") < 0 ||
+                stream_callback_member(ctx, s->snk[SNK_START], "sink", "start") < 0 ||
+                stream_callback_member(ctx, s->snk[SNK_WRITE], "sink", "write") < 0)
                 return -1;
             s->w.stage = WSC_BUILD;
             break;
@@ -1731,6 +1732,7 @@ void writable_stream_init(JSContext *ctx)
     g_op_fn[WS_OP_CLOSE]        = JS_GetPropertyStr(ctx, g_wr_proto, "close");
     g_op_fn[WS_OP_ABORT]        = JS_GetPropertyStr(ctx, g_wr_proto, "abort");
     g_op_fn[WS_OP_RELEASE]      = JS_GetPropertyStr(ctx, g_wr_proto, "releaseLock");
+    g_op_fn[WS_OP_CTRL_ERROR]   = JS_GetPropertyStr(ctx, g_wc_proto, "error");
     for (i = 0; i < WS_OP_N; i++)
         CHECK(JS_IsFunction(ctx, g_op_fn[i]), "a §5 abstract operation was not installed before it was captured");
 

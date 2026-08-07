@@ -343,6 +343,7 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
             FlowJob *sj = &parent->jobs[i], *dj = &sib->jobs[i];
             dj->fn = sj->fn;
             dj->argc = sj->argc;
+            dj->task = sj->task;
             dj->argv = sj->argc ? malloc((size_t)sj->argc * sizeof(JSValue)) : NULL;
             CHECK(!sj->argc || dj->argv, "engine: OOM inheriting a queued job's arguments at a fork");
             for (int a = 0; a < sj->argc; a++) dj->argv[a] = JS_DupValue(ctx, sj->argv[a]);
@@ -473,7 +474,7 @@ static int preempt_hook(int kind) {
    in document order in the shared context, under f's COW delta (set by the caller). */
 /* ASYNC-AS-FLOW job-enqueue hook (installed as JS_SetJobEnqueueHook): route a promise reaction / microtask to
    the ENQUEUING flow's own queue instead of the global list, so it runs later under that flow's live COW. */
-static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueConst *argv) {
+static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueConst *argv, bool is_task) {
     Flow *f = flow_running();
     if (!f) return 0;   /* enqueued outside a flow (baseline setup) -> let the fork use its default global list */
     if (f->njob >= f->jobcap) {
@@ -482,17 +483,23 @@ static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueCo
         CHECK(f->jobs, "engine: OOM flow job queue — a dropped reaction corrupts async exploration");
     }
     FlowJob *j = &f->jobs[f->njob++];
-    j->fn = fn; j->argc = argc;
+    j->fn = fn; j->argc = argc; j->task = is_task;
     j->argv = argc ? malloc((size_t)argc * sizeof(JSValue)) : NULL;
     if (argc) CHECK(j->argv, "engine: OOM job argv");
     for (int i = 0; i < argc; i++) j->argv[i] = JS_DupValue(ctx, argv[i]);
     return 1;   /* host owns it */
 }
 
-/* Run ONE of the flow's queued jobs (FIFO) under its currently-applied COW; free its args + result. */
+/* Run ONE of the flow's queued jobs under its currently-applied COW; free its args + result.
+   THE PICK IS HTML 8.1.7's MICROTASK CHECKPOINT, not a FIFO pop. Within a queue the order is arrival order, but
+   a TASK may not begin while this flow still holds a microtask — a plain FIFO ran `setTimeout(f, 0)` in the
+   middle of a promise chain, which is the one ordering the event loop exists to forbid. */
 static void flow_run_one_job(JSContext *ctx, Flow *f) {
-    FlowJob j = f->jobs[0];
-    memmove(f->jobs, f->jobs + 1, (size_t)(--f->njob) * sizeof(FlowJob));   /* FIFO pop */
+    int pick = 0;
+    while (pick < f->njob && f->jobs[pick].task) pick++;
+    if (pick == f->njob) pick = 0;   /* nothing but tasks: the checkpoint is done, run the earliest task */
+    FlowJob j = f->jobs[pick];
+    memmove(f->jobs + pick, f->jobs + pick + 1, (size_t)(--f->njob - pick) * sizeof(FlowJob));
     JSValue r = j.fn(ctx, j.argc, (JSValueConst *)j.argv);   /* the reaction runs in this flow's timeline */
     JS_FreeValue(ctx, r);
     for (int i = 0; i < j.argc; i++) JS_FreeValue(ctx, j.argv[i]);

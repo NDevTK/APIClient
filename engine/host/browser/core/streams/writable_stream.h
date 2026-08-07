@@ -20,6 +20,8 @@ typedef enum {
     WS_OP_GET_WRITER = 0,   /* on the STREAM */
     WS_OP_WRITE, WS_OP_CLOSE, WS_OP_ABORT, WS_OP_RELEASE,   /* on the WRITER */
     WS_OP_STREAM_ABORT,     /* on the STREAM — §4.2.4's abort algorithm aborts the stream, not through a writer */
+    WS_OP_CTRL_ERROR,       /* on the CONTROLLER — and it IS §5.4's ErrorIfNeeded: `error` already returns
+                               without doing anything unless the stream is still writable */
     WS_OP_N
 } WritableStreamOp;
 JSValueConst writable_stream_op(WritableStreamOp which);
@@ -42,6 +44,9 @@ int writable_stream_start(JSContext *ctx, JSValueConst stream, JSValueConst star
    and whether the destination has already begun closing under it. Answers false for a non-stream. */
 typedef enum { WS_WRITABLE = 0, WS_CLOSED, WS_ERRORING, WS_ERRORED } WritableStreamState;
 bool writable_stream_query(JSValueConst v, WritableStreamState *pstate, bool *plocked, bool *pclose_queued);
+
+/* §5.4's controller for a stream this component built. BORROWED. */
+JSValueConst writable_stream_controller(JSValueConst stream);
 
 /* §5.2's [[storedError]]. DUP'D; undefined when the stream has not failed. */
 JSValue writable_stream_stored_error(JSContext *ctx, JSValueConst v);
