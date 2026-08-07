@@ -38,6 +38,7 @@
 #include "core/streams/transform_stream.h"
 #include "core/events/event.h"
 #include "core/events/message_event.h"
+#include "core/structured_clone.h"
 #include "core/events/event_target.h"
 #include "core/dom/abort.h"
 #include "solver/concolic.h"
@@ -471,6 +472,7 @@ int main(int argc, char **argv)
     event_init(ctx);
     event_install(ctx, global);
     event_target_install(ctx, global);
+    structured_clone_install(ctx, global);   /* HTML 2.7.3, and what 9.4 and §4.9.7 clone through */
     message_event_init(ctx);
     message_event_install(ctx, global);
     abort_init(ctx);        /* the AbortSignal slot key §5.4's signal lives in */

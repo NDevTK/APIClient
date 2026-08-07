@@ -173,6 +173,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "html", "html_form.c"),                       // §4.10: a control's value state + submission
     join(HOST, "browser", "core", "html", "custom_elements.c"),                 // §4.13: the registry, upgrade and reactions
     join(HOST, "browser", "core", "html", "unhandled_rejection.c"),             // §8.1.7.5: rejections nobody handled
+    join(HOST, "browser", "core", "structured_clone.c"),                       // HTML 2.7: StructuredSerialize/Deserialize
     join(HOST, "browser", "core", "events", "event.c"),                         // Event: §2.2, the object a listener receives
     join(HOST, "browser", "core", "events", "message_event.c"),                 // MessageEvent: HTML 9.4.1, what every messaging path dispatches
     join(HOST, "browser", "core", "events", "event_target.c"),                  // EventTarget: listeners + the load event

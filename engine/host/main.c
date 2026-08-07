@@ -41,6 +41,7 @@
 #include "browser/core/idl_args.h"
 #include "browser/core/events/event.h"
 #include "browser/core/events/message_event.h"
+#include "browser/core/structured_clone.h"
 #include "browser/core/events/event_target.h"
 #include "browser/core/frame/location.h"
 #include "browser/core/frame/navigator.h"
@@ -132,6 +133,7 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
         event_install(g_ctx, g);   /* the Event interface object */
         message_event_init(g_ctx);
         message_event_install(g_ctx, g);   /* HTML 9.4.1: the event every messaging path dispatches */
+        structured_clone_install(g_ctx, g);   /* HTML 2.7.3 */
         event_target_install(g_ctx, g);
         event_target_set_window(g_ctx, g);   /* §7.6: the document's parent on a propagation path */
         event_target_install_handlers(g_ctx, g, EH_GLOBAL | EH_WINDOW);   /* window's on* set */   /* window IS the global (7.2.2), so this is window.addEventListener */
