@@ -55,6 +55,10 @@ const INTERFACES = {
      are found in the same file. */
   TextEncoder:          "core/encoding/encoding.c",
   TextDecoder:          "core/encoding/encoding.c",
+  /* §7.5 and §7.6 include the GenericTransformStream mixin, so `readable` and `writable` are members the audit
+     expects — they are installed by this component onto its own two prototypes, not inherited. */
+  TextDecoderStream:    "core/encoding/text_stream.c",
+  TextEncoderStream:    "core/encoding/text_stream.c",
   /* §4.2.4's ReadableStreamPipeTo belongs to neither half of the standard — it holds a reader on one stream
      and a writer on another — so `pipeTo` and `pipeThrough` are declared in their own component and installed
      onto this prototype. Naming only readable_stream.c reported them absent while they were shipping. */

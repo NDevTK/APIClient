@@ -33,6 +33,7 @@
 #include "browser/core/streams/queuing_strategy.h"
 #include "browser/core/streams/writable_stream.h"
 #include "browser/core/encoding/encoding.h"
+#include "browser/core/encoding/text_stream.h"
 #include "browser/core/dom/abort.h"
 #include "browser/core/html/unhandled_rejection.h"
 #include "browser/core/dom/document.h"
@@ -235,6 +236,7 @@ QJS_EXPORT void qjs_teardown(void)
     blob_free(g_ctx);
     location_free();   /* the API base URL the document's address produced */
     encoding_free(g_ctx);
+    text_stream_free(g_ctx);
     form_data_free(g_ctx);        /* URLSearchParams.prototype */
     idl_args_free(g_ctx);   /* the dictionary member atoms the declaration pool interned */
     if (g_ctx) { JS_FreeContext(g_ctx); g_ctx = NULL; }

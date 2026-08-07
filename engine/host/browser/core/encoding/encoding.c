@@ -100,7 +100,7 @@ enum { JIS_ASCII = 0, JIS_ROMAN, JIS_KATAKANA, JIS_LEAD, JIS_TRAIL, JIS_ESC_STAR
 
 /* THE DECODER'S STATE, which is what makes `stream: true` work: a sequence split across two calls resumes in
    the middle, and §7.1's "serialize stream" only flushes an incomplete one when the last chunk arrives. */
-typedef struct {
+typedef struct EncDecoder {
     EncodingId enc;
     uint8_t fatal, ignore_bom, bom_seen;
     /* §4.4's UTF-8 machine: how many continuation bytes are still owed, how many have been seen, the code
@@ -128,7 +128,7 @@ typedef struct {
        three of them held it as `i--` / `i -= 2` and a DCHECK that a stream split would have fired. This is a
        queue, and it is where they push back to. Three bytes is gb18030's worst case, which is the platform's. */
     uint8_t back[3], nback;
-} DecoderState;
+} EncDecoder;
 
 static JSClassID g_dec_class;
 static JSClassID g_enc_class;
@@ -139,9 +139,9 @@ static int       g_dec_ctor_stepid = -1, g_enc_ctor_stepid = -1;
 
 static void decoder_finalizer(JSRuntime *rt, JSValue val)
 {
-    DecoderState *d = JS_GetOpaque(val, g_dec_class);
+    EncDecoder *d = JS_GetOpaque(val, g_dec_class);
     (void)rt;
-    free(d);
+    enc_decoder_free(d);
 }
 
 static void encoder_finalizer(JSRuntime *rt, JSValue val)
@@ -149,7 +149,7 @@ static void encoder_finalizer(JSRuntime *rt, JSValue val)
     (void)rt; (void)val;   /* a TextEncoder holds no state: §7.2 makes its encoding always UTF-8 */
 }
 
-static void decoder_reset(DecoderState *d)
+static void decoder_reset(EncDecoder *d)
 {
     d->cp = 0;
     d->needed = d->seen = 0;
@@ -166,7 +166,7 @@ static void decoder_reset(DecoderState *d)
 }
 
 /* THE STANDARD'S "prepend to the stream", in order: the first byte pushed is the first re-read. */
-static void dec_push_back(DecoderState *d, uint8_t b)
+static void dec_push_back(EncDecoder *d, uint8_t b)
 {
     DCHECK(d->nback < sizeof d->back, "a decoder pushed back more bytes than the queue holds");
     d->back[d->nback++] = b;
@@ -175,7 +175,7 @@ static void dec_push_back(DecoderState *d, uint8_t b)
 /* §4.4's UTF-8 decoder, byte by byte. Returns 0 on success; -1 means the byte was an ERROR, and `*prepeat` says
    the byte must be reprocessed after it (which is how the standard recovers from a truncated sequence without
    swallowing the byte that ended it). */
-static int utf8_step(DecoderState *d, uint8_t b, EncBuf *o, int *prepeat, int fatal)
+static int utf8_step(EncDecoder *d, uint8_t b, EncBuf *o, int *prepeat, int fatal)
 {
     *prepeat = 0;
     if (d->needed == 0) {
@@ -221,7 +221,7 @@ static int utf8_step(DecoderState *d, uint8_t b, EncBuf *o, int *prepeat, int fa
 }
 
 /* §14.4/§14.5's UTF-16 decoders. One machine, `be` deciding the byte order — they differ in nothing else. */
-static int utf16_step(DecoderState *d, uint8_t b, EncBuf *o, int *prepeat, int fatal, int be)
+static int utf16_step(EncDecoder *d, uint8_t b, EncBuf *o, int *prepeat, int fatal, int be)
 {
     uint32_t unit;
     uint8_t first;
@@ -279,7 +279,7 @@ static uint32_t gb18030_ranges_code_point(uint32_t pointer)
  *
  * Bytes the machine held but then finds do not belong to a sequence are PUSHED BACK rather than swallowed, so
  * a truncated sequence followed by an ASCII byte emits an error AND that byte. Returns -1 for an error. */
-static int gb18030_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
+static int gb18030_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
 {
     uint32_t pointer, cp;
     uint8_t lead, offset;
@@ -344,7 +344,7 @@ static int gb18030_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
 /* §12.1.1's Big5 decoder. Four pointers answer TWO code points each — the standard writes them out rather than
    putting them in the index, because an index maps a pointer to one — so this is the only decoder here that
    emits twice from one step. */
-static int big5_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
+static int big5_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
 {
     uint32_t pointer, cp;
     uint8_t lead, offset;
@@ -377,7 +377,7 @@ static int big5_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
 
 /* §13.2.1's EUC-JP decoder. Its 0x8F lead selects the OTHER index for the pair that follows, which is what
    `jis0212` carries: one flag, cleared by the step that reads it, exactly as the standard clears it. */
-static int euc_jp_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
+static int euc_jp_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
 {
     uint32_t pointer = 0, cp = 0;
     uint8_t lead;
@@ -414,7 +414,7 @@ static int euc_jp_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
 
 /* §13.4.1's Shift_JIS decoder. Its pointers 8836..10715 are the private use area rather than an index entry,
    which is why that range is answered before the lookup rather than filled into the table. */
-static int shift_jis_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
+static int shift_jis_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
 {
     uint32_t pointer, cp;
     uint8_t lead, offset, lead_offset;
@@ -445,7 +445,7 @@ static int shift_jis_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
 }
 
 /* §14.1.1's EUC-KR decoder — the simplest of the five: one lead, one pointer, one index. */
-static int euc_kr_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
+static int euc_kr_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
 {
     uint32_t pointer, cp = 0;
     uint8_t lead;
@@ -473,7 +473,7 @@ static int euc_kr_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
  * mode it interrupted, which is what `jis_out` holds. The `output` flag is the standard's own: an escape that
  * lands on the mode already in force with nothing emitted since is an error, which is how it rejects
  * `ESC ( B ESC ( B` while accepting the same pair around real text. */
-static int iso2022jp_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
+static int iso2022jp_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
 {
     uint32_t pointer, cp;
 
@@ -567,7 +567,7 @@ static int iso2022jp_step(DecoderState *d, uint8_t b, EncBuf *o, bool fatal)
 }
 
 /* Run `len` bytes through the receiver's decoder. Returns -1 with a TypeError live in fatal mode. */
-static int decoder_run(JSContext *ctx, DecoderState *d, const uint8_t *p, size_t len, EncBuf *o)
+static int decoder_run(JSContext *ctx, EncDecoder *d, const uint8_t *p, size_t len, EncBuf *o)
 {
     int row = ENCODING_SINGLE_BYTE_ROW[d->enc];
     size_t i = 0;
@@ -636,7 +636,7 @@ enum { DEC_ENCODING = 0, DEC_FATAL, DEC_IGNORE_BOM };
 
 static JSValue js_decoder_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    DecoderState *d = JS_GetOpaque(this_val, g_dec_class);
+    EncDecoder *d = JS_GetOpaque(this_val, g_dec_class);
     if (!d) return JS_ThrowTypeError(ctx, "not a TextDecoder");
     if (magic == DEC_ENCODING) return JS_NewString(ctx, ENCODING_NAMES[d->enc]);
     if (magic == DEC_FATAL) return JS_NewBool(ctx, d->fatal);
@@ -668,27 +668,19 @@ static int enc_buffer_source(JSContext *ctx, JSValueConst v, const uint8_t **pp,
     return 0;
 }
 
-/* §7.1's decode(). The `stream` flag decides whether an incomplete sequence at the end is HELD for the next
-   call or flushed as an error, which is the whole reason a decoder has state at all. */
-static JSValue js_decoder_decode(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* RUN BYTES THROUGH A DECODER — §7.1's decode() minus its arguments, which is exactly what §7.5's "decode and
+   enqueue a chunk" and "flush and enqueue" are. The `stream` flag decides whether an incomplete sequence at
+   the end is HELD for the next call or flushed as an error, which is the whole reason a decoder has state at
+   all; the streaming interface is the same decoder driven by a TransformStream rather than by a page's calls,
+   so this is one operation with two callers and not two implementations that will drift. */
+JSValue enc_decoder_decode(JSContext *ctx, EncDecoder *d, const uint8_t *p, size_t len, bool stream)
 {
-    DecoderState *d = JS_GetOpaque(this_val, g_dec_class);
-    JSValueConst options = argc > 1 ? argv[1] : JS_UNDEFINED;
-    const uint8_t *p = NULL;
-    size_t len = 0, start = 0;
-    JSValue buf = JS_UNDEFINED, r;
+    JSValue r;
     EncBuf o = { 0 };
-    bool stream;
 
-    (void)magic;
-    if (!d) return JS_ThrowTypeError(ctx, "not a TextDecoder");
-    if (argc > 0 && !JS_IsUndefined(argv[0]) && enc_buffer_source(ctx, argv[0], &p, &len, &buf) < 0)
-        return JS_EXCEPTION;
-    stream = idl_dict_bool(ctx, options, "stream");
-
-    if (decoder_run(ctx, d, p + start, len - start, &o) < 0) {
+    DCHECK(d != NULL, "bytes were run through a decoder that does not exist");
+    if (decoder_run(ctx, d, p, len, &o) < 0) {
         free(o.b);
-        JS_FreeValue(ctx, buf);
         decoder_reset(d);
         return JS_EXCEPTION;
     }
@@ -708,7 +700,6 @@ static JSValue js_decoder_decode(JSContext *ctx, JSValueConst this_val, int argc
         if (incomplete) {
             if (d->fatal) {
                 free(o.b);
-                JS_FreeValue(ctx, buf);
                 decoder_reset(d);
                 return JS_ThrowTypeError(ctx, "the encoded data ended mid-sequence");
             }
@@ -725,7 +716,6 @@ static JSValue js_decoder_decode(JSContext *ctx, JSValueConst this_val, int argc
             enc_put(&o, 0xFFFD);
             if (d->nback && decoder_run(ctx, d, NULL, 0, &o) < 0) {
                 free(o.b);
-                JS_FreeValue(ctx, buf);
                 decoder_reset(d);
                 return JS_EXCEPTION;
             }
@@ -747,8 +737,68 @@ static JSValue js_decoder_decode(JSContext *ctx, JSValueConst this_val, int argc
     }
     r = JS_NewStringLen(ctx, o.b ? o.b : "", o.n);
     free(o.b);
+    return r;
+}
+
+/* §7.1's decode(): the arguments, then the operation above. */
+static JSValue js_decoder_decode(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    EncDecoder *d = JS_GetOpaque(this_val, g_dec_class);
+    const uint8_t *p = NULL;
+    size_t len = 0;
+    JSValue buf = JS_UNDEFINED, r;
+    bool stream;
+
+    (void)magic;
+    if (!d) return JS_ThrowTypeError(ctx, "not a TextDecoder");
+    if (argc > 0 && !JS_IsUndefined(argv[0]) && enc_buffer_source(ctx, argv[0], &p, &len, &buf) < 0)
+        return JS_EXCEPTION;
+    stream = idl_dict_bool(ctx, argc > 1 ? argv[1] : JS_UNDEFINED, "stream");
+    r = enc_decoder_decode(ctx, d, p, len, stream);
     JS_FreeValue(ctx, buf);
     return r;
+}
+
+/* ---- WHAT §7.5 AND §7.6 REACH THIS COMPONENT THROUGH ------------------------------------------------------
+ *
+ * The streaming interfaces are the same decoders and the same encoder, driven by a TransformStream rather than
+ * by a page's calls. They live in their own component because the STREAM is the problem they solve, but the
+ * codecs are this one's and are exported rather than written a second time. */
+
+int encoding_lookup(const char *label, size_t len) { return encoding_get(label, len); }
+
+bool encoding_is_replacement(int enc) { return enc == ENC_REPLACEMENT; }
+
+const char *encoding_name_of(int enc)
+{
+    DCHECK(enc >= 0 && enc < ENC_COUNT, "the name of an encoding this registry does not have was asked for");
+    return ENCODING_NAMES[enc];
+}
+
+EncDecoder *enc_decoder_new(int enc, bool fatal, bool ignore_bom)
+{
+    EncDecoder *d;
+    DCHECK(enc >= 0 && enc < ENC_COUNT && enc != ENC_REPLACEMENT,
+           "a decoder was asked for an encoding that has none — `replacement` is refused by the two "
+           "constructors, and every other id in the registry decodes");
+    d = calloc(1, sizeof *d);
+    CHECK(d, "encoding: OOM building a decoder");
+    d->enc = (EncodingId)enc;
+    d->fatal = fatal;
+    d->ignore_bom = ignore_bom;
+    decoder_reset(d);
+    return d;
+}
+
+void enc_decoder_free(EncDecoder *d) { free(d); }
+
+bool enc_decoder_fatal(const EncDecoder *d) { return d->fatal != 0; }
+bool enc_decoder_ignore_bom(const EncDecoder *d) { return d->ignore_bom != 0; }
+int  enc_decoder_encoding(const EncDecoder *d) { return (int)d->enc; }
+
+int encoding_buffer_source(JSContext *ctx, JSValueConst v, const uint8_t **pp, size_t *plen, JSValue *pbuf)
+{
+    return enc_buffer_source(ctx, v, pp, plen, pbuf);
 }
 
 /* §7.1's constructor. `label` resolving to `replacement` is a RangeError as much as an unknown label is — the
@@ -766,7 +816,7 @@ static int js_dec_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     const char *label = "utf-8";
     size_t label_len = 5;
     int id;
-    DecoderState *d;
+    EncDecoder *d;
     JSValue obj;
 
     (void)st; (void)out_cb; (void)out_argc;
@@ -784,12 +834,8 @@ static int js_dec_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 
     obj = JS_NewObjectProtoClass(ctx, g_dec_proto, g_dec_class);
     if (JS_IsException(obj)) return -1;
-    d = calloc(1, sizeof *d);
-    CHECK(d, "encoding: OOM building a TextDecoder");
-    d->enc = (EncodingId)id;
-    d->fatal = idl_dict_bool(ctx, options, "fatal");
-    d->ignore_bom = idl_dict_bool(ctx, options, "ignoreBOM");
-    decoder_reset(d);
+    d = enc_decoder_new(id, idl_dict_bool(ctx, options, "fatal"),
+                        idl_dict_bool(ctx, options, "ignoreBOM"));
     JS_SetOpaque(obj, d);
     *presult = obj;
     return 0;

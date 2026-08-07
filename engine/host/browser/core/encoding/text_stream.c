@@ -1,0 +1,640 @@
+/* TextDecoderStream AND TextEncoderStream — the Encoding Standard §7.5 and §7.6.
+ *
+ * WHAT THEY ARE. Neither is a subclass of TransformStream. Each is its own Web IDL interface that INCLUDES the
+ * Streams Standard's GenericTransformStream mixin, which means it has an associated `transform` — an actual
+ * TransformStream — and its `readable`/`writable` getters answer that stream's two halves. The constructor
+ * creates one and SETS IT UP (Streams §9.3.1) with algorithms of this component's, so the transform stream's
+ * fixed marks and identity transform never come into it: writes go through this file's codec.
+ *
+ * THE CODEC IS §7.1's AND §7.2's, NOT A SECOND ONE. §7.5 says "set stream's decoder to a new instance of
+ * encoding's decoder" — the same object a TextDecoder holds, keeping its half-read sequence between chunks —
+ * so encoding.c exports it and this file drives it. Writing the decode loop again here is how the streaming
+ * interface and the non-streaming one come to disagree about a sequence split across a chunk boundary, which
+ * is the one thing the streaming interface exists to get right.
+ *
+ * EVERY ALGORITHM IS A STEP, because every one of them ENQUEUES — and enqueueing is
+ * TransformStreamDefaultControllerEnqueue, a §6.4 controller operation, which is the page-reachable machinery
+ * and therefore a request. So the four algorithms (decode-and-enqueue, flush-and-enqueue, encode-and-enqueue,
+ * encode-and-flush) are step definitions rather than C functions, minted as step CLOSURES over the
+ * TextDecoderStream/TextEncoderStream object so each one can reach its own codec state.
+ *
+ * §7.6's ENCODER TAKES A DOMString, NOT A USVString, AND THAT IS THE WHOLE DESIGN. A surrogate PAIR split
+ * across two chunks must come out as the one scalar value it encodes, which is only possible if the lone
+ * leading surrogate at the end of a chunk is HELD rather than replaced. So the chunk is read as UTF-16 code
+ * units (CESU-8, which is how this engine hands a string's lone surrogates to C) and §7.6's "convert code unit
+ * to scalar value" machine decides each one. A USVString conversion would have replaced the split pair with
+ * two U+FFFD before this file ever saw it. */
+#include <stdlib.h>
+#include <string.h>
+
+#include "check.h"
+#include "quickjs.h"
+#include "quickjs-step.h"
+#include "core/encoding/encoding.h"
+#include "core/encoding/text_stream.h"
+#include "core/idl_args.h"
+#include "core/streams/transform_stream.h"
+
+/* ---- the two interfaces' state ----------------------------------------------------------------------------- */
+
+/* THE GenericTransformStream MIXIN'S `transform`, plus whichever codec this object is. One record for both
+   interfaces because the mixin half is identical and the codec half is a union of two small things — two
+   records would duplicate the transform slot, the finalizer and the gc_mark, which is three chances for one of
+   them to be updated and the other not. `dec` is NULL exactly when this is an encoder. */
+typedef struct {
+    JSValue transform;      /* the TransformStream this object's readable/writable come from (owned) */
+    EncDecoder *dec;        /* §7.5's "stream's decoder", or NULL for §7.6 */
+    /* §7.6's "leading surrogate": the code unit held back so a pair split across chunks can be rejoined.
+       -1 when there is none, which is the standard's null. */
+    int32_t lead;
+} TextStreamData;
+
+static JSClassID g_tds_class;
+static JSClassID g_tes_class;
+static JSValue   g_tds_proto = JS_UNDEFINED;
+static JSValue   g_tes_proto = JS_UNDEFINED;
+static JSRuntime *g_ts_rt;
+static int       g_tds_ctor_stepid = -1, g_tes_ctor_stepid = -1;
+
+/* The four algorithms' step ids, and the two constructors' — see the file comment. */
+enum { ALG_DECODE = 0, ALG_DEC_FLUSH, ALG_ENCODE, ALG_ENC_FLUSH, ALG_N };
+static int g_alg_stepid[ALG_N];
+
+static TextStreamData *tds_of(JSValueConst v)
+{
+    TextStreamData *t = JS_GetOpaque(v, g_tds_class);
+    return t;
+}
+
+static TextStreamData *tes_of(JSValueConst v)
+{
+    return JS_GetOpaque(v, g_tes_class);
+}
+
+/* Either interface — what the mixin's two getters and the algorithms need, and neither cares which. */
+static TextStreamData *ts_any_of(JSValueConst v)
+{
+    TextStreamData *t = JS_GetOpaque(v, g_tds_class);
+    return t ? t : (TextStreamData *)JS_GetOpaque(v, g_tes_class);
+}
+
+static void text_stream_finalizer(JSRuntime *rt, JSValue val)
+{
+    TextStreamData *t = JS_GetOpaque(val, g_tds_class);
+    if (!t) t = JS_GetOpaque(val, g_tes_class);
+    if (!t) return;
+    JS_FreeValueRT(rt, t->transform);
+    enc_decoder_free(t->dec);
+    free(t);
+}
+
+/* THE CYCLE IS REAL AND MUST BE MARKED. This object holds its TransformStream; that stream's controller holds
+   the algorithm closures; each closure holds this object. Without a mark the collector cannot see the loop and
+   every TextDecoderStream a page makes is a leak the runtime's own walk reports at teardown. */
+static void text_stream_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+{
+    TextStreamData *t = JS_GetOpaque(val, g_tds_class);
+    if (!t) t = JS_GetOpaque(val, g_tes_class);
+    if (!t) return;
+    JS_MarkValue(rt, t->transform, mark_func);
+}
+
+/* ---- Streams §9.3.2's GenericTransformStream mixin ---------------------------------------------------------- */
+
+enum { GTS_READABLE = 0, GTS_WRITABLE };
+
+static JSValue js_gts_get(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    TextStreamData *t = ts_any_of(this_val);
+    if (!t) return JS_ThrowTypeError(ctx, "not a TextDecoderStream or TextEncoderStream");
+    return JS_DupValue(ctx, magic == GTS_READABLE ? transform_stream_readable(t->transform)
+                                                  : transform_stream_writable(t->transform));
+}
+
+/* ---- §7.5's TextDecoderCommon attributes -------------------------------------------------------------------- */
+
+enum { TDS_ENCODING = 0, TDS_FATAL, TDS_IGNORE_BOM };
+
+static JSValue js_tds_get(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    TextStreamData *t = tds_of(this_val);
+    if (!t) return JS_ThrowTypeError(ctx, "not a TextDecoderStream");
+    DCHECK(t->dec != NULL, "a TextDecoderStream reached its attributes with no decoder — the constructor "
+                           "builds one before the object is reachable");
+    if (magic == TDS_ENCODING) return JS_NewString(ctx, encoding_name_of(enc_decoder_encoding(t->dec)));
+    if (magic == TDS_FATAL) return JS_NewBool(ctx, enc_decoder_fatal(t->dec));
+    DCHECK(magic == TDS_IGNORE_BOM,
+           "a TextDecoderStream attribute was declared with a magic this component does not answer");
+    return JS_NewBool(ctx, enc_decoder_ignore_bom(t->dec));
+}
+
+static JSValue js_tes_get(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    (void)magic;
+    if (!tes_of(this_val)) return JS_ThrowTypeError(ctx, "not a TextEncoderStream");
+    return JS_NewString(ctx, "utf-8");   /* §7.6: a TextEncoderStream offers no label and is always UTF-8 */
+}
+
+/* ---- §7.6's "convert code unit to scalar value" ------------------------------------------------------------- */
+
+/* THE CHUNK AS UTF-16 CODE UNITS. quickjs hands a string to C as UTF-8, which has already replaced a lone
+   surrogate — so the CESU-8 form is asked for instead, where each surrogate is its own three-byte sequence and
+   §7.6's machine can see it. Returns the unit at `*pi` and advances past it. */
+static uint32_t cesu8_next(const uint8_t *p, size_t len, size_t *pi)
+{
+    size_t i = *pi;
+    uint32_t c = p[i];
+    int n;
+
+    DCHECK(i < len, "a code unit was read past the end of the chunk");
+    if (c < 0x80) { *pi = i + 1; return c; }
+    n = c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : 2;
+    DCHECK(i + (size_t)n <= len, "a CESU-8 sequence ran past the end of the buffer this engine produced");
+    c &= (uint32_t)(0xFF >> (n + 1));
+    for (i++; i < *pi + (size_t)n; i++) c = (c << 6) | (p[i] & 0x3F);
+    *pi = i;
+    /* CESU-8 never produces a four-byte sequence, but a plain-UTF-8 buffer would; a supplementary code point
+       is two units here, and answering it whole would lose the split-pair behaviour this whole path is for. */
+    DCHECK(n < 4, "a supplementary code point arrived as one unit — the chunk must be read as CESU-8");
+    return c;
+}
+
+/* Append `cp` to `o` as UTF-8, growing it. §7.6's output is UTF-8 bytes, so this IS the encoder. */
+typedef struct { uint8_t *b; size_t n, cap; } ByteBuf;
+
+static void bb_put(ByteBuf *o, uint32_t cp)
+{
+    if (o->n + 4 > o->cap) {
+        size_t c = o->cap ? o->cap * 2 : 64;
+        while (o->n + 4 > c) c *= 2;
+        o->b = realloc(o->b, c);
+        CHECK(o->b != NULL, "encoding: OOM growing a TextEncoderStream chunk");
+        o->cap = c;
+    }
+    if (cp < 0x80) {
+        o->b[o->n++] = (uint8_t)cp;
+    } else if (cp < 0x800) {
+        o->b[o->n++] = (uint8_t)(0xC0 | (cp >> 6));
+        o->b[o->n++] = (uint8_t)(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        o->b[o->n++] = (uint8_t)(0xE0 | (cp >> 12));
+        o->b[o->n++] = (uint8_t)(0x80 | ((cp >> 6) & 0x3F));
+        o->b[o->n++] = (uint8_t)(0x80 | (cp & 0x3F));
+    } else {
+        o->b[o->n++] = (uint8_t)(0xF0 | (cp >> 18));
+        o->b[o->n++] = (uint8_t)(0x80 | ((cp >> 12) & 0x3F));
+        o->b[o->n++] = (uint8_t)(0x80 | ((cp >> 6) & 0x3F));
+        o->b[o->n++] = (uint8_t)(0x80 | (cp & 0x3F));
+    }
+}
+
+/* ---- the four algorithms ------------------------------------------------------------------------------------
+ *
+ * ONE MACHINE, FOUR ENTRIES, because all four end the same way: build a chunk out of the codec, and if it is
+ * not empty, ENQUEUE it — one request, made from one place. What differs is only how the chunk is built, which
+ * is the part that runs no page code and needs no stages. */
+
+enum { TX_ENTRY = 0, TX_STRING, TX_BUILD, TX_ENQUEUE, TX_DONE };
+
+typedef struct {
+    JSStepHdr hdr;
+    uint8_t stage, phase;
+    JSValue self;      /* the TextDecoderStream / TextEncoderStream (owned) */
+    JSValue input;     /* §7.6 step 1's DOMString, once ToString has run on what was written (owned) */
+    JSValue chunk;     /* what this algorithm produced, until it has been enqueued (owned) */
+    JSValue cb[3];     /* step_call_run's buffer: [this, enqueue, chunk] */
+} JSTxState;
+
+static void js_tx_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSTxState *s = st;
+    int k;
+    v->val(ctx, &s->self);
+    v->val(ctx, &s->input);
+    v->val(ctx, &s->chunk);
+    for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
+}
+
+static void js_tx_release(JSContext *ctx, void *st)
+{
+    JSTxState *s = st;
+    int k;
+    JS_FreeValue(ctx, s->self);
+    JS_FreeValue(ctx, s->input);
+    JS_FreeValue(ctx, s->chunk);
+    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
+    s->self = s->input = s->chunk = JS_UNDEFINED;
+}
+
+static JSValue js_tx_fini(JSContext *ctx, void *st, bool take_result)
+{
+    (void)take_result;
+    js_tx_release(ctx, st);
+    return JS_UNDEFINED;   /* §9.3.1's wrapper discards a non-promise result; all four answer undefined */
+}
+
+/* §7.5's "decode and enqueue a chunk" and "flush and enqueue" — the same decoder, differing only in whether
+   this is the end of the stream. Returns the produced string, or JS_EXCEPTION with the TypeError live. */
+static JSValue tx_decode(JSContext *ctx, TextStreamData *t, JSValueConst chunk, bool flush)
+{
+    const uint8_t *p = NULL;
+    size_t len = 0;
+    JSValue buf = JS_UNDEFINED, r;
+
+    DCHECK(t->dec != NULL, "a decode algorithm ran on a TextEncoderStream");
+    if (!flush) {
+        /* §7.5 step 1: "convert chunk to an AllowSharedBufferSource". The chunk is whatever the page WROTE, so
+           nothing has brand-tested it — a transform algorithm reached through set up receives the raw value,
+           unlike an IDL member whose declaration converts first. Anything that is not a buffer source is the
+           union's TypeError, which errors both halves of the stream, which is what the standard wants. */
+        if (!JS_IsArrayBuffer(chunk) && JS_GetTypedArrayType(chunk) < 0 && !JS_IsDataView(chunk))
+            return JS_ThrowTypeError(ctx, "a TextDecoderStream chunk is not a BufferSource");
+        if (encoding_buffer_source(ctx, chunk, &p, &len, &buf) < 0)
+            return JS_EXCEPTION;
+    }
+    r = enc_decoder_decode(ctx, t->dec, p, len, !flush);
+    JS_FreeValue(ctx, buf);
+    return r;
+}
+
+/* §7.6's "encode and enqueue a chunk", from step 2 on: `input` is already the DOMString step 1 produced, which
+   the machine below obtained as a REQUEST because ToString runs the page's own `toString`. */
+static JSValue tx_encode(JSContext *ctx, TextStreamData *t, JSValueConst chunk)
+{
+    const char *s;
+    size_t len = 0, i = 0;
+    ByteBuf o = { 0 };
+    JSValue r;
+
+    DCHECK(t->dec == NULL, "an encode algorithm ran on a TextDecoderStream");
+    s = JS_ToCStringLen2(ctx, &len, chunk, true);   /* CESU-8: lone surrogates survive as their own units */
+    if (!s) return JS_EXCEPTION;
+    while (i < len) {
+        uint32_t u = cesu8_next((const uint8_t *)s, len, &i);
+        /* §7.6's convert code unit to scalar value, in the standard's own order. */
+        if (t->lead >= 0) {
+            uint32_t leading = (uint32_t)t->lead;
+            t->lead = -1;
+            if (u >= 0xDC00 && u <= 0xDFFF) {
+                bb_put(&o, 0x10000 + ((leading - 0xD800) << 10) + (u - 0xDC00));
+                continue;
+            }
+            /* "Restore item to input" — the unit is not a trailing surrogate, so the HELD one is the error and
+               this one is read again on the next turn of the loop. */
+            bb_put(&o, 0xFFFD);
+            /* fall through to classify `u` itself */
+        }
+        if (u >= 0xD800 && u <= 0xDBFF) { t->lead = (int32_t)u; continue; }
+        if (u >= 0xDC00 && u <= 0xDFFF) { bb_put(&o, 0xFFFD); continue; }
+        bb_put(&o, u);
+    }
+    JS_FreeCString(ctx, s);
+    r = o.n ? JS_NewUint8ArrayCopy(ctx, o.b, o.n) : JS_UNDEFINED;
+    free(o.b);
+    return r;
+}
+
+/* §7.6's "encode and flush": a leading surrogate left over at the end of the stream is U+FFFD and nothing
+   else, because there is no chunk left for its pair to arrive in. */
+static JSValue tx_encode_flush(JSContext *ctx, TextStreamData *t)
+{
+    static const uint8_t REPLACEMENT[3] = { 0xEF, 0xBF, 0xBD };
+    DCHECK(t->dec == NULL, "an encode flush ran on a TextDecoderStream");
+    if (t->lead < 0) return JS_UNDEFINED;
+    t->lead = -1;
+    return JS_NewUint8ArrayCopy(ctx, REPLACEMENT, sizeof REPLACEMENT);
+}
+
+/* IS THERE ANYTHING TO ENQUEUE? Both standards say "if outputChunk is not the empty string" / "if output is not
+   empty" — an algorithm that produced nothing enqueues nothing, so a chunk that only advanced the decoder's
+   state does not put an empty string on the readable side. The encoders answer undefined for "nothing"; the
+   decoder answers a string, and this is the one place its emptiness is asked. The comparison runs no page code:
+   the value is a primitive string this file just made. */
+static bool tx_has_chunk(JSContext *ctx, JSValueConst v)
+{
+    if (JS_IsUndefined(v)) return false;
+    if (JS_IsString(v)) {
+        size_t len = 0;
+        const char *p = JS_ToCStringLen(ctx, &len, v);
+        bool any;
+        DCHECK(p != NULL, "a decoded chunk this component built could not be read back as bytes");
+        any = len != 0;
+        JS_FreeCString(ctx, p);
+        return any;
+    }
+    return true;
+}
+
+static int js_tx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSTxState *s = st;
+    JSStepHdr *hdr = &s->hdr;
+    TextStreamData *t;
+    JSValue out;
+    int r;
+
+    /* WHICH ALGORITHM, and where §6 put the controller. A TRANSFORM algorithm is called « chunk, controller »
+       and a FLUSH algorithm « controller » — so the controller is argument 1 for the two that take a chunk and
+       argument 0 for the two that do not. Reading it from the wrong slot hands `enqueue` an undefined receiver
+       and every flush fails its brand test. */
+    int which = hdr->arg;
+    bool takes_chunk = (which == ALG_DECODE || which == ALG_ENCODE);
+
+    DCHECK(which >= 0 && which < ALG_N,
+           "an Encoding stream algorithm ran with an operation this component does not have");
+
+    if (s->stage == TX_ENTRY) {
+        s->self = JS_DupValue(ctx, JS_StepClosureData(hdr, 0));
+        s->input = s->chunk = JS_UNDEFINED;
+        s->cb[0] = s->cb[1] = s->cb[2] = JS_UNDEFINED;
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        /* §7.6 step 1 is ToString on what the page wrote, which is the page's own `toString`. §7.5's chunk is
+           a buffer source and needs no coercion, so only the encoder takes this stage. */
+        s->stage = which == ALG_ENCODE ? TX_STRING : TX_BUILD;
+    }
+
+    if (s->stage == TX_STRING) {
+        r = step_tostring_run(ctx, hdr, step_arg(hdr, 0), cb_result, &s->input, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return JS_STEP_ABRUPT;
+        cb_result = JS_UNDEFINED;
+        s->stage = TX_BUILD;
+    }
+
+    if (s->stage == TX_BUILD) {
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        t = ts_any_of(s->self);
+        DCHECK(t != NULL, "an Encoding stream algorithm ran over something that is not one of its interfaces");
+        s->chunk = which == ALG_DECODE    ? tx_decode(ctx, t, step_arg(hdr, 0), false)
+                 : which == ALG_DEC_FLUSH ? tx_decode(ctx, t, JS_UNDEFINED, true)
+                 : which == ALG_ENCODE    ? tx_encode(ctx, t, s->input)
+                                          : tx_encode_flush(ctx, t);
+        if (JS_IsException(s->chunk)) { s->chunk = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        if (!tx_has_chunk(ctx, s->chunk)) { s->stage = TX_DONE; return JS_STEP_DONE; }
+        s->stage = TX_ENQUEUE;
+    }
+
+    if (s->stage == TX_ENQUEUE) {
+        /* §9.3.1's "enqueue chunk in stream" IS TransformStreamDefaultControllerEnqueue, reached with the
+           controller §6 handed this algorithm as `this` — never through a property the page could replace. */
+        JSValueConst arg = s->chunk;
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), transform_stream_op(TS_OP_ENQUEUE),
+                          step_arg(hdr, takes_chunk ? 1 : 0), 1, &arg, cb_result, &out, out_cb, out_argc);
+        if (r > 0) return r;
+        if (JS_IsException(out)) return JS_STEP_ABRUPT;
+        JS_FreeValue(ctx, out);
+        s->stage = TX_DONE;
+        return JS_STEP_DONE;
+    }
+
+    DCHECK(s->stage == TX_DONE, "an Encoding stream algorithm resumed in a stage it never parks in");
+    JS_FreeValue(ctx, cb_result);
+    return JS_STEP_DONE;
+}
+
+#define TX_DEF(i) { sizeof(JSTxState), js_tx_step, js_tx_fini, (i), .visit = js_tx_visit }
+static const JSTrampStepDef js_tx_defs[ALG_N] = { TX_DEF(0), TX_DEF(1), TX_DEF(2), TX_DEF(3) };
+#undef TX_DEF
+
+/* ---- the two constructors ------------------------------------------------------------------------------------
+ *
+ * Both END in a request — Streams §9.3.1's set up is a step, because building a transform stream settles
+ * promises — so both are step constructors. What they do before that is their own standard's steps. */
+
+enum { TC_ENTRY = 0, TC_SETUP, TC_DONE };
+
+typedef struct {
+    uint8_t stage, phase;
+    JSValue obj;       /* the interface object being built (owned) */
+    JSValue fns[3];    /* transformAlgorithm, flushAlgorithm, cancelAlgorithm (owned) */
+    JSValue cb[5];     /* step_call_run's buffer: [this, setup, 3 algorithms] */
+} JSTcState;
+
+static void js_tc_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSTcState *s = st;
+    int k;
+    v->val(ctx, &s->obj);
+    for (k = 0; k < 3; k++) v->val(ctx, &s->fns[k]);
+    for (k = 0; k < 5; k++) v->val(ctx, &s->cb[k]);
+}
+
+static void js_tc_release(JSContext *ctx, void *st)
+{
+    JSTcState *s = st;
+    int k;
+    JS_FreeValue(ctx, s->obj);
+    s->obj = JS_UNDEFINED;
+    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->fns[k]); s->fns[k] = JS_UNDEFINED; }
+    for (k = 0; k < 5; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
+}
+
+/* Build the object, its codec and the two algorithm closures over it. Returns -1 with an exception live. */
+static int tc_build(JSContext *ctx, JSTcState *s, bool decoder, int enc, bool fatal, bool ignore_bom)
+{
+    TextStreamData *t;
+    JSValueConst self;
+    int k;
+
+    s->obj = JS_NewObjectProtoClass(ctx, decoder ? g_tds_proto : g_tes_proto,
+                                    decoder ? g_tds_class : g_tes_class);
+    if (JS_IsException(s->obj)) return -1;
+    /* THE RECORD IS COMPLETE BEFORE IT IS ATTACHED, so the finalizer of an object torn down by a failure below
+       frees exactly what it holds and nothing it never got. */
+    t = calloc(1, sizeof *t);
+    CHECK(t, "encoding: OOM building a text stream");
+    t->transform = JS_UNDEFINED;
+    t->dec = decoder ? enc_decoder_new(enc, fatal, ignore_bom) : NULL;
+    t->lead = -1;
+    JS_SetOpaque(s->obj, t);
+
+    self = s->obj;
+    for (k = 0; k < 2; k++) {
+        int id = g_alg_stepid[decoder ? (k ? ALG_DEC_FLUSH : ALG_DECODE)
+                                      : (k ? ALG_ENC_FLUSH : ALG_ENCODE)];
+        /* §6 calls a transform algorithm with « chunk, controller » and a flush algorithm with « controller »;
+           declaring 2 and 1 is what makes `step_arg(hdr, 1)` the controller in the first case and
+           `step_arg(hdr, 0)` it in the second — which is why the enqueue stage reads argument 1 for both, and
+           why the flush definitions are entered with an unused slot rather than a different shape. */
+        s->fns[k] = JS_NewStepClosure(ctx, id, 2, 1, &self);
+        if (JS_IsException(s->fns[k])) return -1;
+    }
+    s->fns[2] = JS_UNDEFINED;   /* §7.5 and §7.6 give no cancel algorithm */
+    return 0;
+}
+
+static int tc_run(JSContext *ctx, JSTcState *s, JSValue cb_result, JSValue *presult,
+                  JSValue **out_cb, int *out_argc)
+{
+    JSValue out;
+    int r;
+
+    DCHECK(s->stage == TC_SETUP, "a text stream constructor resumed in a stage it never parks in");
+    {
+        /* Streams §9.3.1's "set up a TransformStream", reached as a request because building the two halves
+           settles promises and resolves capabilities, which is the page's machinery. */
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), transform_stream_op(TS_OP_SETUP), JS_UNDEFINED,
+                          3, (JSValueConst *)s->fns, cb_result, &out, out_cb, out_argc);
+        if (r > 0) return r;
+        if (JS_IsException(out)) return -1;
+        {
+            TextStreamData *t = ts_any_of(s->obj);
+            DCHECK(t != NULL, "a text stream constructor lost its own object between two stages");
+            JS_FreeValue(ctx, t->transform);
+            t->transform = out;
+        }
+        s->stage = TC_DONE;
+        *presult = s->obj;
+        s->obj = JS_UNDEFINED;
+        return 0;
+    }
+}
+
+/* §7.5's constructor: `(optional DOMString label = "utf-8", optional TextDecoderOptions options = {})`. */
+static int js_tds_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    JSTcState *s = st;
+
+    if (s->stage == TC_ENTRY) {
+        JSValueConst options = argc > 1 ? argv[1] : JS_UNDEFINED;
+        const char *label = "utf-8";
+        size_t label_len = 5;
+        int id;
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        s->obj = JS_UNDEFINED;
+        s->fns[0] = s->fns[1] = s->fns[2] = JS_UNDEFINED;
+        { int k; for (k = 0; k < 5; k++) s->cb[k] = JS_UNDEFINED; }
+        if (JS_IsUndefined(hdr->this_val))
+            return JS_ThrowTypeError(ctx, "constructor TextDecoderStream requires 'new'"), -1;
+        if (argc > 0 && !JS_IsUndefined(argv[0])) {
+            label = JS_ToCStringLen(ctx, &label_len, argv[0]);
+            if (!label) return -1;
+        }
+        id = encoding_lookup(label, label_len);
+        if (argc > 0 && !JS_IsUndefined(argv[0])) JS_FreeCString(ctx, label);
+        /* §7.5 step 2: failure AND `replacement` are both the RangeError — the replacement encoding exists to
+           make a hostile label decode to one error rather than to something scriptable, and no constructor in
+           this standard lets a page name it. */
+        if (id < 0 || encoding_is_replacement(id))
+            return JS_ThrowRangeError(ctx, "the label does not name a usable encoding"), -1;
+        if (tc_build(ctx, s, true, id, idl_dict_bool(ctx, options, "fatal"),
+                     idl_dict_bool(ctx, options, "ignoreBOM")) < 0)
+            return -1;
+        s->stage = TC_SETUP;
+    }
+    return tc_run(ctx, s, cb_result, presult, out_cb, out_argc);
+}
+
+/* §7.6's constructor: no arguments at all — a TextEncoderStream is always UTF-8. */
+static int js_tes_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    JSTcState *s = st;
+
+    (void)argc; (void)argv;
+    if (s->stage == TC_ENTRY) {
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        s->obj = JS_UNDEFINED;
+        s->fns[0] = s->fns[1] = s->fns[2] = JS_UNDEFINED;
+        { int k; for (k = 0; k < 5; k++) s->cb[k] = JS_UNDEFINED; }
+        if (JS_IsUndefined(hdr->this_val))
+            return JS_ThrowTypeError(ctx, "constructor TextEncoderStream requires 'new'"), -1;
+        if (tc_build(ctx, s, false, 0, false, false) < 0) return -1;
+        s->stage = TC_SETUP;
+    }
+    return tc_run(ctx, s, cb_result, presult, out_cb, out_argc);
+}
+
+static const IdlStepDecl js_tds_ctor_decl = {
+    js_tds_ctor_step, sizeof(JSTcState), js_tc_visit, js_tc_release
+};
+static const IdlStepDecl js_tes_ctor_decl = {
+    js_tes_ctor_step, sizeof(JSTcState), js_tc_visit, js_tc_release
+};
+
+/* ---- install -------------------------------------------------------------------------------------------- */
+
+static const IdlDictMember DECODER_OPTIONS[] = {
+    { "fatal",     IDL_BOOLEAN },
+    { "ignoreBOM", IDL_BOOLEAN },
+};
+
+void text_stream_init(JSContext *ctx)
+{
+    JSClassDef dsd = { "TextDecoderStream", .finalizer = text_stream_finalizer,
+                       .gc_mark = text_stream_gc_mark };
+    JSClassDef esd = { "TextEncoderStream", .finalizer = text_stream_finalizer,
+                       .gc_mark = text_stream_gc_mark };
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    static const IdlArgType TDS_CTOR_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };
+    int i;
+
+    DCHECK(g_ts_rt == NULL || g_ts_rt == rt, "the Encoding stream interfaces were installed into a second "
+                                             "runtime — one WASM instance is one document");
+    if (g_ts_rt == rt) return;
+    g_ts_rt = rt;
+    JS_NewClassID(rt, &g_tds_class); JS_NewClass(rt, g_tds_class, &dsd);
+    JS_NewClassID(rt, &g_tes_class); JS_NewClass(rt, g_tes_class, &esd);
+
+    for (i = 0; i < ALG_N; i++) {
+        g_alg_stepid[i] = JS_RegisterStepDef(rt, &js_tx_defs[i]);
+        CHECK(g_alg_stepid[i] >= 0, "encoding: no step id for a streaming algorithm");
+    }
+
+    g_tds_proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(g_tds_proto), "TextDecoderStream.prototype could not be allocated");
+    idl_interface_tag(ctx, g_tds_proto, "TextDecoderStream");
+    idl_install_accessor(ctx, g_tds_proto, "encoding", js_tds_get, TDS_ENCODING, -1);
+    idl_install_accessor(ctx, g_tds_proto, "fatal", js_tds_get, TDS_FATAL, -1);
+    idl_install_accessor(ctx, g_tds_proto, "ignoreBOM", js_tds_get, TDS_IGNORE_BOM, -1);
+    idl_install_accessor(ctx, g_tds_proto, "readable", js_gts_get, GTS_READABLE, -1);
+    idl_install_accessor(ctx, g_tds_proto, "writable", js_gts_get, GTS_WRITABLE, -1);
+
+    g_tes_proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(g_tes_proto), "TextEncoderStream.prototype could not be allocated");
+    idl_interface_tag(ctx, g_tes_proto, "TextEncoderStream");
+    idl_install_accessor(ctx, g_tes_proto, "encoding", js_tes_get, 0, -1);
+    idl_install_accessor(ctx, g_tes_proto, "readable", js_gts_get, GTS_READABLE, -1);
+    idl_install_accessor(ctx, g_tes_proto, "writable", js_gts_get, GTS_WRITABLE, -1);
+
+    g_tds_ctor_stepid = idl_method_id_step(ctx, TDS_CTOR_ARGS, 2, DECODER_OPTIONS,
+                                           (int)(sizeof DECODER_OPTIONS / sizeof DECODER_OPTIONS[0]),
+                                           &js_tds_ctor_decl, 0);
+    idl_optional_from(0);   /* §7.5: both constructor arguments are optional */
+    g_tes_ctor_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tes_ctor_decl, 0);
+}
+
+void text_stream_install(JSContext *ctx, JSValueConst global)
+{
+    JSValue ctor;
+
+    DCHECK(g_tds_ctor_stepid >= 0,
+           "the Encoding stream globals were installed before text_stream_init declared them");
+    ctor = idl_step_constructor(ctx, "TextDecoderStream", 0, g_tds_ctor_stepid);
+    CHECK(!JS_IsException(ctor), "the TextDecoderStream interface object could not be allocated");
+    JS_SetConstructor(ctx, ctor, g_tds_proto);
+    JS_SetPropertyStr(ctx, (JSValue)global, "TextDecoderStream", ctor);
+
+    ctor = idl_step_constructor(ctx, "TextEncoderStream", 0, g_tes_ctor_stepid);
+    CHECK(!JS_IsException(ctor), "the TextEncoderStream interface object could not be allocated");
+    JS_SetConstructor(ctx, ctor, g_tes_proto);
+    JS_SetPropertyStr(ctx, (JSValue)global, "TextEncoderStream", ctor);
+}
+
+void text_stream_free(JSContext *ctx)
+{
+    int i;
+    if (!g_ts_rt) return;
+    JS_FreeValue(ctx, g_tds_proto);
+    JS_FreeValue(ctx, g_tes_proto);
+    g_tds_proto = g_tes_proto = JS_UNDEFINED;
+    g_ts_rt = NULL;
+    g_tds_ctor_stepid = g_tes_ctor_stepid = -1;
+    for (i = 0; i < ALG_N; i++) g_alg_stepid[i] = -1;
+}

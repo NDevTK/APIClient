@@ -133,6 +133,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "loader", "document_scripts.c"),               // Lexbor <script> inventory + bundle identity
     join(HOST, "browser", "core", "fetch", "fetch.c"),
     join(HOST, "browser", "core", "encoding", "encoding.c"),                  // TextEncoder/TextDecoder: the Encoding Standard's labels and decoders
+    join(HOST, "browser", "core", "encoding", "text_stream.c"),               // TextDecoderStream/TextEncoderStream: §7.5/§7.6 over a TransformStream
     join(HOST, "browser", "core", "streams", "stream_work.c"),                     // the plumbing §4 and §5 share
     join(HOST, "browser", "core", "streams", "readable_stream.c"),
     join(HOST, "browser", "core", "streams", "writable_stream.c"),                  // WritableStream: Streams §5                // ReadableStream: Streams §4.2-§4.5

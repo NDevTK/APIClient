@@ -124,6 +124,7 @@ enum {
     OP_TRANSFORM_ERR,              /* PerformTransform's rejection: error the stream and re-throw */
     OP_FINISH_OK, OP_FINISH_ERR,   /* the flush's or the cancel's answer, settling [[finishPromise]] */
     OP_HELD_OK, OP_HELD_ERR,       /* a resumed write's transform answered: settle the capability it was handed */
+    OP_SETUP,   /* Streams §9.3.1's "set up a TransformStream", for a spec layering its own interface over §6 */
     OP_N
 };
 
@@ -201,11 +202,18 @@ typedef struct {
        the way back in picks a different branch and walks away from the request. ts_goto asserts that; this is
        where the answer is kept so the assert never has to fire. */
     uint8_t choice;
+    /* THIS ENTRY IS §9.3.1's SET UP, not §6.2's constructor. The two build the same thing out of the same
+       stages; what differs is where the algorithms come from (three arguments rather than a transformer's
+       members), what `this` they are called with (undefined — there is no transformer object), and that the
+       marks are the fixed ones §9.3.1 states rather than a page's strategies. */
+    uint8_t setup;
     double  whwm, rhwm;   /* the two marks, once ToNumber has run on whatever the page put there */
 } JSTsState;
 
 static int g_op_stepid[OP_N];
 static int g_ctor_stepid = -1;
+/* §9.3's four operations, held as the FUNCTION OBJECTS this component installed — see transform_stream.h. */
+static JSValue g_ts_fn[TS_OP_N] = { JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED };
 
 static void js_ts_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
@@ -313,7 +321,7 @@ static int ts_run(JSContext *ctx, JSTsState *s, JSStepHdr *hdr, int op, JSValue 
         { int k; for (k = 0; k < TR_N; k++) s->tr[k] = JS_UNDEFINED;
                  for (k = 0; k < 4; k++) s->strat[k] = JS_UNDEFINED; }
         s->member = s->reject = s->next = s->bp_want = s->err_both = 0;
-        s->held = s->side = s->answer = s->rethrow = s->choice = 0;
+        s->held = s->side = s->answer = s->rethrow = s->choice = s->setup = 0;
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
 
@@ -324,6 +332,21 @@ static int ts_run(JSContext *ctx, JSTsState *s, JSStepHdr *hdr, int op, JSValue 
             }
             s->answer = 1;
             s->w.stage = S_STRAT_READ;
+            goto run;
+        }
+
+        if (op == OP_SETUP) {
+            /* §9.3.1: the marks and size algorithms are FIXED — a spec that sets up a transform stream does
+               not get to pick them, and a page cannot reach them either. The three algorithms are the
+               arguments; there is no `start`, so the shared start promise settles with undefined. */
+            s->setup = 1;
+            s->answer = 1;
+            s->whwm = 1;
+            s->rhwm = 0;
+            s->tr[TR_TRANSFORM] = JS_DupValue(ctx, step_arg(hdr, 0));
+            s->tr[TR_FLUSH]     = JS_DupValue(ctx, step_arg(hdr, 1));
+            s->tr[TR_CANCEL]    = JS_DupValue(ctx, step_arg(hdr, 2));
+            s->w.stage = S_BUILD;
             goto run;
         }
 
@@ -645,7 +668,9 @@ run:
             JS_SetOpaque(s->ctrl, cd);
             cd->stream = JS_DupValue(ctx, s->ts);
             td->controller = JS_DupValue(ctx, s->ctrl);
-            cd->transformer = JS_DupValue(ctx, step_arg(hdr, 0));
+            /* §9.3.1's algorithms are the SPEC's, not a transformer's methods, so they are called with
+               `this` = undefined; §6.2's are called with the transformer as the callback this value. */
+            cd->transformer = s->setup ? JS_UNDEFINED : JS_DupValue(ctx, step_arg(hdr, 0));
             cd->transform_fn = s->tr[TR_TRANSFORM]; s->tr[TR_TRANSFORM] = JS_UNDEFINED;
             cd->flush_fn = s->tr[TR_FLUSH];         s->tr[TR_FLUSH] = JS_UNDEFINED;
             cd->cancel_fn = s->tr[TR_CANCEL];       s->tr[TR_CANCEL] = JS_UNDEFINED;
@@ -1261,6 +1286,7 @@ static JSValue js_illegal_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValu
 static const JSTrampStepDef js_ts_defs[OP_N] = {
     TS_DEF(0),  TS_DEF(1),  TS_DEF(2),  TS_DEF(3),  TS_DEF(4),  TS_DEF(5), TS_DEF(6),
     TS_DEF(7),  TS_DEF(8),  TS_DEF(9),  TS_DEF(10), TS_DEF(11), TS_DEF(12), TS_DEF(13), TS_DEF(14),
+    TS_DEF(15),
 };
 #undef TS_DEF
 
@@ -1303,6 +1329,44 @@ void transform_stream_init(JSContext *ctx)
        only one reader can sequence all three. */
     g_ctor_stepid = idl_method_id_step(ctx, TS_ARGS, 3, NULL, 0, &js_ts_ctor_decl, 0);
     idl_optional_from(0);   /* §6.2: all three constructor arguments are optional */
+
+    /* §9.3's four operations as FUNCTION OBJECTS. The three controller ones are read off the prototype rather
+       than minted a second time, so a caller reaches the same function the page sees — and if the page
+       replaces the property, the reference taken HERE is the one that keeps working, which is the point. */
+    {
+        static const char *const CN[3] = { "enqueue", "terminate", "error" };
+        int k;
+        g_ts_fn[TS_OP_SETUP] = JS_NewCFunction2(ctx, NULL, "", 3, JS_CFUNC_step, g_op_stepid[OP_SETUP]);
+        CHECK(!JS_IsException(g_ts_fn[TS_OP_SETUP]), "streams: §9.3.1's set-up operation could not be made");
+        for (k = 0; k < 3; k++) {
+            g_ts_fn[TS_OP_ENQUEUE + k] = JS_GetPropertyStr(ctx, g_tc_proto, CN[k]);
+            CHECK(JS_IsFunction(ctx, g_ts_fn[TS_OP_ENQUEUE + k]),
+                  "streams: a §6.4 controller member this component just installed is not a function");
+        }
+    }
+}
+
+JSValueConst transform_stream_op(TransformStreamOp which)
+{
+    DCHECK(which >= 0 && which < TS_OP_N,
+           "a §9.3 transform-stream operation was asked for by a name this component does not map");
+    DCHECK(!JS_IsUndefined(g_ts_fn[which]),
+           "a §9.3 operation was asked for before transform_stream_init built it");
+    return g_ts_fn[which];
+}
+
+JSValueConst transform_stream_readable(JSValueConst stream)
+{
+    TsData *t = ts_of(stream);
+    DCHECK(t != NULL, "the readable half of something that is not a TransformStream was asked for");
+    return t->readable;
+}
+
+JSValueConst transform_stream_writable(JSValueConst stream)
+{
+    TsData *t = ts_of(stream);
+    DCHECK(t != NULL, "the writable half of something that is not a TransformStream was asked for");
+    return t->writable;
 }
 
 void transform_stream_install(JSContext *ctx, JSValueConst global)
@@ -1326,6 +1390,7 @@ void transform_stream_free(JSContext *ctx)
 {
     int i;
     if (!g_ts_rt) return;
+    for (i = 0; i < TS_OP_N; i++) { JS_FreeValue(ctx, g_ts_fn[i]); g_ts_fn[i] = JS_UNDEFINED; }
     JS_FreeValue(ctx, g_ts_proto);
     JS_FreeValue(ctx, g_tc_proto);
     g_ts_proto = g_tc_proto = JS_UNDEFINED;

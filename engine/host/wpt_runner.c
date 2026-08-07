@@ -47,6 +47,7 @@
 #include "core/timing/timer.h"
 #include "core/frame/location.h"
 #include "core/encoding/encoding.h"
+#include "core/encoding/text_stream.h"
 #include "core/idl_args.h"
 
 /* Forced preemption at every back-edge, sampled at calls — the same policy run-test262 arms, and for the same
@@ -479,6 +480,10 @@ int main(int argc, char **argv)
     blob_install(ctx, global);
     encoding_init(ctx);
     encoding_install(ctx, global);
+    /* §7.5 and §7.6 are the same codecs driven by a TransformStream, so they install AFTER §6 — the
+       constructors reach it through transform_stream_op the moment a page builds one. */
+    text_stream_init(ctx);
+    text_stream_install(ctx, global);
     /* HTML 8.6's TIMER TASK SOURCE. The runner had none, so `setTimeout` was simply absent — and testharness
        arms its own timeout with one, which is how a file whose tests were still pending ended a run with
        nothing reported and every unsettled promise's reactions leaked. A timer enqueues a JOB, so the pump
@@ -604,6 +609,7 @@ int main(int argc, char **argv)
     blob_free(ctx);
     location_free();   /* the API base URL the document's address produced */
     encoding_free(ctx);
+    text_stream_free(ctx);
     idl_args_free(ctx);
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);

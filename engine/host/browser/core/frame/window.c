@@ -38,6 +38,7 @@
 #include "core/streams/writable_stream.h"
 #include "core/streams/transform_stream.h"
 #include "core/encoding/encoding.h"
+#include "core/encoding/text_stream.h"
 
 static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -73,6 +74,8 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     blob_install(ctx, global);
     encoding_init(ctx);
     encoding_install(ctx, global);
+    text_stream_init(ctx);
+    text_stream_install(ctx, global);
 
     /* 7.2.2: window, self and frames all return THIS Window's proxy, and the global object IS that proxy here —
        so `window.X`, `self.X` and a bare `X` are one read spelled three ways. */

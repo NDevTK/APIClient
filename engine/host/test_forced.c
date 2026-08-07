@@ -31,6 +31,7 @@
 #include "core/streams/writable_stream.h"
 #include "core/streams/transform_stream.h"
 #include "core/encoding/encoding.h"
+#include "core/encoding/text_stream.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/fetch.h"
 #include "solver/endpoint.h"
@@ -1698,6 +1699,7 @@ int main(void) {
     blob_free(ctx);
     location_free();   /* the API base URL the document's address produced */
     encoding_free(ctx);
+    text_stream_free(ctx);
     form_data_free(ctx);        /* URLSearchParams.prototype */
     response_free(ctx);
     request_free(ctx);   /* Response.prototype — one object, held for the runtime's life */
