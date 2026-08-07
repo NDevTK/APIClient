@@ -41,6 +41,7 @@
 #include "core/events/message_port.h"
 #include "core/events/broadcast_channel.h"
 #include "core/frame/window_proxy.h"
+#include "solver/world.h"
 #include "core/frame/window_message.h"
 #include "core/structured_clone.h"
 #include "core/events/event_target.h"
@@ -483,6 +484,9 @@ int main(int argc, char **argv)
     structured_clone_install(ctx, global);   /* HTML 2.7.3, and what 9.4 and §4.9.7 clone through */
     message_event_init(ctx);
     message_event_install(ctx, global);
+    /* NAME THIS DOCUMENT. A WindowProxy answers "is this navigable remote?" by comparing against the one
+       document identity the world registry owns, so the registry has to be up before the first proxy exists. */
+    world_registry_init(1);
     window_proxy_init(ctx);
     window_message_install(ctx, global, "http://web-platform.test");
     message_port_init(ctx);
@@ -625,6 +629,7 @@ int main(int argc, char **argv)
     message_port_free(ctx);
     window_message_free(ctx);
     window_proxy_free(ctx);
+    world_registry_free(ctx);
     message_event_free(ctx);
     event_free(ctx);
     event_target_free(ctx);

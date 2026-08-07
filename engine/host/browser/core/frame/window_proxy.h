@@ -2,6 +2,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_FRAME_WINDOW_PROXY_H
 #define ENGINE_HOST_BROWSER_CORE_FRAME_WINDOW_PROXY_H
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "quickjs.h"
 
@@ -12,8 +13,20 @@ void window_proxy_free(JSContext *ctx);
    Both are the binding at this moment; a navigation replaces them, PER FLOW. */
 JSValue window_proxy_new(JSContext *ctx, JSValueConst window, const char *origin);
 
+/* A proxy over a navigable whose active document lives in ANOTHER WASM instance. It carries no Window — there
+   is no local object to hold — so every read through it is a cross-document operation the flow suspends on. */
+JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const char *origin);
+
 /* IS THIS A WindowProxy? MessageEvent's `source` union names one, and §9.4.4's post takes one as its target. */
 bool window_proxy_is(JSValueConst v);
+
+/* IS THE NAVIGABLE'S ACTIVE DOCUMENT IN ANOTHER INSTANCE? One comparison against the one document identity the
+   world registry also names worlds by — never a second scheme. Asserts that the proxy's document id and its
+   Window agree, because a proxy where they disagree answers a cross-document read with the wrong document. */
+bool window_proxy_is_remote(JSValueConst proxy);
+
+/* WHICH DOCUMENT the navigable's active document is — what the host routes a cross-document request by. */
+uint32_t window_proxy_doc(JSValueConst proxy);
 
 /* The navigable's CURRENT active Window, as this flow sees it (owned). Crashes for a proxy whose navigable is
    in another WASM instance — that resolve is a host round trip and is not built; see window_proxy.c. */

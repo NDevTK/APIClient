@@ -83,6 +83,13 @@ static WorldId mint(WorldId parent)
     return w;
 }
 
+uint32_t world_local_doc(void)
+{
+    DCHECK(g_doc != 0, "this document's id was asked for before world_registry_init named it — a component that "
+                       "needs to know whether a navigable is remote cannot be answered before then");
+    return g_doc;
+}
+
 WorldId world_mint(void) { return mint(WORLD_NONE); }
 
 WorldId world_mint_child(WorldId parent)

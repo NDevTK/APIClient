@@ -54,6 +54,10 @@ static inline bool world_eq(WorldId a, WorldId b) { return a.doc == b.doc && a.s
 void world_registry_init(uint32_t doc_id);
 void world_registry_free(JSContext *ctx);
 
+/* THIS INSTANCE'S DOCUMENT ID — the ONE answer to "which document am I", so that "is this navigable remote?"
+   is a comparison against a single identity rather than a second naming scheme kept in parallel. */
+uint32_t world_local_doc(void);
+
 /* MINT a root world, for a flow created in this instance from the baseline. */
 WorldId world_mint(void);
 

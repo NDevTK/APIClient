@@ -35,15 +35,20 @@
 #include "quickjs.h"
 #include "core/frame/window_proxy.h"
 #include "solver/cow.h"
+#include "solver/world.h"
 
 /* §7.2.5.1's [[Window]] and the origin its same-origin check reads. BOTH are per-flow — see the file comment —
    which is the whole reason this is a record behind a class rather than a property on an object. */
 typedef struct {
-    JSValue window;    /* the navigable's active Window, or JS_UNDEFINED for a remote one (owned) */
+    JSValue window;    /* the navigable's active Window, or JS_UNDEFINED when the document is remote (owned) */
     char   *origin;    /* the active document's origin, for §7.2.5.1's same-origin check (owned) */
-    /* A navigable in ANOTHER WASM instance: its document id, and the world that named it. NULL for the local
-       case. See the file comment — this is the seam, not a stub, and the paths that would need it crash. */
-    char   *remote_doc;
+    /* WHICH DOCUMENT the navigable's active document IS — the same id the world registry names worlds by, so
+       "is this remote?" is one comparison against one identity rather than a second naming scheme kept beside
+       it. A proxy whose doc is this instance's has a live `window`; any other doc is in a peer instance and
+       has none, and those two facts are asserted together because a proxy where they disagree would answer a
+       cross-document read with THIS document's Window — the exact failure the same-origin check exists to
+       prevent. */
+    uint32_t doc;
 } ProxyData;
 
 static JSClassID g_proxy_class;
@@ -54,7 +59,7 @@ static const uint16_t PROXY_VALS[] = { WP_OFF(window) };
 static const CowRecord PROXY_REC = { sizeof(ProxyData), PROXY_VALS, 1 };
 
 /* THE CAPTURE IS IN THE ACCESSOR, as it is for every other component record: a record a flow has reached is one
-   it may write, and there is then no write site to miss. `origin` and `remote_doc` are POD pointers inside the
+   it may write, and there is then no write site to miss. `origin` is a POD pointer and `doc` a POD id inside the
    captured bytes — a navigation REPLACES them rather than mutating what they point at, so the byte copy is a
    complete description of the binding at that moment.
    THE STRINGS ARE THEREFORE NOT FREED ON NAVIGATION. A delta's saved bytes still name the old pointer, and
@@ -123,9 +128,50 @@ JSValue window_proxy_new(JSContext *ctx, JSValueConst window, const char *origin
     CHECK(p != NULL, "window proxy: OOM building a WindowProxy");
     p->window = JS_DupValue(ctx, window);
     p->origin = proxy_strdup(origin ? origin : "null");
-    p->remote_doc = NULL;
+    p->doc = world_local_doc();
     JS_SetOpaque(obj, p);
     return obj;
+}
+
+JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const char *origin)
+{
+    JSValue obj;
+    ProxyData *p;
+
+    DCHECK(g_wp_rt != NULL, "a WindowProxy was minted before window_proxy_init ran");
+    /* A REMOTE PROXY THAT NAMES THIS DOCUMENT is a local one that lost its Window — it would resolve to
+       JS_UNDEFINED for a navigable this instance can actually answer for. */
+    DCHECK(doc != 0 && doc != world_local_doc(),
+           "a remote WindowProxy was minted for this instance's own document — use window_proxy_new, which "
+           "carries the live Window");
+    obj = JS_NewObjectClass(ctx, g_proxy_class);
+    if (JS_IsException(obj)) return obj;
+    p = calloc(1, sizeof *p);
+    CHECK(p != NULL, "window proxy: OOM building a remote WindowProxy");
+    p->window = JS_UNDEFINED;   /* it lives in another instance; there is nothing local to hold */
+    p->origin = proxy_strdup(origin ? origin : "null");
+    p->doc = doc;
+    JS_SetOpaque(obj, p);
+    return obj;
+}
+
+bool window_proxy_is_remote(JSValueConst proxy)
+{
+    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    DCHECK(p != NULL, "something that is not a WindowProxy was asked whether it is remote");
+    /* THE TWO FACTS MUST AGREE. Read together on every ask, because a proxy where they disagree hands a
+       cross-document read this document's Window and nothing downstream can tell. */
+    DCHECK((p->doc == world_local_doc()) == !JS_IsUndefined(p->window),
+           "a WindowProxy's document id and its Window disagree — a local proxy must carry a live Window and a "
+           "remote one must carry none, or a cross-document read is answered by the wrong document");
+    return p->doc != world_local_doc();
+}
+
+uint32_t window_proxy_doc(JSValueConst proxy)
+{
+    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    DCHECK(p != NULL, "the document of something that is not a WindowProxy was asked for");
+    return p->doc;
 }
 
 JSValue window_proxy_window(JSContext *ctx, JSValueConst proxy)
@@ -137,10 +183,11 @@ JSValue window_proxy_window(JSContext *ctx, JSValueConst proxy)
        silently succeeded — the one failure mode the same-origin check exists to prevent. What has to be built
        is named in the message: the binding is (document, world), and resolving it is a host round trip because
        only the host knows which instance holds that document and which of its flows is in that world. */
-    DCHECK(p->remote_doc == NULL,
+    DCHECK(p->doc == world_local_doc(),
            "a WindowProxy names a navigable in ANOTHER WASM instance — build the cross-instance resolve: the "
-           "binding is (document id, the sending flow's decision vector) and the host owns the routing, "
-           "because two arms of a fork that navigated a frame differently must not resolve to one Window");
+           "flow SUSPENDS here (the same snapshot path as an await), the peer answers in its own scheduled turn "
+           "under this flow's world, and the flow resumes with the value. The host owns the routing because "
+           "only it knows which instance holds that document — window_proxy_doc names which one");
     return JS_DupValue(ctx, p->window);
 }
 
@@ -158,7 +205,7 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSValueConst wind
     JS_FreeValue(ctx, p->window);
     p->window = JS_DupValue(ctx, window);
     p->origin = proxy_strdup(origin ? origin : "null");
-    p->remote_doc = NULL;
+    p->doc = world_local_doc();
 }
 
 void window_proxy_init(JSContext *ctx)
