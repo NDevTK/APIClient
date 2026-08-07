@@ -77,6 +77,61 @@ int body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len)
     return 0;
 }
 
+/* §5.2's "clone a body" — the tee, and the reason body.h gives for it being one. */
+int body_clone_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, BodyState *dst, BodyState *src,
+                   JSValue in, JSValue **out_cb, int *out_argc)
+{
+    JSValue out, b0, b1;
+    int r;
+
+    if (*phase == 0) {
+        /* A NULL BODY IS NOT AN EMPTY ONE, and it has no stream to tee — §5.2's clone step is guarded by
+           "if body is null, return null" and this is that guard. */
+        if (!src->has) {
+            JS_FreeValue(ctx, in);
+            dst->has = 0;
+            return 0;
+        }
+        /* In the spec a body IS a stream; here one is built on demand from the bytes, so the tee's operand has
+           to exist before the tee can be asked for. Building it runs none of the page's code. */
+        if (JS_IsUndefined(src->stream)) {
+            src->stream = readable_stream_from_bytes(ctx, src->bytes ? src->bytes : "", src->len);
+            if (JS_IsException(src->stream)) {
+                src->stream = JS_UNDEFINED;
+                JS_FreeValue(ctx, in);
+                return -1;
+            }
+        }
+    }
+    r = step_call_run(ctx, phase, cb, cb_cap, readable_stream_op(RS_OP_TEE), src->stream, 0, NULL,
+                      in, &out, out_cb, out_argc);
+    if (r > 0) return r;
+    if (JS_IsException(out)) return -1;
+    /* §4.2's `tee` answers a two-element Array this component built, so reading its indices runs no page code
+       — the properties are the array's own, and no prototype getter is reached. */
+    b0 = JS_GetPropertyUint32(ctx, out, 0);
+    b1 = JS_GetPropertyUint32(ctx, out, 1);
+    JS_FreeValue(ctx, out);
+    DCHECK(readable_stream_is(b0) && readable_stream_is(b1),
+           "a tee answered something other than two ReadableStreams");
+
+    /* BOTH SIDES ARE NOW STREAM-BACKED. The bytes go, because after the tee they are no longer where the body
+       is: the branch is, and a reader that took the bytes would deliver data the branch has not yielded. */
+    js_free(ctx, src->bytes);
+    src->bytes = NULL;
+    src->len = 0;
+    JS_FreeValue(ctx, src->stream);
+    src->stream = b0;
+
+    dst->bytes = NULL;
+    dst->len = 0;
+    dst->used = 0;   /* §5.2: the clone gets its OWN single-use latch, which is the whole point of cloning */
+    dst->has = 1;
+    JS_FreeValue(ctx, dst->stream);
+    dst->stream = b1;
+    return 0;
+}
+
 /* §5.1'S "EXTRACT A BODY", ONCE, for both interfaces that take a BodyInit.
  *
  * It was written twice — in the Response constructor and in the Request one — and each copy knew TWO of the

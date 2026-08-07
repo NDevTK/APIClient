@@ -26,6 +26,18 @@ int  body_extract(JSContext *ctx, BodyState *b, JSValueConst init, char **out_mi
 /* Copy `len` bytes in, or NULL for the spec's null body. Returns -1 on OOM with an exception live. */
 int  body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len);
 
+/* §5.2's "CLONE A BODY", which is a TEE and nothing else: « out1, out2 » are the result of teeing the source
+   body's stream, the source keeps out1 and the clone gets out2. Copying the bytes instead is not a cheaper
+   spelling of the same thing — after a clone the ORIGINAL's `body` is a different object from the one it was,
+   the old one is locked, and a page teeing a response's body depends on exactly that. It also means a body
+   whose source IS a page's stream can be cloned at all, which a byte copy could not do: there are no bytes.
+ *
+ * A TEE IS A CALL of code the page can reach, so this is a REQUEST: it returns JS_STEP_CALL (which the calling
+ * machine returns), 0 once both sides are set, or -1 with a throw live. `cb`/`cb_cap` are the caller's
+ * step_call_run buffer, which must hold at least 2 slots. `dst` must be a zeroed BodyState. */
+int  body_clone_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, BodyState *dst, BodyState *src,
+                    JSValue in, JSValue **out_cb, int *out_argc);
+
 /* DECLARE that an interface includes Body: the class its instances wear, and how to find the BodyState on one.
    `of` returns NULL when the value is not an instance, which is the receiver check every member performs.
    Returns a handle. There is ONE set of reader machines for the whole platform; the handle is what tells them

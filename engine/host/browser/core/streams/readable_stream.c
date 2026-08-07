@@ -1913,6 +1913,7 @@ static JSClassID g_tee_class;
 static int       g_tee_stepids[TEE_N];
 /* The controller members, as function objects — the same reason §4.4 holds the reader's. */
 static JSValue   g_ctrl_fn[3] = { JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED };
+static JSValue   g_tee_fn = JS_UNDEFINED;   /* §4.2's `tee`, held for the reason g_ctrl_fn is */
 
 static void tee_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -3009,6 +3010,7 @@ JSValueConst readable_stream_op(ReadableStreamOp which)
     case RS_OP_GET_READER: return g_get_reader_fn;
     case RS_OP_READ:       return g_read_fn;
     case RS_OP_RELEASE:    return g_release_fn;
+    case RS_OP_TEE:        return g_tee_fn;
     default:
         DCHECK(which == RS_OP_CANCEL, "a stream operation was asked for by a name this component does not map");
         return g_reader_cancel_fn;
@@ -3433,6 +3435,10 @@ void readable_stream_init(JSContext *ctx)
         }
         idl_install_method(ctx, g_stream_proto, "tee", 0,
                            idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tee_call_decl, 0));
+        /* Held as a FUNCTION OBJECT for the reason g_ctrl_fn is: Fetch's "clone a body" performs the tee
+           OPERATION, and a page that replaces ReadableStream.prototype.tee must not change what clone() does. */
+        g_tee_fn = JS_GetPropertyStr(ctx, g_stream_proto, "tee");
+        CHECK(JS_IsFunction(ctx, g_tee_fn), "streams: `tee` was not installed before it was captured");
     }
 
     /* Fetch §5.2's "fully read", whose record is a class for the reason every other one here is: it is a
@@ -3519,6 +3525,7 @@ void readable_stream_free(JSContext *ctx)
     for (i = 0; i < DRAIN_N; i++) g_drain_stepids[i] = -1;
     g_from_ctor_stepid = -1;
     for (i = 0; i < 3; i++) { JS_FreeValue(ctx, g_ctrl_fn[i]); g_ctrl_fn[i] = JS_UNDEFINED; }
+    JS_FreeValue(ctx, g_tee_fn); g_tee_fn = JS_UNDEFINED;
     g_rs_rt = NULL;
     g_ctor_stepid = g_reader_ctor_stepid = g_read_stepid = g_cancel_stepid = g_release_stepid = -1;
     for (i = 0; i < 3; i++) g_ctrl_stepids[i] = -1;

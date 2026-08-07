@@ -24,6 +24,7 @@
 #include "core/fetch/headers.h"
 #include "core/idl_args.h"
 #include "core/fetch/body.h"
+#include "core/streams/readable_stream.h"
 
 static JSClassID g_response_class;
 static JSValue   g_response_proto = JS_UNDEFINED;
@@ -130,29 +131,84 @@ static int response_set(JSContext *ctx, ResponseData *d, const char *url, int st
    two independent reads, so sharing the latch would make the copy unreadable the moment the original was read
    and defeat the only reason the call exists. It does NOT consume this response — `res.clone()` leaves `res`
    readable, which is what the caching layer then does with it. */
-static JSValue js_response_clone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+/* IT IS A STEP, because §5.2's "clone a body" is a TEE and a tee is a call of code the page can reach. The two
+   synchronous refusals still happen where the page wrote its try/catch: a locked or disturbed body is a
+   TypeError from clone() itself, not a rejected promise, because clone is not a body-consuming method. */
+typedef struct {
+    uint8_t stage, phase;
+    JSValue obj;       /* the clone being built (owned) */
+    JSValue cb[2];     /* step_call_run's buffer: [this, tee] — the tee takes no arguments */
+} JSCloneState;
+
+enum { CL_ENTRY = 0, CL_BODY, CL_DONE };
+
+static void js_clone_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    ResponseData *d = response_of(this_val), *c;
-    JSValue obj;
-    (void)argc; (void)argv;
-    if (!d)
-        return JS_ThrowTypeError(ctx, "not a Response");
-    if (d->body.used)
-        return JS_ThrowTypeError(ctx, "cannot clone a Response whose body has been read");
-    obj = response_alloc(ctx, &c);
-    if (JS_IsException(obj))
-        return obj;
-    /* §6.4 clone COPIES the response, so every field goes — a clone that kept only the body reported status
-       200 and type "basic" for a 404 the page had just constructed. The headers are a NEW Headers over the
-       same list, because [SameObject] is per response and `r.clone().headers === r.headers` is false. */
-    if (response_set(ctx, c, d->url, d->status, d->status_text, d->type,
-                     d->body.has ? d->body.bytes : NULL, d->body.len, headers_list_of(d->headers),
-                     headers_guard_of(d->headers)) < 0) {
-        JS_FreeValue(ctx, obj);
-        return JS_EXCEPTION;
-    }
-    return obj;
+    JSCloneState *s = st;
+    int k;
+    v->val(ctx, &s->obj);
+    for (k = 0; k < 2; k++) v->val(ctx, &s->cb[k]);
 }
+
+static void js_clone_release(JSContext *ctx, void *st)
+{
+    JSCloneState *s = st;
+    int k;
+    JS_FreeValue(ctx, s->obj);
+    s->obj = JS_UNDEFINED;
+    for (k = 0; k < 2; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
+}
+
+static int js_response_clone_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                  JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    JSCloneState *s = st;
+    ResponseData *d = response_of(hdr->this_val), *c;
+    int r;
+
+    (void)argc; (void)argv;
+    if (s->stage == CL_ENTRY) {
+        bool locked = false;
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        s->obj = JS_UNDEFINED;
+        s->cb[0] = s->cb[1] = JS_UNDEFINED;
+        if (!d)
+            return JS_ThrowTypeError(ctx, "not a Response"), -1;
+        /* §5.2's "unusable" is DISTURBED **or** LOCKED — a body whose stream a page has taken a reader on
+           cannot be teed, and reporting only the read latch let clone() reach the tee and throw from inside
+           it, which is the wrong error at the wrong place. */
+        readable_stream_query(d->body.stream, NULL, &locked);
+        if (d->body.used || readable_stream_disturbed(d->body.stream) || locked)
+            return JS_ThrowTypeError(ctx, "cannot clone a Response whose body is disturbed or locked"), -1;
+        s->obj = response_alloc(ctx, &c);
+        if (JS_IsException(s->obj)) { s->obj = JS_UNDEFINED; return -1; }
+        /* §6.4 clone COPIES the response, so every field goes — a clone that kept only the body reported status
+           200 and type "basic" for a 404 the page had just constructed. The headers are a NEW Headers over the
+           same list, because [SameObject] is per response and `r.clone().headers === r.headers` is false. The
+           BODY is not among them: it is the tee below, not a copy. */
+        if (response_set(ctx, c, d->url, d->status, d->status_text, d->type, NULL, 0,
+                         headers_list_of(d->headers), headers_guard_of(d->headers)) < 0)
+            return -1;
+        s->stage = CL_BODY;
+    }
+
+    DCHECK(s->stage == CL_BODY, "Response.clone resumed in a stage it never parks in");
+    DCHECK(d != NULL, "a Response stopped being one between two stages of its own clone");
+    c = response_of(s->obj);
+    DCHECK(c != NULL, "the clone this machine allocated stopped being a Response");
+    r = body_clone_run(ctx, &s->phase, s->cb, 2, &c->body, &d->body, cb_result, out_cb, out_argc);
+    if (r > 0) return r;
+    if (r < 0) return -1;
+    s->stage = CL_DONE;
+    *presult = s->obj;
+    s->obj = JS_UNDEFINED;
+    return 0;
+}
+
+static const IdlStepDecl js_response_clone_decl = {
+    js_response_clone_step, sizeof(JSCloneState), js_clone_visit, js_clone_release
+};
 
 static JSValue js_response_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -179,7 +235,6 @@ static JSValue js_response_get(JSContext *ctx, JSValueConst this_val, int magic)
    body would be a lie the page cannot tell from the null-body case. `blob()` and `formData()` are absent for
    the same reason — there is no Blob and no FormData to answer with. */
 static const JSCFunctionListEntry js_response_proto_funcs[] = {
-    JS_CFUNC_DEF("clone", 0, js_response_clone),
     JS_CGETSET_MAGIC_DEF("ok", js_response_get, NULL, 0),
     JS_CGETSET_MAGIC_DEF("status", js_response_get, NULL, 1),
     JS_CGETSET_MAGIC_DEF("statusText", js_response_get, NULL, 2),
@@ -573,6 +628,9 @@ void response_init(JSContext *ctx)
                                (int)(sizeof(js_response_proto_funcs) / sizeof(js_response_proto_funcs[0])));
     /* §5.2's mixin: the four readers and `bodyUsed`, from the one component Request includes too. */
     body_install(ctx, g_response_proto, g_body_handle);
+    /* §6.4's clone(), a STEP because cloning a body tees its stream — see js_response_clone_step. */
+    idl_install_method(ctx, g_response_proto, "clone", 0,
+                       idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_response_clone_decl, 0));
     g_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, RESPONSE_INIT, 3, &js_response_ctor_decl,
                                        RESP_ENTRY_CTOR);
     idl_optional_from(0);   /* §6.4: `constructor(optional BodyInit? body = null, optional ResponseInit init = {})` */

@@ -28,7 +28,12 @@ bool readable_stream_is(JSValueConst v);
    "fully read" acquires a reader and reads to the end, and it performs the ABSTRACT operations — a page that
    rebinds ReadableStreamDefaultReader.prototype.read must not thereby change what `response.text()` does.
    BORROWED; the caller calls them as it would any function, which is what keeps them suspendable. */
-typedef enum { RS_OP_GET_READER = 0, RS_OP_READ, RS_OP_RELEASE, RS_OP_CANCEL, RS_OP_N } ReadableStreamOp;
+typedef enum { RS_OP_GET_READER = 0, RS_OP_READ, RS_OP_RELEASE, RS_OP_CANCEL,
+               /* §4.2's `tee`, which is how Fetch §5.2's "clone a body" is DEFINED — the body's stream is
+                  teed and each side keeps one branch. A host that copied bytes instead gave the clone a body
+                  the original's reader could not have produced. */
+               RS_OP_TEE,
+               RS_OP_N } ReadableStreamOp;
 JSValueConst readable_stream_op(ReadableStreamOp which);
 
 /* §4.5's CONTROLLER, and the three of its operations a host performs — as the ORIGINAL function objects, for
