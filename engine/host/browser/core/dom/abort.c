@@ -204,11 +204,8 @@ static JSValue signal_new(JSContext *ctx, JSValue aborted, JSValue reason)
     return sig;
 }
 
-/* §3.2 "signal abort", THE STATE HALF: set the flag and the reason. Already-aborted is a no-op, which is what
-   keeps a double abort() from firing twice — and it is why this answers whether the FIRE should happen rather
-   than doing it. The fire is §2.9 dispatch, which runs the page's listeners, so it belongs to a caller that can
-   park; splitting the two is what let abort() become synchronous without a second dispatch. `reason` is
-   CONSUMED. Returns true when the caller must now fire `abort` at the signal. */
+/* §3.2 "signal abort", STEP 2 AND STEP 3: set the flag and the reason. Already-aborted answers false, which is
+   what keeps a double abort() from running anything twice. `reason` is CONSUMED. */
 static bool signal_abort_state(JSContext *ctx, JSValueConst sig, JSValue reason)
 {
     JSValue slots = signal_slots(ctx, sig);
@@ -224,41 +221,220 @@ static bool signal_abort_state(JSContext *ctx, JSValueConst sig, JSValue reason)
     return true;
 }
 
+/* ---- §3.2's ABORT ALGORITHMS ------------------------------------------------------------------------------ */
+
+/* The signal's algorithm list, an Array on its slot record — created on demand, so a signal nobody registers
+   against carries nothing. An ALGORITHM IS NOT A LISTENER: it runs before the `abort` event, the page cannot
+   see it or remove it, and the whole list is dropped once it has run. */
+static JSValue signal_algos(JSContext *ctx, JSValueConst sig, int create)
+{
+    JSValue slots = signal_slots(ctx, sig), arr;
+
+    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return JS_UNDEFINED; }
+    arr = JS_GetPropertyStr(ctx, slots, "algorithms");
+    if (!JS_IsArray(arr) && create) {
+        JS_FreeValue(ctx, arr);
+        arr = JS_NewArray(ctx);
+        if (!JS_IsException(arr))
+            JS_SetPropertyStr(ctx, slots, "algorithms", JS_DupValue(ctx, arr));
+    }
+    JS_FreeValue(ctx, slots);
+    return arr;
+}
+
+static uint32_t array_len(JSContext *ctx, JSValueConst arr)
+{
+    uint32_t n = 0;
+    JSValue v = JS_GetPropertyStr(ctx, arr, "length");
+    JS_ToUint32(ctx, &n, v);
+    JS_FreeValue(ctx, v);
+    return n;
+}
+
+void abort_signal_add_algorithm(JSContext *ctx, JSValueConst sig, JSValueConst fn)
+{
+    JSValue arr;
+
+    DCHECK(JS_IsFunction(ctx, fn), "an abort algorithm that is not callable was registered on a signal");
+    /* §3.2: "if signal is aborted, then return". A signal that has already fired has already emptied its list,
+       so registering into it would leave a value nothing will ever run or free. */
+    if (abort_signal_aborted(ctx, sig))
+        return;
+    arr = signal_algos(ctx, sig, 1);
+    if (!JS_IsArray(arr)) { JS_FreeValue(ctx, arr); return; }
+    JS_SetPropertyUint32(ctx, arr, array_len(ctx, arr), JS_DupValue(ctx, fn));
+    JS_FreeValue(ctx, arr);
+}
+
+void abort_signal_remove_algorithm(JSContext *ctx, JSValueConst sig, JSValueConst fn)
+{
+    JSValue arr = signal_algos(ctx, sig, 0);
+    uint32_t i, n, k = 0;
+
+    if (!JS_IsArray(arr)) { JS_FreeValue(ctx, arr); return; }
+    n = array_len(ctx, arr);
+    /* COMPACT IN PLACE rather than splice: `splice` is a page-visible method on Array.prototype and this list
+       is the engine's, so it is walked with own indices like everything else here. */
+    for (i = 0; i < n; i++) {
+        JSValue v = JS_GetPropertyUint32(ctx, arr, i);
+        if (JS_VALUE_GET_TAG(v) == JS_VALUE_GET_TAG(fn) && JS_VALUE_GET_PTR(v) == JS_VALUE_GET_PTR(fn)) {
+            JS_FreeValue(ctx, v);
+            continue;
+        }
+        JS_SetPropertyUint32(ctx, arr, k++, v);
+    }
+    JS_SetPropertyStr(ctx, arr, "length", JS_NewUint32(ctx, k));
+    JS_FreeValue(ctx, arr);
+}
+
+bool abort_signal_is(JSContext *ctx, JSValueConst v)
+{
+    /* THE SLOT RECORD IS THE BRAND. A signal is the only thing this component gives one of these to, and it is
+       under a private Symbol the page cannot mint — so this is a real brand test and not a shape test. */
+    JSValue slots = signal_slots(ctx, v), flag;
+    bool ok;
+
+    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return false; }
+    /* A CONTROLLER has one of these too, holding `signal`; only a SIGNAL's has `aborted`. */
+    flag = JS_GetPropertyStr(ctx, slots, "aborted");
+    ok = !JS_IsUndefined(flag);
+    JS_FreeValue(ctx, flag);
+    JS_FreeValue(ctx, slots);
+    return ok;
+}
+
+bool abort_signal_aborted(JSContext *ctx, JSValueConst sig)
+{
+    JSValue slots = signal_slots(ctx, sig);
+    bool b = JS_IsObject(slots) && signal_is_aborted(ctx, slots);
+    JS_FreeValue(ctx, slots);
+    return b;
+}
+
+JSValue abort_signal_reason(JSContext *ctx, JSValueConst sig)
+{
+    JSValue slots = signal_slots(ctx, sig), v;
+
+    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return JS_UNDEFINED; }
+    v = signal_is_aborted(ctx, slots) ? JS_GetPropertyStr(ctx, slots, "reason") : JS_UNDEFINED;
+    JS_FreeValue(ctx, slots);
+    return v;
+}
+
+/* ---- §3.2 "signal abort", THE WHOLE OPERATION ------------------------------------------------------------- */
+
+enum { SA_START = 0, SA_ALGOS, SA_FIRE, SA_DONE };
+
+void abort_signal_work_start(AbortSignalWork *w)
+{
+    int k;
+    /* A step state arrives ZEROED, and a zeroed JSValue is the INTEGER 0 rather than undefined. */
+    w->stage = SA_START;
+    w->phase = 0;
+    w->i = 0;
+    w->algos = w->ev = JS_UNDEFINED;
+    for (k = 0; k < 4; k++) w->cb[k] = JS_UNDEFINED;
+}
+
+void abort_signal_work_visit(JSContext *ctx, AbortSignalWork *w, JSStepVisit *v)
+{
+    int k;
+    v->val(ctx, &w->algos);
+    v->val(ctx, &w->ev);
+    for (k = 0; k < 4; k++) v->val(ctx, &w->cb[k]);
+}
+
+void abort_signal_work_release(JSContext *ctx, AbortSignalWork *w)
+{
+    int k;
+    JS_FreeValue(ctx, w->algos);
+    JS_FreeValue(ctx, w->ev);
+    w->algos = w->ev = JS_UNDEFINED;
+    for (k = 0; k < 4; k++) { JS_FreeValue(ctx, w->cb[k]); w->cb[k] = JS_UNDEFINED; }
+}
+
+int abort_signal_run(JSContext *ctx, AbortSignalWork *w, JSValueConst sig, JSValueConst reason,
+                     JSValue in, JSValue **out_cb, int *out_argc)
+{
+    int r;
+
+    if (w->stage == SA_START) {
+        if (!signal_abort_state(ctx, sig, JS_DupValue(ctx, reason))) {
+            /* Already aborted: §3.2 step 1 returns, so nothing runs and nothing fires. */
+            JS_FreeValue(ctx, in);
+            w->stage = SA_DONE;
+            return 0;
+        }
+        /* THE LIST IS SNAPSHOT AND EMPTIED BEFORE THE FIRST ALGORITHM RUNS. §3.2 empties it as its own step,
+           and an algorithm is free to abort another signal that shares this one's list-manipulating code; a
+           walk over the live array would then run an entry that was added after the operation began, which
+           the spec's "for each algorithm of signal's abort algorithms" over an emptied list cannot. */
+        w->algos = signal_algos(ctx, sig, 0);
+        {
+            JSValue slots = signal_slots(ctx, sig);
+            if (JS_IsObject(slots))
+                JS_SetPropertyStr(ctx, slots, "algorithms", JS_UNDEFINED);
+            JS_FreeValue(ctx, slots);
+        }
+        w->i = 0;
+        w->stage = SA_ALGOS;
+    }
+
+    while (w->stage == SA_ALGOS) {
+        JSValue out;
+        if (!JS_IsArray(w->algos) || w->i >= array_len(ctx, w->algos)) { w->stage = SA_FIRE; break; }
+        {
+            JSValue fn = JS_GetPropertyUint32(ctx, w->algos, w->i);
+            r = step_call_run(ctx, &w->phase, STEP_CB(w->cb), fn, JS_UNDEFINED, 0, NULL, in, &out,
+                              out_cb, out_argc);
+            JS_FreeValue(ctx, fn);
+        }
+        if (r > 0) return r;
+        in = JS_UNDEFINED;
+        if (JS_IsException(out)) return -1;
+        JS_FreeValue(ctx, out);
+        w->i++;
+    }
+
+    if (w->stage == SA_FIRE) {
+        /* §3.2 "fire an event named abort at signal" — the ONE §2.9 dispatch, as a REQUEST, so the listeners
+           run as ordinary preemptible page code and the caller resumes after every one of them has returned. */
+        if (JS_IsUndefined(w->ev))
+            w->ev = event_new(ctx, "abort", /*bubbles*/ false, /*cancelable*/ false);
+        r = event_target_fire_run(ctx, &w->phase, STEP_CB(w->cb), sig, w->ev, in, NULL, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        w->stage = SA_DONE;
+    }
+    DCHECK(w->stage == SA_DONE, "a signal-abort request resumed in a stage it never parks in");
+    return 0;
+}
+
 /* §3.2 abort() — A MACHINE, because the spec makes the dispatch SYNCHRONOUS: a page that calls ac.abort() and
    then reads a flag its listener set must see it already set, and a queued fire answers after abort() returned.
    Every step before the fire runs none of the page's code (the slot reads are own slots, the default reason is
    an engine-built DOMException), so the machine has exactly one suspension point: the listeners. */
 typedef struct JSAbortState {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
-    uint8_t   stage;
-    uint8_t   fphase;   /* the fire request's own phase */
+    uint8_t   started;
     JSValue   sig;      /* the signal being aborted (owned) */
-    JSValue   ev;       /* the event, minted once and held across the suspension (owned) */
-    JSValue   cb[4];    /* the fire request buffer: [this, dispatch, target, event] */
+    AbortSignalWork w;  /* the shared "signal abort" request's own record */
 } JSAbortState;
 
 static void js_abort_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSAbortState *s = st;
-    int k;
     v->val(ctx, &s->sig);
-    v->val(ctx, &s->ev);
-    for (k = 0; k < 4; k++)
-        v->val(ctx, &s->cb[k]);
+    abort_signal_work_visit(ctx, &s->w, v);
 }
 
 static JSValue js_abort_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSAbortState *s = st;
-    int k;
     (void)take_result;
     JS_FreeValue(ctx, s->sig);
-    JS_FreeValue(ctx, s->ev);
-    s->sig = s->ev = JS_UNDEFINED;
-    for (k = 0; k < 4; k++) {
-        JS_FreeValue(ctx, s->cb[k]);
-        s->cb[k] = JS_UNDEFINED;
-    }
+    s->sig = JS_UNDEFINED;
+    abort_signal_work_release(ctx, &s->w);
     return JS_UNDEFINED;   /* §3.2 abort() returns undefined whatever the listeners did */
 }
 
@@ -267,37 +443,28 @@ static int js_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     JSAbortState *s = st;
     int r;
 
-    if (s->stage == 0) {
+    if (!s->started) {
         /* §3.2 step 1 is `this.[[Signal]]` — an INTERNAL SLOT. Read as an own slot, so no accessor and no proxy
            trap can sit on it: a page that assigns over the public `signal` property does not redirect abort(). */
-        JSValue slots = signal_slots(ctx, s->hdr.this_val), reason;
+        JSValue slots = signal_slots(ctx, s->hdr.this_val);
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        s->sig = s->ev = JS_UNDEFINED;
-        s->cb[0] = s->cb[1] = s->cb[2] = s->cb[3] = JS_UNDEFINED;
-        s->stage = 1;
-        if (JS_IsObject(slots)) {
+        s->sig = JS_UNDEFINED;
+        abort_signal_work_start(&s->w);
+        s->started = 1;
+        if (JS_IsObject(slots))
             s->sig = JS_GetPropertyStr(ctx, slots, "signal");
-            JS_FreeValue(ctx, slots);
-        } else {
-            JS_FreeValue(ctx, slots);
-        }
+        JS_FreeValue(ctx, slots);
         if (!JS_IsObject(s->sig)) {
             JS_ThrowTypeError(ctx, "abort called on something that is not an AbortController");
             return JS_STEP_ABRUPT;
         }
-        /* The reason travels verbatim; "signal abort" is what turns an undefined one into an AbortError, and
-           it does that for every caller rather than once per call site. */
-        reason = JS_DupValue(ctx, step_arg(&s->hdr, 0));
-        if (!signal_abort_state(ctx, s->sig, reason))
-            return JS_STEP_DONE;   /* already aborted: §3.2 fires nothing a second time */
     }
-    /* §3.2 "fire an event named abort at signal" — the ONE §2.9 dispatch, as a REQUEST, so the listeners run
-       as ordinary preemptible page code and abort() resumes after every one of them has returned. */
-    if (JS_IsUndefined(s->ev))
-        s->ev = event_new(ctx, "abort", /*bubbles*/ false, /*cancelable*/ false);
-    r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), s->sig, s->ev, cb_result, NULL, out_cb, out_argc);
+    /* THE WHOLE OF "signal abort", not a piece of it: the reason travels verbatim (the operation is what turns
+       an undefined one into an AbortError), the signal's abort algorithms run, and then the `abort` event is
+       fired at it. abort() has one thing to do and this is it. */
+    r = abort_signal_run(ctx, &s->w, s->sig, step_arg(&s->hdr, 0), cb_result, out_cb, out_argc);
     if (r > 0) return r;
     if (r < 0) return JS_STEP_ABRUPT;
     return JS_STEP_DONE;
@@ -312,11 +479,6 @@ static int g_abort_stepid = -1;
 JSValue abort_signal_new(JSContext *ctx)
 {
     return signal_new(ctx, JS_FALSE, JS_UNDEFINED);
-}
-
-bool abort_signal_state(JSContext *ctx, JSValueConst sig, JSValue reason)
-{
-    return signal_abort_state(ctx, sig, reason);
 }
 
 /* §3.2's `[SameObject] readonly attribute AbortSignal signal` — an ACCESSOR on the prototype reading the

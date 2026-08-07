@@ -7,12 +7,18 @@
  *
  * WHY THE RECORD HAS A NULL PROTOTYPE, WHICH IS THE WHOLE POINT OF THIS FILE. Every component reads the RECORD
  * with JS_GetOwnSlot — an own slot, never a lookup — and then reads a FIELD out of it with an ordinary
- * property read. If the record inherits from Object.prototype, that second read walks the prototype chain, and
- * a page that has defined a getter for `type` or `size` or `mode` on Object.prototype is then running its own
- * code inside an internal-slot read. It is not hypothetical: WPT patches exactly those names, and the engine
- * aborted on its own "JS_GetPropertyInternal reached a getter" assert while dispatching an event, because the
- * event's `type` slot resolved to the page's trap. A null prototype makes the field read own-only BY
- * CONSTRUCTION, so no component has to remember to use a different accessor for its own fields.
+ * property read, having written that field with an ordinary property write. Both halves consult the prototype
+ * chain, and the WRITE is the half that surprises: assigning `slots.type = x` is [[Set]], so a getter-only
+ * `type` accessor inherited from Object.prototype swallows it and NO own property is created at all — after
+ * which the read finds the page's getter and runs it. WPT patches exactly those names (`type`, `size`, `mode`,
+ * `start`, `highWaterMark`), and the engine aborted on its own "JS_GetPropertyInternal reached a getter"
+ * assert from inside its event dispatch, which looked nothing like a property that had failed to be written.
+ * A null prototype removes both halves of that BY CONSTRUCTION, so no component has to remember a special
+ * accessor for its own fields.
+ *
+ * The sibling rule, for objects that are NOT slot records: a page-facing object the engine populates is
+ * creating OWN properties, so it DEFINES them (JS_DefinePropertyValue*) rather than assigning. That is what
+ * every spec algorithm that builds one actually says — CreateDataPropertyOrThrow, not Set.
  *
  * There is no state and no interface here: one constructor, for a kind of object with one rule. */
 #ifndef ENGINE_HOST_BROWSER_CORE_IDL_SLOTS_H

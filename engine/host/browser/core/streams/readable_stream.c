@@ -26,9 +26,11 @@
 #include "core/idl_args.h"
 #include "core/streams/stream_work.h"
 #include "core/streams/readable_stream.h"
+#include "core/streams/pipe.h"
 
 /* §4.2's states. A stream is readable until it is closed or errored, and those two are terminal. */
-enum { RS_READABLE = 0, RS_CLOSED, RS_ERRORED };
+/* §4.2's three states — declared in the header, because pipeTo branches on them and two spellings of
+   one enum is one more than a component may have. */
 
 typedef struct {
     uint8_t state;
@@ -240,15 +242,21 @@ static JSValue stream_take_read(JSContext *ctx, StreamData *d, int reject)
     return f;
 }
 
-/* §4.3's read result: `{ value, done }`, a plain object this component builds — so nothing of the page's is on
-   it until the settle hands it over. One per read request: §4.2 says CreateIterResultObject per request, and a
-   shared object would be observable as identity. */
+/* §4.3's read result: 7.4.14 CreateIterResultObject — `{ value, done }`. One per read request, because §4.2
+   says so and because a shared object would be observable as identity.
+   THE MEMBERS ARE DEFINED, NOT ASSIGNED. CreateIterResultObject uses CreateDataPropertyOrThrow, which is
+   [[DefineOwnProperty]] and ignores the prototype chain entirely; an ASSIGNMENT is [[Set]], which consults it.
+   The object is an ordinary one, so it inherits Object.prototype — and a page that has defined a getter-only
+   `value` or `done` there would silently swallow the write and leave the read reaching its own getter. That is
+   not a hypothetical: the same mistake on an internal-slot record is what made the engine abort inside its own
+   event dispatch, and it looked nothing like a missing property. Anywhere this engine populates a fresh object
+   it is creating own properties, which is DEFINE. */
 static JSValue read_result(JSContext *ctx, JSValue value, bool done)
 {
     JSValue o = JS_NewObject(ctx);
     if (JS_IsException(o)) { JS_FreeValue(ctx, value); return o; }
-    JS_SetPropertyStr(ctx, o, "value", value);
-    JS_SetPropertyStr(ctx, o, "done", JS_NewBool(ctx, done));
+    JS_DefinePropertyValueStr(ctx, o, "value", value, JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, o, "done", JS_NewBool(ctx, done), JS_PROP_C_W_E);
     return o;
 }
 
@@ -2957,10 +2965,34 @@ JSValueConst readable_stream_op(ReadableStreamOp which)
     switch (which) {
     case RS_OP_GET_READER: return g_get_reader_fn;
     case RS_OP_READ:       return g_read_fn;
+    case RS_OP_RELEASE:    return g_release_fn;
     default:
-        DCHECK(which == RS_OP_RELEASE, "a stream operation was asked for by a name this component does not map");
-        return g_release_fn;
+        DCHECK(which == RS_OP_CANCEL, "a stream operation was asked for by a name this component does not map");
+        return g_reader_cancel_fn;
     }
+}
+
+bool readable_stream_query(JSValueConst v, ReadableStreamState *pstate, bool *plocked)
+{
+    StreamData *d = stream_of(v);
+
+    if (!d) return false;
+    if (pstate) *pstate = (ReadableStreamState)d->state;
+    if (plocked) *plocked = !JS_IsUndefined(d->reader);
+    return true;
+}
+
+JSValue readable_stream_stored_error(JSContext *ctx, JSValueConst v)
+{
+    StreamData *d = stream_of(v);
+    return d ? JS_DupValue(ctx, d->stored_error) : JS_UNDEFINED;
+}
+
+JSValue readable_reader_closed(JSContext *ctx, JSValueConst reader)
+{
+    ReaderData *r = reader_of(reader);
+    DCHECK(r != NULL, "the closed promise of something that is not a reader was asked for");
+    return JS_DupValue(ctx, r->closed);
 }
 
 /* ---- the constructors -------------------------------------------------------------------------------------- */
@@ -3375,6 +3407,12 @@ void readable_stream_init(JSContext *ctx)
     /* §4.3's constructor IS getReader spelled the other way — SetUpReadableStreamDefaultReader reached with
        the stream in an argument instead of in the receiver, which is all the magic says. */
     g_reader_ctor_stepid = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &js_get_reader_decl, GR_CTOR);
+
+    /* §4.2.4's ReadableStreamPipeTo is its own component — it holds a reader on one stream and a writer on
+       another, so it belongs to neither half — but `pipeTo` and `pipeThrough` are §4.2's MEMBERS, and this is
+       the prototype they go on. The declaration is piping's; the placement is this interface's. */
+    pipe_init(ctx);
+    pipe_install(ctx, g_stream_proto);
 }
 
 void readable_stream_install(JSContext *ctx, JSValueConst global)
@@ -3404,6 +3442,7 @@ void readable_stream_free(JSContext *ctx)
 {
     int i;
     if (!g_rs_rt) return;
+    pipe_free(ctx);
     JS_FreeValue(ctx, g_stream_proto);
     JS_FreeValue(ctx, g_reader_proto);
     JS_FreeValue(ctx, g_ctrl_proto);

@@ -47,7 +47,8 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       fetch and FileAPI — which use a stream but assert almost nothing ABOUT one. A component
                       whose spec directory is not checked out is a component whose gate cannot fail, which is
                       the same defect as a gate that only reads the spelling that existed when it was written. */
-                   "streams/readable-streams", "streams/resources", "streams/writable-streams"];
+                   "streams/readable-streams", "streams/resources", "streams/writable-streams",
+                   "streams/piping"];
 
 if (!existsSync(join(WPT, "resources", "testharness.js"))) {
   /* NO --depth 1. The corpus is PINNED, and a depth-1 clone has only the tip — `git checkout bf4714d` in it

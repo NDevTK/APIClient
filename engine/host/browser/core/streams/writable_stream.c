@@ -29,13 +29,12 @@
 #include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/dom/abort.h"
-#include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/streams/stream_work.h"
 #include "core/streams/writable_stream.h"
 
-/* §5.2's four states. */
-enum { WS_WRITABLE = 0, WS_CLOSED, WS_ERRORING, WS_ERRORED };
+/* §5.2's four states are declared in the header: §4.2.4's pipeTo branches on them, and two spellings of one
+   enum is one more than a component may have. */
 
 typedef struct {
     uint8_t state;
@@ -253,6 +252,48 @@ static bool ws_in_flight(WsData *d)
 {
     return !JS_IsUndefined(d->in_flight_write[0]) || !JS_IsUndefined(d->in_flight_close[0]);
 }
+
+/* THE ABSTRACT OPERATIONS, as the ORIGINAL function objects — captured at install, so a page that rebinds a
+   prototype member changes what IT calls and nothing that the platform performs on its behalf. */
+static JSValue g_op_fn[WS_OP_N];
+
+JSValueConst writable_stream_op(WritableStreamOp which)
+{
+    DCHECK(which >= 0 && which < WS_OP_N, "a §5 operation was asked for by a name this component does not map");
+    return g_op_fn[which];
+}
+
+bool writable_stream_query(JSValueConst v, WritableStreamState *pstate, bool *plocked, bool *pclose_queued)
+{
+    WsData *d = ws_of(v);
+
+    if (!d) return false;
+    if (pstate) *pstate = (WritableStreamState)d->state;
+    if (plocked) *plocked = !JS_IsUndefined(d->writer);
+    if (pclose_queued) *pclose_queued = ws_close_queued_or_in_flight(d);
+    return true;
+}
+
+JSValue writable_stream_stored_error(JSContext *ctx, JSValueConst v)
+{
+    WsData *d = ws_of(v);
+    return d ? JS_DupValue(ctx, d->stored_error) : JS_UNDEFINED;
+}
+
+JSValue writable_writer_ready(JSContext *ctx, JSValueConst writer)
+{
+    WsWriterData *w = wr_of(writer);
+    DCHECK(w != NULL, "the ready promise of something that is not a writer was asked for");
+    return JS_DupValue(ctx, w->ready);
+}
+
+JSValue writable_writer_closed(JSContext *ctx, JSValueConst writer)
+{
+    WsWriterData *w = wr_of(writer);
+    DCHECK(w != NULL, "the closed promise of something that is not a writer was asked for");
+    return JS_DupValue(ctx, w->closed);
+}
+
 
 static uint32_t ws_write_pending(JSContext *ctx, WsData *d)
 {
@@ -487,7 +528,7 @@ typedef struct {
     JSValue    chunk;
     JSValue    promise;    /* what a member hands back */
     JSValue    funcs[2];   /* its capability, when the member settles its own answer */
-    JSValue    ev;         /* the `abort` event, held across the signal's dispatch */
+    AbortSignalWork sig;   /* §3.2 "signal abort"'s own record, while the controller's signal is aborting */
     uint8_t    next;       /* the stage S_SETTLE returns to */
     uint8_t    tail;       /* where the erroring chain ends */
     uint8_t    is_close;   /* the sink call in flight is the CLOSE, not a write */
@@ -507,7 +548,7 @@ static void js_ws_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->promise);
     v->val(ctx, &s->funcs[0]);
     v->val(ctx, &s->funcs[1]);
-    v->val(ctx, &s->ev);
+    abort_signal_work_visit(ctx, &s->sig, v);
 }
 
 static JSValue js_ws_fini(JSContext *ctx, void *st, bool take_result)
@@ -522,8 +563,8 @@ static JSValue js_ws_fini(JSContext *ctx, void *st, bool take_result)
     JS_FreeValue(ctx, s->promise);
     JS_FreeValue(ctx, s->funcs[0]);
     JS_FreeValue(ctx, s->funcs[1]);
-    JS_FreeValue(ctx, s->ev);
-    s->ctrl = s->stream = s->chunk = s->promise = s->ev = JS_UNDEFINED;
+    abort_signal_work_release(ctx, &s->sig);
+    s->ctrl = s->stream = s->chunk = s->promise = JS_UNDEFINED;
     s->funcs[0] = s->funcs[1] = JS_UNDEFINED;
     return r;
 }
@@ -596,7 +637,8 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
 
     if (s->w.stage == S_ENTRY) {
         stream_work_start(&s->w);
-        s->ctrl = s->stream = s->chunk = s->promise = s->ev = JS_UNDEFINED;
+        s->ctrl = s->stream = s->chunk = s->promise = JS_UNDEFINED;
+        abort_signal_work_start(&s->sig);
         s->funcs[0] = s->funcs[1] = JS_UNDEFINED;
         s->size = 1;
         s->tail = S_DONE;
@@ -820,16 +862,12 @@ run:
         }
 
         if (s->w.stage == S_SIGNAL) {
-            /* §5.2 abort step 2 signals the controller's AbortSignal, and the FIRE runs the page's listeners —
-               so it is a request, and the state the listeners may have changed is re-read after it. */
-            if (s->w.phase == 0 && JS_IsUndefined(s->ev)) {
-                if (c && !JS_IsUndefined(c->signal) &&
-                    abort_signal_state(ctx, c->signal, JS_DupValue(ctx, s->w.value)))
-                    s->ev = event_new(ctx, "abort", false, false);
-                if (JS_IsUndefined(s->ev)) { s->w.stage = S_ABORT_SETUP; continue; }
-            }
-            r = event_target_fire_run(ctx, &s->w.phase, STEP_CB(s->w.cb), c->signal, s->ev, cb_result, NULL,
-                                      out_cb, out_argc);
+            /* §5.2 abort step 2: "signal abort on the controller's AbortController with reason". The WHOLE DOM
+               operation, as a request — it runs the signal's abort algorithms and then fires `abort` at it, and
+               both of those run code, which is why the state the stream is in is re-read in the next stage
+               rather than remembered across this one. */
+            if (!c || JS_IsUndefined(c->signal)) { s->w.stage = S_ABORT_SETUP; continue; }
+            r = abort_signal_run(ctx, &s->sig, c->signal, s->w.value, cb_result, out_cb, out_argc);
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
             cb_result = JS_UNDEFINED;
@@ -1640,6 +1678,16 @@ void writable_stream_init(JSContext *ctx)
     idl_install_accessor(ctx, g_wc_proto, "signal", js_wc_signal, 0, -1);
     idl_install_step_method(ctx, g_wc_proto, "error", 0, g_op_stepid[OP_WC_ERROR]);
 
+    /* THE ABSTRACT OPERATIONS, read off the prototypes ONCE, while they are still the ones just installed. */
+    g_op_fn[WS_OP_GET_WRITER]   = JS_GetPropertyStr(ctx, g_ws_proto, "getWriter");
+    g_op_fn[WS_OP_STREAM_ABORT] = JS_GetPropertyStr(ctx, g_ws_proto, "abort");
+    g_op_fn[WS_OP_WRITE]        = JS_GetPropertyStr(ctx, g_wr_proto, "write");
+    g_op_fn[WS_OP_CLOSE]        = JS_GetPropertyStr(ctx, g_wr_proto, "close");
+    g_op_fn[WS_OP_ABORT]        = JS_GetPropertyStr(ctx, g_wr_proto, "abort");
+    g_op_fn[WS_OP_RELEASE]      = JS_GetPropertyStr(ctx, g_wr_proto, "releaseLock");
+    for (i = 0; i < WS_OP_N; i++)
+        CHECK(JS_IsFunction(ctx, g_op_fn[i]), "a §5 abstract operation was not installed before it was captured");
+
     g_ws_ctor_stepid = idl_method_id_step(ctx, SINK_AND_STRATEGY, 2, QUEUING_STRATEGY,
                                           (int)(sizeof QUEUING_STRATEGY / sizeof QUEUING_STRATEGY[0]),
                                           &js_ws_ctor_decl, 0);
@@ -1676,6 +1724,7 @@ void writable_stream_free(JSContext *ctx)
     JS_FreeValue(ctx, g_wr_proto);
     JS_FreeValue(ctx, g_wc_proto);
     g_ws_proto = g_wr_proto = g_wc_proto = JS_UNDEFINED;
+    for (i = 0; i < WS_OP_N; i++) { JS_FreeValue(ctx, g_op_fn[i]); g_op_fn[i] = JS_UNDEFINED; }
     g_ws_rt = NULL;
     g_ws_ctor_stepid = g_wr_ctor_stepid = g_getwriter_stepid = -1;
     for (i = 0; i < OP_N; i++) g_op_stepid[i] = -1;

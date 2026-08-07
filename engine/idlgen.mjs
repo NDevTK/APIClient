@@ -55,7 +55,10 @@ const INTERFACES = {
      are found in the same file. */
   TextEncoder:          "core/encoding/encoding.c",
   TextDecoder:          "core/encoding/encoding.c",
-  ReadableStream:       "core/streams/readable_stream.c",
+  /* §4.2.4's ReadableStreamPipeTo belongs to neither half of the standard — it holds a reader on one stream
+     and a writer on another — so `pipeTo` and `pipeThrough` are declared in their own component and installed
+     onto this prototype. Naming only readable_stream.c reported them absent while they were shipping. */
+  ReadableStream:      ["core/streams/readable_stream.c", "core/streams/pipe.c"],
   ReadableStreamDefaultReader: "core/streams/readable_stream.c",
   WritableStream:       "core/streams/writable_stream.c",
   WritableStreamDefaultWriter: "core/streams/writable_stream.c",

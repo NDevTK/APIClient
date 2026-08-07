@@ -136,6 +136,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "streams", "stream_work.c"),                     // the plumbing §4 and §5 share
     join(HOST, "browser", "core", "streams", "readable_stream.c"),
     join(HOST, "browser", "core", "streams", "writable_stream.c"),                  // WritableStream: Streams §5                // ReadableStream: Streams §4.2-§4.5
+    join(HOST, "browser", "core", "streams", "pipe.c"),                          // §4.2.4's pipeTo/pipeThrough: the algorithm that holds a reader on one stream and a writer on another
     join(HOST, "browser", "core", "streams", "queuing_strategy.c"),               // Count/ByteLengthQueuingStrategy: Streams §7
     join(HOST, "browser", "core", "byte_reader.c"),                            // reading a byte sequence as a promise: Fetch §5.2's readers and File API §3.3's, one machine
     join(HOST, "browser", "core", "fetch", "body.c"),

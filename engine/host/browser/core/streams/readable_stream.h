@@ -28,8 +28,24 @@ bool readable_stream_is(JSValueConst v);
    "fully read" acquires a reader and reads to the end, and it performs the ABSTRACT operations — a page that
    rebinds ReadableStreamDefaultReader.prototype.read must not thereby change what `response.text()` does.
    BORROWED; the caller calls them as it would any function, which is what keeps them suspendable. */
-typedef enum { RS_OP_GET_READER = 0, RS_OP_READ, RS_OP_RELEASE, RS_OP_N } ReadableStreamOp;
+typedef enum { RS_OP_GET_READER = 0, RS_OP_READ, RS_OP_RELEASE, RS_OP_CANCEL, RS_OP_N } ReadableStreamOp;
 JSValueConst readable_stream_op(ReadableStreamOp which);
+
+/* §4.2's [[state]], and whether a reader holds the lock. §4.2.4's pipeTo branches on both at half a dozen
+   points — "if source.[[state]] is 'readable', cancel it", "if source is locked, reject" — and each of those
+   is an INTERNAL slot read, so it cannot go through the page-visible `locked` accessor a page may have
+   patched. Answers false for a value that is not a stream, which is the brand test the union arms use. */
+typedef enum { RS_READABLE = 0, RS_CLOSED, RS_ERRORED } ReadableStreamState;
+bool readable_stream_query(JSValueConst v, ReadableStreamState *pstate, bool *plocked);
+
+/* §4.2's [[storedError]] — what an errored stream's reader rejects with, and what pipeTo propagates onward.
+   DUP'D; undefined when the stream has not errored. */
+JSValue readable_stream_stored_error(JSContext *ctx, JSValueConst v);
+
+/* §4.3's [[closedPromise]] on a reader THIS COMPONENT handed out. pipeTo reacts to it to learn that the source
+   closed or errored, and the spec names the slot rather than the `closed` getter — a page that patches
+   ReadableStreamDefaultReader.prototype must not thereby change what a pipe observes. DUP'D. */
+JSValue readable_reader_closed(JSContext *ctx, JSValueConst reader);
 
 /* FULLY READ a stream the caller has already acquired a reader on and issued the FIRST read against, and
    answer a promise for what `make` builds from the whole byte sequence.
