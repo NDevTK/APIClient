@@ -22,7 +22,10 @@
  * the standard's prose looks; they are sub-sequences with their own state byte, driven the way §4.5's settle
  * loop and §4.2.4's shutdown are. A first draft of this file wrote them as helpers and could not compile,
  * which was the design telling the truth early. */
+#include <stddef.h>
+
 #include "check.h"
+#include "solver/cow.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
@@ -62,8 +65,37 @@ static JSClassID g_ts_class, g_tc_class;
 static JSValue   g_ts_proto = JS_UNDEFINED, g_tc_proto = JS_UNDEFINED;
 static JSRuntime *g_ts_rt;
 
-static TsData     *ts_of(JSValueConst v) { return JS_GetOpaque(v, g_ts_class); }
-static TsCtrlData *tc_of(JSValueConst v) { return JS_GetOpaque(v, g_tc_class); }
+/* THE RECORDS TIME-TRAVEL, AND THE CAPTURE IS IN THE ACCESSOR — §4's comment on the same lines gives the whole
+   reason. §6's exposure is the backpressure state: one flow writing while the stream is under backpressure
+   installed a change promise every sibling then waited on, so a fork's arms blocked each other's writes. The
+   offset lists are the same lists the finalizers free; the finalizers and gc_marks go through JS_GetOpaque. */
+#define TS_OFF(T, f) (uint16_t)offsetof(T, f)
+#define TS_NVAL(a)   (int)(sizeof(a) / sizeof((a)[0]))
+static const uint16_t TSD_VALS[] = {
+    TS_OFF(TsData, readable), TS_OFF(TsData, writable), TS_OFF(TsData, controller),
+    TS_OFF(TsData, bp_promise), TS_OFF(TsData, bp_funcs[0]), TS_OFF(TsData, bp_funcs[1]),
+};
+static const CowRecord TSD_REC = { sizeof(TsData), TSD_VALS, TS_NVAL(TSD_VALS) };
+
+static const uint16_t TCD_VALS[] = {
+    TS_OFF(TsCtrlData, stream), TS_OFF(TsCtrlData, transformer), TS_OFF(TsCtrlData, transform_fn),
+    TS_OFF(TsCtrlData, flush_fn), TS_OFF(TsCtrlData, cancel_fn), TS_OFF(TsCtrlData, finish),
+    TS_OFF(TsCtrlData, finish_funcs[0]), TS_OFF(TsCtrlData, finish_funcs[1]),
+};
+static const CowRecord TCD_REC = { sizeof(TsCtrlData), TCD_VALS, TS_NVAL(TCD_VALS) };
+
+static TsData *ts_of(JSValueConst v)
+{
+    TsData *t = JS_GetOpaque(v, g_ts_class);
+    if (t) cow_capture_host_record(v, t, &TSD_REC);
+    return t;
+}
+static TsCtrlData *tc_of(JSValueConst v)
+{
+    TsCtrlData *c = JS_GetOpaque(v, g_tc_class);
+    if (c) cow_capture_host_record(v, c, &TCD_REC);
+    return c;
+}
 
 bool transform_stream_is(JSValueConst v) { return g_ts_class != 0 && JS_GetOpaque(v, g_ts_class) != NULL; }
 

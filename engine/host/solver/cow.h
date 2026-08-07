@@ -74,6 +74,31 @@ void      cow_capture_module_eval(JSContext *ctx, void *mod);
    because `p` points into storage that object owns and a parked flow can outlive every other reference to it. */
 void      cow_capture_host_state(JSContext *ctx, JSValueConst owner, void *p, size_t n);
 
+/* A COMPONENT RECORD THAT OWNS JSValues — the same isolation, for the state that is not a latch.
+ *
+ * cow_capture_host_state copies BYTES, which is right for a body-used flag and WRONG for a slot: a byte copy of
+ * a JSValue makes a second reference and counts none of it, so the next restore frees a value the blob still
+ * names and the one after that reads freed memory. Streams are made of such records — §4.2's stream holds its
+ * reader, its queue and its stored error; §4.3's reader holds the stream it locked and the resolving functions
+ * of its `closed` promise — and none of it was captured, so a flow that acquired a reader held it for every
+ * sibling. `res.clone()` becoming a tee is what made that reachable: a body is a stream now, and two arms of a
+ * fork reading one reply each took a reader on the same branch. It surfaced as "this reader was released while
+ * it was still in use" and as a body read back with bytes that were not its own.
+ *
+ * `val_off` names the record's owned-value offsets — the same list the component's gc_mark walks, and for the
+ * same reason: it is the one statement of what the record OWNS, and a field added to one and not the other is
+ * the bug this exists to prevent.
+ *
+ * NO ctx: the call sites are a component's record ACCESSORS, which is where this belongs — a record captured
+ * when the flow REACHES it cannot be missed at a write site, and there is no write site left to forget. Those
+ * accessors take only the object, so the context is the session's, stashed by cow_set_ctx exactly as the DOM
+ * delta's already is. */
+typedef struct { size_t size; const uint16_t *val_off; int n_val; } CowRecord;
+void      cow_capture_host_record(JSValueConst owner, void *p, const CowRecord *rec);
+
+/* The session's context, for the captures that have no call-site one. The DOM delta's twin is dom_cow_set_ctx. */
+void      cow_set_ctx(JSContext *ctx);
+
 /* Install as JSTimeTravelHooks.async_fork: record the per-flow swap of a shared suspended ASYNC activation. The
    engine cloned it because resuming CONSUMES it; this makes the clone what this flow's resolve/reject closure
    names, leaving the original as the baseline every other arm still finds. */

@@ -25,6 +25,7 @@
 #include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/streams/stream_work.h"
+#include "solver/cow.h"
 #include "core/streams/readable_stream.h"
 #include "core/streams/pipe.h"
 
@@ -163,9 +164,57 @@ static void ctrl_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func
     JS_MarkValue(rt, c->size_fn, mark_func);
 }
 
-static StreamData *stream_of(JSValueConst v) { return JS_GetOpaque(v, g_stream_class); }
-static ReaderData *reader_of(JSValueConst v) { return JS_GetOpaque(v, g_reader_class); }
-static ControllerData *ctrl_of(JSValueConst v) { return JS_GetOpaque(v, g_ctrl_class); }
+/* ---- WHAT EACH RECORD OWNS, AND WHERE IT IS CAPTURED --------------------------------------------------------
+ *
+ * A stream's state is not in the page's heap — it is in these records, behind a class opaque no property hook
+ * can see. So none of it time-travelled: one flow acquiring a reader held the lock for every sibling, and one
+ * flow's read advanced the queue head for all of them. THE CAPTURE IS IN THE ACCESSOR, not at each write. A
+ * record reached by a flow is a record that flow may write, the delta dedups it to one entry, and there are at
+ * most a handful of streams in a flow — so capturing on REACH costs nothing measurable and removes the entire
+ * class of "a write site was missed", which is the only way this can go wrong.
+ * The finalizers and gc_marks go through JS_GetOpaque instead, deliberately: a capture during collection would
+ * dup values on an object that is being torn down.
+ * The offset lists say what the record OWNS, and they are the SAME lists the finalizers free. A field added to
+ * one and not the other is exactly the bug this exists to prevent, which is why they are read together. */
+#define RS_OFF(T, f) (uint16_t)offsetof(T, f)
+#define RS_NVAL(a)   (int)(sizeof(a) / sizeof((a)[0]))
+static const uint16_t STREAM_VALS[] = {
+    RS_OFF(StreamData, stored_error), RS_OFF(StreamData, reader), RS_OFF(StreamData, queue),
+    RS_OFF(StreamData, queue_size), RS_OFF(StreamData, read_resolve), RS_OFF(StreamData, read_reject),
+    RS_OFF(StreamData, controller),
+};
+static const CowRecord STREAM_REC = { sizeof(StreamData), STREAM_VALS, RS_NVAL(STREAM_VALS) };
+
+static const uint16_t READER_VALS[] = {
+    RS_OFF(ReaderData, stream), RS_OFF(ReaderData, closed),
+    RS_OFF(ReaderData, closed_funcs[0]), RS_OFF(ReaderData, closed_funcs[1]),
+};
+static const CowRecord READER_REC = { sizeof(ReaderData), READER_VALS, RS_NVAL(READER_VALS) };
+
+static const uint16_t CTRL_VALS[] = {
+    RS_OFF(ControllerData, stream), RS_OFF(ControllerData, pull_fn), RS_OFF(ControllerData, cancel_fn),
+    RS_OFF(ControllerData, source), RS_OFF(ControllerData, size_fn),
+};
+static const CowRecord CTRL_REC = { sizeof(ControllerData), CTRL_VALS, RS_NVAL(CTRL_VALS) };
+
+static StreamData *stream_of(JSValueConst v)
+{
+    StreamData *d = JS_GetOpaque(v, g_stream_class);
+    if (d) cow_capture_host_record(v, d, &STREAM_REC);
+    return d;
+}
+static ReaderData *reader_of(JSValueConst v)
+{
+    ReaderData *r = JS_GetOpaque(v, g_reader_class);
+    if (r) cow_capture_host_record(v, r, &READER_REC);
+    return r;
+}
+static ControllerData *ctrl_of(JSValueConst v)
+{
+    ControllerData *c = JS_GetOpaque(v, g_ctrl_class);
+    if (c) cow_capture_host_record(v, c, &CTRL_REC);
+    return c;
+}
 
 /* How many chunks are still unread. §4.2 has no length to expose; this is the queue's own bookkeeping. */
 static uint32_t stream_queued(JSContext *ctx, StreamData *d)
@@ -1946,7 +1995,20 @@ static void tee_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
     }
 }
 
-static TeeData *tee_of(JSValueConst v) { return JS_GetOpaque(v, g_tee_class); }
+static const uint16_t TEE_VALS[] = {
+    RS_OFF(TeeData, reader), RS_OFF(TeeData, branch[0]), RS_OFF(TeeData, branch[1]),
+    RS_OFF(TeeData, ctrl[0]), RS_OFF(TeeData, ctrl[1]), RS_OFF(TeeData, cancel_promise),
+    RS_OFF(TeeData, cancel_funcs[0]), RS_OFF(TeeData, cancel_funcs[1]),
+    RS_OFF(TeeData, reason[0]), RS_OFF(TeeData, reason[1]),
+};
+static const CowRecord TEE_REC = { sizeof(TeeData), TEE_VALS, RS_NVAL(TEE_VALS) };
+
+static TeeData *tee_of(JSValueConst v)
+{
+    TeeData *t = JS_GetOpaque(v, g_tee_class);
+    if (t) cow_capture_host_record(v, t, &TEE_REC);
+    return t;
+}
 
 enum { TS_START = 0, TS_READ, TS_B0, TS_B1, TS_RESOLVE_CANCEL, TS_CANCEL_SOURCE, TS_CANCEL_ADOPT };
 enum { CF_ENQUEUE = 0, CF_CLOSE, CF_ERROR };

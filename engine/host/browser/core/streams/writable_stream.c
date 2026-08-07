@@ -22,6 +22,7 @@
  * EVERY SETTLE IS A CALL REQUEST, for the reason §4's are: 27.2.1.3.2 step 8 reads `then` off the resolution and
  * a page owns that prototype. Where §5 settles SEVERAL promises in a stated order, that is a chain of stages,
  * one settle each, not a loop of C calls. */
+#include <stddef.h>
 #include <string.h>
 
 #include "check.h"
@@ -31,6 +32,7 @@
 #include "core/dom/abort.h"
 #include "core/events/event_target.h"
 #include "core/streams/stream_work.h"
+#include "solver/cow.h"
 #include "core/streams/writable_stream.h"
 
 /* §5.2's four states are declared in the header: §4.2.4's pipeTo branches on them, and two spellings of one
@@ -185,9 +187,56 @@ static void wc_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
     JS_MarkValue(rt, c->queue_size, mark_func);
 }
 
-static WsData       *ws_of(JSValueConst v) { return JS_GetOpaque(v, g_ws_class); }
-static WsWriterData *wr_of(JSValueConst v) { return JS_GetOpaque(v, g_wr_class); }
-static WsCtrlData   *wc_of(JSValueConst v) { return JS_GetOpaque(v, g_wc_class); }
+/* THE RECORDS TIME-TRAVEL, AND THE CAPTURE IS IN THE ACCESSOR — §4's comment on the same three lines gives the
+   whole reason, and this half has the identical exposure: a flow that took the writer held the lock for every
+   sibling, and one flow's write advanced the queue head for all of them. The offset lists are the same lists
+   the finalizers free. Finalizers and gc_marks go through JS_GetOpaque, deliberately. */
+#define WS_OFF(T, f) (uint16_t)offsetof(T, f)
+#define WS_NVAL(a)   (int)(sizeof(a) / sizeof((a)[0]))
+static const uint16_t WS_VALS[] = {
+    WS_OFF(WsData, stored_error), WS_OFF(WsData, writer), WS_OFF(WsData, controller),
+    WS_OFF(WsData, write_resolve), WS_OFF(WsData, write_reject),
+    WS_OFF(WsData, in_flight_write[0]), WS_OFF(WsData, in_flight_write[1]),
+    WS_OFF(WsData, in_flight_close[0]), WS_OFF(WsData, in_flight_close[1]),
+    WS_OFF(WsData, close_request[0]), WS_OFF(WsData, close_request[1]),
+    WS_OFF(WsData, abort_funcs[0]), WS_OFF(WsData, abort_funcs[1]),
+    WS_OFF(WsData, abort_p), WS_OFF(WsData, abort_reason),
+};
+static const CowRecord WS_REC = { sizeof(WsData), WS_VALS, WS_NVAL(WS_VALS) };
+
+static const uint16_t WR_VALS[] = {
+    WS_OFF(WsWriterData, stream), WS_OFF(WsWriterData, closed),
+    WS_OFF(WsWriterData, closed_funcs[0]), WS_OFF(WsWriterData, closed_funcs[1]),
+    WS_OFF(WsWriterData, ready),
+    WS_OFF(WsWriterData, ready_funcs[0]), WS_OFF(WsWriterData, ready_funcs[1]),
+};
+static const CowRecord WR_REC = { sizeof(WsWriterData), WR_VALS, WS_NVAL(WR_VALS) };
+
+static const uint16_t WC_VALS[] = {
+    WS_OFF(WsCtrlData, stream), WS_OFF(WsCtrlData, sink), WS_OFF(WsCtrlData, write_fn),
+    WS_OFF(WsCtrlData, close_fn), WS_OFF(WsCtrlData, abort_fn), WS_OFF(WsCtrlData, size_fn),
+    WS_OFF(WsCtrlData, signal), WS_OFF(WsCtrlData, queue), WS_OFF(WsCtrlData, queue_size),
+};
+static const CowRecord WC_REC = { sizeof(WsCtrlData), WC_VALS, WS_NVAL(WC_VALS) };
+
+static WsData *ws_of(JSValueConst v)
+{
+    WsData *d = JS_GetOpaque(v, g_ws_class);
+    if (d) cow_capture_host_record(v, d, &WS_REC);
+    return d;
+}
+static WsWriterData *wr_of(JSValueConst v)
+{
+    WsWriterData *w = JS_GetOpaque(v, g_wr_class);
+    if (w) cow_capture_host_record(v, w, &WR_REC);
+    return w;
+}
+static WsCtrlData *wc_of(JSValueConst v)
+{
+    WsCtrlData *c = JS_GetOpaque(v, g_wc_class);
+    if (c) cow_capture_host_record(v, c, &WC_REC);
+    return c;
+}
 
 bool writable_stream_is(JSValueConst v)
 {

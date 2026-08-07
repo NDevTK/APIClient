@@ -748,6 +748,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int f
     flow_add(ctx, JS_UNDEFINED, NULL, 0);   /* the first flow: the page's scripts, empty decision vector */
     JS_SetFlowLocalMark(1);                 /* objects created while a flow runs are flow-local (discarded) */
     dom_cow_set_ctx(ctx);                   /* the DOM delta needs ctx for the attribute taint-shadow dup/free */
+    cow_set_ctx(ctx);                       /* …and the heap delta needs one for the component records it captures */
     g_dom_capture = 1;                       /* record DOM writes into the running flow's delta (twin of FlowLocalMark) */
     JS_SetFlowControlHooks(forking ? &FC_EXPLORE : &FC_VERIFY);   /* preempt ALWAYS on; fork only when exploring */
     JS_SetJobEnqueueHook(engine_enqueue_job);   /* ASYNC-AS-FLOW: reactions route to the enqueuing flow's queue */
