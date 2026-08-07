@@ -135,6 +135,7 @@ enum {
     S_TR_READ,        /* …then the Transformer's members */
     S_BUILD,          /* InitializeTransformStream + SetUpTransformStreamDefaultControllerFromTransformer */
     S_BP_INIT,        /* §6.2 step 10: the stream begins under backpressure */
+    S_START_W, S_START_R,   /* each half's own "a promise resolved with" the shared start promise */
     S_START, S_START_SETTLE,
     S_WRITE_HOLD,     /* the sink's write, waiting on the backpressure-change promise */
     S_TRANSFORM,      /* PerformTransform: call `transform(chunk, controller)` */
@@ -681,8 +682,37 @@ run:
                start together, and it is why CreateReadable/WritableStream do not run a start of their own. */
             s->promise = JS_NewPromiseCapability(ctx, s->funcs);
             if (JS_IsException(s->promise)) return JS_STEP_ABRUPT;
-            if (writable_stream_start(ctx, t->writable, s->promise) < 0) return JS_STEP_ABRUPT;
-            if (readable_stream_start(ctx, t->readable, s->promise) < 0) return JS_STEP_ABRUPT;
+            JS_FreeValue(ctx, s->w.value);
+            s->w.value = JS_DupValue(ctx, s->promise);
+            ts_goto(s, S_START_W);
+            continue;
+
+        case S_START_W: case S_START_R: {
+            /* EACH HALF GETS ITS OWN PROMISE, and that is not a detail — it is two ticks of the event loop.
+               SetUp{Readable,Writable}StreamDefaultController each perform "Let startPromise be A PROMISE
+               RESOLVED WITH startResult", and Web IDL's "a promise resolved with" mints a NEW promise and
+               RESOLVES it with the value. Resolving with a thenable adopts it: one job to read `then` and call
+               it, another for the reaction it registers. So a half does not start when the shared promise
+               settles — it starts two jobs later, and anything queued in between runs first.
+               `readable.cancel()` immediately followed by `controller.terminate()` is exactly that: the cancel's
+               fulfilment steps land while the writable half is still "erroring" rather than "errored", so
+               [[finishPromise]] RESOLVES and the cancel does not reject. Handing both halves the shared promise
+               object skips the adoption and reverses that. The writable half is first because
+               InitializeTransformStream creates it first, and its two jobs are queued in that order. */
+            int is_w = (s->w.stage == S_START_W);
+            r = stream_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return JS_STEP_ABRUPT;
+            cb_result = JS_UNDEFINED;
+            if ((is_w ? writable_stream_start(ctx, t->writable, s->w.func)
+                      : readable_stream_start(ctx, t->readable, s->w.func)) < 0)
+                return JS_STEP_ABRUPT;
+            if (is_w) { ts_goto(s, S_START_R); continue; }
+            /* BOTH HALVES HAVE ADOPTED IT, so the shared promise stops being this machine's argument. Left in
+               place it became the value S_START_SETTLE resolves the shared capability WITH — a promise resolved
+               with itself — on every stream whose transformer has no `start` to overwrite it. */
+            JS_FreeValue(ctx, s->w.value);
+            s->w.value = JS_UNDEFINED;
             JS_FreeValue(ctx, s->promise);
             s->promise = JS_UNDEFINED;
             JS_FreeValue(ctx, s->w.func);
@@ -690,6 +720,7 @@ run:
             s->tr[TR_START] = JS_UNDEFINED;
             ts_goto(s, JS_IsFunction(ctx, s->w.func) ? S_START : S_START_SETTLE);
             continue;
+        }
 
         case S_START: {
             JSValueConst arg = s->ctrl;
