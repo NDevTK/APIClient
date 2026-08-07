@@ -140,6 +140,21 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
            of ~1300, so every interface it missed — Node, Element, Event, DOMException — was mistaken for
            server-injected app state and a branch on it forked instead of throwing. */
 
+        /* THE PLATFORM GLOBALS, installed by their one caller rather than smuggled inside window_install.
+           They are not browsing-context members and window.c does not own them; bundling them there is what
+           made a SECOND caller of window_install impossible, which cost the WPT runner every one of the
+           browsing-context members it needed. */
+        url_init(g_ctx);              url_install(g_ctx, g);
+        usp_init(g_ctx);              usp_install(g_ctx, g);
+        form_data_init(g_ctx);        form_data_install(g_ctx, g);
+        readable_stream_init(g_ctx);  readable_stream_install(g_ctx, g);
+        queuing_strategy_init(g_ctx); queuing_strategy_install(g_ctx, g);
+        writable_stream_init(g_ctx);  writable_stream_install(g_ctx, g);
+        transform_stream_init(g_ctx); transform_stream_install(g_ctx, g);
+        blob_init(g_ctx);             blob_install(g_ctx, g);
+        encoding_init(g_ctx);         encoding_install(g_ctx, g);
+        text_stream_init(g_ctx);      text_stream_install(g_ctx, g);
+
         window_install(g_ctx, g, origin);   /* window/self/frames/parent/top/opener/closed/origin, and name */
         timer_install(g_ctx, g);
         timer_set_script_sink(engine_queue_script);   /* HTML 8.6: a string handler is evaluated, as a flow */            /* setTimeout/setInterval/clearTimeout/clearInterval/queueMicrotask */

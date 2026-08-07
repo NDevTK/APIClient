@@ -19,6 +19,15 @@
  * cross-WASM chain that lets an embedded document reach its embedder exists, parent/top resolve through it and
  * this is where that lands.
  *
+
+ * WHAT IT DOES NOT DO. This installed the PLATFORM GLOBALS as well — URL, URLSearchParams, FormData, Blob, the
+ * four stream interfaces, TextEncoder/Decoder and their stream forms. None of them is a browsing-context
+ * member and none belongs to this component; they were here only because main.c happened to be the one caller.
+ * That cost a real gate: the WPT runner installs every one of those itself, so it could not call this without
+ * double-installing, and it therefore had NO browsing-context members at all — `window` was not defined, and
+ * every test in html/browsers/the-window-object failed on its first line. Two jobs in one function is what
+ * made the second caller impossible; each install now sits with its own caller.
+ *
  * `name` IS ATTACKER INPUT and is the one member here that is concolic. It survives navigation, so an attacker
  * who can open the document sets it — CLAUDE.md lists it beside cookies and the referrer. Example-free and
  * read through a GETTER, for the same reason location.hash is: a candidate run substitutes a source at MINT
@@ -30,15 +39,6 @@
 #include "solver/concolic.h"
 #include "core/frame/window.h"
 #include "core/url/url.h"
-#include "core/url/url_search_params.h"
-#include "core/html/form_data.h"
-#include "core/file/blob.h"
-#include "core/streams/readable_stream.h"
-#include "core/streams/queuing_strategy.h"
-#include "core/streams/writable_stream.h"
-#include "core/streams/transform_stream.h"
-#include "core/encoding/encoding.h"
-#include "core/encoding/text_stream.h"
 
 static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -51,31 +51,6 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     JSValue g = (JSValue)global;
 
     DCHECK(JS_IsObject(global), "window_install was given something that is not the global object");
-
-    /* §5's URL interface is a plain platform global, not part of any one component's surface — a bundle builds
-       request URLs with it long before it fetches one. */
-    url_init(ctx);
-    url_install(ctx, global);
-    usp_init(ctx);
-    usp_install(ctx, global);
-    form_data_init(ctx);
-    form_data_install(ctx, global);
-    /* File API §3's Blob is a plain platform global too, and Fetch's `blob()` reader answers with one — so it
-       is installed BEFORE anything that can build one. */
-    readable_stream_init(ctx);
-    readable_stream_install(ctx, global);
-    queuing_strategy_init(ctx);
-    queuing_strategy_install(ctx, global);
-    writable_stream_init(ctx);
-    writable_stream_install(ctx, global);
-    transform_stream_init(ctx);
-    transform_stream_install(ctx, global);
-    blob_init(ctx);
-    blob_install(ctx, global);
-    encoding_init(ctx);
-    encoding_install(ctx, global);
-    text_stream_init(ctx);
-    text_stream_install(ctx, global);
 
     /* 7.2.2: window, self and frames all return THIS Window's proxy, and the global object IS that proxy here —
        so `window.X`, `self.X` and a bare `X` are one read spelled three ways. */

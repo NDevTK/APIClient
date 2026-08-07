@@ -35,6 +35,8 @@ void engine_pending_docscript(JSContext *ctx, const char *url, int script_i);
    per flow when that flow has run everything the document gave it: stage 0 fires DOMContentLoaded, stage 1
    fires load. Returns how many listener tasks it scheduled. Registered by the host that owns a Document; a
    scheduler with no document (the solver fixture) simply never has one. */
+/* The event loop's timer step (timer.h). Registered by the timer component; asked when a flow is idle. */
+void engine_set_timer_hook(int (*fn)(JSContext *ctx));
 void engine_set_document_done_hook(int (*fn)(JSContext *ctx, int stage));
 
 /* solver_decide calls this at a forking branch to stash the sibling's hot decision + pins; the interpreter's

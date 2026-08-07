@@ -44,6 +44,7 @@
 #include "quickjs.h"
 #include "core/timing/timer.h"
 #include "core/idl_args.h"
+#include "solver/engine.h"
 
 typedef struct {
     int     id;          /* the handle setTimeout returned; 0 = this slot is free */
@@ -122,31 +123,39 @@ static void (*g_script_sink)(const char *src);
 
 void timer_set_script_sink(void (*queue)(const char *src)) { g_script_sink = queue; }
 
-static JSValue js_timer_step(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 
-/* Enqueue ONE step of this component. Every scheduled expiry has exactly one of these outstanding, so the queue
-   holds as many steps as there are timers to fire and a cleared timer simply leaves its step with nothing to do. */
-static void timer_enqueue_step(JSContext *ctx)
-{
-    JSValue step = JS_NewCFunction(ctx, js_timer_step, "", 0);
-    CHECK(!JS_IsException(step), "timer: the step closure allocation failed");
-    JS_EnqueueCallTask(ctx, step, 0, NULL);
-    JS_FreeValue(ctx, step);
-}
-
-/* FIRE THE EARLIEST TIMER. Runs as a flow's callee, so it may enqueue but must never call the page's code. */
-static JSValue js_timer_step(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+/* FIRE THE EARLIEST DUE TIMER — the event loop's own step, and the reason it is not a queued task.
+ *
+ * IT USED TO BE ONE, AND THAT WAS THE BUG. Setting a timer enqueued a "step" task immediately, so a timer
+ * announced itself DUE the moment it was created; whenever the queue reached that step it advanced the clock to
+ * the expiry, however far away, and fired. Under a wall clock that is harmless — ten seconds is longer than the
+ * queue takes to drain — but virtual time makes "ten seconds from now" arrive the instant the step is reached,
+ * with other tasks still queued behind it. A page's long timeout therefore landed in the middle of its own
+ * work: testharness arms one per file, and it fired while the tests it guards were still queued, marking 140
+ * stream subtests that go on to pass as "Test timed out".
+ *
+ * HTML SAYS WHEN INSTEAD. §8.1.7's event loop runs a task from a task source that has one DUE; the timer
+ * source's task becomes due at its expiry. So nothing is queued in advance — the DRIVER asks this, and only
+ * when it has nothing else to run, which is exactly when "the clock may move" is true. Everything that is
+ * already due (a queued task, a pending microtask, a reply the host owes) is by construction ahead of it.
+ *
+ * AND THE SECOND HOP IS GONE WITH IT. The step existed because a queued job cannot be pulled back out, so
+ * clearTimeout had to work by emptying the entry and letting the step find nothing. With nothing queued in
+ * advance, a cleared timer simply is not there to be found — the compensation went with the thing it
+ * compensated for.
+ *
+ * Returns 1 when a timer fired (the driver has work again), 0 when there is none. */
+int timer_run_due(JSContext *ctx)
 {
     Timer *t = timer_earliest();
     JSValue fn;
     JSValue *args = NULL;
     int n, i;
 
-    (void)this_val; (void)argc; (void)argv;
     if (!t)
-        return JS_UNDEFINED;   /* every timer this step could have fired was cleared */
+        return 0;
 
-    /* 8.6: the clock has advanced to this task's expiry — every later timer is measured from here. */
+    /* 8.6: the clock advances to this task's expiry — every later timer is measured from here. */
     DCHECK(t->when >= g_now, "timer: the earliest expiry is behind the virtual clock — time ran backwards");
     g_now = t->when;
 
@@ -164,22 +173,23 @@ static JSValue js_timer_step(JSContext *ctx, JSValueConst this_val, int argc, JS
     if (t->every >= 0) {
         /* setInterval: the same entry is scheduled again at now + period. UNBOUNDED by design — a page's
            interval never stops on its own, and the WFQ deprioritises one that stops emitting rather than a
-           counter cutting it off. */
+           counter cutting it off. It needs no re-enqueue now: it is simply the earliest entry again when the
+           driver next has nothing to do. */
         t->when = g_now + (t->every > 0 ? t->every : 1);
-        timer_enqueue_step(ctx);
     } else {
         timer_entry_free(ctx, t);
     }
 
+    /* THE CALLBACK IS STILL A TASK, and still the page's own code — so it goes through the flow machinery
+       exactly as before. Only the decision of WHEN moved. */
     JS_EnqueueCallTask(ctx, fn, n, (JSValueConst *)args);
     JS_FreeValue(ctx, fn);
     for (i = 0; i < n; i++)
         JS_FreeValue(ctx, args[i]);
     js_free(ctx, args);
-    return JS_UNDEFINED;
+    return 1;
 }
 
-/* magic 0 = setTimeout, 1 = setInterval */
 static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     double delay = 0;
@@ -235,8 +245,7 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
         for (i = 0; i < t->argc; i++)
             t->argv[i] = JS_DupValue(ctx, argv[i + 2]);
     }
-    timer_enqueue_step(ctx);
-    return JS_NewInt32(ctx, t->id);
+    return JS_NewInt32(ctx, t->id);   /* nothing is queued: the driver asks when the clock may move */
 }
 
 static JSValue js_clear_timer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -273,6 +282,11 @@ static JSValue js_queue_microtask(JSContext *ctx, JSValueConst this_val, int arg
 
 void timer_install(JSContext *ctx, JSValueConst global)
 {
+    /* THE DRIVER MUST ASK, so it is told where to. Registered like the document's load-stage hook and for the
+       same reason: the scheduler may not depend on the browser half by name. A host that registers nothing
+       simply never advances the clock, and a page whose work is behind a timer stalls visibly rather than
+       having that timer fire out of order. */
+    engine_set_timer_hook(timer_run_due);
     JSValue g = (JSValue)global;
     /* HTML 8.6's own IDL, declared rather than approximated:
          long setTimeout(TimerHandler handler, optional long timeout = 0, any... arguments)

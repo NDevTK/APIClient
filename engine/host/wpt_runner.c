@@ -40,6 +40,7 @@
 #include "core/events/message_event.h"
 #include "core/events/message_port.h"
 #include "core/events/broadcast_channel.h"
+#include "core/frame/window.h"
 #include "core/frame/window_proxy.h"
 #include "core/frame/navigable.h"
 #include "solver/world.h"
@@ -48,11 +49,16 @@
 #include "core/events/event_target.h"
 #include "core/dom/abort.h"
 #include "solver/concolic.h"
+#include "solver/flow.h"
+#include "solver/engine.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include "core/timing/timer.h"
+#include <lexbor/html/html.h>
+#include "core/dom/element.h"
+#include "core/dom/document.h"
 #include "core/frame/location.h"
 #include "core/encoding/encoding.h"
 #include "core/encoding/text_stream.h"
@@ -128,6 +134,7 @@ static const char WPT_PROLOGUE[] =
     "  isShadowRealm: function () { return false; },\n"
     "};\n";
 
+
 /* THE EPILOGUE. testharness.js hands its results to a completion callback and, outside a browser, needs to be
    TOLD the page is done — there is no load event here. Both are three lines of the harness's own public API
    rather than anything reimplemented. */
@@ -170,6 +177,7 @@ static struct {
     HeaderList headers;
 } g_owed[WPT_OWED_MAX];
 static int g_owed_n;
+
 /* The document address of the file being run, which is what a relative fetch resolves against. */
 static char g_base_url[512];
 
@@ -396,6 +404,41 @@ static void wpt_report_exception(JSContext *ctx, const char *name, const char *w
     JS_FreeValue(ctx, e);
 }
 
+/* Child document ids this runner has handed out. It is the host here, and only a host may mint one: an engine
+   that minted its own would collide with the host's namespace, and carving the id space to avoid that caps how
+   many documents can exist. Starts above this runner's own document (1). */
+static uint32_t g_wpt_child_doc = 1;
+
+/* THE HOST'S HALF, pumped between resumes. A member that suspends on the host — HTML §7.4's `window.open`,
+   whose child document id only the host knows — parks the flow on the pending register and returns to whoever
+   is driving it. Here that is the loop below, so the answer is supplied there and the very next resume finds
+   it. Without this the flow would be re-entered with the question still open and spin. */
+static void wpt_answer_host_requests(JSContext *ctx)
+{
+    const char *p = engine_host_requests();
+
+    while (*p) {
+        const char *tab = strchr(p, '\t');
+        const char *end = strchr(p, '\n');
+        uint32_t id;
+
+        if (!tab || !end) break;
+        id = (uint32_t)strtoul(p, NULL, 10);
+        if (!strncmp(tab + 1, "navigable.create\t", 17)) {
+            char num[16];
+            snprintf(num, sizeof num, "%u", ++g_wpt_child_doc);
+            {
+                JSValue v = JS_NewString(ctx, num);
+                engine_host_answer(ctx, id, v);
+                JS_FreeValue(ctx, v);
+            }
+        }
+        /* An operation this harness does not implement is left UNANSWERED rather than guessed: the asking flow
+           stays parked, which is visible, where a wrong answer is not. */
+        p = end + 1;
+    }
+}
+
 /* Run one program as a FLOW, exactly as the test262 harness does: park and rebuild the whole frame chain at
    every back-edge. A throw is reported and ends the file — a test file that cannot run is a failure, never a
    skip. */
@@ -409,7 +452,7 @@ static int run_program(JSContext *ctx, const char *src, size_t len, const char *
         wpt_report_exception(ctx, name, "compile: ");
         return 1;
     }
-    while (JS_FlowResume(ctx, flow, &res)) { }
+    while (JS_FlowResume(ctx, flow, &res)) { wpt_answer_host_requests(ctx); }
     if (JS_IsException(res)) {
         wpt_report_exception(ctx, name, "");
         failed = 1;
@@ -418,6 +461,8 @@ static int run_program(JSContext *ctx, const char *src, size_t len, const char *
     JS_FlowFree(ctx, flow);
     return failed;
 }
+
+static lxb_html_document_t *g_wpt_dom;   /* the runner's parsed document */
 
 int main(int argc, char **argv)
 {
@@ -488,6 +533,39 @@ int main(int argc, char **argv)
     /* NAME THIS DOCUMENT. A WindowProxy answers "is this navigable remote?" by comparing against the one
        document identity the world registry owns, so the registry has to be up before the first proxy exists. */
     world_registry_init(1);
+    /* HTML §7.2.2's BROWSING-CONTEXT MEMBERS — window, self, frames, parent, top, opener, closed, origin and
+       name. This runner had none of them, so `window` itself was undefined and every test in
+       html/browsers/the-window-object failed on its first line. It could not call window_install before,
+       because that function also installed the platform globals this runner installs itself. */
+    /* THE CONCOLIC VALUE CLASS. This runner exercises the REAL components, and several of them answer with a
+       concolic value where the spec's answer is genuinely unknown input — `window.name` survives navigation, so
+       an attacker who can open the document sets it. The class has to be registered before any component can
+       mint one; without it every file here aborted at the first such read. */
+    concolic_init(ctx);
+    /* THE SOLVER FRONTIER, because a member that SUSPENDS parks on a flow's pending register and that register
+       is the frontier's. This runner drives quickjs flows (JS_FlowNew/JS_FlowResume) but had no solver flow at
+       all, so §7.4's open() aborted on "issued outside a flow" — correctly. One flow, set running for the whole
+       run: this harness exercises components, and the BFS that would rank many of them is the engine's. */
+    flow_registry_init(1);
+    flow_set_running(flow_add(ctx, JS_UNDEFINED, NULL, 0, WORLD_NONE));
+
+    /* A REAL DOCUMENT — the same Lexbor parse the engine runs, of the minimal document WPT wraps a .window.js
+       in. The runner had none, so `document` was undefined and every file in html/browsers died on its first
+       line. It could not simply be added either: a document makes testharness take its WINDOW path, which arms
+       a wall-clock timeout for the whole file, and under a virtual clock that timeout used to arrive the
+       instant the queue drained — landing in the middle of the tests it guards and reporting 140 passing
+       stream subtests as timeouts. It cannot now: a timer is due only when the event loop has nothing else to
+       run (timer.h), so the long timeout is by construction the last thing to happen. */
+    {
+        static const char DOC[] = "<!doctype html><html><head></head><body></body></html>";
+        g_wpt_dom = lxb_html_document_create();
+        CHECK(g_wpt_dom != NULL, "the runner's document allocation failed");
+        CHECK(lxb_html_document_parse(g_wpt_dom, (const lxb_char_t *)DOC, sizeof DOC - 1) == LXB_STATUS_OK,
+              "the runner's document did not parse");
+        element_init(ctx);
+        document_install(ctx, global, g_wpt_dom, "http://web-platform.test/");
+    }
+    window_install(ctx, global, "http://web-platform.test");
     window_proxy_init(ctx);
     window_message_install(ctx, global, "http://web-platform.test");
     navigable_install(ctx, global, "http://web-platform.test");   /* HTML 7.4 */
@@ -596,7 +674,12 @@ int main(int argc, char **argv)
            and no flow parked — it is waiting on the HOST, exactly as a page waits on the network. Satisfying
            the owed replies is what re-enters JS and gives the pump more to drain; only when a drain owes
            nothing new is the file really finished. */
-        if (!wpt_drain_owed(ctx)) break;
+        if (wpt_drain_owed(ctx)) continue;
+        /* NOTHING QUEUED AND NOTHING OWED, which is the one moment virtual time may move — see timer.h. A
+           timer that is due fires here and its callback is a task the loop drains next. Only when this fires
+           nothing either is the file really finished. */
+        if (timer_run_due(ctx)) continue;
+        break;
     }
     JS_SetFlowControlHooks(&WPT_HOOKS_OFF);
 
@@ -631,6 +714,9 @@ int main(int argc, char **argv)
     message_port_free(ctx);
     window_message_free(ctx);
     navigable_free(ctx);
+    flow_registry_free(ctx);
+    document_free(ctx);
+    element_free(ctx);
     window_proxy_free(ctx);
     world_registry_free(ctx);
     message_event_free(ctx);

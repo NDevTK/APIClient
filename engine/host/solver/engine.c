@@ -143,6 +143,12 @@ void engine_pending_script_url(JSContext *ctx, const char *url) {
 static int (*g_docdone_hook)(JSContext *ctx, int stage);
 void engine_set_document_done_hook(int (*fn)(JSContext *ctx, int stage)) { g_docdone_hook = fn; }
 
+/* THE EVENT LOOP'S TIMER STEP, registered by the timer component for the reason the document hook is: naming
+   it here would make the scheduler depend on the browser half. Asked only where this flow has nothing else to
+   run, which is the one moment virtual time may move — see timer.h. */
+static int (*g_timer_hook)(JSContext *ctx);
+void engine_set_timer_hook(int (*fn)(JSContext *ctx)) { g_timer_hook = fn; }
+
 static char **g_sess_bodies;
 static char **g_sess_srcs;
 
@@ -716,6 +722,10 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                 flow_drain_pending(ctx, f);
                 return 0;
             }
+            /* NOTHING QUEUED, NOTHING OWED — so the clock may move. A timer is due only when the event loop
+               has nothing else, and everything that IS due (this flow's jobs above, a reply the host owes) has
+               already been offered a turn by the time control reaches here. */
+            else if (g_timer_hook && g_timer_hook(ctx)) { g_step_unit = "fire-due-timer"; return 0; }
             else if (f->dom_stage < 2 && g_docdone_hook) {
                 /* THE DOCUMENT FINISHED LOADING, in this flow's world. DOMContentLoaded then load, in that
                    order, each once per flow — the order IS the spec, and a page's real work is behind them:
