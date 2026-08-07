@@ -103,7 +103,7 @@ int body_clone_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, Body
             }
         }
     }
-    r = step_call_run(ctx, phase, cb, cb_cap, readable_stream_op(RS_OP_TEE), src->stream, 0, NULL,
+    r = step_call_run(ctx, phase, cb, cb_cap, readable_stream_op(RS_OP_TEE_CLONE), src->stream, 0, NULL,
                       in, &out, out_cb, out_argc);
     if (r > 0) return r;
     if (JS_IsException(out)) return -1;

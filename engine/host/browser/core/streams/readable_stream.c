@@ -26,6 +26,7 @@
 #include "core/idl_args.h"
 #include "core/streams/stream_work.h"
 #include "solver/cow.h"
+#include "core/structured_clone.h"
 #include "core/streams/readable_stream.h"
 #include "core/streams/pipe.h"
 
@@ -1956,6 +1957,12 @@ typedef struct {
     uint8_t reading;
     uint8_t read_again;
     uint8_t canceled[2];
+    /* §4.9.7's cloneForBranch2. The public `tee()` never sets it — both branches get the SAME chunk, which is
+       what the standard says and what a page teeing its own stream expects. Fetch §5.2's "clone a body" DOES:
+       `response.clone()` must give the second branch a value the first cannot reach, or a page that mutates
+       the chunk it read has changed what the clone will read. Fourteen of response-clone's subtests are
+       exactly that assertion, one per BufferSource type. */
+    uint8_t clone_for_branch2;
 } TeeData;
 
 static JSClassID g_tee_class;
@@ -1963,6 +1970,7 @@ static int       g_tee_stepids[TEE_N];
 /* The controller members, as function objects — the same reason §4.4 holds the reader's. */
 static JSValue   g_ctrl_fn[3] = { JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED };
 static JSValue   g_tee_fn = JS_UNDEFINED;   /* §4.2's `tee`, held for the reason g_ctrl_fn is */
+static JSValue   g_tee_clone_fn = JS_UNDEFINED;   /* the same, with §4.9.7's cloneForBranch2 set */
 
 static void tee_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -2167,6 +2175,23 @@ again:
             s->stage = i ? TS_B1 : TS_B0;
             /* §4.2: a branch the page has already cancelled is not fed, closed or errored. */
             if (s->done != 2 && t->canceled[i]) continue;
+            /* §4.9.7 step 13.2: BRANCH 2 gets a STRUCTURED CLONE of the chunk when the flag is set, and a
+               chunk that cannot be cloned errors BOTH branches rather than one — the two are one tee, and
+               leaving branch 1 alive with a value branch 2 never got is the split the flag exists to prevent. */
+            if (i == 1 && t->clone_for_branch2 && s->done == 0 && !JS_IsUndefined(s->value)) {
+                JSValue c = structured_clone(ctx, s->value);
+                if (JS_IsException(c)) {
+                    JSValue e = JS_GetException(ctx);
+                    JS_FreeValue(ctx, s->value);
+                    s->value = e;
+                    s->done = 2;          /* both branches error, with the clone's own reason */
+                    i = 0;                /* restart the pair: branch 1 has not been errored yet */
+                    s->stage = TS_B0;
+                    continue;
+                }
+                JS_FreeValue(ctx, s->value);
+                s->value = c;
+            }
             r = tee_ctrl_run(ctx, s, t, i,
                              s->done == 2 ? CF_ERROR : s->done ? CF_CLOSE : CF_ENQUEUE,
                              s->value, cb_result, out_cb, out_argc);
@@ -2286,8 +2311,12 @@ static int tee_branch(JSContext *ctx, TeeData *t, JSValueConst tee_v, int i)
     return 0;
 }
 
-static int js_tee_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
-                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+/* `clone2` is §4.9.7's cloneForBranch2 — false for §4.2's `tee()`, true for Fetch's clone. It is a PARAMETER
+   rather than a magic because an IdlStepBody is not handed one, and it is one body rather than two machines
+   because the two differ by a single step inside one algorithm. It is read only at stage 0, where the record
+   is built, so a resume never re-decides it. */
+static int tee_call_run(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                        JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc, bool clone2)
 {
     JSTeeCallState *s = st;
     TeeData *t;
@@ -2320,6 +2349,7 @@ static int js_tee_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         for (i = 0; i < 2; i++)
             t->branch[i] = t->ctrl[i] = t->cancel_funcs[i] = t->reason[i] = JS_UNDEFINED;
         JS_SetOpaque(obj, t);
+        t->clone_for_branch2 = (uint8_t)clone2;
         s->tee = obj;                      /* attached before anything that can fail, as everywhere here */
         t->reader = JS_DupValue(ctx, s->reader);
         t->cancel_promise = JS_NewPromiseCapability(ctx, t->cancel_funcs);
@@ -2365,8 +2395,25 @@ static int js_tee_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     return 0;
 }
 
+static int js_tee_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    return tee_call_run(ctx, hdr, st, argc, argv, cb_result, presult, out_cb, out_argc, false);
+}
+
+static int js_tee_clone_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    return tee_call_run(ctx, hdr, st, argc, argv, cb_result, presult, out_cb, out_argc, true);
+}
+
 static const IdlStepDecl js_tee_call_decl = {
     js_tee_call_step, sizeof(JSTeeCallState), js_tee_call_visit, js_tee_call_release
+};
+/* THE SAME STATE AND THE SAME VISIT — one struct, one ownership contract, which is what the step-visits gate
+   requires and what makes these two declarations of one algorithm rather than two algorithms. */
+static const IdlStepDecl js_tee_clone_decl = {
+    js_tee_clone_step, sizeof(JSTeeCallState), js_tee_call_visit, js_tee_call_release
 };
 
 /* ---- §4.2's `from` --------------------------------------------------------------------------------------------
@@ -3073,6 +3120,7 @@ JSValueConst readable_stream_op(ReadableStreamOp which)
     case RS_OP_READ:       return g_read_fn;
     case RS_OP_RELEASE:    return g_release_fn;
     case RS_OP_TEE:        return g_tee_fn;
+    case RS_OP_TEE_CLONE:  return g_tee_clone_fn;
     default:
         DCHECK(which == RS_OP_CANCEL, "a stream operation was asked for by a name this component does not map");
         return g_reader_cancel_fn;
@@ -3497,6 +3545,13 @@ void readable_stream_init(JSContext *ctx)
         }
         idl_install_method(ctx, g_stream_proto, "tee", 0,
                            idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tee_call_decl, 0));
+        /* §4.9.7 with cloneForBranch2, which is NOT a page-visible member — it is the operation Fetch's "clone
+           a body" performs, so it is a function object this component hands out and nothing installs. */
+        {
+            int id = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tee_clone_decl, 0);
+            g_tee_clone_fn = idl_step_function(ctx, "tee", 0, id);
+            CHECK(JS_IsFunction(ctx, g_tee_clone_fn), "streams: the cloning tee could not be made");
+        }
         /* Held as a FUNCTION OBJECT for the reason g_ctrl_fn is: Fetch's "clone a body" performs the tee
            OPERATION, and a page that replaces ReadableStream.prototype.tee must not change what clone() does. */
         g_tee_fn = JS_GetPropertyStr(ctx, g_stream_proto, "tee");
@@ -3588,6 +3643,7 @@ void readable_stream_free(JSContext *ctx)
     g_from_ctor_stepid = -1;
     for (i = 0; i < 3; i++) { JS_FreeValue(ctx, g_ctrl_fn[i]); g_ctrl_fn[i] = JS_UNDEFINED; }
     JS_FreeValue(ctx, g_tee_fn); g_tee_fn = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_tee_clone_fn); g_tee_clone_fn = JS_UNDEFINED;
     g_rs_rt = NULL;
     g_ctor_stepid = g_reader_ctor_stepid = g_read_stepid = g_cancel_stepid = g_release_stepid = -1;
     for (i = 0; i < 3; i++) g_ctrl_stepids[i] = -1;
