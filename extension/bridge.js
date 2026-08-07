@@ -222,6 +222,37 @@ async function engineServiceFetch(eng) {   // one round: resolve every pending r
   for (const u of replies) M.ccall("qjs_provide", "void", ["string", "string"], [u, await eng.fetched(u, false)]);
   const chunks = String(M.ccall("qjs_chunks", "string", [], [])).split("\n").filter(Boolean);
   for (const u of chunks) M.ccall("qjs_provide", "void", ["string", "string"], [u, await eng.fetched(u, true)]);
+  engineServiceHostRequests(eng);
+}
+
+// WHAT ONLY THIS ZONE CAN ANSWER. A cross-document operation is answered by the instance holding that document,
+// and SECURITY.md makes the offscreen the only zone that knows which instance that is — the same reason it owns
+// the routing and stamps the sender's origin. The asking flow is SUSPENDED mid-frame until the answer lands, so
+// this is pumped every round alongside the fetch replies; leaving one unanswered parks that flow indefinitely
+// (its siblings keep running, which is the point of suspending rather than blocking).
+function engineServiceHostRequests(eng) {
+  const M = eng.M;
+  const reqs = String(M.ccall("qjs_host_requests", "string", [], [])).split("\n").filter(Boolean);
+  for (const line of reqs) {
+    const tab = line.indexOf("\t");
+    if (tab < 0) continue;
+    const id = +line.slice(0, tab);
+    const op = line.slice(tab + 1);
+    let answer = "";
+    if (op.startsWith("navigable.create\t")) {
+      // HTML §7.4 returns null when the navigable is not created, which is what a popup blocker does and what
+      // a page checks for before taking its non-popup path. That is the honest answer while this zone cannot
+      // yet HOST a second instance: minting an id for a document nothing runs would hand the page a proxy
+      // whose every read has no answerer. Routing — spin up an instance for the child, clone the creator's
+      // policy container into it, and return its document id — is what replaces this line.
+      answer = "0";
+    } else {
+      // An operation this zone does not implement must not be answered with a guess: the asking flow stays
+      // parked, which is visible and recoverable, where a wrong answer is neither.
+      continue;
+    }
+    M.ccall("qjs_host_answer", "void", ["number", "string"], [id, answer]);
+  }
 }
 function engineFinalize(eng) {
   try { eng.M.ccall("qjs_teardown", "void", [], []); }

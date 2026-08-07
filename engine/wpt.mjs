@@ -54,7 +54,14 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       solver's `message.origin` attacker source comes from. None of it exists yet, so this
                       directory is the honest measurement of that: a component whose spec directory is not
                       checked out is a component whose gate cannot fail. */
-                   "webmessaging"];
+                   "webmessaging",
+                   /* HTML §7.2.5.1 AND §7.4 — WindowProxy and popups. `window.open`, `opener`, `parent`,
+                      `top`, `frames`, named access, and what a cross-origin WindowProxy may expose. This
+                      engine has just grown a WindowProxy member surface and §7.4's open(), and neither had a
+                      spec directory: a component whose spec directory is not checked out is a component whose
+                      gate cannot fail, which is the same defect as asserting only the spelling that existed
+                      when the assertion was written. */
+                   "html/browsers/windows", "html/browsers/the-window-object"];
 
 if (!existsSync(join(WPT, "resources", "testharness.js"))) {
   /* NO --depth 1. The corpus is PINNED, and a depth-1 clone has only the tip — `git checkout bf4714d` in it
@@ -140,12 +147,19 @@ const cc = spawnSync("gcc", ["-O1", "-w", "-Werror=implicit-function-declaration
 if (cc.status !== 0) { console.error("[wpt] runner build FAILED\n" + (cc.stderr || "")); process.exit(1); }
 
 /* Which files to run. A `.any.js` is the portable form — it carries no HTML around it, which is what lets a
-   non-browser host run the real file rather than a copy of it. */
+   non-browser host run the real file rather than a copy of it.
+   A `.window.js` is the same idea for tests that need a WINDOW: WPT wraps it in a minimal document with
+   testharness and nothing else, so the file itself is a plain script against a Window global — which is what
+   this runner provides. It was excluded, and the cost of that was invisible: html/browsers/windows and
+   html/browsers/the-window-object contain ZERO .any.js files and twenty .window.js ones, so checking those
+   directories out changed no total at all. self-et-al.window.js is the WindowProxy identity test — window,
+   self, frames, parent and top all naming one object — and it is precisely the gate this engine's new proxy
+   surface needs. */
 function collect(dir, out) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, e.name);
     if (e.isDirectory()) collect(p, out);
-    else if (e.name.endsWith(".any.js")) out.push(p);
+    else if (e.name.endsWith(".any.js") || e.name.endsWith(".window.js")) out.push(p);
   }
   return out;
 }

@@ -26,6 +26,8 @@
 #include "browser/core/fetch/response.h"
 #include "browser/core/fetch/request.h"
 #include "browser/core/url/url.h"
+#include "browser/core/frame/window_proxy.h"
+#include "browser/core/frame/navigable.h"
 #include "browser/core/url/url_search_params.h"
 #include "browser/core/html/form_data.h"
 #include "browser/core/file/blob.h"
@@ -158,6 +160,11 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
     fetch_install(g_ctx, g);
         module_loader_install(g_rt);
         location_install(g_ctx, g, origin);
+        /* §7.2.5.1 and §7.4. `window.open` SUSPENDS on the host — the child's document id can only come from
+           the zone that knows what documents exist — and returns a WindowProxy for a document in another
+           instance. The proxy class has to exist before any proxy is minted. */
+        window_proxy_init(g_ctx);
+        navigable_install(g_ctx, g, origin);
         /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
         unhandled_rejection_init(g_ctx);
         unhandled_rejection_install(g_ctx, g);   /* PromiseRejectionEvent */
@@ -237,7 +244,13 @@ QJS_EXPORT void qjs_teardown(void)
     DCHECK(*engine_pending_urls() == '\0',
            "qjs_teardown with replies still owed — every flow parked on one is dropped with its continuation. "
            "Provide them, or step to DONE, before ending the session");
+    DCHECK(*engine_host_requests() == '\0',
+           "qjs_teardown with SYNCHRONOUS requests still owed — a flow blocked on one is suspended mid-frame "
+           "with its snapshot intact, and tearing down drops it exactly where the pending assert above says "
+           "not to. Answer them, or step to DONE, before ending the session");
     doc_scripts_free(&g_scripts);
+    navigable_free(g_ctx);
+    window_proxy_free(g_ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */
     /* the runtime-lifetime values the browser components own — a component that mints one frees it. */
     abort_free(g_ctx);
     document_free(g_ctx);   /* the Document and the window it fires `load` at — both HELD across the lifecycle */
@@ -304,6 +317,30 @@ QJS_EXPORT void qjs_provide(const char *url, const char *body)
         if (n == 0)
             DFAIL("a body was provided for a URL no flow is parked on — the host's pending/provide pairing is "
                   "off, and resolving nothing would leave the flow that IS parked waiting forever");
+    }
+}
+
+/* WHAT ONLY THE TRUSTED ZONE CAN ANSWER, as `id<TAB>op` lines. A cross-document operation — creating a
+   navigable, reading through a WindowProxy — is answered by the instance holding that document, and only the
+   offscreen knows which instance that is. The asking flow is SUSPENDED until qjs_host_answer lands, so this
+   list is pulled every step alongside qjs_pending, and an unanswered request parks that flow indefinitely
+   while every sibling keeps running. */
+QJS_EXPORT const char *qjs_host_requests(void)
+{
+    DCHECK(g_begun, "qjs_host_requests was asked of an engine that never ran");
+    return engine_host_requests();
+}
+
+QJS_EXPORT void qjs_host_answer(unsigned req, const char *value)
+{
+    DCHECK(g_begun, "an answer was provided to an engine that never ran");
+    {
+        JSValue v = value ? JS_NewString(g_ctx, value) : JS_UNDEFINED;
+        /* Routed to ONE call site by id — never broadcast the way a fetched body is, because the answer was
+           computed under the ASKING FLOW's world. A zero return means that flow is gone, which is not an
+           error: nobody is waiting on the answer. */
+        engine_host_answer(g_ctx, (uint32_t)req, v);
+        JS_FreeValue(g_ctx, v);
     }
 }
 

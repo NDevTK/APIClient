@@ -41,6 +41,7 @@
 #include "core/events/message_port.h"
 #include "core/events/broadcast_channel.h"
 #include "core/frame/window_proxy.h"
+#include "core/frame/navigable.h"
 #include "solver/world.h"
 #include "core/frame/window_message.h"
 #include "core/structured_clone.h"
@@ -489,6 +490,7 @@ int main(int argc, char **argv)
     world_registry_init(1);
     window_proxy_init(ctx);
     window_message_install(ctx, global, "http://web-platform.test");
+    navigable_install(ctx, global, "http://web-platform.test");   /* HTML 7.4 */
     message_port_init(ctx);
     message_port_install(ctx, global);   /* HTML 9.4.2/9.4.3 */
     broadcast_channel_init(ctx, "http://web-platform.test");
@@ -628,6 +630,7 @@ int main(int argc, char **argv)
     broadcast_channel_free(ctx);
     message_port_free(ctx);
     window_message_free(ctx);
+    navigable_free(ctx);
     window_proxy_free(ctx);
     world_registry_free(ctx);
     message_event_free(ctx);

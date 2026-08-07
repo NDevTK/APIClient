@@ -7,6 +7,8 @@
 #include "solver/decide.h"
 #include "solver/flow.h"
 #include "solver/world.h"
+#include "core/frame/navigable.h"
+#include "core/frame/window_proxy.h"
 #include "solver/engine.h"
 #include "solver/cow.h"
 #include "core/loader/document_scripts.h"
@@ -1156,6 +1158,9 @@ static const char *HTML =
     /* AND ONE ON EACH SIDE OF A FORK. A blocked flow that forks must RE-ISSUE its request under the sibling's
        own world — sharing the id would deliver one answer into two call sites in two contradictory worlds. */
     "fetch('/api/hostreqfork?v=' + hostRead(cfg.admin ? 'hrA' : 'hrP'));"
+    /* §7.4: a child navigable. `open()` SUSPENDS — its document id can only come from the host — and resumes
+       holding a WindowProxy for a document in ANOTHER instance, so the proxy reports itself remote. */
+    "var _w = open(); fetch('/api/navopen?v=' + (_w ? 'proxy' : 'null'));"
     "</script>"
     "</body></html>";
 
@@ -1199,6 +1204,9 @@ static const char *HTML_MIN =
     /* AND ONE ON EACH SIDE OF A FORK. A blocked flow that forks must RE-ISSUE its request under the sibling's
        own world — sharing the id would deliver one answer into two call sites in two contradictory worlds. */
     "fetch('/api/hostreqfork?v=' + hostRead(cfg.admin ? 'hrA' : 'hrP'));"
+    /* §7.4: a child navigable. `open()` SUSPENDS — its document id can only come from the host — and resumes
+       holding a WindowProxy for a document in ANOTHER instance, so the proxy reports itself remote. */
+    "var _w = open(); fetch('/api/navopen?v=' + (_w ? 'proxy' : 'null'));"
     "</script>"
     "</body></html>";
 
@@ -1433,6 +1441,9 @@ static const IdlStepDecl HOSTREQ_DECL = { hostreq_step, sizeof(HostReqState), ho
 /* THE HOST'S SIDE, driven from the fixture's step loop: answer everything outstanding. A real host routes each
    record to the instance holding that document; here the answer is the request text turned back, which is
    enough to prove the value reaches the call site that asked. */
+/* Child document ids this fixture has handed out. Starts above the fixture's own document (1). */
+static uint32_t g_fixture_child_doc = 1;
+
 static int hostreq_answer_all(JSContext *ctx)
 {
     const char *reqs = engine_host_requests();
@@ -1446,7 +1457,17 @@ static int hostreq_answer_all(JSContext *ctx)
         if (!tab || !end) break;
         id = (uint32_t)strtoul(p, NULL, 10);
         {
-            JSValue v = JS_NewStringLen(ctx, tab + 1, (size_t)(end - tab - 1));
+            JSValue v;
+            /* §7.4: THE HOST MINTS THE CHILD'S DOCUMENT ID, because only the host knows what ids exist. The
+               engine must not mint one — a local counter collides with the host's namespace, and carving the
+               id space to avoid that is a cap on how many documents there can be. */
+            if (!strncmp(tab + 1, "navigable.create\t", 17)) {
+                char num[16];
+                snprintf(num, sizeof num, "%u", ++g_fixture_child_doc);
+                v = JS_NewString(ctx, num);
+            } else {
+                v = JS_NewStringLen(ctx, tab + 1, (size_t)(end - tab - 1));
+            }
             n += engine_host_answer(ctx, id, v);
             JS_FreeValue(ctx, v);
         }
@@ -1484,6 +1505,10 @@ int main(void) {
        left the per-component percent-encode sets — the thing that decides whether an @S PoC reproduces in a
        browser at all — with no test of any kind. */
     location_install(ctx, g, "https://x.test/p");
+    /* §7.4's `window.open`, whose child document id can only come from the host — so the call SUSPENDS and the
+       flow resumes holding a WindowProxy for a document in another instance. */
+    window_proxy_init(ctx);
+    navigable_install(ctx, g, "https://x.test");
     /* THE SYNCHRONOUS HOST READ. A DECLARED step member, because suspending and answering at the same call
        site is the only thing a plain C body cannot do. */
     {
@@ -1743,6 +1768,8 @@ int main(void) {
     int hostreq_tt = (strstr(js, "\"/api/hostreq\"") && strstr(js, "hr0hr1hr2"));
     /* AND ACROSS A FORK: each arm re-issued its own request under its own world, so BOTH answers exist. */
     int hostreqfork_tt = (strstr(js, "\"/api/hostreqfork\"") && strstr(js, "hrA") && strstr(js, "hrP"));
+    /* §7.4 returned a WindowProxy for a child document the host minted, after suspending for it. */
+    int navopen_tt = (strstr(js, "\"/api/navopen\"") && strstr(js, "proxy"));
 
     /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
        both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one
@@ -1937,6 +1964,7 @@ int main(void) {
         { "rerepfork", rerepfork_tt, 1 },  { "gcallfork", gcallfork_tt, 1 },
         { "gapplyfork", gapplyfork_tt, 1 },{ "grefapplyfork", grefapplyfork_tt, 1 },
         { "hostreq", hostreq_tt, 1 }, { "hostreq-fork", hostreqfork_tt, 1 },
+        { "nav-open", navopen_tt, 1 },
     };
     int h_ok = 1;
     printf("@H ");
@@ -2003,6 +2031,8 @@ int main(void) {
     response_free(ctx);
     request_free(ctx);   /* Response.prototype — one object, held for the runtime's life */
     idl_args_free(ctx);   /* the dictionary member atoms the declaration pool interned */
+    navigable_free(ctx);
+    window_proxy_free(ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */
     flow_registry_free(ctx);
     JS_RunGC(rt);   /* collect flow-local garbage from the runs before teardown */
     JS_FreeContext(ctx);
