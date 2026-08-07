@@ -39,6 +39,7 @@
 #include "core/events/event.h"
 #include "core/events/message_event.h"
 #include "core/events/message_port.h"
+#include "core/events/broadcast_channel.h"
 #include "core/frame/window_proxy.h"
 #include "core/frame/window_message.h"
 #include "core/structured_clone.h"
@@ -475,6 +476,10 @@ int main(int argc, char **argv)
     event_init(ctx);
     event_install(ctx, global);
     event_target_install(ctx, global);
+    /* WEB IDL §3.6's [Global] rule needs to know WHICH object is the window, and this runner never said. Every
+       unqualified `addEventListener(...)` in the corpus — which is how most of it registers — resolved to an
+       undefined receiver and registered on nothing. */
+    event_target_set_window(ctx, global);
     structured_clone_install(ctx, global);   /* HTML 2.7.3, and what 9.4 and §4.9.7 clone through */
     message_event_init(ctx);
     message_event_install(ctx, global);
@@ -482,6 +487,8 @@ int main(int argc, char **argv)
     window_message_install(ctx, global, "http://web-platform.test");
     message_port_init(ctx);
     message_port_install(ctx, global);   /* HTML 9.4.2/9.4.3 */
+    broadcast_channel_init(ctx, "http://web-platform.test");
+    broadcast_channel_install(ctx, global);   /* HTML 9.5 */
     abort_init(ctx);        /* the AbortSignal slot key §5.4's signal lives in */
     abort_install(ctx, global);
     writable_stream_init(ctx);
@@ -614,6 +621,7 @@ int main(int argc, char **argv)
     transform_stream_free(ctx);
     writable_stream_free(ctx);
     abort_free(ctx);
+    broadcast_channel_free(ctx);
     message_port_free(ctx);
     window_message_free(ctx);
     window_proxy_free(ctx);

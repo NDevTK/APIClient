@@ -59,6 +59,8 @@ const INTERFACES = {
   /* HTML 9.4.2/9.4.3. MessagePort is an EventTarget, so its inherited members are event_target.c's. */
   MessagePort:         ["core/events/message_port.c", "core/events/event_target.c"],
   MessageChannel:       "core/events/message_port.c",
+  /* HTML 9.5. A BroadcastChannel is an EventTarget, so its inherited members are event_target.c's. */
+  BroadcastChannel:    ["core/events/broadcast_channel.c", "core/events/event_target.c"],
   TextEncoder:          "core/encoding/encoding.c",
   TextDecoder:          "core/encoding/encoding.c",
   /* §7.5 and §7.6 include the GenericTransformStream mixin, so `readable` and `writable` are members the audit

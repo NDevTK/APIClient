@@ -115,6 +115,15 @@ void event_target_free(JSContext *ctx)
 static JSValueConst event_target_receiver(JSValueConst this_val)
 {
     if (JS_IsObject(this_val)) return this_val;
+    /* AND IT MUST BE THERE. Returning an unset g_window let every caller carry on with an UNDEFINED receiver:
+       the listener map was built on nothing, the registration silently vanished, and the listener never fired
+       — with no error anywhere. The WPT runner never called event_target_set_window, so in the gate that
+       measures this engine against the specifications, `addEventListener('message', f)` written the way most
+       real code writes it did nothing at all, and had done since the rule was added. A host that has not named
+       its window has not finished installing, and that is a should-never-happen rather than a quiet no-op. */
+    DCHECK(JS_IsObject(g_window),
+           "an EventTarget operation was called with an undefined `this` before the host named its window — "
+           "[Global] resolves to the relevant global object, and event_target_set_window is what supplies it");
     return g_window;
 }
 

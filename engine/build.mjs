@@ -179,6 +179,7 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     join(HOST, "browser", "core", "events", "event.c"),                         // Event: §2.2, the object a listener receives
     join(HOST, "browser", "core", "events", "message_event.c"),
     join(HOST, "browser", "core", "events", "message_port.c"),                  // MessagePort/MessageChannel: HTML 9.4.2/9.4.3                 // MessageEvent: HTML 9.4.1, what every messaging path dispatches
+    join(HOST, "browser", "core", "events", "broadcast_channel.c"),             // BroadcastChannel: HTML 9.5
     join(HOST, "browser", "core", "events", "event_target.c"),                  // EventTarget: listeners + the load event
     // THE ENTRY. `abi` builds the production qjs_* surface the extension bridge drives; the default builds
     // test_forced.c's main() as the node smoke test. They are alternatives, never both: test_forced.c owns
