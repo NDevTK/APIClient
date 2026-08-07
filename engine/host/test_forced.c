@@ -159,7 +159,12 @@ static JSValue js_last_child_mark(JSContext *ctx, JSValueConst this_val, int arg
    The reply is the same JSON every time, because what this fixture tests is the PATH (request parked, reply
    delivered, continuation resumed), not what any particular endpoint returns. Real replies are the live
    harness's business. */
-static int fixture_owed(void) { return engine_pending_urls()[0] != 0; }
+static int hostreq_answer_all(JSContext *ctx);   /* the SYNCHRONOUS half — see the machine below */
+
+/* THE HOST OWES SOMETHING while a fetch reply is outstanding OR a flow is blocked on a synchronous request.
+   Both are "the trusted zone has work to do"; only the second stops a flow dead, which is why the engine keeps
+   them on one register and the fixture answers both here. */
+static int fixture_owed(void) { return engine_pending_urls()[0] != 0 || engine_host_requests()[0] != 0; }
 
 static int fixture_provide(JSContext *ctx) {
     const char *urls = engine_pending_urls();
@@ -177,7 +182,7 @@ static int fixture_provide(JSContext *ctx) {
         urls = nl + 1;
     }
     JS_FreeValue(ctx, body);
-    return filled;
+    return filled + hostreq_answer_all(ctx);
 }
 
 /* THERE IS NO `fetch` STUB HERE ANY MORE. This file had one, and it was a SECOND implementation of the Fetch
@@ -1142,6 +1147,15 @@ static const char *HTML =
     "function* gcf(){ if (cfg.admin) { yield 'gcA'; } else { yield 'gcP'; } } var gci=gcf(); fetch('/api/gcallfork?v=' + gci.next.call(gci).value);"   /* generator .next() driven via .call BYPASS: gci.next.call(gci) reshapes at do_forward_call to the [this=gen, f=next] shape and is now routed onto do_generator_tramp (not the js_generator_next drive-to-completion). The body branches -> both gcA and gcP, never a DFAIL */
     "function* gapf(){ if (cfg.admin) { yield 'gapA'; } else { yield 'gapP'; } } var gapi=gapf(); fetch('/api/gapplyfork?v=' + gapi.next.apply(gapi, []).value);"   /* generator .next() via Function.prototype.apply BYPASS: reshaped at OP_call_method to [this=gen, next, arg0] and routed onto do_generator_tramp -> both gapA and gapP, never drive-to-completion */
     "function* graf(){ if (cfg.admin) { yield 'graA'; } else { yield 'graP'; } } var grai=graf(); fetch('/api/grefapplyfork?v=' + Reflect.apply(grai.next, grai, []).value);"   /* generator .next() via Reflect.apply BYPASS: [Reflect,apply,target,this,argsList] reshaped to [this=gen, next, arg0] and routed onto do_generator_tramp -> both graA and graP */
+    /* A SYNCHRONOUS READ THE HOST MUST ANSWER — the shape `iframe.contentWindow.document.body` has. The value
+       arrives at the CALL SITE, on the next line, with no promise anywhere: between the two the flow suspended,
+       the scheduler ran other flows, the host answered, and this flow resumed. Inside a LOOP so it happens
+       repeatedly, and the concatenation is what proves each answer reached the call that asked for it rather
+       than an earlier or later one. */
+    "var _hr=''; for (var _i=0;_i<3;_i++) { _hr += hostRead('hr'+_i); } fetch('/api/hostreq?v=' + _hr);"
+    /* AND ONE ON EACH SIDE OF A FORK. A blocked flow that forks must RE-ISSUE its request under the sibling's
+       own world — sharing the id would deliver one answer into two call sites in two contradictory worlds. */
+    "fetch('/api/hostreqfork?v=' + hostRead(cfg.admin ? 'hrA' : 'hrP'));"
     "</script>"
     "</body></html>";
 
@@ -1176,6 +1190,15 @@ static const char *HTML_MIN =
     "function* gcf(){ if (cfg.admin) { yield 'gcA'; } else { yield 'gcP'; } } var gci=gcf(); fetch('/api/gcallfork?v=' + gci.next.call(gci).value);"   /* generator .next() driven via .call BYPASS: gci.next.call(gci) reshapes at do_forward_call to the [this=gen, f=next] shape and is now routed onto do_generator_tramp (not the js_generator_next drive-to-completion). The body branches -> both gcA and gcP, never a DFAIL */
     "function* gapf(){ if (cfg.admin) { yield 'gapA'; } else { yield 'gapP'; } } var gapi=gapf(); fetch('/api/gapplyfork?v=' + gapi.next.apply(gapi, []).value);"   /* generator .next() via Function.prototype.apply BYPASS: reshaped at OP_call_method to [this=gen, next, arg0] and routed onto do_generator_tramp -> both gapA and gapP, never drive-to-completion */
     "function* graf(){ if (cfg.admin) { yield 'graA'; } else { yield 'graP'; } } var grai=graf(); fetch('/api/grefapplyfork?v=' + Reflect.apply(grai.next, grai, []).value);"   /* generator .next() via Reflect.apply BYPASS: [Reflect,apply,target,this,argsList] reshaped to [this=gen, next, arg0] and routed onto do_generator_tramp -> both graA and graP */
+    /* A SYNCHRONOUS READ THE HOST MUST ANSWER — the shape `iframe.contentWindow.document.body` has. The value
+       arrives at the CALL SITE, on the next line, with no promise anywhere: between the two the flow suspended,
+       the scheduler ran other flows, the host answered, and this flow resumed. Inside a LOOP so it happens
+       repeatedly, and the concatenation is what proves each answer reached the call that asked for it rather
+       than an earlier or later one. */
+    "var _hr=''; for (var _i=0;_i<3;_i++) { _hr += hostRead('hr'+_i); } fetch('/api/hostreq?v=' + _hr);"
+    /* AND ONE ON EACH SIDE OF A FORK. A blocked flow that forks must RE-ISSUE its request under the sibling's
+       own world — sharing the id would deliver one answer into two call sites in two contradictory worlds. */
+    "fetch('/api/hostreqfork?v=' + hostRead(cfg.admin ? 'hrA' : 'hrP'));"
     "</script>"
     "</body></html>";
 
@@ -1364,6 +1387,74 @@ static void world_registry_selftest(JSContext *ctx)
     CHECK(!world_has_segment(root) && !world_has_segment(parent), "every segment must be released");
 }
 
+
+/* ===== A FLOW THAT BLOCKS ON THE HOST, which is the shape a cross-document read has =====
+ *
+ * `iframe.contentWindow.document.body` must answer at its own call site, and one instance is one document, so
+ * the answer is in another instance and not available in this turn. The flow SUSPENDS there — the same
+ * snapshot path as an await or a loop back-edge — siblings run, and it resumes with the value.
+ *
+ * The two things that make that work and are what this exercises: the preempt hook YIELDS a blocked flow
+ * regardless of how it ranks (the answer cannot arrive while it holds the thread), and a mid-frame yield while
+ * blocked reports the flow HOST-OWED rather than runnable (otherwise the scheduler hands it the thread again
+ * immediately and it spins). Without either, this member never returns.
+ *
+ * It is a STEP MACHINE because that is the only C shape in this engine that can suspend and be re-entered at
+ * the same call site — a plain C body would have to answer or throw, and answering is what it cannot do. */
+typedef struct { uint32_t req; } HostReqState;
+
+static void hostreq_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
+
+static int hostreq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                        JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    HostReqState *s = st;
+    JSValueConst answer;
+
+    (void)hdr; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    if (s->req == 0) {
+        const char *op = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
+        if (!op) return JS_STEP_ABRUPT;
+        s->req = engine_host_request(ctx, op);
+        JS_FreeCString(ctx, op);
+        return JS_STEP_YIELD;   /* park; the blocked yield deschedules the flow until the host answers */
+    }
+    /* RE-ENTERED. Until the answer lands the machine yields again — and because the flow is blocked, that
+       yield is a suspension rather than a spin. */
+    if (!engine_host_answered(s->req, &answer)) return JS_STEP_YIELD;
+    *presult = engine_host_take(ctx, s->req);
+    s->req = 0;
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl HOSTREQ_DECL = { hostreq_step, sizeof(HostReqState), hostreq_visit, NULL };
+
+/* THE HOST'S SIDE, driven from the fixture's step loop: answer everything outstanding. A real host routes each
+   record to the instance holding that document; here the answer is the request text turned back, which is
+   enough to prove the value reaches the call site that asked. */
+static int hostreq_answer_all(JSContext *ctx)
+{
+    const char *reqs = engine_host_requests();
+    const char *p = reqs;
+    int n = 0;
+
+    while (*p) {
+        const char *tab = strchr(p, '\t');
+        const char *end = strchr(p, '\n');
+        uint32_t id;
+        if (!tab || !end) break;
+        id = (uint32_t)strtoul(p, NULL, 10);
+        {
+            JSValue v = JS_NewStringLen(ctx, tab + 1, (size_t)(end - tab - 1));
+            n += engine_host_answer(ctx, id, v);
+            JS_FreeValue(ctx, v);
+        }
+        p = end + 1;
+    }
+    return n;
+}
+
 int main(void) {
     JSRuntime *rt;
     policy_container_selftest();
@@ -1393,6 +1484,13 @@ int main(void) {
        left the per-component percent-encode sets — the thing that decides whether an @S PoC reproduces in a
        browser at all — with no test of any kind. */
     location_install(ctx, g, "https://x.test/p");
+    /* THE SYNCHRONOUS HOST READ. A DECLARED step member, because suspending and answering at the same call
+       site is the only thing a plain C body cannot do. */
+    {
+        static const IdlArgType HR_ARGS[1] = { IDL_DOMSTRING };
+        idl_install_method(ctx, g, "hostRead", 1,
+                           idl_method_id_step(ctx, HR_ARGS, 1, NULL, 0, &HOSTREQ_DECL, 0));
+    }
     JS_SetPropertyStr(ctx, g, "setBodyAttr", JS_NewCFunction(ctx, js_set_body_attr, "setBodyAttr", 2));   /* DOM attr write (per-flow) */
     JS_SetPropertyStr(ctx, g, "getBodyAttr", JS_NewCFunction(ctx, js_get_body_attr, "getBodyAttr", 1));   /* DOM attr read (per-flow) */
     {
@@ -1640,6 +1738,11 @@ int main(void) {
        of each ⇒ the apply-driven generator body snapshot-forks per arm, never drives to completion. */
     int gapplyfork_tt = (strstr(js, "\"/api/gapplyfork\"") && strstr(js, "gapA") && strstr(js, "gapP"));
     int grefapplyfork_tt = (strstr(js, "\"/api/grefapplyfork\"") && strstr(js, "graA") && strstr(js, "graP"));
+    /* THE SYNCHRONOUS HOST READ resumed at its own call site, three times in a loop, each answer landing in
+       the call that asked for it — hr0hr1hr2 in order, never interleaved or reused. */
+    int hostreq_tt = (strstr(js, "\"/api/hostreq\"") && strstr(js, "hr0hr1hr2"));
+    /* AND ACROSS A FORK: each arm re-issued its own request under its own world, so BOTH answers exist. */
+    int hostreqfork_tt = (strstr(js, "\"/api/hostreqfork\"") && strstr(js, "hrA") && strstr(js, "hrP"));
 
     /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
        both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one
@@ -1833,6 +1936,7 @@ int main(void) {
         { "paf2fork", paf2fork_tt, 1 },    { "redfork", redfork_tt, 1 },
         { "rerepfork", rerepfork_tt, 1 },  { "gcallfork", gcallfork_tt, 1 },
         { "gapplyfork", gapplyfork_tt, 1 },{ "grefapplyfork", grefapplyfork_tt, 1 },
+        { "hostreq", hostreq_tt, 1 }, { "hostreq-fork", hostreqfork_tt, 1 },
     };
     int h_ok = 1;
     printf("@H ");

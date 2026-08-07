@@ -152,6 +152,136 @@ static char **g_sess_srcs;
    a candidate re-fire re-runs the same fetches the exploring flow made — and engine_provide fills every entry
    that names it, so listing it twice makes the host provide twice and the second call finds nothing left. The
    list is a set of requests, not a list of waiters. */
+/* A SYNCHRONOUS REQUEST ONLY THE HOST CAN ANSWER, and the mechanism a cross-document read rides.
+ *
+ * WHY IT IS NOT A FETCH. A fetch hands the page a promise and the flow keeps running; this one BLOCKS, because
+ * the value has to appear at the call site that asked for it. `iframe.contentWindow.document.body` must answer
+ * on the line after the append, and one instance is one document, so the answer is in another instance and not
+ * available in this turn. The flow therefore SUSPENDS exactly as it suspends at an await or a loop back-edge,
+ * siblings run, and it resumes with the value.
+ *
+ * WHY THE RENDEZVOUS IS AN ID AND NOT THE REQUEST TEXT. A fetched body is shared by every flow waiting on that
+ * URL, which is right for a resource. An answer here is computed under the ASKING FLOW'S WORLD — two arms of a
+ * fork that navigated a frame differently must not resolve to one Window — so answers are never shared, and
+ * two identical questions are two requests. */
+static uint32_t g_next_req = 1;
+static void flow_pending_release(JSContext *ctx, FlowPending *p);
+
+uint32_t engine_host_request(JSContext *ctx, const char *op) {
+    Flow *f = flow_running();
+    uint32_t id;
+
+    DCHECK(f != NULL, "a synchronous host request was issued outside a flow — there would be nothing to "
+                      "suspend and nothing to resume with the answer");
+    DCHECK(op != NULL && *op, "a synchronous host request carried no text for the host to route on");
+    (void)ctx;
+    if (f->npend >= f->pendcap) {
+        f->pendcap = f->pendcap ? f->pendcap * 2 : 8;
+        f->pending = realloc(f->pending, (size_t)f->pendcap * sizeof(FlowPending));
+        CHECK(f->pending, "engine: OOM growing the pending register");
+    }
+    memset(&f->pending[f->npend], 0, sizeof f->pending[f->npend]);
+    f->pending[f->npend].resolve = JS_UNDEFINED;
+    f->pending[f->npend].value = JS_UNDEFINED;
+    f->pending[f->npend].kind = FLOW_PENDING_HOSTREQ;
+    f->pending[f->npend].script_i = -1;
+    f->pending[f->npend].op = strdup(op);
+    CHECK(f->pending[f->npend].op, "engine: OOM recording a host request");
+    id = g_next_req++;
+    /* A REUSED ID ANSWERS THE WRONG QUESTION. The answer is routed by this number alone, so a wrapped counter
+       delivers one flow's cross-document read into another flow's call site — in another world. */
+    CHECK(g_next_req != 0, "the host-request id counter wrapped — an answer would be delivered to the wrong "
+                           "call site, in a world that never asked the question");
+    f->pending[f->npend].req = id;
+    f->npend++;
+    return id;
+}
+
+/* HAS THE HOST ANSWERED `req`? The asking machine's re-entry read. The value is BORROWED — it stays on the
+   register until the machine takes it, so a re-entry that yields again can read it once more. */
+int engine_host_answered(uint32_t req, JSValueConst *out) {
+    Flow *f = flow_running();
+    DCHECK(req != 0, "a host request with no id was asked about");
+    DCHECK(f != NULL, "a host request was asked about outside a flow");
+    for (int i = 0; i < f->npend; i++)
+        if (f->pending[i].req == req) {
+            if (!f->pending[i].have_value) return 0;
+            if (out) *out = f->pending[i].value;
+            return 1;
+        }
+    /* NOT ON THIS FLOW'S REGISTER AT ALL. A machine asking about an id it never issued, or issued before a
+       fork that re-issued it under the sibling's own world — either way, answering "no" would park the flow
+       forever on a question nothing is going to answer. */
+    DFAIL("a machine asked about a host request that is not on its flow's register — it either never issued "
+          "the request or it inherited an id across a fork, which re-issues under the sibling's own world");
+    return 0;
+}
+
+/* THE MACHINE TAKES ITS ANSWER and the request leaves the register. Separate from the read above because a
+   machine may be re-entered several times before it is ready to consume, and taking it early would leave the
+   next re-entry with nothing. */
+JSValue engine_host_take(JSContext *ctx, uint32_t req) {
+    Flow *f = flow_running();
+    JSValue v;
+    DCHECK(f != NULL, "a host answer was taken outside a flow");
+    for (int i = 0; i < f->npend; i++)
+        if (f->pending[i].req == req) {
+            DCHECK(f->pending[i].have_value, "a host answer was taken before it arrived");
+            v = f->pending[i].value;
+            f->pending[i].value = JS_UNDEFINED;
+            flow_pending_release(ctx, &f->pending[i]);
+            f->pending[i] = f->pending[--f->npend];
+            return v;
+        }
+    DFAIL("a host answer was taken for a request that is not on this flow's register");
+    return JS_UNDEFINED;
+}
+
+/* Deliver the host's answer. Routed by id to ONE flow's ONE call site — never broadcast the way a fetched
+   body is, because the answer was computed under that flow's world. */
+int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value) {
+    DCHECK(req != 0, "the host answered a request with no id");
+    for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
+        for (int i = 0; i < f->npend; i++) {
+            FlowPending *p = &f->pending[i];
+            if (p->kind != FLOW_PENDING_HOSTREQ || p->req != req) continue;
+            DCHECK(!p->have_value, "the host answered one request twice — the second answer would overwrite a "
+                                   "value the asking machine may already have read");
+            JS_FreeValue(ctx, p->value);
+            p->value = JS_DupValue(ctx, value);
+            p->have_value = 1;
+            return 1;
+        }
+    }
+    return 0;   /* the asking flow is gone: an answer to a question nobody is waiting on is simply dropped */
+}
+
+/* WHAT THE HOST STILL OWES, as `id\top\n` records. Pulled each step like the pending URLs, and NOT deduped:
+   two identical questions from two flows are two questions, because each is answered under its own world. */
+const char *engine_host_requests(void) {
+    static char *join;
+    size_t need = 1;
+    Flow *f;
+
+    free(join); join = NULL;
+    for (int k = 0; (f = flow_at(k)) != NULL; k++)
+        for (int i = 0; i < f->npend; i++)
+            if (f->pending[i].kind == FLOW_PENDING_HOSTREQ && !f->pending[i].have_value)
+                need += strlen(f->pending[i].op) + 24;
+    join = malloc(need);
+    CHECK(join != NULL, "engine: OOM joining the outstanding host requests");
+    join[0] = 0;
+    for (int k = 0; (f = flow_at(k)) != NULL; k++)
+        for (int i = 0; i < f->npend; i++) {
+            FlowPending *p = &f->pending[i];
+            char head[24];
+            if (p->kind != FLOW_PENDING_HOSTREQ || p->have_value) continue;
+            snprintf(head, sizeof head, "%u\t", p->req);
+            strcat(join, head); strcat(join, p->op); strcat(join, "\n");
+        }
+    return join;
+}
+
 const char *engine_pending_urls(void) {
     static char *join;
     size_t need = 1;
@@ -218,6 +348,7 @@ static void flow_pending_release(JSContext *ctx, FlowPending *p) {
     JS_FreeValue(ctx, p->resolve);
     JS_FreeValue(ctx, p->value);
     free(p->url);
+    free(p->op);
     free(p->method);
     free(p->body);
     for (hi = 0; hi < p->nhdr; hi++) { free(p->hdrs[hi].name); free(p->hdrs[hi].value); }
@@ -368,6 +499,19 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
             dp->value = JS_DupValue(ctx, sp->value);
             dp->url = sp->url ? strdup(sp->url) : NULL;
             CHECK(!sp->url || dp->url, "engine: OOM inheriting a pending URL at a fork");
+            dp->op = sp->op ? strdup(sp->op) : NULL;
+            CHECK(!sp->op || dp->op, "engine: OOM inheriting a host request at a fork");
+            /* AN UNANSWERED SYNCHRONOUS REQUEST IS RE-ISSUED, NEVER INHERITED. Its answer is computed under the
+               ASKING FLOW'S WORLD, and the sibling's world is not the parent's from this instant on — two arms
+               of a fork that navigated a frame differently must not resolve to one Window. Sharing the id would
+               deliver one answer into two call sites in two contradictory worlds, which is the same fabrication
+               as merging two senders' messages into one timeline.
+               An ALREADY-ANSWERED one is copied as it stands: the answer was computed before the fork existed,
+               so both arms genuinely observed it. */
+            if (dp->kind == FLOW_PENDING_HOSTREQ && !dp->have_value) {
+                dp->req = g_next_req++;
+                CHECK(g_next_req != 0, "the host-request id counter wrapped while forking a blocked flow");
+            }
             dp->method = sp->method ? strdup(sp->method) : NULL;
             CHECK(!sp->method || dp->method, "engine: OOM inheriting a pending method at a fork");
             dp->body = NULL;
@@ -468,6 +612,10 @@ static int preempt_hook(int kind) {
         Flow *rival = cur ? flow_best_other(cur) : NULL;
         g_outranked = (rival && cur && flow_weight(rival) > flow_weight(cur));
     }
+    /* (0) BLOCKED BEATS BOTH RANKINGS. A flow holding an unanswered synchronous host request cannot make
+       progress no matter how it ranks, and the answer cannot arrive while it holds the thread — the host is
+       only asked between steps. Deciding this by weight would re-enter it immediately and spin. */
+    if (cur && flow_blocked(cur)) return 1;
     if (g_outranked) return 1;                        /* value yield */
     return (++g_qtick % FLOW_QUANTUM) == 0;           /* (2) quantum floor */
 }
@@ -630,7 +778,14 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                 JS_FreeValue(ctx, e);
             }
             JS_FreeValue(ctx, cv);
-            if (r == 1) return 0;   /* quantum yield — more work, resume later */
+            if (r == 1) {
+                /* A MID-FRAME YIELD, and the one case where it is not "more work". A flow that suspended
+                   inside a machine holding an unanswered synchronous host request has no work at all until the
+                   host answers, and reporting it runnable would have the scheduler hand it the thread again
+                   immediately — the spin the blocked yield above exists to prevent. OWED is the register the
+                   scheduler already has for exactly this: waiting, not finished. */
+                return flow_blocked(f) ? FLOW_STEP_OWED : 0;
+            }
             if (r == JS_FLOW_DETACHED) {
                 /* the base registered itself as a continuation elsewhere (a module body's top-level await): it
                    is no longer this flow's to free, and the awaited promise will drive it from here. */

@@ -88,6 +88,16 @@ Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n, Wor
     return f;
 }
 
+/* BLOCKED = holding an unanswered synchronous host request. Scanned rather than counted because a counter is
+   a second representation of the same fact, and the two drift at exactly the sites (fork, drain, release) that
+   are already the hardest to keep in step. The register is short — it is one flow's outstanding requests. */
+int flow_blocked(const Flow *f) {
+    for (int i = 0; i < f->npend; i++)
+        if (f->pending[i].kind == FLOW_PENDING_HOSTREQ && !f->pending[i].have_value)
+            return 1;
+    return 0;
+}
+
 /* THE SERVICE QUANTUM — why the rank moves in steps rather than continuously.
  *
  * Aging was applied per SCHEDULER STEP, so the running flow's weight fell by a hair after every single step. Two

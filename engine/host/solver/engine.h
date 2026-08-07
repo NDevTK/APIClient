@@ -99,6 +99,21 @@ void engine_set_yield_floor(double w);
    can run the better document. It is not a slice and not a cap: nothing is dropped, reordered or forgotten —
    the frontier is exactly where it was and the next step resumes it. -inf (the default) means "run on". */
 void engine_set_yield_floor(double floor);
+/* A SYNCHRONOUS REQUEST ONLY THE HOST CAN ANSWER — see engine.c. Issue it, return to the scheduler (a step
+   machine returns JS_STEP_YIELD), and the flow SUSPENDS until the answer lands; siblings run meanwhile. The
+   rendezvous is the returned id, never the request text: the answer is computed under the ASKING FLOW'S world,
+   so two identical questions from two flows are two questions with two answers. */
+uint32_t engine_host_request(JSContext *ctx, const char *op);
+/* Has it been answered? BORROWED, so a machine re-entered before it is ready to consume may read it again. */
+int      engine_host_answered(uint32_t req, JSValueConst *out);
+/* Take the answer; the request leaves the register. OWNED by the caller. */
+JSValue  engine_host_take(JSContext *ctx, uint32_t req);
+/* The host delivers. Routed by id to ONE call site — never broadcast the way a fetched body is. Returns 0 when
+   the asking flow is gone, which is not an error: nobody is waiting. */
+int      engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value);
+/* What the host still owes, as `id<TAB>op` lines. Pulled each step, and deliberately NOT deduped. */
+const char *engine_host_requests(void);
+
 const char *engine_pending_urls(void);                                  /* newline-joined, or "" */
 int engine_provide(JSContext *ctx, const char *url, JSValueConst value); /* entries filled */
 

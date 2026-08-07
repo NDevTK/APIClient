@@ -37,6 +37,14 @@ typedef struct { JSJobFunc *fn; int argc; JSValue *argv; int task; } FlowJob;
 #define FLOW_PENDING_RESOLVE 0   /* fetch(): call `resolve` with the reply */
 #define FLOW_PENDING_SCRIPT  1   /* injected <script src>: queue the reply as this flow's next program */
 #define FLOW_PENDING_DOCSCRIPT 2 /* the document's OWN <script src>: the reply fills script slot `script_i` */
+/* A SYNCHRONOUS REQUEST ONLY THE HOST CAN ANSWER, and the one kind the flow cannot proceed past. A
+   cross-document read (`iframe.contentWindow.document.body`) must answer at its own call site, and across
+   instances the answer is not available in this turn — so the flow SUSPENDS there exactly as it suspends at an
+   await or a loop back-edge, siblings run, and it resumes with the value. The other kinds are ASYNC: a fetch
+   hands the page a promise and the flow keeps running. This one blocks, which is why flow_blocked exists and
+   why the rendezvous is a REQUEST ID rather than a URL — two flows asking the same question in different
+   worlds must get different answers, so answers are never shared the way a fetched body is. */
+#define FLOW_PENDING_HOSTREQ 3
 /* A REQUEST THIS FLOW IS OWED AN ANSWER TO. `method`, `hdrs`/`nhdr` and `body` are the rest of what the page
    asked — not decoration: SECURITY.md puts all network behind the trusted zone's safeFetch, and safeFetch is
    what decides SOP, CORS, method and credentials. It cannot decide about a method it was never told.
@@ -48,6 +56,10 @@ typedef struct { JSJobFunc *fn; int argc; JSValue *argv; int task; } FlowJob;
 typedef struct { char *name, *value; } FlowHeader;
 typedef struct {
     JSValue resolve; JSValue value; char *url; int have_value; int kind; int script_i;
+    /* FLOW_PENDING_HOSTREQ only: the rendezvous id, and the request text the host routes on. `req` is 0 for
+       every other kind, which is what makes "is this flow blocked?" a scan for a non-zero id with no value. */
+    uint32_t    req;
+    char       *op;
     char       *method;
     FlowHeader *hdrs;
     int         nhdr;
@@ -147,6 +159,12 @@ Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n, Wor
 /* How many flows this document ever created — the other half of the switch count. A run whose cost jumped needs
    to say WHICH grew: the frontier, or the work per flow. */
 long flow_created_count(void);
+
+/* IS THIS FLOW BLOCKED ON THE HOST? True while it holds an unanswered synchronous request. A blocked flow
+   cannot make progress, so the preempt hook always yields it and a mid-frame yield reports it host-owed rather
+   than runnable — otherwise the scheduler re-enters it immediately and it spins on an answer that cannot
+   arrive while it holds the thread. */
+int flow_blocked(const Flow *f);
 
 /* The WFQ priority of a flow (higher = run sooner). Pure function of the flow's reward/aging/visit state. */
 double flow_weight(const Flow *f);
