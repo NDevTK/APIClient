@@ -14,11 +14,13 @@
  * DELIVERY IS ORDERED BY CREATION, which is the standard's own rule and is why the registry is a list rather
  * than a set. A page that opens three channels and posts once observes them in the order it opened them.
  *
- * CROSS-DOCUMENT IS WHERE THIS BUS ACTUALLY LIVES, and it is not built. Two documents of the same origin share
- * a BroadcastChannel bus, and under one-WASM-instance-per-document those are two instances — so the real
- * destination list spans instances and the post has to travel, with the sender's origin stamped by the trusted
- * zone and the sending flow's world carried alongside, for the reason window_message.c gives. What is complete
- * is the same-instance bus, which is the whole of the algorithm minus the transport. */
+ * CROSS-DOCUMENT IS WHERE THIS BUS ACTUALLY LIVES, and half of it is built. An INSTANCE is an origin-keyed
+ * agent cluster, and §9.5's destination set is "same origin, same agent cluster" — which is exactly one
+ * instance — so every document of this origin in this browsing-context group is a realm HERE and the registry
+ * below already spans them: an opener and its same-origin popup share this bus with no transport at all. What
+ * remains is the SECOND browsing-context group (a `noopener` popup is its own), where the destination list
+ * spans instances and the post has to travel with the sender's origin stamped by the trusted zone and the
+ * sending flow's world carried alongside, for the reason window_message.c gives. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -32,8 +34,15 @@
 #include "core/events/broadcast_channel.h"
 #include "solver/cow.h"
 
+/* THE NAME IS AN ATOM, WHICH IS THE IDENTITY §9.5 MATCHES ON. It was a JSValue string compared by POINTER,
+   with a comment claiming the interning made that immune to a page handing back an equal-but-distinct string.
+   That claim is FALSE for a whole class of names: an atom whose characters are a decimal integer below 2^32 is
+   stored TAGGED, and JS_AtomToString ALLOCATES A FRESH STRING for a tagged-int atom every time it is called —
+   so two channels both named "42" held two different pointers and neither ever heard the other. A page that
+   names its bus after a counter or a random integer, which is what the corpus does, silently had no bus at
+   all. The atom IS the interning; comparing it is the comparison the comment described. */
 typedef struct {
-    JSValue name;      /* §9.5's channel name, as the string the page gave (owned) */
+    JSAtom  name;      /* §9.5's channel name (owned — released in the finalizer) */
     uint8_t closed;    /* §9.5's closed flag */
 } ChanData;
 
@@ -45,9 +54,9 @@ static JSRuntime *g_bc_rt;
 static int       g_ctor_stepid = -1;
 static char     *g_origin;
 
-#define BC_OFF(f) (uint16_t)offsetof(ChanData, f)
-static const uint16_t CHAN_VALS[] = { BC_OFF(name) };
-static const CowRecord CHAN_REC = { sizeof(ChanData), CHAN_VALS, 1 };
+/* NO OWNED JSValues: the name is an atom, which is not a GC object, and it is written once at construction and
+   never again — so the byte capture is the whole of what a flow can change here, which is `closed`. */
+static const CowRecord CHAN_REC = { sizeof(ChanData), NULL, 0 };
 
 /* The capture is in the accessor, as it is for every other component record here: `closed` is state a flow
    writes, and an arm that closes a channel must not close it for its sibling. */
@@ -62,15 +71,8 @@ static void chan_finalizer(JSRuntime *rt, JSValue val)
 {
     ChanData *c = JS_GetOpaque(val, g_chan_class);
     if (!c) return;
-    JS_FreeValueRT(rt, c->name);
+    JS_FreeAtomRT(rt, c->name);
     free(c);
-}
-
-static void chan_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
-{
-    ChanData *c = JS_GetOpaque(val, g_chan_class);
-    if (!c) return;
-    JS_MarkValue(rt, c->name, mark_func);
 }
 
 static int registry_len(JSContext *ctx, uint32_t *pn)
@@ -125,7 +127,7 @@ static JSValue js_chan_name(JSContext *ctx, JSValueConst this_val, int magic)
     ChanData *c = chan_of(this_val);
     (void)magic;
     if (!c) return JS_ThrowTypeError(ctx, "not a BroadcastChannel");
-    return JS_DupValue(ctx, c->name);
+    return JS_AtomToString(ctx, c->name);
 }
 
 static JSValue js_chan_post(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -156,7 +158,7 @@ static JSValue js_chan_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
         /* §9.5 step 4: same name, still open, and NOT the sender. The identity test is what makes a page that
            posts on its own channel not hear itself, which is the first thing every user of this relies on. */
         if (dc && !dc->closed && JS_VALUE_GET_PTR(d) != JS_VALUE_GET_PTR(this_val) &&
-            JS_VALUE_GET_PTR(dc->name) == JS_VALUE_GET_PTR(c->name)) {
+            dc->name == c->name) {
             JSValueConst args[2];
             args[0] = d;
             args[1] = buf;
@@ -203,31 +205,20 @@ static int js_bc_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     if (JS_IsException(obj)) return -1;
     c = calloc(1, sizeof *c);
     CHECK(c != NULL, "broadcast channel: OOM building a BroadcastChannel");
-    /* THE NAME IS INTERNED, so the destination match is a pointer comparison rather than a string one — which
-       is what makes the match immune to a page that hands back a different string object with the same
-       characters, and what makes the loop over the registry cheap. */
-    {
-        const char *s;
-        JSAtom a;
-        /* THE DECLARATION ALREADY CONVERTED IT, and this asserts that rather than trusting it. §9.5 declares
-           `constructor(DOMString name)`, so the args machine ran §3.2's ToString — as a FLOW, which is the
-           only place a page's `toString` may run — and what arrives here is a string however the page spelled
-           it. Calling JS_ToCString on an object instead runs that `toString` from a C activation, which the
-           interpreter refuses: it surfaced as JS_ToPrimitiveFree aborting a popup test, three frames below
-           this line, with nothing naming the contract that had been broken. The comment above this block
-           already claimed the conversion had happened; a claim in a comment is not a check. */
-        DCHECK(JS_IsString(argv[0]),
-               "BroadcastChannel's name reached its body unconverted — §9.5 declares it DOMString and the args "
-               "machine converts a declared member's arguments before the body runs, so an object here means "
-               "this member's declaration is not the one that was invoked");
-        s = JS_ToCString(ctx, argv[0]);
-        if (!s) { free(c); JS_FreeValue(ctx, obj); return -1; }
-        a = JS_NewAtom(ctx, s);
-        JS_FreeCString(ctx, s);
-        if (a == JS_ATOM_NULL) { free(c); JS_FreeValue(ctx, obj); return -1; }
-        c->name = JS_AtomToString(ctx, a);
-        JS_FreeAtom(ctx, a);
-    }
+    /* THE DECLARATION ALREADY CONVERTED IT, and this asserts that rather than trusting it. §9.5 declares
+       `constructor(DOMString name)`, so the args machine ran §3.2's ToString — as a FLOW, which is the only
+       place a page's `toString` may run — and what arrives here is a string however the page spelled it.
+       Reaching for the characters from a C activation instead runs that `toString` from C, which the
+       interpreter refuses: it surfaced as JS_ToPrimitiveFree aborting a popup test, three frames below this
+       line, with nothing naming the contract that had been broken. A claim in a comment is not a check. */
+    DCHECK(JS_IsString(argv[0]),
+           "BroadcastChannel's name reached its body unconverted — §9.5 declares it DOMString and the args "
+           "machine converts a declared member's arguments before the body runs, so an object here means "
+           "this member's declaration is not the one that was invoked");
+    /* INTERNED STRAIGHT FROM THE CONVERTED STRING — no C string in between, which is also what keeps a name
+       containing a NUL or a lone surrogate the name the page gave rather than a truncation of it. */
+    c->name = JS_ValueToAtom(ctx, argv[0]);
+    if (c->name == JS_ATOM_NULL) { free(c); JS_FreeValue(ctx, obj); return -1; }
     JS_SetOpaque(obj, c);
     /* CREATION ORDER is the delivery order §9.5 states, so the registry is appended to and never reordered. */
     if (!registry_len(ctx, &n)) { JS_FreeValue(ctx, obj); return -1; }
@@ -244,7 +235,8 @@ static const IdlStepDecl js_bc_ctor_decl = {
 
 void broadcast_channel_init(JSContext *ctx, const char *origin)
 {
-    JSClassDef d = { "BroadcastChannel", .finalizer = chan_finalizer, .gc_mark = chan_gc_mark };
+    /* NO gc_mark: the record holds no JSValue, so there is nothing for the collector to trace through it. */
+    JSClassDef d = { "BroadcastChannel", .finalizer = chan_finalizer };
     JSRuntime *rt = JS_GetRuntime(ctx);
     static const IdlArgType CTOR_ARGS[1] = { IDL_DOMSTRING };
 
