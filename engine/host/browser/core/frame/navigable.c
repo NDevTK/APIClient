@@ -466,38 +466,74 @@ JSValue navigable_open(JSContext *ctx, const char *url, const char *target, cons
     return navigable_create(ctx, url, target && *target && target[0] != '_' ? target : NULL, false, feat);
 }
 
-/* §7.4's `window.open`. NOT a step machine any more: the child's name is minted here, so there is nothing to
-   ask and nothing to suspend for — which is also what the spec says, since `open()` hands back a WindowProxy at
-   its own call site. */
-static JSValue js_win_open(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* §7.4's `window.open`, AS A STEP MACHINE — and it is one again for a reason that did not exist when the note
+ * here said the opposite. That note read "nothing to ask and nothing to suspend for", which was true while the
+ * only thing `open()` did was mint a name: §7.4 step 14 NAVIGATES, navigating FETCHES, and a fetch is a
+ * host-owed answer that suspends the asking flow. A plain C body cannot suspend, so it can only reach a
+ * SYNCHRONOUS fetch — which is why navigable.h's DCHECK says the shipped host, whose network is the trusted
+ * zone's, cannot navigate at all. The machine is what removes that sentence.
+ * IT DOES NOT PARK YET. The fetch below is still the host's synchronous one; what changed is the substrate
+ * under it, so making that fetch a host request is a change to child_document and to nothing here. */
+typedef struct {
+    uint8_t stage;
+    JSValue result;   /* the chosen navigable's proxy (owned) */
+    uint8_t noopener; /* §7.4's last step needs it after the navigable is made */
+} OpenState;
+
+static void open_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    const char *url = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
-    const char *target = argc > 1 ? JS_ToCString(ctx, argv[1]) : NULL;
+    v->val(ctx, &((OpenState *)st)->result);
+}
+
+static void open_release(JSContext *ctx, void *st)
+{
+    OpenState *s = st;
+    JS_FreeValue(ctx, s->result);
+    s->result = JS_UNDEFINED;
+}
+
+static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    OpenState *s = st;
+    const char *url, *target, *features;
+    WindowFeatures feat;
+
+    (void)hdr; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    DCHECK(s->stage == 0, "window.open resumed, and it has only one stage — the machine exists for the fetch "
+                          "inside step 14, which does not park yet");
+    s->result = JS_UNDEFINED;
+    url    = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
+    target = argc > 1 ? JS_ToCString(ctx, argv[1]) : NULL;
     /* §3.6.2: an OPTIONAL argument given `undefined` is ABSENT. `open(url, name, undefined)` is how the
        corpus spells "no features", and stringifying it produced the literal "undefined" — one token,
        a non-empty map, and therefore a popup where the spec has a tab. */
-    const char *features = (argc > 2 && !JS_IsUndefined(argv[2])) ? JS_ToCString(ctx, argv[2]) : NULL;
-    WindowFeatures feat;
-    JSValue r;
-
-    (void)this_val; (void)magic;
-    if (argc > 0 && !url) return JS_EXCEPTION;
-    /* §7.4's THIRD ARGUMENT, which was read and dropped. It decides whether the new navigable is a POPUP —
-       what §7.2.5.3's six BarProps answer from — and whether it gets an OPENER at all. */
+    features = (argc > 2 && !JS_IsUndefined(argv[2])) ? JS_ToCString(ctx, argv[2]) : NULL;
+    if (argc > 0 && !url) return JS_STEP_ABRUPT;
+    /* §7.4's THIRD ARGUMENT decides whether the new navigable is a POPUP — what §7.2.5.3's six BarProps answer
+       from — and whether it gets an OPENER at all. */
     feat = window_features_parse(features);
-    r = navigable_open(ctx, url, target, &feat);
+    s->noopener = feat.noopener ? 1 : 0;
+    s->result = navigable_open(ctx, url, target, &feat);
     if (url) JS_FreeCString(ctx, url);
     if (target) JS_FreeCString(ctx, target);
     if (features) JS_FreeCString(ctx, features);
     /* §7.4 step 4: a URL that does not parse is a SyntaxError, and it is the PAGE's mistake. */
-    if (JS_IsUndefined(r))
-        return JS_ThrowDOMException(ctx, "SyntaxError", "the URL to open is not a URL");
+    if (JS_IsUndefined(s->result)) {
+        JS_ThrowDOMException(ctx, "SyntaxError", "the URL to open is not a URL");
+        return JS_STEP_ABRUPT;
+    }
     /* §7.4's LAST STEP: with `noopener`, `open()` RETURNS NULL. The navigable is created and navigated all the
        same — a page that opens a window it cannot script still opened one — and what the caller loses is the
        handle, which is the whole point of the feature. */
-    if (feat.noopener) { JS_FreeValue(ctx, r); return JS_NULL; }
-    return r;
+    if (s->noopener) { JS_FreeValue(ctx, s->result); s->result = JS_NULL; }
+    *presult = s->result;
+    s->result = JS_UNDEFINED;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl OPEN_DECL = { js_win_open_step, sizeof(OpenState), open_visit, open_release };
 
 static int g_id_open;
 
@@ -508,7 +544,7 @@ void navigable_init(JSContext *ctx)
 {
     static const IdlArgType OPEN_ARGS[3] = { IDL_USVSTRING, IDL_DOMSTRING, IDL_DOMSTRING };
 
-    g_id_open = idl_method_id(ctx, OPEN_ARGS, 3, js_win_open, 0);
+    g_id_open = idl_method_id_step(ctx, OPEN_ARGS, 3, NULL, 0, &OPEN_DECL, 0);
     idl_optional_from(0);
     /* THE BROWSING CONTEXT GROUP'S LIST, built at INIT so it belongs to the pre-boot BASELINE: a flow that
        opens a window writes into it, and the COW delta captures that write for that flow alone. An array
