@@ -24,16 +24,20 @@
 #include "quickjs.h"
 #include "core/frame/bar_prop.h"
 #include "core/idl_args.h"
+#include "core/frame/window_proxy.h"
+#include "core/dom/document.h"
 
 static JSClassID g_bar_class;
 static JSRuntime *g_bar_rt;
-static JSValue g_bar_proto = JS_UNINITIALIZED;
 
-/* §7.2.5.3: `visible` is true for a navigable whose chrome was not suppressed at creation. This engine's
-   top-level navigable is not one that `open()` created with features, so every bar is visible. It is read off
-   the instance rather than returned as a constant, because a popup created with `open(url, name, "menubar=no")`
-   answers differently and that is where this reads from when navigable.c carries those features. */
-typedef struct { uint8_t visible; } BarProp;
+/* §7.2.5.3: `visible` is true for a navigable whose chrome was not suppressed at creation, and that is now
+   read from the NAVIGABLE — §7.4's features argument decides it, navigable.c records the decision, and this
+   answers the negation. It was the constant `true`, which made every popup indistinguishable from a tab: the
+   corpus tells the two apart by reading exactly these six, and `allBarProps.every(x => !x)` is how it does it.
+   THE RECORD IS THE BRAND, not the answer. Six independent objects are what §7.2.5.3 declares and what
+   `window.locationbar !== window.menubar` rests on, but what they answer is one fact about one navigable — so
+   the state lives where the fact does and the instance exists to be a distinct object with a class to check. */
+typedef struct { uint8_t unused; } BarProp;
 
 static void bar_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -42,14 +46,35 @@ static void bar_finalizer(JSRuntime *rt, JSValue val)
     free(b);
 }
 
+/* §7.2.5.3's `visible`, answered for THE REALM THE GETTER BELONGS TO.
+ *
+ * `ctx` HERE IS THE FUNCTION'S OWN REALM, NOT THE CALLER'S — js_call_c_function does `ctx = p->u.cfunc.realm`
+ * before invoking a C function, which is §3.7's rule that every realm gets its own intrinsics doing its job.
+ * So a getter installed ONCE, on a prototype built once at agent init, answers every realm's question with the
+ * ROOT realm's `ctx` forever. That is not a subtlety to remember at this call site: it is what makes a shared
+ * prototype WRONG rather than merely unfaithful, and it cost a whole feature — every popup read all six of
+ * these as `true` and reported itself a tab, because the root navigable is not a popup and the root is whose
+ * ctx arrived. The 51 subtests of window-open-popup-behavior.html split exactly along that line: every
+ * "expect tab" passed and every "expect popup" failed.
+ *
+ * SO THE PROTOTYPE IS PER REALM, in quickjs's own per-context class-proto slot — the same place window.c keeps
+ * Window.prototype and for the same reason. `frames[0].BarProp === BarProp` is false in a browser, and now
+ * here; the six instances a realm installs chain to ITS prototype, so ITS getter carries ITS ctx. */
 static JSValue js_bar_visible(JSContext *ctx, JSValueConst this_val, int magic)
 {
     BarProp *b = JS_GetOpaque(this_val, g_bar_class);
     (void)magic;
     DCHECK(b != NULL, "BarProp.visible was read off something that is not a BarProp");
-    return JS_NewBool(ctx, b->visible);
+    /* IT MUST BE THIS REALM'S NAVIGABLE. §7.2.5.1 gives a navigable ONE WindowProxy and a realm IS one
+       document, so a realm holding a proxy over another document would answer all six for the wrong window —
+       indistinguishable from the right answer whenever the two happen to agree, which is most of the time. */
+    DCHECK(window_proxy_doc(document_window_proxy(ctx)) == document_doc(ctx),
+           "a realm's WindowProxy names a different document than the realm — §7.2.5.1 gives a navigable one "
+           "proxy and document_install is handed the navigable's, so these two cannot disagree");
+    return JS_NewBool(ctx, !window_proxy_is_popup(document_window_proxy(ctx)));
 }
 
+/* THE CLASS IS THE AGENT'S — a class id is a runtime-wide registration and there is one BarProp interface. */
 void bar_prop_init(JSContext *ctx)
 {
     JSClassDef d = { "BarProp", .finalizer = bar_finalizer };
@@ -59,14 +84,25 @@ void bar_prop_init(JSContext *ctx)
     g_bar_rt = rt;
     JS_NewClassID(rt, &g_bar_class);
     JS_NewClass(rt, g_bar_class, &d);
-    g_bar_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_bar_proto), "the BarProp prototype could not be allocated");
-    idl_interface_tag(ctx, g_bar_proto, "BarProp");
-    idl_install_accessor(ctx, g_bar_proto, "visible", js_bar_visible, 0, -1);
+}
+
+/* THE PROTOTYPE IS THE REALM'S — §3.7 gives every realm its own, and here that is load-bearing rather than
+   pedantic: the getter it carries runs in the realm that BUILT it (see js_bar_visible). Kept in quickjs's
+   per-context class-proto slot, which is where a per-realm prototype belongs and what makes the instances a
+   realm mints chain to the right one with no table here to keep. */
+static JSValue bar_prop_build_proto(JSContext *ctx)
+{
+    JSValue proto = JS_NewObject(ctx);
+
+    CHECK(!JS_IsException(proto), "the BarProp prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "BarProp");
+    idl_install_accessor(ctx, proto, "visible", js_bar_visible, 0, -1);
+    JS_SetClassProto(ctx, g_bar_class, JS_DupValue(ctx, proto));   /* the realm owns it from here */
+    return proto;
 }
 
 /* One bar. Six of these hang off the Window, each its own object. */
-static JSValue bar_prop_new(JSContext *ctx, bool visible)
+static JSValue bar_prop_new(JSContext *ctx)
 {
     JSValue obj;
     BarProp *b;
@@ -74,10 +110,9 @@ static JSValue bar_prop_new(JSContext *ctx, bool visible)
     DCHECK(g_bar_rt != NULL, "a BarProp was minted before bar_prop_init ran");
     obj = JS_NewObjectClass(ctx, g_bar_class);
     if (JS_IsException(obj)) return obj;
-    JS_SetPrototype(ctx, obj, g_bar_proto);
+    /* JS_NewObjectClass already gives it this REALM's class prototype, which bar_prop_install built. */
     b = calloc(1, sizeof *b);
     CHECK(b != NULL, "BarProp: OOM");
-    b->visible = visible ? 1 : 0;
     JS_SetOpaque(obj, b);
     return obj;
 }
@@ -90,9 +125,11 @@ void bar_prop_install(JSContext *ctx, JSValueConst global)
         "locationbar", "menubar", "personalbar", "scrollbars", "statusbar", "toolbar"
     };
     size_t i;
+    JSValue proto = bar_prop_build_proto(ctx);
 
+    JS_FreeValue(ctx, proto);   /* the realm's class-proto slot holds it */
     for (i = 0; i < sizeof NAMES / sizeof NAMES[0]; i++) {
-        JSValue bar = bar_prop_new(ctx, true);
+        JSValue bar = bar_prop_new(ctx);
         CHECK(!JS_IsException(bar), "a BarProp could not be allocated");
         JS_SetPropertyStr(ctx, (JSValue)global, NAMES[i], bar);
     }
@@ -101,7 +138,7 @@ void bar_prop_install(JSContext *ctx, JSValueConst global)
 void bar_prop_free(JSContext *ctx)
 {
     if (!g_bar_rt) return;
-    JS_FreeValue(ctx, g_bar_proto);
-    g_bar_proto = JS_UNINITIALIZED;
+    /* NOTHING TO RELEASE HERE ANY MORE: each realm's prototype is held by that realm's class-proto slot and
+       goes with the realm. */
     g_bar_rt = NULL;
 }

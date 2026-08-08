@@ -9,6 +9,7 @@
 #include "core/frame/navigable.h"
 #include "core/frame/window_proxy.h"
 #include "core/frame/policy_container.h"
+#include "core/frame/window_features.h"
 #include "core/dom/document.h"
 #include "core/url/url.h"
 #include "core/idl_args.h"
@@ -146,7 +147,8 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
     return cctx;
 }
 
-JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child)
+JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child,
+                         const WindowFeatures *feat)
 {
     const char *csp = policy_container_csp(document_policy(ctx));
     char *addr = NULL, *origin = NULL;
@@ -177,10 +179,20 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
         /* §7.2.5: `parent` and `opener` ARE WindowProxies. They held the creator's GLOBAL, which made the
            `top` walk leave the proxies at the top and read a scriptable property to continue — and a popup's
            opener a Window rather than the navigable it belongs to. The creator's own proxy is what both are. */
-        proxy = window_proxy_new(ctx, child, addr, origin, name,
+        /* §7.4: `noopener` means the new navigable HAS NO OPENER — not that the opener is hidden, that there
+           is not one — so the link is never made rather than made and filtered. A CHILD navigable (§4.8.5's
+           iframe) has no opener in the first place and no features to ask. */
+        proxy = window_proxy_new(ctx, child, addr, origin, name, feat && feat->is_popup,
                                  is_child ? document_window_proxy(ctx) : JS_UNDEFINED,
-                                 is_child ? JS_NULL : document_window_proxy(ctx));
+                                 (is_child || (feat && feat->noopener)) ? JS_NULL
+                                                                        : document_window_proxy(ctx));
         CHECK(!JS_IsException(proxy), "a navigable's WindowProxy could not be allocated");
+        /* §7.4's DECISION IS A FACT ABOUT THE NAVIGABLE, so it is read back where it was written. A popup that
+           does not know it is one answers `true` from all six of §7.2.5.3's BarProps, which is precisely how
+           the corpus tells a popup from a tab — and a value written and then not there is worth catching at
+           the write rather than 51 subtests downstream in another realm. */
+        DCHECK(window_proxy_is_popup(proxy) == (feat != NULL && feat->is_popup),
+               "a navigable did not keep §7.4's popup decision across its own creation");
         /* §7.4 STEP 14: NAVIGATE THE NEW NAVIGABLE TO url — and navigating is what makes the document RUN.
            A navigable that was given an address is materialized HERE, in the creating turn, because its
            document's own scripts are an observable that owes nothing to the creator: a popup posts back to its
@@ -216,7 +228,8 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
         free(op);
         proxy = window_proxy_new_remote(ctx, child, origin, name,
                                         is_child ? document_window_proxy(ctx) : JS_UNDEFINED,
-                                        is_child ? JS_NULL : document_window_proxy(ctx));
+                                        (is_child || (feat && feat->noopener)) ? JS_NULL
+                                                                               : document_window_proxy(ctx));
         CHECK(!JS_IsException(proxy), "a navigable's WindowProxy could not be allocated");
     }
     free(addr);
@@ -231,18 +244,31 @@ static JSValue js_win_open(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 {
     const char *url = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
     const char *target = argc > 1 ? JS_ToCString(ctx, argv[1]) : NULL;
+    /* §3.6.2: an OPTIONAL argument given `undefined` is ABSENT. `open(url, name, undefined)` is how the
+       corpus spells "no features", and stringifying it produced the literal "undefined" — one token,
+       a non-empty map, and therefore a popup where the spec has a tab. */
+    const char *features = (argc > 2 && !JS_IsUndefined(argv[2])) ? JS_ToCString(ctx, argv[2]) : NULL;
+    WindowFeatures feat;
     JSValue r;
 
     (void)this_val; (void)magic;
     if (argc > 0 && !url) return JS_EXCEPTION;
+    /* §7.4's THIRD ARGUMENT, which was read and dropped. It decides whether the new navigable is a POPUP —
+       what §7.2.5.3's six BarProps answer from — and whether it gets an OPENER at all. */
+    feat = window_features_parse(features);
     /* §7.4's TARGET is the chosen browsing context NAME — except for the keywords, which name a navigable to
        reuse rather than a name to give one. A leading underscore is what tells them apart. */
-    r = navigable_create(ctx, url, target && target[0] != '_' ? target : NULL, false);
+    r = navigable_create(ctx, url, target && target[0] != '_' ? target : NULL, false, &feat);
     if (url) JS_FreeCString(ctx, url);
     if (target) JS_FreeCString(ctx, target);
+    if (features) JS_FreeCString(ctx, features);
     /* §7.4 step 4: a URL that does not parse is a SyntaxError, and it is the PAGE's mistake. */
     if (JS_IsUndefined(r))
         return JS_ThrowDOMException(ctx, "SyntaxError", "the URL to open is not a URL");
+    /* §7.4's LAST STEP: with `noopener`, `open()` RETURNS NULL. The navigable is created and navigated all the
+       same — a page that opens a window it cannot script still opened one — and what the caller loses is the
+       handle, which is the whole point of the feature. */
+    if (feat.noopener) { JS_FreeValue(ctx, r); return JS_NULL; }
     return r;
 }
 

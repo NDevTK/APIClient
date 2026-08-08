@@ -37,6 +37,7 @@
 #include <lexbor/html/html.h>
 
 #include "quickjs.h"
+#include "core/frame/window_features.h"
 
 /* THE TWO HALVES OF §7.4, AND THEY ARE DECLARED SEPARATELY BECAUSE THEY BELONG TO DIFFERENT OWNERS.
  *
@@ -125,6 +126,9 @@ void navigable_free(JSContext *ctx);
 /* `name` is the browsing context name to give it (an iframe's `name` attribute, §7.4's target), or NULL.
    `is_child` distinguishes §4.8.5's CHILD navigable — nested in this one, so its `parent` is this Window — from
    §7.4's AUXILIARY one, which is its own top and links back through `opener`. */
-JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child);
+/* `feat` is §7.4's parsed features argument, or NULL for §4.8.5's iframe — which has no features to
+   parse, is never a popup, and never has an opener. */
+JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child,
+                         const WindowFeatures *feat);
 
 #endif

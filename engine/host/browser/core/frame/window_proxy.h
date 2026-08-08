@@ -19,8 +19,11 @@ void window_proxy_free(JSContext *ctx);
 /* `url` is the navigable's initial address — what its REALM is built from on the first read that reaches
    through to the active document (see navigable.h). The proxy owns that realm once built; the navigable's own
    members (window/self/frames/parent/top/opener/closed/name) never need it and never build it. */
-JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url,
-                         const char *origin, const char *name, JSValueConst parent, JSValueConst opener);
+JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const char *origin, const char *name,
+                         bool is_popup, JSValueConst parent, JSValueConst opener);
+
+/* §7.4's "popup window is requested" for this navigable — §7.2.5.3's BarProps are the negation of it. */
+bool window_proxy_is_popup(JSValueConst proxy);
 
 /* §7.2.5.1's proxy for the realm that is ASKING — `window`, `self`, and the `source` of every message it
    posts. Its realm is this one and is already built, so nothing about it is deferred.

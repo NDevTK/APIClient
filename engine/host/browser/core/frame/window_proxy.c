@@ -80,6 +80,11 @@ typedef struct {
        concolic. A host that CAN state it (a runner that loaded the document itself) says so and gets the
        spec's "". The distinction is DATA the creator supplies, never inferred from which mint was used. */
     uint8_t name_known;
+    /* §7.4's "popup window is requested", decided from the `features` argument at creation and then a FACT
+       ABOUT THE NAVIGABLE for as long as it exists — which is what every BarProp's `visible` is the negation
+       of. It is not per-flow: no flow can turn a tab into a popup, so unlike `closed` and `name` there is
+       nothing here for the delta to capture. */
+    uint8_t is_popup;
     uint8_t closed;    /* the navigable has been destroyed (§4.8.5) or closed (§7.2.5.2) */
     /* WHICH DOCUMENT the navigable's active document IS — the same id the world registry names worlds by, so
        "is this remote?" is one comparison against one identity rather than a second naming scheme kept beside
@@ -221,8 +226,8 @@ static void proxy_adopt_realm(JSContext *ctx, JSValueConst proxy, JSContext *rea
     p->window = JS_GetGlobalObject(realm);
 }
 
-JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url,
-                         const char *origin, const char *name, JSValueConst parent, JSValueConst opener)
+JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const char *origin, const char *name,
+                         bool is_popup, JSValueConst parent, JSValueConst opener)
 {
     JSValue obj;
     ProxyData *p;
@@ -247,6 +252,7 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url,
     /* §7.4 NAMED IT. This mint is the one §7.4's create-a-new-navigable reaches, so the name it was given is
        the navigable's name — including the empty one a `open(url)` with no target gives. */
     p->name_known = 1;
+    p->is_popup = is_popup ? 1 : 0;
     p->parent = JS_DupValue(ctx, parent);
     p->opener = JS_DupValue(ctx, opener);
     p->doc = doc;
@@ -261,7 +267,9 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name)
 {
     /* THE ORIGIN IS THE AGENT'S, and it is read from where §7.2.5.1's check reads it rather than passed in —
        an agent is origin-keyed, so a caller-supplied one could only ever agree or be wrong. */
-    JSValue obj = window_proxy_new(ctx, doc, NULL, g_local_origin, name, JS_UNDEFINED, JS_NULL);
+    /* THE NAVIGABLE THE INSTANCE STARTS IN IS NOT A POPUP: no `open()` created it, so §7.4 decided
+       nothing about it and its chrome is whole. */
+    JSValue obj = window_proxy_new(ctx, doc, NULL, g_local_origin, name, false, JS_UNDEFINED, JS_NULL);
     ProxyData *p;
 
     if (JS_IsException(obj)) return obj;
@@ -437,6 +445,16 @@ JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueCons
     p->name_known = 1;
     JS_FreeCString(ctx, n);
     return JS_UNDEFINED;
+}
+
+/* §7.4's popup decision, read back — what §7.2.5.3's six BarProps answer from. A DESTROYED navigable keeps
+   the answer it was created with: `closed` is what a page checks, and a bar that changed its mind on close
+   would be a second fact where there is one. */
+bool window_proxy_is_popup(JSValueConst proxy)
+{
+    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    DCHECK(p != NULL, "the popup state of something that is not a WindowProxy was asked for");
+    return p->is_popup != 0;
 }
 
 const char *window_proxy_origin(JSValueConst proxy)

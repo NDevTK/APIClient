@@ -74,10 +74,10 @@ void iframe_create_navigable(JSContext *ctx, JSValueConst wrap)
        whole reason the navigable is per-flow. */
     src  = element_attr_get(ctx, wrap, "src");
     name = element_attr_get(ctx, wrap, "name");
-    proxy = navigable_create(ctx, src, name, true);
+    proxy = navigable_create(ctx, src, name, true, NULL);
     /* §4.8.5 has no "did not parse" branch the way §7.4 does: an `<iframe src="::">` still has a navigable,
        holding the initial about:blank it was created with. */
-    if (JS_IsUndefined(proxy)) proxy = navigable_create(ctx, NULL, name, true);
+    if (JS_IsUndefined(proxy)) proxy = navigable_create(ctx, NULL, name, true, NULL);
     free(src);
     free(name);
     DCHECK(!JS_IsUndefined(proxy), "an about:blank child navigable could not be created, which has no failing "
