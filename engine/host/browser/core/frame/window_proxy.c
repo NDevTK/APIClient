@@ -213,10 +213,34 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
     if (!p->realm) {
         DCHECK(p->url != NULL, "a WindowProxy with no realm and no address was read through — a proxy over a "
                                "realm that already exists is minted by window_proxy_new_self, which carries it");
-        p->realm = navigable_realm(ctx, p->doc, p->url, p->origin, proxy);
+        /* §7.2.6: this navigable was CREATED with a clone of its creator's policy (see creator_csp),
+           and that is what its about:blank Document takes when it is finally materialized. */
+        p->realm = navigable_realm(ctx, p->doc, p->url, p->origin, proxy, p->creator_csp);
         p->window = JS_GetGlobalObject(p->realm);
     }
     return p->realm;
+}
+
+/* §7.2.5.1's NAVIGATE — see window_proxy.h. Reached from navigable.c, which owns the fetch and the realm. */
+void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm, uint32_t doc,
+                           const char *url, const char *origin)
+{
+    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — the WHOLE binding rides the delta */
+
+    DCHECK(p != NULL, "something that is not a WindowProxy was navigated");
+    DCHECK(realm != NULL, "a navigable was navigated to no realm — a Document this agent holds IS a realm, and "
+                          "a cross-origin destination is a peer's document, which is a host route and not this");
+    DCHECK(world_doc_hosted(doc), "a navigable was navigated to a document this agent does not hold");
+    /* THE OLD WINDOW'S REFERENCE IS THIS SLOT'S, and the delta already dupped its own copy when the capture
+       above ran — so releasing it here leaves the parked arm's copy intact and the live slot free to move. */
+    JS_FreeValue(ctx, p->window);
+    p->realm  = realm;
+    p->window = JS_GetGlobalObject(realm);
+    p->doc    = doc;
+    /* THE OLD STRINGS ARE NOT FREED. A parked flow's saved bytes still name them (see proxy_of), so freeing
+       here would resume that flow onto freed memory; they are the PROXY's and are released with it. */
+    p->url    = proxy_strdup(url);
+    p->origin = proxy_strdup(origin ? origin : "null");
 }
 
 /* THE SELF PROXY'S REALM IS THE ONE ASKING — already built, so there is nothing to materialize. Stated as its
@@ -227,9 +251,9 @@ static void proxy_adopt_realm(JSContext *ctx, JSValueConst proxy, JSContext *rea
 
     (void)ctx;
     DCHECK(p != NULL, "a realm was handed to something that is not a WindowProxy");
-    DCHECK(p->realm == NULL, "a navigable was given a second realm — it already has an active document, and "
-                             "replacing one is §7.2.5.1's NAVIGATE, which is not built; build it there rather "
-                             "than handing this navigable a second document");
+    DCHECK(p->realm == NULL, "a navigable was given a second realm through the ADOPT path — it already has an "
+                             "active document, and replacing one is window_proxy_navigate, which moves all "
+                             "five facts of the binding at once rather than handing this one a second realm");
     p->realm  = realm;   /* BORROWED — the agent owns its realms */
     p->window = JS_GetGlobalObject(realm);
 }
@@ -492,12 +516,6 @@ const char *window_proxy_origin(JSValueConst proxy)
     DCHECK(p != NULL, "the origin of something that is not a WindowProxy was asked for");
     return p->origin;
 }
-
-/* §7.2.5.1's REPLACE-THE-ACTIVE-DOCUMENT is ABSENT, deliberately, and this is where it will live. There was a
-   `window_proxy_navigate` here that swapped the Window and the origin and left the REALM alone — two halves of
-   one navigable disagreeing about which document is active, which is the same defect as `name` having had two
-   sources. It had no caller, so it was a wrong implementation waiting to be reached rather than a capability;
-   a capability that does not exist is honestly absent, and the DCHECK in window_proxy_set_realm names it. */
 
 
 /* §7.2.5.1's MEMBER SURFACE, and the one distinction that decides how each member is answered.

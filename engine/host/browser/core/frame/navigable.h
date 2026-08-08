@@ -115,8 +115,12 @@ void navigable_set_realm_builder(RealmBuilder b);
  * about:blank parse itself failing to allocate. Building them all and paging the low-value tail to the cold
  * tier is the design that would remove even this line — a JSContext is not a snapshot, so that is a real
  * mechanism to build and not a rewording of the deferral. */
+/* `inherit_csp` is the policy a destination with NO RESPONSE takes — §7.2.6's clone. WHOSE it is depends on
+   the operation and only the caller knows: creating a navigable clones the CREATOR's (kept on the navigable,
+   because a srcless child's realm is built later and by whichever document reads through it first), while
+   navigating one clones the INITIATOR's, the document whose script ran. NULL for none. */
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *origin,
-                           JSValueConst nav_proxy);
+                           JSValueConst nav_proxy, const char *inherit_csp);
 
 /* Install §7.4's scriptable entry point — `window.open`. `origin` is this document's, which the initial
    about:blank child inherits along with the policy container. */
@@ -124,6 +128,12 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
 void navigable_init(JSContext *ctx);
 
 void navigable_install(JSContext *ctx, JSValueConst global, const char *origin);
+
+/* §7.4 STEP 14's NAVIGATE over a navigable that already has an active document — fetch the new document, build
+   the realm its scripts run in, and hand both to §7.2.5.1's replace. Answers the SAME proxy (owned), because a
+   navigation does not make a new one — that is the whole reason WindowProxy exists — or JS_UNDEFINED when the
+   address does not parse, which §7.4 turns into a SyntaxError at the call site. */
+JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url);
 void navigable_free(JSContext *ctx);
 
 /* §7.4's CREATE A NEW NAVIGABLE. `url` is the child's initial address; NULL, "" or "about:blank" all mean the

@@ -92,7 +92,8 @@ static bool child_in_this_agent(const char *child_origin)
    engine owns what a document IS (CLAUDE.md: Lexbor and quickjs own all semantics) and the host owns the
    network. It used to be one host callback holding both, and the host that implemented only the second half
    looked finished. */
-static lxb_html_document_t *child_document(JSContext *ctx, const char *url, JSValueConst nav_proxy, char **pcsp)
+static lxb_html_document_t *child_document(JSContext *ctx, const char *url, const char *inherit_csp,
+                                           char **pcsp)
 {
     static const char EMPTY[] = "<!doctype html><html><head></head><body></body></html>";
     lxb_html_document_t *dom = lxb_html_document_create();
@@ -121,15 +122,16 @@ static lxb_html_document_t *child_document(JSContext *ctx, const char *url, JSVa
            scripts under the CREATOR's CSP, so a page that reaches `f.contentWindow.eval(...)` through a
            srcless iframe is governed by the parent's policy. An empty container there reports that as a
            working exploit on a page whose CSP kills it, which is the very false PoC @S must never emit.
-           IT COMES OFF THE NAVIGABLE, not off `ctx`: the clone happened when the navigable was CREATED
-           (window_proxy.h), and `ctx` here is whichever same-origin document's read reached through first,
-           which need not be the creator. The clone is BY VALUE — policy_container_clone is itself a re-parse
-           of this text — so the child's policy is its own from the moment it exists and a later parent
-           navigation cannot reach back. */
-        const char *text = window_proxy_creator_csp(nav_proxy);
+           WHOSE POLICY IT IS DEPENDS ON THE OPERATION, so the caller says: CREATING a navigable clones the
+           creator's, taken when the navigable was created (window_proxy.h) because a srcless child's realm is
+           built later and by whichever document reads through it first; NAVIGATING one to an `about:` address
+           clones the INITIATOR's, the document whose script ran. Reading it off `ctx` here would answer the
+           first question with the second's document. The clone is BY VALUE — policy_container_clone is itself
+           a re-parse of this text — so the new document's policy is its own from the moment it exists. */
+        const char *text = inherit_csp;
         if (text) {
             *pcsp = strdup(text);
-            CHECK(*pcsp != NULL, "navigable: OOM cloning the creator's policy container for an about: child");
+            CHECK(*pcsp != NULL, "navigable: OOM cloning the inherited policy container for an about: document");
         }
     }
     /* A CHILD WHOSE ADDRESS DOES NOT LOAD KEEPS THE EMPTY DOCUMENT — a browser shows an error page and the
@@ -145,7 +147,7 @@ static lxb_html_document_t *child_document(JSContext *ctx, const char *url, JSVa
    is materialized: §7.4's navigation asks for it in the creating turn, and a read through a not-yet-materialized
    about:blank navigable asks for it then. */
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *origin,
-                           JSValueConst nav_proxy)
+                           JSValueConst nav_proxy, const char *inherit_csp)
 {
     JSContext *cctx;
 
@@ -158,7 +160,7 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
            child_document owns which, since it owns the test that decides. Freed here because the builder
            installs a container built from it and keeps no pointer. */
         char *csp = NULL;
-        lxb_html_document_t *dom = child_document(ctx, url, nav_proxy, &csp);
+        lxb_html_document_t *dom = child_document(ctx, url, inherit_csp, &csp);
         cctx = g_realm_builder(JS_GetRuntime(ctx), dom, url, origin, csp, doc, nav_proxy);
         free(csp);
     }
@@ -172,6 +174,73 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
     }
     g_realms[g_realms_n++] = cctx;
     return cctx;
+}
+
+/* §7.4 STEP 14's NAVIGATE, for a navigable that ALREADY HAS an active document — the other end of the sentence
+ * navigable_realm implements. Its whole difference from materializing one is that the proxy is already bound:
+ * this fetches the new document, builds the realm its scripts run in, and hands both to §7.2.5.1's replace, so
+ * the page's handle on the navigable now reaches the new document and the old realm stays where a parked flow
+ * left it.
+ *
+ * WHAT IS NOT HERE YET, and it is a mechanism rather than a line: the fetch is the HOST's synchronous one
+ * (child_document), so a host whose network parks the flow — which is every host that is not a test runner —
+ * cannot navigate at all, and navigable.h's DCHECK says so at the fetcher. §7.4's navigate becoming a
+ * scheduled work item (the navigating flow parks on the response and resumes with it) is that mechanism, and
+ * it replaces the ONE line below rather than anything else in this function.
+ *
+ * THE ADDRESS IS RESOLVED AGAINST THE NAVIGATING DOCUMENT, not against the target's — §4.4's API base URL
+ * belongs to the document whose script ran, which for `open("/x", "_self")` happens to be the same document
+ * and for `open("/x", "someFrame")` is not. */
+JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
+{
+    char *addr = NULL, *origin = NULL;
+    uint32_t doc;
+    JSContext *cctx;
+
+    DCHECK(window_proxy_is(proxy), "something that is not a WindowProxy was navigated");
+    if (!child_address(ctx, url, &addr, &origin)) {
+        free(addr); free(origin);
+        return JS_UNDEFINED;   /* §7.4 step 4: the caller turns this into a SyntaxError */
+    }
+    /* A CROSS-ORIGIN DESTINATION IS A PEER'S DOCUMENT. An instance is an ORIGIN-KEYED agent cluster, so
+       navigating one of this agent's navigables off-origin moves its active document to another instance —
+       which is the host route the create path already builds a notice for, and is not this. */
+    DCHECK(child_in_this_agent(origin),
+           "a navigable was navigated CROSS-ORIGIN — its active document then lives in a peer instance, which "
+           "is a host-routed provisioning like §7.4's create notice and not a realm this agent can build");
+    /* A NAVIGATION MAKES A NEW DOCUMENT, so it gets a new identity: the world registry names documents, not
+       navigables, and a parked flow in the superseded one must still be able to name where it is. */
+    doc = world_mint_doc(document_doc(ctx));
+    world_doc_adopt(doc);
+    /* §7.2.6: a destination with no response inherits the INITIATOR's policy — this document's. */
+    cctx = navigable_realm(ctx, doc, addr, origin, proxy, policy_container_csp(document_policy(ctx)));
+    window_proxy_navigate(ctx, proxy, cctx, doc, addr, origin);
+    free(addr);
+    free(origin);
+    return JS_DupValue(ctx, proxy);
+}
+
+/* §7.1's RULES FOR CHOOSING A NAVIGABLE, for the four KEYWORD targets — the ones whose leading underscore says
+ * "reuse a navigable" rather than "name a new one". `_blank` is the odd one: it is the only keyword that means
+ * CREATE, which is why it answers JS_UNDEFINED here and every other answer is a navigable to navigate.
+ * A NON-KEYWORD name that matches an existing navigable is the fifth rule and is NOT built: it needs the
+ * familiar-with walk over the navigable tree, and the tree's children are the iframe elements' — so it is the
+ * next piece, and until it is here such a name creates a new navigable and is GIVEN that name, which is what
+ * the same rule says for a name that matches nothing. */
+static JSValue navigable_choose_keyword(JSContext *ctx, const char *target)
+{
+    JSValueConst self = document_window_proxy(ctx);
+
+    if (!target || !*target || !strcmp(target, "_self")) return JS_DupValue(ctx, self);
+    if (!strcmp(target, "_parent")) {
+        /* §7.1: a navigable with no parent is its own parent — the keyword never reaches past the top. */
+        JSValue p = window_proxy_parent(ctx, self);
+        if (window_proxy_is(p)) return p;
+        JS_FreeValue(ctx, p);
+        return JS_DupValue(ctx, self);
+    }
+    if (!strcmp(target, "_top")) return window_proxy_top_of(ctx, self);
+    return JS_UNDEFINED;   /* `_blank`, and any other `_`-prefixed token, CREATE */
 }
 
 JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child,
@@ -291,9 +360,27 @@ static JSValue js_win_open(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     /* §7.4's THIRD ARGUMENT, which was read and dropped. It decides whether the new navigable is a POPUP —
        what §7.2.5.3's six BarProps answer from — and whether it gets an OPENER at all. */
     feat = window_features_parse(features);
-    /* §7.4's TARGET is the chosen browsing context NAME — except for the keywords, which name a navigable to
-       reuse rather than a name to give one. A leading underscore is what tells them apart. */
+    /* §7.4 step 6: APPLY THE RULES FOR CHOOSING A NAVIGABLE. A keyword target names a navigable to REUSE, and
+       reusing one means NAVIGATING it — which this used to skip entirely: `open(url, "_self")` dropped the
+       keyword, fell through to create, and answered with a SECOND window where the spec navigates the one the
+       script is running in. A wrong answer that looks like it worked, which is the shape this whole file's
+       asserts exist to prevent. `_blank` (and any keyword this does not know) still CREATES. */
+    /* §7.1's FIRST RULE IS `noopener`, and it comes before the keywords: a request that must not be able to
+       script its opener cannot be answered with a navigable the opener already holds, so noopener always
+       CREATES — `open(url, "_self", "noopener")` is a new window, not this one navigated. */
+    if (target && target[0] == '_' && !feat.noopener) {
+        JSValue chosen = navigable_choose_keyword(ctx, target);
+        if (window_proxy_is(chosen)) {
+            /* §7.4 step 14 over the chosen navigable. `url` may be absent — `open("", "_self")` navigates to
+               the empty string, which §7.4 resolves against the document's own address, so it reloads. */
+            r = navigable_navigate(ctx, chosen, url ? url : "");
+            JS_FreeValue(ctx, chosen);
+            goto done;
+        }
+        JS_FreeValue(ctx, chosen);
+    }
     r = navigable_create(ctx, url, target && target[0] != '_' ? target : NULL, false, &feat);
+done:
     if (url) JS_FreeCString(ctx, url);
     if (target) JS_FreeCString(ctx, target);
     if (features) JS_FreeCString(ctx, features);

@@ -126,11 +126,18 @@ JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueCons
 /* The active document's origin, as this flow sees it — what §7.2.5.1's same-origin check reads. BORROWED. */
 const char *window_proxy_origin(JSValueConst proxy);
 
-/* NAVIGATE — replacing the navigable's active Document while the proxy object stays the same, which is the
-   whole reason a WindowProxy exists — is NOT BUILT. What stood here replaced the Window and the origin and left
-   the REALM behind, so the two halves of one navigable would have named different documents; it had no caller,
-   so it was a wrong implementation rather than a capability. When it is built it replaces ALL of the active
-   document at once (realm, Window, origin), captured into the RUNNING FLOW's delta so a sibling arm that did
-   not navigate still resolves the proxy to the document it knew. */
+/* NAVIGATE — REPLACE THE NAVIGABLE'S ACTIVE DOCUMENT while the proxy object stays the same, which is the whole
+   reason a WindowProxy exists: a page holding `iframe.contentWindow` across a navigation holds the same object
+   and reaches the NEW document through it.
+   ALL FIVE FACTS MOVE AT ONCE — realm, Window, document id, address, origin — because they are one binding.
+   An earlier attempt replaced the Window and the origin and left the REALM behind, so the two halves of one
+   navigable named different documents; that is why they are one call and not five setters.
+   PER FLOW: the whole record is captured into the running flow's delta at the accessor, so a sibling arm that
+   never navigated still resolves this proxy to the document it knew, and a parked flow resumes into its own.
+   `realm` is BORROWED — the agent owns every realm it built (navigable.c) — and the superseded one is NOT torn
+   down here: a flow parked inside it resumes there, which is what makes it a time-travel entity rather than a
+   page a browser could throw away. */
+void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm, uint32_t doc,
+                           const char *url, const char *origin);
 
 #endif

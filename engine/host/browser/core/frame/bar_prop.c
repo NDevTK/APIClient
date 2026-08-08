@@ -65,12 +65,12 @@ static JSValue js_bar_visible(JSContext *ctx, JSValueConst this_val, int magic)
     BarProp *b = JS_GetOpaque(this_val, g_bar_class);
     (void)magic;
     DCHECK(b != NULL, "BarProp.visible was read off something that is not a BarProp");
-    /* IT MUST BE THIS REALM'S NAVIGABLE. §7.2.5.1 gives a navigable ONE WindowProxy and a realm IS one
-       document, so a realm holding a proxy over another document would answer all six for the wrong window —
-       indistinguishable from the right answer whenever the two happen to agree, which is most of the time. */
-    DCHECK(window_proxy_doc(document_window_proxy(ctx)) == document_doc(ctx),
-           "a realm's WindowProxy names a different document than the realm — §7.2.5.1 gives a navigable one "
-           "proxy and document_install is handed the navigable's, so these two cannot disagree");
+    /* THE ANSWER IS THE NAVIGABLE'S, and that is why there is no assert here that the realm's proxy names THIS
+       realm's document. There was one, and it was true only while nothing could navigate: §7.2.5.1's replace
+       moves the navigable's active document to a new realm while a flow parked in the superseded one keeps
+       running, and that flow reading `window.toolbar` is reading a fact about the NAVIGABLE — which has moved
+       on — not about the document it is standing in. An assert that fires for a correct read is worse than
+       none; the brand check above is the one that still says something. */
     return JS_NewBool(ctx, !window_proxy_is_popup(document_window_proxy(ctx)));
 }
 
