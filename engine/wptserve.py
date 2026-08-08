@@ -16,6 +16,7 @@ It prints `READY <port>` on stdout once bound, and serves until killed.
 """
 import sys
 import os
+import tempfile
 
 root = os.path.abspath(sys.argv[1])
 port = int(sys.argv[2])
@@ -28,6 +29,20 @@ if port == 0:
     _s = socket.socket()
     _s.bind(("127.0.0.1", 0))
     port = _s.getsockname()[1]
+    _s.close()
+
+# THE CORPUS IS WRITTEN AGAINST FOUR PORTS, not one. common/get-host-info.sub.js — which most cross-origin
+# tests in html/browsers name in their META block — substitutes ports[http][0], ports[http][1], ports[https][0]
+# and ports[https][1]. A config declaring ONE http port does not merely give a wrong answer for the others:
+# wptserve's `sub` pipe indexes the list and raises IndexError, so the SERVER answers 500 for the helper
+# itself. Every test that merely imports it then runs with `get_host_info()` undefined or with literal
+# `{{hosts[alt][]}}` text in its origins, which is why cross-origin `window.open` reported "the URL to open is
+# not a URL" and every test built on one timed out. One missing port in a config silenced a family of tests.
+_extra = []
+for _ in range(3):
+    _s = socket.socket()
+    _s.bind(("127.0.0.1", 0))
+    _extra.append(_s.getsockname()[1])
     _s.close()
 
 sys.path.insert(0, os.path.join(root, "tools"))
@@ -54,7 +69,25 @@ _cfg = wptconfig.ConfigBuilder(_Log(),
                                browser_host="web-platform.test",
                                alternate_hosts={"alt": "not-web-platform.test"},
                                doc_root=root,
-                               ports={"http": [port]},
+                               # THE SECOND HTTP PORT IS SERVED; the two https ports are DECLARED and not
+                               # served, and that difference is deliberate. A declared-but-unserved port makes
+                               # a test that actually fetches https fail to connect — one honest failure in the
+                               # test that reaches for it. Leaving it out of the config instead makes the
+                               # shared helper 500, which reports nothing for every test that imports it,
+                               # including the ones that never touch https. Serving them needs TLS and a
+                               # certificate, which is the next thing to build here.
+                               ports={"http": [port, _extra[0]], "https": [_extra[1], _extra[2]]},
+                               # THE HTTPS PORTS ONLY SURVIVE THE CONFIG IF SSL IS CONFIGURED. ConfigBuilder
+                               # PRUNES a scheme it has no certificate for, so `ports={"https": [...]}` alone
+                               # left the list empty and `{{ports[https][0]}}` raised IndexError exactly as a
+                               # missing port did — the config accepted the argument and dropped it. Naming
+                               # the openssl generator keeps them, and the binary is present.
+                               ssl={"type": "openssl",
+                                    "openssl": {"openssl_binary": "openssl",
+                                                "base_path": os.path.join(tempfile.mkdtemp(), "certs"),
+                                                "force_regenerate": False,
+                                                "duration": 30,
+                                                "base_conf_path": None}},
                                check_subdomains=False,
                                subdomains={"www", "www1", "www2", "天気の良い日", "élève"},
                                not_subdomains={"nonexistent"})
@@ -63,6 +96,12 @@ with _cfg as cfg:
     httpd = server.WebTestHttpd(host="127.0.0.1", port=port, doc_root=root, routes=routes,
                                 config=cfg, use_ssl=False, key_file=None, certificate=None)
     httpd.start()
+    # THE SECOND HTTP PORT ANSWERS TOO. `{{ports[http][1]}}` is how the corpus names "same host, different
+    # origin"; a port the config declares and nothing listens on would hand those tests an address that
+    # answers nothing — the same defect the reservation above exists to avoid, one index along.
+    httpd2 = server.WebTestHttpd(host="127.0.0.1", port=_extra[0], doc_root=root, routes=routes,
+                                 config=cfg, use_ssl=False, key_file=None, certificate=None)
+    httpd2.start()
     sys.stdout.write("READY %d\n" % httpd.port)
     sys.stdout.flush()
 # WebTestHttpd.start() runs the server on its own thread and returns, so this one blocks until it is killed.

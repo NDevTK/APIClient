@@ -16,8 +16,8 @@
  * Usage:  node engine/wpt.mjs [subdir-or-file]
  */
 import { spawnSync, spawn } from "node:child_process";
-import { existsSync, readdirSync, mkdtempSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { existsSync, readdirSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, sep } from "node:path";
 import { tmpdir, cpus } from "node:os";
 
 function walk(dir) {
@@ -250,13 +250,35 @@ function metaScripts(file) {
   }
   return out;
 }
+/* A `.sub.js` META SCRIPT IS NOT ITS BYTES ON DISK. wptserve SUBSTITUTES `{{host}}`, `{{ports[http][0]}}`
+   and friends when it serves one, and the whole point of common/get-host-info.sub.js is to hand a test the
+   REAL alternate hosts and ports of the server it is running against. Read off disk it hands back the
+   placeholders instead, so `get_host_info().HTTP_REMOTE_ORIGIN` is the literal string `http://{{hosts[alt][]}}`
+   — which is not a URL, which is why every cross-origin `window.open` in the corpus failed with "the URL to
+   open is not a URL" and every test built on one timed out. That is a GATE defect reported as an engine one.
+   Everything a test FETCHES already goes through the real server; a META script is the one input the driver
+   hands over itself, so it is the one that has to be fetched here. Memoized: the same helper is named by many
+   files and substitution is the server's work, not this loop's. */
+const g_subbed = new Map();
+async function substituted(dep) {
+  if (!/\.sub\.[a-z]+$/.test(dep)) return dep;
+  if (g_subbed.has(dep)) return g_subbed.get(dep);
+  const path = "/" + relative(WPT, dep).split(sep).join("/");
+  const r = await fetch("http://" + serverAddr + path);
+  if (!r.ok) return dep;   /* the corpus server does not serve it; the missing-dep report below names it */
+  const out = join(dirname(bin), relative(WPT, dep).split(sep).join("__"));
+  writeFileSync(out, await r.text());
+  g_subbed.set(dep, out);
+  return out;
+}
+
 let pass = 0, fail = 0, aborted = 0;
 const failures = [];
 
 for (const f of files) {
   const rel = relative(WPT, f);
   byArea(rel).files++;
-  const deps = metaScripts(f);
+  const deps = (await Promise.all(metaScripts(f).map(substituted)));
   const missing = deps.filter((d) => !existsSync(d));
   if (missing.length) {
     /* A META script the sparse checkout does not have is a GATE defect, not a test result: the file would run
