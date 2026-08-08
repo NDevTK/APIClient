@@ -270,9 +270,9 @@ static JSValue win_named_value(JSContext *ctx, const char *name)
     if (!*name) return JS_UNDEFINED;   /* the empty name is no name at all, and no attribute carries it */
     out = win_named_navigable(ctx, name);
     if (!JS_IsUndefined(out)) return out;
-    if (!document_root_node()) return JS_UNDEFINED;
+    if (!document_root_node(ctx)) return JS_UNDEFINED;
 
-    doc = node_wrap(ctx, document_root_node());
+    doc = node_wrap(ctx, document_root_node(ctx));
     coll = collections_named(ctx, doc, name);
     JS_FreeValue(ctx, doc);
     if (JS_IsException(coll)) return JS_UNDEFINED;

@@ -135,9 +135,9 @@ static char *errs_json_array(void) {
    solve.c its fire-verified sinks — and this only decides that they are ONE document and what it is called.
    Keeping that decision in one place is the point: a second caller that wanted "just the endpoints" is how a
    host ends up assembling structure again. */
-char *result_json(void) {
+char *result_json(JSContext *ctx) {
     char *eps = endpoint_json_array();
-    char *sinks = solve_json_array();
+    char *sinks = solve_json_array(ctx);
     char *errs = errs_json_array();
     size_t n;
     char *out;

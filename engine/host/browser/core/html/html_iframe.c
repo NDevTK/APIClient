@@ -115,7 +115,7 @@ void iframe_destroy_navigable(JSContext *ctx, JSValueConst wrap)
  * installed. Everything a script appends afterwards goes through the chokepoint and needs nothing from this. */
 void iframe_document_parsed(JSContext *ctx)
 {
-    lxb_dom_node_t *root = document_root_node(), *n = root;
+    lxb_dom_node_t *root = document_root_node(ctx), *n = root;
 
     while (n) {
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
@@ -147,7 +147,7 @@ void iframe_document_parsed(JSContext *ctx)
  * `want` < 0 counts them all and returns JS_UNDEFINED; otherwise the nth is returned, or JS_UNDEFINED. */
 static JSValue child_navigables(JSContext *ctx, int want, int *out_n)
 {
-    lxb_dom_node_t *root = document_root_node();
+    lxb_dom_node_t *root = document_root_node(ctx);
     lxb_dom_node_t *n = root;
     int seen = 0;
 

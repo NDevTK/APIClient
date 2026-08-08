@@ -40,7 +40,7 @@ void solve_flow_end(struct Flow *f);
    the source's component percent-encodes. There is deliberately no "verified":false — the entry states what was
    searched, never that the sink is safe. An array for the same reason the @H surface is one — result.h owns the
    document. */
-char *solve_json_array(void);
+char *solve_json_array(JSContext *ctx);
 int   solve_count(void);
 
 #endif

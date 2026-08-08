@@ -1678,7 +1678,7 @@ int main(void) {
        C findings (no JS-object round-trip). The host does one JSON.parse of this line and relays it; it used
        to be two lines here, which meant whoever consumed them assembled the document, and assembling is
        structure. The assertions below read the same string, so they cover the composed shape. */
-    char *js = result_json();
+    char *js = result_json(ctx);
     printf("@RESULT %s\n", js);
 
     int has_uid_param = strstr(js, "\"/api/u\"") && strstr(js, "\"uid\"") && strstr(js, "{state}.id");

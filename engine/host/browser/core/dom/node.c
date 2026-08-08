@@ -499,7 +499,7 @@ static JSValue js_node_facts(JSContext *ctx, JSValueConst this_val, int magic)
            and no <base> support yet, so this is its address — asked of the component that owns it rather than
            re-derived here, because two answers to "what is this document's URL" is how they drift apart. */
         DCHECK(magic == 3, "a Node fact was declared with a magic this table does not name");
-        return JS_NewString(ctx, document_base_url());
+        return JS_NewString(ctx, document_base_url(ctx));
     }
 }
 

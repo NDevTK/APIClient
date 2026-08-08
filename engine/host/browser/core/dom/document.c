@@ -42,9 +42,45 @@ static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
 
 #include "core/dom/element.h"
 
-/* The document this component installed, for the tree walks below. One instance is one document. */
-static lxb_html_document_t *g_doc;
-static void element_doc_set(lxb_html_document_t *d) { g_doc = d; }
+/* THE DOCUMENT'S OWN STATE, HELD ON THE REALM THAT IS THIS DOCUMENT — not on the file.
+ *
+ * AN AGENT IS A JSRuntime AND A DOCUMENT IS A JSContext IN IT, because that is what the two words mean. HTML
+ * puts every same-origin document of one browsing-context group in ONE similar-origin window agent — one heap —
+ * and gives each its own global; a JSRuntime is the heap and a JSContext is the global. So the state a document
+ * HAS (its tree, its address, its policy container, its `document` object, its Window) hangs off the context.
+ *
+ * It was file-scope, and file-scope IS the sentence "one instance is one document" — which is the sentence this
+ * design stopped making. Same-origin documents share a heap and the corpus RELIES on it:
+ * `iframe.contentDocument.body.appendChild(subframe)` inserts a node THIS document created, and afterwards
+ * `subframe.parentNode` is a node of the OTHER document while the wrapper stays the same object. There is no
+ * name to pass there — it is one object graph.
+ *
+ * WHAT DOES NOT LIVE HERE is anything the whole agent shares: a class id, a prototype, an interface object, and
+ * the ORIGIN — an agent is origin-keyed, so every document in it has the same one, which is exactly why
+ * SECURITY.md's one-principal-per-instance still holds word for word. */
+typedef struct Document {
+    lxb_html_document_t *dom;
+    PolicyContainer     *policy;    /* owned */
+    JSValue              doc_obj;   /* the `document` object — HELD, released by document_free */
+    JSValue              win_obj;   /* this document's Window — HELD */
+    char                 url[2048]; /* the document's address, which §4.4 baseURI reads */
+} Document;
+
+/* THE RUNNING REALM'S DOCUMENT. The context opaque, because a JSContext IS the document — so there is no table
+   to look it up in and no way for the answer to be the wrong document's. NULL before install, which is a state
+   only the accessors that tolerate it may see. */
+static Document *doc_of(JSContext *ctx)
+{
+    return (Document *)JS_GetContextOpaque(ctx);
+}
+
+static Document *doc_here(JSContext *ctx)
+{
+    Document *d = doc_of(ctx);
+    DCHECK(d != NULL, "a document member ran in a realm with no Document — document_install names which realm "
+                      "a document is, and a realm that never had one cannot answer for a tree it has not got");
+    return d;
+}
 
 /* §4.2.6 / §4.9 THE SELECTOR MEMBERS, AS ONE MACHINE — querySelector, querySelectorAll, matches, closest.
  *
@@ -256,7 +292,7 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
     if (argc < 1) return JS_NULL;
     tag = JS_ToCString(ctx, argv[0]);
     if (!tag) return JS_EXCEPTION;
-    el = lxb_dom_document_create_element(lxb_dom_interface_document(g_doc),
+    el = lxb_dom_document_create_element(lxb_dom_interface_document(doc_here(ctx)->dom),
                                          (const lxb_char_t *)tag, strlen(tag), NULL);
     JS_FreeCString(ctx, tag);
     dom_cow_note_created(el ? lxb_dom_interface_node(el) : NULL);   /* this flow made it: the delta owns it */
@@ -288,7 +324,7 @@ static JSValue js_doc_create_text(JSContext *ctx, JSValueConst this_val, int arg
     (void)this_val;
     s = argc >= 1 ? JS_ToCStringLen(ctx, &len, argv[0]) : JS_ToCStringLen(ctx, &len, JS_UNDEFINED);
     if (!s) return JS_EXCEPTION;
-    t = lxb_dom_document_create_text_node(lxb_dom_interface_document(g_doc), (const lxb_char_t *)s, len);
+    t = lxb_dom_document_create_text_node(lxb_dom_interface_document(doc_here(ctx)->dom), (const lxb_char_t *)s, len);
     dom_cow_note_created(t ? lxb_dom_interface_node(t) : NULL);   /* this flow made it */
     JS_FreeCString(ctx, s);
     DCHECK(t != NULL, "createTextNode produced no node — a page building its DOM would silently build nothing");
@@ -305,7 +341,7 @@ static JSValue js_doc_create_comment(JSContext *ctx, JSValueConst this_val, int 
     (void)this_val;
     s = argc >= 1 ? JS_ToCStringLen(ctx, &len, argv[0]) : JS_ToCStringLen(ctx, &len, JS_UNDEFINED);
     if (!s) return JS_EXCEPTION;
-    c = lxb_dom_document_create_comment(lxb_dom_interface_document(g_doc), (const lxb_char_t *)s, len);
+    c = lxb_dom_document_create_comment(lxb_dom_interface_document(doc_here(ctx)->dom), (const lxb_char_t *)s, len);
     dom_cow_note_created(c ? lxb_dom_interface_node(c) : NULL);   /* this flow made it */
     JS_FreeCString(ctx, s);
     DCHECK(c != NULL, "createComment produced no node — a page building its DOM would silently build nothing");
@@ -389,7 +425,7 @@ static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, i
             JS_FreeCString(ctx, qname);
             return JS_EXCEPTION;
         }
-        el = lxb_dom_element_create(lxb_dom_interface_document(g_doc),
+        el = lxb_dom_element_create(lxb_dom_interface_document(doc_here(ctx)->dom),
                                     (const lxb_char_t *)local, strlen(local),
                                     (const lxb_char_t *)ns, ns ? strlen(ns) : 0,
                                     prefix_len ? (const lxb_char_t *)qname : NULL, prefix_len,
@@ -408,27 +444,27 @@ static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, i
    because a page that missed the event reads it instead. Both are per-FLOW: the scheduler asks once per stage
    for each flow that has run everything the document gave it, so an arm that reached the end of the document
    fires its own listeners in its own world. */
-static JSValue g_doc_obj = JS_UNDEFINED, g_win_obj = JS_UNDEFINED;
-/* The document's address, which §4.4 baseURI reads through document_base_url(). */
-static char g_doc_url[2048];
-
-/* The parsed document's ROOT node — what a whole-tree walk starts from. One component owns which document this
-   engine parsed; a second copy of that pointer is how the two drift apart. */
-lxb_dom_node_t *document_root_node(void)
+/* The parsed document's ROOT node — what a whole-tree walk starts from. One component owns which document a
+   realm parsed; a second copy of that pointer is how the two drift apart. NULL before the install, which is a
+   real state a Window member reads (`window.document` before there is one). */
+lxb_dom_node_t *document_root_node(JSContext *ctx)
 {
-    return g_doc ? lxb_dom_interface_node(g_doc->dom_document.element) : NULL;
+    Document *d = doc_of(ctx);
+    return d ? lxb_dom_interface_node(d->dom->dom_document.element) : NULL;
 }
 
-const char *document_base_url(void)
+const char *document_base_url(JSContext *ctx)
 {
-    DCHECK(g_doc_url[0] != '\0', "a node's baseURI was read before the document was installed");
-    return g_doc_url;
+    Document *d = doc_here(ctx);
+    DCHECK(d->url[0] != '\0', "a node's baseURI was read before the document was installed");
+    return d->url;
 }
 
 static void document_set_ready(JSContext *ctx, const char *state)
 {
-    if (JS_IsObject(g_doc_obj))
-        JS_SetPropertyStr(ctx, g_doc_obj, "readyState", JS_NewString(ctx, state));
+    Document *d = doc_here(ctx);
+    if (JS_IsObject(d->doc_obj))
+        JS_SetPropertyStr(ctx, d->doc_obj, "readyState", JS_NewString(ctx, state));
 }
 
 static int document_done_stage(JSContext *ctx, int stage)
@@ -438,13 +474,15 @@ static int document_done_stage(JSContext *ctx, int stage)
         /* §3.1.1: DOMContentLoaded is fired AT THE DOCUMENT and BUBBLES, which is how a `window.onload`-style
            listener registered on window hears it — the propagation path derives that from the document's
            ancestors now rather than the caller naming the window. It is not cancelable. */
-        event_target_fire(ctx, g_doc_obj, event_new(ctx, "DOMContentLoaded", /*bubbles*/ true, /*cancelable*/ false));
+        event_target_fire(ctx, doc_here(ctx)->doc_obj,
+                          event_new(ctx, "DOMContentLoaded", /*bubbles*/ true, /*cancelable*/ false));
         return 1;
     }
     DCHECK(stage == 1, "the document lifecycle was asked for a stage it does not have");
     document_set_ready(ctx, "complete");
     /* HTML: `load` is fired at the WINDOW and does not bubble — there is nothing above it to bubble to. */
-    event_target_fire(ctx, g_win_obj, event_new(ctx, "load", /*bubbles*/ false, /*cancelable*/ false));
+    event_target_fire(ctx, doc_here(ctx)->win_obj,
+                      event_new(ctx, "load", /*bubbles*/ false, /*cancelable*/ false));
     return 1;
 }
 
@@ -473,8 +511,6 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
    reason the bundle id is a `<script>` scan.
    The HEADER-borne policy is the other half and is the HOST's: it arrives with the response, which the trusted
    zone fetched, and this component never sees it. When that is plumbed it joins the same container. */
-static PolicyContainer *g_policy;
-
 PolicyContainer *document_meta_policy(lxb_html_document_t *dom)
 {
     lxb_dom_node_t *cur;
@@ -523,25 +559,35 @@ PolicyContainer *document_meta_policy(lxb_html_document_t *dom)
     }
 }
 
-const PolicyContainer *document_policy(void) { return g_policy; }
+const PolicyContainer *document_policy(JSContext *ctx) { return doc_here(ctx)->policy; }
 
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url)
 {
+    Document *d;
     JSValue doc;
 
     DCHECK(dom != NULL, "the Document install was handed no parsed document");
     /* BEFORE ANYTHING ELSE, and before the no-address return below: the policy is a property of the parsed
        TREE, not of the address, and §7.4 clones it for an about:blank child at the moment that child is
        created — which can be the first thing a boot script does.
-       ONCE, ON THE BASELINE. One instance is one document, so a second install means a NAVIGATION, and a
-       navigation's container is per-flow: the flow that navigated sees the new policy and its siblings still
-       see the old one. Replacing a global here would answer for whichever world ran last, so the second
-       install crashes naming the COW record to build instead. */
-    DCHECK(g_policy == NULL,
-           "a document's policy container was installed twice — that is a NAVIGATION, and its container is "
+       ONCE PER REALM, ON THE BASELINE. A realm IS a document, so a second install into the same one means a
+       NAVIGATION, and a navigation's container is per-flow: the flow that navigated sees the new policy and its
+       siblings still see the old one. Replacing it here would answer for whichever world ran last, so the
+       second install crashes naming the COW record to build instead. A SECOND DOCUMENT is a second realm and
+       does not come through here twice. */
+    DCHECK(doc_of(ctx) == NULL,
+           "a document was installed twice into one realm — that is a NAVIGATION, and its container is "
            "per-flow state: build it as a COW record (like ProxyData's PROXY_REC) captured in its accessor, so "
            "the flow that navigated and the sibling that did not each read their own");
-    g_policy = document_meta_policy(dom);
+    d = calloc(1, sizeof *d);
+    CHECK(d != NULL, "document: OOM naming this realm's document");
+    d->dom = dom;
+    d->doc_obj = JS_UNDEFINED;
+    d->win_obj = JS_UNDEFINED;
+    d->policy = document_meta_policy(dom);
+    /* THE REALM IS THE DOCUMENT FROM HERE ON — set before the early return below, because the policy was
+       already built and §7.4 clones it for an about:blank child whether or not this document got an address. */
+    JS_SetContextOpaque(ctx, d);
     if (!url || !*url)
         return;   /* no address, no Document — the page's own throw is the honest answer */
 
@@ -561,11 +607,10 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
         event_target_install_handlers(ctx, proto, EH_GLOBAL | EH_DOCUMENT);
         node_set_proto(ctx, LXB_DOM_NODE_TYPE_DOCUMENT, proto);
     }
-    element_doc_set(dom);   /* BEFORE the wrap: the tree accessors below read through it */
     doc = node_wrap(ctx, lxb_dom_interface_node(dom));
     CHECK(JS_IsObject(doc), "the Document wrapper allocation failed");
 
-    snprintf(g_doc_url, sizeof(g_doc_url), "%s", url);
+    snprintf(d->url, sizeof(d->url), "%s", url);
 
     /* Facts about the document this engine parsed. */
     JS_SetPropertyStr(ctx, doc, "URL",         JS_NewString(ctx, url));
@@ -616,8 +661,8 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        "borrowed", and a reference nobody released kept the Document — and through it the wrapped tree and the
        window — alive: JS_FreeRuntime's gc_obj_list walk counted 751 surviving objects, one per object in the
        page, from these two lines. */
-    g_doc_obj = doc;
-    g_win_obj = JS_DupValue(ctx, global);
+    d->doc_obj = doc;
+    d->win_obj = JS_DupValue(ctx, global);
     /* The interface OBJECTS, now that every prototype exists. Node's goes first because the derived ones
        inherit from it; each component names the one it owns rather than node.c enumerating them. */
     document_fragment_init(ctx);         /* §4.7, before any fragment is wrapped as a bare Node */
@@ -651,10 +696,12 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
    is the entire page counted one object at a time. A component that holds a reference owns releasing it. */
 void document_free(JSContext *ctx)
 {
-    JS_FreeValue(ctx, g_win_obj);
-    JS_FreeValue(ctx, g_doc_obj);
-    g_win_obj = g_doc_obj = JS_UNDEFINED;
-    g_doc = NULL;
-    policy_container_free(g_policy);   /* malloc'd, so the GC walk would never have named it */
-    g_policy = NULL;
+    Document *d = doc_of(ctx);
+
+    if (!d) return;   /* a realm that never had a document — the runner builds one per component test */
+    JS_FreeValue(ctx, d->win_obj);
+    JS_FreeValue(ctx, d->doc_obj);
+    policy_container_free(d->policy);   /* malloc'd, so the GC walk would never have named it */
+    free(d);
+    JS_SetContextOpaque(ctx, NULL);
 }

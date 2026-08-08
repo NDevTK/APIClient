@@ -318,7 +318,7 @@ static int solved(const char *sink, const char *src) {
    `innerHTML` fed from `location.hash` that set contains `<`, which is why no HTML-context candidate can fire
    and why the same source's JS-context sink does; the entry states the constraint, it does not claim the sink
    is safe, because an app that percent-DECODES its fragment would break out with the same candidate. */
-char *solve_json_array(void) {
+char *solve_json_array(JSContext *ctx) {
     Buf b = { 0 };
     int n = 0;
     buf_puts(&b, "[");
@@ -333,7 +333,7 @@ char *solve_json_array(void) {
            real. So the finding stays, and it CARRIES what blocks it — "sink REAL, CSP blocks", which is the
            standard's own distinction and the only one that survives being read by someone else. */
         {
-            const PolicyContainer *pc = document_policy();
+            const PolicyContainer *pc = document_policy(ctx);
             PolicyScriptKind kind = !strcmp(g_sinks[i].sink, "eval")      ? POLICY_EVAL
                                   : !strcmp(g_sinks[i].sink, "location")  ? POLICY_JAVASCRIPT_URL
                                                                           : POLICY_INLINE_HANDLER;

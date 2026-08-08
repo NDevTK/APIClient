@@ -24,7 +24,7 @@ static char *g_origin;   /* this document's origin — what an about:blank child
    written, and a relative reference has neither an origin nor a meaning outside the document that wrote it —
    handing the host the raw text would make it resolve against something, and the only base it could pick is a
    guess. Returns false when the reference does not parse; both outputs are owned on success. */
-static bool child_address(const char *url, char **out_url, char **out_origin)
+static bool child_address(JSContext *ctx, const char *url, char **out_url, char **out_origin)
 {
     UrlRecord base, rec;
     const char *base_url;
@@ -40,7 +40,7 @@ static bool child_address(const char *url, char **out_url, char **out_origin)
         CHECK(*out_url && *out_origin, "navigable: OOM naming an about:blank child");
         return true;
     }
-    base_url = document_base_url();
+    base_url = document_base_url(ctx);
     url_record_init(&base);
     have_base = base_url && url_parse(&base, base_url, strlen(base_url), NULL);
     url_record_init(&rec);
@@ -60,14 +60,14 @@ static bool child_address(const char *url, char **out_url, char **out_origin)
    of duplication that lets two call sites drift into two protocols. */
 JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child)
 {
-    const char *csp = policy_container_csp(document_policy());
+    const char *csp = policy_container_csp(document_policy(ctx));
     char *addr = NULL, *origin = NULL;
     uint32_t child;
     JSValue proxy;
     char *op;
     size_t n;
 
-    if (!child_address(url, &addr, &origin)) {   /* the reference does not parse; the caller decides what that means */
+    if (!child_address(ctx, url, &addr, &origin)) {   /* the reference does not parse; the caller decides what that means */
         free(addr); free(origin);
         return JS_UNDEFINED;
     }
@@ -132,10 +132,17 @@ void navigable_install(JSContext *ctx, JSValueConst global, const char *origin)
        optional [LegacyNullToEmptyString] DOMString features = "") -> WindowProxy? */
     static const IdlArgType OPEN_ARGS[3] = { IDL_USVSTRING, IDL_DOMSTRING, IDL_DOMSTRING };
 
-    DCHECK(g_origin == NULL, "window.open was installed twice — one instance is one document");
-    free(g_origin);
-    g_origin = strdup(origin ? origin : "null");
-    CHECK(g_origin != NULL, "navigable: OOM recording this document's origin");
+    /* THE ORIGIN IS THE AGENT'S, NOT THE DOCUMENT'S. An agent is origin-keyed, so every document installed into
+       this instance has the same one and a second install is a second DOCUMENT, not a contradiction — but a
+       DIFFERENT origin arriving here would mean two principals behind one instance, which SECURITY.md's
+       one-principal-per-instance rule forbids and which would make an about:blank child inherit the wrong one. */
+    DCHECK(g_origin == NULL || !strcmp(g_origin, origin ? origin : "null"),
+           "a second document was installed into this agent with a DIFFERENT origin — an agent is origin-keyed, "
+           "so a cross-origin document is a second INSTANCE and never a second realm in this one");
+    if (!g_origin) {
+        g_origin = strdup(origin ? origin : "null");
+        CHECK(g_origin != NULL, "navigable: OOM recording this agent's origin");
+    }
     idl_install_method(ctx, global, "open", 0, idl_method_id(ctx, OPEN_ARGS, 3, js_win_open, 0));
     idl_optional_from(0);
 }

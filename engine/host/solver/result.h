@@ -19,7 +19,7 @@
  *   { "fetchCallSites":[…], "securitySinks":[…], "_switches":N }
  * `_switches` is the scheduler's context-switch count — the host's WFQ reads it as the observable that the ONE
  * BFS actually interleaves rather than running its flows FIFO. */
-char *result_json(void);
+char *result_json(JSContext *ctx);
 
 /* AN UNCAUGHT ERROR FROM ONE OF THE PAGE'S OWN SCRIPTS. A page's throw ending its script is intentional — it is
    the forcing function that names an unbuilt capability — but the name was invisible: the flow simply stopped

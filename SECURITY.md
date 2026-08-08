@@ -92,11 +92,15 @@ The bundle runs inside QuickJS (WASM linear memory), reaching the host only thro
 - It **cannot** read or set the principal (it lives in worker JS, outside the WASM, set per page) and
   **cannot** do raw network — its own `fetch()` calls are *recorded*, not issued; its `import()`
   targets become **untrusted URLs** that `safeFetch` gates (origin-relative SSRF + CORB).
-- **One WASM instance per DOCUMENT** (`freshInstance`, isolated memory) — never per tab and never per
-  page, because a tab holds documents that may be cross-origin to each other and an iframe or a popup
-  is a document of its own. The instance IS the principal: a fetch is governed by a single, correct
-  origin because there is exactly one origin in the instance that issued it. Reusing an instance
-  across documents would put two principals behind one `pageOrigin`.
+- **One WASM instance per ORIGIN-KEYED AGENT CLUSTER** — `(browsing-context group, origin)`,
+  `freshInstance`, isolated memory — never per tab and never per page, because a tab holds documents
+  that may be cross-origin to each other and an iframe or a popup gets its own instance the moment its
+  origin differs. The instance IS the principal: a fetch is governed by a single, correct origin
+  because there is exactly one origin in the instance that issued it, and that stays exactly true when
+  same-origin documents share one — origin, not document, is what the invariant is keyed on. Reusing
+  an instance across ORIGINS would put two principals behind one `pageOrigin`; splitting one across
+  same-origin documents would instead break HTML's own single-heap agent, which same-origin DOM
+  adoption and cross-frame closures rely on.
 - **The engine NAMES its own child documents; the offscreen ROUTES them.** An `<iframe>` insertion or
   a `window.open()` mints the child's name inside the instance (`"<parent>.<n>"`, unique by induction)
   and announces it as a one-way notice; the offscreen is what provisions an instance for that name and

@@ -252,7 +252,7 @@ QJS_EXPORT int qjs_step(void)
 QJS_EXPORT const char *qjs_result(void)
 {
     DCHECK(g_begun, "qjs_result was asked of an engine that never ran");
-    return result_json();
+    return result_json(g_ctx);
 }
 
 QJS_EXPORT void qjs_teardown(void)
@@ -403,6 +403,6 @@ QJS_EXPORT void qjs_request_park(void)
 QJS_EXPORT void qjs_emit_partial(void)
 {
     DCHECK(g_begun, "qjs_emit_partial was asked of an engine that never ran");
-    printf("@RESULT %s\n", result_json());
+    printf("@RESULT %s\n", result_json(g_ctx));
     fflush(stdout);
 }

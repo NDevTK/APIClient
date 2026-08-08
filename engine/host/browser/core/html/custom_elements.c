@@ -253,7 +253,7 @@ void custom_elements_try_upgrade(JSContext *ctx, lxb_dom_element_t *el)
    that arrives after the parser is the ordinary case for a deferred bundle. */
 static void ce_upgrade_document(JSContext *ctx, const char *name, size_t nlen, JSValueConst def)
 {
-    lxb_dom_node_t *root = document_root_node(), *n;
+    lxb_dom_node_t *root = document_root_node(ctx), *n;
     size_t len = 0;
 
     if (!root) return;

@@ -6,8 +6,12 @@
  * inherits its parent's CSP by the ordinary rule, not by an inheritance rule written for CSP — see
  * policy_container.h.
  *
- * ONE INSTANCE IS ONE DOCUMENT, so the child is not in this heap and the clone is a CROSS-INSTANCE operation:
- * the creator's serialized policy travels with the notice.
+ * AN INSTANCE IS AN ORIGIN-KEYED AGENT, so WHERE the child lives is decided by its ORIGIN. A SAME-ORIGIN child
+ * is a second realm in THIS heap — HTML's similar-origin window agent — and its policy container is cloned by
+ * an ordinary in-heap copy. A CROSS-ORIGIN child is another instance, and there the clone travels as the
+ * creator's SERIALIZED policy on the create notice, which the container can do precisely because it is a flat
+ * parse over one owned string: the clone that crosses an instance and the one that crosses a session are the
+ * same operation.
  *
  * CREATION IS SYNCHRONOUS, AND THAT IS NOT A CONVENIENCE — IT IS THE SPEC. §4.8.5's iframe INSERTION STEPS
  * create the child navigable, so `frame.contentWindow` answers on the line after the append, and §7.4's

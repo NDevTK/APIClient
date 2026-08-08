@@ -37,7 +37,7 @@ static int     g_ready;
    it in one, so there is nothing to capture: an uninserted node is flow-private. */
 static JSValue js_frag_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
 {
-    lxb_dom_node_t *root = document_root_node();
+    lxb_dom_node_t *root = document_root_node(ctx);
     lxb_dom_document_fragment_t *frag;
 
     (void)new_target; (void)argc; (void)argv;

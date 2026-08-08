@@ -38,7 +38,7 @@
 static bool hyperlink_url(JSContext *ctx, JSValueConst el, UrlRecord *out, char **raw_href)
 {
     char *href = element_attr_get(ctx, el, "href");
-    const char *base_url = document_base_url();
+    const char *base_url = document_base_url(ctx);
     UrlRecord base;
     bool have_base, ok = false;
 
