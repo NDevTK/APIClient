@@ -81,8 +81,8 @@ quickjs-ng, design the THREE cores correctly, and PORT the proven mechanisms. Th
 Design fixtures (`testing/fixtures/c_*`), live Chrome harness (`restart`), QUALITATIVE design
 correctness only — responsive (infinite recursion/loops STARVE, never hang), value-correct (map=84,
 reduce=6, sort=1), produces its endpoint, no heap corruption. NEVER a count-regression test, NEVER a
-CDN bundle as a progress metric, NEVER native/node-CLI. One WASM instance per page; clear storage
-before concluding a bug.
+CDN bundle as a progress metric, NEVER native/node-CLI. One WASM instance per DOCUMENT (an iframe and a popup are
+documents of their own); clear storage before concluding a bug.
 
 ## What carries over from the current session (the right primitives, wrong substrate)
 

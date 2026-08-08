@@ -504,9 +504,7 @@ void message_port_install(JSContext *ctx, JSValueConst global)
     JSValue ctor;
 
     DCHECK(g_chan_ctor_stepid >= 0, "MessageChannel was installed before message_port_init declared it");
-    ctor = JS_NewCFunction2(ctx, NULL, "MessagePort", 0, JS_CFUNC_constructor, 0);
-    CHECK(!JS_IsException(ctor), "the MessagePort interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_port_proto);
+    ctor = idl_interface_object(ctx, "MessagePort", g_port_proto);
     JS_SetPropertyStr(ctx, (JSValue)global, "MessagePort", ctor);
 
     ctor = idl_step_constructor(ctx, "MessageChannel", 0, g_chan_ctor_stepid);

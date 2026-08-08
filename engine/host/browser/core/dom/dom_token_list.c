@@ -381,9 +381,7 @@ void dom_token_list_install(JSContext *ctx, JSValueConst global)
     JSValue ctor;
 
     DCHECK(g_ready, "DOMTokenList was installed before its prototype was built");
-    ctor = JS_NewCFunction2(ctx, NULL, "DOMTokenList", 0, JS_CFUNC_constructor, 0);
-    CHECK(!JS_IsException(ctor), "the DOMTokenList interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_proto);
+    ctor = idl_interface_object(ctx, "DOMTokenList", g_proto);
     JS_SetPropertyStr(ctx, (JSValue)global, "DOMTokenList", ctor);
 }
 

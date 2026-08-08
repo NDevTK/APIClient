@@ -92,8 +92,21 @@ The bundle runs inside QuickJS (WASM linear memory), reaching the host only thro
 - It **cannot** read or set the principal (it lives in worker JS, outside the WASM, set per page) and
   **cannot** do raw network — its own `fetch()` calls are *recorded*, not issued; its `import()`
   targets become **untrusted URLs** that `safeFetch` gates (origin-relative SSRF + CORB).
-- **One WASM instance per page** (`freshInstance`, isolated memory) — the sandbox is never reused
-  across host pages, so a fetch is always governed by a single, correct origin.
+- **One WASM instance per DOCUMENT** (`freshInstance`, isolated memory) — never per tab and never per
+  page, because a tab holds documents that may be cross-origin to each other and an iframe or a popup
+  is a document of its own. The instance IS the principal: a fetch is governed by a single, correct
+  origin because there is exactly one origin in the instance that issued it. Reusing an instance
+  across documents would put two principals behind one `pageOrigin`.
+- **The engine NAMES its own child documents; the offscreen ROUTES them.** An `<iframe>` insertion or
+  a `window.open()` mints the child's name inside the instance (`"<parent>.<n>"`, unique by induction)
+  and announces it as a one-way notice; the offscreen is what provisions an instance for that name and
+  what carries a cross-document read to it. That split is deliberate and it is the same rule as
+  `sender.tab.url`: **identity may be minted by the untrusted side because it is only a name, but
+  ROUTING and the ORIGIN STAMPED ON A DELIVERED MESSAGE are the trusted zone's alone.** A forgeable
+  `event.origin` would defeat every origin check in every bundle the engine analyses — it would report
+  exploits that are not real and miss ones that are — so the engine never supplies one.
+- **A cross-document delivery carries serialized bytes, never a live value**, for the same reason a
+  parked flow's snapshot does: a live value crosses neither an instance, nor a session, nor a park.
 - **Source maps stay outside QuickJS**: fetched/parsed in worker/offscreen JS (`as:"sourcemap"`),
   used only to label findings shown in the UI — never fed back into the engine.
 

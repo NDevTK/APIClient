@@ -550,12 +550,8 @@ void collections_install(JSContext *ctx, JSValueConst global)
     JSValue nl, hc;
 
     DCHECK(g_ready, "the collection interfaces were installed before their prototypes were built");
-    nl = JS_NewCFunction2(ctx, NULL, "NodeList", 0, JS_CFUNC_constructor, 0);
-    hc = JS_NewCFunction2(ctx, NULL, "HTMLCollection", 0, JS_CFUNC_constructor, 0);
-    CHECK(!JS_IsException(nl) && !JS_IsException(hc),
-          "a collection interface object could not be allocated");
-    JS_SetConstructor(ctx, nl, g_nodelist_proto);
-    JS_SetConstructor(ctx, hc, g_htmlcoll_proto);
+    nl = idl_interface_object(ctx, "NodeList", g_nodelist_proto);
+    hc = idl_interface_object(ctx, "HTMLCollection", g_htmlcoll_proto);
     JS_SetPropertyStr(ctx, (JSValue)global, "NodeList", nl);
     JS_SetPropertyStr(ctx, (JSValue)global, "HTMLCollection", hc);
 }

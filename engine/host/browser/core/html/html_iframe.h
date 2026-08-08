@@ -18,6 +18,11 @@ void iframe_create_navigable(JSContext *ctx, JSValueConst wrapper);
 /* §4.8.5's removing steps: DESTROY the child navigable. The element loses it (contentWindow goes null) and the
    proxy a page is still holding reports `closed`. A no-op for an element this flow never gave one. */
 void iframe_destroy_navigable(JSContext *ctx, JSValueConst wrapper);
+/* §4.8.5 for the iframes the PARSER inserted: a browser runs the insertion steps during tree construction, and
+   this engine's tree comes from a parse that does not pass through the DOM chokepoint. Run once, when the
+   document is installed; anything a script appends afterwards goes through the chokepoint instead. */
+void iframe_document_parsed(JSContext *ctx);
+
 /* §7.2.5's DOCUMENT-TREE CHILD NAVIGABLES, in tree order: what `window.length` counts and `window[i]` indexes.
    Walked from the document tree on every ask, because the set changes with every insertion, removal and
    reparent — and both the tree and the navigables are per-flow, so the answer is this flow's. The nth is

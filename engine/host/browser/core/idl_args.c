@@ -1153,6 +1153,29 @@ void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
    which is how a five-second member step reported itself as "(none)" and stayed anonymous through two rebuilds.
    Six hand-written copies of one call is the same shape as one builtin answering differently depending on which
    spelling reached it: the fix is not to name them one by one, it is for there to be one mint. */
+/* WEB IDL §3.7.1: AN INTERFACE WITH NO CONSTRUCTOR IS STILL A FUNCTION OBJECT, and calling or constructing it
+   throws a TypeError — `new MessagePort()` is a TypeError, not a way to make a port. Six interfaces built their
+   interface object with a NULL body, which is not "no constructor": it is a null function pointer, and
+   `new MessagePort()` called through it and SEGFAULTED the process. The spec's TypeError was arriving as a
+   crash. One call builds an interface object now, so a seventh interface cannot invent a seventh way to have no
+   constructor. */
+static JSValue idl_illegal_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val; (void)argc; (void)argv;
+    return JS_ThrowTypeError(ctx, "Illegal constructor");
+}
+
+JSValue idl_interface_object(JSContext *ctx, const char *name, JSValueConst proto)
+{
+    JSValue ctor = JS_NewCFunction2(ctx, idl_illegal_ctor, name, 0, JS_CFUNC_constructor, 0);
+
+    DCHECK(JS_IsObject(proto), "an interface object was built with no prototype behind it — §3.7.1 gives every "
+                               "one a `prototype`, and a page brand-checks through it");
+    CHECK(!JS_IsException(ctor), "an interface object could not be allocated");
+    JS_SetConstructor(ctx, ctor, proto);   /* .prototype and .constructor, both directions, one call */
+    return ctor;
+}
+
 JSValue idl_step_function(JSContext *ctx, const char *name, int length, int stepid)
 {
     int idx = idl_member_of_step(stepid);

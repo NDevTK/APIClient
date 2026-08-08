@@ -300,9 +300,7 @@ void attr_install(JSContext *ctx, JSValueConst global)
     DCHECK(g_ready, "the Attr interfaces were installed before their prototypes were built");
     node_install_interface(ctx, global, "Attr", g_attr_proto);
     {
-        JSValue nnm = JS_NewCFunction2(ctx, NULL, "NamedNodeMap", 0, JS_CFUNC_constructor, 0);
-        CHECK(!JS_IsException(nnm), "the NamedNodeMap interface object could not be allocated");
-        JS_SetConstructor(ctx, nnm, g_nnm_proto);
+        JSValue nnm = idl_interface_object(ctx, "NamedNodeMap", g_nnm_proto);
         JS_SetPropertyStr(ctx, (JSValue)global, "NamedNodeMap", nnm);
     }
 }

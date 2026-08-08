@@ -264,6 +264,11 @@ typedef JSValue (*IdlGetter)(JSContext *ctx, JSValueConst this_val, int magic);
 /* THE ONE MINT for a step member's function value, and the only thing that can name its pool entry. Use it
    instead of JS_NewCFunction2(..., JS_CFUNC_step, stepid) — a hand-written copy leaves the member anonymous in
    every diagnostic, and there is nothing to notice that until one of them is the thing you are looking for. */
+/* §3.7.1's INTERFACE OBJECT for an interface that declares NO constructor: a function object whose `prototype`
+   is `proto` and whose call and construct both throw a TypeError. The one way to build one — a NULL C function
+   pointer is not "no constructor", it is a crash where the spec says TypeError. */
+JSValue idl_interface_object(JSContext *ctx, const char *name, JSValueConst proto);
+
 JSValue idl_step_function(JSContext *ctx, const char *name, int length, int stepid);
 JSValue idl_step_constructor(JSContext *ctx, const char *name, int length, int stepid);
 

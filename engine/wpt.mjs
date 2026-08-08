@@ -155,11 +155,22 @@ if (cc.status !== 0) { console.error("[wpt] runner build FAILED\n" + (cc.stderr 
    directories out changed no total at all. self-et-al.window.js is the WindowProxy identity test — window,
    self, frames, parent and top all naming one object — and it is precisely the gate this engine's new proxy
    surface needs. */
+/* AND `.html`, WHICH IS MOST OF THE CORPUS. 523 of the 778 test files checked out here are HTML documents, and
+   this collector took none of them: they were not run, not reported and not counted, so the total LOOKED
+   complete while two thirds of the corpus was excluded. An excluded test is a failure whatever the reason —
+   the same defect as a directory that is never checked out, and harder to notice.
+   WHICH .html FILES ARE TESTS is not a naming convention, and guessing from one would take reftest references
+   and support pages as tests. WPT's own manifest classifies by what the file LOADS: a testharness test is a
+   document that pulls in /resources/testharness.js. That is the check, read from the bytes. */
+function isTestDocument(p) {
+  try { return readFileSync(p, "utf8").includes("/resources/testharness.js"); } catch { return false; }
+}
 function collect(dir, out) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, e.name);
     if (e.isDirectory()) collect(p, out);
     else if (e.name.endsWith(".any.js") || e.name.endsWith(".window.js")) out.push(p);
+    else if (e.name.endsWith(".html") && isTestDocument(p)) out.push(p);
   }
   return out;
 }
@@ -169,11 +180,20 @@ const arg = process.argv[2] || "";
    as before and looked like the new component had changed nothing. The default is derived from WPT_PATHS for
    the same reason the META scripts are read from the file: the two must not be able to disagree. */
 const root = arg ? join(WPT, arg) : WPT;
-const files = arg.endsWith(".js") ? [root]
+const files = (arg.endsWith(".js") || arg.endsWith(".html")) ? [root]
             : arg ? collect(root, []).sort()
             : WPT_PATHS.filter((p) => p !== "resources" && p !== "common")
                        .flatMap((p) => collect(join(WPT, p), [])).sort();
-if (!files.length) { console.error(`[wpt] no .any.js under ${root}`); process.exit(1); }
+if (!files.length) { console.error(`[wpt] no test files under ${root}`); process.exit(1); }
+
+/* The AREA a file belongs to: the checked-out path it lives under, which is what WPT_PATHS names. */
+const areas = new Map();
+function byArea(rel) {
+  const p = WPT_PATHS.find((d) => rel === d || rel.startsWith(d + "/")) || rel.split("/")[0];
+  let a = areas.get(p);
+  if (!a) areas.set(p, (a = { files: 0, pass: 0, fail: 0, aborted: 0 }));
+  return a;
+}
 
 const HARNESS = join(WPT, "resources", "testharness.js");
 
@@ -231,12 +251,13 @@ const failures = [];
 
 for (const f of files) {
   const rel = relative(WPT, f);
+  byArea(rel).files++;
   const deps = metaScripts(f);
   const missing = deps.filter((d) => !existsSync(d));
   if (missing.length) {
     /* A META script the sparse checkout does not have is a GATE defect, not a test result: the file would run
        against a corpus it was not written for. Name the paths so WPT_PATHS can be widened. */
-    aborted++;
+    aborted++; byArea(rel).aborted++;
     failures.push(`  ABORT  ${rel}\n         META script not checked out: ${missing.map((d) => relative(WPT, d)).join(", ")}`);
     continue;
   }
@@ -255,7 +276,7 @@ for (const f of files) {
   const why = out.match(/@WHY .*"reason":"([^"]*)/);
   const abortedHere = Boolean(why || r.signal);
   if (abortedHere) {
-    aborted++;
+    aborted++; byArea(rel).aborted++;
     failures.push(`  ABORT  ${rel}\n         ${why ? why[1].slice(0, 160) : "signal " + r.signal}`);
   }
   /* A TEST THAT ASKS FOR A wptserve HANDLER cannot run here, and that is the GATE's limitation rather than a
@@ -264,7 +285,7 @@ for (const f of files) {
      the browser's. */
   const handler = out.match(/^@WPTHANDLER (.*)$/m);
   if (handler) {
-    aborted++;
+    aborted++; byArea(rel).aborted++;
     failures.push(`  ABORT  ${rel}\n         needs the wptserve handler ${handler[1]}, which this runner cannot execute`);
     continue;
   }
@@ -278,7 +299,7 @@ for (const f of files) {
   }
   const err = out.match(/^@WPTERR (.*)$/m);
   if (!abortedHere && err && !filePass && !fileFail) {
-    aborted++;
+    aborted++; byArea(rel).aborted++;
     failures.push(`  ERROR  ${rel}\n         ${err[1].slice(0, 200)}`);
     continue;
   }
@@ -288,17 +309,32 @@ for (const f of files) {
      file held no tests, which is the same silent truncation as leaving a directory out of the checkout: the
      number goes down and nothing says why. It is counted and NAMED. */
   if (!abortedHere && !/^@WPTDONE /m.test(out)) {
-    aborted++;
+    aborted++; byArea(rel).aborted++;
     failures.push(`  ABORT  ${rel}\n         the harness never completed — no @WPTDONE, so its ` +
                   `${filePass + fileFail} reported subtest(s) are not the whole file`);
     continue;
   }
   pass += filePass;
   fail += fileFail;
+  byArea(rel).pass += filePass;
+  byArea(rel).fail += fileFail;
 }
 
+/* PER-AREA, NOT ONE NUMBER. `encoding` alone answers three quarters of a million subtests — one per code point
+   per legacy encoder — so a single total is a number in which every other area is invisible: a component that
+   lost a hundred subtests and one that gained them read identically. The areas are the checked-out paths, which
+   is the same list that decides what runs, so the breakdown cannot drift from the corpus. */
 console.log("\n==================== web-platform-tests ====================");
 for (const l of failures) console.log(l);
+{
+  const names = [...areas.keys()].sort();
+  const w = Math.max(...names.map((n) => n.length));
+  for (const n of names) {
+    const a = areas.get(n);
+    console.log(`  ${n.padEnd(w)}  files ${String(a.files).padStart(4)}  pass ${String(a.pass).padStart(7)}` +
+                `  fail ${String(a.fail).padStart(7)}  aborted ${String(a.aborted).padStart(3)}`);
+  }
+}
 console.log(`  files ${files.length}   subtests ${pass + fail}   pass ${pass}   fail ${fail}   aborted-files ${aborted}`);
 console.log("===========================================================");
 process.exit(fail || aborted ? 1 : 0);

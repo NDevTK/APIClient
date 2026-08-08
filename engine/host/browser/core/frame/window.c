@@ -100,11 +100,131 @@ static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int argc, 
     return concolic_new(ctx, "{window.name}", "window.name", JS_UNDEFINED);
 }
 
+/* §7.2.5.1's EXOTIC OWN-PROPERTY BEHAVIOUR — `window[0]`, and why it is not a property anyone sets.
+ *
+ * The global is a LEGACY PLATFORM OBJECT. Its SUPPORTED PROPERTY INDICES are its document-tree child
+ * navigables, and `window[i]` is the i-th one's WindowProxy. Materialising those as own data properties would
+ * be right until the first frame was appended, removed or moved — the set changes on every tree mutation, and
+ * a count or a slot that a mutation forgot to adjust is wrong in exactly the case the spec files test. Exotic
+ * behaviour is what §7.2.5.1 describes and what this is: every answer is computed from the tree at the moment
+ * it is asked.
+ *
+ * THE THREE OPERATIONS ARE NOT SYMMETRIC, and each asymmetry is a spec sentence:
+ *   [[GetOwnProperty]] answers only for a SUPPORTED index — an unsupported one is an ordinary miss, so
+ *     `window[7] = "x"` on a frameless page really does create an ordinary property.
+ *   [[DefineOwnProperty]] returns FALSE for EVERY array index, supported or not. `Object.defineProperty(window,
+ *     0, …)` fails on a page with no frames at all, which is what distinguishes it from the above.
+ *   [[Delete]] returns false only for a SUPPORTED index; anything else is the ordinary "nothing to delete".
+ *
+ * IT IS REACHED ONLY AFTER THE ORDINARY LOOKUP MISSES (quickjs consults a class's exotic get_own_property when
+ * find_own_property found nothing), so a global variable read pays for this only when it was going to fail
+ * anyway — and the index test is the engine's own, not a re-parse of the atom's text. */
+static JSClassID g_window_class;
+
+/* The child navigable this index names, or false. Owned on true. */
+static bool win_supported_index(JSContext *ctx, JSAtom prop, JSValue *out)
+{
+    uint32_t idx;
+    JSValue nav;
+
+    if (!JS_AtomIsIndex(ctx, &idx, prop) || idx > (uint32_t)INT32_MAX) return false;
+    nav = iframe_child_navigable(ctx, (int)idx);
+    if (JS_IsUndefined(nav)) return false;
+    *out = nav;
+    return true;
+}
+
+static int win_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom prop)
+{
+    JSValue v;
+    (void)obj;
+    if (!win_supported_index(ctx, prop, &v)) return 0;
+    if (!desc) { JS_FreeValue(ctx, v); return 1; }
+    /* §7.2.5.1: { [[Value]]: the child's WindowProxy, [[Writable]]: false, [[Enumerable]]: true,
+       [[Configurable]]: true }. */
+    desc->flags = JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE;
+    desc->getter = JS_UNDEFINED;
+    desc->setter = JS_UNDEFINED;
+    desc->value = v;
+    return 1;
+}
+
+static int win_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValueConst val,
+                          JSValueConst getter, JSValueConst setter, int flags)
+{
+    uint32_t idx;
+
+    if (JS_AtomIsIndex(ctx, &idx, prop)) {
+        if (flags & JS_PROP_THROW) {
+            JS_ThrowTypeError(ctx, "cannot define an indexed property on the window object");
+            return -1;
+        }
+        return 0;
+    }
+    /* EVERYTHING ELSE IS ORDINARY, and the exotic hook REPLACES the ordinary path rather than preceding it —
+       so the ordinary path is re-entered here explicitly, with the exotic step suppressed. Forgetting this
+       would not break `window[0]`; it would break every `var` and every property a page defines on the
+       global. */
+    return JS_DefineProperty(ctx, obj, prop, val, getter, setter, flags | JS_PROP_NO_EXOTIC);
+}
+
+static int win_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
+{
+    JSValue v;
+    (void)obj;
+    /* Reached only when the ordinary own-property scan found nothing, so "not an index" is "nothing to
+       delete", which is true. */
+    if (!win_supported_index(ctx, prop, &v)) return 1;
+    JS_FreeValue(ctx, v);
+    return 0;
+}
+
+static int win_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, JSValueConst obj)
+{
+    int n = iframe_child_navigable_count(ctx), i;
+    JSPropertyEnum *tab;
+
+    (void)obj;
+    /* §7.2.5.1 [[OwnPropertyKeys]] lists the supported indices FIRST, in order. quickjs merges what this
+       returns with the object's ordinary keys, so only the indices belong here. */
+    tab = n ? js_malloc(ctx, sizeof(*tab) * (size_t)n) : NULL;
+    if (n && !tab) return -1;
+    for (i = 0; i < n; i++) {
+        tab[i].is_enumerable = true;
+        tab[i].atom = JS_NewAtomUInt32(ctx, (uint32_t)i);
+    }
+    *ptab = tab;
+    *plen = (uint32_t)n;
+    return 0;
+}
+
+static const JSClassExoticMethods WINDOW_EXOTIC = {
+    .get_own_property = win_get_own,
+    .get_own_property_names = win_own_names,
+    .delete_property = win_delete,
+    .define_own_property = win_define_own,
+    /* The lookup is a walk of the document tree and a read of each iframe's navigable slot — no page code, by
+       construction, which is what lets the engine's own accessor walks run it from C. */
+    .get_own_property_no_user_code = true,
+};
+
+static const JSClassDef WINDOW_CLASS = { "Window", NULL, NULL, NULL, &WINDOW_EXOTIC };
+
 void window_install(JSContext *ctx, JSValueConst global, const char *url)
 {
     JSValue g = (JSValue)global;
 
     DCHECK(JS_IsObject(global), "window_install was given something that is not the global object");
+
+    /* §7.2.5.1's exotic behaviour comes from the object's CLASS, and the global was created by the context
+       before any host class existed — so it is given one here. It owns no per-object data (no finalizer, no
+       gc_mark), which is what makes handing it to an already-built object sound. */
+    DCHECK(g_window_class == 0, "window_install ran twice — one instance is one document");
+    JS_NewClassID(JS_GetRuntime(ctx), &g_window_class);
+    CHECK(JS_NewClass(JS_GetRuntime(ctx), g_window_class, &WINDOW_CLASS) == 0,
+          "the Window class could not be registered");
+    CHECK(JS_SetGlobalClass(ctx, g_window_class) == 0,
+          "the global object would not take the Window class — §7.2.5.1's indexed access has nowhere to live");
 
     /* 7.2.2: window, self and frames all return THIS Window's proxy, and the global object IS that proxy here —
        so `window.X`, `self.X` and a bare `X` are one read spelled three ways. */
@@ -158,6 +278,7 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
 
 void window_free(JSContext *ctx)
 {
+    g_window_class = 0;
     JS_FreeValue(ctx, g_closed_owner);
     g_closed_owner = JS_UNDEFINED;
     bar_prop_free(ctx);

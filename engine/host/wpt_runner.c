@@ -61,6 +61,7 @@
 #include <lexbor/html/html.h>
 #include "core/dom/element.h"
 #include "core/dom/document.h"
+#include "core/loader/document_scripts.h"
 #include "core/frame/location.h"
 #include "core/encoding/encoding.h"
 #include "core/encoding/text_stream.h"
@@ -428,6 +429,77 @@ static void wpt_answer_host_requests(JSContext *ctx)
     (void)engine_host_notices();
 }
 
+/* ---- THE TEST FILE, WHICH IS OFTEN A DOCUMENT ----------------------------------------------------------
+ *
+ * MORE THAN HALF THE CORPUS IS AN HTML FILE, and this gate ran none of them: it collected `.any.js` and
+ * `.window.js` and nothing else, so 523 of the 778 test files checked out here were not run, not reported, and
+ * not counted. That is an exclusion, and an excluded test is a failure whatever the reason for excluding it —
+ * a directory whose files are never collected is the same defect as a directory that is never checked out,
+ * except that the total LOOKS complete.
+ *
+ * A `.window.js` is a script WPT's server wraps in a minimal document. An `.html` file IS the document, and the
+ * difference is only which one this runner parses: after that, both run their scripts against the same Window.
+ *
+ * IT IS FETCHED, NOT READ OFF DISK. A `.sub.html` is SUBSTITUTED by wptserve (hosts, ports, the local origin),
+ * so the bytes on disk are a template and running them would test the template. The runner already speaks HTTP
+ * to the corpus's own server for everything a test fetches; the document itself goes the same way, which is
+ * also what a browser does. */
+static int    g_html_mode;      /* the test is a document, not a script */
+static char   g_test_url[512];  /* its address, server-relative — what to GET and what to resolve against */
+
+/* ONE GET against the corpus server, resolved against the running document's address. */
+static char *wpt_get(const char *url, size_t *plen)
+{
+    FetchRequest req;
+    HeaderList h;
+    int status = 0;
+    char *body;
+
+    memset(&req, 0, sizeof req);
+    memset(&h, 0, sizeof h);
+    req.method = "GET";
+    req.url = url;
+    body = wpt_http(&req, plen, &status, &h);
+    header_list_free(&h);
+    if (body && (status < 200 || status >= 300)) { free(body); body = NULL; }
+    return body;
+}
+
+static void wpt_derive_addresses(int argc, char **argv)
+{
+    const char *h = argv[1], *tail = strstr(h, "/resources/testharness.js");
+    const char *test = argv[argc - 1];
+    size_t n = tail ? (size_t)(tail - h) : 0;
+    size_t tn = strlen(test);
+
+    CHECK(n < sizeof g_wpt_root, "wpt: the corpus root is longer than this runner holds");
+    memcpy(g_wpt_root, h, n);
+    g_wpt_root[n] = 0;
+    /* THE LAST argument is the test; the ones between are its META scripts. Reading argv[2] made a file with a
+       META script resolve its data against that script's directory instead of its own. */
+    if (argc > 2 && !strncmp(test, g_wpt_root, n))
+        snprintf(g_base_url, sizeof g_base_url, "http://web-platform.test%s", test + n);
+    else
+        snprintf(g_base_url, sizeof g_base_url, "http://web-platform.test/");
+    g_html_mode = tn > 5 && !strcmp(test + tn - 5, ".html");
+    if (g_html_mode) {
+        CHECK(!strncmp(test, g_wpt_root, n), "wpt: an HTML test outside the corpus root has no server address");
+        snprintf(g_test_url, sizeof g_test_url, "http://web-platform.test%s", test + n);
+        snprintf(g_base_url, sizeof g_base_url, "%s", g_test_url);
+    }
+    {
+        /* WHERE THE CORPUS IS SERVED FROM. The driver starts wptserve and names its loopback port here; the
+           runner speaks HTTP to it and sends the URL's own authority as the Host header, which is what a
+           hosts-file mapping does for a real browser. A run with no server has nothing to fetch from, and that
+           is a GATE defect rather than a result, so it fails loud. */
+        const char *sv = getenv("WPT_SERVER");
+        CHECK(sv && *sv && strchr(sv, ':'),
+              "wpt: WPT_SERVER names no host:port — the driver must start engine/wptserve.py and pass it");
+        CHECK(strlen(sv) < sizeof g_server, "wpt: WPT_SERVER is longer than this runner holds");
+        snprintf(g_server, sizeof g_server, "%s", sv);
+    }
+}
+
 /* Run one program as a FLOW, exactly as the test262 harness does: park and rebuild the whole frame chain at
    every back-edge. A throw is reported and ends the file — a test file that cannot run is a failure, never a
    skip. */
@@ -468,9 +540,14 @@ int main(int argc, char **argv)
     int i, failed = 0;
 
     if (argc < 2) {
-        fprintf(stderr, "usage: wpt_runner <testharness.js> <test.js> [more.js ...]\n");
+        fprintf(stderr, "usage: wpt_runner <testharness.js> <test.js|test.html> [more.js ...]\n");
         return 2;
     }
+    /* WHICH FILE IS THE TEST, WHERE IT LIVES, AND WHETHER IT IS A DOCUMENT. Derived before anything else is
+       built, because an HTML test's document has to be FETCHED and PARSED before `document` is installed —
+       there is no second document to swap in later, and a runner that installed a placeholder first would be
+       running the test's scripts against the wrong tree. */
+    wpt_derive_addresses(argc, argv);
     rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);
     ctx = JS_NewContext(rt);
@@ -538,6 +615,16 @@ int main(int argc, char **argv)
     flow_registry_init("wpt");
     flow_set_running(flow_add(ctx, JS_UNDEFINED, NULL, 0, WORLD_NONE));
 
+    window_install(ctx, global, "http://web-platform.test");
+    window_proxy_init(ctx);
+    window_proxy_install_members(ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
+    window_message_install(ctx, global, "http://web-platform.test");
+    navigable_install(ctx, global, "http://web-platform.test");   /* HTML 7.4 */
+    /* THE DOCUMENT COMES AFTER THE BROWSING CONTEXT, not before it. §4.8.5's insertion steps run during tree
+       construction, so installing the document CREATES a child navigable for every <iframe> the markup
+       contains — which needs the WindowProxy class and §7.4's create-a-navigable to exist first. The engine's
+       own host has always installed them in this order; this runner had it backwards and the assert in
+       window_proxy_new_remote said so the moment a parsed iframe reached it. */
     /* A REAL DOCUMENT — the same Lexbor parse the engine runs, of the minimal document WPT wraps a .window.js
        in. The runner had none, so `document` was undefined and every file in html/browsers died on its first
        line. It could not simply be added either: a document makes testharness take its WINDOW path, which arms
@@ -546,11 +633,23 @@ int main(int argc, char **argv)
        stream subtests as timeouts. It cannot now: a timer is due only when the event loop has nothing else to
        run (timer.h), so the long timeout is by construction the last thing to happen. */
     {
+        /* THE DOCUMENT IS THE TEST'S OWN when the test is one; otherwise it is the minimal wrapper WPT's server
+           puts around a `.window.js`. One parse either way — the only difference is whose bytes. */
         static const char DOC[] = "<!doctype html><html><head></head><body></body></html>";
+        char *html = NULL;
+        size_t html_n = sizeof DOC - 1;
+        const char *src = DOC;
+
+        if (g_html_mode) {
+            html = wpt_get(g_test_url, &html_n);
+            CHECK(html != NULL, "wpt: the corpus server did not serve the HTML test file");
+            src = html;
+        }
         g_wpt_dom = lxb_html_document_create();
         CHECK(g_wpt_dom != NULL, "the runner's document allocation failed");
-        CHECK(lxb_html_document_parse(g_wpt_dom, (const lxb_char_t *)DOC, sizeof DOC - 1) == LXB_STATUS_OK,
+        CHECK(lxb_html_document_parse(g_wpt_dom, (const lxb_char_t *)src, html_n) == LXB_STATUS_OK,
               "the runner's document did not parse");
+        free(html);
         /* THE DOM CHOKEPOINT'S CONTEXT. §4.2.3's insertion and removing steps are fired from the solver's tree
            chokepoint, which needs the runtime they run in — and this runner never named one, so it ran NONE of
            them: no <script> preparation, no custom-element upgrade, no §4.8.5 child navigable. It failed
@@ -558,13 +657,8 @@ int main(int argc, char **argv)
         dom_cow_set_ctx(ctx);
         element_init(ctx);
     iframe_init(ctx);   /* §4.8.5: the slot a child navigable lives in */
-        document_install(ctx, global, g_wpt_dom, "http://web-platform.test/");
+        document_install(ctx, global, g_wpt_dom, g_base_url);
     }
-    window_install(ctx, global, "http://web-platform.test");
-    window_proxy_init(ctx);
-    window_proxy_install_members(ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
-    window_message_install(ctx, global, "http://web-platform.test");
-    navigable_install(ctx, global, "http://web-platform.test");   /* HTML 7.4 */
     message_port_init(ctx);
     message_port_install(ctx, global);   /* HTML 9.4.2/9.4.3 */
     broadcast_channel_init(ctx, "http://web-platform.test");
@@ -596,61 +690,58 @@ int main(int argc, char **argv)
        and the address is the other, made server-relative — which is exactly what WPT's server serves from and
        resolves against. A worker's `location` is a real WorkerLocation; `search` is empty because this runner
        runs the file with no variant query, which is a real variant and not a way to skip the others. */
+    /* THE ADDRESS, NOT THE INTERFACE. The base URL is what this runner needs from the address — every relative
+       URL in the corpus resolves against it, and `URL.createObjectURL` names its origin — while the Location
+       INTERFACE additionally declares `search` and `hash` as concolic attacker sources. It goes through the
+       component rather than being hand-built, because that component is where HTML's API base URL is derived
+       from the address: assembling the three properties here left the base NULL and every relative URL in the
+       corpus unparseable. */
+    location_set_document_url(g_base_url);
     {
-        const char *h = argv[1], *tail = strstr(h, "/resources/testharness.js");
-        size_t n = tail ? (size_t)(tail - h) : 0;
-        CHECK(n < sizeof g_wpt_root, "wpt: the corpus root is longer than this runner holds");
-        memcpy(g_wpt_root, h, n);
-        g_wpt_root[n] = 0;
-        /* THE LAST argument is the test; the ones between are its META scripts. Reading argv[2] made a file
-           with a META script resolve its data against that script's directory instead of its own. */
-        if (argc > 2 && !strncmp(argv[argc - 1], g_wpt_root, n))
-            snprintf(g_base_url, sizeof g_base_url, "http://web-platform.test%s", argv[argc - 1] + n);
-        else
-            snprintf(g_base_url, sizeof g_base_url, "http://web-platform.test/");
-        /* THROUGH THE COMPONENT, not hand-built. Three properties assembled here were three chances to
-           disagree with the Location the engine ships — and one of them mattered beyond `location.x`: the
-           component is where HTML's API base URL is derived from the address, so hand-building the object left
-           the base NULL and every relative URL in the corpus unparseable, `URL.createObjectURL` naming the
-           opaque origin "null" where the test asserts the document's own. */
-        /* THE ADDRESS, NOT THE INTERFACE. The base URL is what this runner needs from the address — every
-           relative URL in the corpus resolves against it, and `URL.createObjectURL` names its origin — while
-           the Location INTERFACE additionally declares `search` and `hash` as concolic attacker sources. This
-           document genuinely has no query: the runner runs one file with no variant, which is a real variant
-           and not a way to skip the others. A concolic `search` here is not a truth, and the harness's own
-           coercion of it refuses at the C boundary, which is the boundary doing its job. */
-        location_set_document_url(g_base_url);
-        {
-            /* WHERE THE CORPUS IS SERVED FROM. The driver starts wptserve and names its loopback port here;
-               the runner speaks HTTP to it and sends the URL's own authority as the Host header, which is what
-               a hosts-file mapping does for a real browser. A run with no server has nothing to fetch from, and
-               that is a GATE defect rather than a result, so it fails loud. */
-            const char *sv = getenv("WPT_SERVER");
-            CHECK(sv && *sv && strchr(sv, ':'),
-                  "wpt: WPT_SERVER names no host:port — the driver must start engine/wptserve.py and pass it");
-            CHECK(strlen(sv) < sizeof g_server, "wpt: WPT_SERVER is longer than this runner holds");
-            snprintf(g_server, sizeof g_server, "%s", sv);
-        }
-        {
-            JSValue loc = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, loc, "href", JS_NewString(ctx, g_base_url));
-            JS_SetPropertyStr(ctx, loc, "search", JS_NewString(ctx, ""));
-            JS_SetPropertyStr(ctx, loc, "origin", JS_NewString(ctx, "http://web-platform.test"));
-            JS_SetPropertyStr(ctx, loc, "protocol", JS_NewString(ctx, "http:"));
-            JS_SetPropertyStr(ctx, global, "location", loc);
-        }
+        JSValue loc = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, loc, "href", JS_NewString(ctx, g_base_url));
+        JS_SetPropertyStr(ctx, loc, "search", JS_NewString(ctx, ""));
+        JS_SetPropertyStr(ctx, loc, "origin", JS_NewString(ctx, "http://web-platform.test"));
+        JS_SetPropertyStr(ctx, loc, "protocol", JS_NewString(ctx, "http:"));
+        JS_SetPropertyStr(ctx, global, "location", loc);
     }
     idl_args_seal();
     JS_FreeValue(ctx, global);
 
     JS_SetFlowControlHooks(&WPT_HOOKS_ON);
-    failed = run_program(ctx, WPT_PROLOGUE, strlen(WPT_PROLOGUE), "<wpt-prologue>");
-    for (i = 1; i < argc && !failed; i++) {
-        size_t len = 0;
-        char *src = read_file(argv[i], &len);
-        if (!src) { printf("@WPTERR %s: cannot read\n", argv[i]); failed = 1; break; }
-        failed = run_program(ctx, src, len, argv[i]);
-        free(src);
+    if (g_html_mode) {
+        /* THE DOCUMENT'S OWN SCRIPTS, IN DOCUMENT ORDER — the same component the engine loads a real page with,
+           so an HTML test's `<script src=/resources/testharness.js>` is loaded the way the page asked for it
+           rather than by this runner guessing which files a document needs. Each script is its own program body
+           and its own flow: classic scripts do not share a top-level scope, and concatenating them would leak
+           per-<script> let/const bindings between two files the page kept apart.
+           NO PROLOGUE HERE. `GLOBAL` is the shim WPT's server writes around a `.any.js`, and a document that
+           never asked for it must not be given one. */
+        DocScripts ds = document_exec_scripts(g_wpt_dom);
+        for (i = 0; i < ds.n && !failed; i++) {
+            if (ds.bodies[i]) {
+                failed = run_program(ctx, ds.bodies[i], strlen(ds.bodies[i]), g_test_url);
+            } else if (ds.srcs[i]) {
+                size_t len = 0;
+                char *body = wpt_get(ds.srcs[i], &len);
+                /* A <script src> THE SERVER DOES NOT HAVE is a real 404, and a real browser fires an error
+                   event and carries on rather than stopping the document. Reporting it names the file, because
+                   a test whose harness failed to load reports nothing at all otherwise. */
+                if (!body) { printf("@WPTERR %s: <script src> did not load: %s\n", g_test_url, ds.srcs[i]); continue; }
+                failed = run_program(ctx, body, len, ds.srcs[i]);
+                free(body);
+            }
+        }
+        doc_scripts_free(&ds);
+    } else {
+        failed = run_program(ctx, WPT_PROLOGUE, strlen(WPT_PROLOGUE), "<wpt-prologue>");
+        for (i = 1; i < argc && !failed; i++) {
+            size_t len = 0;
+            char *src = read_file(argv[i], &len);
+            if (!src) { printf("@WPTERR %s: cannot read\n", argv[i]); failed = 1; break; }
+            failed = run_program(ctx, src, len, argv[i]);
+            free(src);
+        }
     }
     if (!failed)
         failed = run_program(ctx, WPT_EPILOGUE, strlen(WPT_EPILOGUE), "<wpt-epilogue>");

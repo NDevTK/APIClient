@@ -105,6 +105,31 @@ void iframe_destroy_navigable(JSContext *ctx, JSValueConst wrap)
     JS_DefinePropertyValue(ctx, (JSValue)wrap, g_atom_navigable, JS_UNDEFINED, JS_PROP_WRITABLE);
 }
 
+/* §4.8.5 FOR THE ELEMENTS THE PARSER INSERTED. A browser runs the insertion steps during tree construction, so
+ * an `<iframe>` in the page's own markup has a navigable before the first script runs — `window.length` is 1 on
+ * a document that never scripted anything. This engine's tree comes from a Lexbor parse that does not pass
+ * through the DOM chokepoint, so the parsed tree's iframes get their step here, once, when the document is
+ * installed. Everything a script appends afterwards goes through the chokepoint and needs nothing from this. */
+void iframe_document_parsed(JSContext *ctx)
+{
+    lxb_dom_node_t *root = document_root_node(), *n = root;
+
+    while (n) {
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+            size_t qn = 0;
+            const lxb_char_t *q = lxb_dom_element_qualified_name(lxb_dom_interface_element(n), &qn);
+            if (q && qn == 6 && !strncasecmp((const char *)q, "iframe", 6)) {
+                JSValue w = node_wrap(ctx, n);
+                iframe_create_navigable(ctx, w);
+                JS_FreeValue(ctx, w);
+            }
+        }
+        if (n->first_child) { n = n->first_child; continue; }
+        while (n && !n->next) n = (n == root) ? NULL : n->parent;
+        n = n ? n->next : NULL;
+    }
+}
+
 /* §7.2.5's DOCUMENT-TREE CHILD NAVIGABLES, in TREE ORDER — the set `window.length` counts and `window[i]`
  * indexes. It is a WALK, never a counter kept beside the tree: the set changes on every insertion, every
  * removal and every reparent, and a page reads `length` after doing all three. A count that a mutation forgot

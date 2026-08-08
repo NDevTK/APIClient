@@ -24,6 +24,7 @@
 #include "core/html/html_element.h"
 #include "core/html/html_form.h"
 #include "core/html/custom_elements.h"
+#include "core/html/html_iframe.h"
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
 #include "core/dom/attr.h"
@@ -635,6 +636,12 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     /* §4.5: `Document includes NonElementParentNode` — the same getElementById DocumentFragment includes. */
     node_install_nonelement_parent_mixin(ctx, node_type_proto(LXB_DOM_NODE_TYPE_DOCUMENT));
     node_install_interface(ctx, global, "Document", node_type_proto(LXB_DOM_NODE_TYPE_DOCUMENT));
+    /* §4.8.5 FOR THE TREE THE PARSER BUILT. Insertion steps run during tree construction in a browser, so an
+       <iframe> the page's own markup contains has a child navigable before the first script runs — this
+       engine's tree comes from a Lexbor parse that does not pass through the DOM chokepoint, so the parsed
+       tree's iframes get their step here. It is LAST, after every wrapper and prototype exists, because
+       creating a navigable wraps the element and stores a WindowProxy on it. */
+    iframe_document_parsed(ctx);
     engine_set_document_done_hook(document_done_stage);
 }
 
