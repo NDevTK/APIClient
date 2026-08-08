@@ -939,6 +939,50 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
 /* A SAME-ORIGIN CHILD NAVIGABLE'S REALM — a second JSContext in the SAME JSRuntime, which is what HTML's
    similar-origin window agent is. It gets the identical per-document install the first document got; there is
    no smaller variant of it, because a child whose `window` is smaller is a different browser. */
+/* PROGRAMS A DOCUMENT OWES, waiting for the pump. A child realm is built inside the creator's `window.open()`,
+   so its scripts cannot run there — see the queue's one consumer in main. Each entry owns its bytes and its
+   name; the realm is BORROWED, because the agent owns every realm it built and outlives this queue. */
+typedef struct { JSContext *ctx; char *src; size_t len; char *name; } PendingProgram;
+static PendingProgram *g_pending;
+static int             g_pending_n, g_pending_cap;
+
+static void wpt_queue_program(JSContext *ctx, const char *src, size_t len, const char *name)
+{
+    PendingProgram *e;
+
+    if (g_pending_n == g_pending_cap) {
+        int cap = g_pending_cap ? g_pending_cap * 2 : 8;
+        PendingProgram *g = realloc(g_pending, (size_t)cap * sizeof *g);
+        CHECK(g != NULL, "wpt: OOM queuing a document's program — a dropped program is a document that never ran");
+        g_pending = g;
+        g_pending_cap = cap;
+    }
+    e = &g_pending[g_pending_n++];
+    e->ctx = ctx;
+    e->src = malloc(len + 1);
+    CHECK(e->src != NULL, "wpt: OOM copying a queued program");
+    memcpy(e->src, src, len);
+    e->src[len] = 0;
+    e->len = len;
+    e->name = strdup(name ? name : "<document>");
+    CHECK(e->name != NULL, "wpt: OOM naming a queued program");
+}
+
+/* Run one queued program, or report that there were none. Called from the pump, which is the only thing that
+   may enter JS: this is a program starting, exactly like the test file's own. */
+static bool wpt_run_pending(void)
+{
+    PendingProgram e;
+
+    if (g_pending_n == 0) return false;
+    e = g_pending[0];
+    memmove(g_pending, g_pending + 1, (size_t)(--g_pending_n) * sizeof *g_pending);
+    run_program(e.ctx, e.src, e.len, e.name);
+    free(e.src);
+    free(e.name);
+    return true;
+}
+
 static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url, const char *origin,
                                   uint32_t doc_id, JSValueConst nav_proxy)
 {
@@ -968,18 +1012,25 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
         }
     }
     wpt_realm_install(ctx, dom, url, origin, doc_id, nav_proxy);
-    /* THE CHILD'S SCRIPTS ARE THE CHILD'S, run in ITS realm. They are what make a popup a participant rather
-       than an empty frame — message-opener.html's whole body is one script that posts to its opener. */
+    /* THE CHILD'S SCRIPTS ARE THE CHILD'S, run in ITS realm — they are what make a popup a participant rather
+       than an empty frame, since message-opener.html's whole body is one script that posts to its opener.
+       THEY ARE QUEUED, NOT RUN HERE. A realm is built from inside the creator's `window.open()` — a C
+       activation in the middle of the parent's own program — so running the child's scripts at this point is a
+       nested drive-to-completion re-entering JS from C: exactly the shape this engine refuses everywhere else,
+       and it surfaced as `JS_ToPrimitiveFree reached with a real object` the moment a popup's script coerced
+       anything. A document's scripts are PROGRAMS, and a program is a flow the one pump drives. Queuing them
+       is what makes the child's script ordinary work on the same loop as the parent's, which is also what lets
+       one of them suspend. */
     if (bytes) {
         DocScripts ds = document_exec_scripts(dom);
         int i;
         for (i = 0; i < ds.n; i++) {
-            if (ds.bodies[i]) run_program(ctx, ds.bodies[i], strlen(ds.bodies[i]), url);
+            if (ds.bodies[i]) wpt_queue_program(ctx, ds.bodies[i], strlen(ds.bodies[i]), url);
             else if (ds.srcs[i]) {
                 size_t sl = 0;
                 char *body = wpt_get(ds.srcs[i], &sl);
                 if (!body) continue;
-                run_program(ctx, body, sl, ds.srcs[i]);
+                wpt_queue_program(ctx, body, sl, ds.srcs[i]);
                 free(body);
             }
         }
@@ -1293,6 +1344,10 @@ int main(int argc, char **argv)
            the owed replies is what re-enters JS and gives the pump more to drain; only when a drain owes
            nothing new is the file really finished. */
         if (wpt_drain_owed(ctx)) continue;
+        /* A DOCUMENT THAT LOADED OWES ITS SCRIPTS, and this is where they start. They were queued from inside
+           the creator's `window.open()`, which is a C activation and no place to enter JS from. Before the
+           clock moves, because a child's script is loading, not a timer. */
+        if (wpt_run_pending()) continue;
         /* NOTHING QUEUED AND NOTHING OWED, which is the one moment virtual time may move — see timer.h. A
            timer that is due fires here and its callback is a task the loop drains next. Only when this fires
            nothing either is the file really finished. */
