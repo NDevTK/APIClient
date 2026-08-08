@@ -86,8 +86,13 @@ void location_install(JSContext *ctx, JSValueConst global, const char *url)
     JSValue loc;
     char *s;
 
-    if (!url || !*url)
-        return;   /* no address, no Location — the page's own throw is the honest answer */
+    /* EVERY DOCUMENT HAS AN ADDRESS — `about:blank` is one, and a document created from no response is created
+       AT one. This used to return quietly for an empty string, which is the defensive branch that hid the
+       caller's bug rather than the caller's bug: the shipped host was passing this the document's ORIGIN, and
+       an origin is never empty, so the guard never fired and never could have said so. */
+    DCHECK(url != NULL && *url,
+           "a Location was installed for a document with no address — every document is loaded FROM somewhere, "
+           "so a host with nothing to pass here has not decided what document this realm is");
 
     /* THE ADDRESS GOES THROUGH THE REAL PARSER. A hand-rolled splitter stood here — strstr("://"),
        strrchr(':'), fixed 256-byte buffers — and it was wrong wherever a URL is interesting: it CHECK-failed

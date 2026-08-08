@@ -12,6 +12,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
@@ -251,7 +252,9 @@ console.log("[build] OK -> " + resolve(join(OUT, "qjs.js")));
     if (typeof args[i] === "string" && (args[i].startsWith("-D") || args[i].startsWith("-W") || args[i] === "-O1"))
       flags.push(args[i]);
   }
-  const c = spawnSync(EMCC, [...flags, "-c", other, "-o", join(WORK, "entry-check.o")],
+  /* The object goes to a TEMP path, not into the tree: it is a yes/no answer, not an artifact, and
+     engine/.work is checked in. */
+  const c = spawnSync(EMCC, [...flags, "-c", other, "-o", join(tmpdir(), "apiclient-entry-check.o")],
                       { stdio: "inherit", shell: true, cwd: QJS });
   if (c.status !== 0) {
     console.error("[build] the OTHER entry (" + other + ") does not compile — it is part of this program even " +

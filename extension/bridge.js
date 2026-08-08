@@ -183,8 +183,13 @@ async function engineCreate(code, html, msg, persist) {
   // NO `code` ARGUMENT: identity and the script inventory are the engine's own Lexbor <script> scan of `html`,
   // because a concatenation of a page's scripts cannot represent per-script scope and shifts with an inline
   // script the page did not ship. It used to be passed and cast away on the other side.
+  // THE DOCUMENT'S ADDRESS, NOT ITS ORIGIN. This used to hand over originOf(sourceUrl), so the engine's §4.4
+  // API base URL was the bare origin and every relative URL a bundle built resolved against the site root:
+  // a page at /app/dashboard calling fetch("api/users") was reported as /api/users. The engine derives the
+  // origin from the address itself (§4.7's serialization, which its own url.c implements), so the principal
+  // and the address are one fact from one place instead of two that can disagree.
   M.ccall("qjs_init", "number", ["number", "number", "number", "number"],
-    [arg(html || ""), arg(originOf(msg && msg.sourceUrl)), arg(_docId), arg(_csp)]);
+    [arg(html || ""), arg((msg && msg.sourceUrl) || ""), arg(_docId), arg(_csp)]);
   const _bid = (M.ccall("qjs_bundle_id", "number", [], []) >>> 0).toString(36);
   const fkey = originOf(msg && msg.sourceUrl) + "|" + _bid;
   const prior = persist ? await frontierGet(fkey) : null;

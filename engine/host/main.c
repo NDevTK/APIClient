@@ -139,7 +139,12 @@ static void engine_agent_init(JSContext *ctx, const char *origin)
 }
 
 /* ONE DOCUMENT — the per-realm half, run once per document including the first. */
-static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *origin,
+/* `url` IS THE DOCUMENT'S ADDRESS AND `origin` IS ITS PRINCIPAL, and they are two different facts. This host
+   passed the ORIGIN for both, so every document's §4.4 API BASE URL was `https://site` where the page was at
+   `https://site/app/dashboard` — and the base URL is what `fetch("api/users")` resolves against, so the tool's
+   own headline output named `https://site/api/users` for a request the page makes to `https://site/app/api/users`.
+   The two other hosts already pass a real address; only the shipped one did not. */
+static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
                                  const char *csp, uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSValue g = JS_GetGlobalObject(ctx);
@@ -156,7 +161,7 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
     blob_install(ctx, g);
     encoding_install(ctx, g);
     text_stream_install(ctx, g);
-    window_install(ctx, g, origin);   /* window/self/frames/parent/top/opener/closed/origin, and name */
+    window_install(ctx, g, url);      /* window/self/frames/parent/top/opener/closed/origin, and name */
     timer_install(ctx, g);            /* setTimeout/setInterval/clearTimeout/clearInterval/queueMicrotask */
     event_install(ctx, g);            /* the Event interface object */
     message_event_install(ctx, g);    /* HTML 9.4.1: the event every messaging path dispatches */
@@ -166,13 +171,13 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
        EventTarget.prototype, which window_install chains it to. */
     event_target_install_handlers(ctx, g, EH_GLOBAL | EH_WINDOW);   /* window IS the global (7.2.2) */
     fetch_install(ctx, g);
-    location_install(ctx, g, origin);
+    location_install(ctx, g, url);
     navigable_install(ctx, g, origin);
     unhandled_rejection_install(ctx, g);   /* PromiseRejectionEvent */
     abort_install(ctx, g);   /* AbortController/AbortSignal: fetch takes a signal, so a bundle mints one early */
     navigator_install(ctx, g);
     screen_install(ctx, g);   /* the responsive gate: screen.width decides which router a bundle uses */
-    document_install(ctx, g, dom, origin, csp, doc_id, nav_proxy);
+    document_install(ctx, g, dom, url, csp, doc_id, nav_proxy);
     JS_FreeValue(ctx, g);
 }
 
@@ -198,10 +203,7 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
        that defined them, so a child sharing the agent realm's would resolve every unqualified
        `addEventListener` against the PARENT's window. */
     event_target_install(ctx);
-    /* §4.4's base URL and Location come from the address; engine_realm_install builds both from `origin`
-       today, which is this host's own gap and a different one from the navigation above. */
-    (void)url;
-    engine_realm_install(ctx, dom, origin, csp, doc_id, nav_proxy);
+    engine_realm_install(ctx, dom, url, origin, csp, doc_id, nav_proxy);
     return ctx;
 }
 
@@ -218,9 +220,24 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
  * `<script>` scan, because a concatenation cannot represent per-script scope and shifts with an inline script
  * the page did not ship. An argument that is cast to `(void)` is not "documented as unused", it is a second
  * source of truth the next reader will wire up; it is gone from the ABI instead. */
-QJS_EXPORT int qjs_init(const char *html, const char *origin, const char *doc_id, const char *csp)
+/* `url` IS THE DOCUMENT'S ADDRESS, not its origin, and the ORIGIN IS DERIVED FROM IT HERE. The host used to
+ * send the origin it had computed itself with `new URL(u).origin`, which is one fact arriving from two places
+ * and the address arriving from none: §4.4's API base URL, `location.pathname` and `document.baseURI` were all
+ * the bare origin. Deriving it here also makes it §4.7's real serialization, which url.c already implements. */
+QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, const char *csp)
 {
+    char *origin;
+
     CHECK(g_dom == NULL, "qjs_init ran twice in one WASM instance — one instance is one document");
+    {
+        UrlRecord rec;
+        CHECK(url != NULL && *url && url_parse(&rec, url, strlen(url), NULL),
+              "the host started this engine without a document ADDRESS — a document is loaded FROM somewhere, "
+              "and every relative URL the page builds resolves against it");
+        origin = url_serialize_origin(&rec);
+        CHECK(origin != NULL, "the document address has no serializable origin");
+        url_record_free(&rec);
+    }
 
     g_rt = JS_NewRuntime();
     CHECK(g_rt != NULL, "the runtime allocation failed: a dropped engine loses the whole frontier");
@@ -275,13 +292,14 @@ QJS_EXPORT int qjs_init(const char *html, const char *origin, const char *doc_id
            window.name became an attacker source. The read is concolic until something states it. */
         JSValue root_proxy = window_proxy_new_self(g_ctx, world_local_doc(), NULL);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
-        engine_realm_install(g_ctx, g_dom, origin, csp, world_local_doc(), root_proxy);
+        engine_realm_install(g_ctx, g_dom, url, origin, csp, world_local_doc(), root_proxy);
         JS_FreeValue(g_ctx, root_proxy);
     }
     /* The surface is installed, so every member the platform has is declared — a declaration from here on is a
        per-wrapper or per-flow mint, and that is what the pool asserts against. */
     idl_args_seal();
 
+    free(origin);
     return 0;
 }
 
