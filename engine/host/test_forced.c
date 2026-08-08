@@ -8,6 +8,7 @@
 #include "solver/flow.h"
 #include "solver/world.h"
 #include "core/frame/navigable.h"
+#include "core/timing/timer.h"
 #include "core/frame/window_proxy.h"
 #include "solver/engine.h"
 #include "solver/cow.h"
@@ -1166,6 +1167,16 @@ static const char *HTML =
     /* The TYPES matter as much as the values: an answer that came back as the string "false" would satisfy a
        loose check and prove only that bytes moved. `=== false` and `=== 0` say the peer's value arrived as
        itself. */
+    /* HTML §8.6's TIMER TASK SOURCE, and §8.1.7's ordering around it — neither of which this fixture exercised
+       at all, so `setTimeout` had no probe in the engine's own test despite being how a great deal of real code
+       reaches the event loop. The ORDER is the assertion: a microtask checkpoint runs before the next task, so
+       the `.then` continuation must observe its marker BEFORE the timer callback runs, and two timers with the
+       same delay run in the order they were set. */
+    "var _tk = '';"
+    "setTimeout(function(){ _tk += 'B'; }, 0);"
+    "setTimeout(function(){ _tk += 'C'; fetch('/api/timerfire?v=' + _tk); }, 0);"
+    "Promise.resolve().then(function(){ _tk += 'A'; });"
+
     /* THE SAME READ FROM INSIDE A JOB. A `.then` handler is a queued reaction, and a cross-document read
        SUSPENDS — so this exercises a step machine that parks on the host while it is the root of a job rather
        than reached from a bytecode frame. Without the scheduler reporting that flow host-owed, it resumes and
@@ -1537,6 +1548,11 @@ int main(void) {
        left the per-component percent-encode sets — the thing that decides whether an @S PoC reproduces in a
        browser at all — with no test of any kind. */
     location_install(ctx, g, "https://x.test/p");
+    /* HTML §8.6's TIMER TASK SOURCE. The fixture had none, so `setTimeout` was simply absent and any probe
+       using one threw — which is how a great deal of real page code reaches the event loop, and it was the one
+       platform edge the engine's own test could not exercise. */
+    timer_install(ctx, g);
+    timer_set_script_sink(engine_queue_script);   /* §8.6: a STRING handler is evaluated, as a flow */
     /* §7.4's `window.open`, whose child document id can only come from the host — so the call SUSPENDS and the
        flow resumes holding a WindowProxy for a document in another instance. */
     window_proxy_init(ctx);
@@ -1807,6 +1823,8 @@ int main(void) {
     int xdocread_tt = (strstr(js, "\"/api/xdocread\"") && strstr(js, "xread"));
     /* The same cross-document read reached from inside a QUEUED JOB, which parks the flow at a job root. */
     int xdocjob_tt = (strstr(js, "\"/api/xdocjob\"") && strstr(js, "jobread"));
+    /* §8.6 + §8.1.7: the microtask ran first, then the two timers in the order they were set. */
+    int timer_tt = (strstr(js, "\"/api/timerfire\"") && strstr(js, "ABC"));
 
     /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
        both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one
@@ -2005,7 +2023,7 @@ int main(void) {
         { "rerepfork", rerepfork_tt, 1 },  { "gcallfork", gcallfork_tt, 1 },
         { "gapplyfork", gapplyfork_tt, 1 },{ "grefapplyfork", grefapplyfork_tt, 1 },
         { "hostreq", hostreq_tt, 1 }, { "hostreq-fork", hostreqfork_tt, 1 },
-        { "nav-open", navopen_tt, 1 }, { "xdoc-read", xdocread_tt, 1 }, { "xdoc-job", xdocjob_tt, 1 },
+        { "nav-open", navopen_tt, 1 }, { "xdoc-read", xdocread_tt, 1 }, { "xdoc-job", xdocjob_tt, 1 }, { "timer-order", timer_tt, 1 },
     };
     int h_ok = 1;
     printf("@H ");
