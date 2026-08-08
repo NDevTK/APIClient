@@ -15,6 +15,7 @@
  * concolic branches, so calling it from a C activation is the drive-to-completion the engine aborts on. Each
  * listener is dispatched through the promise machinery, which is how every other page callback in this engine
  * reaches a flow: the reaction runs as a call-root flow, preemptible and forkable like anything else. */
+#include <stdbool.h>
 #include <string.h>
 
 #include "check.h"
@@ -42,6 +43,9 @@ static int g_ready;
    which is why the streams gate could not build with a real AbortSignal in it. The tree registers the walk; a
    host that registers none has a flat path, which is exactly right for one with no document. */
 static JSValue (*g_ancestors)(JSContext *ctx, JSValueConst target);
+/* DOM §2.9's ACTIVATION BEHAVIOUR, declared by whoever owns the element — see event_target.h. */
+static bool (*g_has_activation)(JSContext *ctx, JSValueConst el);
+static void (*g_run_activation)(JSContext *ctx, JSValueConst el, JSValueConst ev);
 /* HTML §8.1.7's handler map key, and the MARKER that holds the handler's place in a listener list — see the
    event-handler section below. Declared here because event_target_init mints them. */
 static JSValue g_handler_key;
@@ -184,6 +188,16 @@ void event_target_install_interface(JSContext *ctx, JSValueConst global)
 void event_target_set_tree(JSValue (*ancestors)(JSContext *ctx, JSValueConst target))
 {
     g_ancestors = ancestors;
+}
+
+void event_target_set_activation(bool (*has)(JSContext *ctx, JSValueConst el),
+                                 void (*run)(JSContext *ctx, JSValueConst el, JSValueConst ev))
+{
+    DCHECK((has != NULL) == (run != NULL),
+           "half an activation behaviour was registered — a predicate with nothing to perform picks an "
+           "activation target the dispatch then cannot run, and a performer with no predicate is never picked");
+    g_has_activation = has;
+    g_run_activation = run;
 }
 
 void event_target_free(JSContext *ctx)
@@ -657,6 +671,9 @@ typedef struct JSDispatchState {
     JSValue   type;      /* the event's type, resolved once per target and needed by `once` (owned) */
     JSValue   path;      /* §2.9's propagation path — the target and its ancestors (owned) */
     JSValue   cur;       /* the target whose listeners are running (owned) */
+    /* §2.9's ACTIVATION TARGET: the nearest entry of the path, TARGET FIRST, that has an activation behaviour.
+       Picked while the path is built and run after the walk — see event_target.h. (owned) */
+    JSValue   act;
     JSValue   arr;       /* that target's listener list SNAPSHOT (owned) */
     JSValue   ev;        /* the event (owned) */
     JSValue   result;    /* !canceled (owned) */
@@ -672,6 +689,7 @@ static void js_dispatch_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->path);
     v->val(ctx, &s->type);
     v->val(ctx, &s->cur);
+    v->val(ctx, &s->act);
     v->val(ctx, &s->arr);
     v->val(ctx, &s->ev);
     v->val(ctx, &s->result);
@@ -690,9 +708,10 @@ static JSValue js_dispatch_fini(JSContext *ctx, void *st, bool take_result)
     JS_FreeValue(ctx, s->path);
     JS_FreeValue(ctx, s->type);
     JS_FreeValue(ctx, s->cur);
+    JS_FreeValue(ctx, s->act);
     JS_FreeValue(ctx, s->arr);
     JS_FreeValue(ctx, s->ev);
-    s->result = s->path = s->type = s->cur = s->arr = s->ev = JS_UNDEFINED;
+    s->result = s->path = s->type = s->cur = s->act = s->arr = s->ev = JS_UNDEFINED;
     for (k = 0; k < 3; k++) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
@@ -746,7 +765,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        s->path = s->type = s->cur = s->arr = s->ev = s->result = JS_UNDEFINED;
+        s->path = s->type = s->cur = s->act = s->arr = s->ev = s->result = JS_UNDEFINED;
         s->cb[0] = s->cb[1] = s->cb[2] = JS_UNDEFINED;
         /* THREE ENTRIES, ONE MACHINE, and `arg` is decided at REGISTRATION so no call site chooses:
              DISPATCH_ARG  — dispatchEvent: the receiver is the target, the page supplied the event.
@@ -778,13 +797,34 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            ENGINE fires keeps the flag it was built with, which is the whole difference between them. */
         if (s->hdr.arg != DISPATCH_PAIR)
             event_set_trusted(ctx, s->ev, false);
+        s->type = event_type(ctx, s->ev);
         s->path = dispatch_path(ctx, target);
+        /* §2.9's ACTIVATION TARGET, picked while the path is here and BEFORE any listener runs — the nearest
+           entry, target first, that has one. It is the target's own ancestors that make a click on a `<span>`
+           inside an `<a>` follow the link, which is why it is the PATH that is searched and not the target.
+           Only a `click` has one: §2.9 sets an activation target for that type alone, which is why a synthetic
+           `dispatchEvent(new Event('foo'))` at an anchor navigates nowhere. */
+        if (g_has_activation && JS_IsString(s->type)) {
+            const char *t = JS_ToCString(ctx, s->type);
+            bool is_click = t != NULL && !strcmp(t, "click");
+            if (t) JS_FreeCString(ctx, t);
+            if (is_click) {
+                uint32_t k, kn = 0;
+                JSValue len_v = JS_GetPropertyStr(ctx, s->path, "length");
+                JS_ToUint32(ctx, &kn, len_v);
+                JS_FreeValue(ctx, len_v);
+                for (k = 0; k < kn; k++) {
+                    JSValue e = JS_GetPropertyUint32(ctx, s->path, k);
+                    if (JS_IsObject(e) && g_has_activation(ctx, e)) { s->act = e; break; }
+                    JS_FreeValue(ctx, e);
+                }
+            }
+        }
         s->tn = 0;
         JS_ToUint32(ctx, &s->tn, JS_GetPropertyStr(ctx, s->path, "length"));
         s->ti = 0;
         s->leg = 0;
         s->n = s->i = 0;
-        s->type = event_type(ctx, s->ev);
         s->stage = 1;
     }
 
@@ -899,6 +939,13 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     /* §2.9 "clean up": the dispatch flag clears, the phase goes back to NONE and currentTarget to null. */
     event_set_dispatch_flag(ctx, s->ev, false);
     event_clear_current(ctx, s->ev);
+    /* §2.9's LAST STEP, and it is last for a reason: the activation behaviour runs AFTER the whole walk and
+       ONLY if nothing cancelled — which is the entire meaning of `preventDefault()` on a click. It runs with
+       the event already cleaned up, so a behaviour that reads `currentTarget` sees null, as it must. */
+    if (JS_IsObject(s->act) && !event_canceled(ctx, s->ev)) {
+        DCHECK(g_run_activation != NULL, "an activation target was picked with nothing to perform");
+        g_run_activation(ctx, s->act, s->ev);
+    }
     s->result = JS_NewBool(ctx, !event_canceled(ctx, s->ev));
     return JS_STEP_DONE;
 }

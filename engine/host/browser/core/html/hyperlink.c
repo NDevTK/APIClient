@@ -32,6 +32,10 @@
 #include "core/dom/document.h"
 #include "core/url/url.h"
 #include "core/idl_args.h"
+#include "core/dom/node.h"
+#include "core/events/event_target.h"
+#include "core/frame/navigable.h"
+#include "core/frame/window_features.h"
 
 /* §4.6.3 "reinitialize url": parse the href content attribute against the document's base URL. Returns false
    when there is no href or it does not parse — the url is then null, which every member has an answer for. */
@@ -127,6 +131,67 @@ static JSValue js_link_tostring(JSContext *ctx, JSValueConst this_val, int argc,
     return js_link_get(ctx, this_val, URL_HREF);
 }
 
+/* §4.6.3 FOLLOWING A HYPERLINK, and DOM §2.9's activation behaviour is how it is reached.
+ *
+ * WHAT WAS MISSING. This component was the URL members and nothing else, so `<a href>` was a rich set of
+ * accessors over a link that could not be followed: clicking one dispatched a real §2.9 click, ran every
+ * listener, and then dropped the event. `e.preventDefault()` on such a click suppressed nothing, because there
+ * was nothing after the walk to suppress.
+ *
+ * IT IS THE ELEMENT'S OWN BEHAVIOUR, not a listener, which is why it is registered here rather than installed
+ * as one: a page cannot remove it, cannot see it in a listener list, and cannot run it out of order. §2.9 picks
+ * the activation target while it builds the path and runs it after the walk only if nothing cancelled.
+ *
+ * THE NAVIGATION IS §7.4's, reached through navigable_open — the same rules for choosing a navigable that
+ * `window.open()` applies. `rel="noopener"` and `rel="noreferrer"` are where this caller's noopener comes
+ * from instead of a features string, which is the only difference between the two callers. */
+static bool link_has_activation(JSContext *ctx, JSValueConst el)
+{
+    lxb_dom_node_t *n = node_of(el);
+    size_t qn = 0;
+    const lxb_char_t *q;
+    char *href;
+
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    /* §4.6.3 gives `a` and `area` an activation behaviour, and only WITH an href: `<a>` with none is not a
+       hyperlink at all — it is a placeholder the spec says nothing happens for. */
+    q = lxb_dom_element_qualified_name((lxb_dom_element_t *)n, &qn);
+    if (!q || !((qn == 1 && q[0] == 'a') || (qn == 4 && !memcmp(q, "area", 4)))) return false;
+    href = element_attr_get(ctx, el, "href");
+    if (!href) return false;
+    free(href);
+    return true;
+}
+
+static void link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev)
+{
+    char *href = element_attr_get(ctx, el, "href");
+    char *target = element_attr_get(ctx, el, "target");
+    char *rel = element_attr_get(ctx, el, "rel");
+    WindowFeatures feat = { false, false, false };
+    JSValue r;
+
+    (void)ev;
+    DCHECK(href != NULL, "a hyperlink with no href was picked as an activation target — link_has_activation "
+                         "is what decides that, and it reads the same attribute");
+    /* §4.6.3's "get an element's noopener". A relation LIST is space-separated and ASCII case-insensitive;
+       `noreferrer` implies `noopener` for the same reason §7.4's feature does — a window with no referrer has
+       no opener, because the opener is how it would have one. */
+    if (rel) {
+        feat.noopener = strstr(rel, "noopener") != NULL || strstr(rel, "noreferrer") != NULL;
+        feat.noreferrer = strstr(rel, "noreferrer") != NULL;
+    }
+    /* §4.6.3 step 2: the target attribute value, and an EMPTY one is no target at all — which the rules for
+       choosing a navigable read as `_self`, the navigable the link is in. */
+    r = navigable_open(ctx, href, target && *target ? target : "_self", &feat);
+    /* A URL THAT DOES NOT PARSE IS NOT AN ERROR HERE. §4.6.3 says to return if the url is failure, and a click
+       is not a place a page can catch anything — unlike `window.open()`, whose caller gets the SyntaxError. */
+    JS_FreeValue(ctx, r);
+    free(href);
+    free(target);
+    free(rel);
+}
+
 void hyperlink_install(JSContext *ctx, JSValueConst proto)
 {
     /* The mixin's members, in IDL order. `origin` is readonly; the rest are accessors whose setter re-serialises
@@ -151,4 +216,8 @@ void hyperlink_install(JSContext *ctx, JSValueConst proto)
                              M[i].readonly ? -1
                                            : idl_setter_id(ctx, IDL_USVSTRING, false, js_link_set, M[i].member));
     idl_install_method(ctx, proto, "toString", 0, idl_method_id(ctx, NULL, 0, js_link_tostring, 0));
+    /* §2.9 asks ONE pair for every element, so registering it from a per-prototype install sets the same two
+       pointers each time — which is why event_target_set_activation asserts they arrive together rather than
+       counting how often they arrive. */
+    event_target_set_activation(link_has_activation, link_run_activation);
 }

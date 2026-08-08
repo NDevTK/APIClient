@@ -1,6 +1,7 @@
 /* EventTarget — DOM §2.7. See event_target.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_EVENTS_EVENT_TARGET_H
 #define ENGINE_HOST_BROWSER_CORE_EVENTS_EVENT_TARGET_H
+#include <stdbool.h>
 #include "quickjs.h"
 
 void event_target_init(JSContext *ctx);                          /* the private listener key (agent init) */
@@ -49,6 +50,18 @@ void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask
    target with no listener yet — and it is given the target and the attribute name so the registering component
    decides with its own brand test rather than this file knowing what a MessagePort is. */
 void event_target_set_handler_hook(void (*after_set)(JSContext *ctx, JSValueConst target, const char *name));
+
+/* DOM §2.9's ACTIVATION BEHAVIOUR — what makes a click on an `<a href>` FOLLOW the link, on a `<form>`'s submit
+   button submit, on a checkbox toggle it. It is not a listener and a page cannot register one: the dispatch
+   picks an ACTIVATION TARGET while it builds the propagation path — the nearest entry, target first, that HAS
+   one — and runs it AFTER the walk, only if nothing called preventDefault. That "only if" is the whole of what
+   `preventDefault` means on a click, and with no activation behaviour at all it meant nothing: §2.9 ran its
+   three legs and then dropped the event, so `<a href>` clicked navigated nowhere and `e.preventDefault()`
+   suppressed something that was never going to happen.
+   The two halves are declared by whoever owns the element, for the reason the tree walk is: this file does not
+   know what an `<a>` is. `has` answers whether that element has one; `run` performs it. */
+void event_target_set_activation(bool (*has)(JSContext *ctx, JSValueConst el),
+                                 void (*run)(JSContext *ctx, JSValueConst el, JSValueConst ev));
 /* The ENGINE firing its own event at `target`. One §2.9 dispatch, reached as a queued task because the callers
    are plain C the scheduler drives. The propagation path is derived from the target's ancestors — there is no
    `bubble_to` to pass, because the window is the document's parent and the spec already says so.

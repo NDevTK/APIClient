@@ -438,6 +438,34 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     return proxy;
 }
 
+/* §7.4 STEPS 6 AND 14, AS ONE OPERATION — choose a navigable for `target` and navigate it to `url`, creating
+ * one when nothing answers to the name. It is its own function because it has TWO callers and they are not
+ * variants of each other: `window.open()` reaches it after parsing a features string, and §4.6.3's FOLLOWING A
+ * HYPERLINK reaches it from an `<a>`'s activation behaviour with `noopener` read off `rel` instead. The rules
+ * for choosing a navigable are one algorithm; a second copy in the hyperlink path would be the second answer
+ * that is always subtly wrong.
+ * `feat` carries what only §7.4 supplies (the popup decision) and what both supply (`noopener`). */
+JSValue navigable_open(JSContext *ctx, const char *url, const char *target, const WindowFeatures *feat)
+{
+    /* §7.1's FIRST rule is `noopener`, and it comes before every other: a request that must not be able to
+       script its opener cannot be answered with a navigable the opener already holds, so it always CREATES. */
+    if (target && *target && !(feat && feat->noopener)) {
+        JSValue chosen = (target[0] == '_') ? navigable_choose_keyword(ctx, target)
+                                            : navigable_choose_name(ctx, target);
+        if (window_proxy_is(chosen)) {
+            /* §7.4 step 14 over the chosen navigable. An absent url is the empty string, which resolves
+               against the document's own address — so `open("", "_self")` reloads. */
+            JSValue r = navigable_navigate(ctx, chosen, url ? url : "");
+            JS_FreeValue(ctx, chosen);
+            return r;
+        }
+        JS_FreeValue(ctx, chosen);
+    }
+    /* §7.1's LAST rule: create one, and GIVE it the name — unless the name was a keyword, which names no
+       navigable at all. */
+    return navigable_create(ctx, url, target && *target && target[0] != '_' ? target : NULL, false, feat);
+}
+
 /* §7.4's `window.open`. NOT a step machine any more: the child's name is minted here, so there is nothing to
    ask and nothing to suspend for — which is also what the spec says, since `open()` hands back a WindowProxy at
    its own call site. */
@@ -457,40 +485,7 @@ static JSValue js_win_open(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     /* §7.4's THIRD ARGUMENT, which was read and dropped. It decides whether the new navigable is a POPUP —
        what §7.2.5.3's six BarProps answer from — and whether it gets an OPENER at all. */
     feat = window_features_parse(features);
-    /* §7.4 step 6: APPLY THE RULES FOR CHOOSING A NAVIGABLE. A keyword target names a navigable to REUSE, and
-       reusing one means NAVIGATING it — which this used to skip entirely: `open(url, "_self")` dropped the
-       keyword, fell through to create, and answered with a SECOND window where the spec navigates the one the
-       script is running in. A wrong answer that looks like it worked, which is the shape this whole file's
-       asserts exist to prevent. `_blank` (and any keyword this does not know) still CREATES. */
-    /* §7.1's FIRST RULE IS `noopener`, and it comes before the keywords: a request that must not be able to
-       script its opener cannot be answered with a navigable the opener already holds, so noopener always
-       CREATES — `open(url, "_self", "noopener")` is a new window, not this one navigated. */
-    if (target && target[0] == '_' && !feat.noopener) {
-        JSValue chosen = navigable_choose_keyword(ctx, target);
-        if (window_proxy_is(chosen)) {
-            /* §7.4 step 14 over the chosen navigable. `url` may be absent — `open("", "_self")` navigates to
-               the empty string, which §7.4 resolves against the document's own address, so it reloads. */
-            r = navigable_navigate(ctx, chosen, url ? url : "");
-            JS_FreeValue(ctx, chosen);
-            goto done;
-        }
-        JS_FreeValue(ctx, chosen);
-    }
-    /* §7.1's FIFTH RULE, before the create that is its sixth: a target that NAMES an existing navigable this
-       source is familiar with REUSES it, and reusing one means navigating it. Only when nothing answers to the
-       name is a navigable created and GIVEN it — which is the same rule's other half, and was the only half
-       here: `open(url, "chan42")` twice made two windows where a browser makes one and navigates it again. */
-    if (target && *target && target[0] != '_' && !feat.noopener) {
-        JSValue named = navigable_choose_name(ctx, target);
-        if (window_proxy_is(named)) {
-            r = navigable_navigate(ctx, named, url ? url : "");
-            JS_FreeValue(ctx, named);
-            goto done;
-        }
-        JS_FreeValue(ctx, named);
-    }
-    r = navigable_create(ctx, url, target && target[0] != '_' ? target : NULL, false, &feat);
-done:
+    r = navigable_open(ctx, url, target, &feat);
     if (url) JS_FreeCString(ctx, url);
     if (target) JS_FreeCString(ctx, target);
     if (features) JS_FreeCString(ctx, features);
