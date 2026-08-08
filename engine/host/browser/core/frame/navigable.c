@@ -18,6 +18,15 @@
 static char *g_origin;   /* this AGENT's origin — what an about:blank child inherits (owned) */
 static RealmBuilder g_realm_builder;
 
+/* THE REALMS THIS AGENT BUILT, and the agent is what owns them. A child realm is created by §7.4 and referred
+   to by the WindowProxy over its navigable, but a proxy is a GC object and a realm is not: releasing one from
+   a finalizer would free JSValues during collection, and leaving it to the proxy meant nobody ran the
+   DOCUMENT's own teardown at all — the realm's `document`, its Window and its WindowProxy stayed referenced and
+   JS_FreeRuntime's gc_obj_list walk counted the whole child page as surviving objects. The agent holds them and
+   releases them with itself; a proxy BORROWS. */
+static JSContext **g_realms;
+static int         g_realms_n, g_realms_cap;
+
 void navigable_set_realm_builder(RealmBuilder b) { g_realm_builder = b; }
 
 
@@ -101,6 +110,14 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
            "surface a document of this build has; declare it with navigable_set_realm_builder");
     cctx = g_realm_builder(JS_GetRuntime(ctx), child_initial_document(), url, origin, doc);
     CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
+    if (g_realms_n == g_realms_cap) {
+        int cap = g_realms_cap ? g_realms_cap * 2 : 8;
+        JSContext **g = realloc(g_realms, (size_t)cap * sizeof *g);
+        CHECK(g != NULL, "navigable: OOM recording a child realm — an unrecorded realm is never torn down");
+        g_realms = g;
+        g_realms_cap = cap;
+    }
+    g_realms[g_realms_n++] = cctx;
     return cctx;
 }
 
@@ -215,7 +232,20 @@ void navigable_install(JSContext *ctx, JSValueConst global, const char *origin)
 
 void navigable_free(JSContext *ctx)
 {
+    int i;
+
     (void)ctx;
+    /* EACH CHILD REALM'S DOCUMENT FIRST, then the realm: document_free is what releases the references the
+       Document holds across its lifecycle — its `document` object, its Window and its WindowProxy — and a
+       realm freed without it leaves that graph referenced by nothing the GC can see. */
+    for (i = 0; i < g_realms_n; i++) {
+        document_free(g_realms[i]);
+        JS_FreeContext(g_realms[i]);
+    }
+    free(g_realms);
+    g_realms = NULL;
+    g_realms_n = g_realms_cap = 0;
+    g_realm_builder = NULL;
     free(g_origin);
     g_origin = NULL;
 }

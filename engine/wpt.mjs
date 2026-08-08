@@ -277,7 +277,12 @@ for (const f of files) {
      leaked as a file that produced NOTHING, which is the "same failures with the count hidden" shape this gate
      exists to avoid. It hid them from me, too: I diagnosed that file as ending with no results and went looking
      for what it was waiting on. The abort is reported AND the subtests are counted; they are different facts. */
-  const why = out.match(/@WHY .*"reason":"([^"]*)/);
+  /* THE TWO @WHY SHAPES, because there are two emitters and losing one loses the name. The HOST's check.h
+     prints a machine-readable JSON line whose `reason` carries the message; the ENGINE's quickjs-check.h prints
+     `@WHY <msg> (file:line)` as plain text. Matching only the first reported the second as a bare
+     "signal SIGABRT" — an abort with the name thrown away, which is the one thing an abort is FOR. It cost a
+     round trip per diagnosis and taught nothing on its own. */
+  const why = out.match(/@WHY .*"reason":"([^"]*)/) || out.match(/^@WHY (.+)$/m);
   const abortedHere = Boolean(why || r.signal);
   if (abortedHere) {
     aborted++; byArea(rel).aborted++;

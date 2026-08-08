@@ -228,6 +228,12 @@ void window_message_init(JSContext *ctx)
 {
     static const IdlArgType POST_ARGS[3] = { IDL_ANY, IDL_ANY, IDL_ANY };
 
+    /* THE DELIVERY TASK'S CALLEE IS THE AGENT'S — one function object for the whole runtime. It was minted in
+       the per-DOCUMENT install, so a second same-origin realm overwrote it and the first realm's copy became
+       unreachable with nothing to free it: JS_FreeRuntime's gc_obj_list walk counted it, which is the leak
+       gate doing exactly its job. */
+    g_deliver_fn = JS_NewCFunction(ctx, js_window_deliver, "", 2);
+    CHECK(JS_IsFunction(ctx, g_deliver_fn), "the window delivery task's callee could not be allocated");
     g_id_post = idl_method_id(ctx, POST_ARGS, 3, js_window_post, 0);
     idl_optional_from(1);
     idl_install_method(ctx, window_proxy_proto(), "postMessage", 1, g_id_post);
@@ -246,8 +252,6 @@ void window_message_install(JSContext *ctx, JSValueConst global, const char *ori
         g_origin = strdup(origin ? origin : "null");
         CHECK(g_origin != NULL, "window message: OOM recording this agent's origin");
     }
-    g_deliver_fn = JS_NewCFunction(ctx, js_window_deliver, "", 2);
-    CHECK(JS_IsFunction(ctx, g_deliver_fn), "the window delivery task's callee could not be allocated");
     /* ONE DECLARATION, TWO PLACES IT IS REACHED — the global (`window.postMessage`) and every WindowProxy
        (`otherWindow.postMessage`). Declaring it twice would give the two spellings two members that can drift,
        and `window.postMessage === self.postMessage` would stop holding. The WindowProxy prototype is the

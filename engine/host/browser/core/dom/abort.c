@@ -597,20 +597,19 @@ static JSValue js_abort_signal_ctor(JSContext *ctx, JSValueConst new_target, int
     return JS_ThrowTypeError(ctx, "Illegal constructor");
 }
 
-void abort_install(JSContext *ctx, JSValueConst global)
+/* §3.2's PROTOTYPES AND STEP IDS ARE THE AGENT'S. They were built inside abort_install, which runs once per
+   DOCUMENT — so a second same-origin realm overwrote both prototypes and every signal the first realm had
+   minted lost the object its members came from, which JS_FreeRuntime's gc_obj_list walk reported as a leak of
+   the whole graph. A step id is a runtime registration and a prototype is an object; Web IDL wants the
+   prototype per realm, and that is the next conversion — but it is one object per AGENT here, never two. */
+static void abort_build_agent(JSContext *ctx)
 {
-    JSValue ctrl, sigctor;
-
-    DCHECK(JS_IsObject(global), "abort_install was given something that is not the global object");
-    DCHECK(g_ready, "abort_install ran before abort_init");
-    DCHECK(g_abort_rt == NULL || g_abort_rt == JS_GetRuntime(ctx),
-           "abort was installed into a second runtime — its step id belongs to the first, and one WASM instance "
-           "is one document");
     if (g_timeout_stepid < 0) {
         g_abort_rt = JS_GetRuntime(ctx);
         g_timeout_stepid = JS_RegisterStepDef(g_abort_rt, &js_timeout_def);
         g_abort_stepid = JS_RegisterStepDef(g_abort_rt, &js_abort_def);
     }
+    if (JS_IsObject(g_sig_proto)) return;
 
     /* AbortSignal.prototype FIRST: the controller's prototype does not need it, but a signal minted by
        anything at all does, and `abort_signal_new` is reachable from §5.4 the moment this returns. */
@@ -637,6 +636,19 @@ void abort_install(JSContext *ctx, JSValueConst global)
                             JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
     JS_SetPropertyStr(ctx, g_ctrl_proto, "abort",
                       JS_NewCFunction2(ctx, NULL, "abort", 0, JS_CFUNC_step, g_abort_stepid));
+
+}
+
+void abort_install(JSContext *ctx, JSValueConst global)
+{
+    JSValue ctrl, sigctor;
+
+    DCHECK(JS_IsObject(global), "abort_install was given something that is not the global object");
+    DCHECK(g_ready, "abort_install ran before abort_init");
+    DCHECK(g_abort_rt == NULL || g_abort_rt == JS_GetRuntime(ctx),
+           "abort was installed into a second runtime — its step id belongs to the first, and a runtime is an "
+           "AGENT");
+    abort_build_agent(ctx);
 
     ctrl = JS_NewCFunction2(ctx, js_abort_controller_ctor, "AbortController", 0, JS_CFUNC_constructor, 0);
     CHECK(!JS_IsException(ctrl), "the AbortController constructor allocation failed");

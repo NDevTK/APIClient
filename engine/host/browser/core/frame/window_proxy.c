@@ -45,6 +45,7 @@
 #include "core/idl_args.h"
 #include "core/html/html_iframe.h"
 #include "core/frame/navigable.h"
+#include "core/dom/document.h"
 #include <stdio.h>
 
 /* §7.2.5.1's [[Window]] and the origin its same-origin check reads. BOTH are per-flow — see the file comment —
@@ -54,8 +55,9 @@ typedef struct {
     /* THE ACTIVE DOCUMENT'S REALM, when this agent holds it — NULL when the document is a peer's. It is what a
        member that reads THROUGH to the active document is answered from: `length` counts the child navigables
        of THAT document, and asking it of the READING realm counts the wrong document's frames. It is also what
-       keeps the realm alive: a child realm is created by §7.4 and nothing else refers to it, so the proxy over
-       the navigable is its owner (JS_FreeContext in the finalizer).
+       BORROWED: the AGENT owns every realm it built and releases them with itself (navigable.c). A proxy is a
+       GC object and a realm is not, so an owning reference here would have to be released from a finalizer —
+       which frees JSValues during collection — and the realm's own Document teardown would still never run.
        NULL UNTIL THE FIRST READ THAT NEEDS IT — see navigable.h. `url` is what it is built from. */
     JSContext *realm;
     char      *url;    /* the navigable's initial address, for the realm this proxy has not built yet (owned) */
@@ -154,7 +156,6 @@ static void proxy_finalizer(JSRuntime *rt, JSValue val)
     JS_FreeValueRT(rt, p->window);
     JS_FreeValueRT(rt, p->parent);
     JS_FreeValueRT(rt, p->opener);
-    if (p->realm) JS_FreeContext(p->realm);
     free(p);   /* the strings are the component's, released at teardown — see proxy_of */
 }
 
@@ -175,9 +176,14 @@ static void proxy_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
    "created at creation" — see navigable.h for why that is the spec rather than a saving. */
 static JSContext *proxy_realm(JSContext *ctx, ProxyData *p)
 {
+    /* SAME-ORIGIN IMPLIES HOSTED, by construction: an instance is an ORIGIN-KEYED agent, so a navigable this
+       agent does not hold is one whose active document is cross-origin — and every same-origin-only member is
+       therefore answerable in this turn. Asserted here because it is the pairing the member table depends on:
+       if it ever stopped holding, a same-origin read would silently fall through to the cross-origin path. */
     DCHECK(world_doc_hosted(p->doc),
-           "the realm of a navigable whose active document is a PEER's was asked for — that read suspends on "
-           "the host and has no local realm to be answered from");
+           "the realm of a navigable whose active document is a PEER's was asked for — a same-origin navigable "
+           "is a realm of this agent by construction, so this proxy is cross-origin and the read that reached "
+           "here should have been a SecurityError");
     if (!p->realm) {
         DCHECK(p->url != NULL, "a WindowProxy with no realm and no address was read through — a proxy over a "
                                "realm that already exists is minted by window_proxy_new_self, which carries it");
@@ -230,7 +236,7 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc)
     if (JS_IsException(obj)) return obj;
     p = JS_GetOpaque(obj, g_proxy_class);
     DCHECK(p != NULL, "the self WindowProxy was minted without its record");
-    p->realm  = JS_DupContext(ctx);
+    p->realm  = ctx;   /* BORROWED — the agent owns its realms */
     p->window = JS_GetGlobalObject(ctx);
     return obj;
 }
@@ -398,10 +404,16 @@ enum {
     WP_WINDOW, WP_SELF, WP_FRAMES, WP_GLOBALTHIS,
     WP_PARENT, WP_TOP, WP_OPENER, WP_CLOSED, WP_NAME,
     WP_LENGTH,   /* the ACTIVE DOCUMENT's — the one member below that leaves this instance */
+    /* §7.2.5's `document`, SAME-ORIGIN ONLY. It answers with the OTHER realm's Document OBJECT, and it can
+       always do so in this turn: an agent is ORIGIN-KEYED, so a same-origin navigable is a realm of this agent
+       by construction and a proxy this agent cannot answer for is cross-origin, where the answer is a
+       SecurityError rather than a document. That pairing is asserted rather than assumed — see proxy_realm. */
+    WP_DOCUMENT,
     WP_MEMBER_N
 };
 static const char *const PROXY_MEMBER[WP_MEMBER_N] = {
-    "window", "self", "frames", "globalThis", "parent", "top", "opener", "closed", "name", "length"
+    "window", "self", "frames", "globalThis", "parent", "top", "opener", "closed", "name", "length",
+    "document"
 };
 /* §7.2.5.1's CROSS-ORIGIN PROPERTY NAMES — the fixed list a WindowProxy exposes whatever the origins are:
    window, self, location, close, closed, focus, blur, frames, length, top, opener, parent, postMessage.
@@ -419,6 +431,7 @@ static const bool PROXY_CROSS_ORIGIN[WP_MEMBER_N] = {
     true,  /* closed     */
     false, /* name — a browsing context's name is NOT on the list; a cross-origin read of it is a SecurityError */
     true,  /* length     */
+    false, /* document — §7.2.5.1 does not list it, so a cross-origin read is a SecurityError */
 };
 
 /* §7.2.5.1: a read the origins do not permit is a SecurityError, and it is thrown at the READ rather than
@@ -483,6 +496,14 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
         /* §7.2.5: a destroyed navigable has no name, and the spec files assert exactly that — the empty string,
            not the name it had. */
         return JS_NewString(ctx, p->closed || !p->name ? "" : p->name);
+    case WP_DOCUMENT:
+        /* §7.2.5's `document`, and reaching it means the read was PERMITTED — which for a same-origin-only
+           member means the origins match, which in an origin-keyed agent means this agent holds the realm. So
+           the answer is that realm's own Document object, handed back in this turn: two same-origin documents
+           are one heap and the corpus appends nodes across exactly this edge. A destroyed navigable has no
+           active document. */
+        if (p->closed) return JS_NULL;
+        return JS_DupValue(ctx, document_object(proxy_realm(ctx, p)));
     default:
         DFAIL("a WindowProxy member with no navigable-own answer reached this switch — WP_LENGTH and anything "
               "added beside it read the ACTIVE DOCUMENT and are declared on the step machine below");
