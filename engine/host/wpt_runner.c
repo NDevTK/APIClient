@@ -58,6 +58,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <sys/wait.h>
 #include "core/timing/timer.h"
 #include <lexbor/html/html.h>
 #include "core/dom/element.h"
@@ -424,10 +425,196 @@ static void wpt_report_exception(JSContext *ctx, const char *name, const char *w
  * loop that walks the owed requests and answers none of them is not a place to add the missing capability, it
  * is a place to be tempted into guessing an answer — which is what "not created" was. An unanswered request
  * stays on the flow's register and is reported by qjs_host_requests to whoever can eventually route it. */
+/* ---- A SECOND DOCUMENT IS A SECOND PROCESS ---------------------------------------------------------------
+ *
+ * SECURITY.md says one WASM instance per DOCUMENT, and CLAUDE.md says a document may be remote REGARDLESS OF
+ * ORIGIN and must never be co-located to dodge the transport. This runner is a process rather than a wasm
+ * instance, so the faithful reading is: a child navigable is a child PROCESS — the same binary, re-executed
+ * with the child's name, address, origin and policy, talking over a pipe.
+ *
+ * CO-LOCATING IT WOULD HAVE BEEN EASIER AND WRONG. Twenty components hold per-document singletons, so a second
+ * document in this process is not merely awkward — it is a second `document`, a second element-wrapper table
+ * and a second world registry sharing one set of statics. But that is not the reason: the reason is that the
+ * transport is the thing that has to work. The cross-instance COW delta rides it, the origin stamp rides it,
+ * and a design that answers a cross-document read without one has tested nothing about either.
+ *
+ * WHAT CROSSES IS TEXT, and that is the same constraint the real seam has: a live JSValue crosses neither a
+ * process, nor a wasm instance, nor a session, nor a park. The answer carries its TYPE because `otherW.length`
+ * is a number and a page compares it with `===` — an answer that arrived as the string "0" would satisfy a
+ * loose check and prove only that bytes moved. */
+#define WPT_CHILD_MAX 32
+typedef struct { char *name; int to, from; pid_t pid; } ChildDoc;
+static ChildDoc g_children[WPT_CHILD_MAX];
+static int g_children_n;
+static const char *g_self_exe;   /* argv[0], which is what a child navigable is re-executed from */
+
+static ChildDoc *wpt_child_for(const char *name)
+{
+    int i;
+    for (i = 0; i < g_children_n; i++)
+        if (!strcmp(g_children[i].name, name)) return &g_children[i];
+    return NULL;
+}
+
+/* §7.4/§4.8.5's create, from the host's side: provision an instance for a document the engine has already
+   named and already handed the page a WindowProxy for. */
+static void wpt_spawn_child(const char *name, const char *url, const char *origin, const char *csp)
+{
+    int down[2], up[2];
+    pid_t pid;
+
+    if (wpt_child_for(name)) return;   /* already provisioned; a notice is not a request */
+    CHECK(g_children_n < WPT_CHILD_MAX, "wpt: more child documents at once than this runner tracks");
+    CHECK(pipe(down) == 0 && pipe(up) == 0, "wpt: could not open the pipes to a child document");
+    pid = fork();
+    CHECK(pid >= 0, "wpt: could not fork a child document");
+    if (pid == 0) {
+        /* THE CHILD. stdin carries the questions, stdout the answers — and stdout is therefore NOT where its
+           test output goes, because a child document has none: it runs a page, not a test file. */
+        dup2(down[0], 0);
+        dup2(up[1], 1);
+        close(down[0]); close(down[1]); close(up[0]); close(up[1]);
+        execl(g_self_exe, g_self_exe, "--document", name, url, origin, csp ? csp : "", (char *)NULL);
+        _exit(127);
+    }
+    close(down[0]); close(up[1]);
+    g_children[g_children_n].name = strdup(name);
+    CHECK(g_children[g_children_n].name != NULL, "wpt: OOM recording a child document");
+    g_children[g_children_n].to = down[1];
+    g_children[g_children_n].from = up[0];
+    g_children[g_children_n].pid = pid;
+    g_children_n++;
+}
+
+/* Ask a child document one question and read one answer line. False when the child is gone, which is a real
+   answer for the caller to report rather than a reason to hang. */
+static bool wpt_child_ask(ChildDoc *c, const char *op, char *out, size_t cap)
+{
+    size_t n = 0;
+
+    wpt_send_all(c->to, op, strlen(op));
+    wpt_send_all(c->to, "\n", 1);
+    for (;;) {
+        char ch;
+        ssize_t r = read(c->from, &ch, 1);
+        if (r <= 0) return false;
+        if (ch == '\n') break;
+        if (n + 1 < cap) out[n++] = ch;
+    }
+    out[n] = 0;
+    return true;
+}
+
+/* The typed answer text -> the value the asking flow resumes with. */
+static JSValue wpt_decode_answer(JSContext *ctx, const char *a)
+{
+    switch (a[0]) {
+    case 'b': return JS_NewBool(ctx, a[1] == '1');
+    case 'n': return JS_NewFloat64(ctx, strtod(a + 1, NULL));
+    case 's': return JS_NewString(ctx, a + 1);
+    case 'N': return JS_NULL;
+    case 'u': return JS_UNDEFINED;
+    default:
+        /* AN OBJECT CANNOT CROSS AS TEXT, and pretending otherwise is how a cross-document read starts
+           answering with something that is not the thing. `contentDocument` and everything reached through it
+           needs a REMOTE HANDLE — (document, object id) resolved back to one proxy per object — which is the
+           next mechanism and not a variant of this one. */
+        DFAIL("a child document answered with a value that is not a primitive — build the remote-object handle "
+              "before routing a member whose value is an object");
+        return JS_UNDEFINED;
+    }
+}
+
+static void wpt_encode_answer(JSContext *ctx, JSValueConst v, char *out, size_t cap)
+{
+    if (JS_IsBool(v))        snprintf(out, cap, "b%d", JS_ToBool(ctx, v) ? 1 : 0);
+    else if (JS_IsNull(v))   snprintf(out, cap, "N");
+    else if (JS_IsUndefined(v)) snprintf(out, cap, "u");
+    else if (JS_IsNumber(v)) { double d = 0; JS_ToFloat64(ctx, &d, v); snprintf(out, cap, "n%.17g", d); }
+    else if (JS_IsString(v)) {
+        const char *t = JS_ToCString(ctx, v);
+        snprintf(out, cap, "s%s", t ? t : "");
+        if (t) JS_FreeCString(ctx, t);
+    } else {
+        DFAIL("a child document was asked for a member whose value is an OBJECT — the remote-object handle is "
+              "what carries one across the seam, and it is not built");
+    }
+}
+
+static void wpt_children_free(void)
+{
+    int i, st;
+    for (i = 0; i < g_children_n; i++) {
+        close(g_children[i].to);
+        close(g_children[i].from);
+        waitpid(g_children[i].pid, &st, 0);
+        free(g_children[i].name);
+    }
+    g_children_n = 0;
+}
+
 static void wpt_answer_host_requests(JSContext *ctx)
 {
-    (void)ctx;
-    (void)engine_host_notices();
+    const char *notices = engine_host_notices();
+    const char *p;
+
+    /* THE NOTICES FIRST: a document announced but not yet provisioned is one a read would arrive for before
+       its instance exists. `navigable.create <child> <creator> <url> <origin> <csp>`. */
+    for (p = notices; *p; ) {
+        const char *end = strchr(p, '\n');
+        char line[1024];
+        size_t n;
+        if (!end) break;
+        n = (size_t)(end - p);
+        if (n < sizeof line) {
+            char *f[6]; int nf = 0; char *q;
+            memcpy(line, p, n); line[n] = 0;
+            for (q = line, f[nf++] = q; *q && nf < 6; q++)
+                if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
+            if (nf == 6 && !strcmp(f[0], "navigable.create"))
+                wpt_spawn_child(f[1], f[3], f[4], f[5]);
+        }
+        p = end + 1;
+    }
+
+    /* AND THE REQUESTS, each routed to the instance holding that document — which is what the trusted zone
+       does in the extension, for the same reason: only it knows which instance holds which document. */
+    for (p = engine_host_requests(); *p; ) {
+        const char *tab = strchr(p, '\t');
+        const char *end = strchr(p, '\n');
+        char op[512], answer[512];
+        uint32_t id;
+        size_t n;
+
+        if (!tab || !end) break;
+        id = (uint32_t)strtoul(p, NULL, 10);
+        n = (size_t)(end - tab - 1);
+        if (n < sizeof op && !strncmp(tab + 1, "windowproxy.get\t", 16)) {
+            char *doc, *q;
+            ChildDoc *c;
+            memcpy(op, tab + 1, n); op[n] = 0;
+            doc = strchr(op, '\t') + 1;
+            q = strchr(doc, '\t');
+            if (q) {
+                *q = 0;
+                c = wpt_child_for(doc);
+                *q = '\t';
+                /* A READ FOR A DOCUMENT NOTHING PROVISIONED is not a slow answer, it is a missing instance —
+                   the notice that named it was dropped, or the read outran it. Left unanswered the flow parks
+                   forever and the file times out with nothing said, so it says it. */
+                DCHECK(c != NULL, "a cross-document read named a document this host never provisioned — the "
+                                  "navigable.create notice for it was dropped");
+                if (c && wpt_child_ask(c, op, answer, sizeof answer)) {
+                    JSValue v = wpt_decode_answer(ctx, answer);
+                    engine_host_answer(ctx, id, v);
+                    JS_FreeValue(ctx, v);
+                }
+            }
+        }
+        /* An operation this harness does not route is left UNANSWERED rather than guessed: the asking flow
+           stays parked, which is visible, where a wrong answer is not. */
+        p = end + 1;
+    }
 }
 
 /* ---- THE TEST FILE, WHICH IS OFTEN A DOCUMENT ----------------------------------------------------------
@@ -504,12 +691,16 @@ static void wpt_derive_addresses(int argc, char **argv)
 /* Run one program as a FLOW, exactly as the test262 harness does: park and rebuild the whole frame chain at
    every back-edge. A throw is reported and ends the file — a test file that cannot run is a failure, never a
    skip. */
-static int run_program(JSContext *ctx, const char *src, size_t len, const char *name)
+/* Run one program as a flow and KEEP ITS VALUE. A member read answered on behalf of another document is a
+   program like any other and must run as a flow like any other: reading `self.length` from C would reach the
+   getter with no flow base under it, which is the one thing this engine refuses. `*pres` is owned. */
+static int run_program_value(JSContext *ctx, const char *src, size_t len, const char *name, JSValue *pres)
 {
     JSValue *flow = JS_FlowNew(ctx, src, len, name, JS_EVAL_TYPE_GLOBAL);
     JSValue res = JS_UNDEFINED;
     int failed = 0;
 
+    if (pres) *pres = JS_UNDEFINED;
     if (!flow) {
         wpt_report_exception(ctx, name, "compile: ");
         return 1;
@@ -519,36 +710,37 @@ static int run_program(JSContext *ctx, const char *src, size_t len, const char *
         wpt_report_exception(ctx, name, "");
         failed = 1;
     }
-    JS_FreeValue(ctx, res);
+    if (pres && !failed) *pres = res;
+    else JS_FreeValue(ctx, res);
     JS_FlowFree(ctx, flow);
     return failed;
 }
 
+static int run_program(JSContext *ctx, const char *src, size_t len, const char *name)
+{
+    return run_program_value(ctx, src, len, name, NULL);
+}
+
 static lxb_html_document_t *g_wpt_dom;   /* the runner's parsed document */
 
-int main(int argc, char **argv)
+/* EVERYTHING A DOCUMENT IS, built once — and built by ONE function because there is more than one kind of
+ * document now. A TEST document and a CHILD document (the navigable an <iframe> or a popup created, which
+ * SECURITY.md puts in an instance of its own) differ in exactly three things: the NAME the world registry
+ * knows them by, their ORIGIN, and which bytes their tree is parsed from. Everything else — the platform
+ * surface, the browsing context, the prototype chain, the event loop — is the same document machinery, and
+ * two copies of it would be two browsers that drift.
+ *
+ * `html`/`html_n` is the document to parse; NULL means the minimal wrapper WPT puts around a .window.js.
+ * `g_base_url` and `g_server` must already name where this document lives — see wpt_derive_addresses. */
+static JSRuntime *g_rt;
+
+static JSContext *wpt_build_document(const char *doc_name, const char *origin,
+                                     const char *html, size_t html_n)
 {
-    /* LINE-BUFFERED, so an ABORT cannot throw away what the file already reported. A DCHECK ends the process
-       with abort(), which does not flush stdio — and stdout is a pipe here, so it is fully buffered. Every
-       result a file produced before it aborted was therefore lost, and the driver read the file as having
-       produced NOTHING. That is the "same failures with the count hidden" shape this gate exists to avoid, and
-       it hid them from ME: I diagnosed a file as ending with no results and went looking for what it was
-       waiting on, when it had reported four failures and then leaked. */
-    setvbuf(stdout, NULL, _IOLBF, 0);
     JSRuntime *rt;
     JSContext *ctx;
     JSValue global;
-    int i, failed = 0;
 
-    if (argc < 2) {
-        fprintf(stderr, "usage: wpt_runner <testharness.js> <test.js|test.html> [more.js ...]\n");
-        return 2;
-    }
-    /* WHICH FILE IS THE TEST, WHERE IT LIVES, AND WHETHER IT IS A DOCUMENT. Derived before anything else is
-       built, because an HTML test's document has to be FETCHED and PARSED before `document` is installed —
-       there is no second document to swap in later, and a runner that installed a placeholder first would be
-       running the test's scripts against the wrong tree. */
-    wpt_derive_addresses(argc, argv);
     rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);
     ctx = JS_NewContext(rt);
@@ -600,7 +792,7 @@ int main(int argc, char **argv)
     message_event_install(ctx, global);
     /* NAME THIS DOCUMENT. A WindowProxy answers "is this navigable remote?" by comparing against the one
        document identity the world registry owns, so the registry has to be up before the first proxy exists. */
-    world_registry_init("wpt");
+    world_registry_init(doc_name);
     /* HTML §7.2.2's BROWSING-CONTEXT MEMBERS — window, self, frames, parent, top, opener, closed, origin and
        name. This runner had none of them, so `window` itself was undefined and every test in
        html/browsers/the-window-object failed on its first line. It could not call window_install before,
@@ -614,14 +806,14 @@ int main(int argc, char **argv)
        is the frontier's. This runner drives quickjs flows (JS_FlowNew/JS_FlowResume) but had no solver flow at
        all, so §7.4's open() aborted on "issued outside a flow" — correctly. One flow, set running for the whole
        run: this harness exercises components, and the BFS that would rank many of them is the engine's. */
-    flow_registry_init("wpt");
+    flow_registry_init(doc_name);
     flow_set_running(flow_add(ctx, JS_UNDEFINED, NULL, 0, WORLD_NONE));
 
-    window_install(ctx, global, "http://web-platform.test");
-    window_proxy_init(ctx);
+    window_install(ctx, global, origin);
+    window_proxy_init(ctx, origin);
     window_proxy_install_members(ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
-    window_message_install(ctx, global, "http://web-platform.test");
-    navigable_install(ctx, global, "http://web-platform.test");   /* HTML 7.4 */
+    window_message_install(ctx, global, origin);
+    navigable_install(ctx, global, origin);   /* HTML 7.4 */
     /* THE DOCUMENT COMES AFTER THE BROWSING CONTEXT, not before it. §4.8.5's insertion steps run during tree
        construction, so installing the document CREATES a child navigable for every <iframe> the markup
        contains — which needs the WindowProxy class and §7.4's create-a-navigable to exist first. The engine's
@@ -638,20 +830,23 @@ int main(int argc, char **argv)
         /* THE DOCUMENT IS THE TEST'S OWN when the test is one; otherwise it is the minimal wrapper WPT's server
            puts around a `.window.js`. One parse either way — the only difference is whose bytes. */
         static const char DOC[] = "<!doctype html><html><head></head><body></body></html>";
-        char *html = NULL;
-        size_t html_n = sizeof DOC - 1;
-        const char *src = DOC;
+        char *fetched = NULL;
+        const char *src = html;
 
-        if (g_html_mode) {
-            html = wpt_get(g_test_url, &html_n);
-            CHECK(html != NULL, "wpt: the corpus server did not serve the HTML test file");
-            src = html;
+        if (!src) {
+            src = DOC;
+            html_n = sizeof DOC - 1;
+            if (g_html_mode) {
+                fetched = wpt_get(g_test_url, &html_n);
+                CHECK(fetched != NULL, "wpt: the corpus server did not serve the HTML test file");
+                src = fetched;
+            }
         }
         g_wpt_dom = lxb_html_document_create();
         CHECK(g_wpt_dom != NULL, "the runner's document allocation failed");
         CHECK(lxb_html_document_parse(g_wpt_dom, (const lxb_char_t *)src, html_n) == LXB_STATUS_OK,
               "the runner's document did not parse");
-        free(html);
+        free(fetched);
         /* THE DOM CHOKEPOINT'S CONTEXT. §4.2.3's insertion and removing steps are fired from the solver's tree
            chokepoint, which needs the runtime they run in — and this runner never named one, so it ran NONE of
            them: no <script> preparation, no custom-element upgrade, no §4.8.5 child navigable. It failed
@@ -663,7 +858,7 @@ int main(int argc, char **argv)
     }
     message_port_init(ctx);
     message_port_install(ctx, global);   /* HTML 9.4.2/9.4.3 */
-    broadcast_channel_init(ctx, "http://web-platform.test");
+    broadcast_channel_init(ctx, origin);
     broadcast_channel_install(ctx, global);   /* HTML 9.5 */
     abort_init(ctx);        /* the AbortSignal slot key §5.4's signal lives in */
     abort_install(ctx, global);
@@ -703,12 +898,124 @@ int main(int argc, char **argv)
         JSValue loc = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, loc, "href", JS_NewString(ctx, g_base_url));
         JS_SetPropertyStr(ctx, loc, "search", JS_NewString(ctx, ""));
-        JS_SetPropertyStr(ctx, loc, "origin", JS_NewString(ctx, "http://web-platform.test"));
+        JS_SetPropertyStr(ctx, loc, "origin", JS_NewString(ctx, origin));
         JS_SetPropertyStr(ctx, loc, "protocol", JS_NewString(ctx, "http:"));
         JS_SetPropertyStr(ctx, global, "location", loc);
     }
     idl_args_seal();
     JS_FreeValue(ctx, global);
+    g_rt = rt;
+    return ctx;
+}
+
+/* THE CHILD DOCUMENT'S OWN MAIN. It is a document, not a test: it parses its address's bytes, runs that
+ * document's scripts, and then ANSWERS — it prints no results, because it has none.
+ *
+ * IT ANSWERS BY RUNNING A PROGRAM, not by reading a property from C. `self.length` is an IDL getter and the
+ * engine refuses to reach one from a C activation: there is no flow base under it, so a loop in the getter's
+ * body would drive to completion instead of parking. The read is a flow like every other read, which is also
+ * what makes an answer that has to suspend possible at all.
+ *
+ * THE WORLD ARRIVES AND IS NOT YET USED, and that is stated rather than hidden: the request carries the asking
+ * flow's world NAME, and world.h's segment materialization needs its ANCESTRY to fork the nearest ancestor a
+ * peer already holds. Nothing sends the ancestry yet, so a peer holds none of it and starts from an empty
+ * segment — which world.c says is the TRUTH for a world that has never written here, and becomes a lie the
+ * moment a flow forks after writing in this document. That is the next mechanism, and it is why the world is
+ * on the wire already. */
+static int wpt_child_main(int argc, char **argv)
+{
+    const char *name = argv[2], *url = argv[3], *origin = argv[4], *csp = argc > 5 ? argv[5] : "";
+    JSContext *ctx;
+    char *html = NULL;
+    size_t html_n = 0;
+    char line[512];
+
+    (void)csp;
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    {
+        const char *sv = getenv("WPT_SERVER");
+        CHECK(sv && *sv, "wpt: a child document was started with no corpus server to load its address from");
+        snprintf(g_server, sizeof g_server, "%s", sv);
+    }
+    snprintf(g_base_url, sizeof g_base_url, "%s", url && *url ? url : "about:blank");
+    /* `about:blank` HAS NO BYTES TO FETCH — its Document is the empty one §7.4 creates, which is what makes it
+       synchronous in a browser and what makes an <iframe> with no src scriptable immediately. */
+    if (strncmp(g_base_url, "about:", 6) != 0) {
+        html = wpt_get(g_base_url, &html_n);
+        /* A child whose address does not load still HAS a document — a browser shows an error page and the
+           navigable exists — so this is about:blank rather than a dead instance. */
+        if (!html) html_n = 0;
+    }
+    ctx = wpt_build_document(name, origin, html, html_n);
+    free(html);
+
+    JS_SetFlowControlHooks(&WPT_HOOKS_ON);
+    {
+        DocScripts ds = document_exec_scripts(g_wpt_dom);
+        int i;
+        for (i = 0; i < ds.n; i++) {
+            if (ds.bodies[i]) run_program(ctx, ds.bodies[i], strlen(ds.bodies[i]), g_base_url);
+            else if (ds.srcs[i]) {
+                size_t len = 0;
+                char *body = wpt_get(ds.srcs[i], &len);
+                if (!body) continue;
+                run_program(ctx, body, len, ds.srcs[i]);
+                free(body);
+            }
+        }
+        doc_scripts_free(&ds);
+    }
+
+    while (fgets(line, sizeof line, stdin)) {
+        char *nl = strchr(line, '\n'), *member;
+        JSValue v = JS_UNDEFINED;
+        char prog[128], answer[512];
+
+        if (nl) *nl = 0;
+        /* `windowproxy.get <doc> <world> <member>` — the member is the last field. */
+        member = strrchr(line, '\t');
+        if (!member) continue;
+        member++;
+        snprintf(prog, sizeof prog, "globalThis[%c%s%c]", '"', member, '"');
+        if (run_program_value(ctx, prog, strlen(prog), "<cross-document read>", &v)) v = JS_UNDEFINED;
+        wpt_encode_answer(ctx, v, answer, sizeof answer);
+        JS_FreeValue(ctx, v);
+        fputs(answer, stdout);
+        fputc('\n', stdout);
+        fflush(stdout);
+    }
+    JS_SetFlowControlHooks(&WPT_HOOKS_OFF);
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    /* LINE-BUFFERED, so an ABORT cannot throw away what the file already reported. A DCHECK ends the process
+       with abort(), which does not flush stdio — and stdout is a pipe here, so it is fully buffered. Every
+       result a file produced before it aborted was therefore lost, and the driver read the file as having
+       produced NOTHING. That is the "same failures with the count hidden" shape this gate exists to avoid, and
+       it hid them from ME: I diagnosed a file as ending with no results and went looking for what it was
+       waiting on, when it had reported four failures and then leaked. */
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    JSRuntime *rt;
+    JSContext *ctx;
+    int i, failed = 0;
+
+    g_self_exe = argv[0];
+    /* A CHILD NAVIGABLE'S INSTANCE, re-executed from this same binary — see the child-document section. */
+    if (argc >= 5 && !strcmp(argv[1], "--document")) return wpt_child_main(argc, argv);
+    if (argc < 2) {
+        fprintf(stderr, "usage: wpt_runner <testharness.js> <test.js|test.html> [more.js ...]\n");
+        return 2;
+    }
+    /* WHICH FILE IS THE TEST, WHERE IT LIVES, AND WHETHER IT IS A DOCUMENT. Derived before anything else is
+       built, because an HTML test's document has to be FETCHED and PARSED before `document` is installed —
+       there is no second document to swap in later, and a runner that installed a placeholder first would be
+       running the test's scripts against the wrong tree. */
+    wpt_derive_addresses(argc, argv);
+    /* THE TEST DOCUMENT. One call, because a child document is built by the same one — see above. */
+    ctx = wpt_build_document("wpt", "http://web-platform.test", NULL, 0);
+    rt = g_rt;
 
     JS_SetFlowControlHooks(&WPT_HOOKS_ON);
     if (g_html_mode) {

@@ -6,7 +6,10 @@
 
 #include "quickjs.h"
 
-void window_proxy_init(JSContext *ctx);
+/* `origin` is THIS DOCUMENT'S, serialized — the ACCESSOR side of §7.2.5.1's same-origin check. Without it the
+   check cannot be made at all, which is the state this component was in: it carried the TARGET's origin and
+   compared it against nothing. */
+void window_proxy_init(JSContext *ctx, const char *origin);
 void window_proxy_free(JSContext *ctx);
 
 /* A proxy over a navigable whose active Window is `window` and whose active document's origin is `origin`.

@@ -182,7 +182,11 @@ const arg = process.argv[2] || "";
 const root = arg ? join(WPT, arg) : WPT;
 const files = (arg.endsWith(".js") || arg.endsWith(".html")) ? [root]
             : arg ? collect(root, []).sort()
-            : WPT_PATHS.filter((p) => p !== "resources" && p !== "common")
+            /* `resources`, `common` and `tools` are checked out to BE USED, not to be tested: testharness.js and
+               its helpers, and WPT's own server. `tools` carries the harness's SELF-tests, which reference
+               testharness.js and therefore look like tests to the collector — 27 files of them, measuring
+               wptserve rather than this engine. Excluding a support path is not excluding a test. */
+            : WPT_PATHS.filter((p) => p !== "resources" && p !== "common" && p !== "tools")
                        .flatMap((p) => collect(join(WPT, p), [])).sort();
 if (!files.length) { console.error(`[wpt] no test files under ${root}`); process.exit(1); }
 

@@ -32,6 +32,7 @@
  * ACTIVE DOCUMENT. The member table below is organised by exactly that line, and it is the difference between
  * `otherW.self` costing nothing and `otherW.self` parking a flow on a host that may never answer. */
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
@@ -67,6 +68,10 @@ typedef struct {
 
 static JSClassID g_proxy_class;
 static JSRuntime *g_wp_rt;
+/* THIS DOCUMENT'S ORIGIN — the ACCESSOR side of §7.2.5.1's same-origin check, and the reason the check can
+   exist at all. A proxy carries the origin of the navigable's active document; the comparison needs the origin
+   of whoever is reading, which is this instance's, and there is exactly one of those. */
+static char *g_local_origin;
 /* §7.2.5.1's member surface, shared by every proxy — which is also what makes `a.postMessage === b.postMessage`
    true. A WindowProxy has no own properties: it FORWARDS to its navigable, answering from the navigable's own
    state where that is what the member is, and suspending on the host where the member reads the active
@@ -90,6 +95,19 @@ static ProxyData *proxy_of(JSValueConst v)
     ProxyData *p = JS_GetOpaque(v, g_proxy_class);
     if (p) cow_capture_host_record(v, p, &PROXY_REC);
     return p;
+}
+
+/* §7.2.5.1's SAME-ORIGIN CHECK, and the one rule that makes it more than a string compare: an OPAQUE origin is
+   unique per spec, so it is same-origin with NOTHING — not even with another opaque one, and not with itself.
+   A sandboxed frame serializes its origin as "null", and treating two "null"s as equal would let one sandboxed
+   document script another. SECURITY.md states the same rule for the credentialed-read principal, and it is the
+   same rule because it is the same concept. */
+static bool proxy_same_origin(const ProxyData *p)
+{
+    DCHECK(g_local_origin != NULL, "the same-origin check ran before window_proxy_init named this document's "
+                                   "origin — the accessor side of §7.2.5.1 has no value to compare against");
+    if (!p->origin || !strcmp(p->origin, "null") || !strcmp(g_local_origin, "null")) return false;
+    return !strcmp(p->origin, g_local_origin);
 }
 
 bool window_proxy_is(JSValueConst v)
@@ -288,6 +306,31 @@ enum {
 static const char *const PROXY_MEMBER[WP_MEMBER_N] = {
     "window", "self", "frames", "globalThis", "parent", "top", "opener", "closed", "name", "length"
 };
+/* §7.2.5.1's CROSS-ORIGIN PROPERTY NAMES — the fixed list a WindowProxy exposes whatever the origins are:
+   window, self, location, close, closed, focus, blur, frames, length, top, opener, parent, postMessage.
+   Everything else is same-origin ONLY, and reaching it across origins is a SecurityError.
+ *
+ * THE LIST IS DECLARED BESIDE THE MEMBERS rather than checked at each read, because the failure mode of the
+ * alternative is silence: this surface had NO check at all, and it was safe only by the accident that the
+ * members installed so far happen to be nearly the whole allowlist. The first member added without one —
+ * `document`, `location`'s same-origin half, anything reached through them — would have leaked a cross-origin
+ * document with nothing to say so. A member declared here cannot be added without answering the question. */
+static const bool PROXY_CROSS_ORIGIN[WP_MEMBER_N] = {
+    true,  /* window     */ true,  /* self       */ true,  /* frames     */
+    false, /* globalThis — the global OBJECT, and §7.2.5.1 does not list it */
+    true,  /* parent     */ true,  /* top        */ true,  /* opener     */
+    true,  /* closed     */
+    false, /* name — a browsing context's name is NOT on the list; a cross-origin read of it is a SecurityError */
+    true,  /* length     */
+};
+
+/* §7.2.5.1: a read the origins do not permit is a SecurityError, and it is thrown at the READ rather than
+   answered with undefined — a page distinguishes the two, and undefined would say "this window has no such
+   member" about one it cannot see. */
+static bool proxy_read_permitted(const ProxyData *p, int magic)
+{
+    return PROXY_CROSS_ORIGIN[magic] || proxy_same_origin(p);
+}
 
 /* §7.2.5's `top`: the TOP-LEVEL traversable's proxy. Walked rather than stored, because a navigable's parent
    chain is the only place the answer lives and a cached one goes stale the moment a frame is reparented. */
@@ -314,7 +357,12 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
            "a WindowProxy member was declared with a magic this component does not name");
     if (!p) return JS_UNDEFINED;
 
-    /* THE LOCAL CASE: the same document, so its own Window is the authority for every member. */
+    /* THE LOCAL CASE: the same document, so its own Window is the authority for every member. A local proxy
+       can still be cross-origin — this instance is one document, but a proxy it holds may name one it
+       navigated elsewhere — so the check comes first either way. */
+    if (!proxy_read_permitted(p, magic))
+        return JS_ThrowDOMException(ctx, "SecurityError",
+                                    "the origins do not permit reading this member of that Window");
     if (p->doc == world_local_doc()) {
         DCHECK(!JS_IsUndefined(p->window),
                "a local WindowProxy carries no Window — its document id and its binding disagree");
@@ -354,6 +402,11 @@ static JSValue proxy_name_set(JSContext *ctx, JSValueConst this_val, JSValueCons
 
     (void)magic;
     if (!p) return JS_UNDEFINED;
+    /* §7.2.5.1's write side is the same rule: `name` is not a cross-origin property, so setting it across
+       origins is a SecurityError rather than a silent no-op. */
+    if (!proxy_read_permitted(p, WP_NAME))
+        return JS_ThrowDOMException(ctx, "SecurityError",
+                                    "the origins do not permit setting the name of that Window");
     if (p->doc == world_local_doc()) {
         if (JS_SetPropertyStr(ctx, p->window, "name", JS_DupValue(ctx, v)) < 0) return JS_EXCEPTION;
         return JS_UNDEFINED;
@@ -415,6 +468,11 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
 
     p = JS_GetOpaque(hdr->this_val, g_proxy_class);
     if (!p) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+    if (!proxy_read_permitted(p, magic)) {
+        JS_ThrowDOMException(ctx, "SecurityError",
+                             "the origins do not permit reading this member of that Window");
+        return JS_STEP_ABRUPT;
+    }
 
     /* THE LOCAL CASE, answered in this turn: an ordinary read of the navigable's own Window. */
     if (p->doc == world_local_doc()) {
@@ -465,7 +523,7 @@ void window_proxy_install_members(JSContext *ctx)
     idl_install_method(ctx, g_proxy_proto, "close", 0, idl_method_id(ctx, NULL, 0, proxy_close, 0));
 }
 
-void window_proxy_init(JSContext *ctx)
+void window_proxy_init(JSContext *ctx, const char *origin)
 {
     JSClassDef d = { "WindowProxy", .finalizer = proxy_finalizer, .gc_mark = proxy_gc_mark };
     JSRuntime *rt = JS_GetRuntime(ctx);
@@ -473,6 +531,9 @@ void window_proxy_init(JSContext *ctx)
     DCHECK(g_wp_rt == NULL || g_wp_rt == rt, "WindowProxy was installed into a second runtime");
     if (g_wp_rt == rt) return;
     g_wp_rt = rt;
+    free(g_local_origin);
+    g_local_origin = strdup(origin ? origin : "null");
+    CHECK(g_local_origin != NULL, "window proxy: OOM recording this document's origin");
     JS_NewClassID(rt, &g_proxy_class);
     JS_NewClass(rt, g_proxy_class, &d);
     g_proxy_proto = JS_NewObject(ctx);
@@ -493,5 +554,7 @@ void window_proxy_free(JSContext *ctx)
     g_strings = NULL;
     JS_FreeValue(ctx, g_proxy_proto);
     g_proxy_proto = JS_UNINITIALIZED;
+    free(g_local_origin);
+    g_local_origin = NULL;
     g_wp_rt = NULL;
 }

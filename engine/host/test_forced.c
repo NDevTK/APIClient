@@ -1164,6 +1164,12 @@ static const char *HTML =
     /* §7.4: a child navigable. `open()` hands back a WindowProxy for a document in ANOTHER instance AT ITS OWN
        CALL SITE — the child's name is minted here, so there is nothing to ask and nothing to suspend for. */
     "var _w = open(); fetch('/api/navopen?v=' + (_w ? 'proxy' : 'null'));"
+    /* §7.2.5.1's SAME-ORIGIN CHECK. A popup at ANOTHER origin exposes the fixed cross-origin list and nothing
+       else: `closed` answers, `name` is a SecurityError. Both halves are the assertion — a filter that threw
+       for everything would pass a test that only checked the throw. */
+    "var _x = open('https://other.test/p'), _sop = '';"
+    "try { _x.name; _sop += 'LEAKED'; } catch (e) { _sop += e.name; }"
+    "fetch('/api/sop?v=' + _sop + ':' + (_x.closed === false ? 'closedok' : 'wrong'));"
     /* §7.2.5.1 ACROSS INSTANCES: the child's document lives in another instance, so this read SUSPENDS the
        flow, the peer answers, and the flow resumes with the value AT THE CALL SITE — `false`, not undefined. */
     /* The TYPES matter as much as the values: an answer that came back as the string "false" would satisfy a
@@ -1253,6 +1259,12 @@ static const char *HTML_MIN =
     /* §7.4: a child navigable. `open()` hands back a WindowProxy for a document in ANOTHER instance AT ITS OWN
        CALL SITE — the child's name is minted here, so there is nothing to ask and nothing to suspend for. */
     "var _w = open(); fetch('/api/navopen?v=' + (_w ? 'proxy' : 'null'));"
+    /* §7.2.5.1's SAME-ORIGIN CHECK. A popup at ANOTHER origin exposes the fixed cross-origin list and nothing
+       else: `closed` answers, `name` is a SecurityError. Both halves are the assertion — a filter that threw
+       for everything would pass a test that only checked the throw. */
+    "var _x = open('https://other.test/p'), _sop = '';"
+    "try { _x.name; _sop += 'LEAKED'; } catch (e) { _sop += e.name; }"
+    "fetch('/api/sop?v=' + _sop + ':' + (_x.closed === false ? 'closedok' : 'wrong'));"
     "</script>"
     "</body></html>";
 
@@ -1580,7 +1592,7 @@ int main(void) {
     window_install(ctx, g, "https://x.test/p");
     /* §7.4's `window.open`, which hands back a WindowProxy for a document in ANOTHER instance at its own call
        site — the child's name is minted in this instance, so nothing suspends. */
-    window_proxy_init(ctx);
+    window_proxy_init(ctx, "https://x.test");
     window_proxy_install_members(ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
     navigable_install(ctx, g, "https://x.test");
     /* THE SYNCHRONOUS HOST READ. A DECLARED step member, because suspending and answering at the same call
@@ -1845,6 +1857,8 @@ int main(void) {
     int hostreqfork_tt = (strstr(js, "\"/api/hostreqfork\"") && strstr(js, "hrA") && strstr(js, "hrP"));
     /* §7.4 returned a WindowProxy for a child document the host minted, after suspending for it. */
     int navopen_tt = (strstr(js, "\"/api/navopen\"") && strstr(js, "proxy"));
+    /* §7.2.5.1: a cross-origin proxy answers `closed` and refuses `name`. */
+    int sop_tt = (strstr(js, "\"/api/sop\"") && strstr(js, "SecurityError:closedok") && !strstr(js, "LEAKED"));
     /* A cross-document read suspended and resumed with the peer's answer. */
     int xdocread_tt = (strstr(js, "\"/api/xdocread\"") && strstr(js, "xread"));
     /* The same cross-document read reached from inside a QUEUED JOB, which parks the flow at a job root. */
@@ -2052,7 +2066,7 @@ int main(void) {
         { "rerepfork", rerepfork_tt, 1 },  { "gcallfork", gcallfork_tt, 1 },
         { "gapplyfork", gapplyfork_tt, 1 },{ "grefapplyfork", grefapplyfork_tt, 1 },
         { "hostreq", hostreq_tt, 1 }, { "hostreq-fork", hostreqfork_tt, 1 },
-        { "nav-open", navopen_tt, 1 }, { "xdoc-read", xdocread_tt, 1 }, { "xdoc-job", xdocjob_tt, 1 }, { "timer-order", timer_tt, 1 }, { "iframe-nav", ifnav_tt, 1 },
+        { "nav-open", navopen_tt, 1 }, { "proxy-sop", sop_tt, 1 }, { "xdoc-read", xdocread_tt, 1 }, { "xdoc-job", xdocjob_tt, 1 }, { "timer-order", timer_tt, 1 }, { "iframe-nav", ifnav_tt, 1 },
     };
     int h_ok = 1;
     printf("@H ");
