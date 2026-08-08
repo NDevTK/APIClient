@@ -982,34 +982,21 @@ static bool wpt_run_pending(void)
     return true;
 }
 
-static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url, const char *origin,
-                                  uint32_t doc_id, JSValueConst nav_proxy)
+/* THE NETWORK HALF of §7.4 step 14 — this runner's, because this runner has a server to ask. The bytes come
+   back and the ENGINE parses them: what a document IS was never this file's question, and while it was, the
+   product host answered the same seam by ignoring the address entirely. */
+static char *wpt_document_fetch(JSContext *ctx, const char *url, size_t *plen)
+{
+    (void)ctx;
+    return wpt_get(url, plen);
+}
+
+static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
+                                  const char *origin, uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSContext *ctx = JS_NewContext(rt);
-    char *bytes = NULL;
-    size_t n = 0;
 
     CHECK(ctx != NULL, "wpt: a same-origin child navigable's realm could not be created");
-    /* §7.4 CREATES THE NAVIGABLE WITH about:blank AND THEN NAVIGATES IT TO ITS ADDRESS, and this is the second
-       half. The engine hands over the initial about:blank Document because that is the one the spec creates
-       synchronously; the ADDRESS's bytes are the HOST's, because the host owns the network — which is why the
-       builder is the host's and takes the url.
-       WITHOUT IT A CHILD IS PERMANENTLY EMPTY. `window.open('resources/message-opener.html')` produced a
-       navigable whose document had no scripts, so the popup never posted back and the opener waited forever:
-       twelve open-features files in this area report nothing at all for exactly that reason, and they are not
-       twelve bugs, they are one missing navigation. A child whose address does not load keeps the empty
-       Document — a browser shows an error page and the navigable still exists. */
-    if (url && *url && strncmp(url, "about:", 6) != 0) {
-        bytes = wpt_get(url, &n);
-        if (bytes && n) {
-            lxb_html_document_t *nav_doc = lxb_html_document_create();
-            CHECK(nav_doc != NULL, "wpt: a navigated child's document allocation failed");
-            CHECK(lxb_html_document_parse(nav_doc, (const lxb_char_t *)bytes, n) == LXB_STATUS_OK,
-                  "wpt: a navigated child's document did not parse");
-            lxb_html_document_destroy(dom);   /* the about:blank Document it replaces */
-            dom = nav_doc;
-        }
-    }
     wpt_realm_install(ctx, dom, url, origin, doc_id, nav_proxy);
     /* THE CHILD'S SCRIPTS ARE THE CHILD'S, run in ITS realm — they are what make a popup a participant rather
        than an empty frame, since message-opener.html's whole body is one script that posts to its opener.
@@ -1020,7 +1007,7 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
        anything. A document's scripts are PROGRAMS, and a program is a flow the one pump drives. Queuing them
        is what makes the child's script ordinary work on the same loop as the parent's, which is also what lets
        one of them suspend. */
-    if (bytes) {
+    {
         DocScripts ds = document_exec_scripts(dom);
         int i;
         for (i = 0; i < ds.n; i++) {
@@ -1034,7 +1021,6 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
             }
         }
         doc_scripts_free(&ds);
-        free(bytes);
     }
     return ctx;
 }
@@ -1059,6 +1045,7 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin,
        answer and not the engine's — a child with a different platform surface would make every fidelity number
        measured in it a number about a different browser. */
     navigable_set_realm_builder(wpt_child_realm);
+    navigable_set_document_fetcher(wpt_document_fetch);   /* §7.4 step 14's bytes; the engine parses them */
 
     if (!src) {
         src = DOC;

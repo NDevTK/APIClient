@@ -17,6 +17,7 @@
 
 static char *g_origin;   /* this AGENT's origin — what an about:blank child inherits (owned) */
 static RealmBuilder g_realm_builder;
+static DocumentFetcher g_doc_fetcher;
 
 /* THE REALMS THIS AGENT BUILT, and the agent is what owns them. A child realm is created by §7.4 and referred
    to by the WindowProxy over its navigable, but a proxy is a GC object and a realm is not: releasing one from
@@ -28,6 +29,7 @@ static JSContext **g_realms;
 static int         g_realms_n, g_realms_cap;
 
 void navigable_set_realm_builder(RealmBuilder b) { g_realm_builder = b; }
+void navigable_set_document_fetcher(DocumentFetcher f) { g_doc_fetcher = f; }
 
 
 /* THE CHILD'S ADDRESS AND ORIGIN, from ONE parse. An `about:blank` navigable — which is what `open()` with no
@@ -82,19 +84,40 @@ static bool child_in_this_agent(const char *child_origin)
     return !strcmp(g_origin, child_origin);
 }
 
-/* THE CHILD'S INITIAL DOCUMENT — §7.4's, which for about:blank is the empty one the spec creates. A real
-   Lexbor parse, because tree construction always produces <html><head><body> and a child whose body is missing
-   is not a document a page can append to. The bytes of a child with a real address are the HOST's to fetch;
-   until that navigation exists the initial about:blank Document is the whole of it, which is exactly what the
-   spec says the navigable starts with. */
-static lxb_html_document_t *child_initial_document(void)
+/* THE CHILD'S DOCUMENT — §7.4's initial about:blank one, or the parse of the address it was navigated to.
+   A REAL LEXBOR PARSE either way, because tree construction always produces <html><head><body> and a child
+   whose body is missing is not a document a page can append to.
+   THE PARSE IS THE ENGINE'S AND THE BYTES ARE THE HOST'S, which is the whole reason those are two calls: this
+   engine owns what a document IS (CLAUDE.md: Lexbor and quickjs own all semantics) and the host owns the
+   network. It used to be one host callback holding both, and the host that implemented only the second half
+   looked finished. */
+static lxb_html_document_t *child_document(JSContext *ctx, const char *url)
 {
     static const char EMPTY[] = "<!doctype html><html><head></head><body></body></html>";
     lxb_html_document_t *dom = lxb_html_document_create();
+    char *bytes = NULL;
+    size_t n = 0;
 
-    CHECK(dom != NULL, "navigable: OOM creating a child navigable's initial Document");
-    CHECK(lxb_html_document_parse(dom, (const lxb_char_t *)EMPTY, sizeof EMPTY - 1) == LXB_STATUS_OK,
-          "a child navigable's initial about:blank Document did not parse");
+    CHECK(dom != NULL, "navigable: OOM creating a child navigable's Document");
+    /* §7.4 STEP 14's NAVIGATE, for an address there is anything to fetch at — see navigable.h for why an
+       `about:` scheme has nothing. A host with no fetcher has not built navigation, and that is named HERE
+       rather than answered with the empty document: a popup whose scripts never ran is indistinguishable in
+       the output from a page that had none, which is a surface reported as explored and never reached. */
+    if (url && *url && strncmp(url, "about:", 6) != 0) {
+        DCHECK(g_doc_fetcher != NULL,
+               "a navigable was navigated to an address in an agent whose host declared no document fetcher — "
+               "§7.4 step 14 fetches it and this host cannot, so the child would silently keep the empty "
+               "about:blank Document and its scripts would never run. Build the navigation: the address is a "
+               "host-owed request, so the navigating flow parks on it and resumes when the response lands "
+               "(navigable_set_document_fetcher)");
+        bytes = g_doc_fetcher(ctx, url, &n);
+    }
+    /* A CHILD WHOSE ADDRESS DOES NOT LOAD KEEPS THE EMPTY DOCUMENT — a browser shows an error page and the
+       navigable still exists. That is a failed fetch, not a missing capability, and the two are different. */
+    CHECK(lxb_html_document_parse(dom, bytes ? (const lxb_char_t *)bytes : (const lxb_char_t *)EMPTY,
+                                  bytes ? n : sizeof EMPTY - 1) == LXB_STATUS_OK,
+          "a child navigable's Document did not parse");
+    free(bytes);
     return dom;
 }
 
@@ -110,7 +133,7 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
            "a same-origin child navigable was reached in an agent whose host declared no realm builder — a "
            "same-origin document is a second REALM in this heap, and only the host knows which platform "
            "surface a document of this build has; declare it with navigable_set_realm_builder");
-    cctx = g_realm_builder(JS_GetRuntime(ctx), child_initial_document(), url, origin, doc, nav_proxy);
+    cctx = g_realm_builder(JS_GetRuntime(ctx), child_document(ctx, url), url, origin, doc, nav_proxy);
     CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
     if (g_realms_n == g_realms_cap) {
         int cap = g_realms_cap ? g_realms_cap * 2 : 8;

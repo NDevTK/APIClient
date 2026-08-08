@@ -38,18 +38,48 @@
 
 #include "quickjs.h"
 
-/* HOW THIS AGENT BUILDS A DOCUMENT — declared by the HOST, called by §7.4 when the child is SAME-ORIGIN.
+/* THE TWO HALVES OF §7.4, AND THEY ARE DECLARED SEPARATELY BECAUSE THEY BELONG TO DIFFERENT OWNERS.
+ *
+ * Creating a navigable decides WHICH DOCUMENT it has; navigating it to an address FETCHES that address. The
+ * first is semantics and belongs to the engine — a Lexbor parse, like every other document this engine holds.
+ * The second is the NETWORK and belongs to the host, because SECURITY.md puts every byte of it behind the
+ * trusted chokepoint and no engine-side code may reach it.
+ *
+ * THEY WERE ONE CALLBACK, AND THAT CONFLATION IS WHY ONE HOST DID BOTH AND ANOTHER SILENTLY DID NEITHER. The
+ * builder took a `url` and was left to decide what to do with it: the conformance runner fetched, parsed and
+ * installed; the PRODUCT host wrote `(void)url;` and returned a realm holding the empty about:blank Document.
+ * So `window.open("/admin")` in the shipped engine produced a popup whose scripts never ran, with no assert, no
+ * notice and nothing in the output to distinguish it from a page that genuinely had none — a surface reported
+ * as explored that was never reached. A seam with two jobs lets a host implement one and look finished.
+ *
+ * A HOST THAT CANNOT FETCH IS NOT A HOST THAT NAVIGATES TO about:blank. It is a host missing a capability, and
+ * §7.4 says so at the point the address arrives rather than handing back an empty document that reads as a
+ * real one. */
+
+/* THE NETWORK HALF — declared by the HOST. Returns the address's bytes (malloc'd, caller frees) and their
+   length, or NULL when the fetch fails; a child whose address does not load keeps the initial about:blank
+   Document, which is what a browser showing an error page still has.
+   SYNCHRONOUS, WHICH IS WHY THE PRODUCT HOST HAS NONE. Its network is the trusted zone's and every request
+   parks the running flow on a host-owed answer, so it cannot answer here at all — §7.4's navigate has to become
+   a scheduled work item that resumes when the response lands, replacing the navigable's active Document. That
+   is the mechanism this signature is the placeholder for, and the DFAIL below names it. */
+typedef char *(*DocumentFetcher)(JSContext *ctx, const char *url, size_t *plen);
+void navigable_set_document_fetcher(DocumentFetcher f);
+
+/* HOW THIS AGENT BUILDS A REALM AROUND A DOCUMENT — declared by the HOST, called by §7.4 when the child is
+ * SAME-ORIGIN.
  *
  * A same-origin child navigable is a second REALM in this heap, and it must get the SAME platform surface its
  * creator has: a child whose `window` is smaller is a different browser, and every fidelity answer measured in
  * it would be measured in the wrong one. WHICH surface that is belongs to the HOST — it is the host that
- * decides what this build exposes — so the host declares the builder once and §7.4 calls it. An engine-side
- * component list would be a SECOND answer to the same question, and the two would drift the first time a
- * component was added to one of them.
+ * decides what this build exposes — so the host declares the builder once and §7.4 calls it.
  *
- * `dom` is the child's initial Document, already parsed by §7.4 (about:blank is the empty one the spec creates,
- * which is what makes an <iframe> with no src scriptable on the next line). The builder returns the realm's
- * context, with the platform installed and `document` in place. */
+ * `dom` is the child's Document, ALREADY DECIDED: the empty about:blank one §7.4 creates, or the parse of the
+ * address's bytes when there was an address and the fetcher answered. `url` is that Document's ADDRESS — a
+ * FACT ABOUT IT, which `document.URL`, §4.4's base URL and Location are all built from — and NOT an instruction
+ * to fetch anything; the fetch already happened, above, and the parse is the engine's. That distinction is the
+ * whole of what was wrong before: the same argument meant "here is the address, do whatever you think that
+ * implies", and one host read it as "fetch and parse this" while the other read it as nothing at all. */
 typedef JSContext *(*RealmBuilder)(JSRuntime *rt, lxb_html_document_t *dom, const char *url, const char *origin,
                                    uint32_t doc_id, JSValueConst nav_proxy);
 void navigable_set_realm_builder(RealmBuilder b);

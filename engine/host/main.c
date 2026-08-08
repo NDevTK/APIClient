@@ -177,6 +177,14 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
 
 /* A SAME-ORIGIN CHILD NAVIGABLE'S REALM — a second JSContext in the SAME JSRuntime, which is what HTML's
    similar-origin window agent is. It gets the identical per-document install the first document got. */
+/* THE ADDRESS IS A FACT ABOUT THE DOCUMENT, NOT A FETCH — the fetch is navigable.c's, through the document
+   fetcher, and THIS HOST DECLARES NONE. That is not an omission to fill in with a shrug: this host's network is
+   the trusted zone's and every request PARKS the running flow on a host-owed answer, so it cannot answer a
+   synchronous fetch at all. §7.4's navigate has to become a scheduled work item here — the navigating flow
+   parks on the response and resumes with it — and until it is, navigable.c asserts at the address rather than
+   letting this host hand back the empty about:blank Document. It did exactly that, silently, behind a
+   `(void)url;`: `window.open("/admin")` produced a popup whose scripts never ran and nothing in the output
+   distinguished it from a page that had none. */
 static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                      const char *origin, uint32_t doc_id, JSValueConst nav_proxy)
 {
@@ -184,8 +192,10 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
 
     CHECK(ctx != NULL, "a same-origin child navigable's realm could not be created");
     CHECK(JS_AddIntrinsicDOMException(ctx) == 0, "the DOMException intrinsic failed to install in a child realm");
-    engine_realm_install(ctx, dom, origin, doc_id, nav_proxy);
+    /* §4.4's base URL and Location come from the address; engine_realm_install builds both from `origin`
+       today, which is this host's own gap and a different one from the navigation above. */
     (void)url;
+    engine_realm_install(ctx, dom, origin, doc_id, nav_proxy);
     return ctx;
 }
 
