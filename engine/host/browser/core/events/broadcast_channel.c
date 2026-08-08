@@ -258,7 +258,7 @@ void broadcast_channel_init(JSContext *ctx, const char *origin)
     CHECK(!JS_IsException(g_chan_proto), "BroadcastChannel.prototype could not be allocated");
     idl_interface_tag(ctx, g_chan_proto, "BroadcastChannel");
     /* §9.5: `interface BroadcastChannel : EventTarget`, with the same two handler attributes a port has. */
-    JS_SetPrototype(ctx, g_chan_proto, event_target_proto());   /* §9.5: `BroadcastChannel : EventTarget` */
+    event_target_chain(ctx, g_chan_proto);   /* §9.5: `BroadcastChannel : EventTarget` */
     event_target_install_handlers(ctx, g_chan_proto, EH_PORT);
     idl_install_accessor(ctx, g_chan_proto, "name", js_chan_name, 0, -1);
     {

@@ -403,7 +403,7 @@ void window_init(JSContext *ctx)
 
 void window_install(JSContext *ctx, JSValueConst global, const char *url)
 {
-    JSValue g = (JSValue)global, gp, props;
+    JSValue g = (JSValue)global, gp, props, etp;
 
     DCHECK(JS_IsObject(global), "window_install was given something that is not the global object");
     DCHECK(g_window_class != 0, "window_install ran before window_init registered the Window class");
@@ -418,7 +418,9 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
        quickjs's own per-context class-prototype slot rather than by a static in this file: a second same-origin
        document is a second realm in this agent, and a static would have given both the first realm's Window
        objects — so `frames[0].Window` would have been this document's. */
-    props = JS_NewObjectProtoClass(ctx, event_target_proto(), g_window_props_class);
+    etp = event_target_proto(ctx);   /* THIS realm's — §3.6's [Global] rule is read off the member's own ctx */
+    props = JS_NewObjectProtoClass(ctx, etp, g_window_props_class);
+    JS_FreeValue(ctx, etp);
     CHECK(!JS_IsException(props), "the WindowProperties object could not be allocated");
     idl_interface_tag(ctx, props, "WindowProperties");
     gp = JS_NewObjectProto(ctx, props);

@@ -1670,6 +1670,10 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
     JSContext *ctx = JS_NewContext(rt);
 
     CHECK(ctx != NULL, "a same-origin child navigable's realm could not be created");
+    /* §3.7: a realm gets its OWN intrinsics, and §2.7's prototype is one — the members on it run in the realm
+       that defined them, so a child sharing the agent realm's would resolve every unqualified
+       `addEventListener` against the PARENT's window. */
+    event_target_install(ctx);
     tf_realm_install(ctx, dom, url, origin, doc_id, nav_proxy);
     return ctx;
 }

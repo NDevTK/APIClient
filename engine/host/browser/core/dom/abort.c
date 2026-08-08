@@ -617,7 +617,7 @@ static void abort_build_agent(JSContext *ctx)
     CHECK(!JS_IsException(g_sig_proto), "the AbortSignal.prototype allocation failed");
     /* §3.2: AbortSignal INHERITS EventTarget, so `addEventListener` and the `onabort` handler attribute are
        reached through the chain rather than copied onto each signal. */
-    JS_SetPrototype(ctx, g_sig_proto, event_target_proto());   /* §3.2: `AbortSignal : EventTarget` */
+    event_target_chain(ctx, g_sig_proto);   /* §3.2: `AbortSignal : EventTarget` */
     event_target_install_handlers(ctx, g_sig_proto, EH_SIGNAL);
     JS_DefinePropertyGetSet(ctx, g_sig_proto, JS_NewAtom(ctx, "aborted"),
                             JS_NewCFunction(ctx, js_sig_get_aborted, "get aborted", 0), JS_UNDEFINED,

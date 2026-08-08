@@ -3,7 +3,12 @@
 #define ENGINE_HOST_BROWSER_CORE_EVENTS_EVENT_TARGET_H
 #include "quickjs.h"
 
-void event_target_init(JSContext *ctx);                          /* the private listener key (install time) */
+void event_target_init(JSContext *ctx);                          /* the private listener key (agent init) */
+/* §2.7's PROTOTYPE FOR ONE REALM. Run it where a realm's other intrinsics are added — at the realm's creation,
+   beside JS_AddIntrinsicDOMException — and exactly once per realm. The agent's first realm gets it from
+   event_target_init, because every agent-scoped prototype in this engine chains to that realm's and so it has
+   to exist before them; a child navigable's realm gets it from its host's realm builder. */
+void event_target_install(JSContext *ctx);
 /* Release that key. A component that mints a RUNTIME-LIFETIME value owns it, and this one did not free its
    Symbol — so every instance leaked it. It was invisible while only the ABI entry installed listeners, because
    nothing there runs the leak check; the moment the fixture harness installed the same components it ships
@@ -20,8 +25,13 @@ void event_target_set_tree(JSValue (*ancestors)(JSContext *ctx, JSValueConst tar
    An interface that INHERITS EventTarget — Node, AbortSignal, MessagePort, BroadcastChannel, Window — chains
    its own prototype to this one; it does not install the three members again. That is not a saving, it is the
    spec: `EventTarget.prototype` is where they are declared, `Node.prototype` is not, and the corpus checks
-   both. Built by event_target_init, so every caller must run after it. */
-JSValueConst event_target_proto(void);
+   both. PER REALM — §3.7 gives each its own, and here that decides ANSWERS and not just identities, because a
+   C member runs in the realm that defined it (see event_target.c). OWNED: the caller frees. */
+JSValue event_target_proto(JSContext *ctx);
+/* `interface X : EventTarget` — chain X's prototype to §2.7's, in `ctx`'s realm. Four interfaces declare it and
+   each spelled it as a borrowed read fed straight to JS_SetPrototype; now that the read is per-realm and owned,
+   the pair is written once here rather than four times, all four of them free-or-leak. */
+void event_target_chain(JSContext *ctx, JSValueConst proto);
 /* §2.7's interface object. CONSTRUCTIBLE — `new EventTarget()` is a plain event target, which is how a page
    gives an ordinary object a listener list. */
 void event_target_install_interface(JSContext *ctx, JSValueConst global);

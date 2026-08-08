@@ -46,9 +46,12 @@ static JSValue (*g_ancestors)(JSContext *ctx, JSValueConst target);
    event-handler section below. Declared here because event_target_init mints them. */
 static JSValue g_handler_key;
 static JSValue g_handler_marker;
-/* The internal DISPATCH_PAIR function object — the one door a C caller has into the §2.9 machine. It is not
-   installed anywhere the page can reach. */
-static JSValue g_dispatch_fn;
+/* The DISPATCH_PAIR step declaration — the one door a C caller has into the §2.9 machine. The FUNCTION OBJECT
+   is minted per fire, in the FIRING REALM, and is never installed anywhere the page can reach: a C function
+   runs in the realm that DEFINED it (js_call_c_function does `ctx = p->u.cfunc.realm`), so one object held in a
+   static would have carried the agent realm's ctx into every child document's dispatch — and dispatch_path
+   reads §7.6's window off that ctx, so a child document's `load` would have propagated to the ROOT window. */
+static int g_dispatch_pair_stepid = -1;
 /* The ids JS_RegisterStepDef handed this runtime for add/removeEventListener. `type` is a Web IDL DOMString,
    so it is ToString on whatever the page passed and cannot be a JS_ToCString from C. */
 static int g_add_stepid = -1, g_remove_stepid = -1, g_dispatch_stepid = -1;
@@ -57,15 +60,21 @@ static int g_add_stepid = -1, g_remove_stepid = -1, g_dispatch_stepid = -1;
    Window — reaches them by CHAINING to it. They used to be installed onto each of those prototypes in turn,
    which is five copies of three members and, worse, a lie the corpus checks directly: `Node.prototype` is not
    where `addEventListener` is declared, `EventTarget.prototype` is, and `document instanceof EventTarget` is
-   false when the interface does not exist at all. */
-static JSValue g_et_proto = JS_UNDEFINED;
+   false when the interface does not exist at all.
+   IT IS PER REALM, in quickjs's own per-context class-proto slot — the same place window.c keeps
+   Window.prototype and bar_prop.c keeps BarProp.prototype, and for the same reason: js_call_c_function does
+   `ctx = p->u.cfunc.realm`, so a member installed once answers every realm's question with the DEFINING realm's
+   ctx forever. Here that is not an identity nicety, it is a wrong ANSWER — §3.6's [Global] rule resolves an
+   unqualified `addEventListener('load', f)` against the RELEVANT GLOBAL, which this file reads off `ctx`, so a
+   shared prototype registered every iframe's listeners on the ROOT window. A class id is what gives the slot a
+   key; the class also brands `new EventTarget()`. */
+static JSClassID g_et_class;
 static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
-/* §2.9's dispatch machine is declared at the bottom of this file, and the prototype it goes on is built at the
-   top — so the build step is a function rather than a block, and this is its one forward declaration. */
-static void event_target_build_proto(JSContext *ctx);
 
 void event_target_init(JSContext *ctx)
 {
+    JSClassDef d = { "EventTarget" };
+
     DCHECK(!g_ready, "event_target_init ran twice — one instance is one document");
     g_key = JS_NewSymbol(ctx, "eventListeners", false);
     CHECK(!JS_IsException(g_key), "the event-listener key allocation failed");
@@ -92,13 +101,33 @@ void event_target_init(JSContext *ctx)
                                              idl_add_or_remove, 1);
         idl_optional_from(2);   /* §2.7: `removeEventListener(type, callback, optional options)` */
     }
-    event_target_build_proto(ctx);
+    JS_NewClassID(JS_GetRuntime(ctx), &g_et_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_et_class, &d);
+    /* THE AGENT'S OWN REALM IS A REALM, and it is the one every agent-scoped prototype in this engine chains to
+       (Node, AbortSignal, MessagePort, BroadcastChannel are still built once, at agent init) — so it gets its
+       EventTarget.prototype here rather than waiting for a per-document install that runs after them. A second
+       realm gets its own where every other per-realm intrinsic is added: at the realm's creation. */
+    event_target_install(ctx);
 }
 
-JSValueConst event_target_proto(void)
+/* §2.7's prototype FOR THIS REALM. Owned — the caller frees. */
+JSValue event_target_proto(JSContext *ctx)
 {
-    DCHECK(JS_IsObject(g_et_proto), "EventTarget.prototype was asked for before event_target_init built it");
-    return g_et_proto;
+    JSValue proto = JS_GetClassProto(ctx, g_et_class);
+    DCHECK(JS_IsObject(proto),
+           "EventTarget.prototype was asked for in a realm that never ran event_target_install — a realm whose "
+           "intrinsics are half-built answers §2.7 with nothing");
+    return proto;
+}
+
+void event_target_chain(JSContext *ctx, JSValueConst proto)
+{
+    JSValue etp;
+
+    DCHECK(JS_IsObject(proto), "an interface prototype that inherits EventTarget is not an object");
+    etp = event_target_proto(ctx);
+    JS_SetPrototype(ctx, (JSValue)proto, etp);
+    JS_FreeValue(ctx, etp);
 }
 
 /* §2.7 declares `constructor()`, so EventTarget IS constructible — `new EventTarget()` is a plain event target,
@@ -108,7 +137,13 @@ static JSValue js_event_target_ctor(JSContext *ctx, JSValueConst new_target, int
 {
     JSValue proto = JS_GetPropertyStr(ctx, new_target, "prototype"), obj;
     if (JS_IsException(proto)) return proto;
-    obj = JS_NewObjectProto(ctx, JS_IsObject(proto) ? proto : (JSValueConst)g_et_proto);
+    /* §3.7.1: a subclass's `prototype` wins; without one it is THIS REALM's — and `ctx` is the CONSTRUCTOR's
+       realm, which is the realm the interface object was installed in, so the two agree by construction. */
+    if (!JS_IsObject(proto)) {
+        JS_FreeValue(ctx, proto);
+        proto = event_target_proto(ctx);
+    }
+    obj = JS_NewObjectProtoClass(ctx, proto, g_et_class);
     JS_FreeValue(ctx, proto);
     (void)argc; (void)argv;
     return obj;
@@ -117,8 +152,11 @@ static JSValue js_event_target_ctor(JSContext *ctx, JSValueConst new_target, int
 void event_target_install_interface(JSContext *ctx, JSValueConst global)
 {
     JSValue ctor = JS_NewCFunction2(ctx, js_event_target_ctor, "EventTarget", 0, JS_CFUNC_constructor, 0);
+    JSValue proto = event_target_proto(ctx);
+
     CHECK(!JS_IsException(ctor), "the EventTarget interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_et_proto);
+    JS_SetConstructor(ctx, ctor, proto);
+    JS_FreeValue(ctx, proto);
     JS_SetPropertyStr(ctx, (JSValue)global, "EventTarget", ctor);
 }
 
@@ -134,9 +172,9 @@ void event_target_free(JSContext *ctx)
     JS_FreeValue(ctx, g_key);
     JS_FreeValue(ctx, g_handler_key);
     JS_FreeValue(ctx, g_handler_marker);
-    JS_FreeValue(ctx, g_dispatch_fn);
-    JS_FreeValue(ctx, g_et_proto);
-    g_key = g_handler_key = g_handler_marker = g_dispatch_fn = g_et_proto = JS_UNDEFINED;
+    /* THE PROTOTYPE IS NOT RELEASED HERE: each realm's is held by that realm's class-proto slot and goes with
+       the realm. Neither is the dispatcher — there is no lasting one to hold. */
+    g_key = g_handler_key = g_handler_marker = JS_UNDEFINED;
     g_ready = 0;
 }
 
@@ -862,6 +900,23 @@ void event_target_install_click(JSContext *ctx, JSValueConst target)
     idl_install_step_method(ctx, target, "click", 0, g_click_stepid);
 }
 
+/* THE INTERNAL DOOR, MINTED IN THE FIRING REALM. A C function's `ctx` is its DEFINING realm, and this machine
+   reads §7.6's window off it — so the dispatcher a child document fires through has to be the child's. It costs
+   one function object per fire, which a dispatch that already snapshots a listener list per target does not
+   notice, and it removes the runtime-lifetime object that would otherwise have to be freed and per-realm at the
+   same time. OWNED by the caller. */
+static JSValue dispatch_fn_new(JSContext *ctx)
+{
+    JSValue fn;
+
+    DCHECK(g_dispatch_pair_stepid >= 0,
+           "the engine fired an event before event_target_init declared the dispatcher — there is one dispatch, "
+           "and this is the only way a C caller reaches it");
+    fn = JS_NewCFunction2(ctx, NULL, "dispatch", 2, JS_CFUNC_step, g_dispatch_pair_stepid);
+    CHECK(!JS_IsException(fn), "the internal event dispatcher could not be allocated");
+    return fn;
+}
+
 /* THE ENGINE FIRING ITS OWN EVENT — `load`, `DOMContentLoaded`, `abort`. It builds the event and hands it to
    the SAME §2.9 machine, reached as a queued task because its callers are plain C the scheduler drives and
    cannot park. That is the whole fix: this used to walk the listener list ITSELF and enqueue each listener as
@@ -874,16 +929,16 @@ void event_target_install_click(JSContext *ctx, JSValueConst target)
 void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev)
 {
     JSValueConst argv[2];
+    JSValue fn;
 
-    DCHECK(JS_IsObject(g_dispatch_fn),
-           "the engine fired an event before event_target_init built the dispatcher — there is one dispatch, "
-           "and this is the only way a C caller reaches it");
     if (JS_IsException(ev)) { JS_FreeValue(ctx, ev); return; }
     argv[0] = target;
     argv[1] = ev;
+    fn = dispatch_fn_new(ctx);
     /* A JOB, so the dispatch runs as a call-root flow: preemptible, forkable and parkable like any other
        program, which is what every listener body needs and what a C activation cannot host. */
-    JS_EnqueueCallJob(ctx, g_dispatch_fn, 2, argv);
+    JS_EnqueueCallJob(ctx, fn, 2, argv);
+    JS_FreeValue(ctx, fn);
     JS_FreeValue(ctx, ev);
 }
 
@@ -905,13 +960,15 @@ int event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_ca
     JSValue out = JS_UNDEFINED;
     int r;
 
-    DCHECK(JS_IsObject(g_dispatch_fn),
-           "an event was fired synchronously before event_target_init built the dispatcher");
     if (*phase == 0) {
+        JSValue fn = dispatch_fn_new(ctx);
         DCHECK(JS_IsObject(ev), "a synchronous fire was handed no event — §2.9 dispatches one that exists");
         argv[0] = target;
         argv[1] = ev;
-        r = step_call_run(ctx, phase, cb, cb_cap, g_dispatch_fn, JS_UNDEFINED, 2, argv, in, &out, out_cb, out_argc);
+        /* step_call_run DUPS the callee into the request buffer, which is what holds it across the suspension —
+           so this realm's dispatcher is released here and the parked call still owns one. */
+        r = step_call_run(ctx, phase, cb, cb_cap, fn, JS_UNDEFINED, 2, argv, in, &out, out_cb, out_argc);
+        JS_FreeValue(ctx, fn);
         DCHECK(r == JS_STEP_CALL, "the dispatch request answered without parking");
         return r;
     }
@@ -926,23 +983,34 @@ static const JSTrampStepDef js_dispatch_pair_def = {
     sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, DISPATCH_PAIR, .visit = js_dispatch_visit
 };
 
-/* §2.7's INTERFACE PROTOTYPE OBJECT — built at the end of the file because the dispatch machine it installs is
-   declared just above, and called from event_target_init so there is still exactly ONE init step a host runs. */
-static void event_target_build_proto(JSContext *ctx)
+/* §2.7's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM — built at the end of the file because the dispatch machine
+   it installs is declared just above.
+   THIS IS THE PER-REALM INTRINSIC STEP, and a host runs it exactly where it runs quickjs's own: at the realm's
+   creation, beside JS_AddIntrinsicDOMException. The agent's first realm gets it from event_target_init, which
+   is the same call — every other agent-scoped prototype in this engine chains to that realm's, so it has to
+   exist before them. */
+void event_target_install(JSContext *ctx)
 {
-    /* THE DISPATCH DECLARATION, and the C caller's private door into the same machine. Both were minted lazily
-       inside the per-target install, because that install ran before init did for some hosts; with one
-       prototype there is one place, and it is here. The step function object is installed nowhere the page can
-       reach — a page that overwrote `dispatchEvent` must not redirect the engine's own `load`. */
-    g_dispatch_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_dispatch_def);
-    g_dispatch_fn = JS_NewCFunction2(ctx, NULL, "dispatch", 2, JS_CFUNC_step,
-                                     JS_RegisterStepDef(JS_GetRuntime(ctx), &js_dispatch_pair_def));
-    CHECK(!JS_IsException(g_dispatch_fn), "the internal event dispatcher could not be allocated");
+    JSValue proto, prev;
 
-    g_et_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_et_proto), "EventTarget.prototype could not be allocated");
-    idl_interface_tag(ctx, g_et_proto, "EventTarget");
-    idl_install_method(ctx, g_et_proto, "addEventListener", 2, g_add_stepid);
-    idl_install_method(ctx, g_et_proto, "removeEventListener", 2, g_remove_stepid);
-    idl_install_step_method(ctx, g_et_proto, "dispatchEvent", 1, g_dispatch_stepid);
+    DCHECK(g_ready, "a realm asked for EventTarget.prototype before event_target_init declared the interface");
+    prev = JS_GetClassProto(ctx, g_et_class);
+    DCHECK(JS_IsNull(prev),
+           "event_target_install ran twice in one realm — §3.7 gives a realm ONE EventTarget.prototype, and a "
+           "second would leave the objects already chained to the first answering out of a discarded one");
+    JS_FreeValue(ctx, prev);
+    /* THE DISPATCH DECLARATIONS are the RUNTIME's — a step def is registered against the runtime and there is
+       one §2.9 machine — so they are declared once and every realm's members carry the same ids. */
+    if (g_dispatch_stepid < 0) {
+        g_dispatch_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_dispatch_def);
+        g_dispatch_pair_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_dispatch_pair_def);
+    }
+
+    proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(proto), "EventTarget.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "EventTarget");
+    idl_install_method(ctx, proto, "addEventListener", 2, g_add_stepid);
+    idl_install_method(ctx, proto, "removeEventListener", 2, g_remove_stepid);
+    idl_install_step_method(ctx, proto, "dispatchEvent", 1, g_dispatch_stepid);
+    JS_SetClassProto(ctx, g_et_class, proto);   /* the realm owns it from here */
 }

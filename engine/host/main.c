@@ -192,6 +192,10 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
 
     CHECK(ctx != NULL, "a same-origin child navigable's realm could not be created");
     CHECK(JS_AddIntrinsicDOMException(ctx) == 0, "the DOMException intrinsic failed to install in a child realm");
+    /* §3.7: a realm gets its OWN intrinsics, and §2.7's prototype is one — the members on it run in the realm
+       that defined them, so a child sharing the agent realm's would resolve every unqualified
+       `addEventListener` against the PARENT's window. */
+    event_target_install(ctx);
     /* §4.4's base URL and Location come from the address; engine_realm_install builds both from `origin`
        today, which is this host's own gap and a different one from the navigation above. */
     (void)url;

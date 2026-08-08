@@ -476,7 +476,7 @@ void message_port_init(JSContext *ctx)
     CHECK(!JS_IsException(g_port_proto), "MessagePort.prototype could not be allocated");
     idl_interface_tag(ctx, g_port_proto, "MessagePort");
     /* §9.4.2: `interface MessagePort : EventTarget` — the listeners and the two handler attributes. */
-    JS_SetPrototype(ctx, g_port_proto, event_target_proto());   /* §9.4.2: `MessagePort : EventTarget` */
+    event_target_chain(ctx, g_port_proto);   /* §9.4.2: `MessagePort : EventTarget` */
     event_target_install_handlers(ctx, g_port_proto, EH_PORT);
     {
         static const IdlArgType POST_ARGS[2] = { IDL_ANY, IDL_ANY };
