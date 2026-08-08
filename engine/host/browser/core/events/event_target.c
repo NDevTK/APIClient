@@ -36,9 +36,6 @@ static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
    ran-twice assert on the FIRST call. A JSValue's emptiness is not the allocator's default. */
 static JSValue g_key;
 static int g_ready;
-/* The WINDOW — §7.6's document parent on a propagation path, and Web IDL's relevant global for a [Global]
-   operation called with no receiver. Declared here because both of those are read before the machine below. */
-static JSValue g_window;
 /* §2.9's PROPAGATION PATH IS THE TREE'S QUESTION, not this component's. A target's ancestors are the DOM's,
    and an EventTarget that is not a Node — an AbortSignal, which Streams §5.4 gives every writable controller —
    has none. Naming node.c here made EVERY host that installs events link the whole DOM and lexbor with it,
@@ -49,8 +46,8 @@ static JSValue (*g_ancestors)(JSContext *ctx, JSValueConst target);
    event-handler section below. Declared here because event_target_init mints them. */
 static JSValue g_handler_key;
 static JSValue g_handler_marker;
-/* The internal DISPATCH_PAIR function object — the one door a C caller has into the §2.9 machine, and the
-   window the propagation path ends at. Neither is installed anywhere the page can reach. */
+/* The internal DISPATCH_PAIR function object — the one door a C caller has into the §2.9 machine. It is not
+   installed anywhere the page can reach. */
 static JSValue g_dispatch_fn;
 /* The ids JS_RegisterStepDef handed this runtime for add/removeEventListener. `type` is a Web IDL DOMString,
    so it is ToString on whatever the page passed and cannot be a JS_ToCString from C. */
@@ -138,10 +135,25 @@ void event_target_free(JSContext *ctx)
     JS_FreeValue(ctx, g_handler_key);
     JS_FreeValue(ctx, g_handler_marker);
     JS_FreeValue(ctx, g_dispatch_fn);
-    JS_FreeValue(ctx, g_window);
     JS_FreeValue(ctx, g_et_proto);
-    g_key = g_handler_key = g_handler_marker = g_dispatch_fn = g_window = g_et_proto = JS_UNDEFINED;
+    g_key = g_handler_key = g_handler_marker = g_dispatch_fn = g_et_proto = JS_UNDEFINED;
     g_ready = 0;
+}
+
+/* THE RELEVANT GLOBAL OBJECT, WHICH IS THE RUNNING REALM'S — asked of the realm rather than remembered.
+   A module-static held it, set by every realm's install, so the LAST document installed was the window every
+   realm answered with: materializing a same-origin popup made the OPENER's unqualified `addEventListener(...)`
+   register on the popup's global. That is the same defect as the API base URL having been one string for every
+   realm, and the same defect as `window.name` having had two sources — a per-realm fact answered per agent.
+   There is nothing to set now, so there is nothing a host can forget to set; the DCHECK that caught a host
+   forgetting goes with the state it was guarding.
+   BORROWED. A realm owns its global for the realm's whole life, so this needs no reference of its own — the
+   dup and free below are how quickjs spells "read it without taking one". */
+static JSValueConst event_target_global(JSContext *ctx)
+{
+    JSValue g = JS_GetGlobalObject(ctx);
+    JS_FreeValue(ctx, g);
+    return g;
 }
 
 /* WEB IDL §3.6's [Global] RULE: an operation on the Window interface called with an undefined `this` uses the
@@ -150,19 +162,10 @@ void event_target_free(JSContext *ctx)
    one of those listeners was registered on nothing at all and silently never fired. It is applied at the shared
    entry because that is where the receiver arrives; a non-global interface reached with undefined would
    otherwise be an immediate TypeError, so there is nothing here for this to take away. */
-static JSValueConst event_target_receiver(JSValueConst this_val)
+static JSValueConst event_target_receiver(JSContext *ctx, JSValueConst this_val)
 {
     if (JS_IsObject(this_val)) return this_val;
-    /* AND IT MUST BE THERE. Returning an unset g_window let every caller carry on with an UNDEFINED receiver:
-       the listener map was built on nothing, the registration silently vanished, and the listener never fired
-       — with no error anywhere. The WPT runner never called event_target_set_window, so in the gate that
-       measures this engine against the specifications, `addEventListener('message', f)` written the way most
-       real code writes it did nothing at all, and had done since the rule was added. A host that has not named
-       its window has not finished installing, and that is a should-never-happen rather than a quiet no-op. */
-    DCHECK(JS_IsObject(g_window),
-           "an EventTarget operation was called with an undefined `this` before the host named its window — "
-           "[Global] resolves to the relevant global object, and event_target_set_window is what supplies it");
-    return g_window;
+    return event_target_global(ctx);
 }
 
 /* The map of type -> listener array on `target`, created on first use. NULL only on allocation failure. */
@@ -329,8 +332,8 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
     type = JS_ToCString(ctx, argv[0]);   /* a real string by now: this cannot reach the page */
     if (!type)
         return JS_EXCEPTION;
-    r = (magic == 0) ? add_listener_with_type(ctx, event_target_receiver(this_val), argv[1], type, capture, once)
-                     : remove_listener_with_type(ctx, event_target_receiver(this_val), argv[1], type, capture);
+    r = (magic == 0) ? add_listener_with_type(ctx, event_target_receiver(ctx, this_val), argv[1], type, capture, once)
+                     : remove_listener_with_type(ctx, event_target_receiver(ctx, this_val), argv[1], type, capture);
     JS_FreeCString(ctx, type);
     return r;
 }
@@ -663,8 +666,10 @@ static JSValue dispatch_path(JSContext *ctx, JSValueConst target)
             JS_FreeValue(ctx, len_v);
             for (i = 0; i < n; i++)
                 JS_SetPropertyUint32(ctx, path, k++, JS_GetPropertyUint32(ctx, up, i));
-            if (JS_IsObject(g_window))
-                JS_SetPropertyUint32(ctx, path, k++, JS_DupValue(ctx, g_window));
+            /* §7.6 puts the WINDOW above the document, and it is THIS realm's — a document and its window
+               are one browsing context, so asking the realm is what makes a popup's own dispatch reach its own
+               window rather than whichever realm installed last. */
+            JS_SetPropertyUint32(ctx, path, k++, JS_DupValue(ctx, event_target_global(ctx)));
         }
         JS_FreeValue(ctx, up);
     }
@@ -694,7 +699,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            job — a walk with no continuation, so it could not see stopImmediatePropagation, could not answer
            whether anything cancelled, and was a second implementation of §2.9 beside this one. */
         target = (s->hdr.arg == DISPATCH_PAIR) ? step_arg(&s->hdr, 0)
-                                              : event_target_receiver(s->hdr.this_val);
+                                              : event_target_receiver(ctx, s->hdr.this_val);
         s->ev = (s->hdr.arg == CLICK_SYNTH)
                     ? event_new_untrusted(ctx, "click", /*bubbles*/ true, /*cancelable*/ true)
                     : JS_DupValue(ctx, step_arg(&s->hdr, s->hdr.arg == DISPATCH_PAIR ? 1 : 0));
@@ -915,15 +920,6 @@ int event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_ca
     if (pnot_canceled) *pnot_canceled = JS_ToBool(ctx, out);
     JS_FreeValue(ctx, out);
     return 0;
-}
-
-/* The window, which §7.6 makes the document's parent for event purposes — how a `load` listener on window
-   hears an event fired at the document. Registered rather than passed per fire, because it is a property of
-   the browsing context and not of any one dispatch. */
-void event_target_set_window(JSContext *ctx, JSValueConst global)
-{
-    JS_FreeValue(ctx, g_window);
-    g_window = JS_DupValue(ctx, global);
 }
 
 static const JSTrampStepDef js_dispatch_pair_def = {

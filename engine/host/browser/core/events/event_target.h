@@ -54,7 +54,5 @@ void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev);
 int  event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, JSValueConst target,
                            JSValueConst ev, JSValue in,
                            bool *pnot_canceled, JSValue **out_cb, int *out_argc);
-/* §7.6: the window the propagation path ends at. */
-void event_target_set_window(JSContext *ctx, JSValueConst global);
 
 #endif

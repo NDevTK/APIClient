@@ -877,7 +877,6 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
     /* WEB IDL §3.6's [Global] rule needs to know WHICH object is the window, and this runner never said. Every
        unqualified `addEventListener(...)` in the corpus — which is how most of it registers — resolved to an
        undefined receiver and registered on nothing. */
-    event_target_set_window(ctx, global);
     structured_clone_install(ctx, global);   /* HTML 2.7.3, and what 9.4 and §4.9.7 clone through */
     message_event_install(ctx, global);
     /* HTML §7.2.2's BROWSING-CONTEXT MEMBERS — window, self, frames, parent, top, opener, closed, origin and

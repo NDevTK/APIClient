@@ -1645,7 +1645,6 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     event_install(ctx, g);   /* the Event interface object — `new Event(...)` and every `instanceof Event` */
     /* §2.7: the global reaches add/removeEventListener/dispatchEvent through Window.prototype ->
        EventTarget.prototype, which window_install chains it to. */
-    event_target_set_window(ctx, g);   /* §7.6: the document's parent on a propagation path */
     /* HTML §8.1.7.2: window's IDL mixes in GlobalEventHandlers AND WindowEventHandlers — `window.onload` is
        how a great deal of real code starts. */
     event_target_install_handlers(ctx, g, EH_GLOBAL | EH_WINDOW);

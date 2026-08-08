@@ -163,7 +163,6 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
     structured_clone_install(ctx, g); /* HTML 2.7.3 */
     /* §2.7: the global reaches add/removeEventListener/dispatchEvent through Window.prototype ->
        EventTarget.prototype, which window_install chains it to. */
-    event_target_set_window(ctx, g);   /* §7.6: the document's parent on a propagation path */
     event_target_install_handlers(ctx, g, EH_GLOBAL | EH_WINDOW);   /* window IS the global (7.2.2) */
     fetch_install(ctx, g);
     location_install(ctx, g, origin);
