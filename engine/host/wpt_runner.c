@@ -943,9 +943,49 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
                                   uint32_t doc_id)
 {
     JSContext *ctx = JS_NewContext(rt);
+    char *bytes = NULL;
+    size_t n = 0;
 
     CHECK(ctx != NULL, "wpt: a same-origin child navigable's realm could not be created");
+    /* §7.4 CREATES THE NAVIGABLE WITH about:blank AND THEN NAVIGATES IT TO ITS ADDRESS, and this is the second
+       half. The engine hands over the initial about:blank Document because that is the one the spec creates
+       synchronously; the ADDRESS's bytes are the HOST's, because the host owns the network — which is why the
+       builder is the host's and takes the url.
+       WITHOUT IT A CHILD IS PERMANENTLY EMPTY. `window.open('resources/message-opener.html')` produced a
+       navigable whose document had no scripts, so the popup never posted back and the opener waited forever:
+       twelve open-features files in this area report nothing at all for exactly that reason, and they are not
+       twelve bugs, they are one missing navigation. A child whose address does not load keeps the empty
+       Document — a browser shows an error page and the navigable still exists. */
+    if (url && *url && strncmp(url, "about:", 6) != 0) {
+        bytes = wpt_get(url, &n);
+        if (bytes && n) {
+            lxb_html_document_t *nav_doc = lxb_html_document_create();
+            CHECK(nav_doc != NULL, "wpt: a navigated child's document allocation failed");
+            CHECK(lxb_html_document_parse(nav_doc, (const lxb_char_t *)bytes, n) == LXB_STATUS_OK,
+                  "wpt: a navigated child's document did not parse");
+            lxb_html_document_destroy(dom);   /* the about:blank Document it replaces */
+            dom = nav_doc;
+        }
+    }
     wpt_realm_install(ctx, dom, url, origin, doc_id);
+    /* THE CHILD'S SCRIPTS ARE THE CHILD'S, run in ITS realm. They are what make a popup a participant rather
+       than an empty frame — message-opener.html's whole body is one script that posts to its opener. */
+    if (bytes) {
+        DocScripts ds = document_exec_scripts(dom);
+        int i;
+        for (i = 0; i < ds.n; i++) {
+            if (ds.bodies[i]) run_program(ctx, ds.bodies[i], strlen(ds.bodies[i]), url);
+            else if (ds.srcs[i]) {
+                size_t sl = 0;
+                char *body = wpt_get(ds.srcs[i], &sl);
+                if (!body) continue;
+                run_program(ctx, body, sl, ds.srcs[i]);
+                free(body);
+            }
+        }
+        doc_scripts_free(&ds);
+        free(bytes);
+    }
     return ctx;
 }
 
