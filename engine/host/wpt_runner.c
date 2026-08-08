@@ -46,6 +46,7 @@
 #include "core/html/html_iframe.h"
 #include "core/frame/navigable.h"
 #include "solver/world.h"
+#include "solver/cow.h"
 #include "solver/dom_cow.h"
 #include "core/frame/window_message.h"
 #include "core/structured_clone.h"
@@ -922,6 +923,10 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin,
  * segment — which world.c says is the TRUTH for a world that has never written here, and becomes a lie the
  * moment a flow forks after writing in this document. That is the next mechanism, and it is why the world is
  * on the wire already. */
+/* The foreign world's segment currently INSTALLED in this instance — the child's answer to "which flow is
+   running", because its serve loop is its scheduler. */
+static CowDelta *g_cur_seg;
+
 static int wpt_child_main(int argc, char **argv)
 {
     const char *name = argv[2], *url = argv[3], *origin = argv[4], *csp = argc > 5 ? argv[5] : "";
@@ -967,15 +972,71 @@ static int wpt_child_main(int argc, char **argv)
     }
 
     while (fgets(line, sizeof line, stdin)) {
-        char *nl = strchr(line, '\n'), *member;
+        char *nl = strchr(line, '\n'), *member, *worlds;
         JSValue v = JS_UNDEFINED;
         char prog[128], answer[512];
+        WorldId w = WORLD_NONE, anc[16];
+        int n_anc = 0;
 
         if (nl) *nl = 0;
-        /* `windowproxy.get <doc> <world> <member>` — the member is the last field. */
+        /* `windowproxy.get <doc> <world>[,<ancestor>...] <member>` — three tab-separated fields after the op. */
         member = strrchr(line, '\t');
         if (!member) continue;
-        member++;
+        *member++ = 0;
+        worlds = strrchr(line, '\t');
+        if (!worlds) continue;
+        worlds++;
+
+        /* THE WORLD THE ANSWER IS TRUE IN, and the ancestry that lets this instance HAVE one. A world minted
+           in another document has a segment here only if a flow of that world has written here; the ancestry
+           is what makes the segment inherit what the flow's ANCESTORS wrote, by forking the nearest one this
+           instance already holds. Without it every cross-document read would answer from a baseline the asking
+           flow left behind — which is not a stale answer, it is a different timeline. */
+        {
+            char *q = worlds;
+            while (q && *q) {
+                char *comma = strchr(q, ','), *colon;
+                if (comma) *comma = 0;
+                colon = strrchr(q, ':');
+                if (colon) {
+                    WorldId id;
+                    *colon = 0;
+                    id.doc = world_doc_intern(q);
+                    id.serial = (uint32_t)strtoul(colon + 1, NULL, 10);
+                    if (world_is_none(w)) w = id;
+                    else if (n_anc < (int)(sizeof anc / sizeof anc[0])) anc[n_anc++] = id;
+                }
+                q = comma ? comma + 1 : NULL;
+            }
+        }
+
+        /* A READ THAT NAMES NO WORLD IS TRUE IN NO TIMELINE, and answering it anyway would answer from whatever
+           this instance last had installed — the exact "two timelines wearing one name" the world registry
+           exists to prevent. It is asserted where the name arrives rather than where the answer is used. */
+        DCHECK(!world_is_none(w), "a cross-document read arrived carrying no world — its answer would be true "
+                                  "in no timeline, and would come from whatever this instance last installed");
+        {
+            int k;
+            for (k = 0; k < n_anc; k++)
+                DCHECK(anc[k].doc == w.doc,
+                       "a cross-document read's ancestry names a world from another document than its own — "
+                       "world_ancestry walks only the edges the minting instance holds, so a mixed chain means "
+                       "the wire format was mis-parsed and the peer would fork the wrong segment");
+        }
+
+        /* THE CONTEXT SWITCH, done here because this loop IS this instance's scheduler: unapply whatever world
+           the last answer ran under, install this one's segment, answer, and leave it installed for the next
+           question — which is the same "move only as far as the two differ" the engine's own switch does. */
+        if (!world_is_none(w)) {
+            CowDelta *seg = world_segment(ctx, w, anc, n_anc);
+            if (seg != g_cur_seg) {
+                cow_unapply(ctx, g_cur_seg);
+                g_cur_seg = seg;
+                cow_set_current(seg);
+                cow_apply(ctx, seg);
+            }
+        }
+
         snprintf(prog, sizeof prog, "globalThis[%c%s%c]", '"', member, '"');
         if (run_program_value(ctx, prog, strlen(prog), "<cross-document read>", &v)) v = JS_UNDEFINED;
         wpt_encode_answer(ctx, v, answer, sizeof answer);
@@ -984,6 +1045,8 @@ static int wpt_child_main(int argc, char **argv)
         fputc('\n', stdout);
         fflush(stdout);
     }
+    cow_unapply(ctx, g_cur_seg);
+    cow_set_current(NULL);
     JS_SetFlowControlHooks(&WPT_HOOKS_OFF);
     return 0;
 }
@@ -1127,6 +1190,10 @@ int main(int argc, char **argv)
     encoding_free(ctx);
     text_stream_free(ctx);
     idl_args_free(ctx);
+    /* THE CHILD DOCUMENTS THIS FILE CREATED. A child is a PROCESS: closing its pipes ends its serve loop and
+       waitpid reaps it. Without this each file left one zombie per <iframe> and per popup for the whole run —
+       a leak the runtime's own gc walk cannot see, because the thing leaked is not in this heap. */
+    wpt_children_free();
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
     return failed ? 1 : 0;

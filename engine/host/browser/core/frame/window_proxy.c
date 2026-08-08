@@ -486,14 +486,27 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     if (p->closed) { *presult = JS_NewInt32(ctx, 0); return JS_STEP_DONE; }
 
     if (s->req == 0) {
-        char op[256];
+        char op[1024];
         Flow *f = flow_running();
+        WorldId anc[16];
+        int n_anc, k, n = 0;
+
         DCHECK(f != NULL, "a cross-document read was issued outside a flow — there would be nothing to suspend");
-        /* (document, world, member), and the document by NAME: a `uint32_t doc` is this instance's handle into
-           its own name table and means a different document in the peer's. The world is the flow's, because the
-           answer is only true in it. */
-        snprintf(op, sizeof op, "windowproxy.get\t%s\t%s:%u\t%s",
-                 world_doc_name(p->doc), world_doc_name(f->world.doc), f->world.serial, PROXY_MEMBER[magic]);
+        /* (document, world+ancestry, member), and every document by NAME: a `uint32_t doc` is this instance's
+           handle into its own name table and means a different document in the peer's.
+           THE ANCESTRY TRAVELS WITH THE WORLD, and it is not optional. A peer materializes its segment for a
+           world it has never seen by FORKING THE NEAREST ANCESTOR IT ALREADY HOLDS (world.h) — so a request
+           that carried only the world's name would make every peer start from an empty segment, which is the
+           truth for a flow that has never written there and a LIE for one that forked after writing. Nearest
+           first, because the scan stops at the first hit and a further ancestor silently drops the nearer
+           one's writes. */
+        n_anc = world_ancestry(f->world, anc, (int)(sizeof anc / sizeof anc[0]));
+        n = snprintf(op, sizeof op, "windowproxy.get\t%s\t%s:%u",
+                     world_doc_name(p->doc), world_doc_name(f->world.doc), f->world.serial);
+        for (k = 0; k < n_anc && n < (int)sizeof op; k++)
+            n += snprintf(op + n, sizeof op - (size_t)n, ",%s:%u",
+                          world_doc_name(anc[k].doc), anc[k].serial);
+        snprintf(op + n, sizeof op - (size_t)n, "\t%s", PROXY_MEMBER[magic]);
         s->req = engine_host_request(ctx, op);
         return JS_STEP_YIELD;   /* park; siblings run until the peer answers */
     }
