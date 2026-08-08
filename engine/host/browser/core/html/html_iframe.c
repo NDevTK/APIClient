@@ -42,7 +42,7 @@
 static JSAtom g_atom_navigable = JS_ATOM_NULL;
 
 /* This element's navigable IN THIS FLOW, or JS_UNDEFINED. */
-static JSValue iframe_navigable(JSContext *ctx, JSValueConst wrap)
+JSValue iframe_navigable(JSContext *ctx, JSValueConst wrap)
 {
     JSValue v;
     if (JS_GetOwnSlot(ctx, &v, wrap, g_atom_navigable) <= 0) return JS_UNDEFINED;

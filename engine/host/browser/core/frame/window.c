@@ -287,8 +287,12 @@ static JSValue win_named_value(JSContext *ctx, const char *name)
     /* §7.3.3: a single named element that HAS a content navigable answers with the navigable's WindowProxy —
        `window.myIframeName` is the frame's window, and a page that then reads `.document` off it would get an
        element otherwise. */
-    if (JS_IsObject(out) && iframe_has_navigable(ctx, out)) {
-        JSValue nav = JS_GetPropertyStr(ctx, out, "contentWindow");
+    /* ASKED OF THE COMPONENT THAT OWNS THE SLOT, never read off `contentWindow`: that attribute is an IDL
+       accessor, and this walk runs from C with no flow base under it — which is why the exotic declares
+       `get_own_property_no_user_code`. Reading it aborted window-properties, window-named-properties and
+       nested-context, each on the first named frame it reached. */
+    {
+        JSValue nav = iframe_navigable(ctx, out);
         if (JS_IsObject(nav)) { JS_FreeValue(ctx, out); return nav; }
         JS_FreeValue(ctx, nav);
     }
