@@ -26,6 +26,7 @@
 #include "core/idl_iter.h"
 #include "core/streams/readable_stream.h"
 #include "core/frame/location.h"
+#include "core/dom/document.h"
 #include "core/url/url.h"
 #include <stdio.h>
 
@@ -190,7 +191,7 @@ static void blob_url_store_free(JSContext *ctx)
 char *blob_url_create(JSContext *ctx, JSValueConst obj)
 {
     UrlRecord base;
-    const char *base_str = location_api_base_url();
+    const char *base_str = document_base_url(ctx);
     char *origin = NULL, *url;
     size_t n;
 

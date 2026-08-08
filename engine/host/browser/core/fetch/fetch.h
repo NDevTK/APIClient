@@ -45,7 +45,7 @@ void fetch_set_provider(const FetchProvider *p);
    the same rule rather than each reaching for url_parse with whatever base it remembered. Fills `*rec` and
    returns true; on failure `*rec` is already freed and the caller throws whichever error its spec names — a
    TypeError for both of today's two, but the spec says so at each site rather than here. */
-bool fetch_parse_url(UrlRecord *rec, const char *url, size_t len);
+bool fetch_parse_url(JSContext *ctx, UrlRecord *rec, const char *url, size_t len);
 
 /* THE REPLY, as the value a host DELIVERS. It was the body's bytes and nothing else, so every reply built from
    it had no status but 200 and NO HEADERS AT ALL — `response.headers.get(...)` was null for everything a page

@@ -359,7 +359,12 @@ JSValue window_proxy_window(JSContext *ctx, JSValueConst proxy)
            "flow SUSPENDS here (the same snapshot path as an await), the peer answers in its own scheduled turn "
            "under this flow's world, and the flow resumes with the value. The host owns the routing because "
            "only it knows which instance holds that document — window_proxy_doc names which one");
-    return JS_DupValue(ctx, JS_GetGlobalObject(proxy_realm(ctx, proxy, p)));
+    /* JS_GetGlobalObject ALREADY RETURNS A REFERENCE. Duplicating it took a second one and returned only one,
+       so every read through here leaked a Window — and with it, since a global roots a whole realm, the entire
+       child page: ~4000 objects surviving JS_FreeRuntime's walk with a single external ref on the Window
+       holding them. It went unseen while the only realm was the root's, because the root's global is freed
+       with the runtime whatever its count; it surfaced the moment §7.4 materialized a second one. */
+    return JS_GetGlobalObject(proxy_realm(ctx, proxy, p));
 }
 
 JSContext *window_proxy_realm(JSContext *ctx, JSValueConst proxy)

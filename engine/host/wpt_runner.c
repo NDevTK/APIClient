@@ -918,13 +918,13 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
        and the address is the other, made server-relative — which is exactly what WPT's server serves from and
        resolves against. A worker's `location` is a real WorkerLocation; `search` is empty because this runner
        runs the file with no variant query, which is a real variant and not a way to skip the others. */
-    /* THE ADDRESS, NOT THE INTERFACE. The base URL is what this runner needs from the address — every relative
-       URL in the corpus resolves against it, and `URL.createObjectURL` names its origin — while the Location
-       INTERFACE additionally declares `search` and `hash` as concolic attacker sources. It goes through the
-       component rather than being hand-built, because that component is where HTML's API base URL is derived
-       from the address: assembling the three properties here left the base NULL and every relative URL in the
-       corpus unparseable. */
-    location_set_document_url(url);
+    /* THE ADDRESS, NOT THE INTERFACE. This runner needs the base URL — every relative URL in the corpus
+       resolves against it, and `URL.createObjectURL` names its origin — while the Location INTERFACE
+       additionally declares `search` and `hash` as concolic attacker sources, which a conformance runner must
+       not have because the harness's own coercion of a concolic `search` refuses it. Nothing has to be
+       recorded for the base: HTML's API base URL is the DOCUMENT's address, and document_install above was
+       given it. This used to hand it to a module-static in location.c, which every realm's install then
+       overwrote — so a materialized popup rewrote its opener's base. */
     {
         JSValue loc = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, loc, "href", JS_NewString(ctx, url));
@@ -1403,7 +1403,6 @@ int main(int argc, char **argv)
     queuing_strategy_free(ctx);
     readable_stream_free(ctx);
     blob_free(ctx);
-    location_free();   /* the API base URL the document's address produced */
     encoding_free(ctx);
     text_stream_free(ctx);
     idl_args_free(ctx);

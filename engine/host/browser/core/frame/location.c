@@ -27,30 +27,11 @@
 #include "core/frame/location.h"
 #include "core/url/url.h"
 
-/* HTML's "API base URL", kept because the address is the only thing that answers it and this is where the
-   address arrives. It is the SERIALIZED record rather than the caller's string, so every consumer parses
-   against the same normalized address the principal above was built from. */
-static char *g_api_base_url;
-
-const char *location_api_base_url(void) { return g_api_base_url; }
-
-void location_free(void) { free(g_api_base_url); g_api_base_url = NULL; }
-
-void location_set_document_url(const char *url)
-{
-    UrlRecord rec;
-    if (!url || !*url)
-        return;
-    url_record_init(&rec);
-    /* THROUGH THE REAL PARSER, and stored SERIALIZED, so every consumer resolves against the same normalized
-       address the principal below is built from. */
-    CHECK(url_parse(&rec, url, strlen(url), NULL),
-          "the document address is not a URL — the host captured something this engine cannot make a "
-          "principal out of");
-    free(g_api_base_url);
-    g_api_base_url = url_serialize(&rec, false);
-    url_record_free(&rec);
-}
+/* HTML's API BASE URL IS NOT KEPT HERE. It is the DOCUMENT's address and is read from the Document record
+   (document_base_url), because it is a per-REALM fact: a module-static copy was overwritten by every install,
+   so materializing a same-origin popup rewrote its OPENER's base and the opener's next relative fetch resolved
+   against the popup's address. That string was the whole of this component's agent-lifetime state, so its
+   teardown went with it rather than staying as an empty function three hosts call. */
 
 /* Install a member from a malloc'd serialization and take ownership of it — every one of Location's concrete
    members is one of these, so the free belongs here rather than at six call sites. */
@@ -117,8 +98,6 @@ void location_install(JSContext *ctx, JSValueConst global, const char *url)
     CHECK(url_parse(&rec, url, strlen(url), NULL),
           "the document address is not a URL — the host captured something this engine cannot make a "
           "principal out of");
-
-    location_set_document_url(url);
 
     loc = JS_NewObject(ctx);
     CHECK(!JS_IsException(loc), "the Location allocation failed");

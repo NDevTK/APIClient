@@ -27,6 +27,7 @@
 #include "core/fetch/fetch.h"
 #include "core/file/blob.h"
 #include "core/frame/location.h"
+#include "core/dom/document.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/body.h"
 #include "core/fetch/response.h"
@@ -42,9 +43,13 @@ static const FetchProvider *g_provider;
    here, so a relative endpoint — which is how a bundle names its own API — resolves the same way from both.
    A document with no address has no base, and the parse is then absolute-only: that is the honest answer for a
    platform-less build rather than a base this component invented. */
-bool fetch_parse_url(UrlRecord *rec, const char *url, size_t len)
+bool fetch_parse_url(JSContext *ctx, UrlRecord *rec, const char *url, size_t len)
 {
-    const char *base_str = location_api_base_url();
+    /* THE BASE IS THE READING REALM'S DOCUMENT ADDRESS, asked of the Document rather than of a module-static
+       copy. HTML says "the current settings object's API base URL", and with one realm per same-origin
+       document the current settings object is whichever realm is running: an opener and a popup have two
+       addresses, and one stored copy answers with whichever installed last. */
+    const char *base_str = document_base_url(ctx);
     UrlRecord base;
     bool ok;
 
@@ -284,7 +289,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
            The settle goes through a FLOW like every other delivery: resolving reads `then` off the Response,
            which the page can own. */
         UrlRecord rec;
-        char *key = fetch_parse_url(&rec, u, strlen(u)) ? url_serialize(&rec, true) : NULL;
+        char *key = fetch_parse_url(ctx, &rec, u, strlen(u)) ? url_serialize(&rec, true) : NULL;
         /* §5.3's CAPTURED ENTRY FIRST: a Request resolved its blob URL when it was built, so a page that
            revoked the URL afterwards still fetches. The store is consulted only for a URL STRING, which has
            nothing to have captured. */

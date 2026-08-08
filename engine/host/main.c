@@ -71,8 +71,10 @@
 #define QJS_EXPORT
 #endif
 
-/* One WASM instance per DOCUMENT (SECURITY.md), so the instance IS the document: one parse, one script
- * inventory, one engine. Nothing here is a registry — a second document is a second instance. */
+/* One WASM instance per ORIGIN-KEYED AGENT CLUSTER (SECURITY.md), and these are the ROOT document's: the parse
+ * the host handed over, its script inventory, and the one engine that runs the agent's whole frontier. Nothing
+ * here is a registry — a same-origin child document is a second REALM (engine_child_realm, whose realms the
+ * agent owns in navigable.c), and a cross-origin one is a second instance. */
 static lxb_html_document_t *g_dom;
 static DocScripts           g_scripts;
 static unsigned             g_bundle_id;
@@ -353,7 +355,6 @@ QJS_EXPORT void qjs_teardown(void)
     queuing_strategy_free(g_ctx);
     readable_stream_free(g_ctx);
     blob_free(g_ctx);
-    location_free();   /* the API base URL the document's address produced */
     encoding_free(g_ctx);
     text_stream_free(g_ctx);
     form_data_free(g_ctx);        /* URLSearchParams.prototype */

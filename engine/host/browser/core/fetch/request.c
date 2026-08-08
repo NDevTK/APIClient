@@ -297,7 +297,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             if (!in) return -1;
             /* AGAINST THE API BASE URL, through Fetch's one parse. `new Request("/api/users")` is how a
                bundle names its own endpoints, and with a NULL base every one of them was a TypeError. */
-            ok = fetch_parse_url(&rec, in, n);
+            ok = fetch_parse_url(ctx, &rec, in, n);
             JS_FreeCString(ctx, in);
             if (!ok) {
                 url_record_free(&rec);

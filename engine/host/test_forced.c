@@ -2178,7 +2178,6 @@ int main(void) {
     queuing_strategy_free(ctx);
     readable_stream_free(ctx);
     blob_free(ctx);
-    location_free();   /* the API base URL the document's address produced */
     encoding_free(ctx);
     text_stream_free(ctx);
     form_data_free(ctx);        /* URLSearchParams.prototype */

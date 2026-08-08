@@ -556,7 +556,7 @@ static JSValue js_response_redirect(JSContext *ctx, JSValueConst this_val, int a
         JS_FreeCString(ctx, url);
         return JS_EXCEPTION;
     }
-    ok = fetch_parse_url(&rec, url, len);
+    ok = fetch_parse_url(ctx, &rec, url, len);
     JS_FreeCString(ctx, url);
     if (!ok) {
         url_record_free(&rec);

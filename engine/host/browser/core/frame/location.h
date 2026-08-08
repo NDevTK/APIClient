@@ -12,24 +12,10 @@ void location_init(JSContext *ctx);
 
 void location_install(JSContext *ctx, JSValueConst global, const char *url);
 
-/* RECORD THE DOCUMENT'S ADDRESS, without installing the interface. The two are different facts with different
-   audiences: the API BASE URL is what every spec that parses a page-written URL resolves against, and the
-   Location INTERFACE additionally declares `search` and `hash` as concolic attacker sources. A host that has an
-   address but is not exploring — a conformance runner, whose document genuinely has no query — needs the first
-   and must not have the second, because a concolic `search` is a value the harness's own coercion of it
-   refuses. location_install calls this first; a host that installs its own Location calls only this. */
-void location_set_document_url(const char *url);
-
-/* THE API BASE URL — HTML's "current settings object's API base URL", which is the document's own address.
-   Every spec that parses a URL a page wrote parses it against this: `new Request("/api/users")`, `new URL(x)`'s
-   implicit base, `Response.redirect("/there")`. Without it those all took a NULL base and a RELATIVE URL — the
-   ordinary way a bundle names its own endpoints — was a TypeError, which is not a shortcoming of any one of
-   them but of the base never being plumbed anywhere. It lives here because this is where the address arrives.
-   NULL when the document has no address, which is what a platform-less test build looks like; a caller passing
-   NULL to url_parse gets exactly the absolute-only behaviour it had. */
-const char *location_api_base_url(void);
-
-/* Release it — the string is this component's for the runtime's life. */
-void location_free(void);
+/* HTML'S API BASE URL IS THE DOCUMENT'S ADDRESS, and it is read from the DOCUMENT — document_base_url(ctx) —
+   rather than recorded here. This component kept a module-static copy that every install overwrote, which was
+   one answer for a heap that now holds one realm per same-origin document: materializing a popup rewrote its
+   OPENER'S base, so the opener's next relative fetch resolved against the popup's address. A per-realm fact
+   stored per agent is the same defect as `name` having had two sources, and the Document already holds it. */
 
 #endif
