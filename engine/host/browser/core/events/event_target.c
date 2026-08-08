@@ -153,9 +153,30 @@ void event_target_install_interface(JSContext *ctx, JSValueConst global)
 {
     JSValue ctor = JS_NewCFunction2(ctx, js_event_target_ctor, "EventTarget", 0, JS_CFUNC_constructor, 0);
     JSValue proto = event_target_proto(ctx);
+    int i;
+    /* Web IDL §3.7.3's [Global] RULE REACHES THE INHERITED INTERFACES TOO. Window is declared [Global], and the
+       rule is about the OBJECT, not about one interface: every member of every interface in the global's
+       inheritance chain is an OWN property of the global. Window includes EventTarget, so
+       `window.hasOwnProperty("addEventListener")` is true in every browser, and it is the SAME function object
+       as `EventTarget.prototype.addEventListener` — the member is one declaration placed twice, never a second
+       one. Reaching it up the chain is observably different: a page that copies the global's own property
+       names, or reads a descriptor off `window`, sees nothing there. */
+    static const char *const GLOBAL_MEMBERS[3] = { "addEventListener", "removeEventListener", "dispatchEvent" };
 
     CHECK(!JS_IsException(ctor), "the EventTarget interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);
+    for (i = 0; i < 3; i++) {
+        JSAtom a = JS_NewAtom(ctx, GLOBAL_MEMBERS[i]);
+        JSValue fn = JS_GetProperty(ctx, proto, a);
+        CHECK(JS_IsFunction(ctx, fn), "§2.7's prototype is missing a member the global must carry its own "
+                                      "reference to — the two lists are one declaration read twice");
+        /* Web IDL §3.7.6's flags for an operation, and all three are asserted by the corpus: writable,
+           ENUMERABLE and configurable. An IDL member is enumerable — that is what makes a for-in over a
+           platform object list the platform's own names — and only [LegacyUnforgeable] takes configurable
+           away, which none of these three carry. */
+        JS_DefinePropertyValue(ctx, (JSValue)global, a, fn, JS_PROP_C_W_E);
+        JS_FreeAtom(ctx, a);
+    }
     JS_FreeValue(ctx, proto);
     JS_SetPropertyStr(ctx, (JSValue)global, "EventTarget", ctor);
 }

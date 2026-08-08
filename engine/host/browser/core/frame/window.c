@@ -439,9 +439,16 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
 
     /* 7.2.2: window, self and frames all return THIS Window's proxy, and the global object IS that proxy here —
        so `window.X`, `self.X` and a bare `X` are one read spelled three ways. */
-    /* §7.2.5 marks `window`, `self`, `location`, `top` and `document` [LegacyUnforgeable]: OWN properties of
-       the global, non-configurable, so a page cannot shadow or delete them. `frames`, `parent` and `opener`
-       carry no such extended attribute and are declared on the prototype like every other member. */
+    /* EVERY MEMBER BELOW IS AN OWN PROPERTY OF THE GLOBAL, because Window is declared [Global] — Web IDL
+       §3.7.3: an interface with [Global] defines its members on the GLOBAL OBJECT, not on the interface
+       prototype object, which is left with nothing on it but its @@toStringTag and `constructor`. That is not
+       a placement detail: `Object.getOwnPropertyDescriptor(window, "opener")` is `undefined` when the member
+       is one link up the chain, and window-properties.https.html reads exactly that for every attribute and
+       every method Window has.
+       The comment that stood here said the opposite — that [LegacyUnforgeable] is what puts a member on the
+       global and that `frames`, `parent` and `opener` therefore "are declared on the prototype like every
+       other member". [LegacyUnforgeable] decides the ATTRIBUTES (non-configurable, so a page cannot shadow or
+       delete), never the LOCATION; on a [Global] interface there is no other location. */
     JS_DefinePropertyValueStr(ctx, g, "window", JS_DupValue(ctx, global), JS_PROP_ENUMERABLE);
     JS_DefinePropertyValueStr(ctx, g, "self",   JS_DupValue(ctx, global), JS_PROP_ENUMERABLE);
     /* §7.2.5 marks `top` [LegacyUnforgeable] — an OWN property — but its VALUE is the navigable's, and `top`
@@ -451,29 +458,29 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
                             JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_win_top, "get top", 0,
                                                  JS_CFUNC_getter_magic, 0),
                             JS_UNDEFINED, JS_PROP_ENUMERABLE);
-    JS_SetPropertyStr(ctx, gp, "frames", JS_DupValue(ctx, global));
+    JS_SetPropertyStr(ctx, g, "frames", JS_DupValue(ctx, global));
     /* §7.2.5's `parent` and `opener` ARE THE NAVIGABLE'S, so they are read from this realm's own WindowProxy
        rather than answered here. They were two FIXED values behind two comments explaining why an embedder
        could not exist — "no embedder is reachable from this instance" and "the document was navigated to, not
        opened by a script in another navigable" — and both were true exactly while one instance was one
        document. A §7.4 child realm in this agent HAS a creator, and a popup whose `opener` is null cannot post
        back to the page that opened it, which is the whole of what a popup is for. */
-    idl_install_accessor(ctx, gp, "parent", js_win_parent, 0, -1);
-    idl_install_accessor(ctx, gp, "opener", js_win_opener, 0, -1);
+    idl_install_accessor(ctx, g, "parent", js_win_parent, 0, -1);
+    idl_install_accessor(ctx, g, "opener", js_win_opener, 0, -1);
     /* §7.2.5.3's six user-interface bars. */
-    bar_prop_install(ctx, gp);
+    bar_prop_install(ctx, g);
 
     /* §7.2.5 `frameElement` — the element this navigable is nested THROUGH. A top-level navigable is nested
        through nothing, so it is null: the real answer for what this is, not a placeholder for one. */
-    JS_SetPropertyStr(ctx, gp, "frameElement", JS_NULL);
+    JS_SetPropertyStr(ctx, g, "frameElement", JS_NULL);
 
     /* `closed` is a GETTER over the NAVIGABLE's per-flow state, because close() changes it. */
-    idl_install_accessor(ctx, gp, "closed", js_win_closed, 0, -1);
-    idl_install_accessor(ctx, gp, "length", js_win_length, 0, -1);
-    idl_install_method(ctx, gp, "close", 0, g_id_close);
-    idl_install_method(ctx, gp, "focus", 0, g_id_focus);
-    idl_install_method(ctx, gp, "blur",  0, g_id_blur);
-    idl_install_method(ctx, gp, "stop",  0, g_id_stop);
+    idl_install_accessor(ctx, g, "closed", js_win_closed, 0, -1);
+    idl_install_accessor(ctx, g, "length", js_win_length, 0, -1);
+    idl_install_method(ctx, g, "close", 0, g_id_close);
+    idl_install_method(ctx, g, "focus", 0, g_id_focus);
+    idl_install_method(ctx, g, "blur",  0, g_id_blur);
+    idl_install_method(ctx, g, "stop",  0, g_id_stop);
 
     /* The Window's origin, serialized — the principal, concrete for the same reason Location's is: a bundle
        compares it and builds URLs out of it, and a shape there loses every endpoint behind the comparison.
@@ -485,13 +492,13 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
         UrlRecord rec;
         if (url_parse(&rec, url, strlen(url), NULL)) {
             char *origin = url_serialize_origin(&rec);
-            JS_SetPropertyStr(ctx, gp, "origin", JS_NewString(ctx, origin));
+            JS_SetPropertyStr(ctx, g, "origin", JS_NewString(ctx, origin));
             free(origin);
         }
         url_record_free(&rec);
     }
 
-    JS_DefinePropertyGetSet(ctx, gp, JS_NewAtom(ctx, "name"),
+    JS_DefinePropertyGetSet(ctx, g, JS_NewAtom(ctx, "name"),
                             JS_NewCFunction(ctx, js_win_get_name, "get name", 0),
                             JS_NewCFunction(ctx, js_win_set_name, "set name", 1),
                             JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
