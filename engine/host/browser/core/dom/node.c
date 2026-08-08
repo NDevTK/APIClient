@@ -1689,7 +1689,9 @@ void node_init(JSContext *ctx)
                                (int)(sizeof(js_node_base) / sizeof(js_node_base[0])));
     JS_SetPropertyFunctionList(ctx, g_node_proto, js_node_consts,
                                (int)(sizeof(js_node_consts) / sizeof(js_node_consts[0])));
-    event_target_install(ctx, g_node_proto);
+    /* §4.4: `Node : EventTarget`. The three members come down the chain from EventTarget.prototype, which is
+       where §2.7 declares them — installing copies onto Node.prototype said they were declared here. */
+    JS_SetPrototype(ctx, g_node_proto, event_target_proto());
     g_protos_ready = 1;
 
     /* Every node kind is a Node until a component claims it. A ProcessingInstruction wrapper answering the Node

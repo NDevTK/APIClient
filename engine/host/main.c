@@ -155,18 +155,21 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
         encoding_init(g_ctx);         encoding_install(g_ctx, g);
         text_stream_init(g_ctx);      text_stream_install(g_ctx, g);
 
+        /* §2.7 BEFORE §7.2.5: Window.prototype is CHAINED to EventTarget.prototype, so the prototype has
+           to exist before the window is installed. */
+    event_target_init(g_ctx);
         window_install(g_ctx, g, origin);   /* window/self/frames/parent/top/opener/closed/origin, and name */
         timer_install(g_ctx, g);
         timer_set_script_sink(engine_queue_script);   /* HTML 8.6: a string handler is evaluated, as a flow */            /* setTimeout/setInterval/clearTimeout/clearInterval/queueMicrotask */
         event_init(g_ctx);
-    event_target_init(g_ctx);
         event_install(g_ctx, g);   /* the Event interface object */
         message_event_init(g_ctx);
         message_event_install(g_ctx, g);   /* HTML 9.4.1: the event every messaging path dispatches */
         message_port_init(g_ctx);
         message_port_install(g_ctx, g);   /* HTML 9.4.2/9.4.3 */
         structured_clone_install(g_ctx, g);   /* HTML 2.7.3 */
-        event_target_install(g_ctx, g);
+        /* §2.7: the global reaches add/removeEventListener/dispatchEvent through Window.prototype ->
+           EventTarget.prototype, which window_install chains it to. */
         event_target_set_window(g_ctx, g);   /* §7.6: the document's parent on a propagation path */
         event_target_install_handlers(g_ctx, g, EH_GLOBAL | EH_WINDOW);   /* window's on* set */   /* window IS the global (7.2.2), so this is window.addEventListener */
         /* THE HOST'S NETWORK. SECURITY.md puts every byte of it behind the trusted chokepoint, so this host's

@@ -16,11 +16,15 @@ void event_target_free(JSContext *ctx);
    headless harness with no document — dispatches at the target and nowhere else, which is the whole of what
    §2.9 says for a target with no parent. */
 void event_target_set_tree(JSValue (*ancestors)(JSContext *ctx, JSValueConst target));
-/* add/removeEventListener. NOT dispatchEvent: §2.9 dispatch is SYNCHRONOUS and reports whether the default
-   action was cancelled, and this engine runs a listener as its own FLOW (never a JS_Call from C), so a caller
-   would be handed an answer before any listener had run. It is honestly absent until the dispatch is a step
-   machine that drives its listeners through the trampoline — the page's own throw names it. */
-void event_target_install(JSContext *ctx, JSValueConst target);
+/* §2.7's INTERFACE PROTOTYPE OBJECT, where addEventListener, removeEventListener and dispatchEvent live.
+   An interface that INHERITS EventTarget — Node, AbortSignal, MessagePort, BroadcastChannel, Window — chains
+   its own prototype to this one; it does not install the three members again. That is not a saving, it is the
+   spec: `EventTarget.prototype` is where they are declared, `Node.prototype` is not, and the corpus checks
+   both. Built by event_target_init, so every caller must run after it. */
+JSValueConst event_target_proto(void);
+/* §2.7's interface object. CONSTRUCTIBLE — `new EventTarget()` is a plain event target, which is how a page
+   gives an ordinary object a listener list. */
+void event_target_install_interface(JSContext *ctx, JSValueConst global);
 
 /* HTML §8.1.7.2 EVENT HANDLER IDL ATTRIBUTES — `onclick`, `onload`, `onabort`. Which set a target carries is
    which MIXIN its IDL includes, so the caller names the mixin rather than the members. */

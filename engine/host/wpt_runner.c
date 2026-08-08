@@ -36,6 +36,7 @@
 #include "core/streams/readable_stream.h"
 #include "core/streams/writable_stream.h"
 #include "core/streams/transform_stream.h"
+#include "core/streams/queuing_strategy.h"
 #include "core/events/event.h"
 #include "core/events/message_event.h"
 #include "core/events/message_port.h"
@@ -588,7 +589,8 @@ int main(int argc, char **argv)
     event_target_init(ctx);
     event_init(ctx);
     event_install(ctx, global);
-    event_target_install(ctx, global);
+    /* §2.7: the global reaches add/removeEventListener/dispatchEvent through Window.prototype ->
+       EventTarget.prototype, which window_install chains it to. */
     /* WEB IDL §3.6's [Global] rule needs to know WHICH object is the window, and this runner never said. Every
        unqualified `addEventListener(...)` in the corpus — which is how most of it registers — resolved to an
        undefined receiver and registered on nothing. */

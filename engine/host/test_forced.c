@@ -1574,6 +1574,9 @@ int main(void) {
     /* §7.2.2's BROWSING-CONTEXT SURFACE, which this fixture did not have at all: `window`, `self`, `parent`,
        `top`, `closed`, `close()`, the bars. A probe that reads `_cw.parent === window` cannot be written
        without it, and a document with no `window` is not a document any page script would survive. */
+    /* §2.7 BEFORE §7.2.5: Window.prototype is CHAINED to EventTarget.prototype, so the prototype has to
+       exist before the window is installed. */
+    event_target_init(ctx);
     window_install(ctx, g, "https://x.test/p");
     /* §7.4's `window.open`, which hands back a WindowProxy for a document in ANOTHER instance at its own call
        site — the child's name is minted in this instance, so nothing suspends. */
@@ -1608,9 +1611,9 @@ int main(void) {
        JS_AddIntrinsicAToB install plus this explicit one no longer overwrite one prototype with another. */
     CHECK(JS_AddIntrinsicDOMException(ctx) == 0, "the DOMException intrinsic failed to install");
     event_init(ctx);
-    event_target_init(ctx);
     event_install(ctx, g);   /* the Event interface object — `new Event(...)` and every `instanceof Event` */
-    event_target_install(ctx, g);
+    /* §2.7: the global reaches add/removeEventListener/dispatchEvent through Window.prototype ->
+       EventTarget.prototype, which window_install chains it to. */
     event_target_set_window(ctx, g);   /* §7.6: the document's parent on a propagation path */
     /* HTML §8.1.7.2: window's IDL mixes in GlobalEventHandlers AND WindowEventHandlers — `window.onload` is
        how a great deal of real code starts. */

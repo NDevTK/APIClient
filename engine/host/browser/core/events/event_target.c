@@ -55,7 +55,17 @@ static JSValue g_dispatch_fn;
 /* The ids JS_RegisterStepDef handed this runtime for add/removeEventListener. `type` is a Web IDL DOMString,
    so it is ToString on whatever the page passed and cannot be a JS_ToCString from C. */
 static int g_add_stepid = -1, g_remove_stepid = -1, g_dispatch_stepid = -1;
+/* §2.7's INTERFACE PROTOTYPE OBJECT. addEventListener, removeEventListener and dispatchEvent live HERE and
+   nowhere else: every interface that inherits EventTarget — Node, AbortSignal, MessagePort, BroadcastChannel,
+   Window — reaches them by CHAINING to it. They used to be installed onto each of those prototypes in turn,
+   which is five copies of three members and, worse, a lie the corpus checks directly: `Node.prototype` is not
+   where `addEventListener` is declared, `EventTarget.prototype` is, and `document instanceof EventTarget` is
+   false when the interface does not exist at all. */
+static JSValue g_et_proto = JS_UNDEFINED;
 static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
+/* §2.9's dispatch machine is declared at the bottom of this file, and the prototype it goes on is built at the
+   top — so the build step is a function rather than a block, and this is its one forward declaration. */
+static void event_target_build_proto(JSContext *ctx);
 
 void event_target_init(JSContext *ctx)
 {
@@ -85,7 +95,34 @@ void event_target_init(JSContext *ctx)
                                              idl_add_or_remove, 1);
         idl_optional_from(2);   /* §2.7: `removeEventListener(type, callback, optional options)` */
     }
+    event_target_build_proto(ctx);
+}
 
+JSValueConst event_target_proto(void)
+{
+    DCHECK(JS_IsObject(g_et_proto), "EventTarget.prototype was asked for before event_target_init built it");
+    return g_et_proto;
+}
+
+/* §2.7 declares `constructor()`, so EventTarget IS constructible — `new EventTarget()` is a plain event target,
+   which is what a page uses to give an ordinary object a listener list. It honours new.target's prototype, so a
+   subclass gets its own. */
+static JSValue js_event_target_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    JSValue proto = JS_GetPropertyStr(ctx, new_target, "prototype"), obj;
+    if (JS_IsException(proto)) return proto;
+    obj = JS_NewObjectProto(ctx, JS_IsObject(proto) ? proto : (JSValueConst)g_et_proto);
+    JS_FreeValue(ctx, proto);
+    (void)argc; (void)argv;
+    return obj;
+}
+
+void event_target_install_interface(JSContext *ctx, JSValueConst global)
+{
+    JSValue ctor = JS_NewCFunction2(ctx, js_event_target_ctor, "EventTarget", 0, JS_CFUNC_constructor, 0);
+    CHECK(!JS_IsException(ctor), "the EventTarget interface object could not be allocated");
+    JS_SetConstructor(ctx, ctor, g_et_proto);
+    JS_SetPropertyStr(ctx, (JSValue)global, "EventTarget", ctor);
 }
 
 void event_target_set_tree(JSValue (*ancestors)(JSContext *ctx, JSValueConst target))
@@ -102,7 +139,8 @@ void event_target_free(JSContext *ctx)
     JS_FreeValue(ctx, g_handler_marker);
     JS_FreeValue(ctx, g_dispatch_fn);
     JS_FreeValue(ctx, g_window);
-    g_key = g_handler_key = g_handler_marker = g_dispatch_fn = g_window = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_et_proto);
+    g_key = g_handler_key = g_handler_marker = g_dispatch_fn = g_window = g_et_proto = JS_UNDEFINED;
     g_ready = 0;
 }
 
@@ -892,21 +930,23 @@ static const JSTrampStepDef js_dispatch_pair_def = {
     sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, DISPATCH_PAIR, .visit = js_dispatch_visit
 };
 
-void event_target_install(JSContext *ctx, JSValueConst target)
+/* §2.7's INTERFACE PROTOTYPE OBJECT — built at the end of the file because the dispatch machine it installs is
+   declared just above, and called from event_target_init so there is still exactly ONE init step a host runs. */
+static void event_target_build_proto(JSContext *ctx)
 {
-    DCHECK(JS_IsObject(target), "event_target_install was handed something that is not an object");
-    /* Declared HERE rather than in event_target_init because the machine is defined below it — and one
-       declaration serves every target, which is what the id being cached says. */
-    if (g_dispatch_stepid < 0) {
-        g_dispatch_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_dispatch_def);
-        /* The C caller's door into the same machine: a step function object nobody installs, so the page can
-           neither see it nor replace it — which matters, because a page that overwrote `dispatchEvent` must
-           not redirect the engine's own `load`. */
-        g_dispatch_fn = JS_NewCFunction2(ctx, NULL, "dispatch", 2, JS_CFUNC_step,
-                                         JS_RegisterStepDef(JS_GetRuntime(ctx), &js_dispatch_pair_def));
-        CHECK(!JS_IsException(g_dispatch_fn), "the internal event dispatcher could not be allocated");
-    }
-    idl_install_method(ctx, target, "addEventListener", 2, g_add_stepid);
-    idl_install_method(ctx, target, "removeEventListener", 2, g_remove_stepid);
-    idl_install_step_method(ctx, target, "dispatchEvent", 1, g_dispatch_stepid);
+    /* THE DISPATCH DECLARATION, and the C caller's private door into the same machine. Both were minted lazily
+       inside the per-target install, because that install ran before init did for some hosts; with one
+       prototype there is one place, and it is here. The step function object is installed nowhere the page can
+       reach — a page that overwrote `dispatchEvent` must not redirect the engine's own `load`. */
+    g_dispatch_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_dispatch_def);
+    g_dispatch_fn = JS_NewCFunction2(ctx, NULL, "dispatch", 2, JS_CFUNC_step,
+                                     JS_RegisterStepDef(JS_GetRuntime(ctx), &js_dispatch_pair_def));
+    CHECK(!JS_IsException(g_dispatch_fn), "the internal event dispatcher could not be allocated");
+
+    g_et_proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(g_et_proto), "EventTarget.prototype could not be allocated");
+    idl_interface_tag(ctx, g_et_proto, "EventTarget");
+    idl_install_method(ctx, g_et_proto, "addEventListener", 2, g_add_stepid);
+    idl_install_method(ctx, g_et_proto, "removeEventListener", 2, g_remove_stepid);
+    idl_install_step_method(ctx, g_et_proto, "dispatchEvent", 1, g_dispatch_stepid);
 }

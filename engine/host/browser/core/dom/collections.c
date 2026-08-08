@@ -44,11 +44,12 @@ static int     g_ready;
 /* The live kinds differ in TWO things and nothing else: which nodes they traverse, and which of those they
    take. The two child kinds walk the owner's child list; the two by-name kinds walk its whole subtree, which is
    what makes getElementsByTagName's result track a page that inserts a matching element anywhere under it. */
-enum { COLL_CHILD_NODES = 0, COLL_CHILDREN, COLL_STATIC, COLL_BY_TAG, COLL_BY_CLASS, COLL_LINKS };
+enum { COLL_CHILD_NODES = 0, COLL_CHILDREN, COLL_STATIC, COLL_BY_TAG, COLL_BY_CLASS, COLL_LINKS,
+       COLL_NAMED };
 
 static bool coll_is_descendant(int kind)
 {
-    return kind == COLL_BY_TAG || kind == COLL_BY_CLASS || kind == COLL_LINKS;
+    return kind == COLL_BY_TAG || kind == COLL_BY_CLASS || kind == COLL_LINKS || kind == COLL_NAMED;
 }
 
 static JSValue coll_slots(JSContext *ctx, JSValueConst v)
@@ -154,6 +155,25 @@ static bool coll_takes(int kind, const char *name, size_t nlen, const lxb_dom_no
     }
     if (kind == COLL_BY_CLASS)
         return coll_has_all_classes(lxb_dom_interface_element((lxb_dom_node_t *)c), name, nlen);
+    if (kind == COLL_NAMED) {
+        /* HTML §7.3.3's NAMED ELEMENTS, which is two rules and not one: any HTML element whose `id` is the
+           name, and `embed`/`form`/`img`/`object` whose `name` attribute is. The tag restriction is on the
+           `name` half only — a `<div name=x>` is not a named element, a `<div id=x>` is. */
+        lxb_dom_element_t *el = (lxb_dom_element_t *)c;
+        size_t vl = 0, qn = 0;
+        const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"id", 2, &vl);
+        const lxb_char_t *q;
+        if (v && vl == nlen && memcmp(v, name, nlen) == 0) return true;
+        q = lxb_dom_element_qualified_name(el, &qn);
+        if (!q) return false;
+        if (!((qn == 5 && memcmp(q, "embed", 5) == 0) || (qn == 4 && memcmp(q, "form", 4) == 0) ||
+              (qn == 3 && memcmp(q, "img", 3) == 0)   || (qn == 6 && memcmp(q, "object", 6) == 0) ||
+              (qn == 6 && memcmp(q, "iframe", 6) == 0)))
+            return false;
+        vl = 0;
+        v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"name", 4, &vl);
+        return v && vl == nlen && memcmp(v, name, nlen) == 0;
+    }
     if (kind == COLL_LINKS) {
         /* §3.1.5 `document.links` is `a` AND `area` elements THAT HAVE AN href — the attribute is half the
            definition, so an anchor used as a scroll target is not a link. */
@@ -497,6 +517,12 @@ JSValue collections_by_name(JSContext *ctx, JSValueConst owner, const char *name
 
 /* §3.1.5's `document.links` — `a`/`area` WITH an href, which is a predicate rather than a name, so it is its
    own kind rather than a by-tag collection that would also count the anchors with no href. */
+JSValue collections_named(JSContext *ctx, JSValueConst owner, const char *name)
+{
+    DCHECK(g_ready, "a named collection was built before collections_init ran");
+    return coll_new(ctx, g_htmlcoll_proto, &HTMLCOLL_INDEXED, COLL_NAMED, owner, name);
+}
+
 JSValue collections_links(JSContext *ctx, JSValueConst owner)
 {
     DCHECK(g_ready, "a links collection was built before collections_init ran");

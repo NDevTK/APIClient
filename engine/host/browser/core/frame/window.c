@@ -41,6 +41,11 @@
 #include "core/url/url.h"
 #include "core/frame/bar_prop.h"
 #include "core/html/html_iframe.h"
+#include "core/frame/window_proxy.h"
+#include "core/events/event_target.h"
+#include "core/dom/collections.h"
+#include "core/dom/document.h"
+#include "core/dom/node.h"
 #include "core/idl_args.h"
 #include "solver/cow.h"
 
@@ -210,9 +215,144 @@ static const JSClassExoticMethods WINDOW_EXOTIC = {
 
 static const JSClassDef WINDOW_CLASS = { "Window", NULL, NULL, NULL, &WINDOW_EXOTIC };
 
+/* §7.2.5's INTERFACE PROTOTYPE OBJECT, and the chain it sits in: window -> Window.prototype ->
+   EventTarget.prototype -> Object.prototype. The global had Object.prototype directly, so `Window` did not
+   exist as a name, `window instanceof EventTarget` was false, and every member of Window was an OWN property
+   of the global — which is where Web IDL puts only the [LegacyUnforgeable] ones (`window`, `self`, `location`,
+   `top`, `document`). Everything else is declared on the prototype, and a page reads the difference: an
+   `assert_own_property` on the wrong object, a descriptor test, a `delete window.closed`.
+   §7.2.5's WindowProperties object sits between Window.prototype and EventTarget.prototype in the real chain
+   and is what NAMED access (`window.myIframeName`) is declared on. It is not built here, so it is not claimed
+   here either: this chain is two links of the three, and the third arrives with named access. */
+static JSValue g_window_proto = JS_UNDEFINED;
+
+/* HTML §7.3.3 — NAMED ACCESS ON THE WINDOW OBJECT, and the object it is declared on.
+ *
+ * `window.myFrameName` and `window.someElementId` are not properties of the global and not properties of
+ * Window.prototype: Web IDL puts an interface's NAMED PROPERTIES on a separate object one link further up the
+ * chain — window -> Window.prototype -> WindowProperties -> EventTarget.prototype — precisely so that a page's
+ * own `window.foo = 1` SHADOWS the named property rather than colliding with it. The corpus walks that chain
+ * link by link, so the object is not a formality: without it the chain is short by one and every level below
+ * compares against the wrong prototype.
+ *
+ * THE ORDER IN §7.3.3 IS THE WHOLE ALGORITHM, and each branch is a different kind of answer:
+ *   a document-tree child NAVIGABLE with that name wins outright, and answers with its WindowProxy;
+ *   a single named ELEMENT that is itself a container with a navigable answers with THAT navigable's proxy —
+ *     `window.myIframeName` is the frame's window, not the <iframe> element;
+ *   a single named element answers with the element;
+ *   more than one answers with a live HTMLCollection, because a page reads `.length` off it.
+ * A "named element" is two rules, not one: any HTML element whose `id` matches, plus embed/form/img/object/
+ * iframe whose `name` attribute matches — see collections.c, which owns the filter.
+ *
+ * [LegacyUnenumerableNamedProperties] is what Window carries, so the descriptor is
+ * { writable: true, enumerable: FALSE, configurable: true }. */
+static JSValue g_window_props = JS_UNDEFINED;
+
+/* The child navigable whose browsing-context name is `name`, or JS_UNDEFINED. Owned on success. */
+static JSValue win_named_navigable(JSContext *ctx, const char *name)
+{
+    int n = iframe_child_navigable_count(ctx), i;
+
+    for (i = 0; i < n; i++) {
+        JSValue nav = iframe_child_navigable(ctx, i);
+        if (JS_IsUndefined(nav)) continue;
+        if (!strcmp(window_proxy_name(nav), name)) return nav;
+        JS_FreeValue(ctx, nav);
+    }
+    return JS_UNDEFINED;
+}
+
+/* §7.3.3's value for `name`, or JS_UNDEFINED when the name is not supported. Owned on success. */
+static JSValue win_named_value(JSContext *ctx, const char *name)
+{
+    JSValue coll, doc, first, second, out = JS_UNDEFINED;
+
+    if (!*name) return JS_UNDEFINED;   /* the empty name is no name at all, and no attribute carries it */
+    out = win_named_navigable(ctx, name);
+    if (!JS_IsUndefined(out)) return out;
+    if (!document_root_node()) return JS_UNDEFINED;
+
+    doc = node_wrap(ctx, document_root_node());
+    coll = collections_named(ctx, doc, name);
+    JS_FreeValue(ctx, doc);
+    if (JS_IsException(coll)) return JS_UNDEFINED;
+    /* HOW MANY, asked by INDEX rather than by `length`. An HTMLCollection's `length` is an IDL accessor, and
+       reaching a getter from C is the one thing this engine refuses — there is no flow base under a C
+       activation. The indexed read is the collection's exotic own-property behaviour, which runs no page code
+       and is declared so; and the two indices are all this branch needs, because §7.3.3 only distinguishes
+       none, exactly one, and more than one. */
+    first  = JS_GetPropertyUint32(ctx, coll, 0);
+    second = JS_GetPropertyUint32(ctx, coll, 1);
+    if (JS_IsUndefined(first)) {
+        JS_FreeValue(ctx, first); JS_FreeValue(ctx, second); JS_FreeValue(ctx, coll);
+        return JS_UNDEFINED;
+    }
+    if (!JS_IsUndefined(second)) {
+        JS_FreeValue(ctx, first); JS_FreeValue(ctx, second);
+        return coll;   /* the LIVE collection is the answer, not a snapshot of it */
+    }
+    JS_FreeValue(ctx, second);
+    out = first;
+    JS_FreeValue(ctx, coll);
+    /* §7.3.3: a single named element that HAS a content navigable answers with the navigable's WindowProxy —
+       `window.myIframeName` is the frame's window, and a page that then reads `.document` off it would get an
+       element otherwise. */
+    if (JS_IsObject(out) && iframe_has_navigable(ctx, out)) {
+        JSValue nav = JS_GetPropertyStr(ctx, out, "contentWindow");
+        if (JS_IsObject(nav)) { JS_FreeValue(ctx, out); return nav; }
+        JS_FreeValue(ctx, nav);
+    }
+    return out;
+}
+
+static int win_named_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom prop)
+{
+    const char *name;
+    JSValue v;
+
+    (void)obj;
+    /* A SYMBOL IS NOT A NAMED PROPERTY. Web IDL's named-property algorithm applies to STRING property names
+       only, and stringifying a symbol here would answer for `Symbol.toStringTag` with whatever element happened
+       to carry the id "Symbol(Symbol.toStringTag)" — and, far more often, would run a whole tree walk for every
+       symbol lookup that reaches this object. */
+    {
+        JSValue pv = JS_AtomToValue(ctx, prop);
+        bool sym = JS_IsSymbol(pv);
+        JS_FreeValue(ctx, pv);
+        if (sym) return 0;
+    }
+    name = JS_AtomToCString(ctx, prop);
+    if (!name) return 0;
+    v = win_named_value(ctx, name);
+    JS_FreeCString(ctx, name);
+    if (JS_IsUndefined(v)) return 0;
+    if (!desc) { JS_FreeValue(ctx, v); return 1; }
+    desc->flags = JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE;   /* [LegacyUnenumerableNamedProperties] */
+    desc->getter = JS_UNDEFINED;
+    desc->setter = JS_UNDEFINED;
+    desc->value = v;
+    return 1;
+}
+
+static const JSClassExoticMethods WINDOW_PROPS_EXOTIC = {
+    .get_own_property = win_named_get_own,
+    /* The lookup is a walk of the document tree and a read of content attributes — no page code, by
+       construction, which is what lets the engine's own accessor walks run it from C. */
+    .get_own_property_no_user_code = true,
+};
+static const JSClassDef WINDOW_PROPS_CLASS = { "WindowProperties", NULL, NULL, NULL, &WINDOW_PROPS_EXOTIC };
+static JSClassID g_window_props_class;
+
+
+JSValueConst window_proto(void)
+{
+    DCHECK(JS_IsObject(g_window_proto), "Window.prototype was asked for before window_install built it");
+    return g_window_proto;
+}
+
 void window_install(JSContext *ctx, JSValueConst global, const char *url)
 {
-    JSValue g = (JSValue)global;
+    JSValue g = (JSValue)global, gp;
 
     DCHECK(JS_IsObject(global), "window_install was given something that is not the global object");
 
@@ -226,34 +366,57 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     CHECK(JS_SetGlobalClass(ctx, g_window_class) == 0,
           "the global object would not take the Window class — §7.2.5.1's indexed access has nowhere to live");
 
+    /* THE PROTOTYPE CHAIN, before any member is installed on any of its objects. */
+    JS_NewClassID(JS_GetRuntime(ctx), &g_window_props_class);
+    CHECK(JS_NewClass(JS_GetRuntime(ctx), g_window_props_class, &WINDOW_PROPS_CLASS) == 0,
+          "the WindowProperties class could not be registered");
+    g_window_props = JS_NewObjectProtoClass(ctx, event_target_proto(), g_window_props_class);
+    CHECK(!JS_IsException(g_window_props), "the WindowProperties object could not be allocated");
+    idl_interface_tag(ctx, g_window_props, "WindowProperties");
+    g_window_proto = JS_NewObjectProto(ctx, g_window_props);
+    CHECK(!JS_IsException(g_window_proto), "Window.prototype could not be allocated");
+    idl_interface_tag(ctx, g_window_proto, "Window");
+    JS_SetPrototype(ctx, g, g_window_proto);
+    /* ECMAScript gives THE GLOBAL OBJECT an own @@toStringTag of "global", and it shadows the interface tag
+       that §3.7.3 puts on Window.prototype — so `Object.prototype.toString.call(window)` answered
+       "[object global]" where every browser answers "[object Window]". That own property is the plain-host
+       global's, not a Window's: HTML's global IS the Window, and the tag it carries is the interface's. */
+    JS_DeleteProperty(ctx, g, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG), 0);
+    event_target_install_interface(ctx, g);   /* §2.7's interface object, now that its prototype is in a chain */
+    JS_SetPropertyStr(ctx, g, "Window", idl_interface_object(ctx, "Window", g_window_proto));
+    gp = g_window_proto;
+
     /* 7.2.2: window, self and frames all return THIS Window's proxy, and the global object IS that proxy here —
        so `window.X`, `self.X` and a bare `X` are one read spelled three ways. */
-    JS_SetPropertyStr(ctx, g, "window", JS_DupValue(ctx, global));
-    JS_SetPropertyStr(ctx, g, "self",   JS_DupValue(ctx, global));
-    JS_SetPropertyStr(ctx, g, "frames", JS_DupValue(ctx, global));
+    /* §7.2.5 marks `window`, `self`, `location`, `top` and `document` [LegacyUnforgeable]: OWN properties of
+       the global, non-configurable, so a page cannot shadow or delete them. `frames`, `parent` and `opener`
+       carry no such extended attribute and are declared on the prototype like every other member. */
+    JS_DefinePropertyValueStr(ctx, g, "window", JS_DupValue(ctx, global), JS_PROP_ENUMERABLE);
+    JS_DefinePropertyValueStr(ctx, g, "self",   JS_DupValue(ctx, global), JS_PROP_ENUMERABLE);
+    JS_DefinePropertyValueStr(ctx, g, "top",    JS_DupValue(ctx, global), JS_PROP_ENUMERABLE);
+    JS_SetPropertyStr(ctx, gp, "frames", JS_DupValue(ctx, global));
     /* No embedder is reachable from this instance, so this document's navigable is its own parent and top. */
-    JS_SetPropertyStr(ctx, g, "parent", JS_DupValue(ctx, global));
-    JS_SetPropertyStr(ctx, g, "top",    JS_DupValue(ctx, global));
+    JS_SetPropertyStr(ctx, gp, "parent", JS_DupValue(ctx, global));
 
     /* The document was navigated to, not opened by a script in another navigable: 7.2.2 says null. */
-    JS_SetPropertyStr(ctx, g, "opener", JS_NULL);
+    JS_SetPropertyStr(ctx, gp, "opener", JS_NULL);
     /* §7.2.5.3's six user-interface bars. */
     bar_prop_init(ctx);
-    bar_prop_install(ctx, global);
+    bar_prop_install(ctx, gp);
 
     /* §7.2.5 `frameElement` — the element this navigable is nested THROUGH. A top-level navigable is nested
        through nothing, so it is null: the real answer for what this is, not a placeholder for one. */
-    JS_SetPropertyStr(ctx, g, "frameElement", JS_NULL);
+    JS_SetPropertyStr(ctx, gp, "frameElement", JS_NULL);
 
     /* `closed` is a GETTER over per-flow state now, because close() changes it. */
     g_closed = 0;
     g_closed_owner = JS_DupValue(ctx, global);
-    idl_install_accessor(ctx, g, "closed", js_win_closed, 0, -1);
-    idl_install_accessor(ctx, g, "length", js_win_length, 0, -1);
-    idl_install_method(ctx, g, "close", 0, idl_method_id(ctx, NULL, 0, js_win_close, 0));
-    idl_install_method(ctx, g, "focus", 0, idl_method_id(ctx, NULL, 0, js_win_noeffect, 0));
-    idl_install_method(ctx, g, "blur",  0, idl_method_id(ctx, NULL, 0, js_win_noeffect, 1));
-    idl_install_method(ctx, g, "stop",  0, idl_method_id(ctx, NULL, 0, js_win_noeffect, 2));
+    idl_install_accessor(ctx, gp, "closed", js_win_closed, 0, -1);
+    idl_install_accessor(ctx, gp, "length", js_win_length, 0, -1);
+    idl_install_method(ctx, gp, "close", 0, idl_method_id(ctx, NULL, 0, js_win_close, 0));
+    idl_install_method(ctx, gp, "focus", 0, idl_method_id(ctx, NULL, 0, js_win_noeffect, 0));
+    idl_install_method(ctx, gp, "blur",  0, idl_method_id(ctx, NULL, 0, js_win_noeffect, 1));
+    idl_install_method(ctx, gp, "stop",  0, idl_method_id(ctx, NULL, 0, js_win_noeffect, 2));
 
     /* The Window's origin, serialized — the principal, concrete for the same reason Location's is: a bundle
        compares it and builds URLs out of it, and a shape there loses every endpoint behind the comparison.
@@ -265,13 +428,13 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
         UrlRecord rec;
         if (url_parse(&rec, url, strlen(url), NULL)) {
             char *origin = url_serialize_origin(&rec);
-            JS_SetPropertyStr(ctx, g, "origin", JS_NewString(ctx, origin));
+            JS_SetPropertyStr(ctx, gp, "origin", JS_NewString(ctx, origin));
             free(origin);
         }
         url_record_free(&rec);
     }
 
-    JS_DefinePropertyGetSet(ctx, g, JS_NewAtom(ctx, "name"),
+    JS_DefinePropertyGetSet(ctx, gp, JS_NewAtom(ctx, "name"),
                             JS_NewCFunction(ctx, js_win_get_name, "get name", 0), JS_UNDEFINED,
                             JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
 }
@@ -279,6 +442,10 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
 void window_free(JSContext *ctx)
 {
     g_window_class = 0;
+    JS_FreeValue(ctx, g_window_proto);
+    JS_FreeValue(ctx, g_window_props);
+    g_window_proto = g_window_props = JS_UNDEFINED;
+    g_window_props_class = 0;
     JS_FreeValue(ctx, g_closed_owner);
     g_closed_owner = JS_UNDEFINED;
     bar_prop_free(ctx);

@@ -54,6 +54,10 @@ uint32_t window_proxy_doc(JSValueConst proxy);
    in another WASM instance — that resolve is a host round trip and is not built; see window_proxy.c. */
 JSValue window_proxy_window(JSContext *ctx, JSValueConst proxy);
 
+/* THE BROWSING CONTEXT'S NAME, as this flow sees it — "" when it has none. §7.3.3's named access on the Window
+   matches against it, so the walk that answers `window.myFrameName` needs to read it. BORROWED. */
+const char *window_proxy_name(JSValueConst proxy);
+
 /* The active document's origin, as this flow sees it — what §7.2.5.1's same-origin check reads. BORROWED. */
 const char *window_proxy_origin(JSValueConst proxy);
 

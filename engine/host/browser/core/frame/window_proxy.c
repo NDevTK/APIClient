@@ -223,6 +223,15 @@ JSValue window_proxy_window(JSContext *ctx, JSValueConst proxy)
     return JS_DupValue(ctx, p->window);
 }
 
+const char *window_proxy_name(JSValueConst proxy)
+{
+    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    DCHECK(p != NULL, "the name of something that is not a WindowProxy was asked for");
+    /* A DESTROYED navigable has no name — the same answer the `name` getter gives, from the same two fields,
+       so named access cannot find a frame the page has already removed. */
+    return p->closed || !p->name ? "" : p->name;
+}
+
 const char *window_proxy_origin(JSValueConst proxy)
 {
     ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);

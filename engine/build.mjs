@@ -217,9 +217,13 @@ const args = [
   "-I", QJS,
   "-I", HOST, "-I", join(HOST, "browser"),   // include by FULL path from the host root: a browser component is "core/dom/dom_element.h", a solver component "solver/concolic.h" — the layer is always explicit (no bare-name -I solver shortcut, so a cross-layer include names its layer)
   "-I", LEXBOR_INC,           // <lexbor/html/html.h> etc for main.c's DOM host-edges
-  /* -Werror on implicit declarations: -w would otherwise let a missing #include truncate a returned
-     pointer to 32 bits, which is a segfault with no diagnostic. See the same note in test262.mjs. */
-  "-O1", "-w", "-Werror=implicit-function-declaration",
+  /* -Werror ON IMPLICIT DECLARATIONS, and the reason `-w` is NOT here beside it. A missing #include makes C
+     assume `int (...)`, so a returned 64-bit POINTER comes back TRUNCATED — a segfault with no diagnostic, and
+     it happened: window.c called window_proxy_name without its header and the whole corpus segfaulted inside
+     strcmp. This line used to read `-w -Werror=implicit-function-declaration`, which does NOT work: `-w`
+     suppresses the diagnostic outright, so the -Werror= promotion has nothing left to promote. The quiet list
+     is explicit for that reason, and the moment it went in the gate found three more missing includes. */
+  "-O1", "-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare", "-Wno-parentheses", "-Wno-format-truncation", "-Wno-format-overflow", "-Wno-array-bounds", "-Wno-stringop-overflow", "-Wno-maybe-uninitialized", "-Wno-misleading-indentation", "-Wno-dangling-pointer", "-Wno-char-subscripts", "-Wno-implicit-fallthrough", "-Werror=implicit-function-declaration",
   "-D_GNU_SOURCE", "-DENABLE_DUMPS",
   // Offensive-programming build mode (check.h): DEV (default) keeps every DCHECK live so a should-never-happen
   // aborts LOUD at its origin; a `release` arg compiles them out (the release exemption — the user is not
