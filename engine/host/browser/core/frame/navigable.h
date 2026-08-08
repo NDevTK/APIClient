@@ -54,6 +54,17 @@ typedef JSContext *(*RealmBuilder)(JSRuntime *rt, lxb_html_document_t *dom, cons
                                    uint32_t doc_id);
 void navigable_set_realm_builder(RealmBuilder b);
 
+/* BUILD THE REALM OF A SAME-ORIGIN NAVIGABLE THIS AGENT HOLDS, and hand the caller the reference.
+ *
+ * ON FIRST TOUCH, NOT AT CREATION — and that is not a cap, because every flow that reaches its child gets one.
+ * §7.4 creates the navigable and its initial about:blank Document synchronously, and this engine does exactly
+ * that: the navigable exists, it is named, `parent.length` counts it, it is nested and it can be destroyed.
+ * What is deferred is only the ECMAScript REALM behind it, whose sole observable is a read THROUGH the proxy —
+ * so the read is where it is built. A forced-execution frontier holds thousands of flows at once and each
+ * one's boot runs the same `open()` in its own world; building a whole platform per never-touched navigable
+ * exhausted the heap at ~2000 flows, which is the frontier doing its job rather than a bug in it. */
+JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *origin);
+
 /* Install §7.4's scriptable entry point — `window.open`. `origin` is this document's, which the initial
    about:blank child inherits along with the policy container. */
 /* THE AGENT'S HALF: §7.4's `open` member, declared once. */

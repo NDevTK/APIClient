@@ -818,12 +818,14 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
     flow_set_running(flow_add(ctx, JS_UNDEFINED, NULL, 0, WORLD_NONE));
     window_init(ctx);
     navigable_init(ctx);
-    window_message_init(ctx);
     timer_init(ctx);
     window_proxy_init(ctx, origin);
     /* §7.2.5.1 one agent further out: a same-origin cross-document read answers with an OBJECT, and an object
        crosses as a NAME. Both halves live here — this agent lending its own, and referencing a peer's. */
     remote_object_init(ctx);
+    /* AFTER the proxy class: §9.4.4's `postMessage` is declared once and installed on the WindowProxy
+       PROTOTYPE, which window_proxy_init is what builds. */
+    window_message_init(ctx);
     window_proxy_install_members(ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
     /* THE DOM CHOKEPOINT'S CONTEXT. §4.2.3's insertion and removing steps are fired from the solver's tree
        chokepoint, which needs the runtime they run in — and this runner never named one, so it ran NONE of
@@ -831,8 +833,8 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
        silently, three layers away, as an iframe whose contentWindow was null. */
     dom_cow_set_ctx(ctx);
     element_init(ctx);
-    iframe_init(ctx);
-    document_init(ctx);   /* §4.8.5: the slot a child navigable lives in */
+    iframe_init(ctx);   /* §4.8.5: the slot a child navigable lives in */
+    document_init(ctx);
     message_port_init(ctx);
     broadcast_channel_init(ctx, origin);
     abort_init(ctx);        /* the AbortSignal slot key §5.4's signal lives in */
@@ -882,7 +884,6 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
        name. This runner had none of them, so `window` itself was undefined and every test in
        html/browsers/the-window-object failed on its first line. */
     window_install(ctx, global, origin);
-    window_message_install(ctx, global, origin, doc_id);
     navigable_install(ctx, global, origin);   /* HTML 7.4 */
     /* THE DOCUMENT COMES AFTER THE BROWSING CONTEXT, not before it. §4.8.5's insertion steps run during tree
        construction, so installing the document CREATES a child navigable for every <iframe> the markup
@@ -894,6 +895,7 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
        the queue drained — landing in the middle of the tests it guards and reporting 140 passing stream
        subtests as timeouts. It cannot now: a timer is due only when the event loop has nothing else to run
        (timer.h), so the long timeout is by construction the last thing to happen. */
+    window_message_install(ctx, global, origin);
     document_install(ctx, global, dom, url, doc_id);
     message_port_install(ctx, global);   /* HTML 9.4.2/9.4.3 */
     broadcast_channel_install(ctx, global);   /* HTML 9.5 */
@@ -943,9 +945,6 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
     JSContext *ctx = JS_NewContext(rt);
 
     CHECK(ctx != NULL, "wpt: a same-origin child navigable's realm could not be created");
-    /* ADOPTED BEFORE THE INSTALL: window_proxy_new asserts that a local proxy names a document this agent
-       holds, and the install itself creates child navigables for any <iframe> the initial markup carries. */
-    world_doc_adopt(doc_id);
     wpt_realm_install(ctx, dom, url, origin, doc_id);
     return ctx;
 }

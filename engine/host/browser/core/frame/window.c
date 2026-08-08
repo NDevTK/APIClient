@@ -59,7 +59,7 @@
 static JSValue js_win_closed(JSContext *ctx, JSValueConst this_val, int magic)
 {
     (void)this_val; (void)magic;
-    return JS_NewBool(ctx, window_proxy_closed(ctx, window_proxy_for_doc(document_doc(ctx))));
+    return JS_NewBool(ctx, window_proxy_closed(ctx, document_window_proxy(ctx)));
 }
 
 /* §7.2.5.2 `close()`. A REAL STATE CHANGE, never a no-effect: the navigable is closed and `closed` reports it
@@ -67,7 +67,7 @@ static JSValue js_win_closed(JSContext *ctx, JSValueConst this_val, int magic)
 static JSValue js_win_close(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     (void)this_val; (void)argc; (void)argv; (void)magic;
-    window_proxy_set_closed(ctx, window_proxy_for_doc(document_doc(ctx)));
+    window_proxy_set_closed(ctx, document_window_proxy(ctx));
     return JS_UNDEFINED;
 }
 

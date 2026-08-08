@@ -241,7 +241,11 @@ static const char *HTML =
        behaviour produces — every one of them was ABSENT, so a page doing any of this stopped there. */
     "fetch('/api/nodeconst?v=' + (document.body.nodeType === Node.ELEMENT_NODE ? 'isconst' : 'wrong'));"
     "fetch('/api/docnode?v=' + (document.nodeType === 9 && document.contains(document.body) ? 'isnode' : 'wrong'));"
-    "fetch('/api/baseuri?v=' + (document.body.baseURI === 'https://x.test' ? 'base' : 'wrong'));"
+    /* §4.4's baseURI IS THE DOCUMENT'S ADDRESS, so it is the address Location reports and not a different
+       string. This fixture used to install the Document at "https://x.test" and Location at
+       "https://x.test/p" — two answers to "where is this document", which no browser has and which only held
+       because one caller passed each. One address now reaches both. */
+    "fetch('/api/baseuri?v=' + (document.body.baseURI === 'https://x.test/p' ? 'base' : 'wrong'));"
     /* getRootNode's `composed` is a page GETTER, so the option read is a request the machine parks on and the
        loop inside it forces a suspend — the answer must still be the document. */
     "fetch('/api/rootnode?v=' + (document.body.getRootNode({ get composed(){ var n=0; for (var i=0;i<400;i++) n+=i; return true; } }) === document ? 'isroot' : 'wrong'));"
@@ -1667,7 +1671,6 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
     JSContext *ctx = JS_NewContext(rt);
 
     CHECK(ctx != NULL, "a same-origin child navigable's realm could not be created");
-    world_doc_adopt(doc_id);
     tf_realm_install(ctx, dom, url, origin, doc_id);
     return ctx;
 }

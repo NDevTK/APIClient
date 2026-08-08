@@ -225,6 +225,18 @@ static int iframe_content_document_step(JSContext *ctx, JSStepHdr *hdr, void *st
             *presult = JS_NULL;
             return JS_STEP_DONE;
         }
+        /* SAME-ORIGIN AND IN THIS AGENT: one heap, so the answer is the child realm's own `document` object and
+           it is handed back in THIS turn. §4.8.5 is synchronous here — `frame.contentDocument.body` reads on
+           the line after the append — so a suspend would be observable, which makes it a fidelity bug rather
+           than extra rigor. It is also what the corpus does with the result: window_length.html appends a node
+           THIS document created into that body, and afterwards `subframe.parentNode` is a node of the other
+           document while the wrapper stays the same object. There is no message that carries that. */
+        if (!window_proxy_is_remote(nav)) {
+            JSContext *cctx = window_proxy_realm(ctx, nav);
+            *presult = JS_DupValue(ctx, document_object(cctx));
+            JS_FreeValue(ctx, nav);
+            return JS_STEP_DONE;
+        }
         DCHECK(f != NULL, "a cross-document read was issued outside a flow — there would be nothing to suspend");
         n_anc = world_ancestry(f->world, anc, (int)(sizeof anc / sizeof anc[0]));
         n = snprintf(op, sizeof op, "windowproxy.get\t%s\t%s:%u",

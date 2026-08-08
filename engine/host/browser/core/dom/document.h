@@ -23,6 +23,17 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
 /* WHICH DOCUMENT THIS REALM IS, in the world registry's naming. §7.4 mints a child's name from it, so a
    same-origin child of a child is named from the child and not from the instance root. */
 uint32_t document_doc(JSContext *ctx);
+
+/* §7.2.5.1's ONE WindowProxy for THIS realm's navigable — what `window.closed` reads the navigable's state
+   through and what every message this document posts carries as `source`. BORROWED. It lives on the realm
+   because it is one PER realm; a registry keyed by document would be an immortal root holding a proxy for
+   every navigable a forced-execution frontier ever created. */
+JSValueConst document_window_proxy(JSContext *ctx);
+
+/* THIS REALM'S `document` OBJECT. BORROWED. §4.8.5's `contentDocument` for a SAME-ORIGIN child answers with
+   exactly this object out of the child's realm — the two documents are one agent, so it is a pointer and not
+   a message. */
+JSValueConst document_object(JSContext *ctx);
 /* §4.4 baseURI's answer: the document's address. ONE component owns what this document's URL is — two answers
    to that question is how they drift apart. */
 const char *document_base_url(JSContext *ctx);

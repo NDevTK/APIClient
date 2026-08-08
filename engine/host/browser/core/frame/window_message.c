@@ -41,7 +41,7 @@
    rather than cached here: a same-origin child is a second realm in this agent, so a file-scope copy would be
    whichever document installed last and `e.source` from one document would have compared equal to the other's.
    The document handle is the identity, and window_proxy.c owns the mapping. */
-static JSValueConst win_proxy(JSContext *ctx) { return window_proxy_for_doc(document_doc(ctx)); }
+static JSValueConst win_proxy(JSContext *ctx) { return document_window_proxy(ctx); }
 static char   *g_origin;          /* this document's origin, serialized (owned) */
 static JSValue g_deliver_fn = JS_UNDEFINED;
 
@@ -234,7 +234,7 @@ void window_message_init(JSContext *ctx)
     idl_optional_from(1);
 }
 
-void window_message_install(JSContext *ctx, JSValueConst global, const char *origin, uint32_t doc_id)
+void window_message_install(JSContext *ctx, JSValueConst global, const char *origin)
 {
 
     /* THE ORIGIN IS THE AGENT'S — an agent is origin-keyed, so a second document installing here is ordinary
@@ -245,12 +245,6 @@ void window_message_install(JSContext *ctx, JSValueConst global, const char *ori
     if (!g_origin) {
         g_origin = strdup(origin ? origin : "null");
         CHECK(g_origin != NULL, "window message: OOM recording this agent's origin");
-    }
-    /* THE ONE PROXY FOR THIS NAVIGABLE — §7.2.5.1, recorded by the mint against this document's handle. */
-    {
-        JSValue self_proxy = window_proxy_new(ctx, doc_id, global, g_origin, NULL, JS_UNDEFINED, JS_NULL);
-        CHECK(!JS_IsException(self_proxy), "this window's WindowProxy could not be allocated");
-        JS_FreeValue(ctx, self_proxy);   /* window_proxy.c holds the reference that keeps it */
     }
     g_deliver_fn = JS_NewCFunction(ctx, js_window_deliver, "", 2);
     CHECK(JS_IsFunction(ctx, g_deliver_fn), "the window delivery task's callee could not be allocated");

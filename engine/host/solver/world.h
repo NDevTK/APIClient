@@ -64,9 +64,10 @@ uint32_t world_local_doc(void);
    every read through it suspends. Comparing against the root document instead answered "remote" for a
    same-origin child that is sitting in the same runtime. */
 bool world_doc_hosted(uint32_t doc);
-/* THIS AGENT NOW HOLDS `doc`'s REALM — said once, by whoever built the realm, because building it is the fact
-   that makes it true. A document is minted before it is built (the name is what makes creation synchronous),
-   so the two are separate statements and the gap between them is a document that exists and has no realm. */
+/* THIS AGENT HOLDS `doc` — said once, by §7.4, because deciding to host it is the fact that makes it true. It
+   is NOT "its realm has been built": a hosted navigable's realm is materialized on the first read that reaches
+   through to its active document (navigable.h), and a navigable nothing ever reads through is still this
+   agent's. Minting a name, hosting, and building the realm are three separate statements in that order. */
 void world_doc_adopt(uint32_t doc);
 
 /* A DOCUMENT IS NAMED, AND A `uint32_t doc` IS THIS INSTANCE'S HANDLE FOR A NAME — an index into the local

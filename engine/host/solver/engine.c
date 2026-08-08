@@ -811,11 +811,23 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
             f->last_compiled = f->script_i;
             f->frame = JS_FlowNew(ctx, body, strlen(body), NULL, 0);   /* page <script>/chunk: classic non-strict global */
             if (f->frame == NULL) {
+                /* WHAT ACTUALLY FAILED, read before anything is decided from it. A compile can fail two ways
+                   and they are not the same event: a SyntaxError is the program's, and OUT OF MEMORY is the
+                   physical floor — the frontier could not hold another flow. Reporting the second as the first
+                   sends every reader looking for a parse bug in code that parses; it cost most of a session. */
+                JSValue exc = JS_GetException(ctx);
+                bool oom = JS_IsOutOfMemoryError(ctx, exc);
+
+                /* OOM IS A `CHECK`, in dev and in release alike: a dropped flow corrupts the frontier, and
+                   there is no version of this the engine may proceed past. It is also the honest name for the
+                   RAM→disk floor this build has no cold tier under. */
+                CHECK(!oom, "the frontier could not hold another flow — this is the physical RAM floor, and the "
+                            "cold tier that pages the lowest-value tail to disk is what carries past it");
                 /* AN @S CANDIDATE THAT DOES NOT PARSE is a dead candidate and nothing more — the search tries
                    several breakouts per sink precisely because most do not fit most contexts. A PAGE script that
                    does not compile is a different thing entirely and still asserts. */
                 DCHECK(is_cand, "flow_step: a page <script>/chunk did not compile");
-                JS_FreeValue(ctx, JS_GetException(ctx));
+                JS_FreeValue(ctx, exc);
                 /* STEP OVER IT. Not advancing left the flow pointing at the same unparseable body, so the next
                    scheduler step compiled it again, and again — the flow could never finish and never made
                    progress. It was invisible because the search seeds several breakouts per sink and most do

@@ -182,9 +182,6 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
 
     CHECK(ctx != NULL, "a same-origin child navigable's realm could not be created");
     CHECK(JS_AddIntrinsicDOMException(ctx) == 0, "the DOMException intrinsic failed to install in a child realm");
-    /* ADOPTED BEFORE THE INSTALL: window_proxy_new asserts that a local proxy names a document this agent
-       holds, and the install creates child navigables for any <iframe> the initial markup carries. */
-    world_doc_adopt(doc_id);
     engine_realm_install(ctx, dom, origin, doc_id);
     (void)url;
     return ctx;

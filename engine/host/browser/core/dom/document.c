@@ -31,6 +31,7 @@
 #include "core/css/css_style_declaration.h"
 #include "core/dom/document.h"
 #include "solver/world.h"
+#include "core/frame/window_proxy.h"
 #include "core/dom/document_fragment.h"
 #include "core/idl_args.h"
 
@@ -65,6 +66,12 @@ typedef struct Document {
     PolicyContainer     *policy;    /* owned */
     JSValue              doc_obj;   /* the `document` object — HELD, released by document_free */
     JSValue              win_obj;   /* this document's Window — HELD */
+    /* §7.2.5.1's ONE WindowProxy FOR THIS NAVIGABLE — `window`, `self`, and the `source` of every message this
+       document posts. It lives on the REALM because that is what it is one of: a page comparing `e.source`
+       across two messages must find the same object, and a table keyed by document would be an immortal root
+       holding one proxy per navigable a forced-execution frontier ever created — thousands, none collectable.
+       HELD, released with the realm. */
+    JSValue              proxy;
     char                 url[2048]; /* the document's address, which §4.4 baseURI reads */
 } Document;
 
@@ -563,7 +570,17 @@ PolicyContainer *document_meta_policy(lxb_html_document_t *dom)
 
 const PolicyContainer *document_policy(JSContext *ctx) { return doc_here(ctx)->policy; }
 
+JSValueConst document_window_proxy(JSContext *ctx)
+{
+    Document *d = doc_here(ctx);
+    DCHECK(!JS_IsUndefined(d->proxy), "this realm's WindowProxy was read before its Document was installed — "
+                                      "§7.2.5.1 gives a navigable ONE, and it is minted with the realm");
+    return d->proxy;
+}
+
 uint32_t document_doc(JSContext *ctx) { return doc_here(ctx)->doc; }
+
+JSValueConst document_object(JSContext *ctx) { return doc_here(ctx)->doc_obj; }
 
 /* DOCUMENT.PROTOTYPE, and the Document as a real NODE. §4.4 `interface Document : Node`, and it was neither —
    a plain JS_NewObject with the members copied onto it. So `document.nodeType` was undefined,
@@ -617,11 +634,17 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     d->dom = dom;
     d->doc = doc_id;
     d->doc_obj = JS_UNDEFINED;
+    d->proxy = JS_UNDEFINED;
     d->win_obj = JS_UNDEFINED;
     d->policy = document_meta_policy(dom);
     /* THE REALM IS THE DOCUMENT FROM HERE ON — set before the early return below, because the policy was
        already built and §7.4 clones it for an about:blank child whether or not this document got an address. */
     JS_SetContextOpaque(ctx, d);
+    /* §7.2.5.1's ONE WindowProxy FOR THIS NAVIGABLE, minted WITH the realm because that is what it is one of.
+       Before the early return below: a document with no address still has a navigable, and `window.closed`
+       reads the navigable's state through this object. */
+    d->proxy = window_proxy_new_self(ctx, doc_id);
+    CHECK(!JS_IsException(d->proxy), "this navigable's WindowProxy could not be allocated");
     if (!url || !*url)
         return;   /* no address, no Document — the page's own throw is the honest answer */
 
@@ -718,6 +741,7 @@ void document_free(JSContext *ctx)
     Document *d = doc_of(ctx);
 
     if (!d) return;   /* a realm that never had a document — the runner builds one per component test */
+    JS_FreeValue(ctx, d->proxy);
     JS_FreeValue(ctx, d->win_obj);
     JS_FreeValue(ctx, d->doc_obj);
     policy_container_free(d->policy);   /* malloc'd, so the GC walk would never have named it */

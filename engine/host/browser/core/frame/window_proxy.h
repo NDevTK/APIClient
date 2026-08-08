@@ -16,8 +16,15 @@ void window_proxy_free(JSContext *ctx);
    Both are the binding at this moment; a navigation replaces them, PER FLOW. `doc` names WHICH document that
    Window is — a same-origin child is a second realm in this agent, so "local" is no longer a synonym for "the
    instance root" and the proxy has to say which of this agent's documents it is over. */
-JSValue window_proxy_new(JSContext *ctx, uint32_t doc, JSValueConst window, const char *origin,
-                         const char *name, JSValueConst parent, JSValueConst opener);
+/* `url` is the navigable's initial address — what its REALM is built from on the first read that reaches
+   through to the active document (see navigable.h). The proxy owns that realm once built; the navigable's own
+   members (window/self/frames/parent/top/opener/closed/name) never need it and never build it. */
+JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url,
+                         const char *origin, const char *name, JSValueConst parent, JSValueConst opener);
+
+/* §7.2.5.1's proxy for the realm that is ASKING — `window`, `self`, and the `source` of every message it
+   posts. Its realm is this one and is already built, so nothing about it is deferred. */
+JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc);
 
 /* A proxy over a navigable whose active document lives in ANOTHER WASM instance. It carries no Window — there
    is no local object to hold — so every read through it is a cross-document operation the flow suspends on. */
@@ -45,11 +52,6 @@ JSValueConst window_proxy_proto(void);
    the class is registered. */
 void window_proxy_install_members(JSContext *ctx);
 
-/* §7.2.5.1: A NAVIGABLE HAS ONE WindowProxy — this one, by document handle. BORROWED. It is what a page reads
-   as `e.source`, and what `frames[0] === iframe.contentWindow` compares; minting a second for one navigable is
-   an identity bug that shows up nowhere near where it was made, so the mint records and this reads. */
-JSValueConst window_proxy_for_doc(uint32_t doc);
-
 /* §7.2.5's `closed` — a fact about the NAVIGABLE, so the Window's getter and the proxy's read the same byte.
    Per-flow: captured into the running flow's delta, so a sibling arm that never closed it still sees it open. */
 bool window_proxy_closed(JSContext *ctx, JSValueConst proxy);
@@ -70,6 +72,12 @@ uint32_t window_proxy_doc(JSValueConst proxy);
 /* The navigable's CURRENT active Window, as this flow sees it (owned). Crashes for a proxy whose navigable is
    in another WASM instance — that resolve is a host round trip and is not built; see window_proxy.c. */
 JSValue window_proxy_window(JSContext *ctx, JSValueConst proxy);
+
+/* THE ACTIVE DOCUMENT'S REALM, MATERIALIZED IF IT IS NOT YET (navigable.h). Only for a navigable this agent
+   HOLDS — it crashes for a peer's, which is a suspend and not a realm. A same-origin document is in this heap
+   and every read of it is answered in the asking turn, because the spec is synchronous there and a suspend
+   would be OBSERVABLE. */
+JSContext *window_proxy_realm(JSContext *ctx, JSValueConst proxy);
 
 /* IS THE NAVIGABLE'S ACTIVE DOCUMENT SAME-ORIGIN WITH THIS ONE? §7.2.5.1's check, exported because §4.8.5's
    `contentDocument` makes the same decision one layer up — and must make it BEFORE asking the peer, since a

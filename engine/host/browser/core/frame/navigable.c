@@ -89,6 +89,21 @@ static lxb_html_document_t *child_initial_document(void)
     return dom;
 }
 
+/* MATERIALIZE A CHILD NAVIGABLE'S REALM — see navigable.h. Called by the WindowProxy on the first read that
+   actually needs the active document, never at creation. */
+JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *origin)
+{
+    JSContext *cctx;
+
+    DCHECK(g_realm_builder != NULL,
+           "a same-origin child navigable was reached in an agent whose host declared no realm builder — a "
+           "same-origin document is a second REALM in this heap, and only the host knows which platform "
+           "surface a document of this build has; declare it with navigable_set_realm_builder");
+    cctx = g_realm_builder(JS_GetRuntime(ctx), child_initial_document(), url, origin, doc);
+    CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
+    return cctx;
+}
+
 JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child)
 {
     const char *csp = policy_container_csp(document_policy(ctx));
@@ -117,21 +132,10 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            the child's body, whose `parentNode` is then a node of the child) and assigns LIVE CLOSURES into the
            child's event handlers. Neither is a value that can be named across a transport; they are one object
            graph, and a browser's own model says so. */
-        lxb_html_document_t *dom = child_initial_document();
-        JSContext *cctx;
-        JSValue cg;
-
-        DCHECK(g_realm_builder != NULL,
-               "a same-origin child navigable was created in an agent whose host declared no realm builder — "
-               "a same-origin document is a second REALM in this heap, and only the host knows which platform "
-               "surface a document of this build has; declare it with navigable_set_realm_builder");
-        cctx = g_realm_builder(JS_GetRuntime(ctx), dom, addr, origin, child);
-        CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
-        cg = JS_GetGlobalObject(cctx);
-        proxy = window_proxy_new(ctx, child, cg, origin, name,
+        world_doc_adopt(child);   /* this agent holds it; the REALM behind it is built on first touch */
+        proxy = window_proxy_new(ctx, child, addr, origin, name,
                                  is_child ? (JSValueConst)g : JS_UNDEFINED,
                                  is_child ? JS_NULL : (JSValueConst)g);
-        JS_FreeValue(cctx, cg);
     } else {
         /* THE NOTICE, and every field of it is load-bearing. The CHILD is the name the host provisions an
            instance under; the CREATOR names who made it, which is what the host routes replies through and what
