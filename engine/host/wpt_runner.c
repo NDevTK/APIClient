@@ -42,6 +42,7 @@
 #include "core/events/broadcast_channel.h"
 #include "core/frame/window.h"
 #include "core/frame/window_proxy.h"
+#include "core/html/html_iframe.h"
 #include "core/frame/navigable.h"
 #include "solver/world.h"
 #include "core/frame/window_message.h"
@@ -562,6 +563,7 @@ int main(int argc, char **argv)
         CHECK(lxb_html_document_parse(g_wpt_dom, (const lxb_char_t *)DOC, sizeof DOC - 1) == LXB_STATUS_OK,
               "the runner's document did not parse");
         element_init(ctx);
+    iframe_init(ctx);   /* §4.8.5: the queued child-navigable driver */
         document_install(ctx, global, g_wpt_dom, "http://web-platform.test/");
     }
     window_install(ctx, global, "http://web-platform.test");
@@ -716,6 +718,7 @@ int main(int argc, char **argv)
     navigable_free(ctx);
     flow_registry_free(ctx);
     document_free(ctx);
+    iframe_free(ctx);
     element_free(ctx);
     window_free(ctx);
     window_proxy_free(ctx);

@@ -27,6 +27,7 @@
 #include "browser/core/fetch/request.h"
 #include "browser/core/url/url.h"
 #include "browser/core/frame/window_proxy.h"
+#include "browser/core/html/html_iframe.h"
 #include "browser/core/frame/navigable.h"
 #include "browser/core/url/url_search_params.h"
 #include "browser/core/html/form_data.h"
@@ -189,6 +190,7 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
         navigator_install(g_ctx, g);
         screen_install(g_ctx, g);           /* the responsive gate: screen.width decides which router a bundle uses */        /* client identity: spec-fixed concrete, gated environment concolic */
         element_init(g_ctx);
+    iframe_init(g_ctx);   /* §4.8.5: the queued child-navigable driver */
         document_install(g_ctx, g, g_dom, origin);
         JS_FreeValue(g_ctx, g);
     }
@@ -271,6 +273,7 @@ QJS_EXPORT void qjs_teardown(void)
     /* the runtime-lifetime values the browser components own — a component that mints one frees it. */
     abort_free(g_ctx);
     document_free(g_ctx);   /* the Document and the window it fires `load` at — both HELD across the lifecycle */
+    iframe_free(g_ctx);
     element_free(g_ctx);    /* the wrapper identity table and the DOM interface prototypes */
     event_target_free(g_ctx);
     message_port_free(g_ctx);

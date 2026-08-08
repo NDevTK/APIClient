@@ -10,6 +10,7 @@
 #include "core/frame/navigable.h"
 #include "core/timing/timer.h"
 #include "core/frame/window_proxy.h"
+#include "core/html/html_iframe.h"
 #include "solver/engine.h"
 #include "solver/cow.h"
 #include "core/loader/document_scripts.h"
@@ -1167,6 +1168,16 @@ static const char *HTML =
     /* The TYPES matter as much as the values: an answer that came back as the string "false" would satisfy a
        loose check and prove only that bytes moved. `=== false` and `=== 0` say the peer's value arrived as
        itself. */
+    /* §4.8.5: INSERTING an <iframe> creates a child navigable — at insertion, which is where a browser makes
+       it. Creating it asks the host, so the insertion step ENQUEUES it; the navigable is therefore visible on
+       the next TASK, never in a microtask continuation, because §8.1.7 runs the checkpoint before the next
+       task. That is a browser's ordering too. Reading THROUGH the proxy suspends again and the peer answers,
+       so `closed` arrives as a real boolean. */
+    "var _if = document.createElement('iframe'); document.body.appendChild(_if);"
+    "setTimeout(function(){"
+    " fetch('/api/iframenav?v=' + (_if.contentWindow && _if.contentWindow === _if.contentWindow &&"
+    " _if.contentWindow.closed === false ? 'ifnav' : 'wrong')); }, 0);"
+
     /* HTML §8.6's TIMER TASK SOURCE, and §8.1.7's ordering around it — neither of which this fixture exercised
        at all, so `setTimeout` had no probe in the engine's own test despite being how a great deal of real code
        reaches the event loop. The ORDER is the assertion: a microtask checkpoint runs before the next task, so
@@ -1613,6 +1624,7 @@ int main(void) {
        document.c — every wrapper, every prototype, every IDL coercion in them — ran only in the shipped ABI
        build where nothing asserts on the result. */
     element_init(ctx);
+    iframe_init(ctx);   /* §4.8.5: the queued child-navigable driver */
     document_install(ctx, g, dom, "https://x.test");
     JS_FreeValue(ctx, g);
 
@@ -1825,6 +1837,9 @@ int main(void) {
     int xdocjob_tt = (strstr(js, "\"/api/xdocjob\"") && strstr(js, "jobread"));
     /* §8.6 + §8.1.7: the microtask ran first, then the two timers in the order they were set. */
     int timer_tt = (strstr(js, "\"/api/timerfire\"") && strstr(js, "ABC"));
+    /* §4.8.5: an inserted iframe got a child navigable, its proxy is STABLE across reads, and a read through it
+       resolved to the peer's answer. */
+    int ifnav_tt = (strstr(js, "\"/api/iframenav\"") && strstr(js, "ifnav"));
 
     /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
        both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one
@@ -2023,7 +2038,7 @@ int main(void) {
         { "rerepfork", rerepfork_tt, 1 },  { "gcallfork", gcallfork_tt, 1 },
         { "gapplyfork", gapplyfork_tt, 1 },{ "grefapplyfork", grefapplyfork_tt, 1 },
         { "hostreq", hostreq_tt, 1 }, { "hostreq-fork", hostreqfork_tt, 1 },
-        { "nav-open", navopen_tt, 1 }, { "xdoc-read", xdocread_tt, 1 }, { "xdoc-job", xdocjob_tt, 1 }, { "timer-order", timer_tt, 1 },
+        { "nav-open", navopen_tt, 1 }, { "xdoc-read", xdocread_tt, 1 }, { "xdoc-job", xdocjob_tt, 1 }, { "timer-order", timer_tt, 1 }, { "iframe-nav", ifnav_tt, 1 },
     };
     int h_ok = 1;
     printf("@H ");
@@ -2070,6 +2085,7 @@ int main(void) {
     unhandled_rejection_free(ctx);
     abort_free(ctx);
     document_free(ctx);   /* the window reference the lifecycle holds */
+    iframe_free(ctx);
     element_free(ctx);    /* the wrapper identity table and the DOM interface prototypes */
     event_target_free(ctx);
     message_port_free(ctx);

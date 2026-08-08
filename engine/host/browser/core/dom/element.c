@@ -31,6 +31,7 @@
 #include "core/events/event_target.h"
 #include "core/html/html_element.h"
 #include "core/html/custom_elements.h"
+#include "core/html/html_iframe.h"
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
 #include "core/dom/attr.h"
@@ -983,6 +984,22 @@ static bool element_tree_steps_step(JSContext *ctx, void *vb)
     if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
         lxb_dom_element_t *el = lxb_dom_interface_element(n);
         if (e->inserted) {
+            /* §4.8.5: an inserted <iframe> CREATES A CHILD NAVIGABLE. ENQUEUED, never done here: the child is
+               a peer instance, so creating it asks the host and suspends, and this walk may not — its buffer is
+               a raw per-machine allocation with no clone contract and no way to park, which is sound only
+               while every per-node effect is an enqueue. It joins <script> preparation and custom-element
+               upgrades as one more queued effect. */
+            {
+                size_t qn = 0;
+                const lxb_char_t *q = lxb_dom_element_qualified_name(el, &qn);
+                /* ASCII-case-insensitive: a parsed `<iframe>` and a `createElement('iframe')` are the same
+                   element and must not be told apart by how their name happened to be stored. */
+                if (q && qn == 6 && !strncasecmp((const char *)q, "iframe", 6)) {
+                    JSValue w = node_wrap(ctx, n);
+                    if (!iframe_has_navigable(ctx, w)) iframe_queue_create(ctx, w);
+                    JS_FreeValue(ctx, w);
+                }
+            }
             element_prepare_script(ctx, el);   /* HTML 4.12.1: an inserted <script> is PREPARED */
             /* §4.13.3: an element that ENTERS a document is upgraded if its name is defined — the other half of
                "learned by execution", beside the <script> preparation right above it. */

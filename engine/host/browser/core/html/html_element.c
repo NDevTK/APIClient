@@ -32,6 +32,7 @@
 #include "core/dom/node.h"
 #include "core/dom/element.h"
 #include "core/html/hyperlink.h"
+#include "core/html/html_iframe.h"
 #include "core/events/event_target.h"
 #include "core/html/html_element.h"
 #include "core/css/css_style_declaration.h"
@@ -403,6 +404,9 @@ void html_element_init(JSContext *ctx)
         if (!strcmp(HTML_IFACE[i].iface, "HTMLAnchorElement") ||
             !strcmp(HTML_IFACE[i].iface, "HTMLAreaElement"))
             hyperlink_install(ctx, g_iface_proto[i]);
+        /* §4.8.5's `contentWindow` — the child navigable its insertion steps queued. */
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLIFrameElement"))
+            iframe_install(ctx, g_iface_proto[i]);
     }
 
         /* §4.12.3 `[SameObject] readonly attribute DocumentFragment content`. It goes on HTMLTemplateElement and
