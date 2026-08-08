@@ -224,7 +224,23 @@ async function engineCreate(code, html, msg, persist) {
       return (r && r.ok && typeof r.body === "string") ? r.body : "";
     } catch (_) { return ""; }
   };
-  return { M, ptrs, lines, fkey, prior, msg, persist, fetched, code, html, state: "hot", _forceparkSteps };
+  // §7.4 STEP 14's RESPONSE, which is the SAME safeFetch and a DIFFERENT answer: a Document is judged against
+  // the policy its response carried, so the header travels with the bytes. `fetched` above cannot serve this —
+  // it returns the body alone, and answering a child document with no policy is how a page whose CSP kills a
+  // sink gets reported as exploitable. A load that does not load is `{body:null}`, which is a navigable that
+  // still exists showing an error page, exactly as the engine's own child_document reads it.
+  const fetchedDocument = async (u) => {
+    if (!canFetch) return { body: null, csp: null };
+    try {
+      const abs = new URL(u, msg.sourceUrl).href;
+      // Never `as:"script"` — these bytes are PARSED as a document, not run as code — and never credentialed:
+      // §7.4's fetch is a navigation this engine initiated, not a learned GET being replayed for its reply.
+      const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl });
+      if (!r || !r.ok || typeof r.body !== "string") return { body: null, csp: null };
+      return { body: r.body, csp: (r.headers && r.headers["content-security-policy"]) || null };
+    } catch (_) { return { body: null, csp: null }; }
+  };
+  return { M, ptrs, lines, fkey, prior, msg, persist, fetched, fetchedDocument, code, html, state: "hot", _forceparkSteps };
 }
 function engineWeight(eng) { return eng.state === "hot" ? +eng.M.ccall("qjs_top_weight", "number", [], []) : -Infinity; }
 async function engineServiceFetch(eng) {   // one round: resolve every pending reply/chunk, then the engine is hot again
@@ -233,7 +249,7 @@ async function engineServiceFetch(eng) {   // one round: resolve every pending r
   for (const u of replies) M.ccall("qjs_provide", "void", ["string", "string"], [u, await eng.fetched(u, false)]);
   const chunks = String(M.ccall("qjs_chunks", "string", [], [])).split("\n").filter(Boolean);
   for (const u of chunks) M.ccall("qjs_provide", "void", ["string", "string"], [u, await eng.fetched(u, true)]);
-  engineServiceHostRequests(eng);
+  await engineServiceHostRequests(eng);
 }
 
 // WHAT ONLY THIS ZONE CAN ANSWER. A cross-document operation is answered by the instance holding that document,
@@ -241,18 +257,34 @@ async function engineServiceFetch(eng) {   // one round: resolve every pending r
 // the routing and stamps the sender's origin. The asking flow is SUSPENDED mid-frame until the answer lands, so
 // this is pumped every round alongside the fetch replies; leaving one unanswered parks that flow indefinitely
 // (its siblings keep running, which is the point of suspending rather than blocking).
-function engineServiceHostRequests(eng) {
+async function engineServiceHostRequests(eng) {
   const M = eng.M;
   // ONE-WAY NOTICES. `navigable.create <child> <creator> <url> <origin> <csp>` announces a document the engine
   // has already named and already handed the page a WindowProxy for; there is nothing to answer, because the
   // engine mints its own child document names. What this zone still owes it is an INSTANCE: spin one up under
   // that name with that url/origin/policy, and route requests naming it to that instance.
   M.ccall("qjs_host_notices", "string", [], []);
-  // NO REQUEST LOOP, deliberately. Every branch that was here has been deleted rather than emptied: a loop that
-  // walks the owed requests and answers none of them is not a place to add the routing, it is a place to be
-  // tempted into guessing an answer — which is what answering `navigable.create` with "not created" was. An
-  // unanswered request stays on the asking flow's register, that flow stays parked (its siblings keep running,
-  // which is the point of suspending rather than blocking), and qjs_host_requests keeps reporting it.
+  // ONE BRANCH, AND ONLY BECAUSE THIS ZONE CAN GENUINELY ANSWER IT. The rule that deleted every other branch
+  // stands: a loop that walks the owed requests is a place to be tempted into GUESSING an answer, which is what
+  // answering `navigable.create` with "not created" was. `document.fetch` is not a guess — it is a network
+  // fetch, and this zone already relays those through the one safeFetch chokepoint SECURITY.md requires. Every
+  // other op is still left UNANSWERED: the asking flow stays parked with its snapshot intact, its siblings keep
+  // running, and qjs_host_requests keeps reporting it, which is visible where a wrong answer is not.
+  //
+  // AND IT HAS TO BE ANSWERED, not merely answerable. A flow parked on a request this host never satisfies
+  // leaves the engine stalled forever, and the step loop above has no other reason to stop — the same shape the
+  // WPT pump was spinning on. Answering is what lets a navigation finish.
+  const reqs = String(M.ccall("qjs_host_requests", "string", [], [])).split("\n").filter(Boolean);
+  for (const line of reqs) {
+    const tab = line.indexOf("\t");
+    if (tab < 0) continue;
+    const id = +line.slice(0, tab), op = line.slice(tab + 1);
+    if (!op.startsWith("document.fetch\t")) continue;
+    const r = await eng.fetchedDocument(op.slice("document.fetch\t".length));
+    // JSON, because the answer carries its TYPE across this seam: `{body:null}` is a load that did not load,
+    // and the string "null" is a one-word document.
+    M.ccall("qjs_host_answer", "void", ["number", "string"], [id, JSON.stringify(r)]);
+  }
 }
 function engineFinalize(eng) {
   try { eng.M.ccall("qjs_teardown", "void", [], []); }
@@ -367,6 +399,12 @@ async function hostSchedule(pool, ops) {
     } else if (st === 0) {   // fully explored, or self-parked under RAM pressure: finalize (residue -> IDB cold tier)
       await ops.finish(target);
     } else {   // st === 2: engine yielded HOT on its cooperative quantum (frontier intact).
+      // AND A STALL LOOKS EXACTLY LIKE THIS. qjs_step reports a stall as a yield on purpose — the bridge
+      // speaks two values — so the one place that can tell them apart is the owed list itself, and asking is
+      // an empty ccall on every ordinary quantum. Without it a flow parked on a host-owed answer is never
+      // serviced at all: NEED_FETCH is the only branch that services, and a stall is not one. The engine would
+      // yield, be resumed, stall again, forever — the same shape the WPT pump was spinning on, one layer up.
+      await ops.serviceHostRequests(target);
       // Then RETURN TO THE EVENT LOOP via a MACROtask so the ONE thread services its message port (evals,
       // postMessage, timers) before we re-enter and RESUME the byte-identical frontier — the anti-freeze yield.
       await macroYield();
@@ -409,6 +447,7 @@ const _hostOps = {
   },
   step: (eng) => { try { return eng.M.ccall("qjs_step", "number", [], []); } catch (e) { engineCrash(eng, "step", e); return 0; } },   // crashed instance -> finalize (loud), don't keep stepping a dead engine
   serviceFetch: engineServiceFetch,
+  serviceHostRequests: engineServiceHostRequests,
   admit: async () => {   // gate CREATION to the RAM budget: build an instance only under memory pressure headroom
     // 1) seat waiting LIVE documents (the user's open tabs) first
     while (_waiting.length && (_pool.length === 0 || _residentBytes() < HOT_RAM_BUDGET)) {

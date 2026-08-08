@@ -463,11 +463,23 @@ QJS_EXPORT const char *qjs_host_notices(void)
     return engine_host_notices();
 }
 
-QJS_EXPORT void qjs_host_answer(unsigned req, const char *value)
+/* THE ANSWER CROSSES AS TEXT AND CARRIES ITS TYPE — JSON, so `null` is not the string "null", `0` is not the
+   string "0", and an answer with STRUCTURE can exist at all. It used to cross as a bare string, which could
+   express exactly one of the shapes the seam already needs: §7.4 step 14's load is answered with `{body, csp}`
+   because a policy is a property of THE RESPONSE, and a cross-origin `otherW.length` is a NUMBER that a page
+   distinguishes from "0". That is the same sentence SECURITY.md states for the cross-instance encoder, applied
+   to the seam one layer down. Redefining it costs nothing: the bridge has never answered a request, so this
+   entry had no caller to break. */
+QJS_EXPORT void qjs_host_answer(unsigned req, const char *json)
 {
     DCHECK(g_begun, "an answer was provided to an engine that never ran");
     {
-        JSValue v = value ? JS_NewString(g_ctx, value) : JS_UNDEFINED;
+        JSValue v = json ? JS_ParseJSON(g_ctx, json, strlen(json), "<host-answer>") : JS_UNDEFINED;
+        /* A MALFORMED ANSWER IS THE HOST'S BUG, not the page's. Delivering the exception instead would surface
+           in the asking flow as if the DOCUMENT had thrown, which is a lie about whose code was wrong. */
+        DCHECK(!JS_IsException(v), "the host answered a synchronous request with text that is not JSON — the "
+                                   "answer crosses as JSON so that it carries its type, and a bare string is "
+                                   "not one (it is the JSON text `\"...\"`)");
         /* Routed to ONE call site by id — never broadcast the way a fetched body is, because the answer was
            computed under the ASKING FLOW's world. A zero return means that flow is gone, which is not an
            error: nobody is waiting on the answer. */
