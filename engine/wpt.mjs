@@ -61,7 +61,16 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       spec directory: a component whose spec directory is not checked out is a component whose
                       gate cannot fail, which is the same defect as asserting only the spelling that existed
                       when the assertion was written. */
-                   "html/browsers/windows", "html/browsers/the-window-object"];
+                   "html/browsers/windows", "html/browsers/the-window-object",
+                   /* THE HELPERS A CHECKED-OUT TEST'S META BLOCK NAMES, which are not areas and are checked out
+                      to BE USED — the same standing as `resources` and `common`. Four webmessaging files were
+                      reported as "META script not checked out", which is an EXCLUDED TEST wearing a reason:
+                      the gate had decided what it measures and then not measured four of them. Naming the
+                      helper's own `resources` directory checks out no test file at all, so nothing is added to
+                      the total except the four files that can now run. */
+                   "html/browsers/browsing-the-web/remote-context-helper/resources",
+                   "html/browsers/browsing-the-web/back-forward-cache/resources",
+                   "service-workers/service-worker/resources"];
 
 if (!existsSync(join(WPT, "resources", "testharness.js"))) {
   /* NO --depth 1. The corpus is PINNED, and a depth-1 clone has only the tip — `git checkout bf4714d` in it
@@ -186,7 +195,12 @@ const files = (arg.endsWith(".js") || arg.endsWith(".html")) ? [root]
                its helpers, and WPT's own server. `tools` carries the harness's SELF-tests, which reference
                testharness.js and therefore look like tests to the collector — 27 files of them, measuring
                wptserve rather than this engine. Excluding a support path is not excluding a test. */
-            : WPT_PATHS.filter((p) => p !== "resources" && p !== "common" && p !== "tools")
+            /* A `resources` DIRECTORY IS A SUPPORT PATH WHEREVER IT SITS, not only at the root: the helper
+               directories a META block names carry support documents that pull in testharness.js, and
+               collecting those would count another spec's fixtures as this gate's tests. The rule is the
+               path's LAST SEGMENT, so a helper added later is excluded by the same sentence. */
+            : WPT_PATHS.filter((p) => p !== "common" && p !== "tools" &&
+                                      p !== "resources" && !p.endsWith("/resources"))
                        .flatMap((p) => collect(join(WPT, p), [])).sort();
 if (!files.length) { console.error(`[wpt] no test files under ${root}`); process.exit(1); }
 
