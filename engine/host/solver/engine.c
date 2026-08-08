@@ -688,7 +688,9 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
            it parks again immediately) rides the switch-out with the flow. Without this the solver host never
            pumped the slot at all: the continuation sat there until a second flow parked and asserted. */
         g_step_unit = "resume-parked-continuation";
-        if (JS_ResumeParkedFlow(JS_GetRuntime(ctx))) return 0;
+        /* Resuming a parked continuation is progress ONLY if the flow can still get somewhere: a flow blocked
+           on the host resumes into the same wait, so reporting progress spins it against the park. */
+        if (JS_ResumeParkedFlow(JS_GetRuntime(ctx))) return flow_blocked(f) ? FLOW_STEP_OWED : 0;
         if (!f->frame) {
             const char *body;
             int is_cand = 0;   /* an @S candidate is allowed not to parse; a page script is not */
@@ -710,7 +712,19 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
             }
             else if (f->script_i - n < f->dyn_n) { body = f->dyn[f->script_i - n];
                                                    is_cand = f->dyn_cand[f->script_i - n]; }
-            else if (f->njob > 0) { g_step_unit = "run-one-job"; flow_run_one_job(ctx, f); return 0; }   /* scripts done -> drain a microtask, yield */
+            else if (f->njob > 0) {
+                /* A JOB CAN PARK, and until now that park was invisible to the scheduler. A queued step machine
+                   that suspends on a synchronous host request is parked by reaction_flow_step (JS_ParkFlow) and
+                   this returned PROGRESS — so the flow was resumed, parked again, resumed again, forever, and
+                   never reported host-owed. The host was therefore never asked, and the answer that would have
+                   let it finish could not arrive: a livelock that looks exactly like slowness, because every
+                   turn is "progress".
+                   It is the same rule the mid-frame yield already keeps: a blocked flow has no work, whatever
+                   it just did. OWED is the register the scheduler already has for waiting-not-finished. */
+                g_step_unit = "run-one-job";
+                flow_run_one_job(ctx, f);
+                return flow_blocked(f) ? FLOW_STEP_OWED : 0;   /* scripts done -> drain a microtask, yield */
+            }
             else if (f->npend > 0 && !flow_pending_ready(f))
                 return FLOW_STEP_OWED;   /* only host-owed replies remain: no progress, and NOT finished */
             else if (flow_pending_ready(f)) {

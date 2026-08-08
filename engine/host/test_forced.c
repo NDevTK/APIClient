@@ -1166,6 +1166,12 @@ static const char *HTML =
     /* The TYPES matter as much as the values: an answer that came back as the string "false" would satisfy a
        loose check and prove only that bytes moved. `=== false` and `=== 0` say the peer's value arrived as
        itself. */
+    /* THE SAME READ FROM INSIDE A JOB. A `.then` handler is a queued reaction, and a cross-document read
+       SUSPENDS — so this exercises a step machine that parks on the host while it is the root of a job rather
+       than reached from a bytecode frame. Without the scheduler reporting that flow host-owed, it resumes and
+       parks forever while every turn looks like progress, the host is never asked, and the run livelocks. */
+    "Promise.resolve().then(function(){"
+    " fetch('/api/xdocjob?v=' + (_w.closed === false ? 'jobread' : 'wrong')); });"
     "fetch('/api/xdocread?v=' + (_w.closed === false && _w.length === 0 &&"
     " typeof _w.closed === 'boolean' && typeof _w.length === 'number' ? 'xread' : 'wrong'));"
     "</script>"
@@ -1799,6 +1805,8 @@ int main(void) {
     int navopen_tt = (strstr(js, "\"/api/navopen\"") && strstr(js, "proxy"));
     /* A cross-document read suspended and resumed with the peer's answer. */
     int xdocread_tt = (strstr(js, "\"/api/xdocread\"") && strstr(js, "xread"));
+    /* The same cross-document read reached from inside a QUEUED JOB, which parks the flow at a job root. */
+    int xdocjob_tt = (strstr(js, "\"/api/xdocjob\"") && strstr(js, "jobread"));
 
     /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
        both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one
@@ -1997,7 +2005,7 @@ int main(void) {
         { "rerepfork", rerepfork_tt, 1 },  { "gcallfork", gcallfork_tt, 1 },
         { "gapplyfork", gapplyfork_tt, 1 },{ "grefapplyfork", grefapplyfork_tt, 1 },
         { "hostreq", hostreq_tt, 1 }, { "hostreq-fork", hostreqfork_tt, 1 },
-        { "nav-open", navopen_tt, 1 }, { "xdoc-read", xdocread_tt, 1 },
+        { "nav-open", navopen_tt, 1 }, { "xdoc-read", xdocread_tt, 1 }, { "xdoc-job", xdocjob_tt, 1 },
     };
     int h_ok = 1;
     printf("@H ");
