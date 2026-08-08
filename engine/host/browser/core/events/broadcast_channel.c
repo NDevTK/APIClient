@@ -207,8 +207,20 @@ static int js_bc_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
        is what makes the match immune to a page that hands back a different string object with the same
        characters, and what makes the loop over the registry cheap. */
     {
-        const char *s = JS_ToCString(ctx, argv[0]);
+        const char *s;
         JSAtom a;
+        /* THE DECLARATION ALREADY CONVERTED IT, and this asserts that rather than trusting it. §9.5 declares
+           `constructor(DOMString name)`, so the args machine ran §3.2's ToString — as a FLOW, which is the
+           only place a page's `toString` may run — and what arrives here is a string however the page spelled
+           it. Calling JS_ToCString on an object instead runs that `toString` from a C activation, which the
+           interpreter refuses: it surfaced as JS_ToPrimitiveFree aborting a popup test, three frames below
+           this line, with nothing naming the contract that had been broken. The comment above this block
+           already claimed the conversion had happened; a claim in a comment is not a check. */
+        DCHECK(JS_IsString(argv[0]),
+               "BroadcastChannel's name reached its body unconverted — §9.5 declares it DOMString and the args "
+               "machine converts a declared member's arguments before the body runs, so an object here means "
+               "this member's declaration is not the one that was invoked");
+        s = JS_ToCString(ctx, argv[0]);
         if (!s) { free(c); JS_FreeValue(ctx, obj); return -1; }
         a = JS_NewAtom(ctx, s);
         JS_FreeCString(ctx, s);
