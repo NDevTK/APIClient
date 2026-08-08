@@ -491,11 +491,19 @@ enum {
        by construction and a proxy this agent cannot answer for is cross-origin, where the answer is a
        SecurityError rather than a document. That pairing is asserted rather than assumed — see proxy_realm. */
     WP_DOCUMENT,
+    /* §7.2.5's `location` — the LOCATION OBJECT OF THE ACTIVE DOCUMENT, and the first thing a page does with a
+       popup it just opened. It was missing entirely, so `w.location.pathname` read a property of undefined: 63
+       subtests in html/browsers failed on that one line, all of them after §7.4 started running popups.
+       IT IS ON §7.2.5.1's CROSS-ORIGIN LIST, which is what makes it different from `document` — the PROPERTY
+       is reachable across origins even though almost every member of the object it returns is not, because
+       `otherW.location.href = url` is how one document navigates another. This engine has no cross-origin
+       Location object to hand back, so that arm names itself rather than answering with this document's. */
+    WP_LOCATION,
     WP_MEMBER_N
 };
 static const char *const PROXY_MEMBER[WP_MEMBER_N] = {
     "window", "self", "frames", "globalThis", "parent", "top", "opener", "closed", "name", "length",
-    "document"
+    "document", "location"
 };
 /* §7.2.5.1's CROSS-ORIGIN PROPERTY NAMES — the fixed list a WindowProxy exposes whatever the origins are:
    window, self, location, close, closed, focus, blur, frames, length, top, opener, parent, postMessage.
@@ -514,6 +522,7 @@ static const bool PROXY_CROSS_ORIGIN[WP_MEMBER_N] = {
     false, /* name — a browsing context's name is NOT on the list; a cross-origin read of it is a SecurityError */
     true,  /* length     */
     false, /* document — §7.2.5.1 does not list it, so a cross-origin read is a SecurityError */
+    true,  /* location — §7.2.5.1 DOES list it; the filtering is the Location object's own, not this table's */
 };
 
 /* §7.2.5.1: a read the origins do not permit is a SecurityError, and it is thrown at the READ rather than
@@ -609,6 +618,23 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
            active document. */
         if (p->closed) return JS_NULL;
         return JS_DupValue(ctx, document_object(proxy_realm(ctx, this_val, p)));
+    case WP_LOCATION:
+        /* §7.2.5.1: a navigable has ONE Location, and it is the ACTIVE DOCUMENT's — so it is read off that
+           document's realm, exactly as `document` is. A destroyed navigable has no active document and so no
+           Location; the spec files read `closed` before touching one, and answering with the address it used
+           to have would be a document that no longer exists.
+           SAME-ORIGIN ONLY, SO FAR. The cross-origin half is REAL — §7.2.5.1 puts `location` on the list
+           precisely so a cross-origin document can be navigated through it — but it needs a Location whose own
+           members are filtered to `href`'s setter and `replace`, over an object in another instance. Handing
+           back THIS document's Location instead would be a cross-origin read that silently succeeded, which is
+           the one failure the check exists to prevent, so proxy_realm's assert stops here and names it. */
+        if (p->closed) return JS_NULL;
+        {
+            JSContext *r = proxy_realm(ctx, this_val, p);
+            JSValue g = JS_GetGlobalObject(r), loc = JS_GetPropertyStr(r, g, "location");
+            JS_FreeValue(r, g);
+            return loc;
+        }
     default:
         DFAIL("a WindowProxy member with no navigable-own answer reached this switch — WP_LENGTH and anything "
               "added beside it read the ACTIVE DOCUMENT and are declared on the step machine below");

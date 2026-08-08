@@ -495,6 +495,27 @@ static int document_done_stage(JSContext *ctx, int stage)
     return 1;
 }
 
+/* §3.1.1's `location` — the LOCATION OBJECT OF THIS DOCUMENT'S RELEVANT GLOBAL. It was absent, and absent is
+   not a small gap here: `document.location.pathname` is how WPT's own /common/PrefixedPostMessage.js names a
+   message channel, so 63 subtests across html/browsers failed on a property of undefined without ever reaching
+   what they were testing. The IDL audit had it listed among Document's absent members the whole time.
+   IT IS THE GLOBAL'S, not a second Location: a document and its window are one browsing context and §3.1.1 says
+   "the Location object of this's relevant global object", so this reads the one location.c installed rather
+   than building another that would compare unequal to it.
+   NULL WHEN THE DOCUMENT IS NOT FULLY ACTIVE, which is what §3.1.1's `Location?` is for — and it is also the
+   honest answer for a host that installed no Location at all (one whose document has no address), where
+   inventing an object would claim an address the engine was never given. */
+static JSValue js_doc_location(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue g = JS_GetGlobalObject(ctx), loc;
+
+    (void)this_val; (void)magic;
+    loc = JS_GetPropertyStr(ctx, g, "location");
+    JS_FreeValue(ctx, g);
+    if (JS_IsUndefined(loc)) { JS_FreeValue(ctx, loc); return JS_NULL; }
+    return loc;
+}
+
 /* The Document METHODS — on Document.prototype, so there is one of each rather than one per install, and so
    `Document.prototype.querySelector` is a thing that exists. */
 static void document_install_members(JSContext *ctx, JSValueConst proto)
@@ -512,6 +533,10 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
             idl_install_accessor(ctx, proto, NAMES[k], js_doc_shortcut, (int)k, -1);
     }
     idl_install_method(ctx, proto, "createElementNS", 2, idl_method_id(ctx, IDL_2STR, 2, js_doc_create_element_ns, 0));
+    /* §3.1.1: `[PutForwards=href] readonly attribute Location? location`. The forwarding half of the extended
+       attribute — `document.location = url` navigating — is NOT built, and it is absent rather than silently
+       dropped: a setter that stored a string would make a page believe it had navigated. */
+    idl_install_accessor(ctx, proto, "location", js_doc_location, 0, -1);
 }
 
 /* HTML §7.2.6's container for THIS document, from the `<meta http-equiv="Content-Security-Policy">` the tree
