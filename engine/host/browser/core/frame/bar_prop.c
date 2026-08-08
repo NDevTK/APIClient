@@ -119,8 +119,10 @@ static JSValue bar_prop_new(JSContext *ctx)
 
 void bar_prop_install(JSContext *ctx, JSValueConst global)
 {
-    /* §7.2.5.3's six, in the order the IDL declares them. Each is [Replaceable], which is an ordinary writable
-       property — so a page may shadow one, and the COW delta captures that like any other write. */
+    /* §7.2.5.3's six, in the order the IDL declares them. Each is [Replaceable] — an ACCESSOR that a write
+       REPLACES with a data property (Web IDL §3.7.6), not a writable data property from the start: the two
+       differ in what `Object.getOwnPropertyDescriptor(window, "toolbar")` answers before anything writes,
+       which is what window-properties.https.html reads. A write is captured by the COW delta like any other. */
     static const char *const NAMES[] = {
         "locationbar", "menubar", "personalbar", "scrollbars", "statusbar", "toolbar"
     };
@@ -131,7 +133,7 @@ void bar_prop_install(JSContext *ctx, JSValueConst global)
     for (i = 0; i < sizeof NAMES / sizeof NAMES[0]; i++) {
         JSValue bar = bar_prop_new(ctx);
         CHECK(!JS_IsException(bar), "a BarProp could not be allocated");
-        JS_SetPropertyStr(ctx, (JSValue)global, NAMES[i], bar);
+        idl_install_replaceable_value(ctx, global, NAMES[i], bar);
     }
 }
 

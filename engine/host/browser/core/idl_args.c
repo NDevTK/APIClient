@@ -1158,6 +1158,85 @@ void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
     JS_FreeAtom(ctx, a);
 }
 
+/* §3.7.6's [Replaceable] SETTER, and its one implementation. The spec's steps are "Perform
+   ? CreateDataPropertyOrThrow(esValue, id, V)" — a DEFINE on the RECEIVER, not a store into whatever the getter
+   reads, so the accessor is gone from that object afterwards and every other realm's is untouched. THROWING is
+   part of it: a page that has already made the property non-configurable gets a TypeError from the define
+   rather than a silent no-op, which window-opener-unconfigurable.window.js reads as its last assertion.
+   The NAME rides on the function as its data. A magic index into a table would have been a second list to keep
+   in step with the first; the name is the only thing this needs and it is already a string at the call site. */
+int idl_replace_with_value(JSContext *ctx, JSValueConst obj, const char *name, JSValueConst v)
+{
+    JSAtom a = JS_NewAtom(ctx, name);
+    int r;
+
+    DCHECK(a != JS_ATOM_NULL, "a replaceable attribute's own name would not intern");
+    r = JS_DefinePropertyValue(ctx, (JSValue)obj, a, JS_DupValue(ctx, v), JS_PROP_C_W_E | JS_PROP_THROW);
+    JS_FreeAtom(ctx, a);
+    return r;
+}
+
+static JSValue idl_replaceable_set(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                   int magic, JSValue *data)
+{
+    const char *name;
+    int r;
+
+    (void)magic;
+    DCHECK(argc >= 1, "a setter was called with no value — the interpreter passes undefined for a bare `x.y = `");
+    name = JS_ToCString(ctx, data[0]);   /* the function's own data: a string this file put there */
+    if (!name) return JS_EXCEPTION;
+    r = idl_replace_with_value(ctx, this_val, name, argv[0]);
+    JS_FreeCString(ctx, name);
+    return r < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+}
+
+/* The getter for the FIXED-VALUE form: the value is the function's data, so the realm owns it for as long as
+   the getter does and there is no slot on the target to keep in step with it. */
+static JSValue idl_replaceable_get_value(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                         int magic, JSValue *data)
+{
+    (void)this_val; (void)argc; (void)argv; (void)magic;
+    return JS_DupValue(ctx, data[0]);
+}
+
+/* Both forms end here: an accessor with §3.7.6's shared setter, at an IDL attribute's flags. */
+static void idl_define_replaceable(JSContext *ctx, JSValueConst target, const char *name, JSValue getter)
+{
+    JSAtom a = JS_NewAtom(ctx, name);
+    JSValue nm, setter;
+
+    DCHECK(a != JS_ATOM_NULL, "a replaceable attribute name could not be interned");
+    nm = JS_NewString(ctx, name);
+    CHECK(!JS_IsException(nm), "a replaceable attribute's name could not be allocated");
+    setter = JS_NewCFunctionData2(ctx, idl_replaceable_set, name, 1, 0, 1, (JSValueConst *)&nm);
+    CHECK(!JS_IsException(setter), "a replaceable attribute's setter could not be allocated");
+    JS_FreeValue(ctx, nm);
+    JS_DefinePropertyGetSet(ctx, (JSValue)target, a, getter, setter,
+                            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+    JS_FreeAtom(ctx, a);
+}
+
+void idl_install_replaceable(JSContext *ctx, JSValueConst target, const char *name,
+                             IdlGetter getter, int getter_magic)
+{
+    JSValue g;
+
+    DCHECK(getter != NULL, "a replaceable attribute with no getter — it is READONLY, so the read is all it has");
+    g = JS_NewCFunction2(ctx, (JSCFunction *)getter, name, 0, JS_CFUNC_getter_magic, getter_magic);
+    CHECK(!JS_IsException(g), "a replaceable attribute's getter could not be allocated");
+    idl_define_replaceable(ctx, target, name, g);
+}
+
+void idl_install_replaceable_value(JSContext *ctx, JSValueConst target, const char *name, JSValue value)
+{
+    JSValue g = JS_NewCFunctionData2(ctx, idl_replaceable_get_value, name, 0, 0, 1, (JSValueConst *)&value);
+
+    CHECK(!JS_IsException(g), "a replaceable attribute's getter could not be allocated");
+    JS_FreeValue(ctx, value);   /* the getter holds its own reference */
+    idl_define_replaceable(ctx, target, name, g);
+}
+
 /* THE ONE PLACE A STEP MEMBER IS MINTED. A member is DECLARED (which builds its pool entry) before it is
    given a name, and stepid ties the two together — so whoever mints the function is the only one who can tell
    the pool what to call itself. There were THREE ways to mint one: this file's install helper, and a bare

@@ -98,6 +98,12 @@ JSContext *window_proxy_realm(JSContext *ctx, JSValueConst proxy);
 JSValue window_proxy_parent(JSContext *ctx, JSValueConst proxy);
 JSValue window_proxy_top_of(JSContext *ctx, JSValueConst proxy);
 JSValue window_proxy_opener(JSContext *ctx, JSValueConst proxy);
+/* §7.2.5's `opener` SETTER, null branch: DISOWN the opener — the link is severed on the NAVIGABLE, so every
+   later read of it (this Window's `opener`, the proxy's) answers null and no own property is defined. It is
+   the half of that setter that is not Web IDL's replace-with-a-value, and it is a real state change rather
+   than a value assignment, which is why it lives on the navigable. Per-flow: captured into the running flow's
+   delta, so a sibling arm that did not disown still has its opener. */
+void window_proxy_disown_opener(JSContext *ctx, JSValueConst proxy);
 
 /* IS THE NAVIGABLE'S ACTIVE DOCUMENT SAME-ORIGIN WITH THIS ONE? §7.2.5.1's check, exported because §4.8.5's
    `contentDocument` makes the same decision one layer up — and must make it BEFORE asking the peer, since a

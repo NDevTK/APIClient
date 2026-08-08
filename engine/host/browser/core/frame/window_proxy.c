@@ -351,6 +351,15 @@ void window_proxy_set_closed(JSContext *ctx, JSValueConst proxy)
     p->closed = 1;
 }
 
+void window_proxy_disown_opener(JSContext *ctx, JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — this write rides the flow's delta */
+
+    DCHECK(p != NULL, "something that is not a WindowProxy was asked to disown its opener");
+    JS_FreeValue(ctx, p->opener);
+    p->opener = JS_NULL;
+}
+
 bool window_proxy_is_remote(JSValueConst proxy)
 {
     ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);

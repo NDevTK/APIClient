@@ -114,6 +114,23 @@ static JSValue js_win_opener(JSContext *ctx, JSValueConst this_val, int magic)
     return window_proxy_opener(ctx, document_window_proxy(ctx));
 }
 
+/* §7.2.5's `opener` SETTER, and it has TWO branches that do different things — which is why it is written out
+   here rather than declared [Replaceable].
+     null  -> DISOWN: the navigable's opener link is severed, and NO own property is defined. A page writes this
+              to cut a popup loose from the document that opened it, and defining an own `null` instead would
+              answer null to the page while leaving the link intact for everything that reads the navigable.
+     other -> Web IDL's CreateDataPropertyOrThrow(this, "opener", V) — the same operation [Replaceable] performs,
+              reached through the same one implementation. */
+static JSValue js_win_set_opener(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    (void)magic;
+    if (JS_IsNull(val)) {
+        window_proxy_disown_opener(ctx, document_window_proxy(ctx));
+        return JS_UNDEFINED;
+    }
+    return idl_replace_with_value(ctx, this_val, "opener", val) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+}
+
 /* §7.11's `name` — THE NAVIGABLE'S, which is the same attribute `w.name` reads through the WindowProxy and is
    answered from the same record. It was a second source here: a source-only concolic with no example, so
    `open(url, "chan42")` gave "chan42" to the opener and an example-free unknown to the popup's own script,
@@ -380,6 +397,7 @@ static JSClassID g_window_props_class;
    and §3.7 gives every realm its own, which is why `frames[0].Window.prototype !== Window.prototype` in a
    browser. So this registers, and window_install builds. */
 static int g_id_close, g_id_focus, g_id_blur, g_id_stop;   /* declared once per agent — see window_init */
+static int g_id_opener_set;   /* §7.2.5's `opener` setter, declared with them for the same reason */
 
 void window_init(JSContext *ctx)
 {
@@ -395,6 +413,7 @@ void window_init(JSContext *ctx)
        ONE, so declaring inside the install would mint a second entry for the second realm's prototype — which
        is the same shape as a per-wrapper mint and is what the pool's seal asserts against. */
     bar_prop_init(ctx);   /* §7.2.5.3's BarProp class, one per agent */
+    g_id_opener_set = idl_setter_id(ctx, IDL_ANY, false, js_win_set_opener, 0);
     g_id_close = idl_method_id(ctx, NULL, 0, js_win_close, 0);
     g_id_focus = idl_method_id(ctx, NULL, 0, js_win_noeffect, 0);
     g_id_blur  = idl_method_id(ctx, NULL, 0, js_win_noeffect, 1);
@@ -450,7 +469,9 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
        other member". [LegacyUnforgeable] decides the ATTRIBUTES (non-configurable, so a page cannot shadow or
        delete), never the LOCATION; on a [Global] interface there is no other location. */
     JS_DefinePropertyValueStr(ctx, g, "window", JS_DupValue(ctx, global), JS_PROP_ENUMERABLE);
-    JS_DefinePropertyValueStr(ctx, g, "self",   JS_DupValue(ctx, global), JS_PROP_ENUMERABLE);
+    /* `self` is [Replaceable], not [LegacyUnforgeable] — `window` is the unforgeable one. A page may
+       overwrite `self` and the IDL says so; a fixed own value said it could not. */
+    idl_install_replaceable_value(ctx, g, "self", JS_DupValue(ctx, global));
     /* §7.2.5 marks `top` [LegacyUnforgeable] — an OWN property — but its VALUE is the navigable's, and `top`
        is a WALK of the parent chain, so a grandchild answers with the top-level traversable rather than with
        itself. An own ACCESSOR, not an own value frozen at install time. */
@@ -458,15 +479,18 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
                             JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_win_top, "get top", 0,
                                                  JS_CFUNC_getter_magic, 0),
                             JS_UNDEFINED, JS_PROP_ENUMERABLE);
-    JS_SetPropertyStr(ctx, g, "frames", JS_DupValue(ctx, global));
+    idl_install_replaceable_value(ctx, g, "frames", JS_DupValue(ctx, global));   /* [Replaceable] */
     /* §7.2.5's `parent` and `opener` ARE THE NAVIGABLE'S, so they are read from this realm's own WindowProxy
        rather than answered here. They were two FIXED values behind two comments explaining why an embedder
        could not exist — "no embedder is reachable from this instance" and "the document was navigated to, not
        opened by a script in another navigable" — and both were true exactly while one instance was one
        document. A §7.4 child realm in this agent HAS a creator, and a popup whose `opener` is null cannot post
        back to the page that opened it, which is the whole of what a popup is for. */
-    idl_install_accessor(ctx, g, "parent", js_win_parent, 0, -1);
-    idl_install_accessor(ctx, g, "opener", js_win_opener, 0, -1);
+    idl_install_replaceable(ctx, g, "parent", js_win_parent, 0);   /* [Replaceable] readonly */
+    /* `opener` is NOT [Replaceable]: the IDL declares `attribute any opener`, and §7.2.5 gives it setter steps
+       of its own whose null branch DISOWNS rather than assigns. Its non-null branch is [Replaceable]'s define,
+       reached through the same implementation. */
+    idl_install_accessor(ctx, g, "opener", js_win_opener, 0, g_id_opener_set);
     /* §7.2.5.3's six user-interface bars. */
     bar_prop_install(ctx, g);
 
@@ -476,7 +500,7 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
 
     /* `closed` is a GETTER over the NAVIGABLE's per-flow state, because close() changes it. */
     idl_install_accessor(ctx, g, "closed", js_win_closed, 0, -1);
-    idl_install_accessor(ctx, g, "length", js_win_length, 0, -1);
+    idl_install_replaceable(ctx, g, "length", js_win_length, 0);   /* [Replaceable] readonly */
     idl_install_method(ctx, g, "close", 0, g_id_close);
     idl_install_method(ctx, g, "focus", 0, g_id_focus);
     idl_install_method(ctx, g, "blur",  0, g_id_blur);
@@ -492,7 +516,7 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
         UrlRecord rec;
         if (url_parse(&rec, url, strlen(url), NULL)) {
             char *origin = url_serialize_origin(&rec);
-            JS_SetPropertyStr(ctx, g, "origin", JS_NewString(ctx, origin));
+            idl_install_replaceable_value(ctx, g, "origin", JS_NewString(ctx, origin));
             free(origin);
         }
         url_record_free(&rec);

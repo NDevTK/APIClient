@@ -290,6 +290,24 @@ void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface);
 void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
                           IdlGetter getter, int getter_magic, int setter_stepid);
 
+/* WEB IDL §3.7.6's [Replaceable] ATTRIBUTE. It is READONLY, and yet assigning to it works: the setter DEFINES
+   an ordinary data property on the receiver, which replaces the accessor outright. So `window.length` is an
+   accessor until a page writes to it and a `{writable:true}` data property afterwards, and the corpus reads
+   the descriptor on both sides of that line. It cannot be modelled as a plain writable data property — that is
+   an accessor the whole time it should be one and never has a getter — nor as a readonly accessor, which
+   silently drops the write. Every replaceable member shares one setter; the property NAME rides on the
+   function as its data, so there is one implementation and no per-member setter to forget.
+   `idl_install_replaceable_value` is the form for an attribute whose value is FIXED for the realm (§7.2.5.3's
+   BarProps, `frames`, `origin`): the getter answers the value it was given. `value` is CONSUMED. */
+void idl_install_replaceable(JSContext *ctx, JSValueConst target, const char *name,
+                             IdlGetter getter, int getter_magic);
+/* The half of that setter a member with its OWN setter steps still needs: Web IDL's
+   CreateDataPropertyOrThrow(receiver, name, V), which REPLACES the accessor on that object. HTML §7.2.5's
+   `opener` setter ends in exactly this operation for a non-null value, so it is one implementation reached from
+   two declarations rather than two that can drift. Returns <0 with an exception pending, like every define. */
+int  idl_replace_with_value(JSContext *ctx, JSValueConst obj, const char *name, JSValueConst v);
+void idl_install_replaceable_value(JSContext *ctx, JSValueConst target, const char *name, JSValue value);
+
 /* AN ACCESSOR WHOSE GETTER IS A MACHINE. A getter takes no arguments, so it has nothing to CONVERT — and that
    is why it was a plain C function, which was the wrong conclusion: it may still have work of the PAGE'S size
    to do. `innerHTML` serialises the whole document, `outerHTML` the same, `childNodes.length` counts every

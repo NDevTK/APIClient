@@ -884,9 +884,9 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
 {
     JSValue global = JS_GetGlobalObject(ctx);
 
-    /* `self` IS the global — testharness.js and every .any.js test reach the global through it. It is set from
-       C rather than in WPT_PROLOGUE because the prologue itself is written against `self`. */
-    JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
+    /* `self` IS NOT SET HERE. It is §7.2.2's [Replaceable] Window member and window_install below installs it
+       as one; a plain own value written first was a STAND-IN for the member under test, and a stand-in is how
+       a gate comes to agree with itself — this one would have hidden the member being absent entirely. */
     JS_SetPropertyStr(ctx, global, "print", JS_NewCFunction(ctx, js_wpt_print, "print", 1));
     /* `gc` — what /common/gc.js reaches for first, and the only way a test that asserts a stream survives
        COLLECTION can assert anything at all. It is the runner's, never the browser's: a page-visible collector
