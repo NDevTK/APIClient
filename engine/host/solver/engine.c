@@ -1065,7 +1065,16 @@ int engine_sched_step(void) {
                 /* the TAIL closes the last gap: a step that offers a point and then runs for seconds before
                    returning has that silence between its last offer and its end, and nothing else records it. */
                 int64_t gap = done - g_last_ask > g_max_gap ? done - g_last_ask : g_max_gap;
-                if (gap > ENGINE_QUANTUM_MS * 400) {
+                /* THE VERDICT IS STRUCTURAL; THE CLOCK ONLY DECIDES WHEN TO LOOK. `asked` is how many suspend
+                   points the path OFFERED, and zero of them is the missing seam this exists to catch — a pure C
+                   loop reaches no back-edge, consults the hook never, and hangs the engine silently. That fact
+                   does not depend on how fast the machine is. The wall-clock gap used to BE the verdict, and a
+                   loaded container then failed a tree whose seam was intact: the same commit passed idle and
+                   aborted twice under load, at 5.4s and 8.7s, with `asked=1` printed in its own message saying
+                   the seam was there. A time threshold standing in for an invariant is a bound wearing a
+                   diagnosis, and it cost a correct change a revert before the control run caught it.
+                   ASKED>0 AND SLOW IS MERELY SLOW, which the margin was always meant to mean. */
+                if (gap > ENGINE_QUANTUM_MS * 400 && g_preempt_asked == pa0) {
                     char why[448];
                     int wi = 0;
                     const char *sk = cur && cur->cand_sink ? cur->cand_sink : "(exploration flow)";

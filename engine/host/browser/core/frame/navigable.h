@@ -51,7 +51,7 @@
  * which is what makes an <iframe> with no src scriptable on the next line). The builder returns the realm's
  * context, with the platform installed and `document` in place. */
 typedef JSContext *(*RealmBuilder)(JSRuntime *rt, lxb_html_document_t *dom, const char *url, const char *origin,
-                                   uint32_t doc_id);
+                                   uint32_t doc_id, JSValueConst nav_proxy);
 void navigable_set_realm_builder(RealmBuilder b);
 
 /* BUILD THE REALM OF A SAME-ORIGIN NAVIGABLE THIS AGENT HOLDS, and hand the caller the reference.
@@ -63,7 +63,8 @@ void navigable_set_realm_builder(RealmBuilder b);
  * so the read is where it is built. A forced-execution frontier holds thousands of flows at once and each
  * one's boot runs the same `open()` in its own world; building a whole platform per never-touched navigable
  * exhausted the heap at ~2000 flows, which is the frontier doing its job rather than a bug in it. */
-JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *origin);
+JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *origin,
+                           JSValueConst nav_proxy);
 
 /* Install §7.4's scriptable entry point — `window.open`. `origin` is this document's, which the initial
    about:blank child inherits along with the policy container. */

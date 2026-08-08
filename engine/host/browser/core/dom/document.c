@@ -611,7 +611,7 @@ void document_init(JSContext *ctx)
 }
 
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
-                      uint32_t doc_id)
+                      uint32_t doc_id, JSValueConst nav_proxy)
 {
     Document *d;
     JSValue doc;
@@ -643,8 +643,17 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     /* §7.2.5.1's ONE WindowProxy FOR THIS NAVIGABLE, minted WITH the realm because that is what it is one of.
        Before the early return below: a document with no address still has a navigable, and `window.closed`
        reads the navigable's state through this object. */
-    d->proxy = window_proxy_new_self(ctx, doc_id);
-    CHECK(!JS_IsException(d->proxy), "this navigable's WindowProxy could not be allocated");
+    /* §7.2.5.1: A NAVIGABLE HAS ONE WindowProxy, AND THE NAVIGABLE COMES FIRST. A realm is built for a
+       navigable that already exists — §7.4 created it, named it and handed its proxy to the page — so minting
+       one here made a SECOND proxy for a navigable that had one. The consequence is not academic: the second
+       carries no parent and no opener, so a child's `parent` answered ITSELF instead of its creator and a
+       popup's `opener` was null, which is the whole of what a popup is for.
+       The caller supplies it, because the caller is whoever owns the navigable: the host for the ROOT one it
+       named, and §7.4 for every child it created. */
+    DCHECK(window_proxy_is(nav_proxy),
+           "a Document was installed for a realm with no navigable — §7.2.5.1's proxy belongs to the navigable "
+           "and the navigable exists before its realm, so the caller that owns it passes it in");
+    d->proxy = JS_DupValue(ctx, nav_proxy);
     if (!url || !*url)
         return;   /* no address, no Document — the page's own throw is the honest answer */
 

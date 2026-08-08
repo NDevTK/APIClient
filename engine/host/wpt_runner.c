@@ -850,7 +850,7 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
 /* ONE DOCUMENT. Runs once per document INCLUDING the first, which is what makes it the one description of what
    a document of this build is — a same-origin child navigable gets exactly this and nothing else. */
 static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
-                              uint32_t doc_id)
+                              uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSValue global = JS_GetGlobalObject(ctx);
 
@@ -896,7 +896,7 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
        subtests as timeouts. It cannot now: a timer is due only when the event loop has nothing else to run
        (timer.h), so the long timeout is by construction the last thing to happen. */
     window_message_install(ctx, global, origin);
-    document_install(ctx, global, dom, url, doc_id);
+    document_install(ctx, global, dom, url, doc_id, nav_proxy);
     message_port_install(ctx, global);   /* HTML 9.4.2/9.4.3 */
     broadcast_channel_install(ctx, global);   /* HTML 9.5 */
     abort_install(ctx, global);
@@ -940,7 +940,7 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
    similar-origin window agent is. It gets the identical per-document install the first document got; there is
    no smaller variant of it, because a child whose `window` is smaller is a different browser. */
 static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url, const char *origin,
-                                  uint32_t doc_id)
+                                  uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSContext *ctx = JS_NewContext(rt);
     char *bytes = NULL;
@@ -967,7 +967,7 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
             dom = nav_doc;
         }
     }
-    wpt_realm_install(ctx, dom, url, origin, doc_id);
+    wpt_realm_install(ctx, dom, url, origin, doc_id, nav_proxy);
     /* THE CHILD'S SCRIPTS ARE THE CHILD'S, run in ITS realm. They are what make a popup a participant rather
        than an empty frame — message-opener.html's whole body is one script that posts to its opener. */
     if (bytes) {
@@ -1025,7 +1025,14 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin,
           "the runner's document did not parse");
     free(fetched);
 
-    wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, world_local_doc());
+    /* THE ROOT NAVIGABLE IS THE HOST'S, so its §7.2.5.1 proxy is minted here — the same rule as every child,
+       whose creator mints it. A navigable has one, and whoever owns the navigable is who makes it. */
+    {
+        JSValue root_proxy = window_proxy_new_self(ctx, world_local_doc());
+        CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
+        wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, world_local_doc(), root_proxy);
+        JS_FreeValue(ctx, root_proxy);
+    }
     /* SEALED AFTER THE FIRST DOCUMENT, and only that one: a component DECLARES its IDL members in its init and
        INSTALLS from the cached id, so a second realm's install declares nothing. A declaration reached from the
        second install is therefore a component that mints per-global, and the seal says so at the first one. */

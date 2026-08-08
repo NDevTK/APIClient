@@ -136,7 +136,8 @@ static void engine_agent_init(JSContext *ctx, const char *origin)
 }
 
 /* ONE DOCUMENT — the per-realm half, run once per document including the first. */
-static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *origin, uint32_t doc_id)
+static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *origin, uint32_t doc_id,
+                                 JSValueConst nav_proxy)
 {
     JSValue g = JS_GetGlobalObject(ctx);
 
@@ -169,20 +170,20 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
     abort_install(ctx, g);   /* AbortController/AbortSignal: fetch takes a signal, so a bundle mints one early */
     navigator_install(ctx, g);
     screen_install(ctx, g);   /* the responsive gate: screen.width decides which router a bundle uses */
-    document_install(ctx, g, dom, origin, doc_id);
+    document_install(ctx, g, dom, origin, doc_id, nav_proxy);
     JS_FreeValue(ctx, g);
 }
 
 /* A SAME-ORIGIN CHILD NAVIGABLE'S REALM — a second JSContext in the SAME JSRuntime, which is what HTML's
    similar-origin window agent is. It gets the identical per-document install the first document got. */
 static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
-                                     const char *origin, uint32_t doc_id)
+                                     const char *origin, uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSContext *ctx = JS_NewContext(rt);
 
     CHECK(ctx != NULL, "a same-origin child navigable's realm could not be created");
     CHECK(JS_AddIntrinsicDOMException(ctx) == 0, "the DOMException intrinsic failed to install in a child realm");
-    engine_realm_install(ctx, dom, origin, doc_id);
+    engine_realm_install(ctx, dom, origin, doc_id, nav_proxy);
     (void)url;
     return ctx;
 }
@@ -245,7 +246,14 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
        (HTML's similar-origin window agent), and what the platform surface of a document of THIS build is, is
        this file's answer and nobody else's. */
     navigable_set_realm_builder(engine_child_realm);
-    engine_realm_install(g_ctx, g_dom, origin, world_local_doc());
+    /* THE ROOT NAVIGABLE IS THIS HOST'S, so its §7.2.5.1 proxy is minted here — one per navigable, made by
+       whoever owns the navigable, which for the root is the host that named it. */
+    {
+        JSValue root_proxy = window_proxy_new_self(g_ctx, world_local_doc());
+        CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
+        engine_realm_install(g_ctx, g_dom, origin, world_local_doc(), root_proxy);
+        JS_FreeValue(g_ctx, root_proxy);
+    }
     /* The surface is installed, so every member the platform has is declared — a declaration from here on is a
        per-wrapper or per-flow mint, and that is what the pool asserts against. */
     idl_args_seal();

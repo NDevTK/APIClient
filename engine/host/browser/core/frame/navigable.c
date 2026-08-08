@@ -100,7 +100,8 @@ static lxb_html_document_t *child_initial_document(void)
 
 /* MATERIALIZE A CHILD NAVIGABLE'S REALM — see navigable.h. Called by the WindowProxy on the first read that
    actually needs the active document, never at creation. */
-JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *origin)
+JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *origin,
+                           JSValueConst nav_proxy)
 {
     JSContext *cctx;
 
@@ -108,7 +109,7 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
            "a same-origin child navigable was reached in an agent whose host declared no realm builder — a "
            "same-origin document is a second REALM in this heap, and only the host knows which platform "
            "surface a document of this build has; declare it with navigable_set_realm_builder");
-    cctx = g_realm_builder(JS_GetRuntime(ctx), child_initial_document(), url, origin, doc);
+    cctx = g_realm_builder(JS_GetRuntime(ctx), child_initial_document(), url, origin, doc, nav_proxy);
     CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
     if (g_realms_n == g_realms_cap) {
         int cap = g_realms_cap ? g_realms_cap * 2 : 8;

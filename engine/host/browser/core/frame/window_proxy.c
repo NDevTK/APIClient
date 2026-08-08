@@ -174,7 +174,7 @@ static void proxy_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
 /* THE ACTIVE DOCUMENT'S REALM, BUILT IF IT IS NOT YET. Every member that reads THROUGH to the active document
    goes through here and nothing else does, which is what makes "created on first touch" indistinguishable from
    "created at creation" — see navigable.h for why that is the spec rather than a saving. */
-static JSContext *proxy_realm(JSContext *ctx, ProxyData *p)
+static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
 {
     /* SAME-ORIGIN IMPLIES HOSTED, by construction: an instance is an ORIGIN-KEYED agent, so a navigable this
        agent does not hold is one whose active document is cross-origin — and every same-origin-only member is
@@ -187,7 +187,7 @@ static JSContext *proxy_realm(JSContext *ctx, ProxyData *p)
     if (!p->realm) {
         DCHECK(p->url != NULL, "a WindowProxy with no realm and no address was read through — a proxy over a "
                                "realm that already exists is minted by window_proxy_new_self, which carries it");
-        p->realm = navigable_realm(ctx, p->doc, p->url, p->origin);
+        p->realm = navigable_realm(ctx, p->doc, p->url, p->origin, proxy);
         p->window = JS_GetGlobalObject(p->realm);
     }
     return p->realm;
@@ -324,14 +324,14 @@ JSValue window_proxy_window(JSContext *ctx, JSValueConst proxy)
            "flow SUSPENDS here (the same snapshot path as an await), the peer answers in its own scheduled turn "
            "under this flow's world, and the flow resumes with the value. The host owns the routing because "
            "only it knows which instance holds that document — window_proxy_doc names which one");
-    return JS_DupValue(ctx, JS_GetGlobalObject(proxy_realm(ctx, p)));
+    return JS_DupValue(ctx, JS_GetGlobalObject(proxy_realm(ctx, proxy, p)));
 }
 
 JSContext *window_proxy_realm(JSContext *ctx, JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);
     DCHECK(p != NULL, "the realm of something that is not a WindowProxy was asked for");
-    return proxy_realm(ctx, p);
+    return proxy_realm(ctx, proxy, p);
 }
 
 bool window_proxy_same_origin_of(JSValueConst proxy)
@@ -503,7 +503,7 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
            are one heap and the corpus appends nodes across exactly this edge. A destroyed navigable has no
            active document. */
         if (p->closed) return JS_NULL;
-        return JS_DupValue(ctx, document_object(proxy_realm(ctx, p)));
+        return JS_DupValue(ctx, document_object(proxy_realm(ctx, this_val, p)));
     default:
         DFAIL("a WindowProxy member with no navigable-own answer reached this switch — WP_LENGTH and anything "
               "added beside it read the ACTIVE DOCUMENT and are declared on the step machine below");

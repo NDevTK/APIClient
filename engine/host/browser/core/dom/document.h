@@ -17,8 +17,11 @@
    second realm installs `document` from the same declarations. */
 void document_init(JSContext *ctx);
 
+/* `nav_proxy` is §7.2.5.1's ONE WindowProxy for the navigable this realm is the active document of. The
+   navigable exists before its realm — §7.4 created it and handed its proxy to the page — so the caller that
+   owns it passes it in rather than a second one being minted here. */
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
-                      uint32_t doc_id);
+                      uint32_t doc_id, JSValueConst nav_proxy);
 
 /* WHICH DOCUMENT THIS REALM IS, in the world registry's naming. §7.4 mints a child's name from it, so a
    same-origin child of a child is named from the child and not from the instance root. */

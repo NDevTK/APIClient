@@ -1592,7 +1592,7 @@ static void tf_agent_init(JSContext *ctx)
 
 /* ONE DOCUMENT — run once per document including the first. */
 static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
-                             uint32_t doc_id)
+                             uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSValue g = JS_GetGlobalObject(ctx);
     /* THE HOST'S NETWORK. SECURITY.md puts every byte of it behind the trusted chokepoint, so this host's
@@ -1660,18 +1660,18 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
        reached the tree through host-edge stand-ins (setBodyAttr, appendChild), so node.c, element.c and
        document.c — every wrapper, every prototype, every IDL coercion in them — ran only in the shipped ABI
        build where nothing asserts on the result. */
-    document_install(ctx, g, dom, url, doc_id);
+    document_install(ctx, g, dom, url, doc_id, nav_proxy);
     JS_FreeValue(ctx, g);
 }
 
 /* A SAME-ORIGIN CHILD NAVIGABLE'S REALM — a second JSContext in the SAME JSRuntime. */
 static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url, const char *origin,
-                                 uint32_t doc_id)
+                                 uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSContext *ctx = JS_NewContext(rt);
 
     CHECK(ctx != NULL, "a same-origin child navigable's realm could not be created");
-    tf_realm_install(ctx, dom, url, origin, doc_id);
+    tf_realm_install(ctx, dom, url, origin, doc_id, nav_proxy);
     return ctx;
 }
 
@@ -1697,7 +1697,12 @@ int main(void) {
     lxb_html_document_t *dom = lxb_html_document_create();
     lxb_html_document_parse(dom, (const lxb_char_t *)doc, strlen(doc));
     g_body = lxb_dom_interface_element(lxb_html_document_body_element(dom));   /* the DOM sink's target element */
-    tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test", world_local_doc());
+    {
+        JSValue root_proxy = window_proxy_new_self(ctx, world_local_doc());
+        CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
+        tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test", world_local_doc(), root_proxy);
+        JS_FreeValue(ctx, root_proxy);
+    }
 
     /* The two hook SETS the solver owns, each declared by its own component. They were struct literals here
        and again in test_forced.c, and the pair had drifted. */
