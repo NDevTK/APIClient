@@ -693,18 +693,35 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        with a partial matcher would return the wrong element silently, which is worse than the throw that names
        what to build. */
 
-    /* 3.1.1 documentElement / body / head — the three tree entry points every page starts from. Lexbor has
+    /* §3.1.1 documentElement / body / head — the three tree entry points every page starts from. Lexbor has
        already parsed them, so these are the REAL elements wrapped once (identity holds: `el.parentNode ===
-       document.body` is a comparison pages make). A document with no body is a document this engine parsed
-       without one, which the HTML parser does not produce — so it is an invariant, not a case to answer null for. */
+       document.body` is a comparison pages make).
+       §3.1.1'S `body` IS "the first of the html element's children that is either a BODY or a FRAMESET
+       element, or null". It read Lexbor's body-element accessor and asserted the result was never null,
+       explaining that tree construction always creates one — and that is FALSE. A FRAMESET document is
+       `<html><head></head><frameset>...</frameset></html>` with no body at all, which is not a malformed parse
+       but the parser following the spec: the `in body` insertion mode gives way to `in frameset` and the body
+       element is never inserted. The corpus has such documents and loads them in frames, so the assert fired on
+       a correct parse the moment child navigables started loading their addresses — a false invariant standing
+       exactly where the real rule belongs. */
     {
         lxb_dom_element_t *root = lxb_dom_interface_element(dom->dom_document.element);
-        lxb_html_body_element_t *body = lxb_html_document_body_element(dom);
+        lxb_dom_node_t *body = NULL, *n;
         lxb_html_head_element_t *head = lxb_html_document_head_element(dom);
-        DCHECK(body != NULL, "the parsed document has no BODY element — HTML tree construction always creates "
-                             "one, so a document without it is a parse this engine should not have accepted");
+
+        for (n = lxb_dom_interface_node(root)->first_child; n; n = n->next) {
+            size_t qn = 0;
+            const lxb_char_t *q;
+            if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
+            q = lxb_dom_element_qualified_name(lxb_dom_interface_element(n), &qn);
+            if (!q) continue;
+            if ((qn == 4 && !memcmp(q, "body", 4)) || (qn == 8 && !memcmp(q, "frameset", 8))) { body = n; break; }
+        }
         JS_SetPropertyStr(ctx, doc, "documentElement", element_wrap(ctx, root));
-        JS_SetPropertyStr(ctx, doc, "body", element_wrap(ctx, lxb_dom_interface_element(body)));
+        /* NULL IS A REAL ANSWER HERE, and the only one for a document whose html element has neither — which
+           §3.1.1 states outright. */
+        JS_SetPropertyStr(ctx, doc, "body",
+                          body ? element_wrap(ctx, lxb_dom_interface_element(body)) : JS_NULL);
         JS_SetPropertyStr(ctx, doc, "head", element_wrap(ctx, lxb_dom_interface_element(head)));
     }
 
