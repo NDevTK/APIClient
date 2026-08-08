@@ -92,12 +92,14 @@ static bool child_in_this_agent(const char *child_origin)
    engine owns what a document IS (CLAUDE.md: Lexbor and quickjs own all semantics) and the host owns the
    network. It used to be one host callback holding both, and the host that implemented only the second half
    looked finished. */
-static lxb_html_document_t *child_document(JSContext *ctx, const char *url)
+static lxb_html_document_t *child_document(JSContext *ctx, const char *url, JSValueConst nav_proxy, char **pcsp)
 {
     static const char EMPTY[] = "<!doctype html><html><head></head><body></body></html>";
     lxb_html_document_t *dom = lxb_html_document_create();
     char *bytes = NULL;
     size_t n = 0;
+
+    *pcsp = NULL;
 
     CHECK(dom != NULL, "navigable: OOM creating a child navigable's Document");
     /* §7.4 STEP 14's NAVIGATE, for an address there is anything to fetch at — see navigable.h for why an
@@ -111,7 +113,24 @@ static lxb_html_document_t *child_document(JSContext *ctx, const char *url)
                "about:blank Document and its scripts would never run. Build the navigation: the address is a "
                "host-owed request, so the navigating flow parks on it and resumes when the response lands "
                "(navigable_set_document_fetcher)");
-        bytes = g_doc_fetcher(ctx, url, &n);
+        bytes = g_doc_fetcher(ctx, url, &n, pcsp);
+    } else {
+        /* §7.2.6 + §7.4: A DOCUMENT CREATED FROM NO RESPONSE CLONES ITS CREATOR'S POLICY CONTAINER. It is the
+           same test one line up that decides both — there is one question ("did this document come from a
+           response?") and it is asked once — and it is not bookkeeping: an `about:blank` child runs its
+           scripts under the CREATOR's CSP, so a page that reaches `f.contentWindow.eval(...)` through a
+           srcless iframe is governed by the parent's policy. An empty container there reports that as a
+           working exploit on a page whose CSP kills it, which is the very false PoC @S must never emit.
+           IT COMES OFF THE NAVIGABLE, not off `ctx`: the clone happened when the navigable was CREATED
+           (window_proxy.h), and `ctx` here is whichever same-origin document's read reached through first,
+           which need not be the creator. The clone is BY VALUE — policy_container_clone is itself a re-parse
+           of this text — so the child's policy is its own from the moment it exists and a later parent
+           navigation cannot reach back. */
+        const char *text = window_proxy_creator_csp(nav_proxy);
+        if (text) {
+            *pcsp = strdup(text);
+            CHECK(*pcsp != NULL, "navigable: OOM cloning the creator's policy container for an about: child");
+        }
     }
     /* A CHILD WHOSE ADDRESS DOES NOT LOAD KEEPS THE EMPTY DOCUMENT — a browser shows an error page and the
        navigable still exists. That is a failed fetch, not a missing capability, and the two are different. */
@@ -134,7 +153,15 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
            "a same-origin child navigable was reached in an agent whose host declared no realm builder — a "
            "same-origin document is a second REALM in this heap, and only the host knows which platform "
            "surface a document of this build has; declare it with navigable_set_realm_builder");
-    cctx = g_realm_builder(JS_GetRuntime(ctx), child_document(ctx, url), url, origin, doc, nav_proxy);
+    {
+        /* THE POLICY TRAVELS WITH THE TREE — the response's, or the creator's cloned for an `about:` child;
+           child_document owns which, since it owns the test that decides. Freed here because the builder
+           installs a container built from it and keeps no pointer. */
+        char *csp = NULL;
+        lxb_html_document_t *dom = child_document(ctx, url, nav_proxy, &csp);
+        cctx = g_realm_builder(JS_GetRuntime(ctx), dom, url, origin, csp, doc, nav_proxy);
+        free(csp);
+    }
     CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
     if (g_realms_n == g_realms_cap) {
         int cap = g_realms_cap ? g_realms_cap * 2 : 8;
@@ -183,6 +210,14 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            is not one — so the link is never made rather than made and filtered. A CHILD navigable (§4.8.5's
            iframe) has no opener in the first place and no features to ask. */
         proxy = window_proxy_new(ctx, child, addr, origin, name, feat && feat->is_popup,
+                                 /* §7.2.6/§7.4: a navigable created with no address has no response to carry a
+                                    policy, so it CLONES THE CREATOR'S — the SAME `csp` this function already
+                                    sends to a PEER instance for a cross-origin child, which is where the gap
+                                    was: the remote path carried the creator's policy and the local one did
+                                    not. Taken now rather than at materialization, because a srcless child's
+                                    realm is built later and by whichever same-origin document reads through
+                                    it first, which need not be its creator. */
+                                 csp,
                                  is_child ? document_window_proxy(ctx) : JS_UNDEFINED,
                                  (is_child || (feat && feat->noopener)) ? JS_NULL
                                                                         : document_window_proxy(ctx));

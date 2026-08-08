@@ -672,7 +672,10 @@ static int    g_html_mode;      /* the test is a document, not a script */
 static char   g_test_url[512];  /* its address, server-relative — what to GET and what to resolve against */
 
 /* ONE GET against the corpus server, resolved against the running document's address. */
-static char *wpt_get(const char *url, size_t *plen)
+/* `pcsp`, when given, receives the response's `Content-Security-Policy` as a malloc'd string (NULL when the
+   response carried none). The header list was already parsed here and thrown away — which is how a corpus test
+   that declares a policy was measured against no policy at all. */
+static char *wpt_get_csp(const char *url, size_t *plen, char **pcsp)
 {
     FetchRequest req;
     HeaderList h;
@@ -684,9 +687,15 @@ static char *wpt_get(const char *url, size_t *plen)
     req.method = "GET";
     req.url = url;
     body = wpt_http(&req, plen, &status, &h);
+    if (pcsp) *pcsp = header_list_get(&h, "content-security-policy");   /* malloc'd or NULL */
     header_list_free(&h);
     if (body && (status < 200 || status >= 300)) { free(body); body = NULL; }
     return body;
+}
+
+static char *wpt_get(const char *url, size_t *plen)
+{
+    return wpt_get_csp(url, plen, NULL);
 }
 
 static void wpt_derive_addresses(int argc, char **argv)
@@ -871,7 +880,7 @@ static char *wpt_loc_prefixed(const char *prefix, const char *tail)
 }
 
 static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
-                              uint32_t doc_id, JSValueConst nav_proxy)
+                              const char *csp, uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSValue global = JS_GetGlobalObject(ctx);
 
@@ -916,7 +925,7 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
        subtests as timeouts. It cannot now: a timer is due only when the event loop has nothing else to run
        (timer.h), so the long timeout is by construction the last thing to happen. */
     window_message_install(ctx, global, origin);
-    document_install(ctx, global, dom, url, doc_id, nav_proxy);
+    document_install(ctx, global, dom, url, csp, doc_id, nav_proxy);
     message_port_install(ctx, global);   /* HTML 9.4.2/9.4.3 */
     broadcast_channel_install(ctx, global);   /* HTML 9.5 */
     abort_install(ctx, global);
@@ -1021,14 +1030,15 @@ static bool wpt_run_pending(void)
 /* THE NETWORK HALF of §7.4 step 14 — this runner's, because this runner has a server to ask. The bytes come
    back and the ENGINE parses them: what a document IS was never this file's question, and while it was, the
    product host answered the same seam by ignoring the address entirely. */
-static char *wpt_document_fetch(JSContext *ctx, const char *url, size_t *plen)
+static char *wpt_document_fetch(JSContext *ctx, const char *url, size_t *plen, char **pcsp)
 {
     (void)ctx;
-    return wpt_get(url, plen);
+    return wpt_get_csp(url, plen, pcsp);
 }
 
 static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
-                                  const char *origin, uint32_t doc_id, JSValueConst nav_proxy)
+                                  const char *origin, const char *csp, uint32_t doc_id,
+                                  JSValueConst nav_proxy)
 {
     JSContext *ctx = JS_NewContext(rt);
 
@@ -1037,7 +1047,7 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
        that defined them, so a child sharing the agent realm's would resolve every unqualified
        `addEventListener` against the PARENT's window. */
     event_target_install(ctx);
-    wpt_realm_install(ctx, dom, url, origin, doc_id, nav_proxy);
+    wpt_realm_install(ctx, dom, url, origin, csp, doc_id, nav_proxy);
     /* THE CHILD'S SCRIPTS ARE THE CHILD'S, run in ITS realm — they are what make a popup a participant rather
        than an empty frame, since message-opener.html's whole body is one script that posts to its opener.
        THEY ARE QUEUED, NOT RUN HERE. A realm is built from inside the creator's `window.open()` — a C
@@ -1072,7 +1082,7 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin,
                                      const char *html, size_t html_n)
 {
     static const char DOC[] = "<!doctype html><html><head></head><body></body></html>";
-    char *fetched = NULL;
+    char *fetched = NULL, *root_csp = NULL;   /* the response's policy — §7.2.6's header half */
     const char *src = html;
     JSRuntime *rt;
     JSContext *ctx;
@@ -1091,7 +1101,10 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin,
         src = DOC;
         html_n = sizeof DOC - 1;
         if (g_html_mode) {
-            fetched = wpt_get(g_test_url, &html_n);
+            /* THE POLICY COMES WITH THE BYTES. A corpus file served with a `.headers` sidecar declares its
+               Content-Security-Policy there, and reading only the body measured every such test against no
+               policy — the same half-a-container defect the product host had. */
+            fetched = wpt_get_csp(g_test_url, &html_n, &root_csp);
             CHECK(fetched != NULL, "wpt: the corpus server did not serve the HTML test file");
             src = fetched;
         }
@@ -1109,9 +1122,10 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin,
            nothing opened it under a name. Saying so is what keeps `window.name` a computed value here. */
         JSValue root_proxy = window_proxy_new_self(ctx, world_local_doc(), "");
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
-        wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, world_local_doc(), root_proxy);
+        wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, root_csp, world_local_doc(), root_proxy);
         JS_FreeValue(ctx, root_proxy);
     }
+    free(root_csp);   /* document_install built its container from it and keeps no pointer */
     /* SEALED AFTER THE FIRST DOCUMENT, and only that one: a component DECLARES its IDL members in its init and
        INSTALLS from the cached id, so a second realm's install declares nothing. A declaration reached from the
        second install is therefore a component that mints per-global, and the seal says so at the first one. */

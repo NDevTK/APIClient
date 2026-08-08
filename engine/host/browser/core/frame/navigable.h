@@ -64,7 +64,10 @@
    parks the running flow on a host-owed answer, so it cannot answer here at all — §7.4's navigate has to become
    a scheduled work item that resumes when the response lands, replacing the navigable's active Document. That
    is the mechanism this signature is the placeholder for, and the DFAIL below names it. */
-typedef char *(*DocumentFetcher)(JSContext *ctx, const char *url, size_t *plen);
+/* `pcsp` receives the response's `Content-Security-Policy` header as a MALLOC'D string the caller frees, or
+   NULL when the response carried none. It is an out-parameter and not a second call because a policy is a
+   property of THE RESPONSE — asking for it separately is asking a second time and may get a second answer. */
+typedef char *(*DocumentFetcher)(JSContext *ctx, const char *url, size_t *plen, char **pcsp);
 void navigable_set_document_fetcher(DocumentFetcher f);
 
 /* HOW THIS AGENT BUILDS A REALM AROUND A DOCUMENT — declared by the HOST, called by §7.4 when the child is
@@ -81,8 +84,12 @@ void navigable_set_document_fetcher(DocumentFetcher f);
  * to fetch anything; the fetch already happened, above, and the parse is the engine's. That distinction is the
  * whole of what was wrong before: the same argument meant "here is the address, do whatever you think that
  * implies", and one host read it as "fetch and parse this" while the other read it as nothing at all. */
+/* `csp` is the policy this document is CREATED with: the response's `Content-Security-Policy` above, or §7.4's
+   clone of the CREATOR's for an `about:` child, which came from no response at all. NULL when there is neither.
+   It travels with the parsed tree because §7.2.6's container is built from BOTH, and a builder handed only the
+   tree would silently install a document judged against its `<meta>` policies alone. */
 typedef JSContext *(*RealmBuilder)(JSRuntime *rt, lxb_html_document_t *dom, const char *url, const char *origin,
-                                   uint32_t doc_id, JSValueConst nav_proxy);
+                                   const char *csp, uint32_t doc_id, JSValueConst nav_proxy);
 void navigable_set_realm_builder(RealmBuilder b);
 
 /* BUILD THE REALM OF A SAME-ORIGIN NAVIGABLE THIS AGENT HOLDS, and hand the caller the reference.

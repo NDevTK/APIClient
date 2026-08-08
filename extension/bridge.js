@@ -78,8 +78,10 @@ function linesToAnalysis(lines, msg) {
 
 /* Run one page through a fresh v2 engine instance, capturing @H/@CHUNK stdout. The ENGINE parses the
    page HTML with its in-wasm Lexbor DOM and runs the document's scripts in order (against the real
-   DOM) — the bridge no longer scrapes scripts. code (argv[1]) is any brain-assembled extra scripts
-   (usually empty); html (argv[2]) is the page. */
+   DOM) — the bridge no longer scrapes scripts, and `html` is the whole of what qjs_init takes for a
+   document. `code` is carried here for the AST_ANALYZE consumer below and is NOT handed to the engine:
+   it used to be, and the engine cast it away, so a caller that put extra scripts in it was silently
+   running none of them. */
 function originOf(u) { try { return new URL(u).origin; } catch (_) { return ""; } }
 /* Stable BUNDLE IDENTITY for the frontier key: the EXTERNAL <script src> set (content-hash filenames
    like main.abc123.js ARE the app version), NOT the volatile HTML wrapper (per-request nonces/CSRF
@@ -178,8 +180,11 @@ async function engineCreate(code, html, msg, persist) {
   // which is exactly the set that can message each other today. It is not yet persisted, because a parked
   // foreign segment does not yet outlive a session; when segments park, this becomes a persisted allocator.
   const _docId = String(++nextDocumentId);
-  M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number"],
-    [arg(code || ""), arg(html || ""), arg(originOf(msg && msg.sourceUrl)), arg(_docId), arg(_csp)]);
+  // NO `code` ARGUMENT: identity and the script inventory are the engine's own Lexbor <script> scan of `html`,
+  // because a concatenation of a page's scripts cannot represent per-script scope and shifts with an inline
+  // script the page did not ship. It used to be passed and cast away on the other side.
+  M.ccall("qjs_init", "number", ["number", "number", "number", "number"],
+    [arg(html || ""), arg(originOf(msg && msg.sourceUrl)), arg(_docId), arg(_csp)]);
   const _bid = (M.ccall("qjs_bundle_id", "number", [], []) >>> 0).toString(36);
   const fkey = originOf(msg && msg.sourceUrl) + "|" + _bid;
   const prior = persist ? await frontierGet(fkey) : null;

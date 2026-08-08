@@ -85,6 +85,14 @@ typedef struct {
        of. It is not per-flow: no flow can turn a tab into a popup, so unlike `closed` and `name` there is
        nothing here for the delta to capture. */
     uint8_t is_popup;
+    /* §7.2.6's POLICY CONTAINER THE CREATOR HANDED THIS NAVIGABLE, taken at CREATION and kept as text because
+       that is what §7.4's "clone a policy container" is (policy_container_clone re-parses this same string).
+       It is here rather than read off whichever realm materializes the document because a navigable created
+       with no address is materialized LAZILY, on the first read that reaches through it — and the reader may
+       be a different same-origin document with a different policy, which would give the child whichever
+       document happened to touch it first. A creation fact, so like `is_popup` no flow can change it.
+       NULL for a navigable with an address (its policy comes with its response) and for the root. Owned. */
+    char   *creator_csp;
     uint8_t closed;    /* the navigable has been destroyed (§4.8.5) or closed (§7.2.5.2) */
     /* WHICH DOCUMENT the navigable's active document IS — the same id the world registry names worlds by, so
        "is this remote?" is one comparison against one identity rather than a second naming scheme kept beside
@@ -227,7 +235,7 @@ static void proxy_adopt_realm(JSContext *ctx, JSValueConst proxy, JSContext *rea
 }
 
 JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const char *origin, const char *name,
-                         bool is_popup, JSValueConst parent, JSValueConst opener)
+                         bool is_popup, const char *creator_csp, JSValueConst parent, JSValueConst opener)
 {
     JSValue obj;
     ProxyData *p;
@@ -253,11 +261,21 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const ch
        the navigable's name — including the empty one a `open(url)` with no target gives. */
     p->name_known = 1;
     p->is_popup = is_popup ? 1 : 0;
+    p->creator_csp = creator_csp && *creator_csp ? proxy_strdup(creator_csp) : NULL;
     p->parent = JS_DupValue(ctx, parent);
     p->opener = JS_DupValue(ctx, opener);
     p->doc = doc;
     JS_SetOpaque(obj, p);
     return obj;
+}
+
+/* §7.4's cloned policy text this navigable was created with — NULL when it was created with an address (its
+   policy arrives with its response) or when nobody created it. BORROWED. */
+const char *window_proxy_creator_csp(JSValueConst proxy)
+{
+    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    DCHECK(p != NULL, "the creator's policy was read off something that is not a WindowProxy");
+    return p->creator_csp;
 }
 
 /* §7.2.5.1's proxy for the REALM THAT IS ASKING — the one `window`, `self` and `e.source` are. Its realm is
@@ -269,7 +287,9 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name)
        an agent is origin-keyed, so a caller-supplied one could only ever agree or be wrong. */
     /* THE NAVIGABLE THE INSTANCE STARTS IN IS NOT A POPUP: no `open()` created it, so §7.4 decided
        nothing about it and its chrome is whole. */
-    JSValue obj = window_proxy_new(ctx, doc, NULL, g_local_origin, name, false, JS_UNDEFINED, JS_NULL);
+    /* NO CREATOR'S POLICY EITHER, for the same reason: nothing here created this navigable, so there is no
+       container to clone. Its document's policy is the one it was installed with — the host's response. */
+    JSValue obj = window_proxy_new(ctx, doc, NULL, g_local_origin, name, false, NULL, JS_UNDEFINED, JS_NULL);
     ProxyData *p;
 
     if (JS_IsException(obj)) return obj;

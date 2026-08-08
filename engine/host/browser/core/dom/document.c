@@ -539,17 +539,30 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     idl_install_accessor(ctx, proto, "location", js_doc_location, 0, -1);
 }
 
-/* HTML §7.2.6's container for THIS document, from the `<meta http-equiv="Content-Security-Policy">` the tree
-   carries. A REAL LEXBOR WALK, not a regex over the source: a `content` attribute is parsed markup by the time
-   it is here, so entity decoding and quoting are the parser's answer rather than a second one — the same
-   reason the bundle id is a `<script>` scan.
-   The HEADER-borne policy is the other half and is the HOST's: it arrives with the response, which the trusted
-   zone fetched, and this component never sees it. When that is plumbed it joins the same container. */
-PolicyContainer *document_meta_policy(lxb_html_document_t *dom)
+/* HTML §7.2.6's container for THIS document, from BOTH halves of the policy list.
+   `csp` IS WHAT THE DOCUMENT WAS CREATED WITH — the response's `Content-Security-Policy` header, or §7.4's
+   clone of the creator's for a document that came from no response — and it used to arrive nowhere: the
+   trusted zone captured the header, handed it to the engine, and the engine's entry point cast it to `(void)`.
+   So every document was judged against its `<meta>` policies alone, and a sink that the page's real policy
+   kills was reported as a working exploit — the exact false PoC §@S exists to never emit.
+   The meta half is a REAL LEXBOR WALK, not a regex over the source: a `content` attribute is parsed markup by
+   the time it is here, so entity decoding and quoting are the parser's answer rather than a second one — the
+   same reason the bundle id is a `<script>` scan. */
+PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp)
 {
     lxb_dom_node_t *cur;
     char *acc = NULL;
     size_t acc_len = 0;
+
+    /* THE CREATED-WITH POLICIES COME FIRST, because they were delivered first; every policy in a list is
+       enforced so the order changes no verdict, but a container that reports its own text should report it in
+       the order the document received it. */
+    if (csp && *csp) {
+        acc_len = strlen(csp);
+        acc = malloc(acc_len + 1);
+        CHECK(acc != NULL, "document: OOM holding the policy this document was created with");
+        memcpy(acc, csp, acc_len + 1);
+    }
 
     /* No guard for a missing tree: document_install has already asserted there is one, and a second, softer
        answer here would be the defensive branch that hides the case the assert exists to catch. */
@@ -636,7 +649,7 @@ void document_init(JSContext *ctx)
 }
 
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
-                      uint32_t doc_id, JSValueConst nav_proxy)
+                      const char *csp, uint32_t doc_id, JSValueConst nav_proxy)
 {
     Document *d;
     JSValue doc;
@@ -661,7 +674,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     d->doc_obj = JS_UNDEFINED;
     d->proxy = JS_UNDEFINED;
     d->win_obj = JS_UNDEFINED;
-    d->policy = document_meta_policy(dom);
+    d->policy = document_policy_new(dom, csp);
     /* THE REALM IS THE DOCUMENT FROM HERE ON — set before the early return below, because the policy was
        already built and §7.4 clones it for an about:blank child whether or not this document got an address. */
     JS_SetContextOpaque(ctx, d);

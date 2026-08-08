@@ -36,6 +36,7 @@
 #include "browser/core/streams/readable_stream.h"
 #include "browser/core/streams/queuing_strategy.h"
 #include "browser/core/streams/writable_stream.h"
+#include "browser/core/streams/transform_stream.h"
 #include "browser/core/encoding/encoding.h"
 #include "browser/core/encoding/text_stream.h"
 #include "browser/core/dom/abort.h"
@@ -138,8 +139,8 @@ static void engine_agent_init(JSContext *ctx, const char *origin)
 }
 
 /* ONE DOCUMENT — the per-realm half, run once per document including the first. */
-static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *origin, uint32_t doc_id,
-                                 JSValueConst nav_proxy)
+static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *origin,
+                                 const char *csp, uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSValue g = JS_GetGlobalObject(ctx);
 
@@ -171,7 +172,7 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
     abort_install(ctx, g);   /* AbortController/AbortSignal: fetch takes a signal, so a bundle mints one early */
     navigator_install(ctx, g);
     screen_install(ctx, g);   /* the responsive gate: screen.width decides which router a bundle uses */
-    document_install(ctx, g, dom, origin, doc_id, nav_proxy);
+    document_install(ctx, g, dom, origin, csp, doc_id, nav_proxy);
     JS_FreeValue(ctx, g);
 }
 
@@ -186,7 +187,8 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
    `(void)url;`: `window.open("/admin")` produced a popup whose scripts never ran and nothing in the output
    distinguished it from a page that had none. */
 static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
-                                     const char *origin, uint32_t doc_id, JSValueConst nav_proxy)
+                                     const char *origin, const char *csp, uint32_t doc_id,
+                                     JSValueConst nav_proxy)
 {
     JSContext *ctx = JS_NewContext(rt);
 
@@ -199,7 +201,7 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
     /* §4.4's base URL and Location come from the address; engine_realm_install builds both from `origin`
        today, which is this host's own gap and a different one from the navigation above. */
     (void)url;
-    engine_realm_install(ctx, dom, origin, doc_id, nav_proxy);
+    engine_realm_install(ctx, dom, origin, csp, doc_id, nav_proxy);
     return ctx;
 }
 
@@ -211,8 +213,12 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
  * flow's world by this name. Two instances sharing a name would hand each other's flows the same segment: one
  * timeline wearing two names. Every document BELOW this one is named by the document that created it (world.h),
  * which is what lets §4.8.5 create a child navigable without asking anyone. */
-QJS_EXPORT int qjs_init(const char *code, const char *html,
-                        const char *origin, const char *doc_id, const char *csp)
+/* THERE IS NO `code` ARGUMENT. The bridge used to hand the engine a concatenation of the page's scripts beside
+ * the HTML, and this entry deliberately ignored it — identity and the script inventory come from the DOM's own
+ * `<script>` scan, because a concatenation cannot represent per-script scope and shifts with an inline script
+ * the page did not ship. An argument that is cast to `(void)` is not "documented as unused", it is a second
+ * source of truth the next reader will wire up; it is gone from the ABI instead. */
+QJS_EXPORT int qjs_init(const char *html, const char *origin, const char *doc_id, const char *csp)
 {
     CHECK(g_dom == NULL, "qjs_init ran twice in one WASM instance — one instance is one document");
 
@@ -248,8 +254,8 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
                                 html ? strlen(html) : 0) != LXB_STATUS_OK)
         CHECK_FAIL("the document parse failed — the DOM is the ground truth every flow reads");
 
-    /* Identity and script inventory from the DOM's OWN executable scripts, never from `code`: a concatenation
-       cannot represent per-<script> scope and would shift with an inline script the page did not ship. */
+    /* Identity and script inventory from the DOM's OWN executable scripts: a concatenation of them cannot
+       represent per-<script> scope and would shift with an inline script the page did not ship. */
     g_bundle_id = document_bundle_id(g_dom);
     g_scripts   = document_exec_scripts(g_dom);
 
@@ -269,14 +275,13 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
            window.name became an attacker source. The read is concolic until something states it. */
         JSValue root_proxy = window_proxy_new_self(g_ctx, world_local_doc(), NULL);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
-        engine_realm_install(g_ctx, g_dom, origin, world_local_doc(), root_proxy);
+        engine_realm_install(g_ctx, g_dom, origin, csp, world_local_doc(), root_proxy);
         JS_FreeValue(g_ctx, root_proxy);
     }
     /* The surface is installed, so every member the platform has is declared — a declaration from here on is a
        per-wrapper or per-flow mint, and that is what the pool asserts against. */
     idl_args_seal();
 
-    (void)code; (void)unused; (void)csp;
     return 0;
 }
 

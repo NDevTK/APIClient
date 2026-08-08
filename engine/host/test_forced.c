@@ -1368,10 +1368,10 @@ static void policy_container_selftest(void)
     policy_container_free(child);
 }
 
-/* THE SCAN THAT MAKES THE CONTAINER LOAD-BEARING, which the parser test above does not reach: the parse can be
-   perfect and still answer for nothing if the document's own `<meta>` never gets to it. Its own tree, because
-   that is what makes it exercisable at all. */
-static void meta_policy_selftest(void)
+/* WHAT MAKES THE CONTAINER LOAD-BEARING, which the parser test above does not reach: the parse can be perfect
+   and still answer for nothing if neither of the document's two policy sources gets to it — the response's
+   header and its own `<meta>`. Its own tree, because that is what makes it exercisable at all. */
+static void document_policy_selftest(void)
 {
     static const char *SRC =
         "<html><head>"
@@ -1388,7 +1388,7 @@ static void meta_policy_selftest(void)
     lxb_html_document_t *plain;
 
     lxb_html_document_parse(dom, (const lxb_char_t *)SRC, strlen(SRC));
-    p = document_meta_policy(dom);
+    p = document_policy_new(dom, NULL);
     CHECK(policy_container_csp(p) != NULL, "the meta scan found no policy in a document that declares two");
     CHECK(!policy_allows(p, POLICY_INLINE_HANDLER),
           "two meta policies must INTERSECT — the second's 'self' forbids what the first's 'unsafe-inline' "
@@ -1399,8 +1399,23 @@ static void meta_policy_selftest(void)
        it — an empty container that answered "blocked" would suppress every real finding on every such page. */
     plain = lxb_html_document_create();
     lxb_html_document_parse(plain, (const lxb_char_t *)"<html><body></body></html>", 26);
-    empty = document_meta_policy(plain);
+    empty = document_policy_new(plain, NULL);
     CHECK(policy_allows(empty, POLICY_INLINE_HANDLER), "a document with no meta CSP must permit everything");
+
+    {
+        /* §7.2.6's OTHER HALF. The response header and the `<meta>` policies are ONE LIST and every policy in
+           it is enforced, so a header that forbids inline must still forbid it on a page whose meta permits it
+           — which is exactly the page above. The engine's entry point used to drop the header, so this page
+           reported a live inline handler that the real response kills. */
+        PolicyContainer *hdr = document_policy_new(plain, "script-src 'self'");
+        PolicyContainer *both = document_policy_new(dom, "default-src 'unsafe-inline'");
+        CHECK(!policy_allows(hdr, POLICY_INLINE_HANDLER),
+              "a header-borne policy must be enforced on a document whose tree declares none");
+        CHECK(!policy_allows(both, POLICY_INLINE_HANDLER),
+              "the header and the meta policies are ONE LIST — a permissive header cannot widen a narrow meta");
+        policy_container_free(hdr);
+        policy_container_free(both);
+    }
 
     policy_container_free(p);
     policy_container_free(empty);
@@ -1592,7 +1607,7 @@ static void tf_agent_init(JSContext *ctx)
 
 /* ONE DOCUMENT — run once per document including the first. */
 static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
-                             uint32_t doc_id, JSValueConst nav_proxy)
+                             const char *csp, uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSValue g = JS_GetGlobalObject(ctx);
     /* THE HOST'S NETWORK. SECURITY.md puts every byte of it behind the trusted chokepoint, so this host's
@@ -1659,13 +1674,13 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
        reached the tree through host-edge stand-ins (setBodyAttr, appendChild), so node.c, element.c and
        document.c — every wrapper, every prototype, every IDL coercion in them — ran only in the shipped ABI
        build where nothing asserts on the result. */
-    document_install(ctx, g, dom, url, doc_id, nav_proxy);
+    document_install(ctx, g, dom, url, csp, doc_id, nav_proxy);
     JS_FreeValue(ctx, g);
 }
 
 /* A SAME-ORIGIN CHILD NAVIGABLE'S REALM — a second JSContext in the SAME JSRuntime. */
 static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url, const char *origin,
-                                 uint32_t doc_id, JSValueConst nav_proxy)
+                                 const char *csp, uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSContext *ctx = JS_NewContext(rt);
 
@@ -1674,14 +1689,14 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
        that defined them, so a child sharing the agent realm's would resolve every unqualified
        `addEventListener` against the PARENT's window. */
     event_target_install(ctx);
-    tf_realm_install(ctx, dom, url, origin, doc_id, nav_proxy);
+    tf_realm_install(ctx, dom, url, origin, csp, doc_id, nav_proxy);
     return ctx;
 }
 
 int main(void) {
     JSRuntime *rt;
     policy_container_selftest();
-    meta_policy_selftest();
+    document_policy_selftest();
     rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);   /* align quickjs's overflow check with the emcc 8MB wasm stack */
     JSContext *ctx = JS_NewContext(rt);
@@ -1704,7 +1719,9 @@ int main(void) {
         /* The fixture built this document, so the navigable's name is the initial "" and is known. */
         JSValue root_proxy = window_proxy_new_self(ctx, world_local_doc(), "");
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
-        tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test", world_local_doc(), root_proxy);
+        /* NULL: this fixture's document is a C string literal, so it came from no response and has no
+           header-borne policy. That is a fact about it, not a gap. */
+        tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test", NULL, world_local_doc(), root_proxy);
         JS_FreeValue(ctx, root_proxy);
     }
 

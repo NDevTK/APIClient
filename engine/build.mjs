@@ -233,6 +233,34 @@ console.log("[build] OK -> " + resolve(join(OUT, "qjs.js")));
 // the design-correctness signal until the live-Chrome harness is re-wired to a rebuilt production ABI entry.
 // (The old ES6-module + qjs.wasm staging into extension/lib/qjs served the deleted qjs_* entry; it returns when
 // that entry is rebuilt.)
+/* THE ENTRY THIS BUILD DID NOT LINK IS STILL COMPILED, because otherwise it is not in the gate at all.
+   test_forced.c and main.c are alternatives — each owns main()/the ABI surface — so a plain `node
+   engine/build.mjs` never touched main.c, and main.c stopped compiling: a missing `#include` for
+   transform_stream and a `(void)unused;` naming an argument that does not exist, four errors, across many
+   commits in which every gate was green. That is the same defect as a corpus file the collector does not
+   collect (CLAUDE.md, Testing): the total LOOKS complete. Compiling the other entry as an object is a few
+   seconds and it is the whole difference between the shipped entry being verified and merely existing. */
+{
+  const other = join(HOST, ABI ? "test_forced.c" : "main.c");
+  /* THE SAME FLAGS THE LINK USED, taken FROM `args` rather than restated — a second copy of the include paths
+     and the -W list is how a check ends up compiling something the real build does not. The -I flags are
+     two-token pairs there, so they are re-joined here. */
+  const flags = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "-I") { flags.push("-I" + args[++i]); continue; }
+    if (typeof args[i] === "string" && (args[i].startsWith("-D") || args[i].startsWith("-W") || args[i] === "-O1"))
+      flags.push(args[i]);
+  }
+  const c = spawnSync(EMCC, [...flags, "-c", other, "-o", join(WORK, "entry-check.o")],
+                      { stdio: "inherit", shell: true, cwd: QJS });
+  if (c.status !== 0) {
+    console.error("[build] the OTHER entry (" + other + ") does not compile — it is part of this program even " +
+                  "when it is not the one being linked");
+    process.exit(c.status || 1);
+  }
+  console.log("[build] OK -> " + other + " compiles too");
+}
+
 if (ABI) {
   console.log("[build] OK -> " + resolve(join(EXT_QJS, "qjs.mjs")) + " (no smoke run: the ABI entry has no main())");
 } else {
