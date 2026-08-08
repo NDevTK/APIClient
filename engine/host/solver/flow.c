@@ -13,12 +13,12 @@ static Flow *g_running = NULL;   /* the flow currently holding the worker (the s
    so whoever asks what the host owes has to visit all of them. flow_best answers a different question. */
 Flow *flow_at(int i) { return (i >= 0 && i < g_flows_n) ? g_flows[i] : NULL; }
 
-void flow_registry_init(uint32_t doc_id) {
+void flow_registry_init(const char *doc_name) {
     g_flows = NULL; g_flows_n = 0; g_flows_cap = 0; g_gen = 0; g_running = NULL;
     /* THE WORLD NAMESPACE COMES UP WITH THE FRONTIER, not beside it: every flow added below is minted a world
        named by this document, and a frontier whose worlds were unnamed could not be reached from another
        instance at all. */
-    world_registry_init(doc_id);
+    world_registry_init(doc_name);
 }
 
 unsigned flow_frontier_gen(void) { return g_gen; }

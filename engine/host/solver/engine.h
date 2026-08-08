@@ -116,6 +116,15 @@ int      engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value);
 /* What the host still owes, as `id<TAB>op` lines. Pulled each step, and deliberately NOT deduped. */
 const char *engine_host_requests(void);
 
+/* AN EMISSION TO THE HOST — one way, never answered, and therefore never a suspend. "A new document exists,
+   here is its name and what to load in it" is that shape: HTML §4.8.5 creates a child navigable inside the
+   insertion steps, so it cannot ask anything, and it does not need to — the name is minted here (world.h) and
+   the host is TOLD. It is an emission for the same reason a cross-document message is one: immutable once sent,
+   so nothing has to un-send it when the sending flow parks or is outranked, and it needs no COW capture. */
+void        engine_host_notify(JSContext *ctx, const char *op);
+/* The notices posted since the last call, newline-joined, DRAINED by the call. "" when there are none. */
+const char *engine_host_notices(void);
+
 const char *engine_pending_urls(void);                                  /* newline-joined, or "" */
 int engine_provide(JSContext *ctx, const char *url, JSValueConst value); /* entries filled */
 

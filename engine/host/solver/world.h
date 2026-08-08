@@ -49,14 +49,33 @@ typedef struct { uint32_t doc; uint32_t serial; } WorldId;
 static inline bool world_is_none(WorldId w) { return w.doc == 0 && w.serial == 0; }
 static inline bool world_eq(WorldId a, WorldId b) { return a.doc == b.doc && a.serial == b.serial; }
 
-/* This instance's document id, which every world it mints is qualified by. Must be non-zero and must differ
-   from every peer's — the host assigns it, because the host is what knows there is more than one. */
-void world_registry_init(uint32_t doc_id);
+/* THIS INSTANCE'S DOCUMENT, BY NAME. The root instance's name comes from the host, because only the host knows
+   there is more than one document at all; every name below it is minted here — see world_mint_doc. */
+void world_registry_init(const char *doc_name);
 void world_registry_free(JSContext *ctx);
 
-/* THIS INSTANCE'S DOCUMENT ID — the ONE answer to "which document am I", so that "is this navigable remote?"
+/* THIS INSTANCE'S DOCUMENT — the ONE answer to "which document am I", so that "is this navigable remote?"
    is a comparison against a single identity rather than a second naming scheme kept in parallel. */
 uint32_t world_local_doc(void);
+
+/* A DOCUMENT IS NAMED, AND A `uint32_t doc` IS THIS INSTANCE'S HANDLE FOR A NAME — an index into the local
+   table, 1-based so zero stays the NONE value. Handles are local and mean nothing to a peer; the NAME is what
+   crosses the seam, which is why every request that carries a document carries world_doc_name.
+ *
+ * WHY NAMES AND NOT NUMBERS THE HOST HANDS OUT. A document created by this one is named "<my name>.<n>":
+ * unique by induction from the root name, with no allocator, no lock and no round trip — the identical argument
+ * the WorldId above rests on, applied one level up. It has to be, because HTML §4.8.5 creates a child navigable
+ * in the INSERTION STEPS: `frame.contentWindow` answers on the line after the append, and a round trip cannot
+ * happen there. Asking the host to mint turned the one operation the spec defines as synchronous into a
+ * suspend, and every host answered it with "not created" rather than host a second document — so an iframe's
+ * contentWindow was null and the whole of html/browsers read members of null. Numbering by a host-assigned
+ * block would have been the other way to avoid the round trip, and it is a cap on how many documents can
+ * exist, which §scheduler bans. */
+uint32_t    world_doc_intern(const char *name);
+const char *world_doc_name(uint32_t doc);
+
+/* MINT A DOCUMENT CREATED BY THIS ONE and return its handle. Synchronous and unbounded. */
+uint32_t world_mint_doc(void);
 
 /* MINT a root world, for a flow created in this instance from the baseline. */
 WorldId world_mint(void);

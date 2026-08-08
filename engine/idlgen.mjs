@@ -131,10 +131,15 @@ const INTERFACES = {
      audit lying in the direction that gets a real gap ignored. */
   HTMLElement:         [...HTML_BASE],
   HTMLUnknownElement:  [...HTML_BASE],
-  HTMLAnchorElement:   [...HTML_BASE],
+  /* HTMLAnchorElement INCLUDES HTMLHyperlinkElementUtils, whose eight members live in their own component —
+     and leaving that file out made the audit report href, protocol, host, hostname, port, pathname, search and
+     hash ABSENT while they were installed and passing their spec tests. A false ABSENT is the audit lying in
+     the direction that buries the real ones in noise. */
+  HTMLAnchorElement:   [...HTML_BASE, "core/html/hyperlink.c"],
   HTMLScriptElement:   [...HTML_BASE],
   HTMLImageElement:    [...HTML_BASE],
-  HTMLIFrameElement:   [...HTML_BASE],
+  /* §4.8.5's navigable members are their own component, for the same reason the hyperlink mixin's are. */
+  HTMLIFrameElement:   [...HTML_BASE, "core/html/html_iframe.c"],
   HTMLFormElement:     [...HTML_BASE],
   HTMLInputElement:    [...HTML_BASE],
   HTMLButtonElement:   [...HTML_BASE],
@@ -142,6 +147,14 @@ const INTERFACES = {
   HTMLMetaElement:     [...HTML_BASE],
   HTMLDivElement:      [...HTML_BASE],
   Document:            ["core/dom/document.c", "core/dom/node.c", "core/events/event_target.c"],
+  /* THE GLOBAL ITSELF, which had no row at all — the interface a page touches before any other, and the audit
+     said nothing about it. §7.2.5's members are spread over the components that own them: the browsing-context
+     half, §7.4's open, the six bars, the event-loop timers, §9.4.4's postMessage, and EventTarget, which Window
+     inherits. Its ABSENT list is long, and that is the measurement rather than a reason not to take it. */
+  Window:              ["core/frame/window.c", "core/frame/navigable.c", "core/frame/bar_prop.c",
+                        "core/timing/timer.c", "core/frame/window_message.c", "core/events/event_target.c",
+                        "core/frame/location.c", "core/frame/navigator.c", "core/frame/screen.c",
+                        "core/dom/document.c", "core/structured_clone.c"],
   HTMLTemplateElement: [...HTML_BASE],
 };
 

@@ -984,11 +984,10 @@ static bool element_tree_steps_step(JSContext *ctx, void *vb)
     if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
         lxb_dom_element_t *el = lxb_dom_interface_element(n);
         if (e->inserted) {
-            /* §4.8.5: an inserted <iframe> CREATES A CHILD NAVIGABLE. ENQUEUED, never done here: the child is
-               a peer instance, so creating it asks the host and suspends, and this walk may not — its buffer is
-               a raw per-machine allocation with no clone contract and no way to park, which is sound only
-               while every per-node effect is an enqueue. It joins <script> preparation and custom-element
-               upgrades as one more queued effect. */
+            /* §4.8.5: an inserted <iframe> CREATES A CHILD NAVIGABLE, right here, which is where the spec puts
+               it — `frame.contentWindow` answers on the line after the append. It does not suspend (the child's
+               name is minted locally), so it does not need the enqueue this walk's buffer would otherwise
+               demand; it joins <script> preparation and custom-element upgrades as one more per-node effect. */
             {
                 size_t qn = 0;
                 const lxb_char_t *q = lxb_dom_element_qualified_name(el, &qn);
@@ -996,7 +995,7 @@ static bool element_tree_steps_step(JSContext *ctx, void *vb)
                    element and must not be told apart by how their name happened to be stored. */
                 if (q && qn == 6 && !strncasecmp((const char *)q, "iframe", 6)) {
                     JSValue w = node_wrap(ctx, n);
-                    if (!iframe_has_navigable(ctx, w)) iframe_queue_create(ctx, w);
+                    iframe_create_navigable(ctx, w);
                     JS_FreeValue(ctx, w);
                 }
             }
@@ -1005,6 +1004,17 @@ static bool element_tree_steps_step(JSContext *ctx, void *vb)
                "learned by execution", beside the <script> preparation right above it. */
             custom_elements_try_upgrade(ctx, el);
         } else {
+            /* §4.8.5's removing steps, the pair of the insertion steps above: an <iframe> that LEAVES a
+               document destroys its child navigable. Without it a removed frame kept answering as a live one —
+               `contentWindow` stayed non-null and `closed` stayed false, which is precisely what the spec files
+               distinguish a destroyed navigable by. */
+            size_t qn = 0;
+            const lxb_char_t *q = lxb_dom_element_qualified_name(el, &qn);
+            if (q && qn == 6 && !strncasecmp((const char *)q, "iframe", 6)) {
+                JSValue w = node_wrap(ctx, n);
+                iframe_destroy_navigable(ctx, w);
+                JS_FreeValue(ctx, w);
+            }
             custom_elements_disconnected(ctx, el);
         }
     }

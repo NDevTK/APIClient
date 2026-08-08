@@ -23,21 +23,75 @@ typedef struct {
 static uint32_t g_doc;
 static uint32_t g_next_serial;
 
+/* THE DOCUMENT NAME TABLE. A handle is an index+1, so 0 stays the NONE value; the table is append-only for the
+   life of the instance because a handle already stored in a WindowProxy or a WorldId must never come to mean a
+   different document. It is small by construction — one entry per document this instance has ever named. */
+static char **g_docs;
+static uint32_t g_docs_n, g_docs_cap;
+static uint32_t g_next_child;   /* the serial half of the names this document mints */
+
+uint32_t world_doc_intern(const char *name)
+{
+    uint32_t i;
+
+    DCHECK(name != NULL && *name, "a document with no name was interned — the name is what crosses the seam, so "
+                                  "an empty one names every document at once");
+    for (i = 0; i < g_docs_n; i++)
+        if (!strcmp(g_docs[i], name)) return i + 1;
+    if (g_docs_n == g_docs_cap) {
+        uint32_t cap = g_docs_cap ? g_docs_cap * 2 : 8;
+        char **g = realloc(g_docs, cap * sizeof *g);
+        CHECK(g != NULL, "world registry: OOM recording a document name — a document whose name is lost can "
+                         "never be routed to, so every read through it would park its flow forever");
+        g_docs = g;
+        g_docs_cap = cap;
+    }
+    g_docs[g_docs_n] = strdup(name);
+    CHECK(g_docs[g_docs_n] != NULL, "world registry: OOM recording a document name");
+    return ++g_docs_n;
+}
+
+const char *world_doc_name(uint32_t doc)
+{
+    DCHECK(doc != 0 && doc <= g_docs_n, "a document handle that names no document was serialized — a handle is "
+                                        "this instance's index into its own name table and means nothing else");
+    return g_docs[doc - 1];
+}
+
+uint32_t world_mint_doc(void)
+{
+    char buf[64];
+    const char *self;
+
+    DCHECK(g_doc != 0, "a document was created before world_registry_init named the one creating it");
+    self = world_doc_name(g_doc);
+    /* "<my name>.<n>" — unique by induction from the root name, which is what lets this be synchronous. */
+    DCHECK(strlen(self) + 12 < sizeof buf,
+           "a document name grew past this buffer — names nest one component per navigable depth, so this is a "
+           "frame tree deeper than the buffer holds and the fix is to grow it, never to truncate a name into a "
+           "collision with another document");
+    snprintf(buf, sizeof buf, "%s.%u", self, ++g_next_child);
+    CHECK(g_next_child != 0, "the child-document counter wrapped — the next name it mints collides with a "
+                             "document that already exists, merging two documents into one identity");
+    return world_doc_intern(buf);
+}
+
 static MintedWorld *g_minted;
 static uint32_t     g_minted_n, g_minted_cap;
 
 static ForeignSegment *g_segs;
 static int             g_segs_n, g_segs_cap;
 
-void world_registry_init(uint32_t doc_id)
+void world_registry_init(const char *doc_name)
 {
-    /* ZERO IS THE NONE VALUE, so a document that took it would mint worlds indistinguishable from "no world".
-       The host assigns this, and it is the host that knows whether there is more than one document at all. */
-    DCHECK(doc_id != 0, "the world registry was given document id 0, which is the reserved NONE value — the "
-                        "host must assign every document a distinct non-zero id");
-    DCHECK(g_doc == 0 || g_doc == doc_id, "the world registry was re-initialised with a different document id "
-                                          "— one instance is one document, and its worlds are named by it");
-    g_doc = doc_id;
+    uint32_t doc;
+
+    DCHECK(doc_name != NULL && *doc_name, "the world registry was given no document name — the host names the "
+                                          "root document because only it knows there is more than one");
+    doc = world_doc_intern(doc_name);
+    DCHECK(g_doc == 0 || g_doc == doc, "the world registry was re-initialised with a different document name "
+                                       "— one instance is one document, and its worlds are named by it");
+    g_doc = doc;
     g_next_serial = 1;
 }
 
@@ -52,6 +106,11 @@ void world_registry_free(JSContext *ctx)
     free(g_minted);
     g_minted = NULL;
     g_minted_n = g_minted_cap = 0;
+    for (i = 0; i < (int)g_docs_n; i++) free(g_docs[i]);
+    free(g_docs);
+    g_docs = NULL;
+    g_docs_n = g_docs_cap = 0;
+    g_next_child = 0;
     g_doc = 0;
     g_next_serial = 0;
 }

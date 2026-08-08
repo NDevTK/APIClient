@@ -45,6 +45,7 @@
 #include "core/html/html_iframe.h"
 #include "core/frame/navigable.h"
 #include "solver/world.h"
+#include "solver/dom_cow.h"
 #include "core/frame/window_message.h"
 #include "core/structured_clone.h"
 #include "core/events/event_target.h"
@@ -405,38 +406,26 @@ static void wpt_report_exception(JSContext *ctx, const char *name, const char *w
     JS_FreeValue(ctx, e);
 }
 
-/* THE HOST'S HALF, pumped between resumes. A member that suspends on the host — HTML §7.4's `window.open`,
-   whose child document id only the host knows — parks the flow on the pending register and returns to whoever
-   is driving it. Here that is the loop below, so the answer is supplied there and the very next resume finds
-   it. Without this the flow would be re-entered with the question still open and spin. */
+/* THE HOST'S HALF, pumped between resumes.
+ *
+ * NOTICES ARE ONE-WAY and are drained here. `navigable.create` announces a document the engine has already
+ * named and already handed the page a WindowProxy for, so there is nothing to answer — the engine mints its own
+ * child document names (world.h), which is what makes §4.8.5's insertion-step creation synchronous.
+ *
+ * WHAT THIS RUNNER STILL OWES A CHILD DOCUMENT IS AN INSTANCE, and it cannot provide one: one document per
+ * instance, and the components hold per-document singletons, so a second document cannot live in this process.
+ * The consequence is exact rather than vague — a read that needs the child's ACTIVE DOCUMENT parks its flow and
+ * the file times out, which is visible; a read that needs only the NAVIGABLE (self, parent, top, opener,
+ * closed, name) is answered inside the creating instance and never reaches here at all.
+ *
+ * SO THERE IS NO REQUEST LOOP. There was one, and every branch in it has been deleted rather than emptied: a
+ * loop that walks the owed requests and answers none of them is not a place to add the missing capability, it
+ * is a place to be tempted into guessing an answer — which is what "not created" was. An unanswered request
+ * stays on the flow's register and is reported by qjs_host_requests to whoever can eventually route it. */
 static void wpt_answer_host_requests(JSContext *ctx)
 {
-    const char *p = engine_host_requests();
-
-    while (*p) {
-        const char *tab = strchr(p, '\t');
-        const char *end = strchr(p, '\n');
-        uint32_t id;
-
-        if (!tab || !end) break;
-        id = (uint32_t)strtoul(p, NULL, 10);
-        if (!strncmp(tab + 1, "navigable.create\t", 17)) {
-            /* §7.4 RETURNS NULL WHEN THE NAVIGABLE IS NOT CREATED — a popup blocker, a sandboxed context, or a
-               host that cannot host another document. This runner is the last of those: one document per
-               instance, and 20 components hold per-document singletons, so a second document cannot live in
-               this process.
-               IT MINTED AN ID BEFORE, and that was a fabrication — an id for a document nothing runs, handed
-               back as a WindowProxy whose every read has no answerer. Those reads then parked their flows
-               forever and three spec files stopped completing at all. Saying "not created" is the truthful
-               answer for a host that cannot, and it is the same one the extension's offscreen gives. */
-            JSValue v = JS_NewString(ctx, "0");
-            engine_host_answer(ctx, id, v);
-            JS_FreeValue(ctx, v);
-        }
-        /* An operation this harness does not implement is left UNANSWERED rather than guessed: the asking flow
-           stays parked, which is visible, where a wrong answer is not. */
-        p = end + 1;
-    }
+    (void)ctx;
+    (void)engine_host_notices();
 }
 
 /* Run one program as a FLOW, exactly as the test262 harness does: park and rebuild the whole frame chain at
@@ -532,7 +521,7 @@ int main(int argc, char **argv)
     message_event_install(ctx, global);
     /* NAME THIS DOCUMENT. A WindowProxy answers "is this navigable remote?" by comparing against the one
        document identity the world registry owns, so the registry has to be up before the first proxy exists. */
-    world_registry_init(1);
+    world_registry_init("wpt");
     /* HTML §7.2.2's BROWSING-CONTEXT MEMBERS — window, self, frames, parent, top, opener, closed, origin and
        name. This runner had none of them, so `window` itself was undefined and every test in
        html/browsers/the-window-object failed on its first line. It could not call window_install before,
@@ -546,7 +535,7 @@ int main(int argc, char **argv)
        is the frontier's. This runner drives quickjs flows (JS_FlowNew/JS_FlowResume) but had no solver flow at
        all, so §7.4's open() aborted on "issued outside a flow" — correctly. One flow, set running for the whole
        run: this harness exercises components, and the BFS that would rank many of them is the engine's. */
-    flow_registry_init(1);
+    flow_registry_init("wpt");
     flow_set_running(flow_add(ctx, JS_UNDEFINED, NULL, 0, WORLD_NONE));
 
     /* A REAL DOCUMENT — the same Lexbor parse the engine runs, of the minimal document WPT wraps a .window.js
@@ -562,8 +551,13 @@ int main(int argc, char **argv)
         CHECK(g_wpt_dom != NULL, "the runner's document allocation failed");
         CHECK(lxb_html_document_parse(g_wpt_dom, (const lxb_char_t *)DOC, sizeof DOC - 1) == LXB_STATUS_OK,
               "the runner's document did not parse");
+        /* THE DOM CHOKEPOINT'S CONTEXT. §4.2.3's insertion and removing steps are fired from the solver's tree
+           chokepoint, which needs the runtime they run in — and this runner never named one, so it ran NONE of
+           them: no <script> preparation, no custom-element upgrade, no §4.8.5 child navigable. It failed
+           silently, three layers away, as an iframe whose contentWindow was null. */
+        dom_cow_set_ctx(ctx);
         element_init(ctx);
-    iframe_init(ctx);   /* §4.8.5: the queued child-navigable driver */
+    iframe_init(ctx);   /* §4.8.5: the slot a child navigable lives in */
         document_install(ctx, global, g_wpt_dom, "http://web-platform.test/");
     }
     window_install(ctx, global, "http://web-platform.test");

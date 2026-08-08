@@ -145,11 +145,11 @@ typedef struct Flow {
     void *park_ctx; void *park_fn; void *park_opaque;
 } Flow;
 
-/* `doc_id` is THIS INSTANCE'S DOCUMENT identity, and it is a parameter rather than a separate init call so a
-   frontier cannot exist without one: every flow is minted a world named by it, and two instances that shared an
-   id would hand each other's flows the same segment. The host assigns it, because the host is what knows there
-   is more than one document. */
-void  flow_registry_init(uint32_t doc_id);
+/* `doc_name` is THIS INSTANCE'S DOCUMENT identity, and it is a parameter rather than a separate init call so a
+   frontier cannot exist without one: every flow is minted a world named by it, and two instances that shared a
+   name would hand each other's flows the same segment. The host names the ROOT document, because the host is
+   what knows there is more than one; every document below it is named by the one that created it. */
+void  flow_registry_init(const char *doc_name);
 void  flow_registry_free(JSContext *ctx);
 
 /* Add a flow to the frontier. Takes ownership of `dec` (freed with the flow) and dups `fn`. `dec` may be NULL

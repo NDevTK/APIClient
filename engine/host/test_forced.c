@@ -9,6 +9,7 @@
 #include "solver/world.h"
 #include "core/frame/navigable.h"
 #include "core/timing/timer.h"
+#include "core/frame/window.h"
 #include "core/frame/window_proxy.h"
 #include "core/html/html_iframe.h"
 #include "solver/engine.h"
@@ -1160,23 +1161,33 @@ static const char *HTML =
     /* AND ONE ON EACH SIDE OF A FORK. A blocked flow that forks must RE-ISSUE its request under the sibling's
        own world — sharing the id would deliver one answer into two call sites in two contradictory worlds. */
     "fetch('/api/hostreqfork?v=' + hostRead(cfg.admin ? 'hrA' : 'hrP'));"
-    /* §7.4: a child navigable. `open()` SUSPENDS — its document id can only come from the host — and resumes
-       holding a WindowProxy for a document in ANOTHER instance, so the proxy reports itself remote. */
+    /* §7.4: a child navigable. `open()` hands back a WindowProxy for a document in ANOTHER instance AT ITS OWN
+       CALL SITE — the child's name is minted here, so there is nothing to ask and nothing to suspend for. */
     "var _w = open(); fetch('/api/navopen?v=' + (_w ? 'proxy' : 'null'));"
     /* §7.2.5.1 ACROSS INSTANCES: the child's document lives in another instance, so this read SUSPENDS the
        flow, the peer answers, and the flow resumes with the value AT THE CALL SITE — `false`, not undefined. */
     /* The TYPES matter as much as the values: an answer that came back as the string "false" would satisfy a
        loose check and prove only that bytes moved. `=== false` and `=== 0` say the peer's value arrived as
        itself. */
-    /* §4.8.5: INSERTING an <iframe> creates a child navigable — at insertion, which is where a browser makes
-       it. Creating it asks the host, so the insertion step ENQUEUES it; the navigable is therefore visible on
-       the next TASK, never in a microtask continuation, because §8.1.7 runs the checkpoint before the next
-       task. That is a browser's ordering too. Reading THROUGH the proxy suspends again and the peer answers,
-       so `closed` arrives as a real boolean. */
-    "var _if = document.createElement('iframe'); document.body.appendChild(_if);"
-    "setTimeout(function(){"
-    " fetch('/api/iframenav?v=' + (_if.contentWindow && _if.contentWindow === _if.contentWindow &&"
-    " _if.contentWindow.closed === false ? 'ifnav' : 'wrong')); }, 0);"
+    /* §4.8.5: INSERTING an <iframe> creates a child navigable IN THE INSERTION STEPS, so `contentWindow`
+       answers ON THE LINE AFTER THE APPEND — no task, no microtask, no await. The read is deliberately in the
+       same statement sequence as the append: a create that had to ask the host could not satisfy it, which is
+       exactly the shape the spec files assert (`document.body.appendChild(frame).contentWindow`). Reading
+       THROUGH the proxy is what suspends, and the peer answers, so `closed` arrives as a real boolean. */
+    /* AND THE NAVIGABLE'S OWN STATE IS ANSWERED HERE, not by the peer: self/window/frames are this navigable's
+       proxy by definition, `parent`/`top` are the creator, `opener` is null for a nested one, and `name` is the
+       element's `name` ATTRIBUTE — which the removal below then empties while leaving the attribute alone. */
+    "var _if = document.createElement('iframe'); _if.setAttribute('name','fr');"
+    "document.body.appendChild(_if); var _cw = _if.contentWindow;"
+    "var _ifok = !!_cw && _cw.self === _cw && _cw.window === _cw && _cw.frames === _cw &&"
+    " _cw.globalThis === _cw && _cw.parent === window && _cw.top === window && _cw.opener === null &&"
+    " _cw.closed === false && _cw.name === 'fr';"
+    /* §4.8.5's REMOVING STEPS: the element loses its navigable, and the proxy the page still holds stays the
+       same object while reporting a destroyed one. */
+    "document.body.removeChild(_if);"
+    "_ifok = _ifok && _if.contentWindow === null && _cw.closed === true && _cw.name === '' &&"
+    " _cw.self === _cw && _if.getAttribute('name') === 'fr';"
+    "fetch('/api/iframenav?v=' + (_ifok ? 'ifnav' : 'wrong'));"
 
     /* HTML §8.6's TIMER TASK SOURCE, and §8.1.7's ordering around it — neither of which this fixture exercised
        at all, so `setTimeout` had no probe in the engine's own test despite being how a great deal of real code
@@ -1239,8 +1250,8 @@ static const char *HTML_MIN =
     /* AND ONE ON EACH SIDE OF A FORK. A blocked flow that forks must RE-ISSUE its request under the sibling's
        own world — sharing the id would deliver one answer into two call sites in two contradictory worlds. */
     "fetch('/api/hostreqfork?v=' + hostRead(cfg.admin ? 'hrA' : 'hrP'));"
-    /* §7.4: a child navigable. `open()` SUSPENDS — its document id can only come from the host — and resumes
-       holding a WindowProxy for a document in ANOTHER instance, so the proxy reports itself remote. */
+    /* §7.4: a child navigable. `open()` hands back a WindowProxy for a document in ANOTHER instance AT ITS OWN
+       CALL SITE — the child's name is minted here, so there is nothing to ask and nothing to suspend for. */
     "var _w = open(); fetch('/api/navopen?v=' + (_w ? 'proxy' : 'null'));"
     "</script>"
     "</body></html>";
@@ -1477,13 +1488,16 @@ static const IdlStepDecl HOSTREQ_DECL = { hostreq_step, sizeof(HostReqState), ho
    record to the instance holding that document; here the answer is the request text turned back, which is
    enough to prove the value reaches the call site that asked. */
 /* Child document ids this fixture has handed out. Starts above the fixture's own document (1). */
-static uint32_t g_fixture_child_doc = 1;
-
 static int hostreq_answer_all(JSContext *ctx)
 {
     const char *reqs = engine_host_requests();
     const char *p = reqs;
     int n = 0;
+
+    /* NOTICES ARE ONE-WAY. `navigable.create` announces a document the engine named itself, so there is nothing
+       to answer; draining it is the whole of this fixture's obligation, and a read that needs the child's
+       ACTIVE DOCUMENT still comes through as a request above. */
+    (void)engine_host_notices();
 
     while (*p) {
         const char *tab = strchr(p, '\t');
@@ -1509,13 +1523,6 @@ static int hostreq_answer_all(JSContext *ctx)
                 v = (mlen == 6 && !memcmp(last, "closed", 6)) ? JS_FALSE
                   : (mlen == 6 && !memcmp(last, "length", 6)) ? JS_NewInt32(ctx, 0)
                                                               : JS_NULL;
-            } else if (!strncmp(tab + 1, "navigable.create\t", 17)) {
-                /* §7.4: THE HOST MINTS THE CHILD'S DOCUMENT ID, because only the host knows what ids exist. The
-                   engine must not mint one — a local counter collides with the host's namespace, and carving
-                   the id space to avoid that is a cap on how many documents there can be. */
-                char num[16];
-                snprintf(num, sizeof num, "%u", ++g_fixture_child_doc);
-                v = JS_NewString(ctx, num);
             } else {
                 v = JS_NewStringLen(ctx, tab + 1, (size_t)(end - tab - 1));
             }
@@ -1539,7 +1546,7 @@ int main(void) {
     JSContext *ctx = JS_NewContext(rt);
 
     concolic_init(ctx);
-    flow_registry_init(1);   /* one document in this fixture; the world namespace is named by it */
+    flow_registry_init("fixture");   /* one document in this fixture; the world namespace is named by it */
     world_registry_selftest(ctx);   /* the peer half: worlds minted as if by another document */
     endpoint_init();
     solve_init(ctx);
@@ -1564,8 +1571,12 @@ int main(void) {
        platform edge the engine's own test could not exercise. */
     timer_install(ctx, g);
     timer_set_script_sink(engine_queue_script);   /* §8.6: a STRING handler is evaluated, as a flow */
-    /* §7.4's `window.open`, whose child document id can only come from the host — so the call SUSPENDS and the
-       flow resumes holding a WindowProxy for a document in another instance. */
+    /* §7.2.2's BROWSING-CONTEXT SURFACE, which this fixture did not have at all: `window`, `self`, `parent`,
+       `top`, `closed`, `close()`, the bars. A probe that reads `_cw.parent === window` cannot be written
+       without it, and a document with no `window` is not a document any page script would survive. */
+    window_install(ctx, g, "https://x.test/p");
+    /* §7.4's `window.open`, which hands back a WindowProxy for a document in ANOTHER instance at its own call
+       site — the child's name is minted in this instance, so nothing suspends. */
     window_proxy_init(ctx);
     window_proxy_install_members(ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
     navigable_install(ctx, g, "https://x.test");
@@ -1624,7 +1635,7 @@ int main(void) {
        document.c — every wrapper, every prototype, every IDL coercion in them — ran only in the shipped ABI
        build where nothing asserts on the result. */
     element_init(ctx);
-    iframe_init(ctx);   /* §4.8.5: the queued child-navigable driver */
+    iframe_init(ctx);   /* §4.8.5: the slot a child navigable lives in */
     document_install(ctx, g, dom, "https://x.test");
     JS_FreeValue(ctx, g);
 
@@ -2107,6 +2118,7 @@ int main(void) {
     request_free(ctx);   /* Response.prototype — one object, held for the runtime's life */
     idl_args_free(ctx);   /* the dictionary member atoms the declaration pool interned */
     navigable_free(ctx);
+    window_free(ctx);
     window_proxy_free(ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */
     flow_registry_free(ctx);
     JS_RunGC(rt);   /* collect flow-local garbage from the runs before teardown */

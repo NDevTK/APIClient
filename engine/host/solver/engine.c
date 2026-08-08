@@ -288,6 +288,44 @@ const char *engine_host_requests(void) {
     return join;
 }
 
+/* THE ONE-WAY LINE. A notice is not on a flow's pending register because nothing is waiting on it and because a
+   flow that finishes must not take it with it: the document it announces exists whatever becomes of the flow
+   that created it. One buffer, appended to and drained whole — a notice the host has read is gone. */
+static char  *g_notices;
+static size_t g_notices_n, g_notices_cap;
+
+void engine_host_notify(JSContext *ctx, const char *op) {
+    size_t len;
+    (void)ctx;
+    DCHECK(op != NULL && *op, "a host notice carried no text for the host to route on");
+    DCHECK(strchr(op, '\n') == NULL, "a host notice contains a newline, which is the record separator — the "
+                                     "host would read it as two notices and route the tail as an operation");
+    len = strlen(op);
+    if (g_notices_n + len + 2 > g_notices_cap) {
+        size_t cap = g_notices_cap ? g_notices_cap * 2 : 256;
+        char *g;
+        while (cap < g_notices_n + len + 2) cap *= 2;
+        g = realloc(g_notices, cap);
+        CHECK(g != NULL, "engine: OOM recording a host notice — a dropped notice is a document the host never "
+                         "provisions, so every read through it parks its flow forever");
+        g_notices = g;
+        g_notices_cap = cap;
+    }
+    memcpy(g_notices + g_notices_n, op, len);
+    g_notices_n += len;
+    g_notices[g_notices_n++] = '\n';
+    g_notices[g_notices_n] = 0;
+}
+
+const char *engine_host_notices(void) {
+    static char *drained;
+    free(drained);
+    drained = g_notices;
+    g_notices = NULL;
+    g_notices_n = g_notices_cap = 0;
+    return drained ? drained : "";
+}
+
 const char *engine_pending_urls(void) {
     static char *join;
     size_t need = 1;

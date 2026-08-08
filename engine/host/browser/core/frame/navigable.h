@@ -7,16 +7,26 @@
  * policy_container.h.
  *
  * ONE INSTANCE IS ONE DOCUMENT, so the child is not in this heap and the clone is a CROSS-INSTANCE operation:
- * the creator's serialized policy travels with the request, and only the host can mint the child's document id
- * because only the host knows what ids exist. The engine does NOT mint one locally — a local counter would
- * collide with the host's namespace, and partitioning the id space to avoid that is a CAP on how many
- * documents there can be, which this project does not do.
+ * the creator's serialized policy travels with the notice.
  *
- * SO CREATION IS A SUSPEND, and that is the whole reason the host-request register exists. The flow parks at
- * the `open()` call exactly as it parks at an await, siblings run, the host answers with the child's id, and
- * the flow resumes holding a WindowProxy for it. */
+ * CREATION IS SYNCHRONOUS, AND THAT IS NOT A CONVENIENCE — IT IS THE SPEC. §4.8.5's iframe INSERTION STEPS
+ * create the child navigable, so `frame.contentWindow` answers on the line after the append, and §7.4's
+ * `open()` returns its WindowProxy at its own call site. Neither can round-trip to the host. This used to, and
+ * the cost was not subtle: every host answered "not created" rather than host a second document, so
+ * contentWindow was null and the whole of html/browsers read members of null.
+ *
+ * WHAT MAKES IT SYNCHRONOUS IS THE NAME. A document is named, and a document created by this one is named
+ * "<my name>.<n>" — unique by induction with no allocator and no round trip (world.h). So the engine MINTS the
+ * child and the host is TOLD, as a one-way notice. The host still owns routing, because only the trusted zone
+ * knows which instance holds which document; what it no longer owns is the identity, which it never needed to.
+ *
+ * A HOST THAT WILL NOT HOST THE CHILD does not answer that by withholding a name — it simply never provisions
+ * the instance, and every read through the proxy parks. That is a host gap, visible as a parked flow, rather
+ * than a page-visible null that a page cannot tell from a popup blocker. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FRAME_NAVIGABLE_H
 #define ENGINE_HOST_BROWSER_CORE_FRAME_NAVIGABLE_H
+
+#include <stdbool.h>
 
 #include "quickjs.h"
 
@@ -24,5 +34,14 @@
    about:blank child inherits along with the policy container. */
 void navigable_install(JSContext *ctx, JSValueConst global, const char *origin);
 void navigable_free(JSContext *ctx);
+
+/* §7.4's CREATE A NEW NAVIGABLE. `url` is the child's initial address; NULL, "" or "about:blank" all mean the
+   initial about:blank Document, which inherits this document's origin and policy container. Returns the child's
+   WindowProxy, or JS_UNDEFINED when `url` does not parse — the caller decides what that means, because §7.4
+   throws a SyntaxError for it where §4.8.5 does not. */
+/* `name` is the browsing context name to give it (an iframe's `name` attribute, §7.4's target), or NULL.
+   `is_child` distinguishes §4.8.5's CHILD navigable — nested in this one, so its `parent` is this Window — from
+   §7.4's AUXILIARY one, which is its own top and links back through `opener`. */
+JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child);
 
 #endif

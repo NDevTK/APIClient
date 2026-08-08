@@ -11,8 +11,9 @@
 /* The engine WASM factory is an ES module; this bridge lives in the CLASSIC offscreen-brain.js, so load
    it via dynamic import() (cached), NOT a static top-level import. Same-origin under the offscreen CSP. */
 let _createQJSp = null;
-// Monotonic DOCUMENT identity for the engines this offscreen owns — see the qjs_init call below. Starts at 0
-// so the first id is 1: the engine reserves 0 as "no world", and rejects a document named by it.
+// The ROOT DOCUMENT NAME for each engine this offscreen owns — see the qjs_init call below. Only the roots are
+// named here: a document an engine CREATES (an iframe's child navigable, a popup) names itself "<parent>.<n>",
+// which is what lets HTML 4.8.5 create a child navigable inside the insertion steps without asking this zone.
 let nextDocumentId = 0;
 function getCreateQJS() { return (_createQJSp || (_createQJSp = import("./lib/qjs/qjs.mjs").then((m) => m.default))); }
 
@@ -232,27 +233,16 @@ async function engineServiceFetch(eng) {   // one round: resolve every pending r
 // (its siblings keep running, which is the point of suspending rather than blocking).
 function engineServiceHostRequests(eng) {
   const M = eng.M;
-  const reqs = String(M.ccall("qjs_host_requests", "string", [], [])).split("\n").filter(Boolean);
-  for (const line of reqs) {
-    const tab = line.indexOf("\t");
-    if (tab < 0) continue;
-    const id = +line.slice(0, tab);
-    const op = line.slice(tab + 1);
-    let answer = "";
-    if (op.startsWith("navigable.create\t")) {
-      // HTML §7.4 returns null when the navigable is not created, which is what a popup blocker does and what
-      // a page checks for before taking its non-popup path. That is the honest answer while this zone cannot
-      // yet HOST a second instance: minting an id for a document nothing runs would hand the page a proxy
-      // whose every read has no answerer. Routing — spin up an instance for the child, clone the creator's
-      // policy container into it, and return its document id — is what replaces this line.
-      answer = "0";
-    } else {
-      // An operation this zone does not implement must not be answered with a guess: the asking flow stays
-      // parked, which is visible and recoverable, where a wrong answer is neither.
-      continue;
-    }
-    M.ccall("qjs_host_answer", "void", ["number", "string"], [id, answer]);
-  }
+  // ONE-WAY NOTICES. `navigable.create <child> <creator> <url> <origin> <csp>` announces a document the engine
+  // has already named and already handed the page a WindowProxy for; there is nothing to answer, because the
+  // engine mints its own child document names. What this zone still owes it is an INSTANCE: spin one up under
+  // that name with that url/origin/policy, and route requests naming it to that instance.
+  M.ccall("qjs_host_notices", "string", [], []);
+  // NO REQUEST LOOP, deliberately. Every branch that was here has been deleted rather than emptied: a loop that
+  // walks the owed requests and answers none of them is not a place to add the routing, it is a place to be
+  // tempted into guessing an answer — which is what answering `navigable.create` with "not created" was. An
+  // unanswered request stays on the asking flow's register, that flow stays parked (its siblings keep running,
+  // which is the point of suspending rather than blocking), and qjs_host_requests keeps reporting it.
 }
 function engineFinalize(eng) {
   try { eng.M.ccall("qjs_teardown", "void", [], []); }

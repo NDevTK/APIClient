@@ -82,16 +82,15 @@ static int                  g_done;
 
 /* PHASE 1 — parse and identify. No script runs, which is the whole point: the host reads the frontier key back
  * synchronously and looks up the prior session before any flow is seeded. */
-/* `doc_id` NAMES THIS INSTANCE'S DOCUMENT, and the host assigns it because the host is what knows there is
- * more than one. One instance is one document regardless of origin, so a flow that scripts an iframe or a
- * popup writes state in a peer instance — and that peer keys its segment of the flow's world by an id minted
- * here. Two instances sharing an id would hand each other's flows the same segment: one timeline wearing two
- * names. It is decimal text because it crosses the ABI beside the other strings. */
+/* `doc_id` NAMES THIS INSTANCE'S DOCUMENT, and the host names the ROOT one because the host is what knows
+ * there is more than one at all. One instance is one document regardless of origin, so a flow that scripts an
+ * iframe or a popup writes state in a peer instance — and that peer keys its segment of the flow's world by
+ * this name. Two instances sharing a name would hand each other's flows the same segment: one timeline wearing
+ * two names. Every document BELOW this one is named by the document that created it (world.h), which is what
+ * lets §4.8.5 create a child navigable without asking anyone. */
 QJS_EXPORT int qjs_init(const char *code, const char *html,
                         const char *origin, const char *doc_id, const char *csp)
 {
-    uint32_t did = doc_id ? (uint32_t)strtoul(doc_id, NULL, 10) : 0;
-
     CHECK(g_dom == NULL, "qjs_init ran twice in one WASM instance — one instance is one document");
 
     g_rt = JS_NewRuntime();
@@ -108,10 +107,10 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
     concolic_init(g_ctx);
     /* NOT A DEFAULT. An instance that does not know which document it is cannot be reached by a peer, and a
        silent 1 here would collide with every other instance that guessed the same. */
-    DCHECK(did != 0, "the host started this engine without a document id — one instance is one document, and a "
+    DCHECK(doc_id != NULL && *doc_id, "the host started this engine without a document name — one instance is one document, and a "
                      "peer instance names this document's flows by that id when it materializes their COW "
                      "segments, so an unnamed document cannot take part in cross-document time travel");
-    flow_registry_init(did);
+    flow_registry_init(doc_id);
     endpoint_init();
     solve_init(g_ctx);
 
@@ -176,9 +175,8 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
     fetch_install(g_ctx, g);
         module_loader_install(g_rt);
         location_install(g_ctx, g, origin);
-        /* §7.2.5.1 and §7.4. `window.open` SUSPENDS on the host — the child's document id can only come from
-           the zone that knows what documents exist — and returns a WindowProxy for a document in another
-           instance. The proxy class has to exist before any proxy is minted. */
+        /* §7.2.5.1 and §7.4. `window.open` returns a WindowProxy for a document in ANOTHER instance, and so
+           does §4.8.5's contentWindow. The proxy class has to exist before any proxy is minted. */
         window_proxy_init(g_ctx);
     window_proxy_install_members(g_ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
         navigable_install(g_ctx, g, origin);
@@ -190,7 +188,7 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
         navigator_install(g_ctx, g);
         screen_install(g_ctx, g);           /* the responsive gate: screen.width decides which router a bundle uses */        /* client identity: spec-fixed concrete, gated environment concolic */
         element_init(g_ctx);
-    iframe_init(g_ctx);   /* §4.8.5: the queued child-navigable driver */
+    iframe_init(g_ctx);   /* §4.8.5: the slot a child navigable lives in */
         document_install(g_ctx, g, g_dom, origin);
         JS_FreeValue(g_ctx, g);
     }
@@ -349,6 +347,17 @@ QJS_EXPORT const char *qjs_host_requests(void)
 {
     DCHECK(g_begun, "qjs_host_requests was asked of an engine that never ran");
     return engine_host_requests();
+}
+
+/* WHAT THE ENGINE TELLS THE TRUSTED ZONE, one-way, as `op` lines — DRAINED by the read. A document created
+   here (§4.8.5's child navigable, §7.4's popup) is announced rather than negotiated: the name is minted in this
+   instance, so there is nothing to ask and nothing to wait for, and the host's job is to provision an instance
+   under that name and route to it. Pulled every step beside qjs_host_requests; a notice the host drops is a
+   document nothing runs, and every read through it parks its flow forever. */
+QJS_EXPORT const char *qjs_host_notices(void)
+{
+    DCHECK(g_begun, "qjs_host_notices was asked of an engine that never ran");
+    return engine_host_notices();
 }
 
 QJS_EXPORT void qjs_host_answer(unsigned req, const char *value)

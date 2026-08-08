@@ -40,6 +40,7 @@
 #include "core/frame/window.h"
 #include "core/url/url.h"
 #include "core/frame/bar_prop.h"
+#include "core/html/html_iframe.h"
 #include "core/idl_args.h"
 #include "solver/cow.h"
 
@@ -83,6 +84,16 @@ static JSValue js_win_noeffect(JSContext *ctx, JSValueConst this_val, int argc, 
     return JS_UNDEFINED;
 }
 
+/* §7.2.5's `length`: the number of DOCUMENT-TREE CHILD NAVIGABLES. A GETTER over a real walk, never a stored
+   number — a page appends a frame, removes it and reads this, and a count something forgot to adjust is wrong
+   in exactly that case. It was absent entirely, which is `undefined` rather than 0 and is not the same answer
+   for any page that tests it. */
+static JSValue js_win_length(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    (void)this_val; (void)magic;
+    return JS_NewInt32(ctx, iframe_child_navigable_count(ctx));
+}
+
 static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)this_val; (void)argc; (void)argv;
@@ -118,6 +129,7 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     g_closed = 0;
     g_closed_owner = JS_DupValue(ctx, global);
     idl_install_accessor(ctx, g, "closed", js_win_closed, 0, -1);
+    idl_install_accessor(ctx, g, "length", js_win_length, 0, -1);
     idl_install_method(ctx, g, "close", 0, idl_method_id(ctx, NULL, 0, js_win_close, 0));
     idl_install_method(ctx, g, "focus", 0, idl_method_id(ctx, NULL, 0, js_win_noeffect, 0));
     idl_install_method(ctx, g, "blur",  0, idl_method_id(ctx, NULL, 0, js_win_noeffect, 1));
