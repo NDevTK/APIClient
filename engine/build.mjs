@@ -120,73 +120,33 @@ if (process.argv[2] === "lexbor") { console.log("[build] lexbor archive rebuilt;
 // is the node smoke-test main (build.mjs's milestone signal: does the new world compile + link + run + PASS its
 // @H/@S fixture). Rebuilding the production ABI entry that wraps engine.c's scheduler for the offscreen
 // document — and re-growing the browser components against the new fork — is the next keystone.
+/* Every .c under a directory, sorted — the same rule engine/wpt.mjs uses to decide what the gate links, and
+   for the same reason its comment gives: a list picked per component only ever describes what was needed the
+   last time someone remembered to edit it. */
+function walkC(dir, out = []) {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) walkC(p, out);
+    else if (e.name.endsWith(".c")) out.push(p);
+  }
+  return out.sort();
+}
+
 const ABI = process.argv.includes("abi");          // build the production qjs_* entry instead of the smoke main()
 const SOLVER = (f) => join(HOST, "solver", f);     // the Time-Travel Solver (the novel half)
 const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
   .map((f) => join(QJS, f))
   .concat([
-    SOLVER("cow.c"), SOLVER("engine.c"), SOLVER("flow.c"), SOLVER("decide.c"),   // per-flow COW + interleaving scheduler + weight + fork
-    SOLVER("world.c"),                                                           // the delta's CROSS-INSTANCE half: a flow's world spans documents
-    SOLVER("concolic.c"), SOLVER("endpoint.c"), SOLVER("solve.c"),               // concolic value + @H surface + @S solver
-    SOLVER("absent.c"),                                                          // absent global: unknown app state vs a component this engine owes
-    SOLVER("result.c"),                                                          // the ONE result document the host reads
-    SOLVER("dom_cow.c"), SOLVER("attr_shadow.c"),                                // DOM time-travel delta + DOM-attribute taint shadow
-    join(HOST, "browser", "core", "loader", "document_scripts.c"),               // Lexbor <script> inventory + bundle identity
-    join(HOST, "browser", "core", "fetch", "fetch.c"),
-    join(HOST, "browser", "core", "encoding", "encoding.c"),                  // TextEncoder/TextDecoder: the Encoding Standard's labels and decoders
-    join(HOST, "browser", "core", "encoding", "text_stream.c"),               // TextDecoderStream/TextEncoderStream: §7.5/§7.6 over a TransformStream
-    join(HOST, "browser", "core", "streams", "stream_work.c"),                     // the plumbing §4 and §5 share
-    join(HOST, "browser", "core", "streams", "readable_stream.c"),
-    join(HOST, "browser", "core", "streams", "writable_stream.c"),                  // WritableStream: Streams §5                // ReadableStream: Streams §4.2-§4.5
-    join(HOST, "browser", "core", "streams", "transform_stream.c"),               // TransformStream: Streams §6
-    join(HOST, "browser", "core", "streams", "pipe.c"),                          // §4.2.4's pipeTo/pipeThrough: the algorithm that holds a reader on one stream and a writer on another
-    join(HOST, "browser", "core", "streams", "queuing_strategy.c"),               // Count/ByteLengthQueuingStrategy: Streams §7
-    join(HOST, "browser", "core", "byte_reader.c"),                            // reading a byte sequence as a promise: Fetch §5.2's readers and File API §3.3's, one machine
-    join(HOST, "browser", "core", "fetch", "body.c"),
-    join(HOST, "browser", "core", "file", "blob.c"),                           // Blob: File API §3's immutable byte sequence
-    join(HOST, "browser", "core", "html", "form_data.c"),                      // FormData: XHR §5's entry list, and what .formData() answers with                          // §5.2's Body mixin: one implementation, included by Request and Response
-    join(HOST, "browser", "core", "fetch", "response.c"),
-    join(HOST, "browser", "core", "fetch", "request.c"),                       // Request: §5.3, and where the request guards become observable                       // Response: the reply a fetch promises
-    join(HOST, "browser", "core", "fetch", "headers.c"),                        // Headers: the header list an endpoint requires
-    join(HOST, "browser", "core", "loader", "module_loader.c"),                 // dynamic import: the lazy-chunk register                           // the Fetch API: every reached request funnels into the @H surface
-    join(HOST, "browser", "core", "url", "url.c"),
-    join(HOST, "browser", "core", "url", "idna.c"),                            // IDNA: UTS-46 domain-to-ASCII over RFC 3492 Punycode
-    join(HOST, "browser", "core", "url", "url_search_params.c"),                // URLSearchParams: §5.1's urlencoded list, and the URL's live view of it                              // WHATWG URL: the record and the basic URL parser every address goes through
-    join(HOST, "browser", "core", "frame", "location.c"),                       // Location: concrete principal + concolic search/hash
-    join(HOST, "browser", "core", "frame", "window.c"),                         // Window: which browsing context this is, and window.name as attacker input
-    join(HOST, "browser", "core", "idl_args.c"),
-    join(HOST, "browser", "core", "idl_iter.c"),                                // Web IDL's sequence<T>: the ES iterator protocol as requests                                // the ONE coerce-then-call machine every DOMString member shares
-    join(HOST, "browser", "core", "dom", "abort.c"),                            // AbortController/AbortSignal: the controller's flag real, a timeout's unknown
-    join(HOST, "browser", "core", "frame", "navigator.c"),
-    join(HOST, "browser", "core", "frame", "screen.c"),                         // Screen: every member the environment, so every member forks                      // Navigator: spec-fixed identity concrete, the gated environment concolic
-    join(HOST, "browser", "core", "timing", "timer.c"),                         // Timers: the timer task source, each expiry a flow
-    join(HOST, "browser", "core", "dom", "document.c"),                         // Document: parsed facts concrete, cookie/referrer input
-    join(HOST, "browser", "core", "dom", "node.c"),                             // Node: identity, the tree, and the CharacterData nodes
-    join(HOST, "browser", "core", "dom", "element.c"),
-    join(HOST, "browser", "core", "idl_indexed.c"),                             // Web IDL's indexed property getter
-    join(HOST, "browser", "core", "dom", "collections.c"),                      // NodeList + HTMLCollection, live
-    join(HOST, "browser", "core", "dom", "attr.c"),                             // DOM 4.9.2 Attr + NamedNodeMap
-    join(HOST, "browser", "core", "dom", "document_fragment.c"),                // DOM 4.7 DocumentFragment
-    join(HOST, "browser", "core", "dom", "dom_token_list.c"),                   // DOMTokenList: §7.1, and classList
-    join(HOST, "browser", "core", "css", "css_style_declaration.c"),           // CSSOM: element.style + getComputedStyle
-    join(HOST, "browser", "core", "html", "html_element.c"),                    // HTMLElement + HTML's per-tag interface table
-    join(HOST, "browser", "core", "html", "hyperlink.c"),
-    join(HOST, "browser", "core", "html", "html_iframe.c"),                      // HTMLIFrameElement navigable: HTML 4.8.5                        // HTMLHyperlinkElementUtils: HTML 4.6.3
-    join(HOST, "browser", "core", "html", "dom_string_map.c"),                  // HTML 3.2.2 dataset
-    join(HOST, "browser", "core", "html", "html_form.c"),                       // §4.10: a control's value state + submission
-    join(HOST, "browser", "core", "html", "custom_elements.c"),                 // §4.13: the registry, upgrade and reactions
-    join(HOST, "browser", "core", "html", "unhandled_rejection.c"),             // §8.1.7.5: rejections nobody handled
-    join(HOST, "browser", "core", "frame", "policy_container.c"),                 // HTML 7.2.6: the policy container an about:blank child clones
-    join(HOST, "browser", "core", "frame", "window_proxy.c"),                    // WindowProxy: HTML 7.2.5.1, the per-flow navigable binding
-    join(HOST, "browser", "core", "frame", "window_message.c"),                  // window.postMessage: HTML 9.4.4
-    join(HOST, "browser", "core", "frame", "bar_prop.c"),                        // BarProp: HTML 7.2.5.3
-    join(HOST, "browser", "core", "frame", "navigable.c"),                       // window.open: HTML 7.4, and the about:blank child's inherited policy
-    join(HOST, "browser", "core", "structured_clone.c"),                       // HTML 2.7: StructuredSerialize/Deserialize
-    join(HOST, "browser", "core", "events", "event.c"),                         // Event: §2.2, the object a listener receives
-    join(HOST, "browser", "core", "events", "message_event.c"),
-    join(HOST, "browser", "core", "events", "message_port.c"),                  // MessagePort/MessageChannel: HTML 9.4.2/9.4.3                 // MessageEvent: HTML 9.4.1, what every messaging path dispatches
-    join(HOST, "browser", "core", "events", "broadcast_channel.c"),             // BroadcastChannel: HTML 9.5
-    join(HOST, "browser", "core", "events", "event_target.c"),                  // EventTarget: listeners + the load event
+    /* EVERY BROWSER AND SOLVER SOURCE, WALKED — not a hand-picked list. The list that stood here named each
+       component with a comment, and it was wrong in the way a hand list always becomes wrong: a component
+       added and not added to it is simply NOT IN THE ENGINE. remote_object.c is what proved it — the file
+       existed, compiled, was tested through the WPT runner (which walks the tree, and has for exactly this
+       reason) and did not link into the shipped wasm, because one place knew about it and the other did not.
+       The failure was a link error here, which is the lucky version; the unlucky version is a component whose
+       symbols happen to be unreferenced and which silently ships absent.
+       ORDER IS STABLE (sorted), so a build is reproducible and a diff of this list is a diff of the tree. */
+    ...walkC(join(HOST, "solver")),
+    ...walkC(join(HOST, "browser")),
     // THE ENTRY. `abi` builds the production qjs_* surface the extension bridge drives; the default builds
     // test_forced.c's main() as the node smoke test. They are alternatives, never both: test_forced.c owns
     // main() and runs on load, which a bridge-loaded module must not do.

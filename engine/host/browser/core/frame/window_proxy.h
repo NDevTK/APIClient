@@ -57,6 +57,12 @@ uint32_t window_proxy_doc(JSValueConst proxy);
    in another WASM instance — that resolve is a host round trip and is not built; see window_proxy.c. */
 JSValue window_proxy_window(JSContext *ctx, JSValueConst proxy);
 
+/* IS THE NAVIGABLE'S ACTIVE DOCUMENT SAME-ORIGIN WITH THIS ONE? §7.2.5.1's check, exported because §4.8.5's
+   `contentDocument` makes the same decision one layer up — and must make it BEFORE asking the peer, since a
+   cross-origin answer is null and asking for it would both leak and suspend a flow on a settled question.
+   An OPAQUE origin is same-origin with NOTHING, including another opaque one. */
+bool window_proxy_same_origin_of(JSValueConst proxy);
+
 /* THE BROWSING CONTEXT'S NAME, as this flow sees it — "" when it has none. §7.3.3's named access on the Window
    matches against it, so the walk that answers `window.myFrameName` needs to read it. BORROWED. */
 const char *window_proxy_name(JSValueConst proxy);

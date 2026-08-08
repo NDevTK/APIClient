@@ -27,6 +27,7 @@
 #include "browser/core/fetch/request.h"
 #include "browser/core/url/url.h"
 #include "browser/core/frame/window_proxy.h"
+#include "browser/core/frame/remote_object.h"
 #include "browser/core/html/html_iframe.h"
 #include "browser/core/frame/navigable.h"
 #include "browser/core/url/url_search_params.h"
@@ -181,6 +182,7 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
         /* §7.2.5.1 and §7.4. `window.open` returns a WindowProxy for a document in ANOTHER instance, and so
            does §4.8.5's contentWindow. The proxy class has to exist before any proxy is minted. */
         window_proxy_init(g_ctx, origin);
+        remote_object_init(g_ctx);   /* §7.2.5.1's object half: a peer's object crosses as a NAME */
     window_proxy_install_members(g_ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
         navigable_install(g_ctx, g, origin);
         /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
@@ -270,6 +272,7 @@ QJS_EXPORT void qjs_teardown(void)
     doc_scripts_free(&g_scripts);
     navigable_free(g_ctx);
     window_free(g_ctx);
+    remote_object_free(g_ctx);
     window_proxy_free(g_ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */
     /* the runtime-lifetime values the browser components own — a component that mints one frees it. */
     abort_free(g_ctx);

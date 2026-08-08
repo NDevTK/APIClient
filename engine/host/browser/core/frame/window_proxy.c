@@ -241,6 +241,13 @@ JSValue window_proxy_window(JSContext *ctx, JSValueConst proxy)
     return JS_DupValue(ctx, p->window);
 }
 
+bool window_proxy_same_origin_of(JSValueConst proxy)
+{
+    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    DCHECK(p != NULL, "the origin of something that is not a WindowProxy was compared");
+    return proxy_same_origin(p);
+}
+
 const char *window_proxy_name(JSValueConst proxy)
 {
     ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);

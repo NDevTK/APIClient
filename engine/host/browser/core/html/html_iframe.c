@@ -31,6 +31,9 @@
 #include "core/dom/document.h"
 #include "core/frame/navigable.h"
 #include "core/frame/window_proxy.h"
+#include "solver/engine.h"
+#include "solver/flow.h"
+#include "solver/world.h"
 #include "core/idl_args.h"
 
 /* The wrapper slot the navigable lives in. Not a name a page would write, and read through JS_GetOwnSlot so no
@@ -185,6 +188,65 @@ JSValue iframe_child_navigable(JSContext *ctx, int index)
     return index < 0 ? JS_UNDEFINED : child_navigables(ctx, index, NULL);
 }
 
+/* §4.8.5 `contentDocument`, and the read that made the cross-agent reference necessary. It is the child
+ * navigable's ACTIVE DOCUMENT, filtered by §7.2.5.1's same-origin check — which is the whole of the spec's
+ * text, because a browser has the two documents in one agent cluster and the answer is a pointer.
+ *
+ * HERE IT IS IN ANOTHER INSTANCE, so the flow SUSPENDS: the peer exports its `document` and answers with the
+ * NAME of it, and this side resolves that name to the one reference for it. `contentDocument` is therefore a
+ * step machine where `contentWindow` is a plain accessor — a WindowProxy names a NAVIGABLE, which this agent
+ * created and knows, and a Document is the peer's object. */
+typedef struct { uint32_t req; } ContentDocState;
+
+static void iframe_cd_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
+
+static int iframe_content_document_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                        JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    ContentDocState *s = st;
+    JSValueConst answer;
+
+    (void)argc; (void)argv; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+
+    if (s->req == 0) {
+        JSValue nav = iframe_navigable(ctx, hdr->this_val);
+        Flow *f = flow_running();
+        WorldId anc[16];
+        char op[1024];
+        int n_anc, k, n;
+
+        /* §4.8.5: no navigable, no document. */
+        if (JS_IsUndefined(nav)) { *presult = JS_NULL; return JS_STEP_DONE; }
+        /* §4.8.5 filters by origin BEFORE asking: a cross-origin child's document is null, and asking the peer
+           for it would both leak and suspend a flow on a question whose answer is already known. */
+        if (!window_proxy_same_origin_of(nav)) {
+            JS_FreeValue(ctx, nav);
+            *presult = JS_NULL;
+            return JS_STEP_DONE;
+        }
+        DCHECK(f != NULL, "a cross-document read was issued outside a flow — there would be nothing to suspend");
+        n_anc = world_ancestry(f->world, anc, (int)(sizeof anc / sizeof anc[0]));
+        n = snprintf(op, sizeof op, "windowproxy.get\t%s\t%s:%u",
+                     world_doc_name(window_proxy_doc(nav)), world_doc_name(f->world.doc), f->world.serial);
+        for (k = 0; k < n_anc && n < (int)sizeof op; k++)
+            n += snprintf(op + n, sizeof op - (size_t)n, ",%s:%u",
+                          world_doc_name(anc[k].doc), anc[k].serial);
+        snprintf(op + n, sizeof op - (size_t)n, "\tdocument");
+        JS_FreeValue(ctx, nav);
+        s->req = engine_host_request(ctx, op);
+        return JS_STEP_YIELD;
+    }
+    if (!engine_host_answered(s->req, &answer))
+        return JS_STEP_YIELD;
+    *presult = engine_host_take(ctx, s->req);
+    s->req = 0;
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl CONTENT_DOC_DECL = { iframe_content_document_step, sizeof(ContentDocState),
+                                              iframe_cd_visit, NULL };
+
 /* §4.8.5 `contentWindow`: this flow's child navigable, or null when there is none. Reading THROUGH it is what
    suspends; this read does not, because the proxy is a local object naming a remote document. */
 static JSValue js_iframe_content_window(JSContext *ctx, JSValueConst this_val, int magic)
@@ -205,6 +267,8 @@ void iframe_init(JSContext *ctx)
 void iframe_install(JSContext *ctx, JSValueConst proto)
 {
     idl_install_accessor(ctx, proto, "contentWindow", js_iframe_content_window, 0, -1);
+    idl_install_accessor_step(ctx, proto, "contentDocument",
+                              idl_getter_id_step(ctx, &CONTENT_DOC_DECL, 0), -1);
 }
 
 void iframe_free(JSContext *ctx)

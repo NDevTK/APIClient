@@ -11,6 +11,7 @@
 #include "core/timing/timer.h"
 #include "core/frame/window.h"
 #include "core/frame/window_proxy.h"
+#include "core/frame/remote_object.h"
 #include "core/html/html_iframe.h"
 #include "solver/engine.h"
 #include "solver/cow.h"
@@ -1593,6 +1594,7 @@ int main(void) {
     /* §7.4's `window.open`, which hands back a WindowProxy for a document in ANOTHER instance at its own call
        site — the child's name is minted in this instance, so nothing suspends. */
     window_proxy_init(ctx, "https://x.test");
+    remote_object_init(ctx);   /* §7.2.5.1's object half */
     window_proxy_install_members(ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
     navigable_install(ctx, g, "https://x.test");
     /* THE SYNCHRONOUS HOST READ. A DECLARED step member, because suspending and answering at the same call
@@ -2136,6 +2138,7 @@ int main(void) {
     idl_args_free(ctx);   /* the dictionary member atoms the declaration pool interned */
     navigable_free(ctx);
     window_free(ctx);
+    remote_object_free(ctx);
     window_proxy_free(ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */
     flow_registry_free(ctx);
     JS_RunGC(rt);   /* collect flow-local garbage from the runs before teardown */

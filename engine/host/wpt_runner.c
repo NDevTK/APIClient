@@ -43,6 +43,7 @@
 #include "core/events/broadcast_channel.h"
 #include "core/frame/window.h"
 #include "core/frame/window_proxy.h"
+#include "core/frame/remote_object.h"
 #include "core/html/html_iframe.h"
 #include "core/frame/navigable.h"
 #include "solver/world.h"
@@ -60,6 +61,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 #include "core/timing/timer.h"
 #include <lexbor/html/html.h>
 #include "core/dom/element.h"
@@ -84,6 +86,15 @@ static const JSFlowControlHooks WPT_HOOKS_OFF = { .branch = NULL, .fork = NULL, 
 
 /* testharness.js reports through a callback; the callback reports through this. One line per subtest, so the
    driver never has to parse prose. */
+/* WHERE A DIAGNOSTIC GOES, and why it is not always stdout. In the parent, stdout carries the test results the
+   driver parses. In a CHILD DOCUMENT, stdout IS THE ANSWER PIPE — one line per question — so a `print()` from
+   the page or an @WPTERR from a failed read would be read by the parent as the answer to its question, and the
+   protocol desynchronises from there: the next answer is one line behind, and the run hangs at teardown on a
+   read that will never come. A child has no results to report, so its diagnostics go to stderr, which the
+   driver already merges into the file's output. */
+static FILE *g_report;
+static FILE *report_out(void) { return g_report ? g_report : stdout; }
+
 static JSValue js_wpt_gc(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)this_val; (void)argc; (void)argv;
@@ -98,11 +109,11 @@ static JSValue js_wpt_print(JSContext *ctx, JSValueConst this_val, int argc, JSV
     for (i = 0; i < argc; i++) {
         const char *s = JS_ToCString(ctx, argv[i]);
         if (!s) return JS_EXCEPTION;
-        fputs(i ? " " : "", stdout);
-        fputs(s, stdout);
+        fputs(i ? " " : "", report_out());
+        fputs(s, report_out());
         JS_FreeCString(ctx, s);
     }
-    fputc('\n', stdout);
+    fputc('\n', report_out());
     return JS_UNDEFINED;
 }
 
@@ -169,6 +180,7 @@ static const char WPT_EPILOGUE[] =
 /* The corpus root, derived from the harness path the driver passes — the runner is handed
    `<root>/resources/testharness.js` as its first argument, so the root is what precedes it. */
 static char g_wpt_root[512];
+
 
 static void wpt_report_exception(JSContext *ctx, const char *name, const char *what);
 
@@ -405,7 +417,7 @@ static void wpt_report_exception(JSContext *ctx, const char *name, const char *w
     JSValue e = JS_GetException(ctx);
     char *owned = NULL;
     const char *msg = JS_DiagCString(ctx, e, &owned);
-    printf("@WPTERR %s: %s%s\n", name, what, msg ? msg : "?");
+    fprintf(report_out(), "@WPTERR %s: %s%s\n", name, what, msg ? msg : "?");
     JS_DiagFreeCString(ctx, msg, owned);
     JS_FreeValue(ctx, e);
 }
@@ -466,7 +478,14 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
 
     if (wpt_child_for(name)) return;   /* already provisioned; a notice is not a request */
     CHECK(g_children_n < WPT_CHILD_MAX, "wpt: more child documents at once than this runner tracks");
-    CHECK(pipe(down) == 0 && pipe(up) == 0, "wpt: could not open the pipes to a child document");
+    /* O_CLOEXEC, AND IT IS NOT HYGIENE. fork() copies every descriptor, so a SECOND child would inherit this
+       parent's write end to the FIRST child's stdin — and then closing the parent's copy never gives that
+       child EOF, its serve loop never ends, and teardown blocks in waitpid forever. The whole run hung after
+       its last result, which reads as the engine failing to finish rather than as a leaked descriptor.
+       dup2 clears the flag on the fd it creates, so the child's own 0 and 1 survive the exec and the
+       originals do not. */
+    CHECK(pipe2(down, O_CLOEXEC) == 0 && pipe2(up, O_CLOEXEC) == 0,
+          "wpt: could not open the pipes to a child document");
     pid = fork();
     CHECK(pid >= 0, "wpt: could not fork a child document");
     if (pid == 0) {
@@ -506,6 +525,10 @@ static bool wpt_child_ask(ChildDoc *c, const char *op, char *out, size_t cap)
     return true;
 }
 
+/* WHICH AGENT the answer being decoded came from — an object name is only meaningful in the name space of the
+   agent that minted it, so the decode has to know whose it is. Set around the one ask. */
+static uint32_t g_answering_doc;
+
 /* The typed answer text -> the value the asking flow resumes with. */
 static JSValue wpt_decode_answer(JSContext *ctx, const char *a)
 {
@@ -515,13 +538,14 @@ static JSValue wpt_decode_answer(JSContext *ctx, const char *a)
     case 's': return JS_NewString(ctx, a + 1);
     case 'N': return JS_NULL;
     case 'u': return JS_UNDEFINED;
+    case 'o': {
+        /* THE PEER NAMED ONE OF ITS OBJECTS. `doc` is which agent's name space the id is in — this decode is
+           only ever reached for an answer that came back from `c`, so it is that child's. */
+        DCHECK(g_answering_doc != 0, "a cross-agent name was decoded with no agent to attribute it to");
+        return remote_object_ref(ctx, g_answering_doc, (uint32_t)strtoul(a + 1, NULL, 10));
+    }
     default:
-        /* AN OBJECT CANNOT CROSS AS TEXT, and pretending otherwise is how a cross-document read starts
-           answering with something that is not the thing. `contentDocument` and everything reached through it
-           needs a REMOTE HANDLE — (document, object id) resolved back to one proxy per object — which is the
-           next mechanism and not a variant of this one. */
-        DFAIL("a child document answered with a value that is not a primitive — build the remote-object handle "
-              "before routing a member whose value is an object");
+        DFAIL("a child document answered with a value this protocol does not name");
         return JS_UNDEFINED;
     }
 }
@@ -536,9 +560,12 @@ static void wpt_encode_answer(JSContext *ctx, JSValueConst v, char *out, size_t 
         const char *t = JS_ToCString(ctx, v);
         snprintf(out, cap, "s%s", t ? t : "");
         if (t) JS_FreeCString(ctx, t);
+    } else if (JS_IsObject(v)) {
+        /* AN OBJECT CROSSES AS ITS NAME. This agent lends it — one id per object, so the asker's reference has
+           the identity a page compares — and the asker resolves the name to the one reference it keeps for it. */
+        snprintf(out, cap, "o%u", remote_object_export(ctx, v));
     } else {
-        DFAIL("a child document was asked for a member whose value is an OBJECT — the remote-object handle is "
-              "what carries one across the seam, and it is not built");
+        DFAIL("a child document was asked for a member whose value is neither a primitive nor an object");
     }
 }
 
@@ -590,7 +617,10 @@ static void wpt_answer_host_requests(JSContext *ctx)
         if (!tab || !end) break;
         id = (uint32_t)strtoul(p, NULL, 10);
         n = (size_t)(end - tab - 1);
-        if (n < sizeof op && !strncmp(tab + 1, "windowproxy.get\t", 16)) {
+        /* BOTH CROSS-AGENT READS ROUTE THE SAME WAY — a member of a navigable's Window, and a property of an
+           object that Window lent out. They differ in what the peer resolves, not in who resolves it. */
+        if (n < sizeof op && (!strncmp(tab + 1, "windowproxy.get\t", 16) ||
+                              !strncmp(tab + 1, "object.get\t", 11))) {
             char *doc, *q;
             ChildDoc *c;
             memcpy(op, tab + 1, n); op[n] = 0;
@@ -606,7 +636,12 @@ static void wpt_answer_host_requests(JSContext *ctx)
                 DCHECK(c != NULL, "a cross-document read named a document this host never provisioned — the "
                                   "navigable.create notice for it was dropped");
                 if (c && wpt_child_ask(c, op, answer, sizeof answer)) {
-                    JSValue v = wpt_decode_answer(ctx, answer);
+                    JSValue v;
+                    /* An object NAME in the answer belongs to the agent that answered, and nothing else in the
+                       line says which that is. */
+                    g_answering_doc = world_doc_intern(c->name);
+                    v = wpt_decode_answer(ctx, answer);
+                    g_answering_doc = 0;
                     engine_host_answer(ctx, id, v);
                     JS_FreeValue(ctx, v);
                 }
@@ -812,6 +847,9 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin,
 
     window_install(ctx, global, origin);
     window_proxy_init(ctx, origin);
+    /* §7.2.5.1 one agent further out: a same-origin cross-document read answers with an OBJECT, and an object
+       crosses as a NAME. Both halves live here — this agent lending its own, and referencing a peer's. */
+    remote_object_init(ctx);
     window_proxy_install_members(ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
     window_message_install(ctx, global, origin);
     navigable_install(ctx, global, origin);   /* HTML 7.4 */
@@ -936,6 +974,8 @@ static int wpt_child_main(int argc, char **argv)
     char line[512];
 
     (void)csp;
+    /* THE ANSWER PIPE IS STDOUT HERE, so nothing else may write to it — see report_out. */
+    g_report = stderr;
     setvbuf(stdout, NULL, _IOLBF, 0);
     {
         const char *sv = getenv("WPT_SERVER");
@@ -976,16 +1016,24 @@ static int wpt_child_main(int argc, char **argv)
         JSValue v = JS_UNDEFINED;
         char prog[128], answer[512];
         WorldId w = WORLD_NONE, anc[16];
-        int n_anc = 0;
+        int n_anc = 0, nf = 0, is_obj;
+        char *f[8];
 
         if (nl) *nl = 0;
-        /* `windowproxy.get <doc> <world>[,<ancestor>...] <member>` — three tab-separated fields after the op. */
-        member = strrchr(line, '\t');
-        if (!member) continue;
-        *member++ = 0;
-        worlds = strrchr(line, '\t');
-        if (!worlds) continue;
-        worlds++;
+        /* THE FIELDS, SPLIT ONCE. `windowproxy.get <doc> <world> <member>` and
+           `object.get <doc> <world> <id> <member>` differ by one field, and reading them with a pair of
+           strrchr walks meant every field's end depended on which NUL a previous walk had written — the id
+           came back as 0 because the world's terminator had eaten it. One split, then index. */
+        {
+            char *q;
+            nf = 0;
+            for (q = line, f[nf++] = q; *q && nf < 8; q++)
+                if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
+        }
+        is_obj = !strcmp(f[0], "object.get");
+        if (nf < (is_obj ? 5 : 4)) continue;
+        worlds = f[2];
+        member = f[is_obj ? 4 : 3];
 
         /* THE WORLD THE ANSWER IS TRUE IN, and the ancestry that lets this instance HAVE one. A world minted
            in another document has a segment here only if a flow of that world has written here; the ancestry
@@ -1037,7 +1085,24 @@ static int wpt_child_main(int argc, char **argv)
             }
         }
 
-        snprintf(prog, sizeof prog, "globalThis[%c%s%c]", '"', member, '"');
+        /* WHAT IS BEING READ. `windowproxy.get` reads a member of THIS document's Window; `object.get` reads a
+           property of an object this document LENT OUT, and the field before the member names which. Both are
+           read by running a PROGRAM, because both are IDL accessors and a C activation has no flow base under
+           it — the object is handed to the program through a slot rather than spliced into its text, so a
+           property name can never be read as code. */
+        if (is_obj) {
+            JSValueConst held = remote_object_by_id((uint32_t)strtoul(f[3], NULL, 10));
+            DCHECK(!JS_IsUndefined(held), "a peer asked for a property of an object this agent never lent — the "
+                                          "name it used was minted somewhere else or the export table was lost");
+            {
+                JSValue g = JS_GetGlobalObject(ctx);
+                JS_SetPropertyStr(ctx, g, "__apiclientLent", JS_DupValue(ctx, held));
+                JS_FreeValue(ctx, g);
+            }
+            snprintf(prog, sizeof prog, "__apiclientLent[%c%s%c]", '"', member, '"');
+        } else {
+            snprintf(prog, sizeof prog, "globalThis[%c%s%c]", '"', member, '"');
+        }
         if (run_program_value(ctx, prog, strlen(prog), "<cross-document read>", &v)) v = JS_UNDEFINED;
         wpt_encode_answer(ctx, v, answer, sizeof answer);
         JS_FreeValue(ctx, v);
@@ -1099,7 +1164,7 @@ int main(int argc, char **argv)
                 /* A <script src> THE SERVER DOES NOT HAVE is a real 404, and a real browser fires an error
                    event and carries on rather than stopping the document. Reporting it names the file, because
                    a test whose harness failed to load reports nothing at all otherwise. */
-                if (!body) { printf("@WPTERR %s: <script src> did not load: %s\n", g_test_url, ds.srcs[i]); continue; }
+                if (!body) { fprintf(report_out(), "@WPTERR %s: <script src> did not load: %s\n", g_test_url, ds.srcs[i]); continue; }
                 failed = run_program(ctx, body, len, ds.srcs[i]);
                 free(body);
             }
@@ -1110,7 +1175,7 @@ int main(int argc, char **argv)
         for (i = 1; i < argc && !failed; i++) {
             size_t len = 0;
             char *src = read_file(argv[i], &len);
-            if (!src) { printf("@WPTERR %s: cannot read\n", argv[i]); failed = 1; break; }
+            if (!src) { fprintf(report_out(), "@WPTERR %s: cannot read\n", argv[i]); failed = 1; break; }
             failed = run_program(ctx, src, len, argv[i]);
             free(src);
         }
@@ -1178,6 +1243,7 @@ int main(int argc, char **argv)
     iframe_free(ctx);
     element_free(ctx);
     window_free(ctx);
+    remote_object_free(ctx);
     window_proxy_free(ctx);
     world_registry_free(ctx);
     message_event_free(ctx);
