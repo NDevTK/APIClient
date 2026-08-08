@@ -1698,7 +1698,8 @@ int main(void) {
     lxb_html_document_parse(dom, (const lxb_char_t *)doc, strlen(doc));
     g_body = lxb_dom_interface_element(lxb_html_document_body_element(dom));   /* the DOM sink's target element */
     {
-        JSValue root_proxy = window_proxy_new_self(ctx, world_local_doc());
+        /* The fixture built this document, so the navigable's name is the initial "" and is known. */
+        JSValue root_proxy = window_proxy_new_self(ctx, world_local_doc(), "");
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
         tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test", world_local_doc(), root_proxy);
         JS_FreeValue(ctx, root_proxy);

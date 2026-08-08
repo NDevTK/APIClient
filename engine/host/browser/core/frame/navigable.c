@@ -98,8 +98,9 @@ static lxb_html_document_t *child_initial_document(void)
     return dom;
 }
 
-/* MATERIALIZE A CHILD NAVIGABLE'S REALM — see navigable.h. Called by the WindowProxy on the first read that
-   actually needs the active document, never at creation. */
+/* BUILD A CHILD NAVIGABLE'S REALM — see navigable.h. Called by the WindowProxy, which is the ONE place a realm
+   is materialized: §7.4's navigation asks for it in the creating turn, and a read through a not-yet-materialized
+   about:blank navigable asks for it then. */
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *origin,
                            JSValueConst nav_proxy)
 {
@@ -149,13 +150,32 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            the child's body, whose `parentNode` is then a node of the child) and assigns LIVE CLOSURES into the
            child's event handlers. Neither is a value that can be named across a transport; they are one object
            graph, and a browser's own model says so. */
-        world_doc_adopt(child);   /* this agent holds it; the REALM behind it is built on first touch */
+        world_doc_adopt(child);   /* this agent holds it */
         /* §7.2.5: `parent` and `opener` ARE WindowProxies. They held the creator's GLOBAL, which made the
            `top` walk leave the proxies at the top and read a scriptable property to continue — and a popup's
            opener a Window rather than the navigable it belongs to. The creator's own proxy is what both are. */
         proxy = window_proxy_new(ctx, child, addr, origin, name,
                                  is_child ? document_window_proxy(ctx) : JS_UNDEFINED,
                                  is_child ? JS_NULL : document_window_proxy(ctx));
+        CHECK(!JS_IsException(proxy), "a navigable's WindowProxy could not be allocated");
+        /* §7.4 STEP 14: NAVIGATE THE NEW NAVIGABLE TO url — and navigating is what makes the document RUN.
+           A navigable that was given an address is materialized HERE, in the creating turn, because its
+           document's own scripts are an observable that owes nothing to the creator: a popup posts back to its
+           opener without the opener ever touching the proxy. Deferring this was twelve files in html/browsers
+           reporting nothing at all — not a saving, a popup that never ran.
+           A navigable with NO address is NOT materialized here, and that is the same sentence read the other
+           way: it holds the initial about:blank Document §7.4 created it with, that Document has no scripts by
+           construction, and the ONLY way to observe it is a read through this proxy — which builds it. The
+           deferral has no observable there, and it is load-bearing: a forced-execution frontier runs this
+           `open()` once per flow, so materializing every never-touched about:blank exhausted the heap at ~2030
+           flows with the initial parse failing to allocate. The line between the two is what a navigable DOES,
+           not what it costs. */
+        /* THE TEST IS "IS THERE ANYTHING TO FETCH", which for §7.4 is the `about:` scheme: about:blank has no
+           response and no content, so navigating to it produces the Document the navigable already has. It is
+           the same test the RealmBuilder applies to decide whether to fetch, and it is stated in both places
+           because it is one spec fact about the scheme rather than a protocol between them. */
+        if (strncmp(addr, "about:", 6) != 0)
+            (void)window_proxy_realm(ctx, proxy);
     } else {
         /* THE NOTICE, and every field of it is load-bearing. The CHILD is the name the host provisions an
            instance under; the CREATOR names who made it, which is what the host routes replies through and what
@@ -174,8 +194,8 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
         proxy = window_proxy_new_remote(ctx, child, origin, name,
                                         is_child ? document_window_proxy(ctx) : JS_UNDEFINED,
                                         is_child ? JS_NULL : document_window_proxy(ctx));
+        CHECK(!JS_IsException(proxy), "a navigable's WindowProxy could not be allocated");
     }
-    CHECK(!JS_IsException(proxy), "a navigable's WindowProxy could not be allocated");
     free(addr);
     free(origin);
     return proxy;

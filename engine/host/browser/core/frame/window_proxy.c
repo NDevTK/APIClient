@@ -39,6 +39,7 @@
 #include "quickjs.h"
 #include "core/frame/window_proxy.h"
 #include "solver/cow.h"
+#include "solver/concolic.h"
 #include "solver/world.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
@@ -58,9 +59,11 @@ typedef struct {
        BORROWED: the AGENT owns every realm it built and releases them with itself (navigable.c). A proxy is a
        GC object and a realm is not, so an owning reference here would have to be released from a finalizer —
        which frees JSValues during collection — and the realm's own Document teardown would still never run.
-       NULL UNTIL THE FIRST READ THAT NEEDS IT — see navigable.h. `url` is what it is built from. */
+       NULL UNTIL THE DOCUMENT IS MATERIALIZED — see proxy_realm and navigable.h. `url` is what it is built
+       from; a navigable that has been NAVIGATED is materialized at creation, one that still holds its initial
+       about:blank Document only when something reads through it. */
     JSContext *realm;
-    char      *url;    /* the navigable's initial address, for the realm this proxy has not built yet (owned) */
+    char      *url;    /* the navigable's address, for a realm not yet materialized (owned) */
     char   *origin;    /* the active document's origin, for §7.2.5.1's same-origin check (owned) */
     /* THE NAVIGABLE'S OWN STATE — see the member table below for why it is here and not in the peer. All four
        are per-flow: a flow that closed the window or renamed it is the only one whose timeline contains that,
@@ -68,6 +71,15 @@ typedef struct {
     JSValue parent;    /* the parent navigable's proxy (or the creator's Window); JS_UNDEFINED = top-level */
     JSValue opener;    /* §7.2.5's opener — the navigable that opened this one, or JS_NULL */
     char   *name;      /* §7.2.5's name: the BROWSING CONTEXT's, not the element's (owned; see proxy_of) */
+    /* WHETHER ANYONE STATED THIS NAVIGABLE'S NAME, which is what decides whether `name` is a computed value or
+       unknown external input. §7.4 STATES it — `open(url, "chan42")` names the navigable it creates, and the
+       popup's own `window.name` is that string — so a navigable this engine created knows its name, "" or
+       otherwise. The navigable the instance STARTS in is the one nobody here created: a real page may have been
+       opened by a cross-origin document that set `name` before navigating, which is exactly how window.name
+       became a classic attacker source, so a host that cannot state it leaves it unknown and the read is
+       concolic. A host that CAN state it (a runner that loaded the document itself) says so and gets the
+       spec's "". The distinction is DATA the creator supplies, never inferred from which mint was used. */
+    uint8_t name_known;
     uint8_t closed;    /* the navigable has been destroyed (§4.8.5) or closed (§7.2.5.2) */
     /* WHICH DOCUMENT the navigable's active document IS — the same id the world registry names worlds by, so
        "is this remote?" is one comparison against one identity rather than a second naming scheme kept beside
@@ -171,9 +183,10 @@ static void proxy_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
     JS_MarkValue(rt, p->opener, mark_func);
 }
 
-/* THE ACTIVE DOCUMENT'S REALM, BUILT IF IT IS NOT YET. Every member that reads THROUGH to the active document
-   goes through here and nothing else does, which is what makes "created on first touch" indistinguishable from
-   "created at creation" — see navigable.h for why that is the spec rather than a saving. */
+/* MATERIALIZE THE ACTIVE DOCUMENT — THE ONE PLACE A REALM IS BUILT. Every member that reads THROUGH to the
+   active document goes through here, and so does §7.4's navigation, which calls window_proxy_realm to
+   materialize the navigable it just created. One build site, reached two ways; see navigable.h for which
+   navigable is materialized WHEN and why the difference is a spec sentence rather than a saving. */
 static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
 {
     /* SAME-ORIGIN IMPLIES HOSTED, by construction: an instance is an ORIGIN-KEYED agent, so a navigable this
@@ -191,6 +204,21 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
         p->window = JS_GetGlobalObject(p->realm);
     }
     return p->realm;
+}
+
+/* THE SELF PROXY'S REALM IS THE ONE ASKING — already built, so there is nothing to materialize. Stated as its
+   own step rather than folded into the mint because it is the one case where the realm precedes the proxy. */
+static void proxy_adopt_realm(JSContext *ctx, JSValueConst proxy, JSContext *realm)
+{
+    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+
+    (void)ctx;
+    DCHECK(p != NULL, "a realm was handed to something that is not a WindowProxy");
+    DCHECK(p->realm == NULL, "a navigable was given a second realm — it already has an active document, and "
+                             "replacing one is §7.2.5.1's NAVIGATE, which is not built; build it there rather "
+                             "than handing this navigable a second document");
+    p->realm  = realm;   /* BORROWED — the agent owns its realms */
+    p->window = JS_GetGlobalObject(realm);
 }
 
 JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url,
@@ -211,11 +239,14 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url,
     JS_SetPrototype(ctx, obj, g_proxy_proto);
     p = calloc(1, sizeof *p);
     CHECK(p != NULL, "window proxy: OOM building a WindowProxy");
-    p->window = JS_UNDEFINED;   /* the realm is built on first touch — see proxy_realm */
+    p->window = JS_UNDEFINED;   /* materialized by proxy_realm — at creation, or on the first read */
     p->realm  = NULL;
     p->url    = url ? proxy_strdup(url) : NULL;   /* NULL only for the self proxy, whose realm is already built */
     p->origin = proxy_strdup(origin ? origin : "null");
     p->name   = name && *name ? proxy_strdup(name) : NULL;
+    /* §7.4 NAMED IT. This mint is the one §7.4's create-a-new-navigable reaches, so the name it was given is
+       the navigable's name — including the empty one a `open(url)` with no target gives. */
+    p->name_known = 1;
     p->parent = JS_DupValue(ctx, parent);
     p->opener = JS_DupValue(ctx, opener);
     p->doc = doc;
@@ -224,22 +255,25 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url,
 }
 
 /* §7.2.5.1's proxy for the REALM THAT IS ASKING — the one `window`, `self` and `e.source` are. Its realm is
-   this one, already built, which is the whole difference from window_proxy_new: there is nothing to defer and
-   no address to defer it from. */
-JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc)
+   this one, which the caller is standing in rather than creating: the two differences from a §7.4 child are
+   that the realm is handed over from the outside, and that nobody here stated the navigable's name. */
+JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name)
 {
     /* THE ORIGIN IS THE AGENT'S, and it is read from where §7.2.5.1's check reads it rather than passed in —
        an agent is origin-keyed, so a caller-supplied one could only ever agree or be wrong. */
-    JSValue obj = window_proxy_new(ctx, doc, NULL, g_local_origin, NULL, JS_UNDEFINED, JS_NULL);
+    JSValue obj = window_proxy_new(ctx, doc, NULL, g_local_origin, name, JS_UNDEFINED, JS_NULL);
     ProxyData *p;
 
     if (JS_IsException(obj)) return obj;
     p = JS_GetOpaque(obj, g_proxy_class);
     DCHECK(p != NULL, "the self WindowProxy was minted without its record");
-    p->realm  = ctx;   /* BORROWED — the agent owns its realms */
-    p->window = JS_GetGlobalObject(ctx);
+    /* THE ONE NAVIGABLE §7.4 DID NOT CREATE. A NULL name is the host saying it does not know this navigable's
+       name, which is the honest answer for a page the browser navigated to — see the field's comment. */
+    p->name_known = name != NULL;
+    proxy_adopt_realm(ctx, obj, ctx);
     return obj;
 }
+
 
 JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const char *origin, const char *name,
                                 JSValueConst parent, JSValueConst opener)
@@ -261,6 +295,7 @@ JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const char *origin
     p->window = JS_UNDEFINED;   /* it lives in another instance; there is nothing local to hold */
     p->origin = proxy_strdup(origin ? origin : "null");
     p->name   = name && *name ? proxy_strdup(name) : NULL;
+    p->name_known = 1;   /* §7.4 named it, in this instance, before the notice crossed */
     p->parent = JS_DupValue(ctx, parent);
     p->opener = JS_DupValue(ctx, opener);
     p->doc = doc;
@@ -350,6 +385,55 @@ const char *window_proxy_name(JSValueConst proxy)
     return p->closed || !p->name ? "" : p->name;
 }
 
+/* §7.11's `name`, AS A VALUE, and the ONE place it is computed. A Window and its WindowProxy are two spellings
+   of one navigable, so `window.name` inside a document and `w.name` from its opener are one attribute of one
+   record — they were two, computed from two unrelated sources: the proxy answered the navigable's name and the
+   global answered a source-only concolic with no example, so `w = open(u,"chan42")` gave "chan42" through the
+   proxy and an example-free unknown inside the popup. HTML §7.11 is unambiguous — "return the current name of
+   this's navigable" — and the popup's own script reading it is the ordinary case, not a second attribute.
+   IT IS STILL AN ATTACKER SOURCE where the name is genuinely unknown, which is not "always": a navigable §7.4
+   created carries the name §7.4 gave it, and the code that wrote `open(url, "chan42")` DETERMINED it, so
+   reporting it as unknown would be inventing uncertainty the program does not have. The navigable nobody here
+   created is the one whose name a cross-origin opener may have set, and that read is concolic — carrying the
+   spec's "" as its example, so it forks control flow without losing the value. */
+JSValue window_proxy_name_value(JSContext *ctx, JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+
+    DCHECK(p != NULL, "the name of something that is not a WindowProxy was read");
+    /* §7.2.5: a destroyed navigable has no name, and the destruction is what determined that — the spec files
+       assert the empty string rather than the name it had. */
+    if (p->closed) return JS_NewStringLen(ctx, "", 0);
+    if (p->name_known) return JS_NewString(ctx, p->name ? p->name : "");
+    return concolic_new(ctx, "{window.name}", "window.name", JS_NewStringLen(ctx, "", 0));
+}
+
+/* §7.11's `name` SETTER, and the ONE place it is written. It renames the BROWSING CONTEXT, which is why
+   `frameW.name = "B"` leaves the element's `name` content attribute alone — the spec files assert that pair
+   together, and an implementation that reflected one into the other would pass neither. Writing it is also what
+   makes the name KNOWN: a page that set it determined it, whatever it was before. */
+JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueConst v)
+{
+    ProxyData *p = proxy_of(proxy);
+    const char *n;
+
+    DCHECK(p != NULL, "the name of something that is not a WindowProxy was written");
+    if (p->closed) return JS_UNDEFINED;   /* a destroyed navigable has nothing to rename */
+    /* A CONCOLIC NAME IS A CAPABILITY THAT DOES NOT EXIST YET, not a value to stringify. `name` is stored as C
+       bytes because named access compares it, so a concolic here would have to be de-tainted to be stored —
+       which is the one thing a concolic must never survive. Storing the triple instead is what to build. */
+    DCHECK(!concolic_is(v),
+           "a navigable was renamed to unknown external input — `name` is held as C bytes so named access can "
+           "compare it, and a concolic cannot be stored there without de-tainting it; hold the navigable's name "
+           "as a JSValue so the triple survives the write");
+    n = JS_ToCString(ctx, v);
+    if (!n) return JS_EXCEPTION;
+    p->name = proxy_strdup(n);
+    p->name_known = 1;
+    JS_FreeCString(ctx, n);
+    return JS_UNDEFINED;
+}
+
 const char *window_proxy_origin(JSValueConst proxy)
 {
     ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
@@ -357,18 +441,11 @@ const char *window_proxy_origin(JSValueConst proxy)
     return p->origin;
 }
 
-void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSValueConst window, const char *origin)
-{
-    ProxyData *p = proxy_of(proxy);   /* CAPTURED FIRST: the flow that navigates owns the change, not its siblings */
-    DCHECK(p != NULL, "something that is not a WindowProxy was navigated");
-    JS_FreeValue(ctx, p->window);
-    p->window = JS_DupValue(ctx, window);
-    p->origin = proxy_strdup(origin ? origin : "null");
-    /* THE DOCUMENT DOES NOT CHANGE: a navigation replaces the ACTIVE DOCUMENT of a navigable, and this call is
-       the same-agent case where the replacement realm is one this agent built. A navigation that lands
-       cross-origin makes the navigable a peer's, which is a different operation and is not this one. */
-    DCHECK(world_doc_hosted(p->doc), "a navigable whose realm this agent does not hold was navigated locally");
-}
+/* §7.2.5.1's REPLACE-THE-ACTIVE-DOCUMENT is ABSENT, deliberately, and this is where it will live. There was a
+   `window_proxy_navigate` here that swapped the Window and the origin and left the REALM alone — two halves of
+   one navigable disagreeing about which document is active, which is the same defect as `name` having had two
+   sources. It had no caller, so it was a wrong implementation waiting to be reached rather than a capability;
+   a capability that does not exist is honestly absent, and the DCHECK in window_proxy_set_realm names it. */
 
 
 /* §7.2.5.1's MEMBER SURFACE, and the one distinction that decides how each member is answered.
@@ -518,9 +595,7 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
     case WP_CLOSED:
         return JS_NewBool(ctx, p->closed);
     case WP_NAME:
-        /* §7.2.5: a destroyed navigable has no name, and the spec files assert exactly that — the empty string,
-           not the name it had. */
-        return JS_NewString(ctx, p->closed || !p->name ? "" : p->name);
+        return window_proxy_name_value(ctx, this_val);
     case WP_DOCUMENT:
         /* §7.2.5's `document`, and reaching it means the read was PERMITTED — which for a same-origin-only
            member means the origins match, which in an origin-keyed agent means this agent holds the realm. So
@@ -556,31 +631,20 @@ JSValue window_proxy_opener(JSContext *ctx, JSValueConst proxy)
     return proxy_member_get(ctx, proxy, WP_OPENER);
 }
 
-/* §7.2.5's `name` SETTER. It renames the BROWSING CONTEXT, which is why `frameW.name = "B"` leaves the
-   element's `name` content attribute alone — the spec files assert that pair together, and an implementation
-   that reflected one into the other would pass neither. A destroyed navigable has nothing to rename. */
+/* §7.2.5.1's WRITE SIDE of `name` — the origin check, which is the whole of what this member adds over the
+   write itself: `name` is not a cross-origin property, so setting it across origins is a SecurityError rather
+   than a silent no-op. The rename is window_proxy_name_assign's, because a Window and its proxy write the one
+   navigable's one name. */
 static JSValue proxy_name_set(JSContext *ctx, JSValueConst this_val, JSValueConst v, int magic)
 {
     ProxyData *p = proxy_of(this_val);
-    const char *n;
 
     (void)magic;
     if (!p) return JS_UNDEFINED;
-    /* §7.2.5.1's write side is the same rule: `name` is not a cross-origin property, so setting it across
-       origins is a SecurityError rather than a silent no-op. */
     if (!proxy_read_permitted(p, WP_NAME))
         return JS_ThrowDOMException(ctx, "SecurityError",
                                     "the origins do not permit setting the name of that Window");
-    /* THE NAME IS THE NAVIGABLE'S, so it is written here for every proxy — see proxy_member_get. Writing it
-       through to the target Window's `name` property put it on the wrong object entirely: `window.name` is
-       this document's attacker-controlled string, and the browsing context's name is neither that nor the
-       element's `name` content attribute. A destroyed navigable has nothing to rename. */
-    if (p->closed) return JS_UNDEFINED;
-    n = JS_ToCString(ctx, v);
-    if (!n) return JS_EXCEPTION;
-    p->name = proxy_strdup(n);
-    JS_FreeCString(ctx, n);
-    return JS_UNDEFINED;
+    return window_proxy_name_assign(ctx, this_val, v);
 }
 
 /* §7.2.5.2's `close()`. A REAL STATE CHANGE, never a no-effect: the navigable is closed and `closed` reports it

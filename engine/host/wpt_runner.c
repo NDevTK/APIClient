@@ -1079,7 +1079,9 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin,
     /* THE ROOT NAVIGABLE IS THE HOST'S, so its §7.2.5.1 proxy is minted here — the same rule as every child,
        whose creator mints it. A navigable has one, and whoever owns the navigable is who makes it. */
     {
-        JSValue root_proxy = window_proxy_new_self(ctx, world_local_doc());
+        /* THE RUNNER LOADED THIS DOCUMENT ITSELF, so it knows the navigable's name is the spec's initial "" —
+           nothing opened it under a name. Saying so is what keeps `window.name` a computed value here. */
+        JSValue root_proxy = window_proxy_new_self(ctx, world_local_doc(), "");
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
         wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, world_local_doc(), root_proxy);
         JS_FreeValue(ctx, root_proxy);

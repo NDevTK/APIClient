@@ -28,15 +28,16 @@
  * every test in html/browsers/the-window-object failed on its first line. Two jobs in one function is what
  * made the second caller impossible; each install now sits with its own caller.
  *
- * `name` IS ATTACKER INPUT and is the one member here that is concolic. It survives navigation, so an attacker
- * who can open the document sets it — CLAUDE.md lists it beside cookies and the referrer. Example-free and
- * read through a GETTER, for the same reason location.hash is: a candidate run substitutes a source at MINT
- * time, and a source minted once at install could never receive a breakout. */
+ * `name` IS THE NAVIGABLE'S — §7.11's, the same attribute a WindowProxy answers — so it is not computed here
+ * at all; window_proxy_name_value is. It is ATTACKER INPUT exactly when nobody stated it: the name survives
+ * navigation, so whoever opened the document sets it, which is why CLAUDE.md lists it beside cookies and the
+ * referrer — and it is a computed value when this engine's own `open(url, target)` named the navigable. Read
+ * through a GETTER either way, for the same reason location.hash is: a candidate run substitutes a source at
+ * MINT time, and a source minted once at install could never receive a breakout. */
 #include <string.h>
 
 #include "check.h"
 #include "quickjs.h"
-#include "solver/concolic.h"
 #include "core/frame/window.h"
 #include "core/frame/window_proxy.h"
 #include "core/dom/document.h"
@@ -113,10 +114,24 @@ static JSValue js_win_opener(JSContext *ctx, JSValueConst this_val, int magic)
     return window_proxy_opener(ctx, document_window_proxy(ctx));
 }
 
+/* §7.11's `name` — THE NAVIGABLE'S, which is the same attribute `w.name` reads through the WindowProxy and is
+   answered from the same record. It was a second source here: a source-only concolic with no example, so
+   `open(url, "chan42")` gave "chan42" to the opener and an example-free unknown to the popup's own script,
+   which is the popup unable to learn the name it was created with. §7.11 says "return the current name of
+   this's navigable"; window_proxy_name_value is where that is computed, including whether it is known at all. */
 static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)this_val; (void)argc; (void)argv;
-    return concolic_new(ctx, "{window.name}", "window.name", JS_UNDEFINED);
+    return window_proxy_name_value(ctx, document_window_proxy(ctx));
+}
+
+/* §7.11's `name` is SETTABLE, and it was not — the accessor had no setter at all, so `window.name = "x"` was a
+   silent no-op and a page that names itself to be reached by `open(url, "x")` could not. It renames the
+   NAVIGABLE, which is the same write `w.name = "x"` performs from outside. */
+static JSValue js_win_set_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val; (void)argc;
+    return window_proxy_name_assign(ctx, document_window_proxy(ctx), argv[0]);
 }
 
 /* §7.2.5.1's EXOTIC OWN-PROPERTY BEHAVIOUR — `window[0]`, and why it is not a property anyone sets.
@@ -475,7 +490,8 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     }
 
     JS_DefinePropertyGetSet(ctx, gp, JS_NewAtom(ctx, "name"),
-                            JS_NewCFunction(ctx, js_win_get_name, "get name", 0), JS_UNDEFINED,
+                            JS_NewCFunction(ctx, js_win_get_name, "get name", 0),
+                            JS_NewCFunction(ctx, js_win_set_name, "set name", 1),
                             JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
     JS_FreeValue(ctx, gp);   /* the realm's class-proto slot and the chain hold it now */
 }

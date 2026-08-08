@@ -56,13 +56,27 @@ void navigable_set_realm_builder(RealmBuilder b);
 
 /* BUILD THE REALM OF A SAME-ORIGIN NAVIGABLE THIS AGENT HOLDS, and hand the caller the reference.
  *
- * ON FIRST TOUCH, NOT AT CREATION — and that is not a cap, because every flow that reaches its child gets one.
- * §7.4 creates the navigable and its initial about:blank Document synchronously, and this engine does exactly
- * that: the navigable exists, it is named, `parent.length` counts it, it is nested and it can be destroyed.
- * What is deferred is only the ECMAScript REALM behind it, whose sole observable is a read THROUGH the proxy —
- * so the read is where it is built. A forced-execution frontier holds thousands of flows at once and each
- * one's boot runs the same `open()` in its own world; building a whole platform per never-touched navigable
- * exhausted the heap at ~2000 flows, which is the frontier doing its job rather than a bug in it. */
+ * WHEN IT IS BUILT IS DECIDED BY WHAT THE NAVIGABLE DOES, and the two answers are one spec sentence read from
+ * both ends.
+ *
+ * A NAVIGABLE WITH AN ADDRESS IS MATERIALIZED AT CREATION, because §7.4 step 14 NAVIGATES it and navigating
+ * RUNS THE DOCUMENT'S SCRIPTS. Those scripts owe nothing to the creator — a popup posts back to its opener
+ * without the opener ever touching the proxy — so a realm built on first touch is a popup that never ran.
+ * Twelve files in html/browsers reported nothing whatsoever for exactly that reason. This is not a cost
+ * question: not running a document changes what the page DOES.
+ *
+ * A NAVIGABLE WITH NO ADDRESS IS MATERIALIZED ON FIRST TOUCH, and there the deferral genuinely has no
+ * observable. `open()` and an `<iframe>` with no `src` hold the INITIAL about:blank Document §7.4 creates them
+ * with; that Document has no scripts by construction, so nothing in it can run and the only way to observe it
+ * at all is a read through its WindowProxy — which is where it is built. The navigable itself is fully there
+ * meanwhile: named, counted by `parent.length`, nested, destroyable.
+ *
+ * THE DEFERRED HALF IS LOAD-BEARING, and it was measured rather than assumed. A forced-execution frontier holds
+ * thousands of flows and each one's boot runs the same `open()` in its own world, so materializing every
+ * never-touched about:blank is a platform per flow: the heap ran out at ~2030 flows, with the initial
+ * about:blank parse itself failing to allocate. Building them all and paging the low-value tail to the cold
+ * tier is the design that would remove even this line — a JSContext is not a snapshot, so that is a real
+ * mechanism to build and not a rewording of the deferral. */
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *origin,
                            JSValueConst nav_proxy);
 

@@ -23,8 +23,12 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url,
                          const char *origin, const char *name, JSValueConst parent, JSValueConst opener);
 
 /* §7.2.5.1's proxy for the realm that is ASKING — `window`, `self`, and the `source` of every message it
-   posts. Its realm is this one and is already built, so nothing about it is deferred. */
-JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc);
+   posts. Its realm is this one and is already built, so nothing about it is deferred.
+   `name` is the navigable's, and NULL is the host STATING THAT IT DOES NOT KNOW IT — this is the one navigable
+   §7.4 did not create, so the browser may have been handed a name by a cross-origin document that set it before
+   navigating, and `window.name` then reads as unknown external input. A host that loaded the document itself
+   knows the answer is "" and says so. */
+JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name);
 
 /* A proxy over a navigable whose active document lives in ANOTHER WASM instance. It carries no Window — there
    is no local object to hold — so every read through it is a cross-document operation the flow suspends on. */
@@ -95,12 +99,22 @@ bool window_proxy_same_origin_of(JSValueConst proxy);
    matches against it, so the walk that answers `window.myFrameName` needs to read it. BORROWED. */
 const char *window_proxy_name(JSValueConst proxy);
 
+/* §7.11's `name`, READ AND WRITTEN THROUGH THE ONE PLACE IT LIVES. A Window and its WindowProxy are two
+   spellings of one navigable, so `window.name` inside a document and `w.name` from its opener are one attribute
+   of one record — window.c answers the global's accessor from here rather than from a second source. The value
+   is CONCRETE where the navigable's name was stated (§7.4 states it) and CONCOLIC where it was not, which is
+   the navigable the instance started in. */
+JSValue window_proxy_name_value(JSContext *ctx, JSValueConst proxy);
+JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueConst v);
+
 /* The active document's origin, as this flow sees it — what §7.2.5.1's same-origin check reads. BORROWED. */
 const char *window_proxy_origin(JSValueConst proxy);
 
-/* NAVIGATE: the navigable's active Window is replaced while the proxy object stays the same, which is the whole
-   reason a WindowProxy exists. The change is captured into the RUNNING FLOW's delta, so a sibling arm that did
-   not navigate still resolves the proxy to the Window it knew. */
-void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSValueConst window, const char *origin);
+/* NAVIGATE — replacing the navigable's active Document while the proxy object stays the same, which is the
+   whole reason a WindowProxy exists — is NOT BUILT. What stood here replaced the Window and the origin and left
+   the REALM behind, so the two halves of one navigable would have named different documents; it had no caller,
+   so it was a wrong implementation rather than a capability. When it is built it replaces ALL of the active
+   document at once (realm, Window, origin), captured into the RUNNING FLOW's delta so a sibling arm that did
+   not navigate still resolves the proxy to the document it knew. */
 
 #endif

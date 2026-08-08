@@ -191,11 +191,11 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
 /* PHASE 1 — parse and identify. No script runs, which is the whole point: the host reads the frontier key back
  * synchronously and looks up the prior session before any flow is seeded. */
 /* `doc_id` NAMES THIS INSTANCE'S DOCUMENT, and the host names the ROOT one because the host is what knows
- * there is more than one at all. One instance is one document regardless of origin, so a flow that scripts an
- * iframe or a popup writes state in a peer instance — and that peer keys its segment of the flow's world by
- * this name. Two instances sharing a name would hand each other's flows the same segment: one timeline wearing
- * two names. Every document BELOW this one is named by the document that created it (world.h), which is what
- * lets §4.8.5 create a child navigable without asking anyone. */
+ * there is more than one at all. An instance is an ORIGIN-KEYED AGENT CLUSTER, so a same-origin iframe or popup
+ * is a second REALM here and a CROSS-ORIGIN one is a peer instance — and that peer keys its segment of the
+ * flow's world by this name. Two instances sharing a name would hand each other's flows the same segment: one
+ * timeline wearing two names. Every document BELOW this one is named by the document that created it (world.h),
+ * which is what lets §4.8.5 create a child navigable without asking anyone. */
 QJS_EXPORT int qjs_init(const char *code, const char *html,
                         const char *origin, const char *doc_id, const char *csp)
 {
@@ -249,7 +249,10 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
     /* THE ROOT NAVIGABLE IS THIS HOST'S, so its §7.2.5.1 proxy is minted here — one per navigable, made by
        whoever owns the navigable, which for the root is the host that named it. */
     {
-        JSValue root_proxy = window_proxy_new_self(g_ctx, world_local_doc());
+        /* NULL: THIS HOST DOES NOT KNOW THE NAVIGABLE'S NAME. The document was navigated to by the real
+           browser, and a cross-origin opener may have set `name` before navigating — which is exactly how
+           window.name became an attacker source. The read is concolic until something states it. */
+        JSValue root_proxy = window_proxy_new_self(g_ctx, world_local_doc(), NULL);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
         engine_realm_install(g_ctx, g_dom, origin, world_local_doc(), root_proxy);
         JS_FreeValue(g_ctx, root_proxy);
