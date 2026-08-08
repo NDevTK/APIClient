@@ -293,15 +293,6 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const ch
     return obj;
 }
 
-/* §7.4's cloned policy text this navigable was created with — NULL when it was created with an address (its
-   policy arrives with its response) or when nobody created it. BORROWED. */
-const char *window_proxy_creator_csp(JSValueConst proxy)
-{
-    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
-    DCHECK(p != NULL, "the creator's policy was read off something that is not a WindowProxy");
-    return p->creator_csp;
-}
-
 /* §7.2.5.1's proxy for the REALM THAT IS ASKING — the one `window`, `self` and `e.source` are. Its realm is
    this one, which the caller is standing in rather than creating: the two differences from a §7.4 child are
    that the realm is handed over from the outside, and that nobody here stated the navigable's name. */

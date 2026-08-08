@@ -12,6 +12,7 @@
 #include "core/frame/window_features.h"
 #include "core/dom/document.h"
 #include "core/html/html_iframe.h"   /* §7.2.5's document-tree child navigables — §7.1's walk descends them */
+#include "quickjs-step.h"            /* §7.4 step 14's load is a step machine on the one frontier */
 #include "core/url/url.h"
 #include "core/idl_args.h"
 #include "solver/engine.h"
@@ -177,26 +178,138 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
     return cctx;
 }
 
-/* §7.4 STEP 14's NAVIGATE, for a navigable that ALREADY HAS an active document — the other end of the sentence
- * navigable_realm implements. Its whole difference from materializing one is that the proxy is already bound:
- * this fetches the new document, builds the realm its scripts run in, and hands both to §7.2.5.1's replace, so
- * the page's handle on the navigable now reaches the new document and the old realm stays where a parked flow
- * left it.
+/* §7.4 STEP 14's NAVIGATE IS A SCHEDULED WORK ITEM, and it has to be one because NOT ONE of its three callers
+ * can wait. §4.8.5's iframe insertion runs inside the tree-construction steps, which are plain C with no flow
+ * to suspend; `window.open()` hands back a WindowProxy at its own call site; §4.6.3's activation behaviour runs
+ * inside a dispatch. The spec says the same thing from the other end — `open()` RETURNS before the destination
+ * loads, and a page that reads `contentDocument` in the creating turn sees the initial about:blank rather than
+ * where the frame is going.
  *
- * WHAT IS NOT HERE YET, and it is a mechanism rather than a line: the fetch is the HOST's synchronous one
- * (child_document), so a host whose network parks the flow — which is every host that is not a test runner —
- * cannot navigate at all, and navigable.h's DCHECK says so at the fetcher. §7.4's navigate becoming a
- * scheduled work item (the navigating flow parks on the response and resumes with it) is that mechanism, and
- * it replaces the ONE line below rather than anything else in this function.
+ * SO THE LOAD IS A JOB, which in this engine is a call-root FLOW: preemptible, forkable, parkable. That last
+ * one is the point. The fetch inside it is still the host's synchronous one, so nothing parks yet; what changed
+ * is WHERE the load happens, and it is now somewhere that CAN park — which is what makes the fetch a change to
+ * one function rather than to every caller of it.
+ *
+ * ONE OPERATION, AND THE JOB CARRIES ITS DESTINATION. The job is handed the ADDRESS and the ORIGIN it is
+ * loading, never the ones already on the proxy: a navigation's destination is not the navigable's current
+ * address, and a first version of this read the address off the proxy whenever the proxy had no realm yet.
+ * That is right for §7.4's create — the navigable's address IS the destination there — and silently WRONG for
+ * §7.1's choose-an-existing-navigable, where `window.open("post-to-top.html","iExist")` navigates a srcless
+ * `<iframe name=iExist>` whose own address is about:blank and whose realm nothing has touched. The destination
+ * was discarded and the navigable materialized empty; the test timed out waiting for a message from a document
+ * that was never loaded. The address travels with the job.
+ *
+ * WHAT THE NAVIGABLE'S STATE STILL DECIDES IS ITS DOCUMENT'S IDENTITY, and only that. A navigable with a
+ * realm already is being NAVIGATED, and §7.2.5.1 supersedes a document, so the new one gets a NEW name — the
+ * world registry names documents rather than navigables, and a flow parked in the superseded one must still be
+ * able to say where it is. A navigable with no realm yet is receiving its FIRST document, whose name §7.4
+ * already minted and adopted when it created the navigable. Either way the realm is built at the job's address
+ * and all five facts of the binding move together.
+ *
+ * THE CALLEE IS MINTED IN THE ENQUEUING REALM. A C function runs in the realm that DEFINED it, and this one
+ * reads §7.2.6's inherited policy off `ctx` — one held in a static would clone the wrong document's. */
+typedef struct {
+    JSStepHdr hdr;   /* the load is ONE step: everything it needs came in as an argument */
+} NavLoadState;
+
+static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    NavLoadState *s = st;
+    JSValueConst proxy = step_arg(&s->hdr, 0);
+    JSValueConst cspv = step_arg(&s->hdr, 3);
+    const char *addr, *origin, *csp = NULL;
+    JSContext *cctx;
+    uint32_t doc;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    DCHECK(window_proxy_is(proxy), "the document-load job was given something that is not a WindowProxy");
+    addr = JS_ToCString(ctx, step_arg(&s->hdr, 1));
+    if (!addr) return JS_STEP_ABRUPT;
+    origin = JS_ToCString(ctx, step_arg(&s->hdr, 2));
+    if (!origin) { JS_FreeCString(ctx, addr); return JS_STEP_ABRUPT; }
+    if (!JS_IsNull(cspv) && !(csp = JS_ToCString(ctx, cspv))) {
+        JS_FreeCString(ctx, origin);
+        JS_FreeCString(ctx, addr);
+        return JS_STEP_ABRUPT;
+    }
+    if (window_proxy_materialized(proxy)) {
+        doc = world_mint_doc(window_proxy_doc(proxy));
+        world_doc_adopt(doc);
+    } else {
+        doc = window_proxy_doc(proxy);   /* §7.4 minted and adopted it when it created the navigable */
+    }
+    cctx = navigable_realm(ctx, doc, addr, origin, proxy, csp);
+    window_proxy_navigate(ctx, proxy, cctx, doc, addr, origin);
+    JS_FreeCString(ctx, csp);
+    JS_FreeCString(ctx, origin);
+    JS_FreeCString(ctx, addr);
+    return JS_STEP_DONE;
+}
+
+/* WHAT THIS MACHINE OWNS: nothing. Its four arguments are the header's and the flow owns those, and the load
+   it performs leaves its results on the navigable rather than in this state. The declaration is still REQUIRED
+   and is not a formality — a machine with no visit cannot be FORKED, so a concolic branch reached from inside
+   the load would abort the fork instead of exploring both arms, and check_step_visits is what says so before
+   anything is compiled. */
+static void js_nav_load_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    (void)ctx; (void)st; (void)v;
+}
+
+static JSValue js_nav_load_fini(JSContext *ctx, void *st, bool take_result)
+{
+    (void)ctx; (void)st; (void)take_result;
+    return JS_UNDEFINED;   /* the state holds no JSValue of its own — the job's arguments are the header's */
+}
+
+static const JSTrampStepDef js_nav_load_def = { sizeof(NavLoadState), js_nav_load_step, js_nav_load_fini, 0,
+                                                .visit = js_nav_load_visit };
+static int g_nav_load_stepid = -1;
+
+/* `inherit_csp` is §7.2.6's policy for a destination that carries none of its own, and WHOSE it is depends on
+   the OPERATION rather than on the navigable's state — the CREATOR's when §7.4 creates a navigable, the
+   INITIATOR's when §7.2.5.1 navigates one. So the caller states it and it travels with the job, which is the
+   same sentence as the address travelling: everything about where this load is going belongs to the operation
+   that started it, and nothing about it can be read back off the navigable being loaded. */
+static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const char *addr, const char *origin,
+                                   const char *inherit_csp)
+{
+    JSValueConst argv[4];
+    JSValue fn, url, org, csp;
+
+    if (g_nav_load_stepid < 0)
+        g_nav_load_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_nav_load_def);
+    fn = JS_NewCFunction2(ctx, NULL, "load", 4, JS_CFUNC_step, g_nav_load_stepid);
+    CHECK(!JS_IsException(fn), "the document-load job's callee could not be allocated");
+    url = JS_NewString(ctx, addr);
+    CHECK(!JS_IsException(url), "the document-load job's address could not be allocated");
+    org = JS_NewString(ctx, origin ? origin : "null");
+    CHECK(!JS_IsException(org), "the document-load job's origin could not be allocated");
+    csp = inherit_csp ? JS_NewString(ctx, inherit_csp) : JS_NULL;
+    CHECK(!JS_IsException(csp), "the document-load job's inherited policy could not be allocated");
+    argv[0] = proxy;
+    argv[1] = url;
+    argv[2] = org;
+    argv[3] = csp;
+    JS_EnqueueCallJob(ctx, fn, 4, argv);
+    JS_FreeValue(ctx, csp);
+    JS_FreeValue(ctx, org);
+    JS_FreeValue(ctx, url);
+    JS_FreeValue(ctx, fn);
+}
+
+/* §7.2.5.1's NAVIGATE, for a navigable this agent already holds. It RESOLVES the destination and ENQUEUES the
+ * load; the document arrives later, which is what the spec says from both ends — `open()` hands back a
+ * WindowProxy at its own call site, and the navigable it names is still showing what it was showing.
  *
  * THE ADDRESS IS RESOLVED AGAINST THE NAVIGATING DOCUMENT, not against the target's — §4.4's API base URL
  * belongs to the document whose script ran, which for `open("/x", "_self")` happens to be the same document
- * and for `open("/x", "someFrame")` is not. */
+ * and for `open("/x", "someFrame")` is not. Resolving it HERE and not in the job is that sentence: by the time
+ * the job runs, the only document it could resolve against is the one being replaced. */
 JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
 {
     char *addr = NULL, *origin = NULL;
-    uint32_t doc;
-    JSContext *cctx;
 
     DCHECK(window_proxy_is(proxy), "something that is not a WindowProxy was navigated");
     if (!child_address(ctx, url, &addr, &origin)) {
@@ -209,13 +322,8 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
     DCHECK(child_in_this_agent(origin),
            "a navigable was navigated CROSS-ORIGIN — its active document then lives in a peer instance, which "
            "is a host-routed provisioning like §7.4's create notice and not a realm this agent can build");
-    /* A NAVIGATION MAKES A NEW DOCUMENT, so it gets a new identity: the world registry names documents, not
-       navigables, and a parked flow in the superseded one must still be able to name where it is. */
-    doc = world_mint_doc(document_doc(ctx));
-    world_doc_adopt(doc);
     /* §7.2.6: a destination with no response inherits the INITIATOR's policy — this document's. */
-    cctx = navigable_realm(ctx, doc, addr, origin, proxy, policy_container_csp(document_policy(ctx)));
-    window_proxy_navigate(ctx, proxy, cctx, doc, addr, origin);
+    navigable_load_enqueue(ctx, proxy, addr, origin, policy_container_csp(document_policy(ctx)));
     free(addr);
     free(origin);
     return JS_DupValue(ctx, proxy);
@@ -372,7 +480,16 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
         /* §7.4: `noopener` means the new navigable HAS NO OPENER — not that the opener is hidden, that there
            is not one — so the link is never made rather than made and filtered. A CHILD navigable (§4.8.5's
            iframe) has no opener in the first place and no features to ask. */
-        proxy = window_proxy_new(ctx, child, addr, origin, name, feat && feat->is_popup,
+        /* §7.4 CREATES THE NAVIGABLE WITH THE INITIAL about:blank, and step 14 navigates it afterwards — so
+           the navigable's own address is about:blank and the DESTINATION belongs to the navigation, never to
+           the creation. Recording the destination here instead was not a shortcut with the same answer: the
+           realm is materialized lazily, so a read reaching through this navigable before the load job ran
+           would have built the DESTINATION document early, and the job would then have found a materialized
+           navigable and loaded the same address a second time into a second document — two fetches, two
+           realms, one navigable, and nothing to say so. With about:blank here that early read materializes
+           the document §7.4 actually created (no response, no fetch) and the job supersedes it, which is both
+           what the spec describes and the only version with one load in it. */
+        proxy = window_proxy_new(ctx, child, "about:blank", origin, name, feat && feat->is_popup,
                                  /* §7.2.6/§7.4: a navigable created with no address has no response to carry a
                                     policy, so it CLONES THE CREATOR'S — the SAME `csp` this function already
                                     sends to a PEER instance for a cross-origin child, which is where the gap
@@ -394,24 +511,24 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
         /* §7.1's search reaches a CHILD down its parent's document tree; a top-level traversable is reachable
            from nothing, so the group holds it — see navigable_choose_name. */
         if (!is_child) navigable_group_add(ctx, proxy);
-        /* §7.4 STEP 14: NAVIGATE THE NEW NAVIGABLE TO url — and navigating is what makes the document RUN.
-           A navigable that was given an address is materialized HERE, in the creating turn, because its
-           document's own scripts are an observable that owes nothing to the creator: a popup posts back to its
-           opener without the opener ever touching the proxy. Deferring this was twelve files in html/browsers
-           reporting nothing at all — not a saving, a popup that never ran.
-           A navigable with NO address is NOT materialized here, and that is the same sentence read the other
-           way: it holds the initial about:blank Document §7.4 created it with, that Document has no scripts by
-           construction, and the ONLY way to observe it is a read through this proxy — which builds it. The
-           deferral has no observable there, and it is load-bearing: a forced-execution frontier runs this
+        /* §7.4 STEP 14: NAVIGATE THE NEW NAVIGABLE TO url — and navigating is what makes the document RUN. It
+           is a JOB rather than a call, for the reason js_nav_load_step states, but it is ENQUEUED here and
+           unconditionally: a navigable's own scripts are an observable that owes nothing to the creator, and a
+           popup posts back to its opener without the opener ever touching the proxy. Not scheduling this at
+           all was twelve files in html/browsers reporting nothing — not a saving, a popup that never ran.
+           A navigable with NO address enqueues NOTHING, and that is the same sentence read the other way: it
+           holds the initial about:blank Document §7.4 created it with, that Document has no scripts by
+           construction, and the ONLY way to observe it is a read through this proxy — which builds it then.
+           The deferral has no observable there, and it is load-bearing: a forced-execution frontier runs this
            `open()` once per flow, so materializing every never-touched about:blank exhausted the heap at ~2030
            flows with the initial parse failing to allocate. The line between the two is what a navigable DOES,
-           not what it costs. */
-        /* THE TEST IS "IS THERE ANYTHING TO FETCH", which for §7.4 is the `about:` scheme: about:blank has no
+           not what it costs.
+           THE TEST IS "IS THERE ANYTHING TO FETCH", which for §7.4 is the `about:` scheme: about:blank has no
            response and no content, so navigating to it produces the Document the navigable already has. It is
            the same test the RealmBuilder applies to decide whether to fetch, and it is stated in both places
            because it is one spec fact about the scheme rather than a protocol between them. */
         if (strncmp(addr, "about:", 6) != 0)
-            (void)window_proxy_realm(ctx, proxy);
+            navigable_load_enqueue(ctx, proxy, addr, origin, csp);   /* §7.2.6: the CREATOR's, for §7.4's create */
     } else {
         /* THE NOTICE, and every field of it is load-bearing. The CHILD is the name the host provisions an
            instance under; the CREATOR names who made it, which is what the host routes replies through and what

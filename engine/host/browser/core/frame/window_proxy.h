@@ -19,15 +19,14 @@ void window_proxy_free(JSContext *ctx);
 /* `url` is the navigable's initial address — what its REALM is built from on the first read that reaches
    through to the active document (see navigable.h). The proxy owns that realm once built; the navigable's own
    members (window/self/frames/parent/top/opener/closed/name) never need it and never build it. */
-/* `creator_csp` is §7.4's CLONE of the creating document's policy container, as text — what a navigable created
-   with NO address (about:blank) runs its scripts under, since it has no response of its own to carry one. Taken
-   HERE, at creation, because such a navigable's realm is materialized lazily and the realm that materializes it
-   need not be the one that created it. NULL for an addressed navigable, whose policy comes with its response. */
+/* `creator_csp` is §7.4's CLONE of the creating document's policy container, as text — what the navigable's
+   INITIAL about:blank Document runs its scripts under, since it has no response of its own to carry one. Every
+   navigable is created with that document (§7.4 creates it before step 14 navigates anywhere), so every
+   navigable is created with this. Taken HERE rather than at materialization, because that Document's realm is
+   built lazily and the realm that builds it need not be the one that created the navigable. A LATER document —
+   the one step 14's load brings — has a policy of its own, and the load carries it (navigable.c). */
 JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const char *origin, const char *name,
                          bool is_popup, const char *creator_csp, JSValueConst parent, JSValueConst opener);
-
-/* That cloned policy text, for the materialization that builds the child's document. BORROWED, NULL for none. */
-const char *window_proxy_creator_csp(JSValueConst proxy);
 
 /* §7.4's "popup window is requested" for this navigable — §7.2.5.3's BarProps are the negation of it. */
 bool window_proxy_is_popup(JSValueConst proxy);
