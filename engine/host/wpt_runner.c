@@ -849,6 +849,27 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
 
 /* ONE DOCUMENT. Runs once per document INCLUDING the first, which is what makes it the one description of what
    a document of this build is — a same-origin child navigable gets exactly this and nothing else. */
+/* AN OWNED SERIALIZATION, INSTALLED AND FREED IN ONE PLACE — every component of the address below is one of
+   these, so the free belongs here rather than at nine call sites. Mirrors location.c's loc_put for the same
+   reason: the URL parser hands back malloc'd strings and a missed free is a leak per realm. */
+static void wpt_loc_put(JSContext *ctx, JSValueConst loc, const char *name, char *owned)
+{
+    JS_SetPropertyStr(ctx, (JSValue)loc, name, JS_NewString(ctx, owned ? owned : ""));
+    free(owned);
+}
+
+/* §4.5: `search` and `hash` carry their leading `?` and `#`; an absent one is "" and not the punctuation. */
+static char *wpt_loc_prefixed(const char *prefix, const char *tail)
+{
+    size_t a = strlen(prefix), b = strlen(tail);
+    char *r = malloc(a + b + 1);
+    CHECK(r != NULL, "wpt: OOM building an address component");
+    memcpy(r, prefix, a);
+    memcpy(r + a, tail, b);
+    r[a + b] = 0;
+    return r;
+}
+
 static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
                               uint32_t doc_id, JSValueConst nav_proxy)
 {
@@ -915,22 +936,37 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
     /* THE CORPUS ROOT AND THE DOCUMENT ADDRESS. The driver hands this runner
        `<root>/resources/testharness.js` first and the test file second, so the root is what precedes the one
        and the address is the other, made server-relative — which is exactly what WPT's server serves from and
-       resolves against. A worker's `location` is a real WorkerLocation; `search` is empty because this runner
-       runs the file with no variant query, which is a real variant and not a way to skip the others. */
+       resolves against. A worker's `location` is a real WorkerLocation. */
     /* THE ADDRESS, NOT THE INTERFACE. This runner needs the base URL — every relative URL in the corpus
        resolves against it, and `URL.createObjectURL` names its origin — while the Location INTERFACE
        additionally declares `search` and `hash` as concolic attacker sources, which a conformance runner must
        not have because the harness's own coercion of a concolic `search` refuses it. Nothing has to be
        recorded for the base: HTML's API base URL is the DOCUMENT's address, and document_install above was
-       given it. This used to hand it to a module-static in location.c, which every realm's install then
-       overwrote — so a materialized popup rewrote its opener's base. */
+       given it.
+       EVERY MEMBER COMES FROM THE ADDRESS, THROUGH THE REAL PARSER. `search` was the literal "" with a comment
+       saying this runner runs its file with no variant query — true of the ROOT document and false of every
+       CHILD, whose address is whatever `window.open` named. `open("target.html?" + channelName)` is how the
+       corpus tells a popup which BroadcastChannel to answer on, and the popup read `location.search.substr(1)`
+       as the empty string: 93 subtests in one file, and most of open-close, timed out waiting for a message
+       posted on a bus named "". A hardcoded component is only ever right for the one document it was written
+       for, and this realm install runs for all of them. */
     {
+        UrlRecord rec;
         JSValue loc = JS_NewObject(ctx);
+
+        url_record_init(&rec);
+        CHECK(url_parse(&rec, url, strlen(url), NULL),
+              "wpt: a realm's address is not a URL — the runner built it, so this is the runner's bug");
         JS_SetPropertyStr(ctx, loc, "href", JS_NewString(ctx, url));
-        JS_SetPropertyStr(ctx, loc, "search", JS_NewString(ctx, ""));
         JS_SetPropertyStr(ctx, loc, "origin", JS_NewString(ctx, origin));
-        JS_SetPropertyStr(ctx, loc, "protocol", JS_NewString(ctx, "http:"));
+        wpt_loc_put(ctx, loc, "search",   rec.query    ? wpt_loc_prefixed("?", rec.query)    : NULL);
+        wpt_loc_put(ctx, loc, "hash",     rec.fragment ? wpt_loc_prefixed("#", rec.fragment) : NULL);
+        wpt_loc_put(ctx, loc, "pathname", url_serialize_path(&rec));
+        wpt_loc_put(ctx, loc, "protocol", wpt_loc_prefixed(rec.scheme, ":"));
+        wpt_loc_put(ctx, loc, "host",     url_serialize_host_port(&rec));
+        wpt_loc_put(ctx, loc, "hostname", url_serialize_host(&rec.host));
         JS_SetPropertyStr(ctx, global, "location", loc);
+        url_record_free(&rec);
     }
     JS_FreeValue(ctx, global);
 }
