@@ -480,9 +480,11 @@ static const char *const EH_NAME[] = {
 #define EH_COUNT ((int)(sizeof(EH_NAME) / sizeof(EH_NAME[0])))
 
 /* The EVENT TYPE each attribute handles: its own name past the `on`, which is what §8.1.7 says and why one
-   list produces both. */
+   list produces both. WRITTEN AS AN INDEX, not as `n + 2`: the two mean the identical thing and the second is
+   the shape `-Wstring-plus-int` exists to catch, because on a string literal it is far more often someone
+   expecting concatenation. Saying `&n[2]` says SUBSTRING, which is what §8.1.7 asks for. */
 static const char *const EH_TYPE[] = {
-#define X(n, m) n + 2,
+#define X(n, m) &(n)[2],
     EVENT_HANDLERS(X)
 #undef X
 };

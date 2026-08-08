@@ -57,18 +57,13 @@
  * §7.4 says so at the point the address arrives rather than handing back an empty document that reads as a
  * real one. */
 
-/* THE NETWORK HALF — declared by the HOST. Returns the address's bytes (malloc'd, caller frees) and their
-   length, or NULL when the fetch fails; a child whose address does not load keeps the initial about:blank
-   Document, which is what a browser showing an error page still has.
-   SYNCHRONOUS, WHICH IS WHY THE PRODUCT HOST HAS NONE. Its network is the trusted zone's and every request
-   parks the running flow on a host-owed answer, so it cannot answer here at all — §7.4's navigate has to become
-   a scheduled work item that resumes when the response lands, replacing the navigable's active Document. That
-   is the mechanism this signature is the placeholder for, and the DFAIL below names it. */
-/* `pcsp` receives the response's `Content-Security-Policy` header as a MALLOC'D string the caller frees, or
-   NULL when the response carried none. It is an out-parameter and not a second call because a policy is a
-   property of THE RESPONSE — asking for it separately is asking a second time and may get a second answer. */
-typedef char *(*DocumentFetcher)(JSContext *ctx, const char *url, size_t *plen, char **pcsp);
-void navigable_set_document_fetcher(DocumentFetcher f);
+/* THE NETWORK HALF IS A HOST-OWED ANSWER, not a callback — `document.fetch<TAB><url>`, issued by §7.4 step
+   14's load job and parked on until the host answers with `{body, csp}` (navigable.c). There is nothing for a
+   host to install here, which is the point: a synchronous fetcher could only ever be implemented by a host
+   whose network happens to be synchronous, and the product host's is the trusted zone's — every request parks
+   the asking flow. The one shape that serves both is the one every other host-owed answer in this engine
+   already uses, so the load uses it and a host that cannot answer leaves the flow parked, visibly, rather than
+   silently keeping an empty document. */
 
 /* HOW THIS AGENT BUILDS A REALM AROUND A DOCUMENT — declared by the HOST, called by §7.4 when the child is
  * SAME-ORIGIN.
@@ -115,12 +110,17 @@ void navigable_set_realm_builder(RealmBuilder b);
  * about:blank parse itself failing to allocate. Building them all and paging the low-value tail to the cold
  * tier is the design that would remove even this line — a JSContext is not a snapshot, so that is a real
  * mechanism to build and not a rewording of the deferral. */
-/* `inherit_csp` is the policy a destination with NO RESPONSE takes — §7.2.6's clone. WHOSE it is depends on
-   the operation and only the caller knows: creating a navigable clones the CREATOR's (kept on the navigable,
-   because a srcless child's realm is built later and by whichever document reads through it first), while
-   navigating one clones the INITIATOR's, the document whose script ran. NULL for none. */
+/* THE RESPONSE IS AN ARGUMENT, because fetching it is a SUSPEND and this function cannot suspend — it is
+   called from `proxy_realm`, which answers a property read in the turn that made it. So whoever HAS a response
+   passes it and whoever has none passes NULL, and the two are the same call: `body`/`body_len` are the bytes
+   the address served (NULL for `about:`, and NULL for a fetch that failed — a browser showing an error page
+   still has a navigable), and `csp` is the policy the Document is CREATED with, which is the response's
+   `Content-Security-Policy` when there was a response and §7.2.6's inherited clone when there was not. WHOSE
+   clone that is depends on the operation and only the caller knows: creating a navigable clones the CREATOR's
+   (kept on the navigable, because a srcless child's realm is built later and by whichever document reads
+   through it first), navigating one clones the INITIATOR's, the document whose script ran. */
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *origin,
-                           JSValueConst nav_proxy, const char *inherit_csp);
+                           JSValueConst nav_proxy, const char *body, size_t body_len, const char *csp);
 
 /* Install §7.4's scriptable entry point — `window.open`. `origin` is this document's, which the initial
    about:blank child inherits along with the policy container. */

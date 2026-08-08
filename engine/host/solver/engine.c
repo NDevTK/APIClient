@@ -276,15 +276,29 @@ const char *engine_host_requests(void) {
                 need += strlen(f->pending[i].op) + 24;
     join = malloc(need);
     CHECK(join != NULL, "engine: OOM joining the outstanding host requests");
-    join[0] = 0;
-    for (int k = 0; (f = flow_at(k)) != NULL; k++)
-        for (int i = 0; i < f->npend; i++) {
-            FlowPending *p = &f->pending[i];
-            char head[24];
-            if (p->kind != FLOW_PENDING_HOSTREQ || p->have_value) continue;
-            snprintf(head, sizeof head, "%u\t", p->req);
-            strcat(join, head); strcat(join, p->op); strcat(join, "\n");
-        }
+    /* WRITTEN THROUGH A CURSOR, NOT strcat. `strcat` rescans everything already written to find the end, so
+       joining N records is O(N²) — and this is pulled on EVERY return to the host, with one outstanding record
+       per parked flow. It was invisible while the only host request was a cross-document read (a handful at a
+       time) and became the gate's wall clock the moment §7.4 step 14's load parked on one: a corpus directory
+       that ran in minutes did not finish in fifty. The length loop above already measured the total, so the
+       cursor costs nothing to keep. */
+    {
+        char *w = join;
+        *w = 0;
+        for (int k = 0; (f = flow_at(k)) != NULL; k++)
+            for (int i = 0; i < f->npend; i++) {
+                FlowPending *p = &f->pending[i];
+                size_t oplen;
+                if (p->kind != FLOW_PENDING_HOSTREQ || p->have_value) continue;
+                w += snprintf(w, 24, "%u\t", p->req);
+                oplen = strlen(p->op);
+                memcpy(w, p->op, oplen); w += oplen;
+                *w++ = '\n';
+            }
+        *w = 0;
+        DCHECK((size_t)(w - join) < need, "the outstanding-request join outgrew the length its own measuring "
+                                          "pass computed — the two loops disagree about which records count");
+    }
     return join;
 }
 
@@ -337,25 +351,37 @@ const char *engine_pending_urls(void) {
             if (f->pending[i].url && !f->pending[i].have_value) need += strlen(f->pending[i].url) + 1;
     join = malloc(need);
     CHECK(join != NULL, "engine: OOM joining the pending URLs");
-    join[0] = 0;
-    for (int k = 0; (f = flow_at(k)) != NULL; k++)
-        for (int i = 0; i < f->npend; i++) {
-            const char *u = f->pending[i].url;
-            if (!u || f->pending[i].have_value) continue;
-            /* already listed? a linear scan over the answer being built, which is the set itself */
-            {
-                const char *p = join; int dup = 0; size_t ul = strlen(u);
-                while (*p) {
-                    const char *e = strchr(p, '\n');
-                    size_t l = e ? (size_t)(e - p) : strlen(p);
-                    if (l == ul && !memcmp(p, u, ul)) { dup = 1; break; }
-                    if (!e) break;
-                    p = e + 1;
+    /* THE CURSOR IS THE END OF THE ANSWER, and it serves both writers — the append and the dedup scan that
+       decides whether to append. `strcat` would rescan everything already written to find the same position
+       this variable holds, which is the O(N²) shape the request join beside this one was measured at. */
+    {
+        char *w = join;
+        *w = 0;
+        for (int k = 0; (f = flow_at(k)) != NULL; k++)
+            for (int i = 0; i < f->npend; i++) {
+                const char *u = f->pending[i].url;
+                size_t ul;
+                if (!u || f->pending[i].have_value) continue;
+                ul = strlen(u);
+                /* already listed? a linear scan over the answer being built, which is the set itself */
+                {
+                    const char *p = join; int dup = 0;
+                    while (p < w) {
+                        const char *e = memchr(p, '\n', (size_t)(w - p));
+                        size_t l = e ? (size_t)(e - p) : (size_t)(w - p);
+                        if (l == ul && !memcmp(p, u, ul)) { dup = 1; break; }
+                        if (!e) break;
+                        p = e + 1;
+                    }
+                    if (dup) continue;
                 }
-                if (dup) continue;
+                memcpy(w, u, ul); w += ul;
+                *w++ = '\n';
             }
-            strcat(join, u); strcat(join, "\n");
-        }
+        *w = 0;
+        DCHECK((size_t)(w - join) < need, "the pending-URL join outgrew the length its own measuring pass "
+                                          "computed — the two loops disagree about which records count");
+    }
     return join;
 }
 

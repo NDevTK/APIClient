@@ -1200,6 +1200,16 @@ static const char *HTML =
     " _cw.self === _cw && _if.getAttribute('name') === 'fr';"
     "fetch('/api/iframenav?v=' + (_ifok ? 'ifnav' : 'wrong'));"
 
+    /* WHAT IS NOT PROBED HERE, AND WHY IT IS NOT A CHOICE: an iframe with a REAL `src`. It would exercise the
+       whole of §7.4 step 14 — the load job asks the host for the address, PARKS, resumes with the response and
+       runs the child's own scripts — and the srcless probe above reaches none of that, because about:blank has
+       no response to fetch. It was written, and it aborts: a fixture statement runs in EVERY flow, a src'd
+       navigable materializes a realm rather than deferring it (its scripts are an observable), and a realm is
+       never reclaimed — so this fixture's ~7000 flows ask for ~7000 child realms and the heap is gone at 4022.
+       That is the ceiling child_document's CHECK names, and it is the next mechanism, not a probe to soften.
+       The path is not unexercised meanwhile: `node engine/wpt.mjs html/browsers` runs hundreds of src'd
+       iframes at flow counts a realm-per-flow can still pay for. */
+
     /* HTML §8.6's TIMER TASK SOURCE, and §8.1.7's ordering around it — neither of which this fixture exercised
        at all, so `setTimeout` had no probe in the engine's own test despite being how a great deal of real code
        reaches the event loop. The ORDER is the assertion: a microtask checkpoint runs before the next task, so
@@ -1555,6 +1565,16 @@ static int hostreq_answer_all(JSContext *ctx)
                 v = (mlen == 6 && !memcmp(last, "closed", 6)) ? JS_FALSE
                   : (mlen == 6 && !memcmp(last, "length", 6)) ? JS_NewInt32(ctx, 0)
                                                               : JS_NULL;
+            } else if (!strncmp(tab + 1, "document.fetch\t", 15)) {
+                /* §7.4 STEP 14'S NETWORK HALF — this fixture standing in for it exactly as it stands in for
+                   the peer above, so the load's suspend/resume runs end to end. `{body, csp}` is ONE answer
+                   because a policy is a property of THE RESPONSE. The body is a DOCUMENT WITH A SCRIPT,
+                   because the only thing that proves a navigation happened is the loaded document RUNNING. */
+                v = JS_NewObject(ctx);
+                JS_SetPropertyStr(ctx, v, "body", JS_NewString(ctx,
+                    "<!doctype html><html><head></head><body>"
+                    "<script>fetch('/api/iframesrc?v=loaded');</script></body></html>"));
+                JS_SetPropertyStr(ctx, v, "csp", JS_NULL);
             } else {
                 v = JS_NewStringLen(ctx, tab + 1, (size_t)(end - tab - 1));
             }

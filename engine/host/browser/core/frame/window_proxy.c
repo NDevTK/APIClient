@@ -213,9 +213,12 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
     if (!p->realm) {
         DCHECK(p->url != NULL, "a WindowProxy with no realm and no address was read through — a proxy over a "
                                "realm that already exists is minted by window_proxy_new_self, which carries it");
-        /* §7.2.6: this navigable was CREATED with a clone of its creator's policy (see creator_csp),
-           and that is what its about:blank Document takes when it is finally materialized. */
-        p->realm = navigable_realm(ctx, p->doc, p->url, p->origin, proxy, p->creator_csp);
+        /* THE INITIAL about:blank, WHICH CAME FROM NO RESPONSE — so no bytes, and §7.2.6's policy is the clone
+           of its creator's this navigable was CREATED with (see creator_csp). Fetching anything here is not
+           deferred, it is IMPOSSIBLE: this runs inside the property read that reached through the navigable,
+           and a fetch suspends. The document an address serves arrives on the load job instead, which is a
+           flow and can park (navigable.c). */
+        p->realm = navigable_realm(ctx, p->doc, p->url, p->origin, proxy, NULL, 0, p->creator_csp);
         p->window = JS_GetGlobalObject(p->realm);
     }
     return p->realm;

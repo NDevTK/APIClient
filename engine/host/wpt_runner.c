@@ -581,6 +581,10 @@ static void wpt_children_free(void)
     g_children_n = 0;
 }
 
+/* Defined below, next to the other GETs against the corpus server — §7.4 step 14's fetch is answered here and
+   it is the same request every other one is. */
+static char *wpt_get_csp(const char *url, size_t *plen, char **pcsp);
+
 static void wpt_answer_host_requests(JSContext *ctx)
 {
     const char *notices = engine_host_notices();
@@ -646,6 +650,28 @@ static void wpt_answer_host_requests(JSContext *ctx)
                     JS_FreeValue(ctx, v);
                 }
             }
+        }
+        /* §7.4 STEP 14'S FETCH, which this runner answers itself because the document being loaded belongs to
+           the instance that asked — routing it to a peer would be answering a same-origin load out of another
+           agent. `{body, csp}` is ONE answer because a policy is a property of THE RESPONSE; a body of null is
+           a fetch that did not load, which is still a document the navigable gets. */
+        else if (!strncmp(tab + 1, "document.fetch\t", 15)) {
+            char *csp = NULL, *body;
+            size_t len = 0;
+            JSValue v = JS_NewObject(ctx);
+
+            DCHECK(n < sizeof op, "a document address outgrew this runner's request buffer — truncating it "
+                                  "would GET a different URL and skipping it parks the loading flow forever, "
+                                  "so the buffer is what has to grow");
+            memcpy(op, tab + 1, n); op[n] = 0;
+            body = wpt_get_csp(strchr(op, '\t') + 1, &len, &csp);
+            JS_SetPropertyStr(ctx, v, "body",
+                              body ? JS_NewStringLen(ctx, body, len) : JS_NULL);
+            JS_SetPropertyStr(ctx, v, "csp", csp ? JS_NewString(ctx, csp) : JS_NULL);
+            free(body);
+            free(csp);
+            engine_host_answer(ctx, id, v);
+            JS_FreeValue(ctx, v);
         }
         /* An operation this harness does not route is left UNANSWERED rather than guessed: the asking flow
            stays parked, which is visible, where a wrong answer is not. */
@@ -1027,15 +1053,6 @@ static bool wpt_run_pending(void)
     return true;
 }
 
-/* THE NETWORK HALF of §7.4 step 14 — this runner's, because this runner has a server to ask. The bytes come
-   back and the ENGINE parses them: what a document IS was never this file's question, and while it was, the
-   product host answered the same seam by ignoring the address entirely. */
-static char *wpt_document_fetch(JSContext *ctx, const char *url, size_t *plen, char **pcsp)
-{
-    (void)ctx;
-    return wpt_get_csp(url, plen, pcsp);
-}
-
 static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                   const char *origin, const char *csp, uint32_t doc_id,
                                   JSValueConst nav_proxy)
@@ -1095,7 +1112,6 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin,
        answer and not the engine's — a child with a different platform surface would make every fidelity number
        measured in it a number about a different browser. */
     navigable_set_realm_builder(wpt_child_realm);
-    navigable_set_document_fetcher(wpt_document_fetch);   /* §7.4 step 14's bytes; the engine parses them */
 
     if (!src) {
         src = DOC;

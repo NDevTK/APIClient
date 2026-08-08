@@ -20,19 +20,27 @@
 
 static char *g_origin;   /* this AGENT's origin — what an about:blank child inherits (owned) */
 static RealmBuilder g_realm_builder;
-static DocumentFetcher g_doc_fetcher;
 
 /* THE REALMS THIS AGENT BUILT, and the agent is what owns them. A child realm is created by §7.4 and referred
    to by the WindowProxy over its navigable, but a proxy is a GC object and a realm is not: releasing one from
    a finalizer would free JSValues during collection, and leaving it to the proxy meant nobody ran the
    DOCUMENT's own teardown at all — the realm's `document`, its Window and its WindowProxy stayed referenced and
    JS_FreeRuntime's gc_obj_list walk counted the whole child page as surviving objects. The agent holds them and
-   releases them with itself; a proxy BORROWS. */
+   releases them with itself; a proxy BORROWS.
+   AND NOTHING RECLAIMS ONE BEFORE THE AGENT DIES, which is a CEILING and not a policy. A navigable with an
+   ADDRESS materializes its realm rather than deferring it — its scripts are an observable the creator never
+   touches — and forced execution runs the creating statement once per flow, so a page with one src'd iframe
+   asks for one child realm per flow and this list only grows. Measured: the fixture reaches 4022 flows and the
+   next child Document cannot allocate. THE MECHANISM THAT IS MISSING IS RECLAMATION, and its shape follows
+   from the sentence above: a realm belongs to its navigable, a navigable IS a GC object, so a realm whose
+   WindowProxy has been collected is dead — the finalizer cannot free it but it can NAME it, and the sweep runs
+   after the collection rather than inside it. §scheduler's cold tier is the same sentence one level further
+   out, and it is its own mechanism: a realm is not a snapshot, so paging one is not a rewording of paging a
+   flow. */
 static JSContext **g_realms;
 static int         g_realms_n, g_realms_cap;
 
 void navigable_set_realm_builder(RealmBuilder b) { g_realm_builder = b; }
-void navigable_set_document_fetcher(DocumentFetcher f) { g_doc_fetcher = f; }
 
 
 /* THE CHILD'S ADDRESS AND ORIGIN, from ONE parse. An `about:blank` navigable — which is what `open()` with no
@@ -87,85 +95,50 @@ static bool child_in_this_agent(const char *child_origin)
     return !strcmp(g_origin, child_origin);
 }
 
-/* THE CHILD'S DOCUMENT — §7.4's initial about:blank one, or the parse of the address it was navigated to.
-   A REAL LEXBOR PARSE either way, because tree construction always produces <html><head><body> and a child
-   whose body is missing is not a document a page can append to.
-   THE PARSE IS THE ENGINE'S AND THE BYTES ARE THE HOST'S, which is the whole reason those are two calls: this
-   engine owns what a document IS (CLAUDE.md: Lexbor and quickjs own all semantics) and the host owns the
-   network. It used to be one host callback holding both, and the host that implemented only the second half
-   looked finished. */
-static lxb_html_document_t *child_document(JSContext *ctx, const char *url, const char *inherit_csp,
-                                           char **pcsp)
+/* THE CHILD'S DOCUMENT — the parse of what the address served, or §7.4's initial about:blank when it served
+   nothing. A REAL LEXBOR PARSE either way, because tree construction always produces <html><head><body> and a
+   child whose body is missing is not a document a page can append to.
+   THE PARSE IS THE ENGINE'S AND THE BYTES ARE THE HOST'S. That is CLAUDE.md's split — Lexbor and quickjs own
+   what a document IS, the host owns the network — and it is why the bytes ARRIVE HERE rather than being asked
+   for here: fetching is a suspend, this runs inside a property read that cannot suspend, and the one caller
+   that can suspend does the asking (js_nav_load_step).
+   NO BYTES IS NOT AN ERROR. `about:blank` served none, and neither did an address whose fetch failed — a
+   browser showing an error page still has a navigable, with a document, in the tree. */
+static lxb_html_document_t *child_document(const char *body, size_t body_len)
 {
     static const char EMPTY[] = "<!doctype html><html><head></head><body></body></html>";
     lxb_html_document_t *dom = lxb_html_document_create();
-    char *bytes = NULL;
-    size_t n = 0;
 
-    *pcsp = NULL;
-
-    CHECK(dom != NULL, "navigable: OOM creating a child navigable's Document");
-    /* §7.4 STEP 14's NAVIGATE, for an address there is anything to fetch at — see navigable.h for why an
-       `about:` scheme has nothing. A host with no fetcher has not built navigation, and that is named HERE
-       rather than answered with the empty document: a popup whose scripts never ran is indistinguishable in
-       the output from a page that had none, which is a surface reported as explored and never reached. */
-    if (url && *url && strncmp(url, "about:", 6) != 0) {
-        DCHECK(g_doc_fetcher != NULL,
-               "a navigable was navigated to an address in an agent whose host declared no document fetcher — "
-               "§7.4 step 14 fetches it and this host cannot, so the child would silently keep the empty "
-               "about:blank Document and its scripts would never run. Build the navigation: the address is a "
-               "host-owed request, so the navigating flow parks on it and resumes when the response lands "
-               "(navigable_set_document_fetcher)");
-        bytes = g_doc_fetcher(ctx, url, &n, pcsp);
-    } else {
-        /* §7.2.6 + §7.4: A DOCUMENT CREATED FROM NO RESPONSE CLONES ITS CREATOR'S POLICY CONTAINER. It is the
-           same test one line up that decides both — there is one question ("did this document come from a
-           response?") and it is asked once — and it is not bookkeeping: an `about:blank` child runs its
-           scripts under the CREATOR's CSP, so a page that reaches `f.contentWindow.eval(...)` through a
-           srcless iframe is governed by the parent's policy. An empty container there reports that as a
-           working exploit on a page whose CSP kills it, which is the very false PoC @S must never emit.
-           WHOSE POLICY IT IS DEPENDS ON THE OPERATION, so the caller says: CREATING a navigable clones the
-           creator's, taken when the navigable was created (window_proxy.h) because a srcless child's realm is
-           built later and by whichever document reads through it first; NAVIGATING one to an `about:` address
-           clones the INITIATOR's, the document whose script ran. Reading it off `ctx` here would answer the
-           first question with the second's document. The clone is BY VALUE — policy_container_clone is itself
-           a re-parse of this text — so the new document's policy is its own from the moment it exists. */
-        const char *text = inherit_csp;
-        if (text) {
-            *pcsp = strdup(text);
-            CHECK(*pcsp != NULL, "navigable: OOM cloning the inherited policy container for an about: document");
-        }
-    }
-    /* A CHILD WHOSE ADDRESS DOES NOT LOAD KEEPS THE EMPTY DOCUMENT — a browser shows an error page and the
-       navigable still exists. That is a failed fetch, not a missing capability, and the two are different. */
-    CHECK(lxb_html_document_parse(dom, bytes ? (const lxb_char_t *)bytes : (const lxb_char_t *)EMPTY,
-                                  bytes ? n : sizeof EMPTY - 1) == LXB_STATUS_OK,
+    /* WHAT ACTUALLY FILLED THE HEAP WHEN THIS FIRES IS NOT DOCUMENTS — see the realm list in navigable_realm.
+       The message says so, because a `@WHY` is read at the site and "OOM" alone sends the reader here. */
+    CHECK(dom != NULL,
+          "OOM creating a child navigable's Document — the working set that filled the heap is CHILD REALMS, "
+          "one per flow that created a navigable with an address, none of them ever reclaimed. Build the "
+          "reclamation: a realm whose WindowProxy has been collected is dead and can be freed after the "
+          "collection, and the low-value tail beyond that pages to the cold tier");
+    CHECK(lxb_html_document_parse(dom, body ? (const lxb_char_t *)body : (const lxb_char_t *)EMPTY,
+                                  body ? body_len : sizeof EMPTY - 1) == LXB_STATUS_OK,
           "a child navigable's Document did not parse");
-    free(bytes);
     return dom;
 }
 
-/* BUILD A CHILD NAVIGABLE'S REALM — see navigable.h. Called by the WindowProxy, which is the ONE place a realm
-   is materialized: §7.4's navigation asks for it in the creating turn, and a read through a not-yet-materialized
-   about:blank navigable asks for it then. */
+/* BUILD A CHILD NAVIGABLE'S REALM AROUND A RESPONSE — see navigable.h. Two callers, and they are the two
+   documents a navigable has: the load job, which has the bytes §7.4 step 14 fetched, and `proxy_realm`, which
+   is materializing the initial about:blank and has none. THE POLICY TRAVELS WITH THE TREE, because §7.2.6's
+   container is built from both and a builder handed only the tree would judge the document against its
+   `<meta>` policies alone. */
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *origin,
-                           JSValueConst nav_proxy, const char *inherit_csp)
+                           JSValueConst nav_proxy, const char *body, size_t body_len, const char *csp)
 {
+    lxb_html_document_t *dom;
     JSContext *cctx;
 
     DCHECK(g_realm_builder != NULL,
            "a same-origin child navigable was reached in an agent whose host declared no realm builder — a "
            "same-origin document is a second REALM in this heap, and only the host knows which platform "
            "surface a document of this build has; declare it with navigable_set_realm_builder");
-    {
-        /* THE POLICY TRAVELS WITH THE TREE — the response's, or the creator's cloned for an `about:` child;
-           child_document owns which, since it owns the test that decides. Freed here because the builder
-           installs a container built from it and keeps no pointer. */
-        char *csp = NULL;
-        lxb_html_document_t *dom = child_document(ctx, url, inherit_csp, &csp);
-        cctx = g_realm_builder(JS_GetRuntime(ctx), dom, url, origin, csp, doc, nav_proxy);
-        free(csp);
-    }
+    dom = child_document(body, body_len);
+    cctx = g_realm_builder(JS_GetRuntime(ctx), dom, url, origin, csp, doc, nav_proxy);
     CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
     if (g_realms_n == g_realms_cap) {
         int cap = g_realms_cap ? g_realms_cap * 2 : 8;
@@ -186,9 +159,18 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
  * where the frame is going.
  *
  * SO THE LOAD IS A JOB, which in this engine is a call-root FLOW: preemptible, forkable, parkable. That last
- * one is the point. The fetch inside it is still the host's synchronous one, so nothing parks yet; what changed
- * is WHERE the load happens, and it is now somewhere that CAN park — which is what makes the fetch a change to
- * one function rather than to every caller of it.
+ * one is the point, and it is what the fetch needs. §7.4 step 14 FETCHES the destination, the network belongs
+ * to the host, and a host-owed answer SUSPENDS the asking flow — so the load asks `document.fetch<TAB><url>`
+ * and returns JS_STEP_YIELD, siblings run while the response is in flight, and the job resumes with `{body,
+ * csp}` in hand. That is why none of the three callers could have done this themselves: each of them is a
+ * place where nothing can suspend, and the job is a place where everything can.
+ *
+ * A HOST THAT DOES NOT ANSWER LEAVES THE FLOW PARKED, which is the honest state and a visible one — the
+ * navigable exists, named and counted, showing the document it had. The alternative this replaced was a
+ * SYNCHRONOUS fetcher the host installed, which only a host with a synchronous network could implement: the
+ * product host's network is the trusted zone's and parks on every request, so it installed none and a DCHECK
+ * fired the moment anything navigated. One shape now serves both, because it is the shape every other
+ * host-owed answer in this engine already has.
  *
  * ONE OPERATION, AND THE JOB CARRIES ITS DESTINATION. The job is handed the ADDRESS and the ORIGIN it is
  * loading, never the ones already on the proxy: a navigation's destination is not the navigable's current
@@ -209,49 +191,86 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
  * THE CALLEE IS MINTED IN THE ENQUEUING REALM. A C function runs in the realm that DEFINED it, and this one
  * reads §7.2.6's inherited policy off `ctx` — one held in a static would clone the wrong document's. */
 typedef struct {
-    JSStepHdr hdr;   /* the load is ONE step: everything it needs came in as an argument */
+    JSStepHdr hdr;
+    uint32_t  req;   /* the host-owed response, 0 before it is asked for */
 } NavLoadState;
 
+/* THE RESPONSE IS `{body, csp}` — one answer, because a policy is a property of THE RESPONSE and asking for it
+   separately is asking a second time and may get a second answer. A missing or null `body` is a fetch that did
+   not load, which is a document the navigable still gets (an error page is a document). */
 static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     NavLoadState *s = st;
     JSValueConst proxy = step_arg(&s->hdr, 0);
-    JSValueConst cspv = step_arg(&s->hdr, 3);
-    const char *addr, *origin, *csp = NULL;
+    JSValueConst answer = JS_UNDEFINED;
+    const char *addr, *origin, *csp = NULL, *body = NULL;
+    JSValue bodyv = JS_UNDEFINED, cspv = JS_UNDEFINED;
+    size_t body_len = 0;
     JSContext *cctx;
     uint32_t doc;
+    bool fetches;
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
     DCHECK(window_proxy_is(proxy), "the document-load job was given something that is not a WindowProxy");
     addr = JS_ToCString(ctx, step_arg(&s->hdr, 1));
     if (!addr) return JS_STEP_ABRUPT;
+    /* IS THERE ANYTHING TO FETCH — one spec fact about the SCHEME, asked where the fetch is. `about:blank` has
+       no response and no content, so navigating to it produces a Document from nothing: asking the host for it
+       would be a GET of the literal text `about:blank`, and every host would answer 404 or nothing at all.
+       It reaches here because §7.2.5.1 navigates to `about:blank` for real (the corpus does it while an
+       initial load is still pending); §7.4's create skips the job entirely for such an address, which is a
+       different decision — deferring materialization — made for a different reason. */
+    fetches = strncmp(addr, "about:", 6) != 0;
+    if (fetches && !s->req) {
+        char *op = malloc(strlen(addr) + 20);
+        CHECK(op != NULL, "navigable: OOM building §7.4 step 14's fetch request");
+        sprintf(op, "document.fetch\t%s", addr);
+        s->req = engine_host_request(ctx, op);
+        free(op);
+        JS_FreeCString(ctx, addr);
+        return JS_STEP_YIELD;   /* park on the response; siblings run meanwhile */
+    }
+    if (fetches && !engine_host_answered(s->req, &answer)) {
+        JS_FreeCString(ctx, addr);
+        return JS_STEP_YIELD;
+    }
     origin = JS_ToCString(ctx, step_arg(&s->hdr, 2));
     if (!origin) { JS_FreeCString(ctx, addr); return JS_STEP_ABRUPT; }
-    if (!JS_IsNull(cspv) && !(csp = JS_ToCString(ctx, cspv))) {
-        JS_FreeCString(ctx, origin);
-        JS_FreeCString(ctx, addr);
-        return JS_STEP_ABRUPT;
+    if (fetches) {
+        bodyv = JS_GetPropertyStr(ctx, answer, "body");
+        cspv  = JS_GetPropertyStr(ctx, answer, "csp");
+        if (!JS_IsUndefined(bodyv) && !JS_IsNull(bodyv)) body = JS_ToCStringLen(ctx, &body_len, bodyv);
     }
+    /* §7.2.6: the RESPONSE'S policy when it carried one, and otherwise the INHERITED clone — which the job
+       carries because whose clone it is belongs to the operation (navigable_load_enqueue). A document made
+       from no response has only the second, which is the whole of why an `about:blank` child runs its scripts
+       under its creator's CSP. */
+    if (!JS_IsUndefined(cspv) && !JS_IsNull(cspv)) csp = JS_ToCString(ctx, cspv);
+    else if (!JS_IsNull(step_arg(&s->hdr, 3))) csp = JS_ToCString(ctx, step_arg(&s->hdr, 3));
     if (window_proxy_materialized(proxy)) {
         doc = world_mint_doc(window_proxy_doc(proxy));
         world_doc_adopt(doc);
     } else {
         doc = window_proxy_doc(proxy);   /* §7.4 minted and adopted it when it created the navigable */
     }
-    cctx = navigable_realm(ctx, doc, addr, origin, proxy, csp);
+    cctx = navigable_realm(ctx, doc, addr, origin, proxy, body, body_len, csp);
     window_proxy_navigate(ctx, proxy, cctx, doc, addr, origin);
     JS_FreeCString(ctx, csp);
+    JS_FreeCString(ctx, body);
+    JS_FreeValue(ctx, cspv);
+    JS_FreeValue(ctx, bodyv);
+    if (s->req) { JS_FreeValue(ctx, engine_host_take(ctx, s->req)); s->req = 0; }
     JS_FreeCString(ctx, origin);
     JS_FreeCString(ctx, addr);
     return JS_STEP_DONE;
 }
 
-/* WHAT THIS MACHINE OWNS: nothing. Its four arguments are the header's and the flow owns those, and the load
-   it performs leaves its results on the navigable rather than in this state. The declaration is still REQUIRED
-   and is not a formality — a machine with no visit cannot be FORKED, so a concolic branch reached from inside
-   the load would abort the fork instead of exploring both arms, and check_step_visits is what says so before
-   anything is compiled. */
+/* WHAT THIS MACHINE OWNS: nothing that is a JSValue. Its four arguments are the header's and the flow owns
+   those, the response is the host register's until it is taken, and the load leaves its results on the
+   navigable rather than in this state. The declaration is still REQUIRED and is not a formality — a machine
+   with no visit cannot be FORKED, so a concolic branch reached from inside the load would abort the fork
+   instead of exploring both arms, and check_step_visits is what says so before anything is compiled. */
 static void js_nav_load_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     (void)ctx; (void)st; (void)v;

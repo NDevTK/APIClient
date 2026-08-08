@@ -225,7 +225,7 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, char **out_mim
     }
 }
 
-/* WHICH INCLUDING INTERFACE the receiver belongs to./* WHICH INCLUDING INTERFACE the receiver belongs to. The reader machine finds the interface the same way and
+/* WHICH INCLUDING INTERFACE the receiver belongs to. The reader machine finds the interface the same way and
    for the same reason; this is the Fetch-side table, which knows about the latch and the headers. */
 static const BodyIface *body_iface_of(JSValueConst v)
 {
