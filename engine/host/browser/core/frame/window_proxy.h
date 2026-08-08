@@ -93,6 +93,13 @@ JSValue window_proxy_window(JSContext *ctx, JSValueConst proxy);
    would be OBSERVABLE. */
 JSContext *window_proxy_realm(JSContext *ctx, JSValueConst proxy);
 
+/* HAS THIS NAVIGABLE'S ACTIVE DOCUMENT BEEN MATERIALIZED YET? Asked by a walk over the navigable TREE, which
+   must not build a realm just to look at it: an unmaterialized navigable holds the initial about:blank Document
+   §7.4 created it with, and that Document has NO child navigables by construction — so "not materialized" and
+   "no children" are the same answer, and materializing every navigable a forced-execution frontier ever created
+   in order to ask is the heap exhaustion navigable.c's deferral exists to avoid. */
+bool window_proxy_materialized(JSValueConst proxy);
+
 /* §7.2.5's `parent`, `top` and `opener` — the NAVIGABLE's, so a Window answers them from the same record its
    own WindowProxy does. One navigable, one answer, whether a page reads `parent` or `otherW.parent`. Owned. */
 JSValue window_proxy_parent(JSContext *ctx, JSValueConst proxy);

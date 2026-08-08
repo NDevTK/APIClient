@@ -384,6 +384,13 @@ void window_proxy_disown_opener(JSContext *ctx, JSValueConst proxy)
     p->opener = JS_NULL;
 }
 
+bool window_proxy_materialized(JSValueConst proxy)
+{
+    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    DCHECK(p != NULL, "something that is not a WindowProxy was asked whether its document is materialized");
+    return p->realm != NULL;
+}
+
 bool window_proxy_is_remote(JSValueConst proxy)
 {
     ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);

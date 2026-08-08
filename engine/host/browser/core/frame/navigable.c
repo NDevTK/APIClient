@@ -11,6 +11,7 @@
 #include "core/frame/policy_container.h"
 #include "core/frame/window_features.h"
 #include "core/dom/document.h"
+#include "core/html/html_iframe.h"   /* §7.2.5's document-tree child navigables — §7.1's walk descends them */
 #include "core/url/url.h"
 #include "core/idl_args.h"
 #include "solver/engine.h"
@@ -227,6 +228,99 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
  * familiar-with walk over the navigable tree, and the tree's children are the iframe elements' — so it is the
  * next piece, and until it is here such a name creates a new navigable and is GIVEN that name, which is what
  * the same rule says for a name that matches nothing. */
+/* §7.1'S FIFTH RULE — a target that is a NAME rather than a keyword names a navigable to REUSE when one with
+ * that name is FAMILIAR WITH the source. What follows is that search, and both halves of it are the spec's.
+ *
+ * WHERE IT LOOKS. A navigable is reachable two ways and neither is a registry keyed by document: DOWN the
+ * document tree (a navigable's children are its active document's iframes, walked from the tree on every ask so
+ * the answer is this flow's), and ACROSS the browsing context group (the top-level traversables this agent has
+ * opened, which no document holds a reference to — a page may drop `open()`'s return value and the window is
+ * still there to be targeted, so the GROUP holds them, exactly as a browser does).
+ *
+ * THE GROUP LIST IS A JS ARRAY, and that is load-bearing rather than convenient. A navigable one forked arm
+ * opened must be invisible to its sibling — otherwise `open(url, "x")` in arm A is found and navigated by arm
+ * B, which is two timelines sharing a window. An array's mutations are property writes, so the COW delta
+ * captures them per flow for free and the list parks and resumes with the flow like everything else; a
+ * malloc'd list would have needed its own delta kind and would have leaked its entries past every unapply.
+ *
+ * FAMILIAR WITH reduces to "in this agent" here, and that is not a simplification: an instance IS an
+ * origin-keyed agent cluster (SECURITY.md), so every navigable this walk can reach is same origin with the
+ * source by construction, which is §7.1's first familiar-with clause. A cross-origin navigable is a peer's and
+ * is not in this heap to be found.
+ *
+ * IT DOES NOT MATERIALIZE ANYTHING. An unmaterialized navigable holds the about:blank Document §7.4 created it
+ * with, which has no iframes, so there is nothing below it to walk — see window_proxy.h. */
+static JSValue g_group = JS_UNDEFINED;   /* the browsing context group's top-level traversables (baseline) */
+
+/* THE WALK IS ITERATIVE, over an explicit worklist, and that is the rule rather than a preference: a tree walk
+   written as a self-call is C-to-C recursion whose depth is the PAGE's iframe nesting, which is the page's to
+   choose — the same reason every call in this engine trampolines onto the heap. The worklist IS the stack, in a
+   place a walk can be measured and, when this becomes a step machine, suspended.
+   BREADTH-FIRST, which is also the spec's answer rather than an accident of the loop: §7.1 wants the navigable
+   NEAREST the source, so a name on a child must win over the same name three frames down another branch. */
+static JSValue nav_find_in_tree(JSContext *ctx, JSValueConst root, const char *name)
+{
+    JSValue queue = JS_NewArray(ctx), hit = JS_UNDEFINED;
+    uint32_t head = 0, tail = 0;
+
+    CHECK(!JS_IsException(queue), "navigable: OOM walking the navigable tree");
+    JS_SetPropertyUint32(ctx, queue, tail++, JS_DupValue(ctx, root));
+    while (head < tail && JS_IsUndefined(hit)) {
+        JSValue proxy = JS_GetPropertyUint32(ctx, queue, head++);
+        const char *nm;
+
+        if (!window_proxy_is(proxy) || window_proxy_closed(ctx, proxy)) { JS_FreeValue(ctx, proxy); continue; }
+        /* §7.4 gave this navigable its name and §7.11 lets a document rename its own — one record, read here. */
+        nm = window_proxy_name(proxy);
+        if (nm && !strcmp(nm, name)) { hit = proxy; break; }
+        if (window_proxy_materialized(proxy)) {
+            JSContext *realm = window_proxy_realm(ctx, proxy);
+            int i, n = iframe_child_navigable_count(realm);
+            for (i = 0; i < n; i++)
+                JS_SetPropertyUint32(ctx, queue, tail++, iframe_child_navigable(realm, i));
+        }
+        JS_FreeValue(ctx, proxy);
+    }
+    JS_FreeValue(ctx, queue);
+    return hit;
+}
+
+static JSValue navigable_choose_name(JSContext *ctx, const char *name)
+{
+    JSValue top = window_proxy_top_of(ctx, document_window_proxy(ctx));
+    JSValue hit = nav_find_in_tree(ctx, top, name);
+    uint32_t i, n = 0;
+    JSValue len;
+
+    JS_FreeValue(ctx, top);
+    if (!JS_IsUndefined(hit)) return hit;   /* the source's own tree first — the nearest match is the spec's */
+    DCHECK(JS_IsArray(g_group), "the browsing context group's list was read before navigable_init built it");
+    len = JS_GetPropertyStr(ctx, g_group, "length");
+    JS_ToUint32(ctx, &n, len);
+    JS_FreeValue(ctx, len);
+    for (i = 0; i < n; i++) {
+        JSValue other = JS_GetPropertyUint32(ctx, g_group, i);
+        hit = nav_find_in_tree(ctx, other, name);
+        JS_FreeValue(ctx, other);
+        if (!JS_IsUndefined(hit)) return hit;
+    }
+    return JS_UNDEFINED;
+}
+
+/* A TOP-LEVEL TRAVERSABLE JOINS THE GROUP. A child navigable does not: it is reachable down its parent's
+   document tree, and putting it here as well would make the walk visit it twice. */
+static void navigable_group_add(JSContext *ctx, JSValueConst proxy)
+{
+    uint32_t n = 0;
+    JSValue len;
+
+    DCHECK(JS_IsArray(g_group), "a navigable was created before navigable_init built the group's list");
+    len = JS_GetPropertyStr(ctx, g_group, "length");
+    JS_ToUint32(ctx, &n, len);
+    JS_FreeValue(ctx, len);
+    JS_SetPropertyUint32(ctx, g_group, n, JS_DupValue(ctx, proxy));
+}
+
 static JSValue navigable_choose_keyword(JSContext *ctx, const char *target)
 {
     JSValueConst self = document_window_proxy(ctx);
@@ -297,6 +391,9 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            the write rather than 51 subtests downstream in another realm. */
         DCHECK(window_proxy_is_popup(proxy) == (feat != NULL && feat->is_popup),
                "a navigable did not keep §7.4's popup decision across its own creation");
+        /* §7.1's search reaches a CHILD down its parent's document tree; a top-level traversable is reachable
+           from nothing, so the group holds it — see navigable_choose_name. */
+        if (!is_child) navigable_group_add(ctx, proxy);
         /* §7.4 STEP 14: NAVIGATE THE NEW NAVIGABLE TO url — and navigating is what makes the document RUN.
            A navigable that was given an address is materialized HERE, in the creating turn, because its
            document's own scripts are an observable that owes nothing to the creator: a popup posts back to its
@@ -379,6 +476,19 @@ static JSValue js_win_open(JSContext *ctx, JSValueConst this_val, int argc, JSVa
         }
         JS_FreeValue(ctx, chosen);
     }
+    /* §7.1's FIFTH RULE, before the create that is its sixth: a target that NAMES an existing navigable this
+       source is familiar with REUSES it, and reusing one means navigating it. Only when nothing answers to the
+       name is a navigable created and GIVEN it — which is the same rule's other half, and was the only half
+       here: `open(url, "chan42")` twice made two windows where a browser makes one and navigates it again. */
+    if (target && *target && target[0] != '_' && !feat.noopener) {
+        JSValue named = navigable_choose_name(ctx, target);
+        if (window_proxy_is(named)) {
+            r = navigable_navigate(ctx, named, url ? url : "");
+            JS_FreeValue(ctx, named);
+            goto done;
+        }
+        JS_FreeValue(ctx, named);
+    }
     r = navigable_create(ctx, url, target && target[0] != '_' ? target : NULL, false, &feat);
 done:
     if (url) JS_FreeCString(ctx, url);
@@ -405,6 +515,13 @@ void navigable_init(JSContext *ctx)
 
     g_id_open = idl_method_id(ctx, OPEN_ARGS, 3, js_win_open, 0);
     idl_optional_from(0);
+    /* THE BROWSING CONTEXT GROUP'S LIST, built at INIT so it belongs to the pre-boot BASELINE: a flow that
+       opens a window writes into it, and the COW delta captures that write for that flow alone. An array
+       allocated lazily inside a flow would be that flow's own object and no sibling would ever see it. */
+    if (JS_IsUndefined(g_group)) {
+        g_group = JS_NewArray(ctx);
+        CHECK(!JS_IsException(g_group), "the browsing context group's list could not be allocated");
+    }
 }
 
 void navigable_install(JSContext *ctx, JSValueConst global, const char *origin)
@@ -427,7 +544,10 @@ void navigable_free(JSContext *ctx)
 {
     int i;
 
-    (void)ctx;
+    /* THE GROUP'S LIST BEFORE THE REALMS. It holds a reference to every top-level traversable's proxy, and a
+       proxy keeps its Window; released here so the realms below are torn down with nothing left pointing in. */
+    JS_FreeValue(ctx, g_group);
+    g_group = JS_UNDEFINED;
     /* EACH CHILD REALM'S DOCUMENT FIRST, then the realm: document_free is what releases the references the
        Document holds across its lifecycle — its `document` object, its Window and its WindowProxy — and a
        realm freed without it leaves that graph referenced by nothing the GC can see. */
