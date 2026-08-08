@@ -770,69 +770,41 @@ static lxb_html_document_t *g_wpt_dom;   /* the runner's parsed document */
  * `g_base_url` and `g_server` must already name where this document lives — see wpt_derive_addresses. */
 static JSRuntime *g_rt;
 
-static JSContext *wpt_build_document(const char *doc_name, const char *origin,
-                                     const char *html, size_t html_n)
+/* THIS BUILD'S AGENT AND THIS BUILD'S DOCUMENT, SPLIT — because they are two different lifetimes and were one
+ * function. An AGENT is a JSRuntime: the class registry every component registers into, the world registry that
+ * names documents, the flow frontier. A DOCUMENT is a JSContext in it: a global with the platform installed on
+ * it, a parsed tree, an address. A SAME-ORIGIN CHILD NAVIGABLE IS A SECOND DOCUMENT IN THIS AGENT, so "what a
+ * document is" has to be one description that can run twice — while it was one function, a second document
+ * meant a second PROCESS and there was no third option to reach for.
+ *
+ * WHERE THE NEXT GAP IS, stated because the split is what makes it visible rather than because it is excused: a
+ * component that builds its PROTOTYPE in its _init builds it in whichever realm was current when the agent came
+ * up, and a second realm then SHARES it — where a browser gives each realm its own intrinsics, so
+ * `frames[0].Element === Element` is false in Chrome and would be true here. The fix is per-component and lands
+ * in each component's own init; there is no agent-level place to put it, which is exactly why it is not here. */
+static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *origin)
 {
-    JSRuntime *rt;
-    JSContext *ctx;
-    JSValue global;
-
-    rt = JS_NewRuntime();
-    JS_SetMaxStackSize(rt, 4 * 1024 * 1024);
-    ctx = JS_NewContext(rt);
-
-    global = JS_GetGlobalObject(ctx);
-    /* `self` IS the global — testharness.js and every .any.js test reach the global through it. It is set from
-       C rather than in WPT_PROLOGUE because the prologue itself is written against `self`. */
-    JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
-    JS_SetPropertyStr(ctx, global, "print", JS_NewCFunction(ctx, js_wpt_print, "print", 1));
-    /* `gc` — what /common/gc.js reaches for first, and the only way a test that asserts a stream survives
-       COLLECTION can assert anything at all. It is the runner's, never the browser's: a page-visible collector
-       is fingerprintable and this engine does not ship one. quickjs's own JS_RunGC is the whole of it. */
-    JS_SetPropertyStr(ctx, global, "gc", JS_NewCFunction(ctx, js_wpt_gc, "gc", 0));
-
     /* THE COMPONENTS UNDER TEST. Named one by one rather than "everything", because a component that is not
        installed makes its tests fail LOUDLY on a missing global — which is the honest report — while quietly
        installing a stand-in would make the gate agree with itself. Grows as areas are covered. */
     headers_init(ctx);
-    headers_install(ctx, global);
     response_init(ctx);
-    response_install(ctx, global);
     request_init(ctx);
-    request_install(ctx, global);
     url_init(ctx);
-    url_install(ctx, global);
     usp_init(ctx);
-    usp_install(ctx, global);
     form_data_init(ctx);
-    form_data_install(ctx, global);
     readable_stream_init(ctx);
-    readable_stream_install(ctx, global);
     queuing_strategy_init(ctx);
-    queuing_strategy_install(ctx, global);
     /* §5.4's controller carries an AbortSignal, which is an EventTarget that DISPATCHES — so the three
        pieces that stack has to have all exist: the listener key, the Event class the `abort` event is an
        instance of, and the signal's own slot. Installing the signal without the Event class left the abort
        path minting an event out of a class that had never been built. */
     event_target_init(ctx);
     event_init(ctx);
-    event_install(ctx, global);
-    /* §2.7: the global reaches add/removeEventListener/dispatchEvent through Window.prototype ->
-       EventTarget.prototype, which window_install chains it to. */
-    /* WEB IDL §3.6's [Global] rule needs to know WHICH object is the window, and this runner never said. Every
-       unqualified `addEventListener(...)` in the corpus — which is how most of it registers — resolved to an
-       undefined receiver and registered on nothing. */
-    event_target_set_window(ctx, global);
-    structured_clone_install(ctx, global);   /* HTML 2.7.3, and what 9.4 and §4.9.7 clone through */
     message_event_init(ctx);
-    message_event_install(ctx, global);
     /* NAME THIS DOCUMENT. A WindowProxy answers "is this navigable remote?" by comparing against the one
        document identity the world registry owns, so the registry has to be up before the first proxy exists. */
     world_registry_init(doc_name);
-    /* HTML §7.2.2's BROWSING-CONTEXT MEMBERS — window, self, frames, parent, top, opener, closed, origin and
-       name. This runner had none of them, so `window` itself was undefined and every test in
-       html/browsers/the-window-object failed on its first line. It could not call window_install before,
-       because that function also installed the platform globals this runner installs itself. */
     /* THE CONCOLIC VALUE CLASS. This runner exercises the REAL components, and several of them answer with a
        concolic value where the spec's answer is genuinely unknown input — `window.name` survives navigation, so
        an attacker who can open the document sets it. The class has to be registered before any component can
@@ -844,74 +816,86 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin,
        run: this harness exercises components, and the BFS that would rank many of them is the engine's. */
     flow_registry_init(doc_name);
     flow_set_running(flow_add(ctx, JS_UNDEFINED, NULL, 0, WORLD_NONE));
-
-    window_install(ctx, global, origin);
     window_proxy_init(ctx, origin);
     /* §7.2.5.1 one agent further out: a same-origin cross-document read answers with an OBJECT, and an object
        crosses as a NAME. Both halves live here — this agent lending its own, and referencing a peer's. */
     remote_object_init(ctx);
     window_proxy_install_members(ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
+    /* THE DOM CHOKEPOINT'S CONTEXT. §4.2.3's insertion and removing steps are fired from the solver's tree
+       chokepoint, which needs the runtime they run in — and this runner never named one, so it ran NONE of
+       them: no <script> preparation, no custom-element upgrade, no §4.8.5 child navigable. It failed
+       silently, three layers away, as an iframe whose contentWindow was null. */
+    dom_cow_set_ctx(ctx);
+    element_init(ctx);
+    iframe_init(ctx);   /* §4.8.5: the slot a child navigable lives in */
+    message_port_init(ctx);
+    broadcast_channel_init(ctx, origin);
+    abort_init(ctx);        /* the AbortSignal slot key §5.4's signal lives in */
+    writable_stream_init(ctx);
+    transform_stream_init(ctx);
+    blob_init(ctx);
+    encoding_init(ctx);
+    /* §7.5 and §7.6 are the same codecs driven by a TransformStream, so they install AFTER §6 — the
+       constructors reach it through transform_stream_op the moment a page builds one. */
+    text_stream_init(ctx);
+}
+
+/* ONE DOCUMENT. Runs once per document INCLUDING the first, which is what makes it the one description of what
+   a document of this build is — a same-origin child navigable gets exactly this and nothing else. */
+static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin)
+{
+    JSValue global = JS_GetGlobalObject(ctx);
+
+    /* `self` IS the global — testharness.js and every .any.js test reach the global through it. It is set from
+       C rather than in WPT_PROLOGUE because the prologue itself is written against `self`. */
+    JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
+    JS_SetPropertyStr(ctx, global, "print", JS_NewCFunction(ctx, js_wpt_print, "print", 1));
+    /* `gc` — what /common/gc.js reaches for first, and the only way a test that asserts a stream survives
+       COLLECTION can assert anything at all. It is the runner's, never the browser's: a page-visible collector
+       is fingerprintable and this engine does not ship one. quickjs's own JS_RunGC is the whole of it. */
+    JS_SetPropertyStr(ctx, global, "gc", JS_NewCFunction(ctx, js_wpt_gc, "gc", 0));
+
+    headers_install(ctx, global);
+    response_install(ctx, global);
+    request_install(ctx, global);
+    url_install(ctx, global);
+    usp_install(ctx, global);
+    form_data_install(ctx, global);
+    readable_stream_install(ctx, global);
+    queuing_strategy_install(ctx, global);
+    event_install(ctx, global);
+    /* §2.7: the global reaches add/removeEventListener/dispatchEvent through Window.prototype ->
+       EventTarget.prototype, which window_install chains it to. */
+    /* WEB IDL §3.6's [Global] rule needs to know WHICH object is the window, and this runner never said. Every
+       unqualified `addEventListener(...)` in the corpus — which is how most of it registers — resolved to an
+       undefined receiver and registered on nothing. */
+    event_target_set_window(ctx, global);
+    structured_clone_install(ctx, global);   /* HTML 2.7.3, and what 9.4 and §4.9.7 clone through */
+    message_event_install(ctx, global);
+    /* HTML §7.2.2's BROWSING-CONTEXT MEMBERS — window, self, frames, parent, top, opener, closed, origin and
+       name. This runner had none of them, so `window` itself was undefined and every test in
+       html/browsers/the-window-object failed on its first line. */
+    window_install(ctx, global, origin);
     window_message_install(ctx, global, origin);
     navigable_install(ctx, global, origin);   /* HTML 7.4 */
     /* THE DOCUMENT COMES AFTER THE BROWSING CONTEXT, not before it. §4.8.5's insertion steps run during tree
        construction, so installing the document CREATES a child navigable for every <iframe> the markup
        contains — which needs the WindowProxy class and §7.4's create-a-navigable to exist first. The engine's
        own host has always installed them in this order; this runner had it backwards and the assert in
-       window_proxy_new_remote said so the moment a parsed iframe reached it. */
-    /* A REAL DOCUMENT — the same Lexbor parse the engine runs, of the minimal document WPT wraps a .window.js
-       in. The runner had none, so `document` was undefined and every file in html/browsers died on its first
-       line. It could not simply be added either: a document makes testharness take its WINDOW path, which arms
-       a wall-clock timeout for the whole file, and under a virtual clock that timeout used to arrive the
-       instant the queue drained — landing in the middle of the tests it guards and reporting 140 passing
-       stream subtests as timeouts. It cannot now: a timer is due only when the event loop has nothing else to
-       run (timer.h), so the long timeout is by construction the last thing to happen. */
-    {
-        /* THE DOCUMENT IS THE TEST'S OWN when the test is one; otherwise it is the minimal wrapper WPT's server
-           puts around a `.window.js`. One parse either way — the only difference is whose bytes. */
-        static const char DOC[] = "<!doctype html><html><head></head><body></body></html>";
-        char *fetched = NULL;
-        const char *src = html;
-
-        if (!src) {
-            src = DOC;
-            html_n = sizeof DOC - 1;
-            if (g_html_mode) {
-                fetched = wpt_get(g_test_url, &html_n);
-                CHECK(fetched != NULL, "wpt: the corpus server did not serve the HTML test file");
-                src = fetched;
-            }
-        }
-        g_wpt_dom = lxb_html_document_create();
-        CHECK(g_wpt_dom != NULL, "the runner's document allocation failed");
-        CHECK(lxb_html_document_parse(g_wpt_dom, (const lxb_char_t *)src, html_n) == LXB_STATUS_OK,
-              "the runner's document did not parse");
-        free(fetched);
-        /* THE DOM CHOKEPOINT'S CONTEXT. §4.2.3's insertion and removing steps are fired from the solver's tree
-           chokepoint, which needs the runtime they run in — and this runner never named one, so it ran NONE of
-           them: no <script> preparation, no custom-element upgrade, no §4.8.5 child navigable. It failed
-           silently, three layers away, as an iframe whose contentWindow was null. */
-        dom_cow_set_ctx(ctx);
-        element_init(ctx);
-    iframe_init(ctx);   /* §4.8.5: the slot a child navigable lives in */
-        document_install(ctx, global, g_wpt_dom, g_base_url);
-    }
-    message_port_init(ctx);
+       window_proxy_new_remote said so the moment a parsed iframe reached it.
+       It could not simply be added either: a document makes testharness take its WINDOW path, which arms a
+       wall-clock timeout for the whole file, and under a virtual clock that timeout used to arrive the instant
+       the queue drained — landing in the middle of the tests it guards and reporting 140 passing stream
+       subtests as timeouts. It cannot now: a timer is due only when the event loop has nothing else to run
+       (timer.h), so the long timeout is by construction the last thing to happen. */
+    document_install(ctx, global, dom, url);
     message_port_install(ctx, global);   /* HTML 9.4.2/9.4.3 */
-    broadcast_channel_init(ctx, origin);
     broadcast_channel_install(ctx, global);   /* HTML 9.5 */
-    abort_init(ctx);        /* the AbortSignal slot key §5.4's signal lives in */
     abort_install(ctx, global);
-    writable_stream_init(ctx);
     writable_stream_install(ctx, global);
-    transform_stream_init(ctx);
     transform_stream_install(ctx, global);
-    blob_init(ctx);
     blob_install(ctx, global);
-    encoding_init(ctx);
     encoding_install(ctx, global);
-    /* §7.5 and §7.6 are the same codecs driven by a TransformStream, so they install AFTER §6 — the
-       constructors reach it through transform_stream_op the moment a page builds one. */
-    text_stream_init(ctx);
     text_stream_install(ctx, global);
     /* HTML 8.6's TIMER TASK SOURCE. The runner had none, so `setTimeout` was simply absent — and testharness
        arms its own timeout with one, which is how a file whose tests were still pending ended a run with
@@ -932,17 +916,55 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin,
        component rather than being hand-built, because that component is where HTML's API base URL is derived
        from the address: assembling the three properties here left the base NULL and every relative URL in the
        corpus unparseable. */
-    location_set_document_url(g_base_url);
+    location_set_document_url(url);
     {
         JSValue loc = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, loc, "href", JS_NewString(ctx, g_base_url));
+        JS_SetPropertyStr(ctx, loc, "href", JS_NewString(ctx, url));
         JS_SetPropertyStr(ctx, loc, "search", JS_NewString(ctx, ""));
         JS_SetPropertyStr(ctx, loc, "origin", JS_NewString(ctx, origin));
         JS_SetPropertyStr(ctx, loc, "protocol", JS_NewString(ctx, "http:"));
         JS_SetPropertyStr(ctx, global, "location", loc);
     }
-    idl_args_seal();
     JS_FreeValue(ctx, global);
+}
+
+/* THE FIRST DOCUMENT, which is also what brings the agent up. A REAL LEXBOR PARSE — the same one the engine
+   runs — of the test's own bytes when the test is an HTML file, and otherwise of the minimal document WPT's
+   server wraps a `.window.js` in. One parse either way; the only difference is whose bytes. */
+static JSContext *wpt_build_document(const char *doc_name, const char *origin,
+                                     const char *html, size_t html_n)
+{
+    static const char DOC[] = "<!doctype html><html><head></head><body></body></html>";
+    char *fetched = NULL;
+    const char *src = html;
+    JSRuntime *rt;
+    JSContext *ctx;
+
+    rt = JS_NewRuntime();
+    JS_SetMaxStackSize(rt, 4 * 1024 * 1024);
+    ctx = JS_NewContext(rt);
+    wpt_agent_init(ctx, doc_name, origin);
+
+    if (!src) {
+        src = DOC;
+        html_n = sizeof DOC - 1;
+        if (g_html_mode) {
+            fetched = wpt_get(g_test_url, &html_n);
+            CHECK(fetched != NULL, "wpt: the corpus server did not serve the HTML test file");
+            src = fetched;
+        }
+    }
+    g_wpt_dom = lxb_html_document_create();
+    CHECK(g_wpt_dom != NULL, "the runner's document allocation failed");
+    CHECK(lxb_html_document_parse(g_wpt_dom, (const lxb_char_t *)src, html_n) == LXB_STATUS_OK,
+          "the runner's document did not parse");
+    free(fetched);
+
+    wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin);
+    /* SEALED AFTER THE FIRST DOCUMENT, and only that one: a component DECLARES its IDL members in its init and
+       INSTALLS from the cached id, so a second realm's install declares nothing. A declaration reached from the
+       second install is therefore a component that mints per-global, and the seal says so at the first one. */
+    idl_args_seal();
     g_rt = rt;
     return ctx;
 }
