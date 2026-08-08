@@ -585,10 +585,18 @@ static void wpt_children_free(void)
    it is the same request every other one is. */
 static char *wpt_get_csp(const char *url, size_t *plen, char **pcsp);
 
-static void wpt_answer_host_requests(JSContext *ctx)
+/* Returns whether it ANSWERED anything, because the pump has to know. A flow parked on a host-owed answer is
+   resumed by JS_ResumeParkedFlow, re-parks on the same unanswered request and is resumed again — so a pump
+   that resumes before it answers spins at full CPU until something outside kills it. Every other owed thing in
+   this file already reports that (wpt_drain_owed, wpt_run_pending, timer_run_due); this one did not, because
+   while the only host request was an occasional cross-document read it was only ever pulled from inside
+   run_program's own resume loop, where the answer landed first by luck of ordering. §7.4 step 14's load parks
+   on one, and luck ran out. */
+static bool wpt_answer_host_requests(JSContext *ctx)
 {
     const char *notices = engine_host_notices();
     const char *p;
+    bool answered = false;
 
     /* THE NOTICES FIRST: a document announced but not yet provisioned is one a read would arrive for before
        its instance exists. `navigable.create <child> <creator> <url> <origin> <csp>`. */
@@ -647,6 +655,7 @@ static void wpt_answer_host_requests(JSContext *ctx)
                     v = wpt_decode_answer(ctx, answer);
                     g_answering_doc = 0;
                     engine_host_answer(ctx, id, v);
+                    answered = true;
                     JS_FreeValue(ctx, v);
                 }
             }
@@ -671,12 +680,14 @@ static void wpt_answer_host_requests(JSContext *ctx)
             free(body);
             free(csp);
             engine_host_answer(ctx, id, v);
+            answered = true;
             JS_FreeValue(ctx, v);
         }
         /* An operation this harness does not route is left UNANSWERED rather than guessed: the asking flow
            stays parked, which is visible, where a wrong answer is not. */
         p = end + 1;
     }
+    return answered;
 }
 
 /* ---- THE TEST FILE, WHICH IS OFTEN A DOCUMENT ----------------------------------------------------------
@@ -1393,6 +1404,10 @@ int main(int argc, char **argv)
     for (;;) {
         JSContext *c1;
         int r;
+        /* ANSWER BEFORE RESUMING. A parked flow that is waiting on this host cannot progress until it has its
+           answer, so resuming it first is a busy-wait — and JS_ResumeParkedFlow reports "I resumed one", which
+           is true, so the loop below never ends. */
+        wpt_answer_host_requests(ctx);
         while (JS_ResumeParkedFlow(rt)) ;
         r = JS_ExecutePendingJob(rt, &c1);
         if (r > 0) continue;
@@ -1402,6 +1417,9 @@ int main(int argc, char **argv)
            the owed replies is what re-enters JS and gives the pump more to drain; only when a drain owes
            nothing new is the file really finished. */
         if (wpt_drain_owed(ctx)) continue;
+        /* THE SAME SENTENCE FOR THE SYNCHRONOUS SEAM: a flow parked on a host-owed answer has no job pending
+           and no reply owed, and answering it is what gives the pump more to drain. */
+        if (wpt_answer_host_requests(ctx)) continue;
         /* A DOCUMENT THAT LOADED OWES ITS SCRIPTS, and this is where they start. They were queued from inside
            the creator's `window.open()`, which is a C activation and no place to enter JS from. Before the
            clock moves, because a child's script is loading, not a timer. */
