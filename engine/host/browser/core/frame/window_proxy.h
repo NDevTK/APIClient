@@ -13,8 +13,11 @@ void window_proxy_init(JSContext *ctx, const char *origin);
 void window_proxy_free(JSContext *ctx);
 
 /* A proxy over a navigable whose active Window is `window` and whose active document's origin is `origin`.
-   Both are the binding at this moment; a navigation replaces them, PER FLOW. */
-JSValue window_proxy_new(JSContext *ctx, JSValueConst window, const char *origin);
+   Both are the binding at this moment; a navigation replaces them, PER FLOW. `doc` names WHICH document that
+   Window is — a same-origin child is a second realm in this agent, so "local" is no longer a synonym for "the
+   instance root" and the proxy has to say which of this agent's documents it is over. */
+JSValue window_proxy_new(JSContext *ctx, uint32_t doc, JSValueConst window, const char *origin,
+                         const char *name, JSValueConst parent, JSValueConst opener);
 
 /* A proxy over a navigable whose active document lives in ANOTHER WASM instance. It carries no Window — there
    is no local object to hold — so every read through it is a cross-document operation the flow suspends on. */
@@ -42,12 +45,23 @@ JSValueConst window_proxy_proto(void);
    the class is registered. */
 void window_proxy_install_members(JSContext *ctx);
 
+/* §7.2.5.1: A NAVIGABLE HAS ONE WindowProxy — this one, by document handle. BORROWED. It is what a page reads
+   as `e.source`, and what `frames[0] === iframe.contentWindow` compares; minting a second for one navigable is
+   an identity bug that shows up nowhere near where it was made, so the mint records and this reads. */
+JSValueConst window_proxy_for_doc(uint32_t doc);
+
+/* §7.2.5's `closed` — a fact about the NAVIGABLE, so the Window's getter and the proxy's read the same byte.
+   Per-flow: captured into the running flow's delta, so a sibling arm that never closed it still sees it open. */
+bool window_proxy_closed(JSContext *ctx, JSValueConst proxy);
+void window_proxy_set_closed(JSContext *ctx, JSValueConst proxy);
+
 /* IS THIS A WindowProxy? MessageEvent's `source` union names one, and §9.4.4's post takes one as its target. */
 bool window_proxy_is(JSValueConst v);
 
-/* IS THE NAVIGABLE'S ACTIVE DOCUMENT IN ANOTHER INSTANCE? One comparison against the one document identity the
-   world registry also names worlds by — never a second scheme. Asserts that the proxy's document id and its
-   Window agree, because a proxy where they disagree answers a cross-document read with the wrong document. */
+/* IS THE NAVIGABLE'S ACTIVE DOCUMENT IN ANOTHER INSTANCE? Asked of the world registry as "does this agent hold
+   that document's realm" — never as "is it the document I am", which answers `true` for a same-origin sibling
+   sitting in the same runtime. Asserts that the proxy's document and its Window agree, because a proxy where
+   they disagree answers a cross-instance read out of the wrong heap. */
 bool window_proxy_is_remote(JSValueConst proxy);
 
 /* WHICH DOCUMENT the navigable's active document is — what the host routes a cross-document request by. */

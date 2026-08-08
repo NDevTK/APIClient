@@ -2,6 +2,8 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_DOCUMENT_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_DOCUMENT_H
 #include <lexbor/html/html.h>
+#include <stdint.h>
+
 #include "quickjs.h"
 #include "core/idl_args.h"
 #include "core/frame/policy_container.h"
@@ -11,7 +13,16 @@
    same JSRuntime and not a second instance. Only the members this engine can answer TRUTHFULLY are
    installed; the tree-walking half is absent until Element exists, because a querySelector that answers null
    for an element the document HAS is a lie, and a lie is worse than a ReferenceError that names the gap. */
-void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url);
+/* THE AGENT'S HALF: Document.prototype, its members and its mixins. A member is declared once per agent; a
+   second realm installs `document` from the same declarations. */
+void document_init(JSContext *ctx);
+
+void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
+                      uint32_t doc_id);
+
+/* WHICH DOCUMENT THIS REALM IS, in the world registry's naming. §7.4 mints a child's name from it, so a
+   same-origin child of a child is named from the child and not from the instance root. */
+uint32_t document_doc(JSContext *ctx);
 /* §4.4 baseURI's answer: the document's address. ONE component owns what this document's URL is — two answers
    to that question is how they drift apart. */
 const char *document_base_url(JSContext *ctx);

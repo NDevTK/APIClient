@@ -231,9 +231,24 @@ static int idl_member_of_step(int stepid) {
 }
 static int            g_n;
 static JSRuntime     *g_rt;
-static bool           g_sealed;   /* the document's install is done, so no further declaration can be correct */
+static bool           g_sealed;   /* the first document's install is done — see idl_declared_before_seal */
+static int            g_sealed_at; /* how many members existed then: a member minted after this is a new one */
 
-void idl_args_seal(void) { g_sealed = true; }
+void idl_args_seal(void) { g_sealed = true; g_sealed_at = g_n; }
+
+/* WAS THIS MEMBER DECLARED BEFORE THE PLATFORM WAS SEALED? Asked at INSTALL, because the install is where the
+   member's NAME is — and a name is the whole difference between an assert you can act on and one that only
+   tells you that something, somewhere, minted twice. The rule it enforces is unchanged: a component DECLARES
+   in its init and INSTALLS from the cached id, so a per-wrapper mint and a per-REALM mint are the same bug and
+   both land here. */
+bool idl_declared_before_seal(int stepid)
+{
+    /* A STEP ID AND A MEMBER INDEX ARE TWO NAMESPACES — the step id names the minted function, the member
+       index names the pool entry, and idl_member_of_step is the map between them. Comparing the wrong one
+       reports a member declared long before the seal as if it were fresh. */
+    int idx = idl_member_of_step(stepid);
+    return !g_sealed || (idx >= 0 && idx < g_sealed_at);
+}
 
 typedef struct {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
@@ -978,10 +993,6 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
        id, so once the document's install is done no declaration can be correct. That is asserted directly now,
        which catches the same bug at the first repeat instead of the 384th and cannot be reached by a platform
        that simply has more members in it. */
-    DCHECK(!g_sealed,
-           "an IDL member was declared after the document was installed — a component declares in its init and "
-           "installs from the cached id; a declaration reached from a wrapper or a flow mints a definition per "
-           "object");
     g_rt = rt;
     idx = g_n++;
     idl_pool_reserve(idx);   /* the pool grows to fit the platform; there is nothing here to run out of */
@@ -1130,6 +1141,7 @@ void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *
 void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
                           IdlGetter getter, int getter_magic, int setter_stepid)
 {
+    DCHECK(setter_stepid < 0 || idl_declared_before_seal(setter_stepid), name);
     JSAtom a = JS_NewAtom(ctx, name);
     JSValue g = JS_UNDEFINED, st = JS_UNDEFINED;
 
@@ -1206,6 +1218,7 @@ JSValue idl_step_constructor(JSContext *ctx, const char *name, int length, int s
 
 void idl_install_method(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid)
 {
+    DCHECK(idl_declared_before_seal(stepid), name);
     DCHECK(stepid >= 0, "an IDL member was installed before it was declared");
     JS_SetPropertyStr(ctx, (JSValue)target, name, idl_step_function(ctx, name, length, stepid));
 }

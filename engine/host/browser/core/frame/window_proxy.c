@@ -78,6 +78,36 @@ static char *g_local_origin;
    document. See the member table lower down for which is which. */
 static JSValue g_proxy_proto = JS_UNINITIALIZED;
 
+/* §7.2.5.1: A NAVIGABLE HAS ONE WindowProxy, and this is where that sentence is enforced. A page comparing
+   `e.source` across two messages must find the SAME object, and a page comparing `frames[0]` with
+   `iframe.contentWindow` must too — so a second proxy minted for a document already named is a bug that shows
+   up as an identity comparison quietly failing. Indexed by the document handle, which is the identity the world
+   registry already owns; there is no second naming scheme. Each entry holds a reference, released at free. */
+static JSValue *g_by_doc;
+static uint32_t g_by_doc_n;
+
+static void proxy_record(JSContext *ctx, uint32_t doc, JSValueConst v)
+{
+    if (doc > g_by_doc_n) {
+        JSValue *g = realloc(g_by_doc, doc * sizeof *g);
+        CHECK(g != NULL, "window proxy: OOM recording a navigable's one WindowProxy");
+        g_by_doc = g;
+        while (g_by_doc_n < doc) g_by_doc[g_by_doc_n++] = JS_UNDEFINED;
+    }
+    DCHECK(JS_IsUndefined(g_by_doc[doc - 1]),
+           "a second WindowProxy was minted for one navigable — §7.2.5.1 says a navigable has ONE, and a page "
+           "that compares `e.source` or `frames[0] === iframe.contentWindow` reads exactly that identity");
+    g_by_doc[doc - 1] = JS_DupValue(ctx, v);
+}
+
+JSValueConst window_proxy_for_doc(uint32_t doc)
+{
+    DCHECK(doc != 0 && doc <= g_by_doc_n && !JS_IsUndefined(g_by_doc[doc - 1]),
+           "the WindowProxy of a navigable that has none was asked for — a navigable gets its proxy when it is "
+           "created, so this is a document whose realm was built without one");
+    return g_by_doc[doc - 1];
+}
+
 #define WP_OFF(f) (uint16_t)offsetof(ProxyData, f)
 static const uint16_t PROXY_VALS[] = { WP_OFF(window), WP_OFF(parent), WP_OFF(opener) };
 static const CowRecord PROXY_REC = { sizeof(ProxyData), PROXY_VALS, 3 };
@@ -158,12 +188,19 @@ static void proxy_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
     JS_MarkValue(rt, p->opener, mark_func);
 }
 
-JSValue window_proxy_new(JSContext *ctx, JSValueConst window, const char *origin)
+JSValue window_proxy_new(JSContext *ctx, uint32_t doc, JSValueConst window, const char *origin,
+                         const char *name, JSValueConst parent, JSValueConst opener)
 {
     JSValue obj;
     ProxyData *p;
 
     DCHECK(g_wp_rt != NULL, "a WindowProxy was minted before window_proxy_init ran");
+    /* A LOCAL PROXY NAMES A DOCUMENT THIS AGENT HOLDS THE REALM OF, and that is checked rather than assumed:
+       the whole member table below decides "answer now" from exactly this fact, so a proxy that carries a live
+       Window for a document living elsewhere would answer a cross-instance read out of the wrong heap. */
+    DCHECK(world_doc_hosted(doc),
+           "a local WindowProxy was minted for a document whose realm this agent does not hold — a document is "
+           "adopted when its realm is built (world_doc_adopt), and one that never was belongs to a peer");
     obj = JS_NewObjectClass(ctx, g_proxy_class);
     if (JS_IsException(obj)) return obj;
     JS_SetPrototype(ctx, obj, g_proxy_proto);
@@ -171,10 +208,12 @@ JSValue window_proxy_new(JSContext *ctx, JSValueConst window, const char *origin
     CHECK(p != NULL, "window proxy: OOM building a WindowProxy");
     p->window = JS_DupValue(ctx, window);
     p->origin = proxy_strdup(origin ? origin : "null");
-    p->parent = JS_UNDEFINED;
-    p->opener = JS_NULL;
-    p->doc = world_local_doc();
+    p->name   = name && *name ? proxy_strdup(name) : NULL;
+    p->parent = JS_DupValue(ctx, parent);
+    p->opener = JS_DupValue(ctx, opener);
+    p->doc = doc;
     JS_SetOpaque(obj, p);
+    proxy_record(ctx, doc, obj);
     return obj;
 }
 
@@ -187,9 +226,9 @@ JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const char *origin
     DCHECK(g_wp_rt != NULL, "a WindowProxy was minted before window_proxy_init ran");
     /* A REMOTE PROXY THAT NAMES THIS DOCUMENT is a local one that lost its Window — it would resolve to
        JS_UNDEFINED for a navigable this instance can actually answer for. */
-    DCHECK(doc != 0 && doc != world_local_doc(),
-           "a remote WindowProxy was minted for this instance's own document — use window_proxy_new, which "
-           "carries the live Window");
+    DCHECK(doc != 0 && !world_doc_hosted(doc),
+           "a remote WindowProxy was minted for a document whose realm this agent holds — use window_proxy_new, "
+           "which carries the live Window");
     obj = JS_NewObjectClass(ctx, g_proxy_class);
     if (JS_IsException(obj)) return obj;
     JS_SetPrototype(ctx, obj, g_proxy_proto);
@@ -202,7 +241,28 @@ JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const char *origin
     p->opener = JS_DupValue(ctx, opener);
     p->doc = doc;
     JS_SetOpaque(obj, p);
+    proxy_record(ctx, doc, obj);
     return obj;
+}
+
+/* §7.2.5's `closed`, READ AND WRITTEN THROUGH THE ONE PLACE IT LIVES. It is a fact about the NAVIGABLE, so
+   `window.closed` and `iframe.contentWindow.closed` must be the same byte — they were two, and closing through
+   one left the other reporting open. Captured through proxy_of, so the flow that closed the window is the only
+   one whose timeline contains it. */
+bool window_proxy_closed(JSContext *ctx, JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+    (void)ctx;
+    DCHECK(p != NULL, "the closed state of something that is not a WindowProxy was read");
+    return p->closed != 0;
+}
+
+void window_proxy_set_closed(JSContext *ctx, JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+    (void)ctx;
+    DCHECK(p != NULL, "something that is not a WindowProxy was closed");
+    p->closed = 1;
 }
 
 bool window_proxy_is_remote(JSValueConst proxy)
@@ -211,10 +271,11 @@ bool window_proxy_is_remote(JSValueConst proxy)
     DCHECK(p != NULL, "something that is not a WindowProxy was asked whether it is remote");
     /* THE TWO FACTS MUST AGREE. Read together on every ask, because a proxy where they disagree hands a
        cross-document read this document's Window and nothing downstream can tell. */
-    DCHECK((p->doc == world_local_doc()) == !JS_IsUndefined(p->window),
-           "a WindowProxy's document id and its Window disagree — a local proxy must carry a live Window and a "
-           "remote one must carry none, or a cross-document read is answered by the wrong document");
-    return p->doc != world_local_doc();
+    DCHECK(world_doc_hosted(p->doc) == !JS_IsUndefined(p->window),
+           "a WindowProxy's document id and its Window disagree — a proxy over a document this agent HOLDS must "
+           "carry a live Window and one over a peer's must carry none, or a cross-instance read is answered out "
+           "of the wrong heap");
+    return !world_doc_hosted(p->doc);
 }
 
 uint32_t window_proxy_doc(JSValueConst proxy)
@@ -233,7 +294,7 @@ JSValue window_proxy_window(JSContext *ctx, JSValueConst proxy)
        silently succeeded — the one failure mode the same-origin check exists to prevent. What has to be built
        is named in the message: the binding is (document, world), and resolving it is a host round trip because
        only the host knows which instance holds that document and which of its flows is in that world. */
-    DCHECK(p->doc == world_local_doc(),
+    DCHECK(world_doc_hosted(p->doc),
            "a WindowProxy names a navigable in ANOTHER WASM instance — build the cross-instance resolve: the "
            "flow SUSPENDS here (the same snapshot path as an await), the peer answers in its own scheduled turn "
            "under this flow's world, and the flow resumes with the value. The host owns the routing because "
@@ -271,7 +332,10 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSValueConst wind
     JS_FreeValue(ctx, p->window);
     p->window = JS_DupValue(ctx, window);
     p->origin = proxy_strdup(origin ? origin : "null");
-    p->doc = world_local_doc();
+    /* THE DOCUMENT DOES NOT CHANGE: a navigation replaces the ACTIVE DOCUMENT of a navigable, and this call is
+       the same-agent case where the replacement realm is one this agent built. A navigation that lands
+       cross-origin makes the navigable a peer's, which is a different operation and is not this one. */
+    DCHECK(world_doc_hosted(p->doc), "a navigable whose realm this agent does not hold was navigated locally");
 }
 
 
@@ -370,7 +434,7 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
     if (!proxy_read_permitted(p, magic))
         return JS_ThrowDOMException(ctx, "SecurityError",
                                     "the origins do not permit reading this member of that Window");
-    if (p->doc == world_local_doc()) {
+    if (world_doc_hosted(p->doc)) {
         DCHECK(!JS_IsUndefined(p->window),
                "a local WindowProxy carries no Window — its document id and its binding disagree");
         return JS_GetPropertyStr(ctx, p->window, PROXY_MEMBER[magic]);
@@ -414,7 +478,7 @@ static JSValue proxy_name_set(JSContext *ctx, JSValueConst this_val, JSValueCons
     if (!proxy_read_permitted(p, WP_NAME))
         return JS_ThrowDOMException(ctx, "SecurityError",
                                     "the origins do not permit setting the name of that Window");
-    if (p->doc == world_local_doc()) {
+    if (world_doc_hosted(p->doc)) {
         if (JS_SetPropertyStr(ctx, p->window, "name", JS_DupValue(ctx, v)) < 0) return JS_EXCEPTION;
         return JS_UNDEFINED;
     }
@@ -436,7 +500,7 @@ static JSValue proxy_close(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 
     (void)argc; (void)argv; (void)magic;
     if (!p) return JS_UNDEFINED;
-    if (p->doc == world_local_doc()) {
+    if (world_doc_hosted(p->doc)) {
         JSAtom a = JS_NewAtom(ctx, "close");
         JSValue r = JS_Invoke(ctx, p->window, a, 0, NULL);
         JS_FreeAtom(ctx, a);
@@ -482,7 +546,7 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     }
 
     /* THE LOCAL CASE, answered in this turn: an ordinary read of the navigable's own Window. */
-    if (p->doc == world_local_doc()) {
+    if (world_doc_hosted(p->doc)) {
         DCHECK(!JS_IsUndefined(p->window),
                "a local WindowProxy carries no Window — its document id and its binding disagree");
         *presult = JS_GetPropertyStr(ctx, p->window, PROXY_MEMBER[magic]);
@@ -569,9 +633,14 @@ JSValueConst window_proxy_proto(void)
 void window_proxy_free(JSContext *ctx)
 {
     OwnedStr *e = g_strings;
+    uint32_t i;
     if (!g_wp_rt) return;
     while (e) { OwnedStr *n = e->next; free(e->s); free(e); e = n; }
     g_strings = NULL;
+    for (i = 0; i < g_by_doc_n; i++) JS_FreeValue(ctx, g_by_doc[i]);
+    free(g_by_doc);
+    g_by_doc = NULL;
+    g_by_doc_n = 0;
     JS_FreeValue(ctx, g_proxy_proto);
     g_proxy_proto = JS_UNINITIALIZED;
     free(g_local_origin);

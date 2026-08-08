@@ -280,6 +280,31 @@ static JSValue js_queue_microtask(JSContext *ctx, JSValueConst this_val, int arg
     return JS_UNDEFINED;
 }
 
+static int g_id_set_timeout, g_id_set_interval, g_id_clear_timeout, g_id_clear_interval;
+
+/* HTML 8.6's own IDL, declared rather than approximated:
+     long setTimeout(TimerHandler handler, optional long timeout = 0, any... arguments)
+     undefined clearTimeout(optional long handle = 0)
+   `handler` is a (DOMString or Function) union and `timeout` is a long, so BOTH can run the page's code — a
+   toString on the non-callable arm, a valueOf on the delay — and neither is a string. The `any...` tail is
+   simply not listed: a position the IDL does not name is passed through as it is.
+   DECLARED ONCE PER AGENT, installed per realm: a declaration builds a pool entry and a member has ONE, and
+   `idl_optional_from` names the member the LAST declaration made — so it belongs beside it, here. */
+void timer_init(JSContext *ctx)
+{
+    static const IdlArgType SET_TIMER[2] = { IDL_STRING_UNLESS_CALLABLE, IDL_LONG };
+    static const IdlArgType CLEAR_TIMER[1] = { IDL_LONG };
+
+    g_id_set_timeout = idl_method_id(ctx, SET_TIMER, 2, js_set_timer, 0);
+    idl_optional_from(1);   /* 8.6: `setTimeout(handler, optional timeout, ...arguments)` */
+    g_id_set_interval = idl_method_id(ctx, SET_TIMER, 2, js_set_timer, 1);
+    idl_optional_from(1);   /* 8.6: `setInterval(handler, optional timeout, ...arguments)` */
+    g_id_clear_timeout = idl_method_id(ctx, CLEAR_TIMER, 1, js_clear_timer, 0);
+    idl_optional_from(0);   /* 8.6: `clearTimeout(optional long id = 0)` */
+    g_id_clear_interval = idl_method_id(ctx, CLEAR_TIMER, 1, js_clear_timer, 0);
+    idl_optional_from(0);   /* 8.6: `clearInterval(optional long id = 0)` */
+}
+
 void timer_install(JSContext *ctx, JSValueConst global)
 {
     /* THE DRIVER MUST ASK, so it is told where to. Registered like the document's load-stage hook and for the
@@ -288,24 +313,10 @@ void timer_install(JSContext *ctx, JSValueConst global)
        having that timer fire out of order. */
     engine_set_timer_hook(timer_run_due);
     JSValue g = (JSValue)global;
-    /* HTML 8.6's own IDL, declared rather than approximated:
-         long setTimeout(TimerHandler handler, optional long timeout = 0, any... arguments)
-         undefined clearTimeout(optional long handle = 0)
-       `handler` is a (DOMString or Function) union and `timeout` is a long, so BOTH can run the page's code —
-       a toString on the non-callable arm, a valueOf on the delay — and neither is a string. The `any...` tail
-       is simply not listed: a position the IDL does not name is passed through as it is. */
-    {
-        static const IdlArgType SET_TIMER[2] = { IDL_STRING_UNLESS_CALLABLE, IDL_LONG };
-        static const IdlArgType CLEAR_TIMER[1] = { IDL_LONG };
-        idl_install_method(ctx, g, "setTimeout", 2, idl_method_id(ctx, SET_TIMER, 2, js_set_timer, 0));
-        idl_optional_from(1);   /* 8.6: `setTimeout(handler, optional timeout, ...arguments)` */
-        idl_install_method(ctx, g, "setInterval", 2, idl_method_id(ctx, SET_TIMER, 2, js_set_timer, 1));
-        idl_optional_from(1);   /* 8.6: `setInterval(handler, optional timeout, ...arguments)` */
-        idl_install_method(ctx, g, "clearTimeout", 1, idl_method_id(ctx, CLEAR_TIMER, 1, js_clear_timer, 0));
-        idl_optional_from(0);   /* 8.6: `clearTimeout(optional long id = 0)` */
-        idl_install_method(ctx, g, "clearInterval", 1, idl_method_id(ctx, CLEAR_TIMER, 1, js_clear_timer, 0));
-        idl_optional_from(0);   /* 8.6: `clearInterval(optional long id = 0)` */
-    }
+    idl_install_method(ctx, g, "setTimeout", 2, g_id_set_timeout);
+    idl_install_method(ctx, g, "setInterval", 2, g_id_set_interval);
+    idl_install_method(ctx, g, "clearTimeout", 1, g_id_clear_timeout);
+    idl_install_method(ctx, g, "clearInterval", 1, g_id_clear_interval);
     JS_SetPropertyStr(ctx, g, "queueMicrotask",
                       JS_NewCFunction(ctx, js_queue_microtask, "queueMicrotask", 1));
 }

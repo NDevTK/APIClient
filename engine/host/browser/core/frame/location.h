@@ -6,6 +6,10 @@
 /* Install `location` (and `document.URL`'s eventual source) built from `url` — the document's address, which
    the host captured. A NULL or empty url installs nothing: a document with no address has no Location, and the
    page's own throw on reading it is the honest answer. */
+/* THE AGENT'S HALF: the two attacker SOURCES this component owns and how a browser delivers each. A source's
+   delivery is a fact about the component, so it is declared once per agent — not once per document. */
+void location_init(JSContext *ctx);
+
 void location_install(JSContext *ctx, JSValueConst global, const char *url);
 
 /* RECORD THE DOCUMENT'S ADDRESS, without installing the interface. The two are different facts with different

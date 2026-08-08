@@ -4,6 +4,10 @@
 #include "quickjs.h"
 
 /* Installs setTimeout/clearTimeout/setInterval/clearInterval and queueMicrotask on the global. */
+/* THE AGENT'S HALF: §8.6's four members, DECLARED once. A declaration builds one pool entry per member; the
+   per-realm install puts that same member on each realm's global. */
+void timer_init(JSContext *ctx);
+
 void timer_install(JSContext *ctx, JSValueConst global);
 /* Drop every scheduled timer (document teardown). */
 void timer_reset(JSContext *ctx);

@@ -81,6 +81,115 @@ static JSContext           *g_ctx;
 static int                  g_begun;
 static int                  g_done;
 
+/* THE AGENT AND THE DOCUMENT, SPLIT — see wpt_runner.c for the same split and the same reason. An AGENT is a
+   JSRuntime: every class registration, the world registry, the flow frontier. A DOCUMENT is a JSContext in it.
+   A SAME-ORIGIN CHILD NAVIGABLE IS A SECOND DOCUMENT IN THIS AGENT, so what a document IS has to be one
+   description that runs twice — and while it was one block inside engine init, a second document could only
+   have been a second INSTANCE, which for a same-origin child is the wrong answer (HTML's similar-origin window
+   agent is one heap, and the corpus moves live nodes and live closures across that boundary).
+
+   WHERE THE NEXT GAP IS: a component that builds its PROTOTYPE in its _init builds it in whichever realm was
+   current, so a second realm shares it where §3.7 gives every realm its own. window.c is converted (its
+   prototypes live in quickjs's per-context class-proto slot); the rest name themselves as they are reached. */
+static void engine_agent_init(JSContext *ctx, const char *origin)
+{
+    /* WHAT THE PLATFORM OWNS is WEB IDL's answer, not a list here: absent.c reads the generated
+       browser/platform_names.h (every name [Exposed=Window]). A list typed at this spot covered 22 names
+       of ~1300, so every interface it missed — Node, Element, Event, DOMException — was mistaken for
+       server-injected app state and a branch on it forked instead of throwing. */
+    url_init(ctx);
+    usp_init(ctx);
+    form_data_init(ctx);
+    readable_stream_init(ctx);
+    queuing_strategy_init(ctx);
+    writable_stream_init(ctx);
+    transform_stream_init(ctx);
+    blob_init(ctx);
+    encoding_init(ctx);
+    text_stream_init(ctx);
+    /* §2.7 BEFORE §7.2.5: Window.prototype is CHAINED to EventTarget.prototype, so the prototype has to exist
+       before the window is installed. */
+    event_target_init(ctx);
+    window_init(ctx);
+    event_init(ctx);
+    message_event_init(ctx);
+    message_port_init(ctx);
+    /* §7.2.5.1 and §7.4. `window.open` returns a WindowProxy, and so does §4.8.5's contentWindow. The proxy
+       class has to exist before any proxy is minted. */
+    location_init(ctx);
+    navigable_init(ctx);
+    timer_init(ctx);
+    window_proxy_init(ctx, origin);
+    remote_object_init(ctx);   /* §7.2.5.1's object half: a peer's object crosses as a NAME */
+    window_proxy_install_members(ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
+    /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
+    unhandled_rejection_init(ctx);
+    abort_init(ctx);
+    element_init(ctx);
+    iframe_init(ctx);
+    document_init(ctx);   /* §4.8.5: the slot a child navigable lives in */
+    module_loader_install(g_rt);
+    /* THE HOST'S NETWORK. SECURITY.md puts every byte of it behind the trusted chokepoint, so this host's
+       answer is to PARK the request on the flow's pending register and let the trusted zone fetch it. */
+    { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
+    timer_set_script_sink(engine_queue_script);   /* HTML 8.6: a string handler is evaluated, as a flow */
+}
+
+/* ONE DOCUMENT — the per-realm half, run once per document including the first. */
+static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *origin, uint32_t doc_id)
+{
+    JSValue g = JS_GetGlobalObject(ctx);
+
+    /* THE PLATFORM GLOBALS, installed by their one caller rather than smuggled inside window_install.
+       They are not browsing-context members and window.c does not own them. */
+    url_install(ctx, g);
+    usp_install(ctx, g);
+    form_data_install(ctx, g);
+    readable_stream_install(ctx, g);
+    queuing_strategy_install(ctx, g);
+    writable_stream_install(ctx, g);
+    transform_stream_install(ctx, g);
+    blob_install(ctx, g);
+    encoding_install(ctx, g);
+    text_stream_install(ctx, g);
+    window_install(ctx, g, origin);   /* window/self/frames/parent/top/opener/closed/origin, and name */
+    timer_install(ctx, g);            /* setTimeout/setInterval/clearTimeout/clearInterval/queueMicrotask */
+    event_install(ctx, g);            /* the Event interface object */
+    message_event_install(ctx, g);    /* HTML 9.4.1: the event every messaging path dispatches */
+    message_port_install(ctx, g);     /* HTML 9.4.2/9.4.3 */
+    structured_clone_install(ctx, g); /* HTML 2.7.3 */
+    /* §2.7: the global reaches add/removeEventListener/dispatchEvent through Window.prototype ->
+       EventTarget.prototype, which window_install chains it to. */
+    event_target_set_window(ctx, g);   /* §7.6: the document's parent on a propagation path */
+    event_target_install_handlers(ctx, g, EH_GLOBAL | EH_WINDOW);   /* window IS the global (7.2.2) */
+    fetch_install(ctx, g);
+    location_install(ctx, g, origin);
+    navigable_install(ctx, g, origin);
+    unhandled_rejection_install(ctx, g);   /* PromiseRejectionEvent */
+    abort_install(ctx, g);   /* AbortController/AbortSignal: fetch takes a signal, so a bundle mints one early */
+    navigator_install(ctx, g);
+    screen_install(ctx, g);   /* the responsive gate: screen.width decides which router a bundle uses */
+    document_install(ctx, g, dom, origin, doc_id);
+    JS_FreeValue(ctx, g);
+}
+
+/* A SAME-ORIGIN CHILD NAVIGABLE'S REALM — a second JSContext in the SAME JSRuntime, which is what HTML's
+   similar-origin window agent is. It gets the identical per-document install the first document got. */
+static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
+                                     const char *origin, uint32_t doc_id)
+{
+    JSContext *ctx = JS_NewContext(rt);
+
+    CHECK(ctx != NULL, "a same-origin child navigable's realm could not be created");
+    CHECK(JS_AddIntrinsicDOMException(ctx) == 0, "the DOMException intrinsic failed to install in a child realm");
+    /* ADOPTED BEFORE THE INSTALL: window_proxy_new asserts that a local proxy names a document this agent
+       holds, and the install creates child navigables for any <iframe> the initial markup carries. */
+    world_doc_adopt(doc_id);
+    engine_realm_install(ctx, dom, origin, doc_id);
+    (void)url;
+    return ctx;
+}
+
 /* PHASE 1 — parse and identify. No script runs, which is the whole point: the host reads the frontier key back
  * synchronously and looks up the prior session before any flow is seeded. */
 /* `doc_id` NAMES THIS INSTANCE'S DOCUMENT, and the host names the ROOT one because the host is what knows
@@ -108,7 +217,7 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
     concolic_init(g_ctx);
     /* NOT A DEFAULT. An instance that does not know which document it is cannot be reached by a peer, and a
        silent 1 here would collide with every other instance that guessed the same. */
-    DCHECK(doc_id != NULL && *doc_id, "the host started this engine without a document name — one instance is one document, and a "
+    DCHECK(doc_id != NULL && *doc_id, "the host started this engine without a document name — an agent is named by its root "
                      "peer instance names this document's flows by that id when it materializes their COW "
                      "segments, so an unnamed document cannot take part in cross-document time travel");
     flow_registry_init(doc_id);
@@ -134,69 +243,12 @@ QJS_EXPORT int qjs_init(const char *code, const char *html,
     /* The web-platform surface, installed on the BASELINE — before any flow runs, so these globals are
        pre-flow state and never land in a delta. Each is a real component under browser/; what is not built
        yet is absent, and the page's own throw on reading it names the next one to write. */
-    {
-        JSValue g = JS_GetGlobalObject(g_ctx);
-        /* WHAT THE PLATFORM OWNS is WEB IDL's answer, not a list here: absent.c reads the generated
-           browser/platform_names.h (every name [Exposed=Window]). A list typed at this spot covered 22 names
-           of ~1300, so every interface it missed — Node, Element, Event, DOMException — was mistaken for
-           server-injected app state and a branch on it forked instead of throwing. */
-
-        /* THE PLATFORM GLOBALS, installed by their one caller rather than smuggled inside window_install.
-           They are not browsing-context members and window.c does not own them; bundling them there is what
-           made a SECOND caller of window_install impossible, which cost the WPT runner every one of the
-           browsing-context members it needed. */
-        url_init(g_ctx);              url_install(g_ctx, g);
-        usp_init(g_ctx);              usp_install(g_ctx, g);
-        form_data_init(g_ctx);        form_data_install(g_ctx, g);
-        readable_stream_init(g_ctx);  readable_stream_install(g_ctx, g);
-        queuing_strategy_init(g_ctx); queuing_strategy_install(g_ctx, g);
-        writable_stream_init(g_ctx);  writable_stream_install(g_ctx, g);
-        transform_stream_init(g_ctx); transform_stream_install(g_ctx, g);
-        blob_init(g_ctx);             blob_install(g_ctx, g);
-        encoding_init(g_ctx);         encoding_install(g_ctx, g);
-        text_stream_init(g_ctx);      text_stream_install(g_ctx, g);
-
-        /* §2.7 BEFORE §7.2.5: Window.prototype is CHAINED to EventTarget.prototype, so the prototype has
-           to exist before the window is installed. */
-    event_target_init(g_ctx);
-        window_install(g_ctx, g, origin);   /* window/self/frames/parent/top/opener/closed/origin, and name */
-        timer_install(g_ctx, g);
-        timer_set_script_sink(engine_queue_script);   /* HTML 8.6: a string handler is evaluated, as a flow */            /* setTimeout/setInterval/clearTimeout/clearInterval/queueMicrotask */
-        event_init(g_ctx);
-        event_install(g_ctx, g);   /* the Event interface object */
-        message_event_init(g_ctx);
-        message_event_install(g_ctx, g);   /* HTML 9.4.1: the event every messaging path dispatches */
-        message_port_init(g_ctx);
-        message_port_install(g_ctx, g);   /* HTML 9.4.2/9.4.3 */
-        structured_clone_install(g_ctx, g);   /* HTML 2.7.3 */
-        /* §2.7: the global reaches add/removeEventListener/dispatchEvent through Window.prototype ->
-           EventTarget.prototype, which window_install chains it to. */
-        event_target_set_window(g_ctx, g);   /* §7.6: the document's parent on a propagation path */
-        event_target_install_handlers(g_ctx, g, EH_GLOBAL | EH_WINDOW);   /* window's on* set */   /* window IS the global (7.2.2), so this is window.addEventListener */
-        /* THE HOST'S NETWORK. SECURITY.md puts every byte of it behind the trusted chokepoint, so this host's
-       answer is to PARK the request on the flow's pending register and let the trusted zone fetch it. */
-    { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
-    fetch_install(g_ctx, g);
-        module_loader_install(g_rt);
-        location_install(g_ctx, g, origin);
-        /* §7.2.5.1 and §7.4. `window.open` returns a WindowProxy for a document in ANOTHER instance, and so
-           does §4.8.5's contentWindow. The proxy class has to exist before any proxy is minted. */
-        window_proxy_init(g_ctx, origin);
-        remote_object_init(g_ctx);   /* §7.2.5.1's object half: a peer's object crosses as a NAME */
-    window_proxy_install_members(g_ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
-        navigable_install(g_ctx, g, origin);
-        /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
-        unhandled_rejection_init(g_ctx);
-        unhandled_rejection_install(g_ctx, g);   /* PromiseRejectionEvent */
-        abort_init(g_ctx);
-        abort_install(g_ctx, g);   /* AbortController/AbortSignal: fetch takes a signal, so a bundle mints one early */
-        navigator_install(g_ctx, g);
-        screen_install(g_ctx, g);           /* the responsive gate: screen.width decides which router a bundle uses */        /* client identity: spec-fixed concrete, gated environment concolic */
-        element_init(g_ctx);
-    iframe_init(g_ctx);   /* §4.8.5: the slot a child navigable lives in */
-        document_install(g_ctx, g, g_dom, origin);
-        JS_FreeValue(g_ctx, g);
-    }
+    engine_agent_init(g_ctx, origin);
+    /* §7.4 CALLS BACK HERE FOR A SAME-ORIGIN CHILD: a same-origin document is a second REALM in this heap
+       (HTML's similar-origin window agent), and what the platform surface of a document of THIS build is, is
+       this file's answer and nobody else's. */
+    navigable_set_realm_builder(engine_child_realm);
+    engine_realm_install(g_ctx, g_dom, origin, world_local_doc());
     /* The surface is installed, so every member the platform has is declared — a declaration from here on is a
        per-wrapper or per-flow mint, and that is what the pool asserts against. */
     idl_args_seal();

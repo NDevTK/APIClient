@@ -51,6 +51,7 @@ static JSAtom g_atom_ctor = JS_ATOM_NULL;
 static JSAtom g_atom_proto = JS_ATOM_NULL;
 static JSAtom g_atom_observed = JS_ATOM_NULL;      /* the definition's own key for the list */
 static JSAtom g_atom_observed_src = JS_ATOM_NULL;  /* the class's `observedAttributes` */
+static int    g_id_define, g_id_get;   /* declared once per agent — see custom_elements_init */
 static int    g_reaction_stepid = -1;
 static JSValue g_reaction_fn;
 
@@ -507,6 +508,16 @@ void custom_elements_init(JSContext *ctx)
        it — the same reason the internal event dispatcher is not on any prototype. */
     g_reaction_fn = JS_NewCFunction2(ctx, NULL, "connectedReaction", 1, JS_CFUNC_step, g_reaction_stepid);
     CHECK(!JS_IsException(g_reaction_fn), "the custom-element reaction driver could not be allocated");
+    /* §4.13.4's two members, DECLARED once per agent: `customElements` is a per-realm object, so installing
+       from a fresh declaration would mint the pair again for a second realm's registry. */
+    g_id_define = idl_method_id_step(ctx, CE_DEFINE_ARGS, 3, CE_DEFINE_OPTS,
+                                     (int)(sizeof(CE_DEFINE_OPTS) / sizeof(CE_DEFINE_OPTS[0])),
+                                     &CE_DEFINE_STEP, 0);
+    idl_optional_from(2);   /* §4.13.4: `define(name, constructor, optional ElementDefinitionOptions options)` */
+    {
+        static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
+        g_id_get = idl_method_id(ctx, ONE_STR, 1, js_ce_get, 0);
+    }
     g_ready = 1;
 }
 
@@ -517,15 +528,8 @@ void custom_elements_install(JSContext *ctx, JSValueConst global)
     DCHECK(g_ready, "customElements was installed before custom_elements_init ran");
     reg = JS_NewObject(ctx);
     CHECK(!JS_IsException(reg), "the CustomElementRegistry allocation failed");
-    idl_install_method(ctx, reg, "define", 2,
-                       idl_method_id_step(ctx, CE_DEFINE_ARGS, 3, CE_DEFINE_OPTS,
-                                          (int)(sizeof(CE_DEFINE_OPTS) / sizeof(CE_DEFINE_OPTS[0])),
-                                          &CE_DEFINE_STEP, 0));
-    idl_optional_from(2);   /* §4.13.4: `define(name, constructor, optional ElementDefinitionOptions options)` */
-    {
-        static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
-        idl_install_method(ctx, reg, "get", 1, idl_method_id(ctx, ONE_STR, 1, js_ce_get, 0));
-    }
+    idl_install_method(ctx, reg, "define", 2, g_id_define);
+    idl_install_method(ctx, reg, "get", 1, g_id_get);
     JS_SetPropertyStr(ctx, (JSValue)global, "customElements", reg);
 }
 

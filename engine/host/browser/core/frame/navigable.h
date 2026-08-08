@@ -32,10 +32,33 @@
 
 #include <stdbool.h>
 
+#include <stdint.h>
+
+#include <lexbor/html/html.h>
+
 #include "quickjs.h"
+
+/* HOW THIS AGENT BUILDS A DOCUMENT — declared by the HOST, called by §7.4 when the child is SAME-ORIGIN.
+ *
+ * A same-origin child navigable is a second REALM in this heap, and it must get the SAME platform surface its
+ * creator has: a child whose `window` is smaller is a different browser, and every fidelity answer measured in
+ * it would be measured in the wrong one. WHICH surface that is belongs to the HOST — it is the host that
+ * decides what this build exposes — so the host declares the builder once and §7.4 calls it. An engine-side
+ * component list would be a SECOND answer to the same question, and the two would drift the first time a
+ * component was added to one of them.
+ *
+ * `dom` is the child's initial Document, already parsed by §7.4 (about:blank is the empty one the spec creates,
+ * which is what makes an <iframe> with no src scriptable on the next line). The builder returns the realm's
+ * context, with the platform installed and `document` in place. */
+typedef JSContext *(*RealmBuilder)(JSRuntime *rt, lxb_html_document_t *dom, const char *url, const char *origin,
+                                   uint32_t doc_id);
+void navigable_set_realm_builder(RealmBuilder b);
 
 /* Install §7.4's scriptable entry point — `window.open`. `origin` is this document's, which the initial
    about:blank child inherits along with the policy container. */
+/* THE AGENT'S HALF: §7.4's `open` member, declared once. */
+void navigable_init(JSContext *ctx);
+
 void navigable_install(JSContext *ctx, JSValueConst global, const char *origin);
 void navigable_free(JSContext *ctx);
 

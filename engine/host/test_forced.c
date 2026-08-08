@@ -1550,6 +1550,128 @@ static int hostreq_answer_all(JSContext *ctx)
     return n;
 }
 
+/* THE AGENT AND THE DOCUMENT, SPLIT — the same split wpt_runner.c and main.c carry, for the same reason: a
+   SAME-ORIGIN CHILD NAVIGABLE IS A SECOND DOCUMENT IN THIS AGENT (HTML's similar-origin window agent is one
+   heap), so what a document of this build IS has to be one description that runs twice. This fixture's probes
+   read `_cw.parent === window` through exactly that child. */
+static int g_id_host_read, g_id_append_child;   /* declared once per agent — a member has one pool entry */
+
+static void tf_agent_init(JSContext *ctx)
+{
+    static const IdlArgType HR_ARGS[1] = { IDL_DOMSTRING };
+    static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
+
+    /* THE SYNCHRONOUS HOST READ. A DECLARED step member, because suspending and answering at the same call
+       site is the only thing a plain C body cannot do. */
+    g_id_host_read = idl_method_id_step(ctx, HR_ARGS, 1, NULL, 0, &HOSTREQ_DECL, 0);
+    /* A DECLARED member, like every DOM member — this host-edge mutates the tree, and §4.2.3's insertion steps
+       are drained by the machine every declared member converges on. */
+    g_id_append_child = idl_method_id(ctx, ONE_STR, 1, js_append_child, 0);
+    { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
+    timer_set_script_sink(engine_queue_script);   /* §8.6: a STRING handler is evaluated, as a flow */
+    event_target_init(ctx);
+    window_init(ctx);
+    location_init(ctx);
+    navigable_init(ctx);
+    timer_init(ctx);
+    window_proxy_init(ctx, "https://x.test");
+    remote_object_init(ctx);   /* §7.2.5.1's object half */
+    window_proxy_install_members(ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
+    event_init(ctx);
+    /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
+    unhandled_rejection_init(ctx);
+    abort_init(ctx);
+    element_init(ctx);
+    iframe_init(ctx);
+    document_init(ctx);   /* §4.8.5: the slot a child navigable lives in */
+}
+
+/* ONE DOCUMENT — run once per document including the first. */
+static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
+                             uint32_t doc_id)
+{
+    JSValue g = JS_GetGlobalObject(ctx);
+    /* THE HOST'S NETWORK. SECURITY.md puts every byte of it behind the trusted chokepoint, so this host's
+       answer is to PARK the request on the flow's pending register and let the trusted zone fetch it. */
+    fetch_install(ctx, g);   /* the REAL component: `fetch`, and with it Response and Headers */
+    JS_SetPropertyStr(ctx, g, "loadScript", JS_NewCFunction(ctx, js_load_script, "loadScript", 1));   /* lazy-chunk load */
+    JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval_sink, "eval", 1));   /* the eval sink */
+    JS_SetPropertyStr(ctx, g, "setInnerHTML", JS_NewCFunction(ctx, js_html_sink, "setInnerHTML", 1));   /* the innerHTML sink */
+    JS_SetPropertyStr(ctx, g, "setLocation", JS_NewCFunction(ctx, js_url_sink, "setLocation", 1));   /* the location/URL sink */
+    /* THE REAL Location, which the smoke test had never exercised: `setLocation` above stands in for the URL
+       SINK, and the two attacker SOURCES behind `location.hash`/`location.search` were reached by nothing. That
+       left the per-component percent-encode sets — the thing that decides whether an @S PoC reproduces in a
+       browser at all — with no test of any kind. */
+    location_install(ctx, g, url);
+    /* HTML §8.6's TIMER TASK SOURCE. The fixture had none, so `setTimeout` was simply absent and any probe
+       using one threw — which is how a great deal of real page code reaches the event loop, and it was the one
+       platform edge the engine's own test could not exercise. */
+    timer_install(ctx, g);
+    /* §7.2.2's BROWSING-CONTEXT SURFACE, which this fixture did not have at all: `window`, `self`, `parent`,
+       `top`, `closed`, `close()`, the bars. A probe that reads `_cw.parent === window` cannot be written
+       without it, and a document with no `window` is not a document any page script would survive. */
+    /* §2.7 BEFORE §7.2.5: Window.prototype is CHAINED to EventTarget.prototype, so the prototype has to
+       exist before the window is installed. */
+    window_install(ctx, g, url);
+    /* §7.4's `window.open`, which hands back a WindowProxy for a document in ANOTHER instance at its own call
+       site — the child's name is minted in this instance, so nothing suspends. */
+    navigable_install(ctx, g, origin);
+    /* THE SYNCHRONOUS HOST READ. A DECLARED step member, because suspending and answering at the same call
+       site is the only thing a plain C body cannot do. */
+    idl_install_method(ctx, g, "hostRead", 1, g_id_host_read);
+    JS_SetPropertyStr(ctx, g, "setBodyAttr", JS_NewCFunction(ctx, js_set_body_attr, "setBodyAttr", 2));   /* DOM attr write (per-flow) */
+    JS_SetPropertyStr(ctx, g, "getBodyAttr", JS_NewCFunction(ctx, js_get_body_attr, "getBodyAttr", 1));   /* DOM attr read (per-flow) */
+    {
+        /* A DECLARED member, like every DOM member — this host-edge mutates the tree, and §4.2.3's insertion
+           steps are drained by the machine every declared member converges on. As a raw JS_CFUNC_DEF its steps
+           never ran at all; nothing showed it, because the <span> it appends is neither a script nor a custom
+           element. The engine asserts on exactly this now, which is what caught it. */
+        idl_install_method(ctx, g, "appendChild", 1, g_id_append_child);
+    }
+    JS_SetPropertyStr(ctx, g, "lastChildMark", JS_NewCFunction(ctx, js_last_child_mark, "lastChildMark", 0));   /* DOM node read */
+    JS_SetPropertyStr(ctx, g, "state", concolic_new(ctx, "{state}", "{state}", JS_UNDEFINED));   /* injected/unknown app state */
+    /* the REAL component, not a synthetic edge: a UA/touch gate is where a bundle hides its other endpoints,
+       so this fixture exercises the interface the ABI build installs rather than a stand-in for it. */
+    navigator_install(ctx, g);
+    screen_install(ctx, g);
+    /* The components the ABI entry installs, so this fixture runs the engine that ships. Unblocked by the
+       JS_AddIntrinsicDOMException fix: the intrinsic is per-context idempotent now, so JS_NewContext's own
+       JS_AddIntrinsicAToB install plus this explicit one no longer overwrite one prototype with another. */
+    CHECK(JS_AddIntrinsicDOMException(ctx) == 0, "the DOMException intrinsic failed to install");
+    event_install(ctx, g);   /* the Event interface object — `new Event(...)` and every `instanceof Event` */
+    /* §2.7: the global reaches add/removeEventListener/dispatchEvent through Window.prototype ->
+       EventTarget.prototype, which window_install chains it to. */
+    event_target_set_window(ctx, g);   /* §7.6: the document's parent on a propagation path */
+    /* HTML §8.1.7.2: window's IDL mixes in GlobalEventHandlers AND WindowEventHandlers — `window.onload` is
+       how a great deal of real code starts. */
+    event_target_install_handlers(ctx, g, EH_GLOBAL | EH_WINDOW);
+    unhandled_rejection_install(ctx, g);   /* PromiseRejectionEvent */
+    abort_install(ctx, g);
+
+    /* Browser layer: parse the document with the real Lexbor HTML parser BEFORE the DOM interfaces install,
+       because `document` is a wrapper over this tree — the parse itself creates no JS object, so it belongs on
+       the baseline beside the globals rather than after the hooks. */
+
+    /* THE REAL DOM, so the tree components are exercised by a fixture at all. They had none: the page above
+       reached the tree through host-edge stand-ins (setBodyAttr, appendChild), so node.c, element.c and
+       document.c — every wrapper, every prototype, every IDL coercion in them — ran only in the shipped ABI
+       build where nothing asserts on the result. */
+    document_install(ctx, g, dom, url, doc_id);
+    JS_FreeValue(ctx, g);
+}
+
+/* A SAME-ORIGIN CHILD NAVIGABLE'S REALM — a second JSContext in the SAME JSRuntime. */
+static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url, const char *origin,
+                                 uint32_t doc_id)
+{
+    JSContext *ctx = JS_NewContext(rt);
+
+    CHECK(ctx != NULL, "a same-origin child navigable's realm could not be created");
+    world_doc_adopt(doc_id);
+    tf_realm_install(ctx, dom, url, origin, doc_id);
+    return ctx;
+}
+
 int main(void) {
     JSRuntime *rt;
     policy_container_selftest();
@@ -1565,96 +1687,14 @@ int main(void) {
     solve_init(ctx);
 
     /* BASELINE setup (mark 0): the globals here must NOT be captured, so install the COW hook AFTER. */
-    JSValue g = JS_GetGlobalObject(ctx);
-    /* THE HOST'S NETWORK. SECURITY.md puts every byte of it behind the trusted chokepoint, so this host's
-       answer is to PARK the request on the flow's pending register and let the trusted zone fetch it. */
-    { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
-    fetch_install(ctx, g);   /* the REAL component: `fetch`, and with it Response and Headers */
-    JS_SetPropertyStr(ctx, g, "loadScript", JS_NewCFunction(ctx, js_load_script, "loadScript", 1));   /* lazy-chunk load */
-    JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval_sink, "eval", 1));   /* the eval sink */
-    JS_SetPropertyStr(ctx, g, "setInnerHTML", JS_NewCFunction(ctx, js_html_sink, "setInnerHTML", 1));   /* the innerHTML sink */
-    JS_SetPropertyStr(ctx, g, "setLocation", JS_NewCFunction(ctx, js_url_sink, "setLocation", 1));   /* the location/URL sink */
-    /* THE REAL Location, which the smoke test had never exercised: `setLocation` above stands in for the URL
-       SINK, and the two attacker SOURCES behind `location.hash`/`location.search` were reached by nothing. That
-       left the per-component percent-encode sets — the thing that decides whether an @S PoC reproduces in a
-       browser at all — with no test of any kind. */
-    location_install(ctx, g, "https://x.test/p");
-    /* HTML §8.6's TIMER TASK SOURCE. The fixture had none, so `setTimeout` was simply absent and any probe
-       using one threw — which is how a great deal of real page code reaches the event loop, and it was the one
-       platform edge the engine's own test could not exercise. */
-    timer_install(ctx, g);
-    timer_set_script_sink(engine_queue_script);   /* §8.6: a STRING handler is evaluated, as a flow */
-    /* §7.2.2's BROWSING-CONTEXT SURFACE, which this fixture did not have at all: `window`, `self`, `parent`,
-       `top`, `closed`, `close()`, the bars. A probe that reads `_cw.parent === window` cannot be written
-       without it, and a document with no `window` is not a document any page script would survive. */
-    /* §2.7 BEFORE §7.2.5: Window.prototype is CHAINED to EventTarget.prototype, so the prototype has to
-       exist before the window is installed. */
-    event_target_init(ctx);
-    window_install(ctx, g, "https://x.test/p");
-    /* §7.4's `window.open`, which hands back a WindowProxy for a document in ANOTHER instance at its own call
-       site — the child's name is minted in this instance, so nothing suspends. */
-    window_proxy_init(ctx, "https://x.test");
-    remote_object_init(ctx);   /* §7.2.5.1's object half */
-    window_proxy_install_members(ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
-    navigable_install(ctx, g, "https://x.test");
-    /* THE SYNCHRONOUS HOST READ. A DECLARED step member, because suspending and answering at the same call
-       site is the only thing a plain C body cannot do. */
-    {
-        static const IdlArgType HR_ARGS[1] = { IDL_DOMSTRING };
-        idl_install_method(ctx, g, "hostRead", 1,
-                           idl_method_id_step(ctx, HR_ARGS, 1, NULL, 0, &HOSTREQ_DECL, 0));
-    }
-    JS_SetPropertyStr(ctx, g, "setBodyAttr", JS_NewCFunction(ctx, js_set_body_attr, "setBodyAttr", 2));   /* DOM attr write (per-flow) */
-    JS_SetPropertyStr(ctx, g, "getBodyAttr", JS_NewCFunction(ctx, js_get_body_attr, "getBodyAttr", 1));   /* DOM attr read (per-flow) */
-    {
-        /* A DECLARED member, like every DOM member — this host-edge mutates the tree, and §4.2.3's insertion
-           steps are drained by the machine every declared member converges on. As a raw JS_CFUNC_DEF its steps
-           never ran at all; nothing showed it, because the <span> it appends is neither a script nor a custom
-           element. The engine asserts on exactly this now, which is what caught it. */
-        static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
-        idl_install_method(ctx, g, "appendChild", 1, idl_method_id(ctx, ONE_STR, 1, js_append_child, 0));
-    }
-    JS_SetPropertyStr(ctx, g, "lastChildMark", JS_NewCFunction(ctx, js_last_child_mark, "lastChildMark", 0));   /* DOM node read */
-    JS_SetPropertyStr(ctx, g, "state", concolic_new(ctx, "{state}", "{state}", JS_UNDEFINED));   /* injected/unknown app state */
-    /* the REAL component, not a synthetic edge: a UA/touch gate is where a bundle hides its other endpoints,
-       so this fixture exercises the interface the ABI build installs rather than a stand-in for it. */
-    navigator_install(ctx, g);
-    screen_install(ctx, g);
-    /* The components the ABI entry installs, so this fixture runs the engine that ships. Unblocked by the
-       JS_AddIntrinsicDOMException fix: the intrinsic is per-context idempotent now, so JS_NewContext's own
-       JS_AddIntrinsicAToB install plus this explicit one no longer overwrite one prototype with another. */
-    CHECK(JS_AddIntrinsicDOMException(ctx) == 0, "the DOMException intrinsic failed to install");
-    event_init(ctx);
-    event_install(ctx, g);   /* the Event interface object — `new Event(...)` and every `instanceof Event` */
-    /* §2.7: the global reaches add/removeEventListener/dispatchEvent through Window.prototype ->
-       EventTarget.prototype, which window_install chains it to. */
-    event_target_set_window(ctx, g);   /* §7.6: the document's parent on a propagation path */
-    /* HTML §8.1.7.2: window's IDL mixes in GlobalEventHandlers AND WindowEventHandlers — `window.onload` is
-       how a great deal of real code starts. */
-    event_target_install_handlers(ctx, g, EH_GLOBAL | EH_WINDOW);
-    /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
-    unhandled_rejection_init(ctx);
-    unhandled_rejection_install(ctx, g);   /* PromiseRejectionEvent */
-    abort_init(ctx);
-    abort_install(ctx, g);
-
-    /* Browser layer: parse the document with the real Lexbor HTML parser BEFORE the DOM interfaces install,
-       because `document` is a wrapper over this tree — the parse itself creates no JS object, so it belongs on
-       the baseline beside the globals rather than after the hooks. */
+    tf_agent_init(ctx);
+    navigable_set_realm_builder(tf_child_realm);
     int asan_min = getenv("APICLIENT_ASAN_MIN") != NULL;   /* fast per-change memory gate: the minimal clone/COW doc */
     const char *doc = asan_min ? HTML_MIN : HTML;
     lxb_html_document_t *dom = lxb_html_document_create();
     lxb_html_document_parse(dom, (const lxb_char_t *)doc, strlen(doc));
     g_body = lxb_dom_interface_element(lxb_html_document_body_element(dom));   /* the DOM sink's target element */
-
-    /* THE REAL DOM, so the tree components are exercised by a fixture at all. They had none: the page above
-       reached the tree through host-edge stand-ins (setBodyAttr, appendChild), so node.c, element.c and
-       document.c — every wrapper, every prototype, every IDL coercion in them — ran only in the shipped ABI
-       build where nothing asserts on the result. */
-    element_init(ctx);
-    iframe_init(ctx);   /* §4.8.5: the slot a child navigable lives in */
-    document_install(ctx, g, dom, "https://x.test");
-    JS_FreeValue(ctx, g);
+    tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test", world_local_doc());
 
     /* The two hook SETS the solver owns, each declared by its own component. They were struct literals here
        and again in test_forced.c, and the pair had drifted. */

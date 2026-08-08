@@ -54,9 +54,20 @@ static inline bool world_eq(WorldId a, WorldId b) { return a.doc == b.doc && a.s
 void world_registry_init(const char *doc_name);
 void world_registry_free(JSContext *ctx);
 
-/* THIS INSTANCE'S DOCUMENT — the ONE answer to "which document am I", so that "is this navigable remote?"
-   is a comparison against a single identity rather than a second naming scheme kept in parallel. */
+/* THIS INSTANCE'S ROOT DOCUMENT — the one the host named. It is NOT "the document I am": an instance is an
+   origin-keyed AGENT and holds one realm per same-origin document, so several documents are this instance's. */
 uint32_t world_local_doc(void);
+
+/* DOES THIS INSTANCE HOLD THE REALM OF `doc`? THE question behind "is this navigable remote?", and it is a
+   question about WHERE the document lives, never about which document is asking. A same-origin child is a
+   second realm in THIS heap and answers every read in this turn; a cross-origin one is another instance and
+   every read through it suspends. Comparing against the root document instead answered "remote" for a
+   same-origin child that is sitting in the same runtime. */
+bool world_doc_hosted(uint32_t doc);
+/* THIS AGENT NOW HOLDS `doc`'s REALM — said once, by whoever built the realm, because building it is the fact
+   that makes it true. A document is minted before it is built (the name is what makes creation synchronous),
+   so the two are separate statements and the gap between them is a document that exists and has no realm. */
+void world_doc_adopt(uint32_t doc);
 
 /* A DOCUMENT IS NAMED, AND A `uint32_t doc` IS THIS INSTANCE'S HANDLE FOR A NAME — an index into the local
    table, 1-based so zero stays the NONE value. Handles are local and mean nothing to a peer; the NAME is what
@@ -74,8 +85,10 @@ uint32_t world_local_doc(void);
 uint32_t    world_doc_intern(const char *name);
 const char *world_doc_name(uint32_t doc);
 
-/* MINT A DOCUMENT CREATED BY THIS ONE and return its handle. Synchronous and unbounded. */
-uint32_t world_mint_doc(void);
+/* MINT A DOCUMENT CREATED BY `parent` and return its handle. Synchronous and unbounded. The parent is named
+   rather than assumed to be the instance root: a same-origin child is a realm of this instance and creates
+   children of its own, and naming them "<root>.<n>" would collide the moment two realms both minted. */
+uint32_t world_mint_doc(uint32_t parent);
 
 /* MINT a root world, for a flow created in this instance from the baseline. */
 WorldId world_mint(void);

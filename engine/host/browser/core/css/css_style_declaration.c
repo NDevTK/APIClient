@@ -43,6 +43,7 @@
    also the brand check every member performs. */
 static JSValue g_key;
 static JSValue g_proto;
+static int g_id_gcs;   /* getComputedStyle — declared once per agent, installed on each realm's window */
 static int     g_ready;
 
 /* WHICH VIEW of an element a declaration object is. Decided when the object is built and never asked again:
@@ -680,6 +681,13 @@ void cssom_init(JSContext *ctx)
         idl_optional_from(2);   /* CSSOM §6.7: `setProperty(property, value, optional priority)` */
         idl_install_method(ctx, g_proto, "item", 1,
                            idl_method_id(ctx, ONE_LONG, 1, js_cssd_item, 0));
+        {
+            /* CSSOM §7.1: `getComputedStyle(elt, optional pseudoElt)`. DECLARED HERE with the rest — the
+               member lives on the WINDOW, which is per realm, and the declaration is the agent's. */
+            static const IdlArgType TWO[2] = { IDL_ANY, IDL_DOMSTRING };
+            g_id_gcs = idl_method_id(ctx, TWO, 2, js_get_computed_style, 0);
+            idl_optional_from(1);
+        }
     }
 
     /* THE CAMEL-CASED IDL ATTRIBUTES, generated from LEXBOR'S OWN CSS PROPERTY REGISTRY. Web IDL states them as
@@ -716,12 +724,7 @@ void cssom_install(JSContext *ctx, JSValueConst global)
 {
     DCHECK(g_ready, "CSSStyleDeclaration was installed before cssom_init ran");
     node_install_interface(ctx, global, "CSSStyleDeclaration", g_proto);
-    {
-        static const IdlArgType TWO[2] = { IDL_ANY, IDL_DOMSTRING };
-        idl_install_method(ctx, global, "getComputedStyle", 1,
-                           idl_method_id(ctx, TWO, 2, js_get_computed_style, 0));
-        idl_optional_from(1);   /* CSSOM §7.1: `getComputedStyle(elt, optional pseudoElt)` */
-    }
+    idl_install_method(ctx, global, "getComputedStyle", 1, g_id_gcs);
 }
 
 void cssom_free(JSContext *ctx)

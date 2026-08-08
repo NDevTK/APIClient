@@ -83,17 +83,24 @@ static JSValue js_loc_get_hash(JSContext *ctx, JSValueConst this_val, int argc, 
     return concolic_new(ctx, "{location.hash}", "location.hash", JS_UNDEFINED);
 }
 
-void location_install(JSContext *ctx, JSValueConst global, const char *url)
+/* THE TWO ATTACKER SOURCES THIS COMPONENT OWNS, declared ONCE PER AGENT — a source's browser delivery is a
+   fact about the COMPONENT, not about a document, so it belongs beside the class registrations and not in the
+   per-realm install. A second same-origin document re-declaring it is what caught this.
+   THE TWO SETS, verified on Chrome and stated in CLAUDE.md: both components encode space, `"`, `<` and `>`;
+   the FRAGMENT additionally encodes the backtick and NOT the apostrophe, and the special-scheme QUERY encodes
+   the apostrophe and `#` and NOT the backtick. That difference is the whole reason these are two sources rather
+   than one — the same candidate is a live JS-context breakout through the fragment and a dead one through the
+   query, and vice versa for a template-literal context. Declared here, where the component that owns the source
+   is, rather than known to the solver. */
+void location_init(JSContext *ctx)
 {
-    /* THE TWO SETS, verified on Chrome and stated in CLAUDE.md: both components encode space, `"`, `<` and `>`;
-       the FRAGMENT additionally encodes the backtick and NOT the apostrophe, and the special-scheme QUERY
-       encodes the apostrophe and `#` and NOT the backtick. That difference is the whole reason these are two
-       sources rather than one — the same candidate is a live JS-context breakout through the fragment and a
-       dead one through the query, and vice versa for a template-literal context. Declared here, where the
-       component that owns the source is, rather than known to the solver. */
+    (void)ctx;
     concolic_declare_source("location.hash", " \"<>`", '#');
     concolic_declare_source("location.search", " \"#<>'", '?');
+}
 
+void location_install(JSContext *ctx, JSValueConst global, const char *url)
+{
     UrlRecord rec;
     JSValue loc;
     char *s;

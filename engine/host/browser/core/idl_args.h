@@ -232,6 +232,11 @@ void idl_set_tree_steps(const IdlTreeSteps *ops);
    per-object mint this asserts against. Called once by the entry, after the components are installed. */
 void idl_args_seal(void);
 
+/* WAS THIS MEMBER DECLARED BEFORE THE PLATFORM WAS SEALED? A component DECLARES in its init and INSTALLS from
+   the cached id; an install carrying a FRESH id after the seal is a member being minted per wrapper or per
+   REALM, which is the same bug twice. Asked at the install because that is where the member's NAME is. */
+bool idl_declared_before_seal(int stepid);
+
 /* Release what the pool interned — the dictionary member atoms — and the pool's blocks. */
 void idl_args_free(JSContext *ctx);
 

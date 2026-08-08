@@ -52,6 +52,7 @@ static int     g_ready;
 /* PromiseRejectionEvent: its prototype, and the private Symbol its two slots live under. A page cannot forge a
    slot bag it cannot name, which is the same shape Event uses for its own. */
 static JSValue g_pre_proto = JS_UNDEFINED;
+static int g_id_pre_ctor;
 static JSValue g_pre_key = JS_UNDEFINED;
 static JSValue g_notify_fn = JS_UNDEFINED;   /* the internal step function each notification runs as */
 static void  (*g_report)(JSContext *ctx, JSValueConst reason);
@@ -298,6 +299,10 @@ void unhandled_rejection_init(JSContext *ctx)
     CHECK(!JS_IsException(g_notify_fn), "the rejection-notification driver could not be allocated");
     g_ready = 1;
     JS_SetHostPromiseRejectionTracker(JS_GetRuntime(ctx), rejection_tracker, NULL);
+    /* THE CONSTRUCTOR'S DECLARATION IS THE AGENT'S — one pool entry per member; every realm's interface object
+       is built from that same one. */
+    g_id_pre_ctor = idl_method_id_dict(ctx, PRE_CTOR_ARGS, 2, PRE_INIT,
+                                       (int)(sizeof(PRE_INIT) / sizeof(PRE_INIT[0])), js_pre_ctor, 0);
 }
 
 void unhandled_rejection_install(JSContext *ctx, JSValueConst global)
@@ -305,10 +310,7 @@ void unhandled_rejection_install(JSContext *ctx, JSValueConst global)
     JSValue ctor;
 
     DCHECK(g_ready, "PromiseRejectionEvent was installed before its prototype was built");
-    ctor = idl_step_constructor(ctx, "PromiseRejectionEvent", 2,
-                            idl_method_id_dict(ctx, PRE_CTOR_ARGS, 2, PRE_INIT,
-                                               (int)(sizeof(PRE_INIT) / sizeof(PRE_INIT[0])),
-                                               js_pre_ctor, 0));
+    ctor = idl_step_constructor(ctx, "PromiseRejectionEvent", 2, g_id_pre_ctor);
     CHECK(!JS_IsException(ctor), "the PromiseRejectionEvent interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, g_pre_proto);
     JS_SetPropertyStr(ctx, (JSValue)global, "PromiseRejectionEvent", ctor);

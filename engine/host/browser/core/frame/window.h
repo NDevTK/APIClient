@@ -6,12 +6,13 @@
 /* Installs the Window members that answer "which browsing context am I?" — window/self/frames/parent/top,
    opener, closed, origin — plus `name`, which is attacker input. `origin` is the document address, the same
    one Location is built from. */
+/* THE AGENT'S HALF: the Window and WindowProperties CLASS ids, registered once per JSRuntime. A class is a
+   runtime registration and a prototype is a realm's object — §3.7 gives every realm its own, which is why
+   `frames[0].Window.prototype !== Window.prototype` in a browser. */
+void window_init(JSContext *ctx);
+
 void window_install(JSContext *ctx, JSValueConst global, const char *url);
 
-/* §7.2.5's INTERFACE PROTOTYPE OBJECT. Every Window member except the [LegacyUnforgeable] five (`window`,
-   `self`, `location`, `top`, `document`) is declared HERE rather than on the global — a component that owns one
-   (timers, `open`, `postMessage`, the event-handler attributes) installs it on this. */
-JSValueConst window_proto(void);
 /* Release what this component HOLDS across the document's lifecycle — the object the per-flow `closed` byte is
    keyed by, and the BarProp prototype. */
 void window_free(JSContext *ctx);

@@ -38,6 +38,8 @@
 #include "quickjs.h"
 #include "solver/concolic.h"
 #include "core/frame/window.h"
+#include "core/frame/window_proxy.h"
+#include "core/dom/document.h"
 #include "core/url/url.h"
 #include "core/frame/bar_prop.h"
 #include "core/html/html_iframe.h"
@@ -49,25 +51,15 @@
 #include "core/idl_args.h"
 #include "solver/cow.h"
 
-/* §7.2.5's `closed`, and the reason it is not the plain `false` that stood here. `close()` CHANGES it, and a
-   page reads it to decide whether the window it is holding is still usable. It is therefore per-flow state:
-   the flow that closed the window is the only one whose timeline contains that, and a sibling arm that did not
-   must still see it open. A single byte with no JSValues in it, so the raw POD capture is the right one — the
-   record capture exists for state that OWNS values, and a byte does not. */
-static uint8_t g_closed;
-static JSValue g_closed_owner = JS_UNDEFINED;   /* what the delta keys the byte by (owned) */
-
-static uint8_t *closed_state(JSContext *ctx)
-{
-    DCHECK(!JS_IsUndefined(g_closed_owner), "the Window's closed state was reached before window_install ran");
-    cow_capture_host_state(ctx, g_closed_owner, &g_closed, sizeof g_closed);
-    return &g_closed;
-}
-
+/* §7.2.5's `closed` IS THE NAVIGABLE'S, not the Window's — which is why it is not read from a byte here.
+   `window.closed` and `iframe.contentWindow.closed` are the SAME fact about the SAME navigable, and a byte in
+   this file made them two: closing through one left the other reporting open. The navigable's state lives on
+   its WindowProxy (per-flow, captured into the running flow's delta like every other binding it holds), and
+   §7.2.5.1 gives a navigable exactly one proxy — so reading it there is reading the one answer. */
 static JSValue js_win_closed(JSContext *ctx, JSValueConst this_val, int magic)
 {
     (void)this_val; (void)magic;
-    return JS_NewBool(ctx, *closed_state(ctx));
+    return JS_NewBool(ctx, window_proxy_closed(ctx, window_proxy_for_doc(document_doc(ctx))));
 }
 
 /* §7.2.5.2 `close()`. A REAL STATE CHANGE, never a no-effect: the navigable is closed and `closed` reports it
@@ -75,7 +67,7 @@ static JSValue js_win_closed(JSContext *ctx, JSValueConst this_val, int magic)
 static JSValue js_win_close(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     (void)this_val; (void)argc; (void)argv; (void)magic;
-    *closed_state(ctx) = 1;
+    window_proxy_set_closed(ctx, window_proxy_for_doc(document_doc(ctx)));
     return JS_UNDEFINED;
 }
 
@@ -224,7 +216,6 @@ static const JSClassDef WINDOW_CLASS = { "Window", NULL, NULL, NULL, &WINDOW_EXO
    §7.2.5's WindowProperties object sits between Window.prototype and EventTarget.prototype in the real chain
    and is what NAMED access (`window.myIframeName`) is declared on. It is not built here, so it is not claimed
    here either: this chain is two links of the three, and the third arrives with named access. */
-static JSValue g_window_proto = JS_UNDEFINED;
 
 /* HTML §7.3.3 — NAMED ACCESS ON THE WINDOW OBJECT, and the object it is declared on.
  *
@@ -246,7 +237,6 @@ static JSValue g_window_proto = JS_UNDEFINED;
  *
  * [LegacyUnenumerableNamedProperties] is what Window carries, so the descriptor is
  * { writable: true, enumerable: FALSE, configurable: true }. */
-static JSValue g_window_props = JS_UNDEFINED;
 
 /* The child navigable whose browsing-context name is `name`, or JS_UNDEFINED. Owned on success. */
 static JSValue win_named_navigable(JSContext *ctx, const char *name)
@@ -344,47 +334,65 @@ static const JSClassDef WINDOW_PROPS_CLASS = { "WindowProperties", NULL, NULL, N
 static JSClassID g_window_props_class;
 
 
-JSValueConst window_proto(void)
+/* THE CLASSES ARE THE AGENT'S, THE PROTOTYPES ARE THE REALM'S — and that line is Web IDL's, not a convenience.
+   A class id is a registration in the JSRuntime and there is one runtime per agent; a PROTOTYPE is an object,
+   and §3.7 gives every realm its own, which is why `frames[0].Window.prototype !== Window.prototype` in a
+   browser. So this registers, and window_install builds. */
+static int g_id_close, g_id_focus, g_id_blur, g_id_stop;   /* declared once per agent — see window_init */
+
+void window_init(JSContext *ctx)
 {
-    DCHECK(JS_IsObject(g_window_proto), "Window.prototype was asked for before window_install built it");
-    return g_window_proto;
+    DCHECK(g_window_class == 0, "window_init ran twice — a class is registered once per agent, and a second "
+                                "registration would give one interface two ids that compare unequal");
+    JS_NewClassID(JS_GetRuntime(ctx), &g_window_class);
+    CHECK(JS_NewClass(JS_GetRuntime(ctx), g_window_class, &WINDOW_CLASS) == 0,
+          "the Window class could not be registered");
+    JS_NewClassID(JS_GetRuntime(ctx), &g_window_props_class);
+    CHECK(JS_NewClass(JS_GetRuntime(ctx), g_window_props_class, &WINDOW_PROPS_CLASS) == 0,
+          "the WindowProperties class could not be registered");
+    /* THE MEMBERS ARE DECLARED HERE AND INSTALLED PER REALM. A declaration builds a pool entry and a member has
+       ONE, so declaring inside the install would mint a second entry for the second realm's prototype — which
+       is the same shape as a per-wrapper mint and is what the pool's seal asserts against. */
+    bar_prop_init(ctx);   /* §7.2.5.3's BarProp class, one per agent */
+    g_id_close = idl_method_id(ctx, NULL, 0, js_win_close, 0);
+    g_id_focus = idl_method_id(ctx, NULL, 0, js_win_noeffect, 0);
+    g_id_blur  = idl_method_id(ctx, NULL, 0, js_win_noeffect, 1);
+    g_id_stop  = idl_method_id(ctx, NULL, 0, js_win_noeffect, 2);
 }
 
 void window_install(JSContext *ctx, JSValueConst global, const char *url)
 {
-    JSValue g = (JSValue)global, gp;
+    JSValue g = (JSValue)global, gp, props;
 
     DCHECK(JS_IsObject(global), "window_install was given something that is not the global object");
+    DCHECK(g_window_class != 0, "window_install ran before window_init registered the Window class");
 
     /* §7.2.5.1's exotic behaviour comes from the object's CLASS, and the global was created by the context
        before any host class existed — so it is given one here. It owns no per-object data (no finalizer, no
        gc_mark), which is what makes handing it to an already-built object sound. */
-    DCHECK(g_window_class == 0, "window_install ran twice — one instance is one document");
-    JS_NewClassID(JS_GetRuntime(ctx), &g_window_class);
-    CHECK(JS_NewClass(JS_GetRuntime(ctx), g_window_class, &WINDOW_CLASS) == 0,
-          "the Window class could not be registered");
     CHECK(JS_SetGlobalClass(ctx, g_window_class) == 0,
           "the global object would not take the Window class — §7.2.5.1's indexed access has nowhere to live");
 
-    /* THE PROTOTYPE CHAIN, before any member is installed on any of its objects. */
-    JS_NewClassID(JS_GetRuntime(ctx), &g_window_props_class);
-    CHECK(JS_NewClass(JS_GetRuntime(ctx), g_window_props_class, &WINDOW_PROPS_CLASS) == 0,
-          "the WindowProperties class could not be registered");
-    g_window_props = JS_NewObjectProtoClass(ctx, event_target_proto(), g_window_props_class);
-    CHECK(!JS_IsException(g_window_props), "the WindowProperties object could not be allocated");
-    idl_interface_tag(ctx, g_window_props, "WindowProperties");
-    g_window_proto = JS_NewObjectProto(ctx, g_window_props);
-    CHECK(!JS_IsException(g_window_proto), "Window.prototype could not be allocated");
-    idl_interface_tag(ctx, g_window_proto, "Window");
-    JS_SetPrototype(ctx, g, g_window_proto);
+    /* THE PROTOTYPE CHAIN, before any member is installed on any of its objects. PER REALM, and held by
+       quickjs's own per-context class-prototype slot rather than by a static in this file: a second same-origin
+       document is a second realm in this agent, and a static would have given both the first realm's Window
+       objects — so `frames[0].Window` would have been this document's. */
+    props = JS_NewObjectProtoClass(ctx, event_target_proto(), g_window_props_class);
+    CHECK(!JS_IsException(props), "the WindowProperties object could not be allocated");
+    idl_interface_tag(ctx, props, "WindowProperties");
+    gp = JS_NewObjectProto(ctx, props);
+    CHECK(!JS_IsException(gp), "Window.prototype could not be allocated");
+    idl_interface_tag(ctx, gp, "Window");
+    JS_SetClassProto(ctx, g_window_props_class, props);   /* the realm owns them from here */
+    JS_SetClassProto(ctx, g_window_class, JS_DupValue(ctx, gp));
+    JS_SetPrototype(ctx, g, gp);
     /* ECMAScript gives THE GLOBAL OBJECT an own @@toStringTag of "global", and it shadows the interface tag
        that §3.7.3 puts on Window.prototype — so `Object.prototype.toString.call(window)` answered
        "[object global]" where every browser answers "[object Window]". That own property is the plain-host
        global's, not a Window's: HTML's global IS the Window, and the tag it carries is the interface's. */
     JS_DeleteProperty(ctx, g, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG), 0);
     event_target_install_interface(ctx, g);   /* §2.7's interface object, now that its prototype is in a chain */
-    JS_SetPropertyStr(ctx, g, "Window", idl_interface_object(ctx, "Window", g_window_proto));
-    gp = g_window_proto;
+    JS_SetPropertyStr(ctx, g, "Window", idl_interface_object(ctx, "Window", gp));
 
     /* 7.2.2: window, self and frames all return THIS Window's proxy, and the global object IS that proxy here —
        so `window.X`, `self.X` and a bare `X` are one read spelled three ways. */
@@ -401,22 +409,19 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     /* The document was navigated to, not opened by a script in another navigable: 7.2.2 says null. */
     JS_SetPropertyStr(ctx, gp, "opener", JS_NULL);
     /* §7.2.5.3's six user-interface bars. */
-    bar_prop_init(ctx);
     bar_prop_install(ctx, gp);
 
     /* §7.2.5 `frameElement` — the element this navigable is nested THROUGH. A top-level navigable is nested
        through nothing, so it is null: the real answer for what this is, not a placeholder for one. */
     JS_SetPropertyStr(ctx, gp, "frameElement", JS_NULL);
 
-    /* `closed` is a GETTER over per-flow state now, because close() changes it. */
-    g_closed = 0;
-    g_closed_owner = JS_DupValue(ctx, global);
+    /* `closed` is a GETTER over the NAVIGABLE's per-flow state, because close() changes it. */
     idl_install_accessor(ctx, gp, "closed", js_win_closed, 0, -1);
     idl_install_accessor(ctx, gp, "length", js_win_length, 0, -1);
-    idl_install_method(ctx, gp, "close", 0, idl_method_id(ctx, NULL, 0, js_win_close, 0));
-    idl_install_method(ctx, gp, "focus", 0, idl_method_id(ctx, NULL, 0, js_win_noeffect, 0));
-    idl_install_method(ctx, gp, "blur",  0, idl_method_id(ctx, NULL, 0, js_win_noeffect, 1));
-    idl_install_method(ctx, gp, "stop",  0, idl_method_id(ctx, NULL, 0, js_win_noeffect, 2));
+    idl_install_method(ctx, gp, "close", 0, g_id_close);
+    idl_install_method(ctx, gp, "focus", 0, g_id_focus);
+    idl_install_method(ctx, gp, "blur",  0, g_id_blur);
+    idl_install_method(ctx, gp, "stop",  0, g_id_stop);
 
     /* The Window's origin, serialized — the principal, concrete for the same reason Location's is: a bundle
        compares it and builds URLs out of it, and a shape there loses every endpoint behind the comparison.
@@ -437,16 +442,13 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     JS_DefinePropertyGetSet(ctx, gp, JS_NewAtom(ctx, "name"),
                             JS_NewCFunction(ctx, js_win_get_name, "get name", 0), JS_UNDEFINED,
                             JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+    JS_FreeValue(ctx, gp);   /* the realm's class-proto slot and the chain hold it now */
 }
 
 void window_free(JSContext *ctx)
 {
+    (void)ctx;
     g_window_class = 0;
-    JS_FreeValue(ctx, g_window_proto);
-    JS_FreeValue(ctx, g_window_props);
-    g_window_proto = g_window_props = JS_UNDEFINED;
     g_window_props_class = 0;
-    JS_FreeValue(ctx, g_closed_owner);
-    g_closed_owner = JS_UNDEFINED;
     bar_prop_free(ctx);
 }

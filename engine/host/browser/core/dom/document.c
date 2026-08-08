@@ -30,6 +30,7 @@
 #include "core/dom/attr.h"
 #include "core/css/css_style_declaration.h"
 #include "core/dom/document.h"
+#include "solver/world.h"
 #include "core/dom/document_fragment.h"
 #include "core/idl_args.h"
 
@@ -59,6 +60,7 @@ static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
  * the ORIGIN — an agent is origin-keyed, so every document in it has the same one, which is exactly why
  * SECURITY.md's one-principal-per-instance still holds word for word. */
 typedef struct Document {
+    uint32_t             doc;      /* this document's handle in the world registry — its NAME is what crosses */
     lxb_html_document_t *dom;
     PolicyContainer     *policy;    /* owned */
     JSValue              doc_obj;   /* the `document` object — HELD, released by document_free */
@@ -561,7 +563,38 @@ PolicyContainer *document_meta_policy(lxb_html_document_t *dom)
 
 const PolicyContainer *document_policy(JSContext *ctx) { return doc_here(ctx)->policy; }
 
-void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url)
+uint32_t document_doc(JSContext *ctx) { return doc_here(ctx)->doc; }
+
+/* DOCUMENT.PROTOTYPE, and the Document as a real NODE. §4.4 `interface Document : Node`, and it was neither —
+   a plain JS_NewObject with the members copied onto it. So `document.nodeType` was undefined,
+   `document.appendChild` was not a function, `document.contains(el)` (which is how a page asks whether a node
+   is still in the tree) was absent, and `document.body.parentNode.parentNode === document` compared a node
+   wrapper against something that was not one. It is a node_wrap of the document node now, so it is in the ONE
+   identity table with everything else and its members come from a prototype chained to Node.prototype rather
+   than being installed per object.
+   IT IS THE AGENT'S HALF, with every other prototype: a member is DECLARED once and a declaration builds one
+   pool entry, so building this inside the per-document install declared the whole of Document a second time
+   for a second realm — which is the shape the pool's seal exists to catch. Web IDL wants the PROTOTYPE per
+   realm too; that is the gap this split makes visible, and it is the same one every DOM component has. */
+void document_init(JSContext *ctx)
+{
+    JSValue proto = JS_NewObjectProto(ctx, node_proto());
+
+    CHECK(!JS_IsException(proto), "Document.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "Document");
+    document_install_members(ctx, proto);
+    /* §3.1.1's IDL includes GlobalEventHandlers and adds onreadystatechange / onvisibilitychange. */
+    event_target_install_handlers(ctx, proto, EH_GLOBAL | EH_DOCUMENT);
+    node_set_proto(ctx, LXB_DOM_NODE_TYPE_DOCUMENT, proto);
+    document_fragment_init(ctx);   /* §4.7, before any fragment is wrapped as a bare Node */
+    /* §4.5: `Document includes ParentNode` — not ChildNode, because a document has no parent to be removed
+       from — and `NonElementParentNode`, the same getElementById DocumentFragment includes. */
+    node_install_parent_mixin(ctx, proto);
+    node_install_nonelement_parent_mixin(ctx, proto);
+}
+
+void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
+                      uint32_t doc_id)
 {
     Document *d;
     JSValue doc;
@@ -582,6 +615,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     d = calloc(1, sizeof *d);
     CHECK(d != NULL, "document: OOM naming this realm's document");
     d->dom = dom;
+    d->doc = doc_id;
     d->doc_obj = JS_UNDEFINED;
     d->win_obj = JS_UNDEFINED;
     d->policy = document_meta_policy(dom);
@@ -598,15 +632,6 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        node wrapper against something that was not one. It is a node_wrap of the document node now, so it is in
        the ONE identity table with everything else and its members come from a prototype chained to
        Node.prototype rather than being installed per object. */
-    {
-        JSValue proto = JS_NewObjectProto(ctx, node_proto());
-        CHECK(!JS_IsException(proto), "Document.prototype could not be allocated");
-        idl_interface_tag(ctx, proto, "Document");
-        document_install_members(ctx, proto);
-        /* §3.1.1's IDL includes GlobalEventHandlers and adds onreadystatechange / onvisibilitychange. */
-        event_target_install_handlers(ctx, proto, EH_GLOBAL | EH_DOCUMENT);
-        node_set_proto(ctx, LXB_DOM_NODE_TYPE_DOCUMENT, proto);
-    }
     doc = node_wrap(ctx, lxb_dom_interface_node(dom));
     CHECK(JS_IsObject(doc), "the Document wrapper allocation failed");
 
@@ -665,7 +690,6 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     d->win_obj = JS_DupValue(ctx, global);
     /* The interface OBJECTS, now that every prototype exists. Node's goes first because the derived ones
        inherit from it; each component names the one it owns rather than node.c enumerating them. */
-    document_fragment_init(ctx);         /* §4.7, before any fragment is wrapped as a bare Node */
     node_install_interfaces(ctx, global);
     node_install_interface(ctx, global, "Element", element_proto());
     html_element_install(ctx, global);   /* HTMLElement and every per-tag interface object */
@@ -675,11 +699,6 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     collections_install(ctx, global);       /* §4.2.10 NodeList, §4.2.11 HTMLCollection */
     attr_install(ctx, global);              /* §4.9.1/§4.9.2 NamedNodeMap and Attr */
     document_fragment_install(ctx, global); /* §4.7 DocumentFragment, which IS constructible */
-    /* §4.5: `Document includes ParentNode` — not ChildNode, because a document has no parent to be removed
-       from. `document.append(el)` is how a page adds to an empty document. */
-    node_install_parent_mixin(ctx, node_type_proto(LXB_DOM_NODE_TYPE_DOCUMENT));
-    /* §4.5: `Document includes NonElementParentNode` — the same getElementById DocumentFragment includes. */
-    node_install_nonelement_parent_mixin(ctx, node_type_proto(LXB_DOM_NODE_TYPE_DOCUMENT));
     node_install_interface(ctx, global, "Document", node_type_proto(LXB_DOM_NODE_TYPE_DOCUMENT));
     /* §4.8.5 FOR THE TREE THE PARSER BUILT. Insertion steps run during tree construction in a browser, so an
        <iframe> the page's own markup contains has a child navigable before the first script runs — this

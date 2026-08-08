@@ -34,12 +34,14 @@
 #include "core/events/message_event.h"
 #include "core/frame/window_message.h"
 #include "core/frame/window_proxy.h"
+#include "core/dom/document.h"
 #include "core/url/url.h"
 
-/* THIS DOCUMENT'S WindowProxy, minted once. It is the `source` every message this window sends carries, and
-   §7.2.5.1 says a navigable has ONE — a page comparing `e.source` across two messages must find the same
-   object, so a fresh proxy per post would be a different bug each time. */
-static JSValue g_proxy = JS_UNDEFINED;
+/* THIS DOCUMENT'S WindowProxy is §7.2.5.1's ONE-per-navigable, and it is READ from where that rule lives
+   rather than cached here: a same-origin child is a second realm in this agent, so a file-scope copy would be
+   whichever document installed last and `e.source` from one document would have compared equal to the other's.
+   The document handle is the identity, and window_proxy.c owns the mapping. */
+static JSValueConst win_proxy(JSContext *ctx) { return window_proxy_for_doc(document_doc(ctx)); }
 static char   *g_origin;          /* this document's origin, serialized (owned) */
 static JSValue g_deliver_fn = JS_UNDEFINED;
 
@@ -96,12 +98,12 @@ static JSValue js_window_deliver(JSContext *ctx, JSValueConst this_val, int argc
     if (JS_IsException(data)) {
         JS_FreeValue(ctx, JS_GetException(ctx));
         JS_FreeValue(ctx, ports);
-        ev = message_event_new(ctx, "messageerror", JS_UNDEFINED, g_origin, g_proxy, JS_UNDEFINED);
+        ev = message_event_new(ctx, "messageerror", JS_UNDEFINED, g_origin, win_proxy(ctx), JS_UNDEFINED);
     } else {
         /* §9.4.4 steps 7.2 and 7.3: the origin is the SENDER'S and the source is the sender's WindowProxy —
            which is what a handler's `event.origin` check is about, and the whole reason this event is worth
            anything to the solver. */
-        ev = message_event_new(ctx, "message", data, g_origin, g_proxy, ports);
+        ev = message_event_new(ctx, "message", data, g_origin, win_proxy(ctx), ports);
         JS_FreeValue(ctx, data);
         JS_FreeValue(ctx, ports);
     }
@@ -128,7 +130,7 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
        most of the real uses of this method — fired the message at the sender. Nothing could be routed by a
        target that was never read. `window.postMessage(...)` calls it on the global, which is this navigable's
        own proxy; a call on a proxy targets that proxy. */
-    JSValueConst target = window_proxy_is(this_val) ? this_val : g_proxy;
+    JSValueConst target = window_proxy_is(this_val) ? this_val : win_proxy(ctx);
 
     (void)magic;
     DCHECK(!JS_IsUndefined(target), "postMessage ran before this window's WindowProxy existed");
@@ -218,42 +220,53 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     return JS_UNDEFINED;
 }
 
-void window_message_install(JSContext *ctx, JSValueConst global, const char *origin)
+static int g_id_post;
+
+/* §9.4.4's `postMessage`, DECLARED ONCE PER AGENT and installed on the shared WindowProxy prototype here —
+   a member has one pool entry, and a second realm's global installs that same one. */
+void window_message_init(JSContext *ctx)
 {
     static const IdlArgType POST_ARGS[3] = { IDL_ANY, IDL_ANY, IDL_ANY };
 
-    DCHECK(JS_IsUndefined(g_proxy), "window.postMessage was installed twice — one instance is one document");
-    free(g_origin);
-    g_origin = strdup(origin ? origin : "null");
-    CHECK(g_origin != NULL, "window message: OOM recording this document's origin");
-    /* THE ONE PROXY FOR THIS NAVIGABLE — see the comment on g_proxy. */
-    g_proxy = window_proxy_new(ctx, global, g_origin);
-    CHECK(!JS_IsException(g_proxy), "this window's WindowProxy could not be allocated");
-    g_deliver_fn = JS_NewCFunction(ctx, js_window_deliver, "", 2);
-    CHECK(JS_IsFunction(ctx, g_deliver_fn), "the window delivery task's callee could not be allocated");
-    {
-        /* ONE DECLARATION, TWO PLACES IT IS REACHED — the global (`window.postMessage`) and every WindowProxy
-           (`otherWindow.postMessage`). Declaring it twice would give the two spellings two members that can
-           drift, and `window.postMessage === self.postMessage` would stop holding. */
-        int id = idl_method_id(ctx, POST_ARGS, 3, js_window_post, 0);
-        idl_install_method(ctx, global, "postMessage", 1, id);
-        idl_optional_from(1);
-        idl_install_method(ctx, window_proxy_proto(), "postMessage", 1, id);
-        idl_optional_from(1);
-    }
+    g_id_post = idl_method_id(ctx, POST_ARGS, 3, js_window_post, 0);
+    idl_optional_from(1);
+    idl_install_method(ctx, window_proxy_proto(), "postMessage", 1, g_id_post);
+    idl_optional_from(1);
 }
 
-JSValueConst window_message_proxy(void)
+void window_message_install(JSContext *ctx, JSValueConst global, const char *origin, uint32_t doc_id)
 {
-    DCHECK(!JS_IsUndefined(g_proxy), "this window's WindowProxy was asked for before it was installed");
-    return g_proxy;
+
+    /* THE ORIGIN IS THE AGENT'S — an agent is origin-keyed, so a second document installing here is ordinary
+       and a second ORIGIN would be two principals behind one instance, which SECURITY.md forbids. */
+    DCHECK(g_origin == NULL || !strcmp(g_origin, origin ? origin : "null"),
+           "a second document was installed into this agent with a DIFFERENT origin — an agent is origin-keyed, "
+           "so a cross-origin document is a second INSTANCE and never a second realm in this one");
+    if (!g_origin) {
+        g_origin = strdup(origin ? origin : "null");
+        CHECK(g_origin != NULL, "window message: OOM recording this agent's origin");
+    }
+    /* THE ONE PROXY FOR THIS NAVIGABLE — §7.2.5.1, recorded by the mint against this document's handle. */
+    {
+        JSValue self_proxy = window_proxy_new(ctx, doc_id, global, g_origin, NULL, JS_UNDEFINED, JS_NULL);
+        CHECK(!JS_IsException(self_proxy), "this window's WindowProxy could not be allocated");
+        JS_FreeValue(ctx, self_proxy);   /* window_proxy.c holds the reference that keeps it */
+    }
+    g_deliver_fn = JS_NewCFunction(ctx, js_window_deliver, "", 2);
+    CHECK(JS_IsFunction(ctx, g_deliver_fn), "the window delivery task's callee could not be allocated");
+    /* ONE DECLARATION, TWO PLACES IT IS REACHED — the global (`window.postMessage`) and every WindowProxy
+       (`otherWindow.postMessage`). Declaring it twice would give the two spellings two members that can drift,
+       and `window.postMessage === self.postMessage` would stop holding. The WindowProxy prototype is the
+       AGENT's, so it takes the member once; the global is per realm. */
+    idl_install_method(ctx, global, "postMessage", 1, g_id_post);
 }
+
 
 void window_message_free(JSContext *ctx)
 {
-    JS_FreeValue(ctx, g_proxy);
+
     JS_FreeValue(ctx, g_deliver_fn);
-    g_proxy = g_deliver_fn = JS_UNDEFINED;
+    g_deliver_fn = JS_UNDEFINED;
     free(g_origin);
     g_origin = NULL;
 }
