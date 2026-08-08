@@ -45,7 +45,8 @@ static int g_ready;
 static JSValue (*g_ancestors)(JSContext *ctx, JSValueConst target);
 /* DOM §2.9's ACTIVATION BEHAVIOUR, declared by whoever owns the element — see event_target.h. */
 static bool (*g_has_activation)(JSContext *ctx, JSValueConst el);
-static void (*g_run_activation)(JSContext *ctx, JSValueConst el, JSValueConst ev);
+static int (*g_run_activation)(JSContext *ctx, JSValueConst el, JSValueConst ev,
+                               uint8_t *phase, uint32_t *req);
 /* HTML §8.1.7's handler map key, and the MARKER that holds the handler's place in a listener list — see the
    event-handler section below. Declared here because event_target_init mints them. */
 static JSValue g_handler_key;
@@ -191,7 +192,8 @@ void event_target_set_tree(JSValue (*ancestors)(JSContext *ctx, JSValueConst tar
 }
 
 void event_target_set_activation(bool (*has)(JSContext *ctx, JSValueConst el),
-                                 void (*run)(JSContext *ctx, JSValueConst el, JSValueConst ev))
+                                 int (*run)(JSContext *ctx, JSValueConst el, JSValueConst ev,
+                                            uint8_t *phase, uint32_t *req))
 {
     DCHECK((has != NULL) == (run != NULL),
            "half an activation behaviour was registered — a predicate with nothing to perform picks an "
@@ -668,6 +670,11 @@ typedef struct JSDispatchState {
     uint32_t  i, n;      /* THE RESUME POINT: the listener being called, and how many there are */
     uint32_t  ti, tn;    /* THE OTHER: how far into the current LEG, and how long the whole path is */
     uint8_t   leg;       /* §2.9's three legs — 0 capturing (root->target), 1 AT_TARGET, 2 bubbling */
+    /* THE ACTIVATION BEHAVIOUR'S OWN SUSPENSION. §4.6.3's is a navigation and a navigation fetches, so the
+       behaviour is a step like everything else that can wait on the host: `aphase` is its resume point and
+       `areq` the host request it is waiting on. They live here because the machine that can park is this one. */
+    uint8_t   aphase;
+    uint32_t  areq;
     JSValue   type;      /* the event's type, resolved once per target and needed by `once` (owned) */
     JSValue   path;      /* §2.9's propagation path — the target and its ancestors (owned) */
     JSValue   cur;       /* the target whose listeners are running (owned) */
@@ -828,6 +835,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         s->stage = 1;
     }
 
+    if (s->stage == 2) goto activation;   /* re-entered inside the activation behaviour — see below */
     for (;;) {
         while (s->i < s->n) {
             JSValue rec;
@@ -936,6 +944,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     }
     JS_FreeValue(ctx, cb_result);
 
+activation:
     /* §2.9 "clean up": the dispatch flag clears, the phase goes back to NONE and currentTarget to null. */
     event_set_dispatch_flag(ctx, s->ev, false);
     event_clear_current(ctx, s->ev);
@@ -943,8 +952,14 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        ONLY if nothing cancelled — which is the entire meaning of `preventDefault()` on a click. It runs with
        the event already cleaned up, so a behaviour that reads `currentTarget` sees null, as it must. */
     if (JS_IsObject(s->act) && !event_canceled(ctx, s->ev)) {
+        int ar;
         DCHECK(g_run_activation != NULL, "an activation target was picked with nothing to perform");
-        g_run_activation(ctx, s->act, s->ev);
+        /* STAGE 2 IS THE RESUME POINT. The behaviour may wait on the host, and when it does the whole dispatch
+           parks here — after the walk, with the event already cleaned up — and re-enters at exactly this line
+           rather than replaying three legs of listeners. */
+        s->stage = 2;
+        ar = g_run_activation(ctx, s->act, s->ev, &s->aphase, &s->areq);
+        if (ar != JS_STEP_DONE) return ar;
     }
     s->result = JS_NewBool(ctx, !event_canceled(ctx, s->ev));
     return JS_STEP_DONE;

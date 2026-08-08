@@ -2,6 +2,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_EVENTS_EVENT_TARGET_H
 #define ENGINE_HOST_BROWSER_CORE_EVENTS_EVENT_TARGET_H
 #include <stdbool.h>
+#include <stdint.h>
 #include "quickjs.h"
 
 void event_target_init(JSContext *ctx);                          /* the private listener key (agent init) */
@@ -59,9 +60,15 @@ void event_target_set_handler_hook(void (*after_set)(JSContext *ctx, JSValueCons
    three legs and then dropped the event, so `<a href>` clicked navigated nowhere and `e.preventDefault()`
    suppressed something that was never going to happen.
    The two halves are declared by whoever owns the element, for the reason the tree walk is: this file does not
-   know what an `<a>` is. `has` answers whether that element has one; `run` performs it. */
+   know what an `<a>` is. `has` answers whether that element has one; `run` PERFORMS it, and it performs it as a
+   STEP: §4.6.3's is a navigation, navigating fetches, and a fetch is a host-owed answer that suspends the
+   asking flow. So `run` has a step's return contract — JS_STEP_YIELD to be re-entered, JS_STEP_DONE when it is
+   finished — and its own two words of state on the dispatch machine, which is already a step machine and can
+   therefore hold the suspension. A `void` hook could only ever reach a SYNCHRONOUS behaviour, which is the same
+   ceiling `window.open` had while it was a plain C body. */
 void event_target_set_activation(bool (*has)(JSContext *ctx, JSValueConst el),
-                                 void (*run)(JSContext *ctx, JSValueConst el, JSValueConst ev));
+                                 int (*run)(JSContext *ctx, JSValueConst el, JSValueConst ev,
+                                            uint8_t *phase, uint32_t *req));
 /* The ENGINE firing its own event at `target`. One §2.9 dispatch, reached as a queued task because the callers
    are plain C the scheduler drives. The propagation path is derived from the target's ancestors — there is no
    `bubble_to` to pass, because the window is the document's parent and the spec already says so.

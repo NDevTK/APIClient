@@ -36,6 +36,7 @@
 #include "core/events/event_target.h"
 #include "core/frame/navigable.h"
 #include "core/frame/window_features.h"
+#include "quickjs-step.h"
 
 /* §4.6.3 "reinitialize url": parse the href content attribute against the document's base URL. Returns false
    when there is no href or it does not parse — the url is then null, which every member has an answer for. */
@@ -163,7 +164,7 @@ static bool link_has_activation(JSContext *ctx, JSValueConst el)
     return true;
 }
 
-static void link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev)
+static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev, uint8_t *phase, uint32_t *req)
 {
     char *href = element_attr_get(ctx, el, "href");
     char *target = element_attr_get(ctx, el, "target");
@@ -183,13 +184,20 @@ static void link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev
     }
     /* §4.6.3 step 2: the target attribute value, and an EMPTY one is no target at all — which the rules for
        choosing a navigable read as `_self`, the navigable the link is in. */
+    /* §7.4 STEPS 6 AND 14. `phase` and `req` are this behaviour's suspension, held by the dispatch machine that
+       called it: the navigate inside here FETCHES, and when that fetch becomes the host request it already has
+       to be (navigable.h), it is these two words the wait lives in and this line that returns JS_STEP_YIELD.
+       It does not park yet — navigable_open reaches the host's synchronous fetcher — so this always finishes in
+       one entry, and the contract is what makes the change to child_document a change to child_document. */
     r = navigable_open(ctx, href, target && *target ? target : "_self", &feat);
-    /* A URL THAT DOES NOT PARSE IS NOT AN ERROR HERE. §4.6.3 says to return if the url is failure, and a click
-       is not a place a page can catch anything — unlike `window.open()`, whose caller gets the SyntaxError. */
-    JS_FreeValue(ctx, r);
     free(href);
     free(target);
     free(rel);
+    (void)phase; (void)req;
+    /* A URL THAT DOES NOT PARSE IS NOT AN ERROR HERE. §4.6.3 says to return if the url is failure, and a click
+       is not a place a page can catch anything — unlike `window.open()`, whose caller gets the SyntaxError. */
+    JS_FreeValue(ctx, r);
+    return JS_STEP_DONE;
 }
 
 void hyperlink_install(JSContext *ctx, JSValueConst proto)
