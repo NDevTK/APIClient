@@ -79,6 +79,12 @@ JSValue window_proxy_window(JSContext *ctx, JSValueConst proxy);
    would be OBSERVABLE. */
 JSContext *window_proxy_realm(JSContext *ctx, JSValueConst proxy);
 
+/* §7.2.5's `parent`, `top` and `opener` — the NAVIGABLE's, so a Window answers them from the same record its
+   own WindowProxy does. One navigable, one answer, whether a page reads `parent` or `otherW.parent`. Owned. */
+JSValue window_proxy_parent(JSContext *ctx, JSValueConst proxy);
+JSValue window_proxy_top_of(JSContext *ctx, JSValueConst proxy);
+JSValue window_proxy_opener(JSContext *ctx, JSValueConst proxy);
+
 /* IS THE NAVIGABLE'S ACTIVE DOCUMENT SAME-ORIGIN WITH THIS ONE? §7.2.5.1's check, exported because §4.8.5's
    `contentDocument` makes the same decision one layer up — and must make it BEFORE asking the peer, since a
    cross-origin answer is null and asking for it would both leak and suspend a flow on a settled question.

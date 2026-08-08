@@ -91,6 +91,28 @@ static JSValue js_win_length(JSContext *ctx, JSValueConst this_val, int magic)
     return JS_NewInt32(ctx, iframe_child_navigable_count(ctx));
 }
 
+/* §7.2.5's BROWSING-CONTEXT LINKS, each answered by this realm's navigable — see window_proxy.h.
+ *
+ * The mapping between a window's two spellings — another navigable is its PROXY, this one is the global — is
+ * window_proxy.c's `win_or_proxy`, applied by every member that can answer with a navigable. */
+static JSValue js_win_parent(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    (void)this_val; (void)magic;
+    return window_proxy_parent(ctx, document_window_proxy(ctx));
+}
+
+static JSValue js_win_top(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    (void)this_val; (void)magic;
+    return window_proxy_top_of(ctx, document_window_proxy(ctx));
+}
+
+static JSValue js_win_opener(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    (void)this_val; (void)magic;
+    return window_proxy_opener(ctx, document_window_proxy(ctx));
+}
+
 static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)this_val; (void)argc; (void)argv;
@@ -405,13 +427,22 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
        carry no such extended attribute and are declared on the prototype like every other member. */
     JS_DefinePropertyValueStr(ctx, g, "window", JS_DupValue(ctx, global), JS_PROP_ENUMERABLE);
     JS_DefinePropertyValueStr(ctx, g, "self",   JS_DupValue(ctx, global), JS_PROP_ENUMERABLE);
-    JS_DefinePropertyValueStr(ctx, g, "top",    JS_DupValue(ctx, global), JS_PROP_ENUMERABLE);
+    /* §7.2.5 marks `top` [LegacyUnforgeable] — an OWN property — but its VALUE is the navigable's, and `top`
+       is a WALK of the parent chain, so a grandchild answers with the top-level traversable rather than with
+       itself. An own ACCESSOR, not an own value frozen at install time. */
+    JS_DefinePropertyGetSet(ctx, g, JS_NewAtom(ctx, "top"),
+                            JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_win_top, "get top", 0,
+                                                 JS_CFUNC_getter_magic, 0),
+                            JS_UNDEFINED, JS_PROP_ENUMERABLE);
     JS_SetPropertyStr(ctx, gp, "frames", JS_DupValue(ctx, global));
-    /* No embedder is reachable from this instance, so this document's navigable is its own parent and top. */
-    JS_SetPropertyStr(ctx, gp, "parent", JS_DupValue(ctx, global));
-
-    /* The document was navigated to, not opened by a script in another navigable: 7.2.2 says null. */
-    JS_SetPropertyStr(ctx, gp, "opener", JS_NULL);
+    /* §7.2.5's `parent` and `opener` ARE THE NAVIGABLE'S, so they are read from this realm's own WindowProxy
+       rather than answered here. They were two FIXED values behind two comments explaining why an embedder
+       could not exist — "no embedder is reachable from this instance" and "the document was navigated to, not
+       opened by a script in another navigable" — and both were true exactly while one instance was one
+       document. A §7.4 child realm in this agent HAS a creator, and a popup whose `opener` is null cannot post
+       back to the page that opened it, which is the whole of what a popup is for. */
+    idl_install_accessor(ctx, gp, "parent", js_win_parent, 0, -1);
+    idl_install_accessor(ctx, gp, "opener", js_win_opener, 0, -1);
     /* §7.2.5.3's six user-interface bars. */
     bar_prop_install(ctx, gp);
 

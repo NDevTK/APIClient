@@ -454,9 +454,33 @@ static JSValue proxy_top(JSContext *ctx, JSValueConst self)
         /* THE CHAIN LEAVES THE PROXIES at this instance's own Window, which is not one — it is the global, and
            the global answers `top` for itself. Following it is what makes a grandchild's `top` this document
            rather than its parent frame. */
-        if (!window_proxy_is(q->parent)) return JS_GetPropertyStr(ctx, q->parent, "top");
+        /* THE CHAIN IS PROXIES ALL THE WAY UP, because §7.2.5 says `parent` IS one. It used to hold the
+           creator's GLOBAL, so this walk left the proxies at the top and read `top` off a Window — a
+           scriptable property read from a C activation, which is the one thing this interpreter refuses the
+           moment that property stops being a frozen value. Storing what the spec says deletes the branch. */
+        DCHECK(window_proxy_is(q->parent),
+               "a navigable's parent is not a WindowProxy — §7.2.5 says it is one, and a walk that has to ask "
+               "what kind of object it reached is a walk that will read a scriptable property to continue");
         cur = q->parent;
     }
+}
+
+/* THE ASKING REALM STANDS FOR ITSELF AS ITS GLOBAL — the one mapping between the two spellings of a window,
+   stated once and used by every member that can answer with a navigable.
+   In the spec `window`, `self`, `frames`, `parent` and `top` of a top-level navigable are ALL one object, its
+   WindowProxy. Here the global is what a page holds as `window`, so answering with the asking realm's OWN
+   proxy would make `window === window.parent` false at top level and `frame.contentWindow.parent === window`
+   false in the corpus's own iframe probe — an identity every page rests on. Another navigable is its PROXY;
+   this one is the global. Putting the rule anywhere but here means writing it twice, and the second copy is
+   the one that gets forgotten: the first attempt at this had it only on the Window side and the proxy side
+   answered with a proxy the page had never seen. */
+static JSValue win_or_proxy(JSContext *ctx, JSValue v)
+{
+    if (JS_VALUE_GET_PTR(v) == JS_VALUE_GET_PTR(document_window_proxy(ctx))) {
+        JS_FreeValue(ctx, v);
+        return JS_GetGlobalObject(ctx);
+    }
+    return v;
 }
 
 static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic)
@@ -485,11 +509,12 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
         return JS_DupValue(ctx, this_val);
     case WP_PARENT:
         /* §7.2.5: the parent navigable's proxy, or THIS one when there is no parent. */
-        return JS_IsUndefined(p->parent) ? JS_DupValue(ctx, this_val) : JS_DupValue(ctx, p->parent);
+        return win_or_proxy(ctx, JS_IsUndefined(p->parent) ? JS_DupValue(ctx, this_val)
+                                                           : JS_DupValue(ctx, p->parent));
     case WP_TOP:
-        return proxy_top(ctx, this_val);
+        return win_or_proxy(ctx, proxy_top(ctx, this_val));
     case WP_OPENER:
-        return JS_DupValue(ctx, p->opener);
+        return win_or_proxy(ctx, JS_DupValue(ctx, p->opener));
     case WP_CLOSED:
         return JS_NewBool(ctx, p->closed);
     case WP_NAME:
@@ -509,6 +534,26 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
               "added beside it read the ACTIVE DOCUMENT and are declared on the step machine below");
         return JS_UNDEFINED;
     }
+}
+
+/* §7.2.5's `parent`, `top` and `opener` ARE THE NAVIGABLE'S, and these are how a Window answers them. A Window
+   and its WindowProxy are two spellings of one navigable, so the two must be one answer from one record — the
+   same unification `closed` already has. window.c answered all three with FIXED values behind two comments
+   saying no embedder could exist and nothing had opened this document; both were true exactly while one
+   instance was one document. */
+JSValue window_proxy_parent(JSContext *ctx, JSValueConst proxy)
+{
+    return proxy_member_get(ctx, proxy, WP_PARENT);
+}
+
+JSValue window_proxy_top_of(JSContext *ctx, JSValueConst proxy)
+{
+    return proxy_member_get(ctx, proxy, WP_TOP);
+}
+
+JSValue window_proxy_opener(JSContext *ctx, JSValueConst proxy)
+{
+    return proxy_member_get(ctx, proxy, WP_OPENER);
 }
 
 /* §7.2.5's `name` SETTER. It renames the BROWSING CONTEXT, which is why `frameW.name = "B"` leaves the

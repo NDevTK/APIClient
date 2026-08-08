@@ -127,7 +127,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     const char *csp = policy_container_csp(document_policy(ctx));
     char *addr = NULL, *origin = NULL;
     uint32_t child;
-    JSValue proxy, g;
+    JSValue proxy;
     char *op;
     size_t n;
 
@@ -138,7 +138,6 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     /* MINTED FROM THE CREATOR, not from the instance root: this agent holds one realm per same-origin
        document, and naming every child "<root>.<n>" would collide the moment two realms both created one. */
     child = world_mint_doc(document_doc(ctx));
-    g = JS_GetGlobalObject(ctx);
     /* WHO THE NAVIGABLE HANGS OFF, and the two shapes §7.4 distinguishes. A CHILD navigable (§4.8.5's iframe)
        is nested in this one: its `parent` is this Window and it has no opener. An AUXILIARY one (§7.4's popup)
        is a TOP-LEVEL traversable — it is its own parent and its own top — and what links it back here is
@@ -151,9 +150,12 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            child's event handlers. Neither is a value that can be named across a transport; they are one object
            graph, and a browser's own model says so. */
         world_doc_adopt(child);   /* this agent holds it; the REALM behind it is built on first touch */
+        /* §7.2.5: `parent` and `opener` ARE WindowProxies. They held the creator's GLOBAL, which made the
+           `top` walk leave the proxies at the top and read a scriptable property to continue — and a popup's
+           opener a Window rather than the navigable it belongs to. The creator's own proxy is what both are. */
         proxy = window_proxy_new(ctx, child, addr, origin, name,
-                                 is_child ? (JSValueConst)g : JS_UNDEFINED,
-                                 is_child ? JS_NULL : (JSValueConst)g);
+                                 is_child ? document_window_proxy(ctx) : JS_UNDEFINED,
+                                 is_child ? JS_NULL : document_window_proxy(ctx));
     } else {
         /* THE NOTICE, and every field of it is load-bearing. The CHILD is the name the host provisions an
            instance under; the CREATOR names who made it, which is what the host routes replies through and what
@@ -170,10 +172,9 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
         engine_host_notify(ctx, op);
         free(op);
         proxy = window_proxy_new_remote(ctx, child, origin, name,
-                                        is_child ? (JSValueConst)g : JS_UNDEFINED,
-                                        is_child ? JS_NULL : (JSValueConst)g);
+                                        is_child ? document_window_proxy(ctx) : JS_UNDEFINED,
+                                        is_child ? JS_NULL : document_window_proxy(ctx));
     }
-    JS_FreeValue(ctx, g);
     CHECK(!JS_IsException(proxy), "a navigable's WindowProxy could not be allocated");
     free(addr);
     free(origin);
