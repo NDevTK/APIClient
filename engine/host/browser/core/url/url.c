@@ -27,6 +27,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/url/url.h"
+#include "solver/concolic.h"   /* §4.1 over unknown input answers at the operator, not at the coercion */
 #include "core/file/blob.h"
 #include "core/url/idna.h"
 #include "core/idl_args.h"
@@ -1615,6 +1616,14 @@ static int js_url_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     if (argc < 1) {
         JS_ThrowTypeError(ctx, "URL requires at least 1 argument");
         return -1;
+    }
+    /* §4.1's URL(url, base) OVER UNKNOWN INPUT. The parser needs real bytes and the coercion below owes C
+       them, so a concolic address can only crash there; the constructor answers instead with an unknown
+       derived from the source. Reading `.href`/`.pathname` off the result then yields further unknowns tied to
+       the same source, which is what a later branch forks on and a later sink solves for. */
+    {
+        JSValue c = concolic_builtin_hook(ctx, argv[0], "URL");
+        if (!JS_IsUninitialized(c)) { *presult = c; return 0; }
     }
     in = JS_ToCStringLen(ctx, &in_len, argv[0]);
     if (!in) return -1;
