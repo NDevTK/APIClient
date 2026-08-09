@@ -14,6 +14,12 @@ void window_message_init(JSContext *ctx);
 void window_message_install_proto(JSContext *ctx);
 
 void window_message_install(JSContext *ctx, JSValueConst global, const char *origin);
+
+/* §9.4.4 STEP 7 FROM ANOTHER INSTANCE — the host routed it here and stamped the sender's origin, which the
+   engine may not do for itself. `target_origin` is what the SENDER asked for ("*" or NULL for any); the check
+   against it happens at delivery, here, because the target may have navigated since the post. */
+void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const char *sender_origin,
+                                   const char *target_origin, const uint8_t *bytes, size_t len);
 void window_message_free(JSContext *ctx);
 
 

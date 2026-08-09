@@ -457,6 +457,10 @@ static void wpt_report_exception(JSContext *ctx, const char *name, const char *w
  * is a number and a page compares it with `===` — an answer that arrived as the string "0" would satisfy a
  * loose check and prove only that bytes moved. */
 #define WPT_CHILD_MAX 32
+/* THE TOP-LEVEL DOCUMENT'S ORIGIN, named once because it is now TWO facts: the origin its own document is
+   installed with, and the origin this host STAMPS on a message it routes out of that document. */
+#define WPT_TOP_ORIGIN "http://web-platform.test"
+
 typedef struct { char *name; int to, from; pid_t pid; } ChildDoc;
 static ChildDoc g_children[WPT_CHILD_MAX];
 static int g_children_n;
@@ -603,18 +607,41 @@ static bool wpt_answer_host_requests(JSContext *ctx)
        its instance exists. `navigable.create <child> <creator> <url> <origin> <csp>`. */
     for (p = notices; *p; ) {
         const char *end = strchr(p, '\n');
-        char line[1024];
+        char *line;
         size_t n;
+        char *f[6]; int nf = 0; char *q;
+
         if (!end) break;
         n = (size_t)(end - p);
-        if (n < sizeof line) {
-            char *f[6]; int nf = 0; char *q;
-            memcpy(line, p, n); line[n] = 0;
-            for (q = line, f[nf++] = q; *q && nf < 6; q++)
-                if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
-            if (nf == 6 && !strcmp(f[0], "navigable.create"))
-                wpt_spawn_child(f[1], f[3], f[4], f[5]);
+        /* THE BUFFER IS SIZED TO THE RECORD. It was a fixed 1024 with the over-long ones SKIPPED, which is a
+           silent drop of exactly the notices that carry payload — a routed message is base64 and routinely
+           longer than that, and a dropped one is a delivery the peer never makes with nothing said. */
+        line = malloc(n + 1);
+        CHECK(line != NULL, "wpt: OOM reading a host notice");
+        memcpy(line, p, n); line[n] = 0;
+        for (q = line, f[nf++] = q; *q && nf < 6; q++)
+            if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
+        if (nf == 6 && !strcmp(f[0], "navigable.create"))
+            wpt_spawn_child(f[1], f[3], f[4], f[5]);
+        /* `windowproxy.post <target doc> <world> <target origin> <base64>` — §9.4.4 across instances. THE
+           ORIGIN IS STAMPED HERE, by the zone that knows who sent it: the engine may not name its own sender
+           (SECURITY.md), so the field it emitted carries no origin and this adds the one it knows. */
+        else if (nf == 5 && !strcmp(f[0], "windowproxy.post")) {
+            ChildDoc *c = wpt_child_for(f[1]);
+            DCHECK(c != NULL, "a routed message named a document this host never provisioned — the "
+                              "navigable.create notice for it was dropped, or the post outran it");
+            if (c) {
+                size_t cap = strlen(f[2]) + strlen(f[3]) + strlen(f[4]) + 64;
+                char *op = malloc(cap);
+                char ack[16];
+                CHECK(op != NULL, "wpt: OOM routing a message to a child document");
+                snprintf(op, cap, "windowproxy.post\t%s\t%s\t%s\t%s",
+                         f[2], WPT_TOP_ORIGIN, f[3], f[4]);
+                wpt_child_ask(c, op, ack, sizeof ack);
+                free(op);
+            }
         }
+        free(line);
         p = end + 1;
     }
 
@@ -1188,7 +1215,7 @@ static int wpt_child_main(int argc, char **argv)
     JSContext *ctx;
     char *html = NULL;
     size_t html_n = 0;
-    char line[512];
+    char line[65536];   /* a routed message rides this channel base64'd — see windowproxy.post below */
 
     (void)csp;
     /* THE ANSWER PIPE IS STDOUT HERE, so nothing else may write to it — see report_out. */
@@ -1230,6 +1257,9 @@ static int wpt_child_main(int argc, char **argv)
 
     while (fgets(line, sizeof line, stdin)) {
         char *nl = strchr(line, '\n'), *member, *worlds;
+        /* A RECORD THAT DID NOT FIT arrived as two, and the tail would then be read as an operation of its own.
+           The channel is line-oriented, so the only safe answer to a truncated read is to stop. */
+        CHECK(nl != NULL || feof(stdin), "wpt: a cross-instance record was longer than this child's line buffer");
         JSValue v = JS_UNDEFINED;
         char prog[128], answer[512];
         WorldId w = WORLD_NONE, anc[16];
@@ -1248,9 +1278,18 @@ static int wpt_child_main(int argc, char **argv)
                 if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
         }
         is_obj = !strcmp(f[0], "object.get");
-        if (nf < (is_obj ? 5 : 4)) continue;
-        worlds = f[2];
-        member = f[is_obj ? 4 : 3];
+        /* `windowproxy.post <world> <sender origin> <target origin> <base64 bytes>` — §9.4.4 step 7 arriving
+           from another instance. It is not a read: nothing is asked of this document, a delivery is MADE to it,
+           so it answers a bare ack and the message becomes a task like any local post. */
+        if (!strcmp(f[0], "windowproxy.post")) {
+            if (nf < 5) continue;
+            worlds = f[1];
+            member = NULL;
+        } else {
+            if (nf < (is_obj ? 5 : 4)) continue;
+            worlds = f[2];
+            member = f[is_obj ? 4 : 3];
+        }
 
         /* THE WORLD THE ANSWER IS TRUE IN, and the ancestry that lets this instance HAVE one. A world minted
            in another document has a segment here only if a flow of that world has written here; the ancestry
@@ -1300,6 +1339,36 @@ static int wpt_child_main(int argc, char **argv)
                 cow_set_current(seg);
                 cow_apply(ctx, seg);
             }
+        }
+
+        if (!member) {
+            /* THE DELIVERY, under the world just installed. The bytes come back through the engine's own
+               base64 — the codec the spec made it implement — rather than a second one grown in this host. */
+            size_t b64n = strlen(f[4]), cap = JS_Base64DecodedMax(b64n) + 1;
+            uint8_t *bytes = malloc(cap);
+            int err = 0;
+            size_t blen;
+
+            CHECK(bytes != NULL, "wpt: OOM receiving a routed message");
+            blen = JS_Base64Decode(bytes, cap, f[4], b64n, &err);
+            CHECK(err == 0, "wpt: a routed message did not survive the text channel it crossed");
+            /* THE SENDING DOCUMENT IS THE HEAD OF THE WORLD VECTOR — a world is minted by a flow of exactly one
+               document, so the vector already names the sender and a second field for it could disagree. */
+            {
+                char *colon = strchr(f[1], ':');
+                char save = colon ? *colon : 0;
+                if (colon) *colon = 0;
+                window_message_deliver_remote(ctx, f[1], f[2], f[3], bytes, blen);
+                if (colon) *colon = save;
+            }
+            free(bytes);
+            /* THE TASK IS ENQUEUED, NOT RUN: the scheduler is what runs it, and entering it is what a turn of
+               this loop does. An empty program is that turn — it drains the posted-message task source the way
+               any other turn would, rather than this host driving the delivery itself. */
+            run_program(ctx, "", 0, "<routed message>");
+            fputs("u\n", stdout);
+            fflush(stdout);
+            continue;
         }
 
         /* WHAT IS BEING READ. `windowproxy.get` reads a member of THIS document's Window; `object.get` reads a
@@ -1359,7 +1428,7 @@ int main(int argc, char **argv)
        running the test's scripts against the wrong tree. */
     wpt_derive_addresses(argc, argv);
     /* THE TEST DOCUMENT. One call, because a child document is built by the same one — see above. */
-    ctx = wpt_build_document("wpt", "http://web-platform.test", NULL, 0);
+    ctx = wpt_build_document("wpt", WPT_TOP_ORIGIN, NULL, 0);
     rt = g_rt;
 
     JS_SetFlowControlHooks(&WPT_HOOKS_ON);

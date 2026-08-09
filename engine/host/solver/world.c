@@ -201,6 +201,29 @@ int world_ancestry(WorldId w, WorldId *out, int cap)
     return n;
 }
 
+/* See world.h. The DOCUMENT is named rather than numbered because a `uint32_t doc` is this instance's handle
+   into its own table and means a different document in a peer's — the same reason every cross-instance request
+   carries world_doc_name. */
+int world_serialize(WorldId w, char *dst, size_t cap)
+{
+    WorldId anc[16];
+    int n_anc, k, n;
+
+    DCHECK(dst != NULL && cap > 0, "a world was serialized into no buffer");
+    n_anc = world_ancestry(w, anc, (int)(sizeof anc / sizeof anc[0]));
+    n = snprintf(dst, cap, "%s:%u", world_doc_name(w.doc), w.serial);
+    CHECK(n > 0 && (size_t)n < cap, "the world vector did not fit its buffer — a truncated vector makes the "
+                                    "peer fork a more distant ancestor and silently lose the nearer writes");
+    for (k = 0; k < n_anc; k++) {
+        int m = snprintf(dst + n, cap - (size_t)n, ",%s:%u", world_doc_name(anc[k].doc), anc[k].serial);
+        CHECK(m > 0 && (size_t)(n + m) < cap,
+              "the world vector did not fit its buffer — a truncated vector makes the peer fork a more distant "
+              "ancestor and silently lose the nearer writes");
+        n += m;
+    }
+    return n;
+}
+
 static ForeignSegment *find_segment(WorldId w)
 {
     int i;

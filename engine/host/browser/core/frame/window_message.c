@@ -37,6 +37,9 @@
 #include "core/frame/window_proxy.h"
 #include "core/dom/document.h"
 #include "core/url/url.h"
+#include "solver/engine.h"
+#include "solver/flow.h"
+#include "solver/world.h"
 
 /* THIS DOCUMENT'S WindowProxy is §7.2.5.1's ONE-per-navigable, and it is READ from where that rule lives
    rather than cached here: a same-origin child is a second realm in this agent, so a file-scope copy would be
@@ -53,7 +56,12 @@ static JSValue g_deliver_fn = JS_UNDEFINED;
    that later: its callee is one function object for the agent, so the ctx it runs under is whichever realm
    minted it, and reading the sender from there named the first document for every post in the instance. This
    is §scheduler's rule that an operation which becomes a work item takes its inputs with it. */
-enum { PQ_DATA = 0, PQ_HOLDERS, PQ_TARGET_ORIGIN, PQ_SOURCE, PQ_N };
+/* PQ_SENDER_ORIGIN IS THE EVENT'S `origin`, AND IT TRAVELS RATHER THAN BEING READ AT DELIVERY. Within one
+   instance it is always this agent's own — an agent is origin-keyed — which is why it could be a module static
+   for as long as every post was local. A post from ANOTHER instance is cross-origin by construction, its
+   origin is stamped by the trusted zone, and `event.origin` is the check every bundle in this corpus writes:
+   answering it from the receiver's own origin would tell a page that a foreign message came from itself. */
+enum { PQ_DATA = 0, PQ_HOLDERS, PQ_TARGET_ORIGIN, PQ_SOURCE, PQ_SENDER_ORIGIN, PQ_N };
 
 /* §9.4.4 step 7.1: the origin check happens IN THE TASK, not at the call — the target may have navigated
    between the post and the delivery, and the standard checks the origin it has THEN. `want` is the serialized
@@ -73,9 +81,9 @@ static JSValue js_window_deliver(JSContext *ctx, JSValueConst this_val, int argc
     JSValueConst target = argc > 0 ? argv[0] : JS_UNDEFINED;   /* the target WindowProxy */
     JSValueConst entry  = argc > 1 ? argv[1] : JS_UNDEFINED;
     StructuredWithTransfer swt;
-    JSValue buf, want, data, ev, source, ports = JS_UNDEFINED;
+    JSValue buf, want, data, ev, source, sender_origin, ports = JS_UNDEFINED;
     JSContext *tctx;
-    const char *want_s = NULL;
+    const char *want_s = NULL, *from = NULL;
     size_t blen = 0;
 
     (void)this_val;
@@ -100,6 +108,10 @@ static JSValue js_window_deliver(JSContext *ctx, JSValueConst this_val, int argc
     tctx = window_proxy_realm(ctx, target);
     DCHECK(tctx != NULL, "a window message was delivered to a navigable this agent holds no realm for");
     source = JS_GetPropertyUint32(ctx, entry, PQ_SOURCE);   /* the sender's proxy, taken at the post */
+    sender_origin = JS_GetPropertyUint32(ctx, entry, PQ_SENDER_ORIGIN);
+    from = JS_ToCString(ctx, sender_origin);
+    DCHECK(from != NULL, "a queued window message carried no sender origin — §9.4.4's `origin` is the one field "
+                         "a page's check is written against");
     buf = JS_GetPropertyUint32(ctx, entry, PQ_DATA);
     swt.holders = JS_GetPropertyUint32(ctx, entry, PQ_HOLDERS);
     swt.data.buf = JS_GetArrayBuffer(ctx, &blen, buf);
@@ -112,15 +124,17 @@ static JSValue js_window_deliver(JSContext *ctx, JSValueConst this_val, int argc
     if (JS_IsException(data)) {
         JS_FreeValue(tctx, JS_GetException(tctx));
         JS_FreeValue(tctx, ports);
-        ev = message_event_new(tctx, "messageerror", JS_UNDEFINED, g_origin, source, JS_UNDEFINED);
+        ev = message_event_new(tctx, "messageerror", JS_UNDEFINED, from, source, JS_UNDEFINED);
     } else {
         /* §9.4.4 steps 7.2 and 7.3: the origin is the SENDER'S and the source is the sender's WindowProxy —
            which is what a handler's `event.origin` check is about, and the whole reason this event is worth
            anything to the solver. */
-        ev = message_event_new(tctx, "message", data, g_origin, source, ports);
+        ev = message_event_new(tctx, "message", data, from, source, ports);
         JS_FreeValue(tctx, data);
         JS_FreeValue(tctx, ports);
     }
+    JS_FreeCString(ctx, from);
+    JS_FreeValue(ctx, sender_origin);
     JS_FreeValue(ctx, source);
     if (JS_IsException(ev)) return JS_EXCEPTION;
     /* Fired at the WINDOW, which is the target proxy's active Window — the same read a flow that navigated the
@@ -131,6 +145,117 @@ static JSValue js_window_deliver(JSContext *ctx, JSValueConst this_val, int argc
         JS_FreeValue(tctx, w);
     }
     return JS_UNDEFINED;
+}
+
+/* §9.4.4 STEP 7 ACROSS INSTANCES — an EMISSION, and every part of that word is load-bearing.
+ *
+ * The bytes are already serialized and immutable, so nothing has to un-send this when the posting flow parks or
+ * is outranked, and it needs no COW capture: that is why a message crosses as an emission rather than as shared
+ * mutation. What the engine cannot do is ROUTE it — only the trusted zone knows which instance holds the target
+ * document — and what it MUST NOT do is stamp the sender's origin. `event.origin` is the check every bundle in
+ * this corpus writes; an origin the untrusted engine chose would defeat all of them, and would make the solver
+ * report cross-origin XSS that is not real and miss the ones that are. So the notice carries no origin at all
+ * and the offscreen adds the one it knows, exactly as SECURITY.md keys authorization on `sender.tab.url`.
+ *
+ * THE SENDING FLOW'S WORLD TRAVELS WITH IT, with its ancestry, because two arms of a fork post two messages
+ * belonging to two contradictory worlds — and a peer that received only the bytes would merge them into a
+ * timeline neither sender was in. The receiver seeds a delivery flow whose world is its own baseline forked
+ * against this vector.
+ *
+ * THE BYTES RIDE AS BASE64 because the notice channel is text. The codec is the ENGINE'S (JS_Base64Encode) —
+ * the one the spec already made it implement for `btoa` — rather than a second one grown here. */
+static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSValueConst entry)
+{
+    Flow *f = flow_running();
+    JSValue buf = JS_GetPropertyUint32(ctx, entry, PQ_DATA);
+    JSValue want = JS_GetPropertyUint32(ctx, entry, PQ_TARGET_ORIGIN);
+    const char *want_s = NULL;
+    uint8_t *bytes;
+    size_t blen = 0, b64_cap, n;
+    char world[512];
+    char *op, *b64;
+
+    DCHECK(f != NULL, "a cross-instance post was made outside a flow — there would be no world to carry");
+    bytes = JS_GetArrayBuffer(ctx, &blen, buf);
+    DCHECK(bytes != NULL, "a queued window message held something that is not the bytes it stored");
+    world_serialize(f->world, world, sizeof world);
+
+    b64_cap = JS_Base64EncodedSize(blen) + 1;
+    b64 = malloc(b64_cap);
+    CHECK(b64 != NULL, "window message: OOM encoding a cross-instance post — a dropped message is a delivery "
+                       "the peer never makes and a handler this solver never reaches");
+    n = JS_Base64Encode(b64, b64_cap, bytes, blen);
+    CHECK(n > 0 || blen == 0, "the base64 buffer was sized wrong for this message");
+    b64[n] = 0;
+
+    /* §9.4.4 step 7.1's origin check is the RECEIVER'S to make — it tests the target's origin at DELIVERY, and
+       the target may navigate between this call and then — so the requested target origin travels rather than
+       being resolved here. "*" is the spec's any-origin, and an absent one means the same. */
+    if (!JS_IsNull(want) && !JS_IsUndefined(want))
+        want_s = JS_ToCString(ctx, want);
+    b64_cap = strlen(world) + strlen(world_doc_name(window_proxy_doc(target))) + strlen(want_s ? want_s : "*") + n + 64;
+    op = malloc(b64_cap);
+    CHECK(op != NULL, "window message: OOM building the cross-instance post notice");
+    snprintf(op, b64_cap, "windowproxy.post\t%s\t%s\t%s\t%s",
+             world_doc_name(window_proxy_doc(target)), world, want_s ? want_s : "*", b64);
+    engine_host_notify(ctx, op);
+    free(op);
+    free(b64);
+    if (want_s) JS_FreeCString(ctx, want_s);
+    JS_FreeValue(ctx, want);
+    JS_FreeValue(ctx, buf);
+}
+
+/* THE INBOUND HALF: a message the trusted zone ROUTED here from another instance. It is the same §9.4.4 step 7
+   task the local path enqueues, built from the wire fields instead of from a call — which is the point, because
+   a delivery that took a different path would be a second implementation of the one thing this file does.
+ *
+ * THE ORIGIN IS THE HOST'S TO SUPPLY and this function takes it as an argument rather than deriving it: the
+ * engine is untrusted (SECURITY.md), so an origin it computed for a foreign message would be a forgery every
+ * `event.origin` check in every bundle would then trust.
+ *
+ * THE SOURCE IS A REMOTE PROXY for the sending document, which is what makes `event.source.postMessage(...)` —
+ * the reply half of every real messaging protocol — resolve to a route back rather than to null.
+ *
+ * THE WORLD is installed by the host BEFORE this is called: the delivery belongs to the sending flow's timeline
+ * forked against this instance's baseline, and the segment switch is the host's scheduler doing what the
+ * engine's own context switch does. */
+void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const char *sender_origin,
+                                   const char *target_origin, const uint8_t *bytes, size_t len)
+{
+    JSValue entry, buf, target, source;
+
+    DCHECK(sender_doc && *sender_doc, "a routed message named no sending document — `event.source` would have "
+                                      "nothing to name and a reply could not be routed back");
+    DCHECK(sender_origin && *sender_origin,
+           "a routed message carried no origin — only the trusted zone may stamp one, and a delivery without it "
+           "would have to invent the one field a page's check is written against");
+    target = win_proxy(ctx);
+    DCHECK(!JS_IsUndefined(target), "a message was routed to an instance whose own WindowProxy does not exist");
+
+    buf = JS_NewArrayBufferCopy(ctx, bytes, len);
+    entry = JS_IsException(buf) ? buf : JS_NewArray(ctx);
+    CHECK(!JS_IsException(entry), "window message: OOM receiving a routed message");
+    /* §7.2.5.1's proxy for the SENDER, minted remote because that document lives in the instance that sent
+       this. Its origin is the stamped one — the same value `event.origin` reports, and the value a
+       same-origin check inside the peer would be made against. */
+    source = window_proxy_new_remote(ctx, world_doc_intern(sender_doc), sender_origin, NULL,
+                                     JS_UNDEFINED, JS_NULL);
+    CHECK(!JS_IsException(source), "the sending document's WindowProxy could not be allocated");
+    JS_SetPropertyUint32(ctx, entry, PQ_DATA, buf);
+    JS_SetPropertyUint32(ctx, entry, PQ_HOLDERS, JS_UNDEFINED);   /* transfer does not cross yet */
+    JS_SetPropertyUint32(ctx, entry, PQ_TARGET_ORIGIN,
+                         (target_origin && strcmp(target_origin, "*")) ? JS_NewString(ctx, target_origin)
+                                                                       : JS_NULL);
+    JS_SetPropertyUint32(ctx, entry, PQ_SOURCE, source);
+    JS_SetPropertyUint32(ctx, entry, PQ_SENDER_ORIGIN, JS_NewString(ctx, sender_origin));
+    {
+        JSValueConst args[2];
+        args[0] = target;
+        args[1] = entry;
+        JS_EnqueueCallTask(ctx, g_deliver_fn, 2, args);
+    }
+    JS_FreeValue(ctx, entry);
 }
 
 /* §9.4.4's `postMessage(message, options)` and the legacy `postMessage(message, targetOrigin, transfer)`. */
@@ -212,23 +337,21 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     JS_SetPropertyUint32(ctx, entry, PQ_TARGET_ORIGIN, want);
     /* §9.4.4 step 7.3's source, read HERE where the caller's realm is the one running. */
     JS_SetPropertyUint32(ctx, entry, PQ_SOURCE, JS_DupValue(ctx, win_proxy(ctx)));
+    JS_SetPropertyUint32(ctx, entry, PQ_SENDER_ORIGIN, JS_NewString(ctx, g_origin ? g_origin : "null"));
     structured_with_transfer_free(ctx, &swt);
 
+    /* THE RESOLVED TARGET, not this window. A task in THIS instance can only deliver to a navigable this
+       instance holds; a proxy naming another document is ROUTED. */
+    if (window_proxy_is_remote(target)) {
+        window_message_send_remote(ctx, target, entry);
+        JS_FreeValue(ctx, entry);
+        return JS_UNDEFINED;
+    }
     /* §9.4.4 step 7: a TASK on the posted-message task source. Not a microtask — a page that posts and then
        awaits observes its own continuation first, which is the ordering the event loop's two halves exist for. */
     {
         JSValueConst args[2];
-        /* THE RESOLVED TARGET, not this window. A task in THIS instance can only deliver to a navigable this
-           instance holds; a proxy naming another document needs the message ROUTED there, which is an
-           EMISSION — the bytes are already serialized and immutable, so nothing has to un-send it when this
-           flow parks or is outranked, and it needs no COW capture. What it still needs is the host: only the
-           trusted zone knows which instance holds that document, and only it may stamp the sender's origin
-           (a forgeable event.origin would defeat every origin check in every bundle this solver reads). */
-        DCHECK(!window_proxy_is_remote(target),
-               "postMessage targets a navigable in ANOTHER WASM instance — build the outbound route: the "
-               "serialized bytes, the sender origin stamped by the trusted zone, and the SENDING FLOW'S WORLD "
-               "go to the host, which seeds a delivery flow in the peer whose world is receiver-baseline and "
-               "that vector, because two arms of a fork post two messages from two contradictory worlds");
+
         args[0] = target;
         args[1] = entry;
         JS_EnqueueCallTask(ctx, g_deliver_fn, 2, args);

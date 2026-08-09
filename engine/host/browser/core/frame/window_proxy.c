@@ -820,8 +820,7 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     if (s->req == 0) {
         char op[1024];
         Flow *f = flow_running();
-        WorldId anc[16];
-        int n_anc, k, n = 0;
+        int n;
 
         DCHECK(f != NULL, "a cross-document read was issued outside a flow — there would be nothing to suspend");
         /* (document, world+ancestry, member), and every document by NAME: a `uint32_t doc` is this instance's
@@ -832,12 +831,8 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
            truth for a flow that has never written there and a LIE for one that forked after writing. Nearest
            first, because the scan stops at the first hit and a further ancestor silently drops the nearer
            one's writes. */
-        n_anc = world_ancestry(f->world, anc, (int)(sizeof anc / sizeof anc[0]));
-        n = snprintf(op, sizeof op, "windowproxy.get\t%s\t%s:%u",
-                     world_doc_name(p->doc), world_doc_name(f->world.doc), f->world.serial);
-        for (k = 0; k < n_anc && n < (int)sizeof op; k++)
-            n += snprintf(op + n, sizeof op - (size_t)n, ",%s:%u",
-                          world_doc_name(anc[k].doc), anc[k].serial);
+        n = snprintf(op, sizeof op, "windowproxy.get\t%s\t", world_doc_name(p->doc));
+        n += world_serialize(f->world, op + n, sizeof op - (size_t)n);
         snprintf(op + n, sizeof op - (size_t)n, "\t%s", PROXY_MEMBER[magic]);
         s->req = engine_host_request(ctx, op);
         return JS_STEP_YIELD;   /* park; siblings run until the peer answers */

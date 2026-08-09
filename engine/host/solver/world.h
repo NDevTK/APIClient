@@ -103,6 +103,13 @@ WorldId world_mint_child(WorldId parent);
    world minted elsewhere has an ancestry only its own instance can answer for. */
 int world_ancestry(WorldId w, WorldId *out, int cap);
 
+/* THE WIRE FORM OF A WORLD AND ITS ANCESTRY — `doc:serial,anc:serial,...`, nearest ancestor first, exactly as
+   world_ancestry writes it. Every request or notice that crosses to another instance carries this, and it is
+   ONE function because two spellings of it would be two peers materializing different segments for the same
+   flow. Writes at most `cap` bytes including the NUL and returns the length written; a truncation is a
+   corrupted vector, so it crashes rather than sending a prefix. */
+int world_serialize(WorldId w, char *dst, size_t cap);
+
 /* THIS INSTANCE'S SEGMENT for a world minted ELSEWHERE, materialized on first use by forking the nearest
    ancestor present in `ancestry` (nearest first, as world_ancestry writes it), or empty if none is. Borrowed:
    the registry owns it until world_release. */
