@@ -34,6 +34,7 @@
 #include "quickjs.h"
 #include "core/idl_slots.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/dom/node.h"
 #include "core/dom/element.h"
 #include "core/css/css_style_declaration.h"
@@ -42,7 +43,15 @@
 /* The private key the declaration's own slots hang off — a Symbol, so a page cannot see or forge it, which is
    also the brand check every member performs. */
 static JSValue g_key;
-static JSValue g_proto;
+/* PER REALM — §3.7, and here it decides ANSWERS: a C member runs in the realm that DEFINED it. Held in
+   quickjs's per-context class-proto slot. */
+static JSClassID g_cssd_class;
+/* Declared once per AGENT (the IDL pool is sealed after agent init); installed per realm. The camel-cased
+   attributes are GENERATED from Lexbor's property registry, so their setter ids are an array indexed the same
+   way the registry is — one entry per property, declared once, installed into every realm. */
+static int g_set_css_text_id = -1, g_get_prop_id = -1, g_remove_prop_id = -1, g_get_priority_id = -1,
+           g_set_prop_id = -1, g_item_id = -1;
+static int g_camel_set_id[LXB_CSS_PROPERTY__LAST_ENTRY];
 static int g_id_gcs;   /* getComputedStyle — declared once per agent, installed on each realm's window */
 static int     g_ready;
 
@@ -584,7 +593,11 @@ static JSValue cssd_new(JSContext *ctx, JSValueConst owner, int mode)
     JSAtom k;
 
     DCHECK(g_ready, "a CSSStyleDeclaration was minted before cssom_init ran");
-    obj = JS_NewObjectProto(ctx, g_proto);
+    {
+        JSValue cssd_proto = cssom_proto(ctx);
+        obj = JS_NewObjectProto(ctx, cssd_proto);
+        JS_FreeValue(ctx, cssd_proto);
+    }
     if (JS_IsException(obj)) return obj;
     slots = idl_slots_new(ctx);
     k = JS_ValueToAtom(ctx, g_key);
@@ -656,31 +669,24 @@ void cssom_init(JSContext *ctx)
     CHECK(g_selectors != NULL && lxb_selectors_init(g_selectors) == LXB_STATUS_OK,
           "the CSS selector matcher could not be created");
     g_key = JS_NewSymbol(ctx, "cssStyleDeclaration", false);
-    g_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_key) && !JS_IsException(g_proto),
-          "the CSSStyleDeclaration key or prototype allocation failed");
-    idl_interface_tag(ctx, g_proto, "CSSStyleDeclaration");
+    CHECK(!JS_IsException(g_key), "the CSSStyleDeclaration key allocation failed");
+    {
+        JSClassDef d = { "CSSStyleDeclaration" };
+        JS_NewClassID(JS_GetRuntime(ctx), &g_cssd_class);
+        JS_NewClass(JS_GetRuntime(ctx), g_cssd_class, &d);
+    }
     g_ready = 1;
-
-    JS_SetPropertyStr(ctx, g_proto, "parentRule", JS_NULL);   /* no CSSRule objects yet, and null is the answer */
-    idl_install_accessor(ctx, g_proto, "length", js_cssd_length, 0, -1);
-    idl_install_accessor(ctx, g_proto, "cssText", js_cssd_css_text, 0,
-                         idl_setter_id(ctx, IDL_DOMSTRING, false, js_cssd_set_css_text, 0));
     {
         static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
         static const IdlArgType ONE_LONG[1] = { IDL_LONG };
         static const IdlArgType THREE_STR[3] = { IDL_DOMSTRING, IDL_DOMSTRING, IDL_DOMSTRING };
-        idl_install_method(ctx, g_proto, "getPropertyValue", 1,
-                           idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 0));
-        idl_install_method(ctx, g_proto, "removeProperty", 1,
-                           idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 1));
-        idl_install_method(ctx, g_proto, "getPropertyPriority", 1,
-                           idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 2));
-        idl_install_method(ctx, g_proto, "setProperty", 2,
-                           idl_method_id(ctx, THREE_STR, 3, js_cssd_set_property, 0));
+        g_set_css_text_id = idl_setter_id(ctx, IDL_DOMSTRING, false, js_cssd_set_css_text, 0);
+        g_get_prop_id = idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 0);
+        g_remove_prop_id = idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 1);
+        g_get_priority_id = idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 2);
+        g_set_prop_id = idl_method_id(ctx, THREE_STR, 3, js_cssd_set_property, 0);
         idl_optional_from(2);   /* CSSOM §6.7: `setProperty(property, value, optional priority)` */
-        idl_install_method(ctx, g_proto, "item", 1,
-                           idl_method_id(ctx, ONE_LONG, 1, js_cssd_item, 0));
+        g_item_id = idl_method_id(ctx, ONE_LONG, 1, js_cssd_item, 0);
         {
             /* CSSOM §7.1: `getComputedStyle(elt, optional pseudoElt)`. DECLARED HERE with the rest — the
                member lives on the WINDOW, which is per realm, and the declaration is the agent's. */
@@ -689,7 +695,32 @@ void cssom_init(JSContext *ctx)
             idl_optional_from(1);
         }
     }
+    for (id = 1; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++)
+        g_camel_set_id[id] = idl_setter_id(ctx, IDL_DOMSTRING, false, js_cssd_camel_set, (int)id);
+    realm_declare_intrinsic(cssom_install_proto);
+}
 
+/* CSSOM §6.7's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. */
+void cssom_install_proto(JSContext *ctx)
+{
+    JSValue proto, prev;
+    uintptr_t id;
+
+    DCHECK(g_ready, "a realm asked for CSSStyleDeclaration.prototype before the interface was declared");
+    prev = JS_GetClassProto(ctx, g_cssd_class);
+    DCHECK(JS_IsNull(prev), "cssom_install_proto ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+    proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(proto), "CSSStyleDeclaration.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "CSSStyleDeclaration");
+    JS_SetPropertyStr(ctx, proto, "parentRule", JS_NULL);   /* no CSSRule objects yet, and null is the answer */
+    idl_install_accessor(ctx, proto, "length", js_cssd_length, 0, -1);
+    idl_install_accessor(ctx, proto, "cssText", js_cssd_css_text, 0, g_set_css_text_id);
+    idl_install_method(ctx, proto, "getPropertyValue", 1, g_get_prop_id);
+    idl_install_method(ctx, proto, "removeProperty", 1, g_remove_prop_id);
+    idl_install_method(ctx, proto, "getPropertyPriority", 1, g_get_priority_id);
+    idl_install_method(ctx, proto, "setProperty", 2, g_set_prop_id);
+    idl_install_method(ctx, proto, "item", 1, g_item_id);
     /* THE CAMEL-CASED IDL ATTRIBUTES, generated from LEXBOR'S OWN CSS PROPERTY REGISTRY. Web IDL states them as
        "for each CSS property, a camel-cased attribute", so the registry IS the list — typing a hundred names
        here would be a second copy of it that could disagree, and inventing them would be worse. */
@@ -709,9 +740,16 @@ void cssom_init(JSContext *ctx)
         camel[j] = 0;
         /* §CSSOM's one exception: `float` is a reserved word in some bindings, so its attribute is `cssFloat`. */
         if (strcmp(camel, "float") == 0) strcpy(camel, "cssFloat");
-        idl_install_accessor(ctx, g_proto, camel, js_cssd_camel_get, (int)id,
-                             idl_setter_id(ctx, IDL_DOMSTRING, false, js_cssd_camel_set, (int)id));
+        idl_install_accessor(ctx, proto, camel, js_cssd_camel_get, (int)id, g_camel_set_id[id]);
     }
+    JS_SetClassProto(ctx, g_cssd_class, proto);
+}
+
+JSValue cssom_proto(JSContext *ctx)
+{
+    JSValue proto = JS_GetClassProto(ctx, g_cssd_class);
+    DCHECK(!JS_IsNull(proto), "CSSStyleDeclaration.prototype was asked for in a realm that never ran its install");
+    return proto;   /* OWNED */
 }
 
 void cssom_install_style_attribute(JSContext *ctx, JSValueConst proto)
@@ -723,16 +761,19 @@ void cssom_install_style_attribute(JSContext *ctx, JSValueConst proto)
 void cssom_install(JSContext *ctx, JSValueConst global)
 {
     DCHECK(g_ready, "CSSStyleDeclaration was installed before cssom_init ran");
-    node_install_interface(ctx, global, "CSSStyleDeclaration", g_proto);
+    {
+        JSValue proto = cssom_proto(ctx);
+        node_install_interface(ctx, global, "CSSStyleDeclaration", proto);
+        JS_FreeValue(ctx, proto);
+    }
     idl_install_method(ctx, global, "getComputedStyle", 1, g_id_gcs);
 }
 
 void cssom_free(JSContext *ctx)
 {
     if (!g_ready) return;
-    JS_FreeValue(ctx, g_key);
-    JS_FreeValue(ctx, g_proto);
-    g_key = g_proto = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_key);   /* the prototypes are the REALMS' — released with their contexts */
+    g_key = JS_UNDEFINED;
     if (g_selectors) { lxb_selectors_destroy(g_selectors, true); g_selectors = NULL; }
     if (g_parser) { lxb_css_parser_destroy(g_parser, true); g_parser = NULL; }
     g_ready = 0;

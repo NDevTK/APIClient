@@ -5,6 +5,10 @@
 #include "quickjs.h"
 
 void cssom_init(JSContext *ctx);
+/* CSSOM §6.7's prototype for ONE realm — declared into core/realm.h's list, run once per realm. */
+void cssom_install_proto(JSContext *ctx);
+/* PER REALM. OWNED: the caller frees. */
+JSValue cssom_proto(JSContext *ctx);
 void cssom_free(JSContext *ctx);
 /* `CSSStyleDeclaration` as a global, and `getComputedStyle` on the one the Window IDL puts it on. */
 void cssom_install(JSContext *ctx, JSValueConst global);

@@ -28,6 +28,7 @@
 #include "quickjs.h"
 #include "solver/dom_cow.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/idl_indexed.h"
 #include "core/dom/node.h"
 #include "core/dom/dom_token_list.h"
@@ -38,7 +39,13 @@ static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
    mean something different from the one-argument form, so it is declared rather than sniffed. */
 static const IdlArgType IDL_STR_BOOL[2] = { IDL_DOMSTRING, IDL_BOOLEAN };
 
-static JSValue g_proto = JS_UNDEFINED;
+/* PER REALM — §3.7 gives each its own, and here that decides ANSWERS: a C member runs in the realm that
+   DEFINED it, so one shared prototype answers every document out of whichever realm built it first. Held in
+   quickjs's per-context class-proto slot. */
+static JSClassID g_tl_class;
+/* Declared once per AGENT (the IDL pool is sealed after agent init); installed per realm. */
+static int g_set_value_id = -1, g_item_id = -1, g_contains_id = -1, g_add_id = -1, g_remove_id = -1,
+           g_toggle_id = -1, g_replace_id = -1, g_to_string_id = -1;
 static JSValue g_key = JS_UNDEFINED;      /* the [SameObject] cache slot on an element's wrapper */
 static JSValue g_owner_key = JS_UNDEFINED; /* the element a list is a view over */
 static int     g_ready;
@@ -324,7 +331,9 @@ static JSValue js_el_class_list(JSContext *ctx, JSValueConst this_val, int magic
     if (JS_GetOwnSlot(ctx, &list, this_val, k) <= 0) list = JS_UNDEFINED;
     if (!JS_IsObject(list)) {
         JS_FreeValue(ctx, list);
-        list = idl_indexed_new(ctx, g_proto, &TOKEN_LIST_INDEXED);
+        JSValue tl_proto = dom_token_list_proto(ctx);
+        list = idl_indexed_new(ctx, tl_proto, &TOKEN_LIST_INDEXED);
+        JS_FreeValue(ctx, tl_proto);
         CHECK(!JS_IsException(list), "DOMTokenList: OOM allocating a classList");
         ok = JS_ValueToAtom(ctx, g_owner_key);
         CHECK(ok != JS_ATOM_NULL, "the DOMTokenList owner key could not be reached");
@@ -338,42 +347,67 @@ static JSValue js_el_class_list(JSContext *ctx, JSValueConst this_val, int magic
 
 void dom_token_list_init(JSContext *ctx)
 {
-    DCHECK(!g_ready, "dom_token_list_init ran twice — one instance is one document");
+    JSClassDef d = { "DOMTokenList" };
+
+    DCHECK(!g_ready, "dom_token_list_init ran twice — the interface is declared once per AGENT");
     g_key = JS_NewSymbol(ctx, "classListSlot", false);
     g_owner_key = JS_NewSymbol(ctx, "tokenListOwner", false);
     CHECK(!JS_IsException(g_key) && !JS_IsException(g_owner_key),
           "the DOMTokenList slot keys could not be allocated");
-    g_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_proto), "DOMTokenList.prototype could not be allocated");
-    idl_interface_tag(ctx, g_proto, "DOMTokenList");
-    idl_install_accessor(ctx, g_proto, "length", js_tl_length, 0, -1);
-    idl_install_accessor(ctx, g_proto, "value", js_tl_value, 0,
-                         idl_setter_id(ctx, IDL_DOMSTRING, false, js_tl_set_value, 0));
-    idl_install_method(ctx, g_proto, "item", 1,
-                       idl_method_id(ctx, (const IdlArgType[]){ IDL_LONG }, 1, js_tl_item, 0));
-    idl_install_method(ctx, g_proto, "contains", 1,
-                       idl_method_id(ctx, IDL_1STR, 1, js_tl_contains, 0));
+    JS_NewClassID(JS_GetRuntime(ctx), &g_tl_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_tl_class, &d);
+    g_set_value_id = idl_setter_id(ctx, IDL_DOMSTRING, false, js_tl_set_value, 0);
+    g_item_id = idl_method_id(ctx, (const IdlArgType[]){ IDL_LONG }, 1, js_tl_item, 0);
+    g_contains_id = idl_method_id(ctx, IDL_1STR, 1, js_tl_contains, 0);
     /* `add` and `remove` are variadic (`DOMString... tokens`) in the IDL; one token is what this declares and
        converts, and a second is not silently ignored — it is not yet accepted, which the audit reports. */
-    idl_install_method(ctx, g_proto, "add", 1,
-                       idl_method_id(ctx, IDL_1STR, 1, js_tl_mutate, 0));
-    idl_install_method(ctx, g_proto, "remove", 1,
-                       idl_method_id(ctx, IDL_1STR, 1, js_tl_mutate, 1));
-    idl_install_method(ctx, g_proto, "toggle", 1,
-                       idl_method_id(ctx, IDL_STR_BOOL, 2, js_tl_mutate, 2));
+    g_add_id = idl_method_id(ctx, IDL_1STR, 1, js_tl_mutate, 0);
+    g_remove_id = idl_method_id(ctx, IDL_1STR, 1, js_tl_mutate, 1);
+    g_toggle_id = idl_method_id(ctx, IDL_STR_BOOL, 2, js_tl_mutate, 2);
     idl_optional_from(1);   /* §7.1: `toggle(token, optional force)` */
-    idl_install_method(ctx, g_proto, "replace", 2,
-                       idl_method_id(ctx, IDL_2STR, 2, js_tl_mutate, 3));
+    g_replace_id = idl_method_id(ctx, IDL_2STR, 2, js_tl_mutate, 3);
     /* §7.1's stringifier IS `value` — the same attribute under the operation's name, so it reads the same
        thing rather than formatting one. Its own body because a getter and a method have different shapes, and
        casting one to the other reads `magic` out of `argc`. */
-    idl_install_method(ctx, g_proto, "toString", 0,
-                       idl_method_id(ctx, IDL_1STR, 1, js_tl_to_string, 0));
+    g_to_string_id = idl_method_id(ctx, IDL_1STR, 1, js_tl_to_string, 0);
     idl_optional_from(0);   /* §7.1's stringifier takes NO arguments — the declared one is `value`'s */
+    g_ready = 1;
+    realm_declare_intrinsic(dom_token_list_install_proto);
+}
+
+/* §7.1's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. */
+void dom_token_list_install_proto(JSContext *ctx)
+{
+    JSValue proto, prev;
+
+    DCHECK(g_ready, "a realm asked for DOMTokenList.prototype before the interface was declared");
+    prev = JS_GetClassProto(ctx, g_tl_class);
+    DCHECK(JS_IsNull(prev), "dom_token_list_install_proto ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+    proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(proto), "DOMTokenList.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "DOMTokenList");
+    idl_install_accessor(ctx, proto, "length", js_tl_length, 0, -1);
+    idl_install_accessor(ctx, proto, "value", js_tl_value, 0, g_set_value_id);
+    idl_install_method(ctx, proto, "item", 1, g_item_id);
+    idl_install_method(ctx, proto, "contains", 1, g_contains_id);
+    idl_install_method(ctx, proto, "add", 1, g_add_id);
+    idl_install_method(ctx, proto, "remove", 1, g_remove_id);
+    idl_install_method(ctx, proto, "toggle", 1, g_toggle_id);
+    idl_install_method(ctx, proto, "replace", 2, g_replace_id);
+    idl_install_method(ctx, proto, "toString", 0, g_to_string_id);
     /* §3.7.10: an interface with an indexed getter is iterable through %Array.prototype.values%, which is why
        `for (const c of el.classList)` is ordinary code — and had nothing. */
-    idl_indexed_install_iterable(ctx, g_proto);
-    g_ready = 1;
+    idl_indexed_install_iterable(ctx, proto);
+    JS_SetClassProto(ctx, g_tl_class, proto);
+}
+
+JSValue dom_token_list_proto(JSContext *ctx)
+{
+    JSValue proto = JS_GetClassProto(ctx, g_tl_class);
+    DCHECK(!JS_IsNull(proto),
+           "DOMTokenList.prototype was asked for in a realm that never ran its install");
+    return proto;   /* OWNED */
 }
 
 void dom_token_list_install(JSContext *ctx, JSValueConst global)
@@ -381,7 +415,11 @@ void dom_token_list_install(JSContext *ctx, JSValueConst global)
     JSValue ctor;
 
     DCHECK(g_ready, "DOMTokenList was installed before its prototype was built");
-    ctor = idl_interface_object(ctx, "DOMTokenList", g_proto);
+    {
+        JSValue proto = dom_token_list_proto(ctx);
+        ctor = idl_interface_object(ctx, "DOMTokenList", proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "DOMTokenList", ctor);
 }
 
@@ -394,9 +432,8 @@ void dom_token_list_install_element(JSContext *ctx, JSValueConst element_proto)
 void dom_token_list_free(JSContext *ctx)
 {
     if (!g_ready) return;
-    JS_FreeValue(ctx, g_proto);
     JS_FreeValue(ctx, g_key);
     JS_FreeValue(ctx, g_owner_key);
-    g_proto = g_key = g_owner_key = JS_UNDEFINED;
+    g_key = g_owner_key = JS_UNDEFINED;   /* the prototypes are the REALMS' — released with their contexts */
     g_ready = 0;
 }

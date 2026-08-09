@@ -5,6 +5,10 @@
 #include "quickjs.h"
 
 void dom_token_list_init(JSContext *ctx);
+/* §7.1's prototype for ONE realm — declared into core/realm.h's list, run once per realm. */
+void dom_token_list_install_proto(JSContext *ctx);
+/* PER REALM. OWNED: the caller frees. */
+JSValue dom_token_list_proto(JSContext *ctx);
 void dom_token_list_free(JSContext *ctx);
 /* `DOMTokenList` as a global — the interface object and its prototype. */
 void dom_token_list_install(JSContext *ctx, JSValueConst global);
