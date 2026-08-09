@@ -40,6 +40,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/html/unhandled_rejection.h"
@@ -51,7 +52,9 @@ static JSValue g_list;
 static int     g_ready;
 /* PromiseRejectionEvent: its prototype, and the private Symbol its two slots live under. A page cannot forge a
    slot bag it cannot name, which is the same shape Event uses for its own. */
-static JSValue g_pre_proto = JS_UNDEFINED;
+/* PER REALM, for the reason event.c states — a C member runs in the realm that DEFINED it. Held in quickjs's
+   own per-context class-proto slot. */
+static JSClassID g_pre_class;
 static int g_id_pre_ctor;
 static JSValue g_pre_key = JS_UNDEFINED;
 static JSValue g_notify_fn = JS_UNDEFINED;   /* the internal step function each notification runs as */
@@ -135,7 +138,11 @@ static JSValue pre_new(JSContext *ctx, JSValue ev, JSValueConst promise, JSValue
     JSValue slots;
 
     if (JS_IsException(ev)) return ev;
-    JS_SetPrototype(ctx, ev, g_pre_proto);
+    {
+        JSValue pre_proto = unhandled_rejection_proto(ctx);
+        JS_SetPrototype(ctx, ev, pre_proto);
+        JS_FreeValue(ctx, pre_proto);
+    }
     slots = JS_NewObjectProto(ctx, JS_NULL);
     CHECK(!JS_IsException(slots), "PromiseRejectionEvent: OOM allocating its slots");
     JS_SetPropertyStr(ctx, slots, "promise", JS_DupValue(ctx, promise));
@@ -286,13 +293,11 @@ void unhandled_rejection_init(JSContext *ctx)
     CHECK(!JS_IsException(g_list), "the rejected-promise list could not be allocated");
     g_pre_key = JS_NewSymbol(ctx, "promiseRejectionSlots", false);
     CHECK(!JS_IsException(g_pre_key), "the PromiseRejectionEvent slot key allocation failed");
-    /* `interface PromiseRejectionEvent : Event` — a real chain, so `e instanceof Event` and every Event member
-       hold on one of these. */
-    g_pre_proto = JS_NewObjectProto(ctx, event_proto());
-    CHECK(!JS_IsException(g_pre_proto), "PromiseRejectionEvent.prototype could not be allocated");
-    idl_interface_tag(ctx, g_pre_proto, "PromiseRejectionEvent");
-    idl_install_accessor(ctx, g_pre_proto, "promise", js_pre_get, 0, -1);
-    idl_install_accessor(ctx, g_pre_proto, "reason", js_pre_get, 1, -1);
+    {
+        JSClassDef d = { "PromiseRejectionEvent" };
+        JS_NewClassID(JS_GetRuntime(ctx), &g_pre_class);
+        JS_NewClass(JS_GetRuntime(ctx), g_pre_class, &d);
+    }
     /* The notification driver is a step function nobody installs, so a page can neither see it nor replace it. */
     g_notify_fn = JS_NewCFunction2(ctx, NULL, "notifyRejected", 2, JS_CFUNC_step,
                                    JS_RegisterStepDef(JS_GetRuntime(ctx), &js_reject_notify_def));
@@ -303,6 +308,36 @@ void unhandled_rejection_init(JSContext *ctx)
        is built from that same one. */
     g_id_pre_ctor = idl_method_id_dict(ctx, PRE_CTOR_ARGS, 2, PRE_INIT,
                                        (int)(sizeof(PRE_INIT) / sizeof(PRE_INIT[0])), js_pre_ctor, 0);
+    realm_declare_intrinsic(unhandled_rejection_install_proto);
+}
+
+/* §8.1.7.2's PROTOTYPE FOR ONE REALM. `interface PromiseRejectionEvent : Event` — a real chain, so
+   `e instanceof Event` and every Event member hold on one of these, and it chains to THIS realm's
+   Event.prototype because a chain to another document's is the same defect one link up. */
+void unhandled_rejection_install_proto(JSContext *ctx)
+{
+    JSValue proto, prev, base;
+
+    DCHECK(g_ready, "a realm asked for PromiseRejectionEvent.prototype before the interface was declared");
+    prev = JS_GetClassProto(ctx, g_pre_class);
+    DCHECK(JS_IsNull(prev), "unhandled_rejection_install_proto ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+    base = event_proto(ctx);
+    proto = JS_NewObjectProto(ctx, base);
+    JS_FreeValue(ctx, base);
+    CHECK(!JS_IsException(proto), "PromiseRejectionEvent.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "PromiseRejectionEvent");
+    idl_install_accessor(ctx, proto, "promise", js_pre_get, 0, -1);
+    idl_install_accessor(ctx, proto, "reason", js_pre_get, 1, -1);
+    JS_SetClassProto(ctx, g_pre_class, proto);
+}
+
+JSValue unhandled_rejection_proto(JSContext *ctx)
+{
+    JSValue proto = JS_GetClassProto(ctx, g_pre_class);
+    DCHECK(!JS_IsNull(proto),
+           "PromiseRejectionEvent.prototype was asked for in a realm that never ran its install");
+    return proto;   /* OWNED */
 }
 
 void unhandled_rejection_install(JSContext *ctx, JSValueConst global)
@@ -312,7 +347,11 @@ void unhandled_rejection_install(JSContext *ctx, JSValueConst global)
     DCHECK(g_ready, "PromiseRejectionEvent was installed before its prototype was built");
     ctor = idl_step_constructor(ctx, "PromiseRejectionEvent", 2, g_id_pre_ctor);
     CHECK(!JS_IsException(ctor), "the PromiseRejectionEvent interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_pre_proto);
+    {
+        JSValue proto = unhandled_rejection_proto(ctx);
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "PromiseRejectionEvent", ctor);
 }
 
@@ -323,10 +362,9 @@ void unhandled_rejection_free(JSContext *ctx)
        fire the callback into a list this call is about to release. */
     JS_SetHostPromiseRejectionTracker(JS_GetRuntime(ctx), NULL, NULL);
     g_ready = 0;
-    JS_FreeValue(ctx, g_list);
-    JS_FreeValue(ctx, g_pre_proto);
+    JS_FreeValue(ctx, g_list);   /* the prototypes are the REALMS' — each is released with its context */
     JS_FreeValue(ctx, g_pre_key);
     JS_FreeValue(ctx, g_notify_fn);
-    g_list = g_pre_proto = g_pre_key = g_notify_fn = JS_UNDEFINED;
+    g_list = g_pre_key = g_notify_fn = JS_UNDEFINED;
     g_report = NULL;
 }

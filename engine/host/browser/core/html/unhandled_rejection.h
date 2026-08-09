@@ -5,6 +5,10 @@
 
 /* Install the runtime's rejection tracker and build the baseline list. */
 void unhandled_rejection_init(JSContext *ctx);
+/* §8.1.7.2's prototype for ONE realm; run beside the realm's other intrinsics, once per realm. */
+void unhandled_rejection_install_proto(JSContext *ctx);
+/* PER REALM — see event.h. OWNED: the caller frees. */
+JSValue unhandled_rejection_proto(JSContext *ctx);
 void unhandled_rejection_free(JSContext *ctx);
 /* `PromiseRejectionEvent` as a global — §8.1.7.5's own interface, chained to Event. */
 void unhandled_rejection_install(JSContext *ctx, JSValueConst global);

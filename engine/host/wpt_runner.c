@@ -52,6 +52,7 @@
 #include "core/frame/window_message.h"
 #include "core/structured_clone.h"
 #include "core/events/event_target.h"
+#include "core/realm.h"
 #include "core/dom/abort.h"
 #include "solver/concolic.h"
 #include "solver/flow.h"
@@ -891,6 +892,10 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
     /* §7.5 and §7.6 are the same codecs driven by a TransformStream, so they install AFTER §6 — the
        constructors reach it through transform_stream_op the moment a page builds one. */
     text_stream_init(ctx);
+    /* THE AGENT'S FIRST REALM IS A REALM. Every per-realm intrinsic the components above declared is built
+       here, through the same one call a child navigable's realm makes — so the first document cannot get a
+       different set from the rest, which is the whole failure mode of a hand-copied list. */
+    realm_install_intrinsics(ctx);
 }
 
 /* ONE DOCUMENT. Runs once per document INCLUDING the first, which is what makes it the one description of what
@@ -1075,6 +1080,9 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
        that defined them, so a child sharing the agent realm's would resolve every unqualified
        `addEventListener` against the PARENT's window. */
     event_target_install(ctx);
+    /* AND EVERY OTHER PER-REALM INTRINSIC, from the ONE list the components declared themselves into — so a
+       component added here is installed in every realm without anybody editing three hosts (core/realm.h). */
+    realm_install_intrinsics(ctx);
     wpt_realm_install(ctx, dom, url, origin, csp, doc_id, nav_proxy);
     /* THE CHILD'S SCRIPTS ARE THE CHILD'S, run in ITS realm — they are what make a popup a participant rather
        than an empty frame, since message-opener.html's whole body is one script that posts to its opener.
@@ -1474,6 +1482,7 @@ int main(int argc, char **argv)
     message_event_free(ctx);
     event_free(ctx);
     event_target_free(ctx);
+    realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */
     queuing_strategy_free(ctx);
     readable_stream_free(ctx);
     blob_free(ctx);

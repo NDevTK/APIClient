@@ -6,13 +6,20 @@
 #include "quickjs.h"
 
 void event_init(JSContext *ctx);
+/* §2.2's PROTOTYPE FOR ONE REALM. Run it where a realm's other intrinsics are added, exactly once per realm —
+   the agent's first realm gets it from event_init, because every prototype derived from Event chains to that
+   realm's and so it has to exist before them. */
+void event_install_proto(JSContext *ctx);
 void event_free(JSContext *ctx);
 /* `Event` as a global: the interface object, its prototype, and §2.2's phase constants. */
 void event_install(JSContext *ctx, JSValueConst global);
 
 /* `Event.prototype`, for a DERIVED interface to chain from — `interface PromiseRejectionEvent : Event` is a
    real prototype chain a page can walk, not a flag on Event. */
-JSValue event_proto(void);
+/* PER REALM — §3.7 gives each its own, and here that decides ANSWERS and not just identities: a C member runs
+   in the realm that DEFINED it, so one shared prototype answers every document out of whichever realm built it
+   first. OWNED: the caller frees. */
+JSValue event_proto(JSContext *ctx);
 /* Mint an event the ENGINE fires (`load`, `abort`, `DOMContentLoaded`). isTrusted is true for these, which is
    exactly the difference from one the page constructs. Returns a new owned Event. */
 JSValue event_new(JSContext *ctx, const char *type, bool bubbles, bool cancelable);

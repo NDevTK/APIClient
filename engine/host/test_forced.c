@@ -30,6 +30,7 @@
 #include "core/events/message_port.h"
 #include "core/frame/policy_container.h"
 #include "core/events/event_target.h"
+#include "core/realm.h"
 #include "core/fetch/response.h"
 #include "core/fetch/request.h"
 #include "core/url/url.h"
@@ -1623,6 +1624,10 @@ static void tf_agent_init(JSContext *ctx)
     element_init(ctx);
     iframe_init(ctx);
     document_init(ctx);   /* §4.8.5: the slot a child navigable lives in */
+    /* THE AGENT'S FIRST REALM IS A REALM. Every per-realm intrinsic the components above declared is built
+       here, through the same one call a child navigable's realm makes — so the first document cannot get a
+       different set from the rest, which is the whole failure mode of a hand-copied list. */
+    realm_install_intrinsics(ctx);
 }
 
 /* ONE DOCUMENT — run once per document including the first. */
@@ -1709,6 +1714,9 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
        that defined them, so a child sharing the agent realm's would resolve every unqualified
        `addEventListener` against the PARENT's window. */
     event_target_install(ctx);
+    /* AND EVERY OTHER PER-REALM INTRINSIC, from the ONE list the components declared themselves into — so a
+       component added here is installed in every realm without anybody editing three hosts (core/realm.h). */
+    realm_install_intrinsics(ctx);
     tf_realm_install(ctx, dom, url, origin, csp, doc_id, nav_proxy);
     return ctx;
 }
@@ -2207,6 +2215,7 @@ int main(void) {
     iframe_free(ctx);
     element_free(ctx);    /* the wrapper identity table and the DOM interface prototypes */
     event_target_free(ctx);
+    realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */
     message_port_free(ctx);
     message_event_free(ctx);
     event_free(ctx);

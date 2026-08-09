@@ -29,14 +29,20 @@
 #include "quickjs.h"
 #include "core/idl_slots.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/events/event.h"
 #include "core/events/message_event.h"
 #include "core/events/message_port.h"
 #include "core/frame/window_proxy.h"
 
 static JSValue g_key;        /* the private Symbol §9.4.1's own slots hang off */
-static JSValue g_proto = JS_UNDEFINED;
+/* PER REALM, for the reason event.c states: a C member runs in the realm that DEFINED it, so one shared
+   prototype answers every document out of whichever realm built it first. Held in quickjs's own per-context
+   class-proto slot. */
+static JSClassID g_me_class;
 static int     g_ready;
+/* Declared once per AGENT (the IDL pool is sealed after agent init); installed per realm. */
+static int g_init_me_id = -1;
 static int     g_ctor_stepid = -1;
 
 /* §9.4.1's own slots — the five attributes Event does not have. One record, read as an OWN slot for the reason
@@ -187,7 +193,11 @@ JSValue message_event_new(JSContext *ctx, const char *type, JSValueConst data, c
     if (JS_IsException(t)) return t;
     /* §9.4.1's events do not bubble and are not cancelable — the standard fires them with neither flag, and a
        page's `stopPropagation` on one has nothing to stop. isTrusted is TRUE: the engine fired it. */
-    ev = event_new_derived(ctx, g_proto, t, false, false, false, /*trusted*/ true);
+    {
+        JSValue proto = message_event_proto(ctx);
+        ev = event_new_derived(ctx, proto, t, false, false, false, /*trusted*/ true);
+        JS_FreeValue(ctx, proto);
+    }
     JS_FreeValue(ctx, t);
     if (JS_IsException(ev)) return ev;
     ports = ports_from_sequence(ctx, ports_in);
@@ -304,7 +314,8 @@ static JSValue js_me_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
         } else {
             /* §2.2's constructor steps, with THIS interface's prototype — the base half of the subclass. An
                event the PAGE constructs is untrusted, which is the whole point of the flag. */
-            ev = event_new_derived(ctx, g_proto, argv[0],
+            JSValue me_proto = message_event_proto(ctx);
+            ev = event_new_derived(ctx, me_proto, argv[0],
                                    idl_dict_bool(ctx, init, "bubbles"),
                                    idl_dict_bool(ctx, init, "cancelable"),
                                    idl_dict_bool(ctx, init, "composed"), /*trusted*/ false);
@@ -343,31 +354,48 @@ static const JSCFunctionListEntry js_me_proto[] = {
 
 void message_event_init(JSContext *ctx)
 {
-    DCHECK(!g_ready, "message_event_init ran twice — one instance is one document");
+    JSClassDef d = { "MessageEvent" };
+    /* `initMessageEvent(type, bubbles, cancelable, data, origin, lastEventId, source, ports)` — eight
+       arguments, seven of them optional, each converted by the declaration. */
+    static const IdlArgType INIT_ARGS[8] = {
+        IDL_DOMSTRING, IDL_BOOLEAN, IDL_BOOLEAN, IDL_ANY,
+        IDL_USVSTRING, IDL_DOMSTRING, IDL_ANY, IDL_ANY,
+    };
+
+    DCHECK(!g_ready, "message_event_init ran twice — the interface is declared once per AGENT");
     g_key = JS_NewSymbol(ctx, "messageEventSlots", false);
     CHECK(!JS_IsException(g_key), "the MessageEvent slot key allocation failed");
-    /* THE PROTOTYPE CHAIN IS THE SUBCLASSING. `MessageEvent.prototype.__proto__ === Event.prototype` is what a
-       page walks and what `instanceof Event` reads; a flat prototype would answer false for both. */
-    g_proto = JS_NewObjectProto(ctx, event_proto());
-    CHECK(!JS_IsException(g_proto), "MessageEvent.prototype could not be allocated");
-    idl_interface_tag(ctx, g_proto, "MessageEvent");
-    g_ready = 1;
-    JS_SetPropertyFunctionList(ctx, g_proto, js_me_proto,
-                               (int)(sizeof(js_me_proto) / sizeof(js_me_proto[0])));
-    {
-        /* `initMessageEvent(type, bubbles, cancelable, data, origin, lastEventId, source, ports)` — eight
-           arguments, seven of them optional, each converted by the declaration. */
-        static const IdlArgType INIT_ARGS[8] = {
-            IDL_DOMSTRING, IDL_BOOLEAN, IDL_BOOLEAN, IDL_ANY,
-            IDL_USVSTRING, IDL_DOMSTRING, IDL_ANY, IDL_ANY,
-        };
-        idl_install_method(ctx, g_proto, "initMessageEvent", 1,
-                           idl_method_id(ctx, INIT_ARGS, 8, js_me_init, 0));
-        idl_optional_from(1);
-    }
+    JS_NewClassID(JS_GetRuntime(ctx), &g_me_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_me_class, &d);
+    g_init_me_id = idl_method_id(ctx, INIT_ARGS, 8, js_me_init, 0);
+    idl_optional_from(1);
     g_ctor_stepid = idl_method_id_dict(ctx, ME_CTOR_ARGS, 2, ME_INIT,
                                        (int)(sizeof(ME_INIT) / sizeof(ME_INIT[0])), js_me_ctor, 0);
     idl_optional_from(1);   /* §9.4.1: `constructor(DOMString type, optional MessageEventInit init = {})` */
+    g_ready = 1;
+    realm_declare_intrinsic(message_event_install_proto);
+}
+
+void message_event_install_proto(JSContext *ctx)
+{
+    JSValue proto, prev, base;
+
+    DCHECK(g_ready, "a realm asked for MessageEvent.prototype before message_event_init declared it");
+    prev = JS_GetClassProto(ctx, g_me_class);
+    DCHECK(JS_IsNull(prev), "message_event_install_proto ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+    /* THE PROTOTYPE CHAIN IS THE SUBCLASSING. `MessageEvent.prototype.__proto__ === Event.prototype` is what a
+       page walks and what `instanceof Event` reads; a flat prototype would answer false for both. THIS realm's
+       Event.prototype, because a chain to another document's is the same defect one link up. */
+    base = event_proto(ctx);
+    proto = JS_NewObjectProto(ctx, base);
+    JS_FreeValue(ctx, base);
+    CHECK(!JS_IsException(proto), "MessageEvent.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "MessageEvent");
+    JS_SetPropertyFunctionList(ctx, proto, js_me_proto,
+                               (int)(sizeof(js_me_proto) / sizeof(js_me_proto[0])));
+    idl_install_method(ctx, proto, "initMessageEvent", 1, g_init_me_id);
+    JS_SetClassProto(ctx, g_me_class, proto);
 }
 
 void message_event_install(JSContext *ctx, JSValueConst global)
@@ -377,23 +405,27 @@ void message_event_install(JSContext *ctx, JSValueConst global)
     DCHECK(g_ready, "MessageEvent was installed before message_event_init built its prototype");
     ctor = idl_step_constructor(ctx, "MessageEvent", 1, g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the MessageEvent interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_proto);
+    {
+        JSValue proto = message_event_proto(ctx);
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "MessageEvent", ctor);
 }
 
-JSValue message_event_proto(void)
+JSValue message_event_proto(JSContext *ctx)
 {
-    DCHECK(g_ready, "MessageEvent.prototype was asked for before message_event_init built it");
-    return g_proto;
+    JSValue proto = JS_GetClassProto(ctx, g_me_class);
+    DCHECK(!JS_IsNull(proto),
+           "MessageEvent.prototype was asked for in a realm that never ran message_event_install_proto");
+    return proto;   /* OWNED */
 }
 
 void message_event_free(JSContext *ctx)
 {
     if (!g_ready) return;
-    JS_FreeValue(ctx, g_key);
-    JS_FreeValue(ctx, g_proto);
+    JS_FreeValue(ctx, g_key);   /* the prototypes are the REALMS' — each is released with its context */
     g_key = JS_UNDEFINED;
-    g_proto = JS_UNDEFINED;
     g_ready = 0;
-    g_ctor_stepid = -1;
+    g_ctor_stepid = g_init_me_id = -1;
 }

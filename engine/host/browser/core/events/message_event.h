@@ -10,7 +10,10 @@ void message_event_install(JSContext *ctx, JSValueConst global);
 void message_event_free(JSContext *ctx);
 
 /* `MessageEvent.prototype`, for an interface derived from THIS one to chain from. */
-JSValue message_event_proto(void);
+/* PER REALM — see event.h. OWNED: the caller frees. */
+JSValue message_event_proto(JSContext *ctx);
+/* §9.4.1's prototype for ONE realm; run beside the realm's other intrinsics, once per realm. */
+void message_event_install_proto(JSContext *ctx);
 
 /* IS THIS A MessageEvent? The brand every 9.4 algorithm that hands one on performs — a private-symbol slot, so
    a page cannot forge it. */

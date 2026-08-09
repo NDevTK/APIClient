@@ -26,6 +26,7 @@
 #include "core/idl_slots.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/events/event.h"
 #include "core/timing/timer.h"
 
@@ -33,8 +34,17 @@
    it and cannot collide with it, for the reason the platform uses internal slots. */
 static JSValue g_key;
 static int     g_ready;
-static JSValue g_proto;
+/* §3.7 GIVES EACH REALM ITS OWN Event.prototype, and here that decides ANSWERS and not just identities: a C
+   member runs in the realm that DEFINED it (js_call_c_function takes `ctx` from the function object), so one
+   prototype shared by every document answers every document's question out of whichever realm happened to
+   build it first. Held in quickjs's own per-context class-proto slot, the same mechanism EventTarget uses. */
+static JSClassID g_event_class;
 static int     g_ctor_stepid = -1;
+/* THE IDL DECLARATIONS ARE THE AGENT'S, THE INSTALLS ARE THE REALM'S. A declaration mints a pool entry and the
+   pool is SEALED after agent init, so minting one from a per-realm install would trip idl_declared_before_seal
+   on the second realm — invisible to a fixture whose realms are all built before the seal, fatal in a runner
+   that builds one later. So the ids are taken once, here, and every realm's members carry the same ones. */
+static int g_cancel_bubble_setid = -1, g_return_value_setid = -1, g_init_event_id = -1;
 
 /* §2.2's initialised-event slots. One record, so a brand check is one read. */
 static JSValue event_slots(JSContext *ctx, JSValueConst ev)
@@ -185,7 +195,10 @@ static JSValue event_make_proto(JSContext *ctx, JSValueConst proto, JSValueConst
 static JSValue event_make(JSContext *ctx, JSValueConst type, bool bubbles, bool cancelable,
                           bool composed, bool trusted)
 {
-    return event_make_proto(ctx, g_proto, type, bubbles, cancelable, composed, trusted);
+    JSValue proto = event_proto(ctx);
+    JSValue ev = event_make_proto(ctx, proto, type, bubbles, cancelable, composed, trusted);
+    JS_FreeValue(ctx, proto);
+    return ev;
 }
 
 JSValue event_new_derived(JSContext *ctx, JSValueConst proto, JSValueConst type,
@@ -410,39 +423,60 @@ static const JSCFunctionListEntry js_event_consts[] = {
 
 void event_init(JSContext *ctx)
 {
-    DCHECK(!g_ready, "event_init ran twice — one instance is one document");
+    JSClassDef d = { "Event" };
+    static const IdlArgType INIT_ARGS[3] = { IDL_DOMSTRING, IDL_ANY, IDL_ANY };
+
+    DCHECK(!g_ready, "event_init ran twice — the interface is declared once per AGENT");
     g_key = JS_NewSymbol(ctx, "eventSlots", false);
     CHECK(!JS_IsException(g_key), "the Event slot key allocation failed");
-    g_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_proto), "Event.prototype could not be allocated");
-    idl_interface_tag(ctx, g_proto, "Event");
-    g_ready = 1;
-    JS_SetPropertyFunctionList(ctx, g_proto, js_event_proto,
-                               (int)(sizeof(js_event_proto) / sizeof(js_event_proto[0])));
-    JS_SetPropertyFunctionList(ctx, g_proto, js_event_consts,
-                               (int)(sizeof(js_event_consts) / sizeof(js_event_consts[0])));
+    JS_NewClassID(JS_GetRuntime(ctx), &g_event_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_event_class, &d);
     /* cancelBubble and returnValue are the two LEGACY attributes with setters, and each setter only ever sets
        — which is the behaviour that makes them legacy and the reason they are not aliases. */
-    idl_install_accessor(ctx, g_proto, "cancelBubble", js_event_get_cancel_bubble, 0,
-                         idl_setter_id(ctx, IDL_ANY, false, js_event_set_cancel_bubble, 0));
-    idl_install_accessor(ctx, g_proto, "returnValue", js_event_get_return_value, 0,
-                         idl_setter_id(ctx, IDL_ANY, false, js_event_set_return_value, 0));
-    {
-        static const IdlArgType INIT_ARGS[3] = { IDL_DOMSTRING, IDL_ANY, IDL_ANY };
-        idl_install_method(ctx, g_proto, "initEvent", 3,
-                           idl_method_id(ctx, INIT_ARGS, 3, js_event_init_event, 0));
-        idl_optional_from(1);   /* §2.2: `initEvent(type, optional bubbles, optional cancelable)` */
-    }
+    g_cancel_bubble_setid = idl_setter_id(ctx, IDL_ANY, false, js_event_set_cancel_bubble, 0);
+    g_return_value_setid  = idl_setter_id(ctx, IDL_ANY, false, js_event_set_return_value, 0);
+    g_init_event_id = idl_method_id(ctx, INIT_ARGS, 3, js_event_init_event, 0);
+    idl_optional_from(1);   /* §2.2: `initEvent(type, optional bubbles, optional cancelable)` */
     g_ctor_stepid = idl_method_id_dict(ctx, EVENT_CTOR_ARGS, 2, EVENT_INIT,
                                       (int)(sizeof(EVENT_INIT) / sizeof(EVENT_INIT[0])),
                                       js_event_ctor, 0);
     idl_optional_from(1);   /* §2.2: `constructor(DOMString type, optional EventInit eventInitDict = {})` */
+    g_ready = 1;
+    realm_declare_intrinsic(event_install_proto);
 }
 
-JSValue event_proto(void)
+/* §2.2's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM — run where a realm's other intrinsics are added, exactly
+   once per realm. */
+void event_install_proto(JSContext *ctx)
 {
-    DCHECK(g_ready, "Event.prototype was asked for before event_init built it");
-    return g_proto;
+    JSValue proto, prev;
+
+    DCHECK(g_ready, "a realm asked for Event.prototype before event_init declared the interface");
+    prev = JS_GetClassProto(ctx, g_event_class);
+    DCHECK(JS_IsNull(prev),
+           "event_install_proto ran twice in one realm — §3.7 gives a realm ONE Event.prototype, and a second "
+           "would leave every event already chained to the first answering out of a discarded one");
+    JS_FreeValue(ctx, prev);
+    proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(proto), "Event.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "Event");
+    JS_SetPropertyFunctionList(ctx, proto, js_event_proto,
+                               (int)(sizeof(js_event_proto) / sizeof(js_event_proto[0])));
+    JS_SetPropertyFunctionList(ctx, proto, js_event_consts,
+                               (int)(sizeof(js_event_consts) / sizeof(js_event_consts[0])));
+    idl_install_accessor(ctx, proto, "cancelBubble", js_event_get_cancel_bubble, 0, g_cancel_bubble_setid);
+    idl_install_accessor(ctx, proto, "returnValue", js_event_get_return_value, 0, g_return_value_setid);
+    idl_install_method(ctx, proto, "initEvent", 3, g_init_event_id);
+    JS_SetClassProto(ctx, g_event_class, proto);   /* the realm owns it from here */
+}
+
+JSValue event_proto(JSContext *ctx)
+{
+    JSValue proto = JS_GetClassProto(ctx, g_event_class);
+    DCHECK(!JS_IsNull(proto),
+           "Event.prototype was asked for in a realm that never ran event_install_proto — a realm whose "
+           "intrinsics were not all installed answers a derived interface's chain out of another document");
+    return proto;   /* OWNED */
 }
 
 void event_install(JSContext *ctx, JSValueConst global)
@@ -454,7 +488,11 @@ void event_install(JSContext *ctx, JSValueConst global)
        before the body runs, and JS_CFUNC_step_ctor is what makes the declaration usable with `new`. */
     ctor = idl_step_constructor(ctx, "Event", 2, g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the Event interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_proto);
+    {
+        JSValue proto = event_proto(ctx);
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyFunctionList(ctx, ctor, js_event_consts,
                                (int)(sizeof(js_event_consts) / sizeof(js_event_consts[0])));
     JS_SetPropertyStr(ctx, (JSValue)global, "Event", ctor);
@@ -464,9 +502,9 @@ void event_free(JSContext *ctx)
 {
     if (!g_ready)
         return;
-    JS_FreeValue(ctx, g_key);
-    JS_FreeValue(ctx, g_proto);
-    g_key = g_proto = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_key);   /* the prototypes are the REALMS' — each is released with its context */
+    g_key = JS_UNDEFINED;
     g_ready = 0;
     g_ctor_stepid = -1;
+    g_cancel_bubble_setid = g_return_value_setid = g_init_event_id = -1;
 }

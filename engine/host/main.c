@@ -49,6 +49,7 @@
 #include "browser/core/events/message_port.h"
 #include "browser/core/structured_clone.h"
 #include "browser/core/events/event_target.h"
+#include "browser/core/realm.h"
 #include "browser/core/frame/location.h"
 #include "browser/core/frame/navigator.h"
 #include "browser/core/frame/screen.h"
@@ -136,6 +137,10 @@ static void engine_agent_init(JSContext *ctx, const char *origin)
        answer is to PARK the request on the flow's pending register and let the trusted zone fetch it. */
     { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
     timer_set_script_sink(engine_queue_script);   /* HTML 8.6: a string handler is evaluated, as a flow */
+    /* THE AGENT'S FIRST REALM IS A REALM. Every per-realm intrinsic the components above declared is built
+       here, through the same one call a child navigable's realm makes — so the first document cannot get a
+       different set from the rest, which is the whole failure mode of a hand-copied list. */
+    realm_install_intrinsics(ctx);
 }
 
 /* ONE DOCUMENT — the per-realm half, run once per document including the first. */
@@ -203,6 +208,9 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
        that defined them, so a child sharing the agent realm's would resolve every unqualified
        `addEventListener` against the PARENT's window. */
     event_target_install(ctx);
+    /* AND EVERY OTHER PER-REALM INTRINSIC, from the ONE list the components declared themselves into — so a
+       component added here is installed in every realm without anybody editing three hosts (core/realm.h). */
+    realm_install_intrinsics(ctx);
     engine_realm_install(ctx, dom, url, origin, csp, doc_id, nav_proxy);
     return ctx;
 }
@@ -378,6 +386,7 @@ QJS_EXPORT void qjs_teardown(void)
     iframe_free(g_ctx);
     element_free(g_ctx);    /* the wrapper identity table and the DOM interface prototypes */
     event_target_free(g_ctx);
+    realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */
     message_port_free(g_ctx);
     message_event_free(g_ctx);
     event_free(g_ctx);

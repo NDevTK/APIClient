@@ -23,6 +23,7 @@
 #include "core/idl_slots.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/events/event.h"
 
 /* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
