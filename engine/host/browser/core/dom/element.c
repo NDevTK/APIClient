@@ -999,6 +999,15 @@ static bool element_tree_steps_step(JSContext *ctx, void *vb)
     DCHECK(b && b->i < b->n, "the tree-steps drain was stepped past its end");
     e = &b->e[b->i];
     n = e->cursor;
+    /* §4.2.3's STEPS RUN IN THE NODE'S DOCUMENT'S REALM, not the mutating member's. Two same-origin documents
+       are ONE agent, so `frame.contentDocument.body.appendChild(subframe)` is a mutation this flow may make in
+       another document's tree — and its navigable, its <script> preparation and its custom-element upgrade all
+       belong to THAT document. The mutating ctx answered the parent's realm for every one of them. */
+    ctx = document_realm_of(n);
+    DCHECK(ctx != NULL,
+           "a tree write reached §4.2.3's steps in a document no realm was installed for — a document that can "
+           "hold a connected node is a document a flow can run steps in, so build its realm rather than "
+           "borrowing whichever one performed the write");
     if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
         lxb_dom_element_t *el = lxb_dom_interface_element(n);
         if (e->inserted) {

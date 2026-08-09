@@ -711,6 +711,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     /* THE REALM IS THE DOCUMENT FROM HERE ON — set before the early return below, because the policy was
        already built and §7.4 clones it for an about:blank child whether or not this document got an address. */
     JS_SetContextOpaque(ctx, d);
+    document_realm_set(lxb_dom_interface_document(dom), ctx);   /* and the answer the other way round */
     /* §7.2.5.1's ONE WindowProxy FOR THIS NAVIGABLE, minted WITH the realm because that is what it is one of.
        Before the early return below: a document with no address still has a navigable, and `window.closed`
        reads the navigable's state through this object. */
@@ -841,6 +842,30 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
    Document and `load` at the window long after install returns — and a held reference to either keeps the whole
    object graph alive. With no release, JS_FreeRuntime's gc_obj_list walk reported 751 surviving objects, which
    is the entire page counted one object at a time. A component that holds a reference owns releasing it. */
+/* THE (DOCUMENT -> REALM) ANSWER, WHICH §4.2.3 NEEDS AND §3.7 EXPLAINS.
+ *
+ * The insertion and removing steps belong to the node's NODE DOCUMENT, not to whoever performed the mutation:
+ * two same-origin documents are one agent (SECURITY.md's origin-keyed cluster), so `parentDoc.body` and
+ * `frame.contentDocument.body` are both writable from one flow, and an <iframe> appended into the CHILD's tree
+ * must create its navigable, prepare its scripts and upgrade its custom elements in the CHILD's realm. The
+ * mutating member's ctx is the wrong answer for exactly the case the cluster exists to allow.
+ *
+ * IT LIVES ON THE DOM DOCUMENT'S OWN `user` SLOT, which lexbor keeps for its embedder and never reads. That is
+ * O(1) with no registry to keep in step with the realms — a registry is a second list of documents, and the
+ * failure mode of one is a stale row answering for a realm that is gone. */
+void document_realm_set(lxb_dom_document_t *dom, JSContext *ctx)
+{
+    DCHECK(dom != NULL, "a realm was named for no document");
+    dom->user = ctx;
+}
+
+JSContext *document_realm_of(const lxb_dom_node_t *n)
+{
+    if (!n || !n->owner_document)
+        return NULL;
+    return (JSContext *)n->owner_document->user;
+}
+
 void document_free(JSContext *ctx)
 {
     Document *d = doc_of(ctx);
@@ -850,6 +875,8 @@ void document_free(JSContext *ctx)
     JS_FreeValue(ctx, d->win_obj);
     JS_FreeValue(ctx, d->doc_obj);
     policy_container_free(d->policy);   /* malloc'd, so the GC walk would never have named it */
+    if (d->dom)
+        document_realm_set(lxb_dom_interface_document(d->dom), NULL);
     free(d);
     JS_SetContextOpaque(ctx, NULL);
 }

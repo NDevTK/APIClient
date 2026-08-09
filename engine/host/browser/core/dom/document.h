@@ -46,6 +46,11 @@ JSValueConst document_object(JSContext *ctx);
 /* §4.4 baseURI's answer: the document's address. ONE component owns what this document's URL is — two answers
    to that question is how they drift apart. */
 const char *document_base_url(JSContext *ctx);
+
+/* §4.2.3's STEPS RUN IN THE NODE'S DOCUMENT'S REALM — see document.c. `document_realm_of` answers NULL for a
+   document no realm was ever installed for (a solver scratch parse), which is a caller's business to assert. */
+void       document_realm_set(lxb_dom_document_t *dom, JSContext *ctx);
+JSContext *document_realm_of(const lxb_dom_node_t *n);
 /* The parsed document's root node, for a component that walks the whole tree. NULL in a realm that has no
    document yet, which `window.document` is entitled to see. */
 lxb_dom_node_t *document_root_node(JSContext *ctx);
