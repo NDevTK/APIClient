@@ -201,12 +201,16 @@ static JSValue event_make(JSContext *ctx, JSValueConst type, bool bubbles, bool 
     return ev;
 }
 
-JSValue event_new_derived(JSContext *ctx, JSValueConst proto, JSValueConst type,
+JSValue event_new_derived(JSContext *ctx, JSValue proto, JSValueConst type,
                           bool bubbles, bool cancelable, bool composed, bool trusted)
 {
+    JSValue ev;
+
     DCHECK(JS_IsObject(proto), "a derived event was minted with no prototype — the base steps put the object "
                                "on the DERIVED interface's prototype, which is what makes it an instance of it");
-    return event_make_proto(ctx, proto, type, bubbles, cancelable, composed, trusted);
+    ev = event_make_proto(ctx, proto, type, bubbles, cancelable, composed, trusted);
+    JS_FreeValue(ctx, proto);   /* CONSUMED — see event.h: the caller's `<Interface>_proto(ctx)` returns owned */
+    return ev;
 }
 
 JSValue event_new(JSContext *ctx, const char *type, bool bubbles, bool cancelable)

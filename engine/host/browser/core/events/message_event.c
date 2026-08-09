@@ -81,7 +81,7 @@ static int message_source_ok(JSContext *ctx, JSValueConst v)
 {
     if (JS_IsNull(v) || JS_IsUndefined(v))
         return 1;
-    if (message_port_is(v) || window_proxy_is(v))
+    if (message_port_is(v) || window_proxy_is_window(ctx, v))
         return 1;
     /* A ServiceWorker is the union's remaining arm and does not exist yet, so a value that is neither a port
        nor a WindowProxy matches no arm — which is the TypeError Web IDL raises for exactly that, not a rule
@@ -193,11 +193,7 @@ JSValue message_event_new(JSContext *ctx, const char *type, JSValueConst data, c
     if (JS_IsException(t)) return t;
     /* §9.4.1's events do not bubble and are not cancelable — the standard fires them with neither flag, and a
        page's `stopPropagation` on one has nothing to stop. isTrusted is TRUE: the engine fired it. */
-    {
-        JSValue proto = message_event_proto(ctx);
-        ev = event_new_derived(ctx, proto, t, false, false, false, /*trusted*/ true);
-        JS_FreeValue(ctx, proto);
-    }
+    ev = event_new_derived(ctx, message_event_proto(ctx), t, false, false, false, /*trusted*/ true);
     JS_FreeValue(ctx, t);
     if (JS_IsException(ev)) return ev;
     ports = ports_from_sequence(ctx, ports_in);
@@ -314,8 +310,7 @@ static JSValue js_me_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
         } else {
             /* §2.2's constructor steps, with THIS interface's prototype — the base half of the subclass. An
                event the PAGE constructs is untrusted, which is the whole point of the flag. */
-            JSValue me_proto = message_event_proto(ctx);
-            ev = event_new_derived(ctx, me_proto, argv[0],
+            ev = event_new_derived(ctx, message_event_proto(ctx), argv[0],
                                    idl_dict_bool(ctx, init, "bubbles"),
                                    idl_dict_bool(ctx, init, "cancelable"),
                                    idl_dict_bool(ctx, init, "composed"), /*trusted*/ false);

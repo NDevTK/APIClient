@@ -70,8 +70,19 @@ void window_proxy_install_proto(JSContext *ctx);
 bool window_proxy_closed(JSContext *ctx, JSValueConst proxy);
 void window_proxy_set_closed(JSContext *ctx, JSValueConst proxy);
 
-/* IS THIS A WindowProxy? MessageEvent's `source` union names one, and §9.4.4's post takes one as its target. */
+/* IS THIS ONE OF THE PROXY OBJECTS THIS COMPONENT MINTS? An implementation question, asked of values this
+   component holds and about to read ProxyData out of. It is NOT the Web IDL type test — see below. */
 bool window_proxy_is(JSValueConst v);
+
+/* THE Web IDL TYPE `WindowProxy`, which is a different question and had only one answer for both. A page's own
+   `window` is a WindowProxy — §7.2.5 says `window`, `self` and `frames` all return one — but in this engine
+   that object is the realm's GLOBAL, because a navigable's proxy answering for ITSELF would make
+   `window === window.parent` false at top level and `frame.contentWindow.parent === window` false (win_or_proxy
+   states that mapping once, and this is the same mapping asked as a type test). So the class brand alone
+   rejected the one WindowProxy every page actually holds: `new MessageEvent('m', {source: window})` threw a
+   TypeError saying `window` was not a WindowProxy. Takes ctx because "is it a window" and "is it THIS realm's
+   window" are the same question here. */
+bool window_proxy_is_window(JSContext *ctx, JSValueConst v);
 
 /* IS THE NAVIGABLE'S ACTIVE DOCUMENT IN ANOTHER INSTANCE? Asked of the world registry as "does this agent hold
    that document's realm" — never as "is it the document I am", which answers `true` for a same-origin sibling

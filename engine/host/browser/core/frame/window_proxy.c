@@ -159,6 +159,21 @@ bool window_proxy_is(JSValueConst v)
     return g_proxy_class != 0 && JS_GetOpaque(v, g_proxy_class) != NULL;
 }
 
+bool window_proxy_is_window(JSContext *ctx, JSValueConst v)
+{
+    JSValue g;
+    bool same;
+
+    if (window_proxy_is(v))
+        return true;
+    /* THE ASKING REALM STANDS FOR ITSELF AS ITS GLOBAL — win_or_proxy's mapping, asked as a type test rather
+       than performed as a substitution. Same object, same rule, one place it is decided. */
+    g = JS_GetGlobalObject(ctx);
+    same = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(v);
+    JS_FreeValue(ctx, g);
+    return same;
+}
+
 /* Every string this proxy has ever held, so a delta that still names an older one resumes onto live memory.
    A list rather than a single slot for the reason the accessor's comment gives. */
 typedef struct OwnedStr { char *s; struct OwnedStr *next; } OwnedStr;

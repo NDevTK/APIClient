@@ -34,7 +34,14 @@ JSValue event_new_untrusted(JSContext *ctx, const char *type, bool bubbles, bool
    and let a page assign to `defaultPrevented`.
    `type` is a VALUE, not a C string, because a derived constructor's `type` arrives already converted by the
    IDL declaration and re-stringifying it would run the page's toString a second time. */
-JSValue event_new_derived(JSContext *ctx, JSValueConst proto, JSValueConst type,
+/* `proto` is CONSUMED — quickjs's own convention for an owned argument (a plain JSValue where a borrowed one
+   is JSValueConst), and it is consumed rather than borrowed because every caller gets it from a
+   `<Interface>_proto(ctx)` that returns an OWNED reference. Borrowing left the release to each call site, and
+   the site that matters most — the PAGE-facing constructor — forgot it: one `new MessageEvent('x')` leaked a
+   reference to MessageEvent.prototype, which roots its realm, so the entire context and every object in it
+   survived teardown and the runtime's leak walk reported 1597 anonymous Functions with no hint of the owner.
+   Taking ownership here deletes the obligation instead of restating it at each caller. */
+JSValue event_new_derived(JSContext *ctx, JSValue proto, JSValueConst type,
                           bool bubbles, bool cancelable, bool composed, bool trusted);
 
 /* §2.2's initialise-an-existing-event steps — what `initEvent` performs, and what a derived interface's legacy
