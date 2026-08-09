@@ -42,6 +42,7 @@
 #include "solver/decide.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
+#include "core/realm.h"
 #include "core/dom/abort.h"
 
 /* The private key the signal's internal slots hang off — a Symbol, so a page enumerating its own objects
@@ -55,19 +56,25 @@ static int g_ready;
    reaches, and what `Object.getOwnPropertyNames(signal)` correctly reports as EMPTY. Building the members onto
    each instance instead left the interface object with no `.prototype` at all, so `instanceof` threw
    "operand 'prototype' property is not an object" — the page could not even ASK what a signal was. */
-static JSValue g_sig_proto, g_ctrl_proto;
+/* PER REALM — §3.7, and here it decides ANSWERS: a C member runs in the realm that DEFINED it. Held in
+   quickjs's per-context class-proto slots. */
+static JSClassID g_sig_class, g_ctrl_class;
 /* The id JS_RegisterStepDef handed this runtime for AbortSignal.timeout's machine. One WASM instance is one
    document is one runtime, which is what the install DCHECK holds it to. */
 static int g_timeout_stepid = -1;
 static JSRuntime *g_abort_rt;
+
+/* The agent's registrations — the step ids, the two class ids, and the realm-registry declaration. They belong
+   to abort_init because the DECLARATION has to happen before the agent's own first realm runs the list. */
+static void abort_build_agent(JSContext *ctx);
 
 void abort_init(JSContext *ctx)
 {
     DCHECK(!g_ready, "abort_init ran twice — one instance is one document");
     g_key = JS_NewSymbol(ctx, "abortState", false);
     CHECK(!JS_IsException(g_key), "the AbortSignal slot key allocation failed");
-    g_sig_proto = g_ctrl_proto = JS_UNDEFINED;
     g_ready = 1;
+    abort_build_agent(ctx);
 }
 
 void abort_free(JSContext *ctx)
@@ -75,9 +82,7 @@ void abort_free(JSContext *ctx)
     if (!g_ready)
         return;
     JS_FreeValue(ctx, g_key);
-    JS_FreeValue(ctx, g_sig_proto);
-    JS_FreeValue(ctx, g_ctrl_proto);
-    g_key = g_sig_proto = g_ctrl_proto = JS_UNDEFINED;
+    g_key = JS_UNDEFINED;   /* the prototypes are the REALMS' — released with their contexts */
     g_ready = 0;
 }
 
@@ -187,10 +192,14 @@ static JSValue signal_new(JSContext *ctx, JSValue aborted, JSValue reason)
     JSValue sig, st;
     JSAtom k;
 
-    DCHECK(JS_IsObject(g_sig_proto),
+    DCHECK(1,
            "an AbortSignal was minted before abort_install built AbortSignal.prototype — the members live "
            "there, so a signal made earlier would have none of them");
-    sig = JS_NewObjectProto(ctx, g_sig_proto);
+    {
+        JSValue sp = abort_signal_proto(ctx);
+        sig = JS_NewObjectProto(ctx, sp);
+        JS_FreeValue(ctx, sp);
+    }
     CHECK(!JS_IsException(sig), "the AbortSignal allocation failed");
     st = idl_slots_new(ctx);
     CHECK(!JS_IsException(st), "the AbortSignal slot record allocation failed");
@@ -506,8 +515,12 @@ static JSValue js_abort_controller_ctor(JSContext *ctx, JSValueConst new_target,
 
     if (JS_IsUndefined(new_target))
         return JS_ThrowTypeError(ctx, "constructor AbortController requires 'new'");
-    DCHECK(JS_IsObject(g_ctrl_proto), "an AbortController was built before its prototype existed");
-    obj = JS_NewObjectProto(ctx, g_ctrl_proto);
+    {
+        JSValue cp = JS_GetClassProto(ctx, g_ctrl_class);
+        DCHECK(!JS_IsNull(cp), "an AbortController was built in a realm with no AbortController.prototype");
+        obj = JS_NewObjectProto(ctx, cp);
+        JS_FreeValue(ctx, cp);
+    }
     if (JS_IsException(obj))
         return obj;
     sig = signal_new(ctx, JS_FALSE, JS_UNDEFINED);
@@ -597,46 +610,79 @@ static JSValue js_abort_signal_ctor(JSContext *ctx, JSValueConst new_target, int
     return JS_ThrowTypeError(ctx, "Illegal constructor");
 }
 
-/* §3.2's PROTOTYPES AND STEP IDS ARE THE AGENT'S. They were built inside abort_install, which runs once per
-   DOCUMENT — so a second same-origin realm overwrote both prototypes and every signal the first realm had
-   minted lost the object its members came from, which JS_FreeRuntime's gc_obj_list walk reported as a leak of
-   the whole graph. A step id is a runtime registration and a prototype is an object; Web IDL wants the
-   prototype per realm, and that is the next conversion — but it is one object per AGENT here, never two. */
+/* §3.2's STEP IDS AND CLASSES ARE THE AGENT'S; the PROTOTYPES are each realm's — see abort_install_protos.
+   A step id is a runtime registration and a class id is one too, so both are minted once for the whole agent;
+   the two prototype OBJECTS are Web IDL §3.7's per-realm ones, and the realm registry builds them. */
 static void abort_build_agent(JSContext *ctx)
 {
+    JSClassDef sd = { "AbortSignal" }, cd = { "AbortController" };
+
     if (g_timeout_stepid < 0) {
         g_abort_rt = JS_GetRuntime(ctx);
         g_timeout_stepid = JS_RegisterStepDef(g_abort_rt, &js_timeout_def);
         g_abort_stepid = JS_RegisterStepDef(g_abort_rt, &js_abort_def);
     }
-    if (JS_IsObject(g_sig_proto)) return;
+    if (g_sig_class) return;
+    JS_NewClassID(JS_GetRuntime(ctx), &g_sig_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_sig_class, &sd);
+    JS_NewClassID(JS_GetRuntime(ctx), &g_ctrl_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_ctrl_class, &cd);
+    realm_declare_intrinsic(abort_install_protos);
+}
+
+/* §3.2's TWO INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. */
+void abort_install_protos(JSContext *ctx)
+{
+    JSValue sig_p, ctrl_p, prev;
+
+    DCHECK(g_sig_class != 0, "a realm asked for AbortSignal.prototype before the interfaces were declared");
+    prev = JS_GetClassProto(ctx, g_sig_class);
+    DCHECK(JS_IsNull(prev), "abort_install_protos ran twice in one realm");
+    JS_FreeValue(ctx, prev);
 
     /* AbortSignal.prototype FIRST: the controller's prototype does not need it, but a signal minted by
        anything at all does, and `abort_signal_new` is reachable from §5.4 the moment this returns. */
-    g_sig_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_sig_proto), "the AbortSignal.prototype allocation failed");
+    sig_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(sig_p), "the AbortSignal.prototype allocation failed");
     /* §3.2: AbortSignal INHERITS EventTarget, so `addEventListener` and the `onabort` handler attribute are
        reached through the chain rather than copied onto each signal. */
-    event_target_chain(ctx, g_sig_proto);   /* §3.2: `AbortSignal : EventTarget` */
-    event_target_install_handlers(ctx, g_sig_proto, EH_SIGNAL);
-    JS_DefinePropertyGetSet(ctx, g_sig_proto, JS_NewAtom(ctx, "aborted"),
-                            JS_NewCFunction(ctx, js_sig_get_aborted, "get aborted", 0), JS_UNDEFINED,
-                            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
-    JS_DefinePropertyGetSet(ctx, g_sig_proto, JS_NewAtom(ctx, "reason"),
-                            JS_NewCFunction(ctx, js_sig_get_reason, "get reason", 0), JS_UNDEFINED,
-                            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
-    JS_SetPropertyStr(ctx, g_sig_proto, "throwIfAborted",
+    event_target_chain(ctx, sig_p);   /* §3.2: `AbortSignal : EventTarget` */
+    event_target_install_handlers(ctx, sig_p, EH_SIGNAL);
+    {
+        JSAtom a = JS_NewAtom(ctx, "aborted"), r = JS_NewAtom(ctx, "reason");
+        JS_DefinePropertyGetSet(ctx, sig_p, a,
+                                JS_NewCFunction(ctx, js_sig_get_aborted, "get aborted", 0), JS_UNDEFINED,
+                                JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+        JS_DefinePropertyGetSet(ctx, sig_p, r,
+                                JS_NewCFunction(ctx, js_sig_get_reason, "get reason", 0), JS_UNDEFINED,
+                                JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+        JS_FreeAtom(ctx, a);
+        JS_FreeAtom(ctx, r);
+    }
+    JS_SetPropertyStr(ctx, sig_p, "throwIfAborted",
                       JS_NewCFunction(ctx, js_sig_throw_if_aborted, "throwIfAborted", 0));
+    JS_SetClassProto(ctx, g_sig_class, sig_p);
 
-    g_ctrl_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_ctrl_proto), "the AbortController.prototype allocation failed");
-    JS_DefinePropertyGetSet(ctx, g_ctrl_proto, JS_NewAtom(ctx, "signal"),
-                            JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_ctrl_get_signal, "get signal", 0,
-                                                 JS_CFUNC_getter_magic, 0), JS_UNDEFINED,
-                            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
-    JS_SetPropertyStr(ctx, g_ctrl_proto, "abort",
+    ctrl_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(ctrl_p), "the AbortController.prototype allocation failed");
+    {
+        JSAtom a = JS_NewAtom(ctx, "signal");
+        JS_DefinePropertyGetSet(ctx, ctrl_p, a,
+                                JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_ctrl_get_signal, "get signal", 0,
+                                                     JS_CFUNC_getter_magic, 0), JS_UNDEFINED,
+                                JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+        JS_FreeAtom(ctx, a);
+    }
+    JS_SetPropertyStr(ctx, ctrl_p, "abort",
                       JS_NewCFunction2(ctx, NULL, "abort", 0, JS_CFUNC_step, g_abort_stepid));
+    JS_SetClassProto(ctx, g_ctrl_class, ctrl_p);
+}
 
+JSValue abort_signal_proto(JSContext *ctx)
+{
+    JSValue proto = JS_GetClassProto(ctx, g_sig_class);
+    DCHECK(!JS_IsNull(proto), "AbortSignal.prototype was asked for in a realm that never ran its install");
+    return proto;   /* OWNED */
 }
 
 void abort_install(JSContext *ctx, JSValueConst global)
@@ -648,11 +694,14 @@ void abort_install(JSContext *ctx, JSValueConst global)
     DCHECK(g_abort_rt == NULL || g_abort_rt == JS_GetRuntime(ctx),
            "abort was installed into a second runtime — its step id belongs to the first, and a runtime is an "
            "AGENT");
-    abort_build_agent(ctx);
 
-    ctrl = JS_NewCFunction2(ctx, js_abort_controller_ctor, "AbortController", 0, JS_CFUNC_constructor, 0);
+    ctrl =JS_NewCFunction2(ctx, js_abort_controller_ctor, "AbortController", 0, JS_CFUNC_constructor, 0);
     CHECK(!JS_IsException(ctrl), "the AbortController constructor allocation failed");
-    JS_SetConstructor(ctx, ctrl, g_ctrl_proto);   /* .prototype and .constructor, both directions */
+    {
+        JSValue cp = JS_GetClassProto(ctx, g_ctrl_class);
+        JS_SetConstructor(ctx, ctrl, cp);   /* .prototype and .constructor, both directions */
+        JS_FreeValue(ctx, cp);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "AbortController", ctrl);
 
     sigctor = JS_NewCFunction2(ctx, js_abort_signal_ctor, "AbortSignal", 0, JS_CFUNC_constructor, 0);
@@ -661,6 +710,10 @@ void abort_install(JSContext *ctx, JSValueConst global)
                       JS_NewCFunction(ctx, js_sig_static_abort, "abort", 0));
     JS_SetPropertyStr(ctx, sigctor, "timeout",
                       JS_NewCFunction2(ctx, NULL, "timeout", 1, JS_CFUNC_step, g_timeout_stepid));
-    JS_SetConstructor(ctx, sigctor, g_sig_proto);
+    {
+        JSValue sp = abort_signal_proto(ctx);
+        JS_SetConstructor(ctx, sigctor, sp);
+        JS_FreeValue(ctx, sp);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "AbortSignal", sigctor);
 }

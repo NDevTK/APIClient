@@ -6,6 +6,8 @@
 #include "quickjs.h"
 
 void message_port_init(JSContext *ctx);
+/* §9.4.2/§9.4.3's two interface prototype objects for ONE realm — declared into core/realm.h's list. */
+void message_port_install_protos(JSContext *ctx);
 void message_port_install(JSContext *ctx, JSValueConst global);
 void message_port_free(JSContext *ctx);
 

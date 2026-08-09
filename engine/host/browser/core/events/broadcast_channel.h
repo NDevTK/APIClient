@@ -6,6 +6,8 @@
 /* `origin` is this document's serialized origin — the value every broadcast carries as `event.origin`, and
    half of what §9.5's destination match is over (the other half being the channel name). */
 void broadcast_channel_init(JSContext *ctx, const char *origin);
+/* §9.5's interface prototype object for ONE realm — declared into core/realm.h's list by the init above. */
+void broadcast_channel_install_proto(JSContext *ctx);
 void broadcast_channel_install(JSContext *ctx, JSValueConst global);
 void broadcast_channel_free(JSContext *ctx);
 

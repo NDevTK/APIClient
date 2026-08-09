@@ -10,7 +10,6 @@ void event_target_init(JSContext *ctx);                          /* the private 
    beside JS_AddIntrinsicDOMException — and exactly once per realm. The agent's first realm gets it from
    event_target_init, because every agent-scoped prototype in this engine chains to that realm's and so it has
    to exist before them; a child navigable's realm gets it from its host's realm builder. */
-void event_target_install(JSContext *ctx);
 /* Release that key. A component that mints a RUNTIME-LIFETIME value owns it, and this one did not free its
    Symbol — so every instance leaked it. It was invisible while only the ABI entry installed listeners, because
    nothing there runs the leak check; the moment the fixture harness installed the same components it ships

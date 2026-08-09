@@ -27,6 +27,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/structured_clone.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
@@ -47,11 +48,11 @@ typedef struct {
 } ChanData;
 
 static JSClassID g_chan_class;
-static JSValue   g_chan_proto = JS_UNDEFINED;
 static JSValue   g_registry = JS_UNDEFINED;   /* the open channels, in creation order — see the file comment */
 static JSValue   g_deliver_fn = JS_UNDEFINED;
 static JSRuntime *g_bc_rt;
 static int       g_ctor_stepid = -1;
+static int       g_id_post = -1, g_id_close = -1;   /* the agent's pool entries; the objects are each realm's */
 static char     *g_origin;
 
 /* NO OWNED JSValues: the name is an atom, which is not a GC object, and it is written once at construction and
@@ -201,7 +202,12 @@ static int js_bc_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
        here is already a string however the page spelled it. */
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "BroadcastChannel requires a name"), -1;
-    obj = JS_NewObjectProtoClass(ctx, g_chan_proto, g_chan_class);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_chan_class);
+        DCHECK(!JS_IsNull(proto), "a BroadcastChannel was constructed in a realm that never ran its install");
+        obj = JS_NewObjectProtoClass(ctx, proto, g_chan_class);
+        JS_FreeValue(ctx, proto);
+    }
     if (JS_IsException(obj)) return -1;
     c = calloc(1, sizeof *c);
     CHECK(c != NULL, "broadcast channel: OOM building a BroadcastChannel");
@@ -254,20 +260,37 @@ void broadcast_channel_init(JSContext *ctx, const char *origin)
     g_deliver_fn = JS_NewCFunction(ctx, js_chan_deliver, "", 2);
     CHECK(JS_IsFunction(ctx, g_deliver_fn), "the broadcast delivery task's callee could not be allocated");
 
-    g_chan_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_chan_proto), "BroadcastChannel.prototype could not be allocated");
-    idl_interface_tag(ctx, g_chan_proto, "BroadcastChannel");
-    /* §9.5: `interface BroadcastChannel : EventTarget`, with the same two handler attributes a port has. */
-    event_target_chain(ctx, g_chan_proto);   /* §9.5: `BroadcastChannel : EventTarget` */
-    event_target_install_handlers(ctx, g_chan_proto, EH_PORT);
-    idl_install_accessor(ctx, g_chan_proto, "name", js_chan_name, 0, -1);
     {
         static const IdlArgType POST_ARGS[1] = { IDL_ANY };
-        idl_install_method(ctx, g_chan_proto, "postMessage", 1,
-                           idl_method_id(ctx, POST_ARGS, 1, js_chan_post, 0));
-        idl_install_method(ctx, g_chan_proto, "close", 0, idl_method_id(ctx, NULL, 0, js_chan_close, 0));
+        g_id_post  = idl_method_id(ctx, POST_ARGS, 1, js_chan_post, 0);
+        g_id_close = idl_method_id(ctx, NULL, 0, js_chan_close, 0);
     }
     g_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 1, NULL, 0, &js_bc_ctor_decl, 0);
+    realm_declare_intrinsic(broadcast_channel_install_proto);
+}
+
+/* §9.5's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM — §3.7 gives every realm its own, and here it decides the
+   ANSWER: a `postMessage` shared between documents would run with the defining realm's ctx, so every channel's
+   broadcast would carry that document's origin rather than its own. */
+void broadcast_channel_install_proto(JSContext *ctx)
+{
+    JSValue proto, prev;
+
+    DCHECK(g_chan_class != 0, "a realm asked for BroadcastChannel.prototype before the class was declared");
+    prev = JS_GetClassProto(ctx, g_chan_class);
+    DCHECK(JS_IsNull(prev), "broadcast_channel_install_proto ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+
+    proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(proto), "BroadcastChannel.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "BroadcastChannel");
+    /* §9.5: `interface BroadcastChannel : EventTarget`, with the same two handler attributes a port has. */
+    event_target_chain(ctx, proto);   /* §9.5: `BroadcastChannel : EventTarget` */
+    event_target_install_handlers(ctx, proto, EH_PORT);
+    idl_install_accessor(ctx, proto, "name", js_chan_name, 0, -1);
+    idl_install_method(ctx, proto, "postMessage", 1, g_id_post);
+    idl_install_method(ctx, proto, "close", 0, g_id_close);
+    JS_SetClassProto(ctx, g_chan_class, proto);
 }
 
 void broadcast_channel_install(JSContext *ctx, JSValueConst global)
@@ -277,7 +300,12 @@ void broadcast_channel_install(JSContext *ctx, JSValueConst global)
     DCHECK(g_ctor_stepid >= 0, "BroadcastChannel was installed before broadcast_channel_init declared it");
     ctor = idl_step_constructor(ctx, "BroadcastChannel", 1, g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the BroadcastChannel interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_chan_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_chan_class);
+        DCHECK(!JS_IsNull(proto), "BroadcastChannel was installed into a realm that never ran its proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "BroadcastChannel", ctor);
 }
 
@@ -285,9 +313,8 @@ void broadcast_channel_free(JSContext *ctx)
 {
     if (!g_bc_rt) return;
     JS_FreeValue(ctx, g_registry);
-    JS_FreeValue(ctx, g_chan_proto);
     JS_FreeValue(ctx, g_deliver_fn);
-    g_registry = g_chan_proto = g_deliver_fn = JS_UNDEFINED;
+    g_registry = g_deliver_fn = JS_UNDEFINED;   /* the prototypes are the REALMS' — released with their contexts */
     free(g_origin);
     g_origin = NULL;
     g_bc_rt = NULL;

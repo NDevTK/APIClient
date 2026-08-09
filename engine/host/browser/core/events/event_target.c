@@ -76,6 +76,7 @@ static int g_add_stepid = -1, g_remove_stepid = -1, g_dispatch_stepid = -1;
    key; the class also brands `new EventTarget()`. */
 static JSClassID g_et_class;
 static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
+static void event_target_install(JSContext *ctx);
 
 void event_target_init(JSContext *ctx)
 {
@@ -109,11 +110,12 @@ void event_target_init(JSContext *ctx)
     }
     JS_NewClassID(JS_GetRuntime(ctx), &g_et_class);
     JS_NewClass(JS_GetRuntime(ctx), g_et_class, &d);
-    /* THE AGENT'S OWN REALM IS A REALM, and it is the one every agent-scoped prototype in this engine chains to
-       (Node, AbortSignal, MessagePort, BroadcastChannel are still built once, at agent init) — so it gets its
-       EventTarget.prototype here rather than waiting for a per-document install that runs after them. A second
-       realm gets its own where every other per-realm intrinsic is added: at the realm's creation. */
-    event_target_install(ctx);
+    /* §2.7's PROTOTYPE IS A PER-REALM INTRINSIC LIKE EVERY OTHER ONE, and it goes in the same list — which is
+       why this call is FIRST: the registry installs in declaration order, and every interface that inherits
+       EventTarget chains to this realm's prototype while building its own. It was the one component whose
+       install was hand-copied into each host's realm builder, which is the exact failure core/realm.h exists
+       to end; a host cannot now forget it, because there is no line to forget. */
+    realm_declare_intrinsic(event_target_install);
 }
 
 /* §2.7's prototype FOR THIS REALM. Owned — the caller frees. */
@@ -1070,12 +1072,9 @@ static const JSTrampStepDef js_dispatch_pair_def = {
 };
 
 /* §2.7's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM — built at the end of the file because the dispatch machine
-   it installs is declared just above.
-   THIS IS THE PER-REALM INTRINSIC STEP, and a host runs it exactly where it runs quickjs's own: at the realm's
-   creation, beside JS_AddIntrinsicDOMException. The agent's first realm gets it from event_target_init, which
-   is the same call — every other agent-scoped prototype in this engine chains to that realm's, so it has to
-   exist before them. */
-void event_target_install(JSContext *ctx)
+   it installs is declared just above. It is the FIRST entry in core/realm.h's list, so every realm — the
+   agent's own included — has it before any interface that inherits EventTarget builds its prototype. */
+static void event_target_install(JSContext *ctx)
 {
     JSValue proto, prev;
 

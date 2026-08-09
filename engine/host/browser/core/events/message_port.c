@@ -28,6 +28,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/structured_clone.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
@@ -57,10 +58,14 @@ typedef struct {
 } PortData;
 
 static JSClassID g_port_class;
-static JSValue   g_port_proto = JS_UNDEFINED;
-static JSValue   g_chan_proto = JS_UNDEFINED;
+/* §9.4.3's MessageChannel HAS A CLASS ID and holds nothing in it. The class is not storage here, it is the
+   per-realm PROTOTYPE SLOT quickjs already keeps for every class — the same mechanism JS_SetClassProto gives
+   MessagePort — so the two interfaces' prototypes are found the same way rather than one of them being a
+   module static that answers every realm out of whichever built it first. */
+static JSClassID g_chan_class;
 static JSRuntime *g_mp_rt;
 static int       g_chan_ctor_stepid = -1;
+static int       g_id_post = -1, g_id_start = -1, g_id_close = -1;   /* the AGENT's pool entries */
 static JSValue   g_deliver_fn = JS_UNDEFINED;   /* the queued delivery task's callee */
 
 /* THE RECORD TIME-TRAVELS. `enabled` and the queue head are state a flow writes where no property hook can see
@@ -400,9 +405,13 @@ static const StructuredTransferable PORT_TRANSFERABLE = {
 static JSValue port_new(JSContext *ctx)
 {
 
-    JSValue obj = JS_NewObjectProtoClass(ctx, g_port_proto, g_port_class);
+    JSValue proto = JS_GetClassProto(ctx, g_port_class);
+    JSValue obj;
     PortData *d;
 
+    DCHECK(!JS_IsNull(proto), "a MessagePort was minted in a realm that never ran its install");
+    obj = JS_NewObjectProtoClass(ctx, proto, g_port_class);
+    JS_FreeValue(ctx, proto);
     if (JS_IsException(obj)) return obj;
     d = calloc(1, sizeof *d);
     CHECK(d != NULL, "message port: OOM building a MessagePort");
@@ -443,7 +452,12 @@ static int js_chan_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     JS_FreeValue(ctx, cb_result);
     if (JS_IsUndefined(hdr->this_val))
         return JS_ThrowTypeError(ctx, "constructor MessageChannel requires 'new'"), -1;
-    obj = JS_NewObjectProto(ctx, g_chan_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_chan_class);
+        DCHECK(!JS_IsNull(proto), "a MessageChannel was constructed in a realm that never ran its install");
+        obj = JS_NewObjectProtoClass(ctx, proto, g_chan_class);
+        JS_FreeValue(ctx, proto);
+    }
     if (JS_IsException(obj)) return -1;
     p1 = message_port_pair(ctx, &p2);
     if (JS_IsException(p1)) { JS_FreeValue(ctx, obj); return -1; }
@@ -464,6 +478,7 @@ static const IdlStepDecl js_chan_ctor_decl = {
 void message_port_init(JSContext *ctx)
 {
     JSClassDef pd = { "MessagePort", .finalizer = port_finalizer, .gc_mark = port_gc_mark };
+    JSClassDef cd = { "MessageChannel" };
     JSRuntime *rt = JS_GetRuntime(ctx);
 
     DCHECK(g_mp_rt == NULL || g_mp_rt == rt, "MessagePort was installed into a second runtime");
@@ -471,26 +486,18 @@ void message_port_init(JSContext *ctx)
     g_mp_rt = rt;
     JS_NewClassID(rt, &g_port_class);
     JS_NewClass(rt, g_port_class, &pd);
+    JS_NewClassID(rt, &g_chan_class);
+    JS_NewClass(rt, g_chan_class, &cd);
 
-    g_port_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_port_proto), "MessagePort.prototype could not be allocated");
-    idl_interface_tag(ctx, g_port_proto, "MessagePort");
-    /* §9.4.2: `interface MessagePort : EventTarget` — the listeners and the two handler attributes. */
-    event_target_chain(ctx, g_port_proto);   /* §9.4.2: `MessagePort : EventTarget` */
-    event_target_install_handlers(ctx, g_port_proto, EH_PORT);
     {
         static const IdlArgType POST_ARGS[2] = { IDL_ANY, IDL_ANY };
-        idl_install_method(ctx, g_port_proto, "postMessage", 1,
-                           idl_method_id(ctx, POST_ARGS, 2, js_port_post, 0));
+        g_id_post = idl_method_id(ctx, POST_ARGS, 2, js_port_post, 0);
         idl_optional_from(1);   /* `postMessage(any message, optional StructuredSerializeOptions options)` */
-        idl_install_method(ctx, g_port_proto, "start", 0, idl_method_id(ctx, NULL, 0, js_port_start, 0));
-        idl_install_method(ctx, g_port_proto, "close", 0, idl_method_id(ctx, NULL, 0, js_port_close, 0));
+        g_id_start = idl_method_id(ctx, NULL, 0, js_port_start, 0);
+        g_id_close = idl_method_id(ctx, NULL, 0, js_port_close, 0);
     }
-
-    g_chan_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_chan_proto), "MessageChannel.prototype could not be allocated");
-    idl_interface_tag(ctx, g_chan_proto, "MessageChannel");
     g_chan_ctor_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_chan_ctor_decl, 0);
+    realm_declare_intrinsic(message_port_install_protos);
 
     g_deliver_fn = JS_NewCFunction(ctx, js_port_deliver, "", 1);
     CHECK(JS_IsFunction(ctx, g_deliver_fn), "the port delivery task's callee could not be allocated");
@@ -499,27 +506,60 @@ void message_port_init(JSContext *ctx)
     structured_register_transferable(&PORT_TRANSFERABLE);
 }
 
+/* §9.4.2's AND §9.4.3's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. `postMessage` is the member that makes
+   this an answer and not an identity: a shared one would serialize and deliver under the realm that built it,
+   so a port handed to a child document would carry the parent's realm into every message it sent. */
+void message_port_install_protos(JSContext *ctx)
+{
+    JSValue port_p, chan_p, prev;
+
+    DCHECK(g_port_class != 0, "a realm asked for MessagePort.prototype before the class was declared");
+    prev = JS_GetClassProto(ctx, g_port_class);
+    DCHECK(JS_IsNull(prev), "message_port_install_protos ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+
+    port_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(port_p), "MessagePort.prototype could not be allocated");
+    idl_interface_tag(ctx, port_p, "MessagePort");
+    /* §9.4.2: `interface MessagePort : EventTarget` — the listeners and the two handler attributes. */
+    event_target_chain(ctx, port_p);   /* §9.4.2: `MessagePort : EventTarget` */
+    event_target_install_handlers(ctx, port_p, EH_PORT);
+    idl_install_method(ctx, port_p, "postMessage", 1, g_id_post);
+    idl_install_method(ctx, port_p, "start", 0, g_id_start);
+    idl_install_method(ctx, port_p, "close", 0, g_id_close);
+    JS_SetClassProto(ctx, g_port_class, port_p);
+
+    chan_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(chan_p), "MessageChannel.prototype could not be allocated");
+    idl_interface_tag(ctx, chan_p, "MessageChannel");
+    JS_SetClassProto(ctx, g_chan_class, chan_p);
+}
+
 void message_port_install(JSContext *ctx, JSValueConst global)
 {
     JSValue ctor;
 
+    JSValue port_p = JS_GetClassProto(ctx, g_port_class), chan_p = JS_GetClassProto(ctx, g_chan_class);
+
     DCHECK(g_chan_ctor_stepid >= 0, "MessageChannel was installed before message_port_init declared it");
-    ctor = idl_interface_object(ctx, "MessagePort", g_port_proto);
+    DCHECK(!JS_IsNull(port_p) && !JS_IsNull(chan_p),
+           "the messaging interfaces were installed into a realm that never ran their proto build");
+    ctor = idl_interface_object(ctx, "MessagePort", port_p);
     JS_SetPropertyStr(ctx, (JSValue)global, "MessagePort", ctor);
 
     ctor = idl_step_constructor(ctx, "MessageChannel", 0, g_chan_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the MessageChannel interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_chan_proto);
+    JS_SetConstructor(ctx, ctor, chan_p);
     JS_SetPropertyStr(ctx, (JSValue)global, "MessageChannel", ctor);
+    JS_FreeValue(ctx, port_p);
+    JS_FreeValue(ctx, chan_p);
 }
 
 void message_port_free(JSContext *ctx)
 {
     if (!g_mp_rt) return;
-    JS_FreeValue(ctx, g_port_proto);
-    JS_FreeValue(ctx, g_chan_proto);
     JS_FreeValue(ctx, g_deliver_fn);
-    g_port_proto = g_chan_proto = g_deliver_fn = JS_UNDEFINED;
+    g_deliver_fn = JS_UNDEFINED;   /* the prototypes are the REALMS' — released with their contexts */
     g_mp_rt = NULL;
     g_chan_ctor_stepid = -1;
 }

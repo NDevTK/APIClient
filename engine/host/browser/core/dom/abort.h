@@ -6,7 +6,11 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 
-void abort_init(JSContext *ctx);                                 /* the private slot key (install time) */
+void abort_init(JSContext *ctx);
+/* §3.2's two prototypes for ONE realm — declared into core/realm.h's list. */
+void abort_install_protos(JSContext *ctx);
+/* PER REALM. OWNED: the caller frees. */
+JSValue abort_signal_proto(JSContext *ctx);                                 /* the private slot key (install time) */
 void abort_install(JSContext *ctx, JSValueConst global);         /* AbortController + AbortSignal */
 void abort_free(JSContext *ctx);                                 /* release the slot key this component owns */
 
