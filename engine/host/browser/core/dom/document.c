@@ -300,6 +300,15 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
 
     (void)this_val;
     if (argc < 1) return JS_NULL;
+    /* 4.5.1 OVER AN UNKNOWN TAG NAME. Lexbor needs real bytes to create an element and the coercion below owes
+       them, so an unknown tag can only crash there — and `createElement(someParameter)` is a real pattern, and
+       an XSS-relevant one (the tag decides whether the node executes). The answer is an unknown derived from
+       the source rather than a node of a guessed name: a concrete tag would be an element the page never
+       created, and every query and every sink after it would be about the wrong node. */
+    {
+        JSValue c = concolic_builtin_hook(ctx, argv[0], "createElement");
+        if (!JS_IsUninitialized(c)) return c;
+    }
     tag = JS_ToCString(ctx, argv[0]);
     if (!tag) return JS_EXCEPTION;
     el = lxb_dom_document_create_element(lxb_dom_interface_document(doc_here(ctx)->dom),
