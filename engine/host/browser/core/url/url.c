@@ -1594,7 +1594,18 @@ static JSValue js_url_static(JSContext *ctx, JSValueConst this_val, int argc, JS
 /* THE CONSTRUCTOR IS A MACHINE because both of its arguments are USVStrings the page may compute: `new
    URL({toString(){…}})` runs that toString, and running it from C is the drive-to-completion this engine
    aborts on. The declaration converts them; §5.1's own steps are the two parses and the throw. */
-typedef struct { uint8_t stage; } JSUrlCtorState;
+/* WHERE THIS MACHINE RESTS. §5.1's constructor is three steps and NONE of them can run the page's code — the
+   declaration has already converted both arguments to USVStrings, and what is left is the API URL parser and
+   a throw. So the machine has exactly one stage and never returns to it. It carried a `stage` byte nothing
+   read: a resume point that did not exist, which is the other half of the defect a private counter has. */
+#define URL_CTOR_STAGES(X) \
+    X(URL_CTOR_PARSE = IDL_STEP_FIRST, \
+      "URL §5.1 new URL(url, base) steps 1-3 (the API URL parser over url and base, the TypeError a failure " \
+      "is, and initializing this with the result)")
+enum { URL_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const URL_CTOR_STEPS[] = { URL_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct { int unused; } JSUrlCtorState;
 
 static void js_url_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
 static void js_url_ctor_release(JSContext *ctx, void *st) { (void)ctx; (void)st; }
@@ -1609,6 +1620,7 @@ static int js_url_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 
     (void)st; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
+    DCHECK(hdr->stage == URL_CTOR_PARSE, "the URL constructor resumed at a stage §5.1 does not have");
     if (JS_IsUndefined(hdr->this_val)) {
         JS_ThrowTypeError(ctx, "constructor URL requires 'new'");
         return -1;
@@ -1678,7 +1690,8 @@ static int js_url_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 }
 
 static const IdlStepDecl js_url_ctor_decl = {
-    js_url_ctor_step, sizeof(JSUrlCtorState), js_url_ctor_visit, js_url_ctor_release
+    js_url_ctor_step, sizeof(JSUrlCtorState), js_url_ctor_visit, js_url_ctor_release,
+    "URL §5.1 new URL(url, base)", URL_CTOR_STEPS
 };
 
 /* §5.1's SETTERS. Each is the basic URL parser with a state override plus the component's own preamble, and

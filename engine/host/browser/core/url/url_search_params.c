@@ -267,13 +267,29 @@ static const IdlPairIterOps USP_PAIR_OPS = { usp_pair_count, usp_pair_at, "URLSe
  * A MACHINE, because its argument is a union whose two object arms are the page's code from end to end: the
  * sequence arm drives an ES iterator and the record arm is [[OwnPropertyKeys]] plus a descriptor and a [[Get]]
  * per key. Both cursors are Web IDL's shared ones. */
-enum { UC_START = 0, UC_ITER_ASKED, UC_SEQ_PAIR, UC_SEQ_ITEM, UC_KEY_PAIR,
-       /* the pair's two ToString conversions, which are the PAGE'S code when either half is an object with a
-          `toString` — so they are requests, not a JS_ToCString from C. Both arms converge on them. */
-       UC_PAIR_NAME_STR, UC_PAIR_VALUE_STR, UC_DONE };
+/* WHERE THIS MACHINE RESTS, AS §6.2 NUMBERS IT. The constructor is two steps and the second is "initialize
+   this with init", whose three arms are the union's — and every one of the object arms' reads is the page's
+   code, which is what the stages between them are. */
+#define UC_STAGES(X) \
+    X(UC_START = IDL_STEP_FIRST, \
+      "URL §6.2 new URLSearchParams(init) steps 1-2 (the leading `?` stripped from a string init, then " \
+      "initialize's step 3 for that arm; Web IDL §3.7.1's `new` requirement precedes them)") \
+    X(UC_ITER_ASKED, \
+      "Web IDL §3.2.25 (Get(init, @@iterator) — the read that picks the sequence arm of " \
+      "`sequence<sequence<USVString>> or record<USVString, USVString> or USVString` over the record one)") \
+    X(UC_SEQ_PAIR, "URL §6.2 initialize step 1 (the next innerSequence of the sequence arm)") \
+    X(UC_SEQ_ITEM, "URL §6.2 initialize step 1.1 (that innerSequence's items — a size other than 2 is a " \
+                   "TypeError, which is why the walk runs one step past the second)") \
+    X(UC_KEY_PAIR, "URL §6.2 initialize step 2 (the next name → value of the record arm: Web IDL §3.2.23's " \
+                   "[[OwnPropertyKeys]], descriptor and [[Get]] per key)") \
+    X(UC_PAIR_NAME_STR, "Web IDL §3.2.13 (converting the pair's NAME to a USVString — the page's `toString`)") \
+    X(UC_PAIR_VALUE_STR, "Web IDL §3.2.13 (converting the pair's VALUE to a USVString)") \
+    X(UC_DONE, "URL §6.2 initialize steps 1.2/2/3.2 (the pair is appended to this's list, or the string arm " \
+               "has been parsed)")
+enum { UC_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const UC_STEPS[] = { UC_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
-    uint8_t      stage;
     uint8_t      after_pair;    /* which arm to return to once the pair is converted */
     IterCursor   outer, inner;
     RecordCursor rec;
@@ -355,7 +371,7 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     JSValue in = cb_result;
     int r;
 
-    if (s->stage == UC_START) {
+    if (hdr->stage == UC_START) {
         if (JS_IsUndefined(hdr->this_val)) {
             JS_FreeValue(ctx, in);
             JS_ThrowTypeError(ctx, "constructor URLSearchParams requires 'new'");
@@ -371,7 +387,7 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         if (JS_IsUndefined(init)) {
             JS_FreeValue(ctx, in);
             in = JS_UNDEFINED;
-            s->stage = UC_DONE;
+            hdr->stage = UC_DONE;
         } else if (!JS_IsObject(init)) {
             /* §6.2's USVString arm. The declaration passes the init through unconverted (the union is this
                machine's to resolve), so the scalar-value replacement happens here. */
@@ -385,28 +401,28 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             if (!q) return -1;
             usp_parse(&s->list, q[0] == '?' ? q + 1 : q, q[0] == '?' ? n - 1 : n);
             JS_FreeCString(ctx, q);
-            s->stage = UC_DONE;
+            hdr->stage = UC_DONE;
         } else {
-            s->stage = UC_ITER_ASKED;
+            hdr->stage = UC_ITER_ASKED;
         }
     }
 
-    if (s->stage == UC_ITER_ASKED) {
+    if (hdr->stage == UC_ITER_ASKED) {
         JSValue itf;
         r = step_getprop_run(ctx, hdr, init, JS_WellKnownSymbolAtom(JS_WKS_ITERATOR), in, &itf,
                              out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return -1;
         in = JS_UNDEFINED;
-        s->stage = JS_IsFunction(ctx, itf) ? UC_SEQ_PAIR : UC_KEY_PAIR;
+        hdr->stage = JS_IsFunction(ctx, itf) ? UC_SEQ_PAIR : UC_KEY_PAIR;
         JS_FreeValue(ctx, itf);
     }
 
     /* ONE LOOP over the stages, because the two arms CONVERGE: both hand their pair to the same USVString
        conversion and both come back to their own next step afterwards. Written as separate loops it needed a
        goto per arm to re-enter the other's loop, which is the shape that hides a missed stage. */
-    while (s->stage != UC_DONE) {
-        switch (s->stage) {
+    while (hdr->stage != UC_DONE) {
+        switch (hdr->stage) {
         /* THE SEQUENCE ARM: `sequence<sequence<USVString>>`, nested exactly as Web IDL nests it. §6.2 makes a
            pair that does not hold exactly two items a TypeError, which is why the inner cursor runs one step
            PAST the second item rather than stopping at it. */
@@ -415,13 +431,13 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             if (r > 0) return r;
             if (r < 0) return -1;
             in = JS_UNDEFINED;
-            if (s->outer.done) { s->stage = UC_DONE; break; }
+            if (s->outer.done) { hdr->stage = UC_DONE; break; }
             iter_cursor_release(ctx, &s->inner);
             iter_cursor_init(&s->inner);
             JS_FreeValue(ctx, s->item[0]); JS_FreeValue(ctx, s->item[1]);
             s->item[0] = s->item[1] = JS_UNDEFINED;
             s->nitem = 0;
-            s->stage = UC_SEQ_ITEM;
+            hdr->stage = UC_SEQ_ITEM;
             break;
 
         case UC_SEQ_ITEM:
@@ -439,7 +455,7 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                 return -1;
             }
             s->after_pair = UC_SEQ_PAIR;
-            s->stage = UC_PAIR_NAME_STR;
+            hdr->stage = UC_PAIR_NAME_STR;
             break;
 
         /* THE RECORD ARM: `record<USVString, USVString>`, the shared cursor. */
@@ -448,20 +464,20 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             if (r > 0) return r;
             if (r < 0) return -1;
             in = JS_UNDEFINED;
-            if (s->rec.done) { s->stage = UC_DONE; break; }
+            if (s->rec.done) { hdr->stage = UC_DONE; break; }
             JS_FreeValue(ctx, s->item[0]); s->item[0] = JS_DupValue(ctx, s->rec.name);
             JS_FreeValue(ctx, s->item[1]); s->item[1] = JS_DupValue(ctx, s->rec.value);
             s->after_pair = UC_KEY_PAIR;
-            s->stage = UC_PAIR_NAME_STR;
+            hdr->stage = UC_PAIR_NAME_STR;
             break;
 
         /* §3.2.11's USVString conversion for both halves. ToString may be the page's, so each is a request;
            the scalar-value replacement is what makes an unpaired surrogate U+FFFD, and it is the whole of what
            makes the type different from a DOMString. */
         default: {
-            int which = (s->stage == UC_PAIR_NAME_STR) ? 0 : 1;
+            int which = (hdr->stage == UC_PAIR_NAME_STR) ? 0 : 1;
             JSValue str = JS_UNDEFINED;
-            DCHECK(s->stage == UC_PAIR_NAME_STR || s->stage == UC_PAIR_VALUE_STR,
+            DCHECK(hdr->stage == UC_PAIR_NAME_STR || hdr->stage == UC_PAIR_VALUE_STR,
                    "the URLSearchParams constructor was re-entered at a stage it never parks in");
             r = step_tostring_run(ctx, hdr, s->item[which], in, &str, out_cb, out_argc);
             if (r > 0) return r;
@@ -471,10 +487,10 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             if (JS_IsException(str)) return -1;
             JS_FreeValue(ctx, s->item[which]);
             s->item[which] = str;
-            if (which == 0) { s->stage = UC_PAIR_VALUE_STR; break; }
+            if (which == 0) { hdr->stage = UC_PAIR_VALUE_STR; break; }
             if (usp_take_pair(ctx, &s->list, s->item[0], s->item[1],
                               s->after_pair == UC_KEY_PAIR) < 0) return -1;
-            s->stage = s->after_pair;
+            hdr->stage = s->after_pair;
             break;
         }
         }
@@ -492,7 +508,8 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 }
 
 static const IdlStepDecl js_usp_ctor_decl = {
-    js_usp_ctor_step, sizeof(JSUspCtorState), js_usp_ctor_visit, js_usp_ctor_release
+    js_usp_ctor_step, sizeof(JSUspCtorState), js_usp_ctor_visit, js_usp_ctor_release,
+    "URL §6.2 new URLSearchParams(init)", UC_STEPS
 };
 
 /* ---- install --------------------------------------------------------------------------------------------- */
