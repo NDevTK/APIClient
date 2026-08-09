@@ -18,6 +18,7 @@
 #include "core/url/url.h"
 #include "core/url/url_search_params.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/idl_iter.h"
 
 /* A PAIR CARRIES ITS LENGTHS, because a name or a value may contain U+0000 — `?a=b%00c` is one pair whose
@@ -36,7 +37,6 @@ typedef UrlEncodedList UspList;
 typedef struct { UspList list; JSValue owner; } UspObj;
 
 static JSClassID g_usp_class;
-static JSValue   g_usp_proto = JS_UNDEFINED;
 static JSRuntime *g_usp_rt;
 static int       g_usp_ctor_stepid = -1;
 static int       g_usp_pair_handle = -1;
@@ -94,7 +94,12 @@ JSValue usp_new(JSContext *ctx, JSValueConst owner, const char *query, size_t qu
     JSValue obj;
 
     DCHECK(g_usp_class != 0, "a URLSearchParams was built before the class existed");
-    obj = JS_NewObjectProtoClass(ctx, g_usp_proto, g_usp_class);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_usp_class);
+        DCHECK(!JS_IsNull(proto), "a URLSearchParams was minted in a realm that never ran its install");
+        obj = JS_NewObjectProtoClass(ctx, proto, g_usp_class);
+        JS_FreeValue(ctx, proto);
+    }
     if (JS_IsException(obj))
         return obj;
     u = js_mallocz(ctx, sizeof(*u));
@@ -116,7 +121,10 @@ void usp_reset(JSContext *ctx, JSValueConst usp, const char *query, size_t query
 
 /* ---- §6.2's members --------------------------------------------------------------------------------------- */
 
-enum { USP_APPEND = 0, USP_DELETE, USP_GET, USP_GETALL, USP_HAS, USP_SET, USP_SORT, USP_TOSTRING };
+enum { USP_APPEND = 0, USP_DELETE, USP_GET, USP_GETALL, USP_HAS, USP_SET, USP_SORT, USP_TOSTRING,
+       USP_MEMBER_N };
+/* THE AGENT'S POOL ENTRIES, one per §6.2 operation — the OBJECTS they are installed as are each realm's. */
+static int g_usp_id[USP_MEMBER_N];
 
 static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
@@ -504,35 +512,48 @@ void usp_init(JSContext *ctx)
     g_usp_rt = rt;
     JS_NewClassID(rt, &g_usp_class);
     JS_NewClass(rt, g_usp_class, &def);
-    g_usp_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_usp_proto), "URLSearchParams.prototype could not be allocated");
-    idl_interface_tag(ctx, g_usp_proto, "URLSearchParams");
-
-    idl_install_method(ctx, g_usp_proto, "append", 2,
-                       idl_method_id(ctx, TWO_STR, 2, js_usp_member, USP_APPEND));
-    idl_install_method(ctx, g_usp_proto, "delete", 1,
-                       idl_method_id(ctx, TWO_STR, 2, js_usp_member, USP_DELETE));
+    g_usp_id[USP_APPEND]   = idl_method_id(ctx, TWO_STR, 2, js_usp_member, USP_APPEND);
+    g_usp_id[USP_DELETE]   = idl_method_id(ctx, TWO_STR, 2, js_usp_member, USP_DELETE);
     idl_optional_from(1);   /* §6.2: `delete(name, optional value)` — undefined is NOT the value "undefined" */
-    idl_install_method(ctx, g_usp_proto, "get", 1,
-                       idl_method_id(ctx, TWO_STR, 1, js_usp_member, USP_GET));
-    idl_install_method(ctx, g_usp_proto, "getAll", 1,
-                       idl_method_id(ctx, TWO_STR, 1, js_usp_member, USP_GETALL));
-    idl_install_method(ctx, g_usp_proto, "has", 1,
-                       idl_method_id(ctx, TWO_STR, 2, js_usp_member, USP_HAS));
+    g_usp_id[USP_GET]      = idl_method_id(ctx, TWO_STR, 1, js_usp_member, USP_GET);
+    g_usp_id[USP_GETALL]   = idl_method_id(ctx, TWO_STR, 1, js_usp_member, USP_GETALL);
+    g_usp_id[USP_HAS]      = idl_method_id(ctx, TWO_STR, 2, js_usp_member, USP_HAS);
     idl_optional_from(1);   /* §6.2: `has(name, optional value)` */
-    idl_install_method(ctx, g_usp_proto, "set", 2,
-                       idl_method_id(ctx, TWO_STR, 2, js_usp_member, USP_SET));
-    idl_install_method(ctx, g_usp_proto, "sort", 0,
-                       idl_method_id(ctx, TWO_STR, 0, js_usp_member, USP_SORT));
-    idl_install_method(ctx, g_usp_proto, "toString", 0,
-                       idl_method_id(ctx, TWO_STR, 0, js_usp_member, USP_TOSTRING));
-    idl_install_accessor(ctx, g_usp_proto, "size", js_usp_get_size, 0, -1);
+    g_usp_id[USP_SET]      = idl_method_id(ctx, TWO_STR, 2, js_usp_member, USP_SET);
+    g_usp_id[USP_SORT]     = idl_method_id(ctx, TWO_STR, 0, js_usp_member, USP_SORT);
+    g_usp_id[USP_TOSTRING] = idl_method_id(ctx, TWO_STR, 0, js_usp_member, USP_TOSTRING);
 
     g_usp_pair_handle = idl_pair_iter_declare(ctx, &USP_PAIR_OPS);
-    idl_pair_iter_install(ctx, g_usp_proto, g_usp_pair_handle);
 
     g_usp_ctor_stepid = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &js_usp_ctor_decl, 0);
     idl_optional_from(0);   /* §6.2: `constructor(optional init = "")` */
+    realm_declare_intrinsic(usp_install_proto);
+}
+
+/* §6.2's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. */
+void usp_install_proto(JSContext *ctx)
+{
+    JSValue proto, prev;
+
+    DCHECK(g_usp_class != 0, "a realm asked for URLSearchParams.prototype before the class was declared");
+    prev = JS_GetClassProto(ctx, g_usp_class);
+    DCHECK(JS_IsNull(prev), "usp_install_proto ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+
+    proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(proto), "URLSearchParams.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "URLSearchParams");
+    idl_install_method(ctx, proto, "append", 2, g_usp_id[USP_APPEND]);
+    idl_install_method(ctx, proto, "delete", 1, g_usp_id[USP_DELETE]);
+    idl_install_method(ctx, proto, "get", 1, g_usp_id[USP_GET]);
+    idl_install_method(ctx, proto, "getAll", 1, g_usp_id[USP_GETALL]);
+    idl_install_method(ctx, proto, "has", 1, g_usp_id[USP_HAS]);
+    idl_install_method(ctx, proto, "set", 2, g_usp_id[USP_SET]);
+    idl_install_method(ctx, proto, "sort", 0, g_usp_id[USP_SORT]);
+    idl_install_method(ctx, proto, "toString", 0, g_usp_id[USP_TOSTRING]);
+    idl_install_accessor(ctx, proto, "size", js_usp_get_size, 0, -1);
+    idl_pair_iter_install(ctx, proto, g_usp_pair_handle);
+    JS_SetClassProto(ctx, g_usp_class, proto);
 }
 
 void usp_install(JSContext *ctx, JSValueConst global)
@@ -541,7 +562,12 @@ void usp_install(JSContext *ctx, JSValueConst global)
     DCHECK(g_usp_ctor_stepid >= 0, "URLSearchParams was installed before usp_init declared its constructor");
     ctor = idl_step_constructor(ctx, "URLSearchParams", 0, g_usp_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the URLSearchParams interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_usp_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_usp_class);
+        DCHECK(!JS_IsNull(proto), "URLSearchParams was installed into a realm that never ran its proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "URLSearchParams", ctor);
 }
 
@@ -549,8 +575,7 @@ void usp_free(JSContext *ctx)
 {
     if (!g_usp_rt)
         return;
-    JS_FreeValue(ctx, g_usp_proto);
-    g_usp_proto = JS_UNDEFINED;
+    /* the prototypes are the REALMS' — released with their contexts */
     g_usp_rt = NULL;
     g_usp_ctor_stepid = -1;
 }

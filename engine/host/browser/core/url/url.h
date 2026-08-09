@@ -115,6 +115,7 @@ char *url_encoded_strdup(const char *s, size_t n);
 
 /* The `URL` interface — §5. */
 void url_init(JSContext *ctx);
+void url_install_proto(JSContext *ctx);   /* §4.4's prototype, for ONE realm */
 void url_install(JSContext *ctx, JSValueConst global);
 void url_free(JSContext *ctx);
 

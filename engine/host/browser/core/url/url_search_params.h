@@ -7,6 +7,7 @@
 #include "core/url/url.h"
 
 void usp_init(JSContext *ctx);
+void usp_install_proto(JSContext *ctx);   /* §6.2's prototype, for ONE realm */
 void usp_install(JSContext *ctx, JSValueConst global);
 void usp_free(JSContext *ctx);
 
