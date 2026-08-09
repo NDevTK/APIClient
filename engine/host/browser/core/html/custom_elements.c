@@ -30,6 +30,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/dom/node.h"
 #include "core/dom/document.h"
 #include "core/html/custom_elements.h"
@@ -43,7 +44,18 @@
    with exactly the registry it had. Null-prototyped so a name can never collide with Object.prototype, and
    never exposed to a page, so a read from C runs no page code.
    Each value is one definition object: { ctor, proto }. */
-static JSValue g_defs;
+/* §4.13.4: A REGISTRY IS PER WINDOW, AND SO IS ITS DEFINITION SET. One set for the agent meant
+   `frame.contentWindow.customElements.define('x-a', C)` defined `x-a` in the PARENT too, and the parent's
+   `customElements.get('x-a')` then handed back the child realm's constructor — a cross-realm constructor
+   handed out by a member that never crossed a boundary. */
+static int g_defs_slot = -1;
+
+/* THIS REALM'S definition set. OWNED: the caller frees. */
+static JSValue ce_defs(JSContext *ctx)
+{
+    DCHECK(g_defs_slot > 0, "a custom-element definition was reached before custom_elements_init declared the set");
+    return realm_value_get(ctx, g_defs_slot);
+}
 static int    g_ready;
 static JSAtom g_atom_prototype = JS_ATOM_NULL;
 static JSAtom g_atom_upgraded = JS_ATOM_NULL;
@@ -62,7 +74,11 @@ static JSValue ce_find(JSContext *ctx, const char *name, size_t len)
     JSValue def;
 
     CHECK(a != JS_ATOM_NULL, "custom elements: a name could not be interned");
-    def = JS_GetProperty(ctx, g_defs, a);
+    {
+        JSValue defs = ce_defs(ctx);
+        def = JS_GetProperty(ctx, defs, a);
+        JS_FreeValue(ctx, defs);
+    }
     JS_FreeAtom(ctx, a);
     return def;
 }
@@ -403,7 +419,11 @@ static JSValue ce_register(JSContext *ctx, int argc, JSValueConst *argv, JSValue
         JS_SetProperty(ctx, def, g_atom_observed, JS_DupValue(ctx, names));
         a = JS_NewAtomLen(ctx, nm, nlen);
         CHECK(a != JS_ATOM_NULL, "custom elements: a name could not be interned");
-        JS_SetProperty(ctx, g_defs, a, JS_DupValue(ctx, def));
+        {
+            JSValue defs = ce_defs(ctx);
+            JS_SetProperty(ctx, defs, a, JS_DupValue(ctx, def));
+            JS_FreeValue(ctx, defs);
+        }
         JS_FreeAtom(ctx, a);
         ce_upgrade_document(ctx, nm, nlen, def);
         JS_FreeValue(ctx, def);
@@ -498,11 +518,7 @@ void custom_elements_init(JSContext *ctx)
           g_atom_upgraded != JS_ATOM_NULL && g_atom_ctor != JS_ATOM_NULL && g_atom_proto != JS_ATOM_NULL &&
           g_atom_observed != JS_ATOM_NULL && g_atom_observed_src != JS_ATOM_NULL,
           "a custom-element atom could not be interned");
-    /* Built HERE, at init, so it belongs to the pre-boot BASELINE: a write to it during a flow is captured by
-       the heap COW. A registry allocated lazily inside a flow would be that flow's private object and every
-       sibling would see an empty one. */
-    g_defs = JS_NewObjectProto(ctx, JS_NULL);
-    CHECK(!JS_IsException(g_defs), "the custom-element definition set could not be allocated");
+    g_defs_slot = realm_value_declare(ctx, "§4.13.4 definition set");
     g_reaction_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_ce_reaction_def);
     /* The reaction driver is a step function object nobody installs, so a page can neither see it nor replace
        it — the same reason the internal event dispatcher is not on any prototype. */
@@ -526,6 +542,13 @@ void custom_elements_install(JSContext *ctx, JSValueConst global)
     JSValue reg;
 
     DCHECK(g_ready, "customElements was installed before custom_elements_init ran");
+    /* Built with the REGISTRY it belongs to, and for the agent's own realm that is still pre-boot — so a write
+       to it during a flow is captured by the heap COW rather than being that flow's private object. */
+    {
+        JSValue defs = JS_NewObjectProto(ctx, JS_NULL);
+        CHECK(!JS_IsException(defs), "the custom-element definition set could not be allocated");
+        realm_value_set(ctx, g_defs_slot, defs);
+    }
     reg = JS_NewObject(ctx);
     CHECK(!JS_IsException(reg), "the CustomElementRegistry allocation failed");
     idl_install_method(ctx, reg, "define", 2, g_id_define);
@@ -536,8 +559,7 @@ void custom_elements_install(JSContext *ctx, JSValueConst global)
 void custom_elements_free(JSContext *ctx)
 {
     if (!g_ready) return;
-    JS_FreeValue(ctx, g_defs);
-    g_defs = JS_UNDEFINED;
+    /* the definition sets are the REALMS' — released with their contexts */
     JS_FreeValue(ctx, g_reaction_fn);
     g_reaction_fn = JS_UNDEFINED;
     JS_FreeAtom(ctx, g_atom_prototype);
