@@ -697,7 +697,14 @@ static int preempt_hook(int kind) {
    the ENQUEUING flow's own queue instead of the global list, so it runs later under that flow's live COW. */
 static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueConst *argv, bool is_task) {
     Flow *f = flow_running();
-    if (!f) return 0;   /* enqueued outside a flow (baseline setup) -> let the fork use its default global list */
+    /* THERE IS NO GLOBAL DRAIN. Declining here hands the job to quickjs's global list, and nothing in this
+       engine ever runs that list — so the job is not "deferred to the default", it is DROPPED. Every task
+       source goes through here: a window message, a port delivery, a broadcast, a timer callback, a custom
+       element reaction. A dropped one is a handler the page registered and this engine never entered, which is
+       invisible from the outside and looks exactly like a page that does nothing on message. */
+    DCHECK(f != NULL, "a job was enqueued with no flow running — there is no global drain, so it would be "
+                      "dropped: seed it as a flow on the frontier instead of declining it here");
+    if (!f) return 0;
     if (f->njob >= f->jobcap) {
         f->jobcap = f->jobcap ? f->jobcap * 2 : 4;
         f->jobs = realloc(f->jobs, (size_t)f->jobcap * sizeof(FlowJob));
