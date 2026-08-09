@@ -347,30 +347,37 @@ static const JSTrampStepDef js_reqsubmit_def = {
 
 /* §3.1.1 document.forms — every form in the document, in tree order. */
 
-void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst input_proto,
-                       JSValueConst textarea_proto, JSValueConst option_proto)
+/* Declared once per AGENT, installed per realm — see hyperlink.c for why the split exists at all. */
+static int g_id_submit = -1, g_id_reqsubmit = -1, g_id_val_input = -1, g_id_val_textarea = -1,
+           g_id_val_option = -1, g_id_checked = -1;
+
+void html_form_declare(JSContext *ctx)
 {
     static const IdlArgType NONE[1] = { IDL_ANY };
-    int id;
 
-    DCHECK(JS_IsObject(form_proto), "the form members were installed with no HTMLFormElement.prototype");
-    idl_install_accessor(ctx, form_proto, "elements", js_form_elements, 0, -1);
-    idl_install_method(ctx, form_proto, "submit", 0, idl_method_id(ctx, NONE, 1, js_form_submit, 0));
+    g_id_submit = idl_method_id(ctx, NONE, 1, js_form_submit, 0);
     idl_optional_from(0);   /* 4.10.21: `submit()` takes no arguments */
     /* requestSubmit registers its own step definition rather than declaring its arguments to the args machine,
        so it installs through the installer for that kind — see idl_install_step_method. */
-    idl_install_step_method(ctx, form_proto, "requestSubmit", 0,
-                            JS_RegisterStepDef(JS_GetRuntime(ctx), &js_reqsubmit_def));
+    g_id_reqsubmit = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_reqsubmit_def);
+    g_id_val_input = idl_setter_id(ctx, IDL_DOMSTRING, false, js_ctrl_set_value, CTRL_INPUT);
+    g_id_val_textarea = idl_setter_id(ctx, IDL_DOMSTRING, false, js_ctrl_set_value, CTRL_TEXTAREA);
+    g_id_val_option = idl_setter_id(ctx, IDL_DOMSTRING, false, js_ctrl_set_value, CTRL_OPTION);
+    g_id_checked = idl_setter_id(ctx, IDL_ANY, false, js_ctrl_set_checked, 0);   /* `boolean checked` is ToBoolean */
+}
 
-    id = idl_setter_id(ctx, IDL_DOMSTRING, false, js_ctrl_set_value, CTRL_INPUT);
-    idl_install_accessor(ctx, input_proto, "value", js_ctrl_get_value, CTRL_INPUT, id);
-    id = idl_setter_id(ctx, IDL_DOMSTRING, false, js_ctrl_set_value, CTRL_TEXTAREA);
-    idl_install_accessor(ctx, textarea_proto, "value", js_ctrl_get_value, CTRL_TEXTAREA, id);
-    id = idl_setter_id(ctx, IDL_DOMSTRING, false, js_ctrl_set_value, CTRL_OPTION);
-    idl_install_accessor(ctx, option_proto, "value", js_ctrl_get_value, CTRL_OPTION, id);
-
-    id = idl_setter_id(ctx, IDL_ANY, false, js_ctrl_set_checked, 0);   /* `boolean checked` is ToBoolean */
-    idl_install_accessor(ctx, input_proto, "checked", js_ctrl_get_checked, 0, id);
+void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst input_proto,
+                       JSValueConst textarea_proto, JSValueConst option_proto)
+{
+    DCHECK(g_id_submit >= 0, "§4.10's members were installed before they were declared");
+    DCHECK(JS_IsObject(form_proto), "the form members were installed with no HTMLFormElement.prototype");
+    idl_install_accessor(ctx, form_proto, "elements", js_form_elements, 0, -1);
+    idl_install_method(ctx, form_proto, "submit", 0, g_id_submit);
+    idl_install_step_method(ctx, form_proto, "requestSubmit", 0, g_id_reqsubmit);
+    idl_install_accessor(ctx, input_proto, "value", js_ctrl_get_value, CTRL_INPUT, g_id_val_input);
+    idl_install_accessor(ctx, textarea_proto, "value", js_ctrl_get_value, CTRL_TEXTAREA, g_id_val_textarea);
+    idl_install_accessor(ctx, option_proto, "value", js_ctrl_get_value, CTRL_OPTION, g_id_val_option);
+    idl_install_accessor(ctx, input_proto, "checked", js_ctrl_get_checked, 0, g_id_checked);
 }
 
 

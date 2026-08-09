@@ -7,6 +7,8 @@
 /* Build HTMLElement.prototype on Element.prototype, then every per-tag interface on top of it. Called by
    element_init, because the HTML layer is built ON the DOM layer and there is no order in which it is not. */
 void html_element_init(JSContext *ctx);
+/* §3.2.2 and §4's prototypes for ONE realm — declared into core/realm.h's list. */
+void html_element_install_protos(JSContext *ctx);
 void html_element_free(JSContext *ctx);
 /* The interface OBJECTS as globals — `HTMLElement`, `HTMLAnchorElement`, … Separate from the prototypes because
    they need a global to hang off, which the document install has and this does not. */

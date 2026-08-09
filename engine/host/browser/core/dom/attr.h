@@ -4,6 +4,10 @@
 #include "quickjs.h"
 
 void attr_init(JSContext *ctx);
+/* §4.9's two prototypes for ONE realm — declared into core/realm.h's list. */
+void attr_install_protos(JSContext *ctx);
+/* PER REALM. OWNED: the caller frees. */
+JSValue named_node_map_proto(JSContext *ctx);
 void attr_install(JSContext *ctx, JSValueConst global);
 void attr_free(JSContext *ctx);
 /* A NamedNodeMap over `owner`'s attributes. The caller caches it on the element's wrapper — §4.9's

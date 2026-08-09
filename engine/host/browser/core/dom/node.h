@@ -5,6 +5,10 @@
 #include "quickjs.h"
 
 void node_init(JSContext *ctx);
+/* §4.4's prototypes for ONE realm — Node, CharacterData, Text, Comment. Declared into core/realm.h's list. */
+void node_install_protos(JSContext *ctx);
+/* PER REALM. OWNED: the caller frees. */
+JSValue node_chardata_proto(JSContext *ctx);
 void node_free(JSContext *ctx);
 
 /* The wrapper for `n`, or JS_NULL. The SAME Lexbor node always yields the SAME JS object: a page compares nodes
@@ -14,14 +18,17 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n);
 /* The Lexbor node behind any wrapper, or NULL if `v` is not one. */
 lxb_dom_node_t *node_of(JSValueConst v);
 /* Node.prototype — the base a derived DOM interface inherits from, borrowed. */
-JSValueConst node_proto(void);
+JSValue node_proto(JSContext *ctx);
 /* The interface a node TYPE wears, borrowed — what a component naming its own interface object reads. */
-JSValueConst node_type_proto(int node_type);
+JSValue node_type_proto(JSContext *ctx, int node_type);
 /* A derived interface claims the node type(s) it is the interface OF: element.c claims ELEMENT with the
    Element.prototype it built on top of node_proto(). `proto` is CONSUMED — the table owns what it holds, and
    claiming a type twice is a DCHECK because one of the two would silently lose. This is what keeps node_wrap
    the ONE place a wrapper is built: two builders is two identity tables, which is no identity at all. */
-void node_set_proto(JSContext *ctx, int node_type, JSValue proto);
+/* A DERIVED INTERFACE CLAIMS A NODE TYPE, once per AGENT: the table maps a type to the CLASS whose
+   per-context proto slot holds that realm's prototype. The prototype itself is never registered here — it is
+   per realm, and the claiming component installs it into its own slot. */
+void node_claim_type(int node_type, JSClassID cls);
 /* Install `Node`, `CharacterData`, `Text` and `Comment` as globals — the interface OBJECTS, carrying §4.4's
    constants and the prototypes an `instanceof` names. */
 void node_install_interfaces(JSContext *ctx, JSValueConst global);
@@ -54,7 +61,7 @@ lxb_dom_node_t *node_next_in(lxb_dom_node_t *n, lxb_dom_node_t *root);
 bool node_is_connected(const lxb_dom_node_t *n);
 /* An ELEMENT's interface is decided by its TAG — HTML's element-interface table, which is the html layer's
    knowledge. It registers the answer here; node_wrap asks it and stays the one place a wrapper is built. */
-void node_set_element_resolver(JSValueConst (*fn)(lxb_dom_element_t *el));
+void node_set_element_resolver(JSValue (*fn)(JSContext *ctx, lxb_dom_element_t *el));
 
 /* THE NODE IS BEING DESTROYED — drop the wrapper the map holds for it. Called from the DOM's destroy
    chokepoint, which is the only place a node's lifetime ends, so the map stays bounded by the nodes that

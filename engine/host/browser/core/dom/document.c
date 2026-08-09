@@ -34,6 +34,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/dom/document_fragment.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 
 /* Every member here takes DOMStrings; createElementNS takes two. Declared, not masked. */
 static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
@@ -518,13 +519,27 @@ static JSValue js_doc_location(JSContext *ctx, JSValueConst this_val, int magic)
 
 /* The Document METHODS — on Document.prototype, so there is one of each rather than one per install, and so
    `Document.prototype.querySelector` is a thing that exists. */
+/* THE DECLARATIONS ARE THE AGENT'S, THE INSTALLS ARE THE REALM'S — the IDL pool is sealed after agent init, so
+   a declaration minted from a per-realm install trips idl_declared_before_seal on the SECOND realm. */
+static JSClassID g_document_class;   /* §3.1.1's prototype slot, per realm */
+static int g_id_create_element = -1, g_id_create_text = -1, g_id_create_comment = -1,
+           g_id_create_fragment = -1, g_id_create_element_ns = -1;
+
+static void document_declare_members(JSContext *ctx)
+{
+    g_id_create_element = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_element, 0);
+    g_id_create_text = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_text, 0);
+    g_id_create_comment = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_comment, 0);
+    g_id_create_fragment = idl_method_id(ctx, NULL, 0, js_doc_create_fragment, 0);
+    g_id_create_element_ns = idl_method_id(ctx, IDL_2STR, 2, js_doc_create_element_ns, 0);
+}
+
 static void document_install_members(JSContext *ctx, JSValueConst proto)
 {
-    idl_install_method(ctx, proto, "createElement", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_element, 0));
-    idl_install_method(ctx, proto, "createTextNode", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_text, 0));
-    idl_install_method(ctx, proto, "createComment", 1, idl_method_id(ctx, IDL_1STR, 1, js_doc_create_comment, 0));
-    idl_install_method(ctx, proto, "createDocumentFragment", 0,
-                       idl_method_id(ctx, NULL, 0, js_doc_create_fragment, 0));
+    idl_install_method(ctx, proto, "createElement", 1, g_id_create_element);
+    idl_install_method(ctx, proto, "createTextNode", 1, g_id_create_text);
+    idl_install_method(ctx, proto, "createComment", 1, g_id_create_comment);
+    idl_install_method(ctx, proto, "createDocumentFragment", 0, g_id_create_fragment);
     {
         /* §3.1.5's five element shortcuts, each a LIVE HTMLCollection over the document. */
         static const char *const NAMES[] = { "forms", "images", "scripts", "embeds", "links" };
@@ -532,7 +547,7 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
         for (k = 0; k < sizeof(NAMES) / sizeof(NAMES[0]); k++)
             idl_install_accessor(ctx, proto, NAMES[k], js_doc_shortcut, (int)k, -1);
     }
-    idl_install_method(ctx, proto, "createElementNS", 2, idl_method_id(ctx, IDL_2STR, 2, js_doc_create_element_ns, 0));
+    idl_install_method(ctx, proto, "createElementNS", 2, g_id_create_element_ns);
     /* §3.1.1: `[PutForwards=href] readonly attribute Location? location`. The forwarding half of the extended
        attribute — `document.location = url` navigating — is NOT built, and it is absent rather than silently
        dropped: a setter that stored a string would make a page believe it had navigated. */
@@ -633,19 +648,37 @@ JSValueConst document_object(JSContext *ctx) { return doc_here(ctx)->doc_obj; }
    realm too; that is the gap this split makes visible, and it is the same one every DOM component has. */
 void document_init(JSContext *ctx)
 {
-    JSValue proto = JS_NewObjectProto(ctx, node_proto());
+    JSClassDef d = { "Document" };
 
+    JS_NewClassID(JS_GetRuntime(ctx), &g_document_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_document_class, &d);
+    node_claim_type(LXB_DOM_NODE_TYPE_DOCUMENT, g_document_class);
+    document_declare_members(ctx);
+    document_fragment_init(ctx);   /* §4.7, before any fragment is wrapped as a bare Node */
+    realm_declare_intrinsic(document_install_proto);
+}
+
+/* §3.1.1's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. */
+void document_install_proto(JSContext *ctx)
+{
+    JSValue proto, base, prev;
+
+    prev = JS_GetClassProto(ctx, g_document_class);
+    DCHECK(JS_IsNull(prev), "document_install_proto ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+    base = node_proto(ctx);
+    proto = JS_NewObjectProto(ctx, base);
+    JS_FreeValue(ctx, base);
     CHECK(!JS_IsException(proto), "Document.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "Document");
     document_install_members(ctx, proto);
     /* §3.1.1's IDL includes GlobalEventHandlers and adds onreadystatechange / onvisibilitychange. */
     event_target_install_handlers(ctx, proto, EH_GLOBAL | EH_DOCUMENT);
-    node_set_proto(ctx, LXB_DOM_NODE_TYPE_DOCUMENT, proto);
-    document_fragment_init(ctx);   /* §4.7, before any fragment is wrapped as a bare Node */
     /* §4.5: `Document includes ParentNode` — not ChildNode, because a document has no parent to be removed
        from — and `NonElementParentNode`, the same getElementById DocumentFragment includes. */
     node_install_parent_mixin(ctx, proto);
     node_install_nonelement_parent_mixin(ctx, proto);
+    JS_SetClassProto(ctx, g_document_class, proto);
 }
 
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
@@ -778,7 +811,11 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     /* The interface OBJECTS, now that every prototype exists. Node's goes first because the derived ones
        inherit from it; each component names the one it owns rather than node.c enumerating them. */
     node_install_interfaces(ctx, global);
-    node_install_interface(ctx, global, "Element", element_proto());
+    {
+        JSValue ep = element_proto(ctx);
+        node_install_interface(ctx, global, "Element", ep);
+        JS_FreeValue(ctx, ep);
+    }
     html_element_install(ctx, global);   /* HTMLElement and every per-tag interface object */
     cssom_install(ctx, global);          /* CSSStyleDeclaration, and getComputedStyle on the Window */
     custom_elements_install(ctx, global);   /* §4.13.4 window.customElements */
@@ -786,7 +823,11 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     collections_install(ctx, global);       /* §4.2.10 NodeList, §4.2.11 HTMLCollection */
     attr_install(ctx, global);              /* §4.9.1/§4.9.2 NamedNodeMap and Attr */
     document_fragment_install(ctx, global); /* §4.7 DocumentFragment, which IS constructible */
-    node_install_interface(ctx, global, "Document", node_type_proto(LXB_DOM_NODE_TYPE_DOCUMENT));
+    {
+        JSValue dp = node_type_proto(ctx, LXB_DOM_NODE_TYPE_DOCUMENT);
+        node_install_interface(ctx, global, "Document", dp);
+        JS_FreeValue(ctx, dp);
+    }
     /* §4.8.5 FOR THE TREE THE PARSER BUILT. Insertion steps run during tree construction in a browser, so an
        <iframe> the page's own markup contains has a child navigable before the first script runs — this
        engine's tree comes from a Lexbor parse that does not pass through the DOM chokepoint, so the parsed

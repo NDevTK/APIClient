@@ -6,6 +6,8 @@
 
 void iframe_init(JSContext *ctx);
 /* Install §4.8.5's `contentWindow` on HTMLIFrameElement's prototype. */
+/* Declared once per AGENT; iframe_install then names the cached ids for each realm's prototype. */
+void iframe_declare(JSContext *ctx);
 void iframe_install(JSContext *ctx, JSValueConst proto);
 /* Does this iframe have a navigable IN THE RUNNING FLOW? Kept on the wrapper, so the heap COW delta isolates
    it: a sibling that never inserted the frame has none. */

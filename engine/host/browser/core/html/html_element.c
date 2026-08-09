@@ -29,6 +29,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/dom/node.h"
 #include "core/dom/element.h"
 #include "core/html/hyperlink.h"
@@ -39,8 +40,9 @@
 #include "core/html/html_form.h"
 #include "core/html/dom_string_map.h"
 
-static JSValue g_html_proto;          /* HTMLElement.prototype */
-static JSValue g_unknown_proto;   /* HTMLUnknownElement.prototype — HTML's answer for a tag it does not know */
+static JSClassID g_html_class;      /* HTMLElement.prototype's per-realm slot */
+static JSClassID g_unknown_class;   /* HTMLUnknownElement — HTML's answer for a tag it does not know */
+static int g_html_ready;
 static JSAtom  g_dataset_key = JS_ATOM_NULL;   /* the [SameObject] dataset cache slot on an element's wrapper */
 
 /* HTMLElement's OWN reflections — §3.2.6's global attributes. */
@@ -267,40 +269,45 @@ static const struct { const char *tag; const char *iface; const ElReflect *refl;
 };
 #define HTML_IFACE_N ((int)(sizeof(HTML_IFACE) / sizeof(HTML_IFACE[0])))
 
-/* One prototype per ROW. Rows that share an interface name share its prototype, which is what makes
-   `q instanceof HTMLQuoteElement` and `blockquote instanceof HTMLQuoteElement` both true. */
-static JSValue g_iface_proto[HTML_IFACE_N];
+/* ONE CLASS PER ROW, not one prototype: the prototypes are PER REALM (§3.7) and this table is not, so a table
+   of prototypes could only ever hold one document's — the same reason node.c's type table holds class ids.
+   Rows that share an interface NAME share its class, which is what makes `q instanceof HTMLQuoteElement` and
+   `blockquote instanceof HTMLQuoteElement` both true in every realm. */
+static JSClassID g_iface_class[HTML_IFACE_N];
+/* Each row's reflection BASE index — declared once per agent, installed into every realm's prototype. */
+static int g_iface_refl_base[HTML_IFACE_N];
+static int g_html_refl_base;
 
 /* The interface a TAG wears. Linear over a table this size, and the answer is a borrowed prototype. A tag the
    table does not list is HTMLUnknownElement, which is HTML's own answer for an element it does not know — the
    custom-element case (a hyphenated name) is HTMLElement, which is a different answer and is stated here rather
    than folded in. */
-static JSValueConst html_proto_for(lxb_dom_element_t *el)
+static JSValue html_proto_for(JSContext *ctx, lxb_dom_element_t *el)
 {
     size_t n = 0;
     const lxb_char_t *tag = lxb_dom_element_local_name(el, &n);
     int i;
 
     if (!tag || !n)
-        return g_unknown_proto;
+        return JS_GetClassProto(ctx, g_unknown_class);
     for (i = 0; i < HTML_IFACE_N; i++)
         if (strlen(HTML_IFACE[i].tag) == n && memcmp(HTML_IFACE[i].tag, tag, n) == 0)
-            return g_iface_proto[i];
+            return JS_GetClassProto(ctx, g_iface_class[i]);
     /* §4.13: a VALID CUSTOM ELEMENT NAME (one containing a hyphen) is an HTMLElement, not an unknown one — a
        page that feature-tests `x instanceof HTMLUnknownElement` to find its own components would get the
        opposite answer, and this engine executes custom elements. */
     if (memchr(tag, '-', n))
-        return g_html_proto;
-    return g_unknown_proto;
+        return JS_GetClassProto(ctx, g_html_class);
+    return JS_GetClassProto(ctx, g_unknown_class);   /* OWNED, like every per-realm prototype read */
 }
 
 /* The prototype an interface NAME was built for. A lookup rather than a stored handful, because this table is
    the single source of which interfaces exist and a second list of them could disagree with it. */
-static JSValueConst html_iface_proto(const char *iface)
+static JSValue html_iface_proto(JSContext *ctx, const char *iface)
 {
     int i;
     for (i = 0; i < HTML_IFACE_N; i++)
-        if (strcmp(HTML_IFACE[i].iface, iface) == 0) return g_iface_proto[i];
+        if (strcmp(HTML_IFACE[i].iface, iface) == 0) return JS_GetClassProto(ctx, g_iface_class[i]);
     DFAIL("an interface prototype was asked for by a name the element-interface table does not list");
     return JS_UNDEFINED;
 }
@@ -357,101 +364,164 @@ static JSValue js_template_content(JSContext *ctx, JSValueConst this_val, int ma
 
 void html_element_init(JSContext *ctx)
 {
+    JSClassDef hd = { "HTMLElement" }, ud = { "HTMLUnknownElement" };
     int i, j;
 
-    DCHECK(!JS_IsObject(g_html_proto), "html_element_init ran twice — one instance is one document");
-
-    /* §3.2.2 `interface HTMLElement : Element`. */
-    g_html_proto = JS_NewObjectProto(ctx, element_proto());
-    CHECK(!JS_IsException(g_html_proto), "HTMLElement.prototype could not be allocated");
-    idl_interface_tag(ctx, g_html_proto, "HTMLElement");
-    element_install_reflections(ctx, g_html_proto, R_HTML, (int)(sizeof(R_HTML) / sizeof(R_HTML[0])));
-    /* HTML mixes GlobalEventHandlers and DocumentAndElementEventHandlers into HTMLElement, not into Element —
-       so this is where they belong, and where `div.onclick = f` now reaches them. */
-    event_target_install_handlers(ctx, g_html_proto, EH_GLOBAL);
-    event_target_install_click(ctx, g_html_proto);
-    /* §3.2.2 `[SameObject] attribute CSSStyleDeclaration style` — the attribute is HTMLElement's, the object is
-       the CSSOM's, so each side owns its half. */
-    cssom_install_style_attribute(ctx, g_html_proto);
+    DCHECK(!g_html_ready, "html_element_init ran twice — the interfaces are declared once per AGENT");
+    JS_NewClassID(JS_GetRuntime(ctx), &g_html_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_html_class, &hd);
+    JS_NewClassID(JS_GetRuntime(ctx), &g_unknown_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_unknown_class, &ud);
+    /* ONE CLASS PER INTERFACE NAME. A row whose interface a previous row already claimed SHARES its class —
+       `q` and `blockquote` are both HTMLQuoteElement, and two classes would make one of the two `instanceof`
+       answers false in every realm. */
+    for (i = 0; i < HTML_IFACE_N; i++) {
+        for (j = 0; j < i; j++)
+            if (strcmp(HTML_IFACE[j].iface, HTML_IFACE[i].iface) == 0) break;
+        if (j < i) { g_iface_class[i] = g_iface_class[j]; continue; }
+        {
+            JSClassDef d = { HTML_IFACE[i].iface };
+            JS_NewClassID(JS_GetRuntime(ctx), &g_iface_class[i]);
+            JS_NewClass(JS_GetRuntime(ctx), g_iface_class[i], &d);
+        }
+    }
+    /* EVERY REFLECTION DECLARED ONCE, here, with the base index each row's install names them by. */
+    g_html_refl_base = element_declare_reflections(ctx, R_HTML, (int)(sizeof(R_HTML) / sizeof(R_HTML[0])));
+    for (i = 0; i < HTML_IFACE_N; i++) {
+        for (j = 0; j < i; j++)
+            if (g_iface_class[j] == g_iface_class[i]) break;
+        g_iface_refl_base[i] = (j < i) ? g_iface_refl_base[j]
+                             : (HTML_IFACE[i].nrefl
+                                    ? element_declare_reflections(ctx, HTML_IFACE[i].refl, HTML_IFACE[i].nrefl)
+                                    : -1);
+    }
+    /* THE MIXINS' AND SUB-INTERFACES' DECLARATIONS, once per agent — their installs run per realm below. */
+    hyperlink_declare(ctx);
+    iframe_declare(ctx);
+    html_form_declare(ctx);
     /* §3.2.2 dataset — on HTMLElement, which is where the IDL puts it. */
     dom_string_map_init(ctx);
     g_dataset_key = JS_NewAtom(ctx, "__datasetSlot");
     CHECK(g_dataset_key != JS_ATOM_NULL, "the dataset slot key could not be interned");
-    idl_install_accessor(ctx, g_html_proto, "dataset", js_html_dataset, 0, -1);
-    JS_SetPropertyStr(ctx, g_html_proto, "focus",
-                      JS_NewCFunctionMagic(ctx, js_html_focus, "focus", 0, JS_CFUNC_generic_magic, 0));
-    JS_SetPropertyStr(ctx, g_html_proto, "blur",
-                      JS_NewCFunctionMagic(ctx, js_html_focus, "blur", 0, JS_CFUNC_generic_magic, 1));
+    g_html_ready = 1;
+    realm_declare_intrinsic(html_element_install_protos);
+    /* node.c keys its prototype table by node TYPE; an element's interface is keyed by its LOCAL NAME, which is
+       HTML's mapping and not the DOM's. So the base ASKS, and stays the one place a wrapper is built. */
+    node_set_element_resolver(html_proto_for);
+}
 
-    g_unknown_proto = JS_NewObjectProto(ctx, g_html_proto);   /* §4: `interface HTMLUnknownElement : HTMLElement` */
-    CHECK(!JS_IsException(g_unknown_proto), "HTMLUnknownElement.prototype could not be allocated");
-    idl_interface_tag(ctx, g_unknown_proto, "HTMLUnknownElement");
+/* §3.2.2 AND §4's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM — HTMLElement, HTMLUnknownElement, and one per
+   interface the tag table names. */
+void html_element_install_protos(JSContext *ctx)
+{
+    JSValue html_p, unknown_p, base, prev;
+    int i, j;
+
+    DCHECK(g_html_ready, "a realm asked for HTMLElement.prototype before the interfaces were declared");
+    prev = JS_GetClassProto(ctx, g_html_class);
+    DCHECK(JS_IsNull(prev), "html_element_install_protos ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+
+    /* §3.2.2 `interface HTMLElement : Element`. */
+    base = element_proto(ctx);
+    html_p = JS_NewObjectProto(ctx, base);
+    JS_FreeValue(ctx, base);
+    CHECK(!JS_IsException(html_p), "HTMLElement.prototype could not be allocated");
+    idl_interface_tag(ctx, html_p, "HTMLElement");
+    element_install_reflections(ctx, html_p, g_html_refl_base, (int)(sizeof(R_HTML) / sizeof(R_HTML[0])));
+    /* HTML mixes GlobalEventHandlers and DocumentAndElementEventHandlers into HTMLElement, not into Element —
+       so this is where they belong, and where `div.onclick = f` now reaches them. */
+    event_target_install_handlers(ctx, html_p, EH_GLOBAL);
+    event_target_install_click(ctx, html_p);
+    /* §3.2.2 `[SameObject] attribute CSSStyleDeclaration style` — the attribute is HTMLElement's, the object is
+       the CSSOM's, so each side owns its half. */
+    cssom_install_style_attribute(ctx, html_p);
+    idl_install_accessor(ctx, html_p, "dataset", js_html_dataset, 0, -1);
+    JS_SetPropertyStr(ctx, html_p, "focus",
+                      JS_NewCFunctionMagic(ctx, js_html_focus, "focus", 0, JS_CFUNC_generic_magic, 0));
+    JS_SetPropertyStr(ctx, html_p, "blur",
+                      JS_NewCFunctionMagic(ctx, js_html_focus, "blur", 0, JS_CFUNC_generic_magic, 1));
+    JS_SetClassProto(ctx, g_html_class, JS_DupValue(ctx, html_p));
+
+    unknown_p = JS_NewObjectProto(ctx, html_p);   /* §4: `interface HTMLUnknownElement : HTMLElement` */
+    CHECK(!JS_IsException(unknown_p), "HTMLUnknownElement.prototype could not be allocated");
+    idl_interface_tag(ctx, unknown_p, "HTMLUnknownElement");
+    JS_SetClassProto(ctx, g_unknown_class, unknown_p);
 
     for (i = 0; i < HTML_IFACE_N; i++) {
-        /* A row whose interface a previous row already built SHARES its prototype — `q` and `blockquote` are
-           both HTMLQuoteElement, and two objects would make one of the two `instanceof` answers false. */
+        JSValue p;
+        /* A row sharing a previous row's CLASS shares its prototype — it is the same slot. */
         for (j = 0; j < i; j++)
-            if (strcmp(HTML_IFACE[j].iface, HTML_IFACE[i].iface) == 0) break;
-        if (j < i) { g_iface_proto[i] = JS_DupValue(ctx, g_iface_proto[j]); continue; }
-        g_iface_proto[i] = JS_NewObjectProto(ctx, g_html_proto);
-        CHECK(!JS_IsException(g_iface_proto[i]), "a per-tag interface prototype could not be allocated");
-        idl_interface_tag(ctx, g_iface_proto[i], HTML_IFACE[i].iface);
+            if (g_iface_class[j] == g_iface_class[i]) break;
+        if (j < i) continue;
+        p = JS_NewObjectProto(ctx, html_p);
+        CHECK(!JS_IsException(p), "a per-tag interface prototype could not be allocated");
+        idl_interface_tag(ctx, p, HTML_IFACE[i].iface);
         if (HTML_IFACE[i].nrefl)
-            element_install_reflections(ctx, g_iface_proto[i], HTML_IFACE[i].refl, HTML_IFACE[i].nrefl);
+            element_install_reflections(ctx, p, g_iface_refl_base[i], HTML_IFACE[i].nrefl);
         /* §4.6.3's HTMLHyperlinkElementUtils, which the IDL says HTMLAnchorElement and HTMLAreaElement
            INCLUDE. Named by interface rather than by tag because that is how the IDL states it, and because
            two tags share one of them. */
         if (!strcmp(HTML_IFACE[i].iface, "HTMLAnchorElement") ||
             !strcmp(HTML_IFACE[i].iface, "HTMLAreaElement"))
-            hyperlink_install(ctx, g_iface_proto[i]);
+            hyperlink_install(ctx, p);
         /* §4.8.5's `contentWindow` — the child navigable its insertion steps queued. */
         if (!strcmp(HTML_IFACE[i].iface, "HTMLIFrameElement"))
-            iframe_install(ctx, g_iface_proto[i]);
+            iframe_install(ctx, p);
+        JS_SetClassProto(ctx, g_iface_class[i], p);
     }
+    JS_FreeValue(ctx, html_p);
 
-        /* §4.12.3 `[SameObject] readonly attribute DocumentFragment content`. It goes on HTMLTemplateElement and
+    /* §4.12.3 `[SameObject] readonly attribute DocumentFragment content`. It goes on HTMLTemplateElement and
        nowhere else, which is why it is here rather than on HTMLElement: a template's children are NOT under it,
-       and `content` is the only way a page reaches the ones the parser put in the fragment. It was absent, so
-       `t.content` was undefined and `t.content.querySelector(...)` — the ordinary way to use a template — threw
-       a TypeError naming a property of undefined instead of naming the missing member.
-       [SameObject] costs nothing to honour: node_wrap keeps one JS object per Lexbor node, so the fragment's
-       wrapper IS the same object every read, and it wears DocumentFragment.prototype because node.c's table now
-       has one to hand out. */
+       and `content` is the only way a page reaches the ones the parser put in the fragment. */
     {
         /* The atom is BORROWED by JS_DefinePropertyGetSet, so this owns it — an interned name nobody releases
            survives the runtime and the gc_obj_list walk counts it. */
         JSAtom a = JS_NewAtom(ctx, "content");
+        JSValue tpl = html_iface_proto(ctx, "HTMLTemplateElement");
         CHECK(a != JS_ATOM_NULL, "the `content` attribute name could not be interned");
-        JS_DefinePropertyGetSet(ctx, html_iface_proto("HTMLTemplateElement"), a,
+        JS_DefinePropertyGetSet(ctx, tpl, a,
                                 JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_template_content, "content", 0,
                                                      JS_CFUNC_getter_magic, 0),
                                 JS_UNDEFINED, JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
         JS_FreeAtom(ctx, a);
+        JS_FreeValue(ctx, tpl);
     }
 
     /* §4.10's members go on the interfaces that DECLARE them, which is why the forms component is handed the
        prototypes rather than reaching for them: this file owns the table, that one owns the algorithms. */
-    html_form_install(ctx, html_iface_proto("HTMLFormElement"), html_iface_proto("HTMLInputElement"),
-                      html_iface_proto("HTMLTextAreaElement"), html_iface_proto("HTMLOptionElement"));
-
-    /* node.c keys its prototype table by node TYPE; an element's interface is keyed by its LOCAL NAME, which is
-       HTML's mapping and not the DOM's. So the base ASKS, and stays the one place a wrapper is built. */
-    node_set_element_resolver(html_proto_for);
+    {
+        JSValue f = html_iface_proto(ctx, "HTMLFormElement"), in = html_iface_proto(ctx, "HTMLInputElement");
+        JSValue ta = html_iface_proto(ctx, "HTMLTextAreaElement"), op = html_iface_proto(ctx, "HTMLOptionElement");
+        html_form_install(ctx, f, in, ta, op);
+        JS_FreeValue(ctx, f); JS_FreeValue(ctx, in); JS_FreeValue(ctx, ta); JS_FreeValue(ctx, op);
+    }
 }
 
 void html_element_install(JSContext *ctx, JSValueConst global)
 {
     int i, j;
 
-    DCHECK(JS_IsObject(g_html_proto), "the HTML interface objects were installed before their prototypes existed");
-    node_install_interface(ctx, global, "HTMLElement", g_html_proto);
+    JSValue hp, up;
+
+    DCHECK(g_html_ready, "the HTML interface objects were installed before their interfaces were declared");
+    hp = JS_GetClassProto(ctx, g_html_class);
+    up = JS_GetClassProto(ctx, g_unknown_class);
+    DCHECK(!JS_IsNull(hp), "the HTML interface objects were installed in a realm with no HTMLElement.prototype");
+    node_install_interface(ctx, global, "HTMLElement", hp);
     dom_string_map_install(ctx, global);   /* §3.2.2 DOMStringMap, which `dataset` is one of */
-    node_install_interface(ctx, global, "HTMLUnknownElement", g_unknown_proto);
+    node_install_interface(ctx, global, "HTMLUnknownElement", up);
+    JS_FreeValue(ctx, hp);
+    JS_FreeValue(ctx, up);
     for (i = 0; i < HTML_IFACE_N; i++) {
+        JSValue p;
         for (j = 0; j < i; j++)
-            if (strcmp(HTML_IFACE[j].iface, HTML_IFACE[i].iface) == 0) break;
+            if (g_iface_class[j] == g_iface_class[i]) break;
         if (j < i) continue;   /* one interface OBJECT per interface, however many tags name it */
-        node_install_interface(ctx, global, HTML_IFACE[i].iface, g_iface_proto[i]);
+        p = JS_GetClassProto(ctx, g_iface_class[i]);
+        node_install_interface(ctx, global, HTML_IFACE[i].iface, p);
+        JS_FreeValue(ctx, p);
     }
 }
 
@@ -459,13 +529,6 @@ void html_element_free(JSContext *ctx)
 {
     dom_string_map_free(ctx);
     if (g_dataset_key != JS_ATOM_NULL) { JS_FreeAtom(ctx, g_dataset_key); g_dataset_key = JS_ATOM_NULL; }
-    int i;
-
-    for (i = 0; i < HTML_IFACE_N; i++) {
-        JS_FreeValue(ctx, g_iface_proto[i]);
-        g_iface_proto[i] = JS_UNDEFINED;
-    }
-    JS_FreeValue(ctx, g_unknown_proto);
-    JS_FreeValue(ctx, g_html_proto);
-    g_unknown_proto = g_html_proto = JS_UNDEFINED;
+    /* the prototypes are the REALMS' — each is released with its context; the AGENT holds only class ids */
+    g_html_ready = 0;
 }

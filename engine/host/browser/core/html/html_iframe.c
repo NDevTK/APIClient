@@ -276,11 +276,19 @@ void iframe_init(JSContext *ctx)
     CHECK(g_atom_navigable != JS_ATOM_NULL, "the iframe navigable slot could not be interned");
 }
 
+/* Declared once per AGENT, installed per realm — see hyperlink.c for why the split exists at all. */
+static int g_content_doc_id = -1;
+
+void iframe_declare(JSContext *ctx)
+{
+    g_content_doc_id = idl_getter_id_step(ctx, &CONTENT_DOC_DECL, 0);
+}
+
 void iframe_install(JSContext *ctx, JSValueConst proto)
 {
+    DCHECK(g_content_doc_id >= 0, "§4.8.5's members were installed before they were declared");
     idl_install_accessor(ctx, proto, "contentWindow", js_iframe_content_window, 0, -1);
-    idl_install_accessor_step(ctx, proto, "contentDocument",
-                              idl_getter_id_step(ctx, &CONTENT_DOC_DECL, 0), -1);
+    idl_install_accessor_step(ctx, proto, "contentDocument", g_content_doc_id, -1);
 }
 
 void iframe_free(JSContext *ctx)

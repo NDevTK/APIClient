@@ -34,10 +34,13 @@
 #include "core/dom/element.h"
 #include "core/dom/node.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/idl_indexed.h"
 
-static JSValue g_attr_proto = JS_UNDEFINED;
-static JSValue g_nnm_proto = JS_UNDEFINED;
+/* PER REALM — §3.7. Held in quickjs's per-context class-proto slots; the node-type table names the CLASS. */
+static JSClassID g_attr_class, g_nnm_class;
+/* Declared once per AGENT (the IDL pool is sealed after agent init); installed per realm. */
+static int g_set_value_id = -1, g_item_id = -1, g_get_named_id = -1, g_remove_named_id = -1;
 static JSValue g_nnm_key = JS_UNDEFINED;    /* the map's owner element, under a private Symbol */
 static int     g_ready;
 
@@ -248,7 +251,9 @@ static JSValue js_nnm_remove(JSContext *ctx, JSValueConst this_val, int argc, JS
 
 JSValue attr_named_node_map_new(JSContext *ctx, JSValueConst owner)
 {
-    JSValue obj = idl_indexed_new(ctx, g_nnm_proto, &NNM_INDEXED);
+    JSValue nnm_p = named_node_map_proto(ctx);
+    JSValue obj = idl_indexed_new(ctx, nnm_p, &NNM_INDEXED);
+    JS_FreeValue(ctx, nnm_p);
     JSAtom k;
 
     DCHECK(g_ready, "a NamedNodeMap was built before attr_init ran");
@@ -264,53 +269,82 @@ void attr_init(JSContext *ctx)
 {
     static const IdlArgType ONE_LONG[1] = { IDL_LONG };
     static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
+    JSClassDef ad = { "Attr" }, nd = { "NamedNodeMap" };
 
-    DCHECK(!g_ready, "attr_init ran twice — one instance is one document");
+    DCHECK(!g_ready, "attr_init ran twice — the interfaces are declared once per AGENT");
     g_nnm_key = JS_NewSymbol(ctx, "namedNodeMapOwner", false);
     CHECK(!JS_IsException(g_nnm_key), "the NamedNodeMap owner key could not be allocated");
-
+    JS_NewClassID(JS_GetRuntime(ctx), &g_attr_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_attr_class, &ad);
+    JS_NewClassID(JS_GetRuntime(ctx), &g_nnm_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_nnm_class, &nd);
     /* §4.9.2 `interface Attr : Node` — so it inherits Node's members rather than repeating them, and node_wrap
        hands an attribute THIS from now on instead of the bare Node it was giving. */
-    g_attr_proto = JS_NewObjectProto(ctx, node_proto());
-    CHECK(!JS_IsException(g_attr_proto), "Attr.prototype could not be allocated");
-    idl_interface_tag(ctx, g_attr_proto, "Attr");
-    JS_SetPropertyFunctionList(ctx, g_attr_proto, js_attr_reads,
-                               (int)(sizeof(js_attr_reads) / sizeof(js_attr_reads[0])));
-    idl_install_accessor(ctx, g_attr_proto, "value", js_attr_get, 2,
-                         idl_setter_id(ctx, IDL_DOMSTRING, false, js_attr_set_value, 0));
-    node_set_proto(ctx, LXB_DOM_NODE_TYPE_ATTRIBUTE, JS_DupValue(ctx, g_attr_proto));
+    node_claim_type(LXB_DOM_NODE_TYPE_ATTRIBUTE, g_attr_class);
+    g_set_value_id = idl_setter_id(ctx, IDL_DOMSTRING, false, js_attr_set_value, 0);
+    g_item_id = idl_method_id(ctx, ONE_LONG, 1, js_nnm_get, 0);
+    g_get_named_id = idl_method_id(ctx, ONE_STR, 1, js_nnm_get, 1);
+    g_remove_named_id = idl_method_id(ctx, ONE_STR, 1, js_nnm_remove, 0);
+    g_ready = 1;
+    realm_declare_intrinsic(attr_install_protos);
+}
 
-    g_nnm_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_nnm_proto), "NamedNodeMap.prototype could not be allocated");
-    idl_interface_tag(ctx, g_nnm_proto, "NamedNodeMap");
-    idl_install_accessor(ctx, g_nnm_proto, "length", js_nnm_length, 0, -1);
-    idl_install_method(ctx, g_nnm_proto, "item", 1, idl_method_id(ctx, ONE_LONG, 1, js_nnm_get, 0));
-    idl_install_method(ctx, g_nnm_proto, "getNamedItem", 1,
-                       idl_method_id(ctx, ONE_STR, 1, js_nnm_get, 1));
-    idl_install_method(ctx, g_nnm_proto, "removeNamedItem", 1,
-                       idl_method_id(ctx, ONE_STR, 1, js_nnm_remove, 0));
+/* §4.9's TWO INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. */
+void attr_install_protos(JSContext *ctx)
+{
+    JSValue attr_p, nnm_p, base, prev;
+
+    DCHECK(g_ready, "a realm asked for Attr.prototype before the interfaces were declared");
+    prev = JS_GetClassProto(ctx, g_attr_class);
+    DCHECK(JS_IsNull(prev), "attr_install_protos ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+    base = node_proto(ctx);
+    attr_p = JS_NewObjectProto(ctx, base);
+    JS_FreeValue(ctx, base);
+    CHECK(!JS_IsException(attr_p), "Attr.prototype could not be allocated");
+    idl_interface_tag(ctx, attr_p, "Attr");
+    JS_SetPropertyFunctionList(ctx, attr_p, js_attr_reads,
+                               (int)(sizeof(js_attr_reads) / sizeof(js_attr_reads[0])));
+    idl_install_accessor(ctx, attr_p, "value", js_attr_get, 2, g_set_value_id);
+    JS_SetClassProto(ctx, g_attr_class, attr_p);
+
+    nnm_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(nnm_p), "NamedNodeMap.prototype could not be allocated");
+    idl_interface_tag(ctx, nnm_p, "NamedNodeMap");
+    idl_install_accessor(ctx, nnm_p, "length", js_nnm_length, 0, -1);
+    idl_install_method(ctx, nnm_p, "item", 1, g_item_id);
+    idl_install_method(ctx, nnm_p, "getNamedItem", 1, g_get_named_id);
+    idl_install_method(ctx, nnm_p, "removeNamedItem", 1, g_remove_named_id);
     /* §3.7.10: an interface with an indexed getter gets %Array.prototype.values% as its @@iterator, which is
        what makes `for (const a of el.attributes)` — the loop this gap was really about — ordinary code. */
-    idl_indexed_install_iterable(ctx, g_nnm_proto);
-    g_ready = 1;
+    idl_indexed_install_iterable(ctx, nnm_p);
+    JS_SetClassProto(ctx, g_nnm_class, nnm_p);
+}
+
+JSValue named_node_map_proto(JSContext *ctx)
+{
+    JSValue proto = JS_GetClassProto(ctx, g_nnm_class);
+    DCHECK(!JS_IsNull(proto), "NamedNodeMap.prototype was asked for in a realm that never ran its install");
+    return proto;   /* OWNED */
 }
 
 void attr_install(JSContext *ctx, JSValueConst global)
 {
     DCHECK(g_ready, "the Attr interfaces were installed before their prototypes were built");
-    node_install_interface(ctx, global, "Attr", g_attr_proto);
     {
-        JSValue nnm = idl_interface_object(ctx, "NamedNodeMap", g_nnm_proto);
+        JSValue attr_p = node_type_proto(ctx, LXB_DOM_NODE_TYPE_ATTRIBUTE), nnm_p = named_node_map_proto(ctx);
+        JSValue nnm = idl_interface_object(ctx, "NamedNodeMap", nnm_p);
+        node_install_interface(ctx, global, "Attr", attr_p);
         JS_SetPropertyStr(ctx, (JSValue)global, "NamedNodeMap", nnm);
+        JS_FreeValue(ctx, attr_p);
+        JS_FreeValue(ctx, nnm_p);
     }
 }
 
 void attr_free(JSContext *ctx)
 {
     if (!g_ready) return;
-    JS_FreeValue(ctx, g_attr_proto);
-    JS_FreeValue(ctx, g_nnm_proto);
-    JS_FreeValue(ctx, g_nnm_key);
-    g_attr_proto = g_nnm_proto = g_nnm_key = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_nnm_key);   /* the prototypes are the REALMS' — released with their contexts */
+    g_nnm_key = JS_UNDEFINED;
     g_ready = 0;
 }

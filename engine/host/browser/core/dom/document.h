@@ -16,6 +16,8 @@
 /* THE AGENT'S HALF: Document.prototype, its members and its mixins. A member is declared once per agent; a
    second realm installs `document` from the same declarations. */
 void document_init(JSContext *ctx);
+/* §3.1.1's prototype for ONE realm — declared into core/realm.h's list. */
+void document_install_proto(JSContext *ctx);
 
 /* `nav_proxy` is §7.2.5.1's ONE WindowProxy for the navigable this realm is the active document of. The
    navigable exists before its realm — §7.4 created it and handed its proxy to the page — so the caller that

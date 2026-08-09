@@ -12,7 +12,10 @@ void    element_free(JSContext *ctx);
 JSValue element_wrap(JSContext *ctx, lxb_dom_element_t *el);
 
 /* Element.prototype, borrowed — what HTMLElement is built on top of. */
-JSValueConst element_proto(void);
+/* §4.9's prototype for ONE realm — declared into core/realm.h's list. */
+void element_install_proto(JSContext *ctx);
+/* PER REALM. OWNED: the caller frees. */
+JSValue element_proto(JSContext *ctx);
 
 /* A [Reflect]ed content attribute: the pair of names that IS the reflection, plus which kind of value it holds.
    A STRING reflection is the attribute's value ("" when absent); a BOOLEAN one is its PRESENCE, because
@@ -22,7 +25,10 @@ typedef struct { const char *idl; const char *attr; int kind; } ElReflect;
 
 /* Install an interface's OWN reflections on its prototype. Each is assigned a magic out of one shared registry,
    so the two bodies that implement every reflection still take exactly one index. */
-void element_install_reflections(JSContext *ctx, JSValueConst proto, const ElReflect *r, int n);
+/* DECLARE a table of reflections once per AGENT; returns the BASE registry index the install names them by. */
+int  element_declare_reflections(JSContext *ctx, const ElReflect *r, int n);
+/* INSTALL the `n` reflections declared at `base` onto THIS realm's prototype. */
+void element_install_reflections(JSContext *ctx, JSValueConst proto, int base, int n);
 
 /* AN ELEMENT'S CONTENT ATTRIBUTE, through the same chokepoint the reflections use — so a component that reads
    and writes one (§4.6.3's hyperlink members re-serialise a URL back into `href`) stays captured in the

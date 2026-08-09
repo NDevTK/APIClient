@@ -200,32 +200,46 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
     return JS_STEP_DONE;
 }
 
+/* The mixin's members, in IDL order. `origin` is readonly; the rest are accessors whose setter re-serialises
+   the URL back into the href attribute. */
+static const struct { const char *name; int member; bool readonly; } HL_M[] = {
+    { "href",     URL_HREF,     false },
+    { "origin",   URL_ORIGIN,   true  },
+    { "protocol", URL_PROTOCOL, false },
+    { "username", URL_USERNAME, false },
+    { "password", URL_PASSWORD, false },
+    { "host",     URL_HOST,     false },
+    { "hostname", URL_HOSTNAME, false },
+    { "port",     URL_PORT,     false },
+    { "pathname", URL_PATHNAME, false },
+    { "search",   URL_SEARCH,   false },
+    { "hash",     URL_HASH,     false },
+};
+#define HL_N ((int)(sizeof HL_M / sizeof HL_M[0]))
+
+/* DECLARED ONCE PER AGENT, INSTALLED PER REALM — the IDL pool is sealed after agent init, so a helper that
+   mints inline works for the first realm and aborts on the second. */
+static int g_hl_set[HL_N];
+static int g_hl_tostring = -1;
+
+void hyperlink_declare(JSContext *ctx)
+{
+    int i;
+    for (i = 0; i < HL_N; i++)
+        g_hl_set[i] = HL_M[i].readonly ? -1
+                                       : idl_setter_id(ctx, IDL_USVSTRING, false, js_link_set, HL_M[i].member);
+    g_hl_tostring = idl_method_id(ctx, NULL, 0, js_link_tostring, 0);
+    /* §2.9 asks ONE pair for every element, so it is registered with the declarations rather than from a
+       per-prototype install that would set the same two pointers once per interface per realm. */
+    event_target_set_activation(link_has_activation, link_run_activation);
+}
+
 void hyperlink_install(JSContext *ctx, JSValueConst proto)
 {
-    /* The mixin's members, in IDL order. `origin` is readonly; the rest are accessors whose setter re-serialises
-       the URL back into the href attribute. */
-    static const struct { const char *name; int member; bool readonly; } M[] = {
-        { "href",     URL_HREF,     false },
-        { "origin",   URL_ORIGIN,   true  },
-        { "protocol", URL_PROTOCOL, false },
-        { "username", URL_USERNAME, false },
-        { "password", URL_PASSWORD, false },
-        { "host",     URL_HOST,     false },
-        { "hostname", URL_HOSTNAME, false },
-        { "port",     URL_PORT,     false },
-        { "pathname", URL_PATHNAME, false },
-        { "search",   URL_SEARCH,   false },
-        { "hash",     URL_HASH,     false },
-    };
-    size_t i;
+    int i;
 
-    for (i = 0; i < sizeof M / sizeof M[0]; i++)
-        idl_install_accessor(ctx, proto, M[i].name, js_link_get, M[i].member,
-                             M[i].readonly ? -1
-                                           : idl_setter_id(ctx, IDL_USVSTRING, false, js_link_set, M[i].member));
-    idl_install_method(ctx, proto, "toString", 0, idl_method_id(ctx, NULL, 0, js_link_tostring, 0));
-    /* §2.9 asks ONE pair for every element, so registering it from a per-prototype install sets the same two
-       pointers each time — which is why event_target_set_activation asserts they arrive together rather than
-       counting how often they arrive. */
-    event_target_set_activation(link_has_activation, link_run_activation);
+    DCHECK(g_hl_tostring >= 0, "HTMLHyperlinkElementUtils was installed before it was declared");
+    for (i = 0; i < HL_N; i++)
+        idl_install_accessor(ctx, proto, HL_M[i].name, js_link_get, HL_M[i].member, g_hl_set[i]);
+    idl_install_method(ctx, proto, "toString", 0, g_hl_tostring);
 }

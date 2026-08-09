@@ -28,6 +28,7 @@
 #include "solver/solve.h"
 #include "core/dom/element.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/events/event_target.h"
 #include "core/html/html_element.h"
 #include "core/html/custom_elements.h"
@@ -749,6 +750,7 @@ static JSValue js_el_name_part(JSContext *ctx, JSValueConst this_val, int magic)
    assigns each a magic out of one shared registry — so the magic is still an index into one table and the
    bodies below still take exactly one. */
 static ElReflect g_reflect[320];
+static int       g_reflect_set[320];   /* each entry's setter pool id — declared with it, per AGENT */
 static int       g_reflect_n;
 
 static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magic)
@@ -830,9 +832,13 @@ void element_attr_set(JSContext *ctx, JSValueConst el, const char *name, const c
     JS_FreeValue(ctx, args[1]);
 }
 
-void element_install_reflections(JSContext *ctx, JSValueConst proto, const ElReflect *r, int n)
+/* A REFLECTION IS DECLARED ONCE AND INSTALLED PER REALM, like every other member — the registry entry and its
+   setter's pool id are the AGENT's, the accessor on a prototype is the REALM's. The caller keeps the BASE index
+   the declaration returned, which is what lets the install name the same registry entries again without
+   appending a second copy of the table. */
+int element_declare_reflections(JSContext *ctx, const ElReflect *r, int n)
 {
-    int i;
+    int base = g_reflect_n, i;
 
     for (i = 0; i < n; i++) {
         CHECK(g_reflect_n < (int)(sizeof(g_reflect) / sizeof(g_reflect[0])),
@@ -840,11 +846,23 @@ void element_install_reflections(JSContext *ctx, JSValueConst proto, const ElRef
         g_reflect[g_reflect_n] = r[i];
         /* A boolean reflection's value is ToBoolean, which is total and runs none of the page's code; a string
            one is a DOMString, which is ToString on whatever the page passed. Two types, one declaration each. */
-        idl_install_accessor(ctx, proto, r[i].idl, js_el_reflect_get, g_reflect_n,
-                             idl_setter_id(ctx, r[i].kind == REFLECT_BOOL ? IDL_ANY : IDL_DOMSTRING,
-                                           false, js_el_reflect_set, g_reflect_n));
+        g_reflect_set[g_reflect_n] = idl_setter_id(ctx, r[i].kind == REFLECT_BOOL ? IDL_ANY : IDL_DOMSTRING,
+                                                   false, js_el_reflect_set, g_reflect_n);
         g_reflect_n++;
     }
+    return base;
+}
+
+void element_install_reflections(JSContext *ctx, JSValueConst proto, int base, int n)
+{
+    int i;
+
+    DCHECK(base >= 0 && base + n <= g_reflect_n,
+           "an interface installed reflections it never declared — the base index comes from "
+           "element_declare_reflections and names the entries that declaration made");
+    for (i = 0; i < n; i++)
+        idl_install_accessor(ctx, proto, g_reflect[base + i].idl, js_el_reflect_get, base + i,
+                             g_reflect_set[base + i]);
 }
 
 /* 4.12.1 "prepare the script", the insertion half. A page loads code conditionally in three ways and this is the
@@ -1097,111 +1115,133 @@ JSValue element_wrap(JSContext *ctx, lxb_dom_element_t *el)
 /* ELEMENT.PROTOTYPE — §4.9, `interface Element : Node`, built ONCE on top of the base node.c owns and handed to
    node.c as the interface every element node wears. It used to be a per-wrapper INSTALLER callback, which minted
    a fresh closure for every member of every element and made `a.getAttribute === b.getAttribute` false. */
-static JSValue g_element_proto;
+/* PER REALM — §3.7. The node-type table names the CLASS; the prototype lives in its per-context slot. */
+static JSClassID g_element_class;
+/* Declared once per AGENT (the IDL pool is sealed after agent init); installed per realm. */
+static int g_refl_base = -1, g_refl_n;
+static int g_id_get_attr = -1, g_id_set_attr = -1, g_id_matches = -1, g_id_closest = -1,
+           g_id_inner_get = -1, g_id_inner_set = -1, g_id_outer_get = -1, g_id_outer_set = -1,
+           g_id_adj_html = -1, g_id_adj_el = -1, g_id_adj_text = -1, g_id_attr_names = -1,
+           g_id_remove_attr = -1, g_id_has_attr = -1, g_id_toggle_attr = -1;
 
 void element_init(JSContext *ctx)
 {
-    JSValue proto;
+    static const IdlArgType ADJ_ANY[2] = { IDL_DOMSTRING, IDL_ANY };
+    static const IdlArgType TOGGLE[2] = { IDL_DOMSTRING, IDL_ANY };   /* `optional boolean force` is ToBoolean */
+    JSClassDef d = { "Element" };
 
     node_init(ctx);
+    JS_NewClassID(JS_GetRuntime(ctx), &g_element_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_element_class, &d);
+    node_claim_type(LXB_DOM_NODE_TYPE_ELEMENT, g_element_class);
 
     /* `name`, `value` and `selectors` are DOMStrings, so each is ToString on whatever the page passed:
        `el.getAttribute({toString(){ … }})` is the page's code, and the declaration parks the machine on that
        argument rather than running it out of a C activation. */
-    proto = JS_NewObjectProto(ctx, node_proto());
-    CHECK(!JS_IsException(proto), "Element.prototype could not be allocated");
-    idl_interface_tag(ctx, proto, "Element");
-    JS_SetPropertyFunctionList(ctx, proto, js_element_readonly,
-                               (int)(sizeof(js_element_readonly) / sizeof(js_element_readonly[0])));
-    idl_install_method(ctx, proto, "getAttribute", 1,
-                       idl_method_id(ctx, IDL_1STR, 1, js_el_get_attribute, 0));
-    idl_install_method(ctx, proto, "setAttribute", 2,
-                       idl_method_id(ctx, IDL_2STR, 2, js_el_set_attribute, 0));
+    g_id_get_attr = idl_method_id(ctx, IDL_1STR, 1, js_el_get_attribute, 0);
+    g_id_set_attr = idl_method_id(ctx, IDL_2STR, 2, js_el_set_attribute, 0);
+    /* §4.9: webkitMatchesSelector is `matches` under its historical name — the IDL declares it as the same
+       operation, so it IS the same declaration and not a forwarding wrapper. Both are magics on the one
+       selector machine document.c owns, which is what stops four members disagreeing about a selector. */
+    g_id_matches = idl_method_id_step(ctx, IDL_1STR, 1, NULL, 0, document_qs_decl(), 2);
+    g_id_closest = idl_method_id_step(ctx, IDL_1STR, 1, NULL, 0, document_qs_decl(), 3);
+    /* `[CEReactions] attribute [LegacyNullToEmptyString] DOMString innerHTML` — the extended attribute is part
+       of the TYPE, so `el.innerHTML = null` empties the element instead of parsing the markup `null`. */
+    g_id_inner_get = idl_getter_id_step(ctx, &EL_GET_HTML_STEP, 0);
+    g_id_inner_set = idl_setter_id_step(ctx, IDL_DOMSTRING, true, &EL_SET_HTML_STEP, 0);
+    g_id_outer_get = idl_getter_id_step(ctx, &EL_GET_HTML_STEP, 1);
+    g_id_outer_set = idl_setter_id_step(ctx, IDL_DOMSTRING, true, &EL_SET_HTML_STEP, 1);
+    /* §4.9's three adjacent members. The HTML one takes two DOMStrings; the other two take a position and a
+       value the IDL leaves alone (a Node, or a DOMString this stringifies into a Text node). */
+    g_id_adj_html = idl_method_id_step(ctx, IDL_2STR, 2, NULL, 0, &EL_ADJACENT_HTML_STEP, 0);
+    g_id_adj_el = idl_method_id(ctx, ADJ_ANY, 2, js_el_insert_adjacent, 1);
+    g_id_adj_text = idl_method_id(ctx, IDL_2STR, 2, js_el_insert_adjacent, 2);
+    g_id_attr_names = idl_method_id(ctx, NULL, 0, js_el_attribute_names, 0);
+    g_id_remove_attr = idl_method_id(ctx, IDL_1STR, 1, js_el_attr_op, 0);
+    g_id_has_attr = idl_method_id(ctx, IDL_1STR, 1, js_el_attr_op, 1);
+    g_id_toggle_attr = idl_method_id(ctx, TOGGLE, 2, js_el_attr_op, 2);
+    idl_optional_from(1);   /* §4.9: `toggleAttribute(qualifiedName, optional force)` */
     {
-        /* §4.9: webkitMatchesSelector is `matches` under its historical name — the IDL declares it as the same
-           operation, so it IS the same declaration and not a forwarding wrapper. Both are magics on the one
-           selector machine document.c owns, which is what stops four members disagreeing about a selector. */
-        int m = idl_method_id_step(ctx, IDL_1STR, 1, NULL, 0, document_qs_decl(), 2);
-        idl_install_method(ctx, proto, "matches", 1, m);
-        idl_install_method(ctx, proto, "webkitMatchesSelector", 1, m);
-        idl_install_method(ctx, proto, "closest", 1,
-                           idl_method_id_step(ctx, IDL_1STR, 1, NULL, 0, document_qs_decl(), 3));
+        static const ElReflect R[] = {
+            { "id", "id", REFLECT_STRING }, { "className", "class", REFLECT_STRING },
+            { "slot", "slot", REFLECT_STRING },
+        };
+        g_refl_n = (int)(sizeof(R) / sizeof(R[0]));
+        g_refl_base = element_declare_reflections(ctx, R, g_refl_n);
     }
+
     idl_indexed_init(ctx);      /* the exotic class every indexed interface is built on */
     attr_init(ctx);             /* §4.9.2 Attr — registered for node type 2, which node_wrap had no interface for */
     g_attrs_key = JS_NewAtom(ctx, "__attributesSlot");
     CHECK(g_attrs_key != JS_ATOM_NULL, "the attributes slot key could not be interned");
     collections_init(ctx);      /* NodeList and HTMLCollection, which childNodes and children are */
-    dom_token_list_init(ctx);   /* its prototype must exist before classList names it */
+    dom_token_list_init(ctx);   /* its class must exist before classList names it */
+    node_set_tree_hook(element_tree_changed);
+    idl_set_tree_steps(&ELEMENT_TREE_STEPS);
+    dom_cow_set_attr_hook(element_attr_changed);
+    realm_declare_intrinsic(element_install_proto);
+    custom_elements_init(ctx);
+    cssom_init(ctx);          /* CSSStyleDeclaration, which HTMLElement's `style` attribute names */
+    html_element_init(ctx);   /* the HTML half, which builds HTMLElement and the per-tag interfaces on this */
+}
+
+/* §4.9's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. It is DECLARED before custom_elements/cssom/html_element
+   above so that the list runs it FIRST — every one of those chains its own prototypes to this one. */
+void element_install_proto(JSContext *ctx)
+{
+    JSValue proto, base, prev;
+
+    prev = JS_GetClassProto(ctx, g_element_class);
+    DCHECK(JS_IsNull(prev), "element_install_proto ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+    base = node_proto(ctx);
+    proto = JS_NewObjectProto(ctx, base);
+    JS_FreeValue(ctx, base);
+    CHECK(!JS_IsException(proto), "Element.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "Element");
+    JS_SetPropertyFunctionList(ctx, proto, js_element_readonly,
+                               (int)(sizeof(js_element_readonly) / sizeof(js_element_readonly[0])));
+    idl_install_method(ctx, proto, "getAttribute", 1, g_id_get_attr);
+    idl_install_method(ctx, proto, "setAttribute", 2, g_id_set_attr);
+    idl_install_method(ctx, proto, "matches", 1, g_id_matches);
+    idl_install_method(ctx, proto, "webkitMatchesSelector", 1, g_id_matches);
+    idl_install_method(ctx, proto, "closest", 1, g_id_closest);
     dom_token_list_install_element(ctx, proto);   /* §4.9's [SameObject] classList */
     node_install_child_mixin(ctx, proto);    /* remove / before / after / replaceWith */
     node_install_parent_mixin(ctx, proto);   /* append / prepend / replaceChildren */
-
-    /* `[CEReactions] attribute [LegacyNullToEmptyString] DOMString innerHTML` — the extended attribute is part
-       of the TYPE, so `el.innerHTML = null` empties the element instead of parsing the markup `null`. */
-    idl_install_accessor_step(ctx, proto, "innerHTML",
-                              idl_getter_id_step(ctx, &EL_GET_HTML_STEP, 0),
-                              idl_setter_id_step(ctx, IDL_DOMSTRING, true, &EL_SET_HTML_STEP, 0));
-    idl_install_accessor_step(ctx, proto, "outerHTML",
-                              idl_getter_id_step(ctx, &EL_GET_HTML_STEP, 1),
-                              idl_setter_id_step(ctx, IDL_DOMSTRING, true, &EL_SET_HTML_STEP, 1));
-    {
-        /* §4.9's three adjacent members. The HTML one takes two DOMStrings; the other two take a position and
-           a value the IDL leaves alone (a Node, or a DOMString this stringifies into a Text node). */
-        static const IdlArgType ADJ_ANY[2] = { IDL_DOMSTRING, IDL_ANY };
-        idl_install_method(ctx, proto, "insertAdjacentHTML", 2,
-                           idl_method_id_step(ctx, IDL_2STR, 2, NULL, 0, &EL_ADJACENT_HTML_STEP, 0));
-        idl_install_method(ctx, proto, "insertAdjacentElement", 2,
-                           idl_method_id(ctx, ADJ_ANY, 2, js_el_insert_adjacent, 1));
-        idl_install_method(ctx, proto, "insertAdjacentText", 2,
-                           idl_method_id(ctx, IDL_2STR, 2, js_el_insert_adjacent, 2));
-    }
-
+    idl_install_accessor_step(ctx, proto, "innerHTML", g_id_inner_get, g_id_inner_set);
+    idl_install_accessor_step(ctx, proto, "outerHTML", g_id_outer_get, g_id_outer_set);
+    idl_install_method(ctx, proto, "insertAdjacentHTML", 2, g_id_adj_html);
+    idl_install_method(ctx, proto, "insertAdjacentElement", 2, g_id_adj_el);
+    idl_install_method(ctx, proto, "insertAdjacentText", 2, g_id_adj_text);
     /* The rest of the attribute family. removeAttribute had no implementation at all, which is also why a
        boolean reflection could not unset itself. */
     idl_install_accessor(ctx, proto, "attributes", js_el_attributes, 0, -1);
-    idl_install_method(ctx, proto, "getAttributeNames", 0,
-                       idl_method_id(ctx, NULL, 0, js_el_attribute_names, 0));
-    idl_install_method(ctx, proto, "removeAttribute", 1,
-                       idl_method_id(ctx, IDL_1STR, 1, js_el_attr_op, 0));
-    idl_install_method(ctx, proto, "hasAttribute", 1,
-                       idl_method_id(ctx, IDL_1STR, 1, js_el_attr_op, 1));
-    {
-        static const IdlArgType TOGGLE[2] = { IDL_DOMSTRING, IDL_ANY };   /* `optional boolean force` is ToBoolean */
-        idl_install_method(ctx, proto, "toggleAttribute", 1,
-                           idl_method_id(ctx, TOGGLE, 2, js_el_attr_op, 2));
-        idl_optional_from(1);   /* §4.9: `toggleAttribute(qualifiedName, optional force)` */
-    }
+    idl_install_method(ctx, proto, "getAttributeNames", 0, g_id_attr_names);
+    idl_install_method(ctx, proto, "removeAttribute", 1, g_id_remove_attr);
+    idl_install_method(ctx, proto, "hasAttribute", 1, g_id_has_attr);
+    idl_install_method(ctx, proto, "toggleAttribute", 1, g_id_toggle_attr);
     JS_SetPropertyStr(ctx, proto, "hasAttributes",
                       JS_NewCFunctionMagic(ctx, js_el_attr_list, "hasAttributes", 0, JS_CFUNC_generic_magic, 0));
     JS_SetPropertyStr(ctx, proto, "getAttributeNames",
                       JS_NewCFunctionMagic(ctx, js_el_attr_list, "getAttributeNames", 0, JS_CFUNC_generic_magic, 1));
     JS_SetPropertyFunctionList(ctx, proto, js_element_name_parts,
                                (int)(sizeof(js_element_name_parts) / sizeof(js_element_name_parts[0])));
-
     /* §4.9's OWN reflections, and only those: `id`, `class` and `slot`. `src`, `name` and `content` used to be
        here too, which is three properties Element's IDL does not declare — they belong to HTMLScriptElement,
        to a dozen form interfaces and to HTMLMetaElement, and they are installed there now. */
-    {
-        static const ElReflect R[] = {
-            { "id", "id", REFLECT_STRING }, { "className", "class", REFLECT_STRING },
-            { "slot", "slot", REFLECT_STRING },
-        };
-        element_install_reflections(ctx, proto, R, (int)(sizeof(R) / sizeof(R[0])));
-    }
-    /* GlobalEventHandlers is NOT on Element — the IDL mixes it into HTMLElement, which is where it is installed
-       now that that interface exists. */
-    g_element_proto = proto;
-    node_set_proto(ctx, LXB_DOM_NODE_TYPE_ELEMENT, JS_DupValue(ctx, proto));
-    node_set_tree_hook(element_tree_changed);
-    idl_set_tree_steps(&ELEMENT_TREE_STEPS);
-    dom_cow_set_attr_hook(element_attr_changed);
-    custom_elements_init(ctx);
-    cssom_init(ctx);          /* CSSStyleDeclaration.prototype, which HTMLElement's `style` attribute names */
-    html_element_init(ctx);   /* the HTML half, which builds HTMLElement and the per-tag interfaces on this */
+    element_install_reflections(ctx, proto, g_refl_base, g_refl_n);
+    /* GlobalEventHandlers is NOT on Element — the IDL mixes it into HTMLElement, which is where it is
+       installed now that that interface exists. */
+    JS_SetClassProto(ctx, g_element_class, proto);
 }
 
-JSValueConst element_proto(void) { DCHECK(JS_IsObject(g_element_proto), "Element.prototype was asked for before element_init built it"); return g_element_proto; }
+JSValue element_proto(JSContext *ctx)
+{
+    JSValue proto = JS_GetClassProto(ctx, g_element_class);
+    DCHECK(!JS_IsNull(proto), "Element.prototype was asked for in a realm that never ran element_install_proto");
+    return proto;   /* OWNED */
+}
 
 void element_free(JSContext *ctx)
 {
@@ -1214,8 +1254,7 @@ void element_free(JSContext *ctx)
     if (g_attrs_key != JS_ATOM_NULL) { JS_FreeAtom(ctx, g_attrs_key); g_attrs_key = JS_ATOM_NULL; }
     document_fragment_free(ctx);
     idl_indexed_free(ctx);
-    JS_FreeValue(ctx, g_element_proto);
-    g_element_proto = JS_UNDEFINED;
+    /* the prototypes are the REALMS' — each is released with its context */
     g_reflect_n = 0;
     node_free(ctx);
 }

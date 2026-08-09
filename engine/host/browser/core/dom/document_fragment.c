@@ -28,9 +28,11 @@
 #include "core/dom/document_fragment.h"
 #include "core/dom/element.h"
 #include "core/dom/node.h"
+#include "core/realm.h"
 #include "core/idl_args.h"
 
-static JSValue g_frag_proto = JS_UNDEFINED;
+/* PER REALM — §3.7. The node-type table names the CLASS; the prototype lives in its context slot. */
+static JSClassID g_frag_class;
 static int     g_ready;
 
 /* `constructor()` — §4.7. The fragment belongs to the document's memory, and is in no tree until the page puts
@@ -50,15 +52,34 @@ static JSValue js_frag_ctor(JSContext *ctx, JSValueConst new_target, int argc, J
 
 void document_fragment_init(JSContext *ctx)
 {
-    DCHECK(!g_ready, "document_fragment_init ran twice — one instance is one document");
-    g_frag_proto = JS_NewObjectProto(ctx, node_proto());
-    CHECK(!JS_IsException(g_frag_proto), "DocumentFragment.prototype could not be allocated");
-    idl_interface_tag(ctx, g_frag_proto, "DocumentFragment");
-    node_install_parent_mixin(ctx, g_frag_proto);
-    node_install_nonelement_parent_mixin(ctx, g_frag_proto);   /* §4.2.4, the same one Document includes */
-    /* CONSUMED by the table, which is what makes node_wrap hand a fragment this interface from now on. */
-    node_set_proto(ctx, LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT, JS_DupValue(ctx, g_frag_proto));
+    JSClassDef d = { "DocumentFragment" };
+
+    DCHECK(!g_ready, "document_fragment_init ran twice — the interface is declared once per AGENT");
+    JS_NewClassID(JS_GetRuntime(ctx), &g_frag_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_frag_class, &d);
+    /* THE CLAIM is what makes node_wrap hand a fragment this interface from now on — in every realm, because
+       what is claimed is the CLASS and each realm fills its own slot. */
+    node_claim_type(LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT, g_frag_class);
     g_ready = 1;
+    realm_declare_intrinsic(document_fragment_install_proto);
+}
+
+/* §4.7's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. */
+void document_fragment_install_proto(JSContext *ctx)
+{
+    JSValue proto, base, prev;
+
+    prev = JS_GetClassProto(ctx, g_frag_class);
+    DCHECK(JS_IsNull(prev), "document_fragment_install_proto ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+    base = node_proto(ctx);
+    proto = JS_NewObjectProto(ctx, base);
+    JS_FreeValue(ctx, base);
+    CHECK(!JS_IsException(proto), "DocumentFragment.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "DocumentFragment");
+    node_install_parent_mixin(ctx, proto);
+    node_install_nonelement_parent_mixin(ctx, proto);   /* §4.2.4, the same one Document includes */
+    JS_SetClassProto(ctx, g_frag_class, proto);
 }
 
 void document_fragment_install(JSContext *ctx, JSValueConst global)
@@ -69,20 +90,24 @@ void document_fragment_install(JSContext *ctx, JSValueConst global)
     /* A REAL CONSTRUCTOR, unlike every other node interface here — §4.7 declares one. */
     ctor = JS_NewCFunction2(ctx, (JSCFunction *)js_frag_ctor, "DocumentFragment", 0, JS_CFUNC_constructor, 0);
     CHECK(!JS_IsException(ctor), "the DocumentFragment interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_frag_proto);
+    {
+        JSValue proto = document_fragment_proto(ctx);
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "DocumentFragment", ctor);
 }
 
-JSValueConst document_fragment_proto(void)
+JSValue document_fragment_proto(JSContext *ctx)
 {
-    DCHECK(g_ready, "DocumentFragment.prototype was asked for before it was built");
-    return g_frag_proto;
+    JSValue proto = JS_GetClassProto(ctx, g_frag_class);
+    DCHECK(!JS_IsNull(proto), "DocumentFragment.prototype was asked for in a realm that never ran its install");
+    return proto;   /* OWNED */
 }
 
 void document_fragment_free(JSContext *ctx)
 {
     if (!g_ready) return;
-    JS_FreeValue(ctx, g_frag_proto);
-    g_frag_proto = JS_UNDEFINED;
+    /* the prototypes are the REALMS' — released with their contexts */
     g_ready = 0;
 }

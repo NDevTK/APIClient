@@ -49,6 +49,7 @@
 #include "core/dom/collections.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/dom/document.h"
 #include "solver/engine.h"
 #include "core/events/event_target.h"
@@ -57,12 +58,18 @@ static const IdlArgType IDL_1NSTR[1] = { IDL_DOMSTRING_NULLABLE };
 
 static JSClassID g_node_class;
 
-/* THE INTERFACE PER NODE TYPE. Indexed by lxb_dom_node_type_t, filled with Node.prototype at init so that a
-   node kind no derived component claims is honestly a Node rather than a bare object. */
-static JSValue g_protos[LXB_DOM_NODE_TYPE_LAST_ENTRY];
-static JSValue g_node_proto;
+/* THE INTERFACE PER NODE TYPE, AS A CLASS ID RATHER THAN A PROTOTYPE. Indexed by lxb_dom_node_type_t, filled
+   with Node's class at init so that a node kind no derived component claims is honestly a Node rather than a
+   bare object.
+   IT HOLDS CLASS IDS BECAUSE THE PROTOTYPES ARE PER REALM AND THIS TABLE IS NOT. §3.7 gives every realm its own
+   interface prototype objects — and here that decides ANSWERS, since a C member runs in the realm that DEFINED
+   it — so a table OF PROTOTYPES could only ever hold one document's. A class id is agent-scoped and immutable,
+   and quickjs's per-context class-proto slot is where each realm's actual prototype lives. That also dissolves
+   the registration ORDER problem: a component claims its node type ONCE per agent, and fills its own realm's
+   slot whenever that realm is built, in whatever order realms happen. */
+static JSClassID g_type_class[LXB_DOM_NODE_TYPE_LAST_ENTRY];
+static JSClassID g_chardata_class, g_text_class, g_comment_class;
 static int     g_protos_ready;
-static JSValue g_chardata_proto;
 
 /* THE IDENTITY MAP, keyed by the Lexbor node's ADDRESS.
    It was a linear scan, and that is O(document) on the single hottest path in the DOM. Every `parentNode`,
@@ -200,8 +207,10 @@ static bool node_is_inclusive_ancestor(const lxb_dom_node_t *a, const lxb_dom_no
    by node TYPE and cannot answer it. So the html layer registers the answer and node_wrap ASKS, which keeps it
    the ONE place a wrapper is built. Not a fallback and nothing to select against: there is exactly one answer
    per element, and an element wrapped before the resolver exists is a DCHECK, not a degraded path. */
-static JSValueConst (*g_element_resolver)(lxb_dom_element_t *el);
-void node_set_element_resolver(JSValueConst (*fn)(lxb_dom_element_t *el)) { g_element_resolver = fn; }
+/* WHICH HTML INTERFACE AN ELEMENT WEARS — the HTML layer's answer, and it takes a REALM because the prototype
+   it names is that realm's. OWNED, like every other per-realm prototype read. */
+static JSValue (*g_element_resolver)(JSContext *ctx, lxb_dom_element_t *el);
+void node_set_element_resolver(JSValue (*fn)(JSContext *ctx, lxb_dom_element_t *el)) { g_element_resolver = fn; }
 
 /* THE TREE HOOK IS INSTALLED INTO THE CHOKEPOINT, not called from each mutation site, and the difference is a
    bug this file had: `element_on_inserted` was invoked from appendChild and NOWHERE else, so an element that
@@ -1239,55 +1248,84 @@ static const IdlStepDecl NODE_BYID_STEP = {
 
 /* §4.2.4, installed on the interfaces whose IDL INCLUDES it: Document and DocumentFragment. Not Element —
    `el.getElementById` is not a member of anything, which is why this is a mixin and not a Node member. */
+static int g_id_by_id = -1;
+
 void node_install_nonelement_parent_mixin(JSContext *ctx, JSValueConst proto)
 {
-    static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
-    idl_install_method(ctx, proto, "getElementById", 1,
-                       idl_method_id_step(ctx, ONE_STR, 1, NULL, 0, &NODE_BYID_STEP, 0));
+    DCHECK(g_id_by_id >= 0, "the NonElementParentNode mixin was installed before it was declared");
+    idl_install_method(ctx, proto, "getElementById", 1, g_id_by_id);
+}
+
+/* The members that WALK, installed through the declaration because they are machines. */
+/* DECLARED ONCE PER AGENT, INSTALLED PER REALM. The IDL pool is SEALED after agent init precisely so that a
+   per-realm mint is caught (idl_declared_before_seal), and a shared "install these members" helper that mints
+   inline is exactly that bug: it works for the first realm and aborts on the second, naming the member. */
+static int g_w_equal = -1, g_w_pos = -1, g_w_append = -1, g_w_remove = -1, g_w_insert = -1, g_w_replace = -1,
+           g_w_normalize = -1, g_w_clone = -1;
+
+static void node_declare_walkers(JSContext *ctx)
+{
+    static const IdlArgType ONE_ANY[1] = { IDL_ANY };   /* `Node? otherNode` — an interface type crosses as itself */
+    static const IdlArgType TWO_ANY[2] = { IDL_ANY, IDL_ANY };
+    static const IdlArgType ONE_BOOL[1] = { IDL_BOOLEAN };
+
+    g_w_equal = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &NODE_EQUAL_STEP, 0);
+    g_w_pos = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &NODE_POS_STEP, 0);
+    /* §4.5's four MUTATING members. `Node node` / `Node? child` are interface types, so there is nothing to
+       coerce — the declaration is not about coercion here, it is about being a declared member at all. */
+    g_w_append = idl_method_id(ctx, ONE_ANY, 1, js_node_child_op, 0);
+    g_w_remove = idl_method_id(ctx, ONE_ANY, 1, js_node_child_op, 1);
+    g_w_insert = idl_method_id(ctx, TWO_ANY, 2, js_node_insert, 0);
+    g_w_replace = idl_method_id(ctx, TWO_ANY, 2, js_node_insert, 1);
+    /* `undefined normalize()` — no arguments to convert and still three loops' worth of the page's tree. */
+    g_w_normalize = idl_method_id_step(ctx, NULL, 0, NULL, 0, &NODE_NORM_STEP, 0);
+    /* `[CEReactions] Node cloneNode(optional boolean subtree = false)`. ToBoolean is total and runs none of the
+       page's code, but the argument still crosses CONVERTED — a body handed the raw value would have to
+       remember to coerce it, which is the per-body mistake one declaration exists to have none of. */
+    g_w_clone = idl_method_id_step(ctx, ONE_BOOL, 1, NULL, 0, &NODE_CLONE_STEP, 0);
+    idl_optional_from(0);   /* §4.4: `cloneNode(optional deep = false)` */
 }
 
 /* The members that WALK, installed through the declaration because they are machines. */
 static void node_install_walkers(JSContext *ctx, JSValueConst proto)
 {
-    static const IdlArgType ONE_ANY[1] = { IDL_ANY };   /* `Node? otherNode` — an interface type crosses as itself */
-    idl_install_method(ctx, proto, "isEqualNode", 1,
-                       idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &NODE_EQUAL_STEP, 0));
-    idl_install_method(ctx, proto, "compareDocumentPosition", 1,
-                       idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &NODE_POS_STEP, 0));
-    {
-        /* §4.5's four MUTATING members. `Node node` / `Node? child` are interface types, so there is nothing to
-           coerce — the declaration is not about coercion here, it is about being a declared member at all. */
-        static const IdlArgType TWO_ANY[2] = { IDL_ANY, IDL_ANY };
-        idl_install_method(ctx, proto, "appendChild", 1,
-                           idl_method_id(ctx, ONE_ANY, 1, js_node_child_op, 0));
-        idl_install_method(ctx, proto, "removeChild", 1,
-                           idl_method_id(ctx, ONE_ANY, 1, js_node_child_op, 1));
-        idl_install_method(ctx, proto, "insertBefore", 2,
-                           idl_method_id(ctx, TWO_ANY, 2, js_node_insert, 0));
-        idl_install_method(ctx, proto, "replaceChild", 2,
-                           idl_method_id(ctx, TWO_ANY, 2, js_node_insert, 1));
+    idl_install_method(ctx, proto, "isEqualNode", 1, g_w_equal);
+    idl_install_method(ctx, proto, "compareDocumentPosition", 1, g_w_pos);
+    idl_install_method(ctx, proto, "appendChild", 1, g_w_append);
+    idl_install_method(ctx, proto, "removeChild", 1, g_w_remove);
+    idl_install_method(ctx, proto, "insertBefore", 2, g_w_insert);
+    idl_install_method(ctx, proto, "replaceChild", 2, g_w_replace);
+    idl_install_method(ctx, proto, "normalize", 0, g_w_normalize);
+    idl_install_method(ctx, proto, "cloneNode", 0, g_w_clone);
+}
+
+/* ONE DECLARATION PER MIXIN MEMBER, minted at agent init and keyed by the member's own MAGIC — which is what
+   makes the id reusable across every prototype that includes the mixin, and across every realm. */
+static int g_mixin_id[32];
+static int g_mixin_declared;
+
+static void node_declare_mixins(JSContext *ctx);
+
+static void mixin_declare(JSContext *ctx, const NodeMixinMember *tab, unsigned n)
+{
+    unsigned k;
+    for (k = 0; k < n; k++) {
+        DCHECK(tab[k].magic >= 0 && tab[k].magic < (int)(sizeof(g_mixin_id) / sizeof(g_mixin_id[0])),
+               "a node mixin member's magic is outside the declaration table — the table is indexed BY magic so "
+               "that one member is one declaration however many mixins include it");
+        if (g_mixin_id[tab[k].magic] < 0)
+            g_mixin_id[tab[k].magic] = idl_method_id_ext(ctx, MIXIN_NODES, 1, /*variadic*/ true, node_class_id(),
+                                                         js_node_mixin, tab[k].magic);
     }
-    /* `undefined normalize()` — no arguments to convert and still three loops' worth of the page's tree. */
-    idl_install_method(ctx, proto, "normalize", 0,
-                       idl_method_id_step(ctx, NULL, 0, NULL, 0, &NODE_NORM_STEP, 0));
-    {
-        /* `[CEReactions] Node cloneNode(optional boolean subtree = false)`. ToBoolean is total and runs none of
-           the page's code, but the argument still crosses CONVERTED — a body handed the raw value would have to
-           remember to coerce it, which is the per-body mistake one declaration exists to have none of. */
-        static const IdlArgType ONE_BOOL[1] = { IDL_BOOLEAN };
-        idl_install_method(ctx, proto, "cloneNode", 0,
-                           idl_method_id_step(ctx, ONE_BOOL, 1, NULL, 0, &NODE_CLONE_STEP, 0));
-        idl_optional_from(0);   /* §4.4: `cloneNode(optional deep = false)` */
-    }
+    g_mixin_declared = 1;
 }
 
 static void mixin_install(JSContext *ctx, JSValueConst proto, const NodeMixinMember *tab, unsigned n)
 {
     unsigned k;
+    DCHECK(g_mixin_declared, "a node mixin was installed before its members were declared");
     for (k = 0; k < n; k++)
-        idl_install_method(ctx, proto, tab[k].name, tab[k].len,
-                           idl_method_id_ext(ctx, MIXIN_NODES, 1, /*variadic*/ true, node_class_id(),
-                                             js_node_mixin, tab[k].magic));
+        idl_install_method(ctx, proto, tab[k].name, tab[k].len, g_mixin_id[tab[k].magic]);
 }
 
 void node_install_child_mixin(JSContext *ctx, JSValueConst proto)
@@ -1299,25 +1337,37 @@ void node_install_child_mixin(JSContext *ctx, JSValueConst proto)
 /* THE WHOLE MIXIN, in one call. An interface that includes ParentNode gets everything §4.2.6 lists — not the
    three insertion members while its reads and lookups are re-declared per interface, which is how Document
    ended up without `children` and with a querySelector that ignored its receiver. */
+static int g_id_qs = -1, g_id_qsa = -1, g_id_by_tag = -1, g_id_by_class = -1;
+
 void node_install_parent_mixin(JSContext *ctx, JSValueConst proto)
 {
-    static const IdlArgType ONE_SEL[1] = { IDL_DOMSTRING };
+    DCHECK(g_id_qs >= 0, "the ParentNode mixin was installed before it was declared");
     mixin_install(ctx, proto, PARENT_NODE_MIXIN,
                   (unsigned)(sizeof(PARENT_NODE_MIXIN) / sizeof(PARENT_NODE_MIXIN[0])));
     JS_SetPropertyFunctionList(ctx, proto, js_parent_node_reads,
                                (int)(sizeof(js_parent_node_reads) / sizeof(js_parent_node_reads[0])));
-    idl_install_method(ctx, proto, "querySelector", 1,
-                       idl_method_id_step(ctx, ONE_SEL, 1, NULL, 0, document_qs_decl(), 0));
-    idl_install_method(ctx, proto, "querySelectorAll", 1,
-                       idl_method_id_step(ctx, ONE_SEL, 1, NULL, 0, document_qs_decl(), 1));
+    idl_install_method(ctx, proto, "querySelector", 1, g_id_qs);
+    idl_install_method(ctx, proto, "querySelectorAll", 1, g_id_qsa);
     /* Not part of ParentNode in the IDL — §4.5 puts these on Document and §4.9 on Element, which between them
        is every interface that includes ParentNode except DocumentFragment. Installed here because that is one
        place rather than two, and a fragment answering them is a superset nothing can observe as wrong: its
        subtree is exactly what the walk would search. */
-    idl_install_method(ctx, proto, "getElementsByTagName", 1,
-                       idl_method_id(ctx, ONE_SEL, 1, js_node_by_name, 0));
-    idl_install_method(ctx, proto, "getElementsByClassName", 1,
-                       idl_method_id(ctx, ONE_SEL, 1, js_node_by_name, 1));
+    idl_install_method(ctx, proto, "getElementsByTagName", 1, g_id_by_tag);
+    idl_install_method(ctx, proto, "getElementsByClassName", 1, g_id_by_class);
+}
+
+/* Every mixin's declarations, once per agent — see node_declare_walkers for why this is split at all. */
+static void node_declare_mixins(JSContext *ctx)
+{
+    static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
+
+    mixin_declare(ctx, CHILD_NODE_MIXIN, (unsigned)(sizeof(CHILD_NODE_MIXIN) / sizeof(CHILD_NODE_MIXIN[0])));
+    mixin_declare(ctx, PARENT_NODE_MIXIN, (unsigned)(sizeof(PARENT_NODE_MIXIN) / sizeof(PARENT_NODE_MIXIN[0])));
+    g_id_by_id = idl_method_id_step(ctx, ONE_STR, 1, NULL, 0, &NODE_BYID_STEP, 0);
+    g_id_qs = idl_method_id_step(ctx, ONE_STR, 1, NULL, 0, document_qs_decl(), 0);
+    g_id_qsa = idl_method_id_step(ctx, ONE_STR, 1, NULL, 0, document_qs_decl(), 1);
+    g_id_by_tag = idl_method_id(ctx, ONE_STR, 1, js_node_by_name, 0);
+    g_id_by_class = idl_method_id(ctx, ONE_STR, 1, js_node_by_name, 1);
 }
 
 static const JSCFunctionListEntry js_node_base[] = {
@@ -1533,29 +1583,40 @@ static const JSCFunctionListEntry js_chardata_base[] = {
 };
 
 /* The interface a node TYPE wears, borrowed — what a component installing its interface object names. */
-JSValueConst node_type_proto(int node_type)
+JSValue node_type_proto(JSContext *ctx, int node_type)
 {
-    DCHECK(g_protos_ready, "a node type's interface was asked for before node_init built the table");
+    JSValue proto;
+
+    DCHECK(g_protos_ready, "a node type's interface was asked for before node_init declared the table");
     DCHECK(node_type > 0 && node_type < LXB_DOM_NODE_TYPE_LAST_ENTRY,
            "a node type the DOM does not have was asked for its interface");
-    return g_protos[node_type];
+    proto = JS_GetClassProto(ctx, g_type_class[node_type]);
+    DCHECK(!JS_IsNull(proto),
+           "a node type's interface was asked for in a realm that never built it — the component that claimed "
+           "the type declares a per-realm install (core/realm.h), and a realm that skipped it has no prototype "
+           "for nodes of that kind to wear");
+    return proto;   /* OWNED */
 }
 
-JSValueConst node_proto(void)
+JSValue node_proto(JSContext *ctx)
 {
-    DCHECK(g_protos_ready, "Node.prototype was asked for before node_init built it");
-    return g_node_proto;
+    JSValue proto;
+
+    DCHECK(g_protos_ready, "Node.prototype was asked for before node_init declared the interface");
+    proto = JS_GetClassProto(ctx, g_node_class);
+    DCHECK(!JS_IsNull(proto), "Node.prototype was asked for in a realm that never ran node_install_protos");
+    return proto;   /* OWNED */
 }
 
-void node_set_proto(JSContext *ctx, int node_type, JSValue proto)
+void node_claim_type(int node_type, JSClassID cls)
 {
-    DCHECK(g_protos_ready, "a derived interface registered its prototype before node_init built Node.prototype");
+    DCHECK(g_protos_ready, "a derived interface claimed a node type before node_init declared Node");
     DCHECK(node_type > 0 && node_type < LXB_DOM_NODE_TYPE_LAST_ENTRY,
-           "a prototype was registered for a node type the DOM does not have");
-    DCHECK(JS_VALUE_GET_PTR(g_protos[node_type]) == JS_VALUE_GET_PTR(g_node_proto),
+           "a node type the DOM does not have was claimed");
+    DCHECK(cls != 0, "a node type was claimed by no class — the claim is what names the per-realm prototype");
+    DCHECK(g_type_class[node_type] == g_node_class,
            "two components claimed the same node type's interface — one of them would silently lose");
-    JS_FreeValue(ctx, g_protos[node_type]);
-    g_protos[node_type] = proto;        /* CONSUMED: the table owns every prototype it holds */
+    g_type_class[node_type] = cls;
 }
 
 JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
@@ -1576,11 +1637,15 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
            "a Lexbor node carries a type the DOM does not define");
     DCHECK(n->type != LXB_DOM_NODE_TYPE_ELEMENT || g_element_resolver != NULL,
            "an Element node was wrapped before the HTML layer registered its interface resolver");
-    obj = JS_NewObjectProtoClass(ctx,
-              (n->type == LXB_DOM_NODE_TYPE_ELEMENT && g_element_resolver)
-                  ? g_element_resolver(lxb_dom_interface_element(n))
-                  : g_protos[n->type],
-              g_node_class);
+    /* THE PROTOTYPE IS THIS REALM'S, so it is read from the class slot rather than a table — and it is OWNED,
+       which is the one cost this conversion adds to the hottest path in the DOM: a refcount pair per wrap. */
+    {
+        JSValue proto = (n->type == LXB_DOM_NODE_TYPE_ELEMENT && g_element_resolver)
+                            ? g_element_resolver(ctx, lxb_dom_interface_element(n))
+                            : node_type_proto(ctx, (int)n->type);
+        obj = JS_NewObjectProtoClass(ctx, proto, g_node_class);
+        JS_FreeValue(ctx, proto);
+    }
     if (JS_IsException(obj))
         return obj;
     JS_SetOpaque(obj, n);
@@ -1661,86 +1726,111 @@ void node_wrap_forget(JSContext *ctx, lxb_dom_node_t *n)
     node_wrap_remove(n);
 }
 
+/* THE AGENT'S DECLARATIONS: the classes, the IDL pool entries, and which class each node type wears. The
+   PROTOTYPES those classes name are built per realm, in node_install_protos. */
+static int g_id_nodevalue = -1, g_id_textcontent = -1, g_id_textcontent_get = -1, g_id_data = -1,
+           g_id_lookup_prefix = -1, g_id_lookup_ns = -1, g_id_default_ns = -1, g_id_root = -1;
+
 void node_init(JSContext *ctx)
 {
     JSClassDef def = { "Node", .finalizer = node_finalizer };
-    JSValue cd;
-    int i, id_nodevalue, id_textcontent, id_data;
+    JSClassDef cd_def = { "CharacterData" }, tx_def = { "Text" }, cm_def = { "Comment" };
+    static const IdlArgType ROOT_ARGS[1] = { IDL_DICT };
+    static const IdlDictMember ROOT_OPTS[] = { { "composed", IDL_BOOLEAN } };   /* GetRootNodeOptions */
+    int i;
 
     if (g_protos_ready)
-        return;    /* element.c asks for the base before building Element.prototype on top of it */
+        return;    /* element.c asks for the base before declaring Element on top of it */
     /* §2.9's dispatch walks the tree, and this is the file that has one. */
     event_target_set_tree(node_ancestors);
     engine_set_wrap_stats(node_wrap_stats);
 
     JS_NewClassID(JS_GetRuntime(ctx), &g_node_class);
     JS_NewClass(JS_GetRuntime(ctx), g_node_class, &def);
-
-    /* Node.prototype. §4.4 `interface Node : EventTarget`: every node is one, and only the global was — so
-       `el.addEventListener(...)` was "not a function" on every element a page wired up, which is where
-       testharness.js stopped on eight documents (`getElementById("rerun").addEventListener`). It belongs here
-       because it is a BASE member, and here it is one function shared by every node rather than a fresh closure
-       on each. */
-    g_node_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_node_proto), "Node.prototype could not be allocated");
-    idl_interface_tag(ctx, g_node_proto, "Node");
-    node_install_walkers(ctx, g_node_proto);
-    JS_SetPropertyFunctionList(ctx, g_node_proto, js_node_base,
-                               (int)(sizeof(js_node_base) / sizeof(js_node_base[0])));
-    JS_SetPropertyFunctionList(ctx, g_node_proto, js_node_consts,
-                               (int)(sizeof(js_node_consts) / sizeof(js_node_consts[0])));
-    /* §4.4: `Node : EventTarget`. The three members come down the chain from EventTarget.prototype, which is
-       where §2.7 declares them — installing copies onto Node.prototype said they were declared here. */
-    event_target_chain(ctx, g_node_proto);
-    g_protos_ready = 1;
+    JS_NewClassID(JS_GetRuntime(ctx), &g_chardata_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_chardata_class, &cd_def);
+    JS_NewClassID(JS_GetRuntime(ctx), &g_text_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_text_class, &tx_def);
+    JS_NewClassID(JS_GetRuntime(ctx), &g_comment_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_comment_class, &cm_def);
 
     /* Every node kind is a Node until a component claims it. A ProcessingInstruction wrapper answering the Node
        members is honest; a bare object answering none of them is not. */
     for (i = 0; i < LXB_DOM_NODE_TYPE_LAST_ENTRY; i++)
-        g_protos[i] = JS_DupValue(ctx, g_node_proto);
+        g_type_class[i] = g_node_class;
+    for (i = 0; i < (int)(sizeof(g_mixin_id) / sizeof(g_mixin_id[0])); i++)
+        g_mixin_id[i] = -1;
+    g_protos_ready = 1;
+    /* Text and Comment are their own interfaces — `interface Text : CharacterData` and `Comment : CharacterData`
+       — so a page's `x instanceof Text` and `Text.prototype` have something to name, and the two do not share
+       one object that answers for both. */
+    node_claim_type(LXB_DOM_NODE_TYPE_TEXT, g_text_class);
+    node_claim_type(LXB_DOM_NODE_TYPE_COMMENT, g_comment_class);
 
-    /* `attribute DOMString? nodeValue` and `attribute DOMString? textContent` — both Node members, so both are
-       declared and installed here. */
-    id_nodevalue = idl_setter_id(ctx, IDL_DOMSTRING_NULLABLE, false, js_cd_set_data, 1);
-    idl_install_accessor(ctx, g_node_proto, "nodeValue", js_cd_get_data, 1, id_nodevalue);
-    id_textcontent = idl_setter_id(ctx, IDL_DOMSTRING_NULLABLE, false, js_node_set_text_content, 0);
-    idl_install_accessor_step(ctx, g_node_proto, "textContent",
-                              idl_getter_id_step(ctx, &NODE_TEXT_STEP, 0), id_textcontent);
+    /* `attribute DOMString? nodeValue` and `attribute DOMString? textContent` — both Node members. */
+    g_id_nodevalue = idl_setter_id(ctx, IDL_DOMSTRING_NULLABLE, false, js_cd_set_data, 1);
+    g_id_textcontent = idl_setter_id(ctx, IDL_DOMSTRING_NULLABLE, false, js_node_set_text_content, 0);
+    g_id_textcontent_get = idl_getter_id_step(ctx, &NODE_TEXT_STEP, 0);
+    /* `attribute [LegacyNullToEmptyString] DOMString data` — the extended attribute is part of the TYPE, so the
+       body never sees a null and never has to remember the rule. */
+    g_id_data = idl_setter_id(ctx, IDL_DOMSTRING, true, js_cd_set_data, 0);
+    /* §4.4 the three namespace lookups. Each takes a `DOMString?`, so each goes on the shared IDL machine —
+       `n.lookupPrefix({toString(){ … }})` is the page's code exactly like every other DOMString argument. */
+    g_id_lookup_prefix = idl_method_id(ctx, IDL_1NSTR, 1, js_node_lookup_ns, 0);
+    g_id_lookup_ns = idl_method_id(ctx, IDL_1NSTR, 1, js_node_lookup_ns, 1);
+    g_id_default_ns = idl_method_id(ctx, IDL_1NSTR, 1, js_node_lookup_ns, 2);
+    g_id_root = idl_method_id_dict(ctx, ROOT_ARGS, 1, ROOT_OPTS,
+                                   (int)(sizeof(ROOT_OPTS) / sizeof(ROOT_OPTS[0])), js_node_root, 0);
+    idl_optional_from(0);   /* §4.4: `getRootNode(optional GetRootNodeOptions options = {})` */
+    node_declare_walkers(ctx);
+    node_declare_mixins(ctx);
+    realm_declare_intrinsic(node_install_protos);
+}
+
+/* §4.4's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM — Node, CharacterData, Text and Comment. */
+void node_install_protos(JSContext *ctx)
+{
+    JSValue node_p, cd, prev;
+
+    DCHECK(g_protos_ready, "a realm asked for Node.prototype before node_init declared the interface");
+    prev = JS_GetClassProto(ctx, g_node_class);
+    DCHECK(JS_IsNull(prev), "node_install_protos ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+
+    /* Node.prototype. §4.4 `interface Node : EventTarget`: every node is one, and only the global was — so
+       `el.addEventListener(...)` was "not a function" on every element a page wired up, which is where
+       testharness.js stopped on eight documents. It belongs here because it is a BASE member, and here it is
+       one function shared by every node rather than a fresh closure on each. */
+    node_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(node_p), "Node.prototype could not be allocated");
+    idl_interface_tag(ctx, node_p, "Node");
+    node_install_walkers(ctx, node_p);
+    JS_SetPropertyFunctionList(ctx, node_p, js_node_base,
+                               (int)(sizeof(js_node_base) / sizeof(js_node_base[0])));
+    JS_SetPropertyFunctionList(ctx, node_p, js_node_consts,
+                               (int)(sizeof(js_node_consts) / sizeof(js_node_consts[0])));
+    /* §4.4: `Node : EventTarget`. The three members come down the chain from EventTarget.prototype, which is
+       where §2.7 declares them — installing copies onto Node.prototype said they were declared here. */
+    event_target_chain(ctx, node_p);
+    idl_install_accessor(ctx, node_p, "nodeValue", js_cd_get_data, 1, g_id_nodevalue);
+    idl_install_accessor_step(ctx, node_p, "textContent", g_id_textcontent_get, g_id_textcontent);
+    idl_install_method(ctx, node_p, "lookupPrefix", 1, g_id_lookup_prefix);
+    idl_install_method(ctx, node_p, "lookupNamespaceURI", 1, g_id_lookup_ns);
+    idl_install_method(ctx, node_p, "isDefaultNamespace", 1, g_id_default_ns);
+    idl_install_method(ctx, node_p, "getRootNode", 0, g_id_root);
+    JS_SetClassProto(ctx, g_node_class, JS_DupValue(ctx, node_p));
 
     /* CharacterData.prototype — §4.10, `interface CharacterData : Node`, so it INHERITS from Node.prototype
        rather than repeating its members. */
-    cd = JS_NewObjectProto(ctx, g_node_proto);
+    cd = JS_NewObjectProto(ctx, node_p);
     CHECK(!JS_IsException(cd), "CharacterData.prototype could not be allocated");
     idl_interface_tag(ctx, cd, "CharacterData");
     JS_SetPropertyFunctionList(ctx, cd, js_chardata_base,
                                (int)(sizeof(js_chardata_base) / sizeof(js_chardata_base[0])));
-    /* `attribute [LegacyNullToEmptyString] DOMString data` — the extended attribute is part of the TYPE, so the
-       body never sees a null and never has to remember the rule. */
-    id_data = idl_setter_id(ctx, IDL_DOMSTRING, true, js_cd_set_data, 0);
-    idl_install_accessor(ctx, cd, "data", js_cd_get_data, 0, id_data);
-
-    /* §4.4 the three namespace lookups. Each takes a `DOMString?`, so each goes on the shared IDL machine —
-       `n.lookupPrefix({toString(){ … }})` is the page's code exactly like every other DOMString argument. */
-    idl_install_method(ctx, g_node_proto, "lookupPrefix", 1,
-                       idl_method_id(ctx, IDL_1NSTR, 1, js_node_lookup_ns, 0));
-    idl_install_method(ctx, g_node_proto, "lookupNamespaceURI", 1,
-                       idl_method_id(ctx, IDL_1NSTR, 1, js_node_lookup_ns, 1));
-    idl_install_method(ctx, g_node_proto, "isDefaultNamespace", 1,
-                       idl_method_id(ctx, IDL_1NSTR, 1, js_node_lookup_ns, 2));
-
-    {
-        static const IdlArgType ROOT_ARGS[1] = { IDL_DICT };
-        static const IdlDictMember ROOT_OPTS[] = { { "composed", IDL_BOOLEAN } };   /* GetRootNodeOptions */
-        idl_install_method(ctx, g_node_proto, "getRootNode", 0,
-                           idl_method_id_dict(ctx, ROOT_ARGS, 1, ROOT_OPTS,
-                                              (int)(sizeof(ROOT_OPTS) / sizeof(ROOT_OPTS[0])),
-                                              js_node_root, 0));
-        idl_optional_from(0);   /* §4.4: `getRootNode(optional GetRootNodeOptions options = {})` */
-    }
-
-    /* Text and Comment are their own interfaces — `interface Text : CharacterData` and `Comment : CharacterData`
-       — so a page's `x instanceof Text` and `Text.prototype` have something to name, and the two do not share
-       one object that answers for both. */
+    idl_install_accessor(ctx, cd, "data", js_cd_get_data, 0, g_id_data);
+    /* §4.10: `CharacterData includes ChildNode` — `textNode.remove()` is real, and a page that tears down
+       text with it had nothing. ParentNode is NOT included: character data has no children. */
+    node_install_child_mixin(ctx, cd);
     {
         JSValue text_proto = JS_NewObjectProto(ctx, cd);
         JSValue comment_proto = JS_NewObjectProto(ctx, cd);
@@ -1748,13 +1838,18 @@ void node_init(JSContext *ctx)
               "a CharacterData-derived prototype could not be allocated");
         idl_interface_tag(ctx, text_proto, "Text");
         idl_interface_tag(ctx, comment_proto, "Comment");
-        node_set_proto(ctx, LXB_DOM_NODE_TYPE_TEXT, text_proto);
-        node_set_proto(ctx, LXB_DOM_NODE_TYPE_COMMENT, comment_proto);
-        /* §4.10: `CharacterData includes ChildNode` — `textNode.remove()` is real, and a page that tears down
-           text with it had nothing. ParentNode is NOT included: character data has no children. */
-        node_install_child_mixin(ctx, cd);
-        g_chardata_proto = cd;   /* HELD: the interface objects below name it, and node_free releases it */
+        JS_SetClassProto(ctx, g_text_class, text_proto);
+        JS_SetClassProto(ctx, g_comment_class, comment_proto);
     }
+    JS_SetClassProto(ctx, g_chardata_class, cd);
+    JS_FreeValue(ctx, node_p);
+}
+
+JSValue node_chardata_proto(JSContext *ctx)
+{
+    JSValue proto = JS_GetClassProto(ctx, g_chardata_class);
+    DCHECK(!JS_IsNull(proto), "CharacterData.prototype was asked for in a realm that never ran its install");
+    return proto;   /* OWNED */
 }
 
 /* THE INTERFACE OBJECTS — `Node`, `CharacterData`, `Text`, `Comment` as globals with their prototypes. Without
@@ -1790,13 +1885,18 @@ void node_install_interface(JSContext *ctx, JSValueConst global, const char *nam
     /* §4.4 puts its constants on the interface object as well as the prototype. Only Node declares any, and a
        derived interface INHERITS them — `Text.ELEMENT_NODE` is a real read — so the chain carries them rather
        than each object repeating the table. */
-    if (JS_VALUE_GET_PTR(proto) == JS_VALUE_GET_PTR(g_node_proto))
-        JS_SetPropertyFunctionList(ctx, ctor, js_node_consts,
-                                   (int)(sizeof(js_node_consts) / sizeof(js_node_consts[0])));
-    else {
-        JSValue base = node_interface_object(ctx, global);   /* OWNED by this read, and JS_SetPrototype borrows */
-        JS_SetPrototype(ctx, ctor, base);
-        JS_FreeValue(ctx, base);
+    {
+        JSValue base_proto = node_proto(ctx);
+        bool is_node = JS_VALUE_GET_PTR(proto) == JS_VALUE_GET_PTR(base_proto);
+        JS_FreeValue(ctx, base_proto);
+        if (is_node)
+            JS_SetPropertyFunctionList(ctx, ctor, js_node_consts,
+                                       (int)(sizeof(js_node_consts) / sizeof(js_node_consts[0])));
+        else {
+            JSValue base = node_interface_object(ctx, global);   /* OWNED by this read; JS_SetPrototype borrows */
+            JS_SetPrototype(ctx, ctor, base);
+            JS_FreeValue(ctx, base);
+        }
     }
     JS_SetPropertyStr(ctx, (JSValue)global, name, ctor);
 }
@@ -1804,10 +1904,17 @@ void node_install_interface(JSContext *ctx, JSValueConst global, const char *nam
 void node_install_interfaces(JSContext *ctx, JSValueConst global)
 {
     DCHECK(g_protos_ready, "the DOM interface objects were installed before node_init built their prototypes");
-    node_install_interface(ctx, global, "Node", g_node_proto);
-    node_install_interface(ctx, global, "CharacterData", g_chardata_proto);
-    node_install_interface(ctx, global, "Text", g_protos[LXB_DOM_NODE_TYPE_TEXT]);
-    node_install_interface(ctx, global, "Comment", g_protos[LXB_DOM_NODE_TYPE_COMMENT]);
+    {
+        JSValue np = node_proto(ctx), cdp = node_chardata_proto(ctx);
+        JSValue tp = node_type_proto(ctx, LXB_DOM_NODE_TYPE_TEXT);
+        JSValue cmp = node_type_proto(ctx, LXB_DOM_NODE_TYPE_COMMENT);
+        node_install_interface(ctx, global, "Node", np);
+        node_install_interface(ctx, global, "CharacterData", cdp);
+        node_install_interface(ctx, global, "Text", tp);
+        node_install_interface(ctx, global, "Comment", cmp);
+        JS_FreeValue(ctx, np); JS_FreeValue(ctx, cdp);
+        JS_FreeValue(ctx, tp); JS_FreeValue(ctx, cmp);
+    }
 }
 
 
@@ -1819,13 +1926,7 @@ void node_free(JSContext *ctx)
             JS_FreeValue(ctx, g_wraps[i].obj);
     free(g_wraps);
     g_wraps = NULL; g_wrap_n = g_wrap_cap = 0;
-    /* Each derived prototype is held once per node type that maps to it; the base is held by the table too. */
-    for (i = 0; i < LXB_DOM_NODE_TYPE_LAST_ENTRY; i++) {
-        JS_FreeValue(ctx, g_protos[i]);
-        g_protos[i] = JS_UNDEFINED;
-    }
-    JS_FreeValue(ctx, g_node_proto);
-    JS_FreeValue(ctx, g_chardata_proto);
-    g_node_proto = g_chardata_proto = JS_UNDEFINED;
+    /* The prototypes are the REALMS' — each is released with its context. What the AGENT holds is the table of
+       CLASS IDS, which is not a reference to anything. */
     g_protos_ready = 0;
 }
