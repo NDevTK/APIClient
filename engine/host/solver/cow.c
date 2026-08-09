@@ -667,22 +667,25 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
     CowDelta *d = cow_delta_new();
     CowSeg *seg;
 
-    /* THIS FORK READS THE LIVE HEAP, so it is only correct for the delta the heap is currently showing. The
-       unapply below is not bookkeeping — it is what FETCHES each entry's branch-point value out of the heap.
-       Run it on a parked delta and the sibling inherits whatever the RUNNING flow has written, and the re-apply
-       then writes this delta's baseline over that flow's state. cow_delta_fork_parked is the operation for a
-       delta nobody is running, and the world registry's segments are all of that kind. */
-    DCHECK(g_cow_installed == src->base,
-           "a delta whose chain is not the installed one was forked as the running flow's — the freeze reads "
-           "each entry's value from the live heap, so it would hand the sibling another flow's writes and then "
-           "write this delta's baseline over them; cow_delta_fork_parked forks a delta nobody is running");
+    /* IS `src` WHAT THE HEAP IS SHOWING? That one fact decides where the branch-point values are, and it is
+       asked here rather than by the caller — see cow.h. `g_current` is the delta being captured into, which is
+       the running flow's and no other; a delta reached from the world registry is a parked segment.
+       A delta being captured into whose chain is NOT installed is incoherent whichever path runs: the writes
+       being captured are landing on a heap showing somebody else's timeline. */
+    const int applied = (src == g_current);
+    DCHECK(!applied || g_cow_installed == src->base,
+           "the delta being captured into is not the one the heap is showing — a write captured now records a "
+           "baseline value that belongs to another flow's timeline, and the fork would freeze that");
     /* Both flows now SHARE every object that existed at THIS fork (the frame snapshot dup'd their heap refs), so
        both must capture writes to any object with flow_gen <= this generation. Record the CURRENT generation as
        both deltas' fork_gen, then BUMP it so objects created after the fork get a strictly-higher generation and
        are correctly treated as flow-private. Updating the parent's fork_gen (it may be > its previous value) is
        correct: the parent must isolate from its NEWEST sibling, which shares everything up to now. */
     src->fork_gen = d->fork_gen = JS_FlowGen();
-    JS_SetFlowForkGen(src->fork_gen);   /* the RUNNING flow's generation just changed without a switch */
+    /* ONLY THE RUNNING DELTA PUBLISHES ITS THRESHOLD. JS_SetFlowForkGen sets what the capture hook compares
+       against, which is a statement about the flow the heap is showing; a parked segment saying it would make
+       the running flow capture by somebody else's fork point. */
+    if (applied) JS_SetFlowForkGen(src->fork_gen);
     JS_FlowBumpGen();
     d->base = src->base;
     if (src->n == 0) {                  /* nothing to freeze: the sibling just takes a reference on the chain */
@@ -690,50 +693,24 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
         return d;
     }
     g_capturing = 1;
-    cow_unapply_entries(ctx, src->e, src->n);   /* -> parked: each entry's branch-point value lands in `cur` */
+    /* THE FETCH, for an applied delta only: unapply is what puts each entry's branch-point value into `cur`. A
+       parked delta's entries hold it already, and running this on one would read the heap of whatever flow IS
+       applied and record another timeline's values as this delta's. */
+    if (applied) cow_unapply_entries(ctx, src->e, src->n);
     seg = malloc(sizeof *seg);
     CHECK(seg, "cow: OOM fork segment — a shared delta would be corrupted");
     seg->e = src->e; seg->n = src->n; seg->base = src->base; seg->refcount = 2;   /* running flow + sibling */
     src->e = NULL; src->n = 0; src->cap = 0;   /* fresh empty head for the running flow */
     free(src->hash); src->hash = NULL; src->hash_cap = 0;
     src->base = d->base = seg;
-    g_cow_installed = seg;                     /* the frozen head is part of the applied chain now */
-    cow_apply_entries(ctx, seg->e, seg->n);    /* re-apply -> the running flow continues byte-identically */
-    g_capturing = 0;
-    return d;
-}
-
-/* THE SAME FREEZE FOR A DELTA NOBODY IS RUNNING — see cow.h. No heap traffic and no chain move: a parked
-   delta's entries already carry the values the fork above goes to the heap for, and the chain the heap is
-   showing belongs to some other flow. Afterwards `src->base` is the new segment while g_cow_installed still
-   names what it named — a chain below an unapplied head, which is exactly the state cow_unapply leaves and
-   cow_install_chain already walks from. */
-CowDelta *cow_delta_fork_parked(JSContext *ctx, CowDelta *src) {
-    CowDelta *d = cow_delta_new();
-    CowSeg *seg;
-
-    (void)ctx;
-    DCHECK(src != NULL, "a parked fork was asked for of no delta");
-    DCHECK(src != g_current,
-           "the delta being captured into was forked as a PARKED one — its entries hold the values the flow had "
-           "when it was last switched out, so the sibling would inherit a state the flow has already written "
-           "past, and every write since would be missing from it with nothing to say so");
-    /* The same generation statement the running fork makes: from here both deltas share every object that
-       exists, so a write to one of them must be captured. JS_SetFlowForkGen is NOT called — that publishes the
-       RUNNING delta's threshold, and neither of these is it. */
-    src->fork_gen = d->fork_gen = JS_FlowGen();
-    JS_FlowBumpGen();
-    d->base = src->base;
-    if (src->n == 0) {                  /* nothing to freeze: the sibling just takes a reference on the chain */
-        if (d->base) d->base->refcount++;
-        return d;
+    if (applied) {
+        g_cow_installed = seg;                 /* the frozen head is part of the applied chain now */
+        cow_apply_entries(ctx, seg->e, seg->n);/* re-apply -> the running flow continues byte-identically */
     }
-    seg = malloc(sizeof *seg);
-    CHECK(seg, "cow: OOM parked fork segment — a shared delta would be corrupted");
-    seg->e = src->e; seg->n = src->n; seg->base = src->base; seg->refcount = 2;
-    src->e = NULL; src->n = 0; src->cap = 0;
-    free(src->hash); src->hash = NULL; src->hash_cap = 0;
-    src->base = d->base = seg;
+    /* A PARKED FORK LEAVES g_cow_installed WHERE IT WAS, and that is coherent rather than a loose end: it names
+       a chain below an unapplied head, exactly the state cow_unapply leaves, and cow_install_chain walks from
+       it to whatever comes next. */
+    g_capturing = 0;
     return d;
 }
 

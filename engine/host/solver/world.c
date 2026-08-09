@@ -93,6 +93,8 @@ uint32_t world_mint_doc(uint32_t parent)
     return world_doc_intern(buf);
 }
 
+static void world_segment_counts_reset(void);   /* defined with the counters it clears */
+
 static MintedWorld *g_minted;
 static uint32_t     g_minted_n, g_minted_cap;
 
@@ -132,6 +134,9 @@ void world_registry_free(JSContext *ctx)
     g_docs_n = g_docs_cap = 0;
     g_doc = 0;
     g_next_serial = 0;
+    /* THE COUNTS GO WITH THE REGISTRY, because they say what THIS instance's seam did and a host that runs
+       several documents in one process (the native WPT runner) would otherwise report the previous one's. */
+    world_segment_counts_reset();
 }
 
 static WorldId mint(WorldId parent)
@@ -300,6 +305,7 @@ void world_segment_stats(int *materialized, int *forked)
     if (materialized) *materialized = g_seg_made;
     if (forked) *forked = g_seg_forked;
 }
+static void world_segment_counts_reset(void) { g_seg_made = g_seg_forked = 0; }
 
 CowDelta *world_segment(JSContext *ctx, WorldId w, const WorldId *ancestry, int n_anc)
 {
@@ -321,14 +327,12 @@ CowDelta *world_segment(JSContext *ctx, WorldId w, const WorldId *ancestry, int 
     for (i = 0; i < n_anc; i++) {
         ForeignSegment *a = find_segment(ancestry[i]);
         if (a) {
-            /* O(1): the parent's head freezes into a shared immutable base segment both now reference.
-               THE PARKED FORK, and the distinction is not pedantic. A segment is materialized while some LOCAL
-               flow is switched in — a routed delivery arrives between scheduler steps, with the receiving
-               document's own timeline applied to the heap — so the ancestor being forked is never the delta the
-               heap is showing. The running-flow fork would read that flow's writes out of the heap as the
-               ancestor's own and then write the ancestor's baseline over them; this one touches no heap at all,
-               because a parked delta already carries in its entries what the other has to go and fetch. */
-            d = cow_delta_fork_parked(ctx, a->delta);
+            /* O(1): the parent's head freezes into a shared immutable base segment both now reference. Whether
+               that ancestor is the delta the heap is showing depends on the host — a routed delivery arrives
+               with the RECEIVING document's own timeline applied, while the WPT host's read loop leaves the
+               previously-read world's segment installed and the ancestor may be exactly it — so the fork asks
+               rather than being told. Told, one of those two callers would be wrong every time, silently. */
+            d = cow_delta_fork(ctx, a->delta);
             g_seg_forked++;
             break;
         }

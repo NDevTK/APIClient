@@ -29,19 +29,16 @@ void      cow_delta_free(JSContext *ctx, CowDelta *d);
    then each diverges on its own head. The DOM twin is dom_cow_fork. Pairs with JS_FlowClone.
    This is what it does NOW; it said so while COPYING every entry and cloning every async blob, and the swap
    below then replayed that whole copied history on every context switch.
-   `src` MUST BE THE RUNNING FLOW'S, and that is asserted: the freeze reads each entry's branch-point value out
-   of the LIVE HEAP (the unapply is what fetches it), so a parked delta forked here would take whatever some
-   OTHER flow has written as its own and then write its baseline over that flow's state. */
+   WHERE THE BRANCH-POINT VALUES COME FROM depends on whether `src` is the delta the heap is currently showing,
+   and this asks rather than making the caller say. For the RUNNING flow's delta they are in the LIVE HEAP and
+   the unapply is what fetches them; for a PARKED one they are already in the entries (cow_unapply put them
+   there when the flow was switched out), so the freeze is pure bookkeeping that must touch neither the heap nor
+   the installed chain — the heap belongs to whichever flow is running, and replaying a parked delta's entries
+   into it installs another timeline's writes under the running one with nothing to unapply them.
+   It is one operation because it is one question about one fact cow.c already holds. The world registry
+   materializes a foreign world's segment by forking an ancestor, and whether that ancestor happens to be
+   applied depends on which host is asking; a caller that answered it wrong would corrupt both deltas silently. */
 CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src);
-
-/* FORK A DELTA NOBODY IS RUNNING — the world registry's materialization, and a DIFFERENT operation rather than a
-   variant of the one above. A parked delta already holds each entry's value in the entry (cow_unapply put it
-   there when the flow was switched out), so the freeze is pure bookkeeping and touches NEITHER the heap NOR the
-   installed chain — which it must not, because the heap belongs to whichever flow is running and replaying a
-   foreign world's entries into it would install another timeline's writes under the running one with nothing to
-   unapply them. Same result as cow_delta_fork: src keeps a fresh empty head over the frozen segment, the
-   returned sibling starts from it. */
-CowDelta *cow_delta_fork_parked(JSContext *ctx, CowDelta *src);
 
 /* HAS ANYTHING BEEN WRITTEN INTO THIS DELTA — head AND frozen chain, since a delta that forked a non-empty
    parent holds its writes in the chain and nothing in its head. The cross-instance seam asks it of a FOREIGN
