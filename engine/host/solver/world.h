@@ -125,6 +125,14 @@ CowDelta *world_segment(JSContext *ctx, WorldId w, const WorldId *ancestry, int 
    peer before mirroring a fork; here it is what makes "materialized lazily" observable to a fixture. */
 bool world_has_segment(WorldId w);
 
+/* WHAT THIS SEAM HAS ACTUALLY DONE IN THIS INSTANCE: how many foreign worlds hold a segment here, and how many
+   of those were materialized by FORKING an ancestor rather than starting from this instance's baseline. It
+   belongs in the result document for the reason the context-switch count does — whether the nearest-ancestor
+   fork ever runs cannot be inferred from the messages that arrived, and a mechanism nobody can see run is
+   indistinguishable from one that has never run. Cumulative, and `forked` counts materializations rather than
+   segments so a released-and-rebuilt world counts twice: it is a record of what the seam DID. */
+void world_segment_stats(int *materialized, int *forked);
+
 /* The world is gone (its flow finished, or was dropped): release this instance's segment. Releasing a world
    with no segment is not an error — a world that never wrote here never had one. */
 void world_release(JSContext *ctx, WorldId w);

@@ -8,6 +8,7 @@
 #include "solver/solve.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
+#include "solver/world.h"   /* what the cross-instance seam materialized here — see world_segment_stats */
 
 /* THE PAGE'S OWN UNCAUGHT ERRORS, deduped. See result.h: a script that throws is the forcing function naming an
    unbuilt capability, and it was silent. This is a plain string set — the message is the page's own, so nothing
@@ -144,16 +145,23 @@ char *result_json(JSContext *ctx) {
     char *out;
 
     if (!eps || !sinks || !errs) { free(eps); free(sinks); free(errs); return NULL; }
-    n = strlen(eps) + strlen(sinks) + strlen(errs) + 192;
+    n = strlen(eps) + strlen(sinks) + strlen(errs) + 256;
     out = malloc(n);
     if (out) {
         /* THE THREE COST NUMBERS, together. A switch count on its own cannot say whether a run that took six
-           times as long grew its frontier or grew the work inside each flow, and those need opposite fixes. */
-        int m = snprintf(out, n, "{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
-                                 "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d,"
-                                 "\"_jobsQueued\":%ld,\"_jobsRun\":%ld}",
-                         eps, sinks, errs, engine_switch_count(), flow_created_count(), solve_candidate_count(),
-                         engine_jobs_queued(), engine_jobs_run());
+           times as long grew its frontier or grew the work inside each flow, and those need opposite fixes.
+           AND WHAT THE CROSS-INSTANCE SEAM DID: how many foreign worlds hold a segment here and how many of
+           those were built by forking an ancestor. A delivery arriving says nothing about whether the ancestry
+           it carried was ever used, and a mechanism nobody can see run is one that has never run. */
+        int seg = 0, segf = 0;
+        int m;
+        world_segment_stats(&seg, &segf);
+        m = snprintf(out, n, "{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
+                             "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d,"
+                             "\"_jobsQueued\":%ld,\"_jobsRun\":%ld,"
+                             "\"_worldSegments\":%d,\"_worldSegmentsForked\":%d}",
+                     eps, sinks, errs, engine_switch_count(), flow_created_count(), solve_candidate_count(),
+                     engine_jobs_queued(), engine_jobs_run(), seg, segf);
         /* THE SLACK IS ASSERTED RATHER THAN EYEBALLED. It was 192 bytes for three counters and is now carrying
            five, whose widest form is 82 digits beside 115 bytes of literal — inside the slack only because the
            real numbers are small. A truncation here does not lose a digit, it loses the closing brace: the host

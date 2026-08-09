@@ -294,6 +294,13 @@ static ForeignSegment *find_segment(WorldId w)
 
 bool world_has_segment(WorldId w) { return find_segment(w) != NULL; }
 
+static int g_seg_made, g_seg_forked;
+void world_segment_stats(int *materialized, int *forked)
+{
+    if (materialized) *materialized = g_seg_made;
+    if (forked) *forked = g_seg_forked;
+}
+
 CowDelta *world_segment(JSContext *ctx, WorldId w, const WorldId *ancestry, int n_anc)
 {
     ForeignSegment *s = find_segment(w);
@@ -314,8 +321,15 @@ CowDelta *world_segment(JSContext *ctx, WorldId w, const WorldId *ancestry, int 
     for (i = 0; i < n_anc; i++) {
         ForeignSegment *a = find_segment(ancestry[i]);
         if (a) {
-            /* O(1): the parent's head freezes into a shared immutable base segment both now reference. */
-            d = cow_delta_fork(ctx, a->delta);
+            /* O(1): the parent's head freezes into a shared immutable base segment both now reference.
+               THE PARKED FORK, and the distinction is not pedantic. A segment is materialized while some LOCAL
+               flow is switched in — a routed delivery arrives between scheduler steps, with the receiving
+               document's own timeline applied to the heap — so the ancestor being forked is never the delta the
+               heap is showing. The running-flow fork would read that flow's writes out of the heap as the
+               ancestor's own and then write the ancestor's baseline over them; this one touches no heap at all,
+               because a parked delta already carries in its entries what the other has to go and fetch. */
+            d = cow_delta_fork_parked(ctx, a->delta);
+            g_seg_forked++;
             break;
         }
     }
@@ -336,6 +350,7 @@ CowDelta *world_segment(JSContext *ctx, WorldId w, const WorldId *ancestry, int 
     g_segs[g_segs_n].id = w;
     g_segs[g_segs_n].delta = d;
     g_segs_n++;
+    g_seg_made++;
     return d;
 }
 

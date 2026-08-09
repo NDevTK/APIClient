@@ -14,6 +14,7 @@
 #ifndef ENGINE_HOST_SOLVER_COW_H
 #define ENGINE_HOST_SOLVER_COW_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #include "quickjs.h"
@@ -27,8 +28,26 @@ void      cow_delta_free(JSContext *ctx, CowDelta *d);
    and the returned sibling reference, so the sibling inherits src's branch-point state in O(1) — NOT a copy —
    then each diverges on its own head. The DOM twin is dom_cow_fork. Pairs with JS_FlowClone.
    This is what it does NOW; it said so while COPYING every entry and cloning every async blob, and the swap
-   below then replayed that whole copied history on every context switch. */
+   below then replayed that whole copied history on every context switch.
+   `src` MUST BE THE RUNNING FLOW'S, and that is asserted: the freeze reads each entry's branch-point value out
+   of the LIVE HEAP (the unapply is what fetches it), so a parked delta forked here would take whatever some
+   OTHER flow has written as its own and then write its baseline over that flow's state. */
 CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src);
+
+/* FORK A DELTA NOBODY IS RUNNING — the world registry's materialization, and a DIFFERENT operation rather than a
+   variant of the one above. A parked delta already holds each entry's value in the entry (cow_unapply put it
+   there when the flow was switched out), so the freeze is pure bookkeeping and touches NEITHER the heap NOR the
+   installed chain — which it must not, because the heap belongs to whichever flow is running and replaying a
+   foreign world's entries into it would install another timeline's writes under the running one with nothing to
+   unapply them. Same result as cow_delta_fork: src keeps a fresh empty head over the frozen segment, the
+   returned sibling starts from it. */
+CowDelta *cow_delta_fork_parked(JSContext *ctx, CowDelta *src);
+
+/* HAS ANYTHING BEEN WRITTEN INTO THIS DELTA — head AND frozen chain, since a delta that forked a non-empty
+   parent holds its writes in the chain and nothing in its head. The cross-instance seam asks it of a FOREIGN
+   WORLD's segment: that segment is empty exactly when the world has written nothing in this instance, which is
+   the one case in which conjoining that world with a local flow's timeline is the local flow's timeline. */
+bool      cow_delta_empty(const CowDelta *d);
 
 /* Route captures to `d` (the flow about to run). NULL = captures are dropped (baseline setup). */
 void      cow_set_current(CowDelta *d);

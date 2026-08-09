@@ -667,6 +667,15 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
     CowDelta *d = cow_delta_new();
     CowSeg *seg;
 
+    /* THIS FORK READS THE LIVE HEAP, so it is only correct for the delta the heap is currently showing. The
+       unapply below is not bookkeeping — it is what FETCHES each entry's branch-point value out of the heap.
+       Run it on a parked delta and the sibling inherits whatever the RUNNING flow has written, and the re-apply
+       then writes this delta's baseline over that flow's state. cow_delta_fork_parked is the operation for a
+       delta nobody is running, and the world registry's segments are all of that kind. */
+    DCHECK(g_cow_installed == src->base,
+           "a delta whose chain is not the installed one was forked as the running flow's — the freeze reads "
+           "each entry's value from the live heap, so it would hand the sibling another flow's writes and then "
+           "write this delta's baseline over them; cow_delta_fork_parked forks a delta nobody is running");
     /* Both flows now SHARE every object that existed at THIS fork (the frame snapshot dup'd their heap refs), so
        both must capture writes to any object with flow_gen <= this generation. Record the CURRENT generation as
        both deltas' fork_gen, then BUMP it so objects created after the fork get a strictly-higher generation and
@@ -693,6 +702,45 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
     g_capturing = 0;
     return d;
 }
+
+/* THE SAME FREEZE FOR A DELTA NOBODY IS RUNNING — see cow.h. No heap traffic and no chain move: a parked
+   delta's entries already carry the values the fork above goes to the heap for, and the chain the heap is
+   showing belongs to some other flow. Afterwards `src->base` is the new segment while g_cow_installed still
+   names what it named — a chain below an unapplied head, which is exactly the state cow_unapply leaves and
+   cow_install_chain already walks from. */
+CowDelta *cow_delta_fork_parked(JSContext *ctx, CowDelta *src) {
+    CowDelta *d = cow_delta_new();
+    CowSeg *seg;
+
+    (void)ctx;
+    DCHECK(src != NULL, "a parked fork was asked for of no delta");
+    DCHECK(src != g_current,
+           "the delta being captured into was forked as a PARKED one — its entries hold the values the flow had "
+           "when it was last switched out, so the sibling would inherit a state the flow has already written "
+           "past, and every write since would be missing from it with nothing to say so");
+    /* The same generation statement the running fork makes: from here both deltas share every object that
+       exists, so a write to one of them must be captured. JS_SetFlowForkGen is NOT called — that publishes the
+       RUNNING delta's threshold, and neither of these is it. */
+    src->fork_gen = d->fork_gen = JS_FlowGen();
+    JS_FlowBumpGen();
+    d->base = src->base;
+    if (src->n == 0) {                  /* nothing to freeze: the sibling just takes a reference on the chain */
+        if (d->base) d->base->refcount++;
+        return d;
+    }
+    seg = malloc(sizeof *seg);
+    CHECK(seg, "cow: OOM parked fork segment — a shared delta would be corrupted");
+    seg->e = src->e; seg->n = src->n; seg->base = src->base; seg->refcount = 2;
+    src->e = NULL; src->n = 0; src->cap = 0;
+    free(src->hash); src->hash = NULL; src->hash_cap = 0;
+    src->base = d->base = seg;
+    return d;
+}
+
+/* EMPTY = nothing in the head and no frozen chain under it. A segment is only ever created from a non-empty
+   head (both forks return early when there is nothing to freeze), so a chain that exists holds writes and the
+   two tests together are the whole answer rather than an approximation of it. */
+bool cow_delta_empty(const CowDelta *d) { return d == NULL || (d->n == 0 && d->base == NULL); }
 
 static void cow_entries_free(JSContext *ctx, CowEntry *e, int n);
 

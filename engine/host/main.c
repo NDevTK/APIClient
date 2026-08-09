@@ -342,7 +342,11 @@ QJS_EXPORT void qjs_begin(const char *recipes)
     DCHECK(!g_begun, "qjs_begin ran twice — the frontier is seeded once and stepped thereafter");
     if (recipes && *recipes)
         DFAIL("qjs_begin was handed parked recipes — build the cold-tier resume that rebuilds each suspended "
-              "flow's snapshot from its recipe and re-ranks it into the one frontier");
+              "flow's snapshot from its recipe and re-ranks it into the one frontier. A flow suspended inside a "
+              "step machine names its rest point by the machine's ALGORITHM and the SPEC STEP it is resting at "
+              "(JSTrampStepDef.steps), never by the stage INDEX: an index means whatever this build's stage "
+              "constants say, so a recipe carrying one resumes at a different step of the same algorithm the "
+              "first time those constants move, silently");
     engine_set_stall_hook(qjs_owed);
     engine_sched_begin(g_ctx, g_scripts.bodies, g_scripts.srcs, g_scripts.n, /*forking*/1);
     g_begun = 1;

@@ -360,10 +360,12 @@ void engine_host_notify(JSContext *ctx, const char *op) {
  * inbound queue, so there is no second queue to drain and no second pump to drain it, and the delivery is
  * parkable, rankable and cross-session resumable for free because every flow is.
  *
- * THE SEGMENT IS THE REGISTRY'S. A world minted elsewhere has one segment in this instance, shared by every
- * arrival from that world — that is what makes a second message from the same sending flow see the writes the
- * first one made. The flow borrows it and must not free it (flow_finish), because the sender's next delivery
- * forks from exactly those writes. */
+ * THE SEGMENT IS THE REGISTRY'S, AND ASKING FOR IT IS HALF THE DELIVERY'S WORLD. A world minted elsewhere has
+ * one segment in this instance — whatever that world has written HERE — materialized on first arrival by
+ * forking the nearest ancestor this instance already holds, which is the only thing the ancestry the record
+ * carries is for. Asking for it here is what makes a later arrival from a world FORKED off this one inherit
+ * these writes instead of starting from this instance's baseline; the registry owns it for the life of the
+ * world, so no flow frees it. */
 void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
 {
     char *dup, *doc, *worlds, *tail;
@@ -405,9 +407,30 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
            "per-document realm lookup here before a child navigable can receive a routed message");
     {
         WorldId w, anc[16];
-        world_parse(worlds, &w, anc, (int)(sizeof anc / sizeof anc[0]));
+        int n_anc = world_parse(worlds, &w, anc, (int)(sizeof anc / sizeof anc[0]));
         DCHECK(w.doc != world_local_doc(), "a record was routed back to the instance whose flow sent it — a "
                                            "message to one's own document is delivered locally and never leaves");
+        /* RECEIVER-FLOW-WORLD ∧ SENDER-VECTOR, AS TWO REAL OBJECTS. The receiving half is the delta of the flow
+           that will make the delivery — the page's `message` listener was registered by a script, so it lives
+           in THAT flow's delta and in no baseline. The sending half is THIS INSTANCE'S SEGMENT for the sender's
+           world: what that world has already written here, materialized by forking the nearest ancestor of it
+           this instance holds. Both are chains rooted at this instance's baseline, and neither is an ancestor
+           of the other — so their conjunction is a JOIN, and a CowDelta is a LINEAR chain (frozen segments
+           under one head) that cannot express one.
+           IT IS THE IDENTITY EXACTLY WHEN THE SEGMENT IS EMPTY, which is the truth for a world that has only
+           ever POSTED: a world that has written nothing here constrains nothing here, so the conjunction is the
+           receiving flow's timeline unchanged and the delivery below is already it. That is asked rather than
+           assumed, because the answer changes the moment this instance answers a cross-document operation that
+           runs page code under a foreign world. */
+        DCHECK(cow_delta_empty(world_segment(ctx, w, anc, n_anc)),
+               "the sending world has WRITTEN in this instance, so the delivery's world is the receiving flow's "
+               "timeline conjoined with those writes — a JOIN of two deltas both rooted at this baseline, "
+               "neither an ancestor of the other, which the linear delta chain cannot express: stacking the "
+               "segment over the flow would overwrite the flow's own value in any slot both touched, and the "
+               "unapply restores the BASELINE rather than the flow's value, destroying what the flow recorded "
+               "with nothing to say so. BUILD THE JOIN — a merge of the two entry lists where they touch "
+               "disjoint slots, and a CONTRADICTION where they touch the same one (two timelines that disagree "
+               "about a slot conjoin to no timeline, so there is no delivery to make in that world)");
     }
     free(dup);
 
@@ -449,6 +472,7 @@ static void flow_deliver(JSContext *ctx, Flow *f)
 {
     char *dup = f->deliver, *doc, *worlds, *tail;
     WorldId w, anc[16];
+    int n_anc;
 
     DCHECK(flow_running() == f, "a routed delivery was made while another flow was switched in — it would run "
                                 "against that flow's delta and its task would land on that flow's queue");
@@ -457,7 +481,16 @@ static void flow_deliver(JSContext *ctx, Flow *f)
     tail = strchr(worlds, '\t'); *tail++ = 0;
     /* THE SENDING DOCUMENT IS THE HEAD OF THE WORLD VECTOR — a world is minted by a flow of exactly one
        document, so the vector already names the sender and a second field for it could disagree with it. */
-    world_parse(worlds, &w, anc, (int)(sizeof anc / sizeof anc[0]));
+    n_anc = world_parse(worlds, &w, anc, (int)(sizeof anc / sizeof anc[0]));
+    /* THE OTHER HALF OF THIS DELIVERY'S WORLD, asked where it is CONSUMED. engine_route asked the same question
+       when the record arrived; this asks it at the moment the delivery actually runs, because the scheduler has
+       run other flows in between and the answer is a property of the run, not of the record. What is installed
+       right now is f's timeline and nothing else, so the sender's segment being empty is what makes that the
+       conjunction rather than half of it. */
+    DCHECK(cow_delta_empty(world_segment(ctx, w, anc, n_anc)),
+           "a delivery ran in the receiving flow's timeline alone while the sending world holds writes in this "
+           "instance — the message arrives at a document missing everything its sender did here. Build the join "
+           "of the two deltas that engine_route names");
     if (!strcmp(dup, "windowproxy.post"))
         window_message_route(ctx, tail, world_doc_name(w.doc), f->deliver_origin);
     else

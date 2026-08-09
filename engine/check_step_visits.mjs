@@ -343,6 +343,51 @@ function balancedFrom(text, at) {
   return text.slice(start, i + 1);
 }
 
+/* AND THE LABELS AND THE STAGE CONSTANTS ARE ONE DECLARATION. `steps[stage]` is the spec step a stage rests at
+ * and the enum is what the machine's code writes into `stage`; written as two lists they are two statements of
+ * one fact, and inserting a step into one and not the other renames every stage after it with nothing to say
+ * so — silently at runtime, and across a session it resumes a parked flow at a different step of its
+ * algorithm. quickjs-step.h's JS_STEP_STAGE_ENUM / JS_STEP_STAGE_LABEL make the pair one X-list; this refuses
+ * a `.steps` array written any other way, because the drift is invisible in the source that has it. */
+/* STRINGS AND COMMENTS MASKED, LENGTHS PRESERVED, so brace matching is over the code and the offsets still
+   index the original. A step LABEL is a sentence — "22.2.7.2 step 2 (Get(R, \"lastIndex\"))" — and reading the
+   array body with a regex that stopped at the first `;` silently skipped twelve of the nineteen arrays: a
+   check that cannot parse its input and says nothing is an excluded check, which is the same defect as a test
+   the gate does not collect. */
+const maskLiterals = (text) => text.replace(/"(?:[^"\\]|\\.)*"|\/\*[\s\S]*?\*\//g, (s) => ' '.repeat(s.length));
+const stageListName = (text, arrayName) => {
+  const masked = maskLiterals(text);
+  const decl = new RegExp(`\\b${arrayName}\\s*\\[\\s*\\]\\s*=`).exec(masked);
+  if (!decl) return null;                                     // not in this file: the caller reports it
+  const body = balancedFrom(masked, decl.index);
+  const x = /(\w+)\s*\(\s*JS_STEP_STAGE_LABEL\s*\)/.exec(body);
+  return x ? x[1] : '';                                       // '' = a hand-written list
+};
+const twoList = [];   // declared, but its constants and its labels are still two lists — the conversion queue
+const stageListCheck = (where, text, name, stepsExpr) => {
+  const arrayName = /^&?(\w+)/.exec(stepsExpr.trim());
+  if (!arrayName) return;
+  const list = stageListName(text, arrayName[1]);
+  const line = () => text.slice(0, text.indexOf(arrayName[1])).split('\n').length;
+  if (list === null) {
+    console.error(`[step-steps] ${where}:${line()}: ${name} names ${arrayName[1]} as its steps and this file ` +
+                  `does not declare it — the gate cannot see the labels, and a check that skips what it cannot ` +
+                  `parse is an excluded check`);
+    bad++;
+    return;
+  }
+  /* A HALF-EXPANSION IS BROKEN, not unconverted: the labels come from an X-list and the constants do not, so
+     the one declaration is a claim the source does not keep. That fails. A machine still carrying two
+     hand-written lists is the same conversion in progress the count below reports, and is named so the queue
+     is a list of machines rather than a number. */
+  if (list === '') twoList.push(`${where}:${line()} ${name} (${arrayName[1]})`);
+  else if (!new RegExp(`\\b${list}\\s*\\(\\s*JS_STEP_STAGE_ENUM\\s*\\)`).test(text)) {
+    console.error(`[step-steps] ${where}:${line()}: ${name}'s labels expand ${list} but no enum does — the ` +
+                  `stage constants are still a second list, which is the drift the X-list exists to prevent`);
+    bad++;
+  }
+};
+
 let declared = 0, undeclared = 0;
 const stageRow = (where, line, name, hasAlg, hasSteps) => {
   if (hasAlg !== hasSteps) {
@@ -354,9 +399,12 @@ const stageRow = (where, line, name, hasAlg, hasSteps) => {
   }
   if (hasAlg) declared++; else undeclared++;
 };
-for (const d of defs(src))
+const stepsExprOf = (body) => (/\.steps\s*=\s*([^,}]+)/.exec(body) ?? [])[1] ?? '';
+for (const d of defs(src)) {
   stageRow('quickjs.c', src.slice(0, d.index).split('\n').length, d.struct,
            /\.algorithm\s*=/.test(d.body), /\.steps\s*=/.test(d.body));
+  if (/\.steps\s*=/.test(d.body)) stageListCheck('quickjs.c', src, d.struct, stepsExprOf(d.body));
+}
 for (const f of hostSources(join(ENGINE, 'host'))) {
   const text = readFileSync(f, 'utf8');
   const where = relative(ENGINE, f);
@@ -364,10 +412,13 @@ for (const f of hostSources(join(ENGINE, 'host'))) {
     const els = topLevelElements(balancedFrom(text, m.index));
     const has = (i) => els.length > i && els[i] !== '' && els[i] !== 'NULL';
     stageRow(where, text.slice(0, m.index).split('\n').length, m[1], has(4), has(5));
+    if (has(5)) stageListCheck(where, text, m[1], els[5]);
   }
-  for (const d of defs(text))
+  for (const d of defs(text)) {
     stageRow(where, text.slice(0, d.index).split('\n').length, d.struct,
              /\.algorithm\s*=/.test(d.body), /\.steps\s*=/.test(d.body));
+    if (/\.steps\s*=/.test(d.body)) stageListCheck(where, text, d.struct, stepsExprOf(d.body));
+  }
 }
 
 if (bad) process.exit(1);
@@ -375,3 +426,7 @@ console.log(`[step-visits] ${checked} engine + ${hostChecked} host declarations,
             `state struct; ${hostChecked} host visits also checked against the struct they cast to`);
 console.log(`[step-steps] ${declared} of ${declared + undeclared} machines rest at a declared spec step; ` +
             `${undeclared} still number their stages privately`);
+if (twoList.length)
+  console.log(`[step-steps] ${twoList.length} of the ${declared} declare their constants and their labels as ` +
+              `TWO lists — one X-list expanded twice makes a renumber carry its label with it:\n  ` +
+              twoList.join('\n  '));
