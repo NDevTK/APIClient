@@ -298,8 +298,33 @@ function byArea(rel) {
   const p = WPT_PATHS.filter((d) => rel === d || rel.startsWith(d + "/"))
                      .reduce((a, b) => (b.length > a.length ? b : a), rel.split("/")[0]);
   let a = areas.get(p);
-  if (!a) areas.set(p, (a = { files: 0, pass: 0, fail: 0, aborted: 0 }));
+  if (!a) areas.set(p, (a = { name: p, expected: 0, done: 0, files: 0, pass: 0, fail: 0, aborted: 0, lines: [] }));
   return a;
+}
+
+/* A REPORT THAT ONLY EXISTS AT EXIT IS A REPORT YOU CANNOT GET ON A SLOW CORPUS. This driver printed everything
+   — every failure and every area row — after the last file, so a run that died at ninety percent yielded
+   NOTHING AT ALL: an hour of real measurement thrown away by where a print statement sits. It happened, on the
+   run that was supposed to produce this file's own numbers, and the corpus has just tripled in size, so it will
+   happen again. It is the same sentence CLAUDE.md applies to the engine's cost reporting — emitting them as the
+   run goes is the host's own job — and the same distinction the uncollected-file list draws: an area that
+   printed is measured, an area that did not is VISIBLY ABSENT rather than silently missing.
+   AN AREA IS FINISHED WHEN ITS LAST FILE IS, WHICH IS NOT WHEN THE NEXT AREA STARTS. The file list is sorted by
+   path, and a standard listed beside its own components interleaves with them — `dom/attributes-are-nodes.html`
+   sorts between `dom/abort/` and `dom/collections/` — so "the area changed" is not the same question as "the
+   area is done". Every area's file count is known before the first file runs, so the answer is exact. */
+for (const f of files) byArea(relative(WPT, f)).expected++;
+const AREA_W = Math.max(...[...areas.keys()].map((n) => n.length));
+function areaRow(a) {
+  console.log(`  ${a.name.padEnd(AREA_W)}  files ${String(a.files).padStart(4)}  pass ${String(a.pass).padStart(7)}` +
+              `  fail ${String(a.fail).padStart(7)}  aborted ${String(a.aborted).padStart(3)}`);
+}
+/* An area's failure lines are held only until that area finishes, for the same reason: buffered to the end of
+   the RUN they are lost with it; buffered to the end of the AREA they arrive with the row they belong to. */
+function areaFinish(a) {
+  for (const l of a.lines) console.log(l);
+  a.lines.length = 0;
+  areaRow(a);
 }
 
 const HARNESS = join(WPT, "resources", "testharness.js");
@@ -376,109 +401,123 @@ async function substituted(dep) {
 }
 
 let pass = 0, fail = 0, aborted = 0;
-const failures = [];
 
+console.log("\n==================== web-platform-tests ====================");
 for (const f of files) {
   const rel = relative(WPT, f);
-  byArea(rel).files++;
-  const deps = (await Promise.all(metaScripts(f).map(substituted)));
-  const missing = deps.filter((d) => !existsSync(d));
-  if (missing.length) {
-    /* A META script the sparse checkout does not have is a GATE defect, not a test result: the file would run
-       against a corpus it was not written for. Name the paths so WPT_PATHS can be widened. */
-    aborted++; byArea(rel).aborted++;
-    failures.push(`  ABORT  ${rel}\n         META script not checked out: ${missing.map((d) => relative(WPT, d)).join(", ")}`);
-    continue;
+  const area = byArea(rel);
+  const failures = area.lines;   /* held until this AREA finishes, not until the run does */
+  area.files++;
+  try {
+    const deps = (await Promise.all(metaScripts(f).map(substituted)));
+    const missing = deps.filter((d) => !existsSync(d));
+    if (missing.length) {
+      /* A META script the sparse checkout does not have is a GATE defect, not a test result: the file would run
+         against a corpus it was not written for. Name the paths so WPT_PATHS can be widened. */
+      aborted++; byArea(rel).aborted++;
+      failures.push(`  ABORT  ${rel}\n         META script not checked out: ${missing.map((d) => relative(WPT, d)).join(", ")}`);
+      continue;
+    }
+    /* WHETHER THE TEST IS A DOCUMENT IS DECIDED HERE AND NOWHERE ELSE. The runner used to re-derive it from the
+       file name — `.html`, and only `.html` — which is a second copy of the rule above and drifted from it the
+       moment the first `.htm` was collected: the driver would have handed the runner a document and the runner
+       would have executed the markup as JavaScript. One authority, passed as a flag; the runner carries no
+       extension list at all. */
+    const r = spawnSync(bin, [...(isDocument(f) ? ["--test-document"] : []), HARNESS, ...deps, f],
+                        { encoding: "utf8", maxBuffer: 1 << 28, timeout: 60_000,
+                          env: { ...process.env, WPT_SERVER: serverAddr } });
+    const out = (r.stdout || "") + (r.stderr || "");
+    /* An ABORT is a result about this file, not an accident: it is a DCHECK naming a capability the browser half
+       does not have, which is exactly what this gate is for. It is counted apart from a FAIL because the two ask
+       for different work — a fail is a wrong answer, an abort is a missing one. */
+    /* AN ABORT DOES NOT ERASE WHAT THE FILE ALREADY REPORTED. A DCHECK ends the process, but the results printed
+       before it are results — and discarding them here counted a file that had failed four subtests and then
+       leaked as a file that produced NOTHING, which is the "same failures with the count hidden" shape this gate
+       exists to avoid. It hid them from me, too: I diagnosed that file as ending with no results and went looking
+       for what it was waiting on. The abort is reported AND the subtests are counted; they are different facts. */
+    /* THE TWO @WHY SHAPES, because there are two emitters and losing one loses the name. The HOST's check.h
+       prints a machine-readable JSON line whose `reason` carries the message; the ENGINE's quickjs-check.h prints
+       `@WHY <msg> (file:line)` as plain text. Matching only the first reported the second as a bare
+       "signal SIGABRT" — an abort with the name thrown away, which is the one thing an abort is FOR. It cost a
+       round trip per diagnosis and taught nothing on its own. */
+    const why = out.match(/@WHY .*"reason":"([^"]*)/) || out.match(/^@WHY (.+)$/m);
+    const abortedHere = Boolean(why || r.signal);
+    if (abortedHere) {
+      aborted++; byArea(rel).aborted++;
+      failures.push(`  ABORT  ${rel}\n         ${why ? why[1].slice(0, 160) : "signal " + r.signal}`);
+    }
+    /* THE `@WPTHANDLER` BRANCH IS GONE, not disabled. It excused a test that asks for a wptserve `.py` handler
+       back when this driver served the corpus off disk — and engine/wptserve.py now runs WPT'S OWN server, which
+       imports those handlers and calls their `main`, so nothing has emitted that marker since. A branch whose
+       emitter no longer exists is not a safety net, it is a reader's mistake waiting to happen: it says this gate
+       cannot run handler tests, and this gate can. */
+    /* A `<script src>` THE CORPUS DOES NOT HAVE is the missing-META-script defect one layer in, and it was the
+       only one of the two that went uncounted: the document RAN, without a file it asked for, and whatever it
+       then reported was counted as an ordinary result unless the file happened to report nothing at all. It is
+       the same fact — this file ran against a corpus it was not written for — so it is the same ABORT, and it
+       names the path so WPT_PATHS can be widened. Its partial subtests are dropped for the reason the count
+       exists at all: they are numbers from a test that is not the test. */
+    const noscript = out.match(/^@WPTERR .*<script src> did not load: (.*)$/m);
+    if (noscript) {
+      aborted++; byArea(rel).aborted++;
+      failures.push(`  ABORT  ${rel}\n         a <script src> the corpus does not serve: ${noscript[1]}`);
+      continue;
+    }
+    let filePass = 0, fileFail = 0;
+    for (const line of out.split("\n")) {
+      const m = line.match(/^@WPT (\{.*\})$/);
+      if (!m) continue;
+      let t; try { t = JSON.parse(m[1]); } catch { continue; }
+      if (t.status === 0) { filePass++; }
+      else { fileFail++; failures.push(`  FAIL   ${rel} :: ${t.name}\n         ${(t.message || "").slice(0, 200)}`); }
+    }
+    const err = out.match(/^@WPTERR (.*)$/m);
+    if (!abortedHere && err && !filePass && !fileFail) {
+      aborted++; byArea(rel).aborted++;
+      failures.push(`  ERROR  ${rel}\n         ${err[1].slice(0, 200)}`);
+      continue;
+    }
+    /* A FILE THAT NEVER COMPLETED IS NOT A FILE WITH NOTHING IN IT. testharness reports through its completion
+       callback, so a run that ends without @WPTDONE — an async test that never settles, a harness that never
+       reached all_done — emitted no @WPT lines at all and contributed ZERO to every column. It read as though the
+       file held no tests, which is the same silent truncation as leaving a directory out of the checkout: the
+       number goes down and nothing says why. It is counted and NAMED. */
+    if (!abortedHere && !/^@WPTDONE /m.test(out)) {
+      aborted++; byArea(rel).aborted++;
+      failures.push(`  ABORT  ${rel}\n         the harness never completed — no @WPTDONE, so its ` +
+                    `${filePass + fileFail} reported subtest(s) are not the whole file`);
+      continue;
+    }
+    pass += filePass;
+    fail += fileFail;
+    byArea(rel).pass += filePass;
+    byArea(rel).fail += fileFail;
+  } finally {
+    /* THE ONE PLACE THE AREA'S PROGRESS IS COUNTED, so that every `continue` above — a missing META script, a
+       missing <script src>, an abort, a harness that never completed — still advances it. A count kept at the
+       bottom of the body would be skipped by exactly the paths that matter most. */
+    if (++area.done === area.expected) areaFinish(area);
   }
-  /* WHETHER THE TEST IS A DOCUMENT IS DECIDED HERE AND NOWHERE ELSE. The runner used to re-derive it from the
-     file name — `.html`, and only `.html` — which is a second copy of the rule above and drifted from it the
-     moment the first `.htm` was collected: the driver would have handed the runner a document and the runner
-     would have executed the markup as JavaScript. One authority, passed as a flag; the runner carries no
-     extension list at all. */
-  const r = spawnSync(bin, [...(isDocument(f) ? ["--test-document"] : []), HARNESS, ...deps, f],
-                      { encoding: "utf8", maxBuffer: 1 << 28, timeout: 60_000,
-                        env: { ...process.env, WPT_SERVER: serverAddr } });
-  const out = (r.stdout || "") + (r.stderr || "");
-  /* An ABORT is a result about this file, not an accident: it is a DCHECK naming a capability the browser half
-     does not have, which is exactly what this gate is for. It is counted apart from a FAIL because the two ask
-     for different work — a fail is a wrong answer, an abort is a missing one. */
-  /* AN ABORT DOES NOT ERASE WHAT THE FILE ALREADY REPORTED. A DCHECK ends the process, but the results printed
-     before it are results — and discarding them here counted a file that had failed four subtests and then
-     leaked as a file that produced NOTHING, which is the "same failures with the count hidden" shape this gate
-     exists to avoid. It hid them from me, too: I diagnosed that file as ending with no results and went looking
-     for what it was waiting on. The abort is reported AND the subtests are counted; they are different facts. */
-  /* THE TWO @WHY SHAPES, because there are two emitters and losing one loses the name. The HOST's check.h
-     prints a machine-readable JSON line whose `reason` carries the message; the ENGINE's quickjs-check.h prints
-     `@WHY <msg> (file:line)` as plain text. Matching only the first reported the second as a bare
-     "signal SIGABRT" — an abort with the name thrown away, which is the one thing an abort is FOR. It cost a
-     round trip per diagnosis and taught nothing on its own. */
-  const why = out.match(/@WHY .*"reason":"([^"]*)/) || out.match(/^@WHY (.+)$/m);
-  const abortedHere = Boolean(why || r.signal);
-  if (abortedHere) {
-    aborted++; byArea(rel).aborted++;
-    failures.push(`  ABORT  ${rel}\n         ${why ? why[1].slice(0, 160) : "signal " + r.signal}`);
-  }
-  /* THE `@WPTHANDLER` BRANCH IS GONE, not disabled. It excused a test that asks for a wptserve `.py` handler
-     back when this driver served the corpus off disk — and engine/wptserve.py now runs WPT'S OWN server, which
-     imports those handlers and calls their `main`, so nothing has emitted that marker since. A branch whose
-     emitter no longer exists is not a safety net, it is a reader's mistake waiting to happen: it says this gate
-     cannot run handler tests, and this gate can. */
-  /* A `<script src>` THE CORPUS DOES NOT HAVE is the missing-META-script defect one layer in, and it was the
-     only one of the two that went uncounted: the document RAN, without a file it asked for, and whatever it
-     then reported was counted as an ordinary result unless the file happened to report nothing at all. It is
-     the same fact — this file ran against a corpus it was not written for — so it is the same ABORT, and it
-     names the path so WPT_PATHS can be widened. Its partial subtests are dropped for the reason the count
-     exists at all: they are numbers from a test that is not the test. */
-  const noscript = out.match(/^@WPTERR .*<script src> did not load: (.*)$/m);
-  if (noscript) {
-    aborted++; byArea(rel).aborted++;
-    failures.push(`  ABORT  ${rel}\n         a <script src> the corpus does not serve: ${noscript[1]}`);
-    continue;
-  }
-  let filePass = 0, fileFail = 0;
-  for (const line of out.split("\n")) {
-    const m = line.match(/^@WPT (\{.*\})$/);
-    if (!m) continue;
-    let t; try { t = JSON.parse(m[1]); } catch { continue; }
-    if (t.status === 0) { filePass++; }
-    else { fileFail++; failures.push(`  FAIL   ${rel} :: ${t.name}\n         ${(t.message || "").slice(0, 200)}`); }
-  }
-  const err = out.match(/^@WPTERR (.*)$/m);
-  if (!abortedHere && err && !filePass && !fileFail) {
-    aborted++; byArea(rel).aborted++;
-    failures.push(`  ERROR  ${rel}\n         ${err[1].slice(0, 200)}`);
-    continue;
-  }
-  /* A FILE THAT NEVER COMPLETED IS NOT A FILE WITH NOTHING IN IT. testharness reports through its completion
-     callback, so a run that ends without @WPTDONE — an async test that never settles, a harness that never
-     reached all_done — emitted no @WPT lines at all and contributed ZERO to every column. It read as though the
-     file held no tests, which is the same silent truncation as leaving a directory out of the checkout: the
-     number goes down and nothing says why. It is counted and NAMED. */
-  if (!abortedHere && !/^@WPTDONE /m.test(out)) {
-    aborted++; byArea(rel).aborted++;
-    failures.push(`  ABORT  ${rel}\n         the harness never completed — no @WPTDONE, so its ` +
-                  `${filePass + fileFail} reported subtest(s) are not the whole file`);
-    continue;
-  }
-  pass += filePass;
-  fail += fileFail;
-  byArea(rel).pass += filePass;
-  byArea(rel).fail += fileFail;
 }
 
 /* PER-AREA, NOT ONE NUMBER. `encoding` alone answers three quarters of a million subtests — one per code point
    per legacy encoder — so a single total is a number in which every other area is invisible: a component that
    lost a hundred subtests and one that gained them read identically. The areas are the checked-out paths, which
-   is the same list that decides what runs, so the breakdown cannot drift from the corpus. */
-console.log("\n==================== web-platform-tests ====================");
-for (const l of failures) console.log(l);
+   is the same list that decides what runs, so the breakdown cannot drift from the corpus.
+   THE ROWS ARE REPEATED HERE because the streamed ones are interleaved with their failure lines and a reader
+   wants them together; the streaming is what makes a killed run report, the summary is what makes a finished
+   run readable. Every area must have finished — each file passes through the accounting above exactly once —
+   so an unflushed area at this point is this driver miscounting, and it says so rather than printing a table
+   that quietly disagrees with the rows above it. */
+console.log("  ---- summary");
 {
   const names = [...areas.keys()].sort();
-  const w = Math.max(...names.map((n) => n.length));
   for (const n of names) {
     const a = areas.get(n);
-    console.log(`  ${n.padEnd(w)}  files ${String(a.files).padStart(4)}  pass ${String(a.pass).padStart(7)}` +
-                `  fail ${String(a.fail).padStart(7)}  aborted ${String(a.aborted).padStart(3)}`);
+    if (a.done !== a.expected || a.lines.length)
+      throw new Error(`[wpt] area ${n} finished ${a.done} of ${a.expected} files with ${a.lines.length} ` +
+                      "unreported line(s) — the per-area accounting is wrong, so this table cannot be trusted");
+    areaRow(a);
   }
 }
 
