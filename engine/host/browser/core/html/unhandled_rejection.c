@@ -57,7 +57,13 @@ static int     g_ready;
 static JSClassID g_pre_class;
 static int g_id_pre_ctor;
 static JSValue g_pre_key = JS_UNDEFINED;
-static JSValue g_notify_fn = JS_UNDEFINED;   /* the internal step function each notification runs as */
+/* THE NOTIFICATION DRIVER IS PER REALM, and that is §8.1.7.5's own requirement rather than tidiness: the event
+   is fired at "the promise's relevant global object", and this driver reads its global off the ctx it runs
+   under — which, for one function object held for the agent, is whichever realm minted it. Every child
+   document's unhandled rejection fired at the ROOT window, which is the same defect a shared
+   EventTarget.prototype has one link up. A rejection RECORDS the driver of the realm it rejected in, so the
+   job carries its realm with it rather than the notify pass guessing one. */
+static int g_notify_slot = -1, g_notify_stepid = -1;
 static void  (*g_report)(JSContext *ctx, JSValueConst reason);
 
 void unhandled_rejection_set_report_hook(void (*fn)(JSContext *ctx, JSValueConst reason)) { g_report = fn; }
@@ -86,6 +92,9 @@ static void rejection_tracker(JSContext *ctx, JSValueConst promise, JSValueConst
                                   "the page reported and this engine never saw");
         JS_SetPropertyUint32(ctx, e, 0, JS_DupValue(ctx, promise));
         JS_SetPropertyUint32(ctx, e, 1, JS_DupValue(ctx, reason));
+        /* THE REJECTING REALM'S driver — quickjs hands this hook the ctx of the realm the promise belongs to,
+           which is the one place that fact is known. */
+        JS_SetPropertyUint32(ctx, e, 2, realm_value_get(ctx, g_notify_slot));
         JS_SetPropertyUint32(ctx, g_list, n, e);
         return;
     }
@@ -267,13 +276,16 @@ int unhandled_rejection_notify(JSContext *ctx)
     for (i = 0; i < n; i++) {
         JSValue e = JS_GetPropertyUint32(ctx, g_list, i);
         JSValueConst argv[2];
-        JSValue promise, reason;
+        JSValue promise, reason, notify;
 
         if (!JS_IsObject(e)) { JS_FreeValue(ctx, e); continue; }
         promise = JS_GetPropertyUint32(ctx, e, 0);
         reason = JS_GetPropertyUint32(ctx, e, 1);
+        notify = JS_GetPropertyUint32(ctx, e, 2);   /* the REJECTING realm's driver, recorded with the entry */
+        DCHECK(JS_IsFunction(ctx, notify), "a recorded rejection lost the driver of the realm it rejected in");
         argv[0] = promise; argv[1] = reason;
-        JS_EnqueueCallJob(ctx, g_notify_fn, 2, argv);
+        JS_EnqueueCallJob(ctx, notify, 2, argv);
+        JS_FreeValue(ctx, notify);
         JS_FreeValue(ctx, promise);
         JS_FreeValue(ctx, reason);
         JS_FreeValue(ctx, e);
@@ -299,9 +311,9 @@ void unhandled_rejection_init(JSContext *ctx)
         JS_NewClass(JS_GetRuntime(ctx), g_pre_class, &d);
     }
     /* The notification driver is a step function nobody installs, so a page can neither see it nor replace it. */
-    g_notify_fn = JS_NewCFunction2(ctx, NULL, "notifyRejected", 2, JS_CFUNC_step,
-                                   JS_RegisterStepDef(JS_GetRuntime(ctx), &js_reject_notify_def));
-    CHECK(!JS_IsException(g_notify_fn), "the rejection-notification driver could not be allocated");
+    g_notify_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_reject_notify_def);
+    CHECK(g_notify_stepid >= 0, "no step id for the rejection-notification driver");
+    g_notify_slot = realm_value_declare(ctx, "§8.1.7.5 notifyRejected");
     g_ready = 1;
     JS_SetHostPromiseRejectionTracker(JS_GetRuntime(ctx), rejection_tracker, NULL);
     /* THE CONSTRUCTOR'S DECLARATION IS THE AGENT'S — one pool entry per member; every realm's interface object
@@ -330,6 +342,11 @@ void unhandled_rejection_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, proto, "promise", js_pre_get, 0, -1);
     idl_install_accessor(ctx, proto, "reason", js_pre_get, 1, -1);
     JS_SetClassProto(ctx, g_pre_class, proto);
+    {
+        JSValue fn = JS_NewCFunction2(ctx, NULL, "notifyRejected", 2, JS_CFUNC_step, g_notify_stepid);
+        CHECK(!JS_IsException(fn), "the rejection-notification driver could not be allocated");
+        realm_value_set(ctx, g_notify_slot, fn);
+    }
 }
 
 JSValue unhandled_rejection_proto(JSContext *ctx)
@@ -364,7 +381,6 @@ void unhandled_rejection_free(JSContext *ctx)
     g_ready = 0;
     JS_FreeValue(ctx, g_list);   /* the prototypes are the REALMS' — each is released with its context */
     JS_FreeValue(ctx, g_pre_key);
-    JS_FreeValue(ctx, g_notify_fn);
-    g_list = g_pre_key = g_notify_fn = JS_UNDEFINED;
+    g_list = g_pre_key = JS_UNDEFINED;   /* the per-realm driver is released with its context */
     g_report = NULL;
 }
