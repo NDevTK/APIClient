@@ -113,9 +113,14 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len)
        The message says so, because a `@WHY` is read at the site and "OOM" alone sends the reader here. */
     CHECK(dom != NULL,
           "OOM creating a child navigable's Document — the working set that filled the heap is CHILD REALMS, "
-          "one per flow that created a navigable with an address, none of them ever reclaimed. Build the "
-          "reclamation: a realm whose WindowProxy has been collected is dead and can be freed after the "
-          "collection, and the low-value tail beyond that pages to the cold tier");
+          "one per flow that created a navigable with an address, none of them ever reclaimed. The reclamation "
+          "is NOT a reference the agent can drop: a child realm's refcount is far above one because every C "
+          "function object minted in it holds a counted reference to its own realm, so JS_FreeContext only "
+          "decrements and removing it from this agent's list orphans the context instead of tearing it down "
+          "(measured: 82 of html/browsers' 154 files turned into a gc_obj_list leak, pass/fail unchanged). A "
+          "JSContext is a GC object and quickjs frees one through the COLLECTOR, whose cycle path asserts a "
+          "context never reaches the zero-refcount list — so this is a mechanism in the collector's terms, and "
+          "the realm's own teardown has to be reachable from there");
     CHECK(lxb_html_document_parse(dom, body ? (const lxb_char_t *)body : (const lxb_char_t *)EMPTY,
                                   body ? body_len : sizeof EMPTY - 1) == LXB_STATUS_OK,
           "a child navigable's Document did not parse");
