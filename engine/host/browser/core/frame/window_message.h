@@ -20,6 +20,10 @@ void window_message_install(JSContext *ctx, JSValueConst global, const char *ori
    against it happens at delivery, here, because the target may have navigated since the post. */
 void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const char *sender_origin,
                                    const char *target_origin, const uint8_t *bytes, size_t len);
+/* THE WIRE HALF of the above: take apart the part of a routed `windowproxy.post` record that belongs to this
+   file (`<targetOrigin>\t<base64>`) and deliver it. The transport's own fields — which instance, whose world —
+   are the router's and are already consumed by the time this is called. One reader, beside the writer. */
+void window_message_route(JSContext *ctx, const char *tail, const char *sender_doc, const char *sender_origin);
 void window_message_free(JSContext *ctx);
 
 

@@ -9,6 +9,8 @@
 #include "solver/decide.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
+#include "solver/world.h"   /* the routed record's world vector: whose timeline a delivery belongs to */
+#include "core/frame/window_message.h"   /* the receiving half of a routed `windowproxy.post` */
 #include "solver/dom_cow.h"   /* the DOM half of time-travel — swapped per-flow alongside the heap COW delta */
 #include "check.h"
 #include <time.h>
@@ -149,8 +151,22 @@ void engine_set_document_done_hook(int (*fn)(JSContext *ctx, int stage)) { g_doc
 static int (*g_timer_hook)(JSContext *ctx);
 void engine_set_timer_hook(int (*fn)(JSContext *ctx)) { g_timer_hook = fn; }
 
+/* THE SESSION. The dispatch loop is not a function that drains — it is a state machine its HOST steps, because
+   the cooperative-quantum yield in CLAUDE.md's §scheduler is exactly that: after a bounded wall-clock slice the
+   scheduler RETURNS so the one thread pumps its message port, streams findings, interleaves other documents,
+   and then resumes the byte-identical frontier. A `for(;;)` that runs to exhaustion cannot do any of it, and in
+   the extension it freezes the worker outright. The state that used to be the loop's C locals lives here so a
+   return between two iterations costs nothing to resume from.
+   ALL OF IT IN ONE PLACE. Two of these sat here and four beside the loop eight hundred lines below, which is
+   one piece of state with two homes — and the split is not cosmetic: everything above the second home could
+   read half the session and not the other half, so a router that needs to know whether a session is live had to
+   be written somewhere it could see g_sess_live rather than where it belongs. */
+static JSContext *g_sess_ctx;
 static char **g_sess_bodies;
 static char **g_sess_srcs;
+static int g_sess_n;
+static Flow *g_sess_cur;
+static int g_sess_live;
 
 /* THE URLS THE HOST OWES, newline-joined across every live flow, or "" — one register, the flows' own. The
    buffer is this function's and is valid until the next call. */
@@ -331,6 +347,126 @@ void engine_host_notify(JSContext *ctx, const char *op) {
     g_notices[g_notices_n] = 0;
 }
 
+/* THE INBOUND HALF OF THE ONE-WAY LINE — a record the trusted zone routed to THIS instance because it holds the
+   document the record names. It is the exact text the sending instance emitted as a notice, plus the SENDER's
+   ORIGIN, which only that zone may stamp (SECURITY.md: an origin the untrusted engine computed for a foreign
+   message is a forgery every `event.origin` check in every bundle would then trust).
+ *
+ * IT BECOMES A FLOW, and that is the whole design rather than a detail of it. §CLAUDE's cross-document rule says
+ * a delivery SEEDS a flow in the receiver whose world is receiver-baseline ∧ the sending flow's vector, and that
+ * it is a work item on the ONE frontier — so this creates a member and returns. It does not deliver: delivering
+ * here would run page code under whatever flow the scheduler last had switched in, against that flow's delta,
+ * which is the "two timelines wearing one name" the world registry exists to prevent. The frontier IS the
+ * inbound queue, so there is no second queue to drain and no second pump to drain it, and the delivery is
+ * parkable, rankable and cross-session resumable for free because every flow is.
+ *
+ * THE SEGMENT IS THE REGISTRY'S. A world minted elsewhere has one segment in this instance, shared by every
+ * arrival from that world — that is what makes a second message from the same sending flow see the writes the
+ * first one made. The flow borrows it and must not free it (flow_finish), because the sender's next delivery
+ * forks from exactly those writes. */
+void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
+{
+    char *dup, *doc, *worlds, *tail;
+    int n;
+
+    DCHECK(record != NULL && *record, "a routed record carried no text to route on");
+    DCHECK(sender_origin != NULL && *sender_origin,
+           "a routed record arrived without the sender's origin — only the trusted zone can stamp one, and a "
+           "delivery without it would have to invent the one field a page's check is written against");
+    DCHECK(g_sess_live, "a record was routed into an instance with no live session — the flow it would be "
+                        "delivered on has no scheduler to run it, so the delivery would be dropped");
+
+    /* EVERY ROUTED RECORD'S FIRST TWO FIELDS ARE THE TRANSPORT'S: the target DOCUMENT (which instance) and the
+       sending flow's WORLD (whose timeline). Everything after them belongs to the component named by the op,
+       which is the only thing that reads it. Stating that here is what lets a second op be routed without a
+       second router. */
+    dup = strdup(record);
+    CHECK(dup != NULL, "engine: OOM routing a record");
+    doc = strchr(dup, '\t');
+    DCHECK(doc != NULL, "a routed record named no target document — the trusted zone routes on that field, so a "
+                        "record without one could not have arrived at this instance on purpose");
+    *doc++ = 0;
+    worlds = strchr(doc, '\t');
+    DCHECK(worlds != NULL, "a routed record carried no world vector — the delivery would belong to no timeline");
+    *worlds++ = 0;
+    tail = strchr(worlds, '\t');
+    DCHECK(tail != NULL, "a routed record carried nothing after its transport fields — there is no delivery in it");
+    *tail = 0;   /* only to bound the vector for the checks here; flow_deliver re-splits its own copy */
+
+    /* ROUTED TO THE WRONG INSTANCE is the trusted zone's bug, not the page's, and it is silent in every other
+       form: delivering anyway would fire the message at THIS document's listeners, which is a message the page
+       never received arriving as if it had. */
+    DCHECK(world_doc_hosted(world_doc_intern(doc)),
+           "a record was routed to an instance that does not hold the document it names — the offscreen is the "
+           "only zone that knows which instance holds which document, and it sent this one to the wrong place");
+    DCHECK(world_doc_intern(doc) == world_local_doc(),
+           "a record was routed to a document this agent hosts but is not its root — delivering it needs the "
+           "REALM of that document (document_realm_of), which this router does not select yet: build the "
+           "per-document realm lookup here before a child navigable can receive a routed message");
+    {
+        WorldId w, anc[16];
+        world_parse(worlds, &w, anc, (int)(sizeof anc / sizeof anc[0]));
+        DCHECK(w.doc != world_local_doc(), "a record was routed back to the instance whose flow sent it — a "
+                                           "message to one's own document is delivered locally and never leaves");
+    }
+    free(dup);
+
+    /* THE MESSAGE ARRIVES IN EVERY TIMELINE OF THE RECEIVING DOCUMENT, and that is what makes it arrive at all.
+       A delivery seeded as a FRESH flow from this instance's baseline was the first shape of this, and it is
+       wrong in a way that is completely silent: the receiving page registers its `message` listener from a
+       script, so the registration lives in the COW delta of the flow that ran that script, and a flow starting
+       from the baseline sees a document where it was never registered. The message is delivered, no handler
+       exists, and nothing distinguishes that from a page that registered none. A document's state IS its flows;
+       there is no other timeline to deliver into.
+       Attached rather than delivered here: this runs between scheduler steps, so the flow the record belongs to
+       is not the one switched in. Each flow makes its own delivery when it next steps, under its own delta,
+       and the task that produces lands on its own queue — which is the whole reason the job queue is per-flow. */
+    n = flow_count();
+    DCHECK(n > 0, "a message was routed to a document whose every timeline had already finished — a document "
+                  "that can still receive is not done, so the receiving flows must stay live while a peer holds "
+                  "a WindowProxy for them: build that before this can be delivered");
+    for (int i = 0; i < n; i++) {
+        Flow *f = flow_at(i);
+        /* ONE PENDING RECORD PER TIMELINE. Two records on one flow would be delivered in sequence into a single
+           timeline, and if their senders are two arms of one fork those arms CONTRADICT — merging them
+           fabricates a timeline neither sender was in. The answer is to FORK the receiving flow per delivery, so
+           each arrival is its own arm; until that exists this crashes rather than merging them. */
+        DCHECK(f->deliver == NULL,
+               "a second record was routed to a flow that has not yet made its first — delivering both into one "
+               "timeline merges senders that may be contradictory arms of one fork; build fork-on-delivery (a "
+               "sibling per arrival, the receiving flow continuing without it) rather than queueing them");
+        f->deliver = strdup(record);
+        f->deliver_origin = strdup(sender_origin);
+        CHECK(f->deliver && f->deliver_origin, "engine: OOM attaching a routed record to a flow");
+    }
+}
+
+/* THE DELIVERY ITSELF, made by the receiving flow's own step — so it runs with that flow switched in, under its
+   delta, and the task it enqueues lands on that flow's own queue like every other job. This is the dispatch on
+   the op, and the ONLY place a routed op is turned into a call: an op with no component here is a transport
+   carrying something nothing receives. */
+static void flow_deliver(JSContext *ctx, Flow *f)
+{
+    char *dup = f->deliver, *doc, *worlds, *tail;
+    WorldId w, anc[16];
+
+    DCHECK(flow_running() == f, "a routed delivery was made while another flow was switched in — it would run "
+                                "against that flow's delta and its task would land on that flow's queue");
+    doc = strchr(dup, '\t');    *doc++ = 0;
+    worlds = strchr(doc, '\t'); *worlds++ = 0;
+    tail = strchr(worlds, '\t'); *tail++ = 0;
+    /* THE SENDING DOCUMENT IS THE HEAD OF THE WORLD VECTOR — a world is minted by a flow of exactly one
+       document, so the vector already names the sender and a second field for it could disagree with it. */
+    world_parse(worlds, &w, anc, (int)(sizeof anc / sizeof anc[0]));
+    if (!strcmp(dup, "windowproxy.post"))
+        window_message_route(ctx, tail, world_doc_name(w.doc), f->deliver_origin);
+    else
+        DFAIL("a record was routed with an op no component receives — the sending half emits it, so the "
+              "receiving half is the unbuilt one; build it rather than dropping the delivery");
+    free(f->deliver); f->deliver = NULL;
+    free(f->deliver_origin); f->deliver_origin = NULL;
+}
+
 const char *engine_host_notices(void) {
     static char *drained;
     free(drained);
@@ -494,6 +630,11 @@ void engine_gen_fork(JSContext *ctx, JSValueConst genobj, void *base_gd, void *c
 static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
     Flow *parent = flow_running();
     DCHECK(parent != NULL && g_fork_dec != NULL, "engine_fork_finalize: fork without a running flow / prepared state");
+    /* A DELIVERY IS MADE BEFORE ANY CODE RUNS, so no flow can be at a branch while still holding its record. If
+       one is, the record would be inherited by the sibling and delivered TWICE — the same message arriving in
+       two timelines of one document, which no peer sent. */
+    DCHECK(parent->deliver == NULL, "a flow forked while still holding a routed record — the sibling would "
+                                    "inherit it and deliver the peer's one message a second time");
     /* THE SIBLING'S WORLD IS A CHILD OF THE PARENT'S, and the edge is recorded so another instance that
    already holds a segment for the parent can materialize the sibling's by forking it — the same O(1)
    shared-base-segment fork this line performs locally, performed there. */
@@ -784,6 +925,10 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
         if (!f->frame) {
             const char *body;
             int is_cand = 0;   /* an @S candidate is allowed not to parse; a page script is not */
+            /* THE ROUTED DELIVERY THIS FLOW EXISTS TO MAKE, and it is first because it is the flow's reason to
+               exist: the task it enqueues is what every branch below then finds on the queue. Consumed once —
+               the record is freed and cleared — so a resumed delivery flow falls through to its jobs. */
+            if (f->deliver) { g_step_unit = "routed-delivery"; flow_deliver(ctx, f); return 0; }
             if (f->script_i < n) {
                 body = bodies[f->script_i];
                 if (!body) {
@@ -986,6 +1131,8 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
        path ran while it was still suspended and freeing it silently would hide that. */
     DCHECK(f->frame == NULL, "a flow finished with a live preemptible frame — its whole activation chain, and "
                              "everything those frames close over, is retained by a handle nothing will free");
+    DCHECK(f->deliver == NULL, "a delivery flow finished without making its delivery — the record it was seeded "
+                               "with is a message the peer sent and this document never received");
     decide_leave(ctx);
     cow_unapply(ctx, (CowDelta *)f->delta); cow_set_current(NULL);
     cow_delta_free(ctx, (CowDelta *)f->delta); f->delta = NULL;
@@ -1033,17 +1180,6 @@ static int64_t engine_now_ms(void) {
     clock_gettime(CLOCK_MONOTONIC, &t);
     return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
 }
-
-/* THE SESSION. The dispatch loop is not a function that drains — it is a state machine its HOST steps, because
-   the cooperative-quantum yield in CLAUDE.md's §scheduler is exactly that: after a bounded wall-clock slice the
-   scheduler RETURNS so the one thread pumps its message port, streams findings, interleaves other documents,
-   and then resumes the byte-identical frontier. A `for(;;)` that runs to exhaustion cannot do any of it, and in
-   the extension it freezes the worker outright. The state that used to be the loop's C locals lives here so a
-   return between two iterations costs nothing to resume from. */
-static JSContext *g_sess_ctx;
-static int g_sess_n;
-static Flow *g_sess_cur;
-static int g_sess_live;
 
 void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int forking) {
     DCHECK(!g_sess_live, "engine_sched_begin while a session is already running — one scheduler, one session");

@@ -523,6 +523,21 @@ QJS_EXPORT void qjs_host_answer(unsigned req, const char *json)
     }
 }
 
+/* THE RETURN PATH FOR A NOTICE — the entry that was missing, and its absence is why the shipped extension could
+   send a cross-document message and never deliver one. `record` is the notice VERBATIM as the emitting instance
+   wrote it (`qjs_host_notices`), routed here by the offscreen because this instance holds the document the
+   record names; `sender_origin` is that instance's serialized origin, which ONLY the trusted zone may state —
+   SECURITY.md keys authorization on what the trusted zone knows for exactly this reason, and an origin the
+   untrusted engine supplied for a foreign message would defeat every `event.origin` check in every bundle.
+   The delivery becomes a FLOW on the one frontier, so it is ordered, preemptible and parkable like all the
+   others; nothing runs inside this call. */
+QJS_EXPORT void qjs_route(const char *record, const char *sender_origin)
+{
+    DCHECK(g_begun, "a record was routed to an engine whose frontier was never seeded — there is no scheduler to "
+                    "run the delivery, so it would be dropped");
+    engine_route(g_ctx, record, sender_origin);
+}
+
 QJS_EXPORT double qjs_top_weight(void)
 {
     DCHECK(g_begun, "qjs_top_weight was asked of an engine whose frontier was never seeded");

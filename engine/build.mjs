@@ -170,7 +170,7 @@ if (LIST_SOURCES) {
 const QJS_ABI = ["qjs_init", "qjs_bundle_id", "qjs_begin", "qjs_step", "qjs_result", "qjs_teardown",
                  "qjs_pending", "qjs_chunks", "qjs_provide", "qjs_top_weight", "qjs_set_yield_floor",
                  "qjs_request_park", "qjs_emit_partial",
-                 "qjs_host_requests", "qjs_host_answer", "qjs_host_notices"];
+                 "qjs_host_requests", "qjs_host_answer", "qjs_host_notices", "qjs_route"];
 
 const args = [
   ...sources,

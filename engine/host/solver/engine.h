@@ -124,6 +124,12 @@ const char *engine_host_requests(void);
 void        engine_host_notify(JSContext *ctx, const char *op);
 /* The notices posted since the last call, newline-joined, DRAINED by the call. "" when there are none. */
 const char *engine_host_notices(void);
+/* THE INBOUND HALF: a record another instance emitted as a notice, routed HERE by the trusted zone because this
+   instance holds the document it names, with the SENDER'S ORIGIN stamped by that zone (the untrusted engine may
+   not compute one for a foreign message — SECURITY.md). It SEEDS A FLOW on the one frontier whose world is the
+   sending flow's, and returns; the scheduler makes the delivery when it runs that flow, under that world's
+   segment. There is no inbound queue because the frontier is one. */
+void engine_route(JSContext *ctx, const char *record, const char *sender_origin);
 
 const char *engine_pending_urls(void);                                  /* newline-joined, or "" */
 int engine_provide(JSContext *ctx, const char *url, JSValueConst value); /* entries filled */

@@ -258,6 +258,39 @@ void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const
     JS_FreeValue(ctx, entry);
 }
 
+/* THE RECORD'S OWN TAIL, READ WHERE IT WAS WRITTEN. window_message_send_remote builds
+   `windowproxy.post\t<target>\t<world>\t<targetOrigin>\t<base64>`; the first two fields are the TRANSPORT's
+   (which instance, whose timeline) and are read by the router, and everything after them is this file's — so
+   this is where they are taken apart. A host that split them itself was the second half of the format, written
+   where nothing can check it against the writer, and both hosts that had one had written a different one.
+   `tail` is `<targetOrigin>\t<base64>`. */
+void window_message_route(JSContext *ctx, const char *tail, const char *sender_doc, const char *sender_origin)
+{
+    const char *b64;
+    char *want;
+    uint8_t *bytes;
+    size_t b64n, cap, blen;
+    int err = 0;
+
+    DCHECK(tail != NULL, "a routed window message carried no payload fields");
+    b64 = strchr(tail, '\t');
+    DCHECK(b64 != NULL, "a routed window message had no base64 field — the record was built by something that "
+                        "is not window_message_send_remote, so the two halves of this format disagree");
+    want = strndup(tail, (size_t)(b64 - tail));
+    CHECK(want != NULL, "window message: OOM reading a routed message's target origin");
+    b64++;
+    b64n = strlen(b64);
+    cap = JS_Base64DecodedMax(b64n) + 1;
+    bytes = malloc(cap);
+    CHECK(bytes != NULL, "window message: OOM receiving a routed message");
+    blen = JS_Base64Decode(bytes, cap, b64, b64n, &err);
+    CHECK(err == 0, "a routed message did not survive the text channel it crossed — the bytes the peer sent and "
+                    "the bytes this instance decoded are not the same message");
+    window_message_deliver_remote(ctx, sender_doc, sender_origin, want, bytes, blen);
+    free(bytes);
+    free(want);
+}
+
 /* §9.4.4's `postMessage(message, options)` and the legacy `postMessage(message, targetOrigin, transfer)`. */
 static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {

@@ -143,6 +143,17 @@ typedef struct Flow {
        would either resume it against the wrong heap or drop it outright. Empty (park_fn NULL) for a flow with
        nothing parked, which is every flow that has not preempted inside a reaction. */
     void *park_ctx; void *park_fn; void *park_opaque;
+    /* A ROUTED CROSS-DOCUMENT DELIVERY — the record the trusted zone handed this instance, and the SENDER's
+       origin, which only that zone may stamp (SECURITY.md: an origin the untrusted engine computed for a
+       foreign message is a forgery every `event.origin` check in every bundle would then trust). A delivery is
+       a WORK ITEM ON THE ONE FRONTIER and this is how it is carried. It is attached to EVERY live flow of the
+       receiving document, because a document's state IS its flows: the page's `message` listener was registered
+       by a script, so it lives in the delta of the flow that ran it, and a delivery made anywhere else arrives
+       at a document where nothing is listening. The flow's next step consumes the record, and the task that
+       step enqueues lands on that flow's own queue like any other job — which is why the queue is per-flow.
+       Both owned; NULL on a flow with nothing to deliver, and NULL again the moment the delivery is made. */
+    char *deliver;
+    char *deliver_origin;
 } Flow;
 
 /* `doc_name` is THIS INSTANCE'S DOCUMENT identity, and it is a parameter rather than a separate init call so a

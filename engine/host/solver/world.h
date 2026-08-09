@@ -110,6 +110,12 @@ int world_ancestry(WorldId w, WorldId *out, int cap);
    corrupted vector, so it crashes rather than sending a prefix. */
 int world_serialize(WorldId w, char *dst, size_t cap);
 
+/* READ that wire form back: the world into `*out` and its ancestry (nearest first) into `ancestry`, returning
+   how many ancestors were written. The inverse of world_serialize and deliberately its neighbour — a grammar
+   with two readers is two grammars, and the writers of the second one are the hosts, where nothing can check it
+   against this. Interning the document NAMES is part of reading, because a handle means nothing to a peer. */
+int world_parse(const char *s, WorldId *out, WorldId *ancestry, int cap);
+
 /* THIS INSTANCE'S SEGMENT for a world minted ELSEWHERE, materialized on first use by forking the nearest
    ancestor present in `ancestry` (nearest first, as world_ancestry writes it), or empty if none is. Borrowed:
    the registry owns it until world_release. */

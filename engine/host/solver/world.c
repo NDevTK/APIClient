@@ -224,6 +224,58 @@ int world_serialize(WorldId w, char *dst, size_t cap)
     return n;
 }
 
+/* THE INVERSE, AND IT LIVES HERE BECAUSE A FORMAT WITH TWO READERS HAS TWO FORMATS. Every host that received a
+   world vector used to take it apart by hand — strchr for the comma, strrchr for the colon, strtoul for the
+   serial — which is the serializer's grammar restated somewhere it cannot be checked against the writer. The
+   document NAME is what crosses (a handle means nothing to a peer), so interning is part of reading it, and the
+   nearest-first ORDER is load-bearing: the reader forks the first ancestor it holds, so an order this function
+   got wrong would silently fork a more distant one and lose the nearer writes. Destructive on a copy of its own
+   making, so the caller's record is untouched. */
+int world_parse(const char *s, WorldId *out, WorldId *ancestry, int cap)
+{
+    char *dup, *q;
+    int n_anc = 0;
+
+    DCHECK(s != NULL && *s, "a world vector was parsed from nothing — the answer would be true in no timeline");
+    DCHECK(out != NULL && (cap == 0 || ancestry != NULL), "a world vector was parsed into no world");
+    *out = WORLD_NONE;
+    dup = strdup(s);
+    CHECK(dup != NULL, "world: OOM parsing a world vector");
+    q = dup;
+    while (q && *q) {
+        char *comma = strchr(q, ','), *colon;
+        if (comma) *comma = 0;
+        /* THE LAST colon: a document name is minted as "<parent>.<n>" and a host may name the root anything,
+           so only the serial's separator is known to be final. */
+        colon = strrchr(q, ':');
+        if (colon) {
+            WorldId id;
+            *colon = 0;
+            id.doc = world_doc_intern(q);
+            id.serial = (uint32_t)strtoul(colon + 1, NULL, 10);
+            if (world_is_none(*out)) *out = id;
+            else if (n_anc < cap) ancestry[n_anc++] = id;
+            else DFAIL("a world vector's ancestry outran the buffer the reader gave it — the reader would fork "
+                       "a more distant ancestor than the sender named and lose every write in between");
+        }
+        q = comma ? comma + 1 : NULL;
+    }
+    free(dup);
+    /* A VECTOR THAT NAMES NO WORLD IS TRUE IN NO TIMELINE — asserted where the name arrives rather than where
+       the answer is used, because by then it is indistinguishable from whatever was last installed. */
+    DCHECK(!world_is_none(*out), "a world vector named no world — its segment would come from whatever this "
+                                 "instance last installed, which is a different timeline wearing one name");
+    {
+        int k;
+        for (k = 0; k < n_anc; k++)
+            DCHECK(ancestry[k].doc == out->doc,
+                   "a world vector's ancestry names a world from another document than its own — world_ancestry "
+                   "walks only the edges the minting instance holds, so a mixed chain means the vector was "
+                   "mis-parsed and this instance would fork the wrong segment");
+    }
+    return n_anc;
+}
+
 static ForeignSegment *find_segment(WorldId w)
 {
     int i;

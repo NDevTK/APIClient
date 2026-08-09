@@ -49,6 +49,7 @@ void flow_registry_free(JSContext *ctx) {
     for (int i = 0; i < g_flows_n; i++) {
         JS_FreeValue(ctx, g_flows[i]->fn);
         free(g_flows[i]->dec);
+        free(g_flows[i]->deliver); free(g_flows[i]->deliver_origin);
         for (int k = 0; k < g_flows[i]->njob; k++) {   /* free any undrained microtask jobs */
             for (int a = 0; a < g_flows[i]->jobs[k].argc; a++) JS_FreeValue(ctx, g_flows[i]->jobs[k].argv[a]);
             free(g_flows[i]->jobs[k].argv);
@@ -65,7 +66,9 @@ void flow_registry_free(JSContext *ctx) {
 static long g_flows_created;
 long flow_created_count(void) { return g_flows_created; }
 
-Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n, WorldId parent) {
+/* THE ONE CONSTRUCTOR. Every flow is born here with a world already decided, so no flow can exist without one
+   and no caller can hand one a second. */
+static Flow *flow_new(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n, WorldId w) {
     g_flows_created++;
     if (g_flows_n >= g_flows_cap) {
         g_flows_cap = g_flows_cap ? g_flows_cap * 2 : 32;
@@ -79,13 +82,17 @@ Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n, Wor
     f->val = 0.0; f->cpu = 0;
     f->cand_src = NULL; f->cand_payload = NULL; f->cand_sink = NULL;
     f->last_compiled = -1;   /* nothing compiled yet; see the no-replay DCHECK at the compile site */
-    /* THE WORLD IS MINTED HERE so no flow can exist without one. A fork passes its parent's world and the
-       child records the edge, which is what lets another instance materialize this flow's segment by forking
-       the nearest ancestor it already holds. A from-baseline flow passes WORLD_NONE and gets a root. */
-    f->world = world_is_none(parent) ? world_mint() : world_mint_child(parent);
+    f->world = w;
     g_flows[g_flows_n++] = f;
     g_gen++;   /* frontier changed */
     return f;
+}
+
+Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n, WorldId parent) {
+    /* THE WORLD IS MINTED HERE so no flow can exist without one. A fork passes its parent's world and the
+       child records the edge, which is what lets another instance materialize this flow's segment by forking
+       the nearest ancestor it already holds. A from-baseline flow passes WORLD_NONE and gets a root. */
+    return flow_new(ctx, fn, dec, dec_n, world_is_none(parent) ? world_mint() : world_mint_child(parent));
 }
 
 /* BLOCKED = holding an unanswered synchronous host request. Scanned rather than counted because a counter is
@@ -159,6 +166,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
         if (g_flows[i] == f) {
             JS_FreeValue(ctx, f->fn);
             free(f->dec);
+            free(f->deliver); free(f->deliver_origin);
             free(f);
             g_flows[i] = g_flows[--g_flows_n];   /* swap-remove; order is by weight, not position */
             g_gen++;   /* frontier changed */
