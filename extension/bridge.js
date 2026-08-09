@@ -280,15 +280,25 @@ function hostHolderOf(docName) {
 async function hostNotice(eng, line) {
   const f = line.split("\t");
   if (f[0] === "navigable.create") {
-    DCHECK(f.length >= 5, "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin and policy");
+    /* SIX FIELDS, because the POLICY is one of them and it is read below. The count said five, so a record that
+       stopped at the origin passed the assert and then took `undefined` for the creator's policy clone — a
+       child document judged under NO policy, which is §7.4's inheritance silently deleted, and the one field a
+       CSP-blocked sink verdict is decided against. An assert that permits the record it is about to misread is
+       the shape of check that reports green while the value is missing. */
+    DCHECK(f.length >= 6, "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin and policy");
     if (hostHolderOf(f[1])) return;   // already provisioned: the engine announces a document once
     const loaded = await eng.fetchedDocument(f[3]);
     const msg = { type: "AST_ANALYZE", pageHtml: (loaded && loaded.body) || "", sourceUrl: f[3],
                   responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     /* THE POLICY IS THE RESPONSE'S, AND THE CREATOR'S CLONE IS THE FALLBACK — §7.2.6/§7.4 in the order the
        spec states them: a Document is judged against the policy container its own response carried, and a
-       response that carried none inherits the clone of its creator's, which is the field the notice carries. */
-    const policy = (loaded && loaded.csp) || f[5] || "";
+       response that carried none inherits the clone of its creator's, which is the field the notice carries.
+       THE CLONE IS THE REST OF THE RECORD, not the sixth field: it is a raw CSP header value and HTTP allows
+       HTAB inside one (this engine's own CSP parser treats tab as source-list whitespace), so a policy carrying
+       one splits into more fields than the record has. The C router already reads it this way — its splitter
+       stops at six and keeps the remainder verbatim — and two readers of one format that disagree about where
+       a field ends are two formats. */
+    const policy = (loaded && loaded.csp) || f.slice(5).join("\t") || "";
     if (policy) msg.responseHeaders["content-security-policy"] = policy;
     const child = await engineCreate("", msg.pageHtml, msg, false, f[1]);
     /* A CHILD DOCUMENT IS A DOCUMENT: it joins the ONE pool and is ranked, sliced, parked and finalized by the

@@ -1405,10 +1405,20 @@ int engine_sched_step(void) {
        flow still alive: every member answers host-owed in a row, the loop breaks on that, and this line closes
        the session over the survivors. A reaction still on one of their queues is dropped exactly as it would
        be at finish, and only the finish case was being checked, so the wider one was invisible. */
-    for (int i = 0; i < flow_count(); i++)
+    for (int i = 0; i < flow_count(); i++) {
         DCHECK(flow_at(i)->njob == 0,
                "the frontier was declared exhausted while a live flow still held queued jobs — its promise "
                "reactions, timer callbacks and delivered messages die with the session");
+        /* AND THE SAME RULE FOR A ROUTED RECORD, which is a work item exactly as a job is. flow_finish asserts
+           it for the flow that RUNS OUT of work; a flow that leaves this loop alive (every member host-owed in
+           a row) had nothing checking it, and the record then dies in flow_registry_free — the peer's message,
+           dropped, indistinguishable from a page that registered no handler. A flow suspended inside a live
+           frame is the shape that reaches here holding one: the delivery is made only where flow_step has no
+           frame, so if this fires, the enqueue belongs earlier than that branch. */
+        DCHECK(flow_at(i)->deliver == NULL,
+               "the frontier was declared exhausted while a live flow still held a routed record — a peer's "
+               "message this document never received, dropped with the session");
+    }
     JS_SetJobEnqueueHook(NULL);
     JS_SetFlowControlHooks(&FC_OFF);
     JS_SetFlowLocalMark(0);

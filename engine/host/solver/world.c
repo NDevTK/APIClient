@@ -248,7 +248,14 @@ int world_parse(const char *s, WorldId *out, WorldId *ancestry, int cap)
         /* THE LAST colon: a document name is minted as "<parent>.<n>" and a host may name the root anything,
            so only the serial's separator is known to be final. */
         colon = strrchr(q, ':');
-        if (colon) {
+        /* EVERY FIELD THE WRITER WROTE IS A WORLD, so a field with no serial is not one to skip — skipping it
+           drops an ancestor, which is the same silent loss the truncation below crashes on: the reader forks
+           the next ancestor it holds and every write in between goes with it. world_serialize emits
+           "<doc>:<serial>" for the head and for each ancestor, so there is no field this can legitimately be. */
+        DCHECK(colon != NULL, "a world vector field carried no serial — world_serialize writes <doc>:<serial> "
+                              "for every field, so this vector was not written by it, and reading past the "
+                              "field would silently drop the ancestor it names");
+        {
             WorldId id;
             *colon = 0;
             id.doc = world_doc_intern(q);

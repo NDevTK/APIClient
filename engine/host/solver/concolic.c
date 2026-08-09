@@ -509,8 +509,15 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue
        source installed as a plain property value — location.hash, document.cookie — was minted once at install
        and never passed through it: its candidate could not be delivered and the sink never fired. Minting is
        the one place every source goes through, whichever way it is reached. */
-    if (g_cand_src && src && !strcmp(src, g_cand_src))
+    if (g_cand_src && src && !strcmp(src, g_cand_src)) {
+        /* THE EXAMPLE IS CONSUMED ON THIS PATH TOO. `example` is owned by this call whichever value comes back,
+           and the candidate's payload REPLACES it — a source under substitution reads the attacker's bytes, not
+           what the address concretely held. Returning without the free leaked it, and it stopped being a
+           dormant leak the moment sources started carrying one: location.search/hash hand over the address's
+           real query and fragment, so every candidate re-fire of a URL source leaked a string. */
+        JS_FreeValue(ctx, example);
         return concolic_deliver(ctx, src, g_cand_payload);
+    }
     DCHECK(g_concolic_class != 0, "concolic_new before concolic_init — the class is unregistered");
     JSValue obj = JS_NewObjectClass(ctx, g_concolic_class);
     if (JS_IsException(obj)) { JS_FreeValue(ctx, example); return obj; }
