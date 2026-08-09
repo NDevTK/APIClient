@@ -32,6 +32,7 @@
 #include "core/realm.h"
 #include "core/dom/node.h"
 #include "core/dom/element.h"
+#include "core/dom/dom_token_list.h"
 #include "core/html/hyperlink.h"
 #include "core/html/html_iframe.h"
 #include "core/events/event_target.h"
@@ -468,6 +469,20 @@ void html_element_install_protos(JSContext *ctx)
         /* §4.8.5's `contentWindow` — the child navigable its insertion steps queued. */
         if (!strcmp(HTML_IFACE[i].iface, "HTMLIFrameElement"))
             iframe_install(ctx, p);
+        /* THE `[SameObject] readonly attribute DOMTokenList` REFLECTIONS, each on the interface whose IDL
+           declares it. They are not reflections in R_* above because those produce a STRING: `link.rel` is the
+           attribute's value and `link.relList` is §7.1's token list over the same attribute, and a page uses
+           the second one to ask `contains('stylesheet')`. Named per interface here rather than by attribute in
+           the token-list component, because which interface declares a member is what this table IS. */
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLAnchorElement") ||
+            !strcmp(HTML_IFACE[i].iface, "HTMLAreaElement") ||
+            !strcmp(HTML_IFACE[i].iface, "HTMLLinkElement") ||
+            !strcmp(HTML_IFACE[i].iface, "HTMLFormElement"))
+            dom_token_list_install_reflection(ctx, p, "relList");
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLLinkElement"))
+            dom_token_list_install_reflection(ctx, p, "sizes");
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLIFrameElement"))
+            dom_token_list_install_reflection(ctx, p, "sandbox");
         JS_SetClassProto(ctx, g_iface_class[i], p);
     }
     JS_FreeValue(ctx, html_p);

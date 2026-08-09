@@ -47,8 +47,29 @@ static JSClassID g_tl_class;
 /* Declared once per AGENT (the IDL pool is sealed after agent init); installed per realm. */
 static int g_set_value_id = -1, g_item_id = -1, g_contains_id = -1, g_add_id = -1, g_remove_id = -1,
            g_toggle_id = -1, g_replace_id = -1, g_to_string_id = -1;
-static JSValue g_key = JS_UNDEFINED;      /* the [SameObject] cache slot on an element's wrapper */
+/* §7.1'S TOKEN-LIST REFLECTIONS — ONE LIST EXPANDED THREE TIMES: the id the engine indexes by, the IDL member
+   name, and the CONTENT ATTRIBUTE that member is a view over. `classList` was the only one and its attribute
+   was hardcoded inside list_owner, which is a second implementation of this file waiting to be written: a
+   `relList` is the SAME object over `rel`, and `sandbox` the same over `sandbox`. A member and its attribute
+   cannot drift because installing a member resolves it through this list. */
+#define TOKEN_LIST_REFLECTIONS(X) \
+    X(TL_CLASS,   "classList", "class")   \
+    X(TL_REL,     "relList",   "rel")     \
+    X(TL_SIZES,   "sizes",     "sizes")   \
+    X(TL_SANDBOX, "sandbox",   "sandbox")
+#define TL_ID(id, member, attr)     id,
+#define TL_MEMBER(id, member, attr) member,
+#define TL_ATTR(id, member, attr)   attr,
+enum { TOKEN_LIST_REFLECTIONS(TL_ID) TL_N };
+static const char *const TL_MEMBERS[TL_N] = { TOKEN_LIST_REFLECTIONS(TL_MEMBER) };
+static const char *const TL_ATTRS[TL_N] = { TOKEN_LIST_REFLECTIONS(TL_ATTR) };
+
+/* ONE [SameObject] CACHE SLOT PER REFLECTION, because `a.relList === a.relList` and `a.classList ===
+   a.classList` are two identities on the same element and one slot would hand the second reader the first
+   one's list — a list over the wrong attribute, with nothing to say so. */
+static JSValue g_key[TL_N];                /* the [SameObject] cache slot on an element's wrapper */
 static JSValue g_owner_key = JS_UNDEFINED; /* the element a list is a view over */
+static JSValue g_which_key = JS_UNDEFINED; /* WHICH reflection it is — the list's own attribute rides here */
 static int     g_ready;
 
 /* ---- the view ---------------------------------------------------------------------------------------------- */
@@ -57,12 +78,24 @@ static int     g_ready;
    different attribute and a hard-coded "class" would be a second implementation the day one lands. */
 static lxb_dom_element_t *list_owner(JSContext *ctx, JSValueConst this_val, const char **attr)
 {
-    JSValue owner;
+    JSValue owner, which;
     JSAtom k;
     lxb_dom_node_t *n;
+    int32_t w = TL_CLASS;
 
-    if (attr) *attr = "class";
     if (!JS_IsObject(this_val)) return NULL;
+    /* WHICH ATTRIBUTE THIS LIST IS A VIEW OVER, read off the list's own slot. Every member reads it through
+       here, so there is no member left that could assume `class`. */
+    k = JS_ValueToAtom(ctx, g_which_key);
+    if (k == JS_ATOM_NULL) return NULL;
+    if (JS_GetOwnSlot(ctx, &which, this_val, k) > 0) JS_ToInt32(ctx, &w, which);
+    else which = JS_UNDEFINED;
+    JS_FreeValue(ctx, which);
+    JS_FreeAtom(ctx, k);
+    DCHECK(w >= 0 && w < TL_N, "a DOMTokenList carries a reflection id §7.1 does not name — the id and the "
+                               "attribute come from one list, so a value outside it is a list this component "
+                               "did not build");
+    if (attr) *attr = TL_ATTRS[w];
     k = JS_ValueToAtom(ctx, g_owner_key);
     if (k == JS_ATOM_NULL) return NULL;
     if (JS_GetOwnSlot(ctx, &owner, this_val, k) <= 0) owner = JS_UNDEFINED;
@@ -335,18 +368,22 @@ static JSValue tl_item(JSContext *ctx, JSValueConst self, uint32_t i)
 static const IdlIndexedDecl TOKEN_LIST_INDEXED = { "DOMTokenList", tl_length, tl_item, NULL };
 
 /* ---- the interface ----------------------------------------------------------------------------------------- */
-/* §4.9 `[SameObject] readonly attribute DOMTokenList classList` — the SAME object every time, cached on the
-   element's wrapper (so per-flow, like the wrapper). A fresh list per read would make `a.classList ===
-   a.classList` false, and a page that keeps the list and mutates it later would be mutating a corpse. */
-static JSValue js_el_class_list(JSContext *ctx, JSValueConst this_val, int magic)
+/* EVERY `[SameObject] readonly attribute DOMTokenList` REFLECTION, under one getter whose MAGIC is which one —
+   §4.9's `classList`, §4.6.7's `relList`, §4.2.4's `sizes`, §4.8.5's `sandbox`. They differ only in the content
+   attribute the list views, which the list carries, so one getter is not a shortcut: four bodies would be four
+   chances to disagree about the cache, the owner slot and the attribute.
+   [SameObject] is the SAME object every time, cached on the element's wrapper (so per-flow, like the wrapper).
+   A fresh list per read would make `a.relList === a.relList` false, and a page that keeps the list and mutates
+   it later would be mutating a corpse. */
+static JSValue js_el_token_list(JSContext *ctx, JSValueConst this_val, int magic)
 {
     JSAtom k, ok;
     JSValue list;
 
-    (void)magic;
-    DCHECK(g_ready, "classList was read before dom_token_list_init built its prototype");
+    DCHECK(g_ready, "a token-list reflection was read before dom_token_list_init built its prototype");
+    DCHECK(magic >= 0 && magic < TL_N, "a token-list reflection was installed with a magic §7.1 does not name");
     if (!JS_IsObject(this_val)) return JS_UNDEFINED;
-    k = JS_ValueToAtom(ctx, g_key);
+    k = JS_ValueToAtom(ctx, g_key[magic]);
     if (k == JS_ATOM_NULL) return JS_UNDEFINED;
     if (JS_GetOwnSlot(ctx, &list, this_val, k) <= 0) list = JS_UNDEFINED;
     if (!JS_IsObject(list)) {
@@ -354,10 +391,14 @@ static JSValue js_el_class_list(JSContext *ctx, JSValueConst this_val, int magic
         JSValue tl_proto = dom_token_list_proto(ctx);
         list = idl_indexed_new(ctx, tl_proto, &TOKEN_LIST_INDEXED);
         JS_FreeValue(ctx, tl_proto);
-        CHECK(!JS_IsException(list), "DOMTokenList: OOM allocating a classList");
+        CHECK(!JS_IsException(list), "DOMTokenList: OOM allocating a token-list reflection");
         ok = JS_ValueToAtom(ctx, g_owner_key);
         CHECK(ok != JS_ATOM_NULL, "the DOMTokenList owner key could not be reached");
         JS_DefinePropertyValue(ctx, list, ok, JS_DupValue(ctx, this_val), 0);
+        JS_FreeAtom(ctx, ok);
+        ok = JS_ValueToAtom(ctx, g_which_key);
+        CHECK(ok != JS_ATOM_NULL, "the DOMTokenList reflection key could not be reached");
+        JS_DefinePropertyValue(ctx, list, ok, JS_NewInt32(ctx, magic), 0);
         JS_FreeAtom(ctx, ok);
         JS_DefinePropertyValue(ctx, (JSValue)this_val, k, JS_DupValue(ctx, list), 0);
     }
@@ -365,14 +406,34 @@ static JSValue js_el_class_list(JSContext *ctx, JSValueConst this_val, int magic
     return list;
 }
 
+void dom_token_list_install_reflection(JSContext *ctx, JSValueConst proto, const char *member)
+{
+    int i;
+
+    for (i = 0; i < TL_N; i++)
+        if (!strcmp(TL_MEMBERS[i], member)) {
+            idl_install_accessor(ctx, proto, TL_MEMBERS[i], js_el_token_list, i, -1);
+            return;
+        }
+    DFAIL("an interface asked for a token-list reflection §7.1 does not name — the member name and the content "
+          "attribute it views come from one list, and a name outside it has no attribute to be a view over");
+}
+
 void dom_token_list_init(JSContext *ctx)
 {
     JSClassDef d = { "DOMTokenList" };
 
     DCHECK(!g_ready, "dom_token_list_init ran twice — the interface is declared once per AGENT");
-    g_key = JS_NewSymbol(ctx, "classListSlot", false);
+    {
+        int i;
+        for (i = 0; i < TL_N; i++) {
+            g_key[i] = JS_NewSymbol(ctx, TL_MEMBERS[i], false);
+            CHECK(!JS_IsException(g_key[i]), "a DOMTokenList [SameObject] slot key could not be allocated");
+        }
+    }
     g_owner_key = JS_NewSymbol(ctx, "tokenListOwner", false);
-    CHECK(!JS_IsException(g_key) && !JS_IsException(g_owner_key),
+    g_which_key = JS_NewSymbol(ctx, "tokenListReflection", false);
+    CHECK(!JS_IsException(g_which_key) && !JS_IsException(g_owner_key),
           "the DOMTokenList slot keys could not be allocated");
     JS_NewClassID(JS_GetRuntime(ctx), &g_tl_class);
     JS_NewClass(JS_GetRuntime(ctx), g_tl_class, &d);
@@ -446,14 +507,19 @@ void dom_token_list_install(JSContext *ctx, JSValueConst global)
 void dom_token_list_install_element(JSContext *ctx, JSValueConst element_proto)
 {
     DCHECK(g_ready, "classList was installed before dom_token_list_init built its prototype");
-    idl_install_accessor(ctx, element_proto, "classList", js_el_class_list, 0, -1);
+    dom_token_list_install_reflection(ctx, element_proto, "classList");
 }
 
 void dom_token_list_free(JSContext *ctx)
 {
     if (!g_ready) return;
-    JS_FreeValue(ctx, g_key);
+    {
+        int i;
+        for (i = 0; i < TL_N; i++) { JS_FreeValue(ctx, g_key[i]); g_key[i] = JS_UNDEFINED; }
+    }
     JS_FreeValue(ctx, g_owner_key);
-    g_key = g_owner_key = JS_UNDEFINED;   /* the prototypes are the REALMS' — released with their contexts */
+    JS_FreeValue(ctx, g_which_key);
+    /* the prototypes are the REALMS' — released with their contexts */
+    g_owner_key = g_which_key = JS_UNDEFINED;
     g_ready = 0;
 }
