@@ -35,7 +35,21 @@ void        concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example
    targeted test in this repo ran against a weaker engine than the one that ships, and a relational compare on a
    concolic reached the ToNumber boundary's DCHECK instead of the .rel hook that answers it. A capability the
    solver owns is declared once BY the solver; an entry asks for it, it does not enumerate it. */
+/* THE VALUE SEMANTICS of a concolic — how it adds, compares, coerces and reports its type. Install this in ANY
+   host where a concolic can be reached: without it every operator falls through to the ordinary-object path
+   and the first coercion throws "toPrimitive" out of an expression the page never wrote. */
 void concolic_install_hooks(void);
+/* IS THIS HOST EXPLORING? Where concolic values COME FROM — a different decision from what they DO. A global
+   that was never set becomes unknown server-injected input rather than a ReferenceError, and a browser value
+   an attacker controls becomes a source rather than the plain value the spec computes. A conformance host
+   wants the spec's answers and declines this; it still gets the value semantics above. Install after
+   concolic_install_hooks. */
+void concolic_install_source_overlay(void);
+
+/* THE ONE SEAM a browser component hands a computed value through to become an attacker SOURCE. Returns
+   `computed` unchanged where no source overlay is installed, and a concolic carrying it as the EXAMPLE where
+   one is. `computed` is consumed either way. */
+JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src, JSValue computed);
 
 /* Propagation through `+` — install with JS_SetConcolicAddHook. */
 int         concolic_add_hook(JSContext *ctx, JSValue *sp);

@@ -26,6 +26,7 @@
 #include "solver/concolic.h"
 #include "core/frame/location.h"
 #include "core/url/url.h"
+#include "core/dom/document.h"   /* this realm's address — the one place a document's URL lives */
 
 /* HTML's API BASE URL IS NOT KEPT HERE. It is the DOCUMENT's address and is read from the Document record
    (document_base_url), because it is a per-REALM fact: a module-static copy was overwritten by every install,
@@ -41,6 +42,21 @@ static void loc_put(JSContext *ctx, JSValueConst loc, const char *name, char *ow
     free(owned);
 }
 
+/* §7.10.5's STRINGIFIER: `[LegacyUnforgeable] stringifier attribute USVString href`. A stringifier attribute
+   gives the interface a `toString()` that answers that attribute, which is what makes a Location usable
+   ANYWHERE a USVString is expected — and that is not a corner: `new URL(path, location)` is how a page builds
+   an absolute URL from a relative one, and WPT's own /common/dispatcher/dispatcher.js opens with exactly it.
+   Without the stringifier, ToString found Object.prototype.toString and handed the URL parser the eight
+   characters `[object Object]`, so the constructor threw "the base URL is not a valid URL" — four webmessaging
+   files ended at their first import.
+   Read at CALL time rather than captured at install, because it must answer whatever the address is then; the
+   href member beside it is the one place the address lives. */
+static JSValue js_loc_to_string(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)argc; (void)argv;
+    return JS_GetPropertyStr(ctx, this_val, "href");
+}
+
 static char *loc_concat(const char *a, const char *b)
 {
     size_t na = strlen(a), nb = strlen(b);
@@ -52,16 +68,54 @@ static char *loc_concat(const char *a, const char *b)
     return r;
 }
 
+/* THE COMPONENT PART OF THIS REALM'S ADDRESS, prefixed as §7.10.5 serializes it ("?x=1", "#frag") and empty
+   when the address has none. Read from the DOCUMENT rather than captured at install for the reason the API
+   base URL is: the address is a per-realm fact and a module-static copy is overwritten by the next install. */
+static JSValue loc_component_example(JSContext *ctx, bool want_query)
+{
+    UrlRecord rec;
+    const char *addr = document_base_url(ctx);
+    JSValue v;
+
+    DCHECK(addr != NULL && *addr, "a Location member was read in a realm whose Document has no address");
+    url_record_init(&rec);
+    CHECK(url_parse(&rec, addr, strlen(addr), NULL),
+          "this realm's own address does not parse — it was parsed once already to install this Location");
+    {
+        const char *part = want_query ? rec.query : rec.fragment;
+        if (!part) {
+            v = JS_NewStringLen(ctx, "", 0);
+        } else {
+            char *pref = loc_concat(want_query ? "?" : "#", part);
+            v = JS_NewString(ctx, pref);
+            free(pref);
+        }
+    }
+    url_record_free(&rec);
+    return v;
+}
+
+/* THE TWO ATTACKER SOURCES, AND THEY CARRY THE EXAMPLE THE ADDRESS ACTUALLY HAS. Both were minted example-free,
+   which says "nothing is known about this value" — but the document was LOADED from an address, and whatever
+   query and fragment it carries are observed facts, not invented ones. §solver's rule is that a value is a
+   domain plus an example when the code pins, computes or LEARNS one, and this one is learned from the address
+   the host supplied; every other source in this engine that has one already supplies it (window.name, screen,
+   navigator). Example-free is not neutral either: it made the value unusable wherever a real string was needed,
+   and the conformance host answered that by building a SECOND Location out of the address — two components
+   answering `location`, so a fix to one silently missed the other, which is exactly how the stringifier landed
+   in a file the conformance runner does not use.
+   The value stays CONCOLIC: the domain is unconstrained and a branch on it still forks, which is the whole
+   point of the source. It simply also knows what it concretely is right now. */
 static JSValue js_loc_get_search(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)this_val; (void)argc; (void)argv;
-    return concolic_new(ctx, "{location.search}", "location.search", JS_UNDEFINED);
+    return concolic_source_wrap(ctx, "{location.search}", "location.search", loc_component_example(ctx, true));
 }
 
 static JSValue js_loc_get_hash(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)this_val; (void)argc; (void)argv;
-    return concolic_new(ctx, "{location.hash}", "location.hash", JS_UNDEFINED);
+    return concolic_source_wrap(ctx, "{location.hash}", "location.hash", loc_component_example(ctx, false));
 }
 
 /* THE TWO ATTACKER SOURCES THIS COMPONENT OWNS, declared ONCE PER AGENT — a source's browser delivery is a
@@ -135,6 +189,12 @@ void location_install(JSContext *ctx, JSValueConst global, const char *url)
         free(origin); free(path);
         loc_put(ctx, loc, "href", s);
     }
+
+    /* [LegacyUnforgeable], which for Web IDL means an OWN property that cannot be reconfigured or overwritten —
+       a page must not be able to make its own Location lie about its address, which is precisely what a
+       replaceable `toString` would let a script do to every same-realm check written against it. */
+    JS_DefinePropertyValueStr(ctx, loc, "toString",
+                              JS_NewCFunction(ctx, js_loc_to_string, "toString", 0), 0);
 
     url_record_free(&rec);
     JS_SetPropertyStr(ctx, (JSValue)global, "location", loc);

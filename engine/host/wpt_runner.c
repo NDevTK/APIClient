@@ -967,6 +967,11 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
        an attacker who can open the document sets it. The class has to be registered before any component can
        mint one; without it every file here aborted at the first such read. */
     concolic_init(ctx);
+    /* THE VALUE SEMANTICS, WITHOUT THE ABSENT-GLOBAL SOURCE. A conformance run reaches concolic values — the
+       two Location sources are the document's own address — and every operator over one needs the hooks or it
+       throws at the first coercion. What it must NOT have is a global that was never set becoming unknown
+       input: the spec answers that with a ReferenceError, and the corpus tests exactly that. */
+    concolic_install_hooks();
     /* THE SOLVER FRONTIER, because a member that SUSPENDS parks on a flow's pending register and that register
        is the frontier's. This runner drives quickjs flows (JS_FlowNew/JS_FlowResume) but had no solver flow at
        all, so §7.4's open() aborted on "issued outside a flow" — correctly. One flow, set running for the whole
@@ -1009,27 +1014,6 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
 
 /* ONE DOCUMENT. Runs once per document INCLUDING the first, which is what makes it the one description of what
    a document of this build is — a same-origin child navigable gets exactly this and nothing else. */
-/* AN OWNED SERIALIZATION, INSTALLED AND FREED IN ONE PLACE — every component of the address below is one of
-   these, so the free belongs here rather than at nine call sites. Mirrors location.c's loc_put for the same
-   reason: the URL parser hands back malloc'd strings and a missed free is a leak per realm. */
-static void wpt_loc_put(JSContext *ctx, JSValueConst loc, const char *name, char *owned)
-{
-    JS_SetPropertyStr(ctx, (JSValue)loc, name, JS_NewString(ctx, owned ? owned : ""));
-    free(owned);
-}
-
-/* §4.5: `search` and `hash` carry their leading `?` and `#`; an absent one is "" and not the punctuation. */
-static char *wpt_loc_prefixed(const char *prefix, const char *tail)
-{
-    size_t a = strlen(prefix), b = strlen(tail);
-    char *r = malloc(a + b + 1);
-    CHECK(r != NULL, "wpt: OOM building an address component");
-    memcpy(r, prefix, a);
-    memcpy(r + a, tail, b);
-    r[a + b] = 0;
-    return r;
-}
-
 static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
                               const char *csp, uint32_t doc_id, JSValueConst nav_proxy)
 {
@@ -1097,37 +1081,14 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
        `<root>/resources/testharness.js` first and the test file second, so the root is what precedes the one
        and the address is the other, made server-relative — which is exactly what WPT's server serves from and
        resolves against. A worker's `location` is a real WorkerLocation. */
-    /* THE ADDRESS, NOT THE INTERFACE. This runner needs the base URL — every relative URL in the corpus
-       resolves against it, and `URL.createObjectURL` names its origin — while the Location INTERFACE
-       additionally declares `search` and `hash` as concolic attacker sources, which a conformance runner must
-       not have because the harness's own coercion of a concolic `search` refuses it. Nothing has to be
-       recorded for the base: HTML's API base URL is the DOCUMENT's address, and document_install above was
-       given it.
-       EVERY MEMBER COMES FROM THE ADDRESS, THROUGH THE REAL PARSER. `search` was the literal "" with a comment
-       saying this runner runs its file with no variant query — true of the ROOT document and false of every
-       CHILD, whose address is whatever `window.open` named. `open("target.html?" + channelName)` is how the
-       corpus tells a popup which BroadcastChannel to answer on, and the popup read `location.search.substr(1)`
-       as the empty string: 93 subtests in one file, and most of open-close, timed out waiting for a message
-       posted on a bus named "". A hardcoded component is only ever right for the one document it was written
-       for, and this realm install runs for all of them. */
-    {
-        UrlRecord rec;
-        JSValue loc = JS_NewObject(ctx);
-
-        url_record_init(&rec);
-        CHECK(url_parse(&rec, url, strlen(url), NULL),
-              "wpt: a realm's address is not a URL — the runner built it, so this is the runner's bug");
-        JS_SetPropertyStr(ctx, loc, "href", JS_NewString(ctx, url));
-        JS_SetPropertyStr(ctx, loc, "origin", JS_NewString(ctx, origin));
-        wpt_loc_put(ctx, loc, "search",   rec.query    ? wpt_loc_prefixed("?", rec.query)    : NULL);
-        wpt_loc_put(ctx, loc, "hash",     rec.fragment ? wpt_loc_prefixed("#", rec.fragment) : NULL);
-        wpt_loc_put(ctx, loc, "pathname", url_serialize_path(&rec));
-        wpt_loc_put(ctx, loc, "protocol", wpt_loc_prefixed(rec.scheme, ":"));
-        wpt_loc_put(ctx, loc, "host",     url_serialize_host_port(&rec));
-        wpt_loc_put(ctx, loc, "hostname", url_serialize_host(&rec.host));
-        JS_SetPropertyStr(ctx, global, "location", loc);
-        url_record_free(&rec);
-    }
+    /* THE ONE Location COMPONENT. This runner used to BUILD ITS OWN out of the address — eight members, its
+       own put/prefix helpers, its own parse — because location.c declares `search` and `hash` as concolic
+       attacker SOURCES and a conformance run needs the real strings. That is a second component answering
+       `location`, and it cost exactly what a second component costs: the §7.10.5 stringifier was added to
+       location.c and this realm never saw it, so `new URL(path, location)` went on handing the URL parser
+       `[object Object]` and four files ended at their first import. The source now carries the example the
+       ADDRESS actually has, so there is one Location and the concolic overlay no longer removes the value. */
+    location_install(ctx, global, url);
     JS_FreeValue(ctx, global);
 }
 

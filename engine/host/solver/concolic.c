@@ -554,16 +554,61 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp) {
     return 1;
 }
 
-/* THE hook set — see concolic.h. Concolic VALUE propagation stays installed across scheduling AND verification,
-   because taint must flow during a candidate re-fire too; the EXPLORATION hooks (branch/fork/preempt) are not
-   here, because the scheduler owns and scopes those. */
+/* TWO SETS, BECAUSE THEY ANSWER TWO DIFFERENT QUESTIONS. What a concolic value DOES once it exists — how it
+   adds, compares, coerces, reports its type — is the value class's own semantics, and it must be installed
+   wherever a concolic can be reached at all: without it every operator falls through to the ordinary-object
+   path and `"x" + document.cookie` throws "toPrimitive" from an expression the page never wrote. Where a
+   concolic COMES FROM is a different decision. absent_global_hook mints one out of a global that was never
+   set, which is §solver's "server-injected absent state is unknown input" — a deliberate exploration choice,
+   and the opposite of what a conformance run wants, where an unset global is a ReferenceError and the spec
+   says so.
+   They were one set, so a host that wanted the first was forced to take the second and every host that
+   declined took neither. The conformance runner declined, and paid for it by growing a SECOND Location
+   component out of the address to avoid the concolic it could not coerce — which is how a §7.10.5 stringifier
+   fix landed in a file that runner does not use. */
+static JSConcolicHooks g_hooks = {
+    .add = concolic_add_hook, .cmp = concolic_cmp_hook, .is = concolic_is,
+    .rel = concolic_rel_hook, .type_of = concolic_typeof_hook,
+    .arith = concolic_arith_hook, .to_str = concolic_tostr_hook,
+    .key_read = concolic_key_read_hook,
+    .key_name = concolic_key_name_hook };
+
+/* Concolic VALUE propagation stays installed across scheduling AND verification, because taint must flow
+   during a candidate re-fire too; the EXPLORATION hooks (branch/fork/preempt) are the scheduler's. */
 void concolic_install_hooks(void)
 {
-    static const JSConcolicHooks HOOKS = {
-        .add = concolic_add_hook, .cmp = concolic_cmp_hook, .is = concolic_is,
-        .absent = absent_global_hook, .rel = concolic_rel_hook, .type_of = concolic_typeof_hook,
-        .arith = concolic_arith_hook, .to_str = concolic_tostr_hook,
-        .key_read = concolic_key_read_hook,
-        .key_name = concolic_key_name_hook };
-    JS_SetConcolicHooks(&HOOKS);
+    JS_SetConcolicHooks(&g_hooks);
+}
+
+/* IS THIS HOST EXPLORING? One statement of it, because every consequence of the answer is the same decision:
+   an unset global becomes unknown server-injected input rather than a ReferenceError, and a browser value the
+   ATTACKER controls becomes a source rather than the plain string the address computed. A host that is not
+   exploring gets the browser's own answers, which is what the spec defines and what a conformance run checks.
+   It is not a "mode": the value semantics above are installed unconditionally, so a concolic that reaches this
+   host still adds, compares and coerces. This decides only whether one is MINTED. */
+static int g_source_overlay;
+
+void concolic_install_source_overlay(void)
+{
+    DCHECK(g_hooks.add != NULL, "the source overlay was installed over a hook set with no value semantics — a "
+                                "source that cannot be added or coerced is a value the page's first expression "
+                                "throws on");
+    g_source_overlay = 1;
+    g_hooks.absent = absent_global_hook;
+    JS_SetConcolicHooks(&g_hooks);
+}
+
+/* THE ONE SEAM between a value the BROWSER computed and the SOLVER's view of it. §CLAUDE splits them exactly
+   here: the browser half computes what the spec says the member is — `location.search` IS the address's query,
+   and every document has an address — and the solver half decides that an attacker controls it, so it is
+   ALSO a symbolic source that forks control flow. Written as one call rather than each component minting a
+   concolic itself, because the components that mint one directly are the ones a non-exploring host cannot
+   use at all, which is what grew a second Location out of the address.
+   `computed` is CONSUMED, and it becomes the source's EXAMPLE: the value is opaque for control flow and still
+   knows what it concretely is, which is §solver's whole triple rather than a choice between the two. */
+JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src, JSValue computed)
+{
+    if (!g_source_overlay)
+        return computed;
+    return concolic_new(ctx, shape, src, computed);
 }

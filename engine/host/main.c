@@ -281,6 +281,7 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
        and again in test_forced.c, and the pair had drifted. */
     cow_install_time_travel_hooks(engine_gen_fork);
     concolic_install_hooks();
+    concolic_install_source_overlay();   /* a SOLVER host: attacker-controlled values are symbolic sources */
 
     g_dom = lxb_html_document_create();
     CHECK(g_dom != NULL, "the document allocation failed");
