@@ -53,6 +53,12 @@ typedef struct {
          - The collector owns the bytes, so there is no second ownership contract to get wrong. */
     JSValue queue;
     uint32_t head;
+    /* §9.4.2's RELEVANT REALM — the realm this port was created in. §9.4.2's delivery creates its
+       MessageEvent "in the relevant realm of the port", and the delivery task's callee is ONE function object
+       for the agent, so the ctx it runs under is whichever realm minted that callee and never the port's. A
+       port handed to a child document delivered every message as an event belonging to the parent.
+       BORROWED: the agent owns its realms and releases them with itself, exactly as a WindowProxy's is. */
+    JSContext *realm;
     uint8_t enabled;     /* §9.4.2: the queue starts DISABLED */
     uint8_t detached;    /* §9.4.2's [[Detached]], set by close() */
 } PortData;
@@ -138,6 +144,7 @@ static JSValue js_port_deliver(JSContext *ctx, JSValueConst this_val, int argc, 
     PortData *d = port_of(port);
     JSValue data, ev, entry, buf, ports = JS_UNDEFINED;
     StructuredWithTransfer swt;
+    JSContext *rctx;
     uint32_t n = 0;
     size_t blen = 0;
 
@@ -156,25 +163,29 @@ static JSValue js_port_deliver(JSContext *ctx, JSValueConst this_val, int argc, 
     swt.data.buf = JS_GetArrayBuffer(ctx, &blen, buf);
     swt.data.len = blen;
     DCHECK(swt.data.buf != NULL, "a port's queue held something that is not the serialized message it stored");
-    data = structured_deserialize_transfer(ctx, &swt, &ports);
+    /* §9.4.2: THE DESERIALIZE AND THE EVENT BELONG TO THE PORT'S REALM, not to whichever realm minted the
+       one delivery callee this agent has. */
+    rctx = d->realm;
+    DCHECK(rctx != NULL, "a port was delivered to without the realm it was created in");
+    data = structured_deserialize_transfer(rctx, &swt, &ports);
     JS_FreeValue(ctx, buf);
     JS_FreeValue(ctx, swt.holders);
     if (JS_IsException(data)) {
         /* §9.4.2: a message that cannot be deserialized fires `messageerror` rather than `message`. This
            engine's deserializer only fails where its own writer and reader disagree, which crashes instead —
            so reaching here means the exception came from somewhere else and is the page's to see. */
-        JS_FreeValue(ctx, JS_GetException(ctx));
-        JS_FreeValue(ctx, ports);
-        ev = message_event_new(ctx, "messageerror", JS_UNDEFINED, "", JS_UNDEFINED, JS_UNDEFINED);
+        JS_FreeValue(rctx, JS_GetException(rctx));
+        JS_FreeValue(rctx, ports);
+        ev = message_event_new(rctx, "messageerror", JS_UNDEFINED, "", JS_UNDEFINED, JS_UNDEFINED);
     } else {
         /* §9.4.2: `ports` is the [[TransferredValues]] — the ports that ARRIVED with this message. */
-        ev = message_event_new(ctx, "message", data, "", JS_UNDEFINED, ports);
-        JS_FreeValue(ctx, data);
-        JS_FreeValue(ctx, ports);
+        ev = message_event_new(rctx, "message", data, "", JS_UNDEFINED, ports);
+        JS_FreeValue(rctx, data);
+        JS_FreeValue(rctx, ports);
     }
     if (JS_IsException(ev))
         return JS_EXCEPTION;
-    event_target_fire(ctx, port, ev);
+    event_target_fire(rctx, port, ev);
     return JS_UNDEFINED;
 }
 
@@ -416,6 +427,7 @@ static JSValue port_new(JSContext *ctx)
     d = calloc(1, sizeof *d);
     CHECK(d != NULL, "message port: OOM building a MessagePort");
     d->entangled = d->queue = JS_UNDEFINED;
+    d->realm = ctx;   /* §9.4.2's relevant realm, taken where the port is created */
     JS_SetOpaque(obj, d);
     return obj;
 }

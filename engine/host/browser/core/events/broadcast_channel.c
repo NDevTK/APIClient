@@ -44,6 +44,11 @@
    all. The atom IS the interning; comparing it is the comparison the comment described. */
 typedef struct {
     JSAtom  name;      /* §9.5's channel name (owned — released in the finalizer) */
+    /* §9.5's RELEVANT REALM — the realm this channel was constructed in. The delivery task's callee is ONE
+       function object for the agent, so the ctx it runs under is whichever realm minted it; a channel opened
+       by a child document received every broadcast as an event belonging to the parent. BORROWED: the agent
+       owns its realms and releases them with itself. */
+    JSContext *realm;
     uint8_t closed;    /* §9.5's closed flag */
 } ChanData;
 
@@ -98,6 +103,7 @@ static JSValue js_chan_deliver(JSContext *ctx, JSValueConst this_val, int argc, 
     ChanData *c = chan_of(dest);
     StructuredData sd;
     JSValue data, ev;
+    JSContext *rctx;
     size_t blen = 0;
 
     (void)this_val;
@@ -106,18 +112,23 @@ static JSValue js_chan_deliver(JSContext *ctx, JSValueConst this_val, int argc, 
     sd.buf = JS_GetArrayBuffer(ctx, &blen, buf);
     sd.len = blen;
     DCHECK(sd.buf != NULL, "a broadcast task held something that is not the bytes it stored");
-    data = structured_deserialize(ctx, &sd);
+    /* §9.5: THE DESERIALIZE AND THE EVENT BELONG TO THE DESTINATION CHANNEL'S REALM — each destination gets
+       its own copy of the message in its own realm, which is what makes a broadcast to two documents two
+       independent deliveries rather than one shared object graph. */
+    rctx = c->realm;
+    DCHECK(rctx != NULL, "a broadcast reached a channel without the realm it was constructed in");
+    data = structured_deserialize(rctx, &sd);
     if (JS_IsException(data)) {
-        JS_FreeValue(ctx, JS_GetException(ctx));
-        ev = message_event_new(ctx, "messageerror", JS_UNDEFINED, g_origin, JS_UNDEFINED, JS_UNDEFINED);
+        JS_FreeValue(rctx, JS_GetException(rctx));
+        ev = message_event_new(rctx, "messageerror", JS_UNDEFINED, g_origin, JS_UNDEFINED, JS_UNDEFINED);
     } else {
         /* §9.5: the origin is the SENDER'S, and a broadcast has no source and no ports — the bus is named, not
            addressed, so there is nothing to reply to. */
-        ev = message_event_new(ctx, "message", data, g_origin, JS_UNDEFINED, JS_UNDEFINED);
-        JS_FreeValue(ctx, data);
+        ev = message_event_new(rctx, "message", data, g_origin, JS_UNDEFINED, JS_UNDEFINED);
+        JS_FreeValue(rctx, data);
     }
     if (JS_IsException(ev)) return JS_EXCEPTION;
-    event_target_fire(ctx, dest, ev);
+    event_target_fire(rctx, dest, ev);
     return JS_UNDEFINED;
 }
 
@@ -223,6 +234,7 @@ static int js_bc_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
            "this member's declaration is not the one that was invoked");
     /* INTERNED STRAIGHT FROM THE CONVERTED STRING — no C string in between, which is also what keeps a name
        containing a NUL or a lone surrogate the name the page gave rather than a truncation of it. */
+    c->realm = ctx;   /* §9.5's relevant realm, taken where the channel is constructed */
     c->name = JS_ValueToAtom(ctx, argv[0]);
     if (c->name == JS_ATOM_NULL) { free(c); JS_FreeValue(ctx, obj); return -1; }
     JS_SetOpaque(obj, c);
