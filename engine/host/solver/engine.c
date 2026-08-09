@@ -461,14 +461,30 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
                   "a WindowProxy for them: build that before this can be delivered");
     for (int i = 0; i < n; i++) {
         Flow *f = flow_at(i);
-        /* ONE PENDING RECORD PER TIMELINE. Two records on one flow would be delivered in sequence into a single
-           timeline, and if their senders are two arms of one fork those arms CONTRADICT — merging them
-           fabricates a timeline neither sender was in. The answer is to FORK the receiving flow per delivery, so
-           each arrival is its own arm; until that exists this crashes rather than merging them. */
+        /* ONE PENDING RECORD PER TIMELINE. Two records on one flow are delivered in sequence into a single
+           timeline, and whether that is right depends ENTIRELY on the senders' worlds — which is the part the
+           instruction here used to get wrong, so it is stated properly before anyone builds against it.
+           TWO MESSAGES FROM ONE WORLD ARE SEQUENTIAL, not alternative: §9.4.4 queues each as a task on the
+           receiving document's queue and the page observes them in order, so "fork a sibling per arrival" is
+           the WRONG mechanism for them — it would turn one sender's two messages into two timelines that each
+           saw one. Only senders whose worlds CONTRADICT (two arms that took opposite branches) may not be
+           merged, and those must fork.
+           AND THE WORLD GRAPH CANNOT YET TELL THE TWO APART, which is the real unbuilt thing and is why this
+           still crashes instead of choosing. A fork mints a CHILD world for the sibling and leaves the PRIMARY
+           holding the parent's, so the two arms of one branch are related as ancestor-and-descendant — exactly
+           the relation that otherwise means "compatible, one is a continuation of the other". Both arms must
+           get a child world (or the branch must be recorded on the edge) before "do these two senders
+           contradict?" has an answer at all. Build THAT first; the queue-or-fork decision is one line once it
+           can be asked. Driven by engine/route.mjs, whose three posts are exactly this: two from one world and
+           one from the other arm. */
         DCHECK(f->deliver == NULL,
-               "a second record was routed to a flow that has not yet made its first — delivering both into one "
-               "timeline merges senders that may be contradictory arms of one fork; build fork-on-delivery (a "
-               "sibling per arrival, the receiving flow continuing without it) rather than queueing them");
+               "a second record was routed to a flow that has not yet made its first. It is NOT automatically a "
+               "merge to prevent: two messages from ONE sending world are sequential tasks the page must see in "
+               "order, and forking a sibling per arrival would be wrong for them. It is only senders whose "
+               "worlds CONTRADICT that may not share a timeline — and the world graph cannot answer that yet, "
+               "because a fork leaves the primary arm holding the parent world, so two contradictory arms look "
+               "like ancestor and descendant. Give both arms a child world, then queue compatible arrivals and "
+               "fork contradictory ones");
         f->deliver = strdup(record);
         f->deliver_origin = strdup(sender_origin);
         CHECK(f->deliver && f->deliver_origin, "engine: OOM attaching a routed record to a flow");
