@@ -29,6 +29,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/streams/transform_stream.h"
 #include "core/streams/readable_stream.h"
 #include "core/streams/writable_stream.h"
@@ -62,7 +63,6 @@ typedef struct {
 } TsCtrlData;
 
 static JSClassID g_ts_class, g_tc_class;
-static JSValue   g_ts_proto = JS_UNDEFINED, g_tc_proto = JS_UNDEFINED;
 static JSRuntime *g_ts_rt;
 
 /* THE RECORDS TIME-TRAVEL, AND THE CAPTURE IS IN THE ACCESSOR — §4's comment on the same lines gives the whole
@@ -245,7 +245,9 @@ typedef struct {
 static int g_op_stepid[OP_N];
 static int g_ctor_stepid = -1;
 /* §9.3's four operations, held as the FUNCTION OBJECTS this component installed — see transform_stream.h. */
-static JSValue g_ts_fn[TS_OP_N] = { JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED };
+/* §9.3's FOUR OPERATIONS AS FUNCTION OBJECTS, PER REALM — a function object carries the realm it was minted
+   in, so one set held for the agent ran a child document's transform through the first document's realm. */
+static int g_ts_fn_slot[TS_OP_N];
 
 static void js_ts_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
@@ -682,7 +684,9 @@ run:
             }
 
             /* Both records are COMPLETE and attached before the first step that can fail. */
-            s->ts = JS_NewObjectProtoClass(ctx, JS_IsObject(s->proto) ? (JSValueConst)s->proto : g_ts_proto,
+            JSValue tsp = JS_GetClassProto(ctx, g_ts_class);
+            DCHECK(!JS_IsNull(tsp), "a TransformStream was minted in a realm that never ran its install");
+            s->ts = JS_NewObjectProtoClass(ctx, JS_IsObject(s->proto) ? (JSValueConst)s->proto : tsp,
                                            g_ts_class);
             if (JS_IsException(s->ts)) return JS_STEP_ABRUPT;
             td = js_mallocz(ctx, sizeof *td);
@@ -692,7 +696,13 @@ run:
             td->backpressure = BP_UNSET;
             JS_SetOpaque(s->ts, td);
 
-            s->ctrl = JS_NewObjectProtoClass(ctx, g_tc_proto, g_tc_class);
+            JS_FreeValue(ctx, tsp);
+            {
+                JSValue tcp = JS_GetClassProto(ctx, g_tc_class);
+                DCHECK(!JS_IsNull(tcp), "a §6.3 controller was minted in a realm with no install");
+                s->ctrl = JS_NewObjectProtoClass(ctx, tcp, g_tc_class);
+                JS_FreeValue(ctx, tcp);
+            }
             if (JS_IsException(s->ctrl)) return JS_STEP_ABRUPT;
             cd = js_mallocz(ctx, sizeof *cd);
             if (!cd) return JS_STEP_ABRUPT;
@@ -1343,20 +1353,6 @@ void transform_stream_init(JSContext *ctx)
         CHECK(g_op_stepid[i] >= 0, "streams: no step id for a §6 operation");
     }
 
-    g_ts_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_ts_proto), "TransformStream.prototype could not be allocated");
-    idl_interface_tag(ctx, g_ts_proto, "TransformStream");
-    idl_install_accessor(ctx, g_ts_proto, "readable", js_ts_get, TS_READABLE, -1);
-    idl_install_accessor(ctx, g_ts_proto, "writable", js_ts_get, TS_WRITABLE, -1);
-
-    g_tc_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_tc_proto), "the §6.3 controller prototype could not be allocated");
-    idl_interface_tag(ctx, g_tc_proto, "TransformStreamDefaultController");
-    idl_install_accessor(ctx, g_tc_proto, "desiredSize", js_tc_desired, 0, -1);
-    idl_install_step_method(ctx, g_tc_proto, "enqueue", 0, g_op_stepid[OP_CTRL_ENQUEUE]);
-    idl_install_step_method(ctx, g_tc_proto, "error", 0, g_op_stepid[OP_CTRL_ERROR]);
-    idl_install_step_method(ctx, g_tc_proto, "terminate", 0, g_op_stepid[OP_CTRL_TERMINATE]);
-
     /* §6.2's constructor: `(optional object transformer, optional QueuingStrategy writableStrategy = {},
        optional QueuingStrategy readableStrategy = {})`. The two strategies are read by the MACHINE rather than
        declared as IDL dictionaries, because the standard's order runs through them AND the transformer, and
@@ -1364,29 +1360,65 @@ void transform_stream_init(JSContext *ctx)
     g_ctor_stepid = idl_method_id_step(ctx, TS_ARGS, 3, NULL, 0, &js_ts_ctor_decl, 0);
     idl_optional_from(0);   /* §6.2: all three constructor arguments are optional */
 
+    {
+        static const char *const OP_NAME[TS_OP_N] = {
+            "§9.3.1 set up", "controller.enqueue", "controller.terminate", "controller.error",
+        };
+        for (i = 0; i < TS_OP_N; i++)
+            g_ts_fn_slot[i] = realm_value_declare(ctx, OP_NAME[i]);
+    }
+    realm_declare_intrinsic(transform_stream_install_protos);
+}
+
+/* §6.2's AND §6.3's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM, and §9.3's four operations read off them. */
+void transform_stream_install_protos(JSContext *ctx)
+{
+    static const char *const CN[3] = { "enqueue", "terminate", "error" };
+    JSValue ts_p, tc_p, prev;
+    int k;
+
+    DCHECK(g_ts_class != 0, "a realm asked for TransformStream.prototype before the class was declared");
+    prev = JS_GetClassProto(ctx, g_ts_class);
+    DCHECK(JS_IsNull(prev), "transform_stream_install_protos ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+
+    ts_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(ts_p), "TransformStream.prototype could not be allocated");
+    idl_interface_tag(ctx, ts_p, "TransformStream");
+    idl_install_accessor(ctx, ts_p, "readable", js_ts_get, TS_READABLE, -1);
+    idl_install_accessor(ctx, ts_p, "writable", js_ts_get, TS_WRITABLE, -1);
+    JS_SetClassProto(ctx, g_ts_class, ts_p);
+
+    tc_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(tc_p), "the §6.3 controller prototype could not be allocated");
+    idl_interface_tag(ctx, tc_p, "TransformStreamDefaultController");
+    idl_install_accessor(ctx, tc_p, "desiredSize", js_tc_desired, 0, -1);
+    idl_install_step_method(ctx, tc_p, "enqueue", 0, g_op_stepid[OP_CTRL_ENQUEUE]);
+    idl_install_step_method(ctx, tc_p, "error", 0, g_op_stepid[OP_CTRL_ERROR]);
+    idl_install_step_method(ctx, tc_p, "terminate", 0, g_op_stepid[OP_CTRL_TERMINATE]);
+    JS_SetClassProto(ctx, g_tc_class, tc_p);
+
     /* §9.3's four operations as FUNCTION OBJECTS. The three controller ones are read off the prototype rather
        than minted a second time, so a caller reaches the same function the page sees — and if the page
        replaces the property, the reference taken HERE is the one that keeps working, which is the point. */
     {
-        static const char *const CN[3] = { "enqueue", "terminate", "error" };
-        int k;
-        g_ts_fn[TS_OP_SETUP] = JS_NewCFunction2(ctx, NULL, "", 3, JS_CFUNC_step, g_op_stepid[OP_SETUP]);
-        CHECK(!JS_IsException(g_ts_fn[TS_OP_SETUP]), "streams: §9.3.1's set-up operation could not be made");
-        for (k = 0; k < 3; k++) {
-            g_ts_fn[TS_OP_ENQUEUE + k] = JS_GetPropertyStr(ctx, g_tc_proto, CN[k]);
-            CHECK(JS_IsFunction(ctx, g_ts_fn[TS_OP_ENQUEUE + k]),
-                  "streams: a §6.4 controller member this component just installed is not a function");
-        }
+        JSValue setup = JS_NewCFunction2(ctx, NULL, "", 3, JS_CFUNC_step, g_op_stepid[OP_SETUP]);
+        CHECK(!JS_IsException(setup), "streams: §9.3.1's set-up operation could not be made");
+        realm_value_set(ctx, g_ts_fn_slot[TS_OP_SETUP], setup);
+    }
+    for (k = 0; k < 3; k++) {
+        JSValue fn = JS_GetPropertyStr(ctx, tc_p, CN[k]);
+        CHECK(JS_IsFunction(ctx, fn),
+              "streams: a §6.4 controller member this component just installed is not a function");
+        realm_value_set(ctx, g_ts_fn_slot[TS_OP_ENQUEUE + k], fn);
     }
 }
 
-JSValueConst transform_stream_op(TransformStreamOp which)
+JSValue transform_stream_op(JSContext *ctx, TransformStreamOp which)
 {
     DCHECK(which >= 0 && which < TS_OP_N,
            "a §9.3 transform-stream operation was asked for by a name this component does not map");
-    DCHECK(!JS_IsUndefined(g_ts_fn[which]),
-           "a §9.3 operation was asked for before transform_stream_init built it");
-    return g_ts_fn[which];
+    return realm_value_get(ctx, g_ts_fn_slot[which]);   /* OWNED */
 }
 
 JSValueConst transform_stream_readable(JSValueConst stream)
@@ -1410,13 +1442,23 @@ void transform_stream_install(JSContext *ctx, JSValueConst global)
     DCHECK(g_ctor_stepid >= 0, "TransformStream was installed before its constructor was declared");
     ctor = idl_step_constructor(ctx, "TransformStream", 0, g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the TransformStream interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_ts_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_ts_class);
+        DCHECK(!JS_IsNull(proto), "TransformStream was installed into a realm with no proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "TransformStream", ctor);
 
     ctor = JS_NewCFunction2(ctx, js_illegal_ctor, "TransformStreamDefaultController", 0,
                             JS_CFUNC_constructor, 0);
     CHECK(!JS_IsException(ctor), "the §6.3 controller interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_tc_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_tc_class);
+        DCHECK(!JS_IsNull(proto), "the §6.3 controller was installed into a realm with no proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "TransformStreamDefaultController", ctor);
 }
 
@@ -1424,10 +1466,7 @@ void transform_stream_free(JSContext *ctx)
 {
     int i;
     if (!g_ts_rt) return;
-    for (i = 0; i < TS_OP_N; i++) { JS_FreeValue(ctx, g_ts_fn[i]); g_ts_fn[i] = JS_UNDEFINED; }
-    JS_FreeValue(ctx, g_ts_proto);
-    JS_FreeValue(ctx, g_tc_proto);
-    g_ts_proto = g_tc_proto = JS_UNDEFINED;
+    /* the prototypes and the captured operations are the REALMS' — released with their contexts */
     g_ts_rt = NULL;
     g_ctor_stepid = -1;
     for (i = 0; i < OP_N; i++) g_op_stepid[i] = -1;

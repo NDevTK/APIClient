@@ -380,8 +380,10 @@ static int js_tx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
         /* §9.3.1's "enqueue chunk in stream" IS TransformStreamDefaultControllerEnqueue, reached with the
            controller §6 handed this algorithm as `this` — never through a property the page could replace. */
         JSValueConst arg = s->chunk;
-        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), transform_stream_op(TS_OP_ENQUEUE),
+        JSValue op = transform_stream_op(ctx, TS_OP_ENQUEUE);
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), op,
                           step_arg(hdr, takes_chunk ? 1 : 0), 1, &arg, cb_result, &out, out_cb, out_argc);
+        JS_FreeValue(ctx, op);
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
         JS_FreeValue(ctx, out);
@@ -479,8 +481,12 @@ static int tc_run(JSContext *ctx, JSTcState *s, JSValue cb_result, JSValue *pres
     {
         /* Streams §9.3.1's "set up a TransformStream", reached as a request because building the two halves
            settles promises and resolves capabilities, which is the page's machinery. */
-        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), transform_stream_op(TS_OP_SETUP), JS_UNDEFINED,
-                          3, (JSValueConst *)s->fns, cb_result, &out, out_cb, out_argc);
+        {
+            JSValue op = transform_stream_op(ctx, TS_OP_SETUP);
+            r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), op, JS_UNDEFINED,
+                              3, (JSValueConst *)s->fns, cb_result, &out, out_cb, out_argc);
+            JS_FreeValue(ctx, op);
+        }
         if (r > 0) return r;
         if (JS_IsException(out)) return -1;
         {

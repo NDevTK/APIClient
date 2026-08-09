@@ -6,6 +6,7 @@
 #include "quickjs.h"
 
 void transform_stream_init(JSContext *ctx);
+void transform_stream_install_protos(JSContext *ctx);   /* §6's two prototypes, for ONE realm */
 void transform_stream_install(JSContext *ctx, JSValueConst global);
 void transform_stream_free(JSContext *ctx);
 
@@ -30,7 +31,8 @@ bool transform_stream_is(JSValueConst v);
 
    They are STEP METHODS, so a caller reaches them the way it reaches any of the page's code: as a request. */
 typedef enum { TS_OP_SETUP = 0, TS_OP_ENQUEUE, TS_OP_TERMINATE, TS_OP_ERROR, TS_OP_N } TransformStreamOp;
-JSValueConst transform_stream_op(TransformStreamOp which);
+/* THIS REALM'S copy of a §9.3 operation. OWNED: the caller frees. */
+JSValue transform_stream_op(JSContext *ctx, TransformStreamOp which);
 
 /* The two halves of a set-up stream, for the GenericTransformStream mixin's two getters. BORROWED. */
 JSValueConst transform_stream_readable(JSValueConst stream);
