@@ -729,6 +729,16 @@ static void flow_run_one_job(JSContext *ctx, Flow *f) {
     FlowJob j = f->jobs[pick];
     memmove(f->jobs + pick, f->jobs + pick + 1, (size_t)(--f->njob - pick) * sizeof(FlowJob));
     JSValue r = j.fn(ctx, j.argc, (JSValueConst *)j.argv);   /* the reaction runs in this flow's timeline */
+    /* A JOB THAT THREW IS A PAGE ERROR, exactly like a script that threw, and this dropped it. A promise
+       reaction, a queueMicrotask callback and a delivered message all run here — so an uncaught throw inside
+       any of them vanished: no report, no result entry, nothing to say the page's own code had failed. It also
+       made every observable this engine has blind to jobs, which is why "does the microtask run at all" could
+       not be answered from outside. §8.1.7.5's report hook is the same one a script uses. */
+    if (JS_IsException(r)) {
+        JSValue e = JS_GetException(ctx);
+        result_page_error_value(ctx, e);
+        JS_FreeValue(ctx, e);
+    }
     JS_FreeValue(ctx, r);
     for (int i = 0; i < j.argc; i++) JS_FreeValue(ctx, j.argv[i]);
     free(j.argv);
