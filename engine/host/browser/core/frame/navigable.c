@@ -118,9 +118,14 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len)
           "function object minted in it holds a counted reference to its own realm, so JS_FreeContext only "
           "decrements and removing it from this agent's list orphans the context instead of tearing it down "
           "(measured: 82 of html/browsers' 154 files turned into a gc_obj_list leak, pass/fail unchanged). A "
-          "JSContext is a GC object and quickjs frees one through the COLLECTOR, whose cycle path asserts a "
-          "context never reaches the zero-refcount list — so this is a mechanism in the collector's terms, and "
-          "the realm's own teardown has to be reachable from there");
+          "JSContext is a GC object and quickjs frees one through the COLLECTOR, so this is a mechanism in the "
+          "collector's terms. MAKING IT REACHABLE FROM THERE IS NOT ENOUGH EITHER, and that was measured too: "
+          "routing a collected context into JS_FreeContext's teardown corrupts the atom table (an assert in "
+          "JS_FreeAtomStruct's hash walk, on the fixture's first run), because that teardown frees modules, "
+          "shapes and atoms while the collector's REMOVE_CYCLES phase is in force — a phase in which "
+          "JS_FreeValueRT only defers to a list and atom refcounts are mid-flight. So the teardown has to be "
+          "SPLIT by phase-safety the way free_object already is: the reference releases can run inside the "
+          "collection, the table and shape frees must run after it");
     CHECK(lxb_html_document_parse(dom, body ? (const lxb_char_t *)body : (const lxb_char_t *)EMPTY,
                                   body ? body_len : sizeof EMPTY - 1) == LXB_STATUS_OK,
           "a child navigable's Document did not parse");
