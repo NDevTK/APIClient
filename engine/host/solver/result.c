@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "check.h"
 #include "solver/result.h"
 #include "solver/endpoint.h"
 #include "solver/solve.h"
@@ -145,14 +146,22 @@ char *result_json(JSContext *ctx) {
     if (!eps || !sinks || !errs) { free(eps); free(sinks); free(errs); return NULL; }
     n = strlen(eps) + strlen(sinks) + strlen(errs) + 192;
     out = malloc(n);
-    if (out)
+    if (out) {
         /* THE THREE COST NUMBERS, together. A switch count on its own cannot say whether a run that took six
            times as long grew its frontier or grew the work inside each flow, and those need opposite fixes. */
-        snprintf(out, n, "{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
-                         "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d,"
-                         "\"_jobsQueued\":%ld,\"_jobsRun\":%ld}",
-                 eps, sinks, errs, engine_switch_count(), flow_created_count(), solve_candidate_count(),
-                 engine_jobs_queued(), engine_jobs_run());
+        int m = snprintf(out, n, "{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
+                                 "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d,"
+                                 "\"_jobsQueued\":%ld,\"_jobsRun\":%ld}",
+                         eps, sinks, errs, engine_switch_count(), flow_created_count(), solve_candidate_count(),
+                         engine_jobs_queued(), engine_jobs_run());
+        /* THE SLACK IS ASSERTED RATHER THAN EYEBALLED. It was 192 bytes for three counters and is now carrying
+           five, whose widest form is 82 digits beside 115 bytes of literal — inside the slack only because the
+           real numbers are small. A truncation here does not lose a digit, it loses the closing brace: the host
+           gets a document that will not parse and reports NOTHING for the page, which is the loudest possible
+           consequence arriving as the quietest possible bug. snprintf already told us; nothing was asking. */
+        DCHECK(m > 0 && (size_t)m < n, "the result document did not fit its buffer — the host would be handed "
+                                       "truncated JSON and every finding for this page would be discarded");
+    }
     free(eps);
     free(sinks);
     free(errs);
