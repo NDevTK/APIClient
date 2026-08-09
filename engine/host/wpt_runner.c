@@ -668,20 +668,18 @@ static void wpt_route_post(JSContext *ctx, const char *doc, const char *world, c
            "a routed message named a document neither this process nor any child of it holds — the "
            "navigable.create notice for it was dropped, or the post outran it");
     {
-        size_t b64n = strlen(b64), cap = JS_Base64DecodedMax(b64n) + 1;
-        uint8_t *bytes = malloc(cap);
-        int err = 0;
-        size_t blen;
-        char *w = strdup(world), *colon;
+        /* THE RECORD IS TAKEN APART BY THE FILE THAT WROTE IT — window_message_route for the payload, and
+           world_parse for the vector. This host used to do both by hand (strchr for the colon, a decode of its
+           own), which is the writer's grammar restated where nothing can check it against the writer. */
+        WorldId w, anc[16];
+        size_t cap = strlen(target_origin) + strlen(b64) + 2;
+        char *tail = malloc(cap);
 
-        CHECK(bytes != NULL && w != NULL, "wpt: OOM receiving a routed message");
-        blen = JS_Base64Decode(bytes, cap, b64, b64n, &err);
-        CHECK(err == 0, "wpt: a routed message did not survive the text channel it crossed");
-        colon = strchr(w, ':');
-        if (colon) *colon = 0;
-        window_message_deliver_remote(ctx, w, from_origin, target_origin, bytes, blen);
-        free(w);
-        free(bytes);
+        CHECK(tail != NULL, "wpt: OOM receiving a routed message");
+        snprintf(tail, cap, "%s\t%s", target_origin, b64);
+        world_parse(world, &w, anc, (int)(sizeof anc / sizeof anc[0]));
+        window_message_route(ctx, tail, world_doc_name(w.doc), from_origin);
+        free(tail);
     }
 }
 
@@ -1401,37 +1399,8 @@ static int wpt_child_main(int argc, char **argv)
            is what makes the segment inherit what the flow's ANCESTORS wrote, by forking the nearest one this
            instance already holds. Without it every cross-document read would answer from a baseline the asking
            flow left behind — which is not a stale answer, it is a different timeline. */
-        {
-            char *q = worlds;
-            while (q && *q) {
-                char *comma = strchr(q, ','), *colon;
-                if (comma) *comma = 0;
-                colon = strrchr(q, ':');
-                if (colon) {
-                    WorldId id;
-                    *colon = 0;
-                    id.doc = world_doc_intern(q);
-                    id.serial = (uint32_t)strtoul(colon + 1, NULL, 10);
-                    if (world_is_none(w)) w = id;
-                    else if (n_anc < (int)(sizeof anc / sizeof anc[0])) anc[n_anc++] = id;
-                }
-                q = comma ? comma + 1 : NULL;
-            }
-        }
+        n_anc = world_parse(worlds, &w, anc, (int)(sizeof anc / sizeof anc[0]));
 
-        /* A READ THAT NAMES NO WORLD IS TRUE IN NO TIMELINE, and answering it anyway would answer from whatever
-           this instance last had installed — the exact "two timelines wearing one name" the world registry
-           exists to prevent. It is asserted where the name arrives rather than where the answer is used. */
-        DCHECK(!world_is_none(w), "a cross-document read arrived carrying no world — its answer would be true "
-                                  "in no timeline, and would come from whatever this instance last installed");
-        {
-            int k;
-            for (k = 0; k < n_anc; k++)
-                DCHECK(anc[k].doc == w.doc,
-                       "a cross-document read's ancestry names a world from another document than its own — "
-                       "world_ancestry walks only the edges the minting instance holds, so a mixed chain means "
-                       "the wire format was mis-parsed and the peer would fork the wrong segment");
-        }
 
         /* THE CONTEXT SWITCH, done here because this loop IS this instance's scheduler: unapply whatever world
            the last answer ran under, install this one's segment, answer, and leave it installed for the next
@@ -1447,26 +1416,17 @@ static int wpt_child_main(int argc, char **argv)
         }
 
         if (!member) {
-            /* THE DELIVERY, under the world just installed. The bytes come back through the engine's own
-               base64 — the codec the spec made it implement — rather than a second one grown in this host. */
-            size_t b64n = strlen(f[4]), cap = JS_Base64DecodedMax(b64n) + 1;
-            uint8_t *bytes = malloc(cap);
-            int err = 0;
-            size_t blen;
+            /* THE DELIVERY, under the world just installed, and taken apart by the file that WROTE the record.
+               The decode and the sender-document split were done here by hand, which is window_message.c's
+               grammar restated where nothing can check it against the writer; the head of the world vector
+               names the sender, so world_parse above already answered that too. */
+            size_t cap = strlen(f[3]) + strlen(f[4]) + 2;
+            char *tail = malloc(cap);
 
-            CHECK(bytes != NULL, "wpt: OOM receiving a routed message");
-            blen = JS_Base64Decode(bytes, cap, f[4], b64n, &err);
-            CHECK(err == 0, "wpt: a routed message did not survive the text channel it crossed");
-            /* THE SENDING DOCUMENT IS THE HEAD OF THE WORLD VECTOR — a world is minted by a flow of exactly one
-               document, so the vector already names the sender and a second field for it could disagree. */
-            {
-                char *colon = strchr(f[1], ':');
-                char save = colon ? *colon : 0;
-                if (colon) *colon = 0;
-                window_message_deliver_remote(ctx, f[1], f[2], f[3], bytes, blen);
-                if (colon) *colon = save;
-            }
-            free(bytes);
+            CHECK(tail != NULL, "wpt: OOM receiving a routed message");
+            snprintf(tail, cap, "%s\t%s", f[3], f[4]);
+            window_message_route(ctx, tail, world_doc_name(w.doc), f[2]);
+            free(tail);
             /* THE TASK IS ENQUEUED, NOT RUN: the scheduler is what runs it, and entering it is what a turn of
                this loop does. An empty program is that turn — it drains the posted-message task source the way
                any other turn would, rather than this host driving the delivery itself. */
