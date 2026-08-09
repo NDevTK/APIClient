@@ -17,6 +17,9 @@ extension/lib/qjs/qjs.wasm
 engine/.work/llvm-mingw-extract/
 engine/.work/llvm-mingw.zip
 engine/.work/lxobj/
+# A gate's own output is not source: a corpus run writes its transcript beside the build
+# artifacts, and it belongs to the run rather than to the repository.
+engine/.work/*.log
 engine/.work/lxobj_clang/
 # The emscripten lexbor build products. Every sibling artifact here was already ignored; these two were not,
 # and a COMMITTED liblexbor.o is a live trap: a container that provisions a different emcc links its fresh
