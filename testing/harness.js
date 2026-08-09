@@ -221,6 +221,10 @@ async function cmdStart(args) {
     `--user-data-dir=${PROFILE_DIR}`,
     "--no-first-run",
     "--no-default-browser-check",
+    /* CHROME REFUSES TO RUN AS ROOT WITH ITS SANDBOX ON, and a container that has no other user is the one
+       place this harness runs unattended. It is added ONLY when the process really is root, so a developer's
+       machine keeps the sandbox — the flag is an environment fact, not a preference. */
+    ...(typeof process.getuid === "function" && process.getuid() === 0 ? ["--no-sandbox"] : []),
   ];
   const chromeProc = spawn(chromePath, chromeArgs, {
     detached: true,

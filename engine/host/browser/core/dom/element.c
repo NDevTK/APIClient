@@ -1263,6 +1263,12 @@ JSValue element_proto(JSContext *ctx)
 
 void element_free(JSContext *ctx)
 {
+    /* NODE.C IS PART OF THIS GROUP AND WAS THE ONE MEMBER MISSING FROM THE CASCADE. It owns the WRAPPER
+       IDENTITY TABLE, which holds a reference to every node wrapper ever minted — and a wrapper holds its
+       prototype, which holds the realm, so four surviving wrappers kept the whole context alive: MEASURED as
+       2200 retained objects and a JSContext at refcount 2212 on the shipped entry, reported by the runtime's
+       leak walk as anonymous Functions with nothing naming the owner. */
+    node_free(ctx);
     html_element_free(ctx);
     cssom_free(ctx);
     custom_elements_free(ctx);

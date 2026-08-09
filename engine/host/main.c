@@ -27,6 +27,8 @@
 #include "browser/core/fetch/request.h"
 #include "browser/core/url/url.h"
 #include "browser/core/frame/window_proxy.h"
+#include "browser/core/events/broadcast_channel.h"
+#include "browser/core/frame/window_message.h"
 #include "browser/core/frame/remote_object.h"
 #include "browser/core/html/html_iframe.h"
 #include "browser/core/frame/navigable.h"
@@ -63,6 +65,7 @@
 #include "solver/endpoint.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
+#include "solver/world.h"
 #include "solver/result.h"
 #include "solver/solve.h"
 
@@ -125,6 +128,12 @@ static void engine_agent_init(JSContext *ctx, const char *origin)
     timer_init(ctx);
     window_proxy_init(ctx, origin);
     remote_object_init(ctx);   /* §7.2.5.1's object half: a peer's object crosses as a NAME */
+    /* HTML §9.4.4 AND §9.5 — `window.postMessage` and `BroadcastChannel`. Both components are built and both
+       were reachable only from the test runner: the SHIPPED engine had neither, so a bundle calling
+       postMessage threw on a missing method and every message-driven code path behind it went unexplored.
+       That is the largest class of code in a modern SPA that this engine was silently not entering. */
+    window_message_init(ctx);
+    broadcast_channel_init(ctx, origin);
     /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
     unhandled_rejection_init(ctx);
     fetch_init(ctx);   /* §5/§6/§5.3 declare their per-realm prototypes here, not from the install */
@@ -171,6 +180,8 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
     event_install(ctx, g);            /* the Event interface object */
     message_event_install(ctx, g);    /* HTML 9.4.1: the event every messaging path dispatches */
     message_port_install(ctx, g);     /* HTML 9.4.2/9.4.3 */
+    window_message_install(ctx, g, origin);   /* HTML 9.4.4: window.postMessage, and §9.4.4's delivery task */
+    broadcast_channel_install(ctx, g);        /* HTML 9.5: the named same-origin bus */
     structured_clone_install(ctx, g); /* HTML 2.7.3 */
     /* §2.7: the global reaches add/removeEventListener/dispatchEvent through Window.prototype ->
        EventTarget.prototype, which window_install chains it to. */
@@ -374,23 +385,27 @@ QJS_EXPORT void qjs_teardown(void)
            "with its snapshot intact, and tearing down drops it exactly where the pending assert above says "
            "not to. Answer them, or step to DONE, before ending the session");
     doc_scripts_free(&g_scripts);
-    navigable_free(g_ctx);
-    window_free(g_ctx);
-    remote_object_free(g_ctx);
-    window_proxy_free(g_ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */
-    /* the runtime-lifetime values the browser components own — a component that mints one frees it. */
+    /* THE ORDER AND THE MEMBERSHIP OF THIS LIST ARE THE OTHER ENTRY'S, VERIFIED, and this one had drifted from
+       it — which nothing could see, because the gate that walks gc_obj_list runs the OTHER entry's main().
+       Four frees were missing here (§8.1.7.5's rejected-promise list and its slot key, the solver's solve and
+       endpoint tables, the flow registry) and so was the collection, so the shipped engine aborted at teardown
+       on `list_empty(&rt->gc_obj_list)` and every finding it had produced was discarded as a crashed
+       instance's. MEASURED on the live harness: a page analysed to "No findings" for that reason alone. */
+    solve_free();
+    endpoint_free();
+    unhandled_rejection_free(g_ctx);
     abort_free(g_ctx);
     document_free(g_ctx);   /* the Document and the window it fires `load` at — both HELD across the lifecycle */
     iframe_free(g_ctx);
     element_free(g_ctx);    /* the wrapper identity table and the DOM interface prototypes */
     event_target_free(g_ctx);
     realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */
+    window_message_free(g_ctx);
+    broadcast_channel_free(g_ctx);
     message_port_free(g_ctx);
     message_event_free(g_ctx);
     event_free(g_ctx);
     headers_free(g_ctx);    /* Headers.prototype and the name it interned */
-    response_free(g_ctx);
-    request_free(g_ctx);   /* Response.prototype — one object, held for the runtime's life */
     url_free(g_ctx);
     usp_free(g_ctx);
     transform_stream_free(g_ctx);
@@ -401,7 +416,20 @@ QJS_EXPORT void qjs_teardown(void)
     encoding_free(g_ctx);
     text_stream_free(g_ctx);
     form_data_free(g_ctx);        /* URLSearchParams.prototype */
+    response_free(g_ctx);
+    request_free(g_ctx);   /* Response.prototype — one object, held for the runtime's life */
     idl_args_free(g_ctx);   /* the dictionary member atoms the declaration pool interned */
+    navigable_free(g_ctx);
+    window_free(g_ctx);
+    remote_object_free(g_ctx);
+    window_proxy_free(g_ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */
+    flow_registry_free(g_ctx);
+    /* THE WORLD REGISTRY holds a COW DELTA per foreign world, and a delta holds the JSValues it captured — so
+       leaving it behind pins every object any cross-document flow ever wrote through. */
+    world_registry_free(g_ctx);
+    /* THE COLLECTION IS PART OF THE TEARDOWN, not an optimisation: a run leaves flow-local garbage that is
+       unreachable but not yet collected, and gc_obj_list counts it exactly as it counts a real leak. */
+    if (g_rt) JS_RunGC(g_rt);
     if (g_ctx) { JS_FreeContext(g_ctx); g_ctx = NULL; }
     if (g_rt)  { JS_FreeRuntime(g_rt);  g_rt  = NULL; }
     lxb_html_document_destroy(g_dom);

@@ -945,6 +945,13 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
        no-work-item-is-ever-dropped rule rather than merely intending to. */
     DCHECK(!JS_HasParkedFlow(JS_GetRuntime(ctx)) && f->park_fn == NULL,
            "a flow finished with a continuation still parked — that flow's async activation is dropped");
+    /* A FINISHED FLOW HAS NO LIVE FRAME. `frame` is the JS_FlowNew handle holding this flow's heap frame chain
+       — every activation, closure and local it is suspended across — so one left behind at finish retains the
+       whole execution graph, and the runtime's leak walk reports it as thousands of anonymous Functions with no
+       hint of the owner. Asserted rather than freed defensively: if a flow can reach here with one, the finish
+       path ran while it was still suspended and freeing it silently would hide that. */
+    DCHECK(f->frame == NULL, "a flow finished with a live preemptible frame — its whole activation chain, and "
+                             "everything those frames close over, is retained by a handle nothing will free");
     decide_leave(ctx);
     cow_unapply(ctx, (CowDelta *)f->delta); cow_set_current(NULL);
     cow_delta_free(ctx, (CowDelta *)f->delta); f->delta = NULL;

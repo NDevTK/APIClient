@@ -343,6 +343,14 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     /* THE RESOLVED TARGET, not this window. A task in THIS instance can only deliver to a navigable this
        instance holds; a proxy naming another document is ROUTED. */
     if (window_proxy_is_remote(target)) {
+        /* A POST TO THIS INSTANCE'S OWN DOCUMENT MUST NEVER TAKE THE ROUTE. Routing one means emitting a notice
+           and returning — so if the target is in fact local, the message is handed to a host that has nothing
+           to deliver it to and the handler never runs, which is silent. The two facts are named together so a
+           disagreement says WHICH document each side thinks this is. */
+        DCHECK(window_proxy_doc(target) != world_local_doc(),
+               "postMessage routed a message OUT of the instance that holds the target document — the proxy "
+               "reports remote while naming this instance's own document, so the world registry and the proxy "
+               "disagree about who hosts it and the delivery would be lost on the way out");
         window_message_send_remote(ctx, target, entry);
         JS_FreeValue(ctx, entry);
         return JS_UNDEFINED;
