@@ -6,21 +6,28 @@
  * code is shipped, reachable, and never executed, which is precisely the surface this engine exists to reach.
  * The rules say it directly: custom elements are learned by EXECUTION, through connectedCallback.
  *
- * THE UPGRADE IS A PROTOTYPE SWAP, and that is not a shortcut — it is what §4.13.3 observably does. An element
- * parsed or created before its definition exists is an ordinary HTMLElement; defining the name later makes the
- * SAME node an instance of the class, with the class's methods on it. This engine has one wrapper per node with
- * a prototype chosen by tag, so upgrading is re-pointing that wrapper's prototype at the definition's — the
- * node's identity survives, which is what makes `el === document.querySelector('app-router')` still true after
- * the upgrade.
+ * THE UPGRADE RE-POINTS THE WRAPPER'S PROTOTYPE, and §4.13.5 does more than that: its step 10.3 CONSTRUCTS the
+ * author's class and its step 10.4 requires SameValue(constructResult, element). The prototype swap is the half
+ * that makes `el instanceof X` and the class's methods true on the same node a page already holds — which is
+ * what makes `el === document.querySelector('app-router')` survive an upgrade — and the CONSTRUCTION is not
+ * built: a class whose constructor body registers routes or fetches has that body never run. That is the
+ * largest gap in this file and the one the corpus reports loudest; §4.13.5's construction stack, its
+ * AlreadyConstructed marking and HTMLElement's own constructor are what it takes.
  *
  * A REACTION IS ENQUEUED, NEVER CALLED. connectedCallback is the page's code with loops and awaits in it, and
  * the insertion that triggers it happens inside appendChild — a plain C body that cannot park. So the reaction
- * goes on the job queue as a first-class flow, the same way the engine's own event firing does, and the
- * callback LOOKUP is a request inside that flow rather than a property read from C.
+ * goes on the job queue as a first-class flow, the same way the engine's own event firing does.
+ * WHICH IS §4.13.6'S BACKUP ELEMENT QUEUE, and only that one. The spec enqueues onto the backup queue exactly
+ * when the custom element reactions STACK is empty, and it is always empty here because no `[CEReactions]`
+ * member pushes onto one — so every reaction runs at the next microtask instead of before the API that caused
+ * it returns. A page that appends an element and reads state its connectedCallback set on the next line sees
+ * the state unset. The stack is the missing mechanism, and the place it belongs is the one point every declared
+ * member already converges on: idl_args.c's post-body drain, which needs an EPILOGUE STAGE rather than a
+ * `bool step()`, because invoking a reaction runs the page's code and must be able to park.
  *
- * WHAT IS HONESTLY ABSENT: disconnectedCallback and adoptedCallback (no removal or adoption reaction yet), and
- * customized built-ins (`extends`), which §4.13.4 rejects here rather than registering as autonomous — a
- * silently-wrong registration is worse than a named refusal. */
+ * WHAT IS HONESTLY ABSENT: adoptedCallback (no adoption reaction yet) and customized built-ins (`extends`),
+ * which §4.13.4 rejects here rather than registering as autonomous — a silently-wrong registration is worse
+ * than a named refusal. */
 #include <string.h>
 #include <stdlib.h>
 
