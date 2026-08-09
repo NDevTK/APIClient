@@ -408,6 +408,22 @@ JSValue concolic_tostr_hook(JSContext *ctx, JSValueConst v) {
     return concolic_new(ctx, shape, src ? src : shape, example);
 }
 
+/* A BUILTIN OVER AN UNKNOWN OPERAND — see the hook's contract in quickjs.h. The shape records WHICH operation
+   produced it, so an @H shape reads as the expression the page actually wrote and an @S search knows which
+   source to solve for. Example-free: this engine does not yet run the operation on the operand's example (a
+   regex match over a known query string HAS a concrete answer, and producing it is the next step here), and
+   inventing one would be a fabricated observation. */
+JSValue concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op) {
+    const char *src, *sh;
+    char shape[224];
+
+    if (!concolic_is(v)) return JS_UNINITIALIZED;
+    src = concolic_src_c(v);
+    sh = concolic_shape_c(v);
+    snprintf(shape, sizeof shape, "%s.%s()", sh ? sh : "{}", op ? op : "builtin");
+    return concolic_new(ctx, shape, src ? src : shape, JS_UNDEFINED);
+}
+
 /* THE NAME an unknown key denotes: its own SHAPE, as a real string. Stable per source, so every key-taking
    operation agrees with every other — see the contract at JS_ToPropertyKeyInternal. */
 JSValue concolic_key_name_hook(JSContext *ctx, JSValueConst key) {
@@ -571,7 +587,8 @@ static JSConcolicHooks g_hooks = {
     .rel = concolic_rel_hook, .type_of = concolic_typeof_hook,
     .arith = concolic_arith_hook, .to_str = concolic_tostr_hook,
     .key_read = concolic_key_read_hook,
-    .key_name = concolic_key_name_hook };
+    .key_name = concolic_key_name_hook,
+    .builtin = concolic_builtin_hook };
 
 /* Concolic VALUE propagation stays installed across scheduling AND verification, because taint must flow
    during a candidate re-fire too; the EXPLORATION hooks (branch/fork/preempt) are the scheduler's. */

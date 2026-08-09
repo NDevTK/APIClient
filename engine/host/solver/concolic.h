@@ -95,6 +95,7 @@ JSValue     concolic_tostr_hook(JSContext *ctx, JSValueConst v);
 JSValue     concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst key);
 /* JSConcolicHooks.key_name — the real string an unknown key denotes (its shape), stable per source. */
 JSValue     concolic_key_name_hook(JSContext *ctx, JSValueConst key);
+JSValue     concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op);
 void        concolic_pin(const char *src, const char *val);   /* EQ true-arm: this source now reads `val` (real @H value) */
 /* THE OTHER HALF OF THE PATH CONSTRAINT. A predicate that pins nothing still narrows: taking the true arm of
    `if (cfg.admin)` says the value is truthy FOR THIS FLOW, and a bundle tests the same flag over and over. The
