@@ -7,6 +7,7 @@
 #include "quickjs.h"
 
 void readable_stream_init(JSContext *ctx);
+void readable_stream_install_protos(JSContext *ctx);   /* §4's four prototypes, for ONE realm */
 void readable_stream_install(JSContext *ctx, JSValueConst global);
 void readable_stream_free(JSContext *ctx);
 
@@ -39,14 +40,16 @@ typedef enum { RS_OP_GET_READER = 0, RS_OP_READ, RS_OP_RELEASE, RS_OP_CANCEL,
                   always the plain one. */
                RS_OP_TEE_CLONE,
                RS_OP_N } ReadableStreamOp;
-JSValueConst readable_stream_op(ReadableStreamOp which);
+/* THIS REALM'S copy of a §4 abstract operation. OWNED: the caller frees. */
+JSValue readable_stream_op(JSContext *ctx, ReadableStreamOp which);
 
 /* §4.5's CONTROLLER, and the three of its operations a host performs — as the ORIGINAL function objects, for
    the reason readable_stream_op gives. §6's TransformStream enqueues into, closes and errors the readable half
    it owns, and it must reach those operations rather than whatever a page has since put on the prototype.
    They are STEP METHODS, so a caller reaches them the way it reaches any of the page's code: as a request. */
 typedef enum { RS_CTRL_ENQUEUE = 0, RS_CTRL_CLOSE, RS_CTRL_ERROR, RS_CTRL_N } ReadableControllerOp;
-JSValueConst readable_stream_ctrl_op(ReadableControllerOp which);
+/* THIS REALM'S copy of a §4.5 controller member. OWNED: the caller frees. */
+JSValue readable_stream_ctrl_op(JSContext *ctx, ReadableControllerOp which);
 
 /* §4.5's controller for a stream this component built. BORROWED. */
 JSValueConst readable_stream_controller(JSValueConst stream);

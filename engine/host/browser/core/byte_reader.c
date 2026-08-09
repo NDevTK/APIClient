@@ -146,8 +146,10 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
     }
 
     if (s->stage == BR_ACQUIRE) {
-        r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), readable_stream_op(RS_OP_GET_READER), s->stream, 0, NULL,
+        JSValue op = readable_stream_op(ctx, RS_OP_GET_READER);
+        r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), op, s->stream, 0, NULL,
                           cb_result, &s->reader, out_cb, out_argc);
+        JS_FreeValue(ctx, op);
         if (r > 0) return r;
         if (JS_IsException(s->reader)) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
@@ -157,8 +159,10 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         const ByteReaderIface *f = iface_of(s->hdr.this_val);
         JSValue read_promise;
         DCHECK(f != NULL, "a byte reader lost its interface between two of its own stages");
-        r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), readable_stream_op(RS_OP_READ), s->reader, 0, NULL,
+        JSValue op = readable_stream_op(ctx, RS_OP_READ);
+        r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), op, s->reader, 0, NULL,
                           cb_result, &read_promise, out_cb, out_argc);
+        JS_FreeValue(ctx, op);
         if (r > 0) return r;
         if (JS_IsException(read_promise)) return JS_STEP_ABRUPT;
         /* The DRAIN owns the settle from here: it holds the accumulating bytes, it reacts to each read, and it

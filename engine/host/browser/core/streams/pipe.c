@@ -579,15 +579,18 @@ run:
             continue;
         }
 
-        case S_ACQ_READER:
-            r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), readable_stream_op(RS_OP_GET_READER),
+        case S_ACQ_READER: {
+            JSValue op = readable_stream_op(ctx, RS_OP_GET_READER);
+            r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), op,
                               p->source, 0, NULL, cb_result, &out, out_cb, out_argc);
+            JS_FreeValue(ctx, op);
             if (r > 0) return r;
             cb_result = JS_UNDEFINED;
             if (JS_IsException(out)) return JS_STEP_ABRUPT;
             p->reader = out;
             pipe_goto(s, S_ACQ_WRITER);
             continue;
+        }
 
         case S_ACQ_WRITER:
             {
@@ -682,9 +685,11 @@ run:
             continue;
         }
 
-        case S_READ:
-            r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), readable_stream_op(RS_OP_READ), p->reader,
+        case S_READ: {
+            JSValue op = readable_stream_op(ctx, RS_OP_READ);
+            r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), op, p->reader,
                               0, NULL, cb_result, &out, out_cb, out_argc);
+            JS_FreeValue(ctx, op);
             if (r > 0) return r;
             cb_result = JS_UNDEFINED;
             if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -694,6 +699,7 @@ run:
             p->read_pending = 1;
             pipe_goto(s, S_DONE);
             continue;
+        }
 
         case S_READ_DONE: {
             /* The read result is 7.4.14's `{ value, done }`, built by §4.3 for this read alone — so its two
@@ -790,7 +796,7 @@ run:
                 s->act_fn = writable_stream_op(ctx, WS_OP_ABORT);
                 s->act_recv = JS_DupValue(ctx, p->writer);
             } else if (p->action == ACT_CANCEL_SOURCE) {
-                s->act_fn = JS_DupValue(ctx, readable_stream_op(RS_OP_CANCEL));
+                s->act_fn = readable_stream_op(ctx, RS_OP_CANCEL);
                 s->act_recv = JS_DupValue(ctx, p->reader);
             } else {
                 /* WritableStreamDefaultWriterCloseWithErrorPropagation: a destination that is already closing
@@ -857,7 +863,7 @@ run:
                 ReadableStreamState ss = RS_READABLE;
                 readable_stream_query(p->source, &ss, NULL);
                 run_it = !p->prevent[OPT_CANCEL] && ss == RS_READABLE;
-                s->act_fn = JS_DupValue(ctx, readable_stream_op(RS_OP_CANCEL));
+                s->act_fn = readable_stream_op(ctx, RS_OP_CANCEL);
                 s->act_recv = JS_DupValue(ctx, p->reader);
             }
             s->act_argc = 1;
@@ -897,9 +903,11 @@ run:
             pipe_goto(s, S_REL_READER);
             continue;
 
-        case S_REL_READER:
-            r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), readable_stream_op(RS_OP_RELEASE), p->reader,
+        case S_REL_READER: {
+            JSValue op = readable_stream_op(ctx, RS_OP_RELEASE);
+            r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), op, p->reader,
                               0, NULL, cb_result, &out, out_cb, out_argc);
+            JS_FreeValue(ctx, op);
             if (r > 0) return r;
             cb_result = JS_UNDEFINED;
             if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -912,6 +920,7 @@ run:
             s->w.func = JS_DupValue(ctx, p->funcs[p->is_error]);
             pipe_goto(s, S_SETTLE);
             continue;
+        }
 
         case S_SETTLE: {
             JSValueConst arg = s->w.value;

@@ -24,6 +24,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/streams/stream_work.h"
 #include "solver/cow.h"
 #include "core/structured_clone.h"
@@ -85,7 +86,8 @@ typedef struct {
 } ControllerData;
 
 static JSClassID g_stream_class, g_reader_class, g_ctrl_class;
-static JSValue   g_stream_proto = JS_UNDEFINED, g_reader_proto = JS_UNDEFINED, g_ctrl_proto = JS_UNDEFINED;
+/* THE AGENT'S POOL ENTRIES for the members whose declaration cannot be repeated per realm. */
+static int       g_getreader_id = -1, g_values_id = -1, g_tee_id = -1, g_tee_clone_id = -1;
 static JSRuntime *g_rs_rt;
 static int       g_ctor_stepid = -1, g_reader_ctor_stepid = -1, g_read_stepid = -1, g_cancel_stepid = -1;
 static int       g_release_stepid = -1, g_from_ctor_stepid = -1;
@@ -318,7 +320,12 @@ static JSValue controller_new(JSContext *ctx, JSValueConst stream)
     ControllerData *c;
     JSValue obj;
 
-    obj = JS_NewObjectProtoClass(ctx, g_ctrl_proto, g_ctrl_class);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_ctrl_class);
+        DCHECK(!JS_IsNull(proto), "a §4.5 controller was minted in a realm that never ran its install");
+        obj = JS_NewObjectProtoClass(ctx, proto, g_ctrl_class);
+        JS_FreeValue(ctx, proto);
+    }
     if (JS_IsException(obj)) return obj;
     c = js_mallocz(ctx, sizeof *c);
     if (!c) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
@@ -338,7 +345,12 @@ static JSValue readable_stream_empty(JSContext *ctx)
     JSValue obj;
 
     DCHECK(g_stream_class != 0, "a ReadableStream was built before the class existed");
-    obj = JS_NewObjectProtoClass(ctx, g_stream_proto, g_stream_class);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_stream_class);
+        DCHECK(!JS_IsNull(proto), "a ReadableStream was minted in a realm that never ran its install");
+        obj = JS_NewObjectProtoClass(ctx, proto, g_stream_class);
+        JS_FreeValue(ctx, proto);
+    }
     if (JS_IsException(obj)) return obj;
     d = js_mallocz(ctx, sizeof *d);
     if (!d) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
@@ -1122,7 +1134,12 @@ static int js_get_reader_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
                 return -1;
             }
         }
-        obj = JS_NewObjectProtoClass(ctx, g_reader_proto, g_reader_class);
+        {
+            JSValue proto = JS_GetClassProto(ctx, g_reader_class);
+            DCHECK(!JS_IsNull(proto), "a reader was minted in a realm that never ran its install");
+            obj = JS_NewObjectProtoClass(ctx, proto, g_reader_class);
+            JS_FreeValue(ctx, proto);
+        }
         if (JS_IsException(obj)) return -1;
         rd = js_mallocz(ctx, sizeof *rd);
         if (!rd) { JS_FreeValue(ctx, obj); return -1; }
@@ -1593,11 +1610,29 @@ typedef struct {
 } AsyncIterData;
 
 static JSClassID g_aiter_class;
-static JSValue   g_aiter_proto = JS_UNDEFINED;
 static int       g_aiter_stepids[AI_N];
 /* THE ORIGINAL FUNCTION OBJECTS — see the note above. */
-static JSValue   g_read_fn = JS_UNDEFINED, g_release_fn = JS_UNDEFINED, g_reader_cancel_fn = JS_UNDEFINED,
-                 g_get_reader_fn = JS_UNDEFINED;
+/* §4.4 AND §4.2 PERFORM THE ABSTRACT OPERATIONS, so the iterator, the tee and the drain keep the function
+   objects INSTALLED at each realm's build — a page that rebinds the members changes what its own calls do and
+   changes nothing about `for await`, `tee()` or Fetch's "clone a body".
+   PER REALM: a function object carries the realm it was minted in, so one set held for the agent ran a child
+   document's every read, cancel and release through the first document's realm. */
+enum { RSF_READ = 0, RSF_RELEASE, RSF_CANCEL, RSF_GET_READER, RSF_TEE, RSF_TEE_CLONE, RSF_N };
+static int g_rs_fn_slot[RSF_N];
+static int g_ctrl_fn_slot[RS_CTRL_N];
+
+static JSValue rs_fn(JSContext *ctx, int which)        /* OWNED */
+{
+    DCHECK(which >= 0 && which < RSF_N, "a stream operation was asked for by a name this component does not map");
+    return realm_value_get(ctx, g_rs_fn_slot[which]);
+}
+
+static JSValue rs_ctrl_fn(JSContext *ctx, int which)   /* OWNED */
+{
+    DCHECK(which >= 0 && which < RS_CTRL_N,
+           "a §4.5 controller operation was asked for by a name this component does not map");
+    return realm_value_get(ctx, g_ctrl_fn_slot[which]);
+}
 
 static void aiter_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -1794,7 +1829,11 @@ static int js_aiter_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
 
     if (s->stage == AIS_READ) {
         JSValueConst data[3];
-        r = aiter_call_run(ctx, s, g_read_fn, a->reader, 0, NULL, cb_result, &out, out_cb, out_argc);
+        {
+            JSValue fn = rs_fn(ctx, RSF_READ);
+            r = aiter_call_run(ctx, s, fn, a->reader, 0, NULL, cb_result, &out, out_cb, out_argc);
+            JS_FreeValue(ctx, fn);
+        }
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
         r = stream_react(ctx, out, g_aiter_stepids[AI_READ_OK], g_aiter_stepids[AI_READ_ERR],
@@ -1808,7 +1847,11 @@ static int js_aiter_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
            with the SOURCE's cancel promise rather than ahead of it. */
         JSValueConst data[4];
         arg = s->value;
-        r = aiter_call_run(ctx, s, g_reader_cancel_fn, a->reader, 1, &arg, cb_result, &out, out_cb, out_argc);
+        {
+            JSValue fn = rs_fn(ctx, RSF_CANCEL);
+            r = aiter_call_run(ctx, s, fn, a->reader, 1, &arg, cb_result, &out, out_cb, out_argc);
+            JS_FreeValue(ctx, fn);
+        }
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
         r = stream_react(ctx, out, g_aiter_stepids[AI_CANCEL_OK], g_aiter_stepids[AI_CANCEL_ERR],
@@ -1823,7 +1866,11 @@ static int js_aiter_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
 
     if (s->stage == AIS_RELEASE) {
         int settle_after = op != AI_RETURN && op != AI_RUN_RETURN;
-        r = aiter_call_run(ctx, s, g_release_fn, a->reader, 0, NULL, cb_result, &out, out_cb, out_argc);
+        {
+            JSValue fn = rs_fn(ctx, RSF_RELEASE);
+            r = aiter_call_run(ctx, s, fn, a->reader, 0, NULL, cb_result, &out, out_cb, out_argc);
+            JS_FreeValue(ctx, fn);
+        }
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
         JS_FreeValue(ctx, out);
@@ -1901,12 +1948,21 @@ static int js_values_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         s->prevent_cancel = argc > 0 && idl_dict_bool(ctx, argv[0], "preventCancel");
         s->stage = 1;
     }
-    r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), g_get_reader_fn, hdr->this_val, 0, NULL,
-                      cb_result, &reader, out_cb, out_argc);
+    {
+        JSValue fn = rs_fn(ctx, RSF_GET_READER);
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, hdr->this_val, 0, NULL,
+                          cb_result, &reader, out_cb, out_argc);
+        JS_FreeValue(ctx, fn);
+    }
     if (r > 0) return r;
     if (JS_IsException(reader)) return -1;
 
-    obj = JS_NewObjectProtoClass(ctx, g_aiter_proto, g_aiter_class);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_aiter_class);
+        DCHECK(!JS_IsNull(proto), "an async iterator was minted in a realm that never ran its install");
+        obj = JS_NewObjectProtoClass(ctx, proto, g_aiter_class);
+        JS_FreeValue(ctx, proto);
+    }
     if (JS_IsException(obj)) { JS_FreeValue(ctx, reader); return -1; }
     a = js_mallocz(ctx, sizeof *a);
     if (!a) { JS_FreeValue(ctx, obj); JS_FreeValue(ctx, reader); return -1; }
@@ -1968,9 +2024,6 @@ typedef struct {
 static JSClassID g_tee_class;
 static int       g_tee_stepids[TEE_N];
 /* The controller members, as function objects — the same reason §4.4 holds the reader's. */
-static JSValue   g_ctrl_fn[3] = { JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED };
-static JSValue   g_tee_fn = JS_UNDEFINED;   /* §4.2's `tee`, held for the reason g_ctrl_fn is */
-static JSValue   g_tee_clone_fn = JS_UNDEFINED;   /* the same, with §4.9.7's cloneForBranch2 set */
 
 static void tee_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -2065,8 +2118,12 @@ static int tee_ctrl_run(JSContext *ctx, JSTeeState *s, TeeData *t, int i, int wh
     JSValue out;
     int r, argc = which == CF_CLOSE ? 0 : 1;
 
-    r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), g_ctrl_fn[which], t->ctrl[i], argc, &arg, in, &out,
-                      out_cb, out_argc);
+    {
+        JSValue fn = rs_ctrl_fn(ctx, which);
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, t->ctrl[i], argc, &arg, in, &out,
+                          out_cb, out_argc);
+        JS_FreeValue(ctx, fn);
+    }
     if (r > 0) return r;
     if (JS_IsException(out)) {
         /* §4.2's tee ignores what a branch's own enqueue/close refuses: a branch that a page has already
@@ -2159,8 +2216,12 @@ static int js_tee_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
 again:
     if (s->stage == TS_READ) {
         JSValueConst data[1];
-        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), g_read_fn, t->reader, 0, NULL, cb_result, &out,
-                          out_cb, out_argc);
+        {
+            JSValue fn = rs_fn(ctx, RSF_READ);
+            r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, t->reader, 0, NULL, cb_result, &out,
+                              out_cb, out_argc);
+            JS_FreeValue(ctx, fn);
+        }
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
         data[0] = s->tee;
@@ -2231,8 +2292,12 @@ again:
 
     if (s->stage == TS_CANCEL_SOURCE) {
         JSValueConst arg = s->value;
-        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), g_reader_cancel_fn, t->reader, 1, &arg, cb_result, &out,
-                          out_cb, out_argc);
+        {
+            JSValue fn = rs_fn(ctx, RSF_CANCEL);
+            r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, t->reader, 1, &arg, cb_result, &out,
+                              out_cb, out_argc);
+            JS_FreeValue(ctx, fn);
+        }
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
         JS_FreeValue(ctx, s->value);
@@ -2335,8 +2400,12 @@ static int tee_call_run(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
         }
     }
     if (s->w.stage == 1) {
-        r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), g_get_reader_fn, hdr->this_val, 0, NULL,
-                          cb_result, &s->reader, out_cb, out_argc);
+        {
+            JSValue fn = rs_fn(ctx, RSF_GET_READER);
+            r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), fn, hdr->this_val, 0, NULL,
+                              cb_result, &s->reader, out_cb, out_argc);
+            JS_FreeValue(ctx, fn);
+        }
         if (r > 0) return r;
         if (JS_IsException(s->reader)) return -1;
         cb_result = JS_UNDEFINED;
@@ -2658,8 +2727,12 @@ settle_promise:
     DCHECK(s->stage == FS_FEED, "a §4.2 `from` machine resumed in a stage it never parks in");
     {
         JSValueConst arg = s->value;
-        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), g_ctrl_fn[s->done ? CF_CLOSE : CF_ENQUEUE], f->controller,
-                          s->done ? 0 : 1, &arg, cb_result, &out, out_cb, out_argc);
+        {
+            JSValue fn = rs_ctrl_fn(ctx, s->done ? CF_CLOSE : CF_ENQUEUE);
+            r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, f->controller,
+                              s->done ? 0 : 1, &arg, cb_result, &out, out_cb, out_argc);
+            JS_FreeValue(ctx, fn);
+        }
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
         JS_FreeValue(ctx, out);
@@ -3006,8 +3079,12 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     DCHECK(dr != NULL, "a drain machine's record stopped being one");
 
     if (s->stage == DS_READ) {
-        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), g_read_fn, dr->reader, 0, NULL, cb_result, &out,
-                          out_cb, out_argc);
+        {
+            JSValue fn = rs_fn(ctx, RSF_READ);
+            r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, dr->reader, 0, NULL, cb_result, &out,
+                              out_cb, out_argc);
+            JS_FreeValue(ctx, fn);
+        }
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
         r = drain_react(ctx, out, s->drain);
@@ -3016,8 +3093,12 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     }
 
     if (s->stage == DS_RELEASE) {
-        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), g_release_fn, dr->reader, 0, NULL, cb_result, &out,
-                          out_cb, out_argc);
+        {
+            JSValue fn = rs_fn(ctx, RSF_RELEASE);
+            r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, dr->reader, 0, NULL, cb_result, &out,
+                              out_cb, out_argc);
+            JS_FreeValue(ctx, fn);
+        }
         if (r > 0) return r;
         if (JS_IsException(out)) {
             /* a release cannot fail on a reader this component acquired and still holds */
@@ -3113,25 +3194,23 @@ int readable_stream_start(JSContext *ctx, JSValueConst stream, JSValueConst star
     return ctrl_react(ctx, start_promise, d->controller, RXN_START_OK, RXN_START_ERR);
 }
 
-JSValueConst readable_stream_op(ReadableStreamOp which)
+JSValue readable_stream_op(JSContext *ctx, ReadableStreamOp which)
 {
     switch (which) {
-    case RS_OP_GET_READER: return g_get_reader_fn;
-    case RS_OP_READ:       return g_read_fn;
-    case RS_OP_RELEASE:    return g_release_fn;
-    case RS_OP_TEE:        return g_tee_fn;
-    case RS_OP_TEE_CLONE:  return g_tee_clone_fn;
+    case RS_OP_GET_READER: return rs_fn(ctx, RSF_GET_READER);
+    case RS_OP_READ:       return rs_fn(ctx, RSF_READ);
+    case RS_OP_RELEASE:    return rs_fn(ctx, RSF_RELEASE);
+    case RS_OP_TEE:        return rs_fn(ctx, RSF_TEE);
+    case RS_OP_TEE_CLONE:  return rs_fn(ctx, RSF_TEE_CLONE);
     default:
         DCHECK(which == RS_OP_CANCEL, "a stream operation was asked for by a name this component does not map");
-        return g_reader_cancel_fn;
+        return rs_fn(ctx, RSF_CANCEL);
     }
 }
 
-JSValueConst readable_stream_ctrl_op(ReadableControllerOp which)
+JSValue readable_stream_ctrl_op(JSContext *ctx, ReadableControllerOp which)
 {
-    DCHECK(which >= 0 && which < RS_CTRL_N,
-           "a §4.5 controller operation was asked for by a name this component does not map");
-    return g_ctrl_fn[which];
+    return rs_ctrl_fn(ctx, which);
 }
 
 JSValueConst readable_stream_controller(JSValueConst stream)
@@ -3434,34 +3513,21 @@ void readable_stream_init(JSContext *ctx)
     JS_NewClassID(rt, &g_reader_class);
     JS_NewClass(rt, g_reader_class, &rd);
 
-    g_stream_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_stream_proto), "ReadableStream.prototype could not be allocated");
-    idl_interface_tag(ctx, g_stream_proto, "ReadableStream");
-    idl_install_accessor(ctx, g_stream_proto, "locked", js_stream_locked, 0, -1);
-    idl_install_method(ctx, g_stream_proto, "getReader", 0,
-                       idl_method_id_step(ctx, ONE_DICT, 1, GET_READER_OPTIONS,
-                                          (int)(sizeof GET_READER_OPTIONS / sizeof *GET_READER_OPTIONS),
-                                          &js_get_reader_decl, GR_SELF));
+    g_getreader_id = idl_method_id_step(ctx, ONE_DICT, 1, GET_READER_OPTIONS,
+                                       (int)(sizeof GET_READER_OPTIONS / sizeof *GET_READER_OPTIONS),
+                                       &js_get_reader_decl, GR_SELF);
     idl_optional_from(0);   /* §4.2: `getReader(optional ReadableStreamGetReaderOptions options = {})` */
     g_cancel_stepid = JS_RegisterStepDef(rt, &js_cancel_def);
     CHECK(g_cancel_stepid >= 0, "streams: no step id for cancel");
-    idl_install_step_method(ctx, g_stream_proto, "cancel", 0, g_cancel_stepid);
 
     {
         JSClassDef cd = { "ReadableStreamDefaultController", .finalizer = ctrl_finalizer,
                           .gc_mark = ctrl_gc_mark };
-        static const char *const NAMES[3] = { "enqueue", "close", "error" };
         JS_NewClassID(rt, &g_ctrl_class);
         JS_NewClass(rt, g_ctrl_class, &cd);
-        g_ctrl_proto = JS_NewObject(ctx);
-        CHECK(!JS_IsException(g_ctrl_proto), "the controller prototype could not be allocated");
-        idl_interface_tag(ctx, g_ctrl_proto, "ReadableStreamDefaultController");
-        idl_install_accessor(ctx, g_ctrl_proto, "desiredSize", js_ctrl_desired, 0, -1);
         for (i = 0; i < 3; i++) {
             g_ctrl_stepids[i] = JS_RegisterStepDef(rt, &js_ctrl_defs[i]);
             CHECK(g_ctrl_stepids[i] >= 0, "streams: no step id for a controller member");
-            JS_SetPropertyStr(ctx, g_ctrl_proto, NAMES[i],
-                              JS_NewCFunction2(ctx, NULL, NAMES[i], 1, JS_CFUNC_step, g_ctrl_stepids[i]));
         }
     }
     for (i = 0; i < 4; i++) {
@@ -3473,89 +3539,42 @@ void readable_stream_init(JSContext *ctx)
         CHECK(g_fwd_stepids[i] >= 0, "streams: no step id for a forwarding reaction");
     }
 
-    g_reader_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_reader_proto), "ReadableStreamDefaultReader.prototype could not be allocated");
-    idl_interface_tag(ctx, g_reader_proto, "ReadableStreamDefaultReader");
-    idl_install_accessor(ctx, g_reader_proto, "closed", js_reader_closed, 0, -1);
     g_release_stepid = JS_RegisterStepDef(rt, &js_release_def);
     CHECK(g_release_stepid >= 0, "streams: no step id for releaseLock");
-    idl_install_step_method(ctx, g_reader_proto, "releaseLock", 0, g_release_stepid);
     g_read_stepid = JS_RegisterStepDef(rt, &js_read_def);
     CHECK(g_read_stepid >= 0, "streams: no step id for read");
-    idl_install_step_method(ctx, g_reader_proto, "read", 0, g_read_stepid);
-    idl_install_step_method(ctx, g_reader_proto, "cancel", 0, g_cancel_stepid);
-    /* §4.4 performs the ABSTRACT OPERATIONS, so the iterator keeps the function objects INSTALLED HERE — a
-       page that rebinds the members changes what its own calls do and changes nothing about `for await`. Read
-       back off a prototype nothing of the page's has touched yet. */
-    g_read_fn = JS_GetPropertyStr(ctx, g_reader_proto, "read");
-    g_release_fn = JS_GetPropertyStr(ctx, g_reader_proto, "releaseLock");
-    g_reader_cancel_fn = JS_GetPropertyStr(ctx, g_reader_proto, "cancel");
-    g_get_reader_fn = JS_GetPropertyStr(ctx, g_stream_proto, "getReader");
-    CHECK(JS_IsFunction(ctx, g_read_fn) && JS_IsFunction(ctx, g_release_fn) &&
-          JS_IsFunction(ctx, g_reader_cancel_fn) && JS_IsFunction(ctx, g_get_reader_fn),
-          "streams: an operation §4.4 performs was not installed before it was captured");
 
     /* §4.4's asynchronous iteration. §3.7.11 puts %AsyncIteratorPrototype% under the iterator prototype
        object, which is what gives it @@asyncIterator and the async-iterator helpers for nothing. */
     {
         JSClassDef ad = { "ReadableStream AsyncIterator", .finalizer = aiter_finalizer,
                           .gc_mark = aiter_gc_mark };
-        JSValue aproto = JS_GetAsyncIteratorPrototype(ctx);
-        JSValue values_fn;
-        int vid;
         JS_NewClassID(rt, &g_aiter_class);
         JS_NewClass(rt, g_aiter_class, &ad);
-        g_aiter_proto = JS_NewObjectProto(ctx, aproto);
-        JS_FreeValue(ctx, aproto);
-        CHECK(!JS_IsException(g_aiter_proto), "the async iterator prototype could not be allocated");
         for (i = 0; i < AI_N; i++) {
             g_aiter_stepids[i] = JS_RegisterStepDef(rt, &js_aiter_defs[i]);
             CHECK(g_aiter_stepids[i] >= 0, "streams: no step id for a §4.4 operation");
         }
-        idl_install_step_method(ctx, g_aiter_proto, "next", 0, g_aiter_stepids[AI_NEXT]);
-        idl_install_step_method(ctx, g_aiter_proto, "return", 1, g_aiter_stepids[AI_RETURN]);
-
-        vid = idl_method_id_step(ctx, ONE_DICT, 1, ITERATOR_OPTIONS,
-                                 (int)(sizeof ITERATOR_OPTIONS / sizeof *ITERATOR_OPTIONS),
-                                 &js_values_decl, 0);
+        g_values_id = idl_method_id_step(ctx, ONE_DICT, 1, ITERATOR_OPTIONS,
+                                         (int)(sizeof ITERATOR_OPTIONS / sizeof *ITERATOR_OPTIONS),
+                                         &js_values_decl, 0);
         idl_optional_from(0);   /* `async iterable<any>(optional ReadableStreamIteratorOptions options = {})` */
-        idl_install_method(ctx, g_stream_proto, "values", 0, vid);
-        /* §3.7.11: @@asyncIterator IS the same function object as `values`, writable and configurable but not
-           enumerable — not a second function that forwards to it. */
-        values_fn = JS_GetPropertyStr(ctx, g_stream_proto, "values");
-        JS_DefinePropertyValue(ctx, g_stream_proto, JS_WellKnownSymbolAtom(JS_WKS_ASYNC_ITERATOR), values_fn,
-                               JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
     }
 
     /* §4.2's tee. Its branches' pull and cancel are step closures, so they need the controller's members as
        function objects for the same reason §4.4 needs the reader's. */
     {
         JSClassDef td = { "ReadableStream tee", .finalizer = tee_finalizer, .gc_mark = tee_gc_mark };
-        static const char *const CTRL_NAMES[3] = { "enqueue", "close", "error" };
         JS_NewClassID(rt, &g_tee_class);
         JS_NewClass(rt, g_tee_class, &td);
-        for (i = 0; i < 3; i++) {
-            g_ctrl_fn[i] = JS_GetPropertyStr(ctx, g_ctrl_proto, CTRL_NAMES[i]);
-            CHECK(JS_IsFunction(ctx, g_ctrl_fn[i]),
-                  "streams: a controller member the tee performs was not installed before it was captured");
-        }
         for (i = 0; i < TEE_N; i++) {
             g_tee_stepids[i] = JS_RegisterStepDef(rt, &js_tee_defs[i]);
             CHECK(g_tee_stepids[i] >= 0, "streams: no step id for a tee operation");
         }
-        idl_install_method(ctx, g_stream_proto, "tee", 0,
-                           idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tee_call_decl, 0));
+        g_tee_id = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tee_call_decl, 0);
         /* §4.9.7 with cloneForBranch2, which is NOT a page-visible member — it is the operation Fetch's "clone
            a body" performs, so it is a function object this component hands out and nothing installs. */
-        {
-            int id = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tee_clone_decl, 0);
-            g_tee_clone_fn = idl_step_function(ctx, "tee", 0, id);
-            CHECK(JS_IsFunction(ctx, g_tee_clone_fn), "streams: the cloning tee could not be made");
-        }
-        /* Held as a FUNCTION OBJECT for the reason g_ctrl_fn is: Fetch's "clone a body" performs the tee
-           OPERATION, and a page that replaces ReadableStream.prototype.tee must not change what clone() does. */
-        g_tee_fn = JS_GetPropertyStr(ctx, g_stream_proto, "tee");
-        CHECK(JS_IsFunction(ctx, g_tee_fn), "streams: `tee` was not installed before it was captured");
+        g_tee_clone_id = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tee_clone_decl, 0);
     }
 
     /* Fetch §5.2's "fully read", whose record is a class for the reason every other one here is: it is a
@@ -3595,7 +3614,101 @@ void readable_stream_init(JSContext *ctx)
        another, so it belongs to neither half — but `pipeTo` and `pipeThrough` are §4.2's MEMBERS, and this is
        the prototype they go on. The declaration is piping's; the placement is this interface's. */
     pipe_init(ctx);
-    pipe_install(ctx, g_stream_proto);
+    {
+        static const char *const FN_NAME[RSF_N] = {
+            "reader.read", "reader.releaseLock", "reader.cancel", "ReadableStream.getReader",
+            "ReadableStream.tee", "§4.9.7 cloning tee",
+        };
+        static const char *const CTRL_NAME[RS_CTRL_N] = {
+            "controller.enqueue", "controller.close", "controller.error",
+        };
+        for (i = 0; i < RSF_N; i++)   g_rs_fn_slot[i] = realm_value_declare(ctx, FN_NAME[i]);
+        for (i = 0; i < RS_CTRL_N; i++) g_ctrl_fn_slot[i] = realm_value_declare(ctx, CTRL_NAME[i]);
+    }
+    realm_declare_intrinsic(readable_stream_install_protos);
+}
+
+/* §4's FOUR INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM, and the abstract operations read off them while they
+   are still the ones just installed. */
+void readable_stream_install_protos(JSContext *ctx)
+{
+    static const char *const CTRL_NAMES[RS_CTRL_N] = { "enqueue", "close", "error" };
+    JSValue stream_p, reader_p, ctrl_p, aiter_p, prev, values_fn;
+    int i;
+
+    DCHECK(g_stream_class != 0, "a realm asked for ReadableStream.prototype before the class was declared");
+    prev = JS_GetClassProto(ctx, g_stream_class);
+    DCHECK(JS_IsNull(prev), "readable_stream_install_protos ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+
+    stream_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(stream_p), "ReadableStream.prototype could not be allocated");
+    idl_interface_tag(ctx, stream_p, "ReadableStream");
+    idl_install_accessor(ctx, stream_p, "locked", js_stream_locked, 0, -1);
+    idl_install_method(ctx, stream_p, "getReader", 0, g_getreader_id);
+    idl_install_step_method(ctx, stream_p, "cancel", 0, g_cancel_stepid);
+    idl_install_method(ctx, stream_p, "values", 0, g_values_id);
+    idl_install_method(ctx, stream_p, "tee", 0, g_tee_id);
+    /* §3.7.11: @@asyncIterator IS the same function object as `values`, writable and configurable but not
+       enumerable — not a second function that forwards to it. */
+    values_fn = JS_GetPropertyStr(ctx, stream_p, "values");
+    JS_DefinePropertyValue(ctx, stream_p, JS_WellKnownSymbolAtom(JS_WKS_ASYNC_ITERATOR), values_fn,
+                           JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+    /* §4.2.4's ReadableStreamPipeTo is its own component — it holds a reader on one stream and a writer on
+       another, so it belongs to neither half — but `pipeTo` and `pipeThrough` are §4.2's MEMBERS, and this is
+       the prototype they go on. The declaration is piping's; the placement is this interface's. */
+    pipe_install(ctx, stream_p);
+    JS_SetClassProto(ctx, g_stream_class, stream_p);
+
+    ctrl_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(ctrl_p), "the controller prototype could not be allocated");
+    idl_interface_tag(ctx, ctrl_p, "ReadableStreamDefaultController");
+    idl_install_accessor(ctx, ctrl_p, "desiredSize", js_ctrl_desired, 0, -1);
+    for (i = 0; i < RS_CTRL_N; i++)
+        JS_SetPropertyStr(ctx, ctrl_p, CTRL_NAMES[i],
+                          JS_NewCFunction2(ctx, NULL, CTRL_NAMES[i], 1, JS_CFUNC_step, g_ctrl_stepids[i]));
+    JS_SetClassProto(ctx, g_ctrl_class, ctrl_p);
+
+    reader_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(reader_p), "ReadableStreamDefaultReader.prototype could not be allocated");
+    idl_interface_tag(ctx, reader_p, "ReadableStreamDefaultReader");
+    idl_install_accessor(ctx, reader_p, "closed", js_reader_closed, 0, -1);
+    idl_install_step_method(ctx, reader_p, "releaseLock", 0, g_release_stepid);
+    idl_install_step_method(ctx, reader_p, "read", 0, g_read_stepid);
+    idl_install_step_method(ctx, reader_p, "cancel", 0, g_cancel_stepid);
+    JS_SetClassProto(ctx, g_reader_class, reader_p);
+
+    /* §4.4's asynchronous iteration. §3.7.11 puts %AsyncIteratorPrototype% under the iterator prototype
+       object, which is what gives it @@asyncIterator and the async-iterator helpers for nothing — and that
+       intrinsic is per realm, which is half of why this object is. */
+    {
+        JSValue aproto = JS_GetAsyncIteratorPrototype(ctx);
+        aiter_p = JS_NewObjectProto(ctx, aproto);
+        JS_FreeValue(ctx, aproto);
+        CHECK(!JS_IsException(aiter_p), "the async iterator prototype could not be allocated");
+        idl_install_step_method(ctx, aiter_p, "next", 0, g_aiter_stepids[AI_NEXT]);
+        idl_install_step_method(ctx, aiter_p, "return", 1, g_aiter_stepids[AI_RETURN]);
+        JS_SetClassProto(ctx, g_aiter_class, aiter_p);
+    }
+
+    /* THE ABSTRACT OPERATIONS, read off the prototypes nothing of the page's has touched yet. */
+    realm_value_set(ctx, g_rs_fn_slot[RSF_READ],       JS_GetPropertyStr(ctx, reader_p, "read"));
+    realm_value_set(ctx, g_rs_fn_slot[RSF_RELEASE],    JS_GetPropertyStr(ctx, reader_p, "releaseLock"));
+    realm_value_set(ctx, g_rs_fn_slot[RSF_CANCEL],     JS_GetPropertyStr(ctx, reader_p, "cancel"));
+    realm_value_set(ctx, g_rs_fn_slot[RSF_GET_READER], JS_GetPropertyStr(ctx, stream_p, "getReader"));
+    realm_value_set(ctx, g_rs_fn_slot[RSF_TEE],        JS_GetPropertyStr(ctx, stream_p, "tee"));
+    realm_value_set(ctx, g_rs_fn_slot[RSF_TEE_CLONE],  idl_step_function(ctx, "tee", 0, g_tee_clone_id));
+    for (i = 0; i < RSF_N; i++) {
+        JSValue fn = rs_fn(ctx, i);
+        CHECK(JS_IsFunction(ctx, fn), "streams: an operation §4 performs was not installed before capture");
+        JS_FreeValue(ctx, fn);
+    }
+    for (i = 0; i < RS_CTRL_N; i++) {
+        JSValue fn = JS_GetPropertyStr(ctx, ctrl_p, CTRL_NAMES[i]);
+        CHECK(JS_IsFunction(ctx, fn),
+              "streams: a controller member the tee performs was not installed before it was captured");
+        realm_value_set(ctx, g_ctrl_fn_slot[i], fn);
+    }
 }
 
 void readable_stream_install(JSContext *ctx, JSValueConst global)
@@ -3604,20 +3717,35 @@ void readable_stream_install(JSContext *ctx, JSValueConst global)
     DCHECK(g_ctor_stepid >= 0, "ReadableStream was installed before its constructor was declared");
     ctor = idl_step_constructor(ctx, "ReadableStream", 0, g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the ReadableStream interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_stream_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_stream_class);
+        DCHECK(!JS_IsNull(proto), "ReadableStream was installed into a realm with no proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     /* §4.2's `from` is STATIC, so it lives on the interface object rather than the prototype. */
     idl_install_method(ctx, ctor, "from", 1, g_from_ctor_stepid);
     JS_SetPropertyStr(ctx, (JSValue)global, "ReadableStream", ctor);
 
     ctor = idl_step_constructor(ctx, "ReadableStreamDefaultReader", 1, g_reader_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the reader interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_reader_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_reader_class);
+        DCHECK(!JS_IsNull(proto), "ReadableStreamDefaultReader was installed into a realm with no proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "ReadableStreamDefaultReader", ctor);
 
     ctor = JS_NewCFunction2(ctx, js_illegal_ctor, "ReadableStreamDefaultController", 0,
                             JS_CFUNC_constructor, 0);
     CHECK(!JS_IsException(ctor), "the controller interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_ctrl_proto);   /* .prototype and .constructor, both directions */
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_ctrl_class);
+        DCHECK(!JS_IsNull(proto), "ReadableStreamDefaultController was installed into a realm with no proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }   /* .prototype and .constructor, both directions */
     JS_SetPropertyStr(ctx, (JSValue)global, "ReadableStreamDefaultController", ctor);
 }
 
@@ -3626,24 +3754,12 @@ void readable_stream_free(JSContext *ctx)
     int i;
     if (!g_rs_rt) return;
     pipe_free(ctx);
-    JS_FreeValue(ctx, g_stream_proto);
-    JS_FreeValue(ctx, g_reader_proto);
-    JS_FreeValue(ctx, g_ctrl_proto);
-    JS_FreeValue(ctx, g_aiter_proto);
-    g_stream_proto = g_reader_proto = g_ctrl_proto = g_aiter_proto = JS_UNDEFINED;
-    JS_FreeValue(ctx, g_read_fn);
-    JS_FreeValue(ctx, g_release_fn);
-    JS_FreeValue(ctx, g_reader_cancel_fn);
-    JS_FreeValue(ctx, g_get_reader_fn);
-    g_read_fn = g_release_fn = g_reader_cancel_fn = g_get_reader_fn = JS_UNDEFINED;
+    /* the prototypes and the captured operations are the REALMS' — released with their contexts */
     for (i = 0; i < AI_N; i++) g_aiter_stepids[i] = -1;
     for (i = 0; i < TEE_N; i++) g_tee_stepids[i] = -1;
     for (i = 0; i < FROM_N; i++) g_from_stepids[i] = -1;
     for (i = 0; i < DRAIN_N; i++) g_drain_stepids[i] = -1;
     g_from_ctor_stepid = -1;
-    for (i = 0; i < 3; i++) { JS_FreeValue(ctx, g_ctrl_fn[i]); g_ctrl_fn[i] = JS_UNDEFINED; }
-    JS_FreeValue(ctx, g_tee_fn); g_tee_fn = JS_UNDEFINED;
-    JS_FreeValue(ctx, g_tee_clone_fn); g_tee_clone_fn = JS_UNDEFINED;
     g_rs_rt = NULL;
     g_ctor_stepid = g_reader_ctor_stepid = g_read_stepid = g_cancel_stepid = g_release_stepid = -1;
     for (i = 0; i < 3; i++) g_ctrl_stepids[i] = -1;

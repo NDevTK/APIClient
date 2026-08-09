@@ -536,9 +536,11 @@ run:
             if (s->w.settle == E_READABLE) {
                 if (s->err_both) {
                     JSValueConst arg = s->w.err;
-                    r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), readable_stream_ctrl_op(RS_CTRL_ERROR),
+                    JSValue op = readable_stream_ctrl_op(ctx, RS_CTRL_ERROR);
+                    r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), op,
                                       readable_stream_controller(t->readable), 1, &arg, cb_result, &out,
                                       out_cb, out_argc);
+                    JS_FreeValue(ctx, op);
                     if (r > 0) return r;
                     cb_result = JS_UNDEFINED;
                     if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -952,8 +954,10 @@ run:
             }
             {
                 JSValueConst arg = s->w.value;
-                r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), readable_stream_ctrl_op(RS_CTRL_ENQUEUE),
+                JSValue op = readable_stream_ctrl_op(ctx, RS_CTRL_ENQUEUE);
+                r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), op,
                                   rc, 1, &arg, cb_result, &out, out_cb, out_argc);
+                JS_FreeValue(ctx, op);
                 if (r > 0) return r;
                 cb_result = JS_UNDEFINED;
             }
@@ -1029,8 +1033,10 @@ run:
             JSValueConst rc = readable_stream_controller(t->readable);
             if (s->w.phase == 0) s->choice = (uint8_t)readable_ctrl_can_close_or_enqueue(ctx, rc);
             if (s->choice) {
-                r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), readable_stream_ctrl_op(RS_CTRL_CLOSE),
+                JSValue op = readable_stream_ctrl_op(ctx, RS_CTRL_CLOSE);
+                r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), op,
                                   rc, 0, NULL, cb_result, &out, out_cb, out_argc);
+                JS_FreeValue(ctx, op);
                 if (r > 0) return r;
                 cb_result = JS_UNDEFINED;
                 if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -1166,10 +1172,11 @@ run:
                     ts_error_enter(s, t, 0, s->w.value, S_FINISH_SETTLE, ctx);
                 } else {
                     JSValueConst arg = s->w.value;
-                    r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb),
-                                      readable_stream_ctrl_op(RS_CTRL_ERROR),
+                    JSValue op = readable_stream_ctrl_op(ctx, RS_CTRL_ERROR);
+                    r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), op,
                                       readable_stream_controller(t->readable), 1, &arg, cb_result, &out,
                                       out_cb, out_argc);
+                    JS_FreeValue(ctx, op);
                     if (r > 0) return r;
                     cb_result = JS_UNDEFINED;
                     if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -1193,9 +1200,13 @@ run:
             }
             /* the FLUSH finished cleanly: the readable half closes */
             DCHECK(s->choice == 3, "a §6 finish took a branch this component does not have");
-            r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), readable_stream_ctrl_op(RS_CTRL_CLOSE),
-                              readable_stream_controller(t->readable), 0, NULL, cb_result, &out,
-                              out_cb, out_argc);
+            {
+                JSValue op = readable_stream_ctrl_op(ctx, RS_CTRL_CLOSE);
+                r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), op,
+                                  readable_stream_controller(t->readable), 0, NULL, cb_result, &out,
+                                  out_cb, out_argc);
+                JS_FreeValue(ctx, op);
+            }
             if (r > 0) return r;
             cb_result = JS_UNDEFINED;
             if (JS_IsException(out)) return JS_STEP_ABRUPT;

@@ -103,8 +103,12 @@ int body_clone_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, Body
             }
         }
     }
-    r = step_call_run(ctx, phase, cb, cb_cap, readable_stream_op(RS_OP_TEE_CLONE), src->stream, 0, NULL,
-                      in, &out, out_cb, out_argc);
+    {
+        JSValue op = readable_stream_op(ctx, RS_OP_TEE_CLONE);   /* THIS realm's §4.9.7 tee */
+        r = step_call_run(ctx, phase, cb, cb_cap, op, src->stream, 0, NULL,
+                          in, &out, out_cb, out_argc);
+        JS_FreeValue(ctx, op);
+    }
     if (r > 0) return r;
     if (JS_IsException(out)) return -1;
     /* §4.2's `tee` answers a two-element Array this component built, so reading its indices runs no page code
