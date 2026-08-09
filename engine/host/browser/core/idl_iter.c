@@ -356,6 +356,16 @@ static JSValue js_idl_pair_foreach_fini(JSContext *ctx, void *st, bool take_resu
     return JS_UNDEFINED;   /* forEach returns undefined */
 }
 
+/* WHERE THIS MACHINE RESTS. §3.7.10's forEach is four steps and only one of them can suspend — step 4.2's
+   invocation of the callback — so the whole walk is that one stage, with `i` as its cursor. Step 4.3's
+   re-read of the pairs is why `count` is asked again on every entry rather than once. */
+#define PAIR_FOREACH_STAGES(X) \
+    X(PAIR_FOREACH_INVOKE, \
+      "Web IDL §3.7.10 forEach(callback, thisArg) steps 4.1-4.4 (invoke callback with the pair's value, its " \
+      "key and the object; the pairs are re-read afterwards because the callback may have changed them)")
+enum { PAIR_FOREACH_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const PAIR_FOREACH_STEPS[] = { PAIR_FOREACH_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
 static int js_idl_pair_foreach_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     IdlPairForEachState *s = st;
@@ -368,6 +378,8 @@ static int js_idl_pair_foreach_step(JSContext *ctx, void *st, JSValue cb_result,
     JSValue ignored;
     int r, k, n;
 
+    DCHECK(s->hdr.stage == PAIR_FOREACH_INVOKE,
+           "an iterable<>'s forEach resumed at a stage §3.7.10 does not have");
     if (s->cphase == 0 && s->i == 0)
         for (k = 0; k < PAIR_FOREACH_CB_SLOTS; k++) s->cb[k] = JS_UNDEFINED;   /* a zeroed state reads as INTEGER 0 */
     if (!f) {
@@ -419,7 +431,9 @@ int idl_pair_iter_declare(JSContext *ctx, const IdlPairIterOps *ops)
     char name[64];
     static JSTrampStepDef foreach_def = {
         sizeof(IdlPairForEachState), js_idl_pair_foreach_step, js_idl_pair_foreach_fini, 0,
-        .visit = js_idl_pair_foreach_visit
+        .visit = js_idl_pair_foreach_visit,
+        .algorithm = "Web IDL §3.7.10 forEach(callback, thisArg) of an iterable<> interface",
+        .steps = PAIR_FOREACH_STEPS
     };
 
     DCHECK(g_pair_n < IDL_PAIR_ITER_MAX,

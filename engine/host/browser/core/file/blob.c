@@ -385,7 +385,19 @@ static JSValue js_blob_slice(JSContext *ctx, JSValueConst this_val, int argc, JS
  *
  * STILL A MACHINE rather than a plain body, because it is the shape a member takes when the args machine cannot
  * finish its work — and because the `endings` transform below is over data of the page's size. */
-typedef struct { uint8_t unused; } JSBlobCtorState;
+/* WHERE THIS MACHINE RESTS. §3.1's constructor is three steps and §4.1's File constructor adds two — and none
+   of them can reach the page's code, because the declaration has already driven the `sequence<BlobPart>`
+   iterator and the BlobPropertyBag's members before the body is entered. So the assembly is one stage and the
+   machine never returns to it. */
+#define BLOB_CTOR_STAGES(X) \
+    X(BLOB_CTOR_ASSEMBLE = IDL_STEP_FIRST, \
+      "File API §3.1 new Blob(blobParts, options) steps 1-3 and §4.1 new File(fileBits, fileName, options) " \
+      "steps 1-5 (the byte sequence the parts assemble to, the normalized type, and a File's name and " \
+      "lastModified)")
+enum { BLOB_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const BLOB_CTOR_STEPS[] = { BLOB_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct { int unused; } JSBlobCtorState;
 
 static void js_blob_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
 static void js_blob_ctor_release(JSContext *ctx, void *st) { (void)ctx; (void)st; }
@@ -433,6 +445,8 @@ static int js_blob_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
 
     (void)st; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
+    DCHECK(hdr->stage == BLOB_CTOR_ASSEMBLE,
+           "the Blob/File constructor resumed at a stage §3.1 and §4.1 do not have between them");
     if (JS_IsUndefined(hdr->this_val)) {
         JS_ThrowTypeError(ctx, "constructor %s requires 'new'", is_file ? "File" : "Blob");
         return -1;
@@ -556,7 +570,8 @@ fail:
 }
 
 static const IdlStepDecl js_blob_ctor_decl = {
-    js_blob_ctor_step, sizeof(JSBlobCtorState), js_blob_ctor_visit, js_blob_ctor_release
+    js_blob_ctor_step, sizeof(JSBlobCtorState), js_blob_ctor_visit, js_blob_ctor_release,
+    "File API §3.1 new Blob(blobParts, options) / §4.1 new File(fileBits, fileName, options)", BLOB_CTOR_STEPS
 };
 
 /* ---- install ---------------------------------------------------------------------------------------------- */
