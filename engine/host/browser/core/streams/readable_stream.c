@@ -564,6 +564,17 @@ static int stream_settle_run(JSContext *ctx, StreamWork *w, StreamData *d, JSVal
 /* §4.5's reactions, by what they react to. Each is a step closure capturing the controller. */
 enum { RXN_START_OK = 0, RXN_START_ERR, RXN_PULL_OK, RXN_PULL_ERR };
 
+/* WHERE THIS MACHINE RESTS. Each of the four is a REACTION the spec attaches at a named step, and what it does
+   afterwards — pull again, or error the stream — is the other stage. */
+#define RXN_STAGES(X) \
+    X(RXN_DECIDE, "Streams §4.9.4 SetUpReadableStreamDefaultController steps 11-12 / §4.5 " \
+                  "ReadableStreamDefaultControllerCallPullIfNeeded steps 6-7 (which reaction this is: the " \
+                  "controller is started, a pull may repeat, or an error is to be reported)") \
+    X(RXN_RUN, "Streams §4.5 ReadableStreamDefaultControllerCallPullIfNeeded steps 2-7 / §4.2 " \
+               "ReadableStreamError (the pull the reaction asks for, or the error it reports)")
+enum { RXN_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const RXN_STEPS[] = { RXN_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
 /* ATTACH A PAIR OF §4.5 REACTIONS. They are STEP CLOSURES because a reaction calls the page's `pull` again and
  * rejects parked read requests — work only a machine may do — and knows its controller only by capture.
  * PerformPromiseThen rather than a `.then` read, because that is what §4.5 performs: a page that replaces
@@ -621,8 +632,17 @@ static int js_fwd_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
     return JS_STEP_DONE;
 }
 
+/* ONE STAGE, because the whole of this machine is the call — it holds nothing between entries. */
+#define FWD_STAGES(X) \
+    X(FWD_CALL, "Streams §4 (a reaction forwarding a promise's settlement to a resolving function — that " \
+                "function's 27.2.1.3.2 step 8 `then` read is the page's code)")
+enum { FWD_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const FWD_STEPS[] = { FWD_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
 #define FWD_DEF(i) { sizeof(JSFwdState), js_fwd_step, js_fwd_fini, (i), \
-                     .catches_abrupt = 1, .visit = js_fwd_visit }
+                     .catches_abrupt = 1, .visit = js_fwd_visit, \
+                     .algorithm = "Streams §4 (forward a promise's settlement to a resolving function)", \
+                     .steps = FWD_STEPS }
 static const JSTrampStepDef js_fwd_defs[2] = { FWD_DEF(FWD_UNDEF), FWD_DEF(FWD_ARG) };
 #undef FWD_DEF
 static int g_fwd_stepids[2] = { -1, -1 };
@@ -761,12 +781,12 @@ static int js_rxn_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
     d = stream_of(c->stream);
     DCHECK(d != NULL, "a controller's stream stopped being a ReadableStream");
 
-    if (s->w.stage == 0) {
+    if (s->hdr.stage == RXN_DECIDE) {
         int op = s->hdr.arg;
         stream_work_start(&s->w);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        s->w.stage = 1;
+        s->hdr.stage = RXN_RUN;
         if (op == RXN_START_OK) {
             /* §4.5's set-up: the controller is STARTED only when start's promise fulfils, so a source whose
                `pull` would have been called synchronously from the constructor is instead called from here —
@@ -809,7 +829,20 @@ static const JSTrampStepDef js_rxn_defs[4] = {
  * It also performs §4.5's PullSteps, which is where a stream's `pull` is asked for on demand — and the spec's
  * ORDER is that the close-or-pull happens BEFORE the read request is answered, so those are stages ahead of the
  * settle rather than after it. */
-enum { RD_START = 0, RD_CLOSE, RD_PULL, RD_SETTLE };
+/* WHERE THIS MACHINE RESTS. §4.3's read() is three steps over §4.7's ReadableStreamDefaultReaderRead, whose
+   step 6.2 is §4.5's [[PullSteps]] — and the close-or-pull that operation performs runs BEFORE the read
+   request is answered, which is why those are stages ahead of the settle rather than after it. */
+#define RD_STAGES(X) \
+    X(RD_START, "Streams §4.3 read() steps 1-3 and §4.7 ReadableStreamDefaultReaderRead steps 1-6 (the brand, " \
+                "the released refusal, the promise, and what the stream's state answers with)") \
+    X(RD_CLOSE, "Streams §4.5 [[PullSteps]] step 3.3 (draining the last chunk of a stream whose close was " \
+                "requested performs ReadableStreamClose)") \
+    X(RD_PULL, "Streams §4.5 [[PullSteps]] step 3.4 / step 4 (CallPullIfNeeded, because the drain made room " \
+               "or because the request parked)") \
+    X(RD_SETTLE, "Streams §4.7 ReadableStreamDefaultReaderRead steps 4-6 (the read request's close, error or " \
+                 "chunk steps — settling the promise is the page's code)")
+enum { RD_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const RD_STEPS[] = { RD_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     JSStepHdr hdr;
@@ -851,7 +884,7 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
     JSValueConst arg;
     int r;
 
-    if (s->w.stage == RD_START) {
+    if (s->hdr.stage == RD_START) {
         ReaderData *rd = reader_of(s->hdr.this_val);
         StreamData *d = NULL;
         JSValue funcs[2];
@@ -865,7 +898,7 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
             JS_ThrowTypeError(ctx, "not a ReadableStreamDefaultReader");
             return JS_STEP_ABRUPT;
         }
-        s->w.stage = RD_SETTLE;
+        s->hdr.stage = RD_SETTLE;
         if (JS_IsUndefined(rd->stream)) {
             /* §4.3: a released reader's read() REJECTS rather than throwing — it is a promise-returning
                member, and a page's `.catch` is where it expects to see this. */
@@ -895,10 +928,10 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                    of them before `done`. Otherwise the drain is what makes room, so the source is pulled. */
                 DCHECK(c != NULL, "a ReadableStream reached a read with no controller");
                 if (c->close_requested && stream_queued(ctx, d) == 0) {
-                    s->w.stage = RD_CLOSE;
+                    s->hdr.stage = RD_CLOSE;
                     s->w.settle = S_CLOSE_SET;
                 } else {
-                    s->w.stage = RD_PULL;
+                    s->hdr.stage = RD_PULL;
                     s->w.pull = P_TEST;
                 }
             } else {
@@ -912,7 +945,7 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                 at = stream_read_pending(ctx, d) + d->rhead;
                 JS_SetPropertyUint32(ctx, d->read_resolve, at, funcs[0]);
                 JS_SetPropertyUint32(ctx, d->read_reject, at, funcs[1]);
-                s->w.stage = RD_PULL;
+                s->hdr.stage = RD_PULL;
                 s->w.pull = P_TEST;
                 goto have_promise;
             }
@@ -925,24 +958,24 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
     have_promise:;
     }
 
-    if (s->w.stage == RD_CLOSE) {
+    if (s->hdr.stage == RD_CLOSE) {
         r = stream_settle_run(ctx, &s->w, stream_of(s->stream), cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
-        s->w.stage = RD_SETTLE;
+        s->hdr.stage = RD_SETTLE;
     }
-    if (s->w.stage == RD_PULL) {
+    if (s->hdr.stage == RD_PULL) {
         StreamData *d = stream_of(s->stream);
         DCHECK(d != NULL, "the read machine's stream stopped being a ReadableStream");
         r = ctrl_pull_run(ctx, &s->w, d->controller, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
-        s->w.stage = RD_SETTLE;
+        s->hdr.stage = RD_SETTLE;
     }
 
-    DCHECK(s->w.stage == RD_SETTLE, "the read machine resumed in a stage it never parks in");
+    DCHECK(s->hdr.stage == RD_SETTLE, "the read machine resumed in a stage it never parks in");
     if (JS_IsUndefined(s->settle)) {
         /* the request parked: nothing to settle yet, the controller owns the answer */
         JS_FreeValue(ctx, cb_result);
@@ -958,7 +991,8 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
 }
 
 static const JSTrampStepDef js_read_def = {
-    sizeof(JSReadState), js_read_step, js_read_fini, 0, .catches_abrupt = 1, .visit = js_read_visit
+    sizeof(JSReadState), js_read_step, js_read_fini, 0, .catches_abrupt = 1, .visit = js_read_visit,
+    .algorithm = "Streams §4.3 read(), through §4.7 ReadableStreamDefaultReaderRead", .steps = RD_STEPS
 };
 
 /* §4.3's `releaseLock()`. A MACHINE, because releasing is not just dropping the lock: it REJECTS the reader's
@@ -967,6 +1001,16 @@ static const JSTrampStepDef js_read_def = {
  * forever, and a `read()` issued before it never answered at all; that is what made the corpus's whole
  * default-reader file report NOTHING rather than a failure, because testharness cannot complete while a
  * promise_test is still unsettled. */
+/* WHERE THIS MACHINE RESTS. §4.3's releaseLock() is one step over §4.7's ReadableStreamDefaultReaderRelease,
+   whose two rejections are the page's code and are therefore the second stage. */
+#define REL_STAGES(X) \
+    X(REL_ENTRY, "Streams §4.3 releaseLock() steps 1-2 and §4.7 ReadableStreamDefaultReaderRelease steps 1-3 " \
+                 "(the brand, the already-released no-op, and the released TypeError)") \
+    X(REL_SETTLE, "Streams §4.7 ReadableStreamDefaultReaderRelease steps 4-5 (reject the reader's `closed` " \
+                  "and every read request it had parked)")
+enum { REL_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const REL_STEPS[] = { REL_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
 typedef struct {
     JSStepHdr hdr;
     StreamWork  w;
@@ -998,13 +1042,13 @@ static int js_release_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     StreamData *d;
     int r;
 
-    if (s->w.stage == 0) {
+    if (s->hdr.stage == REL_ENTRY) {
         ReaderData *rd = reader_of(s->hdr.this_val);
         stream_work_start(&s->w);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         s->stream = JS_UNDEFINED;
-        s->w.stage = 1;
+        s->hdr.stage = REL_SETTLE;
         if (!rd) {
             JS_ThrowTypeError(ctx, "not a ReadableStreamDefaultReader");
             return JS_STEP_ABRUPT;
@@ -1025,7 +1069,8 @@ static int js_release_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
 }
 
 static const JSTrampStepDef js_release_def = {
-    sizeof(JSReleaseState), js_release_step, js_release_fini, 0, .catches_abrupt = 1, .visit = js_release_visit
+    sizeof(JSReleaseState), js_release_step, js_release_fini, 0, .catches_abrupt = 1, .visit = js_release_visit,
+    .algorithm = "Streams §4.3 releaseLock(), through §4.7 ReadableStreamDefaultReaderRelease", .steps = REL_STEPS
 };
 
 static JSValue js_reader_closed(JSContext *ctx, JSValueConst this_val, int magic)
@@ -1071,6 +1116,19 @@ static const IdlDictMember GET_READER_OPTIONS[] = {
  * controller — absent here, and a TypeError is what §4.2 says for a stream that is not one. */
 enum { GR_SELF = 0, GR_CTOR };   /* the magic: which argument the stream arrives in */
 
+/* WHERE THIS MACHINE RESTS. §4.7's SetUpReadableStreamDefaultReader is four steps, and only the last of them —
+   GenericInitialize settling `closed` for a stream that has already finished — is the page's code. */
+#define GR_STAGES(X) \
+    X(GRS_SETUP = IDL_STEP_FIRST, \
+      "Streams §4.7 SetUpReadableStreamDefaultReader steps 1-3 and ReadableStreamReaderGenericInitialize " \
+      "steps 1-3 (the lock, the reader, and its `closed` capability)") \
+    X(GRS_DONE, "Streams §4.2 getReader(options) step 1 (the reader AcquireReadableStreamDefaultReader " \
+                "answered, for a stream still readable)") \
+    X(GRS_SETTLE, "Streams §4.7 ReadableStreamReaderGenericInitialize step 2/3 (settling `closed` at once, " \
+                  "because the stream was already closed or errored)")
+enum { GR_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const GR_STEPS[] = { GR_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
 typedef struct {
     StreamWork w;
     JSValue  reader;
@@ -1101,7 +1159,7 @@ static int js_get_reader_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
     JSValue out;
     int r;
 
-    if (s->w.stage == 0) {
+    if (hdr->stage == GRS_SETUP) {
         StreamData *d = stream_of(stream_v);
         ReaderData *rd;
         JSValue obj;
@@ -1110,7 +1168,7 @@ static int js_get_reader_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         s->reader = JS_UNDEFINED;
-        s->w.stage = 1;
+        hdr->stage = GRS_DONE;
         if (ctor && JS_IsUndefined(hdr->this_val)) {
             JS_ThrowTypeError(ctx, "constructor ReadableStreamDefaultReader requires 'new'");
             return -1;
@@ -1156,10 +1214,10 @@ static int js_get_reader_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
         JS_FreeValue(ctx, rd->closed_funcs[d->state == RS_ERRORED ? 0 : 1]);
         rd->closed_funcs[0] = rd->closed_funcs[1] = JS_UNDEFINED;
         s->w.value = d->state == RS_ERRORED ? JS_DupValue(ctx, d->stored_error) : JS_UNDEFINED;
-        s->w.stage = 2;
+        hdr->stage = GRS_SETTLE;
     }
 
-    if (s->w.stage == 2) {
+    if (hdr->stage == GRS_SETTLE) {
         arg = s->w.value;
         r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), s->w.func, JS_UNDEFINED, 1, &arg, cb_result, &out,
                           out_cb, out_argc);
@@ -1175,7 +1233,8 @@ done:
 }
 
 static const IdlStepDecl js_get_reader_decl = {
-    js_get_reader_step, sizeof(JSGetReaderState), js_get_reader_visit, js_get_reader_release
+    js_get_reader_step, sizeof(JSGetReaderState), js_get_reader_visit, js_get_reader_release,
+    "Streams §4.7 SetUpReadableStreamDefaultReader (getReader() and the reader constructor both)", GR_STEPS
 };
 
 /* §4.2's ReadableStreamCancel, reached from the stream's `cancel(reason)` and from the reader's — §4.3 says
@@ -1186,7 +1245,23 @@ static const IdlStepDecl js_get_reader_decl = {
  * reaction is a step closure over this component's own resolving function, the same shape §4.5's pull
  * reactions are. Before this, the page's `cancel` was never invoked at all — a stream whose source releases a
  * socket released nothing, and the returned promise settled ahead of the source rather than with it. */
-enum { CN_START = 0, CN_CLOSE, CN_CALL, CN_RESOLVE, CN_THEN, CN_SETTLE };
+/* WHERE THIS MACHINE RESTS, AS §4.2 NUMBERS IT. ReadableStreamCancel is seven steps and three of them are the
+   page's code: closing the stream settles `closed`, the source's own `cancel` is a call, and the reaction to
+   what it answered is a PromiseResolve. */
+#define CN_STAGES(X) \
+    X(CN_START, "Streams §4.2 ReadableStreamCancel steps 1-4 (disturbed, then the closed/errored " \
+                "short-circuits)") \
+    X(CN_CLOSE, "Streams §4.2 ReadableStreamCancel step 6's ReadableStreamClose (the reader's `closed` " \
+                "resolves and its parked read requests are answered)") \
+    X(CN_CALL, "Streams §4.2 ReadableStreamCancel step 7 (the controller's [[CancelSteps]] — the source's own " \
+               "`cancel` algorithm over the reason)") \
+    X(CN_RESOLVE, "Streams §4.2 ReadableStreamCancel step 8 (PromiseResolve over what the source answered)") \
+    X(CN_THEN, "Streams §4.2 ReadableStreamCancel step 8 (reacting to sourceCancelPromise with a fulfilment " \
+               "step that returns undefined)") \
+    X(CN_SETTLE, "Streams §4.2 cancel(reason) steps 1-2 (settling this member's own answer — a rejected " \
+                 "promise for a locked stream, or undefined)")
+enum { CN_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CN_STEPS[] = { CN_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     JSStepHdr hdr;
@@ -1233,7 +1308,7 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
     JSValue out;
     int r;
 
-    if (s->w.stage == CN_START) {
+    if (s->hdr.stage == CN_START) {
         /* The receiver is the STREAM for `stream.cancel()` and the READER for `reader.cancel()`. */
         ReaderData *rd;
         int reject = 0;
@@ -1247,7 +1322,7 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         if (!d && rd && !JS_IsUndefined(rd->stream)) d = stream_of(rd->stream);
         s->promise = JS_NewPromiseCapability(ctx, s->funcs);
         if (JS_IsException(s->promise)) return JS_STEP_ABRUPT;
-        s->w.stage = CN_SETTLE;
+        s->hdr.stage = CN_SETTLE;
         if (!d) {
             JS_ThrowTypeError(ctx, rd ? "this reader has been released"
                                       : "cancel was called on neither a ReadableStream nor an active reader");
@@ -1267,27 +1342,27 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
             } else if (d->state == RS_CLOSED) {
                 s->w.value = JS_UNDEFINED;   /* §4.2 step 2: already closed, and the source is not asked */
             } else {
-                s->w.stage = CN_CLOSE;
+                s->hdr.stage = CN_CLOSE;
                 s->w.settle = S_CLOSE_SET;
             }
         }
-        if (s->w.stage == CN_SETTLE) {
+        if (s->hdr.stage == CN_SETTLE) {
             s->settle = s->funcs[reject];
             s->funcs[reject] = JS_UNDEFINED;
         }
     }
 
-    if (s->w.stage == CN_CLOSE) {
+    if (s->hdr.stage == CN_CLOSE) {
         /* §4.2 step 4: the stream CLOSES before the source is asked to cancel, so a reader awaiting `closed`
            or parked on a `read()` is answered first. */
         r = stream_settle_run(ctx, &s->w, stream_of(s->stream), cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
-        s->w.stage = CN_CALL;
+        s->hdr.stage = CN_CALL;
     }
 
-    if (s->w.stage == CN_CALL) {
+    if (s->hdr.stage == CN_CALL) {
         d = stream_of(s->stream);
         DCHECK(d != NULL, "the cancel machine's stream stopped being a ReadableStream");
         c = JS_IsUndefined(d->controller) ? NULL : ctrl_of(d->controller);
@@ -1320,18 +1395,18 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
             JS_FreeValue(ctx, c->cancel_fn);
             c->pull_fn = c->cancel_fn = JS_UNDEFINED;
         }
-        s->w.stage = CN_RESOLVE;
+        s->hdr.stage = CN_RESOLVE;
     }
 
-    if (s->w.stage == CN_RESOLVE) {
+    if (s->hdr.stage == CN_RESOLVE) {
         r = stream_promise_of_run(ctx, &s->w, s->reject_algorithm, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
-        s->w.stage = CN_THEN;
+        s->hdr.stage = CN_THEN;
     }
 
-    if (s->w.stage == CN_THEN) {
+    if (s->hdr.stage == CN_THEN) {
         JS_FreeValue(ctx, cb_result);
         /* §4.2 step 7: this member's promise settles WITH the source's — fulfilling with undefined, because
            whatever the source's cancel resolved to is not this operation's answer, and rejecting with its
@@ -1345,7 +1420,7 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         return r < 0 ? JS_STEP_ABRUPT : JS_STEP_DONE;
     }
 
-    DCHECK(s->w.stage == CN_SETTLE, "the cancel machine resumed in a stage it never parks in");
+    DCHECK(s->hdr.stage == CN_SETTLE, "the cancel machine resumed in a stage it never parks in");
     arg = s->w.value;
     r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), s->settle, JS_UNDEFINED, 1, &arg, cb_result, &out,
                       out_cb, out_argc);
@@ -1356,7 +1431,8 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
 }
 
 static const JSTrampStepDef js_cancel_def = {
-    sizeof(JSCancelState), js_cancel_step, js_cancel_fini, 0, .catches_abrupt = 1, .visit = js_cancel_visit
+    sizeof(JSCancelState), js_cancel_step, js_cancel_fini, 0, .catches_abrupt = 1, .visit = js_cancel_visit,
+    .algorithm = "Streams §4.2/§4.3 cancel(reason), through §4.2 ReadableStreamCancel", .steps = CN_STEPS
 };
 
 /* ---- §4.5's DEFAULT CONTROLLER MEMBERS -----------------------------------------------------------------------
@@ -1365,7 +1441,26 @@ static const JSTrampStepDef js_cancel_def = {
  * settles a promise, which is the page's code. `enqueue` additionally ends in CallPullIfNeeded, which calls the
  * page's `pull`. That is the whole reason this component is machines rather than functions. */
 enum { CTRL_ENQUEUE = 0, CTRL_CLOSE, CTRL_ERROR };
-enum { CS_START = 0, CS_SIZE, CS_ENQUEUE, CS_SETTLE, CS_SETTLE_ALL, CS_PULL, CS_RETHROW };
+/* WHERE THIS MACHINE RESTS, ACROSS §4.5's THREE MEMBERS. `enqueue`, `close` and `error` are one machine
+   because they end in the same two operations — settling what a reader was waiting for, and asking whether to
+   pull — and each stage names the step of whichever member reached it. */
+#define CS_STAGES(X) \
+    X(CS_START, "Streams §4.5 enqueue/close/error steps 1-2 (the brand and CanCloseOrEnqueue)") \
+    X(CS_SIZE, "Streams §4.5 ReadableStreamDefaultControllerEnqueue step 3.1 (the strategy's size algorithm " \
+               "over the chunk)") \
+    X(CS_ENQUEUE, "Streams §4.5 ReadableStreamDefaultControllerEnqueue step 3.2 (EnqueueValueWithSize, whose " \
+                  "own throw errors the controller)") \
+    X(CS_SETTLE, "Streams §4.5 ReadableStreamDefaultControllerEnqueue step 2 (a waiting reader is answered " \
+                 "with the chunk instead of it being queued)") \
+    X(CS_SETTLE_ALL, "Streams §4.2 ReadableStreamClose / ReadableStreamError (settling `closed` and every " \
+                     "parked read request, for `close()` and `error()`)") \
+    X(CS_PULL, "Streams §4.5 ReadableStreamDefaultControllerCallPullIfNeeded (asked after every one of the " \
+               "three members, because each changes what ShouldCallPull answers)") \
+    X(CS_RETHROW, "Streams §4.5 ReadableStreamDefaultControllerEnqueue step 3.1's abrupt completion (the " \
+                  "size algorithm's OWN throw is re-raised while the stream keeps the reason it was errored " \
+                  "with)")
+enum { CS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CS_STEPS[] = { CS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     JSStepHdr hdr;
@@ -1411,7 +1506,7 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
     d = stream_of(c->stream);
     DCHECK(d != NULL, "a controller's stream stopped being a ReadableStream");
 
-    if (s->w.stage == CS_START) {
+    if (s->hdr.stage == CS_START) {
         int op = s->hdr.arg;
         JSValueConst a0 = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
 
@@ -1429,12 +1524,12 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                straight to a reader is never weighed, because it never enters the queue. */
             s->w.func = stream_take_read(ctx, d, 0);
             if (JS_IsUndefined(s->w.func)) {
-                s->w.stage = JS_IsUndefined(c->size_fn) ? CS_ENQUEUE : CS_SIZE;
+                s->hdr.stage = JS_IsUndefined(c->size_fn) ? CS_ENQUEUE : CS_SIZE;
                 s->size = 1;   /* the implicit strategy: one per chunk */
             } else {
                 s->w.value = read_result(ctx, JS_DupValue(ctx, a0), false);
                 if (JS_IsException(s->w.value)) return JS_STEP_ABRUPT;
-                s->w.stage = CS_SETTLE;
+                s->hdr.stage = CS_SETTLE;
             }
             s->w.pull = P_TEST;   /* §4.5 step 4: an enqueue always ends in CallPullIfNeeded */
         } else if (op == CTRL_CLOSE) {
@@ -1446,18 +1541,18 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
             /* §4.5: a close with chunks STILL QUEUED waits for them — the state moves when the queue drains,
                so a reader sees every chunk before `done`. */
             if (stream_queued(ctx, d) > 0) return JS_STEP_DONE;
-            s->w.stage = CS_SETTLE_ALL;
+            s->hdr.stage = CS_SETTLE_ALL;
             s->w.settle = S_CLOSE_SET;
         } else {
             DCHECK(op == CTRL_ERROR, "a controller member ran with an operation this component does not have");
             if (d->state != RS_READABLE) return JS_STEP_DONE;
             s->w.err = JS_DupValue(ctx, a0);
-            s->w.stage = CS_SETTLE_ALL;
+            s->hdr.stage = CS_SETTLE_ALL;
             s->w.settle = S_ERR_SET;
         }
     }
 
-    if (s->w.stage == CS_SIZE) {
+    if (s->hdr.stage == CS_SIZE) {
         JSValueConst chunk = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
         r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), c->size_fn, JS_UNDEFINED, 1, &chunk, cb_result, &out,
                           out_cb, out_argc);
@@ -1476,20 +1571,20 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
             s->w.err = JS_GetException(ctx);
             s->rethrow = JS_DupValue(ctx, s->w.err);
             s->w.settle = S_ERR_SET;
-            s->w.stage = CS_RETHROW;
+            s->hdr.stage = CS_RETHROW;
             s->w.pull = P_IDLE;
         } else {
-            s->w.stage = CS_ENQUEUE;
+            s->hdr.stage = CS_ENQUEUE;
         }
     }
-    if (s->w.stage == CS_ENQUEUE) {
+    if (s->hdr.stage == CS_ENQUEUE) {
         JSValueConst chunk = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         stream_enqueue(ctx, d, chunk, s->size);
-        s->w.stage = CS_PULL;
+        s->hdr.stage = CS_PULL;
     }
-    if (s->w.stage == CS_RETHROW) {
+    if (s->hdr.stage == CS_RETHROW) {
         /* the stream errors first — every parked read is rejected — and only then does enqueue() itself
            re-raise, which is the order §4.5 states and the order a page observes */
         r = stream_settle_run(ctx, &s->w, d, cb_result, out_cb, out_argc);
@@ -1499,7 +1594,7 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
         return JS_STEP_ABRUPT;
     }
 
-    if (s->w.stage == CS_SETTLE) {
+    if (s->hdr.stage == CS_SETTLE) {
         arg = s->w.value;
         r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), s->w.func, JS_UNDEFINED, 1, &arg, cb_result, &out,
                           out_cb, out_argc);
@@ -1507,16 +1602,16 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
         JS_FreeValue(ctx, out);
         cb_result = JS_UNDEFINED;
-        s->w.stage = CS_PULL;
+        s->hdr.stage = CS_PULL;
     }
-    if (s->w.stage == CS_SETTLE_ALL) {
+    if (s->hdr.stage == CS_SETTLE_ALL) {
         r = stream_settle_run(ctx, &s->w, d, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         return JS_STEP_DONE;
     }
 
-    DCHECK(s->w.stage == CS_PULL, "a controller member resumed in a stage it never parks in");
+    DCHECK(s->hdr.stage == CS_PULL, "a controller member resumed in a stage it never parks in");
     r = ctrl_pull_run(ctx, &s->w, s->hdr.this_val, cb_result, out_cb, out_argc);
     if (r > 0) return r;
     if (r < 0) return JS_STEP_ABRUPT;
@@ -1524,6 +1619,7 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
 }
 
 #define CTRL_DEF(i) { sizeof(JSCtrlState), js_ctrl_step, js_ctrl_fini, (i), \
+                      .algorithm = "Streams §4.5 enqueue(chunk) / close() / error(e)", .steps = CS_STEPS, \
                       .catches_abrupt = 1, .visit = js_ctrl_visit }
 static const JSTrampStepDef js_ctrl_defs[3] = {
     CTRL_DEF(CTRL_ENQUEUE), CTRL_DEF(CTRL_CLOSE), CTRL_DEF(CTRL_ERROR),
@@ -1655,11 +1751,27 @@ static void aiter_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
 
 static AsyncIterData *aiter_of(JSValueConst v) { return JS_GetOpaque(v, g_aiter_class); }
 
-enum { AIS_START = 0, AIS_STEPS, AIS_READ, AIS_CANCEL, AIS_RELEASE, AIS_SETTLE, AIS_DONE };
+/* WHERE THIS MACHINE RESTS, AS §4.4 NUMBERS IT. `next()` and `return()` share it because the standard gives
+   them one shape: chain onto the ongoing promise, then read or cancel, then release, then settle. */
+#define AIS_STAGES(X) \
+    X(AIS_START, "Streams §4.4 next()/return(value) step 1 (the promise this call answers with, chained onto " \
+                 "the iterator's ongoing promise)") \
+    X(AIS_STEPS, "Streams §4.4 get the next iteration result step 1 / asynchronous iterator return step 1 " \
+                 "(which of read, cancel or release the reader's state calls for)") \
+    X(AIS_READ, "Streams §4.4 get the next iteration result step 2 (ReadableStreamDefaultReaderRead through " \
+                "the iterator's reader)") \
+    X(AIS_CANCEL, "Streams §4.4 asynchronous iterator return step 3 (ReadableStreamReaderGenericCancel with " \
+                  "the value)") \
+    X(AIS_RELEASE, "Streams §4.4 asynchronous iterator return step 5 / get the next iteration result's close " \
+                   "and error steps (ReadableStreamDefaultReaderRelease)") \
+    X(AIS_SETTLE, "Streams §4.4 (settling this call's promise with the iteration result, or rejecting it — " \
+                  "the resolving function's 27.2.1.3.2 step 8 `then` read is the page's)") \
+    X(AIS_DONE, "Streams §4.4 (the iteration step is complete)")
+enum { AIS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const AIS_STEPS_LABELS[] = { AIS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     JSStepHdr hdr;
-    uint8_t   stage;
     uint8_t   phase;
     uint8_t   reject;      /* which capability the settle stage calls */
     JSValue   iter;
@@ -1715,7 +1827,7 @@ static int js_aiter_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     JSValue out;
     int r;
 
-    if (s->stage == AIS_START) {
+    if (s->hdr.stage == AIS_START) {
         JSValue funcs[2];
 
         s->iter = s->promise = s->resolve = s->reject_fn = s->value = JS_UNDEFINED;
@@ -1770,22 +1882,22 @@ static int js_aiter_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
                                                                                   : JS_UNDEFINED)
                                                : JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 3));
         }
-        s->stage = AIS_STEPS;
+        s->hdr.stage = AIS_STEPS;
     }
 
     a = aiter_of(s->iter);
     DCHECK(a != NULL, "a §4.4 machine captured something that is not a ReadableStream async iterator");
 
-    if (s->stage == AIS_STEPS) {
+    if (s->hdr.stage == AIS_STEPS) {
         switch (op) {
         case AI_NEXT: case AI_RUN_NEXT:
             if (a->finished) {
                 JS_FreeValue(ctx, s->value);
                 s->value = read_result(ctx, JS_UNDEFINED, true);
                 if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
-                s->stage = AIS_SETTLE;
+                s->hdr.stage = AIS_SETTLE;
             } else {
-                s->stage = AIS_READ;
+                s->hdr.stage = AIS_READ;
             }
             break;
         case AI_RETURN: case AI_RUN_RETURN:
@@ -1793,10 +1905,10 @@ static int js_aiter_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
                 JSValue v = s->value;
                 s->value = read_result(ctx, v, true);   /* §3.7.11 wraps the argument, whatever it was */
                 if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
-                s->stage = AIS_SETTLE;
+                s->hdr.stage = AIS_SETTLE;
             } else {
                 a->finished = 1;
-                s->stage = a->prevent_cancel ? AIS_RELEASE : AIS_CANCEL;
+                s->hdr.stage = a->prevent_cancel ? AIS_RELEASE : AIS_CANCEL;
             }
             break;
         case AI_READ_OK: {
@@ -1804,9 +1916,9 @@ static int js_aiter_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
             JSValue done_v = JS_GetPropertyStr(ctx, s->value, "done");
             int done = JS_ToBool(ctx, done_v);
             JS_FreeValue(ctx, done_v);
-            if (!done) { s->stage = AIS_SETTLE; break; }
+            if (!done) { s->hdr.stage = AIS_SETTLE; break; }
             a->finished = 1;
-            s->stage = AIS_RELEASE;   /* §4.4's close steps release the reader before answering */
+            s->hdr.stage = AIS_RELEASE;   /* §4.4's close steps release the reader before answering */
             break;
         }
         default:
@@ -1815,19 +1927,19 @@ static int js_aiter_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
             if (op == AI_READ_ERR) {
                 a->finished = 1;
                 s->reject = 1;
-                s->stage = AIS_RELEASE;   /* §4.4's error steps release the reader before rejecting */
+                s->hdr.stage = AIS_RELEASE;   /* §4.4's error steps release the reader before rejecting */
             } else {
                 JSValue v = s->value;
                 s->reject = op == AI_CANCEL_ERR;
                 s->value = s->reject ? v : read_result(ctx, v, true);
                 if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
-                s->stage = AIS_SETTLE;
+                s->hdr.stage = AIS_SETTLE;
             }
             break;
         }
     }
 
-    if (s->stage == AIS_READ) {
+    if (s->hdr.stage == AIS_READ) {
         JSValueConst data[3];
         {
             JSValue fn = rs_fn(ctx, RSF_READ);
@@ -1842,7 +1954,7 @@ static int js_aiter_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         return r < 0 ? JS_STEP_ABRUPT : JS_STEP_DONE;
     }
 
-    if (s->stage == AIS_CANCEL) {
+    if (s->hdr.stage == AIS_CANCEL) {
         /* §4.4's return steps: cancel FIRST, then release, and the promise this member handed back settles
            with the SOURCE's cancel promise rather than ahead of it. */
         JSValueConst data[4];
@@ -1861,10 +1973,10 @@ static int js_aiter_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         if (r < 0) return JS_STEP_ABRUPT;
         /* the release still has to happen, and it happens now — the reactions above answer the page later */
         cb_result = JS_UNDEFINED;
-        s->stage = AIS_RELEASE;
+        s->hdr.stage = AIS_RELEASE;
     }
 
-    if (s->stage == AIS_RELEASE) {
+    if (s->hdr.stage == AIS_RELEASE) {
         int settle_after = op != AI_RETURN && op != AI_RUN_RETURN;
         {
             JSValue fn = rs_fn(ctx, RSF_RELEASE);
@@ -1886,10 +1998,10 @@ static int js_aiter_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         } else if (!s->reject) {
             /* AI_READ_OK on a done result: the result object is already { undefined, true } */
         }
-        s->stage = AIS_SETTLE;
+        s->hdr.stage = AIS_SETTLE;
     }
 
-    DCHECK(s->stage == AIS_SETTLE, "a §4.4 machine resumed in a stage it never parks in");
+    DCHECK(s->hdr.stage == AIS_SETTLE, "a §4.4 machine resumed in a stage it never parks in");
     arg = s->value;
     r = aiter_call_run(ctx, s, s->reject ? s->reject_fn : s->resolve, JS_UNDEFINED, 1, &arg,
                        cb_result, &out, out_cb, out_argc);
@@ -1900,7 +2012,9 @@ static int js_aiter_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
 }
 
 #define AITER_DEF(i) { sizeof(JSAiterState), js_aiter_step, js_aiter_fini, (i), \
-                       .catches_abrupt = 1, .visit = js_aiter_visit }
+                       .catches_abrupt = 1, .visit = js_aiter_visit, \
+                       .algorithm = "Streams §4.4 the ReadableStream asynchronous iterator's next and return", \
+                       .steps = AIS_STEPS_LABELS }
 static const JSTrampStepDef js_aiter_defs[AI_N] = {
     AITER_DEF(AI_NEXT), AITER_DEF(AI_RETURN), AITER_DEF(AI_RUN_NEXT), AITER_DEF(AI_RUN_RETURN),
     AITER_DEF(AI_READ_OK), AITER_DEF(AI_READ_ERR), AITER_DEF(AI_CANCEL_OK), AITER_DEF(AI_CANCEL_ERR),
@@ -1913,8 +2027,17 @@ static const IdlDictMember ITERATOR_OPTIONS[] = {
     { "preventCancel", IDL_BOOLEAN },
 };
 
+/* WHERE THIS MACHINE RESTS. §4.4's initialization steps are three, and the first of them — acquiring the
+   reader — is a call. */
+#define VAL_STAGES(X) \
+    X(VAL_OPTIONS = IDL_STEP_FIRST, \
+      "Streams §4.4 values(options) (the ReadableStreamIteratorOptions the declaration has converted)") \
+    X(VAL_READER, "Streams §4.4 ReadableStream asynchronous iterator initialization steps 1-3 " \
+                  "(AcquireReadableStreamDefaultReader, then the iterator over it)")
+enum { VAL_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const VAL_STEPS[] = { VAL_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
 typedef struct {
-    uint8_t stage;
     uint8_t phase;
     uint8_t prevent_cancel;
     JSValue cb[3];
@@ -1942,11 +2065,11 @@ static int js_values_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     JSValue reader, obj;
     int r;
 
-    if (s->stage == 0) {
+    if (hdr->stage == VAL_OPTIONS) {
         int k;
         for (k = 0; k < 3; k++) s->cb[k] = JS_UNDEFINED;
         s->prevent_cancel = argc > 0 && idl_dict_bool(ctx, argv[0], "preventCancel");
-        s->stage = 1;
+        hdr->stage = VAL_READER;
     }
     {
         JSValue fn = rs_fn(ctx, RSF_GET_READER);
@@ -1976,7 +2099,8 @@ static int js_values_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
 }
 
 static const IdlStepDecl js_values_decl = {
-    js_values_step, sizeof(JSValuesState), js_values_visit, js_values_release
+    js_values_step, sizeof(JSValuesState), js_values_visit, js_values_release,
+    "Streams §4.4 values(options) and the asynchronous iterator initialization steps", VAL_STEPS
 };
 
 /* ---- §4.2's TEE -----------------------------------------------------------------------------------------------
@@ -2071,12 +2195,27 @@ static TeeData *tee_of(JSValueConst v)
     return t;
 }
 
-enum { TS_START = 0, TS_READ, TS_B0, TS_B1, TS_RESOLVE_CANCEL, TS_CANCEL_SOURCE, TS_CANCEL_ADOPT };
+/* WHERE THIS MACHINE RESTS, AS §4.9.7 NUMBERS IT. One machine over ReadableStreamDefaultTee's pullAlgorithm,
+   its two cancelAlgorithms and the read reactions they share. */
+#define TS_STAGES(X) \
+    X(TS_START, "Streams §4.9.7 ReadableStreamDefaultTee (which of pullAlgorithm, cancel1Algorithm, " \
+                "cancel2Algorithm or a read reaction this entry is)") \
+    X(TS_READ, "Streams §4.9.7 ReadableStreamDefaultTee's pullAlgorithm step 3 (one read through the shared " \
+               "reader)") \
+    X(TS_B0, "Streams §4.9.7 ReadableStreamDefaultTee's chunkSteps step 5 (enqueue the chunk into branch 1)") \
+    X(TS_B1, "Streams §4.9.7 ReadableStreamDefaultTee's chunkSteps step 6 (enqueue it into branch 2)") \
+    X(TS_RESOLVE_CANCEL, "Streams §4.9.7 ReadableStreamDefaultTee's cancelAlgorithm step 4.2 (resolve " \
+                         "cancelPromise with the result of cancelling the source)") \
+    X(TS_CANCEL_SOURCE, "Streams §4.9.7 ReadableStreamDefaultTee's cancelAlgorithm step 4.1 " \
+                        "(ReadableStreamCancel on the source, once BOTH branches have cancelled)") \
+    X(TS_CANCEL_ADOPT, "Streams §4.9.7 ReadableStreamDefaultTee's cancelAlgorithm step 5 (this branch's " \
+                       "answer is cancelPromise)")
+enum { TS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const TS_STEPS[] = { TS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 enum { CF_ENQUEUE = 0, CF_CLOSE, CF_ERROR };
 
 typedef struct {
     JSStepHdr hdr;
-    uint8_t   stage;
     uint8_t   phase;
     uint8_t   done;      /* what the read answered */
     JSValue   tee;
@@ -2143,7 +2282,7 @@ static int js_tee_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
     JSValue out;
     int r;
 
-    if (s->stage == TS_START) {
+    if (s->hdr.stage == TS_START) {
         int k;
         s->tee = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 0));
         s->value = s->result = JS_UNDEFINED;
@@ -2162,7 +2301,7 @@ static int js_tee_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
                 return JS_STEP_DONE;
             }
             t->reading = 1;
-            s->stage = TS_READ;
+            s->hdr.stage = TS_READ;
             break;
         case TEE_CANCEL1: case TEE_CANCEL2: {
             int i = op == TEE_CANCEL1 ? 0 : 1;
@@ -2177,7 +2316,7 @@ static int js_tee_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
             if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
             JS_SetPropertyUint32(ctx, s->value, 0, JS_DupValue(ctx, t->reason[0]));
             JS_SetPropertyUint32(ctx, s->value, 1, JS_DupValue(ctx, t->reason[1]));
-            s->stage = TS_CANCEL_SOURCE;
+            s->hdr.stage = TS_CANCEL_SOURCE;
             break;
         }
         case TEE_READ_OK: {
@@ -2192,7 +2331,7 @@ static int js_tee_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
                 s->value = chunk;
                 t->read_again = 0;
             }
-            s->stage = TS_B0;
+            s->hdr.stage = TS_B0;
             break;
         }
         default:
@@ -2205,7 +2344,7 @@ static int js_tee_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
             }
             s->value = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
             s->done = 2;   /* the closed-rejection arm: both branches are ERRORED with the reason */
-            s->stage = TS_B0;
+            s->hdr.stage = TS_B0;
             break;
         }
     }
@@ -2214,7 +2353,7 @@ static int js_tee_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
     DCHECK(t != NULL, "a tee machine's record stopped being one");
 
 again:
-    if (s->stage == TS_READ) {
+    if (s->hdr.stage == TS_READ) {
         JSValueConst data[1];
         {
             JSValue fn = rs_fn(ctx, RSF_READ);
@@ -2230,10 +2369,10 @@ again:
         return r < 0 ? JS_STEP_ABRUPT : JS_STEP_DONE;
     }
 
-    if (s->stage == TS_B0 || s->stage == TS_B1) {
-        int i = s->stage == TS_B1;
+    if (s->hdr.stage == TS_B0 || s->hdr.stage == TS_B1) {
+        int i = s->hdr.stage == TS_B1;
         for (; i < 2; i++) {
-            s->stage = i ? TS_B1 : TS_B0;
+            s->hdr.stage = i ? TS_B1 : TS_B0;
             /* §4.2: a branch the page has already cancelled is not fed, closed or errored. */
             if (s->done != 2 && t->canceled[i]) continue;
             /* §4.9.7 step 13.2: BRANCH 2 gets a STRUCTURED CLONE of the chunk when the flag is set, and a
@@ -2247,7 +2386,7 @@ again:
                     s->value = e;
                     s->done = 2;          /* both branches error, with the clone's own reason */
                     i = 0;                /* restart the pair: branch 1 has not been errored yet */
-                    s->stage = TS_B0;
+                    s->hdr.stage = TS_B0;
                     continue;
                 }
                 JS_FreeValue(ctx, s->value);
@@ -2267,7 +2406,7 @@ again:
                    as a recursive call, so the machine's own stages stay flat */
                 t->read_again = 0;
                 t->reading = 1;
-                s->stage = TS_READ;
+                s->hdr.stage = TS_READ;
                 cb_result = JS_UNDEFINED;
                 goto again;   /* a LOOP, never a call: this machine may not recurse into itself */
             }
@@ -2276,10 +2415,10 @@ again:
         if (s->done == 1) t->reading = 0;
         /* CLOSE and ERROR both settle the tee's own cancel promise, so a branch cancelled afterwards is not
            left waiting on a source that is already finished. */
-        s->stage = TS_RESOLVE_CANCEL;
+        s->hdr.stage = TS_RESOLVE_CANCEL;
     }
 
-    if (s->stage == TS_RESOLVE_CANCEL) {
+    if (s->hdr.stage == TS_RESOLVE_CANCEL) {
         JSValueConst undef = JS_UNDEFINED;
         if (t->canceled[0] && t->canceled[1]) { JS_FreeValue(ctx, cb_result); return JS_STEP_DONE; }
         r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), t->cancel_funcs[0], JS_UNDEFINED, 1, &undef, cb_result, &out,
@@ -2290,7 +2429,7 @@ again:
         return JS_STEP_DONE;
     }
 
-    if (s->stage == TS_CANCEL_SOURCE) {
+    if (s->hdr.stage == TS_CANCEL_SOURCE) {
         JSValueConst arg = s->value;
         {
             JSValue fn = rs_fn(ctx, RSF_CANCEL);
@@ -2306,10 +2445,10 @@ again:
         /* TWO CALLS, TWO STAGES. One `phase` byte serves one call at a time: writing the two in a row under a
            single byte made the resume re-enter the FIRST call with the SECOND's phase, which issued the second
            call again forever — a livelock the corpus found as a killed process, not as a failure. */
-        s->stage = TS_CANCEL_ADOPT;
+        s->hdr.stage = TS_CANCEL_ADOPT;
     }
 
-    DCHECK(s->stage == TS_CANCEL_ADOPT, "a tee machine resumed in a stage it never parks in");
+    DCHECK(s->hdr.stage == TS_CANCEL_ADOPT, "a tee machine resumed in a stage it never parks in");
     {
         /* §4.2 resolves cancelPromise WITH the source's cancel result, so the branches' cancel promises adopt
            it rather than settling ahead of it. */
@@ -2324,6 +2463,8 @@ again:
 }
 
 #define TEE_DEF(i) { sizeof(JSTeeState), js_tee_step, js_tee_fini, (i), \
+                     .algorithm = "Streams §4.9.7 ReadableStreamDefaultTee's pull, cancel and read reactions", \
+                     .steps = TS_STEPS, \
                      .catches_abrupt = 1, .visit = js_tee_visit }
 static const JSTrampStepDef js_tee_defs[TEE_N] = {
     TEE_DEF(TEE_PULL), TEE_DEF(TEE_CANCEL1), TEE_DEF(TEE_CANCEL2),
@@ -2380,6 +2521,20 @@ static int tee_branch(JSContext *ctx, TeeData *t, JSValueConst tee_v, int i)
    rather than a magic because an IdlStepBody is not handed one, and it is one body rather than two machines
    because the two differ by a single step inside one algorithm. It is read only at stage 0, where the record
    is built, so a resume never re-decides it. */
+/* WHERE THIS MACHINE RESTS. §4.2's `tee()` is one step over §4.9.7's ReadableStreamDefaultTee, whose first
+   step is acquiring the reader — a call — and whose last is the start promise's two reactions. */
+#define TC_STAGES(X) \
+    X(TC_BRAND = IDL_STEP_FIRST, \
+      "Streams §4.9.7 ReadableStreamDefaultTee steps 1-2 (the stream, and the record the five algorithms " \
+      "share)") \
+    X(TC_READER, "Streams §4.9.7 ReadableStreamDefaultTee step 3 (AcquireReadableStreamDefaultReader)") \
+    X(TC_BUILD, "Streams §4.9.7 ReadableStreamDefaultTee steps 4-17 (the two branches, built with " \
+                "CreateReadableStream rather than with the page's `ReadableStream`)") \
+    X(TC_STARTED, "Streams §4.9.7 ReadableStreamDefaultTee step 18 (the reader's `closed` reactions and the " \
+                  "two branches, returned as a pair)")
+enum { TC_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const TC_STEPS[] = { TC_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
 static int tee_call_run(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc, bool clone2)
 {
@@ -2389,17 +2544,17 @@ static int tee_call_run(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
     int r, i;
 
     (void)argc; (void)argv;
-    if (s->w.stage == 0) {
+    if (hdr->stage == TC_BRAND) {
         stream_work_start(&s->w);
         s->tee = s->reader = JS_UNDEFINED;
-        s->w.stage = 1;
+        hdr->stage = TC_READER;
         if (!stream_of(hdr->this_val)) {
             JS_FreeValue(ctx, cb_result);
             JS_ThrowTypeError(ctx, "not a ReadableStream");
             return -1;
         }
     }
-    if (s->w.stage == 1) {
+    if (hdr->stage == TC_READER) {
         {
             JSValue fn = rs_fn(ctx, RSF_GET_READER);
             r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), fn, hdr->this_val, 0, NULL,
@@ -2442,14 +2597,14 @@ static int tee_call_run(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
         /* §4.5's set-up: neither branch is STARTED until a microtask has run, so a pull cannot happen inside
            tee() itself. One resolved promise serves both, which is the same tick each would have had. */
         s->w.value = JS_UNDEFINED;
-        s->w.stage = 2;
+        hdr->stage = TC_BUILD;
     }
-    if (s->w.stage == 2) {
+    if (hdr->stage == TC_BUILD) {
         r = stream_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
-        s->w.stage = 3;
+        hdr->stage = TC_STARTED;
     }
     JS_FreeValue(ctx, cb_result);
     t = tee_of(s->tee);
@@ -2477,12 +2632,14 @@ static int js_tee_clone_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
 }
 
 static const IdlStepDecl js_tee_call_decl = {
-    js_tee_call_step, sizeof(JSTeeCallState), js_tee_call_visit, js_tee_call_release
+    js_tee_call_step, sizeof(JSTeeCallState), js_tee_call_visit, js_tee_call_release,
+    "Streams §4.2 tee(), through §4.9.7 ReadableStreamDefaultTee", TC_STEPS
 };
 /* THE SAME STATE AND THE SAME VISIT — one struct, one ownership contract, which is what the step-visits gate
    requires and what makes these two declarations of one algorithm rather than two algorithms. */
 static const IdlStepDecl js_tee_clone_decl = {
-    js_tee_clone_step, sizeof(JSTeeCallState), js_tee_call_visit, js_tee_call_release
+    js_tee_clone_step, sizeof(JSTeeCallState), js_tee_call_visit, js_tee_call_release,
+    "Fetch §5.2 clone a body, through §4.9.7 ReadableStreamDefaultTee with cloneForBranch2 set", TC_STEPS
 };
 
 /* ---- §4.2's `from` --------------------------------------------------------------------------------------------
@@ -2500,6 +2657,23 @@ static const IdlStepDecl js_tee_clone_decl = {
  * THE HIGH-WATER MARK IS 0. §4.2 says so, and it is the difference between pulling one value ahead of the
  * reader and pulling only when asked — which `from(array)` with a push during reading observes directly. */
 enum { FROM_PULL = 0, FROM_CANCEL, FROM_NEXT_OK, FROM_RET_OK, FROM_N };
+
+/* WHERE THIS MACHINE RESTS, AS §4.9.6 NUMBERS IT. ReadableStreamFromIterable's pullAlgorithm is one
+   `nextMethod` call and its cancelAlgorithm is one `return` call, and everything after each is a reaction. */
+#define FS_STAGES(X) \
+    X(FS_START, "Streams §4.9.6 ReadableStreamFromIterable's pullAlgorithm step 1 / cancelAlgorithm steps " \
+                "1-4 (which algorithm this entry is, and the `return` method it must look for)") \
+    X(FS_CALL, "Streams §4.9.6 pullAlgorithm step 2 / cancelAlgorithm step 5 (calling the iterator's `next` " \
+               "or its `return`)") \
+    X(FS_RESOLVE, "Streams §4.9.6 pullAlgorithm step 3 (PromiseResolve over what `next` answered)") \
+    X(FS_REJECT, "Streams §4.9.6 pullAlgorithm step 3's abrupt completion (a rejected promise for what the " \
+                 "call threw)") \
+    X(FS_REACT, "Streams §4.9.6 pullAlgorithm step 4 / cancelAlgorithm step 7 (reacting to that promise)") \
+    X(FS_READ_DONE, "Streams §4.9.6 pullAlgorithm step 4.2 (Get(iterResult, \"done\"))") \
+    X(FS_READ_VALUE, "Streams §4.9.6 pullAlgorithm step 4.4 (Get(iterResult, \"value\"))") \
+    X(FS_FEED, "Streams §4.9.6 pullAlgorithm steps 4.3-4.5 (close the controller, or enqueue the value)")
+enum { FS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const FS_STEPS[] = { FS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     JSValue iterator;
@@ -2529,11 +2703,9 @@ static void from_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func
     JS_MarkValue(rt, f->controller, mark_func);
 }
 
-enum { FS_START = 0, FS_CALL, FS_RESOLVE, FS_REJECT, FS_REACT, FS_READ_DONE, FS_READ_VALUE, FS_FEED };
 
 typedef struct {
     JSStepHdr hdr;
-    uint8_t   stage;
     uint8_t   phase;
     uint8_t   done;
     JSValue   from;
@@ -2578,7 +2750,7 @@ static int js_from_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
     JSAtom atom;
     int r;
 
-    if (s->stage == FS_START) {
+    if (s->hdr.stage == FS_START) {
         int k;
         s->from = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 0));
         s->value = s->result = s->chain = JS_UNDEFINED;
@@ -2594,17 +2766,17 @@ static int js_from_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                 return JS_STEP_ABRUPT;
             }
             if (op == FROM_RET_OK) return JS_STEP_DONE;   /* the value is discarded: §4.2 answers undefined */
-            s->stage = FS_READ_DONE;
+            s->hdr.stage = FS_READ_DONE;
         } else {
             s->value = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
-            s->stage = FS_CALL;
+            s->hdr.stage = FS_CALL;
         }
     }
 
     f = JS_GetOpaque(s->from, g_from_class);
     DCHECK(f != NULL, "a §4.2 `from` machine captured something that is not its record");
 
-    if (s->stage == FS_CALL) {
+    if (s->hdr.stage == FS_CALL) {
         if (op == FROM_CANCEL) {
             /* §4.2's cancel algorithm: GetMethod(iterator, "return"), and an iterator that has none is simply
                finished — the promise resolves with undefined and nothing is called. */
@@ -2625,7 +2797,7 @@ static int js_from_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                     JS_ThrowTypeError(ctx, "an iterator's `return` is not callable");
                     JS_FreeValue(ctx, s->value);
                     s->value = JS_GetException(ctx);
-                    s->stage = FS_REJECT;
+                    s->hdr.stage = FS_REJECT;
                     goto settle_promise;
                 }
                 JS_FreeValue(ctx, s->result);
@@ -2649,17 +2821,17 @@ static int js_from_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                a rejecting one takes. */
             JS_FreeValue(ctx, s->value);
             s->value = JS_GetException(ctx);
-            s->stage = FS_REJECT;
+            s->hdr.stage = FS_REJECT;
         } else {
             JS_FreeValue(ctx, s->value);
             s->value = out;
-            s->stage = FS_RESOLVE;
+            s->hdr.stage = FS_RESOLVE;
         }
         cb_result = JS_UNDEFINED;
     }
 
 settle_promise:
-    if (s->stage == FS_RESOLVE || s->stage == FS_REJECT) {
+    if (s->hdr.stage == FS_RESOLVE || s->hdr.stage == FS_REJECT) {
         /* §4.2 reacts to PromiseResolve(nextResult) — so what `next` answered goes through a capability
            FIRST, whatever it is. A sync iterator's plain `{value, done}` is not a promise, and reacting to it
            directly reads reaction lists off an object that has none. */
@@ -2671,8 +2843,8 @@ settle_promise:
             JS_FreeValue(ctx, s->result);
             s->result = p;
             JS_FreeValue(ctx, s->chain);
-            s->chain = funcs[s->stage == FS_REJECT];
-            JS_FreeValue(ctx, funcs[s->stage == FS_REJECT ? 0 : 1]);
+            s->chain = funcs[s->hdr.stage == FS_REJECT];
+            JS_FreeValue(ctx, funcs[s->hdr.stage == FS_REJECT ? 0 : 1]);
         }
         r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), s->chain, JS_UNDEFINED, 1, &arg, cb_result, &out,
                           out_cb, out_argc);
@@ -2682,10 +2854,10 @@ settle_promise:
         JS_FreeValue(ctx, s->chain);
         s->chain = JS_UNDEFINED;
         cb_result = JS_UNDEFINED;
-        s->stage = FS_REACT;
+        s->hdr.stage = FS_REACT;
     }
 
-    if (s->stage == FS_REACT) {
+    if (s->hdr.stage == FS_REACT) {
         /* The reaction's OWN capability is what the algorithm answers, so a later pull chains on THIS rather
            than on what `next` happened to return. A rejected one carries the rejection straight through: with
            no handler on that side it reaches §4.5's pull reaction, which errors the stream. */
@@ -2700,7 +2872,7 @@ settle_promise:
         return JS_STEP_DONE;
     }
 
-    if (s->stage == FS_READ_DONE) {
+    if (s->hdr.stage == FS_READ_DONE) {
         atom = JS_NewAtom(ctx, "done");
         r = step_getprop_run(ctx, &s->hdr, s->value, atom, cb_result, &out, out_cb, out_argc);
         JS_FreeAtom(ctx, atom);
@@ -2709,9 +2881,9 @@ settle_promise:
         cb_result = JS_UNDEFINED;
         s->done = (uint8_t)JS_ToBool(ctx, out);
         JS_FreeValue(ctx, out);
-        s->stage = s->done ? FS_FEED : FS_READ_VALUE;
+        s->hdr.stage = s->done ? FS_FEED : FS_READ_VALUE;
     }
-    if (s->stage == FS_READ_VALUE) {
+    if (s->hdr.stage == FS_READ_VALUE) {
         JSValue v;
         atom = JS_NewAtom(ctx, "value");
         r = step_getprop_run(ctx, &s->hdr, s->value, atom, cb_result, &v, out_cb, out_argc);
@@ -2721,10 +2893,10 @@ settle_promise:
         cb_result = JS_UNDEFINED;
         JS_FreeValue(ctx, s->value);
         s->value = v;
-        s->stage = FS_FEED;
+        s->hdr.stage = FS_FEED;
     }
 
-    DCHECK(s->stage == FS_FEED, "a §4.2 `from` machine resumed in a stage it never parks in");
+    DCHECK(s->hdr.stage == FS_FEED, "a §4.2 `from` machine resumed in a stage it never parks in");
     {
         JSValueConst arg = s->value;
         {
@@ -2741,7 +2913,9 @@ settle_promise:
 }
 
 #define FROM_DEF(i) { sizeof(JSFromState), js_from_step, js_from_fini, (i), \
-                      .catches_abrupt = 1, .visit = js_from_visit }
+                      .catches_abrupt = 1, .visit = js_from_visit, \
+                      .algorithm = "Streams §4.9.6 ReadableStreamFromIterable's pull and cancel algorithms", \
+                      .steps = FS_STEPS }
 static const JSTrampStepDef js_from_defs[FROM_N] = {
     FROM_DEF(FROM_PULL), FROM_DEF(FROM_CANCEL), FROM_DEF(FROM_NEXT_OK), FROM_DEF(FROM_RET_OK),
 };
@@ -2749,7 +2923,23 @@ static const JSTrampStepDef js_from_defs[FROM_N] = {
 
 /* `static ReadableStream from(any asyncIterable)`. A MACHINE for GetIterator(obj, ASYNC): three of its four
    steps are the page's code. */
-enum { FC_START = 0, FC_ASYNC_CALL, FC_SYNC_GET, FC_SYNC_CALL, FC_NEXT, FC_BUILD, FC_STARTED };
+/* WHERE THIS MACHINE RESTS. §4.2's `from` is one step over §4.9.6's ReadableStreamFromIterable, whose first
+   step is GetIterator(asyncIterable, ASYNC) — and three of that operation's four steps are the page's code. */
+#define FC_STAGES(X) \
+    X(FC_START = IDL_STEP_FIRST, \
+      "ECMA-262 7.4.2 GetIterator step 1.a (GetMethod(obj, @@asyncIterator))") \
+    X(FC_ASYNC_CALL, "ECMA-262 7.4.2 GetIterator step 3 (Call(method, obj) for the async iterator)") \
+    X(FC_SYNC_GET, "ECMA-262 7.4.2 GetIterator step 1.b (GetMethod(obj, @@iterator), when there is no async " \
+                   "one)") \
+    X(FC_SYNC_CALL, "ECMA-262 7.4.2 GetIterator step 3 (Call(method, obj) for the sync iterator, then " \
+                    "27.1.4.1 CreateAsyncFromSyncIterator over it)") \
+    X(FC_NEXT, "ECMA-262 7.4.3 GetIteratorDirect step 1 (Get(iterator, \"next\"))") \
+    X(FC_BUILD, "Streams §4.9.6 ReadableStreamFromIterable steps 2-4 (the stream, with the iterator's `next` " \
+                "and `return` as its pull and cancel algorithms)") \
+    X(FC_STARTED, "Streams §4.9.6 ReadableStreamFromIterable step 4's startAlgorithm (the start promise's " \
+                  "reactions, attached before the stream is answered)")
+enum { FC_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const FC_STEPS[] = { FC_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     StreamWork w;
@@ -2792,7 +2982,7 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     JSValue out;
     int r;
 
-    if (s->w.stage == FC_START) {
+    if (hdr->stage == FC_START) {
         stream_work_start(&s->w);
         s->method = s->iterator = s->next_fn = s->stream = s->from = JS_UNDEFINED;
         /* AN OBJECT, not merely something iterable. A STRING has @@iterator and would give a stream of its
@@ -2807,13 +2997,13 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         /* 7.4.2 GetIterator with the ASYNC hint: @@asyncIterator first, and only a NULLISH one falls back. */
         r = step_getprop_run(ctx, hdr, src, JS_WellKnownSymbolAtom(JS_WKS_ASYNC_ITERATOR), cb_result,
                              &s->method, out_cb, out_argc);
-        if (r > 0) { s->w.stage = FC_START; return r; }
+        if (r > 0) { hdr->stage = FC_START; return r; }
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
         s->is_sync = JS_IsUndefined(s->method) || JS_IsNull(s->method);
-        s->w.stage = s->is_sync ? FC_SYNC_GET : FC_ASYNC_CALL;
+        hdr->stage = s->is_sync ? FC_SYNC_GET : FC_ASYNC_CALL;
     }
-    if (s->w.stage == FC_SYNC_GET) {
+    if (hdr->stage == FC_SYNC_GET) {
         JS_FreeValue(ctx, s->method);
         s->method = JS_UNDEFINED;
         r = step_getprop_run(ctx, hdr, src, JS_WellKnownSymbolAtom(JS_WKS_ITERATOR), cb_result,
@@ -2825,9 +3015,9 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
             JS_ThrowTypeError(ctx, "ReadableStream.from was given something that is not iterable");
             return -1;
         }
-        s->w.stage = FC_SYNC_CALL;
+        hdr->stage = FC_SYNC_CALL;
     }
-    if (s->w.stage == FC_ASYNC_CALL || s->w.stage == FC_SYNC_CALL) {
+    if (hdr->stage == FC_ASYNC_CALL || hdr->stage == FC_SYNC_CALL) {
         if (!JS_IsFunction(ctx, s->method)) {
             JS_FreeValue(ctx, cb_result);
             JS_ThrowTypeError(ctx, "an iterable's iterator method is not callable");
@@ -2842,9 +3032,9 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
             JS_ThrowTypeError(ctx, "an iterator method answered with something that is not an object");
             return -1;
         }
-        s->w.stage = FC_NEXT;
+        hdr->stage = FC_NEXT;
     }
-    if (s->w.stage == FC_NEXT) {
+    if (hdr->stage == FC_NEXT) {
         JSAtom atom = JS_NewAtom(ctx, "next");
         r = step_getprop_run(ctx, hdr, s->iterator, atom, cb_result, &s->next_fn, out_cb, out_argc);
         JS_FreeAtom(ctx, atom);
@@ -2861,9 +3051,9 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
             s->iterator = wrapped;
             s->next_fn = nextw;
         }
-        s->w.stage = FC_BUILD;
+        hdr->stage = FC_BUILD;
     }
-    if (s->w.stage == FC_BUILD) {
+    if (hdr->stage == FC_BUILD) {
         JSValueConst data[1];
         ControllerData *c;
         StreamData *d;
@@ -2894,9 +3084,9 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         c->cancel_fn = JS_NewStepClosure(ctx, g_from_stepids[FROM_CANCEL], 1, 1, data);
         if (JS_IsException(c->cancel_fn)) { c->cancel_fn = JS_UNDEFINED; return -1; }
         s->w.value = JS_UNDEFINED;
-        s->w.stage = FC_STARTED;
+        hdr->stage = FC_STARTED;
     }
-    if (s->w.stage == FC_STARTED) {
+    if (hdr->stage == FC_STARTED) {
         r = stream_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return -1;
@@ -2911,7 +3101,8 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
 }
 
 static const IdlStepDecl js_from_call_decl = {
-    js_from_call_step, sizeof(JSFromCallState), js_from_call_visit, js_from_call_release
+    js_from_call_step, sizeof(JSFromCallState), js_from_call_visit, js_from_call_release,
+    "Streams §4.2 from(asyncIterable), through §4.9.6 ReadableStreamFromIterable", FC_STEPS
 };
 
 /* ---- FETCH §5.2's "FULLY READ" ---------------------------------------------------------------------------
@@ -2992,11 +3183,20 @@ static int drain_append(JSContext *ctx, DrainData *dr, JSValueConst chunk)
     return 0;
 }
 
-enum { DS_START = 0, DS_READ, DS_RELEASE, DS_SETTLE };
+/* WHERE THIS MACHINE RESTS. It is Fetch §5.2's "fully read a body" step 5 — "read all bytes from reader" —
+   which the Streams standard states as a chain of reads, so each entry is one link of that chain. */
+#define DS_STAGES(X) \
+    X(DS_START, "Fetch §5.2 fully read a body step 5 → Streams read all bytes (what the previous read " \
+                "answered: another chunk, the close, or an error)") \
+    X(DS_READ, "Fetch §5.2 fully read a body step 5 (the next read through the reader)") \
+    X(DS_RELEASE, "Fetch §5.2 fully read a body step 5 (releasing the reader once the body is whole)") \
+    X(DS_SETTLE, "Fetch §5.2 consume body step 4 (successSteps: convertBytesToJSValue over the collected " \
+                 "bytes, then resolve the promise)")
+enum { DS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DS_STEPS[] = { DS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     JSStepHdr hdr;
-    uint8_t   stage;
     uint8_t   phase;
     uint8_t   reject;
     JSValue   drain;
@@ -3039,7 +3239,7 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     JSValue out;
     int r;
 
-    if (s->stage == DS_START) {
+    if (s->hdr.stage == DS_START) {
         int k;
         s->drain = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 0));
         s->value = JS_UNDEFINED;
@@ -3053,13 +3253,13 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
                released with it — there is nothing left to read. */
             s->reject = 1;
             s->value = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
-            s->stage = DS_RELEASE;
+            s->hdr.stage = DS_RELEASE;
         } else {
             JSValue done_v = JS_GetPropertyStr(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED, "done");
             int done = JS_ToBool(ctx, done_v);
             JS_FreeValue(ctx, done_v);
             if (done) {
-                s->stage = DS_RELEASE;
+                s->hdr.stage = DS_RELEASE;
             } else {
                 JSValue chunk = JS_GetPropertyStr(ctx, s->hdr.argv[0], "value");
                 int bad = drain_append(ctx, dr, chunk) < 0;
@@ -3067,9 +3267,9 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
                 if (bad) {
                     s->reject = 1;
                     s->value = JS_GetException(ctx);
-                    s->stage = DS_RELEASE;
+                    s->hdr.stage = DS_RELEASE;
                 } else {
-                    s->stage = DS_READ;
+                    s->hdr.stage = DS_READ;
                 }
             }
         }
@@ -3078,7 +3278,7 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     dr = JS_GetOpaque(s->drain, g_drain_class);
     DCHECK(dr != NULL, "a drain machine's record stopped being one");
 
-    if (s->stage == DS_READ) {
+    if (s->hdr.stage == DS_READ) {
         {
             JSValue fn = rs_fn(ctx, RSF_READ);
             r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, dr->reader, 0, NULL, cb_result, &out,
@@ -3092,7 +3292,7 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         return r < 0 ? JS_STEP_ABRUPT : JS_STEP_DONE;
     }
 
-    if (s->stage == DS_RELEASE) {
+    if (s->hdr.stage == DS_RELEASE) {
         {
             JSValue fn = rs_fn(ctx, RSF_RELEASE);
             r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, dr->reader, 0, NULL, cb_result, &out,
@@ -3116,10 +3316,10 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
                 s->reject = 1;
             }
         }
-        s->stage = DS_SETTLE;
+        s->hdr.stage = DS_SETTLE;
     }
 
-    DCHECK(s->stage == DS_SETTLE, "a drain machine resumed in a stage it never parks in");
+    DCHECK(s->hdr.stage == DS_SETTLE, "a drain machine resumed in a stage it never parks in");
     {
         JSValueConst arg = s->value;
         r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), dr->funcs[s->reject], JS_UNDEFINED, 1, &arg, cb_result, &out,
@@ -3132,7 +3332,9 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
 }
 
 #define DRAIN_DEF(i) { sizeof(JSDrainState), js_drain_step, js_drain_fini, (i), \
-                       .catches_abrupt = 1, .visit = js_drain_visit }
+                       .catches_abrupt = 1, .visit = js_drain_visit, \
+                       .algorithm = "Fetch §5.2 fully read a body step 5 (read all bytes from a reader)", \
+                       .steps = DS_STEPS }
 static const JSTrampStepDef js_drain_defs[DRAIN_N] = { DRAIN_DEF(DRAIN_OK), DRAIN_DEF(DRAIN_ERR) };
 #undef DRAIN_DEF
 
@@ -3279,7 +3481,30 @@ JSValue readable_reader_closed(JSContext *ctx, JSValueConst reader)
  *
  * A `start` that THROWS propagates out of the constructor, which is why this machine does not declare
  * catches_abrupt: §4.9.4 invokes it directly rather than through PromiseCall, unlike `pull`. */
-enum { RSC_START = 0, RSC_PROTO, RSC_READ, RSC_TYPE, RSC_BUILD, RSC_CALL, RSC_RESOLVE, RSC_THEN };
+/* WHERE THIS MACHINE RESTS, AS §4.2 NUMBERS IT. The constructor is nine steps and four of them can run the
+   page's code: Web IDL §3.7.1's `prototype` read, each UnderlyingSource member read, `start` itself, and the
+   PromiseResolve over what it returned. */
+#define RSC_STAGES(X) \
+    X(RSC_START = IDL_STEP_FIRST, \
+      "Streams §4.2 new ReadableStream(underlyingSource, strategy) step 1 (the source is null when missing; " \
+      "Web IDL §3.7.1's `new` requirement precedes it)") \
+    X(RSC_PROTO, "Web IDL §3.7.1 (Get(newTarget, \"prototype\") — what makes " \
+                 "`class S extends ReadableStream {}` produce an S)") \
+    X(RSC_READ, "Streams §4.2 step 2 (converting underlyingSource to an UnderlyingSource: one [[Get]] per " \
+                "member, in the order Web IDL §3.2.18 reads them)") \
+    X(RSC_TYPE, "Streams §4.2 steps 4-5 (underlyingSourceDict[\"type\"]: \"bytes\" picks §4.6's byte " \
+                "controller and anything else is a TypeError)") \
+    X(RSC_BUILD, "Streams §4.2 steps 3 and 6-7 (InitializeReadableStream, ExtractHighWaterMark, " \
+                 "ExtractSizeAlgorithm, and §4.9.4's SetUpReadableStreamDefaultControllerFromUnderlyingSource " \
+                 "up to its start algorithm)") \
+    X(RSC_CALL, "Streams §4.9.4 SetUpReadableStreamDefaultController step 9 (the start algorithm — the " \
+                "source's own `start`, invoked with the controller)") \
+    X(RSC_RESOLVE, "Streams §4.9.4 SetUpReadableStreamDefaultController step 10 (a promise resolved with " \
+                   "startResult — 27.2.1.3.2 step 8's `then` read is the page's)") \
+    X(RSC_THEN, "Streams §4.9.4 SetUpReadableStreamDefaultController steps 11-12 (the start promise's two " \
+                "reactions are attached and the stream is the constructor's result)")
+enum { RSC_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const RSC_STEPS[] = { RSC_STAGES(JS_STEP_STAGE_LABEL) NULL };
 /* UnderlyingSource's members, in the order Web IDL reads them. */
 enum { SRC_CHUNKSIZE = 0, SRC_CANCEL, SRC_PULL, SRC_START, SRC_TYPE, SRC_N };
 
@@ -3333,7 +3558,7 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     JSValueConst arg;
     int r;
 
-    if (s->w.stage == RSC_START) {
+    if (hdr->stage == RSC_START) {
         int k;
         stream_work_start(&s->w);
         JS_FreeValue(ctx, cb_result);
@@ -3355,10 +3580,10 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         s->source = JS_DupValue(ctx, source);
         s->proto = JS_UNDEFINED;
         s->member = 0;
-        s->w.stage = RSC_PROTO;
+        hdr->stage = RSC_PROTO;
     }
 
-    if (s->w.stage == RSC_PROTO) {
+    if (hdr->stage == RSC_PROTO) {
         /* Web IDL §3.7.1: the object is created with `? Get(newTarget, "prototype")` when that is an Object,
            and with the interface prototype object otherwise. That read is what makes `class S extends
            ReadableStream {}` produce an S — and it is the page's code, because new.target can be any
@@ -3369,12 +3594,12 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         if (r > 0) return r;
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
-        s->w.stage = JS_IsObject(source) ? RSC_READ : RSC_BUILD;
+        hdr->stage = JS_IsObject(source) ? RSC_READ : RSC_BUILD;
     }
 
-    while (s->w.stage == RSC_READ) {
+    while (hdr->stage == RSC_READ) {
         JSAtom a;
-        if (s->member >= SRC_N) { s->w.stage = RSC_TYPE; break; }
+        if (s->member >= SRC_N) { hdr->stage = RSC_TYPE; break; }
         a = JS_NewAtom(ctx, SRC_NAMES[s->member]);
         r = step_getprop_run(ctx, hdr, source, a, cb_result, &s->src[s->member], out_cb, out_argc);
         JS_FreeAtom(ctx, a);
@@ -3384,7 +3609,7 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         s->member++;
     }
 
-    if (s->w.stage == RSC_TYPE) {
+    if (hdr->stage == RSC_TYPE) {
         /* The one member whose conversion is not a brand check: `ReadableStreamType type` is an enumeration,
            so it is ToString and then a comparison — and ToString is the page's code. */
         if (!JS_IsUndefined(s->src[SRC_TYPE])) {
@@ -3412,10 +3637,10 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         if (stream_callback_member(ctx, s->src[SRC_PULL], "source", "pull") < 0) return -1;
         if (stream_callback_member(ctx, s->src[SRC_START], "source", "start") < 0) return -1;
         cb_result = JS_UNDEFINED;
-        s->w.stage = RSC_BUILD;
+        hdr->stage = RSC_BUILD;
     }
 
-    if (s->w.stage == RSC_BUILD) {
+    if (hdr->stage == RSC_BUILD) {
         JSValueConst strategy = argc > 1 ? argv[1] : JS_UNDEFINED;
         ControllerData *c;
         JSValue hv;
@@ -3456,10 +3681,10 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         c->source = JS_DupValue(ctx, source);
         s->start_fn = s->src[SRC_START];
         s->src[SRC_START] = JS_UNDEFINED;
-        s->w.stage = JS_IsFunction(ctx, s->start_fn) ? RSC_CALL : RSC_RESOLVE;
+        hdr->stage = JS_IsFunction(ctx, s->start_fn) ? RSC_CALL : RSC_RESOLVE;
     }
 
-    if (s->w.stage == RSC_CALL) {
+    if (hdr->stage == RSC_CALL) {
         JSValue res;
         arg = s->controller;
         r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), s->start_fn, s->source, 1, &arg,
@@ -3468,17 +3693,17 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         JS_FreeValue(ctx, s->w.value);
         s->w.value = res;
         cb_result = JS_UNDEFINED;
-        s->w.stage = RSC_RESOLVE;
+        hdr->stage = RSC_RESOLVE;
     }
-    if (s->w.stage == RSC_RESOLVE) {
+    if (hdr->stage == RSC_RESOLVE) {
         r = stream_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
-        s->w.stage = RSC_THEN;
+        hdr->stage = RSC_THEN;
     }
 
-    DCHECK(s->w.stage == RSC_THEN, "the ReadableStream constructor resumed in a stage it never parks in");
+    DCHECK(hdr->stage == RSC_THEN, "the ReadableStream constructor resumed in a stage it never parks in");
     JS_FreeValue(ctx, cb_result);
     if (readable_stream_start(ctx, s->stream, s->w.func) < 0) return -1;
     *presult = s->stream;
@@ -3487,7 +3712,8 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 }
 
 static const IdlStepDecl js_rs_ctor_decl = {
-    js_rs_ctor_step, sizeof(JSRsCtorState), js_rs_ctor_visit, js_rs_ctor_release
+    js_rs_ctor_step, sizeof(JSRsCtorState), js_rs_ctor_visit, js_rs_ctor_release,
+    "Streams §4.2 new ReadableStream(underlyingSource, strategy)", RSC_STEPS
 };
 
 /* ---- install ------------------------------------------------------------------------------------------------ */

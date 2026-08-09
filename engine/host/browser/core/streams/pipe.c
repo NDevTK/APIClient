@@ -156,23 +156,52 @@ enum {
     OP_N
 };
 
-enum {
-    S_ENTRY = 0,
-    S_TRANSFORM,     /* pipeThrough: read `readable` then `writable` */
-    S_OPT,           /* read the four option members */
-    S_LOCKS,         /* the two lock checks, which reject rather than throw */
-    S_ACQ_READER, S_ACQ_WRITER,
-    S_WIRE,          /* attach the watchers, then run the already-in-that-state checks in spec order */
-    S_LOOP,          /* wait on the writer's `ready` */
-    S_READ, S_READ_DONE, S_WRITE,
-    S_DEFERRED,      /* apply the source-side rule that was waiting for the read to be delivered */
-    S_SHUTDOWN,      /* decide whether to wait for writes */
-    S_ACT_PICK, S_ACTION,          /* choose the action, then issue it — never in one stage */
-    S_SIG_PICK, S_SIG_CALL,        /* the signal's compound, the same way */
-    S_FINALIZE, S_REL_READER, S_SETTLE,
-    S_RESULT,        /* settle this member's OWN capability, for the reject-early answers */
-    S_DONE
-};
+/* WHERE THIS MACHINE RESTS, AS §4.2.4 NUMBERS IT. `pipeTo` and `pipeThrough` are four and six steps whose last
+   real one is ReadableStreamPipeTo, and that operation's step 15 is prose rather than a numbered list — it
+   names its parts ("error and close states must be propagated", "shutdown with an action", "finalize"), so the
+   labels name them the way the standard writes them. Everything before step 15 IS numbered and the stages say
+   which number they are at. */
+#define PIPE_STAGES(X) \
+    X(S_ENTRY, "Streams §4.2 pipeTo/pipeThrough (this invocation's entry: which member or which of §4.2.4's " \
+               "reactions it is)") \
+    X(S_TRANSFORM, "Streams §4.2 pipeThrough(transform, options) steps 2 and 4 (Get(transform, \"writable\") " \
+                   "and Get(transform, \"readable\"))") \
+    X(S_OPT, "Streams §4.2 pipeTo step 3 / pipeThrough step 3 (the StreamPipeOptions members, read in the " \
+             "lexicographic order Web IDL §3.2.18 converts a dictionary in)") \
+    X(S_LOCKS, "Streams §4.2 pipeTo steps 1-2 / pipeThrough steps 1-2 (the two lock checks — a rejected " \
+               "promise for pipeTo, a throw for pipeThrough)") \
+    X(S_ACQ_READER, "Streams §4.2.4 ReadableStreamPipeTo step 9 (AcquireReadableStreamDefaultReader on the " \
+                    "source)") \
+    X(S_ACQ_WRITER, "Streams §4.2.4 ReadableStreamPipeTo step 10 (AcquireWritableStreamDefaultWriter on the " \
+                    "destination)") \
+    X(S_WIRE, "Streams §4.2.4 ReadableStreamPipeTo steps 11-14 (the pipe's promise, the abort algorithm, and " \
+              "step 15's \"error and close states must be propagated\" checks in the order it lists them)") \
+    X(S_LOOP, "Streams §4.2.4 ReadableStreamPipeTo step 15's backpressure rule (wait on the writer's `ready` " \
+              "before reading again)") \
+    X(S_READ, "Streams §4.2.4 ReadableStreamPipeTo step 15 (read a chunk from the reader)") \
+    X(S_READ_DONE, "Streams §4.2.4 ReadableStreamPipeTo step 15 (the read's result: a chunk to write, or the " \
+                   "source's close)") \
+    X(S_WRITE, "Streams §4.2.4 ReadableStreamPipeTo step 15 (write the chunk to the destination, without " \
+               "waiting for it)") \
+    X(S_DEFERRED, "Streams §4.2.4 ReadableStreamPipeTo step 15's propagation rules (the source-side rule that " \
+                  "was waiting for a read in flight to be delivered)") \
+    X(S_SHUTDOWN, "Streams §4.2.4 ReadableStreamPipeTo step 15's \"shutdown\" (whether the pending writes must " \
+                  "settle first)") \
+    X(S_ACT_PICK, "Streams §4.2.4 ReadableStreamPipeTo step 15's \"shutdown with an action\" (choosing the " \
+                  "action: abort the destination, cancel the source, or close the destination)") \
+    X(S_ACTION, "Streams §4.2.4 ReadableStreamPipeTo step 15's \"shutdown with an action\" (performing it)") \
+    X(S_SIG_PICK, "Streams §4.2.4 ReadableStreamPipeTo step 14.1 (the abort algorithm's ordered set of " \
+                  "actions, chosen from preventAbort and preventCancel)") \
+    X(S_SIG_CALL, "Streams §4.2.4 ReadableStreamPipeTo step 14.1.5 (waiting for all of those actions)") \
+    X(S_FINALIZE, "Streams §4.2.4 ReadableStreamPipeTo step 15's \"finalize\" (release the writer)") \
+    X(S_REL_READER, "Streams §4.2.4 ReadableStreamPipeTo step 15's \"finalize\" (release the reader)") \
+    X(S_SETTLE, "Streams §4.2.4 ReadableStreamPipeTo step 15's \"finalize\" (settle the pipe's promise — the " \
+                "resolving function's 27.2.1.3.2 step 8 `then` read is the page's)") \
+    X(S_RESULT, "Streams §4.2 pipeTo steps 1-2 (settling this member's OWN capability, for the answers it " \
+                "rejects with before any pipe exists)") \
+    X(S_DONE, "Streams §4.2 pipeTo step 4 / pipeThrough steps 5-6 (the operation is complete)")
+enum { PIPE_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const PIPE_STEPS[] = { PIPE_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
@@ -254,7 +283,7 @@ static JSValue js_pipe_fini(JSContext *ctx, void *st, bool take_result)
 static void pipe_goto(JSPipeState *s, int stage)
 {
     DCHECK(s->w.phase == 0, "a §4.2.4 stage was left with a call still in flight");
-    s->w.stage = (uint8_t)stage;
+    s->hdr.stage = (uint16_t)stage;
 }
 
 /* Attach one reaction pair to `promise`, both entries re-entering this machine with the record. */
@@ -316,7 +345,7 @@ static int js_pipe_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
     JSValue out;
     int r;
 
-    if (s->w.stage == S_ENTRY) {
+    if (s->hdr.stage == S_ENTRY) {
         stream_work_start(&s->w);
         s->pipe = s->value = s->sig = s->act_fn = s->act_recv = s->promise = JS_UNDEFINED;
         s->funcs[0] = s->funcs[1] = JS_UNDEFINED;
@@ -361,8 +390,16 @@ static int js_pipe_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                 DCHECK(p->writes > 0, "a §4.2.4 write settled that was never counted as outstanding");
                 p->writes--;
                 /* the wait that shutdown parked on is over exactly when the last one settles */
-                s->w.stage = (p->waiting_writes && p->writes == 0) ? S_ACT_PICK : S_DONE;
-                if (s->w.stage == S_ACTION) p->waiting_writes = 0;
+                /* THE FLAG IS CLEARED IN THE ARM THAT ENDS THE WAIT. It was cleared by a line testing the
+                   stage against S_ACTION immediately after that same line had set it to S_ACT_PICK or
+                   S_DONE — a condition that cannot hold, so the flag survived a shutdown it had already
+                   released. Naming the stages made it visible; nothing about the numbers could. */
+                if (p->waiting_writes && p->writes == 0) {
+                    p->waiting_writes = 0;
+                    pipe_goto(s, S_ACT_PICK);
+                } else {
+                    pipe_goto(s, S_DONE);
+                }
                 break;
             case OP_SRC_ERRORED:
             case OP_SRC_CLOSED:
@@ -458,7 +495,7 @@ run:
        requests below see it in their own `out` and handle it there; the KEYED READS cannot, because
        step_getprop_run's contract has no way to say "it threw", so it simply reported "not started" and the
        machine asked for the same property again, forever. */
-    if (JS_IsException(cb_result) && (s->w.stage == S_TRANSFORM || s->w.stage == S_OPT)) {
+    if (JS_IsException(cb_result) && (s->hdr.stage == S_TRANSFORM || s->hdr.stage == S_OPT)) {
         cb_result = JS_UNDEFINED;
         /* `pipeThrough` returns a ReadableStream, so its answer is the throw itself; `pipeTo` returns a
            promise, so its answer is that promise rejected. */
@@ -467,7 +504,7 @@ run:
     }
 
     for (;;) {
-        switch (s->w.stage) {
+        switch (s->hdr.stage) {
 
         case S_TRANSFORM:
             /* §4.2's `ReadableWritablePair`: two REQUIRED members, read in lexicographic order off whatever
@@ -947,7 +984,8 @@ run:
         }
 
         default:
-            DCHECK(s->w.stage == S_DONE, "a §4.2.4 machine resumed in a stage it never parks in");
+            DCHECK(s->hdr.stage == S_DONE,
+                   "a §4.2.4 machine resumed in a stage §4.2's pipe operations do not have");
             JS_FreeValue(ctx, cb_result);
             return JS_STEP_DONE;   /* the answer, if this entry has one, is taken by js_pipe_fini */
         }
@@ -961,7 +999,9 @@ run:
    machine answers a throwing option getter itself — a rejection for pipeTo, a throw for pipeThrough — rather
    than letting the throw unwind it. */
 #define PIPE_DEF(i) { sizeof(JSPipeState), js_pipe_step, js_pipe_fini, (i), \
-                      .catches_abrupt = 1, .visit = js_pipe_visit }
+                      .catches_abrupt = 1, .visit = js_pipe_visit, \
+                      .algorithm = "Streams §4.2 pipeTo/pipeThrough, through §4.2.4 ReadableStreamPipeTo", \
+                      .steps = PIPE_STEPS }
 static const JSTrampStepDef js_pipe_defs[OP_N] = {
     PIPE_DEF(0),  PIPE_DEF(1),  PIPE_DEF(2),  PIPE_DEF(3),  PIPE_DEF(4),
     PIPE_DEF(5),  PIPE_DEF(6),  PIPE_DEF(7),  PIPE_DEF(8),  PIPE_DEF(9),

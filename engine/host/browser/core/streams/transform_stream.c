@@ -393,8 +393,13 @@ static int ts_run(JSContext *ctx, JSTsState *s, JSStepHdr *hdr, int op, JSValue 
     JSValue out;
     int r;
 
+    /* THE HEADER IN FORCE, BEFORE THE STAGE IS READ — because the stage IS this header's, and which base it is
+       counted from is derived from which header this is. Recorded at the first entry only, it was still NULL
+       when the very first ts_stage() ran. Every re-entry arrives through the same definition and therefore the
+       same header, so assigning it on every entry says the same thing and cannot be reached too late. */
+    s->h = hdr;
+
     if (ts_stage(s) == S_ENTRY) {
-        s->h = hdr;
         stream_work_start(&s->w);
         s->ts = s->ctrl = s->promise = s->reason = s->proto = JS_UNDEFINED;
         s->funcs[0] = s->funcs[1] = JS_UNDEFINED;

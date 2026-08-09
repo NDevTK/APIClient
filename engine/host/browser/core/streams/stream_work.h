@@ -15,8 +15,12 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 
+/* NO `stage` HERE. It was the owning machine's own step, kept as a private byte on this shared record — which
+   is exactly the resume point JSTrampStepDef.steps describes: invisible to the driver's assert, unreportable
+   at a park, and unresolvable back to a step by a later build. A machine's stage is its HEADER's, and the
+   labels beside it say which step of which §4/§5/§6 operation it is. What is left here are the SUB-SEQUENCE
+   cursors, which are positions inside one stage rather than stages of their own. */
 typedef struct {
-    uint8_t stage;   /* the owning MACHINE's own step */
     uint8_t phase;   /* step_call_run's, for whichever call is in flight */
     /* TWO MORE SEQUENCE STATES, because they NEST: §4.5's pull runs §4.2's error when the page's `pull`
        throws, and the two must not share a byte. What the values mean is the OWNING component's — §4 spells
@@ -40,8 +44,7 @@ typedef struct {
    the INTEGER 0 (JS_TAG_INT is 0) rather than undefined — so a slot read before it is written yields 0, which
    is a real value the page can see. It has cost this project four bugs and it cost this component a fifth: the
    `closed` promise of a drained stream fulfilled with the number 0. Every machine that owns one of these calls
-   this on its first entry, so the trap has one place to not be. `stage` is deliberately untouched: the machine
-   owns it, and it has usually already been set by the time this runs. */
+   this on its first entry, so the trap has one place to not be. */
 void stream_work_start(StreamWork *w)
 ;
 
