@@ -17,6 +17,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/streams/queuing_strategy.h"
 
 enum { QS_COUNT = 0, QS_BYTE_LENGTH, QS_N };
@@ -28,8 +29,12 @@ static const IdlDictMember QS_INIT[] = {
 };
 
 static JSClassID g_qs_class;
-static JSValue   g_qs_proto[QS_N] = { JS_UNDEFINED, JS_UNDEFINED };
-static JSValue   g_size_fn[QS_N] = { JS_UNDEFINED, JS_UNDEFINED };
+/* §7's TWO PROTOTYPES AND TWO SIZE FUNCTIONS ARE EACH REALM'S. Both interfaces' instances wear ONE class, so
+   the prototypes cannot live in the class slot and take a per-realm VALUE slot each instead — the same store,
+   named for what it holds. The size functions are function objects, which carry the realm they were minted
+   in: `new CountQueuingStrategy({highWaterMark:1}).size` handed every document the first realm's. */
+static int       g_qs_proto_slot[QS_N] = { -1, -1 };
+static int       g_size_fn_slot[QS_N] = { -1, -1 };
 static int       g_qs_ctor_stepid[QS_N] = { -1, -1 };
 static int       g_byte_size_stepid = -1;
 static JSRuntime *g_qs_rt;
@@ -59,7 +64,7 @@ static JSValue js_qs_size(JSContext *ctx, JSValueConst this_val, int magic)
     (void)magic;
     if (!q) return JS_ThrowTypeError(ctx, "not a queuing strategy");
     DCHECK(q->kind == QS_COUNT || q->kind == QS_BYTE_LENGTH, "a queuing strategy carries no kind");
-    return JS_DupValue(ctx, g_size_fn[q->kind]);
+    return realm_value_get(ctx, g_size_fn_slot[q->kind]);   /* OWNED — this realm's */
 }
 
 /* §7.2's size function: one, whatever the chunk is. */
@@ -120,7 +125,11 @@ static JSValue js_qs_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     hv = idl_dict_get(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, "highWaterMark");
     if (JS_ToFloat64(ctx, &h, hv) < 0) { JS_FreeValue(ctx, hv); return JS_EXCEPTION; }
     JS_FreeValue(ctx, hv);
-    obj = JS_NewObjectProtoClass(ctx, g_qs_proto[magic], g_qs_class);
+    {
+        JSValue proto = realm_value_get(ctx, g_qs_proto_slot[magic]);
+        obj = JS_NewObjectProtoClass(ctx, proto, g_qs_class);
+        JS_FreeValue(ctx, proto);
+    }
     if (JS_IsException(obj)) return obj;
     q = js_mallocz(ctx, sizeof *q);
     if (!q) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
@@ -146,19 +155,38 @@ void queuing_strategy_init(JSContext *ctx)
 
     g_byte_size_stepid = JS_RegisterStepDef(rt, &js_byte_size_def);
     CHECK(g_byte_size_stepid >= 0, "queuing strategies: no step id for the byte-length size function");
-    g_size_fn[QS_COUNT] = JS_NewCFunction2(ctx, js_count_size, "size", 0, JS_CFUNC_generic, 0);
-    g_size_fn[QS_BYTE_LENGTH] = JS_NewCFunction2(ctx, NULL, "size", 1, JS_CFUNC_step, g_byte_size_stepid);
-    CHECK(!JS_IsException(g_size_fn[QS_COUNT]) && !JS_IsException(g_size_fn[QS_BYTE_LENGTH]),
-          "a queuing strategy's size function could not be allocated");
-
     for (i = 0; i < QS_N; i++) {
-        g_qs_proto[i] = JS_NewObject(ctx);
-        CHECK(!JS_IsException(g_qs_proto[i]), "a queuing strategy prototype could not be allocated");
-        idl_interface_tag(ctx, g_qs_proto[i], NAMES[i]);
-        idl_install_accessor(ctx, g_qs_proto[i], "highWaterMark", js_qs_hwm, 0, -1);
-        idl_install_accessor(ctx, g_qs_proto[i], "size", js_qs_size, 0, -1);
+        char what[64];
         g_qs_ctor_stepid[i] = idl_method_id_dict(ctx, ONE_DICT, 1, QS_INIT,
                                                  (int)(sizeof QS_INIT / sizeof *QS_INIT), js_qs_ctor, i);
+        snprintf(what, sizeof what, "%s.prototype", NAMES[i]);
+        g_qs_proto_slot[i] = realm_value_declare(ctx, what);
+        snprintf(what, sizeof what, "%s size", NAMES[i]);
+        g_size_fn_slot[i] = realm_value_declare(ctx, what);
+    }
+    realm_declare_intrinsic(queuing_strategy_install_protos);
+}
+
+/* §7's TWO INTERFACE PROTOTYPE OBJECTS AND THEIR SIZE FUNCTIONS, FOR ONE REALM. */
+void queuing_strategy_install_protos(JSContext *ctx)
+{
+    static const char *const NAMES[QS_N] = { "CountQueuingStrategy", "ByteLengthQueuingStrategy" };
+    JSValue size[QS_N];
+    int i;
+
+    DCHECK(g_qs_rt != NULL, "a realm asked for a queuing strategy prototype before the class was declared");
+    size[QS_COUNT] = JS_NewCFunction2(ctx, js_count_size, "size", 0, JS_CFUNC_generic, 0);
+    size[QS_BYTE_LENGTH] = JS_NewCFunction2(ctx, NULL, "size", 1, JS_CFUNC_step, g_byte_size_stepid);
+    CHECK(!JS_IsException(size[QS_COUNT]) && !JS_IsException(size[QS_BYTE_LENGTH]),
+          "a queuing strategy's size function could not be allocated");
+    for (i = 0; i < QS_N; i++) {
+        JSValue proto = JS_NewObject(ctx);
+        CHECK(!JS_IsException(proto), "a queuing strategy prototype could not be allocated");
+        idl_interface_tag(ctx, proto, NAMES[i]);
+        idl_install_accessor(ctx, proto, "highWaterMark", js_qs_hwm, 0, -1);
+        idl_install_accessor(ctx, proto, "size", js_qs_size, 0, -1);
+        realm_value_set(ctx, g_qs_proto_slot[i], proto);
+        realm_value_set(ctx, g_size_fn_slot[i], size[i]);
     }
 }
 
@@ -172,7 +200,11 @@ void queuing_strategy_install(JSContext *ctx, JSValueConst global)
         DCHECK(g_qs_ctor_stepid[i] >= 0, "a queuing strategy was installed before it was declared");
         ctor = idl_step_constructor(ctx, NAMES[i], 1, g_qs_ctor_stepid[i]);
         CHECK(!JS_IsException(ctor), "a queuing strategy interface object could not be allocated");
-        JS_SetConstructor(ctx, ctor, g_qs_proto[i]);
+        {
+            JSValue proto = realm_value_get(ctx, g_qs_proto_slot[i]);
+            JS_SetConstructor(ctx, ctor, proto);
+            JS_FreeValue(ctx, proto);
+        }
         JS_SetPropertyStr(ctx, (JSValue)global, NAMES[i], ctor);
     }
 }
@@ -182,9 +214,7 @@ void queuing_strategy_free(JSContext *ctx)
     int i;
     if (!g_qs_rt) return;
     for (i = 0; i < QS_N; i++) {
-        JS_FreeValue(ctx, g_qs_proto[i]);
-        JS_FreeValue(ctx, g_size_fn[i]);
-        g_qs_proto[i] = g_size_fn[i] = JS_UNDEFINED;
+        /* the prototypes and size functions are the REALMS' — released with their contexts */
         g_qs_ctor_stepid[i] = -1;
     }
     g_byte_size_stepid = -1;

@@ -4,6 +4,7 @@
 #include "quickjs.h"
 
 void queuing_strategy_init(JSContext *ctx);
+void queuing_strategy_install_protos(JSContext *ctx);   /* §7's prototypes and size functions, per realm */
 void queuing_strategy_install(JSContext *ctx, JSValueConst global);
 void queuing_strategy_free(JSContext *ctx);
 
