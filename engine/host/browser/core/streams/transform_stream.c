@@ -549,9 +549,11 @@ run:
                 /* §5.4's `error` IS ErrorIfNeeded: it already returns without doing anything unless the
                    stream is still writable, so there is no second predicate here. */
                 JSValueConst arg = s->w.err;
-                r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), writable_stream_op(WS_OP_CTRL_ERROR),
+                JSValue op = writable_stream_op(ctx, WS_OP_CTRL_ERROR);
+                r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), op,
                                   writable_stream_controller(t->writable), 1, &arg, cb_result, &out,
                                   out_cb, out_argc);
+                JS_FreeValue(ctx, op);
                 if (r > 0) return r;
                 cb_result = JS_UNDEFINED;
                 if (JS_IsException(out)) return JS_STEP_ABRUPT;

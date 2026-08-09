@@ -590,8 +590,12 @@ run:
             continue;
 
         case S_ACQ_WRITER:
-            r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), writable_stream_op(WS_OP_GET_WRITER),
-                              p->dest, 0, NULL, cb_result, &out, out_cb, out_argc);
+            {
+                JSValue op = writable_stream_op(ctx, WS_OP_GET_WRITER);
+                r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), op,
+                                  p->dest, 0, NULL, cb_result, &out, out_cb, out_argc);
+                JS_FreeValue(ctx, op);
+            }
             if (r > 0) return r;
             cb_result = JS_UNDEFINED;
             if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -718,8 +722,12 @@ run:
 
         case S_WRITE: {
             JSValueConst arg = s->w.value;
-            r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), writable_stream_op(WS_OP_WRITE), p->writer,
-                              1, &arg, cb_result, &out, out_cb, out_argc);
+            {
+                JSValue op = writable_stream_op(ctx, WS_OP_WRITE);
+                r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), op, p->writer,
+                                  1, &arg, cb_result, &out, out_cb, out_argc);
+                JS_FreeValue(ctx, op);
+            }
             if (r > 0) return r;
             cb_result = JS_UNDEFINED;
             if (JS_IsException(out)) return JS_STEP_ABRUPT;
@@ -779,7 +787,7 @@ run:
             JS_FreeValue(ctx, s->act_recv);
             s->act_argc = 1;
             if (p->action == ACT_ABORT_DEST) {
-                s->act_fn = JS_DupValue(ctx, writable_stream_op(WS_OP_ABORT));
+                s->act_fn = writable_stream_op(ctx, WS_OP_ABORT);
                 s->act_recv = JS_DupValue(ctx, p->writer);
             } else if (p->action == ACT_CANCEL_SOURCE) {
                 s->act_fn = JS_DupValue(ctx, readable_stream_op(RS_OP_CANCEL));
@@ -803,7 +811,7 @@ run:
                     pipe_goto(s, S_FINALIZE);
                     continue;
                 }
-                s->act_fn = JS_DupValue(ctx, writable_stream_op(WS_OP_CLOSE));
+                s->act_fn = writable_stream_op(ctx, WS_OP_CLOSE);
                 s->act_recv = JS_DupValue(ctx, p->writer);
                 s->act_argc = 0;
             }
@@ -843,7 +851,7 @@ run:
                 WritableStreamState ds = WS_WRITABLE;
                 writable_stream_query(p->dest, &ds, NULL, NULL);
                 run_it = !p->prevent[OPT_ABORT] && ds == WS_WRITABLE;
-                s->act_fn = JS_DupValue(ctx, writable_stream_op(WS_OP_ABORT));
+                s->act_fn = writable_stream_op(ctx, WS_OP_ABORT);
                 s->act_recv = JS_DupValue(ctx, p->writer);
             } else {
                 ReadableStreamState ss = RS_READABLE;
@@ -876,8 +884,12 @@ run:
 
         case S_FINALIZE:
             /* §4.2.4's finalize: release the writer's lock, then the reader's, then answer. */
-            r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), writable_stream_op(WS_OP_RELEASE), p->writer,
-                              0, NULL, cb_result, &out, out_cb, out_argc);
+            {
+                JSValue op = writable_stream_op(ctx, WS_OP_RELEASE);
+                r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), op, p->writer,
+                                  0, NULL, cb_result, &out, out_cb, out_argc);
+                JS_FreeValue(ctx, op);
+            }
             if (r > 0) return r;
             cb_result = JS_UNDEFINED;
             if (JS_IsException(out)) return JS_STEP_ABRUPT;

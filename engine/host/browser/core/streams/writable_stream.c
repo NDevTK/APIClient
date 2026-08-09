@@ -29,6 +29,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/dom/abort.h"
 #include "core/events/event_target.h"
 #include "core/streams/stream_work.h"
@@ -83,7 +84,6 @@ typedef struct {
 } WsCtrlData;
 
 static JSClassID g_ws_class, g_wr_class, g_wc_class;
-static JSValue   g_ws_proto = JS_UNDEFINED, g_wr_proto = JS_UNDEFINED, g_wc_proto = JS_UNDEFINED;
 static JSRuntime *g_ws_rt;
 static int g_ws_ctor_stepid = -1, g_wr_ctor_stepid = -1, g_getwriter_stepid = -1;
 
@@ -302,14 +302,16 @@ static bool ws_in_flight(WsData *d)
     return !JS_IsUndefined(d->in_flight_write[0]) || !JS_IsUndefined(d->in_flight_close[0]);
 }
 
-/* THE ABSTRACT OPERATIONS, as the ORIGINAL function objects — captured at install, so a page that rebinds a
-   prototype member changes what IT calls and nothing that the platform performs on its behalf. */
-static JSValue g_op_fn[WS_OP_N];
+/* THE ABSTRACT OPERATIONS, as the ORIGINAL function objects — captured at each realm's install, so a page that
+   rebinds a prototype member changes what IT calls and nothing that the platform performs on its behalf.
+   PER REALM, because a function object carries the realm it was minted in: one set held for the agent ran a
+   child document's pipe through the first document's realm. */
+static int g_op_fn_slot[WS_OP_N];
 
-JSValueConst writable_stream_op(WritableStreamOp which)
+JSValue writable_stream_op(JSContext *ctx, WritableStreamOp which)
 {
     DCHECK(which >= 0 && which < WS_OP_N, "a §5 operation was asked for by a name this component does not map");
-    return g_op_fn[which];
+    return realm_value_get(ctx, g_op_fn_slot[which]);   /* OWNED */
 }
 
 bool writable_stream_query(JSValueConst v, WritableStreamState *pstate, bool *plocked, bool *pclose_queued)
@@ -1386,7 +1388,12 @@ static int js_gw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
             JS_ThrowTypeError(ctx, "this stream is already locked to a writer");
             return -1;
         }
-        obj = JS_NewObjectProtoClass(ctx, g_wr_proto, g_wr_class);
+        {
+            JSValue proto = JS_GetClassProto(ctx, g_wr_class);
+            DCHECK(!JS_IsNull(proto), "a writer was minted in a realm that never ran its install");
+            obj = JS_NewObjectProtoClass(ctx, proto, g_wr_class);
+            JS_FreeValue(ctx, proto);
+        }
         if (JS_IsException(obj)) return -1;
         wr = js_mallocz(ctx, sizeof *wr);
         if (!wr) { JS_FreeValue(ctx, obj); return -1; }
@@ -1672,7 +1679,12 @@ JSValue writable_stream_create(JSContext *ctx, JSValueConst write_fn, JSValueCon
     /* The stream and its controller are COMPLETE — every owned slot placed, each attached to its object, the
        two linked — before the first step that can fail, so a failure after this is torn down by the two
        finalizers and nothing is orphaned. */
-    obj = JS_NewObjectProtoClass(ctx, g_ws_proto, g_ws_class);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_ws_class);
+        DCHECK(!JS_IsNull(proto), "a WritableStream was minted in a realm that never ran its install");
+        obj = JS_NewObjectProtoClass(ctx, proto, g_ws_class);
+        JS_FreeValue(ctx, proto);
+    }
     if (JS_IsException(obj)) return obj;
     d = js_mallocz(ctx, sizeof *d);
     if (!d) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
@@ -1687,7 +1699,12 @@ JSValue writable_stream_create(JSContext *ctx, JSValueConst write_fn, JSValueCon
     JS_SetOpaque(obj, d);
     if (JS_IsException(d->write_resolve) || JS_IsException(d->write_reject)) goto fail;
 
-    ctrl = JS_NewObjectProtoClass(ctx, g_wc_proto, g_wc_class);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_wc_class);
+        DCHECK(!JS_IsNull(proto), "a §5.4 controller was minted in a realm that never ran its install");
+        ctrl = JS_NewObjectProtoClass(ctx, proto, g_wc_class);
+        JS_FreeValue(ctx, proto);
+    }
     if (JS_IsException(ctrl)) goto fail;
     c = js_mallocz(ctx, sizeof *c);
     if (!c) { JS_FreeValue(ctx, ctrl); goto fail; }
@@ -1748,42 +1765,16 @@ void writable_stream_init(JSContext *ctx)
         CHECK(g_op_stepid[i] >= 0, "streams: no step id for a §5 operation");
     }
 
-    g_ws_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_ws_proto), "WritableStream.prototype could not be allocated");
-    idl_interface_tag(ctx, g_ws_proto, "WritableStream");
-    idl_install_accessor(ctx, g_ws_proto, "locked", js_ws_locked, 0, -1);
-    idl_install_step_method(ctx, g_ws_proto, "abort", 0, g_op_stepid[OP_WS_ABORT]);
-    idl_install_step_method(ctx, g_ws_proto, "close", 0, g_op_stepid[OP_WS_CLOSE]);
     g_getwriter_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_gw_decl, GW_SELF);
-    idl_install_method(ctx, g_ws_proto, "getWriter", 0, g_getwriter_stepid);
-
-    g_wr_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_wr_proto), "WritableStreamDefaultWriter.prototype could not be allocated");
-    idl_interface_tag(ctx, g_wr_proto, "WritableStreamDefaultWriter");
-    idl_install_accessor(ctx, g_wr_proto, "closed", js_wr_get, WR_CLOSED, -1);
-    idl_install_accessor(ctx, g_wr_proto, "ready", js_wr_get, WR_READY, -1);
-    idl_install_accessor(ctx, g_wr_proto, "desiredSize", js_wr_get, WR_DESIRED, -1);
-    idl_install_step_method(ctx, g_wr_proto, "abort", 0, g_op_stepid[OP_WR_ABORT]);
-    idl_install_step_method(ctx, g_wr_proto, "close", 0, g_op_stepid[OP_WR_CLOSE]);
-    idl_install_step_method(ctx, g_wr_proto, "write", 0, g_op_stepid[OP_WR_WRITE]);
-    idl_install_step_method(ctx, g_wr_proto, "releaseLock", 0, g_op_stepid[OP_WR_RELEASE]);
-
-    g_wc_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_wc_proto), "the §5.4 controller prototype could not be allocated");
-    idl_interface_tag(ctx, g_wc_proto, "WritableStreamDefaultController");
-    idl_install_accessor(ctx, g_wc_proto, "signal", js_wc_signal, 0, -1);
-    idl_install_step_method(ctx, g_wc_proto, "error", 0, g_op_stepid[OP_WC_ERROR]);
-
-    /* THE ABSTRACT OPERATIONS, read off the prototypes ONCE, while they are still the ones just installed. */
-    g_op_fn[WS_OP_GET_WRITER]   = JS_GetPropertyStr(ctx, g_ws_proto, "getWriter");
-    g_op_fn[WS_OP_STREAM_ABORT] = JS_GetPropertyStr(ctx, g_ws_proto, "abort");
-    g_op_fn[WS_OP_WRITE]        = JS_GetPropertyStr(ctx, g_wr_proto, "write");
-    g_op_fn[WS_OP_CLOSE]        = JS_GetPropertyStr(ctx, g_wr_proto, "close");
-    g_op_fn[WS_OP_ABORT]        = JS_GetPropertyStr(ctx, g_wr_proto, "abort");
-    g_op_fn[WS_OP_RELEASE]      = JS_GetPropertyStr(ctx, g_wr_proto, "releaseLock");
-    g_op_fn[WS_OP_CTRL_ERROR]   = JS_GetPropertyStr(ctx, g_wc_proto, "error");
-    for (i = 0; i < WS_OP_N; i++)
-        CHECK(JS_IsFunction(ctx, g_op_fn[i]), "a §5 abstract operation was not installed before it was captured");
+    {
+        static const char *const OP_NAME[WS_OP_N] = {
+            "WritableStream.getWriter", "WritableStream.abort", "writer.write", "writer.close",
+            "writer.abort", "writer.releaseLock", "controller.error",
+        };
+        for (i = 0; i < WS_OP_N; i++)
+            g_op_fn_slot[i] = realm_value_declare(ctx, OP_NAME[i]);
+    }
+    realm_declare_intrinsic(writable_stream_install_protos);
 
     g_ws_ctor_stepid = idl_method_id_step(ctx, SINK_AND_STRATEGY, 2, QUEUING_STRATEGY,
                                           (int)(sizeof QUEUING_STRATEGY / sizeof QUEUING_STRATEGY[0]),
@@ -1792,24 +1783,93 @@ void writable_stream_init(JSContext *ctx)
     g_wr_ctor_stepid = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &js_gw_decl, GW_CTOR);
 }
 
+/* §5.2's, §5.3's AND §5.4's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM, and the abstract operations read off
+   them while they are still the ones just installed. */
+void writable_stream_install_protos(JSContext *ctx)
+{
+    JSValue ws_p, wr_p, wc_p, prev;
+    int i;
+
+    DCHECK(g_ws_class != 0, "a realm asked for WritableStream.prototype before the class was declared");
+    prev = JS_GetClassProto(ctx, g_ws_class);
+    DCHECK(JS_IsNull(prev), "writable_stream_install_protos ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+
+    ws_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(ws_p), "WritableStream.prototype could not be allocated");
+    idl_interface_tag(ctx, ws_p, "WritableStream");
+    idl_install_accessor(ctx, ws_p, "locked", js_ws_locked, 0, -1);
+    idl_install_step_method(ctx, ws_p, "abort", 0, g_op_stepid[OP_WS_ABORT]);
+    idl_install_step_method(ctx, ws_p, "close", 0, g_op_stepid[OP_WS_CLOSE]);
+    idl_install_method(ctx, ws_p, "getWriter", 0, g_getwriter_stepid);
+    JS_SetClassProto(ctx, g_ws_class, ws_p);
+
+    wr_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(wr_p), "WritableStreamDefaultWriter.prototype could not be allocated");
+    idl_interface_tag(ctx, wr_p, "WritableStreamDefaultWriter");
+    idl_install_accessor(ctx, wr_p, "closed", js_wr_get, WR_CLOSED, -1);
+    idl_install_accessor(ctx, wr_p, "ready", js_wr_get, WR_READY, -1);
+    idl_install_accessor(ctx, wr_p, "desiredSize", js_wr_get, WR_DESIRED, -1);
+    idl_install_step_method(ctx, wr_p, "abort", 0, g_op_stepid[OP_WR_ABORT]);
+    idl_install_step_method(ctx, wr_p, "close", 0, g_op_stepid[OP_WR_CLOSE]);
+    idl_install_step_method(ctx, wr_p, "write", 0, g_op_stepid[OP_WR_WRITE]);
+    idl_install_step_method(ctx, wr_p, "releaseLock", 0, g_op_stepid[OP_WR_RELEASE]);
+    JS_SetClassProto(ctx, g_wr_class, wr_p);
+
+    wc_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(wc_p), "the §5.4 controller prototype could not be allocated");
+    idl_interface_tag(ctx, wc_p, "WritableStreamDefaultController");
+    idl_install_accessor(ctx, wc_p, "signal", js_wc_signal, 0, -1);
+    idl_install_step_method(ctx, wc_p, "error", 0, g_op_stepid[OP_WC_ERROR]);
+    JS_SetClassProto(ctx, g_wc_class, wc_p);
+
+    realm_value_set(ctx, g_op_fn_slot[WS_OP_GET_WRITER],   JS_GetPropertyStr(ctx, ws_p, "getWriter"));
+    realm_value_set(ctx, g_op_fn_slot[WS_OP_STREAM_ABORT], JS_GetPropertyStr(ctx, ws_p, "abort"));
+    realm_value_set(ctx, g_op_fn_slot[WS_OP_WRITE],        JS_GetPropertyStr(ctx, wr_p, "write"));
+    realm_value_set(ctx, g_op_fn_slot[WS_OP_CLOSE],        JS_GetPropertyStr(ctx, wr_p, "close"));
+    realm_value_set(ctx, g_op_fn_slot[WS_OP_ABORT],        JS_GetPropertyStr(ctx, wr_p, "abort"));
+    realm_value_set(ctx, g_op_fn_slot[WS_OP_RELEASE],      JS_GetPropertyStr(ctx, wr_p, "releaseLock"));
+    realm_value_set(ctx, g_op_fn_slot[WS_OP_CTRL_ERROR],   JS_GetPropertyStr(ctx, wc_p, "error"));
+    for (i = 0; i < WS_OP_N; i++) {
+        JSValue fn = realm_value_get(ctx, g_op_fn_slot[i]);
+        CHECK(JS_IsFunction(ctx, fn), "a §5 abstract operation was not installed before it was captured");
+        JS_FreeValue(ctx, fn);
+    }
+}
+
 void writable_stream_install(JSContext *ctx, JSValueConst global)
 {
     JSValue ctor;
     DCHECK(g_ws_ctor_stepid >= 0, "WritableStream was installed before its constructor was declared");
     ctor = idl_step_constructor(ctx, "WritableStream", 0, g_ws_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the WritableStream interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_ws_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_ws_class);
+        DCHECK(!JS_IsNull(proto), "WritableStream was installed into a realm with no proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "WritableStream", ctor);
 
     ctor = idl_step_constructor(ctx, "WritableStreamDefaultWriter", 1, g_wr_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the writer interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_wr_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_wr_class);
+        DCHECK(!JS_IsNull(proto), "WritableStreamDefaultWriter was installed into a realm with no proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "WritableStreamDefaultWriter", ctor);
 
     ctor = JS_NewCFunction2(ctx, js_illegal_ctor, "WritableStreamDefaultController", 0,
                             JS_CFUNC_constructor, 0);
     CHECK(!JS_IsException(ctor), "the §5.4 controller interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_wc_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_wc_class);
+        DCHECK(!JS_IsNull(proto), "WritableStreamDefaultController was installed into a realm with no proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "WritableStreamDefaultController", ctor);
 }
 
@@ -1817,11 +1877,7 @@ void writable_stream_free(JSContext *ctx)
 {
     int i;
     if (!g_ws_rt) return;
-    JS_FreeValue(ctx, g_ws_proto);
-    JS_FreeValue(ctx, g_wr_proto);
-    JS_FreeValue(ctx, g_wc_proto);
-    g_ws_proto = g_wr_proto = g_wc_proto = JS_UNDEFINED;
-    for (i = 0; i < WS_OP_N; i++) { JS_FreeValue(ctx, g_op_fn[i]); g_op_fn[i] = JS_UNDEFINED; }
+    /* the prototypes and the captured operations are the REALMS' — released with their contexts */
     g_ws_rt = NULL;
     g_ws_ctor_stepid = g_wr_ctor_stepid = g_getwriter_stepid = -1;
     for (i = 0; i < OP_N; i++) g_op_stepid[i] = -1;

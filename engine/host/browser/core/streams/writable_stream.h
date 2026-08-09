@@ -6,6 +6,7 @@
 #include "quickjs.h"
 
 void writable_stream_init(JSContext *ctx);
+void writable_stream_install_protos(JSContext *ctx);   /* §5's three prototypes, for ONE realm */
 void writable_stream_install(JSContext *ctx, JSValueConst global);
 void writable_stream_free(JSContext *ctx);
 
@@ -24,7 +25,8 @@ typedef enum {
                                without doing anything unless the stream is still writable */
     WS_OP_N
 } WritableStreamOp;
-JSValueConst writable_stream_op(WritableStreamOp which);
+/* THIS REALM'S copy of a §5 abstract operation. OWNED: the caller frees. */
+JSValue writable_stream_op(JSContext *ctx, WritableStreamOp which);
 
 /* §5.4's CreateWritableStream, and the START that is deliberately not part of it — see writable_stream.c.
    The three algorithms are the CALLER's function objects, called with the arguments the matching
