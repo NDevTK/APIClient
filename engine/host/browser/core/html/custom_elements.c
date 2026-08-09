@@ -32,6 +32,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/node.h"
+#include "core/dom/element.h"
 #include "core/dom/document.h"
 #include "core/html/custom_elements.h"
 
@@ -58,11 +59,39 @@ static JSValue ce_defs(JSContext *ctx)
 }
 static int    g_ready;
 static JSAtom g_atom_prototype = JS_ATOM_NULL;
-static JSAtom g_atom_upgraded = JS_ATOM_NULL;
 static JSAtom g_atom_ctor = JS_ATOM_NULL;
 static JSAtom g_atom_proto = JS_ATOM_NULL;
 static JSAtom g_atom_observed = JS_ATOM_NULL;      /* the definition's own key for the list */
 static JSAtom g_atom_observed_src = JS_ATOM_NULL;  /* the class's `observedAttributes` */
+static JSAtom g_atom_callbacks = JS_ATOM_NULL;     /* the definition's own key for step 14.4's map */
+
+/* §4.13.5 step 2's "set element's custom element definition to definition" — the element's OWN slot, under a
+   symbol the page cannot mint, so no string key of this engine's invention appears on a custom element. It
+   replaces an `apiclientUpgraded` boolean: the boolean answered "has this been upgraded" and nothing else, and
+   the reaction then had to find the definition again BY NAME through the registry. §4.13.6's enqueue reads the
+   definition off the ELEMENT, which is what makes the definition an element's own state and not a lookup. */
+static JSValue g_def_key = JS_UNDEFINED;
+static JSAtom  g_atom_def = JS_ATOM_NULL;
+
+/* §4.13.4 step 14's `lifecycleCallbacks` map, IN ITS KEY ORDER, AS ONE LIST EXPANDED TWICE — the ids the
+   engine enqueues by and the names step 14.4 reads off the prototype, which cannot be two lists for the same
+   reason a machine's stages cannot: the ORDER is observable. The prototype may be a Proxy, so the sequence of
+   `get`s is part of what the algorithm does and the corpus asserts it exactly.
+   `connectedMoveCallback` is NOT here because `moveBefore` is not: §4.13.4 names that key on a platform that
+   has the operation which fires it, and collecting one for an operation this engine cannot perform would show
+   a page's Proxy a read for a callback nothing will ever invoke. custom_elements_install ASSERTS that pairing.
+   The form-associated four (step 14.12) are a different map, collected only when `formAssociated` converts to
+   true — a step this component has not built, so they are honestly absent rather than half-collected here. */
+#define CE_LIFECYCLE_CALLBACKS(X) \
+    X(CE_CB_CONNECTED,    "connectedCallback") \
+    X(CE_CB_DISCONNECTED, "disconnectedCallback") \
+    X(CE_CB_ADOPTED,      "adoptedCallback") \
+    X(CE_CB_ATTR_CHANGED, "attributeChangedCallback")
+#define CE_CB_ID(id, name)   id,
+#define CE_CB_NAME(id, name) name,
+enum { CE_LIFECYCLE_CALLBACKS(CE_CB_ID) CE_CB_COUNT };
+static const char *const CE_CALLBACK_NAMES[CE_CB_COUNT] = { CE_LIFECYCLE_CALLBACKS(CE_CB_NAME) };
+static JSAtom g_cb_atoms[CE_CB_COUNT];
 static int    g_id_define, g_id_get;   /* declared once per agent — see custom_elements_init */
 static int    g_reaction_stepid = -1;
 static JSValue g_reaction_fn;
@@ -98,33 +127,29 @@ static bool ce_name_valid(const char *name, size_t len)
 #define CE_MAX_REACTION_ARGS 3
 
 /* ---- the reaction ---------------------------------------------------------------------------------------- */
-/* THE REACTION FLOW: read the named callback off the element, and if it is callable, call it with the element
-   as the receiver. Both steps are requests — the read because a class could define a callback as an accessor
-   or sit behind a Proxy, and the call because the body is the page's code.
-   ONE machine for every lifetime callback rather than one per name: what differs between connected and
-   disconnected is the NAME, which is data, and the reaction queue carries it as the job's second argument. */
+/* THE REACTION FLOW: call the reaction's callback function with the element as the receiver. ONE machine for
+   every lifecycle callback rather than one per name: what differs between connected and disconnected is WHICH
+   FUNCTION, which is data, and the reaction queue carries it as the job's second argument.
+   THE CALLBACK ARRIVES WITH THE REACTION; it is not read here. §4.13.4 step 14.4 collects the lifecycle
+   callbacks off the constructor's PROTOTYPE when define() runs, and §4.13.6's "enqueue a custom element
+   callback reaction" reads the collected one off the element's definition — so a page that reassigns
+   `X.prototype.connectedCallback` after define() changes nothing, exactly as in a browser, and an OWN
+   `el.connectedCallback` is not a callback at all. Reading it off the ELEMENT at reaction time answered both
+   of those the other way round. */
 /* WHERE THIS MACHINE RESTS. §4.13.6 invokes a callback reaction by calling its callback function with the
-   element as the callback this value, and the two things that reach the page's code — reading the callback and
-   calling it — are the two stages after the element is fixed.
-   THE READ IS AT REACTION TIME, and the spec's is at DEFINITION time: §4.13.4 step 14.4 collects the lifecycle
-   callbacks off the prototype when define() runs, so a page that reassigns `X.prototype.connectedCallback`
-   afterwards changes nothing in a browser and changes everything here. Naming the step is what made that
-   visible; building step 14.4 is the fix, and it is the next thing this component owes. */
+   element as the callback this value; the operands are the dequeued reaction and the one thing that reaches
+   the page's code is the call. */
 #define CE_REACTION_STAGES(X) \
-    X(CEREACT_ELEMENT,  "HTML §4.13.6 invoke custom element reactions step 1.3.1 (the element this callback " \
-                        "reaction was dequeued for)") \
-    X(CEREACT_CALLBACK, "HTML §4.13.6 step 1.3.1's callback function — read off the ELEMENT here, where " \
-                        "§4.13.4 step 14.4 collects it off the prototype at definition time; that read is the " \
-                        "missing suspension point") \
-    X(CEREACT_INVOKE,   "HTML §4.13.6 step 1.3.1 (invoke the callback function with its arguments and " \
-                        "this = element)")
+    X(CEREACT_ELEMENT, "HTML §4.13.6 invoke custom element reactions step 1.3.1 (the dequeued callback " \
+                       "reaction: its element, and the callback function §4.13.4 step 14.4 collected)") \
+    X(CEREACT_INVOKE,  "HTML §4.13.6 step 1.3.1 (invoke the callback function with its arguments and " \
+                       "this = element)")
 enum { CE_REACTION_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const CE_REACTION_STEPS[] = { CE_REACTION_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct JSCeReaction {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
     uint8_t   cphase;   /* the call request's own phase */
-    JSValue   fn;       /* the callback, once read (owned) */
     JSValue   cb[2 + CE_MAX_REACTION_ARGS];   /* the call request buffer: [this, callback, args…] */
 } JSCeReaction;
 
@@ -132,7 +157,6 @@ static void js_ce_reaction_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSCeReaction *s = st;
     int k;
-    v->val(ctx, &s->fn);
     for (k = 0; k < 2 + CE_MAX_REACTION_ARGS; k++)
         v->val(ctx, &s->cb[k]);
 }
@@ -142,8 +166,6 @@ static JSValue js_ce_reaction_fini(JSContext *ctx, void *st, bool take_result)
     JSCeReaction *s = st;
     int k;
     (void)take_result;
-    JS_FreeValue(ctx, s->fn);
-    s->fn = JS_UNDEFINED;
     for (k = 0; k < 2 + CE_MAX_REACTION_ARGS; k++) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
@@ -154,32 +176,22 @@ static JSValue js_ce_reaction_fini(JSContext *ctx, void *st, bool take_result)
 static int js_ce_reaction_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSCeReaction *s = st;
-    JSValueConst el = step_arg(&s->hdr, 0);
+    JSValueConst el = step_arg(&s->hdr, 0), fn = step_arg(&s->hdr, 1);
     JSValue ignored;
-    JSAtom name;
     int r;
 
     if (s->hdr.stage == CEREACT_ELEMENT) {
-        s->fn = JS_UNDEFINED;
         for (r = 0; r < 2 + CE_MAX_REACTION_ARGS; r++) s->cb[r] = JS_UNDEFINED;
-        s->hdr.stage = CEREACT_CALLBACK;
-        if (!JS_IsObject(el)) { JS_FreeValue(ctx, cb_result); return JS_STEP_DONE; }
-    }
-    if (s->hdr.stage == CEREACT_CALLBACK) {
-        name = JS_ValueToAtom(ctx, step_arg(&s->hdr, 1));
-        CHECK(name != JS_ATOM_NULL, "a custom-element reaction was queued with no callback name");
-        r = step_getprop_run(ctx, &s->hdr, el, name, cb_result, &s->fn, out_cb, out_argc);
-        JS_FreeAtom(ctx, name);
-        cb_result = JS_UNDEFINED;
-        if (r > 0) return r;
-        if (r < 0) return JS_STEP_ABRUPT;
         s->hdr.stage = CEREACT_INVOKE;
-        /* §4.13.3: a definition that does not declare this callback simply has no reaction to run. */
-        if (!JS_IsFunction(ctx, s->fn)) return JS_STEP_DONE;
+        /* The enqueue is what decides a reaction exists: §4.13.6's step 3 drops one whose collected callback is
+           null, so a reaction that reached here has a callable one and an element to run it on. */
+        DCHECK(JS_IsObject(el) && JS_IsFunction(ctx, fn),
+               "a custom-element callback reaction was enqueued without an element and a callback function — "
+               "§4.13.6 step 3 drops a null callback at the ENQUEUE, so one cannot arrive here");
     }
     DCHECK(s->hdr.stage == CEREACT_INVOKE, "a custom-element reaction resumed into a stage §4.13.6 does not have");
-    /* Everything past the element and the callback NAME is the callback's own arguments. */
-    r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), s->fn, el, s->hdr.argc - 2,
+    /* Everything past the element and the callback is the callback's own arguments. */
+    r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), fn, el, s->hdr.argc - 2,
                       s->hdr.argc > 2 ? (JSValueConst *)s->hdr.argv + 2 : NULL,
                       cb_result, &ignored, out_cb, out_argc);
     if (r > 0) return r;
@@ -196,30 +208,54 @@ static const JSTrampStepDef js_ce_reaction_def = {
 /* ---- the upgrade ------------------------------------------------------------------------------------------ */
 /* §4.13.3 "upgrade": give the element the definition's prototype, then enqueue its connected reaction. The
    wrapper is the SAME object it always was, so every identity a page holds survives the upgrade. */
-/* §4.13.3 "enqueue a custom element callback reaction". A JOB, so the callback runs as a call-root flow:
-   preemptible, forkable and parkable like any other program. Calling it here would be a C activation hosting
-   the page's loops, which is the drive-to-completion this engine aborts on. */
-static void ce_enqueue_args(JSContext *ctx, JSValueConst wrap, const char *callback,
+/* §4.13.5 step 2's definition, read off the element's OWN slot — no prototype lookup and no page code. UNDEFINED
+   for an element that has not been upgraded, which is what "custom element definition is null" means. OWNED. */
+static JSValue ce_definition_of(JSContext *ctx, JSValueConst wrap)
+{
+    JSValue v;
+
+    if (!JS_IsObject(wrap)) return JS_UNDEFINED;
+    if (JS_GetOwnSlot(ctx, &v, wrap, g_atom_def) <= 0) return JS_UNDEFINED;
+    return v;
+}
+
+/* §4.13.6 "enqueue a custom element callback reaction", steps 1-3 and 5-6. The callback is the one step 14.4
+   COLLECTED into this element's definition, and step 3 returns without a reaction when it is null — which is
+   why a class that declares no `disconnectedCallback` costs nothing at every removal.
+   A JOB, so the callback runs as a call-root flow: preemptible, forkable and parkable like any other program.
+   Calling it here would be a C activation hosting the page's loops, which is the drive-to-completion this
+   engine aborts on. */
+static void ce_enqueue_args(JSContext *ctx, JSValueConst wrap, JSValueConst def, int callback,
                             int argc, JSValueConst *args)
 {
     JSValueConst argv[2 + CE_MAX_REACTION_ARGS];
-    JSValue name = JS_NewString(ctx, callback);
+    JSValue fn, cbs;
     int i;
 
     DCHECK(JS_IsObject(g_reaction_fn),
            "a custom-element reaction was enqueued before custom_elements_init built its driver");
     DCHECK(argc <= CE_MAX_REACTION_ARGS,
            "a lifecycle callback was enqueued with more arguments than any of them takes");
+    DCHECK(callback >= 0 && callback < CE_CB_COUNT,
+           "a reaction was enqueued for a callback §4.13.4 step 14's map does not name");
+    if (!JS_IsObject(def)) return;   /* step 1: an element with no definition has no reaction */
+    cbs = JS_GetProperty(ctx, def, g_atom_callbacks);
+    DCHECK(JS_IsObject(cbs), "a custom element definition carries no step 14.4 callback map — every definition "
+                             "this component commits builds one, so a missing map is a definition it did not "
+                             "make");
+    fn = JS_GetPropertyUint32(ctx, cbs, (uint32_t)callback);
+    JS_FreeValue(ctx, cbs);
+    if (!JS_IsFunction(ctx, fn)) { JS_FreeValue(ctx, fn); return; }   /* step 3: the entry is null */
     argv[0] = wrap;
-    argv[1] = name;
+    argv[1] = fn;
     for (i = 0; i < argc; i++) argv[2 + i] = args[i];
     JS_EnqueueCallJob(ctx, g_reaction_fn, 2 + argc, argv);
-    JS_FreeValue(ctx, name);
+    JS_FreeValue(ctx, fn);
 }
 
-static void ce_enqueue(JSContext *ctx, JSValueConst wrap, const char *callback)
+static void ce_enqueue(JSContext *ctx, JSValueConst wrap, JSValueConst def, int callback)
 {
-    ce_enqueue_args(ctx, wrap, callback, 0, NULL);
+    ce_enqueue_args(ctx, wrap, def, callback, 0, NULL);
 }
 
 static void ce_upgrade(JSContext *ctx, lxb_dom_element_t *el, JSValueConst def)
@@ -231,36 +267,26 @@ static void ce_upgrade(JSContext *ctx, lxb_dom_element_t *el, JSValueConst def)
     proto = JS_GetProperty(ctx, def, g_atom_proto);
     JS_SetPrototype(ctx, wrap, proto);
     JS_FreeValue(ctx, proto);
-    /* §4.13: an element is upgraded ONCE. The mark rides the WRAPPER, so it is per-flow like everything else
-       about that element — and it is what tells a re-insertion (which must fire connectedCallback again) from
-       a second upgrade (which must not). */
-    JS_DefinePropertyValue(ctx, (JSValue)wrap, g_atom_upgraded, JS_NewBool(ctx, true), 0);
-    ce_enqueue(ctx, wrap, "connectedCallback");
+    /* §4.13.5 step 2: the element's custom element definition. It rides the WRAPPER, so it is per-flow like
+       everything else about that element — and its presence is also what tells a re-insertion (which must fire
+       connectedCallback again) from a second upgrade (which must not). */
+    JS_DefinePropertyValue(ctx, (JSValue)wrap, g_atom_def, JS_DupValue(ctx, def), 0);
+    ce_enqueue(ctx, wrap, def, CE_CB_CONNECTED);
     JS_FreeValue(ctx, wrap);
-}
-
-/* Has this element been upgraded — read off its wrapper's own slot, so no prototype lookup and no page code. */
-static bool ce_is_upgraded(JSContext *ctx, JSValueConst wrap)
-{
-    JSValue v;
-    bool up;
-
-    if (!JS_IsObject(wrap)) return false;
-    if (JS_GetOwnSlot(ctx, &v, wrap, g_atom_upgraded) <= 0) return false;
-    up = JS_ToBool(ctx, v);
-    JS_FreeValue(ctx, v);
-    return up;
 }
 
 void custom_elements_disconnected(JSContext *ctx, lxb_dom_element_t *el)
 {
-    JSValue wrap;
+    JSValue wrap, def;
 
     if (!g_ready) return;
     wrap = node_wrap(ctx, lxb_dom_interface_node(el));
-    /* §4.13.3: only an UPGRADED element has a disconnected reaction. Asking the registry by name instead would
-       fire for an element that was never upgraded — one created before its definition and removed before it. */
-    if (ce_is_upgraded(ctx, wrap)) ce_enqueue(ctx, wrap, "disconnectedCallback");
+    /* §4.13.3: only an UPGRADED element has a disconnected reaction, and the definition it was upgraded WITH is
+       the one that supplies the callback. Asking the registry by name instead would fire for an element that
+       was never upgraded — one created before its definition and removed before it. */
+    def = ce_definition_of(ctx, wrap);
+    ce_enqueue(ctx, wrap, def, CE_CB_DISCONNECTED);
+    JS_FreeValue(ctx, def);
     JS_FreeValue(ctx, wrap);
 }
 
@@ -276,11 +302,14 @@ void custom_elements_try_upgrade(JSContext *ctx, lxb_dom_element_t *el)
     def = ce_find(ctx, (const char *)tag, len);
     if (JS_IsObject(def)) {
         JSValue wrap = node_wrap(ctx, lxb_dom_interface_node(el));
+        JSValue had = ce_definition_of(ctx, wrap);
         /* §4.13.3: an element already upgraded is not upgraded again — but it DOES get a connected reaction
            every time it re-enters a document, which is how a page that moves a node around keeps its
-           lifecycle running. Two different things behind one insertion. */
-        if (ce_is_upgraded(ctx, wrap)) ce_enqueue(ctx, wrap, "connectedCallback");
+           lifecycle running. Two different things behind one insertion. The reaction uses the definition the
+           element WAS upgraded with, which is the element's own state and not this name's current entry. */
+        if (JS_IsObject(had)) ce_enqueue(ctx, wrap, had, CE_CB_CONNECTED);
         else ce_upgrade(ctx, el, def);
+        JS_FreeValue(ctx, had);
         JS_FreeValue(ctx, wrap);
     }
     JS_FreeValue(ctx, def);
@@ -314,18 +343,16 @@ void custom_elements_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, co
                                        const char *val, size_t val_len)
 {
     JSValue wrap, def, observed, args[3];
-    size_t len = 0, old_len = 0;
-    const lxb_char_t *tag, *old;
+    size_t old_len = 0;
+    const lxb_char_t *old;
     uint32_t n = 0, i;
     bool watched = false;
 
     if (!g_ready) return;
     wrap = node_wrap(ctx, lxb_dom_interface_node(el));
-    if (!ce_is_upgraded(ctx, wrap)) { JS_FreeValue(ctx, wrap); return; }
-    tag = lxb_dom_element_local_name(el, &len);
-    def = tag && len ? ce_find(ctx, (const char *)tag, len) : JS_UNDEFINED;
-    observed = JS_IsObject(def) ? JS_GetProperty(ctx, def, g_atom_observed) : JS_UNDEFINED;
-    JS_FreeValue(ctx, def);
+    def = ce_definition_of(ctx, wrap);
+    if (!JS_IsObject(def)) { JS_FreeValue(ctx, def); JS_FreeValue(ctx, wrap); return; }
+    observed = JS_GetProperty(ctx, def, g_atom_observed);
     if (JS_IsObject(observed)) {
         JSValue lv = JS_GetPropertyStr(ctx, observed, "length");
         JS_ToUint32(ctx, &n, lv);
@@ -339,15 +366,17 @@ void custom_elements_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, co
         }
     }
     JS_FreeValue(ctx, observed);
-    if (!watched) { JS_FreeValue(ctx, wrap); return; }
+    /* §4.13.6's enqueue step 4: a name the definition does not observe is not a reaction. */
+    if (!watched) { JS_FreeValue(ctx, def); JS_FreeValue(ctx, wrap); return; }
     /* §4.13.3's arguments: (name, oldValue, newValue). An attribute that was absent has a NULL old value and an
        attribute being removed a NULL new one, and the page's code branches on exactly that. */
     old = lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), &old_len);
     args[0] = JS_NewString(ctx, name);
     args[1] = old ? JS_NewStringLen(ctx, (const char *)old, old_len) : JS_NULL;
     args[2] = val ? JS_NewStringLen(ctx, val, val_len) : JS_NULL;
-    ce_enqueue_args(ctx, wrap, "attributeChangedCallback", 3, (JSValueConst *)args);
+    ce_enqueue_args(ctx, wrap, def, CE_CB_ATTR_CHANGED, 3, (JSValueConst *)args);
     for (i = 0; i < 3; i++) JS_FreeValue(ctx, args[i]);
+    JS_FreeValue(ctx, def);
     JS_FreeValue(ctx, wrap);
 }
 
@@ -378,7 +407,10 @@ static const IdlDictMember CE_DEFINE_OPTS[] = { { "extends", IDL_DOMSTRING } }; 
     X(CE_CHECKS,    "HTML §4.13.4 steps 1-7 (IsConstructor; a valid custom element name; the name is not " \
                     "already defined; `extends`)") \
     X(CE_PROTOTYPE, "HTML §4.13.4 steps 14.1-14.2 (Get(constructor, \"prototype\"); it must be an Object)") \
-    X(CE_OBSERVED,  "HTML §4.13.4 step 14.5.1 (Get(constructor, \"observedAttributes\"))") \
+    X(CE_CALLBACKS, "HTML §4.13.4 step 14.4 (Get(prototype, callbackName) for each key of lifecycleCallbacks, " \
+                    "in the map's order, converting each to the Function callback type), one key per step") \
+    X(CE_OBSERVED,  "HTML §4.13.4 step 14.5.1 (Get(constructor, \"observedAttributes\"), reached only when " \
+                    "step 14.4 collected an attributeChangedCallback)") \
     X(CE_SEQUENCE,  "HTML §4.13.4 step 14.5.2 (converting it to a sequence<DOMString>), one entry per step") \
     X(CE_COMMIT,    "HTML §4.13.4 steps 15-16 and 18 (the definition, and the upgrade reaction for each " \
                     "candidate)")
@@ -386,8 +418,9 @@ enum { IDL_STEP_STAGE_BASE(CE_DEFINE_STAGES) CE_DEFINE_STAGES(JS_STEP_STAGE_ENUM
 static const char *const CE_DEFINE_STEPS[] = { CE_DEFINE_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
-    uint32_t i, n;      /* THE RESUME POINT: the observed-attribute entry being converted */
+    uint32_t i, n;      /* THE RESUME POINT: step 14.4's callback key, then the observed-attribute entry */
     JSValue  proto;     /* step 14.1's answer (owned) */
+    JSValue  callbacks; /* step 14.4's map, indexed by CE_CB_* (owned) */
     JSValue  raw;       /* what the observedAttributes getter answered (owned) */
     JSValue  names;     /* the converted sequence<DOMString> (owned) */
 } CeDefineState;
@@ -396,6 +429,7 @@ static void ce_define_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     CeDefineState *s = st;
     v->val(ctx, &s->proto);
+    v->val(ctx, &s->callbacks);
     v->val(ctx, &s->raw);
     v->val(ctx, &s->names);
 }
@@ -404,9 +438,10 @@ static void ce_define_release(JSContext *ctx, void *st)
 {
     CeDefineState *s = st;
     JS_FreeValue(ctx, s->proto);
+    JS_FreeValue(ctx, s->callbacks);
     JS_FreeValue(ctx, s->raw);
     JS_FreeValue(ctx, s->names);
-    s->proto = s->raw = s->names = JS_UNDEFINED;
+    s->proto = s->callbacks = s->raw = s->names = JS_UNDEFINED;
 }
 
 /* §4.13.4 STEPS 1-7 — everything the spec decides BEFORE it touches the page's object. Its own function
@@ -460,7 +495,8 @@ static int ce_define_checks(JSContext *ctx, int argc, JSValueConst *argv)
 /* §4.13.4 STEPS 15-16 AND 18 — the definition, the definition set, and the upgrade reactions. Plain C, and it
    stays that way: every value it needs is already real, and this is the part that touches only the component's
    own state. `proto` is step 14.1's answer, read as a request rather than here. */
-static JSValue ce_define_commit(JSContext *ctx, JSValueConst *argv, JSValueConst names, JSValueConst proto)
+static JSValue ce_define_commit(JSContext *ctx, JSValueConst *argv, JSValueConst names, JSValueConst proto,
+                                JSValueConst callbacks)
 {
     const char *nm;
     size_t nlen;
@@ -478,6 +514,10 @@ static JSValue ce_define_commit(JSContext *ctx, JSValueConst *argv, JSValueConst
            reassigns it afterwards does not retroactively change what its already-defined elements are. */
         JS_SetProperty(ctx, def, g_atom_proto, JS_DupValue(ctx, proto));
         JS_SetProperty(ctx, def, g_atom_observed, JS_DupValue(ctx, names));
+        /* §4.13.4 step 15's definition holds the lifecycle callbacks step 14.4 collected — the definition IS
+           where a reaction reads its callback from, which is what makes a later `X.prototype.connectedCallback
+           = other` change nothing about the elements already defined. */
+        JS_SetProperty(ctx, def, g_atom_callbacks, JS_DupValue(ctx, callbacks));
         a = JS_NewAtomLen(ctx, nm, nlen);
         CHECK(a != JS_ATOM_NULL, "custom elements: a name could not be interned");
         {
@@ -503,7 +543,14 @@ static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
     if (hdr->stage == CE_CHECKS) {
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        s->proto = s->raw = s->names = JS_UNDEFINED;
+        /* EVERY owned field before the first thing that can throw: the failure path tears this state down
+           through ce_define_release, which frees exactly what the state holds and nothing else. */
+        s->proto = s->raw = JS_UNDEFINED;
+        s->callbacks = JS_NewArray(ctx);
+        s->names = JS_NewArray(ctx);
+        CHECK(!JS_IsException(s->callbacks) && !JS_IsException(s->names),
+              "custom elements: OOM building §4.13.4 step 14's callback map — a definition with no callbacks "
+              "is a class whose lifecycle code never runs");
         /* `define(name, constructor, optional options)` declares two required arguments, and Web IDL's own
            count check has already thrown for a call with fewer — the body's copy of it was unreachable. */
         DCHECK(argc >= 2, "customElements.define reached its algorithm with fewer than the two arguments its "
@@ -520,24 +567,66 @@ static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
             JS_ThrowTypeError(ctx, "a custom element constructor's prototype must be an object");
             return -1;
         }
+        hdr->stage = CE_CALLBACKS;
+        s->i = 0;
+    }
+    if (hdr->stage == CE_CALLBACKS) {
+        /* §4.13.4 step 14.4 — "for each callbackName of the keys of lifecycleCallbacks". IN ORDER, one key per
+           step, off the PROTOTYPE, which is where a class puts them and where a Proxy can be. Collecting them
+           HERE rather than reading one off the element per reaction is the whole point: a browser answers a
+           reaction with the function this loop saw, so reassigning the prototype's property afterwards changes
+           nothing, and an own property on the element is not a lifecycle callback at all. */
+        while (s->i < CE_CB_COUNT) {
+            JSValue v = JS_UNDEFINED;
+            r = step_getprop_run(ctx, hdr, s->proto, g_cb_atoms[s->i], cb_result, &v, out_cb, out_argc);
+            cb_result = JS_UNDEFINED;
+            if (r > 0) return r;          /* parked ON THIS KEY; the resume comes back to it */
+            if (r < 0) return -1;
+            /* step 14.4.2: a value that is not undefined is converted to the Web IDL Function callback type,
+               which throws for anything not callable — and the loop STOPS there, so the keys after it are
+               never read. `null` is not undefined: it is a value that fails the conversion. */
+            if (!JS_IsUndefined(v)) {
+                if (!JS_IsFunction(ctx, v)) {
+                    JS_FreeValue(ctx, v);
+                    JS_ThrowTypeError(ctx, "a custom element's %s is not callable", CE_CALLBACK_NAMES[s->i]);
+                    return -1;
+                }
+                JS_SetPropertyUint32(ctx, s->callbacks, s->i, v);
+            } else {
+                JS_FreeValue(ctx, v);
+            }
+            s->i++;
+        }
         hdr->stage = CE_OBSERVED;
     }
     if (hdr->stage == CE_OBSERVED) {
-        r = step_getprop_run(ctx, hdr, argv[1], g_atom_observed_src, cb_result, &s->raw, out_cb, out_argc);
-        cb_result = JS_UNDEFINED;
-        if (r > 0) return r;
-        if (r < 0) return -1;
-        hdr->stage = CE_SEQUENCE;
-        s->names = JS_NewArray(ctx);
+        /* §4.13.4 step 14.5 is CONDITIONAL: observedAttributes is read only when step 14.4 collected an
+           attributeChangedCallback. A class with no such callback never observes an attribute, so reading the
+           property would run a getter the algorithm never asks for — which a page's Proxy sees, and which is
+           the difference between rethrowing a page's error and never provoking it. */
+        JSValue seen = JS_GetPropertyUint32(ctx, s->callbacks, CE_CB_ATTR_CHANGED);
+        bool observes = JS_IsFunction(ctx, seen);
+        JS_FreeValue(ctx, seen);
         s->i = 0;
         s->n = 0;
-        /* §4.13.4: absent observedAttributes is not an error, it is no observed attributes. A present one is a
-           sequence, whose length is itself a read — of an engine-visible array in every real case, and of the
-           page's object when it is not, which is why the whole walk is on the trampoline. */
-        if (JS_IsObject(s->raw)) {
-            JSValue lv = JS_GetPropertyStr(ctx, s->raw, "length");
-            JS_ToUint32(ctx, &s->n, lv);
-            JS_FreeValue(ctx, lv);
+        if (!observes) {
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            hdr->stage = CE_COMMIT;
+        } else {
+            r = step_getprop_run(ctx, hdr, argv[1], g_atom_observed_src, cb_result, &s->raw, out_cb, out_argc);
+            cb_result = JS_UNDEFINED;
+            if (r > 0) return r;
+            if (r < 0) return -1;
+            hdr->stage = CE_SEQUENCE;
+            /* §4.13.4: absent observedAttributes is not an error, it is no observed attributes. A present one is
+               a sequence, whose length is itself a read — of an engine-visible array in every real case, and of
+               the page's object when it is not, which is why the whole walk is on the trampoline. */
+            if (JS_IsObject(s->raw)) {
+                JSValue lv = JS_GetPropertyStr(ctx, s->raw, "length");
+                JS_ToUint32(ctx, &s->n, lv);
+                JS_FreeValue(ctx, lv);
+            }
         }
     }
     if (hdr->stage == CE_SEQUENCE) {
@@ -556,7 +645,7 @@ static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
     }
     DCHECK(hdr->stage == CE_COMMIT, "customElements.define resumed into a stage §4.13.4 does not have");
     JS_FreeValue(ctx, cb_result);
-    *presult = ce_define_commit(ctx, argv, s->names, s->proto);
+    *presult = ce_define_commit(ctx, argv, s->names, s->proto, s->callbacks);
     if (JS_IsException(*presult)) { *presult = JS_UNDEFINED; return -1; }
     return 0;
 }
@@ -586,17 +675,30 @@ static JSValue js_ce_get(JSContext *ctx, JSValueConst this_val, int argc, JSValu
 
 void custom_elements_init(JSContext *ctx)
 {
+    int k;
+
     DCHECK(!g_ready, "custom_elements_init ran twice — one instance is one document");
     g_atom_prototype = JS_NewAtom(ctx, "prototype");
-    g_atom_upgraded = JS_NewAtom(ctx, "apiclientUpgraded");
     g_atom_ctor = JS_NewAtom(ctx, "ctor");
     g_atom_proto = JS_NewAtom(ctx, "proto");
     g_atom_observed = JS_NewAtom(ctx, "observed");
     g_atom_observed_src = JS_NewAtom(ctx, "observedAttributes");
+    g_atom_callbacks = JS_NewAtom(ctx, "callbacks");
     CHECK(g_atom_prototype != JS_ATOM_NULL &&
-          g_atom_upgraded != JS_ATOM_NULL && g_atom_ctor != JS_ATOM_NULL && g_atom_proto != JS_ATOM_NULL &&
-          g_atom_observed != JS_ATOM_NULL && g_atom_observed_src != JS_ATOM_NULL,
+          g_atom_ctor != JS_ATOM_NULL && g_atom_proto != JS_ATOM_NULL &&
+          g_atom_observed != JS_ATOM_NULL && g_atom_observed_src != JS_ATOM_NULL &&
+          g_atom_callbacks != JS_ATOM_NULL,
           "a custom-element atom could not be interned");
+    /* §4.13.5 step 2's slot key: a symbol the page cannot mint, so the element's definition is not a string
+       property of this engine's invention sitting on every custom element. */
+    g_def_key = JS_NewSymbol(ctx, "customElementDefinition", false);
+    CHECK(!JS_IsException(g_def_key), "the custom-element definition slot key allocation failed");
+    g_atom_def = JS_ValueToAtom(ctx, g_def_key);
+    CHECK(g_atom_def != JS_ATOM_NULL, "the custom-element definition slot key could not be interned");
+    for (k = 0; k < CE_CB_COUNT; k++) {
+        g_cb_atoms[k] = JS_NewAtom(ctx, CE_CALLBACK_NAMES[k]);
+        CHECK(g_cb_atoms[k] != JS_ATOM_NULL, "a §4.13.4 step 14 lifecycle callback name could not be interned");
+    }
     g_defs_slot = realm_value_declare(ctx, "§4.13.4 definition set");
     g_reaction_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_ce_reaction_def);
     /* The reaction driver is a step function object nobody installs, so a page can neither see it nor replace
@@ -621,6 +723,27 @@ void custom_elements_install(JSContext *ctx, JSValueConst global)
     JSValue reg;
 
     DCHECK(g_ready, "customElements was installed before custom_elements_init ran");
+    /* §4.13.4 step 14's map NAMES `connectedMoveCallback` exactly on a platform that has `moveBefore` — the two
+       move together, and neither half is safe alone: a key collected for an operation this engine cannot
+       perform shows a page's Proxy a read for a callback nothing will invoke, and the operation without the key
+       silently drops the reaction it is supposed to fire. Asserted where Element's prototype exists, so
+       building moveBefore CRASHES here rather than leaving the pairing to a comment. */
+    {
+        JSValue ep = element_proto(ctx), mb;
+        JSAtom a = JS_NewAtom(ctx, "moveBefore");
+        int has;
+        CHECK(a != JS_ATOM_NULL, "custom elements: `moveBefore` could not be interned");
+        DCHECK(JS_IsObject(ep), "customElements was installed before Element.prototype existed — §4.13.4's "
+                                "callback list is paired with what Element can do, and that pairing cannot be "
+                                "checked against a prototype that is not there yet");
+        has = JS_GetOwnSlot(ctx, &mb, ep, a);
+        if (has > 0) JS_FreeValue(ctx, mb);
+        JS_FreeAtom(ctx, a);
+        JS_FreeValue(ctx, ep);
+        DCHECK(has <= 0, "Element has moveBefore, so HTML §4.13.4 step 14's lifecycle callback map must name "
+                         "`connectedMoveCallback` between disconnectedCallback and adoptedCallback — add it to "
+                         "CE_LIFECYCLE_CALLBACKS and enqueue it from the move");
+    }
     /* Built with the REGISTRY it belongs to, and for the agent's own realm that is still pre-boot — so a write
        to it during a flow is captured by the heap COW rather than being that flow's private object. */
     {
@@ -637,18 +760,28 @@ void custom_elements_install(JSContext *ctx, JSValueConst global)
 
 void custom_elements_free(JSContext *ctx)
 {
+    int k;
+
     if (!g_ready) return;
     /* the definition sets are the REALMS' — released with their contexts */
     JS_FreeValue(ctx, g_reaction_fn);
     g_reaction_fn = JS_UNDEFINED;
     JS_FreeAtom(ctx, g_atom_prototype);
-    JS_FreeAtom(ctx, g_atom_upgraded);
     JS_FreeAtom(ctx, g_atom_ctor);
     JS_FreeAtom(ctx, g_atom_proto);
     JS_FreeAtom(ctx, g_atom_observed);
     JS_FreeAtom(ctx, g_atom_observed_src);
-    g_atom_prototype = g_atom_upgraded = JS_ATOM_NULL;
+    JS_FreeAtom(ctx, g_atom_callbacks);
+    JS_FreeAtom(ctx, g_atom_def);
+    JS_FreeValue(ctx, g_def_key);
+    g_def_key = JS_UNDEFINED;
+    for (k = 0; k < CE_CB_COUNT; k++) {
+        JS_FreeAtom(ctx, g_cb_atoms[k]);
+        g_cb_atoms[k] = JS_ATOM_NULL;
+    }
+    g_atom_prototype = g_atom_def = JS_ATOM_NULL;
     g_atom_ctor = g_atom_proto = g_atom_observed = g_atom_observed_src = JS_ATOM_NULL;
+    g_atom_callbacks = JS_ATOM_NULL;
     g_reaction_stepid = -1;
     g_ready = 0;
 }
