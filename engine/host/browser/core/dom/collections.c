@@ -28,13 +28,20 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/idl_indexed.h"
 #include "core/dom/node.h"
 #include "core/dom/collections.h"
 #include "solver/dom_cow.h"
 
-static JSValue g_nodelist_proto = JS_UNDEFINED;
-static JSValue g_htmlcoll_proto = JS_UNDEFINED;
+/* PER REALM — §3.7, and here it decides ANSWERS: a C member runs in the realm that DEFINED it, so one shared
+   prototype answers every document out of whichever realm built it first. Held in quickjs's per-context
+   class-proto slots. */
+static JSClassID g_nodelist_class, g_htmlcoll_class;
+/* Declared once per AGENT (the IDL pool is sealed after agent init); installed per realm. */
+static int g_item_id = -1, g_named_item_id = -1;
+
+static JSValue coll_new_hc(JSContext *ctx, int kind, JSValueConst owner, const char *name);
 static JSValue g_key = JS_UNDEFINED;        /* the collection's own slots, under a private Symbol */
 static JSValue g_cache_key = JS_UNDEFINED;  /* the [SameObject] cache on an owner's wrapper */
 static int     g_ready;
@@ -498,12 +505,22 @@ static JSValue coll_cached(JSContext *ctx, JSValueConst owner, int kind, JSValue
 
 JSValue collections_child_nodes(JSContext *ctx, JSValueConst owner)
 {
-    return coll_cached(ctx, owner, COLL_CHILD_NODES, g_nodelist_proto, &NODELIST_INDEXED);
+    {
+        JSValue proto = nodelist_proto(ctx);
+        JSValue r = coll_cached(ctx, owner, COLL_CHILD_NODES, proto, &NODELIST_INDEXED);
+        JS_FreeValue(ctx, proto);
+        return r;
+    }
 }
 
 JSValue collections_children(JSContext *ctx, JSValueConst owner)
 {
-    return coll_cached(ctx, owner, COLL_CHILDREN, g_htmlcoll_proto, &HTMLCOLL_INDEXED);
+    {
+        JSValue proto = htmlcollection_proto(ctx);
+        JSValue r = coll_cached(ctx, owner, COLL_CHILDREN, proto, &HTMLCOLL_INDEXED);
+        JS_FreeValue(ctx, proto);
+        return r;
+    }
 }
 
 /* §4.5/§4.9 getElementsByTagName / getElementsByClassName — LIVE, and not [SameObject]: the spec returns a new
@@ -511,7 +528,7 @@ JSValue collections_children(JSContext *ctx, JSValueConst owner)
 JSValue collections_by_name(JSContext *ctx, JSValueConst owner, const char *name, bool by_class)
 {
     DCHECK(g_ready, "a by-name collection was built before collections_init ran");
-    return coll_new(ctx, g_htmlcoll_proto, &HTMLCOLL_INDEXED,
+    return coll_new_hc(ctx,
                     by_class ? COLL_BY_CLASS : COLL_BY_TAG, owner, name);
 }
 
@@ -520,13 +537,13 @@ JSValue collections_by_name(JSContext *ctx, JSValueConst owner, const char *name
 JSValue collections_named(JSContext *ctx, JSValueConst owner, const char *name)
 {
     DCHECK(g_ready, "a named collection was built before collections_init ran");
-    return coll_new(ctx, g_htmlcoll_proto, &HTMLCOLL_INDEXED, COLL_NAMED, owner, name);
+    return coll_new_hc(ctx, COLL_NAMED, owner, name);
 }
 
 JSValue collections_links(JSContext *ctx, JSValueConst owner)
 {
     DCHECK(g_ready, "a links collection was built before collections_init ran");
-    return coll_new(ctx, g_htmlcoll_proto, &HTMLCOLL_INDEXED, COLL_LINKS, owner, NULL);
+    return coll_new_hc(ctx, COLL_LINKS, owner, NULL);
 }
 
 JSValue collections_static(JSContext *ctx, JSValue nodes)
@@ -534,41 +551,87 @@ JSValue collections_static(JSContext *ctx, JSValue nodes)
     JSValue coll;
 
     DCHECK(g_ready, "a static NodeList was built before collections_init ran");
-    coll = coll_new(ctx, g_nodelist_proto, &NODELIST_INDEXED, COLL_STATIC, nodes, NULL);
+    {
+        JSValue proto = nodelist_proto(ctx);
+        coll = coll_new(ctx, proto, &NODELIST_INDEXED, COLL_STATIC, nodes, NULL);
+        JS_FreeValue(ctx, proto);
+    }
     JS_FreeValue(ctx, nodes);   /* the slots hold their own reference */
     return coll;
 }
 
 void collections_init(JSContext *ctx)
 {
-    DCHECK(!g_ready, "collections_init ran twice — one instance is one document");
+    static const IdlArgType ONE_LONG[1] = { IDL_LONG };
+    static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
+    JSClassDef nl = { "NodeList" }, hc = { "HTMLCollection" };
+
+    DCHECK(!g_ready, "collections_init ran twice — the interfaces are declared once per AGENT");
     g_key = JS_NewSymbol(ctx, "collectionSlots", false);
     g_cache_key = JS_NewSymbol(ctx, "collectionCache", false);
     CHECK(!JS_IsException(g_key) && !JS_IsException(g_cache_key),
           "the collection slot keys could not be allocated");
-    g_nodelist_proto = JS_NewObject(ctx);
-    g_htmlcoll_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_nodelist_proto) && !JS_IsException(g_htmlcoll_proto),
-          "a collection prototype could not be allocated");
-    idl_interface_tag(ctx, g_nodelist_proto, "NodeList");
-    idl_interface_tag(ctx, g_htmlcoll_proto, "HTMLCollection");
-    {
-        static const IdlArgType ONE_LONG[1] = { IDL_LONG };
-        static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
-        int item_id = idl_method_id(ctx, ONE_LONG, 1, js_coll_item, 0);
-        idl_install_accessor(ctx, g_nodelist_proto, "length", js_coll_length, 0, -1);
-        idl_install_accessor(ctx, g_htmlcoll_proto, "length", js_coll_length, 0, -1);
-        idl_install_method(ctx, g_nodelist_proto, "item", 1, item_id);
-        idl_install_method(ctx, g_htmlcoll_proto, "item", 1, item_id);
-        idl_install_method(ctx, g_htmlcoll_proto, "namedItem", 1,
-                           idl_method_id(ctx, ONE_STR, 1, js_coll_named_item, 0));
-    }
+    JS_NewClassID(JS_GetRuntime(ctx), &g_nodelist_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_nodelist_class, &nl);
+    JS_NewClassID(JS_GetRuntime(ctx), &g_htmlcoll_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_htmlcoll_class, &hc);
+    /* ONE declaration for `item`, installed on BOTH prototypes — it is the same operation with the same
+       conversion in both IDLs, and two pool entries would be two copies of one fact. */
+    g_item_id = idl_method_id(ctx, ONE_LONG, 1, js_coll_item, 0);
+    g_named_item_id = idl_method_id(ctx, ONE_STR, 1, js_coll_named_item, 0);
+    g_ready = 1;
+    realm_declare_intrinsic(collections_install_protos);
+}
+
+/* §4.2.10's TWO INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. */
+void collections_install_protos(JSContext *ctx)
+{
+    JSValue nlp, hcp, prev;
+
+    DCHECK(g_ready, "a realm asked for a collection prototype before the interfaces were declared");
+    prev = JS_GetClassProto(ctx, g_nodelist_class);
+    DCHECK(JS_IsNull(prev), "collections_install_protos ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+    nlp = JS_NewObject(ctx);
+    hcp = JS_NewObject(ctx);
+    CHECK(!JS_IsException(nlp) && !JS_IsException(hcp), "a collection prototype could not be allocated");
+    idl_interface_tag(ctx, nlp, "NodeList");
+    idl_interface_tag(ctx, hcp, "HTMLCollection");
+    idl_install_accessor(ctx, nlp, "length", js_coll_length, 0, -1);
+    idl_install_accessor(ctx, hcp, "length", js_coll_length, 0, -1);
+    idl_install_method(ctx, nlp, "item", 1, g_item_id);
+    idl_install_method(ctx, hcp, "item", 1, g_item_id);
+    idl_install_method(ctx, hcp, "namedItem", 1, g_named_item_id);
     /* §3.7.10: NodeList's IDL declares `iterable<Node>`, so it gets the value-iterator members. HTMLCollection
        declares NO iterable — it is iterable only through the indexed getter, which §3.7.10 gives @@iterator
        for and nothing else. Two interfaces, two answers, because that is what the two IDLs say. */
-    idl_indexed_install_iterable(ctx, g_nodelist_proto);
-    idl_indexed_install_iterable(ctx, g_htmlcoll_proto);
-    g_ready = 1;
+    idl_indexed_install_iterable(ctx, nlp);
+    idl_indexed_install_iterable(ctx, hcp);
+    JS_SetClassProto(ctx, g_nodelist_class, nlp);
+    JS_SetClassProto(ctx, g_htmlcoll_class, hcp);
+}
+
+JSValue nodelist_proto(JSContext *ctx)
+{
+    JSValue proto = JS_GetClassProto(ctx, g_nodelist_class);
+    DCHECK(!JS_IsNull(proto), "NodeList.prototype was asked for in a realm that never ran its install");
+    return proto;   /* OWNED */
+}
+
+JSValue htmlcollection_proto(JSContext *ctx)
+{
+    JSValue proto = JS_GetClassProto(ctx, g_htmlcoll_class);
+    DCHECK(!JS_IsNull(proto), "HTMLCollection.prototype was asked for in a realm that never ran its install");
+    return proto;   /* OWNED */
+}
+
+/* An HTMLCollection, in THIS realm — the three call sites that build one differ only in their query. */
+static JSValue coll_new_hc(JSContext *ctx, int kind, JSValueConst owner, const char *name)
+{
+    JSValue proto = htmlcollection_proto(ctx);
+    JSValue r = coll_new(ctx, proto, &HTMLCOLL_INDEXED, kind, owner, name);
+    JS_FreeValue(ctx, proto);
+    return r;
 }
 
 void collections_install(JSContext *ctx, JSValueConst global)
@@ -576,8 +639,13 @@ void collections_install(JSContext *ctx, JSValueConst global)
     JSValue nl, hc;
 
     DCHECK(g_ready, "the collection interfaces were installed before their prototypes were built");
-    nl = idl_interface_object(ctx, "NodeList", g_nodelist_proto);
-    hc = idl_interface_object(ctx, "HTMLCollection", g_htmlcoll_proto);
+    {
+        JSValue nlp = nodelist_proto(ctx), hcp = htmlcollection_proto(ctx);
+        nl = idl_interface_object(ctx, "NodeList", nlp);
+        hc = idl_interface_object(ctx, "HTMLCollection", hcp);
+        JS_FreeValue(ctx, nlp);
+        JS_FreeValue(ctx, hcp);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "NodeList", nl);
     JS_SetPropertyStr(ctx, (JSValue)global, "HTMLCollection", hc);
 }
@@ -585,10 +653,8 @@ void collections_install(JSContext *ctx, JSValueConst global)
 void collections_free(JSContext *ctx)
 {
     if (!g_ready) return;
-    JS_FreeValue(ctx, g_nodelist_proto);
-    JS_FreeValue(ctx, g_htmlcoll_proto);
-    JS_FreeValue(ctx, g_key);
+    JS_FreeValue(ctx, g_key);   /* the prototypes are the REALMS' — released with their contexts */
     JS_FreeValue(ctx, g_cache_key);
-    g_nodelist_proto = g_htmlcoll_proto = g_key = g_cache_key = JS_UNDEFINED;
+    g_key = g_cache_key = JS_UNDEFINED;
     g_ready = 0;
 }

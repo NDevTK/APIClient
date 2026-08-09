@@ -6,6 +6,11 @@
 #include "quickjs.h"
 
 void collections_init(JSContext *ctx);
+/* §4.2.10's two prototypes for ONE realm — declared into core/realm.h's list, run once per realm. */
+void collections_install_protos(JSContext *ctx);
+/* PER REALM. OWNED: the caller frees. */
+JSValue nodelist_proto(JSContext *ctx);
+JSValue htmlcollection_proto(JSContext *ctx);
 void collections_free(JSContext *ctx);
 /* `NodeList` and `HTMLCollection` as globals. */
 void collections_install(JSContext *ctx, JSValueConst global);
