@@ -343,7 +343,15 @@ CowDelta *world_segment(JSContext *ctx, WorldId w, const WorldId *ancestry, int 
     if (g_segs_n == g_segs_cap) {
         int cap = g_segs_cap ? g_segs_cap * 2 : 16;
         ForeignSegment *g = realloc(g_segs, (size_t)cap * sizeof *g);
-        CHECK(g != NULL, "world registry: OOM growing the segment table");
+        /* THE CEILING THIS TABLE HAS, NAMED WHERE IT IS HIT. One segment per foreign world that ever reached
+           this instance, and world_release — the operation that would drop one — has no caller: nothing tells a
+           peer that a sending flow has finished, so every arm of every sender's fork that posts leaves a
+           segment here for the life of the instance. A reader standing at this allocation needs to know that,
+           because "OOM" alone sends them looking at the page. Build the release: a flow that finishes announces
+           its world to the peers it may have reached, exactly as it announces a document it created. */
+        CHECK(g != NULL, "world registry: OOM growing the segment table — one segment per foreign world that "
+                         "has ever reached this instance, and none is ever released: build the sender-side "
+                         "notice that tells a peer a world is gone, so world_release has a caller");
         g_segs = g;
         g_segs_cap = cap;
     }
