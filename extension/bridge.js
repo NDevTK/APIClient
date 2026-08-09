@@ -151,7 +151,10 @@ const HOT_RAM_BUDGET = 512 * 1024 * 1024;   // bytes of summed live WASM memory 
 function _residentBytes() { let b = 0; for (const e of _pool) { try { b += (e.M && e.M.HEAPU8) ? e.M.HEAPU8.length : 0; } catch (_) {} } return b; }
 
 // ---- Engine lifecycle over ONE wasm instance (one document) ----
-async function engineCreate(code, html, msg, persist) {
+/* `docName` is set ONLY for a document another engine CREATED — its name arrived in that engine's
+   navigable.create notice, minted there because HTML §4.8.5 creates a child navigable inside the insertion
+   steps and cannot ask this zone for a name. A root document is named here, by the counter above. */
+async function engineCreate(code, html, msg, persist, docName) {
   const lines = [];
   const createQJS = await getCreateQJS();
   // @DBG is the ONLY dev-trace channel: routed to console.debug, NEVER into `lines` — so it is never parsed
@@ -179,7 +182,7 @@ async function engineCreate(code, html, msg, persist) {
   // SCOPE, stated rather than assumed: this counter is unique across the instances ALIVE in this offscreen,
   // which is exactly the set that can message each other today. It is not yet persisted, because a parked
   // foreign segment does not yet outlive a session; when segments park, this becomes a persisted allocator.
-  const _docId = String(++nextDocumentId);
+  const _docId = docName || String(++nextDocumentId);
   // NO `code` ARGUMENT: identity and the script inventory are the engine's own Lexbor <script> scan of `html`,
   // because a concatenation of a page's scripts cannot represent per-script scope and shifts with an inline
   // script the page did not ship. It used to be passed and cast away on the other side.
@@ -240,7 +243,12 @@ async function engineCreate(code, html, msg, persist) {
       return { body: r.body, csp: (r.headers && r.headers["content-security-policy"]) || null };
     } catch (_) { return { body: null, csp: null }; }
   };
-  return { M, ptrs, lines, fkey, prior, msg, persist, fetched, fetchedDocument, code, html, state: "hot", _forceparkSteps };
+  /* THE ROUTING TABLE IS THE POOL. `docId` is which document this instance holds and `origin` is the value
+     this zone stamps on everything it sends — both are read only by the notice router below, which is the
+     only thing that may know either: SECURITY.md makes this zone the one that knows which instance holds
+     which document, and the one that may state a sender's origin. */
+  return { M, ptrs, lines, fkey, prior, msg, persist, fetched, fetchedDocument, code, html, state: "hot",
+           docId: _docId, origin: originOf((msg && msg.sourceUrl) || ""), _forceparkSteps };
 }
 function engineWeight(eng) { return eng.state === "hot" ? +eng.M.ccall("qjs_top_weight", "number", [], []) : -Infinity; }
 async function engineServiceFetch(eng) {   // one round: resolve every pending reply/chunk, then the engine is hot again
@@ -252,6 +260,57 @@ async function engineServiceFetch(eng) {   // one round: resolve every pending r
   await engineServiceHostRequests(eng);
 }
 
+/* THE INSTANCE HOLDING A DOCUMENT, by exact name. A child's name is PREFIXED by its creator's ("<creator>.<n>")
+   and the creator is precisely the instance that does NOT hold it — that is why the notice exists at all — so a
+   prefix match routes a message straight back to its sender. The engine catches that, twice; it should not have
+   to be the thing that catches it. */
+function hostHolderOf(docName) {
+  for (const e of _pool) if (e.docId === docName) return e;
+  return null;
+}
+
+/* WHAT THIS ZONE OWES A ONE-WAY NOTICE. Two ops today, and each is an ACTION only this zone can take —
+   SECURITY.md makes the offscreen the only zone that knows which instance holds which document.
+   `navigable.create <child> <creator> <url> <origin> <csp>` — the engine has already named the document and
+   already handed the page a WindowProxy for it; what is missing is an INSTANCE. This provisions one under that
+   name, loading the child's own document through the one safeFetch chokepoint.
+   `windowproxy.post <target> <world> <targetOrigin> <base64>` — routed VERBATIM to the instance holding
+   <target>, with THIS engine's origin stamped on it. The engine may not state that origin for itself: it is
+   untrusted, and a forgeable event.origin defeats every origin check in every bundle. */
+async function hostNotice(eng, line) {
+  const f = line.split("\t");
+  if (f[0] === "navigable.create") {
+    DCHECK(f.length >= 5, "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin and policy");
+    if (hostHolderOf(f[1])) return;   // already provisioned: the engine announces a document once
+    const loaded = await eng.fetchedDocument(f[3]);
+    const msg = { type: "AST_ANALYZE", pageHtml: (loaded && loaded.body) || "", sourceUrl: f[3],
+                  responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
+    /* THE POLICY IS THE RESPONSE'S, AND THE CREATOR'S CLONE IS THE FALLBACK — §7.2.6/§7.4 in the order the
+       spec states them: a Document is judged against the policy container its own response carried, and a
+       response that carried none inherits the clone of its creator's, which is the field the notice carries. */
+    const policy = (loaded && loaded.csp) || f[5] || "";
+    if (policy) msg.responseHeaders["content-security-policy"] = policy;
+    const child = await engineCreate("", msg.pageHtml, msg, false, f[1]);
+    /* A CHILD DOCUMENT IS A DOCUMENT: it joins the ONE pool and is ranked, sliced, parked and finalized by the
+       one host WFQ like every other. It has no caller to resolve to, so its findings merge the way a
+       rehydrated cold engine's do rather than being returned to a requester that never asked for it. */
+    child._cold = true;
+    _pool.push(child);
+    return;
+  }
+  if (f[0] === "windowproxy.post") {
+    DCHECK(f.length >= 5, "a windowproxy.post notice was short of its fields");
+    const target = hostHolderOf(f[1]);
+    DCHECK(target !== null, "a message was posted to a document no instance in this pool holds — the create " +
+                            "notice naming it was dropped, or that instance was finalized while a peer still " +
+                            "held a WindowProxy for it");
+    target.M.ccall("qjs_route", "void", ["string", "string"], [line, eng.origin]);
+    return;
+  }
+  DFAIL("an engine emitted a notice with an op this zone does not act on — the engine's half is built, so the " +
+        "host's half is the unbuilt one: `" + f[0] + "`");
+}
+
 // WHAT ONLY THIS ZONE CAN ANSWER. A cross-document operation is answered by the instance holding that document,
 // and SECURITY.md makes the offscreen the only zone that knows which instance that is — the same reason it owns
 // the routing and stamps the sender's origin. The asking flow is SUSPENDED mid-frame until the answer lands, so
@@ -259,11 +318,12 @@ async function engineServiceFetch(eng) {   // one round: resolve every pending r
 // (its siblings keep running, which is the point of suspending rather than blocking).
 async function engineServiceHostRequests(eng) {
   const M = eng.M;
-  // ONE-WAY NOTICES. `navigable.create <child> <creator> <url> <origin> <csp>` announces a document the engine
-  // has already named and already handed the page a WindowProxy for; there is nothing to answer, because the
-  // engine mints its own child document names. What this zone still owes it is an INSTANCE: spin one up under
-  // that name with that url/origin/policy, and route requests naming it to that instance.
-  M.ccall("qjs_host_notices", "string", [], []);
+  // ONE-WAY NOTICES, and this zone OWES each of them an action — a notice it reads and discards is a document
+  // nothing runs and a message nothing delivers, with every later read through them parked forever. They were
+  // being read and discarded. Handled IN ORDER and one at a time: a page opens a window and posts to it in the
+  // same turn, so the create must have finished provisioning before the post that names it is routed.
+  for (const line of String(M.ccall("qjs_host_notices", "string", [], [])).split("\n").filter(Boolean))
+    await hostNotice(eng, line);
   // ONE BRANCH, AND ONLY BECAUSE THIS ZONE CAN GENUINELY ANSWER IT. The rule that deleted every other branch
   // stands: a loop that walks the owed requests is a place to be tempted into GUESSING an answer, which is what
   // answering `navigable.create` with "not created" was. `document.fetch` is not a guess — it is a network
