@@ -159,8 +159,11 @@ static JSValue js_window_deliver(JSContext *ctx, JSValueConst this_val, int argc
  *
  * THE SENDING FLOW'S WORLD TRAVELS WITH IT, with its ancestry, because two arms of a fork post two messages
  * belonging to two contradictory worlds — and a peer that received only the bytes would merge them into a
- * timeline neither sender was in. The receiver seeds a delivery flow whose world is its own baseline forked
- * against this vector.
+ * timeline neither sender was in. What the receiver does with the vector is engine_route's: the delivery is
+ * made by each live flow of the receiving document, in that flow's own timeline (the page's listener was
+ * registered by a script and lives in the delta of the flow that ran it), CONJOINED with this instance's
+ * segment for the world named here — which the ancestry is what materializes, by forking the nearest ancestor
+ * the receiver already holds.
  *
  * THE BYTES RIDE AS BASE64 because the notice channel is text. The codec is the ENGINE'S (JS_Base64Encode) —
  * the one the spec already made it implement for `btoa` — rather than a second one grown here. */
@@ -217,9 +220,14 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
  * THE SOURCE IS A REMOTE PROXY for the sending document, which is what makes `event.source.postMessage(...)` —
  * the reply half of every real messaging protocol — resolve to a route back rather than to null.
  *
- * THE WORLD is installed by the host BEFORE this is called: the delivery belongs to the sending flow's timeline
- * forked against this instance's baseline, and the segment switch is the host's scheduler doing what the
- * engine's own context switch does. */
+ * THE WORLD IS ALREADY INSTALLED WHEN THIS RUNS, and WHICH world is the caller's statement rather than this
+ * file's — the two callers answer it differently because their documents hold state differently. The solver
+ * engine delivers from inside a RECEIVING FLOW (engine.c's flow_deliver, with that flow's delta applied and the
+ * sender's segment asserted to add nothing to it), because a document's state there IS its flows. The WPT host
+ * has no per-flow timelines — its documents' scripts run with captures dropped, so their listeners are baseline
+ * — and installs the SENDING world's segment, which is the same answer for a document whose state is baseline.
+ * What both owe is the same one thing: the world installed must be one in which the receiving document's
+ * listeners exist, and neither this function nor any local check can decide that. */
 void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const char *sender_origin,
                                    const char *target_origin, const uint8_t *bytes, size_t len)
 {

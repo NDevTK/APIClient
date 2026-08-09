@@ -354,7 +354,9 @@ function balancedFrom(text, at) {
    array body with a regex that stopped at the first `;` silently skipped twelve of the nineteen arrays: a
    check that cannot parse its input and says nothing is an excluded check, which is the same defect as a test
    the gate does not collect. */
-const maskLiterals = (text) => text.replace(/"(?:[^"\\]|\\.)*"|\/\*[\s\S]*?\*\//g, (s) => ' '.repeat(s.length));
+const maskLiterals = (text) =>
+  text.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g,
+               (s) => s.replace(/[^\n]/g, ' '));   // newlines kept: offsets AND line numbers stay the originals
 const stageListName = (text, arrayName) => {
   const masked = maskLiterals(text);
   const decl = new RegExp(`\\b${arrayName}\\s*\\[\\s*\\]\\s*=`).exec(masked);

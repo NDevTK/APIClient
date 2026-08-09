@@ -126,9 +126,14 @@ void        engine_host_notify(JSContext *ctx, const char *op);
 const char *engine_host_notices(void);
 /* THE INBOUND HALF: a record another instance emitted as a notice, routed HERE by the trusted zone because this
    instance holds the document it names, with the SENDER'S ORIGIN stamped by that zone (the untrusted engine may
-   not compute one for a foreign message — SECURITY.md). It SEEDS A FLOW on the one frontier whose world is the
-   sending flow's, and returns; the scheduler makes the delivery when it runs that flow, under that world's
-   segment. There is no inbound queue because the frontier is one. */
+   not compute one for a foreign message — SECURITY.md).
+   IT MAKES THE RECORD A WORK ITEM OF EVERY LIVE TIMELINE OF THE RECEIVING DOCUMENT and returns; each of those
+   flows makes its own delivery when the scheduler next runs it, in its OWN world. That is not the same as
+   seeding one flow under the SENDER's world, and the difference is the whole of why this shape exists: the
+   page's `message` listener was registered by a script, so it lives in the delta of the flow that ran it, and a
+   delivery made anywhere else arrives at a document where nothing is listening. What the sender's world
+   contributes is its SEGMENT in this instance — see engine.c, where the conjunction of the two is stated and
+   the part of it that cannot yet be built crashes. There is no inbound queue because the frontier is one. */
 void engine_route(JSContext *ctx, const char *record, const char *sender_origin);
 
 const char *engine_pending_urls(void);                                  /* newline-joined, or "" */

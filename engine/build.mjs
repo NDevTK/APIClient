@@ -265,7 +265,20 @@ console.log("[build] OK -> " + resolve(join(OUT, "qjs.js")));
 }
 
 if (ABI) {
-  console.log("[build] OK -> " + resolve(join(EXT_QJS, "qjs.mjs")) + " (no smoke run: the ABI entry has no main())");
+  console.log("[build] OK -> " + resolve(join(EXT_QJS, "qjs.mjs")));
+  /* AND IT IS RUN, THROUGH THE SURFACE THE BRIDGE ACTUALLY CALLS. "The ABI entry has no main()" was true and was
+     not a reason: the entry is DRIVEN, so its smoke test is a driver, and engine/route.mjs is one — it boots the
+     module the line above just wrote, provisions a SECOND instance from the create notice, and routes a post
+     between them. That is the shipped qjs_init/qjs_begin/qjs_step/qjs_pending/qjs_host_notices/qjs_route path,
+     end to end, in the build that produces it. §Testing's rule is that the shipped entry is the one that rots;
+     compiling it (above) stops half of that, and running it stops the other half. It is also the only thing in
+     the tree that provisions two instances at all, which §SECURITY makes the precondition for believing any
+     cross-instance mechanism has ever run. */
+  const t = spawnSync(process.execPath, [join(ENGINE, "route.mjs")], { stdio: "inherit", shell: false });
+  if (t.status !== 0) {
+    console.error("[build] the two-instance ABI drive FAILED rc=" + (t.status ?? "signal"));
+    process.exit(t.status || 1);
+  }
 } else {
   const t = spawnSync(process.execPath, [join(OUT, "qjs.js")], { stdio: "inherit", shell: false });
   if (t.status !== 0) { console.error("[build] smoke test FAILED rc=" + (t.status ?? "signal")); process.exit(t.status || 1); }

@@ -145,7 +145,11 @@ char *result_json(JSContext *ctx) {
     char *out;
 
     if (!eps || !sinks || !errs) { free(eps); free(sinks); free(errs); return NULL; }
-    n = strlen(eps) + strlen(sinks) + strlen(errs) + 256;
+    /* THE SLACK COVERS THE WIDEST FORM, not the numbers that happen to occur: 155 bytes of literal and seven
+       counters whose full-width decimals are 104 more. It was 192 for a shape whose widest form was already
+       197 — inside only because the real numbers are small — and the two added below would have taken it
+       further past. The DCHECK under the snprintf is the second half of this, not a substitute for it. */
+    n = strlen(eps) + strlen(sinks) + strlen(errs) + 384;
     out = malloc(n);
     if (out) {
         /* THE THREE COST NUMBERS, together. A switch count on its own cannot say whether a run that took six
