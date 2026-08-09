@@ -888,9 +888,20 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
 
 /* ---- the constructor ------------------------------------------------------------------------------------ */
 
-/* `stage` is the BODY's own, not the header's: hdr->stage is the args machine's argument cursor, and a body
-   that wrote to it would move the conversion loop it is running inside. */
-typedef struct { uint8_t stage; HeadersFill fill; HeaderList list; JSValue result; } JSHeadersCtorState;
+/* WHERE THIS MACHINE RESTS. §5.1's constructor is two steps, and they split exactly where the page's code
+   starts: step 1 is an own-slot write and step 2 is the whole fill, whose every [[Get]], @@iterator read and
+   ToString is the page's. The `stage` byte this state carried named neither — and the comment beside it
+   explained that hdr->stage was the ARGUMENT CURSOR, which stopped being true when idl_args.c handed the stage
+   over to the body at IDL_STEP_FIRST. */
+#define HDR_CTOR_STAGES(X) \
+    X(HDR_CTOR_GUARD = IDL_STEP_FIRST, \
+      "Fetch §5.1 new Headers(init) step 1 (this's guard is \"none\"; Web IDL §3.7.1's `new` requirement " \
+      "precedes it)") \
+    X(HDR_CTOR_FILL, "Fetch §5.1 new Headers(init) step 2 (fill this with init)")
+enum { HDR_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const HDR_CTOR_STEPS[] = { HDR_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct { HeadersFill fill; HeaderList list; JSValue result; } JSHeadersCtorState;
 
 static void js_headers_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
@@ -914,7 +925,7 @@ static int js_headers_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
     JSHeadersCtorState *s = st;
     int r;
 
-    if (s->stage == 0) {
+    if (hdr->stage == HDR_CTOR_GUARD) {
         /* JS_CFUNC_step_ctor delivers NEW_TARGET in the receiver slot and undefined for a plain call, which is
            how `Headers()` is told apart from `new Headers()` — the IDL declares a constructor, so it throws. */
         if (JS_IsUndefined(hdr->this_val)) {
@@ -924,8 +935,10 @@ static int js_headers_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         }
         headers_fill_init(&s->fill);
         s->result = JS_UNDEFINED;
-        s->stage = 1;
+        hdr->stage = HDR_CTOR_FILL;
     }
+    DCHECK(hdr->stage == HDR_CTOR_FILL,
+           "the Headers constructor was re-entered at a stage §5.1 does not have");
     /* §5.1: `new Headers(init)` sets the guard to "none" and then fills — a page's own Headers refuses
        nothing, which is why the forbidden lists are unobservable until a Request or a Response owns one. */
     r = headers_fill_run(ctx, hdr, &s->fill, argc > 0 ? argv[0] : JS_UNDEFINED, &s->list,
@@ -937,7 +950,8 @@ static int js_headers_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
 }
 
 static const IdlStepDecl js_headers_ctor_decl = {
-    js_headers_ctor_step, sizeof(JSHeadersCtorState), js_headers_ctor_visit, js_headers_ctor_release
+    js_headers_ctor_step, sizeof(JSHeadersCtorState), js_headers_ctor_visit, js_headers_ctor_release,
+    "Fetch §5.1 new Headers(init)", HDR_CTOR_STEPS
 };
 
 /* ---- install --------------------------------------------------------------------------------------------- */

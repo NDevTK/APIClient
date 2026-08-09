@@ -16,4 +16,9 @@ const char *request_url_of(JSValueConst v);
    revoking the URL afterwards does not stop that request. Borrowed. */
 JSValueConst request_blob_entry(JSValueConst v);
 
+/* §5.3 step 25 — "if method is not a method or is a forbidden method, throw a TypeError", then "normalize
+   method" — as ONE operation, because `fetch(input, init)` performs §5.3 inline and needs the same answer.
+   Returns the normalized method, which the caller releases with js_free, or NULL with a TypeError live. */
+char *request_method_check(JSContext *ctx, const char *m);
+
 #endif

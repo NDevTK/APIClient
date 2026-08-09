@@ -76,6 +76,14 @@ static JSValue js_count_size(JSContext *ctx, JSValueConst this_val, int argc, JS
 
 /* §7.1's size function: `chunk.byteLength`, as a REQUEST — the read is the page's code the moment the chunk
    is anything but a plain typed array. */
+/* WHERE THIS MACHINE RESTS. §7.2.2's steps are ONE step, and that step is the read — so the machine has one
+   stage and rests at it for exactly as long as a Proxy trap or an accessor takes. */
+#define BYTE_SIZE_STAGES(X) \
+    X(BYTE_SIZE_GET, "Streams §7.2.2 byte length queuing strategy size function step 1.1 " \
+                     "(Return ? GetV(chunk, \"byteLength\"))")
+enum { BYTE_SIZE_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const js_byte_size_steps[] = { BYTE_SIZE_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
 typedef struct {
     JSStepHdr hdr;
     JSValue   value;
@@ -101,15 +109,21 @@ static int js_byte_size_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
 {
     JSByteSizeState *s = st;
     JSAtom atom = JS_NewAtom(ctx, "byteLength");
-    int r = step_getprop_run(ctx, &s->hdr, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED, atom,
-                             cb_result, &s->value, out_cb, out_argc);
+    int r;
+
+    DCHECK(s->hdr.stage == BYTE_SIZE_GET,
+           "the byte-length size function resumed at a stage §7.2.2 does not have");
+    r = step_getprop_run(ctx, &s->hdr, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED, atom,
+                         cb_result, &s->value, out_cb, out_argc);
     JS_FreeAtom(ctx, atom);
     if (r > 0) return r;
     return r < 0 ? JS_STEP_ABRUPT : JS_STEP_DONE;
 }
 
 static const JSTrampStepDef js_byte_size_def = {
-    sizeof(JSByteSizeState), js_byte_size_step, js_byte_size_fini, 0, .visit = js_byte_size_visit
+    sizeof(JSByteSizeState), js_byte_size_step, js_byte_size_fini, 0, .visit = js_byte_size_visit,
+    .algorithm = "Streams §7.2.2 byte length queuing strategy size function",
+    .steps = js_byte_size_steps
 };
 
 /* §7's constructor, one body for both interfaces: the `magic` says which, exactly as the two prototypes and

@@ -138,12 +138,20 @@ static int response_set(JSContext *ctx, ResponseData *d, const char *url, int st
    synchronous refusals still happen where the page wrote its try/catch: a locked or disturbed body is a
    TypeError from clone() itself, not a rejected promise, because clone is not a body-consuming method. */
 typedef struct {
-    uint8_t stage, phase;
+    uint8_t phase;
     JSValue obj;       /* the clone being built (owned) */
     JSValue cb[2];     /* step_call_run's buffer: [this, tee] — the tee takes no arguments */
 } JSCloneState;
 
-enum { CL_ENTRY = 0, CL_BODY, CL_DONE };
+/* WHERE THIS MACHINE RESTS. §6.4's clone() is three steps and the page's code runs in exactly one of them:
+   step 2's "clone a response" performs §5.2's "clone a body", which is a TEE — a call. */
+#define RESP_CLONE_STAGES(X) \
+    X(CL_ENTRY = IDL_STEP_FIRST, \
+      "Fetch §6.4 clone() steps 1-2 (the unusable refusal, then §5.2's clone a response down to its body)") \
+    X(CL_BODY, "Fetch §5.2 clone a body step 1 (tee this's body's stream)") \
+    X(CL_DONE, "Fetch §6.4 clone() step 3 (the Response object for the cloned response)")
+enum { RESP_CLONE_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const RESP_CLONE_STEPS[] = { RESP_CLONE_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 static void js_clone_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
@@ -170,7 +178,7 @@ static int js_response_clone_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
     int r;
 
     (void)argc; (void)argv;
-    if (s->stage == CL_ENTRY) {
+    if (hdr->stage == CL_ENTRY) {
         bool locked = false;
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
@@ -193,24 +201,25 @@ static int js_response_clone_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
         if (response_set(ctx, c, d->url, d->status, d->status_text, d->type, NULL, 0,
                          headers_list_of(d->headers), headers_guard_of(d->headers)) < 0)
             return -1;
-        s->stage = CL_BODY;
+        hdr->stage = CL_BODY;
     }
 
-    DCHECK(s->stage == CL_BODY, "Response.clone resumed in a stage it never parks in");
+    DCHECK(hdr->stage == CL_BODY, "Response.clone resumed in a stage §6.4 does not have");
     DCHECK(d != NULL, "a Response stopped being one between two stages of its own clone");
     c = response_of(s->obj);
     DCHECK(c != NULL, "the clone this machine allocated stopped being a Response");
     r = body_clone_run(ctx, &s->phase, s->cb, 2, &c->body, &d->body, cb_result, out_cb, out_argc);
     if (r > 0) return r;
     if (r < 0) return -1;
-    s->stage = CL_DONE;
+    hdr->stage = CL_DONE;
     *presult = s->obj;
     s->obj = JS_UNDEFINED;
     return 0;
 }
 
 static const IdlStepDecl js_response_clone_decl = {
-    js_response_clone_step, sizeof(JSCloneState), js_clone_visit, js_clone_release
+    js_response_clone_step, sizeof(JSCloneState), js_clone_visit, js_clone_release,
+    "Fetch §6.4 Response.clone()", RESP_CLONE_STEPS
 };
 
 static JSValue js_response_get(JSContext *ctx, JSValueConst this_val, int magic)
@@ -304,12 +313,32 @@ static int response_set(JSContext *ctx, ResponseData *d, const char *url, int st
    second copy of the status range check, the reason-phrase check, the header fill and the Content-Type rule.
    The magic says which entry this is. */
 enum { RESP_ENTRY_CTOR = 0, RESP_ENTRY_JSON };
-/* The stages, with a START of its own: a zeroed step state's JSValue is the INTEGER 0 and not JS_UNDEFINED, so
-   "have I begun" is only ever readable off the stage byte. */
-enum { RESP_START = 0, RESP_SERIALIZE, RESP_INIT, RESP_HEADERS, RESP_BODY };
+/* WHERE THIS MACHINE RESTS, ACROSS THE TWO ENTRIES THAT SHARE IT. §6.4's constructor is five steps whose fifth
+   is §5.5's "initialize a response", and json() is five steps whose fourth is the same operation — so the
+   stages after the entry are §5.5's, named by that algorithm rather than by whichever member reached it. The
+   page's code runs at three of them: json()'s serialization, §5.5 step 5's fill, and nothing else.
+   §6.4 step 4's EXTRACTION is performed at the body stage rather than before step 5, which is where the spec
+   writes it: nothing between the two can throw or run the page's code, so the two orders are the same
+   execution, and the label says where it actually happens. */
+#define RESP_CTOR_STAGES(X) \
+    X(RESP_START = IDL_STEP_FIRST, \
+      "Fetch §6.4 new Response(body, init) steps 1-2 (a new response and its Headers; Web IDL §3.7.1's `new` " \
+      "requirement precedes them, and Response.json() enters at the next step instead)") \
+    X(RESP_SERIALIZE, \
+      "Fetch §6.4 Response.json(data, init) step 1 (serialize a JavaScript value to JSON bytes — the page's " \
+      "toJSON, getters and Proxy traps)") \
+    X(RESP_INIT, \
+      "Fetch §5.5 initialize a response steps 1-4 (the status range, the reason-phrase, and the response's " \
+      "status and status message)") \
+    X(RESP_HEADERS, \
+      "Fetch §5.5 initialize a response step 5 (fill response's headers with init[\"headers\"])") \
+    X(RESP_BODY, \
+      "Fetch §5.5 initialize a response step 6 (§6.4 step 4's extraction, the null-body-status refusal, and " \
+      "the Content-Type the extracted type contributes)")
+enum { RESP_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const RESP_CTOR_STEPS[] = { RESP_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
-    uint8_t     stage;
     uint8_t     cphase;    /* json(): the JSON.stringify call's own phase, held across the stage */
     HeadersFill fill;
     HeaderList  list;
@@ -371,7 +400,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
     ResponseData *d;
     int status, r;
 
-    if (s->stage == RESP_START) {
+    if (hdr->stage == RESP_START) {
         /* `new` is the CONSTRUCTOR's requirement. json() is a static, so its receiver is the interface object
            and there is nothing to require. */
         if (entry == RESP_ENTRY_CTOR && JS_IsUndefined(hdr->this_val)) {
@@ -379,10 +408,10 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
             JS_ThrowTypeError(ctx, "constructor Response requires 'new'");
             return -1;
         }
-        s->stage = entry == RESP_ENTRY_JSON ? RESP_SERIALIZE : RESP_INIT;
+        hdr->stage = entry == RESP_ENTRY_JSON ? RESP_SERIALIZE : RESP_INIT;
     }
 
-    if (s->stage == RESP_SERIALIZE) {
+    if (hdr->stage == RESP_SERIALIZE) {
         /* §6.4 json() step 1: "serialize a JavaScript value to JSON bytes", which is JSON.stringify — the
            page's `toJSON`, its getters and its Proxy traps, all of it. This engine deleted the C entry to that
            algorithm on purpose, because a C entry beside the step machine would be a second implementation of
@@ -404,10 +433,10 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
             JS_ThrowTypeError(ctx, "the value has no JSON representation");
             return -1;
         }
-        s->stage = RESP_INIT;
+        hdr->stage = RESP_INIT;
     }
 
-    if (s->stage == RESP_INIT) {
+    if (hdr->stage == RESP_INIT) {
         /* §6.4 step 1: the RANGE check, after Web IDL's `unsigned short` conversion and never instead of it. */
         v_status = idl_dict_get(ctx, init, "status");
         status = 200;
@@ -456,10 +485,10 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
             if (r < 0) { JS_FreeValue(ctx, cb_result); return -1; }
         }
         headers_fill_init(&s->fill);
-        s->stage = RESP_HEADERS;
+        hdr->stage = RESP_HEADERS;
     }
 
-    if (s->stage == RESP_HEADERS) {
+    if (hdr->stage == RESP_HEADERS) {
         /* §6.4 step 7: fill the response's headers, which have guard "response" — so a page that puts
            Set-Cookie on a Response it built silently gets nothing, which is the header wpt asserts by name. */
         v_headers = idl_dict_get(ctx, init, "headers");
@@ -474,10 +503,11 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
         JS_FreeValue(ctx, d->headers);
         d->headers = headers_new(ctx, &s->list, HEADERS_GUARD_RESPONSE);
         if (JS_IsException(d->headers)) return -1;
-        s->stage = RESP_BODY;
+        hdr->stage = RESP_BODY;
     }
 
-    DCHECK(s->stage == RESP_BODY, "the Response constructor was re-entered at a stage it never parks in");
+    DCHECK(hdr->stage == RESP_BODY,
+           "the Response constructor was re-entered at a stage §6.4 and §5.5 do not have between them");
     JS_FreeValue(ctx, cb_result);
     d = response_of(s->result);
     /* §6.4 step 8: a non-null body. §5.1's extraction is body.c's — one implementation of the union for both
@@ -598,7 +628,9 @@ static const JSCFunctionListEntry js_response_static_funcs[] = {
 };
 
 static const IdlStepDecl js_response_ctor_decl = {
-    js_response_ctor_step, sizeof(JSResponseCtorState), js_response_ctor_visit, js_response_ctor_release
+    js_response_ctor_step, sizeof(JSResponseCtorState), js_response_ctor_visit, js_response_ctor_release,
+    "Fetch §6.4 new Response(body, init) / Response.json(data, init), through §5.5 initialize a response",
+    RESP_CTOR_STEPS
 };
 
 /* ---- install --------------------------------------------------------------------------------------------- */

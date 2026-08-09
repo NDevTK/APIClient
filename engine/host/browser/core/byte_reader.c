@@ -48,14 +48,27 @@ static const ByteReaderIface *iface_of(JSValueConst v)
     return NULL;
 }
 
-/* A BODY THAT IS A STREAM takes two more stages before there are any bytes: acquire a reader and issue the
-   first read. Both are CALLS, which is precisely why they are here — this is a machine and can park on them —
-   and the LOOP after them is not, which is why readable_stream_drain owns that. */
-enum { BR_TAKE = 0, BR_ACQUIRE, BR_FIRST_READ, BR_SETTLE };
+/* WHERE THIS MACHINE RESTS. §5.2's "consume body" is seven steps, and its sixth delegates to "fully read a
+   body", whose steps 4 and 5 are the two CALLS a stream-backed body takes before there are any bytes —
+   acquiring a reader and issuing the first read. Both are precisely why this is a machine: it can park on
+   them. The LOOP after them is not here, which is why readable_stream_drain owns it.
+   A BODY THAT IS ALREADY BYTES skips both and goes straight from step 5 to the settle. */
+#define BYTE_READER_STAGES(X) \
+    X(BR_TAKE, \
+      "Fetch §5.2 consume body steps 1-5 (the unusable refusal, the promise, and — for a null or " \
+      "already-read body — convertBytesToJSValue over the bytes)") \
+    X(BR_ACQUIRE, \
+      "Fetch §5.2 consume body step 6 → fully read a body step 4 (get a reader for body's stream)") \
+    X(BR_FIRST_READ, \
+      "Fetch §5.2 consume body step 6 → fully read a body step 5 (read all bytes from the reader)") \
+    X(BR_SETTLE, \
+      "Fetch §5.2 consume body steps 3-4 (resolve promise with the converted value, or reject it with the " \
+      "error) — 27.2.1.3.2 step 8's `then` read is the page's")
+enum { BYTE_READER_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const js_byte_reader_steps[] = { BYTE_READER_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct JSByteReaderState {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
-    uint8_t   stage;
     uint8_t   cphase;   /* the settle call's own phase, so the stage can hold it across a suspension */
     JSValue   promise;  /* the capability's promise — this machine's result (owned) */
     JSValue   func;     /* its resolve or its reject, whichever this read settles with (owned) */
@@ -100,16 +113,17 @@ static JSValue js_byte_reader_fini(JSContext *ctx, void *st, bool take_result)
     return r;
 }
 
-/* Stage 0 turns the bytes into the value this reader answers with; stage 1 settles the promise with it, which is
-   the request. Nothing in stage 0 runs the page's code — the bytes are the host's and the latch, where there is
-   one, is the declaring component's — which is why every reader is one stage and not one machine each. */
+/* The TAKE stage turns the bytes into the value this reader answers with; the SETTLE stage settles the promise
+   with it, which is the request. Nothing in the take runs the page's code — the bytes are the host's and the
+   latch, where there is one, is the declaring component's — which is why every reader is one machine with an
+   index and not one machine each. */
 static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSByteReaderState *s = st;
     JSValue settled, funcs[2];
     int reject = 0, r;
 
-    if (s->stage == BR_TAKE) {
+    if (s->hdr.stage == BR_TAKE) {
         const char *bytes = NULL;
         size_t len = 0;
         const ByteReaderIface *f = iface_of(s->hdr.this_val);
@@ -129,23 +143,23 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
             s->value = JS_GetException(ctx);
             reject = 1;
         } else if (!JS_IsUndefined(s->stream)) {
-            s->stage = BR_ACQUIRE;
+            s->hdr.stage = BR_ACQUIRE;
         } else {
             s->value = f->readers[s->hdr.arg].make(ctx, s->hdr.this_val, bytes ? bytes : "", bytes ? len : 0);
             if (JS_IsException(s->value)) { s->value = JS_GetException(ctx); reject = 1; }
         }
-        if (s->stage == BR_TAKE) {
+        if (s->hdr.stage == BR_TAKE) {
             /* The NATIVE capability: %Promise% with no subclass in sight, so building it constructs nothing of
                the page's. Only the settle below is the page's, and that is the request. */
             s->promise = JS_NewPromiseCapability(ctx, funcs);
             if (JS_IsException(s->promise)) return JS_STEP_ABRUPT;
             s->func = funcs[reject];
             JS_FreeValue(ctx, funcs[reject ^ 1]);
-            s->stage = BR_SETTLE;
+            s->hdr.stage = BR_SETTLE;
         }
     }
 
-    if (s->stage == BR_ACQUIRE) {
+    if (s->hdr.stage == BR_ACQUIRE) {
         JSValue op = readable_stream_op(ctx, RS_OP_GET_READER);
         r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), op, s->stream, 0, NULL,
                           cb_result, &s->reader, out_cb, out_argc);
@@ -153,9 +167,9 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         if (r > 0) return r;
         if (JS_IsException(s->reader)) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
-        s->stage = BR_FIRST_READ;
+        s->hdr.stage = BR_FIRST_READ;
     }
-    if (s->stage == BR_FIRST_READ) {
+    if (s->hdr.stage == BR_FIRST_READ) {
         const ByteReaderIface *f = iface_of(s->hdr.this_val);
         JSValue read_promise;
         DCHECK(f != NULL, "a byte reader lost its interface between two of its own stages");
@@ -173,7 +187,8 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         return JS_IsException(s->promise) ? JS_STEP_ABRUPT : JS_STEP_DONE;
     }
 
-    DCHECK(s->stage == BR_SETTLE, "the byte-read machine was re-entered at a stage it never parks in");
+    DCHECK(s->hdr.stage == BR_SETTLE,
+           "the byte-read machine was re-entered at a stage §5.2 does not have");
     r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), s->func, JS_UNDEFINED, 1, (JSValueConst *)&s->value,
                       cb_result, &settled, out_cb, out_argc);
     if (r > 0) return r;          /* parked ON THE SETTLE; the `then` read runs with a flow base under it */
@@ -187,15 +202,24 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
    SOURCE to pair each with the visit for its state struct, and a macro is invisible to it exactly as a
    runtime-assembled def is — folding these eight into one macro dropped the gate's host count from 32 to 29
    without changing a line of behaviour, which is the gate going quiet rather than the code getting smaller. */
+#define BYTE_READER_ALGORITHM "Fetch §5.2 consume body (also File API §3.3's Blob readers)"
 static const JSTrampStepDef js_byte_reader_defs[BYTE_READER_MAX] = {
-    { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, 0, .visit = js_byte_reader_visit },
-    { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, 1, .visit = js_byte_reader_visit },
-    { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, 2, .visit = js_byte_reader_visit },
-    { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, 3, .visit = js_byte_reader_visit },
-    { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, 4, .visit = js_byte_reader_visit },
-    { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, 5, .visit = js_byte_reader_visit },
-    { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, 6, .visit = js_byte_reader_visit },
-    { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, 7, .visit = js_byte_reader_visit },
+    { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, 0, .visit = js_byte_reader_visit,
+      .algorithm = BYTE_READER_ALGORITHM, .steps = js_byte_reader_steps },
+    { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, 1, .visit = js_byte_reader_visit,
+      .algorithm = BYTE_READER_ALGORITHM, .steps = js_byte_reader_steps },
+    { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, 2, .visit = js_byte_reader_visit,
+      .algorithm = BYTE_READER_ALGORITHM, .steps = js_byte_reader_steps },
+    { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, 3, .visit = js_byte_reader_visit,
+      .algorithm = BYTE_READER_ALGORITHM, .steps = js_byte_reader_steps },
+    { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, 4, .visit = js_byte_reader_visit,
+      .algorithm = BYTE_READER_ALGORITHM, .steps = js_byte_reader_steps },
+    { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, 5, .visit = js_byte_reader_visit,
+      .algorithm = BYTE_READER_ALGORITHM, .steps = js_byte_reader_steps },
+    { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, 6, .visit = js_byte_reader_visit,
+      .algorithm = BYTE_READER_ALGORITHM, .steps = js_byte_reader_steps },
+    { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, 7, .visit = js_byte_reader_visit,
+      .algorithm = BYTE_READER_ALGORITHM, .steps = js_byte_reader_steps },
 };
 
 int byte_reader_declare(JSContext *ctx, const ByteReaderIface *d)

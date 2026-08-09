@@ -160,32 +160,68 @@ enum {
     OP_N
 };
 
-enum {
-    S_ENTRY = 0,
-    S_STRAT_READ,     /* the constructor reading the two QueuingStrategy dictionaries */
-    S_HWM_W, S_HWM_R, /* …and ToNumber on each mark, which is the page's code and so a request */
-    S_CTOR_PROTO,     /* …then `new.target.prototype`, which is what makes a subclass work */
-    S_TR_READ,        /* …then the Transformer's members */
-    S_BUILD,          /* InitializeTransformStream + SetUpTransformStreamDefaultControllerFromTransformer */
-    S_BP_INIT,        /* §6.2 step 10: the stream begins under backpressure */
-    S_START_W, S_START_R,   /* each half's own "a promise resolved with" the shared start promise */
-    S_START, S_START_SETTLE,
-    S_WRITE_HOLD,     /* the sink's write, waiting on the backpressure-change promise */
-    S_TRANSFORM,      /* PerformTransform: call `transform(chunk, controller)` */
-    S_FLUSH, S_CANCEL,
-    S_FINISH_ERRORED, /* §6.2's fulfilment/rejection steps, for all three endings */
-    S_FINISH_SETTLE,
-    S_ENQUEUE, S_ENQUEUE_BP, S_ENQUEUE_DONE,
-    S_ERROR_STREAM,
-    S_TERM_CLOSE, S_TERM_ERROR,
-    S_PULL,           /* the source's pull: clear the backpressure and answer with the change promise */
-    S_PROMISE_OF,     /* PromiseResolve on what an algorithm returned, then attach its reaction */
-    S_ERROR_SEQ,      /* the shared error sub-sequence, returning to `next` */
-    S_SETBP,          /* the shared set-backpressure sub-sequence, returning to `next` */
-    S_SETTLE,         /* call the resolving function in w.func with w.value */
-    S_RESULT,         /* settle this entry's OWN capability */
-    S_DONE
-};
+/* WHERE THIS MACHINE RESTS, AS §6 NUMBERS IT. One machine walks §6.2's constructor, §6.4's five algorithms and
+   §6.3's three members, so a stage names the OPERATION it is inside rather than this file's own count. */
+#define TS_STAGES(X) \
+    X(S_ENTRY, "Streams §6 (this invocation's entry: which of §6.2's constructor, §6.4's algorithms or §6.3's " \
+               "members this is, and the stream and controller records it acts on)") \
+    X(S_STRAT_READ, "Streams §6.2 new TransformStream steps 5-8 (reading the two QueuingStrategy " \
+                    "dictionaries Web IDL has converted)") \
+    X(S_HWM_W, "Streams §6.2 step 7 (ExtractHighWaterMark over writableStrategy — ToNumber on whatever the " \
+               "page put there)") \
+    X(S_HWM_R, "Streams §6.2 step 5 (ExtractHighWaterMark over readableStrategy)") \
+    X(S_CTOR_PROTO, "Web IDL §3.7.1 (Get(newTarget, \"prototype\") — what makes " \
+                    "`class T extends TransformStream {}` produce a T)") \
+    X(S_TR_READ, "Streams §6.2 step 2 (converting transformer to a Transformer: one [[Get]] per member, in " \
+                 "the order Web IDL §3.2.18 reads them)") \
+    X(S_BUILD, "Streams §6.2 steps 3-11 (the two reserved types, InitializeTransformStream, and " \
+               "SetUpTransformStreamDefaultControllerFromTransformer)") \
+    X(S_BP_INIT, "Streams §6.4 InitializeTransformStream step 9 (the stream begins under backpressure, so " \
+                 "TransformStreamSetBackpressure runs with true)") \
+    X(S_START_W, "Streams §6.4 InitializeTransformStream step 5 (CreateWritableStream's start algorithm " \
+                 "answers the shared startPromise)") \
+    X(S_START_R, "Streams §6.4 InitializeTransformStream step 8 (CreateReadableStream's start algorithm " \
+                 "answers the same startPromise)") \
+    X(S_START, "Streams §6.2 step 12 (the transformer's `start`, invoked with the controller)") \
+    X(S_START_SETTLE, "Streams §6.2 steps 12-13 (resolving startPromise with what `start` returned, or with " \
+                      "undefined when the transformer declares none)") \
+    X(S_WRITE_HOLD, "Streams §6.4 TransformStreamDefaultSinkWriteAlgorithm step 3.3 (the write is held on " \
+                    "backpressureChangePromise until the readable half pulls)") \
+    X(S_TRANSFORM, "Streams §6.4 TransformStreamDefaultControllerPerformTransform step 1 (the transform " \
+                   "algorithm over the chunk)") \
+    X(S_FLUSH, "Streams §6.4 TransformStreamDefaultSinkCloseAlgorithm step 5 (the flush algorithm)") \
+    X(S_CANCEL, "Streams §6.4 TransformStreamDefaultSinkAbortAlgorithm step 5 / " \
+                "TransformStreamDefaultSourceCancelAlgorithm step 5 (the cancel algorithm over the reason)") \
+    X(S_FINISH_ERRORED, "Streams §6.4 SinkClose/SinkAbort/SourceCancel step 7 (what the flush or cancel " \
+                        "answered decides which half is closed or errored)") \
+    X(S_FINISH_SETTLE, "Streams §6.4 SinkClose/SinkAbort/SourceCancel step 7.1.2.2 (settling " \
+                       "controller.[[finishPromise]])") \
+    X(S_ENQUEUE, "Streams §6.3 TransformStreamDefaultControllerEnqueue steps 1-4 (CanCloseOrEnqueue, then " \
+                 "ReadableStreamDefaultControllerEnqueue)") \
+    X(S_ENQUEUE_BP, "Streams §6.3 TransformStreamDefaultControllerEnqueue steps 5-7 (the readable half's " \
+                    "backpressure, set on the transform stream)") \
+    X(S_ENQUEUE_DONE, "Streams §6.3 TransformStreamDefaultControllerEnqueue step 8 (the enqueue is complete)") \
+    X(S_ERROR_STREAM, "Streams §6.3 TransformStreamDefaultControllerError step 1 (TransformStreamError with " \
+                      "the reason)") \
+    X(S_TERM_CLOSE, "Streams §6.3 TransformStreamDefaultControllerTerminate steps 2-3 " \
+                    "(ReadableStreamDefaultControllerClose on the readable half)") \
+    X(S_TERM_ERROR, "Streams §6.3 TransformStreamDefaultControllerTerminate steps 4-5 (the terminated " \
+                    "TypeError, then TransformStreamErrorWritableAndUnblockWrite)") \
+    X(S_PULL, "Streams §6.4 TransformStreamDefaultSourcePullAlgorithm steps 3-4 (clear the backpressure and " \
+              "answer with the change promise)") \
+    X(S_PROMISE_OF, "Streams §6 (PromiseResolve over what one of §6.4's algorithms returned, then its " \
+                    "reaction — 27.2.1.3.2 step 8's `then` read is the page's)") \
+    X(S_ERROR_SEQ, "Streams §6.4 TransformStreamError / TransformStreamErrorWritableAndUnblockWrite (the " \
+                   "shared error sub-sequence, which half it errors being the only difference)") \
+    X(S_SETBP, "Streams §6.4 TransformStreamSetBackpressure steps 2-4 (resolve the old change promise, then " \
+               "a fresh one)") \
+    X(S_SETTLE, "Streams §6 (settling the promise the step before this one named — the resolving function's " \
+                "27.2.1.3.2 step 8 `then` read is the page's code)") \
+    X(S_RESULT, "Streams §6 (settling this entry's OWN capability, for the answers §6.4's algorithms " \
+                "short-circuit with)") \
+    X(S_DONE, "Streams §6 (the operation is complete; its promise, where it has one, is this machine's result)")
+enum { TS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const TS_STEPS[] = { TS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 /* §6.2's TransformStreamError / TransformStreamErrorWritableAndUnblockWrite, as ONE sub-sequence over
    `w->settle`: which halves it errors is the only thing that differs between them. */
@@ -302,6 +338,17 @@ static void ts_clear_algorithms(JSContext *ctx, TsCtrlData *c)
     c->transform_fn = c->flush_fn = c->cancel_fn = JS_UNDEFINED;
 }
 
+/* THE STAGE IS THE HEADER'S, AND THE TWO ENTRY SHAPES INDEX IT FROM DIFFERENT BASES. §6's constructor is an
+   IDL declaration, so idl_args.c owns the first IDL_STEP_FIRST stages of that header and hands the rest to
+   the body; every other entry is a trampoline def whose own stages start at 0. The BASE is not stored — the
+   header in force says which shape this is, so the two numbers cannot drift apart. It is the same number the
+   `steps` array is indexed from on each side, which is why one X-list serves both.
+   It was a private byte on the shared work record: a resume point the driver's assert could not see, could not
+   report at a park, and could not resolve back to a step in a later build. */
+#define TS_BASE(s) ((s)->h == &(s)->hdr ? 0 : IDL_STEP_FIRST)
+static unsigned ts_stage(const JSTsState *s) { return (unsigned)(s->h->stage - TS_BASE(s)); }
+static void ts_set(JSTsState *s, int stage) { s->h->stage = (uint16_t)(stage + TS_BASE(s)); }
+
 /* LEAVING A STAGE WITH A CALL IN FLIGHT IS THE BUG THIS ASSERT EXISTS FOR — the same rule §4.2.4 learned the
    hard way. A stage that holds a request must reach the same step_call_run to collect its result; deciding
    differently on the way back in abandons the call and leaves the phase byte set, and the NEXT request then
@@ -309,7 +356,7 @@ static void ts_clear_algorithms(JSContext *ctx, TsCtrlData *c)
 static void ts_goto(JSTsState *s, int stage)
 {
     DCHECK(s->w.phase == 0, "a §6 stage was left with a call still in flight");
-    s->w.stage = (uint8_t)stage;
+    ts_set(s, stage);
 }
 
 /* This entry's own answer, settled at S_RESULT — the promise-returning algorithms and members end here. */
@@ -346,7 +393,7 @@ static int ts_run(JSContext *ctx, JSTsState *s, JSStepHdr *hdr, int op, JSValue 
     JSValue out;
     int r;
 
-    if (s->w.stage == S_ENTRY) {
+    if (ts_stage(s) == S_ENTRY) {
         s->h = hdr;
         stream_work_start(&s->w);
         s->ts = s->ctrl = s->promise = s->reason = s->proto = JS_UNDEFINED;
@@ -365,7 +412,7 @@ static int ts_run(JSContext *ctx, JSTsState *s, JSStepHdr *hdr, int op, JSValue 
                 return JS_STEP_ABRUPT;
             }
             s->answer = 1;
-            s->w.stage = S_STRAT_READ;
+            ts_set(s, S_STRAT_READ);
             goto run;
         }
 
@@ -380,7 +427,7 @@ static int ts_run(JSContext *ctx, JSTsState *s, JSStepHdr *hdr, int op, JSValue 
             s->tr[TR_TRANSFORM] = JS_DupValue(ctx, step_arg(hdr, 0));
             s->tr[TR_FLUSH]     = JS_DupValue(ctx, step_arg(hdr, 1));
             s->tr[TR_CANCEL]    = JS_DupValue(ctx, step_arg(hdr, 2));
-            s->w.stage = S_BUILD;
+            ts_set(s, S_BUILD);
             goto run;
         }
 
@@ -392,7 +439,7 @@ static int ts_run(JSContext *ctx, JSTsState *s, JSStepHdr *hdr, int op, JSValue 
             JS_FreeValue(ctx, s->w.func);
             s->w.func = JS_DupValue(ctx, JS_StepClosureData(hdr, op == OP_HELD_OK ? 0 : 1));
             s->next = S_DONE;
-            s->w.stage = S_SETTLE;
+            ts_set(s, S_SETTLE);
             goto run;
         }
 
@@ -422,7 +469,7 @@ static int ts_run(JSContext *ctx, JSTsState *s, JSStepHdr *hdr, int op, JSValue 
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_DupValue(ctx, step_arg(hdr, 0));
             DCHECK(t->backpressure != BP_UNSET, "a §6 write reached a stream whose backpressure was never set");
-            s->w.stage = t->backpressure ? S_WRITE_HOLD : S_TRANSFORM;
+            ts_set(s, t->backpressure ? S_WRITE_HOLD : S_TRANSFORM);
             break;
 
         case OP_BP_READY:
@@ -433,35 +480,35 @@ static int ts_run(JSContext *ctx, JSTsState *s, JSStepHdr *hdr, int op, JSValue 
             s->held_funcs[0] = JS_DupValue(ctx, JS_StepClosureData(hdr, 2));   /* the held write's resolve */
             s->held_funcs[1] = JS_DupValue(ctx, JS_StepClosureData(hdr, 3));   /* …and its reject */
             s->held = 1;   /* S_TRANSFORM settles the capability it was handed, not one of its own */
-            s->w.stage = S_TRANSFORM;
+            ts_set(s, S_TRANSFORM);
             break;
 
         case OP_SINK_CLOSE:
-            s->w.stage = S_FLUSH;
+            ts_set(s, S_FLUSH);
             break;
         case OP_SINK_ABORT: case OP_SOURCE_CANCEL:
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_DupValue(ctx, step_arg(hdr, 0));
             s->side = (uint8_t)(op == OP_SOURCE_CANCEL ? 2 : 3);
-            s->w.stage = S_CANCEL;
+            ts_set(s, S_CANCEL);
             break;
 
         case OP_SOURCE_PULL:
-            s->w.stage = S_PULL;
+            ts_set(s, S_PULL);
             break;
 
         case OP_CTRL_ENQUEUE:
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_DupValue(ctx, step_arg(hdr, 0));
-            s->w.stage = S_ENQUEUE;
+            ts_set(s, S_ENQUEUE);
             break;
         case OP_CTRL_ERROR:
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_DupValue(ctx, step_arg(hdr, 0));
-            s->w.stage = S_ERROR_STREAM;
+            ts_set(s, S_ERROR_STREAM);
             break;
         case OP_CTRL_TERMINATE:
-            s->w.stage = S_TERM_CLOSE;
+            ts_set(s, S_TERM_CLOSE);
             break;
 
         case OP_TRANSFORM_ERR:
@@ -479,7 +526,7 @@ static int ts_run(JSContext *ctx, JSTsState *s, JSStepHdr *hdr, int op, JSValue 
             s->side = (uint8_t)JS_VALUE_GET_INT(JS_StepClosureData(hdr, 1));
             JS_FreeValue(ctx, s->reason);
             s->reason = JS_DupValue(ctx, JS_StepClosureData(hdr, 2));
-            s->w.stage = S_FINISH_ERRORED;
+            ts_set(s, S_FINISH_ERRORED);
             break;
         }
         goto run;
@@ -491,7 +538,7 @@ run:
     c = JS_IsUndefined(s->ctrl) ? NULL : tc_of(s->ctrl);
 
     for (;;) {
-        switch (s->w.stage) {
+        switch (ts_stage(s)) {
 
         /* ---- the two shared sub-sequences ---------------------------------------------------------------- */
 
@@ -610,7 +657,7 @@ run:
             /* §6.2's ExtractHighWaterMark is `? ToNumber(...)`, and ToNumber on an object runs the page's
                `valueOf` — so it is a request, not a JS_ToFloat64 from C. Two marks, two stages, because the
                coercion sub-sequence keeps one phase on the header and a second would overwrite it. */
-            int w = (s->w.stage == S_HWM_W);
+            int w = (ts_stage(s) == S_HWM_W);
             JSValueConst v = s->strat[w ? 0 : 2];
             if (!JS_IsUndefined(v)) {
                 r = step_todouble_run(ctx, hdr, v, cb_result, w ? &s->whwm : &s->rhwm, out_cb, out_argc);
@@ -770,7 +817,7 @@ run:
                [[finishPromise]] RESOLVES and the cancel does not reject. Handing both halves the shared promise
                object skips the adoption and reverses that. The writable half is first because
                InitializeTransformStream creates it first, and its two jobs are queued in that order. */
-            int is_w = (s->w.stage == S_START_W);
+            int is_w = (ts_stage(s) == S_START_W);
             r = stream_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
@@ -1071,7 +1118,7 @@ run:
         /* ---- the three terminating paths ----------------------------------------------------------------- */
 
         case S_FLUSH: case S_CANCEL: {
-            int is_flush = (s->w.stage == S_FLUSH);
+            int is_flush = (ts_stage(s) == S_FLUSH);
             JSValueConst arg = is_flush ? (JSValueConst)s->ctrl : (JSValueConst)s->w.value;
 
             if (s->w.phase == 0) {
@@ -1251,7 +1298,8 @@ run:
         }
 
         default:
-            DCHECK(s->w.stage == S_DONE, "a §6 machine resumed in a stage it never parks in");
+            DCHECK(ts_stage(s) == S_DONE,
+                   "a §6 machine resumed in a stage §6's operations do not have between them");
             JS_FreeValue(ctx, cb_result);
             if (s->answer == 1) {
                 /* the CONSTRUCTOR's answer is the stream itself */
@@ -1299,7 +1347,8 @@ static int js_ts_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
    forwarded to it was a second declaration of the same ownership, which is exactly the shape that lets a field
    get added to one and not the other; the step-visits gate rejects it by struct for that reason. */
 static const IdlStepDecl js_ts_ctor_decl = {
-    js_ts_ctor_step, sizeof(JSTsState), js_ts_visit, js_ts_release
+    js_ts_ctor_step, sizeof(JSTsState), js_ts_visit, js_ts_release,
+    "Streams §6.2 new TransformStream(transformer, writableStrategy, readableStrategy)", TS_STEPS
 };
 
 /* ---- the plain accessors --------------------------------------------------------------------------------- */
@@ -1335,7 +1384,9 @@ static JSValue js_illegal_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValu
 
 /* ---- install --------------------------------------------------------------------------------------------- */
 
-#define TS_DEF(i) { sizeof(JSTsState), js_ts_step, js_ts_fini, (i), .visit = js_ts_visit }
+#define TS_DEF(i) { sizeof(JSTsState), js_ts_step, js_ts_fini, (i), .visit = js_ts_visit, \
+                    .algorithm = "Streams §6 TransformStream (the shared machine over §6.2-§6.4's operations)", \
+                    .steps = TS_STEPS }
 /* OP_CTOR has no entry here: the constructor is declared at the IDL layer. Its slot stays so the operation
    numbering is one enum rather than two that must be kept in step. */
 static const JSTrampStepDef js_ts_defs[OP_N] = {

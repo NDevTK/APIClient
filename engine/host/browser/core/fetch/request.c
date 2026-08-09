@@ -137,6 +137,20 @@ static int method_is_token(const char *s)
     return 1;
 }
 
+/* §5.3 STEP 25 AS ONE OPERATION, because two call sites perform it: this constructor, and `fetch(input, init)`,
+   which runs §5.3 inline over an init it never turns into a Request. fetch() had none of it — no token test, no
+   forbidden-method refusal and no normalization — so `{method:"connect"}` went out and `{method:"post"}` was
+   reported on the endpoint surface as a method distinct from POST. Returns the normalized method (the caller
+   frees it with js_free) or NULL with a TypeError live. */
+char *request_method_check(JSContext *ctx, const char *m)
+{
+    if (!method_is_token(m) || method_is_forbidden(m)) {
+        JS_ThrowTypeError(ctx, "the Request method is not a usable method");
+        return NULL;
+    }
+    return method_normalize(ctx, m);
+}
+
 enum { REQ_METHOD = 0, REQ_URL, REQ_HEADERS, REQ_DESTINATION, REQ_REFERRER, REQ_REFERRER_POLICY,
        REQ_MODE, REQ_CREDENTIALS, REQ_CACHE, REQ_REDIRECT, REQ_INTEGRITY, REQ_KEEPALIVE,
        REQ_IS_RELOAD_NAV, REQ_IS_HISTORY_NAV, REQ_DUPLEX };
@@ -222,8 +236,25 @@ static JSValue js_request_clone(JSContext *ctx, JSValueConst this_val, int argc,
 
 /* ---- the constructor ------------------------------------------------------------------------------------- */
 
+/* WHERE THIS MACHINE RESTS, AS §5.3 NUMBERS IT. The constructor's forty-two steps run the page's code in
+   exactly two places — the header fill at step 33 and nothing else before it, and the body extraction at step
+   37 — so the stages are the three spans those two points cut it into, and each label says its span. The
+   `stage` byte this state carried said none of that: a flow parked here could be described only as "stage 1 of
+   something", which is neither a resume point a later build can resolve nor a thing a park can report. */
+#define REQ_CTOR_STAGES(X) \
+    X(REQ_CTOR_RECORD = IDL_STEP_FIRST, \
+      "Fetch §5.3 new Request(input, init) steps 5-28 (the request record: its URL from input, then every " \
+      "init member the dictionary conversion has already turned into a value)") \
+    X(REQ_CTOR_HEADERS, \
+      "Fetch §5.3 new Request(input, init) steps 31-33 (this's headers, filled from init[\"headers\"] under " \
+      "the guard step 32 chose)") \
+    X(REQ_CTOR_BODY, \
+      "Fetch §5.3 new Request(input, init) steps 35-37 (a body on GET or HEAD is a TypeError; extract " \
+      "init[\"body\"] and set its Content-Type where the header list has none)")
+enum { REQ_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const REQ_CTOR_STEPS[] = { REQ_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
 typedef struct {
-    uint8_t     stage;
     HeadersFill fill;
     HeaderList  list;
     JSValue     result;
@@ -270,7 +301,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
     RequestData *d;
     int r;
 
-    if (s->stage == 0) {
+    if (hdr->stage == REQ_CTOR_RECORD) {
         JSValue obj;
         const char *from_request = request_url_of(input);
 
@@ -341,7 +372,36 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             url_record_free(&rec);
         }
 
-        /* §5.3's method: a token, not a forbidden method, then normalized. */
+        /* THE INIT MEMBERS, IN §5.3'S OWN ORDER — steps 14 through 25. They were applied in the order this
+           file grew in (method first, then mode, then the rest), and the order decides WHICH TypeError a page
+           sees when two members are bad at once: §5.3 refuses a "navigate" mode at step 17, before it looks at
+           the method at step 25. None of this runs the page's code — the dictionary conversion did that
+           already — so the whole span is one stage, and the span is what the label names. */
+        d->referrer        = init_str(ctx, init, "referrer", "about:client");        /* step 14 */
+        d->referrer_policy = init_str(ctx, init, "referrerPolicy", "");              /* step 15 */
+        /* §5.3 steps 16-18: "navigate" is not a mode a page may ask for. */
+        d->mode = init_str(ctx, init, "mode", "cors");
+        if (!strcmp(d->mode, "navigate")) {
+            JS_ThrowTypeError(ctx, "a Request cannot be constructed with mode \"navigate\"");
+            return -1;
+        }
+        d->credentials     = init_str(ctx, init, "credentials", "same-origin");      /* step 19 */
+        d->cache           = init_str(ctx, init, "cache", "default");                /* step 20 */
+        /* §5.3 step 21: "only-if-cached" asks the cache to answer without going to the network, which only
+           means anything for a same-origin request — so any other mode is a TypeError. It was missing, and
+           `new Request(u, {cache:"only-if-cached"})` (mode "cors" by step 5.5's fallback) was accepted. */
+        if (!strcmp(d->cache, "only-if-cached") && strcmp(d->mode, "same-origin")) {
+            JS_ThrowTypeError(ctx, "a Request with cache \"only-if-cached\" must have mode \"same-origin\"");
+            return -1;
+        }
+        d->redirect        = init_str(ctx, init, "redirect", "follow");              /* step 22 */
+        d->integrity       = init_str(ctx, init, "integrity", "");                   /* step 23 */
+        {
+            JSValue kv = idl_dict_get(ctx, init, "keepalive");                       /* step 24 */
+            d->keepalive = JS_ToBool(ctx, kv);
+            JS_FreeValue(ctx, kv);
+        }
+        /* §5.3 step 25's method: a token, not a forbidden method, then normalized. */
         {
             JSValue mv = idl_dict_get(ctx, init, "method");
             if (JS_IsUndefined(mv)) {
@@ -349,45 +409,23 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             } else {
                 const char *mc = JS_ToCString(ctx, mv);
                 if (!mc) { JS_FreeValue(ctx, mv); return -1; }
-                if (!method_is_token(mc) || method_is_forbidden(mc)) {
-                    JS_FreeCString(ctx, mc);
-                    JS_FreeValue(ctx, mv);
-                    JS_ThrowTypeError(ctx, "the Request method is not a usable method");
-                    return -1;
-                }
-                d->method = method_normalize(ctx, mc);
+                d->method = request_method_check(ctx, mc);
                 JS_FreeCString(ctx, mc);
+                if (!d->method) { JS_FreeValue(ctx, mv); return -1; }
             }
             JS_FreeValue(ctx, mv);
         }
-        /* §5.3: "navigate" is not a mode a page may ask for. */
-        d->mode = init_str(ctx, init, "mode", "cors");
-        if (!strcmp(d->mode, "navigate")) {
-            JS_ThrowTypeError(ctx, "a Request cannot be constructed with mode \"navigate\"");
-            return -1;
-        }
-        d->credentials     = init_str(ctx, init, "credentials", "same-origin");
-        d->cache           = init_str(ctx, init, "cache", "default");
-        d->redirect        = init_str(ctx, init, "redirect", "follow");
-        d->referrer        = init_str(ctx, init, "referrer", "about:client");
-        d->referrer_policy = init_str(ctx, init, "referrerPolicy", "");
-        d->integrity       = init_str(ctx, init, "integrity", "");
         d->destination     = js_strdup(ctx, "");   /* §5.3: a script-constructed request has no destination */
-        {
-            JSValue kv = idl_dict_get(ctx, init, "keepalive");
-            d->keepalive = JS_ToBool(ctx, kv);
-            JS_FreeValue(ctx, kv);
-        }
         CHECK(d->url && d->method && d->mode && d->credentials && d->cache && d->redirect && d->referrer &&
               d->referrer_policy && d->integrity && d->destination, "request: OOM building a Request");
         headers_fill_init(&s->fill);
-        s->stage = 1;
+        hdr->stage = REQ_CTOR_HEADERS;
     }
 
     d = request_of(s->result);
     DCHECK(d != NULL, "the Request the constructor allocated stopped being one mid-construction");
 
-    if (s->stage == 1) {
+    if (hdr->stage == REQ_CTOR_HEADERS) {
         /* §5.3's headers: guard "request", or "request-no-cors" when the mode says so — which is the ONLY way
            either guard becomes observable, since a page's own Headers has guard "none". */
         HeadersGuard guard = !strcmp(d->mode, "no-cors") ? HEADERS_GUARD_REQUEST_NO_CORS
@@ -401,10 +439,11 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         JS_FreeValue(ctx, d->headers);
         d->headers = headers_new(ctx, &s->list, guard);
         if (JS_IsException(d->headers)) return -1;
-        s->stage = 2;
+        hdr->stage = REQ_CTOR_BODY;
     }
 
-    DCHECK(s->stage == 2, "the Request constructor was re-entered at a stage it never parks in");
+    DCHECK(hdr->stage == REQ_CTOR_BODY,
+           "the Request constructor was re-entered at a stage §5.3 does not have");
     JS_FreeValue(ctx, cb_result);
     /* §5.3: a body on a GET or a HEAD is a TypeError. The extraction itself is §5.1's, which body.c owns —
        both including interfaces run the same six-armed union, and the Content-Type it produces is set only
@@ -440,7 +479,8 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
 }
 
 static const IdlStepDecl js_request_ctor_decl = {
-    js_request_ctor_step, sizeof(JSRequestCtorState), js_request_ctor_visit, js_request_ctor_release
+    js_request_ctor_step, sizeof(JSRequestCtorState), js_request_ctor_visit, js_request_ctor_release,
+    "Fetch §5.3 new Request(input, init)", REQ_CTOR_STEPS
 };
 
 static const JSCFunctionListEntry js_request_proto_funcs[] = {

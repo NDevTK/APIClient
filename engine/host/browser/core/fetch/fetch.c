@@ -70,7 +70,6 @@ static JSRuntime *g_fetch_rt;
 typedef struct JSFetchState JSFetchState;
 struct JSFetchState {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
-    uint8_t   stage;
     JSValue   method;   /* the answer to the `init.method` read, or undefined */
     JSValue   url;      /* the answer to the `input.url` read, or the USVString input itself */
     JSValue   input;    /* the argument ITSELF — a Request carries a captured blob URL entry the URL cannot */
@@ -131,9 +130,19 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
  * capture. What it captured is read back off the callee its own header carries. */
 enum { FETCH_DELIVER_RESOLVE = 0, FETCH_DELIVER_URL, FETCH_DELIVER_REJECT };
 
+/* WHERE THIS MACHINE RESTS. §5.6 step 12's processResponse is what a reply runs, and its five sub-steps split
+   exactly once: everything up to and including "creating a Response object" runs on the engine's own values,
+   and the settle is the page's code. */
+#define FETCH_DELIVER_STAGES(X) \
+    X(FETCH_DELIVER_BUILD, "Fetch §5.6 fetch(input, init) step 12's processResponse steps 3-4 (a network " \
+                           "error's TypeError, or the Response object for the reply)") \
+    X(FETCH_DELIVER_SETTLE, "Fetch §5.6 fetch(input, init) step 12's processResponse step 3 or 5 (reject p " \
+                            "with the TypeError, or resolve p with responseObject)")
+enum { FETCH_DELIVER_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const js_fetch_deliver_steps[] = { FETCH_DELIVER_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
 typedef struct {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
-    uint8_t   stage;
     uint8_t   cphase;   /* the settle call's own phase, held across a suspension */
     uint8_t   reject;   /* which of the capability's two functions this delivery settles with */
     JSValue   value;    /* the Response, or the TypeError a null delivery makes (owned) */
@@ -165,7 +174,7 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
     JSValue settled;
     int r;
 
-    if (s->stage == 0) {
+    if (s->hdr.stage == FETCH_DELIVER_BUILD) {
         JSValueConst body_v = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
 
         JS_FreeValue(ctx, cb_result);
@@ -218,10 +227,11 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
             JS_FreeValue(ctx, hs_v); JS_FreeValue(ctx, bd_v);
             if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
         }
-        s->stage = 1;
+        s->hdr.stage = FETCH_DELIVER_SETTLE;
     }
 
-    DCHECK(s->stage == 1, "the fetch delivery was re-entered at a stage it never parks in");
+    DCHECK(s->hdr.stage == FETCH_DELIVER_SETTLE,
+           "the fetch delivery was re-entered at a stage §5.6 step 12's processResponse does not have");
     r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb),
                       JS_StepClosureData(&s->hdr, s->reject ? FETCH_DELIVER_REJECT : FETCH_DELIVER_RESOLVE),
                       JS_UNDEFINED, 1, (JSValueConst *)&s->value, cb_result, &settled, out_cb, out_argc);
@@ -232,7 +242,9 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
 
 static const JSTrampStepDef js_fetch_deliver_def = {
     sizeof(JSFetchDeliverState), js_fetch_deliver_step, js_fetch_deliver_fini, 0,
-    .visit = js_fetch_deliver_visit
+    .visit = js_fetch_deliver_visit,
+    .algorithm = "Fetch §5.6 fetch(input, init) step 12's processResponse",
+    .steps = js_fetch_deliver_steps
 };
 static int g_deliver_stepid = -1;
 
@@ -397,9 +409,6 @@ static JSValue js_fetch_fini(JSContext *ctx, void *st, bool take_result)
     return promise;
 }
 
-/* Stage 0 reads `init.method`, stage 1 `input.url`, stage 2 `init.headers`, stage 3 converts that HeadersInit,
-   and stage 4 records the endpoint. Each read is a request the machine parks on; an argument that needs no read
-   falls straight through to the next stage. */
 /* §5.5 step 1-3: `fetch` NEVER THROWS. It creates the promise FIRST, and an exception from building the
    request — an invalid header value, a bad method, a URL that will not parse — REJECTS that promise instead of
    propagating. A page writes `fetch(u, init).catch(...)`, and a synchronous throw goes straight past the catch
@@ -425,6 +434,43 @@ static int fetch_reject_pending(JSContext *ctx, struct JSFetchState *s)
     return JS_STEP_DONE;
 }
 
+/* WHERE THIS MACHINE RESTS, AS THE TWO STANDARDS NUMBER IT.
+ *
+ * §5.6's `fetch(input, init)` is three steps, and its SECOND one INVOKES the Request constructor — so the
+ * algorithm this machine walks is §5.3's, performed inline because the request it builds never becomes a
+ * Request object. The `init` members it reads belong to neither: Web IDL §3.2.18 converts the RequestInit
+ * dictionary BEFORE step 1 of either algorithm, member by member IN LEXICOGRAPHICAL ORDER.
+ *
+ * THAT ORDER IS OBSERVABLE, and it was wrong. The reads were method, then body, then headers — the order this
+ * file grew in — so `fetch(u, new Proxy({}, {get(t, k){ log.push(k) }}))` reported an order no browser
+ * produces, and `input.url` was read in the MIDDLE of them where §5.3 reads it after all of them. The stages
+ * are the spec's order now, and each one names the step it rests at. */
+#define FETCH_STAGES(X) \
+    X(FETCH_INIT_BODY,    "Web IDL §3.2.18 step 5.2 (Get(init, \"body\") — RequestInit's members are converted " \
+                          "in lexicographical order, before step 1 of either algorithm)") \
+    X(FETCH_INIT_HEADERS, "Web IDL §3.2.18 step 5.2 (Get(init, \"headers\"))") \
+    X(FETCH_INIT_METHOD,  "Web IDL §3.2.18 step 5.2 (Get(init, \"method\"))") \
+    X(FETCH_METHOD_STR,   "Web IDL §3.2.18 step 5.5 (converting init[\"method\"] to its ByteString)") \
+    X(FETCH_INPUT_URL,    "Fetch §5.3 new Request(input, init) steps 5-6 (the request's URL: the input string, " \
+                          "or the input Request's own)") \
+    X(FETCH_METHOD,       "Fetch §5.3 new Request(input, init) step 25 (init[\"method\"] is a method, is not a " \
+                          "forbidden method, and is normalized)") \
+    X(FETCH_HEADERS,      "Fetch §5.3 new Request(input, init) step 33 (fill the request's headers with " \
+                          "init[\"headers\"], under the \"request\" guard)") \
+    X(FETCH_BODY,         "Fetch §5.3 new Request(input, init) steps 35-37 (a body on GET or HEAD is a " \
+                          "TypeError; extract init[\"body\"] and its Content-Type)") \
+    X(FETCH_CALL,         "Fetch §5.6 fetch(input, init) step 12 (fetch given request — the endpoint the flow " \
+                          "parks on until the trusted host answers)")
+enum { FETCH_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const js_fetch_steps[] = { FETCH_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* Web IDL §3.2.18 step 2: a dictionary argument that is neither an object nor null/undefined is a TypeError —
+   `fetch(u, 5)` rejects. It was simply skipped, which made every member of such an init silently absent. */
+static bool fetch_init_is_dict(JSValueConst init)
+{
+    return JS_IsObject(init);
+}
+
 static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSFetchState *s = st;
@@ -432,52 +478,75 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     const char *method = "GET", *mc = NULL;
     int r;
 
-    if (s->stage == 0) {
-        /* THE INPUT ITSELF, kept from the first entry. A Request carries a captured blob URL entry that its
-           `url` string cannot express, and this is where every other answer slot is spelled out too. It cannot
-           be deferred behind an "is it set yet" test on the slot: a zeroed step state's JSValue is the INTEGER
-           0 and not JS_UNDEFINED, so such a test always reads as already-set. */
+    if (s->hdr.stage == FETCH_INIT_BODY) {
+        /* EVERY ANSWER SLOT IS SPELLED HERE, on the one entry every path passes through. It cannot be deferred
+           behind an "is it set yet" test on the slot: a zeroed step state's JSValue is the INTEGER 0 and not
+           JS_UNDEFINED, so such a test always reads as already-set. The INPUT itself is kept too — a Request
+           carries a captured blob URL entry that its `url` string cannot express. */
         s->input = JS_DupValue(ctx, input);
-        if (JS_IsObject(init)) {
-            r = step_getprop_run(ctx, &s->hdr, init, g_atom_method, cb_result, &s->method, out_cb, out_argc);
-            if (r > 0) return r;
-            if (r < 0) return fetch_reject_pending(ctx, s);
-        } else {
+        s->method = s->url = s->hinit = s->binit = JS_UNDEFINED;
+        s->body_mime = s->reject_promise = JS_UNDEFINED;
+        if (!JS_IsUndefined(init) && !JS_IsNull(init) && !fetch_init_is_dict(init)) {
             JS_FreeValue(ctx, cb_result);
-            s->method = JS_UNDEFINED;   /* the skipped read's answer, spelled — see stage 2 */
+            JS_ThrowTypeError(ctx, "the fetch init is not an object");
+            return fetch_reject_pending(ctx, s);
         }
-        cb_result = JS_UNDEFINED;
-        s->stage = 5;
-    }
-    if (s->stage == 5) {
-        /* 5.4 Request step 36: `init.body`. It was never read at all, so `fetch(u, {method:"POST", body:x})`
-           asked the server a different question than the page did — and the endpoint this engine reports for it
-           carried no body either. The READ is the page's code; the EXTRACTION afterwards is §5.1's, which
-           body.c owns for every interface that takes a BodyInit. */
-        if (JS_IsObject(init)) {
+        /* §5.3 step 37: `init.body`. The READ is the page's code; the EXTRACTION is §5.1's, which body.c owns
+           for every interface that takes a BodyInit, and which runs at its own step below. */
+        if (fetch_init_is_dict(init)) {
             r = step_getprop_run(ctx, &s->hdr, init, g_atom_body, cb_result, &s->binit, out_cb, out_argc);
             if (r > 0) return r;
             if (r < 0) return fetch_reject_pending(ctx, s);
         } else {
             JS_FreeValue(ctx, cb_result);
-            s->binit = JS_UNDEFINED;
         }
         cb_result = JS_UNDEFINED;
-        if (!JS_IsUndefined(s->binit) && !JS_IsNull(s->binit)) {
-            char *mime = NULL;
-            if (body_extract(ctx, &s->body, s->binit, &mime) < 0) { free(mime); return fetch_reject_pending(ctx, s); }
-            /* §5.1's type, recorded the way the constructor records it: only where the init's own headers do
-               not already name one, which stage 3's fill decides — so it is appended after that fill. */
-            JS_FreeValue(ctx, s->body_mime);
-            s->body_mime = mime ? JS_NewString(ctx, mime) : JS_UNDEFINED;
-            free(mime);
-        }
-        s->stage = 1;
+        s->hdr.stage = FETCH_INIT_HEADERS;
     }
-    if (s->stage == 1) {
-        /* 5.4 Request: a USVString names the URL directly; a Request names it through its `url` attribute, and
-           THAT is the read that has to be a request. The INPUT itself is kept too: a Request carries a captured
-           blob URL entry, which its `url` string cannot express. */
+    if (s->hdr.stage == FETCH_INIT_HEADERS) {
+        /* Without this read the endpoint's transport requirement was simply invisible: every request that needs
+           an `Authorization` or an `X-Api-Version` was reported as if it needed nothing. */
+        if (fetch_init_is_dict(init)) {
+            r = step_getprop_run(ctx, &s->hdr, init, g_atom_headers, cb_result, &s->hinit, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return fetch_reject_pending(ctx, s);
+        } else {
+            JS_FreeValue(ctx, cb_result);
+        }
+        cb_result = JS_UNDEFINED;
+        s->hdr.stage = FETCH_INIT_METHOD;
+    }
+    if (s->hdr.stage == FETCH_INIT_METHOD) {
+        if (fetch_init_is_dict(init)) {
+            r = step_getprop_run(ctx, &s->hdr, init, g_atom_method, cb_result, &s->method, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return fetch_reject_pending(ctx, s);
+        } else {
+            JS_FreeValue(ctx, cb_result);
+        }
+        cb_result = JS_UNDEFINED;
+        s->hdr.stage = FETCH_METHOD_STR;
+    }
+    if (s->hdr.stage == FETCH_METHOD_STR) {
+        /* The member's TYPE is a ByteString, so a non-string method is ToString'd — the page's code, and its
+           OWN step, because §3.2.18 runs it after the [[Get]] that produced the value. It was never converted
+           at all: `fetch(u, {method: {toString(){ return "POST" }}})` went out as a GET. */
+        if (!JS_IsUndefined(s->method) && !JS_IsString(s->method)) {
+            JSValue str;
+            r = step_tostring_run(ctx, &s->hdr, s->method, cb_result, &str, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return fetch_reject_pending(ctx, s);
+            JS_FreeValue(ctx, s->method);
+            s->method = str;
+        } else {
+            JS_FreeValue(ctx, cb_result);
+        }
+        cb_result = JS_UNDEFINED;
+        s->hdr.stage = FETCH_INPUT_URL;
+    }
+    if (s->hdr.stage == FETCH_INPUT_URL) {
+        /* §5.3: a USVString names the URL directly; a Request names it through its `url` attribute, and THAT is
+           the read that has to be a request. */
         if (JS_IsObject(input)) {
             r = step_getprop_run(ctx, &s->hdr, input, g_atom_url, cb_result, &s->url, out_cb, out_argc);
             if (r > 0) return r;
@@ -491,31 +560,30 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
            another request. It was left stale when this was the last stage and nothing read it again; the moment
            a stage was added after it, that stale copy was freed a second time. */
         cb_result = JS_UNDEFINED;
-        s->stage = 2;
+        s->hdr.stage = FETCH_METHOD;
     }
-    /* 5.4 Request step 33: `init.headers`, whose value is a HeadersInit. The READ is the page's code like the
-       other two, and the CONVERSION is the page's code again — which is why the fill is a sub-sequence and not
-       a loop here. Without it the endpoint's transport requirement was simply invisible: every request that
-       needs an `Authorization` or an `X-Api-Version` was reported as if it needed nothing. */
-    if (s->stage == 2) {
-        if (JS_IsObject(init)) {
-            r = step_getprop_run(ctx, &s->hdr, init, g_atom_headers, cb_result, &s->hinit, out_cb, out_argc);
-            if (r > 0) return r;
-            if (r < 0) return fetch_reject_pending(ctx, s);
-        } else {
-            JS_FreeValue(ctx, cb_result);
-            /* NO init AT ALL, so there is no HeadersInit — and "no HeadersInit" has to be spelled `undefined`,
-               not left as the state's zero. A js_mallocz'd JSValue reads as the INTEGER 0, which is neither
-               undefined nor an object, so the fill rejected `fetch(url)` — every request with no init — with
-               "a Headers init is not an object". The other two answers are written by their reads on every
-               path that reaches them; this is the one a skipped read leaves behind. */
-            s->hinit = JS_UNDEFINED;
-        }
+    if (s->hdr.stage == FETCH_METHOD) {
+        /* §5.3 step 25, through the ONE implementation §5.3's own constructor uses: a method that is not a
+           token, or is CONNECT/TRACE/TRACK however it is spelled, is a TypeError — and the rest are NORMALIZED,
+           so `{method:"post"}` reaches the endpoint surface as POST rather than as a second spelling of it. */
+        JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
+        if (JS_IsString(s->method)) {
+            const char *m = JS_ToCString(ctx, s->method);
+            char *norm;
+            if (!m) return fetch_reject_pending(ctx, s);
+            norm = request_method_check(ctx, m);
+            JS_FreeCString(ctx, m);
+            if (!norm) return fetch_reject_pending(ctx, s);
+            JS_FreeValue(ctx, s->method);
+            s->method = JS_NewString(ctx, norm);
+            js_free(ctx, norm);
+            if (JS_IsException(s->method)) { s->method = JS_UNDEFINED; return fetch_reject_pending(ctx, s); }
+        }
         headers_fill_init(&s->fill);
-        s->stage = 3;
+        s->hdr.stage = FETCH_HEADERS;
     }
-    if (s->stage == 3) {
+    if (s->hdr.stage == FETCH_HEADERS) {
         /* §5.1: a request's header list has guard "request" — the names the browser owns (Host, Cookie,
            Origin, the method-override family carrying CONNECT/TRACE/TRACK) are dropped rather than sent. */
         r = headers_fill_run(ctx, &s->hdr, &s->fill, s->hinit, &s->hdrs, HEADERS_GUARD_REQUEST,
@@ -523,10 +591,40 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         if (r > 0) return r;
         if (r < 0) return fetch_reject_pending(ctx, s);
         cb_result = JS_UNDEFINED;
-        s->stage = 4;
+        s->hdr.stage = FETCH_BODY;
+    }
+    if (s->hdr.stage == FETCH_BODY) {
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        if (!JS_IsUndefined(s->binit) && !JS_IsNull(s->binit)) {
+            char *mime = NULL;
+            /* §5.3 step 35: a body with a GET or a HEAD is a TypeError. It was missing, so a page's own bug
+               went out as a GET carrying a payload and the endpoint surface reported that request as real. */
+            if (JS_IsString(s->method)) {
+                const char *m = JS_ToCString(ctx, s->method);
+                bool bad = m && (!strcmp(m, "GET") || !strcmp(m, "HEAD"));
+                if (m) JS_FreeCString(ctx, m);
+                if (bad) {
+                    JS_ThrowTypeError(ctx, "a fetch with a GET or HEAD method cannot have a body");
+                    return fetch_reject_pending(ctx, s);
+                }
+            } else {
+                /* No method member at all, so §5.3 step 12 left it GET — the same refusal. */
+                JS_ThrowTypeError(ctx, "a fetch with a GET or HEAD method cannot have a body");
+                return fetch_reject_pending(ctx, s);
+            }
+            if (body_extract(ctx, &s->body, s->binit, &mime) < 0) { free(mime); return fetch_reject_pending(ctx, s); }
+            /* §5.3 step 37.4's type: appended only where the init's own headers do not already name one, which
+               the fill above has decided — so `fini` appends it after asking the list. */
+            JS_FreeValue(ctx, s->body_mime);
+            s->body_mime = mime ? JS_NewString(ctx, mime) : JS_UNDEFINED;
+            free(mime);
+        }
+        s->hdr.stage = FETCH_CALL;
     }
 
-    DCHECK(s->stage == 4, "the fetch machine was re-entered at a stage it never parks in");
+    DCHECK(s->hdr.stage == FETCH_CALL,
+           "the fetch machine was re-entered at a stage §5.3 and §5.6 do not have between them");
     if (JS_IsString(s->method)) {
         mc = JS_ToCString(ctx, s->method);
         if (mc) method = mc;
@@ -552,7 +650,9 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
 }
 
 static const JSTrampStepDef js_fetch_def = {
-    sizeof(JSFetchState), js_fetch_step, js_fetch_fini, 0, .visit = js_fetch_visit
+    sizeof(JSFetchState), js_fetch_step, js_fetch_fini, 0, .visit = js_fetch_visit,
+    .algorithm = "Fetch §5.6 fetch(input, init), performing §5.3 new Request(input, init) inline",
+    .steps = js_fetch_steps
 };
 
 /* §5, §6 and §5.3's AGENT-WIDE DECLARATIONS. They were made from inside fetch_install, which runs once per

@@ -558,25 +558,64 @@ enum {
     OP_N
 };
 
-enum {
-    S_ENTRY = 0,
-    S_SIGNAL,        /* §5.2 abort step 2's "signal abort", whose FIRE runs the page's listeners */
-    S_ABORT_SETUP,
-    S_SIZE,          /* §5.4's GetChunkSize, whose throw ERRORS the stream rather than propagating */
-    S_WRITE_QUEUE,
-    S_ERROR,         /* §5.2's DealWithRejection */
-    S_START_ERR,     /* StartErroring's own settle: the writer's `ready` is rejected */
-    S_FINISH_ERR,
-    S_ERR_WRITES, S_ERR_ABORT, S_ERR_CLOSE, S_ERR_CLOSED,
-    S_ADVANCE,       /* §5.4's AdvanceQueueIfNeeded */
-    S_SINK_WRITE, S_SINK_CLOSE, S_SINK_REACT,
-    S_WRITE_DONE,    /* ProcessWrite's fulfilment tail: dequeue, backpressure, advance */
-    S_CLOSE_DONE, S_CLOSE_DONE2, S_CLOSE_ERR2,
-    S_RELEASE, S_RELEASE2,   /* §5.3's release: reject `ready`, then `closed`, then detach */
-    S_SETTLE,        /* run w.settle, then go to `next` */
-    S_RESULT,        /* settle this member's OWN capability, for the short-circuit answers */
-    S_DONE
-};
+/* WHERE THIS MACHINE RESTS, AS §5 NUMBERS IT. It is ONE machine over §5's whole state machine — fifteen entry
+   points (the OP_ list above) that all walk the same abstract operations — so its stages are named by the
+   OPERATION each rests in rather than by whichever member reached it. That is what a stage number could never
+   say: `S_ERR_ABORT` was internally consistent and externally meaningless, and a flow parked in it could be
+   described only as "stage 10 of something".
+   S_START_ERR was in this list and in no line of code — a stage the machine could never rest at, which the
+   conversion is what exposes: it would have named a step nothing reaches. */
+#define WS_STAGES(X) \
+    X(S_ENTRY, "Streams §5 (this invocation's entry: the receiver's brand, its stream and controller records, " \
+               "and which §5 operation the fifteen entry points name)") \
+    X(S_SIGNAL, "Streams §5.2 WritableStreamAbort step 2 (signal abort on the controller's AbortController — " \
+                "the signal's abort algorithms and its `abort` event are the page's code)") \
+    X(S_ABORT_SETUP, "Streams §5.2 WritableStreamAbort steps 3-11 (the state RE-READ after that author code, " \
+                     "the pending abort request, and StartErroring)") \
+    X(S_SIZE, "Streams §5.4 WritableStreamDefaultControllerGetChunkSize steps 2-3 (the strategy's size " \
+              "algorithm over the chunk; a throw errors the stream and the size is 1)") \
+    X(S_WRITE_QUEUE, "Streams §5.3 WritableStreamDefaultWriterWrite steps 5-11 and §5.4 " \
+                     "WritableStreamDefaultControllerWrite steps 1-5 (the state refusals, EnqueueValueWithSize, " \
+                     "then the backpressure update)") \
+    X(S_ERROR, "Streams §5.2 WritableStreamDealWithRejection steps 1-4 (StartErroring for a writable stream, " \
+               "FinishErroring for one already erroring)") \
+    X(S_FINISH_ERR, "Streams §5.2 WritableStreamFinishErroring steps 1-5 (nothing in flight and the controller " \
+                    "started, then the stream is errored and the queue reset)") \
+    X(S_ERR_WRITES, "Streams §5.2 WritableStreamFinishErroring steps 6-7 (reject every write request with the " \
+                    "stored error)") \
+    X(S_ERR_ABORT, "Streams §5.2 WritableStreamFinishErroring steps 8-12 (the pending abort request: rejected " \
+                   "with the stored error when it was already erroring, otherwise the sink's abort algorithm)") \
+    X(S_ERR_CLOSE, "Streams §5.2 WritableStreamRejectCloseAndClosedPromiseIfNeeded step 2 (reject the close " \
+                   "request with the stored error)") \
+    X(S_ERR_CLOSED, "Streams §5.2 WritableStreamRejectCloseAndClosedPromiseIfNeeded step 3 (reject the " \
+                    "writer's `closed` with the stored error)") \
+    X(S_ADVANCE, "Streams §5.4 WritableStreamDefaultControllerAdvanceQueueIfNeeded steps 2-10 (finish " \
+                 "erroring, or process the close sentinel, or process the head chunk)") \
+    X(S_SINK_WRITE, "Streams §5.4 WritableStreamDefaultControllerProcessWrite step 3 (the sink's write " \
+                    "algorithm over the chunk)") \
+    X(S_SINK_CLOSE, "Streams §5.4 WritableStreamDefaultControllerProcessClose step 5 (the sink's close " \
+                    "algorithm)") \
+    X(S_SINK_REACT, "Streams §5.4 ProcessWrite step 4 / ProcessClose step 7 / FinishErroring step 13 " \
+                    "(PromiseResolve over what the sink returned, then its two reactions)") \
+    X(S_WRITE_DONE, "Streams §5.4 WritableStreamDefaultControllerProcessWrite steps 4.4-4.6 (dequeue the " \
+                    "chunk, update backpressure, advance the queue)") \
+    X(S_CLOSE_DONE, "Streams §5.2 WritableStreamFinishInFlightClose step 6 (a stream that was erroring: the " \
+                    "stored error is dropped and the pending abort request resolved)") \
+    X(S_CLOSE_DONE2, "Streams §5.2 WritableStreamFinishInFlightClose steps 7-9 (the stream is closed and the " \
+                     "writer's `closed` resolves)") \
+    X(S_CLOSE_ERR2, "Streams §5.2 WritableStreamFinishInFlightCloseWithError steps 4-5 (reject the pending " \
+                    "abort request, then DealWithRejection)") \
+    X(S_RELEASE, "Streams §5.3 WritableStreamDefaultWriterRelease step 6 (EnsureClosedPromiseRejected with " \
+                 "the released TypeError)") \
+    X(S_RELEASE2, "Streams §5.3 WritableStreamDefaultWriterRelease steps 7-8 (detach the writer from the " \
+                  "stream)") \
+    X(S_SETTLE, "Streams §5 (settling the promise the step before this one named — the resolving function's " \
+                "27.2.1.3.2 step 8 `then` read is the page's code)") \
+    X(S_RESULT, "Streams §5 (settling this member's OWN capability, for the short-circuit answers §5.2 " \
+                "abort step 1, close step 2 and §5.3 write step 5 return)") \
+    X(S_DONE, "Streams §5 (the operation is complete; its promise, where it has one, is this machine's result)")
+enum { WS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const js_ws_steps[] = { WS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     JSStepHdr  hdr;
@@ -680,7 +719,7 @@ static int ws_short(JSContext *ctx, JSWsState *s, int reject, JSValue value)
     s->reject = (uint8_t)reject;
     JS_FreeValue(ctx, s->w.value);
     s->w.value = value;
-    s->w.stage = S_RESULT;
+    s->hdr.stage = S_RESULT;
     return 0;
 }
 
@@ -693,7 +732,7 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
     JSValue out;
     int r;
 
-    if (s->w.stage == S_ENTRY) {
+    if (s->hdr.stage == S_ENTRY) {
         stream_work_start(&s->w);
         s->ctrl = s->stream = s->chunk = s->promise = JS_UNDEFINED;
         abort_signal_work_start(&s->sig);
@@ -764,14 +803,14 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
         switch (op) {
         case OP_START_OK:
             c->started = 1;
-            s->w.stage = S_ADVANCE;
+            s->hdr.stage = S_ADVANCE;
             break;
         case OP_START_ERR:
             /* §5.4: a start that rejects errors the stream, even with nothing written. */
             c->started = 1;
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, step_arg(&s->hdr, 0));
-            s->w.stage = S_ERROR;
+            s->hdr.stage = S_ERROR;
             break;
         case OP_WRITE_OK: {
             JSValue pair[2];
@@ -783,7 +822,7 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_UNDEFINED;
             s->w.settle = W_ONE;
-            s->w.stage = S_SETTLE;
+            s->hdr.stage = S_SETTLE;
             s->next = S_WRITE_DONE;
             break;
         }
@@ -799,7 +838,7 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_DupValue(ctx, s->w.err);
             s->w.settle = W_ONE;
-            s->w.stage = S_SETTLE;
+            s->hdr.stage = S_SETTLE;
             s->next = S_ERROR;
             break;
         }
@@ -813,7 +852,7 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_UNDEFINED;
             s->w.settle = W_ONE;
-            s->w.stage = S_SETTLE;
+            s->hdr.stage = S_SETTLE;
             s->next = S_CLOSE_DONE;
             break;
         }
@@ -829,20 +868,20 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_DupValue(ctx, s->w.err);
             s->w.settle = W_ONE;
-            s->w.stage = S_SETTLE;
+            s->hdr.stage = S_SETTLE;
             s->next = S_CLOSE_ERR2;
             break;
         }
         case OP_ABORT_OK:
             s->w.settle = W_ABORT_RES;
-            s->w.stage = S_SETTLE;
+            s->hdr.stage = S_SETTLE;
             s->next = S_ERR_CLOSE;
             break;
         case OP_ABORT_ERR:
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, step_arg(&s->hdr, 0));
             s->w.settle = W_ABORT_REJ;
-            s->w.stage = S_SETTLE;
+            s->hdr.stage = S_SETTLE;
             s->next = S_ERR_CLOSE;
             break;
 
@@ -854,7 +893,7 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             }
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_DupValue(ctx, step_arg(&s->hdr, 0));
-            s->w.stage = S_SIGNAL;
+            s->hdr.stage = S_SIGNAL;
             break;
 
         case OP_WS_CLOSE: case OP_WR_CLOSE:
@@ -868,20 +907,20 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             if (JS_IsException(s->promise)) return JS_STEP_ABRUPT;
             /* §5.2 step 7: a writer waiting on backpressure is released by the close — nothing more is coming,
                so `ready` resolves rather than staying pending forever. */
-            s->w.stage = S_SETTLE;
+            s->hdr.stage = S_SETTLE;
             s->next = S_ADVANCE;
             s->w.settle = (!JS_IsUndefined(d->writer) && d->backpressure && d->state == WS_WRITABLE)
                         ? W_READY_RES : W_IDLE;
             /* §5.4's Close: the sentinel goes on the tail, so it is taken after every queued chunk. */
             wc_enqueue(ctx, c, JS_UNDEFINED, 0);
             c->close_queued = 1;
-            if (s->w.settle == W_IDLE) s->w.stage = S_ADVANCE;
+            if (s->w.settle == W_IDLE) s->hdr.stage = S_ADVANCE;
             break;
 
         case OP_WR_WRITE:
             JS_FreeValue(ctx, s->chunk);
             s->chunk = JS_DupValue(ctx, step_arg(&s->hdr, 0));
-            s->w.stage = S_SIZE;
+            s->hdr.stage = S_SIZE;
             break;
 
         case OP_WR_RELEASE:
@@ -891,7 +930,7 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_GetException(ctx);
             s->w.settle = W_READY_REJ;
-            s->w.stage = S_SETTLE;
+            s->hdr.stage = S_SETTLE;
             s->next = S_RELEASE;
             break;
 
@@ -900,7 +939,7 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             if (d->state != WS_WRITABLE) return JS_STEP_DONE;
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, step_arg(&s->hdr, 0));
-            s->w.stage = S_ERROR;
+            s->hdr.stage = S_ERROR;
             break;
         }
     }
@@ -910,29 +949,29 @@ run:
     c = JS_IsUndefined(s->ctrl) ? NULL : wc_of(s->ctrl);
 
     for (;;) {
-        if (s->w.stage == S_SETTLE) {
-            if (s->w.settle == W_IDLE) { s->w.stage = s->next; continue; }
+        if (s->hdr.stage == S_SETTLE) {
+            if (s->w.settle == W_IDLE) { s->hdr.stage = s->next; continue; }
             r = ws_settle_run(ctx, &s->w, s->stream, cb_result, out_cb, out_argc);
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
             cb_result = JS_UNDEFINED;
-            s->w.stage = s->next;
+            s->hdr.stage = s->next;
         }
 
-        if (s->w.stage == S_SIGNAL) {
+        if (s->hdr.stage == S_SIGNAL) {
             /* §5.2 abort step 2: "signal abort on the controller's AbortController with reason". The WHOLE DOM
                operation, as a request — it runs the signal's abort algorithms and then fires `abort` at it, and
                both of those run code, which is why the state the stream is in is re-read in the next stage
                rather than remembered across this one. */
-            if (!c || JS_IsUndefined(c->signal)) { s->w.stage = S_ABORT_SETUP; continue; }
+            if (!c || JS_IsUndefined(c->signal)) { s->hdr.stage = S_ABORT_SETUP; continue; }
             r = abort_signal_run(ctx, &s->sig, c->signal, s->w.value, cb_result, out_cb, out_argc);
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
             cb_result = JS_UNDEFINED;
-            s->w.stage = S_ABORT_SETUP;
+            s->hdr.stage = S_ABORT_SETUP;
         }
 
-        if (s->w.stage == S_ABORT_SETUP) {
+        if (s->hdr.stage == S_ABORT_SETUP) {
             if (d->state == WS_CLOSED || d->state == WS_ERRORED) {
                 if (ws_short(ctx, s, 0, JS_UNDEFINED) < 0) return JS_STEP_ABRUPT;
                 continue;
@@ -941,7 +980,7 @@ run:
                 /* §5.2 step 5: a second abort() answers the FIRST one's promise. */
                 JS_FreeValue(ctx, s->promise);
                 s->promise = JS_DupValue(ctx, d->abort_p);
-                s->w.stage = S_DONE;
+                s->hdr.stage = S_DONE;
                 continue;
             }
             d->abort_was_erroring = (d->state == WS_ERRORING);
@@ -952,18 +991,18 @@ run:
             if (JS_IsException(d->abort_p)) return JS_STEP_ABRUPT;
             d->abort_pending = 1;
             s->promise = JS_DupValue(ctx, d->abort_p);
-            if (d->abort_was_erroring) { s->w.stage = S_DONE; continue; }
+            if (d->abort_was_erroring) { s->hdr.stage = S_DONE; continue; }
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, s->w.value);
-            s->w.stage = S_ERROR;
+            s->hdr.stage = S_ERROR;
         }
 
-        if (s->w.stage == S_SIZE) {
+        if (s->hdr.stage == S_SIZE) {
             /* §5.4's GetChunkSize. A `size` that THROWS errors the stream and the size is 1 — the throw does
                not propagate, and the state checks below are what then reject this write. */
             if (JS_IsUndefined(c->size_fn)) {
                 s->size = 1;
-                s->w.stage = S_WRITE_QUEUE;
+                s->hdr.stage = S_WRITE_QUEUE;
             } else {
                 JSValueConst arg = s->chunk;
                 r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), c->size_fn, JS_UNDEFINED, 1, &arg, cb_result,
@@ -974,17 +1013,17 @@ run:
                 if (JS_IsException(out)) {
                     JS_FreeValue(ctx, s->w.err);
                     s->w.err = JS_GetException(ctx);
-                    s->w.stage = d->state == WS_WRITABLE ? S_ERROR : S_WRITE_QUEUE;
+                    s->hdr.stage = d->state == WS_WRITABLE ? S_ERROR : S_WRITE_QUEUE;
                     s->tail = S_WRITE_QUEUE;
                     continue;
                 }
                 if (JS_ToFloat64(ctx, &s->size, out) < 0) JS_FreeValue(ctx, JS_GetException(ctx));
                 JS_FreeValue(ctx, out);
-                s->w.stage = S_WRITE_QUEUE;
+                s->hdr.stage = S_WRITE_QUEUE;
             }
         }
 
-        if (s->w.stage == S_WRITE_QUEUE) {
+        if (s->hdr.stage == S_WRITE_QUEUE) {
             WsWriterData *wr = wr_of(s->hdr.this_val);
             s->tail = S_DONE;
             if (!wr || JS_IsUndefined(wr->stream)) {
@@ -1009,17 +1048,17 @@ run:
                 JS_ThrowRangeError(ctx, "a queuing strategy's size must be a finite, non-negative number");
                 JS_FreeValue(ctx, s->w.err);
                 s->w.err = JS_GetException(ctx);
-                s->w.stage = S_ERROR;
+                s->hdr.stage = S_ERROR;
                 continue;
             }
             wc_enqueue(ctx, c, s->chunk, s->size);
             s->w.settle = ws_update_backpressure(ctx, d, c);
-            s->w.stage = S_SETTLE;
+            s->hdr.stage = S_SETTLE;
             s->next = S_ADVANCE;
             continue;
         }
 
-        if (s->w.stage == S_ERROR) {
+        if (s->hdr.stage == S_ERROR) {
             /* §5.2's DealWithRejection: a stream still WRITABLE starts erroring; one already erroring only has
                to check whether it can finish. */
             if (d->state == WS_WRITABLE) {
@@ -1029,47 +1068,47 @@ run:
                    its own thrown error was an abort request. */
                 ws_start_erroring(ctx, d, s->w.err);
                 s->w.settle = W_READY_REJ;
-                s->w.stage = S_SETTLE;
+                s->hdr.stage = S_SETTLE;
                 s->next = S_FINISH_ERR;
                 continue;
             }
-            s->w.stage = S_FINISH_ERR;
+            s->hdr.stage = S_FINISH_ERR;
         }
 
-        if (s->w.stage == S_FINISH_ERR) {
+        if (s->hdr.stage == S_FINISH_ERR) {
             /* §5.2's FinishErroring runs only when NOTHING is in flight: the sink is still busy otherwise, and
                reporting the stream errored while the page's own write promise is pending is exactly the
                reordering the erroring state exists to prevent. */
-            if (d->state != WS_ERRORING || ws_in_flight(d) || !c->started) { s->w.stage = s->tail; continue; }
+            if (d->state != WS_ERRORING || ws_in_flight(d) || !c->started) { s->hdr.stage = s->tail; continue; }
             d->state = WS_ERRORED;
             wc_reset_queue(ctx, c);
-            s->w.stage = S_ERR_WRITES;
+            s->hdr.stage = S_ERR_WRITES;
         }
 
-        if (s->w.stage == S_ERR_WRITES) {
+        if (s->hdr.stage == S_ERR_WRITES) {
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, d->stored_error);
             s->w.settle = W_REJECT_WRITES;
-            s->w.stage = S_SETTLE;
+            s->hdr.stage = S_SETTLE;
             s->next = S_ERR_ABORT;
             continue;
         }
 
-        if (s->w.stage == S_ERR_ABORT) {
-            if (!d->abort_pending) { s->w.stage = S_ERR_CLOSE; continue; }
+        if (s->hdr.stage == S_ERR_ABORT) {
+            if (!d->abort_pending) { s->hdr.stage = S_ERR_CLOSE; continue; }
             if (d->abort_was_erroring) {
                 /* §5.2 step 10: an abort that arrived while the stream was already failing rejects with the
                    stream's own reason rather than getting the sink asked a second time. */
                 JS_FreeValue(ctx, s->w.err);
                 s->w.err = JS_DupValue(ctx, d->stored_error);
                 s->w.settle = W_ABORT_REJ;
-                s->w.stage = S_SETTLE;
+                s->hdr.stage = S_SETTLE;
                 s->next = S_ERR_CLOSE;
                 continue;
             }
             if (JS_IsUndefined(c->abort_fn)) {
                 s->w.settle = W_ABORT_RES;
-                s->w.stage = S_SETTLE;
+                s->hdr.stage = S_SETTLE;
                 s->next = S_ERR_CLOSE;
                 continue;
             }
@@ -1090,35 +1129,35 @@ run:
                     s->w.value = out;
                     s->reject = 0;
                 }
-                s->w.stage = S_SINK_REACT;
+                s->hdr.stage = S_SINK_REACT;
                 continue;
             }
         }
 
-        if (s->w.stage == S_ERR_CLOSE) {
-            if (JS_IsUndefined(d->close_request[0])) { s->w.stage = S_ERR_CLOSED; continue; }
+        if (s->hdr.stage == S_ERR_CLOSE) {
+            if (JS_IsUndefined(d->close_request[0])) { s->hdr.stage = S_ERR_CLOSED; continue; }
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, d->stored_error);
             s->w.settle = W_CLOSE_REQ_REJ;
-            s->w.stage = S_SETTLE;
+            s->hdr.stage = S_SETTLE;
             s->next = S_ERR_CLOSED;
             continue;
         }
 
-        if (s->w.stage == S_ERR_CLOSED) {
+        if (s->hdr.stage == S_ERR_CLOSED) {
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, d->stored_error);
             s->w.settle = W_CLOSED_REJ;
-            s->w.stage = S_SETTLE;
+            s->hdr.stage = S_SETTLE;
             s->next = s->tail;
             continue;
         }
 
-        if (s->w.stage == S_ADVANCE) {
+        if (s->hdr.stage == S_ADVANCE) {
             /* §5.4's AdvanceQueueIfNeeded. */
-            if (!c->started || ws_in_flight(d)) { s->w.stage = s->tail; continue; }
-            if (d->state == WS_ERRORING) { s->w.stage = S_FINISH_ERR; continue; }
-            if (wc_queued(ctx, c) == 0) { s->w.stage = s->tail; continue; }
+            if (!c->started || ws_in_flight(d)) { s->hdr.stage = s->tail; continue; }
+            if (d->state == WS_ERRORING) { s->hdr.stage = S_FINISH_ERR; continue; }
+            if (wc_queued(ctx, c) == 0) { s->hdr.stage = s->tail; continue; }
             if (c->close_queued && wc_queued(ctx, c) == 1) {
                 /* §5.4's ProcessClose: the sentinel is taken and dequeued at once. */
                 JSValue pair[2];
@@ -1127,7 +1166,7 @@ run:
                 ws_take_pair(d->close_request, pair);
                 d->in_flight_close[0] = pair[0];
                 d->in_flight_close[1] = pair[1];
-                s->w.stage = S_SINK_CLOSE;
+                s->hdr.stage = S_SINK_CLOSE;
             } else {
                 /* §5.4's ProcessWrite PEEKS: the chunk stays on the queue while the write is in flight, so
                    `desiredSize` still counts it, and the fulfilment is what dequeues. */
@@ -1138,12 +1177,12 @@ run:
                 DCHECK(!JS_IsUndefined(pair[0]), "§5.4 advanced onto a chunk with no write request behind it");
                 d->in_flight_write[0] = pair[0];
                 d->in_flight_write[1] = pair[1];
-                s->w.stage = S_SINK_WRITE;
+                s->hdr.stage = S_SINK_WRITE;
             }
         }
 
-        if (s->w.stage == S_SINK_WRITE || s->w.stage == S_SINK_CLOSE) {
-            int is_close = (s->w.stage == S_SINK_CLOSE);
+        if (s->hdr.stage == S_SINK_WRITE || s->hdr.stage == S_SINK_CLOSE) {
+            int is_close = (s->hdr.stage == S_SINK_CLOSE);
             JSValueConst args[2];
             JSValueConst fn = is_close ? c->close_fn : c->write_fn;
             /* §5.4 SetUpWritableStreamDefaultControllerFromUnderlyingSink gives each algorithm its OWN argument
@@ -1170,10 +1209,10 @@ run:
                 s->w.value = out;
                 s->reject = 0;
             }
-            s->w.stage = S_SINK_REACT;
+            s->hdr.stage = S_SINK_REACT;
         }
 
-        if (s->w.stage == S_SINK_REACT) {
+        if (s->hdr.stage == S_SINK_REACT) {
             static const int OKS[3]  = { OP_WRITE_OK,  OP_CLOSE_OK,  OP_ABORT_OK  };
             static const int ERRS[3] = { OP_WRITE_ERR, OP_CLOSE_ERR, OP_ABORT_ERR };
             int arm = s->is_close;
@@ -1186,21 +1225,21 @@ run:
             s->w.func = JS_UNDEFINED;
             s->is_close = 0;
             if (r < 0) return JS_STEP_ABRUPT;
-            s->w.stage = S_DONE;
+            s->hdr.stage = S_DONE;
             continue;
         }
 
-        if (s->w.stage == S_WRITE_DONE) {
+        if (s->hdr.stage == S_WRITE_DONE) {
             /* §5.4's ProcessWrite fulfilment: the chunk leaves the queue now, not when the sink took it. */
             wc_dequeue(ctx, c);
             s->w.settle = (!ws_close_queued_or_in_flight(d) && d->state == WS_WRITABLE)
                         ? ws_update_backpressure(ctx, d, c) : W_IDLE;
-            s->w.stage = S_SETTLE;
+            s->hdr.stage = S_SETTLE;
             s->next = S_ADVANCE;
             continue;
         }
 
-        if (s->w.stage == S_CLOSE_DONE) {
+        if (s->hdr.stage == S_CLOSE_DONE) {
             /* §5.2's FinishInFlightClose: a stream that was ERRORING when its close succeeded is CLOSED all
                the same — the abort it was carrying is answered and the error discarded. */
             if (d->state == WS_ERRORING) {
@@ -1208,59 +1247,59 @@ run:
                 d->stored_error = JS_UNDEFINED;
                 if (d->abort_pending) {
                     s->w.settle = W_ABORT_RES;
-                    s->w.stage = S_SETTLE;
+                    s->hdr.stage = S_SETTLE;
                     s->next = S_CLOSE_DONE2;
                     continue;
                 }
             }
-            s->w.stage = S_CLOSE_DONE2;
+            s->hdr.stage = S_CLOSE_DONE2;
         }
 
-        if (s->w.stage == S_CLOSE_DONE2) {
+        if (s->hdr.stage == S_CLOSE_DONE2) {
             d->state = WS_CLOSED;
             s->w.settle = W_CLOSED_RES;
-            s->w.stage = S_SETTLE;
+            s->hdr.stage = S_SETTLE;
             s->next = S_DONE;
             continue;
         }
 
-        if (s->w.stage == S_CLOSE_ERR2) {
+        if (s->hdr.stage == S_CLOSE_ERR2) {
             /* FinishInFlightCloseWithError also rejects a pending abort with the same reason: the abort is
                what the close was serving. */
             if (d->abort_pending) {
                 s->w.settle = W_ABORT_REJ;
-                s->w.stage = S_SETTLE;
+                s->hdr.stage = S_SETTLE;
                 s->next = S_ERROR;
                 continue;
             }
-            s->w.stage = S_ERROR;
+            s->hdr.stage = S_ERROR;
             continue;
         }
 
-        if (s->w.stage == S_RELEASE) {
+        if (s->hdr.stage == S_RELEASE) {
             /* §5.3 release step 5, the SECOND of the two rejections. It is its own stage rather than a
                re-entry of this one testing `settle`, because S_SETTLE clears `settle` to W_IDLE when the
                sequence finishes — so the test could never be true and `closed` was never rejected at all. A
                stage that decides what to do next by reading a variable the step before it has just reset is a
                dead branch that reads like a live one. */
             s->w.settle = W_CLOSED_REJ;
-            s->w.stage = S_SETTLE;
+            s->hdr.stage = S_SETTLE;
             s->next = S_RELEASE2;
             continue;
         }
 
-        if (s->w.stage == S_RELEASE2) {
+        if (s->hdr.stage == S_RELEASE2) {
             WsWriterData *wr = wr_of(s->hdr.this_val);
             DCHECK(wr != NULL, "a §5.3 release lost its writer between two of its own stages");
             JS_FreeValue(ctx, d->writer);
             d->writer = JS_UNDEFINED;
             JS_FreeValue(ctx, wr->stream);
             wr->stream = JS_UNDEFINED;
-            s->w.stage = S_DONE;
+            s->hdr.stage = S_DONE;
             continue;
         }
 
-        if (s->w.stage == S_RESULT) {
+        if (s->hdr.stage == S_RESULT) {
             JSValueConst arg = s->w.value;
             r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), s->funcs[s->reject], JS_UNDEFINED, 1, &arg,
                               cb_result, &out, out_cb, out_argc);
@@ -1270,14 +1309,17 @@ run:
             return JS_STEP_DONE;
         }
 
-        DCHECK(s->w.stage == S_DONE, "a §5 machine resumed in a stage it never parks in");
+        DCHECK(s->hdr.stage == S_DONE,
+               "a §5 machine resumed in a stage §5's operations do not have between them");
         JS_FreeValue(ctx, cb_result);
         return JS_STEP_DONE;
     }
 }
 
 #define WS_DEF(i) { sizeof(JSWsState), js_ws_step, js_ws_fini, (i), \
-                    .catches_abrupt = 1, .visit = js_ws_visit }
+                    .catches_abrupt = 1, .visit = js_ws_visit, \
+                    .algorithm = "Streams §5 WritableStream (the shared machine over §5.2-§5.4's operations)", \
+                    .steps = js_ws_steps }
 static const JSTrampStepDef js_ws_defs[OP_N] = {
     WS_DEF(0),  WS_DEF(1),  WS_DEF(2),  WS_DEF(3),  WS_DEF(4),  WS_DEF(5),  WS_DEF(6),  WS_DEF(7),
     WS_DEF(8),  WS_DEF(9),  WS_DEF(10), WS_DEF(11), WS_DEF(12), WS_DEF(13), WS_DEF(14),
@@ -1334,7 +1376,18 @@ static JSValue js_illegal_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValu
 /* ---- §5.3's set-up, which is `getWriter()` and the writer's constructor both ------------------------------- */
 
 enum { GW_SELF = 0, GW_CTOR };
-enum { GWS_START = 0, GWS_A, GWS_B, GWS_DONE };
+/* WHERE THIS MACHINE RESTS. §5.3's SetUpWritableStreamDefaultWriter decides in step 5-8 which of the writer's
+   two promises starts already settled, and SETTLING one is the page's code — so each settle is its own stage
+   and the set-up before them is one. */
+#define GW_STAGES(X) \
+    X(GWS_START = IDL_STEP_FIRST, \
+      "Streams §5.3 SetUpWritableStreamDefaultWriter steps 1-8 (the lock, the two capabilities, and which of " \
+      "them the stream's state says starts settled)") \
+    X(GWS_A, "Streams §5.3 SetUpWritableStreamDefaultWriter step 5.2/6.1/7.1/8.1 (settling `ready`)") \
+    X(GWS_B, "Streams §5.3 SetUpWritableStreamDefaultWriter step 7.2/8.2 (settling `closed`)") \
+    X(GWS_DONE, "Streams §5.2 getWriter() step 1 (the writer AcquireWritableStreamDefaultWriter answered)")
+enum { GW_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const GW_STEPS[] = { GW_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     StreamWork w;
@@ -1369,13 +1422,13 @@ static int js_gw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
     WsData *d;
     int r;
 
-    if (s->w.stage == GWS_START) {
+    if (hdr->stage == GWS_START) {
         WsWriterData *wr;
         JSValue obj;
 
         stream_work_start(&s->w);
         s->obj = s->stream = JS_UNDEFINED;
-        s->w.stage = GWS_A;
+        hdr->stage = GWS_A;
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         if (ctor && JS_IsUndefined(hdr->this_val)) {
@@ -1435,7 +1488,7 @@ static int js_gw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
         s->w.err = JS_DupValue(ctx, d->stored_error);
     }
 
-    if (s->w.stage == GWS_A) {
+    if (hdr->stage == GWS_A) {
         if (s->ready_kind != W_IDLE) {
             s->w.settle = s->ready_kind;
             r = ws_settle_run(ctx, &s->w, s->stream, cb_result, out_cb, out_argc);
@@ -1443,9 +1496,9 @@ static int js_gw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
             if (r < 0) return -1;
             cb_result = JS_UNDEFINED;
         }
-        s->w.stage = GWS_B;
+        hdr->stage = GWS_B;
     }
-    if (s->w.stage == GWS_B) {
+    if (hdr->stage == GWS_B) {
         if (s->closed_kind != W_IDLE) {
             s->w.settle = s->closed_kind;
             r = ws_settle_run(ctx, &s->w, s->stream, cb_result, out_cb, out_argc);
@@ -1453,7 +1506,7 @@ static int js_gw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
             if (r < 0) return -1;
             cb_result = JS_UNDEFINED;
         }
-        s->w.stage = GWS_DONE;
+        hdr->stage = GWS_DONE;
     }
     JS_FreeValue(ctx, cb_result);
     *presult = s->obj;
@@ -1461,7 +1514,9 @@ static int js_gw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
     return 0;
 }
 
-static const IdlStepDecl js_gw_decl = { js_gw_step, sizeof(JSGetWriterState), js_gw_visit, js_gw_release };
+static const IdlStepDecl js_gw_decl = { js_gw_step, sizeof(JSGetWriterState), js_gw_visit, js_gw_release,
+    "Streams §5.3 SetUpWritableStreamDefaultWriter (getWriter() and the writer constructor both)",
+    GW_STEPS };
 
 /* ---- §5.2's constructor ------------------------------------------------------------------------------------- */
 
@@ -1474,7 +1529,27 @@ static const IdlDictMember QUEUING_STRATEGY[] = {
 /* UnderlyingSink's members, in the order Web IDL reads them. */
 enum { SNK_ABORT = 0, SNK_CLOSE, SNK_START, SNK_TYPE, SNK_WRITE, SNK_N };
 
-enum { WSC_START = 0, WSC_PROTO, WSC_READ, WSC_BUILD, WSC_CALL, WSC_RESOLVE, WSC_THEN };
+/* WHERE THIS MACHINE RESTS. §5.2's constructor is seven steps, and four of them can run the page's code: the
+   new.target `prototype` read Web IDL §3.7.1 performs, each UnderlyingSink member read, `start` itself, and
+   the PromiseResolve over what `start` returned. */
+#define WSC_STAGES(X) \
+    X(WSC_START = IDL_STEP_FIRST, \
+      "Streams §5.2 new WritableStream(underlyingSink, strategy) steps 1-2 (the sink is null when missing and " \
+      "must be an object; Web IDL §3.7.1's `new` requirement precedes them)") \
+    X(WSC_PROTO, "Web IDL §3.7.1 (Get(newTarget, \"prototype\") — the read that makes " \
+                 "`class S extends WritableStream {}` produce an S)") \
+    X(WSC_READ, "Streams §5.2 step 2 (converting underlyingSink to an UnderlyingSink: one [[Get]] per member, " \
+                "in the order Web IDL §3.2.18 reads them)") \
+    X(WSC_BUILD, "Streams §5.2 steps 3-7 (the reserved `type`, InitializeWritableStream, ExtractSizeAlgorithm, " \
+                 "ExtractHighWaterMark, and §5.4's SetUpWritableStreamDefaultController up to its step 15)") \
+    X(WSC_CALL, "Streams §5.4 SetUpWritableStreamDefaultController step 15 (the start algorithm — the sink's " \
+                "own `start`, invoked directly so a throw propagates out of the constructor)") \
+    X(WSC_RESOLVE, "Streams §5.4 SetUpWritableStreamDefaultController step 16 (a promise resolved with " \
+                   "startResult — 27.2.1.3.2 step 8's `then` read is the page's)") \
+    X(WSC_THEN, "Streams §5.4 SetUpWritableStreamDefaultController steps 17-18 (the start promise's two " \
+                "reactions are attached and the stream is the constructor's result)")
+enum { WSC_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const WSC_STEPS[] = { WSC_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     StreamWork w;
@@ -1523,7 +1598,7 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     JSValueConst sink = argc > 0 ? argv[0] : JS_UNDEFINED;
     int r;
 
-    if (s->w.stage == WSC_START) {
+    if (hdr->stage == WSC_START) {
         int k;
         stream_work_start(&s->w);
         for (k = 0; k < SNK_N; k++) s->snk[k] = JS_UNDEFINED;
@@ -1540,10 +1615,10 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             JS_ThrowTypeError(ctx, "the underlying sink must be an object");
             return -1;
         }
-        s->w.stage = WSC_PROTO;
+        hdr->stage = WSC_PROTO;
     }
 
-    if (s->w.stage == WSC_PROTO) {
+    if (hdr->stage == WSC_PROTO) {
         /* Web IDL §3.7.1: the object is created from `? Get(newTarget, "prototype")` when that is an Object,
            and from the interface prototype object otherwise — which is the whole of what makes
            `class S extends WritableStream {}` produce an S. It is a REQUEST because new.target can be any
@@ -1554,10 +1629,10 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         if (r > 0) return r;
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
-        s->w.stage = JS_IsObject(sink) ? WSC_READ : WSC_BUILD;
+        hdr->stage = JS_IsObject(sink) ? WSC_READ : WSC_BUILD;
     }
 
-    while (s->w.stage == WSC_READ) {
+    while (hdr->stage == WSC_READ) {
         JSAtom a;
         if (s->member >= SNK_N) {
             /* §5.2 step 3: `type` is reserved, and any value for it is a RangeError rather than a silent
@@ -1571,7 +1646,7 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                 stream_callback_member(ctx, s->snk[SNK_START], "sink", "start") < 0 ||
                 stream_callback_member(ctx, s->snk[SNK_WRITE], "sink", "write") < 0)
                 return -1;
-            s->w.stage = WSC_BUILD;
+            hdr->stage = WSC_BUILD;
             break;
         }
         a = JS_NewAtom(ctx, SNK_NAMES[s->member]);
@@ -1583,7 +1658,7 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         s->member++;
     }
 
-    if (s->w.stage == WSC_BUILD) {
+    if (hdr->stage == WSC_BUILD) {
         JSValueConst strategy = argc > 1 ? argv[1] : JS_UNDEFINED;
         WsCtrlData *c;
         JSValue hv;
@@ -1623,10 +1698,10 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         c->sink = JS_DupValue(ctx, sink);
         s->start_fn = s->snk[SNK_START];  s->snk[SNK_START] = JS_UNDEFINED;
         s->w.value = JS_UNDEFINED;
-        s->w.stage = JS_IsFunction(ctx, s->start_fn) ? WSC_CALL : WSC_RESOLVE;
+        hdr->stage = JS_IsFunction(ctx, s->start_fn) ? WSC_CALL : WSC_RESOLVE;
     }
 
-    if (s->w.stage == WSC_CALL) {
+    if (hdr->stage == WSC_CALL) {
         JSValue res;
         JSValueConst arg = s->ctrl;
         r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), s->start_fn, s->sink, 1, &arg, cb_result, &res,
@@ -1637,17 +1712,18 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         JS_FreeValue(ctx, s->w.value);
         s->w.value = res;
         cb_result = JS_UNDEFINED;
-        s->w.stage = WSC_RESOLVE;
+        hdr->stage = WSC_RESOLVE;
     }
-    if (s->w.stage == WSC_RESOLVE) {
+    if (hdr->stage == WSC_RESOLVE) {
         r = stream_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
-        s->w.stage = WSC_THEN;
+        hdr->stage = WSC_THEN;
     }
 
-    DCHECK(s->w.stage == WSC_THEN, "the WritableStream constructor resumed in a stage it never parks in");
+    DCHECK(hdr->stage == WSC_THEN,
+           "the WritableStream constructor resumed in a stage §5.2 does not have");
     JS_FreeValue(ctx, cb_result);
     if (writable_stream_start(ctx, s->stream, s->w.func) < 0) return -1;
     *presult = s->stream;
@@ -1656,7 +1732,8 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 }
 
 static const IdlStepDecl js_ws_ctor_decl = {
-    js_ws_ctor_step, sizeof(JSWsCtorState), js_ws_ctor_visit, js_ws_ctor_release
+    js_ws_ctor_step, sizeof(JSWsCtorState), js_ws_ctor_visit, js_ws_ctor_release,
+    "Streams §5.2 new WritableStream(underlyingSink, strategy)", WSC_STEPS
 };
 
 /* §5.4's CreateWritableStream — a stream whose ALGORITHMS are the caller's function objects rather than a
