@@ -805,7 +805,17 @@ int encoding_buffer_source(JSContext *ctx, JSValueConst v, const uint8_t **pp, s
 /* §7.1's constructor. `label` resolving to `replacement` is a RangeError as much as an unknown label is — the
    replacement encoding exists to make a hostile label decode to one error rather than to something scriptable,
    and the standard refuses to let a page name it. */
-typedef struct { uint8_t unused; } JSDecoderCtorState;
+/* WHERE THIS MACHINE RESTS. §7.1's constructor is five steps and none of them can run the page's code — the
+   declaration has converted `label` to a DOMString and the options dictionary to booleans before this is
+   entered — so the machine has one stage and never returns to it. */
+#define DEC_CTOR_STAGES(X) \
+    X(DEC_CTOR_BUILD = IDL_STEP_FIRST, \
+      "Encoding §7.1 new TextDecoder(label, options) steps 1-5 (get an encoding from label, the RangeError a " \
+      "failure or `replacement` is, then this's encoding, error mode and ignore BOM)")
+enum { DEC_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DEC_CTOR_STEPS[] = { DEC_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct { int unused; } JSDecoderCtorState;
 
 static void js_dec_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
 static void js_dec_ctor_release(JSContext *ctx, void *st) { (void)ctx; (void)st; }
@@ -822,6 +832,7 @@ static int js_dec_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 
     (void)st; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
+    DCHECK(hdr->stage == DEC_CTOR_BUILD, "the TextDecoder constructor resumed at a stage §7.1 does not have");
     if (JS_IsUndefined(hdr->this_val))
         return JS_ThrowTypeError(ctx, "constructor TextDecoder requires 'new'"), -1;
     if (argc > 0 && !JS_IsUndefined(argv[0])) {
@@ -848,7 +859,8 @@ static int js_dec_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 }
 
 static const IdlStepDecl js_dec_ctor_decl = {
-    js_dec_ctor_step, sizeof(JSDecoderCtorState), js_dec_ctor_visit, js_dec_ctor_release
+    js_dec_ctor_step, sizeof(JSDecoderCtorState), js_dec_ctor_visit, js_dec_ctor_release,
+    "Encoding §7.1 new TextDecoder(label, options)", DEC_CTOR_STEPS
 };
 
 /* ---- §7.2's TextEncoder ------------------------------------------------------------------------------------
@@ -930,7 +942,16 @@ static JSValue js_encoder_encode_into(JSContext *ctx, JSValueConst this_val, int
     return r;
 }
 
-typedef struct { uint8_t unused; } JSEncoderCtorState;
+/* WHERE THIS MACHINE RESTS. §7.2's constructor steps "are to do nothing" — so the one stage this machine has
+   is the object §3.7.1 creates, and there is nothing after it. */
+#define ENC_CTOR_STAGES(X) \
+    X(ENC_CTOR_BUILD = IDL_STEP_FIRST, \
+      "Encoding §7.2 new TextEncoder() (the constructor steps are to do nothing; Web IDL §3.7.1's `new` " \
+      "requirement and the object it creates are the whole of it)")
+enum { ENC_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const ENC_CTOR_STEPS[] = { ENC_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct { int unused; } JSEncoderCtorState;
 
 static void js_enc_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
 static void js_enc_ctor_release(JSContext *ctx, void *st) { (void)ctx; (void)st; }
@@ -940,6 +961,7 @@ static int js_enc_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 {
     (void)st; (void)argc; (void)argv; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
+    DCHECK(hdr->stage == ENC_CTOR_BUILD, "the TextEncoder constructor resumed at a stage §7.2 does not have");
     if (JS_IsUndefined(hdr->this_val))
         return JS_ThrowTypeError(ctx, "constructor TextEncoder requires 'new'"), -1;
     {
@@ -952,7 +974,8 @@ static int js_enc_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 }
 
 static const IdlStepDecl js_enc_ctor_decl = {
-    js_enc_ctor_step, sizeof(JSEncoderCtorState), js_enc_ctor_visit, js_enc_ctor_release
+    js_enc_ctor_step, sizeof(JSEncoderCtorState), js_enc_ctor_visit, js_enc_ctor_release,
+    "Encoding §7.2 new TextEncoder()", ENC_CTOR_STEPS
 };
 
 /* ---- install ---------------------------------------------------------------------------------------------- */

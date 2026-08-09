@@ -194,11 +194,24 @@ static void bb_put(ByteBuf *o, uint32_t cp)
  * not empty, ENQUEUE it — one request, made from one place. What differs is only how the chunk is built, which
  * is the part that runs no page code and needs no stages. */
 
-enum { TX_ENTRY = 0, TX_STRING, TX_BUILD, TX_ENQUEUE, TX_DONE };
+/* WHERE THIS MACHINE RESTS. §7.5 and §7.6 give the two streams four algorithms, and the page's code runs at
+   exactly two points in them: the ToString §7.6 step 1 performs on what was written, and the enqueue. */
+#define TX_STAGES(X) \
+    X(TX_ENTRY, "Encoding §7.5/§7.6 (which of the four transform and flush algorithms this entry is, and the " \
+                "stream it belongs to)") \
+    X(TX_STRING, "Encoding §7.6 encode and enqueue a chunk step 1 (chunk converted to a DOMString — the " \
+                 "page's own `toString`)") \
+    X(TX_BUILD, "Encoding §7.5/§7.6 (the codec: decode-and-enqueue steps 1-4, decode-and-flush steps 1-2, " \
+                "encode-and-enqueue steps 2-5, encode-and-flush steps 1-2)") \
+    X(TX_ENQUEUE, "Encoding §7.5/§7.6 (enqueue the chunk in stream — §6.3's " \
+                  "TransformStreamDefaultControllerEnqueue over the controller §6 handed the algorithm)") \
+    X(TX_DONE, "Encoding §7.5/§7.6 (the algorithm is complete; an empty chunk is enqueued nowhere)")
+enum { TX_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const TX_STEPS[] = { TX_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     JSStepHdr hdr;
-    uint8_t stage, phase;
+    uint8_t phase;
     JSValue self;      /* the TextDecoderStream / TextEncoderStream (owned) */
     JSValue input;     /* §7.6 step 1's DOMString, once ToString has run on what was written (owned) */
     JSValue chunk;     /* what this algorithm produced, until it has been enqueued (owned) */
@@ -343,7 +356,7 @@ static int js_tx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
     DCHECK(which >= 0 && which < ALG_N,
            "an Encoding stream algorithm ran with an operation this component does not have");
 
-    if (s->stage == TX_ENTRY) {
+    if (s->hdr.stage == TX_ENTRY) {
         s->self = JS_DupValue(ctx, JS_StepClosureData(hdr, 0));
         s->input = s->chunk = JS_UNDEFINED;
         s->cb[0] = s->cb[1] = s->cb[2] = JS_UNDEFINED;
@@ -351,18 +364,18 @@ static int js_tx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
         cb_result = JS_UNDEFINED;
         /* §7.6 step 1 is ToString on what the page wrote, which is the page's own `toString`. §7.5's chunk is
            a buffer source and needs no coercion, so only the encoder takes this stage. */
-        s->stage = which == ALG_ENCODE ? TX_STRING : TX_BUILD;
+        s->hdr.stage = which == ALG_ENCODE ? TX_STRING : TX_BUILD;
     }
 
-    if (s->stage == TX_STRING) {
+    if (s->hdr.stage == TX_STRING) {
         r = step_tostring_run(ctx, hdr, step_arg(hdr, 0), cb_result, &s->input, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
-        s->stage = TX_BUILD;
+        s->hdr.stage = TX_BUILD;
     }
 
-    if (s->stage == TX_BUILD) {
+    if (s->hdr.stage == TX_BUILD) {
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         t = ts_any_of(s->self);
@@ -372,11 +385,11 @@ static int js_tx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
                  : which == ALG_ENCODE    ? tx_encode(ctx, t, s->input)
                                           : tx_encode_flush(ctx, t);
         if (JS_IsException(s->chunk)) { s->chunk = JS_UNDEFINED; return JS_STEP_ABRUPT; }
-        if (!tx_has_chunk(ctx, s->chunk)) { s->stage = TX_DONE; return JS_STEP_DONE; }
-        s->stage = TX_ENQUEUE;
+        if (!tx_has_chunk(ctx, s->chunk)) { s->hdr.stage = TX_DONE; return JS_STEP_DONE; }
+        s->hdr.stage = TX_ENQUEUE;
     }
 
-    if (s->stage == TX_ENQUEUE) {
+    if (s->hdr.stage == TX_ENQUEUE) {
         /* §9.3.1's "enqueue chunk in stream" IS TransformStreamDefaultControllerEnqueue, reached with the
            controller §6 handed this algorithm as `this` — never through a property the page could replace. */
         JSValueConst arg = s->chunk;
@@ -387,16 +400,19 @@ static int js_tx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
         JS_FreeValue(ctx, out);
-        s->stage = TX_DONE;
+        s->hdr.stage = TX_DONE;
         return JS_STEP_DONE;
     }
 
-    DCHECK(s->stage == TX_DONE, "an Encoding stream algorithm resumed in a stage it never parks in");
+    DCHECK(s->hdr.stage == TX_DONE,
+           "an Encoding stream algorithm resumed at a stage §7.5 and §7.6 do not have between them");
     JS_FreeValue(ctx, cb_result);
     return JS_STEP_DONE;
 }
 
-#define TX_DEF(i) { sizeof(JSTxState), js_tx_step, js_tx_fini, (i), .visit = js_tx_visit }
+#define TX_DEF(i) { sizeof(JSTxState), js_tx_step, js_tx_fini, (i), .visit = js_tx_visit, \
+                   .algorithm = "Encoding §7.5/§7.6 the text stream transform and flush algorithms", \
+                   .steps = TX_STEPS }
 static const JSTrampStepDef js_tx_defs[ALG_N] = { TX_DEF(0), TX_DEF(1), TX_DEF(2), TX_DEF(3) };
 #undef TX_DEF
 
@@ -405,10 +421,22 @@ static const JSTrampStepDef js_tx_defs[ALG_N] = { TX_DEF(0), TX_DEF(1), TX_DEF(2
  * Both END in a request — Streams §9.3.1's set up is a step, because building a transform stream settles
  * promises — so both are step constructors. What they do before that is their own standard's steps. */
 
-enum { TC_ENTRY = 0, TC_SETUP, TC_DONE };
+/* WHERE THESE TWO MACHINES REST. §7.5's constructor is four steps and §7.6's is six, and both end in "set up"
+   — §9.3.1's set up a TransformStream, which is a CALL of §6's own operation and therefore the one place
+   either can suspend. */
+#define TC_STAGES(X) \
+    X(TC_ENTRY = IDL_STEP_FIRST, \
+      "Encoding §7.5 new TextDecoderStream(label, options) steps 1-3 / §7.6 new TextEncoderStream() steps " \
+      "1-3 (the encoding and error mode, or the UTF-8 encoder, and the two algorithms)") \
+    X(TC_SETUP, "Encoding §7.5 step 4 / §7.6 steps 4-6 (set up a text decoder/encoder stream — §9.3.1's set " \
+                "up a TransformStream over those algorithms)") \
+    X(TC_DONE, "Encoding §7.5/§7.6 (this's transform is the TransformStream, and the object is the " \
+               "constructor's result)")
+enum { TC_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const TC_STEPS[] = { TC_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
-    uint8_t stage, phase;
+    uint8_t phase;
     JSValue obj;       /* the interface object being built (owned) */
     JSValue fns[3];    /* transformAlgorithm, flushAlgorithm, cancelAlgorithm (owned) */
     JSValue cb[5];     /* step_call_run's buffer: [this, setup, 3 algorithms] */
@@ -471,13 +499,14 @@ static int tc_build(JSContext *ctx, JSTcState *s, bool decoder, int enc, bool fa
     return 0;
 }
 
-static int tc_run(JSContext *ctx, JSTcState *s, JSValue cb_result, JSValue *presult,
+static int tc_run(JSContext *ctx, JSStepHdr *hdr, JSTcState *s, JSValue cb_result, JSValue *presult,
                   JSValue **out_cb, int *out_argc)
 {
     JSValue out;
     int r;
 
-    DCHECK(s->stage == TC_SETUP, "a text stream constructor resumed in a stage it never parks in");
+    DCHECK(hdr->stage == TC_SETUP,
+           "a text stream constructor resumed at a stage §7.5 and §7.6 do not have between them");
     {
         /* Streams §9.3.1's "set up a TransformStream", reached as a request because building the two halves
            settles promises and resolves capabilities, which is the page's machinery. */
@@ -495,7 +524,7 @@ static int tc_run(JSContext *ctx, JSTcState *s, JSValue cb_result, JSValue *pres
             JS_FreeValue(ctx, t->transform);
             t->transform = out;
         }
-        s->stage = TC_DONE;
+        hdr->stage = TC_DONE;
         *presult = s->obj;
         s->obj = JS_UNDEFINED;
         return 0;
@@ -508,7 +537,7 @@ static int js_tds_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 {
     JSTcState *s = st;
 
-    if (s->stage == TC_ENTRY) {
+    if (hdr->stage == TC_ENTRY) {
         JSValueConst options = argc > 1 ? argv[1] : JS_UNDEFINED;
         const char *label = "utf-8";
         size_t label_len = 5;
@@ -535,9 +564,9 @@ static int js_tds_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         if (tc_build(ctx, s, true, id, idl_dict_bool(ctx, options, "fatal"),
                      idl_dict_bool(ctx, options, "ignoreBOM")) < 0)
             return -1;
-        s->stage = TC_SETUP;
+        hdr->stage = TC_SETUP;
     }
-    return tc_run(ctx, s, cb_result, presult, out_cb, out_argc);
+    return tc_run(ctx, hdr, s, cb_result, presult, out_cb, out_argc);
 }
 
 /* §7.6's constructor: no arguments at all — a TextEncoderStream is always UTF-8. */
@@ -547,7 +576,7 @@ static int js_tes_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     JSTcState *s = st;
 
     (void)argc; (void)argv;
-    if (s->stage == TC_ENTRY) {
+    if (hdr->stage == TC_ENTRY) {
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         s->obj = JS_UNDEFINED;
@@ -556,16 +585,20 @@ static int js_tes_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         if (JS_IsUndefined(hdr->this_val))
             return JS_ThrowTypeError(ctx, "constructor TextEncoderStream requires 'new'"), -1;
         if (tc_build(ctx, s, false, 0, false, false) < 0) return -1;
-        s->stage = TC_SETUP;
+        hdr->stage = TC_SETUP;
     }
-    return tc_run(ctx, s, cb_result, presult, out_cb, out_argc);
+    return tc_run(ctx, hdr, s, cb_result, presult, out_cb, out_argc);
 }
 
 static const IdlStepDecl js_tds_ctor_decl = {
-    js_tds_ctor_step, sizeof(JSTcState), js_tc_visit, js_tc_release
+    js_tds_ctor_step, sizeof(JSTcState), js_tc_visit, js_tc_release,
+    "Encoding §7.5 new TextDecoderStream(label, options)", TC_STEPS
 };
+/* THE SAME STATE AND THE SAME STAGES — §7.5 and §7.6 differ in what they put in the algorithms and in nothing
+   after that, which is why one struct, one visit and one stage list serve both. */
 static const IdlStepDecl js_tes_ctor_decl = {
-    js_tes_ctor_step, sizeof(JSTcState), js_tc_visit, js_tc_release
+    js_tes_ctor_step, sizeof(JSTcState), js_tc_visit, js_tc_release,
+    "Encoding §7.6 new TextEncoderStream()", TC_STEPS
 };
 
 /* ---- install -------------------------------------------------------------------------------------------- */
