@@ -1003,7 +1003,6 @@ void headers_free(JSContext *ctx)
     if (!g_headers_rt)
         return;
     /* the prototypes are the REALMS' — released with their contexts */
-    idl_pair_iter_free(ctx, g_pair_handle);
     g_headers_rt = NULL;
     g_ctor_stepid = -1;
 }

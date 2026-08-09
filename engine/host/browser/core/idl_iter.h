@@ -75,6 +75,8 @@ int  idl_pair_iter_declare(JSContext *ctx, const IdlPairIterOps *ops);
    SAME function object as `entries`, which this does. */
 void idl_pair_iter_install(JSContext *ctx, JSValueConst proto, int handle);
 /* Release the iterator prototype the declaration minted. */
-void idl_pair_iter_free(JSContext *ctx, int handle);
+/* §3.7.10's iterator prototype objects for ONE realm, declared into core/realm.h's list by the first
+   idl_pair_iter_declare — one install builds every declared interface's. */
+void idl_pair_iter_install_protos(JSContext *ctx);
 
 #endif

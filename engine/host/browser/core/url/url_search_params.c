@@ -551,7 +551,6 @@ void usp_free(JSContext *ctx)
         return;
     JS_FreeValue(ctx, g_usp_proto);
     g_usp_proto = JS_UNDEFINED;
-    idl_pair_iter_free(ctx, g_usp_pair_handle);
     g_usp_rt = NULL;
     g_usp_ctor_stepid = -1;
 }

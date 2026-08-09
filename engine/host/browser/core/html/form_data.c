@@ -578,7 +578,6 @@ void form_data_free(JSContext *ctx)
         return;
     JS_FreeValue(ctx, g_fd_proto);
     g_fd_proto = JS_UNDEFINED;
-    idl_pair_iter_free(ctx, g_fd_pair_handle);
     g_fd_rt = NULL;
     g_fd_ctor_stepid = -1;
 }

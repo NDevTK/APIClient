@@ -207,6 +207,7 @@ int record_cursor_run(JSContext *ctx, JSStepHdr *h, RecordCursor *c, JSValueCons
 /* ---- §3.7.10's default iterator object ------------------------------------------------------------------- */
 
 #include "core/idl_args.h"
+#include "core/realm.h"
 
 enum { PAIR_KEYS = 0, PAIR_VALUES, PAIR_ENTRIES };
 
@@ -216,7 +217,6 @@ enum { PAIR_KEYS = 0, PAIR_VALUES, PAIR_ENTRIES };
 typedef struct {
     const IdlPairIterOps *ops;
     JSClassID class_id;
-    JSValue   proto;      /* the ITERATOR prototype object (owned) */
     int       foreach_stepid;
     /* §3.7.10's THREE OPERATIONS, declared with the interface rather than minted at each install. A pool entry
        is an AGENT registration and the pool is SEALED once the agent's realms start building: minting here per
@@ -304,7 +304,15 @@ static JSValue js_idl_pair_make(JSContext *ctx, JSValueConst this_val, int argc,
     (void)argc; (void)argv;
     if (f->ops->count(ctx, this_val) < 0)
         return JS_ThrowTypeError(ctx, "not a %s", f->ops->iface);
-    obj = JS_NewObjectProtoClass(ctx, f->proto, f->class_id);
+    {
+        /* §3.7.10's ITERATOR PROTOTYPE OBJECT IS THIS REALM'S — it inherits %IteratorPrototype%, which is a
+           per-realm intrinsic, so one shared object would give a child document's `h.entries()` the parent's
+           iterator helpers and answer `instanceof` across a boundary. */
+        JSValue iproto = JS_GetClassProto(ctx, f->class_id);
+        DCHECK(!JS_IsNull(iproto), "an iterable<>'s iterator was minted in a realm that never ran its install");
+        obj = JS_NewObjectProtoClass(ctx, iproto, f->class_id);
+        JS_FreeValue(ctx, iproto);
+    }
     if (JS_IsException(obj))
         return obj;
     it = js_mallocz(ctx, sizeof(*it));
@@ -426,20 +434,6 @@ int idl_pair_iter_declare(JSContext *ctx, const IdlPairIterOps *ops)
     JS_NewClassID(rt, &f->class_id);
     JS_NewClass(rt, f->class_id, &def);
 
-    /* §3.7.10: the ITERATOR PROTOTYPE OBJECT inherits from %IteratorPrototype%. That is where `@@iterator`
-       returning `this` comes from (so `for (const e of h.entries())` works) and where the ES2025 iterator
-       helpers come from, so none of that is re-declared here. */
-    intrinsic = JS_GetIteratorPrototype(ctx);
-    f->proto = JS_NewObjectProto(ctx, intrinsic);
-    JS_FreeValue(ctx, intrinsic);
-    CHECK(!JS_IsException(f->proto), "an iterator prototype object could not be allocated");
-    /* §3.7.10 gives it all three attributes — ENUMERABLE included, unlike an interface prototype's members. */
-    JS_DefinePropertyValueStr(ctx, f->proto, "next",
-                              JS_NewCFunction(ctx, js_idl_pair_next, "next", 0),
-                              JS_PROP_WRITABLE | JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE);
-    JS_DefinePropertyValue(ctx, f->proto, JS_DupAtom(ctx, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG)),
-                           JS_NewString(ctx, name), JS_PROP_CONFIGURABLE);
-
     f->foreach_stepid = JS_RegisterStepDef(rt, &foreach_def);
     CHECK(f->foreach_stepid >= 0, "no step id for an iterable<>'s forEach");
     {
@@ -449,7 +443,39 @@ int idl_pair_iter_declare(JSContext *ctx, const IdlPairIterOps *ops)
         f->id_entries = idl_method_id(ctx, NONE, 0, js_idl_pair_make, (handle << 2) | PAIR_ENTRIES);
     }
     g_pair_n++;
+    /* ONE ENTRY IN core/realm.h's LIST FOR EVERY iterable<>, declared with the first of them — the list is run
+       after all the declarations are in, so the one install below builds every declared interface's iterator
+       prototype and a component added later needs no entry of its own. */
+    if (handle == 0)
+        realm_declare_intrinsic(idl_pair_iter_install_protos);
     return handle;
+}
+
+/* §3.7.10's ITERATOR PROTOTYPE OBJECTS, FOR ONE REALM — one per declared iterable<>. */
+void idl_pair_iter_install_protos(JSContext *ctx)
+{
+    int i;
+
+    for (i = 0; i < g_pair_n; i++) {
+        IdlPairIface *f = &g_pair[i];
+        /* §3.7.10: the ITERATOR PROTOTYPE OBJECT inherits from %IteratorPrototype%. That is where `@@iterator`
+           returning `this` comes from (so `for (const e of h.entries())` works) and where the ES2025 iterator
+           helpers come from, so none of that is re-declared here. */
+        JSValue intrinsic = JS_GetIteratorPrototype(ctx);
+        JSValue proto = JS_NewObjectProto(ctx, intrinsic);
+        char name[64];
+
+        JS_FreeValue(ctx, intrinsic);
+        CHECK(!JS_IsException(proto), "an iterator prototype object could not be allocated");
+        snprintf(name, sizeof name, "%s Iterator", f->ops->iface);
+        /* §3.7.10 gives it all three attributes — ENUMERABLE included, unlike an interface prototype's. */
+        JS_DefinePropertyValueStr(ctx, proto, "next",
+                                  JS_NewCFunction(ctx, js_idl_pair_next, "next", 0),
+                                  JS_PROP_WRITABLE | JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE);
+        JS_DefinePropertyValue(ctx, proto, JS_DupAtom(ctx, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG)),
+                               JS_NewString(ctx, name), JS_PROP_CONFIGURABLE);
+        JS_SetClassProto(ctx, f->class_id, proto);
+    }
 }
 
 void idl_pair_iter_install(JSContext *ctx, JSValueConst proto, int handle)
@@ -469,9 +495,4 @@ void idl_pair_iter_install(JSContext *ctx, JSValueConst proto, int handle)
                            entries, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }
 
-void idl_pair_iter_free(JSContext *ctx, int handle)
-{
-    DCHECK(handle >= 0 && handle < g_pair_n, "an iterable<> was freed with a handle nothing declared");
-    JS_FreeValue(ctx, g_pair[handle].proto);
-    g_pair[handle].proto = JS_UNDEFINED;
-}
+
