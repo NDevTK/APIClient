@@ -1113,7 +1113,16 @@ static JSValue js_el_attribute_names(JSContext *ctx, JSValueConst this_val, int 
 static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *name,
                                  const char *val, size_t val_len)
 {
-    custom_elements_attribute_changed(ctx, el, name, val, val_len);
+    /* §4.13.3's attributeChangedCallback BELONGS TO THE ELEMENT'S DOCUMENT, for the reason §4.2.3's steps do:
+       the definition set is that document's, so looking it up in the mutating realm finds nothing for an
+       element in another same-origin document and the callback silently never fires. */
+    JSContext *rctx = document_realm_of(lxb_dom_interface_node(el));
+
+    (void)ctx;
+    DCHECK(rctx != NULL,
+           "an attribute was set on an element in a document no realm was installed for — §4.13.3's reaction "
+           "resolves its definition in that document's registry, so build its realm");
+    custom_elements_attribute_changed(rctx, el, name, val, val_len);
 }
 
 JSValue element_wrap(JSContext *ctx, lxb_dom_element_t *el)
