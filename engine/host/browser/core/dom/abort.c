@@ -450,15 +450,12 @@ static JSValue js_abort_fini(JSContext *ctx, void *st, bool take_result)
    that abstract operation is what runs the signal's abort algorithms and fires `abort` at it, which is the
    page's code. So the operand is one stage and the operation is the other; `started` was a private flag
    standing in for exactly that split, with no way to say which of the two a parked flow was at. */
-enum {
-    ABORT_SIGNAL_SLOT = 0,   /* §3.2 abort() step 1's operand: this's [[Signal]] */
-    ABORT_SIGNAL_RUN,        /* §3.2 abort() step 1: signal abort */
-};
-static const char *const ABORT_STEPS[] = {
-    "DOM §3.2 AbortController.abort() (this's [[Signal]], the operand of step 1)",
-    "DOM §3.2 AbortController.abort() step 1 (signal abort on it: the abort algorithms, then the `abort` event)",
-    NULL
-};
+#define ABORT_STAGES(X) \
+    X(ABORT_SIGNAL_SLOT, "DOM §3.2 AbortController.abort() (this's [[Signal]], the operand of step 1)") \
+    X(ABORT_SIGNAL_RUN,  "DOM §3.2 AbortController.abort() step 1 (signal abort on it: the abort algorithms, " \
+                         "then the `abort` event)")
+enum { ABORT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const ABORT_STEPS[] = { ABORT_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 static int js_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
@@ -570,15 +567,13 @@ static JSValue js_sig_static_abort(JSContext *ctx, JSValueConst this_val, int ar
    `[EnforceRange] unsigned long long milliseconds`, which precedes step 1 and is the page's `valueOf` — so it
    is its own stage. It was folded into the same stage as the build, which is a rest point inside the page's
    code sharing a number with one after it. */
-enum {
-    TIMEOUT_COERCE = 0,   /* Web IDL's conversion of `milliseconds`, before step 1 */
-    TIMEOUT_BUILD,        /* §3.2 AbortSignal.timeout steps 1-4 */
-};
-static const char *const TIMEOUT_STEPS[] = {
-    "Web IDL §3.2.7 [EnforceRange] unsigned long long (converting `milliseconds`, which runs the page's valueOf)",
-    "DOM §3.2 AbortSignal.timeout steps 1-4 (a new AbortSignal, its aborted state and its TimeoutError reason)",
-    NULL
-};
+#define TIMEOUT_STAGES(X) \
+    X(TIMEOUT_COERCE, "Web IDL §3.2.7 [EnforceRange] unsigned long long (converting `milliseconds`, which runs " \
+                      "the page's valueOf)") \
+    X(TIMEOUT_BUILD,  "DOM §3.2 AbortSignal.timeout steps 1-4 (a new AbortSignal, its aborted state and its " \
+                      "TimeoutError reason)")
+enum { TIMEOUT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const TIMEOUT_STEPS[] = { TIMEOUT_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct JSTimeoutState {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */

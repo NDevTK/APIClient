@@ -122,15 +122,12 @@ enum { QS_FIRST = 0, QS_ALL, QS_MATCHES, QS_CLOSEST };
  * The parse is ONE stage because no page code can run between "parse a selector" and "if it is failure, throw"
  * — nothing observes the intermediate — and the label says the range. The match is its own stage because it is
  * a walk of the page's tree, and it rests once per node so a sibling flow can overtake it there. */
-enum {
-    QS_PARSE = IDL_STEP_FIRST,   /* §1.3 steps 1-2 / §4.9 steps 1-2 */
-    QS_MATCH,                    /* §1.3 step 3 / §4.9 matches step 3 / closest steps 3-5 */
-};
-static const char *const QS_STEPS[] = {
-    "DOM §1.3 steps 1-2 / §4.9 steps 1-2 (parse a selector; SyntaxError if it is failure)",
-    "DOM §1.3 step 3 (match a selector against a tree) / §4.9 matches step 3 / closest steps 3-5, one node per step",
-    NULL
-};
+#define QS_STAGES(X) \
+    X(QS_PARSE, "DOM §1.3 steps 1-2 / §4.9 steps 1-2 (parse a selector; SyntaxError if it is failure)") \
+    X(QS_MATCH, "DOM §1.3 step 3 (match a selector against a tree) / §4.9 matches step 3 / closest steps 3-5, " \
+                "one node per step")
+enum { IDL_STEP_STAGE_BASE(QS_STAGES) QS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const QS_STEPS[] = { QS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     lxb_css_parser_t       *parser;

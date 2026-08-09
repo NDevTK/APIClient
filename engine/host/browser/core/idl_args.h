@@ -182,6 +182,18 @@ typedef int (*IdlStepBody)(JSContext *ctx, JSStepHdr *hdr, void *state, int argc
    A body that has not been converted still keeps its own byte; it declares no steps and is not yet asked. */
 #define IDL_STEP_FIRST 2
 
+/* AND A MEMBER'S OWN X-LIST IS BASED HERE, not on the first entry of every list. quickjs-step.h's
+   JS_STEP_STAGE_ENUM emits a bare `name,`, which numbers from zero — right for a machine that owns all of its
+   stages, wrong for a declared member, whose first two belong to the prologue above. Writing `= IDL_STEP_FIRST`
+   on each list's first entry would state that same fact once per member, which is the per-member line this file
+   exists to remove; here it is stated once and every list is expanded the same way:
+
+       enum { IDL_STEP_STAGE_BASE(QS_STAGES) QS_STAGES(JS_STEP_STAGE_ENUM) };
+
+   `list` names the machine's X-list so two members in one file declare two distinct enumerators. C numbers an
+   enumerator with no value as its predecessor + 1, which is the whole mechanism. */
+#define IDL_STEP_STAGE_BASE(list) list##_base = IDL_STEP_FIRST - 1,
+
 /* The state's OWNERSHIP contract, and the two things every step state must state: what it holds (traced for the
    GC and cloned at a deep fork) and how to release it (at teardown, including the throw path). */
 typedef struct {

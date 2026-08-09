@@ -170,18 +170,14 @@ typedef struct { lxb_dom_node_t *node; lxb_dom_node_t *limit; } SerFrame;
    node — once having emitted it and once having advanced past it — and those were one stage and a private
    `phase` byte beside it, which is two suspension points wearing one number. They are two stages now. Nothing
    here can reach the page's code, so no stage has to split further. */
-enum {
-    ELHTML_SETUP = IDL_STEP_FIRST,   /* §8.5.4 / §8.5.5's getter step: the node whose serialization this is */
-    ELHTML_EMIT,                     /* §13.3 step 4.2 */
-    ELHTML_ADVANCE,                  /* §13.3 step 4's iteration, and the end tag */
-};
-static const char *const EL_GET_HTML_STEPS[] = {
-    "HTML §8.5.4 innerHTML getter / §8.5.5 outerHTML getter steps 1-2 (the node to serialize)",
-    "HTML §13.3 step 4.2 (append the current node's start tag or its character data; a template's contents "
-    "are the node instead, per step 3)",
-    "HTML §13.3 step 4 (descend to the node's children, or append its end tag and advance in tree order)",
-    NULL
-};
+#define EL_GET_HTML_STAGES(X) \
+    X(ELHTML_SETUP,   "HTML §8.5.4 innerHTML getter / §8.5.5 outerHTML getter steps 1-2 (the node to serialize)") \
+    X(ELHTML_EMIT,    "HTML §13.3 step 4.2 (append the current node's start tag or its character data; a " \
+                      "template's contents are the node instead, per step 3)") \
+    X(ELHTML_ADVANCE, "HTML §13.3 step 4 (descend to the node's children, or append its end tag and advance in " \
+                      "tree order)")
+enum { IDL_STEP_STAGE_BASE(EL_GET_HTML_STAGES) EL_GET_HTML_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const EL_GET_HTML_STEPS[] = { EL_GET_HTML_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     lxb_dom_node_t *node;    /* the cursor; NULL once the walk is finished */
@@ -378,13 +374,27 @@ enum { PLACE_CHILDREN = 0, PLACE_BEFORE, PLACE_AFTER, PLACE_FIRST_CHILD, PLACE_R
    before step 4. Nothing observed the difference — the tree builder reads the context element's name, not its
    children, and no page code runs inside either — but a stage cannot name a step it runs out of order, and
    that is exactly what naming them exposed. The parse now completes first and the replacement follows it. */
-enum {
-    FRAG_START = IDL_STEP_FIRST,   /* the member's own leading steps */
-    FRAG_FEED,                     /* the fragment parsing algorithm, one byte per step */
-    FRAG_PLACE,                    /* one parsed node into the tree per step */
-    FRAG_DONE,                     /* the fragment is placed */
-    FRAG_CLEAR,                    /* innerHTML= only: replace all, one existing child per step */
-};
+/* ONE LIST FOR ONE MACHINE, and the two members that drive it expand it — the shared four, then the fifth that
+   only innerHTML= reaches. A stage of a shared machine is ONE rest point, so it carries ONE label naming every
+   section that reaches it (the way QS_STEPS names all four of its members'); which member a parked flow is in
+   is what the declaration's `algorithm` says. Splitting the wording per member would be two statements of one
+   stage, which is the drift the X-list exists to prevent. */
+#define FRAG_STAGES(X) \
+    X(FRAG_START, "HTML §8.5.4 innerHTML setter steps 2-3 / §8.5.5 outerHTML setter steps 2-5 / §8.5.6 " \
+                  "insertAdjacentHTML steps 2-4 (the target the fragment is parsed against); step 1's Trusted " \
+                  "Types call is a suspension point this engine does not yet have") \
+    X(FRAG_FEED,  "HTML §8.5.4 step 4 / §8.5.5 step 6 / §8.5.6 step 5 (the fragment parsing algorithm), one " \
+                  "byte per step") \
+    X(FRAG_PLACE, "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 (insert one node of the fragment at the " \
+                  "position the member names)") \
+    X(FRAG_DONE,  "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 (the fragment is placed)")
+/* FOUR STAGES, NOT FIVE, for insertAdjacentHTML: it never replaces its target's children, so FRAG_CLEAR is past
+   the end of what it declares and the driver says so if the shared machine ever reaches it from there. It is
+   its own list for that reason — the setter's declaration is the shared four followed by this one. */
+#define EL_SET_HTML_EXTRA(X) \
+    X(FRAG_CLEAR, "HTML §8.5.4 step 5 (replace all within target: remove one existing child per step)")
+enum { IDL_STEP_STAGE_BASE(FRAG_STAGES)
+       FRAG_STAGES(JS_STEP_STAGE_ENUM) EL_SET_HTML_EXTRA(JS_STEP_STAGE_ENUM) };
 
 typedef struct {
     uint8_t where;
@@ -610,13 +620,7 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
 }
 
 static const char *const EL_SET_HTML_STEPS[] = {
-    "HTML §8.5.4 innerHTML setter steps 2-3 / §8.5.5 outerHTML setter steps 2-5 (the target the fragment is "
-    "parsed against); step 1's Trusted Types call is a suspension point this engine does not yet have",
-    "HTML §8.5.4 step 4 / §8.5.5 step 6 (the fragment parsing algorithm), one byte per step",
-    "HTML §8.5.4 step 5 / §8.5.5 step 7 (insert one node of the fragment into the target)",
-    "HTML §8.5.4 step 5 / §8.5.5 step 7 (the fragment is placed)",
-    "HTML §8.5.4 step 5 (replace all within target: remove one existing child per step)",
-    NULL
+    FRAG_STAGES(JS_STEP_STAGE_LABEL) EL_SET_HTML_EXTRA(JS_STEP_STAGE_LABEL) NULL
 };
 
 static const IdlStepDecl EL_SET_HTML_STEP = { js_el_set_html, sizeof(FragState), frag_visit, frag_release,
@@ -690,16 +694,7 @@ static int js_el_insert_adjacent_html(JSContext *ctx, JSStepHdr *hdr, void *st, 
     return frag_step(ctx, hdr, s);
 }
 
-/* FOUR STAGES, NOT FIVE: insertAdjacentHTML never replaces its target's children, so FRAG_CLEAR is past the end
-   of what it declares and the driver says so if the shared machine ever reaches it from here. */
-static const char *const EL_ADJACENT_HTML_STEPS[] = {
-    "HTML §8.5.6 insertAdjacentHTML steps 2-4 (the context the position names); step 1's Trusted Types call is "
-    "a suspension point this engine does not yet have",
-    "HTML §8.5.6 step 5 (the fragment parsing algorithm), one byte per step",
-    "HTML §8.5.6 step 6 (insert one node of the fragment at the position)",
-    "HTML §8.5.6 step 6 (the fragment is placed)",
-    NULL
-};
+static const char *const EL_ADJACENT_HTML_STEPS[] = { FRAG_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 static const IdlStepDecl EL_ADJACENT_HTML_STEP = {
     js_el_insert_adjacent_html, sizeof(FragState), frag_visit, frag_release,

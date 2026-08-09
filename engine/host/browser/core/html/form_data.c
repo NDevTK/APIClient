@@ -502,11 +502,11 @@ static const IdlPairIterOps FD_PAIR_OPS = { form_data_pair_count, form_data_pair
    runs without touching the page's objects, so the machine has exactly one stage and never returns to it. It
    carried a `stage` byte nothing read: a resume point that did not exist, which is the other half of the
    defect a private counter has. It is declared instead. */
-enum { FD_CTOR_ENTRIES = IDL_STEP_FIRST };   /* XHR §5 new FormData(form, submitter) step 1 */
-static const char *const FD_CTOR_STEPS[] = {
-    "XHR §5 new FormData(form, submitter) step 1 (the entry list: constructed from form, or empty)",
-    NULL
-};
+#define FD_CTOR_STAGES(X) \
+    X(FD_CTOR_ENTRIES, "XHR §5 new FormData(form, submitter) step 1 (the entry list: constructed from form, " \
+                       "or empty)")
+enum { IDL_STEP_STAGE_BASE(FD_CTOR_STAGES) FD_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const FD_CTOR_STEPS[] = { FD_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct { int unused; } JSFormDataCtorState;
 

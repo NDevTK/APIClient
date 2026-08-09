@@ -110,19 +110,16 @@ static bool ce_name_valid(const char *name, size_t len)
    callbacks off the prototype when define() runs, so a page that reassigns `X.prototype.connectedCallback`
    afterwards changes nothing in a browser and changes everything here. Naming the step is what made that
    visible; building step 14.4 is the fix, and it is the next thing this component owes. */
-enum {
-    CEREACT_ELEMENT = 0,   /* §4.13.6: the element the reaction is for */
-    CEREACT_CALLBACK,      /* the reaction's callback function */
-    CEREACT_INVOKE,        /* §4.13.6: invoke it with element as the callback this value */
-};
-static const char *const CE_REACTION_STEPS[] = {
-    "HTML §4.13.6 invoke custom element reactions step 1.3.1 (the element this callback reaction was dequeued "
-    "for)",
-    "HTML §4.13.6 step 1.3.1's callback function — read off the ELEMENT here, where §4.13.4 step 14.4 collects "
-    "it off the prototype at definition time; that read is the missing suspension point",
-    "HTML §4.13.6 step 1.3.1 (invoke the callback function with its arguments and this = element)",
-    NULL
-};
+#define CE_REACTION_STAGES(X) \
+    X(CEREACT_ELEMENT,  "HTML §4.13.6 invoke custom element reactions step 1.3.1 (the element this callback " \
+                        "reaction was dequeued for)") \
+    X(CEREACT_CALLBACK, "HTML §4.13.6 step 1.3.1's callback function — read off the ELEMENT here, where " \
+                        "§4.13.4 step 14.4 collects it off the prototype at definition time; that read is the " \
+                        "missing suspension point") \
+    X(CEREACT_INVOKE,   "HTML §4.13.6 step 1.3.1 (invoke the callback function with its arguments and " \
+                        "this = element)")
+enum { CE_REACTION_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CE_REACTION_STEPS[] = { CE_REACTION_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct JSCeReaction {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
@@ -377,22 +374,16 @@ static const IdlDictMember CE_DEFINE_OPTS[] = { { "extends", IDL_DOMSTRING } }; 
    `Get(constructor, "prototype")` is its own stage for the same reason `observedAttributes` is: a Proxy makes
    it the page's code, and it was a JS_GetProperty from C — a C activation hosting the page's loops, which is
    the one thing this declaration surface exists to remove. */
-enum {
-    CE_CHECKS = IDL_STEP_FIRST,   /* steps 1-7 */
-    CE_PROTOTYPE,                 /* steps 14.1-14.2 */
-    CE_OBSERVED,                  /* step 14.5.1 */
-    CE_SEQUENCE,                  /* step 14.5.2, one entry per step */
-    CE_COMMIT,                    /* steps 15-16 and 18 */
-};
-static const char *const CE_DEFINE_STEPS[] = {
-    "HTML §4.13.4 steps 1-7 (IsConstructor; a valid custom element name; the name is not already defined; "
-    "`extends`)",
-    "HTML §4.13.4 steps 14.1-14.2 (Get(constructor, \"prototype\"); it must be an Object)",
-    "HTML §4.13.4 step 14.5.1 (Get(constructor, \"observedAttributes\"))",
-    "HTML §4.13.4 step 14.5.2 (converting it to a sequence<DOMString>), one entry per step",
-    "HTML §4.13.4 steps 15-16 and 18 (the definition, and the upgrade reaction for each candidate)",
-    NULL
-};
+#define CE_DEFINE_STAGES(X) \
+    X(CE_CHECKS,    "HTML §4.13.4 steps 1-7 (IsConstructor; a valid custom element name; the name is not " \
+                    "already defined; `extends`)") \
+    X(CE_PROTOTYPE, "HTML §4.13.4 steps 14.1-14.2 (Get(constructor, \"prototype\"); it must be an Object)") \
+    X(CE_OBSERVED,  "HTML §4.13.4 step 14.5.1 (Get(constructor, \"observedAttributes\"))") \
+    X(CE_SEQUENCE,  "HTML §4.13.4 step 14.5.2 (converting it to a sequence<DOMString>), one entry per step") \
+    X(CE_COMMIT,    "HTML §4.13.4 steps 15-16 and 18 (the definition, and the upgrade reaction for each " \
+                    "candidate)")
+enum { IDL_STEP_STAGE_BASE(CE_DEFINE_STAGES) CE_DEFINE_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CE_DEFINE_STEPS[] = { CE_DEFINE_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     uint32_t i, n;      /* THE RESUME POINT: the observed-attribute entry being converted */

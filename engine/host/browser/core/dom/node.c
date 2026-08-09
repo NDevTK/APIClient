@@ -582,15 +582,12 @@ static bool node_shallow_equal(lxb_dom_node_t *a, lxb_dom_node_t *b)
    walk checks: conditions 1-4 at the pair it is standing on, condition 5 by advancing both cursors to the
    child at the identical index. No page code can run anywhere inside it, so the pair is one stage and the
    label says which conditions it covers. */
-enum {
-    NODE_EQ_NONNULL = IDL_STEP_FIRST,   /* §4.4 isEqualNode: otherNode is non-null */
-    NODE_EQ_PAIR,                       /* §4.4 equals, one (A, B) pair per step */
-};
-static const char *const NODE_EQUAL_STEPS[] = {
-    "DOM §4.4 isEqualNode (otherNode is non-null)",
-    "DOM §4.4 equals conditions 1-4 at one node pair, then condition 5's pair at the identical index",
-    NULL
-};
+#define NODE_EQUAL_STAGES(X) \
+    X(NODE_EQ_NONNULL, "DOM §4.4 isEqualNode (otherNode is non-null)") \
+    X(NODE_EQ_PAIR,    "DOM §4.4 equals conditions 1-4 at one node pair, then condition 5's pair at the " \
+                       "identical index")
+enum { IDL_STEP_STAGE_BASE(NODE_EQUAL_STAGES) NODE_EQUAL_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const NODE_EQUAL_STEPS[] = { NODE_EQUAL_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     lxb_dom_node_t *a, *b, *ra, *rb;   /* the two cursors and the two roots they are bounded by */
@@ -678,23 +675,16 @@ static void node_pos_visit(JSContext *ctx, void *st, JSStepVisit *v)
    machine whose stage numbers cannot name the step they are at. They now run 7 then 8.
    §4.4 numbers `this` node2 and `other` node1, which is the opposite of how they read, so the state's two
    pointers carry that mapping in their comment rather than in each reader's head. */
-enum {
-    NODEPOS_SAME = IDL_STEP_FIRST,  /* steps 1-3 */
-    NODEPOS_ROOT2,                  /* step 6: node2's root */
-    NODEPOS_ROOT1,                  /* step 6: node1's root, and the DISCONNECTED answer */
-    NODEPOS_ANCESTOR,               /* step 7: node1 is an ancestor of node2 */
-    NODEPOS_DESCENDANT,             /* step 8: node1 is a descendant of node2 */
-    NODEPOS_ORDER,                  /* steps 9-10: node1 is preceding node2, or it follows it */
-};
-static const char *const NODE_POS_STEPS[] = {
-    "DOM §4.4 steps 1-3 (this is other → zero; node1 is other and node2 is this)",
-    "DOM §4.4 step 6 (node2's root: one ancestor per step)",
-    "DOM §4.4 step 6 (node1's root, then the DISCONNECTED answer when the two roots differ)",
-    "DOM §4.4 step 7 (node1 is an ancestor of node2: one ancestor per step)",
-    "DOM §4.4 step 8 (node1 is a descendant of node2: one ancestor per step)",
-    "DOM §4.4 steps 9-10 (which of the two the shared root's tree order reaches first)",
-    NULL
-};
+#define NODE_POS_STAGES(X) \
+    X(NODEPOS_SAME,       "DOM §4.4 steps 1-3 (this is other → zero; node1 is other and node2 is this)") \
+    X(NODEPOS_ROOT2,      "DOM §4.4 step 6 (node2's root: one ancestor per step)") \
+    X(NODEPOS_ROOT1,      "DOM §4.4 step 6 (node1's root, then the DISCONNECTED answer when the two roots " \
+                          "differ)") \
+    X(NODEPOS_ANCESTOR,   "DOM §4.4 step 7 (node1 is an ancestor of node2: one ancestor per step)") \
+    X(NODEPOS_DESCENDANT, "DOM §4.4 step 8 (node1 is a descendant of node2: one ancestor per step)") \
+    X(NODEPOS_ORDER,      "DOM §4.4 steps 9-10 (which of the two the shared root's tree order reaches first)")
+enum { IDL_STEP_STAGE_BASE(NODE_POS_STAGES) NODE_POS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const NODE_POS_STEPS[] = { NODE_POS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 static int js_node_compare_position(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                                     JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
@@ -802,17 +792,13 @@ static JSValue js_node_root(JSContext *ctx, JSValueConst this_val, int argc, JSV
    and the label says so), steps 1-2 are the empty-node case at the node the walk is standing on, and steps 3-4
    with 7 are the absorption — one contiguous exclusive Text sibling per step, because a page that built its
    text a chunk at a time has as many of them as it has chunks. Nothing here runs the page's code. */
-enum {
-    NODE_NORM_EACH = IDL_STEP_FIRST,  /* the iteration over this's descendant exclusive Text nodes */
-    NODE_NORM_AT,                     /* steps 1-2 at one of them */
-    NODE_NORM_ABSORB,                 /* steps 3-4 and 7, one contiguous sibling at a time */
-};
-static const char *const NODE_NORM_STEPS[] = {
-    "DOM §4.4 normalize() (the iteration: this's first descendant exclusive Text node)",
-    "DOM §4.4 normalize() steps 1-2 (length; remove the node when it is zero)",
-    "DOM §4.4 normalize() steps 3-4 and 7 (absorb one contiguous exclusive Text sibling and remove it)",
-    NULL
-};
+#define NODE_NORM_STAGES(X) \
+    X(NODE_NORM_EACH,   "DOM §4.4 normalize() (the iteration: this's first descendant exclusive Text node)") \
+    X(NODE_NORM_AT,     "DOM §4.4 normalize() steps 1-2 (length; remove the node when it is zero)") \
+    X(NODE_NORM_ABSORB, "DOM §4.4 normalize() steps 3-4 and 7 (absorb one contiguous exclusive Text sibling " \
+                        "and remove it)")
+enum { IDL_STEP_STAGE_BASE(NODE_NORM_STAGES) NODE_NORM_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const NODE_NORM_STEPS[] = { NODE_NORM_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     lxb_dom_node_t *root, *n, *next;
@@ -977,19 +963,15 @@ static lxb_dom_node_t *clone_template_content(lxb_dom_node_t *n)
    §4.12.3's, the reason this level exists at all — and then recurse over the children (5). Each is its own
    stage because each is per node and the walk is the page's subtree; none of them can reach the page's code,
    which is why the entry stage may name cloneNode's steps 1-2 together with `clone a node`'s 1-2. */
-enum {
-    CLONE_ROOT = IDL_STEP_FIRST,   /* cloneNode steps 1-2 → clone a node steps 1-2 for the root */
-    CLONE_COPY,                    /* clone a node steps 2 and 4 for one descendant */
-    CLONE_TEMPLATE,                /* clone a node step 3: HTML §4.12.3's template cloning steps */
-    CLONE_CHILDREN,                /* clone a node step 5: each child, in tree order */
-};
-static const char *const NODE_CLONE_STEPS[] = {
-    "DOM §4.4 cloneNode steps 1-2 → clone a node steps 1-2 (clone a single node: the root of the copy)",
-    "DOM §4.4 clone a node steps 2 and 4 (clone a single node; append copy to parent), one descendant per step",
-    "DOM §4.4 clone a node step 3 (HTML §4.12.3 the template element's cloning steps)",
-    "DOM §4.4 clone a node step 5 (for each child of node's children, in tree order)",
-    NULL
-};
+#define NODE_CLONE_STAGES(X) \
+    X(CLONE_ROOT,     "DOM §4.4 cloneNode steps 1-2 → clone a node steps 1-2 (clone a single node: the root of " \
+                      "the copy)") \
+    X(CLONE_COPY,     "DOM §4.4 clone a node steps 2 and 4 (clone a single node; append copy to parent), one " \
+                      "descendant per step") \
+    X(CLONE_TEMPLATE, "DOM §4.4 clone a node step 3 (HTML §4.12.3 the template element's cloning steps)") \
+    X(CLONE_CHILDREN, "DOM §4.4 clone a node step 5 (for each child of node's children, in tree order)")
+enum { IDL_STEP_STAGE_BASE(NODE_CLONE_STAGES) NODE_CLONE_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const NODE_CLONE_STEPS[] = { NODE_CLONE_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                          JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
@@ -1250,15 +1232,11 @@ static const JSCFunctionListEntry js_parent_node_reads[] = {
 /* WHERE THIS MACHINE RESTS. §4.2.4 states the member as one sentence — "the first element, in tree order,
    within this's descendants, whose ID is elementId" — so the two stages are its two halves: fixing what is
    being searched for, and the walk that answers it, which rests once per node. */
-enum {
-    BYID_START = IDL_STEP_FIRST,   /* §4.2.4: the id to search for, and this's descendants */
-    BYID_WALK,                     /* §4.2.4: the first element in tree order whose ID is elementId */
-};
-static const char *const NODE_BYID_STEPS[] = {
-    "DOM §4.2.4 getElementById (the id to search for; this's descendants, in tree order)",
-    "DOM §4.2.4 getElementById (the first element whose ID is elementId), one node per step",
-    NULL
-};
+#define NODE_BYID_STAGES(X) \
+    X(BYID_START, "DOM §4.2.4 getElementById (the id to search for; this's descendants, in tree order)") \
+    X(BYID_WALK,  "DOM §4.2.4 getElementById (the first element whose ID is elementId), one node per step")
+enum { IDL_STEP_STAGE_BASE(NODE_BYID_STAGES) NODE_BYID_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const NODE_BYID_STEPS[] = { NODE_BYID_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     lxb_dom_node_t *root, *cursor;
@@ -1524,15 +1502,12 @@ static bool node_has_children_as_text(const lxb_dom_node_t *n)
    `this` implements — every arm but one is O(1) and answered in the first stage — and the Element and
    DocumentFragment arm is `descendant text content`, a concatenation over every Text descendant in tree order.
    That concatenation is the page's subtree, so it is its own stage and rests once per node. */
-enum {
-    NODE_TEXT_SWITCH = IDL_STEP_FIRST,   /* §4.4 get text content: switch on the interface */
-    NODE_TEXT_DESCENDANTS,               /* §4.4 descendant text content, one node per step */
-};
-static const char *const NODE_TEXT_STEPS[] = {
-    "DOM §4.4 get text content (switch on the interface this implements)",
-    "DOM §4.4 descendant text content (concatenate each Text descendant's data, in tree order), one node per step",
-    NULL
-};
+#define NODE_TEXT_STAGES(X) \
+    X(NODE_TEXT_SWITCH,      "DOM §4.4 get text content (switch on the interface this implements)") \
+    X(NODE_TEXT_DESCENDANTS, "DOM §4.4 descendant text content (concatenate each Text descendant's data, in " \
+                             "tree order), one node per step")
+enum { IDL_STEP_STAGE_BASE(NODE_TEXT_STAGES) NODE_TEXT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const NODE_TEXT_STEPS[] = { NODE_TEXT_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     lxb_dom_node_t *root, *cursor;

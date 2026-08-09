@@ -357,21 +357,30 @@ function balancedFrom(text, at) {
 const maskLiterals = (text) =>
   text.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g,
                (s) => s.replace(/[^\n]/g, ' '));   // newlines kept: offsets AND line numbers stay the originals
-const stageListName = (text, arrayName) => {
+/* EVERY list the array expands, not the first one. A machine SHARED by two members declares the stages they
+   both rest at once and the ones only one of them reaches beside it — `{ FRAG_STAGES(L) EL_SET_HTML_EXTRA(L) }`
+   — and reading only the leading expansion checks the shared list and lets the tail be a second hand-written
+   one, which is the drift this check exists to catch, in the machine most likely to have it. */
+/* THE EXPANDER MAY TAKE OPERANDS. One machine can BE several algorithms — Array.prototype's every, some,
+   forEach, map and filter are one walk whose steps the standard numbers 5, 5, 5, 6 and 7 — so the stage list is
+   expanded once PER ALGORITHM with that algorithm's own step text. Requiring a bare `LIST(JS_STEP_STAGE_LABEL)`
+   would force one hand-copied list per algorithm, which is precisely the drift this check exists to catch, in
+   the machines most likely to have it. `LIST(JS_STEP_STAGE_LABEL, …)` is still ONE list: a stage cannot move in
+   one algorithm without moving in every algorithm that expands it. */
+const stageLists = (text, arrayName) => {
   const masked = maskLiterals(text);
   const decl = new RegExp(`\\b${arrayName}\\s*\\[\\s*\\]\\s*=`).exec(masked);
   if (!decl) return null;                                     // not in this file: the caller reports it
   const body = balancedFrom(masked, decl.index);
-  const x = /(\w+)\s*\(\s*JS_STEP_STAGE_LABEL\s*\)/.exec(body);
-  return x ? x[1] : '';                                       // '' = a hand-written list
+  return [...body.matchAll(/(\w+)\s*\(\s*JS_STEP_STAGE_LABEL\s*[,)]/g)].map((m) => m[1]);  // [] = hand-written
 };
 const twoList = [];   // declared, but its constants and its labels are still two lists — the conversion queue
 const stageListCheck = (where, text, name, stepsExpr) => {
   const arrayName = /^&?(\w+)/.exec(stepsExpr.trim());
   if (!arrayName) return;
-  const list = stageListName(text, arrayName[1]);
+  const lists = stageLists(text, arrayName[1]);
   const line = () => text.slice(0, text.indexOf(arrayName[1])).split('\n').length;
-  if (list === null) {
+  if (lists === null) {
     console.error(`[step-steps] ${where}:${line()}: ${name} names ${arrayName[1]} as its steps and this file ` +
                   `does not declare it — the gate cannot see the labels, and a check that skips what it cannot ` +
                   `parse is an excluded check`);
@@ -382,12 +391,13 @@ const stageListCheck = (where, text, name, stepsExpr) => {
      the one declaration is a claim the source does not keep. That fails. A machine still carrying two
      hand-written lists is the same conversion in progress the count below reports, and is named so the queue
      is a list of machines rather than a number. */
-  if (list === '') twoList.push(`${where}:${line()} ${name} (${arrayName[1]})`);
-  else if (!new RegExp(`\\b${list}\\s*\\(\\s*JS_STEP_STAGE_ENUM\\s*\\)`).test(text)) {
-    console.error(`[step-steps] ${where}:${line()}: ${name}'s labels expand ${list} but no enum does — the ` +
-                  `stage constants are still a second list, which is the drift the X-list exists to prevent`);
-    bad++;
-  }
+  if (lists.length === 0) { twoList.push(`${where}:${line()} ${name} (${arrayName[1]})`); return; }
+  for (const list of lists)
+    if (!new RegExp(`\\b${list}\\s*\\(\\s*JS_STEP_STAGE_ENUM\\s*[,)]`).test(text)) {
+      console.error(`[step-steps] ${where}:${line()}: ${name}'s labels expand ${list} but no enum does — the ` +
+                    `stage constants are still a second list, which is the drift the X-list exists to prevent`);
+      bad++;
+    }
 };
 
 let declared = 0, undeclared = 0;

@@ -285,16 +285,12 @@ static JSValue js_form_submit(JSContext *ctx, JSValueConst this_val, int argc, J
    shouldContinue be the result of firing an event named submit at form ... with the cancelable attribute
    initialized to true" — and step 5.8 is what its verdict decides. Everything after it, up to the request this
    engine records, runs with no page code in it, so one stage names that range and says so. */
-enum {
-    REQSUBMIT_FORM = 0,   /* §4.10.21.4: the form this request is for */
-    REQSUBMIT_FIRE,       /* §4.10.21.4 step 5.6, then 5.8 and the submission */
-};
-static const char *const REQSUBMIT_STEPS[] = {
-    "HTML §4.10.21.4 (the form this request is for, before step 5.6's event)",
-    "HTML §4.10.21.4 step 5.6 (fire an event named submit at form, cancelable), then step 5.8's verdict and "
-    "the submission it allows",
-    NULL
-};
+#define REQSUBMIT_STAGES(X) \
+    X(REQSUBMIT_FORM, "HTML §4.10.21.4 (the form this request is for, before step 5.6's event)") \
+    X(REQSUBMIT_FIRE, "HTML §4.10.21.4 step 5.6 (fire an event named submit at form, cancelable), then step " \
+                      "5.8's verdict and the submission it allows")
+enum { REQSUBMIT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const REQSUBMIT_STEPS[] = { REQSUBMIT_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct JSReqSubmitState {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */

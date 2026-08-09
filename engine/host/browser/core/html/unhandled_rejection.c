@@ -212,15 +212,12 @@ static JSValue js_pre_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVa
    machine is that task's body for ONE promise, which is step 4.1's loop. Its two halves are the two stages:
    4.1.2 fires the event (the page's listeners), 4.1.3 decides whether the rejection is reported. Minting the
    PromiseRejectionEvent is part of 4.1.2 and cannot suspend, so it shares that stage's entry. */
-enum {
-    REJECT_EVENT = 0,   /* §8.1.4.7 step 4.1.2's PromiseRejectionEvent */
-    REJECT_FIRE,        /* §8.1.4.7 steps 4.1.2-4.1.3 */
-};
-static const char *const REJECT_NOTIFY_STEPS[] = {
-    "HTML §8.1.4.7 step 4.1.2 (the PromiseRejectionEvent, cancelable, for this promise)",
-    "HTML §8.1.4.7 steps 4.1.2-4.1.3 (fire unhandledrejection at the global; report unless it was canceled)",
-    NULL
-};
+#define REJECT_NOTIFY_STAGES(X) \
+    X(REJECT_EVENT, "HTML §8.1.4.7 step 4.1.2 (the PromiseRejectionEvent, cancelable, for this promise)") \
+    X(REJECT_FIRE,  "HTML §8.1.4.7 steps 4.1.2-4.1.3 (fire unhandledrejection at the global; report unless it " \
+                    "was canceled)")
+enum { REJECT_NOTIFY_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const REJECT_NOTIFY_STEPS[] = { REJECT_NOTIFY_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct JSRejectNotify {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */

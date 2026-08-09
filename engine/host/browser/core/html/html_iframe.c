@@ -205,16 +205,13 @@ JSValue iframe_child_navigable(JSContext *ctx, int index)
    Same-origin in THIS agent the two documents are one heap, so step 4 is answered in the same turn and the
    machine never rests at the second stage — a suspend there would be observable, which makes it a fidelity bug
    rather than extra rigor. */
-enum {
-    CONTENTDOC_RESOLVE = IDL_STEP_FIRST,   /* §7.3.1 content document steps 1-3 */
-    CONTENTDOC_ANSWER,                     /* §7.3.1 content document step 4, from the peer instance */
-};
-static const char *const CONTENT_DOC_STEPS[] = {
-    "HTML §4.8.5 contentDocument → §7.3.1 content document steps 1-3 (the content navigable's active document, "
-    "filtered by §7.2.5.1's same origin-domain check)",
-    "HTML §7.3.1 content document step 4 (the answer, from the instance that holds the document)",
-    NULL
-};
+#define CONTENT_DOC_STAGES(X) \
+    X(CONTENTDOC_RESOLVE, "HTML §4.8.5 contentDocument → §7.3.1 content document steps 1-3 (the content " \
+                          "navigable's active document, filtered by §7.2.5.1's same origin-domain check)") \
+    X(CONTENTDOC_ANSWER,  "HTML §7.3.1 content document step 4 (the answer, from the instance that holds the " \
+                          "document)")
+enum { IDL_STEP_STAGE_BASE(CONTENT_DOC_STAGES) CONTENT_DOC_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CONTENT_DOC_STEPS[] = { CONTENT_DOC_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct { uint32_t req; } ContentDocState;
 
