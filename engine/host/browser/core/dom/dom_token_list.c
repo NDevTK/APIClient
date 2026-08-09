@@ -25,6 +25,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "check.h"
+#include "solver/concolic.h"   /* an unknown NAME denotes its shape — see concolic_name_cstr */
 #include "quickjs.h"
 #include "solver/dom_cow.h"
 #include "core/idl_args.h"
@@ -171,7 +172,10 @@ static JSValue js_tl_set_value(JSContext *ctx, JSValueConst this_val, JSValueCon
 
     (void)magic;
     if (!el) return JS_UNDEFINED;
-    s = JS_ToCStringLen(ctx, &slen, val);   /* a real string by now: the declaration converted it */
+    /* the declaration passes UNKNOWN input through as itself; an unknown token denotes its SHAPE, so
+       `classList.add(x)` adds one stable class per source instead of ending the document at the coercion. */
+    s = concolic_name_cstr(ctx, val);
+    slen = s ? strlen(s) : 0;
     if (!s) return JS_EXCEPTION;
     list_write(el, attr, s, slen);
     JS_FreeCString(ctx, s);

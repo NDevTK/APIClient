@@ -183,7 +183,7 @@ static int js_document_qs(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
                      : magic == QS_MATCHES ? JS_FALSE : JS_NULL;
             return JS_STEP_DONE;
         }
-        sel = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
+        sel = concolic_name_cstr(ctx, argv[0]);   /* the declaration passes UNKNOWN input through as itself, so an unknown name denotes its SHAPE */
         if (!sel) return JS_STEP_ABRUPT;
         s->parser = lxb_css_parser_create();
         s->selectors = lxb_selectors_create();
@@ -305,9 +305,21 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
        an XSS-relevant one (the tag decides whether the node executes). The answer is an unknown derived from
        the source rather than a node of a guessed name: a concrete tag would be an element the page never
        created, and every query and every sink after it would be about the wrong node. */
-    {
-        JSValue c = concolic_builtin_hook(ctx, argv[0], "createElement");
-        if (!JS_IsUninitialized(c)) return c;
+    if (concolic_is(argv[0])) {
+        /* THE CREATION RUNS, on the tag this source concretely is. §solver allows no other way for an example
+           to propagate — the engine performs the real operation on the concrete, never a rule that predicts
+           what performing it would have produced — so this re-enters with the example in place of the operand
+           and the element it really builds becomes the derived value's example. With no example there is
+           nothing to run and the answer is honestly unknown, which is a non-answer rather than a guess. */
+        JSValue ex = concolic_example(ctx, argv[0]), real = JS_UNDEFINED;
+        if (JS_IsString(ex)) {
+            JSValueConst a2[1];
+            a2[0] = ex;
+            real = js_doc_create_element(ctx, this_val, 1, a2, magic);
+            if (JS_IsException(real)) { JS_FreeValue(ctx, JS_GetException(ctx)); real = JS_UNDEFINED; }
+        }
+        JS_FreeValue(ctx, ex);
+        return concolic_builtin_hook(ctx, argv[0], "createElement", real);
     }
     tag = JS_ToCString(ctx, argv[0]);
     if (!tag) return JS_EXCEPTION;

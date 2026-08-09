@@ -413,15 +413,36 @@ JSValue concolic_tostr_hook(JSContext *ctx, JSValueConst v) {
    source to solve for. Example-free: this engine does not yet run the operation on the operand's example (a
    regex match over a known query string HAS a concrete answer, and producing it is the next step here), and
    inventing one would be a fabricated observation. */
-JSValue concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op) {
+JSValue concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op, JSValue example) {
     const char *src, *sh;
     char shape[224];
 
-    if (!concolic_is(v)) return JS_UNINITIALIZED;
+    if (!concolic_is(v)) { JS_FreeValue(ctx, example); return JS_UNINITIALIZED; }
     src = concolic_src_c(v);
     sh = concolic_shape_c(v);
     snprintf(shape, sizeof shape, "%s.%s()", sh ? sh : "{}", op ? op : "builtin");
-    return concolic_new(ctx, shape, src ? src : shape, JS_UNDEFINED);
+    /* `example` is what the operator got by RUNNING THE REAL OPERATION on this operand's own example. It is
+       never computed here and never predicted: the codec really encoded, the parser really parsed. */
+    return concolic_new(ctx, shape, src ? src : shape, example);
+}
+
+/* THE BYTES A DOM MEMBER NEEDS FROM AN ARGUMENT THAT MAY BE UNKNOWN — a selector, an attribute name, a class
+   token, an element id. Every one of those call sites did JS_ToCString under a comment saying "a real string by
+   now: the declaration converted it", and that comment is FALSE for a concolic: the IDL boundary passes unknown
+   input through as itself on purpose, so the coercion crashed and `document.querySelector(location.hash)` ended
+   the document. An unknown NAME denotes its SHAPE, which is the same rule the key_name hook already states for
+   `obj[x]` and the same one setAttribute already applies to an unknown VALUE: a real string, stable per source,
+   so two lookups through one source agree and two sources never collide. OWNED either way, so the call site
+   keeps one free path and does not grow a branch. */
+const char *concolic_name_cstr(JSContext *ctx, JSValueConst v) {
+    if (concolic_is(v)) {
+        const char *sh = concolic_shape_c(v);
+        JSValue s = JS_NewString(ctx, sh ? sh : "{}");
+        const char *r = JS_ToCString(ctx, s);
+        JS_FreeValue(ctx, s);
+        return r;
+    }
+    return JS_ToCString(ctx, v);
 }
 
 /* THE NAME an unknown key denotes: its own SHAPE, as a real string. Stable per source, so every key-taking
@@ -588,7 +609,8 @@ static JSConcolicHooks g_hooks = {
     .arith = concolic_arith_hook, .to_str = concolic_tostr_hook,
     .key_read = concolic_key_read_hook,
     .key_name = concolic_key_name_hook,
-    .builtin = concolic_builtin_hook };
+    .builtin = concolic_builtin_hook,
+    .example = concolic_example };
 
 /* Concolic VALUE propagation stays installed across scheduling AND verification, because taint must flow
    during a candidate re-fire too; the EXPLORATION hooks (branch/fork/preempt) are the scheduler's. */

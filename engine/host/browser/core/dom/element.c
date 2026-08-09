@@ -69,7 +69,7 @@ static JSValue js_el_get_attribute(JSContext *ctx, JSValueConst this_val, int ar
     int si;
 
     if (!el || argc < 1) return JS_NULL;
-    name = JS_ToCString(ctx, argv[0]);
+    name = concolic_name_cstr(ctx, argv[0]);
     if (!name) return JS_EXCEPTION;
     /* The TAINT SHADOW answers first: an attacker value written here came back out of Lexbor as plain bytes
        with its provenance gone, and a sink reading it would look clean. */
@@ -93,7 +93,10 @@ static JSValue js_el_set_attribute(JSContext *ctx, JSValueConst this_val, int ar
     const char *val;
 
     if (!el || argc < 2) return JS_UNDEFINED;
-    name = JS_ToCString(ctx, argv[0]);
+    /* THE NAME, WHICH CAN ALSO BE UNKNOWN. The VALUE below has had a concolic path since the taint shadow was
+       built; the name never did, so `setAttribute(someParameter, v)` crashed at the coercion while
+       `setAttribute("href", someParameter)` worked. An unknown name denotes its shape, stable per source. */
+    name = concolic_name_cstr(ctx, argv[0]);
     if (!name) return JS_EXCEPTION;
     /* A concolic value has no bytes to store. Record it in the shadow so the read gives the SAME concolic back,
        and write its shape into the tree so a serialization of the document still shows something. */
@@ -661,7 +664,7 @@ static JSValue js_el_attr_op(JSContext *ctx, JSValueConst this_val, int argc, JS
     JSValue r;
 
     if (!el || argc < 1) return magic == 0 ? JS_UNDEFINED : JS_FALSE;
-    name = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
+    name = concolic_name_cstr(ctx, argv[0]);   /* the declaration passes UNKNOWN input through as itself, so an unknown name denotes its SHAPE */
     if (!name) return JS_EXCEPTION;
     present = lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), &vl) != NULL;
     switch (magic) {

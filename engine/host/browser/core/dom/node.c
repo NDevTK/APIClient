@@ -1152,7 +1152,7 @@ static JSValue js_node_by_name(JSContext *ctx, JSValueConst this_val, int argc, 
     JSValue r;
 
     if (!node_is_parent_node(n) || argc < 1) return JS_UNDEFINED;
-    name = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
+    name = concolic_name_cstr(ctx, argv[0]);   /* the declaration passes UNKNOWN input through as itself, so an unknown name denotes its SHAPE */
     if (!name) return JS_EXCEPTION;
     r = collections_by_name(ctx, this_val, name, magic != 0);
     JS_FreeCString(ctx, name);
@@ -1214,7 +1214,7 @@ static int js_node_get_element_by_id(JSContext *ctx, JSStepHdr *hdr, void *st, i
 
         *presult = JS_NULL;
         if (!self || argc < 1) return JS_STEP_DONE;
-        id = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
+        id = concolic_name_cstr(ctx, argv[0]);   /* the declaration passes UNKNOWN input through as itself, so an unknown name denotes its SHAPE */
         if (!id) return JS_STEP_ABRUPT;
         s->idlen = strlen(id);
         s->id = malloc(s->idlen + 1);

@@ -1621,9 +1621,32 @@ static int js_url_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
        them, so a concolic address can only crash there; the constructor answers instead with an unknown
        derived from the source. Reading `.href`/`.pathname` off the result then yields further unknowns tied to
        the same source, which is what a later branch forks on and a later sink solves for. */
-    {
-        JSValue c = concolic_builtin_hook(ctx, argv[0], "URL");
-        if (!JS_IsUninitialized(c)) { *presult = c; return 0; }
+    if (concolic_is(argv[0])) {
+        /* THE PARSE RUNS, on the address this source concretely is: §4.1's real algorithm over the example, and
+           the URL it really produces becomes the derived value's example. Nothing is predicted here — with no
+           example there is nothing to parse and the answer is honestly unknown, which is a non-answer rather
+           than a guess. */
+        JSValue ex = concolic_example(ctx, argv[0]), real = JS_UNDEFINED;
+        if (JS_IsString(ex)) {
+            UrlRecord r2, b2;
+            const char *a = JS_ToCString(ctx, ex);
+            bool hb = false;
+            url_record_init(&b2);
+            if (a && argc > 1 && !JS_IsUndefined(argv[1]) && !concolic_is(argv[1])) {
+                const char *bs2 = JS_ToCString(ctx, argv[1]);
+                if (bs2) { hb = url_parse(&b2, bs2, strlen(bs2), NULL); JS_FreeCString(ctx, bs2); }
+            }
+            if (a && url_parse(&r2, a, strlen(a), hb ? &b2 : NULL)) {
+                real = url_wrap(ctx, &r2);
+                url_record_free(&r2);
+                if (JS_IsException(real)) { JS_FreeValue(ctx, JS_GetException(ctx)); real = JS_UNDEFINED; }
+            }
+            url_record_free(&b2);
+            if (a) JS_FreeCString(ctx, a);
+        }
+        JS_FreeValue(ctx, ex);
+        *presult = concolic_builtin_hook(ctx, argv[0], "URL", real);
+        return 0;
     }
     in = JS_ToCStringLen(ctx, &in_len, argv[0]);
     if (!in) return -1;
