@@ -695,8 +695,16 @@ static int preempt_hook(int kind) {
    in document order in the shared context, under f's COW delta (set by the caller). */
 /* ASYNC-AS-FLOW job-enqueue hook (installed as JS_SetJobEnqueueHook): route a promise reaction / microtask to
    the ENQUEUING flow's own queue instead of the global list, so it runs later under that flow's live COW. */
+/* HOW MANY JOBS THIS DOCUMENT QUEUED AND HOW MANY IT RAN, published beside the other cost numbers for the
+   same reason they are: a run whose reactions never fire and a page that queued none are indistinguishable
+   from outside, and the difference is most of a modern bundle. */
+static long g_jobs_q, g_jobs_run;
+long engine_jobs_queued(void) { return g_jobs_q; }
+long engine_jobs_run(void) { return g_jobs_run; }
+
 static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueConst *argv, bool is_task) {
     Flow *f = flow_running();
+    g_jobs_q++;
     /* THERE IS NO GLOBAL DRAIN. Declining here hands the job to quickjs's global list, and nothing in this
        engine ever runs that list — so the job is not "deferred to the default", it is DROPPED. Every task
        source goes through here: a window message, a port delivery, a broadcast, a timer callback, a custom
@@ -728,6 +736,7 @@ static void flow_run_one_job(JSContext *ctx, Flow *f) {
     if (pick == f->njob) pick = 0;   /* nothing but tasks: the checkpoint is done, run the earliest task */
     FlowJob j = f->jobs[pick];
     memmove(f->jobs + pick, f->jobs + pick + 1, (size_t)(--f->njob - pick) * sizeof(FlowJob));
+    g_jobs_run++;
     JSValue r = j.fn(ctx, j.argc, (JSValueConst *)j.argv);   /* the reaction runs in this flow's timeline */
     /* A JOB THAT THREW IS A PAGE ERROR, exactly like a script that threw, and this dropped it. A promise
        reaction, a queueMicrotask callback and a delivered message all run here — so an uncaught throw inside

@@ -137,6 +137,8 @@ void engine_gen_fork(JSContext *ctx, JSValueConst genobj, void *base_gd, void *c
    findings cannot: an interleaving scheduler and a FIFO one agree on an easy page and disagree on every hard
    one, so the interleave has to be observable on its own. */
 int  engine_switch_count(void);
+long engine_jobs_queued(void);
+long engine_jobs_run(void);
 
 /* WHO COUNTS THE DOM'S WRAPPERS. The scheduler's diagnostic line reports the identity map's size, and that map
    is the DOM's — so the DOM registers the counter rather than the solver naming node.h and dragging lexbor in

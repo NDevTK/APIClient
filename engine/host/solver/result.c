@@ -149,8 +149,10 @@ char *result_json(JSContext *ctx) {
         /* THE THREE COST NUMBERS, together. A switch count on its own cannot say whether a run that took six
            times as long grew its frontier or grew the work inside each flow, and those need opposite fixes. */
         snprintf(out, n, "{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
-                         "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d}",
-                 eps, sinks, errs, engine_switch_count(), flow_created_count(), solve_candidate_count());
+                         "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d,"
+                         "\"_jobsQueued\":%ld,\"_jobsRun\":%ld}",
+                 eps, sinks, errs, engine_switch_count(), flow_created_count(), solve_candidate_count(),
+                 engine_jobs_queued(), engine_jobs_run());
     free(eps);
     free(sinks);
     free(errs);
