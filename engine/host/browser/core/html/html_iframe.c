@@ -196,6 +196,26 @@ JSValue iframe_child_navigable(JSContext *ctx, int index)
  * NAME of it, and this side resolves that name to the one reference for it. `contentDocument` is therefore a
  * step machine where `contentWindow` is a plain accessor — a WindowProxy names a NAVIGABLE, which this agent
  * created and knows, and a Document is the peer's object. */
+/* WHERE THIS MACHINE RESTS, AS THE STANDARD NUMBERS IT. §4.8.5's getter is one sentence over §7.3.1's
+   `content document`, whose four steps are: no content navigable → null; its active document; §7.2.5.1's same
+   origin-domain filter; return it. Steps 1-3 are one stage — they are decided here, and no page code runs
+   between them. Step 4 is its OWN stage whenever the document lives in another instance, because that answer
+   arrives from a peer's scheduled turn and this flow is parked until it does; the resume point was a request
+   handle being non-zero, which is a stage nothing could name.
+   Same-origin in THIS agent the two documents are one heap, so step 4 is answered in the same turn and the
+   machine never rests at the second stage — a suspend there would be observable, which makes it a fidelity bug
+   rather than extra rigor. */
+enum {
+    CONTENTDOC_RESOLVE = IDL_STEP_FIRST,   /* §7.3.1 content document steps 1-3 */
+    CONTENTDOC_ANSWER,                     /* §7.3.1 content document step 4, from the peer instance */
+};
+static const char *const CONTENT_DOC_STEPS[] = {
+    "HTML §4.8.5 contentDocument → §7.3.1 content document steps 1-3 (the content navigable's active document, "
+    "filtered by §7.2.5.1's same origin-domain check)",
+    "HTML §7.3.1 content document step 4 (the answer, from the instance that holds the document)",
+    NULL
+};
+
 typedef struct { uint32_t req; } ContentDocState;
 
 static void iframe_cd_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
@@ -209,7 +229,7 @@ static int iframe_content_document_step(JSContext *ctx, JSStepHdr *hdr, void *st
     (void)argc; (void)argv; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
 
-    if (s->req == 0) {
+    if (hdr->stage == CONTENTDOC_RESOLVE) {
         JSValue nav = iframe_navigable(ctx, hdr->this_val);
         Flow *f = flow_running();
         WorldId anc[16];
@@ -247,8 +267,12 @@ static int iframe_content_document_step(JSContext *ctx, JSStepHdr *hdr, void *st
         snprintf(op + n, sizeof op - (size_t)n, "\tdocument");
         JS_FreeValue(ctx, nav);
         s->req = engine_host_request(ctx, op);
+        hdr->stage = CONTENTDOC_ANSWER;
         return JS_STEP_YIELD;
     }
+    DCHECK(hdr->stage == CONTENTDOC_ANSWER, "contentDocument resumed into a stage §7.3.1 does not have");
+    DCHECK(s->req != 0, "contentDocument is parked on step 4 with no request outstanding — the stage says a "
+                        "peer was asked and nothing was");
     if (!engine_host_answered(s->req, &answer))
         return JS_STEP_YIELD;
     *presult = engine_host_take(ctx, s->req);
@@ -257,7 +281,9 @@ static int iframe_content_document_step(JSContext *ctx, JSStepHdr *hdr, void *st
 }
 
 static const IdlStepDecl CONTENT_DOC_DECL = { iframe_content_document_step, sizeof(ContentDocState),
-                                              iframe_cd_visit, NULL };
+                                              iframe_cd_visit, NULL,
+                                              "HTML §4.8.5 HTMLIFrameElement.contentDocument "
+                                              "(over §7.3.1's content document)", CONTENT_DOC_STEPS };
 
 /* §4.8.5 `contentWindow`: this flow's child navigable, or null when there is none. Reading THROUGH it is what
    suspends; this read does not, because the proxy is a local object naming a remote document. */

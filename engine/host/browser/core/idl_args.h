@@ -167,10 +167,21 @@ int  idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
    be a machine is the other wrong answer — that is the duplication one machine exists to prevent.
    So the body is itself a STEP, with the converted arguments in place: same return contract as a
    JSTrampStepDef's step, and its own state, whose SIZE the member declares and whose owned values its visit
-   names. The state is zeroed before the first entry, so a stage byte of 0 means "not started".
+   names. The state is zeroed before the first entry.
    `presult` is where it leaves the member's answer. */
 typedef int (*IdlStepBody)(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc);
+
+/* THE FIRST STAGE THAT IS THE MEMBER'S OWN. Stages 0 and 1 belong to the machine that hosts every declared
+   member — the argument-count check and the ES-to-IDL conversions — and BOTH are rest points, because a page's
+   `toString` runs inside the second one. A body's own algorithm therefore starts here, and it rests on
+   `hdr->stage` rather than on a private counter of its own: a stage is where a machine parks, where a sibling
+   overtakes it and where a cold-tier resume picks it up, and the driver asserts at do_step_step that the stage
+   a machine holds is a step its declaration names. A private byte in the body's state is invisible to that
+   assert, so a body keeping one has a resume point nothing can check and nothing can report.
+   A body that has not been converted still keeps its own byte; it declares no steps and is not yet asked. */
+#define IDL_STEP_FIRST 2
+
 /* The state's OWNERSHIP contract, and the two things every step state must state: what it holds (traced for the
    GC and cloned at a deep fork) and how to release it (at teardown, including the throw path). */
 typedef struct {
@@ -178,6 +189,21 @@ typedef struct {
     size_t      state_size;
     void      (*visit)(JSContext *ctx, void *state, JSStepVisit *v);
     void      (*release)(JSContext *ctx, void *state);
+    /* WHICH ALGORITHM THIS MEMBER IS, AND WHICH OF ITS STEPS EACH STAGE RESTS AT — the host half of
+       JSTrampStepDef's own declaration, and it lands on the same field of the same definition: the pool builds
+       one JSTrampStepDef per member, prepends the two labels for the stages it owns itself, and the driver's
+       one check reads the result. So a member is asserted by exactly the mechanism a quickjs.c machine is,
+       rather than by a second one written for the host.
+       `steps` is indexed from IDL_STEP_FIRST and NULL-terminated: `steps[0]` is the step the body rests at on
+       its first entry. The label is the standard's own wording ("DOM §4.4 step 3"), because the point of it is
+       that a parked flow can SAY where it is parked and that the number means the same thing in the next
+       session as in this one. A stage may name a RANGE of steps only when no page code can run between them —
+       a getter, a setter, a callback or a custom-element reaction in the middle is a stage that must SPLIT —
+       and then the label says the range.
+       Both or neither: a member declaring one without the other is half a declaration, which the pool refuses
+       rather than accepting an algorithm with unnamed steps or steps belonging to no algorithm. */
+    const char *algorithm;
+    const char *const *steps;
 } IdlStepDecl;
 /* DECLARE WHERE THE OPTIONAL ARGUMENTS START. §3.6.2 makes an `undefined` passed for an optional argument with
    no default mean the argument is ABSENT — `new URL("aaa:b", undefined)` is a one-argument call, and

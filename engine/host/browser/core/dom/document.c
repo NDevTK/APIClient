@@ -116,8 +116,23 @@ static Document *doc_here(JSContext *ctx)
  * subtree in isolation gets wrong. */
 enum { QS_FIRST = 0, QS_ALL, QS_MATCHES, QS_CLOSEST };
 
+/* WHERE THIS MACHINE RESTS, AS THE STANDARD NUMBERS IT. All four members are the same two steps: parse the
+ * selector, then match it — §1.3 states them for querySelector and querySelectorAll (through scope-match a
+ * selectors string) and §4.9 restates them for matches and closest, with the same wording and the same order.
+ * The parse is ONE stage because no page code can run between "parse a selector" and "if it is failure, throw"
+ * — nothing observes the intermediate — and the label says the range. The match is its own stage because it is
+ * a walk of the page's tree, and it rests once per node so a sibling flow can overtake it there. */
+enum {
+    QS_PARSE = IDL_STEP_FIRST,   /* §1.3 steps 1-2 / §4.9 steps 1-2 */
+    QS_MATCH,                    /* §1.3 step 3 / §4.9 matches step 3 / closest steps 3-5 */
+};
+static const char *const QS_STEPS[] = {
+    "DOM §1.3 steps 1-2 / §4.9 steps 1-2 (parse a selector; SyntaxError if it is failure)",
+    "DOM §1.3 step 3 (match a selector against a tree) / §4.9 matches step 3 / closest steps 3-5, one node per step",
+    NULL
+};
+
 typedef struct {
-    uint8_t stage;
     lxb_css_parser_t       *parser;
     lxb_selectors_t        *selectors;
     lxb_css_selector_list_t *list;
@@ -139,7 +154,7 @@ static void qs_visit(JSContext *ctx, void *st, JSStepVisit *v)
     /* A FORK CANNOT REACH A SELECTOR WALK. It runs none of the page's code, so no concolic branch can happen
        under it — which is what lets the compiled list be held as a bare pointer: there is no such thing as half
        a selector context to hand a second flow. */
-    DCHECK(s->parser == NULL || s->stage == 0, "a selector walk was forked mid-walk");
+    DCHECK(s->parser == NULL, "a selector walk was forked mid-walk");
     v->val(ctx, &s->arr);
 }
 
@@ -174,7 +189,7 @@ static int js_document_qs(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
 
-    if (s->stage == 0) {
+    if (hdr->stage == QS_PARSE) {
         lxb_dom_node_t *n = node_of(hdr->this_val);
         const char *sel;
 
@@ -210,10 +225,11 @@ static int js_document_qs(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
             s->arr = JS_NewArray(ctx);
             CHECK(!JS_IsException(s->arr), "querySelectorAll could not allocate its result");
         }
-        s->stage = 1;
+        hdr->stage = QS_MATCH;
         return JS_STEP_YIELD;
     }
 
+    DCHECK(hdr->stage == QS_MATCH, "a selector walk resumed into a stage its algorithm does not have");
     if (!s->cursor) {
         /* Ran out without a match. */
         switch (magic) {
@@ -252,7 +268,9 @@ static int js_document_qs(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     return JS_STEP_YIELD;
 }
 
-static const IdlStepDecl QS_STEP = { js_document_qs, sizeof(QsState), qs_visit, qs_release };
+static const IdlStepDecl QS_STEP = { js_document_qs, sizeof(QsState), qs_visit, qs_release,
+                                     "DOM §1.3 scope-match a selectors string / §4.9 Element.matches, closest",
+                                     QS_STEPS };
 
 const IdlStepDecl *document_qs_decl(void) { return &QS_STEP; }
 

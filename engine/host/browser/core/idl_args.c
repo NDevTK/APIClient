@@ -160,10 +160,30 @@ typedef struct {
        idl_method_id_step. Its state lives immediately after this machine's, which is why the def's size is
        per-member and not a constant. */
     const IdlStepDecl *step;
+    /* THE STAGE LABELS THIS MEMBER'S DEFINITION POINTS AT, owned here because they are two lists joined: the
+       two stages this machine owns, and the ones the member's own algorithm declares. Built once per member at
+       declaration and freed with the pool — the definition BORROWS it, exactly as JS_RegisterStepDef borrows
+       the definition. NULL for a member that declares no steps, which is what "not converted" is. */
+    const char **steps;
     bool       variadic;    /* the last declared type applies to every argument from there on */
     JSClassID  iface;       /* the brand an IDL_STRING_UNLESS_IFACE position tests against */
     const char *name;       /* what to call this member in a diagnostic; set when it is installed */
 } IdlMember;
+
+/* THE TWO STAGES EVERY DECLARED MEMBER PASSES THROUGH BEFORE ITS OWN ALGORITHM STARTS, and they are stages
+   rather than bookkeeping because a flow RESTS at both: the second one is where a page's `toString` or a
+   Proxy's get trap runs, so a member parked there is parked inside the page's code with its own algorithm not
+   yet begun. Naming them here rather than in each member is the same rule as everything else in this file —
+   one declaration, no per-member line to forget — and it is why IDL_STEP_FIRST is 2. */
+static const char *const IDL_PROLOGUE_STEPS[] = {
+    "Web IDL §3.6.2 (the operation's argument count: fewer than the required ones is a TypeError)",
+    "Web IDL §3.6.2 (converting each passed argument to its declared IDL type)",
+};
+/* The two are one number seen from two sides — how many stages this machine owns, and where a member's own
+   stages begin — so they agree at COMPILE time rather than by a comment asking them to. A member's steps would
+   otherwise be joined on at the wrong base and every label would name the step next door. */
+typedef char idl_prologue_matches_step_first[
+    (sizeof IDL_PROLOGUE_STEPS / sizeof *IDL_PROLOGUE_STEPS) == IDL_STEP_FIRST ? 1 : -1];
 
 /* The DOM layer's tree-steps edge — see idl_args.h. NULL until the DOM registers it, which is what the
    platform-less test builds and the pre-DOM boot look like. */
@@ -845,6 +865,14 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         s->i++;
     }
 
+    /* THE PROLOGUE IS OVER, so the stage stops being this machine's and becomes the MEMBER'S. It is advanced
+       here — at the one place the conversion loop is known to have finished — rather than by the body, because
+       a body that had to remember to leave stage 1 behind is a body whose forgetting makes its first algorithm
+       step indistinguishable from a suspension inside the page's `toString`. Every member passes through this
+       line, including the ones whose bodies are plain C: the stage names where the machine is, and after this
+       line the machine is inside the member. */
+    if (s->hdr.stage == 1) s->hdr.stage = IDL_STEP_FIRST;
+
     /* THE BODY RUNS HERE, NOT IN fini. Every declared argument is a real string now, so it has no user code
        left to reach — the claim the declaration makes. It cannot run in fini because the shared teardown
        releases hdr.this_val BEFORE calling it, so a body that reads the receiver there reads a freed value:
@@ -1040,6 +1068,7 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
         idl_member(idx)->dict_n = nmembers;
     }
     idl_member(idx)->step = NULL;
+    idl_member(idx)->steps = NULL;
     idl_member(idx)->variadic = false;
     idl_member(idx)->iface = 0;
     idl_def(idx)->size  = sizeof(JSIdlArgsState);
@@ -1059,10 +1088,32 @@ int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
                        const IdlStepDecl *decl, int magic)
 {
     int id = idl_method_id_dict(ctx, types, nargs, members, nmembers, NULL, magic);
+    int idx = g_n - 1;
     /* the pool entry idl_method_id_dict just filled — a step member differs only in WHAT runs once the
        conversions are done, and in needing room after this machine's state for that thing to run in. */
-    idl_member(g_n - 1)->step = decl;
-    idl_def(g_n - 1)->size = sizeof(JSIdlArgsState) + decl->state_size;
+    idl_member(idx)->step = decl;
+    idl_def(idx)->size = sizeof(JSIdlArgsState) + decl->state_size;
+    /* THE MEMBER'S STAGES, JOINED TO THIS MACHINE'S, ONTO THE DEFINITION THE DRIVER ALREADY ASSERTS ON. The
+       two lists are concatenated here — the one place a member's declaration and its definition are both in
+       hand — so no member restates the prologue and no member can index its own steps from the wrong base. */
+    DCHECK((decl->algorithm != NULL) == (decl->steps != NULL),
+           "an IDL member declared an algorithm with no steps, or steps belonging to no algorithm — a stage "
+           "the driver asserts against needs both halves, and half a declaration names a resume point nothing "
+           "can report");
+    if (decl->steps) {
+        int n = 0, k;
+        const char **all;
+        while (decl->steps[n]) n++;
+        all = malloc(sizeof(*all) * (size_t)(IDL_STEP_FIRST + n + 1));
+        CHECK(all != NULL, "idl: OOM joining a member's declared steps to the prologue's — a member whose "
+                           "stages cannot be named is a resume point nothing can check");
+        for (k = 0; k < IDL_STEP_FIRST; k++) all[k] = IDL_PROLOGUE_STEPS[k];
+        for (k = 0; k < n; k++) all[IDL_STEP_FIRST + k] = decl->steps[k];
+        all[IDL_STEP_FIRST + n] = NULL;
+        idl_member(idx)->steps = all;
+        idl_def(idx)->algorithm = decl->algorithm;
+        idl_def(idx)->steps = all;
+    }
     return id;
 }
 
@@ -1328,6 +1379,10 @@ void idl_args_free(JSContext *ctx)
             JS_FreeAtom(ctx, idl_member(i)->dict_atoms[k]);
         free(idl_member(i)->dict_atoms);
         idl_member(i)->dict_atoms = NULL;
+        /* The joined stage labels — the strings themselves are statics belonging to the member and to this
+           file; the array that names them is this pool's. */
+        free((void *)idl_member(i)->steps);
+        idl_member(i)->steps = NULL;
     }
     for (i = 0; i < g_nchunks; i++)
         free(g_chunks[i]);

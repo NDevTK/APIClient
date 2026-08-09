@@ -306,6 +306,72 @@ for (const m of src.matchAll(/step_(setprop|defidx)_run\s*\(([\s\S]{0,400}?)\)\s
   }
 }
 
+/* ---- THE STAGE DECLARATION -----------------------------------------------------------------------------
+ * A definition also declares WHICH ALGORITHM it is and which of its steps each stage rests at
+ * (JSTrampStepDef.algorithm / .steps, and IdlStepDecl's two trailing fields). That declaration is what the
+ * driver asserts against at do_step_step, and a machine that carries neither is simply not converted yet — so
+ * the COUNT of those is the conversion's work queue, and this is where it is reported. quickjs-step.h says so;
+ * until this section existed it said so about a gate that did not exist, which is a comment standing in for a
+ * mechanism.
+ *
+ * The pairing is asserted too, for the reason every other pairing in this file is: an algorithm with no steps
+ * names a resume point nothing can check, and steps belonging to no algorithm print a stage number against
+ * "(unnamed algorithm)". Both compile. The host's positional `{ body, sizeof(State), visit, release,
+ * algorithm, steps }` is read by counting its TOP-LEVEL elements, because a positional initializer cannot be
+ * asked which field is which — and its labels are string literals full of commas, so they are removed first. */
+function topLevelElements(init) {
+  const t = init.replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/\/\*[\s\S]*?\*\//g, '');
+  const out = [];
+  let depth = 0, cur = '';
+  for (let i = 1; i < t.length - 1; i++) {   // inside the outermost braces
+    const c = t[i];
+    if (c === '(' || c === '{' || c === '[') depth++;
+    else if (c === ')' || c === '}' || c === ']') depth--;
+    if (c === ',' && depth === 0) { out.push(cur.trim()); cur = ''; continue; }
+    cur += c;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+function balancedFrom(text, at) {
+  const start = text.indexOf('{', at);
+  let depth = 0, i = start;
+  for (; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}' && --depth === 0) break;
+  }
+  return text.slice(start, i + 1);
+}
+
+let declared = 0, undeclared = 0;
+const stageRow = (where, line, name, hasAlg, hasSteps) => {
+  if (hasAlg !== hasSteps) {
+    console.error(`[step-steps] ${where}:${line}: ${name} declares ` +
+                  (hasAlg ? 'an algorithm with no steps' : 'steps belonging to no algorithm') +
+                  ' — a stage the driver asserts against needs both halves');
+    bad++;
+    return;
+  }
+  if (hasAlg) declared++; else undeclared++;
+};
+for (const d of defs(src))
+  stageRow('quickjs.c', src.slice(0, d.index).split('\n').length, d.struct,
+           /\.algorithm\s*=/.test(d.body), /\.steps\s*=/.test(d.body));
+for (const f of hostSources(join(ENGINE, 'host'))) {
+  const text = readFileSync(f, 'utf8');
+  const where = relative(ENGINE, f);
+  for (const m of text.matchAll(/IdlStepDecl\s+(\w+)\s*=\s*\{/g)) {
+    const els = topLevelElements(balancedFrom(text, m.index));
+    const has = (i) => els.length > i && els[i] !== '' && els[i] !== 'NULL';
+    stageRow(where, text.slice(0, m.index).split('\n').length, m[1], has(4), has(5));
+  }
+  for (const d of defs(text))
+    stageRow(where, text.slice(0, d.index).split('\n').length, d.struct,
+             /\.algorithm\s*=/.test(d.body), /\.steps\s*=/.test(d.body));
+}
+
 if (bad) process.exit(1);
 console.log(`[step-visits] ${checked} engine + ${hostChecked} host declarations, each paired with exactly one ` +
             `state struct; ${hostChecked} host visits also checked against the struct they cast to`);
+console.log(`[step-steps] ${declared} of ${declared + undeclared} machines rest at a declared spec step; ` +
+            `${undeclared} still number their stages privately`);

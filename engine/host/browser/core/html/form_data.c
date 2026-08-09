@@ -498,7 +498,17 @@ static const IdlPairIterOps FD_PAIR_OPS = { form_data_pair_count, form_data_pair
  * file owns, so a `form` argument reaches a DFAIL naming it rather than an empty FormData that would look like
  * a form with no controls. `new FormData()` with no argument is an empty entry list and is the whole of what
  * `.formData()` and the wpt corpus construct. */
-typedef struct { uint8_t stage; } JSFormDataCtorState;
+/* WHERE THIS MACHINE RESTS. §5's constructor is ONE step — "if form is given, then ..." — and the whole of it
+   runs without touching the page's objects, so the machine has exactly one stage and never returns to it. It
+   carried a `stage` byte nothing read: a resume point that did not exist, which is the other half of the
+   defect a private counter has. It is declared instead. */
+enum { FD_CTOR_ENTRIES = IDL_STEP_FIRST };   /* XHR §5 new FormData(form, submitter) step 1 */
+static const char *const FD_CTOR_STEPS[] = {
+    "XHR §5 new FormData(form, submitter) step 1 (the entry list: constructed from form, or empty)",
+    NULL
+};
+
+typedef struct { int unused; } JSFormDataCtorState;
 
 static void js_fd_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
 static void js_fd_ctor_release(JSContext *ctx, void *st) { (void)ctx; (void)st; }
@@ -508,6 +518,7 @@ static int js_fd_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 {
     (void)st; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
+    DCHECK(hdr->stage == FD_CTOR_ENTRIES, "the FormData constructor resumed into a stage §5 does not have");
     if (JS_IsUndefined(hdr->this_val)) {
         JS_ThrowTypeError(ctx, "constructor FormData requires 'new'");
         return -1;
@@ -520,7 +531,8 @@ static int js_fd_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 }
 
 static const IdlStepDecl js_fd_ctor_decl = {
-    js_fd_ctor_step, sizeof(JSFormDataCtorState), js_fd_ctor_visit, js_fd_ctor_release
+    js_fd_ctor_step, sizeof(JSFormDataCtorState), js_fd_ctor_visit, js_fd_ctor_release,
+    "XHR §5 new FormData(form, submitter)", FD_CTOR_STEPS
 };
 
 /* ---- install --------------------------------------------------------------------------------------------- */

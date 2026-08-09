@@ -577,8 +577,22 @@ static bool node_shallow_equal(lxb_dom_node_t *a, lxb_dom_node_t *b)
    nothing else did either — it held the scheduler for as long as the page's tree was deep, inside one opcode,
    with every other flow waiting. Running no user code only means it needs no REQUEST; it still needs to yield.
    The cursors are the state, so a resume continues at the pair it stopped on and re-walks nothing. */
+/* WHERE THIS MACHINE RESTS, AS §4.4 NUMBERS IT. isEqualNode is one sentence — "return true if otherNode is
+   non-null and this equals otherNode" — over the `equals` concept, whose five conditions are what the paired
+   walk checks: conditions 1-4 at the pair it is standing on, condition 5 by advancing both cursors to the
+   child at the identical index. No page code can run anywhere inside it, so the pair is one stage and the
+   label says which conditions it covers. */
+enum {
+    NODE_EQ_NONNULL = IDL_STEP_FIRST,   /* §4.4 isEqualNode: otherNode is non-null */
+    NODE_EQ_PAIR,                       /* §4.4 equals, one (A, B) pair per step */
+};
+static const char *const NODE_EQUAL_STEPS[] = {
+    "DOM §4.4 isEqualNode (otherNode is non-null)",
+    "DOM §4.4 equals conditions 1-4 at one node pair, then condition 5's pair at the identical index",
+    NULL
+};
+
 typedef struct {
-    uint8_t stage;
     lxb_dom_node_t *a, *b, *ra, *rb;   /* the two cursors and the two roots they are bounded by */
     bool result;
 } NodeEqualState;
@@ -597,14 +611,15 @@ static int js_node_is_equal(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
-    if (s->stage == 0) {
-        s->stage = 1;
+    if (hdr->stage == NODE_EQ_NONNULL) {
+        hdr->stage = NODE_EQ_PAIR;
         s->a = node_of(hdr->this_val);
         s->b = argc > 0 ? node_of(argv[0]) : NULL;
         s->ra = s->a; s->rb = s->b;
         /* `Node? otherNode`: null is never equal. */
         if (!s->a || !s->b) { *presult = JS_FALSE; return JS_STEP_DONE; }
     }
+    DCHECK(hdr->stage == NODE_EQ_PAIR, "isEqualNode resumed into a stage §4.4 does not have");
     if (!node_shallow_equal(s->a, s->b)) { *presult = JS_FALSE; return JS_STEP_DONE; }
     /* the CHILD COUNTS must match, and comparing them here rather than at the end is what lets the two
        cursors advance in lockstep below without one running off the end of the other. */
@@ -625,7 +640,8 @@ static int js_node_is_equal(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 }
 
 static const IdlStepDecl NODE_EQUAL_STEP = {
-    js_node_is_equal, sizeof(NodeEqualState), node_equal_visit, NULL
+    js_node_is_equal, sizeof(NodeEqualState), node_equal_visit, NULL,
+    "DOM §4.4 Node.isEqualNode (over the `equals` concept)", NODE_EQUAL_STEPS
 };
 
 /* §4.4 compareDocumentPosition — the bitmask a page uses to sort nodes into document order. */
@@ -643,8 +659,7 @@ enum {
    ONE CURSOR serves all of them: each stage sets it and the next stage consumes it, so a resume comes back to
    the position the walk was at and never to the start of a stage it already finished. */
 typedef struct {
-    uint8_t stage;
-    lxb_dom_node_t *a, *b;      /* the two nodes, resolved once */
+    lxb_dom_node_t *a, *b;      /* node2 and node1: `this` and `other`, in §4.4's own names */
     lxb_dom_node_t *ra, *rb;    /* their roots, once each walk has found them */
     lxb_dom_node_t *p;          /* the cursor the running stage is advancing */
 } NodePosState;
@@ -656,8 +671,29 @@ static void node_pos_visit(JSContext *ctx, void *st, JSStepVisit *v)
     (void)ctx; (void)st; (void)v;
 }
 
+/* WHERE THIS MACHINE RESTS, AS §4.4 NUMBERS IT — and the numbering caught a real disagreement with the spec:
+   the two containment tests ran in the order "is node1 a DESCENDANT of node2" then "is node1 an ANCESTOR of
+   node2", which is step 8 before step 7. They are mutually exclusive for the nodes this engine builds, so no
+   answer changed; the ORDER of a spec's steps is the spec, and a machine whose stages run them backwards is a
+   machine whose stage numbers cannot name the step they are at. They now run 7 then 8.
+   §4.4 numbers `this` node2 and `other` node1, which is the opposite of how they read, so the state's two
+   pointers carry that mapping in their comment rather than in each reader's head. */
 enum {
-    NODEPOS_ROOT_A = 1, NODEPOS_ROOT_B, NODEPOS_ANC_AB, NODEPOS_ANC_BA, NODEPOS_ORDER,
+    NODEPOS_SAME = IDL_STEP_FIRST,  /* steps 1-3 */
+    NODEPOS_ROOT2,                  /* step 6: node2's root */
+    NODEPOS_ROOT1,                  /* step 6: node1's root, and the DISCONNECTED answer */
+    NODEPOS_ANCESTOR,               /* step 7: node1 is an ancestor of node2 */
+    NODEPOS_DESCENDANT,             /* step 8: node1 is a descendant of node2 */
+    NODEPOS_ORDER,                  /* steps 9-10: node1 is preceding node2, or it follows it */
+};
+static const char *const NODE_POS_STEPS[] = {
+    "DOM §4.4 steps 1-3 (this is other → zero; node1 is other and node2 is this)",
+    "DOM §4.4 step 6 (node2's root: one ancestor per step)",
+    "DOM §4.4 step 6 (node1's root, then the DISCONNECTED answer when the two roots differ)",
+    "DOM §4.4 step 7 (node1 is an ancestor of node2: one ancestor per step)",
+    "DOM §4.4 step 8 (node1 is a descendant of node2: one ancestor per step)",
+    "DOM §4.4 steps 9-10 (which of the two the shared root's tree order reaches first)",
+    NULL
 };
 
 static int js_node_compare_position(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -668,58 +704,58 @@ static int js_node_compare_position(JSContext *ctx, JSStepHdr *hdr, void *st, in
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
 
-    switch (s->stage) {
-    case 0:
+    switch (hdr->stage) {
+    case NODEPOS_SAME:
         s->a = node_of(hdr->this_val);
         s->b = argc > 0 ? node_of(argv[0]) : NULL;
         if (!s->a || !s->b) {
             JS_ThrowTypeError(ctx, "compareDocumentPosition requires a Node");
             return JS_STEP_ABRUPT;
         }
-        if (s->a == s->b) { *presult = JS_NewInt32(ctx, 0); return JS_STEP_DONE; }
-        s->p = s->a;
-        s->stage = NODEPOS_ROOT_A;
+        if (s->a == s->b) { *presult = JS_NewInt32(ctx, 0); return JS_STEP_DONE; }   /* step 1 */
+        s->p = s->a;                 /* step 2: node2 is `this` */
+        hdr->stage = NODEPOS_ROOT2;
         return JS_STEP_YIELD;
 
-    case NODEPOS_ROOT_A:
+    case NODEPOS_ROOT2:
         if (s->p->parent) { s->p = s->p->parent; return JS_STEP_YIELD; }
         s->ra = s->p;
         s->p = s->b;
-        s->stage = NODEPOS_ROOT_B;
+        hdr->stage = NODEPOS_ROOT1;
         return JS_STEP_YIELD;
 
-    case NODEPOS_ROOT_B:
+    case NODEPOS_ROOT1:
         if (s->p->parent) { s->p = s->p->parent; return JS_STEP_YIELD; }
         s->rb = s->p;
         if (s->ra != s->rb)
-            /* §4.4: disconnected nodes get a consistent-but-arbitrary order, and it must be CONSISTENT — the
-               same pair must answer the same way every time or a page's sort never terminates. Pointer order is
-               stable for the lifetime of the two nodes, which is what "implementation-specific" allows for. */
+            /* §4.4 step 6: disconnected nodes get a consistent-but-arbitrary order, and it must be CONSISTENT —
+               the same pair must answer the same way every time or a page's sort never terminates. Pointer
+               order is stable for the lifetime of the two nodes, which is what the spec's note allows for. */
             return *presult = JS_NewInt32(ctx, NODE_POS_DISCONNECTED | NODE_POS_IMPLEMENTATION_SPECIFIC |
                                                (s->a < s->b ? NODE_POS_FOLLOWING : NODE_POS_PRECEDING)),
                    JS_STEP_DONE;
-        s->p = s->b;                 /* walk UP from b looking for a: O(depth), not O(a's subtree) */
-        s->stage = NODEPOS_ANC_AB;
+        s->p = s->a;                 /* step 7: walk UP from node2 looking for node1 — O(depth), not O(subtree) */
+        hdr->stage = NODEPOS_ANCESTOR;
         return JS_STEP_YIELD;
 
-    case NODEPOS_ANC_AB:
-        if (s->p == s->a)
-            return *presult = JS_NewInt32(ctx, NODE_POS_CONTAINED_BY | NODE_POS_FOLLOWING), JS_STEP_DONE;
-        if (s->p) { s->p = s->p->parent; return JS_STEP_YIELD; }
-        s->p = s->a;
-        s->stage = NODEPOS_ANC_BA;
-        return JS_STEP_YIELD;
-
-    case NODEPOS_ANC_BA:
+    case NODEPOS_ANCESTOR:
         if (s->p == s->b)
             return *presult = JS_NewInt32(ctx, NODE_POS_CONTAINS | NODE_POS_PRECEDING), JS_STEP_DONE;
         if (s->p) { s->p = s->p->parent; return JS_STEP_YIELD; }
+        s->p = s->b;                 /* step 8: walk UP from node1 looking for node2 */
+        hdr->stage = NODEPOS_DESCENDANT;
+        return JS_STEP_YIELD;
+
+    case NODEPOS_DESCENDANT:
+        if (s->p == s->a)
+            return *presult = JS_NewInt32(ctx, NODE_POS_CONTAINED_BY | NODE_POS_FOLLOWING), JS_STEP_DONE;
+        if (s->p) { s->p = s->p->parent; return JS_STEP_YIELD; }
         s->p = s->ra;                /* neither contains the other: tree order decides */
-        s->stage = NODEPOS_ORDER;
+        hdr->stage = NODEPOS_ORDER;
         return JS_STEP_YIELD;
 
     case NODEPOS_ORDER:
-        /* Whichever the pre-order walk reaches first PRECEDES. */
+        /* Steps 9-10: whichever the pre-order walk reaches first PRECEDES. */
         if (s->p == s->a) return *presult = JS_NewInt32(ctx, NODE_POS_FOLLOWING), JS_STEP_DONE;
         if (s->p == s->b) return *presult = JS_NewInt32(ctx, NODE_POS_PRECEDING), JS_STEP_DONE;
         s->p = node_next_in(s->p, NULL);
@@ -727,12 +763,13 @@ static int js_node_compare_position(JSContext *ctx, JSStepHdr *hdr, void *st, in
                              "tree is not a tree");
         return JS_STEP_YIELD;
     }
-    DFAIL("compareDocumentPosition resumed into a stage it does not have");
+    DFAIL("compareDocumentPosition resumed into a stage §4.4 does not have");
     return JS_STEP_ABRUPT;
 }
 
 static const IdlStepDecl NODE_POS_STEP = {
-    js_node_compare_position, sizeof(NodePosState), node_pos_visit, NULL
+    js_node_compare_position, sizeof(NodePosState), node_pos_visit, NULL,
+    "DOM §4.4 Node.compareDocumentPosition", NODE_POS_STEPS
 };
 
 /* §4.4 getRootNode(optional GetRootNodeOptions options = {}).
@@ -760,8 +797,24 @@ static JSValue js_node_root(JSContext *ctx, JSValueConst this_val, int argc, JSV
    into one step would be a walk hiding inside a step of a walk.
    `next` is taken BEFORE the current node can be removed, and it lives in the state for the same reason the
    cursor does — the merge stage adjusts it when it absorbs the very node `next` was pointing at. */
+/* WHERE THIS MACHINE RESTS, AS §4.4 NUMBERS IT. normalize()'s steps 1-7 are stated FOR EACH descendant
+   exclusive Text node, so the iteration itself is a rest point (there is no step number for "the next node",
+   and the label says so), steps 1-2 are the empty-node case at the node the walk is standing on, and steps 3-4
+   with 7 are the absorption — one contiguous exclusive Text sibling per step, because a page that built its
+   text a chunk at a time has as many of them as it has chunks. Nothing here runs the page's code. */
+enum {
+    NODE_NORM_EACH = IDL_STEP_FIRST,  /* the iteration over this's descendant exclusive Text nodes */
+    NODE_NORM_AT,                     /* steps 1-2 at one of them */
+    NODE_NORM_ABSORB,                 /* steps 3-4 and 7, one contiguous sibling at a time */
+};
+static const char *const NODE_NORM_STEPS[] = {
+    "DOM §4.4 normalize() (the iteration: this's first descendant exclusive Text node)",
+    "DOM §4.4 normalize() steps 1-2 (length; remove the node when it is zero)",
+    "DOM §4.4 normalize() steps 3-4 and 7 (absorb one contiguous exclusive Text sibling and remove it)",
+    NULL
+};
+
 typedef struct {
-    uint8_t stage;                        /* 0 = start, 1 = at a node, 2 = absorbing a run of Text siblings */
     lxb_dom_node_t *root, *n, *next;
 } NodeNormState;
 
@@ -782,15 +835,15 @@ static int js_node_normalize(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     (void)argc; (void)argv; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
 
-    if (s->stage == 0) {
+    if (hdr->stage == NODE_NORM_EACH) {
         s->root = node_of(hdr->this_val);
         if (!s->root) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
         s->n = node_next_in(s->root, s->root);
-        s->stage = 1;
+        hdr->stage = NODE_NORM_AT;
         return JS_STEP_YIELD;
     }
 
-    if (s->stage == 1) {
+    if (hdr->stage == NODE_NORM_AT) {
         if (!s->n) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
         s->next = node_next_in(s->n, s->root);
         if (s->n->type != LXB_DOM_NODE_TYPE_TEXT) { s->n = s->next; return JS_STEP_YIELD; }
@@ -800,11 +853,11 @@ static int js_node_normalize(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
             s->n = s->next;
             return JS_STEP_YIELD;
         }
-        s->stage = 2;
+        hdr->stage = NODE_NORM_ABSORB;
         return JS_STEP_YIELD;
     }
 
-    DCHECK(s->stage == 2, "normalize resumed into a stage it does not have");
+    DCHECK(hdr->stage == NODE_NORM_ABSORB, "normalize resumed into a stage §4.4 does not have");
     /* ONE SIBLING PER STEP. Absorb it into `n`, drop it, and come back here for the next one. */
     if (s->n->next && s->n->next->type == LXB_DOM_NODE_TYPE_TEXT) {
         lxb_dom_node_t *sib = s->n->next;
@@ -826,12 +879,13 @@ static int js_node_normalize(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         return JS_STEP_YIELD;
     }
     s->n = s->next;
-    s->stage = 1;
+    hdr->stage = NODE_NORM_AT;
     return JS_STEP_YIELD;
 }
 
 static const IdlStepDecl NODE_NORM_STEP = {
-    js_node_normalize, sizeof(NodeNormState), node_norm_visit, NULL
+    js_node_normalize, sizeof(NodeNormState), node_norm_visit, NULL,
+    "DOM §4.4 Node.normalize()", NODE_NORM_STEPS
 };
 
 /* §4.4 cloneNode — A MACHINE, because a deep clone is a walk of the page's subtree and a COPY of it. Lexbor's
@@ -848,7 +902,6 @@ static const IdlStepDecl NODE_NORM_STEP = {
 typedef struct { lxb_dom_node_t *src, *dst, *root, *croot, *cnode; } CloneFrame;
 
 typedef struct {
-    uint8_t stage;
     lxb_dom_node_t *src;     /* the cursor in the original */
     lxb_dom_node_t *root;    /* what bounds the CURRENT level of the walk */
     lxb_dom_node_t *dst;     /* the copy the next child is inserted into */
@@ -918,7 +971,25 @@ static lxb_dom_node_t *clone_template_content(lxb_dom_node_t *n)
    the template descends into its own content again and the walk never ends.
    The invariant every stage keeps: `src` is the original being handled, `cnode` is its copy, and `dst` is the
    copy of the node the NEXT child goes under. */
-enum { CLONE_COPY = 1, CLONE_TEMPLATE, CLONE_CHILDREN };
+/* WHERE THIS MACHINE RESTS, AS THE STANDARDS NUMBER IT. cloneNode is two steps over `clone a node`, whose
+   own steps 2, 3 and 5 are exactly the three the walk cycles through per node: clone a single node and append
+   it (2 and 4), run the cloning steps other specifications define — which for a template element is HTML
+   §4.12.3's, the reason this level exists at all — and then recurse over the children (5). Each is its own
+   stage because each is per node and the walk is the page's subtree; none of them can reach the page's code,
+   which is why the entry stage may name cloneNode's steps 1-2 together with `clone a node`'s 1-2. */
+enum {
+    CLONE_ROOT = IDL_STEP_FIRST,   /* cloneNode steps 1-2 → clone a node steps 1-2 for the root */
+    CLONE_COPY,                    /* clone a node steps 2 and 4 for one descendant */
+    CLONE_TEMPLATE,                /* clone a node step 3: HTML §4.12.3's template cloning steps */
+    CLONE_CHILDREN,                /* clone a node step 5: each child, in tree order */
+};
+static const char *const NODE_CLONE_STEPS[] = {
+    "DOM §4.4 cloneNode steps 1-2 → clone a node steps 1-2 (clone a single node: the root of the copy)",
+    "DOM §4.4 clone a node steps 2 and 4 (clone a single node; append copy to parent), one descendant per step",
+    "DOM §4.4 clone a node step 3 (HTML §4.12.3 the template element's cloning steps)",
+    "DOM §4.4 clone a node step 5 (for each child of node's children, in tree order)",
+    NULL
+};
 
 static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                          JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
@@ -928,7 +999,7 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
 
-    if (s->stage == 0) {
+    if (hdr->stage == CLONE_ROOT) {
         lxb_dom_node_t *n = node_of(hdr->this_val);
         /* `optional boolean subtree = false` — the declaration converted it, so this is a real boolean. */
         bool deep = argc > 0 && JS_ToBool(ctx, argv[0]);
@@ -945,23 +1016,23 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
         if (!deep) { *presult = node_wrap(ctx, s->copy); return JS_STEP_DONE; }
         s->root = s->src = n;
         s->cnode = s->dst = s->croot = s->copy;   /* the root is already copied; the walk starts at its children */
-        s->stage = CLONE_TEMPLATE;
+        hdr->stage = CLONE_TEMPLATE;
         return JS_STEP_YIELD;
     }
 
-    if (s->stage == CLONE_COPY) {
+    if (hdr->stage == CLONE_COPY) {
         /* ONE NODE PER STEP: copy it and hang it under the copy of its parent. */
         s->cnode = lxb_dom_node_clone(s->src, false);
         CHECK(s->cnode != NULL, "cloneNode: a descendant's Lexbor copy failed — the page would get a subtree "
                                 "with a hole in it and no way to tell");
         dom_cow_insert_private(s->croot, s->dst, s->cnode);
-        s->stage = CLONE_TEMPLATE;
+        hdr->stage = CLONE_TEMPLATE;
         return JS_STEP_YIELD;
     }
 
-    if (s->stage == CLONE_TEMPLATE) {
+    if (hdr->stage == CLONE_TEMPLATE) {
         lxb_dom_node_t *content = clone_template_content(s->src);
-        s->stage = CLONE_CHILDREN;
+        hdr->stage = CLONE_CHILDREN;
         if (content && content->first_child) {
             /* Leave this tree for the template's, on both sides at once. The frame is everything to come back
                to; the copy's fragment is its own private tree, made by clone_interface a moment ago. */
@@ -971,16 +1042,16 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
             s->dst = s->croot = clone_template_content(s->cnode);
             DCHECK(s->dst != NULL, "a cloned <template> has no content fragment to copy into — lexbor's "
                                    "clone_interface built something other than a template interface");
-            s->stage = CLONE_COPY;
+            hdr->stage = CLONE_COPY;
         }
         return JS_STEP_YIELD;
     }
 
-    DCHECK(s->stage == CLONE_CHILDREN, "cloneNode resumed into a stage it does not have");
+    DCHECK(hdr->stage == CLONE_CHILDREN, "cloneNode resumed into a stage §4.4 does not have");
     if (s->src->first_child) {
         s->src = s->src->first_child;
         s->dst = s->cnode;
-        s->stage = CLONE_COPY;
+        hdr->stage = CLONE_COPY;
         return JS_STEP_YIELD;
     }
     for (;;) {
@@ -990,7 +1061,7 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
             s->src = s->src->parent;
             s->dst = s->dst->parent;
         }
-        if (s->src != s->root) { s->src = s->src->next; s->stage = CLONE_COPY; return JS_STEP_YIELD; }
+        if (s->src != s->root) { s->src = s->src->next; hdr->stage = CLONE_COPY; return JS_STEP_YIELD; }
         if (s->sp == 0) { *presult = node_wrap(ctx, s->copy); return JS_STEP_DONE; }
         s->sp--;                        /* back to the template that owns this level, PAST its content check */
         s->src = s->stack[s->sp].src;
@@ -1003,7 +1074,8 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
 }
 
 static const IdlStepDecl NODE_CLONE_STEP = {
-    js_node_clone, sizeof(NodeCloneState), node_clone_visit, node_clone_release
+    js_node_clone, sizeof(NodeCloneState), node_clone_visit, node_clone_release,
+    "DOM §4.4 Node.cloneNode (over the `clone a node` concept)", NODE_CLONE_STEPS
 };
 
 /* §4.2.3 insertBefore / replaceChild — the two remaining mutating tree operations, through the same per-flow
@@ -1175,8 +1247,20 @@ static const JSCFunctionListEntry js_parent_node_reads[] = {
    EVERY match into a collection and then takes the first, so it walked the whole document after already having
    the answer — for a member whose entire definition is "the FIRST element in tree order".
    A MACHINE, because that walk is the document's size. One node per step, and the first match ends it. */
+/* WHERE THIS MACHINE RESTS. §4.2.4 states the member as one sentence — "the first element, in tree order,
+   within this's descendants, whose ID is elementId" — so the two stages are its two halves: fixing what is
+   being searched for, and the walk that answers it, which rests once per node. */
+enum {
+    BYID_START = IDL_STEP_FIRST,   /* §4.2.4: the id to search for, and this's descendants */
+    BYID_WALK,                     /* §4.2.4: the first element in tree order whose ID is elementId */
+};
+static const char *const NODE_BYID_STEPS[] = {
+    "DOM §4.2.4 getElementById (the id to search for; this's descendants, in tree order)",
+    "DOM §4.2.4 getElementById (the first element whose ID is elementId), one node per step",
+    NULL
+};
+
 typedef struct {
-    uint8_t stage;
     lxb_dom_node_t *root, *cursor;
     char   *id;
     size_t  idlen;
@@ -1208,7 +1292,7 @@ static int js_node_get_element_by_id(JSContext *ctx, JSStepHdr *hdr, void *st, i
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
 
-    if (s->stage == 0) {
+    if (hdr->stage == BYID_START) {
         lxb_dom_node_t *self = node_of(hdr->this_val);
         const char *id;
 
@@ -1223,10 +1307,11 @@ static int js_node_get_element_by_id(JSContext *ctx, JSStepHdr *hdr, void *st, i
         JS_FreeCString(ctx, id);
         s->root = self;
         s->cursor = self->first_child;
-        s->stage = 1;
+        hdr->stage = BYID_WALK;
         return JS_STEP_YIELD;
     }
 
+    DCHECK(hdr->stage == BYID_WALK, "getElementById resumed into a stage §4.2.4 does not have");
     n = s->cursor;
     if (!n) { *presult = JS_NULL; return JS_STEP_DONE; }
     if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
@@ -1243,7 +1328,8 @@ static int js_node_get_element_by_id(JSContext *ctx, JSStepHdr *hdr, void *st, i
 }
 
 static const IdlStepDecl NODE_BYID_STEP = {
-    js_node_get_element_by_id, sizeof(NodeByIdState), node_byid_visit, node_byid_release
+    js_node_get_element_by_id, sizeof(NodeByIdState), node_byid_visit, node_byid_release,
+    "DOM §4.2.4 NonElementParentNode.getElementById", NODE_BYID_STEPS
 };
 
 /* §4.2.4, installed on the interfaces whose IDL INCLUDES it: Document and DocumentFragment. Not Element —
@@ -1434,8 +1520,21 @@ static bool node_has_children_as_text(const lxb_dom_node_t *n)
    document's memory. One pass into a growing buffer is what a resumable walk needs anyway, and it is strictly
    less work; what it has to reproduce exactly is WHICH nodes count, which is Text nodes and nothing else, over
    child links — so a `<template>`'s content is not part of its element's text. */
+/* WHERE THIS MACHINE RESTS. §4.4's textContent getter is `get text content`, which SWITCHES on the interface
+   `this` implements — every arm but one is O(1) and answered in the first stage — and the Element and
+   DocumentFragment arm is `descendant text content`, a concatenation over every Text descendant in tree order.
+   That concatenation is the page's subtree, so it is its own stage and rests once per node. */
+enum {
+    NODE_TEXT_SWITCH = IDL_STEP_FIRST,   /* §4.4 get text content: switch on the interface */
+    NODE_TEXT_DESCENDANTS,               /* §4.4 descendant text content, one node per step */
+};
+static const char *const NODE_TEXT_STEPS[] = {
+    "DOM §4.4 get text content (switch on the interface this implements)",
+    "DOM §4.4 descendant text content (concatenate each Text descendant's data, in tree order), one node per step",
+    NULL
+};
+
 typedef struct {
-    uint8_t stage;
     lxb_dom_node_t *root, *cursor;
     char   *out;
     size_t  out_len, out_cap;
@@ -1481,7 +1580,7 @@ static int js_node_get_text_content(JSContext *ctx, JSStepHdr *hdr, void *st, in
     (void)argc; (void)argv; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
 
-    if (s->stage == 0) {
+    if (hdr->stage == NODE_TEXT_SWITCH) {
         n = node_of(hdr->this_val);
         *presult = JS_NULL;
         if (!n) return JS_STEP_DONE;
@@ -1503,10 +1602,11 @@ static int js_node_get_text_content(JSContext *ctx, JSStepHdr *hdr, void *st, in
         }
         s->root = n;
         s->cursor = node_next_in(n, n);
-        s->stage = 1;
+        hdr->stage = NODE_TEXT_DESCENDANTS;
         return JS_STEP_YIELD;
     }
 
+    DCHECK(hdr->stage == NODE_TEXT_DESCENDANTS, "textContent resumed into a stage §4.4 does not have");
     if (!s->cursor) {
         *presult = JS_NewStringLen(ctx, s->out ? s->out : "", s->out_len);
         return JS_STEP_DONE;
@@ -1520,7 +1620,8 @@ static int js_node_get_text_content(JSContext *ctx, JSStepHdr *hdr, void *st, in
 }
 
 static const IdlStepDecl NODE_TEXT_STEP = {
-    js_node_get_text_content, sizeof(NodeTextState), node_text_visit, node_text_release
+    js_node_get_text_content, sizeof(NodeTextState), node_text_visit, node_text_release,
+    "DOM §4.4 Node.textContent getter (over `get text content`)", NODE_TEXT_STEPS
 };
 
 static JSValue js_node_set_text_content(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)

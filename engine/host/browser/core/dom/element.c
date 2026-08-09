@@ -164,13 +164,28 @@ static JSValue js_el_get_tag(JSContext *ctx, JSValueConst this_val)
    pushes, because a machine's C stack is gone at every suspension. */
 typedef struct { lxb_dom_node_t *node; lxb_dom_node_t *limit; } SerFrame;
 
+/* WHERE THIS MACHINE RESTS, AS THE STANDARD NUMBERS IT. Both getters are one sentence over the fragment
+   serializing algorithm, which for an HTML document is §13.3's HTML fragment serialization algorithm; §13.3's
+   step 4 walks the children in tree order and its step 4.2 appends each one's string. The walk RESTS twice per
+   node — once having emitted it and once having advanced past it — and those were one stage and a private
+   `phase` byte beside it, which is two suspension points wearing one number. They are two stages now. Nothing
+   here can reach the page's code, so no stage has to split further. */
+enum {
+    ELHTML_SETUP = IDL_STEP_FIRST,   /* §8.5.4 / §8.5.5's getter step: the node whose serialization this is */
+    ELHTML_EMIT,                     /* §13.3 step 4.2 */
+    ELHTML_ADVANCE,                  /* §13.3 step 4's iteration, and the end tag */
+};
+static const char *const EL_GET_HTML_STEPS[] = {
+    "HTML §8.5.4 innerHTML getter / §8.5.5 outerHTML getter steps 1-2 (the node to serialize)",
+    "HTML §13.3 step 4.2 (append the current node's start tag or its character data; a template's contents "
+    "are the node instead, per step 3)",
+    "HTML §13.3 step 4 (descend to the node's children, or append its end tag and advance in tree order)",
+    NULL
+};
+
 typedef struct {
     lxb_dom_node_t *node;    /* the cursor; NULL once the walk is finished */
     lxb_dom_node_t *limit;   /* the ascent stops HERE and does not close it — it is not part of the output */
-    /* THIS MACHINE'S OWN CURSOR. `hdr->stage` belongs to the argument machine that hosts this body and is
-       already 1 by the time the body is first entered, so a body reading it never runs its own start. */
-    uint8_t         stage;   /* 0 = the walk has not been set up */
-    uint8_t         phase;   /* 0 = emit `node`, 1 = advance from it */
     SerFrame       *stack;   /* the template levels above this one */
     int             sp, scap;
     char           *out;     /* the accumulator: malloc'd, because a fork gives each arm its own */
@@ -231,7 +246,7 @@ static int js_el_get_html_step(JSContext *ctx, JSStepHdr *hdr, void *st, int arg
 
     (void)argc; (void)argv; (void)cb_result; (void)out_cb; (void)out_argc;
 
-    if (s->stage == 0) {
+    if (hdr->stage == ELHTML_SETUP) {
         el = elem_of(hdr->this_val);
         if (!el) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
         n = lxb_dom_interface_node(el);
@@ -243,13 +258,12 @@ static int js_el_get_html_step(JSContext *ctx, JSStepHdr *hdr, void *st, int arg
         int inner = idl_step_magic(hdr) == 0;
         s->limit = inner ? n : n->parent;
         s->node  = inner ? n->first_child : n;
-        s->phase = 0;
-        s->stage = 1;
+        hdr->stage = ELHTML_EMIT;
     }
 
     if (!s->node) goto finished;
 
-    if (s->phase == 0) {
+    if (hdr->stage == ELHTML_EMIT) {
         lxb_status_t status = lxb_html_serialize_cb(s->node, el_ser_append, s);
         DCHECK(status == LXB_STATUS_OK, "lexbor refused to serialise a node kind this tree contains");
         (void)status;
@@ -264,19 +278,20 @@ static int js_el_get_html_step(JSContext *ctx, JSStepHdr *hdr, void *st, int arg
                 return JS_STEP_YIELD;
             }
         }
-        s->phase = 1;
+        hdr->stage = ELHTML_ADVANCE;
         return JS_STEP_YIELD;
     }
 
     /* ADVANCE. A void element has no children to descend into even when the tree gave it some. */
+    DCHECK(hdr->stage == ELHTML_ADVANCE, "the fragment serialiser resumed into a stage §13.3 does not have");
     if (!lxb_html_node_is_void(s->node) && s->node->first_child) {
         s->node = s->node->first_child;
-        s->phase = 0;
+        hdr->stage = ELHTML_EMIT;
         return JS_STEP_YIELD;
     }
     for (;;) {
         el_ser_close(s, s->node);
-        if (s->node->next) { s->node = s->node->next; s->phase = 0; return JS_STEP_YIELD; }
+        if (s->node->next) { s->node = s->node->next; hdr->stage = ELHTML_EMIT; return JS_STEP_YIELD; }
         s->node = s->node->parent;
         if (s->node == s->limit) {
             if (s->sp == 0) break;                       /* the walk itself is over */
@@ -314,7 +329,9 @@ static void js_el_get_html_release(JSContext *ctx, void *st)
 }
 
 static const IdlStepDecl EL_GET_HTML_STEP = {
-    js_el_get_html_step, sizeof(ElHtmlState), js_el_get_html_visit, js_el_get_html_release
+    js_el_get_html_step, sizeof(ElHtmlState), js_el_get_html_visit, js_el_get_html_release,
+    "HTML §8.5.4/§8.5.5 innerHTML/outerHTML getter (over §13.3's HTML fragment serialization)",
+    EL_GET_HTML_STEPS
 };
 
 /* §13.4 THE FRAGMENT PARSE, as ONE operation, because there are four members that do it and they differ only
@@ -351,10 +368,25 @@ enum { PLACE_CHILDREN = 0, PLACE_BEFORE, PLACE_AFTER, PLACE_FIRST_CHILD, PLACE_R
  * IT STILL RUNS NO PAGE CODE. That is what keeps a suspended parse safe to leave lying around: the tree builder
  * cannot reach a script (element_prepare_script QUEUES one), so nothing can observe a half-built fragment, and
  * nothing can fork this flow while the machine is on its chain. */
-enum { FRAG_CLEAR = 1, FRAG_FEED, FRAG_PLACE, FRAG_DONE };
+/* WHERE THIS MACHINE RESTS. The three members that parse markup are the same shape — a few leading steps of
+   their own, then "let fragment be the result of invoking the fragment parsing algorithm steps", then a
+   placement — so the stages after the entry belong to those two operations and each member's declaration names
+   them in ITS OWN numbering. The clear is LAST in the enum on purpose: only the innerHTML setter replaces its
+   target's children, so insertAdjacentHTML simply does not declare that stage, and the driver's check is what
+   says so if the shared machine ever reaches it from there.
+   THE ORDER IS THE SPEC'S, and it was not: the children were removed BEFORE the parse, which is step 5 running
+   before step 4. Nothing observed the difference — the tree builder reads the context element's name, not its
+   children, and no page code runs inside either — but a stage cannot name a step it runs out of order, and
+   that is exactly what naming them exposed. The parse now completes first and the replacement follows it. */
+enum {
+    FRAG_START = IDL_STEP_FIRST,   /* the member's own leading steps */
+    FRAG_FEED,                     /* the fragment parsing algorithm, one byte per step */
+    FRAG_PLACE,                    /* one parsed node into the tree per step */
+    FRAG_DONE,                     /* the fragment is placed */
+    FRAG_CLEAR,                    /* innerHTML= only: replace all, one existing child per step */
+};
 
 typedef struct {
-    uint8_t stage;
     uint8_t where;
     uint8_t clear_first;          /* innerHTML= empties the element before parsing, one child per step */
     lxb_html_parser_t *parser;    /* THIS parse's own — see above */
@@ -393,6 +425,12 @@ static void frag_begin(JSContext *ctx, FragState *s, lxb_dom_element_t *context,
                        int where, const char *html, bool clear_first)
 {
     (void)ctx;
+    /* The clear is `replace all within TARGET`, and the target is the anchor — which for a <template> is its
+       content fragment rather than the element. Only the children-replacing member asks for it, which is what
+       lets the placement's reference child be computed before the clear rather than after it. */
+    DCHECK(!clear_first || where == PLACE_CHILDREN,
+           "a fragment parse asked to replace its target's children at a position that is not PLACE_CHILDREN — "
+           "the placement's reference child is fixed before the clear, which only holds for an append");
     s->context = context;
     s->anchor = anchor;
     s->where = (uint8_t)where;
@@ -402,19 +440,25 @@ static void frag_begin(JSContext *ctx, FragState *s, lxb_dom_element_t *context,
     CHECK(s->html != NULL, "the fragment parse could not copy its markup");
     memcpy(s->html, html, s->len + 1);
     s->off = 0;
-    s->node = clear_first ? lxb_dom_interface_node(context)->first_child : NULL;
-    s->stage = clear_first ? FRAG_CLEAR : FRAG_FEED;
+    s->node = NULL;
 }
 
 /* ONE STEP of the parse-and-place. Returns JS_STEP_YIELD while there is more, or 0 when the fragment is in the
    tree. Every caller is a member body that returns whatever this returns. */
-static int frag_step(JSContext *ctx, FragState *s)
+static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
 {
-    switch (s->stage) {
+    switch (hdr->stage) {
     case FRAG_CLEAR: {
-        /* §4.9 innerHTML= REPLACES the children, and a page's existing subtree is as big as the page. */
+        /* `Replace all with fragment within target` REMOVES the target's children first, and a page's existing
+           subtree is as big as the page. The parse is already finished by the time this runs, which is the
+           order the setter states. */
         lxb_dom_node_t *next;
-        if (!s->node) { s->stage = FRAG_FEED; return JS_STEP_YIELD; }
+        if (!s->node) {
+            if (!s->frag) { hdr->stage = FRAG_DONE; return 0; }
+            s->node = s->frag->first_child;
+            hdr->stage = FRAG_PLACE;
+            return JS_STEP_YIELD;
+        }
         next = s->node->next;
         dom_cow_remove_child(s->node);
         s->node = next;
@@ -439,13 +483,19 @@ static int frag_step(JSContext *ctx, FragState *s)
         s->frag = lxb_html_parse_fragment_chunk_end(s->parser);
         lxb_html_parser_destroy(s->parser);
         s->parser = NULL;
-        if (!s->frag) { s->stage = FRAG_DONE; return 0; }
-        /* The reference child is fixed BEFORE anything moves: inserting changes `anchor->next`. */
+        /* The reference child is fixed BEFORE anything moves: inserting changes `anchor->next`. The clear that
+           may follow cannot move it either — it only ever empties an append target, which frag_begin asserts. */
         s->ref = (s->where == PLACE_AFTER) ? s->anchor->next
                : (s->where == PLACE_FIRST_CHILD) ? s->anchor->first_child
                : s->anchor;
+        if (s->clear_first) {
+            s->node = s->anchor->first_child;
+            hdr->stage = FRAG_CLEAR;
+            return JS_STEP_YIELD;
+        }
+        if (!s->frag) { hdr->stage = FRAG_DONE; return 0; }
         s->node = s->frag->first_child;
-        s->stage = FRAG_PLACE;
+        hdr->stage = FRAG_PLACE;
         return JS_STEP_YIELD;
 
     case FRAG_PLACE: {
@@ -455,7 +505,7 @@ static int frag_step(JSContext *ctx, FragState *s)
         if (!node) {
             dom_cow_destroy_private(s->frag, /*with_children*/ false);
             if (s->where == PLACE_REPLACE) dom_cow_remove_child(s->anchor);
-            s->stage = FRAG_DONE;
+            hdr->stage = FRAG_DONE;
             return 0;
         }
         next = node->next;
@@ -476,7 +526,7 @@ static int frag_step(JSContext *ctx, FragState *s)
         return JS_STEP_YIELD;
     }
     default:
-        DCHECK(s->stage == FRAG_DONE, "the fragment machine resumed into a stage it does not have");
+        DCHECK(hdr->stage == FRAG_DONE, "the fragment machine resumed into a stage it does not have");
         return 0;
     }
 }
@@ -499,7 +549,7 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     JS_FreeValue(ctx, cb_result);
     *presult = JS_UNDEFINED;
 
-    if (s->stage == 0) {
+    if (hdr->stage == FRAG_START) {
         lxb_dom_element_t *el = elem_of(hdr->this_val);
         JSValueConst val = argc > 0 ? argv[0] : JS_UNDEFINED;
         lxb_dom_node_t *n;
@@ -522,18 +572,44 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
                                  "drive-to-completion the flow machinery exists to avoid");
         html = JS_ToCString(ctx, val);
         if (!html) return JS_STEP_ABRUPT;
-        if (magic == 0)
-            frag_begin(ctx, s, el, n, PLACE_CHILDREN, html, /*clear_first*/ true);
-        else
-            /* §4.9: the fragment is parsed in the PARENT's context, because that is where it will live. */
+        if (magic == 0) {
+            /* §8.5.4 step 3: a <template>'s children are NOT what innerHTML= replaces — its TEMPLATE CONTENTS
+               are, which is a separate tree reached through the element. The parse context stays the element,
+               because the tree builder's "in template" insertion mode is what decides whether a <tr> survives;
+               only the target of the replacement moves. Without this a page that filled a template this way
+               got an element with children nothing renders and a `content` fragment that stayed empty. */
+            lxb_dom_node_t *target = n;
+            if (lxb_html_tree_node_is(n, LXB_TAG_TEMPLATE)) {
+                lxb_html_template_element_t *t = lxb_html_interface_template(n);
+                DCHECK(t->content != NULL, "a <template> element in the tree has no content fragment — lexbor's "
+                                           "template interface is what owns it, and §4.12.3 gives every "
+                                           "template one");
+                target = &t->content->node;
+            }
+            frag_begin(ctx, s, el, target, PLACE_CHILDREN, html, /*clear_first*/ true);
+        } else {
+            /* §8.5.5 step 6: the fragment is parsed in the PARENT's context, because that is where it lives. */
             frag_begin(ctx, s, lxb_dom_interface_element(n->parent), n, PLACE_REPLACE, html, false);
+        }
         JS_FreeCString(ctx, html);
+        hdr->stage = FRAG_FEED;
         return JS_STEP_YIELD;
     }
-    return frag_step(ctx, s);
+    return frag_step(ctx, hdr, s);
 }
 
-static const IdlStepDecl EL_SET_HTML_STEP = { js_el_set_html, sizeof(FragState), frag_visit, frag_release };
+static const char *const EL_SET_HTML_STEPS[] = {
+    "HTML §8.5.4 innerHTML setter steps 1-3 / §8.5.5 outerHTML setter steps 1-5 (the string, and the target "
+    "the fragment is parsed against)",
+    "HTML §8.5.4 step 4 / §8.5.5 step 6 (the fragment parsing algorithm), one byte per step",
+    "HTML §8.5.4 step 5 / §8.5.5 step 7 (insert one node of the fragment into the target)",
+    "HTML §8.5.4 step 5 / §8.5.5 step 7 (the fragment is placed)",
+    "HTML §8.5.4 step 5 (replace all within target: remove one existing child per step)",
+    NULL
+};
+
+static const IdlStepDecl EL_SET_HTML_STEP = { js_el_set_html, sizeof(FragState), frag_visit, frag_release,
+                                              "HTML §8.5.4/§8.5.5 innerHTML/outerHTML setter", EL_SET_HTML_STEPS };
 
 /* §4.9 insertAdjacentHTML / insertAdjacentElement / insertAdjacentText — the SAME four positions, which is why
    one body reads the position and three members differ only in what they place. insertAdjacentHTML is an
@@ -577,7 +653,7 @@ static int js_el_insert_adjacent_html(JSContext *ctx, JSStepHdr *hdr, void *st, 
     JS_FreeValue(ctx, cb_result);
     *presult = JS_UNDEFINED;
 
-    if (s->stage == 0) {
+    if (hdr->stage == FRAG_START) {
         lxb_dom_element_t *el = elem_of(hdr->this_val);
         lxb_dom_node_t *n;
         const char *html;
@@ -597,13 +673,25 @@ static int js_el_insert_adjacent_html(JSContext *ctx, JSStepHdr *hdr, void *st, 
            would be dropped by the tree builder and the page would find nothing it inserted. */
         frag_begin(ctx, s, outside ? lxb_dom_interface_element(n->parent) : el, n, where, html, false);
         JS_FreeCString(ctx, html);
+        hdr->stage = FRAG_FEED;
         return JS_STEP_YIELD;
     }
-    return frag_step(ctx, s);
+    return frag_step(ctx, hdr, s);
 }
 
+/* FOUR STAGES, NOT FIVE: insertAdjacentHTML never replaces its target's children, so FRAG_CLEAR is past the end
+   of what it declares and the driver says so if the shared machine ever reaches it from here. */
+static const char *const EL_ADJACENT_HTML_STEPS[] = {
+    "HTML §8.5.6 insertAdjacentHTML steps 1-4 (the string; the context the position names)",
+    "HTML §8.5.6 step 5 (the fragment parsing algorithm), one byte per step",
+    "HTML §8.5.6 step 6 (insert one node of the fragment at the position)",
+    "HTML §8.5.6 step 6 (the fragment is placed)",
+    NULL
+};
+
 static const IdlStepDecl EL_ADJACENT_HTML_STEP = {
-    js_el_insert_adjacent_html, sizeof(FragState), frag_visit, frag_release
+    js_el_insert_adjacent_html, sizeof(FragState), frag_visit, frag_release,
+    "HTML §8.5.6 Element.insertAdjacentHTML", EL_ADJACENT_HTML_STEPS
 };
 
 /* §4.9 insertAdjacentElement / insertAdjacentText — the two that take a node the caller already has, or a
