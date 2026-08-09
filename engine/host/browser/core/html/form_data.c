@@ -24,6 +24,7 @@
 #include "core/file/blob.h"
 #include "core/html/form_data.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/idl_iter.h"
 
 /* §5's ENTRY: a name, and a value that is EITHER a USVString OR a File. It was the URL Standard's urlencoded
@@ -83,7 +84,6 @@ static const char *fd_entry_bytes(JSContext *ctx, const FdEntry *e, size_t *plen
 }
 
 static JSClassID g_fd_class;
-static JSValue   g_fd_proto = JS_UNDEFINED;
 static JSRuntime *g_fd_rt;
 static int       g_fd_ctor_stepid = -1;
 static int       g_fd_pair_handle = -1;
@@ -119,7 +119,12 @@ JSValue form_data_new(JSContext *ctx, const UrlEncodedList *entries)
     int i;
 
     DCHECK(g_fd_class != 0, "a FormData was built before the class existed — form_data_init runs at install");
-    obj = JS_NewObjectProtoClass(ctx, g_fd_proto, g_fd_class);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_fd_class);
+        DCHECK(!JS_IsNull(proto), "a FormData was minted in a realm that never ran its install");
+        obj = JS_NewObjectProtoClass(ctx, proto, g_fd_class);
+        JS_FreeValue(ctx, proto);
+    }
     if (JS_IsException(obj))
         return obj;
     d = calloc(1, sizeof *d);
@@ -346,7 +351,9 @@ char *form_data_serialize_multipart(JSContext *ctx, JSValueConst fd, char *bound
 
 /* ---- §5's members ---------------------------------------------------------------------------------------- */
 
-enum { FD_APPEND = 0, FD_DELETE, FD_GET, FD_GETALL, FD_HAS, FD_SET };
+enum { FD_APPEND = 0, FD_DELETE, FD_GET, FD_GETALL, FD_HAS, FD_SET, FD_MEMBER_N };
+/* THE AGENT'S POOL ENTRIES — the OBJECTS they are installed as are each realm's. */
+static int g_fd_id[FD_MEMBER_N];
 
 /* §5's `append` and `set` are OVERLOADED on their second argument: `(USVString value)` and
  * `(Blob blobValue, optional USVString filename)`. Web IDL resolves the overload by asking whether the
@@ -533,33 +540,46 @@ void form_data_init(JSContext *ctx)
     g_fd_rt = rt;
     JS_NewClassID(rt, &g_fd_class);
     JS_NewClass(rt, g_fd_class, &def);
-    g_fd_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_fd_proto), "FormData.prototype could not be allocated");
-    idl_interface_tag(ctx, g_fd_proto, "FormData");
-
     /* The value argument is IDL_ANY because §5's overload picks its type: a Blob crosses as itself and
        everything else is a USVString. With no Blob interface nothing is one, and the member's own
        JS_ToCStringLen is that arm — declaring it USVString here would convert a Blob too, once there is one. */
-    idl_install_method(ctx, g_fd_proto, "append", 2,
-                       idl_method_id(ctx, TWO_STR, 3, js_form_data_member, FD_APPEND));
+    g_fd_id[FD_APPEND] = idl_method_id(ctx, TWO_STR, 3, js_form_data_member, FD_APPEND);
     idl_optional_from(2);   /* §5: `append(name, blobValue, optional filename)` — two are required */
-    idl_install_method(ctx, g_fd_proto, "delete", 1,
-                       idl_method_id(ctx, TWO_STR, 1, js_form_data_member, FD_DELETE));
-    idl_install_method(ctx, g_fd_proto, "get", 1,
-                       idl_method_id(ctx, TWO_STR, 1, js_form_data_member, FD_GET));
-    idl_install_method(ctx, g_fd_proto, "getAll", 1,
-                       idl_method_id(ctx, TWO_STR, 1, js_form_data_member, FD_GETALL));
-    idl_install_method(ctx, g_fd_proto, "has", 1,
-                       idl_method_id(ctx, TWO_STR, 1, js_form_data_member, FD_HAS));
-    idl_install_method(ctx, g_fd_proto, "set", 2,
-                       idl_method_id(ctx, TWO_STR, 3, js_form_data_member, FD_SET));
+    g_fd_id[FD_DELETE] = idl_method_id(ctx, TWO_STR, 1, js_form_data_member, FD_DELETE);
+    g_fd_id[FD_GET]    = idl_method_id(ctx, TWO_STR, 1, js_form_data_member, FD_GET);
+    g_fd_id[FD_GETALL] = idl_method_id(ctx, TWO_STR, 1, js_form_data_member, FD_GETALL);
+    g_fd_id[FD_HAS]    = idl_method_id(ctx, TWO_STR, 1, js_form_data_member, FD_HAS);
+    g_fd_id[FD_SET]    = idl_method_id(ctx, TWO_STR, 3, js_form_data_member, FD_SET);
     idl_optional_from(2);   /* §5: `set(name, blobValue, optional filename)` — two are required */
 
     g_fd_pair_handle = idl_pair_iter_declare(ctx, &FD_PAIR_OPS);
-    idl_pair_iter_install(ctx, g_fd_proto, g_fd_pair_handle);
 
     g_fd_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, NULL, 0, &js_fd_ctor_decl, 0);
     idl_optional_from(0);   /* §5: both constructor arguments are optional */
+    realm_declare_intrinsic(form_data_install_proto);
+}
+
+/* §5's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. */
+void form_data_install_proto(JSContext *ctx)
+{
+    JSValue proto, prev;
+
+    DCHECK(g_fd_class != 0, "a realm asked for FormData.prototype before the class was declared");
+    prev = JS_GetClassProto(ctx, g_fd_class);
+    DCHECK(JS_IsNull(prev), "form_data_install_proto ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+
+    proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(proto), "FormData.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "FormData");
+    idl_install_method(ctx, proto, "append", 2, g_fd_id[FD_APPEND]);
+    idl_install_method(ctx, proto, "delete", 1, g_fd_id[FD_DELETE]);
+    idl_install_method(ctx, proto, "get", 1, g_fd_id[FD_GET]);
+    idl_install_method(ctx, proto, "getAll", 1, g_fd_id[FD_GETALL]);
+    idl_install_method(ctx, proto, "has", 1, g_fd_id[FD_HAS]);
+    idl_install_method(ctx, proto, "set", 2, g_fd_id[FD_SET]);
+    idl_pair_iter_install(ctx, proto, g_fd_pair_handle);
+    JS_SetClassProto(ctx, g_fd_class, proto);
 }
 
 void form_data_install(JSContext *ctx, JSValueConst global)
@@ -568,7 +588,12 @@ void form_data_install(JSContext *ctx, JSValueConst global)
     DCHECK(g_fd_ctor_stepid >= 0, "FormData was installed before form_data_init declared its constructor");
     ctor = idl_step_constructor(ctx, "FormData", 0, g_fd_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the FormData interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_fd_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_fd_class);
+        DCHECK(!JS_IsNull(proto), "FormData was installed into a realm that never ran its proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "FormData", ctor);
 }
 
@@ -576,8 +601,7 @@ void form_data_free(JSContext *ctx)
 {
     if (!g_fd_rt)
         return;
-    JS_FreeValue(ctx, g_fd_proto);
-    g_fd_proto = JS_UNDEFINED;
+    /* the prototypes are the REALMS' — released with their contexts */
     g_fd_rt = NULL;
     g_fd_ctor_stepid = -1;
 }

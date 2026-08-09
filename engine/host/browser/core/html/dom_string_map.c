@@ -33,12 +33,12 @@
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/dom/element.h"
 #include "core/dom/node.h"
 #include "core/html/dom_string_map.h"
 
 static JSClassID g_class;
-static JSValue   g_proto = JS_UNDEFINED;
 static int       g_ready;
 
 /* The element this map is the dataset OF. The map holds the element's NODE, not a reference to its wrapper:
@@ -285,10 +285,24 @@ void dom_string_map_init(JSContext *ctx)
     JS_NewClassID(JS_GetRuntime(ctx), &g_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_class, &g_class_def) == 0,
           "the DOMStringMap class could not be registered");
-    g_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_proto), "DOMStringMap.prototype could not be allocated");
-    idl_interface_tag(ctx, g_proto, "DOMStringMap");
     g_ready = 1;
+    realm_declare_intrinsic(dom_string_map_install_proto);
+}
+
+/* §3.2.9's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. */
+void dom_string_map_install_proto(JSContext *ctx)
+{
+    JSValue proto, prev;
+
+    DCHECK(g_ready, "a realm asked for DOMStringMap.prototype before the class was declared");
+    prev = JS_GetClassProto(ctx, g_class);
+    DCHECK(JS_IsNull(prev), "dom_string_map_install_proto ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+
+    proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(proto), "DOMStringMap.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "DOMStringMap");
+    JS_SetClassProto(ctx, g_class, proto);
 }
 
 JSValue dom_string_map_new(JSContext *ctx, lxb_dom_element_t *el)
@@ -296,7 +310,12 @@ JSValue dom_string_map_new(JSContext *ctx, lxb_dom_element_t *el)
     JSValue obj;
 
     DCHECK(g_ready, "a dataset was asked for before dom_string_map_init ran");
-    obj = JS_NewObjectProtoClass(ctx, g_proto, g_class);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_class);
+        DCHECK(!JS_IsNull(proto), "a dataset was minted in a realm that never ran its install");
+        obj = JS_NewObjectProtoClass(ctx, proto, g_class);
+        JS_FreeValue(ctx, proto);
+    }
     if (JS_IsException(obj)) return obj;
     JS_SetOpaque(obj, lxb_dom_interface_node(el));
     return obj;
@@ -307,14 +326,17 @@ void dom_string_map_install(JSContext *ctx, JSValueConst global)
     JSValue ctor;
 
     DCHECK(g_ready, "the DOMStringMap interface was installed before its prototype was built");
-    ctor = idl_interface_object(ctx, "DOMStringMap", g_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_class);
+        DCHECK(!JS_IsNull(proto), "DOMStringMap was installed into a realm that never ran its proto build");
+        ctor = idl_interface_object(ctx, "DOMStringMap", proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "DOMStringMap", ctor);
 }
 
 void dom_string_map_free(JSContext *ctx)
 {
     if (!g_ready) return;
-    JS_FreeValue(ctx, g_proto);
-    g_proto = JS_UNDEFINED;
-    g_ready = 0;
+    g_ready = 0;   /* the prototypes are the REALMS' — released with their contexts */
 }

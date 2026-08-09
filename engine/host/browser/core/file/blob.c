@@ -23,6 +23,7 @@
 #include "core/byte_reader.h"
 #include "core/file/blob.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/idl_iter.h"
 #include "core/streams/readable_stream.h"
 #include "core/frame/location.h"
@@ -42,8 +43,11 @@ typedef struct {
 } BlobObj;
 
 static JSClassID g_blob_class;
-static JSValue   g_blob_proto = JS_UNDEFINED;
-static JSValue   g_file_proto = JS_UNDEFINED;
+/* §4's File HAS A CLASS ID AND NO INSTANCES OF ITS OWN: a File wears the Blob class (every brand test that
+   accepts a Blob accepts a File, which is what the inheritance MEANS), so this id exists for the per-realm
+   PROTOTYPE SLOT alone — the same store quickjs keeps for Blob, so the two are found the same way. */
+static JSClassID g_file_class;
+static int       g_blob_id_stream = -1, g_blob_id_slice = -1;
 static int       g_file_ctor_stepid = -1;
 static JSRuntime *g_blob_rt;
 static int       g_blob_ctor_stepid = -1;
@@ -113,7 +117,14 @@ JSValue blob_new(JSContext *ctx, const char *bytes, size_t len, const char *type
    `image/gif\0` by handing over a C string. */
 JSValue blob_new_len(JSContext *ctx, const char *bytes, size_t len, const char *type, size_t type_len)
 {
-    return blob_alloc(ctx, g_blob_proto, bytes, len, type, type_len);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_blob_class);
+        JSValue obj;
+        DCHECK(!JS_IsNull(proto), "a Blob was minted in a realm that never ran its install");
+        obj = blob_alloc(ctx, proto, bytes, len, type, type_len);
+        JS_FreeValue(ctx, proto);
+        return obj;
+    }
 }
 
 /* §4.1's File, which is §3.1's Blob wearing File.prototype and carrying a name. `name` is NOT optional here —
@@ -121,7 +132,12 @@ JSValue blob_new_len(JSContext *ctx, const char *bytes, size_t len, const char *
 JSValue file_new(JSContext *ctx, const char *bytes, size_t len, const char *type, size_t type_len,
                  const char *name, size_t name_len, int64_t last_modified)
 {
-    JSValue obj = blob_alloc(ctx, g_file_proto, bytes, len, type, type_len);
+    JSValue proto = JS_GetClassProto(ctx, g_file_class);
+    JSValue obj;
+
+    DCHECK(!JS_IsNull(proto), "a File was minted in a realm that never ran its install");
+    obj = blob_alloc(ctx, proto, bytes, len, type, type_len);
+    JS_FreeValue(ctx, proto);
     BlobObj *b;
 
     if (JS_IsException(obj))
@@ -579,38 +595,58 @@ void blob_init(JSContext *ctx)
     g_blob_rt = rt;
     JS_NewClassID(rt, &g_blob_class);
     JS_NewClass(rt, g_blob_class, &def);
-    g_blob_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_blob_proto), "Blob.prototype could not be allocated");
-    idl_interface_tag(ctx, g_blob_proto, "Blob");
-
-    idl_install_accessor(ctx, g_blob_proto, "size", js_blob_get, BLOB_SIZE, -1);
-    idl_install_accessor(ctx, g_blob_proto, "type", js_blob_get, BLOB_TYPE, -1);
-    idl_install_method(ctx, g_blob_proto, "stream", 0,
-                       idl_method_id(ctx, SLICE_ARGS, 0, js_blob_stream, 0));
-    idl_install_method(ctx, g_blob_proto, "slice", 0,
-                       idl_method_id(ctx, SLICE_ARGS, 3, js_blob_slice, 0));
+    {
+        JSClassDef fdef = { "File" };
+        JS_NewClassID(rt, &g_file_class);
+        JS_NewClass(rt, g_file_class, &fdef);
+    }
+    g_blob_id_stream = idl_method_id(ctx, SLICE_ARGS, 0, js_blob_stream, 0);
+    g_blob_id_slice  = idl_method_id(ctx, SLICE_ARGS, 3, js_blob_slice, 0);
     idl_optional_from(0);   /* §3.1: all three of slice's arguments are optional */
 
     g_blob_reader_handle = byte_reader_declare(ctx, &BLOB_READER_IFACE);
-    byte_reader_install(ctx, g_blob_proto, g_blob_reader_handle);
 
     g_blob_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, BLOB_OPTIONS,
                                             (int)(sizeof BLOB_OPTIONS / sizeof BLOB_OPTIONS[0]),
                                             &js_blob_ctor_decl, 0);
     idl_optional_from(0);   /* §3.1: both constructor arguments are optional */
 
-    /* §4: `interface File : Blob`. The prototype CHAINS to Blob.prototype, so a File's `slice`, `text` and
-       `size` are the same functions rather than copies — and its instances wear the same class id, so every
-       brand test that accepts a Blob accepts a File, which is what the inheritance MEANS. */
-    g_file_proto = JS_NewObjectProto(ctx, g_blob_proto);
-    CHECK(!JS_IsException(g_file_proto), "File.prototype could not be allocated");
-    idl_interface_tag(ctx, g_file_proto, "File");
-    idl_install_accessor(ctx, g_file_proto, "name", js_blob_get, FILE_NAME, -1);
-    idl_install_accessor(ctx, g_file_proto, "lastModified", js_blob_get, FILE_LAST_MODIFIED, -1);
     g_file_ctor_stepid = idl_method_id_step(ctx, FILE_CTOR_ARGS, 3, FILE_OPTIONS,
                                             (int)(sizeof FILE_OPTIONS / sizeof FILE_OPTIONS[0]),
                                             &js_blob_ctor_decl, 1);
     idl_optional_from(2);   /* §4.1: `fileBits` and `fileName` are REQUIRED; only `options` is optional */
+    realm_declare_intrinsic(blob_install_protos);
+}
+
+/* §3.1's AND §4's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. */
+void blob_install_protos(JSContext *ctx)
+{
+    JSValue blob_p, file_p, prev;
+
+    DCHECK(g_blob_class != 0, "a realm asked for Blob.prototype before the class was declared");
+    prev = JS_GetClassProto(ctx, g_blob_class);
+    DCHECK(JS_IsNull(prev), "blob_install_protos ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+
+    blob_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(blob_p), "Blob.prototype could not be allocated");
+    idl_interface_tag(ctx, blob_p, "Blob");
+    idl_install_accessor(ctx, blob_p, "size", js_blob_get, BLOB_SIZE, -1);
+    idl_install_accessor(ctx, blob_p, "type", js_blob_get, BLOB_TYPE, -1);
+    idl_install_method(ctx, blob_p, "stream", 0, g_blob_id_stream);
+    idl_install_method(ctx, blob_p, "slice", 0, g_blob_id_slice);
+    byte_reader_install(ctx, blob_p, g_blob_reader_handle);
+    JS_SetClassProto(ctx, g_blob_class, blob_p);
+
+    /* §4: `interface File : Blob`. The prototype CHAINS to Blob.prototype, so a File's `slice`, `text` and
+       `size` are the same functions rather than copies — and its instances wear the same class id, so every
+       brand test that accepts a Blob accepts a File, which is what the inheritance MEANS. */
+    file_p = JS_NewObjectProto(ctx, blob_p);
+    CHECK(!JS_IsException(file_p), "File.prototype could not be allocated");
+    idl_interface_tag(ctx, file_p, "File");
+    idl_install_accessor(ctx, file_p, "name", js_blob_get, FILE_NAME, -1);
+    idl_install_accessor(ctx, file_p, "lastModified", js_blob_get, FILE_LAST_MODIFIED, -1);
+    JS_SetClassProto(ctx, g_file_class, file_p);
 }
 
 void blob_install(JSContext *ctx, JSValueConst global)
@@ -619,12 +655,22 @@ void blob_install(JSContext *ctx, JSValueConst global)
     DCHECK(g_blob_ctor_stepid >= 0, "Blob was installed before blob_init declared its constructor");
     ctor = idl_step_constructor(ctx, "Blob", 0, g_blob_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the Blob interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_blob_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_blob_class);
+        DCHECK(!JS_IsNull(proto), "Blob was installed into a realm that never ran its proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "Blob", ctor);
 
     ctor = idl_step_constructor(ctx, "File", 2, g_file_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the File interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_file_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_file_class);
+        DCHECK(!JS_IsNull(proto), "File was installed into a realm that never ran its proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "File", ctor);
 }
 
@@ -633,9 +679,7 @@ void blob_free(JSContext *ctx)
     if (!g_blob_rt)
         return;
     blob_url_store_free(ctx);
-    JS_FreeValue(ctx, g_blob_proto);
-    JS_FreeValue(ctx, g_file_proto);
-    g_blob_proto = g_file_proto = JS_UNDEFINED;
+    /* the prototypes are the REALMS' — released with their contexts */
     g_blob_rt = NULL;
     g_blob_ctor_stepid = g_file_ctor_stepid = -1;
 }

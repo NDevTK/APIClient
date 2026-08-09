@@ -9,6 +9,7 @@
 #include "core/url/url.h"
 
 void form_data_init(JSContext *ctx);
+void form_data_install_proto(JSContext *ctx);   /* §5's prototype, for ONE realm */
 void form_data_install(JSContext *ctx, JSValueConst global);
 void form_data_free(JSContext *ctx);
 

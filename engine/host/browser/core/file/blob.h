@@ -8,6 +8,7 @@
 #include "quickjs.h"
 
 void blob_init(JSContext *ctx);
+void blob_install_protos(JSContext *ctx);   /* §3.1's and §4's prototypes, for ONE realm */
 void blob_install(JSContext *ctx, JSValueConst global);
 void blob_free(JSContext *ctx);
 
