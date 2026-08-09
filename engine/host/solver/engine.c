@@ -1000,12 +1000,19 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
     free(f->dyn); f->dyn = NULL;
     free(f->dyn_cand); f->dyn_cand = NULL;
     f->dyn_n = f->dyn_cap = 0;
-    /* flow_step returns 1 (finished) only with an empty job queue, but free any residual defensively. */
-    for (int i = 0; i < f->njob; i++) { for (int k = 0; k < f->jobs[i].argc; k++) JS_FreeValue(ctx, f->jobs[i].argv[k]); free(f->jobs[i].argv); }
-    free(f->jobs); f->jobs = NULL; f->njob = f->jobcap = 0;
-    /* FETCH-AWAIT: flow_step drains pending before finishing, but free any residual (resolve capabilities + values). */
-    for (int i = 0; i < f->npend; i++) flow_pending_release(ctx, &f->pending[i]);
-    free(f->pending); f->pending = NULL; f->npend = f->pendcap = 0;
+    /* THE QUEUE AND THE PENDING LIST ARE EMPTY HERE, AND THAT IS ASSERTED RATHER THAN CLEANED UP AFTER. Both
+       used to be walked and freed "defensively", which is the fallback shape: the walk can only ever run when
+       a work item is being DROPPED, and freeing it quietly is precisely how that drop stays invisible. Neither
+       is reachable — flow_step decides "finished" only after offering the job queue a turn (njob > 0 runs one),
+       and only when npend is zero, since a pending entry with a value drains and one without reports host-owed.
+       So the loops were dead, and the one state that would have entered them is the bug. The ARRAY still has to
+       be freed: it is this flow's allocation whether or not it ever held an entry. */
+    DCHECK(f->njob == 0, "a finishing flow still held queued jobs — its promise reactions and timer callbacks "
+                         "are being dropped, and freeing them here is what used to hide that");
+    free(f->jobs); f->jobs = NULL; f->jobcap = 0;
+    DCHECK(f->npend == 0, "a finishing flow still held pending host replies — a flow awaiting one is parked, "
+                          "not finished, and releasing them here is what used to hide that");
+    free(f->pending); f->pending = NULL; f->pendcap = 0;
     flow_set_running(NULL);
     flow_remove(ctx, f);
 }
@@ -1257,6 +1264,15 @@ int engine_sched_step(void) {
        job-enqueue hook). Crash LOUD here rather than silently drop it, so the gap cannot hide. */
     DCHECK(!JS_IsJobPending(JS_GetRuntime(ctx)),
            "async: a job reached the global list (enqueued outside a flow) but was never drained");
+    /* THE SAME RULE ONE LEVEL UP, over the FLOWS' OWN queues. flow_step asserts that a flow may not FINISH
+       holding work, and that covers the flow that runs out of work — but the loop above can also LEAVE with a
+       flow still alive: every member answers host-owed in a row, the loop breaks on that, and this line closes
+       the session over the survivors. A reaction still on one of their queues is dropped exactly as it would
+       be at finish, and only the finish case was being checked, so the wider one was invisible. */
+    for (int i = 0; i < flow_count(); i++)
+        DCHECK(flow_at(i)->njob == 0,
+               "the frontier was declared exhausted while a live flow still held queued jobs — its promise "
+               "reactions, timer callbacks and delivered messages die with the session");
     JS_SetJobEnqueueHook(NULL);
     JS_SetFlowControlHooks(&FC_OFF);
     JS_SetFlowLocalMark(0);
