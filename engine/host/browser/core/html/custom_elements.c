@@ -103,9 +103,28 @@ static bool ce_name_valid(const char *name, size_t len)
    or sit behind a Proxy, and the call because the body is the page's code.
    ONE machine for every lifetime callback rather than one per name: what differs between connected and
    disconnected is the NAME, which is data, and the reaction queue carries it as the job's second argument. */
+/* WHERE THIS MACHINE RESTS. §4.13.6 invokes a callback reaction by calling its callback function with the
+   element as the callback this value, and the two things that reach the page's code — reading the callback and
+   calling it — are the two stages after the element is fixed.
+   THE READ IS AT REACTION TIME, and the spec's is at DEFINITION time: §4.13.4 step 14.4 collects the lifecycle
+   callbacks off the prototype when define() runs, so a page that reassigns `X.prototype.connectedCallback`
+   afterwards changes nothing in a browser and changes everything here. Naming the step is what made that
+   visible; building step 14.4 is the fix, and it is the next thing this component owes. */
+enum {
+    CEREACT_ELEMENT = 0,   /* §4.13.6: the element the reaction is for */
+    CEREACT_CALLBACK,      /* the reaction's callback function */
+    CEREACT_INVOKE,        /* §4.13.6: invoke it with element as the callback this value */
+};
+static const char *const CE_REACTION_STEPS[] = {
+    "HTML §4.13.6 (the element this callback reaction is for)",
+    "HTML §4.13.6 (the reaction's callback function — read off the element here, where §4.13.4 step 14.4 "
+    "reads it off the prototype at definition time)",
+    "HTML §4.13.6 (invoke the reaction's callback function with element as the callback this value)",
+    NULL
+};
+
 typedef struct JSCeReaction {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
-    uint8_t   stage;
     uint8_t   cphase;   /* the call request's own phase */
     JSValue   fn;       /* the callback, once read (owned) */
     JSValue   cb[2 + CE_MAX_REACTION_ARGS];   /* the call request buffer: [this, callback, args…] */
@@ -142,13 +161,13 @@ static int js_ce_reaction_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
     JSAtom name;
     int r;
 
-    if (s->stage == 0) {
+    if (s->hdr.stage == CEREACT_ELEMENT) {
         s->fn = JS_UNDEFINED;
         for (r = 0; r < 2 + CE_MAX_REACTION_ARGS; r++) s->cb[r] = JS_UNDEFINED;
-        s->stage = 1;
+        s->hdr.stage = CEREACT_CALLBACK;
         if (!JS_IsObject(el)) { JS_FreeValue(ctx, cb_result); return JS_STEP_DONE; }
     }
-    if (s->stage == 1) {
+    if (s->hdr.stage == CEREACT_CALLBACK) {
         name = JS_ValueToAtom(ctx, step_arg(&s->hdr, 1));
         CHECK(name != JS_ATOM_NULL, "a custom-element reaction was queued with no callback name");
         r = step_getprop_run(ctx, &s->hdr, el, name, cb_result, &s->fn, out_cb, out_argc);
@@ -156,10 +175,11 @@ static int js_ce_reaction_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         cb_result = JS_UNDEFINED;
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
-        s->stage = 2;
+        s->hdr.stage = CEREACT_INVOKE;
         /* §4.13.3: a definition that does not declare this callback simply has no reaction to run. */
         if (!JS_IsFunction(ctx, s->fn)) return JS_STEP_DONE;
     }
+    DCHECK(s->hdr.stage == CEREACT_INVOKE, "a custom-element reaction resumed into a stage §4.13.6 does not have");
     /* Everything past the element and the callback NAME is the callback's own arguments. */
     r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), s->fn, el, s->hdr.argc - 2,
                       s->hdr.argc > 2 ? (JSValueConst *)s->hdr.argv + 2 : NULL,
@@ -170,7 +190,8 @@ static int js_ce_reaction_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
 }
 
 static const JSTrampStepDef js_ce_reaction_def = {
-    sizeof(JSCeReaction), js_ce_reaction_step, js_ce_reaction_fini, 0, .visit = js_ce_reaction_visit
+    sizeof(JSCeReaction), js_ce_reaction_step, js_ce_reaction_fini, 0, .visit = js_ce_reaction_visit,
+    .algorithm = "HTML §4.13.6 invoke a custom element callback reaction", .steps = CE_REACTION_STEPS
 };
 
 /* ---- the upgrade ------------------------------------------------------------------------------------------ */

@@ -425,7 +425,6 @@ int abort_signal_run(JSContext *ctx, AbortSignalWork *w, JSValueConst sig, JSVal
    an engine-built DOMException), so the machine has exactly one suspension point: the listeners. */
 typedef struct JSAbortState {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
-    uint8_t   started;
     JSValue   sig;      /* the signal being aborted (owned) */
     AbortSignalWork w;  /* the shared "signal abort" request's own record */
 } JSAbortState;
@@ -447,12 +446,26 @@ static JSValue js_abort_fini(JSContext *ctx, void *st, bool take_result)
     return JS_UNDEFINED;   /* §3.2 abort() returns undefined whatever the listeners did */
 }
 
+/* WHERE THIS MACHINE RESTS. §3.2's abort() is one step — "signal abort on this's signal with reason" — and
+   that abstract operation is what runs the signal's abort algorithms and fires `abort` at it, which is the
+   page's code. So the operand is one stage and the operation is the other; `started` was a private flag
+   standing in for exactly that split, with no way to say which of the two a parked flow was at. */
+enum {
+    ABORT_SIGNAL_SLOT = 0,   /* §3.2 abort() step 1's operand: this's [[Signal]] */
+    ABORT_SIGNAL_RUN,        /* §3.2 abort() step 1: signal abort */
+};
+static const char *const ABORT_STEPS[] = {
+    "DOM §3.2 AbortController.abort() (this's [[Signal]], the operand of step 1)",
+    "DOM §3.2 AbortController.abort() step 1 (signal abort on it: the abort algorithms, then the `abort` event)",
+    NULL
+};
+
 static int js_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSAbortState *s = st;
     int r;
 
-    if (!s->started) {
+    if (s->hdr.stage == ABORT_SIGNAL_SLOT) {
         /* §3.2 step 1 is `this.[[Signal]]` — an INTERNAL SLOT. Read as an own slot, so no accessor and no proxy
            trap can sit on it: a page that assigns over the public `signal` property does not redirect abort(). */
         JSValue slots = signal_slots(ctx, s->hdr.this_val);
@@ -461,7 +474,7 @@ static int js_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         cb_result = JS_UNDEFINED;
         s->sig = JS_UNDEFINED;
         abort_signal_work_start(&s->w);
-        s->started = 1;
+        s->hdr.stage = ABORT_SIGNAL_RUN;
         if (JS_IsObject(slots))
             s->sig = JS_GetPropertyStr(ctx, slots, "signal");
         JS_FreeValue(ctx, slots);
@@ -473,6 +486,7 @@ static int js_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     /* THE WHOLE OF "signal abort", not a piece of it: the reason travels verbatim (the operation is what turns
        an undefined one into an AbortError), the signal's abort algorithms run, and then the `abort` event is
        fired at it. abort() has one thing to do and this is it. */
+    DCHECK(s->hdr.stage == ABORT_SIGNAL_RUN, "abort() resumed into a stage §3.2 does not have");
     r = abort_signal_run(ctx, &s->w, s->sig, step_arg(&s->hdr, 0), cb_result, out_cb, out_argc);
     if (r > 0) return r;
     if (r < 0) return JS_STEP_ABRUPT;
@@ -480,7 +494,8 @@ static int js_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
 }
 
 static const JSTrampStepDef js_abort_def = {
-    sizeof(JSAbortState), js_abort_step, js_abort_fini, 0, .visit = js_abort_visit
+    sizeof(JSAbortState), js_abort_step, js_abort_fini, 0, .visit = js_abort_visit,
+    .algorithm = "DOM §3.2 AbortController.abort(reason)", .steps = ABORT_STEPS
 };
 static int g_abort_stepid = -1;
 
@@ -551,9 +566,22 @@ static JSValue js_sig_static_abort(JSContext *ctx, JSValueConst this_val, int ar
    `[EnforceRange] unsigned long long milliseconds` is ToNumber on whatever was passed, so
    `AbortSignal.timeout({ valueOf() { for(;;){} } })` is the page's loop: it has to suspend and resume at the
    exact stage, which is what step_toint64_run parks on. */
+/* WHERE THIS MACHINE RESTS. The coercion is not part of §3.2's four steps — it is Web IDL's
+   `[EnforceRange] unsigned long long milliseconds`, which precedes step 1 and is the page's `valueOf` — so it
+   is its own stage. It was folded into the same stage as the build, which is a rest point inside the page's
+   code sharing a number with one after it. */
+enum {
+    TIMEOUT_COERCE = 0,   /* Web IDL's conversion of `milliseconds`, before step 1 */
+    TIMEOUT_BUILD,        /* §3.2 AbortSignal.timeout steps 1-4 */
+};
+static const char *const TIMEOUT_STEPS[] = {
+    "Web IDL §3.2.7 [EnforceRange] unsigned long long (converting `milliseconds`, which runs the page's valueOf)",
+    "DOM §3.2 AbortSignal.timeout steps 1-4 (a new AbortSignal, its aborted state and its TimeoutError reason)",
+    NULL
+};
+
 typedef struct JSTimeoutState {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
-    uint8_t   stage;
     JSValue   result;   /* the signal, once built (owned) */
 } JSTimeoutState;
 
@@ -581,16 +609,17 @@ static int js_timeout_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     JSValue flag;
     int r;
 
-    if (s->stage == 0) {
+    if (s->hdr.stage == TIMEOUT_COERCE) {
         s->result = JS_UNDEFINED;
-        s->stage = 1;
+        /* The coercion runs whatever the page put in `valueOf`, and its SIDE EFFECTS are observable — so it
+           runs even though the duration itself does not change what this engine models. Dropping it would be a
+           quieter spec bug than getting the number wrong. */
+        r = step_toint64_run(ctx, &s->hdr, step_arg(&s->hdr, 0), cb_result, &ms, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return JS_STEP_ABRUPT;
+        s->hdr.stage = TIMEOUT_BUILD;
     }
-    /* The coercion runs whatever the page put in `valueOf`, and its SIDE EFFECTS are observable — so it runs
-       even though the duration itself does not change what this engine models. Dropping it would be a quieter
-       spec bug than getting the number wrong. */
-    r = step_toint64_run(ctx, &s->hdr, step_arg(&s->hdr, 0), cb_result, &ms, out_cb, out_argc);
-    if (r > 0) return r;
-    if (r < 0) return JS_STEP_ABRUPT;
+    DCHECK(s->hdr.stage == TIMEOUT_BUILD, "AbortSignal.timeout resumed into a stage §3.2 does not have");
 
     flag = concolic_new(ctx, "AbortSignal.timeout().aborted", "AbortSignal.timeout().aborted", JS_FALSE);
     CHECK(!JS_IsException(flag), "minting the timeout signal's aborted flag failed");
@@ -599,7 +628,8 @@ static int js_timeout_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
 }
 
 static const JSTrampStepDef js_timeout_def = {
-    sizeof(JSTimeoutState), js_timeout_step, js_timeout_fini, 0, .visit = js_timeout_visit
+    sizeof(JSTimeoutState), js_timeout_step, js_timeout_fini, 0, .visit = js_timeout_visit,
+    .algorithm = "DOM §3.2 AbortSignal.timeout(milliseconds)", .steps = TIMEOUT_STEPS
 };
 
 /* §3.2's IDL declares no constructor, so `new AbortSignal()` is a TypeError — and so is calling it. The

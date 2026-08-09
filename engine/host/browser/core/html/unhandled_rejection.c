@@ -204,6 +204,19 @@ static JSValue js_pre_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 /* ONE rejection's notification: fire `unhandledrejection` at the global and, unless a listener cancelled it,
    hand the reason to whoever decides what an unreported rejection means. A machine because §2.9 dispatch is
    SYNCHRONOUS and its listeners are the page's code — the fire is a request, not a call from C. */
+/* WHERE THIS MACHINE RESTS. §8.1.7.5's step 5.1 runs per promise, and its two halves are the two stages: 5.1.2
+   fires the event (the page's listeners), 5.1.3 reports the exception if they did not cancel it. Minting the
+   PromiseRejectionEvent is part of 5.1.2 and cannot suspend, so it shares that stage's entry. */
+enum {
+    REJECT_EVENT = 0,   /* §8.1.7.5 step 5.1.2's PromiseRejectionEvent */
+    REJECT_FIRE,        /* §8.1.7.5 steps 5.1.2-5.1.3 */
+};
+static const char *const REJECT_NOTIFY_STEPS[] = {
+    "HTML §8.1.7.5 step 5.1.2 (the PromiseRejectionEvent, cancelable, for this promise)",
+    "HTML §8.1.7.5 steps 5.1.2-5.1.3 (fire it at the global; report the exception unless it was canceled)",
+    NULL
+};
+
 typedef struct JSRejectNotify {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
     uint8_t   fphase;   /* the fire request's own phase */
@@ -242,14 +255,15 @@ static int js_reject_notify_step(JSContext *ctx, void *st, JSValue cb_result, JS
     JSValue global;
     int r, k;
 
-    if (s->hdr.stage == 0) {
+    if (s->hdr.stage == REJECT_EVENT) {
         s->ev = JS_UNDEFINED;
         for (k = 0; k < 4; k++) s->cb[k] = JS_UNDEFINED;
-        s->hdr.stage = 1;
+        s->hdr.stage = REJECT_FIRE;
         /* §8.1.7.5: `unhandledrejection` does not bubble and IS cancelable — the cancel is the whole point. */
         s->ev = pre_new(ctx, event_new(ctx, "unhandledrejection", false, true), promise, reason);
         if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
     }
+    DCHECK(s->hdr.stage == REJECT_FIRE, "the rejection notification resumed into a stage §8.1.7.5 does not have");
     global = JS_GetGlobalObject(ctx);
     r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), global, s->ev, cb_result, &s->not_canceled,
                               out_cb, out_argc);
@@ -263,7 +277,9 @@ static int js_reject_notify_step(JSContext *ctx, void *st, JSValue cb_result, JS
 }
 
 static const JSTrampStepDef js_reject_notify_def = {
-    sizeof(JSRejectNotify), js_reject_notify_step, js_reject_notify_fini, 0, .visit = js_reject_notify_visit
+    sizeof(JSRejectNotify), js_reject_notify_step, js_reject_notify_fini, 0, .visit = js_reject_notify_visit,
+    .algorithm = "HTML §8.1.7.5 notify about rejected promises, for one promise",
+    .steps = REJECT_NOTIFY_STEPS
 };
 
 int unhandled_rejection_notify(JSContext *ctx)

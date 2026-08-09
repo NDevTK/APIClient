@@ -281,9 +281,23 @@ static JSValue js_form_submit(JSContext *ctx, JSValueConst this_val, int argc, J
    decides whether the request exists at all. A page that wires a submit handler and calls preventDefault is
    doing its own fetch instead, and recording the form's request anyway would be a finding the page never
    makes. */
+/* WHERE THIS MACHINE RESTS. §4.10.21.4's step 5.6 is the one thing here that reaches the page's code — "let
+   shouldContinue be the result of firing an event named submit at form ... with the cancelable attribute
+   initialized to true" — and step 5.8 is what its verdict decides. Everything after it, up to the request this
+   engine records, runs with no page code in it, so one stage names that range and says so. */
+enum {
+    REQSUBMIT_FORM = 0,   /* §4.10.21.4: the form this request is for */
+    REQSUBMIT_FIRE,       /* §4.10.21.4 step 5.6, then 5.8 and the submission */
+};
+static const char *const REQSUBMIT_STEPS[] = {
+    "HTML §4.10.21.4 (the form this request is for, before step 5.6's event)",
+    "HTML §4.10.21.4 step 5.6 (fire an event named submit at form, cancelable), then step 5.8's verdict and "
+    "the submission it allows",
+    NULL
+};
+
 typedef struct JSReqSubmitState {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
-    uint8_t   stage;
     uint8_t   fphase;   /* the fire request's own phase */
     JSValue   ev;       /* the event, minted once and held across the suspension (owned) */
     JSValue   cb[4];    /* the fire request buffer: [this, dispatch, target, event] */
@@ -318,15 +332,16 @@ static int js_reqsubmit_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
     bool not_canceled = true;
     int r;
 
-    if (s->stage == 0) {
+    if (s->hdr.stage == REQSUBMIT_FORM) {
         s->ev = JS_UNDEFINED;
         s->cb[0] = s->cb[1] = s->cb[2] = s->cb[3] = JS_UNDEFINED;
-        s->stage = 1;
+        s->hdr.stage = REQSUBMIT_FIRE;
         if (!form_elem_of(s->hdr.this_val)) {
             JS_FreeValue(ctx, cb_result);
             return JS_STEP_DONE;
         }
     }
+    DCHECK(s->hdr.stage == REQSUBMIT_FIRE, "requestSubmit resumed into a stage §4.10.21.4 does not have");
     /* §4.10.21.4 step 4: "fire an event named submit at form, with the cancelable attribute initialized to
        true" — the ONE §2.9 dispatch, as a REQUEST, so the handlers run as ordinary preemptible page code and
        this resumes after every one of them has returned. */
@@ -342,7 +357,8 @@ static int js_reqsubmit_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
 }
 
 static const JSTrampStepDef js_reqsubmit_def = {
-    sizeof(JSReqSubmitState), js_reqsubmit_step, js_reqsubmit_fini, 0, .visit = js_reqsubmit_visit
+    sizeof(JSReqSubmitState), js_reqsubmit_step, js_reqsubmit_fini, 0, .visit = js_reqsubmit_visit,
+    .algorithm = "HTML §4.10.21.4 submit a form (from requestSubmit)", .steps = REQSUBMIT_STEPS
 };
 
 /* §3.1.1 document.forms — every form in the document, in tree order. */
