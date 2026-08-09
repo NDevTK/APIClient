@@ -33,6 +33,7 @@
 #include "core/html/html_element.h"
 #include "core/html/custom_elements.h"
 #include "core/html/html_iframe.h"
+#include "core/html/trusted_types.h"
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
 #include "core/dom/attr.h"
@@ -380,9 +381,10 @@ enum { PLACE_CHILDREN = 0, PLACE_BEFORE, PLACE_AFTER, PLACE_FIRST_CHILD, PLACE_R
    is what the declaration's `algorithm` says. Splitting the wording per member would be two statements of one
    stage, which is the drift the X-list exists to prevent. */
 #define FRAG_STAGES(X) \
+    X(FRAG_TRUSTED, "HTML §8.5.4 / §8.5.5 / §8.5.6 step 1 (get trusted type compliant string with TrustedHTML " \
+                    "and this sink), which is where Trusted Types §4.2's default-policy callback runs") \
     X(FRAG_START, "HTML §8.5.4 innerHTML setter steps 2-3 / §8.5.5 outerHTML setter steps 2-5 / §8.5.6 " \
-                  "insertAdjacentHTML steps 2-4 (the target the fragment is parsed against); step 1's Trusted " \
-                  "Types call is a suspension point this engine does not yet have") \
+                  "insertAdjacentHTML steps 2-4 (the target the fragment is parsed against)") \
     X(FRAG_FEED,  "HTML §8.5.4 step 4 / §8.5.5 step 6 / §8.5.6 step 5 (the fragment parsing algorithm), one " \
                   "byte per step") \
     X(FRAG_PLACE, "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 (insert one node of the fragment at the " \
@@ -399,6 +401,10 @@ enum { IDL_STEP_STAGE_BASE(FRAG_STAGES)
 typedef struct {
     uint8_t where;
     uint8_t clear_first;          /* innerHTML= empties the element before parsing, one child per step */
+    /* STEP 1's ANSWER, held across the stage boundary (owned). It is the compliant string and not the
+       argument: once Trusted Types §3 exists, step 1 runs the default policy's callback and what the fragment
+       is parsed from is what that callback RETURNED, which is a different value from the one passed in. */
+    JSValue compliant;
     lxb_html_parser_t *parser;    /* THIS parse's own — see above */
     char   *html;                 /* the markup, owned: the parser is handed slices of it across suspensions */
     size_t  len, off;
@@ -409,6 +415,7 @@ typedef struct {
 static void frag_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     FragState *s = st;
+    v->val(ctx, &s->compliant);
     /* A FORK CANNOT REACH A PARSE IN FLIGHT. A fork is a concolic branch, which is bytecode, and this machine
        runs none — the tree builder cannot reach the page's code. Two flows handed one lexbor parser would
        corrupt both, so it is asserted rather than trusted; if it ever fires, the parser needs a real ownership
@@ -420,13 +427,14 @@ static void frag_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static void frag_release(JSContext *ctx, void *st)
 {
     FragState *s = st;
-    (void)ctx;
     /* THE THROW PATH OWNS THE PARSER TOO. A flow dropped mid-parse would otherwise leak a tokenizer, an
        open-element stack and the temporary document behind them. */
     if (s->parser) { lxb_html_parse_fragment_chunk_end(s->parser); lxb_html_parser_destroy(s->parser); }
     s->parser = NULL;
     free(s->html);
     s->html = NULL;
+    JS_FreeValue(ctx, s->compliant);
+    s->compliant = JS_UNDEFINED;
 }
 
 /* Set the machine up for a parse of `html` into `where` around `anchor`, parsed in `context`'s tree-building
@@ -559,9 +567,19 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     JS_FreeValue(ctx, cb_result);
     *presult = JS_UNDEFINED;
 
+    if (hdr->stage == FRAG_TRUSTED) {
+        /* §8.5.4 / §8.5.5 step 1. It runs BEFORE the element and its parent are looked at, which is the order
+           the standard writes and the order that decides what a page under a trusted-types policy sees: the
+           throw comes from step 1, not from step 4's parse, so `document.createElement("b").outerHTML = s`
+           throws the TypeError rather than returning at step 3's null parent. */
+        s->compliant = trusted_types_compliant_string(ctx, TRUSTED_TYPE_HTML, argc > 0 ? argv[0] : JS_UNDEFINED,
+                                                      magic == 0 ? "Element innerHTML" : "Element outerHTML");
+        if (JS_IsException(s->compliant)) { s->compliant = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        hdr->stage = FRAG_START;
+    }
     if (hdr->stage == FRAG_START) {
         lxb_dom_element_t *el = elem_of(hdr->this_val);
-        JSValueConst val = argc > 0 ? argv[0] : JS_UNDEFINED;
+        JSValueConst val = s->compliant;
         lxb_dom_node_t *n;
         const char *html;
 
@@ -668,6 +686,15 @@ static int js_el_insert_adjacent_html(JSContext *ctx, JSStepHdr *hdr, void *st, 
     JS_FreeValue(ctx, cb_result);
     *presult = JS_UNDEFINED;
 
+    if (hdr->stage == FRAG_TRUSTED) {
+        /* §8.5.6 step 1 — before step 2's position parse, which is the order the standard writes: a document
+           under a trusted-types policy throws the TypeError for `insertAdjacentHTML("nonsense", s)` rather
+           than the SyntaxError the position would have produced. */
+        s->compliant = trusted_types_compliant_string(ctx, TRUSTED_TYPE_HTML, argc > 1 ? argv[1] : JS_UNDEFINED,
+                                                      "Element insertAdjacentHTML");
+        if (JS_IsException(s->compliant)) { s->compliant = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        hdr->stage = FRAG_START;
+    }
     if (hdr->stage == FRAG_START) {
         lxb_dom_element_t *el = elem_of(hdr->this_val);
         lxb_dom_node_t *n;
@@ -678,10 +705,10 @@ static int js_el_insert_adjacent_html(JSContext *ctx, JSStepHdr *hdr, void *st, 
         if (!el || argc < 2) return JS_STEP_DONE;
         n = lxb_dom_interface_node(el);
         if (!adjacent_where(ctx, argv[0], n, &where, &outside)) return JS_STEP_ABRUPT;
-        solve_html_sink(ctx, argv[1]);
-        if (concolic_is(argv[1])) return JS_STEP_DONE;
-        DCHECK(JS_IsString(argv[1]), "insertAdjacentHTML reached the body unconverted");
-        html = JS_ToCString(ctx, argv[1]);
+        solve_html_sink(ctx, s->compliant);
+        if (concolic_is(s->compliant)) return JS_STEP_DONE;
+        DCHECK(JS_IsString(s->compliant), "insertAdjacentHTML reached the body unconverted");
+        html = JS_ToCString(ctx, s->compliant);
         if (!html) return JS_STEP_ABRUPT;
         /* Parsed in the context it will LIVE in: the parent for the outside positions, this element for the
            inside ones. A `<td>` inserted beforeend of a `<tr>` survives; parsed against the wrong context it
