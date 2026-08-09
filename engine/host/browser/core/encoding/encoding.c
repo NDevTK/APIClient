@@ -23,6 +23,7 @@
 #include "core/encoding/encoding.h"
 #include "core/encoding/encoding_table.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 
 /* ---- §4.2's "get an encoding" ------------------------------------------------------------------------------
  *
@@ -132,8 +133,8 @@ typedef struct EncDecoder {
 
 static JSClassID g_dec_class;
 static JSClassID g_enc_class;
-static JSValue   g_dec_proto = JS_UNDEFINED;
-static JSValue   g_enc_proto = JS_UNDEFINED;
+/* THE AGENT'S POOL ENTRIES — the OBJECTS they are installed as are each realm's. */
+static int       g_id_decode = -1, g_id_encode = -1, g_id_encode_into = -1;
 static JSRuntime *g_enc_rt;
 static int       g_dec_ctor_stepid = -1, g_enc_ctor_stepid = -1;
 
@@ -832,7 +833,12 @@ static int js_dec_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     if (id < 0 || id == ENC_REPLACEMENT)
         return JS_ThrowRangeError(ctx, "the label does not name a usable encoding"), -1;
 
-    obj = JS_NewObjectProtoClass(ctx, g_dec_proto, g_dec_class);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_dec_class);
+        DCHECK(!JS_IsNull(proto), "a TextDecoder was minted in a realm that never ran its install");
+        obj = JS_NewObjectProtoClass(ctx, proto, g_dec_class);
+        JS_FreeValue(ctx, proto);
+    }
     if (JS_IsException(obj)) return -1;
     d = enc_decoder_new(id, idl_dict_bool(ctx, options, "fatal"),
                         idl_dict_bool(ctx, options, "ignoreBOM"));
@@ -936,7 +942,12 @@ static int js_enc_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     JS_FreeValue(ctx, cb_result);
     if (JS_IsUndefined(hdr->this_val))
         return JS_ThrowTypeError(ctx, "constructor TextEncoder requires 'new'"), -1;
-    *presult = JS_NewObjectProtoClass(ctx, g_enc_proto, g_enc_class);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_enc_class);
+        DCHECK(!JS_IsNull(proto), "a TextEncoder was minted in a realm that never ran its install");
+        *presult = JS_NewObjectProtoClass(ctx, proto, g_enc_class);
+        JS_FreeValue(ctx, proto);
+    }
     return JS_IsException(*presult) ? -1 : 0;
 }
 
@@ -975,33 +986,48 @@ void encoding_init(JSContext *ctx)
     JS_NewClassID(rt, &g_enc_class);
     JS_NewClass(rt, g_enc_class, &enc_def);
 
-    g_dec_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_dec_proto), "TextDecoder.prototype could not be allocated");
-    idl_interface_tag(ctx, g_dec_proto, "TextDecoder");
-    idl_install_accessor(ctx, g_dec_proto, "encoding", js_decoder_get, DEC_ENCODING, -1);
-    idl_install_accessor(ctx, g_dec_proto, "fatal", js_decoder_get, DEC_FATAL, -1);
-    idl_install_accessor(ctx, g_dec_proto, "ignoreBOM", js_decoder_get, DEC_IGNORE_BOM, -1);
-    idl_install_method(ctx, g_dec_proto, "decode", 0,
-                       idl_method_id_dict(ctx, DECODE_ARGS, 2, DECODE_OPTIONS,
-                                          (int)(sizeof DECODE_OPTIONS / sizeof DECODE_OPTIONS[0]),
-                                          js_decoder_decode, 0));
+    g_id_decode = idl_method_id_dict(ctx, DECODE_ARGS, 2, DECODE_OPTIONS,
+                                     (int)(sizeof DECODE_OPTIONS / sizeof DECODE_OPTIONS[0]),
+                                     js_decoder_decode, 0);
     idl_optional_from(0);   /* §7.1: `decode(optional BufferSource input, optional TextDecodeOptions options)` */
-
-    g_enc_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_enc_proto), "TextEncoder.prototype could not be allocated");
-    idl_interface_tag(ctx, g_enc_proto, "TextEncoder");
-    idl_install_accessor(ctx, g_enc_proto, "encoding", js_encoder_get, 0, -1);
-    idl_install_method(ctx, g_enc_proto, "encode", 0,
-                       idl_method_id(ctx, ENCODE_ARGS, 1, js_encoder_encode, 0));
+    g_id_encode = idl_method_id(ctx, ENCODE_ARGS, 1, js_encoder_encode, 0);
     idl_optional_from(0);   /* §7.2: `encode(optional USVString input = "")` */
-    idl_install_method(ctx, g_enc_proto, "encodeInto", 2,
-                       idl_method_id(ctx, ENCODE_INTO_ARGS, 2, js_encoder_encode_into, 0));
+    g_id_encode_into = idl_method_id(ctx, ENCODE_INTO_ARGS, 2, js_encoder_encode_into, 0);
 
     g_dec_ctor_stepid = idl_method_id_step(ctx, DEC_CTOR_ARGS, 2, DECODER_OPTIONS,
                                            (int)(sizeof DECODER_OPTIONS / sizeof DECODER_OPTIONS[0]),
                                            &js_dec_ctor_decl, 0);
     idl_optional_from(0);   /* §7.1: `constructor(optional DOMString label = "utf-8", optional options = {})` */
     g_enc_ctor_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_enc_ctor_decl, 0);
+    realm_declare_intrinsic(encoding_install_protos);
+}
+
+/* §7.1's AND §7.2's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. */
+void encoding_install_protos(JSContext *ctx)
+{
+    JSValue dec_p, enc_p, prev;
+
+    DCHECK(g_dec_class != 0, "a realm asked for TextDecoder.prototype before the class was declared");
+    prev = JS_GetClassProto(ctx, g_dec_class);
+    DCHECK(JS_IsNull(prev), "encoding_install_protos ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+
+    dec_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(dec_p), "TextDecoder.prototype could not be allocated");
+    idl_interface_tag(ctx, dec_p, "TextDecoder");
+    idl_install_accessor(ctx, dec_p, "encoding", js_decoder_get, DEC_ENCODING, -1);
+    idl_install_accessor(ctx, dec_p, "fatal", js_decoder_get, DEC_FATAL, -1);
+    idl_install_accessor(ctx, dec_p, "ignoreBOM", js_decoder_get, DEC_IGNORE_BOM, -1);
+    idl_install_method(ctx, dec_p, "decode", 0, g_id_decode);
+    JS_SetClassProto(ctx, g_dec_class, dec_p);
+
+    enc_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(enc_p), "TextEncoder.prototype could not be allocated");
+    idl_interface_tag(ctx, enc_p, "TextEncoder");
+    idl_install_accessor(ctx, enc_p, "encoding", js_encoder_get, 0, -1);
+    idl_install_method(ctx, enc_p, "encode", 0, g_id_encode);
+    idl_install_method(ctx, enc_p, "encodeInto", 2, g_id_encode_into);
+    JS_SetClassProto(ctx, g_enc_class, enc_p);
 }
 
 void encoding_install(JSContext *ctx, JSValueConst global)
@@ -1010,12 +1036,22 @@ void encoding_install(JSContext *ctx, JSValueConst global)
     DCHECK(g_dec_ctor_stepid >= 0, "the Encoding globals were installed before encoding_init declared them");
     ctor = idl_step_constructor(ctx, "TextDecoder", 0, g_dec_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the TextDecoder interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_dec_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_dec_class);
+        DCHECK(!JS_IsNull(proto), "TextDecoder was installed into a realm that never ran its proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "TextDecoder", ctor);
 
     ctor = idl_step_constructor(ctx, "TextEncoder", 0, g_enc_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the TextEncoder interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_enc_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_enc_class);
+        DCHECK(!JS_IsNull(proto), "TextEncoder was installed into a realm that never ran its proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "TextEncoder", ctor);
 }
 
@@ -1023,9 +1059,7 @@ void encoding_free(JSContext *ctx)
 {
     if (!g_enc_rt)
         return;
-    JS_FreeValue(ctx, g_dec_proto);
-    JS_FreeValue(ctx, g_enc_proto);
-    g_dec_proto = g_enc_proto = JS_UNDEFINED;
+    /* the prototypes are the REALMS' — released with their contexts */
     g_enc_rt = NULL;
     g_dec_ctor_stepid = g_enc_ctor_stepid = -1;
 }

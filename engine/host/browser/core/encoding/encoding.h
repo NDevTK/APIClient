@@ -7,6 +7,7 @@
 #include <stddef.h>
 
 void encoding_init(JSContext *ctx);
+void encoding_install_protos(JSContext *ctx);   /* §7.1's and §7.2's prototypes, for ONE realm */
 void encoding_install(JSContext *ctx, JSValueConst global);
 void encoding_free(JSContext *ctx);
 

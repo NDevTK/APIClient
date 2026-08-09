@@ -33,6 +33,7 @@
 #include "core/encoding/encoding.h"
 #include "core/encoding/text_stream.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/streams/transform_stream.h"
 
 /* ---- the two interfaces' state ----------------------------------------------------------------------------- */
@@ -51,8 +52,7 @@ typedef struct {
 
 static JSClassID g_tds_class;
 static JSClassID g_tes_class;
-static JSValue   g_tds_proto = JS_UNDEFINED;
-static JSValue   g_tes_proto = JS_UNDEFINED;
+
 static JSRuntime *g_ts_rt;
 static int       g_tds_ctor_stepid = -1, g_tes_ctor_stepid = -1;
 
@@ -438,8 +438,12 @@ static int tc_build(JSContext *ctx, JSTcState *s, bool decoder, int enc, bool fa
     JSValueConst self;
     int k;
 
-    s->obj = JS_NewObjectProtoClass(ctx, decoder ? g_tds_proto : g_tes_proto,
-                                    decoder ? g_tds_class : g_tes_class);
+    {
+        JSValue proto = JS_GetClassProto(ctx, decoder ? g_tds_class : g_tes_class);
+        DCHECK(!JS_IsNull(proto), "a text stream was minted in a realm that never ran its install");
+        s->obj = JS_NewObjectProtoClass(ctx, proto, decoder ? g_tds_class : g_tes_class);
+        JS_FreeValue(ctx, proto);
+    }
     if (JS_IsException(s->obj)) return -1;
     /* THE RECORD IS COMPLETE BEFORE IT IS ATTACHED, so the finalizer of an object torn down by a failure below
        frees exactly what it holds and nothing it never got. */
@@ -587,27 +591,42 @@ void text_stream_init(JSContext *ctx)
         CHECK(g_alg_stepid[i] >= 0, "encoding: no step id for a streaming algorithm");
     }
 
-    g_tds_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_tds_proto), "TextDecoderStream.prototype could not be allocated");
-    idl_interface_tag(ctx, g_tds_proto, "TextDecoderStream");
-    idl_install_accessor(ctx, g_tds_proto, "encoding", js_tds_get, TDS_ENCODING, -1);
-    idl_install_accessor(ctx, g_tds_proto, "fatal", js_tds_get, TDS_FATAL, -1);
-    idl_install_accessor(ctx, g_tds_proto, "ignoreBOM", js_tds_get, TDS_IGNORE_BOM, -1);
-    idl_install_accessor(ctx, g_tds_proto, "readable", js_gts_get, GTS_READABLE, -1);
-    idl_install_accessor(ctx, g_tds_proto, "writable", js_gts_get, GTS_WRITABLE, -1);
-
-    g_tes_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_tes_proto), "TextEncoderStream.prototype could not be allocated");
-    idl_interface_tag(ctx, g_tes_proto, "TextEncoderStream");
-    idl_install_accessor(ctx, g_tes_proto, "encoding", js_tes_get, 0, -1);
-    idl_install_accessor(ctx, g_tes_proto, "readable", js_gts_get, GTS_READABLE, -1);
-    idl_install_accessor(ctx, g_tes_proto, "writable", js_gts_get, GTS_WRITABLE, -1);
 
     g_tds_ctor_stepid = idl_method_id_step(ctx, TDS_CTOR_ARGS, 2, DECODER_OPTIONS,
                                            (int)(sizeof DECODER_OPTIONS / sizeof DECODER_OPTIONS[0]),
                                            &js_tds_ctor_decl, 0);
     idl_optional_from(0);   /* §7.5: both constructor arguments are optional */
     g_tes_ctor_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tes_ctor_decl, 0);
+    realm_declare_intrinsic(text_stream_install_protos);
+}
+
+/* §7.5's AND §7.6's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. */
+void text_stream_install_protos(JSContext *ctx)
+{
+    JSValue tds_p, tes_p, prev;
+
+    DCHECK(g_tds_class != 0, "a realm asked for TextDecoderStream.prototype before the class was declared");
+    prev = JS_GetClassProto(ctx, g_tds_class);
+    DCHECK(JS_IsNull(prev), "text_stream_install_protos ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+
+    tds_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(tds_p), "TextDecoderStream.prototype could not be allocated");
+    idl_interface_tag(ctx, tds_p, "TextDecoderStream");
+    idl_install_accessor(ctx, tds_p, "encoding", js_tds_get, TDS_ENCODING, -1);
+    idl_install_accessor(ctx, tds_p, "fatal", js_tds_get, TDS_FATAL, -1);
+    idl_install_accessor(ctx, tds_p, "ignoreBOM", js_tds_get, TDS_IGNORE_BOM, -1);
+    idl_install_accessor(ctx, tds_p, "readable", js_gts_get, GTS_READABLE, -1);
+    idl_install_accessor(ctx, tds_p, "writable", js_gts_get, GTS_WRITABLE, -1);
+    JS_SetClassProto(ctx, g_tds_class, tds_p);
+
+    tes_p = JS_NewObject(ctx);
+    CHECK(!JS_IsException(tes_p), "TextEncoderStream.prototype could not be allocated");
+    idl_interface_tag(ctx, tes_p, "TextEncoderStream");
+    idl_install_accessor(ctx, tes_p, "encoding", js_tes_get, 0, -1);
+    idl_install_accessor(ctx, tes_p, "readable", js_gts_get, GTS_READABLE, -1);
+    idl_install_accessor(ctx, tes_p, "writable", js_gts_get, GTS_WRITABLE, -1);
+    JS_SetClassProto(ctx, g_tes_class, tes_p);
 }
 
 void text_stream_install(JSContext *ctx, JSValueConst global)
@@ -618,12 +637,22 @@ void text_stream_install(JSContext *ctx, JSValueConst global)
            "the Encoding stream globals were installed before text_stream_init declared them");
     ctor = idl_step_constructor(ctx, "TextDecoderStream", 0, g_tds_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the TextDecoderStream interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_tds_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_tds_class);
+        DCHECK(!JS_IsNull(proto), "TextDecoderStream was installed into a realm with no proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "TextDecoderStream", ctor);
 
     ctor = idl_step_constructor(ctx, "TextEncoderStream", 0, g_tes_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the TextEncoderStream interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_tes_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_tes_class);
+        DCHECK(!JS_IsNull(proto), "TextEncoderStream was installed into a realm with no proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "TextEncoderStream", ctor);
 }
 
@@ -631,9 +660,7 @@ void text_stream_free(JSContext *ctx)
 {
     int i;
     if (!g_ts_rt) return;
-    JS_FreeValue(ctx, g_tds_proto);
-    JS_FreeValue(ctx, g_tes_proto);
-    g_tds_proto = g_tes_proto = JS_UNDEFINED;
+    /* the prototypes are the REALMS' — released with their contexts */
     g_ts_rt = NULL;
     g_tds_ctor_stepid = g_tes_ctor_stepid = -1;
     for (i = 0; i < ALG_N; i++) g_alg_stepid[i] = -1;

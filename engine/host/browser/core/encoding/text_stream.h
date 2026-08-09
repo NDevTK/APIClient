@@ -4,6 +4,7 @@
 #include "quickjs.h"
 
 void text_stream_init(JSContext *ctx);
+void text_stream_install_protos(JSContext *ctx);   /* §7.5's and §7.6's prototypes, for ONE realm */
 void text_stream_install(JSContext *ctx, JSValueConst global);
 void text_stream_free(JSContext *ctx);
 
