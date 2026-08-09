@@ -461,7 +461,7 @@ static void wpt_report_exception(JSContext *ctx, const char *name, const char *w
    installed with, and the origin this host STAMPS on a message it routes out of that document. */
 #define WPT_TOP_ORIGIN "http://web-platform.test"
 
-typedef struct { char *name; int to, from; pid_t pid; } ChildDoc;
+typedef struct { char *name; char *origin; int to, from; pid_t pid; } ChildDoc;
 static ChildDoc g_children[WPT_CHILD_MAX];
 static int g_children_n;
 static const char *g_self_exe;   /* argv[0], which is what a child navigable is re-executed from */
@@ -504,7 +504,11 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
     }
     close(down[0]); close(up[1]);
     g_children[g_children_n].name = strdup(name);
-    CHECK(g_children[g_children_n].name != NULL, "wpt: OOM recording a child document");
+    /* ITS ORIGIN, kept because this host STAMPS it on everything that child emits — the child cannot name its
+       own sender any more than the top-level document can. */
+    g_children[g_children_n].origin = strdup(origin ? origin : "null");
+    CHECK(g_children[g_children_n].name != NULL && g_children[g_children_n].origin != NULL,
+          "wpt: OOM recording a child document");
     g_children[g_children_n].to = down[1];
     g_children[g_children_n].from = up[0];
     g_children[g_children_n].pid = pid;
@@ -513,21 +517,58 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
 
 /* Ask a child document one question and read one answer line. False when the child is gone, which is a real
    answer for the caller to report rather than a reason to hang. */
-static bool wpt_child_ask(ChildDoc *c, const char *op, char *out, size_t cap)
+/* THE CHILD'S OWN NOTICES COME BACK UP THIS PIPE, prefixed `N\t`, before its answer. A child instance cannot
+   initiate — the transport is one question, one answer — so without this a message it POSTS is emitted into a
+   channel nobody drains and vanishes: the reply half of every messaging protocol, silently absent. The relay
+   is what makes the child's emissions reach the one router that knows where they go, and routing one may ask
+   another child, which is why this is re-entrant on a different child's pipes. */
+static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin);
+static JSContext *g_wpt_ctx;   /* the top-level document's realm, for a notice relayed while a read is in flight */
+
+static bool wpt_child_read_line(ChildDoc *c, char **out, size_t *cap)
 {
     size_t n = 0;
-
-    wpt_send_all(c->to, op, strlen(op));
-    wpt_send_all(c->to, "\n", 1);
     for (;;) {
         char ch;
         ssize_t r = read(c->from, &ch, 1);
         if (r <= 0) return false;
         if (ch == '\n') break;
-        if (n + 1 < cap) out[n++] = ch;
+        if (n + 2 > *cap) {
+            size_t want = *cap ? *cap * 2 : 256;
+            char *g = realloc(*out, want);
+            CHECK(g != NULL, "wpt: OOM reading a child document's answer");
+            *out = g; *cap = want;
+        }
+        (*out)[n++] = ch;
     }
-    out[n] = 0;
+    if (!*cap) { *out = malloc(1); CHECK(*out != NULL, "wpt: OOM"); *cap = 1; }
+    (*out)[n] = 0;
     return true;
+}
+
+static bool wpt_child_ask(ChildDoc *c, const char *op, char *out, size_t cap)
+{
+    static char *buf;
+    static size_t buf_cap;
+
+    wpt_send_all(c->to, op, strlen(op));
+    wpt_send_all(c->to, "\n", 1);
+    for (;;) {
+        if (!wpt_child_read_line(c, &buf, &buf_cap)) return false;
+        if (!strncmp(buf, "N\t", 2)) {
+            /* A NOTICE THE CHILD EMITTED, routed by the zone that knows where it goes — and stamped with the
+               CHILD's origin, because it is the child that sent it. */
+            char *line = strdup(buf + 2);
+            CHECK(line != NULL, "wpt: OOM relaying a child's notice");
+            DCHECK(g_wpt_ctx != NULL, "a child relayed a notice before this host had a document to route it "
+                                      "into — the top-level realm names where a reply is delivered");
+            wpt_route_notice(g_wpt_ctx, line, c->origin);
+            free(line);
+            continue;
+        }
+        snprintf(out, cap, "%s", buf);
+        return true;
+    }
 }
 
 /* WHICH AGENT the answer being decoded came from — an object name is only meaningful in the name space of the
@@ -597,6 +638,74 @@ static char *wpt_get_csp(const char *url, size_t *plen, char **pcsp);
    while the only host request was an occasional cross-document read it was only ever pulled from inside
    run_program's own resume loop, where the answer landed first by luck of ordering. §7.4 step 14's load parks
    on one, and luck ran out. */
+/* THE TRUSTED ZONE'S ROUTER. Every notice, whoever emitted it, comes through here — the top-level document's
+   own, and every one relayed up from a child instance — because "which instance holds which document" is
+   exactly the one fact only this process knows, and a second copy of the decision would be a second answer.
+   `from_origin` is the origin of the instance that EMITTED the notice, which this host knows and the emitting
+   engine may not name for itself: it is what a routed message is stamped with. `line` is modified in place. */
+static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin);
+
+/* Relay one message to whichever instance holds `doc` — a child, or this process's own document. */
+static void wpt_route_post(JSContext *ctx, const char *doc, const char *world, const char *from_origin,
+                           const char *target_origin, const char *b64)
+{
+    ChildDoc *c = wpt_child_for(doc);
+
+    if (c) {
+        size_t cap = strlen(world) + strlen(from_origin) + strlen(target_origin) + strlen(b64) + 64;
+        char *op = malloc(cap);
+        char ack[16];
+        CHECK(op != NULL, "wpt: OOM routing a message to a child document");
+        snprintf(op, cap, "windowproxy.post\t%s\t%s\t%s\t%s", world, from_origin, target_origin, b64);
+        wpt_child_ask(c, op, ack, sizeof ack);
+        free(op);
+        return;
+    }
+    /* NOT A CHILD, SO IT IS THIS PROCESS'S OWN DOCUMENT — the reply direction, which is most of what a real
+       messaging protocol does: a frame answers its opener. The delivery is the same one a child makes, in this
+       instance, so it goes through the same engine entry rather than a second path. */
+    DCHECK(!strcmp(doc, "wpt"),
+           "a routed message named a document neither this process nor any child of it holds — the "
+           "navigable.create notice for it was dropped, or the post outran it");
+    {
+        size_t b64n = strlen(b64), cap = JS_Base64DecodedMax(b64n) + 1;
+        uint8_t *bytes = malloc(cap);
+        int err = 0;
+        size_t blen;
+        char *w = strdup(world), *colon;
+
+        CHECK(bytes != NULL && w != NULL, "wpt: OOM receiving a routed message");
+        blen = JS_Base64Decode(bytes, cap, b64, b64n, &err);
+        CHECK(err == 0, "wpt: a routed message did not survive the text channel it crossed");
+        colon = strchr(w, ':');
+        if (colon) *colon = 0;
+        window_message_deliver_remote(ctx, w, from_origin, target_origin, bytes, blen);
+        free(w);
+        free(bytes);
+    }
+}
+
+static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin)
+{
+    char *f[6]; int nf = 0; char *q;
+
+    for (q = line, f[nf++] = q; *q && nf < 6; q++)
+        if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
+    if (nf == 6 && !strcmp(f[0], "navigable.create")) {
+        wpt_spawn_child(f[1], f[3], f[4], f[5]);
+        return;
+    }
+    /* `windowproxy.post <target doc> <world> <target origin> <base64>` — §9.4.4 across instances. THE ORIGIN
+       IS STAMPED HERE, by the zone that knows who sent it: the engine may not name its own sender
+       (SECURITY.md), so the notice carries none and this adds the one it knows. */
+    if (nf == 5 && !strcmp(f[0], "windowproxy.post")) {
+        wpt_route_post(ctx, f[1], f[2], from_origin, f[3], f[4]);
+        return;
+    }
+    DFAIL("a host notice reached the router under an operation it does not route — a notice this host drops is "
+          "a capability the engine emitted for and nothing performs, which is invisible at the emitting end");
+}
+
 static bool wpt_answer_host_requests(JSContext *ctx)
 {
     const char *notices = engine_host_notices();
@@ -604,12 +713,11 @@ static bool wpt_answer_host_requests(JSContext *ctx)
     bool answered = false;
 
     /* THE NOTICES FIRST: a document announced but not yet provisioned is one a read would arrive for before
-       its instance exists. `navigable.create <child> <creator> <url> <origin> <csp>`. */
+       its instance exists. */
     for (p = notices; *p; ) {
         const char *end = strchr(p, '\n');
         char *line;
         size_t n;
-        char *f[6]; int nf = 0; char *q;
 
         if (!end) break;
         n = (size_t)(end - p);
@@ -619,28 +727,7 @@ static bool wpt_answer_host_requests(JSContext *ctx)
         line = malloc(n + 1);
         CHECK(line != NULL, "wpt: OOM reading a host notice");
         memcpy(line, p, n); line[n] = 0;
-        for (q = line, f[nf++] = q; *q && nf < 6; q++)
-            if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
-        if (nf == 6 && !strcmp(f[0], "navigable.create"))
-            wpt_spawn_child(f[1], f[3], f[4], f[5]);
-        /* `windowproxy.post <target doc> <world> <target origin> <base64>` — §9.4.4 across instances. THE
-           ORIGIN IS STAMPED HERE, by the zone that knows who sent it: the engine may not name its own sender
-           (SECURITY.md), so the field it emitted carries no origin and this adds the one it knows. */
-        else if (nf == 5 && !strcmp(f[0], "windowproxy.post")) {
-            ChildDoc *c = wpt_child_for(f[1]);
-            DCHECK(c != NULL, "a routed message named a document this host never provisioned — the "
-                              "navigable.create notice for it was dropped, or the post outran it");
-            if (c) {
-                size_t cap = strlen(f[2]) + strlen(f[3]) + strlen(f[4]) + 64;
-                char *op = malloc(cap);
-                char ack[16];
-                CHECK(op != NULL, "wpt: OOM routing a message to a child document");
-                snprintf(op, cap, "windowproxy.post\t%s\t%s\t%s\t%s",
-                         f[2], WPT_TOP_ORIGIN, f[3], f[4]);
-                wpt_child_ask(c, op, ack, sizeof ack);
-                free(op);
-            }
-        }
+        wpt_route_notice(ctx, line, WPT_TOP_ORIGIN);
         free(line);
         p = end + 1;
     }
@@ -1209,6 +1296,24 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin,
    running", because its serve loop is its scheduler. */
 static CowDelta *g_cur_seg;
 
+/* A CHILD CANNOT INITIATE, so its notices ride back on the answer pipe prefixed `N\t` and the parent's router
+   takes them from there. Drained before every answer, because the answer is the only moment this instance is
+   allowed to speak — a notice held past it waits for the next question that may never come. */
+static void wpt_child_emit_notices(void)
+{
+    const char *notices = engine_host_notices();
+    const char *p;
+
+    for (p = notices; *p; ) {
+        const char *end = strchr(p, '\n');
+        if (!end) break;
+        fputs("N\t", stdout);
+        fwrite(p, 1, (size_t)(end - p), stdout);
+        fputc('\n', stdout);
+        p = end + 1;
+    }
+}
+
 static int wpt_child_main(int argc, char **argv)
 {
     const char *name = argv[2], *url = argv[3], *origin = argv[4], *csp = argc > 5 ? argv[5] : "";
@@ -1366,6 +1471,7 @@ static int wpt_child_main(int argc, char **argv)
                this loop does. An empty program is that turn — it drains the posted-message task source the way
                any other turn would, rather than this host driving the delivery itself. */
             run_program(ctx, "", 0, "<routed message>");
+            wpt_child_emit_notices();
             fputs("u\n", stdout);
             fflush(stdout);
             continue;
@@ -1392,6 +1498,7 @@ static int wpt_child_main(int argc, char **argv)
         if (run_program_value(ctx, prog, strlen(prog), "<cross-document read>", &v)) v = JS_UNDEFINED;
         wpt_encode_answer(ctx, v, answer, sizeof answer);
         JS_FreeValue(ctx, v);
+        wpt_child_emit_notices();
         fputs(answer, stdout);
         fputc('\n', stdout);
         fflush(stdout);
@@ -1429,6 +1536,10 @@ int main(int argc, char **argv)
     wpt_derive_addresses(argc, argv);
     /* THE TEST DOCUMENT. One call, because a child document is built by the same one — see above. */
     ctx = wpt_build_document("wpt", WPT_TOP_ORIGIN, NULL, 0);
+    /* THE REALM A RELAYED NOTICE IS DELIVERED INTO. A child's notice arrives while this process is blocked
+       inside wpt_child_ask, which has no ctx of its own — this names the one it routes into, and a notice
+       arriving before there is one is a message with nowhere to go. */
+    g_wpt_ctx = ctx;
     rt = g_rt;
 
     JS_SetFlowControlHooks(&WPT_HOOKS_ON);
