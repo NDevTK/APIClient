@@ -775,7 +775,8 @@ static JSValue proxy_close(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 
     (void)argc; (void)argv; (void)magic;
     if (!p) return JS_UNDEFINED;
-    /* §7.2.5.2 RETURNS EARLY for a navigable that is not a TOP-LEVEL traversable, and that is the whole of it
+
+/* §7.2.5.2 RETURNS EARLY for a navigable that is not a TOP-LEVEL traversable, and that is the whole of it
        for every proxy: the navigable is this agent's, so there is nothing to delegate and nothing to ask. */
     if (JS_IsUndefined(p->parent)) p->closed = 1;
     return JS_UNDEFINED;
@@ -792,6 +793,17 @@ void window_proxy_close(JSContext *ctx, JSValueConst proxy)
 typedef struct { uint32_t req; } ProxyGetState;
 
 static void proxy_get_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
+
+/* WHERE THIS MACHINE RESTS. §7.2.5.1 answers each cross-origin member from the OTHER navigable's active
+   document, so the read is one step of the standard performed in another instance — and the wait for that
+   peer is a sub-sequence inside it (`req` is its cursor), not a step of its own. One stage: a flow parked
+   here is parked at the read it made, whichever member it asked for. */
+#define PROXY_GET_STAGES(X) \
+    X(PROXY_GET_ASK = IDL_STEP_FIRST, \
+      "HTML §7.2.5.1 (the cross-origin member's value, resolved by the instance that holds the active " \
+      "document — the flow suspends on the line that made the read and resumes with the answer)")
+enum { PROXY_GET_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const PROXY_GET_STEPS[] = { PROXY_GET_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                           JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
@@ -859,7 +871,9 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     return JS_STEP_DONE;
 }
 
-static const IdlStepDecl PROXY_GET_DECL = { proxy_get_step, sizeof(ProxyGetState), proxy_get_visit, NULL };
+static const IdlStepDecl PROXY_GET_DECL = { proxy_get_step, sizeof(ProxyGetState), proxy_get_visit, NULL,
+                                           "HTML §7.2.5.1 a cross-origin WindowProxy member's value",
+                                           PROXY_GET_STEPS };
 
 /* §7.2.5.1's MEMBER SURFACE FOR ONE REALM. Declaration order in core/realm.h's list matters here in one
    direction only: window_message.c's `postMessage` goes onto this object, so its entry is declared after this

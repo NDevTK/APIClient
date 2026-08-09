@@ -205,6 +205,16 @@ typedef struct {
     uint32_t  req;   /* the host-owed response, 0 before it is asked for */
 } NavLoadState;
 
+/* WHERE THIS MACHINE RESTS. It is §7.4 step 14's load as a JOB, and its whole body is one step of the
+   standard: fetch the destination, build the Document from what came back, and hand the navigable to it. The
+   wait for the host's answer is a sub-sequence within that step (`req` is its cursor) and not a step of its
+   own — no page code of this document runs across it, because the document does not exist yet. */
+#define NAV_LOAD_STAGES(X) \
+    X(NAV_LOAD_FETCH, "HTML §7.4 step 14 → §7.11 navigate (fetch the destination, then §7.2.6's policy " \
+                      "container and §7.11's create and initialize a Document object over the response)")
+enum { NAV_LOAD_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const NAV_LOAD_STEPS[] = { NAV_LOAD_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
 /* THE RESPONSE IS `{body, csp}` — one answer, because a policy is a property of THE RESPONSE and asking for it
    separately is asking a second time and may get a second answer. A missing or null `body` is a fetch that did
    not load, which is a document the navigable still gets (an error page is a document). */
@@ -222,6 +232,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
+    DCHECK(s->hdr.stage == NAV_LOAD_FETCH, "the document-load job resumed at a stage §7.4 does not have");
     DCHECK(window_proxy_is(proxy), "the document-load job was given something that is not a WindowProxy");
     addr = JS_ToCString(ctx, step_arg(&s->hdr, 1));
     if (!addr) return JS_STEP_ABRUPT;
@@ -293,7 +304,9 @@ static JSValue js_nav_load_fini(JSContext *ctx, void *st, bool take_result)
 }
 
 static const JSTrampStepDef js_nav_load_def = { sizeof(NavLoadState), js_nav_load_step, js_nav_load_fini, 0,
-                                                .visit = js_nav_load_visit };
+                                                .visit = js_nav_load_visit,
+                                                .algorithm = "HTML §7.4 step 14's document load, as a job",
+                                                .steps = NAV_LOAD_STEPS };
 static int g_nav_load_stepid = -1;
 
 /* `inherit_csp` is §7.2.6's policy for a destination that carries none of its own, and WHOSE it is depends on
@@ -620,8 +633,17 @@ JSValue navigable_open(JSContext *ctx, const char *url, const char *target, cons
  * zone's, cannot navigate at all. The machine is what removes that sentence.
  * IT DOES NOT PARK YET. The fetch below is still the host's synchronous one; what changed is the substrate
  * under it, so making that fetch a host request is a change to child_document and to nothing here. */
+/* WHERE THIS MACHINE RESTS. §7.4's open() is nine steps and the only one that can suspend is step 14's load,
+   which the LOAD JOB below owns rather than this member — so open() has one stage today, and the machine
+   exists so that step can become a park without this being rewritten. */
+#define OPEN_STAGES(X) \
+    X(OPEN_CHOOSE = IDL_STEP_FIRST, \
+      "HTML §7.4 open(url, target, features) steps 1-9 (the features, choosing or creating the navigable, " \
+      "navigating it, and the null a `noopener` request answers with)")
+enum { OPEN_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const OPEN_STEPS[] = { OPEN_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
 typedef struct {
-    uint8_t stage;
     JSValue result;   /* the chosen navigable's proxy (owned) */
     uint8_t noopener; /* §7.4's last step needs it after the navigable is made */
 } OpenState;
@@ -645,10 +667,11 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     const char *url, *target, *features;
     WindowFeatures feat;
 
-    (void)hdr; (void)out_cb; (void)out_argc;
+    (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
-    DCHECK(s->stage == 0, "window.open resumed, and it has only one stage — the machine exists for the fetch "
-                          "inside step 14, which does not park yet");
+    DCHECK(hdr->stage == OPEN_CHOOSE,
+           "window.open resumed, and §7.4 gives it one stage here — step 14's load is the load job's, and it "
+           "is that job that parks");
     s->result = JS_UNDEFINED;
     url    = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
     target = argc > 1 ? JS_ToCString(ctx, argv[1]) : NULL;
@@ -679,7 +702,8 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     return JS_STEP_DONE;
 }
 
-static const IdlStepDecl OPEN_DECL = { js_win_open_step, sizeof(OpenState), open_visit, open_release };
+static const IdlStepDecl OPEN_DECL = { js_win_open_step, sizeof(OpenState), open_visit, open_release,
+                                      "HTML §7.4 open(url, target, features)", OPEN_STEPS };
 
 static int g_id_open;
 

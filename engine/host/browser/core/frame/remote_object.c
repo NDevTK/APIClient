@@ -118,6 +118,16 @@ uint32_t remote_object_id(JSValueConst v)
     return r->id;
 }
 
+/* WHERE THIS MACHINE RESTS. A same-origin-across-instances property read is ONE operation — §7.2.5's
+   ordinary [[Get]], performed by the peer that owns the object — and the wait for that peer is a sub-sequence
+   inside it rather than a step of its own. */
+#define REF_GET_STAGES(X) \
+    X(REF_GET_ASK = IDL_STEP_FIRST, \
+      "ECMA-262 10.1.8 [[Get]], performed in the instance that owns the object (the flow suspends on the read " \
+      "and resumes with what the peer's own program answered)")
+enum { REF_GET_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const REF_GET_STEPS[] = { REF_GET_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
 /* §7.2.5.1's read, one agent further out: `object.get <doc> <world+ancestry> <id> <name>`. The world travels
    for the same reason it travels with a WindowProxy read — the answer is only true in it — and so does its
    ancestry, so the peer can materialize its segment by forking the nearest ancestor it holds. */
@@ -179,7 +189,9 @@ static int ref_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
     return JS_STEP_DONE;
 }
 
-static const IdlStepDecl REF_GET_DECL = { ref_get_step, sizeof(RefGetState), ref_get_visit, NULL };
+static const IdlStepDecl REF_GET_DECL = { ref_get_step, sizeof(RefGetState), ref_get_visit, NULL,
+                                         "ECMA-262 10.1.8 [[Get]] across an instance boundary",
+                                         REF_GET_STEPS };
 
 /* Everything a reference does NOT do yet, said at the site rather than left to answer wrongly. A write, a call
    and a delete each need the peer to run the operation under the asking flow's world and to accept ARGUMENTS,
