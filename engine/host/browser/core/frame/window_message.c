@@ -48,7 +48,12 @@ static JSValue g_deliver_fn = JS_UNDEFINED;
 
 /* One queued post: the message, the origin check it still owes, and the target. Held as a JS Array for the
    reason a port's queue is one — it is frontier data, it has to park, and the collector should own it. */
-enum { PQ_DATA = 0, PQ_HOLDERS, PQ_TARGET_ORIGIN, PQ_N };
+/* PQ_SOURCE IS CAPTURED AT THE POST, not read at the delivery. §9.4.4 step 7.3's `source` is the INCUMBENT
+   settings object's global — the window that CALLED postMessage — and the delivery task has no way to know
+   that later: its callee is one function object for the agent, so the ctx it runs under is whichever realm
+   minted it, and reading the sender from there named the first document for every post in the instance. This
+   is §scheduler's rule that an operation which becomes a work item takes its inputs with it. */
+enum { PQ_DATA = 0, PQ_HOLDERS, PQ_TARGET_ORIGIN, PQ_SOURCE, PQ_N };
 
 /* §9.4.4 step 7.1: the origin check happens IN THE TASK, not at the call — the target may have navigated
    between the post and the delivery, and the standard checks the origin it has THEN. `want` is the serialized
@@ -68,7 +73,8 @@ static JSValue js_window_deliver(JSContext *ctx, JSValueConst this_val, int argc
     JSValueConst target = argc > 0 ? argv[0] : JS_UNDEFINED;   /* the target WindowProxy */
     JSValueConst entry  = argc > 1 ? argv[1] : JS_UNDEFINED;
     StructuredWithTransfer swt;
-    JSValue buf, want, data, ev, ports = JS_UNDEFINED;
+    JSValue buf, want, data, ev, source, ports = JS_UNDEFINED;
+    JSContext *tctx;
     const char *want_s = NULL;
     size_t blen = 0;
 
@@ -87,34 +93,42 @@ static JSValue js_window_deliver(JSContext *ctx, JSValueConst this_val, int argc
     if (want_s) JS_FreeCString(ctx, want_s);
     JS_FreeValue(ctx, want);
 
+    /* §9.4.4 step 7: THE DESERIALIZE AND THE EVENT BELONG TO THE TARGET'S REALM. The standard says "in
+       targetWindow's relevant realm" for both, and it is not pedantry here: the deserialized objects and the
+       MessageEvent are handed to the RECEIVING document's code, so building them under the delivery callee's
+       own realm gave a child document a message whose every object belonged to the parent. */
+    tctx = window_proxy_realm(ctx, target);
+    DCHECK(tctx != NULL, "a window message was delivered to a navigable this agent holds no realm for");
+    source = JS_GetPropertyUint32(ctx, entry, PQ_SOURCE);   /* the sender's proxy, taken at the post */
     buf = JS_GetPropertyUint32(ctx, entry, PQ_DATA);
     swt.holders = JS_GetPropertyUint32(ctx, entry, PQ_HOLDERS);
     swt.data.buf = JS_GetArrayBuffer(ctx, &blen, buf);
     swt.data.len = blen;
     DCHECK(swt.data.buf != NULL, "a queued window message held something that is not the bytes it stored");
-    data = structured_deserialize_transfer(ctx, &swt, &ports);
+    data = structured_deserialize_transfer(tctx, &swt, &ports);
     JS_FreeValue(ctx, buf);
     JS_FreeValue(ctx, swt.holders);
 
     if (JS_IsException(data)) {
-        JS_FreeValue(ctx, JS_GetException(ctx));
-        JS_FreeValue(ctx, ports);
-        ev = message_event_new(ctx, "messageerror", JS_UNDEFINED, g_origin, win_proxy(ctx), JS_UNDEFINED);
+        JS_FreeValue(tctx, JS_GetException(tctx));
+        JS_FreeValue(tctx, ports);
+        ev = message_event_new(tctx, "messageerror", JS_UNDEFINED, g_origin, source, JS_UNDEFINED);
     } else {
         /* §9.4.4 steps 7.2 and 7.3: the origin is the SENDER'S and the source is the sender's WindowProxy —
            which is what a handler's `event.origin` check is about, and the whole reason this event is worth
            anything to the solver. */
-        ev = message_event_new(ctx, "message", data, g_origin, win_proxy(ctx), ports);
-        JS_FreeValue(ctx, data);
-        JS_FreeValue(ctx, ports);
+        ev = message_event_new(tctx, "message", data, g_origin, source, ports);
+        JS_FreeValue(tctx, data);
+        JS_FreeValue(tctx, ports);
     }
+    JS_FreeValue(ctx, source);
     if (JS_IsException(ev)) return JS_EXCEPTION;
     /* Fired at the WINDOW, which is the target proxy's active Window — the same read a flow that navigated the
        navigable would answer differently, and the reason the proxy is the thing held rather than the Window. */
     {
-        JSValue w = window_proxy_window(ctx, target);
-        event_target_fire(ctx, w, ev);
-        JS_FreeValue(ctx, w);
+        JSValue w = window_proxy_window(tctx, target);
+        event_target_fire(tctx, w, ev);
+        JS_FreeValue(tctx, w);
     }
     return JS_UNDEFINED;
 }
@@ -196,6 +210,8 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     JS_SetPropertyUint32(ctx, entry, PQ_DATA, buf);
     JS_SetPropertyUint32(ctx, entry, PQ_HOLDERS, JS_DupValue(ctx, swt.holders));
     JS_SetPropertyUint32(ctx, entry, PQ_TARGET_ORIGIN, want);
+    /* §9.4.4 step 7.3's source, read HERE where the caller's realm is the one running. */
+    JS_SetPropertyUint32(ctx, entry, PQ_SOURCE, JS_DupValue(ctx, win_proxy(ctx)));
     structured_with_transfer_free(ctx, &swt);
 
     /* §9.4.4 step 7: a TASK on the posted-message task source. Not a microtask — a page that posts and then
