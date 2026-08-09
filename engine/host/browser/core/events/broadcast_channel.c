@@ -197,6 +197,16 @@ typedef struct { uint8_t unused; } JSBcCtorState;
 static void js_bc_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
 static void js_bc_release(JSContext *ctx, void *st) { (void)ctx; (void)st; }
 
+/* WHERE THIS MACHINE RESTS. §9.5's constructor is three steps — the name, the origin and adding the channel
+   to the registry — and none of them reaches the page's code, because the declaration converted the name
+   before the body ran. One stage, never returned to. */
+#define BC_CTOR_STAGES(X) \
+    X(BC_CTOR_BUILD = IDL_STEP_FIRST, \
+      "HTML §9.5 new BroadcastChannel(name) steps 1-3 (this's channel name and origin, then this is added to " \
+      "the list of BroadcastChannel objects — creation order IS delivery order)")
+enum { BC_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const BC_CTOR_STEPS[] = { BC_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
 static int js_bc_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -206,6 +216,7 @@ static int js_bc_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 
     (void)st; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
+    DCHECK(hdr->stage == BC_CTOR_BUILD, "the BroadcastChannel constructor resumed at a stage §9.5 does not have");
     if (JS_IsUndefined(hdr->this_val))
         return JS_ThrowTypeError(ctx, "constructor BroadcastChannel requires 'new'"), -1;
     /* §9.5: `constructor(DOMString name)` — one REQUIRED argument, so a bare `new BroadcastChannel()` is the
@@ -246,7 +257,8 @@ static int js_bc_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 }
 
 static const IdlStepDecl js_bc_ctor_decl = {
-    js_bc_ctor_step, sizeof(JSBcCtorState), js_bc_visit, js_bc_release
+    js_bc_ctor_step, sizeof(JSBcCtorState), js_bc_visit, js_bc_release,
+    "HTML §9.5 new BroadcastChannel(name)", BC_CTOR_STEPS
 };
 
 /* ---- install -------------------------------------------------------------------------------------------- */

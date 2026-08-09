@@ -449,7 +449,15 @@ JSValue message_port_pair(JSContext *ctx, JSValue *port2)
     return p1;
 }
 
-typedef struct { uint8_t unused; } JSChanCtorState;
+/* WHERE THIS MACHINE RESTS. §9.4.3's constructor is three steps, none of which can reach the page's code —
+   two new MessagePorts and the entanglement — so the machine has one stage and never returns to it. */
+#define CHAN_CTOR_STAGES(X) \
+    X(CHAN_CTOR_PAIR = IDL_STEP_FIRST, \
+      "HTML §9.4.3 new MessageChannel() steps 1-3 (this's port 1 and port 2, then entangle them)")
+enum { CHAN_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CHAN_CTOR_STEPS[] = { CHAN_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct { int unused; } JSChanCtorState;
 static void js_chan_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
 static void js_chan_release(JSContext *ctx, void *st) { (void)ctx; (void)st; }
 
@@ -462,6 +470,7 @@ static int js_chan_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
 
     (void)st; (void)argc; (void)argv; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
+    DCHECK(hdr->stage == CHAN_CTOR_PAIR, "the MessageChannel constructor resumed at a stage §9.4.3 does not have");
     if (JS_IsUndefined(hdr->this_val))
         return JS_ThrowTypeError(ctx, "constructor MessageChannel requires 'new'"), -1;
     {
@@ -482,7 +491,8 @@ static int js_chan_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
 }
 
 static const IdlStepDecl js_chan_ctor_decl = {
-    js_chan_ctor_step, sizeof(JSChanCtorState), js_chan_visit, js_chan_release
+    js_chan_ctor_step, sizeof(JSChanCtorState), js_chan_visit, js_chan_release,
+    "HTML §9.4.3 new MessageChannel()", CHAN_CTOR_STEPS
 };
 
 /* ---- install -------------------------------------------------------------------------------------------- */

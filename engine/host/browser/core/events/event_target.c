@@ -668,9 +668,22 @@ static void listener_remove_record(JSContext *ctx, JSValueConst target, const ch
  * that runs mid-walk can add or remove listeners, and this walk is suspended across every one of them. */
 enum { DISPATCH_ARG = 0, CLICK_SYNTH = 1, DISPATCH_PAIR = 2 };
 
+/* WHERE THIS MACHINE RESTS, AS §2.9 NUMBERS IT. Dispatch is twelve steps and it can suspend at exactly two
+   points: inside a listener, and inside the activation behaviour — so those are the two stages after the one
+   that builds the path. The stage was a private byte, which is a resume point the driver cannot assert on,
+   a park cannot report, and a later build cannot resolve back to a step. */
+#define DISPATCH_STAGES(X) \
+    X(DISPATCH_PATH, "DOM §2.9 dispatch steps 1-5.11 (the dispatch flag, the target override, the " \
+                     "propagation path, and which entry of it is the activation target)") \
+    X(DISPATCH_WALK, "DOM §2.9 dispatch steps 5.12-5.13 (invoke each listener along the path — capturing, " \
+                     "at-target, then bubbling — parked on the one being called)") \
+    X(DISPATCH_ACTIVATION, "DOM §2.9 dispatch step 11.1 (the activation target's activation behaviour, run " \
+                           "after the whole walk and only when nothing cancelled)")
+enum { DISPATCH_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DISPATCH_STEPS[] = { DISPATCH_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
 typedef struct JSDispatchState {
     JSStepHdr hdr;       /* FIRST — the driver writes the def and the operand bounds through it */
-    uint8_t   stage;
     uint8_t   cphase;    /* the call request's own phase, so a stage can hold a call across a suspension */
     uint32_t  i, n;      /* THE RESUME POINT: the listener being called, and how many there are */
     uint32_t  ti, tn;    /* THE OTHER: how far into the current LEG, and how long the whole path is */
@@ -772,7 +785,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     JSValue fn, ignored;
     int r;
 
-    if (s->stage == 0) {
+    if (s->hdr.stage == DISPATCH_PATH) {
         JSValueConst target;
 
         JS_FreeValue(ctx, cb_result);
@@ -837,10 +850,10 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         s->ti = 0;
         s->leg = 0;
         s->n = s->i = 0;
-        s->stage = 1;
+        s->hdr.stage = DISPATCH_WALK;
     }
 
-    if (s->stage == 2) goto activation;   /* re-entered inside the activation behaviour — see below */
+    if (s->hdr.stage == DISPATCH_ACTIVATION) goto activation;   /* re-entered inside the activation behaviour — see below */
     for (;;) {
         while (s->i < s->n) {
             JSValue rec;
@@ -962,7 +975,7 @@ activation:
         /* STAGE 2 IS THE RESUME POINT. The behaviour may wait on the host, and when it does the whole dispatch
            parks here — after the walk, with the event already cleaned up — and re-enters at exactly this line
            rather than replaying three legs of listeners. */
-        s->stage = 2;
+        s->hdr.stage = DISPATCH_ACTIVATION;
         ar = g_run_activation(ctx, s->act, s->ev, &s->aphase, &s->areq);
         if (ar != JS_STEP_DONE) return ar;
     }
@@ -971,12 +984,14 @@ activation:
 }
 
 static const JSTrampStepDef js_dispatch_def = {
-    sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, DISPATCH_ARG, .visit = js_dispatch_visit
+    sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, DISPATCH_ARG, .visit = js_dispatch_visit,
+    .algorithm = "DOM §2.9 dispatch", .steps = DISPATCH_STEPS
 };
 /* §3.2.2 click(). The SAME machine — a click is a dispatch, and giving it its own would be two implementations
    of §2.9 that could disagree about listener order, the handler slot or the canceled flag. */
 static const JSTrampStepDef js_click_def = {
-    sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, CLICK_SYNTH, .visit = js_dispatch_visit
+    sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, CLICK_SYNTH, .visit = js_dispatch_visit,
+    .algorithm = "DOM §2.9 dispatch", .steps = DISPATCH_STEPS
 };
 static int g_click_stepid = -1;
 
@@ -1068,7 +1083,8 @@ int event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_ca
 }
 
 static const JSTrampStepDef js_dispatch_pair_def = {
-    sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, DISPATCH_PAIR, .visit = js_dispatch_visit
+    sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, DISPATCH_PAIR, .visit = js_dispatch_visit,
+    .algorithm = "DOM §2.9 dispatch", .steps = DISPATCH_STEPS
 };
 
 /* §2.7's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM — built at the end of the file because the dispatch machine
