@@ -354,7 +354,11 @@ void engine_host_notify(JSContext *ctx, const char *op) {
  *
  * IT BECOMES A FLOW, and that is the whole design rather than a detail of it. §CLAUDE's cross-document rule says
  * a delivery SEEDS a flow in the receiver whose world is receiver-baseline ∧ the sending flow's vector, and that
- * it is a work item on the ONE frontier — so this creates a member and returns. It does not deliver: delivering
+ * it is a work item on the ONE frontier. RECEIVER-BASELINE IS READ AS THE RECEIVING DOCUMENT'S OWN TIMELINES,
+ * not as this instance's pre-boot baseline: a flow starting from the latter arrives where the page's `message`
+ * listener was never registered, because the script that registered it ran in some flow's delta. The two
+ * readings differ by exactly that, and only one of them delivers a message at all — so this creates a member
+ * of every live timeline and returns. It does not deliver: delivering
  * here would run page code under whatever flow the scheduler last had switched in, against that flow's delta,
  * which is the "two timelines wearing one name" the world registry exists to prevent. The frontier IS the
  * inbound queue, so there is no second queue to drain and no second pump to drain it, and the delivery is
@@ -421,8 +425,15 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
            ever POSTED: a world that has written nothing here constrains nothing here, so the conjunction is the
            receiving flow's timeline unchanged and the delivery below is already it. That is asked rather than
            assumed, because the answer changes the moment this instance answers a cross-document operation that
-           runs page code under a foreign world. */
-        DCHECK(cow_delta_empty(world_segment(ctx, w, anc, n_anc)),
+           runs page code under a foreign world.
+           MATERIALIZED ON ITS OWN LINE, because it is not part of the question. A DCHECK vanishes in release,
+           so a segment created inside one would exist in dev and not in production — and the next arrival from
+           a world forked off this one would find no ancestor and start from the baseline instead of inheriting
+           it. That is two different timelines in two builds, which is precisely why check.h requires the
+           condition to be side-effect-free. */
+        CowDelta *seg = world_segment(ctx, w, anc, n_anc);
+        (void)seg;
+        DCHECK(cow_delta_empty(seg),
                "the sending world has WRITTEN in this instance, so the delivery's world is the receiving flow's "
                "timeline conjoined with those writes — a JOIN of two deltas both rooted at this baseline, "
                "neither an ancestor of the other, which the linear delta chain cannot express: stacking the "
@@ -473,6 +484,7 @@ static void flow_deliver(JSContext *ctx, Flow *f)
     char *dup = f->deliver, *doc, *worlds, *tail;
     WorldId w, anc[16];
     int n_anc;
+    CowDelta *seg;
 
     DCHECK(flow_running() == f, "a routed delivery was made while another flow was switched in — it would run "
                                 "against that flow's delta and its task would land on that flow's queue");
@@ -486,8 +498,12 @@ static void flow_deliver(JSContext *ctx, Flow *f)
        when the record arrived; this asks it at the moment the delivery actually runs, because the scheduler has
        run other flows in between and the answer is a property of the run, not of the record. What is installed
        right now is f's timeline and nothing else, so the sender's segment being empty is what makes that the
-       conjunction rather than half of it. */
-    DCHECK(cow_delta_empty(world_segment(ctx, w, anc, n_anc)),
+       conjunction rather than half of it. Looked up on its own line for the reason engine_route's is: a
+       DCHECK's condition is compiled out in release, and a segment materialized inside one would exist in dev
+       and not in production. */
+    seg = world_segment(ctx, w, anc, n_anc);
+    (void)seg;
+    DCHECK(cow_delta_empty(seg),
            "a delivery ran in the receiving flow's timeline alone while the sending world holds writes in this "
            "instance — the message arrives at a document missing everything its sender did here. Build the join "
            "of the two deltas that engine_route names");
