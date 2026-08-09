@@ -105,6 +105,22 @@ static bool value_has(const char *v, size_t vlen, const char *tok, size_t tlen)
     return false;
 }
 
+/* §7.1's ORDERED SET PARSER DROPS DUPLICATES, and that is what this list IS — a token SET. `class="a a b"` is
+   TWO tokens, so `length` is 2 and `item(1)` is `b`; walking the attribute's raw tokens made both of them
+   answer 3 and `a`, which is `contains` and `length` disagreeing about the very same list.
+   The set's members are the FIRST occurrences, so a token is in the set exactly when it does not appear in the
+   value BEFORE itself — which the prefix ending at this token is, and which needs no allocation and no second
+   pass. Every member that counts or indexes the list walks with this rather than with token_next; the two are
+   deliberately different functions because the mutation walk wants the raw tokens (it dedups into its OUTPUT,
+   which is what re-serialises the set). */
+static bool set_next(const char *v, const char **p, const char *end, const char **tok, size_t *tlen)
+{
+    while (token_next(p, end, tok, tlen))
+        if (!value_has(v, (size_t)(*tok - v), *tok, *tlen))
+            return true;
+    return false;
+}
+
 /* §7.1 "run the update steps": re-serialise the set and write it through the DOM chokepoint, so the write is
    per-flow and runs the attribute change steps exactly like a setAttribute the page wrote itself. */
 static void list_write(lxb_dom_element_t *el, const char *attr, const char *val, size_t len)
@@ -141,7 +157,7 @@ static JSValue js_tl_length(JSContext *ctx, JSValueConst this_val, int magic)
     if (!el) return JS_NewInt32(ctx, 0);
     v = list_value(el, attr, &vlen);
     p = v; end = v + vlen;
-    while (token_next(&p, end, &t, &tlen)) n++;
+    while (set_next(v, &p, end, &t, &tlen)) n++;
     return JS_NewInt32(ctx, (int)n);
 }
 
@@ -197,7 +213,7 @@ static JSValue js_tl_item(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     if (want < 0) return JS_NULL;
     v = list_value(el, attr, &vlen);
     p = v; end = v + vlen;
-    while (token_next(&p, end, &t, &tlen)) {
+    while (set_next(v, &p, end, &t, &tlen)) {
         if (n == (uint32_t)want) return JS_NewStringLen(ctx, t, tlen);
         n++;
     }
