@@ -555,6 +555,38 @@ static const JSTrampStepDef js_fetch_def = {
     sizeof(JSFetchState), js_fetch_step, js_fetch_fini, 0, .visit = js_fetch_visit
 };
 
+/* §5, §6 and §5.3's AGENT-WIDE DECLARATIONS. They were made from inside fetch_install, which runs once per
+   DOCUMENT — so the three components declared their per-realm prototypes into core/realm.h's list AFTER the
+   agent's own realm had already run it, and the first document's Headers had no prototype at all. A
+   declaration belongs at agent init beside every other one; the GLOBAL is still the host's to expose or not. */
+void fetch_init(JSContext *ctx)
+{
+    JSRuntime *rt = JS_GetRuntime(ctx);
+
+    DCHECK(g_fetch_rt == NULL || g_fetch_rt == rt,
+           "fetch was declared into a second runtime — its atoms and step id belong to the first, and one WASM "
+           "instance is one document");
+    if (g_fetch_stepid >= 0)
+        return;
+    g_fetch_rt = rt;
+    /* The reply's delivery, declared once for the runtime — every parked fetch mints a CLOSURE over this
+       one definition rather than a definition per request. */
+    g_deliver_stepid = JS_RegisterStepDef(rt, &js_fetch_deliver_def);
+    /* §5.2's BODY IS A STREAM — `.body` answers one, and "clone a body" tees one — so §4 is not an
+       optional neighbour of this component, it is a dependency. Each host installing it separately meant
+       the dependency held only where a host had remembered: test_forced's fixture reached `res.clone()`
+       with §4's class ids never minted and aborted at the DCHECK that says so. */
+    readable_stream_init(ctx);
+    response_init(ctx);
+    headers_init(ctx);
+    request_init(ctx);
+    g_atom_method = JS_NewAtom(ctx, "method");
+    g_atom_body   = JS_NewAtom(ctx, "body");
+    g_atom_url    = JS_NewAtom(ctx, "url");
+    g_atom_headers = JS_NewAtom(ctx, "headers");
+    g_fetch_stepid = JS_RegisterStepDef(rt, &js_fetch_def);
+}
+
 void fetch_install(JSContext *ctx, JSValueConst global)
 {
     JSRuntime *rt = JS_GetRuntime(ctx);
@@ -563,26 +595,10 @@ void fetch_install(JSContext *ctx, JSValueConst global)
     DCHECK(g_fetch_rt == NULL || g_fetch_rt == rt,
            "fetch was installed into a second runtime — its atoms and step id belong to the first, and one WASM "
            "instance is one document");
-    if (g_fetch_stepid < 0) {
-        g_fetch_rt    = rt;
-        /* The reply's delivery, declared once for the runtime — every parked fetch mints a CLOSURE over this
-           one definition rather than a definition per request. */
-        g_deliver_stepid = JS_RegisterStepDef(rt, &js_fetch_deliver_def);
-        /* §5.2's BODY IS A STREAM — `.body` answers one, and "clone a body" tees one — so §4 is not an
-           optional neighbour of this component, it is a dependency. Each host installing it separately meant
-           the dependency held only where a host had remembered: test_forced's fixture reached `res.clone()`
-           with §4's class ids never minted and aborted at the DCHECK that says so. Init is idempotent per
-           runtime; the GLOBAL is still the host's to expose or not. */
-        readable_stream_init(ctx);
-        response_init(ctx);
-        headers_init(ctx);
-        request_init(ctx);
-        g_atom_method = JS_NewAtom(ctx, "method");
-        g_atom_body   = JS_NewAtom(ctx, "body");
-        g_atom_url    = JS_NewAtom(ctx, "url");
-        g_atom_headers = JS_NewAtom(ctx, "headers");
-        g_fetch_stepid = JS_RegisterStepDef(rt, &js_fetch_def);
-    }
+    DCHECK(g_fetch_stepid >= 0, "fetch was installed into a realm before fetch_init declared it — §5's and §6's "
+                                "prototypes are per-realm intrinsics, and a component that declares itself from "
+                                "inside a per-DOCUMENT install declares itself after the agent's own realm has "
+                                "already built its list");
     headers_install(ctx, global);   /* §5's interface object — a page builds an init with it before it fetches */
     response_install(ctx, global);  /* §6's — a page constructs one to seed a cache or a service-worker path */
     request_install(ctx, global);   /* §5.3's — `fetch(new Request(u, init))` is how half of real code calls it */

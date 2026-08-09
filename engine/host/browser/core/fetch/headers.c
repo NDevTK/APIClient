@@ -24,11 +24,11 @@
 #include "quickjs-step.h"
 #include "core/fetch/headers.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/idl_iter.h"
 #include "solver/concolic.h"
 
 static JSClassID g_headers_class;
-static JSValue   g_proto = JS_UNDEFINED;
 static int       g_ctor_stepid = -1;
 static JSRuntime *g_headers_rt;
 
@@ -158,7 +158,12 @@ JSValue headers_new(JSContext *ctx, const HeaderList *src, HeadersGuard guard)
     int i;
 
     DCHECK(g_headers_class != 0, "a Headers was built before the class existed — headers_init runs at install");
-    obj = JS_NewObjectProtoClass(ctx, g_proto, g_headers_class);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_headers_class);
+        DCHECK(!JS_IsNull(proto), "a Headers was minted in a realm that never ran its install");
+        obj = JS_NewObjectProtoClass(ctx, proto, g_headers_class);
+        JS_FreeValue(ctx, proto);
+    }
     if (JS_IsException(obj))
         return obj;
     h = calloc(1, sizeof *h);
@@ -419,7 +424,9 @@ static int headers_guard_allows(JSContext *ctx, uint8_t guard, const char *name,
     return r;
 }
 
-enum { HDR_APPEND = 0, HDR_SET, HDR_DELETE, HDR_GET, HDR_HAS, HDR_GETSETCOOKIE };
+enum { HDR_APPEND = 0, HDR_SET, HDR_DELETE, HDR_GET, HDR_HAS, HDR_GETSETCOOKIE, HDR_MEMBER_N };
+/* THE AGENT'S POOL ENTRIES, one per §5.2 operation — the OBJECTS they are installed as are each realm's. */
+static int g_id[HDR_MEMBER_N];
 
 static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
@@ -950,23 +957,42 @@ void headers_init(JSContext *ctx)
     g_headers_rt = rt;
     JS_NewClassID(rt, &g_headers_class);
     JS_NewClass(rt, g_headers_class, &def);
-    g_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_proto), "Headers.prototype could not be allocated");
-    idl_interface_tag(ctx, g_proto, "Headers");
-    idl_install_method(ctx, g_proto, "append", 2, idl_method_id(ctx, TWO_STR, 2, js_headers_member, HDR_APPEND));
-    idl_install_method(ctx, g_proto, "set", 2, idl_method_id(ctx, TWO_STR, 2, js_headers_member, HDR_SET));
-    idl_install_method(ctx, g_proto, "delete", 1, idl_method_id(ctx, TWO_STR, 1, js_headers_member, HDR_DELETE));
-    idl_install_method(ctx, g_proto, "get", 1, idl_method_id(ctx, TWO_STR, 1, js_headers_member, HDR_GET));
-    idl_install_method(ctx, g_proto, "has", 1, idl_method_id(ctx, TWO_STR, 1, js_headers_member, HDR_HAS));
-    idl_install_method(ctx, g_proto, "getSetCookie", 0,
-                       idl_method_id(ctx, TWO_STR, 0, js_headers_member, HDR_GETSETCOOKIE));
+    g_id[HDR_APPEND]       = idl_method_id(ctx, TWO_STR, 2, js_headers_member, HDR_APPEND);
+    g_id[HDR_SET]          = idl_method_id(ctx, TWO_STR, 2, js_headers_member, HDR_SET);
+    g_id[HDR_DELETE]       = idl_method_id(ctx, TWO_STR, 1, js_headers_member, HDR_DELETE);
+    g_id[HDR_GET]          = idl_method_id(ctx, TWO_STR, 1, js_headers_member, HDR_GET);
+    g_id[HDR_HAS]          = idl_method_id(ctx, TWO_STR, 1, js_headers_member, HDR_HAS);
+    g_id[HDR_GETSETCOOKIE] = idl_method_id(ctx, TWO_STR, 0, js_headers_member, HDR_GETSETCOOKIE);
     g_ctor_stepid = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &js_headers_ctor_decl, 0);
     idl_optional_from(0);   /* §5.1: `constructor(optional HeadersInit init)` */
 
     /* §5.2's `iterable<ByteString, ByteString>` — the shared default iterator object over the two operations
        above, so the six members it defines exist once for every such interface rather than once per. */
     g_pair_handle = idl_pair_iter_declare(ctx, &HEADERS_PAIR_OPS);
-    idl_pair_iter_install(ctx, g_proto, g_pair_handle);
+    realm_declare_intrinsic(headers_install_proto);
+}
+
+/* §5.1's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. */
+void headers_install_proto(JSContext *ctx)
+{
+    JSValue proto, prev;
+
+    DCHECK(g_headers_class != 0, "a realm asked for Headers.prototype before the class was declared");
+    prev = JS_GetClassProto(ctx, g_headers_class);
+    DCHECK(JS_IsNull(prev), "headers_install_proto ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+
+    proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(proto), "Headers.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "Headers");
+    idl_install_method(ctx, proto, "append", 2, g_id[HDR_APPEND]);
+    idl_install_method(ctx, proto, "set", 2, g_id[HDR_SET]);
+    idl_install_method(ctx, proto, "delete", 1, g_id[HDR_DELETE]);
+    idl_install_method(ctx, proto, "get", 1, g_id[HDR_GET]);
+    idl_install_method(ctx, proto, "has", 1, g_id[HDR_HAS]);
+    idl_install_method(ctx, proto, "getSetCookie", 0, g_id[HDR_GETSETCOOKIE]);
+    idl_pair_iter_install(ctx, proto, g_pair_handle);
+    JS_SetClassProto(ctx, g_headers_class, proto);
 }
 
 /* The prototype and the interned name are this component's for the runtime's life, so they are released WITH
@@ -976,8 +1002,7 @@ void headers_free(JSContext *ctx)
 {
     if (!g_headers_rt)
         return;
-    JS_FreeValue(ctx, g_proto);
-    g_proto = JS_UNDEFINED;
+    /* the prototypes are the REALMS' — released with their contexts */
     idl_pair_iter_free(ctx, g_pair_handle);
     g_headers_rt = NULL;
     g_ctor_stepid = -1;
@@ -990,6 +1015,11 @@ void headers_install(JSContext *ctx, JSValueConst global)
     DCHECK(g_ctor_stepid >= 0, "Headers was installed before headers_init declared its constructor");
     ctor = idl_step_constructor(ctx, "Headers", 1, g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the Headers interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_headers_class);
+        DCHECK(!JS_IsNull(proto), "Headers was installed into a realm that never ran its proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyStr(ctx, (JSValue)global, "Headers", ctor);
 }

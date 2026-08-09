@@ -7,6 +7,8 @@
 
 /* Install `fetch` on `global`. Every request forced execution reaches funnels one endpoint into the @H
    surface; the network itself is the trusted bridge's, never this sandbox's. */
+/* §5/§6/§5.3's agent-wide declarations, including the three components' per-realm prototype entries. */
+void fetch_init(JSContext *ctx);
 void fetch_install(JSContext *ctx, JSValueConst global);
 
 /* THE HOST'S NETWORK, as a seam the browser half takes rather than names.

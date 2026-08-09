@@ -1619,6 +1619,7 @@ static void tf_agent_init(JSContext *ctx)
     event_init(ctx);
     /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
     unhandled_rejection_init(ctx);
+    fetch_init(ctx);   /* §5/§6/§5.3 declare their per-realm prototypes here, not from the install */
     abort_init(ctx);
     element_init(ctx);
     iframe_init(ctx);

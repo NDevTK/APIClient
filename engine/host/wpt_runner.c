@@ -834,9 +834,7 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
     /* THE COMPONENTS UNDER TEST. Named one by one rather than "everything", because a component that is not
        installed makes its tests fail LOUDLY on a missing global — which is the honest report — while quietly
        installing a stand-in would make the gate agree with itself. Grows as areas are covered. */
-    headers_init(ctx);
-    response_init(ctx);
-    request_init(ctx);
+    fetch_init(ctx);   /* §5/§6/§5.3, and §4 under them — one declaration point for the whole of Fetch */
     url_init(ctx);
     usp_init(ctx);
     form_data_init(ctx);

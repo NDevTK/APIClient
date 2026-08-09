@@ -59,6 +59,7 @@ int  headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst
                       HeadersGuard guard, JSValue in, JSValue **out_cb, int *out_argc);
 
 void    headers_init(JSContext *ctx);                       /* register the class + its machines (install time) */
+void    headers_install_proto(JSContext *ctx);              /* §5.1's prototype, for ONE realm */
 void    headers_install(JSContext *ctx, JSValueConst global);   /* the Headers interface object */
 void    headers_free(JSContext *ctx);   /* the prototypes this component holds */
 /* A Headers over an existing list; the object takes a COPY, because a header list a component owns outlives

@@ -7,6 +7,7 @@
 #include "core/fetch/headers.h"
 
 void    response_init(JSContext *ctx);   /* register the class, its prototype and its machines (install time) */
+void    response_install_proto(JSContext *ctx);   /* §6.4's prototype and serializer, for ONE realm */
 void    response_install(JSContext *ctx, JSValueConst global);   /* the Response interface object */
 void    response_free(JSContext *ctx);   /* the prototype this component holds */
 /* A Response over the host's reply. The body is a BYTE SEQUENCE and carries its length: `arrayBuffer()` and

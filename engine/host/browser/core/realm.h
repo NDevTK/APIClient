@@ -31,4 +31,20 @@ void realm_install_intrinsics(JSContext *ctx);
 /* Agent teardown: the declarations are the agent's. */
 void realm_intrinsics_free(void);
 
+/* A PER-REALM VALUE THAT IS NOT A PROTOTYPE.
+ *
+ * §3.7's intrinsics are not all interface prototypes. `Response.json(data)` serialises with %JSON.stringify% —
+ * the INTRINSIC, so a page reassigning `JSON.stringify` must not change it — and that intrinsic belongs to the
+ * realm the member runs in. Held in a module static it is one realm's function object answering for every
+ * document, which is the same defect as a shared prototype and harder to see because nothing about the value
+ * says which realm it came from.
+ *
+ * THE STORE IS QUICKJS'S OWN PER-CONTEXT SLOT ARRAY, reached by declaring a class whose slot never holds a
+ * prototype. That array is what the runtime already frees with the context, so a realm's value is released
+ * exactly when the realm is and there is no second lifetime to get wrong. Declared ONCE PER AGENT (from a
+ * component's `_init`), set from that component's per-realm install, read wherever the member runs. */
+int     realm_value_declare(JSContext *ctx, const char *what);
+void    realm_value_set(JSContext *ctx, int slot, JSValue v);   /* CONSUMES v */
+JSValue realm_value_get(JSContext *ctx, int slot);              /* OWNED: the caller frees */
+
 #endif

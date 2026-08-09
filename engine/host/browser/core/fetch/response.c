@@ -23,28 +23,31 @@
 #include "core/fetch/response.h"
 #include "core/fetch/headers.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/fetch/body.h"
 #include "core/streams/readable_stream.h"
 
 static JSClassID g_response_class;
-static JSValue   g_response_proto = JS_UNDEFINED;
-static int       g_ctor_stepid = -1, g_json_stepid = -1, g_redirect_stepid = -1;
+static int       g_ctor_stepid = -1, g_json_stepid = -1, g_redirect_stepid = -1, g_clone_stepid = -1;
 static int       g_body_handle = -1;
 /* One WASM instance is one document, so the class id and the body readers' step ids below are that runtime's;
    the DCHECK at install is what makes a second one impossible rather than merely unlikely. */
 static JSRuntime *g_response_rt;
-/* %JSON.stringify%, captured at install. §6.4's "serialize a JavaScript value to JSON bytes" is the ABSTRACT
-   operation, not a property read — a page that replaces `JSON.stringify` does not thereby change what
-   `Response.json` does — so the original function object is held rather than looked up per call. It is read
-   before any page script runs, off the engine's own builtin, so the capture itself runs nothing of the
-   page's. */
-static JSValue g_json_stringify = JS_UNDEFINED;
+/* %JSON.stringify%, captured per realm at that realm's install. §6.4's "serialize a JavaScript value to JSON
+   bytes" is the ABSTRACT operation, not a property read — a page that replaces `JSON.stringify` does not
+   thereby change what `Response.json` does — so the original function object is held rather than looked up per
+   call. It is read before any page script runs, off the engine's own builtin, so the capture itself runs
+   nothing of the page's.
+   IT IS PER REALM because §3.7 says so and because the value is a function object, which carries the realm it
+   was minted in: one module static handed every document the FIRST realm's serializer, and a serializer runs
+   the page's `toJSON` — so the callback flows of a child document ran in the parent's realm. */
+static int g_json_stringify_slot = -1;
 
-static JSValueConst response_json_stringify(void)
+/* OWNED: the caller frees. */
+static JSValue response_json_stringify(JSContext *ctx)
 {
-    DCHECK(!JS_IsUndefined(g_json_stringify),
-           "Response.json ran before response_init captured %JSON.stringify%");
-    return g_json_stringify;
+    DCHECK(g_json_stringify_slot > 0, "Response.json ran before response_init declared its %JSON.stringify% slot");
+    return realm_value_get(ctx, g_json_stringify_slot);
 }
 
 /* THE BODY IS BYTES AND CARRIES ITS LENGTH. A body stream is a byte sequence in the spec, and it was a C string
@@ -254,8 +257,12 @@ static JSValue response_alloc(JSContext *ctx, ResponseData **pd)
     JSValue obj;
 
     DCHECK(g_response_class != 0, "a Response was built before the class existed — response_init runs at install");
-    DCHECK(!JS_IsUndefined(g_response_proto), "a Response was built before its prototype existed");
-    obj = JS_NewObjectProtoClass(ctx, g_response_proto, g_response_class);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_response_class);
+        DCHECK(!JS_IsNull(proto), "a Response was minted in a realm that never ran its install");
+        obj = JS_NewObjectProtoClass(ctx, proto, g_response_class);
+        JS_FreeValue(ctx, proto);
+    }
     if (JS_IsException(obj))
         return obj;
     d = js_mallocz(ctx, sizeof(*d));
@@ -381,9 +388,13 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
            algorithm on purpose, because a C entry beside the step machine would be a second implementation of
            it; the way to run it is the way a page does, as a CALL REQUEST on the tramp where a loop inside a
            `toJSON` suspends like any other. */
-        r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), response_json_stringify(), JS_UNDEFINED,
-                          argc > 0 ? 1 : 0, argc > 0 ? &argv[0] : NULL, cb_result, &s->json,
-                          out_cb, out_argc);
+        {
+            JSValue stringify = response_json_stringify(ctx);   /* THIS realm's, per §3.7 */
+            r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), stringify, JS_UNDEFINED,
+                              argc > 0 ? 1 : 0, argc > 0 ? &argv[0] : NULL, cb_result, &s->json,
+                              out_cb, out_argc);
+            JS_FreeValue(ctx, stringify);
+        }
         if (r > 0) return r;          /* parked INSIDE the page's toJSON */
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
@@ -618,19 +629,7 @@ void response_init(JSContext *ctx)
     JS_NewClassID(rt, &g_response_class);
     JS_NewClass(rt, g_response_class, &def);
     g_body_handle = body_declare(ctx, g_response_class, response_body_of, response_body_mime, "Response");
-    /* ONE PROTOTYPE, not a copy of the members per instance. They were own properties of each Response, which
-       is not what Web IDL describes and is observable three ways: `Response.prototype.text` was absent,
-       `delete r.text` removed the method, and every reply paid for eight property installs. */
-    g_response_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_response_proto), "Response.prototype could not be allocated");
-    idl_interface_tag(ctx, g_response_proto, "Response");
-    JS_SetPropertyFunctionList(ctx, g_response_proto, js_response_proto_funcs,
-                               (int)(sizeof(js_response_proto_funcs) / sizeof(js_response_proto_funcs[0])));
-    /* §5.2's mixin: the four readers and `bodyUsed`, from the one component Request includes too. */
-    body_install(ctx, g_response_proto, g_body_handle);
-    /* §6.4's clone(), a STEP because cloning a body tees its stream — see js_response_clone_step. */
-    idl_install_method(ctx, g_response_proto, "clone", 0,
-                       idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_response_clone_decl, 0));
+    g_clone_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_response_clone_decl, 0);
     g_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, RESPONSE_INIT, 3, &js_response_ctor_decl,
                                        RESP_ENTRY_CTOR);
     idl_optional_from(0);   /* §6.4: `constructor(optional BodyInit? body = null, optional ResponseInit init = {})` */
@@ -641,12 +640,42 @@ void response_init(JSContext *ctx)
     idl_optional_from(1);   /* §6.4: `data` is required, `init` is not */
     g_redirect_stepid = idl_method_id(ctx, REDIRECT_ARGS, 2, js_response_redirect, 0);
     idl_optional_from(1);   /* §6.4: `redirect(USVString url, optional unsigned short status = 302)` */
+    g_json_stringify_slot = realm_value_declare(ctx, "%JSON.stringify% (Response.json)");
+    realm_declare_intrinsic(response_install_proto);
+}
+
+/* §6.4's INTERFACE PROTOTYPE OBJECT AND ITS SERIALIZER, FOR ONE REALM.
+   ONE PROTOTYPE PER REALM, not a copy of the members per instance. They were own properties of each Response,
+   which is not what Web IDL describes and is observable three ways: `Response.prototype.text` was absent,
+   `delete r.text` removed the method, and every reply paid for eight property installs. */
+void response_install_proto(JSContext *ctx)
+{
+    JSValue proto, prev;
+
+    DCHECK(g_response_class != 0, "a realm asked for Response.prototype before the class was declared");
+    prev = JS_GetClassProto(ctx, g_response_class);
+    DCHECK(JS_IsNull(prev), "response_install_proto ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+
+    proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(proto), "Response.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "Response");
+    JS_SetPropertyFunctionList(ctx, proto, js_response_proto_funcs,
+                               (int)(sizeof(js_response_proto_funcs) / sizeof(js_response_proto_funcs[0])));
+    /* §5.2's mixin: the four readers and `bodyUsed`, from the one component Request includes too. */
+    body_install(ctx, proto, g_body_handle);
+    /* §6.4's clone(), a STEP because cloning a body tees its stream — see js_response_clone_step. */
+    idl_install_method(ctx, proto, "clone", 0, g_clone_stepid);
+    JS_SetClassProto(ctx, g_response_class, proto);
+
+    /* §6.4's serializer, read off THIS realm's builtin before any of its scripts run. */
     {
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue json = JS_GetPropertyStr(ctx, global, "JSON");
-        g_json_stringify = JS_GetPropertyStr(ctx, json, "stringify");
-        CHECK(JS_IsFunction(ctx, g_json_stringify),
+        JSValue stringify = JS_GetPropertyStr(ctx, json, "stringify");
+        CHECK(JS_IsFunction(ctx, stringify),
               "%JSON.stringify% is not a function — Response.json has no serializer to run");
+        realm_value_set(ctx, g_json_stringify_slot, stringify);
         JS_FreeValue(ctx, json);
         JS_FreeValue(ctx, global);
     }
@@ -659,7 +688,12 @@ void response_install(JSContext *ctx, JSValueConst global)
     DCHECK(g_ctor_stepid >= 0, "Response was installed before response_init declared its constructor");
     ctor = idl_step_constructor(ctx, "Response", 0, g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the Response interface object could not be allocated");
-    JS_SetConstructor(ctx, ctor, g_response_proto);
+    {
+        JSValue proto = JS_GetClassProto(ctx, g_response_class);
+        DCHECK(!JS_IsNull(proto), "Response was installed into a realm that never ran its proto build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    }
     JS_SetPropertyFunctionList(ctx, ctor, js_response_static_funcs,
                                (int)(sizeof(js_response_static_funcs) / sizeof(js_response_static_funcs[0])));
     /* The two statics whose arguments the args machine converts, installed on the INTERFACE OBJECT — which is
@@ -671,9 +705,7 @@ void response_install(JSContext *ctx, JSValueConst global)
 
 void response_free(JSContext *ctx)
 {
-    JS_FreeValue(ctx, g_response_proto);
-    JS_FreeValue(ctx, g_json_stringify);
-    g_response_proto = g_json_stringify = JS_UNDEFINED;
+    /* the prototypes and this realm's serializer are the REALMS' — released with their contexts */
     g_response_rt = NULL;
     g_ctor_stepid = g_json_stepid = g_redirect_stepid = -1;
 }

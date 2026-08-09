@@ -218,6 +218,10 @@ typedef struct {
     JSClassID class_id;
     JSValue   proto;      /* the ITERATOR prototype object (owned) */
     int       foreach_stepid;
+    /* §3.7.10's THREE OPERATIONS, declared with the interface rather than minted at each install. A pool entry
+       is an AGENT registration and the pool is SEALED once the agent's realms start building: minting here per
+       realm aborted the second realm with the member's name ("keys"), which is the seal doing its job. */
+    int       id_keys, id_values, id_entries;
 } IdlPairIface;
 
 static IdlPairIface g_pair[IDL_PAIR_ITER_MAX];
@@ -438,22 +442,24 @@ int idl_pair_iter_declare(JSContext *ctx, const IdlPairIterOps *ops)
 
     f->foreach_stepid = JS_RegisterStepDef(rt, &foreach_def);
     CHECK(f->foreach_stepid >= 0, "no step id for an iterable<>'s forEach");
+    {
+        static const IdlArgType NONE[1] = { IDL_ANY };
+        f->id_keys    = idl_method_id(ctx, NONE, 0, js_idl_pair_make, (handle << 2) | PAIR_KEYS);
+        f->id_values  = idl_method_id(ctx, NONE, 0, js_idl_pair_make, (handle << 2) | PAIR_VALUES);
+        f->id_entries = idl_method_id(ctx, NONE, 0, js_idl_pair_make, (handle << 2) | PAIR_ENTRIES);
+    }
     g_pair_n++;
     return handle;
 }
 
 void idl_pair_iter_install(JSContext *ctx, JSValueConst proto, int handle)
 {
-    static const IdlArgType NONE[1] = { IDL_ANY };
     JSValue entries;
 
     DCHECK(handle >= 0 && handle < g_pair_n, "an iterable<> was installed with a handle nothing declared");
-    idl_install_method(ctx, proto, "keys", 0,
-                       idl_method_id(ctx, NONE, 0, js_idl_pair_make, (handle << 2) | PAIR_KEYS));
-    idl_install_method(ctx, proto, "values", 0,
-                       idl_method_id(ctx, NONE, 0, js_idl_pair_make, (handle << 2) | PAIR_VALUES));
-    idl_install_method(ctx, proto, "entries", 0,
-                       idl_method_id(ctx, NONE, 0, js_idl_pair_make, (handle << 2) | PAIR_ENTRIES));
+    idl_install_method(ctx, proto, "keys", 0, g_pair[handle].id_keys);
+    idl_install_method(ctx, proto, "values", 0, g_pair[handle].id_values);
+    idl_install_method(ctx, proto, "entries", 0, g_pair[handle].id_entries);
     /* ONE forEach def serves every interface; `arg` is which one, read off the header by the step. */
     idl_install_step_method(ctx, proto, "forEach", 1, g_pair[handle].foreach_stepid);
     /* §3.7.10: @@iterator on the interface IS `entries` — the same function object, so

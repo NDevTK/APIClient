@@ -4,6 +4,7 @@
 #include "quickjs.h"
 
 void request_init(JSContext *ctx);
+void request_install_proto(JSContext *ctx);   /* §5.3's prototype, for ONE realm */
 void request_install(JSContext *ctx, JSValueConst global);
 void request_free(JSContext *ctx);
 
