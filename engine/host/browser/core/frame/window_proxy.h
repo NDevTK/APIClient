@@ -53,17 +53,17 @@ JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const char *origin
    element still sees the frame it knew. */
 void window_proxy_close(JSContext *ctx, JSValueConst proxy);
 
-/* §7.2.5.1's shared member surface, so a component that owns one of the cross-origin-accessible members
-   (postMessage) installs it where every proxy sees it, and `a.postMessage === b.postMessage` holds. */
-JSValueConst window_proxy_proto(void);
+/* §7.2.5.1's member surface FOR ONE REALM, so a component that owns one of the cross-origin-accessible members
+   (postMessage) installs it where every proxy of that realm sees it. OWNED: the caller frees. */
+JSValue window_proxy_proto(JSContext *ctx);
 
-/* §7.2.5.1's members on that prototype. A LOCAL proxy answers every one by reading its own Window in this turn.
-   A REMOTE one answers the NAVIGABLE's own state — window/self/frames/globalThis/parent/top/opener/closed/name,
-   plus close() — in this turn too, because the navigable belongs to the instance that created it; only a member
-   that reads through to the ACTIVE DOCUMENT SUSPENDS the flow on a host request carrying (document, world,
-   member). Installed separately from init because it needs the IDL declaration machinery, which is not up when
-   the class is registered. */
-void window_proxy_install_members(JSContext *ctx);
+/* §7.2.5.1's members on that prototype, built for ONE realm and declared into core/realm.h's list by
+   window_proxy_init. A LOCAL proxy answers every one by reading its own Window in this turn. A REMOTE one
+   answers the NAVIGABLE's own state — window/self/frames/globalThis/parent/top/opener/closed/name, plus
+   close() — in this turn too, because the navigable belongs to the instance that created it; only a member that
+   reads through to the ACTIVE DOCUMENT SUSPENDS the flow on a host request carrying (document, world,
+   member). */
+void window_proxy_install_proto(JSContext *ctx);
 
 /* §7.2.5's `closed` — a fact about the NAVIGABLE, so the Window's getter and the proxy's read the same byte.
    Per-flow: captured into the running flow's delta, so a sibling arm that never closed it still sees it open. */

@@ -44,6 +44,7 @@
 #include "solver/engine.h"
 #include "solver/flow.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/html/html_iframe.h"
 #include "core/frame/navigable.h"
 #include "core/dom/document.h"
@@ -109,11 +110,16 @@ static JSRuntime *g_wp_rt;
    exist at all. A proxy carries the origin of the navigable's active document; the comparison needs the origin
    of whoever is reading, which is this instance's, and there is exactly one of those. */
 static char *g_local_origin;
-/* §7.2.5.1's member surface, shared by every proxy — which is also what makes `a.postMessage === b.postMessage`
-   true. A WindowProxy has no own properties: it FORWARDS to its navigable, answering from the navigable's own
-   state where that is what the member is, and suspending on the host where the member reads the active
-   document. See the member table lower down for which is which. */
-static JSValue g_proxy_proto = JS_UNINITIALIZED;
+/* §7.2.5.1's member surface. A WindowProxy has no own properties: it FORWARDS to its navigable, answering from
+   the navigable's own state where that is what the member is, and suspending on the host where the member reads
+   the active document. See the member table lower down for which is which.
+   IT IS PER REALM, in quickjs's own class-proto slot, and that is an ANSWER and not an identity: a member runs
+   in the realm that DEFINED it, so one shared object would answer `parent`, `name` and `close()` for every
+   document out of whichever realm built it first — and the whole point of these members is that they read the
+   asking document's side of a boundary. `a.postMessage === b.postMessage` still holds for two proxies of the
+   same realm, which is what §7.2.5.1's shared surface means; two REALMS have two, exactly as two realms have
+   two `Array.prototype.map`s. */
+static int g_wp_len_getter_id = -1, g_wp_name_setter_id = -1, g_wp_close_id = -1;
 
 
 #define WP_OFF(f) (uint16_t)offsetof(ProxyData, f)
@@ -274,9 +280,10 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const ch
     DCHECK(world_doc_hosted(doc),
            "a local WindowProxy was minted for a document whose realm this agent does not hold — a document is "
            "adopted when §7.4 decides to host it (world_doc_adopt), and one that never was belongs to a peer");
+    /* JS_NewObjectClass TAKES THE PROTOTYPE FROM THE CLASS SLOT OF THIS REALM — there is no separate
+       JS_SetPrototype here, because a mint that had to remember one is a mint that can forget it. */
     obj = JS_NewObjectClass(ctx, g_proxy_class);
     if (JS_IsException(obj)) return obj;
-    JS_SetPrototype(ctx, obj, g_proxy_proto);
     p = calloc(1, sizeof *p);
     CHECK(p != NULL, "window proxy: OOM building a WindowProxy");
     p->window = JS_UNDEFINED;   /* materialized by proxy_realm — at creation, or on the first read */
@@ -335,7 +342,6 @@ JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const char *origin
            "which carries the live Window");
     obj = JS_NewObjectClass(ctx, g_proxy_class);
     if (JS_IsException(obj)) return obj;
-    JS_SetPrototype(ctx, obj, g_proxy_proto);
     p = calloc(1, sizeof *p);
     CHECK(p != NULL, "window proxy: OOM building a remote WindowProxy");
     p->window = JS_UNDEFINED;   /* it lives in another instance; there is nothing local to hold */
@@ -845,21 +851,31 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
 
 static const IdlStepDecl PROXY_GET_DECL = { proxy_get_step, sizeof(ProxyGetState), proxy_get_visit, NULL };
 
-void window_proxy_install_members(JSContext *ctx)
+/* §7.2.5.1's MEMBER SURFACE FOR ONE REALM. Declaration order in core/realm.h's list matters here in one
+   direction only: window_message.c's `postMessage` goes onto this object, so its entry is declared after this
+   one and finds it already built. */
+void window_proxy_install_proto(JSContext *ctx)
 {
+    JSValue proto, prev;
     int i;
-    DCHECK(g_wp_rt != NULL, "WindowProxy members were installed before window_proxy_init ran");
+
+    DCHECK(g_wp_rt != NULL, "a realm asked for the WindowProxy prototype before window_proxy_init ran");
+    prev = JS_GetClassProto(ctx, g_proxy_class);
+    DCHECK(JS_IsNull(prev), "window_proxy_install_proto ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+
+    proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(proto), "the WindowProxy prototype could not be allocated");
     for (i = 0; i < WP_MEMBER_N; i++) {
         if (i == WP_LENGTH)
-            idl_install_accessor_step(ctx, g_proxy_proto, PROXY_MEMBER[i],
-                                      idl_getter_id_step(ctx, &PROXY_GET_DECL, i), -1);
+            idl_install_accessor_step(ctx, proto, PROXY_MEMBER[i], g_wp_len_getter_id, -1);
         else if (i == WP_NAME)
-            idl_install_accessor(ctx, g_proxy_proto, PROXY_MEMBER[i], proxy_member_get, i,
-                                 idl_setter_id(ctx, IDL_DOMSTRING, false, proxy_name_set, i));
+            idl_install_accessor(ctx, proto, PROXY_MEMBER[i], proxy_member_get, i, g_wp_name_setter_id);
         else
-            idl_install_accessor(ctx, g_proxy_proto, PROXY_MEMBER[i], proxy_member_get, i, -1);
+            idl_install_accessor(ctx, proto, PROXY_MEMBER[i], proxy_member_get, i, -1);
     }
-    idl_install_method(ctx, g_proxy_proto, "close", 0, idl_method_id(ctx, NULL, 0, proxy_close, 0));
+    idl_install_method(ctx, proto, "close", 0, g_wp_close_id);
+    JS_SetClassProto(ctx, g_proxy_class, proto);
 }
 
 void window_proxy_init(JSContext *ctx, const char *origin)
@@ -875,14 +891,20 @@ void window_proxy_init(JSContext *ctx, const char *origin)
     CHECK(g_local_origin != NULL, "window proxy: OOM recording this document's origin");
     JS_NewClassID(rt, &g_proxy_class);
     JS_NewClass(rt, g_proxy_class, &d);
-    g_proxy_proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_proxy_proto), "the WindowProxy prototype could not be allocated");
+    /* THE POOL ENTRIES ARE THE AGENT'S — a declaration is a runtime registration, and every realm's members
+       carry the same ids. Only the OBJECTS below are per realm. */
+    g_wp_len_getter_id  = idl_getter_id_step(ctx, &PROXY_GET_DECL, WP_LENGTH);
+    g_wp_name_setter_id = idl_setter_id(ctx, IDL_DOMSTRING, false, proxy_name_set, WP_NAME);
+    g_wp_close_id       = idl_method_id(ctx, NULL, 0, proxy_close, 0);
+    realm_declare_intrinsic(window_proxy_install_proto);
 }
 
-JSValueConst window_proxy_proto(void)
+JSValue window_proxy_proto(JSContext *ctx)
 {
-    DCHECK(g_wp_rt != NULL, "the WindowProxy prototype was asked for before window_proxy_init ran");
-    return g_proxy_proto;
+    JSValue proto = JS_GetClassProto(ctx, g_proxy_class);
+    DCHECK(!JS_IsNull(proto),
+           "the WindowProxy prototype was asked for in a realm that never ran window_proxy_install_proto");
+    return proto;   /* OWNED */
 }
 
 void window_proxy_free(JSContext *ctx)
@@ -891,8 +913,7 @@ void window_proxy_free(JSContext *ctx)
     if (!g_wp_rt) return;
     while (e) { OwnedStr *n = e->next; free(e->s); free(e); e = n; }
     g_strings = NULL;
-    JS_FreeValue(ctx, g_proxy_proto);
-    g_proxy_proto = JS_UNINITIALIZED;
+    /* the prototypes are the REALMS' — released with their contexts */
     free(g_local_origin);
     g_local_origin = NULL;
     g_wp_rt = NULL;

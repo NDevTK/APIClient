@@ -1616,7 +1616,6 @@ static void tf_agent_init(JSContext *ctx)
     timer_init(ctx);
     window_proxy_init(ctx, "https://x.test");
     remote_object_init(ctx);   /* §7.2.5.1's object half */
-    window_proxy_install_members(ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
     event_init(ctx);
     /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
     unhandled_rejection_init(ctx);

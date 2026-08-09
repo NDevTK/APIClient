@@ -10,6 +10,8 @@
    page's handler checks before trusting `event.data`. */
 /* THE AGENT'S HALF: §9.4.4's `postMessage`, declared once and installed on the shared WindowProxy prototype. */
 void window_message_init(JSContext *ctx);
+/* §9.4.4's postMessage on ONE realm's WindowProxy prototype — declared into core/realm.h's list above. */
+void window_message_install_proto(JSContext *ctx);
 
 void window_message_install(JSContext *ctx, JSValueConst global, const char *origin);
 void window_message_free(JSContext *ctx);

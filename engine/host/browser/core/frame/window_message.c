@@ -29,6 +29,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/structured_clone.h"
 #include "core/events/event_target.h"
 #include "core/events/message_event.h"
@@ -220,10 +221,22 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     return JS_UNDEFINED;
 }
 
-static int g_id_post;
+static int g_id_post = -1;
 
-/* §9.4.4's `postMessage`, DECLARED ONCE PER AGENT and installed on the shared WindowProxy prototype here —
-   a member has one pool entry, and a second realm's global installs that same one. */
+/* §9.4.4's `postMessage` ON THIS REALM'S WindowProxy PROTOTYPE. It is declared into core/realm.h's list AFTER
+   window_proxy's own entry, which is what makes the object it goes onto already exist. */
+void window_message_install_proto(JSContext *ctx)
+{
+    JSValue proto = window_proxy_proto(ctx);
+
+    DCHECK(g_id_post >= 0, "postMessage was installed before window_message_init declared it");
+    idl_install_method(ctx, proto, "postMessage", 1, g_id_post);
+    idl_optional_from(1);
+    JS_FreeValue(ctx, proto);
+}
+
+/* §9.4.4's `postMessage`, DECLARED ONCE PER AGENT — a member has one pool entry, and every realm's prototype
+   carries that same one. */
 void window_message_init(JSContext *ctx)
 {
     static const IdlArgType POST_ARGS[3] = { IDL_ANY, IDL_ANY, IDL_ANY };
@@ -236,8 +249,7 @@ void window_message_init(JSContext *ctx)
     CHECK(JS_IsFunction(ctx, g_deliver_fn), "the window delivery task's callee could not be allocated");
     g_id_post = idl_method_id(ctx, POST_ARGS, 3, js_window_post, 0);
     idl_optional_from(1);
-    idl_install_method(ctx, window_proxy_proto(), "postMessage", 1, g_id_post);
-    idl_optional_from(1);
+    realm_declare_intrinsic(window_message_install_proto);
 }
 
 void window_message_install(JSContext *ctx, JSValueConst global, const char *origin)

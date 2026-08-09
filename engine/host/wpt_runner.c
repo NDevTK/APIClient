@@ -873,7 +873,6 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
     /* AFTER the proxy class: §9.4.4's `postMessage` is declared once and installed on the WindowProxy
        PROTOTYPE, which window_proxy_init is what builds. */
     window_message_init(ctx);
-    window_proxy_install_members(ctx);   /* §7.2.5.1: local reads answer now, remote ones SUSPEND */
     /* THE DOM CHOKEPOINT'S CONTEXT. §4.2.3's insertion and removing steps are fired from the solver's tree
        chokepoint, which needs the runtime they run in — and this runner never named one, so it ran NONE of
        them: no <script> preparation, no custom-element upgrade, no §4.8.5 child navigable. It failed
