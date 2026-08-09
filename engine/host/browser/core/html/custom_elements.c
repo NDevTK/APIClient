@@ -116,10 +116,11 @@ enum {
     CEREACT_INVOKE,        /* §4.13.6: invoke it with element as the callback this value */
 };
 static const char *const CE_REACTION_STEPS[] = {
-    "HTML §4.13.6 (the element this callback reaction is for)",
-    "HTML §4.13.6 (the reaction's callback function — read off the element here, where §4.13.4 step 14.4 "
-    "reads it off the prototype at definition time)",
-    "HTML §4.13.6 (invoke the reaction's callback function with element as the callback this value)",
+    "HTML §4.13.6 invoke custom element reactions step 1.3.1 (the element this callback reaction was dequeued "
+    "for)",
+    "HTML §4.13.6 step 1.3.1's callback function — read off the ELEMENT here, where §4.13.4 step 14.4 collects "
+    "it off the prototype at definition time; that read is the missing suspension point",
+    "HTML §4.13.6 step 1.3.1 (invoke the callback function with its arguments and this = element)",
     NULL
 };
 
@@ -191,7 +192,8 @@ static int js_ce_reaction_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
 
 static const JSTrampStepDef js_ce_reaction_def = {
     sizeof(JSCeReaction), js_ce_reaction_step, js_ce_reaction_fini, 0, .visit = js_ce_reaction_visit,
-    .algorithm = "HTML §4.13.6 invoke a custom element callback reaction", .steps = CE_REACTION_STEPS
+    .algorithm = "HTML §4.13.6 invoke custom element reactions in an element queue, for one callback "
+                 "reaction", .steps = CE_REACTION_STEPS
 };
 
 /* ---- the upgrade ------------------------------------------------------------------------------------------ */

@@ -557,11 +557,22 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
 
         if (!el) return JS_STEP_DONE;
         n = lxb_dom_interface_node(el);
-        /* §4.9: an element with no parent cannot be replaced — there is nothing to replace it IN. */
-        if (magic == 1 && (!n->parent || n->parent->type != LXB_DOM_NODE_TYPE_ELEMENT)) {
-            JS_ThrowDOMException(ctx, "NoModificationAllowedError",
-                                 "outerHTML on an element with no element parent");
-            return JS_STEP_ABRUPT;
+        if (magic == 1) {
+            /* §8.5.5 steps 3-4, WHICH ARE TWO DIFFERENT ANSWERS and were one. A null parent RETURNS — the
+               spec's own reason is that there would be no way to obtain a reference to the nodes created —
+               and only a DOCUMENT parent throws. Collapsing them into "not an element parent → throw" made
+               `document.createElement("b").outerHTML = "<i>"` a NoModificationAllowedError, which is a throw
+               the standard does not have and which a page's own try/catch reads as a real failure. */
+            if (!n->parent) return JS_STEP_DONE;                            /* step 3 */
+            if (n->parent->type == LXB_DOM_NODE_TYPE_DOCUMENT) {            /* step 4 */
+                JS_ThrowDOMException(ctx, "NoModificationAllowedError",
+                                     "outerHTML on an element whose parent is a Document");
+                return JS_STEP_ABRUPT;
+            }
+            DCHECK(n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
+                   "§8.5.5 step 5: outerHTML on an element whose parent is a DocumentFragment parses against a "
+                   "freshly created HTML `body` element, which this engine has no create-an-element path to "
+                   "here — build it rather than parsing against the fragment");
         }
         solve_html_sink(ctx, val);
         if (concolic_is(val))
@@ -599,8 +610,8 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
 }
 
 static const char *const EL_SET_HTML_STEPS[] = {
-    "HTML §8.5.4 innerHTML setter steps 1-3 / §8.5.5 outerHTML setter steps 1-5 (the string, and the target "
-    "the fragment is parsed against)",
+    "HTML §8.5.4 innerHTML setter steps 2-3 / §8.5.5 outerHTML setter steps 2-5 (the target the fragment is "
+    "parsed against); step 1's Trusted Types call is a suspension point this engine does not yet have",
     "HTML §8.5.4 step 4 / §8.5.5 step 6 (the fragment parsing algorithm), one byte per step",
     "HTML §8.5.4 step 5 / §8.5.5 step 7 (insert one node of the fragment into the target)",
     "HTML §8.5.4 step 5 / §8.5.5 step 7 (the fragment is placed)",
@@ -682,7 +693,8 @@ static int js_el_insert_adjacent_html(JSContext *ctx, JSStepHdr *hdr, void *st, 
 /* FOUR STAGES, NOT FIVE: insertAdjacentHTML never replaces its target's children, so FRAG_CLEAR is past the end
    of what it declares and the driver says so if the shared machine ever reaches it from here. */
 static const char *const EL_ADJACENT_HTML_STEPS[] = {
-    "HTML §8.5.6 insertAdjacentHTML steps 1-4 (the string; the context the position names)",
+    "HTML §8.5.6 insertAdjacentHTML steps 2-4 (the context the position names); step 1's Trusted Types call is "
+    "a suspension point this engine does not yet have",
     "HTML §8.5.6 step 5 (the fragment parsing algorithm), one byte per step",
     "HTML §8.5.6 step 6 (insert one node of the fragment at the position)",
     "HTML §8.5.6 step 6 (the fragment is placed)",

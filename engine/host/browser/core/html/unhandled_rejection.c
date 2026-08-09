@@ -1,4 +1,8 @@
-/* UNHANDLED PROMISE REJECTIONS — HTML §8.1.7.5.
+/* UNHANDLED PROMISE REJECTIONS — HTML §8.1.4.7 "Unhandled promise rejections".
+ *
+ * The section number was §8.1.7.5 throughout this file, which is a REAL section — "Dealing with the event loop
+ * from other specifications" — and a different algorithm. A citation that resolves to the wrong text is worse
+ * than none, because it reads as checked.
  *
  * WHAT WAS MISSING, AND WHY IT MATTERS HERE MORE THAN IN A BROWSER: a promise that rejects with nobody to catch
  * it was SILENT. Not softened, not swallowed by a fallback — never observed at all. A page error is this
@@ -7,7 +11,7 @@
  * API. Every one of those looked exactly like a flow that ran and did nothing, which is the worst possible
  * failure mode for a tool whose whole job is to notice what code CAN do.
  *
- * THE TWO LISTS ARE THE SPEC, AND THEY ARE WHY THIS IS NOT JUST A PRINT AT THE THROW SITE. §8.1.7.5 keeps an
+ * THE TWO LISTS ARE THE SPEC, AND THEY ARE WHY THIS IS NOT JUST A PRINT AT THE THROW SITE. §8.1.4.7 keeps an
  * "about-to-be-notified" list and an "outstanding" list precisely because attaching a handler LATER is normal,
  * correct code — `var p = f(); p.catch(h)` rejects before the catch is attached. Reporting at rejection time
  * would call every one of those an error. The runtime's tracker reports both edges (rejected-with-no-handler,
@@ -25,7 +29,7 @@
  * there is no early report for it to retract.
  *
  * THE EVENT IS THE PAGE'S CHANCE TO ANSWER, and it is CANCELABLE, so the report is not this component's to
- * make: §8.1.7.5 fires `unhandledrejection` at the global and reports only if nothing called preventDefault.
+ * make: §8.1.4.7 fires `unhandledrejection` at the global and reports only if nothing called preventDefault.
  * A page that ships its own error reporter cancels it — and that reporter is code with a fetch in it, which is
  * exactly the surface this engine exists to reach, so firing the event is worth more than the report is.
  * Firing is a REQUEST (dispatch is synchronous and its listeners are the page's code), so each notification is
@@ -45,7 +49,7 @@
 #include "core/events/event_target.h"
 #include "core/html/unhandled_rejection.h"
 
-/* §8.1.7.5's list, as a baseline heap object so it time-travels with the flow that filled it. Each live entry
+/* §8.1.4.7's list, as a baseline heap object so it time-travels with the flow that filled it. Each live entry
    is a two-element array [promise, reason]; a handled entry becomes undefined in place, because the identity
    of a slot is what the handled edge finds it by and compacting would move the ones behind it. */
 static JSValue g_list;
@@ -57,7 +61,7 @@ static int     g_ready;
 static JSClassID g_pre_class;
 static int g_id_pre_ctor;
 static JSValue g_pre_key = JS_UNDEFINED;
-/* THE NOTIFICATION DRIVER IS PER REALM, and that is §8.1.7.5's own requirement rather than tidiness: the event
+/* THE NOTIFICATION DRIVER IS PER REALM, and that is §8.1.4.7's own requirement rather than tidiness: the event
    is fired at "the promise's relevant global object", and this driver reads its global off the ctx it runs
    under — which, for one function object held for the agent, is whichever realm minted it. Every child
    document's unhandled rejection fired at the ROOT window, which is the same defect a shared
@@ -114,7 +118,7 @@ static void rejection_tracker(JSContext *ctx, JSValueConst promise, JSValueConst
        including ones handled in the same turn they rejected, which never reached the list at all. */
 }
 
-/* ---- PromiseRejectionEvent — §8.1.7.5's own interface ------------------------------------------------------ */
+/* ---- PromiseRejectionEvent — §8.1.4.7's own interface ------------------------------------------------------ */
 /* The two slots. Own properties under a private Symbol, read back by the getters — `promise` and `reason` are
    readonly attributes on the interface, never properties the page can assign. */
 static JSValue pre_slot(JSContext *ctx, JSValueConst ev, const char *name)
@@ -204,16 +208,17 @@ static JSValue js_pre_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 /* ONE rejection's notification: fire `unhandledrejection` at the global and, unless a listener cancelled it,
    hand the reason to whoever decides what an unreported rejection means. A machine because §2.9 dispatch is
    SYNCHRONOUS and its listeners are the page's code — the fire is a request, not a call from C. */
-/* WHERE THIS MACHINE RESTS. §8.1.7.5's step 5.1 runs per promise, and its two halves are the two stages: 5.1.2
-   fires the event (the page's listeners), 5.1.3 reports the exception if they did not cancel it. Minting the
-   PromiseRejectionEvent is part of 5.1.2 and cannot suspend, so it shares that stage's entry. */
+/* WHERE THIS MACHINE RESTS. §8.1.4.7's steps 1-3 clone and empty the list and step 4 QUEUES a global task; this
+   machine is that task's body for ONE promise, which is step 4.1's loop. Its two halves are the two stages:
+   4.1.2 fires the event (the page's listeners), 4.1.3 decides whether the rejection is reported. Minting the
+   PromiseRejectionEvent is part of 4.1.2 and cannot suspend, so it shares that stage's entry. */
 enum {
-    REJECT_EVENT = 0,   /* §8.1.7.5 step 5.1.2's PromiseRejectionEvent */
-    REJECT_FIRE,        /* §8.1.7.5 steps 5.1.2-5.1.3 */
+    REJECT_EVENT = 0,   /* §8.1.4.7 step 4.1.2's PromiseRejectionEvent */
+    REJECT_FIRE,        /* §8.1.4.7 steps 4.1.2-4.1.3 */
 };
 static const char *const REJECT_NOTIFY_STEPS[] = {
-    "HTML §8.1.7.5 step 5.1.2 (the PromiseRejectionEvent, cancelable, for this promise)",
-    "HTML §8.1.7.5 steps 5.1.2-5.1.3 (fire it at the global; report the exception unless it was canceled)",
+    "HTML §8.1.4.7 step 4.1.2 (the PromiseRejectionEvent, cancelable, for this promise)",
+    "HTML §8.1.4.7 steps 4.1.2-4.1.3 (fire unhandledrejection at the global; report unless it was canceled)",
     NULL
 };
 
@@ -259,11 +264,11 @@ static int js_reject_notify_step(JSContext *ctx, void *st, JSValue cb_result, JS
         s->ev = JS_UNDEFINED;
         for (k = 0; k < 4; k++) s->cb[k] = JS_UNDEFINED;
         s->hdr.stage = REJECT_FIRE;
-        /* §8.1.7.5: `unhandledrejection` does not bubble and IS cancelable — the cancel is the whole point. */
+        /* §8.1.4.7: `unhandledrejection` does not bubble and IS cancelable — the cancel is the whole point. */
         s->ev = pre_new(ctx, event_new(ctx, "unhandledrejection", false, true), promise, reason);
         if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
     }
-    DCHECK(s->hdr.stage == REJECT_FIRE, "the rejection notification resumed into a stage §8.1.7.5 does not have");
+    DCHECK(s->hdr.stage == REJECT_FIRE, "the rejection notification resumed into a stage §8.1.4.7 does not have");
     global = JS_GetGlobalObject(ctx);
     r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), global, s->ev, cb_result, &s->not_canceled,
                               out_cb, out_argc);
@@ -278,7 +283,7 @@ static int js_reject_notify_step(JSContext *ctx, void *st, JSValue cb_result, JS
 
 static const JSTrampStepDef js_reject_notify_def = {
     sizeof(JSRejectNotify), js_reject_notify_step, js_reject_notify_fini, 0, .visit = js_reject_notify_visit,
-    .algorithm = "HTML §8.1.7.5 notify about rejected promises, for one promise",
+    .algorithm = "HTML §8.1.4.7 notify about rejected promises — step 4's queued task, one promise",
     .steps = REJECT_NOTIFY_STEPS
 };
 
@@ -329,7 +334,7 @@ void unhandled_rejection_init(JSContext *ctx)
     /* The notification driver is a step function nobody installs, so a page can neither see it nor replace it. */
     g_notify_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_reject_notify_def);
     CHECK(g_notify_stepid >= 0, "no step id for the rejection-notification driver");
-    g_notify_slot = realm_value_declare(ctx, "§8.1.7.5 notifyRejected");
+    g_notify_slot = realm_value_declare(ctx, "§8.1.4.7 notifyRejected");
     g_ready = 1;
     JS_SetHostPromiseRejectionTracker(JS_GetRuntime(ctx), rejection_tracker, NULL);
     /* THE CONSTRUCTOR'S DECLARATION IS THE AGENT'S — one pool entry per member; every realm's interface object
