@@ -828,7 +828,15 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                report hook — and what it means then is this half's answer, the same thing a script that threw
                means: a capability the page needed. Notifying clears the list, so the next pass finds none. */
             else if ((g_step_unit = "unhandled-rejection-notify", unhandled_rejection_notify(ctx))) return 0;
-            else return 1;   /* all scripts + chunks + microtask jobs + live fetches + load listeners done */
+            else {
+                /* A FLOW MAY NOT FINISH HOLDING WORK. Every branch above claims to have offered its queue a
+                   turn, so reaching here with a job still on it means one of them returned first and the job
+                   is about to be dropped with the flow — silently, because a dropped reaction looks exactly
+                   like a page that registered no handler. Asserted at the one place "finished" is decided. */
+                DCHECK(f->njob == 0, "a flow finished holding queued jobs — a promise reaction, a timer "
+                                     "callback or a delivered message would be dropped with it");
+                return 1;   /* all scripts + chunks + microtask jobs + live fetches + load listeners done */
+            }
             /* NULL ScriptOrModule name: an inline page script's name is the DOCUMENT's URL, which this host does
                not model yet — nothing here has one to give. It is what a relative `import('./chunk.js')` resolves
                against, so the moat's lazy-chunk surface needs the document URL plumbed to this call. */
