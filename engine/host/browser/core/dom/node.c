@@ -1637,12 +1637,24 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
            "a Lexbor node carries a type the DOM does not define");
     DCHECK(n->type != LXB_DOM_NODE_TYPE_ELEMENT || g_element_resolver != NULL,
            "an Element node was wrapped before the HTML layer registered its interface resolver");
-    /* THE PROTOTYPE IS THIS REALM'S, so it is read from the class slot rather than a table — and it is OWNED,
-       which is the one cost this conversion adds to the hottest path in the DOM: a refcount pair per wrap. */
+    /* THE PROTOTYPE IS THE NODE'S DOCUMENT'S REALM'S, and the distinction is the whole reason a wrapper is
+       cached: there is ONE wrapper per node — two same-origin documents are one agent and both see the same
+       object, which is what makes `frame.contentDocument.body === frame.contentDocument.body` hold across the
+       boundary — so the realm cannot be "whichever flow touched it first". A member reached through that
+       prototype runs in the realm that DEFINED it, so a child document's `body.tagName` answered out of the
+       parent's realm for no reason but the order of the reads.
+       It is OWNED, which is the one cost this conversion adds to the hottest path in the DOM: a refcount pair
+       per wrap. */
     {
-        JSValue proto = (n->type == LXB_DOM_NODE_TYPE_ELEMENT && g_element_resolver)
-                            ? g_element_resolver(ctx, lxb_dom_interface_element(n))
-                            : node_type_proto(ctx, (int)n->type);
+        JSContext *rctx = document_realm_of(n);
+        JSValue proto;
+
+        DCHECK(rctx != NULL,
+               "a node was wrapped in a document no realm was installed for — its prototype is that document's "
+               "and there is none, so build the realm rather than lending it the wrapping flow's");
+        proto = (n->type == LXB_DOM_NODE_TYPE_ELEMENT && g_element_resolver)
+                    ? g_element_resolver(rctx, lxb_dom_interface_element(n))
+                    : node_type_proto(rctx, (int)n->type);
         obj = JS_NewObjectProtoClass(ctx, proto, g_node_class);
         JS_FreeValue(ctx, proto);
     }
