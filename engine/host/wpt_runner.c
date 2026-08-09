@@ -818,6 +818,11 @@ static bool wpt_answer_host_requests(JSContext *ctx)
  * so the bytes on disk are a template and running them would test the template. The runner already speaks HTTP
  * to the corpus's own server for everything a test fetches; the document itself goes the same way, which is
  * also what a browser does. */
+/* WHICH IT IS, THE DRIVER SAYS — this runner does not guess from the file name. It guessed `.html` and only
+ * `.html`, which was a second copy of engine/wpt.mjs's collection rule; the corpus spells a document `.htm`
+ * and `.xhtml` too, so the two copies disagreed for 26 checked-out files and the disagreement would have been
+ * a document executed as a script. The driver already decided — it collected the file BECAUSE it is a markup
+ * document that loads testharness.js — so it passes `--test-document` and there is one rule, in one place. */
 static int    g_html_mode;      /* the test is a document, not a script */
 static char   g_test_url[512];  /* its address, server-relative — what to GET and what to resolve against */
 
@@ -853,7 +858,6 @@ static void wpt_derive_addresses(int argc, char **argv)
     const char *h = argv[1], *tail = strstr(h, "/resources/testharness.js");
     const char *test = argv[argc - 1];
     size_t n = tail ? (size_t)(tail - h) : 0;
-    size_t tn = strlen(test);
 
     CHECK(n < sizeof g_wpt_root, "wpt: the corpus root is longer than this runner holds");
     memcpy(g_wpt_root, h, n);
@@ -864,7 +868,6 @@ static void wpt_derive_addresses(int argc, char **argv)
         snprintf(g_base_url, sizeof g_base_url, "http://web-platform.test%s", test + n);
     else
         snprintf(g_base_url, sizeof g_base_url, "http://web-platform.test/");
-    g_html_mode = tn > 5 && !strcmp(test + tn - 5, ".html");
     if (g_html_mode) {
         CHECK(!strncmp(test, g_wpt_root, n), "wpt: an HTML test outside the corpus root has no server address");
         snprintf(g_test_url, sizeof g_test_url, "http://web-platform.test%s", test + n);
@@ -1446,8 +1449,11 @@ int main(int argc, char **argv)
     g_self_exe = argv[0];
     /* A CHILD NAVIGABLE'S INSTANCE, re-executed from this same binary — see the child-document section. */
     if (argc >= 5 && !strcmp(argv[1], "--document")) return wpt_child_main(argc, argv);
+    /* THE DRIVER'S CLASSIFICATION, consumed before anything else reads argv. Everything downstream then sees
+       the same argument shape it always saw, so there is no second indexing rule to keep in step. */
+    if (argc >= 2 && !strcmp(argv[1], "--test-document")) { g_html_mode = 1; argv++; argc--; }
     if (argc < 2) {
-        fprintf(stderr, "usage: wpt_runner <testharness.js> <test.js|test.html> [more.js ...]\n");
+        fprintf(stderr, "usage: wpt_runner [--test-document] <testharness.js> <test> [more.js ...]\n");
         return 2;
     }
     /* WHICH FILE IS THE TEST, WHERE IT LIVES, AND WHETHER IT IS A DOCUMENT. Derived before anything else is
