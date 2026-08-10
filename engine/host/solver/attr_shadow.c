@@ -4,7 +4,7 @@
 #include "check.h"        /* CHECK — dropping a taint shadow on OOM would silently corrupt @S isolation */
 #include "solver/attr_shadow.h"
 
-typedef struct { lxb_dom_element_t *el; int kind; char *ns; char *name; JSValue opaque; } AttrShadow;
+typedef struct { const void *owner; int kind; char *ns; char *name; JSValue opaque; } AttrShadow;
 static AttrShadow *g_attr_shadow = NULL; static int g_attr_shadow_n = 0, g_attr_shadow_cap = 0;
 
 /* Two namespaces match when both are the null namespace or both are the same URI. NULL is a VALUE here, not a
@@ -17,19 +17,19 @@ static void shadow_drop(JSContext *ctx, int i) {
     g_attr_shadow[i] = g_attr_shadow[--g_attr_shadow_n];
 }
 
-int attr_shadow_find(lxb_dom_element_t *el, int kind, const char *ns, const char *name) {
+int attr_shadow_find(const void *owner, int kind, const char *ns, const char *name) {
     for (int i = 0; i < g_attr_shadow_n; i++)
-        if (g_attr_shadow[i].el == el && g_attr_shadow[i].kind == kind
+        if (g_attr_shadow[i].owner == owner && g_attr_shadow[i].kind == kind
             && ns_same(g_attr_shadow[i].ns, ns) && strcmp(g_attr_shadow[i].name, name) == 0) return i;
     return -1;
 }
-void attr_shadow_set(JSContext *ctx, lxb_dom_element_t *el, int kind, const char *ns, const char *name,
+void attr_shadow_set(JSContext *ctx, const void *owner, int kind, const char *ns, const char *name,
                      JSValueConst opaque) {
     int i;
     DCHECK(kind != ATTR_SLOT_PROPERTY || ns == NULL,
            "a DOM PROPERTY slot was given a namespace — a property has none, and a key that carries one would "
            "never be found by the read, which passes NULL");
-    i = attr_shadow_find(el, kind, ns, name);
+    i = attr_shadow_find(owner, kind, ns, name);
     if (JS_IsUndefined(opaque)) {   /* concrete overwrite -> clear any stale taint */
         if (i >= 0) shadow_drop(ctx, i);
         return;
@@ -37,7 +37,7 @@ void attr_shadow_set(JSContext *ctx, lxb_dom_element_t *el, int kind, const char
     if (i >= 0) { JS_FreeValue(ctx, g_attr_shadow[i].opaque); g_attr_shadow[i].opaque = JS_DupValue(ctx, opaque); return; }
     if (g_attr_shadow_n >= g_attr_shadow_cap) { int nc = g_attr_shadow_cap ? g_attr_shadow_cap * 2 : 16;
         AttrShadow *n = realloc(g_attr_shadow, (size_t)nc * sizeof(AttrShadow)); CHECK(n, "attr-shadow-oom: realloc failed — silently dropping a taint shadow corrupts @S isolation"); g_attr_shadow = n; g_attr_shadow_cap = nc; }
-    g_attr_shadow[g_attr_shadow_n].el = el; g_attr_shadow[g_attr_shadow_n].kind = kind;
+    g_attr_shadow[g_attr_shadow_n].owner = owner; g_attr_shadow[g_attr_shadow_n].kind = kind;
     g_attr_shadow[g_attr_shadow_n].ns = ns ? strdup(ns) : NULL;
     CHECK(!ns || g_attr_shadow[g_attr_shadow_n].ns, "attr-shadow-oom: a namespace key could not be copied");
     g_attr_shadow[g_attr_shadow_n].name = strdup(name);

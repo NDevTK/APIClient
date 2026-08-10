@@ -44,6 +44,7 @@
 #include "core/realm.h"
 #include "core/dom/node.h"
 #include "core/dom/names.h"
+#include "core/dom/attr_list.h"   /* §4.9's (namespace, local name) lookup — the old value of THIS attribute */
 #include "core/dom/element.h"
 #include "core/dom/document.h"
 #include "core/html/html_element.h"
@@ -897,13 +898,17 @@ static void ce_upgrade_document(JSContext *ctx, const char *name, size_t nlen, J
 /* §4.13.3 "attribute changed": the reaction runs only for a name the definition declared as OBSERVED, which is
    why observedAttributes is read at define time and stored — a class watching two attributes must not have its
    callback run for the other fifty a page writes. Four arguments, which is what makes the generalised reaction
-   carry an argument vector rather than a name alone. */
-void custom_elements_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, const char *name,
+   carry an argument vector rather than a name alone.
+   THE OBSERVED SET IS OVER LOCAL NAMES, and the old value is read by §4.9's own identity: a qualified-name read
+   would answer with whichever attribute happens to print that name FIRST, which for a prefixed attribute is a
+   different attribute than the one being written. */
+void custom_elements_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
                                        const char *val, size_t val_len)
 {
-    JSValue wrap, def, observed, args[3];
+    JSValue wrap, def, observed, args[4];
     size_t old_len = 0;
     const lxb_char_t *old;
+    lxb_dom_attr_t *old_attr;
     uint32_t n = 0, i;
     bool watched = false;
 
@@ -919,7 +924,7 @@ void custom_elements_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, co
         for (i = 0; i < n && !watched; i++) {
             JSValue e = JS_GetPropertyUint32(ctx, observed, i);
             const char *s = JS_ToCString(ctx, e);
-            if (s && strcmp(s, name) == 0) watched = true;
+            if (s && strcmp(s, local) == 0) watched = true;
             if (s) JS_FreeCString(ctx, s);
             JS_FreeValue(ctx, e);
         }
@@ -927,14 +932,17 @@ void custom_elements_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, co
     JS_FreeValue(ctx, observed);
     /* §4.13.6's enqueue step 4: a name the definition does not observe is not a reaction. */
     if (!watched) { JS_FreeValue(ctx, def); JS_FreeValue(ctx, wrap); return; }
-    /* §4.13.3's arguments: (name, oldValue, newValue). An attribute that was absent has a NULL old value and an
-       attribute being removed a NULL new one, and the page's code branches on exactly that. */
-    old = lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), &old_len);
-    args[0] = JS_NewString(ctx, name);
+    /* §4.13.3's arguments: (localName, oldValue, newValue, namespace). An attribute that was absent has a NULL
+       old value and an attribute being removed a NULL new one, and the page's code branches on exactly that;
+       the namespace is null for every attribute an HTML page writes and a URI for the ones the parser moved. */
+    old_attr = dom_attr_get_ns(el, ns, local);
+    old = old_attr ? lxb_dom_attr_value(old_attr, &old_len) : NULL;
+    args[0] = JS_NewString(ctx, local);
     args[1] = old ? JS_NewStringLen(ctx, (const char *)old, old_len) : JS_NULL;
     args[2] = val ? JS_NewStringLen(ctx, val, val_len) : JS_NULL;
-    ce_enqueue_args(ctx, wrap, def, CE_CB_ATTR_CHANGED, 3, (JSValueConst *)args);
-    for (i = 0; i < 3; i++) JS_FreeValue(ctx, args[i]);
+    args[3] = ns ? JS_NewString(ctx, ns) : JS_NULL;
+    ce_enqueue_args(ctx, wrap, def, CE_CB_ATTR_CHANGED, 4, (JSValueConst *)args);
+    for (i = 0; i < 4; i++) JS_FreeValue(ctx, args[i]);
     JS_FreeValue(ctx, def);
     JS_FreeValue(ctx, wrap);
 }

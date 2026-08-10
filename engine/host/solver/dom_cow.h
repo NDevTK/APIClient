@@ -27,8 +27,13 @@ void dom_cow_set_ctx(JSContext *ctx);
    a node entered the tree and 0 BEFORE one leaves it, because "was it connected" is only answerable then. */
 void dom_cow_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, int inserted));
 /* §4.9's ATTRIBUTE CHANGE STEPS, fired by the same chokepoint for the same reason. Called BEFORE the write,
-   because the OLD value is what the element still holds; `val` is NULL for a removal. */
-void dom_cow_set_attr_hook(void (*fn)(JSContext *ctx, lxb_dom_element_t *el, const char *name,
+   because the OLD value is what the element still holds; `val` is NULL for a removal.
+   THE IDENTITY IS §4.9'S OWN — (namespace, LOCAL name), `ns` NULL for the null namespace. §4.9's "handle
+   attribute changes" step 3 passes the namespace to the attribute change steps and step 2 passes it to
+   §4.13.3's `attributeChangedCallback` as its FOURTH argument, and DOM's own ID change steps fire only when
+   "localName is id AND namespace is null" — so a hook carrying a qualified name alone cannot answer either
+   question for a namespaced attribute, and reports an `svg:id` as the element's ID. */
+void dom_cow_set_attr_hook(void (*fn)(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
                                       const char *val, size_t val_len));
 
 /* THE TREE VERSION. Every structural change to the document — an insert, a removal, and the SWAP that makes
@@ -61,9 +66,23 @@ void dom_cow_remove_attribute(lxb_dom_element_t *el, const char *name);
 void dom_cow_set_attribute_ns(lxb_dom_element_t *el, const char *ns, const char *prefix, const char *local,
                               const char *val, size_t val_len, JSValueConst taint);
 void dom_cow_remove_attribute_ns(lxb_dom_element_t *el, const char *ns, const char *local);
+/* §4.9's NODE-VALUED half — `setAttributeNode`/`setNamedItem` and `removeAttributeNode`/`removeNamedItem`,
+   which name the attribute by OBJECT rather than by any name. They are not expressible through the setters
+   above: the page's own Attr has to BE the attribute afterwards, so a create would answer `===` wrong. */
+void dom_cow_put_attribute_node(lxb_dom_element_t *el, lxb_dom_attr_t *a, JSValueConst taint);
+void dom_cow_remove_attribute_node(lxb_dom_attr_t *a);
+/* §4.9.2 "create an attribute" — a DETACHED Attr the running flow OWNS, destroyed with its delta. */
+lxb_dom_attr_t *dom_cow_create_attribute(lxb_dom_document_t *doc, const char *ns, const char *prefix,
+                                         const char *local);
+/* §4.9.2 "set an existing attribute value" over an attribute whose element is null. */
+void dom_cow_set_detached_attr_value(lxb_dom_attr_t *a, const char *val, size_t val_len,
+                                    JSValueConst taint);
 /* The taint this attribute carries — BORROWED (dup it to keep), JS_UNDEFINED when it carries none. The read's
    twin of the fused write, resolving the identity the same way so the two cannot disagree. */
 JSValue dom_cow_attr_taint(lxb_dom_element_t *el, const char *name);
+/* The same read at §4.9's OWN key, which is what the namespace-keyed family (`getAttributeNS`, `Attr.value`)
+   asks with — the by-name read above is that question plus the qualified-name resolution in front of it. */
+JSValue dom_cow_attr_taint_ns(lxb_dom_element_t *el, const char *ns, const char *local);
 /* node-insert chokepoint — the tree-structure twin of dom_cow_set_attribute: capture the insertion THEN attach
    the child, so a subtree a flow appends reverts per-flow (detached on context-switch, re-attached on resume). */
 void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child);

@@ -1133,6 +1133,9 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
             idl_install_accessor(ctx, proto, NAMES[k], js_doc_shortcut, (int)k, -1);
     }
     idl_install_method(ctx, proto, "createElementNS", 2, g_id_create_element_ns);
+    /* §4.5's two ATTRIBUTE factories, declared beside the interface they build (attr.c) — "create an attribute"
+       is §4.9.2's algorithm and belongs to the attribute component, not to a second copy of it here. */
+    attr_install_document_members(ctx, proto);
     idl_install_method(ctx, proto, "createNodeIterator", 1, g_id_create_iterator);
     idl_install_method(ctx, proto, "createTreeWalker", 1, g_id_create_walker);
     idl_install_method(ctx, proto, "createRange", 0, g_id_create_range);

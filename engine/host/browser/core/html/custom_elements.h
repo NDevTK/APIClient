@@ -5,8 +5,11 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 
-/* attributeChangedCallback's (name, oldValue, newValue) — the widest lifecycle callback there is. */
-#define CE_MAX_REACTION_ARGS 3
+/* attributeChangedCallback's (localName, oldValue, newValue, NAMESPACE) — the widest lifecycle callback there
+   is. FOUR, because DOM §4.9's "handle attribute changes" step 2 enqueues « attribute's local name, oldValue,
+   newValue, attribute's namespace »: the namespace is the argument a page reads to tell an `xlink:href` from
+   the null-namespace `href` it also observes, and a three-slot buffer silently drops it. */
+#define CE_MAX_REACTION_ARGS 4
 
 /* §4.13.6 STEP 4'S DRAIN, AS A STRUCT THE CALLING MACHINE EMBEDS. Invoking a reaction runs the page's code, so
    the drain parks — and it parks inside whichever machine is performing the `[CEReactions]` wrapper, which is
@@ -69,8 +72,12 @@ void custom_elements_try_upgrade(JSContext *ctx, lxb_dom_element_t *el);
    the element was upgraded, because only an upgraded element has a lifecycle to react with. */
 void custom_elements_disconnected(JSContext *ctx, lxb_dom_element_t *el);
 /* §4.13.3's attribute-changed reaction. Called BEFORE the write, so the element still holds the old value;
-   `val` is NULL for a removal. A no-op unless the element is upgraded and its definition OBSERVES this name. */
-void custom_elements_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, const char *name,
+   `val` is NULL for a removal. A no-op unless the element is upgraded and its definition OBSERVES this name.
+   THE ATTRIBUTE IS NAMED THE WAY §4.9 NAMES IT — (namespace, LOCAL name), `ns` NULL for the null namespace —
+   because §4.9's "handle attribute changes" step 2 enqueues the reaction with « local name, oldValue, newValue,
+   NAMESPACE » and the observed-attributes filter is over the LOCAL name: a qualified name would neither match
+   `observedAttributes` for a prefixed attribute nor be able to supply the fourth argument at all. */
+void custom_elements_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
                                        const char *val, size_t val_len);
 
 #endif

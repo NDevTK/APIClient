@@ -1,6 +1,7 @@
 /* DOM §4.9's ATTRIBUTE LIST — the raw operations. See attr_list.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_ATTR_LIST_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_ATTR_LIST_H
+#include <stdbool.h>
 #include <lexbor/dom/dom.h>
 #include "quickjs.h"
 
@@ -34,16 +35,38 @@ lxb_dom_attr_t *dom_attr_get_ns(lxb_dom_element_t *el, const char *ns, const cha
 /* §4.9 "get an attribute by name" — the FIRST attribute whose QUALIFIED name is `qname`. */
 lxb_dom_attr_t *dom_attr_get_qname(lxb_dom_element_t *el, const char *qname);
 
+/* §4.9.2 "create an attribute" — a DETACHED Attr node (element null), which is what `createAttribute` and
+   `createAttributeNS` return and what `setAttributeNode` is handed. No validation: §4.9.2 is a raw constructor
+   and every caller that needs a name check has already run it. `ns`/`prefix` NULL is the null namespace, and a
+   non-null prefix with a null namespace is unconstructible ("validate and extract" step 8) and DCHECKed. */
+lxb_dom_attr_t *dom_attr_create(lxb_dom_document_t *doc, const char *ns, const char *prefix, const char *local);
+/* §4.9 "change an attribute" step 2 — the VALUE, over an attribute that may or may not be on an element. */
+void dom_attr_set_value(lxb_dom_attr_t *a, const char *val, size_t val_len);
+/* §4.9 "append an attribute" steps 1 and 2, at a POSITION. `before` NULL appends at the end, which is what the
+   algorithm itself always does — the position exists for the per-flow delta, whose job is to restore a list
+   rather than to run an algorithm, and whose restore must put an attribute back at the index the page's
+   `el.attributes[i]` read it from. */
+void dom_attr_attach(lxb_dom_element_t *el, lxb_dom_attr_t *a, lxb_dom_attr_t *before);
+/* §4.9 "remove an attribute" steps 2 and 3 — unlink and set its element to null. THE NODE SURVIVES: §9.4.7
+   clears `element` and nothing else, and `removeAttributeNode`/`removeNamedItem` RETURN that attribute. */
+void dom_attr_detach(lxb_dom_attr_t *a);
+/* §4.9 "replace an attribute" steps 2 to 5 — IN PLACE, so the list position (and `NamedNodeMap` index order) is
+   preserved, which is what makes it different from a detach plus an append. The two must already agree on
+   (namespace, local name), which "set an attribute" step 3 guarantees by finding the old one at that key. */
+void dom_attr_replace(lxb_dom_attr_t *old_a, lxb_dom_attr_t *new_a);
+/* Free a DETACHED attribute nothing can reach any more — the per-flow delta's release for one the flow created.
+   Takes the context because an Attr is a WRAPPED node: the identity map must be told before it is left naming
+   freed memory, which a pool allocator turns into the next attribute inheriting this one's wrapper. */
+void dom_attr_destroy(JSContext *ctx, lxb_dom_attr_t *a);
+
 /* §4.9 "append an attribute" and "change an attribute" over one identity: create it when the element has no
    attribute with that (namespace, local name), otherwise write the new value into the one it has. `prefix` is
    NULL when there is none, and is only ever consulted for a newly created attribute — an existing attribute's
-   prefix is its own and a value write does not rename it. */
-void dom_attr_write(lxb_dom_element_t *el, const char *ns, const char *prefix, const char *local,
-                    const char *val, size_t val_len);
-/* §4.9 "remove an attribute by namespace and local name". A no-op when there is no such attribute. Takes the
-   context because an Attr is a WRAPPED node: the removal frees it, and the identity map must be told before it
-   is left naming freed memory. */
-void dom_attr_erase(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local);
+   prefix is its own and a value write does not rename it. Returns the attribute it wrote, and sets `*created`
+   (may be NULL) when it had to make one: the delta owns what a flow creates, and the only place that fact is
+   known without asking twice is here. */
+lxb_dom_attr_t *dom_attr_write(lxb_dom_element_t *el, const char *ns, const char *prefix, const char *local,
+                               const char *val, size_t val_len, bool *created);
 
 /* THE PARSE BOUNDARY. HTML tree construction produces attributes in the NULL namespace; lexbor stamps them with
    the element's namespace instead, and the difference is only knowable at the boundary — afterwards a parsed

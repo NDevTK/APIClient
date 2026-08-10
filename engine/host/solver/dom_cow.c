@@ -25,7 +25,21 @@ typedef struct DomUndo {
        null namespace and for a PROPERTY slot, which has neither. */
     int kind; int slot; lxb_dom_element_t *el; char *ns; char *prefix; char *name;
     lxb_char_t *old; size_t old_len; int had;                 /* kind 0: baseline attr VALUE */
+    /* kind 0: THE ATTRIBUTE NODE ITSELF, and where in the list it sat. §9.4.7's "remove an attribute" clears
+       the attribute's element and NOTHING ELSE — the node survives, and `removeAttributeNode` returns it — so a
+       restore RE-ATTACHES THE SAME NODE rather than building a replacement out of (ns, prefix, local, value).
+       Rebuilt, `el.getAttributeNode("x")` held across a context switch would come back a different object, and
+       `attributes[0] === attributes[0]` would stop holding across a park. `attr_next` is the attribute it sat
+       BEFORE at capture time, which is what puts it back at the index the page read it from; a reverse-order
+       restore always finds that successor attached, because an attribute removed EARLIER cannot be the
+       successor recorded later. */
+    lxb_dom_attr_t *attr, *attr_next;
     lxb_char_t *cur; size_t cur_len; int cur_had;             /* kind 0: flow's attr VALUE (valid while parked) */
+    lxb_dom_attr_t *cur_attr, *cur_attr_next;                 /* kind 0: the NODE serving it while parked */
+    /* WHOSE TAINT SHADOW THIS ENTRY RESTORES. The element for kinds 0, and the ATTR NODE for kind 7 — an
+       attribute with no element keys its shadow on itself (see attr_shadow.h), so the field that names the
+       shadow's owner is its own rather than `el` reinterpreted. */
+    const void *sh_owner;
     JSValue sh_old; int sh_had;                               /* kind 0: baseline attr TAINT shadow (opaque, or none) */
     JSValue sh_cur; int sh_cur_had;                           /* kind 0: flow's attr TAINT shadow (valid while parked) */
     lxb_dom_node_t *node, *parent, *next;                     /* kind 1/2: the node + its position */
@@ -35,6 +49,11 @@ typedef struct DomUndo {
        children, and without a removal capture the old subtree would survive into the new markup and leak
        across a context switch into a sibling flow that never removed it. */
     int reinserted;                                           /* kind 2: currently back in the tree (unapplied) */
+    /* kind 6: an ATTRIBUTE this flow created — kind 4's twin, and a separate kind because both halves of what
+       a creation entry does differ. "Is it still reachable?" is `owner != NULL` for an attribute and not
+       `dom_is_attached` (an Attr's parent is always null, so kind 4's test would call an attribute sitting in
+       an element's list unattached and free it out from under that list), and the free is the Attr
+       destructor rather than a deep tree walk. The node it names is `node`, reached as an attribute. */
     /* kind 5: a whole DOCUMENT this flow created (§4.5.1's createHTMLDocument / createDocument). Its own field
        rather than `node` reused, because what has to be destroyed is the lxb_html_document_t and not the node
        at its root — a different destructor, over a different allocation, and a type pun through the node would
@@ -73,6 +92,7 @@ static DomSeg *g_dom_base = NULL;
 static DomSeg *g_dom_installed = NULL;
 static void dom_unapply_seg(DomSeg *s);   /* fwd: dom_revert (defined earlier) walks the base chain */
 static void dom_seg_unref(DomSeg *s);
+static void dom_note_created_attr(lxb_dom_attr_t *a);   /* fwd: the chokepoint is above the creation records */
 
 void dom_cow_set_ctx(JSContext *ctx) { g_cow_ctx = ctx; }
 
@@ -96,34 +116,44 @@ static void (*g_tree_hook)(JSContext *ctx, lxb_dom_node_t *n, int inserted);
 
 void dom_cow_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, int inserted)) { g_tree_hook = fn; }
 
-static void (*g_attr_hook)(JSContext *ctx, lxb_dom_element_t *el, const char *name,
+static void (*g_attr_hook)(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
                            const char *val, size_t val_len);
-void dom_cow_set_attr_hook(void (*fn)(JSContext *ctx, lxb_dom_element_t *el, const char *name,
+void dom_cow_set_attr_hook(void (*fn)(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
                                       const char *val, size_t val_len)) { g_attr_hook = fn; }
 
 /* the current taint shadow for this slot identity, dup'd (JS_UNDEFINED + *had=0 if none) */
-static JSValue shadow_snapshot(lxb_dom_element_t *el, int slot, const char *ns, const char *name, int *had) {
-    int si = attr_shadow_find(el, slot, ns, name);
+static JSValue shadow_snapshot(const void *owner, int slot, const char *ns, const char *name, int *had) {
+    int si = attr_shadow_find(owner, slot, ns, name);
     *had = (si >= 0);
     return (si >= 0 && g_cow_ctx) ? JS_DupValue(g_cow_ctx, attr_shadow_opaque(si)) : JS_UNDEFINED;
 }
 /* set this slot identity's taint shadow to `v` (borrowed; attr_shadow_set dups it), or clear it when !had */
-static void shadow_restore(lxb_dom_element_t *el, int slot, const char *ns, const char *name,
+static void shadow_restore(const void *owner, int slot, const char *ns, const char *name,
                            JSValueConst v, int had) {
-    if (g_cow_ctx) attr_shadow_set(g_cow_ctx, el, slot, ns, name, had ? v : JS_UNDEFINED);
+    if (g_cow_ctx) attr_shadow_set(g_cow_ctx, owner, slot, ns, name, had ? v : JS_UNDEFINED);
 }
 
 /* THE DELTA'S TWO ATTRIBUTE PRIMITIVES, over the identity an entry holds. Both go through §4.9's attribute-list
    algorithms rather than lexbor's qualified-name shortcuts, which is the whole point of storing the identity:
    a restore puts the attribute back where it was, in the namespace it was in. */
-static void attr_put(const DomUndo *u, const lxb_char_t *val, size_t len) {
-    dom_attr_write(u->el, u->ns, u->prefix, u->name, (const char *)(val ? val : (const lxb_char_t *)""), len);
+static void attr_put(const DomUndo *u, lxb_dom_attr_t *a, lxb_dom_attr_t *before,
+                     const lxb_char_t *val, size_t len) {
+    DCHECK(a != NULL, "an attribute delta says this identity was PRESENT and names no attribute node to put "
+                      "back — presence is recorded with the node that served it, so the two cannot disagree");
+    if (!a->owner) {
+        /* (namespace, local name) is §4.9's UNIQUENESS key on the list, so whatever is serving this identity
+           now has to come out before the restored node goes in. `setAttributeNode` is what makes that a real
+           case rather than a defensive one: it REPLACES an attribute with a different Attr object at the same
+           identity, and the baseline's node is the one this entry has to put back. */
+        lxb_dom_attr_t *occupant = dom_attr_get_ns(u->el, u->ns, u->name);
+        if (occupant) dom_attr_detach(occupant);
+        dom_attr_attach(u->el, a, (before && before->owner == u->el) ? before : NULL);
+    }
+    dom_attr_set_value(a, (const char *)(val ? val : (const lxb_char_t *)""), len);
 }
 static void attr_drop(const DomUndo *u) {
-    DCHECK(g_cow_ctx != NULL,
-           "a DOM attribute delta was restored with no context named — an Attr is a WRAPPED node, so the "
-           "identity map has to be told before the removal frees it (dom_cow_set_ctx names the runtime)");
-    dom_attr_erase(g_cow_ctx, u->el, u->ns, u->name);
+    lxb_dom_attr_t *a = dom_attr_get_ns(u->el, u->ns, u->name);
+    if (a) dom_attr_detach(a);   /* §9.4.7: the node survives — the delta that CREATED it is what frees it */
 }
 
 static void dom_undo_push(DomUndo u) {
@@ -139,23 +169,35 @@ static void dom_undo_push(DomUndo u) {
 }
 /* Record (element, namespace, local name)'s BASELINE — value and taint together, because a restore that put one
    back without the other would hand a sink either clean bytes that are attacker input or a stale provenance on
-   a value that never had it. `prefix` rides along so a restore that has to CREATE the attribute again rebuilds
-   the qualified name the baseline printed. */
-static void dom_attr_capture(lxb_dom_element_t *el, const char *ns, const char *prefix, const char *local) {
+   a value that never had it.
+   THE PREFIX IS READ OFF THE ATTRIBUTE, NEVER TAKEN FROM THE CALLER. It is only ever consulted by a restore
+   that has to CREATE the attribute again, which happens exactly when the baseline HAD one — so the prefix that
+   restore must rebuild is that attribute's own, and the caller's is about the attribute it is on its way to
+   write. Taken from the caller, `removeAttributeNS(XLINK, "href")` (which has no prefix to pass) reverted to an
+   XLink `href` with no prefix at all: the same attribute by §4.9's identity, printing `href` where the page's
+   markup said `xlink:href`. */
+static void dom_attr_capture(lxb_dom_element_t *el, const char *ns, const char *local) {
     lxb_dom_attr_t *a;
-    size_t vl = 0;
-    const lxb_char_t *cur;
+    size_t vl = 0, pl = 0;
+    const lxb_char_t *cur, *prefix;
     DomUndo u;
 
     if (!g_dom_capture) return;
     a = dom_attr_get_ns(el, ns, local);
     cur = a ? lxb_dom_attr_value(a, &vl) : NULL;
+    prefix = a ? dom_attr_prefix(a, &pl) : NULL;
     memset(&u, 0, sizeof u);
     u.kind = 0; u.slot = ATTR_SLOT_ATTRIBUTE; u.el = el; u.had = a ? 1 : 0;
+    u.attr = a; u.attr_next = a ? a->next : NULL;   /* the node, and the index it sat at */
+    u.sh_owner = el;
     u.name = strdup(local);
     CHECK(u.name, "dom-cow-oom: attr local-name strdup failed");
     if (ns) { u.ns = strdup(ns); CHECK(u.ns, "dom-cow-oom: attr namespace strdup failed"); }
-    if (prefix) { u.prefix = strdup(prefix); CHECK(u.prefix, "dom-cow-oom: attr prefix strdup failed"); }
+    if (prefix) {
+        u.prefix = malloc(pl + 1);
+        CHECK(u.prefix, "dom-cow-oom: attr prefix copy failed");
+        memcpy(u.prefix, prefix, pl); u.prefix[pl] = 0;
+    }
     if (cur) { u.old = malloc(vl ? vl : 1); CHECK(u.old, "dom-cow-oom: baseline attr snapshot malloc failed — the delta could not restore its baseline"); memcpy(u.old, cur, vl); u.old_len = vl; }
     u.sh_old = shadow_snapshot(el, ATTR_SLOT_ATTRIBUTE, ns, local, &u.sh_had);   /* baseline TAINT reverts with the value */
     u.sh_cur = JS_UNDEFINED;
@@ -167,7 +209,7 @@ static void dom_attr_capture(lxb_dom_element_t *el, const char *ns, const char *
 static void dom_prop_taint_capture(lxb_dom_element_t *el, const char *name) {
     if (!g_dom_capture) return;
     DomUndo u; memset(&u, 0, sizeof u);
-    u.kind = 0; u.slot = ATTR_SLOT_PROPERTY; u.el = el; u.name = strdup(name); u.had = 0;
+    u.kind = 0; u.slot = ATTR_SLOT_PROPERTY; u.el = el; u.sh_owner = el; u.name = strdup(name); u.had = 0;
     CHECK(u.name, "dom-cow-oom: property name strdup failed");
     u.sh_old = shadow_snapshot(el, ATTR_SLOT_PROPERTY, NULL, name, &u.sh_had);
     u.sh_cur = JS_UNDEFINED;
@@ -183,39 +225,6 @@ void dom_insert_capture(lxb_dom_node_t *node) {
     if (!g_dom_capture) return;
     DomUndo u; memset(&u, 0, sizeof u); u.kind = 1; u.node = node; u.sh_old = u.sh_cur = JS_UNDEFINED; dom_undo_push(u);
 }
-/* THE DOM-mutation CHOKEPOINT (see dom_cow.h): capture the baseline THEN mutate, so a write cannot bypass the
-   per-flow delta. Every browser-component attribute write funnels through here — the capture-before-mutate order
-   is guaranteed in ONE place, not re-remembered at each call site.
- *
- * VALUE AND TAINT ARE ONE WRITE. They were two calls every caller had to make in agreement, over a key each
- * computed for itself, and a caller that made one and not the other left a stale taint on a fresh value (a sink
- * reading clean bytes as attacker input) or dropped the provenance of a stored source. `toggleAttribute(name,
- * true)` was the second of those: it wrote the empty string and left whatever taint the attribute had. One call
- * resolves the identity once and cannot disagree with itself. `taint` is JS_UNDEFINED for a concrete write. */
-void dom_cow_set_attribute_ns(lxb_dom_element_t *el, const char *ns, const char *prefix, const char *local,
-                              const char *val, size_t val_len, JSValueConst taint) {
-    dom_attr_capture(el, ns, prefix, local);   /* baseline into the running flow's delta FIRST (no-op if !g_dom_capture) */
-    /* BEFORE the write: the change steps take the OLD value, which the element still holds only until now. */
-    DCHECK(!ns, "a NAMESPACED attribute write reached the attribute change steps, which carry only a name — "
-                "§4.13.3's attributeChangedCallback takes the namespace as its fourth argument, so give the "
-                "hook one before a namespace-aware setter can call this");
-    if (g_attr_hook && g_cow_ctx) g_attr_hook(g_cow_ctx, el, local, val, val_len);
-    dom_attr_write(el, ns, prefix, local, val, val_len);
-    if (g_cow_ctx) attr_shadow_set(g_cow_ctx, el, ATTR_SLOT_ATTRIBUTE, ns, local, taint);
-}
-/* Remove an ATTRIBUTE the baseline may own — the fourth thing a flow can change about the tree, and the one
-   that had no chokepoint, so a boolean reflection (`el.hidden = false`, `script.async = false`) had no way to
-   unset itself without going around the per-flow delta. Same capture-then-mutate order as the setter, and the
-   taint goes with the value because there is no value left for it to describe. */
-void dom_cow_remove_attribute_ns(lxb_dom_element_t *el, const char *ns, const char *local) {
-    dom_attr_capture(el, ns, NULL, local);
-    DCHECK(!ns, "a NAMESPACED attribute removal reached the attribute change steps — see the setter");
-    if (g_attr_hook && g_cow_ctx) g_attr_hook(g_cow_ctx, el, local, NULL, 0);
-    DCHECK(g_cow_ctx != NULL, "an attribute removal ran with no context named — see attr_drop");
-    dom_attr_erase(g_cow_ctx, el, ns, local);
-    if (g_cow_ctx) attr_shadow_set(g_cow_ctx, el, ATTR_SLOT_ATTRIBUTE, ns, local, JS_UNDEFINED);
-}
-
 /* §4.9 "get an attribute by name" RESOLVED TO AN IDENTITY: which attribute a qualified name means is a question
    about the element's current attribute list, so it is asked HERE, once, rather than by each caller inventing a
    key that the delta and the taint shadow then have to agree about.
@@ -245,7 +254,180 @@ static void attr_ident_of(lxb_dom_element_t *el, const char *qname, AttrIdent *i
     s = lxb_dom_attr_local_name(a, &len);
     id->local = dupn(s, len);
 }
+/* THE SAME IDENTITY READ OFF AN ATTRIBUTE NODE, which is what the node-valued operations are given: they name
+   the attribute by object, and every delta entry and every shadow key is over (namespace, local name). */
+static void attr_ident_of_node(const lxb_dom_attr_t *a, AttrIdent *id) {
+    const lxb_char_t *s;
+    size_t len = 0;
+
+    id->ns = id->prefix = NULL;
+    if ((s = dom_attr_ns(a, &len)) != NULL) id->ns = dupn(s, len);
+    if ((s = dom_attr_prefix(a, &len)) != NULL) id->prefix = dupn(s, len);
+    s = lxb_dom_attr_local_name((lxb_dom_attr_t *)a, &len);
+    DCHECK(s != NULL, "an attribute carries no local name — §4.9.1 says a local name is a non-empty string");
+    id->local = dupn(s, len);
+}
 static void attr_ident_free(AttrIdent *id) { free(id->ns); free(id->prefix); free(id->local); }
+
+/* THE DETACHED NODE'S VALUE, as a delta entry over the NODE — kind 3's shape (a value in place on a node whose
+   identity must survive the write) over an Attr instead of a CharacterData. Pushed by the DETACH, which is the
+   moment a shared attribute's value stops being reachable through its element and starts being reachable only
+   through the object the page is holding. */
+static void dom_attr_node_value_capture(lxb_dom_attr_t *a, const AttrIdent *id) {
+    DomUndo u;
+    size_t vl = 0;
+    const lxb_char_t *v;
+
+    if (!g_dom_capture) return;
+    memset(&u, 0, sizeof u);
+    u.kind = 7; u.node = lxb_dom_interface_node(a); u.sh_old = u.sh_cur = JS_UNDEFINED;
+    v = lxb_dom_attr_value(a, &vl);
+    if (v) {
+        u.old = malloc(vl ? vl : 1);
+        CHECK(u.old, "dom-cow-oom: a detached attribute's baseline value could not be snapshotted");
+        memcpy(u.old, v, vl); u.old_len = vl;
+    }
+    u.had = 1;
+    /* AND ITS TAINT, which is keyed on the NODE while it has no element — the value and its provenance are one
+       piece of state and a restore that put one back without the other hands a sink either clean bytes that
+       are attacker input or a stale provenance on a value that never had it. */
+    u.slot = ATTR_SLOT_ATTRIBUTE; u.sh_owner = a;
+    if (id->ns) { u.ns = strdup(id->ns); CHECK(u.ns, "dom-cow-oom: detached attr namespace strdup failed"); }
+    u.name = strdup(id->local);
+    CHECK(u.name, "dom-cow-oom: detached attr local-name strdup failed");
+    u.sh_old = shadow_snapshot(a, ATTR_SLOT_ATTRIBUTE, id->ns, id->local, &u.sh_had);
+    dom_undo_push(u);
+}
+
+/* THE DOM-mutation CHOKEPOINT (see dom_cow.h): capture the baseline THEN mutate, so a write cannot bypass the
+   per-flow delta. Every browser-component attribute write funnels through here — the capture-before-mutate order
+   is guaranteed in ONE place, not re-remembered at each call site.
+ *
+ * VALUE AND TAINT ARE ONE WRITE. They were two calls every caller had to make in agreement, over a key each
+ * computed for itself, and a caller that made one and not the other left a stale taint on a fresh value (a sink
+ * reading clean bytes as attacker input) or dropped the provenance of a stored source. `toggleAttribute(name,
+ * true)` was the second of those: it wrote the empty string and left whatever taint the attribute had. One call
+ * resolves the identity once and cannot disagree with itself. `taint` is JS_UNDEFINED for a concrete write. */
+void dom_cow_set_attribute_ns(lxb_dom_element_t *el, const char *ns, const char *prefix, const char *local,
+                              const char *val, size_t val_len, JSValueConst taint) {
+    dom_attr_capture(el, ns, local);   /* baseline into the running flow's delta FIRST (no-op if !g_dom_capture) */
+    /* BEFORE the write: the change steps take the OLD value, which the element still holds only until now. */
+    if (g_attr_hook && g_cow_ctx) g_attr_hook(g_cow_ctx, el, ns, local, val, val_len);
+    {
+        bool created = false;
+        lxb_dom_attr_t *a = dom_attr_write(el, ns, prefix, local, val, val_len, &created);
+        /* AN ATTRIBUTE A FLOW CREATES IS THE FLOW'S, and the write is the one place that knows it made one. */
+        if (created) dom_note_created_attr(a);
+    }
+    if (g_cow_ctx) attr_shadow_set(g_cow_ctx, el, ATTR_SLOT_ATTRIBUTE, ns, local, taint);
+}
+/* Remove an ATTRIBUTE the baseline may own — the fourth thing a flow can change about the tree, and the one
+   that had no chokepoint, so a boolean reflection (`el.hidden = false`, `script.async = false`) had no way to
+   unset itself without going around the per-flow delta. Same capture-then-mutate order as the setter, and the
+   taint goes with the value because there is no value left for it to describe. */
+void dom_cow_remove_attribute_ns(lxb_dom_element_t *el, const char *ns, const char *local) {
+    /* §4.9 "remove an attribute by namespace and local name" step 2: the removal — and therefore the change
+       steps, the delta entry and the shadow clear — happen ONLY when there is an attribute to remove. The guard
+       is here rather than in the by-name wrapper because §4.9's key is this one: a qualified name that matches
+       nothing still resolves to an identity, and the question "is there one" is only answerable at the key the
+       list is unique over. */
+    lxb_dom_attr_t *a = dom_attr_get_ns(el, ns, local);
+    if (!a) return;
+    dom_cow_remove_attribute_node(a);
+}
+/* §4.9 "REMOVE AN ATTRIBUTE" OVER THE NODE ITSELF, which is what `removeAttributeNode` and `removeNamedItem`
+   are defined on: they find the attribute by IDENTITY (a containment test on the list), not by a name. */
+void dom_cow_remove_attribute_node(lxb_dom_attr_t *a) {
+    lxb_dom_element_t *el;
+    AttrIdent id;
+
+    DCHECK(a != NULL, "an attribute-node removal was asked for no attribute");
+    el = a->owner;
+    if (!el) return;   /* §9.4.7 over an attribute whose element is already null */
+    attr_ident_of_node(a, &id);
+    dom_attr_capture(el, id.ns, id.local);
+    if (g_attr_hook && g_cow_ctx) g_attr_hook(g_cow_ctx, el, id.ns, id.local, NULL, 0);
+    DCHECK(g_cow_ctx != NULL, "an attribute removal ran with no context named — the taint shadow that goes with "
+                              "the value is held as JSValues (dom_cow_set_ctx names the runtime)");
+    /* THE DETACHED NODE'S VALUE BECOMES REACHABLE STATE, so it is captured HERE and not at the write that
+       changes it. §9.4.7 leaves the removed attribute alive with its value, and a page can write that value
+       while it sits detached (`const a = el.removeAttributeNode(x); a.value = "..."`). The node is SHARED —
+       another flow's world still has it in the element's list — so the write has to revert; recording the
+       baseline at the detach makes every later write to it free, and leaves an attribute the flow CREATED
+       (which no other flow can name) with no entry at all, which is the invariant that keeps a delta O(shared
+       state touched). */
+    dom_attr_detach(a);                                /* §9.4.7: the node survives, detached */
+    dom_attr_node_value_capture(a, &id);
+    /* THE TAINT GOES WITH THE ATTRIBUTE, not with the element it left. `el.removeAttributeNode(x)` hands the
+       page an object still holding the source that was written into it, and a later `el.setAttributeNode(x)`
+       puts that source back into the DOM — so the provenance is re-keyed onto the node rather than dropped. */
+    if (g_cow_ctx) {
+        int si = attr_shadow_find(el, ATTR_SLOT_ATTRIBUTE, id.ns, id.local);
+        if (si >= 0) attr_shadow_set(g_cow_ctx, a, ATTR_SLOT_ATTRIBUTE, id.ns, id.local, attr_shadow_opaque(si));
+        attr_shadow_set(g_cow_ctx, el, ATTR_SLOT_ATTRIBUTE, id.ns, id.local, JS_UNDEFINED);
+    }
+    attr_ident_free(&id);
+}
+/* §4.9 "SET AN ATTRIBUTE" STEPS 6 AND 7 — the list write with a NODE the caller supplies, which is what
+   `setAttributeNode` and `setNamedItem` do and what no name-keyed setter can express: the page's own Attr
+   object has to BE the attribute afterwards, so this cannot go through a create.
+   ONE change notification either way — §9.4.8 step 6 reports a REPLACE against the OLD attribute's name and
+   namespace with the NEW attribute's value, and the two agree on that identity by construction. */
+void dom_cow_put_attribute_node(lxb_dom_element_t *el, lxb_dom_attr_t *a, JSValueConst taint) {
+    lxb_dom_attr_t *old;
+    AttrIdent id;
+    size_t vl = 0;
+    const lxb_char_t *v;
+
+    DCHECK(el && a, "an attribute-node write was asked for no element or no attribute");
+    DCHECK(a->owner == NULL || a->owner == el,
+           "an attribute already on ANOTHER element reached the list write — §4.9's \"set an attribute\" step 2 "
+           "throws InUseAttributeError for that, so it never gets here");
+    attr_ident_of_node(a, &id);
+    old = dom_attr_get_ns(el, id.ns, id.local);
+    if (old != a) {
+        dom_attr_capture(el, id.ns, id.local);
+        v = lxb_dom_attr_value(a, &vl);
+        if (g_attr_hook && g_cow_ctx)
+            g_attr_hook(g_cow_ctx, el, id.ns, id.local, (const char *)(v ? v : (const lxb_char_t *)""), vl);
+        if (old) dom_attr_replace(old, a);             /* step 6 — in place, keeping the index */
+        else dom_attr_attach(el, a, NULL);             /* step 7 */
+        if (old) dom_attr_node_value_capture(old, &id);   /* the displaced node is reachable and now detached */
+        if (g_cow_ctx) {
+            /* THE ATTRIBUTE BRINGS ITS OWN TAINT. `a.value = location.hash` on a detached Attr keyed the
+               source on the node; attaching it is what puts that source into the DOM, so the node's shadow is
+               what this identity carries afterwards — the caller's `taint` is only for an attribute that never
+               had one. It is not cleared off the node: a revert detaches `a` again, and its provenance has to
+               still be there when it does. */
+            int si = attr_shadow_find(a, ATTR_SLOT_ATTRIBUTE, id.ns, id.local);
+            attr_shadow_set(g_cow_ctx, el, ATTR_SLOT_ATTRIBUTE, id.ns, id.local,
+                            si >= 0 ? attr_shadow_opaque(si) : taint);
+        }
+    }
+    attr_ident_free(&id);
+}
+/* §4.9.2 "create an attribute" — the delta owns what the flow creates, exactly as it owns a created node. */
+lxb_dom_attr_t *dom_cow_create_attribute(lxb_dom_document_t *doc, const char *ns, const char *prefix,
+                                         const char *local) {
+    lxb_dom_attr_t *a = dom_attr_create(doc, ns, prefix, local);
+    dom_note_created_attr(a);
+    return a;
+}
+/* §4.9.2 "set an existing attribute value" step 1/4's arm — the attribute's element is NULL. No capture: a
+   detached attribute is either one this flow CREATED (which no other flow can name) or one this flow DETACHED
+   from an element, and the detach already recorded its baseline value. */
+void dom_cow_set_detached_attr_value(lxb_dom_attr_t *a, const char *val, size_t val_len, JSValueConst taint) {
+    AttrIdent id;
+
+    DCHECK(a != NULL, "a detached attribute value write was asked for no attribute");
+    DCHECK(a->owner == NULL, "a detached-attribute write was made to an attribute that is ON an element — its "
+                             "value is keyed state there, and the write has to go through the identity");
+    dom_attr_set_value(a, val, val_len);
+    attr_ident_of_node(a, &id);
+    if (g_cow_ctx) attr_shadow_set(g_cow_ctx, a, ATTR_SLOT_ATTRIBUTE, id.ns, id.local, taint);
+    attr_ident_free(&id);
+}
+
 
 void dom_cow_set_attribute(lxb_dom_element_t *el, const char *name, const char *val, size_t val_len,
                            JSValueConst taint) {
@@ -258,22 +440,25 @@ void dom_cow_set_attribute(lxb_dom_element_t *el, const char *name, const char *
 void dom_cow_remove_attribute(lxb_dom_element_t *el, const char *name) {
     AttrIdent id;
 
-    if (!dom_attr_get_qname(el, name)) return;   /* §4.9: removing what is not there changes nothing */
-    attr_ident_of(el, name, &id);
+    attr_ident_of(el, name, &id);   /* §4.9 "remove an attribute by name" step 1 — the identity that name means */
     dom_cow_remove_attribute_ns(el, id.ns, id.local);
     attr_ident_free(&id);
 }
 /* The taint a flow can see at this attribute — BORROWED, like attr_shadow_opaque, and JS_UNDEFINED when the
    attribute carries none. The read's twin of the fused write: it resolves the identity the same way, so a
    qualified-name read finds what a qualified-name write stored. */
+JSValue dom_cow_attr_taint_ns(lxb_dom_element_t *el, const char *ns, const char *local) {
+    int si = attr_shadow_find(el, ATTR_SLOT_ATTRIBUTE, ns, local);
+    return si >= 0 ? attr_shadow_opaque(si) : JS_UNDEFINED;
+}
 JSValue dom_cow_attr_taint(lxb_dom_element_t *el, const char *name) {
     AttrIdent id;
-    int si;
+    JSValue t;
 
     attr_ident_of(el, name, &id);
-    si = attr_shadow_find(el, ATTR_SLOT_ATTRIBUTE, id.ns, id.local);
+    t = dom_cow_attr_taint_ns(el, id.ns, id.local);
     attr_ident_free(&id);
-    return si >= 0 ? attr_shadow_opaque(si) : JS_UNDEFINED;
+    return t;
 }
 
 /* THE TREE VERSION — Blink's Document::dom_tree_version, and it is here rather than on the document for the
@@ -432,6 +617,17 @@ static void dom_forget_wrappers(JSContext *ctx, lxb_dom_node_t *root)
  * revert before this runs. */
 static void dom_release_created(DomUndo *u)
 {
+    if (u->kind == 6 && u->node) {   /* an ATTRIBUTE this flow created — see the entry's own comment */
+        lxb_dom_attr_t *a = lxb_dom_interface_attr(u->node);
+        DCHECK(a->owner == NULL,
+               "a flow's created attribute was still ON an element when its delta was discarded — a write of "
+               "it was never unapplied, so freeing it would leave that element's list naming freed memory");
+        DCHECK(g_cow_ctx != NULL, "a created attribute was freed with no context named — an Attr is a WRAPPED "
+                                  "node and the identity map has to be told (dom_cow_set_ctx names the runtime)");
+        dom_attr_destroy(g_cow_ctx, a);
+        u->node = NULL;   /* the entry has spent its claim; nothing may act on it twice */
+        return;
+    }
     if (u->kind != 4 || !u->node)
         return;
     /* Nothing may still hold it. After a discard the document is back at its baseline, so a node this flow
@@ -482,6 +678,20 @@ static void dom_release_created_all(DomUndo *e, int n)
  * ARE the baseline and must outlive every delta. The entry is inert to apply/unapply (creating a node changes
  * nothing shared; its VISIBILITY is the insertion's job) and rides the existing head/fork/free machinery, so
  * sharing and refcounting need no new mechanism. */
+/* THIS FLOW CREATED THIS ATTRIBUTE — kind 4's twin over an Attr node, and separate for the two reasons the
+ * entry's own comment gives: reachability is `owner != NULL` rather than dom_is_attached, and the free is the
+ * Attr destructor. Called from the attribute chokepoint, which is the only place that learns a write had to
+ * make one. */
+static void dom_note_created_attr(lxb_dom_attr_t *a)
+{
+    DomUndo u;
+    if (!g_dom_capture || !a)
+        return;
+    memset(&u, 0, sizeof u);
+    u.kind = 6; u.node = lxb_dom_interface_node(a); u.sh_old = u.sh_cur = JS_UNDEFINED;
+    dom_undo_push(u);
+}
+
 void dom_cow_note_created(lxb_dom_node_t *node)
 {
     DomUndo u;
@@ -586,16 +796,22 @@ void dom_revert(void) {   /* DISCARD the running flow's DOM writes -> baseline (
                 /* PRESENCE decides, not whether there were BYTES. `had && old` treated an attribute with an
                    empty value as one the baseline never had, so a revert REMOVED it — and `<input required>`
                    is exactly that attribute. */
-                if (u->had) attr_put(u, u->old, u->old_len);
+                if (u->had) attr_put(u, u->attr, u->attr_next, u->old, u->old_len);
                 else attr_drop(u);
             }
-            shadow_restore(u->el, u->slot, u->ns, u->name, u->sh_old, u->sh_had);
+            shadow_restore(u->sh_owner, u->slot, u->ns, u->name, u->sh_old, u->sh_had);
             if (g_cow_ctx) { JS_FreeValue(g_cow_ctx, u->sh_old); JS_FreeValue(g_cow_ctx, u->sh_cur); }
             free(u->ns); free(u->prefix); free(u->name); free(u->old); free(u->cur);
         } else if (u->kind == 3) {   /* character data: put the baseline's text back */
             lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(u->node);
             lxb_dom_character_data_replace(cd, u->old, u->old_len, 0, cd->data.length);
             free(u->old); free(u->cur);
+        } else if (u->kind == 7) {   /* a DETACHED attribute's value: put the baseline's bytes back */
+            dom_attr_set_value(lxb_dom_interface_attr(u->node), (const char *)(u->old ? u->old : (lxb_char_t *)""),
+                               u->old_len);
+            shadow_restore(u->sh_owner, u->slot, u->ns, u->name, u->sh_old, u->sh_had);
+            if (g_cow_ctx) { JS_FreeValue(g_cow_ctx, u->sh_old); JS_FreeValue(g_cow_ctx, u->sh_cur); }
+            free(u->ns); free(u->name); free(u->old); free(u->cur);
         } else if (u->kind == 1 && !u->detached) {   /* inserted node: detach it (baseline had none) */
             lxb_dom_node_remove(u->node);
         } else if (u->kind == 2 && !u->reinserted) {   /* removed node: the baseline HAD it — put it back */
@@ -622,15 +838,29 @@ static void dom_unapply_entry(DomUndo *u) {
             lxb_dom_attr_t *a = dom_attr_get_ns(u->el, u->ns, u->name);
             size_t vl = 0; const lxb_char_t *c = a ? lxb_dom_attr_value(a, &vl) : NULL;
             free(u->cur); u->cur = NULL; u->cur_len = 0; u->cur_had = a ? 1 : 0;   /* stash the flow's attr value */
+            /* AND THE NODE, for the same reason the baseline side holds one: the attribute the FLOW put here
+               may be a different Attr from the baseline's, and the page may be holding it. */
+            u->cur_attr = a; u->cur_attr_next = a ? a->next : NULL;
             if (c) { u->cur = malloc(vl ? vl : 1); CHECK(u->cur, "dom-cow-oom: parked flow attr snapshot malloc failed — apply would lose the flow's DOM write"); memcpy(u->cur, c, vl); u->cur_len = vl; }
         }
         if (g_cow_ctx) JS_FreeValue(g_cow_ctx, u->sh_cur);
-        u->sh_cur = shadow_snapshot(u->el, u->slot, u->ns, u->name, &u->sh_cur_had);   /* stash the flow's taint shadow */
+        u->sh_cur = shadow_snapshot(u->sh_owner, u->slot, u->ns, u->name, &u->sh_cur_had);   /* stash the flow's taint shadow */
         if (u->slot == ATTR_SLOT_ATTRIBUTE) {
-            if (u->had) attr_put(u, u->old, u->old_len);
+            if (u->had) attr_put(u, u->attr, u->attr_next, u->old, u->old_len);
             else attr_drop(u);
         }
-        shadow_restore(u->el, u->slot, u->ns, u->name, u->sh_old, u->sh_had);   /* restore the baseline taint */
+        shadow_restore(u->sh_owner, u->slot, u->ns, u->name, u->sh_old, u->sh_had);   /* restore the baseline taint */
+    } else if (u->kind == 7) {
+        lxb_dom_attr_t *a = lxb_dom_interface_attr(u->node);
+        size_t vl = 0; const lxb_char_t *c = lxb_dom_attr_value(a, &vl);
+        free(u->cur); u->cur = NULL; u->cur_len = 0; u->cur_had = 1;       /* stash the flow's bytes */
+        if (c) { u->cur = malloc(vl ? vl : 1);
+                 CHECK(u->cur, "dom-cow-oom: parked detached-attribute snapshot malloc failed");
+                 memcpy(u->cur, c, vl); u->cur_len = vl; }
+        if (g_cow_ctx) JS_FreeValue(g_cow_ctx, u->sh_cur);
+        u->sh_cur = shadow_snapshot(u->sh_owner, u->slot, u->ns, u->name, &u->sh_cur_had);
+        dom_attr_set_value(a, (const char *)(u->old ? u->old : (lxb_char_t *)""), u->old_len);   /* baseline back */
+        shadow_restore(u->sh_owner, u->slot, u->ns, u->name, u->sh_old, u->sh_had);
     } else if (u->kind == 3) {
         lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(u->node);
         free(u->cur); u->cur_len = cd->data.length; u->cur_had = 1;       /* stash the flow's text */
@@ -655,10 +885,14 @@ static void dom_apply_entry(DomUndo *u) {
     g_dom_version++;
     if (u->kind == 0) {
         if (u->slot == ATTR_SLOT_ATTRIBUTE) {
-            if (u->cur_had) attr_put(u, u->cur, u->cur_len);
+            if (u->cur_had) attr_put(u, u->cur_attr, u->cur_attr_next, u->cur, u->cur_len);
             else attr_drop(u);
         }
-        shadow_restore(u->el, u->slot, u->ns, u->name, u->sh_cur, u->sh_cur_had);   /* restore the flow's taint */
+        shadow_restore(u->sh_owner, u->slot, u->ns, u->name, u->sh_cur, u->sh_cur_had);   /* restore the flow's taint */
+    } else if (u->kind == 7 && u->cur_had) {
+        dom_attr_set_value(lxb_dom_interface_attr(u->node),
+                           (const char *)(u->cur ? u->cur : (lxb_char_t *)""), u->cur_len);
+        shadow_restore(u->sh_owner, u->slot, u->ns, u->name, u->sh_cur, u->sh_cur_had);
     } else if (u->kind == 3 && u->cur_had) {
         lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(u->node);
         lxb_dom_character_data_replace(cd, u->cur, u->cur_len, 0, cd->data.length);   /* the flow's text back */

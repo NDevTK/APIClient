@@ -1,6 +1,7 @@
 /* The Element interface — Blink core/dom. One JS object per Lexbor element, per document. */
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_ELEMENT_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_ELEMENT_H
+#include <stddef.h>
 #include <lexbor/dom/dom.h>
 #include "quickjs.h"
 
@@ -35,5 +36,13 @@ void element_install_reflections(JSContext *ctx, JSValueConst proto, int base, i
    running flow's DOM delta. element_attr_get returns an OWNED string, or NULL when the attribute is absent. */
 char *element_attr_get(JSContext *ctx, JSValueConst el, const char *name);
 void  element_attr_set(JSContext *ctx, JSValueConst el, const char *name, const char *value);
+
+/* The element behind a wrapper, or NULL when the value is not one. */
+lxb_dom_element_t *element_of_value(JSValueConst v);
+/* THE ELEMENT AS §3.8 NAMES IT — its namespace URL and its local name, which together decide which interface it
+   implements and therefore which row of the Trusted Types table it can match. Borrowed from Lexbor's interned
+   strings into the caller's buffers; `*ns` is NULL for an element in no namespace. */
+void element_ns_and_local(lxb_dom_element_t *el, const char **ns, const char **local,
+                          char *nsbuf, size_t nscap, char *lobuf, size_t locap);
 
 #endif

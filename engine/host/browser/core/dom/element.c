@@ -60,7 +60,7 @@ static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
 /* IDENTITY AND THE TREE BASE LIVE IN node.c — one wrapper table for every node kind, because a tree whose only
    node kind is Element cannot represent the document it just parsed. This file is what makes a node an ELEMENT:
    attributes, tagName, innerHTML, the reflected properties. */
-static lxb_dom_element_t *elem_of(JSValueConst v)
+lxb_dom_element_t *element_of_value(JSValueConst v)
 {
     lxb_dom_node_t *n = node_of(v);
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return NULL;
@@ -70,7 +70,7 @@ static lxb_dom_element_t *elem_of(JSValueConst v)
 static JSValue js_el_get_attribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     (void)magic;
-    lxb_dom_element_t *el = elem_of(this_val);
+    lxb_dom_element_t *el = element_of_value(this_val);
     const char *name;
     JSValue r = JS_NULL, t;
 
@@ -98,35 +98,65 @@ static JSValue js_el_get_attribute(JSContext *ctx, JSValueConst this_val, int ar
    NO USER CODE: `handle attribute changes` enqueues a mutation record and an `attributeChangedCallback` and
    runs the attribute change steps, and SPEC_STEPS §2.5 is the statement that none of those three runs script.
    The reactions surface at the `[CEReactions]` boundary, not here. */
-static void el_write_attribute(JSContext *ctx, lxb_dom_element_t *el, const char *name, JSValueConst value)
-{
-    const char *val;
+/* THE BYTES AND THE TAINT A VALUE WRITES, which is ONE decision — resolved here because both of §4.9's key
+   spaces write, and a second copy of it is a second answer to "what does a concolic attribute value store".
+   `owned` is the JS_ToCString to free, NULL when the bytes are the concolic's own shape. */
+typedef struct { const char *bytes; size_t len; JSValueConst taint; const char *owned; } ElAttrValue;
 
+static bool el_attr_value(JSContext *ctx, JSValueConst value, ElAttrValue *out)
+{
     /* A concolic value has no bytes to store. Record it in the shadow so the read gives the SAME concolic back,
        and write its shape into the tree so a serialization of the document still shows something. */
     if (concolic_is(value)) {
         /* NEVER ToString a concolic to get bytes: its coercion belongs to the concolic hooks and answers with
            another concolic, so the call THROWS — and the throw was being dropped here, leaving a pending
            exception behind a normal return. The SHAPE is the honest byte form for the tree. */
-        val = concolic_shape_c(value);
-        dom_cow_set_attribute(el, name, val ? val : "", val ? strlen(val) : 0, value);
-        return;
+        const char *shape = concolic_shape_c(value);
+        out->owned = NULL;
+        out->bytes = shape ? shape : "";
+        out->len = shape ? strlen(shape) : 0;
+        out->taint = value;
+        return true;
     }
-    val = JS_ToCString(ctx, value);
-    DCHECK(val != NULL, "an attribute value reached the write unconverted — the IDL declaration is what converts "
-                        "it, and running the page's toString from here is the drive-to-completion the flow "
-                        "machinery exists to avoid");
-    if (!val) return;
+    out->owned = JS_ToCString(ctx, value);
+    DCHECK(out->owned != NULL, "an attribute value reached the write unconverted — the IDL declaration is what "
+                               "converts it, and running the page's toString from here is the "
+                               "drive-to-completion the flow machinery exists to avoid");
+    if (!out->owned) return false;
+    out->bytes = out->owned;
+    out->len = strlen(out->owned);
     /* JS_UNDEFINED is what clears any earlier taint: a concrete write says this attribute is no longer a source. */
-    dom_cow_set_attribute(el, name, val, strlen(val), JS_UNDEFINED);   /* chokepoint: capture-then-mutate, per flow */
-    JS_FreeCString(ctx, val);
+    out->taint = JS_UNDEFINED;
+    return true;
 }
 
-/* THE ELEMENT AS §3.8 NAMES IT — its namespace URL and its local name, which together decide which interface
-   it implements and therefore which row of the Trusted Types table it can match. Borrowed from Lexbor's own
-   interned strings; `*ns` is NULL for an element in no namespace. */
-static void el_ns_and_local(lxb_dom_element_t *el, const char **ns, const char **local,
-                            char *nsbuf, size_t nscap, char *lobuf, size_t locap)
+static void el_attr_value_free(JSContext *ctx, ElAttrValue *v) { if (v->owned) JS_FreeCString(ctx, v->owned); }
+
+static void el_write_attribute(JSContext *ctx, lxb_dom_element_t *el, const char *name, JSValueConst value)
+{
+    ElAttrValue v;
+
+    if (!el_attr_value(ctx, value, &v)) return;
+    dom_cow_set_attribute(el, name, v.bytes, v.len, v.taint);   /* chokepoint: capture-then-mutate, per flow */
+    el_attr_value_free(ctx, &v);
+}
+
+/* DOM §4.9 "set an attribute value" AT §4.9'S OWN KEY — setAttributeNS step 3 and every reflection whose
+   attribute is namespaced. The twin above is NOT this algorithm: setAttribute step 4 finds "the FIRST attribute
+   whose QUALIFIED name is", and the two can each find an attribute the other cannot, so they are two functions
+   and not one with a flag. */
+static void el_write_attribute_ns(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *prefix,
+                                  const char *local, JSValueConst value)
+{
+    ElAttrValue v;
+
+    if (!el_attr_value(ctx, value, &v)) return;
+    dom_cow_set_attribute_ns(el, ns, prefix, local, v.bytes, v.len, v.taint);
+    el_attr_value_free(ctx, &v);
+}
+
+void element_ns_and_local(lxb_dom_element_t *el, const char **ns, const char **local,
+                          char *nsbuf, size_t nscap, char *lobuf, size_t locap)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el);
     size_t len = 0;
@@ -187,7 +217,7 @@ static int js_el_set_attribute(JSContext *ctx, JSStepHdr *hdr, void *st, int arg
                                JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     SetAttrState *s = st;
-    lxb_dom_element_t *el = elem_of(hdr->this_val);
+    lxb_dom_element_t *el = element_of_value(hdr->this_val);
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
@@ -230,7 +260,7 @@ static int js_el_set_attribute(JSContext *ctx, JSStepHdr *hdr, void *st, int arg
         const char *ns, *local;
 
         if (!el) return JS_STEP_DONE;
-        el_ns_and_local(el, &ns, &local, nsbuf, sizeof(nsbuf), lobuf, sizeof(lobuf));
+        element_ns_and_local(el, &ns, &local, nsbuf, sizeof(nsbuf), lobuf, sizeof(lobuf));
         /* STEP 3, with a NULL attribute namespace — which is what makes `el.setAttribute("onclick", s)` a
            TrustedScript sink and `el.setAttributeNS(XLINK, "xlink:href", s)` not the same one. */
         s->verified = trusted_types_compliant_attribute_value(ctx, ns, local, NULL, s->name,
@@ -248,13 +278,136 @@ static const IdlStepDecl EL_SET_ATTR_STEP = {
     "DOM §4.9 Element.setAttribute", EL_SET_ATTR_STEPS
 };
 
+/* §4.9 setAttributeNS, AS ITS OWN MACHINE — three steps, with Trusted Types §3.7 at step 2 of them.
+   NOT A MAGIC ON setAttribute'S TABLE. The two algorithms differ in every step: this one VALIDATES AND EXTRACTS
+   (§1.4's twelve steps, throwing NamespaceError for a pairing setAttribute cannot even express) where that one
+   validates a local name and lowercases; this one runs Trusted Types with the LOCAL name and the REAL attribute
+   namespace where that one passes the whole qualified name and null; and this one writes at §4.9's own
+   (namespace, local name) key where that one writes at the first attribute wearing a qualified name. A shared
+   stage table would name the wrong step for whichever of them a parked flow was in. */
+#define EL_SET_ATTR_NS_STAGES(X) \
+    X(SETATTRNS_VALIDATE, "DOM §4.9 setAttributeNS step 1 (validate and extract namespace and qualifiedName " \
+                          "with context \"attribute\" — DOM §1.4's twelve steps, throwing InvalidCharacterError " \
+                          "or NamespaceError)") \
+    X(SETATTRNS_TRUSTED,  "DOM §4.9 setAttributeNS step 2 (get trusted type compliant attribute value with the " \
+                          "LOCAL name, the extracted namespace, this and value), which is where Trusted Types " \
+                          "§3.5's default-policy callback runs") \
+    X(SETATTRNS_WRITE,    "DOM §4.9 setAttributeNS step 3 (set an attribute value for this using localName, " \
+                          "the verified value, prefix and namespace)")
+enum { IDL_STEP_STAGE_BASE(EL_SET_ATTR_NS_STAGES) EL_SET_ATTR_NS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const EL_SET_ATTR_NS_STEPS[] = { EL_SET_ATTR_NS_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* THE EXTRACTED NAME IS ONE BUFFER WITH THE COLON REPLACED BY A NUL, which is what "prefix and local name are
+   the two halves of qualifiedName" means once they have to be C strings: `qname` is the prefix and
+   `qname + prefix_len + 1` is the local name, both NUL-terminated, and `prefix_len == 0` is §1.4's null prefix
+   (step 4.3 rejects a zero-length one, so there is no third case). Two separate copies would be two answers to
+   where the colon was. */
+typedef struct {
+    char   *qname;       /* step 1's qualified name, owned, colon overwritten with NUL */
+    size_t  qname_len;
+    size_t  prefix_len;  /* 0 = no prefix; otherwise the local name starts at prefix_len + 1 */
+    char   *ns;          /* step 1's namespace, owned; NULL is the null namespace */
+    size_t  ns_len;
+    JSValue verified;    /* step 2's answer, owned — what step 3 writes, never the argument */
+} SetAttrNsState;
+
+static const char *set_attr_ns_local(const SetAttrNsState *s)
+{
+    return s->qname + (s->prefix_len ? s->prefix_len + 1 : 0);
+}
+
+static void set_attr_ns_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    SetAttrNsState *s = st;
+    v->val(ctx, &s->verified);
+    v->buf(ctx, (void **)&s->qname, s->qname_len ? s->qname_len + 1 : 0);
+    v->buf(ctx, (void **)&s->ns, s->ns_len ? s->ns_len + 1 : 0);
+}
+
+static void set_attr_ns_release(JSContext *ctx, void *st)
+{
+    SetAttrNsState *s = st;
+    free(s->qname); s->qname = NULL;
+    free(s->ns); s->ns = NULL;
+    JS_FreeValue(ctx, s->verified);
+    s->verified = JS_UNDEFINED;
+}
+
+static int js_el_set_attribute_ns(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                  JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    SetAttrNsState *s = st;
+    lxb_dom_element_t *el = element_of_value(hdr->this_val);
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+
+    if (hdr->stage == SETATTRNS_VALIDATE) {
+        const char *ns_arg, *qn;
+        size_t ns_arg_len = 0, qn_len = 0;
+        DomQName ex;
+        bool ok;
+
+        if (argc < 3) return JS_STEP_DONE;
+        /* `DOMString? namespace`: the declaration made null of null AND undefined, and §1.4 step 1 makes null
+           of the empty string too — so both reach validate-and-extract as the null namespace. */
+        ns_arg = JS_IsNull(argv[0]) ? NULL : JS_ToCStringLen(ctx, &ns_arg_len, argv[0]);
+        qn = concolic_name_cstr(ctx, argv[1]);
+        if (!qn) { if (ns_arg) JS_FreeCString(ctx, ns_arg); return JS_STEP_ABRUPT; }
+        qn_len = strlen(qn);
+        ok = dom_validate_and_extract(ctx, ns_arg, ns_arg_len, qn, qn_len, DOM_NAME_ATTRIBUTE, &ex);   /* step 1 */
+        if (ok) {
+            s->qname_len = qn_len;
+            s->qname = malloc(qn_len + 1);
+            CHECK(s->qname != NULL, "setAttributeNS could not copy its own qualified name");
+            memcpy(s->qname, qn, qn_len + 1);
+            s->prefix_len = ex.prefix ? ex.prefix_len : 0;
+            if (s->prefix_len) s->qname[s->prefix_len] = 0;   /* the colon IS the separator, now a terminator */
+            if (ex.ns) {
+                s->ns_len = ex.ns_len;
+                s->ns = malloc(ex.ns_len + 1);
+                CHECK(s->ns != NULL, "setAttributeNS could not copy its own namespace");
+                memcpy(s->ns, ex.ns, ex.ns_len); s->ns[ex.ns_len] = 0;
+            }
+        }
+        JS_FreeCString(ctx, qn);
+        if (ns_arg) JS_FreeCString(ctx, ns_arg);
+        if (!ok) return JS_STEP_ABRUPT;   /* §1.4 already threw the exception its step names */
+        hdr->stage = SETATTRNS_TRUSTED;
+    }
+    if (hdr->stage == SETATTRNS_TRUSTED) {
+        char nsbuf[128], lobuf[64];
+        const char *el_ns, *el_local;
+
+        if (!el) return JS_STEP_DONE;
+        element_ns_and_local(el, &el_ns, &el_local, nsbuf, sizeof(nsbuf), lobuf, sizeof(lobuf));
+        /* STEP 2, with the attribute's REAL namespace and its LOCAL name — which is what makes the XLink
+           `href` of an SVGScriptElement a TrustedScriptURL sink and `setAttributeNS(null, "onclick", s)` an
+           event-handler one, neither of which the by-name call can express. */
+        s->verified = trusted_types_compliant_attribute_value(ctx, el_ns, el_local, s->ns,
+                                                              set_attr_ns_local(s), argv[2]);
+        if (JS_IsException(s->verified)) { s->verified = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        hdr->stage = SETATTRNS_WRITE;
+    }
+    DCHECK(hdr->stage == SETATTRNS_WRITE, "setAttributeNS resumed into a stage it does not have");
+    if (el)   /* step 3 */
+        el_write_attribute_ns(ctx, el, s->ns, s->prefix_len ? s->qname : NULL, set_attr_ns_local(s), s->verified);
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl EL_SET_ATTR_NS_STEP = {
+    js_el_set_attribute_ns, sizeof(SetAttrNsState), set_attr_ns_visit, set_attr_ns_release,
+    "DOM §4.9 Element.setAttributeNS", EL_SET_ATTR_NS_STEPS
+};
+
 /* THE ENGINE'S OWN ATTRIBUTE WRITE — a reflection's setter, the hyperlink mixin re-serialising `href`. It is
    DOM §4.9's "set an attribute value" and nothing above it: the name is the engine's own (so step 1 cannot
    fail and step 2 has nothing to lowercase), and the Trusted Types step belongs to the MEMBER the page called,
    which for a reflected IDL attribute is that attribute's own setter. */
 static void el_set_attribute_internal(JSContext *ctx, JSValueConst this_val, const char *name, JSValueConst value)
 {
-    lxb_dom_element_t *el = elem_of(this_val);
+    lxb_dom_element_t *el = element_of_value(this_val);
 
     if (!el) return;
     DCHECK(dom_valid_attribute_local_name(name, strlen(name)),
@@ -272,7 +425,7 @@ static void el_set_attribute_internal(JSContext *ctx, JSValueConst this_val, con
    function that knows the rule. */
 static JSValue js_el_get_tag(JSContext *ctx, JSValueConst this_val)
 {
-    lxb_dom_element_t *el = elem_of(this_val);
+    lxb_dom_element_t *el = element_of_value(this_val);
     size_t n = 0;
     const lxb_char_t *t;
     if (!el) return JS_UNDEFINED;
@@ -386,7 +539,7 @@ static int js_el_get_html_step(JSContext *ctx, JSStepHdr *hdr, void *st, int arg
     (void)argc; (void)argv; (void)cb_result; (void)out_cb; (void)out_argc;
 
     if (hdr->stage == ELHTML_SETUP) {
-        el = elem_of(hdr->this_val);
+        el = element_of_value(hdr->this_val);
         if (!el) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
         n = lxb_dom_interface_node(el);
         DCHECK(n->local_name != LXB_TAG__DOCUMENT,
@@ -736,7 +889,7 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         hdr->stage = FRAG_START;
     }
     if (hdr->stage == FRAG_START) {
-        lxb_dom_element_t *el = elem_of(hdr->this_val);
+        lxb_dom_element_t *el = element_of_value(hdr->this_val);
         JSValueConst val = s->compliant;
         lxb_dom_node_t *n;
         const char *html;
@@ -872,7 +1025,7 @@ static int js_el_insert_adjacent_html(JSContext *ctx, JSStepHdr *hdr, void *st, 
         hdr->stage = FRAG_START;
     }
     if (hdr->stage == FRAG_START) {
-        lxb_dom_element_t *el = elem_of(hdr->this_val);
+        lxb_dom_element_t *el = element_of_value(hdr->this_val);
         lxb_dom_node_t *n;
         const char *html;
         int where;
@@ -909,7 +1062,7 @@ static const IdlStepDecl EL_ADJACENT_HTML_STEP = {
 static JSValue js_el_insert_adjacent(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                      int magic)
 {
-    lxb_dom_element_t *el = elem_of(this_val);
+    lxb_dom_element_t *el = element_of_value(this_val);
     lxb_dom_node_t *n;
     int where;
     bool outside;
@@ -955,7 +1108,7 @@ static JSValue js_el_insert_adjacent(JSContext *ctx, JSValueConst this_val, int 
    way to UNSET itself and `el.hidden = false` could only ever set. magic: 0 remove, 1 has, 2 toggle. */
 static JSValue js_el_attr_op(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    lxb_dom_element_t *el = elem_of(this_val);
+    lxb_dom_element_t *el = element_of_value(this_val);
     const char *name;
     size_t vl = 0;
     bool present;
@@ -988,11 +1141,63 @@ static JSValue js_el_attr_op(JSContext *ctx, JSValueConst this_val, int argc, JS
     return r;
 }
 
+/* §4.9's (NAMESPACE, LOCAL NAME) KEY SPACE — `getAttributeNS`, `hasAttributeNS`, `getAttributeNodeNS` and
+   `removeAttributeNS`, which are the SAME lookup with four different answers. One body because the thing that
+   is easy to get wrong is the KEY, not the answer: each of the four begins "if namespace is the empty string,
+   set it to null" and then asks for THE attribute (not "the first") at that pair, and four copies of that are
+   four chances to write `getAttribute`'s lowercasing into one of them by accident — NONE of this family
+   lowercases anything.
+   magic: 0 getAttributeNS, 1 hasAttributeNS, 2 getAttributeNodeNS, 3 removeAttributeNS. */
+static JSValue js_el_attr_ns_op(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_element_t *el = element_of_value(this_val);
+    const char *ns, *local;
+    lxb_dom_attr_t *a;
+    JSValue r;
+
+    if (!el || argc < 2) return magic == 1 ? JS_FALSE : (magic == 3 ? JS_UNDEFINED : JS_NULL);
+    /* step 1 of both lookups: the empty string IS the null namespace, and so is the IDL null the `DOMString?`
+       declaration made of null and undefined. */
+    ns = JS_IsNull(argv[0]) ? NULL : JS_ToCString(ctx, argv[0]);
+    if (ns && !ns[0]) { JS_FreeCString(ctx, ns); ns = NULL; }
+    local = concolic_name_cstr(ctx, argv[1]);   /* an unknown local name denotes its SHAPE, as by-name does */
+    if (!local) { if (ns) JS_FreeCString(ctx, ns); return JS_EXCEPTION; }
+    a = dom_attr_get_ns(el, ns, local);
+    switch (magic) {
+    case 0: {
+        /* The TAINT SHADOW answers first, exactly as `getAttribute` has it answer: an attacker value written
+           through `setAttributeNS` came back out of Lexbor as plain bytes with its provenance gone. */
+        JSValue t = dom_cow_attr_taint_ns(el, ns, local);
+        if (!JS_IsUndefined(t)) { r = JS_DupValue(ctx, t); break; }   /* borrowed — dup to hand it out */
+        {
+            size_t vl = 0;
+            const lxb_char_t *v = a ? lxb_dom_attr_value(a, &vl) : NULL;
+            r = a ? JS_NewStringLen(ctx, (const char *)(v ? v : (const lxb_char_t *)""), v ? vl : 0) : JS_NULL;
+        }
+        break;
+    }
+    case 1:
+        r = JS_NewBool(ctx, a != NULL);
+        break;
+    case 2:
+        r = a ? node_wrap(ctx, lxb_dom_interface_node(a)) : JS_NULL;
+        break;
+    default:
+        DCHECK(magic == 3, "a namespace-keyed attribute operation was declared with a magic this file does not name");
+        dom_cow_remove_attribute_ns(el, ns, local);   /* the chokepoint's own step-2 guard decides "non-null" */
+        r = JS_UNDEFINED;
+        break;
+    }
+    JS_FreeCString(ctx, local);
+    if (ns) JS_FreeCString(ctx, ns);
+    return r;
+}
+
 /* §4.9 hasAttributes / getAttributeNames / localName / prefix / namespaceURI — pure reads over the attribute
    list Lexbor already holds. magic: 0 hasAttributes, 1 getAttributeNames. */
 static JSValue js_el_attr_list(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    lxb_dom_element_t *el = elem_of(this_val);
+    lxb_dom_element_t *el = element_of_value(this_val);
     lxb_dom_attr_t *at;
     JSValue arr;
     uint32_t i = 0;
@@ -1015,7 +1220,7 @@ static JSValue js_el_attr_list(JSContext *ctx, JSValueConst this_val, int argc, 
    of which Lexbor already interned. magic: 0 localName, 1 prefix, 2 namespaceURI. */
 static JSValue js_el_name_part(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    lxb_dom_element_t *el = elem_of(this_val);
+    lxb_dom_element_t *el = element_of_value(this_val);
     size_t n = 0;
     const lxb_char_t *v;
 
@@ -1052,7 +1257,7 @@ static int       g_reflect_n;
 
 static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    lxb_dom_element_t *el = elem_of(this_val);
+    lxb_dom_element_t *el = element_of_value(this_val);
     JSValue nv, r;
     size_t vl = 0;
 
@@ -1072,7 +1277,7 @@ static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magi
 
 static JSValue js_el_reflect_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    lxb_dom_element_t *el = elem_of(this_val);
+    lxb_dom_element_t *el = element_of_value(this_val);
     JSValue verified;
 
     DCHECK(magic >= 0 && magic < g_reflect_n,
@@ -1095,7 +1300,7 @@ static JSValue js_el_reflect_set(JSContext *ctx, JSValueConst this_val, JSValueC
         char nsbuf[128], lobuf[64];
         const char *ns, *local;
 
-        el_ns_and_local(el, &ns, &local, nsbuf, sizeof(nsbuf), lobuf, sizeof(lobuf));
+        element_ns_and_local(el, &ns, &local, nsbuf, sizeof(nsbuf), lobuf, sizeof(lobuf));
         verified = trusted_types_compliant_attribute_value(ctx, ns, local, NULL, g_reflect[magic].attr, val);
         if (JS_IsException(verified)) return JS_EXCEPTION;
     }
@@ -1396,7 +1601,7 @@ static JSValue js_el_attributes(JSContext *ctx, JSValueConst this_val, int magic
     JSValue cached;
 
     (void)magic;
-    if (!elem_of(this_val)) return JS_UNDEFINED;
+    if (!element_of_value(this_val)) return JS_UNDEFINED;
     if (JS_GetOwnSlot(ctx, &cached, this_val, g_attrs_key) > 0 && JS_IsObject(cached))
         return cached;
     JS_FreeValue(ctx, cached);
@@ -1413,7 +1618,7 @@ static JSValue js_el_attributes(JSContext *ctx, JSValueConst this_val, int magic
 static JSValue js_el_get_attribute_node(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                         int magic)
 {
-    lxb_dom_element_t *el = elem_of(this_val);
+    lxb_dom_element_t *el = element_of_value(this_val);
     const char *name;
     JSValue r;
 
@@ -1426,31 +1631,28 @@ static JSValue js_el_get_attribute_node(JSContext *ctx, JSValueConst this_val, i
     return JS_IsUndefined(r) ? JS_NULL : r;
 }
 
-/* §4.9 getAttributeNames() — the qualified names, in order. The cheap half of the same capability: a page that
-   only wants the names should not have to build an Attr for each of them. */
-static JSValue js_el_attribute_names(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                     int magic)
+/* §4.9 `[CEReactions] Attr removeAttributeNode(Attr attr)` — NON-nullable, because it throws instead of
+   returning null. Step 1 is an IDENTITY containment test on the list and not a name match: an Attr with the
+   same name on another element, or a detached one, is a NotFoundError even though a by-name removal would have
+   found something. Not a machine — it runs no author code before the `[CEReactions]` epilogue. */
+static JSValue js_el_remove_attribute_node(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                           int magic)
 {
-    lxb_dom_element_t *el = elem_of(this_val);
-    lxb_dom_attr_t *a;
-    JSValue arr;
-    uint32_t n = 0;
+    lxb_dom_element_t *el = element_of_value(this_val);
+    lxb_dom_attr_t *a = argc > 0 ? attr_node_of(argv[0]) : NULL;
 
-    (void)argc; (void)argv; (void)magic;
-    arr = JS_NewArray(ctx);
-    if (!el) return arr;
-    for (a = lxb_dom_element_first_attribute(el); a; a = lxb_dom_element_next_attribute(a)) {
-        size_t len = 0;
-        const lxb_char_t *q = lxb_dom_attr_qualified_name(a, &len);
-        if (q) JS_SetPropertyUint32(ctx, arr, n++, JS_NewStringLen(ctx, (const char *)q, len));
-    }
-    return arr;
+    (void)magic;
+    if (!el) return JS_NULL;
+    if (!a || a->owner != el)                                       /* step 1 */
+        return JS_ThrowDOMException(ctx, "NotFoundError", "the attribute is not on this element");
+    dom_cow_remove_attribute_node(a);                               /* step 2 */
+    return JS_DupValue(ctx, argv[0]);                               /* step 3 — the SAME object, still alive */
 }
 
 /* §4.9's attribute change steps, fired by the mutation chokepoint for the same reason the tree steps are:
    `setAttribute`, a reflected IDL attribute, a boolean reflection unsetting itself and innerHTML's parse all
    reach the tree through one function, and a per-caller notification would miss whichever one was added last. */
-static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *name,
+static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
                                  const char *val, size_t val_len)
 {
     /* §4.13.3's attributeChangedCallback BELONGS TO THE ELEMENT'S DOCUMENT, for the reason §4.2.3's steps do:
@@ -1462,7 +1664,7 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
     DCHECK(rctx != NULL,
            "an attribute was set on an element in a document no realm was installed for — §4.13.3's reaction "
            "resolves its definition in that document's registry, so build its realm");
-    custom_elements_attribute_changed(rctx, el, name, val, val_len);
+    custom_elements_attribute_changed(rctx, el, ns, local, val, val_len);
 }
 
 JSValue element_wrap(JSContext *ctx, lxb_dom_element_t *el)
@@ -1480,12 +1682,23 @@ static int g_refl_base = -1, g_refl_n;
 static int g_id_get_attr = -1, g_id_set_attr = -1, g_id_matches = -1, g_id_closest = -1,
            g_id_inner_get = -1, g_id_inner_set = -1, g_id_outer_get = -1, g_id_outer_set = -1,
            g_id_adj_html = -1, g_id_adj_el = -1, g_id_adj_text = -1, g_id_attr_names = -1,
-           g_id_remove_attr = -1, g_id_has_attr = -1, g_id_toggle_attr = -1, g_id_get_attr_node = -1;
+           g_id_remove_attr = -1, g_id_has_attr = -1, g_id_toggle_attr = -1, g_id_get_attr_node = -1,
+           g_id_has_attrs = -1,
+           /* §4.9's (namespace, local name) family — the four members that key on §4.9's own identity. */
+           g_id_get_attr_ns = -1, g_id_has_attr_ns = -1, g_id_get_attr_node_ns = -1, g_id_remove_attr_ns = -1,
+           g_id_set_attr_ns = -1,
+           /* §4.9's NODE-valued members — the ones that name an attribute by object rather than by any name. */
+           g_id_set_attr_node = -1, g_id_remove_attr_node = -1;
 
 void element_init(JSContext *ctx)
 {
     static const IdlArgType ADJ_ANY[2] = { IDL_DOMSTRING, IDL_ANY };
     static const IdlArgType TOGGLE[2] = { IDL_DOMSTRING, IDL_ANY };   /* `optional boolean force` is ToBoolean */
+    /* `(DOMString? namespace, DOMString localName)` — §4.9's namespace-keyed argument list, and the one that
+       carries `getAttributeNodeNS`'s and `removeAttributeNS`'s too. */
+    static const IdlArgType NS_LOCAL[2] = { IDL_DOMSTRING_NULLABLE, IDL_DOMSTRING };
+    static const IdlArgType NS_QNAME_VALUE[3] = { IDL_DOMSTRING_NULLABLE, IDL_DOMSTRING, IDL_DOMSTRING };
+    static const IdlArgType ONE_ATTR[1] = { IDL_INTERFACE };
     JSClassDef d = { "Element" };
 
     node_init(ctx);
@@ -1517,7 +1730,19 @@ void element_init(JSContext *ctx)
     g_id_adj_html = idl_method_id_step(ctx, IDL_2STR, 2, NULL, 0, &EL_ADJACENT_HTML_STEP, 0);
     g_id_adj_el = idl_method_id(ctx, ADJ_ANY, 2, js_el_insert_adjacent, 1);
     g_id_adj_text = idl_method_id(ctx, IDL_2STR, 2, js_el_insert_adjacent, 2);
-    g_id_attr_names = idl_method_id(ctx, NULL, 0, js_el_attribute_names, 0);
+    g_id_has_attrs = idl_method_id(ctx, NULL, 0, js_el_attr_list, 0);
+    g_id_attr_names = idl_method_id(ctx, NULL, 0, js_el_attr_list, 1);
+    /* §4.9's namespace-keyed family. `DOMString? namespace` is the FIRST argument of every one of them, and it
+       is declared nullable rather than tested in the body: Web IDL turns null AND undefined into the IDL null
+       before ToString is ever reached, so `getAttributeNS(undefined, "x")` must not look for the namespace
+       whose URL is the four characters `null`. */
+    g_id_get_attr_ns = idl_method_id(ctx, NS_LOCAL, 2, js_el_attr_ns_op, 0);
+    g_id_has_attr_ns = idl_method_id(ctx, NS_LOCAL, 2, js_el_attr_ns_op, 1);
+    g_id_get_attr_node_ns = idl_method_id(ctx, NS_LOCAL, 2, js_el_attr_ns_op, 2);
+    g_id_remove_attr_ns = idl_method_id(ctx, NS_LOCAL, 2, js_el_attr_ns_op, 3);
+    /* `[CEReactions] undefined setAttributeNS(DOMString? namespace, DOMString qualifiedName,
+       (TrustedType or DOMString) value)` — a machine, because its step 2 is the default policy's callback. */
+    g_id_set_attr_ns = idl_method_id_step(ctx, NS_QNAME_VALUE, 3, NULL, 0, &EL_SET_ATTR_NS_STEP, 0);
     g_id_get_attr_node = idl_method_id(ctx, IDL_1STR, 1, js_el_get_attribute_node, 0);
     g_id_remove_attr = idl_method_id(ctx, IDL_1STR, 1, js_el_attr_op, 0);
     g_id_has_attr = idl_method_id(ctx, IDL_1STR, 1, js_el_attr_op, 1);
@@ -1534,6 +1759,17 @@ void element_init(JSContext *ctx)
 
     idl_indexed_init(ctx);      /* the exotic class every indexed interface is built on */
     attr_init(ctx);             /* §4.9.2 Attr — registered for node type 2, which node_wrap had no interface for */
+    /* AFTER attr_init, because both of these name the Attr CLASS and the machine attr.c declares: §4.9's "set
+       an attribute" is one algorithm serving four members across two interfaces, and the interface that owns
+       the Attr is the one that owns it. */
+    /* `[CEReactions] Attr? setAttributeNode(Attr attr)` — ONE machine shared with NamedNodeMap's setNamedItem,
+       because §4.9's "set an attribute" is what all four of those members are. Magic 0: `this` IS the element.
+       The `Attr attr` position is an INTERFACE type, so a non-Attr is a TypeError before step 1. */
+    g_id_set_attr_node = idl_method_id_step(ctx, ONE_ATTR, 1, NULL, 0, attr_set_attribute_decl(), 0);
+    idl_iface_brand(attr_class_id());
+    g_id_remove_attr_node = idl_method_id(ctx, ONE_ATTR, 1, js_el_remove_attribute_node, 0);
+    idl_iface_brand(attr_class_id());
+
     g_attrs_key = JS_NewAtom(ctx, "__attributesSlot");
     CHECK(g_attrs_key != JS_ATOM_NULL, "the attributes slot key could not be interned");
     collections_init(ctx);      /* NodeList and HTMLCollection, which childNodes and children are */
@@ -1593,10 +1829,20 @@ void element_install_proto(JSContext *ctx)
     idl_install_method(ctx, proto, "removeAttribute", 1, g_id_remove_attr);
     idl_install_method(ctx, proto, "hasAttribute", 1, g_id_has_attr);
     idl_install_method(ctx, proto, "toggleAttribute", 1, g_id_toggle_attr);
-    JS_SetPropertyStr(ctx, proto, "hasAttributes",
-                      JS_NewCFunctionMagic(ctx, js_el_attr_list, "hasAttributes", 0, JS_CFUNC_generic_magic, 0));
-    JS_SetPropertyStr(ctx, proto, "getAttributeNames",
-                      JS_NewCFunctionMagic(ctx, js_el_attr_list, "getAttributeNames", 0, JS_CFUNC_generic_magic, 1));
+    idl_install_method(ctx, proto, "hasAttributes", 0, g_id_has_attrs);
+    /* §4.9's (namespace, local name) family. Their absence was not a missing convenience: an SVG or MathML
+       subtree in an HTML page carries its `xlink:href` in a namespace the by-name members cannot reach, so a
+       page reading one got null and a page writing one created a second, null-namespace attribute beside it. */
+    idl_install_method(ctx, proto, "getAttributeNS", 2, g_id_get_attr_ns);
+    idl_install_method(ctx, proto, "setAttributeNS", 3, g_id_set_attr_ns);
+    idl_install_method(ctx, proto, "removeAttributeNS", 2, g_id_remove_attr_ns);
+    idl_install_method(ctx, proto, "hasAttributeNS", 2, g_id_has_attr_ns);
+    idl_install_method(ctx, proto, "getAttributeNodeNS", 2, g_id_get_attr_node_ns);
+    /* §4.9.9: `setAttributeNode` and `setAttributeNodeNS` are the SAME algorithm, verbatim, in one sentence —
+       the NS suffix carries no behavioural difference at all, so it is one machine installed twice. */
+    idl_install_method(ctx, proto, "setAttributeNode", 1, g_id_set_attr_node);
+    idl_install_method(ctx, proto, "setAttributeNodeNS", 1, g_id_set_attr_node);
+    idl_install_method(ctx, proto, "removeAttributeNode", 1, g_id_remove_attr_node);
     JS_SetPropertyFunctionList(ctx, proto, js_element_name_parts,
                                (int)(sizeof(js_element_name_parts) / sizeof(js_element_name_parts[0])));
     /* §4.9's OWN reflections, and only those: `id`, `class` and `slot`. `src`, `name` and `content` used to be
