@@ -67,6 +67,14 @@ void engine_run(JSContext *ctx, char **bodies, char **srcs, int n);
    gates its later endpoints loses everything after the first request. */
 #define ENGINE_STEP_STALLED 3
 #define ENGINE_QUANTUM_MS  12  /* a thread-sharing floor, not a cap: nothing is dropped across it */
+/* THE SEAM ASSERTION'S MARGIN, counted in WORK the step performed (forks + flows created + jobs run) rather
+   than in milliseconds — see the verdict in engine_sched_step for why a wall clock cannot decide this on a
+   loaded machine and why this host has no CPU clock to switch to. A step that performs this much work without
+   once consulting the preempt hook has no suspend/resume seam on that path, whatever else is running on the
+   box. Deliberately enormous: an ordinary step forks a handful of times between two suspend points, so nothing
+   short of a genuinely non-returning stretch approaches it. It is a DIAGNOSTIC, never a bound — it truncates
+   no work, drops no flow, and is compiled out of release. */
+#define ENGINE_SEAMLESS_WORK 1000
 /* WHAT THE HOST IS OWED. The scheduler asks this ONE seam before it decides the frontier is exhausted; a
    non-zero answer means STALLED rather than DONE. It is a question, not policy: the scheduler holds no idea of
    what a reply is, and the host holds no idea of what a flow is. */

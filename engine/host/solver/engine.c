@@ -1335,6 +1335,10 @@ int engine_sched_step(void) {
 #if APICLIENT_DEV
             int64_t t0 = engine_now_ms();
             uint64_t pq0 = 0, pf0 = 0, pa0 = g_preempt_asked;
+            /* THE WORK THIS STEP PERFORMS, sampled beside the clock and for a reason the clock cannot serve —
+               see the verdict below. Forks, flows and jobs are things the engine DID; no amount of being
+               descheduled can inflate them. */
+            long fk0 = decide_fork_total(), fl0 = flow_created_count(), jb0 = g_jobs_run;
             JS_FlowPreemptStats(&pq0, &pf0);
             g_max_gap = 0; g_last_ask = t0;   /* this step's gaps, measured from the moment it starts */
             idl_slowest_reset();              /* ...and this step's slowest single Web API member step */
@@ -1361,16 +1365,40 @@ int engine_sched_step(void) {
                 /* the TAIL closes the last gap: a step that offers a point and then runs for seconds before
                    returning has that silence between its last offer and its end, and nothing else records it. */
                 int64_t gap = done - g_last_ask > g_max_gap ? done - g_last_ask : g_max_gap;
-                /* THE VERDICT IS STRUCTURAL; THE CLOCK ONLY DECIDES WHEN TO LOOK. `asked` is how many suspend
-                   points the path OFFERED, and zero of them is the missing seam this exists to catch — a pure C
-                   loop reaches no back-edge, consults the hook never, and hangs the engine silently. That fact
-                   does not depend on how fast the machine is. The wall-clock gap used to BE the verdict, and a
-                   loaded container then failed a tree whose seam was intact: the same commit passed idle and
-                   aborted twice under load, at 5.4s and 8.7s, with `asked=1` printed in its own message saying
-                   the seam was there. A time threshold standing in for an invariant is a bound wearing a
-                   diagnosis, and it cost a correct change a revert before the control run caught it.
-                   ASKED>0 AND SLOW IS MERELY SLOW, which the margin was always meant to mean. */
-                if (gap > ENGINE_QUANTUM_MS * 400 && g_preempt_asked == pa0) {
+                /* THE VERDICT IS WORK, NOT TIME — and the clock is now only something the message PRINTS.
+                   `asked == 0` says the path offered the scheduler no suspend point, which is the missing seam
+                   this exists to catch. It was ANDed with a wall-clock gap, and a wall clock cannot tell the two
+                   states apart that matter here:
+                     - a stretch of C that genuinely has no seam, which spins forever with the switch count
+                       frozen and is the real defect, and
+                     - a stretch that was simply DESCHEDULED because something else on the box had the CPU.
+                   A descheduled thread executes no instructions, so it reaches no preempt check either: it shows
+                   `asked=0` for exactly the same reason, and the wall gap it accumulates is not its own. That is
+                   not hypothetical — three concurrent builds made this fire at 14486 ms with `points asked=0` on
+                   a tree whose seam was intact, and the same commit run alone passed; the resulting diagnosis
+                   was published and had to be retracted. A false failure is worse than a missing one, because it
+                   sends the next reader hunting a phantom in whichever component happened to be under test.
+                   CPU TIME WOULD BE THE RIGHT MEASURE AND THIS HOST DOES NOT HAVE ONE. Emscripten's WASI
+                   clock_time_get answers every non-realtime clock — CLOCK_MONOTONIC, and CLOCK_PROCESS_CPUTIME_ID
+                   / CLOCK_THREAD_CPUTIME_ID, which is what ISO C `clock()` is built on — from
+                   emscripten_get_now(), i.e. wall time. So there is no process-CPU source to switch to, and
+                   leaving a wall clock in the verdict while calling it CPU would be worse than saying so.
+                   WHAT IS MEASURED INSTEAD IS WHAT THE STEP DID. Forks, flows created and jobs run are work the
+                   engine PERFORMED; being descheduled cannot inflate any of them, because a thread that is not
+                   running performs none. A step that mints thousands of siblings without once consulting the
+                   preempt hook has no seam on that path whatever the machine's load — that is the invariant,
+                   stated in the quantity it is actually about. It truncates nothing and drops no flow: the
+                   engine that reaches this margin is already the one that never returns.
+                   THE SHAPE THAT REACHES IT is real and is in the tree today: an unknown-length walk over
+                   opaque input asks one outcome-fork question per position and the driver re-enters the same
+                   step immediately after each fork, so one scheduler step mints an unbounded chain of siblings
+                   and never comes back to be ranked.
+                   THE ONE CASE THIS CANNOT SEE is a seamless stretch that also does no observable work — a bare
+                   `for(;;);`. Nothing inside the process can distinguish that from being descheduled without a
+                   CPU clock, so it is named here rather than papered over with a threshold that would fire on
+                   both. An outside observer (the host's own watchdog) is where that one belongs. */
+                long work = (decide_fork_total() - fk0) + (flow_created_count() - fl0) + (g_jobs_run - jb0);
+                if (work > ENGINE_SEAMLESS_WORK && g_preempt_asked == pa0) {
                     char why[448];
                     int wi = 0;
                     const char *sk = cur && cur->cand_sink ? cur->cand_sink : "(exploration flow)";
@@ -1410,14 +1438,20 @@ int engine_sched_step(void) {
                        requested==0 means the points were there and the scheduler declined every one, which is a
                        ranking question, not a missing seam. requested>fired means a point was reached, the
                        preempt was wanted, and it was DROPPED because no driver at that depth adopts the seam. */
+                    /* BOTH MEASURES ARE PRINTED, the work one that decided it and the wall clock that no
+                       longer does, so the next reader can see at a glance which state they are in: a big work
+                       count with a small gap is a real seamless stretch on an idle box, and a big gap with the
+                       same work count says the box was also loaded — neither changes the verdict, and that is
+                       the point. */
                     wi += snprintf(why, sizeof why,
-                                   "%d ms passed with NO suspend point offered (step ran %d ms, points "
-                                   "asked=%llu, preempts wanted=%llu fired=%llu; slowest Web API member step: "
-                                   "%s %dms of %dms over %ld member steps; wrapper map %ld/%ld; live "
-                                   "objects %lld, heap %lld KiB) — this stretch has no suspend/resume seam; "
-                                   "unit=%s script_i=%d "
+                                   "%ld units of work (forks+flows+jobs) with NO suspend point offered "
+                                   "(wall gap %d ms, step ran %d ms — reported, NOT the verdict: this host has "
+                                   "no CPU clock; points asked=%llu, preempts wanted=%llu fired=%llu; slowest "
+                                   "Web API member step: %s %dms of %dms over %ld member steps; wrapper map "
+                                   "%ld/%ld; live objects %lld, heap %lld KiB) — this stretch has no "
+                                   "suspend/resume seam; unit=%s script_i=%d "
                                    "flow=%s payload=",
-                                   (int)gap, (int)spent, (unsigned long long)(g_preempt_asked - pa0),
+                                   work, (int)gap, (int)spent, (unsigned long long)(g_preempt_asked - pa0),
                                    (unsigned long long)(pq - pq0),
                                    (unsigned long long)(pf - pf0), slow_name, (int)slow_ms,
                                    (int)steps_ms, steps_n, wrap_n, wrap_cap,
