@@ -3,7 +3,10 @@
  * (COW barrier post-processing, wasm64, JSPI, Lexbor/Z3 link) is gone with the
  * fresh fork. Re-add each capability ONLY when the scheduler needs it, verified.
  *
- *   node engine/build.mjs           -> engine/host/out/qjs.mjs + qjs.wasm (node smoke test)
+ *   node engine/build.mjs                  -> engine/host/out/qjs.mjs + qjs.wasm (node smoke test)
+ *   node engine/build.mjs native [min]     -> the smoke fixture built and run NATIVELY (the memory series)
+ *   node engine/build.mjs native leak      -> the same under LeakSanitizer
+ *   node engine/build.mjs native address   -> the same under AddressSanitizer
  *
  * Build success/failure is the milestone-0 signal (does clean quickjs-ng compile
  * + link + boot). Design-correctness verification stays on the live Chrome
@@ -135,13 +138,13 @@ function walkC(dir, out = []) {
 
 const ABI = process.argv.includes("abi");          // build the production qjs_* entry instead of the smoke main()
 /* WHICH DOCUMENT THE SMOKE DRIVES. `min` selects test_forced.c's minimal clone/COW/verify fixture and its probe
-   subset — the per-change MEMORY gate, seconds instead of minutes, which is why the asan build implies it (that
+   subset — the per-change MEMORY gate, seconds instead of minutes, and the one to pair with `sanitize` (that
    fixture exists precisely to avoid the full document's fork-tree blowup under a sanitizer).
    IT IS PASSED AS AN ARGUMENT, and that is the whole fix: the selection used to be getenv("APICLIENT_ASAN_MIN"),
    and emscripten's ENV is a fixed default set that never merges process.env — so the minimal document, its probe
    subset and every statement only it carried were unreachable in EVERY mode of this script. A fixture no mode of
    the build can run is an excluded test, and an excluded test is a failure (CLAUDE.md, Testing). */
-const MIN = process.argv.includes("min") || process.argv.includes("asan");
+const MIN = process.argv.includes("min");
 const SOLVER = (f) => join(HOST, "solver", f);     // the Time-Travel Solver (the novel half)
 const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
   .map((f) => join(QJS, f))
@@ -170,6 +173,73 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
    and the checker reads it. */
 if (LIST_SOURCES) {
   console.log(sources.join("\n"));
+  process.exit(0);
+}
+
+/* THE NATIVE SMOKE TARGET, and the sanitized builds that are only possible on it.
+ *
+ *   node engine/build.mjs native            -> the smoke fixture as a native binary (the MEMORY series: its
+ *                                              @HEAP/@PROGRESS stream is the only place this engine's live
+ *                                              allocation is reported, and a wasm link per iteration is a tool
+ *                                              nobody reaches for)
+ *   node engine/build.mjs native leak       -> LeakSanitizer (which allocation is still live at exit)
+ *   node engine/build.mjs native address    -> AddressSanitizer (UAF / double-free / overflow, leaks included)
+ *   … plus `min` to drive the minimal fixture, as the wasm smoke takes it.
+ *
+ * It used to be a `-fsanitize=address` FLAG ON THE EMCC LINK, and that target could not run: wasm32 addresses
+ * 4 GiB total, and this fixture's forced multi-path frontier measures 5.2 GiB of live allocation NATIVE and
+ * unsanitized. `node engine/build.mjs asan` therefore aborted `Aborted(OOM)` inside the FIRST context switch,
+ * with 46 KiB of JS heap on it — refusing to grow past 1.29 GB — and raising INITIAL_MEMORY only moved the wall
+ * (MAXIMUM_MEMORY clamps it; lifting both reached 3.1 GiB still inside switch 1). A sanitizer target that cannot
+ * reach switch two measures nothing, so the flag is DELETED rather than kept as a mode nobody can use.
+ *
+ * Native is not a workaround for that: it is where every other gate in this project already runs its C —
+ * engine/wpt.mjs builds this same source list with gcc for the same reason (an eight-minute wasm link per
+ * iteration is a gate nobody runs), and a native ASan run over that runner is what named the attribute-lifetime
+ * SEGV in one go. The flags below are wpt.mjs's, with the SMOKE entry instead of the WPT one, and DEV on so a
+ * DCHECK stays live — a sanitized build with the asserts compiled out reports faults the engine's own
+ * invariants would have caught first, at the wrong site. */
+const NATIVE = process.argv.includes("native");
+if (NATIVE) {
+  /* WHICH SANITIZER, IF ANY — named, because the plain native build is the one the memory series comes from and
+     a sanitizer changes both the numbers and the wall-clock by an order of magnitude. */
+  const kind = process.argv.includes("address") ? "address"
+             : process.argv.includes("leak")    ? "leak" : "none";
+  const bin = join(OUT, "qjs-native-" + kind);
+  mkdirSync(OUT, { recursive: true });
+  /* LEXBOR, NATIVELY, exactly as wpt.mjs provisions it — the same vendored source and the same cached archive,
+     because a second copy of that provisioning is a second thing to keep in step with the pinned tag. */
+  const LEXBOR_NATIVE = join(WORK, "lexbor-native", "liblexbor_static.a");
+  if (!existsSync(LEXBOR_NATIVE)) {
+    console.error("[build] the native lexbor archive is not built: " + LEXBOR_NATIVE + "\n" +
+                  "[build] `node engine/wpt.mjs` builds it once (cmake + make) — run that first.");
+    process.exit(1);
+  }
+  /* The quiet list and -Werror=implicit-function-declaration are the SHIPPED build's, taken from the same place
+     rather than restated, so the sanitized program is the program. */
+  const quiet = ["-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare", "-Wno-parentheses",
+                 "-Wno-format-truncation", "-Wno-format-overflow", "-Wno-array-bounds", "-Wno-stringop-overflow",
+                 "-Wno-maybe-uninitialized", "-Wno-misleading-indentation", "-Wno-dangling-pointer",
+                 "-Wno-char-subscripts", "-Wno-implicit-fallthrough", "-Werror=implicit-function-declaration"];
+  const cc = spawnSync("gcc", [
+    "-O1", "-g", "-fno-omit-frame-pointer",
+    ...(kind === "none" ? [] : ["-fsanitize=" + kind]),
+    ...quiet,
+    "-D_GNU_SOURCE", "-DENABLE_DUMPS", '-DCONFIG_VERSION="native"', "-DAPICLIENT_DEV=1",
+    "-I" + QJS, "-I" + HOST, "-I" + join(HOST, "browser"), "-I" + join(WORK, "lexbor-src", "source"),
+    ...sources, LEXBOR_NATIVE, "-o", bin, "-lm", "-lpthread",
+  ], { stdio: "inherit" });
+  if (cc.status !== 0) { console.error("[build] native build FAILED rc=" + cc.status); process.exit(cc.status || 1); }
+  console.log("[build] OK -> " + bin);
+  /* AND IT IS RUN, because a target that is only built is the excluded test one layer down: the whole point is
+     the stream it prints and the report it ends with, and nothing else in the tree produces either. */
+  const t = spawnSync(bin, MIN ? ["--min"] : [], { stdio: "inherit" });
+  if (t.status !== 0) {
+    console.error("[build] the native run reported rc=" + (t.status ?? "signal") +
+                  " — a LeakSanitizer summary above is a real leak, and an AddressSanitizer report a real fault");
+    process.exit(t.status || 1);
+  }
+  console.log("[build] native run PASS (" + kind + (MIN ? ", minimal document" : "") + ")");
   process.exit(0);
 }
 
@@ -202,22 +272,16 @@ const args = [
   // (the failing C assert + file:line — e.g. a refcount/gc_obj_list leak), the offensive-programming ideal of a
   // LOUD *and* diagnosable dev failure. Off by default so normal dev builds stay fast; enable when debugging.
   ...(process.argv.includes("assert") ? ["-sASSERTIONS=2"] : []),
-  // AddressSanitizer build (`asan` arg) — the FIRST-CLASS memory-debugging tool a browser engineer expects:
-  // intercepts malloc/free (quickjs's js_free routes to system free), so a double-free / use-after-free is
-  // reported DETERMINISTICALLY with the alloc stack + BOTH free stacks (function names via --profiling-funcs).
-  // ASan's shadow memory is incompatible with memory GROWTH, so it pins a fixed 1 GiB heap instead.
-  ...(process.argv.includes("asan")
-      ? ["-fsanitize=address", "--profiling-funcs", "-sINITIAL_MEMORY=1073741824",
-         ...(process.argv.includes("dwarf") ? ["-g"] : [])]
-      /* THE ARCHITECTURE'S CEILING, not a budget. wasm32 addresses 4 GiB and emscripten stops the heap at 2 GiB
-         unless told otherwise, so the growth flag alone was a 2 GiB cap wearing the word "growth". The smoke
-         fixture's forced multi-path run measures 3.1 GiB of peak RSS natively BEFORE any of this session's
-         changes — the frontier holds every flow's COW delta in RAM because the smoke has no IDB cold tier to
-         page the low-value tail into — so the 2 GiB stop was already the thing about to fail, and a 12%
-         increase from Fetch's clone-as-tee is what crossed it. Raising it to what the address space actually
-         holds is the platform floor; the real answer for a frontier this size is the cold tier, which is the
-         scheduler's work and not a flag. */
-      : ["-sALLOW_MEMORY_GROWTH=1", "-sMAXIMUM_MEMORY=4294967296"]),
+  /* THE ARCHITECTURE'S CEILING, not a budget. wasm32 addresses 4 GiB and emscripten stops the heap at 2 GiB
+     unless told otherwise, so the growth flag alone was a 2 GiB cap wearing the word "growth". The smoke
+     fixture's forced multi-path run measures gigabytes of live allocation — the frontier holds every flow's COW
+     delta in RAM because the smoke has no IDB cold tier to page the low-value tail into — so the 2 GiB stop was
+     already the thing about to fail. Raising it to what the address space actually holds is the platform floor;
+     the real answer for a frontier this size is the cold tier, which is the scheduler's work and not a flag.
+     THE SANITIZED TARGET IS NOT HERE, and that is measured rather than assumed — see `sanitize` above: a wasm
+     ASan link cannot reach the second context switch inside 4 GiB, so the flag that used to sit on this line
+     was a mode that had never run. */
+  "-sALLOW_MEMORY_GROWTH=1", "-sMAXIMUM_MEMORY=4294967296",
   "-sSTACK_SIZE=8388608",
   // The smoke entry RUNS on load and exits with the @H/@S pass code; the ABI entry is driven by the bridge
   // through ccall, so its runtime must stay alive across qjs_step re-entries and be importable as an ES module.

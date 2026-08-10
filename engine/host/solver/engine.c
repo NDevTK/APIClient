@@ -1738,7 +1738,7 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
                            "\"miscBytes\":%lld,\"miscParts\":%lld,\"childRealms\":%d,"
                            "\"objBytes\":%lld,\"propBytes\":%lld,\"shapeBytes\":%lld,\"strBytes\":%lld,"
                            "\"atomBytes\":%lld,\"funcBytes\":%lld,\"arrayElemBytes\":%lld,"
-                           "\"unattributed\":%lld,\"cLiveKiB\":%lld,\"arenaKiB\":%lld}\n",
+                           "\"unattributed\":%lld,\"stepMachines\":%d,\"trampFrames\":%d,\"cLiveKiB\":%lld,\"arenaKiB\":%lld}\n",
                            (long long)mem.malloc_count, (long long)mem.atom_count, (long long)mem.str_count,
                            (long long)mem.obj_count, (long long)mem.shape_count, (long long)mem.prop_count,
                            (long long)mem.js_func_count, (long long)mem.js_func_code_size,
@@ -1749,6 +1749,17 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
                            (long long)mem.str_size, (long long)mem.atom_size, (long long)mem.js_func_size,
                            (long long)mem.fast_array_elements * (long long)sizeof(JSValue),
                            (long long)mem.malloc_size - attributed,
+                           /* HOW MUCH OF THAT RESIDUAL IS SUSPENDED BUILTINS. `unattributed` is by construction
+                              everything JS_ComputeMemoryUsage cannot name, and a step machine is the largest
+                              thing in it: one per continuation-holding builtin a flow is inside, each carrying
+                              its captured arguments, so a frontier of parked flows holds one per parked call.
+                              Without this the residual is a number with no decomposition — the same defect
+                              `live` fixed for `flows`. */
+                           JS_StepMachineCount(JS_GetRuntime(g_sess_ctx)),
+                           /* AND THE HEAP CALL STACK, the other half of that residual and the larger one:
+                              a parked flow is a SUSPENDED CHAIN, so this is the frontier's depth in frames.
+                              Growth here with a flat `live` is a chain nothing unwound. */
+                           JS_TrampFrameCount(JS_GetRuntime(g_sess_ctx)),
                            (long long)engine_c_alloc_live() / 1024, (long long)engine_c_alloc_arena() / 1024);
                 }
                 printf("@PROGRESS {\"switches\":%d,\"flows\":%ld,\"live\":%d,\"objects\":%lld,"
