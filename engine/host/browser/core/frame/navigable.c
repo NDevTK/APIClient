@@ -435,6 +435,40 @@ static JSValue nav_find_in_tree(JSContext *ctx, JSValueConst root, const char *n
     return hit;
 }
 
+/* See navigable.h. PRE-ORDER, so the children are pushed in REVERSE and pop in tree order — a stack walked
+   forwards would report a container's frames back to front. */
+JSValue navigable_tree_order(JSContext *ctx)
+{
+    JSValue out = JS_NewArray(ctx), stack = JS_NewArray(ctx);
+    uint32_t nout = 0, ntop = 0;
+
+    CHECK(!JS_IsException(out) && !JS_IsException(stack),
+          "navigable: OOM walking this agent's navigables");
+    JS_SetPropertyUint32(ctx, stack, ntop++,
+                         window_proxy_top_navigable(ctx, document_window_proxy(ctx)));
+    while (ntop > 0) {
+        JSValue proxy = JS_GetPropertyUint32(ctx, stack, --ntop);
+        JSContext *realm;
+        int i, n;
+
+        JS_SetPropertyUint32(ctx, stack, ntop, JS_UNDEFINED);
+        if (!window_proxy_is(proxy) || window_proxy_closed(ctx, proxy) || window_proxy_is_remote(proxy) ||
+            !window_proxy_materialized(proxy)) {
+            JS_FreeValue(ctx, proxy);
+            continue;
+        }
+        realm = window_proxy_realm(ctx, proxy);
+        DCHECK(realm != NULL, "a materialized navigable answered with no realm — window_proxy_materialized "
+                              "is what says one is there to answer with");
+        n = iframe_child_navigable_count(realm);
+        for (i = n - 1; i >= 0; i--)
+            JS_SetPropertyUint32(ctx, stack, ntop++, iframe_child_navigable(realm, i));
+        JS_SetPropertyUint32(ctx, out, nout++, proxy);   /* the list takes this reference */
+    }
+    JS_FreeValue(ctx, stack);
+    return out;
+}
+
 static JSValue navigable_choose_name(JSContext *ctx, const char *name)
 {
     JSValue top = window_proxy_top_of(ctx, document_window_proxy(ctx));

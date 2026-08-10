@@ -142,8 +142,8 @@ void engine_pending_script_url(JSContext *ctx, const char *url) {
    or external (srcs[i] is its URL and bodies[i] is filled when the host replies). Declared here because the
    pending DRAIN writes into it: an external script's text is the DOCUMENT's, shared by every flow. */
 /* The browser layer's document-load lifecycle, asked when a flow has run everything the document gave it. */
-static int (*g_docdone_hook)(JSContext *ctx, int stage);
-void engine_set_document_done_hook(int (*fn)(JSContext *ctx, int stage)) { g_docdone_hook = fn; }
+static int (*g_docdone_hook)(JSContext *ctx);
+void engine_set_document_done_hook(int (*fn)(JSContext *ctx)) { g_docdone_hook = fn; }
 
 /* THE EVENT LOOP'S TIMER STEP, registered by the timer component for the reason the document hook is: naming
    it here would make the scheduler depend on the browser half. Asked only where this flow has nothing else to
@@ -739,7 +739,9 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
         }
         sib->dyn_n = sib->dyn_cap = parent->dyn_n;
     }
-    sib->dom_stage = parent->dom_stage;   /* the sibling is at the same point in the document's lifecycle */
+    /* THE LIFECYCLE IS NOT COPIED HERE ANY MORE: it lives on each Document as a heap write, so the sibling
+       inherits every document's readiness through the delta it forks, along with everything else the flow had
+       written. A field copied here could only ever have carried ONE document's. */
     /* THE REPLIES STILL IN FLIGHT ARE INHERITED TOO. A flow that forks while a request is outstanding — a
        fetch whose `.then` has not run, an injected <script src> whose body has not arrived — was leaving the
        sibling with an empty register, so the reply reached exactly one world and everything behind it was
@@ -1047,6 +1049,16 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
             /* NOTHING QUEUED, NOTHING OWED — so the clock may move. A timer is due only when the event loop
                has nothing else, and everything that IS due (this flow's jobs above, a reply the host owes) has
                already been offered a turn by the time control reaches here. */
+            /* A DOCUMENT FINISHED LOADING, in this flow's world — DOMContentLoaded across the agent's
+               documents in tree order, then `load` innermost-first, one per turn. It comes BEFORE the two
+               clock-driven sources and that is the spec's order rather than a preference: the parser
+               completing is not a timer and not a frame, it is already due, and everything that is due runs
+               before the clock may move. It used to sit AFTER them, so a `setTimeout(f, 0)` a parse-time
+               script set ran before DOMContentLoaded — which no browser does — and a rendering opportunity
+               would have preceded it too. A page's real work is behind these events: the half of a bundle
+               that touches the DOM and calls the API runs here. */
+            else if (g_docdone_hook && g_docdone_hook(ctx)) {
+                g_step_unit = "document-lifecycle-stage"; return 0; }
             /* §8.1.7.3's IN-PARALLEL HALF, asked first of the two clock-driven sources because it is the one
                that can defer: it compares the next rendering opportunity with the earliest timer expiry and
                yields when the timer is earlier. Without a rendering opportunity there is no
@@ -1056,16 +1068,6 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
             else if (g_rendering_hook && g_rendering_hook(ctx)) {
                 g_step_unit = "queue-rendering-opportunity"; return 0; }
             else if (g_timer_hook && g_timer_hook(ctx)) { g_step_unit = "fire-due-timer"; return 0; }
-            else if (f->dom_stage < 2 && g_docdone_hook) {
-                /* THE DOCUMENT FINISHED LOADING, in this flow's world. DOMContentLoaded then load, in that
-                   order, each once per flow — the order IS the spec, and a page's real work is behind them:
-                   the half of a bundle that touches the DOM and calls the API runs here. Every listener is
-                   queued as a task, so the loop above picks them up like any other job. */
-                g_step_unit = "document-done-stage";
-                g_docdone_hook(ctx, f->dom_stage);
-                f->dom_stage++;
-                return 0;
-            }
             /* HTML §8.1.7.5 "notify about rejected promises". The flow has nothing left to run, so every
                rejection still on its list is one no handler will ever be attached to. The browser half keeps
                the lists and fires `unhandledrejection`; those fires are JOBS, so the flow has work again and

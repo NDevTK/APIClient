@@ -133,6 +133,25 @@ void navigable_install(JSContext *ctx, JSValueConst global, const char *origin);
    the realm its scripts run in, and hand both to §7.2.5.1's replace. Answers the SAME proxy (owned), because a
    navigation does not make a new one — that is the whole reason WindowProxy exists — or JS_UNDEFINED when the
    address does not parse, which §7.4 turns into a SyntaxError at the call site. */
+/* EVERY NAVIGABLE OF THIS AGENT, IN TREE ORDER — a container before what it contains, siblings in the tree
+   order of their navigable containers. As an Array of WindowProxy (owned).
+ *
+ * IT IS HERE BECAUSE THE TREE IS. Two components need this walk for two different reasons — HTML §8.1.7.3 step
+ * 2's document list and the per-document LOAD LIFECYCLE — and a second copy of a tree walk is the second answer
+ * that is always subtly wrong: nav_find_in_tree below is a third, breadth-first, because §7.1 wants the NEAREST
+ * match rather than the outermost. Each caller applies its OWN filters to this list; what they share is the
+ * ORDER, which is the spec's and not theirs.
+ *
+ * THE WALK IS ITERATIVE over an explicit worklist, for the reason nav_find_in_tree's is: a self-call would be
+ * C-to-C recursion whose depth is the PAGE's iframe nesting, which is the page's to choose.
+ *
+ * A NAVIGABLE THIS INSTANCE HAS NOT MATERIALIZED IS NOT IN THE LIST, and neither is a peer's or a destroyed
+ * one. An unmaterialized navigable holds the initial about:blank Document §7.4 created it with; that Document
+ * has no scripts, so it has no lifecycle to run and nothing below it to walk — "not materialized" and "no
+ * children" are the same answer (window_proxy.h), and materializing every navigable a forced-execution
+ * frontier ever created in order to ask is the heap exhaustion navigable.c's deferral exists to avoid. */
+JSValue navigable_tree_order(JSContext *ctx);
+
 JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url);
 
 /* §7.4 STEPS 6 AND 14 AS ONE OPERATION — choose a navigable for `target` and navigate it to `url`, creating one

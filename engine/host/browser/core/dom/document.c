@@ -33,6 +33,7 @@
 #include "core/dom/document.h"
 #include "solver/world.h"
 #include "core/frame/window_proxy.h"
+#include "core/frame/navigable.h"
 #include "core/dom/document_fragment.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -511,11 +512,52 @@ const char *document_base_url(JSContext *ctx)
     return d->url;
 }
 
-static void document_set_ready(JSContext *ctx, const char *state)
+/* HTML's CURRENT DOCUMENT READINESS, and the reason it is not simply `readyState`. §3.1.1 declares readyState a
+   READONLY attribute; this engine has it as a data property, so a page can assign it — and the load lifecycle
+   and §8.1.7.3 step 3's render-blocked test both READ it, which would let `document.readyState = "complete"`
+   skip a document's DOMContentLoaded and unblock its rendering. The readiness therefore lives in an OWN SLOT
+   under a private Symbol a page cannot name, exactly as an Event's internal slots do, and `readyState` REFLECTS
+   it. Both are per-FLOW heap writes, so the COW delta isolates one arm's lifecycle from its sibling's. */
+static JSValue g_ready_key = JS_UNDEFINED;
+
+static void document_set_ready(JSContext *ctx, int stage)
 {
     Document *d = doc_here(ctx);
-    if (JS_IsObject(d->doc_obj))
-        JS_SetPropertyStr(ctx, d->doc_obj, "readyState", JS_NewString(ctx, state));
+    static const char *const NAMES[3] = { "loading", "interactive", "complete" };
+    JSAtom k;
+
+    DCHECK(stage >= 0 && stage <= 2, "a document readiness HTML does not define");
+    if (!JS_IsObject(d->doc_obj))
+        return;
+    k = JS_ValueToAtom(ctx, g_ready_key);
+    CHECK(k != JS_ATOM_NULL, "the document-readiness slot key could not be reached");
+    JS_DefinePropertyValue(ctx, d->doc_obj, k, JS_NewInt32(ctx, stage), 0);   /* internal: not writable */
+    JS_FreeAtom(ctx, k);
+    JS_SetPropertyStr(ctx, d->doc_obj, "readyState", JS_NewString(ctx, NAMES[stage]));
+}
+
+/* This document's readiness: 0 loading, 1 interactive, 2 complete. A realm with no Document yet is 0 — a
+   Document that has certainly not finished parsing. */
+static int document_readiness(JSContext *ctx)
+{
+    Document *d = doc_of(ctx);
+    JSAtom k;
+    JSValue v;
+    int32_t r = 0;
+
+    if (!d || !JS_IsObject(d->doc_obj))
+        return 0;
+    k = JS_ValueToAtom(ctx, g_ready_key);
+    CHECK(k != JS_ATOM_NULL, "the document-readiness slot key could not be reached");
+    /* AN OWN SLOT, never a property LOOKUP: a lookup walks the prototype chain into the solver's absent-state
+       seam and would mint a concolic for a name nobody defined. */
+    if (JS_GetOwnSlot(ctx, &v, d->doc_obj, k) <= 0) v = JS_UNDEFINED;
+    JS_FreeAtom(ctx, k);
+    if (JS_IsUndefined(v)) { JS_FreeValue(ctx, v); return 0; }
+    JS_ToInt32(ctx, &r, v);
+    JS_FreeValue(ctx, v);
+    DCHECK(r >= 0 && r <= 2, "a document's readiness slot holds a stage HTML does not define");
+    return r;
 }
 
 /* HTML §8.1.7.3 "update the rendering" step 3's RENDER-BLOCKED clause, answered by the component that owns the
@@ -523,34 +565,18 @@ static void document_set_ready(JSContext *ctx, const char *state)
  *
  * A Document is render-blocked while it has render-blocking elements, and the parser is what removes the last
  * of them: a browser does not present a document, and does not reveal it, until its parse has finished. In
- * this engine the tree is one Lexbor parse and the parser's completion IS `document_done_stage(0)` — the moment
- * `readyState` leaves "loading" and DOMContentLoaded fires — so that is the state read here. It is what puts
- * the first rendering opportunity (and therefore `pagereveal` and the first animation frame) AFTER
- * DOMContentLoaded, which is where a browser puts it.
- *
- * IT IS READ OFF THE DOCUMENT OBJECT because it is PER-FLOW: one arm of a fork may have finished its lifecycle
- * while its sibling has not, and a C-side flag would answer one flow's question with another's timeline. */
+ * this engine the tree is one Lexbor parse and the parser's completion IS stage 0 — the moment the readiness
+ * leaves "loading" and DOMContentLoaded fires. It is what puts the first rendering opportunity (and therefore
+ * `pagereveal` and the first animation frame) AFTER DOMContentLoaded, which is where a browser puts it. */
 bool document_render_blocked(JSContext *ctx)
 {
-    Document *d = doc_here(ctx);
-    JSValue v;
-    const char *s;
-    bool blocked;
-
-    if (!JS_IsObject(d->doc_obj))
-        return true;   /* no Document yet is a Document that has certainly not finished parsing */
-    v = JS_GetPropertyStr(ctx, d->doc_obj, "readyState");
-    s = JS_ToCString(ctx, v);
-    blocked = !s || !strcmp(s, "loading");
-    if (s) JS_FreeCString(ctx, s);
-    JS_FreeValue(ctx, v);
-    return blocked;
+    return document_readiness(ctx) == 0;
 }
 
-int document_done_stage(JSContext *ctx, int stage)
+static int document_done_stage(JSContext *ctx, int stage)
 {
     if (stage == 0) {
-        document_set_ready(ctx, "interactive");
+        document_set_ready(ctx, 1);
         /* §3.1.1: DOMContentLoaded is fired AT THE DOCUMENT and BUBBLES, which is how a `window.onload`-style
            listener registered on window hears it — the propagation path derives that from the document's
            ancestors now rather than the caller naming the window. It is not cancelable. */
@@ -559,11 +585,56 @@ int document_done_stage(JSContext *ctx, int stage)
         return 1;
     }
     DCHECK(stage == 1, "the document lifecycle was asked for a stage it does not have");
-    document_set_ready(ctx, "complete");
+    document_set_ready(ctx, 2);
     /* HTML: `load` is fired at the WINDOW and does not bubble — there is nothing above it to bubble to. */
     event_target_fire(ctx, doc_here(ctx)->win_obj,
                       event_new(ctx, "load", /*bubbles*/ false, /*cancelable*/ false));
     return 1;
+}
+
+/* THE LOAD LIFECYCLE IS PER DOCUMENT, and it was per FLOW — one counter, for one document, driven with the
+ * ROOT realm's ctx. That is not a small mismatch: HTML gives every Document its own readiness and its own
+ * DOMContentLoaded, so a CHILD navigable's document could never leave "loading". It never fired
+ * DOMContentLoaded, never fired `load`, and — the moment §8.1.7.3 step 3's render-blocked clause existed — was
+ * removed from every rendering opportunity for ever. A child document simply never ran the half of its code
+ * that is behind those events, and nothing anywhere said so; wpt's
+ * animation-frames/callback-cross-realm-report-exception is one test that says it out loud.
+ *
+ * SO THE STAGE IS READ FROM THE DOCUMENT, and the flow's counter is DELETED. The readiness is already
+ * per-document and per-flow (an own slot on each realm's Document, isolated by the COW delta), which is
+ * exactly what the counter was trying to be and could not be, because one integer cannot hold N documents.
+ *
+ * THE ORDER IS THE SPEC'S, and it is two passes rather than one. Every document's DOMContentLoaded comes
+ * before any document's `load` — a parent's parse finishes while its frames are still loading — and a CHILD's
+ * `load` fires before its PARENT's, because a parent's load waits for its subframes. Tree order gives the
+ * first; the REVERSE of tree order gives the second, since a container precedes what it contains.
+ *
+ * ONE DOCUMENT PER CALL, then return, because this is a work item on the one frontier like everything else the
+ * scheduler asks for — each fire queues listener tasks the loop picks up before the next document's stage.
+ * Returns 1 when it advanced one, 0 when every document of this agent is complete. */
+int document_lifecycle_step(JSContext *ctx)
+{
+    JSValue docs = navigable_tree_order(ctx), len;
+    uint32_t n = 0, i;
+    int did = 0;
+
+    len = JS_GetPropertyStr(ctx, docs, "length");
+    JS_ToUint32(ctx, &n, len);
+    JS_FreeValue(ctx, len);
+    for (i = 0; i < n && !did; i++) {          /* pass one: DOMContentLoaded, in tree order */
+        JSValue proxy = JS_GetPropertyUint32(ctx, docs, i);
+        JSContext *realm = window_proxy_realm(ctx, proxy);
+        if (document_readiness(realm) == 0) { document_done_stage(realm, 0); did = 1; }
+        JS_FreeValue(ctx, proxy);
+    }
+    for (i = n; i > 0 && !did; i--) {          /* pass two: `load`, innermost first */
+        JSValue proxy = JS_GetPropertyUint32(ctx, docs, i - 1);
+        JSContext *realm = window_proxy_realm(ctx, proxy);
+        if (document_readiness(realm) == 1) { document_done_stage(realm, 1); did = 1; }
+        JS_FreeValue(ctx, proxy);
+    }
+    JS_FreeValue(ctx, docs);
+    return did;
 }
 
 /* §3.1.1's `location` — the LOCATION OBJECT OF THIS DOCUMENT'S RELEVANT GLOBAL. It was absent, and absent is
@@ -798,6 +869,10 @@ void document_init(JSContext *ctx)
     JS_NewClassID(JS_GetRuntime(ctx), &g_document_class);
     JS_NewClass(JS_GetRuntime(ctx), g_document_class, &d);
     node_claim_type(LXB_DOM_NODE_TYPE_DOCUMENT, g_document_class);
+    /* The readiness slot's key — the AGENT's, like every other private slot key, because the readiness lives on
+       each realm's Document and they are all read through this one name. */
+    g_ready_key = JS_NewSymbol(ctx, "documentReadiness", false);
+    CHECK(!JS_IsException(g_ready_key), "the document-readiness slot key allocation failed");
     document_declare_members(ctx);
     document_fragment_init(ctx);   /* §4.7, before any fragment is wrapped as a bare Node */
     realm_declare_intrinsic(document_install_proto);
@@ -944,7 +1019,8 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
 
     /* §4.4 a Document is an EventTarget through Node, so addEventListener comes down the prototype chain now
        rather than being installed here. "loading" until its scripts have run. */
-    JS_SetPropertyStr(ctx, doc, "readyState", JS_NewString(ctx, "loading"));
+    /* The readiness is set through its ONE writer below, once `doc_obj` is in place, so the internal slot and
+       the reflecting `readyState` cannot disagree — which is the whole reason the slot exists. */
 
     JS_SetPropertyStr(ctx, (JSValue)global, "document", JS_DupValue(ctx, doc));
     /* HELD, not borrowed: `doc` is this function's own reference and the global got a DUP of it, so the
@@ -953,6 +1029,9 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        window — alive: JS_FreeRuntime's gc_obj_list walk counted 751 surviving objects, one per object in the
        page, from these two lines. */
     d->doc_obj = doc;
+    /* HTML: a Document's readiness starts at "loading" — its parser has not finished. Written through the one
+       writer so the internal slot and the reflecting `readyState` cannot disagree. */
+    document_set_ready(ctx, 0);
     d->win_obj = JS_DupValue(ctx, global);
     /* The interface OBJECTS, now that every prototype exists. Node's goes first because the derived ones
        inherit from it; each component names the one it owns rather than node.c enumerating them. */
@@ -984,7 +1063,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        tree's iframes get their step here. It is LAST, after every wrapper and prototype exists, because
        creating a navigable wraps the element and stores a WindowProxy on it. */
     iframe_document_parsed(ctx);
-    engine_set_document_done_hook(document_done_stage);
+    engine_set_document_done_hook(document_lifecycle_step);
 }
 
 /* THE DOCUMENT'S LIFECYCLE REFERENCES. Both are HELD across the lifecycle — `DOMContentLoaded` fires at the
@@ -1019,6 +1098,10 @@ void document_free(JSContext *ctx)
 {
     Document *d = doc_of(ctx);
 
+    /* The KEY is the agent's and is released whichever realm tears down last; the readiness itself is a
+       property of each Document and goes with it. */
+    JS_FreeValue(ctx, g_ready_key);
+    g_ready_key = JS_UNDEFINED;
     if (!d) return;   /* a realm that never had a document — the runner builds one per component test */
     JS_FreeValue(ctx, d->proxy);
     JS_FreeValue(ctx, d->win_obj);

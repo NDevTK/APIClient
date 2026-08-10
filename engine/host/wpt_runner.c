@@ -1521,7 +1521,6 @@ int main(int argc, char **argv)
        PARKED FLOWS RESUME FIRST. A flow that suspended is ahead of every queued job in program order, so
        draining a job while one is parked reorders observable microtasks — and this pump got it wrong on its
        first run, which the engine's own assert named at the site with the fix in the message. */
-    int doc_stage = 0;   /* HTML: DOMContentLoaded, then load — once each, in that order */
     for (;;) {
         JSContext *c1;
         int r;
@@ -1545,12 +1544,14 @@ int main(int argc, char **argv)
            the creator's `window.open()`, which is a C activation and no place to enter JS from. Before the
            clock moves, because a child's script is loading, not a timer. */
         if (wpt_run_pending()) continue;
-        /* THE DOCUMENT FINISHES LOADING, and this runner used to run NEITHER stage — so its documents were
+        /* THE DOCUMENTS FINISH LOADING, and this runner used to run NONE of it — so its documents were
            `readyState: "loading"` forever, `window.onload` never fired, and HTML §8.1.7.3 step 3 saw a
            RENDER-BLOCKED document on every pass: no rendering opportunity, no `pagereveal`, and no animation
-           frame, in a harness whose whole job is to measure exactly those. It is BEFORE the clock moves for the
-           reason a child's pending script is: the parser finishing is not a timer. */
-        if (doc_stage < 2) { document_done_stage(ctx, doc_stage++); continue; }
+           frame, in a harness whose whole job is to measure exactly those. PER DOCUMENT, so a child navigable's
+           document gets its own DOMContentLoaded and its own `load` rather than living for ever in a stage a
+           single counter could only ever hold for one of them. It is BEFORE the clock moves for the reason a
+           child's pending script is: the parser finishing is not a timer. */
+        if (document_lifecycle_step(ctx)) continue;
         /* NOTHING QUEUED AND NOTHING OWED, which is the one moment virtual time may move — see timer.h. TWO
            task sources become due at moments on that clock: §8.1.7.3's rendering task source at the next
            rendering opportunity, and §8.6's timer source at the earliest expiry. The rendering step is asked

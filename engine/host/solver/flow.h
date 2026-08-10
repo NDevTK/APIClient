@@ -107,10 +107,11 @@ typedef struct Flow {
 
     int   started;         /* decide_enter has run (fresh) — else resume from the blobs below */
     void *frame;           /* the current script's live preemptible frame (JS_FlowNew handle), NULL between scripts */
-    /* THE DOCUMENT'S LOAD STAGE, in THIS flow's world: 0 = still running scripts, 1 = DOMContentLoaded fired,
-       2 = load fired. Per-flow because the listeners are (they are ordinary properties on the target, so the COW
-       delta isolates registration), and because a forked arm reaches the end of the document in its own time. */
-    int   dom_stage;
+    /* THE DOCUMENT'S LOAD STAGE IS NOT HERE, and the field that was is DELETED. One integer cannot hold N
+       documents: an agent is an origin-keyed CLUSTER, so a flow reaches several Documents and HTML gives each
+       its own readiness and its own DOMContentLoaded. The stage lives on each Document (document.c's readiness
+       slot), which is a heap write the COW delta already isolates per flow — so it is still per-flow, and it is
+       now also per-document, which is what it always had to be. */
     int   script_i;        /* position in the script sequence: static [0,n), then this flow's dyn chunks [n, n+dyn_n) */
     /* THE HIGHEST SCRIPT INDEX THIS FLOW HAS COMPILED, so that compiling one twice can be caught. A flow runs
        each program in its sequence ONCE; a preempted flow RESUMES its suspended frame and never re-enters

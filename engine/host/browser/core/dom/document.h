@@ -34,13 +34,13 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
    same-origin child of a child is named from the child and not from the instance root. */
 uint32_t document_doc(JSContext *ctx);
 
-/* THE DOCUMENT'S LOAD LIFECYCLE — stage 0 fires DOMContentLoaded at the Document, stage 1 fires `load` at the
-   Window. WHEN a document has finished loading is the SCHEDULER's answer (it is the flow that knows it has run
-   everything the document gave it), so this is registered as that hook; it is declared here as well because a
-   host that drives its own pump has the same two stages to run, and a host that runs NEITHER has a document
-   that is render-blocked forever — no rendering opportunity, no `pagereveal`, no animation frame, and
-   `window.onload` never fires. Returns 1, so a driver can treat it like every other "I made progress" step. */
-int document_done_stage(JSContext *ctx, int stage);
+/* THE LOAD LIFECYCLE, PER DOCUMENT — see the definition. Advances ONE document of this agent by one stage
+   (DOMContentLoaded in tree order, then `load` innermost-first) and returns 1, or 0 when every document is
+   complete. WHEN a document has finished loading is the SCHEDULER's answer — it is the flow that knows it has
+   run everything the documents gave it — so this is registered as that hook; it is declared here as well
+   because a host that drives its own pump has the same lifecycle to run, and a host that runs NONE of it has
+   documents that are render-blocked for ever. */
+int document_lifecycle_step(JSContext *ctx);
 
 /* HTML §8.1.7.3 "update the rendering" step 3's render-blocked clause — see the definition. True while this
    document's parser has not finished, which is `readyState === "loading"`. */

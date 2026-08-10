@@ -10,7 +10,7 @@
 #include "core/dom/document.h"
 #include "core/events/event_target.h"
 #include "core/frame/window_proxy.h"
-#include "core/html/html_iframe.h"
+#include "core/frame/navigable.h"
 #include "core/rendering/animation_frame.h"
 #include "core/rendering/page_reveal.h"
 #include "core/rendering/rendering.h"
@@ -89,47 +89,30 @@ static bool doc_has_rendering_work(JSContext *docctx)
    active documents of this event loop in container-precedes-contained order, and steps 3, 4 and 5 REMOVE from
    that list. Collecting only what survives is the same list.
  *
- * THE ORDER IS A PRE-ORDER WALK OF THE NAVIGABLE TREE — a container's document precedes every document it
- * contains, and siblings follow the tree order of their navigable containers, which is the order
- * `iframe_child_navigable` reports them in. The walk is ITERATIVE over an explicit worklist for the reason
- * navigable.c's is: a self-call would be C-to-C recursion whose depth is the PAGE's iframe nesting.
- *
- * A NAVIGABLE THIS INSTANCE HAS NOT MATERIALIZED IS REMOVED BY STEP 3's last clause — it does not currently
- * have a rendering opportunity — and that is not a hedge. An unmaterialized navigable holds the initial
- * about:blank Document §7.4 created it with; that Document has no scripts, so nothing in it can have called
- * `requestAnimationFrame`, and the only listener that could observe its `pagereveal` would have to be
- * registered by code in it, which is what materializing it means. Materializing every never-touched
- * about:blank on every frame is the heap exhaustion navigable.c's deferral exists to avoid.
+ * THE ORDER IS THE NAVIGABLE TREE's, and the walk that produces it belongs to navigable.c because the tree
+ * does — the per-document LOAD LIFECYCLE needs the same order for a different reason, and a second copy of a
+ * tree walk is the second answer that is always subtly wrong. Step 3's last clause (a navigable with no
+ * rendering opportunity) is what removes the ones that walk does not report: an unmaterialized navigable holds
+ * the initial about:blank Document §7.4 created it with, which has no scripts, so nothing in it can have
+ * called `requestAnimationFrame` and the only listener that could observe its `pagereveal` would have to be
+ * registered by code in it — which is what materializing it means.
  *
  * A RENDER-BLOCKED DOCUMENT IS REMOVED BY STEP 3's first clause, and in this engine that is the document whose
  * parser has not finished — see document_render_blocked. It is what puts the first rendering opportunity after
  * DOMContentLoaded, where a browser puts it. */
 static JSValue rendering_collect_docs(JSContext *ctx)
 {
-    JSValue docs = JS_NewArray(ctx), stack = JS_NewArray(ctx);
-    uint32_t ndocs = 0, ntop = 0;
+    JSValue docs = JS_NewArray(ctx), all = navigable_tree_order(ctx), len;
+    uint32_t ndocs = 0, n = 0, i;
 
-    CHECK(!JS_IsException(docs) && !JS_IsException(stack),
-          "update the rendering: OOM collecting this event loop's documents");
-    {
-        JSValue top = window_proxy_top_navigable(ctx, document_window_proxy(ctx));
-        JS_SetPropertyUint32(ctx, stack, ntop++, top);
-    }
-    while (ntop > 0) {
-        JSValue proxy = JS_GetPropertyUint32(ctx, stack, --ntop);
-        JSContext *docctx;
-        int i, n;
+    CHECK(!JS_IsException(docs), "update the rendering: OOM collecting this event loop's documents");
+    len = JS_GetPropertyStr(ctx, all, "length");
+    JS_ToUint32(ctx, &n, len);
+    JS_FreeValue(ctx, len);
+    for (i = 0; i < n; i++) {
+        JSValue proxy = JS_GetPropertyUint32(ctx, all, i);
+        JSContext *docctx = window_proxy_realm(ctx, proxy);
 
-        JS_SetPropertyUint32(ctx, stack, ntop, JS_UNDEFINED);
-        if (!window_proxy_is(proxy) || window_proxy_closed(ctx, proxy) || window_proxy_is_remote(proxy) ||
-            !window_proxy_materialized(proxy)) {
-            /* step 3: not a document of this event loop, or one with no rendering opportunity here */
-            JS_FreeValue(ctx, proxy);
-            continue;
-        }
-        docctx = window_proxy_realm(ctx, proxy);
-        DCHECK(docctx != NULL, "a materialized navigable answered with no realm — window_proxy_materialized "
-                               "is what says one is there to answer with");
         /* STEP 3's VISIBILITY CLAUSE — "remove doc if ... doc's visibility state is `hidden`". Page
            Visibility is not in this build: there is no `document.hidden`, no `visibilityState` and nothing
            that could set one, so every document this instance holds is visible by construction. Asserted for
@@ -140,15 +123,9 @@ static JSValue rendering_collect_docs(JSContext *ctx)
                     "of taking every document for visible");
         if (!document_render_blocked(docctx) && doc_has_rendering_work(docctx))
             JS_SetPropertyUint32(ctx, docs, ndocs++, JS_DupValue(ctx, proxy));
-        /* The children are pushed in REVERSE so they pop in tree order: a stack walked forwards would report
-           this container's frames back to front, and "shadow-including tree order of their navigable
-           containers" is what step 2 says. */
-        n = iframe_child_navigable_count(docctx);
-        for (i = n - 1; i >= 0; i--)
-            JS_SetPropertyUint32(ctx, stack, ntop++, iframe_child_navigable(docctx, i));
         JS_FreeValue(ctx, proxy);
     }
-    JS_FreeValue(ctx, stack);
+    JS_FreeValue(ctx, all);
     return docs;
 }
 
