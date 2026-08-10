@@ -1,5 +1,14 @@
-/* Flow registry + WFQ — see flow.h. Pure host component (quickjs.h + check.h only). */
+/* Flow registry + WFQ — see flow.h.
+ *
+ * The registry also owns the teardown of a flow that NEVER FINISHED, which is why this file knows what a
+ * flow's state is made of: the fields are declared in flow.h, so their destructors belong wherever a Flow is
+ * freed. The alternative — a scheduler that must remember to sweep the survivors before the registry goes down
+ * — is the shape where a host that forgets retains the whole runtime with nothing to name the owner. */
 #include "solver/flow.h"
+#include "solver/cow.h"        /* a survivor's heap COW delta */
+#include "solver/dom_cow.h"    /* …and its DOM delta head + shared base segment */
+#include "solver/decide.h"     /* …and its suspended decision vector */
+#include "solver/concolic.h"   /* …and its suspended path constraint */
 #include "check.h"
 #include <stdlib.h>
 
@@ -47,15 +56,50 @@ void flow_registry_free(JSContext *ctx) {
        going to free it, and it is malloc'd, so the runtime's GC walk would never name it. */
     world_registry_free(ctx);
     for (int i = 0; i < g_flows_n; i++) {
-        JS_FreeValue(ctx, g_flows[i]->fn);
-        free(g_flows[i]->dec);
-        free(g_flows[i]->deliver); free(g_flows[i]->deliver_origin);
-        for (int k = 0; k < g_flows[i]->njob; k++) {   /* free any undrained microtask jobs */
-            for (int a = 0; a < g_flows[i]->jobs[k].argc; a++) JS_FreeValue(ctx, g_flows[i]->jobs[k].argv[a]);
-            free(g_flows[i]->jobs[k].argv);
+        Flow *f = g_flows[i];
+        /* A FLOW LEFT IN THE FRONTIER IS THE ORDINARY CASE, NOT AN ERROR — and everything it is still holding
+           has to be released HERE, because nothing else will. The session closes over its survivors by design
+           (engine_sched_step's exhausted path leaves every host-owed flow alive, and in the product a parked
+           flow OUTLIVES the session entirely), so this is the teardown for a flow that never finished and it
+           must release exactly what flow_finish releases for one that did.
+           It released four fields and left the rest, and the two that matter are not small: `frame` is the
+           JS_FlowNew handle holding this flow's whole heap-frame chain — every activation, closure and local
+           it is suspended across — and `delta` is the COW state naming every shared value it captured. One
+           survivor therefore retained the entire realm, and the runtime's leak walk reported it as a Window, a
+           context and seventeen hundred anonymous Functions with nothing naming the owner. That is precisely
+           the shape a leak takes when the ROOT is one dropped handle. */
+        DCHECK(f->park_fn == NULL,
+               "a flow reached the frontier's teardown with a continuation still parked — its suspended async "
+               "activation is dropped, and only the flow that FINISHES was being checked for this");
+        if (f->frame) { JS_FlowFree(ctx, (JSValue *)f->frame); f->frame = NULL; }
+        /* the REPLIES it was still owed. Each entry is a request the host never answered; its resolve
+           capability and the reply value are real references, and the rest of it is malloc'd. */
+        for (int k = 0; k < f->npend; k++) {
+            FlowPending *p = &f->pending[k];
+            JS_FreeValue(ctx, p->resolve);
+            JS_FreeValue(ctx, p->value);
+            free(p->url); free(p->op); free(p->method); free(p->body);
+            for (int h = 0; h < p->nhdr; h++) { free(p->hdrs[h].name); free(p->hdrs[h].value); }
+            free(p->hdrs);
         }
-        free(g_flows[i]->jobs);
-        free(g_flows[i]);
+        free(f->pending);
+        cow_delta_free(ctx, (CowDelta *)f->delta); f->delta = NULL;
+        if (f->dom) dom_buf_free(f->dom, f->dom_n);
+        if (f->dom_base) dom_base_free(f->dom_base);
+        decide_blob_free(f->dec_blob);
+        concolic_pins_blob_free(f->pin_blob);
+        for (int k = 0; k < f->dyn_n; k++) free(f->dyn[k]);
+        free(f->dyn); free(f->dyn_cand);
+        free(f->cand_src); free(f->cand_payload);
+        JS_FreeValue(ctx, f->fn);
+        free(f->dec);
+        free(f->deliver); free(f->deliver_origin);
+        for (int k = 0; k < f->njob; k++) {   /* free any undrained microtask jobs */
+            for (int a = 0; a < f->jobs[k].argc; a++) JS_FreeValue(ctx, f->jobs[k].argv[a]);
+            free(f->jobs[k].argv);
+        }
+        free(f->jobs);
+        free(f);
     }
     free(g_flows); g_flows = NULL; g_flows_n = g_flows_cap = 0;
 }

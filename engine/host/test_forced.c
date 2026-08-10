@@ -680,24 +680,19 @@ static const char *HTML =
     "var lhHost = document.createElement('div'); document.body.appendChild(lhHost);"
     "lhHost.innerHTML = location.hash;"
     /* THE OUTCOME FORK AT A C BUILTIN. `JSON.parse` of unknown text has two feasible completions — 25.5.1
-       step 8's value and step 2's SyntaxError — and until the fork existed the engine ABORTED here rather
-       than pick one, because picking deletes the arm the `catch` and everything behind it lives on. BOTH
-       endpoints below must appear in ONE run: two flows, one snapshot-forked from the other AT the builtin.
+       step 8's value and step 2's SyntaxError — and a builtin that picks one has DELETED the arm the `catch`
+       and everything behind it lives on. BOTH endpoints below must appear in ONE run: two flows, one
+       snapshot-forked from the other AT the builtin.
        AND THE REFINEMENT, which is the negative half and the reason this is two statements and not one: the
        SAME builtin over `location.hash` ITSELF has only ONE feasible completion, because the component that
        owns that source declares what the browser delivers — the empty string or `#` followed by the fragment,
        neither of which is a JSON text. So that one must throw with NO fork, exactly as V8 does, and
        /api/jsonrawok must never be reached. Asserting only the fork would pass with the refinement absent;
        asserting only the throw would pass with the fork absent. */
-    "fetch('/api/jprobe?a=' + location.hash.slice(1));"
     "try { JSON.parse(location.hash.slice(1)); fetch('/api/jsonok'); }"
     "catch (jpe) { fetch('/api/jsonthrew?n=' + jpe.name); }"
     "try { JSON.parse(location.hash); fetch('/api/jsonrawok'); }"
     "catch (jpe2) { fetch('/api/jsonrawthrew?n=' + jpe2.name); }"
-    /* THE UNBOUNDED CASE OF THE SAME PRIMITIVE. Iterating an UNKNOWN collection asks the same question once
-       per position — "is there another element?" — and each position is its OWN predicate, so it forks per
-       iteration and each iteration is a parkable flow. No seen-set, no cap, no fixpoint: it behaves like
-       "once" only because the identical-input tail emits nothing new and is outranked and paged. */
     "fetch('/api/locsrc?o=' + location.origin + '&pn=' + location.pathname);"
     /* §3.1.5's element shortcuts and §4.5's createDocumentFragment. All five shortcuts are LIVE
        HTMLCollections over the document — a bundle scanner reaches for document.scripts and document.forms in
