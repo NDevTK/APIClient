@@ -624,6 +624,10 @@ static void dom_release_created(DomUndo *u)
                "it was never unapplied, so freeing it would leave that element's list naming freed memory");
         DCHECK(g_cow_ctx != NULL, "a created attribute was freed with no context named — an Attr is a WRAPPED "
                                   "node and the identity map has to be told (dom_cow_set_ctx names the runtime)");
+        /* AND THE TAINT SHADOW, for the same reason and in the same breath as the wrapper: a detached attribute
+           keys its shadow on ITSELF, lexbor hands attributes out of a pool, and an entry left naming this
+           address is inherited by the next attribute allocated at it. */
+        attr_shadow_forget(g_cow_ctx, a);
         dom_attr_destroy(g_cow_ctx, a);
         u->node = NULL;   /* the entry has spent its claim; nothing may act on it twice */
         return;

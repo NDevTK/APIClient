@@ -45,6 +45,12 @@ void attr_shadow_set(JSContext *ctx, const void *owner, int kind, const char *ns
     g_attr_shadow[g_attr_shadow_n].opaque = JS_DupValue(ctx, opaque); g_attr_shadow_n++;
 }
 JSValue attr_shadow_opaque(int i) { return g_attr_shadow[i].opaque; }   /* borrowed */
+void attr_shadow_forget(JSContext *ctx, const void *owner) {
+    /* BACKWARDS, because shadow_drop fills the hole from the END: walking forwards would step over the entry it
+       just moved into `i` and leave one of this owner's behind. */
+    for (int i = g_attr_shadow_n - 1; i >= 0; i--)
+        if (g_attr_shadow[i].owner == owner) shadow_drop(ctx, i);
+}
 void attr_shadow_free(JSContext *ctx) {
     for (int i = 0; i < g_attr_shadow_n; i++) { JS_FreeValue(ctx, g_attr_shadow[i].opaque);
         free(g_attr_shadow[i].name); free(g_attr_shadow[i].ns); }
