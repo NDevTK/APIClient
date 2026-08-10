@@ -125,11 +125,16 @@ static JSValue rendering_collect_docs(JSContext *ctx)
                     "CONCOLIC source (concolic_source_wrap) and `if (document.hidden) return;` — a guard that "
                     "hides polling and analytics endpoints — must FORK. This C read cannot fork, so it "
                     "concretizes on the pin exactly as CLAUDE.md's CONCRETIZE-ON-PIN says: the forked "
-                    "hidden-arm has the source pinned true and gets NO rendering opportunity (a browser "
-                    "throttles a hidden tab to zero frames), the primary arm is pinned false, and an unpinned "
-                    "read takes the example. concolic.c HAS that per-flow pin state (pin_of, suspended and "
-                    "resumed with the flow) and does not export it — one accessor is what this needs. "
-                    "Hardcoding \"visible\" here would be the second answer to one fact");
+                    "hidden-arm has the source decided TRUE and gets NO rendering opportunity (a browser "
+                    "throttles a hidden tab to zero frames), the primary arm is decided false, and an "
+                    "undecided read takes the example. concolic_branch_decided(src) ALREADY ANSWERS THAT and "
+                    "is already public in concolic.h — a bare truthiness test keys on the source path and the "
+                    "map suspends and resumes with the flow, so this read needs NO new primitive. What DOES "
+                    "need deciding first is that `hidden` and `visibilityState` are ONE fact behind TWO IDL "
+                    "members: two concolic sources would be the second answer this whole message is about, "
+                    "and the equality form (`visibilityState === \"hidden\"`) records a VALUE pin under a "
+                    "different key that concolic.h exports no reader for. Hardcoding \"visible\" here is the "
+                    "one thing that is certainly wrong");
         if (!document_render_blocked(docctx) && doc_has_rendering_work(docctx))
             JS_SetPropertyUint32(ctx, docs, ndocs++, JS_DupValue(ctx, proxy));
         JS_FreeValue(ctx, proxy);
