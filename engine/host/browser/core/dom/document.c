@@ -590,6 +590,83 @@ static JSValue js_doc_create_text(JSContext *ctx, JSValueConst this_val, int arg
     return node_wrap(ctx, lxb_dom_interface_node(t));
 }
 
+/* §4.5 `new Document()` — "set this's origin to the origin of current global object's associated Document",
+   and nothing else: the document it makes has NO tree, no doctype and no document element, its URL is
+   `about:blank` and its content type is `application/xml`. It is the ONE way a page gets an XML document
+   without going through DOMImplementation, and dom/common.js opens with it.
+   The Document is built here rather than by the interface object's shared throw because §4.5's IDL declares a
+   constructor; `node_install_interface` is for the interfaces that declare none. */
+static JSValue js_doc_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv, int magic)
+{
+    lxb_html_document_t *dom;
+
+    (void)new_target; (void)argc; (void)argv; (void)magic;
+    dom = lxb_html_document_create();
+    CHECK(dom != NULL, "new Document(): OOM building a second Document");
+    /* The ORIGIN is the constructing realm's document's, which document_new takes from the realm it runs in —
+       the same rule createDocument's step 6 states, and the reason this is not `document_install`. */
+    return document_new(ctx, dom, "about:blank", "application/xml");
+}
+
+/* §4.5.1 `createCDATASection(data)` and `createProcessingInstruction(target, data)` — the two node factories
+   an XML document has and an HTML one does not, and the reason they are here rather than absent: dom/common.js
+   builds `paras[5]` out of two CDATA sections and `xmlDoc` out of two processing instructions, so EVERY
+   §5 and §6 test file that includes it threw inside its own setup and reported zero subtests. That is the
+   excluded-test defect wearing a page's TypeError: fifteen files ERRORed at load, and the count looked like
+   fifteen rather than like the hundreds of subtests they contain.
+   magic 0 = createCDATASection, 1 = createProcessingInstruction. */
+static JSValue js_doc_create_xml_node(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                      int magic)
+{
+    Document *d = doc_receiver(ctx, this_val);
+    lxb_dom_document_t *dom;
+    const char *data, *target = NULL;
+    size_t dlen = 0, tlen = 0;
+    lxb_dom_node_t *made = NULL;
+    JSValue r;
+
+    if (!d) return JS_EXCEPTION;
+    dom = lxb_dom_interface_document(d->dom);
+    if (magic == 0) {
+        /* STEP 1. `createCDATASection` on an HTML document is a NotSupportedError — this engine's documents
+           are HTML unless createDocument or `new Document()` made them, and the content type is what says so.
+           §4.5's own words are "if this is an HTML document"; the content type is how a Document records it. */
+        if (!strcmp(d->content_type, "text/html"))
+            return JS_ThrowDOMException(ctx, "NotSupportedError",
+                                        "an HTML document has no CDATA sections");
+    } else {
+        target = JS_ToCStringLen(ctx, &tlen, argv[0]);
+        if (!target) return JS_EXCEPTION;
+    }
+    data = JS_ToCStringLen(ctx, &dlen, argv[magic == 0 ? 0 : 1]);
+    if (!data) { if (target) JS_FreeCString(ctx, target); return JS_EXCEPTION; }
+    /* STEP 2 in both algorithms: the one sequence the node's own serialization cannot survive. */
+    if (magic == 0 ? (strstr(data, "]]>") != NULL) : (strstr(data, "?>") != NULL)) {
+        JS_FreeCString(ctx, data);
+        if (target) JS_FreeCString(ctx, target);
+        return JS_ThrowDOMException(ctx, "InvalidCharacterError",
+                                    magic == 0 ? "a CDATA section cannot contain \"]]>\""
+                                               : "a processing instruction cannot contain \"?>\"");
+    }
+    if (magic == 0) {
+        lxb_dom_cdata_section_t *c =
+            lxb_dom_document_create_cdata_section(dom, (const lxb_char_t *)data, dlen);
+        CHECK(c != NULL, "createCDATASection: the Lexbor node allocation failed");
+        made = lxb_dom_interface_node(c);
+    } else {
+        lxb_dom_processing_instruction_t *pi =
+            lxb_dom_document_create_processing_instruction(dom, (const lxb_char_t *)target, tlen,
+                                                           (const lxb_char_t *)data, dlen);
+        CHECK(pi != NULL, "createProcessingInstruction: the Lexbor node allocation failed");
+        made = lxb_dom_interface_node(pi);
+    }
+    dom_cow_note_created(made);   /* this flow made it; detached until the page inserts it */
+    JS_FreeCString(ctx, data);
+    if (target) JS_FreeCString(ctx, target);
+    r = node_wrap(ctx, made);
+    return r;
+}
+
 static JSValue js_doc_create_comment(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     (void)magic;
@@ -1092,7 +1169,8 @@ static JSValue js_doc_create_event(JSContext *ctx, JSValueConst this_val, int ar
 static JSClassID g_document_class;   /* §3.1.1's prototype slot, per realm */
 static int g_id_create_element = -1, g_id_create_text = -1, g_id_create_comment = -1,
            g_id_create_fragment = -1, g_id_create_element_ns = -1, g_id_create_iterator = -1,
-           g_id_create_walker = -1, g_id_create_range = -1, g_id_create_event = -1;
+           g_id_create_walker = -1, g_id_create_range = -1, g_id_create_event = -1,
+           g_id_create_cdata = -1, g_id_create_pi = -1, g_id_doc_ctor = -1;
 
 static void document_declare_members(JSContext *ctx)
 {
@@ -1101,6 +1179,11 @@ static void document_declare_members(JSContext *ctx)
     g_id_create_element = idl_method_id_step(ctx, IDL_1STR, 1, NULL, 0, &DOC_CREATE_EL_STEP, 0);
     g_id_create_text = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_text, 0);
     g_id_create_comment = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_comment, 0);
+    g_id_create_cdata = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_xml_node, 0);
+    g_id_create_pi = idl_method_id(ctx, IDL_2STR, 2, js_doc_create_xml_node, 1);
+    /* §4.5's `[Exposed=Window] interface Document { constructor(); }` — the interface object is CONSTRUCTIBLE,
+       which it was not, and `new Document()` is how a page gets an XML document without DOMImplementation. */
+    g_id_doc_ctor = idl_method_id(ctx, NULL, 0, js_doc_ctor, 0);
     g_id_create_fragment = idl_method_id(ctx, NULL, 0, js_doc_create_fragment, 0);
     g_id_create_element_ns = idl_method_id(ctx, IDL_2STR, 2, js_doc_create_element_ns, 0);
     {
@@ -1124,6 +1207,8 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     idl_install_method(ctx, proto, "createElement", 1, g_id_create_element);
     idl_install_method(ctx, proto, "createTextNode", 1, g_id_create_text);
     idl_install_method(ctx, proto, "createComment", 1, g_id_create_comment);
+    idl_install_method(ctx, proto, "createCDATASection", 1, g_id_create_cdata);
+    idl_install_method(ctx, proto, "createProcessingInstruction", 2, g_id_create_pi);
     idl_install_method(ctx, proto, "createDocumentFragment", 0, g_id_create_fragment);
     {
         /* §3.1.5's five element shortcuts, each a LIVE HTMLCollection over the document. */
@@ -1522,8 +1607,11 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     document_type_install(ctx, global);     /* §4.6 DocumentType */
     dom_implementation_install(ctx, global);/* §4.5.1 DOMImplementation */
     {
+        /* §4.5 declares a CONSTRUCTOR, so `Document` is not one of the interface objects whose call is the
+           shared "Illegal constructor" throw. */
         JSValue dp = node_type_proto(ctx, LXB_DOM_NODE_TYPE_DOCUMENT);
-        node_install_interface(ctx, global, "Document", dp);
+        node_install_interface_ctor(ctx, global, "Document", dp,
+                                    idl_step_constructor(ctx, "Document", 0, g_id_doc_ctor));
         JS_FreeValue(ctx, dp);
     }
     /* §4.8.5 FOR THE TREE THE PARSER BUILT. Insertion steps run during tree construction in a browser, so an
