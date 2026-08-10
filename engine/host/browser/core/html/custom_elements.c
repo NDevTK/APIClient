@@ -16,14 +16,18 @@
  *
  * A REACTION IS ENQUEUED, NEVER CALLED. connectedCallback is the page's code with loops and awaits in it, and
  * the insertion that triggers it happens inside appendChild — a plain C body that cannot park. So the reaction
- * goes on the job queue as a first-class flow, the same way the engine's own event firing does.
- * WHICH IS §4.13.6'S BACKUP ELEMENT QUEUE, and only that one. The spec enqueues onto the backup queue exactly
- * when the custom element reactions STACK is empty, and it is always empty here because no `[CEReactions]`
- * member pushes onto one — so every reaction runs at the next microtask instead of before the API that caused
- * it returns. A page that appends an element and reads state its connectedCallback set on the next line sees
- * the state unset. The stack is the missing mechanism, and the place it belongs is the one point every declared
- * member already converges on: idl_args.c's post-body drain, which needs an EPILOGUE STAGE rather than a
- * `bool step()`, because invoking a reaction runs the page's code and must be able to park.
+ * goes on an ELEMENT QUEUE, and §4.13.6 decides which one: the top of the agent's custom element REACTIONS
+ * STACK when a `[CEReactions]` member is on it, and the BACKUP element queue (drained by a microtask) when the
+ * stack is empty. Every reaction used to take the backup arm, because nothing pushed a queue — so a page that
+ * appended an element and read state its connectedCallback set ON THE NEXT LINE saw the state unset, which is
+ * the ordering the whole of §4.13.6 exists to give. The stack is built here and pushed at the one point every
+ * declared member already converges on: idl_args.c, which pushes before the body and INVOKES after it, because
+ * invoking a reaction runs the page's code and must be able to park.
+ *
+ * THE QUEUE IS A JS VALUE, NOT A MALLOC'D LIST, and so is every element's own reaction queue (an own slot on
+ * its wrapper under a private symbol). Both are per-flow for free — a reaction enqueued in one forked arm is
+ * invisible to its sibling — and both park to the cold tier with the flow that holds them. A C list captured
+ * by its head pointer would revert the POINTER on a context switch and leave the nodes reachable from nothing.
  *
  * WHAT IS HONESTLY ABSENT: adoptedCallback (no adoption reaction yet) and customized built-ins (`extends`),
  * which §4.13.4 rejects here rather than registering as autonomous — a silently-wrong registration is worse
@@ -100,8 +104,6 @@ enum { CE_LIFECYCLE_CALLBACKS(CE_CB_ID) CE_CB_COUNT };
 static const char *const CE_CALLBACK_NAMES[CE_CB_COUNT] = { CE_LIFECYCLE_CALLBACKS(CE_CB_NAME) };
 static JSAtom g_cb_atoms[CE_CB_COUNT];
 static int    g_id_define, g_id_get;   /* declared once per agent — see custom_elements_init */
-static int    g_reaction_stepid = -1;
-static JSValue g_reaction_fn;
 
 /* The definition for a name, or JS_UNDEFINED. OWNED by the caller. */
 static JSValue ce_find(JSContext *ctx, const char *name, size_t len)
@@ -130,86 +132,268 @@ static bool ce_name_valid(const char *name, size_t len)
     return false;
 }
 
-/* attributeChangedCallback's (name, oldValue, newValue) — the widest lifecycle callback there is. */
-#define CE_MAX_REACTION_ARGS 3
+/* ---- §4.13.6 the custom element reactions stack ------------------------------------------------------------
+   THE QUEUES AND EVERY REACTION ON THEM ARE JS VALUES. A reaction has to fork per flow (two arms of a branch
+   that both append an element each have their own connectedCallback pending) and it has to PARK to the cold
+   tier with the flow holding it, and a JS Array does both for free: its mutations are property writes the COW
+   delta already captures — and an Array a FLOW created is flow-private, so a member's own queue costs the
+   delta nothing at all.
+   A REACTION is « callback function, arguments… » as one Array; an ELEMENT QUEUE is an Array of element
+   wrappers; an element's own REACTION QUEUE is an Array on an own slot of its wrapper under a private symbol,
+   so it is per-flow exactly like every other own property of that wrapper.
+   THERE IS NO STACK ARRAY, and that is not a shortcut. §4.13.6's reactions stack exists to model the NESTING of
+   `[CEReactions]` invocations, and with the trampoline a declared member's own steps run inside exactly one C
+   activation of the IDL machine — so the "current element queue" is that machine's, for exactly as long as
+   that call lasts, and the nesting is one frame deep by construction. A shared stack Array would be BASELINE
+   state written twice per member call, which is a delta entry per DOM API call for bookkeeping no flow needs
+   to time-travel: measured at 2927 entries per context switch against 219 without it. */
+static CustomElementQueue *g_current;   /* the innermost declared member's queue, while its own steps run */
+static JSValue g_ce_backup = JS_UNDEFINED;   /* §4.13.6's backup element queue */
+static JSValue g_rq_key = JS_UNDEFINED;      /* the element's reaction-queue slot key (a Symbol) */
+static JSAtom  g_atom_rq = JS_ATOM_NULL;
+/* THE CONSUMED CURSOR OF A REACTION QUEUE, as a property of the queue itself rather than a C counter: §4.13.6
+   step 1.3 repeats "remove the first reaction" until the queue is EMPTY, and a callback may append to the very
+   queue being drained. A head index makes the removal O(1) and keeps the append visible, and being a property
+   it forks and parks with the flow like the queue it indexes. */
+static JSAtom  g_atom_rq_head = JS_ATOM_NULL;
+/* §4.13.6's "processing the backup element queue" flag, on the backup queue itself for the same reason. */
+static JSAtom  g_atom_backup_flag = JS_ATOM_NULL;
+static int     g_backup_stepid = -1;
+static JSValue g_backup_fn = JS_UNDEFINED;
 
-/* ---- the reaction ---------------------------------------------------------------------------------------- */
-/* THE REACTION FLOW: call the reaction's callback function with the element as the receiver. ONE machine for
-   every lifecycle callback rather than one per name: what differs between connected and disconnected is WHICH
-   FUNCTION, which is data, and the reaction queue carries it as the job's second argument.
-   THE CALLBACK ARRIVES WITH THE REACTION; it is not read here. §4.13.4 step 14.4 collects the lifecycle
-   callbacks off the constructor's PROTOTYPE when define() runs, and §4.13.6's "enqueue a custom element
-   callback reaction" reads the collected one off the element's definition — so a page that reassigns
-   `X.prototype.connectedCallback` after define() changes nothing, exactly as in a browser, and an OWN
-   `el.connectedCallback` is not a callback at all. Reading it off the ELEMENT at reaction time answered both
-   of those the other way round. */
-/* WHERE THIS MACHINE RESTS. §4.13.6 invokes a callback reaction by calling its callback function with the
-   element as the callback this value; the operands are the dequeued reaction and the one thing that reaches
-   the page's code is the call. */
-#define CE_REACTION_STAGES(X) \
-    X(CEREACT_ELEMENT, "HTML §4.13.6 invoke custom element reactions step 1.3.1 (the dequeued callback " \
-                       "reaction: its element, and the callback function §4.13.4 step 14.4 collected)") \
-    X(CEREACT_INVOKE,  "HTML §4.13.6 step 1.3.1 (invoke the callback function with its arguments and " \
-                       "this = element)")
-enum { CE_REACTION_STAGES(JS_STEP_STAGE_ENUM) };
-static const char *const CE_REACTION_STEPS[] = { CE_REACTION_STAGES(JS_STEP_STAGE_LABEL) NULL };
-
-typedef struct JSCeReaction {
-    JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
-    uint8_t   cphase;   /* the call request's own phase */
-    JSValue   cb[2 + CE_MAX_REACTION_ARGS];   /* the call request buffer: [this, callback, args…] */
-} JSCeReaction;
-
-static void js_ce_reaction_visit(JSContext *ctx, void *st, JSStepVisit *v)
+static uint32_t ce_array_len(JSContext *ctx, JSValueConst arr)
 {
-    JSCeReaction *s = st;
-    int k;
-    for (k = 0; k < 2 + CE_MAX_REACTION_ARGS; k++)
-        v->val(ctx, &s->cb[k]);
+    JSValue lv = JS_GetPropertyStr(ctx, arr, "length");
+    uint32_t n = 0;
+    JS_ToUint32(ctx, &n, lv);
+    JS_FreeValue(ctx, lv);
+    return n;
 }
 
-static JSValue js_ce_reaction_fini(JSContext *ctx, void *st, bool take_result)
+/* Append to an Array — one write the COW delta captures, which is the whole reason these are Arrays. */
+static void ce_array_push(JSContext *ctx, JSValueConst arr, JSValue v)
 {
-    JSCeReaction *s = st;
-    int k;
-    (void)take_result;
-    for (k = 0; k < 2 + CE_MAX_REACTION_ARGS; k++) {
-        JS_FreeValue(ctx, s->cb[k]);
-        s->cb[k] = JS_UNDEFINED;
+    JS_SetPropertyUint32(ctx, (JSValue)arr, ce_array_len(ctx, arr), v);
+}
+
+static void ce_array_set_len(JSContext *ctx, JSValueConst arr, uint32_t n)
+{
+    JS_SetPropertyStr(ctx, (JSValue)arr, "length", JS_NewUint32(ctx, n));
+}
+
+/* An element's own reaction queue, created on first use. OWNED by the caller. */
+static JSValue ce_reaction_queue(JSContext *ctx, JSValueConst wrap, int create)
+{
+    JSValue q;
+
+    if (JS_GetOwnSlot(ctx, &q, wrap, g_atom_rq) > 0 && JS_IsObject(q)) return q;
+    if (JS_GetOwnSlot(ctx, &q, wrap, g_atom_rq) > 0) JS_FreeValue(ctx, q);
+    if (!create) return JS_UNDEFINED;
+    q = JS_NewArray(ctx);
+    CHECK(!JS_IsException(q), "an element's custom element reaction queue could not be allocated");
+    JS_SetPropertyUint32(ctx, q, 0, JS_UNDEFINED);        /* materialise the array before the head cursor */
+    ce_array_set_len(ctx, q, 0);
+    JS_SetProperty(ctx, q, g_atom_rq_head, JS_NewUint32(ctx, 0));
+    JS_DefinePropertyValue(ctx, (JSValue)wrap, g_atom_rq, JS_DupValue(ctx, q), 0);
+    return q;
+}
+
+/* §4.13.6 "enqueue an element on the appropriate element queue". The BRANCH is the whole algorithm: with a
+   `[CEReactions]` member running the element joins THAT member's queue and its reactions run before the member
+   returns; with none running it joins the backup queue and a microtask drains it. */
+static void ce_enqueue_element(JSContext *ctx, JSValueConst wrap)
+{
+    if (g_current) {                                        /* step 3: the current element queue */
+        if (JS_IsUndefined(g_current->queue)) {
+            /* CREATED BY THE FIRST ENQUEUE, so a member that touches no custom element allocates nothing — and
+               so the Array belongs to the running FLOW and its appends never reach the COW delta. */
+            g_current->queue = JS_NewArray(ctx);
+            CHECK(!JS_IsException(g_current->queue), "a §4.13.6 element queue could not be allocated");
+            g_current->i = 0;
+        }
+        ce_array_push(ctx, g_current->queue, JS_DupValue(ctx, wrap));
+        return;
     }
+    /* step 2: the backup element queue, and a microtask to invoke it — queued once, which is what the flag is
+       for. The microtask is an ordinary job, so the drain is a first-class flow like every other. */
+    ce_array_push(ctx, g_ce_backup, JS_DupValue(ctx, wrap));
+    {
+        JSValue f = JS_GetProperty(ctx, g_ce_backup, g_atom_backup_flag);
+        int set = JS_ToBool(ctx, f);
+        JS_FreeValue(ctx, f);
+        if (set) return;
+        JS_SetProperty(ctx, g_ce_backup, g_atom_backup_flag, JS_TRUE);
+    }
+    DCHECK(JS_IsObject(g_backup_fn),
+           "a reaction reached the backup element queue before custom_elements_init built its microtask driver");
+    JS_EnqueueCallJob(ctx, g_backup_fn, 0, NULL);
+}
+
+void custom_elements_reactions_push(CustomElementQueue *q)
+{
+    DCHECK(g_current == NULL, "a declared member began its steps while another member's element queue was "
+                              "still current — a member parks by RETURNING, so nothing can run between the "
+                              "push and the pop and this nesting cannot exist");
+    g_current = q;
+}
+
+void custom_elements_reactions_pop(void)
+{
+    g_current = NULL;
+}
+
+void custom_elements_queue_init(CustomElementQueue *q)
+{
+    int k;
+    q->queue = JS_UNDEFINED;
+    q->i = 0;
+    q->phase = 0;
+    for (k = 0; k < 2 + CE_MAX_REACTION_ARGS; k++) q->cb[k] = JS_UNDEFINED;
+}
+
+void custom_elements_queue_visit(JSContext *ctx, CustomElementQueue *q, JSStepVisit *v)
+{
+    int k;
+    v->val(ctx, &q->queue);
+    for (k = 0; k < 2 + CE_MAX_REACTION_ARGS; k++) v->val(ctx, &q->cb[k]);
+}
+
+void custom_elements_queue_release(JSContext *ctx, CustomElementQueue *q)
+{
+    int k;
+    JS_FreeValue(ctx, q->queue);
+    q->queue = JS_UNDEFINED;
+    for (k = 0; k < 2 + CE_MAX_REACTION_ARGS; k++) {
+        JS_FreeValue(ctx, q->cb[k]);
+        q->cb[k] = JS_UNDEFINED;
+    }
+}
+
+/* §4.13.6 "invoke custom element reactions in an element queue", one reaction per entry.
+   THE POP HAPPENS FIRST AND IT IS OBSERVABLE: step 3 removes the queue from the stack BEFORE step 4 invokes it,
+   so a reaction that itself mutates the DOM enqueues onto whatever is on the stack THEN — an outer
+   `[CEReactions]` member's queue, or the backup queue — and never back onto the one being drained.
+   Returns JS_STEP_CALL parked on one reaction (the caller returns it), or 0 when the queue is exhausted. */
+int custom_elements_reactions_invoke(JSContext *ctx, CustomElementQueue *q, JSValue cb_result,
+                                     JSValue **out_cb, int *out_argc)
+{
+    /* STEP 3 already happened: the queue stopped being current the moment the member's own steps returned,
+       which is what makes a reaction that mutates the DOM enqueue onto the NEXT member's queue (or the backup
+       one) and never back onto the one being drained. An empty queue is the overwhelmingly common case — a
+       member that touched no custom element never allocated one. */
+    if (!g_ready || JS_IsUndefined(q->queue)) { JS_FreeValue(ctx, cb_result); return 0; }
+    for (;;) {
+        uint32_t n = ce_array_len(ctx, q->queue);
+        JSValue el, rq, head_v, reaction, fn;
+        uint32_t head, rn;
+        int nargs, k, r;
+        JSValue args[CE_MAX_REACTION_ARGS], ignored;
+
+        if (q->i >= n) {                                  /* step 1: the queue is empty */
+            JS_FreeValue(ctx, cb_result);
+            JS_FreeValue(ctx, q->queue);
+            q->queue = JS_UNDEFINED;
+            return 0;
+        }
+        el = JS_GetPropertyUint32(ctx, q->queue, q->i);   /* step 1.1: dequeue element */
+        rq = ce_reaction_queue(ctx, el, 0);               /* step 1.2: its reaction queue */
+        head_v = JS_IsObject(rq) ? JS_GetProperty(ctx, rq, g_atom_rq_head) : JS_UNDEFINED;
+        head = 0;
+        JS_ToUint32(ctx, &head, head_v);
+        JS_FreeValue(ctx, head_v);
+        rn = JS_IsObject(rq) ? ce_array_len(ctx, rq) : 0;
+        if (head >= rn) {                                 /* step 1.3: this element's reactions are exhausted */
+            if (JS_IsObject(rq)) {                        /* the removal §4.13.6 performs, as one truncation */
+                ce_array_set_len(ctx, rq, 0);
+                JS_SetProperty(ctx, rq, g_atom_rq_head, JS_NewUint32(ctx, 0));
+            }
+            JS_FreeValue(ctx, rq);
+            JS_FreeValue(ctx, el);
+            q->i++;
+            continue;
+        }
+        /* PEEKED, NOT REMOVED, UNTIL THE CALL COMPLETES. The invoke parks on the page's code and this function
+           is re-entered from the top, so advancing the head before the call would resume on the NEXT reaction
+           and drop the one whose answer just arrived. */
+        reaction = JS_GetPropertyUint32(ctx, rq, head);
+        DCHECK(JS_IsObject(reaction), "an element's reaction queue holds something that is not a reaction");
+        fn = JS_GetPropertyUint32(ctx, reaction, 0);
+        nargs = (int)ce_array_len(ctx, reaction) - 1;
+        DCHECK(nargs >= 0 && nargs <= CE_MAX_REACTION_ARGS,
+               "a lifecycle callback reaction carries more arguments than any of them takes");
+        for (k = 0; k < nargs; k++) args[k] = JS_GetPropertyUint32(ctx, reaction, (uint32_t)(k + 1));
+        /* step 1.3.1: invoke the callback function with its arguments and "report", this = element. */
+        r = step_call_run(ctx, &q->phase, q->cb, 2 + CE_MAX_REACTION_ARGS, fn, el, nargs,
+                          (JSValueConst *)args, cb_result, &ignored, out_cb, out_argc);
+        for (k = 0; k < nargs; k++) JS_FreeValue(ctx, args[k]);
+        JS_FreeValue(ctx, fn);
+        JS_FreeValue(ctx, reaction);
+        if (r > 0) {                                      /* parked on the page's code */
+            JS_FreeValue(ctx, rq);
+            JS_FreeValue(ctx, el);
+            return JS_STEP_CALL;
+        }
+        JS_FreeValue(ctx, ignored);                       /* §4.13.3: a reaction's return value is discarded */
+        cb_result = JS_UNDEFINED;
+        JS_SetProperty(ctx, rq, g_atom_rq_head, JS_NewUint32(ctx, head + 1));   /* NOW it is removed */
+        JS_FreeValue(ctx, rq);
+        JS_FreeValue(ctx, el);
+    }
+}
+
+/* THE BACKUP QUEUE'S MICROTASK — §4.13.6 step 2.4, and the ONE place a reaction runs when no `[CEReactions]`
+   member is on the stack (the parser's own mutations, an engine-driven insertion). It is the same invoke over
+   a queue that was never on the stack, so it takes the same machine with the queue handed to it directly. */
+#define CE_BACKUP_STAGES(X) \
+    X(CEBACKUP_INVOKE, "HTML §4.13.6 enqueue an element on the appropriate element queue step 2.4 (invoke " \
+                       "custom element reactions in the backup element queue), one reaction per step")
+enum { CE_BACKUP_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CE_BACKUP_STEPS[] = { CE_BACKUP_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct JSCeBackup {
+    JSStepHdr          hdr;    /* FIRST — the driver writes the def and the operand bounds through it */
+    CustomElementQueue q;
+} JSCeBackup;
+
+static void js_ce_backup_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSCeBackup *s = st;
+    custom_elements_queue_visit(ctx, &s->q, v);
+}
+
+static JSValue js_ce_backup_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSCeBackup *s = st;
+    (void)take_result;
+    custom_elements_queue_release(ctx, &s->q);
     return JS_UNDEFINED;
 }
 
-static int js_ce_reaction_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+static int js_ce_backup_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
-    JSCeReaction *s = st;
-    JSValueConst el = step_arg(&s->hdr, 0), fn = step_arg(&s->hdr, 1);
-    JSValue ignored;
+    JSCeBackup *s = st;
     int r;
 
-    if (s->hdr.stage == CEREACT_ELEMENT) {
-        for (r = 0; r < 2 + CE_MAX_REACTION_ARGS; r++) s->cb[r] = JS_UNDEFINED;
-        s->hdr.stage = CEREACT_INVOKE;
-        /* The enqueue is what decides a reaction exists: §4.13.6's step 3 drops one whose collected callback is
-           null, so a reaction that reached here has a callable one and an element to run it on. */
-        DCHECK(JS_IsObject(el) && JS_IsFunction(ctx, fn),
-               "a custom-element callback reaction was enqueued without an element and a callback function — "
-               "§4.13.6 step 3 drops a null callback at the ENQUEUE, so one cannot arrive here");
+    DCHECK(s->hdr.stage == CEBACKUP_INVOKE,
+           "the backup element queue's drain resumed into a stage §4.13.6 does not have");
+    if (JS_IsUndefined(s->q.queue) && s->q.phase == 0) {
+        /* THE QUEUE IS TAKEN WHOLE, and the flag is unset with it (step 2.4's second half): a reaction that
+           runs during the drain and enqueues onto an empty stack must schedule a NEW microtask, not append to
+           the batch already in flight. */
+        s->q.queue = JS_DupValue(ctx, g_ce_backup);
+        s->q.i = 0;
+        g_ce_backup = JS_NewArray(ctx);
+        CHECK(!JS_IsException(g_ce_backup), "the backup element queue could not be replaced");
+        JS_SetProperty(ctx, g_ce_backup, g_atom_backup_flag, JS_FALSE);
     }
-    DCHECK(s->hdr.stage == CEREACT_INVOKE, "a custom-element reaction resumed into a stage §4.13.6 does not have");
-    /* Everything past the element and the callback is the callback's own arguments. */
-    r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), fn, el, s->hdr.argc - 2,
-                      s->hdr.argc > 2 ? (JSValueConst *)s->hdr.argv + 2 : NULL,
-                      cb_result, &ignored, out_cb, out_argc);
-    if (r > 0) return r;
-    JS_FreeValue(ctx, ignored);   /* §4.13.3: a reaction's return value is discarded */
-    return JS_STEP_DONE;
+    r = custom_elements_reactions_invoke(ctx, &s->q, cb_result, out_cb, out_argc);
+    return r ? r : JS_STEP_DONE;
 }
 
-static const JSTrampStepDef js_ce_reaction_def = {
-    sizeof(JSCeReaction), js_ce_reaction_step, js_ce_reaction_fini, 0, .visit = js_ce_reaction_visit,
-    .algorithm = "HTML §4.13.6 invoke custom element reactions in an element queue, for one callback "
-                 "reaction", .steps = CE_REACTION_STEPS
+static const JSTrampStepDef js_ce_backup_def = {
+    sizeof(JSCeBackup), js_ce_backup_step, js_ce_backup_fini, 0, .visit = js_ce_backup_visit,
+    .algorithm = "HTML §4.13.6 invoke custom element reactions in the backup element queue",
+    .steps = CE_BACKUP_STEPS
 };
 
 /* ---- the upgrade ------------------------------------------------------------------------------------------ */
@@ -229,23 +413,23 @@ static JSValue ce_definition_of(JSContext *ctx, JSValueConst wrap)
 /* §4.13.6 "enqueue a custom element callback reaction", steps 1-3 and 5-6. The callback is the one step 14.4
    COLLECTED into this element's definition, and step 3 returns without a reaction when it is null — which is
    why a class that declares no `disconnectedCallback` costs nothing at every removal.
-   A JOB, so the callback runs as a call-root flow: preemptible, forkable and parkable like any other program.
-   Calling it here would be a C activation hosting the page's loops, which is the drive-to-completion this
-   engine aborts on. */
+   STEP 5 ADDS IT TO THE ELEMENT'S OWN REACTION QUEUE and step 6 puts the ELEMENT on an element queue. Those are
+   two lists and not one, and the difference is observable: §4.13.6's invoke dequeues an element and then drains
+   ALL of that element's reactions, so `el.setAttribute(a,1); other.setAttribute(b,2); el.setAttribute(a,3)`
+   inside one `[CEReactions]` boundary runs el's two callbacks back to back. A single flat list of reactions
+   would interleave them, which is a different program order for the page. */
 static void ce_enqueue_args(JSContext *ctx, JSValueConst wrap, JSValueConst def, int callback,
                             int argc, JSValueConst *args)
 {
-    JSValueConst argv[2 + CE_MAX_REACTION_ARGS];
-    JSValue fn, cbs;
+    JSValue fn, cbs, reaction, rq;
     int i;
 
-    DCHECK(JS_IsObject(g_reaction_fn),
-           "a custom-element reaction was enqueued before custom_elements_init built its driver");
     DCHECK(argc <= CE_MAX_REACTION_ARGS,
            "a lifecycle callback was enqueued with more arguments than any of them takes");
     DCHECK(callback >= 0 && callback < CE_CB_COUNT,
            "a reaction was enqueued for a callback §4.13.4 step 14's map does not name");
     if (!JS_IsObject(def)) return;   /* step 1: an element with no definition has no reaction */
+    if (!JS_IsObject(wrap)) return;
     cbs = JS_GetProperty(ctx, def, g_atom_callbacks);
     DCHECK(JS_IsObject(cbs), "a custom element definition carries no step 14.4 callback map — every definition "
                              "this component commits builds one, so a missing map is a definition it did not "
@@ -253,11 +437,15 @@ static void ce_enqueue_args(JSContext *ctx, JSValueConst wrap, JSValueConst def,
     fn = JS_GetPropertyUint32(ctx, cbs, (uint32_t)callback);
     JS_FreeValue(ctx, cbs);
     if (!JS_IsFunction(ctx, fn)) { JS_FreeValue(ctx, fn); return; }   /* step 3: the entry is null */
-    argv[0] = wrap;
-    argv[1] = fn;
-    for (i = 0; i < argc; i++) argv[2 + i] = args[i];
-    JS_EnqueueCallJob(ctx, g_reaction_fn, 2 + argc, argv);
-    JS_FreeValue(ctx, fn);
+    reaction = JS_NewArray(ctx);
+    CHECK(!JS_IsException(reaction), "a custom element callback reaction could not be allocated");
+    JS_SetPropertyUint32(ctx, reaction, 0, fn);
+    for (i = 0; i < argc; i++)
+        JS_SetPropertyUint32(ctx, reaction, (uint32_t)(i + 1), JS_DupValue(ctx, args[i]));
+    rq = ce_reaction_queue(ctx, wrap, 1);   /* step 5 */
+    ce_array_push(ctx, rq, reaction);
+    JS_FreeValue(ctx, rq);
+    ce_enqueue_element(ctx, wrap);          /* step 6 */
 }
 
 static void ce_enqueue(JSContext *ctx, JSValueConst wrap, JSValueConst def, int callback)
@@ -707,11 +895,24 @@ void custom_elements_init(JSContext *ctx)
         CHECK(g_cb_atoms[k] != JS_ATOM_NULL, "a §4.13.4 step 14 lifecycle callback name could not be interned");
     }
     g_defs_slot = realm_value_declare(ctx, "§4.13.4 definition set");
-    g_reaction_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_ce_reaction_def);
-    /* The reaction driver is a step function object nobody installs, so a page can neither see it nor replace
+    /* §4.13.6's stack, its backup queue and the two private keys the queues are read through. Built here, in
+       the agent's own pre-boot realm, so a flow's push is captured by the heap COW rather than being that
+       flow's private object. */
+    g_rq_key = JS_NewSymbol(ctx, "customElementReactionQueue", false);
+    CHECK(!JS_IsException(g_rq_key), "the custom element reaction queue slot key allocation failed");
+    g_atom_rq = JS_ValueToAtom(ctx, g_rq_key);
+    g_atom_rq_head = JS_NewAtom(ctx, "head");
+    g_atom_backup_flag = JS_NewAtom(ctx, "processing");
+    CHECK(g_atom_rq != JS_ATOM_NULL && g_atom_rq_head != JS_ATOM_NULL && g_atom_backup_flag != JS_ATOM_NULL,
+          "a §4.13.6 element queue key could not be interned");
+    g_ce_backup = JS_NewArray(ctx);
+    CHECK(!JS_IsException(g_ce_backup), "the backup element queue could not be allocated");
+    JS_SetProperty(ctx, g_ce_backup, g_atom_backup_flag, JS_FALSE);
+    g_backup_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_ce_backup_def);
+    /* The backup drain is a step function object nobody installs, so a page can neither see it nor replace
        it — the same reason the internal event dispatcher is not on any prototype. */
-    g_reaction_fn = JS_NewCFunction2(ctx, NULL, "connectedReaction", 1, JS_CFUNC_step, g_reaction_stepid);
-    CHECK(!JS_IsException(g_reaction_fn), "the custom-element reaction driver could not be allocated");
+    g_backup_fn = JS_NewCFunction2(ctx, NULL, "backupElementQueue", 0, JS_CFUNC_step, g_backup_stepid);
+    CHECK(!JS_IsException(g_backup_fn), "the backup element queue's driver could not be allocated");
     /* §4.13.4's two members, DECLARED once per agent: `customElements` is a per-realm object, so installing
        from a fresh declaration would mint the pair again for a second realm's registry. */
     g_id_define = idl_method_id_step(ctx, CE_DEFINE_ARGS, 3, CE_DEFINE_OPTS,
@@ -771,8 +972,16 @@ void custom_elements_free(JSContext *ctx)
 
     if (!g_ready) return;
     /* the definition sets are the REALMS' — released with their contexts */
-    JS_FreeValue(ctx, g_reaction_fn);
-    g_reaction_fn = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_backup_fn);
+    JS_FreeValue(ctx, g_ce_backup);
+    JS_FreeValue(ctx, g_rq_key);
+    g_backup_fn = g_ce_backup = g_rq_key = JS_UNDEFINED;
+    g_current = NULL;
+    JS_FreeAtom(ctx, g_atom_rq);
+    JS_FreeAtom(ctx, g_atom_rq_head);
+    JS_FreeAtom(ctx, g_atom_backup_flag);
+    g_atom_rq = g_atom_rq_head = g_atom_backup_flag = JS_ATOM_NULL;
+    g_backup_stepid = -1;
     JS_FreeAtom(ctx, g_atom_prototype);
     JS_FreeAtom(ctx, g_atom_ctor);
     JS_FreeAtom(ctx, g_atom_proto);
@@ -789,6 +998,5 @@ void custom_elements_free(JSContext *ctx)
     g_atom_prototype = g_atom_def = JS_ATOM_NULL;
     g_atom_ctor = g_atom_proto = g_atom_observed = g_atom_observed_src = JS_ATOM_NULL;
     g_atom_callbacks = JS_ATOM_NULL;
-    g_reaction_stepid = -1;
     g_ready = 0;
 }

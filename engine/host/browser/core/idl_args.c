@@ -30,6 +30,7 @@
 #include "core/streams/readable_stream.h"
 #include "core/idl_iter.h"
 #include "core/file/blob.h"
+#include "core/html/custom_elements.h"
 #include "core/html/form_data.h"
 #include "core/url/url_search_params.h"
 #include <time.h>
@@ -165,6 +166,10 @@ typedef struct {
        declaration and freed with the pool — the definition BORROWS it, exactly as JS_RegisterStepDef borrows
        the definition. NULL for a member that declares no steps, which is what "not converted" is. */
     const char **steps;
+    /* HOW MANY OF THEM ARE THE MEMBER'S OWN — which is where the `[CEReactions]` epilogue's stage sits, since
+       it is appended after the member's last. Kept beside the list rather than re-counted at each use: a
+       NULL-terminated array counted in two places is two statements of one number. */
+    int        nsteps;
     bool       variadic;    /* the last declared type applies to every argument from there on */
     JSClassID  iface;       /* the brand an IDL_STRING_UNLESS_IFACE position tests against */
     const char *name;       /* what to call this member in a diagnostic; set when it is installed */
@@ -184,6 +189,18 @@ static const char *const IDL_PROLOGUE_STEPS[] = {
    otherwise be joined on at the wrong base and every label would name the step next door. */
 typedef char idl_prologue_matches_step_first[
     (sizeof IDL_PROLOGUE_STEPS / sizeof *IDL_PROLOGUE_STEPS) == IDL_STEP_FIRST ? 1 : -1];
+
+/* AND THE ONE STAGE EVERY DECLARED MEMBER PASSES THROUGH AFTER ITS OWN ALGORITHM ENDS. HTML §4.13.6 replaces
+   the steps of every `[CEReactions]` operation and setter with: push an element queue, run the member's own
+   steps, pop the queue, INVOKE the reactions in it, then return. Step 4 is the page's code — a custom element
+   constructor or a lifecycle callback — so it is a rest point, and it is appended to every member's stage list
+   for the same reason the prologue's two are prepended: this machine is the one point every declared member
+   converges on, and a per-member line would be a per-member line to forget. A member whose IDL carries no
+   [CEReactions] never enqueues anything during its own steps, so its queue is empty and this stage is reached
+   and left in one step. */
+static const char *const IDL_EPILOGUE_STEP =
+    "HTML §4.13.6 custom element reactions steps 3-4 (pop the element queue this member pushed and invoke "
+    "the custom element reactions in it), one reaction per step";
 
 /* The DOM layer's tree-steps edge — see idl_args.h. NULL until the DOM registers it, which is what the
    platform-less test builds and the pre-DOM boot look like. */
@@ -307,6 +324,21 @@ typedef struct {
        drain YIELDS, and a shared list would be appended to by whichever flow ran during the suspension. */
     void     *tree;
     uint8_t   tree_after_body;   /* 1 = the body is finished; the member ends when the drain does */
+    /* §4.13.6's `[CEReactions]` wrapper — the element queue this member pushed at step 1, and the drain of it
+       at step 4. It is the MACHINE's state because the drain runs the page's code and therefore parks inside
+       this machine; the algorithm is custom_elements.c's. Its queue is created by the FIRST enqueue and is
+       therefore flow-private, which is why a member that enqueues nothing costs nothing and why the queue's
+       own appends never reach the COW delta. */
+    CustomElementQueue ce;
+    uint8_t   ce_after_body;     /* 1 = the member's own steps are over; only the invoke remains */
+    /* §4.13.6 STEP 2's CAUGHT EXCEPTION, held as a VALUE until step 5 rethrows it. The wrapper runs the
+       member's own steps "catching exceptions", invokes the reactions, and only THEN rethrows — so a member
+       that enqueues a reaction and throws still runs the reaction, which is what the spec says and what a page
+       that catches the throw and then reads the callback's effect observes. Held as an owned value rather than
+       left pending in the context, because the invoke PARKS: an exception live in the context across a
+       suspension would be seen by whatever flow ran next. */
+    uint8_t   ce_threw;
+    JSValue   ce_exc;
 } JSIdlArgsState;
 
 /* WHAT THIS MACHINE OWNS: the coerced arguments so far. A concolic branch inside one page `toString` forks the
@@ -322,6 +354,7 @@ static void js_idl_args_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->vstage);
     iter_cursor_visit(ctx, &s->seq, v);
     v->val(ctx, &s->seq_list);
+    v->val(ctx, &s->ce_exc);
     for (i = 0; i < IDL_MAX_ARGS; i++)
         v->val(ctx, &s->args[i]);
     DCHECK(s->hdr.arg >= 0 && s->hdr.arg < g_n, "an IDL member's visit ran with no pool entry behind it");
@@ -329,6 +362,7 @@ static void js_idl_args_visit(JSContext *ctx, void *st, JSStepVisit *v)
        branch, which is bytecode; the drain runs none — every per-node effect is an enqueue. If this ever fires,
        the drain grew a call into the page and the buffer needs a real ownership declaration. */
     DCHECK(s->tree == NULL, "an IDL member was forked while draining its tree steps");
+    custom_elements_queue_visit(ctx, &s->ce, v);
     m = idl_member(s->hdr.arg);
     if (m->step && m->step->visit) m->step->visit(ctx, (char *)st + sizeof(JSIdlArgsState), v);
 }
@@ -371,6 +405,38 @@ static int idl_tree_drain(JSContext *ctx, JSIdlArgsState *s)
     return 0;
 }
 
+/* HTML §4.13.6 STEPS 3-4 — the `[CEReactions]` EPILOGUE, and EVERY member ends through it. The queue this
+   member pushed at step 1 is popped and its reactions run before the member's value is returned, which is the
+   whole of the ordering the spec's wrapper exists to give: `document.body.appendChild(el)` runs el's
+   connectedCallback before the next statement, not at the next microtask.
+   The stage moves to the epilogue's own label, appended to this member's list at declaration — so a flow
+   parked on a lifecycle callback reports §4.13.6 step 4 and not whichever of the member's own steps it
+   happened to finish at. */
+/* THE SAME POP WITH NO INVOKE, for the throw path and for a flow dropped mid-member. §4.13.6 steps 4-5 run the
+   reactions and THEN rethrow, which would mean holding the pending exception live across every park of the
+   invoke — the same requirement IDL_TREE_THREW names and refuses for the tree steps, and the same answer: a
+   member that must both enqueue and throw splits its stages so the invoke happens between them. Every member
+   in this engine validates before it mutates, so the popped queue is empty, and custom_elements asserts it. */
+static int idl_ce_finish(JSContext *ctx, JSIdlArgsState *s, JSValue in, JSValue **out_cb, int *out_argc)
+{
+    const IdlMember *m = idl_member(s->hdr.arg);
+    int r;
+
+    if (!s->ce_after_body) {
+        s->ce_after_body = 1;
+        if (m->steps) s->hdr.stage = IDL_STEP_FIRST + m->nsteps;
+    }
+    r = custom_elements_reactions_invoke(ctx, &s->ce, in, out_cb, out_argc);
+    if (r) return r;
+    if (s->ce_threw) {          /* §4.13.6 step 5: rethrow, now that step 4's reactions have run */
+        s->ce_threw = 0;
+        JS_Throw(ctx, s->ce_exc);
+        s->ce_exc = JS_UNDEFINED;
+        return JS_STEP_ABRUPT;
+    }
+    return JS_STEP_DONE;
+}
+
 /* THE SLOWEST SINGLE STEP of any IDL member this scheduler-step ran, because a step machine's whole contract
    is that ONE step is short. The engine's seam assertion can say a flow went five seconds without offering a
    suspend point; it cannot say what the flow was inside, and a call point is now offered before every call, so
@@ -407,22 +473,35 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
 
 static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
+    JSIdlArgsState *s = st;
+    int rr;
 #if APICLIENT_DEV
     int64_t t0 = idl_now_ms();
-    int rr = js_idl_args_step_inner(ctx, st, cb_result, out_cb, out_argc);
-    int64_t d = idl_now_ms() - t0;
-    g_step_total += d;
-    g_step_count++;
-    if (d > g_slow_ms) {
-        JSIdlArgsState *ss = st;
-        g_slow_ms = d;
-        g_slow_name = (ss->hdr.arg >= 0 && ss->hdr.arg < g_n && idl_member(ss->hdr.arg)->name)
-                    ? idl_member(ss->hdr.arg)->name : "(a member installed by neither install path)";
-    }
-    return rr;
-#else
-    return js_idl_args_step_inner(ctx, st, cb_result, out_cb, out_argc);
 #endif
+    /* HTML §4.13.6 STEP 1, AND STEP 3 ON THE WAY OUT. The element queue this member enqueues its reactions onto
+       is CURRENT for exactly as long as the member's own steps are running, and this C call IS that: a member
+       parks by RETURNING, so nothing else in the program can run between these two lines. That is why there is
+       no stack array — §4.13.6's reactions stack models the nesting of `[CEReactions]` invocations, and with
+       the trampoline that nesting is one frame deep by construction. A DOM mutation reached from page code the
+       member called is inside ANOTHER declared member, which pushes its own queue here and invokes it at its
+       own boundary, which is what the spec's stack says too. A mutation reached from no member at all (the
+       parser) finds no current queue and takes the backup arm — also what the spec says. */
+    custom_elements_reactions_push(&s->ce);
+    rr = js_idl_args_step_inner(ctx, st, cb_result, out_cb, out_argc);
+    custom_elements_reactions_pop();
+#if APICLIENT_DEV
+    {
+        int64_t d = idl_now_ms() - t0;
+        g_step_total += d;
+        g_step_count++;
+        if (d > g_slow_ms) {
+            g_slow_ms = d;
+            g_slow_name = (s->hdr.arg >= 0 && s->hdr.arg < g_n && idl_member(s->hdr.arg)->name)
+                        ? idl_member(s->hdr.arg)->name : "(a member installed by neither install path)";
+        }
+    }
+#endif
+    return rr;
 }
 
 /* WEB IDL §3.2.10's `ByteString` RANGE, over the UTF-8 the engine hands out. A ByteString's code points are
@@ -482,13 +561,17 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
     DCHECK(m->name != NULL, "an IDL member reached its step with no name — it was minted by a hand-written "
                             "JS_NewCFunction2 instead of idl_step_function/idl_step_constructor");
 
+    /* A RESUME INSIDE THE EPILOGUE goes straight back to it: the member's own steps are finished and its
+       arguments are converted, so neither the conversion loop nor the body may run again. */
+    if (s->ce_after_body) return idl_ce_finish(ctx, s, cb_result, out_cb, out_argc);
+
     /* THE DRAIN COMES FIRST ON EVERY RE-ENTRY, before the conversion loop or the body, because the steps the
        previous step recorded must finish before anything else this member does. */
     if (s->tree) {
         JS_FreeValue(ctx, cb_result);
         r = idl_tree_drain(ctx, s);
         if (r) return r;
-        if (s->tree_after_body) return JS_STEP_DONE;
+        if (s->tree_after_body) return idl_ce_finish(ctx, s, JS_UNDEFINED, out_cb, out_argc);
         cb_result = JS_UNDEFINED;
     }
 
@@ -537,6 +620,13 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         s->i = 0;
         s->tree = NULL;
         s->tree_after_body = 0;
+        /* §4.13.6 STEP 1, and it is here rather than after the conversions because the conversions are the
+           page's code: a `toString` that appends an element must have its reaction run at THIS member's
+           boundary, not at whatever outer one happens to be on the stack. */
+        custom_elements_queue_init(&s->ce);
+        s->ce_after_body = 0;
+        s->ce_threw = 0;
+        s->ce_exc = JS_UNDEFINED;
         s->hdr.stage = 1;
     }
 
@@ -911,7 +1001,9 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         if (r < 0) {
             s->result = JS_UNDEFINED;
             DCHECK(!g_tree || !g_tree->recorded(), IDL_TREE_THREW);
-            return JS_STEP_ABRUPT;
+            s->ce_threw = 1;                              /* §4.13.6 step 2's catch */
+            s->ce_exc = JS_GetException(ctx);
+            return idl_ce_finish(ctx, s, JS_UNDEFINED, out_cb, out_argc);
         }
         /* A REQUEST carries operands in out_cb that only the driver's immediate read can honour, so the drain
            cannot come first there. No step body both mutates the tree and asks the page for something — and if
@@ -926,7 +1018,8 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         idl_tree_take(ctx, s);
         s->tree_after_body = (r == 0);
         if (s->tree) { int d = idl_tree_drain(ctx, s); if (d) return d; }
-        return r ? r : JS_STEP_DONE;
+        if (r) return r;
+        return idl_ce_finish(ctx, s, JS_UNDEFINED, out_cb, out_argc);
     }
     s->result = m->setter
         ? m->setter(ctx, s->hdr.this_val, s->n > 0 ? s->args[0] : JS_UNDEFINED, m->magic)
@@ -935,12 +1028,14 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
     if (JS_IsException(s->result)) {
         s->result = JS_UNDEFINED;
         DCHECK(!g_tree || !g_tree->recorded(), IDL_TREE_THREW);
-        return JS_STEP_ABRUPT;
+        s->ce_threw = 1;                                  /* §4.13.6 step 2's catch */
+        s->ce_exc = JS_GetException(ctx);
+        return idl_ce_finish(ctx, s, JS_UNDEFINED, out_cb, out_argc);
     }
     idl_tree_take(ctx, s);
     s->tree_after_body = 1;
     if (s->tree) { int d = idl_tree_drain(ctx, s); if (d) return d; }
-    return JS_STEP_DONE;
+    return idl_ce_finish(ctx, s, JS_UNDEFINED, out_cb, out_argc);
 }
 
 static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
@@ -958,6 +1053,12 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
     /* An abandoned drain — the member threw, or the flow was dropped mid-walk. The remaining nodes' steps do
        not run, which is what an abrupt completion means, but the buffer is still this machine's to free. */
     if (s->tree && g_tree) { g_tree->release(ctx, s->tree); s->tree = NULL; }
+    /* AND AN ABANDONED ELEMENT QUEUE. A flow dropped anywhere inside a member may hold reactions nobody will
+       ever invoke; they die with the flow, which is what an abandoned flow means. */
+    custom_elements_queue_release(ctx, &s->ce);
+    JS_FreeValue(ctx, s->ce_exc);
+    s->ce_exc = JS_UNDEFINED;
+    s->ce_threw = 0;
 
     if (take_result) s->result = JS_UNDEFINED;
     JS_FreeValue(ctx, s->result);
@@ -1104,13 +1205,15 @@ int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
         int n = 0, k;
         const char **all;
         while (decl->steps[n]) n++;
-        all = malloc(sizeof(*all) * (size_t)(IDL_STEP_FIRST + n + 1));
+        all = malloc(sizeof(*all) * (size_t)(IDL_STEP_FIRST + n + 2));
         CHECK(all != NULL, "idl: OOM joining a member's declared steps to the prologue's — a member whose "
                            "stages cannot be named is a resume point nothing can check");
         for (k = 0; k < IDL_STEP_FIRST; k++) all[k] = IDL_PROLOGUE_STEPS[k];
         for (k = 0; k < n; k++) all[IDL_STEP_FIRST + k] = decl->steps[k];
-        all[IDL_STEP_FIRST + n] = NULL;
+        all[IDL_STEP_FIRST + n] = IDL_EPILOGUE_STEP;   /* §4.13.6 steps 3-4, which every member ends through */
+        all[IDL_STEP_FIRST + n + 1] = NULL;
         idl_member(idx)->steps = all;
+        idl_member(idx)->nsteps = n;
         idl_def(idx)->algorithm = decl->algorithm;
         idl_def(idx)->steps = all;
     }
