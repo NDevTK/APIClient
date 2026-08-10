@@ -515,6 +515,51 @@ static void el_ser_close(ElHtmlState *s, lxb_dom_node_t *n)
     el_ser_append((const lxb_char_t *)">", 1, s);
 }
 
+/* HTML §13.3's TEXT CASE, WRITTEN HERE BECAUSE THE ALGORITHM DECIDES BY INTERFACE AND LEXBOR DECIDES BY
+   nodeType. "If current node is a Text node" is true of a CDATASection — §4.12 is `CDATASection : Text` — but
+   lexbor's `lxb_html_serialize_cb` switches on `node->type` and has no CDATA arm at all, so it returned
+   LXB_STATUS_ERROR and the DCHECK below fired. That abort was the whole of what seventeen dom/ranges and
+   dom/traversal files reported, because dom/common.js builds its sixth paragraph out of two CDATA sections and
+   every one of those files serialises the fixture to name its subtests.
+   Lexbor's per-kind serialisers are internal, so this is §13.3 ported rather than delegated — the last rung of
+   "bind before build", and the port is one escape table.
+   §13.3: a Text node whose PARENT is a raw-text element is appended literally; otherwise its data is escaped
+   with the attribute-mode flag unset, which is `&`, U+00A0, `<` and `>`. */
+static bool el_ser_parent_is_raw_text(const lxb_dom_node_t *n)
+{
+    lxb_dom_node_t *p = n->parent;
+
+    if (!p || p->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    return lxb_html_tree_node_is(p, LXB_TAG_STYLE)    || lxb_html_tree_node_is(p, LXB_TAG_SCRIPT) ||
+           lxb_html_tree_node_is(p, LXB_TAG_XMP)      || lxb_html_tree_node_is(p, LXB_TAG_IFRAME) ||
+           lxb_html_tree_node_is(p, LXB_TAG_NOEMBED)  || lxb_html_tree_node_is(p, LXB_TAG_NOFRAMES) ||
+           lxb_html_tree_node_is(p, LXB_TAG_PLAINTEXT) || lxb_html_tree_node_is(p, LXB_TAG_NOSCRIPT);
+}
+
+static void el_ser_text_node(ElHtmlState *s, lxb_dom_node_t *n)
+{
+    const lxb_dom_character_data_t *cd = (const lxb_dom_character_data_t *)n;
+    const lxb_char_t *d = cd->data.data;
+    size_t len = cd->data.length, i, run = 0;
+
+    if (el_ser_parent_is_raw_text(n)) { el_ser_append(d, len, s); return; }
+    for (i = 0; i < len; i++) {
+        const char *rep = NULL;
+        size_t skip = 1;
+
+        if (d[i] == '&')      rep = "&amp;";
+        else if (d[i] == '<') rep = "&lt;";
+        else if (d[i] == '>') rep = "&gt;";
+        else if (d[i] == 0xC2 && i + 1 < len && d[i + 1] == 0xA0) { rep = "&nbsp;"; skip = 2; }  /* U+00A0 */
+        if (!rep) { run++; continue; }
+        if (run) el_ser_append(d + i - run, run, s);
+        run = 0;
+        el_ser_append((const lxb_char_t *)rep, strlen(rep), s);
+        i += skip - 1;
+    }
+    if (run) el_ser_append(d + len - run, run, s);
+}
+
 static void el_ser_push(ElHtmlState *s, lxb_dom_node_t *node, lxb_dom_node_t *limit)
 {
     if (s->sp == s->scap) {
@@ -556,9 +601,13 @@ static int js_el_get_html_step(JSContext *ctx, JSStepHdr *hdr, void *st, int arg
     if (!s->node) goto finished;
 
     if (hdr->stage == ELHTML_EMIT) {
-        lxb_status_t status = lxb_html_serialize_cb(s->node, el_ser_append, s);
-        DCHECK(status == LXB_STATUS_OK, "lexbor refused to serialise a node kind this tree contains");
-        (void)status;
+        if (s->node->type == LXB_DOM_NODE_TYPE_CDATA_SECTION) {
+            el_ser_text_node(s, s->node);   /* §13.3's Text case — see el_ser_text_node */
+        } else {
+            lxb_status_t status = lxb_html_serialize_cb(s->node, el_ser_append, s);
+            DCHECK(status == LXB_STATUS_OK, "lexbor refused to serialise a node kind this tree contains");
+            (void)status;
+        }
         /* `<template>`'s children are on its content fragment, not under it. Descend there before the template
            is closed, and come back to the template's ADVANCE when that level runs out. */
         if (lxb_html_tree_node_is(s->node, LXB_TAG_TEMPLATE)) {

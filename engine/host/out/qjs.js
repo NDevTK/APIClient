@@ -760,89 +760,6 @@ function _emscripten_resize_heap(requestedSize) {
   return false;
 }
 
-var ENV = {};
-
-var getExecutableName = () => thisProgram;
-
-var getEnvStrings = () => {
-  if (!getEnvStrings.strings) {
-    // Default values.
-    var lang = (globalThis.navigator?.language ?? "C").replace("-", "_") + ".UTF-8";
-    var env = {
-      "USER": "web_user",
-      "LOGNAME": "web_user",
-      "PATH": "/",
-      "PWD": "/",
-      "HOME": "/home/web_user",
-      "LANG": lang,
-      "_": getExecutableName()
-    };
-    // Apply the user-provided values, if any.
-    for (var x in ENV) {
-      // x is a key in ENV; if ENV[x] is undefined, that means it was
-      // explicitly set to be so. We allow user code to do that to
-      // force variables with default values to remain unset.
-      if (ENV[x] === undefined) delete env[x]; else env[x] = ENV[x];
-    }
-    var strings = [];
-    for (var x in env) {
-      strings.push(`${x}=${env[x]}`);
-    }
-    getEnvStrings.strings = strings;
-  }
-  return getEnvStrings.strings;
-};
-
-function _environ_get(__environ, environ_buf) {
-  __environ >>>= 0;
-  environ_buf >>>= 0;
-  var bufSize = 0;
-  var envp = 0;
-  for (var string of getEnvStrings()) {
-    var ptr = environ_buf + bufSize;
-    HEAPU32[(((__environ) + (envp)) >>> 2) >>> 0] = ptr;
-    bufSize += stringToUTF8(string, ptr, Infinity) + 1;
-    envp += 4;
-  }
-  return 0;
-}
-
-var lengthBytesUTF8 = str => {
-  var len = 0;
-  for (var i = 0; i < str.length; ++i) {
-    // Gotcha: charCodeAt returns a 16-bit word that is a UTF-16 encoded code
-    // unit, not a Unicode code point of the character! So decode
-    // UTF16->UTF32->UTF8.
-    // See http://unicode.org/faq/utf_bom.html#utf16-3
-    var c = str.charCodeAt(i);
-    // possibly a lead surrogate
-    if (c <= 127) {
-      len++;
-    } else if (c <= 2047) {
-      len += 2;
-    } else if (c >= 55296 && c <= 57343) {
-      len += 4;
-      ++i;
-    } else {
-      len += 3;
-    }
-  }
-  return len;
-};
-
-function _environ_sizes_get(penviron_count, penviron_buf_size) {
-  penviron_count >>>= 0;
-  penviron_buf_size >>>= 0;
-  var strings = getEnvStrings();
-  HEAPU32[((penviron_count) >>> 2) >>> 0] = strings.length;
-  var bufSize = 0;
-  for (var string of strings) {
-    bufSize += lengthBytesUTF8(string) + 1;
-  }
-  HEAPU32[((penviron_buf_size) >>> 2) >>> 0] = bufSize;
-  return 0;
-}
-
 var _fd_close = fd => 52;
 
 function _fd_seek(fd, offset, whence, newOffset) {
@@ -930,6 +847,38 @@ var handleException = e => {
   quit_(1, e);
 };
 
+var lengthBytesUTF8 = str => {
+  var len = 0;
+  for (var i = 0; i < str.length; ++i) {
+    // Gotcha: charCodeAt returns a 16-bit word that is a UTF-16 encoded code
+    // unit, not a Unicode code point of the character! So decode
+    // UTF16->UTF32->UTF8.
+    // See http://unicode.org/faq/utf_bom.html#utf16-3
+    var c = str.charCodeAt(i);
+    // possibly a lead surrogate
+    if (c <= 127) {
+      len++;
+    } else if (c <= 2047) {
+      len += 2;
+    } else if (c >= 55296 && c <= 57343) {
+      len += 4;
+      ++i;
+    } else {
+      len += 3;
+    }
+  }
+  return len;
+};
+
+var stackAlloc = sz => __emscripten_stack_alloc(sz);
+
+var stringToUTF8OnStack = str => {
+  var size = lengthBytesUTF8(str) + 1;
+  var ret = stackAlloc(size);
+  stringToUTF8(str, ret, size);
+  return ret;
+};
+
 // End JS library code
 // include: postlibrary.js
 // This file is included after the automatically-generated JS library code
@@ -963,7 +912,7 @@ var _fflush, _main, ___funcs_on_exit, __emscripten_stack_restore, __emscripten_s
 
 function assignWasmExports(wasmExports) {
   _fflush = wasmExports["fflush"];
-  _main = Module["_main"] = wasmExports["main"];
+  _main = Module["_main"] = wasmExports["__main_argc_argv"];
   ___funcs_on_exit = wasmExports["__funcs_on_exit"];
   __emscripten_stack_restore = wasmExports["_emscripten_stack_restore"];
   __emscripten_stack_alloc = wasmExports["_emscripten_stack_alloc"];
@@ -980,8 +929,6 @@ var wasmImports = {
   /** @export */ clock_time_get: _clock_time_get,
   /** @export */ emscripten_date_now: _emscripten_date_now,
   /** @export */ emscripten_resize_heap: _emscripten_resize_heap,
-  /** @export */ environ_get: _environ_get,
-  /** @export */ environ_sizes_get: _environ_sizes_get,
   /** @export */ fd_close: _fd_close,
   /** @export */ fd_seek: _fd_seek,
   /** @export */ fd_write: _fd_write
@@ -1002,10 +949,17 @@ function applySignatureConversions(wasmExports) {
 
 // include: postamble.js
 // === Auto-generated postamble setup entry stuff ===
-function callMain() {
+function callMain(args = []) {
   var entryFunction = _main;
-  var argc = 0;
-  var argv = 0;
+  args.unshift(thisProgram);
+  var argc = args.length;
+  var argv = stackAlloc((argc + 1) * 4);
+  var argv_ptr = argv;
+  for (var arg of args) {
+    HEAPU32[((argv_ptr) >>> 2) >>> 0] = stringToUTF8OnStack(arg);
+    argv_ptr += 4;
+  }
+  HEAPU32[((argv_ptr) >>> 2) >>> 0] = 0;
   try {
     var ret = entryFunction(argc, argv);
     // if we're not running an evented main loop, it's time to exit
@@ -1016,7 +970,7 @@ function callMain() {
   }
 }
 
-async function run() {
+async function run(args = programArgs) {
   preRun();
   var setStatus = Module["setStatus"];
   if (setStatus) {
@@ -1031,7 +985,7 @@ async function run() {
   // No ATMAINS hooks
   Module["onRuntimeInitialized"]?.();
   var noInitialRun = Module["noInitialRun"] || false;
-  if (!noInitialRun) callMain();
+  if (!noInitialRun) callMain(args);
   postRun();
 }
 
