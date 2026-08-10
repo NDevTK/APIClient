@@ -18,7 +18,7 @@
 import { spawnSync, spawn } from "node:child_process";
 import { existsSync, readdirSync, mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
-import { tmpdir, cpus } from "node:os";
+import { tmpdir, cpus, loadavg } from "node:os";
 
 function walk(dir) {
   const out = [];
@@ -36,6 +36,15 @@ const WPT = join(WORK, "wpt");
 /* PINNED. The corpus is an oracle, and an oracle that changes under you turns "this regressed" into "did it?".
    Re-pin deliberately, as a commit of its own, so the diff in results has one cause. */
 const WPT_REV = "bf4714d";
+
+/* A test's budget is the CPU it may CONSUME, plus a wall backstop for a test that consumes none because it is
+   deadlocked on I/O. See the spawn below for why elapsed time alone cannot be the verdict. */
+/* The HARD limit sits above the soft one so the kernel raises SIGXCPU at the soft limit and only escalates to
+   SIGKILL if the process ignores it. Set as one value, dash makes soft == hard and the first notification IS the
+   kill — measured: the same busy loop reports SIGKILL with `ulimit -t 1` and SIGXCPU with the pair. Both are
+   read as the CPU cause below; the pair just makes the usual path say so in its own signal. */
+const CPU_BUDGET_S = 60;
+const WALL_BACKSTOP_MS = 600_000;
 /* WHAT IS CHECKED OUT. A sparse list rather than the whole 1 GB tree, and it grows as areas are covered — an
    area absent here is honestly untested, which is a different statement from "passes". */
 /* `tools` is not a test area — it is WPT'S OWN SERVER and its vendored dependencies. The corpus is SERVED by
@@ -573,9 +582,24 @@ for (const { file: f, kind, variant } of runs) {
     /* AND THE VARIANT GOES WITH IT, for the same reason: the driver decided what this run IS, so the runner is
        told rather than left to re-derive it. It becomes the run's address — what the runner GETs and what
        `location.search` answers — which is the whole of what a variant is. */
-    const r = spawnSync(bin, [...(kind === "document" ? ["--test-document"] : []),
-                              ...(variant ? ["--variant", variant] : []), HARNESS, ...deps, f],
-                        { encoding: "utf8", maxBuffer: 1 << 28, timeout: 60_000,
+    /* THE BUDGET IS CPU, NOT WALL CLOCK, AND THAT IS THE WHOLE DIFFERENCE BETWEEN A RESULT AND AN ARTIFACT.
+       This was `timeout: 60_000` — sixty seconds of ELAPSED time — so a healthy test running on a loaded box was
+       killed and reported in the same column as a DCHECK naming a missing capability. It is not hypothetical: at
+       a load average of 13-18 on four cores, `dom/ranges` read 15743 pass against a 25056 baseline with an
+       IDENTICAL fail count, because one file was killed part-way and the subtests it had not yet printed simply
+       ceased to exist. The reader cannot tell that from a regression, which is the same shape as the aborted
+       files this gate was built to expose.
+       RLIMIT_CPU is the honest measure: it counts the CPU SECONDS this process consumed, so a test starved by
+       other work is never killed for waiting, however long it waits. The kernel raises SIGXCPU at the soft
+       limit, which is a DIFFERENT signal from the wall backstop's SIGTERM — so the two causes stay
+       distinguishable in the report rather than collapsing into "signal SIGTERM".
+       The wall backstop stays, generously, because RLIMIT_CPU cannot see a test BLOCKED on I/O — a deadlock
+       against wptserve burns no CPU at all. Two measures, two signals, and the report says which fired. */
+    const r = spawnSync("/bin/sh",
+                        ["-c", `ulimit -H -t ${CPU_BUDGET_S + 10} 2>/dev/null; ulimit -S -t ${CPU_BUDGET_S}; exec "$@"`, "sh", bin,
+                         ...(kind === "document" ? ["--test-document"] : []),
+                         ...(variant ? ["--variant", variant] : []), HARNESS, ...deps, f],
+                        { encoding: "utf8", maxBuffer: 1 << 28, timeout: WALL_BACKSTOP_MS,
                           env: { ...process.env, WPT_SERVER: serverAddr } });
     const out = (r.stdout || "") + (r.stderr || "");
     /* An ABORT is a result about this file, not an accident: it is a DCHECK naming a capability the browser half
@@ -595,7 +619,15 @@ for (const { file: f, kind, variant } of runs) {
     const abortedHere = Boolean(why || r.signal);
     if (abortedHere) {
       aborted++; area.aborted++;
-      failures.push(`  ABORT  ${rel}\n         ${why ? why[1].slice(0, 160) : "signal " + r.signal}`);
+      /* NAME WHICH OF THE THREE THIS IS. A DCHECK abort is a missing capability and is work; a CPU-budget kill
+         is a real statement about this test's cost and is also work; a wall-backstop kill is a fact about the
+         BOX, and reporting it as either of the others sends the next reader hunting a phantom. The load average
+         rides along with the third because it is the number that explains it. */
+      const cause = why ? why[1].slice(0, 160)
+                  : (r.signal === "SIGXCPU" || r.signal === "SIGKILL") ? `exceeded the ${CPU_BUDGET_S}s CPU budget (not wall time — this test really is that expensive)`
+                  : r.signal === "SIGTERM" ? `wall backstop at ${WALL_BACKSTOP_MS / 1000}s with load average ${loadavg()[0].toFixed(1)} on ${cpus().length} cores — RE-RUN THIS FILE ALONE before believing it`
+                  : "signal " + r.signal;
+      failures.push(`  ABORT  ${rel}\n         ${cause}`);
     }
     /* THE `@WPTHANDLER` BRANCH IS GONE, not disabled. It excused a test that asks for a wptserve `.py` handler
        back when this driver served the corpus off disk — and engine/wptserve.py now runs WPT'S OWN server, which
