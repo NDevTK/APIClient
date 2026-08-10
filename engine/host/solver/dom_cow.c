@@ -1018,6 +1018,10 @@ void dom_cow_chain_stats(long *segs, long *entries) {
     if (segs) *segs = g_dom_seg_live;
     if (entries) *entries = g_dom_seg_entries_live;
 }
+long dom_cow_chain_bytes(void) {
+    return g_dom_seg_live * (long)sizeof(DomSeg) + g_dom_seg_entries_live * (long)sizeof(DomUndo);
+}
+long dom_cow_head_bytes(int cap) { return (long)cap * (long)sizeof(DomUndo); }
 
 static void dom_seg_unref(DomSeg *s) {
     while (s && --s->refcount <= 0) {

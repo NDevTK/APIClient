@@ -10,10 +10,46 @@
 
 static void *decide_fork_blob(int cursor, int arm);   /* the sibling's hot decision state (defined below) */
 
-/* The RUNNING flow's decision state. g_dec is the vector being replayed/extended; g_c is the cursor (decisions
-   consumed this run); g_cur_fn is the function a sibling fork re-drives. The scheduler owns the lifecycle via
-   decide_enter/leave. */
-static signed char *g_dec = NULL; static int g_dec_n = 0, g_dec_cap = 0;
+/* THE DECISION VECTOR IS A CHAIN, NOT A COPY — the fourth and last instance of cow.c's refcounted immutable
+ * segment, and the one that was still copying.
+ *
+ * A FORK SHARES THE PREFIX. The sibling's decision vector is, by construction, the parent's decisions up to the
+ * branch plus one byte: the other arm. That prefix is FROZEN at that instant — neither flow can ever rewrite a
+ * decision it has already taken, because the cursor only moves forward and a replayed slot is read, never
+ * written — so it is exactly the shape cow.c's CowSeg, dom_cow.c's DomSeg and concolic.c's ConsSeg already
+ * have, and it was the only one of the four still handing each sibling its own `malloc(cursor)` + `memcpy`.
+ *
+ * MEASURED, on the minimal fixture, whose unknown-length walk forks once per position so the chain is as long
+ * as the walk (@COLD in the progress stream, which is the census this file's cost had no row in before):
+ *
+ *     flows       1006      4014      9006     16046
+ *     decKiB       506     31708     39720    125915     <- copied: the whole prefix, per flow
+ *     decKiB         7        31        70       125     <- chained: one blob header per flow
+ *     decSegKiB     41       164       369       658     <- …plus the shared chain, counted ONCE
+ *
+ * 125915 KiB against 125+658 — and the ratio is not the point, the SHAPE is: the first row is quadratic and
+ * the other two are linear, so the gap is unbounded. The whole engine's live C allocation at 16046 flows went
+ * from 161 MB to 41 MB with nothing else changed.
+ *
+ * That is n^2/2 bytes to the byte — 16046 flows held 128,745,080 decision slots, and 16046^2/2 is 128,736,529 —
+ * and it was 123 MB of the 137 MB of per-flow snapshot the frontier was holding, against 15 MB for every
+ * suspended heap-frame chain in the run put together. A quadratic term in the thing a cold tier exists to page
+ * is not a paging problem, it is the wrong data structure: paging it out would have written the same shared
+ * prefix once per flow and multiplied the sharing back out, which is precisely what §State-isolation forbids
+ * ("The delta captures ONLY shared baseline state").
+ *
+ * WHAT IS PER-FLOW IS THE HEAD: the decisions this flow has taken since its last freeze, which for a flow that
+ * forks at every branch is exactly one. Everything below it is shared with its ancestors, refcounted, and freed
+ * when the last flow standing on it goes.
+ *
+ * `g_c` is the cursor in WHOLE-VECTOR coordinates, so `below` on each segment is the index its first slot has —
+ * stored rather than re-derived, for the reason TrampFrame's `local_slots` is: a length that is computed twice
+ * can disagree with itself. */
+typedef struct DecSeg { signed char *e; int n, below; struct DecSeg *base; int refcount; } DecSeg;
+
+static DecSeg *g_dec_base = NULL;   /* the frozen prefix the running flow stands on (NULL = it has none) */
+static int g_dec_below = 0;         /* slots in that chain — the head's index origin */
+static signed char *g_dec = NULL; static int g_dec_n = 0, g_dec_cap = 0;   /* the head: this flow's own */
 static int g_c = 0;
 static JSValue g_cur_fn = JS_UNDEFINED;   /* borrowed from the running Flow (alive for the run) */
 static int g_running = 0;
@@ -27,8 +63,99 @@ static void dec_ensure(int n) {
     g_dec_cap = nc;
 }
 
+/* Drop a chain reference: refcount--, free the segment at zero, continue into its base. A loop, not recursion —
+   the chain's depth is the fork depth, and an unknown-length walk makes that as deep as the walk is long; the C
+   stack cannot be parked. The twin of cow_seg_unref / dom_seg_unref / cons_seg_unref. */
+static void dec_seg_unref(DecSeg *s) {
+    while (s && --s->refcount <= 0) {
+        DecSeg *base = s->base;
+        free(s->e); free(s);
+        s = base;
+    }
+}
+
+/* THE FROZEN CHAIN'S OWN CENSUS — the fourth of the four, counted at the two points a segment's lifetime begins
+   and ends so the pair cannot drift from the thing it counts. */
+static long g_dec_seg_live, g_dec_seg_entries_live, g_dec_seg_bytes_live;
+void decide_chain_stats(long *segs, long *entries, long *bytes) {
+    if (segs) *segs = g_dec_seg_live;
+    if (entries) *entries = g_dec_seg_entries_live;
+    if (bytes) *bytes = g_dec_seg_bytes_live;
+}
+
+/* The running flow's decision state is over: release its chain and empty its head. `g_dec` itself is the ONE
+   reusable head buffer and is not freed here — decide_free owns it. */
+static void dec_clear(void) {
+    dec_seg_unref(g_dec_base);
+    g_dec_base = NULL; g_dec_below = 0; g_dec_n = 0;
+}
+
+static int dec_total(void) { return g_dec_below + g_dec_n; }
+
+/* The arm recorded at whole-vector index `k`. The head first, because that is where every read a resumed flow
+   performs lands: a sibling resumes with its cursor AT the branch it was forked over, so the one slot it
+   replays is the topmost. A from-baseline flow replaying a birth vector reads out of the head too, since
+   decide_enter loads that vector there. The chain walk below is for a replay that outlives a freeze. */
+static int dec_at(int k) {
+    const DecSeg *s;
+    DCHECK(k >= 0 && k < dec_total(),
+           "a decision was read outside the vector — a branch would take an arm this flow never recorded");
+    if (k >= g_dec_below) return g_dec[k - g_dec_below];
+    for (s = g_dec_base; s; s = s->base)
+        if (k >= s->below) return s->e[k - s->below];
+    DFAIL("a decision index below the head was not in any frozen segment — the chain's `below` offsets and the "
+          "head's origin disagree, so the vector has a hole in it");
+    return 0;
+}
+
+/* Append one decision to the head. */
+static void dec_append(int arm) {
+    dec_ensure(g_dec_n + 1);
+    g_dec[g_dec_n++] = (signed char)arm;
+}
+
+/* FREEZE the head into a shared immutable segment and hand the caller ONE reference on it, on top of the
+   running flow's own. An empty head freezes to nothing: the caller takes another reference on the chain the
+   flow already stands on, which is what keeps a park/resume pair with no decisions between them from pushing an
+   empty segment per switch — the same guard concolic_pins_suspend keeps, and for the same reason (the chain's
+   depth would then count SWITCHES rather than forks). */
+static DecSeg *dec_freeze(void) {
+    DecSeg *s;
+
+    if (g_dec_n == 0) {
+        if (g_dec_base) g_dec_base->refcount++;
+        return g_dec_base;
+    }
+    s = malloc(sizeof *s);
+    CHECK(s, "decide: OOM freezing the decision vector into a shared segment");
+    s->e = malloc((size_t)g_dec_n);
+    CHECK(s->e, "decide: OOM freezing the decision vector's entries");
+    memcpy(s->e, g_dec, (size_t)g_dec_n);
+    s->n = g_dec_n; s->below = g_dec_below; s->base = g_dec_base; s->refcount = 2;   /* running flow + caller */
+    g_dec_seg_live++; g_dec_seg_entries_live += s->n;
+    g_dec_seg_bytes_live += (long)sizeof *s + s->n;
+    g_dec_base = s; g_dec_below = s->below + s->n; g_dec_n = 0;
+    return s;
+}
+
+/* ONE MORE DECISION over `base`, as its own segment — the sibling's arm at the branch. It takes the caller's
+   reference on `base` (the fork's freeze produced exactly one to give). */
+static DecSeg *dec_seg_arm(DecSeg *base, int arm) {
+    DecSeg *s = malloc(sizeof *s);
+    CHECK(s, "decide: OOM recording a sibling's arm");
+    s->e = malloc(1);
+    CHECK(s->e, "decide: OOM recording a sibling's arm");
+    s->e[0] = (signed char)arm;
+    s->n = 1; s->below = base ? base->below + base->n : 0;
+    s->base = base; s->refcount = 1;   /* the fork blob's, and nobody else's until the sibling resumes */
+    g_dec_seg_live++; g_dec_seg_entries_live += 1;
+    g_dec_seg_bytes_live += (long)sizeof *s + 1;
+    return s;
+}
+
 void decide_enter(JSContext *ctx, Flow *f) {
     (void)ctx;
+    dec_clear();   /* whatever the previous flow was standing on is not this one's */
     dec_ensure(f->dec_n);
     if (f->dec_n) memcpy(g_dec, f->dec, (size_t)f->dec_n);
     g_dec_n = f->dec_n;
@@ -40,8 +167,23 @@ void decide_enter(JSContext *ctx, Flow *f) {
 
 void decide_leave(JSContext *ctx) {
     (void)ctx;
+    /* THE FLOW IS DONE, so its reference on the chain goes with it. Every other release point is a flow
+       STARTING (decide_enter / decide_resume, which clear before installing their own); a flow that finishes
+       reaches neither, and the chain it stood on would be held by a global until some later flow happened to
+       start. Released where the lifetime actually ends. */
+    dec_clear();
     g_running = 0;
     g_cur_fn = JS_UNDEFINED;
+}
+
+/* THE SESSION'S TEARDOWN. The head buffer and any chain the last flow left standing are this file's, and
+   nothing else frees them — the frontier's teardown frees the flows' BLOBS, which is a different reference. */
+void decide_free(void) {
+    dec_clear();
+    free(g_dec); g_dec = NULL; g_dec_cap = 0;
+    DCHECK(g_dec_seg_live == 0,
+           "the decision chain outlived the session — a frozen segment is referenced by the flows forked below "
+           "it and by nothing else, so one still live here is a blob the frontier's teardown did not release");
 }
 
 int decide_cursor(void) { return g_c; }
@@ -97,33 +239,58 @@ long decide_fork_total(void) { return g_fork_total; }
 /* Swap the running decision state when the scheduler interleaves flows. A flow paused mid-execution keeps its
    evolving vector (forks may have extended g_dec past f->dec) + its cursor, so on resume it consumes the SAME
    decisions from where it left off. decide_suspend snapshots; decide_resume restores + re-binds cur_fn. */
-typedef struct { signed char *dec; int dec_n, c; } DecideBlob;
+/* A BLOB IS A POINTER AT A SEGMENT and a cursor — the whole of one flow's parked decision state, and it is
+   O(1) whatever the depth of the vector it names. It was a `malloc(dec_n)` + `memcpy` of the entire vector, on
+   every park AND on every fork, which is where the quadratic came from. */
+typedef struct { DecSeg *seg; int c; } DecideBlob;
 void *decide_suspend(void) {
     DecideBlob *b = malloc(sizeof *b); CHECK(b, "decide: OOM suspend blob");
-    b->dec = malloc(g_dec_n ? (size_t)g_dec_n : 1); CHECK(b->dec, "decide: OOM suspend vector");
-    if (g_dec_n) memcpy(b->dec, g_dec, (size_t)g_dec_n);
-    b->dec_n = g_dec_n; b->c = g_c;
+    b->seg = dec_freeze();   /* the blob owns the reference the freeze hands back */
+    b->c = g_c;
     return b;
 }
 void decide_resume(void *blob, JSValueConst fn) {
     DecideBlob *b = blob;
-    dec_ensure(b->dec_n);
-    if (b->dec_n) memcpy(g_dec, b->dec, (size_t)b->dec_n);
-    g_dec_n = b->dec_n; g_c = b->c;
+    DCHECK(b != NULL, "a flow was resumed with no parked decision state — every branch it had already taken "
+                      "would be re-decided, and it would re-fork every sibling it has already produced");
+    dec_clear();                 /* the head and chain belong to the flow that just parked */
+    g_dec_base = b->seg;
+    if (g_dec_base) { g_dec_base->refcount++; g_dec_below = g_dec_base->below + g_dec_base->n; }
+    g_c = b->c;
+    DCHECK(g_c <= dec_total(), "a flow resumed with a cursor past the end of its own decision vector — the "
+                               "next branch would read a slot nothing recorded");
     g_cur_fn = fn;   /* borrowed from the resuming Flow */
     g_running = 1;
 }
-void decide_blob_free(void *blob) { DecideBlob *b = blob; if (b) { free(b->dec); free(b); } }
+void decide_blob_free(void *blob) { DecideBlob *b = blob; if (b) { dec_seg_unref(b->seg); free(b); } }
+
+/* See decide.h. `entries` is how many decisions the flow stands on, which is a property of the CHAIN and is
+   therefore SHARED with every ancestor; `bytes` is what the flow itself owns, which is now the blob and nothing
+   else. Reporting both is the point — the pair is what says the sharing is real. */
+void decide_blob_stats(const void *blob, long *entries, long *bytes) {
+    const DecideBlob *b = blob;
+    if (entries) *entries = (b && b->seg) ? b->seg->below + b->seg->n : 0;
+    if (bytes) *bytes = b ? (long)sizeof *b : 0;
+}
+void decide_live_stats(long *entries, long *bytes) {
+    if (entries) *entries = dec_total();
+    if (bytes) *bytes = g_dec_cap;
+}
 
 /* The sibling's hot decision state at a fork: replay the parent's path so far, then take `arm` at this branch
    (cursor). c = cursor so on resume the sibling re-executes the OP_if and replays exactly this arm — never
    re-forks, never re-runs the prefix. */
 static void *decide_fork_blob(int cursor, int arm) {
     DecideBlob *b = malloc(sizeof *b); CHECK(b, "decide: OOM fork blob");
-    b->dec_n = cursor + 1;
-    b->dec = malloc((size_t)b->dec_n); CHECK(b->dec, "decide: OOM fork vector");
-    if (cursor) memcpy(b->dec, g_dec, (size_t)cursor);
-    b->dec[cursor] = (signed char)arm;
+    /* A FORK IS ALWAYS AT THE END, and that is what makes the freeze the sibling's whole prefix rather than a
+       prefix of it. decide_arm reaches the forking branch only when the cursor has caught up with the vector
+       (the replay arm consumes a recorded slot, the constraint arm consumes none and records none), so the head
+       being frozen here ends exactly at `cursor`. Asserted rather than assumed: a fork at an interior cursor
+       would hand the sibling decisions this flow took AFTER the branch it is being forked at. */
+    DCHECK(cursor == dec_total(),
+           "a fork was prepared at a cursor that is not the end of the decision vector — the sibling would "
+           "inherit decisions taken after the branch it is being forked at");
+    b->seg = dec_seg_arm(dec_freeze(), arm);   /* the sibling's arm over the shared prefix; O(1) */
     b->c = cursor;
     return b;
 }
@@ -163,8 +330,8 @@ int decide_value_arm(JSValueConst cond)
 static int decide_arm(const char *key, int *forked) {
     int arm;
     *forked = 0;
-    if (g_c < g_dec_n) {                 /* REPLAY: this run is re-reaching a recorded decision — take that arm */
-        arm = g_dec[g_c] ? 1 : 0;
+    if (g_c < dec_total()) {             /* REPLAY: this run is re-reaching a recorded decision — take that arm */
+        arm = dec_at(g_c) ? 1 : 0;
         g_c++;
     } else if (key && concolic_branch_decided(key) >= 0) {
         /* FEASIBLE REFINEMENT. This flow has already decided this exact predicate, so the other arm is
@@ -195,16 +362,14 @@ static int decide_arm(const char *key, int *forked) {
         void *pblob = concolic_pins_suspend();
         if (key) concolic_constrain_branch(key, 1);
         engine_prepare_fork(dblob, pblob);
-        dec_ensure(g_c + 1);
-        g_dec[g_c] = 1;                  /* this flow: TRUE arm */
-        g_dec_n = g_c + 1;
+        dec_append(1);                   /* this flow: TRUE arm, onto the head the freeze above just emptied */
         g_c++;
         arm = 1;
         *forked = 1;
     }
     if (key && !*forked) concolic_constrain_branch(key, arm);   /* a REPLAYED arm narrows this flow just the same */
-    DCHECK(g_c <= g_dec_n, "the decision cursor ran past the vector — a branch answered without consuming its "
-                           "recorded slot, so the next one will read that slot as its own");
+    DCHECK(g_c <= dec_total(), "the decision cursor ran past the vector — a branch answered without consuming "
+                               "its recorded slot, so the next one will read that slot as its own");
     return arm;
 }
 

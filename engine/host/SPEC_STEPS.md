@@ -3257,3 +3257,160 @@ chains rather than the subtree.
 epilogue. What makes four of them **machines** is not author code — it is that they walk the page's
 tree: the stringifier, `deleteContents`, `extract`/`clone the contents` and `surroundContents` are
 each O(document) and rest one node per step, exactly as §4.4's `cloneNode` and §8.4's serialiser do.
+
+---
+
+## 13. The COLD TIER — what a parked flow's snapshot is made of, and what has to exist before any of it can cross
+
+**Why this section exists.** CLAUDE.md promises this mechanism in four places — §Time-travel-resume
+("the cold low-value tail serializes to IDB as suspended snapshots and resumes on demand"),
+§scheduler ("STARVE means deprioritize-and-page (resumable, cross-session), NEVER terminate"; "an
+engine self-parks its residue to the IDB cold tier under pressure") and §Disposition's RAM→DISK
+floor — and `engine.c` names it at its own flow-compile OOM as "the cold tier that pages the lowest-
+value tail to disk". **This build has none.** Every parked flow is hot in RAM, for the life of the
+session. This section is what a reader has to know before writing one, in the order the subproblems
+come.
+
+**The standard here is CLAUDE.md, not a W3C document**, so there is no "network was available"
+table; what takes its place is a MEASUREMENT table, because the first subproblem is not code. The
+numbers below are from `node engine/build.mjs min` — test_forced.c's minimal fixture, whose
+`Array.from(state.items)` over unknown injected state forks one sibling per position and therefore
+never drains (§NO BOUNDS: every length is a world, and the walk takes the longer arm forever).
+
+### 13.0 The measurement had to come first, and the instrument was blind
+
+Two things had to be built before anything could be measured at all, and both are landed.
+
+**The progress stream's cadence was keyed on `g_switches`.** In this run the walking flow is never
+outranked — `flow_weight` is reward + optimism − aging, the walker's reward is every endpoint it
+emitted earlier and the aging is 1e-6 per scheduler step — so the switch count is **2 for the whole
+run**, and the stream emitted ONE line while RSS climbed past 2.7 GB. A cadence keyed on a counter
+that stops is a report that goes silent exactly when there is something to report: the same defect
+as a corpus file the collector does not collect, because the output LOOKS complete. Both the cadence
+and the seam verdict now read one `engine_work_done()` — forks + flows + jobs + switches — so they
+measure the same quantity and cannot drift.
+
+**Nothing reported what a parked flow costs.** `@SWAP` says what a context SWITCH costs;
+`@HEAP` says what the RUNTIME holds; between them a parked flow's own state had no row. `@COLD`
+(`solver/cold.c`) is that row, per part, and it separates PER-FLOW from SHARED — because that
+distinction is the whole design question for a pager, not a detail of it.
+
+### 13.1 What a snapshot is made of — measured
+
+`min`, at four points in one run (KiB unless stated):
+
+| flows | decision vectors | pending replies | pin chain | delta heads | Flow structs | per-flow total | frame chains (runtime) | C alloc live |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1006 | 506 | 705 | 198 | 30 | 157 | 1399 | ~930 | 8001 |
+| 4014 | 31708 | 5648 | 1600 | 118 | 627 | 38837 | ~3700 | 51865 |
+| 9518 | 44357 | 6322 | 1791 | 280 | 1487 | 47699 | 8579 | 62226 |
+| 16046 | 125915 | 11265 | 3206 | 442 | 2507 | 140130 | 14648 | 165039 |
+
+Read it as four facts.
+
+1. **The decision vector was the whole problem, and it was quadratic.** 16046 flows held
+   **128,745,080** decision slots; 16046²/2 is 128,736,529. `decide_fork_blob` gave every sibling
+   its own `malloc(cursor)` + `memcpy` of the parent's prefix — 123 MB of the 137 MB of per-flow
+   snapshot the frontier was holding. §13.2.
+2. **The suspended heap-frame chains are the SMALL part.** Every frame chain in the run together is
+   14.6 MB at 16046 flows — about 930 bytes per flow, flat — and the JS object count is *flat at
+   2093* for the whole run. The part with no encoder is not the part with the bytes.
+3. **The shared chains are already right.** The heap COW chain holds 2 KiB and the DOM chain 250 KiB
+   across sixteen thousand flows; the delta heads total 442 KiB. cow.c's and dom_cow.c's structural
+   sharing works, which is exactly why a naive per-flow serializer would be wrong: it would write
+   each shared segment once per flow and multiply the sharing back out.
+4. **The pending register is inherited whole at every fork.** Eight entries per flow (the fixture's
+   eight outstanding fetches), each with its URL, method and headers deep-copied — 11 MB at 16046
+   flows. It is O(1) per flow, so it is not the shape the decision vector was, but it is the largest
+   remaining per-flow row and it is named here rather than left for the next reader to rediscover.
+
+### 13.2 Subproblem 1 (LANDED): the decision vector is a chain, not a copy
+
+The fourth and last instance of cow.c's refcounted immutable segment, and the one that was still
+copying. A sibling's decision vector is, by construction, the parent's decisions up to the branch
+plus one byte — and that prefix is frozen at that instant, because the cursor only moves forward and
+a replayed slot is read, never written. So `decide.c` now holds a mutable HEAD over a chain of
+`DecSeg`, `decide_fork_blob` freezes the head and hands the sibling one more segment holding its
+arm, and a park/resume with no decisions between them pushes no segment at all (the same guard
+`concolic_pins_suspend` keeps, for the same reason: the chain's depth must count FORKS, not
+switches). Every reference is released by `flow_registry_free`, which is the one teardown every host
+already runs — a `decide_free()` line copied into the three hosts' teardowns would be the hand-
+picked list `build.mjs` warns about, and one of them would eventually not have it.
+
+Measured, same fixture, same four points (KiB):
+
+| flows | 1006 | 4014 | 9006 | 16046 |
+| --- | --- | --- | --- | --- |
+| copied — the whole prefix, per flow | 506 | 31708 | 39720 | 125915 |
+| chained — one blob header per flow | 7 | 31 | 70 | 125 |
+| …plus the shared chain, counted once | 41 | 164 | 369 | 658 |
+| whole engine, C allocator live | 8001 → 3633 | 18559 → 10974 | 62226 → 23249 | 165039 → 41890 |
+
+The ratio is not the point; the SHAPE is. The first row is quadratic and the other two are linear,
+so the gap is unbounded — and it also removes a quadratic in TIME, since every fork was doing that
+`memcpy`. The same wall clock now reaches 29550 flows where it reached 16046, which is why RSS per
+SECOND can look similar while RSS per FLOW is four times lower: the honest comparison is at a
+matched flow count, and that is what the table is.
+
+### 13.3 Subproblem 2 (NOT BUILT): the snapshot value codec, which is what actually blocks the tier
+
+A cold tier only helps if paging a flow out **frees** what it held. A parked flow's roots are its
+suspended heap-frame chain, its COW delta head, its DOM head, its queued jobs, its pending replies
+and its `fn` — and every one of those holds live `JSValue`s. So the encoder must answer, for each
+value, one of two things:
+
+- **SHARED with the live heap** (a baseline object, a prototype, the global) — externalize by a
+  stable id and keep the identity on resume. The primitive exists and is the right one:
+  `remote_object_export` mints one id per object and holds a reference, which is how
+  `w.document === w.document` stays true across an agent boundary. It frees nothing, and it is not
+  supposed to: those objects are alive anyway.
+- **PRIVATE to this flow** — serialize by value and free. This is where the RAM comes back, and the
+  discriminator already exists in the engine: `JS_ObjFlowGen(obj)` against the delta's `fork_gen` is
+  precisely "was this object created after the last fork", which is the test `cow_capture` uses to
+  keep a delta O(shared-state-touched).
+
+**What does not exist is the second half's encoder.** `structured_clone.c` is HTML §2.7 and refuses
+by design exactly the kinds a parked flow is made of: a function, a Proxy, a Promise, a platform
+object. A suspended activation additionally holds closure `var_ref`s, a `JSFunctionBytecode` with a
+`cur_pc` into it, generator and async states, and a `cont_state` per continuation-holding builtin —
+354 step machines, each with its own struct. `JS_FlowClone`'s `clone_deep_flow` is the existing
+proof that the shapes CAN be walked; an encoder is that walk with a wire format and an object table
+instead of a `js_dup`.
+
+**Do not build a partial one.** An encoder that externalizes everything it cannot serialize compiles,
+runs, reports a paged-out count, and frees nothing — a cold tier that is a stub in §NO STUBS' sense,
+and worse than none because the counter would say it works.
+
+### 13.4 Subproblem 3 (NOT BUILT): the store edge, and where it is
+
+Per SECURITY.md the persistent store is IndexedDB **in the offscreen**, reached through the trusted
+bridge; `chrome.storage.local` is banned and the untrusted WASM may not touch IDB. So the engine
+side of this is a host edge, and the edge it should be is the one that already exists:
+`engine_host_request` / `engine_host_answer`. A flow paged out is a flow whose bytes the host holds;
+a flow paged **in** is a flow BLOCKED on a host request for its own snapshot — which is already a
+first-class state (`FLOW_PENDING_HOSTREQ`, `flow_blocked`), already ranked by the one WFQ, and
+already resumable. There is no second queue and no second pump to add.
+
+**The unit that crosses is the SEGMENT, not the flow.** §13.1's third fact is why: a flow's chains
+are shared with every sibling forked below them, so a segment is written once under its own key and
+a flow's record names its chain as a list of those keys. A store that wrote a flow's whole chain per
+flow would turn 250 KiB of DOM chain into 16046 copies of it.
+
+### 13.5 Subproblem 4 (NOT BUILT): the admission step
+
+§scheduler: "Cold-tail resume is the SAME admission step (not a separate loop), ranked by a
+`frontierWeight` estimator (emit-per-visit, since a parked flow has no live CPU to age by)." So this
+is not a new loop in `engine_sched_step` — it is one question asked where the WFQ already picks:
+over the RAM working-set floor, the lowest-`frontierWeight` PARKED flow serializes and is released;
+`flow_best` selecting a cold flow is what pages it back. **The razor is §scheduler's:** a resume
+that drops, starves, skips, reorders or forgets any flow is a CAP, banned — so the assertion this
+step owes is that a paged-out-and-resumed flow's decision vector, cursor, constraint and delta are
+byte-identical to what it parked with, checked at the resume rather than hoped for.
+
+### 13.6 What `min` does NOT do, and why that is correct
+
+It does not terminate, and it must not be made to. The walk is unbounded by design — every length of
+an unknown collection is a world — and `run_scheduler`'s completion condition is that the frontier
+drains. The cold tier does not change that and is not meant to: what it changes is whether the
+unboundedness is paid in RAM or on disk. A run that grows linearly and pages its tail is the
+designed behaviour; a run that grows quadratically in RAM was a data-structure bug, which is §13.2.

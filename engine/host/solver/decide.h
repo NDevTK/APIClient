@@ -66,4 +66,22 @@ void *decide_suspend(void);
 void  decide_resume(void *blob, JSValueConst fn);
 void  decide_blob_free(void *blob);
 
+/* HOW BIG ONE FLOW'S DECISION STATE IS — the slots in it and the bytes it holds. The cold tier asks because the
+   vector is PER FLOW and a fork COPIES the parent's prefix into it, so a chain of forks at one predicate costs
+   O(n) per flow and O(n^2) over the frontier. A number nobody could read is how that stayed invisible. `blob`
+   is a parked flow's (NULL for the running one, whose state is live here — decide_live_stats answers that). */
+void decide_blob_stats(const void *blob, long *entries, long *bytes);
+void decide_live_stats(long *entries, long *bytes);
+
+/* WHAT THE FROZEN DECISION CHAIN IS HOLDING — the fourth of the four chains built on cow.c's refcounted
+   immutable segment, reported beside the other three because a per-flow allocation nobody released looks the
+   same from any one of them and only the one that CLIMBS names which. A flow's own decision state is a POINTER
+   at a segment now, so what used to be the frontier's largest per-flow row is here, counted once. */
+void decide_chain_stats(long *segs, long *entries, long *bytes);
+
+/* The frontier's decision state going down with the frontier — called by flow_registry_free, which is the one
+   teardown every host already runs. Releases the running flow's chain reference and the single reusable head
+   buffer, and asserts that no frozen segment outlived the flows that referenced it. */
+void decide_free(void);
+
 #endif

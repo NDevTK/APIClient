@@ -13,6 +13,7 @@
 #include "core/frame/window_message.h"   /* the receiving half of a routed `windowproxy.post` */
 #include "core/frame/navigable.h"   /* @HEAP's realm count: the one component that holds this agent's realms */
 #include "solver/dom_cow.h"   /* the DOM half of time-travel — swapped per-flow alongside the heap COW delta */
+#include "solver/cold.h"      /* what the frontier's parked snapshots are made of — the cold tier's census */
 #include "check.h"
 #include <time.h>
 #include <stdlib.h>
@@ -1169,6 +1170,22 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
 static int g_switches = 0;
 int engine_switch_count(void) { return g_switches; }
 
+/* THE WORK THIS ENGINE HAS PERFORMED — forks taken, flows created, jobs run, context switches. ONE definition,
+   because two consumers ask the same question about it and they were asking two different ones.
+ *
+ * The seam verdict below measures a single step's SHARE of this, on the argument that being descheduled cannot
+ * inflate any of the four (a thread that is not running performs none of them). The PROGRESS STREAM needs
+ * exactly the same quantity and was keyed on `g_switches` alone — which is a subset, and in the one run that
+ * most needs reporting it is a subset that never moves. Measured on the minimal fixture: the unknown-length
+ * walk holds the thread because nothing outranks it, so `switches` stays at 1 for the whole run and the stream
+ * emitted ONE line while RSS climbed past two gigabytes. A cadence keyed on a counter that stops is a report
+ * that goes silent exactly when there is something to report, which is the same defect as a corpus file the
+ * collector does not collect: the output LOOKS complete. Keying both on the same "work done" fixes it and also
+ * makes the two agree by construction rather than by two people remembering to. */
+static long engine_work_done(void) {
+    return decide_fork_total() + flow_created_count() + g_jobs_run + g_switches;
+}
+
 static void flow_switch_out(JSContext *ctx, Flow *f) {   /* pause f: snapshot its solver state, restore baseline */
     /* the PARKED CONTINUATION travels with the flow, for the reason the delta does: it resumes a suspended
        async activation of THIS flow, under THIS flow's heap. Left in the runtime it would be resumed by
@@ -1340,7 +1357,7 @@ int engine_sched_step(void) {
             /* THE WORK THIS STEP PERFORMS, sampled beside the clock and for a reason the clock cannot serve —
                see the verdict below. Forks, flows and jobs are things the engine DID; no amount of being
                descheduled can inflate them. */
-            long fk0 = decide_fork_total(), fl0 = flow_created_count(), jb0 = g_jobs_run;
+            long w0 = engine_work_done();
             JS_FlowPreemptStats(&pq0, &pf0);
             g_max_gap = 0; g_last_ask = t0;   /* this step's gaps, measured from the moment it starts */
             idl_slowest_reset();              /* ...and this step's slowest single Web API member step */
@@ -1399,7 +1416,7 @@ int engine_sched_step(void) {
                    `for(;;);`. Nothing inside the process can distinguish that from being descheduled without a
                    CPU clock, so it is named here rather than papered over with a threshold that would fire on
                    both. An outside observer (the host's own watchdog) is where that one belongs. */
-                long work = (decide_fork_total() - fk0) + (flow_created_count() - fl0) + (g_jobs_run - jb0);
+                long work = engine_work_done() - w0;
                 if (work > ENGINE_SEAMLESS_WORK && g_preempt_asked == pa0) {
                     char why[448];
                     int wi = 0;
@@ -1616,8 +1633,8 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
         }
         /* Either enough work has happened to be worth a line, or the SEARCH grew — a new candidate is the event
            that changes what the rest of the run will cost, so it is worth saying when it happens. */
-        if (g_switches >= next || solve_candidate_count() != last_cands) {
-            while (g_switches >= next) next += ENGINE_PROGRESS_EVERY;
+        if (engine_work_done() >= next || solve_candidate_count() != last_cands) {
+            while (engine_work_done() >= next) next += ENGINE_PROGRESS_EVERY;
             last_cands = solve_candidate_count();
             /* WHAT IS RUNNING, not just how much has run. A run that stops advancing is the one thing this
                stream exists to make visible, and a line of pure counters cannot name the flow it stopped in —
@@ -1636,6 +1653,34 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
                 printf("@SWAP {\"installs\":%ld,\"entries\":%ld,\"worst\":%ld,\"mean\":%.1f,"
                        "\"heapSegs\":%ld,\"heapSegEntries\":%ld,\"domSegs\":%ld,\"domSegEntries\":%ld}\n",
                        sc, st, sm, sc ? (double)st / (double)sc : 0.0, hs, he, ds, de);
+            }
+            /* WHAT THE FRONTIER'S PARKED SNAPSHOTS ARE MADE OF — the cold tier's census (solver/cold.h). The
+               @SWAP line above says what a context SWITCH costs and the @HEAP line below says what the RUNTIME
+               holds; between them a parked flow's own state — its decision vector, its delta head, its DOM
+               head, its queued work — had no number at all, and that is exactly the thing a pager pages. The
+               PER-FLOW rows are what multiply by the frontier's size; the SHARED rows are counted once for the
+               whole frontier because a frozen segment is referenced by every flow forked below it. */
+            {
+                ColdCensus c;
+                cold_census(&c);
+                printf("@COLD {\"flows\":%ld,\"framed\":%ld,\"blocked\":%ld,"
+                       "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
+                       "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendKiB\":%ld,"
+                       "\"dynKiB\":%ld,\"miscKiB\":%ld,\"perFlowKiB\":%ld,"
+                       "\"segKiB\":%ld,\"domSegKiB\":%ld,\"pinSegs\":%ld,\"pinSegEntries\":%ld,"
+                       "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
+                       "\"sharedKiB\":%ld,\"stepMachines\":%d}\n",
+                       c.flows, c.framed, c.blocked,
+                       c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
+                       c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count,
+                       c.pend_bytes / 1024, c.dyn_bytes / 1024, c.misc_bytes / 1024,
+                       (c.dec_bytes + c.head_bytes + c.dom_head_bytes + c.pend_bytes + c.dyn_bytes +
+                        c.misc_bytes) / 1024,
+                       c.seg_bytes / 1024, c.dom_seg_bytes / 1024,
+                       c.pin_seg_count, c.pin_seg_entries, c.pin_seg_bytes / 1024,
+                       c.dec_seg_count, c.dec_seg_entries, c.dec_seg_bytes / 1024,
+                       (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes) / 1024,
+                       JS_StepMachineCount(JS_GetRuntime(g_sess_ctx)));
             }
             /* CREATED IS NOT LIVE, AND A COUNTER THAT CANNOT TELL THEM APART CANNOT NAME A LEAK. A run whose
                created-flow count climbs with the switch count is either CHURN (each flow finishes and the

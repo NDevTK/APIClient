@@ -144,6 +144,11 @@ void dom_base_ref(void *base);  /* add ONE ref (each orphan forks the document f
    The heap half reports the same pair (cow.h); they are read together because a delta nobody released looks the
    same from either side and only the one that CLIMBS names which half owns it. */
 void dom_cow_chain_stats(long *segs, long *entries);
+/* …in the unit the cold tier pages in, and the same for ONE flow's parked head at capacity `cap`. Asked of
+   this file for the reason cow.h's twin is: `sizeof(DomUndo)` is private and a caller that guessed it would
+   report a number that drifts the next time an entry kind is added. */
+long dom_cow_chain_bytes(void);
+long dom_cow_head_bytes(int cap);
 
 /* THIS FLOW CREATED THIS NODE. Called from every place a node is made, so the delta owns it and destroys it
    when the delta is discarded. Inert while capture is off — a boot-time creation is baseline and outlives

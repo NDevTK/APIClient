@@ -157,5 +157,15 @@ void cow_swap_stats(long *count, long *total, long *max);
    memory belonging somewhere else entirely. A segment is freed when its last holder drops it, so this number
    falling to nothing as flows finish is the whole claim that the structural sharing is also a lifetime. */
 void cow_chain_stats(long *segs, long *entries);
+/* …AND WHAT IT COSTS IN BYTES. The pair above counts segments and entries, which is the right unit for "is the
+   sharing working"; the cold tier needs the other unit, because what it pages is bytes. Asked of this file
+   rather than multiplied out by the caller: `sizeof(CowEntry)` is private, and a caller that guessed it would
+   report a number that drifts the next time an entry kind is added. */
+long cow_chain_bytes(void);
+
+/* ONE FLOW'S OWN HEAD — the writes it has made since its last fork, which is the part of the heap delta that
+   is NOT shared with any sibling and therefore the part a pager pays for once per parked flow. `bytes` is the
+   delta's whole host allocation (the struct, its entry array at capacity, and its hash index). */
+void cow_delta_head_stats(const CowDelta *d, long *entries, long *bytes);
 
 #endif

@@ -86,6 +86,19 @@ void cow_chain_stats(long *segs, long *entries) {
     if (segs) *segs = g_seg_live;
     if (entries) *entries = g_seg_entries_live;
 }
+/* The same two numbers in the unit the cold tier pages in — see cow.h. A frozen segment's entry array is
+   allocated at exactly its entry count (the head's array is handed over whole at the freeze), so the entries
+   are the array and there is no capacity slack to account for. */
+long cow_chain_bytes(void) {
+    return g_seg_live * (long)sizeof(CowSeg) + g_seg_entries_live * (long)sizeof(CowEntry);
+}
+
+void cow_delta_head_stats(const CowDelta *d, long *entries, long *bytes) {
+    if (entries) *entries = d ? d->n : 0;
+    if (bytes) *bytes = d ? (long)sizeof *d + (long)d->cap * (long)sizeof(CowEntry)
+                                           + (long)d->hash_cap * (long)sizeof(int)
+                          : 0;
+}
 static void cow_install_chain(JSContext *ctx, CowSeg *want);   /* defined with the rest of the chain walk */
 
 static uint32_t cow_slot_hash(void *p, uint32_t atom) {

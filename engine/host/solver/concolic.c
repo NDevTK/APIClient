@@ -52,7 +52,19 @@ typedef struct { char *key; char *val; signed char truth; } Cons;
    A WRITE TO A KEY THE CHAIN ALREADY HOLDS COPIES THAT ONE ENTRY UP INTO THE HEAD (`cons_entry`), which is what
    keeps the shared segments immutable while a flow may still narrow a fact it inherited — never a write through
    into a segment a sibling is reading. */
-typedef struct ConsSeg { Cons *e; int n; int *hash; int hash_cap; struct ConsSeg *base; int refcount; } ConsSeg;
+/* `bytes` is what this segment costs, computed ONCE at the freeze and carried, because the strings it holds
+   are strdup'd and re-walking them at every census would make a measurement O(chain). The cold tier reads it:
+   a frozen segment is SHARED by every flow forked below it, so it is counted once for the whole frontier and
+   never once per flow. */
+typedef struct ConsSeg { Cons *e; int n; int *hash; int hash_cap; struct ConsSeg *base; int refcount; long bytes; } ConsSeg;
+/* THE FROZEN CONSTRAINT CHAIN'S OWN CENSUS — the twin of cow.c's and dom_cow.c's, counted at the two points a
+   segment's lifetime begins and ends so the pair cannot drift from the thing it counts. */
+static long g_cons_seg_live, g_cons_seg_entries_live, g_cons_seg_bytes_live;
+void concolic_chain_stats(long *segs, long *entries, long *bytes) {
+    if (segs) *segs = g_cons_seg_live;
+    if (entries) *entries = g_cons_seg_entries_live;
+    if (bytes) *bytes = g_cons_seg_bytes_live;
+}
 
 static Cons    *g_pins = NULL;  static int g_pins_n = 0, g_pins_cap = 0;   /* the running flow's HEAD */
 static int     *g_pins_hash = NULL; static int g_pins_hash_cap = 0;        /* …and its index (key -> idx+1) */
@@ -144,6 +156,7 @@ static void cons_seg_unref(ConsSeg *s) {
     while (s && --s->refcount <= 0) {
         ConsSeg *base = s->base;
         int i;
+        g_cons_seg_live--; g_cons_seg_entries_live -= s->n; g_cons_seg_bytes_live -= s->bytes;
         for (i = 0; i < s->n; i++) { free(s->e[i].key); free(s->e[i].val); }
         free(s->e); free(s->hash); free(s);
         s = base;
@@ -182,6 +195,14 @@ void *concolic_pins_suspend(void) {
         CHECK(s, "concolic: OOM freezing the path constraint into a shared segment");
         s->e = g_pins; s->n = g_pins_n; s->hash = g_pins_hash; s->hash_cap = g_pins_hash_cap;
         s->base = g_pins_base; s->refcount = 2;   /* the running flow + this blob */
+        {   /* what this segment costs, measured where it is frozen — see the struct */
+            int k;
+            s->bytes = (long)sizeof *s + (long)s->n * (long)sizeof(Cons)
+                     + (long)s->hash_cap * (long)sizeof(int);
+            for (k = 0; k < s->n; k++)
+                s->bytes += (long)strlen(s->e[k].key) + 1 + (s->e[k].val ? (long)strlen(s->e[k].val) + 1 : 0);
+            g_cons_seg_live++; g_cons_seg_entries_live += s->n; g_cons_seg_bytes_live += s->bytes;
+        }
         g_pins = NULL; g_pins_n = g_pins_cap = 0;
         g_pins_hash = NULL; g_pins_hash_cap = 0;
         g_pins_base = s;                          /* the running flow continues on top of what it just froze */

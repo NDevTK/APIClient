@@ -102,6 +102,13 @@ void flow_registry_free(JSContext *ctx) {
         free(f);
     }
     free(g_flows); g_flows = NULL; g_flows_n = g_flows_cap = 0;
+    /* AND THE DECISION STATE THE FRONTIER STANDS ON, released HERE and not by each host. Every flow's parked
+       vector is a reference on a shared frozen chain, and the running flow holds one more in decide.c's
+       globals; the blobs went with the flows in the loop above, so this is the last of them. Putting it in the
+       three hosts' teardowns instead would be the hand-copied list build.mjs warns about — a host that forgot
+       the line would leak the whole chain with nothing to say so, which is exactly how the world registry's
+       own release came to be missing from one of them. It belongs to the frontier, so it goes down with it. */
+    decide_free();
 }
 
 /* EVERY FLOW EVER CREATED. Reported beside the switch count for the same reason that one is: without it, a run

@@ -115,5 +115,11 @@ void        concolic_clear_pins(void);                        /* per-flow: clear
 void       *concolic_pins_suspend(void);
 void        concolic_pins_resume(void *blob);
 void        concolic_pins_blob_free(void *blob);
+/* WHAT THE FROZEN CONSTRAINT CHAIN IS HOLDING — the third of the three chains built on cow.c's refcounted
+   immutable segment, reported beside the other two for the reason they are reported beside each other: a
+   per-flow allocation nobody released looks identical from any one of them, and only the number that CLIMBS
+   names which. A blob is one pointer at a segment, so a parked flow's own constraint cost is here and not in
+   its per-flow rows. */
+void        concolic_chain_stats(long *segs, long *entries, long *bytes);
 
 #endif
