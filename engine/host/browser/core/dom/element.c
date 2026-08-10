@@ -86,38 +86,189 @@ static JSValue js_el_get_attribute(JSContext *ctx, JSValueConst this_val, int ar
     return r;
 }
 
-static JSValue js_el_set_attribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* DOM §4.9 "set an attribute value" — setAttribute's steps 4-7 and setAttributeNS's step 3, over a name that is
+   already the one the algorithm computed (validated, and ASCII-lowercased where step 2 says so) and a value
+   whose Trusted Type step 3 has already verified. Every write in this file lands here, which is what makes the
+   taint shadow and the per-flow DOM delta impossible for a caller to skip.
+   NO USER CODE: `handle attribute changes` enqueues a mutation record and an `attributeChangedCallback` and
+   runs the attribute change steps, and SPEC_STEPS §2.5 is the statement that none of those three runs script.
+   The reactions surface at the `[CEReactions]` boundary, not here. */
+static void el_write_attribute(JSContext *ctx, lxb_dom_element_t *el, const char *name, JSValueConst value)
 {
-    (void)magic;
-    lxb_dom_element_t *el = elem_of(this_val);
-    const char *name;
     const char *val;
 
-    if (!el || argc < 2) return JS_UNDEFINED;
-    /* THE NAME, WHICH CAN ALSO BE UNKNOWN. The VALUE below has had a concolic path since the taint shadow was
-       built; the name never did, so `setAttribute(someParameter, v)` crashed at the coercion while
-       `setAttribute("href", someParameter)` worked. An unknown name denotes its shape, stable per source. */
-    name = concolic_name_cstr(ctx, argv[0]);
-    if (!name) return JS_EXCEPTION;
     /* A concolic value has no bytes to store. Record it in the shadow so the read gives the SAME concolic back,
        and write its shape into the tree so a serialization of the document still shows something. */
-    if (concolic_is(argv[1])) {
-        attr_shadow_set(ctx, el, ATTR_SLOT_ATTRIBUTE, name, argv[1]);
+    if (concolic_is(value)) {
+        attr_shadow_set(ctx, el, ATTR_SLOT_ATTRIBUTE, name, value);
         /* NEVER ToString a concolic to get bytes: its coercion belongs to the concolic hooks and answers with
            another concolic, so the call THROWS — and the throw was being dropped here, leaving a pending
            exception behind a normal return. The SHAPE is the honest byte form for the tree. */
-        val = concolic_shape_c(argv[1]);
+        val = concolic_shape_c(value);
         dom_cow_set_attribute(el, name, val ? val : "", val ? strlen(val) : 0);
-        JS_FreeCString(ctx, name);
-        return JS_UNDEFINED;
+        return;
     }
     attr_shadow_set(ctx, el, ATTR_SLOT_ATTRIBUTE, name, JS_UNDEFINED);   /* a concrete write clears any earlier taint */
-    val = JS_ToCString(ctx, argv[1]);
-    if (!val) { JS_FreeCString(ctx, name); return JS_EXCEPTION; }
+    val = JS_ToCString(ctx, value);
+    DCHECK(val != NULL, "an attribute value reached the write unconverted — the IDL declaration is what converts "
+                        "it, and running the page's toString from here is the drive-to-completion the flow "
+                        "machinery exists to avoid");
+    if (!val) return;
     dom_cow_set_attribute(el, name, val, strlen(val));   /* chokepoint: capture-then-mutate, per flow */
     JS_FreeCString(ctx, val);
-    JS_FreeCString(ctx, name);
-    return JS_UNDEFINED;
+}
+
+/* DOM §1.4: a string is a VALID ATTRIBUTE LOCAL NAME if its length is at least 1 and it contains no ASCII
+   whitespace, U+0000, U+002F (/), U+003D (=) or U+003E (>). setAttribute step 1 throws InvalidCharacterError
+   for anything else, and a page's own feature detection reads that throw. */
+static bool el_valid_attribute_local_name(const char *n)
+{
+    size_t i;
+
+    if (!n || !*n) return false;
+    for (i = 0; n[i]; i++) {
+        char c = n[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f') return false;
+        if (c == '/' || c == '=' || c == '>') return false;
+    }
+    return true;   /* a U+0000 cannot appear in a NUL-terminated C string, and JS_ToCString rejects one */
+}
+
+/* THE ELEMENT AS §3.8 NAMES IT — its namespace URL and its local name, which together decide which interface
+   it implements and therefore which row of the Trusted Types table it can match. Borrowed from Lexbor's own
+   interned strings; `*ns` is NULL for an element in no namespace. */
+static void el_ns_and_local(lxb_dom_element_t *el, const char **ns, const char **local,
+                            char *nsbuf, size_t nscap, char *lobuf, size_t locap)
+{
+    lxb_dom_node_t *n = lxb_dom_interface_node(el);
+    size_t len = 0;
+    const lxb_char_t *s;
+
+    *ns = NULL;
+    *local = "";
+    s = lxb_ns_by_id(n->owner_document->ns, n->ns, &len);
+    if (s && len && len < nscap) { memcpy(nsbuf, s, len); nsbuf[len] = 0; *ns = nsbuf; }
+    len = 0;
+    s = lxb_dom_element_local_name(el, &len);
+    if (s && len < locap) { memcpy(lobuf, s, len); lobuf[len] = 0; *local = lobuf; }
+}
+
+/* §4.9 setAttribute, AS A MACHINE, because its step 3 is Trusted Types §3.7 → §3.4 → §3.5, and §3.5 calls the
+   page's own default-policy `createHTML`/`createScript`/`createScriptURL`. That is author code running in the
+   MIDDLE of setAttribute, between the lowercase and the write, so the algorithm cannot be one C body — a stage
+   boundary has to exist exactly there or the flow has nowhere to park.
+   ITS OWN STAGE TABLE, NOT ONE SHARED WITH setAttributeNS. The two put the Trusted Types call at different
+   positions — after the lowercase (step 3 of 7) here, after validate-and-extract (step 2 of 3) there — so one
+   table across both would name the wrong step for one of them, which is a parked flow that reports a position
+   in its algorithm that it is not at. */
+#define EL_SET_ATTR_STAGES(X) \
+    X(SETATTR_NAME,    "DOM §4.9 setAttribute steps 1-2 (throw InvalidCharacterError unless qualifiedName is a " \
+                       "valid attribute local name; ASCII-lowercase it for an element in the HTML namespace in " \
+                       "an HTML document)") \
+    X(SETATTR_TRUSTED, "DOM §4.9 setAttribute step 3 (get trusted type compliant attribute value with " \
+                       "qualifiedName, a null attribute namespace, this and value), which is where Trusted " \
+                       "Types §3.5's default-policy callback runs") \
+    X(SETATTR_WRITE,   "DOM §4.9 setAttribute steps 4-7 (change the attribute of that qualified name, or " \
+                       "create one and append it)")
+enum { IDL_STEP_STAGE_BASE(EL_SET_ATTR_STAGES) EL_SET_ATTR_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const EL_SET_ATTR_STEPS[] = { EL_SET_ATTR_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    char   *name;        /* step 2's answer: the lowercased qualified name, held across step 3's suspension */
+    size_t  name_len;
+    JSValue verified;    /* step 3's answer, owned — what steps 5-7 write, never the argument */
+} SetAttrState;
+
+static void set_attr_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    SetAttrState *s = st;
+    v->val(ctx, &s->verified);
+    v->buf(ctx, (void **)&s->name, s->name_len ? s->name_len + 1 : 0);
+}
+
+static void set_attr_release(JSContext *ctx, void *st)
+{
+    SetAttrState *s = st;
+    free(s->name);
+    s->name = NULL;
+    JS_FreeValue(ctx, s->verified);
+    s->verified = JS_UNDEFINED;
+}
+
+static int js_el_set_attribute(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                               JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    SetAttrState *s = st;
+    lxb_dom_element_t *el = elem_of(hdr->this_val);
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+
+    if (hdr->stage == SETATTR_NAME) {
+        /* THE NAME, WHICH CAN ALSO BE UNKNOWN. The VALUE has had a concolic path since the taint shadow was
+           built; the name never did, so `setAttribute(someParameter, v)` crashed at the coercion while
+           `setAttribute("href", someParameter)` worked. An unknown name denotes its shape, stable per source. */
+        const char *name = concolic_name_cstr(ctx, argc > 0 ? argv[0] : JS_UNDEFINED);
+        size_t i;
+
+        if (!name) return JS_STEP_ABRUPT;
+        if (!el || argc < 2) { JS_FreeCString(ctx, name); return JS_STEP_DONE; }
+        if (!el_valid_attribute_local_name(name)) {          /* step 1 */
+            JS_FreeCString(ctx, name);
+            JS_ThrowDOMException(ctx, "InvalidCharacterError",
+                                 "setAttribute was given a name that is not a valid attribute local name");
+            return JS_STEP_ABRUPT;
+        }
+        s->name_len = strlen(name);
+        s->name = malloc(s->name_len + 1);
+        CHECK(s->name != NULL, "setAttribute could not copy its own attribute name");
+        memcpy(s->name, name, s->name_len + 1);
+        JS_FreeCString(ctx, name);
+        /* STEP 2. Lexbor lowercases the name it STORES for an HTML element in an HTML document, and this
+           member did not — so the taint shadow was keyed on the case the page wrote while the tree held the
+           lowercase, and `el.setAttribute("SRC", location.hash)` then read back clean through
+           `el.getAttribute("src")`. Doing step 2 here is what makes the two agree. */
+        if (lxb_dom_interface_node(el)->ns == LXB_NS_HTML &&
+            lxb_dom_interface_node(el)->owner_document->type == LXB_DOM_DOCUMENT_DTYPE_HTML)
+            for (i = 0; i < s->name_len; i++)
+                if (s->name[i] >= 'A' && s->name[i] <= 'Z') s->name[i] = (char)(s->name[i] - 'A' + 'a');
+        hdr->stage = SETATTR_TRUSTED;
+    }
+    if (hdr->stage == SETATTR_TRUSTED) {
+        char nsbuf[128], lobuf[64];
+        const char *ns, *local;
+
+        if (!el) return JS_STEP_DONE;
+        el_ns_and_local(el, &ns, &local, nsbuf, sizeof(nsbuf), lobuf, sizeof(lobuf));
+        /* STEP 3, with a NULL attribute namespace — which is what makes `el.setAttribute("onclick", s)` a
+           TrustedScript sink and `el.setAttributeNS(XLINK, "xlink:href", s)` not the same one. */
+        s->verified = trusted_types_compliant_attribute_value(ctx, ns, local, NULL, s->name,
+                                                              argc > 1 ? argv[1] : JS_UNDEFINED);
+        if (JS_IsException(s->verified)) { s->verified = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        hdr->stage = SETATTR_WRITE;
+    }
+    DCHECK(hdr->stage == SETATTR_WRITE, "setAttribute resumed into a stage it does not have");
+    if (el) el_write_attribute(ctx, el, s->name, s->verified);   /* steps 4-7 */
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl EL_SET_ATTR_STEP = {
+    js_el_set_attribute, sizeof(SetAttrState), set_attr_visit, set_attr_release,
+    "DOM §4.9 Element.setAttribute", EL_SET_ATTR_STEPS
+};
+
+/* THE ENGINE'S OWN ATTRIBUTE WRITE — a reflection's setter, the hyperlink mixin re-serialising `href`. It is
+   DOM §4.9's "set an attribute value" and nothing above it: the name is the engine's own (so step 1 cannot
+   fail and step 2 has nothing to lowercase), and the Trusted Types step belongs to the MEMBER the page called,
+   which for a reflected IDL attribute is that attribute's own setter. */
+static void el_set_attribute_internal(JSContext *ctx, JSValueConst this_val, const char *name, JSValueConst value)
+{
+    lxb_dom_element_t *el = elem_of(this_val);
+
+    if (!el) return;
+    DCHECK(el_valid_attribute_local_name(name), "the engine wrote an attribute whose name the DOM would reject");
+    el_write_attribute(ctx, el, name, value);
 }
 
 /* §4.9 tagName is the HTML-UPPERCASED qualified name: for an element in the HTML namespace whose document is an
@@ -901,8 +1052,7 @@ static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magi
 static JSValue js_el_reflect_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     lxb_dom_element_t *el = elem_of(this_val);
-    JSValue args[2];
-    JSValue r;
+    JSValue verified;
 
     DCHECK(magic >= 0 && magic < g_reflect_n,
            "a reflected property was declared with a magic the registry does not name");
@@ -916,12 +1066,24 @@ static JSValue js_el_reflect_set(JSContext *ctx, JSValueConst this_val, JSValueC
         }
         return JS_UNDEFINED;
     }
-    args[0] = JS_NewString(ctx, g_reflect[magic].attr);
-    args[1] = JS_DupValue(ctx, val);
-    r = js_el_set_attribute(ctx, this_val, 2, (JSValueConst *)args, 0);
-    JS_FreeValue(ctx, args[0]);
-    JS_FreeValue(ctx, args[1]);
-    return r;
+    /* A REFLECTED ATTRIBUTE THAT IS A TRUSTED TYPES SINK IS ONE THROUGH BOTH SPELLINGS. §3.8's table is a
+       table of (element, attribute) pairs, not of member names, so `script.src = s` and
+       `script.setAttribute("src", s)` are the same sink and must throw together under
+       `require-trusted-types-for 'script'`; HTML says the same thing by declaring srcdoc's IDL type as
+       `(TrustedHTML or DOMString)`. Nearly every reflection maps to nothing and this returns the value it was
+       given. */
+    if (!el) return JS_UNDEFINED;
+    {
+        char nsbuf[128], lobuf[64];
+        const char *ns, *local;
+
+        el_ns_and_local(el, &ns, &local, nsbuf, sizeof(nsbuf), lobuf, sizeof(lobuf));
+        verified = trusted_types_compliant_attribute_value(ctx, ns, local, NULL, g_reflect[magic].attr, val);
+        if (JS_IsException(verified)) return JS_EXCEPTION;
+    }
+    el_set_attribute_internal(ctx, this_val, g_reflect[magic].attr, verified);
+    JS_FreeValue(ctx, verified);
+    return JS_UNDEFINED;
 }
 
 /* AN ELEMENT'S CONTENT ATTRIBUTE, for a component that is not a plain reflection. §4.6.3's
@@ -948,13 +1110,10 @@ char *element_attr_get(JSContext *ctx, JSValueConst el, const char *name)
 
 void element_attr_set(JSContext *ctx, JSValueConst el, const char *name, const char *value)
 {
-    JSValue args[2];
+    JSValue v = JS_NewString(ctx, value ? value : "");
 
-    args[0] = JS_NewString(ctx, name);
-    args[1] = JS_NewString(ctx, value ? value : "");
-    JS_FreeValue(ctx, js_el_set_attribute(ctx, el, 2, (JSValueConst *)args, 0));
-    JS_FreeValue(ctx, args[0]);
-    JS_FreeValue(ctx, args[1]);
+    el_set_attribute_internal(ctx, el, name, v);
+    JS_FreeValue(ctx, v);
 }
 
 /* A REFLECTION IS DECLARED ONCE AND INSTALLED PER REALM, like every other member — the registry entry and its
@@ -1282,7 +1441,10 @@ void element_init(JSContext *ctx)
        `el.getAttribute({toString(){ … }})` is the page's code, and the declaration parks the machine on that
        argument rather than running it out of a C activation. */
     g_id_get_attr = idl_method_id(ctx, IDL_1STR, 1, js_el_get_attribute, 0);
-    g_id_set_attr = idl_method_id(ctx, IDL_2STR, 2, js_el_set_attribute, 0);
+    /* `[CEReactions] undefined setAttribute(DOMString qualifiedName, (TrustedType or DOMString) value)`. The
+       union's platform-object arm is §2's three types, which do not exist here, so every value takes the
+       DOMString arm — and it becomes an arm the moment §2 lands, in the DECLARATION rather than in the body. */
+    g_id_set_attr = idl_method_id_step(ctx, IDL_2STR, 2, NULL, 0, &EL_SET_ATTR_STEP, 0);
     /* §4.9: webkitMatchesSelector is `matches` under its historical name — the IDL declares it as the same
        operation, so it IS the same declaration and not a forwarding wrapper. Both are magics on the one
        selector machine document.c owns, which is what stops four members disagreeing about a selector. */

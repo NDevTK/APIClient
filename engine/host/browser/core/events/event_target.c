@@ -583,6 +583,34 @@ static JSValue js_handler_set(JSContext *ctx, JSValueConst this_val, JSValueCons
     return JS_UNDEFINED;
 }
 
+/* HTML §8.1.7.2: an EVENT HANDLER CONTENT ATTRIBUTE is the content attribute of the same name as an event
+   handler IDL attribute, and that name set is exactly the list above — so the question is answered here rather
+   than by a second list somewhere else. Trusted Types §3.8 step 2 asks it of every setAttribute: an event
+   handler content attribute demands a TrustedScript, so `el.setAttribute("onclick", s)` throws under
+   `require-trusted-types-for 'script'` while `el.setAttribute("title", s)` does not, and a copy of this list
+   that fell one name behind would answer that question differently from the property that shares the name. */
+bool event_target_is_handler_attribute(const char *name)
+{
+    int i;
+
+    DCHECK(name != NULL, "the event handler content attribute test was asked about no name");
+    /* ASCII case-insensitively: an attribute name reaching here has already been lowercased by DOM §4.9 step 2
+       for an HTML element, but setAttributeNS performs no such lowercasing and `onClick` in an XML document is
+       not an event handler content attribute — the compare is stated once here rather than at each caller. */
+    for (i = 0; i < EH_COUNT; i++) {
+        const char *n = EH_NAME[i];
+        size_t k = 0;
+        while (n[k] && name[k]) {
+            char a = name[k];
+            if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+            if (a != n[k]) break;
+            k++;
+        }
+        if (!n[k] && !name[k]) return true;
+    }
+    return false;
+}
+
 void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask)
 {
     int i;

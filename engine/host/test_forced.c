@@ -1288,10 +1288,13 @@ static const char *HTML_MIN =
 /* HTML §7.2.6 AND CSP §6.1, in C — the browser half's tests are C tests, and this one has no page to run.
    What it pins is the pair of facts the rest of the platform will build on: what a policy PERMITS, and that a
    child's container is a CLONE whose answers do not move when the parent's would. */
-/* TRUSTED TYPES §4.4, in C, for the same reason the one below is: it is a parse over a serialized CSP list and
-   it has no page to run. What it pins is the answer every HTML sink's step 1 turns on — a document with no
-   policy requires nothing, and one that requires trusted types is one on which `el.innerHTML = s` THROWS, so
-   getting either side wrong silently changes what the solver explores on every page that carries a policy. */
+/* TRUSTED TYPES §4.2.3 AND §3.8, in C, for the same reason the one below is: a parse over a serialized CSP
+   list and a table lookup, neither of which has a page to run. What §4.2.3 pins is the answer every HTML
+   sink's step 1 turns on — a document with no policy requires nothing, and one that requires trusted types is
+   one on which `el.innerHTML = s` THROWS, so getting either side wrong silently changes what the solver
+   explores on every page that carries a policy. What §3.8 pins is WHICH attributes are sinks at all: get that
+   set too wide and every setAttribute on a policy-carrying page throws, too narrow and the solver reports
+   `script.src = attackerUrl` as reachable on a document where the assignment dies. */
 static void trusted_types_selftest(void)
 {
     /* "No Content-Security-Policy" is the overwhelmingly common case, and a wrong default here would throw a
@@ -1316,6 +1319,51 @@ static void trusted_types_selftest(void)
           "an unquoted sink group is not the keyword");
     CHECK(!trusted_types_required_by("require-trusted-types-for", TRUSTED_TYPE_HTML),
           "a directive with no value requires nothing");
+
+    /* §3.8's four table rows and its event-handler rule. The sink NAME is checked as well as the type: it is
+       what a violation report identifies, and two sinks reporting one name are one sink to whoever reads it. */
+    {
+        static const char *HTML_NS = "http://www.w3.org/1999/xhtml";
+        static const char *SVG_NS = "http://www.w3.org/2000/svg";
+        static const char *XLINK_NS = "http://www.w3.org/1999/xlink";
+        TrustedTypeKind k;
+        char sink[96];
+
+        CHECK(trusted_types_attribute_data(HTML_NS, "iframe", NULL, "srcdoc", &k, sink, sizeof(sink)) &&
+              k == TRUSTED_TYPE_HTML && strcmp(sink, "HTMLIFrameElement srcdoc") == 0,
+              "an iframe's srcdoc is the TrustedHTML row");
+        CHECK(trusted_types_attribute_data(HTML_NS, "script", NULL, "src", &k, sink, sizeof(sink)) &&
+              k == TRUSTED_TYPE_SCRIPT_URL && strcmp(sink, "HTMLScriptElement src") == 0,
+              "a script's src is the TrustedScriptURL row");
+        CHECK(trusted_types_attribute_data(SVG_NS, "script", NULL, "href", &k, sink, sizeof(sink)) &&
+              k == TRUSTED_TYPE_SCRIPT_URL, "an SVG script's href is the TrustedScriptURL row");
+        CHECK(trusted_types_attribute_data(SVG_NS, "script", XLINK_NS, "href", &k, sink, sizeof(sink)) &&
+              k == TRUSTED_TYPE_SCRIPT_URL, "an SVG script's xlink:href is its own TrustedScriptURL row");
+        /* The INTERFACE is what the first column names, and an `iframe`'s src is not its srcdoc — a row read
+           as "any element, this attribute" would make every `img.src` a Trusted Types sink. */
+        CHECK(!trusted_types_attribute_data(HTML_NS, "iframe", NULL, "src", &k, sink, sizeof(sink)),
+              "an iframe's src is not in the table");
+        CHECK(!trusted_types_attribute_data(HTML_NS, "img", NULL, "src", &k, sink, sizeof(sink)),
+              "an img's src is not the script row");
+        CHECK(!trusted_types_attribute_data(SVG_NS, "script", NULL, "src", &k, sink, sizeof(sink)),
+              "an SVG script's src is not its href row");
+        /* STEP 2, which precedes the table and builds its sink name out of the attribute. */
+        CHECK(trusted_types_attribute_data(HTML_NS, "div", NULL, "onclick", &k, sink, sizeof(sink)) &&
+              k == TRUSTED_TYPE_SCRIPT && strcmp(sink, "Element onclick") == 0,
+              "an event handler content attribute is a TrustedScript sink named after itself");
+        CHECK(trusted_types_attribute_data(SVG_NS, "circle", NULL, "onload", &k, sink, sizeof(sink)) &&
+              k == TRUSTED_TYPE_SCRIPT, "step 2 covers the SVG namespace as well as HTML");
+        /* An attribute NAMESPACE is what step 2 requires to be null, and `ongoing` is not a handler name — a
+           prefix match would make it one. */
+        CHECK(!trusted_types_attribute_data(HTML_NS, "div", XLINK_NS, "onclick", &k, sink, sizeof(sink)),
+              "a namespaced onclick is not an event handler content attribute");
+        CHECK(!trusted_types_attribute_data(HTML_NS, "div", NULL, "ongoing", &k, sink, sizeof(sink)),
+              "a name that merely starts like a handler is not one");
+        CHECK(!trusted_types_attribute_data(HTML_NS, "div", NULL, "onclickx", &k, sink, sizeof(sink)),
+              "a name that merely begins with a handler name is not one");
+        CHECK(!trusted_types_attribute_data(HTML_NS, "div", NULL, "title", &k, sink, sizeof(sink)),
+              "an ordinary attribute maps to nothing, which is nearly every attribute there is");
+    }
 }
 
 static void policy_container_selftest(void)

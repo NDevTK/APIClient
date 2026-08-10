@@ -44,6 +44,10 @@ enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 1
    machine under a second entry rather than a second implementation of it. */
 void event_target_install_click(JSContext *ctx, JSValueConst target);
 void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask);
+/* IS THIS THE NAME OF AN EVENT HANDLER CONTENT ATTRIBUTE? HTML §8.1.7.2 defines that set as the names of the
+   event handler IDL attributes above, so it is answered from the one list rather than from a second copy.
+   Trusted Types §3.8 step 2 is the caller: an event handler content attribute maps to TrustedScript. */
+bool event_target_is_handler_attribute(const char *name);
 /* A handler attribute whose SETTER has a side effect. HTML has one: §9.4.2's `onmessage` on a MessagePort also
    starts the port, which is why assigning it is enough and addEventListener alone is not. The hook runs AFTER
    the handler is registered — start() delivers what is already queued, and delivering it first would fire at a
