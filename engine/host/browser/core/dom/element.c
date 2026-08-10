@@ -560,6 +560,9 @@ typedef struct {
     char   *html;                 /* the markup, owned: the parser is handed slices of it across suspensions */
     size_t  len, off;
     lxb_dom_element_t *context;
+    /* §8.5.5 STEP 5's `body`, when there is one: an element this machine CREATED to be the parse context and
+       that is in no tree, so this machine has to destroy it. Owned, and released on the throw path too. */
+    lxb_dom_element_t *own_context;
     lxb_dom_node_t *anchor, *ref, *frag, *node;
 } FragState;
 
@@ -578,6 +581,11 @@ static void frag_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static void frag_release(JSContext *ctx, void *st)
 {
     FragState *s = st;
+    /* §8.5.5 step 5's `body` never entered a tree, so nothing else will ever free it. */
+    if (s->own_context) {
+        dom_cow_destroy_private(lxb_dom_interface_node(s->own_context), /*with_children*/ true);
+        s->own_context = NULL;
+    }
     /* THE THROW PATH OWNS THE PARSER TOO. A flow dropped mid-parse would otherwise leak a tokenizer, an
        open-element stack and the temporary document behind them. */
     if (s->parser) { lxb_html_parse_fragment_chunk_end(s->parser); lxb_html_parser_destroy(s->parser); }
@@ -748,10 +756,25 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
                                      "outerHTML on an element whose parent is a Document");
                 return JS_STEP_ABRUPT;
             }
-            DCHECK(n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
-                   "§8.5.5 step 5: outerHTML on an element whose parent is a DocumentFragment parses against a "
-                   "freshly created HTML `body` element, which this engine has no create-an-element path to "
-                   "here — build it rather than parsing against the fragment");
+            /* §8.5.5 STEP 5: a DocumentFragment parent is not a parse context — the fragment parsing
+               algorithm reads the context element's local name to pick the tokenizer state and to reset the
+               insertion mode, and a fragment has neither. The standard says to parse against a freshly
+               created HTML `body` element instead, which is what makes
+               `frag.appendChild(td); td.outerHTML = "<tr>"` behave as `body` would rather than as whatever
+               the fragment's first child happened to be. The element is created here and destroyed with the
+               machine: it is in no tree, so nothing else ever would. */
+            if (n->parent->type == LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT) {
+                s->own_context = lxb_dom_document_create_element(n->owner_document,
+                                                                 (const lxb_char_t *)"body", 4, NULL);
+                CHECK(s->own_context != NULL,
+                      "§8.5.5 step 5's `body` element could not be created — outerHTML would then parse "
+                      "against a context the algorithm does not have");
+            } else {
+                DCHECK(n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
+                       "§8.5.5 step 2 gave outerHTML a parent that is neither a Document (step 4's throw), a "
+                       "DocumentFragment (step 5's body) nor an Element — DOM §4.2.3 admits no fourth kind of "
+                       "parent, so this is a tree this engine built and the standard cannot describe");
+            }
         }
         solve_html_sink(ctx, val);
         if (concolic_is(val))
@@ -778,8 +801,11 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
             }
             frag_begin(ctx, s, el, target, PLACE_CHILDREN, html, /*clear_first*/ true);
         } else {
-            /* §8.5.5 step 6: the fragment is parsed in the PARENT's context, because that is where it lives. */
-            frag_begin(ctx, s, lxb_dom_interface_element(n->parent), n, PLACE_REPLACE, html, false);
+            /* §8.5.5 step 6: parsed in the PARENT's context, because that is where it lives — or in step 5's
+               `body` when the parent is a fragment. Step 7 still replaces `this` within THIS'S parent, which
+               is the real one either way: step 5 reassigns the local, not the tree. */
+            frag_begin(ctx, s, s->own_context ? s->own_context : lxb_dom_interface_element(n->parent),
+                       n, PLACE_REPLACE, html, false);
         }
         JS_FreeCString(ctx, html);
         hdr->stage = FRAG_FEED;
