@@ -134,6 +134,14 @@ function walkC(dir, out = []) {
 }
 
 const ABI = process.argv.includes("abi");          // build the production qjs_* entry instead of the smoke main()
+/* WHICH DOCUMENT THE SMOKE DRIVES. `min` selects test_forced.c's minimal clone/COW/verify fixture and its probe
+   subset — the per-change MEMORY gate, seconds instead of minutes, which is why the asan build implies it (that
+   fixture exists precisely to avoid the full document's fork-tree blowup under a sanitizer).
+   IT IS PASSED AS AN ARGUMENT, and that is the whole fix: the selection used to be getenv("APICLIENT_ASAN_MIN"),
+   and emscripten's ENV is a fixed default set that never merges process.env — so the minimal document, its probe
+   subset and every statement only it carried were unreachable in EVERY mode of this script. A fixture no mode of
+   the build can run is an excluded test, and an excluded test is a failure (CLAUDE.md, Testing). */
+const MIN = process.argv.includes("min") || process.argv.includes("asan");
 const SOLVER = (f) => join(HOST, "solver", f);     // the Time-Travel Solver (the novel half)
 const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
   .map((f) => join(QJS, f))
@@ -280,7 +288,10 @@ if (ABI) {
     process.exit(t.status || 1);
   }
 } else {
-  const t = spawnSync(process.execPath, [join(OUT, "qjs.js")], { stdio: "inherit", shell: false });
+  /* The trailing arguments reach main()'s argv — the channel getenv could not be, since emscripten's ENV never
+     merges the launching process's environment. */
+  const t = spawnSync(process.execPath, [join(OUT, "qjs.js"), ...(MIN ? ["--min"] : [])],
+                      { stdio: "inherit", shell: false });
   if (t.status !== 0) { console.error("[build] smoke test FAILED rc=" + (t.status ?? "signal")); process.exit(t.status || 1); }
-  console.log("[build] smoke test PASS (new-world @H + @S)");
+  console.log("[build] smoke test PASS (new-world @H + @S" + (MIN ? ", minimal document" : "") + ")");
 }

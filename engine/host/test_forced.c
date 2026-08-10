@@ -54,6 +54,7 @@
 #include "solver/result.h"
 #include "solver/solve.h"
 #include "solver/dom_cow.h"   /* dom_attr_capture — the DOM write host-edge records into the per-flow DOM delta */
+#include "solver/attr_shadow.h"   /* the (element, slot) taint shadow — freed with the frontier at teardown */
 #include <lexbor/html/html.h>
 #include <lexbor/dom/dom.h>
 #include <stdio.h>
@@ -1271,7 +1272,19 @@ static const char *HTML_MIN =
     "function* gof(){ if (cfg.admin) { yield 'ofA'; } else { yield 'ofP'; } } var ofr=''; for (const x of gof()) { ofr += x; } fetch('/api/genofork?v=' + ofr);"   /* FOR-OF generator-body fork */
     "function* aff(){ if (cfg.admin) { yield 'afA'; } else { yield 'afP'; } } fetch('/api/afromfork?v=' + Array.from(aff())[0]);"   /* Array.from(GEN) consumer fork: the gen body branches while CONSUMED by Array.from on the tramp (CONT_ITER_CONSUME), so clone_deep_flow's gen-branch clones the JSIterConsume state -> both afA and afP */
     "function* spf(){ if (cfg.admin) { yield 'spA'; } else { yield 'spP'; } } fetch('/api/spreadfork?v=' + [...spf()][0]);"   /* [...GEN] spread consumer fork: same CONT_ITER_CONSUME machinery, SPREAD sink (append to the literal's array), forks mid-consume -> both spA and spP */
-    "var _af = Array.from(state.items); fetch('/api/optiter?n=' + _af.length + '&a=' + _af[0] + '&b=' + _af[1]);"   /* OPAQUE ITERATION: `state.items` is unknown injected state, so LengthOfArrayLike over it has no answer - every length is a world. The walks bound is a CHAIN of per-position outcome forks (step_length_unknown), so n, a and b carry one value per arm and {state}.items.0 / {state}.items.1 are two INDEPENDENT sources, never one answered twice */
+    /* OPAQUE ITERATION: `state.items` is unknown injected state, so LengthOfArrayLike over it has no answer -
+       every length is a world, and the walk's bound is a CHAIN of per-position outcome forks
+       (step_length_unknown). THIS STATEMENT IS RED, and it is red because it is finally RUN: it sat here behind
+       a getenv() emscripten never fills, so no mode of engine/build.mjs reached it and nothing asserted it.
+       Run, it dies at the first script with `concolic: OOM constraint blob key` - a REAL wasm-heap exhaustion,
+       invisible to @HEAP's heapKiB because that counter is quickjs's allocator while the constraint map is
+       plain malloc. WHAT IS MISSING is a yield between positions: each ask returns JS_STEP_FORK and the driver
+       RE-ENTERS the same step immediately, so one flow mints a sibling AND an O(n) deep copy of its constraint
+       map per position, in one scheduler step, forever. The WFQ comment on step_length_unknown says the
+       unproductive arm is "outranked and paged" - it never can be, because the chain never returns to the
+       scheduler to be ranked. Build the per-position yield (the ask is a work item on the ONE frontier, exactly
+       like a loop back-edge), then this statement runs in BOTH documents and its row becomes DOC_BOTH. */
+    "var _af = Array.from(state.items); fetch('/api/optiter?n=' + _af.length + '&a=' + _af[0] + '&b=' + _af[1]);"
     "var _sad = new Set(); if (cfg.admin) { _sad.add('sadA'); } else { _sad.add('sadP'); } fetch('/api/setaddfork?v=' + [...(_sad)][0]);"   /* SHARED-SET record isolation: _sad is created before the concolic fork; each arm's Set.add must be COW-isolated via the map_add capture (record removed by JS_MapDeleteRecord on unapply) -> EXACTLY 'sadA' and 'sadP', never a contaminated set holding both */
     "function* sef(){ if (cfg.admin) { yield 'seA'; } else { yield 'seP'; } } fetch('/api/setfork?v=' + [...new Set(sef())][0]);"   /* new Set(GEN) consumer fork: the Set consumer (CONT_ITER_CONSUME, SET sink) forks mid-consume; now fork-SAFE via the map_add COW capture -> both seA and seP */
     "var _mm = new Map([['k','base']]); if (cfg.admin) { _mm.set('k','mmA'); } else { _mm.delete('k'); } fetch('/api/mapmutfork?v=' + (_mm.has('k') ? _mm.get('k') : 'gone'));"   /* SHARED-MAP overwrite/delete isolation: _mm is created before the fork; one arm OVERWRITES 'k', the other DELETES it. The map_mutate undo-log capture (unapply restores the old value / re-adds) keeps them per-flow -> EXACTLY 'mmA' and 'gone', never cross-contaminated */
@@ -1840,7 +1853,21 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
     return ctx;
 }
 
-int main(void) {
+/* WHICH DOCUMENT THIS RUN DRIVES, asked of the ARGUMENT VECTOR because that is the only channel a host has to
+   this program. It was `getenv("APICLIENT_ASAN_MIN")`, and emscripten's `ENV` is a fixed default set that never
+   merges the launching process's environment — so the minimal document, the `min` probe subset and every
+   statement only that document carries were unreachable in EVERY mode of `node engine/build.mjs`. An unrunnable
+   fixture is the same defect as a corpus file the collector does not collect (CLAUDE.md, Testing): it looks like
+   coverage and is not. argv IS delivered (emcc's runtime hands node's trailing arguments to main), so the
+   selection is made where the host can actually make it. */
+static int arg_has(int argc, char **argv, const char *flag) {
+    int i;
+    for (i = 1; i < argc; i++)
+        if (argv[i] && !strcmp(argv[i], flag)) return 1;
+    return 0;
+}
+
+int main(int argc, char **argv) {
     JSRuntime *rt;
     trusted_types_selftest();
     policy_container_selftest();
@@ -1858,8 +1885,8 @@ int main(void) {
     /* BASELINE setup (mark 0): the globals here must NOT be captured, so install the COW hook AFTER. */
     tf_agent_init(ctx);
     navigable_set_realm_builder(tf_child_realm);
-    int asan_min = getenv("APICLIENT_ASAN_MIN") != NULL;   /* fast per-change memory gate: the minimal clone/COW doc */
-    const char *doc = asan_min ? HTML_MIN : HTML;
+    int min_doc = arg_has(argc, argv, "--min");   /* fast per-change memory gate: the minimal clone/COW doc */
+    const char *doc = min_doc ? HTML_MIN : HTML;
     lxb_html_document_t *dom = lxb_html_document_create();
     lxb_html_document_parse(dom, (const lxb_char_t *)doc, strlen(doc));
     g_body = lxb_dom_interface_element(lxb_html_document_body_element(dom));   /* the DOM sink's target element */
@@ -2070,6 +2097,16 @@ int main(void) {
        of each ⇒ the apply-driven generator body snapshot-forks per arm, never drives to completion. */
     int gapplyfork_tt = (strstr(js, "\"/api/gapplyfork\"") && strstr(js, "gapA") && strstr(js, "gapP"));
     int grefapplyfork_tt = (strstr(js, "\"/api/grefapplyfork\"") && strstr(js, "graA") && strstr(js, "graP"));
+    /* OPAQUE ITERATION over unknown injected state. `state.items` has no length, so LengthOfArrayLike has no
+       answer and every length is a world: the walk is a CHAIN of per-position outcome forks. Two facts are
+       asserted and both are the point. (1) The two element reads are INDEPENDENT SOURCES — {state}.items.0 and
+       {state}.items.1 — never one source answered twice, which is what the per-POSITION key in the outcome seam
+       exists to guarantee. (2) `n` carries more than one value, because a chain that forked would report the
+       length of each arm; one length would mean the walk decided a bound instead of forking it. This statement
+       had NO row here at all, so nothing asserted it in either document — the fixture's own rule is that a probe
+       which is not declared does not exist. */
+    int optiter_tt = (strstr(js, "\"/api/optiter\"") && strstr(js, "{state}.items.0") && strstr(js, "{state}.items.1")
+                      && strstr(js, "\"n\""));
     /* THE SYNCHRONOUS HOST READ resumed at its own call site, three times in a loop, each answer landing in
        the call that asked for it — hr0hr1hr2 in order, never interleaved or reused. */
     int hostreq_tt = (strstr(js, "\"/api/hostreq\"") && strstr(js, "hr0hr1hr2"));
@@ -2258,13 +2295,49 @@ int main(void) {
     int domidl_tt   = domproto_tt && cdnull_tt && tcnull_tt && nodeval_tt && tcset_tt;
     int deadline_tt = (strstr(js, "\"/api/deadline\"") && strstr(js, "expired") && strstr(js, "live"));
 
+    /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified. Read from the
+       ONE document above — there is no second line to keep in step with it. */
+    const char *ss = js;
+    /* @S JS: single-quote-context breakout fire-verified. @S HTML: innerHTML sink fire-verified via Lexbor re-parse. */
+    int s_eval = strstr(ss, "\"sink\":\"eval\"") && strstr(ss, "{state}.code") && strstr(ss, "';X9();//");
+    int s_html = strstr(ss, "\"sink\":\"innerHTML\"") && strstr(ss, "{state}.html") && strstr(ss, "<svg onload=X9()>");
+    int s_url = strstr(ss, "\"sink\":\"location\"") && strstr(ss, "{state}.next") && strstr(ss, "javascript:X9()");
+    /* THE SOURCE'S BROWSER TRANSFORM, asserted end to end: a breakout through the REAL Location, whose value
+       the browser percent-encodes per the fragment set and prefixes with `#`. The apostrophe is not in that set,
+       so `';X9();//` arrives intact and fires — and it fires through `'#';X9();//'`, the leading `#` included.
+       Before the transform existed the payload was handed over raw, so this fired for the wrong reason and an
+       HTML-context breakout through the same source would have fired too, which a browser would not. */
+    int s_loc = strstr(ss, "\"source\":\"location.hash\"") && strstr(ss, "';X9();//");
+    /* THE NEGATIVE HALF, and it is an assertion about the REPORT, not about a missing line. The same source
+       into an HTML sink must produce NO PoC — the fragment set encodes `<`, so every HTML candidate arrives as
+       `%3C` and parses as text — and must still be REPORTED, as a parked search carrying the encode set that
+       defeated it. Asserting only "no PoC" would also pass if the sink were never detected, which is the false
+       negative this half exists to catch; asserting the parked entry says the sink WAS reached and searched. */
+    int s_park = strstr(ss, "\"sink\":\"innerHTML\",\"source\":\"location.hash\",\"search\":\"parked\"")
+              && strstr(ss, "\"sourceEncodes\":\" \\\"<>`\"")
+              && !strstr(ss, "\"source\":\"location.hash\",\"poc\":\"<");
+
     /* THE PROBES, DECLARED ONCE. This was a 46-term conjunction and a separate printf listing 43 of them, which
        is two hand-maintained lists of the same thing — so a probe could be computed and joined to NEITHER, and
        one immediately was: `clone_body` asserted §6.4 clone() and the gate never read it, so the fixture
        reported PASS on a result nothing had checked. A row here is what makes a probe a probe: the gate walks
        it and the report walks it, and a probe that is not declared does not exist rather than silently
-       passing. `min` marks the subset the ASAN gate runs (the clone/COW/generator paths). */
-    struct { const char *name; int ok; unsigned char min; } probes[] = {
+       passing. `min` marks the subset the `--min` document carries (the clone/COW/generator paths, and the
+       three @S sinks it drives) — a probe whose statement is NOT in that document must be 0 here, or the gate
+       asserts a fact about a program that never ran.
+       THE @S VERDICTS ARE ROWS TOO. They were a second conjunction below this table with its own printf, which
+       is exactly the two-hand-maintained-lists shape the paragraph above describes: they could not be scoped to
+       a document, so selecting the minimal one made the run FAIL on `location.hash` sinks that document does not
+       contain. One table, one gate, one report. */
+    /* The three answers, so a row states which program its fact came from. The values are chosen so that the
+       rows already written keep their meaning: 0 was "full only" and 1 was "the minimal subset", which is BOTH. */
+    enum { DOC_FULL = 0, DOC_BOTH = 1, DOC_MIN = 2 };
+    /* WHICH DOCUMENTS CARRY THE STATEMENT: DOC_FULL only, BOTH, or DOC_MIN only. Two documents means two bits,
+       and the field held one — which was sound only while the minimal document was a strict SUBSET of the full
+       one. It is not: the opaque-iteration statement is in the minimal document ALONE, because running it in the
+       full one dies (see its row), and a single bit cannot say that. A row that lies about which program its
+       fact came from is a probe asserting something about a run that never happened. */
+    struct { const char *name; int ok; unsigned char docs; } probes[] = {
         { "uid-param", has_uid_param, 0 }, { "role-admin", role_admin, 0 },
         { "role-public", role_public, 0 }, { "merged", merged, 0 },
         { "pinned", pinned, 0 },           { "lazy", lazy, 0 },
@@ -2296,41 +2369,26 @@ int main(void) {
         { "hostreq", hostreq_tt, 1 }, { "hostreq-fork", hostreqfork_tt, 1 },
         { "json-fork", jsonfork_tt, 1 },
         { "nav-open", navopen_tt, 1 }, { "proxy-sop", sop_tt, 1 }, { "xdoc-read", xdocread_tt, 1 }, { "xdoc-job", xdocjob_tt, 1 }, { "timer-order", timer_tt, 1 }, { "iframe-nav", ifnav_tt, 1 },
+        /* DOC_MIN ONLY, and that is a MEASUREMENT, not a preference. Put this statement in the full document
+           and the run dies at the first script with `concolic: OOM constraint blob key` — a REAL exhaustion of
+           the wasm heap, which `heapKiB` cannot show because that counter is quickjs's allocator and the
+           constraint map is plain malloc. See the statement's own comment for what is missing. */
+        { "optiter", optiter_tt, DOC_MIN },
+        { "s-eval", s_eval, 1 },           { "s-html", s_html, 1 },
+        { "s-url", s_url, 1 },             { "s-loc", s_loc, 0 },
+        { "s-park", s_park, 0 },
     };
     int h_ok = 1;
     printf("@H ");
     for (unsigned pi = 0; pi < sizeof(probes) / sizeof(probes[0]); pi++) {
-        if (asan_min && !probes[pi].min)
+        if (probes[pi].docs != DOC_BOTH && probes[pi].docs != (min_doc ? DOC_MIN : DOC_FULL))
             continue;
         h_ok = h_ok && probes[pi].ok;
         printf("%s=%d ", probes[pi].name, probes[pi].ok);
     }
     printf("=> %s\n", h_ok ? "OK" : "FAIL");
 
-    /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified. Read from the
-       ONE document above — there is no second line to keep in step with it. */
-    const char *ss = js;
-    /* @S JS: single-quote-context breakout fire-verified. @S HTML: innerHTML sink fire-verified via Lexbor re-parse. */
-    int s_eval = strstr(ss, "\"sink\":\"eval\"") && strstr(ss, "{state}.code") && strstr(ss, "';X9();//");
-    int s_html = strstr(ss, "\"sink\":\"innerHTML\"") && strstr(ss, "{state}.html") && strstr(ss, "<svg onload=X9()>");
-    int s_url = strstr(ss, "\"sink\":\"location\"") && strstr(ss, "{state}.next") && strstr(ss, "javascript:X9()");
-    /* THE SOURCE'S BROWSER TRANSFORM, asserted end to end: a breakout through the REAL Location, whose value
-       the browser percent-encodes per the fragment set and prefixes with `#`. The apostrophe is not in that set,
-       so `';X9();//` arrives intact and fires — and it fires through `'#';X9();//'`, the leading `#` included.
-       Before the transform existed the payload was handed over raw, so this fired for the wrong reason and an
-       HTML-context breakout through the same source would have fired too, which a browser would not. */
-    int s_loc = strstr(ss, "\"source\":\"location.hash\"") && strstr(ss, "';X9();//");
-    /* THE NEGATIVE HALF, and it is an assertion about the REPORT, not about a missing line. The same source
-       into an HTML sink must produce NO PoC — the fragment set encodes `<`, so every HTML candidate arrives as
-       `%3C` and parses as text — and must still be REPORTED, as a parked search carrying the encode set that
-       defeated it. Asserting only "no PoC" would also pass if the sink were never detected, which is the false
-       negative this half exists to catch; asserting the parked entry says the sink WAS reached and searched. */
-    int s_park = strstr(ss, "\"sink\":\"innerHTML\",\"source\":\"location.hash\",\"search\":\"parked\"")
-              && strstr(ss, "\"sourceEncodes\":\" \\\"<>`\"")
-              && !strstr(ss, "\"source\":\"location.hash\",\"poc\":\"<");
-    int s_ok = s_eval && s_html && s_url && s_loc && s_park;
-
-    printf("%s\n", (h_ok && s_ok)
+    printf("%s\n", h_ok
         ? "PASS: @H merge AND @S eval + innerHTML + location + a REAL Location source — fired where the source's"
           " transform permits, parked where it does not"
         : "FAIL: @H or @S incorrect");
@@ -2372,8 +2430,14 @@ int main(void) {
     remote_object_free(ctx);
     window_proxy_free(ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */
     flow_registry_free(ctx);
+    /* THE TAINT SHADOW, which had no teardown caller at all. It is a global table of (element, slot) -> opaque,
+       every entry holding a dup'd JSValue — so a shadow still standing when the runtime goes down is a leaked
+       GC object the `gc_obj_list` walk reports with nothing naming the owner, and the table's own array is
+       leaked whether or not any entry survives. It is freed HERE, with the frontier, because that is what it
+       belongs to: a shadow exists because some flow stored a source in an attribute. */
+    attr_shadow_free(ctx);
     JS_RunGC(rt);   /* collect flow-local garbage from the runs before teardown */
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
-    return (h_ok && s_ok) ? 0 : 1;
+    return h_ok ? 0 : 1;
 }

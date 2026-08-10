@@ -206,6 +206,29 @@ Flow *flow_best_other(const Flow *exclude) {
 }
 
 void flow_remove(JSContext *ctx, Flow *f) {
+    /* WHAT THIS FUNCTION DOES NOT FREE, ASSERTED RATHER THAN ASSUMED. A Flow owns fourteen things and this
+       releases five; the other nine belong to the caller's teardown (engine.c's flow_finish), which runs while
+       the flow is switched IN because releasing a COW delta or a DOM head means unapplying it from the live
+       heap and document first. That split is correct and it is also invisible: nothing said so, so a second
+       caller — an eviction, a cancelled candidate, a frontier trim — would compile, run, and leak the flow's
+       entire delta, its DOM head, its queued jobs and its suspended frame with no counter naming the owner.
+       That is precisely the shape the delta leak took (a per-flow allocation nobody freed, holding no live
+       JSValue by then, so the runtime's own leak walk could not see it either).
+       Asserted at the ROOT of the contract instead: a field added to Flow gets a line here, and a caller that
+       has not run flow_finish crashes at the removal instead of two hundred megabytes later. */
+    DCHECK(f->delta == NULL && f->dom == NULL && f->dom_base == NULL,
+           "a flow was removed with its COW state still attached — the heap delta and the DOM head must be "
+           "UNAPPLIED from the live heap and document before they can be freed, which is why flow_finish owns "
+           "that and this does not: removing it here drops both");
+    DCHECK(f->frame == NULL && f->park_fn == NULL,
+           "a flow was removed holding a live frame or a parked continuation — its whole activation chain, and "
+           "everything those frames close over, would be retained by a handle nothing will ever free");
+    DCHECK(f->njob == 0 && f->jobs == NULL && f->npend == 0 && f->pending == NULL,
+           "a flow was removed still holding queued jobs or pending host replies — each is a work item on the "
+           "one frontier, and the WFQ may never drop one");
+    DCHECK(f->dyn == NULL && f->dyn_cand == NULL && f->dec_blob == NULL && f->pin_blob == NULL,
+           "a flow was removed with its lazily-loaded chunk bodies or its suspended decision/pin blobs still "
+           "attached — the flow's own allocations, freed by nothing else");
     for (int i = 0; i < g_flows_n; i++) {
         if (g_flows[i] == f) {
             JS_FreeValue(ctx, f->fn);
