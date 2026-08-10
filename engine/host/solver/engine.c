@@ -1578,12 +1578,43 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
             {
                 JSMemoryUsage mem;
                 JS_ComputeMemoryUsage(JS_GetRuntime(g_sess_ctx), &mem);
+                /* WHAT THE HEAP IS MADE OF, because "it grew" names nothing to fix. The runtime already counts
+                   its own allocations by KIND, and the kinds answer different questions: a climbing
+                   `allocations` with a flat `objects` is memory no GC object owns (an atom, a string, a
+                   property table, a bytecode function), and each of those has a different owner and a
+                   different place where the owner forgot to let go. */
+                printf("@HEAP {\"allocations\":%lld,\"atoms\":%lld,\"strings\":%lld,\"objects\":%lld,"
+                       "\"shapes\":%lld,\"props\":%lld,\"funcs\":%lld,\"funcCode\":%lld,\"arrays\":%lld}\n",
+                       (long long)mem.malloc_count, (long long)mem.atom_count, (long long)mem.str_count,
+                       (long long)mem.obj_count, (long long)mem.shape_count, (long long)mem.prop_count,
+                       (long long)mem.js_func_count, (long long)mem.js_func_code_size,
+                       (long long)mem.array_count);
                 printf("@PROGRESS {\"switches\":%d,\"flows\":%ld,\"live\":%d,\"objects\":%lld,"
-                       "\"heapKiB\":%lld,\"script\":%d,\"candidates\":%d,\"running\":\"%s\"",
+                       "\"heapKiB\":%lld,\"script\":%d,\"candidates\":%d,\"running\":\"%s\",\"forkedAt\":{",
                        g_switches, flow_created_count(), flow_count(),
                        (long long)mem.obj_count, (long long)(mem.malloc_size / 1024),
                        g_sess_cur ? g_sess_cur->script_i : -1, last_cands,
                        g_sess_cur && g_sess_cur->cand_sink ? g_sess_cur->cand_sink : "-");
+                /* WHERE the frontier is growing, not just that it is. The key holds the separator bytes the
+                   constraint is keyed with, which are control characters, so it is escaped like the payload
+                   below rather than emitted raw into JSON. */
+                {
+                    long hits = 0;
+                    const char *k;
+                    int i;
+
+                    for (i = 0; (k = decide_fork_at(i, &hits)) != NULL; i++) {
+                        if (i) printf(",");
+                        putchar('"');
+                        for (; *k; k++) {
+                            if (*k == '"' || *k == '\\') printf("\\%c", *k);
+                            else if ((unsigned char)*k < 0x20) printf("\\u%04x", (unsigned char)*k);
+                            else putchar(*k);
+                        }
+                        printf("\":%ld", hits);
+                    }
+                    printf("},\"forks\":%ld", decide_fork_total());
+                }
             }
             if (g_sess_cur && g_sess_cur->cand_payload) {
                 printf(",\"payload\":\"");

@@ -49,6 +49,17 @@ int  decide_value_arm(JSValueConst cond);
    re-run got before forking. */
 int  decide_cursor(void);
 
+/* WHICH PREDICATE IS GROWING THE FRONTIER — the most-forked constraint key, its hits, the total number of
+   forks and how many distinct predicates have produced one. A frontier that grows without stopping is growing
+   at ONE branch, and every counter in the progress stream says only that it is growing: `flows` climbing while
+   `live` stays flat says the shape is a CHAIN and still not where the chain is. This is where.
+   It is keyed by the CONSTRAINT key rather than a file:line because that is what a predicate IS here — two
+   forks at one source and operation are one predicate however many call sites spell it, and a chain (a source
+   whose operation string carries a position) shows as `distinct` climbing with `total`, which distinguishes
+   the two shapes on its own. Walk `i` from 0 until it answers NULL; the key is borrowed and stable. */
+const char *decide_fork_at(int i, long *hits);
+long        decide_fork_total(void);
+
 /* Swap the running decision state when the scheduler interleaves flows: suspend snapshots the evolving vector
    + cursor of the paused flow; resume restores them + re-binds the flow's fn. */
 void *decide_suspend(void);

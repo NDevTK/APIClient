@@ -46,6 +46,54 @@ void decide_leave(JSContext *ctx) {
 
 int decide_cursor(void) { return g_c; }
 
+/* WHICH PREDICATE IS GROWING THE FRONTIER — see decide.h.
+ *
+ * A COUNT AND NOT A LAST-SEEN, because a sample of the most recent fork answers a question nobody asked: a
+ * frontier growing at one branch forks there thousands of times and at a dozen other branches once each, and
+ * the last one before the sample instant is as likely to be one of the dozen. The table is small and keyed by
+ * the constraint key, so two forks at one source and operation are one row however many call sites spell it,
+ * and a CHAIN — a source whose operation string carries a position — shows as many rows with one hit each,
+ * which is itself the answer. A key that does not fit is counted in the overflow row rather than dropped: an
+ * undercount that says so is a measurement, an undercount that does not is a lie. */
+#define DECIDE_FORK_KEYS 64
+static struct { char key[192]; long n; } g_fork_keys[DECIDE_FORK_KEYS];
+static long g_fork_other, g_fork_total;
+
+static void fork_key_count(const char *key)
+{
+    int i;
+
+    g_fork_total++;
+    for (i = 0; i < DECIDE_FORK_KEYS; i++) {
+        if (!g_fork_keys[i].n) {                       /* an empty row: claim it */
+            snprintf(g_fork_keys[i].key, sizeof g_fork_keys[i].key, "%s", key);
+            g_fork_keys[i].n = 1;
+            return;
+        }
+        if (!strcmp(g_fork_keys[i].key, key)) { g_fork_keys[i].n++; return; }
+    }
+    g_fork_other++;
+}
+
+const char *decide_fork_at(int i, long *hits)
+{
+    if (i < 0 || i > DECIDE_FORK_KEYS) return NULL;
+    if (i < DECIDE_FORK_KEYS && g_fork_keys[i].n) {
+        *hits = g_fork_keys[i].n;
+        return g_fork_keys[i].key;
+    }
+    /* THE OVERFLOW ROW IS A ROW, and it is the one right after the last real one — rows are claimed in order,
+       so the FIRST empty index is where the real ones end and is the only index it may appear at. An
+       undercount that says so is a measurement; one that does not is a lie. */
+    if (g_fork_other && i <= DECIDE_FORK_KEYS && (i == 0 || g_fork_keys[i - 1].n)) {
+        *hits = g_fork_other;
+        return "(more predicates than this table holds)";
+    }
+    return NULL;
+}
+
+long decide_fork_total(void) { return g_fork_total; }
+
 /* Swap the running decision state when the scheduler interleaves flows. A flow paused mid-execution keeps its
    evolving vector (forks may have extended g_dec past f->dec) + its cursor, so on resume it consumes the SAME
    decisions from where it left off. decide_suspend snapshots; decide_resume restores + re-binds cur_fn. */
@@ -138,6 +186,7 @@ static int decide_arm(const char *key, int *forked) {
            sibling resumes AT the branch and replays FALSE — it does NOT re-run from the start. This flow takes
            TRUE. No re-run vector, no fallback. */
         void *dblob = decide_fork_blob(g_c, 0);
+        fork_key_count(key ? key : "(no source identity)");
         /* the sibling's constraint must already say FALSE when its snapshot is taken — it is the arm the
            sibling IS, so a later test of the same predicate over there is decided too. Recorded, snapshotted,
            then overwritten with this flow's arm; the two orders are one statement apart and getting them
