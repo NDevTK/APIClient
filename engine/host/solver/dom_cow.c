@@ -617,21 +617,6 @@ static void dom_forget_wrappers(JSContext *ctx, lxb_dom_node_t *root)
  * revert before this runs. */
 static void dom_release_created(DomUndo *u)
 {
-    if (u->kind == 6 && u->node) {   /* an ATTRIBUTE this flow created — see the entry's own comment */
-        lxb_dom_attr_t *a = lxb_dom_interface_attr(u->node);
-        DCHECK(a->owner == NULL,
-               "a flow's created attribute was still ON an element when its delta was discarded — a write of "
-               "it was never unapplied, so freeing it would leave that element's list naming freed memory");
-        DCHECK(g_cow_ctx != NULL, "a created attribute was freed with no context named — an Attr is a WRAPPED "
-                                  "node and the identity map has to be told (dom_cow_set_ctx names the runtime)");
-        /* AND THE TAINT SHADOW, for the same reason and in the same breath as the wrapper: a detached attribute
-           keys its shadow on ITSELF, lexbor hands attributes out of a pool, and an entry left naming this
-           address is inherited by the next attribute allocated at it. */
-        attr_shadow_forget(g_cow_ctx, a);
-        dom_attr_destroy(g_cow_ctx, a);
-        u->node = NULL;   /* the entry has spent its claim; nothing may act on it twice */
-        return;
-    }
     if (u->kind != 4 || !u->node)
         return;
     /* Nothing may still hold it. After a discard the document is back at its baseline, so a node this flow
@@ -658,10 +643,40 @@ static void dom_release_created(DomUndo *u)
  * why the order is load-bearing rather than tidy. One function because the order is a property of the RELEASE
  * and not of any one caller: three of them discard a delta, and an order restated three times is an order two
  * of them can lose. */
+/* AN ATTRIBUTE THIS FLOW CREATED — kind 4's twin, released BEFORE it. See the ordering in
+ * dom_release_created_all: an attribute lives in an ELEMENT's list, and lexbor's element destroy frees every
+ * attribute the element still holds. */
+static void dom_release_created_attr(DomUndo *u)
+{
+    lxb_dom_attr_t *a;
+
+    if (u->kind != 6 || !u->node)
+        return;
+    a = lxb_dom_interface_attr(u->node);
+    DCHECK(a->owner == NULL,
+           "a flow's created attribute was still ON an element when its delta was discarded — the revert runs "
+           "first and detaches it through its kind-0 entry, so an attached one means that entry is missing");
+    DCHECK(g_cow_ctx != NULL, "a created attribute was freed with no context named — an Attr is a WRAPPED "
+                              "node and the identity map has to be told (dom_cow_set_ctx names the runtime)");
+    /* AND THE TAINT SHADOW, for the same reason and in the same breath as the wrapper: a detached attribute
+       keys its shadow on ITSELF, lexbor hands attributes out of a pool, and an entry left naming this address
+       is inherited by the next attribute allocated at it. */
+    attr_shadow_forget(g_cow_ctx, a);
+    dom_attr_destroy(g_cow_ctx, a);
+    u->node = NULL;   /* the entry has spent its claim; nothing may act on it twice */
+}
+
 static void dom_release_created_all(DomUndo *e, int n)
 {
     int i;
 
+    /* ATTRIBUTES BEFORE NODES, for the same reason nodes come before documents below and one level down: an
+       attribute lives in an ELEMENT's attribute list, and lexbor's `lxb_dom_element_interface_destroy` walks
+       that list and destroys every attribute still on it. A flow that clones an element and then writes an
+       attribute on the copy records the element (kind 4) before the attribute (kind 6), so releasing in entry
+       order freed the element first and the attribute's own release then read memory that was already gone —
+       `Node-cloneNode.html` SIGSEGV. */
+    for (i = 0; i < n; i++) dom_release_created_attr(&e[i]);
     for (i = 0; i < n; i++) dom_release_created(&e[i]);
     for (i = 0; i < n; i++) {
         if (e[i].kind != 5 || !e[i].doc)
