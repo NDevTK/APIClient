@@ -1567,9 +1567,24 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
                 printf("@SWAP {\"installs\":%ld,\"entries\":%ld,\"worst\":%ld,\"mean\":%.1f}\n",
                        sc, st, sm, sc ? (double)st / (double)sc : 0.0);
             }
-            printf("@PROGRESS {\"switches\":%d,\"flows\":%ld,\"candidates\":%d,\"running\":\"%s\"",
-                   g_switches, flow_created_count(), last_cands,
-                   g_sess_cur && g_sess_cur->cand_sink ? g_sess_cur->cand_sink : "-");
+            /* CREATED IS NOT LIVE, AND A COUNTER THAT CANNOT TELL THEM APART CANNOT NAME A LEAK. A run whose
+               created-flow count climbs with the switch count is either CHURN (each flow finishes and the
+               frontier stays small) or ACCUMULATION (the frontier itself grows) — two different defects with
+               one number between them, and the whole difference is `live`. Beside it the RUNTIME's own live
+               heap, because a frontier that stays small while the heap climbs is a leak somewhere else
+               entirely, and that is the third answer this line has to be able to give. `script` names WHICH
+               program the running flow is in, which is the only thing that turns "it stopped advancing" into a
+               place in the fixture. */
+            {
+                JSMemoryUsage mem;
+                JS_ComputeMemoryUsage(JS_GetRuntime(g_sess_ctx), &mem);
+                printf("@PROGRESS {\"switches\":%d,\"flows\":%ld,\"live\":%d,\"objects\":%lld,"
+                       "\"heapKiB\":%lld,\"script\":%d,\"candidates\":%d,\"running\":\"%s\"",
+                       g_switches, flow_created_count(), flow_count(),
+                       (long long)mem.obj_count, (long long)(mem.malloc_size / 1024),
+                       g_sess_cur ? g_sess_cur->script_i : -1, last_cands,
+                       g_sess_cur && g_sess_cur->cand_sink ? g_sess_cur->cand_sink : "-");
+            }
             if (g_sess_cur && g_sess_cur->cand_payload) {
                 printf(",\"payload\":\"");
                 for (const char *p = g_sess_cur->cand_payload; *p; p++) {
