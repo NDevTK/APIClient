@@ -1417,6 +1417,27 @@ static JSValue js_el_attributes(JSContext *ctx, JSValueConst this_val, int magic
     return cached;
 }
 
+/* §4.9 `Attr? getAttributeNode(DOMString qualifiedName)` — "the result of getting an attribute by name",
+   which is §4.9.1's getNamedItem over the same element and therefore the same implementation. It was absent,
+   and its absence is what made every Attr-node behaviour unreachable from script: `element.attributes` hands
+   out Attr nodes but a page asks for one BY NAME, and DOM §5's own corpus builds its Attr-rooted ranges with
+   exactly this call. */
+static JSValue js_el_get_attribute_node(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                        int magic)
+{
+    lxb_dom_element_t *el = elem_of(this_val);
+    const char *name;
+    JSValue r;
+
+    (void)magic;
+    if (!el || argc < 1) return JS_NULL;
+    name = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
+    if (!name) return JS_EXCEPTION;
+    r = attr_by_name(ctx, el, name);
+    JS_FreeCString(ctx, name);
+    return JS_IsUndefined(r) ? JS_NULL : r;
+}
+
 /* §4.9 getAttributeNames() — the qualified names, in order. The cheap half of the same capability: a page that
    only wants the names should not have to build an Attr for each of them. */
 static JSValue js_el_attribute_names(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
@@ -1471,7 +1492,7 @@ static int g_refl_base = -1, g_refl_n;
 static int g_id_get_attr = -1, g_id_set_attr = -1, g_id_matches = -1, g_id_closest = -1,
            g_id_inner_get = -1, g_id_inner_set = -1, g_id_outer_get = -1, g_id_outer_set = -1,
            g_id_adj_html = -1, g_id_adj_el = -1, g_id_adj_text = -1, g_id_attr_names = -1,
-           g_id_remove_attr = -1, g_id_has_attr = -1, g_id_toggle_attr = -1;
+           g_id_remove_attr = -1, g_id_has_attr = -1, g_id_toggle_attr = -1, g_id_get_attr_node = -1;
 
 void element_init(JSContext *ctx)
 {
@@ -1509,6 +1530,7 @@ void element_init(JSContext *ctx)
     g_id_adj_el = idl_method_id(ctx, ADJ_ANY, 2, js_el_insert_adjacent, 1);
     g_id_adj_text = idl_method_id(ctx, IDL_2STR, 2, js_el_insert_adjacent, 2);
     g_id_attr_names = idl_method_id(ctx, NULL, 0, js_el_attribute_names, 0);
+    g_id_get_attr_node = idl_method_id(ctx, IDL_1STR, 1, js_el_get_attribute_node, 0);
     g_id_remove_attr = idl_method_id(ctx, IDL_1STR, 1, js_el_attr_op, 0);
     g_id_has_attr = idl_method_id(ctx, IDL_1STR, 1, js_el_attr_op, 1);
     g_id_toggle_attr = idl_method_id(ctx, TOGGLE, 2, js_el_attr_op, 2);
@@ -1579,6 +1601,7 @@ void element_install_proto(JSContext *ctx)
        boolean reflection could not unset itself. */
     idl_install_accessor(ctx, proto, "attributes", js_el_attributes, 0, -1);
     idl_install_method(ctx, proto, "getAttributeNames", 0, g_id_attr_names);
+    idl_install_method(ctx, proto, "getAttributeNode", 1, g_id_get_attr_node);
     idl_install_method(ctx, proto, "removeAttribute", 1, g_id_remove_attr);
     idl_install_method(ctx, proto, "hasAttribute", 1, g_id_has_attr);
     idl_install_method(ctx, proto, "toggleAttribute", 1, g_id_toggle_attr);

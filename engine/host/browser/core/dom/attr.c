@@ -184,9 +184,8 @@ static JSValue nnm_item(JSContext *ctx, JSValueConst self, uint32_t i)
 }
 
 /* §4.9.1's NAMED getter — `el.attributes.href` is the Attr, which is how a great deal of older code reads one. */
-static JSValue nnm_named(JSContext *ctx, JSValueConst self, const char *name)
+JSValue attr_by_name(JSContext *ctx, lxb_dom_element_t *el, const char *name)
 {
-    lxb_dom_element_t *el = nnm_owner(ctx, self);
     lxb_dom_attr_t *a;
     size_t nlen = strlen(name), qlen = 0;
 
@@ -197,6 +196,11 @@ static JSValue nnm_named(JSContext *ctx, JSValueConst self, const char *name)
             return node_wrap(ctx, lxb_dom_interface_node(a));
     }
     return JS_UNDEFINED;
+}
+
+static JSValue nnm_named(JSContext *ctx, JSValueConst self, const char *name)
+{
+    return attr_by_name(ctx, nnm_owner(ctx, self), name);
 }
 
 static const IdlIndexedDecl NNM_INDEXED = { "NamedNodeMap", nnm_length, nnm_item, nnm_named, 0 };
@@ -317,7 +321,7 @@ void attr_install_protos(JSContext *ctx)
     idl_install_method(ctx, nnm_p, "removeNamedItem", 1, g_remove_named_id);
     /* §3.7.10: an interface with an indexed getter gets %Array.prototype.values% as its @@iterator, which is
        what makes `for (const a of el.attributes)` — the loop this gap was really about — ordinary code. */
-    idl_indexed_install_iterable(ctx, nnm_p);
+    idl_indexed_install_iterable(ctx, nnm_p, /*declares_iterable*/ false);   /* §4.9.1 declares no iterable<> */
     JS_SetClassProto(ctx, g_nnm_class, nnm_p);
 }
 
