@@ -11,10 +11,12 @@
 #include "solver/cow.h"
 #include "solver/world.h"   /* the routed record's world vector: whose timeline a delivery belongs to */
 #include "core/frame/window_message.h"   /* the receiving half of a routed `windowproxy.post` */
+#include "core/frame/navigable.h"   /* @HEAP's realm count: the one component that holds this agent's realms */
 #include "solver/dom_cow.h"   /* the DOM half of time-travel — swapped per-flow alongside the heap COW delta */
 #include "check.h"
 #include <time.h>
 #include <stdlib.h>
+#include <malloc.h>   /* @HEAP's allocator numbers — see engine_c_alloc_live */
 #include <stdio.h>
 #include <string.h>
 
@@ -1567,6 +1569,33 @@ int engine_sched_step(void) {
    thousand switches, so a cadence in the hundreds of thousands emits nothing and tells nobody anything. */
 #define ENGINE_PROGRESS_EVERY 1000
 
+/* THE C ALLOCATOR'S OWN TWO NUMBERS — see the @HEAP line for why they are here. `live` is what it has handed
+   out and not been given back (quickjs's bytes included, since js_malloc routes to malloc); `arena` is the
+   total space it has taken from the system, which in wasm is LINEAR MEMORY AND ONLY EVER GROWS. It is one
+   allocator interface with two spellings: emscripten's dlmalloc exports the classic `mallinfo` with size_t
+   fields, glibc's `mallinfo` is int-wide and deprecated in favour of the size_t `mallinfo2`. Picking the
+   spelling is an ABI question about the platform's malloc, not a choice about what to measure — both answer
+   the same two fields, and the int-wide one would silently wrap on a run this size. */
+#if defined(__EMSCRIPTEN__)
+#define ENGINE_MALLINFO_T struct mallinfo
+#define ENGINE_MALLINFO() mallinfo()
+#else
+#define ENGINE_MALLINFO_T struct mallinfo2
+#define ENGINE_MALLINFO() mallinfo2()
+#endif
+
+static size_t engine_c_alloc_live(void)
+{
+    ENGINE_MALLINFO_T m = ENGINE_MALLINFO();
+    return (size_t)m.uordblks;
+}
+
+static size_t engine_c_alloc_arena(void)
+{
+    ENGINE_MALLINFO_T m = ENGINE_MALLINFO();
+    return (size_t)m.arena + (size_t)m.hblkhd;   /* brk'd space plus whatever came from mmap */
+}
+
 static int (*g_provider)(JSContext *ctx);
 void engine_set_provider(int (*provide)(JSContext *ctx)) { g_provider = provide; }
 
@@ -1596,10 +1625,17 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
                way to localise it. A candidate flow is identified by the (sink, payload) it is verifying, so the
                last line before a stall names the search that entered it. */
             {
-                long sc = 0, st = 0, sm = 0;
+                long sc = 0, st = 0, sm = 0, hs = 0, he = 0, ds = 0, de = 0;
                 cow_swap_stats(&sc, &st, &sm);
-                printf("@SWAP {\"installs\":%ld,\"entries\":%ld,\"worst\":%ld,\"mean\":%.1f}\n",
-                       sc, st, sm, sc ? (double)st / (double)sc : 0.0);
+                /* AND WHAT THE TWO CHAINS ARE STILL HOLDING. The three numbers above are about the COST of a
+                   switch and say nothing about RETENTION, which is the other thing a delta can get wrong: a
+                   frontier of four flows whose chains hold tens of thousands of frozen segments is a lifetime
+                   bug, and it reads exactly like a healthy run in `installs`/`entries`/`worst`. */
+                cow_chain_stats(&hs, &he);
+                dom_cow_chain_stats(&ds, &de);
+                printf("@SWAP {\"installs\":%ld,\"entries\":%ld,\"worst\":%ld,\"mean\":%.1f,"
+                       "\"heapSegs\":%ld,\"heapSegEntries\":%ld,\"domSegs\":%ld,\"domSegEntries\":%ld}\n",
+                       sc, st, sm, sc ? (double)st / (double)sc : 0.0, hs, he, ds, de);
             }
             /* CREATED IS NOT LIVE, AND A COUNTER THAT CANNOT TELL THEM APART CANNOT NAME A LEAK. A run whose
                created-flow count climbs with the switch count is either CHURN (each flow finishes and the
@@ -1617,22 +1653,59 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
                    `allocations` with a flat `objects` is memory no GC object owns (an atom, a string, a
                    property table, a bytecode function), and each of those has a different owner and a
                    different place where the owner forgot to let go. */
-                /* AND WHAT IS NOT A GC OBJECT AT ALL, because that is where this run's growth actually was and
-                   none of the counts above could see it. `memory_used_*` is the runtime's own walk of its
-                   CONTEXT LIST — two entries and sizeof(JSContext) + one JSValue per class for every realm
-                   alive — so a run whose heap climbs while objects/props/shapes/atoms stay flat is answered
-                   here: a REALM per flow is one line of this number and no lines of the others. It is the
-                   working set navigable.c's OOM `CHECK` names (one child realm per flow that created a
-                   navigable with an address, none reclaimed), and it was invisible because nothing printed the
-                   one counter that holds it. */
-                printf("@HEAP {\"allocations\":%lld,\"atoms\":%lld,\"strings\":%lld,\"objects\":%lld,"
-                       "\"shapes\":%lld,\"props\":%lld,\"funcs\":%lld,\"funcCode\":%lld,\"arrays\":%lld,"
-                       "\"realmBytes\":%lld,\"realmParts\":%lld}\n",
-                       (long long)mem.malloc_count, (long long)mem.atom_count, (long long)mem.str_count,
-                       (long long)mem.obj_count, (long long)mem.shape_count, (long long)mem.prop_count,
-                       (long long)mem.js_func_count, (long long)mem.js_func_code_size,
-                       (long long)mem.array_count,
-                       (long long)mem.memory_used_size, (long long)mem.memory_used_count);
+                /* A COUNTER IS NAMED AFTER WHAT IT COUNTS, AND THESE TWO WERE NOT. They were emitted as
+                   `realmBytes`/`realmParts` on the claim that `memory_used_*` is "the runtime's own walk of its
+                   CONTEXT LIST", so a reader asking "is the growth child realms?" read them and got an answer
+                   about something else. JS_ComputeMemoryUsage's own body says otherwise: the context walk adds
+                   two entries per realm, and then EVERY object's property array, EVERY fast array's element
+                   vector, every var_ref, bound function, C-closure record and module entry adds to the same
+                   pair. It is the MISCELLANEOUS bucket — everything the typed counters above do not name — and
+                   at this fixture's first switch it already reads 5977 parts with one realm in the runtime.
+                   So it is called that, and the realm question is answered by the one component that knows the
+                   answer: navigable.c's own list of the child realms this agent built, which is precisely the
+                   working set its OOM `CHECK` names (one per flow that created a navigable with an address,
+                   none reclaimed). A mislabelled counter is worse than a missing one — it is a wrong answer
+                   that looks like a measurement. */
+                /* AND WHAT THE BYTES ARE, not just how many of each kind there are. `allocations` and the
+                   counts cannot be compared against `heapKiB`, so a run whose allocator holds 655 MB with 72k
+                   objects has nothing in this line to say where those bytes are; the SIZE fields the runtime
+                   already computes do, and `unattributed` is the residual — malloc_size minus every kind the
+                   runtime can name, which is the engine's OWN js_malloc'd memory (heap call frames, flow
+                   blobs) and is the number that names the next thing to fix when it is the one that climbs. */
+                /* AND THE ALLOCATOR UNDER ALL OF IT, because every number above is quickjs's own accounting and
+                   the engine is not the only thing in the address space. Lexbor's document arenas, the per-flow
+                   COW deltas and every other `malloc` in the host are invisible to `heapKiB`, so a run whose
+                   RSS is sixteen times its JS heap has nothing in this line to say what the other fifteen
+                   sixteenths are. `cLive` is what the C allocator currently has handed out — quickjs's bytes
+                   INCLUDED, since js_malloc routes to malloc — so `cLive - heapKiB` is the host's own live
+                   memory, and `arena` is the address space that allocator has ever needed. In wasm those two
+                   differ permanently: LINEAR MEMORY ONLY GROWS. A page the allocator hands back stays mapped,
+                   so `arena` is a HIGH-WATER MARK and RSS follows it rather than `cLive` — which means a run
+                   whose `cLive` is flat while `arena` climbs is not leaking at all, it is fragmenting, and the
+                   two have entirely different fixes. Nothing in this engine could tell those apart before. */
+                {
+                    long long attributed = (long long)mem.atom_size + mem.str_size + mem.obj_size +
+                        mem.prop_size + mem.shape_size + mem.js_func_size + mem.js_func_code_size +
+                        mem.js_func_pc2line_size + mem.memory_used_size +
+                        (long long)mem.fast_array_elements * (long long)sizeof(JSValue);
+                    printf("@HEAP {\"allocations\":%lld,\"atoms\":%lld,\"strings\":%lld,\"objects\":%lld,"
+                           "\"shapes\":%lld,\"props\":%lld,\"funcs\":%lld,\"funcCode\":%lld,\"arrays\":%lld,"
+                           "\"miscBytes\":%lld,\"miscParts\":%lld,\"childRealms\":%d,"
+                           "\"objBytes\":%lld,\"propBytes\":%lld,\"shapeBytes\":%lld,\"strBytes\":%lld,"
+                           "\"atomBytes\":%lld,\"funcBytes\":%lld,\"arrayElemBytes\":%lld,"
+                           "\"unattributed\":%lld,\"cLiveKiB\":%lld,\"arenaKiB\":%lld}\n",
+                           (long long)mem.malloc_count, (long long)mem.atom_count, (long long)mem.str_count,
+                           (long long)mem.obj_count, (long long)mem.shape_count, (long long)mem.prop_count,
+                           (long long)mem.js_func_count, (long long)mem.js_func_code_size,
+                           (long long)mem.array_count,
+                           (long long)mem.memory_used_size, (long long)mem.memory_used_count,
+                           navigable_realm_count(),
+                           (long long)mem.obj_size, (long long)mem.prop_size, (long long)mem.shape_size,
+                           (long long)mem.str_size, (long long)mem.atom_size, (long long)mem.js_func_size,
+                           (long long)mem.fast_array_elements * (long long)sizeof(JSValue),
+                           (long long)mem.malloc_size - attributed,
+                           (long long)engine_c_alloc_live() / 1024, (long long)engine_c_alloc_arena() / 1024);
+                }
                 printf("@PROGRESS {\"switches\":%d,\"flows\":%ld,\"live\":%d,\"objects\":%lld,"
                        "\"heapKiB\":%lld,\"script\":%d,\"candidates\":%d,\"running\":\"%s\",\"forkedAt\":{",
                        g_switches, flow_created_count(), flow_count(),

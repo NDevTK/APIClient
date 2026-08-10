@@ -36,11 +36,22 @@ static RealmBuilder g_realm_builder;
    WindowProxy has been collected is dead — the finalizer cannot free it but it can NAME it, and the sweep runs
    after the collection rather than inside it. §scheduler's cold tier is the same sentence one level further
    out, and it is its own mechanism: a realm is not a snapshot, so paging one is not a rewording of paging a
-   flow. */
+   flow.
+   IT IS A CEILING ON THE PROBE THAT MATERIALIZES ONE, AND IT IS NOT WHERE THIS ENGINE'S MEMORY GOES — measured,
+   because the paragraph above reads like an explanation of the whole heap and was taken for one. The default
+   smoke fixture builds ZERO child realms over 14003 flows (`childRealms` on the @HEAP line) while the C
+   allocator goes from 4.6 MB to 3.39 GB, of which quickjs's own allocator holds 1.27 GB in 7.4 MILLION live
+   blocks that no JS object, property, shape, string or bytecode accounts for. So the growth is ~500 leaked
+   allocations per CREATED flow in two places — inside the runtime and in the host's own malloc — and none of it
+   is here. The ceiling below is real and it is what keeps a src'd-iframe probe out of that fixture; it is not
+   the answer to "why does this run take gigabytes", and a reader who arrives with that question is told so
+   here rather than after a day of building reclamation that would not have moved the number. */
 static JSContext **g_realms;
 static int         g_realms_n, g_realms_cap;
 
 void navigable_set_realm_builder(RealmBuilder b) { g_realm_builder = b; }
+
+int navigable_realm_count(void) { return g_realms_n; }
 
 
 /* THE CHILD'S ADDRESS AND ORIGIN, from ONE parse. An `about:blank` navigable — which is what `open()` with no
@@ -110,10 +121,16 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len)
     lxb_html_document_t *dom = lxb_html_document_create();
 
     /* WHAT ACTUALLY FILLED THE HEAP WHEN THIS FIRES IS NOT DOCUMENTS — see the realm list in navigable_realm.
-       The message says so, because a `@WHY` is read at the site and "OOM" alone sends the reader here. */
+       The message says so, because a `@WHY` is read at the site and "OOM" alone sends the reader here. It names
+       what this component contributed, and it says WHERE TO LOOK FIRST, because it does not know what else in
+       the run was allocating: the same fixture with no src'd navigable in it at all builds zero realms and
+       still reaches gigabytes (navigable_realm's note has the numbers), so a reader who arrives here must
+       check `childRealms` on the @HEAP line before believing this paragraph is their answer. */
     CHECK(dom != NULL,
-          "OOM creating a child navigable's Document — the working set that filled the heap is CHILD REALMS, "
-          "one per flow that created a navigable with an address, none of them ever reclaimed. The reclamation "
+          "OOM creating a child navigable's Document — CHECK @HEAP's `childRealms` FIRST: if it is small, this "
+          "OOM is a bystander and the memory is elsewhere in the run. If it is large, the working set is CHILD "
+          "REALMS, one per flow that created a navigable with an address, none of them ever reclaimed. The "
+          "reclamation "
           "is NOT a reference the agent can drop: a child realm's refcount is far above one because every C "
           "function object minted in it holds a counted reference to its own realm, so JS_FreeContext only "
           "decrements and removing it from this agent's list orphans the context instead of tearing it down "

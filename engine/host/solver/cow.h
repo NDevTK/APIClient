@@ -151,4 +151,11 @@ void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork);
    the worst single one. A switch is supposed to be O(divergence); this says what the divergence actually is. */
 void cow_swap_stats(long *count, long *total, long *max);
 
+/* WHAT THE CHAIN IS HOLDING RIGHT NOW — the frozen segments still referenced and the entries in them. The swap
+   counters above say what a SWITCH costs and say nothing about what is RETAINED, so a run whose frontier is
+   four flows while its allocator holds gigabytes had no counter that could tell a chain nobody released from
+   memory belonging somewhere else entirely. A segment is freed when its last holder drops it, so this number
+   falling to nothing as flows finish is the whole claim that the structural sharing is also a lifetime. */
+void cow_chain_stats(long *segs, long *entries);
+
 #endif

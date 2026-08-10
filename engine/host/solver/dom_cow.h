@@ -140,6 +140,11 @@ void dom_base_load(void *base); /* install a parked flow's base chain (before do
 void dom_base_free(void *base); /* drop a flow's reference to a base chain (free iff last) */
 void dom_base_ref(void *base);  /* add ONE ref (each orphan forks the document flow's shared DOM delta) */
 
+/* WHAT THE DOCUMENT'S CHAIN IS HOLDING RIGHT NOW — frozen segments still referenced, and the entries in them.
+   The heap half reports the same pair (cow.h); they are read together because a delta nobody released looks the
+   same from either side and only the one that CLIMBS names which half owns it. */
+void dom_cow_chain_stats(long *segs, long *entries);
+
 /* THIS FLOW CREATED THIS NODE. Called from every place a node is made, so the delta owns it and destroys it
    when the delta is discarded. Inert while capture is off — a boot-time creation is baseline and outlives
    every delta. */

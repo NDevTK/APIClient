@@ -164,6 +164,13 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url);
 JSValue navigable_open(JSContext *ctx, const char *url, const char *target, const WindowFeatures *feat);
 void navigable_free(JSContext *ctx);
 
+/* HOW MANY CHILD REALMS THIS AGENT IS HOLDING — the working set child_document's OOM `CHECK` names, asked of
+   the only component that knows it. It exists because the alternative was inferring it from
+   JS_ComputeMemoryUsage's `memory_used_*`, which is the runtime's MISCELLANEOUS bucket (every property array
+   and every fast-array element vector lands in it) and answers a different question with a similar-looking
+   number — see the @HEAP line in solver/engine.c. */
+int navigable_realm_count(void);
+
 /* §7.4's CREATE A NEW NAVIGABLE. `url` is the child's initial address; NULL, "" or "about:blank" all mean the
    initial about:blank Document, which inherits this document's origin and policy container. Returns the child's
    WindowProxy, or JS_UNDEFINED when `url` does not parse — the caller decides what that means, because §7.4

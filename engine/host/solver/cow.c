@@ -79,6 +79,13 @@ struct CowDelta { CowEntry *e; int n, cap; uint32_t fork_gen; int *hash; int has
    the document. A switch moves it to the incoming flow's chain by walking to the two chains' lowest common
    segment and touching only what lies above; the shared suffix is left alone. */
 static CowSeg *g_cow_installed = NULL;
+/* WHAT THE CHAIN IS HOLDING — see cow.h. Counted at the two points a segment's lifetime begins and ends (the
+   fork that freezes one, and the unref that frees it), so the pair cannot drift from the thing it counts. */
+static long g_seg_live, g_seg_entries_live;
+void cow_chain_stats(long *segs, long *entries) {
+    if (segs) *segs = g_seg_live;
+    if (entries) *entries = g_seg_entries_live;
+}
 static void cow_install_chain(JSContext *ctx, CowSeg *want);   /* defined with the rest of the chain walk */
 
 static uint32_t cow_slot_hash(void *p, uint32_t atom) {
@@ -700,6 +707,7 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
     seg = malloc(sizeof *seg);
     CHECK(seg, "cow: OOM fork segment — a shared delta would be corrupted");
     seg->e = src->e; seg->n = src->n; seg->base = src->base; seg->refcount = 2;   /* running flow + sibling */
+    g_seg_live++; g_seg_entries_live += seg->n;
     src->e = NULL; src->n = 0; src->cap = 0;   /* fresh empty head for the running flow */
     free(src->hash); src->hash = NULL; src->hash_cap = 0;
     src->base = d->base = seg;
@@ -727,6 +735,7 @@ static void cow_seg_unref(JSContext *ctx, CowSeg *s) {
     while (s && --s->refcount <= 0) {
         CowSeg *base = s->base;
         cow_entries_free(ctx, s->e, s->n);
+        g_seg_live--; g_seg_entries_live -= s->n;
         free(s->e); free(s);
         s = base;
     }

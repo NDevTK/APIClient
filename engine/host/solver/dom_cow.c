@@ -1010,9 +1010,19 @@ static void dom_unapply_seg(DomSeg *s)
         for (int i = s->n - 1; i >= 0; i--) dom_unapply_entry(&s->e[i]);
 }
 /* drop a chain reference: refcount--, free the segment's entries (parked: old/cur held) when it hits 0, recurse. */
+/* WHAT THE DOCUMENT'S CHAIN IS HOLDING — the same pair the heap chain reports, counted at the same two points
+   (the fork that freezes a segment and this unref), and reported beside it because a per-flow delta that is
+   never released looks identical in the two halves and has to be told apart by which number climbs. */
+static long g_dom_seg_live, g_dom_seg_entries_live;
+void dom_cow_chain_stats(long *segs, long *entries) {
+    if (segs) *segs = g_dom_seg_live;
+    if (entries) *entries = g_dom_seg_entries_live;
+}
+
 static void dom_seg_unref(DomSeg *s) {
     while (s && --s->refcount <= 0) {
         DomSeg *base = s->base;
+        g_dom_seg_live--; g_dom_seg_entries_live -= s->n;
         dom_release_created_all(s->e, s->n);
         for (int i = 0; i < s->n; i++) { DomUndo *u = &s->e[i];
             free(u->ns); free(u->prefix); free(u->name); free(u->old); free(u->cur);
@@ -1047,6 +1057,7 @@ void *dom_cow_fork(void) {
     DomSeg *seg = malloc(sizeof(DomSeg));
     CHECK(seg, "dom-cow-oom: fork segment alloc failed — a shared DOM delta would be corrupted");
     seg->e = g_dom_undo; seg->n = g_dom_undo_n; seg->base = g_dom_base; seg->refcount = 2;   /* running flow + sibling */
+    g_dom_seg_live++; g_dom_seg_entries_live += seg->n;
     g_dom_undo = NULL; g_dom_undo_n = 0; g_dom_undo_cap = 0;   /* fresh empty head for the running flow */
     g_dom_base = seg;
     g_dom_installed = seg;   /* the frozen head belongs to the applied chain now, not to anyone's head */
