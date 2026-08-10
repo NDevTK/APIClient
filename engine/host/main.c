@@ -42,6 +42,7 @@
 #include "browser/core/encoding/encoding.h"
 #include "browser/core/encoding/text_stream.h"
 #include "browser/core/dom/abort.h"
+#include "browser/core/dom/observable.h"
 #include "browser/core/html/unhandled_rejection.h"
 #include "browser/core/dom/document.h"
 #include "browser/core/dom/element.h"
@@ -155,6 +156,7 @@ static void engine_agent_init(JSContext *ctx, const char *origin)
     rendering_init(ctx);
     fetch_init(ctx);   /* §5/§6/§5.3 declare their per-realm prototypes here, not from the install */
     abort_init(ctx);
+    observable_init(ctx);
     element_init(ctx);
     iframe_init(ctx);
     document_init(ctx);   /* §4.8.5: the slot a child navigable lives in */
@@ -212,6 +214,7 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
     page_reveal_install(ctx, g);           /* HTML §7.4.6.3: PageRevealEvent */
     media_query_list_install(ctx, g);   /* CSSOM VIEW §4.2/§7: matchMedia, MediaQueryList */
     abort_install(ctx, g);   /* AbortController/AbortSignal: fetch takes a signal, so a bundle mints one early */
+    observable_install(ctx, g);
     navigator_install(ctx, g);
     screen_install(ctx, g);   /* the responsive gate: screen.width decides which router a bundle uses */
     document_install(ctx, g, dom, url, csp, doc_id, nav_proxy);
@@ -425,6 +428,7 @@ QJS_EXPORT void qjs_teardown(void)
     animation_frame_free(g_ctx);
     unhandled_rejection_free(g_ctx);
     abort_free(g_ctx);
+    observable_free(g_ctx);
     document_free(g_ctx);   /* the Document and the window it fires `load` at — both HELD across the lifecycle */
     iframe_free(g_ctx);
     element_free(g_ctx);    /* the wrapper identity table and the DOM interface prototypes */

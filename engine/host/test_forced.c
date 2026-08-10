@@ -19,6 +19,7 @@
 #include "core/frame/navigator.h"
 #include "core/frame/screen.h"
 #include "core/dom/abort.h"
+#include "core/dom/observable.h"
 #include "core/html/unhandled_rejection.h"
 #include "core/css/media_query_list.h"
 #include "core/rendering/animation_frame.h"
@@ -1756,6 +1757,7 @@ static void tf_agent_init(JSContext *ctx)
     rendering_init(ctx);
     fetch_init(ctx);   /* §5/§6/§5.3 declare their per-realm prototypes here, not from the install */
     abort_init(ctx);
+    observable_init(ctx);
     element_init(ctx);
     iframe_init(ctx);
     document_init(ctx);   /* §4.8.5: the slot a child navigable lives in */
@@ -1828,6 +1830,7 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     page_reveal_install(ctx, g);           /* HTML §7.4.6.3: PageRevealEvent */
     media_query_list_install(ctx, g);   /* CSSOM VIEW §4.2/§7: matchMedia, MediaQueryList */
     abort_install(ctx, g);
+    observable_install(ctx, g);
 
     /* Browser layer: parse the document with the real Lexbor HTML parser BEFORE the DOM interfaces install,
        because `document` is a wrapper over this tree — the parse itself creates no JS object, so it belongs on
@@ -2407,6 +2410,7 @@ int main(int argc, char **argv) {
     animation_frame_free(ctx);
     unhandled_rejection_free(ctx);
     abort_free(ctx);
+    observable_free(ctx);
     document_free(ctx);   /* the window reference the lifecycle holds */
     iframe_free(ctx);
     element_free(ctx);    /* the wrapper identity table and the DOM interface prototypes */

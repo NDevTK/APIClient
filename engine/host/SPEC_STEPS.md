@@ -2489,6 +2489,195 @@ attribute` step 1, `set an existing attribute value` step 3), and (c) the `[CERe
    `[CEReactions]` epilogue — including all of `handle attribute changes`, which is the algorithm
    an implementer is most likely to wrongly split.
 
+---
+
+## 10. Observable — `Subscriber`, `Observable`, `subscribe`, `from()`, and the operators
+
+**Why this section exists.** `dom/observable` was the largest completely-unimplemented cluster in the
+DOM gate, and the reason it is worth writing down separately from the nine groups above is that it
+inverts their ratio. In groups 1–9 the author-code surface is a handful of Trusted Types calls and
+`[CEReactions]` epilogues buried in otherwise straight-line tree work; **in this standard there is
+almost nothing that is not author code.** A producer is a callback, every consumer is a callback,
+every teardown is a callback, every abort algorithm is a callback, and the two dictionaries
+(`SubscriptionObserver`, `SubscribeOptions`) are read with `[[Get]]`. So the interesting question is
+not "where are the suspension points" but "is there a step anywhere that is *not* one".
+
+**Network was available.** Everything below was read from the live standard on **2026-08-10**:
+
+| Standard | Source | Version read |
+| --- | --- | --- |
+| Observable | `https://wicg.github.io/observable/` | Editor's Draft, read 2026-08-10 |
+| WHATWG DOM (`AbortSignal`, "signal abort") | `https://dom.spec.whatwg.org/` | Living Standard, §3.2 |
+| Web IDL (callback invocation, dictionaries) | `https://webidl.spec.whatwg.org/` | Living Standard, §3.2.18, §3.12 |
+
+The standard is **not** in WHATWG DOM yet. `https://dom.spec.whatwg.org/` contains no `Observable`,
+no `Subscriber` and no `subscribe` — a `curl` of it and a `grep` for those three words answers zero,
+zero and zero — so a step number cited as "DOM §…" for this component would name nothing. The WPT
+directory is `dom/observable/tentative` for that reason, and the citations below are the WICG
+draft's own section numbers.
+
+### 10.0 The one fact that decides every stage boundary
+
+**Web IDL's "invoke with `report`" is a suspension point that *cannot* raise.** Every callback in
+this standard is invoked either with `"report"` (the observer's `next`/`error`/`complete`, every
+teardown, the abort algorithm, `inspect`'s five handlers on their reporting paths) or with
+`"rethrow"` (the subscribe callback, and the operators' `mapper`/`predicate`/`reducer`, whose throw
+the caller immediately turns into `subscriber.error(E)`). Both are `[S]`. The difference is what the
+machine does when the request comes back abrupt, and it is why this component's definitions declare
+`catches_abrupt`: with `"report"` the exception is a value to be reported and the walk continues —
+which is what lets the standard assert *"Assert: No exception was thrown"* after each observer's
+steps — and with `"rethrow"` it is a value that becomes the next algorithm's argument. Neither ever
+unwinds the machine. A definition without `catches_abrupt` turns both into a raise, and a raise out
+of `subscriber.next()` is an exception escaping into whatever the producer was doing.
+
+### 10.1 §2.1 `Subscriber` — `next`, `error`, `complete`, `addTeardown`
+
+`next(value)`:
+
+1. If `active` is false, return. —
+2. If the relevant global is a `Window` whose Document is not fully active, return. —
+3. Let *copy* be **a copy of** the internal observers. — *(not a live walk — see 10.5)*
+4. For each observer of *copy*: **`[S]`** run its next steps given value.
+
+`error(error)`:
+
+1. If `active` is false, **`[S]`** report an exception with error, and return. — *(HTML §8.1.4.6
+   fires `error` at the global, so the page's `onerror` runs)*
+2. Fully-active check. —
+3. **`[S]`** Close this. — *(the whole of 10.3, which runs abort algorithms, listeners and teardowns)*
+4. Let *copy* be a copy of the internal observers. —
+5. For each observer of *copy*: **`[S]`** run its error steps given error.
+
+`complete()` is `error` without step 1's report and with complete steps at step 5.
+
+`addTeardown(teardown)`:
+
+1. Fully-active check. —
+2. If `active` is true, append teardown to the teardown callbacks. —
+3. Otherwise, **`[S]`** invoke teardown with «» and `"report"`. — *this is the branch an
+   implementation forgets, and WPT pins it: a teardown added to an already-closed subscription runs
+   **synchronously, during `addTeardown`**, and two of them added that way run in **FIFO** order —
+   the reverse-order rule belongs to step 4 of `close`, not to this step.*
+
+**Suspension points: 6.** The prologue adds none — `next(any value)` and `error(any error)` convert
+nothing, and `addTeardown`'s `VoidFunction` is a brand check.
+
+### 10.2 §2.2 The `Observable` constructor and `subscribe`
+
+`new Observable(callback)` is one step ("set this's subscribe callback to callback"), and its only
+author-code reach is Web IDL §3.7.1's `Get(newTarget, "prototype")` — **`[S]`**, before the
+algorithm.
+
+`subscribe(observer, options)` is `subscribe to an Observable` (§2.2.1), whose steps are:
+
+1. Fully-active check. —
+2. Let *internal observer* be a new internal observer. —
+3. Process *observer*: a callable IS the next steps; an object is a `SubscriptionObserver`, whose
+   three members are read **`[S]` × 3** in Web IDL §3.2.18's **lexicographic** order —
+   `complete`, `error`, `next` — *not* the order the standard's prose lists them in.
+4. Assert on the error steps. —
+5. **If the weak subscriber is non-null and still active**, the subscription **JOINS** it:
+   1. Let *subscriber* be that one. —
+   2. Append *internal observer* to its internal observers. —
+   3. If `options`'s signal exists: aborted → remove it again; otherwise add the abort algorithm
+      of step 9.2. —
+   4. **Return** — *the subscribe callback is NOT invoked a second time.*
+6. Let *subscriber* be a new `Subscriber`. —
+7. Append *internal observer*. —
+8. Set the weak subscriber. —
+9. If `options`'s signal exists:
+   1. aborted → **`[S]`** close *subscriber* with the signal's abort reason;
+   2. otherwise add an abort algorithm that removes this internal observer and, **only when the
+      list is then empty**, closes *subscriber* with the signal's abort reason. **`[S]`** when it
+      later runs.
+10. **`[S]`** Invoke the subscribe callback with «subscriber» and `"rethrow"`; on exception E,
+    **`[S]`** run `subscriber.error(E)`.
+
+**Step 10 is not conditional on step 9.1.** A subscription whose signal was *already* aborted still
+runs the producer, and every `subscriber.next()` it makes is dropped by 10.1 step 1 while its
+`addTeardown` takes 10.1's step-3 branch and fires immediately. Making step 10 conditional is the
+single easiest way to get this component wrong and have most tests still pass.
+
+**Suspension points: 7** (3 dictionary reads + 1 options read + close + the callback + the error).
+
+### 10.3 §2.1 `close a subscription`
+
+1. If `active` is false, **return** — the re-entrancy guard, and the standard's own example is a
+   teardown that aborts a controller whose abort algorithm re-enters this algorithm. —
+2. Set `active` to false. —
+3. **`[S]`** Signal abort the subscription controller with the reason, if one was given. — DOM §3.2:
+   this runs the signal's **abort algorithms** and then fires `abort` at it, so it is two kinds of
+   author code, and it is where the whole upstream chain unsubscribes.
+4. For each teardown **sorted in reverse insertion order**:
+   1. Re-check fully-active — *the standard says this step "runs repeatedly because each teardown
+      could result in the above Document becoming inactive"*. —
+   2. **`[S]`** Invoke teardown with «» and `"report"`.
+
+**Suspension points: 2 (one of them per teardown).** Step 3 must be its own stage from step 4:
+an abort algorithm registered on the subscriber's own signal can add nothing to the teardown list
+(`addTeardown` on an inactive subscriber fires immediately instead), but it CAN close another
+subscription, so the list is read **after** step 3 has finished, never captured before it.
+
+### 10.4 §2.3.1 `from()` — four arms, and the order they are tried in
+
+`convert to an Observable` is stated as an abstract operation precisely so the operators can reach it
+without the Web IDL bindings. Its arms, in order:
+
+0. If Type(value) is not Object, **throw a TypeError** — no primitive is coerced, so a String is not
+   an iterable here. —
+1. **From Observable**: if value's specific type is `Observable`, return it. —
+2. **From async iterable**: **`[S]`** `GetMethod(value, %Symbol.asyncIterator%)` — `GetMethod`, not
+   `GetIterator`, so a value with no async iterator does not throw. Undefined or null → fall to 3.
+3. **From iterable**: **`[S]`** `GetMethod(value, %Symbol.iterator%)`. Undefined → fall to 4.
+4. **From Promise**: `IsPromise(value)` — the brand, not a `then` read. —
+5. Otherwise **throw a TypeError**. —
+
+Each arm returns an Observable whose subscribe callback is native steps, and those steps are where
+the rest of the author code lives:
+
+- **sync iterable**: **`[S]`** `GetIterator(value, sync)` *(re-invoking the `@@iterator` getter — the
+  standard notes this is deliberate and matches test expectations)*, then register an
+  `IteratorClose` abort algorithm, then a `while (true)` of **`[S]`** `IteratorStepValue` →
+  **`[S]`** `subscriber.next(value)` → check the signal. The next() is what re-enters 10.1, and the
+  loop is unbounded, so it is a **yield point as well as a suspension point**.
+- **async iterable**: **`[S]`** `GetIterator(value, async)` **synchronously**, whose throw reaches
+  `subscriber.error()` **synchronously** — the standard calls this out as the only synchronous error
+  an async iterable can produce — then a promise-reaction chain, each turn of which is
+  **`[S]`** `IteratorNext` + `[S]` the reaction + `[S]` `subscriber.next()`.
+- **Promise**: a reaction that runs `next` then `complete`, or `error`.
+
+### 10.5 What a step machine gets wrong here, in the order it will get it wrong
+
+1. **Walking the live internal-observer list.** Step 3 of `next` copies it, and WPT pins the copy
+   directly: a `next` handler that subscribes to the same Observable adds an observer that must NOT
+   receive the value currently in flight, and must receive the following one.
+2. **Treating the weak subscriber as "one subscription per subscribe()".** Two `subscribe()` calls
+   on one Observable share a producer and one teardown, which runs only when the **last** of them
+   unsubscribes — in any order.
+3. **Closing on the first unsubscribe.** Step 9.2's abort algorithm closes only when the internal
+   observer list is EMPTY afterwards.
+4. **Capturing the teardown list before step 3 of `close`.**
+5. **Reading the `SubscriptionObserver` members in prose order.** They are lexicographic.
+6. **Letting a `"report"` invocation unwind.** See 10.0.
+7. **Declaring `catches_abrupt` and then making a KEYED READ.** This one is not about the standard, it is
+   about this engine, and it cost a whole test file: a CALL request reports its throw through its own
+   `out`, and `step_getprop_run` has no way to say "it threw" — so under `catches_abrupt` a throwing
+   `[[Get]]` is delivered as `JS_EXCEPTION`, the read reports "not started", and the machine asks for the
+   same property again, forever. `Observable.from(obj)` where obj's `@@iterator` **getter** throws is a
+   test of its own, and it took `observable-from.any.js` from 48 results to none — a timeout, with every
+   passing subtest before it discarded. A machine that both catches and reads must take the abrupt
+   delivery **before** the stage runs, at exactly the stages whose request is a read.
+
+### 10.6 Summary
+
+| Algorithm | Suspension points | The one that surprises |
+| --- | --- | --- |
+| §2.1 `next` / `error` / `complete` / `addTeardown` | 6 | `addTeardown` on an inactive subscription invokes **during** `addTeardown`, FIFO |
+| §2.2.1 `subscribe to an Observable` | 7 | step 10 runs the producer **even when** step 9.1 already closed the subscriber |
+| §2.1 `close a subscription` | 2 (one per teardown) | the teardown list is read **after** the signal abort, and runs in **reverse** order |
+| §2.3.1 `convert to an Observable` | 3 + the arm's own loop | `GetMethod`, never `GetIterator`, for the probe; a sync iterable's loop is unbounded |
+| **Total for the core** | **18** | |
+
 ## 11. DOM §2.7 / §2.8 / §2.9 — the event listener list, the event path, and dispatch
 
 **Why this section exists.** `dispatchEvent` is the only DOM member whose RETURN VALUE depends on

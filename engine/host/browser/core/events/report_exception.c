@@ -19,6 +19,8 @@
  * loader records it, this is the one place that reads it. */
 #include <string.h>
 
+#include <stdlib.h>
+
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
@@ -107,6 +109,49 @@ void report_exception_work_release(JSContext *ctx, ReportExceptionWork *w)
     for (i = 0; i < 4; i++) { JS_FreeValue(ctx, w->cb[i]); w->cb[i] = JS_UNDEFINED; }
 }
 
+/* THE THROW SITE, OUT OF THE BACKTRACE THE ENGINE ALREADY RECORDED — the other three of step 2's
+   implementation-defined values. They were zero and an empty string, which is a conforming answer and is also
+   a worse one than the engine can give: an Error carries a CallSite per frame with its line and its column,
+   and JS_GetErrorStackString renders them WITHOUT running any of the page's code (which is the same reason the
+   message goes through JS_DiagCString). The rendered top frame is the throw site, and everything before its
+   last two colons is the file. A value with no backtrace — every non-Error a page can throw — leaves all three
+   at their defaults rather than being guessed at.
+   WPT reads all three off the event (`lineno` and `colno` are asserted to be greater than zero in six of
+   dom/observable's subtests alone), so a fabricated number would be a wrong answer dressed as a right one and
+   a zero is a right answer that loses information the engine has. */
+static void report_position(JSContext *ctx, JSValueConst exception, char *file, size_t file_cap,
+                            uint32_t *pline, uint32_t *pcol)
+{
+    JSValue stack = JS_GetErrorStackString(ctx, exception);
+    const char *s, *nl, *p, *colon2, *colon1, *open;
+    size_t n;
+
+    if (!JS_IsString(stack)) { JS_FreeValue(ctx, stack); return; }
+    s = JS_ToCString(ctx, stack);
+    JS_FreeValue(ctx, stack);
+    if (!s) return;
+    nl = strchr(s, '\n');
+    if (!nl) nl = s + strlen(s);
+    /* the LAST two `:` of the frame line — a filename contains one (`https://x/y`), a line number may not */
+    colon2 = colon1 = NULL;
+    for (p = s; p < nl; p++)
+        if (*p == ':') { colon1 = colon2; colon2 = p; }
+    if (colon1 && colon2 && colon2[1] >= '0' && colon2[1] <= '9' && colon1[1] >= '0' && colon1[1] <= '9') {
+        *pline = (uint32_t)strtoul(colon1 + 1, NULL, 10);
+        *pcol  = (uint32_t)strtoul(colon2 + 1, NULL, 10);
+        open = memchr(s, '(', (size_t)(colon1 - s));
+        p = open ? open + 1 : s;
+        while (p < colon1 && *p == ' ') p++;
+        /* an anonymous frame renders as `    at <file>:l:c`, so the leading "at " is skipped too */
+        if (!open && (size_t)(colon1 - p) > 3 && !strncmp(p, "at ", 3)) p += 3;
+        n = (size_t)(colon1 - p);
+        if (n >= file_cap) n = file_cap - 1;
+        memcpy(file, p, n);
+        file[n] = '\0';
+    }
+    JS_FreeCString(ctx, s);
+}
+
 /* §8.1.4.6 step 2: "extract error information from exception". `error` is the exception; the other four are
    implementation-defined, and the message is derived WITHOUT running the page's `toString` — a host reporting
    what went wrong must not depend on the code that went wrong, which is exactly what JS_DiagCString is for. */
@@ -115,11 +160,15 @@ static JSValue report_error_event(JSContext *ctx, JSValueConst exception)
     char *owned = NULL;
     const char *what = JS_DiagCString(ctx, exception, &owned);
     JSValue message = JS_NewString(ctx, what ? what : "Uncaught exception");
-    JSValue filename = JS_NewString(ctx, "");
+    char path[512] = "";
+    uint32_t line = 0, col = 0;
+    JSValue filename;
     JSValue ev;
 
+    report_position(ctx, exception, path, sizeof path, &line, &col);
+    filename = JS_NewString(ctx, path);
     JS_DiagFreeCString(ctx, what, owned);
-    ev = error_event_new(ctx, message, filename, /*lineno*/ 0, /*colno*/ 0, exception);
+    ev = error_event_new(ctx, message, filename, line, col, exception);
     JS_FreeValue(ctx, message);
     JS_FreeValue(ctx, filename);
     return ev;

@@ -56,6 +56,7 @@
 #include "core/events/event_target.h"
 #include "core/realm.h"
 #include "core/dom/abort.h"
+#include "core/dom/observable.h"
 #include "solver/concolic.h"
 #include "solver/flow.h"
 #include "solver/engine.h"
@@ -1020,6 +1021,7 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
     message_port_init(ctx);
     broadcast_channel_init(ctx, origin);
     abort_init(ctx);        /* the AbortSignal slot key §5.4's signal lives in */
+    observable_init(ctx);
     writable_stream_init(ctx);
     transform_stream_init(ctx);
     blob_init(ctx);
@@ -1098,6 +1100,7 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
     message_port_install(ctx, global);   /* HTML 9.4.2/9.4.3 */
     broadcast_channel_install(ctx, global);   /* HTML 9.5 */
     abort_install(ctx, global);
+    observable_install(ctx, global);
     writable_stream_install(ctx, global);
     transform_stream_install(ctx, global);
     blob_install(ctx, global);
@@ -1648,6 +1651,7 @@ int main(int argc, char **argv)
     transform_stream_free(ctx);
     writable_stream_free(ctx);
     abort_free(ctx);
+    observable_free(ctx);
     broadcast_channel_free(ctx);
     message_port_free(ctx);
     window_message_free(ctx);
