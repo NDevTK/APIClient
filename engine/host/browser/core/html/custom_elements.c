@@ -43,6 +43,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/node.h"
+#include "core/dom/names.h"
 #include "core/dom/element.h"
 #include "core/dom/document.h"
 #include "core/html/custom_elements.h"
@@ -62,11 +63,26 @@
    handed out by a member that never crossed a boundary. */
 static int g_defs_slot = -1;
 
+/* §4.13.4's WHEN-DEFINED PROMISE MAP, per realm for exactly the reason the definition set is: the promise
+   `whenDefined` hands back is settled by a `define` in THAT window, and one map for the agent would settle a
+   parent's promise on a child's registration. A plain null-prototyped object keyed by name, whose values are
+   one promise and the two halves of its capability as a three-element Array — a JS value, so it forks per flow
+   and parks with the flow that is waiting, which a malloc'd list of pending promises could do neither of. */
+static int g_whendef_slot = -1;
+
 /* THIS REALM'S definition set. OWNED: the caller frees. */
 static JSValue ce_defs(JSContext *ctx)
 {
     DCHECK(g_defs_slot > 0, "a custom-element definition was reached before custom_elements_init declared the set");
     return realm_value_get(ctx, g_defs_slot);
+}
+
+/* THIS REALM'S when-defined promise map. OWNED: the caller frees. */
+static JSValue ce_whendef(JSContext *ctx)
+{
+    DCHECK(g_whendef_slot > 0,
+           "§4.13.4's when-defined promise map was reached before custom_elements_init declared it");
+    return realm_value_get(ctx, g_whendef_slot);
 }
 static int    g_ready;
 static JSAtom g_atom_prototype = JS_ATOM_NULL;
@@ -103,7 +119,7 @@ static JSAtom  g_atom_def = JS_ATOM_NULL;
 enum { CE_LIFECYCLE_CALLBACKS(CE_CB_ID) CE_CB_COUNT };
 static const char *const CE_CALLBACK_NAMES[CE_CB_COUNT] = { CE_LIFECYCLE_CALLBACKS(CE_CB_NAME) };
 static JSAtom g_cb_atoms[CE_CB_COUNT];
-static int    g_id_define, g_id_get;   /* declared once per agent — see custom_elements_init */
+static int    g_id_define, g_id_get, g_id_when_defined;   /* declared once per agent — see custom_elements_init */
 
 /* The definition for a name, or JS_UNDEFINED. OWNED by the caller. */
 static JSValue ce_find(JSContext *ctx, const char *name, size_t len)
@@ -121,15 +137,34 @@ static JSValue ce_find(JSContext *ctx, const char *name, size_t len)
     return def;
 }
 
-/* §4.13.1 a VALID CUSTOM ELEMENT NAME contains a hyphen and starts with an ASCII lower alpha. The hyphen is the
-   whole point of the rule: it is what guarantees a custom name can never collide with a future built-in. */
+/* §4.13.1 A VALID CUSTOM ELEMENT NAME — all five of its requirements. This was "starts with a-z and contains a
+   hyphen", which is two of them, and the three it left out are not pedantry: `a-A` was accepted although no
+   parser can round-trip it, `annotation-xml` was accepted although the name belongs to MathML, and every name
+   whose later code points the DOM forbids was accepted although `createElement` could never build one. The
+   requirement that carries the others is the FIRST one — the name must be a VALID ELEMENT LOCAL NAME, which is
+   the DOM's own predicate and lives with its sibling in core/dom/names.c rather than being re-derived here.
+   The hyphen requirement is still what guarantees a custom name cannot collide with a future built-in; the
+   reserved list is the eight names that already contain one and are already taken. */
 static bool ce_name_valid(const char *name, size_t len)
 {
+    /* §4.13.1's list, verbatim: the SVG and MathML element names that contain a hyphen. */
+    static const char *const RESERVED[] = {
+        "annotation-xml", "color-profile", "font-face", "font-face-src", "font-face-uri",
+        "font-face-format", "font-face-name", "missing-glyph", NULL
+    };
     size_t i;
-    if (len < 2 || name[0] < 'a' || name[0] > 'z') return false;
-    for (i = 0; i < len; i++)
-        if (name[i] == '-') return true;
-    return false;
+    bool hyphen = false;
+
+    if (!dom_valid_element_local_name(name, len)) return false;
+    if (name[0] < 'a' || name[0] > 'z') return false;      /* the 0th code point is an ASCII lower alpha */
+    for (i = 0; i < len; i++) {
+        if (name[i] >= 'A' && name[i] <= 'Z') return false;  /* it contains no ASCII upper alphas */
+        if (name[i] == '-') hyphen = true;                  /* it contains a U+002D (-) */
+    }
+    if (!hyphen) return false;
+    for (i = 0; RESERVED[i]; i++)
+        if (strlen(RESERVED[i]) == len && memcmp(RESERVED[i], name, len) == 0) return false;
+    return true;
 }
 
 /* ---- §4.13.6 the custom element reactions stack ------------------------------------------------------------
@@ -579,6 +614,99 @@ void custom_elements_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, co
     JS_FreeValue(ctx, wrap);
 }
 
+/* §4.13.4 whenDefined(name) — the promise a page awaits before it uses a tag whose bundle may not have loaded
+   yet. It is the reason a lazily-registered component is reachable at all: `await customElements.whenDefined
+   ('x-app'); document.createElement('x-app')` is the ordinary shape, and with no such member the await threw
+   and the code after it never ran.
+   NOT A STEP MACHINE, because it runs no author code: the name is a DOMString the declaration has already
+   converted, the map is this component's own object, and settling a promise enqueues a job rather than calling
+   into the page. The settle still goes through JS_CallAsFlow — a settle has a flow base under it, which is not
+   a per-call judgement about whether this one happens to need one. */
+static JSValue js_ce_when_defined(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    const char *nm;
+    size_t nlen;
+    JSValue map, entry, promise, resolving[2], def;
+    JSAtom a;
+
+    (void)this_val; (void)magic; (void)argc;
+    nm = JS_ToCStringLen(ctx, &nlen, argv[0]);   /* a real string by now: the declaration converted it */
+    if (!nm) return JS_EXCEPTION;
+    if (!ce_name_valid(nm, nlen)) {              /* step 1: a REJECTED promise, never a synchronous throw */
+        JSValue exc;
+
+        JS_FreeCString(ctx, nm);
+        promise = JS_NewPromiseCapability(ctx, resolving);
+        if (JS_IsException(promise)) return promise;
+        JS_ThrowDOMException(ctx, "SyntaxError", "not a valid custom element name");
+        exc = JS_GetException(ctx);
+        if (JS_CallAsFlow(ctx, resolving[1], exc) < 0) JS_FreeValue(ctx, JS_GetException(ctx));
+        JS_FreeValue(ctx, exc);
+        JS_FreeValue(ctx, resolving[0]);
+        JS_FreeValue(ctx, resolving[1]);
+        return promise;
+    }
+    def = ce_find(ctx, nm, nlen);                /* step 2: already defined — resolved with the constructor */
+    if (JS_IsObject(def)) {
+        JSValue ctor = JS_GetProperty(ctx, def, g_atom_ctor);
+
+        JS_FreeValue(ctx, def);
+        JS_FreeCString(ctx, nm);
+        promise = JS_NewPromiseCapability(ctx, resolving);
+        if (JS_IsException(promise)) { JS_FreeValue(ctx, ctor); return promise; }
+        if (JS_CallAsFlow(ctx, resolving[0], ctor) < 0) JS_FreeValue(ctx, JS_GetException(ctx));
+        JS_FreeValue(ctx, ctor);
+        JS_FreeValue(ctx, resolving[0]);
+        JS_FreeValue(ctx, resolving[1]);
+        return promise;
+    }
+    JS_FreeValue(ctx, def);
+    a = JS_NewAtomLen(ctx, nm, nlen);
+    CHECK(a != JS_ATOM_NULL, "custom elements: a whenDefined name could not be interned");
+    JS_FreeCString(ctx, nm);
+    map = ce_whendef(ctx);
+    entry = JS_GetProperty(ctx, map, a);
+    if (!JS_IsObject(entry)) {                   /* step 3: map[name] does not exist — a NEW promise */
+        JS_FreeValue(ctx, entry);
+        promise = JS_NewPromiseCapability(ctx, resolving);
+        if (JS_IsException(promise)) { JS_FreeValue(ctx, map); JS_FreeAtom(ctx, a); return promise; }
+        entry = JS_NewArray(ctx);
+        CHECK(!JS_IsException(entry), "custom elements: a when-defined map entry could not be allocated");
+        JS_SetPropertyUint32(ctx, entry, 0, promise);          /* the promise, and the two halves that settle */
+        JS_SetPropertyUint32(ctx, entry, 1, resolving[0]);
+        JS_SetPropertyUint32(ctx, entry, 2, resolving[1]);
+        JS_SetProperty(ctx, map, a, JS_DupValue(ctx, entry));
+    }
+    JS_FreeValue(ctx, map);
+    JS_FreeAtom(ctx, a);
+    promise = JS_GetPropertyUint32(ctx, entry, 0);             /* step 4: return map[name] */
+    JS_FreeValue(ctx, entry);
+    return promise;
+}
+
+/* §4.13.4's last step: "If this's when-defined promise map[name] exists, resolve it with constructor and remove
+   it." Reached from the commit, after the upgrade reactions the same step list enqueues — a page that awaits
+   whenDefined and then reads state its constructor set must find the constructors already run. */
+static void ce_when_defined_resolve(JSContext *ctx, const char *name, size_t nlen, JSValueConst ctor)
+{
+    JSAtom a = JS_NewAtomLen(ctx, name, nlen);
+    JSValue map, entry;
+
+    CHECK(a != JS_ATOM_NULL, "custom elements: a name could not be interned");
+    map = ce_whendef(ctx);
+    entry = JS_GetProperty(ctx, map, a);
+    if (JS_IsObject(entry)) {
+        JSValue resolve = JS_GetPropertyUint32(ctx, entry, 1);
+
+        JS_DeleteProperty(ctx, map, a, 0);
+        if (JS_CallAsFlow(ctx, resolve, ctor) < 0) JS_FreeValue(ctx, JS_GetException(ctx));
+        JS_FreeValue(ctx, resolve);
+    }
+    JS_FreeValue(ctx, entry);
+    JS_FreeValue(ctx, map);
+    JS_FreeAtom(ctx, a);
+}
+
 /* ---- define() -------------------------------------------------------------------------------------------- */
 /* Every step that can reach the page's code is DECLARED, so the body is ordinary C: `name` is a DOMString
    (ToString on whatever was passed) and `options` is an ElementDefinitionOptions whose `extends` member is a
@@ -726,6 +854,7 @@ static JSValue ce_define_commit(JSContext *ctx, JSValueConst *argv, JSValueConst
         }
         JS_FreeAtom(ctx, a);
         ce_upgrade_document(ctx, nm, nlen, def);
+        ce_when_defined_resolve(ctx, nm, nlen, argv[1]);
         JS_FreeValue(ctx, def);
     }
     JS_FreeCString(ctx, nm);
@@ -899,6 +1028,7 @@ void custom_elements_init(JSContext *ctx)
         CHECK(g_cb_atoms[k] != JS_ATOM_NULL, "a §4.13.4 step 14 lifecycle callback name could not be interned");
     }
     g_defs_slot = realm_value_declare(ctx, "§4.13.4 definition set");
+    g_whendef_slot = realm_value_declare(ctx, "§4.13.4 when-defined promise map");
     /* §4.13.6's stack, its backup queue and the two private keys the queues are read through. Built here, in
        the agent's own pre-boot realm, so a flow's push is captured by the heap COW rather than being that
        flow's private object. */
@@ -926,6 +1056,7 @@ void custom_elements_init(JSContext *ctx)
     {
         static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
         g_id_get = idl_method_id(ctx, ONE_STR, 1, js_ce_get, 0);
+        g_id_when_defined = idl_method_id(ctx, ONE_STR, 1, js_ce_when_defined, 0);
     }
     g_ready = 1;
 }
@@ -960,13 +1091,17 @@ void custom_elements_install(JSContext *ctx, JSValueConst global)
        to it during a flow is captured by the heap COW rather than being that flow's private object. */
     {
         JSValue defs = JS_NewObjectProto(ctx, JS_NULL);
+        JSValue pending = JS_NewObjectProto(ctx, JS_NULL);
         CHECK(!JS_IsException(defs), "the custom-element definition set could not be allocated");
+        CHECK(!JS_IsException(pending), "the §4.13.4 when-defined promise map could not be allocated");
         realm_value_set(ctx, g_defs_slot, defs);
+        realm_value_set(ctx, g_whendef_slot, pending);
     }
     reg = JS_NewObject(ctx);
     CHECK(!JS_IsException(reg), "the CustomElementRegistry allocation failed");
     idl_install_method(ctx, reg, "define", 2, g_id_define);
     idl_install_method(ctx, reg, "get", 1, g_id_get);
+    idl_install_method(ctx, reg, "whenDefined", 1, g_id_when_defined);
     JS_SetPropertyStr(ctx, (JSValue)global, "customElements", reg);
 }
 
