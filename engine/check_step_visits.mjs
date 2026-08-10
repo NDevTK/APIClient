@@ -84,7 +84,17 @@ function defs(text) {
  * labels and enum were all correct and agreed with each other.
  * Nothing else can see this: step_stage_check catches a stage past the END of the algorithm, and this one is a
  * stage that is IN it and is the wrong one. So it is caught here, at the only place the constants and the body
- * are both visible. */
+ * are both visible.
+ *
+ * AND THE LITERAL NEED NOT BE THE WHOLE RIGHT-HAND SIDE. This read `hdr.stage (==|=) (\d+)` and so it saw only
+ * the bare form; `s->hdr.stage = shift ? 3 : 4;` and `s->hdr.stage = (unshift && argc > 0) ? 2 : 3;` both sat in
+ * DECLARED machines, in the file, past a green gate. They were correct under the numbering they were written
+ * against and would have silently named other steps the moment a stage moved — which is the entire defect this
+ * check exists to catch, in the one shape it could not see. So the rule is now about the ASSIGNMENT: take the
+ * whole right-hand side and refuse a standalone integer token in any of its STAGE-VALUE positions. A ternary's
+ * condition is not one of them (`argc > 1 ? A : B` names no stage with its 1), and a comparison's stage is the
+ * single token after the `==` (`funcs[hdr.stage == FS_REJECT ? 0 : 1]` indexes an array, it does not name a
+ * stage) — a gate that reports those is a gate someone turns off. */
 function stageLiteralCheck(where, text, name, stepFn, report) {
   const fn = new RegExp(`\\b${stepFn}\\s*\\([^;{]*\\)\\s*\\n\\{`).exec(text);
   if (!fn) return;                               // declared in another translation unit; nothing to read here
@@ -94,7 +104,23 @@ function stageLiteralCheck(where, text, name, stepFn, report) {
     else if (text[i] === '}' && --depth === 0) break;
   }
   const body = maskLiterals(text.slice(fn.index, i + 1));
-  const lits = [...body.matchAll(/\bhdr\.stage\s*(?:==|=)\s*(\d+)/g)].map((m) => m[1]);
+  /* the whole right-hand side, up to the `;` or the `)` of an `if (…)`, reduced to its STAGE-VALUE positions,
+     then every standalone integer in those — an enum constant may contain digits, so the token has to be an
+     integer on its own, and a ternary's CONDITION is not a stage at all (`argc > 1 ? A : B` names no stage with
+     its 1). Splitting on `?` and `:` and dropping whatever a `?` follows leaves exactly the arms. */
+  const stageValues = (rhs) => {
+    const parts = rhs.split(/([?:])/);
+    const out = [];
+    for (let i = 0; i < parts.length; i += 2) if (parts[i + 1] !== '?') out.push(parts[i]);
+    return out;
+  };
+  const lits = [];
+  /* a COMPARISON's stage is the one token after `==`, and nothing further: `funcs[hdr.stage == FS_REJECT ? 0 : 1]`
+     is an array index whose 0 and 1 are not stages at all, and reading to the `;` would call them two. */
+  for (const m of body.matchAll(/\bhdr\.stage\s*==\s*(\w+)/g)) if (/^\d+$/.test(m[1])) lits.push(m[1]);
+  for (const m of body.matchAll(/\bhdr\.stage\s*=(?!=)\s*([^;]*);/g))
+    for (const v of stageValues(m[1]))
+      for (const n of v.matchAll(/(?<![A-Za-z_0-9])\d+(?![A-Za-z_0-9])/g)) lits.push(n[0]);
   if (lits.length)
     report(`[step-steps] ${where}: ${name} declares its stages but ${stepFn} still writes the NUMBER ` +
            `(${[...new Set(lits)].join(', ')}) — a literal keeps the old private numbering alive inside the ` +
