@@ -813,10 +813,18 @@ static int js_rxn_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
     return JS_STEP_DONE;
 }
 
-#define RXN_DEF(i) { sizeof(JSRxnState), js_rxn_step, js_rxn_fini, (i), \
-                     .catches_abrupt = 1, .visit = js_rxn_visit }
+#define RXN_DEF(i, alg) { sizeof(JSRxnState), js_rxn_step, js_rxn_fini, (i), \
+                          .catches_abrupt = 1, .visit = js_rxn_visit, \
+                          .algorithm = (alg), .steps = RXN_STEPS }
 static const JSTrampStepDef js_rxn_defs[4] = {
-    RXN_DEF(RXN_START_OK), RXN_DEF(RXN_START_ERR), RXN_DEF(RXN_PULL_OK), RXN_DEF(RXN_PULL_ERR),
+    RXN_DEF(RXN_START_OK,
+            "Streams \u00a74.9.4 SetUpReadableStreamDefaultController step 11's onFulfilled"),
+    RXN_DEF(RXN_START_ERR,
+            "Streams \u00a74.9.4 SetUpReadableStreamDefaultController step 12's onRejected"),
+    RXN_DEF(RXN_PULL_OK,
+            "Streams \u00a74.5 ReadableStreamDefaultControllerCallPullIfNeeded step 6's onFulfilled"),
+    RXN_DEF(RXN_PULL_ERR,
+            "Streams \u00a74.5 ReadableStreamDefaultControllerCallPullIfNeeded step 7's onRejected"),
 };
 #undef RXN_DEF
 

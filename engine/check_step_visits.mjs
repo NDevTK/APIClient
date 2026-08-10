@@ -453,7 +453,18 @@ const stageListCheck = (where, text, name, stepsExpr) => {
     }
 };
 
+/* AND WHEN THE LAST ONE IS CONVERTED, "not yet converted" STOPS BEING A STATE A MACHINE MAY START IN — the
+ * same ratchet the fourth ownership clause above already holds, and for the same reason. While the series was in
+ * flight the count was a work queue and printing it was the whole job; with every machine declaring its steps,
+ * letting the next one start undeclared is letting the queue re-open, silently, at the one moment nobody is
+ * watching a number that has been zero for a while.
+ * A machine that numbers its stages privately cannot say WHERE it is parked, so a park, a fork or a cross-session
+ * resume of it names a rest point that no build can resolve — which is the entire thing JSTrampStepDef.steps
+ * exists to make impossible. This is engine/check_recognizers.mjs's ratchet in its other direction: that one may
+ * only ever go DOWN, this one may only ever be zero. */
+const UNDECLARED_CEILING = 0;
 let declared = 0, undeclared = 0;
+const undeclaredNames = [];
 const stageRow = (where, line, name, hasAlg, hasSteps) => {
   if (hasAlg !== hasSteps) {
     console.error(`[step-steps] ${where}:${line}: ${name} declares ` +
@@ -462,7 +473,7 @@ const stageRow = (where, line, name, hasAlg, hasSteps) => {
     bad++;
     return;
   }
-  if (hasAlg) declared++; else undeclared++;
+  if (hasAlg) declared++; else { undeclared++; undeclaredNames.push(`${where}:${line} ${name}`); }
 };
 const stepsExprOf = (body) => (/\.steps\s*=\s*([^,}]+)/.exec(body) ?? [])[1] ?? '';
 for (const d of defs(src)) {
@@ -495,11 +506,21 @@ for (const f of hostSources(join(ENGINE, 'host'))) {
   }
 }
 
+if (undeclared > UNDECLARED_CEILING) {
+  console.error(`[step-steps] ratchet FAILED: ${undeclared} machine(s) declare no algorithm and no steps, ` +
+                `and the ceiling is ${UNDECLARED_CEILING}:`);
+  for (const n of undeclaredNames) console.error(`  ${n}`);
+  console.error(`A machine that numbers its stages privately cannot SAY where it is parked, so a park, a fork ` +
+                `or a cross-session resume of it names a rest point no build can resolve. Declare .algorithm ` +
+                `and .steps from ONE X-list expanded twice (quickjs-step.h's JS_STEP_STAGE_ENUM / ` +
+                `JS_STEP_STAGE_LABEL), with every stage resting at a real step of that algorithm.`);
+  bad++;
+}
 if (bad) process.exit(1);
 console.log(`[step-visits] ${checked} engine + ${hostChecked} host declarations, each paired with exactly one ` +
             `state struct; ${hostChecked} host visits also checked against the struct they cast to`);
 console.log(`[step-steps] ${declared} of ${declared + undeclared} machines rest at a declared spec step; ` +
-            `${undeclared} still number their stages privately`);
+            `${undeclared} still number their stages privately (ceiling ${UNDECLARED_CEILING})`);
 if (twoList.length)
   console.log(`[step-steps] ${twoList.length} of the ${declared} declare their constants and their labels as ` +
               `TWO lists — one X-list expanded twice makes a renumber carry its label with it:\n  ` +

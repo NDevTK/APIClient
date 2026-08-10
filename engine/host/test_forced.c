@@ -1604,7 +1604,19 @@ static int hostreq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
     return JS_STEP_DONE;
 }
 
-static const IdlStepDecl HOSTREQ_DECL = { hostreq_step, sizeof(HostReqState), hostreq_visit, NULL };
+/* WHERE THIS MACHINE RESTS. It has one stage and rests at it repeatedly: a blocked read yields until the host
+   answers, and every one of those yields is a suspension of the flow. The label is the RULE it models rather
+   than a clause of ECMAScript — there is no spec algorithm here to cite, and inventing one would be a claim
+   about a standard rather than a reference to it (see quickjs.c's B64OP_STAGES). */
+#define HOSTREQ_STAGES(X) \
+    X(HOSTREQ_BLOCKED, "SECURITY.md's synchronous cross-instance read: the request is placed with the host and " \
+                       "the flow is parked at the call site that made it until the answer arrives")
+enum { IDL_STEP_STAGE_BASE(HOSTREQ_STAGES) HOSTREQ_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const HOSTREQ_STEPS[] = { HOSTREQ_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static const IdlStepDecl HOSTREQ_DECL = { hostreq_step, sizeof(HostReqState), hostreq_visit, NULL,
+                                          "a cross-instance read that blocks on the host",
+                                          HOSTREQ_STEPS };
 
 /* THE HOST'S SIDE, driven from the fixture's step loop: answer everything outstanding. A real host routes each
    record to the instance holding that document; here the answer is the request text turned back, which is
