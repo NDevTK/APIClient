@@ -66,20 +66,29 @@ static void dec_ensure(int n) {
     g_dec_cap = nc;
 }
 
+/* THE FROZEN CHAIN'S OWN CENSUS — the fourth of the four, counted at the two points a segment's lifetime begins
+   and ends so the pair cannot drift from the thing it counts. */
+static long g_dec_seg_live, g_dec_seg_entries_live, g_dec_seg_bytes_live;
+
 /* Drop a chain reference: refcount--, free the segment at zero, continue into its base. A loop, not recursion —
    the chain's depth is the fork depth, and an unknown-length walk makes that as deep as the walk is long; the C
    stack cannot be parked. The twin of cow_seg_unref / dom_seg_unref / cons_seg_unref. */
 static void dec_seg_unref(DecSeg *s) {
     while (s && --s->refcount <= 0) {
         DecSeg *base = s->base;
+        /* THE CENSUS'S OTHER HALF. Its own comment says the pair is "counted at the two points a segment's
+           lifetime begins and ends so the pair cannot drift from the thing it counts" — and only the BEGIN
+           point was written, so the count could only ever rise. `decide_free`'s teardown DCHECK then fired on
+           every run that froze a single segment, reporting a leak of memory these two `free`s had already
+           released. A counter that cannot go down is not a census of what is live; it is a total, and asserting
+           on it says nothing about the heap. */
+        g_dec_seg_live--; g_dec_seg_entries_live -= s->n;
+        g_dec_seg_bytes_live -= (long)sizeof *s + s->n;
         free(s->e); free(s);
         s = base;
     }
 }
 
-/* THE FROZEN CHAIN'S OWN CENSUS — the fourth of the four, counted at the two points a segment's lifetime begins
-   and ends so the pair cannot drift from the thing it counts. */
-static long g_dec_seg_live, g_dec_seg_entries_live, g_dec_seg_bytes_live;
 void decide_chain_stats(long *segs, long *entries, long *bytes) {
     if (segs) *segs = g_dec_seg_live;
     if (entries) *entries = g_dec_seg_entries_live;
