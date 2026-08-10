@@ -95,6 +95,17 @@ static int decide_key(JSValueConst cond, char *buf, size_t n) {
     return 1;
 }
 
+/* See decide.h. It reads the constraint WITHOUT touching the decision vector or its cursor: a read is not a
+   decision, so it must not consume a slot — the same rule decide_arm's feasible-refinement arm keeps, and for
+   the same reason (a consumed slot would make the NEXT branch read someone else's answer). */
+int decide_value_arm(JSValueConst cond)
+{
+    char key[256];
+
+    if (!decide_key(cond, key, sizeof key)) return -1;
+    return concolic_branch_decided(key);
+}
+
 /* THE DECISION ITSELF, over a predicate identified by `key` (NULL when the condition has no source identity to
    constrain — uncertainty, which keeps both arms). Every caller of this is a place the program's control flow
    turns on unknown input, and there are two of them because a decision is not the same thing as an OP_if: a

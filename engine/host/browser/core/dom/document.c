@@ -34,6 +34,7 @@
 #include "solver/world.h"
 #include "core/frame/window_proxy.h"
 #include "core/frame/navigable.h"
+#include "core/dom/page_visibility.h"
 #include "core/dom/document_fragment.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -904,6 +905,8 @@ void document_install_proto(JSContext *ctx)
        from — and `NonElementParentNode`, the same getElementById DocumentFragment includes. */
     node_install_parent_mixin(ctx, proto);
     node_install_nonelement_parent_mixin(ctx, proto);
+    /* HTML §6.6's `visibilityState` and `hidden` — one source and the comparison the spec defines over it. */
+    page_visibility_install(ctx, proto);
     JS_SetClassProto(ctx, g_document_class, proto);
     /* THIS REALM'S DOCUMENT READINESS, built with the realm so it belongs to the pre-boot BASELINE — the same
        reason §8.9's map and §7.4.6.3's flag are built here. It exists before this realm has a Document at all,

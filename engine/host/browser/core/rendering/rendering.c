@@ -11,6 +11,7 @@
 #include "core/events/event_target.h"
 #include "core/frame/window_proxy.h"
 #include "core/frame/navigable.h"
+#include "core/dom/page_visibility.h"
 #include "core/rendering/animation_frame.h"
 #include "core/rendering/page_reveal.h"
 #include "core/rendering/rendering.h"
@@ -113,28 +114,12 @@ static JSValue rendering_collect_docs(JSContext *ctx)
         JSValue proxy = JS_GetPropertyUint32(ctx, all, i);
         JSContext *docctx = window_proxy_realm(ctx, proxy);
 
-        /* STEP 3's VISIBILITY CLAUSE — "remove doc if ... doc's visibility state is `hidden`". Page
-           Visibility is not in this build: there is no `document.hidden`, no `visibilityState` and nothing
-           that could set one, so every document this instance holds is visible by construction. Asserted for
-           the reason step_awaits exists, at the step that would have to read it. */
-        step_awaits(docctx, "document.hidden",
-                    "update the rendering step 3 removes a doc whose VISIBILITY STATE is \"hidden\", and this "
-                    "build now has Page Visibility — the collect below must read it. READ IT AS THE SOURCE'S "
-                    "PIN, never as a second answer: the visibility state is ONE fact, and a headless UA has a "
-                    "modeled example for it (\"visible\") while a real user CAN background the tab, so it is a "
-                    "CONCOLIC source (concolic_source_wrap) and `if (document.hidden) return;` — a guard that "
-                    "hides polling and analytics endpoints — must FORK. This C read cannot fork, so it "
-                    "concretizes on the pin exactly as CLAUDE.md's CONCRETIZE-ON-PIN says: the forked "
-                    "hidden-arm has the source decided TRUE and gets NO rendering opportunity (a browser "
-                    "throttles a hidden tab to zero frames), the primary arm is decided false, and an "
-                    "undecided read takes the example. concolic_branch_decided(src) ALREADY ANSWERS THAT and "
-                    "is already public in concolic.h — a bare truthiness test keys on the source path and the "
-                    "map suspends and resumes with the flow, so this read needs NO new primitive. What DOES "
-                    "need deciding first is that `hidden` and `visibilityState` are ONE fact behind TWO IDL "
-                    "members: two concolic sources would be the second answer this whole message is about, "
-                    "and the equality form (`visibilityState === \"hidden\"`) records a VALUE pin under a "
-                    "different key that concolic.h exports no reader for. Hardcoding \"visible\" here is the "
-                    "one thing that is certainly wrong");
+        /* STEP 3's VISIBILITY CLAUSE — "remove any doc whose visibility state is `hidden`". ONE fact, two
+           readers, no second answer: the page reads it through §6.6's members and a branch there FORKS, while
+           this read is C and cannot, so it concretizes on what the flow already decided (page_visibility.h).
+           A flow exploring the backgrounded world therefore gets no rendering opportunity, which is what a
+           browser does to a hidden tab. */
+        if (page_visibility_hidden(docctx)) { JS_FreeValue(ctx, proxy); continue; }
         if (!document_render_blocked(docctx) && doc_has_rendering_work(docctx))
             JS_SetPropertyUint32(ctx, docs, ndocs++, JS_DupValue(ctx, proxy));
         JS_FreeValue(ctx, proxy);
