@@ -186,13 +186,13 @@ static JSValue ce_reaction_queue(JSContext *ctx, JSValueConst wrap, int create)
 {
     JSValue q;
 
-    if (JS_GetOwnSlot(ctx, &q, wrap, g_atom_rq) > 0 && JS_IsObject(q)) return q;
-    if (JS_GetOwnSlot(ctx, &q, wrap, g_atom_rq) > 0) JS_FreeValue(ctx, q);
+    if (JS_GetOwnSlot(ctx, &q, wrap, g_atom_rq) > 0) {
+        if (JS_IsObject(q)) return q;
+        JS_FreeValue(ctx, q);
+    }
     if (!create) return JS_UNDEFINED;
     q = JS_NewArray(ctx);
     CHECK(!JS_IsException(q), "an element's custom element reaction queue could not be allocated");
-    JS_SetPropertyUint32(ctx, q, 0, JS_UNDEFINED);        /* materialise the array before the head cursor */
-    ce_array_set_len(ctx, q, 0);
     JS_SetProperty(ctx, q, g_atom_rq_head, JS_NewUint32(ctx, 0));
     JS_DefinePropertyValue(ctx, (JSValue)wrap, g_atom_rq, JS_DupValue(ctx, q), 0);
     return q;
@@ -290,6 +290,10 @@ int custom_elements_reactions_invoke(JSContext *ctx, CustomElementQueue *q, JSVa
         JSValue args[CE_MAX_REACTION_ARGS], ignored;
 
         if (q->i >= n) {                                  /* step 1: the queue is empty */
+            /* EMPTIED, not merely walked past. A member's queue is flow-private and dies with the machine, but
+               the BACKUP queue is the agent's one array forever — an element left on it after its reactions
+               are consumed is a reference nothing ever drops. */
+            ce_array_set_len(ctx, q->queue, 0);
             JS_FreeValue(ctx, cb_result);
             JS_FreeValue(ctx, q->queue);
             q->queue = JS_UNDEFINED;
@@ -377,13 +381,13 @@ static int js_ce_backup_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
     DCHECK(s->hdr.stage == CEBACKUP_INVOKE,
            "the backup element queue's drain resumed into a stage §4.13.6 does not have");
     if (JS_IsUndefined(s->q.queue) && s->q.phase == 0) {
-        /* THE QUEUE IS TAKEN WHOLE, and the flag is unset with it (step 2.4's second half): a reaction that
-           runs during the drain and enqueues onto an empty stack must schedule a NEW microtask, not append to
-           the batch already in flight. */
+        /* THE FLAG IS UNSET AS THE DRAIN BEGINS (step 2.4's second half), so a reaction that runs during it and
+           enqueues with no member on the stack schedules a NEW microtask rather than joining the batch in
+           flight. The ARRAY is not replaced: it is the agent's, held in a C static that no COW delta captures,
+           so swapping the static would make one flow's replacement visible to every other. The drain walks it
+           by cursor and empties it at the end, which the delta does capture. */
         s->q.queue = JS_DupValue(ctx, g_ce_backup);
         s->q.i = 0;
-        g_ce_backup = JS_NewArray(ctx);
-        CHECK(!JS_IsException(g_ce_backup), "the backup element queue could not be replaced");
         JS_SetProperty(ctx, g_ce_backup, g_atom_backup_flag, JS_FALSE);
     }
     r = custom_elements_reactions_invoke(ctx, &s->q, cb_result, out_cb, out_argc);
