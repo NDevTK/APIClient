@@ -516,7 +516,36 @@ static void document_set_ready(JSContext *ctx, const char *state)
         JS_SetPropertyStr(ctx, d->doc_obj, "readyState", JS_NewString(ctx, state));
 }
 
-static int document_done_stage(JSContext *ctx, int stage)
+/* HTML §8.1.7.3 "update the rendering" step 3's RENDER-BLOCKED clause, answered by the component that owns the
+   document's load lifecycle rather than guessed by the one that runs the steps.
+ *
+ * A Document is render-blocked while it has render-blocking elements, and the parser is what removes the last
+ * of them: a browser does not present a document, and does not reveal it, until its parse has finished. In
+ * this engine the tree is one Lexbor parse and the parser's completion IS `document_done_stage(0)` — the moment
+ * `readyState` leaves "loading" and DOMContentLoaded fires — so that is the state read here. It is what puts
+ * the first rendering opportunity (and therefore `pagereveal` and the first animation frame) AFTER
+ * DOMContentLoaded, which is where a browser puts it.
+ *
+ * IT IS READ OFF THE DOCUMENT OBJECT because it is PER-FLOW: one arm of a fork may have finished its lifecycle
+ * while its sibling has not, and a C-side flag would answer one flow's question with another's timeline. */
+bool document_render_blocked(JSContext *ctx)
+{
+    Document *d = doc_here(ctx);
+    JSValue v;
+    const char *s;
+    bool blocked;
+
+    if (!JS_IsObject(d->doc_obj))
+        return true;   /* no Document yet is a Document that has certainly not finished parsing */
+    v = JS_GetPropertyStr(ctx, d->doc_obj, "readyState");
+    s = JS_ToCString(ctx, v);
+    blocked = !s || !strcmp(s, "loading");
+    if (s) JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, v);
+    return blocked;
+}
+
+int document_done_stage(JSContext *ctx, int stage)
 {
     if (stage == 0) {
         document_set_ready(ctx, "interactive");

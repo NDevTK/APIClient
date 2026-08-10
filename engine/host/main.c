@@ -56,6 +56,9 @@
 #include "browser/core/frame/navigator.h"
 #include "browser/core/frame/screen.h"
 #include "browser/core/frame/window.h"
+#include "browser/core/rendering/animation_frame.h"
+#include "browser/core/rendering/page_reveal.h"
+#include "browser/core/rendering/rendering.h"
 #include "browser/core/timing/timer.h"
 #include "browser/core/loader/document_scripts.h"
 #include "browser/core/loader/module_loader.h"
@@ -136,6 +139,11 @@ static void engine_agent_init(JSContext *ctx, const char *origin)
     broadcast_channel_init(ctx, origin);
     /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
     unhandled_rejection_init(ctx);
+    /* HTML §8.1.7.3's IN-PARALLEL HALF — the rendering task source and "update the rendering". §8.9's map goes
+       first because step 14 consumes it and §7.4.6.3 after Event, whose prototype PageRevealEvent chains to. */
+    animation_frame_init(ctx);
+    page_reveal_init(ctx);
+    rendering_init(ctx);
     fetch_init(ctx);   /* §5/§6/§5.3 declare their per-realm prototypes here, not from the install */
     abort_init(ctx);
     element_init(ctx);
@@ -190,6 +198,8 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
     location_install(ctx, g, url);
     navigable_install(ctx, g, origin);
     unhandled_rejection_install(ctx, g);   /* PromiseRejectionEvent */
+    animation_frame_install(ctx, g);       /* HTML §8.9: requestAnimationFrame/cancelAnimationFrame */
+    page_reveal_install(ctx, g);           /* HTML §7.4.6.3: PageRevealEvent */
     abort_install(ctx, g);   /* AbortController/AbortSignal: fetch takes a signal, so a bundle mints one early */
     navigator_install(ctx, g);
     screen_install(ctx, g);   /* the responsive gate: screen.width decides which router a bundle uses */
@@ -398,6 +408,9 @@ QJS_EXPORT void qjs_teardown(void)
        instance's. MEASURED on the live harness: a page analysed to "No findings" for that reason alone. */
     solve_free();
     endpoint_free();
+    rendering_free(g_ctx);
+    page_reveal_free(g_ctx);
+    animation_frame_free(g_ctx);
     unhandled_rejection_free(g_ctx);
     abort_free(g_ctx);
     document_free(g_ctx);   /* the Document and the window it fires `load` at — both HELD across the lifecycle */

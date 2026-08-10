@@ -2,6 +2,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_DOCUMENT_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_DOCUMENT_H
 #include <lexbor/html/html.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "quickjs.h"
@@ -32,6 +33,18 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
 /* WHICH DOCUMENT THIS REALM IS, in the world registry's naming. §7.4 mints a child's name from it, so a
    same-origin child of a child is named from the child and not from the instance root. */
 uint32_t document_doc(JSContext *ctx);
+
+/* THE DOCUMENT'S LOAD LIFECYCLE — stage 0 fires DOMContentLoaded at the Document, stage 1 fires `load` at the
+   Window. WHEN a document has finished loading is the SCHEDULER's answer (it is the flow that knows it has run
+   everything the document gave it), so this is registered as that hook; it is declared here as well because a
+   host that drives its own pump has the same two stages to run, and a host that runs NEITHER has a document
+   that is render-blocked forever — no rendering opportunity, no `pagereveal`, no animation frame, and
+   `window.onload` never fires. Returns 1, so a driver can treat it like every other "I made progress" step. */
+int document_done_stage(JSContext *ctx, int stage);
+
+/* HTML §8.1.7.3 "update the rendering" step 3's render-blocked clause — see the definition. True while this
+   document's parser has not finished, which is `readyState === "loading"`. */
+bool document_render_blocked(JSContext *ctx);
 
 /* §7.2.5.1's ONE WindowProxy for THIS realm's navigable — what `window.closed` reads the navigable's state
    through and what every message this document posts carries as `source`. BORROWED. It lives on the realm

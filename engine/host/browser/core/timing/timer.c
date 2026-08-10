@@ -119,6 +119,27 @@ static Timer *timer_earliest(void)
     return best;
 }
 
+/* THE CLOCK IS THE EVENT LOOP'S — see timer.h. §8.1.7.3's rendering task source becomes due at moments on the
+   same clock, so the two are compared rather than raced, and the comparison needs both halves askable. */
+double timer_next_due(void)
+{
+    Timer *t = timer_earliest();
+    return t ? t->when : -1;
+}
+
+void timer_advance_to(double when)
+{
+    Timer *t = timer_earliest();
+
+    DCHECK(when >= g_now, "the event loop's clock was asked to move BACKWARDS — a moment already passed is a "
+                          "task that should have run before whatever is asking");
+    DCHECK(!t || when <= t->when,
+           "the event loop's clock was moved PAST a due timer — a task source that steps over an earlier one "
+           "runs the page's work in an order the page did not write, which is exactly what virtual time makes "
+           "easy to get wrong (a long timeout landing in the middle of the work it was set to outlast)");
+    g_now = when;
+}
+
 static void (*g_script_sink)(const char *src);
 
 void timer_set_script_sink(void (*queue)(const char *src)) { g_script_sink = queue; }

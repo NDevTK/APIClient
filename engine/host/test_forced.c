@@ -20,6 +20,9 @@
 #include "core/frame/screen.h"
 #include "core/dom/abort.h"
 #include "core/html/unhandled_rejection.h"
+#include "core/rendering/animation_frame.h"
+#include "core/rendering/page_reveal.h"
+#include "core/rendering/rendering.h"
 #include "core/html/trusted_types.h"
 #include "core/dom/node.h"
 #include "core/dom/element.h"
@@ -1710,6 +1713,10 @@ static void tf_agent_init(JSContext *ctx)
     event_init(ctx);
     /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
     unhandled_rejection_init(ctx);
+    /* HTML §8.1.7.3's IN-PARALLEL HALF — the rendering task source and "update the rendering". */
+    animation_frame_init(ctx);
+    page_reveal_init(ctx);
+    rendering_init(ctx);
     fetch_init(ctx);   /* §5/§6/§5.3 declare their per-realm prototypes here, not from the install */
     abort_init(ctx);
     element_init(ctx);
@@ -1780,6 +1787,8 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
        how a great deal of real code starts. */
     event_target_install_handlers(ctx, g, EH_GLOBAL | EH_WINDOW);
     unhandled_rejection_install(ctx, g);   /* PromiseRejectionEvent */
+    animation_frame_install(ctx, g);       /* HTML §8.9: requestAnimationFrame/cancelAnimationFrame */
+    page_reveal_install(ctx, g);           /* HTML §7.4.6.3: PageRevealEvent */
     abort_install(ctx, g);
 
     /* Browser layer: parse the document with the real Lexbor HTML parser BEFORE the DOM interfaces install,
@@ -2300,6 +2309,9 @@ int main(void) {
     solve_free();
     endpoint_free();
 
+    rendering_free(ctx);
+    page_reveal_free(ctx);
+    animation_frame_free(ctx);
     unhandled_rejection_free(ctx);
     abort_free(ctx);
     document_free(ctx);   /* the window reference the lifecycle holds */

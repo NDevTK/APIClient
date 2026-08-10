@@ -64,6 +64,9 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include "core/timing/timer.h"
+#include "core/rendering/animation_frame.h"
+#include "core/rendering/page_reveal.h"
+#include "core/rendering/rendering.h"
 #include <lexbor/html/html.h>
 #include "core/dom/element.h"
 #include "core/dom/document.h"
@@ -1009,6 +1012,11 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
     /* §7.5 and §7.6 are the same codecs driven by a TransformStream, so they install AFTER §6 — the
        constructors reach it through transform_stream_op the moment a page builds one. */
     text_stream_init(ctx);
+    /* HTML §8.1.7.3's IN-PARALLEL HALF — the rendering task source and "update the rendering", plus §8.9's
+       map of animation frame callbacks and §7.4.6.3's reveal. */
+    animation_frame_init(ctx);
+    page_reveal_init(ctx);
+    rendering_init(ctx);
     /* THE AGENT'S FIRST REALM IS A REALM. Every per-realm intrinsic the components above declared is built
        here, through the same one call a child navigable's realm makes — so the first document cannot get a
        different set from the rest, which is the whole failure mode of a hand-copied list. */
@@ -1064,6 +1072,8 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
        (timer.h), so the long timeout is by construction the last thing to happen. */
     window_message_install(ctx, global, origin);
     document_install(ctx, global, dom, url, csp, doc_id, nav_proxy);
+    animation_frame_install(ctx, global);   /* HTML §8.9: requestAnimationFrame/cancelAnimationFrame */
+    page_reveal_install(ctx, global);       /* HTML §7.4.6.3: PageRevealEvent */
     message_port_install(ctx, global);   /* HTML 9.4.2/9.4.3 */
     broadcast_channel_install(ctx, global);   /* HTML 9.5 */
     abort_install(ctx, global);
@@ -1511,6 +1521,7 @@ int main(int argc, char **argv)
        PARKED FLOWS RESUME FIRST. A flow that suspended is ahead of every queued job in program order, so
        draining a job while one is parked reorders observable microtasks — and this pump got it wrong on its
        first run, which the engine's own assert named at the site with the fix in the message. */
+    int doc_stage = 0;   /* HTML: DOMContentLoaded, then load — once each, in that order */
     for (;;) {
         JSContext *c1;
         int r;
@@ -1534,9 +1545,17 @@ int main(int argc, char **argv)
            the creator's `window.open()`, which is a C activation and no place to enter JS from. Before the
            clock moves, because a child's script is loading, not a timer. */
         if (wpt_run_pending()) continue;
-        /* NOTHING QUEUED AND NOTHING OWED, which is the one moment virtual time may move — see timer.h. A
-           timer that is due fires here and its callback is a task the loop drains next. Only when this fires
-           nothing either is the file really finished. */
+        /* THE DOCUMENT FINISHES LOADING, and this runner used to run NEITHER stage — so its documents were
+           `readyState: "loading"` forever, `window.onload` never fired, and HTML §8.1.7.3 step 3 saw a
+           RENDER-BLOCKED document on every pass: no rendering opportunity, no `pagereveal`, and no animation
+           frame, in a harness whose whole job is to measure exactly those. It is BEFORE the clock moves for the
+           reason a child's pending script is: the parser finishing is not a timer. */
+        if (doc_stage < 2) { document_done_stage(ctx, doc_stage++); continue; }
+        /* NOTHING QUEUED AND NOTHING OWED, which is the one moment virtual time may move — see timer.h. TWO
+           task sources become due at moments on that clock: §8.1.7.3's rendering task source at the next
+           rendering opportunity, and §8.6's timer source at the earliest expiry. The rendering step is asked
+           first because it is the one that can defer — it yields to a timer that expires before the frame. */
+        if (rendering_run_opportunity(ctx)) continue;
         if (timer_run_due(ctx)) continue;
         break;
     }
@@ -1559,6 +1578,9 @@ int main(int argc, char **argv)
         g_owed_n = 0;
     }
 
+    rendering_free(ctx);
+    page_reveal_free(ctx);
+    animation_frame_free(ctx);
     timer_reset(ctx);
     headers_free(ctx);
     response_free(ctx);

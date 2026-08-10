@@ -79,6 +79,13 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                    "fetch/api/request", "fetch/api/body", "fetch/api/abort",
                    "html/webappapis/system-state-and-capabilities/the-navigator-object",
                    "html/webappapis/timers", "html/webappapis/microtask-queuing",
+                   /* HTML §8.1.7.3's rendering loop and §8.9's animation frames — core/rendering. The
+                      component did not exist, so neither did this row; `requestAnimationFrame` was one of the
+                      ~1300 names browser/platform_names.h had the engine reporting as honestly ABSENT. Now
+                      that the rendering task source, "update the rendering" and §8.9's map are built, a
+                      directory that is not collected is an EXCLUDED TEST — which this file calls a failure
+                      one paragraph up. */
+                   "html/webappapis/animation-frames",
                    "html/webappapis/structured-clone", "xhr/formdata", "xhr/resources",
                    /* custom_elements.c — HTML §4.13, the reactions that every [CEReactions] operation in
                       SPEC_STEPS.md runs. */

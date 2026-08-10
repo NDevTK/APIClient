@@ -622,7 +622,7 @@ static bool proxy_read_permitted(const ProxyData *p, int magic)
 
 /* §7.2.5's `top`: the TOP-LEVEL traversable's proxy. Walked rather than stored, because a navigable's parent
    chain is the only place the answer lives and a cached one goes stale the moment a frame is reparented. */
-static JSValue proxy_top(JSContext *ctx, JSValueConst self)
+JSValue window_proxy_top_navigable(JSContext *ctx, JSValueConst self)
 {
     JSValueConst cur = self;
 
@@ -642,6 +642,14 @@ static JSValue proxy_top(JSContext *ctx, JSValueConst self)
         cur = q->parent;
     }
 }
+
+/* THE SCRIPTABLE `top` AND THE TOP NAVIGABLE ARE NOT THE SAME ANSWER, and this is the one place that is true
+   rather than pedantry. `window.top` of the asking realm's own navigable is that realm's GLOBAL (win_or_proxy
+   below), because `window === window.top` is an identity every page rests on; the TREE WALK that HTML
+   §8.1.7.3 step 2 makes wants the top-level traversable's NAVIGABLE, which is a WindowProxy in every case
+   including that one. A walk given the scriptable answer reaches a Window, asks "is this a proxy", is told no,
+   and silently collects NO documents — which is exactly what happened: the rendering loop found nothing to
+   render on every page. */
 
 /* THE ASKING REALM STANDS FOR ITSELF AS ITS GLOBAL — the one mapping between the two spellings of a window,
    stated once and used by every member that can answer with a navigable.
@@ -690,7 +698,7 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
         return win_or_proxy(ctx, JS_IsUndefined(p->parent) ? JS_DupValue(ctx, this_val)
                                                            : JS_DupValue(ctx, p->parent));
     case WP_TOP:
-        return win_or_proxy(ctx, proxy_top(ctx, this_val));
+        return win_or_proxy(ctx, window_proxy_top_navigable(ctx, this_val));
     case WP_OPENER:
         return win_or_proxy(ctx, JS_DupValue(ctx, p->opener));
     case WP_CLOSED:

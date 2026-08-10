@@ -114,6 +114,12 @@ bool window_proxy_materialized(JSValueConst proxy);
    own WindowProxy does. One navigable, one answer, whether a page reads `parent` or `otherW.parent`. Owned. */
 JSValue window_proxy_parent(JSContext *ctx, JSValueConst proxy);
 JSValue window_proxy_top_of(JSContext *ctx, JSValueConst proxy);
+/* THE TOP-LEVEL TRAVERSABLE'S NAVIGABLE, which is NOT what `top` answers and that difference is load-bearing.
+   `window.top` of the asking realm's own navigable is that realm's GLOBAL, because `window === window.top` is
+   an identity every page rests on; an ENGINE walk over the navigable tree (HTML §8.1.7.3 step 2's document
+   list) wants the WindowProxy in every case including that one. A walk handed the scriptable answer reaches a
+   Window, asks "is this a proxy", is told no, and silently walks NOTHING. Owned. */
+JSValue window_proxy_top_navigable(JSContext *ctx, JSValueConst proxy);
 JSValue window_proxy_opener(JSContext *ctx, JSValueConst proxy);
 /* §7.2.5's `opener` SETTER, null branch: DISOWN the opener — the link is severed on the NAVIGABLE, so every
    later read of it (this Window's `opener`, the proxy's) answers null and no own property is defined. It is

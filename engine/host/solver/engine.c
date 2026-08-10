@@ -151,6 +151,14 @@ void engine_set_document_done_hook(int (*fn)(JSContext *ctx, int stage)) { g_doc
 static int (*g_timer_hook)(JSContext *ctx);
 void engine_set_timer_hook(int (*fn)(JSContext *ctx)) { g_timer_hook = fn; }
 
+/* THE EVENT LOOP'S OTHER CLOCK-DRIVEN SOURCE — §8.1.7.3's in-parallel half, which queues an update-the-
+   rendering task on the rendering task source when a navigable has a rendering opportunity. Registered by the
+   rendering component for the reason the timer step is: naming it here would make the scheduler depend on the
+   browser half. It is asked immediately BEFORE the timer step and yields to a timer that expires first, so the
+   ONE virtual clock still runs its two sources in the order their moments fall. */
+static int (*g_rendering_hook)(JSContext *ctx);
+void engine_set_rendering_hook(int (*fn)(JSContext *ctx)) { g_rendering_hook = fn; }
+
 /* THE SESSION. The dispatch loop is not a function that drains — it is a state machine its HOST steps, because
    the cooperative-quantum yield in CLAUDE.md's §scheduler is exactly that: after a bounded wall-clock slice the
    scheduler RETURNS so the one thread pumps its message port, streams findings, interleaves other documents,
@@ -1039,6 +1047,14 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
             /* NOTHING QUEUED, NOTHING OWED — so the clock may move. A timer is due only when the event loop
                has nothing else, and everything that IS due (this flow's jobs above, a reply the host owes) has
                already been offered a turn by the time control reaches here. */
+            /* §8.1.7.3's IN-PARALLEL HALF, asked first of the two clock-driven sources because it is the one
+               that can defer: it compares the next rendering opportunity with the earliest timer expiry and
+               yields when the timer is earlier. Without a rendering opportunity there is no
+               requestAnimationFrame, no ResizeObserver delivery, no IntersectionObserver task, no
+               scroll/resize/pagereveal and no Web Animations microtask checkpoint — a large fraction of a real
+               page's code hangs off exactly those. */
+            else if (g_rendering_hook && g_rendering_hook(ctx)) {
+                g_step_unit = "queue-rendering-opportunity"; return 0; }
             else if (g_timer_hook && g_timer_hook(ctx)) { g_step_unit = "fire-due-timer"; return 0; }
             else if (f->dom_stage < 2 && g_docdone_hook) {
                 /* THE DOCUMENT FINISHED LOADING, in this flow's world. DOMContentLoaded then load, in that

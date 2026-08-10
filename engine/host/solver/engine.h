@@ -37,6 +37,11 @@ void engine_pending_docscript(JSContext *ctx, const char *url, int script_i);
    scheduler with no document (the solver fixture) simply never has one. */
 /* The event loop's timer step (timer.h). Registered by the timer component; asked when a flow is idle. */
 void engine_set_timer_hook(int (*fn)(JSContext *ctx));
+/* HTML §8.1.7.3's IN-PARALLEL half — the rendering task source (rendering.h). Registered by the rendering
+   component for the reason the timer step is registered rather than named: the scheduler may not depend on the
+   browser half. Asked at the same moment and immediately BEFORE the timer step, because the two are due at
+   moments on the ONE virtual clock and this one defers to a timer that expires first. */
+void engine_set_rendering_hook(int (*fn)(JSContext *ctx));
 void engine_set_document_done_hook(int (*fn)(JSContext *ctx, int stage));
 
 /* solver_decide calls this at a forking branch to stash the sibling's hot decision + pins; the interpreter's

@@ -17,6 +17,19 @@ void timer_reset(JSContext *ctx);
    queue that ran them. */
 double timer_now(void);
 
+/* THE CLOCK IS THE EVENT LOOP'S, NOT THE TIMER SOURCE'S — and it stopped being only the timer source's the
+   moment a SECOND source became due at moments on it. §8.1.7.3's in-parallel half queues a rendering task at
+   the next rendering opportunity, so "what happens next" is the earlier of that moment and the earliest timer
+   expiry, and both halves of that comparison have to be askable from one place. They live here because this is
+   where the clock is: a second clock would order events differently from the queue that ran them, which is the
+   one thing the virtual clock exists to keep consistent.
+
+   `timer_next_due` answers the earliest expiry, or -1 when no timer is set. `timer_advance_to` moves the clock
+   to a moment ANOTHER task source becomes due — never past a timer that expires first, which is asserted here
+   rather than trusted to the caller. */
+double timer_next_due(void);
+void   timer_advance_to(double when);
+
 /* HTML 8.6: a STRING handler is EVALUATED when the timer fires. Running it is the HOST's — the extension's host
    queues it onto the flow that scheduled it, which is what keeps a `setTimeout("...")` payload explorable — and
    naming that register here would make the browser half depend on the scheduler, and through it on the whole
