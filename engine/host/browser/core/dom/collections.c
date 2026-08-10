@@ -51,12 +51,13 @@ static int     g_ready;
 /* The live kinds differ in TWO things and nothing else: which nodes they traverse, and which of those they
    take. The two child kinds walk the owner's child list; the two by-name kinds walk its whole subtree, which is
    what makes getElementsByTagName's result track a page that inserts a matching element anywhere under it. */
-enum { COLL_CHILD_NODES = 0, COLL_CHILDREN, COLL_STATIC, COLL_BY_TAG, COLL_BY_CLASS, COLL_LINKS,
-       COLL_NAMED };
+enum { COLL_CHILD_NODES = 0, COLL_CHILDREN, COLL_STATIC, COLL_BY_TAG, COLL_BY_TAG_NS, COLL_BY_CLASS,
+       COLL_LINKS, COLL_NAMED };
 
 static bool coll_is_descendant(int kind)
 {
-    return kind == COLL_BY_TAG || kind == COLL_BY_CLASS || kind == COLL_LINKS || kind == COLL_NAMED;
+    return kind == COLL_BY_TAG || kind == COLL_BY_TAG_NS || kind == COLL_BY_CLASS ||
+           kind == COLL_LINKS || kind == COLL_NAMED;
 }
 
 static JSValue coll_slots(JSContext *ctx, JSValueConst v)
@@ -141,8 +142,39 @@ static bool coll_ascii_ieq(const char *a, const char *b, size_t n)
 
 /* Is this node one the collection counts? A NodeList counts every node; an HTMLCollection counts elements; a
    by-name collection counts the elements whose name matches what it was built with. */
-static bool coll_takes(int kind, const char *name, size_t nlen, const lxb_dom_node_t *c)
+/* §4.5 STATES TWO BY-NAME ALGORITHMS AND THEY TAKE DIFFERENT OPERANDS. "list of elements with qualified name
+   qualifiedName" matches ONE string against the qualified name, with the HTML-document lowercasing rule.
+   "list of elements with namespace namespace and local name localName" matches TWO, against the NAMESPACE and
+   the LOCAL name, with `*` meaning "any" in each position INDEPENDENTLY and with no lowercasing anywhere. They
+   are not one algorithm with an optional argument, so a query is a record a walk carries rather than a bare
+   string — and reading it once per walk rather than once per node is what keeps the constant smaller than the
+   algorithm. */
+typedef struct {
+    const char *name;   /* the qualified name, or the local name for the NS form */
+    size_t      nlen;
+    const char *ns;     /* the NS form's namespace; NULL means the null namespace, which is a real query */
+    size_t      nslen;
+} CollQuery;
+
+/* Does this element's namespace match the query's? §4.5: the empty string was already turned into null by
+   validate-and-extract's first step, `*` matches any, and null matches an element in NO namespace — which is
+   what Lexbor answers with an empty or absent namespace URL for. */
+static bool coll_ns_matches(const CollQuery *q, const lxb_dom_node_t *c)
 {
+    size_t len = 0;
+    const lxb_char_t *url;
+
+    if (q->ns && q->nslen == 1 && q->ns[0] == '*') return true;
+    url = lxb_ns_by_id(c->owner_document->ns, c->ns, &len);
+    if (!q->ns) return url == NULL || len == 0;
+    return url && len == q->nslen && memcmp(url, q->ns, len) == 0;
+}
+
+static bool coll_takes(int kind, const CollQuery *qy, const lxb_dom_node_t *c)
+{
+    const char *name = qy ? qy->name : NULL;
+    size_t nlen = qy ? qy->nlen : 0;
+
     if (kind == COLL_CHILD_NODES) return true;
     if (c->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
     if (kind == COLL_BY_TAG) {
@@ -159,6 +191,17 @@ static bool coll_takes(int kind, const char *name, size_t nlen, const lxb_dom_no
            same sentence. */
         if (c->ns == LXB_NS_HTML) return coll_ascii_ieq((const char *)q, name, nlen);
         return memcmp(q, name, nlen) == 0;
+    }
+    if (kind == COLL_BY_TAG_NS) {
+        size_t ln = 0;
+        const lxb_char_t *l;
+
+        if (!coll_ns_matches(qy, c)) return false;
+        if (nlen == 1 && name[0] == '*') return true;   /* `*` is any LOCAL name, independently of the ns */
+        l = lxb_dom_element_local_name((lxb_dom_element_t *)c, &ln);
+        /* THE LOCAL NAME, EXACTLY — no HTML lowercasing. `getElementsByTagNameNS` is the case-sensitive form,
+           which is the whole reason a page reaches for it over getElementsByTagName in an XML document. */
+        return l && ln == nlen && memcmp(l, name, nlen) == 0;
     }
     if (kind == COLL_BY_CLASS)
         return coll_has_all_classes(lxb_dom_interface_element((lxb_dom_node_t *)c), name, nlen);
@@ -257,19 +300,34 @@ static bool coll_in_subtree(const lxb_dom_node_t *n, const lxb_dom_node_t *root)
 /* The cache for this collection, already checked against the tree it describes. NULL means walk from scratch. */
 /* The name a by-name collection was built with. Read once per call rather than per node — the walk is the
    node-shaped part, and a CString per node would make the constant bigger than the algorithm. */
-static const char *coll_query(JSContext *ctx, JSValueConst self, int kind, size_t *plen)
+static void coll_query(JSContext *ctx, JSValueConst self, int kind, CollQuery *q)
 {
     JSValue slots, nv;
-    const char *r;
 
-    *plen = 0;
-    if (!coll_is_descendant(kind)) return NULL;
+    q->name = q->ns = NULL;
+    q->nlen = q->nslen = 0;
+    if (!coll_is_descendant(kind)) return;
     slots = coll_slots(ctx, self);
     nv = JS_GetPropertyStr(ctx, slots, "name");
-    JS_FreeValue(ctx, slots);
-    r = JS_ToCStringLen(ctx, plen, nv);
+    q->name = JS_ToCStringLen(ctx, &q->nlen, nv);
     JS_FreeValue(ctx, nv);
-    return r;
+    if (kind == COLL_BY_TAG_NS) {
+        /* THE NULL NAMESPACE IS A REAL QUERY, so it is JS_NULL in the slot and NULL here — not the empty
+           string, which §4.5's first step has already turned into null and which would otherwise match an
+           element whose namespace URL is genuinely empty by accident rather than by the algorithm. */
+        JSValue nsv = JS_GetPropertyStr(ctx, slots, "ns");
+        if (!JS_IsNull(nsv) && !JS_IsUndefined(nsv))
+            q->ns = JS_ToCStringLen(ctx, &q->nslen, nsv);
+        JS_FreeValue(ctx, nsv);
+    }
+    JS_FreeValue(ctx, slots);
+}
+
+static void coll_query_free(JSContext *ctx, CollQuery *q)
+{
+    if (q->name) JS_FreeCString(ctx, q->name);
+    if (q->ns)   JS_FreeCString(ctx, q->ns);
+    q->name = q->ns = NULL;
 }
 
 static CollCache *coll_cache(JSValueConst self, lxb_dom_node_t *owner)
@@ -307,11 +365,11 @@ static uint32_t coll_length(JSContext *ctx, JSValueConst self)
     /* THE TREE AS IT IS NOW. That walk is the liveness — there is nothing here to invalidate or refresh,
        because the version says when what was counted stopped describing the tree. */
     {
-        size_t qlen = 0;
-        const char *q = coll_query(ctx, self, kind, &qlen);
+        CollQuery q;
+        coll_query(ctx, self, kind, &q);
         for (c = coll_first_node(kind, n); c; c = coll_adv(kind, n, c, 1))
-            if (coll_takes(kind, q, qlen, c)) count++;
-        if (q) JS_FreeCString(ctx, q);
+            if (coll_takes(kind, &q, c)) count++;
+        coll_query_free(ctx, &q);
     }
     if (cc) { cc->length = count; cc->has_length = 1; }
     return count;
@@ -319,14 +377,14 @@ static uint32_t coll_length(JSContext *ctx, JSValueConst self)
 
 /* Step `from` by `delta` members of the collection, in `dir`. The members are the children `coll_takes` accepts,
    so a NodeList steps one child at a time and an HTMLCollection skips the text between elements. */
-static lxb_dom_node_t *coll_step(int kind, const char *q, size_t qlen, lxb_dom_node_t *root,
+static lxb_dom_node_t *coll_step(int kind, const CollQuery *q, lxb_dom_node_t *root,
                                  lxb_dom_node_t *from, uint32_t delta, int forward)
 {
     lxb_dom_node_t *c = from;
     while (delta) {
         c = coll_adv(kind, root, c, forward);
         if (!c) return NULL;
-        if (coll_takes(kind, q, qlen, c)) delta--;
+        if (coll_takes(kind, q, c)) delta--;
     }
     return c;
 }
@@ -350,8 +408,8 @@ static JSValue coll_item(JSContext *ctx, JSValueConst self, uint32_t i)
     if (!n) return JS_UNDEFINED;
     cc = coll_cache(self, n);
     {
-    size_t qlen = 0;
-    const char *q = coll_query(ctx, self, kind, &qlen);
+    CollQuery q;
+    coll_query(ctx, self, kind, &q);
     if (cc && cc->node) {
         /* THE WHOLE POINT: a loop that reads 0, 1, 2… moves one member per call rather than i of them. A read
            that goes BACKWARDS is the same walk through `prev`, because a child list is doubly linked and a page
