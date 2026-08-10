@@ -122,6 +122,12 @@ const INTERFACES = {
      so its gaps were not reported as zero — they were not reported at all, which is the audit lying by
      omission rather than by direction. */
   DocumentFragment:    ["core/dom/document_fragment.c", "core/dom/node.c", "core/events/event_target.c"],
+  /* DOM §6. The three interfaces share §6.4's filter, which lives in node_filter.c, so each names its own file
+     plus that one — the same rule the BODY mixin's row states: a member installed by a shared component is
+     found where that component is. */
+  NodeIterator:        ["core/dom/node_iterator.c", "core/dom/node_filter.c"],
+  TreeWalker:          ["core/dom/tree_walker.c", "core/dom/node_filter.c"],
+  NodeFilter:           "core/dom/node_filter.c",
   NodeList:            "core/dom/collections.c",
   HTMLCollection:      "core/dom/collections.c",
   Element:             ["core/dom/element.c", "core/dom/node.c", "core/events/event_target.c",

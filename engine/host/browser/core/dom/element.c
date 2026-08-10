@@ -27,6 +27,9 @@
 #include "solver/engine.h"
 #include "solver/solve.h"
 #include "core/dom/element.h"
+#include "core/dom/node_iterator.h"
+#include "core/dom/tree_walker.h"
+#include "core/dom/node_filter.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/events/event_target.h"
@@ -1269,6 +1272,15 @@ typedef struct { TreeStepEntry *e; int n, i; } TreeStepBuf;
 static TreeStepEntry *g_ts;
 static int g_ts_n, g_ts_cap;
 
+/* §4.2.3's remove, step "for each NodeIterator object iterator whose root's node document is node's node
+   document, run the NodeIterator pre-remove steps". It is a tree hook of its own rather than a line inside the
+   one below, because they are two independent steps of the standard's algorithm and the one below returns early
+   for a node that is not connected — which a NodeIterator rooted at a detached subtree very much is. */
+static void element_iterator_pre_remove(JSContext *ctx, lxb_dom_node_t *n, int inserted)
+{
+    if (!inserted) node_iterator_pre_remove(ctx, n);
+}
+
 static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, int inserted)
 {
     (void)ctx;
@@ -1507,7 +1519,12 @@ void element_init(JSContext *ctx)
     CHECK(g_attrs_key != JS_ATOM_NULL, "the attributes slot key could not be interned");
     collections_init(ctx);      /* NodeList and HTMLCollection, which childNodes and children are */
     dom_token_list_init(ctx);   /* its class must exist before classList names it */
-    node_set_tree_hook(element_tree_changed);
+    /* §6's TRAVERSERS, before the tree hooks below: §4.2.3's remove runs §6.1's pre-remove steps BEFORE the
+       removing steps, and the hook list runs in registration order, so the order here IS the standard's. */
+    node_iterator_init(ctx);
+    tree_walker_init(ctx);
+    node_add_tree_hook(element_iterator_pre_remove);
+    node_add_tree_hook(element_tree_changed);
     idl_set_tree_steps(&ELEMENT_TREE_STEPS);
     dom_cow_set_attr_hook(element_attr_changed);
     realm_declare_intrinsic(element_install_proto);
@@ -1585,6 +1602,9 @@ void element_free(JSContext *ctx)
     html_element_free(ctx);
     cssom_free(ctx);
     custom_elements_free(ctx);
+    tree_walker_free(ctx);
+    node_iterator_free(ctx);
+    node_filter_free(ctx);
     dom_token_list_free(ctx);
     collections_free(ctx);
     attr_free(ctx);

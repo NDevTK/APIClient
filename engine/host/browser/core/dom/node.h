@@ -52,13 +52,29 @@ void node_install_child_mixin(JSContext *ctx, JSValueConst proto);
    RECEIVER, for the reason ParentNode's members are: a mixin is what the IDL says these are. */
 void node_install_nonelement_parent_mixin(JSContext *ctx, JSValueConst proto);
 void node_install_parent_mixin(JSContext *ctx, JSValueConst proto);
-void node_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, int inserted));
+/* §4.2.3's insertion/removing steps, as the LIST the standard writes: a component REGISTERS one and the
+   chokepoint runs them all, in registration order. `inserted` is 1 after a node entered the tree and 0 BEFORE
+   one leaves it. */
+typedef void (*NodeTreeHook)(JSContext *ctx, lxb_dom_node_t *n, int inserted);
+void node_add_tree_hook(NodeTreeHook fn);
 /* THE PRE-ORDER SUCCESSOR within `root`'s subtree, or NULL at the end — the one traversal primitive the spec's
    tree-order algorithms need. Exported for the same reason it exists: having it once is what keeps every
    algorithm that walks in tree order from growing its own walker that disagrees at the edges. */
 lxb_dom_node_t *node_next_in(lxb_dom_node_t *n, lxb_dom_node_t *root);
+/* Its inverse — the pre-order PREDECESSOR within `root`'s subtree, or NULL at the beginning. §6.1's backwards
+   traversal is stated over exactly this, and a second one written inline gets the last-descendant descent
+   wrong. */
+lxb_dom_node_t *node_prev_in(lxb_dom_node_t *n, lxb_dom_node_t *root);
 /* §4.4 isConnected — is this node's root a document. */
 bool node_is_connected(const lxb_dom_node_t *n);
+/* §4.4's "root": the topmost inclusive ancestor. §5's boundary points and §6's traversers both ask. */
+lxb_dom_node_t *node_root(lxb_dom_node_t *n);
+/* §4.2's "inclusive ancestor" — walked UP from the descendant, so it is O(depth) with no allocation. */
+bool node_is_inclusive_ancestor(const lxb_dom_node_t *a, const lxb_dom_node_t *b);
+/* §4.4's "length" — 0 for a doctype, the data length of a CharacterData node, the child count otherwise. */
+uint32_t node_length(const lxb_dom_node_t *n);
+/* §4.2's "index" — how many siblings precede this node. */
+uint32_t node_index(const lxb_dom_node_t *n);
 /* An ELEMENT's interface is decided by its TAG — HTML's element-interface table, which is the html layer's
    knowledge. It registers the answer here; node_wrap asks it and stays the one place a wrapper is built. */
 void node_set_element_resolver(JSValue (*fn)(JSContext *ctx, lxb_dom_element_t *el));

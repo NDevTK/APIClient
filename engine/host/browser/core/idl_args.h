@@ -101,6 +101,19 @@ typedef enum {
        hand it was right twice and wrong the third time, where a plain object reached JS_GetArrayBufferView and
        tripped the engine's own "this is a typed array" assertion. */
     IDL_BUFFERSOURCE,
+    /* AN INTERFACE TYPE — §3.2.16. `Node root`, `Range sourceRange`, `Node currentNode`: a platform object
+       implementing the interface crosses as itself and ANYTHING else is a TypeError, thrown before the
+       algorithm's step 1. It is a declared type rather than a body's `if` for the reason every other brand test
+       here is: `walker.currentNode = null` must throw, and a body that checks by hand is a body that can forget
+       to. The class is declared beside it with idl_iface_brand, which is what "implementing the interface"
+       means to this engine. */
+    IDL_INTERFACE,
+    /* A NULLABLE CALLBACK INTERFACE — §3.2.22. `NodeFilter? filter` is the only shape of it here, and its rule
+       is not IDL_CALLBACK's: a callback INTERFACE accepts any object (its operation is read off it by name),
+       so a non-callable object is valid and only a primitive is a TypeError. null and undefined are the IDL
+       null. Declared apart from IDL_CALLBACK because conflating them rejects `{acceptNode(){}}`, which is the
+       ordinary way a page writes a filter. */
+    IDL_CALLBACK_INTERFACE_NULLABLE,
 } IdlArgType;
 
 /* A DICTIONARY MEMBER, as its IDL declares it: the name, the type of its value, and whether the IDL marks it
@@ -135,6 +148,14 @@ typedef struct {
    step id, which the caller CACHES. Registration and installation are separate on purpose: Element's members
    are installed on every wrapper the tree hands out, so registering there would mint a definition per element. */
 int  idl_method_id(JSContext *ctx, const IdlArgType *types, int nargs, IdlBody body, int magic);
+
+/* §3.2's INTEGER conversion, over the double a ToNumber has already produced — sign(x)·floor(|x|) taken modulo
+   the type's width, folded into range if it is signed, with [Clamp] rounding half to even instead. Public
+   because a conversion that happens OUTSIDE this machine needs the same arithmetic: Web IDL converts a
+   callback's RETURN VALUE to the operation's declared type, and DOM §6.4's `acceptNode` returns an
+   `unsigned short`, so a filter answering 65537 accepts exactly as one answering 1 does. Written a second time
+   in the component that needed it, that is a modulo somebody has to remember. */
+int64_t idl_integer_of(IdlArgType t, double x);
 
 /* §3.2.10's ByteString RANGE over UTF-8 bytes: true when every code point is 0x00..0xFF. Public because a
    conversion that happens OUTSIDE this machine needs the same answer — Headers' fill converts a record's keys
@@ -224,6 +245,12 @@ typedef struct {
    id a declaration returns is the RUNTIME's step id and not this pool's index. A member that never calls this
    converts every declared position, which is right for a member whose arguments are all required. */
 void idl_optional_from(int first_optional);
+
+/* DECLARE THE CLASS AN IDL_INTERFACE / IDL_STRING_UNLESS_IFACE POSITION BRANDS AGAINST. Set after the
+   declaration, naming the member the LAST one made, exactly as idl_optional_from does and for the same reason:
+   the id a declaration returns is the RUNTIME's step id and not this pool's index. It composes with every
+   declaration form — a method, a setter, a step body — which idl_method_id_ext's `iface` parameter did not. */
+void idl_iface_brand(JSClassID iface);
 
 int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
                        const IdlDictMember *members, int nmembers,

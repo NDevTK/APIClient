@@ -78,7 +78,7 @@ static bool idl_is_integer(IdlArgType t)
 }
 
 
-static int64_t idl_int_of(IdlArgType t, double x)
+int64_t idl_integer_of(IdlArgType t, double x)
 {
     switch (t) {
     case IDL_LONG:            return idl_int_convert(x, 32, true,  false);
@@ -102,7 +102,7 @@ static bool idl_is_numeric(IdlArgType t)
 static JSValue idl_num_of(JSContext *ctx, IdlArgType t, double x)
 {
     if (t == IDL_UNRESTRICTED_DOUBLE) return JS_NewFloat64(ctx, x);
-    return JS_NewInt64(ctx, idl_int_of(t, x));
+    return JS_NewInt64(ctx, idl_integer_of(t, x));
 }
 
 /* §3.2.19's ENUMERATION check, over the string ToString produced. Returns -1 with a TypeError live. */
@@ -670,7 +670,12 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            concolic, which the C boundary asserts against because opacity has to SURVIVE a coercion or the value
            stops forking control flow and stops being solvable at a sink. This is the same answer JSON.stringify
            gives an opaque field: yield the opaque itself, never a de-tainting placeholder. */
-        if (t != IDL_ANY && t != IDL_DICT && t != IDL_DICT_OR_BOOL_FIRST && concolic_is(a)) {
+        /* AN INTERFACE BRAND IS NOT A COERCION, so the pass-through below does not cover it: unknown external
+           input is not a platform object, and letting it cross as itself hands the body something node_of
+           answers NULL for. §3.2.16's answer to "this is not a Node" is a TypeError either way, and a
+           TypeError de-taints nothing. */
+        if (t != IDL_ANY && t != IDL_DICT && t != IDL_DICT_OR_BOOL_FIRST && t != IDL_INTERFACE &&
+            concolic_is(a)) {
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
             *slot = JS_DupValue(ctx, a);
@@ -848,6 +853,40 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             s->seq_list = JS_UNDEFINED;
             s->seq_n = 0;
             s->seq_phase = 0;
+            goto placed;
+        }
+
+        /* §3.2.16's INTERFACE type: the brand test, once, so no body performs it — and a value that is not one
+           is a TypeError BEFORE the algorithm's step 1, which is what `walker.currentNode = null` asserts. */
+        if (t == IDL_INTERFACE) {
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            DCHECK(m->iface != 0, "an interface-typed argument was declared with no class to brand against — "
+                                  "idl_iface_brand is the other half of that type");
+            if (!JS_GetOpaque(a, m->iface)) {
+                JS_ThrowTypeError(ctx, "argument %d does not implement the declared interface", s->i + 1);
+                return JS_STEP_ABRUPT;
+            }
+            *slot = JS_DupValue(ctx, a);
+            goto placed;
+        }
+
+        /* §3.2.22's NULLABLE CALLBACK INTERFACE: null and undefined are the IDL null, ANY object crosses as
+           itself (its operation is read off it by name, so it need not be callable), and a primitive is a
+           TypeError. */
+        if (t == IDL_CALLBACK_INTERFACE_NULLABLE) {
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            if (JS_IsNull(a) || JS_IsUndefined(a)) {
+                *slot = JS_NULL;
+                goto placed;
+            }
+            if (!JS_IsObject(a)) {
+                JS_ThrowTypeError(ctx, "argument %d is not an object and cannot be a callback interface",
+                                  s->i + 1);
+                return JS_STEP_ABRUPT;
+            }
+            *slot = JS_DupValue(ctx, a);
             goto placed;
         }
 
@@ -1227,6 +1266,14 @@ void idl_optional_from(int first_optional)
 {
     DCHECK(g_n > 0, "an optional-argument index was declared before any member was");
     idl_member(g_n - 1)->first_optional = first_optional;
+}
+
+/* See idl_args.h. Same "names the last declaration" rule as idl_optional_from. */
+void idl_iface_brand(JSClassID iface)
+{
+    DCHECK(g_n > 0, "an interface brand was declared before any member was");
+    DCHECK(iface != 0, "an interface brand named no class — the class is half of what the type states");
+    idl_member(g_n - 1)->iface = iface;
 }
 
 int idl_setter_id_step(JSContext *ctx, IdlArgType type, bool null_to_empty, const IdlStepDecl *decl, int magic)

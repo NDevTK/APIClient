@@ -44,6 +44,9 @@ static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
 #include <lexbor/selectors/selectors.h>
 
 #include "core/dom/element.h"
+#include "core/dom/node_filter.h"
+#include "core/dom/node_iterator.h"
+#include "core/dom/tree_walker.h"
 
 /* THE DOCUMENT'S OWN STATE, HELD ON THE REALM THAT IS THIS DOCUMENT — not on the file.
  *
@@ -553,13 +556,40 @@ static JSValue js_doc_location(JSContext *ctx, JSValueConst this_val, int magic)
     return loc;
 }
 
+
+/* §4.5's TWO TRAVERSER FACTORIES. `createNodeIterator(root, whatToShow, filter)` and `createTreeWalker(...)`
+   are the same five-line construction with a different object at the end, so they are one body with a magic —
+   and neither runs a line of the page's code once its arguments are converted, which is why they are plain C
+   and their MEMBERS are machines. The IDL is what does the work: `Node root` is an interface type (a non-Node
+   is a TypeError before step 1), `optional unsigned long whatToShow = 0xFFFFFFFF` is ToNumber and a modulo, and
+   `optional NodeFilter? filter = null` accepts a function OR any object and rejects a primitive.
+   magic 0 = createNodeIterator, 1 = createTreeWalker. */
+static JSValue js_doc_create_traverser(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                       int magic)
+{
+    JSValueConst root = argc > 0 ? argv[0] : JS_UNDEFINED, filter = JS_NULL;
+    uint32_t what = 0xFFFFFFFFu;
+
+    DCHECK(node_of(this_val) != NULL, "a traverser factory ran on something that is not a document");
+    if (!node_of(root))
+        return JS_ThrowTypeError(ctx, "createNodeIterator/createTreeWalker requires a Node root");
+    /* The IDL's defaults. An absent optional argument arrives as undefined, which is what §3.6.2 means by
+       absent — so the default is applied here and nowhere else. */
+    if (argc > 1 && !JS_IsUndefined(argv[1]) && JS_ToUint32(ctx, &what, argv[1]) < 0)
+        return JS_EXCEPTION;
+    if (argc > 2 && !JS_IsUndefined(argv[2])) filter = argv[2];
+    return magic == 0 ? node_iterator_new(ctx, root, what, filter)
+                      : tree_walker_new(ctx, root, what, filter);
+}
+
 /* The Document METHODS — on Document.prototype, so there is one of each rather than one per install, and so
    `Document.prototype.querySelector` is a thing that exists. */
 /* THE DECLARATIONS ARE THE AGENT'S, THE INSTALLS ARE THE REALM'S — the IDL pool is sealed after agent init, so
    a declaration minted from a per-realm install trips idl_declared_before_seal on the SECOND realm. */
 static JSClassID g_document_class;   /* §3.1.1's prototype slot, per realm */
 static int g_id_create_element = -1, g_id_create_text = -1, g_id_create_comment = -1,
-           g_id_create_fragment = -1, g_id_create_element_ns = -1;
+           g_id_create_fragment = -1, g_id_create_element_ns = -1, g_id_create_iterator = -1,
+           g_id_create_walker = -1;
 
 static void document_declare_members(JSContext *ctx)
 {
@@ -568,6 +598,18 @@ static void document_declare_members(JSContext *ctx)
     g_id_create_comment = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_comment, 0);
     g_id_create_fragment = idl_method_id(ctx, NULL, 0, js_doc_create_fragment, 0);
     g_id_create_element_ns = idl_method_id(ctx, IDL_2STR, 2, js_doc_create_element_ns, 0);
+    {
+        /* §4.5: `(Node root, optional unsigned long whatToShow = 0xFFFFFFFF, optional NodeFilter? filter =
+           null)`, twice. */
+        static const IdlArgType TRAVERSER[3] = { IDL_INTERFACE, IDL_UNSIGNED_LONG,
+                                                 IDL_CALLBACK_INTERFACE_NULLABLE };
+        g_id_create_iterator = idl_method_id(ctx, TRAVERSER, 3, js_doc_create_traverser, 0);
+        idl_iface_brand(node_class_id());
+        idl_optional_from(1);
+        g_id_create_walker = idl_method_id(ctx, TRAVERSER, 3, js_doc_create_traverser, 1);
+        idl_iface_brand(node_class_id());
+        idl_optional_from(1);
+    }
 }
 
 static void document_install_members(JSContext *ctx, JSValueConst proto)
@@ -584,6 +626,8 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
             idl_install_accessor(ctx, proto, NAMES[k], js_doc_shortcut, (int)k, -1);
     }
     idl_install_method(ctx, proto, "createElementNS", 2, g_id_create_element_ns);
+    idl_install_method(ctx, proto, "createNodeIterator", 1, g_id_create_iterator);
+    idl_install_method(ctx, proto, "createTreeWalker", 1, g_id_create_walker);
     /* §3.1.1: `[PutForwards=href] readonly attribute Location? location`. The forwarding half of the extended
        attribute — `document.location = url` navigating — is NOT built, and it is absent rather than silently
        dropped: a setter that stored a string would make a page believe it had navigated. */
@@ -857,6 +901,9 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     cssom_install(ctx, global);          /* CSSStyleDeclaration, and getComputedStyle on the Window */
     custom_elements_install(ctx, global);   /* §4.13.4 window.customElements */
     dom_token_list_install(ctx, global);    /* §7.1 DOMTokenList */
+    node_filter_install(ctx, global);       /* §6.3 NodeFilter — the constants every traverser is read with */
+    node_iterator_install(ctx, global);     /* §6.1 NodeIterator */
+    tree_walker_install(ctx, global);       /* §6.2 TreeWalker */
     collections_install(ctx, global);       /* §4.2.10 NodeList, §4.2.11 HTMLCollection */
     attr_install(ctx, global);              /* §4.9.1/§4.9.2 NamedNodeMap and Attr */
     document_fragment_install(ctx, global); /* §4.7 DocumentFragment, which IS constructible */

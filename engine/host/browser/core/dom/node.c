@@ -199,7 +199,6 @@ static JSValue js_node_child_nodes(JSContext *ctx, JSValueConst this_val)
 /* §4.2.3 appendChild / removeChild — the per-flow chokepoints, and they return the node the spec returns
    (pages chain on it). Any node kind, which is the whole point of this file. */
 static JSValue js_node_child_op(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
-static bool node_is_inclusive_ancestor(const lxb_dom_node_t *a, const lxb_dom_node_t *b);
 
 /* A newly inserted <script> is PREPARED (HTML 4.12.1) by the element component, which owns that rule; the base
    asks for it through this hook so node.c does not have to know what a script is. */
@@ -239,9 +238,32 @@ static JSValue node_ancestors(JSContext *ctx, JSValueConst target)
     return arr;
 }
 
-void node_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, int inserted))
+/* §4.2.3's INSERTION AND REMOVING STEPS ARE A LIST, not a slot. The standard's own `remove` runs several
+   independent things in order — the live-range pre-remove steps, then §6.1's NodeIterator pre-remove steps,
+   then each interested party's removing steps — and this was ONE function pointer, so the second component to
+   need it would have had to be called from inside the first. That is the hand-copied list CLAUDE.md warns
+   about, one layer down: a component added without editing whoever happens to hold the slot is a component
+   whose steps silently never run.
+   The ORDER is the registration order, which is the standard's order because the components register in it. */
+#define NODE_TREE_HOOKS_MAX 4
+static NodeTreeHook g_tree_hooks[NODE_TREE_HOOKS_MAX];
+static int g_tree_hook_n;
+
+static void node_tree_hooks_run(JSContext *ctx, lxb_dom_node_t *n, int inserted)
 {
-    dom_cow_set_tree_hook(fn);
+    int i;
+    for (i = 0; i < g_tree_hook_n; i++)
+        g_tree_hooks[i](ctx, n, inserted);
+}
+
+void node_add_tree_hook(NodeTreeHook fn)
+{
+    DCHECK(fn != NULL, "a tree-steps hook was registered as nothing");
+    CHECK(g_tree_hook_n < NODE_TREE_HOOKS_MAX,
+          "more §4.2.3 tree-steps hooks were registered than the list holds — a dropped one is a component "
+          "whose insertion or removing steps silently never run");
+    g_tree_hooks[g_tree_hook_n++] = fn;
+    dom_cow_set_tree_hook(node_tree_hooks_run);
 }
 
 /* §4.2.3 "insert" — A DocumentFragment IS NOT INSERTED; ITS CHILDREN ARE, in order, and the fragment is left
@@ -266,6 +288,17 @@ static void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom
         }
         return;
     }
+    /* §4.2.3 PRE-INSERT STEP 2: a reference child that IS the node becomes the node's next sibling, decided
+       before the node leaves its place. */
+    if (ref == node) ref = node->next;
+    /* §4.5 "adopt" STEP 2, which §4.2.3's insert reaches at its step 6.1: "if node's parent is non-null, remove
+       node". Lexbor's insert does NOT unlink — it writes the new parent's links over the old ones and leaves
+       the old parent still naming the node as its child, so a MOVE (`doc.appendChild(p)` for a `p` that has a
+       parent) built a tree with two parents and a sibling chain that loops. Every walk in this engine then runs
+       forever, which is how it surfaced: §6.2's TreeWalker hung where the corpus regrafts a subtree.
+       It goes through the capturing chokepoint rather than a raw detach because it IS a removal — the per-flow
+       delta has to see it, and so do §4.2.3's removing steps and §6.1's pre-remove steps. */
+    if (node->parent) dom_cow_remove_child(node);
     if (ref) dom_cow_insert_before(ref, node);
     else     dom_cow_append_child(parent, node);
 }
@@ -451,7 +484,7 @@ static JSValue js_cd_get_length(JSContext *ctx, JSValueConst this_val)
 
 /* §4.4 "root": the topmost inclusive ancestor. Shadow trees do not exist in this engine yet, so a node's root
    and its SHADOW-INCLUDING root are the same node. */
-static lxb_dom_node_t *node_root(lxb_dom_node_t *n)
+lxb_dom_node_t *node_root(lxb_dom_node_t *n)
 {
     while (n->parent) n = n->parent;
     return n;
@@ -464,7 +497,7 @@ bool node_is_connected(const lxb_dom_node_t *n)
 
 /* §4.2 "inclusive ancestor": walk UP from the descendant, which is O(depth) with no allocation, rather than
    down from the ancestor, which is O(subtree). */
-static bool node_is_inclusive_ancestor(const lxb_dom_node_t *a, const lxb_dom_node_t *b)
+bool node_is_inclusive_ancestor(const lxb_dom_node_t *a, const lxb_dom_node_t *b)
 {
     for (; b; b = b->parent)
         if (b == a) return true;
@@ -482,6 +515,51 @@ lxb_dom_node_t *node_next_in(lxb_dom_node_t *n, lxb_dom_node_t *root)
         if (!n) return NULL;
     }
     return NULL;
+}
+
+/* AND ITS INVERSE — the pre-order PREDECESSOR within `root`'s subtree, or NULL at the beginning. §6.1's
+   `previousNode` walks a node collection backwards and there is no other way to say that: the node before `n`
+   in tree order is the LAST DESCENDANT of its previous sibling, or, with no previous sibling, its parent.
+   It lives beside its twin for the reason the twin exists — two walkers that disagree at the edges is exactly
+   the bug a shared primitive prevents, and a backwards walk written inline gets the last-descendant descent
+   wrong the first time. */
+lxb_dom_node_t *node_prev_in(lxb_dom_node_t *n, lxb_dom_node_t *root)
+{
+    if (n == root) return NULL;
+    if (n->prev) {
+        n = n->prev;
+        while (n->last_child) n = n->last_child;
+        return n;
+    }
+    return n->parent;   /* NULL for a node with no parent, which is the start of any collection */
+}
+
+/* §4.4's "length": zero for a DocumentType, the data length of a CharacterData node, and the number of children
+   for everything else. Every boundary-point check in §5 and every offset §6 hands out is stated against it. */
+uint32_t node_length(const lxb_dom_node_t *n)
+{
+    const lxb_dom_node_t *c;
+    uint32_t k = 0;
+
+    DCHECK(n != NULL, "§4.4's length was asked of no node");
+    if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE) return 0;
+    if (n->type == LXB_DOM_NODE_TYPE_TEXT || n->type == LXB_DOM_NODE_TYPE_COMMENT ||
+        n->type == LXB_DOM_NODE_TYPE_CDATA_SECTION ||
+        n->type == LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION)
+        return (uint32_t)((const lxb_dom_character_data_t *)n)->data.length;
+    for (c = n->first_child; c; c = c->next) k++;
+    return k;
+}
+
+/* §4.2's "index": how many siblings precede this node. */
+uint32_t node_index(const lxb_dom_node_t *n)
+{
+    const lxb_dom_node_t *c;
+    uint32_t k = 0;
+
+    DCHECK(n != NULL, "§4.2's index was asked of no node");
+    for (c = n->prev; c; c = c->prev) k++;
+    return k;
 }
 
 /* magic 0 = isConnected, 1 = ownerDocument, 2 = parentElement, 3 = baseURI */
