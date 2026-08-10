@@ -36,8 +36,11 @@ void idl_indexed_free(JSContext *ctx);
    the runtime, which is what makes it a static per-interface constant rather than per-instance state. */
 JSValue idl_indexed_new(JSContext *ctx, JSValueConst proto, const IdlIndexedDecl *decl);
 
-/* Web IDL §3.7.10: an interface with an indexed property getter gets %Array.prototype.values% as @@iterator,
-   and the value-iterator members beside it. Installed on the PROTOTYPE, which is where the IDL puts them. */
-void idl_indexed_install_iterable(JSContext *ctx, JSValueConst proto);
+/* Web IDL §3.7.10: an interface with an indexed property getter and an integer `length` gets
+   %Array.prototype.values% as its @@iterator. `declares_iterable` is whether the interface ALSO declares
+   `iterable<V>`, which is what adds `entries`, `keys`, `values` and `forEach` — NodeList and DOMTokenList do,
+   HTMLCollection and NamedNodeMap do not, and one answer for all four gave an HTMLCollection a `forEach` the
+   standard says it has no such member. Installed on the PROTOTYPE, which is where the IDL puts them. */
+void idl_indexed_install_iterable(JSContext *ctx, JSValueConst proto, bool declares_iterable);
 
 #endif

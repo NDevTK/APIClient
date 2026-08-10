@@ -124,6 +124,24 @@ void event_set_phase(JSContext *ctx, JSValueConst ev, int phase)
 }
 bool event_stop_immediate(JSContext *ctx, JSValueConst ev) { return event_read_flag(ctx, ev, "stopImmediate"); }
 bool event_dispatch_flag(JSContext *ctx, JSValueConst ev)  { return event_read_flag(ctx, ev, "dispatch"); }
+/* §2.2's initialized flag — set by every constructor and by initEvent, unset by §4.5's createEvent. */
+bool event_initialized(JSContext *ctx, JSValueConst ev)    { return event_read_flag(ctx, ev, "initialized"); }
+
+/* §4.5 createEvent steps 6-8, performed on an event its own interface has just built: the type goes back to
+   the empty string, isTrusted to false, and the initialized flag is UNSET. It lives here rather than in the
+   factory because the slots are this component's and nothing outside it may write one. */
+void event_uninitialize(JSContext *ctx, JSValueConst ev)
+{
+    JSValue slots = event_slots(ctx, ev);
+
+    DCHECK(JS_IsObject(slots), "createEvent uninitialised something that is not an Event — a row's maker "
+                               "must answer with an object carrying Event's slot record");
+    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return; }
+    JS_SetPropertyStr(ctx, slots, "type", JS_NewString(ctx, ""));
+    JS_SetPropertyStr(ctx, slots, "isTrusted", JS_FALSE);
+    JS_SetPropertyStr(ctx, slots, "initialized", JS_FALSE);
+    JS_FreeValue(ctx, slots);
+}
 void event_set_dispatch_flag(JSContext *ctx, JSValueConst ev, bool on)
 {
     event_write_flag(ctx, ev, "dispatch", on);
@@ -187,6 +205,11 @@ static JSValue event_make_proto(JSContext *ctx, JSValueConst proto, JSValueConst
     JS_SetPropertyStr(ctx, slots, "stopPropagation", JS_FALSE);
     JS_SetPropertyStr(ctx, slots, "stopImmediate", JS_FALSE);
     JS_SetPropertyStr(ctx, slots, "dispatch", JS_FALSE);
+    /* §2.2's INITIALIZED FLAG. Every event that arrives through a constructor or through the engine's own
+       firing is initialized; the ONE thing that produces an uninitialized event is §4.5's createEvent, and
+       the flag is the only observable difference between what it returns and what `new Event("")` returns —
+       dispatching one before initEvent is an InvalidStateError. */
+    JS_SetPropertyStr(ctx, slots, "initialized", JS_TRUE);
     JS_SetProperty(ctx, ev, k, slots);
     JS_FreeAtom(ctx, k);
     return ev;
@@ -354,6 +377,9 @@ bool event_reinit(JSContext *ctx, JSValueConst ev, JSValueConst type, bool bubbl
     JS_SetPropertyStr(ctx, slots, "stopPropagation", JS_FALSE);
     JS_SetPropertyStr(ctx, slots, "stopImmediate", JS_FALSE);
     JS_SetPropertyStr(ctx, slots, "target", JS_NULL);
+    /* §2.2 step 2: "Set this's initialized flag." An event built by createEvent becomes dispatchable here
+       and nowhere else, which is what makes the legacy factory's two-call shape work at all. */
+    JS_SetPropertyStr(ctx, slots, "initialized", JS_TRUE);
     JS_FreeValue(ctx, slots);
     return true;
 }

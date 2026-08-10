@@ -132,15 +132,20 @@ static int idl_indexed_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t
     return 0;
 }
 
-static int idl_indexed_has(JSContext *ctx, JSValueConst obj, JSAtom prop)
-{
-    return idl_indexed_get_own(ctx, NULL, obj, prop);
-}
-
+/* THERE IS NO EXOTIC [[HasProperty]], AND THAT IS THE SPEC, NOT AN OMISSION. Web IDL §3.9 overrides exactly
+   five internal methods on a legacy platform object — [[GetOwnProperty]], [[DefineOwnProperty]], [[Set]],
+   [[Delete]] and [[OwnPropertyKeys]] — and [[HasProperty]] is not among them, so `x in list` is
+   OrdinaryHasProperty: this object's own lookup (which IS the indexed getter above, reached through
+   [[GetOwnProperty]]) and then THE PROTOTYPE CHAIN.
+   A hook here truncates that chain, because quickjs's contract for `has_property` is that the exotic answers
+   definitively — it returns the exotic's answer and never walks the prototype. So one existed and
+   `'length' in el.children` was FALSE while `el.children.length` answered 1, and `'item' in list`, `'add' in
+   classList` and `'getNamedItem' in el.attributes` were false the same way. testharness's assert_array_equals
+   opens with `"length" in actual`, so every collection assertion in the corpus failed its precondition and
+   reported the collection as "not an array" — a hundred subtests whose real message was that `in` was wrong. */
 static JSClassExoticMethods g_exotic = {
     .get_own_property = idl_indexed_get_own,
     .get_own_property_names = idl_indexed_own_names,
-    .has_property = idl_indexed_has,
     /* The lookup above is an index parse and a read of the component's own state. There is no accessor in a
        Web IDL indexed property getter by construction, which is what lets the engine's accessor walk run it
        from C instead of routing it onto the trampoline. */
@@ -186,7 +191,7 @@ JSValue idl_indexed_new(JSContext *ctx, JSValueConst proto, const IdlIndexedDecl
     return obj;
 }
 
-void idl_indexed_install_iterable(JSContext *ctx, JSValueConst proto)
+void idl_indexed_install_iterable(JSContext *ctx, JSValueConst proto, bool declares_iterable)
 {
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue arr = JS_GetPropertyStr(ctx, global, "Array");
@@ -209,8 +214,13 @@ void idl_indexed_install_iterable(JSContext *ctx, JSValueConst proto)
         JS_FreeValue(ctx, it);
         JS_FreeValue(ctx, sym_ctor);
     }
-    /* The value-iterator members the same clause gives it, and for the same reason: they are the array ones. */
-    {
+    /* THE VALUE-ITERATOR MEMBERS ARE A DIFFERENT CLAUSE, AND THEY ARE NOT EVERY INDEXED INTERFACE'S. §3.7.10
+       gives @@iterator to any interface with an indexed getter and an integer `length`; `entries`, `keys`,
+       `values` and `forEach` come from a `iterable<V>` DECLARATION, which NodeList and DOMTokenList carry and
+       HTMLCollection and NamedNodeMap do not. Installing all four unconditionally put `paragraphs.forEach` on
+       an HTMLCollection, which WPT asserts is absent — and the interface says so, so the interface says so
+       HERE, as an argument, rather than being one answer for four IDLs. */
+    if (declares_iterable) {
         static const char *const NAMES[] = { "values", "keys", "entries", "forEach" };
         unsigned k;
         for (k = 0; k < sizeof(NAMES) / sizeof(NAMES[0]); k++) {

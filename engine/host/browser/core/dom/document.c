@@ -20,6 +20,7 @@
 #include "solver/concolic.h"
 #include "solver/engine.h"
 #include "core/events/event.h"
+#include "core/events/create_event.h"
 #include "core/events/event_target.h"
 #include "core/html/html_element.h"
 #include "core/html/html_form.h"
@@ -623,6 +624,25 @@ static JSValue js_doc_create_range(JSContext *ctx, JSValueConst this_val, int ar
     return range_new_at(ctx, this_val);
 }
 
+/* §4.5 `[NewObject] Event createEvent(DOMString interface)` — the legacy factory. The TABLE and the
+   construction belong to the events component; what is Document's is the member and the realm whose interfaces
+   the exposure check asks about, which is this document's global. */
+static JSValue js_doc_create_event(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                   int magic)
+{
+    JSValue global, r;
+    const char *iface;
+
+    (void)this_val; (void)argc; (void)magic;
+    iface = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
+    if (!iface) return JS_EXCEPTION;
+    global = JS_GetGlobalObject(ctx);
+    r = create_event(ctx, global, iface);
+    JS_FreeValue(ctx, global);
+    JS_FreeCString(ctx, iface);
+    return r;
+}
+
 /* The Document METHODS — on Document.prototype, so there is one of each rather than one per install, and so
    `Document.prototype.querySelector` is a thing that exists. */
 /* THE DECLARATIONS ARE THE AGENT'S, THE INSTALLS ARE THE REALM'S — the IDL pool is sealed after agent init, so
@@ -630,7 +650,7 @@ static JSValue js_doc_create_range(JSContext *ctx, JSValueConst this_val, int ar
 static JSClassID g_document_class;   /* §3.1.1's prototype slot, per realm */
 static int g_id_create_element = -1, g_id_create_text = -1, g_id_create_comment = -1,
            g_id_create_fragment = -1, g_id_create_element_ns = -1, g_id_create_iterator = -1,
-           g_id_create_walker = -1, g_id_create_range = -1;
+           g_id_create_walker = -1, g_id_create_range = -1, g_id_create_event = -1;
 
 static void document_declare_members(JSContext *ctx)
 {
@@ -652,6 +672,7 @@ static void document_declare_members(JSContext *ctx)
         idl_optional_from(1);
     }
     g_id_create_range = idl_method_id(ctx, NULL, 0, js_doc_create_range, 0);
+    g_id_create_event = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_event, 0);
 }
 
 static void document_install_members(JSContext *ctx, JSValueConst proto)
@@ -671,6 +692,7 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     idl_install_method(ctx, proto, "createNodeIterator", 1, g_id_create_iterator);
     idl_install_method(ctx, proto, "createTreeWalker", 1, g_id_create_walker);
     idl_install_method(ctx, proto, "createRange", 0, g_id_create_range);
+    idl_install_method(ctx, proto, "createEvent", 1, g_id_create_event);
     /* §3.1.1: `[PutForwards=href] readonly attribute Location? location`. The forwarding half of the extended
        attribute — `document.location = url` navigating — is NOT built, and it is absent rather than silently
        dropped: a setter that stored a string would make a page believe it had navigated. */

@@ -57,6 +57,12 @@ bool    event_canceled(JSContext *ctx, JSValueConst ev);        /* the canceled 
 bool    event_stop_immediate(JSContext *ctx, JSValueConst ev);  /* the stop-immediate-propagation flag */
 bool    event_bubbles(JSContext *ctx, JSValueConst ev);         /* does it travel up the propagation path */
 bool    event_stop_propagation(JSContext *ctx, JSValueConst ev);
+/* §2.2's initialized flag: false only for an event §4.5's createEvent produced and initEvent has not yet
+   initialised. dispatchEvent throws InvalidStateError on one, which is why the flag is public here. */
+bool    event_initialized(JSContext *ctx, JSValueConst ev);
+/* §4.5 createEvent steps 6-8 over an event its interface has just built — empty type, untrusted, and the
+   initialized flag UNSET. The factory owns the table; the slots are this component's. */
+void    event_uninitialize(JSContext *ctx, JSValueConst ev);
 void    event_set_phase(JSContext *ctx, JSValueConst ev, int phase);   /* AT_TARGET, then BUBBLING_PHASE */
 /* §2.9 "dispatch" sets these on the event as it walks: the target it was dispatched at, and the object whose
    listeners are running right now. */

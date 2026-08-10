@@ -149,6 +149,22 @@ const char *concolic_source_encodes(const char *src)
     return NULL;
 }
 
+/* JSConcolicHooks.lead — the DOMAIN fact the delivery declaration already holds, read by a builtin that has to
+   decide whether one of its completions is feasible at all. The prefix is what the component states its
+   component's value carries (`#` for a fragment, `?` for a query), so this is not a guess about the value: it
+   is the same declaration the candidate delivery is built from, asked the other way round.
+   A DERIVED value (`location.hash.slice(1)`) has its own source identity and no declaration, so it answers 0
+   and nothing is refined — which is right, since slicing is exactly what removes the prefix. */
+static int concolic_lead_hook(JSValueConst v)
+{
+    const char *src = concolic_src_c(v);
+    int i;
+    if (!src) return 0;
+    for (i = 0; i < g_srcs_n; i++)
+        if (!strcmp(g_srcs[i].src, src)) return (unsigned char)g_srcs[i].prefix;
+    return 0;
+}
+
 /* THE CANDIDATE AS THE PAGE READS IT. The solver's payload is what the ATTACKER puts in the URL; this is what
    the browser hands the page, which is the only thing re-execution can honestly decide a breakout against. */
 static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *payload)
@@ -617,7 +633,8 @@ static JSConcolicHooks g_hooks = {
     .key_read = concolic_key_read_hook,
     .key_name = concolic_key_name_hook,
     .builtin = concolic_builtin_hook,
-    .example = concolic_example };
+    .example = concolic_example,
+    .lead = concolic_lead_hook };
 
 /* Concolic VALUE propagation stays installed across scheduling AND verification, because taint must flow
    during a candidate re-fire too; the EXPLORATION hooks (branch/fork/preempt) are the scheduler's. */

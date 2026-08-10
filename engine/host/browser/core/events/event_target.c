@@ -845,6 +845,14 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             JS_ThrowDOMException(ctx, "InvalidStateError", "the event is already being dispatched");
             return JS_STEP_ABRUPT;
         }
+        /* §2.7 dispatchEvent's OTHER early throw, and it is the same step: an event whose INITIALIZED FLAG is
+           unset cannot be dispatched. Only §4.5's createEvent makes one, and the two-call shape it exists for
+           — `createEvent` then `initEvent` — is only meaningful because dispatching between them throws. */
+        if (!event_initialized(ctx, s->ev)) {
+            JS_ThrowDOMException(ctx, "InvalidStateError",
+                                 "the event was created by createEvent and never initialised");
+            return JS_STEP_ABRUPT;
+        }
         event_set_dispatch_flag(ctx, s->ev, true);
         /* §2.9 step 3: an event the PAGE dispatches is untrusted, whatever it was when constructed. One the
            ENGINE fires keeps the flag it was built with, which is the whole difference between them. */

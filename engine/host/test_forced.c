@@ -679,6 +679,25 @@ static const char *HTML =
     "eval(\"'\" + location.hash + \"'\");"
     "var lhHost = document.createElement('div'); document.body.appendChild(lhHost);"
     "lhHost.innerHTML = location.hash;"
+    /* THE OUTCOME FORK AT A C BUILTIN. `JSON.parse` of unknown text has two feasible completions — 25.5.1
+       step 8's value and step 2's SyntaxError — and until the fork existed the engine ABORTED here rather
+       than pick one, because picking deletes the arm the `catch` and everything behind it lives on. BOTH
+       endpoints below must appear in ONE run: two flows, one snapshot-forked from the other AT the builtin.
+       AND THE REFINEMENT, which is the negative half and the reason this is two statements and not one: the
+       SAME builtin over `location.hash` ITSELF has only ONE feasible completion, because the component that
+       owns that source declares what the browser delivers — the empty string or `#` followed by the fragment,
+       neither of which is a JSON text. So that one must throw with NO fork, exactly as V8 does, and
+       /api/jsonrawok must never be reached. Asserting only the fork would pass with the refinement absent;
+       asserting only the throw would pass with the fork absent. */
+    "fetch('/api/jprobe?a=' + location.hash.slice(1));"
+    "try { JSON.parse(location.hash.slice(1)); fetch('/api/jsonok'); }"
+    "catch (jpe) { fetch('/api/jsonthrew?n=' + jpe.name); }"
+    "try { JSON.parse(location.hash); fetch('/api/jsonrawok'); }"
+    "catch (jpe2) { fetch('/api/jsonrawthrew?n=' + jpe2.name); }"
+    /* THE UNBOUNDED CASE OF THE SAME PRIMITIVE. Iterating an UNKNOWN collection asks the same question once
+       per position — "is there another element?" — and each position is its OWN predicate, so it forks per
+       iteration and each iteration is a parkable flow. No seen-set, no cap, no fixpoint: it behaves like
+       "once" only because the identical-input tail emits nothing new and is outranked and paged. */
     "fetch('/api/locsrc?o=' + location.origin + '&pn=' + location.pathname);"
     /* §3.1.5's element shortcuts and §4.5's createDocumentFragment. All five shortcuts are LIVE
        HTMLCollections over the document — a bundle scanner reaches for document.scripts and document.forms in
@@ -2226,6 +2245,14 @@ int main(void) {
     if (strstr(js, "rejCANCEL")) nodealgo_tt = 0;
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)
         if (!strstr(js, NODE_ALGOS[ai][0]) || !strstr(js, NODE_ALGOS[ai][1])) nodealgo_tt = 0;
+    /* THE OUTCOME FORK, both halves. Positive: ONE run reached BOTH completions of `JSON.parse` over unknown
+       text, which can only happen by a snapshot fork taken inside the builtin — the throw arm carries the real
+       SyntaxError, so `catch` ran with a real Error object rather than a shape. Negative: the same builtin over
+       a source whose delivery contradicts the parse forked NOTHING and threw, so a completion no value of that
+       source can produce was never fabricated. */
+    int jsonfork_tt = strstr(js, "\"/api/jsonok\"") && strstr(js, "\"/api/jsonthrew\"")
+                   && strstr(js, "\"validValues\":[\"SyntaxError\"]")
+                   && strstr(js, "\"/api/jsonrawthrew\"") && !strstr(js, "/api/jsonrawok");
     int domidl_tt   = domproto_tt && cdnull_tt && tcnull_tt && nodeval_tt && tcset_tt;
     int deadline_tt = (strstr(js, "\"/api/deadline\"") && strstr(js, "expired") && strstr(js, "live"));
 
@@ -2265,6 +2292,7 @@ int main(void) {
         { "rerepfork", rerepfork_tt, 1 },  { "gcallfork", gcallfork_tt, 1 },
         { "gapplyfork", gapplyfork_tt, 1 },{ "grefapplyfork", grefapplyfork_tt, 1 },
         { "hostreq", hostreq_tt, 1 }, { "hostreq-fork", hostreqfork_tt, 1 },
+        { "json-fork", jsonfork_tt, 1 },
         { "nav-open", navopen_tt, 1 }, { "proxy-sop", sop_tt, 1 }, { "xdoc-read", xdocread_tt, 1 }, { "xdoc-job", xdocjob_tt, 1 }, { "timer-order", timer_tt, 1 }, { "iframe-nav", ifnav_tt, 1 },
     };
     int h_ok = 1;

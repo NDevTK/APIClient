@@ -16,6 +16,12 @@
    or -1 when the value is not concolic (interpreter falls through to the normal ToBool). */
 int  solver_decide(JSContext *ctx, JSValueConst cond);
 
+/* JSFlowControlHooks.outcome — the same decision, asked by a C BUILTIN that has no OP_if to ask it at. `over`
+   is the unknown operand its completion depends on, `op` names the operation ("JSON.parse"), `n` is how many
+   completions the machine declares feasible. Returns the arm this flow takes, ORed with 0x100 when a sibling
+   was prepared for the other — the same protocol solver_decide uses, because it is the same fork. */
+int  solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n);
+
 /* Take the decision vector out of a fork blob (ownership transfers; blob struct freed). For the replay fork. */
 
 /* The scheduler brackets each flow run: enter loads the flow's decision vector as the replay source (cursor 0);

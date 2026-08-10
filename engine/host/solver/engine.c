@@ -1250,7 +1250,8 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
    preemption off) is the cardinal violation twice over — a second scheduler beside the BFS AND a drive-to-
    completion (an unbounded candidate loop would hang, non-parkable). So verify is this same loop with forking off:
    ONE concrete path (no branch/fork hook), yet every candidate flow is preemptible + parkable like any other. */
-static const JSFlowControlHooks FC_EXPLORE = { .branch = solver_decide, .fork = engine_fork_finalize, .preempt = preempt_hook };
+static const JSFlowControlHooks FC_EXPLORE = { .branch = solver_decide, .outcome = solver_outcome,
+                                               .fork = engine_fork_finalize, .preempt = preempt_hook };
 static const JSFlowControlHooks FC_VERIFY  = { .preempt = preempt_hook };   /* candidate re-fire: no fork, still preemptible */
 static const JSFlowControlHooks FC_OFF     = { 0 };
 

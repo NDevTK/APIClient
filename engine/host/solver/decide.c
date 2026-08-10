@@ -95,22 +95,19 @@ static int decide_key(JSValueConst cond, char *buf, size_t n) {
     return 1;
 }
 
-int solver_decide(JSContext *ctx, JSValueConst cond) {
-    if (!g_running || !concolic_is(cond)) return -1;   /* not a forced-exec branch on a concolic value */
-
-    /* If the condition is a COMPARISON result (`x === 'admin'`), the taken arm may PIN the source to a concrete
-       value — CONCRETIZE-ON-PIN, so later reads compute the REAL @H value, not the shape. */
-    const char *src = NULL, *tok = NULL;
-    int op = concolic_cmp(cond, &src, &tok);
-
-    char key[256];
-    int keyed = decide_key(cond, key, sizeof key);
-
-    int arm, forked = 0;
+/* THE DECISION ITSELF, over a predicate identified by `key` (NULL when the condition has no source identity to
+   constrain — uncertainty, which keeps both arms). Every caller of this is a place the program's control flow
+   turns on unknown input, and there are two of them because a decision is not the same thing as an OP_if: a
+   BYTECODE BRANCH is one, and a NATIVE OPERATION whose completion depends on the same unknown is the other.
+   They share this because they are the same decision — the same vector slot, the same constraint, the same
+   replay on a resume — and the only difference is what the interpreter has to do about the arm afterwards. */
+static int decide_arm(const char *key, int *forked) {
+    int arm;
+    *forked = 0;
     if (g_c < g_dec_n) {                 /* REPLAY: this run is re-reaching a recorded decision — take that arm */
         arm = g_dec[g_c] ? 1 : 0;
         g_c++;
-    } else if (keyed && concolic_branch_decided(key) >= 0) {
+    } else if (key && concolic_branch_decided(key) >= 0) {
         /* FEASIBLE REFINEMENT. This flow has already decided this exact predicate, so the other arm is
            CONTRADICTED: same unknown input, same test, one answer. Forking it again would add a flow that
            explores nothing and still carries a COW delta, and a bundle testing one flag in twenty places would
@@ -134,23 +131,72 @@ int solver_decide(JSContext *ctx, JSValueConst cond) {
            sibling IS, so a later test of the same predicate over there is decided too. Recorded, snapshotted,
            then overwritten with this flow's arm; the two orders are one statement apart and getting them
            backwards hands the sibling this flow's answer. */
-        if (keyed) concolic_constrain_branch(key, 0);
+        if (key) concolic_constrain_branch(key, 0);
         void *pblob = concolic_pins_suspend();
-        if (keyed) concolic_constrain_branch(key, 1);
+        if (key) concolic_constrain_branch(key, 1);
         engine_prepare_fork(dblob, pblob);
         dec_ensure(g_c + 1);
         g_dec[g_c] = 1;                  /* this flow: TRUE arm */
         g_dec_n = g_c + 1;
         g_c++;
         arm = 1;
-        forked = 1;
+        *forked = 1;
     }
-    if (keyed && !forked) concolic_constrain_branch(key, arm);   /* a REPLAYED arm narrows this flow just the same */
+    if (key && !*forked) concolic_constrain_branch(key, arm);   /* a REPLAYED arm narrows this flow just the same */
     DCHECK(g_c <= g_dec_n, "the decision cursor ran past the vector — a branch answered without consuming its "
                            "recorded slot, so the next one will read that slot as its own");
+    return arm;
+}
+
+int solver_decide(JSContext *ctx, JSValueConst cond) {
+    (void)ctx;
+    if (!g_running || !concolic_is(cond)) return -1;   /* not a forced-exec branch on a concolic value */
+
+    /* If the condition is a COMPARISON result (`x === 'admin'`), the taken arm may PIN the source to a concrete
+       value — CONCRETIZE-ON-PIN, so later reads compute the REAL @H value, not the shape. */
+    const char *src = NULL, *tok = NULL;
+    int op = concolic_cmp(cond, &src, &tok);
+
+    char key[256];
+    int keyed = decide_key(cond, key, sizeof key);
+    int forked = 0;
+    int arm = decide_arm(keyed ? key : NULL, &forked);
 
     /* the source equals tok on the arm that makes the EQ true (EQ&&true or NE&&false) -> the code pinned it */
     if (src && tok && ((op == OPCMP_EQ && arm == 1) || (op == OPCMP_NE && arm == 0)))
         concolic_pin(src, tok);
     return forked ? (arm | 0x100) : arm;   /* 0x100 tells the interpreter to snapshot-fork this frame */
+}
+
+/* JSFlowControlHooks.outcome — the SAME decision asked from a C builtin, which has no OP_if to ask it at.
+ *
+ * `JSON.parse(x)` over unknown text completes with a value or with a SyntaxError, and both are feasible; the
+ * builtin cannot pick one, because picking DELETES the arm a `catch` and everything behind it lives on. So the
+ * machine states the question and this answers it out of the flow's decision vector, exactly as a branch's arm
+ * comes out of it — which is what makes a sibling parked today and resumed next session take the same arm.
+ *
+ * The KEY is the operand's SOURCE plus the OPERATION, and the separator is a byte neither a field path nor an
+ * operation name contains and is DIFFERENT from the comparison key's: `x === "a"` and `JSON.parse(x)` are two
+ * facts about one source, and a key space they shared would let one answer the other. The operation string is
+ * the machine's, so a machine that asks the same question at successive POSITIONS (an iteration over an unknown
+ * collection) says so there — each position is its own predicate and must not be decided by the last one's
+ * answer. */
+int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n) {
+    (void)ctx;
+    if (!g_running) return -1;
+    DCHECK(concolic_is(over), "the outcome seam was asked about a value that is not unknown — a native "
+                              "operation forks only where its operand's domain permits more than one completion");
+    DCHECK(n == 2, "an outcome fork declaring more than two feasible completions — this prepares ONE sibling "
+                   "per ask; build the N-1 sibling prepare (a queue engine_fork_finalize drains) before a "
+                   "machine declares more");
+    {
+        const char *src = concolic_src_c(over);
+        char key[256];
+        int forked = 0, arm;
+        DCHECK(src != NULL, "an unknown operand with no source identity reached the outcome seam — its "
+                            "completions cannot be constrained, so two asks about it would be one fact");
+        snprintf(key, sizeof key, "%s\x02%s", src, op ? op : "");
+        arm = decide_arm(key, &forked);
+        return forked ? (arm | 0x100) : arm;
+    }
 }

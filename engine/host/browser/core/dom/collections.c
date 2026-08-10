@@ -605,8 +605,8 @@ void collections_install_protos(JSContext *ctx)
     /* §3.7.10: NodeList's IDL declares `iterable<Node>`, so it gets the value-iterator members. HTMLCollection
        declares NO iterable — it is iterable only through the indexed getter, which §3.7.10 gives @@iterator
        for and nothing else. Two interfaces, two answers, because that is what the two IDLs say. */
-    idl_indexed_install_iterable(ctx, nlp);
-    idl_indexed_install_iterable(ctx, hcp);
+    idl_indexed_install_iterable(ctx, nlp, /*declares_iterable*/ true);
+    idl_indexed_install_iterable(ctx, hcp, /*declares_iterable*/ false);
     JS_SetClassProto(ctx, g_nodelist_class, nlp);
     JS_SetClassProto(ctx, g_htmlcoll_class, hcp);
 }
