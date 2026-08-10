@@ -64,12 +64,21 @@ bool    event_initialized(JSContext *ctx, JSValueConst ev);
    initialized flag UNSET. The factory owns the table; the slots are this component's. */
 void    event_uninitialize(JSContext *ctx, JSValueConst ev);
 void    event_set_phase(JSContext *ctx, JSValueConst ev, int phase);   /* AT_TARGET, then BUBBLING_PHASE */
-/* §2.9 "dispatch" sets these on the event as it walks: the target it was dispatched at, and the object whose
-   listeners are running right now. */
-void    event_set_targets(JSContext *ctx, JSValueConst ev, JSValueConst target, JSValueConst current);
-/* §2.9 step 3 and "clean up": an event the page dispatches is untrusted, and the walk leaves no current target. */
+/* §2.9 "invoke" steps 3 and 7, which are two steps: the target the event was dispatched at (set once for the
+   whole walk) and the object whose listeners are running right now (set at every path item). */
+void    event_set_target(JSContext *ctx, JSValueConst ev, JSValueConst target);
+void    event_set_current(JSContext *ctx, JSValueConst ev, JSValueConst current);
+/* §2.9 step 3: an event the page dispatches is untrusted, whatever it was when constructed. */
 void    event_set_trusted(JSContext *ctx, JSValueConst ev, bool trusted);
-void    event_clear_current(JSContext *ctx, JSValueConst ev);
+/* §2.9 steps 7-10 as ONE operation, because the spec groups them and because splitting them is how three of the
+   four went missing: phase NONE, currentTarget null, path empty, and the dispatch/stop-propagation/
+   stop-immediate-propagation flags unset. */
+void    event_end_dispatch(JSContext *ctx, JSValueConst ev);
+/* §2.9's PATH, which is the EVENT'S state — composedPath() reads "this's path". `path` is BORROWED (dup'd). */
+void    event_set_path(JSContext *ctx, JSValueConst ev, JSValueConst path);
+/* §2.2's IN PASSIVE LISTENER FLAG — set by "inner invoke" around a passive listener, and the reason that
+   listener's preventDefault() does nothing. */
+void    event_set_in_passive(JSContext *ctx, JSValueConst ev, bool on);
 /* §2.9: an event that has been dispatched cannot be re-dispatched while in flight. */
 bool    event_dispatch_flag(JSContext *ctx, JSValueConst ev);
 void    event_set_dispatch_flag(JSContext *ctx, JSValueConst ev, bool on);

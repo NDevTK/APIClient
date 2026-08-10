@@ -153,22 +153,60 @@ void event_set_trusted(JSContext *ctx, JSValueConst ev, bool trusted)
     event_write_flag(ctx, ev, "isTrusted", trusted);
 }
 
-/* §2.9 "clean up": the walk is over, so there is no current target and no phase. `target` STAYS — a page reads
-   it after dispatchEvent returns, which is the difference between the two. */
-void event_clear_current(JSContext *ctx, JSValueConst ev)
+/* §2.9 dispatch steps 7-10, WHICH ARE ONE THING AND SO ARE ONE CALL: eventPhase back to NONE, currentTarget to
+   null, the PATH to the empty list, and the dispatch, stop propagation and stop immediate propagation flags
+   unset. `target` STAYS — a page reads it after dispatchEvent returns, which is the difference between the two.
+   The three flags were not unset at all, and each omission is observable: the SAME event re-dispatched after a
+   listener called stopPropagation propagated nowhere the second time, which is exactly what step 10 exists to
+   prevent and what Event-dispatch-redispatch asks. */
+void event_end_dispatch(JSContext *ctx, JSValueConst ev)
 {
     JSValue slots = event_slots(ctx, ev);
     if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return; }
     JS_SetPropertyStr(ctx, slots, "currentTarget", JS_NULL);
     JS_SetPropertyStr(ctx, slots, "eventPhase", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, slots, "path", JS_NULL);
+    JS_SetPropertyStr(ctx, slots, "dispatch", JS_FALSE);
+    JS_SetPropertyStr(ctx, slots, "stopPropagation", JS_FALSE);
+    JS_SetPropertyStr(ctx, slots, "stopImmediate", JS_FALSE);
     JS_FreeValue(ctx, slots);
 }
 
-void event_set_targets(JSContext *ctx, JSValueConst ev, JSValueConst target, JSValueConst current)
+/* §2.9's EVENT PATH, which is the event's own state and not the dispatch's — `composedPath()` reads "this's
+   path", so a walk that kept it privately could only ever answer with the one target it happened to be standing
+   on. Set by dispatch as it appends (step 6.3 and step 6.8.7's append), cleared by step 9. */
+void event_set_path(JSContext *ctx, JSValueConst ev, JSValueConst path)
+{
+    JSValue slots = event_slots(ctx, ev);
+    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return; }
+    JS_SetPropertyStr(ctx, slots, "path", JS_DupValue(ctx, path));
+    JS_FreeValue(ctx, slots);
+}
+
+/* §2.2's IN PASSIVE LISTENER FLAG. "inner invoke" sets it around a listener whose `passive` is true and unsets
+   it after, and `preventDefault` is defined to do nothing while it is set — which is the whole of what passive
+   means to the page. */
+void event_set_in_passive(JSContext *ctx, JSValueConst ev, bool on)
+{
+    event_write_flag(ctx, ev, "inPassive", on);
+}
+
+/* §2.9 "invoke" step 3 and step 7 — TWO writes at two different steps, and they were one call taking both.
+   `target` is the path item's shadow-adjusted target and is set once for the whole walk; `currentTarget` is
+   whose listeners are running and moves at every item. A single setter forced the walk to restate the target it
+   was not changing, and passing a placeholder for it is how an event ends up with `target` undefined. */
+void event_set_target(JSContext *ctx, JSValueConst ev, JSValueConst target)
 {
     JSValue slots = event_slots(ctx, ev);
     if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return; }
     JS_SetPropertyStr(ctx, slots, "target", JS_DupValue(ctx, target));
+    JS_FreeValue(ctx, slots);
+}
+
+void event_set_current(JSContext *ctx, JSValueConst ev, JSValueConst current)
+{
+    JSValue slots = event_slots(ctx, ev);
+    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return; }
     JS_SetPropertyStr(ctx, slots, "currentTarget", JS_DupValue(ctx, current));
     JS_FreeValue(ctx, slots);   /* the PHASE is the walk's to set — it knows which step of the path this is */
 }
@@ -205,6 +243,11 @@ static JSValue event_make_proto(JSContext *ctx, JSValueConst proto, JSValueConst
     JS_SetPropertyStr(ctx, slots, "stopPropagation", JS_FALSE);
     JS_SetPropertyStr(ctx, slots, "stopImmediate", JS_FALSE);
     JS_SetPropertyStr(ctx, slots, "dispatch", JS_FALSE);
+    /* §2.2's PATH — the empty list until a dispatch builds one, and the empty list again after step 9. It is
+       initialised here rather than left absent so composedPath's read is a slot and never a miss. */
+    JS_SetPropertyStr(ctx, slots, "path", JS_NULL);
+    /* §2.2's IN PASSIVE LISTENER FLAG, unset until "inner invoke" raises it around a passive listener. */
+    JS_SetPropertyStr(ctx, slots, "inPassive", JS_FALSE);
     /* §2.2's INITIALIZED FLAG. Every event that arrives through a constructor or through the engine's own
        firing is initialized; the ONE thing that produces an uninitialized event is §4.5's createEvent, and
        the flag is the only observable difference between what it returns and what `new Event("")` returns —
@@ -326,8 +369,10 @@ static JSValue js_event_flag(JSContext *ctx, JSValueConst this_val, int argc, JS
     if (!event_is(ctx, this_val))
         return JS_ThrowTypeError(ctx, "an Event method was called on something that is not an Event");
     if (magic == 0) {
-        /* §2.2: preventDefault does nothing unless the event is cancelable. */
-        if (event_read_flag(ctx, this_val, "cancelable"))
+        /* §2.2: "If this's cancelable attribute value is true and this's in passive listener flag is unset,
+           then set this's canceled flag." A passive listener's preventDefault does NOTHING — that is the whole
+           of the guarantee `{passive:true}` gives the user agent, and honouring `cancelable` alone gave it away. */
+        if (event_read_flag(ctx, this_val, "cancelable") && !event_read_flag(ctx, this_val, "inPassive"))
             event_write_flag(ctx, this_val, "canceled", true);
         return JS_UNDEFINED;
     }
@@ -337,21 +382,36 @@ static JSValue js_event_flag(JSContext *ctx, JSValueConst this_val, int argc, JS
     return JS_UNDEFINED;
 }
 
-/* §2.2 composedPath — the path the event travelled. This engine dispatches AT THE TARGET only (there is no
-   capture or bubble walk yet), so the path is the current target alone when one is set and empty otherwise,
-   which is exactly what the spec's algorithm produces for that path. */
+/* §2.2 composedPath — THIS'S PATH, which §2.9 built and which this file now holds. It used to answer with the
+   current target alone, because there was no walk to have a path from; there is one, and answering a walk's
+   whole path with its last entry is not a smaller answer, it is a different one.
+   The spec's algorithm is written around CLOSED SHADOW TREES: it finds the current target in the path and then
+   walks outwards in both directions, skipping entries hidden behind a closed root. This engine has no shadow
+   trees, so every entry's root-of-closed-tree and slot-in-closed-tree are false, the hidden-level counters never
+   move, and the two loops degenerate to "every entry, in path order". They are written that way here rather than
+   carried as dead arithmetic; the day a ShadowRoot exists, the levels come back with it. */
 static JSValue js_event_composed_path(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
-    JSValue arr = JS_NewArray(ctx), cur;
+    JSValue arr, path, slots;
+    uint32_t i, n = 0;
 
     (void)argc; (void)argv;
-    if (!event_is(ctx, this_val)) {
-        JS_FreeValue(ctx, arr);
+    if (!event_is(ctx, this_val))
         return JS_ThrowTypeError(ctx, "composedPath called on something that is not an Event");
+    arr = JS_NewArray(ctx);
+    slots = event_slots(ctx, this_val);
+    path = JS_GetPropertyStr(ctx, slots, "path");
+    JS_FreeValue(ctx, slots);
+    /* step 3: an event that is not being dispatched has an empty path, and composedPath answers the empty list. */
+    if (!JS_IsArray(path)) { JS_FreeValue(ctx, path); return arr; }
+    {
+        JSValue len_v = JS_GetPropertyStr(ctx, path, "length");
+        JS_ToUint32(ctx, &n, len_v);
+        JS_FreeValue(ctx, len_v);
     }
-    cur = js_event_get(ctx, this_val, 2);
-    if (JS_IsObject(cur)) JS_SetPropertyUint32(ctx, arr, 0, cur);
-    else                  JS_FreeValue(ctx, cur);
+    for (i = 0; i < n; i++)
+        JS_SetPropertyUint32(ctx, arr, i, JS_GetPropertyUint32(ctx, path, i));
+    JS_FreeValue(ctx, path);
     return arr;
 }
 

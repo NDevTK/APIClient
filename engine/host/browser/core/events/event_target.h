@@ -16,12 +16,22 @@ void event_target_init(JSContext *ctx);                          /* the private 
    with, JS_FreeRuntime's gc_obj_list assert named it. */
 void event_target_free(JSContext *ctx);
 
-/* WHO KNOWS A TARGET'S ANCESTORS. §2.9's propagation path walks up the tree, and the tree is the DOM's — so the
-   DOM registers the walk rather than this file naming it. `ancestors` answers an Array of the target's
-   ancestors, nearest first, and an empty one for a target that is in no tree. A host that registers none — a
-   headless harness with no document — dispatches at the target and nowhere else, which is the whole of what
-   §2.9 says for a target with no parent. */
-void event_target_set_tree(JSValue (*ancestors)(JSContext *ctx, JSValueConst target));
+/* WHAT THE EVENTS LAYER HAS TO ASK THE TREE. Two questions, and both are the DOM's rather than this file's, so
+   the DOM registers them rather than this file naming node.c — which is what let the streams gate build with a
+   real AbortSignal and no lexbor in it.
+   `get_parent` IS §2.9's "get the parent": a node's is its parent, a DOCUMENT's is its window unless the event
+   is `load` or it has no browsing context, and anything that is not in a tree answers NULL — which is §2.7's own
+   default and gives a path of one. It replaced an "ancestors" list, and the difference is not a shape: the list
+   could not say that a document's parent is a window while a DETACHED node's is nothing, so the walk appended
+   the realm's window above every detached node and above a document dispatching `load`.
+   `default_passive_target` is §2.7's default passive value, minus the type test this file makes: is this target
+   the window, the node document, its document element, or its body. OWNED BY THE CALLER and must outlive the
+   runtime — a static, as node.c's is. */
+typedef struct EventTargetTree {
+    JSValue (*get_parent)(JSContext *ctx, JSValueConst target, JSValueConst ev);
+    bool    (*default_passive_target)(JSContext *ctx, JSValueConst target);
+} EventTargetTree;
+void event_target_set_tree(const EventTargetTree *tree);
 /* §2.7's INTERFACE PROTOTYPE OBJECT, where addEventListener, removeEventListener and dispatchEvent live.
    An interface that INHERITS EventTarget — Node, AbortSignal, MessagePort, BroadcastChannel, Window — chains
    its own prototype to this one; it does not install the three members again. That is not a saving, it is the

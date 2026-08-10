@@ -38,7 +38,9 @@
 #include "core/streams/transform_stream.h"
 #include "core/streams/queuing_strategy.h"
 #include "core/events/event.h"
+#include "core/events/error_event.h"
 #include "core/events/message_event.h"
+#include "core/events/report_exception.h"
 #include "core/events/message_port.h"
 #include "core/events/broadcast_channel.h"
 #include "core/frame/window.h"
@@ -976,6 +978,8 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
     event_target_init(ctx);
     event_init(ctx);
     message_event_init(ctx);
+    error_event_init(ctx);
+    report_exception_init(ctx);
     /* NAME THIS DOCUMENT. A WindowProxy answers "is this navigable remote?" by comparing against the one
        document identity the world registry owns, so the registry has to be up before the first proxy exists. */
     world_registry_init(doc_name);
@@ -1070,6 +1074,7 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
        undefined receiver and registered on nothing. */
     structured_clone_install(ctx, global);   /* HTML 2.7.3, and what 9.4 and §4.9.7 clone through */
     message_event_install(ctx, global);
+    error_event_install(ctx, global);
     /* HTML §7.2.2's BROWSING-CONTEXT MEMBERS — window, self, frames, parent, top, opener, closed, origin and
        name. This runner had none of them, so `window` itself was undefined and every test in
        html/browsers/the-window-object failed on its first line. */
@@ -1656,6 +1661,8 @@ int main(int argc, char **argv)
     window_proxy_free(ctx);
     world_registry_free(ctx);
     message_event_free(ctx);
+    error_event_free(ctx);
+    report_exception_free(ctx);
     event_free(ctx);
     event_target_free(ctx);
     realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */

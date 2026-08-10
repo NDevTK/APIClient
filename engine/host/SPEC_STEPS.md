@@ -2488,3 +2488,228 @@ attribute` step 1, `set an existing attribute value` step 3), and (c) the `[CERe
 5. Everything else in group 9 is one straight-line stage between its prologue and its
    `[CEReactions]` epilogue — including all of `handle attribute changes`, which is the algorithm
    an implementer is most likely to wrongly split.
+
+## 11. DOM §2.7 / §2.8 / §2.9 — the event listener list, the event path, and dispatch
+
+**Why this section exists.** `dispatchEvent` is the only DOM member whose RETURN VALUE depends on
+what the page's own code did, and its algorithm runs page code at up to three different depths in
+one call — a `handleEvent` property read, the listener itself, and the activation behaviour. It is
+therefore the algorithm in which "where can this machine rest" is the whole design, and the one this
+engine got structurally wrong: the walk was written as THREE legs (capture over the ancestors,
+AT_TARGET over the target with both kinds of listener in registration order, bubble over the
+ancestors) and the standard's walk is TWO passes over the whole path. The two shapes agree on every
+example an implementer invents and disagree on the one the corpus asks for directly.
+
+**Network was available.** Everything below was read from the live standard on **2026-08-10**:
+
+| Standard | Source | Version read |
+| --- | --- | --- |
+| WHATWG DOM | `https://dom.spec.whatwg.org/` | Living Standard, §2.7, §2.8, §2.9 |
+| Web IDL (call a user object's operation) | `https://webidl.spec.whatwg.org/` | Living Standard, §3.12 |
+
+Step numbers are the standard's own list numbering as of that date.
+
+### 11.0 Four things the live text says that a reasonable person would remember differently
+
+1. **At the target, a CAPTURING listener runs before a bubbling one however they were registered.**
+   There is no "AT_TARGET phase" in the walk. There are two loops — step 6.13 over the path in
+   REVERSE with phase `"capturing"`, step 6.14 over the path in order with phase `"bubbling"` — and
+   the target is simply the path item that both loops set `eventPhase` to `AT_TARGET` for. Inner
+   invoke's steps 2.3/2.4 then filter by `capture` in BOTH loops. So
+   `el.addEventListener("click", a, false); el.addEventListener("click", b, true)` fires `b` then
+   `a`, which is exactly what `dom/events/Event-dispatch-order-at-target.html` asserts.
+2. **A non-bubbling event still reaches the target in the BUBBLING loop.** Step 6.14.2.1's
+   `continue` for `bubbles === false` is inside the OTHERWISE branch — the branch for a path item
+   whose shadow-adjusted target is null. The target's item never reaches it.
+3. **Dispatch UNSETS the stop propagation and stop immediate propagation flags at the end**
+   (step 10), together with the dispatch flag. Leaving them set is invisible until the same event
+   object is dispatched a second time, at which point it propagates nowhere.
+4. **Removal has an effect on a dispatch already in flight, and addition does not.** The walk clones
+   the listener list (invoke step 8) so an added listener does not run; a REMOVED one is skipped by
+   inner invoke step 2's "whose removed is false". A clone with no `removed` field gets the second
+   half backwards and re-runs a listener the page has just removed.
+
+### 11.1 §2.7 "add an event listener", given eventTarget and listener
+
+1. ServiceWorkerGlobalScope console warning. — *not applicable*
+2. If listener's **signal** is non-null and is **aborted**, then return. —
+3. If listener's **callback** is null, then return. —
+4. If listener's **passive** is null, then set it to the **default passive value** given listener's
+   type and eventTarget. —
+5. If eventTarget's event listener list does not contain an event listener whose **type**,
+   **callback** and **capture** are the listener's, then append listener. —
+6. If listener's signal is non-null, then add abort steps to it: **remove an event listener** with
+   eventTarget and listener. —
+
+No step here is `[S]`. Every one of them is straight-line C over values the Web IDL conversion has
+already produced. The **suspension points of `addEventListener` are all in the conversion**: `type`
+is a DOMString (ToString `[S]`), and the third argument is `(AddEventListenerOptions or boolean)`,
+whose dictionary conversion is four `[[Get]]`s (`capture`, `once`, `passive`, `signal`), each `[S]`.
+
+**`flatten more options`** is what makes `passive` a TRISTATE rather than a boolean:
+
+1. Let capture be the result of **flattening** options (a boolean IS `capture`).
+2. Let once be false.
+3. Let **passive and signal be null**.
+4. If options is a dictionary: set once; **if options["passive"] EXISTS**, set passive; **if
+   options["signal"] EXISTS**, set signal.
+
+So an ABSENT `passive` is null and step 4 of "add an event listener" fills it from the default
+passive value; a written `{passive: false}` is false and stays false. A declaration that types the
+member as an IDL boolean with a `= false` default destroys that distinction before the algorithm
+starts, because ToBoolean(undefined) is false and "absent" is then unrepresentable.
+
+**`default passive value`, given type and eventTarget** — true iff BOTH:
+
+- type is one of `"touchstart"`, `"touchmove"`, `"wheel"`, `"mousewheel"`; **and**
+- eventTarget is a `Window`, **or** is a node whose node document is eventTarget, **or** whose node
+  document's document element is eventTarget, **or** whose node document's body element is
+  eventTarget.
+
+### 11.2 §2.7 "remove an event listener"
+
+1. ServiceWorkerGlobalScope console warning. — *not applicable*
+2. **Set listener's removed to true** and remove listener from eventTarget's event listener list. —
+
+Both halves, in that order, are one operation. The first is what a dispatch holding a snapshot of
+this list observes; dropping it from the live list alone is invisible to the walk in flight.
+
+### 11.3 §2.9 `dispatch`, given event and target
+
+1. Set event's **dispatch flag**. —
+2. Let targetOverride be target (or target's associated Document under the legacy target override
+   flag, which only HTML uses and only for a Window). —
+3. Let activationTarget be null. —
+4. Let relatedTarget be the result of **retargeting** event's relatedTarget against target. —
+   *(identity with no shadow trees)*
+5. Let clearTargets be false. —
+6. If target is not relatedTarget or target is event's relatedTarget:
+   1. Let touchTargets be a new list. —
+   2. Retarget each of event's touch targets into it. —
+   3. **Append to an event path** with event, target, targetOverride, relatedTarget, touchTargets,
+      false. —
+   4. Let **isActivationEvent** be true if event is a `MouseEvent` and its type is `"click"`. —
+   5. If isActivationEvent and **target** has activation behavior, set activationTarget to target. —
+      *(no `bubbles` condition — this is the difference from 6.8.7)*
+   6. Let slottable be target if it is assigned, otherwise null. —
+   7. Let slotInClosedTree be false. —
+   8. Let parent be the result of invoking target's **get the parent** with event. — **[S]** *(the
+      DOM's own get the parent is straight-line; a host that defines it otherwise makes this one)*
+   9. **While parent is non-null:** append it to the path, retarget relatedTarget and the touch
+      targets against it, and set parent to the result of invoking ITS get the parent. Inside it,
+      **6.8.7**: if isActivationEvent, **event's bubbles is true**, activationTarget is null and
+      parent has activation behavior, set activationTarget to parent. — **walk of page size**
+   10. Let clearTargetsItem be the last path item with a non-null shadow-adjusted target. —
+   11. Set clearTargets if that item's target/relatedTarget/touch target is in a shadow tree. —
+   12. Run activationTarget's **legacy-pre-activation behavior**, if it has one. —
+   13. **For each item of event's path, IN REVERSE ORDER:** set eventPhase to `AT_TARGET` if the
+       item's shadow-adjusted target is non-null and `CAPTURING_PHASE` otherwise, then **invoke**
+       with phase `"capturing"`. — **[S] per listener**
+   14. **For each item of event's path:** if the item's shadow-adjusted target is non-null set
+       eventPhase to `AT_TARGET`; **otherwise**, if event's bubbles is false **continue**, else set
+       eventPhase to `BUBBLING_PHASE`. Then **invoke** with phase `"bubbling"`. — **[S] per listener**
+7. Set event's eventPhase to `NONE`. —
+8. Set event's currentTarget to null. —
+9. Set event's **path to the empty list**. —
+10. **Unset event's dispatch flag, stop propagation flag, and stop immediate propagation flag.** —
+11. If clearTargets, set target, relatedTarget and the touch target list to null/empty. —
+12. If activationTarget is non-null: **1.** if event's canceled flag is unset, run activationTarget's
+    **activation behavior** with event; **2.** otherwise run its legacy-canceled-activation
+    behavior. — **[S]** *(§4.6.3's is a navigation, and a navigation fetches)*
+13. Return false if event's canceled flag is set; otherwise true. —
+
+**Which of `event`'s state is the EVENT's and not the dispatch's.** Steps 9 and 10 are the tell:
+`path` is a field of the event, because `composedPath()` reads *this's path* and a dispatch that
+kept the path privately can only answer with the one target it is standing on. `eventPhase`,
+`currentTarget`, `target` and the three flags are the event's for the same reason.
+
+### 11.4 §2.9 `invoke`, given a path item, event and phase
+
+1. Let targetItem be pathItem; **while** its shadow-adjusted target is null, step back. —
+2. Set event's **target** to targetItem's shadow-adjusted target. —
+3. Set event's relatedTarget and touch target list from pathItem. —
+4. **If event's stop propagation flag is set, return.** — *(tested per PATH ITEM, not per listener)*
+5. Initialize event's **currentTarget** to pathItem's invocation target. —
+6. Let listeners be a **clone** of currentTarget's event listener list. —
+7. **inner invoke** with event, listeners, phase, invocationTargetInShadowTree. —
+
+With no shadow trees every item's shadow-adjusted target is the target, so step 2 is one write for
+the whole walk and step 1's backward scan is empty.
+
+### 11.5 §2.9 `inner invoke`, given event, listeners and phase
+
+1. Let found be false. —
+2. For each listener **whose removed is false**:
+   1. If event's type is not listener's type, continue. —
+   2. Set found to true. —
+   3. If phase is `"capturing"` and listener's capture is false, continue. —
+   4. If phase is `"bubbling"` and listener's capture is true, continue. —
+   5. If listener's **once** is true, **remove an event listener** given event's currentTarget and
+      listener. — *(BEFORE the call, so a re-entrant dispatch cannot see it)*
+   6. Let global be the listener callback's associated realm's global object. —
+   7-8. Save the global's **current event** and set it to event. —
+   9. If listener's **passive** is true, set event's **in passive listener flag**. —
+   10. Record timing info. — *(no scriptable result headless)*
+   11. **Call a user object's operation** with listener's callback, `"handleEvent"`, « event », and
+       event's currentTarget. **If this throws, REPORT the exception** and continue. — **[S]**
+   12. Unset the in passive listener flag. —
+   13. Restore the global's current event. —
+3. Return found. —
+
+**Step 11 is TWO suspension points, not one** — Web IDL §3.12 "call a user object's operation":
+
+- 9. Let X be O.
+- 10. **If IsCallable(O) is false:**
+  - 1. Let getResult be **Get(O, opName)**. — **[S]** *(an accessor or a Proxy trap)*
+  - 2. Abrupt → return it.
+  - 3. Set X to getResult.[[Value]].
+  - 4. If IsCallable(X) is false, **throw a TypeError** (in O's realm).
+  - 5. **Set thisArg to O**, overriding the provided value.
+- 11-12. Call X with thisArg and the argument list. — **[S]**
+
+So `el.addEventListener("x", {handleEvent(e){…}})` is an ordinary registration whose method is read
+**per invocation**, and the receiver of that call is the OBJECT, not `currentTarget`. A component
+that requires a callable listener at registration time drops the registration silently; one that
+requires it at invocation time drops the call silently. Both are wrong in the same place: the
+callback type is a callback INTERFACE (§2.8 `callback interface EventListener`), not a function.
+
+**And step 2.11's "report" is a THIRD suspension point.** HTML §8.1.4.6 "report an exception":
+
+1. Let notHandled be true.
+2. Let errorInfo be the result of **extracting error information** from exception — `error` is the
+   exception; `message`, `filename`, `lineno` and `colno` are *implementation-defined values derived
+   from exception*, which is the standard's own wording and is why a headless engine with no script
+   position is conforming here rather than stubbed.
+3-4. The **muted errors** branch, for a classic script fetched cross-origin without CORS. —
+5. If global is **not in error reporting mode**: set the flag; fire an event named `error` at global,
+   using **ErrorEvent**, **cancelable**, with errorInfo's attributes, and set notHandled to the
+   result; unset the flag. — **[S]**
+6-7. The worker propagation, then the developer console. —
+
+The in-error-reporting-mode flag is what stops a throwing `onerror` reporting itself forever, and it
+is **per global**, which is why it lives on the global object and not in the reporting component.
+
+### 11.6 Suspension points per entry point
+
+| Entry point | Suspension points | The one that surprises |
+| --- | --- | --- |
+| `addEventListener(type, cb, options)` | 5 | four of them are the OPTIONS dictionary's `[[Get]]`s; the algorithm itself has none |
+| `removeEventListener(type, cb, options)` | 2 | `type`'s ToString runs even when the callback is null |
+| `dispatchEvent(event)` | 2 + 3 per listener + 1 | the second per-listener one is the `handleEvent` READ; the third is the `error` event REPORTING what the listener threw, and the walk continues after it |
+| the engine's own fire (`load`, `DOMContentLoaded`, `abort`) | the same | it is the SAME machine; only the reach differs |
+
+### 11.7 Stage-boundary consequences for a step machine
+
+1. **The path walk (step 6.9) is its own stage.** It is a walk of the page's tree, so it must be
+   able to yield between parents; and it must not restart at step 1 when it resumes.
+2. **The capturing pass and the bubbling pass are two stages, not one stage with a leg counter.**
+   The counter shape cannot express "the target item is invoked in BOTH passes with `AT_TARGET`",
+   which is the only way §2.9 orders at-target listeners.
+3. **The `handleEvent` read needs its own resume marker, distinct from the call's — and the REPORT
+   needs a third.** One listener suspends at up to three different steps (its operation lookup, its
+   own body, and the `error` event fired for what that body threw), and a machine with one marker
+   resumes one of them into another.
+4. **`once` removal happens before the call**, so a resume must NOT re-read the record it came from:
+   that record is now `removed` and the walk would skip the very listener whose answer is arriving.
+5. **The activation behaviour is a stage after the cleanup**, not before it — a behaviour that reads
+   `currentTarget` must see null.

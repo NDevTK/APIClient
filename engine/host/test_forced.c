@@ -31,7 +31,9 @@
 #include "core/idl_args.h"
 #include "core/dom/document.h"
 #include "core/events/event.h"
+#include "core/events/error_event.h"
 #include "core/events/message_event.h"
+#include "core/events/report_exception.h"
 #include "core/events/message_port.h"
 #include "core/frame/policy_container.h"
 #include "core/events/event_target.h"
@@ -1740,6 +1742,8 @@ static void tf_agent_init(JSContext *ctx)
     window_proxy_init(ctx, "https://x.test");
     remote_object_init(ctx);   /* §7.2.5.1's object half */
     event_init(ctx);
+    error_event_init(ctx);
+    report_exception_init(ctx);
     /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
     unhandled_rejection_init(ctx);
     /* HTML §8.1.7.3's IN-PARALLEL HALF — the rendering task source and "update the rendering". */
@@ -2410,6 +2414,8 @@ int main(int argc, char **argv) {
     realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */
     message_port_free(ctx);
     message_event_free(ctx);
+    error_event_free(ctx);
+    report_exception_free(ctx);
     event_free(ctx);
     headers_free(ctx);    /* Headers.prototype and the name it interned */
     url_free(ctx);

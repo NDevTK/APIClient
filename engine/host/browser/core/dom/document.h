@@ -63,6 +63,14 @@ const char *document_base_url(JSContext *ctx);
 /* §4.2.3's STEPS RUN IN THE NODE'S DOCUMENT'S REALM — see document.c. `document_realm_of` answers NULL for a
    document no record was ever built for (a solver scratch parse), which is a caller's business to assert. */
 JSContext *document_realm_of(const lxb_dom_node_t *n);
+/* HTML's "the document's relevant global object" — what DOM §2.9's get the parent puts above a Document in the
+   event path, and JS_NULL for a document with no browsing context. BORROWED: a realm owns its global. It is a
+   fact about THAT DOCUMENT and not about whoever is running, which a caller reading the realm's global instead
+   gets wrong exactly when two same-origin documents are one agent. */
+JSValueConst document_window_of(const lxb_dom_node_t *n);
+/* DOM §2.7's DEFAULT PASSIVE VALUE, the three parts of its target test that are §3.1.1/§4.5 lookups: is this
+   node the document, its document element, or its body. */
+bool document_is_passive_default_node(const lxb_dom_node_t *n);
 
 /* A SECOND DOCUMENT IN THIS REALM — what DOM §4.5.1's createDocument and createHTMLDocument return, and what
    HTML's `new Document()` builds. It has NO BROWSING CONTEXT: no navigable, no Window, no WindowProxy, and no

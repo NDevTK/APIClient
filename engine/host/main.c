@@ -47,7 +47,9 @@
 #include "browser/core/dom/element.h"
 #include "browser/core/idl_args.h"
 #include "browser/core/events/event.h"
+#include "browser/core/events/error_event.h"
 #include "browser/core/events/message_event.h"
+#include "browser/core/events/report_exception.h"
 #include "browser/core/events/message_port.h"
 #include "browser/core/structured_clone.h"
 #include "browser/core/events/event_target.h"
@@ -124,6 +126,8 @@ static void engine_agent_init(JSContext *ctx, const char *origin)
     window_init(ctx);
     event_init(ctx);
     message_event_init(ctx);
+    error_event_init(ctx);
+    report_exception_init(ctx);
     message_port_init(ctx);
     /* §7.2.5.1 and §7.4. `window.open` returns a WindowProxy, and so does §4.8.5's contentWindow. The proxy
        class has to exist before any proxy is minted. */
@@ -192,6 +196,7 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
     timer_install(ctx, g);            /* setTimeout/setInterval/clearTimeout/clearInterval/queueMicrotask */
     event_install(ctx, g);            /* the Event interface object */
     message_event_install(ctx, g);    /* HTML 9.4.1: the event every messaging path dispatches */
+    error_event_install(ctx, g);      /* HTML §8.1.4.6's report-an-exception fires one of these */
     message_port_install(ctx, g);     /* HTML 9.4.2/9.4.3 */
     window_message_install(ctx, g, origin);   /* HTML 9.4.4: window.postMessage, and §9.4.4's delivery task */
     broadcast_channel_install(ctx, g);        /* HTML 9.5: the named same-origin bus */
@@ -429,6 +434,8 @@ QJS_EXPORT void qjs_teardown(void)
     broadcast_channel_free(g_ctx);
     message_port_free(g_ctx);
     message_event_free(g_ctx);
+    error_event_free(g_ctx);
+    report_exception_free(g_ctx);
     event_free(g_ctx);
     headers_free(g_ctx);    /* Headers.prototype and the name it interned */
     url_free(g_ctx);

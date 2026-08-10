@@ -47,11 +47,13 @@
 #include "solver/attr_shadow.h"
 #include "core/dom/node.h"
 #include "core/dom/collections.h"
+#include "core/dom/range.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
 #include "solver/engine.h"
+#include "core/events/event.h"
 #include "core/events/event_target.h"
 
 static const IdlArgType IDL_1NSTR[1] = { IDL_DOMSTRING_NULLABLE };
@@ -216,27 +218,64 @@ void node_set_element_resolver(JSValue (*fn)(JSContext *ctx, lxb_dom_element_t *
    entered the tree by insertBefore, by replaceChild, or by an innerHTML parse was never prepared and never
    upgraded. Eleven sites mutate the tree; one remembered. The chokepoint is the one place that cannot be
    forgotten, which is the same argument that put capture there. */
-/* §2.9's propagation path, answered for the events layer: a node's ancestors, nearest first. Registered rather
-   than called across, because the tree is what knows this and a target with no tree — an AbortSignal — has an
-   empty one. */
-static JSValue node_ancestors(JSContext *ctx, JSValueConst target)
+/* §2.9's GET THE PARENT, answered for the events layer one step at a time — DOM §4.4: "A node's get the parent
+   algorithm, given an event, returns the node's assigned slot, if node is assigned; otherwise node's parent",
+   and HTML overrides it for a DOCUMENT: "returns null if event's type attribute value is `load` or document
+   does not have a browsing context; otherwise the document's relevant global object."
+ *
+ * IT REPLACED AN "ANCESTORS" LIST, and the list could not express either override. Its caller appended the
+ * running realm's window above whatever it returned, so a DETACHED div's bubbling event propagated to the
+ * window, and a document's `load` propagated there too — the one type the spec stops. It could not express the
+ * relevant-global half either: the window above a document is THAT DOCUMENT'S, and a list of nodes has nowhere
+ * to say so, which is why the append read the realm that happened to be running.
+ * NULL for anything that is not a node — an AbortSignal, a Request, a MessagePort — which is §2.7's own default
+ * and gives a path of one, and which the list had to spell as "undefined, not an empty array". */
+static JSValue node_get_parent(JSContext *ctx, JSValueConst target, JSValueConst ev)
 {
     lxb_dom_node_t *n = node_of(target);
-    JSValue arr;
-    uint32_t k = 0;
 
-    /* NOT A NODE AT ALL — an AbortSignal, a Request, anything that is an EventTarget without being in a tree.
-       UNDEFINED rather than an empty array, because the two answers are DIFFERENT questions and §7.6 turns on
-       the first: a DOCUMENT is in the tree and has NO ancestors, so "the array came back empty" cannot mean
-       "not in a tree". Conflating them cost the window its DOMContentLoaded — the one event whose whole point
-       is that it is fired at the document and heard on the window. */
     if (!n)
-        return JS_UNDEFINED;
-    arr = JS_NewArray(ctx);
-    for (n = n->parent; n; n = n->parent)
-        JS_SetPropertyUint32(ctx, arr, k++, node_wrap(ctx, n));
-    return arr;
+        return JS_NULL;
+    if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT) {
+        JSValue type = event_type(ctx, ev);
+        JSValueConst win;
+        const char *t = JS_IsString(type) ? JS_ToCString(ctx, type) : NULL;
+        bool is_load = t != NULL && !strcmp(t, "load");
+
+        if (t) JS_FreeCString(ctx, t);
+        JS_FreeValue(ctx, type);
+        if (is_load)
+            return JS_NULL;
+        /* "the document's relevant global object" — THIS document's realm, not the running one. A same-origin
+           parent dispatching into a child's document is one agent and one flow, so the realm that is executing
+           is routinely not the one the event is travelling through. */
+        win = document_window_of(n);   /* BORROWED there; get the parent answers OWNED, like node_wrap */
+        DCHECK(JS_IsNull(win) || JS_IsObject(win),
+               "a document answered its get the parent with something that is not a Window and is not null");
+        return JS_DupValue(ctx, win);
+    }
+    return node_wrap(ctx, n->parent);
 }
+
+/* §2.7's DEFAULT PASSIVE VALUE, the half that is a tree question: is this target the Window, the node document
+   itself, its document element, or its body. The event-TYPE half is the events layer's, which is why this
+   answers only about the target. */
+static bool node_default_passive_target(JSContext *ctx, JSValueConst target)
+{
+    lxb_dom_node_t *n = node_of(target);
+
+    if (!n) {
+        /* not a node — the only other target the spec's list names is a WINDOW, and a realm's global is the
+           one object that is one. */
+        JSValue g = JS_GetGlobalObject(ctx);
+        bool same = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(target);
+        JS_FreeValue(ctx, g);
+        return same;
+    }
+    return document_is_passive_default_node(n);
+}
+
+static const EventTargetTree NODE_EVENT_TREE = { node_get_parent, node_default_passive_target };
 
 /* §4.2.3's INSERTION AND REMOVING STEPS ARE A LIST, not a slot. The standard's own `remove` runs several
    independent things in order — the live-range pre-remove steps, then §6.1's NodeIterator pre-remove steps,
@@ -2097,7 +2136,7 @@ void node_init(JSContext *ctx)
     if (g_protos_ready)
         return;    /* element.c asks for the base before declaring Element on top of it */
     /* §2.9's dispatch walks the tree, and this is the file that has one. */
-    event_target_set_tree(node_ancestors);
+    event_target_set_tree(&NODE_EVENT_TREE);
     engine_set_wrap_stats(node_wrap_stats);
 
     JS_NewClassID(JS_GetRuntime(ctx), &g_node_class);

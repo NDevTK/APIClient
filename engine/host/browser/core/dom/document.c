@@ -934,17 +934,55 @@ static lxb_dom_node_t *doc_child_named(lxb_dom_node_t *parent, const char *a, co
     return NULL;
 }
 
+/* §4.5 "document element": the ELEMENT child of the document. There is at most one, and NULL is a real answer —
+   a document §4.5's createDocument built with no qualified name has none. */
+static lxb_dom_node_t *doc_element_of(const lxb_dom_node_t *doc)
+{
+    lxb_dom_node_t *n;
+
+    if (!doc || doc->type != LXB_DOM_NODE_TYPE_DOCUMENT)
+        return NULL;
+    for (n = doc->first_child; n; n = n->next)
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT)
+            return n;
+    return NULL;
+}
+
+/* DOM §2.7's DEFAULT PASSIVE VALUE names four targets, and three of them are this file's definitions: the node
+   DOCUMENT itself, its document element, and its body. The fourth is the Window, which is not a node and is
+   answered where the registration is. It lives here so the two §3.1.1 lookups have one implementation. */
+bool document_is_passive_default_node(const lxb_dom_node_t *n)
+{
+    lxb_dom_node_t *doc;
+
+    if (!n)
+        return false;
+    if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT)
+        return true;
+    doc = n->owner_document ? lxb_dom_interface_node(n->owner_document) : NULL;
+    return n == doc_element_of(doc) || n == doc_child_named(doc_element_of(doc), "body", "frameset");
+}
+
+/* HTML's "the document's relevant global object", which §2.9's get the parent puts above a Document in the
+   event path. BORROWED, and JS_NULL for a document with no browsing context — one `createHTMLDocument` built,
+   whose events therefore stop at the document exactly as the spec says. */
+JSValueConst document_window_of(const lxb_dom_node_t *n)
+{
+    Document *d = n ? doc_rec(n->owner_document) : NULL;
+
+    if (!d || !JS_IsObject(d->win_obj))
+        return JS_NULL;
+    return d->win_obj;
+}
+
 static JSValue js_doc_tree(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    lxb_dom_node_t *doc = node_of(this_val), *root = NULL, *n;
+    lxb_dom_node_t *doc = node_of(this_val), *root, *n;
 
     /* WEB IDL §3.7.5's brand check — a TypeError, not an assert; see doc_receiver. */
     if (!doc || doc->type != LXB_DOM_NODE_TYPE_DOCUMENT)
         return JS_ThrowTypeError(ctx, "this is not a Document");
-    /* §4.5 "document element": the ELEMENT child of the document. There is at most one, and NULL is a real
-       answer — a document §4.5's createDocument built with no qualified name has none. */
-    for (n = doc->first_child; n; n = n->next)
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) { root = n; break; }
+    root = doc_element_of(doc);
     switch (magic) {
     case 0:
         return node_wrap(ctx, root);

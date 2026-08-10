@@ -24,7 +24,9 @@
 #include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "core/dom/abort.h"
 #include "core/events/event.h"
+#include "core/events/report_exception.h"
 
 /* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
 static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
@@ -38,12 +40,15 @@ static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
    ran-twice assert on the FIRST call. A JSValue's emptiness is not the allocator's default. */
 static JSValue g_key;
 static int g_ready;
-/* §2.9's PROPAGATION PATH IS THE TREE'S QUESTION, not this component's. A target's ancestors are the DOM's,
-   and an EventTarget that is not a Node — an AbortSignal, which Streams §5.4 gives every writable controller —
-   has none. Naming node.c here made EVERY host that installs events link the whole DOM and lexbor with it,
-   which is why the streams gate could not build with a real AbortSignal in it. The tree registers the walk; a
-   host that registers none has a flat path, which is exactly right for one with no document. */
-static JSValue (*g_ancestors)(JSContext *ctx, JSValueConst target);
+/* §2.9's PROPAGATION PATH IS THE TREE'S QUESTION, not this component's. Naming node.c here made EVERY host that
+   installs events link the whole DOM and lexbor with it, which is why the streams gate could not build with a
+   real AbortSignal in it. The tree registers the walk; a host that registers none has a path of one, which is
+   exactly §2.7's own get the parent and exactly right for a host with no document. */
+static JSValue (*g_get_parent)(JSContext *ctx, JSValueConst target, JSValueConst ev);
+/* §2.7's DEFAULT PASSIVE VALUE also asks the tree: it is true only for four event types AND only when the
+   target is the window, the node document, its document element or its body. The type half is this file's; the
+   target half is the DOM's, for the reason the walk is. */
+static bool (*g_default_passive_target)(JSContext *ctx, JSValueConst target);
 /* DOM §2.9's ACTIVATION BEHAVIOUR, declared by whoever owns the element — see event_target.h. */
 static bool (*g_has_activation)(JSContext *ctx, JSValueConst el);
 static int (*g_run_activation)(JSContext *ctx, JSValueConst el, JSValueConst ev,
@@ -96,7 +101,16 @@ void event_target_init(JSContext *ctx)
            `capture` in it, and reading a member the IDL does not declare there simply never happens. */
         static const IdlArgType ADD_ARGS[3] = { IDL_DOMSTRING, IDL_ANY, IDL_DICT_OR_BOOL_FIRST };
         static const IdlDictMember ADD_OPTS[] = {   /* `capture` FIRST: it is what the bare boolean means */
-            { "capture", IDL_BOOLEAN }, { "once", IDL_BOOLEAN }, { "passive", IDL_BOOLEAN },
+            { "capture", IDL_BOOLEAN }, { "once", IDL_BOOLEAN },
+            /* `passive` is IDL_ANY and NOT IDL_BOOLEAN, and that is the declaration doing its job: a boolean
+               member with a `= false` default converts an ABSENT one to false, and §2.7's flatten more options
+               needs to know whether the page WROTE it — an absent `passive` is null and is then filled from the
+               default passive value, which for a wheel listener on the window is TRUE. The body does the
+               ToBoolean, which runs none of the page's code. */
+            { "passive", IDL_ANY },
+            /* `AbortSignal signal` — IDL_ANY because §3.2's brand is a private slot record and not the class
+               opaque IDL_INTERFACE tests; the body performs the interface check, and says so. */
+            { "signal", IDL_ANY },
         };
         static const IdlDictMember REMOVE_OPTS[] = { { "capture", IDL_BOOLEAN } };
         g_add_stepid    = idl_method_id_dict(ctx, ADD_ARGS, 3, ADD_OPTS,
@@ -189,9 +203,13 @@ void event_target_install_interface(JSContext *ctx, JSValueConst global)
     JS_SetPropertyStr(ctx, (JSValue)global, "EventTarget", ctor);
 }
 
-void event_target_set_tree(JSValue (*ancestors)(JSContext *ctx, JSValueConst target))
+void event_target_set_tree(const EventTargetTree *tree)
 {
-    g_ancestors = ancestors;
+    DCHECK(tree != NULL && tree->get_parent != NULL && tree->default_passive_target != NULL,
+           "half a tree was registered with the events layer — §2.9's walk and §2.7's default passive value are "
+           "both tree questions, and one answered without the other is a component that silently never runs");
+    g_get_parent = tree->get_parent;
+    g_default_passive_target = tree->default_passive_target;
 }
 
 void event_target_set_activation(bool (*has)(JSContext *ctx, JSValueConst el),
@@ -279,7 +297,7 @@ static JSValue listener_map(JSContext *ctx, JSValueConst target, int create)
    (type, callback, capture), so the same function registered once capturing and once bubbling is TWO
    listeners and used to be silently one. The record is an engine-built null-prototyped object, so reading it
    back from C runs none of the page's code. */
-static JSValue listener_record(JSContext *ctx, JSValueConst cb, bool capture, bool once)
+static JSValue listener_record(JSContext *ctx, JSValueConst cb, bool capture, bool once, bool passive)
 {
     JSValue rec = JS_NewObjectProto(ctx, JS_NULL);
     CHECK(!JS_IsException(rec), "event listeners: OOM recording a registration — a dropped listener is page "
@@ -287,7 +305,20 @@ static JSValue listener_record(JSContext *ctx, JSValueConst cb, bool capture, bo
     JS_SetPropertyStr(ctx, rec, "cb", JS_DupValue(ctx, cb));
     JS_SetPropertyStr(ctx, rec, "capture", JS_NewBool(ctx, capture));
     JS_SetPropertyStr(ctx, rec, "once", JS_NewBool(ctx, once));
+    JS_SetPropertyStr(ctx, rec, "passive", JS_NewBool(ctx, passive));
+    /* §2.7's REMOVED FIELD, and it is the fifth field for a reason the spec states in a note: dispatch walks a
+       CLONE of the list so that a listener added mid-walk does not run, "note that removal still has an effect
+       due to the removed field". Without it, removing a listener from inside a dispatch removed it from the live
+       list and the snapshot ran it anyway — the one thing the clone must NOT preserve. */
+    JS_SetPropertyStr(ctx, rec, "removed", JS_FALSE);
     return rec;
+}
+
+/* §2.7 "remove an event listener" step 2: SET REMOVED, then drop it. The two halves are one operation, and the
+   first is what a dispatch already holding a snapshot of this list observes. */
+static void listener_mark_removed(JSContext *ctx, JSValueConst rec)
+{
+    JS_SetPropertyStr(ctx, (JSValue)rec, "removed", JS_TRUE);
 }
 
 static bool rec_flag(JSContext *ctx, JSValueConst rec, const char *name)
@@ -338,14 +369,74 @@ static uint32_t arr_len(JSContext *ctx, JSValueConst arr)
     return n;
 }
 
-/* The listener-list work, once `type` is a real string. Split from the coercion so the part that CAN reach the
-   page's code is a request and the part that cannot is ordinary C. */
-static JSValue add_listener_with_type(JSContext *ctx, JSValueConst this_val, JSValueConst cb, const char *type,
-                                      bool capture, bool once)
+static JSValue remove_listener_with_type(JSContext *ctx, JSValueConst this_val, JSValueConst cb, const char *type,
+                                         bool capture);
+
+/* §2.7 step 6's ABORT ALGORITHM, as a closure over exactly the four things "remove an event listener" needs.
+   It is an ALGORITHM and not an `abort` listener: §3.2 runs the algorithms BEFORE it fires `abort`, so a
+   listener registered with a signal is already gone by the time the page's own `abort` handler runs — and an
+   algorithm is invisible to the page, which cannot remove it or see it in a listener list.
+   The captures are the REGISTRATION's identity, which is (target, type, callback, capture) and nothing else:
+   holding the RECORD instead would keep a listener the page has since removed and re-added alive as a second
+   entry to delete. */
+static JSValue js_listener_signal_abort(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                        int magic, JSValue *func_data)
 {
-    JSValue arr = listener_list(ctx, this_val, type, 1);
+    const char *type = JS_ToCString(ctx, func_data[1]);   /* a real string: the registration converted it */
+
+    (void)this_val; (void)argc; (void)argv; (void)magic;
+    if (type) {
+        remove_listener_with_type(ctx, func_data[0], func_data[2], type, JS_ToBool(ctx, func_data[3]));
+        JS_FreeCString(ctx, type);
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue listener_signal_algorithm(JSContext *ctx, JSValueConst target, const char *type,
+                                         JSValueConst cb, bool capture)
+{
+    JSValueConst data[4];
+    JSValue t = JS_NewString(ctx, type), fn;
+
+    data[0] = target; data[1] = t; data[2] = cb; data[3] = JS_NewBool(ctx, capture);
+    fn = JS_NewCFunctionData(ctx, js_listener_signal_abort, 0, 0, 4, data);
+    JS_FreeValue(ctx, t);
+    CHECK(!JS_IsException(fn), "the abort algorithm for a signal-scoped listener could not be allocated — a "
+                               "dropped one is a listener that outlives the signal that owns it");
+    return fn;
+}
+
+/* §2.7's DEFAULT PASSIVE VALUE, given an event type and an EventTarget. The four types are this file's list —
+   they are named in the spec, not derived — and the target test is the tree's. Both halves must hold. */
+static bool default_passive_value(JSContext *ctx, const char *type, JSValueConst target)
+{
+    static const char *const PASSIVE_BY_DEFAULT[] = { "touchstart", "touchmove", "wheel", "mousewheel", NULL };
+    int i;
+
+    for (i = 0; PASSIVE_BY_DEFAULT[i]; i++)
+        if (!strcmp(type, PASSIVE_BY_DEFAULT[i]))
+            return g_default_passive_target != NULL && g_default_passive_target(ctx, target);
+    return false;
+}
+
+/* The listener-list work, once `type` is a real string. Split from the coercion so the part that CAN reach the
+   page's code is a request and the part that cannot is ordinary C.
+   `passive` is a TRISTATE, because §2.7's flatten more options makes it one: -1 means the page did not say, and
+   step 4 of "add an event listener" then fills it from the default passive value. Collapsing it to false at the
+   dictionary read would make `{passive:false}` and `{}` the same registration, which for a wheel listener on
+   the window is exactly the difference the flag exists to express. */
+static JSValue add_listener_with_type(JSContext *ctx, JSValueConst this_val, JSValueConst cb, const char *type,
+                                      bool capture, bool once, int passive, JSValueConst signal)
+{
+    JSValue arr;
     uint32_t len, i;
 
+    /* §2.7 step 2: a listener registered with an ALREADY-ABORTED signal is not registered at all. */
+    if (abort_signal_is(ctx, signal) && abort_signal_aborted(ctx, signal))
+        return JS_UNDEFINED;
+    if (passive < 0)
+        passive = default_passive_value(ctx, type, this_val);
+    arr = listener_list(ctx, this_val, type, 1);
     if (!JS_IsArray(arr)) { JS_FreeValue(ctx, arr); return JS_UNDEFINED; }
     len = arr_len(ctx, arr);
     /* "If the event listener list already contains a listener whose type, callback and capture are the same,
@@ -356,8 +447,17 @@ static JSValue add_listener_with_type(JSContext *ctx, JSValueConst this_val, JSV
         JS_FreeValue(ctx, e);
         if (same) { JS_FreeValue(ctx, arr); return JS_UNDEFINED; }
     }
-    JS_SetPropertyUint32(ctx, arr, len, listener_record(ctx, cb, capture, once));
+    JS_SetPropertyUint32(ctx, arr, len, listener_record(ctx, cb, capture, once, passive != 0));
     JS_FreeValue(ctx, arr);
+    /* §2.7 step 6: "If listener's signal is non-null, then add the following abort steps to it: remove an event
+       listener with eventTarget and listener." An ABORT ALGORITHM, which is what §3.2 calls a piece of engine
+       work that runs BEFORE the `abort` event and is invisible to the page — a page-visible `abort` listener
+       would be one the page could see, remove, or have run out of order with its own. */
+    if (abort_signal_is(ctx, signal)) {
+        JSValue algo = listener_signal_algorithm(ctx, this_val, type, cb, capture);
+        abort_signal_add_algorithm(ctx, signal, algo);   /* BORROWED: the signal takes its own reference */
+        JS_FreeValue(ctx, algo);
+    }
     return JS_UNDEFINED;
 }
 
@@ -376,7 +476,7 @@ static JSValue remove_listener_with_type(JSContext *ctx, JSValueConst this_val, 
     for (i = 0; i < len; i++) {
         JSValue e = JS_GetPropertyUint32(ctx, arr, i);
         bool same = JS_IsObject(e) && rec_matches(ctx, e, cb, capture);
-        if (same) JS_FreeValue(ctx, e);
+        if (same) { listener_mark_removed(ctx, e); JS_FreeValue(ctx, e); }
         else JS_SetPropertyUint32(ctx, kept, k++, e);
     }
     JS_SetPropertyStr(ctx, map, type, kept);
@@ -388,7 +488,8 @@ static JSValue remove_listener_with_type(JSContext *ctx, JSValueConst this_val, 
 void event_target_add_listener(JSContext *ctx, JSValueConst target, const char *type, JSValueConst cb)
 {
     JS_FreeValue(ctx, add_listener_with_type(ctx, event_target_receiver(ctx, target), cb, type,
-                                             /*capture*/ false, /*once*/ false));
+                                             /*capture*/ false, /*once*/ false, /*passive*/ -1,
+                                             /*signal*/ JS_UNDEFINED));
 }
 
 void event_target_remove_listener(JSContext *ctx, JSValueConst target, const char *type, JSValueConst cb)
@@ -409,22 +510,60 @@ void event_target_remove_listener(JSContext *ctx, JSValueConst target, const cha
 static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     JSValueConst opts = argc > 2 ? argv[2] : JS_UNDEFINED;
+    JSValue signal = JS_UNDEFINED, passive_v = JS_UNDEFINED;
     const char *type;
     bool capture, once;
+    int passive;
     JSValue r;
 
-    if (argc < 2 || (magic == 0 && !JS_IsFunction(ctx, argv[1])))
-        return JS_UNDEFINED;   /* 2.7: a non-callable listener is ignored, not an error */
+    /* WEB IDL CONVERTS EVERY ARGUMENT, IN ORDER, BEFORE THE ALGORITHM RUNS — so the shape of this body is
+       "finish the conversions, THEN run §2.7", and the two halves are not interleavable. §2.8's `callback` is an
+       `EventListener?`, which is a CALLBACK INTERFACE and not a function type: ANY object implements it, because
+       its one operation is looked up BY NAME on the object each time it is invoked, so
+       `el.addEventListener("x", {handleEvent(e){…}})` is an ordinary registration and used to be silently
+       dropped here. A PRIMITIVE is the type's TypeError, and it is raised before the options are read because
+       the callback is the earlier argument. */
+    if (argc > 1 && !JS_IsObject(argv[1]) && !JS_IsNull(argv[1]) && !JS_IsUndefined(argv[1]))
+        return JS_ThrowTypeError(ctx, "the event listener is not an object");
     /* The engine-built dictionary, whatever the page wrote: `{capture:true}`, a bare `true`, or nothing. The
        union's flattening happened in the declaration, so there is one shape to read here. */
     capture = idl_dict_bool(ctx, opts, "capture");
     once = idl_dict_bool(ctx, opts, "once");
+    /* §2.7 "flatten more options" step 3.2: `passive` is null unless the member EXISTS, which is why this is a
+       tristate and not a bool — a wheel listener registered with `{}` on the window is passive by default and
+       one registered with `{passive:false}` is not. */
+    passive_v = idl_dict_get(ctx, opts, "passive");
+    passive = JS_IsUndefined(passive_v) ? -1 : (JS_ToBool(ctx, passive_v) ? 1 : 0);
+    JS_FreeValue(ctx, passive_v);
+    signal = idl_dict_get(ctx, opts, "signal");
+    /* `AbortSignal signal` is an INTERFACE-typed member, so a value that is not one is a TypeError before the
+       algorithm's step 1. The brand test is not the declaration's here because §3.2's brand is a private SLOT
+       RECORD rather than a class opaque — IDL_INTERFACE tests the opaque, which an AbortSignal does not carry. */
+    /* NULL IS NOT AN ABSENT MEMBER HERE. `AbortSignal signal` is NOT nullable, so `{signal: null}` is a
+       TypeError and not "no signal" — the corpus asks for exactly that, twice, and it asks for it even when the
+       CALLBACK is null, which is why the conversion has to happen before §2.7's "if callback is null, return".
+       Only an ABSENT member (undefined) is the null the algorithm means. */
+    if (!JS_IsUndefined(signal) && !abort_signal_is(ctx, signal)) {
+        JS_FreeValue(ctx, signal);
+        return JS_ThrowTypeError(ctx, "options.signal does not implement AbortSignal");
+    }
+    /* §2.7 "add an event listener" step 3 / "remove an event listener"'s equivalent: a NULL callback registers
+       nothing. It is HERE, after every conversion, because that is where the spec puts it — which is what makes
+       `addEventListener("x", null, {signal: null})` a TypeError about the signal rather than a silent no-op. */
+    if (argc < 2 || JS_IsNull(argv[1]) || JS_IsUndefined(argv[1])) {
+        JS_FreeValue(ctx, signal);
+        return JS_UNDEFINED;
+    }
     type = JS_ToCString(ctx, argv[0]);   /* a real string by now: this cannot reach the page */
-    if (!type)
+    if (!type) {
+        JS_FreeValue(ctx, signal);
         return JS_EXCEPTION;
-    r = (magic == 0) ? add_listener_with_type(ctx, event_target_receiver(ctx, this_val), argv[1], type, capture, once)
+    }
+    r = (magic == 0) ? add_listener_with_type(ctx, event_target_receiver(ctx, this_val), argv[1], type,
+                                              capture, once, passive, signal)
                      : remove_listener_with_type(ctx, event_target_receiver(ctx, this_val), argv[1], type, capture);
     JS_FreeCString(ctx, type);
+    JS_FreeValue(ctx, signal);
     return r;
 }
 
@@ -587,7 +726,8 @@ static JSValue js_handler_set(JSContext *ctx, JSValueConst this_val, JSValueCons
     if (JS_IsFunction(ctx, val)) {
         JS_SetPropertyStr(ctx, map, type, JS_DupValue(ctx, val));
         /* §8.1.7: the listener is registered ONCE, the first time a handler is set for this type. */
-        add_listener_with_type(ctx, this_val, g_handler_marker, type, /*capture*/ false, /*once*/ false);
+        add_listener_with_type(ctx, this_val, g_handler_marker, type, /*capture*/ false, /*once*/ false,
+                               /*passive*/ -1, /*signal*/ JS_UNDEFINED);
     } else {
         JS_SetPropertyStr(ctx, map, type, JS_NULL);
         remove_listener_with_type(ctx, this_val, g_handler_marker, type, /*capture*/ false);   /* §8.1.7 "deactivate" */
@@ -687,7 +827,7 @@ static void listener_remove_record(JSContext *ctx, JSValueConst target, const ch
     kept = JS_NewArray(ctx);
     for (i = 0; i < len; i++) {
         JSValue e = JS_GetPropertyUint32(ctx, arr, i);
-        if (JS_VALUE_GET_PTR(e) == JS_VALUE_GET_PTR(rec)) JS_FreeValue(ctx, e);
+        if (JS_VALUE_GET_PTR(e) == JS_VALUE_GET_PTR(rec)) { listener_mark_removed(ctx, e); JS_FreeValue(ctx, e); }
         else JS_SetPropertyUint32(ctx, kept, k++, e);
     }
     JS_SetPropertyStr(ctx, map, type, kept);
@@ -713,16 +853,21 @@ static void listener_remove_record(JSContext *ctx, JSValueConst target, const ch
  * that runs mid-walk can add or remove listeners, and this walk is suspended across every one of them. */
 enum { DISPATCH_ARG = 0, CLICK_SYNTH = 1, DISPATCH_PAIR = 2 };
 
-/* WHERE THIS MACHINE RESTS, AS §2.9 NUMBERS IT. Dispatch is twelve steps and it can suspend at exactly two
-   points: inside a listener, and inside the activation behaviour — so those are the two stages after the one
-   that builds the path. The stage was a private byte, which is a resume point the driver cannot assert on,
-   a park cannot report, and a later build cannot resolve back to a step. */
+/* WHERE THIS MACHINE RESTS, AS §2.9 NUMBERS IT — read off the live standard rather than remembered, because the
+   labels it carried before named steps that do not exist (there is no step 11.1; the activation behaviour is
+   step 12.1, and the two listener loops are 6.13 and 6.14 inside the ONE `if` that step 6 is).
+   It can suspend at three points: while WALKING the tree that makes the path (a page-sized walk, so it yields
+   between parents), inside a listener, and inside the activation behaviour. */
 #define DISPATCH_STAGES(X) \
-    X(DISPATCH_PATH, "DOM §2.9 dispatch steps 1-5.11 (the dispatch flag, the target override, the " \
-                     "propagation path, and which entry of it is the activation target)") \
-    X(DISPATCH_WALK, "DOM §2.9 dispatch steps 5.12-5.13 (invoke each listener along the path — capturing, " \
-                     "at-target, then bubbling — parked on the one being called)") \
-    X(DISPATCH_ACTIVATION, "DOM §2.9 dispatch step 11.1 (the activation target's activation behaviour, run " \
+    X(DISPATCH_INIT, "DOM §2.9 dispatch steps 1-6.8 (the dispatch flag, the target override, the target's own " \
+                     "path entry, whether the target is the activation target, and the first get the parent)") \
+    X(DISPATCH_PATH, "DOM §2.9 dispatch step 6.9 (walk get the parent, appending each ancestor to the event " \
+                     "path — one parent per yield, because the tree is the page's size)") \
+    X(DISPATCH_CAPTURE, "DOM §2.9 dispatch step 6.13 (invoke each path item in REVERSE order with phase " \
+                        "\"capturing\" — parked on the listener being called)") \
+    X(DISPATCH_BUBBLE, "DOM §2.9 dispatch step 6.14 (invoke each path item in order with phase \"bubbling\" — " \
+                       "parked on the listener being called)") \
+    X(DISPATCH_ACTIVATION, "DOM §2.9 dispatch step 12.1 (the activation target's activation behaviour, run " \
                            "after the whole walk and only when nothing cancelled)")
 enum { DISPATCH_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const DISPATCH_STEPS[] = { DISPATCH_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -731,16 +876,36 @@ typedef struct JSDispatchState {
     JSStepHdr hdr;       /* FIRST — the driver writes the def and the operand bounds through it */
     uint8_t   cphase;    /* the call request's own phase, so a stage can hold a call across a suspension */
     uint32_t  i, n;      /* THE RESUME POINT: the listener being called, and how many there are */
-    uint32_t  ti, tn;    /* THE OTHER: how far into the current LEG, and how long the whole path is */
-    uint8_t   leg;       /* §2.9's three legs — 0 capturing (root->target), 1 AT_TARGET, 2 bubbling */
+    uint32_t  ti, tn;    /* THE OTHER: how far into the current PASS, and how long the whole path is */
+    /* §2.9 step 6.4's isActivationEvent, decided once at step 6.4 and read again at 6.8.7 for every ancestor. */
+    uint8_t   is_activation;
     /* THE ACTIVATION BEHAVIOUR'S OWN SUSPENSION. §4.6.3's is a navigation and a navigation fetches, so the
        behaviour is a step like everything else that can wait on the host: `aphase` is its resume point and
        `areq` the host request it is waiting on. They live here because the machine that can park is this one. */
     uint8_t   aphase;
     uint32_t  areq;
+    /* THE LISTENER'S OWN `passive`, held across the call: §2.9 "inner invoke" RAISES the event's in-passive
+       listener flag before the listener runs and lowers it after, so the machine has to remember which way to
+       put it back when it resumes — the record it read it from is gone by then. */
+    uint8_t   in_passive;
+    /* THE CALLBACK'S OPERATION LOOKUP. A callback INTERFACE that is not callable has `handleEvent` read off it
+       per invocation, and that read is the page's code — so the object survives the suspension on the state and
+       `lphase` says a read is outstanding. Two markers rather than one because a listener can suspend TWICE: on
+       its operation lookup and then on the call. */
+    uint8_t   lphase;
+    /* §2.9 "inner invoke" step 2.11's "IF THIS THROWS AN EXCEPTION, REPORT IT" — the walk does not unwind, it
+       REPORTS and continues, and reporting fires an `error` event at the global, which runs the page's code.
+       So the exception survives on the state and the report is a sub-request with its own work record.
+       `reporting` is its resume marker, the third this walk needs: a listener can suspend on its operation
+       lookup, on its own body, and on the report of what its body threw. */
+    uint8_t   reporting;
+    ReportExceptionWork rep;
+    JSValue   exc;       /* what the listener threw, held across the report (owned) */
+    JSValue   lcb;       /* the listener's callback object, held across its operation lookup (owned) */
     JSValue   type;      /* the event's type, resolved once per target and needed by `once` (owned) */
     JSValue   path;      /* §2.9's propagation path — the target and its ancestors (owned) */
-    JSValue   cur;       /* the target whose listeners are running (owned) */
+    JSValue   cur;       /* the target whose listeners are running, and the WALK's frontier while step 6.9
+                            builds the path (owned) */
     /* §2.9's ACTIVATION TARGET: the nearest entry of the path, TARGET FIRST, that has an activation behaviour.
        Picked while the path is built and run after the walk — see event_target.h. (owned) */
     JSValue   act;
@@ -758,6 +923,9 @@ static void js_dispatch_visit(JSContext *ctx, void *st, JSStepVisit *v)
     int k;
     v->val(ctx, &s->path);
     v->val(ctx, &s->type);
+    v->val(ctx, &s->lcb);
+    v->val(ctx, &s->exc);
+    report_exception_work_visit(ctx, &s->rep, v);
     v->val(ctx, &s->cur);
     v->val(ctx, &s->act);
     v->val(ctx, &s->arr);
@@ -777,11 +945,14 @@ static JSValue js_dispatch_fini(JSContext *ctx, void *st, bool take_result)
     JS_FreeValue(ctx, s->result);
     JS_FreeValue(ctx, s->path);
     JS_FreeValue(ctx, s->type);
+    JS_FreeValue(ctx, s->lcb);
+    JS_FreeValue(ctx, s->exc);
+    report_exception_work_release(ctx, &s->rep);
     JS_FreeValue(ctx, s->cur);
     JS_FreeValue(ctx, s->act);
     JS_FreeValue(ctx, s->arr);
     JS_FreeValue(ctx, s->ev);
-    s->result = s->path = s->type = s->cur = s->act = s->arr = s->ev = JS_UNDEFINED;
+    s->result = s->path = s->type = s->lcb = s->exc = s->cur = s->act = s->arr = s->ev = JS_UNDEFINED;
     for (k = 0; k < 3; k++) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
@@ -789,54 +960,41 @@ static JSValue js_dispatch_fini(JSContext *ctx, void *st, bool take_result)
     return r;
 }
 
-/* §2.9 THE PROPAGATION PATH: the target, then its ancestors, then the window for a document. It is stored
-   target-first and walked in BOTH directions — computing it is what let `bubble_to` go: event_target_fire used
-   to pass window in by hand as a special case, which is the document's ancestor stated twice, once in the spec
-   and once in an argument. */
-static JSValue dispatch_path(JSContext *ctx, JSValueConst target)
+/* §2.9's GET THE PARENT, asked of whoever owns the tree. It answers null for an EventTarget with no tree at all
+   — §2.7's own get the parent, which `new EventTarget()` and an AbortSignal both have — so this file needs no
+   "is it in the tree" question and no window special case: a DOCUMENT's get the parent IS the window (unless the
+   event is `load`), which is a fact about documents and belongs where documents are known.
+   That special case used to live here as "append the realm's global whenever the ancestor hook answered an
+   array", which put the window above a DETACHED node as well, and above a document dispatching `load`. */
+static JSValue dispatch_get_parent(JSContext *ctx, JSValueConst target, JSValueConst ev)
 {
-    JSValue path = JS_NewArray(ctx);
-    uint32_t k = 0;
+    JSValue parent;
 
-    JS_SetPropertyUint32(ctx, path, k++, JS_DupValue(ctx, target));
-    if (g_ancestors) {
-        /* THE HOOK ANSWERS "IS THIS TARGET IN THE TREE", and the ancestor list is how it says yes. An
-           EventTarget that is in no tree — an AbortSignal, which Streams §5.4 gives every writable controller —
-           gets UNDEFINED and a path of one. A DOCUMENT gets an EMPTY array, which is a different answer: it IS
-           in the tree, it simply has nothing above it, and §7.6 still puts the window above THAT. Testing the
-           list's length instead of its presence collapsed the two and dropped the window off the document's
-           path, so `window.addEventListener('DOMContentLoaded', …)` — the way most bundles start — never ran. */
-        JSValue up = g_ancestors(ctx, target);
-        if (JS_IsArray(up)) {
-            uint32_t i, n = 0;
-            JSValue len_v = JS_GetPropertyStr(ctx, up, "length");
-            JS_ToUint32(ctx, &n, len_v);
-            JS_FreeValue(ctx, len_v);
-            for (i = 0; i < n; i++)
-                JS_SetPropertyUint32(ctx, path, k++, JS_GetPropertyUint32(ctx, up, i));
-            /* §7.6 puts the WINDOW above the document, and it is THIS realm's — a document and its window
-               are one browsing context, so asking the realm is what makes a popup's own dispatch reach its own
-               window rather than whichever realm installed last. */
-            JS_SetPropertyUint32(ctx, path, k++, JS_DupValue(ctx, event_target_global(ctx)));
-        }
-        JS_FreeValue(ctx, up);
-    }
-    return path;
+    if (!g_get_parent)
+        return JS_NULL;   /* a host with no tree: §2.7's default, a path of one */
+    parent = g_get_parent(ctx, target, ev);
+    DCHECK(JS_IsNull(parent) || JS_IsObject(parent),
+           "§2.9's get the parent answered with something that is not an EventTarget and is not null — the "
+           "walk appends whatever it is handed to the event path and then invokes listeners on it");
+    return parent;
 }
 
 static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSDispatchState *s = st;
-    JSValue fn, ignored;
+    /* BOTH ARE JUMPED PAST. The re-entry gotos land after these are assigned on the straight path, so they are
+       initialised at their declaration rather than left for a `goto` to read. */
+    JSValue fn = JS_UNDEFINED, ignored = JS_UNDEFINED;
     int r;
 
-    if (s->hdr.stage == DISPATCH_PATH) {
+    if (s->hdr.stage == DISPATCH_INIT) {
         JSValueConst target;
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        s->path = s->type = s->cur = s->act = s->arr = s->ev = s->result = JS_UNDEFINED;
+        s->path = s->type = s->lcb = s->exc = s->cur = s->act = s->arr = s->ev = s->result = JS_UNDEFINED;
         s->cb[0] = s->cb[1] = s->cb[2] = JS_UNDEFINED;
+        report_exception_work_start(&s->rep);
         /* THREE ENTRIES, ONE MACHINE, and `arg` is decided at REGISTRATION so no call site chooses:
              DISPATCH_ARG  — dispatchEvent: the receiver is the target, the page supplied the event.
              CLICK_SYNTH   — §3.2.2 click(): the receiver is the target and the event is BUILT, because click
@@ -876,150 +1034,299 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         if (s->hdr.arg != DISPATCH_PAIR)
             event_set_trusted(ctx, s->ev, false);
         s->type = event_type(ctx, s->ev);
-        s->path = dispatch_path(ctx, target);
-        /* §2.9's ACTIVATION TARGET, picked while the path is here and BEFORE any listener runs — the nearest
-           entry, target first, that has one. It is the target's own ancestors that make a click on a `<span>`
-           inside an `<a>` follow the link, which is why it is the PATH that is searched and not the target.
-           Only a `click` has one: §2.9 sets an activation target for that type alone, which is why a synthetic
-           `dispatchEvent(new Event('foo'))` at an anchor navigates nowhere. */
-        if (g_has_activation && JS_IsString(s->type)) {
+        /* §2.9 step 6.3: APPEND TO AN EVENT PATH with the target itself. The path is the EVENT's — composedPath
+           reads it — so it is published on the event as it grows rather than kept privately here. */
+        s->path = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, s->path, 0, JS_DupValue(ctx, target));
+        s->tn = 1;
+        event_set_path(ctx, s->ev, s->path);
+        /* §2.9 step 6.4's isActivationEvent. The spec says "event is a MouseEvent object and event's type is
+           `click`"; this engine has no MouseEvent interface yet, so the type is the whole of what it can ask —
+           which is why `Event-dispatch-click` (a `new MouseEvent("click")`) is a MouseEvent gap and not a
+           dispatch one. */
+        if (JS_IsString(s->type)) {
             const char *t = JS_ToCString(ctx, s->type);
-            bool is_click = t != NULL && !strcmp(t, "click");
+            s->is_activation = t != NULL && !strcmp(t, "click");
             if (t) JS_FreeCString(ctx, t);
-            if (is_click) {
-                uint32_t k, kn = 0;
-                JSValue len_v = JS_GetPropertyStr(ctx, s->path, "length");
-                JS_ToUint32(ctx, &kn, len_v);
-                JS_FreeValue(ctx, len_v);
-                for (k = 0; k < kn; k++) {
-                    JSValue e = JS_GetPropertyUint32(ctx, s->path, k);
-                    if (JS_IsObject(e) && g_has_activation(ctx, e)) { s->act = e; break; }
-                    JS_FreeValue(ctx, e);
-                }
-            }
         }
-        s->tn = 0;
-        JS_ToUint32(ctx, &s->tn, JS_GetPropertyStr(ctx, s->path, "length"));
-        s->ti = 0;
-        s->leg = 0;
-        s->n = s->i = 0;
-        s->hdr.stage = DISPATCH_WALK;
+        /* §2.9 step 6.5: the TARGET is the activation target if it has one — no `bubbles` condition here, which
+           is the difference from step 6.8.7's test on an ancestor. */
+        if (s->is_activation && g_has_activation && g_has_activation(ctx, target))
+            s->act = JS_DupValue(ctx, target);
+        /* step 6.8: the first get the parent. `cur` carries the walk's frontier from here to the end of 6.9. */
+        s->cur = JS_DupValue(ctx, target);
+        s->hdr.stage = DISPATCH_PATH;
     }
 
-    if (s->hdr.stage == DISPATCH_ACTIVATION) goto activation;   /* re-entered inside the activation behaviour — see below */
+    if (s->hdr.stage == DISPATCH_PATH) {
+        /* §2.9 step 6.9: "While parent is non-null" — append it and ask it for ITS parent. A tree is the PAGE's
+           size, so this yields between parents rather than walking to the root inside one opcode; the frontier
+           is on the state, so a park in the middle resumes at the ancestor it had reached. */
+        JSValue parent;
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        parent = dispatch_get_parent(ctx, s->cur, s->ev);
+        JS_FreeValue(ctx, s->cur);
+        s->cur = parent;
+        if (JS_IsObject(parent)) {
+            JS_SetPropertyUint32(ctx, s->path, s->tn++, JS_DupValue(ctx, parent));
+            /* step 6.8.7: an ANCESTOR becomes the activation target only for an event that BUBBLES, and only
+               while none has been picked — the nearest one, target first, wins. */
+            if (s->is_activation && !JS_IsObject(s->act) && event_bubbles(ctx, s->ev) &&
+                g_has_activation && g_has_activation(ctx, parent))
+                s->act = JS_DupValue(ctx, parent);
+            return JS_STEP_YIELD;
+        }
+        JS_FreeValue(ctx, s->cur);
+        s->cur = JS_UNDEFINED;
+        /* §2.9 "invoke" step 3: the event's TARGET is the path's shadow-adjusted target, which with no shadow
+           trees is path[0] for every item — so it is set once, here, rather than re-derived per item. */
+        {
+            JSValue first = JS_GetPropertyUint32(ctx, s->path, 0);
+            event_set_target(ctx, s->ev, first);
+            JS_FreeValue(ctx, first);
+        }
+        s->ti = 0;
+        s->n = s->i = 0;
+        s->hdr.stage = DISPATCH_CAPTURE;
+    }
+
+    if (s->hdr.stage == DISPATCH_ACTIVATION) {
+        /* re-entered inside the activation behaviour — see below. It waits on the HOST, not on a call, so
+           whatever the resume carries is not this machine's and is released here rather than leaked. */
+        JS_FreeValue(ctx, cb_result);
+        goto activation;
+    }
+    /* A re-entry with no call in flight carries nothing this walk wants; the one that does is consumed by the
+       request it belongs to, at resume_listener. */
+    if (s->cphase == 0 && s->lphase == 0 && s->reporting == 0) { JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED; }
+    /* §2.9 steps 6.13 and 6.14: TWO passes over the path, not three legs over parts of it. The old shape ran the
+       target as a leg of its own with BOTH kinds of listener in registration order, which is a different answer
+       from the spec's and one the corpus asks for directly: at the target a CAPTURING listener runs in the
+       capturing pass and a bubbling one in the bubbling pass, so registering bubble-then-capture still fires
+       capture first. It also made "does this event bubble" a question about the LEG rather than about the ITEM,
+       and for the target item the answer is that it is invoked either way. */
     for (;;) {
         while (s->i < s->n) {
             JSValue rec;
-            bool want_capture;
 
             /* §2.9: stopImmediatePropagation ends the walk between listeners, which is the only place it can
                be observed — the flag was set by a listener that has already returned. */
-            if (s->cphase == 0 && event_stop_immediate(ctx, s->ev))
+            if (s->reporting)
+                goto report_throw;   /* re-entered inside the REPORT of what the last listener threw */
+            if (s->cphase == 0 && s->lphase == 0 && event_stop_immediate(ctx, s->ev))
                 break;
+            if (s->cphase != 0) {
+                /* RE-ENTERED INSIDE THE CALL BELOW. The record is NOT re-read: `once` has already removed it
+                   from the live list and set its removed field, so a re-read would skip the very listener whose
+                   answer is arriving and lose the call's result. The callee is held by the request buffer. */
+                fn = JS_UNDEFINED;
+                goto resume_listener;
+            }
+            if (s->lphase != 0)
+                goto resolve_operation;   /* re-entered inside the `handleEvent` READ — same reason */
             rec = JS_GetPropertyUint32(ctx, s->arr, s->i);
             if (!JS_IsObject(rec)) {
                 JS_FreeValue(ctx, rec);
-                JS_FreeValue(ctx, cb_result);
-                cb_result = JS_UNDEFINED;
                 s->i++;
                 continue;
             }
-            /* §2.9 "invoke": the CAPTURING leg runs only capturing listeners and the BUBBLING leg only the
-               others; AT_TARGET runs both, which is why the target is its own leg rather than an end of one. */
-            want_capture = (s->leg == 0);
-            if (s->leg != 1 && rec_flag(ctx, rec, "capture") != want_capture) {
+            /* §2.9 "inner invoke" step 2: a listener whose REMOVED field is set is skipped. The walk iterates a
+               SNAPSHOT so that an added listener does not run, and the spec's own note says removal must still
+               have an effect — which is exactly what the field is for. Without it, `removeEventListener` called
+               from inside a dispatch removed the listener from the live list and the snapshot ran it anyway. */
+            if (rec_flag(ctx, rec, "removed")) {
                 JS_FreeValue(ctx, rec);
-                JS_FreeValue(ctx, cb_result);
-                cb_result = JS_UNDEFINED;
+                s->i++;
+                continue;
+            }
+            /* §2.9 "inner invoke" steps 2.3-2.4: the CAPTURING pass runs only capturing listeners and the
+               BUBBLING pass only the others, at every item of the path INCLUDING the target. */
+            if (rec_flag(ctx, rec, "capture") != (s->hdr.stage == DISPATCH_CAPTURE)) {
+                JS_FreeValue(ctx, rec);
                 s->i++;
                 continue;
             }
             fn = rec_cb(ctx, rec);
             /* §8.1.7: the HANDLER SLOT resolves HERE, at dispatch time, to whatever `ontype` currently is —
-               that is what keeps the slot's POSITION in the list while its handler changes underneath it. */
+               that is what keeps the slot's POSITION in the list while its handler changes underneath it. An
+               UNSET handler is not a listener at all, which is why this one skip stays a skip: there is nothing
+               to look an operation up on. */
             if (JS_VALUE_GET_PTR(fn) == JS_VALUE_GET_PTR(g_handler_marker)) {
                 const char *t = JS_IsString(s->type) ? JS_ToCString(ctx, s->type) : NULL;
                 JS_FreeValue(ctx, fn);
                 fn = t ? handler_current(ctx, s->cur, t) : JS_UNDEFINED;
                 if (t) JS_FreeCString(ctx, t);
+                if (!JS_IsFunction(ctx, fn)) {
+                    JS_FreeValue(ctx, fn);
+                    JS_FreeValue(ctx, rec);
+                    s->i++;
+                    continue;
+                }
             }
-            if (!JS_IsFunction(ctx, fn)) {
-                JS_FreeValue(ctx, fn);
-                JS_FreeValue(ctx, rec);
-                JS_FreeValue(ctx, cb_result);
-                cb_result = JS_UNDEFINED;
-                s->i++;
-                continue;
-            }
-            /* §2.9 "inner invoke" step 2: a `once` listener is removed BEFORE it is called, so a listener that
+            /* §2.9 "inner invoke" step 2.5: a `once` listener is removed BEFORE it is called, so a listener that
                re-enters this dispatch cannot see itself. Removing it after would let a re-entrant fire run it
                a second time, which is the exact bug `once` exists to prevent. */
-            if (s->cphase == 0 && rec_flag(ctx, rec, "once")) {
+            if (rec_flag(ctx, rec, "once")) {
                 const char *t = JS_IsString(s->type) ? JS_ToCString(ctx, s->type) : NULL;
                 if (t) { listener_remove_record(ctx, s->cur, t, rec); JS_FreeCString(ctx, t); }
             }
+            /* §2.9 "inner invoke" step 2.9: a PASSIVE listener raises the event's in-passive listener flag for
+               the duration of the call, which is what makes its preventDefault() do nothing. */
+            s->in_passive = rec_flag(ctx, rec, "passive");
+            if (s->in_passive)
+                event_set_in_passive(ctx, s->ev, true);
             JS_FreeValue(ctx, rec);
-            /* §2.9 "inner invoke": the listener is called with `this` = currentTarget and the event as its one
-               argument. A CALL REQUEST, so the listener is ordinary preemptible page code and this machine
-               parks — which is the whole reason the engine's own firing can share this walk. */
+            JS_FreeValue(ctx, s->lcb);
+            s->lcb = fn;   /* held across the operation lookup below, which can run the page's code */
+resolve_operation:
+            /* §2.9 "inner invoke" step 2.11 is "CALL A USER OBJECT'S OPERATION with listener's callback and
+               `handleEvent`", and Web IDL §3.12 step 10 is what that means for a callback INTERFACE: a callable
+               callback is itself the operation and keeps the given `this`; a NON-callable one has `handleEvent`
+               READ OFF IT — per invocation, so a page that swaps the method between two dispatches gets both —
+               and is then the `this` of that call.
+               The read is the page's code (an accessor, a Proxy trap), so it is a REQUEST and not a
+               JS_GetPropertyStr; that is also why `event-global-set-before-handleEvent-lookup` can observe where
+               in the algorithm it happens. */
+            fn = JS_DupValue(ctx, s->lcb);
+            if (!JS_IsFunction(ctx, fn)) {
+                JSAtom op;
+                JSValue m = JS_UNDEFINED;
+
+                JS_FreeValue(ctx, fn);
+                /* THE READ THREW, AND THE ANSWER IS ALREADY HERE. A machine that declares catches_abrupt is
+                   re-entered with JS_EXCEPTION and the throw still live, and the request's own sub-sequence
+                   cursor does NOT survive that delivery — so re-issuing the read at this call site runs the
+                   page's getter a SECOND time, which throws again, forever. That is not a hypothetical: it is
+                   `EventListener-handleEvent`'s "rethrows errors when getting handleEvent", and the symptom was
+                   a whole test file timing out with no allocation growth and nothing to say why.
+                   Web IDL §3.12 step 10.2 says an abrupt Get is RETURNED as it stands, which is what this is. */
+                if (s->lphase != 0 && JS_IsException(cb_result)) {
+                    s->lphase = 0;
+                    cb_result = JS_UNDEFINED;
+                    goto listener_threw;
+                }
+                op = JS_NewAtom(ctx, "handleEvent");
+                r = step_getprop_run(ctx, &s->hdr, s->lcb, op, cb_result, &m, out_cb, out_argc);
+                JS_FreeAtom(ctx, op);
+                cb_result = JS_UNDEFINED;
+                if (r > 0) { s->lphase = 1; return r; }   /* parked ON THE READ; the resume comes back here */
+                s->lphase = 0;
+                if (r < 0) return JS_STEP_ABRUPT;
+                if (!JS_IsFunction(ctx, m)) {
+                    /* Web IDL §3.12 step 10.4: a non-callable operation is a TypeError — and step 10.2 says an
+                       ABRUPT read is returned as it stands, which under catches_abrupt arrives here as the
+                       exception value with the throw still live. Either way §2.9 REPORTS it and the walk goes
+                       on; raising a fresh TypeError over a live throw would report the wrong error. */
+                    if (!JS_IsException(m))
+                        JS_ThrowTypeError(ctx, "the event listener's `handleEvent` is not callable");
+                    JS_FreeValue(ctx, m);
+                    goto listener_threw;
+                }
+                fn = m;
+                /* Web IDL §3.12 step 10.5: the receiver becomes the callback OBJECT, overriding currentTarget. */
+                r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), fn, s->lcb, 1, (JSValueConst *)&s->ev,
+                                  cb_result, &ignored, out_cb, out_argc);
+                JS_FreeValue(ctx, fn);
+                cb_result = JS_UNDEFINED;
+                if (r > 0) return r;
+                goto listener_returned;
+            }
+            /* §2.9 "inner invoke" step 2.11: the listener is called with `this` = currentTarget and the event as
+               its one argument. A CALL REQUEST, so the listener is ordinary preemptible page code and this
+               machine parks — which is the whole reason the engine's own firing can share this walk. */
+resume_listener:
             r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), fn, s->cur, 1, (JSValueConst *)&s->ev,
                               cb_result, &ignored, out_cb, out_argc);
-            JS_FreeValue(ctx, fn);
+            JS_FreeValue(ctx, fn);   /* the request DUP'd it into the buffer, which is what holds it parked */
             cb_result = JS_UNDEFINED;
             if (r > 0) return r;         /* parked ON THIS LISTENER; the resume comes back to it */
+listener_returned:
+            if (s->in_passive) {
+                event_set_in_passive(ctx, s->ev, false);
+                s->in_passive = 0;
+            }
+            JS_FreeValue(ctx, s->lcb);
+            s->lcb = JS_UNDEFINED;
+            /* §2.9 "inner invoke" step 2.11: "If this throws an exception exception: report exception". THE
+               WALK DOES NOT UNWIND — the next listener runs, the remaining path items run, and dispatchEvent
+               still answers !canceled. This machine therefore DECLARES catches_abrupt, so a throwing listener
+               arrives as a value here instead of tearing the dispatch down; without it, one page's throw
+               skipped every listener after it and the exception was swallowed with nothing to say so. */
+            if (JS_IsException(ignored)) {
+                ignored = JS_UNDEFINED;
+listener_threw:
+                /* Reached from the operation lookup as well, which has not run the cleanup above — both are
+                   idempotent, which is why one label serves both arrivals. */
+                if (s->in_passive) { event_set_in_passive(ctx, s->ev, false); s->in_passive = 0; }
+                JS_FreeValue(ctx, s->lcb);
+                s->lcb = JS_UNDEFINED;
+                s->exc = JS_GetException(ctx);
+                s->reporting = 1;
+            }
             JS_FreeValue(ctx, ignored);  /* §2.9: a listener's return value is discarded */
+report_throw:
+            if (s->reporting) {
+                r = report_exception_run(ctx, &s->rep, s->exc, cb_result, out_cb, out_argc);
+                cb_result = JS_UNDEFINED;
+                if (r > 0) return r;    /* parked inside the `error` event's own dispatch */
+                s->reporting = 0;
+                JS_FreeValue(ctx, s->exc);
+                s->exc = JS_UNDEFINED;
+            }
             s->i++;
         }
-        /* ON TO THE NEXT TARGET. §2.9 walks the path THREE times: down it for the capturing listeners, once at
-           the target for all of them, and back up it for the bubbling ones. `ti` counts within the current leg,
-           so advancing is "next in this leg, or the first of the next one" and nothing else.
-           stopPropagation ends the walk entirely — it is checked here because the flag is set by a listener
-           that has already returned, exactly like stopImmediatePropagation above. */
-        if (s->ti > 0 && event_stop_propagation(ctx, s->ev)) break;
+        /* ON TO THE NEXT PATH ITEM, and then to the next pass. `ti` names the item ABOUT to be invoked and is
+           advanced once its listeners are set up, so the FIRST item of each pass is ti == 0 and no entry point
+           has to say so twice. "invoke" step 6 returns immediately when the stop propagation flag is set, so it
+           is tested per ITEM — it is set by a listener that has already returned, exactly like
+           stopImmediatePropagation above. */
         for (;;) {
-            uint32_t legn = (s->leg == 1) ? 1 : (s->tn > 0 ? s->tn - 1 : 0);
-            if (s->ti < legn) break;
-            if (s->leg == 2) { legn = 0; break; }
-            s->leg++;
-            s->ti = 0;
-            /* §2.9: the bubbling leg happens only for an event that bubbles. AT_TARGET always does. */
-            if (s->leg == 2 && !event_bubbles(ctx, s->ev)) { s->leg = 3; }
-            if (s->leg >= 3) break;
-        }
-        if (s->leg >= 3) break;
-        if (s->leg == 2 && !event_bubbles(ctx, s->ev)) break;
-        {
-            /* leg 0 walks the path BACKWARDS (root first); leg 1 is the target; leg 2 walks it forwards. */
-            uint32_t idx = (s->leg == 0) ? (s->tn - 1 - s->ti) : (s->leg == 1 ? 0 : s->ti + 1);
-            uint32_t legn = (s->leg == 1) ? 1 : (s->tn > 0 ? s->tn - 1 : 0);
-            JSValue first;
+            uint32_t idx;
             const char *type;
+            bool at_target;
 
-            if (s->ti >= legn) break;
+            if (s->ti >= s->tn) {
+                if (s->hdr.stage == DISPATCH_BUBBLE) goto walked;
+                s->hdr.stage = DISPATCH_BUBBLE;
+                s->ti = 0;
+                continue;
+            }
+            if (event_stop_propagation(ctx, s->ev)) goto walked;
+            /* the capturing pass walks the path in REVERSE (root first); the bubbling pass walks it forwards. */
+            idx = (s->hdr.stage == DISPATCH_CAPTURE) ? (s->tn - 1 - s->ti) : s->ti;
+            at_target = (idx == 0);
+            /* §2.9 step 6.14.2.1: in the BUBBLING pass an item that is not the target is skipped entirely for an
+               event that does not bubble. The TARGET is invoked either way — which is why a non-bubbling event
+               still reaches the target's non-capturing listeners. */
+            if (!at_target && s->hdr.stage == DISPATCH_BUBBLE && !event_bubbles(ctx, s->ev)) { s->ti++; continue; }
             JS_FreeValue(ctx, s->cur);
             JS_FreeValue(ctx, s->arr);
             s->cur = JS_GetPropertyUint32(ctx, s->path, idx);
-            first = JS_GetPropertyUint32(ctx, s->path, 0);
+            /* §2.9 steps 6.13.1-6.13.2: the phase is AT_TARGET for the item that IS the target, whichever pass
+               is running, and the pass's own phase otherwise. */
+            event_set_phase(ctx, s->ev, at_target ? 2 : (s->hdr.stage == DISPATCH_CAPTURE ? 1 : 3));
+            event_set_current(ctx, s->ev, s->cur);
             type = JS_IsString(s->type) ? JS_ToCString(ctx, s->type) : NULL;
-            /* §2.9: `target` is where the event was dispatched and does not move; `currentTarget` is whose
-               listeners are running now, and the phase is the leg. */
-            event_set_targets(ctx, s->ev, first, s->cur);
-            event_set_phase(ctx, s->ev, s->leg == 0 ? 1 : (s->leg == 1 ? 2 : 3));
             s->arr = type ? listener_snapshot(ctx, s->cur, type) : JS_NewArray(ctx);
             if (type) JS_FreeCString(ctx, type);
-            JS_FreeValue(ctx, first);
+            s->n = arr_len(ctx, s->arr);
+            s->i = 0;
+            s->ti++;
+            break;
         }
-        s->n = arr_len(ctx, s->arr);
-        s->i = 0;
-        s->ti++;
     }
+
+walked:
     JS_FreeValue(ctx, cb_result);
+    /* §2.9 steps 7-10: eventPhase NONE, currentTarget null, the path empty, and the dispatch and both stop
+       flags UNSET — one operation, because the spec states them together and because leaving the stop flags set
+       made the SAME event unusable for a second dispatch. */
+    event_end_dispatch(ctx, s->ev);
 
 activation:
-    /* §2.9 "clean up": the dispatch flag clears, the phase goes back to NONE and currentTarget to null. */
-    event_set_dispatch_flag(ctx, s->ev, false);
-    event_clear_current(ctx, s->ev);
-    /* §2.9's LAST STEP, and it is last for a reason: the activation behaviour runs AFTER the whole walk and
+    /* §2.9's step 12, and it is last for a reason: the activation behaviour runs AFTER the whole walk and
        ONLY if nothing cancelled — which is the entire meaning of `preventDefault()` on a click. It runs with
        the event already cleaned up, so a behaviour that reads `currentTarget` sees null, as it must. */
     if (JS_IsObject(s->act) && !event_canceled(ctx, s->ev)) {
@@ -1037,13 +1344,13 @@ activation:
 }
 
 static const JSTrampStepDef js_dispatch_def = {
-    sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, DISPATCH_ARG, .visit = js_dispatch_visit,
+    sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, DISPATCH_ARG, .catches_abrupt = 1, .visit = js_dispatch_visit,
     .algorithm = "DOM §2.9 dispatch", .steps = DISPATCH_STEPS
 };
 /* §3.2.2 click(). The SAME machine — a click is a dispatch, and giving it its own would be two implementations
    of §2.9 that could disagree about listener order, the handler slot or the canceled flag. */
 static const JSTrampStepDef js_click_def = {
-    sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, CLICK_SYNTH, .visit = js_dispatch_visit,
+    sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, CLICK_SYNTH, .catches_abrupt = 1, .visit = js_dispatch_visit,
     .algorithm = "DOM §2.9 dispatch", .steps = DISPATCH_STEPS
 };
 static int g_click_stepid = -1;
@@ -1136,7 +1443,7 @@ int event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_ca
 }
 
 static const JSTrampStepDef js_dispatch_pair_def = {
-    sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, DISPATCH_PAIR, .visit = js_dispatch_visit,
+    sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, DISPATCH_PAIR, .catches_abrupt = 1, .visit = js_dispatch_visit,
     .algorithm = "DOM §2.9 dispatch", .steps = DISPATCH_STEPS
 };
 
