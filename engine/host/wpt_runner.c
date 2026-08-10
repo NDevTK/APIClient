@@ -829,6 +829,13 @@ static bool wpt_answer_host_requests(JSContext *ctx)
  * document that loads testharness.js — so it passes `--test-document` and there is one rule, in one place. */
 static int    g_html_mode;      /* the test is a document, not a script */
 static char   g_test_url[512];  /* its address, server-relative — what to GET and what to resolve against */
+/* THE VARIANT IS PART OF THE ADDRESS, which is the whole of what a variant IS. WPT's manifest emits one test
+   per `<meta name=variant>` / `// META: variant=` declaration, each at the file's own URL with that query or
+   fragment appended (tools/manifest/sourcefile.py: `test_url + variant`), and the file reads it back off
+   `location.search` to decide which subtests to run. Running the bare URL instead runs a test the corpus does
+   not itself run — an excluded test wearing a counted name — so the driver names the variant and it lands
+   here, in the two addresses everything else is derived from: what to GET, and what `location` answers. */
+static char   g_variant[256];   /* "" or the "?…"/"#…" this run is */
 
 /* ONE GET against the corpus server, resolved against the running document's address. */
 /* `pcsp`, when given, receives the response's `Content-Security-Policy` as a malloc'd string (NULL when the
@@ -863,20 +870,23 @@ static void wpt_derive_addresses(int argc, char **argv)
     const char *test = argv[argc - 1];
     size_t n = tail ? (size_t)(tail - h) : 0;
 
+    /* THE CORPUS ROOT IS DERIVED FROM THE HARNESS PATH, so a first argument that is not the corpus's
+       testharness.js leaves it EMPTY — and every address below then carries the runner's own filesystem path
+       into a URL, which the server answers with a 404 nobody can read backwards. */
+    CHECK(tail != NULL, "wpt: argv[1] is not the corpus's resources/testharness.js, so the corpus root is unknown");
     CHECK(n < sizeof g_wpt_root, "wpt: the corpus root is longer than this runner holds");
     memcpy(g_wpt_root, h, n);
     g_wpt_root[n] = 0;
     /* THE LAST argument is the test; the ones between are its META scripts. Reading argv[2] made a file with a
-       META script resolve its data against that script's directory instead of its own. */
-    if (argc > 2 && !strncmp(test, g_wpt_root, n))
-        snprintf(g_base_url, sizeof g_base_url, "http://web-platform.test%s", test + n);
-    else
-        snprintf(g_base_url, sizeof g_base_url, "http://web-platform.test/");
-    if (g_html_mode) {
-        CHECK(!strncmp(test, g_wpt_root, n), "wpt: an HTML test outside the corpus root has no server address");
-        snprintf(g_test_url, sizeof g_test_url, "http://web-platform.test%s", test + n);
-        snprintf(g_base_url, sizeof g_base_url, "%s", g_test_url);
-    }
+       META script resolve its data against that script's directory instead of its own.
+       ONE ADDRESS, BOTH KINDS. A document test and a script test each live at their own path in the corpus, so
+       each has the same one address — what to GET, and what a relative URL resolves against. This was two
+       branches computing the same string, of which only the document one also kept it; the script branch threw
+       it away and the test was then read off disk, which is how a `.sub.` script test came to run with its
+       `{{host}}` placeholders intact. */
+    CHECK(!strncmp(test, g_wpt_root, n), "wpt: a test outside the corpus root has no server address");
+    snprintf(g_test_url, sizeof g_test_url, "http://web-platform.test%s%s", test + n, g_variant);
+    snprintf(g_base_url, sizeof g_base_url, "%s", g_test_url);
     {
         /* WHERE THE CORPUS IS SERVED FROM. The driver starts wptserve and names its loopback port here; the
            runner speaks HTTP to it and sends the URL's own authority as the Host header, which is what a
@@ -1467,9 +1477,26 @@ int main(int argc, char **argv)
     if (argc >= 5 && !strcmp(argv[1], "--document")) return wpt_child_main(argc, argv);
     /* THE DRIVER'S CLASSIFICATION, consumed before anything else reads argv. Everything downstream then sees
        the same argument shape it always saw, so there is no second indexing rule to keep in step. */
-    if (argc >= 2 && !strcmp(argv[1], "--test-document")) { g_html_mode = 1; argv++; argc--; }
-    if (argc < 2) {
-        fprintf(stderr, "usage: wpt_runner [--test-document] <testharness.js> <test> [more.js ...]\n");
+    while (argc >= 2 && argv[1][0] == '-' && argv[1][1] == '-') {
+        if (!strcmp(argv[1], "--test-document")) { g_html_mode = 1; argv++; argc--; }
+        else if (!strcmp(argv[1], "--variant")) {
+            CHECK(argc >= 3, "wpt: --variant names no variant");
+            /* THE CORPUS'S OWN RULE, asserted where the value arrives rather than trusted from the driver:
+               sourcefile.py rejects a non-empty variant that does not begin with `?` or `#`, because a variant
+               is a query or a fragment and nothing else. A variant that is neither would silently become part
+               of the PATH here and this runner would GET a file that does not exist. */
+            CHECK(argv[2][0] == '?' || argv[2][0] == '#',
+                  "wpt: a variant must begin with ? or # — it is a query or a fragment, not a path");
+            CHECK(strlen(argv[2]) < sizeof g_variant, "wpt: the variant is longer than this runner holds");
+            snprintf(g_variant, sizeof g_variant, "%s", argv[2]);
+            argv += 2; argc -= 2;
+        } else break;
+    }
+    /* THE HARNESS AND THE TEST ARE BOTH REQUIRED, which the usage line has always said and the check has not:
+       it accepted `argc >= 2`, and with only the harness given every rule below that says "the LAST argument is
+       the test" would have named the harness as the test. */
+    if (argc < 3) {
+        fprintf(stderr, "usage: wpt_runner [--test-document] [--variant ?v] <testharness.js> <test> [more.js ...]\n");
         return 2;
     }
     /* WHICH FILE IS THE TEST, WHERE IT LIVES, AND WHETHER IT IS A DOCUMENT. Derived before anything else is
@@ -1512,11 +1539,28 @@ int main(int argc, char **argv)
         doc_scripts_free(&ds);
     } else {
         failed = run_program(ctx, WPT_PROLOGUE, strlen(WPT_PROLOGUE), "<wpt-prologue>");
-        for (i = 1; i < argc && !failed; i++) {
+        /* THE HARNESS AND THE META SCRIPTS ARE PROGRAM INPUTS THE DRIVER RESOLVED, so they come from the paths
+           it named; a `.sub.js` among them was fetched and substituted by the driver before it handed the path
+           over. The TEST is not one of those — it is the run's ADDRESS — so it comes from the server. */
+        for (i = 1; i < argc - 1 && !failed; i++) {
             size_t len = 0;
             char *src = read_file(argv[i], &len);
             if (!src) { fprintf(report_out(), "@WPTERR %s: cannot read\n", argv[i]); failed = 1; break; }
             failed = run_program(ctx, src, len, argv[i]);
+            free(src);
+        }
+        /* AND THE TEST ITSELF IS FETCHED, exactly as a document test is, because the reason is the same and it
+           is not a reason about markup: a `.sub.` file is a TEMPLATE, and wptserve substitutes `{{host}}` and
+           `{{ports[https][0]}}` when it serves one. Read off disk,
+           `dom/events/EventListener-addEventListener.sub.window.js` opens an iframe at the literal string
+           `https://{{hosts[alt][]}}:{{ports[https][0]}}/…`, which is not a URL — so the file tested the
+           template rather than the test, and the driver's own substitution reached only the META scripts. One
+           rule, both kinds: the test comes from the corpus's own server. */
+        if (!failed) {
+            size_t len = 0;
+            char *src = wpt_get(g_test_url, &len);
+            CHECK(src != NULL, "wpt: the corpus server did not serve the test file");
+            failed = run_program(ctx, src, len, g_test_url);
             free(src);
         }
     }
