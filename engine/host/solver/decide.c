@@ -23,13 +23,16 @@ static void *decide_fork_blob(int cursor, int arm);   /* the sibling's hot decis
  * as the walk (@COLD in the progress stream, which is the census this file's cost had no row in before):
  *
  *     flows       1006      4014      9006     16046
- *     decKiB       506     31708     39720    125915     <- copied: the whole prefix, per flow
+ *     decKiB       506      7916     39720    125915     <- copied: the whole prefix, per flow
  *     decKiB         7        31        70       125     <- chained: one blob header per flow
  *     decSegKiB     41       164       369       658     <- …plus the shared chain, counted ONCE
+ *     cLiveKiB    4057     18559     62226    165039     <- the whole engine's live C allocation, copied
+ *     cLiveKiB    3633     10974     23249     40447     <- …chained
  *
  * 125915 KiB against 125+658 — and the ratio is not the point, the SHAPE is: the first row is quadratic and
- * the other two are linear, so the gap is unbounded. The whole engine's live C allocation at 16046 flows went
- * from 161 MB to 41 MB with nothing else changed.
+ * the other two are linear, so the gap is unbounded. Every one of those numbers is a matched FLOW COUNT and
+ * not a matched wall clock, which is the only honest comparison here: the copy was O(n) work per fork as well
+ * as O(n) bytes, so the same wall clock now reaches 29550 flows where it reached 16046.
  *
  * That is n^2/2 bytes to the byte — 16046 flows held 128,745,080 decision slots, and 16046^2/2 is 128,736,529 —
  * and it was 123 MB of the 137 MB of per-flow snapshot the frontier was holding, against 15 MB for every

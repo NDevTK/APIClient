@@ -3341,10 +3341,11 @@ Measured, same fixture, same four points (KiB):
 
 | flows | 1006 | 4014 | 9006 | 16046 |
 | --- | --- | --- | --- | --- |
-| copied — the whole prefix, per flow | 506 | 31708 | 39720 | 125915 |
+| copied — the whole prefix, per flow | 506 | 7916 | 39720 | 125915 |
 | chained — one blob header per flow | 7 | 31 | 70 | 125 |
 | …plus the shared chain, counted once | 41 | 164 | 369 | 658 |
-| whole engine, C allocator live | 8001 → 3633 | 18559 → 10974 | 62226 → 23249 | 165039 → 41890 |
+| per-flow snapshot total | 1399 → 901 | 11473 → 3588 | 47699 → 8049 | 140130 → 14340 |
+| whole engine, C allocator live | 4057 → 3633 | 18559 → 10974 | 62226 → 23249 | 165039 → 40447 |
 
 The ratio is not the point; the SHAPE is. The first row is quadratic and the other two are linear,
 so the gap is unbounded — and it also removes a quadratic in TIME, since every fork was doing that
