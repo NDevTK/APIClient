@@ -99,6 +99,11 @@ static bool tt_list_requires(const char *csp, const char *group)
 
 bool trusted_types_required(JSContext *ctx, TrustedTypeKind expected)
 {
+    return trusted_types_required_by(policy_container_csp(document_policy(ctx)), expected);
+}
+
+bool trusted_types_required_by(const char *csp_text, TrustedTypeKind expected)
+{
     /* The ONLY sink group the standard defines is "script", and all three types belong to it. This is a switch
        rather than a constant so that a second group added to the standard lands here, at the one place that
        decides it, instead of being a string spelled at every sink. */
@@ -114,7 +119,7 @@ bool trusted_types_required(JSContext *ctx, TrustedTypeKind expected)
         DFAIL("a sink asked whether trusted types are required for a type the standard does not define");
         return false;
     }
-    return tt_list_requires(policy_container_csp(document_policy(ctx)), group);
+    return tt_list_requires(csp_text, group);
 }
 
 JSValue trusted_types_compliant_string(JSContext *ctx, TrustedTypeKind expected, JSValueConst input,

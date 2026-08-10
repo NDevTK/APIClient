@@ -43,4 +43,9 @@ JSValue trusted_types_compliant_string(JSContext *ctx, TrustedTypeKind expected,
    CSP blocks" has to be able to ask it. */
 bool trusted_types_required(JSContext *ctx, TrustedTypeKind expected);
 
+/* THE SAME QUESTION OVER A SERIALIZED CSP LIST, which is what makes the directive parse exercisable with one
+   fixture and no document — the document half above is one line over this. `csp_text` may be NULL, which is
+   what "no Content-Security-Policy" is. */
+bool trusted_types_required_by(const char *csp_text, TrustedTypeKind expected);
+
 #endif

@@ -20,6 +20,7 @@
 #include "core/frame/screen.h"
 #include "core/dom/abort.h"
 #include "core/html/unhandled_rejection.h"
+#include "core/html/trusted_types.h"
 #include "core/dom/node.h"
 #include "core/dom/element.h"
 #include "core/frame/location.h"
@@ -1287,6 +1288,36 @@ static const char *HTML_MIN =
 /* HTML §7.2.6 AND CSP §6.1, in C — the browser half's tests are C tests, and this one has no page to run.
    What it pins is the pair of facts the rest of the platform will build on: what a policy PERMITS, and that a
    child's container is a CLONE whose answers do not move when the parent's would. */
+/* TRUSTED TYPES §4.4, in C, for the same reason the one below is: it is a parse over a serialized CSP list and
+   it has no page to run. What it pins is the answer every HTML sink's step 1 turns on — a document with no
+   policy requires nothing, and one that requires trusted types is one on which `el.innerHTML = s` THROWS, so
+   getting either side wrong silently changes what the solver explores on every page that carries a policy. */
+static void trusted_types_selftest(void)
+{
+    /* "No Content-Security-Policy" is the overwhelmingly common case, and a wrong default here would throw a
+       TypeError out of every innerHTML assignment on the web. */
+    CHECK(!trusted_types_required_by(NULL, TRUSTED_TYPE_HTML), "no policy must require no trusted type");
+    CHECK(!trusted_types_required_by("script-src 'self'", TRUSTED_TYPE_HTML),
+          "a policy without require-trusted-types-for must require no trusted type");
+    CHECK(trusted_types_required_by("require-trusted-types-for 'script'", TRUSTED_TYPE_HTML),
+          "require-trusted-types-for 'script' must require one at an HTML sink");
+    /* CSP §2.2: directives are `;`-delimited within one policy, so the directive is found wherever it sits. */
+    CHECK(trusted_types_required_by("script-src 'self'; require-trusted-types-for 'script'", TRUSTED_TYPE_SCRIPT),
+          "a directive after another in the same policy must still be read");
+    /* And POLICIES are `,`-delimited, enforced independently — so ANY of them requiring trusted types requires
+       them, which is the opposite quantifier from policy_allows and the one a copy of that loop would get
+       wrong. */
+    CHECK(trusted_types_required_by("default-src 'none', require-trusted-types-for 'script'",
+                                    TRUSTED_TYPE_SCRIPT_URL),
+          "a second policy in the list requiring trusted types must require them");
+    /* The grammar writes a sink group as a QUOTED keyword. An unquoted token is not the keyword, and a
+       directive with no value covers no group — the value IS the set it covers. */
+    CHECK(!trusted_types_required_by("require-trusted-types-for script", TRUSTED_TYPE_HTML),
+          "an unquoted sink group is not the keyword");
+    CHECK(!trusted_types_required_by("require-trusted-types-for", TRUSTED_TYPE_HTML),
+          "a directive with no value requires nothing");
+}
+
 static void policy_container_selftest(void)
 {
     PolicyContainer *none, *self_only, *inline_ok, *nonced, *evals, *child;
@@ -1721,6 +1752,7 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
 
 int main(void) {
     JSRuntime *rt;
+    trusted_types_selftest();
     policy_container_selftest();
     document_policy_selftest();
     rt = JS_NewRuntime();
