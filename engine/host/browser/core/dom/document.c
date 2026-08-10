@@ -512,51 +512,47 @@ const char *document_base_url(JSContext *ctx)
     return d->url;
 }
 
-/* HTML's CURRENT DOCUMENT READINESS, and the reason it is not simply `readyState`. §3.1.1 declares readyState a
-   READONLY attribute; this engine has it as a data property, so a page can assign it — and the load lifecycle
-   and §8.1.7.3 step 3's render-blocked test both READ it, which would let `document.readyState = "complete"`
-   skip a document's DOMContentLoaded and unblock its rendering. The readiness therefore lives in an OWN SLOT
-   under a private Symbol a page cannot name, exactly as an Event's internal slots do, and `readyState` REFLECTS
-   it. Both are per-FLOW heap writes, so the COW delta isolates one arm's lifecycle from its sibling's. */
-static JSValue g_ready_key = JS_UNDEFINED;
+/* HTML's CURRENT DOCUMENT READINESS, and the reason it is not simply `readyState`. §3.1.1 declares readyState
+   a READONLY attribute; this engine has it as a data property, so a page can assign it — and the load
+   lifecycle and §8.1.7.3 step 3's render-blocked test both READ it, which would let
+   `document.readyState = "complete"` skip a document's DOMContentLoaded and unblock its rendering.
+ *
+ * IT LIVES IN THIS REALM'S OWN BASELINE RECORD, the same shape §8.9's map of animation frame callbacks and
+ * §7.4.6.3's has-been-revealed use, and for the same two reasons: the record is unreachable from the page, so
+ * nothing can write the readiness but this component; and its `stage` is an ordinary property write, so the
+ * heap COW captures it and one arm of a fork advances its lifecycle without touching its sibling's.
+ * A private Symbol on the Document would have done the first job and not the second cleanly — and it would
+ * have been an AGENT-wide value freed by a PER-REALM teardown (document_free runs once per realm, from
+ * navigable.c's realm sweep), which is one document dropping the key the others still read through. */
+static int g_ready_slot = -1;
 
 static void document_set_ready(JSContext *ctx, int stage)
 {
     Document *d = doc_here(ctx);
     static const char *const NAMES[3] = { "loading", "interactive", "complete" };
-    JSAtom k;
+    JSValue rec;
 
     DCHECK(stage >= 0 && stage <= 2, "a document readiness HTML does not define");
-    if (!JS_IsObject(d->doc_obj))
-        return;
-    k = JS_ValueToAtom(ctx, g_ready_key);
-    CHECK(k != JS_ATOM_NULL, "the document-readiness slot key could not be reached");
-    JS_DefinePropertyValue(ctx, d->doc_obj, k, JS_NewInt32(ctx, stage), 0);   /* internal: not writable */
-    JS_FreeAtom(ctx, k);
-    JS_SetPropertyStr(ctx, d->doc_obj, "readyState", JS_NewString(ctx, NAMES[stage]));
+    rec = realm_value_get(ctx, g_ready_slot);
+    DCHECK(JS_IsObject(rec), "a realm answered for its document readiness with no record");
+    JS_SetPropertyStr(ctx, rec, "stage", JS_NewInt32(ctx, stage));
+    JS_FreeValue(ctx, rec);
+    if (JS_IsObject(d->doc_obj))   /* `readyState` REFLECTS it, for the page that missed the event */
+        JS_SetPropertyStr(ctx, d->doc_obj, "readyState", JS_NewString(ctx, NAMES[stage]));
 }
 
-/* This document's readiness: 0 loading, 1 interactive, 2 complete. A realm with no Document yet is 0 — a
-   Document that has certainly not finished parsing. */
+/* This document's readiness: 0 loading, 1 interactive, 2 complete. */
 static int document_readiness(JSContext *ctx)
 {
-    Document *d = doc_of(ctx);
-    JSAtom k;
-    JSValue v;
+    JSValue rec = realm_value_get(ctx, g_ready_slot), v;
     int32_t r = 0;
 
-    if (!d || !JS_IsObject(d->doc_obj))
-        return 0;
-    k = JS_ValueToAtom(ctx, g_ready_key);
-    CHECK(k != JS_ATOM_NULL, "the document-readiness slot key could not be reached");
-    /* AN OWN SLOT, never a property LOOKUP: a lookup walks the prototype chain into the solver's absent-state
-       seam and would mint a concolic for a name nobody defined. */
-    if (JS_GetOwnSlot(ctx, &v, d->doc_obj, k) <= 0) v = JS_UNDEFINED;
-    JS_FreeAtom(ctx, k);
-    if (JS_IsUndefined(v)) { JS_FreeValue(ctx, v); return 0; }
+    DCHECK(JS_IsObject(rec), "a realm answered for its document readiness with no record");
+    v = JS_GetPropertyStr(ctx, rec, "stage");
     JS_ToInt32(ctx, &r, v);
     JS_FreeValue(ctx, v);
-    DCHECK(r >= 0 && r <= 2, "a document's readiness slot holds a stage HTML does not define");
+    JS_FreeValue(ctx, rec);
+    DCHECK(r >= 0 && r <= 2, "a document's readiness record holds a stage HTML does not define");
     return r;
 }
 
@@ -624,13 +620,26 @@ int document_lifecycle_step(JSContext *ctx)
     for (i = 0; i < n && !did; i++) {          /* pass one: DOMContentLoaded, in tree order */
         JSValue proxy = JS_GetPropertyUint32(ctx, docs, i);
         JSContext *realm = window_proxy_realm(ctx, proxy);
-        if (document_readiness(realm) == 0) { document_done_stage(realm, 0); did = 1; }
+        if (document_readiness(realm) == 0) {
+            document_done_stage(realm, 0);
+            DCHECK(document_readiness(realm) == 1,
+                   "a document's DOMContentLoaded stage ran and left its readiness where it was — this walk "
+                   "would then pick the same document for ever, queueing its listeners again every turn, which "
+                   "is a live-lock the scheduler cannot tell from progress");
+            did = 1;
+        }
         JS_FreeValue(ctx, proxy);
     }
     for (i = n; i > 0 && !did; i--) {          /* pass two: `load`, innermost first */
         JSValue proxy = JS_GetPropertyUint32(ctx, docs, i - 1);
         JSContext *realm = window_proxy_realm(ctx, proxy);
-        if (document_readiness(realm) == 1) { document_done_stage(realm, 1); did = 1; }
+        if (document_readiness(realm) == 1) {
+            document_done_stage(realm, 1);
+            DCHECK(document_readiness(realm) == 2,
+                   "a document's `load` stage ran and left its readiness where it was — as above, the walk "
+                   "would re-fire it every turn");
+            did = 1;
+        }
         JS_FreeValue(ctx, proxy);
     }
     JS_FreeValue(ctx, docs);
@@ -869,10 +878,7 @@ void document_init(JSContext *ctx)
     JS_NewClassID(JS_GetRuntime(ctx), &g_document_class);
     JS_NewClass(JS_GetRuntime(ctx), g_document_class, &d);
     node_claim_type(LXB_DOM_NODE_TYPE_DOCUMENT, g_document_class);
-    /* The readiness slot's key — the AGENT's, like every other private slot key, because the readiness lives on
-       each realm's Document and they are all read through this one name. */
-    g_ready_key = JS_NewSymbol(ctx, "documentReadiness", false);
-    CHECK(!JS_IsException(g_ready_key), "the document-readiness slot key allocation failed");
+    g_ready_slot = realm_value_declare(ctx, "HTML current document readiness");
     document_declare_members(ctx);
     document_fragment_init(ctx);   /* §4.7, before any fragment is wrapped as a bare Node */
     realm_declare_intrinsic(document_install_proto);
@@ -899,6 +905,16 @@ void document_install_proto(JSContext *ctx)
     node_install_parent_mixin(ctx, proto);
     node_install_nonelement_parent_mixin(ctx, proto);
     JS_SetClassProto(ctx, g_document_class, proto);
+    /* THIS REALM'S DOCUMENT READINESS, built with the realm so it belongs to the pre-boot BASELINE — the same
+       reason §8.9's map and §7.4.6.3's flag are built here. It exists before this realm has a Document at all,
+       which is right: "loading" is what a Document that has not been installed yet would answer anyway, and
+       the lifecycle walk only ever reaches a realm through its materialized navigable. */
+    {
+        JSValue rec = JS_NewObjectProto(ctx, JS_NULL);
+        CHECK(!JS_IsException(rec), "this realm's document-readiness record could not be allocated");
+        JS_SetPropertyStr(ctx, rec, "stage", JS_NewInt32(ctx, 0));
+        realm_value_set(ctx, g_ready_slot, rec);
+    }
 }
 
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
@@ -1030,7 +1046,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        page, from these two lines. */
     d->doc_obj = doc;
     /* HTML: a Document's readiness starts at "loading" — its parser has not finished. Written through the one
-       writer so the internal slot and the reflecting `readyState` cannot disagree. */
+       writer so the record and the reflecting `readyState` cannot disagree. */
     document_set_ready(ctx, 0);
     d->win_obj = JS_DupValue(ctx, global);
     /* The interface OBJECTS, now that every prototype exists. Node's goes first because the derived ones
@@ -1098,10 +1114,6 @@ void document_free(JSContext *ctx)
 {
     Document *d = doc_of(ctx);
 
-    /* The KEY is the agent's and is released whichever realm tears down last; the readiness itself is a
-       property of each Document and goes with it. */
-    JS_FreeValue(ctx, g_ready_key);
-    g_ready_key = JS_UNDEFINED;
     if (!d) return;   /* a realm that never had a document — the runner builds one per component test */
     JS_FreeValue(ctx, d->proxy);
     JS_FreeValue(ctx, d->win_obj);

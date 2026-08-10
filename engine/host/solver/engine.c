@@ -1046,9 +1046,11 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                 flow_drain_pending(ctx, f);
                 return 0;
             }
-            /* NOTHING QUEUED, NOTHING OWED — so the clock may move. A timer is due only when the event loop
-               has nothing else, and everything that IS due (this flow's jobs above, a reply the host owes) has
-               already been offered a turn by the time control reaches here. */
+            /* NOTHING QUEUED, NOTHING OWED. What follows is what becomes due when the flow has nothing else,
+               in the order it becomes due: first the load lifecycle, which is already due (a parser finishing
+               waits on no clock), and only then the two CLOCK-DRIVEN sources — and by the time control reaches
+               here everything that was already due (this flow's jobs above, a reply the host owes) has been
+               offered a turn. */
             /* A DOCUMENT FINISHED LOADING, in this flow's world — DOMContentLoaded across the agent's
                documents in tree order, then `load` innermost-first, one per turn. It comes BEFORE the two
                clock-driven sources and that is the spec's order rather than a preference: the parser
