@@ -463,13 +463,164 @@ static JSValue js_cd_set_data(JSContext *ctx, JSValueConst this_val, JSValueCons
     return JS_UNDEFINED;
 }
 
+/* The byte length of the UTF-8 sequence a lead byte opens. A continuation byte reaching here would be a
+   sequence this walk started inside, which Lexbor's storage cannot produce. */
+static size_t cd_seq_len(unsigned char c)
+{
+    return c < 0x80 ? 1 : (c < 0xE0 ? 2 : (c < 0xF0 ? 3 : 4));
+}
+
+/* §4.4's LENGTH IS IN UTF-16 CODE UNITS, AND LEXBOR STORES UTF-8 — so every offset §4.10 takes is a code-unit
+   offset into a byte string, and answering `data.length` was answering BYTES. `t.data = "é"; t.length` said 2
+   where every engine says 1, and every offset a page computed from that length then addressed the wrong place.
+   One conversion, used by `length`, by substringData and by "replace data", because three copies of a UTF-8
+   walk is three chances to disagree about where a code point ends. */
+static uint32_t cd_units(const lxb_char_t *s, size_t len)
+{
+    uint32_t u = 0;
+    size_t i = 0;
+
+    while (i < len) {
+        size_t adv = cd_seq_len(s[i]);
+        if (i + adv > len) adv = len - i;   /* a truncated sequence counts as the bytes that are there */
+        u += (adv == 4) ? 2 : 1;            /* a code point above the BMP is a SURROGATE PAIR: two units */
+        i += adv;
+    }
+    return u;
+}
+
+/* The BYTE offset at which code-unit offset `want` begins, clamped to `len`.
+   A `want` that lands BETWEEN the two halves of a surrogate pair answers the byte offset of the WHOLE pair:
+   UTF-8 has no representation for half a surrogate, so a split there cannot be stored. That is a limit of the
+   store and not of this walk — it is where CharacterData-surrogates diverges from a UTF-16 engine — and it is
+   clamped rather than rounded so the split never lands mid-sequence and corrupts the text. */
+static size_t cd_byte_of(const lxb_char_t *s, size_t len, uint32_t want)
+{
+    uint32_t u = 0;
+    size_t i = 0;
+
+    while (i < len && u < want) {
+        size_t adv = cd_seq_len(s[i]);
+        if (i + adv > len) adv = len - i;
+        u += (adv == 4) ? 2 : 1;
+        i += adv;
+    }
+    return i;
+}
+
 static JSValue js_cd_get_length(JSContext *ctx, JSValueConst this_val)
 {
     lxb_dom_node_t *n = node_of(this_val);
+    lxb_dom_character_data_t *cd;
+
     if (!n) return JS_NewInt32(ctx, 0);
     if (!node_is_chardata(n))
         return JS_ThrowTypeError(ctx, "CharacterData.length read on a node that holds no character data");
-    return JS_NewInt32(ctx, (int)lxb_dom_interface_character_data(n)->data.length);
+    cd = lxb_dom_interface_character_data(n);
+    return JS_NewInt32(ctx, (int)cd_units(cd->data.data, cd->data.length));
+}
+
+/* §4.10 "REPLACE DATA", and the four members that ARE it with different operands — appendData is
+   (length, 0, data), insertData is (offset, 0, data), deleteData is (offset, count, "") and replaceData is
+   itself. Written once because they are one algorithm; four bodies would be four places for the IndexSizeError
+   and the count clamp to drift, and the standard states them once for the same reason.
+   WHAT IS NOT HERE, and is therefore honestly absent rather than half-done: step 4's characterData mutation
+   record (MutationObserver is not built) and steps 8-11's live-range fixups (§5's ranges are, but the
+   boundary-point adjustment is that component's algorithm and calling it from here would be this file's
+   second copy of it). A page reading `range.startOffset` after a splice sees the unadjusted offset; the splice
+   itself is right. */
+static JSValue cd_replace_data(JSContext *ctx, lxb_dom_node_t *n, uint32_t offset, uint32_t count,
+                               const char *data, size_t data_len)
+{
+    lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(n);
+    const lxb_char_t *s = cd->data.data;
+    size_t len = cd->data.length, a, b, out_len;
+    uint32_t length = cd_units(s, len);
+    char *out;
+
+    if (offset > length)                                            /* step 2 */
+        return JS_ThrowDOMException(ctx, "IndexSizeError",
+                                    "the offset is past the end of the character data");
+    if ((uint64_t)offset + count > length)                          /* step 3 */
+        count = length - offset;
+    a = cd_byte_of(s, len, offset);                                 /* steps 5-7, as one splice */
+    b = cd_byte_of(s, len, offset + count);
+    out_len = a + data_len + (len - b);
+    out = malloc(out_len + 1);
+    CHECK(out != NULL, "CharacterData: OOM splicing a node's data — a dropped write is a document that "
+                       "disagrees with the program that wrote it");
+    memcpy(out, s, a);
+    memcpy(out + a, data, data_len);
+    memcpy(out + a + data_len, s + b, len - b);
+    out[out_len] = 0;
+    dom_cow_set_text(n, out, out_len);   /* the chokepoint: capture-then-mutate, per flow */
+    free(out);
+    return JS_UNDEFINED;
+}
+
+/* §4.10's five members. magic: 0 substringData, 1 appendData, 2 insertData, 3 deleteData, 4 replaceData.
+   Every argument arrives CONVERTED — `unsigned long` and `DOMString` are the declaration's work — so nothing
+   here runs the page's code and the body is ordinary C. */
+static JSValue js_cd_op(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+    lxb_dom_character_data_t *cd;
+    uint32_t offset = 0, count = 0;
+    const char *data = NULL;
+    size_t data_len = 0;
+    JSValue r;
+
+    if (!n || !node_is_chardata(n))
+        return JS_ThrowTypeError(ctx, "a CharacterData method ran on a node that holds no character data");
+    cd = lxb_dom_interface_character_data(n);
+    switch (magic) {
+    case 0: case 3: case 4:
+        JS_ToUint32(ctx, &offset, argv[0]);
+        JS_ToUint32(ctx, &count, argv[1]);
+        break;
+    case 2:
+        JS_ToUint32(ctx, &offset, argv[0]);
+        break;
+    default:
+        DCHECK(magic == 1, "a CharacterData method was declared with a magic §4.10 does not name");
+        break;
+    }
+    if (magic == 0) {                                               /* substringData */
+        uint32_t length = cd_units(cd->data.data, cd->data.length);
+        size_t a, b;
+
+        if (offset > length)                                        /* step 2 */
+            return JS_ThrowDOMException(ctx, "IndexSizeError",
+                                        "the offset is past the end of the character data");
+        if ((uint64_t)offset + count > length)                      /* step 3 */
+            count = length - offset;
+        a = cd_byte_of(cd->data.data, cd->data.length, offset);
+        b = cd_byte_of(cd->data.data, cd->data.length, offset + count);
+        return JS_NewStringLen(ctx, (const char *)cd->data.data + a, b - a);
+    }
+    if (magic != 3) {                                               /* the three that take a DOMString */
+        JSValueConst v = (magic == 1) ? argv[0] : (magic == 2 ? argv[1] : argv[2]);
+        DCHECK(JS_IsString(v) || concolic_is(v),
+               "a CharacterData splice reached the body with an unconverted operand — the IDL declaration is "
+               "what converts it, and running the page's toString from here is the drive-to-completion the "
+               "flow machinery exists to avoid");
+        /* Unknown external input has no bytes: its SHAPE is what the node carries, the same answer `data`
+           gives, so a source spliced into the tree still displays as the source it came from. */
+        data = concolic_is(v) ? concolic_shape_c(v) : JS_ToCStringLen(ctx, &data_len, v);
+        if (!data) return JS_EXCEPTION;
+        if (concolic_is(v)) data_len = strlen(data);
+    } else {
+        data = "";
+        data_len = 0;
+    }
+    if (magic == 1)                                                 /* appendData: offset is the length */
+        offset = cd_units(cd->data.data, cd->data.length);
+    if (magic == 1 || magic == 2)                                   /* append/insert delete nothing */
+        count = 0;
+    r = cd_replace_data(ctx, n, offset, count, data, data_len);
+    if (magic != 3 && !concolic_is((magic == 1) ? argv[0] : (magic == 2 ? argv[1] : argv[2])))
+        JS_FreeCString(ctx, data);
+    return r;
 }
 
 /* ---- §4.4 THE NODE ALGORITHMS ---------------------------------------------------------------------------
@@ -1894,6 +2045,7 @@ void node_wrap_forget(JSContext *ctx, lxb_dom_node_t *n)
 
 /* THE AGENT'S DECLARATIONS: the classes, the IDL pool entries, and which class each node type wears. The
    PROTOTYPES those classes name are built per realm, in node_install_protos. */
+static int g_id_cd[5] = { -1, -1, -1, -1, -1 };   /* §4.10's five splice members */
 static int g_id_nodevalue = -1, g_id_textcontent = -1, g_id_textcontent_get = -1, g_id_data = -1,
            g_id_lookup_prefix = -1, g_id_lookup_ns = -1, g_id_default_ns = -1, g_id_root = -1;
 
@@ -1940,6 +2092,19 @@ void node_init(JSContext *ctx)
     /* `attribute [LegacyNullToEmptyString] DOMString data` — the extended attribute is part of the TYPE, so the
        body never sees a null and never has to remember the rule. */
     g_id_data = idl_setter_id(ctx, IDL_DOMSTRING, true, js_cd_set_data, 0);
+    {
+        /* §4.10's five members, and their IDL is the whole of the argument handling: `unsigned long offset`,
+           `unsigned long count`, `DOMString data`. Declared here, installed per realm, like every other. */
+        static const IdlArgType CD_UL_UL[2]     = { IDL_UNSIGNED_LONG, IDL_UNSIGNED_LONG };
+        static const IdlArgType CD_STR[1]       = { IDL_DOMSTRING };
+        static const IdlArgType CD_UL_STR[2]    = { IDL_UNSIGNED_LONG, IDL_DOMSTRING };
+        static const IdlArgType CD_UL_UL_STR[3] = { IDL_UNSIGNED_LONG, IDL_UNSIGNED_LONG, IDL_DOMSTRING };
+        g_id_cd[0] = idl_method_id(ctx, CD_UL_UL,     2, js_cd_op, 0);   /* substringData */
+        g_id_cd[1] = idl_method_id(ctx, CD_STR,       1, js_cd_op, 1);   /* appendData    */
+        g_id_cd[2] = idl_method_id(ctx, CD_UL_STR,    2, js_cd_op, 2);   /* insertData    */
+        g_id_cd[3] = idl_method_id(ctx, CD_UL_UL,     2, js_cd_op, 3);   /* deleteData    */
+        g_id_cd[4] = idl_method_id(ctx, CD_UL_UL_STR, 3, js_cd_op, 4);   /* replaceData   */
+    }
     /* §4.4 the three namespace lookups. Each takes a `DOMString?`, so each goes on the shared IDL machine —
        `n.lookupPrefix({toString(){ … }})` is the page's code exactly like every other DOMString argument. */
     g_id_lookup_prefix = idl_method_id(ctx, IDL_1NSTR, 1, js_node_lookup_ns, 0);
@@ -1994,6 +2159,14 @@ void node_install_protos(JSContext *ctx)
     JS_SetPropertyFunctionList(ctx, cd, js_chardata_base,
                                (int)(sizeof(js_chardata_base) / sizeof(js_chardata_base[0])));
     idl_install_accessor(ctx, cd, "data", js_cd_get_data, 0, g_id_data);
+    {
+        static const char *const CD_NAMES[5] = { "substringData", "appendData", "insertData",
+                                                 "deleteData", "replaceData" };
+        static const int CD_ARGC[5] = { 2, 1, 2, 2, 3 };
+        int k;
+        for (k = 0; k < 5; k++)
+            idl_install_method(ctx, cd, CD_NAMES[k], CD_ARGC[k], g_id_cd[k]);
+    }
     /* §4.10: `CharacterData includes ChildNode` — `textNode.remove()` is real, and a page that tears down
        text with it had nothing. ParentNode is NOT included: character data has no children. */
     node_install_child_mixin(ctx, cd);
