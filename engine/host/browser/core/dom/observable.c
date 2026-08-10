@@ -683,6 +683,7 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
         case OP_TAKE_UNTIL: case OP_TAKE: case OP_DROP: case OP_INSPECT:
         case OP_TOARRAY: case OP_FOREACH: case OP_EVERY: case OP_FIRST:
         case OP_LAST: case OP_FIND: case OP_SOME: case OP_REDUCE:
+        case OP_WHEN:
             if (obs_ops_entry(ctx, s, op, &r))
                 return r;
             break;

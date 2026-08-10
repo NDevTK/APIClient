@@ -902,13 +902,18 @@ static int ops_stage_enter(JSContext *ctx, JSObsState *s, JSValue *pcb, JSValue 
         return 0;
 
     case OA_DROP_NEXT: {
+        /* "If remaining is > 0, then decrement remaining and abort these steps. Assert: remaining is 0."
+           The spec's `remaining` is an UNSIGNED LONG LONG, so "> 0" means "not 0" — and this engine carries
+           the amount as a SIGNED int64 because Web IDL's `drop(-1)` is 2^64-1, a count no subscription can
+           reach and no double can hold. Carried signed it counts DOWN from -1 without ever meeting zero,
+           which is the same observable behaviour; testing `> 0` instead of `!= 0` would emit on the very
+           first value and turn "drop everything" into "drop nothing". */
         int64_t rem = obs_rec_int(ctx, s->st, "remaining");
-        if (rem > 0) {
+        if (rem != 0) {
             obs_rec_set(ctx, s->st, "remaining", JS_NewInt64(ctx, rem - 1));
             obs_goto(s, S_DONE);
             return 0;
         }
-        DCHECK(rem == 0, "§2.3.2 drop: \"Assert: remaining is 0\" — the counter went past its own floor");
         obs_emit_enter(ctx, s, EM_NEXT, JS_DupValue(ctx, s->value), S_DONE);
         return 0;
     }
