@@ -1442,6 +1442,34 @@ static JSValue js_node_by_name(JSContext *ctx, JSValueConst this_val, int argc, 
     return r;
 }
 
+/* §4.5/§4.9 getElementsByTagNameNS — the OTHER by-name algorithm, and a different one rather than the same one
+   with an extra argument: it matches the LOCAL name case-sensitively (no HTML lowercasing) and the NAMESPACE,
+   with `*` meaning "any" in each position independently. The walk lives in the collection component beside its
+   sibling; what belongs here is §4.5's step 1. */
+static JSValue js_node_by_tag_ns(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+    const char *ns = NULL, *local;
+    JSValue r;
+
+    (void)magic;
+    if (!node_is_parent_node(n) || argc < 2) return JS_UNDEFINED;
+    /* §4.5 step 1: THE EMPTY STRING IS THE NULL NAMESPACE. Performed here rather than inside the walk so that
+       `getElementsByTagNameNS("", "x")` and `getElementsByTagNameNS(null, "x")` are one query by construction —
+       the standard states the conversion once and everything after it relies on having been given null. */
+    if (!JS_IsNull(argv[0])) {
+        ns = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
+        if (!ns) return JS_EXCEPTION;
+        if (!*ns) { JS_FreeCString(ctx, ns); ns = NULL; }
+    }
+    local = concolic_name_cstr(ctx, argv[1]);
+    if (!local) { if (ns) JS_FreeCString(ctx, ns); return JS_EXCEPTION; }
+    r = collections_by_tag_ns(ctx, this_val, ns, local);
+    JS_FreeCString(ctx, local);
+    if (ns) JS_FreeCString(ctx, ns);
+    return r;
+}
+
 static const JSCFunctionListEntry js_parent_node_reads[] = {
     JS_CGETSET_MAGIC_DEF("children", js_node_element_children, NULL, 0),
     JS_CGETSET_MAGIC_DEF("firstElementChild", js_node_element_children, NULL, 1),
@@ -1630,7 +1658,7 @@ void node_install_child_mixin(JSContext *ctx, JSValueConst proto)
 /* THE WHOLE MIXIN, in one call. An interface that includes ParentNode gets everything §4.2.6 lists — not the
    three insertion members while its reads and lookups are re-declared per interface, which is how Document
    ended up without `children` and with a querySelector that ignored its receiver. */
-static int g_id_qs = -1, g_id_qsa = -1, g_id_by_tag = -1, g_id_by_class = -1;
+static int g_id_qs = -1, g_id_qsa = -1, g_id_by_tag = -1, g_id_by_class = -1, g_id_by_tag_ns = -1;
 
 void node_install_parent_mixin(JSContext *ctx, JSValueConst proto)
 {
@@ -1647,6 +1675,7 @@ void node_install_parent_mixin(JSContext *ctx, JSValueConst proto)
        subtree is exactly what the walk would search. */
     idl_install_method(ctx, proto, "getElementsByTagName", 1, g_id_by_tag);
     idl_install_method(ctx, proto, "getElementsByClassName", 1, g_id_by_class);
+    idl_install_method(ctx, proto, "getElementsByTagNameNS", 2, g_id_by_tag_ns);
 }
 
 /* Every mixin's declarations, once per agent — see node_declare_walkers for why this is split at all. */
@@ -1661,6 +1690,12 @@ static void node_declare_mixins(JSContext *ctx)
     g_id_qsa = idl_method_id_step(ctx, ONE_STR, 1, NULL, 0, document_qs_decl(), 1);
     g_id_by_tag = idl_method_id(ctx, ONE_STR, 1, js_node_by_name, 0);
     g_id_by_class = idl_method_id(ctx, ONE_STR, 1, js_node_by_name, 1);
+    {
+        /* §4.5: `getElementsByTagNameNS(DOMString? namespace, DOMString localName)` — the first is
+           NULLABLE, which is what makes `null` a namespace rather than the four characters. */
+        static const IdlArgType NS_STR[2] = { IDL_DOMSTRING_NULLABLE, IDL_DOMSTRING };
+        g_id_by_tag_ns = idl_method_id(ctx, NS_STR, 2, js_node_by_tag_ns, 0);
+    }
 }
 
 static const JSCFunctionListEntry js_node_base[] = {

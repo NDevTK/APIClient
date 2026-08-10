@@ -41,7 +41,7 @@ static JSClassID g_nodelist_class, g_htmlcoll_class;
 /* Declared once per AGENT (the IDL pool is sealed after agent init); installed per realm. */
 static int g_item_id = -1, g_named_item_id = -1;
 
-static JSValue coll_new_hc(JSContext *ctx, int kind, JSValueConst owner, const char *name);
+static JSValue coll_new_hc(JSContext *ctx, int kind, JSValueConst owner, const char *name, const char *ns);
 static JSValue g_key = JS_UNDEFINED;        /* the collection's own slots, under a private Symbol */
 static JSValue g_cache_key = JS_UNDEFINED;  /* the [SameObject] cache on an owner's wrapper */
 static int     g_ready;
@@ -421,24 +421,24 @@ static JSValue coll_item(JSContext *ctx, JSValueConst self, uint32_t i)
         DCHECK(coll_in_subtree(cc->node, n),
                "a cached collection member has left the collection's owner — a tree mutation did not advance "
                "dom_cow_version, so the cache is describing a tree that is gone");
-        c = i >= cc->index ? coll_step(kind, q, qlen, n, cc->node, i - cc->index, 1)
-                           : coll_step(kind, q, qlen, n, cc->node, cc->index - i, 0);
-        if (q) JS_FreeCString(ctx, q);
+        c = i >= cc->index ? coll_step(kind, &q, n, cc->node, i - cc->index, 1)
+                           : coll_step(kind, &q, n, cc->node, cc->index - i, 0);
+        coll_query_free(ctx, &q);
         if (!c) return JS_UNDEFINED;
         cc->index = i;
         cc->node = c;
         return node_wrap(ctx, c);
     }
     for (c = coll_first_node(kind, n); c; c = coll_adv(kind, n, c, 1)) {
-        if (!coll_takes(kind, q, qlen, c)) continue;
+        if (!coll_takes(kind, &q, c)) continue;
         if (k == i) {
             if (cc) { cc->index = i; cc->node = c; }
-            if (q) JS_FreeCString(ctx, q);
+            coll_query_free(ctx, &q);
             return node_wrap(ctx, c);
         }
         k++;
     }
-    if (q) JS_FreeCString(ctx, q);
+    coll_query_free(ctx, &q);
     }
     return JS_UNDEFINED;
 }
@@ -513,7 +513,7 @@ static JSValue js_coll_named_item(JSContext *ctx, JSValueConst this_val, int arg
 
 /* ---- construction ------------------------------------------------------------------------------------------ */
 static JSValue coll_new(JSContext *ctx, JSValueConst proto, const IdlIndexedDecl *decl, int kind,
-                        JSValueConst owner, const char *name)
+                        JSValueConst owner, const char *name, const char *ns)
 {
     JSValue obj = idl_indexed_new(ctx, proto, decl), slots;
     JSAtom k;
@@ -524,6 +524,11 @@ static JSValue coll_new(JSContext *ctx, JSValueConst proto, const IdlIndexedDecl
     JS_SetPropertyStr(ctx, slots, "kind", JS_NewInt32(ctx, kind));
     JS_SetPropertyStr(ctx, slots, "owner", JS_DupValue(ctx, owner));
     if (name) JS_SetPropertyStr(ctx, slots, "name", JS_NewString(ctx, name));
+    /* §4.5's NS form: the namespace is part of what the collection IS, so it rides the slots beside the name.
+       JS_NULL rather than absent, because the NULL NAMESPACE is a real query and "no namespace was given" is
+       not a state this algorithm has. */
+    if (kind == COLL_BY_TAG_NS)
+        JS_SetPropertyStr(ctx, slots, "ns", ns ? JS_NewString(ctx, ns) : JS_NULL);
     k = JS_ValueToAtom(ctx, g_key);
     CHECK(k != JS_ATOM_NULL, "the collection slot key could not be reached");
     JS_DefinePropertyValue(ctx, obj, k, slots, 0);
@@ -554,7 +559,7 @@ static JSValue coll_cached(JSContext *ctx, JSValueConst owner, int kind, JSValue
     coll = JS_GetPropertyUint32(ctx, cache, (uint32_t)kind);
     if (!JS_IsObject(coll)) {
         JS_FreeValue(ctx, coll);
-        coll = coll_new(ctx, proto, decl, kind, owner, NULL);
+        coll = coll_new(ctx, proto, decl, kind, owner, NULL, NULL);
         JS_SetPropertyUint32(ctx, cache, (uint32_t)kind, JS_DupValue(ctx, coll));
     }
     JS_FreeValue(ctx, cache);
@@ -586,8 +591,16 @@ JSValue collections_children(JSContext *ctx, JSValueConst owner)
 JSValue collections_by_name(JSContext *ctx, JSValueConst owner, const char *name, bool by_class)
 {
     DCHECK(g_ready, "a by-name collection was built before collections_init ran");
-    return coll_new_hc(ctx,
-                    by_class ? COLL_BY_CLASS : COLL_BY_TAG, owner, name);
+    return coll_new_hc(ctx, by_class ? COLL_BY_CLASS : COLL_BY_TAG, owner, name, NULL);
+}
+
+/* §4.5's "list of elements with namespace namespace and local name localName" — getElementsByTagNameNS on both
+   Document and Element. LIVE and not [SameObject], like its qualified-name sibling. `ns` NULL is the NULL
+   NAMESPACE, which matches an element in no namespace; the empty string became null at the member. */
+JSValue collections_by_tag_ns(JSContext *ctx, JSValueConst owner, const char *ns, const char *local)
+{
+    DCHECK(g_ready, "a by-namespace collection was built before collections_init ran");
+    return coll_new_hc(ctx, COLL_BY_TAG_NS, owner, local, ns);
 }
 
 /* §3.1.5's `document.links` — `a`/`area` WITH an href, which is a predicate rather than a name, so it is its
@@ -595,13 +608,13 @@ JSValue collections_by_name(JSContext *ctx, JSValueConst owner, const char *name
 JSValue collections_named(JSContext *ctx, JSValueConst owner, const char *name)
 {
     DCHECK(g_ready, "a named collection was built before collections_init ran");
-    return coll_new_hc(ctx, COLL_NAMED, owner, name);
+    return coll_new_hc(ctx, COLL_NAMED, owner, name, NULL);
 }
 
 JSValue collections_links(JSContext *ctx, JSValueConst owner)
 {
     DCHECK(g_ready, "a links collection was built before collections_init ran");
-    return coll_new_hc(ctx, COLL_LINKS, owner, NULL);
+    return coll_new_hc(ctx, COLL_LINKS, owner, NULL, NULL);
 }
 
 JSValue collections_static(JSContext *ctx, JSValue nodes)
@@ -611,7 +624,7 @@ JSValue collections_static(JSContext *ctx, JSValue nodes)
     DCHECK(g_ready, "a static NodeList was built before collections_init ran");
     {
         JSValue proto = nodelist_proto(ctx);
-        coll = coll_new(ctx, proto, &NODELIST_INDEXED, COLL_STATIC, nodes, NULL);
+        coll = coll_new(ctx, proto, &NODELIST_INDEXED, COLL_STATIC, nodes, NULL, NULL);
         JS_FreeValue(ctx, proto);
     }
     JS_FreeValue(ctx, nodes);   /* the slots hold their own reference */
@@ -684,10 +697,10 @@ JSValue htmlcollection_proto(JSContext *ctx)
 }
 
 /* An HTMLCollection, in THIS realm — the three call sites that build one differ only in their query. */
-static JSValue coll_new_hc(JSContext *ctx, int kind, JSValueConst owner, const char *name)
+static JSValue coll_new_hc(JSContext *ctx, int kind, JSValueConst owner, const char *name, const char *ns)
 {
     JSValue proto = htmlcollection_proto(ctx);
-    JSValue r = coll_new(ctx, proto, &HTMLCOLL_INDEXED, kind, owner, name);
+    JSValue r = coll_new(ctx, proto, &HTMLCOLL_INDEXED, kind, owner, name, ns);
     JS_FreeValue(ctx, proto);
     return r;
 }

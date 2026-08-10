@@ -29,6 +29,11 @@ JSValue collections_static(JSContext *ctx, JSValue nodes);
    mark these [SameObject], because the query is part of what the collection is. */
 JSValue collections_by_name(JSContext *ctx, JSValueConst owner, const char *name, bool by_class);
 
+/* §4.5's OTHER by-name algorithm: "list of elements with namespace `ns` and local name `local`", LIVE over
+   `owner`'s subtree. `*` means any in EITHER position independently, and `ns` NULL is the null namespace —
+   a real query matching an element in no namespace, which is why it is not spelled as an empty string. */
+JSValue collections_by_tag_ns(JSContext *ctx, JSValueConst owner, const char *ns, const char *local);
+
 /* HTML §7.3.3's NAMED ELEMENTS, live over `owner`'s subtree: any HTML element whose `id` is `name`, plus
    embed/form/img/object/iframe whose `name` attribute is. It is what named access on the Window answers with
    when more than one element carries the name — the spec returns an HTMLCollection there, not the first match,
