@@ -132,20 +132,15 @@ static int idl_indexed_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t
     return 0;
 }
 
-/* THERE IS NO EXOTIC [[HasProperty]], AND THAT IS THE SPEC, NOT AN OMISSION. Web IDL §3.9 overrides exactly
-   five internal methods on a legacy platform object — [[GetOwnProperty]], [[DefineOwnProperty]], [[Set]],
-   [[Delete]] and [[OwnPropertyKeys]] — and [[HasProperty]] is not among them, so `x in list` is
-   OrdinaryHasProperty: this object's own lookup (which IS the indexed getter above, reached through
-   [[GetOwnProperty]]) and then THE PROTOTYPE CHAIN.
-   A hook here truncates that chain, because quickjs's contract for `has_property` is that the exotic answers
-   definitively — it returns the exotic's answer and never walks the prototype. So one existed and
-   `'length' in el.children` was FALSE while `el.children.length` answered 1, and `'item' in list`, `'add' in
-   classList` and `'getNamedItem' in el.attributes` were false the same way. testharness's assert_array_equals
-   opens with `"length" in actual`, so every collection assertion in the corpus failed its precondition and
-   reported the collection as "not an array" — a hundred subtests whose real message was that `in` was wrong. */
+static int idl_indexed_has(JSContext *ctx, JSValueConst obj, JSAtom prop)
+{
+    return idl_indexed_get_own(ctx, NULL, obj, prop);
+}
+
 static JSClassExoticMethods g_exotic = {
     .get_own_property = idl_indexed_get_own,
     .get_own_property_names = idl_indexed_own_names,
+    .has_property = idl_indexed_has,
     /* The lookup above is an index parse and a read of the component's own state. There is no accessor in a
        Web IDL indexed property getter by construction, which is what lets the engine's accessor walk run it
        from C instead of routing it onto the trampoline. */

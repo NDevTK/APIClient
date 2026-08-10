@@ -321,6 +321,44 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
     JSContext *docctx;
     int r, k;
 
+    /* THE PAGE'S CODE THREW, AND THAT IS NOT THIS TASK'S COMPLETION. §8.9 invokes an animation frame callback
+       with "report" and §2.9 says the same of a listener: the exception is REPORTED and the walk CONTINUES. So
+       this machine DECLARES catches_abrupt and the throw arrives here as a value instead of tearing the
+       machine down — which is what used to happen, and it cost more than it looked like: steps 15 through 23
+       of that frame were skipped, the remaining callbacks were left for the NEXT frame, and the exception
+       itself was swallowed with nothing anywhere to say a page had thrown.
+       REPORTING IT IS A COMPONENT THIS ENGINE DOES NOT HAVE. HTML §8.1.4.6 "report an exception" fires `error`
+       at the global using an ErrorEvent carrying message/filename/lineno/colno/error, and neither ErrorEvent
+       nor the current script position an unmuted report needs exists here. It is not this component's to
+       invent: DOM §2.9's throwing listener needs the identical algorithm (event_target.c's dispatch machine
+       declares no catches_abrupt either, so a throwing listener aborts a dispatch today) and RESIZE OBSERVER
+       §3.4.6's "deliver resize loop error" is the same fire at step 16.3. One component, three callers. */
+    if (JS_IsException(cb_result)) {
+        JSValue exc = JS_GetException(ctx);
+
+        DFAIL("the page's code threw inside update-the-rendering, and both callers here invoke it with "
+              "\"report\" (HTML §8.9 step 3, DOM §2.9 inner invoke) — build HTML §8.1.4.6 report-an-exception "
+              "as its own component: an ErrorEvent fired at the global, cancelable, carrying message/filename/"
+              "lineno/colno/error, with RESIZE OBSERVER §3.4.6's loop error as its third caller");
+        JS_FreeValue(ctx, exc);
+        cb_result = JS_UNDEFINED;
+        /* The abandoned request's buffer is this machine's, so it is released HERE rather than left for a new
+           request to overwrite — step_call_run only frees what it placed when it is RESUMED, and this one
+           never will be. */
+        for (k = 0; k < 4; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
+        if (s->hdr.stage == UR_REVEAL) {
+            s->fphase = 0;
+            JS_FreeValue(ctx, s->ev);
+            s->ev = JS_UNDEFINED;
+            s->i++;                      /* this document is revealed; the reveal is not retried */
+        } else if (s->hdr.stage == UR_FRAMES) {
+            s->cphase = 0;
+            JS_FreeValue(ctx, s->fn);
+            s->fn = JS_UNDEFINED;
+            s->k++;                      /* §8.9 removed the callback before invoking it: on to the next */
+        }
+    }
+
     if (s->hdr.stage == UR_DOCS) {
         /* EVERY OWNED FIELD IS ON THE STATE BEFORE ANYTHING THAT CAN FAIL — the failure path tears the machine
            down through fini, which frees exactly what the state holds. */
@@ -446,6 +484,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
 
 static const JSTrampStepDef js_update_rendering_def = {
     sizeof(JSUpdateRendering), js_update_rendering_step, js_update_rendering_fini, 0,
+    .catches_abrupt = 1,   /* §8.9 step 3 and §2.9 invoke the page's code with "report": a throw is a VALUE */
     .visit = js_update_rendering_visit,
     .algorithm = "HTML §8.1.7.3 update the rendering — the rendering task source's task",
     .steps = UPDATE_RENDERING_STEPS
