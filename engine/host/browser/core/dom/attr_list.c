@@ -255,6 +255,10 @@ lxb_dom_attr_t *dom_attr_create(lxb_dom_document_t *doc, const char *ns, const c
         st = lxb_dom_attr_set_name(a, (const lxb_char_t *)local, strlen(local), false);
     }
     CHECK(st == LXB_STATUS_OK, "dom-attr-oom: an attribute's name could not be interned");
+    /* §4.9.2 "create an attribute" step 2 sets the VALUE, and its default is THE EMPTY STRING. §9.1 lists an
+       attribute's value as "a string", so a value-less attribute is a state the model does not have — lexbor
+       leaves the field NULL until something writes it, and every reader would then have to carry that case. */
+    dom_attr_set_value(a, "", 0);
     return a;
 }
 

@@ -580,11 +580,35 @@ void dom_cow_insert_private(lxb_dom_node_t *root, lxb_dom_node_t *parent, lxb_do
    nodes that were never destroyed, leaving live nodes holding freed JSValues, which is an out-of-bounds access
    the moment one of them is touched again. Climbing only while `n != root` cannot leave the subtree.
    No C recursion: depth here is the page's data. */
+/* AN ELEMENT'S ATTRIBUTES ARE NOT ITS DESCENDANTS — DOM §4.5's adopt says so by re-documenting them in a step
+ * of its own, and this walk is over CHILDREN, so it visited none of them. Every one is a WRAPPED node all the
+ * same, and lexbor's `lxb_dom_element_interface_destroy` destroys the whole attribute list with the element,
+ * so an element freed here left every Attr wrapper the page still holds naming freed memory. `attr.value` then
+ * read a garbage `value` pointer — a SEGV in `dom/nodes/Node-cloneNode.html`, which clones elements, reads
+ * their attributes, and discards the delta that owns the copies.
+ * The taint shadow goes with the wrapper for the reason attr_shadow.h gives: its key is a POINTER into a pool,
+ * and an entry outliving its node is inherited by the next attribute allocated at that address. */
+static void dom_forget_node_attrs(JSContext *ctx, lxb_dom_node_t *n)
+{
+    lxb_dom_attr_t *a;
+
+    if (n->type != LXB_DOM_NODE_TYPE_ELEMENT)
+        return;
+    for (a = lxb_dom_interface_element(n)->first_attr; a; a = a->next) {
+        node_wrap_forget(ctx, lxb_dom_interface_node(a));
+        attr_shadow_forget(ctx, a);
+    }
+    /* AND THE ELEMENT'S OWN SLOTS, which are keyed on the element rather than on any attribute — a content
+       attribute's taint and a DOM property's both die with the element that owns them. */
+    attr_shadow_forget(ctx, lxb_dom_interface_element(n));
+}
+
 static void dom_forget_wrappers(JSContext *ctx, lxb_dom_node_t *root)
 {
     lxb_dom_node_t *n = root;
 
     for (;;) {
+        dom_forget_node_attrs(ctx, n);
         node_wrap_forget(ctx, n);
         if (n->first_child) { n = n->first_child; continue; }
         while (n != root && !n->next) n = n->parent;
