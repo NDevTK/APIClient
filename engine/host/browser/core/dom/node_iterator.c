@@ -54,7 +54,7 @@ static const CowRecord ITER_REC = { sizeof(IterData), ITER_VALS, 4 };
 
 /* THE AGENT'S LIVE ITERATORS — see the file header. Entries are BORROWED: the finalizer removes its own. */
 static JSValueConst *g_live;
-static int g_live_n, g_live_cap;
+static int g_live_n, g_live_cap, g_live_closed;
 
 static void iter_register(JSValueConst obj)
 {
@@ -81,6 +81,14 @@ static void iter_unregister(JSValueConst obj)
           "lifetimes have come apart, so a later removal would walk a freed entry");
 }
 
+static void iter_live_drop(void)
+{
+    if (g_live_n || !g_live_closed) return;
+    free(g_live);
+    g_live = NULL;
+    g_live_cap = 0;
+}
+
 static IterData *iter_of(JSValueConst v)
 {
     IterData *it = JS_GetOpaque(v, g_iter_class);
@@ -103,6 +111,7 @@ static void iter_finalizer(JSRuntime *rt, JSValue val)
     IterData *it = JS_GetOpaque(val, g_iter_class);
     if (!it) return;
     iter_unregister(val);
+    iter_live_drop();
     traverser_release(rt, &it->t);
     JS_FreeValueRT(rt, it->ref_node);
     JS_FreeValueRT(rt, it->cand_node);
@@ -415,11 +424,11 @@ void node_iterator_install(JSContext *ctx, JSValueConst global)
 void node_iterator_free(JSContext *ctx)
 {
     (void)ctx;
-    /* The entries are BORROWED and each object's finalizer removes its own, so by the time the runtime is gone
-       the list is empty — which is the invariant the registry rests on, asserted rather than assumed. */
-    DCHECK(g_live_n == 0, "the live-NodeIterator list still names objects at teardown — an iterator was freed "
-                          "without its finalizer running, or registered twice");
-    free(g_live);
-    g_live = NULL;
-    g_live_n = g_live_cap = 0;
+    /* THE LIST OUTLIVES THE COMPONENT'S TEARDOWN, and it has to. A component's `_free` runs BEFORE the runtime's
+       final sweep, so the objects whose finalizers unregister are still alive when it does — freeing the array
+       there is a use-after-free at the first finalizer, and asserting the list is empty there asserts an order the
+       runtime does not have. So teardown only says "no more registrations are coming", and the LAST finalizer
+       frees the array. A list that is already empty is freed at once, which is the ordinary case. */
+    g_live_closed = 1;
+    iter_live_drop();
 }

@@ -30,6 +30,7 @@
 #include "core/dom/node_iterator.h"
 #include "core/dom/tree_walker.h"
 #include "core/dom/node_filter.h"
+#include "core/dom/range.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/events/event_target.h"
@@ -1272,6 +1273,14 @@ typedef struct { TreeStepEntry *e; int n, i; } TreeStepBuf;
 static TreeStepEntry *g_ts;
 static int g_ts_n, g_ts_cap;
 
+/* §4.2.3's LIVE-RANGE steps, both directions: the pre-remove steps before a node leaves the tree, and insert's
+   step 4 after one enters it. */
+static void element_range_steps(JSContext *ctx, lxb_dom_node_t *n, int inserted)
+{
+    if (inserted) range_did_insert(ctx, n);
+    else          range_pre_remove(ctx, n);
+}
+
 /* §4.2.3's remove, step "for each NodeIterator object iterator whose root's node document is node's node
    document, run the NodeIterator pre-remove steps". It is a tree hook of its own rather than a line inside the
    one below, because they are two independent steps of the standard's algorithm and the one below returns early
@@ -1523,6 +1532,10 @@ void element_init(JSContext *ctx)
        removing steps, and the hook list runs in registration order, so the order here IS the standard's. */
     node_iterator_init(ctx);
     tree_walker_init(ctx);
+    range_init(ctx);
+    /* §4.2.3's remove runs the LIVE RANGE pre-remove steps FIRST, then §6.1's, then the removing steps — and
+       the hook list runs in registration order, so this order IS the standard's. */
+    node_add_tree_hook(element_range_steps);
     node_add_tree_hook(element_iterator_pre_remove);
     node_add_tree_hook(element_tree_changed);
     idl_set_tree_steps(&ELEMENT_TREE_STEPS);
@@ -1602,6 +1615,7 @@ void element_free(JSContext *ctx)
     html_element_free(ctx);
     cssom_free(ctx);
     custom_elements_free(ctx);
+    range_free(ctx);
     tree_walker_free(ctx);
     node_iterator_free(ctx);
     node_filter_free(ctx);

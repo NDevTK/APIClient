@@ -128,6 +128,11 @@ const INTERFACES = {
   NodeIterator:        ["core/dom/node_iterator.c", "core/dom/node_filter.c"],
   TreeWalker:          ["core/dom/tree_walker.c", "core/dom/node_filter.c"],
   NodeFilter:           "core/dom/node_filter.c",
+  /* DOM §5. AbstractRange's five getters are installed by the shared component and INHERITED by both derived
+     interfaces, so each names its own file plus that one — the same rule the BODY mixin's row states. */
+  AbstractRange:        "core/dom/abstract_range.c",
+  StaticRange:          "core/dom/abstract_range.c",
+  Range:               ["core/dom/range.c", "core/dom/abstract_range.c"],
   NodeList:            "core/dom/collections.c",
   HTMLCollection:      "core/dom/collections.c",
   Element:             ["core/dom/element.c", "core/dom/node.c", "core/events/event_target.c",

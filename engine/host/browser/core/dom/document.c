@@ -47,6 +47,7 @@ static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
 #include "core/dom/node_filter.h"
 #include "core/dom/node_iterator.h"
 #include "core/dom/tree_walker.h"
+#include "core/dom/range.h"
 
 /* THE DOCUMENT'S OWN STATE, HELD ON THE REALM THAT IS THIS DOCUMENT — not on the file.
  *
@@ -611,6 +612,17 @@ static JSValue js_doc_create_traverser(JSContext *ctx, JSValueConst this_val, in
                       : tree_walker_new(ctx, root, what, filter);
 }
 
+/* §4.5 `[NewObject] Range createRange()` — "a new live range with (this, 0) as its start and end". It is the
+   same construction `new Range()` performs, and it is the Document's rather than the current global's: a page
+   that calls `otherDoc.createRange()` gets a range rooted in THAT document. */
+static JSValue js_doc_create_range(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                   int magic)
+{
+    (void)argc; (void)argv; (void)magic;
+    DCHECK(node_of(this_val) != NULL, "createRange ran on something that is not a document");
+    return range_new_at(ctx, this_val);
+}
+
 /* The Document METHODS — on Document.prototype, so there is one of each rather than one per install, and so
    `Document.prototype.querySelector` is a thing that exists. */
 /* THE DECLARATIONS ARE THE AGENT'S, THE INSTALLS ARE THE REALM'S — the IDL pool is sealed after agent init, so
@@ -618,7 +630,7 @@ static JSValue js_doc_create_traverser(JSContext *ctx, JSValueConst this_val, in
 static JSClassID g_document_class;   /* §3.1.1's prototype slot, per realm */
 static int g_id_create_element = -1, g_id_create_text = -1, g_id_create_comment = -1,
            g_id_create_fragment = -1, g_id_create_element_ns = -1, g_id_create_iterator = -1,
-           g_id_create_walker = -1;
+           g_id_create_walker = -1, g_id_create_range = -1;
 
 static void document_declare_members(JSContext *ctx)
 {
@@ -639,6 +651,7 @@ static void document_declare_members(JSContext *ctx)
         idl_iface_brand(node_class_id());
         idl_optional_from(1);
     }
+    g_id_create_range = idl_method_id(ctx, NULL, 0, js_doc_create_range, 0);
 }
 
 static void document_install_members(JSContext *ctx, JSValueConst proto)
@@ -657,6 +670,7 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     idl_install_method(ctx, proto, "createElementNS", 2, g_id_create_element_ns);
     idl_install_method(ctx, proto, "createNodeIterator", 1, g_id_create_iterator);
     idl_install_method(ctx, proto, "createTreeWalker", 1, g_id_create_walker);
+    idl_install_method(ctx, proto, "createRange", 0, g_id_create_range);
     /* §3.1.1: `[PutForwards=href] readonly attribute Location? location`. The forwarding half of the extended
        attribute — `document.location = url` navigating — is NOT built, and it is absent rather than silently
        dropped: a setter that stored a string would make a page believe it had navigated. */
@@ -933,6 +947,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     node_filter_install(ctx, global);       /* §6.3 NodeFilter — the constants every traverser is read with */
     node_iterator_install(ctx, global);     /* §6.1 NodeIterator */
     tree_walker_install(ctx, global);       /* §6.2 TreeWalker */
+    range_install(ctx, global);             /* §5.3 AbstractRange, §5.4 StaticRange, §5.5 Range */
     collections_install(ctx, global);       /* §4.2.10 NodeList, §4.2.11 HTMLCollection */
     attr_install(ctx, global);              /* §4.9.1/§4.9.2 NamedNodeMap and Attr */
     document_fragment_install(ctx, global); /* §4.7 DocumentFragment, which IS constructible */

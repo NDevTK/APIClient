@@ -755,6 +755,18 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                         return JS_STEP_ABRUPT;
                     }
                 }
+                else if (mt == IDL_INTERFACE) {
+                    /* §3.2.16 on a dictionary member, which is where StaticRangeInit's four live: the brand
+                       test is the TYPE's, so the member does not cross as itself and the body performs no
+                       check of its own. */
+                    DCHECK(m->iface != 0, "a dictionary declared an interface-typed member with no class to "
+                                          "brand against — idl_iface_brand is the other half of that type");
+                    if (!JS_GetOpaque(s->dict_v, m->iface)) {
+                        JS_ThrowTypeError(ctx, "dictionary member `%s` does not implement the declared "
+                                          "interface", dm->name);
+                        return JS_STEP_ABRUPT;
+                    }
+                }
                 else if (idl_is_numeric(mt)) {
                     r = step_todouble_run(ctx, &s->hdr, s->dict_v, cb_result, &s->nums[s->i], out_cb, out_argc);
                     cb_result = JS_UNDEFINED;
