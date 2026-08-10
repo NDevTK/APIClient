@@ -74,7 +74,7 @@ static JSValue js_ctrl_get_value(JSContext *ctx, JSValueConst this_val, int magi
     int i;
 
     if (!el) return JS_NewStringLen(ctx, "", 0);
-    i = attr_shadow_find(el, ATTR_SLOT_PROPERTY, "value");
+    i = attr_shadow_find(el, ATTR_SLOT_PROPERTY, NULL, "value");
     if (i >= 0) return JS_DupValue(ctx, attr_shadow_opaque(i));   /* the state the page assigned */
 
     /* §4.10.11 a textarea's default value is its CHILD TEXT; §4.10.10.12 an option with no `value` attribute
@@ -111,7 +111,7 @@ static JSValue js_ctrl_get_checked(JSContext *ctx, JSValueConst this_val, int ma
 
     (void)magic;
     if (!el) return JS_FALSE;
-    i = attr_shadow_find(el, ATTR_SLOT_PROPERTY, "checked");
+    i = attr_shadow_find(el, ATTR_SLOT_PROPERTY, NULL, "checked");
     if (i >= 0) return JS_NewBool(ctx, JS_ToBool(ctx, attr_shadow_opaque(i)));
     return JS_NewBool(ctx, has_attr(el, "checked"));
 }

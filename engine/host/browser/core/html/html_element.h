@@ -10,6 +10,10 @@ void html_element_init(JSContext *ctx);
 /* §3.2.2 and §4's prototypes for ONE realm — declared into core/realm.h's list. */
 void html_element_install_protos(JSContext *ctx);
 void html_element_free(JSContext *ctx);
+/* §3.2.2's HTMLElement.prototype FOR THIS REALM. OWNED: the caller frees. HTML §4.13.2 step 9 needs it — a
+   custom element constructor whose NewTarget carries a non-object `prototype` gets the interface prototype
+   object of that constructor's realm, so the answer is a realm's and never a static. */
+JSValue html_element_proto(JSContext *ctx);
 /* The interface OBJECTS as globals — `HTMLElement`, `HTMLAnchorElement`, … Separate from the prototypes because
    they need a global to hang off, which the document install has and this does not. */
 void html_element_install(JSContext *ctx, JSValueConst global);

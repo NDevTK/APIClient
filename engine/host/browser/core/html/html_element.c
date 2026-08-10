@@ -36,6 +36,7 @@
 #include "core/html/hyperlink.h"
 #include "core/html/html_iframe.h"
 #include "core/events/event_target.h"
+#include "core/html/custom_elements.h"
 #include "core/html/html_element.h"
 #include "core/css/css_style_declaration.h"
 #include "core/html/html_form.h"
@@ -313,6 +314,13 @@ static JSValue html_iface_proto(JSContext *ctx, const char *iface)
     return JS_UNDEFINED;
 }
 
+JSValue html_element_proto(JSContext *ctx)
+{
+    JSValue proto = JS_GetClassProto(ctx, g_html_class);
+    DCHECK(!JS_IsNull(proto), "HTMLElement.prototype was asked for in a realm that never ran its install");
+    return proto;   /* OWNED */
+}
+
 /* §3.2.2 focus() and blur(). A headless run has no focus ring, and the spec defines no scriptable result for
    either beyond moving the focus — which is a state this engine does not model — so each is a documented
    no-effect rather than a value invented for it. click() is NOT one of these: it fires a real event, so it is
@@ -524,7 +532,12 @@ void html_element_install(JSContext *ctx, JSValueConst global)
     hp = JS_GetClassProto(ctx, g_html_class);
     up = JS_GetClassProto(ctx, g_unknown_class);
     DCHECK(!JS_IsNull(hp), "the HTML interface objects were installed in a realm with no HTMLElement.prototype");
-    node_install_interface(ctx, global, "HTMLElement", hp);
+    /* §4.13.2: HTMLElement's IDL carries `[HTMLConstructor]`, which is a real fifteen-step algorithm and not
+       the shared "Illegal constructor" throw — a page's `class X extends HTMLElement { constructor(){super()} }`
+       reaches it through super(), and every custom element in the platform is built by it. The machine belongs
+       to the custom-elements component because it reads that component's definition set and construction
+       stack; what belongs here is WHICH interface carries it. */
+    node_install_interface_ctor(ctx, global, "HTMLElement", hp, custom_elements_html_constructor(ctx));
     dom_string_map_install(ctx, global);   /* §3.2.2 DOMStringMap, which `dataset` is one of */
     node_install_interface(ctx, global, "HTMLUnknownElement", up);
     JS_FreeValue(ctx, hp);

@@ -391,7 +391,7 @@ static void cssd_write_inline(JSContext *ctx, lxb_dom_element_t *el, const char 
         css_buf_add(&out, name); css_buf_add(&out, ": ");
         css_buf_add(&out, value); css_buf_add(&out, "; ");
     }
-    dom_cow_set_attribute(el, "style", out.s ? out.s : "", out.s ? out.n : 0);
+    dom_cow_set_attribute(el, "style", out.s ? out.s : "", out.s ? out.n : 0, JS_UNDEFINED);
     css_buf_free(&out);
 }
 
@@ -523,7 +523,7 @@ static JSValue js_cssd_set_css_text(JSContext *ctx, JSValueConst this_val, JSVal
                                     "a computed style declaration is read-only");
     v = JS_ToCString(ctx, val);
     if (!v) return JS_EXCEPTION;
-    dom_cow_set_attribute(el, "style", v, strlen(v));   /* the attribute IS the block */
+    dom_cow_set_attribute(el, "style", v, strlen(v), JS_UNDEFINED);   /* the attribute IS the block */
     JS_FreeCString(ctx, v);
     return JS_UNDEFINED;
 }

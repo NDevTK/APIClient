@@ -158,7 +158,7 @@ static bool set_next(const char *v, const char **p, const char *end, const char 
    per-flow and runs the attribute change steps exactly like a setAttribute the page wrote itself. */
 static void list_write(lxb_dom_element_t *el, const char *attr, const char *val, size_t len)
 {
-    dom_cow_set_attribute(el, attr, val, len);
+    dom_cow_set_attribute(el, attr, val, len, JS_UNDEFINED);
 }
 
 /* §7.1: a token must be non-empty and contain no ASCII whitespace. Both are the spec's own errors, not a

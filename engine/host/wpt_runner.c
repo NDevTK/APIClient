@@ -64,6 +64,7 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include "core/timing/timer.h"
+#include "core/css/media_query_list.h"
 #include "core/rendering/animation_frame.h"
 #include "core/rendering/page_reveal.h"
 #include "core/rendering/rendering.h"
@@ -1016,6 +1017,10 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
        map of animation frame callbacks and §7.4.6.3's reveal. */
     animation_frame_init(ctx);
     page_reveal_init(ctx);
+    /* CSSOM VIEW §4.2 and §7 — `matchMedia`, MediaQueryList and MediaQueryListEvent. DECLARED before the
+       rendering loop because update-the-rendering STEP 10 is its algorithm, and after §2.7 and §2.2 because
+       both of its prototypes chain to theirs. */
+    media_query_list_init(ctx);
     rendering_init(ctx);
     /* THE AGENT'S FIRST REALM IS A REALM. Every per-realm intrinsic the components above declared is built
        here, through the same one call a child navigable's realm makes — so the first document cannot get a
@@ -1074,6 +1079,7 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
     document_install(ctx, global, dom, url, csp, doc_id, nav_proxy);
     animation_frame_install(ctx, global);   /* HTML §8.9: requestAnimationFrame/cancelAnimationFrame */
     page_reveal_install(ctx, global);       /* HTML §7.4.6.3: PageRevealEvent */
+    media_query_list_install(ctx, global);   /* CSSOM VIEW §4.2/§7: matchMedia, MediaQueryList */
     message_port_install(ctx, global);   /* HTML 9.4.2/9.4.3 */
     broadcast_channel_install(ctx, global);   /* HTML 9.5 */
     abort_install(ctx, global);
@@ -1581,6 +1587,7 @@ int main(int argc, char **argv)
 
     rendering_free(ctx);
     page_reveal_free(ctx);
+    media_query_list_free(ctx);
     animation_frame_free(ctx);
     timer_reset(ctx);
     headers_free(ctx);

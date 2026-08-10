@@ -158,6 +158,11 @@ const INTERFACES = {
   HTMLMetaElement:     [...HTML_BASE],
   HTMLDivElement:      [...HTML_BASE],
   Document:            ["core/dom/document.c", "core/dom/node.c", "core/events/event_target.c"],
+  /* DOM §4.5.1 and §4.6 — the interface that BUILDS a document and the interface a doctype IS. DocumentType's
+     file list carries node.c for the reason Element's does: it inherits Node, and node.c is also where the
+     ChildNode mixin it INCLUDES is installed. DOMImplementation inherits nothing, so it names only its own. */
+  DOMImplementation:    "core/dom/dom_implementation.c",
+  DocumentType:        ["core/dom/document_type.c", "core/dom/node.c", "core/events/event_target.c"],
   /* THE GLOBAL ITSELF, which had no row at all — the interface a page touches before any other, and the audit
      said nothing about it. §7.2.5's members are spread over the components that own them: the browsing-context
      half, §7.4's open, the six bars, the event-loop timers, §9.4.4's postMessage, and EventTarget, which Window

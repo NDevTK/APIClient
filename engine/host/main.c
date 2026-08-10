@@ -56,6 +56,7 @@
 #include "browser/core/frame/navigator.h"
 #include "browser/core/frame/screen.h"
 #include "browser/core/frame/window.h"
+#include "browser/core/css/media_query_list.h"
 #include "browser/core/rendering/animation_frame.h"
 #include "browser/core/rendering/page_reveal.h"
 #include "browser/core/rendering/rendering.h"
@@ -143,6 +144,10 @@ static void engine_agent_init(JSContext *ctx, const char *origin)
        first because step 14 consumes it and §7.4.6.3 after Event, whose prototype PageRevealEvent chains to. */
     animation_frame_init(ctx);
     page_reveal_init(ctx);
+    /* CSSOM VIEW §4.2 and §7 — `matchMedia`, MediaQueryList and MediaQueryListEvent. DECLARED before the
+       rendering loop because update-the-rendering STEP 10 is its algorithm, and after §2.7 and §2.2 because
+       both of its prototypes chain to theirs. */
+    media_query_list_init(ctx);
     rendering_init(ctx);
     fetch_init(ctx);   /* §5/§6/§5.3 declare their per-realm prototypes here, not from the install */
     abort_init(ctx);
@@ -200,6 +205,7 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
     unhandled_rejection_install(ctx, g);   /* PromiseRejectionEvent */
     animation_frame_install(ctx, g);       /* HTML §8.9: requestAnimationFrame/cancelAnimationFrame */
     page_reveal_install(ctx, g);           /* HTML §7.4.6.3: PageRevealEvent */
+    media_query_list_install(ctx, g);   /* CSSOM VIEW §4.2/§7: matchMedia, MediaQueryList */
     abort_install(ctx, g);   /* AbortController/AbortSignal: fetch takes a signal, so a bundle mints one early */
     navigator_install(ctx, g);
     screen_install(ctx, g);   /* the responsive gate: screen.width decides which router a bundle uses */
@@ -410,6 +416,7 @@ QJS_EXPORT void qjs_teardown(void)
     endpoint_free();
     rendering_free(g_ctx);
     page_reveal_free(g_ctx);
+    media_query_list_free(g_ctx);
     animation_frame_free(g_ctx);
     unhandled_rejection_free(g_ctx);
     abort_free(g_ctx);

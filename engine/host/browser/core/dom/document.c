@@ -29,6 +29,7 @@
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
 #include "core/dom/attr.h"
+#include "core/dom/attr_list.h"
 #include "core/css/css_style_declaration.h"
 #include "core/dom/document.h"
 #include "solver/world.h"
@@ -36,6 +37,8 @@
 #include "core/frame/navigable.h"
 #include "core/dom/page_visibility.h"
 #include "core/dom/document_fragment.h"
+#include "core/dom/document_type.h"
+#include "core/dom/dom_implementation.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 
@@ -68,24 +71,52 @@ static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
  * WHAT DOES NOT LIVE HERE is anything the whole agent shares: a class id, a prototype, an interface object, and
  * the ORIGIN — an agent is origin-keyed, so every document in it has the same one, which is exactly why
  * SECURITY.md's one-principal-per-instance still holds word for word. */
+/* A REALM IS THE ACTIVE DOCUMENT OF ONE NAVIGABLE — AND IT IS NOT THE ONLY DOCUMENT IN IT.
+ *
+ * §4.5's createHTMLDocument, createDocument and `new Document()` build a Document that has NO browsing context:
+ * no navigable, no Window, no WindowProxy, and no scripts of its own. HTML's similar-origin window agent is one
+ * heap, so such a document is neither a second realm nor a second instance — it is a second tree in this one,
+ * and its nodes are ordinary objects of this realm (`foreignDoc.createElement("p") instanceof Element` holds,
+ * and its wrapper's prototype is THIS realm's).
+ *
+ * SO THE RECORD IS PER DOCUMENT, NOT PER REALM, and it hangs off the Lexbor document's own embedder slot — the
+ * same slot that used to hold the realm pointer, which was already the (document -> realm) answer §4.2.3 needs.
+ * One indirection more buys every per-document fact: the address `baseURI` reads, the content type, and §4.5's
+ * `[SameObject] implementation`. The realm's context opaque still names its ACTIVE document, because that is a
+ * fact about the realm and the answer to "the API base URL" and "who fires load".
+ *
+ * WHAT IS PER NAVIGABLE stays on the active document's record and is UNDEFINED on every other: a document with
+ * no browsing context has no Window and no WindowProxy, which is exactly what §3.1.1's `location` returning
+ * null for one means. */
 typedef struct Document {
+    JSContext           *realm;    /* the realm this document belongs to — every document has exactly one */
     uint32_t             doc;      /* this document's handle in the world registry — its NAME is what crosses */
     lxb_html_document_t *dom;
-    PolicyContainer     *policy;    /* owned */
+    int                  owned;    /* this record destroys `dom` — true for a document the page CREATED */
+    PolicyContainer     *policy;    /* owned; NULL for a document with no browsing context */
     JSValue              doc_obj;   /* the `document` object — HELD, released by document_free */
-    JSValue              win_obj;   /* this document's Window — HELD */
+    JSValue              win_obj;   /* this document's Window — HELD, and UNDEFINED with no browsing context */
     /* §7.2.5.1's ONE WindowProxy FOR THIS NAVIGABLE — `window`, `self`, and the `source` of every message this
        document posts. It lives on the REALM because that is what it is one of: a page comparing `e.source`
        across two messages must find the same object, and a table keyed by document would be an immortal root
        holding one proxy per navigable a forced-execution frontier ever created — thousands, none collectable.
-       HELD, released with the realm. */
+       HELD, released with the realm. UNDEFINED for a document with no browsing context. */
     JSValue              proxy;
+    /* §4.5's `[SameObject] readonly attribute DOMImplementation implementation`. SameObject is what makes this
+       a field rather than a fresh object per read: a page holds `document.implementation` and compares it. */
+    JSValue              impl;
     char                 url[2048]; /* the document's address, which §4.4 baseURI reads */
+    char                 content_type[32];   /* §4.5 contentType — what this document was created as */
+    /* THE REALM'S CHAIN OF DOCUMENTS IT CREATED AT BASELINE. A document a FLOW creates is owned by that flow's
+       COW delta (dom_cow_note_created_document) and dies with it; one created while capture is off is baseline,
+       exactly like a baseline node, and the realm that made it is what outlives it. Head on the active
+       document's record, because that is the record the realm's teardown already reaches. */
+    struct Document     *next_created;
 } Document;
 
-/* THE RUNNING REALM'S DOCUMENT. The context opaque, because a JSContext IS the document — so there is no table
-   to look it up in and no way for the answer to be the wrong document's. NULL before install, which is a state
-   only the accessors that tolerate it may see. */
+/* THE RUNNING REALM'S ACTIVE DOCUMENT. The context opaque, because a JSContext IS one navigable's document — so
+   there is no table to look it up in and no way for the answer to be the wrong document's. NULL before install,
+   which is a state only the accessors that tolerate it may see. */
 static Document *doc_of(JSContext *ctx)
 {
     return (Document *)JS_GetContextOpaque(ctx);
@@ -96,6 +127,36 @@ static Document *doc_here(JSContext *ctx)
     Document *d = doc_of(ctx);
     DCHECK(d != NULL, "a document member ran in a realm with no Document — document_install names which realm "
                       "a document is, and a realm that never had one cannot answer for a tree it has not got");
+    return d;
+}
+
+/* THE RECORD FOR A DOM DOCUMENT — the answer to every per-document question, whatever realm is asking. NULL for
+   a Lexbor document no record was ever built for, which is a solver scratch parse. */
+static Document *doc_rec(const lxb_dom_document_t *dom)
+{
+    return dom ? (Document *)dom->user : NULL;
+}
+
+/* THE RECORD FOR THE DOCUMENT A MEMBER WAS CALLED ON. Every §4.5 member is `Document.prototype`'s, so its
+   receiver names WHICH document it is about — `foreignDoc.createElement` must build its element in foreignDoc,
+   and reading the realm's active document instead is the defect a second Document makes visible. */
+static Document *doc_receiver(JSContext *ctx, JSValueConst this_val)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+    Document *d;
+
+    /* WEB IDL §3.7.5: a member reached with a receiver that does not implement the interface is a TypeError,
+       thrown at the read — `Object.getOwnPropertyDescriptor(Document.prototype, "URL").get.call(null)` is a
+       thing the corpus does deliberately. It is NOT an engine invariant and so NOT a DCHECK: asserting it would
+       turn a test that asks for the throw into an abort that takes the whole file with it. */
+    if (!n || n->type != LXB_DOM_NODE_TYPE_DOCUMENT) {
+        JS_ThrowTypeError(ctx, "this is not a Document");
+        return NULL;
+    }
+    d = doc_rec(lxb_dom_interface_document(n));
+    DCHECK(d != NULL, "a Document member ran on a Lexbor document with no record — document_install and "
+                      "document_new are the two places one is built, and a tree that came from neither cannot "
+                      "answer for its own address");
     return d;
 }
 
@@ -318,9 +379,9 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
     (void)magic;
     const char *tag;
     lxb_dom_element_t *el;
+    Document *d;
     JSValue r;
 
-    (void)this_val;
     if (argc < 1) return JS_NULL;
     /* 4.5.1 OVER AN UNKNOWN TAG NAME. Lexbor needs real bytes to create an element and the coercion below owes
        them, so an unknown tag can only crash there — and `createElement(someParameter)` is a real pattern, and
@@ -345,7 +406,11 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
     }
     tag = JS_ToCString(ctx, argv[0]);
     if (!tag) return JS_EXCEPTION;
-    el = lxb_dom_document_create_element(lxb_dom_interface_document(doc_here(ctx)->dom),
+    /* §4.5 step 5's "create an element GIVEN THIS": the element's node document is the RECEIVER's, never the
+       realm's active one — `foreignDoc.createElement("p")` builds a node of foreignDoc. */
+    d = doc_receiver(ctx, this_val);
+    if (!d) { JS_FreeCString(ctx, tag); return JS_EXCEPTION; }
+    el = lxb_dom_document_create_element(lxb_dom_interface_document(d->dom),
                                          (const lxb_char_t *)tag, strlen(tag), NULL);
     JS_FreeCString(ctx, tag);
     dom_cow_note_created(el ? lxb_dom_interface_node(el) : NULL);   /* this flow made it: the delta owns it */
@@ -353,6 +418,146 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
                        "nothing and every query after it would answer null");
     r = element_wrap(ctx, el);
     return r;
+}
+
+/* DOM §4.5 createElement, AS THE ALGORITHM IT DELEGATES TO — §4.9 "create an element" with
+ * `synchronousCustomElements` TRUE, which is the `true` that makes a custom element's constructor run INSIDE
+ * document.createElement rather than at some later checkpoint.
+ *
+ * WHY IT IS A MACHINE. Step 5.1.4.1 is "constructing C with no arguments", and C is the page's class: its body
+ * has loops, awaits and DOM mutations in it, so a JS_CallConstructor from here is the drive-to-completion the
+ * engine aborts on and the class's own `super()` would reach a C entry with no flow base under it. A construct
+ * is a request like every other, and the machine rests on it.
+ *
+ * WHAT THIS DOES NOT YET DO is step 5.1.4's REPORT arm: the spec catches an exception from the construct,
+ * reports it (which fires `error` at the global — the page's code again) and answers with an
+ * HTMLUnknownElement whose state is "failed". Catching an abrupt request result is a capability a definition
+ * DECLARES (JSTrampStepDef.catches_abrupt) and the declared-member surface does not carry it yet, so a
+ * constructor that throws propagates out of createElement. That is a wrong answer and it is named here rather
+ * than hidden: the next piece is that declaration. */
+#define DCE_STAGES(X) \
+    X(DCE_LOOKUP,    "DOM §4.5 steps 1-5 into §4.9 steps 1-3 (the local name, and looking up a custom element " \
+                     "definition for it) and §4.9 step 6 when there is none") \
+    X(DCE_CONSTRUCT, "DOM §4.9 step 5.1.4.1 (constructing C with no arguments — the page's constructor)") \
+    X(DCE_CHECKS,    "DOM §4.9 steps 5.1.4.2-11 (what the constructor returned, checked against what this " \
+                     "operation asked for)")
+enum { IDL_STEP_STAGE_BASE(DCE_STAGES) DCE_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DCE_STEPS[] = { DCE_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    uint8_t phase;      /* the construct request's own cursor */
+    JSValue cb[1];      /* [ctor] — §4.9 step 5.1.4.1 passes no arguments, so the buffer is one slot */
+    JSValue def;        /* step 3's definition (owned) */
+    JSValue local;      /* the local name the operation was given (owned) — step 5.1.4.8 compares against it */
+    JSValue result;     /* what the page's constructor answered (owned) */
+} DocCreateElState;
+
+static void doc_create_el_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    DocCreateElState *s = st;
+    v->val(ctx, &s->cb[0]);
+    v->val(ctx, &s->def);
+    v->val(ctx, &s->local);
+    v->val(ctx, &s->result);
+}
+
+static void doc_create_el_release(JSContext *ctx, void *st)
+{
+    DocCreateElState *s = st;
+    JS_FreeValue(ctx, s->cb[0]);
+    JS_FreeValue(ctx, s->def);
+    JS_FreeValue(ctx, s->local);
+    JS_FreeValue(ctx, s->result);
+    s->cb[0] = s->def = s->local = s->result = JS_UNDEFINED;
+}
+
+static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                      JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    DocCreateElState *s = st;
+    int r;
+
+    if (hdr->stage == DCE_LOOKUP) {
+        const char *tag;
+        size_t len = 0;
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        /* EVERY owned field before the first thing that can throw — the failure path tears this state down
+           through doc_create_el_release, which frees exactly what the state holds and nothing else. */
+        s->cb[0] = s->def = s->local = s->result = JS_UNDEFINED;
+        /* §4.9 step 3 needs a NAME to look a definition up by, and a concolic tag has none — the creation is
+           the one below, over whatever example the source carries. */
+        if (argc < 1 || concolic_is(argv[0])) {
+            *presult = js_doc_create_element(ctx, hdr->this_val, argc, argv, 0);
+            return JS_IsException(*presult) ? -1 : 0;
+        }
+        tag = JS_ToCStringLen(ctx, &len, argv[0]);   /* a real string by now: the declaration converted it */
+        if (!tag) return -1;
+        s->def = custom_elements_definition_for_name(ctx, tag, len);
+        if (!JS_IsObject(s->def)) {                  /* §4.9 step 6: not a custom element */
+            JS_FreeCString(ctx, tag);
+            *presult = js_doc_create_element(ctx, hdr->this_val, argc, argv, 0);
+            return JS_IsException(*presult) ? -1 : 0;
+        }
+        s->local = JS_NewStringLen(ctx, tag, len);
+        JS_FreeCString(ctx, tag);
+        if (JS_IsException(s->local)) { s->local = JS_UNDEFINED; return -1; }
+        hdr->stage = DCE_CONSTRUCT;
+    }
+    if (hdr->stage == DCE_CONSTRUCT) {
+        /* §4.9 steps 5.1.1-5.1.4.1. The agent's active custom element constructor map (steps 5.1.2-5.1.3, and
+           5.1.5-5.1.6's restore) is what a SCOPED registry is read through, and there are none, so the map has
+           one entry for every constructor and setting it changes nothing that can be read back. It becomes
+           real state in the same diff that makes `customElementRegistry` a creation option. */
+        JSValue ctor = custom_elements_definition_constructor(ctx, s->def);
+        JSValue made = JS_UNDEFINED;
+
+        r = step_construct_run(ctx, &s->phase, STEP_CB(s->cb), ctor, 0, NULL, cb_result, &made,
+                               out_cb, out_argc);
+        JS_FreeValue(ctx, ctor);
+        cb_result = JS_UNDEFINED;
+        if (r > 0) return r;                          /* parked ON the page's constructor */
+        if (r < 0) return -1;
+        s->result = made;
+        hdr->stage = DCE_CHECKS;
+    }
+    DCHECK(hdr->stage == DCE_CHECKS, "document.createElement resumed into a stage DOM §4.9 does not have");
+    JS_FreeValue(ctx, cb_result);
+    {
+        size_t len = 0;
+        const char *local = JS_ToCStringLen(ctx, &len, s->local);
+        Document *d = doc_receiver(ctx, hdr->this_val);
+
+        if (!local || !d) { if (local) JS_FreeCString(ctx, local); return -1; }
+        r = custom_elements_created_check(ctx, s->result, s->def,
+                                          lxb_dom_interface_document(d->dom), local, len);
+        JS_FreeCString(ctx, local);
+        if (r < 0) return -1;
+    }
+    *presult = s->result;
+    s->result = JS_UNDEFINED;
+    return 0;
+}
+
+static const IdlStepDecl DOC_CREATE_EL_STEP = {
+    js_doc_create_element_step, sizeof(DocCreateElState), doc_create_el_visit, doc_create_el_release,
+    "DOM §4.5 Document.createElement, over §4.9 create an element", DCE_STEPS
+};
+
+/* DOM §4.9 "create an element internal" for THIS REALM'S document — see document.h. Separate from the member
+   above because the two name different documents on purpose: `createElement` creates in its RECEIVER's
+   document (§4.5 step 5's "given this"), and HTML §4.13.2 step 7.2 creates in the CURRENT GLOBAL's. */
+JSValue document_create_element_internal(JSContext *ctx, const char *local, size_t len)
+{
+    lxb_dom_element_t *el = lxb_dom_document_create_element(lxb_dom_interface_document(doc_here(ctx)->dom),
+                                                            (const lxb_char_t *)local, len, NULL);
+
+    dom_cow_note_created(el ? lxb_dom_interface_node(el) : NULL);   /* this flow made it: the delta owns it */
+    DCHECK(el != NULL, "HTML §4.13.2 step 7 produced no element for a definition's local name — the definition "
+                       "was made from a name §4.13.1 already accepted, so Lexbor refusing it is a disagreement "
+                       "about what a name is");
+    return element_wrap(ctx, el);
 }
 
 /* 4.5.3 createElementNS(namespace, qualifiedName). Same element creation as createElement, plus the spec's
@@ -373,11 +578,12 @@ static JSValue js_doc_create_text(JSContext *ctx, JSValueConst this_val, int arg
     const char *s;
     size_t len = 0;
     lxb_dom_text_t *t;
+    Document *d = doc_receiver(ctx, this_val);
 
-    (void)this_val;
+    if (!d) return JS_EXCEPTION;
     s = argc >= 1 ? JS_ToCStringLen(ctx, &len, argv[0]) : JS_ToCStringLen(ctx, &len, JS_UNDEFINED);
     if (!s) return JS_EXCEPTION;
-    t = lxb_dom_document_create_text_node(lxb_dom_interface_document(doc_here(ctx)->dom), (const lxb_char_t *)s, len);
+    t = lxb_dom_document_create_text_node(lxb_dom_interface_document(d->dom), (const lxb_char_t *)s, len);
     dom_cow_note_created(t ? lxb_dom_interface_node(t) : NULL);   /* this flow made it */
     JS_FreeCString(ctx, s);
     DCHECK(t != NULL, "createTextNode produced no node — a page building its DOM would silently build nothing");
@@ -390,11 +596,12 @@ static JSValue js_doc_create_comment(JSContext *ctx, JSValueConst this_val, int 
     const char *s;
     size_t len = 0;
     lxb_dom_comment_t *c;
+    Document *d = doc_receiver(ctx, this_val);
 
-    (void)this_val;
+    if (!d) return JS_EXCEPTION;
     s = argc >= 1 ? JS_ToCStringLen(ctx, &len, argv[0]) : JS_ToCStringLen(ctx, &len, JS_UNDEFINED);
     if (!s) return JS_EXCEPTION;
-    c = lxb_dom_document_create_comment(lxb_dom_interface_document(doc_here(ctx)->dom), (const lxb_char_t *)s, len);
+    c = lxb_dom_document_create_comment(lxb_dom_interface_document(d->dom), (const lxb_char_t *)s, len);
     dom_cow_note_created(c ? lxb_dom_interface_node(c) : NULL);   /* this flow made it */
     JS_FreeCString(ctx, s);
     DCHECK(c != NULL, "createComment produced no node — a page building its DOM would silently build nothing");
@@ -460,9 +667,10 @@ static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, i
     const char *ns = NULL, *qname, *local;
     size_t prefix_len = 0;
     lxb_dom_element_t *el;
+    Document *d = doc_receiver(ctx, this_val);
     JSValue r;
 
-    (void)this_val;
+    if (!d) return JS_EXCEPTION;
     if (argc < 2) return JS_ThrowTypeError(ctx, "createElementNS requires a namespace and a qualified name");
     if (!JS_IsNull(argv[0]) && !JS_IsUndefined(argv[0])) {
         ns = JS_ToCString(ctx, argv[0]);
@@ -478,7 +686,7 @@ static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, i
             JS_FreeCString(ctx, qname);
             return JS_EXCEPTION;
         }
-        el = lxb_dom_element_create(lxb_dom_interface_document(doc_here(ctx)->dom),
+        el = lxb_dom_element_create(lxb_dom_interface_document(d->dom),
                                     (const lxb_char_t *)local, strlen(local),
                                     (const lxb_char_t *)ns, ns ? strlen(ns) : 0,
                                     prefix_len ? (const lxb_char_t *)qname : NULL, prefix_len,
@@ -490,6 +698,30 @@ static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, i
     JS_FreeCString(ctx, qname);
     r = element_wrap(ctx, el);
     return r;
+}
+
+/* §4.5's "INTERNAL createElementNS STEPS", named as the spec names them because a second caller reaches them:
+   §4.5.1's createDocument step 3 is "the internal createElementNS steps, GIVEN DOCUMENT" — the new document,
+   not the one whose implementation was asked. One implementation of validate-and-extract and of the element
+   creation, rather than a second one over there that could disagree about a prefix. */
+JSValue document_create_element_ns(JSContext *ctx, JSValueConst doc, int argc, JSValueConst *argv)
+{
+    return js_doc_create_element_ns(ctx, doc, argc, argv, 0);
+}
+
+/* §4.5's `[SameObject] readonly attribute DOMImplementation implementation`. SameObject is the whole reason the
+   object lives on the document's record: a page holds it and calls it later, and a fresh one per read would
+   compare unequal to the one it kept. */
+static JSValue js_doc_implementation(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    Document *d = doc_receiver(ctx, this_val);
+
+    (void)magic;
+    if (!d) return JS_EXCEPTION;
+    DCHECK(JS_IsObject(d->impl),
+           "a document answered for its `implementation` with no object — it is built WITH the document, so a "
+           "document that has one and cannot say so came from neither document_install nor document_new");
+    return JS_DupValue(ctx, d->impl);
 }
 
 /* THE DOCUMENT'S LOAD LIFECYCLE. Stage 0 is DOMContentLoaded — fired at the DOCUMENT and bubbling to window,
@@ -659,15 +891,106 @@ int document_lifecycle_step(JSContext *ctx)
    inventing an object would claim an address the engine was never given. */
 static JSValue js_doc_location(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    JSValue g = JS_GetGlobalObject(ctx), loc;
+    JSValue g, loc;
 
-    (void)this_val; (void)magic;
+    (void)magic;
+    /* §3.1.1: null when this document is not FULLY ACTIVE — and a document §4.5 created has no browsing context
+       at all, so it can never be. It was the realm's `location` unconditionally, which handed a page an address
+       belonging to a different document the moment a second one existed. */
+    Document *d = doc_receiver(ctx, this_val);
+
+    if (!d) return JS_EXCEPTION;
+    if (JS_IsUndefined(d->proxy))
+        return JS_NULL;
+    g = JS_GetGlobalObject(ctx);
     loc = JS_GetPropertyStr(ctx, g, "location");
     JS_FreeValue(ctx, g);
     if (JS_IsUndefined(loc)) { JS_FreeValue(ctx, loc); return JS_NULL; }
     return loc;
 }
 
+
+/* §3.1.1's TREE ENTRY POINTS, COMPUTED FROM THE RECEIVER'S TREE — documentElement, body, head and doctype.
+ *
+ * They were four DATA PROPERTIES latched onto the `document` object at install, and that is wrong twice. It is
+ * wrong in TIME: each is defined as a lookup in the tree AS IT IS, so a page that replaces `<body>` (which
+ * `document.body = el` and a `replaceChild` both do) went on being handed the node the parse produced. And it
+ * is wrong in SUBJECT: a value stored on one object cannot answer for a second document, so
+ * `implementation.createHTMLDocument("").body` was undefined — the whole reason this had to be looked at.
+ * magic 0 = documentElement, 1 = body, 2 = head, 3 = doctype. */
+static lxb_dom_node_t *doc_child_named(lxb_dom_node_t *parent, const char *a, const char *b)
+{
+    lxb_dom_node_t *n;
+
+    for (n = parent ? parent->first_child : NULL; n; n = n->next) {
+        size_t qn = 0;
+        const lxb_char_t *q;
+        if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        q = lxb_dom_element_qualified_name(lxb_dom_interface_element(n), &qn);
+        if (!q) continue;
+        if ((qn == strlen(a) && !memcmp(q, a, qn)) || (b && qn == strlen(b) && !memcmp(q, b, qn)))
+            return n;
+    }
+    return NULL;
+}
+
+static JSValue js_doc_tree(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_node_t *doc = node_of(this_val), *root = NULL, *n;
+
+    /* WEB IDL §3.7.5's brand check — a TypeError, not an assert; see doc_receiver. */
+    if (!doc || doc->type != LXB_DOM_NODE_TYPE_DOCUMENT)
+        return JS_ThrowTypeError(ctx, "this is not a Document");
+    /* §4.5 "document element": the ELEMENT child of the document. There is at most one, and NULL is a real
+       answer — a document §4.5's createDocument built with no qualified name has none. */
+    for (n = doc->first_child; n; n = n->next)
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) { root = n; break; }
+    switch (magic) {
+    case 0:
+        return node_wrap(ctx, root);
+    case 1:
+        /* §3.1.1: "the first of the html element's children that is either a BODY or a FRAMESET element, or
+           null" — a frameset document has no body at all, which is the parser following the spec. */
+        return node_wrap(ctx, doc_child_named(root, "body", "frameset"));
+    case 2:
+        /* §3.1.1: "the first head element that is a child of the html element". */
+        return node_wrap(ctx, doc_child_named(root, "head", NULL));
+    default:
+        DCHECK(magic == 3, "a Document tree accessor was declared with a magic this table does not name");
+        /* §4.5 doctype: "the first DocumentType node child, in tree order, or null". */
+        for (n = doc->first_child; n; n = n->next)
+            if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE) return node_wrap(ctx, n);
+        return JS_NULL;
+    }
+}
+
+/* §4.5 / §3.1.1's PER-DOCUMENT STRINGS. Every one is a fact about the receiver rather than about the realm, and
+   every one was a data property latched at install and therefore absent on any other document.
+   magic 0 = URL and documentURI (§4.5 defines the second as an alias of the first), 1 = contentType,
+   2 = compatMode, 3 = characterSet / charset / inputEncoding. */
+static JSValue js_doc_strings(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    Document *d = doc_receiver(ctx, this_val);
+
+    if (!d) return JS_EXCEPTION;
+    switch (magic) {
+    case 0:
+        return JS_NewString(ctx, d->url);
+    case 1:
+        return JS_NewString(ctx, d->content_type);
+    case 2:
+        /* §4.5: "BackCompat" if the document is in quirks mode, "CSS1Compat" otherwise — the PARSER's answer,
+           read off the tree it built rather than assumed. */
+        return JS_NewString(ctx, d->dom->dom_document.compat_mode == LXB_DOM_DOCUMENT_CMODE_QUIRKS
+                                     ? "BackCompat" : "CSS1Compat");
+    default:
+        DCHECK(magic == 3, "a Document string accessor was declared with a magic this table does not name");
+        /* §4.5's encoding trio. This engine decodes every document as UTF-8, so that is the real answer and not
+           a placeholder; `charset` and `inputEncoding` are the spec's own historical aliases of `characterSet`
+           and are the SAME getter rather than three that could disagree. */
+        return JS_NewString(ctx, "UTF-8");
+    }
+}
 
 /* §4.5's TWO TRAVERSER FACTORIES. `createNodeIterator(root, whatToShow, filter)` and `createTreeWalker(...)`
    are the same five-line construction with a different object at the end, so they are one body with a magic —
@@ -735,7 +1058,9 @@ static int g_id_create_element = -1, g_id_create_text = -1, g_id_create_comment 
 
 static void document_declare_members(JSContext *ctx)
 {
-    g_id_create_element = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_element, 0);
+    /* §4.5's `[CEReactions, NewObject] Element createElement(DOMString localName, …)` — a STEP because §4.9
+       step 5.1.4.1 constructs the page's custom element class synchronously inside it. */
+    g_id_create_element = idl_method_id_step(ctx, IDL_1STR, 1, NULL, 0, &DOC_CREATE_EL_STEP, 0);
     g_id_create_text = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_text, 0);
     g_id_create_comment = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_comment, 0);
     g_id_create_fragment = idl_method_id(ctx, NULL, 0, js_doc_create_fragment, 0);
@@ -778,6 +1103,21 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
        attribute — `document.location = url` navigating — is NOT built, and it is absent rather than silently
        dropped: a setter that stored a string would make a page believe it had navigated. */
     idl_install_accessor(ctx, proto, "location", js_doc_location, 0, -1);
+    /* §3.1.1's TREE ENTRY POINTS and §4.5's per-document strings. They were data properties latched onto ONE
+       document object at install — wrong in time (each is a lookup in the tree as it IS) and wrong in subject
+       (a value stored on one object cannot answer for a second document). */
+    idl_install_accessor(ctx, proto, "documentElement", js_doc_tree, 0, -1);
+    idl_install_accessor(ctx, proto, "body",           js_doc_tree, 1, -1);
+    idl_install_accessor(ctx, proto, "head",           js_doc_tree, 2, -1);
+    idl_install_accessor(ctx, proto, "doctype",        js_doc_tree, 3, -1);
+    idl_install_accessor(ctx, proto, "URL",            js_doc_strings, 0, -1);
+    idl_install_accessor(ctx, proto, "documentURI",    js_doc_strings, 0, -1);
+    idl_install_accessor(ctx, proto, "contentType",    js_doc_strings, 1, -1);
+    idl_install_accessor(ctx, proto, "compatMode",     js_doc_strings, 2, -1);
+    idl_install_accessor(ctx, proto, "characterSet",   js_doc_strings, 3, -1);
+    idl_install_accessor(ctx, proto, "charset",        js_doc_strings, 3, -1);
+    idl_install_accessor(ctx, proto, "inputEncoding",  js_doc_strings, 3, -1);
+    idl_install_accessor(ctx, proto, "implementation", js_doc_implementation, 0, -1);
 }
 
 /* HTML §7.2.6's container for THIS document, from BOTH halves of the policy list.
@@ -882,6 +1222,8 @@ void document_init(JSContext *ctx)
     g_ready_slot = realm_value_declare(ctx, "HTML current document readiness");
     document_declare_members(ctx);
     document_fragment_init(ctx);   /* §4.7, before any fragment is wrapped as a bare Node */
+    document_type_init(ctx);       /* §4.6, before the parser's doctype is wrapped as a bare Node */
+    dom_implementation_init(ctx);  /* §4.5.1, which every document's record builds one of */
     realm_declare_intrinsic(document_install_proto);
 }
 
@@ -920,6 +1262,114 @@ void document_install_proto(JSContext *ctx)
     }
 }
 
+/* A DOCUMENT'S RECORD, AND THE ONE PLACE THE (document -> record) ANSWER IS ESTABLISHED.
+ *
+ * It lives on the Lexbor document's own `user` slot, which lexbor keeps for its embedder and never reads. That
+ * slot used to hold the REALM pointer, which was already the (document -> realm) answer §4.2.3 needs; holding
+ * the record instead answers that question and every other per-document one through one indirection, with no
+ * registry to keep in step — a registry is a second list of documents whose failure mode is a stale row. */
+static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *type)
+{
+    lxb_dom_document_t *dd = lxb_dom_interface_document(dom);
+    Document *d;
+
+    DCHECK(dom != NULL, "a document record was built for no document");
+    DCHECK(dd->user == NULL, "a second record was built for one Lexbor document — the first would be leaked and "
+                             "every node of the tree would answer through whichever won");
+    d = calloc(1, sizeof *d);
+    CHECK(d != NULL, "document: OOM naming a document");
+    d->realm = ctx;
+    d->dom = dom;
+    d->doc_obj = JS_UNDEFINED;
+    d->win_obj = JS_UNDEFINED;
+    d->proxy = JS_UNDEFINED;
+    d->impl = JS_UNDEFINED;
+    snprintf(d->url, sizeof d->url, "%s", url ? url : "");
+    snprintf(d->content_type, sizeof d->content_type, "%s", type);
+    dd->user = d;
+    return d;
+}
+
+/* THE RECORD'S HELD REFERENCES GO BACK, and the tree goes with them when this record OWNS it. Every node of a
+   document the page created has a wrapper the identity map holds a reference to, so a document freed without
+   handing those back leaves the map naming freed memory and the runtime's own leak walk counting its whole
+   tree. */
+static void doc_rec_release(Document *d)
+{
+    JSContext *ctx = d->realm;
+
+    dom_implementation_detach(ctx, d->impl);
+    JS_FreeValue(ctx, d->impl);
+    JS_FreeValue(ctx, d->proxy);
+    JS_FreeValue(ctx, d->win_obj);
+    JS_FreeValue(ctx, d->doc_obj);
+    policy_container_free(d->policy);   /* malloc'd, so the GC walk would never have named it */
+    if (d->dom)
+        lxb_dom_interface_document(d->dom)->user = NULL;
+    free(d);
+}
+
+/* THE TREE IS ABOUT TO GO, SO THE RECORD THAT NAMES IT GOES FIRST — called from the ONE place a document's
+   lifetime ends. A delta-owned document is destroyed by the flow that made it, and its record is reachable from
+   nothing else, so without this the struct and the two references it holds (the wrapper and the
+   DOMImplementation) survive every exploration arm that ever created a document. */
+void document_record_release(lxb_html_document_t *dom)
+{
+    Document *d = doc_rec(lxb_dom_interface_document(dom));
+
+    if (!d) return;   /* already released — the realm's own path clears the record before it destroys the tree */
+    DCHECK(!d->owned, "a document the REALM owns was destroyed through the delta's path — two owners for one "
+                      "tree is one free too many");
+    doc_rec_release(d);
+}
+
+/* The realm's own path: clear the record FIRST, so the destroy below finds nothing to release and the two
+   owners cannot both run. */
+static void doc_rec_free(JSContext *ctx, Document *d)
+{
+    lxb_html_document_t *dom = d->owned ? d->dom : NULL;
+
+    (void)ctx;
+    doc_rec_release(d);
+    if (dom)
+        dom_cow_destroy_document(dom);
+}
+
+/* A SECOND DOCUMENT IN THIS REALM — see document.h. */
+JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *content_type)
+{
+    Document *d = doc_rec_new(ctx, dom, url, content_type);
+    JSValue doc;
+
+    /* WHO DESTROYS IT. A document a FLOW created is that flow's, exactly like a node it created: the COW delta
+       owns it and destroys it when the delta is discarded, so the frontier does not accumulate one document per
+       exploration arm. A creation made while capture is OFF is BASELINE — the boot flow's creations are the
+       baseline by definition — and the realm that made it is what outlives it, so it goes on the realm's chain
+       and dies with document_free. Exactly one of the two, which is what the flag records. */
+    if (!dom_cow_note_created_document(dom)) {
+        Document *active = doc_of(ctx);
+        DCHECK(active != NULL, "a document was created in a realm that has none — the chain that owns a baseline "
+                               "creation hangs off the realm's ACTIVE document, and there is none to hang it on");
+        d->owned = 1;
+        d->next_created = active->next_created;
+        active->next_created = d;
+    }
+    doc = node_wrap(ctx, lxb_dom_interface_node(dom));
+    CHECK(JS_IsObject(doc), "a created Document's wrapper allocation failed");
+    d->doc_obj = JS_DupValue(ctx, doc);
+    d->impl = dom_implementation_new(ctx, doc);
+    return doc;
+}
+
+const char *document_url_of(const lxb_dom_document_t *dom)
+{
+    Document *d = doc_rec(dom);
+
+    DCHECK(d != NULL, "a node's baseURI was read in a document with no record — §4.4 reads the NODE DOCUMENT's "
+                      "address, and a tree that came from neither document_install nor document_new has none");
+    return d->url;
+}
+
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
                       const char *csp, uint32_t doc_id, JSValueConst nav_proxy)
 {
@@ -939,18 +1389,12 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
            "a document was installed twice into one realm — that is a NAVIGATION, and its container is "
            "per-flow state: build it as a COW record (like ProxyData's PROXY_REC) captured in its accessor, so "
            "the flow that navigated and the sibling that did not each read their own");
-    d = calloc(1, sizeof *d);
-    CHECK(d != NULL, "document: OOM naming this realm's document");
-    d->dom = dom;
+    d = doc_rec_new(ctx, dom, url, "text/html");
     d->doc = doc_id;
-    d->doc_obj = JS_UNDEFINED;
-    d->proxy = JS_UNDEFINED;
-    d->win_obj = JS_UNDEFINED;
     d->policy = document_policy_new(dom, csp);
-    /* THE REALM IS THE DOCUMENT FROM HERE ON — set before the early return below, because the policy was
+    /* THE REALM'S ACTIVE DOCUMENT FROM HERE ON — set before the early return below, because the policy was
        already built and §7.4 clones it for an about:blank child whether or not this document got an address. */
     JS_SetContextOpaque(ctx, d);
-    document_realm_set(lxb_dom_interface_document(dom), ctx);   /* and the answer the other way round */
     /* §7.2.5.1's ONE WindowProxy FOR THIS NAVIGABLE, minted WITH the realm because that is what it is one of.
        Before the early return below: a document with no address still has a navigable, and `window.closed`
        reads the navigable's state through this object. */
@@ -977,12 +1421,12 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        Node.prototype rather than being installed per object. */
     doc = node_wrap(ctx, lxb_dom_interface_node(dom));
     CHECK(JS_IsObject(doc), "the Document wrapper allocation failed");
+    d->impl = dom_implementation_new(ctx, doc);   /* §4.5's [SameObject], built WITH the document */
 
-    snprintf(d->url, sizeof(d->url), "%s", url);
-
-    /* Facts about the document this engine parsed. */
-    JS_SetPropertyStr(ctx, doc, "URL",         JS_NewString(ctx, url));
-    JS_SetPropertyStr(ctx, doc, "documentURI", JS_NewString(ctx, url));
+    /* `URL`, `documentURI`, `documentElement`, `body` and `head` were SET HERE, as data properties on this one
+       object. Every one of them is now an accessor on Document.prototype computed from the receiver's tree —
+       see js_doc_tree and js_doc_strings — because a value latched onto one object is wrong in TIME (each is
+       defined as a lookup in the tree AS IT IS) and wrong in SUBJECT (it cannot answer for a second document). */
 
     /* 3.1.1 title: the document's title, which Lexbor already computed from the tree — a pure read, no page
        code, and the real answer rather than a placeholder. */
@@ -998,43 +1442,6 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        path unreachable — the same mistake as a concrete `undefined` for absent app state. */
     JS_SetPropertyStr(ctx, doc, "cookie",   concolic_new(ctx, "{document.cookie}",   "document.cookie",   JS_UNDEFINED));
     JS_SetPropertyStr(ctx, doc, "referrer", concolic_new(ctx, "{document.referrer}", "document.referrer", JS_UNDEFINED));
-
-    /* getElementById is a pure tree walk over the id attribute — no page code, and the REAL element, wrapped
-       once so identity holds. querySelector is still absent: it needs a CSS selector engine, and answering it
-       with a partial matcher would return the wrong element silently, which is worse than the throw that names
-       what to build. */
-
-    /* §3.1.1 documentElement / body / head — the three tree entry points every page starts from. Lexbor has
-       already parsed them, so these are the REAL elements wrapped once (identity holds: `el.parentNode ===
-       document.body` is a comparison pages make).
-       §3.1.1'S `body` IS "the first of the html element's children that is either a BODY or a FRAMESET
-       element, or null". It read Lexbor's body-element accessor and asserted the result was never null,
-       explaining that tree construction always creates one — and that is FALSE. A FRAMESET document is
-       `<html><head></head><frameset>...</frameset></html>` with no body at all, which is not a malformed parse
-       but the parser following the spec: the `in body` insertion mode gives way to `in frameset` and the body
-       element is never inserted. The corpus has such documents and loads them in frames, so the assert fired on
-       a correct parse the moment child navigables started loading their addresses — a false invariant standing
-       exactly where the real rule belongs. */
-    {
-        lxb_dom_element_t *root = lxb_dom_interface_element(dom->dom_document.element);
-        lxb_dom_node_t *body = NULL, *n;
-        lxb_html_head_element_t *head = lxb_html_document_head_element(dom);
-
-        for (n = lxb_dom_interface_node(root)->first_child; n; n = n->next) {
-            size_t qn = 0;
-            const lxb_char_t *q;
-            if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-            q = lxb_dom_element_qualified_name(lxb_dom_interface_element(n), &qn);
-            if (!q) continue;
-            if ((qn == 4 && !memcmp(q, "body", 4)) || (qn == 8 && !memcmp(q, "frameset", 8))) { body = n; break; }
-        }
-        JS_SetPropertyStr(ctx, doc, "documentElement", element_wrap(ctx, root));
-        /* NULL IS A REAL ANSWER HERE, and the only one for a document whose html element has neither — which
-           §3.1.1 states outright. */
-        JS_SetPropertyStr(ctx, doc, "body",
-                          body ? element_wrap(ctx, lxb_dom_interface_element(body)) : JS_NULL);
-        JS_SetPropertyStr(ctx, doc, "head", element_wrap(ctx, lxb_dom_interface_element(head)));
-    }
 
     /* §4.4 a Document is an EventTarget through Node, so addEventListener comes down the prototype chain now
        rather than being installed here. "loading" until its scripts have run. */
@@ -1071,6 +1478,8 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     collections_install(ctx, global);       /* §4.2.10 NodeList, §4.2.11 HTMLCollection */
     attr_install(ctx, global);              /* §4.9.1/§4.9.2 NamedNodeMap and Attr */
     document_fragment_install(ctx, global); /* §4.7 DocumentFragment, which IS constructible */
+    document_type_install(ctx, global);     /* §4.6 DocumentType */
+    dom_implementation_install(ctx, global);/* §4.5.1 DOMImplementation */
     {
         JSValue dp = node_type_proto(ctx, LXB_DOM_NODE_TYPE_DOCUMENT);
         node_install_interface(ctx, global, "Document", dp);
@@ -1081,6 +1490,9 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        engine's tree comes from a Lexbor parse that does not pass through the DOM chokepoint, so the parsed
        tree's iframes get their step here. It is LAST, after every wrapper and prototype exists, because
        creating a navigable wraps the element and stores a WindowProxy on it. */
+    /* HTML tree construction produces attributes in the NULL namespace; lexbor stamps them with the element's
+       namespace instead, and only here — on the tree the parse just built — are the two distinguishable. */
+    dom_attr_normalize_parsed(lxb_dom_interface_node(dom));
     iframe_document_parsed(ctx);
     engine_set_document_done_hook(document_lifecycle_step);
 }
@@ -1099,31 +1511,26 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
  *
  * IT LIVES ON THE DOM DOCUMENT'S OWN `user` SLOT, which lexbor keeps for its embedder and never reads. That is
  * O(1) with no registry to keep in step with the realms — a registry is a second list of documents, and the
- * failure mode of one is a stale row answering for a realm that is gone. */
-void document_realm_set(lxb_dom_document_t *dom, JSContext *ctx)
-{
-    DCHECK(dom != NULL, "a realm was named for no document");
-    dom->user = ctx;
-}
-
+ * failure mode of one is a stale row answering for a realm that is gone.
+ *
+ * IT IS ONE INDIRECTION FURTHER NOW, through the document's own record — the slot holds the RECORD and the
+ * record names the realm. That is what makes a second Document expressible at all: the slot used to be the
+ * whole answer, and "which document" and "which realm" were then the same question, which is exactly the
+ * question §4.5.1's three factories have to ask twice. */
 JSContext *document_realm_of(const lxb_dom_node_t *n)
 {
-    if (!n || !n->owner_document)
-        return NULL;
-    return (JSContext *)n->owner_document->user;
+    Document *d = n ? doc_rec(n->owner_document) : NULL;
+    return d ? d->realm : NULL;
 }
 
 void document_free(JSContext *ctx)
 {
-    Document *d = doc_of(ctx);
+    Document *d = doc_of(ctx), *c, *next;
 
     if (!d) return;   /* a realm that never had a document — the runner builds one per component test */
-    JS_FreeValue(ctx, d->proxy);
-    JS_FreeValue(ctx, d->win_obj);
-    JS_FreeValue(ctx, d->doc_obj);
-    policy_container_free(d->policy);   /* malloc'd, so the GC walk would never have named it */
-    if (d->dom)
-        document_realm_set(lxb_dom_interface_document(d->dom), NULL);
-    free(d);
+    /* THE DOCUMENTS THIS REALM CREATED AT BASELINE go first: each holds a wrapper of the ACTIVE document's realm
+       and each owns a whole Lexbor tree, and the active record is what the chain hangs off. */
+    for (c = d->next_created; c; c = next) { next = c->next_created; doc_rec_free(ctx, c); }
+    doc_rec_free(ctx, d);
     JS_SetContextOpaque(ctx, NULL);
 }

@@ -31,6 +31,7 @@
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
 #include "core/dom/attr.h"
+#include "core/dom/attr_list.h"
 #include "core/dom/element.h"
 #include "core/dom/node.h"
 #include "core/idl_args.h"
@@ -65,24 +66,30 @@ static JSValue js_attr_get(JSContext *ctx, JSValueConst this_val, int magic)
     case 2: {
         /* THE TAINT SHADOW ANSWERS FIRST, as it does for getAttribute — a source written into this attribute
            came back out of Lexbor as plain bytes with its provenance gone, and a sink reading it looks clean. */
-        int si;
         const lxb_char_t *qn = lxb_dom_attr_qualified_name(a, &len);
         if (a->owner && qn) {
             char *nm = malloc(len + 1);
+            JSValue t;
             CHECK(nm != NULL, "Attr.value could not copy its own name");
             memcpy(nm, qn, len); nm[len] = 0;
-            si = attr_shadow_find(a->owner, ATTR_SLOT_ATTRIBUTE, nm);
+            t = dom_cow_attr_taint(a->owner, nm);   /* BORROWED */
             free(nm);
-            if (si >= 0) return JS_DupValue(ctx, attr_shadow_opaque(si));
+            if (!JS_IsUndefined(t)) return JS_DupValue(ctx, t);
         }
         s = lxb_dom_attr_value(a, &len);
         return s ? JS_NewStringLen(ctx, (const char *)s, len) : JS_NewStringLen(ctx, "", 0);
     }
     case 3:
-        /* §4.9.2: an attribute with no namespace answers null, not the empty string. */
-        return a->node.ns == LXB_NS__UNDEF || a->node.ns == LXB_NS__UNDEF
-             ? JS_NULL : JS_NewString(ctx, "http://www.w3.org/1999/xhtml");
-    case 4: return JS_NULL;    /* no namespace-aware setter exists yet, so no attribute here has a prefix */
+        /* §4.9.2: an attribute with no namespace answers null, not the empty string — and the namespace it
+           does have is the one the attribute carries, read back out of the document's table. This answered a
+           hardcoded XHTML URI for every attribute lexbor had marked with its element's namespace, which is
+           every scripted `setAttribute` on an HTML element; the writes now record the null namespace §4.9 says
+           they are in, so there is a real fact here to report. */
+        s = dom_attr_ns(a, &len);
+        return s ? JS_NewStringLen(ctx, (const char *)s, len) : JS_NULL;
+    case 4:
+        s = dom_attr_prefix(a, &len);
+        return s ? JS_NewStringLen(ctx, (const char *)s, len) : JS_NULL;
     default:
         /* §4.9.2: `specified` is a historical member that is always true — the spec says so in as many words,
            and a value invented for it would be a different thing wearing the name. */
@@ -117,14 +124,11 @@ static JSValue js_attr_set_value(JSContext *ctx, JSValueConst this_val, JSValueC
 
     if (concolic_is(val)) {
         const char *shape = concolic_shape_c(val);
-        attr_shadow_set(ctx, a->owner, ATTR_SLOT_ATTRIBUTE, name, val);
-        dom_cow_set_attribute(a->owner, name, shape ? shape : "", shape ? strlen(shape) : 0);
+        dom_cow_set_attribute(a->owner, name, shape ? shape : "", shape ? strlen(shape) : 0, val);
     } else {
-        const char *s;
-        attr_shadow_set(ctx, a->owner, ATTR_SLOT_ATTRIBUTE, name, JS_UNDEFINED);
-        s = JS_ToCString(ctx, val);
+        const char *s = JS_ToCString(ctx, val);
         if (s) {
-            dom_cow_set_attribute(a->owner, name, s, strlen(s));
+            dom_cow_set_attribute(a->owner, name, s, strlen(s), JS_UNDEFINED);
             JS_FreeCString(ctx, s);
         }
     }
@@ -247,8 +251,7 @@ static JSValue js_nnm_remove(JSContext *ctx, JSValueConst this_val, int argc, JS
         JS_FreeCString(ctx, name);
         return JS_ThrowDOMException(ctx, "NotFoundError", "no attribute of that name");
     }
-    attr_shadow_set(ctx, el, ATTR_SLOT_ATTRIBUTE, name, JS_UNDEFINED);
-    dom_cow_remove_attribute(el, name);   /* the removal chokepoint, so it reverts per flow */
+    dom_cow_remove_attribute(el, name);   /* the removal chokepoint, so it reverts per flow — taint included */
     JS_FreeCString(ctx, name);
     return found;
 }

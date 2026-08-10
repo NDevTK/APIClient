@@ -126,7 +126,7 @@ static int dsm_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst 
     const lxb_char_t *v;
     char *attr = NULL;
     size_t vlen = 0;
-    int si;
+    JSValue t;
 
     if (!el) return 0;
     /* THE TAINT SHADOW ANSWERS FIRST, as it does for getAttribute: a source written here came back out of
@@ -139,12 +139,12 @@ static int dsm_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst 
         a2 = dsm_prop_to_attr(ctx, name, strlen(name), &alen);
         JS_FreeCString(ctx, name);
         if (!a2) { JS_FreeValue(ctx, JS_GetException(ctx)); return 0; }   /* not a supported name, not a throw */
-        si = attr_shadow_find(el, ATTR_SLOT_ATTRIBUTE, a2);
-        if (si >= 0) {
+        t = dom_cow_attr_taint(el, a2);
+        if (!JS_IsUndefined(t)) {
             free(a2);
             if (!desc) return 1;
             desc->flags = JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE;
-            desc->value = JS_DupValue(ctx, attr_shadow_opaque(si));
+            desc->value = JS_DupValue(ctx, t);
             desc->getter = desc->setter = JS_UNDEFINED;
             return 1;
         }
@@ -229,16 +229,15 @@ static int dsm_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValue
        gives the SAME concolic back, and write its shape into the tree so a serialisation still shows something. */
     if (concolic_is(val)) {
         const char *shape = concolic_shape_c(val);
-        attr_shadow_set(ctx, el, ATTR_SLOT_ATTRIBUTE, attr, val);
-        dom_cow_set_attribute(el, attr, shape ? shape : "", shape ? strlen(shape) : 0);
+        dom_cow_set_attribute(el, attr, shape ? shape : "", shape ? strlen(shape) : 0, val);
         free(attr);
         return 1;
     }
-    attr_shadow_set(ctx, el, ATTR_SLOT_ATTRIBUTE, attr, JS_UNDEFINED);   /* a concrete write clears old taint */
     {
         const char *s = JS_ToCString(ctx, val);
         if (!s) { free(attr); return -1; }
-        dom_cow_set_attribute(el, attr, s, strlen(s));   /* chokepoint: capture-then-mutate, per flow */
+        /* JS_UNDEFINED clears any old taint: a concrete write says this attribute is no longer a source. */
+        dom_cow_set_attribute(el, attr, s, strlen(s), JS_UNDEFINED);   /* chokepoint: capture-then-mutate, per flow */
         JS_FreeCString(ctx, s);
     }
     free(attr);
@@ -257,10 +256,7 @@ static int dsm_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
     if (!el) return true;
     v = dsm_lookup(ctx, el, prop, &attr, &vlen);
     if (!attr) { JS_FreeValue(ctx, JS_GetException(ctx)); return true; }
-    if (v) {
-        attr_shadow_set(ctx, el, ATTR_SLOT_ATTRIBUTE, attr, JS_UNDEFINED);
-        dom_cow_remove_attribute(el, attr);   /* the removal chokepoint, so it reverts per flow */
-    }
+    if (v) dom_cow_remove_attribute(el, attr);   /* the removal chokepoint, so it reverts per flow */
     free(attr);
     return true;
 }

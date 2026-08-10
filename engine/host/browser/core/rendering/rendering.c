@@ -11,6 +11,7 @@
 #include "core/events/event_target.h"
 #include "core/frame/window_proxy.h"
 #include "core/frame/navigable.h"
+#include "core/css/media_query_list.h"
 #include "core/dom/page_visibility.h"
 #include "core/rendering/animation_frame.h"
 #include "core/rendering/page_reveal.h"
@@ -83,7 +84,8 @@ static void step_awaits(JSContext *ctx, const char *path, const char *what)
    these two. Asked of the doc's OWN realm, because both pieces of state are per-Window. */
 static bool doc_has_rendering_work(JSContext *docctx)
 {
-    return page_reveal_pending(docctx) || animation_frame_pending(docctx);
+    return page_reveal_pending(docctx) || animation_frame_pending(docctx)
+        || media_query_list_pending(docctx);
 }
 
 /* Steps 2-5, as ONE walk, and the fusion is the spec's rather than a shortcut: step 2 collects the fully
@@ -137,6 +139,9 @@ static JSValue rendering_collect_docs(JSContext *ctx)
                  "user-agent-skipped)")                                                                        \
     X(UR_REVEAL, "HTML §8.1.7.3 update the rendering step 6 (for each doc: reveal doc — HTML §7.4.6.3 fires "   \
                  "pagereveal at its relevant global object), one document per rest")                           \
+    X(UR_MEDIA,  "HTML §8.1.7.3 update the rendering step 10 (for each doc: evaluate media queries and report " \
+                 "changes — CSSOM VIEW §4.2 fires `change` at each MediaQueryList whose matches state has "     \
+                 "changed, in the order they were created, oldest first), one MediaQueryList per rest")         \
     X(UR_FRAMES, "HTML §8.1.7.3 update the rendering step 14 (for each doc: run the animation frame callbacks " \
                  "with the relative high resolution time of frameTimestamp — HTML §8.9), one callback per "     \
                  "rest")                                                                                       \
@@ -149,16 +154,19 @@ static const char *const UPDATE_RENDERING_STEPS[] = { UPDATE_RENDERING_STAGES(JS
 typedef struct JSUpdateRendering {
     JSStepHdr hdr;          /* FIRST — the driver writes the def and the operand bounds through it */
     JSValue   docs;         /* step 2's surviving list, as each document's WindowProxy (owned) */
-    JSValue   ev;           /* step 6's PageRevealEvent, held across its dispatch (owned) */
+    JSValue   ev;           /* the event a per-document step is holding across its dispatch (owned) */
+    JSValue   target;       /* step 10's MediaQueryList, held across its dispatch (owned) */
     JSValue   fn;           /* step 14's callback, taken from the map and held across its call (owned) */
     JSValue   cb[4];        /* the request buffer: a fire needs [this, fn, target, event], a call three */
     double    frame_ts;     /* step 1 */
     double    layout_start; /* step 15's unsafeStyleAndLayoutStartTime */
     uint32_t  ndocs, i;     /* the cursor every "for each doc of docs" step shares */
     uint32_t  nframe, k;    /* §8.9 step 2's key snapshot for the current doc, and step 3's cursor */
+    uint32_t  nmedia, m;    /* §4.2's collection snapshot for the current doc, and its cursor */
     uint8_t   fphase;       /* step 6's fire request */
     uint8_t   cphase;       /* step 14's call request */
     uint8_t   snapped;      /* §8.9 step 2 has been taken for docs[i] */
+    uint8_t   msnapped;     /* §4.2's collection snapshot has been taken for docs[i] */
     bool      not_canceled;
 } JSUpdateRendering;
 
@@ -169,6 +177,7 @@ static void js_update_rendering_visit(JSContext *ctx, void *st, JSStepVisit *v)
 
     v->val(ctx, &s->docs);
     v->val(ctx, &s->ev);
+    v->val(ctx, &s->target);
     v->val(ctx, &s->fn);
     for (k = 0; k < 4; k++)
         v->val(ctx, &s->cb[k]);
@@ -182,8 +191,9 @@ static JSValue js_update_rendering_fini(JSContext *ctx, void *st, bool take_resu
     (void)take_result;
     JS_FreeValue(ctx, s->docs);
     JS_FreeValue(ctx, s->ev);
+    JS_FreeValue(ctx, s->target);
     JS_FreeValue(ctx, s->fn);
-    s->docs = s->ev = s->fn = JS_UNDEFINED;
+    s->docs = s->ev = s->target = s->fn = JS_UNDEFINED;
     for (k = 0; k < 4; k++) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
@@ -205,8 +215,8 @@ static JSContext *doc_realm(JSContext *ctx, JSUpdateRendering *s)
     return docctx;
 }
 
-/* Steps 7 to 13, asserted in order at the place the algorithm runs them. */
-static void steps_7_to_13(JSContext *docctx)
+/* Steps 7 to 9, asserted in order at the place the algorithm runs them. */
+static void steps_7_to_9(JSContext *docctx)
 {
     step_awaits(docctx, "FocusEvent",
                 "update the rendering step 7 flushes doc's AUTOFOCUS CANDIDATES (HTML §6.6), whose step 5.11.3 "
@@ -221,10 +231,15 @@ static void steps_7_to_13(JSContext *docctx)
                 "scroll events, firing scroll/scrollend/scrollsnapchange in the order they were added — this "
                 "build now has a way to scroll a scrolling box, so that list has a producer and step 9 must be "
                 "written");
-    step_awaits(docctx, "matchMedia",
-                "update the rendering step 10 EVALUATES MEDIA QUERIES AND REPORTS CHANGES (CSSOM VIEW §4.2), "
-                "firing `change` at each MediaQueryList whose matches state changed, oldest first — this build "
-                "now has matchMedia, so step 10 must be written");
+}
+
+/* STEP 10 IS WRITTEN — it is UR_MEDIA, below. Its assert is gone rather than relaxed, which is the whole point
+   of the mechanism: the producer (`matchMedia`) arrived, the DCHECK fired at this exact place in the order, and
+   the step it named was built here.
+
+   Steps 11 to 13, asserted in order at the place the algorithm runs them. */
+static void steps_11_to_13(JSContext *docctx)
+{
     step_awaits(docctx, "Animation",
                 "update the rendering step 11 UPDATES ANIMATIONS AND SENDS EVENTS (WEB ANIMATIONS §4.4): "
                 "update the timelines, remove replaced animations, PERFORM A FULL MICROTASK CHECKPOINT (§4.4 "
@@ -327,6 +342,12 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
             JS_FreeValue(ctx, s->ev);
             s->ev = JS_UNDEFINED;
             s->i++;                      /* this document is revealed; the reveal is not retried */
+        } else if (s->hdr.stage == UR_MEDIA) {
+            s->fphase = 0;
+            JS_FreeValue(ctx, s->ev);
+            JS_FreeValue(ctx, s->target);
+            s->ev = s->target = JS_UNDEFINED;
+            s->m++;                      /* §4.2 latched the new state before the fire: on to the next target */
         } else if (s->hdr.stage == UR_FRAMES) {
             s->cphase = 0;
             JS_FreeValue(ctx, s->fn);
@@ -338,10 +359,10 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
     if (s->hdr.stage == UR_DOCS) {
         /* EVERY OWNED FIELD IS ON THE STATE BEFORE ANYTHING THAT CAN FAIL — the failure path tears the machine
            down through fini, which frees exactly what the state holds. */
-        s->docs = s->ev = s->fn = JS_UNDEFINED;
+        s->docs = s->ev = s->target = s->fn = JS_UNDEFINED;
         for (k = 0; k < 4; k++) s->cb[k] = JS_UNDEFINED;
-        s->i = s->ndocs = s->nframe = s->k = 0;
-        s->fphase = s->cphase = s->snapped = 0;
+        s->i = s->ndocs = s->nframe = s->k = s->nmedia = s->m = 0;
+        s->fphase = s->cphase = s->snapped = s->msnapped = 0;
         s->hdr.stage = UR_REVEAL;
         /* STEP 1: frameTimestamp is the event loop's LAST RENDER OPPORTUNITY TIME — the moment the in-parallel
            loop recorded when it decided there was one, not the moment this task happens to run. */
@@ -364,10 +385,10 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
         for (;;) {
             if (s->i >= s->ndocs) {
                 for (s->i = 0; s->i < s->ndocs; s->i++)
-                    steps_7_to_13(doc_realm(ctx, s));
+                    steps_7_to_9(doc_realm(ctx, s));
                 s->i = 0;
-                s->snapped = 0;
-                s->hdr.stage = UR_FRAMES;
+                s->msnapped = 0;
+                s->hdr.stage = UR_MEDIA;
                 break;
             }
             docctx = doc_realm(ctx, s);
@@ -386,6 +407,48 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
             JS_FreeValue(docctx, s->ev);
             s->ev = JS_UNDEFINED;
             s->i++;
+        }
+    }
+
+    if (s->hdr.stage == UR_MEDIA) {
+        /* STEP 10: "For each doc of docs: evaluate media queries and report changes for doc." CSSOM VIEW §4.2's
+           own walk is the inner loop — every MediaQueryList that has doc as its document, IN THE ORDER THEY
+           WERE CREATED, oldest first — and it fires at each one whose matches state has changed.
+           IT IS ITS OWN STAGE, AND ONE TARGET PER REST, because firing runs the page's `change` listeners: a
+           stage that spanned two targets would be a stage the scheduler cannot preempt between, which is the
+           unsuspendable span CLAUDE.md forbids wherever author code runs. */
+        for (;;) {
+            if (s->i >= s->ndocs) {
+                for (s->i = 0; s->i < s->ndocs; s->i++)
+                    steps_11_to_13(doc_realm(ctx, s));
+                s->i = 0;
+                s->snapped = 0;
+                s->hdr.stage = UR_FRAMES;
+                break;
+            }
+            docctx = doc_realm(ctx, s);
+            if (!s->msnapped) {                      /* the collection, snapshotted — see media_query_list.h */
+                s->nmedia = media_query_list_count(docctx);
+                s->m = 0;
+                s->msnapped = 1;
+            }
+            if (s->m >= s->nmedia) {
+                s->msnapped = 0;
+                s->i++;
+                continue;
+            }
+            if (s->fphase == 0 && JS_IsUndefined(s->ev)) {
+                s->ev = media_query_list_change(docctx, s->m, &s->target);   /* §4.2, including its latch */
+                if (JS_IsUndefined(s->ev)) { s->m++; continue; }   /* this target's state has not changed */
+            }
+            r = event_target_fire_run(docctx, &s->fphase, STEP_CB(s->cb), s->target, s->ev, cb_result,
+                                      &s->not_canceled, out_cb, out_argc);
+            if (r > 0) return r;                     /* parked on the page's `change` listeners */
+            cb_result = JS_UNDEFINED;
+            JS_FreeValue(docctx, s->ev);
+            JS_FreeValue(docctx, s->target);
+            s->ev = s->target = JS_UNDEFINED;
+            s->m++;
         }
     }
 

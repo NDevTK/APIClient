@@ -52,6 +52,8 @@ static JSAtom g_attrs_key = JS_ATOM_NULL;   /* the [SameObject] NamedNodeMap cac
 static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
 static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
 #include <lexbor/html/serialize.h>
+#include "core/dom/attr_list.h"
+#include "core/dom/names.h"   /* §1.4's name predicates, shared with createElement and the custom-element registry */
 #include "core/dom/node.h"
 #include "core/dom/document.h"
 
@@ -70,17 +72,16 @@ static JSValue js_el_get_attribute(JSContext *ctx, JSValueConst this_val, int ar
     (void)magic;
     lxb_dom_element_t *el = elem_of(this_val);
     const char *name;
-    JSValue r = JS_NULL;
-    int si;
+    JSValue r = JS_NULL, t;
 
     if (!el || argc < 1) return JS_NULL;
     name = concolic_name_cstr(ctx, argv[0]);
     if (!name) return JS_EXCEPTION;
     /* The TAINT SHADOW answers first: an attacker value written here came back out of Lexbor as plain bytes
        with its provenance gone, and a sink reading it would look clean. */
-    si = attr_shadow_find(el, ATTR_SLOT_ATTRIBUTE, name);
-    if (si >= 0) {
-        r = JS_DupValue(ctx, attr_shadow_opaque(si));   /* borrowed — dup to hand it out */
+    t = dom_cow_attr_taint(el, name);
+    if (!JS_IsUndefined(t)) {
+        r = JS_DupValue(ctx, t);   /* borrowed — dup to hand it out */
     } else {
         size_t vl = 0;
         const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), &vl);
@@ -104,38 +105,21 @@ static void el_write_attribute(JSContext *ctx, lxb_dom_element_t *el, const char
     /* A concolic value has no bytes to store. Record it in the shadow so the read gives the SAME concolic back,
        and write its shape into the tree so a serialization of the document still shows something. */
     if (concolic_is(value)) {
-        attr_shadow_set(ctx, el, ATTR_SLOT_ATTRIBUTE, name, value);
         /* NEVER ToString a concolic to get bytes: its coercion belongs to the concolic hooks and answers with
            another concolic, so the call THROWS — and the throw was being dropped here, leaving a pending
            exception behind a normal return. The SHAPE is the honest byte form for the tree. */
         val = concolic_shape_c(value);
-        dom_cow_set_attribute(el, name, val ? val : "", val ? strlen(val) : 0);
+        dom_cow_set_attribute(el, name, val ? val : "", val ? strlen(val) : 0, value);
         return;
     }
-    attr_shadow_set(ctx, el, ATTR_SLOT_ATTRIBUTE, name, JS_UNDEFINED);   /* a concrete write clears any earlier taint */
     val = JS_ToCString(ctx, value);
     DCHECK(val != NULL, "an attribute value reached the write unconverted — the IDL declaration is what converts "
                         "it, and running the page's toString from here is the drive-to-completion the flow "
                         "machinery exists to avoid");
     if (!val) return;
-    dom_cow_set_attribute(el, name, val, strlen(val));   /* chokepoint: capture-then-mutate, per flow */
+    /* JS_UNDEFINED is what clears any earlier taint: a concrete write says this attribute is no longer a source. */
+    dom_cow_set_attribute(el, name, val, strlen(val), JS_UNDEFINED);   /* chokepoint: capture-then-mutate, per flow */
     JS_FreeCString(ctx, val);
-}
-
-/* DOM §1.4: a string is a VALID ATTRIBUTE LOCAL NAME if its length is at least 1 and it contains no ASCII
-   whitespace, U+0000, U+002F (/), U+003D (=) or U+003E (>). setAttribute step 1 throws InvalidCharacterError
-   for anything else, and a page's own feature detection reads that throw. */
-static bool el_valid_attribute_local_name(const char *n)
-{
-    size_t i;
-
-    if (!n || !*n) return false;
-    for (i = 0; n[i]; i++) {
-        char c = n[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f') return false;
-        if (c == '/' || c == '=' || c == '>') return false;
-    }
-    return true;   /* a U+0000 cannot appear in a NUL-terminated C string, and JS_ToCString rejects one */
 }
 
 /* THE ELEMENT AS §3.8 NAMES IT — its namespace URL and its local name, which together decide which interface
@@ -218,7 +202,7 @@ static int js_el_set_attribute(JSContext *ctx, JSStepHdr *hdr, void *st, int arg
 
         if (!name) return JS_STEP_ABRUPT;
         if (!el || argc < 2) { JS_FreeCString(ctx, name); return JS_STEP_DONE; }
-        if (!el_valid_attribute_local_name(name)) {          /* step 1 */
+        if (!dom_valid_attribute_local_name(name, strlen(name))) {          /* step 1 */
             JS_FreeCString(ctx, name);
             JS_ThrowDOMException(ctx, "InvalidCharacterError",
                                  "setAttribute was given a name that is not a valid attribute local name");
@@ -229,10 +213,12 @@ static int js_el_set_attribute(JSContext *ctx, JSStepHdr *hdr, void *st, int arg
         CHECK(s->name != NULL, "setAttribute could not copy its own attribute name");
         memcpy(s->name, name, s->name_len + 1);
         JS_FreeCString(ctx, name);
-        /* STEP 2. Lexbor lowercases the name it STORES for an HTML element in an HTML document, and this
-           member did not — so the taint shadow was keyed on the case the page wrote while the tree held the
-           lowercase, and `el.setAttribute("SRC", location.hash)` then read back clean through
-           `el.getAttribute("src")`. Doing step 2 here is what makes the two agree. */
+        /* STEP 2 — "if this is in the HTML namespace and its node document is an HTML document, ASCII
+           lowercase qualifiedName" — AND THIS LOOP IS THE ONLY THING THAT PERFORMS IT. The write below goes
+           through attr_list.c's dom_attr_write, which hands lexbor the name AS GIVEN; nothing calls
+           lxb_dom_element_set_attribute any more, so there is no longer a second, hidden lowercasing under
+           this one. Delete this loop and `el.setAttribute("SRC", location.hash)` stores an attribute named
+           `SRC` that `el.getAttribute("src")` cannot find, and the taint shadow keyed on it goes with it. */
         if (lxb_dom_interface_node(el)->ns == LXB_NS_HTML &&
             lxb_dom_interface_node(el)->owner_document->type == LXB_DOM_DOCUMENT_DTYPE_HTML)
             for (i = 0; i < s->name_len; i++)
@@ -271,7 +257,8 @@ static void el_set_attribute_internal(JSContext *ctx, JSValueConst this_val, con
     lxb_dom_element_t *el = elem_of(this_val);
 
     if (!el) return;
-    DCHECK(el_valid_attribute_local_name(name), "the engine wrote an attribute whose name the DOM would reject");
+    DCHECK(dom_valid_attribute_local_name(name, strlen(name)),
+           "the engine wrote an attribute whose name the DOM would reject");
     el_write_attribute(ctx, el, name, value);
 }
 
@@ -662,8 +649,16 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
             return JS_STEP_YIELD;
         }
         s->frag = lxb_html_parse_fragment_chunk_end(s->parser);
+        /* The same parse boundary the document has: lexbor stamps every attribute it creates with the
+           ELEMENT's namespace, while HTML tree construction puts them in the null namespace unless "adjust
+           foreign attributes" moved them. Only here are the two still distinguishable. */
+        dom_attr_normalize_parsed(lxb_dom_interface_node(s->frag));
         lxb_html_parser_destroy(s->parser);
         s->parser = NULL;
+        /* The same parse boundary the document has: tree construction produces attributes in the NULL
+           namespace, and lexbor stamps them with the element's. Corrected here, before a single node of this
+           fragment is moved into a tree anything can read. */
+        dom_attr_normalize_parsed(s->frag);
         /* The reference child is fixed BEFORE anything moves: inserting changes `anchor->next`. The clear that
            may follow cannot move it either — it only ever empties an append target, which frag_begin asserts. */
         s->ref = (s->where == PLACE_AFTER) ? s->anchor->next
@@ -972,8 +967,7 @@ static JSValue js_el_attr_op(JSContext *ctx, JSValueConst this_val, int argc, JS
     present = lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), &vl) != NULL;
     switch (magic) {
     case 0:
-        dom_cow_remove_attribute(el, name);
-        attr_shadow_set(ctx, el, ATTR_SLOT_ATTRIBUTE, name, JS_UNDEFINED);   /* the taint goes with the value */
+        dom_cow_remove_attribute(el, name);   /* the taint goes with the value */
         r = JS_UNDEFINED;
         break;
     case 1:
@@ -984,11 +978,8 @@ static JSValue js_el_attr_op(JSContext *ctx, JSValueConst this_val, int argc, JS
         DCHECK(magic == 2, "an attribute operation was declared with a magic this file does not name");
         {
             bool want = (argc > 1 && !JS_IsUndefined(argv[1])) ? JS_ToBool(ctx, argv[1]) : !present;
-            if (want) dom_cow_set_attribute(el, name, "", 0);
-            else {
-                dom_cow_remove_attribute(el, name);
-                attr_shadow_set(ctx, el, ATTR_SLOT_ATTRIBUTE, name, JS_UNDEFINED);
-            }
+            if (want) dom_cow_set_attribute(el, name, "", 0, JS_UNDEFINED);
+            else dom_cow_remove_attribute(el, name);
             r = JS_NewBool(ctx, want);
         }
         break;
@@ -1089,11 +1080,8 @@ static JSValue js_el_reflect_set(JSContext *ctx, JSValueConst this_val, JSValueC
     if (g_reflect[magic].kind == REFLECT_BOOL) {
         if (!el) return JS_UNDEFINED;
         /* §2.2.1: setting true ADDS the attribute with the empty string, setting false REMOVES it. */
-        if (JS_ToBool(ctx, val)) dom_cow_set_attribute(el, g_reflect[magic].attr, "", 0);
-        else {
-            dom_cow_remove_attribute(el, g_reflect[magic].attr);
-            attr_shadow_set(ctx, el, ATTR_SLOT_ATTRIBUTE, g_reflect[magic].attr, JS_UNDEFINED);
-        }
+        if (JS_ToBool(ctx, val)) dom_cow_set_attribute(el, g_reflect[magic].attr, "", 0, JS_UNDEFINED);
+        else dom_cow_remove_attribute(el, g_reflect[magic].attr);
         return JS_UNDEFINED;
     }
     /* A REFLECTED ATTRIBUTE THAT IS A TRUSTED TYPES SINK IS ONE THROUGH BOTH SPELLINGS. §3.8's table is a
@@ -1193,15 +1181,15 @@ static void element_prepare_script(JSContext *ctx, lxb_dom_element_t *el)
     size_t n = 0, vl = 0;
     const lxb_char_t *tag = lxb_dom_element_qualified_name(el, &n);
     const lxb_char_t *src;
-    int si;
+    JSValue t;
 
     if (!tag || n != 6 || memcmp(tag, "script", 6) != 0)
         return;
     /* An UNKNOWN src is a URL this engine cannot fetch, but it is still a request the page makes — recorded so
        it reaches the @H surface as the shape it is, rather than disappearing. */
-    si = attr_shadow_find(el, ATTR_SLOT_ATTRIBUTE, "src");
-    if (si >= 0) {
-        endpoint_record(ctx, "GET", attr_shadow_opaque(si), NULL, 0);
+    t = dom_cow_attr_taint(el, "src");
+    if (!JS_IsUndefined(t)) {
+        endpoint_record(ctx, "GET", t, NULL, 0);
         return;
     }
     src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &vl);

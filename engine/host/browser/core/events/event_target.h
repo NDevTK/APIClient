@@ -39,7 +39,8 @@ void event_target_install_interface(JSContext *ctx, JSValueConst global);
 
 /* HTML §8.1.7.2 EVENT HANDLER IDL ATTRIBUTES — `onclick`, `onload`, `onabort`. Which set a target carries is
    which MIXIN its IDL includes, so the caller names the mixin rather than the members. */
-enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 16 };
+enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 16,
+       EH_MEDIA_QUERY_LIST = 32 };
 /* HTML §3.2.2 click() — "fire a synthetic pointer event named click", which IS §2.9 dispatch, so it is the same
    machine under a second entry rather than a second implementation of it. */
 void event_target_install_click(JSContext *ctx, JSValueConst target);
@@ -54,6 +55,17 @@ bool event_target_is_handler_attribute(const char *name);
    target with no listener yet — and it is given the target and the attribute name so the registering component
    decides with its own brand test rather than this file knowing what a MessagePort is. */
 void event_target_set_handler_hook(void (*after_set)(JSContext *ctx, JSValueConst target, const char *name));
+
+/* §2.7's "add an event listener" AND "remove an event listener", reached from C with the type already a real
+   string. The callers are members of OTHER standards that the spec DEFINES as those algorithms rather than as
+   lists of their own: CSSOM VIEW §4.2's `MediaQueryList.addListener(callback)` IS `addEventListener("change",
+   callback)`, which is why `mql.addListener(f)` and `mql.removeEventListener("change", f)` name one
+   registration in every browser. A component keeping its own list would answer that pair with two.
+   The CALLBACK is the page's value and is stored as-is; nothing here runs it, so neither of these can reach the
+   page's code and neither needs to be a request. `capture` and `once` are false, which is what a member that
+   takes only a callback means. */
+void event_target_add_listener(JSContext *ctx, JSValueConst target, const char *type, JSValueConst cb);
+void event_target_remove_listener(JSContext *ctx, JSValueConst target, const char *type, JSValueConst cb);
 
 /* DOM §2.9's ACTIVATION BEHAVIOUR — what makes a click on an `<a href>` FOLLOW the link, on a `<form>`'s submit
    button submit, on a checkbox toggle it. It is not a listener and a page cannot register one: the dispatch

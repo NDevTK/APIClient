@@ -15,8 +15,14 @@
 #include "quickjs.h"
 
 enum { ATTR_SLOT_ATTRIBUTE = 0, ATTR_SLOT_PROPERTY = 1 };   /* setAttribute(name) vs a DOM property (textContent) */
-int attr_shadow_find(lxb_dom_element_t *el, int kind, const char *name);   /* index of the (el,kind,name) entry, or -1 */
-void attr_shadow_set(JSContext *ctx, lxb_dom_element_t *el, int kind, const char *name, JSValueConst opaque);   /* JS_UNDEFINED clears */
+/* THE KEY IS THE ATTRIBUTE'S OWN IDENTITY: (element, slot, NAMESPACE, local name). §4.9 keys an attribute on
+   (namespace, local name), so a shadow keyed on the name alone gives `xlink:href` and `href` one taint entry
+   between them — one write clobbering the other's provenance, in whichever direction ran last. `ns` is the
+   namespace URI, NULL for the null namespace, and is always NULL for ATTR_SLOT_PROPERTY: a DOM property has no
+   namespace, which is a fact about the slot rather than a case to special-case. */
+int attr_shadow_find(lxb_dom_element_t *el, int kind, const char *ns, const char *name);   /* index, or -1 */
+void attr_shadow_set(JSContext *ctx, lxb_dom_element_t *el, int kind, const char *ns, const char *name,
+                     JSValueConst opaque);   /* JS_UNDEFINED clears */
 JSValue attr_shadow_opaque(int i);   /* the shadow opaque at index i (BORROWED — dup it to keep) */
 void attr_shadow_free(JSContext *ctx);
 

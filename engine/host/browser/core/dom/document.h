@@ -61,12 +61,46 @@ JSValueConst document_object(JSContext *ctx);
 const char *document_base_url(JSContext *ctx);
 
 /* §4.2.3's STEPS RUN IN THE NODE'S DOCUMENT'S REALM — see document.c. `document_realm_of` answers NULL for a
-   document no realm was ever installed for (a solver scratch parse), which is a caller's business to assert. */
-void       document_realm_set(lxb_dom_document_t *dom, JSContext *ctx);
+   document no record was ever built for (a solver scratch parse), which is a caller's business to assert. */
 JSContext *document_realm_of(const lxb_dom_node_t *n);
+
+/* A SECOND DOCUMENT IN THIS REALM — what DOM §4.5.1's createDocument and createHTMLDocument return, and what
+   HTML's `new Document()` builds. It has NO BROWSING CONTEXT: no navigable, no Window, no WindowProxy, and no
+   scripts, which is why §3.1.1's `location` is null on it. It is NOT a second realm and NOT a second instance —
+   HTML's similar-origin window agent is ONE HEAP, so the nodes it makes are ordinary objects of `ctx` with
+   `ctx`'s prototypes, and none of navigable.c's or world.c's machinery is involved (both are about NAVIGABLES,
+   which this has none of).
+   `dom` is CONSUMED: whoever ends up owning the document destroys it. That is the running flow's COW delta when
+   capture is on — a document a flow created dies with the flow, exactly like a node it created — and the REALM
+   when it is off, since a creation made at baseline is baseline. Returns the document's wrapper, OWNED. */
+JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *content_type);
+
+/* §4.4 baseURI's answer FOR ONE NODE: its NODE DOCUMENT's address. Not the same as document_base_url the moment
+   a second Document exists — that one is the REALM's active document, which is HTML's "API base URL" and is
+   what a fetch, a hyperlink and a navigation resolve against. */
+const char *document_url_of(const lxb_dom_document_t *dom);
+
+/* THE DOCUMENT IS ABOUT TO BE DESTROYED — release the record that names it, and everything the record holds
+   (its wrapper, its DOMImplementation, its policy container). Called from the ONE place a document's lifetime
+   ends, which is dom_cow's destroy, so a record cannot outlive its tree and a flow that created a document
+   cannot leave one behind. A no-op for a document whose record is already gone. */
+void document_record_release(lxb_html_document_t *dom);
+
+/* §4.5's "INTERNAL createElementNS STEPS" — named as the spec names them because §4.5.1's createDocument step 3
+   reaches them on a DIFFERENT document from the one whose implementation was asked. `doc` is that document's
+   wrapper; `argv` is (namespace, qualifiedName). */
+JSValue document_create_element_ns(JSContext *ctx, JSValueConst doc, int argc, JSValueConst *argv);
 /* The parsed document's root node, for a component that walks the whole tree. NULL in a realm that has no
    document yet, which `window.document` is entitled to see. */
 lxb_dom_node_t *document_root_node(JSContext *ctx);
+
+/* DOM §4.9 "CREATE AN ELEMENT INTERNAL" — the half of element creation that runs NO page code: a node
+   implementing the interface for `local`, in THIS REALM'S associated Document, in the HTML namespace,
+   DETACHED, with an empty attribute list. HTML §4.13.2 step 7 is its second caller — a custom element
+   constructor reached with an EMPTY construction stack makes the element itself, and step 7.2 names the
+   current global's document rather than any receiver's, which is why this is the realm's and `createElement`'s
+   own creation is the receiver's. Returns the wrapper, OWNED. */
+JSValue document_create_element_internal(JSContext *ctx, const char *local, size_t len);
 
 /* HTML §7.2.6's container for one document, from BOTH of its sources: the policy it was created with (above)
    and CSP §3.3's `<meta http-equiv="Content-Security-Policy">` the parsed tree carries. They are ONE POLICY

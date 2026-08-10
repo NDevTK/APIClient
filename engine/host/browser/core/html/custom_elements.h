@@ -39,6 +39,26 @@ int  custom_elements_reactions_invoke(JSContext *ctx, CustomElementQueue *q, JSV
 
 void custom_elements_init(JSContext *ctx);
 void custom_elements_free(JSContext *ctx);
+
+/* HTML §4.13.2's `[HTMLConstructor]` AS THIS REALM'S HTMLElement INTERFACE OBJECT. It is minted here and not
+   where the other interface objects are because the algorithm is this component's — it walks the definition
+   set and the construction stack — while WHICH interface carries it is html_element.c's. OWNED (consumed by
+   the install). */
+JSValue custom_elements_html_constructor(JSContext *ctx);
+
+/* §4.13.4's "look up a custom element definition" by local name, for DOM §4.9 step 3 — the definition or
+   JS_UNDEFINED. OWNED. Its ONE reader is `create an element`, which needs the definition to decide between
+   step 5's synchronous Construct and step 6's plain creation. */
+JSValue custom_elements_definition_for_name(JSContext *ctx, const char *name, size_t len);
+/* The definition's constructor — DOM §4.9 step 5.1.1's `C`, the value `create an element` Constructs. OWNED. */
+JSValue custom_elements_definition_constructor(JSContext *ctx, JSValueConst def);
+/* DOM §4.9 steps 5.1.4.2-11: the checks the spec runs on what the page's constructor RETURNED, and the state
+   it then writes onto it. They are here rather than in document.c because "result's custom element state" and
+   "result's custom element definition" are this component's own record, and a second writer of them is a
+   second answer to what a custom element is. Returns 0, or -1 having thrown the NotSupportedError/TypeError
+   the step names. `local` is the local name `create an element` was given. */
+int custom_elements_created_check(JSContext *ctx, JSValueConst result, JSValueConst def,
+                                  lxb_dom_document_t *doc, const char *local, size_t len);
 /* `window.customElements` — §4.13.4's CustomElementRegistry. */
 void custom_elements_install(JSContext *ctx, JSValueConst global);
 

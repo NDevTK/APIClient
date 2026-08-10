@@ -385,6 +385,18 @@ static JSValue remove_listener_with_type(JSContext *ctx, JSValueConst this_val, 
     return JS_UNDEFINED;
 }
 
+void event_target_add_listener(JSContext *ctx, JSValueConst target, const char *type, JSValueConst cb)
+{
+    JS_FreeValue(ctx, add_listener_with_type(ctx, event_target_receiver(ctx, target), cb, type,
+                                             /*capture*/ false, /*once*/ false));
+}
+
+void event_target_remove_listener(JSContext *ctx, JSValueConst target, const char *type, JSValueConst cb)
+{
+    JS_FreeValue(ctx, remove_listener_with_type(ctx, event_target_receiver(ctx, target), cb, type,
+                                                /*capture*/ false));
+}
+
 /* add/removeEventListener's `type` is a Web IDL DOMString, so it is ToString on whatever the page passed and
    cannot be a JS_ToCString from C. They use the SHARED coerce-then-call machine rather than one of their own:
    what they have in common with getAttribute and createElement is exactly the thing that needs a machine, and a
@@ -444,7 +456,12 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
     /* GlobalEventHandlers — HTML §8.1.7.2.1, on Window, Document and Element alike. */                       \
     X("onabort", EH_GLOBAL | EH_SIGNAL) X("onauxclick", EH_GLOBAL) X("onbeforeinput", EH_GLOBAL)                    \
     X("onbeforematch", EH_GLOBAL) X("onbeforetoggle", EH_GLOBAL) X("onblur", EH_GLOBAL) X("oncancel", EH_GLOBAL)      \
-    X("oncanplay", EH_GLOBAL) X("oncanplaythrough", EH_GLOBAL) X("onchange", EH_GLOBAL) X("onclick", EH_GLOBAL)       \
+    X("oncanplay", EH_GLOBAL) X("oncanplaythrough", EH_GLOBAL)                          \
+    /* `onchange` has TWO owners — GlobalEventHandlers and CSSOM VIEW §4.2's MediaQueryList — which is exactly
+       what the mask is a BITMASK for. A second X() line for the same name would put the name in this list
+       twice, and every consumer of the list (the IDL auditor, the content-attribute test) would then see a
+       member that does not exist twice over. */                                                              \
+    X("onchange", EH_GLOBAL | EH_MEDIA_QUERY_LIST) X("onclick", EH_GLOBAL)       \
     X("onclose", EH_GLOBAL) X("oncontextlost", EH_GLOBAL) X("oncontextmenu", EH_GLOBAL)                             \
     X("oncontextrestored", EH_GLOBAL) X("oncuechange", EH_GLOBAL) X("ondblclick", EH_GLOBAL) X("ondrag", EH_GLOBAL)   \
     X("ondragend", EH_GLOBAL) X("ondragenter", EH_GLOBAL) X("ondragleave", EH_GLOBAL) X("ondragover", EH_GLOBAL)      \

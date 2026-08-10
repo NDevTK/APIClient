@@ -21,6 +21,13 @@
 #include "solver/concolic.h"
 #include "core/frame/screen.h"
 
+/* THE MODELLED DISPLAY'S BIT DEPTH, stated ONCE. It is `screen.colorDepth`'s example and it is also what MEDIA
+   QUERIES §4.5's `color` feature reports — as bits per COLOR COMPONENT, which is this divided by the three
+   components of an RGB display. Two readers of one fact, so the fact is a constant here rather than a second
+   number written into the media-feature table (CLAUDE.md §per-realm: one fact answered from two places is the
+   defect, whatever the places are). */
+#define SCREEN_COLOR_DEPTH 24
+
 /* An environment member: opaque for control flow, carrying what a real display reports. One helper, so a member
    added later cannot quietly arrive as bare-concrete. */
 static void screen_env(JSContext *ctx, JSValueConst scr, const char *name, JSValue example)
@@ -33,6 +40,11 @@ static void screen_env(JSContext *ctx, JSValueConst scr, const char *name, JSVal
     v = concolic_new(ctx, path, path, example);
     CHECK(!JS_IsException(v), "minting a Screen environment value failed");
     JS_SetPropertyStr(ctx, (JSValue)scr, name, v);
+}
+
+int screen_color_depth(void)
+{
+    return SCREEN_COLOR_DEPTH;
 }
 
 void screen_install(JSContext *ctx, JSValueConst global)
@@ -52,8 +64,8 @@ void screen_install(JSContext *ctx, JSValueConst global)
        taskbar" question, and sharing one source would make that branch answer the size branch. */
     screen_env(ctx, scr, "availWidth",  JS_NewInt32(ctx, 1920));
     screen_env(ctx, scr, "availHeight", JS_NewInt32(ctx, 1040));
-    screen_env(ctx, scr, "colorDepth", JS_NewInt32(ctx, 24));
-    screen_env(ctx, scr, "pixelDepth", JS_NewInt32(ctx, 24));
+    screen_env(ctx, scr, "colorDepth", JS_NewInt32(ctx, SCREEN_COLOR_DEPTH));
+    screen_env(ctx, scr, "pixelDepth", JS_NewInt32(ctx, SCREEN_COLOR_DEPTH));
 
     JS_SetPropertyStr(ctx, (JSValue)global, "screen", scr);
 }

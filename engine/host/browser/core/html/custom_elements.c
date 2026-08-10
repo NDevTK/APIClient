@@ -46,6 +46,7 @@
 #include "core/dom/names.h"
 #include "core/dom/element.h"
 #include "core/dom/document.h"
+#include "core/html/html_element.h"
 #include "core/html/custom_elements.h"
 
 /* §4.13.4 THE DEFINITION SET IS A HEAP OBJECT, AND THAT IS THE WHOLE ISOLATION STORY. A registry in C globals
@@ -62,6 +63,23 @@
    `customElements.get('x-a')` then handed back the child realm's constructor — a cross-realm constructor
    handed out by a member that never crossed a boundary. */
 static int g_defs_slot = -1;
+
+/* THE SAME SET, IN DEFINITION ORDER — because §4.13.2 step 3 looks a definition up BY ITS CONSTRUCTOR and the
+   object above is keyed by NAME. A JS object cannot be keyed by a constructor (it is the page's function
+   object, and hanging an engine-minted symbol on it would put a slot on a page value that
+   `Object.getOwnPropertySymbols` reports), so the by-constructor question is answered by walking the set —
+   which is what §4.13.2 states it is. The keyed object is the NAME INDEX into this list, not a second set: both
+   are written by the one commit and hold the same definition objects, and a definition in one and not the other
+   is a DCHECK at the walk. An Array rather than a C list for the reason every queue here is one — it forks per
+   flow and parks with the flow that defined it. */
+static int g_deflist_slot = -1;
+
+/* §4.13.2's ACTIVE FUNCTION OBJECT, for the one interface that carries `[HTMLConstructor]` today. Step 5 is
+   "the active function object must be HTMLElement" for an autonomous custom element, and that is an IDENTITY
+   question about a PER-REALM object — a module static holding one realm's HTMLElement would answer it wrong
+   for every other document, which is the defect class §3.7 names. Set by the mint below, which is what
+   html_element.c calls to build the interface object. */
+static int g_html_ctor_slot = -1;
 
 /* §4.13.4's WHEN-DEFINED PROMISE MAP, per realm for exactly the reason the definition set is: the promise
    `whenDefined` hands back is settled by a `define` in THAT window, and one map for the agent would settle a
@@ -84,6 +102,14 @@ static JSValue ce_whendef(JSContext *ctx)
            "§4.13.4's when-defined promise map was reached before custom_elements_init declared it");
     return realm_value_get(ctx, g_whendef_slot);
 }
+
+/* THIS REALM'S definition set in definition order. OWNED: the caller frees. */
+static JSValue ce_deflist(JSContext *ctx)
+{
+    DCHECK(g_deflist_slot > 0, "a custom-element definition was reached before custom_elements_init declared "
+                               "the ordered set §4.13.2 step 3 walks");
+    return realm_value_get(ctx, g_deflist_slot);
+}
 static int    g_ready;
 static JSAtom g_atom_prototype = JS_ATOM_NULL;
 static JSAtom g_atom_ctor = JS_ATOM_NULL;
@@ -91,6 +117,16 @@ static JSAtom g_atom_proto = JS_ATOM_NULL;
 static JSAtom g_atom_observed = JS_ATOM_NULL;      /* the definition's own key for the list */
 static JSAtom g_atom_observed_src = JS_ATOM_NULL;  /* the class's `observedAttributes` */
 static JSAtom g_atom_callbacks = JS_ATOM_NULL;     /* the definition's own key for step 14.4's map */
+/* §4.13.4 step 15's definition is a RECORD, and three of its fields were missing because nothing yet read
+   them. `name` and `local name` are two fields and not one — they are equal for an AUTONOMOUS custom element
+   and differ for a customized built-in, and §4.13.2 step 5 tells the two apart by comparing exactly them. The
+   CONSTRUCTION STACK is what makes §4.13.5's upgrade and §4.13.2's constructor one algorithm rather than two:
+   the constructor answers with a FRESH element when the stack is empty and with the stack's last entry when an
+   upgrade put one there, and that is the whole of how `super()` inside an upgrade returns the node the page
+   already holds. An Array, so it forks per flow and parks with the flow that is inside the constructor. */
+static JSAtom g_atom_name = JS_ATOM_NULL;
+static JSAtom g_atom_local = JS_ATOM_NULL;
+static JSAtom g_atom_stack = JS_ATOM_NULL;
 
 /* §4.13.5 step 2's "set element's custom element definition to definition" — the element's OWN slot, under a
    symbol the page cannot mint, so no string key of this engine's invention appears on a custom element. It
@@ -447,6 +483,295 @@ static JSValue ce_definition_of(JSContext *ctx, JSValueConst wrap)
     if (!JS_IsObject(wrap)) return JS_UNDEFINED;
     if (JS_GetOwnSlot(ctx, &v, wrap, g_atom_def) <= 0) return JS_UNDEFINED;
     return v;
+}
+
+JSValue custom_elements_definition_for_name(JSContext *ctx, const char *name, size_t len)
+{
+    if (!g_ready) return JS_UNDEFINED;
+    return ce_find(ctx, name, len);
+}
+
+JSValue custom_elements_definition_constructor(JSContext *ctx, JSValueConst def)
+{
+    DCHECK(JS_IsObject(def), "a custom element definition's constructor was asked for on something that is not "
+                             "a definition");
+    return JS_GetProperty(ctx, def, g_atom_ctor);
+}
+
+/* DOM §4.9 STEPS 5.1.4.2-11 — what the page's constructor gave back, checked against what the operation asked
+   for. Every one of these is a real page pattern and each has its own subtest: `return {foo:'bar'}` (not a
+   node at all), `return document.createTextNode('hi')` (a node of the wrong kind), `super(); this.setAttribute
+   ('id','foo')` (an element with an attribute), `super(); this.appendChild(…)` (one with a child).
+   The spec writes 5.1.4.2 and .3 as ASSERTS because the only way to reach this step is through §4.13.2, which
+   guarantees them — but a constructor may RETURN something else entirely, and that is not an engine invariant
+   about its own logic, it is the page choosing. So they are the TypeError every browser throws. */
+int custom_elements_created_check(JSContext *ctx, JSValueConst result, JSValueConst def,
+                                  lxb_dom_document_t *doc, const char *local, size_t len)
+{
+    lxb_dom_node_t *n = node_of(result);
+    lxb_dom_element_t *el;
+    JSValue has;
+    bool is_custom;
+
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) {
+        JS_ThrowTypeError(ctx, "a custom element constructor returned something that is not an element");
+        return -1;
+    }
+    has = ce_definition_of(ctx, result);
+    is_custom = JS_VALUE_GET_PTR(has) == JS_VALUE_GET_PTR(def) && JS_IsObject(has);
+    JS_FreeValue(ctx, has);
+    if (!is_custom) {   /* step 5.1.4.2: its custom element state is not "custom" for THIS definition */
+        JS_ThrowTypeError(ctx, "a custom element constructor returned an element it did not construct");
+        return -1;
+    }
+    el = lxb_dom_interface_element(n);
+    if (lxb_dom_element_first_attribute(el)) {     /* step 5.1.4.4 */
+        JS_ThrowDOMException(ctx, "NotSupportedError",
+                             "a custom element constructor added an attribute to the element it was building");
+        return -1;
+    }
+    if (n->first_child) {                          /* step 5.1.4.5 */
+        JS_ThrowDOMException(ctx, "NotSupportedError",
+                             "a custom element constructor gave the element it was building a child");
+        return -1;
+    }
+    if (n->parent) {                               /* step 5.1.4.6 */
+        JS_ThrowDOMException(ctx, "NotSupportedError",
+                             "a custom element constructor inserted the element it was building into a tree");
+        return -1;
+    }
+    if (doc && n->owner_document != doc) {         /* step 5.1.4.7 */
+        JS_ThrowDOMException(ctx, "NotSupportedError",
+                             "a custom element constructor returned an element of another document");
+        return -1;
+    }
+    {                                              /* step 5.1.4.8 */
+        size_t got = 0;
+        const lxb_char_t *tag = lxb_dom_element_local_name(el, &got);
+        if (!tag || got != len || memcmp(tag, local, len) != 0) {
+            JS_ThrowDOMException(ctx, "NotSupportedError",
+                                 "a custom element constructor returned an element of another local name");
+            return -1;
+        }
+    }
+    /* steps 5.1.4.9-11 set the namespace prefix, the is value and the registry. The prefix is already null
+       (the creation passed none), the is value is null for an autonomous element, and scoped registries are
+       not built — so all three are already what these steps set, and writing them would be writing the value
+       that is there. When any of the three becomes expressible this is where it goes. */
+    return 0;
+}
+
+/* ---- HTML §4.13.2 the [HTMLConstructor] extended attribute ------------------------------------------------
+ *
+ * WHY THIS IS THE PIECE EVERYTHING ELSE WAITED FOR. A page defines a component by writing
+ * `class Router extends HTMLElement { constructor() { super(); … } }`, and every DOM interface object in this
+ * engine shared one body that threw "Illegal constructor" — so `super()` threw, so the class could not be
+ * constructed, so `document.createElement('x-router')` could not construct it and the UPGRADE could not
+ * either. The whole of §4.13's lifecycle hangs off a constructor that could not run: the reactions corpus
+ * opens every one of its ~290 subtests with assert_array_equals(log.types(), ['constructed']) and got [].
+ *
+ * IT IS A STEP MACHINE BECAUSE OF ONE READ. Step 8 is `Get(NewTarget, "prototype")` — off the page's class,
+ * which may be a Proxy or carry an accessor, so it is the page's code running in the middle of a constructor.
+ * Web IDL §3.7.10's "internally create a new object implementing the interface", which step 7.1 delegates to,
+ * makes the SAME read. One stage rests there and the algorithm's two arms continue from it.
+ *
+ * THE CONSTRUCTION STACK IS THE WHOLE MECHANISM, and it is what makes the two ways a custom element comes into
+ * existence ONE algorithm. Reached with an EMPTY stack (`new Router()`, and DOM §4.9 step 5.1.4.1's Construct
+ * inside createElement) the constructor MAKES the element. Reached with a NON-EMPTY one (§4.13.5's upgrade
+ * pushed the already-parsed node before constructing) it hands back the node the page already holds, so
+ * identity survives the upgrade — and it REPLACES that entry with an already-constructed marker, which is how
+ * a constructor that calls itself a second time gets an InvalidStateError instead of a second element. */
+#define HC_STAGES(X) \
+    X(HC_LOOKUP,    "HTML §4.13.2 steps 1-6 (the registry; NewTarget is not the active function object; the " \
+                    "definition whose constructor is NewTarget; autonomous vs customized built-in)") \
+    X(HC_PROTOTYPE, "HTML §4.13.2 step 8, and Web IDL §3.7.10's same read inside step 7.1 " \
+                    "(Get(NewTarget, \"prototype\"))") \
+    X(HC_FINISH,    "HTML §4.13.2 steps 7.2-7.9 (a fresh element, for an empty construction stack) or steps " \
+                    "9-15 (the stack's last entry, its prototype, and the already-constructed marker)")
+enum { IDL_STEP_STAGE_BASE(HC_STAGES) HC_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const HC_STEPS[] = { HC_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSValue def;     /* step 3's definition (owned) */
+    JSValue proto;   /* step 8's answer (owned) */
+} CeHtmlCtorState;
+
+static void ce_html_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    CeHtmlCtorState *s = st;
+    v->val(ctx, &s->def);
+    v->val(ctx, &s->proto);
+}
+
+static void ce_html_ctor_release(JSContext *ctx, void *st)
+{
+    CeHtmlCtorState *s = st;
+    JS_FreeValue(ctx, s->def);
+    JS_FreeValue(ctx, s->proto);
+    s->def = s->proto = JS_UNDEFINED;
+}
+
+/* §4.13.2 step 3: the entry in the definition set whose CONSTRUCTOR is `ctor`. A walk of the ordered set,
+   which is what the spec's own wording is; the name-keyed index above cannot answer this question at all.
+   UNDEFINED when there is none, which is step 3's TypeError. OWNED. */
+static JSValue ce_definition_by_ctor(JSContext *ctx, JSValueConst ctor)
+{
+    JSValue list = ce_deflist(ctx), found = JS_UNDEFINED;
+    uint32_t n, i;
+
+    n = ce_array_len(ctx, list);
+    for (i = 0; i < n && !JS_IsObject(found); i++) {
+        JSValue def = JS_GetPropertyUint32(ctx, list, i);
+        JSValue c = JS_GetProperty(ctx, def, g_atom_ctor);
+        if (JS_VALUE_GET_PTR(c) == JS_VALUE_GET_PTR(ctor) && JS_IsObject(c)) found = def;
+        else JS_FreeValue(ctx, def);
+        JS_FreeValue(ctx, c);
+    }
+    JS_FreeValue(ctx, list);
+    return found;
+}
+
+/* §4.13.2 step 13's ALREADY CONSTRUCTED MARKER. It is a distinct value from an element, and `true` is the one
+   thing the stack can hold that no element ever is — the stack's entries are element wrappers, which are
+   objects. Step 11 tests for it and throws InvalidStateError, which is what a constructor calling its own
+   class a second time inside itself must see. */
+static bool ce_is_already_constructed(JSValueConst v) { return JS_IsBool(v); }
+
+static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                           JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    CeHtmlCtorState *s = st;
+    JSValueConst ntgt = hdr->this_val;   /* JS_CFUNC_step_ctor delivers NEW TARGET in the receiver slot */
+    int r;
+
+    (void)argc; (void)argv;
+    if (hdr->stage == HC_LOOKUP) {
+        JSValue active;
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        s->def = s->proto = JS_UNDEFINED;
+        /* Web IDL: an interface object is not callable. `HTMLElement()` with no `new` is a TypeError before
+           §4.13.2 step 1, which JS_CFUNC_step_ctor states by delivering an UNDEFINED receiver. */
+        if (JS_IsUndefined(ntgt)) {
+            JS_ThrowTypeError(ctx, "constructor HTMLElement requires 'new'");
+            return -1;
+        }
+        /* step 2: NewTarget must not be the active function object. `new HTMLElement()` builds nothing — the
+           element a custom element constructor produces is the DEFINITION's, and there is no definition whose
+           constructor is HTMLElement itself. */
+        active = realm_value_get(ctx, g_html_ctor_slot);
+        DCHECK(JS_IsObject(active), "HTML §4.13.2 ran in a realm whose HTMLElement interface object was never "
+                                    "recorded — step 5's \"the active function object is HTMLElement\" is an "
+                                    "identity question and there is nothing to compare against");
+        if (JS_VALUE_GET_PTR(ntgt) == JS_VALUE_GET_PTR(active)) {
+            JS_FreeValue(ctx, active);
+            JS_ThrowTypeError(ctx, "Illegal constructor");
+            return -1;
+        }
+        DCHECK(JS_VALUE_GET_PTR(hdr->func_obj) == JS_VALUE_GET_PTR(active),
+               "HTML §4.13.2 ran with an active function object that is not HTMLElement — the customized "
+               "built-in half of steps 5-6 needs the interface's valid local names, and §4.13.4 refuses "
+               "`extends` until it exists, so no other interface may carry this machine yet");
+        JS_FreeValue(ctx, active);
+        /* step 3: the definition whose constructor is NewTarget. */
+        s->def = ce_definition_by_ctor(ctx, ntgt);
+        if (!JS_IsObject(s->def)) {
+            JS_ThrowTypeError(ctx, "this constructor is not a defined custom element constructor");
+            return -1;
+        }
+        /* steps 5-6: autonomous (name == local name) requires the active function object to be HTMLElement,
+           which the assert above already established. A definition whose two names DIFFER is a customized
+           built-in, and §4.13.4 refuses to make one, so reaching here with one is a definition this component
+           did not commit. */
+        {
+            JSValue nm = JS_GetProperty(ctx, s->def, g_atom_name);
+            JSValue lo = JS_GetProperty(ctx, s->def, g_atom_local);
+            bool autonomous = JS_VALUE_GET_PTR(nm) == JS_VALUE_GET_PTR(lo) || JS_IsUndefined(lo);
+            JS_FreeValue(ctx, nm);
+            JS_FreeValue(ctx, lo);
+            DCHECK(autonomous, "HTML §4.13.2 reached a definition whose name and local name differ — a "
+                               "customized built-in, which §4.13.4 does not register");
+        }
+        hdr->stage = HC_PROTOTYPE;
+    }
+    if (hdr->stage == HC_PROTOTYPE) {
+        /* step 8 / Web IDL §3.7.10: the page's class may be a Proxy, so this is a request and not a read. */
+        r = step_getprop_run(ctx, hdr, ntgt, g_atom_prototype, cb_result, &s->proto, out_cb, out_argc);
+        cb_result = JS_UNDEFINED;
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        hdr->stage = HC_FINISH;
+    }
+    DCHECK(hdr->stage == HC_FINISH, "HTML §4.13.2 resumed into a stage it does not have");
+    JS_FreeValue(ctx, cb_result);
+    /* step 9: a prototype that is not an Object is the interface prototype object of NewTarget's function
+       realm. HTMLElement's own is this realm's, which is what a cross-realm NewTarget makes wrong and what
+       makes that a `[S]`-free but realm-sensitive read — the same question §3.7 answers everywhere else. */
+    if (!JS_IsObject(s->proto)) {
+        JS_FreeValue(ctx, s->proto);
+        s->proto = html_element_proto(ctx);
+    }
+    {
+        JSValue stack = JS_GetProperty(ctx, s->def, g_atom_stack);
+        uint32_t n = ce_array_len(ctx, stack);
+        JSValue el;
+
+        DCHECK(JS_IsObject(stack), "a custom element definition carries no §4.13.2 construction stack");
+        if (n == 0) {
+            /* steps 7.1-7.9: the constructor MAKES the element. Its local name is the definition's, its
+               document is the CURRENT GLOBAL's (step 7.2, not any receiver's), its state is "custom" and its
+               definition is this one — which is what the definition slot on the wrapper means. */
+            JSValue lo = JS_GetProperty(ctx, s->def, g_atom_local);
+            size_t len = 0;
+            const char *local = JS_ToCStringLen(ctx, &len, lo);
+
+            JS_FreeValue(ctx, lo);
+            JS_FreeValue(ctx, stack);
+            if (!local) return -1;
+            el = document_create_element_internal(ctx, local, len);
+            JS_FreeCString(ctx, local);
+            if (JS_IsException(el)) return -1;
+            JS_SetPrototype(ctx, el, s->proto);
+            JS_DefinePropertyValue(ctx, el, g_atom_def, JS_DupValue(ctx, s->def), 0);
+            *presult = el;
+            return 0;
+        }
+        /* steps 10-15: the element §4.13.5 pushed. */
+        el = JS_GetPropertyUint32(ctx, stack, n - 1);
+        if (ce_is_already_constructed(el)) {          /* step 11 */
+            JS_FreeValue(ctx, el);
+            JS_FreeValue(ctx, stack);
+            JS_ThrowDOMException(ctx, "InvalidStateError",
+                                 "this custom element constructor already ran for the element being upgraded");
+            return -1;
+        }
+        JS_SetPrototype(ctx, el, s->proto);                            /* step 12 */
+        JS_SetPropertyUint32(ctx, stack, n - 1, JS_TRUE);              /* step 13: the marker */
+        JS_FreeValue(ctx, stack);
+        *presult = el;
+        return 0;
+    }
+}
+
+static const IdlStepDecl CE_HTML_CTOR_STEP = {
+    js_ce_html_ctor, sizeof(CeHtmlCtorState), ce_html_ctor_visit, ce_html_ctor_release,
+    "HTML §4.13.2 the HTMLElement constructor", HC_STEPS
+};
+static int g_id_html_ctor = -1;
+
+JSValue custom_elements_html_constructor(JSContext *ctx)
+{
+    JSValue ctor;
+
+    DCHECK(g_ready, "HTMLElement's interface object was minted before custom_elements_init declared §4.13.2");
+    ctor = idl_step_constructor(ctx, "HTMLElement", 0, g_id_html_ctor);
+    CHECK(!JS_IsException(ctor), "the HTMLElement interface object could not be allocated");
+    /* §4.13.2 step 5's IDENTITY, recorded for THIS realm as the object is made. Asking the global for
+       `HTMLElement` instead would read a property the page can reassign, and `window.HTMLElement = X` must not
+       change which constructor is legal to extend. */
+    realm_value_set(ctx, g_html_ctor_slot, JS_DupValue(ctx, ctor));
+    return ctor;
 }
 
 /* §4.13.6 "enqueue a custom element callback reaction", steps 1-3 and 5-6. The callback is the one step 14.4
@@ -837,6 +1162,20 @@ static JSValue ce_define_commit(JSContext *ctx, JSValueConst *argv, JSValueConst
         CHECK(!JS_IsException(def), "custom elements: OOM allocating a definition — a dropped definition is a "
                                     "class whose lifecycle code never runs");
         JS_SetProperty(ctx, def, g_atom_ctor, JS_DupValue(ctx, argv[1]));
+        /* §4.13.4 step 15's NAME and LOCAL NAME. Two fields, equal for an autonomous custom element and
+           different for a customized built-in — §4.13.2 step 5 tells them apart by comparing exactly these,
+           so folding them into one would make every definition look autonomous the moment `extends` lands.
+           The SAME string value in both, so the identity comparison there is the answer and not a strcmp. */
+        JS_SetProperty(ctx, def, g_atom_name, JS_DupValue(ctx, argv[0]));
+        JS_SetProperty(ctx, def, g_atom_local, JS_DupValue(ctx, argv[0]));
+        /* §4.13.2's CONSTRUCTION STACK, empty. It is per definition and it is an Array, so it forks with the
+           flow that is inside a constructor and parks with it — a C list would revert its head POINTER on a
+           context switch and leave the element being upgraded reachable from nothing. */
+        {
+            JSValue stack = JS_NewArray(ctx);
+            CHECK(!JS_IsException(stack), "a §4.13.2 construction stack could not be allocated");
+            JS_SetProperty(ctx, def, g_atom_stack, stack);
+        }
         /* The class's `prototype` is what the upgrade installs. Read ONCE, at step 14.1, so a page that
            reassigns it afterwards does not retroactively change what its already-defined elements are. */
         JS_SetProperty(ctx, def, g_atom_proto, JS_DupValue(ctx, proto));
@@ -849,7 +1188,13 @@ static JSValue ce_define_commit(JSContext *ctx, JSValueConst *argv, JSValueConst
         CHECK(a != JS_ATOM_NULL, "custom elements: a name could not be interned");
         {
             JSValue defs = ce_defs(ctx);
+            JSValue list = ce_deflist(ctx);
+            /* ONE SET, TWO READINGS: the name index the lookups use, and the definition ORDER §4.13.2 step 3
+               walks to answer "which definition has this constructor". Written together, here, because a
+               definition in one and not the other is a definition half the platform can see. */
             JS_SetProperty(ctx, defs, a, JS_DupValue(ctx, def));
+            ce_array_push(ctx, list, JS_DupValue(ctx, def));
+            JS_FreeValue(ctx, list);
             JS_FreeValue(ctx, defs);
         }
         JS_FreeAtom(ctx, a);
@@ -1012,10 +1357,14 @@ void custom_elements_init(JSContext *ctx)
     g_atom_observed = JS_NewAtom(ctx, "observed");
     g_atom_observed_src = JS_NewAtom(ctx, "observedAttributes");
     g_atom_callbacks = JS_NewAtom(ctx, "callbacks");
+    g_atom_name = JS_NewAtom(ctx, "name");
+    g_atom_local = JS_NewAtom(ctx, "local");
+    g_atom_stack = JS_NewAtom(ctx, "stack");
     CHECK(g_atom_prototype != JS_ATOM_NULL &&
           g_atom_ctor != JS_ATOM_NULL && g_atom_proto != JS_ATOM_NULL &&
           g_atom_observed != JS_ATOM_NULL && g_atom_observed_src != JS_ATOM_NULL &&
-          g_atom_callbacks != JS_ATOM_NULL,
+          g_atom_callbacks != JS_ATOM_NULL && g_atom_name != JS_ATOM_NULL &&
+          g_atom_local != JS_ATOM_NULL && g_atom_stack != JS_ATOM_NULL,
           "a custom-element atom could not be interned");
     /* §4.13.5 step 2's slot key: a symbol the page cannot mint, so the element's definition is not a string
        property of this engine's invention sitting on every custom element. */
@@ -1028,7 +1377,9 @@ void custom_elements_init(JSContext *ctx)
         CHECK(g_cb_atoms[k] != JS_ATOM_NULL, "a §4.13.4 step 14 lifecycle callback name could not be interned");
     }
     g_defs_slot = realm_value_declare(ctx, "§4.13.4 definition set");
+    g_deflist_slot = realm_value_declare(ctx, "§4.13.4 definition set, in definition order");
     g_whendef_slot = realm_value_declare(ctx, "§4.13.4 when-defined promise map");
+    g_html_ctor_slot = realm_value_declare(ctx, "§4.13.2's active function object (HTMLElement)");
     /* §4.13.6's stack, its backup queue and the two private keys the queues are read through. Built here, in
        the agent's own pre-boot realm, so a flow's push is captured by the heap COW rather than being that
        flow's private object. */
@@ -1058,6 +1409,9 @@ void custom_elements_init(JSContext *ctx)
         g_id_get = idl_method_id(ctx, ONE_STR, 1, js_ce_get, 0);
         g_id_when_defined = idl_method_id(ctx, ONE_STR, 1, js_ce_when_defined, 0);
     }
+    /* §4.13.2, DECLARED ONCE PER AGENT and minted per realm: HTMLElement is a per-realm interface object, so a
+       declaration made where it is installed would mint the member again for every document. */
+    g_id_html_ctor = idl_method_id_step(ctx, NULL, 0, NULL, 0, &CE_HTML_CTOR_STEP, 0);
     g_ready = 1;
 }
 
@@ -1091,10 +1445,13 @@ void custom_elements_install(JSContext *ctx, JSValueConst global)
        to it during a flow is captured by the heap COW rather than being that flow's private object. */
     {
         JSValue defs = JS_NewObjectProto(ctx, JS_NULL);
+        JSValue order = JS_NewArray(ctx);
         JSValue pending = JS_NewObjectProto(ctx, JS_NULL);
         CHECK(!JS_IsException(defs), "the custom-element definition set could not be allocated");
+        CHECK(!JS_IsException(order), "the custom-element definition ORDER could not be allocated");
         CHECK(!JS_IsException(pending), "the §4.13.4 when-defined promise map could not be allocated");
         realm_value_set(ctx, g_defs_slot, defs);
+        realm_value_set(ctx, g_deflist_slot, order);
         realm_value_set(ctx, g_whendef_slot, pending);
     }
     reg = JS_NewObject(ctx);
@@ -1127,6 +1484,10 @@ void custom_elements_free(JSContext *ctx)
     JS_FreeAtom(ctx, g_atom_observed);
     JS_FreeAtom(ctx, g_atom_observed_src);
     JS_FreeAtom(ctx, g_atom_callbacks);
+    JS_FreeAtom(ctx, g_atom_name);
+    JS_FreeAtom(ctx, g_atom_local);
+    JS_FreeAtom(ctx, g_atom_stack);
+    g_atom_name = g_atom_local = g_atom_stack = JS_ATOM_NULL;
     JS_FreeAtom(ctx, g_atom_def);
     JS_FreeValue(ctx, g_def_key);
     g_def_key = JS_UNDEFINED;

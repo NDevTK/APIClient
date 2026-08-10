@@ -36,6 +36,13 @@ void node_install_interfaces(JSContext *ctx, JSValueConst global);
    document.c installs `Document`. Not constructible (none of these declares a constructor), inheriting Node's
    interface object so §4.4's constants read off it. */
 void node_install_interface(JSContext *ctx, JSValueConst global, const char *name, JSValueConst proto);
+/* THE SAME INSTALL FOR AN INTERFACE THAT HAS A REAL CONSTRUCTOR. Every interface object above shares one
+   "Illegal constructor" throw because none of those interfaces declares one — but HTMLElement's IDL carries
+   `[HTMLConstructor]`, which is HTML §4.13.2, a fifteen-step algorithm that reads `Get(NewTarget, "prototype")`
+   off the page's class. So the caller mints the machine and this hangs it where the shared throw would go,
+   with the same prototype pairing and the same Node-interface inheritance. `ctor` is CONSUMED. */
+void node_install_interface_ctor(JSContext *ctx, JSValueConst global, const char *name, JSValueConst proto,
+                                 JSValue ctor);
 /* The class id every node wrapper shares — components that need JS_NewObjectClass for one. */
 JSClassID node_class_id(void);
 /* What to do with a node once it is inserted (a <script> is PREPARED per HTML 4.12.1) — element.c's rule, asked

@@ -20,6 +20,7 @@
 #include "core/frame/screen.h"
 #include "core/dom/abort.h"
 #include "core/html/unhandled_rejection.h"
+#include "core/css/media_query_list.h"
 #include "core/rendering/animation_frame.h"
 #include "core/rendering/page_reveal.h"
 #include "core/rendering/rendering.h"
@@ -110,7 +111,7 @@ static JSValue js_set_body_attr(JSContext *ctx, JSValueConst this_val, int argc,
     const char *name = JS_ToCString(ctx, argv[0]);
     const char *val = JS_ToCString(ctx, argv[1]);
     /* mutate ONLY through the chokepoint — capture-then-mutate atomically, never raw Lexbor + separate capture */
-    if (name && val) dom_cow_set_attribute(g_body, name, val, strlen(val));
+    if (name && val) dom_cow_set_attribute(g_body, name, val, strlen(val), JS_UNDEFINED);
     if (name) JS_FreeCString(ctx, name);
     if (val) JS_FreeCString(ctx, val);
     return JS_UNDEFINED;
@@ -1270,6 +1271,7 @@ static const char *HTML_MIN =
     "function* gof(){ if (cfg.admin) { yield 'ofA'; } else { yield 'ofP'; } } var ofr=''; for (const x of gof()) { ofr += x; } fetch('/api/genofork?v=' + ofr);"   /* FOR-OF generator-body fork */
     "function* aff(){ if (cfg.admin) { yield 'afA'; } else { yield 'afP'; } } fetch('/api/afromfork?v=' + Array.from(aff())[0]);"   /* Array.from(GEN) consumer fork: the gen body branches while CONSUMED by Array.from on the tramp (CONT_ITER_CONSUME), so clone_deep_flow's gen-branch clones the JSIterConsume state -> both afA and afP */
     "function* spf(){ if (cfg.admin) { yield 'spA'; } else { yield 'spP'; } } fetch('/api/spreadfork?v=' + [...spf()][0]);"   /* [...GEN] spread consumer fork: same CONT_ITER_CONSUME machinery, SPREAD sink (append to the literal's array), forks mid-consume -> both spA and spP */
+    "var _af = Array.from(state.items); fetch('/api/optiter?n=' + _af.length + '&a=' + _af[0] + '&b=' + _af[1]);"   /* OPAQUE ITERATION: `state.items` is unknown injected state, so LengthOfArrayLike over it has no answer - every length is a world. The walks bound is a CHAIN of per-position outcome forks (step_length_unknown), so n, a and b carry one value per arm and {state}.items.0 / {state}.items.1 are two INDEPENDENT sources, never one answered twice */
     "var _sad = new Set(); if (cfg.admin) { _sad.add('sadA'); } else { _sad.add('sadP'); } fetch('/api/setaddfork?v=' + [...(_sad)][0]);"   /* SHARED-SET record isolation: _sad is created before the concolic fork; each arm's Set.add must be COW-isolated via the map_add capture (record removed by JS_MapDeleteRecord on unapply) -> EXACTLY 'sadA' and 'sadP', never a contaminated set holding both */
     "function* sef(){ if (cfg.admin) { yield 'seA'; } else { yield 'seP'; } } fetch('/api/setfork?v=' + [...new Set(sef())][0]);"   /* new Set(GEN) consumer fork: the Set consumer (CONT_ITER_CONSUME, SET sink) forks mid-consume; now fork-SAFE via the map_add COW capture -> both seA and seP */
     "var _mm = new Map([['k','base']]); if (cfg.admin) { _mm.set('k','mmA'); } else { _mm.delete('k'); } fetch('/api/mapmutfork?v=' + (_mm.has('k') ? _mm.get('k') : 'gone'));"   /* SHARED-MAP overwrite/delete isolation: _mm is created before the fork; one arm OVERWRITES 'k', the other DELETES it. The map_mutate undo-log capture (unapply restores the old value / re-adds) keeps them per-flow -> EXACTLY 'mmA' and 'gone', never cross-contaminated */
@@ -1730,6 +1732,10 @@ static void tf_agent_init(JSContext *ctx)
     /* HTML §8.1.7.3's IN-PARALLEL HALF — the rendering task source and "update the rendering". */
     animation_frame_init(ctx);
     page_reveal_init(ctx);
+    /* CSSOM VIEW §4.2 and §7 — `matchMedia`, MediaQueryList and MediaQueryListEvent. DECLARED before the
+       rendering loop because update-the-rendering STEP 10 is its algorithm, and after §2.7 and §2.2 because
+       both of its prototypes chain to theirs. */
+    media_query_list_init(ctx);
     rendering_init(ctx);
     fetch_init(ctx);   /* §5/§6/§5.3 declare their per-realm prototypes here, not from the install */
     abort_init(ctx);
@@ -1803,6 +1809,7 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     unhandled_rejection_install(ctx, g);   /* PromiseRejectionEvent */
     animation_frame_install(ctx, g);       /* HTML §8.9: requestAnimationFrame/cancelAnimationFrame */
     page_reveal_install(ctx, g);           /* HTML §7.4.6.3: PageRevealEvent */
+    media_query_list_install(ctx, g);   /* CSSOM VIEW §4.2/§7: matchMedia, MediaQueryList */
     abort_install(ctx, g);
 
     /* Browser layer: parse the document with the real Lexbor HTML parser BEFORE the DOM interfaces install,
@@ -2334,6 +2341,7 @@ int main(void) {
 
     rendering_free(ctx);
     page_reveal_free(ctx);
+    media_query_list_free(ctx);
     animation_frame_free(ctx);
     unhandled_rejection_free(ctx);
     abort_free(ctx);

@@ -733,11 +733,13 @@ static JSValue js_node_facts(JSContext *ctx, JSValueConst this_val, int magic)
            document and the fragment, which is why a walk-up loop uses this one and stops on its own. */
         return (n->parent && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT) ? node_wrap(ctx, n->parent) : JS_NULL;
     default:
-        /* §4.4: the node document's document base URL, serialized. There is one document per engine instance
-           and no <base> support yet, so this is its address — asked of the component that owns it rather than
+        /* §4.4: THE NODE DOCUMENT's document base URL, serialized — the node's own document and not the realm's
+           active one, which stopped being the same question the moment §4.5.1's factories could build a second
+           Document. `foreignDoc.createElement("a").baseURI` is `about:blank`, not the page's address. No <base>
+           support yet, so it is that document's address — asked of the component that owns it rather than
            re-derived here, because two answers to "what is this document's URL" is how they drift apart. */
         DCHECK(magic == 3, "a Node fact was declared with a magic this table does not name");
-        return JS_NewString(ctx, document_base_url(ctx));
+        return JS_NewString(ctx, document_url_of(n->owner_document));
     }
 }
 
@@ -1831,7 +1833,7 @@ static int js_node_get_text_content(JSContext *ctx, JSStepHdr *hdr, void *st, in
         }
         if (!node_has_children_as_text(n)) return JS_STEP_DONE;
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
-            int si = attr_shadow_find(lxb_dom_interface_element(n), ATTR_SLOT_PROPERTY, "textContent");
+            int si = attr_shadow_find(lxb_dom_interface_element(n), ATTR_SLOT_PROPERTY, NULL, "textContent");
             if (si >= 0) {
                 /* A source parked here as TEXT comes back as the same concolic, not as the bytes its shape
                    wrote into the tree — that is what keeps it solvable at a later sink. */
@@ -2251,8 +2253,13 @@ static JSValue node_interface_object(JSContext *ctx, JSValueConst global)
 
 void node_install_interface(JSContext *ctx, JSValueConst global, const char *name, JSValueConst proto)
 {
-    JSValue ctor = JS_NewCFunction2(ctx, js_node_iface_ctor, name, 0, JS_CFUNC_constructor, 0);
+    node_install_interface_ctor(ctx, global, name, proto,
+                                JS_NewCFunction2(ctx, js_node_iface_ctor, name, 0, JS_CFUNC_constructor, 0));
+}
 
+void node_install_interface_ctor(JSContext *ctx, JSValueConst global, const char *name, JSValueConst proto,
+                                 JSValue ctor)
+{
     DCHECK(JS_IsObject(proto), "a DOM interface object was installed with no prototype behind it");
     CHECK(!JS_IsException(ctor), "a DOM interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);   /* .prototype and .constructor, both directions, one call */

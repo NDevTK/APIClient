@@ -44,9 +44,26 @@ uint64_t dom_cow_version(void);
    to unbypassable capture: rather than fork Lexbor to hook its internal write primitives, we OWN the mutation
    API on top of Lexbor and funnel every write through here — enforced structurally by engine/check_dom_chokepoint.mjs,
    which fails the build if a browser component names a raw Lexbor mutator at all. */
-void dom_cow_set_attribute(lxb_dom_element_t *el, const char *name, const char *val, size_t val_len);
-/* the attribute setter's twin — removeAttribute, and what a boolean reflection does when set to false. */
+/* VALUE AND TAINT ARE ONE WRITE, and the identity that keys both is resolved HERE. They were two calls every
+   caller made in agreement over a key each computed for itself: a caller that made one and not the other left a
+   stale taint on a fresh value or dropped the provenance of a stored source, and `toggleAttribute(name, true)`
+   did exactly the first. `taint` is JS_UNDEFINED for an ordinary concrete write.
+   `name` is a QUALIFIED name — §4.9 "get an attribute by name" is what setAttribute matches with — and the
+   attribute it names may live in any namespace; the identity (namespace, local name) is read off the attribute
+   the element actually has, so the delta can restore it as the attribute it was. */
+void dom_cow_set_attribute(lxb_dom_element_t *el, const char *name, const char *val, size_t val_len,
+                           JSValueConst taint);
+/* the attribute setter's twin — removeAttribute, and what a boolean reflection does when set to false. The
+   taint goes with the value: there is no value left for it to describe. */
 void dom_cow_remove_attribute(lxb_dom_element_t *el, const char *name);
+/* The same two over §4.9's own key, (namespace, local name), which is what every namespace-aware algorithm is
+   defined on. `ns`/`prefix` NULL is the null namespace. */
+void dom_cow_set_attribute_ns(lxb_dom_element_t *el, const char *ns, const char *prefix, const char *local,
+                              const char *val, size_t val_len, JSValueConst taint);
+void dom_cow_remove_attribute_ns(lxb_dom_element_t *el, const char *ns, const char *local);
+/* The taint this attribute carries — BORROWED (dup it to keep), JS_UNDEFINED when it carries none. The read's
+   twin of the fused write, resolving the identity the same way so the two cannot disagree. */
+JSValue dom_cow_attr_taint(lxb_dom_element_t *el, const char *name);
 /* node-insert chokepoint — the tree-structure twin of dom_cow_set_attribute: capture the insertion THEN attach
    the child, so a subtree a flow appends reverts per-flow (detached on context-switch, re-attached on resume). */
 void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child);
@@ -83,7 +100,6 @@ void dom_cow_destroy_private(lxb_dom_node_t *root, bool with_children);  /* and 
 
 /* Lower-level capture primitives the chokepoint is built on (record a mutation BEFORE it happens). Direct use is
    reserved for the mutation ops that compose them (the chokepoint above, and node-insert once it lands). */
-void dom_attr_capture(lxb_dom_element_t *el, const char *name);   /* pre-write attribute baseline */
 void dom_insert_capture(lxb_dom_node_t *node);                    /* an inserted node */
 
 /* Scheduler hooks — swap the running flow's DOM writes. */
@@ -109,5 +125,18 @@ void dom_base_ref(void *base);  /* add ONE ref (each orphan forks the document f
    when the delta is discarded. Inert while capture is off — a boot-time creation is baseline and outlives
    every delta. */
 void dom_cow_note_created(lxb_dom_node_t *node);
+
+/* THIS FLOW CREATED THIS DOCUMENT — DOM §4.5.1's createHTMLDocument and createDocument, whose result is a whole
+   second Document rather than a node in one. Same contract as dom_cow_note_created and one difference that has
+   to come back to the caller: a baseline NODE is owned by the document it was made in, and a document has no
+   such parent. So this RETURNS true when the running flow's delta took ownership (it destroys the document when
+   the delta is discarded) and false when capture is off, which means the creation is BASELINE and the realm
+   that made it is what must own it. */
+bool dom_cow_note_created_document(lxb_html_document_t *dom);
+
+/* DESTROY A DOCUMENT THIS ENGINE OWNS, wrappers first. The identity map holds a strong reference per node, so a
+   document freed without this leaves the map naming freed memory — which a pool allocator turns into the next
+   node inheriting a dead wrapper — and leaves the runtime's own leak walk counting its whole tree. */
+void dom_cow_destroy_document(lxb_html_document_t *dom);
 
 #endif
