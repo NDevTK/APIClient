@@ -75,8 +75,25 @@ console.log(`[test262] FEATURE run (forced time-travel, no fallback) on ${sub ||
 const args = ["-c", "test262.conf",
               ...(isFile ? ["-f", target] : dir ? ["-d", dir, "-I", dir] : []), ...passthru];
                                                     // cwd=QJS so relative harnessdir resolves
-const r = spawnSync(bin, args, { cwd: QJS, encoding: "utf8", maxBuffer: 1 << 30,
-  env: { ...process.env, FORK_PREEMPT: "1" }, timeout: 590_000 });
+/* THE BUDGET IS CPU, NOT WALL CLOCK — the same correction the WPT gate needed, for the same reason and after the
+   same false red. This was `timeout: 590_000`: 590 seconds of ELAPSED time, killed with SIGTERM, and reported
+   through a message that lists the three causes it cannot tell apart ("segfault/abort/timeout"). On a box under
+   load that is not a fact about the engine at all — a healthy whole-corpus run was reported as DID-NOT-COMPLETE
+   with an EMPTY tail, which is the signature of being killed while still running rather than of a crash, since a
+   crash leaves the output that preceded it.
+   RLIMIT_CPU counts the CPU SECONDS the child consumed, so a run starved by other work is never killed for
+   waiting. The wall backstop stays, generously, for a child that consumes no CPU because it is deadlocked.
+   The two causes report as DIFFERENT SIGNALS — SIGXCPU from the kernel, SIGTERM from node's own timeout — so the
+   summary below can name which one fired instead of collapsing both into a crash. The hard limit is set above
+   the soft one because dash makes them equal when given a single value, and the first notification is then the
+   kill itself; SIGKILL is read as the CPU cause too. */
+const CPU_BUDGET_S = 3600;
+const WALL_BACKSTOP_MS = 7_200_000;
+const r = spawnSync("/bin/sh",
+  ["-c", `ulimit -H -t ${CPU_BUDGET_S + 60} 2>/dev/null; ulimit -S -t ${CPU_BUDGET_S}; cd "$1" && shift && exec "$@"`,
+   "sh", QJS, bin, ...args],
+  { cwd: QJS, encoding: "utf8", maxBuffer: 1 << 30,
+    env: { ...process.env, FORK_PREEMPT: "1" }, timeout: WALL_BACKSTOP_MS });
 const out = (r.stdout || "") + (r.stderr || "");
 /* SINGLE-FILE MODE HAS NO SUMMARY LINE — run-test262 prints one only for a directory run, and a passing file
    prints nothing at all. Reporting the absence of a summary as DID-NOT-COMPLETE told the exact lie this
@@ -146,7 +163,16 @@ const notEngaged = /Feature: NOT ENGAGED/.test(out);
 const d2c = out.match(/DriveToCompletion: (\d+)/);   /* automatic drive-to-completion detector (structural, corpus-wide) */
 
 console.log("\n==================== test262 (feature) ====================");
-if (!m) { console.log("  DID-NOT-COMPLETE — a HARD crash before the summary (segfault/abort/timeout). FAIL LOUD:");
+/* WHICH OF THEM IT WAS, said out loud. "segfault/abort/timeout" named three causes and distinguished none, so a
+   run killed on the clock read exactly like a corpus-wide crash — and did, for a healthy binary, under load. */
+const budgetCause = (r.signal === "SIGXCPU" || r.signal === "SIGKILL")
+    ? `the ${CPU_BUDGET_S}s CPU budget (real CPU consumed, not elapsed — the corpus genuinely needs more than this)`
+  : r.signal === "SIGTERM"
+    ? `the ${WALL_BACKSTOP_MS / 1000}s WALL BACKSTOP while consuming little CPU — that is a DEADLOCK or a saturated box, NOT a crash. Re-run on a quiet machine before believing it.`
+    : null;
+if (!m) { console.log(budgetCause
+    ? `  DID-NOT-COMPLETE — killed by ${budgetCause}`
+    : "  DID-NOT-COMPLETE — a HARD crash before the summary (segfault or abort). FAIL LOUD:");
   /* Dump the captured tail + the child's exit signal/status so a corpus-wide crash names itself instead of hiding
      behind a bare "DID-NOT-COMPLETE" — this is what surfaces the un-routed drive-to-completion / memory bugs. */
   console.log("---- last 60 lines of captured output ----\n" + out.split(/\r?\n/).slice(-60).join("\n"));
