@@ -595,12 +595,15 @@ if (gopdFromC !== 8) {
  * trap and a gopd per key that 7.3.16 never performs. The superseded bodies are deleted, and with them the
  * unused public JS_SealObject / JS_FreezeObject, which ran those same traps from C for any embedder that called
  * them. 15 -> 14.
- * 14 = the call sites, excluding the definition. */
+ * 7 -> 6: js_object_isExtensible's C body was still standing after Object/Reflect.isExtensible became the
+ * JSExtOp step machine — reachable from nothing, and holding one of these calls. Deleting it is the same gain
+ * as routing one, and the count is lowered so it cannot be given back.
+ * 6 = the call sites, excluding the definition. */
 const extFromC = (src.match(/JS_IsExtensible\(/g) || []).length
   - (src.match(/^int JS_IsExtensible\(/gm) || []).length;
-if (extFromC !== 7) {
-  console.error(`C-side [[IsExtensible]] call sites: ${extFromC}, expected 7.`);
-  console.error(extFromC > 7
+if (extFromC !== 6) {
+  console.error(`C-side [[IsExtensible]] call sites: ${extFromC}, expected 6.`);
+  console.error(extFromC > 6
     ? `  A new C caller can reach a Proxy's isExtensible trap with no flow base.`
     : `  One was routed: LOWER the count in engine/check_recognizers.mjs so the gain cannot be given back.`);
   process.exit(1);
