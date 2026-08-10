@@ -32,13 +32,23 @@ JSValue abort_signal_new(JSContext *ctx);
  *
  * The work record is the CALLING machine's, like every other request here, so a fork copies it and a suspension
  * inside a listener resumes in the same stage. The caller visits and releases it.
- *   JS_STEP_CALL = return it, 0 = the operation has finished, -1 = it threw. */
+ *   JS_STEP_CALL = return it, 0 = the operation has finished, -1 = it threw.
+ *
+ * THE OPERATION RUNS "THE ABORT STEPS" FOR MORE THAN ONE SIGNAL. §3.2 splits signal abort into a REASON pass
+ * (steps 3-4: every non-aborted DEPENDENT signal takes this signal's abort reason, and the ones that did are
+ * collected) and an EFFECT pass (steps 5-6: "run the abort steps" — the algorithms, then the `abort` event —
+ * for this signal first and then for each collected dependent). The split is OBSERVABLE: a listener on the
+ * source already sees every dependent reading `aborted === true`, because the reason pass finished before the
+ * first listener ran. So the record carries a LIST of targets rather than one signal, and `j` says which of
+ * them the walk is inside. */
 typedef struct {
     uint8_t  stage;
     uint8_t  phase;    /* step_call_run's / event_target_fire_run's, for whichever call is in flight */
-    uint32_t i;        /* how far through the algorithm list */
-    JSValue  algos;    /* the snapshot being walked (owned) */
-    JSValue  ev;       /* the `abort` event, minted once and held across the dispatch (owned) */
+    uint32_t i;        /* how far through the CURRENT target's algorithm list */
+    uint32_t j;        /* which target's abort steps are running — 0 is the signal itself */
+    JSValue  targets;  /* §3.2 steps 5-6: the signal, then each dependentSignal that took its reason (owned) */
+    JSValue  algos;    /* the current target's algorithm snapshot (owned) */
+    JSValue  ev;       /* the current target's `abort` event, held across the dispatch (owned) */
     JSValue  cb[4];    /* the request buffer: four slots, because the fire needs [this, fn, target, event] */
 } AbortSignalWork;
 
@@ -65,5 +75,22 @@ bool    abort_signal_aborted(JSContext *ctx, JSValueConst sig);
    one is a TypeError — Streams §4.2.4's options carry one, and a union arm is a brand test. */
 bool    abort_signal_is(JSContext *ctx, JSValueConst v);
 JSValue abort_signal_reason(JSContext *ctx, JSValueConst sig);   /* dup'd */
+
+/* §3.2 "CREATE A DEPENDENT ABORT SIGNAL" — one signal that aborts when ANY of `signals` does, with that one's
+ * reason. It is a real §3.2 concept and not a convenience: the Observable standard's promise-returning
+ * operators each hold an AbortController of their own AND accept the caller's `options.signal`, and the
+ * subscription they open has to end when EITHER fires — `every()` aborts its own controller the moment the
+ * predicate answers false, while the caller's signal may abort it first.
+ *
+ * WHY IT CANNOT BE "add an algorithm to each that aborts the result". §3.2 states the propagation as STATE, not
+ * as a listener: step 4 of signal abort sets each dependent's abort reason BEFORE any of the abort steps run,
+ * so by the time the source's own algorithms and `abort` listeners execute, every dependent already reads
+ * `aborted === true`. An algorithm-based imitation aborts the dependent DURING the source's algorithm walk,
+ * which is one turn late and visible to the page. It is also why a dependent signal FLATTENS: a dependent built
+ * over a dependent takes the SOURCE signals of the inner one, so a chain of operators is one hop deep however
+ * many of them there are, and step 4.2's assert says the flattening is total.
+ *
+ * `signals` is BORROWED, the answer is OWNED. */
+JSValue abort_signal_dependent_new(JSContext *ctx, JSValueConst *signals, int n);
 
 #endif

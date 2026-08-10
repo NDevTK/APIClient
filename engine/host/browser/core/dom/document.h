@@ -52,6 +52,11 @@ bool document_render_blocked(JSContext *ctx);
    every navigable a forced-execution frontier ever created. */
 JSValueConst document_window_proxy(JSContext *ctx);
 
+/* HTML §7.3.1 "fully active" for THIS realm's Document — the guard a family of algorithms opens with, and the
+   reason a detached iframe's Observable pushes nothing. See the definition for why it is a walk and not a
+   flag. */
+bool document_fully_active(JSContext *ctx);
+
 /* THIS REALM'S `document` OBJECT. BORROWED. §4.8.5's `contentDocument` for a SAME-ORIGIN child answers with
    exactly this object out of the child's realm — the two documents are one agent, so it is a pointer and not
    a message. */

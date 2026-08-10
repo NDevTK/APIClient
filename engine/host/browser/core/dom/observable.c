@@ -39,31 +39,12 @@
 #include "core/idl_slots.h"
 #include "core/realm.h"
 #include "core/dom/abort.h"
+#include "core/dom/document.h"
+#include "core/events/event_target.h"
 #include "core/streams/stream_work.h"
 #include "core/events/report_exception.h"
 #include "core/dom/observable.h"
-
-/* WHICH OPERATION AN INVOCATION IS. §2.1's and §2.2's members, plus the two algorithms that are reached as
-   CALLABLES rather than as members: the abort algorithm a SubscribeOptions signal carries. */
-enum {
-    OP_CTOR = 0,       /* §2.2 new Observable(callback) */
-    OP_SUBSCRIBE,      /* §2.2 subscribe(observer, options) */
-    OP_NEXT,           /* §2.1 next(value) */
-    OP_ERROR,          /* §2.1 error(error) */
-    OP_COMPLETE,       /* §2.1 complete() */
-    OP_ADD_TEARDOWN,   /* §2.1 addTeardown(teardown) */
-    OP_UNSUB_ALGO,     /* §2.2.1 "subscribe to an Observable" step 9.2's abort algorithm */
-    OP_FROM,           /* §2.3.1 Observable.from(value) */
-    OP_FROM_ITER,      /* §2.3.1 "From iterable" — the returned Observable's subscribe callback */
-    OP_FROM_ASYNC,     /* §2.3.1 "From async iterable" — likewise */
-    OP_FROM_PROMISE,   /* §2.3.1 "From Promise" — likewise */
-    OP_ITER_CLOSE,     /* §2.3.1's abort algorithm: IteratorClose / AsyncIteratorClose */
-    OP_ASYNC_OK,       /* §2.3.1 nextAlgorithm's fulfilled reaction */
-    OP_ASYNC_ERR,      /* §2.3.1 nextAlgorithm's rejected reaction */
-    OP_PROMISE_OK,     /* §2.3.1 "From Promise" — the fulfilled reaction */
-    OP_PROMISE_ERR,    /* §2.3.1 "From Promise" — the rejected reaction */
-    OP_N
-};
+#include "core/dom/observable_impl.h"
 
 /* The private key the slot records hang off — a Symbol, so a page enumerating its own objects cannot see it
    and cannot collide with it. `g_ready` rather than testing g_key, because a static JSValue is zero-initialised
@@ -118,6 +99,14 @@ static void slot_set(JSContext *ctx, JSValueConst o, const char *name, JSValue v
 
 static bool observable_is(JSValueConst v) { return JS_GetClassID(v) == g_obs_class; }
 static bool subscriber_is(JSValueConst v) { return JS_GetClassID(v) == g_sub_class; }
+
+bool obs_is_observable(JSValueConst v) { return observable_is(v); }
+bool obs_is_subscriber(JSValueConst v) { return subscriber_is(v); }
+int  obs_stepid(int op)
+{
+    DCHECK(op >= 0 && op < OP_N, "an Observable operation was asked for by an id the component does not have");
+    return g_op_stepid[op];
+}
 
 static uint32_t array_len(JSContext *ctx, JSValueConst arr)
 {
@@ -192,6 +181,59 @@ static JSValue internal_observer_new(JSContext *ctx, JSValueConst n, JSValueCons
     return io;
 }
 
+JSValue obs_internal_observer_new(JSContext *ctx, JSValueConst n, JSValueConst e, JSValueConst c)
+{
+    return internal_observer_new(ctx, n, e, c);
+}
+
+/* §2.3'S PER-SUBSCRIPTION STATE. The standard's operators say "references to all of the following: queue,
+   activeInnerSubscription, outerSubscriptionHasCompleted, and idx" — one mutable record shared by the
+   subscribe callback and every one of its internal observer's algorithms. It is a JS object because
+   §State-isolation says a queue a flow builds is one: its writes are property writes the per-flow COW delta
+   already captures, and it parks to the cold tier with the snapshot for free. Null-prototyped and engine-owned,
+   so reading it back from C runs none of the page's code. */
+JSValue obs_record_new(JSContext *ctx)
+{
+    JSValue rec = idl_slots_new(ctx);
+    CHECK(!JS_IsException(rec), "an operator's per-subscription state record could not be allocated");
+    return rec;
+}
+
+JSValue obs_rec_get(JSContext *ctx, JSValueConst rec, const char *name)
+{
+    return JS_GetPropertyStr(ctx, rec, name);
+}
+
+void obs_rec_set(JSContext *ctx, JSValueConst rec, const char *name, JSValue v)
+{
+    DCHECK(JS_IsObject(rec), "an operator state field was written on something that is not a state record");
+    JS_SetPropertyStr(ctx, (JSValue)rec, name, v);
+}
+
+bool obs_rec_bool(JSContext *ctx, JSValueConst rec, const char *name)
+{
+    JSValue v = JS_GetPropertyStr(ctx, rec, name);
+    bool b = JS_ToBool(ctx, v);
+    JS_FreeValue(ctx, v);
+    return b;
+}
+
+int64_t obs_rec_int(JSContext *ctx, JSValueConst rec, const char *name)
+{
+    JSValue v = JS_GetPropertyStr(ctx, rec, name);
+    int64_t n = 0;
+    JS_ToInt64(ctx, &n, v);
+    JS_FreeValue(ctx, v);
+    return n;
+}
+
+JSValue obs_subscriber_signal(JSContext *ctx, JSValueConst sub)
+{
+    JSValue sig = slot_get(ctx, sub, "signal");
+    DCHECK(abort_signal_is(ctx, sig), "a Subscriber's subscription controller is not an AbortSignal");
+    return sig;
+}
+
 /* Remove one internal observer from a subscriber's list, by IDENTITY. Compacted in place rather than spliced:
    `splice` is a page-visible method on Array.prototype and this list is the engine's. */
 static void observers_remove(JSContext *ctx, JSValueConst sub, JSValueConst io)
@@ -220,102 +262,9 @@ static void array_append(JSContext *ctx, JSValueConst arr, JSValue v)
 
 /* ---- the machine ------------------------------------------------------------------------------------------ */
 
-enum { EM_NEXT = 0, EM_ERROR, EM_COMPLETE };
-
-/* WHERE THIS MACHINE RESTS, AS THE STANDARD NUMBERS IT. One machine walks §2.1's four members, §2.2's
-   constructor and subscribe, and the two algorithms that are not members — so a stage names the OPERATION it
-   is inside rather than a private count. */
-#define OBS_STAGES(X) \
-    X(S_ENTRY, "Observable §2.1/§2.2 (this invocation's entry: which member or algorithm it is, and the " \
-               "Observable or Subscriber it acts on)") \
-    X(S_CTOR_PROTO, "Web IDL §3.7.1 (Get(newTarget, \"prototype\") — what makes " \
-                    "`class O extends Observable {}` produce an O)") \
-    X(S_OBSERVER_READ, "Observable §2.2.1 subscribe step 3 (processing observer: the ObserverUnion's arm, and " \
-                       "a SubscriptionObserver's members read in Web IDL §3.2.18's order)") \
-    X(S_OPTIONS_READ, "Web IDL §3.2.18 (converting SubscribeOptions — the `signal` member's [[Get]])") \
-    X(S_ATTACH, "Observable §2.2.1 subscribe steps 5-9 (the reused-or-new Subscriber, and what the " \
-                "SubscribeOptions signal registers on it)") \
-    X(S_INVOKE, "Observable §2.2.1 subscribe step 10 (invoking the subscribe callback with the Subscriber, " \
-                "with \"rethrow\")") \
-    X(S_EMIT_ENTER, "Observable §2.1 next/error/complete step 1 (the active check, and for error and complete " \
-                    "the close that precedes the push)") \
-    X(S_EMIT_WALK, "Observable §2.1 next step 4 / error step 5 / complete step 5 (running each internal " \
-                   "observer's steps over a COPY of the list)") \
-    X(S_CLOSE_ENTER, "Observable §2.1 close-a-subscription steps 1-2 (the re-entrancy guard, then active " \
-                     "becomes false)") \
-    X(S_CLOSE_ABORT, "Observable §2.1 close-a-subscription step 3 (signal abort the subscription controller: " \
-                     "its abort algorithms, then the `abort` event)") \
-    X(S_CLOSE_TEARDOWN, "Observable §2.1 close-a-subscription step 4 (each teardown, in REVERSE insertion " \
-                        "order, invoked with \"report\")") \
-    X(S_TEARDOWN_NOW, "Observable §2.1 addTeardown step 3 (the subscription is already inactive, so the " \
-                      "teardown is invoked immediately with \"report\")") \
-    X(S_REPORT, "HTML §8.1.4.6 report an exception (the `error` event fired at the global — the page's " \
-                "onerror runs here), reached from §2.1's error(), its default error algorithm, and every " \
-                "callback the standard invokes with \"report\"") \
-    X(S_EMIT_CALL, "Observable §2.3 (running a Subscriber's next()/error()/complete() METHOD from a native " \
-                   "subscribe callback — the operators and from() are all specified that way)") \
-    X(S_FROM_PROBE_ASYNC, "Observable §2.3.1 convert-to-an-Observable step 3 " \
-                          "(GetMethod(value, %Symbol.asyncIterator%))") \
-    X(S_FROM_PROBE_SYNC, "Observable §2.3.1 convert-to-an-Observable \"From iterable\" step 1 " \
-                         "(GetMethod(value, %Symbol.iterator%))") \
-    X(S_ITER_METHOD, "Observable §2.3.1 (GetIterator step 1: re-reading the iterator method off the source, " \
-                     "which the standard notes is deliberate)") \
-    X(S_ITER_CALL, "Observable §2.3.1 (GetIterator step 2: calling the iterator method)") \
-    X(S_ITER_NEXTFN, "Observable §2.3.1 (GetIterator step 5: Get(iterator, \"next\"))") \
-    X(S_ITER_WRAP, "Observable §2.3.1 (GetIterator(value, async) step 1.b: CreateAsyncFromSyncIterator over " \
-                   "a source with no %Symbol.asyncIterator%)") \
-    X(S_ITER_STEP, "Observable §2.3.1 (IteratorNext: calling the iterator's `next` — and the yield point of " \
-                   "an unbounded iteration)") \
-    X(S_ITER_DONE, "Observable §2.3.1 (IteratorComplete: Get(iteratorResult, \"done\"))") \
-    X(S_ITER_VALUE, "Observable §2.3.1 (IteratorValue: Get(iteratorResult, \"value\"))") \
-    X(S_ITER_RETURN_FN, "Observable §2.3.1 (IteratorClose step 4: Get(iterator, \"return\"))") \
-    X(S_ITER_RETURN_CALL, "Observable §2.3.1 (IteratorClose step 6: calling `return`)") \
-    X(S_ASYNC_PROMISE, "Observable §2.3.1 nextAlgorithm step 5 (a promise resolved with what the async " \
-                       "iterator's `next` returned — 27.2.1.3.2 step 8's `then` read is the page's)") \
-    X(S_ASYNC_REACT, "Observable §2.3.1 nextAlgorithm step 6 (reacting to nextPromise)") \
-    X(S_PROMISE_REACT, "Observable §2.3.1 \"From Promise\" (reacting to the value)") \
-    X(S_PROMISE_DONE, "Observable §2.3.1 \"From Promise\" (the subscriber's complete(), after its next())") \
-    X(S_DONE, "Observable §2.1/§2.2 (the operation is complete)")
 enum { OBS_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const OBS_STEPS[] = { OBS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-typedef struct JSObsState {
-    JSStepHdr hdr;        /* FIRST — the driver writes the def and the operand bounds through it */
-    JSValue   result;     /* what this entry answers (owned) */
-    JSValue   obs;        /* the Observable being subscribed to (owned) */
-    JSValue   sub;        /* the Subscriber (owned) */
-    JSValue   io;         /* the internal observer being attached or walked (owned) */
-    JSValue   sig;        /* the SubscribeOptions signal, or undefined (owned) */
-    JSValue   list;       /* the snapshot being walked — observers, or teardowns (owned) */
-    JSValue   value;      /* the value/error being pushed (owned) */
-    /* THE CLOSE'S REASON, IN ITS OWN SLOT. §2.1's error() closes the subscription with the error AND THEN
-       pushes that same error to every observer, so the two cannot share `value` — the close would free what
-       the walk is about to hand over. */
-    JSValue   creason;
-    JSValue   iocb[3];    /* the internal observer's three algorithms as they are read; in §2.3.1's arms,
-                             [0] is the iterator's `next` method and [1] the iterator result (owned) */
-    JSValue   cb[4];      /* the call request's buffer (owned) */
-    AbortSignalWork aw;   /* §3.2 "signal abort", as a request */
-    StreamWork sw;        /* PromiseResolve, for §2.3.1's nextPromise */
-    ReportExceptionWork rw;   /* HTML §8.1.4.6 "report an exception", as a request */
-    JSValue   rerr;       /* what is being reported, held across that dispatch (owned) */
-    int64_t   i;          /* the walk cursor */
-    uint8_t   phase;      /* step_call_run's */
-    uint8_t   next;       /* the stage the close sequence, or an emitted call, returns to */
-    uint8_t   emit;       /* EM_NEXT / EM_ERROR / EM_COMPLETE */
-    uint8_t   member;     /* which dictionary member a read is on; the iteration's yield latch */
-    uint8_t   has_sig;    /* the SubscribeOptions declared a signal */
-    uint8_t   has_reason; /* close was given a reason */
-    /* §2.3.1's ARM: 0 = the sync iterable, 1 = the async one, 2 = the async one whose source turned out to
-       have no %Symbol.asyncIterator% after all, so GetIterator(value, async) falls back to the sync protocol
-       wrapped in a CreateAsyncFromSyncIterator. */
-    uint8_t   async;
-    uint8_t   reject;     /* the PromiseResolve in flight is a REJECTION (the async `next` threw) */
-    /* THE REPORT'S OWN RETURN STAGE, and it may not be `next`. A report happens INSIDE a walk that already
-       owns `next` — the teardown loop's continuation, the close sequence's — so sharing one byte would send
-       the walk to the close's exit the first time a callback threw. */
-    uint8_t   rnext;
-} JSObsState;
 
 static void js_obs_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
@@ -331,7 +280,12 @@ static void js_obs_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->value);
     v->val(ctx, &s->creason);
     for (k = 0; k < 3; k++) v->val(ctx, &s->iocb[k]);
-    for (k = 0; k < 4; k++) v->val(ctx, &s->cb[k]);
+    v->val(ctx, &s->src);
+    v->val(ctx, &s->st);
+    v->val(ctx, &s->op1);
+    v->val(ctx, &s->op2);
+    v->val(ctx, &s->op3);
+    for (k = 0; k < 6; k++) v->val(ctx, &s->cb[k]);
     abort_signal_work_visit(ctx, &s->aw, v);
     stream_work_visit(ctx, &s->sw, v);
     report_exception_work_visit(ctx, &s->rw, v);
@@ -352,7 +306,12 @@ static void js_obs_release(JSContext *ctx, void *st)
     JS_FreeValue(ctx, s->value);   s->value  = JS_UNDEFINED;
     JS_FreeValue(ctx, s->creason); s->creason = JS_UNDEFINED;
     for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->iocb[k]); s->iocb[k] = JS_UNDEFINED; }
-    for (k = 0; k < 4; k++) { JS_FreeValue(ctx, s->cb[k]);   s->cb[k]   = JS_UNDEFINED; }
+    JS_FreeValue(ctx, s->src);     s->src  = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->st);      s->st   = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->op1);     s->op1  = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->op2);     s->op2  = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->op3);     s->op3  = JS_UNDEFINED;
+    for (k = 0; k < 6; k++) { JS_FreeValue(ctx, s->cb[k]);   s->cb[k]   = JS_UNDEFINED; }
     abort_signal_work_release(ctx, &s->aw);
     stream_work_release(ctx, &s->sw);
     report_exception_work_release(ctx, &s->rw);
@@ -373,7 +332,7 @@ static JSValue js_obs_fini(JSContext *ctx, void *st, bool take_result)
 /* LEAVING A STAGE WITH A CALL IN FLIGHT is the bug this assert exists for: a stage that holds a request must
    reach the same step_call_run to collect its result, and deciding differently on the way back in leaves the
    phase byte set, so the NEXT request reads that as a resume and answers without ever asking. */
-static void obs_goto(JSObsState *s, int stage)
+void obs_goto(JSObsState *s, int stage)
 {
     DCHECK(s->phase == 0, "an Observable stage was left with a call still in flight");
     s->hdr.stage = (uint16_t)stage;
@@ -400,11 +359,11 @@ static void obs_close_enter(JSContext *ctx, JSObsState *s, int has, JSValue reas
    §2.3's operators and §2.3.1's arms are all specified as "run subscriber's next() METHOD", so a native
    algorithm must reach the same function object the page sees rather than mint a second one — and taking the
    reference HERE is what keeps a page that later replaces the property from redirecting the standard's own
-   algorithms. Indexed by EM_NEXT/EM_ERROR/EM_COMPLETE. */
-static int g_sub_fn_slot[3];
+   algorithms. Indexed by EM_NEXT/EM_ERROR/EM_COMPLETE/EM_TEARDOWN. */
+static int g_sub_fn_slot[EM_N];
 
 /* Run one of those members on this machine's subscriber, returning to `ret`. `value` is CONSUMED. */
-static void obs_emit_enter(JSContext *ctx, JSObsState *s, int which, JSValue value, int ret)
+void obs_emit_enter(JSContext *ctx, JSObsState *s, int which, JSValue value, int ret)
 {
     JS_FreeValue(ctx, s->value);
     s->value = value;
@@ -417,7 +376,7 @@ static void obs_emit_enter(JSContext *ctx, JSObsState *s, int which, JSValue val
    entry rather than once per machine: one walk reports once per throwing callback. The ALGORITHM belongs to
    core/events/report_exception.c — DOM §2.9's throwing listener and HTML §8.9's animation-frame callback reach
    the same one, and this is its fourth caller. */
-static void obs_report_enter(JSContext *ctx, JSObsState *s, JSValue err, int ret)
+void obs_report_enter(JSContext *ctx, JSObsState *s, JSValue err, int ret)
 {
     JS_FreeValue(ctx, s->rerr);
     s->rerr = err;
@@ -427,10 +386,85 @@ static void obs_report_enter(JSContext *ctx, JSObsState *s, JSValue err, int ret
     obs_goto(s, S_REPORT);
 }
 
-/* The live exception becomes `subscriber.error(E)` — §2.3.1's answer at every one of its throwing steps. */
+/* The live exception becomes `subscriber.error(E)` — §2.3.1's answer at every one of its throwing steps, and
+   §2.3.2/§2.3.3's at every "if an exception E was thrown, then run subscriber's error() method, given E". */
+void obs_fail_to(JSContext *ctx, JSObsState *s, int ret)
+{
+    obs_emit_enter(ctx, s, EM_ERROR, JS_GetException(ctx), ret);
+}
+
 static void obs_fail(JSContext *ctx, JSObsState *s)
 {
-    obs_emit_enter(ctx, s, EM_ERROR, JS_GetException(ctx), S_DONE);
+    obs_fail_to(ctx, s, S_DONE);
+}
+
+/* §2.2.1 "SUBSCRIBE TO AN OBSERVABLE" REACHED FROM SPEC PROSE, returning to `ret`. It is a CALL of the realm's
+   own function object over §2.2.1's machine rather than a jump into S_ATTACH, and that is the whole point: an
+   operator subscribes to its source from INSIDE one of its own algorithms, so the two subscriptions' states
+   would otherwise be one state. As a call, the inner one is an ordinary machine on the trampoline. */
+static int g_sub_native_slot;
+
+void obs_subscribe_enter(JSContext *ctx, JSObsState *s, JSValueConst observable, JSValueConst io,
+                         JSValueConst signal, int ret)
+{
+    /* DUP BEFORE FREE, at every one of the three. An operand slot's incoming value is routinely the SAME value
+       the slot already holds — the flatMap/switchMap/catch tails hand `op1` straight back as the Observable
+       they just converted — and freeing first would drop the last reference to the argument the very next line
+       reads. */
+    JSValue a = JS_DupValue(ctx, observable), b = JS_DupValue(ctx, io), c = JS_DupValue(ctx, signal);
+
+    JS_FreeValue(ctx, s->op1); s->op1 = a;
+    JS_FreeValue(ctx, s->op2); s->op2 = b;
+    JS_FreeValue(ctx, s->op3); s->op3 = c;
+    s->snext = (uint8_t)ret;
+    obs_goto(s, S_SUB_NATIVE);
+}
+
+/* §2.3.1 "convert to an Observable", as a CALL, returning to `ret` with the answer in `s->op1` — or with the
+   TypeError live and `s->op1` an exception. The standard's own note asks for exactly this ("we shouldn't
+   invoke from() directly … we want to pipe the exceptions to subscriber"), and a call is what gives the
+   caller the throw as a VALUE: this machine declares catches_abrupt, so an abrupt request result is an operand
+   rather than an unwind. The function object is the realm's OWN reference to §2.3.1's machine, never
+   `Observable.from` read off the constructor, which a page may replace. */
+static int g_from_fn_slot;
+
+void obs_convert_enter(JSContext *ctx, JSObsState *s, JSValueConst value, int ret)
+{
+    JSValue v = JS_DupValue(ctx, value);   /* dup before free — see obs_subscribe_enter */
+
+    JS_FreeValue(ctx, s->op1); s->op1 = v;
+    s->fnext = (uint8_t)ret;
+    obs_goto(s, S_OP_CONVERT);
+}
+
+JSValue obs_algo_new(JSContext *ctx, int alg, JSValueConst rec)
+{
+    JSValueConst data[2];
+    JSValue kv = JS_NewInt32(ctx, alg), fn;
+
+    DCHECK(alg >= 0 && alg < OA_N, "an operator internal-observer algorithm was minted with no OA_ id");
+    data[0] = kv;
+    data[1] = rec;
+    fn = JS_NewStepClosure(ctx, g_op_stepid[OP_OP_ALGO], 1, 2, data);
+    JS_FreeValue(ctx, kv);
+    CHECK(!JS_IsException(fn), "an operator's internal-observer algorithm could not be allocated");
+    return fn;
+}
+
+JSValue obs_operator_observable(JSContext *ctx, int kind, JSValueConst source, JSValueConst arg)
+{
+    JSValueConst data[3];
+    JSValue kv = JS_NewInt32(ctx, kind), cb;
+
+    DCHECK(kind >= 0 && kind < K_N, "an operator Observable was minted with no K_ id");
+    data[0] = kv;
+    data[1] = source;
+    data[2] = arg;
+    cb = JS_NewStepClosure(ctx, g_op_stepid[OP_OP_SUBSCRIBE], 1, 3, data);
+    JS_FreeValue(ctx, kv);
+    if (JS_IsException(cb))
+        return cb;
+    return observable_new(ctx, JS_UNDEFINED, cb);
 }
 
 static bool sub_signal_aborted(JSContext *ctx, JSObsState *s)
@@ -476,7 +510,8 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
         s->result = s->obs = s->sub = s->io = s->sig = s->list = s->value = JS_UNDEFINED;
         s->creason = JS_UNDEFINED;
         for (k = 0; k < 3; k++) s->iocb[k] = JS_UNDEFINED;
-        for (k = 0; k < 4; k++) s->cb[k] = JS_UNDEFINED;
+        s->src = s->st = s->op1 = s->op2 = s->op3 = JS_UNDEFINED;
+        for (k = 0; k < 6; k++) s->cb[k] = JS_UNDEFINED;
         abort_signal_work_start(&s->aw);
         stream_work_start(&s->sw);
         report_exception_work_start(&s->rw);
@@ -485,6 +520,8 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
         s->i = 0;
         s->phase = s->next = s->emit = s->member = s->has_sig = s->has_reason = 0;
         s->async = 0;
+        s->snext = s->fnext = S_DONE;
+        s->kind = s->alg = 0;
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
 
@@ -509,6 +546,12 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
                 return JS_STEP_ABRUPT;
             }
             s->obs = JS_DupValue(ctx, s->hdr.this_val);
+            /* §2.2.1 step 1: a detached document subscribes to nothing — the producer is never invoked and
+               the observer's dictionary members are never even read. */
+            if (!document_fully_active(ctx)) {
+                obs_goto(s, S_DONE);
+                break;
+            }
             obs_goto(s, S_OBSERVER_READ);
             break;
 
@@ -518,6 +561,14 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
                 return JS_STEP_ABRUPT;
             }
             s->sub = JS_DupValue(ctx, s->hdr.this_val);
+            /* §2.1's FULLY-ACTIVE GUARD, which every one of these four members opens with: "If the relevant
+               global object is a Window whose associated Document is not fully active, then return." It is
+               after the brand test and after Web IDL's argument conversion, because those precede step 1 —
+               `subscriber.next()` with no arguments is still a TypeError in a detached document. */
+            if (!document_fully_active(ctx)) {
+                obs_goto(s, S_DONE);
+                break;
+            }
             if (op == OP_ADD_TEARDOWN) {
                 /* §2.1: `addTeardown(VoidFunction teardown)` — a callback function type, so a non-callable is
                    a TypeError before step 1. */
@@ -609,6 +660,33 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
             obs_emit_enter(ctx, s, EM_NEXT, JS_DupValue(ctx, step_arg(&s->hdr, 0)), S_PROMISE_DONE);
             break;
 
+        case OP_SUBSCRIBE_NATIVE: {
+            /* §2.2.1 "subscribe to an Observable" reached from spec prose: the operands are the operator's
+               own — the Observable, an INTERNAL OBSERVER it built, and the signal it chose — so steps 1-4 of
+               the member (the ObserverUnion and the SubscribeOptions read) have no counterpart here and the
+               algorithm begins at step 5. */
+            JSValueConst signal = step_arg(&s->hdr, 2);
+            s->obs = JS_DupValue(ctx, step_arg(&s->hdr, 0));
+            s->io  = JS_DupValue(ctx, step_arg(&s->hdr, 1));
+            DCHECK(observable_is(s->obs),
+                   "a spec-prose subscription named something that is not an Observable");
+            DCHECK(JS_IsObject(s->io), "a spec-prose subscription carried no internal observer");
+            if (abort_signal_is(ctx, signal)) {
+                s->sig = JS_DupValue(ctx, signal);
+                s->has_sig = 1;
+            }
+            obs_goto(s, S_ATTACH);
+            break;
+        }
+
+        case OP_OP_SUBSCRIBE: case OP_OP_ALGO:
+        case OP_TAKE_UNTIL: case OP_TAKE: case OP_DROP: case OP_INSPECT:
+        case OP_TOARRAY: case OP_FOREACH: case OP_EVERY: case OP_FIRST:
+        case OP_LAST: case OP_FIND: case OP_SOME: case OP_REDUCE:
+            if (obs_ops_entry(ctx, s, op, &r))
+                return r;
+            break;
+
         default:
             DCHECK(op == OP_UNSUB_ALGO, "an Observable machine was entered with an operation it does not have");
             /* §2.2.1 step 9.2's abort algorithm, which captured the subscriber, the internal observer it
@@ -643,9 +721,12 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
     if (JS_IsException(cb_result)) {
         switch (s->hdr.stage) {
         case S_CTOR_PROTO: case S_OBSERVER_READ: case S_OPTIONS_READ:
-        case S_FROM_PROBE_ASYNC: case S_FROM_PROBE_SYNC:
+        case S_FROM_PROBE_ASYNC: case S_FROM_PROBE_SYNC: case S_OP_ENTER:
             /* Web IDL and §2.3.1 both RETHROW: a dictionary member's throwing getter aborts subscribe(), and
-               convert-to-an-Observable propagates whatever the probe threw. */
+               convert-to-an-Observable propagates whatever the probe threw. S_OP_ENTER is in this group for
+               the same reason and no other — it is where §2.3.2/§2.3.3's Web IDL PROLOGUE runs (inspect's five
+               members, every promise operator's `options.signal`, take/drop's `valueOf`), and a conversion
+               that throws throws out of the METHOD, before any promise exists to reject. */
             return JS_STEP_ABRUPT;
         case S_ITER_METHOD: case S_ITER_NEXTFN: case S_ITER_DONE: case S_ITER_VALUE:
             /* Inside a subscription every throw is `subscriber.error(E)` instead. */
@@ -956,7 +1037,13 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
         case S_CLOSE_TEARDOWN:
             /* Step 4: each teardown, in REVERSE insertion order, invoked with "report". */
             while (s->i >= 0) {
-                JSValue fn = JS_GetPropertyUint32(ctx, s->list, (uint32_t)s->i);
+                JSValue fn;
+                /* Step 4.1, and the standard says it runs REPEATEDLY "because each teardown could result in
+                   the above Document becoming inactive" — so it is asked inside the loop, per teardown, not
+                   once before it. */
+                if (!document_fully_active(ctx))
+                    break;
+                fn = JS_GetPropertyUint32(ctx, s->list, (uint32_t)s->i);
                 r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, JS_UNDEFINED, 0, NULL, cb_result, &out,
                                   out_cb, out_argc);
                 JS_FreeValue(ctx, fn);
@@ -1293,13 +1380,63 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
             obs_emit_enter(ctx, s, EM_COMPLETE, JS_UNDEFINED, S_DONE);
             continue;
 
+        case S_SUB_NATIVE: {
+            /* §2.2.1 from spec prose, AS A CALL. The three operands were placed by obs_subscribe_enter; the
+               callee is this realm's own §2.2.1 machine, so the nested subscription — the producer it runs,
+               the values it pushes back through this operator — is on the trampoline rather than C re-entry. */
+            JSValue fn = realm_value_get(ctx, g_sub_native_slot);
+            JSValueConst argv[3];
+
+            argv[0] = s->op1;
+            argv[1] = s->op2;
+            argv[2] = s->op3;
+            r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, JS_UNDEFINED, 3, argv, cb_result, &out,
+                              out_cb, out_argc);
+            JS_FreeValue(ctx, fn);
+            if (r > 0) return r;
+            cb_result = JS_UNDEFINED;
+            /* §2.2.1 lets nothing escape: step 10 turns the producer's throw into subscriber.error(E), and
+               every observer algorithm is invoked with "report". */
+            DCHECK(!JS_IsException(out),
+                   "a spec-prose subscription raised — §2.2.1 catches its producer's throw and reports every "
+                   "observer's, so nothing it runs can unwind into the operator that subscribed");
+            if (JS_IsException(out)) JS_FreeValue(ctx, JS_GetException(ctx));
+            else JS_FreeValue(ctx, out);
+            JS_FreeValue(ctx, s->op1); s->op1 = JS_UNDEFINED;
+            JS_FreeValue(ctx, s->op2); s->op2 = JS_UNDEFINED;
+            JS_FreeValue(ctx, s->op3); s->op3 = JS_UNDEFINED;
+            obs_goto(s, s->snext);
+            continue;
+        }
+
+        case S_OP_CONVERT: {
+            /* §2.3.1's convert, AS A CALL — see obs_convert_enter. The answer, or the exception, lands in
+               `op1`, which is where the operator stage that asked reads it. */
+            JSValue fn = realm_value_get(ctx, g_from_fn_slot);
+            JSValueConst arg = s->op1;
+
+            r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, JS_UNDEFINED, 1, &arg, cb_result, &out,
+                              out_cb, out_argc);
+            JS_FreeValue(ctx, fn);
+            if (r > 0) return r;
+            cb_result = JS_UNDEFINED;
+            JS_FreeValue(ctx, s->op1);
+            s->op1 = out;                      /* the Observable, or JS_EXCEPTION with the throw live */
+            obs_goto(s, s->fnext);
+            continue;
+        }
+
         case S_DONE:
             JS_FreeValue(ctx, cb_result);
             return JS_STEP_DONE;
 
         default:
-            DFAIL("an Observable machine resumed in a stage the standard does not have");
-            return JS_STEP_ABRUPT;
+            /* §2.3'S STAGES ARE observable_ops.c's. It answers the way this loop's own arms do, and DFAILs on
+               a stage neither file claims — so a stage that exists in the enum and nowhere else aborts at the
+               resume rather than silently doing nothing. */
+            if (obs_ops_stage(ctx, s, &cb_result, out_cb, out_argc, &r))
+                return r;
+            continue;
         }
     }
 }
@@ -1318,10 +1455,12 @@ static int js_obs_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
                      .algorithm = "Observable §2.1/§2.2 (the shared machine over the Subscriber and " \
                                   "Observable operations)", \
                      .steps = OBS_STEPS }
+#define OBS_DEF8(b) OBS_DEF((b)+0), OBS_DEF((b)+1), OBS_DEF((b)+2), OBS_DEF((b)+3), \
+                    OBS_DEF((b)+4), OBS_DEF((b)+5), OBS_DEF((b)+6), OBS_DEF((b)+7)
 static const JSTrampStepDef js_obs_defs[OP_N] = {
-    OBS_DEF(0),  OBS_DEF(1),  OBS_DEF(2),  OBS_DEF(3),  OBS_DEF(4),  OBS_DEF(5),  OBS_DEF(6),  OBS_DEF(7),
-    OBS_DEF(8),  OBS_DEF(9),  OBS_DEF(10), OBS_DEF(11), OBS_DEF(12), OBS_DEF(13), OBS_DEF(14), OBS_DEF(15),
+    OBS_DEF8(0), OBS_DEF8(8), OBS_DEF8(16), OBS_DEF8(24),
 };
+#undef OBS_DEF8
 #undef OBS_DEF
 
 /* ---- the plain accessors ----------------------------------------------------------------------------------
@@ -1370,17 +1509,23 @@ void observable_init(JSContext *ctx)
     JS_NewClassID(rt, &g_sub_class);
     JS_NewClass(rt, g_sub_class, &sd);
 
+    DCHECK(sizeof(js_obs_defs) / sizeof(js_obs_defs[0]) == OP_N,
+           "an Observable operation was declared with no step definition beside it — the table is written in "
+           "blocks and OP_N is what says how many of them there are");
     for (i = 0; i < OP_N; i++) {
         g_op_stepid[i] = JS_RegisterStepDef(rt, &js_obs_defs[i]);
         CHECK(g_op_stepid[i] >= 0, "observable: no step id for one of its operations");
     }
     {
-        static const char *const FN[3] = {
-            "Subscriber.prototype.next", "Subscriber.prototype.error", "Subscriber.prototype.complete"
+        static const char *const FN[EM_N] = {
+            "Subscriber.prototype.next", "Subscriber.prototype.error", "Subscriber.prototype.complete",
+            "Subscriber.prototype.addTeardown"
         };
-        for (i = 0; i < 3; i++)
+        for (i = 0; i < EM_N; i++)
             g_sub_fn_slot[i] = realm_value_declare(ctx, FN[i]);
     }
+    g_sub_native_slot = realm_value_declare(ctx, "Observable §2.2.1 subscribe-to (spec prose)");
+    g_from_fn_slot    = realm_value_declare(ctx, "Observable §2.3.1 convert-to-an-Observable");
     realm_declare_intrinsic(observable_install_protos);
 }
 
@@ -1406,9 +1551,9 @@ void observable_install_protos(JSContext *ctx)
        than minted a second time — a native `subscriber.next(v)` must be the same function the page can see,
        and the reference taken here is the one that keeps working when the page replaces the property. */
     {
-        static const char *const N[3] = { "next", "error", "complete" };
+        static const char *const N[EM_N] = { "next", "error", "complete", "addTeardown" };
         int k;
-        for (k = 0; k < 3; k++) {
+        for (k = 0; k < EM_N; k++) {
             JSValue fn = JS_GetPropertyStr(ctx, sub_p, N[k]);
             CHECK(JS_IsFunction(ctx, fn), "observable: a §2.1 member this component just installed is not a "
                                           "function");
@@ -1421,7 +1566,31 @@ void observable_install_protos(JSContext *ctx)
     CHECK(!JS_IsException(obs_p), "the Observable.prototype allocation failed");
     idl_interface_tag(ctx, obs_p, "Observable");
     idl_install_step_method(ctx, obs_p, "subscribe", 0, g_op_stepid[OP_SUBSCRIBE]);
+    obs_ops_install(ctx, obs_p);
     JS_SetClassProto(ctx, g_obs_class, obs_p);
+
+    /* §3's `partial interface EventTarget { Observable when(...) }`. A partial interface is the SAME interface,
+       so the member goes on EventTarget.prototype rather than onto anything of this component's — which is
+       what makes `document.when` and `element.when` and `signal.when` one declaration. */
+    {
+        JSValue etp = event_target_proto(ctx);
+        DCHECK(JS_IsObject(etp), "§3's when() was installed into a realm with no EventTarget.prototype");
+        idl_install_step_method(ctx, etp, "when", 1, g_op_stepid[OP_WHEN]);
+        JS_FreeValue(ctx, etp);
+    }
+
+    /* THE TWO ALGORITHMS SPEC PROSE REACHES WITHOUT A MEMBER, as function objects OF THIS REALM. §2.2.1's
+       "subscribe to an Observable" and §2.3.1's "convert to an Observable" are both stated as abstract
+       operations precisely so the operators can use them without going through the Web IDL bindings — and a
+       page that replaces `Observable.prototype.subscribe` or `Observable.from` must not redirect them. */
+    {
+        JSValue fn = JS_NewCFunction2(ctx, NULL, "", 3, JS_CFUNC_step, g_op_stepid[OP_SUBSCRIBE_NATIVE]);
+        CHECK(JS_IsFunction(ctx, fn), "observable: §2.2.1's spec-prose subscribe could not be minted");
+        realm_value_set(ctx, g_sub_native_slot, fn);
+        fn = JS_NewCFunction2(ctx, NULL, "", 1, JS_CFUNC_step, g_op_stepid[OP_FROM]);
+        CHECK(JS_IsFunction(ctx, fn), "observable: §2.3.1's convert could not be minted");
+        realm_value_set(ctx, g_from_fn_slot, fn);
+    }
 }
 
 void observable_install(JSContext *ctx, JSValueConst global)

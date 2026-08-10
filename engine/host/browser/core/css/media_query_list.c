@@ -149,7 +149,8 @@ static JSValue js_mql_add_listener(JSContext *ctx, JSValueConst this_val, int ar
     if (!mql_data(ctx, this_val)) return JS_EXCEPTION;
     /* `EventListener? callback` — a null callback registers nothing, which is what §2.7's own algorithm says. */
     if (!JS_IsNull(argv[0]) && !JS_IsUndefined(argv[0]))
-        event_target_add_listener(ctx, this_val, "change", argv[0]);
+        event_target_add_listener(ctx, this_val, "change", argv[0], /*capture*/ false, /*once*/ false,
+                                  /*passive*/ -1, /*signal*/ JS_UNDEFINED);
     return JS_UNDEFINED;
 }
 

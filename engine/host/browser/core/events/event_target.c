@@ -485,11 +485,11 @@ static JSValue remove_listener_with_type(JSContext *ctx, JSValueConst this_val, 
     return JS_UNDEFINED;
 }
 
-void event_target_add_listener(JSContext *ctx, JSValueConst target, const char *type, JSValueConst cb)
+void event_target_add_listener(JSContext *ctx, JSValueConst target, const char *type, JSValueConst cb,
+                               bool capture, bool once, int passive, JSValueConst signal)
 {
     JS_FreeValue(ctx, add_listener_with_type(ctx, event_target_receiver(ctx, target), cb, type,
-                                             /*capture*/ false, /*once*/ false, /*passive*/ -1,
-                                             /*signal*/ JS_UNDEFINED));
+                                             capture, once, passive, signal));
 }
 
 void event_target_remove_listener(JSContext *ctx, JSValueConst target, const char *type, JSValueConst cb)

@@ -72,9 +72,19 @@ void event_target_set_handler_hook(void (*after_set)(JSContext *ctx, JSValueCons
    callback)`, which is why `mql.addListener(f)` and `mql.removeEventListener("change", f)` name one
    registration in every browser. A component keeping its own list would answer that pair with two.
    The CALLBACK is the page's value and is stored as-is; nothing here runs it, so neither of these can reach the
-   page's code and neither needs to be a request. `capture` and `once` are false, which is what a member that
-   takes only a callback means. */
-void event_target_add_listener(JSContext *ctx, JSValueConst target, const char *type, JSValueConst cb);
+   page's code and neither needs to be a request.
+
+   THE ADD TAKES THE WHOLE LISTENER, not a callback and three defaults. §2.7's listener is five fields, and a C
+   caller that could only ever register (capture false, once false, passive default, no signal) could not
+   express the one registration another standard actually asks for: the Observable standard's §3 `when()` names
+   FOUR of the five explicitly — its `capture` and `passive` come from an `ObservableEventListenerOptions`
+   dictionary, and its `signal` is the subscription controller's, which is the entire mechanism by which
+   unsubscribing removes the listener. Narrowing the entry point to the fields the first caller happened to
+   need is how a component ends up keeping a listener list of its own.
+   `passive` is the TRISTATE the flatten-more-options algorithm makes it: -1 means the caller did not say, and
+   §2.7's step 4 then fills it from the default passive value for the type. `signal` may be undefined. */
+void event_target_add_listener(JSContext *ctx, JSValueConst target, const char *type, JSValueConst cb,
+                               bool capture, bool once, int passive, JSValueConst signal);
 void event_target_remove_listener(JSContext *ctx, JSValueConst target, const char *type, JSValueConst cb);
 
 /* DOM §2.9's ACTIVATION BEHAVIOUR — what makes a click on an `<a href>` FOLLOW the link, on a `<form>`'s submit

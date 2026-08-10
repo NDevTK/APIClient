@@ -1323,6 +1323,51 @@ JSValueConst document_window_proxy(JSContext *ctx)
     return d->proxy;
 }
 
+/* HTML §7.3.1 "FULLY ACTIVE": a Document is fully active when it is the active document of a navigable, and
+ * that navigable is either a top-level traversable or its container document is itself fully active.
+ *
+ * WHY IT IS ITS OWN QUESTION AND NOT `!closed`. The two differ exactly where it matters: removing an
+ * `<iframe>` destroys THAT navigable, and every document nested inside it stops being fully active without
+ * anything having been done to its own navigable. So the answer is the WALK the definition states — this
+ * navigable and every one containing it — and it is asked, not remembered, because the tree it walks is
+ * per-flow: one arm of a fork removed the frame and its sibling did not.
+ *
+ * WHO ASKS. Every algorithm the standards guard with it, and there is a family of them: the Observable
+ * standard opens §2.1's next/error/complete/addTeardown, §2.2.1's subscribe and §3's when() with this exact
+ * sentence, and §2.1's close-a-subscription RE-asks it before every teardown because "each teardown could
+ * result in the above Document becoming inactive". A detached document must silently do nothing rather than
+ * push values into a realm the user agent has discarded. */
+bool document_fully_active(JSContext *ctx)
+{
+    Document *d = doc_here(ctx);
+    JSValue cur;
+    bool ok = true;
+
+    /* A Document with no navigable at all — `new Document()`, a DOMParser result — has no browsing context, so
+       the guard's own premise ("the relevant global object is a Window") is false and the algorithm proceeds.
+       The realm this runs in is a Window's, and this realm's proxy is minted with it. */
+    if (!window_proxy_is(d->proxy))
+        return true;
+    cur = JS_DupValue(ctx, d->proxy);
+    for (;;) {
+        JSValue parent;
+        if (window_proxy_closed(ctx, cur)) { ok = false; break; }
+        parent = window_proxy_parent(ctx, cur);
+        /* §7.3.1's base case is a TOP-LEVEL traversable, and §7.2.5's `parent` of one is the navigable ITSELF —
+           so the walk ends when the answer stops moving, or when it is not a navigable's proxy at all (a
+           cross-instance parent this agent cannot walk into, which is answered by its own instance). */
+        if (!window_proxy_is(parent) ||
+            JS_VALUE_GET_PTR(parent) == JS_VALUE_GET_PTR(cur)) {
+            JS_FreeValue(ctx, parent);
+            break;
+        }
+        JS_FreeValue(ctx, cur);
+        cur = parent;
+    }
+    JS_FreeValue(ctx, cur);
+    return ok;
+}
+
 uint32_t document_doc(JSContext *ctx) { return doc_here(ctx)->doc; }
 
 JSValueConst document_object(JSContext *ctx) { return doc_here(ctx)->doc_obj; }

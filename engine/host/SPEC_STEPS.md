@@ -2676,7 +2676,124 @@ the rest of the author code lives:
 | §2.2.1 `subscribe to an Observable` | 7 | step 10 runs the producer **even when** step 9.1 already closed the subscriber |
 | §2.1 `close a subscription` | 2 (one per teardown) | the teardown list is read **after** the signal abort, and runs in **reverse** order |
 | §2.3.1 `convert to an Observable` | 3 + the arm's own loop | `GetMethod`, never `GetIterator`, for the probe; a sync iterable's loop is unbounded |
+| §2.3.2 an operator's subscribe callback | 1-2 subscriptions + the arm's own | takeUntil's step 5 skips the SOURCE entirely when the notifier already fired |
+| §2.3.2 an operator's `next` steps | 1 callback + 1 emit (+1 convert +1 subscribe for flatMap/switchMap/catch) | the mapper is invoked with «value, idx» and "rethrow"; idx moves only on the NON-throwing path |
+| §2.3.3 the promise operators | 1 read + 1 settle + 1 abort per decision | the settle precedes the abort, and the dependent signal is §3.2's, never an algorithm pair |
+| §3 `when()` | 3 reads, and NO subscription | the listener's signal is the subscription controller's — that is the whole teardown |
 | **Total for the core** | **18** | |
+
+### 10.7 §2.3.2 The Observable-returning operators — one shape, ten times
+
+**Every one of them is the same three parts**, and reading them as anything else is how they drift apart:
+
+1. the METHOD builds an `Observable` whose subscribe callback is native steps closed over the source and the
+   operator's argument;
+2. that callback makes a per-subscription STATE record and an INTERNAL OBSERVER whose three algorithms read
+   and write it;
+3. it SUBSCRIBES to the source with **`subscriber`'s own subscription controller's signal** as the options
+   signal.
+
+Part 3 is the whole unsubscription story and it is one line in every operator. When the downstream consumer
+goes away, §2.1's close-a-subscription signals that controller, §2.2.1 step 9.2's abort algorithm on the
+upstream subscription removes this internal observer and — **only when the list is then empty** — closes the
+upstream `Subscriber`. Nothing in an operator arranges its own teardown; a chain of ten unwinds itself.
+
+**Which methods are step machines, and why the other six are not.** A method is a machine when something
+between its entry and its return can run the page's code. `map`, `filter`, `flatMap`, `switchMap`, `catch` and
+`finally` convert exactly one argument each and every one of those conversions is a Web IDL **callback function
+type**, which is a brand check — no `[[Get]]`, no coercion, no user algorithm. A machine there would DECLARE a
+suspension point the standard does not have. The four that are machines are machines for a stated reason:
+
+| Method | Why it reaches the page's code |
+| --- | --- |
+| `takeUntil(value)` | step 2 **converts** `value` to an Observable — §2.3.1's `GetMethod` on `@@asyncIterator` then `@@iterator`, both the page's |
+| `take(amount)` / `drop(amount)` | Web IDL `unsigned long long` is ToNumber, so `take({valueOf(){…}})` is the page's loop |
+| `inspect(inspectorUnion)` | five dictionary members, read with `[[Get]]` in Web IDL §3.2.18's **lexicographic** order — `abort`, `complete`, `error`, `next`, `subscribe` |
+
+**takeUntil is the only operator that subscribes twice, and the ORDER is load-bearing.** The notifier is
+subscribed to FIRST, with the same subscriber's signal; its `next` **and** its `error` steps both run
+`subscriber.complete()`, and it has **no complete steps at all** — a notifier that completes without emitting
+must leave the mirror running. Then step 5 asks whether `subscriber`'s `active` is still true, and a notifier
+that emitted synchronously has already closed it, so **the source is never subscribed to**. The internal
+observer's error steps being PRESENT is what keeps §2.2.1's default error algorithm — a report — from firing
+instead.
+
+**`flatMap` and `switchMap` are the same operator with opposite answers to "a second value arrived".** flatMap
+QUEUES it behind an `activeInnerSubscription` boolean and drains the queue from the inner observer's complete
+steps; switchMap ABORTS the previous inner subscription's own `AbortController` and derives a new one. Both
+then run the identical *process next value* steps — mapper, `idx + 1`, convert, subscribe — and both hold the
+outer `complete` back: `outerSubscriptionHasCompleted` is set, and whoever finishes last runs
+`subscriber.complete()`. switchMap's inner subscription is where §3.2's **dependent abort signal** is
+unavoidable: its options signal is a dependent over «the inner controller's signal, the subscriber's», because
+either one ending must end that subscription and neither may end the other.
+
+**`inspect`'s abort handler is registered and then REMOVED by three of its own algorithms.** The standard's
+note says why: the handler is for CONSUMER-initiated unsubscription only, so a producer that is about to
+`error()` or `complete()` — which signals the very controller the handler is registered on — must unregister it
+first. Its `next` handler removes it too, but only on the path where it THREW.
+
+### 10.8 §2.3.3 The promise-returning operators — six shared steps and one difference
+
+All eight open with the same prologue, and the ONE thing that differs is whether the operator owns an
+`AbortController` of its own:
+
+| Operator | Own controller? | Because |
+| --- | --- | --- |
+| `toArray`, `last` | no | they never end the subscription early, so the internal options signal IS the caller's |
+| `forEach`, `every`, `first`, `find`, `some`, `reduce` | yes | their observer DECIDES to stop — a false predicate, the first value, a callback that threw |
+
+For the six, the internal options signal is **§3.2's "create a dependent abort signal" over «controller's
+signal, options's signal if non-null»**, and that primitive is not optional and not replaceable by "add an
+algorithm to each that aborts the result". §3.2 states the propagation as STATE: step 4 of *signal abort* sets
+every non-aborted dependent's abort reason **before** any of the abort steps run, so by the time the source's
+own algorithms and `abort` listeners execute, every dependent already reads `aborted === true`. An
+algorithm-based imitation aborts the dependent DURING the source's algorithm walk — one turn late, and
+page-visible. It is also why a dependent signal FLATTENS (step 4.2 takes the SOURCE signals of a dependent
+input), so a chain of operators is one hop deep however long it is, and step 4.2.1's assert says the flattening
+is total.
+
+Three details the WPT files pin:
+
+- **The abort algorithm rejects `p`, and it stays registered.** `toArray`'s and `last`'s is on the CALLER's
+  signal and outlives the subscription. Rejecting an already-settled promise is a no-op, which is what makes
+  the "resolve, then abort my own controller" order below safe.
+- **The settle comes BEFORE the abort.** `every()` resolves `false` and *then* signals its controller;
+  `first()` resolves the value and *then* signals. Aborting first would run the subscription's teardown chain
+  before the promise a handler is waiting on had settled.
+- **`reduce`'s accumulator is "uninitialized", not "undefined".** `reduce(f, undefined)` HAS an initial value,
+  and the difference is whether the first emitted value is fed to the reducer or *becomes* the accumulator.
+  `hasAcc` is therefore `argc > 1`, never a test of the value.
+
+### 10.9 §3 `EventTarget.when()` — and the listener entry point it needed
+
+`when(type, options)` is a partial interface on `EventTarget`, so the member goes on `EventTarget.prototype`.
+Its Observable's subscribe callback **subscribes to nothing**: it adds an event listener whose callback runs
+the *observable event listener invoke algorithm* (`subscriber.next(event)`) and whose **signal is the
+subscription controller's**. That signal is the entire unsubscription mechanism — §2.1's close signals it,
+§2.7 step 6's abort steps remove the listener — and it is why this component keeps no registration of its own.
+
+It was blocked on the C entry point, and the block was the shape of the entry rather than the storage behind
+it. §2.7's listener is five fields and DOM §2.9's rebuild already stored all five (including the tristate
+`passive` and a real `signal` abort algorithm), but `event_target_add_listener` took only a callback and
+hard-coded the other four. `when()` names FOUR of them explicitly, so the entry point now takes the whole
+listener. `passive` must stay the TRISTATE: §3 says "options's `passive` if this member EXISTS; null
+otherwise", and collapsing an absent member to `false` would deny the type its default passive value.
+
+### 10.10 HTML §7.3.1 "fully active" — the guard this whole standard opens with
+
+§2.1's `next`/`error`/`complete`/`addTeardown`, §2.2.1's subscribe and §3's `when()` each begin with *"If the
+relevant global object is a `Window` object, and its associated `Document` is not fully active, then return"*,
+and §2.1's close-a-subscription re-asks it **per teardown**, because the standard says each teardown could
+result in that Document becoming inactive.
+
+The answer is a WALK, not a flag, and the two differ exactly where it matters: removing an `<iframe>` destroys
+THAT navigable, and every document nested inside it stops being fully active without anything having been done
+to its own navigable. So `document_fully_active` asks §7.3.1's own question — this navigable and every one
+containing it — and asks it rather than remembering it, because the tree it walks is per-flow: one arm of a
+fork removed the frame and its sibling did not.
+
+The guard sits AFTER the brand test and after Web IDL's argument conversion, because those precede step 1:
+`subscriber.next()` with no arguments is still a TypeError in a detached document.
 
 ## 11. DOM §2.7 / §2.8 / §2.9 — the event listener list, the event path, and dispatch
 
