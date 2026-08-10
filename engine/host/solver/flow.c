@@ -178,8 +178,28 @@ double flow_weight(const Flow *f) {
        scheduler chose a flow — forty times a quantum of aging — so the act of switching to a flow was enough to
        make it no longer the best one, and the scheduler switched straight back. The guarantee is unchanged and
        is what the term is for: a flow that has never RUN has no service, so it carries the full bonus and
-       cannot be starved. What is gone is a rank that moves because of a decision rather than because of work. */
-    double ucb    = 1.0 / (1.0 + (double)(f->cpu / FLOW_SERVICE_QUANTUM));
+       cannot be starved. What is gone is a rank that moves because of a decision rather than because of work.
+       ZERO SERVICE IS ITS OWN NOTCH, and that is the whole of the guarantee rather than a rounding detail.
+       Quantising with a FLOOR put a flow that has never run and a flow that has burned 4095 units of CPU into
+       the SAME notch, so they tied — and flow_best keeps the incumbent on a tie. "A never-run flow is never
+       starved" is then not a guarantee at all: for a whole service quantum the term cannot tell the two apart,
+       and the one already holding the thread wins. A CEILING restores it and costs the anti-thrash property
+       nothing: service 0 is the never-run notch and is strictly better than every serviced flow, while
+       1..QUANTUM all land on notch 1 and tie with each other exactly as they did, so two flows that have both
+       run still hold the thread for a whole quantum and trade places once, never per step. Measured on the
+       full smoke fixture: same PASS, 13796 flows against 14003, 37002 context switches against 14000 — the
+       extra switches are fresh forks taking their turn, which is what the term is for.
+       WHAT THIS DOES NOT FIX, measured, so that the next reader does not credit it with more than it does: a
+       flow that has already EMITTED carries that reward forever (`reward = f->val`), and a fresh sibling starts
+       at zero, so the notch never comes into it — the emitting flow outranks by whole points while the aging
+       meant to give those points back is 1e-6 per scheduler step, about 10^7 steps per point. An unknown-length
+       walk (`Array.from(state.items)`, one outcome fork per position) is a flow that emits nothing more and
+       never finishes, and it held the thread for 227 seconds with `switches` still at 1. §scheduler says the
+       aging term sinks "a monopolizer that burns CPU without emitting" below productive AND unrun flows; at
+       this rate it cannot, and making it commensurate with the reward it is subtracted from is the next
+       mechanism here. */
+    long served   = (f->cpu + FLOW_SERVICE_QUANTUM - 1) / FLOW_SERVICE_QUANTUM;   /* 0 IFF never serviced */
+    double ucb    = 1.0 / (1.0 + (double)served);
     double aging  = (double)(f->cpu / FLOW_SERVICE_QUANTUM)
                   * (FLOW_SERVICE_QUANTUM * FLOW_AGE_RATE);   /* same rate, quantised — see above */
     return reward + ucb - aging;

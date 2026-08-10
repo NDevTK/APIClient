@@ -1277,16 +1277,28 @@ static const char *HTML_MIN =
     "function* spf(){ if (cfg.admin) { yield 'spA'; } else { yield 'spP'; } } fetch('/api/spreadfork?v=' + [...spf()][0]);"   /* [...GEN] spread consumer fork: same CONT_ITER_CONSUME machinery, SPREAD sink (append to the literal's array), forks mid-consume -> both spA and spP */
     /* OPAQUE ITERATION: `state.items` is unknown injected state, so LengthOfArrayLike over it has no answer -
        every length is a world, and the walk's bound is a CHAIN of per-position outcome forks
-       (step_length_unknown). THIS STATEMENT IS RED, and it is red because it is finally RUN: it sat here behind
-       a getenv() emscripten never fills, so no mode of engine/build.mjs reached it and nothing asserted it.
-       Run, it dies at the first script with `concolic: OOM constraint blob key` - a REAL wasm-heap exhaustion,
-       invisible to @HEAP's heapKiB because that counter is quickjs's allocator while the constraint map is
-       plain malloc. WHAT IS MISSING is a yield between positions: each ask returns JS_STEP_FORK and the driver
-       RE-ENTERS the same step immediately, so one flow mints a sibling AND an O(n) deep copy of its constraint
-       map per position, in one scheduler step, forever. The WFQ comment on step_length_unknown says the
-       unproductive arm is "outranked and paged" - it never can be, because the chain never returns to the
-       scheduler to be ranked. Build the per-position yield (the ask is a work item on the ONE frontier, exactly
-       like a loop back-edge), then this statement runs in BOTH documents and its row becomes DOC_BOTH. */
+       (step_length_unknown). THIS STATEMENT IS RED, and each thing it has been red FOR is measured, because a
+       row that names the wrong cause is what makes the next reader fix the wrong thing.
+       FIXED: the constraint map's whole-map deep copy. Every fork copied the running flow's ENTIRE path
+       constraint, so n positions cost O(n^2) bytes and the run died at the FIRST script in concolic.c's own
+       CHECK. concolic.c is now a mutable head over refcounted immutable segments (cow.c's CowSeg pattern), so a
+       fork costs O(1) - measured: the first script now completes and the walk runs.
+       NOT the cause, though it was named as one: the per-position ask DOES return to the scheduler. The driver
+       consults the preempt hook at every outcome fork (JS_PREEMPT_FORK, quickjs.c), so a yield is offered per
+       position and the seam assertion's `asked == 0` never holds here.
+       STILL RED, and this is the measured reason: the WALKING FLOW IS NEVER OUTRANKED. flow_weight is
+       reward + optimism - aging, the walker's reward is every endpoint it emitted EARLIER in this document
+       while a fresh sibling starts at zero, and the aging that §scheduler says must sink "a monopolizer that
+       burns CPU without emitting" is 1e-6 per scheduler step - about 10^7 steps to give back ONE emission's
+       worth of rank. So the scheduler is offered the yield, declines it, and re-picks the walker: 227 seconds
+       of run with `switches` still at 1 and nothing else in the frontier ever dispatched. The aging term has to
+       be commensurate with the reward it is weighed against; that is the next mechanism, and it is flow.c's.
+       AND BEHIND THAT, the walk is unbounded by design (§NO BOUNDS: every length is a world and the walker
+       takes the "longer" arm forever), so the frontier NEVER DRAINS - and this harness's completion condition
+       is that it drains. What carries past that is the mechanism engine.c already names at its own flow-compile
+       OOM: a cold tier that pages the lowest-value tail out of the live frontier. Until it exists the honest
+       end of this run is the physical RAM floor, loud, at that CHECK. Both are why the row is DOC_MIN: putting
+       it in the full document costs the main gate the same way. */
     "var _af = Array.from(state.items); fetch('/api/optiter?n=' + _af.length + '&a=' + _af[0] + '&b=' + _af[1]);"
     "var _sad = new Set(); if (cfg.admin) { _sad.add('sadA'); } else { _sad.add('sadP'); } fetch('/api/setaddfork?v=' + [...(_sad)][0]);"   /* SHARED-SET record isolation: _sad is created before the concolic fork; each arm's Set.add must be COW-isolated via the map_add capture (record removed by JS_MapDeleteRecord on unapply) -> EXACTLY 'sadA' and 'sadP', never a contaminated set holding both */
     "function* sef(){ if (cfg.admin) { yield 'seA'; } else { yield 'seP'; } } fetch('/api/setfork?v=' + [...new Set(sef())][0]);"   /* new Set(GEN) consumer fork: the Set consumer (CONT_ITER_CONSUME, SET sink) forks mid-consume; now fork-SAFE via the map_add COW capture -> both seA and seP */
@@ -2376,10 +2388,12 @@ int main(int argc, char **argv) {
         { "hostreq", hostreq_tt, 1 }, { "hostreq-fork", hostreqfork_tt, 1 },
         { "json-fork", jsonfork_tt, 1 },
         { "nav-open", navopen_tt, 1 }, { "proxy-sop", sop_tt, 1 }, { "xdoc-read", xdocread_tt, 1 }, { "xdoc-job", xdocjob_tt, 1 }, { "timer-order", timer_tt, 1 }, { "iframe-nav", ifnav_tt, 1 },
-        /* DOC_MIN ONLY, and that is a MEASUREMENT, not a preference. Put this statement in the full document
-           and the run dies at the first script with `concolic: OOM constraint blob key` — a REAL exhaustion of
-           the wasm heap, which `heapKiB` cannot show because that counter is quickjs's allocator and the
-           constraint map is plain malloc. See the statement's own comment for what is missing. */
+        /* DOC_MIN ONLY, and that is a MEASUREMENT, not a preference. The whole-map constraint copy that used to
+           kill this run at the FIRST script is gone (concolic.c is a segment chain now), and the walk runs — but
+           the flow walking it is never outranked, so it holds the thread and the frontier behind it never
+           dispatches, and the walk is unbounded so the frontier never drains either. Put the statement in the
+           full document and the main gate goes the same way. See the statement's own comment for the two
+           measured causes and which mechanism each one needs. */
         { "optiter", optiter_tt, DOC_MIN },
         { "s-eval", s_eval, 1 },           { "s-html", s_html, 1 },
         { "s-url", s_url, 1 },             { "s-loc", s_loc, 0 },

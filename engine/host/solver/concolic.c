@@ -35,13 +35,95 @@ typedef struct {
    Both are per-flow and travel together, which is why they are ONE entry rather than two maps that a fork,
    a suspend and a resume would each have to remember to carry. */
 typedef struct { char *key; char *val; signed char truth; } Cons;
-static Cons *g_pins = NULL; static int g_pins_n = 0, g_pins_cap = 0;
+
+/* THE CONSTRAINT IS A MUTABLE HEAD OVER IMMUTABLE, REFCOUNTED, STRUCTURALLY-SHARED SEGMENTS — the third
+   instance of the one primitive cow.c's `CowSeg` and dom_cow.c's `DomSeg` already are, and it is here for the
+   same reason and in the same shape.
+   IT USED TO BE A WHOLE-MAP DEEP COPY, PER FORK: one malloc for the array and two strdups per entry, taken by
+   every sibling, so a flow that forks n times over a map it is also growing allocated O(n^2) bytes and held
+   every one of them until the last sibling finished. THE SHAPE THAT REACHED IT is an unknown-length walk —
+   `Array.from(state.items)` asks step_length_unknown one outcome fork per POSITION and each position adds one
+   entry — and the run died in this file's own CHECK with the wasm heap gone, at the FIRST script.
+   A frozen segment is never written again, so two flows that reach the same segment agree about everything
+   from there down: a fork hands the sibling the parent's whole knowledge by taking ONE reference on the chain
+   (O(1)), and what each flow LEARNS afterwards lives in its own head above it. That is the copy-on-write the
+   deep copy was imitating, and it makes a fork cost what the arm has learned rather than what its whole history
+   knows.
+   A WRITE TO A KEY THE CHAIN ALREADY HOLDS COPIES THAT ONE ENTRY UP INTO THE HEAD (`cons_entry`), which is what
+   keeps the shared segments immutable while a flow may still narrow a fact it inherited — never a write through
+   into a segment a sibling is reading. */
+typedef struct ConsSeg { Cons *e; int n; int *hash; int hash_cap; struct ConsSeg *base; int refcount; } ConsSeg;
+
+static Cons    *g_pins = NULL;  static int g_pins_n = 0, g_pins_cap = 0;   /* the running flow's HEAD */
+static int     *g_pins_hash = NULL; static int g_pins_hash_cap = 0;        /* …and its index (key -> idx+1) */
+static ConsSeg *g_pins_base = NULL;                                        /* the frozen chain under it */
+
+static uint32_t cons_hash(const char *k) {   /* FNV-1a over the constraint key */
+    uint32_t h = 2166136261u;
+    while (*k) { h ^= (unsigned char)*k++; h *= 16777619u; }
+    return h;
+}
+/* THE ONE PROBE, over the head's index or a segment's — a segment's index IS the head's, handed over unchanged
+   at the freeze, so there is one implementation and the two cannot drift. Returns the entry index or -1. */
+static int cons_index_find(const Cons *e, const int *hash, int cap, const char *key) {
+    uint32_t m, h;
+    if (!hash) return -1;
+    m = (uint32_t)cap - 1; h = cons_hash(key) & m;
+    while (hash[h]) {
+        if (!strcmp(e[hash[h] - 1].key, key)) return hash[h] - 1;
+        h = (h + 1) & m;
+    }
+    return -1;
+}
+static void cons_hash_put(int idx) {   /* insert head entry idx; caller guarantees room */
+    uint32_t m = (uint32_t)g_pins_hash_cap - 1, h = cons_hash(g_pins[idx].key) & m;
+    while (g_pins_hash[h]) h = (h + 1) & m;
+    g_pins_hash[h] = idx + 1;
+}
+static void cons_hash_rebuild(void) {   /* size to >= 2*n (power of two), re-insert every head entry */
+    int i;
+    g_pins_hash_cap = 16; while (g_pins_hash_cap < g_pins_n * 2) g_pins_hash_cap *= 2;
+    g_pins_hash = realloc(g_pins_hash, (size_t)g_pins_hash_cap * sizeof(int));
+    CHECK(g_pins_hash, "concolic: OOM path-constraint index");
+    memset(g_pins_hash, 0, (size_t)g_pins_hash_cap * sizeof(int));
+    for (i = 0; i < g_pins_n; i++) cons_hash_put(i);
+}
+/* THE WHOLE CONSTRAINT THIS FLOW CAN SEE, nearest-first: the head, then each frozen segment from the newest
+   down. Nearest-first is the copy-on-write rule read the other way round — a head entry SHADOWS the segment
+   entry it was copied up from, so a fact this arm has narrowed is the one that answers. */
+static const Cons *cons_lookup(const char *key) {
+    ConsSeg *s;
+    int i = cons_index_find(g_pins, g_pins_hash, g_pins_hash_cap, key);
+    if (i >= 0) return &g_pins[i];
+    for (s = g_pins_base; s; s = s->base) {
+        i = cons_index_find(s->e, s->hash, s->hash_cap, key);
+        if (i >= 0) return &s->e[i];
+    }
+    return NULL;
+}
+/* THE WRITABLE entry for `key`: the head's, copying the chain's fact up into the head the first time this flow
+   narrows one it inherited. */
 static Cons *cons_entry(const char *key) {
-    for (int i = 0; i < g_pins_n; i++) if (!strcmp(g_pins[i].key, key)) return &g_pins[i];
-    if (g_pins_n >= g_pins_cap) { g_pins_cap = g_pins_cap ? g_pins_cap * 2 : 8; g_pins = realloc(g_pins, (size_t)g_pins_cap * sizeof(Cons)); CHECK(g_pins, "concolic: OOM path constraint"); }
+    const Cons *below;
+    int i = cons_index_find(g_pins, g_pins_hash, g_pins_hash_cap, key);
+    if (i >= 0) return &g_pins[i];
+    below = cons_lookup(key);   /* the head misses, so this is the chain's entry or nothing */
+    if (g_pins_n >= g_pins_cap) {
+        g_pins_cap = g_pins_cap ? g_pins_cap * 2 : 8;
+        g_pins = realloc(g_pins, (size_t)g_pins_cap * sizeof(Cons));
+        CHECK(g_pins, "concolic: OOM path constraint");
+    }
     g_pins[g_pins_n].key = strdup(key); CHECK(g_pins[g_pins_n].key, "concolic: OOM constraint key");
-    g_pins[g_pins_n].val = NULL; g_pins[g_pins_n].truth = -1;
-    return &g_pins[g_pins_n++];
+    g_pins[g_pins_n].val = (below && below->val) ? strdup(below->val) : NULL;
+    CHECK(!(below && below->val) || g_pins[g_pins_n].val, "concolic: OOM copying an inherited pin value");
+    g_pins[g_pins_n].truth = below ? below->truth : -1;
+    g_pins_n++;
+    if (!g_pins_hash || g_pins_hash_cap < g_pins_n * 2) cons_hash_rebuild();
+    else cons_hash_put(g_pins_n - 1);
+    DCHECK(cons_index_find(g_pins, g_pins_hash, g_pins_hash_cap, key) == g_pins_n - 1,
+           "a constraint entry is not findable through the index that was just given it — a later read of the "
+           "same fact would fork a branch this flow has already decided");
+    return &g_pins[g_pins_n - 1];
 }
 void concolic_pin(const char *src, const char *val) {
     Cons *c = cons_entry(src);
@@ -51,62 +133,78 @@ void concolic_constrain_branch(const char *key, int truth) {
     cons_entry(key)->truth = (signed char)(truth ? 1 : 0);
 }
 int concolic_branch_decided(const char *key) {
-    for (int i = 0; i < g_pins_n; i++) if (!strcmp(g_pins[i].key, key)) return g_pins[i].truth;
-    return -1;
+    const Cons *c = cons_lookup(key);
+    return c ? c->truth : -1;
 }
-void concolic_clear_pins(void) { for (int i = 0; i < g_pins_n; i++) { free(g_pins[i].key); free(g_pins[i].val); } g_pins_n = 0; }
 
-/* Per-flow constraint state is swappable so interleaved flows keep their OWN narrowing: suspend snapshots the
-   live map (deep copy), resume replaces the live map with a snapshot. A blob is one flow's constraint parked
-   while another runs — and the blob a FORK takes is the sibling's whole starting knowledge. */
-typedef struct { Cons *pins; int n; } PinBlob;
-/* WHAT ACTUALLY FILLS THE HEAP WHEN THESE FIRE, said here, because a reader of an `@E` is standing at THIS
-   allocation and the word "OOM" sends them looking at the page instead. THE COPY IS WHOLE AND IT IS PER FORK:
-   every fork deep-copies the running flow's ENTIRE constraint map — one malloc for the array and two strdups
-   per entry — so a flow that forks n times over one growing map allocates O(n^2) bytes and never returns them
-   until the siblings finish. That is the same defect cow.c already fixed for the heap delta ("the fork COPIED
-   every entry ... so N sibling flows each carried the whole history"), and it has the same answer: a mutable
-   HEAD over refcounted IMMUTABLE segments, frozen at the fork, shared by both arms in O(1).
-   THE SHAPE THAT REACHES IT is an unknown-length walk. `Array.from(state.items)` over unknown injected state
-   asks step_length_unknown one outcome-fork question per POSITION, and the driver re-enters the same step
-   immediately after each fork — so one scheduler step mints an unbounded chain of siblings, each taking one of
-   these whole-map copies, and the run dies here at the FIRST script. Both halves are real and independent: the
-   quadratic copy is this file's, the missing per-position yield is the chain's. */
+/* Drop a chain reference: refcount--, free the segment's entries at zero, continue into its base. A loop, not
+   recursion — the chain's depth is the fork depth, and an unknown-length walk makes that as deep as the walk is
+   long; C stack cannot be parked. The twin of cow_seg_unref / dom_seg_unref. */
+static void cons_seg_unref(ConsSeg *s) {
+    while (s && --s->refcount <= 0) {
+        ConsSeg *base = s->base;
+        int i;
+        for (i = 0; i < s->n; i++) { free(s->e[i].key); free(s->e[i].val); }
+        free(s->e); free(s->hash); free(s);
+        s = base;
+    }
+}
+
+void concolic_clear_pins(void) {
+    int i;
+    for (i = 0; i < g_pins_n; i++) { free(g_pins[i].key); free(g_pins[i].val); }
+    free(g_pins); g_pins = NULL; g_pins_n = g_pins_cap = 0;
+    free(g_pins_hash); g_pins_hash = NULL; g_pins_hash_cap = 0;
+    cons_seg_unref(g_pins_base); g_pins_base = NULL;
+}
+
+/* Per-flow constraint state is swappable so interleaved flows keep their OWN narrowing: suspend FREEZES the
+   live head onto the chain and hands back a reference to it, resume installs a parked chain as the live one.
+   A blob is one flow's constraint parked while another runs — and the blob a FORK takes is the sibling's whole
+   starting knowledge, which is the same object either way and is why one function serves both. */
+typedef struct { ConsSeg *seg; } PinBlob;
 void *concolic_pins_suspend(void) {
     PinBlob *b = malloc(sizeof *b);
-    CHECK(b, "concolic: the path constraint could not be parked — see the note above this function: a fork "
-             "copies the WHOLE map, so an unknown-length walk's per-position fork chain allocates O(n^2)");
-    b->n = g_pins_n;
-    b->pins = g_pins_n ? malloc((size_t)g_pins_n * sizeof(Cons)) : NULL;
-    if (g_pins_n)
-        CHECK(b->pins, "concolic: a fork could not copy the path constraint — this is the O(n^2) whole-map copy "
-                       "described above this function, reached by an unknown-length walk whose per-position "
-                       "outcome forks never return to the scheduler between positions");
-    for (int i = 0; i < g_pins_n; i++) {
-        b->pins[i].key = strdup(g_pins[i].key);
-        CHECK(b->pins[i].key, "concolic: a fork could not copy one constraint key — the whole-map copy above");
-        b->pins[i].val = g_pins[i].val ? strdup(g_pins[i].val) : NULL;
-        b->pins[i].truth = g_pins[i].truth;
+    CHECK(b, "concolic: the path constraint could not be parked — the frontier never drops a work item, and a "
+             "flow whose constraint is lost would re-fork every branch it has already decided");
+    if (g_pins_n == 0) {
+        /* NOTHING LEARNED SINCE THE LAST FREEZE, so there is nothing to freeze: the blob is one more reference
+           on the chain the flow already stands on. Without this a park/resume pair with no writes between them
+           would push an empty segment per switch and the chain's depth would count SWITCHES rather than forks. */
+        b->seg = g_pins_base;
+        if (b->seg) b->seg->refcount++;
+        return b;
+    }
+    DCHECK(g_pins_hash != NULL, "a non-empty constraint head is being frozen with no index — every read of the "
+                                "frozen segment would miss and the fact would be re-forked");
+    {
+        ConsSeg *s = malloc(sizeof *s);
+        CHECK(s, "concolic: OOM freezing the path constraint into a shared segment");
+        s->e = g_pins; s->n = g_pins_n; s->hash = g_pins_hash; s->hash_cap = g_pins_hash_cap;
+        s->base = g_pins_base; s->refcount = 2;   /* the running flow + this blob */
+        g_pins = NULL; g_pins_n = g_pins_cap = 0;
+        g_pins_hash = NULL; g_pins_hash_cap = 0;
+        g_pins_base = s;                          /* the running flow continues on top of what it just froze */
+        b->seg = s;
     }
     return b;
 }
 void concolic_pins_resume(void *blob) {
-    concolic_clear_pins();                 /* free the live map before overwriting it */
     PinBlob *b = blob;
-    for (int i = 0; i < b->n; i++) {
-        Cons *c = cons_entry(b->pins[i].key);
-        c->val = b->pins[i].val ? strdup(b->pins[i].val) : NULL;
-        c->truth = b->pins[i].truth;
-    }
+    DCHECK(b != NULL, "a flow was resumed with no parked path constraint — it would re-fork every branch it "
+                      "had already decided, on a decision vector that replays the old answers");
+    concolic_clear_pins();                 /* the live head and chain belong to the flow that just parked */
+    g_pins_base = b->seg;
+    if (g_pins_base) g_pins_base->refcount++;   /* the blob keeps its own reference until it is freed */
 }
 void concolic_pins_blob_free(void *blob) {
     PinBlob *b = blob; if (!b) return;
-    for (int i = 0; i < b->n; i++) { free(b->pins[i].key); free(b->pins[i].val); }
-    free(b->pins); free(b);
+    cons_seg_unref(b->seg);
+    free(b);
 }
 static const char *pin_of(const char *src) {
-    for (int i = 0; i < g_pins_n; i++) if (!strcmp(g_pins[i].key, src)) return g_pins[i].val;
-    return NULL;
+    const Cons *c = cons_lookup(src);
+    return c ? c->val : NULL;
 }
 
 static JSClassID g_concolic_class = 0;   /* runtime-allocated; 0 until concolic_init */
