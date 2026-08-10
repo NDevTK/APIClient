@@ -69,9 +69,36 @@ function defs(text) {
       if (text[i] === '{') depth++;
       else if (text[i] === '}' && --depth === 0) break;
     }
-    out.push({ struct: m[1], fini: m[3], body: text.slice(m.index, i + 1), index: m.index });
+    out.push({ struct: m[1], step: m[2], fini: m[3], body: text.slice(m.index, i + 1), index: m.index });
   }
   return out;
+}
+
+/* AND A CONVERTED MACHINE WRITES THE CONSTANT, NEVER THE NUMBER — the third clause of the one declaration.
+ * Declaring the X-list does not by itself remove the private numbering: the body still has to be rewritten, and
+ * a single `stage = 8` left behind is a stage whose identity moved out from under it while the source still
+ * reads as if it had not. That is not hypothetical. RegExp.prototype[@@search] was converted with two raw
+ * literals surviving; `8` had been "the restore" under the old private numbering and was `RES_INDEX` under the
+ * declared one, so a search whose `lastIndex` had moved skipped BOTH the restore (22.2.6.12 step 8) and the
+ * null check (step 9) and read `.index` off a null result — five test262 files, in a machine whose stage list,
+ * labels and enum were all correct and agreed with each other.
+ * Nothing else can see this: step_stage_check catches a stage past the END of the algorithm, and this one is a
+ * stage that is IN it and is the wrong one. So it is caught here, at the only place the constants and the body
+ * are both visible. */
+function stageLiteralCheck(where, text, name, stepFn, report) {
+  const fn = new RegExp(`\\b${stepFn}\\s*\\([^;{]*\\)\\s*\\n\\{`).exec(text);
+  if (!fn) return;                               // declared in another translation unit; nothing to read here
+  let depth = 0, i = fn.index + fn[0].length - 1;
+  for (; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}' && --depth === 0) break;
+  }
+  const body = maskLiterals(text.slice(fn.index, i + 1));
+  const lits = [...body.matchAll(/\bhdr\.stage\s*(?:==|=)\s*(\d+)/g)].map((m) => m[1]);
+  if (lits.length)
+    report(`[step-steps] ${where}: ${name} declares its stages but ${stepFn} still writes the NUMBER ` +
+           `(${[...new Set(lits)].join(', ')}) — a literal keeps the old private numbering alive inside the ` +
+           `declared one, and it names whichever step happens to sit at that index now`);
 }
 
 /* Which teardowns release through the declaration? Those are the ones for which a missing declaration is not
@@ -415,7 +442,10 @@ const stepsExprOf = (body) => (/\.steps\s*=\s*([^,}]+)/.exec(body) ?? [])[1] ?? 
 for (const d of defs(src)) {
   stageRow('quickjs.c', src.slice(0, d.index).split('\n').length, d.struct,
            /\.algorithm\s*=/.test(d.body), /\.steps\s*=/.test(d.body));
-  if (/\.steps\s*=/.test(d.body)) stageListCheck('quickjs.c', src, d.struct, stepsExprOf(d.body));
+  if (/\.steps\s*=/.test(d.body)) {
+    stageListCheck('quickjs.c', src, d.struct, stepsExprOf(d.body));
+    stageLiteralCheck('quickjs.c', src, d.struct, d.step, (m) => { console.error(m); bad++; });
+  }
 }
 for (const f of hostSources(join(ENGINE, 'host'))) {
   const text = readFileSync(f, 'utf8');
@@ -424,12 +454,18 @@ for (const f of hostSources(join(ENGINE, 'host'))) {
     const els = topLevelElements(balancedFrom(text, m.index));
     const has = (i) => els.length > i && els[i] !== '' && els[i] !== 'NULL';
     stageRow(where, text.slice(0, m.index).split('\n').length, m[1], has(4), has(5));
-    if (has(5)) stageListCheck(where, text, m[1], els[5]);
+    if (has(5)) {
+      stageListCheck(where, text, m[1], els[5]);
+      stageLiteralCheck(where, text, m[1], els[0], (msg) => { console.error(msg); bad++; });
+    }
   }
   for (const d of defs(text)) {
     stageRow(where, text.slice(0, d.index).split('\n').length, d.struct,
              /\.algorithm\s*=/.test(d.body), /\.steps\s*=/.test(d.body));
-    if (/\.steps\s*=/.test(d.body)) stageListCheck(where, text, d.struct, stepsExprOf(d.body));
+    if (/\.steps\s*=/.test(d.body)) {
+      stageListCheck(where, text, d.struct, stepsExprOf(d.body));
+      stageLiteralCheck(where, text, d.struct, d.step, (msg) => { console.error(msg); bad++; });
+    }
   }
 }
 
