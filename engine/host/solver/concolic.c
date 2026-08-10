@@ -60,13 +60,31 @@ void concolic_clear_pins(void) { for (int i = 0; i < g_pins_n; i++) { free(g_pin
    live map (deep copy), resume replaces the live map with a snapshot. A blob is one flow's constraint parked
    while another runs — and the blob a FORK takes is the sibling's whole starting knowledge. */
 typedef struct { Cons *pins; int n; } PinBlob;
+/* WHAT ACTUALLY FILLS THE HEAP WHEN THESE FIRE, said here, because a reader of an `@E` is standing at THIS
+   allocation and the word "OOM" sends them looking at the page instead. THE COPY IS WHOLE AND IT IS PER FORK:
+   every fork deep-copies the running flow's ENTIRE constraint map — one malloc for the array and two strdups
+   per entry — so a flow that forks n times over one growing map allocates O(n^2) bytes and never returns them
+   until the siblings finish. That is the same defect cow.c already fixed for the heap delta ("the fork COPIED
+   every entry ... so N sibling flows each carried the whole history"), and it has the same answer: a mutable
+   HEAD over refcounted IMMUTABLE segments, frozen at the fork, shared by both arms in O(1).
+   THE SHAPE THAT REACHES IT is an unknown-length walk. `Array.from(state.items)` over unknown injected state
+   asks step_length_unknown one outcome-fork question per POSITION, and the driver re-enters the same step
+   immediately after each fork — so one scheduler step mints an unbounded chain of siblings, each taking one of
+   these whole-map copies, and the run dies here at the FIRST script. Both halves are real and independent: the
+   quadratic copy is this file's, the missing per-position yield is the chain's. */
 void *concolic_pins_suspend(void) {
-    PinBlob *b = malloc(sizeof *b); CHECK(b, "concolic: OOM constraint blob");
+    PinBlob *b = malloc(sizeof *b);
+    CHECK(b, "concolic: the path constraint could not be parked — see the note above this function: a fork "
+             "copies the WHOLE map, so an unknown-length walk's per-position fork chain allocates O(n^2)");
     b->n = g_pins_n;
     b->pins = g_pins_n ? malloc((size_t)g_pins_n * sizeof(Cons)) : NULL;
-    if (g_pins_n) CHECK(b->pins, "concolic: OOM constraint blob copy");
+    if (g_pins_n)
+        CHECK(b->pins, "concolic: a fork could not copy the path constraint — this is the O(n^2) whole-map copy "
+                       "described above this function, reached by an unknown-length walk whose per-position "
+                       "outcome forks never return to the scheduler between positions");
     for (int i = 0; i < g_pins_n; i++) {
-        b->pins[i].key = strdup(g_pins[i].key); CHECK(b->pins[i].key, "concolic: OOM constraint blob key");
+        b->pins[i].key = strdup(g_pins[i].key);
+        CHECK(b->pins[i].key, "concolic: a fork could not copy one constraint key — the whole-map copy above");
         b->pins[i].val = g_pins[i].val ? strdup(g_pins[i].val) : NULL;
         b->pins[i].truth = g_pins[i].truth;
     }

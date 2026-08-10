@@ -1583,12 +1583,22 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
                    `allocations` with a flat `objects` is memory no GC object owns (an atom, a string, a
                    property table, a bytecode function), and each of those has a different owner and a
                    different place where the owner forgot to let go. */
+                /* AND WHAT IS NOT A GC OBJECT AT ALL, because that is where this run's growth actually was and
+                   none of the counts above could see it. `memory_used_*` is the runtime's own walk of its
+                   CONTEXT LIST — two entries and sizeof(JSContext) + one JSValue per class for every realm
+                   alive — so a run whose heap climbs while objects/props/shapes/atoms stay flat is answered
+                   here: a REALM per flow is one line of this number and no lines of the others. It is the
+                   working set navigable.c's OOM `CHECK` names (one child realm per flow that created a
+                   navigable with an address, none reclaimed), and it was invisible because nothing printed the
+                   one counter that holds it. */
                 printf("@HEAP {\"allocations\":%lld,\"atoms\":%lld,\"strings\":%lld,\"objects\":%lld,"
-                       "\"shapes\":%lld,\"props\":%lld,\"funcs\":%lld,\"funcCode\":%lld,\"arrays\":%lld}\n",
+                       "\"shapes\":%lld,\"props\":%lld,\"funcs\":%lld,\"funcCode\":%lld,\"arrays\":%lld,"
+                       "\"realmBytes\":%lld,\"realmParts\":%lld}\n",
                        (long long)mem.malloc_count, (long long)mem.atom_count, (long long)mem.str_count,
                        (long long)mem.obj_count, (long long)mem.shape_count, (long long)mem.prop_count,
                        (long long)mem.js_func_count, (long long)mem.js_func_code_size,
-                       (long long)mem.array_count);
+                       (long long)mem.array_count,
+                       (long long)mem.memory_used_size, (long long)mem.memory_used_count);
                 printf("@PROGRESS {\"switches\":%d,\"flows\":%ld,\"live\":%d,\"objects\":%lld,"
                        "\"heapKiB\":%lld,\"script\":%d,\"candidates\":%d,\"running\":\"%s\",\"forkedAt\":{",
                        g_switches, flow_created_count(), flow_count(),
