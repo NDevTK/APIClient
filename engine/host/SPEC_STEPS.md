@@ -2713,3 +2713,241 @@ is **per global**, which is why it lives on the global object and not in the rep
    that record is now `removed` and the walk would skip the very listener whose answer is arriving.
 5. **The activation behaviour is a stage after the cleanup**, not before it — a behaviour that reads
    `currentTarget` must see null.
+
+## 12. DOM §5 "Ranges" and §4.10/§4.11 — the live range, and the three tree algorithms that move it
+
+**Why this section exists.** §5's boundary points are only "live" because five *other* algorithms
+adjust them: `insert`, `remove`, `replace data`, `split a Text node`, and `move`. Four of those live
+outside §5, and the engine had two of them — insert's step 6 and the pre-remove steps — while
+`replace data` carried a comment saying its steps 8-11 were "honestly absent" and `split` did not
+exist at all. That is not a §5 gap: a page reading `range.startOffset` after `t.appendData("x")` got
+the *unadjusted* offset, and nothing in §5 could have told it so. This section is the step lists for
+all of them, plus §5.5's five content-moving members, which were absent for the stated reason that
+`replace data` and `split` did not exist.
+
+**Network was available.** Read from the live standard on **2026-08-10**:
+
+| Standard | Source | Version read |
+| --- | --- | --- |
+| WHATWG DOM | `https://dom.spec.whatwg.org/` | Living Standard, §5 and §4.10/§4.11 |
+
+### 12.0 Three things the live text says that a reasonable person would remember differently
+
+1. **A boundary point offset is in UTF-16 CODE UNITS, because §4.4's "length" is.** `node_length`
+   returned the *byte* length of a CharacterData node's UTF-8 store while `CharacterData.length`
+   returned code units, so the two disagreed for every non-ASCII text node and a Range's offsets
+   were byte offsets into a string the page indexes in code units. Every §5 algorithm is stated over
+   `length`; this is a §4.4 bug that §5 inherits wholesale.
+2. **The `data` setter is `replace data`, not a write.** §4.10's `data` setter and §4.4's
+   `nodeValue` setter are both defined as *replace data with node this, offset 0, count this's
+   length, and data the new value*. Writing the bytes straight through skips steps 8-11, so
+   `t.data = "x"` left every live range inside `t` pointing past the end of it.
+3. **`extract` and `clone the contents` are one algorithm with three differences.** The standard
+   states them as two lists; they differ only in that extract repositions the range (steps 12-15),
+   MOVES a contained child where clone deep-copies it (step 18 vs 14), and empties the CharacterData
+   it took bytes from. Every other line is word for word the same, including the whole
+   partial-containment rule.
+
+### 12.1 §5.5 "live range pre-remove steps", given a node `node`
+
+1. Let `parent` be `node`'s parent. —
+2. Assert: `parent` is non-null. — *(a DCHECK; `remove` is never reached for a parentless node)*
+3. Let `index` be `node`'s index. —
+4. For each live range whose **start node** is an inclusive descendant of `node`, set its start to
+   (`parent`, `index`). —
+5. The same for **end**. —
+6. For each live range whose start node **is** `parent` and start offset is **greater than**
+   `index`, decrease its start offset by 1. —
+7. The same for **end**. —
+
+**Steps 6-7 must re-read the boundary node**, because steps 4-5 may have just moved it onto
+`parent`. The standard runs the four in this order for exactly that reason. `>` and not `>=`: an
+offset **equal** to the index already names the removal site.
+
+### 12.2 §4.2.3 `insert`'s step 6 — the live-range half
+
+> If `child` is non-null: for each live range whose start node is `parent` and start offset is
+> greater than `child`'s index, increase its start offset by `count`; the same for end.
+
+`count` is the number of nodes actually inserted (a DocumentFragment contributes its children). This
+engine's DOM-mutation chokepoint fires per node, so it runs with `count` = 1 and the inserted node's
+own post-insertion index — which is **equivalent**: inserting N nodes one at a time at successive
+indices moves an offset past all of them by exactly N, and an offset equal to the first index is
+moved by neither form.
+
+### 12.3 §4.10 `replace data(node, offset, count, data)` — steps 8-11
+
+1. Let `length` be `node`'s length. —
+2. If `offset` > `length`, throw **`IndexSizeError`**. —
+3. If `offset` + `count` > `length`, set `count` to `length` − `offset`. —
+4. Queue a `characterData` mutation record. — *(MutationObserver is not built; honestly absent)*
+5. Insert `data` into `node`'s data after `offset` code units. —
+6. Let `deleteOffset` be `offset` + `data`'s length. —
+7. Starting from `deleteOffset` code units, remove `count` code units. —
+8. For each live range whose start node is `node` and start offset is **greater than `offset` but
+   less than or equal to `offset` + `count`**: set its start offset to `offset`. —
+9. The same for **end**. —
+10. For each live range whose start node is `node` and start offset is **greater than `offset` +
+    `count`**: increase it by `data`'s length and decrease it by `count`. —
+11. The same for **end**. —
+
+**Steps 8-9 and 10-11 cannot interfere.** Step 8 only ever writes `offset`, which is never greater
+than `offset + count`, so a boundary point step 8 moved can never satisfy step 10's test. Writing
+them as an if/else is a different algorithm only in appearance — but the four operands are in **code
+units**, and a caller that hands over a UTF-8 byte length moves a boundary point by two where
+`insertData(0, "é")` moves it by one.
+
+### 12.4 §4.11 `split a Text node(node, offset)`
+
+1. Let `length` be `node`'s length. —
+2. If `offset` > `length`, throw **`IndexSizeError`**. —
+3. Let `count` be `length` − `offset`. —
+4. Let `newData` be **substring data** of `node` with `offset` and `count`. —
+5. Let `newNode` be a **new text node** on **`node`'s node document** and `newData`. —
+6. Let `parent` be `node`'s parent. —
+7. If `parent` is non-null:
+   1. **Insert** `newNode` into `parent` before `node`'s next sibling. —
+   2. For each live range whose start node is `node` and start offset > `offset`: set its start node
+      to `newNode` and decrease its start offset by `offset`. —
+   3. The same for **end**. —
+   4. For each live range whose start node is `parent` and start offset **equals** `node`'s index +
+      1: increase it by 1. —
+   5. The same for **end**. —
+8. **Replace data** of `node` with `offset`, `count`, and the empty string. —
+9. Return `newNode`. —
+
+**7.1's own live-range step and 7.4 are not redundant.** 7.1's insert moves every offset in `parent`
+**greater than** `node`'s index + 1; 7.4 handles the one that is **equal** to it. Together: every
+offset at or after the split point moves along by one. And step 8's own steps 8-11 have nothing left
+to move, because 7.2-7.3 already took every boundary point past the split point off `node` — which
+is why the standard runs them before it. Step 5 names **`node`'s** node document, not the running
+realm's, so a split inside an adopted subtree keeps that subtree's document.
+
+### 12.5 §5.5 `deleteContents()`
+
+1. If this is **collapsed**, return. —
+2. Let `originalStartNode`/`Offset`, `originalEndNode`/`Offset` be this's boundary points. —
+3. If `originalStartNode` **is** `originalEndNode` and it is a CharacterData node: **replace data**
+   with (`originalStartOffset`, `originalEndOffset − originalStartOffset`, `""`) and return. —
+4. Let `nodesToRemove` be all nodes **contained in** this, in tree order, **omitting any node whose
+   parent is also contained**. —
+5. Let `newNode`, `newOffset` be null. —
+6. If `originalStartNode` is an inclusive ancestor of `originalEndNode`: `newNode` =
+   `originalStartNode`, `newOffset` = `originalStartOffset`. —
+7. Otherwise: walk `referenceNode` up from `originalStartNode` while its parent is non-null and not
+   an inclusive ancestor of `originalEndNode`; `newNode` = `referenceNode`'s parent, `newOffset` =
+   `referenceNode`'s index + 1. —
+8. Set this's start **and** end to (`newNode`, `newOffset`). —
+9. If `originalStartNode` is CharacterData: **replace data** with (`originalStartOffset`, its length
+   − `originalStartOffset`, `""`). —
+10. For each node of `nodesToRemove`, in tree order: **remove** it. —
+11. If `originalEndNode` is CharacterData: **replace data** with (`0`, `originalEndOffset`, `""`). —
+
+**It is NOT `extract` with the fragment dropped.** Step 4's omission rule is what replaces the spine
+`extract` descends, and there is no recursion in this algorithm at all. Step 4's walk is bounded by
+the **common ancestor** — every contained node is a descendant of it — and a contained node's
+descendants are all contained with a contained parent, so the walk skips their subtrees rather than
+visiting them to discard them.
+
+### 12.6 §5.5 `extract` a live range / `clone the contents` of one
+
+1. Let `fragment` be a new DocumentFragment on **range's start node's node document**. —
+2. If range is collapsed, return `fragment`. —
+3. Snapshot the four boundary values as `original*`. —
+4. If `originalStartNode` **is** `originalEndNode` and it is CharacterData: clone it, set the
+   clone's data to **substring data** (`originalStartOffset`, `originalEndOffset −
+   originalStartOffset`), append the clone to `fragment`, *(extract only)* **replace data** of the
+   original with the same span and `""`, and return `fragment`. —
+5. Let `commonAncestor` be **get the common ancestor** of range. —
+6. Let `firstPartiallyContainedChild` be null. —
+7. If `originalStartNode` is **not** an inclusive ancestor of `originalEndNode`, set it to the
+   **first** child of `commonAncestor` that is **partially contained**. —
+8. Let `lastPartiallyContainedChild` be null. —
+9. If `originalEndNode` is **not** an inclusive ancestor of `originalStartNode`, set it to the
+   **last** such child. —
+10. Let `containedChildren` be all children of `commonAncestor` **contained in** range, in tree
+    order. —
+11. If any member of `containedChildren` is a doctype, throw **`HierarchyRequestError`**. —
+12-15. *(extract only)* `newNode`/`newOffset` exactly as `deleteContents` steps 5-7, then set
+    range's start **and** end to (`newNode`, `newOffset`). —
+16. If `firstPartiallyContainedChild` is CharacterData *(then it **is** `originalStartNode`)*: clone
+    it with data **substring** (`originalStartOffset`, its length − `originalStartOffset`), append
+    to `fragment`, *(extract only)* replace data of the original with the same span and `""`. —
+17. Otherwise, if it is non-null: clone it **shallowly**, append the clone to `fragment`, build a
+    subrange (`originalStartNode`, `originalStartOffset`) → (`firstPartiallyContainedChild`, its
+    length), **recurse**, and append the subfragment to the clone. —
+18. For each `containedChildren`: *(extract)* **append** it to `fragment` — which pre-inserts and so
+    **removes** it, running §12.1 — or *(clone)* deep-clone it and append the copy. —
+19-20. The mirror of 16-17 for `lastPartiallyContainedChild`, with (`0`, `originalEndOffset`) and a
+    subrange (`lastPartiallyContainedChild`, 0) → (`originalEndNode`, `originalEndOffset`). —
+21. Return `fragment`. —
+
+**Two consequences for a step machine.** (a) Step 17's recursion descends one level per iteration
+between a boundary node and the common ancestor — a **page-controlled** depth, so it is an explicit
+frame stack and never C recursion. (b) `containedChildren` must be **snapshotted at step 10**: step
+18 removes them from the sibling chain and steps 12-15 have already moved the range, so a cursor
+that asked "is the next sibling still contained" would be asking a question whose answer this
+algorithm is changing.
+
+**Step 18's clone arm is this same algorithm.** A deep copy of a contained child is the contents of
+the range that selects all of it, so it is one more frame — which is what keeps it preemptible and
+keeps the engine from growing a second recursive copier beside §4.4's.
+
+### 12.7 §5.5 `insert a node` into a live range
+
+1. If range's start node is a **ProcessingInstruction** or **Comment**, is a **Text** node whose
+   parent is null, or **is** `node`, throw **`HierarchyRequestError`**. —
+2. Let `referenceNode` be null. —
+3. If range's start node is a Text node, set `referenceNode` to it. —
+4. Otherwise, set it to the child of range's start node at index range's start offset, or null. —
+5. Let `parent` be range's start node if `referenceNode` is null, otherwise `referenceNode`'s
+   parent. —
+6. **Ensure pre-insert validity** given `node`, `parent`, `referenceNode`, and « ». —
+7. If range's start node is a Text node, set `referenceNode` to the result of **splitting** it at
+   range's start offset. —
+8. If `node` **is** `referenceNode`, set `referenceNode` to its next sibling. —
+9. If `node`'s parent is non-null, **remove** `node`. —
+10. Let `newOffset` be `parent`'s length if `referenceNode` is null, otherwise `referenceNode`'s
+    index. —
+11. Increase `newOffset` by `node`'s **length** if `node` is a DocumentFragment, otherwise by 1. —
+12. **Pre-insert** `node` into `parent` before `referenceNode`. —
+13. If range **is collapsed**, set range's end to (`parent`, `newOffset`). —
+
+**Step 13 is evaluated after step 12**, so it reads the range as the insertion's own live-range
+steps have just left it. Step 6 is the **whole** of `ensure pre-insert validity` — DOM §4.2.3's
+eleven-step list, which the engine's other insertion sites carried only the ancestor half of.
+
+### 12.8 §5.5 `surroundContents(newParent)`
+
+1. If a **non-Text** node is partially contained in this, throw **`InvalidStateError`**. —
+2. If `newParent` is a Document, DocumentType or DocumentFragment, throw
+   **`InvalidNodeTypeError`**. — *(CharacterData is deliberately not checked here; it throws later
+   from step 5, "for historical reasons")*
+3. Let `fragment` be the result of **extracting** this. —
+4. If `newParent` has children, **replace all** with null within it. —
+5. **Insert** `newParent` into this. — *(§12.7, which is where a CharacterData `newParent` throws)*
+6. **Append** `fragment` to `newParent`. —
+7. **Select** `newParent` within this. —
+
+**Step 1 is O(depth), not O(document).** The partially contained nodes are exactly the inclusive
+ancestors of one boundary node up to (but not including) the common ancestor, so the check walks two
+chains rather than the subtree.
+
+### 12.9 Suspension points in Algorithm group 12
+
+| Entry point | `[S]` count | Where |
+| --- | --- | --- |
+| `Range.deleteContents()` | 1 | CE epilogue |
+| `Range.extractContents()` / `cloneContents()` | 1 | CE epilogue |
+| `Range.insertNode(node)` | 1 | CE epilogue |
+| `Range.surroundContents(newParent)` | 1 | CE epilogue |
+| `Text.splitText(offset)` | 1 | ToIndex-ish `unsigned long` conversion |
+| `CharacterData.appendData/insertData/deleteData/replaceData` | 1 | the `DOMString`/`unsigned long` conversions |
+| `Range` boundary-point setters, `compareBoundaryPoints`, `comparePoint`, `isPointInRange`, `intersectsNode` | 1 | the `unsigned long` conversion where there is one |
+| the live-range steps of §12.1-§12.4 | **0** | none of them can reach author code |
+
+**Suspension points in Algorithm group 12: none inside the algorithms themselves.** Every one of
+§5's members is straight-line tree work between its Web IDL prologue and its `[CEReactions]`
+epilogue. What makes four of them **machines** is not author code — it is that they walk the page's
+tree: the stringifier, `deleteContents`, `extract`/`clone the contents` and `surroundContents` are
+each O(document) and rest one node per step, exactly as §4.4's `cloneNode` and §8.4's serialiser do.

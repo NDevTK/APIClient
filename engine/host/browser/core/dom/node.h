@@ -82,6 +82,25 @@ bool node_is_inclusive_ancestor(const lxb_dom_node_t *a, const lxb_dom_node_t *b
 uint32_t node_length(const lxb_dom_node_t *n);
 /* §4.2's "index" — how many siblings precede this node. */
 uint32_t node_index(const lxb_dom_node_t *n);
+/* §4.10's "REPLACE DATA" — the concept, with its own IndexSizeError and its own count clamp, and it runs §5.5's
+   live-range steps 8-11 on the way out. §5.5's content-moving members are stated over it by name; a second
+   splice written beside it is a second place for those steps to be forgotten. `offset` and `count` are in CODE
+   UNITS, `data`/`data_len` are UTF-8 bytes. */
+JSValue node_cd_replace_data(JSContext *ctx, lxb_dom_node_t *n, uint32_t offset, uint32_t count,
+                             const char *data, size_t data_len);
+/* THE BYTE OFFSET at which code-unit offset `units` begins in a CharacterData node's stored UTF-8. §4.4's
+   length is in CODE UNITS and lexbor stores UTF-8, so every §5 algorithm that touches the bytes behind an
+   offset goes through this one walk rather than growing a second that disagrees at a surrogate pair. */
+size_t node_cd_byte_of(const lxb_dom_node_t *n, uint32_t units);
+/* §4.11's "split a Text node" — the CONCEPT, which §5.5's `insertNode` is stated over. Returns the second half,
+   or NULL having thrown "IndexSizeError". It carries the live-range steps a substringData+insertBefore
+   composition cannot. */
+lxb_dom_node_t *node_split_text(JSContext *ctx, lxb_dom_node_t *node, uint32_t offset);
+/* §4.2.3's "insert", as this engine's ONE tree-write helper: a DocumentFragment contributes its CHILDREN, a
+   node already in a tree is removed from it first, and `ref` naming `node` itself resolves to its next sibling.
+   Exported because §5.5's content-moving members are all stated over pre-insert and append; a second copy of
+   the fragment rule is how fragments quietly stop working. `ref` NULL appends. */
+void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref);
 /* An ELEMENT's interface is decided by its TAG — HTML's element-interface table, which is the html layer's
    knowledge. It registers the answer here; node_wrap asks it and stays the one place a wrapper is built. */
 void node_set_element_resolver(JSValue (*fn)(JSContext *ctx, lxb_dom_element_t *el));

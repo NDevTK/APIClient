@@ -70,7 +70,7 @@ static JSClassID g_node_class;
    the registration ORDER problem: a component claims its node type ONCE per agent, and fills its own realm's
    slot whenever that realm is built, in whatever order realms happen. */
 static JSClassID g_type_class[LXB_DOM_NODE_TYPE_LAST_ENTRY];
-static JSClassID g_chardata_class, g_text_class, g_comment_class;
+static JSClassID g_chardata_class, g_text_class, g_comment_class, g_cdata_class, g_pi_class;
 static int     g_protos_ready;
 
 /* THE IDENTITY MAP, keyed by the Lexbor node's ADDRESS.
@@ -315,7 +315,7 @@ void node_add_tree_hook(NodeTreeHook fn)
    ask it would be the one place fragments quietly stopped working again.
    The children come OUT through the capturing chokepoint rather than a private detach: a fragment can be older
    than the fork that is running, so another flow's baseline may hold it. */
-static void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref)
+void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref)
 {
     if (node->type == LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT) {
         lxb_dom_node_t *c, *next;
@@ -438,9 +438,16 @@ static JSValue js_node_mixin(JSContext *ctx, JSValueConst this_val, int argc, JS
     return JS_UNDEFINED;
 }
 
+/* §4.10's CharacterData is FOUR node kinds, not two. Text and Comment were the only ones the engine could
+   build, so the predicate said so — and the moment §4.5 grew `createCDATASection` and
+   `createProcessingInstruction`, `cdata.data` became a TypeError on a node whose whole interface is
+   CharacterData's. A CDATASection is a Text, and a ProcessingInstruction is a CharacterData; both carry
+   `data`, `length` and §4.10's five splices. */
 static bool node_is_chardata(const lxb_dom_node_t *n)
 {
-    return n->type == LXB_DOM_NODE_TYPE_TEXT || n->type == LXB_DOM_NODE_TYPE_COMMENT;
+    return n->type == LXB_DOM_NODE_TYPE_TEXT || n->type == LXB_DOM_NODE_TYPE_COMMENT ||
+           n->type == LXB_DOM_NODE_TYPE_CDATA_SECTION ||
+           n->type == LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION;
 }
 
 /* §4.4 Node.nodeValue and §4.10 CharacterData.data — THE SAME TEXT THROUGH TWO MEMBERS WITH DIFFERENT RULES,
@@ -466,13 +473,23 @@ static JSValue js_cd_get_data(JSContext *ctx, JSValueConst this_val, int magic)
     return JS_NewStringLen(ctx, (const char *)cd->data.data, cd->data.length);
 }
 
+/* THE SETTER IS "REPLACE DATA", NOT A RAW WRITE, and the difference is a whole class of live ranges going
+   stale. §4.10's `data` setter and §4.4's `nodeValue` setter are both defined as *replace data with node this,
+   offset 0, count this's length, and data the new value* — so `t.data = "x"` runs the same steps 8-11 that
+   `t.replaceData(0, t.length, "x")` does, and every boundary point inside `t` collapses onto 0. Writing the
+   bytes straight through skipped those steps: the text changed under a live range and the range kept pointing
+   past the end of a node that no longer had that many code units. */
+static uint32_t cd_units(const lxb_char_t *s, size_t len);
+
 /* The value arrives CONVERTED — a real string, JS_NULL for the nullable member, or a concolic that crossed as
    itself. Nothing here runs the page's code, which is the claim the declaration in node_init makes. */
 static JSValue js_cd_set_data(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     lxb_dom_node_t *n = node_of(this_val);
+    lxb_dom_character_data_t *cd;
     const char *s;
     size_t len;
+    JSValue r;
 
     if (!n) return JS_UNDEFINED;
     if (!node_is_chardata(n)) {
@@ -480,26 +497,25 @@ static JSValue js_cd_set_data(JSContext *ctx, JSValueConst this_val, JSValueCons
             return JS_UNDEFINED;   /* §4.4 nodeValue setter: "otherwise: do nothing" */
         return JS_ThrowTypeError(ctx, "CharacterData.data set on a node that holds no character data");
     }
+    cd = lxb_dom_interface_character_data(n);
     /* §4.4 the nodeValue setter's own first step; data reaches this through [LegacyNullToEmptyString]. */
-    if (JS_IsNull(val)) {
-        dom_cow_set_text(n, "", 0);
-        return JS_UNDEFINED;
-    }
+    if (JS_IsNull(val))
+        return node_cd_replace_data(ctx, n, 0, cd_units(cd->data.data, cd->data.length), "", 0);
     /* Unknown external input has no bytes: its SHAPE is what the node carries, the same answer textContent
        gives, so a source parked in the tree as text still displays as the source it came from. */
     if (concolic_is(val)) {
         s = concolic_shape_c(val);
-        dom_cow_set_text(n, s ? s : "", s ? strlen(s) : 0);
-        return JS_UNDEFINED;
+        return node_cd_replace_data(ctx, n, 0, cd_units(cd->data.data, cd->data.length), s ? s : "",
+                               s ? strlen(s) : 0);
     }
     DCHECK(JS_IsString(val), "a CharacterData write reached the body unconverted — the IDL declaration is what "
                              "converts it, and running the page's toString from here is the drive-to-completion "
                              "the flow machinery exists to avoid");
     s = JS_ToCStringLen(ctx, &len, val);
     if (!s) return JS_EXCEPTION;
-    dom_cow_set_text(n, s, len);
+    r = node_cd_replace_data(ctx, n, 0, cd_units(cd->data.data, cd->data.length), s, len);
     JS_FreeCString(ctx, s);
-    return JS_UNDEFINED;
+    return r;
 }
 
 /* The byte length of the UTF-8 sequence a lead byte opens. A continuation byte reaching here would be a
@@ -564,11 +580,13 @@ static JSValue js_cd_get_length(JSContext *ctx, JSValueConst this_val)
    itself. Written once because they are one algorithm; four bodies would be four places for the IndexSizeError
    and the count clamp to drift, and the standard states them once for the same reason.
    WHAT IS NOT HERE, and is therefore honestly absent rather than half-done: step 4's characterData mutation
-   record (MutationObserver is not built) and steps 8-11's live-range fixups (§5's ranges are, but the
-   boundary-point adjustment is that component's algorithm and calling it from here would be this file's
-   second copy of it). A page reading `range.startOffset` after a splice sees the unadjusted offset; the splice
-   itself is right. */
-static JSValue cd_replace_data(JSContext *ctx, lxb_dom_node_t *n, uint32_t offset, uint32_t count,
+   record (MutationObserver is not built).
+   STEPS 8-11 ARE §5.5's AND ARE CALLED, NOT COPIED. They walk the live-range registry, which is range.c's, and
+   the operands they need are exactly this algorithm's: the offset and the count AFTER step 3's clamp, and the
+   replacement's length in CODE UNITS, never in bytes. That last one is why the call belongs here and not at
+   each of the five members — `insertData(0, "é")` moves a boundary point by ONE, and a member handing over
+   `data_len` would move it by two. */
+JSValue node_cd_replace_data(JSContext *ctx, lxb_dom_node_t *n, uint32_t offset, uint32_t count,
                                const char *data, size_t data_len)
 {
     lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(n);
@@ -594,6 +612,8 @@ static JSValue cd_replace_data(JSContext *ctx, lxb_dom_node_t *n, uint32_t offse
     out[out_len] = 0;
     dom_cow_set_text(n, out, out_len);   /* the chokepoint: capture-then-mutate, per flow */
     free(out);
+    /* STEPS 8-11 — §5.5's, over the operands this algorithm settled on. */
+    range_replace_data_steps(ctx, n, offset, count, cd_units((const lxb_char_t *)data, data_len));
     return JS_UNDEFINED;
 }
 
@@ -656,10 +676,118 @@ static JSValue js_cd_op(JSContext *ctx, JSValueConst this_val, int argc, JSValue
         offset = cd_units(cd->data.data, cd->data.length);
     if (magic == 1 || magic == 2)                                   /* append/insert delete nothing */
         count = 0;
-    r = cd_replace_data(ctx, n, offset, count, data, data_len);
+    r = node_cd_replace_data(ctx, n, offset, count, data, data_len);
     if (magic != 3 && !concolic_is((magic == 1) ? argv[0] : (magic == 2 ? argv[1] : argv[2])))
         JS_FreeCString(ctx, data);
     return r;
+}
+
+/* §4.11 "SPLIT A TEXT NODE" — the concept, exported because §5.5's `insertNode` is stated over it: a range
+   whose start node is a Text node splits that node at the start offset and inserts before the second half.
+   IT IS NOT `substringData` FOLLOWED BY `insertBefore`. Two things make it its own algorithm: the new node is
+   created on `node`'s NODE DOCUMENT (not the running realm's), and steps 7.2-7.5 move the live ranges across
+   the split — a boundary point past the split point belongs to the SECOND node afterwards, which no
+   composition of the public members does. Returns the new node, or NULL having thrown. */
+lxb_dom_node_t *node_split_text(JSContext *ctx, lxb_dom_node_t *node, uint32_t offset)
+{
+    lxb_dom_character_data_t *cd;
+    lxb_dom_node_t *parent, *new_node;
+    lxb_dom_text_t *t;
+    uint32_t length, count;
+    size_t a, b;
+
+    DCHECK(node != NULL && node->type == LXB_DOM_NODE_TYPE_TEXT,
+           "§4.11's split was asked for something that is not a Text node — every caller checks the type, so "
+           "reaching here means one of them stopped");
+    cd = lxb_dom_interface_character_data(node);
+    length = cd_units(cd->data.data, cd->data.length);                  /* STEP 1 */
+    if (offset > length) {                                              /* STEP 2 */
+        JS_ThrowDOMException(ctx, "IndexSizeError", "the split offset is past the end of the Text node");
+        return NULL;
+    }
+    count = length - offset;                                            /* STEP 3 */
+    a = cd_byte_of(cd->data.data, cd->data.length, offset);             /* STEP 4 */
+    b = cd_byte_of(cd->data.data, cd->data.length, length);
+    /* STEP 5 — on `node`'s NODE DOCUMENT, which is what makes a split inside an adopted subtree keep that
+       subtree's document rather than acquiring the running realm's. */
+    t = lxb_dom_document_create_text_node(node->owner_document, cd->data.data + a, b - a);
+    CHECK(t != NULL, "split a Text node: the Lexbor text allocation failed — half a split is a document that "
+                     "disagrees with the program that wrote it");
+    new_node = lxb_dom_interface_node(t);
+    dom_cow_note_created(new_node);   /* this flow made it */
+    parent = node->parent;                                              /* STEP 6 */
+    if (parent) {                                                       /* STEP 7 */
+        node_insert_at(parent, new_node, node->next);                   /* STEP 7.1 */
+        range_split_text_steps(ctx, node, new_node, offset);            /* STEPS 7.2-7.5 */
+    }
+    /* STEP 8. Its own steps 8-11 have nothing left to move: 7.2-7.3 took every boundary point past the split
+       point off this node already, which is the whole reason the standard runs them first. */
+    {
+        JSValue r = node_cd_replace_data(ctx, node, offset, count, "", 0);
+        if (JS_IsException(r)) return NULL;
+        JS_FreeValue(ctx, r);
+    }
+    return new_node;                                                    /* STEP 9 */
+}
+
+/* §4.11 `[NewObject] Text splitText(unsigned long offset)`. The offset arrives CONVERTED. */
+static JSValue js_text_split(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val), *split;
+    uint32_t offset = 0;
+
+    (void)magic;
+    if (!n || n->type != LXB_DOM_NODE_TYPE_TEXT)
+        return JS_ThrowTypeError(ctx, "splitText ran on a node that is not a Text node");
+    if (argc > 0 && JS_ToUint32(ctx, &offset, argv[0]) < 0) return JS_EXCEPTION;
+    split = node_split_text(ctx, n, offset);
+    return split ? node_wrap(ctx, split) : JS_EXCEPTION;
+}
+
+/* §4.11 `readonly attribute DOMString wholeText` — the concatenation of the data of THIS node's contiguous
+   Text nodes in tree order, which is the run of Text siblings this node is inside. */
+static JSValue js_text_whole(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val), *first, *p;
+    char *buf = NULL;
+    size_t len = 0, cap = 0;
+    JSValue r;
+
+    (void)magic;
+    if (!n || n->type != LXB_DOM_NODE_TYPE_TEXT)
+        return JS_ThrowTypeError(ctx, "wholeText read on a node that is not a Text node");
+    for (first = n; first->prev && first->prev->type == LXB_DOM_NODE_TYPE_TEXT; first = first->prev)
+        ;
+    for (p = first; p && p->type == LXB_DOM_NODE_TYPE_TEXT; p = p->next) {
+        lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(p);
+        if (len + cd->data.length > cap) {
+            size_t want = cap ? cap * 2 : 64;
+            char *nb;
+            while (want < len + cd->data.length) want *= 2;
+            nb = realloc(buf, want);
+            CHECK(nb != NULL, "wholeText's buffer could not grow");
+            buf = nb;
+            cap = want;
+        }
+        memcpy(buf + len, cd->data.data, cd->data.length);
+        len += cd->data.length;
+    }
+    r = JS_NewStringLen(ctx, buf ? buf : "", len);
+    free(buf);
+    return r;
+}
+
+/* §4.13 `ProcessingInstruction.target` — the only member the interface adds to CharacterData. */
+static JSValue js_pi_target(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+    lxb_dom_processing_instruction_t *pi;
+
+    (void)magic;
+    if (!n || n->type != LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION)
+        return JS_ThrowTypeError(ctx, "target read on a node that is not a ProcessingInstruction");
+    pi = lxb_dom_interface_processing_instruction(n);
+    return JS_NewStringLen(ctx, (const char *)pi->target.data, pi->target.length);
 }
 
 /* ---- §4.4 THE NODE ALGORITHMS ---------------------------------------------------------------------------
@@ -725,7 +853,14 @@ lxb_dom_node_t *node_prev_in(lxb_dom_node_t *n, lxb_dom_node_t *root)
 }
 
 /* §4.4's "length": zero for a DocumentType, the data length of a CharacterData node, and the number of children
-   for everything else. Every boundary-point check in §5 and every offset §6 hands out is stated against it. */
+   for everything else. Every boundary-point check in §5 and every offset §6 hands out is stated against it.
+   IT IS IN CODE UNITS, LIKE `CharacterData.length`, AND IT WAS IN BYTES — the same defect §4.4's own length
+   getter already carries a paragraph about, one layer down and unfixed. The two answers disagreed for every
+   non-ASCII text node: `t.length` said 1 for "é" and this said 2, so `range.setStart(t, 2)` was rejected by
+   one rule and accepted by the other, and a Range's offsets were byte offsets into a string the page indexes
+   in code units. §5 is stated entirely over this function, so every boundary point in the engine inherited it.
+   ONE conversion, shared with §4.10's splices, because a second UTF-8 walk is a second place to disagree about
+   where a code point ends. */
 uint32_t node_length(const lxb_dom_node_t *n)
 {
     const lxb_dom_node_t *c;
@@ -735,10 +870,27 @@ uint32_t node_length(const lxb_dom_node_t *n)
     if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE) return 0;
     if (n->type == LXB_DOM_NODE_TYPE_TEXT || n->type == LXB_DOM_NODE_TYPE_COMMENT ||
         n->type == LXB_DOM_NODE_TYPE_CDATA_SECTION ||
-        n->type == LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION)
-        return (uint32_t)((const lxb_dom_character_data_t *)n)->data.length;
+        n->type == LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION) {
+        const lxb_dom_character_data_t *cd = (const lxb_dom_character_data_t *)n;
+        return cd_units(cd->data.data, cd->data.length);
+    }
     for (c = n->first_child; c; c = c->next) k++;
     return k;
+}
+
+/* THE BYTE OFFSET AT WHICH CODE-UNIT OFFSET `units` BEGINS in a CharacterData node's stored UTF-8 — the
+   translation every §5 algorithm needs to touch the bytes behind an offset node_length handed out. Exported
+   rather than re-walked in range.c for the reason above: two walks is two answers. */
+size_t node_cd_byte_of(const lxb_dom_node_t *n, uint32_t units)
+{
+    const lxb_dom_character_data_t *cd;
+
+    DCHECK(n != NULL && (n->type == LXB_DOM_NODE_TYPE_TEXT || n->type == LXB_DOM_NODE_TYPE_COMMENT ||
+                         n->type == LXB_DOM_NODE_TYPE_CDATA_SECTION ||
+                         n->type == LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION),
+           "§4.10's byte offset was asked of a node that holds no character data");
+    cd = (const lxb_dom_character_data_t *)n;
+    return cd_byte_of(cd->data.data, cd->data.length, units);
 }
 
 /* §4.2's "index": how many siblings precede this node. */
@@ -1129,7 +1281,15 @@ static int js_node_normalize(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         memcpy(buf + cd->data.length, sd->data.data, sd->data.length);
         /* the successor was computed before this sibling was absorbed; if it WAS this sibling, move it on. */
         if (s->next == sib) s->next = node_next_in(sib, s->root);
-        dom_cow_set_text(s->n, buf, len);
+        /* §4.4's own step 4 is `replace data of node with length, 0, data` — an APPEND, whose live-range steps
+           8-11 can move nothing (no offset is greater than the length it is being appended to), which is why
+           the raw write is the same algorithm here and the boundary points are §4.4's own steps 6.1-6.4. They
+           run with the length node had BEFORE this sibling, and while the sibling is still in the tree. */
+        {
+            uint32_t before = node_length(s->n);
+            dom_cow_set_text(s->n, buf, len);
+            range_normalize_absorb_steps(ctx, s->n, sib, before);
+        }
         dom_cow_remove_child(sib);
         free(buf);
         return JS_STEP_YIELD;
@@ -2123,12 +2283,14 @@ void node_wrap_forget(JSContext *ctx, lxb_dom_node_t *n)
    PROTOTYPES those classes name are built per realm, in node_install_protos. */
 static int g_id_cd[5] = { -1, -1, -1, -1, -1 };   /* §4.10's five splice members */
 static int g_id_nodevalue = -1, g_id_textcontent = -1, g_id_textcontent_get = -1, g_id_data = -1,
-           g_id_lookup_prefix = -1, g_id_lookup_ns = -1, g_id_default_ns = -1, g_id_root = -1;
+           g_id_lookup_prefix = -1, g_id_lookup_ns = -1, g_id_default_ns = -1, g_id_root = -1,
+           g_id_split_text = -1;
 
 void node_init(JSContext *ctx)
 {
     JSClassDef def = { "Node", .finalizer = node_finalizer };
-    JSClassDef cd_def = { "CharacterData" }, tx_def = { "Text" }, cm_def = { "Comment" };
+    JSClassDef cd_def = { "CharacterData" }, tx_def = { "Text" }, cm_def = { "Comment" },
+               cs_def = { "CDATASection" }, pi_def = { "ProcessingInstruction" };
     static const IdlArgType ROOT_ARGS[1] = { IDL_DICT };
     static const IdlDictMember ROOT_OPTS[] = { { "composed", IDL_BOOLEAN } };   /* GetRootNodeOptions */
     int i;
@@ -2147,6 +2309,10 @@ void node_init(JSContext *ctx)
     JS_NewClass(JS_GetRuntime(ctx), g_text_class, &tx_def);
     JS_NewClassID(JS_GetRuntime(ctx), &g_comment_class);
     JS_NewClass(JS_GetRuntime(ctx), g_comment_class, &cm_def);
+    JS_NewClassID(JS_GetRuntime(ctx), &g_cdata_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_cdata_class, &cs_def);
+    JS_NewClassID(JS_GetRuntime(ctx), &g_pi_class);
+    JS_NewClass(JS_GetRuntime(ctx), g_pi_class, &pi_def);
 
     /* Every node kind is a Node until a component claims it. A ProcessingInstruction wrapper answering the Node
        members is honest; a bare object answering none of them is not. */
@@ -2160,6 +2326,10 @@ void node_init(JSContext *ctx)
        one object that answers for both. */
     node_claim_type(LXB_DOM_NODE_TYPE_TEXT, g_text_class);
     node_claim_type(LXB_DOM_NODE_TYPE_COMMENT, g_comment_class);
+    /* §4.12 and §4.13. Unclaimed, both wore Node.prototype — a node answering `nodeType === 4` with no `data`
+       on it, which is the shape this engine treats as worst because nothing throws until the page's own read. */
+    node_claim_type(LXB_DOM_NODE_TYPE_CDATA_SECTION, g_cdata_class);
+    node_claim_type(LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION, g_pi_class);
 
     /* `attribute DOMString? nodeValue` and `attribute DOMString? textContent` — both Node members. */
     g_id_nodevalue = idl_setter_id(ctx, IDL_DOMSTRING_NULLABLE, false, js_cd_set_data, 1);
@@ -2180,6 +2350,9 @@ void node_init(JSContext *ctx)
         g_id_cd[2] = idl_method_id(ctx, CD_UL_STR,    2, js_cd_op, 2);   /* insertData    */
         g_id_cd[3] = idl_method_id(ctx, CD_UL_UL,     2, js_cd_op, 3);   /* deleteData    */
         g_id_cd[4] = idl_method_id(ctx, CD_UL_UL_STR, 3, js_cd_op, 4);   /* replaceData   */
+        /* §4.11 `[NewObject] Text splitText(unsigned long offset)` — one `unsigned long`, and the declaration
+           is what converts it, so an object argument runs its `valueOf` on the machine like every other. */
+        g_id_split_text = idl_method_id(ctx, CD_UL_UL, 1, js_text_split, 0);
     }
     /* §4.4 the three namespace lookups. Each takes a `DOMString?`, so each goes on the shared IDL machine —
        `n.lookupPrefix({toString(){ … }})` is the page's code exactly like every other DOMString argument. */
@@ -2252,7 +2425,25 @@ void node_install_protos(JSContext *ctx)
         CHECK(!JS_IsException(text_proto) && !JS_IsException(comment_proto),
               "a CharacterData-derived prototype could not be allocated");
         idl_interface_tag(ctx, text_proto, "Text");
+        /* §4.11's OWN two members. `Text : CharacterData` adds exactly these, and a Text prototype with
+           nothing on it is what made `splitText` absent while `nodeType === 3` answered — the shape this
+           engine treats as worst, because nothing throws until the page's own call does. */
+        idl_install_method(ctx, text_proto, "splitText", 1, g_id_split_text);
+        idl_install_accessor(ctx, text_proto, "wholeText", js_text_whole, 0, -1);
         idl_interface_tag(ctx, comment_proto, "Comment");
+        {
+            /* §4.12 `interface CDATASection : Text` — no members of its own. §4.13
+               `interface ProcessingInstruction : CharacterData` adds exactly `target`. */
+            JSValue cdata_proto = JS_NewObjectProto(ctx, text_proto);
+            JSValue pi_proto = JS_NewObjectProto(ctx, cd);
+            CHECK(!JS_IsException(cdata_proto) && !JS_IsException(pi_proto),
+                  "a CharacterData-derived prototype could not be allocated");
+            idl_interface_tag(ctx, cdata_proto, "CDATASection");
+            idl_interface_tag(ctx, pi_proto, "ProcessingInstruction");
+            idl_install_accessor(ctx, pi_proto, "target", js_pi_target, 0, -1);
+            JS_SetClassProto(ctx, g_cdata_class, cdata_proto);
+            JS_SetClassProto(ctx, g_pi_class, pi_proto);
+        }
         JS_SetClassProto(ctx, g_text_class, text_proto);
         JS_SetClassProto(ctx, g_comment_class, comment_proto);
     }
@@ -2331,9 +2522,14 @@ void node_install_interfaces(JSContext *ctx, JSValueConst global)
         node_install_interface(ctx, global, "Node", np);
         node_install_interface(ctx, global, "CharacterData", cdp);
         node_install_interface(ctx, global, "Text", tp);
+        JSValue csp = node_type_proto(ctx, LXB_DOM_NODE_TYPE_CDATA_SECTION);
+        JSValue pip = node_type_proto(ctx, LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION);
         node_install_interface(ctx, global, "Comment", cmp);
+        node_install_interface(ctx, global, "CDATASection", csp);
+        node_install_interface(ctx, global, "ProcessingInstruction", pip);
         JS_FreeValue(ctx, np); JS_FreeValue(ctx, cdp);
         JS_FreeValue(ctx, tp); JS_FreeValue(ctx, cmp);
+        JS_FreeValue(ctx, csp); JS_FreeValue(ctx, pip);
     }
 }
 
