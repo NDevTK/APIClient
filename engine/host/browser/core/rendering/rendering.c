@@ -119,8 +119,17 @@ static JSValue rendering_collect_docs(JSContext *ctx)
            the reason step_awaits exists, at the step that would have to read it. */
         step_awaits(docctx, "document.hidden",
                     "update the rendering step 3 removes a doc whose VISIBILITY STATE is \"hidden\", and this "
-                    "build now has Page Visibility — the collect below must read the visibility state instead "
-                    "of taking every document for visible");
+                    "build now has Page Visibility — the collect below must read it. READ IT AS THE SOURCE'S "
+                    "PIN, never as a second answer: the visibility state is ONE fact, and a headless UA has a "
+                    "modeled example for it (\"visible\") while a real user CAN background the tab, so it is a "
+                    "CONCOLIC source (concolic_source_wrap) and `if (document.hidden) return;` — a guard that "
+                    "hides polling and analytics endpoints — must FORK. This C read cannot fork, so it "
+                    "concretizes on the pin exactly as CLAUDE.md's CONCRETIZE-ON-PIN says: the forked "
+                    "hidden-arm has the source pinned true and gets NO rendering opportunity (a browser "
+                    "throttles a hidden tab to zero frames), the primary arm is pinned false, and an unpinned "
+                    "read takes the example. concolic.c HAS that per-flow pin state (pin_of, suspended and "
+                    "resumed with the flow) and does not export it — one accessor is what this needs. "
+                    "Hardcoding \"visible\" here would be the second answer to one fact");
         if (!document_render_blocked(docctx) && doc_has_rendering_work(docctx))
             JS_SetPropertyUint32(ctx, docs, ndocs++, JS_DupValue(ctx, proxy));
         JS_FreeValue(ctx, proxy);
