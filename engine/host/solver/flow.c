@@ -211,6 +211,10 @@ void flow_remove(JSContext *ctx, Flow *f) {
             JS_FreeValue(ctx, f->fn);
             free(f->dec);
             free(f->deliver); free(f->deliver_origin);
+            /* THE CANDIDATE IT WAS VERIFYING. Both strings are this flow's own copies, and the only other place
+               that frees them is the frontier's teardown — which walks the flows that are STILL THERE, so a
+               flow removed here took them with it into nothing. `cand_sink` is static text and is not one. */
+            free(f->cand_src); free(f->cand_payload);
             free(f);
             g_flows[i] = g_flows[--g_flows_n];   /* swap-remove; order is by weight, not position */
             g_gen++;   /* frontier changed */

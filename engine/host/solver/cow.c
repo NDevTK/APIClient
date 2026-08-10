@@ -797,6 +797,18 @@ void cow_delta_free(JSContext *ctx, CowDelta *d) {
     }
     cow_seg_unref(ctx, d->base); d->base = NULL;
     cow_entries_free(ctx, d->e, d->n);
+    /* AND THE DELTA'S OWN ALLOCATIONS, which this function did not free — it released what the entries POINTED
+       AT and left the entry array, the hash index and the struct itself behind, on every flow that ever
+       finished. Nothing else frees them: `cow_delta_new` is the only allocator and this is its only pair, so a
+       delta outlived its flow as pure garbage no GC walk could see (it holds no live JSValue by then) and no
+       counter named (the frontier stayed at ~30 live flows while the process grew by a delta per flow). At the
+       fixture's ~14000 flows that is hundreds of megabytes, which is the difference between a run that fits in
+       the address space and one that does not.
+       AFTER the two calls above and not before: `cow_entries_free` reads `d->e`, and the segment unref may walk
+       the chain this delta's head sits over. */
+    free(d->e);
+    free(d->hash);
+    free(d);
 }
 
 static void cow_entries_free(JSContext *ctx, CowEntry *e, int n) {
