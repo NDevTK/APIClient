@@ -21,7 +21,10 @@
 
 #include "quickjs.h"   /* §1.4's steps THROW, so the component that owns them owns their exceptions too */
 
-/* DOM §1.4 "valid element local name", the five steps exactly. */
+/* DOM §1.4 "valid element local name", the five steps exactly. Note that it is the ONLY one of the three that
+   is an algorithm rather than a character set, and that it permits U+003D (=), which an attribute local name
+   does not — §1.4 was deliberately loosened to accept every name the HTML PARSER can produce, so a name the
+   XML productions reject (`1abc`, `<`, `a:b`) is valid here and setAttribute does not throw for it. */
 bool dom_valid_element_local_name(const char *name, size_t len);
 /* DOM §1.4 "valid namespace prefix": length >= 1, and no ASCII whitespace, U+0000, U+002F (/) or U+003E (>).
    Note what is NOT there: U+003D (=), which an attribute local name forbids and a prefix does not. */
@@ -45,7 +48,7 @@ typedef struct {
     const char *local;  size_t local_len;
 } DomQName;
 
-/* DOM §1.4 "validate and extract a namespace and qualifiedName", the eleven steps exactly. Returns false with
+/* DOM §1.4 "validate and extract a namespace and qualifiedName", the TWELVE steps exactly. Returns false with
    the DOMException the step names ALREADY THROWN — InvalidCharacterError for a name the productions reject,
    NamespaceError for a (prefix, namespace) pairing the standard forbids. A caller that only wants to know
    whether it may proceed reads the bool; the exception is the page's answer either way. */

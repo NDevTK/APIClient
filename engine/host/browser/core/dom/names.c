@@ -84,22 +84,24 @@ bool dom_validate_and_extract(JSContext *ctx, const char *ns, size_t ns_len,
     if (ns && ns_len == 0) ns = NULL;                             /* step 1: "" IS the null namespace */
     out->ns = ns; out->ns_len = ns ? ns_len : 0;
     out->prefix = NULL; out->prefix_len = 0;                      /* step 2 */
-    out->local = qname; out->local_len = qname_len;
+    out->local = qname; out->local_len = qname_len;               /* step 3 */
     colon = qname ? memchr(qname, ':', qname_len) : NULL;
-    if (colon) {                                                  /* step 3 */
-        out->prefix = qname; out->prefix_len = (size_t)(colon - qname);
-        out->local = colon + 1; out->local_len = qname_len - out->prefix_len - 1;
-        if (!dom_valid_namespace_prefix(out->prefix, out->prefix_len)) {   /* step 3.3 */
+    if (colon) {                                                  /* step 4 — the FIRST colon, so a name with
+                                                                     two of them keeps the rest in the local */
+        out->prefix = qname; out->prefix_len = (size_t)(colon - qname);   /* step 4.1 */
+        out->local = colon + 1; out->local_len = qname_len - out->prefix_len - 1;   /* step 4.2 */
+        if (!dom_valid_namespace_prefix(out->prefix, out->prefix_len)) {   /* step 4.3 */
             JS_ThrowDOMException(ctx, "InvalidCharacterError",
                                  "the namespace prefix is not a valid namespace prefix");
             return false;
         }
     }
-    /* step 4: the assertion the spec states, which holds because step 3.3 is the only way a prefix is set. */
+    /* step 5: the assertion the spec states, which holds because step 4.3 is the only way a prefix is set. */
     DCHECK(!out->prefix || dom_valid_namespace_prefix(out->prefix, out->prefix_len),
            "validate-and-extract carried a prefix its own step 3 would have rejected");
-    /* steps 5 and 6: WHICH predicate the local name must satisfy is what the context decides, and it is a real
-       difference — `a=b` is a valid element local name and not a valid attribute one. */
+    /* steps 6 and 7: WHICH predicate the local name must satisfy is what the CONTEXT decides, and it is a real
+       difference — `a=b` is a valid element local name and not a valid attribute one. The context is a
+       parameter of the algorithm itself in the live text, not a caller's convention. */
     if (!(kind == DOM_NAME_ATTRIBUTE ? dom_valid_attribute_local_name(out->local, out->local_len)
                                      : dom_valid_element_local_name(out->local, out->local_len))) {
         JS_ThrowDOMException(ctx, "InvalidCharacterError",
@@ -107,25 +109,25 @@ bool dom_validate_and_extract(JSContext *ctx, const char *ns, size_t ns_len,
                                                         : "not a valid element local name");
         return false;
     }
-    if (out->prefix && !ns) {                                     /* step 7 */
+    if (out->prefix && !ns) {                                     /* step 8 */
         JS_ThrowDOMException(ctx, "NamespaceError", "a prefixed name needs a namespace");
         return false;
     }
-    if (str_is(out->prefix, out->prefix_len, "xml") && !str_is(ns, ns_len, NS_XML)) {   /* step 8 */
+    if (str_is(out->prefix, out->prefix_len, "xml") && !str_is(ns, ns_len, NS_XML)) {   /* step 9 */
         JS_ThrowDOMException(ctx, "NamespaceError", "the \"xml\" prefix belongs to the XML namespace");
         return false;
     }
-    /* step 9: EITHER the whole qualified name or the prefix being "xmlns" binds it to the XMLNS namespace —
+    /* step 10: EITHER the whole qualified name or the prefix being "xmlns" binds it to the XMLNS namespace —
        `xmlns` with no prefix at all is the one that matters, and reading only the prefix misses it. */
     if ((str_is(qname, qname_len, "xmlns") || str_is(out->prefix, out->prefix_len, "xmlns"))
         && !str_is(ns, ns_len, NS_XMLNS)) {
         JS_ThrowDOMException(ctx, "NamespaceError", "the \"xmlns\" name belongs to the XMLNS namespace");
         return false;
     }
-    if (str_is(ns, ns_len, NS_XMLNS)                              /* step 10 — and its converse */
+    if (str_is(ns, ns_len, NS_XMLNS)                              /* step 11 — step 10's converse */
         && !(str_is(qname, qname_len, "xmlns") || str_is(out->prefix, out->prefix_len, "xmlns"))) {
         JS_ThrowDOMException(ctx, "NamespaceError", "the XMLNS namespace only holds \"xmlns\" names");
         return false;
     }
-    return true;                                                  /* step 11 */
+    return true;                                                  /* step 12 */
 }

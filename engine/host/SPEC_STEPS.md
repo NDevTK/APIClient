@@ -1374,3 +1374,1117 @@ as the four distinct shapes they delegate to, already listed.)
 4. **Two algorithms contain a nested full drain.** Update-the-rendering step 11.3 performs a
    microtask checkpoint, and step 16.2 is an unbounded `while (true)` whose body invokes author
    callbacks. Neither can be a single stage.
+
+---
+
+## 9. DOM §4.9 attributes IN FULL — the attribute model, the two key spaces, and every entry point into them
+
+**Why this section exists beside Algorithm group 2.** Group 2 covered the four mutators an
+implementer reaches for first (`getAttribute`, `setAttribute`, `setAttributeNS`, `removeAttribute`)
+and the change-steps they run. It did not cover the *model*: the `Attr` node, the `NamedNodeMap`,
+the node-valued entry points (`getAttributeNode`/`setAttributeNode`/`removeAttributeNode`), the
+`Document` factories, or DOM §1.4's validation predicates. Those are where the two key spaces
+(qualified name vs (namespace, local name)) actually diverge, and where the live text has moved
+furthest from what a reasonable person remembers. Nothing in group 2 is contradicted below; §9.3
+and §9.4 restate the primitives group 2 quoted so that this section reads standalone.
+
+**Network was available.** Everything below was read from the live standards on **2026-08-10**:
+
+| Standard | Source | Version read |
+| --- | --- | --- |
+| WHATWG DOM | `https://dom.spec.whatwg.org/` | Living Standard, Last Updated **18 July 2026** |
+| WHATWG Infra | `https://infra.spec.whatwg.org/` | Living Standard, Last Updated **17 July 2026** |
+| WHATWG HTML | `https://html.spec.whatwg.org/multipage/parsing.html` | Living Standard, Last Updated **20 July 2026** (`last-modified: Mon, 20 Jul 2026 08:01:45 GMT`) |
+| Trusted Types | `https://w3c.github.io/trusted-types/dist/spec/` | Editor's Draft, read 2026-08-10 |
+
+Step numbers are the standards' own list numbering as of those dates.
+
+### 9.0 Five things the live text says that a reasonable person would remember differently
+
+Stated first, because they are the point of the section. Each is expanded, with its deciding step,
+further down.
+
+1. **There is no `validate` algorithm any more, and name validation is no longer XML-based.**
+   DOM §1.4 is titled **"Name validation"** and contains exactly three predicates plus
+   `validate and extract`. The old standalone "validate" (which checked `qualifiedName` against
+   XML's `Name`/`QName` productions) is **gone**, and the spec says so in its own note: *"Various
+   APIs in this specification used to validate namespace prefixes, attribute local names, element
+   local names, and doctype names more strictly. […] This was found to be annoying for web
+   developers, especially since it meant there were some names that could be created by the HTML
+   parser, but not by DOM APIs. So, the validations have been loosened to just those described
+   above."* Concretely: **`el.setAttribute("1abc", "x")` does not throw**, and neither does
+   `el.setAttribute("<", "x")` or `el.setAttribute("a:b", "x")`. The only rejected code points in an
+   attribute local name are ASCII whitespace, U+0000, `/`, `=`, `>`. See §9.2.
+2. **DOM §1.5 "Namespaces" no longer exists.** The six namespace constants live in **Infra §8**.
+   DOM §1 is now: 1.1 Trees, 1.2 Ordered sets, 1.3 Selectors, 1.4 Name validation — and stops.
+   Any citation of "DOM §1.5" for the XML/XMLNS/XLink namespace strings is stale.
+3. **`set an existing attribute value` checks the same field twice, deliberately, around a
+   suspension point** (steps 1 and 4 both test "attribute's element is null", with the Trusted Types
+   call at step 3 between them). This is the spec instructing you that author code runs in the
+   middle and that the field must be **re-read after resuming**. It is the only algorithm in §4.9
+   that re-validates across an `[S]`, and it is exactly the shape a step machine gets wrong by
+   caching. See §9.4.10.
+4. **Trusted Types on attributes is not a short URL/HTML list — it includes every event handler
+   content attribute.** `get Trusted Type data for attribute` returns `TrustedScript` for *any*
+   attribute that is the name of an event handler content attribute on an element in the HTML, SVG
+   or MathML namespace, before it even consults its 4-row table. So
+   **`el.setAttribute("onclick", s)` invokes the page's default policy.** See §9.5.4.
+5. **Reflection does not go through Trusted Types, but `Attr.value`, `Attr.nodeValue` and
+   `Attr.textContent` do.** `Element.id`/`className`/`slot` are defined to *reflect*, whose setter
+   steps are **`set an attribute value`** — no TT call anywhere on that path. The three `Attr`-side
+   setters all route through **`set an existing attribute value`**, whose step 3 is the TT call.
+   `el.id = x` cannot run a policy; `el.getAttributeNode("id").value = x` can.
+
+### 9.1 The data model — DOM §4.9 / §4.9.2
+
+An **attribute** (an `Attr` node) has exactly five fields:
+
+- **namespace** — null or a **non-empty** string
+- **namespace prefix** — null or a **non-empty** string
+- **local name** — a **non-empty** string
+- **value** — a string
+- **element** — null or an element
+
+(The spec's own aside: *"If designed today they would just have a name and value."*)
+
+An attribute's **qualified name** is *"its local name if its namespace prefix is null, and its
+namespace prefix, followed by `":"`, followed by its local name, otherwise."* The spec adds:
+*"User agents could have this as an internal slot as an optimization."*
+
+An **element** has an **attribute list**, *"which is a list exposed through a `NamedNodeMap`. Unless
+explicitly given when an element is created, its attribute list is empty."* An element **has an
+attribute** A *"if its attribute list contains A"*.
+
+**An `A` attribute** is defined as *"an attribute whose local name is `A` and whose namespace and
+namespace prefix are null."* This three-part definition is what phrases like "an `id` attribute" and
+"a `class` attribute" mean throughout DOM and HTML — a namespaced `svg:id` is **not** an `id`
+attribute.
+
+**`create an attribute(document, localName [, namespace = null [, prefix = null [, value = "" ]]])`**
+— DOM §4.9.2:
+
+1. Let `attribute` be the result of **creating a node that implements `Attr`**, given `document`. —
+2. Set `attribute`'s namespace to `namespace`, namespace prefix to `prefix`, local name to
+   `localName`, and value to `value`. —
+3. Return `attribute`. —
+
+**No validation happens here.** `create an attribute` is a raw constructor; every caller that needs
+a name check does it before calling. Note the parameter order — `(document, localName, namespace,
+prefix, value)` — `localName` second, and `namespace` **before** `prefix`.
+
+`DCHECK` targets this section hands you directly: namespace non-null implies non-empty; prefix
+non-null implies non-empty; local name always non-empty; prefix non-null implies namespace non-null
+(enforced by `validate and extract` step 8, and by the fact that `create an attribute`'s only
+callers that pass a prefix are `setAttributeNS`/`createAttributeNS`, both post-validation).
+
+### 9.2 DOM §1.4 "Name validation" — the character sets, quoted exactly
+
+> A string is a **valid namespace prefix** if its length is at least 1 and it does not contain ASCII
+> whitespace, U+0000 NULL, U+002F (`/`), or U+003E (`>`).
+
+> A string is a **valid attribute local name** if its length is at least 1 and it does not contain
+> ASCII whitespace, U+0000 NULL, U+002F (`/`), U+003D (`=`), or U+003E (`>`).
+
+> A string `name` is a **valid element local name** if the following steps return true:
+> 1. If `name`'s length is 0, then return false. —
+> 2. If `name`'s 0th code point is an **ASCII alpha**:
+>    1. If `name` contains ASCII whitespace, U+0000 NULL, U+002F (`/`), or U+003E (`>`), then return
+>       false. —
+>    2. Return true. —
+> 3. If `name`'s 0th code point is not U+003A (`:`), U+005F (`_`), or in the range U+0080 to
+>    U+10FFFF, inclusive, then return false. —
+> 4. If `name`'s subsequent code points, if any, are not ASCII alphas, ASCII digits, U+002D (`-`),
+>    U+002E (`.`), U+003A (`:`), U+005F (`_`), or in the range U+0080 to U+10FFFF, inclusive, then
+>    return false. —
+> 5. Return true. —
+
+The spec supplies its own reference implementation, quoted verbatim and worth copying into a test:
+
+```
+/^(?:[A-Za-z][^\0\t\n\f\r\u0020/>]*|[:_\u0080-\u{10FFFF}][A-Za-z0-9-.:_\u0080-\u{10FFFF}]*)$/u
+```
+
+and its own explanation: *"The intention is to allow any name that is possible to construct using
+the HTML parser (the branch where the first code point is an ASCII alpha), plus some additional
+possibilities. For those additional possibilities, the ASCII range is restricted for historical
+reasons, but beyond ASCII anything is allowed."*
+
+> A string is a **valid doctype name** if it does not contain ASCII whitespace, U+0000 NULL, or
+> U+003E (`>`). The empty string is a valid doctype name.
+
+**ASCII whitespace** is Infra's, and it has **five** members: *"U+0009 TAB, U+000A LF, U+000C FF,
+U+000D CR, or U+0020 SPACE."* Infra's own note is the trap: *"The XML, JSON, and parts of the HTTP
+specifications exclude U+000C FF in their definition of whitespace"* — an implementation that reuses
+an XML or JSON whitespace predicate here accepts a form feed in an attribute name and is wrong.
+**To ASCII lowercase** a string is *"replace all ASCII upper alphas in the string with their
+corresponding code point in ASCII lower alpha"* — U+0041 to U+005A only, never a Unicode case fold,
+never locale-sensitive.
+
+Three asymmetries between the three predicates, each of which a shared helper would erase:
+
+- `=` is forbidden in an **attribute** local name and **permitted** in an **element** local name.
+- `:` is permitted in **both** (which is why `setAttribute("a:b", v)` succeeds — see §9.11 Q3).
+- The attribute and prefix predicates are pure character-set tests with no first-code-point rule;
+  only the **element** predicate has one, and it is the only one of the three whose ASCII branch and
+  non-ASCII branch accept **different** subsequent character sets.
+
+**`validate and extract(namespace, qualifiedName, context)`** — DOM §1.4. `context` is `"attribute"`
+or `"element"`. Returns a `(namespace, prefix, localName)` triple.
+
+1. If `namespace` is the empty string, then set it to null. —
+2. Let `prefix` be null. —
+3. Let `localName` be `qualifiedName`. —
+4. If `qualifiedName` contains a U+003A (`:`):
+   1. Set `prefix` to the part of `qualifiedName` before the **first** U+003A (`:`). —
+   2. Set `localName` to the part of `qualifiedName` after the **first** U+003A (`:`). —
+   3. If `prefix` is not a **valid namespace prefix**, then throw an **`InvalidCharacterError`**
+      `DOMException`. —
+5. Assert: `prefix` is either null or a valid namespace prefix. —
+6. If `context` is `"attribute"` and `localName` is not a **valid attribute local name**, then throw
+   an **`InvalidCharacterError`** `DOMException`. —
+7. If `context` is `"element"` and `localName` is not a **valid element local name**, then throw an
+   **`InvalidCharacterError`** `DOMException`. —
+8. If `prefix` is non-null and `namespace` is null, then throw a **`NamespaceError`**
+   `DOMException`. —
+9. If `prefix` is `"xml"` and `namespace` is not the **XML namespace**, then throw a
+   **`NamespaceError`** `DOMException`. —
+10. If **either `qualifiedName` or `prefix`** is `"xmlns"` and `namespace` is not the **XMLNS
+    namespace**, then throw a **`NamespaceError`** `DOMException`. —
+11. If `namespace` is the **XMLNS namespace** and **neither `qualifiedName` nor `prefix`** is
+    `"xmlns"`, then throw a **`NamespaceError`** `DOMException`. —
+12. Return `(namespace, prefix, localName)`. —
+
+No step here runs user code. Every throw is one of exactly two types, and step 4.1/4.2 split on the
+**first** colon only — `"a:b:c"` yields prefix `"a"`, localName `"b:c"`, and `"b:c"` is a valid
+attribute local name, so `setAttributeNS(ns, "a:b:c", v)` **succeeds**.
+
+Steps 10 and 11 are a biconditional written as two one-way tests, and both halves check
+`qualifiedName` **or** `prefix` — so the unprefixed `qualifiedName === "xmlns"` case is covered by
+the same steps as the prefixed `"xmlns:foo"` case. This is why
+`setAttributeNS(XMLNS_NS, "xmlns", v)` is legal and `setAttributeNS(null, "xmlns", v)` throws
+`NamespaceError` (step 10), while `setAttribute("xmlns", v)` throws nothing at all and produces a
+null-namespace attribute (§9.11 Q3).
+
+The namespace constants (**Infra §8**, not DOM):
+
+| Name | String |
+| --- | --- |
+| HTML namespace | `http://www.w3.org/1999/xhtml` |
+| MathML namespace | `http://www.w3.org/1998/Math/MathML` |
+| SVG namespace | `http://www.w3.org/2000/svg` |
+| XLink namespace | `http://www.w3.org/1999/xlink` |
+| XML namespace | `http://www.w3.org/XML/1998/namespace` |
+| XMLNS namespace | `http://www.w3.org/2000/xmlns/` |
+
+### 9.3 The two lookup primitives — DOM §4.9
+
+**`get an attribute by name(qualifiedName, element)`** — the **qualified-name** key space:
+
+1. If `element` is in the **HTML namespace** *and* its **node document is an HTML document**, then
+   set `qualifiedName` to `qualifiedName` in **ASCII lowercase**. —
+2. Return **the first attribute** in `element`'s attribute list whose **qualified name** is
+   `qualifiedName`; otherwise null. —
+
+**`get an attribute by namespace and local name(namespace, localName, element)`** — the
+**(namespace, local name)** key space:
+
+1. If `namespace` is the empty string, then set it to null. —
+2. Return **the attribute** in `element`'s attribute list whose **namespace** is `namespace` **and
+   local name** is `localName`, if any; otherwise null. —
+
+Both are referred to in prose as *"getting an attribute"*; which of the two runs is decided purely
+by the argument list at the call site (`(qualifiedName, element)` vs `(namespace, localName,
+element)`). Neither runs user code.
+
+The difference between step 2 of each is not cosmetic. The name-keyed lookup says **"the first"**,
+because an element's attribute list may legitimately hold two attributes with the same qualified
+name (e.g. `{ns: XLink, prefix: "xlink", local: "href"}` and `{ns: null, prefix: null, local:
+"xlink:href"}`, both with qualified name `"xlink:href"`). The namespace-keyed lookup says **"the"**,
+because `(namespace, localName)` is a **uniqueness key** on the list — a `DCHECK` target: appending
+an attribute whose `(namespace, localName)` already occurs in the list must be impossible.
+
+**`get an attribute value(element, localName [, namespace = null])`**:
+
+1. Let `attr` be the result of **getting an attribute** given `namespace`, `localName`, and
+   `element`. —
+2. If `attr` is null, then return **the empty string**. —
+3. Return `attr`'s value. —
+
+Note the argument order differs from the primitive it calls (`element` first here, last there) and
+that it keys on **(namespace, local name)** with `namespace` defaulting to null — this is the getter
+half of reflection, so `el.id` is a null-namespace `id` lookup and returns `""` when absent, never
+null.
+
+### 9.4 The mutation primitives — DOM §4.9
+
+#### 9.4.1 `set an attribute(attr, element)` — the `setAttributeNode` path
+
+1. **`[S]`** Let `verifiedValue` be the result of calling **get trusted type compliant attribute
+   value** with `attr`'s local name, `attr`'s namespace, `element`, and `attr`'s value.
+   `[TRUSTED-TYPES]` —
+2. If `attr`'s **element** is neither null nor `element`, throw an **`InUseAttributeError`**
+   `DOMException`. —
+3. Let `oldAttr` be the result of **getting an attribute** given `attr`'s namespace, `attr`'s local
+   name, and `element`. — *(the (namespace, local name) key space)*
+4. If `oldAttr` **is** `attr`, return `attr`. —
+5. Set `attr`'s value to `verifiedValue`. —
+6. If `oldAttr` is non-null, then **replace** `oldAttr` with `attr`. —
+7. Otherwise, **append** `attr` to `element`. —
+8. Return `oldAttr`. —
+
+**The suspension point is step 1, before the validity check at step 2.** A page's Trusted Types
+default policy therefore runs even for a call that is about to throw `InUseAttributeError`, and the
+policy callback can itself move `attr` onto another element — so **step 2 must read `attr`'s element
+after the resume, not a value captured before step 1**. Step 4's `oldAttr is attr` early return
+(before the value is written) is what makes `el.setAttributeNode(el.getAttributeNode("x"))` a no-op
+that still runs the policy.
+
+#### 9.4.2 `set an attribute value(element, localName, value [, prefix = null [, namespace = null]])`
+
+1. Let `attribute` be the result of **getting an attribute** given `namespace`, `localName`, and
+   `element`. —
+2. If `attribute` is null, then **append** the result of **creating an attribute** given `element`'s
+   node document, `localName`, `namespace`, `prefix`, and `value` to `element`, and then return. —
+3. **Change** `attribute` to `value`. —
+
+**No Trusted Types call.** This is the algorithm reflection's setter steps use and the algorithm
+`setAttributeNS` step 3 uses (the TT call in `setAttributeNS` is in `setAttributeNS` itself, at its
+own step 2 — not here). Step 3 is the reason **the prefix of an existing attribute is never
+updated**: the lookup at step 1 ignores prefix, and `change an attribute` writes only the value.
+`el.setAttributeNS(XLINK, "a:href", v1)` then `el.setAttributeNS(XLINK, "b:href", v2)` leaves one
+attribute whose prefix is still `"a"` and whose value is `v2`.
+
+#### 9.4.3 `remove an attribute by name(qualifiedName, element)`
+
+1. Let `attr` be the result of **getting an attribute** given `qualifiedName` and `element`. —
+2. If `attr` is non-null, then **remove** `attr`. —
+3. Return `attr`. —
+
+#### 9.4.4 `remove an attribute by namespace and local name(namespace, localName, element)`
+
+1. Let `attr` be the result of **getting an attribute** given `namespace`, `localName`, and
+   `element`. —
+2. If `attr` is non-null, then **remove** `attr`. —
+3. Return `attr`. —
+
+Both return null when nothing matched, and **neither throws**. The `NotFoundError` that
+`removeNamedItem` produces is added by that wrapper (§9.6), not by these.
+
+#### 9.4.5 `append an attribute(attribute, element)`
+
+1. Append `attribute` to `element`'s **attribute list**. —
+2. Set `attribute`'s **element** to `element`. —
+3. Set `attribute`'s **node document** to `element`'s node document. —
+4. **Handle attribute changes** for `attribute` with `element`, **null**, and `attribute`'s value. —
+
+#### 9.4.6 `change an attribute(attribute, value)`
+
+1. Let `oldValue` be `attribute`'s value. —
+2. Set `attribute`'s value to `value`. —
+3. **Handle attribute changes** for `attribute` with `attribute`'s **element**, `oldValue`, and
+   `value`. —
+
+#### 9.4.7 `remove an attribute(attribute)`
+
+1. Let `element` be `attribute`'s element. —
+2. Remove `attribute` from `element`'s attribute list. —
+3. Set `attribute`'s **element** to null. —
+4. **Handle attribute changes** for `attribute` with `element`, `attribute`'s value, and **null**. —
+
+Step 3 clears **element** and **nothing else**: the removed `Attr`'s **node document is not reset**,
+so a detached attribute keeps pointing at the document it was last appended into. Step 1 captures
+`element` before step 2 precisely so step 4 can still name it.
+
+#### 9.4.8 `replace an attribute(oldAttribute, newAttribute)`
+
+1. Let `element` be `oldAttribute`'s element. —
+2. Replace `oldAttribute` by `newAttribute` in `element`'s attribute list. — *(in place — the
+   position in the list, and therefore `NamedNodeMap` index order, is preserved)*
+3. Set `newAttribute`'s **element** to `element`. —
+4. Set `newAttribute`'s **node document** to `element`'s node document. —
+5. Set `oldAttribute`'s **element** to null. —
+6. **Handle attribute changes** for **`oldAttribute`** with `element`, **`oldAttribute`'s value**,
+   and **`newAttribute`'s value**. —
+
+Step 6 is the one to read twice. A replacement produces **one** change notification, not a
+remove-then-append pair, and it is reported against the **old** attribute — so the mutation record's
+`attributeName`/`attributeNamespace` and the `attributeChangedCallback`'s local name and namespace
+come from `oldAttribute`, while the new value comes from `newAttribute`. Since the two attributes
+match on (namespace, local name) by construction (`set an attribute` step 3 found `oldAttr` by that
+key), the only field that can actually differ is the **prefix**, which is not reported at all.
+
+#### 9.4.9 `handle attribute changes(attribute, element, oldValue, newValue)`
+
+1. **(enqueue)** **Queue a mutation record** of `"attributes"` for `element` with `attribute`'s
+   local name, `attribute`'s namespace, `oldValue`, « », « », null, and null. —
+2. **(enqueue)** If `element` is **custom**, then **enqueue a custom element callback reaction** with
+   `element`, callback name `"attributeChangedCallback"`, and « `attribute`'s local name,
+   `oldValue`, `newValue`, `attribute`'s namespace ». —
+3. Run the **attribute change steps** with `element`, `attribute`'s local name, `oldValue`,
+   `newValue`, and `attribute`'s namespace. —
+
+**Zero suspension points**, as group 2 established. Note the argument asymmetry that survives into
+every observer: the mutation record at step 1 receives **`oldValue` only** — the new value is not in
+the record, an observer must read the attribute back — while the callback at step 2 receives
+**both**.
+
+DOM's own attribute change steps for the element **ID** concept, in full:
+
+1. If `localName` is `id`, `namespace` is null, and `value` is null **or the empty string**, then
+   **unset** `element`'s ID. —
+2. Otherwise, if `localName` is `id`, `namespace` is null, then set `element`'s ID to `value`. —
+
+So `el.id = ""` unsets the ID rather than setting it to the empty string, and a namespaced
+`id` attribute never participates. The spec's framing note: *"Historically elements could have
+multiple identifiers e.g., by using the HTML `id` attribute and a DTD. This specification makes ID a
+concept of the DOM and allows for only one per element."*
+
+#### 9.4.10 `set an existing attribute value(attribute, value)` — DOM §4.9.2
+
+1. If `attribute`'s **element is null**, then set `attribute`'s value to `value` and **return**. —
+2. Let `element` be `attribute`'s element. —
+3. **`[S]`** Let `verifiedValue` be the result of calling **get trusted type compliant attribute
+   value** with `attribute`'s local name, `attribute`'s namespace, `element`, and `value`.
+   `[TRUSTED-TYPES]` —
+4. If `attribute`'s **element is null**, then set `attribute`'s value to `verifiedValue` and
+   **return**. —
+5. **Change** `attribute` to `verifiedValue`. —
+
+This is §9.0 item 3. Steps 1 and 4 test the same field for the same condition; the only thing
+between them is the author-code call at step 3. The spec is stating outright that the policy
+callback may detach the attribute and that the algorithm must notice. For a step machine: the
+`element` captured at step 2 is used **only** as an argument to step 3; step 4 must re-read
+`attribute`'s element from the object, and step 5's `change an attribute` re-reads it again (its own
+step 3 uses `attribute`'s element). Caching `element` across the stage boundary is the bug, and it
+is a bug that only reproduces when a page installs a default policy that touches the DOM.
+
+This algorithm is reached from **three** places, all of them `[CEReactions]`:
+`Attr.value`'s setter, `Node.nodeValue`'s setter when `this` is an `Attr`, and `Node.textContent`'s
+setter when `this` is an `Attr` (via **set text content**).
+
+### 9.5 The `Element` methods — DOM §4.9
+
+IDL, verbatim, attribute-related members only:
+
+```
+[Exposed=Window]
+interface Element : Node {
+  readonly attribute DOMString? namespaceURI;
+  readonly attribute DOMString? prefix;
+  readonly attribute DOMString localName;
+  readonly attribute DOMString tagName;
+
+  [CEReactions] attribute DOMString id;
+  [CEReactions] attribute DOMString className;
+  [SameObject, PutForwards=value] readonly attribute DOMTokenList classList;
+  [CEReactions, Unscopable] attribute DOMString slot;
+
+  boolean hasAttributes();
+  [SameObject] readonly attribute NamedNodeMap attributes;
+  sequence<DOMString> getAttributeNames();
+  DOMString? getAttribute(DOMString qualifiedName);
+  DOMString? getAttributeNS(DOMString? namespace, DOMString localName);
+  [CEReactions] undefined setAttribute(DOMString qualifiedName, (TrustedType or DOMString) value);
+  [CEReactions] undefined setAttributeNS(DOMString? namespace, DOMString qualifiedName,
+                                         (TrustedType or DOMString) value);
+  [CEReactions] undefined removeAttribute(DOMString qualifiedName);
+  [CEReactions] undefined removeAttributeNS(DOMString? namespace, DOMString localName);
+  [CEReactions] boolean toggleAttribute(DOMString qualifiedName, optional boolean force);
+  boolean hasAttribute(DOMString qualifiedName);
+  boolean hasAttributeNS(DOMString? namespace, DOMString localName);
+
+  Attr? getAttributeNode(DOMString qualifiedName);
+  Attr? getAttributeNodeNS(DOMString? namespace, DOMString localName);
+  [CEReactions] Attr? setAttributeNode(Attr attr);
+  [CEReactions] Attr? setAttributeNodeNS(Attr attr);
+  [CEReactions] Attr removeAttributeNode(Attr attr);
+  ...
+};
+```
+
+Three IDL facts that are load-bearing and easy to lose in a hand-written binding:
+`setAttributeNode`/`setAttributeNodeNS` return **`Attr?`** while `removeAttributeNode` returns a
+**non-nullable `Attr`** (it throws instead of returning null); `toggleAttribute`'s `force` is
+`optional boolean` with **no default**, so "not given" and `false` are distinguishable and the
+algorithm distinguishes them; `slot` is `[Unscopable]` and `classList` is
+`[SameObject, PutForwards=value]`.
+
+#### 9.5.1 `hasAttributes()` / `attributes` / `getAttributeNames()`
+
+> The `hasAttributes()` method steps are to **return false if this's attribute list is empty;
+> otherwise true**.
+
+> The `attributes` getter steps are to **return the associated `NamedNodeMap`**.
+
+> The `getAttributeNames()` method steps are to **return the qualified names of the attributes in
+> this's attribute list, in order; otherwise a new list.**
+
+That last sentence is quoted exactly as written, trailing oddity included ("otherwise a new list" =
+an empty list when there are none). Its note: **"These are not guaranteed to be unique."** No
+lowercasing, no de-duplication, no filtering — which is the exact opposite of what
+`NamedNodeMap`'s supported property names do (§9.6), and the two are therefore observably different
+views of the same list.
+
+#### 9.5.2 `getAttribute(qualifiedName)` / `getAttributeNS(namespace, localName)`
+
+`getAttribute`, prologue **`[S]`** `ToString(qualifiedName)`:
+
+1. Let `attr` be the result of **getting an attribute** given `qualifiedName` and `this`. —
+2. If `attr` is null, return null. —
+3. Return `attr`'s value. —
+
+`getAttributeNS`, prologue **`[S]`** `ToString(namespace)` when not null, **`[S]`**
+`ToString(localName)`:
+
+1. Let `attr` be the result of **getting an attribute** given `namespace`, `localName`, and `this`. —
+2. If `attr` is null, return null. —
+3. Return `attr`'s value. —
+
+Not `[CEReactions]`. Cannot throw. Return null (not `""`) when absent — unlike `get an attribute
+value` (§9.3), which is why `el.id` and `el.getAttribute("id")` differ on an element without one.
+
+#### 9.5.3 `setAttribute(qualifiedName, value)`
+
+Prologue: **`[S]`** `ToString(qualifiedName)`; **`[S]`** the `(TrustedType or DOMString)` union
+conversion (Web IDL §3.2.25 — see Algorithm group 7). `[CEReactions]` push.
+
+1. If `qualifiedName` is not a **valid attribute local name**, then throw an
+   **`InvalidCharacterError`** `DOMException`. —
+   > *Spec note: "Despite the parameter naming, `qualifiedName` is only used as a qualified name if
+   > an attribute already exists with that qualified name. Otherwise, it is used as the local name
+   > of the new attribute. We only need to validate it for the latter case."*
+2. If **`this` is in the HTML namespace and its node document is an HTML document**, then set
+   `qualifiedName` to `qualifiedName` in **ASCII lowercase**. —
+3. **`[S]`** Let `verifiedValue` be the result of calling **get trusted type compliant attribute
+   value** with `qualifiedName`, **null**, `this`, and `value`. `[TRUSTED-TYPES]` —
+4. Let `attribute` be **the first attribute** in `this`'s attribute list whose **qualified name** is
+   `qualifiedName`, and null otherwise. —
+5. If `attribute` is non-null, then **change** `attribute` to `verifiedValue` and **return**. —
+6. Set `attribute` to the result of **creating an attribute** given `this`'s node document,
+   `qualifiedName`, **null**, **null**, and `verifiedValue`. —
+7. **Append** `attribute` to `this`. —
+
+Epilogue: **`[S]`** the `[CEReactions]` invoke — where `attributeChangedCallback` actually runs.
+
+Step ordering that a step machine must not collapse: the lowercase at step 2 happens **before** the
+TT call at step 3, so the policy receives the **lowercased** name as its `attributeName` argument
+(and thus an `ONCLICK` attribute is matched as an event handler content attribute); and the lookup
+at step 4 happens **after** step 3, so it must run against the attribute list **as the policy
+callback left it**. A machine that hoists step 4 to run beside step 2 — an obvious optimization,
+since neither depends on `verifiedValue` — is wrong.
+
+Step 4 duplicates `get an attribute by name` step 2 inline rather than calling the primitive,
+because the primitive would lowercase a second time under a different condition. Step 6 passes
+**null namespace and null prefix**: see §9.11 Q3.
+
+#### 9.5.4 The Trusted Types mapping for attributes — Trusted Types §3.7 / §3.8
+
+**`get trusted type compliant attribute value(attributeName, attributeNs, element, newValue)`**
+(TT §3.7):
+
+1. If `attributeNs` is the empty string, set `attributeNs` to null. —
+2. Set `attributeData` to the result of **get Trusted Type data for attribute** with `element`,
+   `attributeName`, `attributeNs`. —
+3. If `attributeData` is null, then: if `newValue` is a string, **return `newValue`**; assert
+   `newValue` is `TrustedHTML`/`TrustedScript`/`TrustedScriptURL`; return its associated data. —
+   *(this is the no-mapping fast path: no policy, no author code)*
+4. Let `expectedType` be the fourth member of `attributeData`; let `sink` be the fifth. —
+5. **`[S]`** Return the result of executing **get trusted type compliant string** with
+   `expectedType`, `newValue` as input, `element`'s node document's relevant global object as
+   global, `sink`, and `'script'` as sinkGroup; rethrow if it threw. — *(§0.4 has the eight steps of
+   `get trusted type compliant string`; its step 4 runs the page's default policy callback)*
+
+**`get Trusted Type data for attribute(element, attribute, attributeNs)`** (TT §3.8):
+
+1. Let `data` be null. —
+2. **If `attributeNs` is null, « HTML namespace, SVG namespace, MathML namespace » contains
+   `element`'s namespace, and `attribute` is the name of an event handler content attribute:**
+   return `(Element, null, attribute, TrustedScript, "Element " + attribute)`. —
+3. Find the row in the following table where `element` is in the first column, `attributeNs` is in
+   the second, and `attribute` is in the third. If a matching row is found, set `data` to that row. —
+
+   | Element | Attribute namespace | Attribute local name | TrustedType | Sink |
+   | --- | --- | --- | --- | --- |
+   | `HTMLIFrameElement` | null | `"srcdoc"` | `TrustedHTML` | `"HTMLIFrameElement srcdoc"` |
+   | `HTMLScriptElement` | null | `"src"` | `TrustedScriptURL` | `"HTMLScriptElement src"` |
+   | `SVGScriptElement` | null | `"href"` | `TrustedScriptURL` | `"SVGScriptElement href"` |
+   | `SVGScriptElement` | XLink namespace | `"href"` | `TrustedScriptURL` | `"SVGScriptElement href"` |
+
+4. Return `data`. —
+
+Step 2 is §9.0 item 4 — and it is checked **before** the table, so it applies to every element in
+those three namespaces, not only to the four rows. The spec flags its own weakness here: *"The event
+handler content attribute concept used below is ambiguous. This spec needs a better mechanism to
+identify event handler attributes."* For the engine that means the set of event handler content
+attribute names is HTML's, and it is the same set that governs `onclick`-style parsing.
+
+The practical consequence for the solver half: **`setAttribute` on any `on*` attribute of an HTML
+element is a Trusted Types sink**, so a page with `require-trusted-types-for 'script'` blocks it,
+and a page with a default policy runs author code inside it.
+
+#### 9.5.5 `setAttributeNS(namespace, qualifiedName, value)`
+
+Prologue: **`[S]`** `ToString(namespace)` when not null; **`[S]`** `ToString(qualifiedName)`;
+**`[S]`** the `(TrustedType or DOMString)` union. `[CEReactions]` push.
+
+1. Let `(namespace, prefix, localName)` be the result of **validating and extracting** `namespace`
+   and `qualifiedName` given **`"attribute"`**. — *(throws `InvalidCharacterError` /
+   `NamespaceError` per §9.2 steps 4.3, 6, 8, 9, 10, 11)*
+2. **`[S]`** Let `verifiedValue` be the result of calling **get trusted type compliant attribute
+   value** with `localName`, `namespace`, `this`, and `value`. `[TRUSTED-TYPES]` —
+3. **Set an attribute value** for `this` using `localName`, `verifiedValue`, `prefix`, and
+   `namespace`. —
+
+Epilogue: **`[S]`** `[CEReactions]` invoke.
+
+**No ASCII-lowercasing anywhere on this path.** `setAttributeNS(null, "FOO", v)` on an HTML element
+in an HTML document creates an attribute whose local name is `"FOO"`, which `getAttribute("foo")`
+then cannot find and `getAttribute("FOO")` also cannot find (step 1 of the by-name lookup lowercases
+the *query*). It is reachable only via `getAttributeNS(null, "FOO")` — and via
+`getAttributeNames()`, which reports it unlowercased, while `el.attributes` named access hides it
+(§9.6).
+
+Also note the position difference from `setAttribute`, already flagged in group 2: TT runs at
+**step 2 of 3** here and **step 3 of 7** there, and here it is passed `localName` + the real
+`namespace`, where `setAttribute` passes the whole (lowercased) `qualifiedName` + null.
+
+#### 9.5.6 `removeAttribute` / `removeAttributeNS`
+
+> The `removeAttribute(qualifiedName)` method steps are to **remove an attribute** given
+> `qualifiedName` and `this`, and then **return undefined**.
+
+> The `removeAttributeNS(namespace, localName)` method steps are to **remove an attribute** given
+> `namespace`, `localName`, and `this`, and then **return undefined**.
+
+One step each, discarding the primitive's return value. `[CEReactions]`. **Never throws** —
+removing an attribute that does not exist is silent.
+
+#### 9.5.7 `hasAttribute(qualifiedName)` / `hasAttributeNS(namespace, localName)`
+
+`hasAttribute`:
+
+1. If **`this` is in the HTML namespace and its node document is an HTML document**, then set
+   `qualifiedName` to `qualifiedName` in **ASCII lowercase**. —
+2. Return true if `this` **has an attribute** whose **qualified name** is `qualifiedName`; otherwise
+   false. —
+
+`hasAttributeNS`:
+
+1. If `namespace` is the empty string, then set it to null. —
+2. Return true if `this` **has an attribute** whose **namespace** is `namespace` and **local name**
+   is `localName`; otherwise false. —
+
+Both open-code the lookup rather than delegating (there is no "first" tiebreak needed for a boolean).
+Neither is `[CEReactions]`; neither throws.
+
+#### 9.5.8 `toggleAttribute(qualifiedName, force)`
+
+Prologue: **`[S]`** `ToString(qualifiedName)`; `force` is `optional boolean` — Web IDL's boolean
+conversion is `ToBoolean`, which **never** calls user code. `[CEReactions]` push.
+
+1. If `qualifiedName` is not a **valid attribute local name**, then throw an
+   **`InvalidCharacterError`** `DOMException`. —
+   > *Spec note: "See the discussion above about why we validate it as a local name, instead of a
+   > qualified name."*
+2. If **`this` is in the HTML namespace and its node document is an HTML document**, then set
+   `qualifiedName` to `qualifiedName` in **ASCII lowercase**. —
+3. Let `attribute` be **the first attribute** in `this`'s attribute list whose **qualified name** is
+   `qualifiedName`, and null otherwise. —
+4. If `attribute` is null:
+   1. If `force` is **not given or is true**, then **append** the result of **creating an attribute**
+      given `this`'s node document and `qualifiedName` to `this`, and then **return true**. —
+   2. Return false. —
+5. If `force` is **not given or is false**, **remove an attribute** given `qualifiedName` and
+   `this`, and then **return false**. —
+6. Return true. —
+
+**`toggleAttribute` never calls Trusted Types.** It is the one attribute-creating `Element` method
+with no TT step, because the value it creates is the default empty string (step 4.1 passes only two
+arguments to `create an attribute`). So `el.toggleAttribute("onclick")` produces an `onclick=""`
+attribute under a policy that would have intercepted `el.setAttribute("onclick", "")`.
+
+Step 5's re-lookup by name is redundant with step 3's result but is what the spec says; it re-enters
+`get an attribute by name`, which lowercases **again** — harmless because step 2 already did, and
+ASCII lowercase is idempotent.
+
+#### 9.5.9 The node-valued methods
+
+> The `getAttributeNode(qualifiedName)` method steps are to return the result of **getting an
+> attribute** given `qualifiedName` and `this`.
+
+> The `getAttributeNodeNS(namespace, localName)` method steps are to return the result of **getting
+> an attribute** given `namespace`, `localName`, and `this`.
+
+> The `setAttributeNode(attr)` and `setAttributeNodeNS(attr)` methods steps are to return the result
+> of **setting an attribute** given `attr` and `this`.
+
+`removeAttributeNode(attr)`:
+
+1. If `this`'s attribute list does **not contain** `attr`, then throw a **`NotFoundError`**
+   `DOMException`. —
+2. **Remove** `attr`. —
+3. Return `attr`. —
+
+`setAttributeNode` and `setAttributeNodeNS` are **the same algorithm, verbatim, in one sentence** —
+the `NS` suffix carries no behavioural difference at all. (They differ from each other only in name;
+both key on (namespace, local name) via `set an attribute` step 3.) Step 1 of
+`removeAttributeNode` is an **identity** containment test on the list, not a name match.
+
+#### 9.5.10 `id`, `className`, `slot` — reflection, DOM's own definition
+
+DOM defines reflection for these three itself (it does not use HTML §2.6.1's machinery):
+
+> IDL attributes that are defined to **reflect** a string `name`, must have these getter and setter
+> steps:
+> - **getter steps**: Return the result of running **get an attribute value** given `this` and
+>   `name`.
+> - **setter steps**: **Set an attribute value** for `this` using `name` and the given value.
+
+> The `id` attribute must reflect `"id"`. The `className` attribute must reflect `"class"`. The
+> `classList` getter steps are to return a `DOMTokenList` object whose associated element is `this`
+> and whose associated attribute's local name is `class`. The `slot` attribute must reflect
+> `"slot"`.
+
+> *"`id`, `class`, and `slot` are effectively superglobal attributes as they can appear on any
+> element, regardless of that element's namespace."*
+
+Because the setter is `set an attribute value` with only `(element, name, value)` — prefix and
+namespace defaulting to null — **reflection is null-namespace-keyed and never lowercases anything**
+(the name is a spec literal, already lowercase) and, as §9.0 item 5 says, **never runs Trusted
+Types**. The getter returning `""` for an absent attribute comes from `get an attribute value`
+step 2.
+
+### 9.6 DOM §4.9.1 `NamedNodeMap`, in full
+
+```
+[Exposed=Window,
+ LegacyUnenumerableNamedProperties]
+interface NamedNodeMap {
+  readonly attribute unsigned long length;
+  getter Attr? item(unsigned long index);
+  getter Attr? getNamedItem(DOMString qualifiedName);
+  Attr? getNamedItemNS(DOMString? namespace, DOMString localName);
+  [CEReactions] Attr? setNamedItem(Attr attr);
+  [CEReactions] Attr? setNamedItemNS(Attr attr);
+  [CEReactions] Attr removeNamedItem(DOMString qualifiedName);
+  [CEReactions] Attr removeNamedItemNS(DOMString? namespace, DOMString localName);
+};
+```
+
+> A `NamedNodeMap` has an associated **element** (an element). A `NamedNodeMap` object's **attribute
+> list** is its element's attribute list.
+
+It is a **live view**, not a copy — and `Element.attributes` is `[SameObject]`, so the identity is
+stable for the element's lifetime.
+
+**Supported property indices**: *"the numbers in the range zero to its attribute list's size minus
+1, unless the attribute list is empty, in which case there are no supported property indices."*
+
+**`length`** getter: return the attribute list's **size**.
+
+**`item(index)`**:
+
+1. If `index` is equal to or greater than `this`'s attribute list's size, then return null. —
+2. Otherwise, return `this`'s attribute list[`index`]. —
+
+**Supported property names** — the algorithm that makes named access disagree with
+`getAttributeNames()`:
+
+1. Let `names` be **the qualified names** of the attributes in this `NamedNodeMap` object's
+   attribute list, **with duplicates omitted**, in order. —
+2. If this `NamedNodeMap` object's **element is in the HTML namespace and its node document is an
+   HTML document**, then for each `name` of `names`:
+   1. Let `lowercaseName` be `name`, in **ASCII lowercase**. —
+   2. If `lowercaseName` is **not equal to** `name`, **remove `name` from `names`**. —
+3. Return `names`. —
+
+Read step 2.2 carefully: it does **not** lowercase the exposed name, it **deletes** any name that is
+not already lowercase. So on an HTML element in an HTML document, an attribute created as
+`setAttributeNS(null, "FOO", v)` is **absent from `el.attributes`' named properties entirely** while
+being present in `el.getAttributeNames()` and reachable by index. Combined with
+`LegacyUnenumerableNamedProperties`, the named properties do not show up in `Object.keys` /
+`for...in` either.
+
+**`getNamedItem(qualifiedName)`**: return the result of **getting an attribute** given
+`qualifiedName` and element. — *(qualified-name key space)*
+
+**`getNamedItemNS(namespace, localName)`**: return the result of **getting an attribute** given
+`namespace`, `localName`, and element. — *((namespace, local name) key space)*
+
+**`setNamedItem(attr)` and `setNamedItemNS(attr)`**: *"to return the result of **setting an
+attribute** given `attr` and element."* — identical, one sentence, both of them; §9.4.1 applies,
+including the `InUseAttributeError` and the Trusted Types call at its step 1.
+
+**`removeNamedItem(qualifiedName)`**:
+
+1. Let `attr` be the result of **removing an attribute** given `qualifiedName` and element. —
+2. If `attr` is null, then throw a **`NotFoundError`** `DOMException`. —
+3. Return `attr`. —
+
+**`removeNamedItemNS(namespace, localName)`**:
+
+1. Let `attr` be the result of **removing an attribute** given `namespace`, `localName`, and
+   element. —
+2. If `attr` is null, then throw a **`NotFoundError`** `DOMException`. —
+3. Return `attr`. —
+
+This is the one behavioural difference between the `NamedNodeMap` surface and the `Element` surface
+over the same primitives: **`removeNamedItem` throws on a miss, `removeAttribute` does not.**
+
+### 9.7 DOM §4.9.2 `Attr`, in full
+
+```
+[Exposed=Window]
+interface Attr : Node {
+  readonly attribute DOMString? namespaceURI;
+  readonly attribute DOMString? prefix;
+  readonly attribute DOMString localName;
+  readonly attribute DOMString name;
+  [CEReactions] attribute DOMString value;
+
+  readonly attribute Element? ownerElement;
+
+  readonly attribute boolean specified; // historical; always returns true
+};
+```
+
+Member by member, quoting the getter steps:
+
+| Member | Getter steps | Notes |
+| --- | --- | --- |
+| `namespaceURI` | *"return this's **namespace**"* | nullable; never the empty string |
+| `prefix` | *"return this's **namespace prefix**"* | nullable; never the empty string |
+| `localName` | *"return this's **local name**"* | non-nullable, never empty |
+| `name` | *"return this's **qualified name**"* | i.e. `prefix + ":" + localName`, or `localName` |
+| `value` | *"return this's **value**"* | setter = **set an existing attribute value** (§9.4.10) |
+| `ownerElement` | *"return this's **element**"* | nullable |
+| `specified` | *"return **true**"* | the IDL's own comment: `// historical; always returns true` |
+
+There is **no `Attr` constructor** and there is no way to set namespace, prefix or local name after
+creation — the only mutable field is `value`. `Attr` has no `Node` children (its "value" is not a
+`Text` child in this DOM), which is why `Node.textContent`'s **set text content** switches on `Attr`
+to `set an existing attribute value` rather than replacing children.
+
+Inherited `Node` members whose behaviour is `Attr`-specific:
+
+- **`nodeName`** getter, switching on interface: for `Attr`, *"Its **qualified name**"* (for
+  `Element` it is the HTML-uppercased qualified name — `Attr` is **not** uppercased).
+- **`nodeValue`** getter: for `Attr`, *"this's **value**"*. Setter: *"if the given value is null, act
+  as if it was the empty string instead"*, then for `Attr`, **set an existing attribute value** with
+  `this` and the given value.
+- **`textContent`**: getter runs **get text content**; setter runs **set text content**, which for
+  `Attr` is **set an existing attribute value** with `node` and `value`.
+
+So all three of `attr.value = s`, `attr.nodeValue = s`, `attr.textContent = s` are `[CEReactions]`
+and all three can run a Trusted Types default policy. The IDL type of `Attr.value` is plain
+**`DOMString`**, *not* the `(TrustedType or DOMString)` union that `setAttribute` uses — so passing a
+`TrustedScript` to `attr.value` stringifies it in the Web IDL prologue, and the TT algorithm at
+`set an existing attribute value` step 3 then sees a **plain string** and takes the default-policy
+path rather than the "already an instance of expectedType" fast path. That asymmetry is a real
+observable difference between `el.setAttribute("onclick", trustedScript)` and
+`el.getAttributeNode("onclick").value = trustedScript`.
+
+`Node.nodeValue` and `Node.textContent` are both `[CEReactions] attribute DOMString?` — **nullable**,
+so a null assignment skips `ToString` entirely and is turned into `""` by the setter's own preamble.
+
+### 9.8 `Document` — creation, cloning, adoption
+
+**`createAttribute(localName)`** — DOM §4.5:
+
+1. If `localName` is not a **valid attribute local name**, then throw an **`InvalidCharacterError`**
+   `DOMException`. —
+2. If **`this` is an HTML document**, then set `localName` to `localName` in **ASCII lowercase**. —
+3. Return the result of **creating an attribute** given `this` and `localName`. —
+
+Step 2's condition is **only** "this is an HTML document" — there is no HTML-namespace conjunct,
+because there is no element yet. This is the single place in the attribute surface where the
+lowercasing condition has one term instead of two. `htmlDoc.createAttribute("FOO").name === "foo"`;
+`xmlDoc.createAttribute("FOO").name === "FOO"`.
+
+Step 3 passes only two arguments, so the new attribute has **namespace null, prefix null, value
+`""`** — and, critically, **element null**: `createAttribute` does not attach anything.
+
+**`createAttributeNS(namespace, qualifiedName)`** — DOM §4.5:
+
+1. Let `(namespace, prefix, localName)` be the result of **validating and extracting** `namespace`
+   and `qualifiedName` given **`"attribute"`**. —
+2. Return the result of **creating an attribute** given `this`, `localName`, `namespace`, and
+   `prefix`. —
+
+**No lowercasing.** Value defaults to `""`.
+
+**`clone a single node(node, document, fallbackRegistry)`** — DOM §4.4, the attribute-relevant arms:
+
+- If `node` is an element, after `copy` is created by **create an element**:
+  - For each `attribute` of `node`'s attribute list:
+    1. Let `copyAttribute` be the result of **cloning a single node** given `attribute`, `document`,
+       and **null**. —
+    2. **Append** `copyAttribute` to `copy`. —
+- The per-interface "additional requirements" arm for **`Attr`**: *"Set copy's **namespace**,
+  **namespace prefix**, **local name**, and **value** to those of node."*
+
+Step 2 is **`append an attribute`** (§9.4.5), not a list push — so cloning an element **queues a
+mutation record and enqueues `attributeChangedCallback` per attribute on the clone**. Note the
+`Attr` arm copies four fields and **not** `element` — the clone starts detached and is attached by
+the caller.
+
+**`adopt(node, document)`** — DOM §4.5, the attribute-relevant steps:
+
+1. Let `oldDocument` be `node`'s node document. —
+2. If `node`'s **parent** is non-null, then **remove** `node`. —
+3. If `document` is not `oldDocument`, then for each `inclusiveDescendant` of `node`'s
+   shadow-including inclusive descendants, in shadow-including tree order:
+   1. Set `inclusiveDescendant`'s node document to `document`. —
+   2. ... (shadow root / custom element registry arms) ...
+   3. Otherwise, if `inclusiveDescendant` is an **element**:
+      1. **Set the node document of each attribute in `inclusiveDescendant`'s attribute list to
+         `document`.** —
+      2. ... (custom element registry arm) ...
+
+Two consequences worth a `DCHECK`: an element's attributes are **not** descendants, so they are
+re-documented by the explicit step 3.3.1 and by nothing else; and step 2's "if node's parent is
+non-null, remove node" **never fires for an `Attr`**, because an attribute's owner is its
+**element**, not its **parent** (an `Attr`'s parent is always null). **`doc.adoptNode(attrOnAnElement)`
+therefore changes the attribute's node document while leaving it attached to an element in another
+document.**
+
+**`importNode(node, options)`** — DOM §4.5: steps 1 to 6 handle `subtree`/`registry` and then
+*"Return the result of **cloning a node** given `node`"* with the target document — so importNode's
+effect on attributes is entirely `clone a single node`'s, above. `adoptNode(node)` is: throw
+`NotSupportedError` for a document, `HierarchyRequestError` for a shadow root, **adopt** `node` into
+`this`, return `node`.
+
+### 9.9 HTML — "adjust foreign attributes"
+
+From HTML's tree-construction section (the "Creating and inserting nodes" area of §13.2.6):
+
+> When the steps below require the user agent to **adjust foreign attributes** for a token, then, if
+> any of the attributes on the token match the strings given in the first column of the following
+> table, let the attribute be a namespaced attribute, with the **prefix** being the string given in
+> the corresponding cell in the second column, the **local name** being the string given in the
+> corresponding cell in the third column, and the **namespace** being the namespace given in the
+> corresponding cell in the fourth column. (This fixes the use of namespaced attributes, in
+> particular `lang` attributes in the XML namespace.)
+
+| Attribute name | Prefix | Local name | Namespace |
+| --- | --- | --- | --- |
+| `xlink:actuate` | `xlink` | `actuate` | XLink namespace |
+| `xlink:arcrole` | `xlink` | `arcrole` | XLink namespace |
+| `xlink:href` | `xlink` | `href` | XLink namespace |
+| `xlink:role` | `xlink` | `role` | XLink namespace |
+| `xlink:show` | `xlink` | `show` | XLink namespace |
+| `xlink:title` | `xlink` | `title` | XLink namespace |
+| `xlink:type` | `xlink` | `type` | XLink namespace |
+| `xml:lang` | `xml` | `lang` | XML namespace |
+| `xml:space` | `xml` | `space` | XML namespace |
+| `xmlns` | *(none)* | `xmlns` | XMLNS namespace |
+| `xmlns:xlink` | `xmlns` | `xlink` | XMLNS namespace |
+
+**Exactly eleven rows.** Things to note against common belief: only **seven** `xlink:` attributes
+are listed (`actuate`, `arcrole`, `href`, `role`, `show`, `title`, `type` — there is no
+`xlink:label`, no `xlink:from`/`to`); only **two** `xml:` attributes (`lang`, `space` — **no
+`xml:base`**); and `xmlns` is the **only** row with **no prefix**, giving an attribute whose
+qualified name is `xmlns` and whose namespace is XMLNS. A table implemented as "split on `:` and map
+the prefix" gets the `xmlns` row wrong.
+
+Called from exactly **three** places in the tree construction: the "in body" insertion mode's
+`<math>` start tag, the "in body" insertion mode's `<svg>` start tag, and the "in foreign content"
+insertion mode's any-other-start-tag rule. In all three it runs **after** `adjust MathML attributes`
+/ `adjust SVG attributes` and **before** "insert a foreign element".
+
+Its two neighbours, for completeness, since they run on the same token and are frequently confused
+with it:
+
+- **`adjust MathML attributes`**: *"if the token has an attribute named `definitionurl`, change its
+  name to `definitionURL`"* — a single **rename**, no namespace, one row.
+- **`adjust SVG attributes`**: a rename table (`attributename` to `attributeName`,
+  `attributetype` to `attributeType`, `basefrequency` to `baseFrequency`, ... `zoomandpan` to
+  `zoomAndPan`) — again **renames only**, no namespace, no prefix.
+
+Only "adjust foreign attributes" produces a namespaced attribute; the other two only fix case.
+
+The one place this leaks into scripting: an attribute the parser produced this way has a **non-null
+prefix**, so its qualified name has a colon in it, so `el.getAttribute("xlink:href")` finds it (by
+qualified name) while `el.getAttributeNS(null, "xlink:href")` does not, and
+`el.getAttributeNS(XLINK, "href")` does. And `el.setAttribute("xlink:href", v)` on a *fresh* element
+creates a **different, null-namespace** attribute that merely prints the same (§9.11 Q3).
+
+### 9.10 Headless note
+
+Nothing in the attribute surface depends on a device, a layout, or a network. Every value here is
+fully determined by the algorithms above. The only external inputs are the page's Trusted Types
+default policy (author code) and the document's "is an HTML document" flag.
+
+### 9.11 The three questions, answered with the deciding step
+
+#### Q1. Which lookups are keyed on the QUALIFIED name and which on (namespace, local name)?
+
+**Qualified-name-keyed** — every one of these ends at `get an attribute by name` **step 2** ("the
+first attribute ... whose **qualified name** is `qualifiedName`") or open-codes it:
+
+| Entry point | Deciding step |
+| --- | --- |
+| `Element.getAttribute(q)` | its step 1, into `get an attribute by name` step 2 |
+| `Element.getAttributeNode(q)` | its only step, same |
+| `Element.hasAttribute(q)` | its **step 2** (open-coded: "whose qualified name is") |
+| `Element.removeAttribute(q)` | `remove an attribute by name` **step 1**, same |
+| `Element.setAttribute(q, v)` | its **step 4** (open-coded: "the first attribute ... whose qualified name is") |
+| `Element.toggleAttribute(q, f)` | its **step 3** (open-coded), and again its step 5 |
+| `NamedNodeMap.getNamedItem(q)` | its only step, same |
+| `NamedNodeMap.removeNamedItem(q)` | its **step 1**, into `remove an attribute by name` step 1 |
+| `NamedNodeMap` supported property names | its **step 1** ("the **qualified names** of the attributes") |
+| `Element.getAttributeNames()` | its only step ("the **qualified names**") |
+| `Attr.name`, `Node.nodeName` for `Attr` | "its qualified name" |
+
+**(namespace, local name)-keyed** — every one of these ends at `get an attribute by namespace and
+local name` **step 2** ("whose **namespace** is `namespace` and **local name** is `localName`") or
+open-codes it:
+
+| Entry point | Deciding step |
+| --- | --- |
+| `Element.getAttributeNS(ns, ln)` | its step 1, into `get an attribute by namespace and local name` step 2 |
+| `Element.getAttributeNodeNS(ns, ln)` | its only step, same |
+| `Element.hasAttributeNS(ns, ln)` | its **step 2** (open-coded) |
+| `Element.removeAttributeNS(ns, ln)` | `remove an attribute by namespace and local name` **step 1**, same |
+| `Element.setAttributeNS(ns, q, v)` | its step 3, into `set an attribute value` **step 1**, same |
+| `Element.setAttributeNode(attr)` / `setAttributeNodeNS(attr)` | `set an attribute` **step 3** |
+| `NamedNodeMap.getNamedItemNS(ns, ln)` | its only step, same |
+| `NamedNodeMap.setNamedItem(attr)` / `setNamedItemNS(attr)` | `set an attribute` **step 3** |
+| `NamedNodeMap.removeNamedItemNS(ns, ln)` | its **step 1**, same |
+| `Element.id` / `className` / `slot` **getters** | reflect getter steps, into `get an attribute value` **step 1** (namespace null) |
+| `Element.id` / `className` / `slot` **setters** | reflect setter steps, into `set an attribute value` **step 1** (namespace null) |
+| DOM's ID attribute change steps | its steps 1 and 2 (`localName is id` **and** `namespace is null`) |
+
+**Neither** (identity-keyed): `Element.removeAttributeNode(attr)` **step 1** is a *containment* test
+on the list, and `set an attribute` **step 4** (`oldAttr is attr`) is an identity comparison.
+**Index-keyed**: `NamedNodeMap.item(index)` **step 2**, and the supported property indices.
+
+The asymmetry to internalise: **`setAttribute`/`toggleAttribute`/`hasAttribute` are name-keyed while
+`setAttributeNS`/`setAttributeNode` are namespace-keyed**, so the two families can each find an
+attribute the other cannot, and the name-keyed family is the only one that can encounter a
+**duplicate** (hence "the first"). The uniqueness invariant on the attribute list is over
+**(namespace, local name)**, never over the qualified name.
+
+#### Q2. Where exactly does `setAttribute` ASCII-lowercase its argument, and under what condition?
+
+**`setAttribute` step 2**, and the condition is a **conjunction of two terms**:
+
+> If **this is in the HTML namespace** **and** its **node document is an HTML document**, then set
+> `qualifiedName` to `qualifiedName` in **ASCII lowercase**.
+
+Not "if the document is HTML" alone, and not "if the element is an HTML element" alone. An `<svg>`
+element's `<circle>` child in an HTML document is in the SVG namespace, so
+`circle.setAttribute("viewBox", v)` **preserves the capital B**; a `<div>` in an XML document is in
+the HTML namespace but the document is not an HTML document, so `div.setAttribute("FOO", v)`
+preserves the capitals too.
+
+Position matters as much as condition: step 2 is **after** the validity check at step 1 (which
+therefore tests the caller's original casing — irrelevant, since the character sets are
+case-blind) and **before** the Trusted Types call at step 3 (which therefore receives the lowercased
+name) and before the lookup at step 4 (which therefore matches lowercased).
+
+The same two-term condition, at the corresponding step, governs:
+`get an attribute by name` **step 1**, `hasAttribute` **step 1**, `toggleAttribute` **step 2**, and
+`NamedNodeMap`'s supported property names **step 2** (on the map's element). It is
+**`Document.createAttribute` step 2** that has the **one-term** version ("If this is an HTML
+document"), and **`setAttributeNS`, `createAttributeNS`, `setAttributeNode`, `getAttributeNS`,
+`hasAttributeNS` and reflection lowercase nothing at all**.
+
+"ASCII lowercase" is Infra's: U+0041 to U+005A become U+0061 to U+007A, nothing else. A `tolower()`
+under a Turkish locale, or a Unicode `toLowerCase`, is a fidelity bug.
+
+#### Q3. What namespace does an attribute created by `setAttribute` have?
+
+**Null.** The deciding step is **`setAttribute` step 6**:
+
+> Set `attribute` to the result of **creating an attribute** given `this`'s node document,
+> `qualifiedName`, **null**, **null**, and `verifiedValue`.
+
+Matched against `create an attribute(document, localName, namespace, prefix, value)`, the third and
+fourth arguments are the **namespace** and the **prefix**, both explicitly null. So the new
+attribute has:
+
+- **local name** = the (possibly lowercased) `qualifiedName`, **colon and all**;
+- **namespace** = null;
+- **namespace prefix** = null;
+- and therefore **qualified name == local name**.
+
+`toggleAttribute` **step 4.1** is the same (it passes only `document` and `qualifiedName`, so
+namespace and prefix take their null defaults and value takes `""`).
+
+The consequence that bites: `el.setAttribute("xlink:href", v)` creates an attribute whose **local
+name is the ten-character string `xlink:href`** in **no namespace**. It is not the XLink `href`
+attribute the parser would have produced for the same source text (§9.9), `getAttributeNS(XLINK,
+"href")` will not find it, and if the element already carries a parser-produced XLink `href` then
+**both** attributes now exist in the list with the **same qualified name** — which is precisely the
+duplicate that `get an attribute by name` step 2's "the **first**" exists to resolve, and precisely
+why the uniqueness key is (namespace, local name). None of this throws, because `:` is not in the
+excluded set of a **valid attribute local name** (§9.2).
+
+The mirror-image fact: `setAttributeNS(namespace, qualifiedName, value)` reaches
+`set an attribute value` with a **non-null prefix** only through `validate and extract` step 4,
+and step 8 guarantees a non-null prefix implies a non-null namespace — so **an attribute with a
+prefix but no namespace is unconstructible** through any API. That is a `DCHECK`, not a comment.
+
+### 9.12 Suspension points per entry point
+
+`[S]` = the page's own code can run. `TT` = the Trusted Types default-policy call. `CE` = the
+`[CEReactions]` invoke epilogue (§0.3). Argument conversions are the Web IDL prologue (§0.2);
+`unsigned long` and `boolean` conversions are `ToNumber`/`ToBoolean`, of which only `ToNumber` can
+call user code.
+
+| Entry point | `[S]` | Which |
+| --- | --- | --- |
+| `Element.getAttributeNames()` | 0 | — |
+| `Element.hasAttributes()` | 0 | — |
+| `Element.getAttribute(q)` | 1 | ToString(q) |
+| `Element.getAttributeNS(ns, ln)` | 2 | ToString times 2 |
+| `Element.setAttribute(q, v)` | 4 | ToString(q); union(v); **TT step 3**; CE |
+| `Element.setAttributeNS(ns, q, v)` | 5 | ToString times 2; union(v); **TT step 2**; CE |
+| `Element.removeAttribute(q)` | 2 | ToString(q); CE |
+| `Element.removeAttributeNS(ns, ln)` | 3 | ToString times 2; CE |
+| `Element.toggleAttribute(q, force)` | 2 | ToString(q); CE — **no TT** |
+| `Element.hasAttribute(q)` | 1 | ToString(q) |
+| `Element.hasAttributeNS(ns, ln)` | 2 | ToString times 2 |
+| `Element.getAttributeNode(q)` | 1 | ToString(q) |
+| `Element.getAttributeNodeNS(ns, ln)` | 2 | ToString times 2 |
+| `Element.setAttributeNode(attr)` / `setAttributeNodeNS(attr)` | 2 | **TT** (`set an attribute` step 1, **before** the `InUseAttributeError` check); CE — counted once as one shape |
+| `Element.removeAttributeNode(attr)` | 1 | CE |
+| `Element.id` / `className` / `slot` **setters** | 2 | ToString; CE — **no TT** — counted once as one shape |
+| `NamedNodeMap.item(i)` / indexed getter | 1 | ToNumber(i) |
+| `NamedNodeMap.getNamedItem(q)` | 1 | ToString(q) |
+| `NamedNodeMap.getNamedItemNS(ns, ln)` | 2 | ToString times 2 |
+| `NamedNodeMap.setNamedItem(attr)` / `setNamedItemNS(attr)` | 2 | **TT**; CE — counted once as one shape |
+| `NamedNodeMap.removeNamedItem(q)` | 2 | ToString(q); CE |
+| `NamedNodeMap.removeNamedItemNS(ns, ln)` | 3 | ToString times 2; CE |
+| `Attr.value` setter | 3 | ToString; **TT** (`set an existing attribute value` step 3); CE |
+| `Attr.nodeValue` setter | 3 | ToString (nullable — null skips it); **TT**; CE |
+| `Attr.textContent` setter | 3 | ToString (nullable); **TT**; CE |
+| `Attr` getters (`namespaceURI`/`prefix`/`localName`/`name`/`value`/`ownerElement`/`specified`) | 0 | — |
+| `Document.createAttribute(ln)` | 1 | ToString(ln) |
+| `Document.createAttributeNS(ns, q)` | 2 | ToString times 2 |
+
+**Suspension points in Algorithm group 9: 53.** Inside `handle attribute changes`, `append an
+attribute`, `change an attribute`, `remove an attribute`, `replace an attribute`, `get an attribute
+by name`, `get an attribute by namespace and local name`, `get an attribute value`, `set an
+attribute value`, `create an attribute`, and `validate and extract`: **zero** — every one of those
+primitives is straight-line C with no author-code reachable step. The entire author-code surface of
+the DOM attribute model is (a) the Web IDL argument conversions, (b) **exactly two** Trusted Types
+call sites reached from four algorithms (`setAttribute` step 3, `setAttributeNS` step 2, `set an
+attribute` step 1, `set an existing attribute value` step 3), and (c) the `[CEReactions]` epilogue.
+
+### 9.13 Stage-boundary consequences for a step machine
+
+1. **`setAttribute` needs a boundary between step 3 and step 4**, because the policy callback at
+   step 3 can add, remove or reorder attributes and step 4's "first attribute whose qualified name
+   is" must see the post-callback list.
+2. **`set an attribute` needs a boundary between step 1 and step 2**, and step 2 must re-read
+   `attr`'s element rather than a value captured before step 1.
+3. **`set an existing attribute value` needs a boundary between step 3 and step 4**, and step 4 is
+   the spec explicitly telling you to re-read the field — it is the same test as step 1 for the
+   same reason. Steps 1 and 4 are not a redundancy to fold.
+4. **`setAttributeNS` needs a boundary between step 2 and step 3**, because `set an attribute
+   value`'s own step 1 lookup must run after the callback.
+5. Everything else in group 9 is one straight-line stage between its prologue and its
+   `[CEReactions]` epilogue — including all of `handle attribute changes`, which is the algorithm
+   an implementer is most likely to wrongly split.
