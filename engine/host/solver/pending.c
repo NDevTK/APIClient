@@ -283,6 +283,43 @@ static JSValue pend_list_fork(JSValueConst src)
     return out;
 }
 
+/* ONE RECORD, COPIED. Used where an arm must hold a field the other arm may not see — which is exactly one
+   field and exactly one kind, the unanswered synchronous request's rendezvous id. */
+static JSValue pend_entry_copy(JSValueConst src)
+{
+    JSValue dst = JS_NewObjectProto(pend_ctx(), JS_NULL);
+    int f;
+
+    CHECK(!JS_IsException(dst), "engine: OOM copying a pending record");
+    DCHECK(pend_own_count(src) == PEND_FIELD_COUNT,
+           "a pending record carries a field PENDING_FIELDS does not name — the copy would leave it behind, "
+           "and the arm that reads it would see `undefined`, which is a real value belonging to the request; "
+           "every field is an obligation at the push, at this copy and at the free, and this is the copy's half");
+    cow_engine_write_begin();
+    for (f = 0; f < PEND_FIELD_COUNT; f++) {
+        JSValue v = pend_own(src, g_field[f]);
+        if (PEND_COPY_MODE[f] == PEND_STRUCT) {
+            JSValue c = pend_list_fork(v);
+            JS_FreeValue(pend_ctx(), v);
+            v = c;
+        }
+        pend_put(dst, f, v);
+    }
+    cow_engine_write_end();
+    return dst;
+}
+
+/* THE SIBLING'S REGISTER SHARES THE PARENT'S RECORDS, and copies only the ARRAY that names them.
+ *
+ * A record is IMMUTABLE from the moment it is pushed, with one exception: the ANSWER (`value`/`haveValue`),
+ * which every arm waiting on that request genuinely observes — engine_provide already filled EVERY copy that
+ * named the URL, and the resolve capability was already shared between the arms (its already_resolved latch
+ * and the promise's settlement are per-flow state the COW delta captures, which is what lets both arms settle
+ * one capability). So two arms holding one record see exactly what two arms holding two identical copies saw,
+ * and the fork stops paying for the duplicate: on the minimal fixture the boot flow's eight parked fetches
+ * were being re-materialised into 112484 records across 14062 forks.
+ * The register itself is still per-flow and must be: each arm removes an entry when IT delivers, and the host
+ * walks every flow's register from outside any flow's delta. */
 JSValue pending_fork(JSValueConst reg)
 {
     JSValue out;
@@ -293,36 +330,33 @@ JSValue pending_fork(JSValueConst reg)
     n = pend_len(reg);
     out = JS_NewArray(pend_ctx());
     CHECK(!JS_IsException(out), "engine: OOM inheriting the pending replies at a fork");
-    for (i = 0; i < n; i++) {
-        JSValue src = pending_entry(reg, i);
-        JSValue dst = JS_NewObjectProto(pend_ctx(), JS_NULL);
-        int f;
-        CHECK(!JS_IsException(dst), "engine: OOM inheriting a pending record at a fork");
-        DCHECK(pend_own_count(src) == PEND_FIELD_COUNT,
-               "a pending record carries a field PENDING_FIELDS does not name — the sibling would inherit it "
-               "as `undefined`, which is a real value belonging to the parent's request; every field is an "
-               "obligation at the push, at this fork and at the free, and this is the fork's half");
-        cow_engine_write_begin();
-        for (f = 0; f < PEND_FIELD_COUNT; f++) {
-            JSValue v = pend_own(src, g_field[f]);
-            if (PEND_COPY_MODE[f] == PEND_STRUCT) {
-                JSValue c = pend_list_fork(v);
-                JS_FreeValue(pend_ctx(), v);
-                v = c;
-            }
-            pend_put(dst, f, v);
-        }
-        JS_SetPropertyUint32(pend_ctx(), out, (uint32_t)i, dst);
-        cow_engine_write_end();
-        JS_FreeValue(pend_ctx(), src);
-    }
+    cow_engine_write_begin();
+    for (i = 0; i < n; i++)
+        JS_SetPropertyUint32(pend_ctx(), out, (uint32_t)i, pending_entry(reg, i));
+    cow_engine_write_end();
     return out;
+}
+
+JSValue pending_unshare(JSValueConst reg, int i)
+{
+    JSValue src = pending_entry(reg, i);
+    JSValue dst = pend_entry_copy(src);
+    JS_FreeValue(pend_ctx(), src);
+    cow_engine_write_begin();
+    JS_SetPropertyUint32(pend_ctx(), reg, (uint32_t)i, JS_DupValue(pend_ctx(), dst));
+    cow_engine_write_end();
+    return dst;
 }
 
 /* ---- the census row ----------------------------------------------------------------------------------------
    WHAT THIS REGISTER COSTS A PAGER, in quickjs's bytes rather than the host allocator's — which is the point of
    the conversion. A string is counted by the LENGTH the register names, because the same string is very often
-   one the page already holds and one every sibling of this flow shares. */
+   one the page already holds and one every sibling of this flow shares.
+   IT IS DELIBERATELY THE PER-FLOW FIGURE, records included, and that now OVERSTATES what the frontier holds:
+   since pending_fork shares records, N arms naming one record are counted N times here. That is what a pager
+   which cannot yet NAME the sharing would actually write, so it is the right number for this row until the
+   cold tier grows a shared-record row the way cow.c's frozen chain already has one. The real live figure is
+   the allocator's (`cLiveKiB` on the @HEAP line) and it is where the sharing shows up. */
 
 static long pend_str_bytes(JSValueConst v)
 {

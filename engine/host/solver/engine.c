@@ -782,12 +782,11 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
         }
         sib->njob = sib->jobcap = parent->njob;
     }
-    /* IT IS STILL A COPY, and it has to be: the host walks EVERY flow's register from outside any flow's
-       delta (engine_provide fills whichever flows parked on a URL, engine_host_requests joins what is
-       outstanding across all of them), so two flows sharing one array would each read the other's outstanding
-       requests and neither could be answered independently. What changed is what a copy COSTS — the record's
-       strings are immutable JS strings now, so the sibling takes a reference to each instead of a strdup, and
-       an empty register (which is most of them) copies as JS_UNDEFINED. */
+    /* THE ARRAY IS COPIED AND THE RECORDS ARE SHARED. The array has to be per-flow: the host walks EVERY
+       flow's register from outside any flow's delta (engine_provide fills whichever flows parked on a URL,
+       engine_host_requests joins what is outstanding across all of them), and each arm removes an entry when
+       IT delivers. The records do not, because a record never changes after it is pushed except for the
+       ANSWER, and an answer is something both arms wait on and both observe. */
     sib->pending = pending_fork(parent->pending);
     /* AN UNANSWERED SYNCHRONOUS REQUEST IS RE-ISSUED, NEVER INHERITED. Its answer is computed under the ASKING
        FLOW'S WORLD, and the sibling's world is not the parent's from this instant on — two arms of a fork that
@@ -799,6 +798,10 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
     for (int i = 0, n = pending_count(sib->pending); i < n; i++) {
         JSValue p = pending_entry(sib->pending, i);
         if (pending_get_int(p, PEND_KIND) == FLOW_PENDING_HOSTREQ && !pending_get_int(p, PEND_HAVE_VALUE)) {
+            /* …and it is the ONE record the sibling cannot share, because this id is the one field the two
+               arms must disagree about. It stops being shared first. */
+            JS_FreeValue(ctx, p);
+            p = pending_unshare(sib->pending, i);
             pending_set_int(p, PEND_REQ, g_next_req++);
             CHECK(g_next_req != 0, "the host-request id counter wrapped while forking a blocked flow");
         }

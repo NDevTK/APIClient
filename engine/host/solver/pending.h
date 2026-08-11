@@ -136,11 +136,20 @@ void pending_remove(JSValue *reg, int i);
 /* Release the whole register. Idempotent; leaves *reg JS_UNDEFINED. */
 void pending_free(JSContext *ctx, JSValue *reg);
 
-/* THE SIBLING'S OWN REGISTER at a fork — a structural copy through PENDING_FIELDS. It is a COPY and not a
-   shared reference because the host reads every flow's register from outside any flow's delta: two flows
-   sharing one array would each see the other's outstanding requests, and neither could be answered
-   independently. JS_UNDEFINED in gives JS_UNDEFINED out, which is the common case and costs nothing. */
+/* THE SIBLING'S REGISTER at a fork: a new ARRAY naming the parent's RECORDS.
+   The array is per-flow and must be — each arm removes an entry when IT delivers, and the host walks every
+   flow's register from outside any flow's delta, so two flows sharing one array would each see the other's
+   outstanding requests. The RECORDS are shared, because a record never changes after it is pushed except for
+   the answer, which every arm waiting on that request genuinely observes. JS_UNDEFINED in gives JS_UNDEFINED
+   out, which is the common case and costs nothing. */
 JSValue pending_fork(JSValueConst reg);
+
+/* GIVE THIS REGISTER ITS OWN COPY OF ENTRY `i`, replacing the shared record in the slot. Returns the copy,
+   owned. There is exactly one field that must DIFFER between two arms — the unanswered synchronous request's
+   rendezvous id, because its answer is computed under the ASKING FLOW'S WORLD — and a shared record cannot
+   hold two of them, so it stops being shared first. The copy goes through PENDING_FIELDS and asserts the
+   source's own-property count against it. */
+JSValue pending_unshare(JSValueConst reg, int i);
 
 /* THE CENSUS ROW (solver/cold.h): what this register would cost a pager. Now quickjs's bytes rather than the
    host allocator's, which is the point of the conversion — the strings are shared with everything else that
