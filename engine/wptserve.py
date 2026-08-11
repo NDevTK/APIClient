@@ -16,7 +16,11 @@ It prints `READY <port>` on stdout once bound, and serves until killed.
 """
 import sys
 import os
+import signal
+import socket
 import tempfile
+import time
+import uuid
 
 root = os.path.abspath(sys.argv[1])
 port = int(sys.argv[2])
@@ -25,7 +29,6 @@ if port == 0:
     # `{{ports[http][0]}}` into the origins it then fetches, so a config carrying 0 while the socket carried an
     # ephemeral port would hand every such test an address that answers nothing. Reserve one here and pass the
     # same number to both.
-    import socket
     _s = socket.socket()
     _s.bind(("127.0.0.1", 0))
     port = _s.getsockname()[1]
@@ -48,7 +51,7 @@ for _ in range(3):
 sys.path.insert(0, os.path.join(root, "tools"))
 import localpaths  # noqa: F401  — puts tools/third_party/* on the path, which is how wpt itself does it
 
-from wptserve import server, handlers, routes as default_routes, config as wptconfig
+from wptserve import server, handlers, stash, routes as default_routes, config as wptconfig
 
 # The routes tools/serve/serve.py builds for a plain HTTP virtual host, in its order: the rewrites and special
 # paths it declares, then the python-script handler for `.py`, then the file handler for everything else.
@@ -92,7 +95,20 @@ _cfg = wptconfig.ConfigBuilder(_Log(),
                                subdomains={"www", "www1", "www2", "天気の良い日", "élève"},
                                not_subdomains={"nonexistent"})
 
-with _cfg as cfg:
+# THE STASH IS A SERVER, AND WITHOUT IT A HANDLER THAT USES ONE ANSWERS 500. `request.server.stash` reads its
+# address out of WPT_STASH_CONFIG, which nothing but tools/serve/serve.py's `with stash.StashServer(...)` ever
+# sets — so every handler that persists a value between two requests raised KeyError inside wptserve and the
+# corpus got a 500 whose body was a Python traceback. That is the same defect as serving a `.py` handler's
+# SOURCE: the test compares its answer against something that is not the server's answer and reports the ENGINE
+# as wrong. `xhr/resources/authentication.py` is the worked example — its whole subject is the 401 challenge it
+# only issues once per token, which it remembers in the stash — so thirteen `send-authentication-*` files were
+# measured against a traceback. serve.py's own two lines, with its own address-and-authkey shape.
+_stash_port = socket.socket()
+_stash_port.bind(("127.0.0.1", 0))
+_stash_addr = ("127.0.0.1", _stash_port.getsockname()[1])
+_stash_port.close()
+
+with stash.StashServer(_stash_addr, authkey=str(uuid.uuid4())), _cfg as cfg:
     httpd = server.WebTestHttpd(host="127.0.0.1", port=port, doc_root=root, routes=routes,
                                 config=cfg, use_ssl=False, key_file=None, certificate=None)
     httpd.start()
@@ -106,8 +122,13 @@ with _cfg as cfg:
     sys.stdout.flush()
 # WebTestHttpd.start() runs the server on its own thread and returns, so this one blocks until it is killed.
 # There is no join to call — `start`, `get_url` and `stop` are the whole of its surface.
+    # AND SIGTERM UNWINDS IT, because the stash is a CHILD PROCESS now and the driver stops this server by
+    # killing it. Python's default SIGTERM disposition dies without running a single `__exit__`, so the manager
+    # the StashServer forked would outlive every gate run and accumulate one orphan per run on a shared box.
+    # Raising SystemExit from the handler runs the `with` blocks' exits, and `manager.shutdown()` with them.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:
         while True:
-            __import__("time").sleep(3600)
+            time.sleep(3600)
     except KeyboardInterrupt:
         pass

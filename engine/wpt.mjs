@@ -16,7 +16,8 @@
  * Usage:  node engine/wpt.mjs [subdir-or-file]
  */
 import { spawnSync, spawn } from "node:child_process";
-import { existsSync, readdirSync, mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, mkdtempSync, mkdirSync, openSync, readFileSync, statSync,
+         writeFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { tmpdir, cpus, loadavg } from "node:os";
 
@@ -45,6 +46,10 @@ const WPT_REV = "bf4714d";
    read as the CPU cause below; the pair just makes the usual path say so in its own signal. */
 const CPU_BUDGET_S = 60;
 const WALL_BACKSTOP_MS = 600_000;
+/* The kernel's own tick, asked for rather than assumed: /proc's CPU fields are in clock ticks and a hardcoded
+   100 is a constant this file would have no way of noticing had gone wrong. */
+const CLK_TCK = Number(spawnSync("getconf", ["CLK_TCK"], { encoding: "utf8" }).stdout.trim()) || 0;
+if (!CLK_TCK) { console.error("[wpt] getconf CLK_TCK answered nothing, so a child's CPU cannot be read"); process.exit(1); }
 /* WHAT IS CHECKED OUT. A sparse list rather than the whole 1 GB tree, and it grows as areas are covered — an
    area absent here is honestly untested, which is a different statement from "passes". */
 /* `tools` is not a test area — it is WPT'S OWN SERVER and its vendored dependencies. The corpus is SERVED by
@@ -507,18 +512,36 @@ function areaFinish(a) {
 const HARNESS = join(WPT, "resources", "testharness.js");
 
 /* WPT'S OWN SERVER, started once for the run. Everything the corpus fetches goes through it, so the handlers
-   are the real ones and the rewrites are the real ones. */
-const server = spawn("python3", [join(ENGINE, "wptserve.py"), WPT, "0"], { stdio: ["ignore", "pipe", "pipe"] });
+   are the real ones and the rewrites are the real ones.
+   ITS OUTPUT GOES TO A FILE, AND A PIPE HERE IS A DEADLOCK — not a style preference. The server was spawned
+   with `stdio: ["ignore","pipe","pipe"]` and nothing ever read the stderr pipe, so wptserve's own logger filled
+   the 64 KiB socketpair and the next handler thread to log blocked in `write(2, …)` FOREVER, inside
+   `sock_alloc_send_pskb`, holding the connection it was answering. The runner then sat in `read()` in
+   `wpt_http` with zero CPU until the 600 s wall backstop killed it — measured, on the live process: server
+   thread blocked writing 1342 bytes to fd 2, runner blocked reading fd 3, both socket queues empty. Five `xhr`
+   files hung that way and cost ~50 minutes of every run, and WHICH five was deterministic: the ones served
+   after the pipe filled whose requests make the server log at all (a 500, a 400), while a request answered 200
+   logs nothing and sailed past.
+   DRAINING IT FROM NODE WOULD NOT FIX IT. The run is a sequence of `spawnSync` calls, each of which blocks this
+   process's event loop for as long as the test takes — up to the whole backstop — so a `data` listener runs
+   only between tests and the buffer fills within one. The fix has to be at the file descriptor: a real file
+   cannot exert back-pressure, so the server can never block on it whatever it writes and however busy this
+   driver is. READY is then read back from that file rather than off a pipe. The log is KEPT, not discarded —
+   it is what named the missing stash — and its path is printed so the next reader can look. */
+const SERVER_LOG = join(WORK, "wptserve.log");
+writeFileSync(SERVER_LOG, "");
+const serverLogFd = openSync(SERVER_LOG, "a");
+const server = spawn("python3", [join(ENGINE, "wptserve.py"), WPT, "0"],
+                     { stdio: ["ignore", serverLogFd, serverLogFd] });
 const serverAddr = await new Promise((resolve, reject) => {
-  let out = "";
   const fail = setTimeout(() => reject(new Error("wptserve did not report READY within 60s")), 60_000);
-  server.stdout.on("data", (d) => {
-    out += d;
-    const m = /READY (\d+)/.exec(out);
-    if (m) { clearTimeout(fail); resolve("127.0.0.1:" + m[1]); }
-  });
-  server.on("exit", (c) => { clearTimeout(fail); reject(new Error("wptserve exited with " + c)); });
+  const poll = setInterval(() => {
+    const m = /READY (\d+)/.exec(readFileSync(SERVER_LOG, "utf8"));
+    if (m) { clearTimeout(fail); clearInterval(poll); resolve("127.0.0.1:" + m[1]); }
+  }, 50);
+  server.on("exit", (c) => { clearTimeout(fail); clearInterval(poll); reject(new Error("wptserve exited with " + c)); });
 }).catch((e) => { console.error("[wpt] " + e.message); process.exit(1); });
+console.log(`[wpt] wptserve on ${serverAddr}; its log: ${SERVER_LOG}`);
 process.on("exit", () => server.kill());
 
 /* WPT's server does not serve every path from a file of that name. This is its rewrite table (tools/serve's
@@ -611,12 +634,29 @@ for (const { file: f, kind, variant } of runs) {
        distinguishable in the report rather than collapsing into "signal SIGTERM".
        The wall backstop stays, generously, because RLIMIT_CPU cannot see a test BLOCKED on I/O — a deadlock
        against wptserve burns no CPU at all. Two measures, two signals, and the report says which fired. */
+    /* AND THE BACKSTOP'S REPORT CARRIES THE CPU THE KILLED TEST ACTUALLY CONSUMED, because that number is the
+       whole verdict and it was missing. A SIGTERM at the backstop is TWO different facts wearing one signal: a
+       real test crawling on a saturated box (seconds of CPU per second of wall), and a test blocked on a socket
+       that will never answer (zero). This driver reported both as "load average N — re-run this file alone",
+       which is a claim about the BOX, and it sent three separate diagnoses in one day hunting a phantom before
+       anyone measured the process: 0.03 s of CPU over 600 s of wall, blocked in `read()`, against a wptserve
+       whose logging thread was itself blocked writing to a pipe nobody read. `cutime`/`cstime` in
+       /proc/self/stat accumulate the CPU of children this process has REAPED, and spawnSync reaps before it
+       returns, so the delta across the call IS that child's CPU — no wrapper, no accounting the kill can
+       destroy. */
+    const childCpu = () => {
+      const f = readFileSync("/proc/self/stat", "utf8");
+      const v = f.slice(f.lastIndexOf(")") + 2).split(" ");   /* comm may hold spaces; fields resume after it */
+      return (Number(v[11]) + Number(v[12])) / CLK_TCK;       /* stat(3) fields 16,17: cutime, cstime */
+    };
+    const cpu0 = childCpu();
     const r = spawnSync("/bin/sh",
                         ["-c", `ulimit -H -t ${CPU_BUDGET_S + 10} 2>/dev/null; ulimit -S -t ${CPU_BUDGET_S}; exec "$@"`, "sh", bin,
                          ...(kind === "document" ? ["--test-document"] : []),
                          ...(variant ? ["--variant", variant] : []), HARNESS, ...deps, f],
                         { encoding: "utf8", maxBuffer: 1 << 28, timeout: WALL_BACKSTOP_MS,
                           env: { ...process.env, WPT_SERVER: serverAddr } });
+    const cpuUsed = childCpu() - cpu0;
     const out = (r.stdout || "") + (r.stderr || "");
     /* An ABORT is a result about this file, not an accident: it is a DCHECK naming a capability the browser half
        does not have, which is exactly what this gate is for. It is counted apart from a FAIL because the two ask
@@ -641,7 +681,13 @@ for (const { file: f, kind, variant } of runs) {
          rides along with the third because it is the number that explains it. */
       const cause = why ? why[1].slice(0, 160)
                   : (r.signal === "SIGXCPU" || r.signal === "SIGKILL") ? `exceeded the ${CPU_BUDGET_S}s CPU budget (not wall time — this test really is that expensive)`
-                  : r.signal === "SIGTERM" ? `wall backstop at ${WALL_BACKSTOP_MS / 1000}s with load average ${loadavg()[0].toFixed(1)} on ${cpus().length} cores — RE-RUN THIS FILE ALONE before believing it`
+                  : r.signal === "SIGTERM"
+                      ? (cpuUsed < 1
+                          ? `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuUsed.toFixed(2)}s of CPU — ` +
+                            `that is a BLOCK, not load: the process was asleep waiting for something that never came. ` +
+                            `Attach to it (gdb -p, /proc/PID/syscall) and look at the OTHER end`
+                          : `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuUsed.toFixed(1)}s of CPU, ` +
+                            `load average ${loadavg()[0].toFixed(1)} on ${cpus().length} cores — starved, not blocked; RE-RUN THIS FILE ALONE`)
                   : "signal " + r.signal;
       failures.push(`  ABORT  ${rel}\n         ${cause}`);
     }
