@@ -22,12 +22,13 @@ static const int PEND_COPY_MODE[PEND_FIELD_COUNT] = {
 #undef PEND_COPY
 };
 
-static JSContext *pend_ctx(void)
+JSContext *pending_ctx(void)
 {
     DCHECK(g_ctx != NULL, "the pending register was reached before pending_set_ctx named the session's "
                           "context — every read and write here uses it");
     return g_ctx;
 }
+#define pend_ctx() pending_ctx()
 
 static void pend_atoms(void)
 {

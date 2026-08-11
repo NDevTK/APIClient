@@ -198,11 +198,11 @@ int engine_host_answered(uint32_t req, JSValueConst *out) {
             /* BORROWED, and the register is what holds it: the reference taken here is released before the
                return, exactly as the field read did when the record was C — the entry still names the value,
                and a machine re-entered before it consumes may read it again. */
-            if (have && out) { JSValue v = pending_get(e, PEND_VALUE); *out = v; JS_FreeValue(g_sess_ctx, v); }
-            JS_FreeValue(g_sess_ctx, e);
+            if (have && out) { JSValue v = pending_get(e, PEND_VALUE); *out = v; JS_FreeValue(pending_ctx(), v); }
+            JS_FreeValue(pending_ctx(), e);
             return have;
         }
-        JS_FreeValue(g_sess_ctx, e);
+        JS_FreeValue(pending_ctx(), e);
     }
     /* NOT ON THIS FLOW'S REGISTER AT ALL. A machine asking about an id it never issued, or issued before a
        fork that re-issued it under the sibling's own world — either way, answering "no" would park the flow
@@ -269,12 +269,12 @@ const char *engine_host_requests(void) {
             if (pending_get_int(p, PEND_KIND) == FLOW_PENDING_HOSTREQ && !pending_get_int(p, PEND_HAVE_VALUE)) {
                 JSValue o = pending_get(p, PEND_OP);
                 size_t ol = 0;
-                const char *s = JS_ToCStringLen(g_sess_ctx, &ol, o);
-                if (s) JS_FreeCString(g_sess_ctx, s);
-                JS_FreeValue(g_sess_ctx, o);
+                const char *s = JS_ToCStringLen(pending_ctx(), &ol, o);
+                if (s) JS_FreeCString(pending_ctx(), s);
+                JS_FreeValue(pending_ctx(), o);
                 need += ol + 24;
             }
-            JS_FreeValue(g_sess_ctx, p);
+            JS_FreeValue(pending_ctx(), p);
         }
     join = malloc(need);
     CHECK(join != NULL, "engine: OOM joining the outstanding host requests");
@@ -294,15 +294,15 @@ const char *engine_host_requests(void) {
                 const char *s;
                 size_t oplen = 0;
                 if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
-                    pending_get_int(p, PEND_HAVE_VALUE)) { JS_FreeValue(g_sess_ctx, p); continue; }
+                    pending_get_int(p, PEND_HAVE_VALUE)) { JS_FreeValue(pending_ctx(), p); continue; }
                 w += snprintf(w, 24, "%u\t", (uint32_t)pending_get_int(p, PEND_REQ));
                 o = pending_get(p, PEND_OP);
-                s = JS_ToCStringLen(g_sess_ctx, &oplen, o);
+                s = JS_ToCStringLen(pending_ctx(), &oplen, o);
                 DCHECK(s != NULL, "an outstanding host request has no text — the host routes on it");
                 memcpy(w, s, oplen); w += oplen;
-                JS_FreeCString(g_sess_ctx, s);
-                JS_FreeValue(g_sess_ctx, o);
-                JS_FreeValue(g_sess_ctx, p);
+                JS_FreeCString(pending_ctx(), s);
+                JS_FreeValue(pending_ctx(), o);
+                JS_FreeValue(pending_ctx(), p);
                 *w++ = '\n';
             }
         *w = 0;
@@ -546,11 +546,11 @@ const char *engine_pending_urls(void) {
             JSValue p = pending_entry(f->pending, i);
             JSValue u = pending_get(p, PEND_URL);
             size_t ul = 0;
-            const char *s = JS_IsString(u) ? JS_ToCStringLen(g_sess_ctx, &ul, u) : NULL;
-            if (s) JS_FreeCString(g_sess_ctx, s);
+            const char *s = JS_IsString(u) ? JS_ToCStringLen(pending_ctx(), &ul, u) : NULL;
+            if (s) JS_FreeCString(pending_ctx(), s);
             if (s && !pending_get_int(p, PEND_HAVE_VALUE)) need += ul + 1;
-            JS_FreeValue(g_sess_ctx, u);
-            JS_FreeValue(g_sess_ctx, p);
+            JS_FreeValue(pending_ctx(), u);
+            JS_FreeValue(pending_ctx(), p);
         }
     join = malloc(need);
     CHECK(join != NULL, "engine: OOM joining the pending URLs");
@@ -565,7 +565,7 @@ const char *engine_pending_urls(void) {
                 JSValue pe = pending_entry(f->pending, i);
                 JSValue uv = pending_get(pe, PEND_URL);
                 size_t ul = 0;
-                const char *u = JS_IsString(uv) ? JS_ToCStringLen(g_sess_ctx, &ul, uv) : NULL;
+                const char *u = JS_IsString(uv) ? JS_ToCStringLen(pending_ctx(), &ul, uv) : NULL;
                 int skip = (!u || pending_get_int(pe, PEND_HAVE_VALUE));
                 /* already listed? a linear scan over the answer being built, which is the set itself */
                 if (!skip) {
@@ -579,9 +579,9 @@ const char *engine_pending_urls(void) {
                     }
                 }
                 if (!skip) { memcpy(w, u, ul); w += ul; *w++ = '\n'; }
-                if (u) JS_FreeCString(g_sess_ctx, u);
-                JS_FreeValue(g_sess_ctx, uv);
-                JS_FreeValue(g_sess_ctx, pe);
+                if (u) JS_FreeCString(pending_ctx(), u);
+                JS_FreeValue(pending_ctx(), uv);
+                JS_FreeValue(pending_ctx(), pe);
             }
         *w = 0;
         DCHECK((size_t)(w - join) < need, "the pending-URL join outgrew the length its own measuring pass "

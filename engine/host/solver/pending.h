@@ -89,6 +89,11 @@ enum {
    the running flow is blocked and has only the flow. The twins are cow_set_ctx and dom_cow_set_ctx, and this is
    named beside them for the same reason: a host that did not call it crashes at the first register touch. */
 void pending_set_ctx(JSContext *ctx);
+/* …and the context itself, for a caller that holds a register and no ctx of its own. It is NOT the scheduler
+   session's: the WPT runner drives flows without ever opening a session, so a reader that reached for
+   engine.c's `g_sess_ctx` there got NULL and freed a value through it — a SIGSEGV in 302 of 347 xhr runs, from
+   the one line in this conversion that asked a second place for a fact this file already holds. */
+JSContext *pending_ctx(void);
 /* Release the atoms this file interned and forget that context — the frontier's teardown. The corpus hosts
    take a runtime down and bring another up per file, and an atom from the previous one is a handle into a
    freed table, so this is not tidiness: it is the same rule flow_registry_free keeps for the decision chain. */
