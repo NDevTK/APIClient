@@ -107,19 +107,49 @@ void dom_cow_set_ctx(JSContext *ctx) { g_cow_ctx = ctx; }
  * surfaced three layers away as `contentWindow` being null. The context is now ASSERTED rather than tested, and
  * the hook is called unconditionally, so a host that forgets crashes at the write instead of quietly running a
  * different DOM. */
-static void (*g_tree_hook)(JSContext *ctx, lxb_dom_node_t *n, int inserted);
+static void (*g_tree_hook)(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase);
 
 #define TREE_HOOK_NO_CTX \
     "a tree write reached the insertion/removing steps with no context — dom_cow_set_ctx names the runtime " \
     "they run in, and a host that registers the hook without it runs NO insertion steps at all: no <script> " \
     "preparation, no custom-element upgrade, no child navigable, and nothing to say so"
 
-void dom_cow_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, int inserted)) { g_tree_hook = fn; }
+void dom_cow_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase))
+{
+    g_tree_hook = fn;
+}
 
 static void (*g_attr_hook)(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
-                           const char *val, size_t val_len);
+                           const char *old_val, size_t old_len, const char *val, size_t val_len);
 void dom_cow_set_attr_hook(void (*fn)(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
-                                      const char *val, size_t val_len)) { g_attr_hook = fn; }
+                                      const char *old_val, size_t old_len, const char *val, size_t val_len))
+{
+    g_attr_hook = fn;
+}
+
+/* §9.4.6's OLD VALUE, copied out before the write replaces it. The change steps run AFTER the value is stored
+   (step 2 sets it, step 3 handles the change), so the element no longer holds the old one by the time they run
+   and it has to be carried across. NULL when the attribute was absent, which is the null `oldValue` a page's
+   attributeChangedCallback branches on. The caller frees. */
+static char *attr_old_value(lxb_dom_element_t *el, const char *ns, const char *local, size_t *len)
+{
+    lxb_dom_attr_t *a = dom_attr_get_ns(el, ns, local);
+    const lxb_char_t *v;
+    size_t vl = 0;
+    char *copy;
+
+    *len = 0;
+    if (!a) return NULL;
+    v = lxb_dom_attr_value(a, &vl);
+    if (!v) return NULL;
+    copy = malloc(vl + 1);
+    CHECK(copy != NULL, "dom-cow-oom: §9.4.6's old attribute value could not be copied — the change steps run "
+                        "after the write and the element no longer holds it");
+    memcpy(copy, v, vl);
+    copy[vl] = 0;
+    *len = vl;
+    return copy;
+}
 
 /* the current taint shadow for this slot identity, dup'd (JS_UNDEFINED + *had=0 if none) */
 static JSValue shadow_snapshot(const void *owner, int slot, const char *ns, const char *name, int *had) {
@@ -310,9 +340,10 @@ static void dom_attr_node_value_capture(lxb_dom_attr_t *a, const AttrIdent *id) 
  * resolves the identity once and cannot disagree with itself. `taint` is JS_UNDEFINED for a concrete write. */
 void dom_cow_set_attribute_ns(lxb_dom_element_t *el, const char *ns, const char *prefix, const char *local,
                               const char *val, size_t val_len, JSValueConst taint) {
+    size_t old_len = 0;
+    char *old = (g_attr_hook && g_cow_ctx) ? attr_old_value(el, ns, local, &old_len) : NULL;
+
     dom_attr_capture(el, ns, local);   /* baseline into the running flow's delta FIRST (no-op if !g_dom_capture) */
-    /* BEFORE the write: the change steps take the OLD value, which the element still holds only until now. */
-    if (g_attr_hook && g_cow_ctx) g_attr_hook(g_cow_ctx, el, ns, local, val, val_len);
     {
         bool created = false;
         lxb_dom_attr_t *a = dom_attr_write(el, ns, prefix, local, val, val_len, &created);
@@ -320,6 +351,12 @@ void dom_cow_set_attribute_ns(lxb_dom_element_t *el, const char *ns, const char 
         if (created) dom_note_created_attr(a);
     }
     if (g_cow_ctx) attr_shadow_set(g_cow_ctx, el, ATTR_SLOT_ATTRIBUTE, ns, local, taint);
+    /* AFTER the write — §9.4.6 step 2 stores the value and step 3 handles the change, in that order, so a
+       page's attributeChangedCallback reading the attribute back sees the value it was told about and
+       §4.2.2's slot steps re-derive a slottable's name from the attribute that is now there. It used to fire
+       BEFORE, with a comment claiming the standard says so; it does not. */
+    if (g_attr_hook && g_cow_ctx) g_attr_hook(g_cow_ctx, el, ns, local, old, old_len, val, val_len);
+    free(old);
 }
 /* Remove an ATTRIBUTE the baseline may own — the fourth thing a flow can change about the tree, and the one
    that had no chokepoint, so a boolean reflection (`el.hidden = false`, `script.async = false`) had no way to
@@ -346,7 +383,6 @@ void dom_cow_remove_attribute_node(lxb_dom_attr_t *a) {
     if (!el) return;   /* §9.4.7 over an attribute whose element is already null */
     attr_ident_of_node(a, &id);
     dom_attr_capture(el, id.ns, id.local);
-    if (g_attr_hook && g_cow_ctx) g_attr_hook(g_cow_ctx, el, id.ns, id.local, NULL, 0);
     DCHECK(g_cow_ctx != NULL, "an attribute removal ran with no context named — the taint shadow that goes with "
                               "the value is held as JSValues (dom_cow_set_ctx names the runtime)");
     /* THE DETACHED NODE'S VALUE BECOMES REACHABLE STATE, so it is captured HERE and not at the write that
@@ -365,6 +401,14 @@ void dom_cow_remove_attribute_node(lxb_dom_attr_t *a) {
         int si = attr_shadow_find(el, ATTR_SLOT_ATTRIBUTE, id.ns, id.local);
         if (si >= 0) attr_shadow_set(g_cow_ctx, a, ATTR_SLOT_ATTRIBUTE, id.ns, id.local, attr_shadow_opaque(si));
         attr_shadow_set(g_cow_ctx, el, ATTR_SLOT_ATTRIBUTE, id.ns, id.local, JS_UNDEFINED);
+    }
+    /* §9.4.7 step 4: handle attribute changes with the attribute's value as the OLD one and NULL as the new,
+       AFTER step 2 took it out of the list. The value is still on the detached node, which is what §9.4.7
+       leaves alive. */
+    if (g_attr_hook && g_cow_ctx) {
+        size_t vl = 0;
+        const lxb_char_t *v = lxb_dom_attr_value(a, &vl);
+        g_attr_hook(g_cow_ctx, el, id.ns, id.local, (const char *)v, v ? vl : 0, NULL, 0);
     }
     attr_ident_free(&id);
 }
@@ -386,12 +430,19 @@ void dom_cow_put_attribute_node(lxb_dom_element_t *el, lxb_dom_attr_t *a, JSValu
     attr_ident_of_node(a, &id);
     old = dom_attr_get_ns(el, id.ns, id.local);
     if (old != a) {
+        size_t old_len = 0;
+        char *old_val = (g_attr_hook && g_cow_ctx) ? attr_old_value(el, id.ns, id.local, &old_len) : NULL;
+
         dom_attr_capture(el, id.ns, id.local);
         v = lxb_dom_attr_value(a, &vl);
-        if (g_attr_hook && g_cow_ctx)
-            g_attr_hook(g_cow_ctx, el, id.ns, id.local, (const char *)(v ? v : (const lxb_char_t *)""), vl);
         if (old) dom_attr_replace(old, a);             /* step 6 — in place, keeping the index */
         else dom_attr_attach(el, a, NULL);             /* step 7 */
+        /* §9.4.8 step 6: ONE change notification, reported against the OLD attribute's name and namespace with
+           the NEW attribute's value — and after the list write, like every other. */
+        if (g_attr_hook && g_cow_ctx)
+            g_attr_hook(g_cow_ctx, el, id.ns, id.local, old_val, old_len,
+                        (const char *)(v ? v : (const lxb_char_t *)""), vl);
+        free(old_val);
         if (old) dom_attr_node_value_capture(old, &id);   /* the displaced node is reachable and now detached */
         if (g_cow_ctx) {
             /* THE ATTRIBUTE BRINGS ITS OWN TAINT. `a.value = location.hash` on a detached Attr keyed the
@@ -480,7 +531,7 @@ void dom_cow_remove_child(lxb_dom_node_t *node) {
     g_dom_version++;
     /* BEFORE the detach, because "was it connected" has no answer afterwards. */
     DCHECK(!g_tree_hook || g_cow_ctx, TREE_HOOK_NO_CTX);
-    if (g_tree_hook) g_tree_hook(g_cow_ctx, node, 0);
+    if (g_tree_hook) g_tree_hook(g_cow_ctx, node, node->parent, 0);
     if (g_dom_capture) {
         DomUndo u; memset(&u, 0, sizeof u);
         u.kind = 2; u.node = node;
@@ -488,7 +539,15 @@ void dom_cow_remove_child(lxb_dom_node_t *node) {
         u.sh_old = u.sh_cur = JS_UNDEFINED;
         dom_undo_push(u);
     }
-    lxb_dom_node_remove(node);
+    {
+        /* §4.2.3 remove step 3 detaches, and steps 4-7 run AFTER it — the slot steps recompute a slot's
+           assigned nodes, and doing that while the node is still a child finds it again and reports no change.
+           The old parent is carried across the detach because the node no longer has one to be asked for. */
+        lxb_dom_node_t *was = node->parent;
+
+        lxb_dom_node_remove(node);
+        if (g_tree_hook) g_tree_hook(g_cow_ctx, node, was, -1);
+    }
 }
 
 /* A PRIVATE TREE — the DOM's half of the invariant the heap COW already keeps: a delta captures only SHARED
@@ -818,7 +877,7 @@ void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
     dom_insert_capture(child);   /* record the insertion FIRST so it reverts per-flow (detached on unapply) */
     lxb_dom_node_insert_child(parent, child);
     DCHECK(!g_tree_hook || g_cow_ctx, TREE_HOOK_NO_CTX);
-    if (g_tree_hook) g_tree_hook(g_cow_ctx, child, 1);   /* AFTER: connectedness is the new tree's */
+    if (g_tree_hook) g_tree_hook(g_cow_ctx, child, child->parent, 1);   /* AFTER: connectedness is the new tree's */
 }
 /* §4.2.3 "insert before": the same capture, at a POSITION. The insert entry remembers where it landed at
    unapply time rather than at capture time, so this differs from append only in the Lexbor call — which is
@@ -828,7 +887,7 @@ void dom_cow_insert_before(lxb_dom_node_t *ref, lxb_dom_node_t *child) {
     dom_insert_capture(child);
     lxb_dom_node_insert_before(ref, child);
     DCHECK(!g_tree_hook || g_cow_ctx, TREE_HOOK_NO_CTX);
-    if (g_tree_hook) g_tree_hook(g_cow_ctx, child, 1);
+    if (g_tree_hook) g_tree_hook(g_cow_ctx, child, child->parent, 1);
 }
 void dom_revert(void) {   /* DISCARD the running flow's DOM writes -> baseline (reverse order); empties the delta */
     g_dom_version++;

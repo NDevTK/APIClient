@@ -47,6 +47,7 @@
 #include "solver/attr_shadow.h"
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
+#include "core/dom/slot.h"
 #include "core/dom/collections.h"
 #include "core/dom/range.h"
 #include "quickjs-step.h"
@@ -324,15 +325,17 @@ static const EventTargetTree NODE_EVENT_TREE = { node_get_parent, node_default_p
    about, one layer down: a component added without editing whoever happens to hold the slot is a component
    whose steps silently never run.
    The ORDER is the registration order, which is the standard's order because the components register in it. */
-#define NODE_TREE_HOOKS_MAX 4
+#define NODE_TREE_HOOKS_MAX 6
 static NodeTreeHook g_tree_hooks[NODE_TREE_HOOKS_MAX];
 static int g_tree_hook_n;
 
-static void node_tree_hooks_run(JSContext *ctx, lxb_dom_node_t *n, int inserted)
+static void node_tree_hooks_run(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase)
 {
     int i;
+    DCHECK(phase >= NODE_TREE_REMOVED && phase <= NODE_TREE_INSERTED,
+           "the tree-steps list was run at a phase §4.2.3 does not have");
     for (i = 0; i < g_tree_hook_n; i++)
-        g_tree_hooks[i](ctx, n, inserted);
+        g_tree_hooks[i](ctx, n, parent, phase);
 }
 
 void node_add_tree_hook(NodeTreeHook fn)
@@ -2491,6 +2494,9 @@ void node_install_protos(JSContext *ctx)
            engine treats as worst, because nothing throws until the page's own call does. */
         idl_install_method(ctx, text_proto, "splitText", 1, g_id_split_text);
         idl_install_accessor(ctx, text_proto, "wholeText", js_text_whole, 0, -1);
+        /* §4.2.9: `Text includes Slottable`, and the mixin is one member — `assignedSlot`. A Text node is a
+           slottable exactly like an element, which is what makes an unnamed `<slot>` collect a host's text. */
+        slot_install_slottable_mixin(ctx, text_proto);
         idl_interface_tag(ctx, comment_proto, "Comment");
         {
             /* §4.12 `interface CDATASection : Text` — no members of its own. §4.13

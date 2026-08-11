@@ -1368,12 +1368,9 @@ static void ce_upgrade_document(JSContext *ctx, const char *name, size_t nlen, J
    would answer with whichever attribute happens to print that name FIRST, which for a prefixed attribute is a
    different attribute than the one being written. */
 void custom_elements_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
-                                       const char *val, size_t val_len)
+                                       const char *old, size_t old_len, const char *val, size_t val_len)
 {
     JSValue wrap, def, args[4];
-    size_t old_len = 0;
-    const lxb_char_t *old;
-    lxb_dom_attr_t *old_attr;
     uint32_t i;
 
     if (!g_ready) return;
@@ -1383,20 +1380,16 @@ void custom_elements_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, co
     /* §4.13.3's arguments: (localName, oldValue, newValue, namespace). An attribute that was absent has a NULL
        old value and an attribute being removed a NULL new one, and the page's code branches on exactly that;
        the namespace is null for every attribute an HTML page writes and a URI for the ones the parser moved. */
-    old_attr = dom_attr_get_ns(el, ns, local);
-    old = old_attr ? lxb_dom_attr_value(old_attr, &old_len) : NULL;
     args[0] = JS_NewString(ctx, local);
-    args[1] = old ? JS_NewStringLen(ctx, (const char *)old, old_len) : JS_NULL;
+    args[1] = old ? JS_NewStringLen(ctx, old, old_len) : JS_NULL;
     args[2] = val ? JS_NewStringLen(ctx, val, val_len) : JS_NULL;
     args[3] = ns ? JS_NewString(ctx, ns) : JS_NULL;
     ce_enqueue_args(ctx, wrap, def, CE_CB_ATTR_CHANGED, 4, (JSValueConst *)args);
     for (i = 0; i < 4; i++) JS_FreeValue(ctx, args[i]);
     /* §4.10.18.3: "when a listed form-associated element's `form` attribute is set, changed, or removed, the
-       user agent must reset the form owner of that element". THE NEW VALUE IS HANDED OVER rather than read
-       back off the element: DOM §4.9 runs the attribute change steps BEFORE the value is stored, so an
-       algorithm that reaches through to the element here reads the value the write is replacing. That is the
-       defect that arrives with every operation whose inputs are read at the wrong time, and it is silent
-       because the wrong value is a real value belonging to that element. */
+       user agent must reset the form owner of that element". The new value is handed over because it is the
+       OPERATION's input, which is the rule for every input of a step that could become a job — not because
+       the element cannot be asked. */
     if (!ns && strcmp(local, "form") == 0)
         element_internals_reset_form_owner(ctx, wrap, val, val_len);
     JS_FreeValue(ctx, def);

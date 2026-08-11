@@ -172,6 +172,27 @@ static bool sr_flag(JSContext *ctx, JSValueConst sr, int which)
     return b;
 }
 
+bool shadow_root_slot_assignment_is_manual(JSContext *ctx, const lxb_dom_node_t *n)
+{
+    JSValueConst wrap = node_wrap_peek(n);
+    JSValue slots, v;
+    const char *s;
+    bool manual;
+
+    DCHECK(shadow_root_is(n), "§4.8's slot assignment was asked of a node that is not a shadow root");
+    DCHECK(JS_IsObject(wrap), "a shadow root has no wrapper — attach a shadow root mints one, and it is the "
+                              "only thing that makes one of these nodes");
+    slots = sr_slots(ctx, wrap);
+    DCHECK(JS_IsObject(slots), "a shadow root has no §4.8 record");
+    v = JS_GetPropertyStr(ctx, slots, SR_FIELD[SR_SLOT_ASSIGNMENT]);
+    s = JS_ToCString(ctx, v);
+    manual = s != NULL && strcmp(s, "manual") == 0;
+    if (s) JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, v);
+    JS_FreeValue(ctx, slots);
+    return manual;
+}
+
 /* §4.8's SEVEN getters, over the receiver's record and the node's two C fields. */
 static JSValue js_sr_get(JSContext *ctx, JSValueConst this_val, int magic)
 {

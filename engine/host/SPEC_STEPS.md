@@ -4228,6 +4228,64 @@ the shadow-including root, "find a slot" and the event path all ask it from plac
   being READ (it is a dictionary member, so a getter on it is the page's code) and then ignored,
   because there was nothing for it to select.
 
+### 17.4 §4.2.2 The slot algorithms, and the two triggers whose TIME had to move
+
+**Finding — §4.2.2.3.** "Find a slot" (a slottable asks which slot it goes in) is five steps and the
+third is the one that matters to script: `open` true refuses a CLOSED shadow root, which is why
+`assignedSlot` cannot see out of one. "Find slottables" is the inverse over a slot; "find flattened
+slottables" is that through NESTED slots, which is what `{flatten: true}` means and which the standard
+writes recursively — here it is an explicit stack, because the nesting is the PAGE'S (a component
+inside a component inside a component) and a C recursion over it is a page-controlled C stack.
+
+**Assigning — §4.2.2.4.** "Assign slottables" compares what a slot WOULD hold against what it holds
+and signals only when they differ; that comparison is the whole of when `slotchange` fires.
+
+**Signalling — §4.2.2.5.** "Signal a slot change" appends to the AGENT's signal slots and queues a
+mutation observer microtask, guarded by the agent's `mutation observer microtask queued` flag — which
+is what makes a hundred mutations in one task ONE notification per slot rather than one per mutation.
+The microtask then unsets the flag FIRST, clones the set, empties it, and fires. Both the set and the
+flag are baseline state whose writes the COW delta captures, exactly like custom_elements.c's backup
+element queue.
+
+**And the two triggers had to move in TIME, which is this section's real content.**
+
+  1. **§4.2.3 remove's slot steps run AFTER the detach.** Steps 4-7 recompute a slot's assigned nodes,
+     and doing that while the node is still a child of the host FINDS IT AGAIN — so the list does not
+     change, no `slotchange` is signalled, and removing a slotted child is silent. The engine's tree
+     hook fired only BEFORE a removal (`inserted` 0) because the live-range and NodeIterator
+     pre-remove steps need that position. The list now carries a PHASE with three values and the old
+     parent, which is passed rather than read off the node because by then there is none.
+  2. **§9.4.6's attribute change steps run AFTER the value is stored** — step 2 sets it, step 3 handles
+     the change — and this engine fired its attribute hook BEFORE the write, with a comment saying the
+     standard says so. It does not. That was invisible while the only consumer was
+     `attributeChangedCallback`, which is HANDED both values; it stops being invisible the moment an
+     algorithm re-derives something from the attribute, which is exactly what a slottable's name is.
+     The hook now fires after the write and carries the OLD value across it, copied before the store,
+     because the element no longer has it. A page's `attributeChangedCallback` that reads
+     `this.getAttribute(name)` sees the new value now, which is what every browser does.
+
+### 17.5 Where the slot state lives, and the one walk that had to be guarded
+
+A slot's `assigned nodes` and `manually assigned nodes`, and a slottable's `assigned slot` and
+`manual slot assignment`, are JS Arrays and wrapper slots — never malloc'd C. Two forked arms
+disagree about which nodes a slot holds and a parked flow carries that to the cold tier, which is
+CLAUDE.md's rule for platform data a flow queues; a malloc'd list captured as a pointer reverts the
+pointer and leaks the nodes where the runtime's own GC walk cannot see them.
+
+A slottable's **name is not stored**. §4.2.2 keeps one only because the attribute change steps hold it
+in sync with the `slot` content attribute; reading the attribute answers the same question with no
+second copy to drift. The change STEPS still exist, because their side effects — "assign slottables
+for element's assigned slot" then "assign a slot for element" — are the whole reason the standard
+hooks the attribute.
+
+**"Assign slottables for a tree with node's root" runs on EVERY insertion**, and taken literally that
+is a walk of the whole tree per inserted node — quadratic in the page's own markup, paid by every
+document whether or not it has a shadow root. It is skipped when the root is not a shadow root, and
+that is a DERIVATION rather than a shortcut: "find slottables" returns the empty list for a slot whose
+root is not a shadow root, so every slot in such a tree computes empty, and a slot can only HAVE
+assigned nodes while its root is a shadow root — which the remove steps clear on the way out. The
+walk's whole effect is therefore empty, and the common case costs one node-type check.
+
 ### 17.6 What is honestly ABSENT, by name
 
 - **`ShadowRootInit`'s `customElementRegistry`.** Its type is `CustomElementRegistry?`, and this
@@ -4251,3 +4309,17 @@ the shadow-including root, "find a slot" and the event path all ask it from plac
   shadow root to answer with. It answers "this's target element's shadow root, if its **available to
   element internals** is true" — the field step 9 above now sets — and lands with the next diff on
   that component rather than this one.
+- **`assignedNodes({flatten: true})` is not a step machine.** The flattened walk is iterative (no C
+  recursion, because the nesting is the page's) but it is one C activation, so a very deep component
+  tree holds the scheduler for the length of one call. It becomes a declared machine the same way
+  `innerHTML`'s serialiser did.
+- **Retargeting (§2.9's shadow-adjusted target) and `composedPath`'s closed-tree hiding.** The event
+  PATH is now correct — §4.8's get-the-parent stops a non-composed event at the shadow root and hands
+  a composed one the host — but every path item's `target` is still path[0], where the standard
+  retargets it against each item's root, and `composedPath()` answers every entry rather than hiding
+  the ones behind a closed root. Both need the path to become a list of ITEMS (invocation target,
+  shadow-adjusted target, root-of-closed-tree, slot-in-closed-tree) rather than a list of targets,
+  which is a change to the §2.9 machine's state and its own next diff.
+- **`slotchange` on a slot in a document with no shadow root**, which cannot happen — a slot outside a
+  shadow tree has no assigned nodes by construction — and is named here only because it is the one
+  case the guarded tree walk in 17.5 skips.

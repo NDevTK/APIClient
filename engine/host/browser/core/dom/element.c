@@ -56,6 +56,7 @@ static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
 #include "core/dom/names.h"   /* §1.4's name predicates, shared with createElement and the custom-element registry */
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
+#include "core/dom/slot.h"
 #include "core/dom/document.h"
 
 /* IDENTITY AND THE TREE BASE LIVE IN node.c — one wrapper table for every node kind, because a tree whose only
@@ -1518,24 +1519,39 @@ static int g_ts_n, g_ts_cap;
 
 /* §4.2.3's LIVE-RANGE steps, both directions: the pre-remove steps before a node leaves the tree, and insert's
    step 4 after one enters it. */
-static void element_range_steps(JSContext *ctx, lxb_dom_node_t *n, int inserted)
+static void element_range_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase)
 {
-    if (inserted) range_did_insert(ctx, n);
-    else          range_pre_remove(ctx, n);
+    (void)parent;
+    if (phase == NODE_TREE_INSERTED)      range_did_insert(ctx, n);
+    else if (phase == NODE_TREE_REMOVING) range_pre_remove(ctx, n);
 }
 
 /* §4.2.3's remove, step "for each NodeIterator object iterator whose root's node document is node's node
    document, run the NodeIterator pre-remove steps". It is a tree hook of its own rather than a line inside the
    one below, because they are two independent steps of the standard's algorithm and the one below returns early
    for a node that is not connected — which a NodeIterator rooted at a detached subtree very much is. */
-static void element_iterator_pre_remove(JSContext *ctx, lxb_dom_node_t *n, int inserted)
+static void element_iterator_pre_remove(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase)
 {
-    if (!inserted) node_iterator_pre_remove(ctx, n);
+    (void)parent;
+    if (phase == NODE_TREE_REMOVING) node_iterator_pre_remove(ctx, n);
 }
 
-static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, int inserted)
+/* §4.2.3's SLOT steps, both sides of the detach — insert's two and remove's three. Registered between the
+   pre-remove steps and the removing steps because that is where the standard's own `remove` runs them: after
+   step 3's detach and before step 8's removing steps. */
+static void element_slot_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase)
 {
-    (void)ctx;
+    if (phase == NODE_TREE_INSERTED)     slot_insert_steps(ctx, n, parent);
+    else if (phase == NODE_TREE_REMOVED) slot_removed_steps(ctx, n, parent);
+}
+
+static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, lxb_dom_node_t *parent, int phase)
+{
+    int inserted = phase == NODE_TREE_INSERTED;
+    (void)ctx; (void)parent;
+    /* §4.13's insertion and removing steps are the two SIDES of the tree change, so the post-detach phase is
+       not one of them: it exists for §4.2.2's slot steps, which are a different component's. */
+    if (phase == NODE_TREE_REMOVED) return;
     if (!root || !node_is_connected(root)) return;
     if (g_ts_n == g_ts_cap) {
         int want = g_ts_cap ? g_ts_cap * 2 : 8;
@@ -1705,7 +1721,7 @@ static JSValue js_el_remove_attribute_node(JSContext *ctx, JSValueConst this_val
    `setAttribute`, a reflected IDL attribute, a boolean reflection unsetting itself and innerHTML's parse all
    reach the tree through one function, and a per-caller notification would miss whichever one was added last. */
 static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
-                                 const char *val, size_t val_len)
+                                 const char *old_val, size_t old_len, const char *val, size_t val_len)
 {
     /* §4.13.3's attributeChangedCallback BELONGS TO THE ELEMENT'S DOCUMENT, for the reason §4.2.3's steps do:
        the definition set is that document's, so looking it up in the mutating realm finds nothing for an
@@ -1716,7 +1732,10 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
     DCHECK(rctx != NULL,
            "an attribute was set on an element in a document no realm was installed for — §4.13.3's reaction "
            "resolves its definition in that document's registry, so build its realm");
-    custom_elements_attribute_changed(rctx, el, ns, local, val, val_len);
+    custom_elements_attribute_changed(rctx, el, ns, local, old_val, old_len, val, val_len);
+    /* §4.2.2's two attribute change steps — a slottable's `slot` and a slot's `name`. They re-derive the name
+       from the attribute that is NOW there, which is why the whole hook had to move after the write. */
+    slot_attribute_changed(rctx, el, ns, local);
 }
 
 JSValue element_wrap(JSContext *ctx, lxb_dom_element_t *el)
@@ -1835,6 +1854,7 @@ void element_init(JSContext *ctx)
        the hook list runs in registration order, so this order IS the standard's. */
     node_add_tree_hook(element_range_steps);
     node_add_tree_hook(element_iterator_pre_remove);
+    node_add_tree_hook(element_slot_steps);
     node_add_tree_hook(element_tree_changed);
     idl_set_tree_steps(&ELEMENT_TREE_STEPS);
     dom_cow_set_attr_hook(element_attr_changed);
@@ -1904,6 +1924,8 @@ void element_install_proto(JSContext *ctx)
     /* §4.9's two Shadow DOM members — `attachShadow` and the `shadowRoot` getter, which the interface
        declares on Element and not on HTMLElement. */
     shadow_root_install_element_members(ctx, proto);
+    /* §4.2.9: `Element includes Slottable`. */
+    slot_install_slottable_mixin(ctx, proto);
     /* GlobalEventHandlers is NOT on Element — the IDL mixes it into HTMLElement, which is where it is
        installed now that that interface exists. */
     JS_SetClassProto(ctx, g_element_class, proto);
@@ -1937,6 +1959,7 @@ void element_free(JSContext *ctx)
     if (g_attrs_key != JS_ATOM_NULL) { JS_FreeAtom(ctx, g_attrs_key); g_attrs_key = JS_ATOM_NULL; }
     document_fragment_free(ctx);
     shadow_root_free(ctx);
+    slot_free(ctx);
     idl_indexed_free(ctx);
     /* the prototypes are the REALMS' — each is released with its context */
     g_reflect_n = 0;

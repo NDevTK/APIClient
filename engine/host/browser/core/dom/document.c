@@ -40,6 +40,7 @@
 #include "core/dom/page_visibility.h"
 #include "core/dom/document_fragment.h"
 #include "core/dom/shadow_root.h"
+#include "core/dom/slot.h"
 #include "core/dom/document_type.h"
 #include "core/dom/dom_implementation.h"
 #include "core/idl_args.h"
@@ -1446,6 +1447,7 @@ void document_init(JSContext *ctx)
     document_declare_members(ctx);
     document_fragment_init(ctx);   /* §4.7, before any fragment is wrapped as a bare Node */
     shadow_root_init(ctx);         /* §4.8, whose prototype chains to §4.7's — declared after it */
+    slot_init(ctx);                /* §4.2.2's slots, which only exist inside a §4.8 tree */
     document_type_init(ctx);       /* §4.6, before the parser's doctype is wrapped as a bare Node */
     dom_implementation_init(ctx);  /* §4.5.1, which every document's record builds one of */
     realm_declare_intrinsic(document_install_proto);

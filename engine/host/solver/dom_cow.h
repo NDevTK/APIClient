@@ -25,16 +25,19 @@ void dom_cow_set_ctx(JSContext *ctx);
    <script> is prepared, a custom element is upgraded, its disconnected reaction is enqueued); this file owns
    the one place a tree write happens, which is the only place that cannot be forgotten. `inserted` is 1 after
    a node entered the tree and 0 BEFORE one leaves it, because "was it connected" is only answerable then. */
-void dom_cow_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, int inserted));
-/* §4.9's ATTRIBUTE CHANGE STEPS, fired by the same chokepoint for the same reason. Called BEFORE the write,
-   because the OLD value is what the element still holds; `val` is NULL for a removal.
+void dom_cow_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase));
+/* §4.9's ATTRIBUTE CHANGE STEPS, fired by the same chokepoint for the same reason. Called AFTER the write —
+   §9.4.6 step 2 stores the value and step 3 handles the change, in that order — so BOTH values are passed and
+   the old one is copied across the write rather than read back off an element that no longer has it. `val` is
+   NULL for a removal and `old_val` is NULL for an attribute that was absent, which is the null a page's
+   attributeChangedCallback branches on.
    THE IDENTITY IS §4.9'S OWN — (namespace, LOCAL name), `ns` NULL for the null namespace. §4.9's "handle
    attribute changes" step 3 passes the namespace to the attribute change steps and step 2 passes it to
    §4.13.3's `attributeChangedCallback` as its FOURTH argument, and DOM's own ID change steps fire only when
    "localName is id AND namespace is null" — so a hook carrying a qualified name alone cannot answer either
    question for a namespaced attribute, and reports an `svg:id` as the element's ID. */
 void dom_cow_set_attr_hook(void (*fn)(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
-                                      const char *val, size_t val_len));
+                                      const char *old_val, size_t old_len, const char *val, size_t val_len));
 
 /* THE TREE VERSION. Every structural change to the document — an insert, a removal, and the SWAP that makes
    one flow's delta the visible tree — advances it. It is what a live collection's index cache is keyed on:

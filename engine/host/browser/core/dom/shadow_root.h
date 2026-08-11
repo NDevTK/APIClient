@@ -25,6 +25,10 @@ lxb_dom_element_t *shadow_root_host(const lxb_dom_node_t *n);
 /* §4.8's MODE, in lexbor's own enum. Asked by `element.shadowRoot` (a closed root answers null), by "find a
    slot"'s `open` flag, and by the event path's closed-tree levels. */
 bool shadow_root_is_open(const lxb_dom_node_t *n);
+/* §4.8's SLOT ASSIGNMENT, as the one question §4.2.2 asks of it: is this tree's assignment "manual". Named for
+   the question rather than for the field, because "named" is the default and every algorithm branches on the
+   other one. */
+bool shadow_root_slot_assignment_is_manual(JSContext *ctx, const lxb_dom_node_t *n);
 
 /* "SHADOW-INCLUDING ROOT" — DOM §4.2: the root's host's shadow-including root when the root is a shadow root,
    otherwise the root. What `getRootNode({composed:true})` answers and what §4.4's `isConnected` is stated

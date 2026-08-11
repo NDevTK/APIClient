@@ -37,6 +37,7 @@
 #include "core/html/html_iframe.h"
 #include "core/events/event_target.h"
 #include "core/html/custom_elements.h"
+#include "core/dom/slot.h"
 #include "core/html/element_internals.h"
 #include "core/html/html_element.h"
 #include "core/css/css_style_declaration.h"
@@ -524,6 +525,14 @@ void html_element_install_protos(JSContext *ctx)
                                 JS_UNDEFINED, JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
         JS_FreeAtom(ctx, a);
         JS_FreeValue(ctx, tpl);
+    }
+
+    /* HTML §4.12.4's three members go on HTMLSlotElement and nowhere else, handed the prototype for the same
+       reason the forms component is: this file owns the table, that one owns §4.2.2's algorithms. */
+    {
+        JSValue sp = html_iface_proto(ctx, "HTMLSlotElement");
+        slot_install_slot_members(ctx, sp);
+        JS_FreeValue(ctx, sp);
     }
 
     /* §4.10's members go on the interfaces that DECLARE them, which is why the forms component is handed the

@@ -68,9 +68,15 @@ void node_install_child_mixin(JSContext *ctx, JSValueConst proto);
 void node_install_nonelement_parent_mixin(JSContext *ctx, JSValueConst proto);
 void node_install_parent_mixin(JSContext *ctx, JSValueConst proto);
 /* §4.2.3's insertion/removing steps, as the LIST the standard writes: a component REGISTERS one and the
-   chokepoint runs them all, in registration order. `inserted` is 1 after a node entered the tree and 0 BEFORE
-   one leaves it. */
-typedef void (*NodeTreeHook)(JSContext *ctx, lxb_dom_node_t *n, int inserted);
+   chokepoint runs them all, in registration order.
+   THREE PHASES, not two, because §4.2.3's `remove` has work on BOTH sides of the detach and one of them cannot
+   be moved. Steps 1-2's live-range and NodeIterator pre-remove steps read the node's position and must run
+   BEFORE it leaves; steps 4-7's SLOT steps recompute a slot's assigned nodes and must run AFTER, or the
+   recomputation still finds the node being removed and nothing changes — so the removal fires no `slotchange`.
+   `parent` is the node's parent, PASSED rather than read off the node, because by NODE_TREE_REMOVED there is
+   none left to read. */
+enum { NODE_TREE_REMOVED = -1, NODE_TREE_REMOVING = 0, NODE_TREE_INSERTED = 1 };
+typedef void (*NodeTreeHook)(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase);
 void node_add_tree_hook(NodeTreeHook fn);
 /* THE PRE-ORDER SUCCESSOR within `root`'s subtree, or NULL at the end — the one traversal primitive the spec's
    tree-order algorithms need. Exported for the same reason it exists: having it once is what keeps every
