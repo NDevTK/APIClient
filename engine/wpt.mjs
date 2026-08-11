@@ -528,7 +528,9 @@ const HARNESS = join(WPT, "resources", "testharness.js");
    cannot exert back-pressure, so the server can never block on it whatever it writes and however busy this
    driver is. READY is then read back from that file rather than off a pipe. The log is KEPT, not discarded —
    it is what named the missing stash — and its path is printed so the next reader can look. */
-const SERVER_LOG = join(WORK, "wptserve.log");
+/* It lives beside THIS RUN'S binary, not in .work: the log is an artifact of one run, and a fixed path in a
+   shared work directory is one two concurrent runs would interleave and then read as one server's story. */
+const SERVER_LOG = join(dirname(bin), "wptserve.log");
 writeFileSync(SERVER_LOG, "");
 const serverLogFd = openSync(SERVER_LOG, "a");
 const server = spawn("python3", [join(ENGINE, "wptserve.py"), WPT, "0"],
