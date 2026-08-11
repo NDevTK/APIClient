@@ -155,9 +155,20 @@ static bool set_next(const char *v, const char **p, const char *end, const char 
 }
 
 /* §7.1 "run the update steps": re-serialise the set and write it through the DOM chokepoint, so the write is
-   per-flow and runs the attribute change steps exactly like a setAttribute the page wrote itself. */
+   per-flow and runs the attribute change steps exactly like a setAttribute the page wrote itself.
+ *
+ * STEP 1 IS AN EARLY RETURN, AND IT WAS NOT HERE. "If get an attribute by namespace and local name given null,
+ * set's attribute name, and set's element returns null AND set's token set is empty, then return." So an
+ * element with no `class` attribute at all, asked for a token set that ends up empty, gets NO attribute — where
+ * this wrote `class=""` and thereby CREATED one. That is a visible difference: `hasAttribute("class")` flips,
+ * the serialization grows an attribute, and every layer below sees a write that the standard says does not
+ * happen — an attribute change step, a mutation record, a custom element's attributeChangedCallback, and an
+ * entry in the running flow's DOM delta. */
 static void list_write(lxb_dom_element_t *el, const char *attr, const char *val, size_t len)
 {
+    size_t have = 0;
+    if (len == 0 && !lxb_dom_element_get_attribute(el, (const lxb_char_t *)attr, strlen(attr), &have))
+        return;                       /* update steps, step 1 */
     dom_cow_set_attribute(el, attr, val, len, JS_UNDEFINED);
 }
 
@@ -299,6 +310,16 @@ static JSValue js_tl_mutate(JSContext *ctx, JSValueConst this_val, int argc, JSV
     }
     v = list_value(el, attr, &vlen);
     present = value_has(v, vlen, a[0], alen[0]);
+    /* §7.1 toggle STEPS 3.2 AND 5 RETURN WITHOUT RUNNING THE UPDATE STEPS, and that is the whole difference
+       between a no-op and a write. `toggle(t, true)` on a token that is already there answers true at step 3.2;
+       `toggle(t, false)` on one that is absent answers false at step 5. Neither touches the token set, so
+       neither may touch the attribute — this ran the update steps regardless, so a no-op toggle rewrote `class`
+       with its own current value and produced an attribute change step, a mutation record and a delta entry a
+       browser never produces. The condition is exactly "force was given and it already agrees with reality". */
+    if (magic == 2 && force_given && force == present) {
+        result = JS_NewBool(ctx, force);
+        goto out;
+    }
     /* §7.1 toggle's answer is whether the token is present AFTERWARDS, and with `force` it is force itself. */
     want = (magic == 0) ? true
          : (magic == 1) ? false
