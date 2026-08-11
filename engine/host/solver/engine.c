@@ -656,6 +656,14 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
             DCHECK(body != NULL, "an injected script's body did not arrive as text");
             if (body) { engine_queue_script(body); JS_FreeCString(ctx, body); }
         } else {
+            /* A SYNCHRONOUS ANSWER IS TAKEN, NEVER DRAINED, and that is asserted here because this branch is
+               where it would land if it were not. The machine that asked resumes through its park and consumes
+               the answer with engine_host_take; the entry is gone before any drain sees it. A HOSTREQ that
+               reached this line would be settled as if it were a fetch — through a `resolve` capability it does
+               not have, since nothing on that path ever made a promise. */
+            DCHECK(kind == FLOW_PENDING_RESOLVE,
+                   "a synchronous host request's answer reached the fetch drain — its asking machine never "
+                   "resumed to take it, so its parked continuation is the thing to look for");
             /* AS A FLOW, not a JS_Call. The delivery settles the page's promise, and 27.2.1.3.2 step 8 reads
                `Get(resolution, "then")` off the Response — an ordinary object whose prototype the page owns, so
                `Object.prototype.then = { get(){…} }` makes that read the page's code. Out of this drain it ran
