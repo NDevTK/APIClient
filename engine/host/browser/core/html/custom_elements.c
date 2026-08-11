@@ -226,7 +226,7 @@ static JSValue ce_find(JSContext *ctx, const char *name, size_t len)
    the DOM's own predicate and lives with its sibling in core/dom/names.c rather than being re-derived here.
    The hyphen requirement is still what guarantees a custom name cannot collide with a future built-in; the
    reserved list is the eight names that already contain one and are already taken. */
-static bool ce_name_valid(const char *name, size_t len)
+bool custom_elements_name_is_valid(const char *name, size_t len)
 {
     /* §4.13.1's list, verbatim: the SVG and MathML element names that contain a hyphen. */
     static const char *const RESERVED[] = {
@@ -270,7 +270,7 @@ static int ce_state_of(JSContext *ctx, JSValueConst wrap)
     {
         size_t len = 0;
         const lxb_char_t *tag = lxb_dom_element_local_name(lxb_dom_interface_element(n), &len);
-        if (tag && len && ce_name_valid((const char *)tag, len)) return CE_STATE_UNDEFINED;
+        if (tag && len && custom_elements_name_is_valid((const char *)tag, len)) return CE_STATE_UNDEFINED;
     }
     return CE_STATE_UNCUSTOMIZED;
 }
@@ -1286,7 +1286,7 @@ static bool ce_upgradable_name(lxb_dom_element_t *el)
 {
     size_t len = 0;
     const lxb_char_t *tag = lxb_dom_element_local_name(el, &len);
-    return tag != NULL && len != 0 && ce_name_valid((const char *)tag, len);
+    return tag != NULL && len != 0 && custom_elements_name_is_valid((const char *)tag, len);
 }
 
 void custom_elements_disconnected(JSContext *ctx, lxb_dom_element_t *el)
@@ -1421,7 +1421,7 @@ static JSValue js_ce_when_defined(JSContext *ctx, JSValueConst this_val, int arg
     (void)this_val; (void)magic; (void)argc;
     nm = JS_ToCStringLen(ctx, &nlen, argv[0]);   /* a real string by now: the declaration converted it */
     if (!nm) return JS_EXCEPTION;
-    if (!ce_name_valid(nm, nlen)) {              /* step 1: a REJECTED promise, never a synchronous throw */
+    if (!custom_elements_name_is_valid(nm, nlen)) {              /* step 1: a REJECTED promise, never a synchronous throw */
         JSValue exc;
 
         JS_FreeCString(ctx, nm);
@@ -1644,7 +1644,7 @@ static int ce_define_checks(JSContext *ctx, int argc, JSValueConst *argv)
     }
     nm = JS_ToCStringLen(ctx, &nlen, argv[0]);   /* a real string by now: the declaration converted it */
     if (!nm) return -1;
-    if (!ce_name_valid(nm, nlen)) {              /* step 2 */
+    if (!custom_elements_name_is_valid(nm, nlen)) {              /* step 2 */
         JS_FreeCString(ctx, nm);
         JS_ThrowDOMException(ctx, "SyntaxError", "not a valid custom element name");
         return -1;

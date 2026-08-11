@@ -39,6 +39,7 @@
 #include "core/frame/navigable.h"
 #include "core/dom/page_visibility.h"
 #include "core/dom/document_fragment.h"
+#include "core/dom/shadow_root.h"
 #include "core/dom/document_type.h"
 #include "core/dom/dom_implementation.h"
 #include "core/idl_args.h"
@@ -1444,6 +1445,7 @@ void document_init(JSContext *ctx)
     g_ready_slot = realm_value_declare(ctx, "HTML current document readiness");
     document_declare_members(ctx);
     document_fragment_init(ctx);   /* §4.7, before any fragment is wrapped as a bare Node */
+    shadow_root_init(ctx);         /* §4.8, whose prototype chains to §4.7's — declared after it */
     document_type_init(ctx);       /* §4.6, before the parser's doctype is wrapped as a bare Node */
     dom_implementation_init(ctx);  /* §4.5.1, which every document's record builds one of */
     realm_declare_intrinsic(document_install_proto);
@@ -1701,6 +1703,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     collections_install(ctx, global);       /* §4.2.10 NodeList, §4.2.11 HTMLCollection */
     attr_install(ctx, global);              /* §4.9.1/§4.9.2 NamedNodeMap and Attr */
     document_fragment_install(ctx, global); /* §4.7 DocumentFragment, which IS constructible */
+    shadow_root_install(ctx, global);      /* §4.8 ShadowRoot */
     document_type_install(ctx, global);     /* §4.6 DocumentType */
     dom_implementation_install(ctx, global);/* §4.5.1 DOMImplementation */
     {

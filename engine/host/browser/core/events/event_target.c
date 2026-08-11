@@ -637,7 +637,7 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
     X("onpause", EH_GLOBAL) X("onplay", EH_GLOBAL) X("onplaying", EH_GLOBAL) X("onprogress", EH_GLOBAL | EH_XHR)               \
     X("onratechange", EH_GLOBAL) X("onreset", EH_GLOBAL) X("onresize", EH_GLOBAL) X("onscroll", EH_GLOBAL)            \
     X("onscrollend", EH_GLOBAL) X("onsecuritypolicyviolation", EH_GLOBAL) X("onseeked", EH_GLOBAL)                  \
-    X("onseeking", EH_GLOBAL) X("onselect", EH_GLOBAL) X("onslotchange", EH_GLOBAL) X("onstalled", EH_GLOBAL)         \
+    X("onseeking", EH_GLOBAL) X("onselect", EH_GLOBAL) X("onslotchange", EH_GLOBAL | EH_SHADOW_ROOT) X("onstalled", EH_GLOBAL)         \
     X("onsubmit", EH_GLOBAL) X("onsuspend", EH_GLOBAL) X("ontimeupdate", EH_GLOBAL) X("ontoggle", EH_GLOBAL)          \
     X("onvolumechange", EH_GLOBAL) X("onwaiting", EH_GLOBAL) X("onwheel", EH_GLOBAL)                                \
     /* DocumentAndElementEventHandlers — §8.1.7.2.3, on Document and Element (and Window, which mixes it in). */\

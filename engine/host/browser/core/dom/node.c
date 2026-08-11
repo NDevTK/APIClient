@@ -46,6 +46,7 @@
 #include "solver/concolic.h"
 #include "solver/attr_shadow.h"
 #include "core/dom/node.h"
+#include "core/dom/shadow_root.h"
 #include "core/dom/collections.h"
 #include "core/dom/range.h"
 #include "quickjs-step.h"
@@ -151,12 +152,31 @@ lxb_dom_node_t *node_of(JSValueConst v)
     return JS_GetOpaque(v, g_node_class);
 }
 
+/* §4.7: A ShadowRoot IS A DocumentFragment. Lexbor gives a shadow root its own node type — which is what makes
+   "is this a shadow root" answerable with no realm in hand, and which every §4.8 algorithm needs — so the two
+   facts are stated once, here, rather than as a `||` at each of the ten places the standard says
+   "DocumentFragment" and means both. A rule written over a DocumentFragment covers a shadow root; a rule about
+   the SHADOW ROOT asks shadow_root_is. */
+bool node_is_document_fragment(const lxb_dom_node_t *n)
+{
+    return n != NULL && (n->type == LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT ||
+                         n->type == LXB_DOM_NODE_TYPE_SHADOW_ROOT);
+}
+
+/* THE NODE TYPE THE STANDARD EXPOSES, which is not always lexbor's. §4.4's `nodeType` is an interface-level
+   fact and ShadowRoot's interface is DocumentFragment's, so a shadow root answers 11 — lexbor's own 14 is an
+   implementation detail of how this engine tells one apart and is never a number a page sees. */
+static int node_spec_type(const lxb_dom_node_t *n)
+{
+    return (n->type == LXB_DOM_NODE_TYPE_SHADOW_ROOT) ? (int)LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT : (int)n->type;
+}
+
 /* §4.4 nodeType — the numeric constants a page switches on. */
 static JSValue js_node_get_type(JSContext *ctx, JSValueConst this_val)
 {
     lxb_dom_node_t *n = node_of(this_val);
     if (!n) return JS_UNDEFINED;
-    return JS_NewInt32(ctx, (int)n->type);
+    return JS_NewInt32(ctx, node_spec_type(n));
 }
 
 /* §4.4 nodeName: an element's is its qualified name uppercased by the HTML serialiser Lexbor already applies;
@@ -170,6 +190,9 @@ static JSValue js_node_get_name(JSContext *ctx, JSValueConst this_val)
     if (!n) return JS_UNDEFINED;
     if (n->type == LXB_DOM_NODE_TYPE_TEXT)    return JS_NewString(ctx, "#text");
     if (n->type == LXB_DOM_NODE_TYPE_COMMENT) return JS_NewString(ctx, "#comment");
+    /* §4.4's table gives a DocumentFragment "#document-fragment", and a ShadowRoot IS one — lexbor's
+       lxb_dom_node_name has no row for its own shadow-root type and would answer the empty string. */
+    if (n->type == LXB_DOM_NODE_TYPE_SHADOW_ROOT) return JS_NewString(ctx, "#document-fragment");
     s = lxb_dom_node_name(n, &len);
     return s ? JS_NewStringLen(ctx, (const char *)s, len) : JS_NewString(ctx, "");
 }
@@ -254,6 +277,23 @@ static JSValue node_get_parent(JSContext *ctx, JSValueConst target, JSValueConst
                "a document answered its get the parent with something that is not a Window and is not null");
         return JS_DupValue(ctx, win);
     }
+    /* §4.8: "A shadow root's get the parent algorithm, given an event, returns null if event's composed flag is
+       unset and shadow root is the root of event's path's FIRST event path item's invocation target; otherwise
+       shadow root's host." That condition is the whole of what stops a non-composed event escaping the tree it
+       was dispatched in — and its "first path item" half is why a non-composed event dispatched AT THE HOST
+       still reaches the document: the host's root is not this shadow root. */
+    if (shadow_root_is(n)) {
+        if (!event_composed(ctx, ev)) {
+            JSValue first = event_path_first(ctx, ev);
+            lxb_dom_node_t *fn = node_of(first);
+            bool inside = fn != NULL && node_root(fn) == n;
+
+            JS_FreeValue(ctx, first);
+            if (inside)
+                return JS_NULL;
+        }
+        return node_wrap(ctx, lxb_dom_interface_node(shadow_root_host(n)));
+    }
     return node_wrap(ctx, n->parent);
 }
 
@@ -317,7 +357,7 @@ void node_add_tree_hook(NodeTreeHook fn)
    than the fork that is running, so another flow's baseline may hold it. */
 void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref)
 {
-    if (node->type == LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT) {
+    if (node_is_document_fragment(node)) {
         lxb_dom_node_t *c, *next;
         for (c = node->first_child; c; c = next) {
             next = c->next;
@@ -800,17 +840,21 @@ static JSValue js_pi_target(JSContext *ctx, JSValueConst this_val, int magic)
  * recursive C walk is an unbounded C stack in a engine whose whole point is that the C stack is flat. They are
  * explicit cursor walks with an explicit paired stack. */
 
-/* §4.4 "root": the topmost inclusive ancestor. Shadow trees do not exist in this engine yet, so a node's root
-   and its SHADOW-INCLUDING root are the same node. */
+/* §4.4 "root": the topmost inclusive ancestor. A node inside a shadow tree roots at the SHADOW ROOT, whose own
+   parent is null — climbing out of it is §4.2's shadow-INCLUDING root, which is a different question and lives
+   in shadow_root.c beside the host it has to read. */
 lxb_dom_node_t *node_root(lxb_dom_node_t *n)
 {
     while (n->parent) n = n->parent;
     return n;
 }
 
+/* §4.4: "connected: a node is connected if its SHADOW-INCLUDING root is a document". The distinction is the
+   whole of what makes a custom element inside a shadow tree receive `connectedCallback`: its own root is the
+   shadow root, and only climbing to the host's root reaches the document. */
 bool node_is_connected(const lxb_dom_node_t *n)
 {
-    return n && node_root((lxb_dom_node_t *)n)->type == LXB_DOM_NODE_TYPE_DOCUMENT;
+    return n && shadow_root_shadow_including_root((lxb_dom_node_t *)n)->type == LXB_DOM_NODE_TYPE_DOCUMENT;
 }
 
 /* §4.2 "inclusive ancestor": walk UP from the descendant, which is O(depth) with no allocation, rather than
@@ -913,8 +957,10 @@ static JSValue js_node_facts(JSContext *ctx, JSValueConst this_val, int magic)
     switch (magic) {
     case 0:
         /* §4.4: connected iff the shadow-including root is a DOCUMENT. A node a page has created but not yet
-           inserted is NOT connected, which is the difference a component-mount check is asking about. */
-        return JS_NewBool(ctx, node_root(n)->type == LXB_DOM_NODE_TYPE_DOCUMENT);
+           inserted is NOT connected, which is the difference a component-mount check is asking about. The
+           comment said "shadow-including" while the code read the plain root, which for a node inside a shadow
+           tree is the shadow root and never a document — one implementation, so the two cannot disagree. */
+        return JS_NewBool(ctx, node_is_connected(n));
     case 1:
         /* §4.4: a Document's ownerDocument is null; every other node's is its node document. */
         if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT) return JS_NULL;
@@ -1184,20 +1230,20 @@ static const IdlStepDecl NODE_POS_STEP = {
     "DOM §4.4 Node.compareDocumentPosition", NODE_POS_STEPS
 };
 
-/* §4.4 getRootNode(optional GetRootNodeOptions options = {}).
+/* §4.4 getRootNode(optional GetRootNodeOptions options = {}) — "return this's shadow-including root if
+ * options["composed"] is true; otherwise this's root".
  *
- * The answer never depends on the option: `composed` chooses between the root and the SHADOW-INCLUDING root,
- * and with no shadow trees in this engine those are the same node. Reading it is still the page's code —
- * `getRootNode({ get composed(){ … } })` is a getter, and a Proxy makes even a plain object one — so the read
- * is a REQUEST, and the declaration is what performs it: by the time this body runs the dictionary is a plain
- * engine-built object and there is no user code left to reach. Skipping the read because the result would not
- * change is the shortcut this file does not take. It was a whole hand-rolled machine before the IDL dictionary
- * conversion could express a typed member; a second implementation of a request the machine already makes. */
+ * Reading the option is the page's code — `getRootNode({ get composed(){ … } })` is a getter, and a Proxy makes
+ * even a plain object one — so the read is a REQUEST, and the declaration is what performs it: by the time this
+ * body runs the dictionary is a plain engine-built object and there is no user code left to reach. */
 static JSValue js_node_root(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     lxb_dom_node_t *n = node_of(this_val);
-    (void)argc; (void)argv; (void)magic;
-    return n ? node_wrap(ctx, node_root(n)) : JS_UNDEFINED;
+    (void)magic;
+    if (!n) return JS_UNDEFINED;
+    if (argc > 0 && idl_dict_bool(ctx, argv[0], "composed"))
+        return node_wrap(ctx, shadow_root_shadow_including_root(n));
+    return node_wrap(ctx, node_root(n));
 }
 
 /* §4.4 normalize — remove empty Text nodes and merge adjacent ones. A page calls it before comparing or
@@ -1597,7 +1643,7 @@ static bool node_is_parent_node(const lxb_dom_node_t *n)
 {
     return n && (n->type == LXB_DOM_NODE_TYPE_ELEMENT ||
                  n->type == LXB_DOM_NODE_TYPE_DOCUMENT ||
-                 n->type == LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT);
+                 node_is_document_fragment(n));
 }
 
 /* magic 0 = children, 1 = firstElementChild, 2 = lastElementChild, 3 = childElementCount. `children` is a LIVE
@@ -1953,7 +1999,7 @@ static const JSCFunctionListEntry js_node_consts[] = {
    property slot, so a source parked in the DOM as text and later read back into a real sink is still solved. */
 static bool node_has_children_as_text(const lxb_dom_node_t *n)
 {
-    return n->type == LXB_DOM_NODE_TYPE_ELEMENT || n->type == LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT;
+    return n->type == LXB_DOM_NODE_TYPE_ELEMENT || node_is_document_fragment(n);
 }
 
 /* §4.4 textContent's READ — A MACHINE, and the same shape as §8.4's serialiser: the answer is the concatenated
@@ -2215,6 +2261,21 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
         g_wrap_n++;
     }
     return obj;
+}
+
+/* THE WRAPPER THIS NODE ALREADY HAS, or JS_UNDEFINED — the same lookup node_wrap opens with, without the
+   allocation that follows it. A component asking a question whose answer is kept on a wrapper (§4.9's shadow
+   root association) must not MINT one to find out: the parser inserts every node in the document through the
+   tree walk that asks, and minting there would put a wrapper in the identity map for every node in the page.
+   BORROWED — the map's own reference outlives any caller, because it is released only when the node dies. */
+JSValueConst node_wrap_peek(const lxb_dom_node_t *n)
+{
+    unsigned slot;
+
+    if (!n || !g_wrap_cap)
+        return JS_UNDEFINED;
+    slot = node_wrap_slot(g_wraps, g_wrap_cap, n);
+    return g_wraps[slot].n ? g_wraps[slot].obj : JS_UNDEFINED;
 }
 
 /* REMOVE an entry, keeping the probe chains intact. Open addressing with linear probing cannot simply blank a

@@ -133,6 +133,12 @@ JSValue custom_elements_definition_of_element(JSContext *ctx, JSValueConst wrap)
 /* DOM §4.9's custom element state for an element — one of the five CE_STATE_* values. §4.13.7's
    `attachInternals` step 6 branches on exactly it. */
 int custom_elements_state_of_element(JSContext *ctx, JSValueConst wrap);
+/* HTML §4.13.1's "valid custom element name" — the PotentialCustomElementName production plus the reserved
+   list, over UTF-8 bytes. Public because DOM §4.8's "valid shadow host name" is stated as "a valid custom
+   element name, or one of eighteen built-ins": a second copy of the production beside it would be a second
+   answer to which names may host a shadow tree.*/
+bool custom_elements_name_is_valid(const char *name, size_t len);
+
 /* §4.13's "element is a form-associated custom element": it carries a definition whose form-associated field
    is true. The predicate every ElementInternals form member throws a NotSupportedError on. */
 bool custom_elements_is_form_associated(JSContext *ctx, JSValueConst wrap);

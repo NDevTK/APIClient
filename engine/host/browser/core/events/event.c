@@ -183,6 +183,31 @@ void event_set_path(JSContext *ctx, JSValueConst ev, JSValueConst path)
     JS_FreeValue(ctx, slots);
 }
 
+/* §2.2's COMPOSED FLAG, and §2.9's FIRST EVENT PATH ITEM — the two halves DOM §4.8's get-the-parent condition
+   needs off the EVENT ("returns null if event's composed flag is unset and shadow root is the ROOT of event's
+   path's first event path item's invocation target"). The other half of that sentence is a question about the
+   TREE, and it is answered where nodes are known: this file must not learn what a node is, for the reason
+   event_target.c's own header gives — naming the DOM here makes every host that installs events link lexbor. */
+bool event_composed(JSContext *ctx, JSValueConst ev)
+{
+    return event_read_flag(ctx, ev, "composed");
+}
+
+JSValue event_path_first(JSContext *ctx, JSValueConst ev)
+{
+    JSValue slots = event_slots(ctx, ev), path, first;
+
+    path = JS_GetPropertyStr(ctx, slots, "path");
+    JS_FreeValue(ctx, slots);
+    /* No path is not a state §4.8 has an answer for: get the parent is only ever asked from inside dispatch,
+       which appends the target at step 6.3 before the first ask. */
+    DCHECK(JS_IsArray(path), "§2.9's first event path item was asked for outside a dispatch — the event has no "
+                             "path, so §4.8's composed-flag condition has no subject to be about");
+    first = JS_IsArray(path) ? JS_GetPropertyUint32(ctx, path, 0) : JS_UNDEFINED;
+    JS_FreeValue(ctx, path);
+    return first;
+}
+
 /* §2.2's IN PASSIVE LISTENER FLAG. "inner invoke" sets it around a listener whose `passive` is true and unsets
    it after, and `preventDefault` is defined to do nothing while it is set — which is the whole of what passive
    means to the page. */

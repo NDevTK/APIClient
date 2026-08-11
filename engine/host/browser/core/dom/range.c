@@ -1234,7 +1234,7 @@ static int ensure_pre_insert_validity(JSContext *ctx, lxb_dom_node_t *node, lxb_
     lxb_dom_node_t *c;
     int elems = 0, texts = 0;
 
-    if (parent->type != LXB_DOM_NODE_TYPE_DOCUMENT && parent->type != LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT &&
+    if (parent->type != LXB_DOM_NODE_TYPE_DOCUMENT && !node_is_document_fragment(parent) &&
         parent->type != LXB_DOM_NODE_TYPE_ELEMENT)                                            /* STEP 1 */
         return JS_ThrowDOMException(ctx, "HierarchyRequestError",
                                     "a node can only be inserted into a Document, DocumentFragment or "
@@ -1245,7 +1245,7 @@ static int ensure_pre_insert_validity(JSContext *ctx, lxb_dom_node_t *node, lxb_
     if (child && child->parent != parent)                                                     /* STEP 3 */
         return JS_ThrowDOMException(ctx, "NotFoundError",
                                     "the reference child is not a child of the parent"), -1;
-    if (node->type != LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT && node->type != LXB_DOM_NODE_TYPE_DOCUMENT_TYPE &&
+    if (!node_is_document_fragment(node) && node->type != LXB_DOM_NODE_TYPE_DOCUMENT_TYPE &&
         node->type != LXB_DOM_NODE_TYPE_ELEMENT && !node_is_chardata_kind(node))              /* STEP 4 */
         return JS_ThrowDOMException(ctx, "HierarchyRequestError",
                                     "a node of this type cannot be inserted into a tree"), -1;
@@ -1259,7 +1259,7 @@ static int ensure_pre_insert_validity(JSContext *ctx, lxb_dom_node_t *node, lxb_
         return JS_ThrowDOMException(ctx, "HierarchyRequestError",
                                     "a Text node cannot be a child of a document"), -1;
     if (node_is_chardata_kind(node)) return 0;                                                /* STEP 7 */
-    if (node->type == LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT) {                                  /* STEP 8 */
+    if (node_is_document_fragment(node)) {                                                    /* STEP 8 */
         for (c = node->first_child; c; c = c->next) {
             if (c->type == LXB_DOM_NODE_TYPE_ELEMENT) elems++;
             else if (c->type == LXB_DOM_NODE_TYPE_TEXT) texts++;
@@ -1269,7 +1269,7 @@ static int ensure_pre_insert_validity(JSContext *ctx, lxb_dom_node_t *node, lxb_
                                         "a document can hold at most one element and no text"), -1;
         if (!elems) return 0;
     }
-    if (node->type == LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT ||
+    if (node_is_document_fragment(node) ||
         node->type == LXB_DOM_NODE_TYPE_ELEMENT) {                                            /* STEP 9 */
         for (c = parent->first_child; c; c = c->next)
             if (c->type == LXB_DOM_NODE_TYPE_ELEMENT)
@@ -1336,7 +1336,7 @@ static int range_insert_node(JSContext *ctx, RangeBounds *b, lxb_dom_node_t *nod
     if (node == ref) ref = ref->next;                                                          /* STEP 8 */
     if (node->parent) dom_cow_remove_child(node);                                              /* STEP 9 */
     new_off = ref ? node_index(ref) : node_length(parent);                                     /* STEP 10 */
-    new_off += (node->type == LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT) ? node_length(node) : 1u;   /* STEP 11 */
+    new_off += node_is_document_fragment(node) ? node_length(node) : 1u;                       /* STEP 11 */
     node_insert_at(parent, node, ref);                                                         /* STEP 12 */
     if (node_of(b->start_node) == node_of(b->end_node) && b->start_off == b->end_off) {        /* STEP 13 */
         JSValue w = node_wrap(ctx, parent);
@@ -1394,7 +1394,7 @@ static int rs_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
                                             "a non-Text node is partially contained in the range"),
                        JS_STEP_ABRUPT;
         if (np->type == LXB_DOM_NODE_TYPE_DOCUMENT || np->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE ||
-            np->type == LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT)                                  /* STEP 2 */
+            node_is_document_fragment(np))                                                    /* STEP 2 */
             return JS_ThrowDOMException(ctx, "InvalidNodeTypeError",
                                         "newParent cannot be a Document, DocumentType or DocumentFragment"),
                    JS_STEP_ABRUPT;

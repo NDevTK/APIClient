@@ -15,8 +15,16 @@ void node_free(JSContext *ctx);
    by identity constantly, and a fresh wrapper per lookup makes every such comparison silently false. The
    prototype is chosen by the node's TYPE, so a Text node is a Text and an Element is an Element. */
 JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n);
+/* The wrapper this node ALREADY has, or JS_UNDEFINED — node_wrap's lookup without node_wrap's allocation, for a
+   component whose question is answered by a slot ON the wrapper and must not mint one to ask. BORROWED. */
+JSValueConst node_wrap_peek(const lxb_dom_node_t *n);
 /* The Lexbor node behind any wrapper, or NULL if `v` is not one. */
 lxb_dom_node_t *node_of(JSValueConst v);
+/* §4.7: A ShadowRoot IS a DocumentFragment. Lexbor gives a shadow root its own node type — which is what makes
+   "is this a shadow root" answerable with no realm in hand — so every rule the standard states over a
+   DocumentFragment asks THIS rather than comparing the type, and a rule about the shadow root itself asks
+   shadow_root_is (core/dom/shadow_root.h). */
+bool node_is_document_fragment(const lxb_dom_node_t *n);
 /* Node.prototype — the base a derived DOM interface inherits from, borrowed. */
 JSValue node_proto(JSContext *ctx);
 /* The interface a node TYPE wears, borrowed — what a component naming its own interface object reads. */

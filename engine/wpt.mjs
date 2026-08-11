@@ -104,6 +104,11 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                    /* custom_elements.c — HTML §4.13, the reactions that every [CEReactions] operation in
                       SPEC_STEPS.md runs. */
                    "custom-elements",
+                   /* shadow_root.c — DOM §4.8 and §4.2.2's slots, which did not exist in this engine at all
+                      until they did: no `attachShadow`, no ShadowRoot interface, no `<slot>`. The directory is
+                      the standard's own and its first number is expected to be bad, which is the honest first
+                      measurement rather than a reason not to take it. */
+                   "shadow-dom",
                    /* Web IDL §3.2's ECMAScript binding — SPEC_STEPS.md §7's own directory, and the spec
                       idl_args.c, idl_iter.c and idl_indexed.c implement: what an interface object is, how a
                       DOMString/sequence/record argument is converted, what `has instance` and `toString`

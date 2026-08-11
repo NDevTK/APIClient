@@ -52,8 +52,11 @@ void event_target_install_interface(JSContext *ctx, JSValueConst global);
 /* EH_XHR is XHR §3.3's set on XMLHttpRequestEventTarget — the seven a page uses to watch a transfer; it is a
    MIXIN's set, so XMLHttpRequestUpload gets exactly the same members by inheritance. EH_XHR_READYSTATE is the
    ONE §3.3 puts "solely" on XMLHttpRequest, which is why it cannot ride the same bit. */
+/* EH_SHADOW_ROOT is DOM §4.8's `onslotchange`, which that interface declares ON ITSELF. It is also one of
+   GlobalEventHandlers' names, so the one entry carries both bits — the mask is which MIXIN a target includes,
+   and a name declared by two mixins is installed by both. */
 enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 16,
-       EH_MEDIA_QUERY_LIST = 32, EH_XHR = 64, EH_XHR_READYSTATE = 128 };
+       EH_MEDIA_QUERY_LIST = 32, EH_XHR = 64, EH_XHR_READYSTATE = 128, EH_SHADOW_ROOT = 256 };
 /* HTML §3.2.2 click() — "fire a synthetic pointer event named click", which IS §2.9 dispatch, so it is the same
    machine under a second entry rather than a second implementation of it. */
 void event_target_install_click(JSContext *ctx, JSValueConst target);

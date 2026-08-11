@@ -4091,3 +4091,163 @@ platform has the same gap and the same one-line answer.
 - **§4.13.4 steps 8-9's "element definition is running" flag.** It guards against a `define()`
   re-entered from a getter the same `define()` invoked; the flag is state on the registry, which is
   per-realm, so it lands with the scoped-registry work that also makes step 7.1's "is scoped" real.
+
+## 17. DOM §4.8 and §4.2.2 — `attachShadow`, `ShadowRoot`, the slot algorithms, and event retargeting
+
+**Why this section exists.** Shadow DOM did not exist in this engine **at all**: no `attachShadow`,
+no `ShadowRoot` interface, no `<slot>`, and five separate components carried a sentence saying so —
+`element_internals.c` refused to install `shadowRoot` because a getter that can only ever answer
+null is the shape-only stub the IDL audit exists to expose, and `node.c`'s `root`, `event.c`'s
+`composedPath` and `event_target.c`'s dispatch each said "with no shadow trees in this engine".
+
+That is not one absent getter. A page whose component library calls `attachShadow` in a constructor
+threw a `TypeError` on that line, HTML §8.1.4.6's report fired an `error` event, and **everything
+the component would have built was never built** — so the API surface this tool reports for a
+Web-Components page is the surface of the code that runs before the first custom element mounts. The
+custom-element machinery it sits beside became real in §14 and §16 (the upgrade CONSTRUCTS, and
+`ElementInternals` exists), which is what makes this the next thing in the way.
+
+**Network was available.** Everything below was read from the live standards on **2026-08-11**:
+
+| Standard | Source | Version read |
+| --- | --- | --- |
+| WHATWG DOM | `https://dom.spec.whatwg.org/` | Living Standard, §4.2.2, §4.2.3, §4.8, §4.9, §4.4 |
+| WHATWG HTML | `https://html.spec.whatwg.org/multipage/scripting.html` | Living Standard, §4.12.4 `<slot>` |
+
+Step numbers are the standard's own list numbering as of that date.
+
+### 17.0 Four things the live text says that a reasonable person would remember differently
+
+1. **`attachShadow` throws `NotSupportedError` for every one of its four refusals** — a non-HTML
+   namespace, a local name that is not a valid shadow host name, a definition whose `disable shadow`
+   is true, and an element that is already a shadow host. There is no `InvalidStateError` and no
+   `TypeError` anywhere in "attach a shadow root". This is the same shape §16.0 records for
+   `attachInternals`, and a page's `catch (e) { e.name }` reads exactly that string.
+2. **`ShadowRootInit`'s members are read LEXICOGRAPHICALLY, not in declaration order.** Web IDL
+   §3.2.18 orders a dictionary's members by name, so the reads are `clonable`, `delegatesFocus`,
+   `mode`, `serializable`, `slotAssignment` — a different order in every position from the IDL's own
+   list, and observable the moment a page passes an object of getters or a Proxy. `mode` being
+   `required` does not move it to the front. The engine's own dictionary assert caught this
+   declaration written in IDL order, which is what that assert is for.
+3. **`assignedSlot` is not the stored `assigned slot`.** §4.2.9's getter steps are "return the result
+   of **find a slot** given this and **true**" — a fresh lookup with the `open` flag set, so a
+   slottable inside a CLOSED shadow tree answers `null` from script while its stored assigned slot is
+   the real slot the flattened tree uses. Answering with the stored field leaks a closed tree.
+4. **A shadow root's "get the parent" is conditional on the event's path, not on the event alone.**
+   §4.8: "returns null if event's composed flag is unset **and shadow root is the root of event's
+   path's FIRST event path item's invocation target**; otherwise shadow root's host." The second
+   conjunct is why a non-composed event dispatched **at the host** still reaches the document: the
+   host's root is not that shadow root, so the condition is false and the walk continues.
+
+### 17.1 `attach a shadow root(element, mode, clonable, serializable, delegatesFocus, slotAssignment, registry)` — DOM §4.8
+
+  1. If *element*'s namespace is not the HTML namespace, throw `NotSupportedError`. —
+  2. If *element*'s local name is not a **valid shadow host name**, throw `NotSupportedError`. —
+  3. If *element*'s local name is a valid custom element name, or *element*'s `is` value is non-null:
+     1. Let *definition* be the result of **looking up a custom element definition**. —
+     2. If *definition* is non-null and its **disable shadow** is true, throw `NotSupportedError`. —
+  4. If *element* is a shadow host:
+     1. Let *currentShadowRoot* be *element*'s shadow root. —
+     2. If *currentShadowRoot*'s **declarative** is false, **or** its mode is not *mode*, throw
+        `NotSupportedError`. —
+     3. Remove all of *currentShadowRoot*'s children, in tree order. —
+     4. Set *currentShadowRoot*'s declarative to false. —
+     5. Return. —
+  5. Let *shadow* be a new node implementing `ShadowRoot`, given *element*'s node document. —
+  6. Set *shadow*'s **host** to *element*. —
+  7. Set *shadow*'s **mode** to *mode*. —
+  8. Set *shadow*'s **delegates focus** to *delegatesFocus*. —
+  9. If *element*'s custom element state is `"precustomized"` or `"custom"`, set *shadow*'s
+     **available to element internals** to true. —
+  10. Set *shadow*'s **slot assignment** to *slotAssignment*. —
+  11. Set *shadow*'s **declarative** to false. —
+  12. Set *shadow*'s **clonable** to *clonable*. —
+  13. Set *shadow*'s **serializable** to *serializable*. —
+  14. Set *shadow*'s **custom element registry** to *registry*. —
+  15. Set *element*'s **shadow root** to *shadow*. —
+
+**No step is `[S]`.** Every read is of the element's own record or of the registry, so the whole
+algorithm is ordinary C — the page's code all ran in the Web IDL prologue that converted
+`ShadowRootInit`, which is the only place a getter or a Proxy trap can be.
+
+**Step 4 is written out even though its branch is currently unreachable.** `declarative` is set true
+by exactly one thing — the HTML parser's `shadowrootmode` attribute, which this engine does not have
+— so every re-attach reaches step 4.2's throw. Collapsing the branch to that throw would make the
+day the parser grows declarative shadow roots a rewrite of the algorithm rather than a change to one
+writer, and `declarative` is a real field with a real reader either way.
+
+**Where the state lives, and why it is split two ways.** `host` and `mode` are lexbor's own fields on
+its `lxb_dom_shadow_root_t` — the fields lexbor's `lxb_dom_node_host_including_inclusive_ancestor`
+already reads — so a second copy would be two answers to one question. They are written once, at step
+6 and step 7, on a node the attaching flow has just created: flow-private state, which the COW delta
+deliberately does not capture, and which nothing in §4.8 ever writes again. Steps 8-13's six fields
+have no lexbor field and live in an internal-slot record on the shadow root's WRAPPER.
+
+**Step 15 is the one that must be per flow, and it is the reason this is a wrapper slot at all.** The
+HOST is a baseline element two flows share. A C pointer on the lexbor element would make
+`attachShadow` in one arm of a fork visible in the other — one fact answered from one place for many
+agents, which is the defect class CLAUDE.md names. An own property of the wrapper is captured by the
+heap COW delta for free and parks with the flow that wrote it.
+
+### 17.2 `attachShadow(init)` and the `shadowRoot` getter — DOM §4.9
+
+  1. Let *registry* be this's node document's **custom element registry**. —
+  2. If `init["customElementRegistry"]` exists, set *registry* to it. — *(ABSENT — see 17.6)*
+  3. If *registry* is non-null, its **is scoped** is false, and it is not this's node document's
+     registry, throw `NotSupportedError`. — *(unreachable: this engine has exactly one registry and
+     it IS the node document's, so the comparison cannot fail)*
+  4. Run **attach a shadow root** with this and the six init members. —
+  5. Return this's shadow root. —
+
+The `shadowRoot` getter is three steps and the middle one is the whole of what a mode is:
+
+  1. Let *shadow* be this's shadow root. —
+  2. If *shadow* is null **or its mode is `"closed"`**, return null. —
+  3. Return *shadow*. —
+
+### 17.3 What a ShadowRoot IS, and the four tree facts that changed underneath it
+
+`ShadowRoot : DocumentFragment`, so its prototype chains to §4.7's and it inherits `ParentNode` and
+`NonElementParentNode` with no third copy of either mixin. Lexbor gives a shadow root **its own node
+type**, which is what makes "is this a shadow root" answerable with no realm in hand — retargeting,
+the shadow-including root, "find a slot" and the event path all ask it from places that have no
+`JSContext`. The interface-level facts are then stated once:
+
+- **`nodeType` is 11** and **`nodeName` is `"#document-fragment"`**, because the interface is
+  `DocumentFragment`'s. Lexbor's own type number is an implementation detail no page ever sees.
+- Every rule the standard states over a `DocumentFragment` reaches a shadow root through ONE
+  predicate (`node_is_document_fragment`), not a `||` at each of the ten sites that compared the
+  type: §4.2.3's fragment-contributes-its-children insert, ParentNode's receiver set, `textContent`'s
+  two cases, §8.5.5's `outerHTML` context element, and five of §5's boundary-point checks.
+- **`isConnected` is stated over the SHADOW-INCLUDING root** (§4.4), and this engine's read of it was
+  the plain root with a comment that said "shadow-including" — a comment asserting an invariant the
+  code did not implement. A node inside a shadow tree roots at the shadow root, which is never a
+  document, so every custom element inside a shadow tree would have reported itself disconnected.
+- **`getRootNode({composed: true})`** is the shadow-including root: the root's host's
+  shadow-including root when the root is a shadow root, otherwise the root. The option was already
+  being READ (it is a dictionary member, so a getter on it is the page's code) and then ignored,
+  because there was nothing for it to select.
+
+### 17.6 What is honestly ABSENT, by name
+
+- **`ShadowRootInit`'s `customElementRegistry`.** Its type is `CustomElementRegistry?`, and this
+  engine's `window.customElements` is a plain object with four methods — there is no
+  `CustomElementRegistry` interface, no interface object, no prototype and therefore no brand to
+  convert against. Declaring the member without one could not tell a `TypeError` (not a registry)
+  from the `NotSupportedError` step 3 throws (a registry that is not this document's), so it lands
+  with the interface, together with §4.13.4 steps 8-9's "element definition is running" flag and
+  step 7.1's "is scoped" that §16.6 already names.
+- **Declarative shadow roots** — the parser's `shadowrootmode`, `shadowrootdelegatesfocus`,
+  `shadowrootclonable` and `shadowrootserializable` attributes, and with them the only writer that
+  could ever set a shadow root's `declarative` to true.
+- **`clonable`'s effect.** §4.5's clone steps copy a clonable shadow root onto the clone; the field is
+  stored and read back, and `cloneNode` does not consult it yet.
+- **`serializable`'s effect** — `getHTML(options)` and `setHTMLUnsafe`, which are HTML §8.5's, not
+  §4.8's.
+- **`delegatesFocus`'s effect**, which is HTML's focusing steps; this engine has no focus model.
+- **HTML's additions to `ShadowRoot`** — `innerHTML`, `activeElement`, `styleSheets`,
+  `adoptedStyleSheets` and the rest of `DocumentOrShadowRoot`.
+- **`ElementInternals`' `shadowRoot` getter** (§4.13.7.2), which §16 named as absent for want of a
+  shadow root to answer with. It answers "this's target element's shadow root, if its **available to
+  element internals** is true" — the field step 9 above now sets — and lands with the next diff on
+  that component rather than this one.

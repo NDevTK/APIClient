@@ -55,6 +55,7 @@ static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
 #include "core/dom/attr_list.h"
 #include "core/dom/names.h"   /* §1.4's name predicates, shared with createElement and the custom-element registry */
 #include "core/dom/node.h"
+#include "core/dom/shadow_root.h"
 #include "core/dom/document.h"
 
 /* IDENTITY AND THE TREE BASE LIVE IN node.c — one wrapper table for every node kind, because a tree whose only
@@ -964,7 +965,7 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
                `frag.appendChild(td); td.outerHTML = "<tr>"` behave as `body` would rather than as whatever
                the fragment's first child happened to be. The element is created here and destroyed with the
                machine: it is in no tree, so nothing else ever would. */
-            if (n->parent->type == LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT) {
+            if (node_is_document_fragment(n->parent)) {
                 s->own_context = lxb_dom_document_create_element(n->owner_document,
                                                                  (const lxb_char_t *)"body", 4, NULL);
                 CHECK(s->own_context != NULL,
@@ -1900,6 +1901,9 @@ void element_install_proto(JSContext *ctx)
        here too, which is three properties Element's IDL does not declare — they belong to HTMLScriptElement,
        to a dozen form interfaces and to HTMLMetaElement, and they are installed there now. */
     element_install_reflections(ctx, proto, g_refl_base, g_refl_n);
+    /* §4.9's two Shadow DOM members — `attachShadow` and the `shadowRoot` getter, which the interface
+       declares on Element and not on HTMLElement. */
+    shadow_root_install_element_members(ctx, proto);
     /* GlobalEventHandlers is NOT on Element — the IDL mixes it into HTMLElement, which is where it is
        installed now that that interface exists. */
     JS_SetClassProto(ctx, g_element_class, proto);
@@ -1932,6 +1936,7 @@ void element_free(JSContext *ctx)
     attr_free(ctx);
     if (g_attrs_key != JS_ATOM_NULL) { JS_FreeAtom(ctx, g_attrs_key); g_attrs_key = JS_ATOM_NULL; }
     document_fragment_free(ctx);
+    shadow_root_free(ctx);
     idl_indexed_free(ctx);
     /* the prototypes are the REALMS' — each is released with its context */
     g_reflect_n = 0;
