@@ -4323,3 +4323,207 @@ walk's whole effect is therefore empty, and the common case costs one node-type 
 - **`slotchange` on a slot in a document with no shadow root**, which cannot happen — a slot outside a
   shadow tree has no assigned nodes by construction — and is named here only because it is the one
   case the guarded tree walk in 17.5 skips.
+---
+
+## 18. DOM §4.3 "Mutation observers" — the record queue, the transient registration, and the microtask
+
+**Why this section exists.** `MutationObserver` was absent, and two separate pieces of work named it
+as the thing blocking them: the custom-elements conversion and `ElementInternals`. It also blocks
+`dom/nodes` outright — eleven files there are `MutationObserver-*.html`. And the machinery it needs
+already existed: §4.9's attribute change steps and §4.2.3's insertion/removing steps both fire from
+the DOM-mutation chokepoint, and §4.13.6's reaction queues landed with an explicit entry type and a
+microtask drain. §4.3's "queue a mutation record" is a third consumer of exactly that shape.
+
+**Network was available.** Everything below was read from the live standard on **2026-08-11**:
+
+| Standard | Source | Version read |
+| --- | --- | --- |
+| WHATWG DOM | `https://dom.spec.whatwg.org/` | Living Standard, §4.2.3, §4.3, §4.3.1, §4.3.2, §4.3.3, §4.9, §4.10 |
+
+### 18.0 Four things the live text says that a reasonable person would remember differently
+
+1. **`MutationObserverInit`'s booleans do not all default to false.** `childList` and `subtree`
+   declare `= false`; `attributes`, `characterData`, `attributeOldValue` and `characterDataOldValue`
+   declare **no default at all**, and `attributeFilter` is a plain `sequence<DOMString>`. So
+   "does not exist" and "exists and is false" are two different states, and four of `observe()`'s
+   six validation steps turn on which one they are asking about:
+   `observe(t, {attributeFilter: []})` sets `attributes` to true at step 1 and **succeeds**, while
+   `observe(t, {attributes: false, attributeFilter: []})` is a **TypeError** at step 5. A conversion
+   that folds absence into false (which `ToBoolean(undefined)` does) cannot express either one.
+2. **The record is queued for the INCLUSIVE ANCESTORS of the target, and `interestedObservers` is a
+   MAP KEYED BY OBSERVER.** One observer registered on three ancestors of one node gets **one**
+   record, not three. And `mappedOldValue` is per observer, so one registration asking for
+   `attributeOldValue` is enough to put the old value in the record every registration of that
+   observer shares.
+3. **An `attributeFilter` REJECTS every namespaced attribute outright.** The third bullet of the
+   interested-observer test is "type is `attributes`, `attributeFilter` exists, and `attributeFilter`
+   does not contain *name* **or namespace is non-null**". The filter is over LOCAL names, and there
+   is no spelling of an `xlink:href` that a filtered observer hears about.
+4. **"Queue a mutation observer microtask" is guarded by an agent-wide flag, and NOTIFY clears it
+   FIRST.** Notify's step 1 sets `mutation observer microtask queued` to false before step 2 clones
+   the pending set — so a mutation performed by one of the callbacks it is about to invoke schedules
+   a NEW microtask rather than joining the batch being delivered. That is what makes an observer
+   that mutates inside its own callback fire a second time.
+
+### 18.1 `queue a mutation record(type, target, name, namespace, oldValue, addedNodes, removedNodes, previousSibling, nextSibling)` — DOM §4.3.2
+
+  1. Let *interestedObservers* be an empty map. —
+  2. Let *nodes* be the **inclusive ancestors** of *target*. — **(walk)**
+  3. For each *node* of *nodes*, and then for each *registered* of *node*'s registered observer
+     list: — **(walk)**
+     1. Let *options* be *registered*'s options. —
+     2. If **none** of the following are true — *(each is a reason to SKIP)* —
+        - *node* is not *target* and `options["subtree"]` is false
+        - *type* is `"attributes"` and `options["attributes"]` does not exist or is false
+        - *type* is `"attributes"`, `options["attributeFilter"]` exists, and it does not contain
+          *name* **or** *namespace* is non-null
+        - *type* is `"characterData"` and `options["characterData"]` does not exist or is false
+        - *type* is `"childList"` and `options["childList"]` is false
+
+        then: 1. *mo* ← *registered*'s observer. 2. If `interestedObservers[mo]` does not exist, set
+        it to null. 3. If (*type* is `"attributes"` and `options["attributeOldValue"]` is true) or
+        (*type* is `"characterData"` and `options["characterDataOldValue"]` is true), set
+        `interestedObservers[mo]` to *oldValue*. —
+  4. For each *observer* → *mappedOldValue* of *interestedObservers*: —
+     1. Let *record* be a new `MutationRecord` with all nine fields set. —
+     2. **(enqueue)** Enqueue *record* to *observer*'s record queue. —
+     3. Append *observer* to the surrounding agent's **pending mutation observers**. — *(a SET: a
+        repeat is not appended twice)*
+  5. **(enqueue)** Queue a mutation observer microtask. —
+
+**No user code runs at any step.** Every `[S]` in this algorithm's neighbourhood is at the
+DELIVERY end, which is §18.3. That is what lets the whole of it run from inside the tree
+chokepoint, which cannot park.
+
+**`queue a tree mutation record(target, addedNodes, removedNodes, previousSibling, nextSibling)`** —
+  1. Assert: either *addedNodes* or *removedNodes* is not empty. —
+  2. Queue a mutation record of `"childList"` for *target* with null, null, null, and the four. —
+
+### 18.2 Who calls it — the three sites, with their own step numbers
+
+| Caller | Step | Arguments |
+| --- | --- | --- |
+| §4.9 **handle attribute changes**(attribute, element, oldValue, newValue) | **1** *(before step 2's `attributeChangedCallback` enqueue)* | `"attributes"` for *element* with attribute's **local name**, attribute's **namespace**, *oldValue*, « », « », null, null |
+| §4.10 **replace data**(node, offset, count, data) | **4** *(before step 5 writes the bytes)* | `"characterData"` for *node* with null, null, **node's data**, « », « », null, null |
+| §4.2.3 **insert**(node, parent, child, suppressObservers) | **4.2** *(the fragment emptying — it ignores suppressObservers)* and **8** | tree record for *node* with « », *nodes*, null, null; then for *parent* with *nodes*, « », *previousSibling*, *child* |
+| §4.2.3 **remove**(node, suppressObservers) | **16** *(after step 15's transients)* | tree record for *parent* with « », « *node* », *oldPreviousSibling*, *oldNextSibling* |
+| §4.2.3 **replace**(child, node, parent) | **10** | tree record for *parent* with *nodes*, *removedNodes*, *previousSibling*, *referenceChild* |
+| §4.2.3 **replace all**(node, parent) | **7** | tree record for *parent* with *addedNodes*, *removedNodes*, null, null |
+
+**§4.2.3 remove step 15 — the TRANSIENT registration, and it precedes the record:**
+
+  15. For each **inclusive ancestor** *inclusiveAncestor* of *parent*, and then for each *registered*
+      of *inclusiveAncestor*'s registered observer list, if `registered's options["subtree"]` is
+      true, then append a new **transient registered observer** whose observer is *registered*'s
+      observer, options is *registered*'s options, and **source is *registered*** to **node**'s
+      registered observer list. — **(walk)**
+
+A transient registered observer is "a registered observer that ALSO consists of a source", so the
+presence of a source IS the entire difference between the two and there is no second entry kind.
+They exist so that `subtree: true` keeps reporting a removed node's own mutations until the observer
+is next notified — the part an implementation omits **silently**, because everything else still
+works and the only symptom is a callback that stops being called.
+
+### 18.3 `queue a mutation observer microtask` / `notify mutation observers` — DOM §4.3
+
+**queue a mutation observer microtask:**
+  1. If the surrounding agent's *mutation observer microtask queued* is true, return. —
+  2. Set it to true. —
+  3. **(enqueue)** Queue a microtask to notify mutation observers. —
+
+**notify mutation observers:**
+  1. Set the surrounding agent's *mutation observer microtask queued* to false. —
+  2. Let *notifySet* be a clone of the agent's **pending mutation observers**. —
+  3. Empty the agent's pending mutation observers. —
+  4. Let *signalSet* be a clone of the agent's **signal slots**. —
+  5. Empty the agent's signal slots. —
+  6. For each *mo* of *notifySet*: —
+     1. Let *records* be a clone of *mo*'s record queue. —
+     2. Empty *mo*'s record queue. —
+     3. For each *node* of *mo*'s node list: remove all **transient** registered observers whose
+        observer is *mo* from *node*'s registered observer list. — **(walk)**
+     4. If *records* is not empty, then **`[S]`** invoke *mo*'s callback with « *records*, *mo* » and
+        `"report"`, with callback this value *mo*. — **the page's code.** `"report"` means a throw
+        does not propagate: HTML §8.1.4.6 **report an exception** runs instead, which **fires an
+        `error` event at the global** and is therefore a **second `[S]`** inside this one step.
+  7. For each *slot* of *signalSet*: **`[S]`** fire an event named `slotchange`, bubbles true, at
+     *slot*. —
+
+Steps 6.1-6.3 run for **every** observer in the set — the record queue is emptied and the transients
+are dropped even when there is nothing to deliver. Only step 6.4 is conditional.
+
+**Suspension points in algorithm group 18: 3.** (notify step 6.4's callback; the `"report"` inside
+it; step 7's `slotchange`.) **Zero** in `queue a mutation record`, `queue a tree mutation record`,
+`queue a mutation observer microtask`, `observe`, `disconnect` or `takeRecords` — which is precisely
+what lets the first two run from inside the DOM-mutation chokepoint.
+
+### 18.4 `observe(target, options)` — DOM §4.3.1
+
+The Web IDL prologue converts `Node target` (an interface type: a non-Node is a TypeError before
+step 1) and `MutationObserverInit options` (a dictionary: a `[[Get]]` per member, each of which is
+the page's code — §0.2). Then:
+
+  1. If `options["attributeOldValue"]` or `options["attributeFilter"]` **exists**, and
+     `options["attributes"]` does **not** exist, set `options["attributes"]` to true. —
+  2. If `options["characterDataOldValue"]` exists and `options["characterData"]` does not, set
+     `options["characterData"]` to true. —
+  3. If none of `childList`, `attributes`, `characterData` is true → **TypeError**. —
+  4. If `attributeOldValue` is true and `attributes` is false → **TypeError**. —
+  5. If `attributeFilter` exists and `attributes` is false → **TypeError**. —
+  6. If `characterDataOldValue` is true and `characterData` is false → **TypeError**. —
+  7. For each *registered* of *target*'s registered observer list, if *registered*'s observer is
+     **this**: —
+     1. For each *node* of **this**'s node list: remove all transient registered observers whose
+        **source is *registered*** from *node*'s registered observer list. — **(walk)**
+     2. Set *registered*'s options to *options*. —
+     Otherwise: append a new registered observer (observer **this**, options *options*) to *target*'s
+     registered observer list, and append a **weak reference** to *target* to **this**'s node list. —
+
+  **`disconnect()`:** 1. For each *node* of this's node list, remove any registered observer for
+  which this is the observer. 2. Empty this's record queue. —
+  **`takeRecords()`:** 1. *records* ← a clone of this's record queue. 2. Empty it. 3. Return
+  *records*. —
+
+**Step 7's "otherwise" hangs off the FOR EACH, not off an `if`** — the new registration is appended
+only when no iteration matched, which is why a second `observe()` of the same target with different
+options REPLACES the options rather than adding a registration.
+
+### 18.5 §4.3.3 `MutationRecord` — nine readonly attributes and nothing else
+
+`type` (one of the three strings), `target`, `[SameObject] addedNodes`, `[SameObject] removedNodes`,
+`previousSibling`, `nextSibling`, `attributeName`, `attributeNamespace`, `oldValue`. The two
+`NodeList`s are **`[SameObject]`**, so they are built when the record is and held: building one per
+read answers `r.addedNodes === r.addedNodes` false, and a page that keeps the list from a first
+record and compares it later is where that surfaces.
+
+`attributeNamespace` is a real answer in this engine and not a null: §4.9's attribute identity is
+(namespace, local name) throughout, the mutation chokepoint's attribute hook carries both, and the
+taint shadow keys on the pair.
+
+### 18.6 What is honestly ABSENT, by name
+
+Nothing of §4.3's own algorithm is absent. §4.3's **signal slots** (notify steps 4, 5 and 7) arrived
+with §17's shadow DOM in the same hour as the record queue, as a SECOND machine with a SECOND
+`mutation observer microtask queued` flag and a SECOND microtask — two halves of one algorithm, each
+correct alone and wrong together, because §4.3 clones BOTH sets, delivers every record at step 6 and
+only THEN fires every `slotchange` at step 7. Split, that order is whichever half was queued first,
+and a page that observes a slot's parent and listens for `slotchange` sees them interleaved. There is
+now one machine, one flag and one microtask: `signal a slot change` calls §4.3's
+`queue a mutation observer microtask`, and slot.c owns steps 4-5 and 7 as work the one machine embeds
+(the shape `ReportExceptionWork` and `CustomElementQueue` already have).
+
+- **The node list holds STRONG references where §4.3 says weak ones.** "A list of weak references to
+  nodes" is a GC-observability statement, and this engine's wrapper identity map already holds a
+  strong reference to every wrapper for the life of the document, so a weak list here would not
+  change what is retained by one object. It becomes real with the wrapper map's own weakening, and
+  both are the same mechanism.
+- **The BATCH: an `insert` of a DocumentFragment queues N records where §4.2.3 step 8 queues ONE**
+  with all of `nodes` in `addedNodes`, and so does `replace all` (which is what `innerHTML`,
+  `textContent` and `replaceChildren` are). Every SINGLE-node insertion and **every** removal is
+  byte-exact, because `remove` removes one node and `nodes` then has one member — but a page that
+  appends a fragment of three children and counts records reads 3 where a browser reads 1. The
+  mechanism this needs is §4.2.3's own `suppressObservers` parameter on the three tree chokepoint
+  entries, so the operation that owns the loop (`node_insert_at`'s fragment branch, `replace all`'s
+  remove-all) queues the one record itself with the list it already has. That is the next diff in
+  this section, and it is named here rather than left as a comment because a comment is not a
+  follow-up.

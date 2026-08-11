@@ -762,15 +762,63 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                                        "cursor is per-argument, so a nested one would read the outer's names");
                 /* An ABSENT member is not converted: `undefined` on a dictionary means the member is not
                    there, and running ToString over it would write the four characters `undefined` where the
-                   spec puts nothing. A boolean is the exception only because ToBoolean(undefined) is false,
-                   which is the `= false` default every boolean member in this surface declares. */
+                   spec puts nothing. IDL_BOOLEAN is the exception because ToBoolean(undefined) is false, which
+                   IS the `= false` default a member declared that way carries — and IDL_BOOLEAN_NO_DEFAULT is
+                   the member that declares no default, which is exactly why it is NOT exempt here: it stays
+                   undefined so the body can tell absence from false (see idl_args.h). */
                 if (JS_IsUndefined(s->dict_v) && mt != IDL_BOOLEAN)
                     mt = IDL_ANY;
                 /* The same boundary rule the arguments follow: unknown external input crosses as ITSELF, so a
                    concolic member keeps forking control flow instead of collapsing at a coercion. */
                 if (mt != IDL_ANY && concolic_is(s->dict_v))
                     mt = IDL_ANY;
-                if (mt == IDL_BOOLEAN) {
+                if (mt == IDL_SEQUENCE_DOMSTRING) {
+                    /* §3.2.20 over a dictionary member. A value that is not an Object is a TypeError before
+                       anything is read, exactly as it is in argument position — the check is on the TYPE and
+                       not on iterability, so `{attributeFilter: "id"}` throws even though a string iterates.
+                       The cursor is the machine's own (`seq`), which the argument-position conversion also
+                       uses: the two cannot be in flight at once because arguments are converted strictly left
+                       to right and one argument is being converted here. */
+                    DCHECK(s->seq_phase == 0 || JS_IsObject(s->seq_list),
+                           "a dictionary member's sequence resumed with no list under it");
+                    if (!JS_IsObject(s->dict_v)) {
+                        JS_FreeValue(ctx, cb_result);
+                        JS_ThrowTypeError(ctx, "dictionary member `%s` is not a sequence", dm->name);
+                        return JS_STEP_ABRUPT;
+                    }
+                    if (s->seq_phase == 0) {
+                        s->seq_list = JS_NewArray(ctx);
+                        if (JS_IsException(s->seq_list)) return JS_STEP_ABRUPT;
+                        iter_cursor_init(&s->seq);
+                        s->seq_phase = 1;
+                    }
+                    for (;;) {
+                        JSValue str = JS_UNDEFINED;
+
+                        if (s->seq_phase == 1) {
+                            r = iter_cursor_run(ctx, &s->hdr, &s->seq, s->dict_v, cb_result, out_cb, out_argc);
+                            cb_result = JS_UNDEFINED;
+                            if (r > 0) return r;   /* parked ON THIS ELEMENT; the resume comes back to it */
+                            if (r < 0) return JS_STEP_ABRUPT;
+                            if (s->seq.done) break;
+                            s->seq_phase = 2;
+                        }
+                        DCHECK(s->seq_phase == 2, "a dictionary member's sequence resumed at a phase it never "
+                                                  "parks in");
+                        r = step_tostring_run(ctx, &s->hdr, s->seq.value, cb_result, &str, out_cb, out_argc);
+                        cb_result = JS_UNDEFINED;
+                        if (r > 0) return r;
+                        if (r < 0) return JS_STEP_ABRUPT;
+                        JS_SetPropertyUint32(ctx, s->seq_list, s->seq_n++, str);
+                        s->seq_phase = 1;
+                    }
+                    JS_FreeValue(ctx, s->dict_v);
+                    s->dict_v = s->seq_list;
+                    s->seq_list = JS_UNDEFINED;
+                    s->seq_n = 0;
+                    s->seq_phase = 0;
+                }
+                else if (mt == IDL_BOOLEAN || mt == IDL_BOOLEAN_NO_DEFAULT) {
                     JSValue b = JS_NewBool(ctx, JS_ToBool(ctx, s->dict_v));
                     JS_FreeValue(ctx, s->dict_v);
                     s->dict_v = b;

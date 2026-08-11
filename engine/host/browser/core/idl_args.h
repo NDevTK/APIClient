@@ -70,6 +70,22 @@ typedef enum {
        what the IDL states. */
     IDL_STRING_UNLESS_CALLABLE,
     IDL_BOOLEAN,          /* ToBoolean. The conversion runs nothing; the READ that precedes it is the page's */
+    /* A `boolean` DICTIONARY MEMBER WITH NO DEFAULT — and the difference from IDL_BOOLEAN is the whole reason
+       it exists. §3.2.18 does not set an absent member at all, so "does not exist" and "exists and is false"
+       are two states a dictionary can be in, and DOM §4.3.1's `observe` branches on which: `observe(t,
+       {attributeFilter:[]})` sets attributes to true and succeeds, while `observe(t, {attributes:false,
+       attributeFilter:[]})` is a TypeError at step 5 — the same filter, the same absence of `true`, opposite
+       answers. ToBoolean(undefined) is false, so IDL_BOOLEAN folds the two together and can express neither
+       step. MutationObserverInit declares four of these (attributes, characterData, attributeOldValue,
+       characterDataOldValue) and the two members that DO carry `= false` (childList, subtree) stay
+       IDL_BOOLEAN, which is the IDL's own distinction and not a convention. */
+    IDL_BOOLEAN_NO_DEFAULT,
+    /* `sequence<DOMString>` — §3.2.20's iterator-protocol conversion with DOMString as the element type.
+       DOM §4.3.1's `attributeFilter` is the first, and it is a DICTIONARY MEMBER: the iterator protocol is the
+       page's code at every step, so a member declared this way parks on the element it is on exactly as an
+       argument-position sequence does, rather than being walked from a body after every later member was
+       already read. */
+    IDL_SEQUENCE_DOMSTRING,
     /* A DICTIONARY. Web IDL converts one by READING each declared member IN ORDER and converting each by ITS
        OWN type — so a dictionary is that member list plus this very machine, not a second kind of thing. A read
        is one accessor or Proxy trap away from being the page's code, and so is each member's conversion, so

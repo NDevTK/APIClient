@@ -30,6 +30,7 @@
 #include "core/html/html_iframe.h"
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
+#include "core/dom/mutation_observer.h"
 #include "core/dom/attr.h"
 #include "core/dom/attr_list.h"
 #include "core/css/css_style_declaration.h"
@@ -1703,6 +1704,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     tree_walker_install(ctx, global);       /* §6.2 TreeWalker */
     range_install(ctx, global);             /* §5.3 AbstractRange, §5.4 StaticRange, §5.5 Range */
     collections_install(ctx, global);       /* §4.2.10 NodeList, §4.2.11 HTMLCollection */
+    mutation_observer_install(ctx, global); /* §4.3.1 MutationObserver, §4.3.3 MutationRecord */
     attr_install(ctx, global);              /* §4.9.1/§4.9.2 NamedNodeMap and Attr */
     document_fragment_install(ctx, global); /* §4.7 DocumentFragment, which IS constructible */
     shadow_root_install(ctx, global);      /* §4.8 ShadowRoot */

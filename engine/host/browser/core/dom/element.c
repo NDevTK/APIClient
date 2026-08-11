@@ -53,6 +53,8 @@ static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
 static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
 #include <lexbor/html/serialize.h>
 #include "core/dom/attr_list.h"
+#include "core/dom/mutation_observer.h"
+#include "core/dom/mutation_record.h"
 #include "core/dom/names.h"   /* §1.4's name predicates, shared with createElement and the custom-element registry */
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
@@ -1732,6 +1734,15 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
     DCHECK(rctx != NULL,
            "an attribute was set on an element in a document no realm was installed for — §4.13.3's reaction "
            "resolves its definition in that document's registry, so build its realm");
+    /* §4.9 "handle attribute changes" STEP 1 — the mutation record, and it comes BEFORE step 2's
+       attributeChangedCallback because that is the order the steps are numbered in and both are enqueues:
+       the record is delivered by §4.3's microtask and the reaction by §4.13.6's drain, so a page that
+       observes an attribute AND defines the element sees the record queued first.
+       THE OLD VALUE IS THE ONE THE CHOKEPOINT CARRIED ACROSS THE WRITE. This hook fires AFTER the write —
+       §9.4.6 stores the value and then handles the change — so the element no longer has it, and reading it
+       back off the element would report the NEW value as the old one for every mutation record. */
+    mutation_observer_queue_record(rctx, MR_TYPE_ATTRIBUTES, lxb_dom_interface_node(el), local, ns,
+                                   old_val, old_len, JS_UNDEFINED, JS_UNDEFINED, NULL, NULL);
     custom_elements_attribute_changed(rctx, el, ns, local, old_val, old_len, val, val_len);
     /* §4.2.2's two attribute change steps — a slottable's `slot` and a slot's `name`. They re-derive the name
        from the attribute that is NOW there, which is why the whole hook had to move after the write. */
@@ -1856,6 +1867,12 @@ void element_init(JSContext *ctx)
     node_add_tree_hook(element_iterator_pre_remove);
     node_add_tree_hook(element_slot_steps);
     node_add_tree_hook(element_tree_changed);
+    /* §4.3's RECORD IS QUEUED LAST, which is where §4.2.3 numbers it: insert step 8 follows step 7's insertion
+       steps and custom-element reactions, and remove steps 15-16 follow the removing steps and the
+       disconnectedCallback. The hook list runs in registration order, so this line IS that ordering. */
+    mutation_observer_init(ctx);
+    node_add_tree_hook(mutation_observer_tree_steps);
+    dom_cow_set_cdata_hook(mutation_observer_character_data);
     idl_set_tree_steps(&ELEMENT_TREE_STEPS);
     dom_cow_set_attr_hook(element_attr_changed);
     realm_declare_intrinsic(element_install_proto);
@@ -1949,6 +1966,7 @@ void element_free(JSContext *ctx)
     html_element_free(ctx);
     cssom_free(ctx);
     custom_elements_free(ctx);
+    mutation_observer_free(ctx);
     range_free(ctx);
     tree_walker_free(ctx);
     node_iterator_free(ctx);

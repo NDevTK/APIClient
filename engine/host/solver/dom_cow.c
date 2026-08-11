@@ -151,6 +151,10 @@ static char *attr_old_value(lxb_dom_element_t *el, const char *ns, const char *l
     return copy;
 }
 
+static void (*g_cdata_hook)(JSContext *ctx, lxb_dom_node_t *node, const char *old, size_t old_len);
+void dom_cow_set_cdata_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *node, const char *old, size_t old_len))
+{ g_cdata_hook = fn; }
+
 /* the current taint shadow for this slot identity, dup'd (JS_UNDEFINED + *had=0 if none) */
 static JSValue shadow_snapshot(const void *owner, int slot, const char *ns, const char *name, int *had) {
     int si = attr_shadow_find(owner, slot, ns, name);
@@ -859,6 +863,11 @@ void dom_cow_set_text(lxb_dom_node_t *node, const char *val, size_t val_len) {
     DCHECK(node->type == LXB_DOM_NODE_TYPE_TEXT || node->type == LXB_DOM_NODE_TYPE_COMMENT,
            "dom_cow_set_text on a node that holds no character data");
     cd = lxb_dom_interface_character_data(node);
+    /* BEFORE the write and before the capture, because §4.10's replace data queues its record with the node's
+       CURRENT data and there is no answer to that once the bytes are gone. */
+    DCHECK(!g_cdata_hook || g_cow_ctx, TREE_HOOK_NO_CTX);
+    if (g_cdata_hook)
+        g_cdata_hook(g_cow_ctx, node, (const char *)cd->data.data, cd->data.length);
     if (g_dom_capture) {
         DomUndo u; memset(&u, 0, sizeof u);
         u.kind = 3; u.node = node; u.sh_old = u.sh_cur = JS_UNDEFINED;

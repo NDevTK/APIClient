@@ -38,6 +38,12 @@ void dom_cow_set_tree_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *n, lxb_dom
    question for a namespaced attribute, and reports an `svg:id` as the element's ID. */
 void dom_cow_set_attr_hook(void (*fn)(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
                                       const char *old_val, size_t old_len, const char *val, size_t val_len));
+/* §4.10's "REPLACE DATA" step 4, fired by the third chokepoint for the third thing a flow can change about the
+   tree. Called BEFORE the write and handed the node's CURRENT data, because that is the `oldValue` a
+   characterData mutation record carries and there is no answer to it afterwards. It is a hook and not a call
+   from each of `data=`, `appendData`, `normalize` and `textContent` for the reason the other two are: eleven
+   sites write character data and one would remember. */
+void dom_cow_set_cdata_hook(void (*fn)(JSContext *ctx, lxb_dom_node_t *node, const char *old, size_t old_len));
 
 /* THE TREE VERSION. Every structural change to the document — an insert, a removal, and the SWAP that makes
    one flow's delta the visible tree — advances it. It is what a live collection's index cache is keyed on:

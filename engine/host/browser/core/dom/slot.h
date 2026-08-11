@@ -4,11 +4,9 @@
 #include <lexbor/dom/dom.h>
 #include <stdbool.h>
 #include "quickjs.h"
+#include "quickjs-step.h"
 
 void slot_init(JSContext *ctx);
-/* §4.2.2's per-realm half: the `slotchange` notification driver, which is a FUNCTION OBJECT and therefore
-   carries the realm it was minted in. Declared into core/realm.h's list. */
-void slot_install_proto(JSContext *ctx);
 /* HTML §4.12.4's three members, on the interface whose IDL declares them. */
 void slot_install_slot_members(JSContext *ctx, JSValueConst slot_proto);
 /* §4.2.9's `Slottable` mixin — one member, on each interface whose IDL INCLUDES it (Element and Text). */
@@ -26,5 +24,32 @@ void slot_removed_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *pa
 /* §4.2.2's attribute change steps: `slot` on a slottable updates its name and re-assigns, `name` on a slot
    re-assigns that shadow tree. `ns` NULL is the null namespace, which is the only one either applies to. */
 void slot_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local);
+
+/* §4.3 "NOTIFY MUTATION OBSERVERS" STEPS 4-5 AND 7 — the signal-slots half, as a struct the ONE notify machine
+   embeds. It is not a machine of its own, and that is the whole point: §4.3 is ONE algorithm with ONE
+   agent-wide `mutation observer microtask queued` flag, and it clones BOTH sets, delivers every record at step
+   6 and only THEN fires every `slotchange` at step 7. Two machines with two flags and two microtasks is two
+   implementations of one algorithm whose ORDER is observable — a `slotchange` listener and a MutationObserver
+   callback would run in whichever order the two microtasks happened to be queued.
+   Same shape as report_exception.h's ReportExceptionWork and custom_elements.h's CustomElementQueue: the
+   algorithm belongs here, the state belongs to the machine that parks in it. Firing an event runs the page's
+   listeners, so `_run` parks: JS_STEP_CALL = return it, 0 = every slot has been fired at. */
+typedef struct {
+    uint8_t  fphase;   /* the fire request's own phase */
+    uint32_t i;        /* the cursor into signalSet */
+    JSValue  set;      /* step 4's CLONE of the agent's signal slots (owned) */
+    JSValue  ev;       /* the slotchange event in flight (owned) */
+    JSValue  cb[4];    /* the fire request's buffer — event_target_fire_run needs four slots */
+} SlotChangeWork;
+
+void slot_change_work_start(SlotChangeWork *w);
+void slot_change_work_visit(JSContext *ctx, SlotChangeWork *w, JSStepVisit *v);
+void slot_change_work_release(JSContext *ctx, SlotChangeWork *w);
+/* Steps 4 and 5: clone the agent's signal slots and empty it. The Array is not replaced — it is the agent's,
+   and swapping the static would make one flow's replacement visible to every other. */
+void slot_signal_slots_take(JSContext *ctx, SlotChangeWork *w);
+/* Step 7: "for each slot of signalSet, fire an event named slotchange, with its bubbles attribute set to true,
+   at slot" — one slot per resume, because each fire runs the page's listeners. */
+int  slot_change_work_run(JSContext *ctx, SlotChangeWork *w, JSValue cb_result, JSValue **out_cb, int *out_argc);
 
 #endif

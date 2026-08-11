@@ -44,6 +44,7 @@
 #include "core/dom/element.h"
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
+#include "core/dom/mutation_observer.h"
 #include "core/dom/slot.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
@@ -52,7 +53,6 @@
 
 static int g_ready;
 static int g_id_assigned_nodes = -1, g_id_assigned_elements = -1, g_id_assign = -1;
-static int g_notify_stepid = -1, g_notify_slot = -1;
 
 /* THE SLOT KEYS — Symbols this component minted and never published. */
 static JSValue g_assigned_key = JS_UNDEFINED;    /* slot -> its assigned nodes (an Array) */
@@ -67,8 +67,6 @@ static JSAtom  g_atom_manual_of = JS_ATOM_NULL;
    The AGENT's, so it is built pre-boot and a flow's appends to it are captured by the heap COW delta — the same
    place and for the same reason as custom_elements.c's backup element queue. */
 static JSValue g_signal_slots = JS_UNDEFINED;
-/* "the surrounding agent's MUTATION OBSERVER MICROTASK QUEUED", on the set itself so it forks with it. */
-static JSAtom  g_atom_queued = JS_ATOM_NULL;
 
 #define SLOT_SLOT_FLAGS (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE)
 
@@ -332,25 +330,15 @@ static void find_flattened_slottables(JSContext *ctx, lxb_dom_node_t *slot, JSVa
    what makes several mutations in one task fire one `slotchange` each rather than one per mutation. */
 static void signal_a_slot_change(JSContext *ctx, lxb_dom_node_t *slot)
 {
-    JSValue flag;
-
     DCHECK(g_ready, "a slot change was signalled before slot_init ran");
     DCHECK(JS_IsArray(g_signal_slots), "§4.2.2.5's signal slots set does not exist");
     if (!list_contains(ctx, g_signal_slots, slot))
         JS_SetPropertyUint32(ctx, g_signal_slots, list_len(ctx, g_signal_slots), node_wrap(ctx, slot));
-    /* "QUEUE A MUTATION OBSERVER MICROTASK": if the agent's flag is set, return; otherwise set it and queue one
-       microtask. The flag is what makes a hundred mutations one notification. */
-    flag = JS_GetProperty(ctx, g_signal_slots, g_atom_queued);
-    if (JS_ToBool(ctx, flag)) { JS_FreeValue(ctx, flag); return; }
-    JS_FreeValue(ctx, flag);
-    JS_SetProperty(ctx, g_signal_slots, g_atom_queued, JS_TRUE);
-    {
-        JSValue fn = realm_value_get(ctx, g_notify_slot);
-        DCHECK(JS_IsFunction(ctx, fn), "a slot change was signalled in a realm that never built the "
-                                       "notify-mutation-observers driver");
-        JS_EnqueueCallJob(ctx, fn, 0, NULL);
-        JS_FreeValue(ctx, fn);
-    }
+    /* "QUEUE A MUTATION OBSERVER MICROTASK" — §4.3's, which is the SAME operation with the SAME agent-wide
+       flag that a queued mutation record ends in. A second flag here would be a second answer to "is a
+       notification already scheduled", and the notification is one algorithm: it delivers every record and
+       THEN fires every `slotchange`. */
+    mutation_observer_queue_microtask(ctx);
 }
 
 /* ---- §4.2.2.4 assigning ------------------------------------------------------------------------------------- */
@@ -507,104 +495,75 @@ void slot_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, const char *n
         assign_slottables_for_a_tree(ctx, node_root(n));
 }
 
-/* ---- §4.2.2.5 "notify mutation observers", the slot half ----------------------------------------------------- */
+/* ---- §4.3 "notify mutation observers" steps 4-5 and 7 — the signal-slots half of the ONE notification ------ */
 
-/* WHERE THIS MACHINE RESTS. §4.2.2.5's microtask clones the signal set, empties it, and then "for each slot of
-   signalSet: FIRE AN EVENT named slotchange, with its bubbles attribute set to true, at slot". Firing runs the
-   page's listeners, so the machine rests between slots and inside one fire. */
-#define SLOTCHANGE_STAGES(X) \
-    X(SLOTCHANGE_TAKE, "DOM §4.2.2.5 notify mutation observers steps 1-4 (unset the queued flag, clone the " \
-                       "signal slots set and empty it)") \
-    X(SLOTCHANGE_FIRE, "DOM §4.2.2.5 notify mutation observers step 6 (fire slotchange, bubbles true, at each " \
-                       "slot of signalSet — one slot per resume, because each fire runs the page's listeners)")
-enum { SLOTCHANGE_STAGES(JS_STEP_STAGE_ENUM) };
-static const char *const SLOTCHANGE_STEPS[] = { SLOTCHANGE_STAGES(JS_STEP_STAGE_LABEL) NULL };
-
-typedef struct JSSlotChange {
-    JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
-    uint8_t   fphase;   /* the fire request's own phase */
-    uint32_t  i;        /* the cursor into signalSet */
-    JSValue   set;      /* the CLONE of the agent's signal slots (owned) */
-    JSValue   ev;       /* the slotchange event in flight (owned) */
-    JSValue   cb[4];    /* the fire request's buffer — event_target_fire_run needs four slots */
-} JSSlotChange;
-
-static void js_slotchange_visit(JSContext *ctx, void *st, JSStepVisit *v)
+void slot_change_work_start(SlotChangeWork *w)
 {
-    JSSlotChange *s = st;
     int k;
-
-    v->val(ctx, &s->set);
-    v->val(ctx, &s->ev);
-    for (k = 0; k < 4; k++) v->val(ctx, &s->cb[k]);
+    w->fphase = 0;
+    w->i = 0;
+    w->set = w->ev = JS_UNDEFINED;
+    for (k = 0; k < 4; k++) w->cb[k] = JS_UNDEFINED;
 }
 
-static JSValue js_slotchange_fini(JSContext *ctx, void *st, bool take_result)
+void slot_change_work_visit(JSContext *ctx, SlotChangeWork *w, JSStepVisit *v)
 {
-    JSSlotChange *s = st;
     int k;
-
-    (void)take_result;
-    JS_FreeValue(ctx, s->set);
-    JS_FreeValue(ctx, s->ev);
-    s->set = s->ev = JS_UNDEFINED;
-    for (k = 0; k < 4; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
-    return JS_UNDEFINED;
+    v->val(ctx, &w->set);
+    v->val(ctx, &w->ev);
+    for (k = 0; k < 4; k++) v->val(ctx, &w->cb[k]);
 }
 
-static int js_slotchange_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+void slot_change_work_release(JSContext *ctx, SlotChangeWork *w)
 {
-    JSSlotChange *s = st;
-    int r, k;
+    int k;
+    JS_FreeValue(ctx, w->set);
+    JS_FreeValue(ctx, w->ev);
+    w->set = w->ev = JS_UNDEFINED;
+    for (k = 0; k < 4; k++) { JS_FreeValue(ctx, w->cb[k]); w->cb[k] = JS_UNDEFINED; }
+}
 
-    if (s->hdr.stage == SLOTCHANGE_TAKE) {
-        uint32_t i, n;
+void slot_signal_slots_take(JSContext *ctx, SlotChangeWork *w)
+{
+    uint32_t i, n;
 
-        s->set = JS_NewArray(ctx);
-        s->ev = JS_UNDEFINED;
-        for (k = 0; k < 4; k++) s->cb[k] = JS_UNDEFINED;
-        s->i = 0;
-        s->hdr.stage = SLOTCHANGE_FIRE;
-        CHECK(!JS_IsException(s->set), "§4.2.2.5's signalSet clone could not be allocated");
-        /* Steps 1 and 4-5: the flag is unset AS THE MICROTASK BEGINS, so a slot change signalled by one of the
-           listeners below queues a NEW microtask rather than joining the batch in flight; and the agent's set
-           is CLONED and then EMPTIED. The Array is not replaced — it is the agent's, and swapping the static
-           would make one flow's replacement visible to every other. */
-        JS_SetProperty(ctx, g_signal_slots, g_atom_queued, JS_FALSE);
-        n = list_len(ctx, g_signal_slots);
-        for (i = 0; i < n; i++)
-            JS_SetPropertyUint32(ctx, s->set, i, JS_GetPropertyUint32(ctx, g_signal_slots, i));
-        JS_SetPropertyStr(ctx, g_signal_slots, "length", JS_NewInt32(ctx, 0));
-    }
-    DCHECK(s->hdr.stage == SLOTCHANGE_FIRE,
-           "the slotchange notification resumed into a stage §4.2.2.5 does not have");
+    DCHECK(g_ready, "§4.3's signal slots were taken before slot_init ran");
+    DCHECK(JS_IsUndefined(w->set), "§4.3 step 4's clone was taken twice in one notification");
+    w->set = JS_NewArray(ctx);
+    CHECK(!JS_IsException(w->set), "§4.3 step 4's signalSet clone could not be allocated");
+    w->i = 0;
+    n = list_len(ctx, g_signal_slots);
+    for (i = 0; i < n; i++)                                                          /* step 4 */
+        JS_SetPropertyUint32(ctx, w->set, i, JS_GetPropertyUint32(ctx, g_signal_slots, i));
+    JS_SetPropertyStr(ctx, g_signal_slots, "length", JS_NewInt32(ctx, 0));           /* step 5 */
+}
+
+int slot_change_work_run(JSContext *ctx, SlotChangeWork *w, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    int r;
+
+    DCHECK(JS_IsArray(w->set), "§4.3 step 7 ran before step 4 cloned the signal slots");
     for (;;) {
         JSValue slot;
 
-        if (JS_IsUndefined(s->ev)) {
-            if (s->i >= list_len(ctx, s->set)) { JS_FreeValue(ctx, cb_result); return JS_STEP_DONE; }
-            /* §4.2.2.5: `slotchange` BUBBLES and is not cancelable, and it is the engine's own event, so it is
-               trusted — which is what a component's listener reads to tell it from one a page dispatched. */
-            s->ev = event_new(ctx, "slotchange", true, false);
-            CHECK(!JS_IsException(s->ev), "the slotchange event could not be allocated");
+        if (JS_IsUndefined(w->ev)) {
+            if (w->i >= list_len(ctx, w->set)) { JS_FreeValue(ctx, cb_result); return 0; }
+            /* §4.3 step 7: `slotchange` BUBBLES and is not cancelable, and it is the engine's own event, so it
+               is trusted — which is what a component's listener reads to tell it from one a page dispatched. */
+            w->ev = event_new(ctx, "slotchange", true, false);
+            CHECK(!JS_IsException(w->ev), "the slotchange event could not be allocated");
         }
-        slot = JS_GetPropertyUint32(ctx, s->set, s->i);
-        r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), slot, s->ev, cb_result, NULL,
+        slot = JS_GetPropertyUint32(ctx, w->set, w->i);
+        r = event_target_fire_run(ctx, &w->fphase, STEP_CB(w->cb), slot, w->ev, cb_result, NULL,
                                   out_cb, out_argc);
         JS_FreeValue(ctx, slot);
         if (r > 0) return r;
         cb_result = JS_UNDEFINED;
-        JS_FreeValue(ctx, s->ev);
-        s->ev = JS_UNDEFINED;
-        s->i++;
+        JS_FreeValue(ctx, w->ev);
+        w->ev = JS_UNDEFINED;
+        w->i++;
     }
 }
-
-static const JSTrampStepDef js_slotchange_def = {
-    sizeof(JSSlotChange), js_slotchange_step, js_slotchange_fini, 0, .visit = js_slotchange_visit,
-    .algorithm = "DOM §4.2.2.5 notify mutation observers — the signal-slots half",
-    .steps = SLOTCHANGE_STEPS
-};
 
 /* §4.2.2's slottable, as a value-level brand — what `idl_iface_narrow` asks of every `assign()` argument. */
 static bool slottable_value_of(JSValueConst v)
@@ -734,8 +693,6 @@ void slot_init(JSContext *ctx)
     g_atom_manual = JS_ValueToAtom(ctx, g_manual_key);
     g_atom_slot_of = JS_ValueToAtom(ctx, g_slot_of_key);
     g_atom_manual_of = JS_ValueToAtom(ctx, g_manual_of_key);
-    g_atom_queued = JS_NewAtom(ctx, "mutationObserverMicrotaskQueued");
-    CHECK(g_atom_queued != JS_ATOM_NULL, "§4.2.2.5's queued flag could not be interned");
     /* THE AGENT'S SIGNAL SLOTS, built pre-boot so it belongs to the BASELINE: a flow's appends are then
        captured by the heap COW delta. A set allocated lazily inside a flow would be that flow's private object
        and no sibling would ever see a slot it signalled. */
@@ -750,23 +707,7 @@ void slot_init(JSContext *ctx)
        two kinds and a Comment passed to `assign()` is a TypeError before step 1, not something the body sorts
        out afterwards. */
     idl_iface_narrow(slottable_value_of);
-    g_notify_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_slotchange_def);
-    CHECK(g_notify_stepid >= 0, "no step id for §4.2.2.5's notification driver");
-    g_notify_slot = realm_value_declare(ctx, "§4.2.2.5 notifyMutationObservers");
     g_ready = 1;
-    realm_declare_intrinsic(slot_install_proto);
-}
-
-void slot_install_proto(JSContext *ctx)
-{
-    /* A FUNCTION OBJECT CARRIES THE REALM IT WAS MINTED IN — js_call_c_function does `ctx = p->u.cfunc.realm`
-       — so the notification driver is minted PER REALM. One held in a static would fire every document's
-       `slotchange` out of whichever realm happened to build it first. */
-    JSValue fn = JS_NewCFunction2(ctx, NULL, "notifyMutationObservers", 0, JS_CFUNC_step, g_notify_stepid);
-
-    DCHECK(g_ready, "§4.2.2.5's driver was built before slot_init ran");
-    CHECK(!JS_IsException(fn), "§4.2.2.5's notification driver could not be allocated");
-    realm_value_set(ctx, g_notify_slot, fn);
 }
 
 void slot_install_slot_members(JSContext *ctx, JSValueConst slot_proto)
@@ -792,14 +733,12 @@ void slot_free(JSContext *ctx)
     JS_FreeAtom(ctx, g_atom_manual);
     JS_FreeAtom(ctx, g_atom_slot_of);
     JS_FreeAtom(ctx, g_atom_manual_of);
-    JS_FreeAtom(ctx, g_atom_queued);
-    g_atom_assigned = g_atom_manual = g_atom_slot_of = g_atom_manual_of = g_atom_queued = JS_ATOM_NULL;
+    g_atom_assigned = g_atom_manual = g_atom_slot_of = g_atom_manual_of = JS_ATOM_NULL;
     JS_FreeValue(ctx, g_assigned_key);
     JS_FreeValue(ctx, g_manual_key);
     JS_FreeValue(ctx, g_slot_of_key);
     JS_FreeValue(ctx, g_manual_of_key);
     g_assigned_key = g_manual_key = g_slot_of_key = g_manual_of_key = JS_UNDEFINED;
     g_id_assigned_nodes = g_id_assigned_elements = g_id_assign = -1;
-    g_notify_stepid = g_notify_slot = -1;
     g_ready = 0;
 }
