@@ -2,6 +2,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_CUSTOM_ELEMENTS_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_CUSTOM_ELEMENTS_H
 #include <lexbor/dom/dom.h>
+#include <stdbool.h>
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/events/report_exception.h"
@@ -111,6 +112,38 @@ int custom_elements_created_check(JSContext *ctx, JSValueConst result,
 void custom_elements_mark_failed(JSContext *ctx, JSValueConst wrap);
 /* `window.customElements` — §4.13.4's CustomElementRegistry. */
 void custom_elements_install(JSContext *ctx, JSValueConst global);
+
+/* §4.13.4 step 15'S THREE BOOLEAN FIELDS OF A DEFINITION, named so a reader outside this component can ask for
+   one without knowing how a definition is stored. `disable shadow` has no reader yet — §4.13.5 step 8.1 and
+   `attachShadow` are the two, and neither exists — but it is COLLECTED, because step 14.10 reads the same
+   `disabledFeatures` sequence step 14.9 does and collecting one of the two would make the definition disagree
+   with the sequence it was built from. */
+typedef enum {
+    CE_DEF_FORM_ASSOCIATED = 0,
+    CE_DEF_DISABLE_INTERNALS,
+    CE_DEF_DISABLE_SHADOW
+} CustomElementDefinitionFlag;
+bool custom_elements_definition_flag(JSContext *ctx, JSValueConst def, CustomElementDefinitionFlag which);
+
+/* THE ELEMENT'S OWN DEFINITION — §4.13.5 step 2's record, or JS_UNDEFINED. OWNED. `attachInternals` needs it
+   for step 2, and every form-associated member needs it to answer "is this a form-associated custom element".
+   It is the element's own state and not a registry lookup, which is what makes an element upgraded by a
+   definition keep answering for THAT definition after the registry moves on. */
+JSValue custom_elements_definition_of_element(JSContext *ctx, JSValueConst wrap);
+/* DOM §4.9's custom element state for an element — one of the five CE_STATE_* values. §4.13.7's
+   `attachInternals` step 6 branches on exactly it. */
+int custom_elements_state_of_element(JSContext *ctx, JSValueConst wrap);
+/* §4.13's "element is a form-associated custom element": it carries a definition whose form-associated field
+   is true. The predicate every ElementInternals form member throws a NotSupportedError on. */
+bool custom_elements_is_form_associated(JSContext *ctx, JSValueConst wrap);
+
+/* §4.13.6 "enqueue a custom element callback reaction" for one of §4.13.4 step 14.13's FORM callbacks, from
+   the component that owns the state which changed. `which` is one of the CE_FORM_CB_* ids below; `args` is
+   the argument list the spec names for it. A no-op when the element carries no definition or the definition
+   collected no such callback, which is step 3 of the enqueue. */
+enum { CE_FORM_CB_ASSOCIATED = 0, CE_FORM_CB_RESET, CE_FORM_CB_DISABLED, CE_FORM_CB_STATE_RESTORE };
+void custom_elements_enqueue_form_callback(JSContext *ctx, JSValueConst wrap, int which,
+                                           int argc, JSValueConst *args);
 
 /* DOM §4.2.3's INSERTION STEPS for an element, as HTML's custom-element half states them: an element that is
    already "custom" gets a connectedCallback reaction, and any other element is TRIED FOR UPGRADE (§4.13.5's

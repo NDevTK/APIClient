@@ -30,6 +30,11 @@ JSValue form_data_parse_multipart(JSContext *ctx, const char *body, size_t len,
    spec asks of the list is the serializer below. */
 bool form_data_is(JSValueConst v);
 
+/* INFRA's "clone" of a FormData's ENTRY LIST, as a fresh FormData — HTML §4.13.7.3's `setFormValue` stores
+   one rather than the object it was handed, so a later `append` to that object changes nothing about what the
+   element submits. OWNED. */
+JSValue form_data_clone(JSContext *ctx, JSValueConst src);
+
 /* Fetch §5.1's `multipart/form-data` SERIALIZER — the other direction of the parser above, and the body a
    `new Response(formData)` carries. `*out_n` is the length; the BOUNDARY it chose is written to `boundary`,
    which must hold at least FORM_DATA_BOUNDARY_MAX bytes, because the Content-Type has to name it. */

@@ -3496,13 +3496,14 @@ Step numbers are the standard's own list numbering as of that date.
    restore. It becomes real state in the same diff that makes `customElementRegistry` a creation
    option.)*
 8. Run the following steps **while catching any exceptions**:
-   1. disable-shadow check. — *not applicable: `attachInternals` is absent*
+   1. disable-shadow check. — *not applicable: there is no `attachShadow`, so no element can have a
+      shadow root for the check to find. §4.13.4's `disable shadow` boolean IS collected — see §16.1.*
    2. Set element's custom element state to "precustomized". —
    3. Let constructResult be the result of **constructing C**, with no arguments. — **`[S]`**
    4. If `SameValue(constructResult, element)` is false, then throw a `TypeError`. —
 9. Remove the last entry from the end of definition's construction stack. — *(regardless of whether
    the above threw)*
-10. Form-associated half. — *not applicable: `formAssociated` is absent*
+10. Form-associated half. — **built; see §16.2.** Two enqueues, no `[S]`.
 11. Set element's custom element state to "custom". —
 
 **And if the above threw:** set the definition to null, **empty element's custom element reaction
@@ -3590,7 +3591,7 @@ entry either way.
 
 - `adoptedCallback` — there is no adoption reaction; the callback is collected by §4.13.4 step 14
   and nothing enqueues it.
-- **form-associated custom elements** — §4.13.5 step 10, and step 14.12's four-callback map.
+- ~~form-associated custom elements~~ — **built; see §16.**
 - **customized built-ins** (`extends`) — §4.13.4 refuses them with a `NotSupportedError` rather than
   registering them as autonomous. That refusal is load-bearing twice over: it is what lets
   `ce_upgradable_name` answer the insertion-steps branch off the Lexbor local name alone (so
@@ -3609,8 +3610,9 @@ these is an ABSENT capability naming itself, not a defect in §4.13:
 
 - **`ElementInternals` / `HTMLElement.attachInternals()`** — 11 files. Every one of them writes
   `constructor(){ super(); this.internals_ = this.attachInternals(); }`, so the constructor throws
-  `TypeError: not a function` on the first line the class runs. This is the single largest named gap
-  in the directory and it is the whole of `form-associated/` plus the `ElementInternals-*` files.
+  `TypeError: not a function` on the first line the class runs. This was the single largest named gap
+  in the directory and it was the whole of `form-associated/` plus the `ElementInternals-*` files.
+  **BUILT — see §16**, which is what this named entry was for.
 - **HTML "create an element for the token" with `synchronousCustomElements` true** — the PARSER must
   CONSTRUCT a custom element it parses, not create-then-upgrade it. This engine upgrades, so a
   constructor that `new`s its own class before `super()` finds the upgrade's construction-stack entry
@@ -3868,3 +3870,224 @@ Trusted Types call sites and no `[CEReactions]` epilogues here, and every rest p
    flag on the event it dispatched, so the next fire in a sequence needs its OWN event object — the
    machine mints on entry to the stage and releases at its end, which is also what makes a park
    mid-dispatch resume onto the same event rather than a fresh one.
+
+---
+
+## 16. HTML §4.13.7 — `attachInternals()`, `ElementInternals`, and the form-associated custom element
+
+**Why this section exists.** §14 made §4.13.5's upgrade CONSTRUCT the author's class, and the
+measurement that followed named its own next step: `custom-elements`' aborted-file count rose 26 →
+41, and **eleven of the fifteen new aborts were one absent API**. Every one of those files writes
+
+```js
+constructor() { super(); this.internals_ = this.attachInternals(); }
+```
+
+so the constructor threw `TypeError: not a function` on the first line the class ran, §8.1.4.6's
+report fired an `error` event, `testharness.js` saw it, and the file read ERROR. That is the whole
+of `custom-elements/form-associated/` plus the `ElementInternals-*` files.
+
+**Network was available.** Everything below was read from the live standard on **2026-08-11**:
+
+| Standard | Source | Version read |
+| --- | --- | --- |
+| WHATWG HTML | `https://html.spec.whatwg.org/` | Living Standard, §4.10.18.3, §4.10.19, §4.10.21, §4.13.4, §4.13.5, §4.13.7 |
+| WAI-ARIA | `@webref/idl`'s `wai-aria.idl` | `interface mixin ARIAMixin`, read for its member list |
+
+Step numbers are the standard's own list numbering as of that date.
+
+### 16.0 Three things the live text says that a reasonable person would remember differently
+
+1. **`attachInternals` throws `NotSupportedError` for EVERY one of its five refusals — there is no
+   `InvalidStateError` in the algorithm.** Not for a customized built-in (step 1), not for a missing
+   definition (step 3), not for `disabledFeatures` containing `"internals"` (step 4), not for a
+   second call (step 5), and not for an element whose custom element state is neither
+   `"precustomized"` nor `"custom"` (step 6). A page's `catch (e) { e.name }` reads exactly that
+   string and the corpus asserts it.
+2. **`setValidity`'s `TypeError` for a true flag with no message is thrown BEFORE any flag is
+   written** (step 3 precedes step 4), so a rejected call leaves the element's validity untouched.
+   And its message is cleared, not kept, when every flag is false: step 5 says "the empty string if
+   *message* is not given **or all of element's validity flags are false**".
+3. **`setFormValue`'s OMITTED second argument is not the same as `null`.** Step 4 is "if the *state*
+   argument of the function is omitted, set element's state to its **submission value**"; step 6
+   stores a given `null` as the state. `undefined` passed explicitly is the IDL null for this
+   `(File or USVString or FormData)?` union, so `setFormValue(v, undefined)` stores a null state
+   while `setFormValue(v)` stores `v` — which only an `argc` test can tell apart.
+
+### 16.1 §4.13.4 `define()` — the four steps that build the definition's three booleans
+
+The steps inside "run the following steps while catching any exceptions" continue from §14's
+14.1-14.5:
+
+  6. Let *disabledFeatures* be an empty `sequence<DOMString>`. —
+  7. Let *disabledFeaturesIterable* be ? `Get(constructor, "disabledFeatures")`. — **`[S]`**
+     *(UNCONDITIONAL, unlike step 14.5's `observedAttributes`: it is read off every constructor,
+     and a page's static getter observes exactly that.)*
+  8. If it is not undefined, convert it to a `sequence<DOMString>`. — **`[S]` per entry**
+  9. If *disabledFeatures* contains `"internals"`, set *disableInternals* to true. —
+  10. If *disabledFeatures* contains `"shadow"`, set *disableShadow* to true. —
+  11. Let *formAssociatedValue* be ? `Get(constructor, "formAssociated")`. — **`[S]`**
+  12. Set *formAssociated* to the result of converting it to a boolean. — *(ToBoolean runs nothing;
+      the READ above is the page's code and has already happened.)*
+  13. If *formAssociated* is true, then for each *callbackName* of « `formAssociatedCallback`,
+      `formResetCallback`, `formDisabledCallback`, `formStateRestoreCallback` »: `Get(prototype,
+      callbackName)` and convert. — **`[S]` per key**
+
+**The form four are a SECOND list, not four more entries of step 14.4's.** Step 14.4 walks its list
+unconditionally; step 14.13 walks this one only for a form-associated class. Merging them would show
+a page's `Proxy` four reads the algorithm never makes — the same observability rule that keeps
+`connectedMoveCallback` off step 14.4's list while `moveBefore` does not exist. They index ONE
+callback map, contiguously, because step 15's definition holds one map.
+
+**And the checks moved to the order §4.13.4 states.** Steps 1-4 (IsConstructor; a valid custom
+element name; the name is not already defined; **the CONSTRUCTOR is not already defined**) precede
+steps 6-7's `extends`. This engine ran `extends` FIRST, so `define('not a name', C, {extends:'button'})`
+answered `NotSupportedError` where the standard answers step 2's `SyntaxError`. Reading the
+already-converted dictionary runs none of the page's code, so the only thing the order decided was
+WHICH exception — which is exactly the kind of thing a reordering is invisible in until someone
+catches it. Step 4 was absent entirely: `define('a-x', C); define('b-x', C)` passes step 3 both
+times, and answering step 4 is what the definition ORDER exists for, because a set keyed by name
+cannot be asked about a constructor.
+
+### 16.2 §4.13.5 step 10 — the upgrade's form-associated half
+
+  10. If *element* is a form-associated custom element:
+      1. **Reset the form owner** of *element*. If *element* is associated with a `form` element,
+         then **enqueue a custom element callback reaction** with *element*,
+         `"formAssociatedCallback"`, and « the associated form ». —
+      2. If *element* is **disabled**, then enqueue a callback reaction with `"formDisabledCallback"`
+         and « true ». —
+  11. Set *element*'s custom element state to `"custom"`. —
+
+Neither is `[S]`: both are ENQUEUES, so they run in the same drain after the constructor returns.
+The condition on 10.1's reaction is the OWNER being non-null — **not** whether the reset changed it,
+which is what §4.13.3's own trigger reads (see 16.4) and why the two are different calls.
+
+### 16.3 §4.13.7 `attachInternals()`
+
+  1. If this's **is value** is not null, throw `NotSupportedError`. — *(an `is` value is set only for
+     a customized built-in, and §4.13.4 refuses to register one at all, so nothing in this engine can
+     carry one. It becomes a real read in the diff that makes `extends` registrable.)*
+  2. Let *definition* be the result of **looking up a custom element definition** given this's
+     registry, namespace, local name and null. —
+  3. If *definition* is null, throw `NotSupportedError`. —
+  4. If *definition*'s **disable internals** is true, throw `NotSupportedError`. —
+  5. If this's **attached internals** is non-null, throw `NotSupportedError`. —
+  6. If this's custom element state is not `"precustomized"` or `"custom"`, throw
+     `NotSupportedError`. — *(this is what makes the call legal from INSIDE the constructor: §4.13.5
+     step 8.2 sets `"precustomized"` before it Constructs.)*
+  7. Set this's attached internals to a new `ElementInternals` whose **target element** is this. —
+  8. Return it. —
+
+**No step is `[S]`.** Step 2 reads the ELEMENT's own definition record, not a property of anything
+the page owns, so the whole algorithm is ordinary C.
+
+### 16.4 §4.10.18.3 "reset the form owner", and where it is triggered
+
+  1. Unset *element*'s **parser inserted** flag. — *(this engine's tree builder keeps no "form element
+     pointer", so it makes no parser association and there is nothing to unset. It becomes a real
+     field in the same diff that pointer does.)*
+  2. If ALL of: *element*'s form owner is not null; *element* is not listed **or** its `form` content
+     attribute is not present; and its form owner is its nearest ancestor `form` — then return. —
+  3. Set *element*'s form owner to null. —
+  4. If *element* is listed, has a `form` content attribute, **and is connected**: if the first
+     element in *element*'s TREE, in tree order, whose ID equals that attribute's value is a `form`,
+     associate them. —
+  5. **Otherwise**, if *element* has an ancestor `form`, associate it with the nearest one. —
+
+**Step 5's "otherwise" is on step 4's CONDITION, not on its result.** A connected
+`<my-control form="nothing">` inside a `<form>` therefore keeps a NULL owner — which is also why the
+owner is STORED rather than derived at read time.
+
+**§4.13.3's trigger is separate from §4.13.5 step 10's:** "when the user agent resets the form owner
+of a form-associated custom element and doing so **changes** the form owner, its
+`formAssociatedCallback` is called, given the new form owner **(or null if no owner)**". The null
+argument is real, which is why this cannot be folded into step 10.1's non-null-only enqueue.
+
+**AND THE `form` ATTRIBUTE'S NEW VALUE IS AN ARGUMENT, NOT A READ.** DOM §4.9's "change an
+attribute" runs the attribute change steps **before** it stores the value, and the attribute write is
+one of this reset's triggers — so an implementation that reaches through to the element from that
+trigger reads the value the write is *replacing*. It is the same defect as any operation whose inputs
+are read at the wrong time, and it is silent because the wrong value is a real value belonging to
+that element.
+
+The triggers this engine can see are the element's own insertion, its own removal, its own `form`
+write, and §4.13.5 step 10. **Named ABSENT:** the resets HTML also requires when some OTHER element's
+`id` changes, or when an element with an ID enters or leaves the document — both need a
+document-level id index, which this engine does not have (`getElementById` walks), and a tree walk
+per `id` write is not that index.
+
+### 16.5 §4.13.7.3's members, and the one `[S]` among them
+
+| Member | Steps | Suspends |
+| --- | --- | --- |
+| `form` | throw `NotSupportedError` unless a FACE; else the form owner | — |
+| `setFormValue(value, state)` | 1-6 above | — |
+| `setValidity(flags, message, anchor)` | 1-9; `TypeError` at 3, `NotFoundError` at 8 | — |
+| `willValidate` | is the target a **candidate for constraint validation** | — |
+| `validity` | a LIVE `ValidityState` over the element's flags | — |
+| `validationMessage` | the stored validation message | — |
+| `checkValidity()` | §4.10.21.1's **check validity steps** | **`[S]`** at step 1.1 |
+| `reportValidity()` | §4.10.21.1's **report validity steps** | **`[S]`** at step 1.1 |
+| `labels` | §4.10.19's label association, as a static `NodeList` | — |
+| `states` | §4.13.7.5's `CustomStateSet` | — |
+
+**Both validity methods are ONE machine.** §4.10.21.1's two step lists differ in exactly one place:
+
+  1. If *element* is a candidate for constraint validation and does not satisfy its constraints:
+     1. Fire an event named `invalid` at *element*, cancelable. — **`[S]`**
+     2. *(report only)* If the event was not canceled, report the problems to the **user**. —
+     3. Return false. —
+  2. Return true. —
+
+Step 1.2 is a UA presentation with no scriptable result, so the two algorithms are one implementation
+with two `.algorithm` labels; step 1.1 is the page's own handlers and is why they are machines at all.
+
+**A FACE is barred from constraint validation** when it is **disabled**, when its `readonly` content
+attribute is specified (§4.13's own sentence), or when it has a `datalist` ancestor.
+
+### 16.5a Two members the measurement named, and the brand a class id cannot express
+
+`ElementInternals-validation.html` and `CustomElementRegistry-upgrade.html` both stop on
+`customElements.upgrade is not a function`, so §4.13.4's
+
+  1. Let *candidates* be a list of all of *root*'s shadow-including inclusive descendant elements, in
+     shadow-including tree order. —
+  2. For each *candidate*: **try to upgrade** *candidate*. —
+
+is built. Neither step is `[S]` — "try to upgrade" ENQUEUES, and the `[CEReactions]` epilogue every
+declared member ends through is what drains it.
+
+And `setValidity`'s third argument is `optional HTMLElement anchor`, which **a class-id brand cannot
+state**: every DOM node wrapper in this engine is one class, so `idl_iface_brand(node_class_id())`
+says "a Node" and lets `document.createElementNS('some-ns', 'foo')` cross where the IDL says
+TypeError. A brand is part of the TYPE and not something a body re-tests, so the declaration surface
+gained a NARROWING predicate (`idl_iface_narrow`) that runs after the class check and throws the same
+TypeError. `html_element_is` is that predicate for HTMLElement, and the namespace is the whole of it:
+§4's element-interface table maps every HTML-namespace element to an interface inheriting HTMLElement,
+including `HTMLUnknownElement`. Every `Element`/`HTMLFormElement`/`HTMLElement`-typed argument in the
+platform has the same gap and the same one-line answer.
+
+### 16.6 What is honestly ABSENT, by name
+
+- **`shadowRoot`.** There is no Shadow DOM in this engine — no `attachShadow`, no `ShadowRoot`
+  interface — so §4.13.7.2's getter has no "is a shadow host" to ask. A getter that could only ever
+  answer `null` is the shape-only stub the IDL audit exists to expose, so the member is absent and
+  the page's own `TypeError` names it. §4.13.4's **disable shadow** boolean is collected anyway,
+  because it comes off the same sequence **disable internals** does; §4.13.5 step 8.1's check and
+  `attachShadow` are its two readers and both arrive together.
+- **ARIAMixin's eight ELEMENT-reflecting members** — `ariaActiveDescendantElement` and the seven
+  `FrozenArray<Element>?` ones. They are not content-attribute reflections at all; they are the
+  "explicitly set attr-element" machinery, with its own lifetime rules. The **46 `DOMString?`
+  members are real** and reflect into §4.13.7.4's internal content attribute map.
+- **The SUBMISSION side of `setFormValue`.** The submission value and the state are stored exactly as
+  §4.13.7.3 says, and §4.13.7.3's **entry construction algorithm** has nothing to run in: form
+  submission's control list is a tree walk over the form's built-in descendants, and
+  `new FormData(form)` already `DFAIL`s on the same missing algorithm. Both widen together, and doing
+  so is what makes a form-associated custom element's value reach an `@H` record.
+- **`formStateRestoreCallback` and `formResetCallback` have no CALLER.** Both are collected by step
+  14.13 and both are enqueueable through one entry point; the first needs a session-history state
+  restore and the second needs `form.reset()`, neither of which exists.
+- **§4.13.4 steps 8-9's "element definition is running" flag.** It guards against a `define()`
+  re-entered from a getter the same `define()` invoked; the flag is state on the registry, which is
+  per-realm, so it lands with the scoped-registry work that also makes step 7.1's "is scoped" real.

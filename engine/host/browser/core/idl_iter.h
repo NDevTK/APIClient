@@ -1,6 +1,7 @@
 /* DRIVING AN ES ITERABLE AS A SEQUENCE OF REQUESTS — Web IDL §3.2.20's `sequence<T>` conversion. See idl_iter.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_IDL_ITER_H
 #define ENGINE_HOST_BROWSER_CORE_IDL_ITER_H
+#include <stdbool.h>
 #include "quickjs.h"
 #include "quickjs-step.h"
 
@@ -67,6 +68,12 @@ typedef struct {
     /* Fills *key and *value (owned by the caller). Only called with 0 <= i < count. */
     void (*pair)(JSContext *ctx, JSValueConst target, int i, JSValue *key, JSValue *value);
     const char *iface;   /* the interface's identifier, for the @@toStringTag and the class name */
+    /* IS THIS A `setlike<V>` RATHER THAN AN `iterable<K, V>`? §3.7.10 makes @@iterator the same function object
+       as `entries` for the second and as `values` for the first, so `for (const s of set)` yields the VALUES
+       and not « v, v » pairs. It is declared here, beside the members, because it is a fact about the
+       DECLARATION — a caller passing a flag to the install would be the same fact asked at the wrong place,
+       and the interface that forgot to pass it would silently iterate pairs. */
+    bool setlike;
 } IdlPairIterOps;
 
 /* DECLARE the iterator class, its prototype and the forEach machine for one interface. Returns a handle. */

@@ -502,9 +502,10 @@ void idl_pair_iter_install(JSContext *ctx, JSValueConst proto, int handle)
     idl_install_method(ctx, proto, "entries", 0, g_pair[handle].id_entries);
     /* ONE forEach def serves every interface; `arg` is which one, read off the header by the step. */
     idl_install_step_method(ctx, proto, "forEach", 1, g_pair[handle].foreach_stepid);
-    /* §3.7.10: @@iterator on the interface IS `entries` — the same function object, so
-       `h[Symbol.iterator] === h.entries` the way the spec states it. */
-    entries = JS_GetPropertyStr(ctx, proto, "entries");
+    /* §3.7.10: @@iterator on the interface IS `entries` for an `iterable<K, V>` and `values` for a
+       `setlike<V>` — the SAME function object either way, so `h[Symbol.iterator] === h.entries` (or
+       `=== s.values`) the way the spec states it. Which one comes off the declaration, not off the caller. */
+    entries = JS_GetPropertyStr(ctx, proto, g_pair[handle].ops->setlike ? "values" : "entries");
     JS_DefinePropertyValue(ctx, (JSValue)proto, JS_DupAtom(ctx, JS_WellKnownSymbolAtom(JS_WKS_ITERATOR)),
                            entries, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }

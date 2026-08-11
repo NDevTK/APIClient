@@ -2,6 +2,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_HTML_ELEMENT_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_HTML_ELEMENT_H
 #include <lexbor/dom/dom.h>
+#include <stdbool.h>
 #include "quickjs.h"
 
 /* Build HTMLElement.prototype on Element.prototype, then every per-tag interface on top of it. Called by
@@ -14,6 +15,12 @@ void html_element_free(JSContext *ctx);
    custom element constructor whose NewTarget carries a non-object `prototype` gets the interface prototype
    object of that constructor's realm, so the answer is a realm's and never a static. */
 JSValue html_element_proto(JSContext *ctx);
+/* IS THIS VALUE AN HTMLElement — an ELEMENT node in the HTML namespace. Every node wrapper shares one class,
+   so a class-id brand cannot tell a `Node` from an `HTMLElement`, and the platform's IDL says both: it is
+   `optional HTMLElement anchor` that a foreign-namespace element must not cross. The question is HTML's (the
+   namespace is what decides it) so the answer lives here, and idl_iface_narrow is what a member declares it
+   with. */
+bool html_element_is(JSValueConst v);
 /* §4's HTMLUnknownElement.prototype FOR THIS REALM. OWNED. DOM §4.9 step 5.1.4's failure arm names the
    interface by name — "create an element internal given document, HTMLUnknownElement, localName, …" — so a
    custom element whose constructor threw is an HTMLUnknownElement with that local name, which is what makes

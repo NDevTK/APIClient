@@ -26,6 +26,7 @@
 #include "core/html/html_element.h"
 #include "core/html/html_form.h"
 #include "core/html/custom_elements.h"
+#include "core/html/element_internals.h"
 #include "core/html/html_iframe.h"
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
@@ -1691,6 +1692,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     html_element_install(ctx, global);   /* HTMLElement and every per-tag interface object */
     cssom_install(ctx, global);          /* CSSStyleDeclaration, and getComputedStyle on the Window */
     custom_elements_install(ctx, global);   /* §4.13.4 window.customElements */
+    element_internals_install(ctx, global);  /* §4.13.7 ElementInternals, CustomStateSet, ValidityState */
     dom_token_list_install(ctx, global);    /* §7.1 DOMTokenList */
     node_filter_install(ctx, global);       /* §6.3 NodeFilter — the constants every traverser is read with */
     node_iterator_install(ctx, global);     /* §6.1 NodeIterator */

@@ -57,6 +57,7 @@
 #include "core/dom/document.h"
 #include "core/html/html_element.h"
 #include "core/html/custom_elements.h"
+#include "core/html/element_internals.h"
 
 /* §4.13.4 THE DEFINITION SET IS A HEAP OBJECT, AND THAT IS THE WHOLE ISOLATION STORY. A registry in C globals
    is SHARED state outside the per-flow COW delta, so a flow that forks anywhere BEFORE `define()` runs it in
@@ -136,6 +137,15 @@ static JSAtom g_atom_callbacks = JS_ATOM_NULL;     /* the definition's own key f
 static JSAtom g_atom_name = JS_ATOM_NULL;
 static JSAtom g_atom_local = JS_ATOM_NULL;
 static JSAtom g_atom_stack = JS_ATOM_NULL;
+/* §4.13.4 step 15's THREE BOOLEAN FIELDS, and the two class properties steps 14.7 and 14.11 read them out of.
+   They are fields of the DEFINITION and not questions asked of the constructor later, for the same reason
+   `observed attributes` is: a class that reassigns `formAssociated` after `define()` must not retroactively
+   make its already-registered elements form-associated. Stored as one flags integer under one key, because
+   the three are written together by one step list and read together by one predicate — three keys would be
+   three chances for a definition to carry two of them. */
+static JSAtom g_atom_flags = JS_ATOM_NULL;
+static JSAtom g_atom_disabled_src = JS_ATOM_NULL;   /* the class's `disabledFeatures` */
+static JSAtom g_atom_form_assoc_src = JS_ATOM_NULL; /* the class's `formAssociated` */
 
 /* §4.13.5 step 2's "set element's custom element definition to definition" — the element's OWN slot, under a
    symbol the page cannot mint, so no string key of this engine's invention appears on a custom element. It
@@ -162,19 +172,35 @@ static JSAtom  g_atom_state = JS_ATOM_NULL;
    `connectedMoveCallback` is NOT here because `moveBefore` is not: §4.13.4 names that key on a platform that
    has the operation which fires it, and collecting one for an operation this engine cannot perform would show
    a page's Proxy a read for a callback nothing will ever invoke. custom_elements_install ASSERTS that pairing.
-   The form-associated four (step 14.12) are a different map, collected only when `formAssociated` converts to
-   true — a step this component has not built, so they are honestly absent rather than half-collected here. */
+   THE FORM FOUR ARE A SECOND LIST AND NOT FOUR MORE ENTRIES OF THIS ONE, because §4.13.4 reads them at a
+   different STEP under a different condition: step 14.4 walks THIS list unconditionally off the prototype, and
+   step 14.13 walks the form list only when step 14.12's `formAssociated` converted to true. Merging them would
+   show a page's Proxy four reads the algorithm never makes for a class that is not form-associated — the same
+   observability rule that keeps `connectedMoveCallback` out. They index into ONE callback map, contiguously,
+   because §4.13.4 step 15's definition holds one map and a reaction names one entry of it. */
 #define CE_LIFECYCLE_CALLBACKS(X) \
     X(CE_CB_CONNECTED,    "connectedCallback") \
     X(CE_CB_DISCONNECTED, "disconnectedCallback") \
     X(CE_CB_ADOPTED,      "adoptedCallback") \
     X(CE_CB_ATTR_CHANGED, "attributeChangedCallback")
+/* §4.13.4 step 14.13's « formAssociatedCallback, formResetCallback, formDisabledCallback,
+   formStateRestoreCallback » — IN THAT ORDER, because the reads are observable in it. */
+#define CE_FORM_CALLBACKS(X) \
+    X(CE_CB_FORM_ASSOCIATED,    "formAssociatedCallback") \
+    X(CE_CB_FORM_RESET,         "formResetCallback") \
+    X(CE_CB_FORM_DISABLED,      "formDisabledCallback") \
+    X(CE_CB_FORM_STATE_RESTORE, "formStateRestoreCallback")
 #define CE_CB_ID(id, name)   id,
 #define CE_CB_NAME(id, name) name,
-enum { CE_LIFECYCLE_CALLBACKS(CE_CB_ID) CE_CB_COUNT };
-static const char *const CE_CALLBACK_NAMES[CE_CB_COUNT] = { CE_LIFECYCLE_CALLBACKS(CE_CB_NAME) };
+enum { CE_LIFECYCLE_CALLBACKS(CE_CB_ID) CE_FORM_CALLBACKS(CE_CB_ID) CE_CB_COUNT,
+       /* WHERE THE SECOND LIST STARTS, stated as the first id of it rather than as the length of the first —
+          so step 14.4's loop bound and step 14.13's starting index are the SAME fact and cannot drift. */
+       CE_CB_LIFECYCLE_COUNT = CE_CB_FORM_ASSOCIATED };
+static const char *const CE_CALLBACK_NAMES[CE_CB_COUNT] = {
+    CE_LIFECYCLE_CALLBACKS(CE_CB_NAME) CE_FORM_CALLBACKS(CE_CB_NAME)
+};
 static JSAtom g_cb_atoms[CE_CB_COUNT];
-static int    g_id_define, g_id_get, g_id_when_defined;   /* declared once per agent — see custom_elements_init */
+static int    g_id_define, g_id_get, g_id_when_defined, g_id_upgrade;   /* declared once per agent */
 
 /* The definition for a name, or JS_UNDEFINED. OWNED by the caller. */
 static JSValue ce_find(JSContext *ctx, const char *name, size_t len)
@@ -554,8 +580,13 @@ static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el
         return 0;
     }
     JS_FreeValue(ctx, made);
-    /* step 11. Step 10's form-associated half is absent with formAssociated itself. */
-    ce_set_state(ctx, el, CE_STATE_CUSTOM);
+    /* Step 10: a form-associated custom element gets its form owner reset here, with a formAssociatedCallback
+       for the form it lands on and a formDisabledCallback when it is disabled — both ENQUEUED, so they run in
+       this same drain after the constructor. The algorithm belongs to §4.13.7's component because the owner and
+       the disabled question are the FORM layer's; the reaction is this one's, which is the one line joining
+       them. */
+    element_internals_upgrade_form_steps(ctx, el);
+    ce_set_state(ctx, el, CE_STATE_CUSTOM);   /* step 11 */
     return 0;
 }
 
@@ -778,6 +809,42 @@ JSValue custom_elements_definition_for_name(JSContext *ctx, const char *name, si
 {
     if (!g_ready) return JS_UNDEFINED;
     return ce_find(ctx, name, len);
+}
+
+bool custom_elements_definition_flag(JSContext *ctx, JSValueConst def, CustomElementDefinitionFlag which)
+{
+    JSValue v;
+    int32_t bits = 0;
+
+    if (!JS_IsObject(def)) return false;
+    v = JS_GetProperty(ctx, def, g_atom_flags);
+    DCHECK(JS_IsNumber(v), "a custom element definition carries no §4.13.4 step 15 flags word — every "
+                           "definition this component commits writes one, so a missing word is a definition "
+                           "it did not make");
+    JS_ToInt32(ctx, &bits, v);
+    JS_FreeValue(ctx, v);
+    return (bits & (1 << (int)which)) != 0;
+}
+
+JSValue custom_elements_definition_of_element(JSContext *ctx, JSValueConst wrap)
+{
+    DCHECK(g_ready, "an element's custom element definition was asked for before custom_elements_init ran");
+    return ce_definition_of(ctx, wrap);
+}
+
+int custom_elements_state_of_element(JSContext *ctx, JSValueConst wrap)
+{
+    DCHECK(g_ready, "an element's custom element state was asked for before custom_elements_init ran");
+    return ce_state_of(ctx, wrap);
+}
+
+bool custom_elements_is_form_associated(JSContext *ctx, JSValueConst wrap)
+{
+    JSValue def = custom_elements_definition_of_element(ctx, wrap);
+    bool r = custom_elements_definition_flag(ctx, def, CE_DEF_FORM_ASSOCIATED);
+
+    JS_FreeValue(ctx, def);
+    return r;
 }
 
 JSValue custom_elements_definition_constructor(JSContext *ctx, JSValueConst def)
@@ -1156,6 +1223,21 @@ static void ce_enqueue(JSContext *ctx, JSValueConst wrap, JSValueConst def, int 
     ce_enqueue_args(ctx, wrap, def, callback, 0, NULL);
 }
 
+void custom_elements_enqueue_form_callback(JSContext *ctx, JSValueConst wrap, int which,
+                                           int argc, JSValueConst *args)
+{
+    JSValue def;
+
+    DCHECK(g_ready, "a form lifecycle reaction was enqueued before custom_elements_init ran");
+    DCHECK(which >= 0 && which <= CE_FORM_CB_STATE_RESTORE,
+           "a form lifecycle reaction was enqueued for a callback §4.13.4 step 14.13 does not name");
+    /* The public ids are the step 14.13 list's ORDER, so they index the one callback map by offsetting past
+       step 14.4's — one addition rather than a second enum a caller could get out of step with. */
+    def = ce_definition_of(ctx, wrap);
+    ce_enqueue_args(ctx, wrap, def, CE_CB_LIFECYCLE_COUNT + which, argc, args);
+    JS_FreeValue(ctx, def);
+}
+
 /* §4.13.6 "enqueue a custom element upgrade reaction". Two steps and both of them matter: the reaction records
    the DEFINITION so the upgrade that eventually runs uses the one that was current when the element was
    reached, and the ELEMENT joins an element queue so the drain finds it. Nothing about the element changes
@@ -1220,6 +1302,10 @@ void custom_elements_disconnected(JSContext *ctx, lxb_dom_element_t *el)
         def = ce_definition_of(ctx, wrap);
         ce_enqueue(ctx, wrap, def, CE_CB_DISCONNECTED);
         JS_FreeValue(ctx, def);
+        /* §4.10.18.3: "the form owner is also reset by the HTML element removing steps" — which is what drops
+           a `form=`-associated element's owner when it leaves the document, because step 4's condition
+           includes "and is connected". */
+        element_internals_reset_form_owner(ctx, wrap, ELEMENT_INTERNALS_ATTR_UNCHANGED, 0);
     }
     JS_FreeValue(ctx, wrap);
 }
@@ -1239,6 +1325,10 @@ void custom_elements_element_connected(JSContext *ctx, lxb_dom_element_t *el)
         JSValue def = ce_definition_of(ctx, wrap);
         ce_enqueue(ctx, wrap, def, CE_CB_CONNECTED);
         JS_FreeValue(ctx, def);
+        /* §4.10.18.3: "the form owner is also reset by the HTML element insertion steps". Only for an element
+           that is ALREADY custom — one being tried for upgrade has §4.13.5 step 10 ahead of it, and resetting
+           here as well would enqueue a formAssociatedCallback the upgrade is about to enqueue again. */
+        element_internals_reset_form_owner(ctx, wrap, ELEMENT_INTERNALS_ATTR_UNCHANGED, 0);
     } else {
         ce_try_upgrade(ctx, el, wrap);
     }
@@ -1301,6 +1391,14 @@ void custom_elements_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, co
     args[3] = ns ? JS_NewString(ctx, ns) : JS_NULL;
     ce_enqueue_args(ctx, wrap, def, CE_CB_ATTR_CHANGED, 4, (JSValueConst *)args);
     for (i = 0; i < 4; i++) JS_FreeValue(ctx, args[i]);
+    /* §4.10.18.3: "when a listed form-associated element's `form` attribute is set, changed, or removed, the
+       user agent must reset the form owner of that element". THE NEW VALUE IS HANDED OVER rather than read
+       back off the element: DOM §4.9 runs the attribute change steps BEFORE the value is stored, so an
+       algorithm that reaches through to the element here reads the value the write is replacing. That is the
+       defect that arrives with every operation whose inputs are read at the wrong time, and it is silent
+       because the wrong value is a real value belonging to that element. */
+    if (!ns && strcmp(local, "form") == 0)
+        element_internals_reset_form_owner(ctx, wrap, val, val_len);
     JS_FreeValue(ctx, def);
     JS_FreeValue(ctx, wrap);
 }
@@ -1422,25 +1520,34 @@ static const IdlDictMember CE_DEFINE_OPTS[] = { { "extends", IDL_DOMSTRING } }; 
    it the page's code, and it was a JS_GetProperty from C — a C activation hosting the page's loops, which is
    the one thing this declaration surface exists to remove. */
 #define CE_DEFINE_STAGES(X) \
-    X(CE_CHECKS,    "HTML §4.13.4 steps 1-7 (IsConstructor; a valid custom element name; the name is not " \
-                    "already defined; `extends`)") \
+    X(CE_CHECKS,    "HTML §4.13.4 steps 1-7 (IsConstructor; a valid custom element name; the name and the " \
+                    "constructor are not already defined; `extends`)") \
     X(CE_PROTOTYPE, "HTML §4.13.4 steps 14.1-14.2 (Get(constructor, \"prototype\"); it must be an Object)") \
     X(CE_CALLBACKS, "HTML §4.13.4 step 14.4 (Get(prototype, callbackName) for each key of lifecycleCallbacks, " \
                     "in the map's order, converting each to the Function callback type), one key per step") \
     X(CE_OBSERVED,  "HTML §4.13.4 step 14.5.1 (Get(constructor, \"observedAttributes\"), reached only when " \
                     "step 14.4 collected an attributeChangedCallback)") \
     X(CE_SEQUENCE,  "HTML §4.13.4 step 14.5.2 (converting it to a sequence<DOMString>), one entry per step") \
+    X(CE_DISABLED,  "HTML §4.13.4 step 14.7 (Get(constructor, \"disabledFeatures\"))") \
+    X(CE_DISABLED_SEQ, "HTML §4.13.4 step 14.8 (converting it to a sequence<DOMString>), one entry per step") \
+    X(CE_FORM_FLAG, "HTML §4.13.4 step 14.11 (Get(constructor, \"formAssociated\"); step 14.12's ToBoolean " \
+                    "runs no code, and steps 14.9-14.10 read the sequence step 14.8 built)") \
+    X(CE_FORM_CB,   "HTML §4.13.4 step 14.13 (Get(prototype, callbackName) for each of « " \
+                    "formAssociatedCallback, formResetCallback, formDisabledCallback, formStateRestoreCallback " \
+                    "», reached only when step 14.12 answered true), one key per step") \
     X(CE_COMMIT,    "HTML §4.13.4 steps 15-16 and 18 (the definition, and the upgrade reaction for each " \
                     "candidate)")
 enum { IDL_STEP_STAGE_BASE(CE_DEFINE_STAGES) CE_DEFINE_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const CE_DEFINE_STEPS[] = { CE_DEFINE_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
-    uint32_t i, n;      /* THE RESUME POINT: step 14.4's callback key, then the observed-attribute entry */
+    uint32_t i, n;      /* THE RESUME POINT: step 14.4's callback key, then the sequence entry */
     JSValue  proto;     /* step 14.1's answer (owned) */
-    JSValue  callbacks; /* step 14.4's map, indexed by CE_CB_* (owned) */
-    JSValue  raw;       /* what the observedAttributes getter answered (owned) */
-    JSValue  names;     /* the converted sequence<DOMString> (owned) */
+    JSValue  callbacks; /* step 14.4's and step 14.13's map, indexed by CE_CB_* (owned) */
+    JSValue  raw;       /* what the observedAttributes / disabledFeatures getter answered (owned) */
+    JSValue  names;     /* step 14.5.2's converted sequence<DOMString> (owned) */
+    JSValue  features;  /* step 14.8's converted sequence<DOMString> (owned) */
+    uint32_t flags;     /* step 15's three booleans, as CE_DEF_* bit positions */
 } CeDefineState;
 
 static void ce_define_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -1450,6 +1557,7 @@ static void ce_define_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->callbacks);
     v->val(ctx, &s->raw);
     v->val(ctx, &s->names);
+    v->val(ctx, &s->features);
 }
 
 static void ce_define_release(JSContext *ctx, void *st)
@@ -1459,7 +1567,63 @@ static void ce_define_release(JSContext *ctx, void *st)
     JS_FreeValue(ctx, s->callbacks);
     JS_FreeValue(ctx, s->raw);
     JS_FreeValue(ctx, s->names);
-    s->proto = s->callbacks = s->raw = s->names = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->features);
+    s->proto = s->callbacks = s->raw = s->names = s->features = JS_UNDEFINED;
+}
+
+/* §4.13.4'S TWO `sequence<DOMString>` CONVERSIONS AS ONE WALK — step 14.5.2's observedAttributes and step
+   14.8's disabledFeatures are the same conversion over the same cursor, and writing it twice is how the second
+   one gets a `length` read the first one does not. `dest` receives the converted entries; `s->raw` is the
+   value the getter answered and `s->i`/`s->n` are the resume point. Returns >0 parked on ONE entry's ToString
+   (the caller returns it), 0 when the sequence is exhausted, or -1 with a throw live. */
+static int ce_sequence_run(JSContext *ctx, JSStepHdr *hdr, CeDefineState *s, JSValueConst dest,
+                           JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    while (s->i < s->n) {
+        JSValue entry = JS_GetPropertyUint32(ctx, s->raw, s->i);
+        JSValue item = JS_UNDEFINED;
+        int r = step_tostring_run(ctx, hdr, entry, cb_result, &item, out_cb, out_argc);
+
+        JS_FreeValue(ctx, entry);
+        cb_result = JS_UNDEFINED;
+        if (r > 0) return r;          /* parked ON THIS ENTRY; the resume comes back to it */
+        if (r < 0) return -1;
+        JS_SetPropertyUint32(ctx, (JSValue)dest, s->i, item);
+        s->i++;
+    }
+    JS_FreeValue(ctx, cb_result);
+    return 0;
+}
+
+/* THE LENGTH OF WHAT A GETTER ANSWERED WITH, for the walk above. §4.13.4 converts a
+   `sequence<DOMString>`, whose length is itself a read — of an engine-visible array in every real case. */
+static uint32_t ce_sequence_length(JSContext *ctx, JSValueConst raw)
+{
+    uint32_t n = 0;
+
+    if (JS_IsObject(raw)) {
+        JSValue lv = JS_GetPropertyStr(ctx, raw, "length");
+        JS_ToUint32(ctx, &n, lv);
+        JS_FreeValue(ctx, lv);
+    }
+    return n;
+}
+
+/* Infra's "list contains" over a converted sequence — steps 14.9 and 14.10's test on disabledFeatures. */
+static bool ce_sequence_contains(JSContext *ctx, JSValueConst seq, const char *want)
+{
+    uint32_t n = ce_sequence_length(ctx, seq), i;
+
+    for (i = 0; i < n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, seq, i);
+        const char *s = JS_ToCString(ctx, e);
+        bool hit = s != NULL && strcmp(s, want) == 0;
+
+        if (s) JS_FreeCString(ctx, s);
+        JS_FreeValue(ctx, e);
+        if (hit) return true;
+    }
+    return false;
 }
 
 /* §4.13.4 STEPS 1-7 — everything the spec decides BEFORE it touches the page's object. Its own function
@@ -1478,20 +1642,6 @@ static int ce_define_checks(JSContext *ctx, int argc, JSValueConst *argv)
         JS_ThrowTypeError(ctx, "customElements.define requires a constructor");
         return -1;
     }
-    /* steps 6-7: customized built-ins. Rejected rather than registered as autonomous — quietly treating
-       `{extends:'button'}` as a new tag would define something the page never asked for and leave the button
-       it did ask for un-upgraded. */
-    ext = idl_dict_get(ctx, argc > 2 ? argv[2] : JS_UNDEFINED, "extends");
-    if (JS_IsString(ext)) {
-        JS_FreeValue(ctx, ext);
-        JS_ThrowDOMException(ctx, "NotSupportedError",
-                             "a customized built-in (`extends`) is not modelled: this engine has no built-in "
-                             "element to customize yet, and registering it as an autonomous element would "
-                             "define a tag the page never asked for");
-        return -1;
-    }
-    JS_FreeValue(ctx, ext);
-
     nm = JS_ToCStringLen(ctx, &nlen, argv[0]);   /* a real string by now: the declaration converted it */
     if (!nm) return -1;
     if (!ce_name_valid(nm, nlen)) {              /* step 2 */
@@ -1507,6 +1657,46 @@ static int ce_define_checks(JSContext *ctx, int argc, JSValueConst *argv)
         JS_ThrowDOMException(ctx, "NotSupportedError", "this name is already defined");
         return -1;
     }
+    /* step 4: the definition set already contains an item with THIS CONSTRUCTOR. It is a second question and
+       not the same one — `define('a-x', C); define('b-x', C)` passes step 3 both times — and answering it is
+       what the definition ORDER exists for, because a set keyed by name cannot be asked about a constructor. */
+    {
+        JSValue list = ce_deflist(ctx);
+        uint32_t n = ce_array_len(ctx, list), i;
+        bool dup = false;
+
+        for (i = 0; i < n && !dup; i++) {
+            JSValue d = JS_GetPropertyUint32(ctx, list, i);
+            JSValue c = JS_GetProperty(ctx, d, g_atom_ctor);
+
+            dup = JS_VALUE_GET_PTR(c) == JS_VALUE_GET_PTR(argv[1]);
+            JS_FreeValue(ctx, c);
+            JS_FreeValue(ctx, d);
+        }
+        JS_FreeValue(ctx, list);
+        if (dup) {
+            JS_ThrowDOMException(ctx, "NotSupportedError", "this constructor is already defined");
+            return -1;
+        }
+    }
+    /* steps 6-7: customized built-ins. Rejected rather than registered as autonomous — quietly treating
+       `{extends:'button'}` as a new tag would define something the page never asked for and leave the button
+       it did ask for un-upgraded.
+       IT IS ASKED LAST, WHICH IS WHERE §4.13.4 ASKS IT. This ran FIRST, so
+       `define('not a name', C, {extends:'button'})` answered NotSupportedError where the standard answers
+       step 2's SyntaxError — a page's `catch` tells those apart, and so does the corpus. Reading the
+       already-converted dictionary runs none of the page's code, so the only thing the order decided was
+       WHICH exception, which is exactly the thing a reordering is invisible in until someone catches it. */
+    ext = idl_dict_get(ctx, argc > 2 ? argv[2] : JS_UNDEFINED, "extends");
+    if (JS_IsString(ext)) {
+        JS_FreeValue(ctx, ext);
+        JS_ThrowDOMException(ctx, "NotSupportedError",
+                             "a customized built-in (`extends`) is not modelled: this engine has no built-in "
+                             "element to customize yet, and registering it as an autonomous element would "
+                             "define a tag the page never asked for");
+        return -1;
+    }
+    JS_FreeValue(ctx, ext);
     return 0;
 }
 
@@ -1514,7 +1704,7 @@ static int ce_define_checks(JSContext *ctx, int argc, JSValueConst *argv)
    stays that way: every value it needs is already real, and this is the part that touches only the component's
    own state. `proto` is step 14.1's answer, read as a request rather than here. */
 static JSValue ce_define_commit(JSContext *ctx, JSValueConst *argv, JSValueConst names, JSValueConst proto,
-                                JSValueConst callbacks)
+                                JSValueConst callbacks, uint32_t flags)
 {
     const char *nm;
     size_t nlen;
@@ -1550,6 +1740,8 @@ static JSValue ce_define_commit(JSContext *ctx, JSValueConst *argv, JSValueConst
            where a reaction reads its callback from, which is what makes a later `X.prototype.connectedCallback
            = other` change nothing about the elements already defined. */
         JS_SetProperty(ctx, def, g_atom_callbacks, JS_DupValue(ctx, callbacks));
+        /* §4.13.4 step 15's form-associated, disable internals and disable shadow. */
+        JS_SetProperty(ctx, def, g_atom_flags, JS_NewUint32(ctx, flags));
         a = JS_NewAtomLen(ctx, nm, nlen);
         CHECK(a != JS_ATOM_NULL, "custom elements: a name could not be interned");
         {
@@ -1576,7 +1768,6 @@ static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     CeDefineState *s = st;
-    JSValue item;
     int r;
 
     if (hdr->stage == CE_CHECKS) {
@@ -1585,9 +1776,11 @@ static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
         /* EVERY owned field before the first thing that can throw: the failure path tears this state down
            through ce_define_release, which frees exactly what the state holds and nothing else. */
         s->proto = s->raw = JS_UNDEFINED;
+        s->flags = 0;
         s->callbacks = JS_NewArray(ctx);
         s->names = JS_NewArray(ctx);
-        CHECK(!JS_IsException(s->callbacks) && !JS_IsException(s->names),
+        s->features = JS_NewArray(ctx);
+        CHECK(!JS_IsException(s->callbacks) && !JS_IsException(s->names) && !JS_IsException(s->features),
               "custom elements: OOM building §4.13.4 step 14's callback map — a definition with no callbacks "
               "is a class whose lifecycle code never runs");
         /* `define(name, constructor, optional options)` declares two required arguments, and Web IDL's own
@@ -1615,7 +1808,7 @@ static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
            HERE rather than reading one off the element per reaction is the whole point: a browser answers a
            reaction with the function this loop saw, so reassigning the prototype's property afterwards changes
            nothing, and an own property on the element is not a lifecycle callback at all. */
-        while (s->i < CE_CB_COUNT) {
+        while (s->i < CE_CB_LIFECYCLE_COUNT) {
             JSValue v = JS_UNDEFINED;
             r = step_getprop_run(ctx, hdr, s->proto, g_cb_atoms[s->i], cb_result, &v, out_cb, out_argc);
             cb_result = JS_UNDEFINED;
@@ -1651,7 +1844,7 @@ static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
         if (!observes) {
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
-            hdr->stage = CE_COMMIT;
+            hdr->stage = CE_DISABLED;
         } else {
             r = step_getprop_run(ctx, hdr, argv[1], g_atom_observed_src, cb_result, &s->raw, out_cb, out_argc);
             cb_result = JS_UNDEFINED;
@@ -1661,30 +1854,81 @@ static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
             /* §4.13.4: absent observedAttributes is not an error, it is no observed attributes. A present one is
                a sequence, whose length is itself a read — of an engine-visible array in every real case, and of
                the page's object when it is not, which is why the whole walk is on the trampoline. */
-            if (JS_IsObject(s->raw)) {
-                JSValue lv = JS_GetPropertyStr(ctx, s->raw, "length");
-                JS_ToUint32(ctx, &s->n, lv);
-                JS_FreeValue(ctx, lv);
-            }
+            s->n = ce_sequence_length(ctx, s->raw);
         }
     }
     if (hdr->stage == CE_SEQUENCE) {
-        while (s->i < s->n) {
-            JSValue entry = JS_GetPropertyUint32(ctx, s->raw, s->i);
-            item = JS_UNDEFINED;
-            r = step_tostring_run(ctx, hdr, entry, cb_result, &item, out_cb, out_argc);
-            JS_FreeValue(ctx, entry);
+        r = ce_sequence_run(ctx, hdr, s, s->names, cb_result, out_cb, out_argc);
+        cb_result = JS_UNDEFINED;
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        hdr->stage = CE_DISABLED;
+    }
+    if (hdr->stage == CE_DISABLED) {
+        /* §4.13.4 step 14.7 — UNCONDITIONAL, unlike step 14.5's observedAttributes: `disabledFeatures` is read
+           off every constructor whether or not the class declares one, and a page's static getter sees exactly
+           that. Step 14.6's empty sequence is the Array the entry stage allocated. */
+        JS_FreeValue(ctx, s->raw);
+        s->raw = JS_UNDEFINED;
+        r = step_getprop_run(ctx, hdr, argv[1], g_atom_disabled_src, cb_result, &s->raw, out_cb, out_argc);
+        cb_result = JS_UNDEFINED;
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        s->i = 0;
+        /* step 14.8: an absent (undefined) iterable leaves the sequence empty. */
+        s->n = JS_IsUndefined(s->raw) ? 0 : ce_sequence_length(ctx, s->raw);
+        hdr->stage = CE_DISABLED_SEQ;
+    }
+    if (hdr->stage == CE_DISABLED_SEQ) {
+        r = ce_sequence_run(ctx, hdr, s, s->features, cb_result, out_cb, out_argc);
+        cb_result = JS_UNDEFINED;
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        /* steps 14.9 and 14.10 — two reads of the one sequence, no page code between them. */
+        if (ce_sequence_contains(ctx, s->features, "internals")) s->flags |= 1u << CE_DEF_DISABLE_INTERNALS;
+        if (ce_sequence_contains(ctx, s->features, "shadow")) s->flags |= 1u << CE_DEF_DISABLE_SHADOW;
+        hdr->stage = CE_FORM_FLAG;
+    }
+    if (hdr->stage == CE_FORM_FLAG) {
+        JSValue raw = JS_UNDEFINED;
+
+        r = step_getprop_run(ctx, hdr, argv[1], g_atom_form_assoc_src, cb_result, &raw, out_cb, out_argc);
+        cb_result = JS_UNDEFINED;
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        /* step 14.12: converting to a Web IDL boolean is ToBoolean, which runs nothing — the READ above is the
+           page's code, and it has already happened. */
+        if (JS_ToBool(ctx, raw)) s->flags |= 1u << CE_DEF_FORM_ASSOCIATED;
+        JS_FreeValue(ctx, raw);
+        s->i = CE_CB_LIFECYCLE_COUNT;
+        hdr->stage = (s->flags & (1u << CE_DEF_FORM_ASSOCIATED)) ? CE_FORM_CB : CE_COMMIT;
+    }
+    if (hdr->stage == CE_FORM_CB) {
+        /* §4.13.4 step 14.13 — the same collection step 14.4 makes, over the second list, and reached only for
+           a form-associated class. One key per step, off the PROTOTYPE, in the list's order. */
+        while (s->i < CE_CB_COUNT) {
+            JSValue v = JS_UNDEFINED;
+            r = step_getprop_run(ctx, hdr, s->proto, g_cb_atoms[s->i], cb_result, &v, out_cb, out_argc);
             cb_result = JS_UNDEFINED;
-            if (r > 0) return r;          /* parked ON THIS ENTRY; the resume comes back to it */
+            if (r > 0) return r;          /* parked ON THIS KEY; the resume comes back to it */
             if (r < 0) return -1;
-            JS_SetPropertyUint32(ctx, s->names, s->i, item);
+            if (!JS_IsUndefined(v)) {
+                if (!JS_IsFunction(ctx, v)) {
+                    JS_FreeValue(ctx, v);
+                    JS_ThrowTypeError(ctx, "a custom element's %s is not callable", CE_CALLBACK_NAMES[s->i]);
+                    return -1;
+                }
+                JS_SetPropertyUint32(ctx, s->callbacks, s->i, v);
+            } else {
+                JS_FreeValue(ctx, v);
+            }
             s->i++;
         }
         hdr->stage = CE_COMMIT;
     }
     DCHECK(hdr->stage == CE_COMMIT, "customElements.define resumed into a stage §4.13.4 does not have");
     JS_FreeValue(ctx, cb_result);
-    *presult = ce_define_commit(ctx, argv, s->names, s->proto, s->callbacks);
+    *presult = ce_define_commit(ctx, argv, s->names, s->proto, s->callbacks, s->flags);
     if (JS_IsException(*presult)) { *presult = JS_UNDEFINED; return -1; }
     return 0;
 }
@@ -1712,6 +1956,39 @@ static JSValue js_ce_get(JSContext *ctx, JSValueConst this_val, int argc, JSValu
     return r;
 }
 
+/* §4.13.4 `[CEReactions] undefined upgrade(Node root)` — the member a page calls to force the upgrade of a
+   subtree it built while the definition was not yet registered. Two steps: collect root's inclusive descendant
+   elements in tree order, and TRY TO UPGRADE each. Nothing here constructs — "try to upgrade" enqueues an
+   upgrade reaction, and the `[CEReactions]` epilogue every declared member ends through is what drains it,
+   which is exactly why this is an ordinary body and not a machine.
+   (§4.13.4 says shadow-including inclusive descendants and shadow-including tree order; with no shadow trees
+   in this engine those are the plain ones — the same identity node.c's `root` already relies on.) */
+static JSValue js_ce_upgrade(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_node_t *root, *n;
+
+    (void)this_val; (void)magic; (void)argc;
+    root = node_of(argv[0]);
+    if (!root) return JS_ThrowTypeError(ctx, "customElements.upgrade requires a Node");
+    for (n = root; n; ) {
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+            lxb_dom_element_t *el = lxb_dom_interface_element(n);
+
+            /* The same cheap name test the insertion steps make, and for the same reason: reading an element's
+               state means minting its WRAPPER, and `upgrade(document)` walks every node in the document. */
+            if (ce_upgradable_name(el)) {
+                JSValue wrap = node_wrap(ctx, n);
+                ce_try_upgrade(ctx, el, wrap);
+                JS_FreeValue(ctx, wrap);
+            }
+        }
+        if (n->first_child) { n = n->first_child; continue; }
+        while (n && !n->next) n = (n == root) ? NULL : n->parent;
+        n = n ? n->next : NULL;
+    }
+    return JS_UNDEFINED;
+}
+
 void custom_elements_init(JSContext *ctx)
 {
     int k;
@@ -1726,6 +2003,12 @@ void custom_elements_init(JSContext *ctx)
     g_atom_name = JS_NewAtom(ctx, "name");
     g_atom_local = JS_NewAtom(ctx, "local");
     g_atom_stack = JS_NewAtom(ctx, "stack");
+    g_atom_flags = JS_NewAtom(ctx, "flags");
+    g_atom_disabled_src = JS_NewAtom(ctx, "disabledFeatures");
+    g_atom_form_assoc_src = JS_NewAtom(ctx, "formAssociated");
+    CHECK(g_atom_flags != JS_ATOM_NULL && g_atom_disabled_src != JS_ATOM_NULL &&
+          g_atom_form_assoc_src != JS_ATOM_NULL,
+          "a §4.13.4 step 15 definition-flag atom could not be interned");
     CHECK(g_atom_prototype != JS_ATOM_NULL &&
           g_atom_ctor != JS_ATOM_NULL && g_atom_proto != JS_ATOM_NULL &&
           g_atom_observed != JS_ATOM_NULL && g_atom_observed_src != JS_ATOM_NULL &&
@@ -1778,6 +2061,13 @@ void custom_elements_init(JSContext *ctx)
         static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
         g_id_get = idl_method_id(ctx, ONE_STR, 1, js_ce_get, 0);
         g_id_when_defined = idl_method_id(ctx, ONE_STR, 1, js_ce_when_defined, 0);
+    }
+    {
+        /* `upgrade(Node root)` — the argument's INTERFACE type is what makes `customElements.upgrade({})` a
+           TypeError before step 1, rather than a body's hand-written check. */
+        static const IdlArgType ONE_NODE[1] = { IDL_INTERFACE };
+        g_id_upgrade = idl_method_id(ctx, ONE_NODE, 1, js_ce_upgrade, 0);
+        idl_iface_brand(node_class_id());
     }
     /* §4.13.2, DECLARED ONCE PER AGENT and minted per realm: HTMLElement is a per-realm interface object, so a
        declaration made where it is installed would mint the member again for every document. */
@@ -1835,6 +2125,7 @@ void custom_elements_install(JSContext *ctx, JSValueConst global)
     idl_install_method(ctx, reg, "define", 2, g_id_define);
     idl_install_method(ctx, reg, "get", 1, g_id_get);
     idl_install_method(ctx, reg, "whenDefined", 1, g_id_when_defined);
+    idl_install_method(ctx, reg, "upgrade", 1, g_id_upgrade);
     JS_SetPropertyStr(ctx, (JSValue)global, "customElements", reg);
 }
 
@@ -1863,6 +2154,10 @@ void custom_elements_free(JSContext *ctx)
     JS_FreeAtom(ctx, g_atom_name);
     JS_FreeAtom(ctx, g_atom_local);
     JS_FreeAtom(ctx, g_atom_stack);
+    JS_FreeAtom(ctx, g_atom_flags);
+    JS_FreeAtom(ctx, g_atom_disabled_src);
+    JS_FreeAtom(ctx, g_atom_form_assoc_src);
+    g_atom_flags = g_atom_disabled_src = g_atom_form_assoc_src = JS_ATOM_NULL;
     g_atom_name = g_atom_local = g_atom_stack = JS_ATOM_NULL;
     JS_FreeAtom(ctx, g_atom_def);
     JS_FreeValue(ctx, g_def_key);

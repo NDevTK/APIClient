@@ -120,6 +120,12 @@ typedef enum {
        null. Declared apart from IDL_CALLBACK because conflating them rejects `{acceptNode(){}}`, which is the
        ordinary way a page writes a filter. */
     IDL_CALLBACK_INTERFACE_NULLABLE,
+    /* `(File or USVString or FormData)?` — HTML §4.13.7.3's `setFormValue` arguments, and its rule is
+       IDL_BODYINIT_NULLABLE's shape over a different arm list: null and undefined are the IDL null, a File or a
+       FormData crosses as itself, and everything else is the USVString arm. A plain BLOB is NOT one of the arms
+       — the union names File — so it takes the string arm and stringifies, which is the case a hand-written
+       body gets wrong by asking `blob_is`. */
+    IDL_FORMVALUE_NULLABLE,
 } IdlArgType;
 
 /* A DICTIONARY MEMBER, as its IDL declares it: the name, the type of its value, and whether the IDL marks it
@@ -269,6 +275,17 @@ void idl_optional_from(int first_optional);
    the id a declaration returns is the RUNTIME's step id and not this pool's index. It composes with every
    declaration form — a method, a setter, a step body — which idl_method_id_ext's `iface` parameter did not. */
 void idl_iface_brand(JSClassID iface);
+
+/* NARROW an IDL_INTERFACE position past what a CLASS can express. Every DOM node wrapper is one class, so
+   `idl_iface_brand(node_class_id())` says "a Node" and cannot say "an Element", "an HTMLElement" or "an
+   HTMLFormElement" — and the platform's IDL says all three. §4.13.7.3's `optional HTMLElement anchor` is where
+   that first mattered: `setValidity(flags, msg, document.createElementNS('some-ns','foo'))` must be a
+   TypeError and a class check crosses it as itself.
+   The predicate runs AFTER the class check and its failure is the same TypeError, so a member declares the
+   interface it means in ONE place rather than repeating a hand-written test in its body — which is the whole
+   reason the brand is part of the type. Set after the declaration, naming the member the LAST one made, as
+   idl_iface_brand and idl_optional_from do. */
+void idl_iface_narrow(bool (*is)(JSValueConst v));
 
 int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
                        const IdlDictMember *members, int nmembers,

@@ -136,6 +136,27 @@ JSValue form_data_new(JSContext *ctx, const UrlEncodedList *entries)
     return obj;
 }
 
+/* INFRA'S "CLONE" OF AN ENTRY LIST, as one more FormData. HTML §4.13.7.3's `setFormValue` stores "a clone of
+   value's entry list" and not the FormData it was handed, and the difference is the whole point: a page that
+   calls `setFormValue(fd)` and then appends to `fd` has not changed what its element submits. A SHALLOW clone
+   of the list — the entries themselves are immutable (a name and a USVString-or-File), and a File entry must
+   stay the SAME object because §5's `get` answers with identity. */
+JSValue form_data_clone(JSContext *ctx, JSValueConst src)
+{
+    FormDataObj *from = JS_GetOpaque(src, g_fd_class), *to;
+    JSValue obj = form_data_new(ctx, NULL);
+    int i;
+
+    DCHECK(from != NULL, "an entry list was cloned from something that is not a FormData — the brand test is "
+                         "the union's, and it runs before this");
+    if (JS_IsException(obj)) return obj;
+    to = JS_GetOpaque(obj, g_fd_class);
+    for (i = 0; from && i < from->list.n; i++)
+        fd_list_append(&to->list, from->list.e[i].name, from->list.e[i].nlen,
+                       JS_DupValue(ctx, from->list.e[i].value));
+    return obj;
+}
+
 /* ---- Fetch §5.2's multipart/form-data parser --------------------------------------------------------------
  *
  * The shape is fixed by the spec and by RFC 7578: `--boundary CRLF` then the part's headers, then `CRLF CRLF`,

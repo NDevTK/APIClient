@@ -172,6 +172,9 @@ typedef struct {
     int        nsteps;
     bool       variadic;    /* the last declared type applies to every argument from there on */
     JSClassID  iface;       /* the brand an IDL_STRING_UNLESS_IFACE position tests against */
+    /* THE NARROWING half of that brand — see idl_iface_narrow. NULL for a member whose interface a class id
+       already names exactly, which is most of them. */
+    bool     (*iface_narrow)(JSValueConst v);
     const char *name;       /* what to call this member in a diagnostic; set when it is installed */
 } IdlMember;
 
@@ -899,7 +902,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             cb_result = JS_UNDEFINED;
             DCHECK(m->iface != 0, "an interface-typed argument was declared with no class to brand against — "
                                   "idl_iface_brand is the other half of that type");
-            if (!JS_GetOpaque(a, m->iface)) {
+            if (!JS_GetOpaque(a, m->iface) || (m->iface_narrow && !m->iface_narrow(a))) {
                 JS_ThrowTypeError(ctx, "argument %d does not implement the declared interface", s->i + 1);
                 return JS_STEP_ABRUPT;
             }
@@ -954,6 +957,18 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             t = (JS_IsArrayBuffer(a) || JS_GetTypedArrayType(a) >= 0 || JS_IsDataView(a) ||
                  blob_is(a) || form_data_is(a) || usp_list_of(a) || readable_stream_is(a))
               ? IDL_ANY : IDL_DOMSTRING;
+        }
+
+        /* `(File or USVString or FormData)?`: the same shape as BodyInit's, over the arms HTML §4.13.7.3
+           names. A plain Blob is not one of them, so it takes the USVString arm and stringifies. */
+        if (t == IDL_FORMVALUE_NULLABLE) {
+            if (JS_IsNull(a) || JS_IsUndefined(a)) {
+                JS_FreeValue(ctx, cb_result);
+                cb_result = JS_UNDEFINED;
+                *slot = JS_NULL;
+                goto placed;
+            }
+            t = (blob_file_name_of(a) != NULL || form_data_is(a)) ? IDL_ANY : IDL_USVSTRING;
         }
 
         /* `DOMString?` and `USVString?`: null AND undefined become the IDL null before any ToString is
@@ -1321,6 +1336,17 @@ void idl_iface_brand(JSClassID iface)
     DCHECK(g_n > 0, "an interface brand was declared before any member was");
     DCHECK(iface != 0, "an interface brand named no class — the class is half of what the type states");
     idl_member(g_n - 1)->iface = iface;
+    idl_member(g_n - 1)->iface_narrow = NULL;   /* a fresh brand narrows to nothing until the member says so */
+}
+
+void idl_iface_narrow(bool (*is)(JSValueConst v))
+{
+    DCHECK(g_n > 0, "an interface narrowing was declared before any member was");
+    DCHECK(idl_member(g_n - 1)->iface != 0,
+           "an interface narrowing was declared for a member with no class brand — it narrows a brand, so the "
+           "brand has to be there to narrow");
+    DCHECK(is != NULL, "an interface narrowing named no predicate");
+    idl_member(g_n - 1)->iface_narrow = is;
 }
 
 int idl_setter_id_step(JSContext *ctx, IdlArgType type, bool null_to_empty, const IdlStepDecl *decl, int magic)

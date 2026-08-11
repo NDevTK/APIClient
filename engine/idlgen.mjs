@@ -179,6 +179,14 @@ const INTERFACES = {
                         "core/frame/location.c", "core/frame/navigator.c", "core/frame/screen.c",
                         "core/dom/document.c", "core/structured_clone.c"],
   HTMLTemplateElement: [...HTML_BASE],
+  /* HTML §4.13.7. ElementInternals INCLUDES ARIAMixin, whose 54 members are therefore members the audit
+     expects on it — which is what makes the eight element-reflecting ones show up as the real gap they are
+     rather than as nothing at all. CustomStateSet's setlike members and both iterator surfaces come from the
+     shared default iterator object, so idl_iter.c is named beside the component for the reason every other
+     `iterable<>` interface names it. */
+  ElementInternals:    ["core/html/element_internals.c", "core/idl_iter.c"],
+  CustomStateSet:      ["core/html/element_internals.c", "core/idl_iter.c"],
+  ValidityState:        "core/html/element_internals.c",
 };
 
 const all = await listAll();
