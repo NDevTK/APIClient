@@ -2659,14 +2659,24 @@ the rest of the author code lives:
 4. **Capturing the teardown list before step 3 of `close`.**
 5. **Reading the `SubscriptionObserver` members in prose order.** They are lexicographic.
 6. **Letting a `"report"` invocation unwind.** See 10.0.
-7. **Declaring `catches_abrupt` and then making a KEYED READ.** This one is not about the standard, it is
-   about this engine, and it cost a whole test file: a CALL request reports its throw through its own
-   `out`, and `step_getprop_run` has no way to say "it threw" — so under `catches_abrupt` a throwing
-   `[[Get]]` is delivered as `JS_EXCEPTION`, the read reports "not started", and the machine asks for the
-   same property again, forever. `Observable.from(obj)` where obj's `@@iterator` **getter** throws is a
-   test of its own, and it took `observable-from.any.js` from 48 results to none — a timeout, with every
-   passing subtest before it discarded. A machine that both catches and reads must take the abrupt
-   delivery **before** the stage runs, at exactly the stages whose request is a read.
+7. **Resting between a request and its answer.** `S_ITER_STEP` offered the scheduler its once-per-iteration
+   yield at the TOP of the stage, so the re-entry carrying `next()`'s **result** took the yield instead of
+   the answer and freed that result on the way out; the machine then answered an already-answered call with
+   `undefined` and reported *"an iterator's next() did not answer an object"* for every iterable there is.
+   A rest point is a place the machine is BETWEEN steps of its algorithm, and a machine with a request
+   outstanding is not between anything — the whole head of such a stage belongs behind `phase == 0`, which
+   is the same fact `obs_goto` already asserts on when a stage is LEFT.
+
+   *(What used to be item 7 — "declaring `catches_abrupt` and then making a keyed read" — was not about this
+   standard at all but about the request layer, and it is fixed there rather than worked around here. The
+   driver used to rewind a machine's keyed cursor before re-entering it with `JS_EXCEPTION`, so the read
+   reported "not started" and the machine asked for the same property again, forever. It now leaves the
+   cursor alone: the machine re-enters its helper at the call site that parked, the helper ENDS the request
+   and returns **-1**, which is what `step_getprop_run` and its siblings had always documented, and every
+   per-stage `if (r < 0)` arm this machine already had turned out to be exactly the right handling. The
+   pre-stage `switch` that enumerated "which stages are reads" is deleted; a stage added without one can no
+   longer be a silent hang, because a machine that asks for anything over a live throw now aborts at
+   `do_step_step` naming its algorithm and stage.)*
 
 ### 10.6 Summary
 
@@ -3014,7 +3024,12 @@ is **per global**, which is why it lives on the global object and not in the rep
 3. **The `handleEvent` read needs its own resume marker, distinct from the call's — and the REPORT
    needs a third.** One listener suspends at up to three different steps (its operation lookup, its
    own body, and the `error` event fired for what that body threw), and a machine with one marker
-   resumes one of them into another.
+   resumes one of them into another. What that marker is NOT is a shadow of the request's own cursor:
+   this machine briefly carried one, testing `lphase != 0 && JS_IsException(cb_result)` before the read
+   so it would not re-issue a `handleEvent` getter that had just thrown. The re-issue was the REQUEST
+   LAYER rewinding the cursor on an abrupt delivery, and with that fixed the read reports the throw as
+   -1 at the call site that parked, which §2.9 step 2.11 turns into a REPORT and a walk that continues.
+   The marker stays; the shadow of it is gone.
 4. **`once` removal happens before the call**, so a resume must NOT re-read the record it came from:
    that record is now `removed` and the walk would skip the very listener whose answer is arriving.
 5. **The activation behaviour is a stage after the cleanup**, not before it — a behaviour that reads

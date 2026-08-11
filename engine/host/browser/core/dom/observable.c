@@ -713,39 +713,6 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
         }
     }
 
-    /* CATCHES_ABRUPT: A REQUEST THAT THREW COMES BACK AS A VALUE — and a KEYED READ cannot say so. Every
-       other request reports its throw through its own `out`; step_getprop_run's contract has no way to, so it
-       reports "not started" and the machine asks for the same property again, FOREVER. That is not a corner:
-       `Observable.from(obj)` where obj's `@@iterator` GETTER throws is a test of its own, and it hung the
-       whole file. So the throw is taken HERE, before the stage runs, at exactly the stages whose request is a
-       read — a CALL stage is left alone, because it sees the exception in its own `out`. */
-    if (JS_IsException(cb_result)) {
-        switch (s->hdr.stage) {
-        case S_CTOR_PROTO: case S_OBSERVER_READ: case S_OPTIONS_READ:
-        case S_FROM_PROBE_ASYNC: case S_FROM_PROBE_SYNC: case S_OP_ENTER:
-            /* Web IDL and §2.3.1 both RETHROW: a dictionary member's throwing getter aborts subscribe(), and
-               convert-to-an-Observable propagates whatever the probe threw. S_OP_ENTER is in this group for
-               the same reason and no other — it is where §2.3.2/§2.3.3's Web IDL PROLOGUE runs (inspect's five
-               members, every promise operator's `options.signal`, take/drop's `valueOf`), and a conversion
-               that throws throws out of the METHOD, before any promise exists to reject. */
-            return JS_STEP_ABRUPT;
-        case S_ITER_METHOD: case S_ITER_NEXTFN: case S_ITER_DONE: case S_ITER_VALUE:
-            /* Inside a subscription every throw is `subscriber.error(E)` instead. */
-            cb_result = JS_UNDEFINED;
-            obs_fail(ctx, s);
-            break;
-        case S_ITER_RETURN_FN:
-            /* IteratorClose(…, NormalCompletion(UNUSED)) discards it, and this runs as an abort algorithm
-               where there is nobody to hand it to. */
-            cb_result = JS_UNDEFINED;
-            JS_FreeValue(ctx, JS_GetException(ctx));
-            obs_goto(s, S_DONE);
-            break;
-        default:
-            break;
-        }
-    }
-
     for (;;) {
         switch (s->hdr.stage) {
 
@@ -1164,9 +1131,9 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
             JSValue m;
 
             r = step_getprop_run(ctx, &s->hdr, s->obs, a, cb_result, &m, out_cb, out_argc);
+            cb_result = JS_UNDEFINED;   /* consumed by the request, whichever way it completed */
             if (r > 0) return r;
             if (r < 0) { obs_fail(ctx, s); continue; }
-            cb_result = JS_UNDEFINED;
             if (s->async == 1 && (JS_IsUndefined(m) || JS_IsNull(m))) {
                 /* GetIterator(value, async) step 1.b: no %Symbol.asyncIterator% after all, so the SYNC
                    protocol is used and wrapped. */
@@ -1211,9 +1178,9 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
 
             r = step_getprop_run(ctx, &s->hdr, s->io, a, cb_result, &m, out_cb, out_argc);
             JS_FreeAtom(ctx, a);
+            cb_result = JS_UNDEFINED;   /* consumed by the request, whichever way it completed */
             if (r > 0) return r;
             if (r < 0) { obs_fail(ctx, s); continue; }
-            cb_result = JS_UNDEFINED;
             JS_FreeValue(ctx, s->iocb[0]);
             s->iocb[0] = m;
             if (s->async == 2) { obs_goto(s, S_ITER_WRAP); continue; }
@@ -1251,10 +1218,20 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
         case S_ITER_STEP:
             /* THE UNBOUNDED WALK'S YIELD. An iterable of the page's size is exactly the shape §scheduler
                calls un-parkable when it runs to completion inside one opcode, so the machine offers the
-               scheduler a switch once per iteration; with nobody waiting it is re-entered immediately. */
-            if (s->member == 0) { s->member = 1; JS_FreeValue(ctx, cb_result); return JS_STEP_YIELD; }
-            s->member = 0;
-            if (sub_signal_aborted(ctx, s)) { obs_goto(s, S_DONE); continue; }
+               scheduler a switch once per iteration; with nobody waiting it is re-entered immediately.
+               A REST POINT MAY NOT SIT BETWEEN A REQUEST AND ITS ANSWER, which is why the whole head of this
+               stage is behind `phase == 0` — the same fact obs_goto asserts on when a stage is left. Without
+               it the re-entry carrying `next()`'s RESULT took the yield instead of the answer and freed that
+               result on the way out; the machine then re-entered, answered a call that had already been
+               answered with undefined, and reported "an iterator's next() did not answer an object" for every
+               iterable there is. An ABRUPT next() made it visible rather than merely wrong: the yield ran with
+               the throw still live, which is the one thing a machine may not ask for, and the request check at
+               the driver's convergence point named this stage. */
+            if (s->phase == 0) {
+                if (s->member == 0) { s->member = 1; JS_FreeValue(ctx, cb_result); return JS_STEP_YIELD; }
+                s->member = 0;
+                if (sub_signal_aborted(ctx, s)) { obs_goto(s, S_DONE); continue; }
+            }
             r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), s->iocb[0], s->io, 0, NULL, cb_result, &out,
                               out_cb, out_argc);
             if (r > 0) return r;
@@ -1311,9 +1288,9 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
 
             r = step_getprop_run(ctx, &s->hdr, s->iocb[1], a, cb_result, &v, out_cb, out_argc);
             JS_FreeAtom(ctx, a);
+            cb_result = JS_UNDEFINED;   /* consumed by the request, whichever way it completed */
             if (r > 0) return r;
             if (r < 0) { obs_fail(ctx, s); continue; }
-            cb_result = JS_UNDEFINED;
             if (JS_ToBool(ctx, v)) {
                 JS_FreeValue(ctx, v);
                 obs_emit_enter(ctx, s, EM_COMPLETE, JS_UNDEFINED, S_DONE);
@@ -1332,9 +1309,9 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
 
             r = step_getprop_run(ctx, &s->hdr, s->iocb[1], a, cb_result, &v, out_cb, out_argc);
             JS_FreeAtom(ctx, a);
+            cb_result = JS_UNDEFINED;   /* consumed by the request, whichever way it completed */
             if (r > 0) return r;
             if (r < 0) { obs_fail(ctx, s); continue; }
-            cb_result = JS_UNDEFINED;
             obs_emit_enter(ctx, s, EM_NEXT, v, S_ITER_STEP);
             continue;
         }
@@ -1348,9 +1325,9 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
 
             r = step_getprop_run(ctx, &s->hdr, s->io, a, cb_result, &m, out_cb, out_argc);
             JS_FreeAtom(ctx, a);
+            cb_result = JS_UNDEFINED;   /* consumed by the request, whichever way it completed */
             if (r > 0) return r;
             if (r < 0) { JS_FreeValue(ctx, JS_GetException(ctx)); obs_goto(s, S_DONE); continue; }
-            cb_result = JS_UNDEFINED;
             if (!JS_IsFunction(ctx, m)) { JS_FreeValue(ctx, m); obs_goto(s, S_DONE); continue; }
             JS_FreeValue(ctx, s->iocb[0]);
             s->iocb[0] = m;

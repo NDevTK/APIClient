@@ -1195,32 +1195,23 @@ resolve_operation:
                 JSValue m = JS_UNDEFINED;
 
                 JS_FreeValue(ctx, fn);
-                /* THE READ THREW, AND THE ANSWER IS ALREADY HERE. A machine that declares catches_abrupt is
-                   re-entered with JS_EXCEPTION and the throw still live, and the request's own sub-sequence
-                   cursor does NOT survive that delivery — so re-issuing the read at this call site runs the
-                   page's getter a SECOND time, which throws again, forever. That is not a hypothetical: it is
-                   `EventListener-handleEvent`'s "rethrows errors when getting handleEvent", and the symptom was
-                   a whole test file timing out with no allocation growth and nothing to say why.
-                   Web IDL §3.12 step 10.2 says an abrupt Get is RETURNED as it stands, which is what this is. */
-                if (s->lphase != 0 && JS_IsException(cb_result)) {
-                    s->lphase = 0;
-                    cb_result = JS_UNDEFINED;
-                    goto listener_threw;
-                }
                 op = JS_NewAtom(ctx, "handleEvent");
                 r = step_getprop_run(ctx, &s->hdr, s->lcb, op, cb_result, &m, out_cb, out_argc);
                 JS_FreeAtom(ctx, op);
                 cb_result = JS_UNDEFINED;
                 if (r > 0) { s->lphase = 1; return r; }   /* parked ON THE READ; the resume comes back here */
                 s->lphase = 0;
-                if (r < 0) return JS_STEP_ABRUPT;
+                if (r < 0) {
+                    /* Web IDL §3.12 step 10.2: an ABRUPT Get is RETURNED as it stands. The read reports it here
+                       because this machine's definition declares catches_abrupt, and §2.9 "inner invoke" step
+                       2.11 says what to do with it — REPORT it and carry on down the listener list, never
+                       unwind the dispatch. `EventListener-handleEvent`'s "rethrows errors when getting
+                       handleEvent" is exactly this listener. */
+                    goto listener_threw;
+                }
                 if (!JS_IsFunction(ctx, m)) {
-                    /* Web IDL §3.12 step 10.4: a non-callable operation is a TypeError — and step 10.2 says an
-                       ABRUPT read is returned as it stands, which under catches_abrupt arrives here as the
-                       exception value with the throw still live. Either way §2.9 REPORTS it and the walk goes
-                       on; raising a fresh TypeError over a live throw would report the wrong error. */
-                    if (!JS_IsException(m))
-                        JS_ThrowTypeError(ctx, "the event listener's `handleEvent` is not callable");
+                    /* Web IDL §3.12 step 10.4: a non-callable operation is a TypeError, reported the same way. */
+                    JS_ThrowTypeError(ctx, "the event listener's `handleEvent` is not callable");
                     JS_FreeValue(ctx, m);
                     goto listener_threw;
                 }
