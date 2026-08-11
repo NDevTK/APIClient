@@ -72,17 +72,11 @@ void flow_registry_free(JSContext *ctx) {
                "a flow reached the frontier's teardown with a continuation still parked — its suspended async "
                "activation is dropped, and only the flow that FINISHES was being checked for this");
         if (f->frame) { JS_FlowFree(ctx, (JSValue *)f->frame); f->frame = NULL; }
-        /* the REPLIES it was still owed. Each entry is a request the host never answered; its resolve
-           capability and the reply value are real references, and the rest of it is malloc'd. */
-        for (int k = 0; k < f->npend; k++) {
-            FlowPending *p = &f->pending[k];
-            JS_FreeValue(ctx, p->resolve);
-            JS_FreeValue(ctx, p->value);
-            free(p->url); free(p->op); free(p->method); free(p->body);
-            for (int h = 0; h < p->nhdr; h++) { free(p->hdrs[h].name); free(p->hdrs[h].value); }
-            free(p->hdrs);
-        }
-        free(f->pending);
+        /* the REPLIES it was still owed. Each entry is a request the host never answered; the whole register
+           is one JS value now, so its resolve capabilities, its reply values and every string in it go with
+           one release — which is the difference between a record whose free path had to be kept in step with
+           its fields and one that cannot be. */
+        pending_free(ctx, &f->pending);
         cow_delta_free(ctx, (CowDelta *)f->delta); f->delta = NULL;
         if (f->dom) dom_buf_free(f->dom, f->dom_n);
         if (f->dom_base) dom_base_free(f->dom_base);
@@ -109,6 +103,10 @@ void flow_registry_free(JSContext *ctx) {
        the line would leak the whole chain with nothing to say so, which is exactly how the world registry's
        own release came to be missing from one of them. It belongs to the frontier, so it goes down with it. */
     decide_free();
+    /* AND THE PENDING REGISTER'S INTERNED FIELD NAMES, for the same reason and in the same place: the corpus
+       hosts take a runtime down and bring another up per file, so an atom left here is a handle into a freed
+       table that the next session's first push would write through. */
+    pending_free_ctx(ctx);
 }
 
 /* EVERY FLOW EVER CREATED. Reported beside the switch count for the same reason that one is: without it, a run
@@ -129,6 +127,14 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, signed char *dec, int dec
     Flow *f = calloc(1, sizeof(Flow));
     CHECK(f, "flow_add: OOM allocating a flow — a dropped flow corrupts the frontier");
     f->fn = JS_DupValue(ctx, fn);
+    /* THE PENDING REGISTER IS EMPTY, AND EMPTY IS NOT AN ARRAY. Most flows never park on anything, so
+       allocating one per flow would put a JSObject on the heap for every member of a frontier that reached
+       29550 on this fixture — and the blocked scan the preempt hook runs at every suspend point would then
+       have to read a length instead of testing a tag. It is minted by the first push. */
+    f->pending = JS_UNDEFINED;
+    /* …and the register's own context, named HERE because this is the one point every flow passes through.
+       Putting it in each host's setup would be the hand-copied list build.mjs warns about. */
+    pending_set_ctx(ctx);
     f->dec = dec; f->dec_n = dec_n;
     f->val = 0.0; f->cpu = 0;
     f->cand_src = NULL; f->cand_payload = NULL; f->cand_sink = NULL;
@@ -149,12 +155,7 @@ Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n, Wor
 /* BLOCKED = holding an unanswered synchronous host request. Scanned rather than counted because a counter is
    a second representation of the same fact, and the two drift at exactly the sites (fork, drain, release) that
    are already the hardest to keep in step. The register is short — it is one flow's outstanding requests. */
-int flow_blocked(const Flow *f) {
-    for (int i = 0; i < f->npend; i++)
-        if (f->pending[i].kind == FLOW_PENDING_HOSTREQ && !f->pending[i].have_value)
-            return 1;
-    return 0;
-}
+int flow_blocked(const Flow *f) { return pending_blocked(f->pending); }
 
 /* THE SERVICE QUANTUM — why the rank moves in steps rather than continuously.
  *
@@ -250,7 +251,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
     DCHECK(f->frame == NULL && f->park_fn == NULL,
            "a flow was removed holding a live frame or a parked continuation — its whole activation chain, and "
            "everything those frames close over, would be retained by a handle nothing will ever free");
-    DCHECK(f->njob == 0 && f->jobs == NULL && f->npend == 0 && f->pending == NULL,
+    DCHECK(f->njob == 0 && f->jobs == NULL && JS_IsUndefined(f->pending),
            "a flow was removed still holding queued jobs or pending host replies — each is a work item on the "
            "one frontier, and the WFQ may never drop one");
     DCHECK(f->dyn == NULL && f->dyn_cand == NULL && f->dec_blob == NULL && f->pin_blob == NULL,

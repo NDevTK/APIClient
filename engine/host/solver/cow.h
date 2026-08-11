@@ -115,6 +115,20 @@ void      cow_capture_host_record(JSValueConst owner, void *p, const CowRecord *
 /* The session's context, for the captures that have no call-site one. The DOM delta's twin is dom_cow_set_ctx. */
 void      cow_set_ctx(JSContext *ctx);
 
+/* THE SCHEDULER'S OWN BOOKKEEPING IS NOT A FLOW'S WRITE, and this is what says so at the write.
+ *
+ * The flows' pending register (solver/pending.h) is a JS object graph the SCHEDULER owns: it records what the
+ * host still owes ONE flow. The host reads EVERY flow's register from outside any flow's delta — engine_provide
+ * fills whichever flows parked on a URL, engine_host_requests joins what is outstanding across all of them, and
+ * the preempt hook asks whether the running flow is blocked. If a delta captured those writes, an entry's
+ * contents would depend on which delta happened to be applied: an entry appended after a fork would be
+ * TRUNCATED away the moment a sibling switched in, and the reply would be delivered into a slot that no longer
+ * exists. That is not an isolation question — the register is not state a page can observe — so it is answered
+ * where the write is made rather than by a generational accident that a later fork invalidates.
+ * Nestable, and asserted balanced: an unclosed bracket would silently stop capturing the PAGE's writes. */
+void      cow_engine_write_begin(void);
+void      cow_engine_write_end(void);
+
 /* Install as JSTimeTravelHooks.async_fork: record the per-flow swap of a shared suspended ASYNC activation. The
    engine cloned it because resuming CONSUMES it; this makes the clone what this flow's resolve/reject closure
    names, leaving the original as the baseline every other arm still finds. */

@@ -49,19 +49,14 @@ void cold_census(ColdCensus *out)
         out->dom_head_bytes += dom_cow_head_bytes(f->dom_cap);
 
         out->job_count += f->njob;
-        out->pend_count += f->npend;
+        /* THE REPLIES THE HOST STILL OWES, asked of the register itself rather than measured here — the same
+           rule the rest of this walk keeps. It is a JS Array of records now, so its bytes are quickjs's and its
+           strings are shared with everything else that names them; a `sizeof` restated here would have to know
+           the record's shape, which is exactly what drifts the next time a field is added. */
+        out->pend_count += pending_count(f->pending);
+        out->pend_bytes += pending_bytes(f->pending);
         {
-            int k, h;
-            for (k = 0; k < f->npend; k++) {
-                const FlowPending *p = &f->pending[k];
-                out->pend_bytes += (long)sizeof *p;
-                if (p->url) out->pend_bytes += (long)strlen(p->url) + 1;
-                if (p->op) out->pend_bytes += (long)strlen(p->op) + 1;
-                if (p->method) out->pend_bytes += (long)strlen(p->method) + 1;
-                out->pend_bytes += (long)p->body_len;
-                for (h = 0; h < p->nhdr; h++)
-                    out->pend_bytes += (long)strlen(p->hdrs[h].name) + strlen(p->hdrs[h].value) + 2;
-            }
+            int k;
             for (k = 0; k < f->dyn_n; k++) out->dyn_bytes += (long)strlen(f->dyn[k]) + 1;
         }
 

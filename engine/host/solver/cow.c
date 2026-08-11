@@ -153,7 +153,27 @@ CowDelta *cow_delta_new(void) {
 
 /* The engine asks the same shared-vs-private question this delta asks (JS_IsFlowShared), so the generation
    travels with the delta: setting one without the other would have the two disagree about what is shared. */
-void cow_set_current(CowDelta *d) { g_current = d; JS_SetFlowForkGen(d ? d->fork_gen : 0); }
+static int       g_engine_write_depth;
+static CowDelta *g_engine_write_saved;
+void cow_set_current(CowDelta *d) {
+    DCHECK(g_engine_write_depth == 0,
+           "the running flow's delta was swapped inside an engine-bookkeeping write — the bracket would put "
+           "the OUTGOING flow's delta back and the incoming flow would run with captures pointed at it");
+    g_current = d; JS_SetFlowForkGen(d ? d->fork_gen : 0);
+}
+
+/* THE SCHEDULER'S OWN BOOKKEEPING — see cow.h. It is expressed as "there is no current delta", which is the
+   statement every hook here already understands (`!g_current` is how baseline setup drops its captures), so
+   nothing else has to learn about it and no hook can be added that forgets to ask. */
+void cow_engine_write_begin(void) {
+    if (g_engine_write_depth++ == 0) { g_engine_write_saved = g_current; g_current = NULL; }
+}
+void cow_engine_write_end(void) {
+    DCHECK(g_engine_write_depth > 0,
+           "cow_engine_write_end with no matching begin — an unbalanced bracket leaves the PAGE's writes "
+           "uncaptured from here on, which is cross-flow leakage with nothing to report it");
+    if (--g_engine_write_depth == 0) { g_current = g_engine_write_saved; g_engine_write_saved = NULL; }
+}
 
 /* The is_state entry's four operations, dispatched by TARGET KIND. One mechanism, three things it captures —
    the alternative was another entry kind whose unapply/apply/fork/free arms would be the same four lines again.

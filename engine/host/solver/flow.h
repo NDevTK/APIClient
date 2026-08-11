@@ -15,6 +15,7 @@
 
 #include "quickjs.h"
 #include "solver/world.h"
+#include "solver/pending.h"   /* the replies the host still owes this flow — a JS Array, not a malloc'd list */
 
 /* One queued microtask/reaction job owned by a flow (routed here by the job-enqueue hook, not a global list):
    the quickjs job function + its dup'd arguments, run under the flow's COW after its scripts. */
@@ -23,49 +24,6 @@
    flow still holds a microtask. One array keeps the two in a single arrival order — which is what a task source
    needs among its own tasks — and the pick applies the checkpoint rule. */
 typedef struct { JSJobFunc *fn; int argc; JSValue *argv; int task; } FlowJob;
-
-/* FETCH-AWAIT: a live (async) fetch this flow issued — a PENDING promise whose resolve capability + the value the
-   "network" will deliver are held until the flow stalls, then resolved (the fetch completing) so the awaiting
-   async body resumes. Per-flow (not global) so one flow's drain never resolves another flow's fetch. */
-/* ONE live fetch this flow issued. `url` is what the trusted host must fetch (the sandbox cannot), and `value`
-   is what the continuation resumes with once it has. A NULL url is an engine-supplied reply — a fixture or a
-   modelled body — which needs no host round trip and drains immediately. */
-/* WHAT THIS FLOW OWES ITSELF once the host supplies `url`. A fetch RESOLVES its promise with the reply; an
-   injected <script src> has no promise at all — its reply is more of this flow's PROGRAM, queued as another
-   script the one BFS runs. The kind is on the entry because it is the entry's business: the register, the
-   dedup and the stall accounting are identical either way, and only the delivery differs. */
-#define FLOW_PENDING_RESOLVE 0   /* fetch(): call `resolve` with the reply */
-#define FLOW_PENDING_SCRIPT  1   /* injected <script src>: queue the reply as this flow's next program */
-#define FLOW_PENDING_DOCSCRIPT 2 /* the document's OWN <script src>: the reply fills script slot `script_i` */
-/* A SYNCHRONOUS REQUEST ONLY THE HOST CAN ANSWER, and the one kind the flow cannot proceed past. A
-   cross-document read (`iframe.contentWindow.document.body`) must answer at its own call site, and across
-   instances the answer is not available in this turn — so the flow SUSPENDS there exactly as it suspends at an
-   await or a loop back-edge, siblings run, and it resumes with the value. The other kinds are ASYNC: a fetch
-   hands the page a promise and the flow keeps running. This one blocks, which is why flow_blocked exists and
-   why the rendezvous is a REQUEST ID rather than a URL — two flows asking the same question in different
-   worlds must get different answers, so answers are never shared the way a fetched body is. */
-#define FLOW_PENDING_HOSTREQ 3
-/* A REQUEST THIS FLOW IS OWED AN ANSWER TO. `method`, `hdrs`/`nhdr` and `body` are the rest of what the page
-   asked — not decoration: SECURITY.md puts all network behind the trusted zone's safeFetch, and safeFetch is
-   what decides SOP, CORS, method and credentials. It cannot decide about a method it was never told.
-   EVERY OWNED FIELD HERE IS AN OBLIGATION AT THREE SITES: the push that fills it, the FORK that inherits it,
-   and the free that releases it. The fork copied field by field into a malloc'd slot, so it already missed
-   `script_i` before this record grew anything — and a missed field there is not a leak, it is uninitialised
-   memory that the free path then walks. It copies the whole struct first now, so a field added later is
-   inherited by default and only a POINTER needs a line of its own. */
-typedef struct { char *name, *value; } FlowHeader;
-typedef struct {
-    JSValue resolve; JSValue value; char *url; int have_value; int kind; int script_i;
-    /* FLOW_PENDING_HOSTREQ only: the rendezvous id, and the request text the host routes on. `req` is 0 for
-       every other kind, which is what makes "is this flow blocked?" a scan for a non-zero id with no value. */
-    uint32_t    req;
-    char       *op;
-    char       *method;
-    FlowHeader *hdrs;
-    int         nhdr;
-    char       *body;
-    size_t      body_len;
-} FlowPending;
 
 /* WHAT ONE STEP OF A FLOW ANSWERED. OWED is not a third kind of flow — it is the same flow reporting that the
    work it has left belongs to the host, so the scheduler can tell an exhausted frontier from a waiting one
@@ -136,8 +94,12 @@ typedef struct Flow {
     void *pin_blob;        /* suspended pin state while paused (concolic_pins_suspend) */
     FlowJob *jobs; int njob, jobcap;   /* ASYNC-AS-FLOW: this flow's OWN queued microtasks AND tasks, drained
                                           after its scripts under its live COW (correct ordering, per-flow isolated) */
-    FlowPending *pending; int npend, pendcap;   /* FETCH-AWAIT: this flow's OWN live (pending) fetches, resolved when
-                                                   the flow's scripts+microtasks stall (the network completing). */
+    /* FETCH-AWAIT: this flow's OWN live (pending) fetches and the synchronous requests it is blocked on,
+       resolved when the flow's scripts+microtasks stall (the network completing). A JS ARRAY of plain records
+       (solver/pending.h) rather than a malloc'd list, because CLAUDE.md §State-isolation says so in as many
+       words: it must park to the cold tier, resume byte-identically and fork per-flow, and a `char *` does
+       none of the three. JS_UNDEFINED for a flow that has never parked on anything, which is most of them. */
+    JSValue pending;
     /* THE PARKED CONTINUATION, swapped with everything else on a context switch. A forced preempt inside
        job-driven code parks an async activation in the RUNTIME's one slot; that activation belongs to THIS
        flow's timeline and resumes under THIS flow's delta, so leaving it in the runtime while a sibling runs

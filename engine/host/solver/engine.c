@@ -50,69 +50,46 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
        it was never told. Recording the rest is the next step here; naming it in the seam is what makes that a
        change in one place rather than a signature every provider re-invents. */
     const char *url = req ? req->url : NULL;
+    JSValue e;
     /* A live fetch is ALWAYS issued from a running flow — both explore and @S verify are the ONE scheduler now
        (run_scheduler), so flow_running() is set; the flow's stall drains it (flow_step). */
     DCHECK(f != NULL, "engine_pending_fetch_url: a live fetch issued outside a running flow");
-    if (f->npend >= f->pendcap) {
-        f->pendcap = f->pendcap ? f->pendcap * 2 : 8;
-        f->pending = realloc(f->pending, (size_t)f->pendcap * sizeof(FlowPending));
-        CHECK(f->pending, "engine: OOM growing the flow's pending-fetch list");
-    }
-    memset(&f->pending[f->npend], 0, sizeof f->pending[f->npend]);
-    f->pending[f->npend].resolve = JS_DupValue(ctx, resolve);
-    f->pending[f->npend].value = JS_DupValue(ctx, value);
-    f->pending[f->npend].url = url ? strdup(url) : NULL;
+    e = pending_push(&f->pending, FLOW_PENDING_RESOLVE);
+    pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
+    pending_set(e, PEND_VALUE, JS_DupValue(ctx, value));
+    if (url) pending_set(e, PEND_URL, JS_NewString(ctx, url));
     /* THE REST OF THE REQUEST, recorded rather than dropped between the seam and the trusted zone. */
-    f->pending[f->npend].method = (req && req->method) ? strdup(req->method) : NULL;
+    if (req && req->method) pending_set(e, PEND_METHOD, JS_NewString(ctx, req->method));
     if (req && req->headers && req->headers->n > 0) {
+        JSValue hl = pending_list_new();
         int hi;
-        f->pending[f->npend].hdrs = calloc((size_t)req->headers->n, sizeof(FlowHeader));
-        CHECK(f->pending[f->npend].hdrs, "engine: OOM recording a pending request's headers");
-        for (hi = 0; hi < req->headers->n; hi++) {
-            f->pending[f->npend].hdrs[hi].name = strdup(req->headers->e[hi].name);
-            f->pending[f->npend].hdrs[hi].value = strdup(req->headers->e[hi].value);
-            CHECK(f->pending[f->npend].hdrs[hi].name && f->pending[f->npend].hdrs[hi].value,
-                  "engine: OOM recording a pending request's header");
-        }
-        f->pending[f->npend].nhdr = req->headers->n;
+        for (hi = 0; hi < req->headers->n; hi++)
+            pending_list_add_pair(hl, req->headers->e[hi].name, req->headers->e[hi].value);
+        pending_set(e, PEND_HEADERS, hl);
     }
-    if (req && req->body) {
-        f->pending[f->npend].body = malloc(req->body_len + 1);
-        CHECK(f->pending[f->npend].body, "engine: OOM recording a pending request's body");
-        memcpy(f->pending[f->npend].body, req->body, req->body_len);
-        f->pending[f->npend].body[req->body_len] = 0;
-        f->pending[f->npend].body_len = req->body_len;
-    }
-    f->pending[f->npend].have_value = (url == NULL);
-    f->pending[f->npend].kind = FLOW_PENDING_RESOLVE;
-    f->pending[f->npend].script_i = -1;
-    f->npend++;
+    if (req && req->body) pending_set_bytes(e, PEND_BODY, req->body, req->body_len);
+    if (!url) pending_set(e, PEND_HAVE_VALUE, JS_TRUE);
+    JS_FreeValue(ctx, e);
 }
 
 /* PARK ON AN EXTERNAL DOCUMENT SCRIPT. Registered at most once per flow per slot — the flow is asked again on
    every scheduler pass while it waits, and a second registration would make the host owe the same URL twice. */
 void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
     Flow *f = flow_running();
+    JSValue e;
     DCHECK(f != NULL, "an external document script was awaited outside a running flow");
     DCHECK(url != NULL && *url, "an external document script entry carries no URL");
-    for (int i = 0; i < f->npend; i++)
-        if (f->pending[i].kind == FLOW_PENDING_DOCSCRIPT && f->pending[i].script_i == script_i)
-            return;
-    if (f->npend >= f->pendcap) {
-        f->pendcap = f->pendcap ? f->pendcap * 2 : 8;
-        f->pending = realloc(f->pending, (size_t)f->pendcap * sizeof(FlowPending));
-        CHECK(f->pending, "engine: OOM growing the flow's pending list");
+    for (int i = 0, n = pending_count(f->pending); i < n; i++) {
+        JSValue p = pending_entry(f->pending, i);
+        int dup = pending_get_int(p, PEND_KIND) == FLOW_PENDING_DOCSCRIPT &&
+                  pending_get_int(p, PEND_SCRIPT_I) == script_i;
+        JS_FreeValue(ctx, p);
+        if (dup) return;
     }
-    memset(&f->pending[f->npend], 0, sizeof f->pending[f->npend]);
-    f->pending[f->npend].resolve = JS_UNDEFINED;
-    f->pending[f->npend].value = JS_UNDEFINED;
-    f->pending[f->npend].url = strdup(url);
-    CHECK(f->pending[f->npend].url, "engine: OOM recording an external script's URL");
-    f->pending[f->npend].have_value = 0;
-    f->pending[f->npend].kind = FLOW_PENDING_DOCSCRIPT;
-    f->pending[f->npend].script_i = script_i;
-    f->npend++;
-    (void)ctx;
+    e = pending_push(&f->pending, FLOW_PENDING_DOCSCRIPT);
+    pending_set(e, PEND_URL, JS_NewString(ctx, url));
+    pending_set_int(e, PEND_SCRIPT_I, script_i);
+    JS_FreeValue(ctx, e);
 }
 
 /* PARK ON AN INJECTED SCRIPT. `document.body.appendChild(s)` with `s.src` set is the other way a page loads code
@@ -122,23 +99,12 @@ void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
    pins, its position in the BFS. A sibling that never took that branch never sees the script. */
 void engine_pending_script_url(JSContext *ctx, const char *url) {
     Flow *f = flow_running();
+    JSValue e;
     DCHECK(f != NULL, "a <script src> was injected outside a running flow");
     DCHECK(url != NULL && *url, "a <script src> was injected with no URL");
-    if (f->npend >= f->pendcap) {
-        f->pendcap = f->pendcap ? f->pendcap * 2 : 8;
-        f->pending = realloc(f->pending, (size_t)f->pendcap * sizeof(FlowPending));
-        CHECK(f->pending, "engine: OOM growing the flow's pending list");
-    }
-    memset(&f->pending[f->npend], 0, sizeof f->pending[f->npend]);
-    f->pending[f->npend].resolve = JS_UNDEFINED;
-    f->pending[f->npend].value = JS_UNDEFINED;
-    f->pending[f->npend].url = strdup(url);
-    CHECK(f->pending[f->npend].url, "engine: OOM recording an injected script's URL");
-    f->pending[f->npend].have_value = 0;
-    f->pending[f->npend].kind = FLOW_PENDING_SCRIPT;
-    f->pending[f->npend].script_i = -1;
-    f->npend++;
-    (void)ctx;
+    e = pending_push(&f->pending, FLOW_PENDING_SCRIPT);
+    pending_set(e, PEND_URL, JS_NewString(ctx, url));
+    JS_FreeValue(ctx, e);
 }
 
 /* THE SESSION'S SCRIPT SEQUENCE — the document's own scripts in order. Entry i is inline (bodies[i] is its text)
@@ -198,35 +164,24 @@ static int g_sess_live;
  * fork that navigated a frame differently must not resolve to one Window — so answers are never shared, and
  * two identical questions are two requests. */
 static uint32_t g_next_req = 1;
-static void flow_pending_release(JSContext *ctx, FlowPending *p);
 
 uint32_t engine_host_request(JSContext *ctx, const char *op) {
     Flow *f = flow_running();
+    JSValue e;
     uint32_t id;
 
     DCHECK(f != NULL, "a synchronous host request was issued outside a flow — there would be nothing to "
                       "suspend and nothing to resume with the answer");
     DCHECK(op != NULL && *op, "a synchronous host request carried no text for the host to route on");
-    (void)ctx;
-    if (f->npend >= f->pendcap) {
-        f->pendcap = f->pendcap ? f->pendcap * 2 : 8;
-        f->pending = realloc(f->pending, (size_t)f->pendcap * sizeof(FlowPending));
-        CHECK(f->pending, "engine: OOM growing the pending register");
-    }
-    memset(&f->pending[f->npend], 0, sizeof f->pending[f->npend]);
-    f->pending[f->npend].resolve = JS_UNDEFINED;
-    f->pending[f->npend].value = JS_UNDEFINED;
-    f->pending[f->npend].kind = FLOW_PENDING_HOSTREQ;
-    f->pending[f->npend].script_i = -1;
-    f->pending[f->npend].op = strdup(op);
-    CHECK(f->pending[f->npend].op, "engine: OOM recording a host request");
+    e = pending_push(&f->pending, FLOW_PENDING_HOSTREQ);
+    pending_set(e, PEND_OP, JS_NewString(ctx, op));
     id = g_next_req++;
     /* A REUSED ID ANSWERS THE WRONG QUESTION. The answer is routed by this number alone, so a wrapped counter
        delivers one flow's cross-document read into another flow's call site — in another world. */
     CHECK(g_next_req != 0, "the host-request id counter wrapped — an answer would be delivered to the wrong "
                            "call site, in a world that never asked the question");
-    f->pending[f->npend].req = id;
-    f->npend++;
+    pending_set_int(e, PEND_REQ, id);
+    JS_FreeValue(ctx, e);
     return id;
 }
 
@@ -236,12 +191,19 @@ int engine_host_answered(uint32_t req, JSValueConst *out) {
     Flow *f = flow_running();
     DCHECK(req != 0, "a host request with no id was asked about");
     DCHECK(f != NULL, "a host request was asked about outside a flow");
-    for (int i = 0; i < f->npend; i++)
-        if (f->pending[i].req == req) {
-            if (!f->pending[i].have_value) return 0;
-            if (out) *out = f->pending[i].value;
-            return 1;
+    for (int i = 0, n = pending_count(f->pending); i < n; i++) {
+        JSValue e = pending_entry(f->pending, i);
+        if ((uint32_t)pending_get_int(e, PEND_REQ) == req) {
+            int have = pending_get_int(e, PEND_HAVE_VALUE) != 0;
+            /* BORROWED, and the register is what holds it: the reference taken here is released before the
+               return, exactly as the field read did when the record was C — the entry still names the value,
+               and a machine re-entered before it consumes may read it again. */
+            if (have && out) { JSValue v = pending_get(e, PEND_VALUE); *out = v; JS_FreeValue(g_sess_ctx, v); }
+            JS_FreeValue(g_sess_ctx, e);
+            return have;
         }
+        JS_FreeValue(g_sess_ctx, e);
+    }
     /* NOT ON THIS FLOW'S REGISTER AT ALL. A machine asking about an id it never issued, or issued before a
        fork that re-issued it under the sibling's own world — either way, answering "no" would park the flow
        forever on a question nothing is going to answer. */
@@ -257,15 +219,17 @@ JSValue engine_host_take(JSContext *ctx, uint32_t req) {
     Flow *f = flow_running();
     JSValue v;
     DCHECK(f != NULL, "a host answer was taken outside a flow");
-    for (int i = 0; i < f->npend; i++)
-        if (f->pending[i].req == req) {
-            DCHECK(f->pending[i].have_value, "a host answer was taken before it arrived");
-            v = f->pending[i].value;
-            f->pending[i].value = JS_UNDEFINED;
-            flow_pending_release(ctx, &f->pending[i]);
-            f->pending[i] = f->pending[--f->npend];
+    for (int i = 0, n = pending_count(f->pending); i < n; i++) {
+        JSValue e = pending_entry(f->pending, i);
+        if ((uint32_t)pending_get_int(e, PEND_REQ) == req) {
+            DCHECK(pending_get_int(e, PEND_HAVE_VALUE), "a host answer was taken before it arrived");
+            v = pending_get(e, PEND_VALUE);   /* the caller's reference; the register's goes with the entry */
+            JS_FreeValue(ctx, e);
+            pending_remove(&f->pending, i);
             return v;
         }
+        JS_FreeValue(ctx, e);
+    }
     DFAIL("a host answer was taken for a request that is not on this flow's register");
     return JS_UNDEFINED;
 }
@@ -275,14 +239,16 @@ JSValue engine_host_take(JSContext *ctx, uint32_t req) {
 int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value) {
     DCHECK(req != 0, "the host answered a request with no id");
     for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
-        for (int i = 0; i < f->npend; i++) {
-            FlowPending *p = &f->pending[i];
-            if (p->kind != FLOW_PENDING_HOSTREQ || p->req != req) continue;
-            DCHECK(!p->have_value, "the host answered one request twice — the second answer would overwrite a "
-                                   "value the asking machine may already have read");
-            JS_FreeValue(ctx, p->value);
-            p->value = JS_DupValue(ctx, value);
-            p->have_value = 1;
+        for (int i = 0, n = pending_count(f->pending); i < n; i++) {
+            JSValue p = pending_entry(f->pending, i);
+            if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
+                (uint32_t)pending_get_int(p, PEND_REQ) != req) { JS_FreeValue(ctx, p); continue; }
+            DCHECK(!pending_get_int(p, PEND_HAVE_VALUE),
+                   "the host answered one request twice — the second answer would overwrite a value the "
+                   "asking machine may already have read");
+            pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
+            pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
+            JS_FreeValue(ctx, p);
             return 1;
         }
     }
@@ -298,9 +264,18 @@ const char *engine_host_requests(void) {
 
     free(join); join = NULL;
     for (int k = 0; (f = flow_at(k)) != NULL; k++)
-        for (int i = 0; i < f->npend; i++)
-            if (f->pending[i].kind == FLOW_PENDING_HOSTREQ && !f->pending[i].have_value)
-                need += strlen(f->pending[i].op) + 24;
+        for (int i = 0, n = pending_count(f->pending); i < n; i++) {
+            JSValue p = pending_entry(f->pending, i);
+            if (pending_get_int(p, PEND_KIND) == FLOW_PENDING_HOSTREQ && !pending_get_int(p, PEND_HAVE_VALUE)) {
+                JSValue o = pending_get(p, PEND_OP);
+                size_t ol = 0;
+                const char *s = JS_ToCStringLen(g_sess_ctx, &ol, o);
+                if (s) JS_FreeCString(g_sess_ctx, s);
+                JS_FreeValue(g_sess_ctx, o);
+                need += ol + 24;
+            }
+            JS_FreeValue(g_sess_ctx, p);
+        }
     join = malloc(need);
     CHECK(join != NULL, "engine: OOM joining the outstanding host requests");
     /* WRITTEN THROUGH A CURSOR, NOT strcat. `strcat` rescans everything already written to find the end, so
@@ -313,13 +288,21 @@ const char *engine_host_requests(void) {
         char *w = join;
         *w = 0;
         for (int k = 0; (f = flow_at(k)) != NULL; k++)
-            for (int i = 0; i < f->npend; i++) {
-                FlowPending *p = &f->pending[i];
-                size_t oplen;
-                if (p->kind != FLOW_PENDING_HOSTREQ || p->have_value) continue;
-                w += snprintf(w, 24, "%u\t", p->req);
-                oplen = strlen(p->op);
-                memcpy(w, p->op, oplen); w += oplen;
+            for (int i = 0, n = pending_count(f->pending); i < n; i++) {
+                JSValue p = pending_entry(f->pending, i);
+                JSValue o;
+                const char *s;
+                size_t oplen = 0;
+                if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
+                    pending_get_int(p, PEND_HAVE_VALUE)) { JS_FreeValue(g_sess_ctx, p); continue; }
+                w += snprintf(w, 24, "%u\t", (uint32_t)pending_get_int(p, PEND_REQ));
+                o = pending_get(p, PEND_OP);
+                s = JS_ToCStringLen(g_sess_ctx, &oplen, o);
+                DCHECK(s != NULL, "an outstanding host request has no text — the host routes on it");
+                memcpy(w, s, oplen); w += oplen;
+                JS_FreeCString(g_sess_ctx, s);
+                JS_FreeValue(g_sess_ctx, o);
+                JS_FreeValue(g_sess_ctx, p);
                 *w++ = '\n';
             }
         *w = 0;
@@ -559,8 +542,16 @@ const char *engine_pending_urls(void) {
 
     free(join); join = NULL;
     for (int k = 0; (f = flow_at(k)) != NULL; k++)
-        for (int i = 0; i < f->npend; i++)
-            if (f->pending[i].url && !f->pending[i].have_value) need += strlen(f->pending[i].url) + 1;
+        for (int i = 0, n = pending_count(f->pending); i < n; i++) {
+            JSValue p = pending_entry(f->pending, i);
+            JSValue u = pending_get(p, PEND_URL);
+            size_t ul = 0;
+            const char *s = JS_IsString(u) ? JS_ToCStringLen(g_sess_ctx, &ul, u) : NULL;
+            if (s) JS_FreeCString(g_sess_ctx, s);
+            if (s && !pending_get_int(p, PEND_HAVE_VALUE)) need += ul + 1;
+            JS_FreeValue(g_sess_ctx, u);
+            JS_FreeValue(g_sess_ctx, p);
+        }
     join = malloc(need);
     CHECK(join != NULL, "engine: OOM joining the pending URLs");
     /* THE CURSOR IS THE END OF THE ANSWER, and it serves both writers — the append and the dedup scan that
@@ -570,25 +561,27 @@ const char *engine_pending_urls(void) {
         char *w = join;
         *w = 0;
         for (int k = 0; (f = flow_at(k)) != NULL; k++)
-            for (int i = 0; i < f->npend; i++) {
-                const char *u = f->pending[i].url;
-                size_t ul;
-                if (!u || f->pending[i].have_value) continue;
-                ul = strlen(u);
+            for (int i = 0, n = pending_count(f->pending); i < n; i++) {
+                JSValue pe = pending_entry(f->pending, i);
+                JSValue uv = pending_get(pe, PEND_URL);
+                size_t ul = 0;
+                const char *u = JS_IsString(uv) ? JS_ToCStringLen(g_sess_ctx, &ul, uv) : NULL;
+                int skip = (!u || pending_get_int(pe, PEND_HAVE_VALUE));
                 /* already listed? a linear scan over the answer being built, which is the set itself */
-                {
-                    const char *p = join; int dup = 0;
+                if (!skip) {
+                    const char *p = join;
                     while (p < w) {
                         const char *e = memchr(p, '\n', (size_t)(w - p));
                         size_t l = e ? (size_t)(e - p) : (size_t)(w - p);
-                        if (l == ul && !memcmp(p, u, ul)) { dup = 1; break; }
+                        if (l == ul && !memcmp(p, u, ul)) { skip = 1; break; }
                         if (!e) break;
                         p = e + 1;
                     }
-                    if (dup) continue;
                 }
-                memcpy(w, u, ul); w += ul;
-                *w++ = '\n';
+                if (!skip) { memcpy(w, u, ul); w += ul; *w++ = '\n'; }
+                if (u) JS_FreeCString(g_sess_ctx, u);
+                JS_FreeValue(g_sess_ctx, uv);
+                JS_FreeValue(g_sess_ctx, pe);
             }
         *w = 0;
         DCHECK((size_t)(w - join) < need, "the pending-URL join outgrew the length its own measuring pass "
@@ -604,13 +597,19 @@ int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
     int n = 0;
     DCHECK(url != NULL, "a body was provided for no URL");
     for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
-        for (int i = 0; i < f->npend; i++) {
-            FlowPending *p = &f->pending[i];
-            if (!p->url || p->have_value || strcmp(p->url, url) != 0) continue;
-            JS_FreeValue(ctx, p->value);
-            p->value = JS_DupValue(ctx, value);
-            p->have_value = 1;
-            n++;
+        for (int i = 0, m = pending_count(f->pending); i < m; i++) {
+            JSValue p = pending_entry(f->pending, i);
+            JSValue uv = pending_get(p, PEND_URL);
+            const char *u = JS_IsString(uv) ? JS_ToCString(ctx, uv) : NULL;
+            int hit = u && !pending_get_int(p, PEND_HAVE_VALUE) && strcmp(u, url) == 0;
+            if (u) JS_FreeCString(ctx, u);
+            JS_FreeValue(ctx, uv);
+            if (hit) {
+                pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
+                pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
+                n++;
+            }
+            JS_FreeValue(ctx, p);
         }
     }
     return n;
@@ -618,42 +617,42 @@ int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
 /* Resolve every pending fetch this flow issued (the network completed). Returns how many were drained. */
 /* Is any of this flow's pending fetches deliverable? A flow with only host-owed entries has no work — it stalls
    rather than spinning on a drain that would resolve nothing. */
-static int flow_pending_ready(const Flow *f) {
-    for (int i = 0; i < f->npend; i++) if (f->pending[i].have_value) return 1;
-    return 0;
-}
-
-/* RELEASE ONE ENTRY. Both places that free one call this, so a field added to the record has ONE line to gain
-   rather than two to be forgotten at. */
-static void flow_pending_release(JSContext *ctx, FlowPending *p) {
-    int hi;
-    JS_FreeValue(ctx, p->resolve);
-    JS_FreeValue(ctx, p->value);
-    free(p->url);
-    free(p->op);
-    free(p->method);
-    free(p->body);
-    for (hi = 0; hi < p->nhdr; hi++) { free(p->hdrs[hi].name); free(p->hdrs[hi].value); }
-    free(p->hdrs);
-}
+static int flow_pending_ready(const Flow *f) { return pending_ready(f->pending); }
 
 static int flow_drain_pending(JSContext *ctx, Flow *f) {
-    int n = 0, keep = 0;
-    for (int i = 0; i < f->npend; i++) {
-        FlowPending *p = &f->pending[i];
-        if (!p->have_value) { f->pending[keep++] = *p; continue; }   /* the host still owes this one */
-        if (p->kind == FLOW_PENDING_DOCSCRIPT) {
+    int n = 0, i = 0;
+    while (i < pending_count(f->pending)) {
+        JSValue p = pending_entry(f->pending, i);
+        JSValue pv;
+        int kind;
+        if (!pending_get_int(p, PEND_HAVE_VALUE)) {   /* the host still owes this one */
+            JS_FreeValue(ctx, p);
+            i++;
+            continue;
+        }
+        /* TAKEN OFF THE REGISTER BEFORE IT IS DELIVERED, and that ordering is the record's own lifetime. The
+           delivery below runs the PAGE's code — 27.2.1.3.2 step 8 reads `Get(resolution,"then")` off an object
+           whose prototype the page owns — and that code can issue another fetch, which appends to this very
+           register. As a C array the walk held a `FlowPending *` into storage the append could realloc out
+           from under it; as a JS record the reference here is what keeps it alive, so an append cannot move it
+           and the slot it occupied cannot be walked twice. The removal is a swap-remove, so `i` is deliberately
+           NOT advanced: the entry swapped into this slot has not been looked at yet. */
+        pending_remove(&f->pending, i);
+        kind = (int)pending_get_int(p, PEND_KIND);
+        pv = pending_get(p, PEND_VALUE);
+        if (kind == FLOW_PENDING_DOCSCRIPT) {
             /* the DOCUMENT's text, shared by every flow: fill the slot once and all waiters proceed in order */
-            if (!g_sess_bodies[p->script_i]) {
-                const char *body = JS_ToCString(ctx, p->value);
+            int si = (int)pending_get_int(p, PEND_SCRIPT_I);
+            if (!g_sess_bodies[si]) {
+                const char *body = JS_ToCString(ctx, pv);
                 DCHECK(body != NULL, "an external document script's body did not arrive as text");
-                g_sess_bodies[p->script_i] = body ? strdup(body) : strdup("");
-                CHECK(g_sess_bodies[p->script_i], "engine: OOM storing an external document script");
+                g_sess_bodies[si] = body ? strdup(body) : strdup("");
+                CHECK(g_sess_bodies[si], "engine: OOM storing an external document script");
                 if (body) JS_FreeCString(ctx, body);
             }
-        } else if (p->kind == FLOW_PENDING_SCRIPT) {
+        } else if (kind == FLOW_PENDING_SCRIPT) {
             /* the reply is PROGRAM: it joins this flow's script sequence, and the one BFS runs it */
-            const char *body = JS_ToCString(ctx, p->value);
+            const char *body = JS_ToCString(ctx, pv);
             DCHECK(body != NULL, "an injected script's body did not arrive as text");
             if (body) { engine_queue_script(body); JS_FreeCString(ctx, body); }
         } else {
@@ -666,19 +665,21 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
                zone; the status and headers safeFetch saw are what it owes next, and building the reply here is
                what makes that a change in one place rather than a second delivery shape. */
             size_t rlen = 0;
-            const char *rbody = JS_ToCStringLen(ctx, &rlen, p->value);
+            const char *rbody = JS_ToCStringLen(ctx, &rlen, pv);
             JSValue reply = fetch_reply_new(ctx, 200, "OK", NULL, rbody ? rbody : "", rbody ? rlen : 0);
+            JSValue resolve = pending_get(p, PEND_RESOLVE);
             if (rbody) JS_FreeCString(ctx, rbody);
-            if (JS_CallAsFlow(ctx, p->resolve, reply) < 0) {
+            if (JS_CallAsFlow(ctx, resolve, reply) < 0) {
                 JSValue exc = JS_GetException(ctx);
                 JS_FreeValue(ctx, exc);   /* a rejected delivery is the page's to observe, not this drain's */
             }
+            JS_FreeValue(ctx, resolve);
             JS_FreeValue(ctx, reply);
         }
-        flow_pending_release(ctx, p);
+        JS_FreeValue(ctx, pv);
+        JS_FreeValue(ctx, p);
         n++;
     }
-    f->npend = keep;
     return n;
 }
 
@@ -773,56 +774,27 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
         }
         sib->njob = sib->jobcap = parent->njob;
     }
-    if (parent->npend) {
-        sib->pending = malloc((size_t)parent->npend * sizeof(FlowPending));
-        CHECK(sib->pending, "engine: OOM inheriting the pending replies at a fork");
-        for (int i = 0; i < parent->npend; i++) {
-            FlowPending *sp = &parent->pending[i], *dp = &sib->pending[i];
-            int hi;
-            /* THE WHOLE STRUCT FIRST. Copying field by field into a malloc'd slot left every field this list
-               forgot as uninitialised memory — `script_i` was already one, so a forked flow's document-script
-               entry indexed the shared body table with garbage. What follows re-owns the POINTERS, which is
-               the only part a copy cannot do. */
-            *dp = *sp;
-            dp->resolve = JS_DupValue(ctx, sp->resolve);
-            dp->value = JS_DupValue(ctx, sp->value);
-            dp->url = sp->url ? strdup(sp->url) : NULL;
-            CHECK(!sp->url || dp->url, "engine: OOM inheriting a pending URL at a fork");
-            dp->op = sp->op ? strdup(sp->op) : NULL;
-            CHECK(!sp->op || dp->op, "engine: OOM inheriting a host request at a fork");
-            /* AN UNANSWERED SYNCHRONOUS REQUEST IS RE-ISSUED, NEVER INHERITED. Its answer is computed under the
-               ASKING FLOW'S WORLD, and the sibling's world is not the parent's from this instant on — two arms
-               of a fork that navigated a frame differently must not resolve to one Window. Sharing the id would
-               deliver one answer into two call sites in two contradictory worlds, which is the same fabrication
-               as merging two senders' messages into one timeline.
-               An ALREADY-ANSWERED one is copied as it stands: the answer was computed before the fork existed,
-               so both arms genuinely observed it. */
-            if (dp->kind == FLOW_PENDING_HOSTREQ && !dp->have_value) {
-                dp->req = g_next_req++;
-                CHECK(g_next_req != 0, "the host-request id counter wrapped while forking a blocked flow");
-            }
-            dp->method = sp->method ? strdup(sp->method) : NULL;
-            CHECK(!sp->method || dp->method, "engine: OOM inheriting a pending method at a fork");
-            dp->body = NULL;
-            if (sp->body) {
-                dp->body = malloc(sp->body_len + 1);
-                CHECK(dp->body, "engine: OOM inheriting a pending body at a fork");
-                memcpy(dp->body, sp->body, sp->body_len);
-                dp->body[sp->body_len] = 0;
-            }
-            dp->hdrs = NULL;
-            if (sp->nhdr > 0) {
-                dp->hdrs = calloc((size_t)sp->nhdr, sizeof(FlowHeader));
-                CHECK(dp->hdrs, "engine: OOM inheriting pending headers at a fork");
-                for (hi = 0; hi < sp->nhdr; hi++) {
-                    dp->hdrs[hi].name = strdup(sp->hdrs[hi].name);
-                    dp->hdrs[hi].value = strdup(sp->hdrs[hi].value);
-                    CHECK(dp->hdrs[hi].name && dp->hdrs[hi].value,
-                          "engine: OOM inheriting a pending header at a fork");
-                }
-            }
+    /* IT IS STILL A COPY, and it has to be: the host walks EVERY flow's register from outside any flow's
+       delta (engine_provide fills whichever flows parked on a URL, engine_host_requests joins what is
+       outstanding across all of them), so two flows sharing one array would each read the other's outstanding
+       requests and neither could be answered independently. What changed is what a copy COSTS — the record's
+       strings are immutable JS strings now, so the sibling takes a reference to each instead of a strdup, and
+       an empty register (which is most of them) copies as JS_UNDEFINED. */
+    sib->pending = pending_fork(parent->pending);
+    /* AN UNANSWERED SYNCHRONOUS REQUEST IS RE-ISSUED, NEVER INHERITED. Its answer is computed under the ASKING
+       FLOW'S WORLD, and the sibling's world is not the parent's from this instant on — two arms of a fork that
+       navigated a frame differently must not resolve to one Window. Sharing the id would deliver one answer
+       into two call sites in two contradictory worlds, which is the same fabrication as merging two senders'
+       messages into one timeline.
+       An ALREADY-ANSWERED one keeps its id: the answer was computed before the fork existed, so both arms
+       genuinely observed it. */
+    for (int i = 0, n = pending_count(sib->pending); i < n; i++) {
+        JSValue p = pending_entry(sib->pending, i);
+        if (pending_get_int(p, PEND_KIND) == FLOW_PENDING_HOSTREQ && !pending_get_int(p, PEND_HAVE_VALUE)) {
+            pending_set_int(p, PEND_REQ, g_next_req++);
+            CHECK(g_next_req != 0, "the host-request id counter wrapped while forking a blocked flow");
         }
-        sib->npend = sib->pendcap = parent->npend;
+        JS_FreeValue(ctx, p);
     }
 }
 
@@ -1038,7 +1010,7 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                 flow_run_one_job(ctx, f);
                 return flow_blocked(f) ? FLOW_STEP_OWED : 0;   /* scripts done -> drain a microtask, yield */
             }
-            else if (f->npend > 0 && !flow_pending_ready(f))
+            else if (pending_count(f->pending) > 0 && !flow_pending_ready(f))
                 return FLOW_STEP_OWED;   /* only host-owed replies remain: no progress, and NOT finished */
             else if (flow_pending_ready(f)) {
                 /* FETCH-AWAIT: scripts + microtasks are drained, but a suspended async body is awaiting a LIVE
@@ -1255,15 +1227,17 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
        used to be walked and freed "defensively", which is the fallback shape: the walk can only ever run when
        a work item is being DROPPED, and freeing it quietly is precisely how that drop stays invisible. Neither
        is reachable — flow_step decides "finished" only after offering the job queue a turn (njob > 0 runs one),
-       and only when npend is zero, since a pending entry with a value drains and one without reports host-owed.
+       and only when the register is empty, since a pending entry with a value drains and one without reports
+       host-owed.
        So the loops were dead, and the one state that would have entered them is the bug. The ARRAY still has to
        be freed: it is this flow's allocation whether or not it ever held an entry. */
     DCHECK(f->njob == 0, "a finishing flow still held queued jobs — its promise reactions and timer callbacks "
                          "are being dropped, and freeing them here is what used to hide that");
     free(f->jobs); f->jobs = NULL; f->jobcap = 0;
-    DCHECK(f->npend == 0, "a finishing flow still held pending host replies — a flow awaiting one is parked, "
-                          "not finished, and releasing them here is what used to hide that");
-    free(f->pending); f->pending = NULL; f->pendcap = 0;
+    DCHECK(pending_count(f->pending) == 0,
+           "a finishing flow still held pending host replies — a flow awaiting one is parked, not finished, "
+           "and releasing them here is what used to hide that");
+    pending_free(ctx, &f->pending);
     flow_set_running(NULL);
     flow_remove(ctx, f);
 }
