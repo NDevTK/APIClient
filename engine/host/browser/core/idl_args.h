@@ -31,6 +31,12 @@ typedef enum {
        load-bearing: `el.textContent = null` is "replace all with null", which removes the children and adds NO
        Text node, and stringifying it wrote the four characters `null` into the page's DOM instead. */
     IDL_DOMSTRING_NULLABLE,
+    /* `USVString?` — the same null-and-undefined-become-null rule with §3.2.11's scalar value conversion after
+       it. XHR §3.5.1's `optional USVString? username = null` is the member that needs it, and it needs it
+       load-bearingly: `open(m, u, false, null)` must leave the parsed URL's username alone, where a
+       DOMString-nullable would drop the surrogate replacement and a plain USVString would set it to the four
+       characters "null". */
+    IDL_USVSTRING_NULLABLE,
     /* THE INTEGER TYPES, each stating its WIDTH and its SIGN — which is all §3.2's conversion needs, and the
        whole of what tells them apart. Every one of them is ToNumber (the page's valueOf may run) and then the
        one arithmetic in idl_args.c: sign(x)·floor(|x|) taken MODULO 2^width, folded into range if the type is

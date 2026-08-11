@@ -236,6 +236,18 @@ static int header_value_is_valid(const char *s, size_t len)
     return 1;
 }
 
+bool header_name_valid(const char *name, size_t len) { return header_name_is_valid(name, len) != 0; }
+
+char *header_value_normalize_valid(const char *value, size_t len, size_t *pn)
+{
+    size_t n = 0;
+    char *norm = header_normalize_value(value, len, &n);
+
+    if (!header_value_is_valid(norm, n)) { free(norm); return NULL; }
+    if (pn) *pn = n;
+    return norm;
+}
+
 /* §5.1's guard as ONE operation, because every entry point performs the same one: normalize the value, then
    reject a bad name or a bad value with a TypeError. `*pnorm` is the normalized value (caller frees), left NULL
    for the name-only members. 0 on success, -1 with a TypeError live. */
@@ -334,6 +346,11 @@ static int header_is_forbidden_request(const char *lower_name, const char *value
         header_ci_eq(lower_name, "x-method-override"))
         return value && header_value_has_forbidden_method(value);
     return 0;
+}
+
+bool header_forbidden_request(const char *lower_name, const char *value)
+{
+    return header_is_forbidden_request(lower_name, value) != 0;
 }
 
 /* §5.1 "forbidden response-header name": the two a page may not put on a response it did not receive. */

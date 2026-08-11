@@ -49,8 +49,11 @@ void event_target_install_interface(JSContext *ctx, JSValueConst global);
 
 /* HTML §8.1.7.2 EVENT HANDLER IDL ATTRIBUTES — `onclick`, `onload`, `onabort`. Which set a target carries is
    which MIXIN its IDL includes, so the caller names the mixin rather than the members. */
+/* EH_XHR is XHR §3.3's set on XMLHttpRequestEventTarget — the seven a page uses to watch a transfer; it is a
+   MIXIN's set, so XMLHttpRequestUpload gets exactly the same members by inheritance. EH_XHR_READYSTATE is the
+   ONE §3.3 puts "solely" on XMLHttpRequest, which is why it cannot ride the same bit. */
 enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 16,
-       EH_MEDIA_QUERY_LIST = 32 };
+       EH_MEDIA_QUERY_LIST = 32, EH_XHR = 64, EH_XHR_READYSTATE = 128 };
 /* HTML §3.2.2 click() — "fire a synthetic pointer event named click", which IS §2.9 dispatch, so it is the same
    machine under a second entry rather than a second implementation of it. */
 void event_target_install_click(JSContext *ctx, JSValueConst target);
@@ -86,6 +89,14 @@ void event_target_set_handler_hook(void (*after_set)(JSContext *ctx, JSValueCons
 void event_target_add_listener(JSContext *ctx, JSValueConst target, const char *type, JSValueConst cb,
                                bool capture, bool once, int passive, JSValueConst signal);
 void event_target_remove_listener(JSContext *ctx, JSValueConst target, const char *type, JSValueConst cb);
+
+/* IS ANYTHING REGISTERED ON THIS TARGET AT ALL — §2.7's event listener list, asked as "is it non-empty" for
+   ANY type. XHR §3.5.6 step 5 is the caller and the question is exactly that: "if one or more event listeners
+   are registered on this's upload object", which is what sets the upload listener flag and, in a real browser,
+   what makes the request CORS-preflighted. It is asked of this file rather than counted by the caller because
+   an event handler attribute (`upload.onprogress = f`) registers a listener too, and a component keeping its
+   own count would answer no for exactly the way most pages write it. */
+bool event_target_has_any_listener(JSContext *ctx, JSValueConst target);
 
 /* DOM §2.9's ACTIVATION BEHAVIOUR — what makes a click on an `<a href>` FOLLOW the link, on a `<form>`'s submit
    button submit, on a checkbox toggle it. It is not a listener and a page cannot register one: the dispatch

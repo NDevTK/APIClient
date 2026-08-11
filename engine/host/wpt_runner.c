@@ -42,6 +42,7 @@
 #include "core/events/message_event.h"
 #include "core/events/report_exception.h"
 #include "core/events/message_port.h"
+#include "core/xhr/xml_http_request.h"
 #include "core/events/broadcast_channel.h"
 #include "core/frame/window.h"
 #include "core/frame/window_proxy.h"
@@ -365,7 +366,13 @@ static char *wpt_http(const FetchRequest *req, size_t *plen, int *pstatus, Heade
                 line = end + 1;
             }
         }
-        if (sep && status >= 200 && status < 300) {
+        /* THE BODY OF EVERY RESPONSE, NOT ONLY A 2xx ONE. Fetch rejects a promise for a NETWORK ERROR and for
+           nothing else — a 404 RESOLVES, with `ok` false and the server's error page as the body — so cutting
+           the body off at the status made `fetch("/missing")` reject where the standard resolves. XHR is what
+           made it impossible to ignore: `status` and `responseText` on a 404 are exactly what half of
+           xhr/ asserts, and there is no second helper to give them to. A reply with no header terminator at
+           all is still the network error it always was. */
+        if (sep) {
             size_t off = (size_t)(sep - buf) + 4;
             *plen = n - off;
             body = malloc(*plen + 1);
@@ -803,6 +810,69 @@ static bool wpt_answer_host_requests(JSContext *ctx)
             answered = true;
             JS_FreeValue(ctx, v);
         }
+        /* XHR §3.5.6's FETCH, which this runner answers with the same HTTP it answers every other request
+           with. The record crosses as JSON because it carries a method, a header list and a body — a
+           tab-separated line cannot hold a body — and because the answer already crosses that way.
+           IT IS ANSWERED HERE AND NOT ROUTED TO A PEER: an XMLHttpRequest belongs to the instance that made
+           it, and the trusted zone's job for one is the network, not the routing. */
+        else if (!strncmp(tab + 1, "xhr.send\t", 9)) {
+            char *line = malloc(n + 1);
+            JSValue rec, mv, uv, hv, bv, reply;
+            const char *method, *url, *bodys = NULL;
+            size_t blen = 0;
+            HeaderList hdrs = { 0 }, rh = { 0 };
+            FetchRequest req;
+            uint32_t hn = 0, hi;
+            char *body;
+            size_t len = 0;
+            int status = 0;
+
+            CHECK(line != NULL, "wpt: OOM reading an XMLHttpRequest's request record");
+            memcpy(line, tab + 1, n); line[n] = 0;
+            rec = JS_ParseJSON(ctx, line + 9, strlen(line + 9), "<xhr.send>");
+            free(line);
+            DCHECK(!JS_IsException(rec), "an XMLHttpRequest's request record did not arrive as JSON — the "
+                                         "engine built it with JS_JSONStringify, so a parse failure here is a "
+                                         "truncation between the two");
+            if (JS_IsException(rec)) { JS_FreeValue(ctx, JS_GetException(ctx)); p = end + 1; continue; }
+            mv = JS_GetPropertyStr(ctx, rec, "method");
+            uv = JS_GetPropertyStr(ctx, rec, "url");
+            hv = JS_GetPropertyStr(ctx, rec, "headers");
+            bv = JS_GetPropertyStr(ctx, rec, "body");
+            method = JS_ToCString(ctx, mv);
+            url = JS_ToCString(ctx, uv);
+            if (JS_IsString(bv)) bodys = JS_ToCStringLen(ctx, &blen, bv);
+            { JSValue lv = JS_GetPropertyStr(ctx, hv, "length");
+              JS_ToUint32(ctx, &hn, lv);
+              JS_FreeValue(ctx, lv); }
+            for (hi = 0; hi < hn; hi++) {
+                JSValue pair = JS_GetPropertyUint32(ctx, hv, hi);
+                JSValue nv2 = JS_GetPropertyUint32(ctx, pair, 0), vv2 = JS_GetPropertyUint32(ctx, pair, 1);
+                const char *nm = JS_ToCString(ctx, nv2), *val = JS_ToCString(ctx, vv2);
+                if (nm && val) header_list_append(&hdrs, nm, val);
+                if (nm) JS_FreeCString(ctx, nm);
+                if (val) JS_FreeCString(ctx, val);
+                JS_FreeValue(ctx, nv2); JS_FreeValue(ctx, vv2); JS_FreeValue(ctx, pair);
+            }
+            req.method = method ? method : "GET";
+            req.url = url ? url : "";
+            req.headers = &hdrs;
+            req.body = bodys;
+            req.body_len = blen;
+            body = wpt_http(&req, &len, &status, &rh);
+            reply = body ? fetch_reply_new(ctx, status, "", &rh, body, len) : JS_NULL;
+            engine_host_answer(ctx, id, reply);
+            answered = true;
+            JS_FreeValue(ctx, reply);
+            free(body);
+            header_list_free(&rh);
+            header_list_free(&hdrs);
+            if (method) JS_FreeCString(ctx, method);
+            if (url) JS_FreeCString(ctx, url);
+            if (bodys) JS_FreeCString(ctx, bodys);
+            JS_FreeValue(ctx, mv); JS_FreeValue(ctx, uv); JS_FreeValue(ctx, hv); JS_FreeValue(ctx, bv);
+            JS_FreeValue(ctx, rec);
+        }
         /* An operation this harness does not route is left UNANSWERED rather than guessed: the asking flow
            stays parked, which is visible, where a wrong answer is not. */
         p = end + 1;
@@ -1019,6 +1089,7 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
     iframe_init(ctx);   /* §4.8.5: the slot a child navigable lives in */
     document_init(ctx);
     message_port_init(ctx);
+    xhr_init(ctx);   /* XHR §3, and §5's ProgressEvent under it */
     broadcast_channel_init(ctx, origin);
     abort_init(ctx);        /* the AbortSignal slot key §5.4's signal lives in */
     observable_init(ctx);
@@ -1098,6 +1169,7 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
     page_reveal_install(ctx, global);       /* HTML §7.4.6.3: PageRevealEvent */
     media_query_list_install(ctx, global);   /* CSSOM VIEW §4.2/§7: matchMedia, MediaQueryList */
     message_port_install(ctx, global);   /* HTML 9.4.2/9.4.3 */
+    xhr_install(ctx, global);            /* XHR §3, §5 */
     broadcast_channel_install(ctx, global);   /* HTML 9.5 */
     abort_install(ctx, global);
     observable_install(ctx, global);

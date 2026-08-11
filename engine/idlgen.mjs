@@ -61,6 +61,13 @@ const INTERFACES = {
   MessageChannel:       "core/events/message_port.c",
   /* HTML 9.5. A BroadcastChannel is an EventTarget, so its inherited members are event_target.c's. */
   BroadcastChannel:    ["core/events/broadcast_channel.c", "core/events/event_target.c"],
+  /* XHR §3 and §5. XMLHttpRequest's file list carries event_target.c because its prototype chain reaches
+     EventTarget.prototype through XMLHttpRequestEventTarget — the seven handler attributes and the three
+     listener members really ARE reachable on one, so reporting them absent would be the audit lying. */
+  XMLHttpRequest:       ["core/xhr/xml_http_request.c", "core/events/event_target.c"],
+  XMLHttpRequestUpload: ["core/xhr/xml_http_request.c", "core/events/event_target.c"],
+  XMLHttpRequestEventTarget: ["core/xhr/xml_http_request.c", "core/events/event_target.c"],
+  ProgressEvent:       ["core/xhr/progress_event.c", "core/events/event.c"],
   TextEncoder:          "core/encoding/encoding.c",
   TextDecoder:          "core/encoding/encoding.c",
   /* §7.5 and §7.6 include the GenericTransformStream mixin, so `readable` and `writable` are members the audit

@@ -799,8 +799,9 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     s->dict_v = idl_num_of(ctx, mt, s->nums[s->i]);
                 }
                 else if (mt == IDL_DOMSTRING || mt == IDL_DOMSTRING_NULLABLE || mt == IDL_BYTESTRING ||
-                         mt == IDL_USVSTRING || mt == IDL_ENUM) {
-                    if (mt == IDL_DOMSTRING_NULLABLE && JS_IsNull(s->dict_v)) {
+                         mt == IDL_USVSTRING || mt == IDL_USVSTRING_NULLABLE || mt == IDL_ENUM) {
+                    if ((mt == IDL_DOMSTRING_NULLABLE || mt == IDL_USVSTRING_NULLABLE) &&
+                        JS_IsNull(s->dict_v)) {
                         /* `DOMString?`: null is the IDL null, never the string "null". */
                     } else {
                         JSValue str = JS_UNDEFINED;
@@ -812,7 +813,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                         s->dict_v = str;
                         if (mt == IDL_BYTESTRING && idl_bytestring_check(ctx, s->dict_v) < 0)
                             return JS_STEP_ABRUPT;
-                        if (mt == IDL_USVSTRING) {
+                        if (mt == IDL_USVSTRING || mt == IDL_USVSTRING_NULLABLE) {
                             s->dict_v = JS_ToScalarValueString(ctx, s->dict_v);
                             if (JS_IsException(s->dict_v)) return JS_STEP_ABRUPT;
                         }
@@ -955,15 +956,16 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
               ? IDL_ANY : IDL_DOMSTRING;
         }
 
-        /* `DOMString?`: null AND undefined become the IDL null before any ToString is reached. */
-        if (t == IDL_DOMSTRING_NULLABLE) {
+        /* `DOMString?` and `USVString?`: null AND undefined become the IDL null before any ToString is
+           reached; what survives takes the un-nullable type's own conversion. */
+        if (t == IDL_DOMSTRING_NULLABLE || t == IDL_USVSTRING_NULLABLE) {
             if (JS_IsNull(a) || JS_IsUndefined(a)) {
                 JS_FreeValue(ctx, cb_result);
                 cb_result = JS_UNDEFINED;
                 *slot = JS_NULL;
                 goto placed;
             }
-            t = IDL_DOMSTRING;
+            t = (t == IDL_DOMSTRING_NULLABLE) ? IDL_DOMSTRING : IDL_USVSTRING;
         }
 
         /* [LegacyNullToEmptyString]: null becomes "" rather than "null", and it is part of the TYPE — the

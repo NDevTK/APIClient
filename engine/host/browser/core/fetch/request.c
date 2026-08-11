@@ -137,6 +137,8 @@ static int method_is_token(const char *s)
     return 1;
 }
 
+bool request_method_is_token(const char *m) { return method_is_token(m) != 0; }
+
 /* §5.3 STEP 25 AS ONE OPERATION, because two call sites perform it: this constructor, and `fetch(input, init)`,
    which runs §5.3 inline over an init it never turns into a Request. fetch() had none of it — no token test, no
    forbidden-method refusal and no normalization — so `{method:"connect"}` went out and `{method:"post"}` was

@@ -247,7 +247,23 @@ async function engineCreate(code, html, msg, persist, docName) {
      this zone stamps on everything it sends — both are read only by the notice router below, which is the
      only thing that may know either: SECURITY.md makes this zone the one that knows which instance holds
      which document, and the one that may state a sender's origin. */
-  return { M, ptrs, lines, fkey, prior, msg, persist, fetched, fetchedDocument, code, html, state: "hot",
+  // XHR §3.5.6's fetch, through the SAME chokepoint every other byte goes through. `rec` is the engine's own
+  // JSON record — method, url, headers, body — and the answer is the reply shape the engine's fetch_reply_new
+  // builds, so a null body is the network error §3.5.6's "handle errors" turns into an `error` event.
+  const fetchedXhr = async (rec) => {
+    let q;
+    try { q = JSON.parse(rec); } catch (_) { return { body: null, status: 0, statusText: "", headers: [] }; }
+    if (!canFetch) return { body: null, status: 0, statusText: "", headers: [] };
+    try {
+      const abs = new URL(q.url, msg.sourceUrl).href;
+      const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, method: q.method, headers: q.headers,
+                                            body: q.body, credentials: q.credentials });
+      if (!r || typeof r.body !== "string") return { body: null, status: 0, statusText: "", headers: [] };
+      return { body: r.body, status: r.status || 200, statusText: r.statusText || "",
+               headers: Object.entries(r.headers || {}) };
+    } catch (_) { return { body: null, status: 0, statusText: "", headers: [] }; }
+  };
+  return { M, ptrs, lines, fkey, prior, msg, persist, fetched, fetchedDocument, fetchedXhr, code, html, state: "hot",
            docId: _docId, origin: originOf((msg && msg.sourceUrl) || ""), _forceparkSteps };
 }
 function engineWeight(eng) { return eng.state === "hot" ? +eng.M.ccall("qjs_top_weight", "number", [], []) : -Infinity; }
@@ -349,6 +365,16 @@ async function engineServiceHostRequests(eng) {
     const tab = line.indexOf("\t");
     if (tab < 0) continue;
     const id = +line.slice(0, tab), op = line.slice(tab + 1);
+    // XHR §3.5.6's fetch is the SECOND thing this zone can genuinely answer, and for the identical reason: it
+    // is a network fetch, and safeFetch is the one chokepoint SECURITY.md allows it through. The record carries
+    // the whole request — method, headers and body — because the chokepoint decides SOP, CORS, method and
+    // credentials and cannot decide about a method it was never told. A flow parked on one is SUSPENDED at the
+    // exact line the page wrote `send()` on, which is what a synchronous XMLHttpRequest is.
+    if (op.startsWith("xhr.send\t")) {
+      const r = await eng.fetchedXhr(op.slice("xhr.send\t".length));
+      M.ccall("qjs_host_answer", "void", ["number", "string"], [id, JSON.stringify(r)]);
+      continue;
+    }
     if (!op.startsWith("document.fetch\t")) continue;
     const r = await eng.fetchedDocument(op.slice("document.fetch\t".length));
     // JSON, because the answer carries its TYPE across this seam: `{body:null}` is a load that did not load,

@@ -498,6 +498,30 @@ void event_target_remove_listener(JSContext *ctx, JSValueConst target, const cha
                                                 /*capture*/ false));
 }
 
+/* §2.7's event listener list, asked as "is it non-empty for ANY type". The map is this file's own engine-built
+   object, so walking it runs none of the page's code — and a handler ATTRIBUTE is in it because setting one
+   registers a real listener, which is the whole reason the caller must not count for itself. */
+bool event_target_has_any_listener(JSContext *ctx, JSValueConst target)
+{
+    JSValue map = listener_map(ctx, event_target_receiver(ctx, target), 0);
+    JSPropertyEnum *tab = NULL;
+    uint32_t n = 0, i;
+    bool any = false;
+
+    if (!JS_IsObject(map)) { JS_FreeValue(ctx, map); return false; }
+    if (JS_GetOwnPropertyNames(ctx, &tab, &n, map, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+        for (i = 0; i < n && !any; i++) {
+            JSValue arr = JS_GetProperty(ctx, map, tab[i].atom);
+            if (JS_IsArray(arr) && arr_len(ctx, arr) > 0) any = true;
+            JS_FreeValue(ctx, arr);
+        }
+        for (i = 0; i < n; i++) JS_FreeAtom(ctx, tab[i].atom);
+        js_free(ctx, tab);
+    }
+    JS_FreeValue(ctx, map);
+    return any;
+}
+
 /* add/removeEventListener's `type` is a Web IDL DOMString, so it is ToString on whatever the page passed and
    cannot be a JS_ToCString from C. They use the SHARED coerce-then-call machine rather than one of their own:
    what they have in common with getAttribute and createElement is exactly the thing that needs a machine, and a
@@ -593,7 +617,7 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
  * handler per-flow for free, so `onclick` assigned in one arm of a fork is invisible to its sibling. */
 #define EVENT_HANDLERS(X)                                                                                     \
     /* GlobalEventHandlers — HTML §8.1.7.2.1, on Window, Document and Element alike. */                       \
-    X("onabort", EH_GLOBAL | EH_SIGNAL) X("onauxclick", EH_GLOBAL) X("onbeforeinput", EH_GLOBAL)                    \
+    X("onabort", EH_GLOBAL | EH_SIGNAL | EH_XHR) X("onauxclick", EH_GLOBAL) X("onbeforeinput", EH_GLOBAL)          \
     X("onbeforematch", EH_GLOBAL) X("onbeforetoggle", EH_GLOBAL) X("onblur", EH_GLOBAL) X("oncancel", EH_GLOBAL)      \
     X("oncanplay", EH_GLOBAL) X("oncanplaythrough", EH_GLOBAL)                          \
     /* `onchange` has TWO owners — GlobalEventHandlers and CSSOM VIEW §4.2's MediaQueryList — which is exactly
@@ -605,12 +629,12 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
     X("oncontextrestored", EH_GLOBAL) X("oncuechange", EH_GLOBAL) X("ondblclick", EH_GLOBAL) X("ondrag", EH_GLOBAL)   \
     X("ondragend", EH_GLOBAL) X("ondragenter", EH_GLOBAL) X("ondragleave", EH_GLOBAL) X("ondragover", EH_GLOBAL)      \
     X("ondragstart", EH_GLOBAL) X("ondrop", EH_GLOBAL) X("ondurationchange", EH_GLOBAL) X("onemptied", EH_GLOBAL)     \
-    X("onended", EH_GLOBAL) X("onerror", EH_GLOBAL) X("onfocus", EH_GLOBAL) X("onformdata", EH_GLOBAL)                \
+    X("onended", EH_GLOBAL) X("onerror", EH_GLOBAL | EH_XHR) X("onfocus", EH_GLOBAL) X("onformdata", EH_GLOBAL)                \
     X("oninput", EH_GLOBAL) X("oninvalid", EH_GLOBAL) X("onkeydown", EH_GLOBAL) X("onkeypress", EH_GLOBAL)            \
-    X("onkeyup", EH_GLOBAL) X("onload", EH_GLOBAL) X("onloadeddata", EH_GLOBAL) X("onloadedmetadata", EH_GLOBAL)      \
-    X("onloadstart", EH_GLOBAL) X("onmousedown", EH_GLOBAL) X("onmouseenter", EH_GLOBAL) X("onmouseleave", EH_GLOBAL) \
+    X("onkeyup", EH_GLOBAL) X("onload", EH_GLOBAL | EH_XHR) X("onloadeddata", EH_GLOBAL) X("onloadedmetadata", EH_GLOBAL)      \
+    X("onloadstart", EH_GLOBAL | EH_XHR) X("onmousedown", EH_GLOBAL) X("onmouseenter", EH_GLOBAL) X("onmouseleave", EH_GLOBAL) \
     X("onmousemove", EH_GLOBAL) X("onmouseout", EH_GLOBAL) X("onmouseover", EH_GLOBAL) X("onmouseup", EH_GLOBAL)      \
-    X("onpause", EH_GLOBAL) X("onplay", EH_GLOBAL) X("onplaying", EH_GLOBAL) X("onprogress", EH_GLOBAL)               \
+    X("onpause", EH_GLOBAL) X("onplay", EH_GLOBAL) X("onplaying", EH_GLOBAL) X("onprogress", EH_GLOBAL | EH_XHR)               \
     X("onratechange", EH_GLOBAL) X("onreset", EH_GLOBAL) X("onresize", EH_GLOBAL) X("onscroll", EH_GLOBAL)            \
     X("onscrollend", EH_GLOBAL) X("onsecuritypolicyviolation", EH_GLOBAL) X("onseeked", EH_GLOBAL)                  \
     X("onseeking", EH_GLOBAL) X("onselect", EH_GLOBAL) X("onslotchange", EH_GLOBAL) X("onstalled", EH_GLOBAL)         \
@@ -626,7 +650,9 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
     X("onrejectionhandled", EH_WINDOW) X("onstorage", EH_WINDOW) X("onunhandledrejection", EH_WINDOW)               \
     X("onunload", EH_WINDOW)                                                                                    \
     /* Document's own — §3.1.1 and the Page Visibility API. */                                                 \
-    X("onreadystatechange", EH_DOCUMENT) X("onvisibilitychange", EH_DOCUMENT)
+    X("onreadystatechange", EH_DOCUMENT | EH_XHR_READYSTATE) X("onvisibilitychange", EH_DOCUMENT) \
+    /* XHR §3.3 — the two of its seven that belong to NO other mixin, so this list is where they arrive. */ \
+    X("onloadend", EH_XHR) X("ontimeout", EH_XHR)
 
 /* The NAMES are string literals, not stringified identifiers, so the IDL gap auditor — which scans a component
    for the property names it installs — can SEE them. Behind a `#n` it saw none of these and reported all ninety

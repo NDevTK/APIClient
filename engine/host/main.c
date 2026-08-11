@@ -52,6 +52,7 @@
 #include "browser/core/events/message_event.h"
 #include "browser/core/events/report_exception.h"
 #include "browser/core/events/message_port.h"
+#include "browser/core/xhr/xml_http_request.h"
 #include "browser/core/structured_clone.h"
 #include "browser/core/events/event_target.h"
 #include "browser/core/realm.h"
@@ -130,6 +131,7 @@ static void engine_agent_init(JSContext *ctx, const char *origin)
     error_event_init(ctx);
     report_exception_init(ctx);
     message_port_init(ctx);
+    xhr_init(ctx);   /* XHR §3, and §5's ProgressEvent under it */
     /* §7.2.5.1 and §7.4. `window.open` returns a WindowProxy, and so does §4.8.5's contentWindow. The proxy
        class has to exist before any proxy is minted. */
     location_init(ctx);
@@ -200,6 +202,7 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
     message_event_install(ctx, g);    /* HTML 9.4.1: the event every messaging path dispatches */
     error_event_install(ctx, g);      /* HTML §8.1.4.6's report-an-exception fires one of these */
     message_port_install(ctx, g);     /* HTML 9.4.2/9.4.3 */
+    xhr_install(ctx, g);              /* XHR §3, §5: XMLHttpRequest and ProgressEvent */
     window_message_install(ctx, g, origin);   /* HTML 9.4.4: window.postMessage, and §9.4.4's delivery task */
     broadcast_channel_install(ctx, g);        /* HTML 9.5: the named same-origin bus */
     structured_clone_install(ctx, g); /* HTML 2.7.3 */
@@ -437,6 +440,7 @@ QJS_EXPORT void qjs_teardown(void)
     window_message_free(g_ctx);
     broadcast_channel_free(g_ctx);
     message_port_free(g_ctx);
+    xhr_free(g_ctx);
     message_event_free(g_ctx);
     error_event_free(g_ctx);
     report_exception_free(g_ctx);

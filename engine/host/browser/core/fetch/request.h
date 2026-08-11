@@ -21,4 +21,10 @@ JSValueConst request_blob_entry(JSValueConst v);
    Returns the normalized method, which the caller releases with js_free, or NULL with a TypeError live. */
 char *request_method_check(JSContext *ctx, const char *m);
 
+/* §5.1's "method": an RFC 7230 token. Public because the answer to "is this a method" and the answer to "is
+   this a FORBIDDEN method" carry DIFFERENT errors in a second standard: XHR §3.5.1 open() throws a
+   "SyntaxError" for the first and a "SecurityError" for the second, where §5.3 throws one TypeError for both.
+   So the grammar is shared and the error stays each standard's own. */
+bool request_method_is_token(const char *m);
+
 #endif

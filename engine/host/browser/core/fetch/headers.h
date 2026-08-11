@@ -1,6 +1,7 @@
 /* The Headers interface — WHATWG Fetch §5, and the HEADER LIST behind it. See headers.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FETCH_HEADERS_H
 #define ENGINE_HOST_BROWSER_CORE_FETCH_HEADERS_H
+#include <stdbool.h>
 #include <stddef.h>
 
 #include "quickjs.h"
@@ -26,6 +27,20 @@ typedef enum {
     HEADERS_GUARD_RESPONSE,
 } HeadersGuard;
 
+
+/* §5.1's GRAMMAR, exported because a SECOND standard performs the same three tests and throws DIFFERENT
+   errors for them: XHR §3.5.2 setRequestHeader() answers a bad name or value with a "SyntaxError"
+   DOMException where §5.1's own members answer with a TypeError, and it answers a forbidden request-header
+   with a silent return. So the grammar is stated once and the error stays each standard's own — a second copy
+   of "what a header name is" is a second thing to keep in step with RFC 7230.
+     `header_name_valid` is "a header name is a NAME" (a token).
+     `header_value_normalize_valid` is "normalize a header value" followed by "a header value is a VALUE": it
+   strips leading and trailing HTTP whitespace and then refuses NUL/CR/LF, returning the normalized value
+   (caller frees, `*pn` is its length) or NULL for a value that is not one.
+     `header_forbidden_request` is "forbidden request-header", over a LOWERCASED name. */
+bool  header_name_valid(const char *name, size_t len);
+char *header_value_normalize_valid(const char *value, size_t len, size_t *pn);
+bool  header_forbidden_request(const char *lower_name, const char *value);
 
 void  header_list_free(HeaderList *l);
 /* §5.1 append: lowercase the name, keep the pair. Both strings are COPIED. */

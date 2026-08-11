@@ -1,6 +1,7 @@
 /* @S solver — see solve.h. Forced-exec candidate: derive the breakout from the sink's lexical CONTEXT, inject
    it at the source, re-run the REAL code, and verify it FIRES. */
 #include "solver/solve.h"
+#include "core/json_buf.h"
 #include "core/frame/policy_container.h"
 #include "core/dom/document.h"
 #include "solver/concolic.h"
@@ -289,19 +290,8 @@ void solve_flow_end(Flow *f) {
         record_sink(f->cand_sink, f->cand_src, f->cand_payload);
 }
 
-/* ── @S JSON emit (C-native) ── */
-typedef struct { char *b; size_t n, cap; } Buf;
-static void buf_ensure(Buf *b, size_t extra) { if (b->n + extra + 1 <= b->cap) return; while (b->n + extra + 1 > b->cap) b->cap = b->cap ? b->cap * 2 : 256; b->b = realloc(b->b, b->cap); CHECK(b->b, "solve: OOM JSON"); }
-static void buf_puts(Buf *b, const char *s) { size_t l = strlen(s); buf_ensure(b, l); memcpy(b->b + b->n, s, l); b->n += l; }
-static void buf_json_str(Buf *b, const char *s) {
-    buf_ensure(b, 1); b->b[b->n++] = '"';
-    for (; *s; s++) { unsigned char c = (unsigned char)*s;
-        if (c == '"' || c == '\\') { buf_ensure(b, 2); b->b[b->n++] = '\\'; b->b[b->n++] = (char)c; }
-        else if (c == '\n') buf_puts(b, "\\n"); else if (c == '\r') buf_puts(b, "\\r"); else if (c == '\t') buf_puts(b, "\\t");
-        else if (c < 0x20) { char t[8]; snprintf(t, sizeof t, "\\u%04x", c); buf_puts(b, t); }
-        else { buf_ensure(b, 1); b->b[b->n++] = (char)c; } }
-    buf_ensure(b, 1); b->b[b->n++] = '"';
-}
+/* ── @S JSON emit (C-native) ── the writer is core/json_buf.h's, which this file and endpoint.c each used to
+   carry a private copy of. */
 static int solved(const char *sink, const char *src) {
     for (int i = 0; i < g_sinks_n; i++)
         if (!strcmp(g_sinks[i].sink, sink) && !strcmp(g_sinks[i].source, src)) return 1;
@@ -319,14 +309,14 @@ static int solved(const char *sink, const char *src) {
    and why the same source's JS-context sink does; the entry states the constraint, it does not claim the sink
    is safe, because an app that percent-DECODES its fragment would break out with the same candidate. */
 char *solve_json_array(JSContext *ctx) {
-    Buf b = { 0 };
+    JsonBuf b = { 0 };
     int n = 0;
-    buf_puts(&b, "[");
+    json_buf_puts(&b, "[");
     for (int i = 0; i < g_sinks_n; i++) {
-        if (n++) buf_puts(&b, ",");
-        buf_puts(&b, "{\"sink\":"); buf_json_str(&b, g_sinks[i].sink);
-        buf_puts(&b, ",\"source\":"); buf_json_str(&b, g_sinks[i].source);
-        buf_puts(&b, ",\"poc\":"); buf_json_str(&b, g_sinks[i].poc);
+        if (n++) json_buf_puts(&b, ",");
+        json_buf_puts(&b, "{\"sink\":"); json_buf_str(&b, g_sinks[i].sink);
+        json_buf_puts(&b, ",\"source\":"); json_buf_str(&b, g_sinks[i].source);
+        json_buf_puts(&b, ",\"poc\":"); json_buf_str(&b, g_sinks[i].poc);
         /* §S: A FIRING BREAKOUT IN THE MODEL IS NOT YET A WORKING EXPLOIT. The PoC has to run under the page's
            ACTUAL policy, and an inline `onerror` is dead under `script-src 'self'`. Reporting a bare XSS there
            is a false positive a reader cannot tell from a real one; reporting nothing would hide a sink that IS
@@ -338,28 +328,27 @@ char *solve_json_array(JSContext *ctx) {
                                   : !strcmp(g_sinks[i].sink, "location")  ? POLICY_JAVASCRIPT_URL
                                                                           : POLICY_INLINE_HANDLER;
             if (!policy_allows(pc, kind)) {
-                buf_puts(&b, ",\"cspBlocks\":");
-                buf_json_str(&b, policy_container_csp(pc));
+                json_buf_puts(&b, ",\"cspBlocks\":");
+                json_buf_str(&b, policy_container_csp(pc));
             }
         }
-        buf_puts(&b, "}");
+        json_buf_puts(&b, "}");
     }
     for (int i = 0; i < g_pending_n; i++) {
         const char *sk = sink_name(g_pending[i].sink), *enc;
         char t[32];
         if (solved(sk, g_pending[i].src)) continue;
-        if (n++) buf_puts(&b, ",");
-        buf_puts(&b, "{\"sink\":"); buf_json_str(&b, sk);
-        buf_puts(&b, ",\"source\":"); buf_json_str(&b, g_pending[i].src);
-        buf_puts(&b, ",\"search\":\"parked\",\"tried\":");
-        snprintf(t, sizeof t, "%d", g_pending[i].tried); buf_puts(&b, t);
+        if (n++) json_buf_puts(&b, ",");
+        json_buf_puts(&b, "{\"sink\":"); json_buf_str(&b, sk);
+        json_buf_puts(&b, ",\"source\":"); json_buf_str(&b, g_pending[i].src);
+        json_buf_puts(&b, ",\"search\":\"parked\",\"tried\":");
+        snprintf(t, sizeof t, "%d", g_pending[i].tried); json_buf_puts(&b, t);
         enc = concolic_source_encodes(g_pending[i].src);
-        if (enc) { buf_puts(&b, ",\"sourceEncodes\":"); buf_json_str(&b, enc); }
-        buf_puts(&b, "}");
+        if (enc) { json_buf_puts(&b, ",\"sourceEncodes\":"); json_buf_str(&b, enc); }
+        json_buf_puts(&b, "}");
     }
-    buf_puts(&b, "]");
-    buf_ensure(&b, 1); b.b[b.n] = 0;
-    return b.b;
+    json_buf_puts(&b, "]");
+    return json_buf_take(&b);
 }
 
 int solve_count(void) { return g_sinks_n; }

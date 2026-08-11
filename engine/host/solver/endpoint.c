@@ -1,5 +1,6 @@
 /* @H endpoint surface — see endpoint.h. Findings are C data; params + values merge in C; emit is C. */
 #include "solver/endpoint.h"
+#include "core/json_buf.h"
 #include "solver/concolic.h"
 #include "solver/flow.h"
 #include "check.h"
@@ -124,62 +125,43 @@ done:
     free(kv);
 }
 
-/* Serialize the @H surface DIRECTLY to a JSON string in C (caller frees) — no JS-object round-trip. */
-typedef struct { char *b; size_t n, cap; } Buf;
-static void buf_ensure(Buf *b, size_t extra) {
-    if (b->n + extra + 1 <= b->cap) return;
-    while (b->n + extra + 1 > b->cap) b->cap = b->cap ? b->cap * 2 : 256;
-    b->b = realloc(b->b, b->cap); CHECK(b->b, "endpoint: OOM JSON");
-}
-static void buf_puts(Buf *b, const char *s) { size_t l = strlen(s); buf_ensure(b, l); memcpy(b->b + b->n, s, l); b->n += l; }
-static void buf_json_str(Buf *b, const char *s) {
-    buf_ensure(b, 1); b->b[b->n++] = '"';
-    for (; *s; s++) {
-        unsigned char c = (unsigned char)*s;
-        if (c == '"' || c == '\\') { buf_ensure(b, 2); b->b[b->n++] = '\\'; b->b[b->n++] = (char)c; }
-        else if (c == '\n') buf_puts(b, "\\n");
-        else if (c == '\r') buf_puts(b, "\\r");
-        else if (c == '\t') buf_puts(b, "\\t");
-        else if (c < 0x20) { char t[8]; snprintf(t, sizeof t, "\\u%04x", c); buf_puts(b, t); }
-        else { buf_ensure(b, 1); b->b[b->n++] = (char)c; }
-    }
-    buf_ensure(b, 1); b->b[b->n++] = '"';
-}
+/* Serialize the @H surface DIRECTLY to a JSON string in C (caller frees) — no JS-object round-trip. The
+   writer is core/json_buf.h's: this file and solve.c each carried a private copy of it, which is one copy too
+   many of a thing that has exactly one correct behaviour. */
 char *endpoint_json_array(void) {
-    Buf b = { 0 };
-    buf_puts(&b, "[");
+    JsonBuf b = { 0 };
+    json_buf_puts(&b, "[");
     for (int i = 0; i < g_eps_n; i++) {
         Endpoint *e = &g_eps[i];
-        if (i) buf_puts(&b, ",");
-        buf_puts(&b, "{\"method\":"); buf_json_str(&b, e->method);
-        buf_puts(&b, ",\"url\":"); buf_json_str(&b, e->path);
-        buf_puts(&b, ",\"params\":[");
+        if (i) json_buf_puts(&b, ",");
+        json_buf_puts(&b, "{\"method\":"); json_buf_str(&b, e->method);
+        json_buf_puts(&b, ",\"url\":"); json_buf_str(&b, e->path);
+        json_buf_puts(&b, ",\"params\":[");
         for (int j = 0; j < e->np; j++) {
-            if (j) buf_puts(&b, ",");
-            buf_puts(&b, "{\"name\":"); buf_json_str(&b, e->params[j].name);
-            buf_puts(&b, ",\"validValues\":[");
-            for (int k = 0; k < e->params[j].nvals; k++) { if (k) buf_puts(&b, ","); buf_json_str(&b, e->params[j].vals[k]); }
-            buf_puts(&b, "]}");
+            if (j) json_buf_puts(&b, ",");
+            json_buf_puts(&b, "{\"name\":"); json_buf_str(&b, e->params[j].name);
+            json_buf_puts(&b, ",\"validValues\":[");
+            for (int k = 0; k < e->params[j].nvals; k++) { if (k) json_buf_puts(&b, ","); json_buf_str(&b, e->params[j].vals[k]); }
+            json_buf_puts(&b, "]}");
         }
-        buf_puts(&b, "]");
+        json_buf_puts(&b, "]");
         /* The transport half, and ONLY when there is one — an endpoint with no learned header must not claim an
            empty requirement, which reads as "needs nothing" rather than "nothing was observed". A record keyed
            by header name, which is the shape the popup's Required Headers section already reads. */
         if (e->nh) {
-            buf_puts(&b, ",\"headers\":{");
+            json_buf_puts(&b, ",\"headers\":{");
             for (int j = 0; j < e->nh; j++) {
-                if (j) buf_puts(&b, ",");
-                buf_json_str(&b, e->hdrs[j].name);
-                buf_puts(&b, ":");
-                buf_json_str(&b, e->hdrs[j].value);
+                if (j) json_buf_puts(&b, ",");
+                json_buf_str(&b, e->hdrs[j].name);
+                json_buf_puts(&b, ":");
+                json_buf_str(&b, e->hdrs[j].value);
             }
-            buf_puts(&b, "}");
+            json_buf_puts(&b, "}");
         }
-        buf_puts(&b, "}");
+        json_buf_puts(&b, "}");
     }
-    buf_puts(&b, "]");
-    buf_ensure(&b, 1); b.b[b.n] = 0;
-    return b.b;
+    json_buf_puts(&b, "]");
+    return json_buf_take(&b);
 }
 
 int endpoint_count(void) { return g_eps_n; }

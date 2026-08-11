@@ -3623,3 +3623,248 @@ these is an ABSENT capability naming itself, not a defect in §4.13:
   inside `document.createElement`, and the 5.1.4.3-8 checks after it, are reported and answered with a
   failed `HTMLUnknownElement` of the requested local name. The declaration that made it possible is
   `IdlStepDecl::catches_abrupt`, and `createElement` is the first member to carry it.
+
+---
+
+## 15. XMLHttpRequest §3 and §5 — the readyState machine, `send()`'s two arms, and the response body
+
+**Why this section exists.** `xhr` was 305 checked-out test files the WPT gate collected NOTHING of,
+because this engine had no XMLHttpRequest at all — a page that wrote `new XMLHttpRequest()` got a
+`ReferenceError` and every endpoint behind that line was invisible to forced execution too. It is
+also the one standard in this file whose algorithm is a **state machine first and a member list
+second**: every member of §3 is defined by which of the five states it is legal in and what it
+throws otherwise, so a component written outward from the member list gets each of those as a
+per-member `if` that some member will be missing.
+
+And it is the standard that owns the engine's most interesting suspension point. §3.5.6's
+synchronous arm says, in the standard's own words, "**Pause until** either processedResponse is true
+or this's timeout is not 0 and this's timeout milliseconds have passed since now". A pause is what a
+flow does at an `await` or a loop back-edge; it is not a reason to refuse `async = false`, and it is
+not something to drive to completion inside a C frame.
+
+**Network was available.** Everything below was read from the live standard on **2026-08-11**:
+
+| Standard | Source | Version read |
+| --- | --- | --- |
+| WHATWG XMLHttpRequest | `https://xhr.spec.whatwg.org/` | Living Standard, §3, §5 |
+
+Step numbers are the standard's own list numbering as of that date.
+
+### 15.0 Five things the live text says that a reasonable person would remember differently
+
+1. **An OMITTED `async` argument is true; an `undefined` one is FALSE.** §3.5.1 step 7 is written
+   about the argument being *omitted*, and the standard adds the note "Unfortunately legacy content
+   prevents treating the async argument being undefined identical from it being omitted". So
+   `open(m, u)` is asynchronous and `open(m, u, undefined)` is SYNCHRONOUS — the IDL boolean's
+   ToBoolean(undefined) is false and step 7 never runs. The argument COUNT decides, never the value,
+   and a declaration that gives `async` a default of true gets this exactly backwards.
+2. **`readystatechange` fires more often than the state changes**, and the standard says so at the
+   site: processBodyChunk sets the state to loading only "if this's state is headers received" and
+   then fires `readystatechange` **unconditionally**, with the note "Web compatibility is the reason
+   readystatechange fires more often than this's state changes."
+3. **`abort()` on a DONE object sets the state back to UNSENT and fires NOTHING** (§3.5.7 step 3,
+   with its own note "No readystatechange event is dispatched"). It is the one transition in the
+   standard that moves the state without an event.
+4. **A response with no `Content-Type` is `text/xml`, not `text/plain` and not nothing.** §3.6.6's
+   "get a response MIME type" step 2 says so, and it is what makes `responseXML` on a header-less
+   reply attempt an XML parse — which is why the absence of an XML parser is observable at all.
+5. **`getAllResponseHeaders()` sorts by the BYTE-UPPERCASED name**, not by the lowercased one and
+   not by the raw bytes. §3.6.5 defines "legacy-uppercased-byte less than" for exactly this, with
+   the note "Unfortunately, this is needed for compatibility with deployed content."
+
+### 15.1 §3.4 The states, and what each member is legal in
+
+| State | Value | Reached by |
+| --- | --- | --- |
+| unsent | `UNSENT` (0) | construction; §3.5.7 step 3 from done |
+| opened | `OPENED` (1) | §3.5.1 step 12.1 |
+| headers received | `HEADERS_RECEIVED` (2) | §3.5.6 processResponse step 4 |
+| loading | `LOADING` (3) | §3.5.6 processBodyChunk step 3 |
+| done | `DONE` (4) | handle response end-of-body step 7; the request error steps step 1 |
+
+The throwing arms, which are the whole reason the record is one and not eleven fields:
+
+| Member | Refuses when | With |
+| --- | --- | --- |
+| `open()` | the document is not fully active | `InvalidStateError` |
+| `open()` | the method is not a token | `SyntaxError` |
+| `open()` | the method is `CONNECT`/`TRACE`/`TRACK` | `SecurityError` |
+| `open()` | the URL will not parse | `SyntaxError` |
+| `open()` | `async` false on a Window with a timeout or a responseType | `InvalidAccessError` |
+| `setRequestHeader()` | the state is not opened, or send() invoked | `InvalidStateError` |
+| `setRequestHeader()` | a bad header name or value | `SyntaxError` |
+| `timeout` setter | synchronous, on a Window | `InvalidAccessError` |
+| `withCredentials` setter | the state is past opened, or send() invoked | `InvalidStateError` |
+| `send()` | the state is not opened, or send() invoked | `InvalidStateError` |
+| `overrideMimeType()` | the state is loading or done | `InvalidStateError` |
+| `responseType` setter | the state is loading or done | `InvalidStateError` |
+| `responseType` setter | synchronous, on a Window | `InvalidAccessError` |
+| `responseText` | the responseType is not `""` or `"text"` | `InvalidStateError` |
+| `responseXML` | the responseType is not `""` or `"document"` | `InvalidStateError` |
+
+A forbidden request-header in `setRequestHeader()` is **not** in that table: §3.5.2 step 5 RETURNS.
+A page that sets `Host` defensively must keep working, which is the same three-way distinction Fetch
+§5.1's guard makes and the reason this component asks `header_forbidden_request` rather than reusing
+the throwing `header_check`.
+
+### 15.2 §3.5.1 `open(method, url, async, username, password)` — 12 steps
+
+1. Not fully active → `InvalidStateError`. —
+2. Not a method → `SyntaxError`. —
+3. A forbidden method → `SecurityError`. —
+4. Normalize method. —
+5-6. Encoding-parse `url` against the relevant settings object; failure → `SyntaxError`. —
+7. An **omitted** `async` is true, and then username and password are null. — *(§15.0 item 1)*
+8. If the parsed URL's host is non-null, set the username and the password into it. —
+9. Synchronous on a Window with a timeout or a responseType → `InvalidAccessError`. —
+10. **Terminate this's fetch controller.** —
+11. Reset: send() invoked, method, URL, author request headers, request body, synchronous, upload
+    listener, response, received bytes, response object. **Not** the override MIME type — the note
+    says why: `overrideMimeType()` may be invoked BEFORE `open()`. —
+12. If the state is not opened: set it to opened and **fire an event named `readystatechange`**. —
+    **[S]**
+
+**One suspension point in the algorithm and five in the prologue**: `method` is a ByteString,
+`url` is a USVString, and `username`/`password` are `USVString?` — which is a distinct Web IDL type
+from `DOMString?`, because null and undefined become the IDL null BEFORE the scalar-value
+replacement that makes a USVString one.
+
+### 15.3 §3.5.6 `send(body)` — where the two arms split
+
+Steps 1-11 are common and none of them fires anything: the state and send()-invoked checks, dropping
+the body for a GET or a HEAD, §5.1's "safely extract" of the BodyInit union (whose USVString arm is
+**[S]** — ToString on the page's value), the author `Content-Type`, the upload-listener flag, and
+the request. Step 12 is the ASYNCHRONOUS arm and step 13 the SYNCHRONOUS one.
+
+**Asynchronous (step 12), in order:**
+
+| Step | What | `[S]` |
+| --- | --- | --- |
+| 12.1 | fire a progress event `loadstart` at this with 0 and 0 | **[S]** |
+| 12.5 | if upload complete is false and upload listener is true, fire `loadstart` at the upload object | **[S]** |
+| 12.6 | if the state is not opened or send() invoked is false, **return** — a listener may have aborted | |
+| processRequestEndOfBody | upload complete true; then `progress`, `load`, `loadend` at the upload object | **[S]** × 3 |
+| processResponse 1-4 | set this's response; handle errors; a network error returns; state → headers received | |
+| processResponse 5 | fire `readystatechange` | **[S]** |
+| processResponse 6 | if the state is not headers received, **return** | |
+| processBodyChunk 1-3 | append the bytes; state → loading | |
+| processBodyChunk 4 | fire `readystatechange` — unconditionally (§15.0 item 2) | **[S]** |
+| processBodyChunk 5 | fire `progress` at this with the received length and the extracted length | **[S]** |
+| processEndOfBody | handle response end-of-body | |
+
+**handle response end-of-body**, which BOTH arms end in:
+
+1. Handle errors for xhr. —
+2. A network error returns. —
+3-5. transmitted is the received length; length is the extracted `Content-Length`, or 0. —
+6. If **synchronous is false**, fire `progress` at xhr. — **[S]**
+7-8. State → done; send() invoked → false. —
+9. Fire `readystatechange`. — **[S]**
+10. Fire `load`. — **[S]**
+11. Fire `loadend`. — **[S]**
+
+**handle errors** is four lines and the whole error taxonomy: send() invoked false returns; timed
+out → the request error steps with `timeout` and `TimeoutError`; the response's aborted flag → with
+`abort` and `AbortError`; a network error → with `error` and `NetworkError`.
+
+**the request error steps**, given an event name and optionally an exception:
+
+1-3. State → done; send() invoked → false; response → a network error. —
+4. **If synchronous, THROW the exception** — and the standard's own note after step 5 is "At this
+   point it is clear that xhr's synchronous is false", which is what makes steps 5-8 the
+   asynchronous continuation rather than a branch. —
+5. Fire `readystatechange`. — **[S]**
+6. If upload complete is false: set it; and if the upload listener is true, fire the named event and
+   then `loadend` at the upload object with 0 and 0. — **[S]** × 2
+7. Fire the named event at xhr with 0 and 0. — **[S]**
+8. Fire `loadend` at xhr with 0 and 0. — **[S]**
+
+**Synchronous (step 13):** set the fetch controller with processResponseConsumeBody, then **Pause
+until** processedResponse or the timeout, then report timing, then run handle response end-of-body.
+There is no processResponse, no headers-received state, no loading state and no `progress` — the
+state goes opened → done, and step 6 above is the one the `synchronous is false` test removes.
+
+### 15.4 The one thing this standard needs that the others did not: a BLOCKING rendezvous
+
+A fetch parks a flow's PENDING REGISTER and the flow keeps running — that is what makes
+`fetch().then(…)` work and it is deliberately not a block (`flow_blocked` in `solver/flow.c` is
+false for a fetch entry). §3.5.6's synchronous arm needs the opposite: the value must appear at the
+call site that asked for it, in the same turn, with the flow SUSPENDED in between. That is exactly
+`engine_host_request` — the rendezvous SECURITY.md's cross-instance read already uses, and the only
+one in this engine that reports its flow blocked so the scheduler deschedules it instead of
+re-entering it into the same wait.
+
+So this component has **one** network edge and both arms take it: `xhr.send<TAB><JSON record>`,
+answered with the reply object `fetch_reply_new` builds. What differs between the arms is only who
+is waiting on it — `send()` itself when synchronous (through `step_call_run` on the lifecycle
+machine, so the flow parks inside `send()`), and a queued TASK when asynchronous (so `send()`
+returns to the page and the response is processed in its own turn). Writing the two event sequences
+twice — once in a send machine and once in a task — is how two copies of an ORDER drift, and the
+order IS the spec.
+
+### 15.5 §3.6.6 The response body — four MIME operations and one absent parser
+
+- **get a response MIME type**: the response's `Content-Type`, or `text/xml` when it will not parse.
+- **get a final MIME type**: the override MIME type if there is one, else the above.
+- **get a final encoding**: the response MIME type's `charset`, overridden by the override MIME
+  type's — and the standard notes that this deliberately does NOT use the final MIME type, "as it
+  would not be web compatible".
+- **set a document response**: returns for a null body, for a final MIME type that is neither HTML
+  nor XML, and for an HTML type when the response type is the empty string (the note: "This is
+  restricted to xhr's response type being 'document' in order to prevent breaking legacy content").
+
+The HTML arm is lexbor's parser over a `document.c` Document, which has NO browsing context — that
+is what "with scripting disabled" means here rather than a flag, because there is no Window for a
+script to run in. **The XML arm is a `DFAIL`**: lexbor ships no XML module, and answering with the
+spec's "the XML parser failed → null" would be a claim about a parse that never ran. That is the
+component's one honestly-absent capability and the assert names what to build.
+
+### 15.6 Suspension points per entry point
+
+`[S]` = the page's own code can run. Argument conversions are the Web IDL prologue (§0.2).
+
+| Entry point | `[S]` | Which |
+| --- | --- | --- |
+| `new XMLHttpRequest()` | 0 | — |
+| `readyState` / `status` / `statusText` / `responseURL` / `upload` / `timeout` / `withCredentials` / `responseType` getters | 0 | — |
+| `open(m, u)` | 3 | ByteString(m); USVString(u); the `readystatechange` fire |
+| `open(m, u, a, user, pass)` | 5 | + `USVString?` × 2 (null and undefined skip the ToString) |
+| `setRequestHeader(n, v)` | 2 | ByteString × 2 — the algorithm itself has none |
+| `timeout` setter | 1 | ToNumber |
+| `withCredentials` setter | 0 | ToBoolean runs nothing |
+| `responseType` setter | 1 | ToString (an unrecognised value is IGNORED, never a TypeError) |
+| `overrideMimeType(m)` | 1 | ToString |
+| `getResponseHeader(n)` | 1 | ByteString(n) |
+| `getAllResponseHeaders()` | 0 | — |
+| `send(body)` — asynchronous | 1 + 2 + 3 + 5 | the USVString arm; `loadstart` × 2; the upload's three; then processResponse's `readystatechange`, processBodyChunk's `readystatechange` and `progress`, and end-of-body's `progress`/`readystatechange`/`load`/`loadend` |
+| `send(body)` — synchronous | 1 + **1 pause** + 4 | the USVString arm; the BLOCKING host rendezvous; then `readystatechange`, `load`, `loadend` (no `progress`) |
+| `abort()` | 0 or 6 | none when unsent/done; the request error steps' six fires when a request is in flight |
+| `response` (document arm) | 0 | a PARSE, which yields but runs no page code |
+| `responseText` | 0 | a decode |
+| `responseXML` | 0 | a parse |
+
+**Suspension points in Algorithm group 15: 33.** All but the argument conversions are event
+dispatches, which is what makes this standard's shape the opposite of group 9's: there are no
+Trusted Types call sites and no `[CEReactions]` epilogues here, and every rest point is a listener.
+
+### 15.7 Stage-boundary consequences for a step machine
+
+1. **`open()` needs a boundary before step 12.2**, and step 12.1's state write must happen BEFORE
+   the fire — a listener reading `readyState` from the `readystatechange` it was just given must see
+   `OPENED`.
+2. **`send()`'s steps 12.1 and 12.5 are two stages with a RE-READ between them.** Step 12.6 exists
+   because the `loadstart` listener can call `abort()` or `open()`, so the machine must re-read the
+   state and send()-invoked off the record after every fire and never from a value captured before.
+3. **processResponse step 6 is the same re-read one stage later**, and it is the reason a stage that
+   bundled steps 4-6 would be wrong: the fire between them can move the state.
+4. **The request error steps are a SEQUENCE the machine enters from three places** — handle errors
+   inside the response walk, handle errors inside end-of-body, and `abort()`. They are stages of the
+   one lifecycle machine reached by `goto`, never three copies, because the ORDER of six dispatches
+   is exactly the thing three copies would get differently.
+5. **`abort()` cannot reach the request error steps on a synchronous object**, and that is an
+   assert rather than a branch: step 4 would throw an exception `abort()` was never given, and the
+   flow that called `send()` is parked inside it, so nothing in this agent can be the caller.
+6. **A fire and a re-mint are one stage, not two.** §2.9 leaves `target`, the path and the dispatch
+   flag on the event it dispatched, so the next fire in a sequence needs its OWN event object — the
+   machine mints on entry to the stage and releases at its end, which is also what makes a park
+   mid-dispatch resume onto the same event rather than a fresh one.

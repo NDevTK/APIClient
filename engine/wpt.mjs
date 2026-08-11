@@ -95,7 +95,12 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       directory that is not collected is an EXCLUDED TEST — which this file calls a failure
                       one paragraph up. */
                    "html/webappapis/animation-frames",
-                   "html/webappapis/structured-clone", "xhr/formdata", "xhr/resources",
+                   "html/webappapis/structured-clone",
+                   /* XHR §3 and §5 — core/xhr. Its two SUPPORT directories were listed and the standard's own
+                      was not, so the 305 test files of the standard this engine had no component for were the
+                      largest single uncollected population in the checkout. `xhr` is the standard; the two
+                      below are its fixtures and the FormData tests that live under it. */
+                   "xhr", "xhr/formdata", "xhr/resources",
                    /* custom_elements.c — HTML §4.13, the reactions that every [CEReactions] operation in
                       SPEC_STEPS.md runs. */
                    "custom-elements",
