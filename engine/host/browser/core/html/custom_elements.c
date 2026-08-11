@@ -742,6 +742,16 @@ typedef char ce_backup_stages_match_arms[
 
 typedef struct JSCeBackup {
     JSStepHdr          hdr;    /* FIRST — the driver writes the def and the operand bounds through it */
+    /* HAVE THIS STATE'S OWNED FIELDS BEEN PLACED YET. tramp_step_state_new js_mallocz's a machine's state, and
+       a ZEROED JSValue is the INTEGER 0 — JS_TAG_INT is 0 — so every value on a fresh state reads as
+       "already set" and JS_IsUndefined answers false for all of them. This drain read its "have I taken the
+       backup queue yet" off `q.queue`, so it never took it: `custom_elements_reactions_invoke` was handed the
+       integer 0 as the element queue, `ce_array_len` answered 0 for it, and the drain returned having invoked
+       NOTHING. Every reaction that reaches the backup queue — which is every mutation performed outside a
+       `[CEReactions]` member, so the parser's own tree construction and every engine-driven insertion — was
+       enqueued and never run, with no throw and no assert to say so.
+       The stage cannot answer this the way js_idl_args_step's does: this machine's first stage IS 0. */
+    uint8_t            started;
     CustomElementQueue q;
 } JSCeBackup;
 
@@ -766,6 +776,12 @@ static int js_ce_backup_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
 
     DCHECK(s->hdr.stage >= CEBACKUP_CALLBACK && s->hdr.stage <= CEBACKUP_REPORT,
            "the backup element queue's drain resumed into a stage §4.13.6 does not have");
+    if (!s->started) {
+        /* Every owned field placed before the first thing that can fail, which is what the failure path's
+           `fini` frees — the same contract js_idl_args_step keeps for the queue it embeds. */
+        custom_elements_queue_init(&s->q);
+        s->started = 1;
+    }
     if (JS_IsUndefined(s->q.queue) && s->q.phase == 0 && !s->q.reporting) {
         /* THE FLAG IS UNSET AS THE DRAIN BEGINS (step 2.4's second half), so a reaction that runs during it and
            enqueues with no member on the stack schedules a NEW microtask rather than joining the batch in
