@@ -287,8 +287,13 @@ static JSValue pend_list_fork(JSValueConst src)
    field and exactly one kind, the unanswered synchronous request's rendezvous id. */
 static JSValue pend_entry_copy(JSValueConst src)
 {
-    JSValue dst = JS_NewObjectProto(pend_ctx(), JS_NULL);
+    JSValue dst;
     int f;
+
+    /* The field names, HERE and not left to a caller's DCHECK to have interned them — a condition compiled out
+       in release is not an initialisation. */
+    pend_atoms();
+    dst = JS_NewObjectProto(pend_ctx(), JS_NULL);
 
     CHECK(!JS_IsException(dst), "engine: OOM copying a pending record");
     DCHECK(pend_own_count(src) == PEND_FIELD_COUNT,
