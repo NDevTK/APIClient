@@ -237,6 +237,12 @@ void pending_remove(JSValue *reg, int i)
                              JS_GetPropertyUint32(pend_ctx(), *reg, (uint32_t)(n - 1)));
     JS_SetProperty(pend_ctx(), *reg, g_len_atom, JS_NewInt32(pend_ctx(), n - 1));
     cow_engine_write_end();
+    /* A REGISTER WITH NOTHING IN IT IS NOT A REGISTER, and that is a HOT-PATH statement rather than tidiness.
+       flow_blocked is asked at every suspend point the interpreter offers, and its answer for a flow that owes
+       nothing has to be a TAG TEST — the C list answered it with `npend == 0`. Left as an empty Array it would
+       be a shape lookup for `length` instead, and four dom/ranges tests crossed the gate's 60s CPU budget on
+       exactly that difference. */
+    if (n == 1) pending_free(pend_ctx(), reg);
 }
 
 void pending_free(JSContext *ctx, JSValue *reg)

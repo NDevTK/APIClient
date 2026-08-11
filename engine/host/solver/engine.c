@@ -259,56 +259,44 @@ int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value) {
    two identical questions from two flows are two questions, because each is answered under its own world. */
 const char *engine_host_requests(void) {
     static char *join;
-    size_t need = 1;
+    static size_t cap;
+    size_t n_out = 0;
     Flow *f;
 
-    free(join); join = NULL;
+    /* ONE PASS, NOT TWO. It measured and then wrote, which meant converting every record's text TWICE — and a
+       JS string's text is a conversion that allocates, where the C list's was a `strlen`. Two dom/ranges tests
+       crossed the gate's CPU budget on that alone, and the measuring pass existed only so `malloc` could be
+       given a size. A buffer that grows is the same answer with one conversion, and it also retires the DCHECK
+       that the two loops agreed: there is one loop. */
+    if (!join) { cap = 256; join = malloc(cap); CHECK(join, "engine: OOM joining the outstanding host requests"); }
+    join[0] = 0;
     for (int k = 0; (f = flow_at(k)) != NULL; k++)
         for (int i = 0, n = pending_count(f->pending); i < n; i++) {
             JSValue p = pending_entry(f->pending, i);
-            if (pending_get_int(p, PEND_KIND) == FLOW_PENDING_HOSTREQ && !pending_get_int(p, PEND_HAVE_VALUE)) {
-                JSValue o = pending_get(p, PEND_OP);
-                size_t ol = 0;
-                const char *s = JS_ToCStringLen(pending_ctx(), &ol, o);
-                if (s) JS_FreeCString(pending_ctx(), s);
-                JS_FreeValue(pending_ctx(), o);
-                need += ol + 24;
+            JSValue o;
+            const char *s;
+            size_t ol = 0;
+            char idbuf[24];
+            int idlen;
+            if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
+                pending_get_int(p, PEND_HAVE_VALUE)) { JS_FreeValue(pending_ctx(), p); continue; }
+            idlen = snprintf(idbuf, sizeof idbuf, "%u\t", (uint32_t)pending_get_int(p, PEND_REQ));
+            o = pending_get(p, PEND_OP);
+            s = JS_ToCStringLen(pending_ctx(), &ol, o);
+            DCHECK(s != NULL, "an outstanding host request has no text — the host routes on it");
+            while (n_out + (size_t)idlen + ol + 2 > cap) {
+                cap *= 2;
+                join = realloc(join, cap);
+                CHECK(join, "engine: OOM growing the outstanding-request join");
             }
+            memcpy(join + n_out, idbuf, (size_t)idlen); n_out += (size_t)idlen;
+            memcpy(join + n_out, s, ol); n_out += ol;
+            join[n_out++] = '\n';
+            join[n_out] = 0;
+            JS_FreeCString(pending_ctx(), s);
+            JS_FreeValue(pending_ctx(), o);
             JS_FreeValue(pending_ctx(), p);
         }
-    join = malloc(need);
-    CHECK(join != NULL, "engine: OOM joining the outstanding host requests");
-    /* WRITTEN THROUGH A CURSOR, NOT strcat. `strcat` rescans everything already written to find the end, so
-       joining N records is O(N²) — and this is pulled on EVERY return to the host, with one outstanding record
-       per parked flow. It was invisible while the only host request was a cross-document read (a handful at a
-       time) and became the gate's wall clock the moment §7.4 step 14's load parked on one: a corpus directory
-       that ran in minutes did not finish in fifty. The length loop above already measured the total, so the
-       cursor costs nothing to keep. */
-    {
-        char *w = join;
-        *w = 0;
-        for (int k = 0; (f = flow_at(k)) != NULL; k++)
-            for (int i = 0, n = pending_count(f->pending); i < n; i++) {
-                JSValue p = pending_entry(f->pending, i);
-                JSValue o;
-                const char *s;
-                size_t oplen = 0;
-                if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
-                    pending_get_int(p, PEND_HAVE_VALUE)) { JS_FreeValue(pending_ctx(), p); continue; }
-                w += snprintf(w, 24, "%u\t", (uint32_t)pending_get_int(p, PEND_REQ));
-                o = pending_get(p, PEND_OP);
-                s = JS_ToCStringLen(pending_ctx(), &oplen, o);
-                DCHECK(s != NULL, "an outstanding host request has no text — the host routes on it");
-                memcpy(w, s, oplen); w += oplen;
-                JS_FreeCString(pending_ctx(), s);
-                JS_FreeValue(pending_ctx(), o);
-                JS_FreeValue(pending_ctx(), p);
-                *w++ = '\n';
-            }
-        *w = 0;
-        DCHECK((size_t)(w - join) < need, "the outstanding-request join outgrew the length its own measuring "
-                                          "pass computed — the two loops disagree about which records count");
-    }
     return join;
 }
 
@@ -537,56 +525,47 @@ const char *engine_host_notices(void) {
 
 const char *engine_pending_urls(void) {
     static char *join;
-    size_t need = 1;
+    static size_t cap;
+    size_t n_out = 0;
     Flow *f;
 
-    free(join); join = NULL;
+    /* ONE PASS AND ONE CONVERSION, for the reason engine_host_requests states. The DEDUP is unchanged: a linear
+       scan over the answer being built, which is the set itself — several flows park on the same URL (a
+       candidate re-fire re-runs the exploring flow's fetches) and engine_provide fills every entry that names
+       it, so listing it twice makes the host provide twice and the second call finds nothing left. */
+    if (!join) { cap = 256; join = malloc(cap); CHECK(join, "engine: OOM joining the pending URLs"); }
+    join[0] = 0;
     for (int k = 0; (f = flow_at(k)) != NULL; k++)
         for (int i = 0, n = pending_count(f->pending); i < n; i++) {
-            JSValue p = pending_entry(f->pending, i);
-            JSValue u = pending_get(p, PEND_URL);
+            JSValue pe = pending_entry(f->pending, i);
+            JSValue uv = pending_get(pe, PEND_URL);
             size_t ul = 0;
-            const char *s = JS_IsString(u) ? JS_ToCStringLen(pending_ctx(), &ul, u) : NULL;
-            if (s) JS_FreeCString(pending_ctx(), s);
-            if (s && !pending_get_int(p, PEND_HAVE_VALUE)) need += ul + 1;
-            JS_FreeValue(pending_ctx(), u);
-            JS_FreeValue(pending_ctx(), p);
-        }
-    join = malloc(need);
-    CHECK(join != NULL, "engine: OOM joining the pending URLs");
-    /* THE CURSOR IS THE END OF THE ANSWER, and it serves both writers — the append and the dedup scan that
-       decides whether to append. `strcat` would rescan everything already written to find the same position
-       this variable holds, which is the O(N²) shape the request join beside this one was measured at. */
-    {
-        char *w = join;
-        *w = 0;
-        for (int k = 0; (f = flow_at(k)) != NULL; k++)
-            for (int i = 0, n = pending_count(f->pending); i < n; i++) {
-                JSValue pe = pending_entry(f->pending, i);
-                JSValue uv = pending_get(pe, PEND_URL);
-                size_t ul = 0;
-                const char *u = JS_IsString(uv) ? JS_ToCStringLen(pending_ctx(), &ul, uv) : NULL;
-                int skip = (!u || pending_get_int(pe, PEND_HAVE_VALUE));
-                /* already listed? a linear scan over the answer being built, which is the set itself */
-                if (!skip) {
-                    const char *p = join;
-                    while (p < w) {
-                        const char *e = memchr(p, '\n', (size_t)(w - p));
-                        size_t l = e ? (size_t)(e - p) : (size_t)(w - p);
-                        if (l == ul && !memcmp(p, u, ul)) { skip = 1; break; }
-                        if (!e) break;
-                        p = e + 1;
-                    }
+            const char *u = JS_IsString(uv) ? JS_ToCStringLen(pending_ctx(), &ul, uv) : NULL;
+            int skip = (!u || pending_get_int(pe, PEND_HAVE_VALUE));
+            if (!skip) {
+                const char *q = join, *stop = join + n_out;
+                while (q < stop) {
+                    const char *e = memchr(q, '\n', (size_t)(stop - q));
+                    size_t l = e ? (size_t)(e - q) : (size_t)(stop - q);
+                    if (l == ul && !memcmp(q, u, ul)) { skip = 1; break; }
+                    if (!e) break;
+                    q = e + 1;
                 }
-                if (!skip) { memcpy(w, u, ul); w += ul; *w++ = '\n'; }
-                if (u) JS_FreeCString(pending_ctx(), u);
-                JS_FreeValue(pending_ctx(), uv);
-                JS_FreeValue(pending_ctx(), pe);
             }
-        *w = 0;
-        DCHECK((size_t)(w - join) < need, "the pending-URL join outgrew the length its own measuring pass "
-                                          "computed — the two loops disagree about which records count");
-    }
+            if (!skip) {
+                while (n_out + ul + 2 > cap) {
+                    cap *= 2;
+                    join = realloc(join, cap);
+                    CHECK(join, "engine: OOM growing the pending-URL join");
+                }
+                memcpy(join + n_out, u, ul); n_out += ul;
+                join[n_out++] = '\n';
+                join[n_out] = 0;
+            }
+            if (u) JS_FreeCString(pending_ctx(), u);
+            JS_FreeValue(pending_ctx(), uv);
+            JS_FreeValue(pending_ctx(), pe);
+        }
     return join;
 }
 
