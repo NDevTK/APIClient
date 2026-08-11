@@ -321,6 +321,13 @@ JSValue html_element_proto(JSContext *ctx)
     return proto;   /* OWNED */
 }
 
+JSValue html_unknown_element_proto(JSContext *ctx)
+{
+    JSValue proto = JS_GetClassProto(ctx, g_unknown_class);
+    DCHECK(!JS_IsNull(proto), "HTMLUnknownElement.prototype was asked for in a realm that never ran its install");
+    return proto;
+}
+
 /* §3.2.2 focus() and blur(). A headless run has no focus ring, and the spec defines no scriptable result for
    either beyond moving the focus — which is a state this engine does not model — so each is a documented
    no-effect rather than a value invented for it. click() is NOT one of these: it fires a real event, so it is

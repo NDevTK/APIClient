@@ -22,6 +22,7 @@
 #include "core/events/event.h"
 #include "core/events/create_event.h"
 #include "core/events/event_target.h"
+#include "core/events/report_exception.h"
 #include "core/html/html_element.h"
 #include "core/html/html_form.h"
 #include "core/html/custom_elements.h"
@@ -429,18 +430,23 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
  * engine aborts on and the class's own `super()` would reach a C entry with no flow base under it. A construct
  * is a request like every other, and the machine rests on it.
  *
- * WHAT THIS DOES NOT YET DO is step 5.1.4's REPORT arm: the spec catches an exception from the construct,
- * reports it (which fires `error` at the global — the page's code again) and answers with an
- * HTMLUnknownElement whose state is "failed". Catching an abrupt request result is a capability a definition
- * DECLARES (JSTrampStepDef.catches_abrupt) and the declared-member surface does not carry it yet, so a
- * constructor that throws propagates out of createElement. That is a wrong answer and it is named here rather
- * than hidden: the next piece is that declaration. */
+ * AND STEP 5.1.4 IS "RUN THESE STEPS WHILE CATCHING ANY EXCEPTIONS", which is the whole of why the answer to a
+ * throwing constructor is an element and not a propagating throw. The construct AND the checks after it are
+ * inside that catch, so `class X extends HTMLElement { constructor(){ super(); this.attachInternals(); } }`
+ * over an absent API — or one that returns the wrong node — REPORTS (fires `error` at the global, the page's
+ * code again) and answers with an HTMLUnknownElement of the requested local name whose custom element state is
+ * "failed". Propagating instead destroyed the whole document: eleven corpus files went from a real number to
+ * no result at all on the diff that first made constructors run. The capability is DECLARED
+ * (IdlStepDecl::catches_abrupt) rather than assumed, because the abrupt then arrives at this body's own
+ * request site and every request this machine makes has to answer for it. */
 #define DCE_STAGES(X) \
     X(DCE_LOOKUP,    "DOM §4.5 steps 1-5 into §4.9 steps 1-3 (the local name, and looking up a custom element " \
                      "definition for it) and §4.9 step 6 when there is none") \
     X(DCE_CONSTRUCT, "DOM §4.9 step 5.1.4.1 (constructing C with no arguments — the page's constructor)") \
     X(DCE_CHECKS,    "DOM §4.9 steps 5.1.4.2-11 (what the constructor returned, checked against what this " \
-                     "operation asked for)")
+                     "operation asked for)") \
+    X(DCE_REPORT,    "DOM §4.9 step 5.1.4's exception arm (report the exception the construct or the checks " \
+                     "threw), which is HTML §8.1.4.6 report an exception")
 enum { IDL_STEP_STAGE_BASE(DCE_STAGES) DCE_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const DCE_STEPS[] = { DCE_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -450,6 +456,8 @@ typedef struct {
     JSValue def;        /* step 3's definition (owned) */
     JSValue local;      /* the local name the operation was given (owned) — step 5.1.4.8 compares against it */
     JSValue result;     /* what the page's constructor answered (owned) */
+    JSValue exc;        /* step 5.1.4's caught exception (owned), held across the report's own park */
+    ReportExceptionWork rw;
 } DocCreateElState;
 
 static void doc_create_el_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -459,6 +467,8 @@ static void doc_create_el_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->def);
     v->val(ctx, &s->local);
     v->val(ctx, &s->result);
+    v->val(ctx, &s->exc);
+    report_exception_work_visit(ctx, &s->rw, v);
 }
 
 static void doc_create_el_release(JSContext *ctx, void *st)
@@ -468,7 +478,9 @@ static void doc_create_el_release(JSContext *ctx, void *st)
     JS_FreeValue(ctx, s->def);
     JS_FreeValue(ctx, s->local);
     JS_FreeValue(ctx, s->result);
-    s->cb[0] = s->def = s->local = s->result = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->exc);
+    s->cb[0] = s->def = s->local = s->result = s->exc = JS_UNDEFINED;
+    report_exception_work_release(ctx, &s->rw);
 }
 
 static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -485,7 +497,8 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
         cb_result = JS_UNDEFINED;
         /* EVERY owned field before the first thing that can throw — the failure path tears this state down
            through doc_create_el_release, which frees exactly what the state holds and nothing else. */
-        s->cb[0] = s->def = s->local = s->result = JS_UNDEFINED;
+        s->cb[0] = s->def = s->local = s->result = s->exc = JS_UNDEFINED;
+        report_exception_work_start(&s->rw);
         /* §4.9 step 3 needs a NAME to look a definition up by, and a concolic tag has none — the creation is
            the one below, over whatever example the source carries. */
         if (argc < 1 || concolic_is(argv[0])) {
@@ -518,31 +531,68 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
         JS_FreeValue(ctx, ctor);
         cb_result = JS_UNDEFINED;
         if (r > 0) return r;                          /* parked ON the page's constructor */
-        if (r < 0) return -1;
+        /* step 5.1.4's catch. The construct threw — synchronously (r < 0) or delivered as JS_EXCEPTION,
+           which is what this member's declared catches_abrupt asks the driver for. */
+        if (r < 0 || JS_IsException(made)) {
+            JS_FreeValue(ctx, made);
+            s->exc = JS_GetException(ctx);
+            hdr->stage = DCE_REPORT;
+            goto report;
+        }
         s->result = made;
         hdr->stage = DCE_CHECKS;
     }
-    DCHECK(hdr->stage == DCE_CHECKS, "document.createElement resumed into a stage DOM §4.9 does not have");
-    JS_FreeValue(ctx, cb_result);
-    {
+    if (hdr->stage == DCE_CHECKS) {
         size_t len = 0;
         const char *local = JS_ToCStringLen(ctx, &len, s->local);
         Document *d = doc_receiver(ctx, hdr->this_val);
 
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
         if (!local || !d) { if (local) JS_FreeCString(ctx, local); return -1; }
-        r = custom_elements_created_check(ctx, s->result, s->def,
+        r = custom_elements_created_check(ctx, s->result,
                                           lxb_dom_interface_document(d->dom), local, len);
         JS_FreeCString(ctx, local);
-        if (r < 0) return -1;
+        /* The checks are INSIDE step 5.1.4's catch too — a constructor that gave its element an attribute, a
+           child, a parent or the wrong local name throws a NotSupportedError the spec REPORTS. */
+        if (r < 0) { s->exc = JS_GetException(ctx); hdr->stage = DCE_REPORT; goto report; }
+        *presult = s->result;
+        s->result = JS_UNDEFINED;
+        return 0;
     }
-    *presult = s->result;
-    s->result = JS_UNDEFINED;
+report:
+    DCHECK(hdr->stage == DCE_REPORT, "document.createElement resumed into a stage DOM §4.9 does not have");
+    r = report_exception_run(ctx, &s->rw, s->exc, cb_result, out_cb, out_argc);
+    if (r > 0) return r;                              /* parked inside the `error` event's own dispatch */
+    JS_FreeValue(ctx, s->exc);
+    s->exc = JS_UNDEFINED;
+    /* "Set result to the result of creating an element internal given document, HTMLUnknownElement, localName,
+       the HTML namespace, prefix, "failed", null, and registry." The INTERFACE is named by the step, so the
+       element the page gets back is an HTMLUnknownElement carrying the local name it asked for — which is how
+       a page distinguishes a component whose constructor threw from one that worked. */
+    {
+        /* Created through the member's own plain body, so the element lands in the RECEIVER's document — §4.5
+           step 5's "given this", which a create in the current global's document would get wrong for
+           `otherDoc.createElement(...)`. */
+        JSValue el = js_doc_create_element(ctx, hdr->this_val, argc, argv, 0);
+        JSValue proto;
+
+        if (JS_IsException(el)) return -1;
+        proto = html_unknown_element_proto(ctx);
+        JS_SetPrototype(ctx, el, proto);
+        JS_FreeValue(ctx, proto);
+        custom_elements_mark_failed(ctx, el);
+        *presult = el;
+    }
     return 0;
 }
 
 static const IdlStepDecl DOC_CREATE_EL_STEP = {
     js_doc_create_element_step, sizeof(DocCreateElState), doc_create_el_visit, doc_create_el_release,
-    "DOM §4.5 Document.createElement, over §4.9 create an element", DCE_STEPS
+    "DOM §4.5 Document.createElement, over §4.9 create an element", DCE_STEPS,
+    /* DOM §4.9 step 5.1.4 is "run these steps while catching any exceptions", so the construct's abrupt
+       completion is this algorithm's VALUE — it reports it and answers with a failed HTMLUnknownElement. */
+    .catches_abrupt = 1
 };
 
 /* DOM §4.9 "create an element internal" for THIS REALM'S document — see document.h. Separate from the member

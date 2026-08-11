@@ -1600,9 +1600,11 @@ static bool element_tree_steps_step(JSContext *ctx, void *vb)
                 }
             }
             element_prepare_script(ctx, el);   /* HTML 4.12.1: an inserted <script> is PREPARED */
-            /* §4.13.3: an element that ENTERS a document is upgraded if its name is defined — the other half of
-               "learned by execution", beside the <script> preparation right above it. */
-            custom_elements_try_upgrade(ctx, el);
+            /* DOM §4.2.3's insertion steps: an element that ENTERS a document gets its connectedCallback if it
+               is already custom, and is otherwise tried for upgrade — the other half of "learned by
+               execution", beside the <script> preparation right above it. The upgrade is ENQUEUED, never run:
+               it constructs the page's class, and this walk is C that cannot park. */
+            custom_elements_element_connected(ctx, el);
         } else {
             /* §4.8.5's removing steps, the pair of the insertion steps above: an <iframe> that LEAVES a
                document destroys its child navigable. Without it a removed frame kept answering as a live one —

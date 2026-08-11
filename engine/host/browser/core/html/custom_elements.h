@@ -4,12 +4,34 @@
 #include <lexbor/dom/dom.h>
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/events/report_exception.h"
 
 /* attributeChangedCallback's (localName, oldValue, newValue, NAMESPACE) — the widest lifecycle callback there
    is. FOUR, because DOM §4.9's "handle attribute changes" step 2 enqueues « attribute's local name, oldValue,
    newValue, attribute's namespace »: the namespace is the argument a page reads to tell an `xlink:href` from
    the null-namespace `href` it also observes, and a three-slot buffer silently drops it. */
 #define CE_MAX_REACTION_ARGS 4
+
+/* DOM §4.9's CUSTOM ELEMENT STATE — the five values, and they are five because §4.13.5 step 1 branches on
+   exactly this set. It was a BOOLEAN ("does this wrapper carry a definition?"), which cannot tell an element
+   whose upgrade THREW from one that was never tried: §4.13.5 returns early for "undefined" and "uncustomized"
+   and for nothing else, so a failed element was upgraded again on every re-insertion and its constructor ran
+   a second time. "precustomized" is the window between step 8.2 and the constructor returning, which is what
+   DOM §4.9 step 5.1.4's assert distinguishes an element that reached `super()` by. */
+typedef enum {
+    CE_STATE_UNCUSTOMIZED = 0,   /* a local name §4.13.1 could never accept — the default for most elements */
+    CE_STATE_UNDEFINED,          /* a valid custom element name with no definition committed for it yet */
+    CE_STATE_FAILED,
+    CE_STATE_PRECUSTOMIZED,
+    CE_STATE_CUSTOM
+} CustomElementState;
+
+/* §4.13.6's REACTION TYPE. The spec's invoke SWITCHES on it, and the two arms run different algorithms with
+   different park shapes — a callback reaction CALLS a function, an upgrade reaction runs §4.13.5 and
+   CONSTRUCTS a class. Stored as the reaction's own first element rather than inferred from whether entry 0
+   happens to be callable, because a definition and a callback are both objects and a shape sniff would make
+   the two arms one bug apart. */
+enum { CE_REACTION_CALLBACK = 0, CE_REACTION_UPGRADE = 1 };
 
 /* §4.13.6 STEP 4'S DRAIN, AS A STRUCT THE CALLING MACHINE EMBEDS. Invoking a reaction runs the page's code, so
    the drain parks — and it parks inside whichever machine is performing the `[CEReactions]` wrapper, which is
@@ -19,9 +41,30 @@
 typedef struct {
     JSValue  queue;    /* the element queue popped off the stack (owned), UNDEFINED before step 3 */
     uint32_t i;        /* the element cursor into it */
-    uint8_t  phase;    /* the call request's own phase */
+    uint8_t  phase;    /* the call or construct request's own phase — one reaction is in flight at a time */
+    /* §4.13.5's OWN CURSOR while the reaction being run is an UPGRADE. The upgrade parks on the page's class
+       (step 8.3's Construct), so it needs a resume point of its own inside the one reaction the drain is on. */
+    uint8_t  up_stage;
+    /* §4.13.6 step 1.3.1's upgrade arm: "If this throws an exception, catch it, and report it". The throw is
+       the algorithm's VALUE here, so the exception is held and HTML §8.1.4.6's report runs as a request — it
+       fires an `error` event, which is the page's code and therefore another park. */
+    uint8_t  reporting;
+    JSValue  exc;
+    ReportExceptionWork rep;
+    /* §4.13.6 step 1.3's "REMOVE the first element of reactions, and let reaction be that element" — the
+       reaction and the element it belongs to, held HERE because the removal happens BEFORE the reaction runs
+       and the run parks. Re-reading them off the element's queue at the resume instead is what made a
+       re-entrant drain (a `[CEReactions]` member inside a constructor, dequeuing the SAME element) see the
+       in-flight reaction still at the head and run it a second time. Both owned. */
+    JSValue  cur;
+    JSValue  cur_el;
     JSValue  cb[2 + CE_MAX_REACTION_ARGS];   /* the call request buffer: [this, callback, args…] */
 } CustomElementQueue;
+
+/* WHICH ARM OF §4.13.6 step 1.3.1 THE DRAIN IS PARKED IN, so the calling machine can name its resume point as
+   the spec step it actually is rather than as "somewhere in step 4". Read after the invoke returns a park. */
+enum { CE_ARM_CALLBACK = 0, CE_ARM_UPGRADE = 1, CE_ARM_REPORT = 2 };
+int custom_elements_queue_arm(const CustomElementQueue *q);
 
 void custom_elements_queue_init(CustomElementQueue *q);
 void custom_elements_queue_visit(JSContext *ctx, CustomElementQueue *q, JSStepVisit *v);
@@ -60,14 +103,21 @@ JSValue custom_elements_definition_constructor(JSContext *ctx, JSValueConst def)
    "result's custom element definition" are this component's own record, and a second writer of them is a
    second answer to what a custom element is. Returns 0, or -1 having thrown the NotSupportedError/TypeError
    the step names. `local` is the local name `create an element` was given. */
-int custom_elements_created_check(JSContext *ctx, JSValueConst result, JSValueConst def,
+int custom_elements_created_check(JSContext *ctx, JSValueConst result,
                                   lxb_dom_document_t *doc, const char *local, size_t len);
+/* DOM §4.9 step 5.1.4's failure arm: the element it answers with has custom element state "failed". Written
+   from here and not by the caller because the state is this component's own record — and it is what stops the
+   element being tried for upgrade again the moment it enters a document. */
+void custom_elements_mark_failed(JSContext *ctx, JSValueConst wrap);
 /* `window.customElements` — §4.13.4's CustomElementRegistry. */
 void custom_elements_install(JSContext *ctx, JSValueConst global);
 
-/* §4.13.3 "try to upgrade": called when an element enters the tree. A no-op unless its local name is defined
-   and it has not been upgraded already. */
-void custom_elements_try_upgrade(JSContext *ctx, lxb_dom_element_t *el);
+/* DOM §4.2.3's INSERTION STEPS for an element, as HTML's custom-element half states them: an element that is
+   already "custom" gets a connectedCallback reaction, and any other element is TRIED FOR UPGRADE (§4.13.5's
+   "try to upgrade", which ENQUEUES an upgrade reaction — it never constructs here, because the insertion is
+   inside a C walk that cannot park). The two are one branch and not two calls because the spec writes them as
+   one, and because doing both for an element that is already custom would run its constructor twice. */
+void custom_elements_element_connected(JSContext *ctx, lxb_dom_element_t *el);
 /* §4.13.3's disconnected reaction — the twin of the upgrade, for an element LEAVING a document. A no-op unless
    the element was upgraded, because only an upgraded element has a lifecycle to react with. */
 void custom_elements_disconnected(JSContext *ctx, lxb_dom_element_t *el);

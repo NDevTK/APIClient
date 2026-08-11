@@ -14,6 +14,11 @@ void html_element_free(JSContext *ctx);
    custom element constructor whose NewTarget carries a non-object `prototype` gets the interface prototype
    object of that constructor's realm, so the answer is a realm's and never a static. */
 JSValue html_element_proto(JSContext *ctx);
+/* §4's HTMLUnknownElement.prototype FOR THIS REALM. OWNED. DOM §4.9 step 5.1.4's failure arm names the
+   interface by name — "create an element internal given document, HTMLUnknownElement, localName, …" — so a
+   custom element whose constructor threw is an HTMLUnknownElement with that local name, which is what makes
+   `el instanceof HTMLUnknownElement` the page's way to see that the upgrade failed. */
+JSValue html_unknown_element_proto(JSContext *ctx);
 /* The interface OBJECTS as globals — `HTMLElement`, `HTMLAnchorElement`, … Separate from the prototypes because
    they need a global to hang off, which the document install has and this does not. */
 void html_element_install(JSContext *ctx, JSValueConst global);

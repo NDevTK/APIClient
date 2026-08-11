@@ -3415,3 +3415,196 @@ an unknown collection is a world — and `run_scheduler`'s completion condition 
 drains. The cold tier does not change that and is not meant to: what it changes is whether the
 unboundedness is paid in RAM or on disk. A run that grows linearly and pages its tail is the
 designed behaviour; a run that grows quadratically in RAM was a data-structure bug, which is §13.2.
+
+---
+
+## 14. HTML §4.13.2 / §4.13.5 / §4.13.6 — the HTMLElement constructor, the UPGRADE, and the reaction drain
+
+**Why this section exists.** A custom element's constructor body is code nothing else in the program
+calls, and until this section's diff it never ran. The engine had §4.13.4's `define`, §4.13.6's
+element queues and §4.13.2's `[HTMLConstructor]` — everything except the one algorithm that joins
+them. `upgrade an element` was a PROTOTYPE SWAP: the wrapper was re-pointed at the class's
+`prototype` and a `connectedCallback` reaction enqueued, so `el instanceof X` and `el.method()` were
+true while `constructor(){ super(); this.routes = … }` had never executed. The construction stack
+existed (`ce_define_commit` allocated one per definition, `js_ce_html_ctor` read it) and **nothing
+ever pushed onto it**, so §4.13.2's steps 10-15 — the half that returns the node the page already
+holds — were unreachable by construction.
+
+**Network was available.** Everything below was read from the live standards on **2026-08-11**:
+
+| Standard | Source | Version read |
+| --- | --- | --- |
+| WHATWG HTML | `https://html.spec.whatwg.org/` | Living Standard, §4.13.2, §4.13.5, §4.13.6 |
+| WHATWG DOM | `https://dom.spec.whatwg.org/` | Living Standard, "create an element", "insert a node" |
+
+Step numbers are the standard's own list numbering as of that date.
+
+### 14.0 Four things the live text says that a reasonable person would remember differently
+
+1. **The already-constructed marker throws a `TypeError`, not an `InvalidStateError`.** §4.13.2 step
+   11 says `TypeError` in as many words, and both shapes that reach it are ordinary page bugs — a
+   constructor that `new`s its own class before `super()`, and one that calls `super()` twice. This
+   engine threw an `InvalidStateError`, which is a `DOMException`: a page's
+   `catch (e) { e instanceof TypeError }` answers false for it, and so does the corpus.
+2. **The upgrade is ENQUEUED, never performed, by "try to upgrade".** §4.13.5's "try to upgrade an
+   element" is two steps — look the definition up, then *enqueue a custom element upgrade reaction* —
+   and §4.13.6's reaction queue therefore holds TWO KINDS of entry, which its invoke SWITCHES on.
+   This is not bookkeeping: the insertion that triggers an upgrade happens inside a C tree walk, and
+   step 8.3 CONSTRUCTS the page's class. An upgrade performed at the insertion point would be a
+   `JS_CallConstructor` from C, which is the drive-to-completion this engine aborts on.
+3. **The custom element state has FIVE values and three of them coexist with a non-null definition.**
+   "undefined", "uncustomized", "failed", "precustomized", "custom". §4.13.5 step 1 returns early for
+   the first two and for nothing else, so an element whose upgrade THREW must never be upgraded
+   again — and a boolean "does this wrapper carry a definition" cannot express that, because step 2
+   sets the definition BEFORE step 8 can fail. DOM's "create an element" gives a fresh element
+   "undefined" exactly when its local name is one §4.13.1 would accept, and "uncustomized"
+   otherwise, which is why an absent state is DERIVED from the name rather than written at every
+   creation site (one of which is the HTML parser).
+4. **DOM's insertion steps are a BRANCH, not two calls.** "If inclusiveDescendant is custom, then
+   enqueue a `connectedCallback` reaction. **Otherwise**, try to upgrade it." Doing both would fire
+   `connectedCallback` twice for a freshly upgraded element, because §4.13.5's own step 5 enqueues
+   that same reaction.
+
+### 14.1 §4.13.5 "upgrade an element", given definition and element
+
+1. If element's custom element state is not "undefined" or "uncustomized", then return. —
+2. Set element's custom element definition to definition. —
+3. Set element's custom element state to "failed". —
+4. For each attribute in element's attribute list, in order, **enqueue a custom element callback
+   reaction** with element, `"attributeChangedCallback"`, and « attribute's local name, null,
+   attribute's value, attribute's namespace ». —
+5. If element is **connected**, then enqueue a custom element callback reaction with element,
+   `"connectedCallback"`, and « ». —
+6. Add element to the end of definition's **construction stack**. —
+7. Let C be definition's constructor. — *(7.5-7.6's active custom element constructor map is the
+   scoped-registry mechanism; there are no scoped registries, so there is nothing to save or
+   restore. It becomes real state in the same diff that makes `customElementRegistry` a creation
+   option.)*
+8. Run the following steps **while catching any exceptions**:
+   1. disable-shadow check. — *not applicable: `attachInternals` is absent*
+   2. Set element's custom element state to "precustomized". —
+   3. Let constructResult be the result of **constructing C**, with no arguments. — **`[S]`**
+   4. If `SameValue(constructResult, element)` is false, then throw a `TypeError`. —
+9. Remove the last entry from the end of definition's construction stack. — *(regardless of whether
+   the above threw)*
+10. Form-associated half. — *not applicable: `formAssociated` is absent*
+11. Set element's custom element state to "custom". —
+
+**And if the above threw:** set the definition to null, **empty element's custom element reaction
+queue**, and rethrow — which §4.13.6 immediately catches and REPORTS. The state stays "failed" or
+"precustomized", which is what makes step 1 refuse the retry.
+
+**Step 8.3 is the only `[S]`, and it is the point of the whole section.** It is a
+`step_construct_run` on the drain's own `phase`/`cb`, so the flow parks inside the page's
+constructor exactly as it parks inside a lifecycle callback — the constructor may hold a loop, an
+`await` or a DOM mutation, and it suspends and resumes at any depth like any other flow.
+
+**The algorithm is a sub-algorithm of the drain, not a machine of its own.** §4.13.6 invokes it and
+must inspect its completion (to report it), so a separate `JSTrampStepDef` would need a definition,
+a stage list and a park protocol solely to be driven by one caller — which is what a two-value
+cursor (`up_stage`) on the drain's state already is. `up_stage` is zero exactly when no upgrade is
+in flight, which is what `custom_elements_queue_arm` reads.
+
+### 14.2 §4.13.6 "invoke custom element reactions in an element queue" — the SWITCH
+
+1. While queue is not empty:
+   1. Let element be the result of dequeuing from queue. —
+   2. Let reactions be element's custom element reaction queue. —
+   3. Repeat until reactions is empty: remove the first reaction and **switch on its type**:
+      - **upgrade reaction** — **upgrade** element using the reaction's definition. If this throws,
+        **catch it and report it** for the definition's constructor's realm's global. — **`[S]`**
+        (§4.13.5 step 8.3, and again inside HTML §8.1.4.6's `error` event)
+      - **callback reaction** — invoke the reaction's callback function with its arguments and
+        `"report"`, `this` = element. — **`[S]`** (the callback, and again inside the report)
+
+So the drain rests at **three** distinct spec steps, and each is a declared stage: the callback, the
+construct, and the report. One label for all three would name a resume point that means three
+things, which a cold-tier resume cannot report and a `step_stage_check` cannot assert. Those stages
+are appended to EVERY declared member's list by `idl_method_id_step` (`IDL_EPILOGUE_STEPS`) and
+declared again for the backup queue's own machine, which static-asserts that its three enum values
+ARE `CE_ARM_CALLBACK`/`CE_ARM_UPGRADE`/`CE_ARM_REPORT`.
+
+**Both arms CATCH, so every machine that drives this drain must declare `catches_abrupt`** — the
+per-member `JSTrampStepDef` the IDL pool builds, and `js_ce_backup_def`. Without it, one throwing
+custom element constructor tore down the member that was draining and dropped every reaction queued
+behind it. The declaration is made once, for all members, because the epilogue is there for all
+members; a per-member opt-in is a line to forget on the member that first needs it. **Nowhere else
+does an IDL member catch** — an argument coercion's throw and the member body's own request must
+propagate exactly as before — so `js_idl_args_step_inner` re-raises an abrupt delivery at its top
+whenever it is not inside the epilogue. Re-entering the conversion loop with it would re-issue the
+keyed read the page's getter just threw from, which is an infinite re-ask, not a slow path.
+
+### 14.3 §4.13.6 step 3's POP is observable, and it was only claimed
+
+The `[CEReactions]` wrapper is: push a queue, run the member's steps, **pop**, invoke, rethrow. The
+pop is step 3 and the invoke is step 4, in that order — so while the drain runs, no queue is
+current, and a reaction enqueued BY the drain (§4.13.5 step 4 and step 5 are exactly that) goes to
+the **backup element queue** and its microtask.
+
+`custom_elements_reactions_invoke` carried a comment saying step 3 "already happened: the queue
+stopped being current the moment the member's own steps returned". That is true of a member that
+PARKS and false of one that does not: `js_idl_args_step` makes the queue current for its whole C
+activation, and the epilogue runs inside it. So the enqueues went back onto the queue being drained.
+The pop is now performed at the top of the invoke, which is also what lets a custom element
+constructor — reached from step 8.3, and itself a declared member that pushes a queue — pass
+`custom_elements_reactions_push`'s "no queue is current" assertion.
+
+The element's OWN reaction queue still receives those reactions, and step 1.3's *repeat until
+reactions is empty* is what runs them in the same drain; the backup queue's later microtask finds
+the element's queue already empty. That is the spec's own arrangement, not a shortcut.
+
+### 14.4 §4.13.2 `[HTMLConstructor]` — what the construction stack makes true
+
+With step 6 of §4.13.5 pushing, §4.13.2's two arms are finally both reachable:
+
+- **empty stack** (`new Router()`, and DOM "create an element" step 5.1.4.1's Construct inside
+  `createElement`): steps 7.1-7.9 MAKE the element, and 7.7-7.8 set its state to "custom" and its
+  definition. Both, in that order — the state is what DOM's step 5.1.4 assert reads back.
+- **non-empty stack** (an upgrade): step 10 takes the last entry, step 11 throws a `TypeError` if it
+  is the already-constructed marker, step 12 performs `element.[[SetPrototypeOf]](prototype)` and
+  step 13 REPLACES the entry with the marker. This is how `super()` inside an author constructor
+  assigns the node the page already holds to `this`, and it is why the prototype swap the old
+  upgrade did by hand is deleted rather than kept beside it.
+
+**A constructor that never calls `super()`** leaves the stack entry as the element rather than the
+marker and returns abruptly (a derived constructor that does not call `super()` throws a
+`ReferenceError` at return), so §4.13.5 step 8.4's SameValue is what reports it and step 9 pops the
+entry either way.
+
+### 14.5 What is honestly ABSENT, by name
+
+- `adoptedCallback` — there is no adoption reaction; the callback is collected by §4.13.4 step 14
+  and nothing enqueues it.
+- **form-associated custom elements** — §4.13.5 step 10, and step 14.12's four-callback map.
+- **customized built-ins** (`extends`) — §4.13.4 refuses them with a `NotSupportedError` rather than
+  registering them as autonomous. That refusal is load-bearing twice over: it is what lets
+  `ce_upgradable_name` answer the insertion-steps branch off the Lexbor local name alone (so
+  inserting a `<div>` mints no wrapper), and it is what lets §4.13.2's autonomous/customized split be
+  a `DCHECK` instead of a branch. Building customized built-ins widens all three together.
+- **scoped registries** (`CustomElementRegistry` as a constructible interface, the active custom
+  element constructor map, `Element.customElementRegistry`) — the map's save/restore in §4.13.5
+  steps 7.5-7.6 and 8.9 has nothing to save while there is one registry per window.
+
+### 14.6 What running the constructors EXPOSED, by name
+
+Making §4.13.5 construct turns a class of "every subtest fails" files into "the page's own code throws",
+because a WPT file's constructor calls the API the test is about. `testharness.js` installs
+`window.onerror`, so HTML §8.1.4.6's report — working correctly — is what marks the file ERROR. Each of
+these is an ABSENT capability naming itself, not a defect in §4.13:
+
+- **`ElementInternals` / `HTMLElement.attachInternals()`** — 11 files. Every one of them writes
+  `constructor(){ super(); this.internals_ = this.attachInternals(); }`, so the constructor throws
+  `TypeError: not a function` on the first line the class runs. This is the single largest named gap
+  in the directory and it is the whole of `form-associated/` plus the `ElementInternals-*` files.
+- **HTML "create an element for the token" with `synchronousCustomElements` true** — the PARSER must
+  CONSTRUCT a custom element it parses, not create-then-upgrade it. This engine upgrades, so a
+  constructor that `new`s its own class before `super()` finds the upgrade's construction-stack entry
+  and §4.13.2 step 11 throws (`parser-uses-constructed-element.html`), and one that never calls
+  `super()` reaches `this` uninitialised (`parser-fallsback-to-unknown-element.html`). Both are
+  correct behaviour for the algorithm the parser is actually running; the fix is in the parser.
+- **`MutationObserver`** — `microtasks-and-constructors.html` uses it to observe the constructor's
+  microtask ordering.
+- **DOM "create an element" step 5.1.4's REPORT arm IS built** (this diff): a constructor that throws
+  inside `document.createElement`, and the 5.1.4.3-8 checks after it, are reported and answered with a
+  failed `HTMLUnknownElement` of the requested local name. The declaration that made it possible is
+  `IdlStepDecl::catches_abrupt`, and `createElement` is the first member to carry it.

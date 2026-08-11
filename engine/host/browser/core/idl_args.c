@@ -190,7 +190,7 @@ static const char *const IDL_PROLOGUE_STEPS[] = {
 typedef char idl_prologue_matches_step_first[
     (sizeof IDL_PROLOGUE_STEPS / sizeof *IDL_PROLOGUE_STEPS) == IDL_STEP_FIRST ? 1 : -1];
 
-/* AND THE ONE STAGE EVERY DECLARED MEMBER PASSES THROUGH AFTER ITS OWN ALGORITHM ENDS. HTML §4.13.6 replaces
+/* AND THE STAGES EVERY DECLARED MEMBER PASSES THROUGH AFTER ITS OWN ALGORITHM ENDS. HTML §4.13.6 replaces
    the steps of every `[CEReactions]` operation and setter with: push an element queue, run the member's own
    steps, pop the queue, INVOKE the reactions in it, then return. Step 4 is the page's code — a custom element
    constructor or a lifecycle callback — so it is a rest point, and it is appended to every member's stage list
@@ -198,9 +198,21 @@ typedef char idl_prologue_matches_step_first[
    converges on, and a per-member line would be a per-member line to forget. A member whose IDL carries no
    [CEReactions] never enqueues anything during its own steps, so its queue is empty and this stage is reached
    and left in one step. */
-static const char *const IDL_EPILOGUE_STEP =
-    "HTML §4.13.6 custom element reactions steps 3-4 (pop the element queue this member pushed and invoke "
-    "the custom element reactions in it), one reaction per step";
+/* THREE OF THEM, because §4.13.6 step 1.3.1 SWITCHES on the reaction's type and the three arms rest at three
+   different spec steps: a callback reaction parks inside a lifecycle callback, an UPGRADE reaction parks inside
+   §4.13.5 step 8.3's Construct of the page's class, and a reaction that threw parks inside HTML §8.1.4.6's
+   `error` event. One label for all three would name a resume point that means three things — which is exactly
+   what a stage may not do, since a cold-tier resume reports it. The order IS custom_elements.h's CE_ARM_*, and
+   custom_elements.c static-asserts the same pairing for the backup queue's copy. */
+static const char *const IDL_EPILOGUE_STEPS[] = {
+    "HTML §4.13.6 custom element reactions steps 3-4, invoke step 1.3.1 callback reaction (invoke the "
+    "reaction's callback function with \"report\"), one reaction per step",
+    "HTML §4.13.6 custom element reactions steps 3-4, invoke step 1.3.1 upgrade reaction — HTML §4.13.5 step "
+    "8.3 (constructing the definition's constructor with no arguments)",
+    "HTML §4.13.6 custom element reactions steps 3-4, invoke step 1.3.1 (reporting the exception a reaction "
+    "threw), which is HTML §8.1.4.6 report an exception",
+};
+#define IDL_EPILOGUE_NSTEPS ((int)(sizeof IDL_EPILOGUE_STEPS / sizeof *IDL_EPILOGUE_STEPS))
 
 /* The DOM layer's tree-steps edge — see idl_args.h. NULL until the DOM registers it, which is what the
    platform-less test builds and the pre-DOM boot look like. */
@@ -422,11 +434,12 @@ static int idl_ce_finish(JSContext *ctx, JSIdlArgsState *s, JSValue in, JSValue 
     const IdlMember *m = idl_member(s->hdr.arg);
     int r;
 
-    if (!s->ce_after_body) {
-        s->ce_after_body = 1;
-        if (m->steps) s->hdr.stage = IDL_STEP_FIRST + m->nsteps;
-    }
+    if (!s->ce_after_body) s->ce_after_body = 1;
     r = custom_elements_reactions_invoke(ctx, &s->ce, in, out_cb, out_argc);
+    /* THE STAGE IS THE ARM THE DRAIN IS IN, set on every pass — a park inside a lifecycle callback, inside
+       §4.13.5's Construct and inside the `error` event are three different resume points and the stage says
+       which. Set unconditionally rather than once on entry, because the arm changes between reactions. */
+    if (m->steps) s->hdr.stage = IDL_STEP_FIRST + m->nsteps + custom_elements_queue_arm(&s->ce);
     if (r) return r;
     if (s->ce_threw) {          /* §4.13.6 step 5: rethrow, now that step 4's reactions have run */
         s->ce_threw = 0;
@@ -564,6 +577,16 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
     /* A RESUME INSIDE THE EPILOGUE goes straight back to it: the member's own steps are finished and its
        arguments are converted, so neither the conversion loop nor the body may run again. */
     if (s->ce_after_body) return idl_ce_finish(ctx, s, cb_result, out_cb, out_argc);
+
+    /* AN ABRUPT DELIVERY BELONGS TO WHICHEVER ALGORITHM DECLARED THAT IT CATCHES. The definition always
+       declares catches_abrupt, because §4.13.6's epilogue below catches for every member — so a request that
+       threw during an ARGUMENT CONVERSION, or inside a body that did NOT declare it, arrives here as
+       JS_EXCEPTION with the throw still live, and this hands it straight back. This is routing and not a
+       fallback: it picks which one implementation answers, and the shape it does not route (a conversion, which
+       Web IDL propagates) has no other answer to give. Re-entering the conversion loop with it would run the
+       page's getter a second time, which is the failure that turns a throwing `toString` into an infinite
+       re-ask. */
+    if (JS_IsException(cb_result) && !(m->step && m->step->catches_abrupt)) return JS_STEP_ABRUPT;
 
     /* THE DRAIN COMES FIRST ON EVERY RE-ENTRY, before the conversion loop or the body, because the steps the
        previous step recorded must finish before anything else this member does. */
@@ -1228,6 +1251,15 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
     idl_def(idx)->fini  = idl_args_result;
     idl_def(idx)->arg   = idx;
     idl_def(idx)->visit = js_idl_args_visit;
+    /* EVERY DECLARED MEMBER CATCHES, AND IT CATCHES IN EXACTLY ONE PLACE. §4.13.6 step 1.3.1 says an upgrade
+       reaction's throw is CAUGHT AND REPORTED and a callback reaction is invoked "with \"report\"" — so the
+       epilogue every member ends through has an abrupt completion that is its own VALUE, and without this
+       declaration one throwing custom element constructor tore the member down and dropped every reaction
+       queued behind it. It is declared here for all members rather than per member because the epilogue is
+       here for all members: a per-member opt-in would be a line to forget on the member that first needs it.
+       Nowhere ELSE does this machine catch — an argument coercion's throw and the member body's own request
+       propagate exactly as before, which js_idl_args_step_inner re-raises at its top. */
+    idl_def(idx)->catches_abrupt = 1;
     {
         int sid = JS_RegisterStepDef(rt, idl_def(idx));
         idl_map_step(sid, idx);   /* the one place the runtime's id and this pool's index are both in hand */
@@ -1256,13 +1288,14 @@ int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
         int n = 0, k;
         const char **all;
         while (decl->steps[n]) n++;
-        all = malloc(sizeof(*all) * (size_t)(IDL_STEP_FIRST + n + 2));
+        all = malloc(sizeof(*all) * (size_t)(IDL_STEP_FIRST + n + IDL_EPILOGUE_NSTEPS + 1));
         CHECK(all != NULL, "idl: OOM joining a member's declared steps to the prologue's — a member whose "
                            "stages cannot be named is a resume point nothing can check");
         for (k = 0; k < IDL_STEP_FIRST; k++) all[k] = IDL_PROLOGUE_STEPS[k];
         for (k = 0; k < n; k++) all[IDL_STEP_FIRST + k] = decl->steps[k];
-        all[IDL_STEP_FIRST + n] = IDL_EPILOGUE_STEP;   /* §4.13.6 steps 3-4, which every member ends through */
-        all[IDL_STEP_FIRST + n + 1] = NULL;
+        /* §4.13.6 steps 3-4, which every member ends through — one stage per arm of its invoke's switch. */
+        for (k = 0; k < IDL_EPILOGUE_NSTEPS; k++) all[IDL_STEP_FIRST + n + k] = IDL_EPILOGUE_STEPS[k];
+        all[IDL_STEP_FIRST + n + IDL_EPILOGUE_NSTEPS] = NULL;
         idl_member(idx)->steps = all;
         idl_member(idx)->nsteps = n;
         idl_def(idx)->algorithm = decl->algorithm;

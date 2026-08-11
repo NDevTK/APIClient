@@ -237,6 +237,18 @@ typedef struct {
        rather than accepting an algorithm with unnamed steps or steps belonging to no algorithm. */
     const char *algorithm;
     const char *const *steps;
+    /* THIS MEMBER'S OWN ALGORITHM CATCHES AN ABRUPT REQUEST RESULT, instead of letting it propagate. The pool's
+       definition always declares JSTrampStepDef::catches_abrupt — HTML §4.13.6 step 1.3.1 catches in the
+       epilogue EVERY member ends through — so the abrupt arrives at this machine either way; this field says
+       which of the two implementations handles it. Zero means the epilogue's, and the body never sees it: an
+       argument coercion's throw and the body's own request re-raise exactly as they did before. One means the
+       BODY's, and the body is then re-entered with JS_EXCEPTION at the request's call site with the throw
+       still live — which is what DOM §4.9 step 5.1.4's "run these steps while catching any exceptions" is, and
+       the only reason `document.createElement` can report a throwing custom element constructor instead of
+       letting it destroy the document. A body that declares this MUST answer for the abrupt at every request
+       it makes: re-issuing the request instead is an infinite re-ask, because a keyed read's own two-phase
+       cursor is reset by the abrupt delivery. */
+    uint8_t     catches_abrupt;
 } IdlStepDecl;
 /* DECLARE WHERE THE OPTIONAL ARGUMENTS START. §3.6.2 makes an `undefined` passed for an optional argument with
    no default mean the argument is ABSENT — `new URL("aaa:b", undefined)` is a one-argument call, and
