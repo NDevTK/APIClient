@@ -602,6 +602,89 @@ void mutation_observer_transient_for_removal(JSContext *ctx, lxb_dom_node_t *nod
     JS_FreeValue(ctx, nwrap);
 }
 
+/* §4.2.3's `suppressObservers`, as the SCOPE the algorithm actually has rather than a parameter this engine
+ * cannot thread. Inserting a DocumentFragment is ONE operation in the standard and N tree writes here: step 1
+ * makes `nodes` the fragment's children, step 4 removes them from the fragment WITH suppressObservers SET TO
+ * TRUE, and the last step queues ONE record for the parent with the whole list. The per-node chokepoint hook
+ * cannot see that shape — it fires once per child — so it queued N records where a browser queues one, which
+ * is exactly what the eight remaining MutationObserver-childList failures say ("expected 1 but got 2").
+ *
+ * Accumulating in the OBSERVER rather than passing a flag down through the tree chokepoint is what keeps
+ * `node_insert_at` free of a JSContext it does not have: the hook already receives one per call, and the two
+ * aggregate records are emitted at the end from the context that was actually running.
+ *
+ * The two targets are fixed by the algorithm, not discovered: removals during the scope belong to the FRAGMENT
+ * (step 4's record, which the standard says intentionally ignores suppressObservers) and insertions belong to
+ * the PARENT. Anything else inside the scope would be a different operation and is asserted against.
+ *
+ * A run with no observer registered never reaches here at all, so the scope is inert until someone is watching. */
+static int      g_batch;
+static JSContext *g_batch_ctx;
+static JSValue  g_batch_add = JS_UNDEFINED, g_batch_rem = JS_UNDEFINED;
+static uint32_t g_batch_nadd, g_batch_nrem;
+static lxb_dom_node_t *g_batch_parent, *g_batch_from, *g_batch_prev, *g_batch_next;
+
+void mutation_observer_batch_begin(void)
+{
+    if (g_batch++ == 0) {
+        g_batch_nadd = g_batch_nrem = 0;
+        g_batch_parent = g_batch_from = g_batch_prev = g_batch_next = NULL;
+        g_batch_ctx = NULL;
+    }
+}
+
+void mutation_observer_batch_end(void)
+{
+    JSContext *ctx = g_batch_ctx;
+
+    DCHECK(g_batch > 0, "a mutation-record batch ended that never began");
+    if (--g_batch > 0) return;
+    if (!ctx) return;                       /* nothing accumulated: no observer, or an empty fragment */
+    /* Step 4's record on the FRAGMENT, then the operation's own record on the PARENT — in that order, because
+       the standard queues them in that order and §4.3's queue is observably ordered. */
+    if (g_batch_nrem && g_batch_from)
+        mutation_observer_queue_record(ctx, MR_TYPE_CHILD_LIST, g_batch_from, NULL, NULL, NULL, 0,
+                                       JS_UNDEFINED, g_batch_rem, NULL, NULL);
+    if (g_batch_nadd && g_batch_parent)
+        mutation_observer_queue_record(ctx, MR_TYPE_CHILD_LIST, g_batch_parent, NULL, NULL, NULL, 0,
+                                       g_batch_add, JS_UNDEFINED, g_batch_prev, g_batch_next);
+    JS_FreeValue(ctx, g_batch_add); g_batch_add = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_batch_rem); g_batch_rem = JS_UNDEFINED;
+    g_batch_ctx = NULL;
+}
+
+/* One node joins the scope's list. Returns true when it was taken, which is what tells the caller not to queue
+   the per-node record the standard does not have. */
+static bool batch_take(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int inserted, JSValue wrap)
+{
+    JSValue *list = inserted ? &g_batch_add : &g_batch_rem;
+    uint32_t *count = inserted ? &g_batch_nadd : &g_batch_nrem;
+
+    if (!g_batch) return false;
+    if (!g_batch_ctx) g_batch_ctx = ctx;
+    if (JS_IsUndefined(*list)) {
+        *list = JS_NewArray(ctx);
+        CHECK(!JS_IsException(*list), "a batched tree mutation record's node list could not be allocated");
+    }
+    if (inserted) {
+        if (!g_batch_parent) {              /* the operation's position is the FIRST insertion's */
+            g_batch_parent = parent;
+            g_batch_prev = n->prev;
+        }
+        g_batch_next = n->next;
+        DCHECK(g_batch_parent == parent,
+               "one mutation-record batch spanned two insertion parents — §4.2.3's insert has exactly one, so "
+               "this scope is wrapped around something that is not one insert");
+    } else {
+        if (!g_batch_from) g_batch_from = parent;
+        DCHECK(g_batch_from == parent,
+               "one mutation-record batch spanned two removal parents — step 4 removes a fragment's children "
+               "from that one fragment");
+    }
+    JS_SetPropertyUint32(ctx, *list, (*count)++, wrap);
+    return true;
+}
+
 void mutation_observer_tree_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase)
 {
     JSValue list, wrap;
@@ -620,6 +703,8 @@ void mutation_observer_tree_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_nod
         mutation_observer_transient_for_removal(ctx, n, parent);
     wrap = node_wrap(ctx, n);
     if (JS_IsNull(wrap)) { JS_FreeValue(ctx, wrap); return; }
+    /* Inside §4.2.3's scope this node is one entry of ONE record, not a record of its own. */
+    if (batch_take(ctx, n, parent, inserted, wrap)) return;
     list = JS_NewArray(ctx);
     CHECK(!JS_IsException(list), "a tree mutation record's node list could not be allocated");
     JS_SetPropertyUint32(ctx, list, 0, wrap);

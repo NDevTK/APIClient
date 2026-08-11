@@ -45,6 +45,7 @@
 #include "solver/dom_cow.h"
 #include "solver/concolic.h"
 #include "solver/attr_shadow.h"
+#include "core/dom/mutation_observer.h"
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
 #include "core/dom/slot.h"
@@ -362,12 +363,18 @@ void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t
 {
     if (node_is_document_fragment(node)) {
         lxb_dom_node_t *c, *next;
+        /* §4.2.3 INSERT IS ONE OPERATION, and these are its N tree writes. Step 4 removes the fragment's
+           children with `suppressObservers` set to TRUE and queues one record for the FRAGMENT; the last step
+           queues one record for the PARENT with the whole node list. Without the scope the per-node hook
+           queued one record per child at each end — which is what "expected 1 but got 2" reports. */
+        mutation_observer_batch_begin();
         for (c = node->first_child; c; c = next) {
             next = c->next;
             dom_cow_remove_child(c);
             if (ref) dom_cow_insert_before(ref, c);
             else     dom_cow_append_child(parent, c);
         }
+        mutation_observer_batch_end();
         return;
     }
     /* §4.2.3 PRE-INSERT STEP 2: a reference child that IS the node becomes the node's next sibling, decided

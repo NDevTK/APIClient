@@ -50,6 +50,13 @@ void mutation_observer_transient_for_removal(JSContext *ctx, lxb_dom_node_t *nod
    custom-element reactions. */
 void mutation_observer_tree_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase);
 
+/* §4.2.3's `suppressObservers`, as a SCOPE. Inserting a DocumentFragment is one operation in the standard and N
+   tree writes here, so the per-node hook queued N records where a browser queues one. Wrap the fragment's
+   children loop: removals inside belong to the fragment (step 4's own record), insertions to the parent (the
+   operation's record), and both are emitted once at the end. Nests; inert when no observer is registered. */
+void mutation_observer_batch_begin(void);
+void mutation_observer_batch_end(void);
+
 /* §4.10's "REPLACE DATA" step 4 — "queue a mutation record of `characterData` for node with null, null, node's
    data, « », « », null and null". Fired by the character-data chokepoint, BEFORE the write, because `node's
    data` there is the value the node still holds. */
