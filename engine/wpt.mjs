@@ -157,6 +157,12 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       whose script 404s runs a test nobody wrote. Its last segment is `resources`, so it is
                       checked out to BE USED and contributes no test of its own. */
                    "html/resources",
+                   /* The same, for `shadow-dom/reference-target/`: ten of its files name
+                      `/wai-aria/scripts/aria-utils.js`, and the gate reported all ten as ABORTED with "a
+                      <script src> the corpus does not serve" — which is an EXCLUDED TEST wearing a reason.
+                      The directory holds helper scripts and no testharness document, so it adds ten runnable
+                      files and no test of its own. */
+                   "wai-aria/scripts",
                    "service-workers/service-worker/resources"];
 
 if (!existsSync(join(WPT, "resources", "testharness.js"))) {
