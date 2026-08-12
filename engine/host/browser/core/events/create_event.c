@@ -26,7 +26,10 @@
 #include "core/events/before_unload_event.h"
 #include "core/events/create_event.h"
 #include "core/events/event.h"
+#include "core/events/keyboard_event.h"
 #include "core/events/message_event.h"
+#include "core/events/mouse_event.h"
+#include "core/events/ui_event.h"
 
 typedef JSValue (*EventMaker)(JSContext *ctx);
 
@@ -60,6 +63,12 @@ static JSValue make_before_unload_event(JSContext *ctx)
     return before_unload_event_new(ctx);
 }
 
+/* THE UIEvent, MouseEvent AND KeyboardEvent ROWS NEED NO MAKER OF THEIR OWN. Each of those interfaces exports
+   DOM §2.5's "create an event using X" — every attribute at its un-initialized value — and that is exactly and
+   only what a maker owes, so the interface's own entry IS the maker rather than a wrapper restating it here.
+   `mouseevents` and `uievents` are the same interface under §4.5's legacy alias, which is why two rows share
+   one entry: the table's first column is a string, its second is the interface, and only the second decides
+   what is built. */
 /* THERE IS NO PageTransitionEvent ROW, and that is §4.5's table rather than a gap here: the table names
    BeforeUnloadEvent, CompositionEvent, CustomEvent, DeviceMotionEvent, DeviceOrientationEvent, DragEvent,
    Event, FocusEvent, HashChangeEvent, KeyboardEvent, MessageEvent, MouseEvent, StorageEvent, TextEvent,
@@ -77,16 +86,16 @@ static const CreateEventRow CREATE_EVENT[] = {
     { "focusevent",             "FocusEvent",             NULL },
     { "hashchangeevent",        "HashChangeEvent",        NULL },
     { "htmlevents",             "Event",                  make_event },
-    { "keyboardevent",          "KeyboardEvent",          NULL },
+    { "keyboardevent",          "KeyboardEvent",          keyboard_event_new },
     { "messageevent",           "MessageEvent",           make_message_event },
-    { "mouseevent",             "MouseEvent",             NULL },
-    { "mouseevents",            "MouseEvent",             NULL },
+    { "mouseevent",             "MouseEvent",             mouse_event_new },
+    { "mouseevents",            "MouseEvent",             mouse_event_new },
     { "storageevent",           "StorageEvent",           NULL },
     { "svgevents",              "Event",                  make_event },
     { "textevent",              "TextEvent",              NULL },
     { "touchevent",             "TouchEvent",             NULL },
-    { "uievent",                "UIEvent",                NULL },
-    { "uievents",               "UIEvent",                NULL },
+    { "uievent",                "UIEvent",                ui_event_new },
+    { "uievents",               "UIEvent",                ui_event_new },
 };
 
 /* Is `s` the row's alias, compared the way §4.5 compares — ASCII case-insensitively, byte for byte. A byte

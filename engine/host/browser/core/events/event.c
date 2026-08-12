@@ -16,14 +16,16 @@
  * It is also the brand: a page cannot forge the symbol, so "does it carry the slot record" IS `instanceof
  * Event` for the algorithms, and it stays true across subclassing the way a class-id check would not.
  *
- * WHAT IS ABSENT AND WHY. CustomEvent and the typed events (MouseEvent, KeyboardEvent…) are their own interfaces
- * with their own state; they are honestly missing rather than approximated by an Event with extra properties,
- * and the IDL audit names them. §2.2's `relatedTarget` and `touch target list` are NOT with them, and reading
- * the standard is what says so: they are associated values of the EVENT, initially null and the empty list, and
- * UIEvents and Touch Events only define ATTRIBUTES over them. So they are slots here like every other, they
- * are what §2.9 retargets at each path item and what `invoke` writes back at each one, and the interfaces that
- * FILL them are the part that is missing. Retargeting of the TARGET is the third of the same family: it is
- * §2.9's shadow-adjusted target, and composedPath below is written over it. */
+ * WHAT IS ABSENT AND WHY. CustomEvent and the typed events this tree has not reached yet (FocusEvent,
+ * InputEvent, TouchEvent…) are their own interfaces with their own state; they are honestly missing rather
+ * than approximated by an Event with extra properties, and the IDL audit names them. §2.2's `relatedTarget`
+ * and `touch target list` are NOT with them, and reading the standard is what says so: they are associated
+ * values of the EVENT, initially null and the empty list, and UIEvents and Touch Events only define
+ * ATTRIBUTES over them. So they are slots here like every other, they are what §2.9 retargets at each path
+ * item and what `invoke` writes back at each one — mouse_event.c's `relatedTarget` attribute reads THIS slot
+ * for exactly that reason, and the touch target list is still waiting for the interface that fills it.
+ * Retargeting of the TARGET is the third of the same family: it is §2.9's shadow-adjusted target, and
+ * composedPath below is written over it. */
 #include <stdbool.h>
 #include <string.h>
 
@@ -38,6 +40,9 @@
 #include "core/events/error_event.h"
 #include "core/events/page_transition_event.h"
 #include "core/events/before_unload_event.h"
+#include "core/events/ui_event.h"
+#include "core/events/mouse_event.h"
+#include "core/events/keyboard_event.h"
 #include "core/events/event_path.h"
 #include "core/timing/timer.h"
 
@@ -802,6 +807,12 @@ static void event_declare_subclasses(JSContext *ctx)
     error_event_init(ctx);
     page_transition_event_init(ctx);
     before_unload_event_init(ctx);
+    /* THE ORDER IS THE CHAIN. Each of these declares a per-realm install and realm.h runs them in declaration
+       order, so an interface must declare AFTER the one it extends or its prototype chains to a slot no realm
+       has filled yet: `MouseEvent : UIEvent : Event` and `KeyboardEvent : UIEvent : Event`. */
+    ui_event_init(ctx);
+    mouse_event_init(ctx);
+    keyboard_event_init(ctx);
 }
 
 static void event_free_subclasses(JSContext *ctx)
@@ -810,6 +821,9 @@ static void event_free_subclasses(JSContext *ctx)
     error_event_free(ctx);
     page_transition_event_free(ctx);
     before_unload_event_free(ctx);
+    ui_event_free(ctx);
+    mouse_event_free(ctx);
+    keyboard_event_free(ctx);
 }
 
 void event_free(JSContext *ctx)
