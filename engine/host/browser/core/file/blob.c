@@ -22,6 +22,8 @@
 #include "cutils.h"
 #include "core/byte_reader.h"
 #include "core/file/blob.h"
+#include "core/file/file_device.h"
+#include "core/file/file_list.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/idl_iter.h"
@@ -631,6 +633,10 @@ void blob_init(JSContext *ctx)
                                             &js_blob_ctor_decl, 1);
     idl_optional_from(2);   /* §4.1: `fileBits` and `fileName` are REQUIRED; only `options` is optional */
     realm_declare_intrinsic(blob_install_protos);
+    /* §5's FileList, declared from here because §3, §4 and §5 are ONE component and this is its declaration
+       point — the same reason html_form_declare declares §4.10.22.10's SubmitEvent. It declares its own
+       per-realm intrinsic, so its prototype and interface object are built in every realm this one is. */
+    file_list_init(ctx);
 }
 
 /* §3.1's AND §4's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. */
@@ -694,6 +700,8 @@ void blob_free(JSContext *ctx)
     if (!g_blob_rt)
         return;
     blob_url_store_free(ctx);
+    file_list_free(ctx);
+    file_device_free();   /* the device's bytes are the agent's, and they outlive no agent */
     /* the prototypes are the REALMS' — released with their contexts */
     g_blob_rt = NULL;
     g_blob_ctor_stepid = g_file_ctor_stepid = -1;

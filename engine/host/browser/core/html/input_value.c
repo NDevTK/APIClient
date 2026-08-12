@@ -34,7 +34,18 @@
  *
  * THE DIRTY VALUE FLAG is what decides which of the two candidates the getter answers — the element's own value,
  * or the content attribute. Once a script assigns, the flag is true and the attribute is the DEFAULT, which is
- * why a form reset restores it and why `defaultValue` reflects it. */
+ * why a form reset restores it and why `defaultValue` reflects it.
+ *
+ * AND THE FILENAME MODE IS A PROJECTION OF §4.10.5.1.17's LIST OF SELECTED FILES, which is why that list lives
+ * here beside the value it is read through. `input.value` on a file control IS "C:\fakepath\" plus the first
+ * selected file's name, `input.value = ""` EMPTIES that list, and `input.files` is the list itself — one piece
+ * of state seen three ways, and split across two components it would be three answers that stop agreeing.
+ * The list was hardcoded empty, with a comment here saying the engine "has no file picker" and so could take
+ * no other branch. That was a claim about a DEVICE, not about the algorithm: the list, the FileList over it
+ * (File API §5), the `accept`/`multiple` filter and §4.10.5.1.17's UPDATE THE FILE SELECTION are all defined
+ * without one, and what a headless engine actually lacks is bytes to select — which core/file/file_device.c
+ * models the way storage.c models a disk. So a file control now HAS a list, empty until something selects into
+ * it through input_files_pick, and every reader of it reads the real thing. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -45,17 +56,27 @@
 #include "core/css/css_color.h"
 #include "core/dom/attr_list.h"
 #include "core/dom/node.h"
+#include "core/events/event.h"
+#include "core/events/event_target.h"
+#include "core/file/blob.h"
+#include "core/file/file_device.h"
+#include "core/file/file_list.h"
 #include "core/html/html_form.h"
 #include "core/html/input_value.h"
+#include "core/idl_args.h"
 #include "solver/attr_shadow.h"
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
 
-/* The two per-element slots this component keeps, in the per-flow property shadow the control's value already
-   used — so both TIME-TRAVEL: a forked arm's assignment and the state it was sanitized under are that flow's,
-   and its sibling sees the markup's. */
+/* The three per-element slots this component keeps, in the per-flow property shadow the control's value already
+   used — so all three TIME-TRAVEL: a forked arm's assignment, the state it was sanitized under, and the files
+   it selected are that flow's, and its sibling sees the markup's. */
 #define IV_VALUE  "value"            /* §4.10.5.1's ELEMENT'S VALUE, already sanitized */
 #define IV_STATE  "valueSanitizedAs" /* the `type` state that value was sanitized in — see the header comment */
+#define IV_FILES  "selectedFiles"    /* §4.10.5.1.17's LIST OF SELECTED FILES, as the FileList that IS one */
+
+/* §4.10.5.4's `files` setter, declared once per AGENT — see input_value_declare. */
+static int g_id_files_set = -1;
 
 /* §4.10.5.1's DIRTY VALUE FLAG, which is not a second slot beside the value but the SAME FACT: the flag is set
    to true by exactly the operation that gives the element a value of its own (§4.10.5.4's value-mode setter,
@@ -543,12 +564,31 @@ JSValue input_value_get(JSContext *ctx, JSValueConst wrap)
         return iv_content_attr(ctx, el, "");
     case INPUT_VALUE_MODE_DEFAULT_ON:
         return iv_content_attr(ctx, el, "on");
-    case INPUT_VALUE_MODE_FILENAME:
-        /* "Return the string `C:\fakepath\` followed by the name of the FIRST FILE in the list of selected
-           files, if any, or the empty string if the list is empty." This engine has no file picker, so that
-           list is empty for every file control — the same answer §4.10.22.4 step 5.8 gives one: a condition
-           whose state cannot be anything else, evaluated at the step that asks it. */
-        return JS_NewStringLen(ctx, "", 0);
+    case INPUT_VALUE_MODE_FILENAME: {
+        /* "On getting, return the string `C:\fakepath\` followed by the name of the FIRST FILE in the list of
+           selected files, if any, or the empty string if the list is empty." The prefix cannot be mistaken for
+           a path component of the name, because path components are stripped where a file enters the device. */
+        static const char FAKE[] = "C:\\fakepath\\";
+        JSValue first = input_files_item(ctx, wrap, 0), r;
+        const char *name;
+        size_t nlen;
+        char *buf;
+
+        if (JS_IsUndefined(first)) return JS_NewStringLen(ctx, "", 0);
+        name = blob_file_name_of(first);
+        DCHECK(name != NULL, "the list of selected files held a value that is not a File — File API §5 is a "
+                             "list of File objects and file_list_new asserts that at every build, so a plain "
+                             "Blob cannot have got in");
+        nlen = name ? strlen(name) : 0;
+        buf = malloc(sizeof FAKE - 1 + nlen);
+        CHECK(buf != NULL, "input: OOM building a file control's value");
+        memcpy(buf, FAKE, sizeof FAKE - 1);
+        if (nlen) memcpy(buf + sizeof FAKE - 1, name, nlen);
+        r = JS_NewStringLen(ctx, buf, sizeof FAKE - 1 + nlen);
+        free(buf);
+        JS_FreeValue(ctx, first);
+        return r;
+    }
     }
     DFAIL("§4.10.5.4 names four modes of the `value` IDL attribute and a fifth arrived");
     return JS_NewStringLen(ctx, "", 0);
@@ -602,9 +642,9 @@ JSValue input_value_set(JSContext *ctx, JSValueConst wrap, JSValueConst val)
     }
     case INPUT_VALUE_MODE_FILENAME: {
         /* "On setting, if the new value is the empty string, EMPTY the list of selected files; otherwise, throw
-           an `InvalidStateError` DOMException." The list is already empty in an engine with no file picker, so
-           the empty-string branch is a no-op with a reason rather than a skipped step — and the throw is not
-           optional: a page distinguishes it from an assignment that silently did nothing. */
+           an `InvalidStateError` DOMException." Both branches are real: the first is how a page clears a
+           control it has driven a selection into, and the throw is not optional — a page distinguishes it from
+           an assignment that silently did nothing. */
         size_t len = 0;
         const char *s = JS_ToCStringLen(ctx, &len, val);
         bool empty;
@@ -614,7 +654,10 @@ JSValue input_value_set(JSContext *ctx, JSValueConst wrap, JSValueConst val)
            setter takes on an unknown is the one the standard takes on everything that is not "". */
         empty = len == 0 && !concolic_is(val);
         JS_FreeCString(ctx, s);
-        if (empty) return JS_UNDEFINED;
+        if (empty) {
+            input_files_clear(ctx, wrap);
+            return JS_UNDEFINED;
+        }
         return JS_ThrowDOMException(ctx, "InvalidStateError",
                                     "an `input` in the File Upload state was assigned a value other than the "
                                     "empty string");
@@ -622,4 +665,225 @@ JSValue input_value_set(JSContext *ctx, JSValueConst wrap, JSValueConst val)
     }
     DFAIL("§4.10.5.4 names four modes of the `value` IDL attribute and a fifth arrived");
     return JS_UNDEFINED;
+}
+
+/* ---- §4.10.5.1.17's LIST OF SELECTED FILES, and §4.10.5.4's `files` ------------------------------------------
+ *
+ * "The input element represents a list of selected files, each file consisting of a filename, a file type, and
+ * a file body." The list is per-element state and lives in the same per-flow property shadow as the value, so a
+ * flow that drives a selection has one and its sibling has the markup's empty one.
+ *
+ * IT IS HELD AS THE FileList ITSELF, not as a list this file would wrap on each read, because §4.10.5.4 makes
+ * the OBJECT observable: "return a FileList object that represents the current selected files. THE SAME OBJECT
+ * must be returned until the list of selected files changes." A fresh wrapper per read would make
+ * `input.files === input.files` false. */
+
+/* The element's list, BORROWED from the shadow, or JS_UNDEFINED when nothing has ever given this element one —
+   which is the empty list, and is why every reader below asks file_list_* rather than branching on it. */
+static JSValue iv_files_slot(lxb_dom_element_t *el)
+{
+    int i = attr_shadow_find(el, ATTR_SLOT_PROPERTY, NULL, IV_FILES);
+
+    return i < 0 ? JS_UNDEFINED : attr_shadow_opaque(i);
+}
+
+/* REPLACE the element's list. The per-flow chokepoint, so the selection reverts with every other write this
+   flow made — and the shadow DUPS what it is given, so the caller keeps its own reference. */
+static void iv_files_store(JSContext *ctx, lxb_dom_element_t *el, JSValueConst files)
+{
+    DCHECK(file_list_is(ctx, files),
+           "an input's list of selected files was set to something that is not a FileList — §4.10.5.4's setter "
+           "and §4.10.5.1.17's update the file selection are the only two writers and both brand what they are "
+           "given");
+    dom_cow_set_prop_taint(ctx, el, IV_FILES, files);
+}
+
+/* THE ELEMENT, asserted to be in the state whose algorithms these are. NULL for anything else, which is the
+   same guard every member above uses for an `input` that has no element behind it. */
+static lxb_dom_element_t *iv_file_control(JSValueConst wrap)
+{
+    lxb_dom_element_t *el;
+    HtmlInputState st = iv_state_of(wrap, &el);
+
+    DCHECK(st == INPUT_STATE_FILE,
+           "an algorithm of §4.10.5.1.17's File Upload state ran on a control that is not in it — the list of "
+           "selected files belongs to that state and to no other, and every caller has the state in hand");
+    return st == INPUT_STATE_FILE ? el : NULL;
+}
+
+uint32_t input_files_count(JSContext *ctx, JSValueConst wrap)
+{
+    lxb_dom_element_t *el = iv_file_control(wrap);
+
+    return el ? file_list_length(ctx, iv_files_slot(el)) : 0;
+}
+
+JSValue input_files_item(JSContext *ctx, JSValueConst wrap, uint32_t i)
+{
+    lxb_dom_element_t *el = iv_file_control(wrap);
+
+    return el ? file_list_item(ctx, iv_files_slot(el), i) : JS_UNDEFINED;
+}
+
+JSValue input_files_get(JSContext *ctx, JSValueConst wrap)
+{
+    lxb_dom_element_t *el;
+    HtmlInputState st = iv_state_of(wrap, &el);
+    JSValue held, fresh;
+
+    DCHECK(st != INPUT_STATE_NONE, "§4.10.5.4's `files` getter ran on something that is not an `input` — the "
+                                   "member is HTMLInputElement's and its brand check is at the member");
+    /* "If the IDL attribute does not apply, then it must instead return null." It applies to the File Upload
+       state and to no other, and a page tells that null from an empty list. */
+    if (st != INPUT_STATE_FILE || !el) return JS_NULL;
+    held = iv_files_slot(el);
+    if (!JS_IsUndefined(held)) return JS_DupValue(ctx, held);
+    /* THE EMPTY LIST IS AN OBJECT TOO, and it is minted once and STORED — "the same object must be returned
+       until the list of selected files changes", so a control nothing has selected into still answers the same
+       FileList on every read. Storing it on a READ is the [SameObject] cache every live collection in this
+       engine keeps, and it goes in the flow's delta like any other write. */
+    fresh = file_list_new_empty(ctx);
+    iv_files_store(ctx, el, fresh);
+    return fresh;
+}
+
+void input_files_clear(JSContext *ctx, JSValueConst wrap)
+{
+    lxb_dom_element_t *el = iv_file_control(wrap);
+    JSValue fresh;
+
+    if (!el) return;
+    /* EMPTYING AN EMPTY LIST CHANGES NOTHING, and §4.10.5.4 makes that observable: storing a fresh empty list
+       here would change the object `input.files` answers with across an assignment that selected and
+       deselected nothing. */
+    if (file_list_length(ctx, iv_files_slot(el)) == 0) return;
+    fresh = file_list_new_empty(ctx);
+    iv_files_store(ctx, el, fresh);
+    JS_FreeValue(ctx, fresh);
+}
+
+/* §4.10.5.1.17's UPDATE THE FILE SELECTION for `wrap`, given the files the user's selection produced:
+ *
+ *   "Queue an element task on the user interaction task source given element and the following steps:
+ *      1. Update element's selected files so that it represents the user's selection.
+ *      2. Fire an event named input at the input element, with the bubbles and composed attributes
+ *         initialized to true.
+ *      3. Fire an event named change at the input element, with the bubbles attribute initialized to true."
+ *
+ * The two fires are ELEMENT TASKS, which in this engine is what event_target_fire enqueues: each dispatch is a
+ * first-class flow the one scheduler drives, so a listener's body — loop, await, generator — suspends and
+ * resumes like any other program instead of running inside a C activation that cannot park. */
+void input_files_update(JSContext *ctx, JSValueConst wrap, JSValueConst files)
+{
+    lxb_dom_element_t *el = iv_file_control(wrap);
+    JSValue tv;
+
+    DCHECK(file_list_is(ctx, files),
+           "§4.10.5.1.17's update the file selection was given something that is not a FileList — the user's "
+           "selection is a list of File objects and file_device_select is what produces one");
+    if (!el) return;
+    iv_files_store(ctx, el, files);   /* step 1 */
+    /* Step 2. `composed` is not one of event_new's arguments because most engine fires do not set it; the
+       derived form takes it, and Event.prototype is the interface §4.10.5.1.17 names ("fire an event named
+       input" with no interface given is a plain Event). */
+    tv = JS_NewString(ctx, "input");
+    CHECK(!JS_IsException(tv), "input: the `input` event type could not be allocated");
+    event_target_fire(ctx, wrap,
+                      event_new_derived(ctx, event_proto(ctx), tv, /*bubbles*/ true, /*cancelable*/ false,
+                                        /*composed*/ true, /*trusted*/ true),
+                      JS_UNDEFINED);
+    JS_FreeValue(ctx, tv);
+    /* Step 3. `change` does not compose — it stops at the shadow boundary, which is what the standard says by
+       initialising only `bubbles`. */
+    event_target_fire(ctx, wrap, event_new(ctx, "change", /*bubbles*/ true, /*cancelable*/ false), JS_UNDEFINED);
+}
+
+uint32_t input_files_pick(JSContext *ctx, JSValueConst wrap)
+{
+    lxb_dom_element_t *el = iv_file_control(wrap);
+    const char *accept;
+    size_t alen = 0;
+    JSValue files;
+    uint32_t n;
+
+    if (!el) return 0;
+    /* §4.10.5.1.17: "If the element is not mutable, the user agent must not allow the user to change the
+       element's selection." An input is mutable unless it is disabled — `readonly` does not apply to this
+       state, which §4.10.5.3.6 says by listing the states it does apply to. */
+    if (html_form_control_is_disabled(ctx, wrap)) return 0;
+    accept = (const char *)lxb_dom_element_get_attribute(el, (const lxb_char_t *)"accept", 6, &alen);
+    files = file_device_select(ctx, accept, alen, iv_has_attr(el, "multiple"));
+    n = file_list_length(ctx, files);
+    /* THE DEVICE OFFERED NOTHING THIS CONTROL ACCEPTS — the same as a user who was shown a prompt and chose
+       nothing. §4.10.5.1.17's update is what happens "when the user does so", so an empty answer leaves the
+       list, and the `input`/`change` events, alone. */
+    if (n) input_files_update(ctx, wrap, files);
+    JS_FreeValue(ctx, files);
+    return n;
+}
+
+/* ---- §4.10.5.4's `files` member ----------------------------------------------------------------------------- */
+
+/* Web IDL §3.7.5's BRAND CHECK, which is this member's own because this file installs it:
+   `descriptor.get.call(textarea)` is a TypeError and not the null a non-file input answers with. */
+static bool iv_is_input(JSValueConst this_val)
+{
+    return html_form_input_state(node_of(this_val)) != INPUT_STATE_NONE;
+}
+
+static JSValue js_input_get_files(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    (void)magic;
+    if (!iv_is_input(this_val))
+        return JS_ThrowTypeError(ctx, "HTMLInputElement's `files` was accessed on something that is not an "
+                                      "HTMLInputElement");
+    return input_files_get(ctx, this_val);
+}
+
+static JSValue js_input_set_files(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    lxb_dom_element_t *el;
+    HtmlInputState st;
+
+    (void)magic;
+    if (!iv_is_input(this_val))
+        return JS_ThrowTypeError(ctx, "HTMLInputElement's `files` was assigned on something that is not an "
+                                      "HTMLInputElement");
+    st = iv_state_of(this_val, &el);
+    /* THE TYPE'S OWN REFUSAL, MADE HERE. `attribute FileList? files` is a NULLABLE INTERFACE type and the
+       declaration surface has none — IDL_INTERFACE throws a TypeError for the null that §4.10.5.4's step 1
+       requires to silently return, and there is no nullable form of it (the same edge form_data.c's
+       constructor states for its `HTMLElement? submitter`). So the conversion is this body's first step,
+       written as the two things the type says: null and undefined are the IDL null, and anything that is not a
+       FileList is a TypeError before the algorithm's step 1. */
+    if (JS_IsNull(val) || JS_IsUndefined(val)) return JS_UNDEFINED;
+    if (!file_list_is(ctx, val))
+        return JS_ThrowTypeError(ctx, "HTMLInputElement's `files` was assigned something that is not a "
+                                      "FileList");
+    /* Step 1's other half: "If the IDL attribute does not apply ... then return." */
+    if (st != INPUT_STATE_FILE || !el) return JS_UNDEFINED;
+    /* Step 2: "Replace the element's selected files with the given value." The GIVEN OBJECT becomes the
+       element's list, which is what makes `input.files = fl; input.files === fl` hold — the assignment is
+       itself the change that ends the previous object's identity. */
+    iv_files_store(ctx, el, val);
+    return JS_UNDEFINED;
+}
+
+void input_value_declare(JSContext *ctx)
+{
+    DCHECK(g_id_files_set < 0, "input_value_declare ran twice — its member is declared once per AGENT, and a "
+                               "second declaration would mint the setter per realm");
+    g_id_files_set = idl_setter_id(ctx, IDL_ANY, false, js_input_set_files, 0);
+}
+
+void input_value_install(JSContext *ctx, JSValueConst input_proto)
+{
+    DCHECK(g_id_files_set >= 0, "§4.10.5.4's `files` was installed before input_value_declare declared it");
+    DCHECK(JS_IsObject(input_proto), "`files` was installed with no HTMLInputElement.prototype");
+    idl_install_accessor(ctx, input_proto, "files", js_input_get_files, 0, g_id_files_set);
+}
+
+void input_value_free(void)
+{
+    g_id_files_set = -1;
 }
