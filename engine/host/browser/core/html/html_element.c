@@ -39,6 +39,7 @@
 #include "core/html/custom_elements.h"
 #include "core/dom/slot.h"
 #include "core/html/element_internals.h"
+#include "core/html/focus.h"
 #include "core/html/html_element.h"
 #include "core/css/css_style_declaration.h"
 #include "core/html/form_data_event.h"
@@ -341,16 +342,6 @@ JSValue html_unknown_element_proto(JSContext *ctx)
     return proto;
 }
 
-/* §3.2.2 focus() and blur(). A headless run has no focus ring, and the spec defines no scriptable result for
-   either beyond moving the focus — which is a state this engine does not model — so each is a documented
-   no-effect rather than a value invented for it. click() is NOT one of these: it fires a real event, so it is
-   implemented where the dispatch machine is. */
-static JSValue js_html_focus(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    (void)ctx; (void)this_val; (void)argc; (void)argv; (void)magic;
-    return JS_UNDEFINED;
-}
-
 /* §3.2.2 `[SameObject] readonly attribute DOMStringMap dataset`. [SameObject] is an IDENTITY the IDL states, so
    the map is cached on the element's own wrapper: a page that stashes `el.dataset` and a later `el.dataset` must
    be holding the same object, and a fresh one per read makes every `===` against the stash false. The cache
@@ -479,10 +470,10 @@ void html_element_install_protos(JSContext *ctx)
     /* §4.13.2 `ElementInternals attachInternals()` — an HTMLElement member, installed on THIS realm's
        prototype like every other. */
     element_internals_install_html_members(ctx, html_p);
-    JS_SetPropertyStr(ctx, html_p, "focus",
-                      JS_NewCFunctionMagic(ctx, js_html_focus, "focus", 0, JS_CFUNC_generic_magic, 0));
-    JS_SetPropertyStr(ctx, html_p, "blur",
-                      JS_NewCFunctionMagic(ctx, js_html_focus, "blur", 0, JS_CFUNC_generic_magic, 1));
+    /* §6.6.6's `HTMLOrSVGOrMathMLElement` members — `focus(options)` and `blur()`, the two entry points of
+       §6.6.4's processing model. They were one body returning undefined; they are now the real algorithms,
+       which move the document's focused area and fire the page's focus handlers (core/html/focus.c). */
+    focus_install_html_members(ctx, html_p);
     JS_SetClassProto(ctx, g_html_class, JS_DupValue(ctx, html_p));
 
     unknown_p = JS_NewObjectProto(ctx, html_p);   /* §4: `interface HTMLUnknownElement : HTMLElement` */

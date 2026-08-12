@@ -41,6 +41,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/frame/navigable.h"
 #include "core/dom/page_visibility.h"
+#include "core/html/focus.h"
 #include "core/dom/document_fragment.h"
 #include "core/dom/shadow_root.h"
 #include "core/dom/slot.h"
@@ -1290,7 +1291,7 @@ static lxb_dom_node_t *doc_child_named(lxb_dom_node_t *parent, const char *a, co
 
 /* §4.5 "document element": the ELEMENT child of the document. There is at most one, and NULL is a real answer —
    a document §4.5's createDocument built with no qualified name has none. */
-static lxb_dom_node_t *doc_element_of(const lxb_dom_node_t *doc)
+lxb_dom_node_t *document_document_element_of(const lxb_dom_node_t *doc)
 {
     lxb_dom_node_t *n;
 
@@ -1300,6 +1301,15 @@ static lxb_dom_node_t *doc_element_of(const lxb_dom_node_t *doc)
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT)
             return n;
     return NULL;
+}
+
+/* §3.1.1's `body`, AS A LOOKUP ANOTHER COMPONENT CAN MAKE. HTML §6.6.6's `activeElement` ends in exactly these
+   two steps ("if candidate has a body element, return that body element; if candidate's document element is
+   non-null, return that document element"), and a second walk written there would be a second answer to a
+   question this file already answers — which is what made `document.body` a latched data property once. */
+lxb_dom_node_t *document_body_of(const lxb_dom_node_t *doc)
+{
+    return doc_child_named(document_document_element_of(doc), "body", "frameset");
 }
 
 /* DOM §2.7's DEFAULT PASSIVE VALUE names four targets, and three of them are this file's definitions: the node
@@ -1314,7 +1324,7 @@ bool document_is_passive_default_node(const lxb_dom_node_t *n)
     if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT)
         return true;
     doc = n->owner_document ? lxb_dom_interface_node(n->owner_document) : NULL;
-    return n == doc_element_of(doc) || n == doc_child_named(doc_element_of(doc), "body", "frameset");
+    return n == document_document_element_of(doc) || n == document_body_of(doc);
 }
 
 /* HTML's "the document's relevant global object", which §2.9's get the parent puts above a Document in the
@@ -1336,14 +1346,14 @@ static JSValue js_doc_tree(JSContext *ctx, JSValueConst this_val, int magic)
     /* WEB IDL §3.7.5's brand check — a TypeError, not an assert; see doc_receiver. */
     if (!doc || doc->type != LXB_DOM_NODE_TYPE_DOCUMENT)
         return JS_ThrowTypeError(ctx, "this is not a Document");
-    root = doc_element_of(doc);
+    root = document_document_element_of(doc);
     switch (magic) {
     case 0:
         return node_wrap(ctx, root);
     case 1:
         /* §3.1.1: "the first of the html element's children that is either a BODY or a FRAMESET element, or
            null" — a frameset document has no body at all, which is the parser following the spec. */
-        return node_wrap(ctx, doc_child_named(root, "body", "frameset"));
+        return node_wrap(ctx, document_body_of(doc));
     case 2:
         /* §3.1.1: "the first head element that is a child of the html element". */
         return node_wrap(ctx, doc_child_named(root, "head", NULL));
@@ -1715,6 +1725,10 @@ void document_init(JSContext *ctx)
        host's own init list, which is the hand-picked list CLAUDE.md warns about: three hosts each declaring
        their own is three places for the next component to be missing from one of. */
     page_visibility_init(ctx);
+    /* HTML §6.6's FOCUSED AREA is a Document's state too, and focus_install_document_members runs from
+       document_install_proto below for the same reason page_visibility_install does — so its declaration is
+       paired with it here rather than copied into each host's own init list. */
+    focus_init(ctx);
     realm_declare_intrinsic(document_install_proto);
 }
 
@@ -1740,6 +1754,9 @@ void document_install_proto(JSContext *ctx)
     node_install_nonelement_parent_mixin(ctx, proto);
     /* HTML §6.6's `visibilityState` and `hidden` — one source and the comparison the spec defines over it. */
     page_visibility_install(ctx, proto);
+    /* HTML §6.6.6's `activeElement` (DocumentOrShadowRoot) and `hasFocus()`, and this realm's INITIAL FOCUSED
+       AREA — the viewport, built with the realm so it is baseline rather than whichever flow read first. */
+    focus_install_document_members(ctx, proto);
     JS_SetClassProto(ctx, g_document_class, proto);
     /* THIS REALM'S DOCUMENT READINESS, built with the realm so it belongs to the pre-boot BASELINE — the same
        reason §8.9's map and §7.4.6.3's flag are built here. It exists before this realm has a Document at all,

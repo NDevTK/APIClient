@@ -31,8 +31,13 @@
  *     other; a C pointer on the lexbor element would be one answer for every flow, which is the defect class
  *     CLAUDE.md names as one fact answered from one place for many agents. A property write is captured.
  *
- * WHAT IS HONESTLY ABSENT, BY NAME — see SPEC_STEPS.md §17.6. `delegatesFocus`'s effect on focus, and HTML's
- * `DocumentOrShadowRoot` additions (`activeElement`, `styleSheets`).
+ * WHAT IS HONESTLY ABSENT, BY NAME — see SPEC_STEPS.md §17.6. HTML's `DocumentOrShadowRoot` addition
+ * `styleSheets`.
+ * `delegatesFocus` HAS ITS EFFECT as of HTML §6.6.4: it is what makes a host NOT a focusable area (§6.6.2's
+ * row 1) and what sends `get the focusable area` to the FOCUS DELEGATE, and core/html/focus.c reads it through
+ * shadow_root_flag below. The mixin's other addition, `activeElement`, is installed on this prototype by the
+ * same component — its getter RETARGETS the focused area against the receiver, which is why a ShadowRoot
+ * answers with its own tree's node and not with the document's.
  * `ShadowRootInit`'s `customElementRegistry` is no longer among them: §4.8's registry is a real parameter of
  * "attach a shadow root", attachShadow resolves steps 1-3 (this document's registry, the member's override,
  * and the NotSupportedError for one that is neither scoped nor this document's), and step 3.1's disable-shadow
@@ -57,6 +62,7 @@
 #include "core/dom/shadow_root.h"
 #include "core/events/event_target.h"
 #include "core/html/custom_elements.h"
+#include "core/html/focus.h"
 #include "core/html/fragment_serializer.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
@@ -721,6 +727,10 @@ void shadow_root_install_proto(JSContext *ctx)
     idl_install_method(ctx, proto, "setHTML", 1, g_id_set_html);
     idl_install_method(ctx, proto, "setHTMLUnsafe", 1, g_id_set_html_unsafe);
     fragment_serializer_install_get_html(ctx, proto);
+    /* HTML §6.6.6's `DocumentOrShadowRoot` addition. It is the same one member Document carries, over the same
+       focused area, and it is the RECEIVER that decides the answer: §4.8's retargeting against `this` is what
+       turns a focused node inside this tree into the node an observer of this tree may see. */
+    focus_install_shadow_root_members(ctx, proto);
     /* §4.8's ONE event handler IDL attribute. It is declared on ShadowRoot itself and not through
        GlobalEventHandlers, which is why it needs its own bit rather than riding EH_GLOBAL's mask. */
     event_target_install_handlers(ctx, proto, EH_SHADOW_ROOT);

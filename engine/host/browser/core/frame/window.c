@@ -45,6 +45,7 @@
 #include "core/url/url.h"
 #include "core/frame/bar_prop.h"
 #include "core/html/html_iframe.h"
+#include "core/html/focus.h"
 #include "core/frame/window_proxy.h"
 #include "core/events/event_target.h"
 #include "core/dom/collections.h"
@@ -78,10 +79,13 @@ static JSValue js_win_close(JSContext *ctx, JSValueConst this_val, int argc, JSV
     return JS_UNDEFINED;
 }
 
-/* §7.2.5's `focus()` and `blur()` move SYSTEM focus between windows, and §7.2.5 defines no scriptable result
-   for either — nothing observable to a script changes. This is the documented no-effect the IDL audit permits,
-   not a stub standing in for a value: there is no value to compute. `stop()` is the same shape here, because
-   this engine has no in-flight navigation to abort. */
+/* §6.6.6's `Window.blur()`, whose METHOD STEPS ARE "TO DO NOTHING" — the standard's own words, and the note
+   beside them says why: "historically, the focus() and blur() methods actually affected the system-level focus
+   of the system widget that contained the navigable, but hostile sites widely abuse this behavior to the user's
+   detriment". So this is the SPEC's no-effect and not this engine's; `Window.focus()` is NOT one of these and
+   is no longer here — §6.6.6 gives it real steps (the navigable, the allow focus steps, then §6.6.4's focusing
+   steps), which core/html/focus.c runs. `stop()` shares this body because this engine has no in-flight
+   navigation to abort. */
 static JSValue js_win_noeffect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     (void)ctx; (void)this_val; (void)argc; (void)argv; (void)magic;
@@ -412,7 +416,7 @@ static JSClassID g_window_props_class;
    A class id is a registration in the JSRuntime and there is one runtime per agent; a PROTOTYPE is an object,
    and §3.7 gives every realm its own, which is why `frames[0].Window.prototype !== Window.prototype` in a
    browser. So this registers, and window_install builds. */
-static int g_id_close, g_id_focus, g_id_blur, g_id_stop;   /* declared once per agent — see window_init */
+static int g_id_close, g_id_blur, g_id_stop;   /* declared once per agent — see window_init */
 static int g_id_opener_set;   /* §7.2.5's `opener` setter, declared with them for the same reason */
 
 void window_init(JSContext *ctx)
@@ -431,7 +435,6 @@ void window_init(JSContext *ctx)
     bar_prop_init(ctx);   /* §7.2.5.3's BarProp class, one per agent */
     g_id_opener_set = idl_setter_id(ctx, IDL_ANY, false, js_win_set_opener, 0);
     g_id_close = idl_method_id(ctx, NULL, 0, js_win_close, 0);
-    g_id_focus = idl_method_id(ctx, NULL, 0, js_win_noeffect, 0);
     g_id_blur  = idl_method_id(ctx, NULL, 0, js_win_noeffect, 1);
     g_id_stop  = idl_method_id(ctx, NULL, 0, js_win_noeffect, 2);
 }
@@ -518,7 +521,8 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     idl_install_accessor(ctx, g, "closed", js_win_closed, 0, -1);
     idl_install_replaceable(ctx, g, "length", js_win_length, 0);   /* [Replaceable] readonly */
     idl_install_method(ctx, g, "close", 0, g_id_close);
-    idl_install_method(ctx, g, "focus", 0, g_id_focus);
+    /* §6.6.6's `Window.focus()` — its OWN algorithm, installed by the component that owns §6.6.4's steps. */
+    focus_install_window_members(ctx, g);
     idl_install_method(ctx, g, "blur",  0, g_id_blur);
     idl_install_method(ctx, g, "stop",  0, g_id_stop);
 

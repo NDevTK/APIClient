@@ -84,6 +84,15 @@ JSValueConst document_window_of(const lxb_dom_node_t *n);
    node the document, its document element, or its body. */
 bool document_is_passive_default_node(const lxb_dom_node_t *n);
 
+/* §4.5's "DOCUMENT ELEMENT" and §3.1.1's `body`, AS FACTS ABOUT ONE DOCUMENT rather than about the running
+   realm — the two lookups HTML §6.6.6's `activeElement` getter ends in (steps 5-6), asked of the component
+   that already owns them so the focus model does not grow a second walk that disagrees at the edges (`body` is
+   the first BODY *or FRAMESET* child of the document element, which is the edge a second walk gets wrong).
+   NULL is a real answer for both: a frameset document has no body, and a `createDocument` with no qualified
+   name has no document element. */
+lxb_dom_node_t *document_document_element_of(const lxb_dom_node_t *doc);
+lxb_dom_node_t *document_body_of(const lxb_dom_node_t *doc);
+
 /* A SECOND DOCUMENT IN THIS REALM — what DOM §4.5.1's createDocument and createHTMLDocument return, and what
    HTML's `new Document()` builds. It has NO BROWSING CONTEXT: no navigable, no Window, no WindowProxy, and no
    scripts, which is why §3.1.1's `location` is null on it. It is NOT a second realm and NOT a second instance —
