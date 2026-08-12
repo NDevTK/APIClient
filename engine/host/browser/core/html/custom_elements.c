@@ -234,6 +234,14 @@ static bool ce_registry_this(JSContext *ctx, JSValueConst this_val)
     bool ok = JS_IsObject(rec);
 
     JS_FreeValue(ctx, rec);
+    /* THE TWO BRAND TESTS IN THIS FILE MUST AGREE, and this is where that is asserted rather than assumed.
+       One asks whether the object carries the class id, the other whether it carries the record; they are the
+       same question only because ce_registry_new does both in one place. If they ever disagree, a registry was
+       minted without its record, or an object is wearing the class without being one — and the previous version
+       of the class-id test disagreed with this one for every registry in existence with nothing to say so. */
+    DCHECK(ok == custom_elements_is_registry(this_val),
+           "a CustomElementRegistry's class-id brand and its internal-slot record disagree about the same "
+           "object — one of the two mints is incomplete");
     if (!ok) JS_ThrowTypeError(ctx, "not a CustomElementRegistry");
     return ok;
 }
@@ -336,9 +344,19 @@ static void ce_node_set_registry(JSContext *ctx, JSValueConst wrap, JSValueConst
  * latch and the key are all this component's, so a caller states WHICH node and WHICH registry and nothing
  * else. That is what keeps DOM's "once initialized it cannot be changed" a fact about the write instead of a
  * convention every writer has to remember. */
+/* THE BRAND IS THE CLASS ID, because this component deliberately has no opaque to ask about. §4.13.4's five
+   fields live in an own slot under a private symbol — the file's own header says why: a write to them is then
+   an ordinary property write the per-flow COW delta captures, so a definition committed in one arm of a fork is
+   invisible to its sibling for free. Nothing here ever calls JS_SetOpaque.
+   So the test this used to make — `JS_GetOpaque(v, g_registry_class) != NULL` — was NULL for every registry
+   this file has ever minted, and answered FALSE for the real thing. It was not merely an assert that fired:
+   §4.8's attachShadow and §4.9's create-an-element both run it as their step 2 BRAND CHECK, so a page handing
+   either one a genuine CustomElementRegistry got a TypeError, and the document's own registry could not pass
+   its own step 3. `JS_NewObjectProtoClass` stamps the class id at the mint and nothing in the language can
+   forge one, which is the whole of what a brand check needs. */
 bool custom_elements_is_registry(JSValueConst v)
 {
-    return g_registry_class != 0 && JS_GetOpaque(v, g_registry_class) != NULL;
+    return g_registry_class != 0 && JS_GetClassID(v) == g_registry_class;
 }
 
 bool custom_elements_registry_is_scoped(JSContext *ctx, JSValueConst reg)
