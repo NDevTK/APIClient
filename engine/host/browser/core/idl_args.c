@@ -71,6 +71,23 @@ static int64_t idl_int_convert(double x, int width, bool is_signed, bool clamp)
 }
 
 /* WHAT AN INTEGER TYPE IS, read off the declaration rather than remembered per call site. */
+/* Web IDL 3.2.16's BRAND TEST — "does this value IMPLEMENT the declared interface", which is a question about
+   its CLASS and nothing else. Every site below asked `JS_GetOpaque(v, iface)` instead, which is the class test
+   AND a second, unstated condition: that the object carries a NON-NULL OPAQUE PAYLOAD. Those two coincide only
+   for a component that keeps its state in one, and a component is free not to — core/html/custom_elements.c
+   keeps a registry's 4.13.4 fields in an own slot under a private symbol DELIBERATELY, so that a write to them
+   is an ordinary property write the per-flow COW delta captures and a definition committed in one arm of a fork
+   is invisible to its sibling. It calls JS_SetOpaque nowhere, so every CustomElementRegistry in existence
+   failed a brand test it is by definition the subject of.
+   JS_NewObjectProtoClass stamps the class id at the mint, nothing in the language can forge one, and
+   JS_GetClassID answers JS_INVALID_CLASS_ID for a non-object — which is the whole of what a brand needs. The
+   supplementary narrowing a class cannot express stays where it was, in idl_iface_narrow. */
+static bool idl_is_iface(JSValueConst v, JSClassID iface)
+{
+    DCHECK(iface != 0, "an interface brand test was made with no class to brand against");
+    return JS_GetClassID(v) == iface;
+}
+
 static bool idl_is_integer(IdlArgType t)
 {
     return t == IDL_LONG || t == IDL_UNSIGNED_LONG || t == IDL_UNSIGNED_SHORT ||
@@ -317,11 +334,24 @@ bool idl_declared_before_seal(int stepid)
    dictionary argument and a NESTED dictionary a sequence's element type names. */
 static void idl_dict_order_check(const IdlDictMember *members, int k)
 {
-    DCHECK(k == 0 || members[k].level > members[k - 1].level ||
-               (members[k].level == members[k - 1].level &&
-                strcmp(members[k - 1].name, members[k].name) < 0),
-           "a dictionary's members were declared out of §3.2.17's read order — inherited levels first, and "
-           "each level's own members lexicographically among themselves");
+    if (k == 0) return;
+    if (members[k].level > members[k - 1].level) return;
+    if (members[k].level == members[k - 1].level && strcmp(members[k - 1].name, members[k].name) < 0) return;
+#if APICLIENT_DEV
+    {
+        /* NAME THE PAIR. This used to abort with the RULE and nothing else, and the pool holds every dictionary
+           in the engine — so a reader standing at the abort had a search rather than a diagnosis, and the two
+           members that have to swap are the entire content of the answer. Building it costs a stack buffer on
+           a path that is about to abort. */
+        char why[320];
+        snprintf(why, sizeof why,
+                 "a dictionary's members were declared out of Web IDL 3.2.17's read order: `%s` (level %d) is "
+                 "declared after `%s` (level %d). Inherited levels come first, and each level's own members "
+                 "sort lexicographically among themselves",
+                 members[k].name, members[k].level, members[k - 1].name, members[k - 1].level);
+        DFAIL(why);
+    }
+#endif
 }
 
 /* THE INTERNED MEMBER NAMES OF A NESTED DICTIONARY. The atom must be live at both halves of a keyed read —
@@ -1035,7 +1065,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         if (t == IDL_STRING_UNLESS_IFACE) {
             DCHECK(m->iface != 0, "a member declared an interface-or-string union with no interface to brand "
                                   "against — the class is half of what that type states");
-            t = JS_GetOpaque(a, m->iface) ? IDL_ANY : IDL_DOMSTRING;
+            t = idl_is_iface(a, m->iface) ? IDL_ANY : IDL_DOMSTRING;
         }
 
         /* UNKNOWN EXTERNAL INPUT CROSSES AS ITSELF, whatever the declared type says.
@@ -1215,7 +1245,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                                 DCHECK(m->iface != 0,
                                        "a dictionary declared a sequence of an interface type with no class to "
                                        "brand against — idl_iface_brand is the other half of that type");
-                                if (!JS_GetOpaque(s->seq.value, m->iface) ||
+                                if (!idl_is_iface(s->seq.value, m->iface) ||
                                     (m->iface_narrow && !m->iface_narrow(s->seq.value))) {
                                     JS_ThrowTypeError(ctx, "an element of dictionary member `%s` does not "
                                                       "implement the declared interface", dm->name);
@@ -1259,7 +1289,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                        check of its own. */
                     DCHECK(m->iface != 0, "a dictionary declared an interface-typed member with no class to "
                                           "brand against — idl_iface_brand is the other half of that type");
-                    if (!JS_GetOpaque(s->dict_v, m->iface)) {
+                    if (!idl_is_iface(s->dict_v, m->iface)) {
                         JS_ThrowTypeError(ctx, "dictionary member `%s` does not implement the declared "
                                           "interface", dm->name);
                         return JS_STEP_ABRUPT;
@@ -1341,7 +1371,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                         DCHECK(m->iface != 0,
                                "an interface-sequence argument was declared with no class to brand against — "
                                "idl_iface_brand is the other half of that type");
-                        if (!JS_GetOpaque(s->seq.value, m->iface) ||
+                        if (!idl_is_iface(s->seq.value, m->iface) ||
                             (m->iface_narrow && !m->iface_narrow(s->seq.value))) {
                             JS_ThrowTypeError(ctx, "an element of argument %d does not implement the declared "
                                               "interface", s->i + 1);
@@ -1389,7 +1419,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             cb_result = JS_UNDEFINED;
             DCHECK(m->iface != 0, "an interface-typed argument was declared with no class to brand against — "
                                   "idl_iface_brand is the other half of that type");
-            if (!JS_GetOpaque(a, m->iface) || (m->iface_narrow && !m->iface_narrow(a))) {
+            if (!idl_is_iface(a, m->iface) || (m->iface_narrow && !m->iface_narrow(a))) {
                 JS_ThrowTypeError(ctx, "argument %d does not implement the declared interface", s->i + 1);
                 return JS_STEP_ABRUPT;
             }
