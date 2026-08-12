@@ -42,6 +42,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/css/css_color.h"
 #include "core/dom/attr_list.h"
 #include "core/dom/node.h"
 #include "core/html/html_form.h"
@@ -150,6 +151,26 @@ static JSValue iv_content_attr(JSContext *ctx, lxb_dom_element_t *el, const char
 static bool iv_has_attr(lxb_dom_element_t *el, const char *name)
 {
     return dom_attr_get_ns(el, NULL, name) != NULL;
+}
+
+/* §4.10.5.1.14's `colorspace` ENUMERATED ATTRIBUTE, whose two keywords name the Limited sRGB and Display P3
+   states and whose missing value default AND invalid value default are both Limited sRGB — so this answers the
+   one question that has an answer other than the default. An enumerated attribute's keywords are compared ASCII
+   case-insensitively, which is why `DISPLAY-P3` is the same state. */
+static bool iv_colorspace_is_display_p3(lxb_dom_element_t *el)
+{
+    static const char P3[] = "display-p3";
+    size_t len = 0, i;
+    const char *v = (const char *)lxb_dom_element_get_attribute(el, (const lxb_char_t *)"colorspace", 10, &len);
+
+    if (!v || len != sizeof P3 - 1) return false;
+    for (i = 0; i < len; i++) {
+        char c = v[i];
+
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (c != P3[i]) return false;
+    }
+    return true;
 }
 
 /* ---- §2.3.4.3's NUMBERS, as ONE walk answering the two questions §4.10.5 asks of a numeral -------------------
@@ -410,18 +431,45 @@ static JSValue iv_sanitize(JSContext *ctx, lxb_dom_element_t *el, HtmlInputState
                   "those parsers as their own component and answer this from them, as §4.10.5.3.7's underflow "
                   "and overflow and §4.10.5.3.8's step mismatch also must");
         break;
-    case INPUT_STATE_COLOR:
-        /* §4.10.5.1.14: "Run UPDATE A COLOR WELL CONTROL COLOR for the element" — parse the value as a CSS
-           color, use opaque black when that fails, and set the value to the SERIALIZATION of the result. The
-           failure branch is the whole of what is decidable with no CSS color parser, and it is the branch an
-           EMPTY value takes: `<input type=color>` reads back as `#000000`, never as the empty string. */
-        if (len)
-            DFAIL("an `input` in the Color state has a non-empty value — §4.10.5.1.14's value sanitization "
-                  "algorithm runs `update a color well control color`, and this engine has no CSS color "
-                  "parser; build that algorithm (a CSS color parse and the sRGB/display-p3 serialisation its "
-                  "`alpha` and `colorspace` attributes select) and sanitize from it");
-        iv_add(&b, "#000000", 7);
+    case INPUT_STATE_COLOR: {
+        /* §4.10.5.1.14: "Run UPDATE A COLOR WELL CONTROL COLOR for the element". That algorithm's step 2 picks
+           the value out of the element the same way this component's callers already did — the `value` content
+           attribute while the dirty value flag is false, the element's own value otherwise — so `value` IS its
+           result, and steps 3 and 4 are the rest of it: PARSE the value as a CSS color, fall to OPAQUE BLACK
+           when the parse returns failure, and set the value to `serialize a color well control color`. The
+           failure branch is the one an EMPTY value takes, which is why `<input type=color>` reads back as
+           `#000000` and never as the empty string. */
+        CssColor c;
+        char hex[8];
+
+        /* `serialize a color well control color` steps 3 and 4. The Limited sRGB state with no `alpha`
+           attribute is the branch that ends in §16.2.1's HTML-compatible serialization — the `#rrggbb` form —
+           and it is the only branch reached without the `color()` function, which the CSS grammar this engine
+           binds to does not have in either direction. */
+        if (iv_has_attr(el, "alpha"))
+            DFAIL("an `input` in the Color state has an `alpha` attribute — §4.10.5.1.14's `serialize a color "
+                  "well control color` then KEEPS the colour's alpha component (step 3 makes it fully opaque "
+                  "only when the attribute is absent) and step 4.4 converts the colour using the `color()` "
+                  "function, so the value serializes as `color(srgb R G B / A)` rather than as a hex colour. "
+                  "That form needs two things this engine has not built: CSS Color 4 §16.2.2's `color()` "
+                  "serialization, and the `color()` PARSE that reads the control's own value back (lexbor's "
+                  "<color> grammar answers failure for it, and css_color_parse resolves a `none` component to "
+                  "0 where that serialization must preserve it) — build both in core/css/css_color.c");
+        if (iv_colorspace_is_display_p3(el))
+            DFAIL("an `input` in the Color state has its `colorspace` attribute in the Display P3 state — "
+                  "§4.10.5.1.14's `serialize a color well control color` step 5 converts the colour to the "
+                  "'display-p3' colour space and serializes it as `color(display-p3 R G B)`. That needs CSS "
+                  "Color 4 §17's sRGB-to-Display-P3 conversion, §16.2.2's `color()` serialization, and the "
+                  "`color()` PARSE that reads the control's own value back — build all three in "
+                  "core/css/css_color.c");
+        if (!css_color_parse(s, len, &c)) c = CSS_COLOR_OPAQUE_BLACK;   /* step 3's opaque black */
+        /* Step 3 of the serialization: the `alpha` attribute is not specified — established above — so the
+           colour's alpha component is set fully opaque, which is also what makes §16.2.1's form apply. */
+        c.a = 1.0;
+        css_color_serialize_html(&c, hex);
+        iv_add(&b, hex, 7);
         break;
+    }
     default:
         DFAIL("a state of the `type` attribute reached §4.10.5.1's value sanitization with no algorithm named "
               "for it — every one of §4.10.5.1's twenty-one sections either defines one or defines none, so "

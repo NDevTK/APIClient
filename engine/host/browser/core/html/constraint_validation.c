@@ -13,7 +13,8 @@
  * conditioned by §4.10.19.3 and §4.10.19.4 on the value having been "last changed by a USER EDIT", and
  * `badInput` is stated by every input state as a fact about what "the user interface is representing" — this
  * engine has no user, so the conditions are false, not skipped. The one exception is the Color state, whose
- * bad-input clause is about the VALUE and not the interface, and it crashes naming what it needs.
+ * bad-input clause is about the VALUE and not the interface: it is "parsing it returns failure", the same CSS
+ * Color 4 parse §4.10.5.1.14's value sanitization runs, and both ask core/css/css_color.c.
  *
  * AN UNKNOWN VALUE FORKS. A control whose value came from unknown external input (`input.value =
  * location.hash`) makes "does this control satisfy its constraints" a question with two feasible answers, and
@@ -30,6 +31,7 @@
 #include "libregexp.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/css/css_color.h"
 #include "core/dom/attr_list.h"
 #include "core/dom/node.h"
 #include "core/events/event.h"
@@ -728,11 +730,21 @@ static uint32_t cv_states(JSContext *ctx, JSValueConst wrap, const CvValue *v, i
         if (cv_has(el, "required")) flags |= 1u << CV_VALUE_MISSING;
         return flags;
     }
-    if (st == INPUT_STATE_COLOR && (v->unknown || v->len)) {
-        DFAIL("an `input` in the Color state has a non-empty value — §4.10.5.1.14 makes it SUFFERING FROM BAD "
-              "INPUT while parsing that value returns failure, and this engine has no CSS color parser; build "
-              "§4.10.5.1.14's `update a color well control color` (a CSS color parse and the sRGB/display-p3 "
-              "serialisation its `alpha` and `colorspace` attributes select) and answer bad input from it");
+    if (st == INPUT_STATE_COLOR) {
+        /* §4.10.5.1.14: "While the element's value is not the empty string and PARSING IT returns failure, the
+           control is suffering from bad input." That parse is CSS Color 4's `parse a CSS <color> value` — the
+           same one §4.10.5.1.14's sanitization runs — so the two answer from one component and cannot drift:
+           a value the sanitizer serialized is by construction one this parse accepts, and a value that reaches
+           here unparseable is one the sanitizer never saw. Returning here is the state's own answer and not a
+           shortcut: §4.10.5.1.14 lists `required`, `pattern`, `min`, `max`, `step`, `maxlength` and `minlength`
+           among the attributes that do not apply to it, so no constraint below is stated over a colour. */
+        if (v->unknown) { if (*punknown_bit < 0) *punknown_bit = CV_BAD_INPUT; }
+        else if (v->len) {
+            CssColor c;
+
+            if (!css_color_parse(v->s, v->len, &c)) flags |= 1u << CV_BAD_INPUT;
+        }
+        return flags;
     }
 
     /* §4.10.5.3.4: required, its `value` IDL attribute applies and is in the mode VALUE, the element is
