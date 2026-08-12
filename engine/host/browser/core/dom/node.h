@@ -2,7 +2,9 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_NODE_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_NODE_H
 #include <lexbor/dom/dom.h>
+#include <stdbool.h>
 #include "quickjs.h"
+#include "quickjs-step.h"
 
 void node_init(JSContext *ctx);
 /* §4.4's prototypes for ONE realm — Node, CharacterData, Text, Comment. Declared into core/realm.h's list. */
@@ -115,6 +117,82 @@ lxb_dom_node_t *node_split_text(JSContext *ctx, lxb_dom_node_t *node, uint32_t o
    Exported because §5.5's content-moving members are all stated over pre-insert and append; a second copy of
    the fragment rule is how fragments quietly stop working. `ref` NULL appends. */
 void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref);
+
+/* DOM §4.4 "CLONE A NODE" — THE ALGORITHM, DELEGATABLE, so the one implementation is the one every caller runs.
+ *
+ * §5.5's extract and clone-the-contents are stated over it in six places ("let clone be a clone of
+ * originalStartNode", "a clone of contained child with subtree set to true"), and a caller that copies a node
+ * itself instead is not a shortcut — it is a DIFFERENT algorithm with step 3 (the cloning steps HTML defines for
+ * `input`, `textarea`, `script` and `template`) and step 6 (a clonable shadow root, which is cloned even when
+ * subtree is false) missing from it, silently, per node. So the algorithm is exported rather than the member.
+ *
+ * A CALLER PERFORMS IT INSIDE ITS OWN MACHINE, which is what makes it parkable at every node of a subtree the
+ * page chose the depth of: declare the six stages inside the caller's own stage block with
+ * NODE_CLONE_ALGO_STAGES, embed a NodeCloneState, chain node_clone_visit_state / node_clone_release_state into
+ * the caller's visit and release, and hand node_clone_run the base of that block. Stage identity is the LABEL,
+ * so the list is expanded once per caller with that caller's own leading text and its own prefix.
+ *
+ * THIS IS THE `parent`-NULL FORM. §4.4's step 4 ("if parent is non-null, then append copy to parent") is what
+ * the walk does for every DESCENDANT; both callers of the entry are stated over a null parent and append the
+ * copy where their own steps say to — cloneNode returns it, §5.5 appends it to the fragment. */
+#define NODE_CLONE_ALGO_STAGES(X, P, W) \
+    X(P##_ROOT,     W " → DOM §4.4 clone a node steps 1-2 (clone a single node: the root of the copy)") \
+    X(P##_COPY,     W " → DOM §4.4 clone a node steps 2 and 4 (clone a single node; append copy to parent), " \
+                      "one descendant per step") \
+    X(P##_TEMPLATE, W " → DOM §4.4 clone a node step 3 (HTML §4.12.3 the template element's cloning steps)") \
+    X(P##_CHILDREN, W " → DOM §4.4 clone a node step 5 (for each child of node's children, in tree order)") \
+    X(P##_SHADOW,   W " → DOM §4.4 clone a node step 6 (a shadow host's clonable shadow root: steps 6.1-6.7 " \
+                      "attach it onto the copy, 6.8 clones its children), after step 5") \
+    X(P##_LEAVE,    W " → DOM §4.4 clone a node step 7 (return copy): this node's clone is complete, and step " \
+                      "5's loop over its parent's children advances")
+
+/* A LEVEL of the walk — a tree reached OTHER THAN through child links, which is a `<template>`'s content
+   fragment (HTML §4.12.3's cloning steps) and a shadow tree (§4.4 step 6.8). `stage` is where the level that
+   pushed this frame RESUMES, and it is not the same for the two: a template's content is cloned by step 3, so
+   the element's own step 5 is still to come, while a shadow tree is cloned by step 6, after which only step 7
+   remains. A frame with no resume stage is what made step 6 unimplementable — popping back always meant
+   "children next", so a shadow descent would have re-walked the light children it was standing after. */
+typedef struct NodeCloneFrame {
+    lxb_dom_node_t *src, *dst, *root, *croot, *cnode;
+    bool deep;
+    int  stage;
+} NodeCloneFrame;
+
+typedef struct NodeCloneState {
+    lxb_dom_node_t *src;     /* the cursor in the original */
+    lxb_dom_node_t *root;    /* what bounds the CURRENT level of the walk */
+    lxb_dom_node_t *dst;     /* the copy the next child is inserted into */
+    lxb_dom_node_t *copy;    /* the copy's root — the ANSWER, read by the caller at its resume stage */
+    /* §4.4's `document` ARGUMENT: the document every "clone a single node" creates its copy in. It is node's
+       node document for every ordinary clone and the COPY for a document ("if node is a document, then set
+       document to copy"), which is the whole of what makes a cloned Document's tree belong to the clone. */
+    lxb_dom_document_t *doc;
+    /* THE PRIVATE-TREE DECLARATION FOR THE CURRENT LEVEL, which is not always `copy`. A `<template>`'s content
+       is a SEPARATE tree — reached through the element's `content` field, not through child links — so once the
+       walk descends into it, the tree being built into is that fragment. It is private for the same reason the
+       copy is: clone_interface made it a moment ago and nothing has ever seen it. A cloned shadow tree is the
+       second such tree, reached through §4.9's association instead. */
+    lxb_dom_node_t *croot;
+    lxb_dom_node_t *cnode;   /* the copy of `src` — what its own children get inserted under */
+    /* `clone a node`'s `subtree` FOR THE CURRENT LEVEL, which is not one value for the whole call: step 5 is
+       conditioned on it, HTML §4.12.3 returns early without it, and step 6.8 passes TRUE regardless — so
+       `host.cloneNode(false)` clones no light children and the whole shadow tree. */
+    bool deep;
+    int  after;              /* the CALLER's stage this algorithm hands control back at, with `copy` filled */
+    NodeCloneFrame *stack;   /* the levels above this one */
+    int sp, scap;
+} NodeCloneState;
+
+/* Begin `clone a node` given `node` and `subtree`. `base` is where the caller declared the algorithm's stage
+   block and `after` is the caller's own stage it resumes at with `s->copy` filled in. Every field the walk
+   reads is placed here, before the first step that can allocate or throw. */
+void node_clone_start(JSStepHdr *hdr, NodeCloneState *s, lxb_dom_node_t *node, bool subtree, int base, int after);
+/* ONE STAGE of it. JS_STEP_YIELD to rest, JS_STEP_ABRUPT having thrown; the finish sets `hdr->stage` to the
+   caller's `after`, so a caller never tests for completion. */
+int  node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base);
+/* The caller's own visit and release chain into these — the level stack is this state's allocation. */
+void node_clone_visit_state(JSContext *ctx, NodeCloneState *s, JSStepVisit *v);
+void node_clone_release_state(JSContext *ctx, NodeCloneState *s);
 /* An ELEMENT's interface is decided by its TAG — HTML's element-interface table, which is the html layer's
    knowledge. It registers the answer here; node_wrap asks it and stays the one place a wrapper is built. */
 void node_set_element_resolver(JSValue (*fn)(JSContext *ctx, lxb_dom_element_t *el));
