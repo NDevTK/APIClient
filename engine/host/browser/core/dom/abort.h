@@ -5,6 +5,7 @@
 
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/events/event_target.h"   /* EventFireCb — the width of the fire request this machine parks on */
 
 void abort_init(JSContext *ctx);
 /* §3.2's two prototypes for ONE realm — declared into core/realm.h's list. */
@@ -49,7 +50,7 @@ typedef struct {
     JSValue  targets;  /* §3.2 steps 5-6: the signal, then each dependentSignal that took its reason (owned) */
     JSValue  algos;    /* the current target's algorithm snapshot (owned) */
     JSValue  ev;       /* the current target's `abort` event, held across the dispatch (owned) */
-    JSValue  cb[4];    /* the request buffer: four slots, because the fire needs [this, fn, target, event] */
+    EventFireCb  cb;    /* the request buffer: four slots, because the fire needs [this, fn, target, event] */
 } AbortSignalWork;
 
 void abort_signal_work_start(AbortSignalWork *w);

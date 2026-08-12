@@ -619,7 +619,7 @@ typedef struct JSEiValidityState {
     uint8_t   answer;   /* the boolean the steps return, yielded by fini — a machine's result IS its fini's */
     JSValue   el;       /* the target element, resolved at step 1 and held across the suspension (owned) */
     JSValue   ev;       /* the `invalid` event, minted once (owned) */
-    JSValue   cb[4];    /* the fire request buffer: [this, dispatch, target, event] */
+    EventFireCb   cb;    /* the fire request buffer: [this, dispatch, target, event] */
 } JSEiValidityState;
 
 static void js_ei_validity_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -629,7 +629,7 @@ static void js_ei_validity_visit(JSContext *ctx, void *st, JSStepVisit *v)
 
     v->val(ctx, &s->el);
     v->val(ctx, &s->ev);
-    for (k = 0; k < 4; k++) v->val(ctx, &s->cb[k]);
+    STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
 }
 
 static JSValue js_ei_validity_fini(JSContext *ctx, void *st, bool take_result)
@@ -640,7 +640,7 @@ static JSValue js_ei_validity_fini(JSContext *ctx, void *st, bool take_result)
     JS_FreeValue(ctx, s->el);
     JS_FreeValue(ctx, s->ev);
     s->el = s->ev = JS_UNDEFINED;
-    for (k = 0; k < 4; k++) {
+    STEP_CB_FOREACH(s->cb, k) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
     }
@@ -664,7 +664,7 @@ static int js_ei_validity_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
            through js_ei_validity_fini, which frees exactly what the state holds and nothing else. */
         s->el = s->ev = JS_UNDEFINED;
         s->answer = 0;
-        for (k = 0; k < 4; k++) s->cb[k] = JS_UNDEFINED;
+        STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
         s->el = ei_face_target_or_throw(ctx, s->hdr.this_val);
         if (!JS_IsObject(s->el)) return JS_STEP_ABRUPT;
         /* Step 1's condition. A candidate that satisfies its constraints fires nothing and answers true —

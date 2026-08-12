@@ -594,7 +594,7 @@ struct ConstraintValidationRun {
     JSValue   field;       /* the control step 3.2 is asking about, held across its suspensions (owned) */
     JSValue   value;       /* that control's value, held for the same reason (owned) */
     JSValue   ev;          /* step 5.1's `invalid` event (owned) */
-    JSValue   cb[4];       /* the fire request buffer: [this, dispatch, target, event] */
+    EventFireCb   cb;       /* the fire request buffer: [this, dispatch, target, event] */
     CvMatcher *m;          /* the compiled pattern and the subject, shared by reference */
     uint8_t  **capture;    /* the executor's capture/register block, this arm's own */
     int       cap_alloc;
@@ -614,7 +614,7 @@ static void cv_run_elem_visit(JSContext *ctx, void *elem, JSStepVisit *v)
     v->val(ctx, &r->field);
     v->val(ctx, &r->value);
     v->val(ctx, &r->ev);
-    for (k = 0; k < 4; k++) v->val(ctx, &r->cb[k]);
+    STEP_CB_FOREACH(r->cb, k) v->val(ctx, &r->cb[k]);
     v->shared(ctx, (void **)&r->m, r->m ? &r->m->refs : NULL, cv_matcher_destroy);
     /* ORDER: the capture block is copied first so the executor's context can be re-pointed at whichever copy it
        now belongs to. Its remaining pointers aim into the compiled program and the subject, and the matcher
@@ -647,7 +647,7 @@ void constraint_validation_release(JSContext *ctx, ConstraintValidationRun **slo
     JS_FreeValue(ctx, r->controls);
     JS_FreeValue(ctx, r->invalid);
     JS_FreeValue(ctx, r->ev);
-    for (k = 0; k < 4; k++) JS_FreeValue(ctx, r->cb[k]);
+    STEP_CB_FOREACH(r->cb, k) JS_FreeValue(ctx, r->cb[k]);
     js_free(ctx, r);
     *slot = NULL;
 }
@@ -970,7 +970,7 @@ int constraint_validation_interactively_run(JSContext *ctx, JSStepHdr *h, Constr
         /* EVERY owned field before anything that can fail: an abandoned run is released through the one
            declaration, which frees exactly what the state holds and nothing else. */
         r->controls = r->invalid = r->field = r->value = r->ev = JS_UNDEFINED;
-        for (k = 0; k < 4; k++) r->cb[k] = JS_UNDEFINED;
+        STEP_CB_FOREACH(r->cb, k) r->cb[k] = JS_UNDEFINED;
         r->phase = CVR_COLLECT;
         r->fld_phase = CVF_STATES;
         /* Step 1: "let controls be a list of all the submittable elements whose form owner is form, in tree

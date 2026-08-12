@@ -279,7 +279,7 @@ void form_entry_list_init(FormEntryListRun *r)
     r->controls = JS_UNDEFINED;
     r->entries = JS_UNDEFINED;
     r->ev = JS_UNDEFINED;
-    for (k = 0; k < 4; k++) r->cb[k] = JS_UNDEFINED;
+    STEP_CB_FOREACH(r->cb, k) r->cb[k] = JS_UNDEFINED;
 }
 
 void form_entry_list_visit(JSContext *ctx, FormEntryListRun *r, JSStepVisit *v)
@@ -290,7 +290,7 @@ void form_entry_list_visit(JSContext *ctx, FormEntryListRun *r, JSStepVisit *v)
     v->val(ctx, &r->controls);
     v->val(ctx, &r->entries);
     v->val(ctx, &r->ev);
-    for (k = 0; k < 4; k++)
+    STEP_CB_FOREACH(r->cb, k)
         v->val(ctx, &r->cb[k]);
 }
 
@@ -310,7 +310,7 @@ void form_entry_list_release(JSContext *ctx, FormEntryListRun *r)
     JS_FreeValue(ctx, r->entries);
     JS_FreeValue(ctx, r->ev);
     r->form = r->controls = r->entries = r->ev = JS_UNDEFINED;
-    for (k = 0; k < 4; k++) {
+    STEP_CB_FOREACH(r->cb, k) {
         JS_FreeValue(ctx, r->cb[k]);
         r->cb[k] = JS_UNDEFINED;
     }

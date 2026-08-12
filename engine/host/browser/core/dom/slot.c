@@ -530,7 +530,7 @@ void slot_change_work_start(SlotChangeWork *w)
     w->fphase = 0;
     w->i = 0;
     w->set = w->ev = JS_UNDEFINED;
-    for (k = 0; k < 4; k++) w->cb[k] = JS_UNDEFINED;
+    STEP_CB_FOREACH(w->cb, k) w->cb[k] = JS_UNDEFINED;
 }
 
 void slot_change_work_visit(JSContext *ctx, SlotChangeWork *w, JSStepVisit *v)
@@ -538,7 +538,7 @@ void slot_change_work_visit(JSContext *ctx, SlotChangeWork *w, JSStepVisit *v)
     int k;
     v->val(ctx, &w->set);
     v->val(ctx, &w->ev);
-    for (k = 0; k < 4; k++) v->val(ctx, &w->cb[k]);
+    STEP_CB_FOREACH(w->cb, k) v->val(ctx, &w->cb[k]);
 }
 
 void slot_change_work_release(JSContext *ctx, SlotChangeWork *w)
@@ -547,7 +547,7 @@ void slot_change_work_release(JSContext *ctx, SlotChangeWork *w)
     JS_FreeValue(ctx, w->set);
     JS_FreeValue(ctx, w->ev);
     w->set = w->ev = JS_UNDEFINED;
-    for (k = 0; k < 4; k++) { JS_FreeValue(ctx, w->cb[k]); w->cb[k] = JS_UNDEFINED; }
+    STEP_CB_FOREACH(w->cb, k) { JS_FreeValue(ctx, w->cb[k]); w->cb[k] = JS_UNDEFINED; }
 }
 
 void slot_signal_slots_take(JSContext *ctx, SlotChangeWork *w)

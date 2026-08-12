@@ -24,7 +24,7 @@ static const char *feat_normalize(const char *name)
     if (!strcmp(name, "screeny"))     return "top";
     if (!strcmp(name, "innerwidth"))  return "width";
     if (!strcmp(name, "innerheight")) return "height";
-    return name;
+    return NULL;   /* not an alias — the caller keeps the name it already owns */
 }
 
 /* §7.4's PARSE A BOOLEAN FEATURE, exactly. The empty string is TRUE — which is what makes bare `popup` and
@@ -46,29 +46,66 @@ static bool feat_parse_bool(const char *value)
     return parsed != 0;
 }
 
-/* THE TOKENIZED MAP, as a flat list. A features string has a handful of entries and the spec's map is ORDERED
-   with later entries overwriting earlier ones by name, so a list with a linear lookup IS the ordered map — a
-   hash here would be machinery for six entries. */
-#define FEAT_MAX 32
-typedef struct { char name[32]; char value[32]; } Feature;
-typedef struct { Feature e[FEAT_MAX]; int n; } FeatureMap;
+/* THE TOKENIZED MAP, as a flat list. The spec's map is ORDERED with later entries overwriting earlier ones by
+   name, so a list with a linear lookup IS the ordered map — a hash here would be machinery for six entries.
+   THE ENTRIES AND THE STRINGS ARE HEAP-OWNED AND UNBOUNDED. They were `char name[32]; char value[32];` in a
+   32-slot array, and all three of those limits changed answers rather than merely dropping tails: two names
+   agreeing in their first 31 characters became ONE entry with the later value, so a page could overwrite an
+   entry it never named; a value whose significant digits sat past the cut parsed differently from the value the
+   page wrote (`left=` followed by thirty zeroes and a one is TRUE and truncates to FALSE); and the 33rd entry
+   vanished, which decides the popup check outright when the entry it dropped was `popup`. A cap that changes an
+   answer is not a tail being dropped, and the map the algorithm is defined over has no size in it. */
+typedef struct { char *name; char *value; } Feature;
+typedef struct { Feature *e; int n, cap; } FeatureMap;
 
-static void feat_set(FeatureMap *m, const char *name, const char *value)
+/* An ASCII-lowercased copy of exactly `len` bytes. Both the name and the value are lowercased by §7.4, and both
+   are page-controlled and of page-controlled length, so the length is measured and the copy is sized to it. */
+static char *feat_dup_lower(const char *s, size_t len)
+{
+    char *d = malloc(len + 1);
+    size_t i;
+    CHECK(d != NULL, "window feature token allocation failed");
+    for (i = 0; i < len; i++) d[i] = ascii_lower(s[i]);
+    d[len] = 0;
+    return d;
+}
+
+static void feat_map_init(FeatureMap *m) { m->e = NULL; m->n = 0; m->cap = 0; }
+
+static void feat_map_free(FeatureMap *m)
+{
+    int i;
+    for (i = 0; i < m->n; i++) { free(m->e[i].name); free(m->e[i].value); }
+    free(m->e);
+    feat_map_init(m);
+}
+
+/* TAKES OWNERSHIP of both strings, on every path. The map is the only owner once they are handed over, and a
+   replace frees the value it displaced — the name it displaced is the one already stored, so the caller's name
+   is freed instead and the map's key stays the pointer the earlier entry established. */
+static void feat_set(FeatureMap *m, char *name, char *value)
 {
     int i;
     /* §7.4's map is keyed by name: a repeated name REPLACES, which is what `,left=1,left=2,` means. */
     for (i = 0; i < m->n; i++) {
         if (!strcmp(m->e[i].name, name)) {
-            snprintf(m->e[i].value, sizeof m->e[i].value, "%s", value);
+            free(m->e[i].value);
+            m->e[i].value = value;
+            free(name);
             return;
         }
     }
-    /* A features string longer than this carries sizing requests a headless engine has no window to apply, so
-       dropping the tail changes no answer this component gives — but it must not be silent about the ones it
-       DOES give, and all three of those are named features that appear early. */
-    if (m->n >= FEAT_MAX) return;
-    snprintf(m->e[m->n].name, sizeof m->e[m->n].name, "%s", name);
-    snprintf(m->e[m->n].value, sizeof m->e[m->n].value, "%s", value);
+    if (m->n == m->cap) {
+        int cap = m->cap ? m->cap * 2 : 8;
+        Feature *e = realloc(m->e, (size_t)cap * sizeof *e);
+        /* A dropped feature is a different popup answer and a different navigable, so this is one of the
+           allocation failures CLAUDE.md names as always-fatal rather than a dev-only invariant. */
+        CHECK(e != NULL, "window feature map growth failed");
+        m->e = e;
+        m->cap = cap;
+    }
+    m->e[m->n].name = name;
+    m->e[m->n].value = value;
     m->n++;
 }
 
@@ -82,6 +119,8 @@ static void feat_remove(FeatureMap *m, const char *name)
     int i;
     for (i = 0; i < m->n; i++) {
         if (!strcmp(m->e[i].name, name)) {
+            free(m->e[i].name);
+            free(m->e[i].value);
             /* The map is ORDERED and the order is the page's; closing the gap preserves it. */
             memmove(&m->e[i], &m->e[i + 1], (size_t)(m->n - i - 1) * sizeof m->e[0]);
             m->n--;
@@ -117,17 +156,18 @@ static void feat_tokenize(const char *features, FeatureMap *m)
     const char *p = features, *end = features + strlen(features);
 
     while (p < end) {
-        char name[32], value[32];
-        size_t n = 0;
+        const char *name_at, *value_at = NULL;
+        size_t name_len, value_len = 0;
+        const char *alias;
+        char *name, *value;
 
         /* Step 3.3: skip a run of feature separators. */
         while (p < end && feat_sep(*p)) p++;
-        /* Step 3.4: the NAME is everything up to a separator or `=`, ASCII-lowercased. */
-        while (p < end && !feat_sep(*p)) {
-            if (n + 1 < sizeof name) name[n++] = ascii_lower(*p);
-            p++;
-        }
-        name[n] = 0;
+        /* Step 3.4: the NAME is everything up to a separator or `=`, ASCII-lowercased. Its EXTENT is taken
+           first and the copy is sized from it, so the name the map stores is the name the page wrote. */
+        name_at = p;
+        while (p < end && !feat_sep(*p)) p++;
+        name_len = (size_t)(p - name_at);
 
         /* Step 3.6: advance to the `=`, stopping at a `,` or at anything that is not a separator — so
            `left , = 141` still reaches the `=` while `left , 141` does not. */
@@ -136,7 +176,6 @@ static void feat_tokenize(const char *features, FeatureMap *m)
             p++;
         }
 
-        value[0] = 0;
         /* Step 3.7: if we are standing on a separator, the VALUE follows — after skipping the run of
            separators that is not a comma. */
         if (p < end && feat_sep(*p)) {
@@ -144,16 +183,47 @@ static void feat_tokenize(const char *features, FeatureMap *m)
                 if (*p == ',') break;
                 p++;
             }
-            n = 0;
-            while (p < end && !feat_sep(*p)) {
-                if (n + 1 < sizeof value) value[n++] = ascii_lower(*p);
-                p++;
-            }
-            value[n] = 0;
+            value_at = p;
+            while (p < end && !feat_sep(*p)) p++;
+            value_len = (size_t)(p - value_at);
         }
 
         /* Step 3.8: an empty name contributes nothing — which is what makes `,,,` and trailing commas inert. */
-        if (name[0]) feat_set(m, feat_normalize(name), value);
+        if (name_len == 0) continue;
+
+        name = feat_dup_lower(name_at, name_len);
+        value = value_at ? feat_dup_lower(value_at, value_len) : feat_dup_lower("", 0);
+        /* The four legacy aliases REPLACE the name, so the tokenized one is released here rather than leaking
+           behind a literal the map would then own inconsistently with every other key. */
+        alias = feat_normalize(name);
+        if (alias) { free(name); name = feat_dup_lower(alias, strlen(alias)); }
+        feat_set(m, name, value);
+    }
+}
+
+/* §7.4's CHECK IF A POPUP WINDOW IS REQUESTED, over what is LEFT after steps 6-8 removed the two.
+   Step 1: an empty map is a TAB. Step 2: `popup` decides on its own when present. Otherwise the question is
+   whether the features ask for the FULL set of chrome, and any one missing makes it a popup — so the DEFAULTS
+   are the whole of the answer and they are written beside each name. `resizable` defaults TRUE and every other
+   one defaults false, which is why `open(url, name, "resizable=no")` is a popup and
+   `location=yes,toolbar=yes,menubar=yes,scrollbars=yes,status=yes` is a tab.
+   IT IS A FUNCTION because the map is now heap-owned: the four early returns this used to be spelled as each
+   needed the release repeated, and a release repeated at four exits is the shape that grows a fifth exit
+   without one. */
+static bool feat_popup_requested(const FeatureMap *m)
+{
+    const char *v;
+
+    if (m->n == 0) return false;
+    if ((v = feat_get(m, "popup")) != NULL) return feat_parse_bool(v);
+    {
+        bool location = feat_is_set(m, "location", false);
+        bool toolbar  = feat_is_set(m, "toolbar",  false);
+        return !(location || toolbar)
+            || !feat_is_set(m, "menubar",    false)
+            || !feat_is_set(m, "resizable",  true)
+            || !feat_is_set(m, "scrollbars", false)
+            || !feat_is_set(m, "status",     false);
     }
 }
 
@@ -163,7 +233,7 @@ WindowFeatures window_features_parse(const char *features)
     FeatureMap m;
     const char *v;
 
-    m.n = 0;
+    feat_map_init(&m);
     /* §7.4 takes `optional DOMString features = ""`, so an absent third argument is the empty string and
        tokenizes to nothing. A caller that has none passes NULL. */
     if (!features || !*features) return f;
@@ -172,18 +242,12 @@ WindowFeatures window_features_parse(const char *features)
 
     /* §7.4 steps 6-8, IN THIS ORDER: read each of the two, REMOVE it from the map, then let `noreferrer` imply
        `noopener` — a window with no referrer has no opener either, because the opener is how it would have
-       one. The removal is what makes the popup check below see the map the spec hands it. */
+       one. The removal is what makes the popup check below see the map the spec hands it. Each value is PARSED
+       before its entry is removed, because the removal frees the bytes `v` points at. */
     if ((v = feat_get(&m, "noopener")) != NULL)   { f.noopener   = feat_parse_bool(v); feat_remove(&m, "noopener"); }
     if ((v = feat_get(&m, "noreferrer")) != NULL) { f.noreferrer = feat_parse_bool(v); feat_remove(&m, "noreferrer"); }
     if (f.noreferrer) f.noopener = true;
 
-    /* §7.4's CHECK IF A POPUP WINDOW IS REQUESTED, over what is LEFT.
-       Step 1: an empty map is a TAB. Step 2: `popup` decides on its own when present. Otherwise the question
-       is whether the features ask for the FULL set of chrome, and any one missing makes it a popup — so the
-       DEFAULTS are the whole of the answer and they are written beside each name. `resizable` defaults TRUE
-       and every other one defaults false, which is why `open(url, name, "resizable=no")` is a popup and
-       `location=yes,toolbar=yes,menubar=yes,scrollbars=yes,status=yes` is a tab. */
-    if (m.n == 0) return f;
     /* A WINDOW WITH NO OPENER IS NOT A POPUP, and this one is stated from the corpus rather than from my
        reading of the algorithm above — which is why it is written out here instead of folded in silently.
        window-open-popup-behavior.html asserts a TAB for EVERY features string with `noopener` or `noreferrer`
@@ -193,19 +257,8 @@ WindowFeatures window_features_parse(const char *features)
        the observable rule is this one; if §7.4's prose turns out to place it elsewhere (in the rules for
        choosing a navigable, which is where `noopener` changes what gets created), it moves there rather than
        changing what it says. */
-    if (f.noopener) return f;
-    if ((v = feat_get(&m, "popup")) != NULL) {
-        f.is_popup = feat_parse_bool(v);
-        return f;
-    }
-    {
-        bool location = feat_is_set(&m, "location", false);
-        bool toolbar  = feat_is_set(&m, "toolbar",  false);
-        f.is_popup = !(location || toolbar)
-                  || !feat_is_set(&m, "menubar",    false)
-                  || !feat_is_set(&m, "resizable",  true)
-                  || !feat_is_set(&m, "scrollbars", false)
-                  || !feat_is_set(&m, "status",     false);
-    }
+    if (!f.noopener) f.is_popup = feat_popup_requested(&m);
+
+    feat_map_free(&m);
     return f;
 }

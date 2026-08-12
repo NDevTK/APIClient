@@ -435,7 +435,7 @@ static const char *const OPEN_STEPS_LABELS[] = { OPEN_STAGES(JS_STEP_STAGE_LABEL
 typedef struct {
     uint8_t phase;      /* the dispatch request's own phase, held across the suspension */
     JSValue ev;         /* the readystatechange event (owned) */
-    JSValue cb[4];      /* the dispatch's request buffer */
+    EventFireCb cb;      /* the dispatch's request buffer */
 } JSXhrOpenState;
 
 static void js_xhr_open_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -443,7 +443,7 @@ static void js_xhr_open_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSXhrOpenState *s = st;
     int i;
     v->val(ctx, &s->ev);
-    for (i = 0; i < 4; i++) v->val(ctx, &s->cb[i]);
+    STEP_CB_FOREACH(s->cb, i) v->val(ctx, &s->cb[i]);
 }
 
 static void js_xhr_open_release(JSContext *ctx, void *st)
@@ -452,7 +452,7 @@ static void js_xhr_open_release(JSContext *ctx, void *st)
     int i;
     JS_FreeValue(ctx, s->ev);
     s->ev = JS_UNDEFINED;
-    for (i = 0; i < 4; i++) { JS_FreeValue(ctx, s->cb[i]); s->cb[i] = JS_UNDEFINED; }
+    STEP_CB_FOREACH(s->cb, i) { JS_FreeValue(ctx, s->cb[i]); s->cb[i] = JS_UNDEFINED; }
 }
 
 /* §3.5.1 step 11's reset, which is also what a second open() on a sent object performs. */
@@ -1169,7 +1169,7 @@ typedef struct {
     uint32_t  req;      /* the outstanding host request, or 0 */
     uint8_t   phase;    /* the dispatch request's own phase */
     JSValue   ev;       /* the event in flight (owned) */
-    JSValue   cb[4];    /* the dispatch's request buffer */
+    EventFireCb   cb;    /* the dispatch's request buffer */
     double    transmitted, length;
     /* WHICH request error this is, DECIDED ONCE at XR_ERR_BEGIN and held. It cannot be re-derived at each
        later stage: "handle errors" reads `send() invoked`, which step 2 of the request error steps has already
@@ -1184,7 +1184,7 @@ static void js_xhr_run_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSXhrRunState *s = st;
     int i;
     v->val(ctx, &s->ev);
-    for (i = 0; i < 4; i++) v->val(ctx, &s->cb[i]);
+    STEP_CB_FOREACH(s->cb, i) v->val(ctx, &s->cb[i]);
 }
 
 static JSValue js_xhr_run_fini(JSContext *ctx, void *st, bool take_result)
@@ -1194,7 +1194,7 @@ static JSValue js_xhr_run_fini(JSContext *ctx, void *st, bool take_result)
     (void)take_result;
     JS_FreeValue(ctx, s->ev);
     s->ev = JS_UNDEFINED;
-    for (i = 0; i < 4; i++) { JS_FreeValue(ctx, s->cb[i]); s->cb[i] = JS_UNDEFINED; }
+    STEP_CB_FOREACH(s->cb, i) { JS_FreeValue(ctx, s->cb[i]); s->cb[i] = JS_UNDEFINED; }
     return JS_UNDEFINED;
 }
 
@@ -1652,7 +1652,7 @@ static const char *const SEND_STEPS[] = { SEND_STAGES(JS_STEP_STAGE_LABEL) NULL 
 typedef struct {
     uint8_t phase;      /* the dispatch/call request's own phase */
     JSValue ev;         /* the event in flight (owned) */
-    JSValue cb[4];
+    EventFireCb cb;
     JSValue body;       /* the converted body, held across the extraction (owned) */
     JSValue fn;         /* the lifecycle machine a SYNCHRONOUS send calls (owned) */
     double  body_len;
@@ -1665,7 +1665,7 @@ static void js_xhr_send_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->ev);
     v->val(ctx, &s->body);
     v->val(ctx, &s->fn);
-    for (i = 0; i < 4; i++) v->val(ctx, &s->cb[i]);
+    STEP_CB_FOREACH(s->cb, i) v->val(ctx, &s->cb[i]);
 }
 
 static void js_xhr_send_release(JSContext *ctx, void *st)
@@ -1676,7 +1676,7 @@ static void js_xhr_send_release(JSContext *ctx, void *st)
     JS_FreeValue(ctx, s->body);
     JS_FreeValue(ctx, s->fn);
     s->ev = s->body = s->fn = JS_UNDEFINED;
-    for (i = 0; i < 4; i++) { JS_FreeValue(ctx, s->cb[i]); s->cb[i] = JS_UNDEFINED; }
+    STEP_CB_FOREACH(s->cb, i) { JS_FreeValue(ctx, s->cb[i]); s->cb[i] = JS_UNDEFINED; }
 }
 
 /* §3's `XMLHttpRequestBodyInit` = `(Blob or BufferSource or FormData or URLSearchParams or USVString)`. Web
@@ -1870,7 +1870,7 @@ static const char *const ABORT_STEPS[] = { ABORT_STAGES(JS_STEP_STAGE_LABEL) NUL
 typedef struct {
     uint8_t phase;
     JSValue fn;      /* the lifecycle machine, in error mode (owned) */
-    JSValue cb[4];
+    EventFireCb cb;
 } JSXhrAbortState;
 
 static void js_xhr_abort_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -1878,7 +1878,7 @@ static void js_xhr_abort_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSXhrAbortState *s = st;
     int i;
     v->val(ctx, &s->fn);
-    for (i = 0; i < 4; i++) v->val(ctx, &s->cb[i]);
+    STEP_CB_FOREACH(s->cb, i) v->val(ctx, &s->cb[i]);
 }
 
 static void js_xhr_abort_release(JSContext *ctx, void *st)
@@ -1887,7 +1887,7 @@ static void js_xhr_abort_release(JSContext *ctx, void *st)
     int i;
     JS_FreeValue(ctx, s->fn);
     s->fn = JS_UNDEFINED;
-    for (i = 0; i < 4; i++) { JS_FreeValue(ctx, s->cb[i]); s->cb[i] = JS_UNDEFINED; }
+    STEP_CB_FOREACH(s->cb, i) { JS_FreeValue(ctx, s->cb[i]); s->cb[i] = JS_UNDEFINED; }
 }
 
 static int js_xhr_abort_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,

@@ -158,7 +158,7 @@ typedef struct JSUpdateRendering {
     JSValue   ev;           /* the event a per-document step is holding across its dispatch (owned) */
     JSValue   target;       /* step 10's MediaQueryList, held across its dispatch (owned) */
     JSValue   fn;           /* step 14's callback, taken from the map and held across its call (owned) */
-    JSValue   cb[4];        /* the request buffer: a fire needs [this, fn, target, event], a call three */
+    EventFireCb   cb;        /* the request buffer: a fire needs [this, fn, target, event], a call three */
     double    frame_ts;     /* step 1 */
     double    layout_start; /* step 15's unsafeStyleAndLayoutStartTime */
     uint32_t  ndocs, i;     /* the cursor every "for each doc of docs" step shares */
@@ -188,7 +188,7 @@ static void js_update_rendering_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->fn);
     v->val(ctx, &s->exc);
     report_exception_work_visit(ctx, &s->rep, v);
-    for (k = 0; k < 4; k++)
+    STEP_CB_FOREACH(s->cb, k)
         v->val(ctx, &s->cb[k]);
 }
 
@@ -205,7 +205,7 @@ static JSValue js_update_rendering_fini(JSContext *ctx, void *st, bool take_resu
     JS_FreeValue(ctx, s->exc);
     report_exception_work_release(ctx, &s->rep);
     s->docs = s->ev = s->target = s->fn = s->exc = JS_UNDEFINED;
-    for (k = 0; k < 4; k++) {
+    STEP_CB_FOREACH(s->cb, k) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
     }
@@ -344,7 +344,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
         /* The abandoned request's buffer is this machine's, so it is released HERE rather than left for a new
            request to overwrite — step_call_run only frees what it placed when it is RESUMED, and this one
            never will be. */
-        for (k = 0; k < 4; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
+        STEP_CB_FOREACH(s->cb, k) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
         if (s->hdr.stage == UR_REVEAL) {
             s->fphase = 0;
             JS_FreeValue(ctx, s->ev);
@@ -384,7 +384,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
         /* EVERY OWNED FIELD IS ON THE STATE BEFORE ANYTHING THAT CAN FAIL — the failure path tears the machine
            down through fini, which frees exactly what the state holds. */
         s->docs = s->ev = s->target = s->fn = s->exc = JS_UNDEFINED;
-        for (k = 0; k < 4; k++) s->cb[k] = JS_UNDEFINED;
+        STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
         /* The report's own record, zeroed before anything can throw — a step state arrives with the INTEGER 0
            in every JSValue slot, and the report's teardown frees exactly what it holds. */
         report_exception_work_start(&s->rep);

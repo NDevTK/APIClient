@@ -224,7 +224,7 @@ typedef struct JSRejectNotify {
     uint8_t   fphase;   /* the fire request's own phase */
     bool      not_canceled;
     JSValue   ev;       /* the event, minted once and re-read after the dispatch (owned) */
-    JSValue   cb[4];    /* the fire request's buffer — event_target_fire_run needs four slots */
+    EventFireCb   cb;    /* the fire request's buffer — event_target_fire_run needs four slots */
 } JSRejectNotify;
 
 static void js_reject_notify_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -232,7 +232,7 @@ static void js_reject_notify_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSRejectNotify *s = st;
     int k;
     v->val(ctx, &s->ev);
-    for (k = 0; k < 4; k++)
+    STEP_CB_FOREACH(s->cb, k)
         v->val(ctx, &s->cb[k]);
 }
 
@@ -243,7 +243,7 @@ static JSValue js_reject_notify_fini(JSContext *ctx, void *st, bool take_result)
     (void)take_result;
     JS_FreeValue(ctx, s->ev);
     s->ev = JS_UNDEFINED;
-    for (k = 0; k < 4; k++) {
+    STEP_CB_FOREACH(s->cb, k) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
     }
@@ -259,7 +259,7 @@ static int js_reject_notify_step(JSContext *ctx, void *st, JSValue cb_result, JS
 
     if (s->hdr.stage == REJECT_EVENT) {
         s->ev = JS_UNDEFINED;
-        for (k = 0; k < 4; k++) s->cb[k] = JS_UNDEFINED;
+        STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
         s->hdr.stage = REJECT_FIRE;
         /* §8.1.4.7: `unhandledrejection` does not bubble and IS cancelable — the cancel is the whole point. */
         s->ev = pre_new(ctx, event_new(ctx, "unhandledrejection", false, true), promise, reason);

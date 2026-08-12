@@ -1845,6 +1845,12 @@ int event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_ca
     JSValue out = JS_UNDEFINED;
     int r;
 
+    /* ASKED ON BOTH LEGS, because the resume leg forwards the same capacity and a caller that got the first one
+       right by accident must not get the second one wrong in silence. */
+    DCHECK(cb_cap >= EVENT_FIRE_CB_SLOTS,
+           "a fire request was handed a buffer narrower than §2.9's three-argument dispatch — declare it "
+           "EventFireCb rather than counting the slots");
+
     if (*phase == 0) {
         JSValue fn = dispatch_fn_new(ctx);
         DCHECK(JS_IsObject(ev), "a synchronous fire was handed no event — §2.9 dispatches one that exists");

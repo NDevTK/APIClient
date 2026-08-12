@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/events/event_target.h"   /* EventFireCb — the width of the fire request this machine parks on */
 
 void slot_init(JSContext *ctx);
 /* HTML §4.12.4's three members, on the interface whose IDL declares them. */
@@ -52,7 +53,7 @@ typedef struct {
     uint32_t i;        /* the cursor into signalSet */
     JSValue  set;      /* step 4's CLONE of the agent's signal slots (owned) */
     JSValue  ev;       /* the slotchange event in flight (owned) */
-    JSValue  cb[4];    /* the fire request's buffer — event_target_fire_run needs four slots */
+    EventFireCb  cb;    /* the fire request's buffer — event_target_fire_run needs four slots */
 } SlotChangeWork;
 
 void slot_change_work_start(SlotChangeWork *w);

@@ -6,6 +6,7 @@
 
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/events/event_target.h"   /* EventFireCb — the width of the fire request this machine parks on */
 
 /* THE ALGORITHM IS A SUB-SEQUENCE, not a member: §4.10.22.4 has two callers that are two different members of
    two different standards — HTML's "submit a form" and XHR §5's `new FormData(form, submitter)` — and both are
@@ -35,7 +36,7 @@ typedef struct {
     JSValue  controls;   /* step 3's list, as a JS Array of wrappers (owned) */
     JSValue  entries;    /* steps 4-6's entry list, as the FormData it is associated with (owned) */
     JSValue  ev;         /* step 7's FormDataEvent, held across the dispatch (owned) */
-    JSValue  cb[4];      /* the fire request's buffer: [this, dispatch, target, event] */
+    EventFireCb  cb;      /* the fire request's buffer: [this, dispatch, target, event] */
 } FormEntryListRun;
 
 /* Place the run's owned fields before anything can fail. A step state arrives js_mallocz'd, which is safe to

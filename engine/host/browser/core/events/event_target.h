@@ -181,10 +181,23 @@ void event_target_set_activation(bool (*has)(JSContext *ctx, JSValueConst el),
    boolean because the flag's whole content is "the target's associated Document" and the caller holds it;
    asked as a boolean this component would have to resolve a Window whose realm it may not own. */
 void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev, JSValueConst target_override);
+/* THE FIRE REQUEST BUFFER, AS A TYPE. §2.9's dispatcher takes THREE arguments (target, event, targetOverride)
+   and step_call_run's operand shape is [this, func, args…], so the buffer is 2 + 3 slots wide.
+   IT IS A TYPE BECAUSE A WIDTH EVERY CALLER RESTATES IS A WIDTH EVERY CALLER IS FREE TO BE BEHIND ON.
+   `target_override` was added to the dispatch as a third argument and its own doc-comment went on saying FOUR
+   slots, so fifteen callers declared `JSValue cb[4]` for a call needing five and the FIRST fire of the run —
+   the document's own `DOMContentLoaded` — dupped the override one slot past the end of the array, over
+   whatever struct field happened to follow it. It aborted in step_call_run's capacity DCHECK, which is the
+   lucky version; the unlucky one is a buffer whose neighbour is padding and which corrupts nothing until a
+   fork copies it. A caller that names this type cannot be an argument behind the algorithm, because there is
+   no number at the call site to be behind with. */
+#define EVENT_FIRE_CB_SLOTS (2 + 3)
+typedef JSValue EventFireCb[EVENT_FIRE_CB_SLOTS];
+
 /* THE SAME FIRE for a caller that can park — §2.9 is synchronous, and §3.2's `abort` is specified that way. One
    dispatch, two reaches: this is the REQUEST form, event_target_fire is the queued one. `phase` and `cb` belong
-   to the calling machine and `cb` needs FOUR slots — pass it through STEP_CB so its capacity comes with it, as
-   a forwarded buffer can no longer be measured. `ev` is the caller's too: the CALLER owns it and holds it across
+   to the calling machine; `cb` is an `EventFireCb` passed through STEP_CB so its capacity travels with it, as a
+   forwarded buffer can no longer be measured. `ev` is the caller's too: the CALLER owns it and holds it across
    the suspension, because §2.9 dispatches an event that exists rather than one the dispatch invents. Returns
    JS_STEP_CALL (return it) or 0 when it has answered. */
 int  event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, JSValueConst target,

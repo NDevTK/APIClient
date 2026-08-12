@@ -6,6 +6,7 @@
 
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/events/event_target.h"   /* EventFireCb — the width of the fire request this machine parks on */
 
 /* THE OPERATION AS A REQUEST, because step 5.2 FIRES AN EVENT and firing one runs the page's code.
  *
@@ -18,7 +19,7 @@ typedef struct {
     uint8_t stage;     /* 0 = not started, 1 = the `error` event is in flight */
     uint8_t phase;     /* event_target_fire_run's own */
     JSValue ev;        /* the ErrorEvent, minted once and held across the dispatch (owned) */
-    JSValue cb[4];
+    EventFireCb cb;
 } ReportExceptionWork;
 
 /* The private key §8.1.4.6 step 5's "in error reporting mode" flag hangs off the global by. One per AGENT. */

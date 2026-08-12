@@ -41,6 +41,7 @@
 #include "core/html/html_form.h"
 #include "core/html/input_value.h"
 #include "core/html/submit_event.h"
+#include "core/html/user_activation.h"
 #include "core/url/url.h"
 #include "solver/attr_shadow.h"
 #include "solver/concolic.h"
@@ -743,7 +744,7 @@ typedef struct JSSubmitState {
     uint8_t   firing_set;  /* THIS run set the form's firing-submission-events, so THIS run must clear it */
     uint32_t  i;           /* the cursor of whichever per-control walk is running (steps 5.3 and 5.4) */
     JSValue   ev;          /* the SubmitEvent, minted once and held across the suspension (owned) */
-    JSValue   cb[4];       /* the fire request buffer: [this, dispatch, target, event] */
+    EventFireCb   cb;       /* the fire request buffer: [this, dispatch, target, event] */
     JSValue   submitter;   /* the algorithm's `submitter` — the form itself when none was given (owned) */
     /* THE FORM, held by this machine even though the header already carries it as the receiver — because the
        shared teardown RELEASES `this_val` before a definition's own fini runs, and an abandoned run has to
@@ -771,7 +772,7 @@ static void js_submit_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->form);
     v->val(ctx, &s->controls);
     v->val(ctx, &s->entry_list);
-    for (k = 0; k < 4; k++)
+    STEP_CB_FOREACH(s->cb, k)
         v->val(ctx, &s->cb[k]);
     form_entry_list_visit(ctx, &s->entries, v);
     constraint_validation_visit(ctx, &s->validation, v);
@@ -801,7 +802,7 @@ static JSValue js_submit_fini(JSContext *ctx, void *st, bool take_result)
     s->controls = JS_UNDEFINED;
     JS_FreeValue(ctx, s->entry_list);
     s->entry_list = JS_UNDEFINED;
-    for (k = 0; k < 4; k++) {
+    STEP_CB_FOREACH(s->cb, k) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
     }
@@ -916,7 +917,7 @@ static int js_submit_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         s->validation = NULL;
         s->i = 0;
         s->firing_set = 0;
-        for (k = 0; k < 4; k++) s->cb[k] = JS_UNDEFINED;
+        STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
         form_entry_list_init(&s->entries);
         /* Web IDL §3.7.5's brand check: both members are HTMLFormElement's, and one invoked on anything else
            is a TypeError. It was a silent `return`, which told a page that `submit.call({})` had submitted. */
@@ -1622,6 +1623,12 @@ void html_form_declare(JSContext *ctx)
     /* §4.10.21's constraint validation, declared from here for the same reason: its members go on the control
        interfaces §4.10 owns the prototypes of, and step 5.4 above is its caller. */
     constraint_validation_declare(ctx);
+    /* §6.4's USER ACTIVATION STATE — declared here because §6.4.1's per-Window record has to exist BEFORE the
+       first realm is built (a realm that missed it answers §7.4.2.4's sticky-activation conjunct out of a
+       record that is not there), and this is the declaration point core/html reaches the agent through. It is
+       not §4.10's section; when core/html grows a declaration point that is not a form's, this line is one of
+       the ones that belongs to it. */
+    user_activation_init(ctx);
     /* BOTH submission members register their own step definition rather than declaring arguments to the args
        machine, so both install through the installer for that kind — see idl_install_step_method. `submit()`
        is one because §4.10.22.4's `formdata` event is the page's code and it runs on that path too. */
@@ -1657,6 +1664,7 @@ void html_form_free(JSContext *ctx)
     form_data_event_free(ctx);
     form_entry_list_free(ctx);
     constraint_validation_free(ctx);
+    user_activation_free();
     /* The slot keys are the AGENT's, so they are released with the agent — a Symbol nobody frees is a live GC
        object the runtime's own walk counts as a leak. */
     JS_FreeAtom(ctx, g_atom_owner);

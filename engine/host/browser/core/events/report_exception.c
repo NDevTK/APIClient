@@ -106,7 +106,7 @@ void report_exception_work_release(JSContext *ctx, ReportExceptionWork *w)
     }
     JS_FreeValue(ctx, w->ev);
     w->ev = JS_UNDEFINED;
-    for (i = 0; i < 4; i++) { JS_FreeValue(ctx, w->cb[i]); w->cb[i] = JS_UNDEFINED; }
+    STEP_CB_FOREACH(w->cb, i) { JS_FreeValue(ctx, w->cb[i]); w->cb[i] = JS_UNDEFINED; }
 }
 
 /* THE THROW SITE, OUT OF THE BACKTRACE THE ENGINE ALREADY RECORDED — the other three of step 2's

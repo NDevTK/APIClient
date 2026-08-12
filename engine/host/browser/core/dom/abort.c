@@ -491,7 +491,7 @@ void abort_signal_work_start(AbortSignalWork *w)
     w->phase = 0;
     w->i = w->j = 0;
     w->targets = w->algos = w->ev = JS_UNDEFINED;
-    for (k = 0; k < 4; k++) w->cb[k] = JS_UNDEFINED;
+    STEP_CB_FOREACH(w->cb, k) w->cb[k] = JS_UNDEFINED;
 }
 
 void abort_signal_work_visit(JSContext *ctx, AbortSignalWork *w, JSStepVisit *v)
@@ -500,7 +500,7 @@ void abort_signal_work_visit(JSContext *ctx, AbortSignalWork *w, JSStepVisit *v)
     v->val(ctx, &w->targets);
     v->val(ctx, &w->algos);
     v->val(ctx, &w->ev);
-    for (k = 0; k < 4; k++) v->val(ctx, &w->cb[k]);
+    STEP_CB_FOREACH(w->cb, k) v->val(ctx, &w->cb[k]);
 }
 
 void abort_signal_work_release(JSContext *ctx, AbortSignalWork *w)
@@ -510,7 +510,7 @@ void abort_signal_work_release(JSContext *ctx, AbortSignalWork *w)
     JS_FreeValue(ctx, w->algos);
     JS_FreeValue(ctx, w->ev);
     w->targets = w->algos = w->ev = JS_UNDEFINED;
-    for (k = 0; k < 4; k++) { JS_FreeValue(ctx, w->cb[k]); w->cb[k] = JS_UNDEFINED; }
+    STEP_CB_FOREACH(w->cb, k) { JS_FreeValue(ctx, w->cb[k]); w->cb[k] = JS_UNDEFINED; }
 }
 
 int abort_signal_run(JSContext *ctx, AbortSignalWork *w, JSValueConst sig, JSValueConst reason,

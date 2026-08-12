@@ -15,6 +15,7 @@
 #include "core/frame/document_lifecycle.h"
 #include "core/frame/window_proxy.h"
 #include "core/html/html_iframe.h"
+#include "core/html/user_activation.h"
 #include "core/timing/timer.h"
 
 /* THE THREE PER-DOCUMENT OPERATIONS, and why they are ONE fan-out with three bodies.
@@ -149,20 +150,12 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
  * The steps to fire beforeunload return (unloadPromptShown, unloadPromptCanceled), and everything between the
  * fire and that pair is ONE five-part conjunction guarding an unload PROMPT. Two of its conjuncts are facts
  * about the document and the agent rather than about the event, which is why before_unload_event.h answers only
- * the fourth: they are decided here, from what this engine models. */
-
-/* §6.3's STICKY ACTIVATION of a document's relevant global object — "the last activation timestamp is not
-   negative infinity", which is to say a USER has interacted with this page at least once since it was loaded.
-   Only a TRUSTED event carrying the activation-triggering flag moves that timestamp, and this user agent has no
-   input device and delivers no such event: §3.2.2's `element.click()` mints a SYNTHETIC pointer event, which is
-   untrusted and grants nothing. So the answer is false for every Window here — computed at the step that asks
-   it, in the same shape §4.10.22.3's sandboxed-forms condition has, and it is also what a real browser reports
-   for a page the user has never touched (which is why Chrome shows no beforeunload dialog there either). */
-static bool window_has_sticky_activation(JSContext *ctx)
-{
-    (void)ctx;
-    return false;
-}
+ * the fourth. Of those two, the SANDBOXING one is decided here because a document's active sandboxing flag set
+ * is state this engine's policy container does not carry; the STICKY ACTIVATION one is not decided here at all
+ * — §6.4 is a component (user_activation.c) with per-Window state, and a conjunct that answered it locally
+ * would be one algorithm's private copy of a fact §7.3.1.7's popup rules, §7.4.2.1's source snapshot params,
+ * §7.1.5's sandboxing, §7.2.4's `location` history handling, §6.6.6's focus and §4.10.5.4's showPicker all read
+ * as well — and each of those would then have grown its own copy of the same excuse. */
 
 /* §7.4.2.4's second conjunct — "document's active sandboxing flag set does not have its sandboxed modals flag
    set". A document's sandboxing flags come from §7.6.2's navigable container through §7.2.6's policy container,
@@ -186,7 +179,7 @@ typedef struct {
     JSStepHdr hdr;
     uint8_t   fphase;   /* the fire request's own phase */
     JSValue   ev;       /* the BeforeUnloadEvent, minted once and read back after the dispatch (owned) */
-    JSValue   cb[4];    /* the fire request's buffer — event_target_fire_run needs four slots */
+    EventFireCb   cb;    /* the fire request's buffer — event_target_fire_run needs four slots */
 } BeforeUnloadState;
 
 /* ---- §7.5.9's UNLOAD A DOCUMENT, one document ----------------------------------------------------------------
@@ -232,7 +225,7 @@ typedef struct {
        destroyed, which is what the standard says about a document a page never revealed. */
     uint8_t   showing;
     JSValue   ev;
-    JSValue   cb[4];
+    EventFireCb   cb;
 } UnloadState;
 
 /* ---- the shared subtree fan-out ------------------------------------------------------------------------------
@@ -421,7 +414,7 @@ static int js_beforeunload_step(JSContext *ctx, void *st, JSValue cb_result, JSV
         /* EVERY OWNED FIELD IS ON THE STATE BEFORE ANYTHING THAT CAN FAIL — the failure path tears the machine
            down through fini, which frees exactly what the state holds and nothing else. */
         s->ev = JS_UNDEFINED;
-        for (k = 0; k < 4; k++) s->cb[k] = JS_UNDEFINED;
+        STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
         s->fphase = 0;
         s->hdr.stage = BU_FIRE;
         JS_FreeValue(ctx, cb_result);
@@ -445,10 +438,15 @@ static int js_beforeunload_step(JSContext *ctx, void *st, JSValue cb_result, JSV
         cb_result = JS_UNDEFINED;                     /* the fire consumed it */
         /* STEP 6's CONJUNCTION — the unload prompt. Four of its five parts are decided here and the fifth is
            the user agent's own judgement ("showing an unload prompt is unlikely to be annoying, deceptive, or
-           pointless"), which cannot be reached because the third part already fails. */
+           pointless"), which is not reached while the third part answers false.
+           THE THIRD PART IS REAL STATE NOW, not a constant: §6.4.1's sticky activation is a comparison against
+           this Window's own last activation timestamp, and the reason it still answers false everywhere is
+           that this engine dispatches no TRUSTED input event for §6.4.2's notification to run before — a
+           property of the engine's inputs, which is where it belongs, rather than of this conjunct. The day
+           one exists, this line starts saying yes and the DFAIL below is the work it names. */
         if (before_unload_event_asks_to_cancel(cctx, s->ev)          /* the event's own two-part answer */
             && !document_sandboxes_modals(cctx)
-            && window_has_sticky_activation(cctx)) {
+            && user_activation_sticky(cctx)) {
             DFAIL("§7.4.2.4 reached the unload prompt — BUILD the two things it needs: an unload prompt (the "
                   "user agent asks the user to confirm and PAUSES, so it is a suspension of this flow and not "
                   "a call), and the accumulator its answer feeds — unloadPromptShown and finalStatus are "
@@ -469,7 +467,7 @@ static void js_beforeunload_visit(JSContext *ctx, void *st, JSStepVisit *v)
     int k;
 
     v->val(ctx, &s->ev);
-    for (k = 0; k < 4; k++) v->val(ctx, &s->cb[k]);
+    STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
 }
 
 static JSValue js_beforeunload_fini(JSContext *ctx, void *st, bool take_result)
@@ -480,7 +478,7 @@ static JSValue js_beforeunload_fini(JSContext *ctx, void *st, bool take_result)
     (void)take_result;
     JS_FreeValue(ctx, s->ev);
     s->ev = JS_UNDEFINED;
-    for (k = 0; k < 4; k++) {
+    STEP_CB_FOREACH(s->cb, k) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
     }
@@ -497,7 +495,7 @@ static int js_unload_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
     DCHECK(window_proxy_is(proxy), "§7.5.9's unload task was given something that is not a WindowProxy");
     if (s->hdr.stage == UNLOAD_ENTER) {
         s->ev = JS_UNDEFINED;
-        for (k = 0; k < 4; k++) s->cb[k] = JS_UNDEFINED;
+        STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
         s->fphase = 0;
         s->showing = 0;
         s->hdr.stage = UNLOAD_PAGEHIDE;
@@ -587,7 +585,7 @@ static void js_unload_visit(JSContext *ctx, void *st, JSStepVisit *v)
     int k;
 
     v->val(ctx, &s->ev);
-    for (k = 0; k < 4; k++) v->val(ctx, &s->cb[k]);
+    STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
 }
 
 static JSValue js_unload_fini(JSContext *ctx, void *st, bool take_result)
@@ -598,7 +596,7 @@ static JSValue js_unload_fini(JSContext *ctx, void *st, bool take_result)
     (void)take_result;
     JS_FreeValue(ctx, s->ev);
     s->ev = JS_UNDEFINED;
-    for (k = 0; k < 4; k++) {
+    STEP_CB_FOREACH(s->cb, k) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
     }

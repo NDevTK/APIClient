@@ -255,7 +255,7 @@ static void js_mo_notify_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->exc);
     report_exception_work_visit(ctx, &s->rep, v);
     slot_change_work_visit(ctx, &s->slots, v);
-    for (k = 0; k < 4; k++) v->val(ctx, &s->cb[k]);
+    STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
 }
 
 static JSValue js_mo_notify_fini(JSContext *ctx, void *st, bool take_result)
@@ -271,7 +271,7 @@ static JSValue js_mo_notify_fini(JSContext *ctx, void *st, bool take_result)
     s->notify = s->cur = s->records = s->exc = JS_UNDEFINED;
     report_exception_work_release(ctx, &s->rep);
     slot_change_work_release(ctx, &s->slots);
-    for (k = 0; k < 4; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
+    STEP_CB_FOREACH(s->cb, k) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
     return JS_UNDEFINED;
 }
 
@@ -287,7 +287,7 @@ static int js_mo_notify_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
            state down through `fini`, which frees exactly what the state holds — and on a js_mallocz'd state
            that is nine integer zeros until this line runs. */
         s->notify = s->cur = s->records = s->exc = JS_UNDEFINED;
-        for (k = 0; k < 4; k++) s->cb[k] = JS_UNDEFINED;
+        STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
         report_exception_work_start(&s->rep);
         slot_change_work_start(&s->slots);
         s->started = 1;
