@@ -30,6 +30,19 @@ bool shadow_root_is_open(const lxb_dom_node_t *n);
    other one. */
 bool shadow_root_slot_assignment_is_manual(JSContext *ctx, const lxb_dom_node_t *n);
 
+/* §4.8's THREE BOOLEAN FIELDS THAT ARE READ FROM OUTSIDE THIS COMPONENT — the three HTML §13.3 step 4.2 emits
+   as content attributes of the `<template shadowrootmode>` it writes. One reader over a declared field rather
+   than three getters, so the serializer names the FIELD the standard names and learns nothing about where the
+   record lives (which is the shadow root's WRAPPER — a per-flow fact, for the reason shadow_root.c states).
+   `mode` is shadow_root_is_open's and `slot assignment` is the question above, because those two have callers
+   that ask them as questions rather than as fields. */
+typedef enum {
+    SHADOW_ROOT_DELEGATES_FOCUS = 0,
+    SHADOW_ROOT_CLONABLE,
+    SHADOW_ROOT_SERIALIZABLE,
+} ShadowRootFlag;
+bool shadow_root_flag(JSContext *ctx, const lxb_dom_node_t *n, ShadowRootFlag which);
+
 /* "SHADOW-INCLUDING ROOT" — DOM §4.2: the root's host's shadow-including root when the root is a shadow root,
    otherwise the root. What `getRootNode({composed:true})` answers and what §4.4's `isConnected` is stated
    over, which is why it lives beside node_root rather than inside one member. */

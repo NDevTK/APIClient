@@ -4,9 +4,29 @@
 #include <stddef.h>
 #include <lexbor/dom/dom.h>
 #include "quickjs.h"
+#include "core/idl_args.h"
 
 void    element_init(JSContext *ctx);
 void    element_free(JSContext *ctx);
+
+/* HTML §13.4's FRAGMENT PARSE, and WHICH MEMBER is driving it — the magic every declaration of the one machine
+   carries. Five members over one parse: they differ in the TARGET whose children the fragment replaces, in the
+   CONTEXT element the markup is parsed in, and in whether §13.4's `allowDeclarativeShadowRoots` is true (which
+   is what makes `<template shadowrootmode>` inside the markup a real shadow root, and which only the two
+   `Unsafe` members pass). ShadowRoot's two are declared HERE rather than in a second machine beside it,
+   because §8.5.4's and §8.5.2's steps for a ShadowRoot receiver are the same algorithm over a different
+   target — the difference the standard states is §13.4 step 2's "otherwise target's host". */
+enum {
+    ELEMENT_SET_INNER_HTML = 0,   /* §8.5.4's innerHTML setter, on Element */
+    ELEMENT_SET_OUTER_HTML,       /* §8.5.5's outerHTML setter */
+    ELEMENT_SET_HTML_UNSAFE,      /* §8.5.2's setHTMLUnsafe, on Element */
+    SHADOW_ROOT_SET_INNER_HTML,   /* §8.5.4's innerHTML setter, on ShadowRoot */
+    SHADOW_ROOT_SET_HTML_UNSAFE,  /* §8.5.2's setHTMLUnsafe, on ShadowRoot */
+};
+const IdlStepDecl *element_set_html_decl(void);
+/* §8.5.2's `setHTMLUnsafe` DECLARED for one of the two interfaces that have it — one argument list and one
+   dictionary, because the IDL states the same line on Element and on ShadowRoot. Returns the step id. */
+int element_declare_set_html_unsafe(JSContext *ctx, int magic);
 
 /* The wrapper for `el`, or JS_NULL. The SAME Lexbor element always yields the SAME JS object: a page compares
    nodes by identity constantly, and a fresh wrapper per lookup makes every such comparison silently false. */

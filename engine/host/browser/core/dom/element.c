@@ -38,6 +38,8 @@
 #include "core/html/custom_elements.h"
 #include "core/html/html_iframe.h"
 #include "core/html/trusted_types.h"
+#include "core/html/declarative_shadow.h"
+#include "core/html/fragment_serializer.h"
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
 #include "core/dom/attr.h"
@@ -51,7 +53,6 @@ static JSAtom g_attrs_key = JS_ATOM_NULL;   /* the [SameObject] NamedNodeMap cac
 
 static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
 static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
-#include <lexbor/html/serialize.h>
 #include "core/dom/attr_list.h"
 #include "core/dom/mutation_observer.h"
 #include "core/dom/mutation_record.h"
@@ -437,247 +438,11 @@ static JSValue js_el_get_tag(JSContext *ctx, JSValueConst this_val)
     return t ? JS_NewStringLen(ctx, (const char *)t, n) : JS_UNDEFINED;
 }
 
-/* §8.4 THE FRAGMENT SERIALISER — innerHTML and outerHTML as READS, which they were not: the accessor was
-   write-only and every `el.innerHTML` answered undefined. That is the worst shape a gap can take here, because
-   undefined does not throw — it PROPAGATES. `wrap.innerHTML = head.innerHTML + row` builds the string
-   "undefined…" and the page carries on, so the engine reports a surface assembled out of a value the page
-   never had, and nothing anywhere names the missing capability.
-   Lexbor owns the serialisation OF ONE NODE, which is the point: the escaping, the attribute quoting and the
-   raw-text elements are HTML's own rules, and hand-rolling them here would be a second HTML serialiser that
-   disagrees with the parser sitting beside it. What this file owns is the WALK — because the walk is of the
-   PAGE'S SIZE, and `lxb_html_serialize_tree_str` runs it to completion inside one opcode. That is the
-   drive-to-completion this engine has no room for: `document.body.outerHTML` on a real page held the scheduler
-   for the whole document with every other flow parked behind it. So the walk is a machine that emits ONE node
-   per step and yields, and lexbor is asked for that one node.
-   The closing tag is the one piece lexbor does not export (`lxb_html_serialize_element_closed_cb` is static),
-   so it is emitted here from the same qualified name and gated on the same public `lxb_html_node_is_void`.
-   ONE DELIBERATE DIVERGENCE FROM LEXBOR, and it is the SPEC that decides it. §13.3 step 2: "If current node is a
-   template element, then let current node instead be the template element's template contents" — the template is
-   REPLACED by its content, so its ordinary children (which `t.appendChild(x)` really does create, since only the
-   parser and `t.content` reach the fragment) are not serialised at all. Lexbor emits the content and THEN
-   descends into first_child, which prints them; this walk comes back from the content straight to the close tag.
-   Asserted by /api/tplboth, whose template has one of each.
-   magic 0 = innerHTML (the CHILDREN), 1 = outerHTML (the element itself). */
-
-/* A LEVEL of the walk: `<template>`'s children live on a SEPARATE tree (its content fragment, whose node has no
-   parent), so serialising one means walking a second tree and coming back. Lexbor recurses for that; this
-   pushes, because a machine's C stack is gone at every suspension. */
-typedef struct { lxb_dom_node_t *node; lxb_dom_node_t *limit; } SerFrame;
-
-/* WHERE THIS MACHINE RESTS, AS THE STANDARD NUMBERS IT. Both getters are one sentence over the fragment
-   serializing algorithm, which for an HTML document is §13.3's HTML fragment serialization algorithm; §13.3's
-   step 4 walks the children in tree order and its step 4.2 appends each one's string. The walk RESTS twice per
-   node — once having emitted it and once having advanced past it — and those were one stage and a private
-   `phase` byte beside it, which is two suspension points wearing one number. They are two stages now. Nothing
-   here can reach the page's code, so no stage has to split further. */
-#define EL_GET_HTML_STAGES(X) \
-    X(ELHTML_SETUP,   "HTML §8.5.4 innerHTML getter / §8.5.5 outerHTML getter steps 1-2 (the node to serialize)") \
-    X(ELHTML_EMIT,    "HTML §13.3 step 4.2 (append the current node's start tag or its character data; a " \
-                      "template's contents are the node instead, per step 3)") \
-    X(ELHTML_ADVANCE, "HTML §13.3 step 4 (descend to the node's children, or append its end tag and advance in " \
-                      "tree order)")
-enum { IDL_STEP_STAGE_BASE(EL_GET_HTML_STAGES) EL_GET_HTML_STAGES(JS_STEP_STAGE_ENUM) };
-static const char *const EL_GET_HTML_STEPS[] = { EL_GET_HTML_STAGES(JS_STEP_STAGE_LABEL) NULL };
-
-typedef struct {
-    lxb_dom_node_t *node;    /* the cursor; NULL once the walk is finished */
-    lxb_dom_node_t *limit;   /* the ascent stops HERE and does not close it — it is not part of the output */
-    SerFrame       *stack;   /* the template levels above this one */
-    int             sp, scap;
-    char           *out;     /* the accumulator: malloc'd, because a fork gives each arm its own */
-    size_t          out_len, out_cap;
-} ElHtmlState;
-
-static lxb_status_t el_ser_append(const lxb_char_t *data, size_t len, void *vctx)
-{
-    ElHtmlState *s = vctx;
-    if (s->out_len + len + 1 > s->out_cap) {
-        size_t want = s->out_cap ? s->out_cap * 2 : 256;
-        char *n;
-        while (want < s->out_len + len + 1) want *= 2;
-        n = realloc(s->out, want);
-        CHECK(n != NULL, "the HTML serialiser could not grow its accumulator");
-        s->out = n;
-        s->out_cap = want;
-    }
-    memcpy(s->out + s->out_len, data, len);
-    s->out_len += len;
-    return LXB_STATUS_OK;
-}
-
-/* `</name>`, which lexbor emits from a static function. Void elements have none, and neither does anything that
-   is not an element — the same two conditions lexbor's own ascent tests. */
-static void el_ser_close(ElHtmlState *s, lxb_dom_node_t *n)
-{
-    const lxb_char_t *name;
-    size_t len = 0;
-    if (n->type != LXB_DOM_NODE_TYPE_ELEMENT || lxb_html_node_is_void(n)) return;
-    name = lxb_dom_element_qualified_name(lxb_dom_interface_element(n), &len);
-    DCHECK(name != NULL, "an element in the tree has no qualified name to close");
-    el_ser_append((const lxb_char_t *)"</", 2, s);
-    el_ser_append(name, len, s);
-    el_ser_append((const lxb_char_t *)">", 1, s);
-}
-
-/* HTML §13.3's TEXT CASE, WRITTEN HERE BECAUSE THE ALGORITHM DECIDES BY INTERFACE AND LEXBOR DECIDES BY
-   nodeType. "If current node is a Text node" is true of a CDATASection — §4.12 is `CDATASection : Text` — but
-   lexbor's `lxb_html_serialize_cb` switches on `node->type` and has no CDATA arm at all, so it returned
-   LXB_STATUS_ERROR and the DCHECK below fired. That abort was the whole of what seventeen dom/ranges and
-   dom/traversal files reported, because dom/common.js builds its sixth paragraph out of two CDATA sections and
-   every one of those files serialises the fixture to name its subtests.
-   Lexbor's per-kind serialisers are internal, so this is §13.3 ported rather than delegated — the last rung of
-   "bind before build", and the port is one escape table.
-   §13.3: a Text node whose PARENT is a raw-text element is appended literally; otherwise its data is escaped
-   with the attribute-mode flag unset, which is `&`, U+00A0, `<` and `>`. */
-static bool el_ser_parent_is_raw_text(const lxb_dom_node_t *n)
-{
-    lxb_dom_node_t *p = n->parent;
-
-    if (!p || p->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
-    return lxb_html_tree_node_is(p, LXB_TAG_STYLE)    || lxb_html_tree_node_is(p, LXB_TAG_SCRIPT) ||
-           lxb_html_tree_node_is(p, LXB_TAG_XMP)      || lxb_html_tree_node_is(p, LXB_TAG_IFRAME) ||
-           lxb_html_tree_node_is(p, LXB_TAG_NOEMBED)  || lxb_html_tree_node_is(p, LXB_TAG_NOFRAMES) ||
-           lxb_html_tree_node_is(p, LXB_TAG_PLAINTEXT) || lxb_html_tree_node_is(p, LXB_TAG_NOSCRIPT);
-}
-
-static void el_ser_text_node(ElHtmlState *s, lxb_dom_node_t *n)
-{
-    const lxb_dom_character_data_t *cd = (const lxb_dom_character_data_t *)n;
-    const lxb_char_t *d = cd->data.data;
-    size_t len = cd->data.length, i, run = 0;
-
-    if (el_ser_parent_is_raw_text(n)) { el_ser_append(d, len, s); return; }
-    for (i = 0; i < len; i++) {
-        const char *rep = NULL;
-        size_t skip = 1;
-
-        if (d[i] == '&')      rep = "&amp;";
-        else if (d[i] == '<') rep = "&lt;";
-        else if (d[i] == '>') rep = "&gt;";
-        else if (d[i] == 0xC2 && i + 1 < len && d[i + 1] == 0xA0) { rep = "&nbsp;"; skip = 2; }  /* U+00A0 */
-        if (!rep) { run++; continue; }
-        if (run) el_ser_append(d + i - run, run, s);
-        run = 0;
-        el_ser_append((const lxb_char_t *)rep, strlen(rep), s);
-        i += skip - 1;
-    }
-    if (run) el_ser_append(d + len - run, run, s);
-}
-
-static void el_ser_push(ElHtmlState *s, lxb_dom_node_t *node, lxb_dom_node_t *limit)
-{
-    if (s->sp == s->scap) {
-        int want = s->scap ? s->scap * 2 : 8;
-        SerFrame *n = realloc(s->stack, sizeof(SerFrame) * (size_t)want);
-        CHECK(n != NULL, "the HTML serialiser could not grow its template stack");
-        s->stack = n;
-        s->scap = want;
-    }
-    s->stack[s->sp].node = node;
-    s->stack[s->sp].limit = limit;
-    s->sp++;
-}
-
-static int js_el_get_html_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
-                               JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
-{
-    ElHtmlState *s = st;
-    lxb_dom_element_t *el;
-    lxb_dom_node_t *n;
-
-    (void)argc; (void)argv; (void)cb_result; (void)out_cb; (void)out_argc;
-
-    if (hdr->stage == ELHTML_SETUP) {
-        el = element_of_value(hdr->this_val);
-        if (!el) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
-        n = lxb_dom_interface_node(el);
-        DCHECK(n->local_name != LXB_TAG__DOCUMENT,
-               "the fragment serialiser reached a DOCUMENT — this accessor lives on Element, and a document "
-               "serialises its children with no wrapper of its own");
-        /* magic 0 walks the CHILDREN with the element as the limit, so the element's own tags are not emitted;
-           magic 1 walks the element itself, limited by its parent. One walk, two starting points. */
-        int inner = idl_step_magic(hdr) == 0;
-        s->limit = inner ? n : n->parent;
-        s->node  = inner ? n->first_child : n;
-        hdr->stage = ELHTML_EMIT;
-    }
-
-    if (!s->node) goto finished;
-
-    if (hdr->stage == ELHTML_EMIT) {
-        if (s->node->type == LXB_DOM_NODE_TYPE_CDATA_SECTION) {
-            el_ser_text_node(s, s->node);   /* §13.3's Text case — see el_ser_text_node */
-        } else {
-            lxb_status_t status = lxb_html_serialize_cb(s->node, el_ser_append, s);
-            DCHECK(status == LXB_STATUS_OK, "lexbor refused to serialise a node kind this tree contains");
-            (void)status;
-        }
-        /* `<template>`'s children are on its content fragment, not under it. Descend there before the template
-           is closed, and come back to the template's ADVANCE when that level runs out. */
-        if (lxb_html_tree_node_is(s->node, LXB_TAG_TEMPLATE)) {
-            lxb_html_template_element_t *t = lxb_html_interface_template(s->node);
-            if (t->content && t->content->node.first_child) {
-                el_ser_push(s, s->node, s->limit);
-                s->limit = &t->content->node;
-                s->node  = t->content->node.first_child;
-                return JS_STEP_YIELD;
-            }
-        }
-        hdr->stage = ELHTML_ADVANCE;
-        return JS_STEP_YIELD;
-    }
-
-    /* ADVANCE. A void element has no children to descend into even when the tree gave it some. */
-    DCHECK(hdr->stage == ELHTML_ADVANCE, "the fragment serialiser resumed into a stage §13.3 does not have");
-    if (!lxb_html_node_is_void(s->node) && s->node->first_child) {
-        s->node = s->node->first_child;
-        hdr->stage = ELHTML_EMIT;
-        return JS_STEP_YIELD;
-    }
-    for (;;) {
-        el_ser_close(s, s->node);
-        if (s->node->next) { s->node = s->node->next; hdr->stage = ELHTML_EMIT; return JS_STEP_YIELD; }
-        s->node = s->node->parent;
-        if (s->node == s->limit) {
-            if (s->sp == 0) break;                       /* the walk itself is over */
-            s->sp--;                                     /* back to the template that owns this level */
-            s->node  = s->stack[s->sp].node;
-            s->limit = s->stack[s->sp].limit;
-            continue;                                    /* close the <template> and carry on from it */
-        }
-        DCHECK(s->node != NULL, "the serialiser walked off the top of the tree without reaching its limit — the "
-                                "cursor left the subtree the walk started in");
-    }
-finished:
-    *presult = JS_NewStringLen(ctx, s->out ? s->out : "", s->out_len);
-    return JS_STEP_DONE;
-}
-
-static void js_el_get_html_visit(JSContext *ctx, void *st, JSStepVisit *v)
-{
-    ElHtmlState *s = st;
-    /* Both are plain storage a forked arm must not share: the two arms append their own remaining nodes to the
-       accumulator, and each unwinds its own template stack. The DOM pointers inside are per-flow COW nodes,
-       which every arm reaches by the same address. */
-    v->buf(ctx, (void **)&s->out, s->out_cap);
-    v->buf(ctx, (void **)&s->stack, sizeof(SerFrame) * (size_t)s->scap);
-}
-
-static void js_el_get_html_release(JSContext *ctx, void *st)
-{
-    ElHtmlState *s = st;
-    (void)ctx;
-    free(s->out);
-    free(s->stack);
-    s->out = NULL;
-    s->stack = NULL;
-}
-
-static const IdlStepDecl EL_GET_HTML_STEP = {
-    js_el_get_html_step, sizeof(ElHtmlState), js_el_get_html_visit, js_el_get_html_release,
-    "HTML §8.5.4/§8.5.5 innerHTML/outerHTML getter (over §13.3's HTML fragment serialization)",
-    EL_GET_HTML_STEPS
-};
+/* §13.3's FRAGMENT SERIALISER — innerHTML's and outerHTML's getters — IS core/html/fragment_serializer.c, and
+   is not here. It was: this file held the walk, and the moment ShadowRoot needed the SAME algorithm (its own
+   `innerHTML` getter, and §8.5.3's `getHTML` on both interfaces) a second copy of it was what a second
+   installation would have grown. One algorithm, one component, four members — the magics are the component's
+   FRAGMENT_SERIALIZE_* and the declarations below are what name them. */
 
 /* §13.4 THE FRAGMENT PARSE, as ONE operation, because there are four members that do it and they differ only
    in where the result goes. `context` is the element whose parsing state the fragment is parsed IN — a `<tr>`
@@ -729,26 +494,34 @@ enum { PLACE_CHILDREN = 0, PLACE_BEFORE, PLACE_AFTER, PLACE_FIRST_CHILD, PLACE_R
    is what the declaration's `algorithm` says. Splitting the wording per member would be two statements of one
    stage, which is the drift the X-list exists to prevent. */
 #define FRAG_STAGES(X) \
-    X(FRAG_TRUSTED, "HTML §8.5.4 / §8.5.5 / §8.5.6 step 1 (get trusted type compliant string with TrustedHTML " \
-                    "and this sink), which is where Trusted Types §4.2's default-policy callback runs") \
+    X(FRAG_TRUSTED, "HTML §8.5.4 / §8.5.5 / §8.5.6 step 1 / §8.5.2 setHTMLUnsafe step 1 (get trusted type " \
+                    "compliant string with TrustedHTML and this sink), which is where Trusted Types §4.2's " \
+                    "default-policy callback runs") \
     X(FRAG_START, "HTML §8.5.4 innerHTML setter steps 2-3 / §8.5.5 outerHTML setter steps 2-5 / §8.5.6 " \
-                  "insertAdjacentHTML steps 2-4 (the target the fragment is parsed against)") \
-    X(FRAG_FEED,  "HTML §8.5.4 step 4 / §8.5.5 step 6 / §8.5.6 step 5 (the fragment parsing algorithm), one " \
-                  "byte per step") \
-    X(FRAG_PLACE, "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 (insert one node of the fragment at the " \
-                  "position the member names)") \
-    X(FRAG_DONE,  "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 (the fragment is placed)")
+                  "insertAdjacentHTML steps 2-4 / §8.5.2 setHTMLUnsafe step 2 and §8.6.4 set and filter HTML " \
+                  "steps 1-5 (the target the fragment is parsed against)") \
+    X(FRAG_FEED,  "HTML §8.5.4 step 4 / §8.5.5 step 6 / §8.5.6 step 5 / §8.6.4 set and filter HTML step 6 " \
+                  "(the fragment parsing algorithm), one byte per step") \
+    X(FRAG_PLACE, "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.6.4 set and filter HTML step 8 " \
+                  "(insert one node of the fragment at the position the member names)") \
+    X(FRAG_DONE,  "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.6.4 set and filter HTML step 8 " \
+                  "(the fragment is placed)")
 /* FOUR STAGES, NOT FIVE, for insertAdjacentHTML: it never replaces its target's children, so FRAG_CLEAR is past
    the end of what it declares and the driver says so if the shared machine ever reaches it from there. It is
    its own list for that reason — the setter's declaration is the shared four followed by this one. */
 #define EL_SET_HTML_EXTRA(X) \
-    X(FRAG_CLEAR, "HTML §8.5.4 step 5 (replace all within target: remove one existing child per step)")
+    X(FRAG_CLEAR, "HTML §8.5.4 step 5 / §8.6.4 set and filter HTML step 8 (replace all within target: remove " \
+                  "one existing child per step)")
 enum { IDL_STEP_STAGE_BASE(FRAG_STAGES)
        FRAG_STAGES(JS_STEP_STAGE_ENUM) EL_SET_HTML_EXTRA(JS_STEP_STAGE_ENUM) };
 
 typedef struct {
     uint8_t where;
     uint8_t clear_first;          /* innerHTML= empties the element before parsing, one child per step */
+    /* HTML §13.4's `allowDeclarativeShadowRoots`, which the two Unsafe members pass TRUE and every other
+       fragment parse passes false. It rides the state because the step that acts on it — §13.2.6.4.4's
+       template start tag, run over the finished fragment — is stages away from the one that read it. */
+    uint8_t allow_declarative;
     /* STEP 1's ANSWER, held across the stage boundary (owned). It is the compliant string and not the
        argument: once Trusted Types §3 exists, step 1 runs the default policy's callback and what the fragment
        is parsed from is what that callback RETURNED, which is a different value from the one passed in. */
@@ -796,7 +569,7 @@ static void frag_release(JSContext *ctx, void *st)
 /* Set the machine up for a parse of `html` into `where` around `anchor`, parsed in `context`'s tree-building
    context. `html` is COPIED because the JSString it came from is released before the first suspension. */
 static void frag_begin(JSContext *ctx, FragState *s, lxb_dom_element_t *context, lxb_dom_node_t *anchor,
-                       int where, const char *html, bool clear_first)
+                       int where, const char *html, bool clear_first, bool allow_declarative)
 {
     (void)ctx;
     /* The clear is `replace all within TARGET`, and the target is the anchor — which for a <template> is its
@@ -809,6 +582,7 @@ static void frag_begin(JSContext *ctx, FragState *s, lxb_dom_element_t *context,
     s->anchor = anchor;
     s->where = (uint8_t)where;
     s->clear_first = clear_first;
+    s->allow_declarative = allow_declarative;
     s->len = strlen(html);
     s->html = malloc(s->len + 1);
     CHECK(s->html != NULL, "the fragment parse could not copy its markup");
@@ -863,6 +637,17 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
            written twice, on the same node under two comments saying the same thing in different words, so
            every `el.innerHTML = markup` walked the whole parsed fragment's attributes twice. */
         dom_attr_normalize_parsed(s->frag);
+        /* HTML §13.2.6.4.4's template start tag, over the fragment this parse just built — the same seam the
+           document's parse runs it at, and the reason §13.4 takes `allowDeclarativeShadowRoots` at all.
+           THE TOPMOST ELEMENT IS NONE. The step's third condition names "the topmost element in the stack of
+           open elements", which for a fragment parse is the root element §13.4 step 8 creates and which lexbor
+           does not hand back — so a `<template shadowrootmode>` written at the TOP of the markup is one whose
+           parent is the FRAGMENT rather than an element, which declarative_shadow_parsed refuses for exactly
+           the reason the third condition exists. That is why `el.setHTMLUnsafe("<template shadowrootmode=open>")`
+           leaves a template and does not give `el` a shadow root.
+           It runs BEFORE the placement, because a browser runs it during tree construction: the hosts it
+           attaches to are still this parse's private nodes, so nothing else can see a half-converted tree. */
+        declarative_shadow_parsed(ctx, s->frag, NULL, s->allow_declarative != 0);
         /* The reference child is fixed BEFORE anything moves: inserting changes `anchor->next`. The clear that
            may follow cannot move it either — it only ever empties an append target, which frag_begin asserts. */
         s->ref = (s->where == PLACE_AFTER) ? s->anchor->next
@@ -918,36 +703,84 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
    Reporting the sink and dropping the markup was the second half missing.
    Both halves go through the per-flow chokepoints, so two forked arms each see their own subtree. A concolic
    value has no bytes to parse — the sink report IS the answer for it.
-   magic 0 = innerHTML=, 1 = outerHTML=. */
+   The magic is element.h's ELEMENT_SET_* / SHADOW_ROOT_SET_*: five members over one parse, differing in the
+   TARGET the fragment replaces, the CONTEXT it is parsed in, and whether §13.4's allowDeclarativeShadowRoots
+   is true. */
+/* THE SINK NAME each member passes to §3.4, which is what a Trusted Types violation report names — so two
+   sinks are distinguishable in one report. Indexed by the magic, beside the magic's own declaration. */
+static const char *const FRAG_SINK[] = {
+    "Element innerHTML", "Element outerHTML", "Element setHTMLUnsafe",
+    "ShadowRoot innerHTML", "ShadowRoot setHTMLUnsafe",
+};
+
 static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                           JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     FragState *s = st;
     int magic = idl_step_magic(hdr);
+    bool unsafe = magic == ELEMENT_SET_HTML_UNSAFE || magic == SHADOW_ROOT_SET_HTML_UNSAFE;
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
     *presult = JS_UNDEFINED;
+    DCHECK(magic >= 0 && magic < (int)(sizeof(FRAG_SINK) / sizeof(FRAG_SINK[0])),
+           "the fragment-parse machine was declared with a magic no member of element.h's list names");
 
     if (hdr->stage == FRAG_TRUSTED) {
-        /* §8.5.4 / §8.5.5 step 1. It runs BEFORE the element and its parent are looked at, which is the order
-           the standard writes and the order that decides what a page under a trusted-types policy sees: the
-           throw comes from step 1, not from step 4's parse, so `document.createElement("b").outerHTML = s`
-           throws the TypeError rather than returning at step 3's null parent. */
+        /* §8.5.4 / §8.5.5 / §8.5.2 step 1. It runs BEFORE the element and its parent are looked at, which is
+           the order the standard writes and the order that decides what a page under a trusted-types policy
+           sees: the throw comes from step 1, not from step 4's parse, so
+           `document.createElement("b").outerHTML = s` throws the TypeError rather than returning at step 3's
+           null parent. */
         s->compliant = trusted_types_compliant_string(ctx, TRUSTED_TYPE_HTML, argc > 0 ? argv[0] : JS_UNDEFINED,
-                                                      magic == 0 ? "Element innerHTML" : "Element outerHTML");
+                                                      FRAG_SINK[magic]);
         if (JS_IsException(s->compliant)) { s->compliant = JS_UNDEFINED; return JS_STEP_ABRUPT; }
         hdr->stage = FRAG_START;
     }
     if (hdr->stage == FRAG_START) {
-        lxb_dom_element_t *el = element_of_value(hdr->this_val);
+        lxb_dom_node_t *n = node_of(hdr->this_val);
+        lxb_dom_element_t *el;
         JSValueConst val = s->compliant;
-        lxb_dom_node_t *n;
         const char *html;
 
-        if (!el) return JS_STEP_DONE;
-        n = lxb_dom_interface_node(el);
-        if (magic == 1) {
+        /* WEB IDL §3.7.5's BRAND CHECK. `Element.prototype`'s members reach any receiver a page hands them
+           with `.call`, and ShadowRoot's two are declared on an interface that is NOT an element — a
+           DocumentFragment — so which of the two this is decides what the receiver must be. */
+        if (magic == SHADOW_ROOT_SET_INNER_HTML || magic == SHADOW_ROOT_SET_HTML_UNSAFE) {
+            if (!shadow_root_is(n)) {
+                JS_ThrowTypeError(ctx, "a ShadowRoot markup member was written on something that is not a "
+                                       "shadow root");
+                return JS_STEP_ABRUPT;
+            }
+        } else if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) {
+            JS_ThrowTypeError(ctx, "an Element markup member was written on something that is not an element");
+            return JS_STEP_ABRUPT;
+        }
+        /* §8.5.2's OPTIONS, read before anything is parsed because §8.6.4 reads them at its steps 4 and 5 —
+           before its step 6's parse. Neither is a member this engine can honour yet, and each names what to
+           build rather than being silently ignored: a page that asks for sanitization and gets none is a page
+           whose DOM this engine builds differently from every browser, and a page whose `runScripts` scripts
+           never run is a page whose code this engine never reaches — the exact failure this tool exists to
+           not have. */
+        if (unsafe) {
+            JSValueConst options = argc > 1 ? argv[1] : JS_UNDEFINED;
+            JSValue sanitizer = idl_dict_get(ctx, options, "sanitizer");
+
+            if (!JS_IsUndefined(sanitizer))
+                DFAIL("§8.6.4's `sanitize` step was handed a sanitizer and HTML §8.6 does not exist in this "
+                      "engine — build core/html/sanitizer.c (the Sanitizer interface, §8.6.3's configuration "
+                      "and §8.6.4's inner sanitize steps as a step machine, since the walk is of the parsed "
+                      "fragment's size). An ABSENT member is the unsafe default `{}`, whose configuration "
+                      "removes nothing, which is why only a stated one stops here");
+            JS_FreeValue(ctx, sanitizer);
+            if (idl_dict_bool(ctx, options, "runScripts"))
+                DFAIL("SetHTMLUnsafeOptions's `runScripts` asks for §13.4's Fragment parser scripting mode and "
+                      "this engine's fragment parses are all Inert — build the scripting mode through "
+                      "frag_begin so a <script> the fragment carries is PREPARED when the insertion steps "
+                      "reach it, the way the document parse's already is");
+        }
+        el = n->type == LXB_DOM_NODE_TYPE_ELEMENT ? lxb_dom_interface_element(n) : NULL;
+        if (magic == ELEMENT_SET_OUTER_HTML) {
             /* §8.5.5 steps 3-4, WHICH ARE TWO DIFFERENT ANSWERS and were one. A null parent RETURNS — the
                spec's own reason is that there would be no way to obtain a reference to the nodes created —
                and only a DOCUMENT parent throws. Collapsing them into "not an element parent → throw" made
@@ -988,12 +821,24 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
                                  "drive-to-completion the flow machinery exists to avoid");
         html = JS_ToCString(ctx, val);
         if (!html) return JS_STEP_ABRUPT;
-        if (magic == 0) {
-            /* §8.5.4 step 3: a <template>'s children are NOT what innerHTML= replaces — its TEMPLATE CONTENTS
-               are, which is a separate tree reached through the element. The parse context stays the element,
-               because the tree builder's "in template" insertion mode is what decides whether a <tr> survives;
-               only the target of the replacement moves. Without this a page that filled a template this way
-               got an element with children nothing renders and a `content` fragment that stayed empty. */
+        if (magic == ELEMENT_SET_OUTER_HTML) {
+            /* §8.5.5 step 6: parsed in the PARENT's context, because that is where it lives — or in step 5's
+               `body` when the parent is a fragment. Step 7 still replaces `this` within THIS'S parent, which
+               is the real one either way: step 5 reassigns the local, not the tree. */
+            frag_begin(ctx, s, s->own_context ? s->own_context : lxb_dom_interface_element(n->parent),
+                       n, PLACE_REPLACE, html, false, /*allow_declarative*/ false);
+        } else if (magic == SHADOW_ROOT_SET_INNER_HTML || magic == SHADOW_ROOT_SET_HTML_UNSAFE) {
+            /* §13.4 step 2: "Let context be target if target is an Element; otherwise target's HOST." A shadow
+               root has no local name and no tokenizer state of its own, so the markup is parsed exactly as the
+               host's children would be, and it REPLACES the shadow root's children. */
+            frag_begin(ctx, s, shadow_root_host(n), n, PLACE_CHILDREN, html, /*clear_first*/ true, unsafe);
+        } else {
+            /* §8.5.4 step 2.2 / §8.5.2 setHTMLUnsafe step 2: a <template>'s children are NOT what these
+               replace — its TEMPLATE CONTENTS are, which is a separate tree reached through the element. The
+               parse context stays the element, because the tree builder's "in template" insertion mode is what
+               decides whether a <tr> survives; only the target of the replacement moves. Without this a page
+               that filled a template this way got an element with children nothing renders and a `content`
+               fragment that stayed empty. */
             lxb_dom_node_t *target = n;
             if (lxb_html_tree_node_is(n, LXB_TAG_TEMPLATE)) {
                 lxb_html_template_element_t *t = lxb_html_interface_template(n);
@@ -1002,13 +847,7 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
                                            "template one");
                 target = &t->content->node;
             }
-            frag_begin(ctx, s, el, target, PLACE_CHILDREN, html, /*clear_first*/ true);
-        } else {
-            /* §8.5.5 step 6: parsed in the PARENT's context, because that is where it lives — or in step 5's
-               `body` when the parent is a fragment. Step 7 still replaces `this` within THIS'S parent, which
-               is the real one either way: step 5 reassigns the local, not the tree. */
-            frag_begin(ctx, s, s->own_context ? s->own_context : lxb_dom_interface_element(n->parent),
-                       n, PLACE_REPLACE, html, false);
+            frag_begin(ctx, s, el, target, PLACE_CHILDREN, html, /*clear_first*/ true, unsafe);
         }
         JS_FreeCString(ctx, html);
         hdr->stage = FRAG_FEED;
@@ -1022,7 +861,44 @@ static const char *const EL_SET_HTML_STEPS[] = {
 };
 
 static const IdlStepDecl EL_SET_HTML_STEP = { js_el_set_html, sizeof(FragState), frag_visit, frag_release,
-                                              "HTML §8.5.4/§8.5.5 innerHTML/outerHTML setter", EL_SET_HTML_STEPS };
+                                              "HTML §8.5.4/§8.5.5 innerHTML/outerHTML setter, §8.5.2 "
+                                              "setHTMLUnsafe (over §8.6.4's set and filter HTML)",
+                                              EL_SET_HTML_STEPS };
+
+const IdlStepDecl *element_set_html_decl(void)
+{
+    return &EL_SET_HTML_STEP;
+}
+
+/* §8.5.2's `[CEReactions] undefined setHTMLUnsafe((TrustedHTML or DOMString) html, optional
+   SetHTMLUnsafeOptions options = {})` — DECLARED HERE FOR BOTH INTERFACES that have it. Element's and
+   ShadowRoot's IDL for this member is the same line, so the argument list and the dictionary are stated once:
+   two copies are two chances for one of them to lose a member, and a member the declaration does not list is
+   one the body silently never sees.
+   The union's TrustedHTML arm is §2's type, which does not exist here, so every value takes the DOMString arm
+   — and there is NO [LegacyNullToEmptyString] on it, unlike innerHTML's, so `setHTMLUnsafe(null)` parses the
+   four characters `null`. */
+int element_declare_set_html_unsafe(JSContext *ctx, int magic)
+{
+    static const IdlArgType SET_HTML_UNSAFE_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };
+    /* Web IDL §3.2.18 reads a dictionary's members LEXICOGRAPHICALLY, which for these two is also declaration
+       order. `sanitizer` is `(Sanitizer or SanitizerConfig or SanitizerPresets)` and is IDL_ANY because none of
+       the three types exists yet — the body refuses a stated one by name rather than converting it to
+       something it cannot honour. */
+    static const IdlDictMember SET_HTML_UNSAFE_OPTIONS[] = {
+        { "runScripts", IDL_BOOLEAN, false, NULL, 0 },
+        { "sanitizer",  IDL_ANY,     false, NULL, 0 },
+    };
+    int id;
+
+    DCHECK(magic == ELEMENT_SET_HTML_UNSAFE || magic == SHADOW_ROOT_SET_HTML_UNSAFE,
+           "setHTMLUnsafe was declared under a magic that is not one of the two interfaces that have it");
+    id = idl_method_id_step(ctx, SET_HTML_UNSAFE_ARGS, 2, SET_HTML_UNSAFE_OPTIONS,
+                            (int)(sizeof(SET_HTML_UNSAFE_OPTIONS) / sizeof(SET_HTML_UNSAFE_OPTIONS[0])),
+                            &EL_SET_HTML_STEP, magic);
+    idl_optional_from(1);
+    return id;
+}
 
 /* §4.9 insertAdjacentHTML / insertAdjacentElement / insertAdjacentText — the SAME four positions, which is why
    one body reads the position and three members differ only in what they place. insertAdjacentHTML is an
@@ -1093,7 +969,10 @@ static int js_el_insert_adjacent_html(JSContext *ctx, JSStepHdr *hdr, void *st, 
         /* Parsed in the context it will LIVE in: the parent for the outside positions, this element for the
            inside ones. A `<td>` inserted beforeend of a `<tr>` survives; parsed against the wrong context it
            would be dropped by the tree builder and the page would find nothing it inserted. */
-        frag_begin(ctx, s, outside ? lxb_dom_interface_element(n->parent) : el, n, where, html, false);
+        /* §8.5.6 step 5 invokes the fragment parsing algorithm with the two-argument spelling, whose
+           `allowDeclarativeShadowRoots` default is FALSE — a `<template shadowrootmode>` inserted this way
+           stays a template, exactly as it does through innerHTML. */
+        frag_begin(ctx, s, outside ? lxb_dom_interface_element(n->parent) : el, n, where, html, false, false);
         JS_FreeCString(ctx, html);
         hdr->stage = FRAG_FEED;
         return JS_STEP_YIELD;
@@ -1761,6 +1640,7 @@ static JSClassID g_element_class;
 static int g_refl_base = -1, g_refl_n;
 static int g_id_get_attr = -1, g_id_set_attr = -1, g_id_matches = -1, g_id_closest = -1,
            g_id_inner_get = -1, g_id_inner_set = -1, g_id_outer_get = -1, g_id_outer_set = -1,
+           g_id_set_html_unsafe = -1,
            g_id_adj_html = -1, g_id_adj_el = -1, g_id_adj_text = -1, g_id_attr_names = -1,
            g_id_remove_attr = -1, g_id_has_attr = -1, g_id_toggle_attr = -1, g_id_get_attr_node = -1,
            g_id_has_attrs = -1,
@@ -1785,6 +1665,9 @@ void element_init(JSContext *ctx)
     JS_NewClassID(JS_GetRuntime(ctx), &g_element_class);
     JS_NewClass(JS_GetRuntime(ctx), g_element_class, &d);
     node_claim_type(LXB_DOM_NODE_TYPE_ELEMENT, g_element_class);
+    /* §13.3's serializer, declared before the four members that name it — `getHTML` is its own declaration and
+       innerHTML's and outerHTML's getters are two magics on the same machine. */
+    fragment_serializer_init(ctx);
 
     /* `name`, `value` and `selectors` are DOMStrings, so each is ToString on whatever the page passed:
        `el.getAttribute({toString(){ … }})` is the page's code, and the declaration parks the machine on that
@@ -1801,10 +1684,11 @@ void element_init(JSContext *ctx)
     g_id_closest = idl_method_id_step(ctx, IDL_1STR, 1, NULL, 0, document_qs_decl(), 3);
     /* `[CEReactions] attribute [LegacyNullToEmptyString] DOMString innerHTML` — the extended attribute is part
        of the TYPE, so `el.innerHTML = null` empties the element instead of parsing the markup `null`. */
-    g_id_inner_get = idl_getter_id_step(ctx, &EL_GET_HTML_STEP, 0);
-    g_id_inner_set = idl_setter_id_step(ctx, IDL_DOMSTRING, true, &EL_SET_HTML_STEP, 0);
-    g_id_outer_get = idl_getter_id_step(ctx, &EL_GET_HTML_STEP, 1);
-    g_id_outer_set = idl_setter_id_step(ctx, IDL_DOMSTRING, true, &EL_SET_HTML_STEP, 1);
+    g_id_inner_get = idl_getter_id_step(ctx, fragment_serializer_decl(), FRAGMENT_SERIALIZE_CHILDREN);
+    g_id_inner_set = idl_setter_id_step(ctx, IDL_DOMSTRING, true, &EL_SET_HTML_STEP, ELEMENT_SET_INNER_HTML);
+    g_id_outer_get = idl_getter_id_step(ctx, fragment_serializer_decl(), FRAGMENT_SERIALIZE_SELF);
+    g_id_outer_set = idl_setter_id_step(ctx, IDL_DOMSTRING, true, &EL_SET_HTML_STEP, ELEMENT_SET_OUTER_HTML);
+    g_id_set_html_unsafe = element_declare_set_html_unsafe(ctx, ELEMENT_SET_HTML_UNSAFE);
     /* §4.9's three adjacent members. The HTML one takes two DOMStrings; the other two take a position and a
        value the IDL leaves alone (a Node, or a DOMString this stringifies into a Text node). */
     g_id_adj_html = idl_method_id_step(ctx, IDL_2STR, 2, NULL, 0, &EL_ADJACENT_HTML_STEP, 0);
@@ -1905,6 +1789,12 @@ void element_install_proto(JSContext *ctx)
     node_install_parent_mixin(ctx, proto);   /* append / prepend / replaceChildren */
     idl_install_accessor_step(ctx, proto, "innerHTML", g_id_inner_get, g_id_inner_set);
     idl_install_accessor_step(ctx, proto, "outerHTML", g_id_outer_get, g_id_outer_set);
+    /* §8.5's two partial-interface markup members. `setHTML` — the SAFE one — is not here, and it is not a
+       stub either: its steps are "set and filter HTML given target, html, options, and TRUE", which is
+       sanitization, and §8.6 does not exist. A page calling it gets the TypeError of a missing method, which
+       is the forcing function; a `setHTML` that skipped the sanitizer would insert markup a browser removes. */
+    idl_install_method(ctx, proto, "setHTMLUnsafe", 1, g_id_set_html_unsafe);
+    fragment_serializer_install_get_html(ctx, proto);
     idl_install_method(ctx, proto, "insertAdjacentHTML", 2, g_id_adj_html);
     idl_install_method(ctx, proto, "insertAdjacentElement", 2, g_id_adj_el);
     idl_install_method(ctx, proto, "insertAdjacentText", 2, g_id_adj_text);
@@ -1975,6 +1865,7 @@ void element_free(JSContext *ctx)
     if (g_attrs_key != JS_ATOM_NULL) { JS_FreeAtom(ctx, g_attrs_key); g_attrs_key = JS_ATOM_NULL; }
     document_fragment_free(ctx);
     shadow_root_free(ctx);
+    fragment_serializer_free();
     slot_free(ctx);
     idl_indexed_free(ctx);
     /* the prototypes are the REALMS' — each is released with its context */

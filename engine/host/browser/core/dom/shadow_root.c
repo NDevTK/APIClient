@@ -32,10 +32,14 @@
  *     CLAUDE.md names as one fact answered from one place for many agents. A property write is captured.
  *
  * WHAT IS HONESTLY ABSENT, BY NAME — see SPEC_STEPS.md §17.6. `ShadowRootInit`'s `customElementRegistry`
- * member, `serializable`'s effect in `getHTML`, `delegatesFocus`'s effect on focus, and HTML's
- * `DocumentOrShadowRoot`/`ShadowRoot` additions (`innerHTML`, `activeElement`, `styleSheets`).
- * `declarative` has a writer as of HTML §13.2.6.4.4 — declarative_shadow.c — and `clonable` has a READER as of
- * DOM §4.4 step 6, which is shadow_root_clone_onto below. */
+ * member, `delegatesFocus`'s effect on focus, and HTML's `DocumentOrShadowRoot` additions (`activeElement`,
+ * `styleSheets`).
+ * `declarative` has a writer as of HTML §13.2.6.4.4 — declarative_shadow.c — `clonable` has a READER as of DOM
+ * §4.4 step 6, which is shadow_root_clone_onto below, and `serializable`, `delegatesFocus`, `clonable`, `mode`
+ * and `slot assignment` are ALL read by HTML §13.3 step 4.2, which writes them back out as the
+ * `<template shadowrootmode>` §13.2.6.4.4 reads. HTML §8.5's `partial interface ShadowRoot` — `innerHTML`,
+ * `getHTML`, `setHTMLUnsafe` — is installed below; `setHTML` is the one member still absent, because it
+ * sanitizes and HTML §8.6 does not exist here. */
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -50,6 +54,7 @@
 #include "core/dom/shadow_root.h"
 #include "core/events/event_target.h"
 #include "core/html/custom_elements.h"
+#include "core/html/fragment_serializer.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/realm.h"
@@ -58,6 +63,8 @@
 static JSClassID g_sr_class;
 static int       g_ready;
 static int       g_id_attach = -1;
+/* HTML §8.5's `partial interface ShadowRoot` — the markup members, declared once per agent like every other. */
+static int       g_id_inner_get = -1, g_id_inner_set = -1, g_id_set_html_unsafe = -1;
 
 /* THE SLOT KEYS — Symbols this component minted and never published, so none of §4.8's state is a string
    property of the engine's invention sitting where `Object.keys` reports it. */
@@ -257,6 +264,21 @@ bool shadow_root_slot_assignment_is_manual(JSContext *ctx, const lxb_dom_node_t 
     JS_FreeValue(ctx, v);
     JS_FreeValue(ctx, slots);
     return manual;
+}
+
+bool shadow_root_flag(JSContext *ctx, const lxb_dom_node_t *n, ShadowRootFlag which)
+{
+    /* THE PUBLIC NAME AND THE RECORD'S KEY ARE ONE PAIRING, stated here because they are two enums and C can
+       see nothing wrong with reading one at the other's index. */
+    static const int FIELD_OF[] = { SR_DELEGATES_FOCUS, SR_CLONABLE, SR_SERIALIZABLE };
+    JSValueConst wrap = node_wrap_peek(n);
+
+    DCHECK(shadow_root_is(n), "a §4.8 boolean was asked of a node that is not a shadow root");
+    DCHECK(which >= 0 && which < (int)(sizeof(FIELD_OF) / sizeof(FIELD_OF[0])),
+           "a §4.8 boolean was asked for under a name the field table does not have");
+    DCHECK(JS_IsObject(wrap), "a shadow root has no wrapper — attach a shadow root mints one, and it is the "
+                              "only thing that makes one of these nodes");
+    return sr_flag(ctx, wrap, FIELD_OF[which]);
 }
 
 /* §4.8's SEVEN getters, over the receiver's record and the node's two C fields. */
@@ -570,6 +592,19 @@ void shadow_root_init(JSContext *ctx)
     g_id_attach = idl_method_id_dict(ctx, ATTACH_ARGS, 1, SHADOW_ROOT_INIT,
                                      (int)(sizeof(SHADOW_ROOT_INIT) / sizeof(SHADOW_ROOT_INIT[0])),
                                      js_el_attach_shadow, 0);
+    /* HTML §8.5's THREE MARKUP MEMBERS ON THIS INTERFACE, and each is the SAME algorithm Element's is — which
+       is why not one of them is implemented here. §8.5.4's `innerHTML` getter is §13.3's serializer with the
+       shadow options false and « » (the component that owns §13.3); its setter and §8.5.2's `setHTMLUnsafe`
+       are §13.4's fragment parse, whose §13.4 step 2 says the context element is "target's HOST" when the
+       target is not an element — one line of difference, expressed as a magic on element.c's one parse machine
+       rather than as a second parse that can drift from it.
+       `getHTML` is that component's own declaration, installed on both prototypes.
+       `setHTML` — the SAFE member — is honestly ABSENT: its steps are "set and filter HTML … and TRUE", which
+       is sanitization, and HTML §8.6 does not exist here. */
+    g_id_inner_get = idl_getter_id_step(ctx, fragment_serializer_decl(), FRAGMENT_SERIALIZE_CHILDREN);
+    g_id_inner_set = idl_setter_id_step(ctx, IDL_DOMSTRING, true, element_set_html_decl(),
+                                        SHADOW_ROOT_SET_INNER_HTML);
+    g_id_set_html_unsafe = element_declare_set_html_unsafe(ctx, SHADOW_ROOT_SET_HTML_UNSAFE);
     g_ready = 1;
     realm_declare_intrinsic(shadow_root_install_proto);
 }
@@ -594,6 +629,11 @@ void shadow_root_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, proto, "clonable", js_sr_get, SR_CLONABLE, -1);
     idl_install_accessor(ctx, proto, "serializable", js_sr_get, SR_SERIALIZABLE, -1);
     idl_install_accessor(ctx, proto, "host", js_sr_get, SR_HOST, -1);
+    /* HTML §8.5's partial interface. `serializable` above is no longer a flag with no reader: `getHTML`'s
+       serializableShadowRoots argument is what reads it, and §13.3 step 4.2 is where. */
+    idl_install_accessor_step(ctx, proto, "innerHTML", g_id_inner_get, g_id_inner_set);
+    idl_install_method(ctx, proto, "setHTMLUnsafe", 1, g_id_set_html_unsafe);
+    fragment_serializer_install_get_html(ctx, proto);
     /* §4.8's ONE event handler IDL attribute. It is declared on ShadowRoot itself and not through
        GlobalEventHandlers, which is why it needs its own bit rather than riding EH_GLOBAL's mask. */
     event_target_install_handlers(ctx, proto, EH_SHADOW_ROOT);
@@ -630,6 +670,6 @@ void shadow_root_free(JSContext *ctx)
     JS_FreeValue(ctx, g_slots_key);
     JS_FreeValue(ctx, g_shadow_key);
     g_slots_key = g_shadow_key = JS_UNDEFINED;
-    g_id_attach = -1;
+    g_id_attach = g_id_inner_get = g_id_inner_set = g_id_set_html_unsafe = -1;
     g_ready = 0;
 }
