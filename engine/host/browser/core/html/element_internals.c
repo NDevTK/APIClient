@@ -31,11 +31,14 @@
  * `attachInternals` impossible and what would keep the state right if an element ever outlived its internals.
  *
  * WHAT IS HONESTLY ABSENT, BY NAME:
- *   - `shadowRoot`. There is no Shadow DOM in this engine at all — no `attachShadow`, no ShadowRoot interface —
- *     so §4.13.7.2's getter has no "is a shadow host" to ask. A getter that could only ever answer null is the
- *     shape-only stub the audit exists to expose, so the member is ABSENT and the page's own TypeError names
- *     it. §4.13.4's `disable shadow` boolean is collected anyway, because it comes off the same sequence
- *     `disable internals` does.
+ *   - `shadowRoot`. The reason this line USED to give — "there is no Shadow DOM in this engine at all" — is no
+ *     longer true and is deleted: §17 built `attachShadow`, ShadowRoot and the slot algorithms, so steps 2-3's
+ *     "is a shadow host" and "target's shadow root" both have real answers now. What is still missing is steps
+ *     4-5's: the root's AVAILABLE TO ELEMENT INTERNALS field, which §4.8's record carries as a WRITE
+ *     (shadow_root_mark_declarative) with no reader. A getter that skipped that check would hand a page the
+ *     one shadow root §4.13.7.2 hides from it, which is a WRONG answer rather than a partial one, so the
+ *     member stays ABSENT until the field is readable. §4.13.4's `disable shadow` boolean is collected anyway,
+ *     because it comes off the same sequence `disable internals` does.
  *   - ARIAMixin's EIGHT element-reflecting members (`ariaActiveDescendantElement` and the seven
  *     `FrozenArray<Element>?` ones). They are not content-attribute reflections at all — they are the
  *     "explicitly set attr-element" machinery, which is its own mechanism with its own lifetime rules. The 46
@@ -851,6 +854,18 @@ static JSValue js_html_attach_internals(JSContext *ctx, JSValueConst this_val, i
     JS_DefinePropertyValue(ctx, internals, g_atom_target, JS_DupValue(ctx, this_val), EI_SLOT_FLAGS);
     JS_DefinePropertyValue(ctx, (JSValue)this_val, g_atom_attached, JS_DupValue(ctx, internals), EI_SLOT_FLAGS);
     return internals;
+}
+
+JSValue element_internals_submission_value(JSContext *ctx, JSValueConst wrap)
+{
+    JSValue rec = ei_face_record(ctx, wrap, false), v;
+
+    /* §4.13.7.3's initial submission value is null, and an element with no record has never had one written —
+       which is what an absent record means and why nothing allocates one to answer this. */
+    if (!JS_IsObject(rec)) { JS_FreeValue(ctx, rec); return JS_NULL; }
+    v = JS_GetProperty(ctx, rec, g_atom_value);
+    JS_FreeValue(ctx, rec);
+    return v;
 }
 
 /* ---- §4.13.5 step 10 and §4.10.18.3's reset ------------------------------------------------------------------ */

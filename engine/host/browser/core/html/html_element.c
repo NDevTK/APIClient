@@ -41,6 +41,7 @@
 #include "core/html/element_internals.h"
 #include "core/html/html_element.h"
 #include "core/css/css_style_declaration.h"
+#include "core/html/form_data_event.h"
 #include "core/html/html_form.h"
 #include "core/html/dom_string_map.h"
 #include "core/html/declarative_shadow.h"
@@ -583,6 +584,9 @@ void html_element_install(JSContext *ctx, JSValueConst global)
        stack; what belongs here is WHICH interface carries it. */
     node_install_interface_ctor(ctx, global, "HTMLElement", hp, custom_elements_html_constructor(ctx));
     dom_string_map_install(ctx, global);   /* §3.2.2 DOMStringMap, which `dataset` is one of */
+    /* §4.10.22.1 FormDataEvent — a §4.10 interface object, so it goes up where §4's interface objects do. Its
+       algorithm is form_entry_list.c's; this file owns which names the global carries. */
+    form_data_event_install(ctx, global);
     node_install_interface(ctx, global, "HTMLUnknownElement", up);
     JS_FreeValue(ctx, hp);
     JS_FreeValue(ctx, up);

@@ -23,6 +23,10 @@
 #include "quickjs-step.h"
 #include "core/file/blob.h"
 #include "core/html/form_data.h"
+#include "core/html/form_entry_list.h"
+#include "core/dom/node.h"
+#include "core/html/html_element.h"
+#include "core/html/html_form.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/idl_iter.h"
@@ -285,6 +289,61 @@ bool form_data_is(JSValueConst v)
     return g_fd_class != 0 && JS_GetOpaque(v, g_fd_class) != NULL;
 }
 
+JSClassID form_data_class_id(void)
+{
+    DCHECK(g_fd_class != 0, "a FormData-typed IDL position was declared before form_data_init made the class");
+    return g_fd_class;
+}
+
+/* ---- the entry list, as HTML §4.10.22.4 builds it ---------------------------------------------------------- */
+
+void form_data_append_entry(JSContext *ctx, JSValueConst fd, const char *name, size_t nlen, JSValue value)
+{
+    FormDataObj *d = JS_GetOpaque(fd, g_fd_class);
+
+    (void)ctx;
+    DCHECK(d != NULL, "an entry was appended to something that is not a FormData — §4.10.22.4 step 4 builds one");
+    fd_list_append(&d->list, name, nlen, value);
+}
+
+void form_data_append_all(JSContext *ctx, JSValueConst dst, JSValueConst src)
+{
+    FormDataObj *to = JS_GetOpaque(dst, g_fd_class), *from = JS_GetOpaque(src, g_fd_class);
+    int i;
+
+    DCHECK(to != NULL && from != NULL,
+           "§4.13.7.3's entry construction was handed something that is not a FormData — the union's brand test "
+           "runs before this");
+    for (i = 0; i < from->list.n; i++)
+        fd_list_append(&to->list, from->list.e[i].name, from->list.e[i].nlen,
+                       JS_DupValue(ctx, from->list.e[i].value));
+}
+
+int form_data_entry_count(JSValueConst fd)
+{
+    FormDataObj *d = JS_GetOpaque(fd, g_fd_class);
+
+    DCHECK(d != NULL, "an entry list was counted on something that is not a FormData");
+    return d->list.n;
+}
+
+const char *form_data_entry_name(JSValueConst fd, int i, size_t *plen)
+{
+    FormDataObj *d = JS_GetOpaque(fd, g_fd_class);
+
+    DCHECK(d != NULL && i >= 0 && i < d->list.n, "an entry was asked for past the end of the list");
+    *plen = d->list.e[i].nlen;
+    return d->list.e[i].name;
+}
+
+JSValueConst form_data_entry_value(JSValueConst fd, int i)
+{
+    FormDataObj *d = JS_GetOpaque(fd, g_fd_class);
+
+    DCHECK(d != NULL && i >= 0 && i < d->list.n, "an entry was asked for past the end of the list");
+    return d->list.e[i].value;
+}
+
 /* Fetch §5.1's `multipart/form-data` SERIALIZER — the parser above, run backwards, and what a
  * `new Response(formData)` carries. RFC 7578's shape: `--boundary CRLF` then each part's Content-Disposition,
  * a blank line, its bytes, and a closing `--boundary--`. A FILE entry additionally carries `filename=` and its
@@ -514,41 +573,107 @@ static const IdlPairIterOps FD_PAIR_OPS = { form_data_pair_count, form_data_pair
 /* ---- §5's constructor -------------------------------------------------------------------------------------
  *
  * `constructor(optional HTMLFormElement form, optional HTMLElement? submitter = null)`. Constructing FROM a
- * form is the form's own "constructing the entry list" algorithm, which needs a form element to walk; this
- * engine's DOM has one, but the entry list it produces is the SUBMISSION algorithm rather than anything this
- * file owns, so a `form` argument reaches a DFAIL naming it rather than an empty FormData that would look like
- * a form with no controls. `new FormData()` with no argument is an empty entry list and is the whole of what
- * `.formData()` and the wpt corpus construct. */
-/* WHERE THIS MACHINE RESTS. §5's constructor is ONE step — "if form is given, then ..." — and the whole of it
-   runs without touching the page's objects, so the machine has exactly one stage and never returns to it. It
-   carried a `stage` byte nothing read: a resume point that did not exist, which is the other half of the
-   defect a private counter has. It is declared instead. */
+ * form runs HTML §4.10.22.4's "construct the entry list", and that algorithm FIRES A `formdata` EVENT at the
+ * form — the page's own code, mid-construction, with a live handle on the list being built. So this
+ * constructor is a machine that SUSPENDS, and `new FormData(form)` is one of the few constructors in the
+ * platform that does. `new FormData()` with no argument is an empty entry list and never reaches step 1. */
+/* WHERE THIS MACHINE RESTS. §5's step 1 has two halves and the page's code sits between them, so they are two
+   STAGES: the submitter's two refusals (both of which throw before anything is built), and the construction
+   itself. The construction's own cursor rides the entry-list sub-sequence, which is why the second stage names
+   the whole of steps 1.2-1.4 rather than one step of it. */
 #define FD_CTOR_STAGES(X) \
-    X(FD_CTOR_ENTRIES, "XHR §5 new FormData(form, submitter) step 1 (the entry list: constructed from form, " \
-                       "or empty)")
+    X(FD_CTOR_SUBMITTER, "XHR §5 new FormData(form, submitter) step 1.1 (a submitter must be a submit button " \
+                         "whose form owner is form)") \
+    X(FD_CTOR_ENTRIES, "XHR §5 new FormData(form, submitter) steps 1.2-1.4 (construct the entry list for form " \
+                       "and submitter, refuse a null one, and adopt it)")
 enum { IDL_STEP_STAGE_BASE(FD_CTOR_STAGES) FD_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const FD_CTOR_STEPS[] = { FD_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-typedef struct { int unused; } JSFormDataCtorState;
+typedef struct { FormEntryListRun entries; } JSFormDataCtorState;
 
-static void js_fd_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
-static void js_fd_ctor_release(JSContext *ctx, void *st) { (void)ctx; (void)st; }
+static void js_fd_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSFormDataCtorState *s = st;
+    form_entry_list_visit(ctx, &s->entries, v);
+}
+
+static void js_fd_ctor_release(JSContext *ctx, void *st)
+{
+    JSFormDataCtorState *s = st;
+    form_entry_list_release(ctx, &s->entries);
+}
 
 static int js_fd_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    (void)st; (void)out_cb; (void)out_argc;
-    JS_FreeValue(ctx, cb_result);
+    JSFormDataCtorState *s = st;
+    JSValueConst form = argc > 0 ? argv[0] : JS_UNDEFINED;
+    JSValueConst submitter = argc > 1 ? argv[1] : JS_UNDEFINED;
+    int r;
+
+    if (hdr->stage == FD_CTOR_SUBMITTER) {
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        if (JS_IsUndefined(hdr->this_val)) {
+            JS_ThrowTypeError(ctx, "constructor FormData requires 'new'");
+            return -1;
+        }
+        form_entry_list_init(&s->entries);
+        /* `optional HTMLFormElement form` with no default: an omitted or explicitly-undefined argument is NOT
+           GIVEN (§3.6.2), which the declaration leaves unconverted, so this is what "if form is given" reads.
+           A `null` passed for it is a TypeError the DECLARATION throws — the position is interface-typed and
+           not nullable — so nothing here re-tests it. */
+        if (JS_IsUndefined(form)) {
+            *presult = form_data_new(ctx, NULL);
+            return JS_IsException(*presult) ? -1 : 0;
+        }
+        /* Step 1.1. `submitter` IS nullable, and null is what the IDL's own default is, so both spellings mean
+           "no submitter". The two refusals are in the order §5 lists them. */
+        if (!JS_IsUndefined(submitter) && !JS_IsNull(submitter)) {
+            if (!html_element_is(submitter)) {
+                JS_ThrowTypeError(ctx, "the FormData submitter is not an HTMLElement");
+                return -1;
+            }
+            if (!html_form_is_submit_button(ctx, submitter)) {
+                JS_ThrowTypeError(ctx, "the FormData submitter is not a submit button");
+                return -1;
+            }
+            {
+                JSValue owner = html_form_owner_of(ctx, submitter);
+                bool mine = JS_VALUE_GET_PTR(owner) == JS_VALUE_GET_PTR(form);
+                JS_FreeValue(ctx, owner);
+                if (!mine) {
+                    JS_ThrowDOMException(ctx, "NotFoundError",
+                                         "the FormData submitter's form owner is not the given form");
+                    return -1;
+                }
+            }
+        } else {
+            /* §4.10.22.4's `submitter` defaults to null, and its step 5.1 compares fields against it — a null
+               submitter therefore drops every button, which is what `new FormData(form)` must produce. */
+            submitter = JS_NULL;
+        }
+        hdr->stage = FD_CTOR_ENTRIES;
+    }
     DCHECK(hdr->stage == FD_CTOR_ENTRIES, "the FormData constructor resumed into a stage §5 does not have");
-    if (JS_IsUndefined(hdr->this_val)) {
-        JS_ThrowTypeError(ctx, "constructor FormData requires 'new'");
+    if (JS_IsUndefined(submitter)) submitter = JS_NULL;
+    /* Step 1.2. The ENCODING is not given, so §4.10.22.4's own default applies — UTF-8. A form's
+       `accept-charset` belongs to §4.10.21.3's "pick an encoding", which is the SUBMISSION's step and not this
+       constructor's; reading it here would put a `_charset_` entry in a list the spec builds without one. */
+    r = form_entry_list_run(ctx, &s->entries, form, submitter, "UTF-8", cb_result, presult, out_cb, out_argc);
+    if (r > 0) return r;
+    if (r < 0) return -1;
+    /* Step 1.3: a null list is a form already constructing one — re-entered from its own `formdata` handler. */
+    if (JS_IsNull(*presult)) {
+        *presult = JS_UNDEFINED;
+        JS_ThrowDOMException(ctx, "InvalidStateError",
+                             "the form is already constructing its entry list");
         return -1;
     }
-    if (argc > 0 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0]))
-        DFAIL("new FormData(form) reached its constructor — build the form-submission entry list algorithm, "
-              "which is what turns a form element's controls into entries");
-    *presult = form_data_new(ctx, NULL);
-    return JS_IsException(*presult) ? -1 : 0;
+    /* Step 1.4: "set this's entry list to list". The list IS a FormData — §4.10.22.4 step 9 returns a clone of
+       the entry list and form_entry_list_run hands that clone over as the object holding it — so adopting it is
+       returning it, and nothing copies a list twice. */
+    return 0;
 }
 
 static const IdlStepDecl js_fd_ctor_decl = {
@@ -563,7 +688,11 @@ void form_data_init(JSContext *ctx)
     JSClassDef def = { "FormData", .finalizer = form_data_finalizer, .gc_mark = form_data_gc_mark };
     JSRuntime *rt = JS_GetRuntime(ctx);
     static const IdlArgType TWO_STR[3] = { IDL_USVSTRING, IDL_ANY, IDL_USVSTRING };
-    static const IdlArgType CTOR_ARGS[2] = { IDL_ANY, IDL_ANY };
+    /* §5's `optional HTMLFormElement form` is a real INTERFACE position, so a non-form is a TypeError the type
+       throws and no body re-tests. Its second argument stays IDL_ANY: `optional HTMLElement? submitter` is a
+       NULLABLE interface, and one declaration carries ONE brand and ONE narrowing, so the two positions cannot
+       both be expressed here — the constructor's step 1.1 makes the submitter's check as its first act. */
+    static const IdlArgType CTOR_ARGS[2] = { IDL_INTERFACE, IDL_ANY };
 
     DCHECK(g_fd_rt == NULL || g_fd_rt == rt,
            "FormData was installed into a second runtime — its class id and step ids belong to the first, and "
@@ -589,6 +718,8 @@ void form_data_init(JSContext *ctx)
 
     g_fd_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, NULL, 0, &js_fd_ctor_decl, 0);
     idl_optional_from(0);   /* §5: both constructor arguments are optional */
+    idl_iface_brand(node_class_id());          /* every node wrapper is one class … */
+    idl_iface_narrow(html_form_is_form_element);   /* … so HTMLFormElement is the narrowing, per §16.5a */
     realm_declare_intrinsic(form_data_install_proto);
 }
 

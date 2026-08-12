@@ -30,4 +30,10 @@ void element_internals_upgrade_form_steps(JSContext *ctx, JSValueConst wrap);
 void element_internals_reset_form_owner(JSContext *ctx, JSValueConst wrap,
                                         const char *form_attr, size_t form_attr_len);
 
+/* §4.13.7.3's SUBMISSION VALUE for a form-associated custom element — `setFormValue`'s first argument, which
+   HTML §4.13.7.3's entry construction algorithm turns into the element's entries. A `(File or USVString or
+   FormData)?`, so the caller distinguishes the FormData arm (an entry LIST appended wholesale) from the single
+   value; JS_NULL when the element has never been given one. OWNED. */
+JSValue element_internals_submission_value(JSContext *ctx, JSValueConst wrap);
+
 #endif

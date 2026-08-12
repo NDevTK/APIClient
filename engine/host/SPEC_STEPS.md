@@ -4270,6 +4270,23 @@ write, and §4.13.5 step 10. **Named ABSENT:** the resets HTML also requires whe
 document-level id index, which this engine does not have (`getElementById` walks), and a tree walk
 per `id` write is not that index.
 
+**AND NO RESET IS EVER TRIGGERED FOR A BUILT-IN CONTROL, WHICH IS WHY THE ABSENT SLOT MEANS SOMETHING
+OTHER THAN NULL.** All four triggers above sit inside `custom_elements.c`, behind
+`ce_upgradable_name`, so an `<input>` reaches none of them — and the reason is not that nobody added
+the call. HTML's TREE BUILDER associates a parsed control through the **form element pointer** as it
+builds, and this engine's Lexbor parse routes through none of DOM §4.2.3's insertion steps at all
+(`element_tree_changed` records a walk only for a *connected* root, and the initial parse produces no
+such record). So for a parsed document there is no moment at which a reset *could* have run, and
+reading an absent slot as "the owner is null" would empty `form.elements` and every entry list for
+every page the tool exists to look at.
+
+The slot's absence therefore means **"no reset has run"** — a different fact from "the owner is
+null" — and `html_form_owner_of` answers it by RUNNING steps 4-5 over the tree as it stands. That is
+the same `form_derive_owner` the reset itself calls, so there is one §4.10.18.3 and not two, and a
+STORED owner always wins, which is what keeps `<my-control form=nothing>`'s null answer null. **Named
+ABSENT:** the tree builder's form element pointer, which is the only thing that can associate a
+control the parser MOVED (`<form><table><input>`) with the form it was written inside.
+
 ### 16.5 §4.13.7.3's members, and the one `[S]` among them
 
 | Member | Steps | Suspends |
