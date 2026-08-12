@@ -39,6 +39,7 @@
 #include "core/html/form_data_event.h"
 #include "core/html/form_entry_list.h"
 #include "core/html/html_form.h"
+#include "core/html/input_value.h"
 #include "core/html/submit_event.h"
 #include "core/url/url.h"
 #include "solver/attr_shadow.h"
@@ -264,9 +265,16 @@ static JSValue option_collect_text(JSContext *ctx, lxb_dom_node_t *root)
     return r;
 }
 
-/* ---- a control's VALUE state ----------------------------------------------------------------------------- */
+/* ---- a control's VALUE state -----------------------------------------------------------------------------
+ *
+ * §4.10.5's `input` is NOT one of these. Its value is §4.10.5.1's — a piece of state whose CONTENT is decided
+ * by the `type` attribute's state through the value sanitization algorithm and whose relationship to the
+ * `value` content attribute is decided by the dirty value flag — and it lives in input_value.c because it is a
+ * different problem from "the element's assigned state, or its markup's default". What is left here is the two
+ * controls whose section states exactly that (§4.10.11's textarea and §4.10.10's option) and the `button`,
+ * whose value IS its `value` content attribute. */
 /* magic names whose DEFAULT applies when the page has assigned no state. */
-enum { CTRL_INPUT = 0, CTRL_TEXTAREA, CTRL_OPTION };
+enum { CTRL_ATTRIBUTE = 0, CTRL_TEXTAREA, CTRL_OPTION };
 
 static JSValue js_ctrl_get_value(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -306,6 +314,35 @@ static JSValue js_ctrl_set_value(JSContext *ctx, JSValueConst this_val, JSValueC
        slot keeps the VALUE, so a concolic stays a concolic all the way to the submission. */
     if (el) dom_cow_set_prop_taint(ctx, el, "value", val);
     return JS_UNDEFINED;
+}
+
+/* §4.10.5.4's `value` on HTMLInputElement, which input_value.c owns in full — the four modes and §4.10.5.1's
+   value sanitization algorithm. Here only Web IDL §3.7.5's BRAND CHECK, because the member is
+   HTMLInputElement's: `descriptor.get.call(textarea)` is a TypeError and not the empty string a shared accessor
+   would answer, and the two controls that share this file's other accessor are not `input` elements. */
+static JSValue js_input_brand(JSContext *ctx, JSValueConst this_val)
+{
+    if (html_form_input_state(node_of(this_val)) != INPUT_STATE_NONE) return JS_UNDEFINED;
+    return JS_ThrowTypeError(ctx, "HTMLInputElement's `value` was accessed on something that is not an "
+                                  "HTMLInputElement");
+}
+
+static JSValue js_input_get_value(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue bad = js_input_brand(ctx, this_val);
+
+    (void)magic;
+    if (JS_IsException(bad)) return bad;
+    return input_value_get(ctx, this_val);
+}
+
+static JSValue js_input_set_value(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    JSValue bad = js_input_brand(ctx, this_val);
+
+    (void)magic;
+    if (JS_IsException(bad)) return bad;
+    return input_value_set(ctx, this_val, val);
 }
 
 /* §4.10.5.1.15 checkedness, defaulting to the `checked` content attribute. */
@@ -1288,9 +1325,14 @@ JSValue html_form_control_value(JSContext *ctx, JSValueConst wrap)
 {
     lxb_dom_node_t *n = node_of(wrap);
 
+    /* An `input`'s value is §4.10.5.1's, sanitized and mode-dependent — so the entry list and the constraint
+       validation read the SAME value the IDL attribute answers, which is the whole point of one accessor:
+       `<input type=url value=" http://x ">` reported a typeMismatch a browser does not, because a browser
+       stripped that whitespace before anything looked at the value. */
+    if (html_form_input_state(n) != INPUT_STATE_NONE) return input_value_get(ctx, wrap);
     return js_ctrl_get_value(ctx, wrap,
                              tag_is(n, "textarea") ? CTRL_TEXTAREA : tag_is(n, "option") ? CTRL_OPTION
-                                                                                         : CTRL_INPUT);
+                                                                                         : CTRL_ATTRIBUTE);
 }
 
 bool html_form_control_checked(JSContext *ctx, JSValueConst wrap)
@@ -1310,20 +1352,20 @@ const char *html_form_control_name(JSValueConst wrap, size_t *plen)
     return el ? attr_of(el, "name", plen) : NULL;
 }
 
+/* Step 5.7's value IS §4.10.5.4's DEFAULT/ON MODE — "if the field element has a `value` attribute specified,
+   then let value be the value of that attribute; otherwise, let value be the string `on`" is that mode's getter
+   word for word, which is why the default is a word and not the empty string. So it is one algorithm and this
+   is where the entry list asks for it, never a second copy that reads the slot the value mode writes: a
+   `box.value = location.hash` is an assignment in DEFAULT/ON mode and lands on the CONTENT ATTRIBUTE, where the
+   taint shadow keeps it a source. */
 JSValue html_form_checkbox_value(JSContext *ctx, JSValueConst wrap)
 {
-    lxb_dom_element_t *el = form_elem_of(wrap);
-    size_t len = 0;
-    const char *a;
-    int i;
+    HtmlInputState st = html_form_input_state(node_of(wrap));
 
-    if (!el) return JS_NewStringLen(ctx, "on", 2);
-    /* The state the page assigned, first — the value slot is where an assignment lands and it is what carries a
-       CONCOLIC, so `box.value = location.hash` submits as the source rather than as the markup's default. */
-    i = attr_shadow_find(el, ATTR_SLOT_PROPERTY, NULL, "value");
-    if (i >= 0) return JS_DupValue(ctx, attr_shadow_opaque(i));
-    a = attr_of(el, "value", &len);
-    return a ? JS_NewStringLen(ctx, a, len) : JS_NewStringLen(ctx, "on", 2);
+    DCHECK(st == INPUT_STATE_CHECKBOX || st == INPUT_STATE_RADIO,
+           "§4.10.22.4 step 5.7's value was asked of a control that is not an `input` in the Checkbox or Radio "
+           "Button state — those are the two states html_form_field_kind answers FORM_FIELD_CHECKBOX for");
+    return input_value_get(ctx, wrap);
 }
 
 FormFieldKind html_form_field_kind(JSContext *ctx, JSValueConst wrap)
@@ -1585,7 +1627,10 @@ void html_form_declare(JSContext *ctx)
        is one because §4.10.22.4's `formdata` event is the page's code and it runs on that path too. */
     g_id_submit = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_submit_def);
     g_id_reqsubmit = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_reqsubmit_def);
-    g_id_val_input = idl_setter_id(ctx, IDL_DOMSTRING, false, js_ctrl_set_value, CTRL_INPUT);
+    /* §4.10.5.4's `value` takes a DOMString like the others, and input_value.c decides what its four modes do
+       with it — including the File Upload state's throw, which reaches the page because a setter's exception
+       propagates out of the args machine like any other. */
+    g_id_val_input = idl_setter_id(ctx, IDL_DOMSTRING, false, js_input_set_value, 0);
     g_id_val_textarea = idl_setter_id(ctx, IDL_DOMSTRING, false, js_ctrl_set_value, CTRL_TEXTAREA);
     g_id_val_option = idl_setter_id(ctx, IDL_DOMSTRING, false, js_ctrl_set_value, CTRL_OPTION);
     g_id_checked = idl_setter_id(ctx, IDL_ANY, false, js_ctrl_set_checked, 0);   /* `boolean checked` is ToBoolean */
@@ -1599,7 +1644,7 @@ void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst inp
     idl_install_accessor(ctx, form_proto, "elements", js_form_elements, 0, -1);
     idl_install_step_method(ctx, form_proto, "submit", 0, g_id_submit);
     idl_install_step_method(ctx, form_proto, "requestSubmit", 0, g_id_reqsubmit);
-    idl_install_accessor(ctx, input_proto, "value", js_ctrl_get_value, CTRL_INPUT, g_id_val_input);
+    idl_install_accessor(ctx, input_proto, "value", js_input_get_value, 0, g_id_val_input);
     idl_install_accessor(ctx, textarea_proto, "value", js_ctrl_get_value, CTRL_TEXTAREA, g_id_val_textarea);
     idl_install_accessor(ctx, option_proto, "value", js_ctrl_get_value, CTRL_OPTION, g_id_val_option);
     idl_install_accessor(ctx, input_proto, "checked", js_ctrl_get_checked, 0, g_id_checked);

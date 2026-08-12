@@ -122,8 +122,8 @@ FormFieldKind html_form_field_kind(JSContext *ctx, JSValueConst wrap);
 const char *html_form_control_name(JSValueConst wrap, size_t *plen);
 
 /* Step 5.7's value: "if the field element has a `value` attribute specified, then let value be the value of
-   that attribute; otherwise, let value be the string `on`" — §4.10.5.4's default/on mode, which is why the
-   default is a word and not the empty string a text control's value falls back to. OWNED. */
+   that attribute; otherwise, let value be the string `on`" — which IS §4.10.5.4's DEFAULT/ON mode word for
+   word, so this asks input_value.c for that mode rather than spelling the same two lines again. OWNED. */
 JSValue html_form_checkbox_value(JSContext *ctx, JSValueConst wrap);
 
 /* §4.10.7's LIST OF OPTIONS for a `select`, narrowed to step 5.6's condition — selectedness true and not
@@ -151,7 +151,12 @@ bool html_form_is_telephone_input(const lxb_dom_node_t *n);
 /* §4.10.18.1's VALUE, and §4.10.5.1.15's CHECKEDNESS, for a caller that is not the IDL accessor — the entry
    list reads both off controls it did not receive as a receiver. `html_form_control_value` is OWNED and may be
    a CONCOLIC: the value slot holds a JSValue rather than bytes exactly so that `input.value = location.hash`
-   survives into the submission. */
+   survives into the submission.
+   FOR AN `input` IT IS input_value.c'S — §4.10.5.4's mode-dependent value, already through §4.10.5.1's value
+   sanitization algorithm. That is why it is ONE function and not a read each consumer does for itself: the
+   entry list, §4.10.21's constraint validation and §3.2.6's auto-directionality all read a control's value, and
+   an unsanitized one made all three wrong together (`<input type=url value=" http://x ">` reported a
+   typeMismatch no browser reports). */
 JSValue html_form_control_value(JSContext *ctx, JSValueConst wrap);
 bool    html_form_control_checked(JSContext *ctx, JSValueConst wrap);
 
