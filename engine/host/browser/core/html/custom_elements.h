@@ -187,4 +187,19 @@ void custom_elements_disconnected(JSContext *ctx, lxb_dom_element_t *el);
 void custom_elements_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
                                        const char *old, size_t old_len, const char *val, size_t val_len);
 
+/* DOM §4.5 "ADOPT A NODE" STEP 3'S REGISTRY ARMS, for ONE shadow-including inclusive descendant the walk has
+   just moved from `old_document` into `document` — step 3.2 (a shadow root takes the new document's global
+   registry unless its own is scoped), step 3.3.2 (an element re-derives its registry from its PARENT, or from
+   the new document when it has none or is a child of an exclusive DocumentFragment) and step 3.3.3 (a CUSTOM
+   element gets an `adoptedCallback` reaction with « oldDocument, document »).
+   THE WHOLE ARM IS ONE ENTRY because every part of it is this component's record — the registry object, its
+   `is scoped` boolean, DOM §4.5's "effective global custom element registry", the node's registry slot, the
+   element's custom element state and its definition. node.c owns the WALK and step 3.1's node documents; it
+   must not be able to name any of the above, or there are two answers to what a node's registry is.
+   Called ONLY from inside that walk, which is why it asserts `document != old_document` rather than testing
+   it: step 3's condition is the walk's, and an arm reached without it rewrites a registry adoption never
+   touches. */
+void custom_elements_node_adopted(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_document_t *document,
+                                  lxb_dom_document_t *old_document);
+
 #endif

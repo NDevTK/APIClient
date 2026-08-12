@@ -55,6 +55,10 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
+/* §4.5 adopt's step 3 arm. The DOM defines a node's custom element registry and the standard states the
+   re-derivation right here, in §4.5; HTML owns what a registry IS. shadow_root.c reaches across the same
+   boundary for the same reason. */
+#include "core/html/custom_elements.h"
 #include "solver/engine.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
@@ -439,6 +443,155 @@ void node_add_tree_hook(NodeTreeHook fn)
     dom_cow_set_tree_hook(node_tree_hooks_run);
 }
 
+/* ---- DOM §4.5 "ADOPT A NODE" ----------------------------------------------------------------------------
+ *
+ * ONLY STEP 2 OF IT EXISTED, inline in `node_insert_at`, and step 2 is the one step that is not about
+ * adoption at all — it is the removal that makes a move a move. Everything the algorithm is FOR was missing:
+ * a node inserted into another document kept the node document it was created in, so `ownerDocument` lied,
+ * `document.createElement` on the wrong document's behalf built attributes that disagreed with their element
+ * (attr_list.c asserts exactly that pairing), a custom element moved between documents got no
+ * `adoptedCallback`, its registry was never re-derived, and a `<template>` carried its contents into a
+ * document that is not their owner. Nothing threw for any of it.
+ *
+ * THE WALK IS ITERATIVE OVER AN EXPLICIT STACK, and not because a rest point would be hard: `node_insert_at`
+ * is reached from `appendChild`, from the ChildNode/ParentNode mixins and from §5.5's range machines, and
+ * every one of those is a plain C body with no flow base under it, so there is nothing here that COULD
+ * suspend. What a page's tree can still do is make the walk as deep as its markup, and C recursion over that
+ * is the overflow this project has removed from every other tree algorithm (see `clone a node`'s level stack,
+ * declarative_shadow.c's list, §4.2's shadow-including walk). So the depth lives in a heap stack of FRAMES.
+ * A frame is one INVOCATION of `adopt`: step 3.4's adopting steps for a `<template>` adopt its contents into a
+ * DIFFERENT document, which is a nested adopt with its own `document` and its own `oldDocument`, and the frame
+ * carries both. The outer frame's cursor is advanced BEFORE the nested frame is pushed, so the nested walk
+ * runs exactly where step 3.4 puts it — between this descendant and the next one — rather than after the
+ * outer subtree, which is the order every reaction the walk enqueues is delivered in.
+ * WHEN THE CALLER CAN PARK, this becomes a stage block over the same frames and the stack becomes the state;
+ * nothing about the algorithm changes. */
+typedef struct {
+    lxb_dom_node_t     *root;   /* this invocation's `node` — what bounds its shadow-including walk */
+    lxb_dom_node_t     *cur;    /* the next inclusive descendant step 3 has still to visit */
+    lxb_dom_document_t *doc;    /* this invocation's `document` */
+    lxb_dom_document_t *old;    /* step 1's `oldDocument`, read before step 3 wrote a single node document */
+} NodeAdoptFrame;
+
+typedef struct {
+    NodeAdoptFrame *f;
+    int sp, cap;
+} NodeAdoptStack;
+
+/* §4.4's NODE DOCUMENT as a Lexbor question: a Document IS its own, and lexbor says so through the same
+   field, but reading it through one place is what keeps the assert below honest for both. */
+static lxb_dom_document_t *node_document_of(lxb_dom_node_t *n)
+{
+    if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT) return lxb_dom_interface_document(n);
+    return n->owner_document;
+}
+
+/* §4.5 adopt STEP 3.1 — "set inclusiveDescendant's node document to document", and step 3.3.1's same write
+   over an element's attribute list.
+   THE WRITE HAS NO PER-FLOW CAPTURE, which is the one thing about adoption this engine cannot yet do. A node's
+   document is shared baseline state exactly like its parent link: flow A adopting a node into another document
+   must be invisible to flow B, and dom_cow's delta has an entry kind for the tree, one for attributes and one
+   for character data — not one for this. So the assert fires precisely where the absence changes an answer:
+   while a flow's DOM writes are being captured. With capture off the write IS the baseline (the document
+   parse, a scratch parse) and there is nothing to revert. */
+static void node_set_node_document(lxb_dom_node_t *n, lxb_dom_document_t *doc)
+{
+    DCHECK(n->type != LXB_DOM_NODE_TYPE_DOCUMENT,
+           "DOM §4.5 adopt step 3.1 tried to set a DOCUMENT's node document — a document IS its own node "
+           "document, and `adoptNode` throws NotSupportedError rather than reaching one");
+    if (n->owner_document == doc) return;
+    DCHECK(!g_dom_capture,
+           "DOM §4.5 adopt changed a node's NODE DOCUMENT while a flow's DOM writes are being captured, and "
+           "the per-flow delta has no entry kind for it — a sibling flow would read this node in the document "
+           "this flow moved it to. engine/solver/dom_cow.c must add "
+           "`void dom_cow_set_node_document(lxb_dom_node_t *node, lxb_dom_document_t *doc)`, a capture-then-"
+           "write chokepoint whose delta entry restores the old document on unapply, beside the tree, "
+           "attribute and character-data entry kinds it already has");
+    n->owner_document = doc;
+}
+
+static void node_adopt_push(NodeAdoptStack *s, lxb_dom_node_t *root, lxb_dom_document_t *doc)
+{
+    NodeAdoptFrame *f;
+
+    /* STEP 3's condition, asked where the invocation begins: an adopt into the document a node is already in
+       does nothing at all, so the frame is never pushed and the walk is never entered. */
+    if (node_document_of(root) == doc) return;
+    if (s->sp == s->cap) {
+        int want = s->cap ? s->cap * 2 : 4;
+        NodeAdoptFrame *n = realloc(s->f, sizeof(NodeAdoptFrame) * (size_t)want);
+        CHECK(n != NULL, "DOM §4.5 adopt could not grow its level stack");
+        s->f = n;
+        s->cap = want;
+    }
+    f = &s->f[s->sp++];
+    f->root = root;
+    f->cur = root;                       /* step 3's walk is INCLUSIVE — it starts at the node itself */
+    f->doc = doc;
+    f->old = node_document_of(root);     /* STEP 1 */
+}
+
+/* §4.5's STEP 3.4 — "run the adopting steps with inclusiveDescendant and oldDocument". HTML defines them for
+   exactly one element: a `<template>`, whose CONTENTS are a separate tree that no child link reaches, so
+   without this an adopted template's markup keeps a node document its element no longer has.
+   HTML §4.12.3 adopts them into the new node document's APPROPRIATE TEMPLATE CONTENTS OWNER DOCUMENT — an
+   inert Document with no browsing context, created once per document and remembered on it, which is what
+   keeps a template's scripts from running. That is a Document FIELD, and core/dom/document.c owns the record
+   it would live on, so this is where the algorithm stops. */
+static void node_adopting_steps(NodeAdoptStack *s, lxb_dom_node_t *n, lxb_dom_document_t *doc)
+{
+    if (n->type != LXB_DOM_NODE_TYPE_ELEMENT || !lxb_html_tree_node_is(n, LXB_TAG_TEMPLATE)) return;
+    (void)s; (void)doc;
+    DFAIL("DOM §4.5 adopt step 3.4 reached HTML §4.12.3's adopting steps for a <template>: its template "
+          "contents are adopted into the new node document's APPROPRIATE TEMPLATE CONTENTS OWNER DOCUMENT, "
+          "which is that document's associated inert template document — a Document field. core/dom/document.c "
+          "must add `lxb_html_document_t *document_template_contents_owner(JSContext *ctx, "
+          "lxb_dom_document_t *doc)`: HTML §4.12.3 answers `doc` itself when `doc` was created by that "
+          "algorithm, and otherwise creates the inert Document on first ask (browsing context null, marked an "
+          "HTML document when `doc` is one), stores it as `doc`'s associated inert template document and "
+          "answers it");
+}
+
+/* DOM §4.5 "ADOPT A NODE", given `node` and `document`. */
+void node_adopt(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *document)
+{
+    NodeAdoptStack s = { NULL, 0, 0 };
+
+    DCHECK(node != NULL && document != NULL, "DOM §4.5 adopt was asked of nothing");
+    /* STEP 2. It is the capturing removal and not a raw detach because it IS a removal: the per-flow delta has
+       to see it, and so do §4.2.3's removing steps and §6.1's pre-remove steps. */
+    if (node->parent) dom_cow_remove_child(node);
+    node_adopt_push(&s, node, document);           /* STEPS 1 and 3's condition */
+    /* Step 3 mints wrappers and reads per-flow records off them, so it needs the realm — and only step 3 does,
+       which is why an adopt into the document a node is already in is answerable without one. */
+    DCHECK(s.sp == 0 || ctx != NULL,
+           "DOM §4.5 adopt's step 3 walk ran with no realm — every part of it (the shadow-including walk's "
+           "element→shadow-root association, the registry arm, the adoptedCallback reaction) is a per-flow "
+           "fact kept on a node's WRAPPER, and there is no realm to build one in");
+    while (s.sp > 0) {
+        NodeAdoptFrame *f = &s.f[s.sp - 1];
+        lxb_dom_node_t *d = f->cur;
+        lxb_dom_document_t *doc = f->doc, *old = f->old;
+
+        if (!d) { s.sp--; continue; }
+        /* Advanced BEFORE the steps run, so step 3.4's nested invocation lands between this descendant and the
+           next rather than after the whole subtree — and so this frame's pointer may be invalidated by the
+           push below without the cursor being lost. */
+        f->cur = shadow_root_next_in_shadow_including(ctx, d, f->root);
+
+        node_set_node_document(d, doc);                                              /* STEP 3.1 */
+        if (d->type == LXB_DOM_NODE_TYPE_ELEMENT) {                                  /* STEP 3.3.1 */
+            lxb_dom_attr_t *a;
+            for (a = lxb_dom_element_first_attribute(lxb_dom_interface_element(d)); a;
+                 a = lxb_dom_element_next_attribute(a))
+                node_set_node_document(&a->node, doc);
+        }
+        custom_elements_node_adopted(ctx, d, doc, old);       /* STEPS 3.2, 3.3.2 and 3.3.3 */
+        node_adopting_steps(&s, d, doc);                      /* STEP 3.4 */
+    }
+    free(s.f);
+}
+
 /* §4.2.3 "insert" — A DocumentFragment IS NOT INSERTED; ITS CHILDREN ARE, in order, and the fragment is left
    empty. That is not a detail: `createDocumentFragment` exists so a page can batch nodes and attach them in one
    call, so every use of it went wrong — the fragment NODE landed in the tree, `frag.childNodes.length` stayed
@@ -449,6 +602,16 @@ void node_add_tree_hook(NodeTreeHook fn)
    ask it would be the one place fragments quietly stopped working again.
    The children come OUT through the capturing chokepoint rather than a private detach: a fragment can be older
    than the fork that is running, so another flow's baseline may hold it. */
+/* §4.2.3 insert STEP 6.1 — "adopt node into parent's node document", which is where the ONE adopt above is
+   reached from. The realm is the PARENT'S DOCUMENT'S, because that is the document being adopted into and its
+   registry is what step 3 re-derives against; `node_insert_at` carries no JSContext of its own, deliberately,
+   and taking the running one instead would answer a second same-origin document's adoption out of whichever
+   realm happened to call. */
+static void node_insert_adopt(lxb_dom_node_t *parent, lxb_dom_node_t *node)
+{
+    node_adopt(document_realm_of(parent), node, node_document_of(parent));
+}
+
 void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref)
 {
     if (node_is_document_fragment(node)) {
@@ -460,7 +623,8 @@ void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t
         mutation_observer_batch_begin();
         for (c = node->first_child; c; c = next) {
             next = c->next;
-            dom_cow_remove_child(c);
+            dom_cow_remove_child(c);            /* STEP 4, with `suppressObservers` set */
+            node_insert_adopt(parent, c);       /* STEP 6.1, per node of `nodes` */
             if (ref) dom_cow_insert_before(ref, c);
             else     dom_cow_append_child(parent, c);
         }
@@ -470,14 +634,13 @@ void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t
     /* §4.2.3 PRE-INSERT STEP 2: a reference child that IS the node becomes the node's next sibling, decided
        before the node leaves its place. */
     if (ref == node) ref = node->next;
-    /* §4.5 "adopt" STEP 2, which §4.2.3's insert reaches at its step 6.1: "if node's parent is non-null, remove
-       node". Lexbor's insert does NOT unlink — it writes the new parent's links over the old ones and leaves
-       the old parent still naming the node as its child, so a MOVE (`doc.appendChild(p)` for a `p` that has a
-       parent) built a tree with two parents and a sibling chain that loops. Every walk in this engine then runs
-       forever, which is how it surfaced: §6.2's TreeWalker hung where the corpus regrafts a subtree.
-       It goes through the capturing chokepoint rather than a raw detach because it IS a removal — the per-flow
-       delta has to see it, and so do §4.2.3's removing steps and §6.1's pre-remove steps. */
-    if (node->parent) dom_cow_remove_child(node);
+    /* STEP 6.1. Adopt is what unlinks the node from its old parent (its own step 2) — lexbor's insert does NOT
+       unlink, it writes the new parent's links over the old ones and leaves the old parent still naming the
+       node as its child, so a MOVE (`doc.appendChild(p)` for a `p` that has a parent) built a tree with two
+       parents and a sibling chain that loops. Every walk in this engine then runs forever, which is how it
+       surfaced: §6.2's TreeWalker hung where the corpus regrafts a subtree. The removal used to be written
+       here, under a comment naming §4.5 step 2 — one step of an algorithm, standing in for the algorithm. */
+    node_insert_adopt(parent, node);
     if (ref) dom_cow_insert_before(ref, node);
     else     dom_cow_append_child(parent, node);
 }

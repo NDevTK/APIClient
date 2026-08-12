@@ -112,6 +112,19 @@ size_t node_cd_byte_of(const lxb_dom_node_t *n, uint32_t units);
    or NULL having thrown "IndexSizeError". It carries the live-range steps a substringData+insertBefore
    composition cannot. */
 lxb_dom_node_t *node_split_text(JSContext *ctx, lxb_dom_node_t *node, uint32_t offset);
+/* DOM §4.5 "ADOPT A NODE", given `node` and `document` — the whole algorithm, which is what §4.2.3's insert
+   reaches at its step 6.1 and what `Document.adoptNode()`/`importNode()` are stated over.
+   IT IS NOT A "SET THE OWNER DOCUMENT": step 3 walks `node`'s SHADOW-INCLUDING inclusive descendants in
+   shadow-including tree order and, per node, sets its node document, sets the node document of every attribute
+   in an element's attribute list, re-derives its custom element registry (custom_elements.c owns that arm),
+   enqueues an `adoptedCallback` reaction for a custom element, and runs the ADOPTING STEPS other standards
+   define — HTML's, for a `<template>`, adopting its contents into a different document again.
+   `ctx` is the realm of the DOCUMENT BEING ADOPTED INTO, because step 3's per-node state lives on wrappers and
+   a wrapper's prototypes are its document's. It may be NULL only for an adopt that step 3's condition skips
+   (`document` is already the node's node document), which is the ordinary same-document insert.
+   The walk is a heap frame stack, never C recursion: a page's tree is as deep as the page says, and every
+   caller of §4.2.3's insert is a plain C body that cannot suspend. See node.c. */
+void node_adopt(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *document);
 /* §4.2.3's "insert", as this engine's ONE tree-write helper: a DocumentFragment contributes its CHILDREN, a
    node already in a tree is removed from it first, and `ref` naming `node` itself resolves to its next sibling.
    Exported because §5.5's content-moving members are all stated over pre-insert and append; a second copy of

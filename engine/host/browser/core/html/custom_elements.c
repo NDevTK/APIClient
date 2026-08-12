@@ -44,13 +44,13 @@
  * `try to upgrade`, `define`'s three set questions, `whenDefined`, `upgrade`, and §4.13.2's own step 3 through
  * the agent's active custom element constructor map.
  *
- * WHAT IS HONESTLY ABSENT: adoptedCallback (no adoption reaction yet), and customized built-ins (`extends`),
- * which §4.13.4 rejects here rather than registering as autonomous — a silently-wrong registration is worse
- * than a named refusal. The three DOM sites that must WRITE a node's registry live in components this one may
- * not edit — `create an element`'s flattened creation options (core/dom/document.c), `attach a shadow root`'s
- * ShadowRootInit member (core/dom/shadow_root.c) and `adopt`'s re-derivation (core/dom/node.c) — and
- * custom_elements_definition_for_name carries the DCHECK that fires the moment their absence changes an
- * answer. */
+ * WHAT IS HONESTLY ABSENT: customized built-ins (`extends`), which §4.13.4 rejects here rather than
+ * registering as autonomous — a silently-wrong registration is worse than a named refusal. TWO of the DOM
+ * sites that must WRITE a node's registry live in components this one may not edit — `create an element`'s
+ * flattened creation options (core/dom/document.c) and `attach a shadow root`'s ShadowRootInit member
+ * (core/dom/shadow_root.c) — and custom_elements_definition_for_name carries the DCHECK that fires the moment
+ * their absence changes an answer. The third, DOM §4.5 `adopt`'s re-derivation, is BUILT:
+ * custom_elements_node_adopted is its steps 3.2/3.3.2/3.3.3, driven by core/dom/node.c's adopt walk. */
 #include <string.h>
 #include <stdlib.h>
 
@@ -270,12 +270,14 @@ static JSValue ce_registry_of_document(JSContext *ctx, const lxb_dom_document_t 
  * ABSENT IS DERIVED, NOT NULL, and the derivation is the value the CREATING operation would have written. DOM
  * sets the field at four sites — `create an element` (from the flattened creation options, defaulting to the
  * document's), `attach a shadow root` (from ShadowRootInit, defaulting to the host's node document's),
- * `create an element internal`, and `adopt` — and three of those four live in components this one may not
- * write into (core/dom/document.c, core/dom/shadow_root.c, core/dom/node.c). Deriving is not a stand-in for
- * them: for every registry that is NOT scoped the derived answer IS the stored one, because all four sites
- * write the node document's registry and `adopt` re-writes it to the new document's for exactly the global
- * case. Only a SCOPED registry is a value no derivation can produce, and that is why it must be STAMPED — by
- * `initialize`, by §4.13.2's constructor, and by the three sites above once they can pass one. OWNED. */
+ * `create an element internal`, and `adopt`, which is the one of the four that now STAMPS
+ * (custom_elements_node_adopted). Two of the remaining three live in components this one may not write into
+ * (core/dom/document.c, core/dom/shadow_root.c). Deriving is not a stand-in for them: for every registry that
+ * is NOT scoped the derived answer IS the stored one, because all four sites write the node document's
+ * registry. Only a SCOPED registry is a value no derivation can produce, and that is why it must be STAMPED —
+ * by `initialize`, by §4.13.2's constructor, by `adopt` (whose derivation from the PARENT is what makes an
+ * element adopted under a scoped tree answer null rather than the new document's), and by the two sites above
+ * once they can pass one. OWNED. */
 static JSValue ce_registry_of_node(JSContext *ctx, JSValueConst wrap)
 {
     lxb_dom_node_t *n, *root;
@@ -302,8 +304,13 @@ static JSValue ce_registry_of_node(JSContext *ctx, JSValueConst wrap)
     return ce_registry_of_document(ctx, ce_node_document(n));
 }
 
-/* DOM's "Once the custom element registry of a node is initialized to a CustomElementRegistry object, it
-   intentionally cannot be changed any further" — so the write is a DEFINE that asserts it is the first. */
+/* HTML §4.13.4's "Once the custom element registry of a node is initialized to a CustomElementRegistry object,
+   it intentionally cannot be changed any further", AS THE INVARIANT DOM §4.5 LEAVES STANDING. The sentence is
+   about a SCOPED association: `adopt` step 3.2/3.3.2 re-derive a node's registry every time it crosses into
+   another document, and both arms are guarded on the current registry being null or GLOBAL, so what can never
+   be replaced is a scoped registry — which is exactly the association a page reasons about and an
+   implementation optimizes against. Asserting "never written twice" instead would have made adoption itself
+   the violation. */
 static void ce_node_set_registry(JSContext *ctx, JSValueConst wrap, JSValueConst reg)
 {
     JSValue prev;
@@ -311,12 +318,12 @@ static void ce_node_set_registry(JSContext *ctx, JSValueConst wrap, JSValueConst
     DCHECK(JS_IsObject(wrap), "a custom element registry was associated with something that is not a node");
     if (JS_GetOwnSlot(ctx, &prev, wrap, g_atom_node_reg) > 0) {
         bool same = JS_VALUE_GET_PTR(prev) == JS_VALUE_GET_PTR(reg);
-        bool was_null = JS_IsNull(prev);
+        bool was_scoped = JS_IsObject(prev) && ce_reg_flag(ctx, prev, g_atom_scoped);
         JS_FreeValue(ctx, prev);
-        DCHECK(same || was_null,
-               "a node's custom element registry was replaced — DOM states it cannot be changed once it is "
-               "initialized to a CustomElementRegistry object, so the second writer is one that read the "
-               "node's registry wrong");
+        DCHECK(same || !was_scoped,
+               "a node's SCOPED custom element registry was replaced — HTML states the association cannot be "
+               "changed once it is made, and DOM §4.5 adopt's own re-derivation is guarded against exactly "
+               "this, so the second writer is one that read the node's registry wrong");
     }
     JS_DefinePropertyValue(ctx, (JSValue)wrap, g_atom_node_reg, JS_DupValue(ctx, reg), CE_SLOT_FLAGS);
     /* The latch custom_elements_definition_for_name reads — see its DCHECK. */
@@ -1692,6 +1699,107 @@ static void ce_try_upgrade(JSContext *ctx, lxb_dom_element_t *el, JSValueConst w
     def = ce_find_for_node(ctx, wrap, (const char *)tag, len);
     if (JS_IsObject(def)) ce_enqueue_upgrade(ctx, wrap, def);
     JS_FreeValue(ctx, def);
+}
+
+/* DOM §4.5's "GLOBAL CUSTOM ELEMENT REGISTRY" and "EFFECTIVE GLOBAL CUSTOM ELEMENT REGISTRY" — two definitions
+   stated over "null or a CustomElementRegistry object", which is why both take a value that may be JS_NULL
+   rather than a registry. A registry is GLOBAL when it is non-null and its `is scoped` is false; a registry's
+   EFFECTIVE global is itself when it is global and null otherwise. They are the whole of what `adopt` writes,
+   which is what makes adoption unable to hand a node a SCOPED registry it was not created under. */
+static bool ce_registry_is_global(JSContext *ctx, JSValueConst reg)
+{
+    return JS_IsObject(reg) && !ce_reg_flag(ctx, reg, g_atom_scoped);
+}
+
+/* CONSUMES `reg` and returns the effective global, OWNED. */
+static JSValue ce_registry_effective_global(JSContext *ctx, JSValue reg)
+{
+    if (ce_registry_is_global(ctx, reg)) return reg;
+    JS_FreeValue(ctx, reg);
+    return JS_NULL;
+}
+
+void custom_elements_node_adopted(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_document_t *document,
+                                  lxb_dom_document_t *old_document)
+{
+    JSValue wrap, reg;
+
+    DCHECK(g_ready, "DOM §4.5 adopt reached the custom element registry arm before custom_elements_init ran");
+    DCHECK(n != NULL && document != NULL && old_document != NULL && document != old_document,
+           "DOM §4.5 adopt's step 3 arm ran for a node whose document did not change — step 3's own condition "
+           "is `document is not oldDocument`, and running the arm anyway rewrites a registry the algorithm "
+           "never reaches");
+    /* Steps 3.2 and 3.3 name a SHADOW ROOT and an ELEMENT and nothing else; every other node kind carries no
+       custom element registry at all (§4.13.4's "look up a custom element registry" returns null for one). */
+    if (n->type != LXB_DOM_NODE_TYPE_ELEMENT && !shadow_root_is(n)) return;
+
+    wrap = node_wrap(ctx, n);
+    if (!JS_IsObject(wrap)) { JS_FreeValue(ctx, wrap); return; }
+    reg = ce_registry_of_node(ctx, wrap);
+
+    if (shadow_root_is(n)) {
+        /* STEP 3.2 — a shadow root takes the new document's global registry when its own is null (and it is
+           not being kept null) or is itself a global one. A SCOPED registry is left alone, which is the whole
+           of HTML §4.13.4's "once the custom element registry of a node is initialized to a
+           CustomElementRegistry object, it intentionally cannot be changed any further": the sentence is about
+           the association a scoped registry makes, and `adopt` re-deriving a global one is stated by DOM
+           itself. */
+        /* §4.8's `keep custom element registry null` is the second half of the first condition, and its ONE
+           writer is HTML §13.2.6.4.4's `shadowrootcustomelementregistry` branch. core/dom/shadow_root.c has no
+           such field and core/html/declarative_shadow.c does not read that attribute, so there is nothing here
+           to ask — and a NULL registry is the only state in which the answer differs, which is where this
+           crashes rather than guessing. What runs past it is the field's INITIAL value, false. */
+        DCHECK(!JS_IsNull(reg),
+               "DOM §4.5 adopt step 3.2 reached a shadow root whose custom element registry is NULL, where "
+               "§4.8's `keep custom element registry null` decides whether the new document's global registry "
+               "is adopted: core/dom/shadow_root.h must expose it (a SHADOW_ROOT_KEEP_REGISTRY_NULL entry on "
+               "shadow_root_flag, over a field of §4.8's record) and core/html/declarative_shadow.c must set "
+               "it from HTML §13.2.6.4.4's `shadowrootcustomelementregistry` attribute");
+        if (JS_IsNull(reg) || ce_registry_is_global(ctx, reg)) {
+            JSValue want = ce_registry_effective_global(ctx, ce_registry_of_document(ctx, document));
+
+            ce_node_set_registry(ctx, wrap, want);
+            JS_FreeValue(ctx, want);
+        }
+    } else {
+        /* STEP 3.3.2 — an element whose registry is null or NOT scoped re-derives one. The derivation is
+           stated over the element's PARENT and not over the new document alone, because the walk reaches a
+           descendant after its parent: an element adopted into a scoped tree takes that tree's registry's
+           effective global (which is NULL, a scoped registry having none), and only a root — or a child of an
+           exclusive DocumentFragment, which is a fragment that is not a shadow root — falls back to the
+           document's. */
+        if (JS_IsNull(reg) || !ce_reg_flag(ctx, reg, g_atom_scoped)) {
+            JSValue registry, want;
+
+            if (JS_IsObject(reg) || n->parent == NULL ||
+                (node_is_document_fragment(n->parent) && !shadow_root_is(n->parent))) {
+                registry = ce_registry_of_document(ctx, document);
+            } else {
+                JSValue pw = node_wrap(ctx, n->parent);
+                registry = ce_registry_of_node(ctx, pw);
+                JS_FreeValue(ctx, pw);
+            }
+            want = ce_registry_effective_global(ctx, registry);
+            ce_node_set_registry(ctx, wrap, want);
+            JS_FreeValue(ctx, want);
+        }
+        /* STEP 3.3.3 — the `adoptedCallback` reaction, with « oldDocument, document ». Only a CUSTOM element
+           has one: §4.13.6's enqueue takes the element's own definition, and an element that was never
+           upgraded carries none. */
+        if (ce_state_of(ctx, wrap) == CE_STATE_CUSTOM) {
+            JSValue def = ce_definition_of(ctx, wrap);
+            JSValue args[2];
+
+            args[0] = node_wrap(ctx, lxb_dom_interface_node(old_document));
+            args[1] = node_wrap(ctx, lxb_dom_interface_node(document));
+            ce_enqueue_args(ctx, wrap, def, CE_CB_ADOPTED, 2, (JSValueConst *)args);
+            JS_FreeValue(ctx, args[1]);
+            JS_FreeValue(ctx, args[0]);
+            JS_FreeValue(ctx, def);
+        }
+    }
+    JS_FreeValue(ctx, reg);
+    JS_FreeValue(ctx, wrap);
 }
 
 /* NOTHING IS ALLOCATED FOR AN ORDINARY ELEMENT, and that is what keeps these two on the tree walk's hot path.
