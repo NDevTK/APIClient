@@ -942,14 +942,14 @@ static int document_done_stage(JSContext *ctx, int stage)
            listener registered on window hears it — the propagation path derives that from the document's
            ancestors now rather than the caller naming the window. It is not cancelable. */
         event_target_fire(ctx, doc_here(ctx)->doc_obj,
-                          event_new(ctx, "DOMContentLoaded", /*bubbles*/ true, /*cancelable*/ false));
+                          event_new(ctx, "DOMContentLoaded", /*bubbles*/ true, /*cancelable*/ false), JS_UNDEFINED);
         return 1;
     }
     DCHECK(stage == 1, "the document lifecycle was asked for a stage it does not have");
     document_set_ready(ctx, 2);
     /* HTML: `load` is fired at the WINDOW and does not bubble — there is nothing above it to bubble to. */
     event_target_fire(ctx, doc_here(ctx)->win_obj,
-                      event_new(ctx, "load", /*bubbles*/ false, /*cancelable*/ false));
+                      event_new(ctx, "load", /*bubbles*/ false, /*cancelable*/ false), JS_UNDEFINED);
     return 1;
 }
 

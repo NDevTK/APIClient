@@ -584,7 +584,7 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     }
 
     DCHECK(hdr->stage == OPEN_FIRE, "the open() machine resumed at a stage §3.5.1 does not have");
-    r = event_target_fire_run(ctx, &s->phase, STEP_CB(s->cb), hdr->this_val, s->ev, cb_result, NULL,
+    r = event_target_fire_run(ctx, &s->phase, STEP_CB(s->cb), hdr->this_val, s->ev, JS_UNDEFINED, cb_result, NULL,
                               out_cb, out_argc);
     if (r > 0) return r;
     if (r < 0) return JS_STEP_ABRUPT;
@@ -1210,7 +1210,7 @@ static int xhr_fire_run(JSContext *ctx, JSXhrRunState *s, JSValueConst target, c
                          : event_new(ctx, type, /*bubbles*/ false, /*cancelable*/ false);
         if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return -1; }
     }
-    r = event_target_fire_run(ctx, &s->phase, STEP_CB(s->cb), target, s->ev, in, NULL, out_cb, out_argc);
+    r = event_target_fire_run(ctx, &s->phase, STEP_CB(s->cb), target, s->ev, JS_UNDEFINED, in, NULL, out_cb, out_argc);
     if (r > 0) return r;
     /* §2.9 leaves `target` and the dispatch flag on the event, so the next fire gets its own. */
     JS_FreeValue(ctx, s->ev);
@@ -1787,7 +1787,7 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             s->ev = progress_event_new(ctx, "loadstart", 0, 0);
             if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return -1; }
         }
-        r = event_target_fire_run(ctx, &s->phase, STEP_CB(s->cb), hdr->this_val, s->ev, in, NULL,
+        r = event_target_fire_run(ctx, &s->phase, STEP_CB(s->cb), hdr->this_val, s->ev, JS_UNDEFINED, in, NULL,
                                   out_cb, out_argc);
         in = JS_UNDEFINED;
         if (r > 0) return r;
@@ -1804,7 +1804,7 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                 s->ev = progress_event_new(ctx, "loadstart", 0, s->body_len);
                 if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return -1; }
             }
-            r = event_target_fire_run(ctx, &s->phase, STEP_CB(s->cb), d->upload, s->ev, in, NULL,
+            r = event_target_fire_run(ctx, &s->phase, STEP_CB(s->cb), d->upload, s->ev, JS_UNDEFINED, in, NULL,
                                       out_cb, out_argc);
             in = JS_UNDEFINED;
             if (r > 0) return r;

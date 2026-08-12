@@ -600,7 +600,7 @@ int abort_signal_run(JSContext *ctx, AbortSignalWork *w, JSValueConst sig, JSVal
                has returned. */
             if (JS_IsUndefined(w->ev))
                 w->ev = event_new(ctx, "abort", /*bubbles*/ false, /*cancelable*/ false);
-            r = event_target_fire_run(ctx, &w->phase, STEP_CB(w->cb), cur, w->ev, in, NULL, out_cb, out_argc);
+            r = event_target_fire_run(ctx, &w->phase, STEP_CB(w->cb), cur, w->ev, JS_UNDEFINED, in, NULL, out_cb, out_argc);
             in = JS_UNDEFINED;
             if (r > 0) { JS_FreeValue(ctx, cur); return r; }
             if (r < 0) { JS_FreeValue(ctx, cur); return -1; }

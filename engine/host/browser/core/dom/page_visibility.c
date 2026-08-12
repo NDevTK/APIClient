@@ -76,7 +76,7 @@ void page_visibility_update(JSContext *ctx, bool hidden)
     /* THE PAGE VISIBILITY CHANGE STEPS: `visibilitychange` at the DOCUMENT, bubbling. Queued rather than
        dispatched inline, because §6.6's caller is an algorithm step and the listeners are the page's code —
        event_target_fire is the queued reach, which is a first-class flow like every other job. */
-    event_target_fire(ctx, document_object(ctx), event_new(ctx, "visibilitychange", true, false));
+    event_target_fire(ctx, document_object(ctx), event_new(ctx, "visibilitychange", true, false), JS_UNDEFINED);
 }
 
 /* `readonly attribute boolean hidden` — §6.6 defines it as `visibilityState === "hidden"`, so that is what it

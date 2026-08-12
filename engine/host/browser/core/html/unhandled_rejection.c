@@ -267,7 +267,7 @@ static int js_reject_notify_step(JSContext *ctx, void *st, JSValue cb_result, JS
     }
     DCHECK(s->hdr.stage == REJECT_FIRE, "the rejection notification resumed into a stage §8.1.4.7 does not have");
     global = JS_GetGlobalObject(ctx);
-    r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), global, s->ev, cb_result, &s->not_canceled,
+    r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), global, s->ev, JS_UNDEFINED, cb_result, &s->not_canceled,
                               out_cb, out_argc);
     JS_FreeValue(ctx, global);
     if (r > 0) return r;

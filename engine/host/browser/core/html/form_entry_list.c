@@ -369,7 +369,7 @@ int form_entry_list_run(JSContext *ctx, FormEntryListRun *r, JSValueConst form, 
         r->ev = form_data_event_new(ctx, r->entries);
         if (JS_IsException(r->ev)) { r->ev = JS_UNDEFINED; JS_FreeValue(ctx, in); return -1; }
     }
-    rc = event_target_fire_run(ctx, &r->fphase, STEP_CB(r->cb), r->form, r->ev, in, NULL, out_cb, out_argc);
+    rc = event_target_fire_run(ctx, &r->fphase, STEP_CB(r->cb), r->form, r->ev, JS_UNDEFINED, in, NULL, out_cb, out_argc);
     if (rc > 0) return rc;
     if (rc < 0) return -1;
     fel_flag_set(ctx, r->form, false);   /* step 8 */

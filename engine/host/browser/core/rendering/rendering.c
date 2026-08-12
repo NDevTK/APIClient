@@ -398,7 +398,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
             }
             {
                 JSValue g = JS_GetGlobalObject(docctx);
-                r = event_target_fire_run(docctx, &s->fphase, STEP_CB(s->cb), g, s->ev, cb_result,
+                r = event_target_fire_run(docctx, &s->fphase, STEP_CB(s->cb), g, s->ev, JS_UNDEFINED, cb_result,
                                           &s->not_canceled, out_cb, out_argc);
                 JS_FreeValue(docctx, g);
             }
@@ -441,7 +441,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                 s->ev = media_query_list_change(docctx, s->m, &s->target);   /* §4.2, including its latch */
                 if (JS_IsUndefined(s->ev)) { s->m++; continue; }   /* this target's state has not changed */
             }
-            r = event_target_fire_run(docctx, &s->fphase, STEP_CB(s->cb), s->target, s->ev, cb_result,
+            r = event_target_fire_run(docctx, &s->fphase, STEP_CB(s->cb), s->target, s->ev, JS_UNDEFINED, cb_result,
                                       &s->not_canceled, out_cb, out_argc);
             if (r > 0) return r;                     /* parked on the page's `change` listeners */
             cb_result = JS_UNDEFINED;

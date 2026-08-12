@@ -1045,7 +1045,7 @@ static int js_submit_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         }
         /* Step 5.6's dispatch, as a REQUEST, so the handlers run as ordinary preemptible page code and this
            resumes after every one of them has returned. */
-        r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), s->hdr.this_val, s->ev, cb_result,
+        r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), s->hdr.this_val, s->ev, JS_UNDEFINED, cb_result,
                                   &not_canceled, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;

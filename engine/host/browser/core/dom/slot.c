@@ -581,7 +581,7 @@ int slot_change_work_run(JSContext *ctx, SlotChangeWork *w, JSValue cb_result, J
             CHECK(!JS_IsException(w->ev), "the slotchange event could not be allocated");
         }
         slot = JS_GetPropertyUint32(ctx, w->set, w->i);
-        r = event_target_fire_run(ctx, &w->fphase, STEP_CB(w->cb), slot, w->ev, cb_result, NULL,
+        r = event_target_fire_run(ctx, &w->fphase, STEP_CB(w->cb), slot, w->ev, JS_UNDEFINED, cb_result, NULL,
                                   out_cb, out_argc);
         JS_FreeValue(ctx, slot);
         if (r > 0) return r;

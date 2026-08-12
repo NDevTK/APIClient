@@ -141,7 +141,7 @@ static JSValue js_window_deliver(JSContext *ctx, JSValueConst this_val, int argc
        navigable would answer differently, and the reason the proxy is the thing held rather than the Window. */
     {
         JSValue w = window_proxy_window(tctx, target);
-        event_target_fire(tctx, w, ev);
+        event_target_fire(tctx, w, ev, JS_UNDEFINED);
         JS_FreeValue(tctx, w);
     }
     return JS_UNDEFINED;

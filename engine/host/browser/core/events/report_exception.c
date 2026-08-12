@@ -197,7 +197,7 @@ int report_exception_run(JSContext *ctx, ReportExceptionWork *w, JSValueConst ex
     }
     /* step 5.2: fire `error` at the global, using ErrorEvent, cancelable. It is the SAME §2.9 dispatch every
        other fire in this engine uses — reached as a REQUEST because this caller can park. */
-    r = event_target_fire_run(ctx, &w->phase, STEP_CB(w->cb), global, w->ev, in,
+    r = event_target_fire_run(ctx, &w->phase, STEP_CB(w->cb), global, w->ev, JS_UNDEFINED, in,
                               &not_canceled, out_cb, out_argc);
     if (r)
         return r;

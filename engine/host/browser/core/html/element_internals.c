@@ -667,7 +667,7 @@ static int js_ei_validity_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
     DCHECK(s->hdr.stage == EIV_FIRE, "check/report validity resumed into a stage §4.10.21.1 does not have");
     if (JS_IsUndefined(s->ev))
         s->ev = event_new(ctx, "invalid", /*bubbles*/ false, /*cancelable*/ true);
-    r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), s->el, s->ev, cb_result, &not_canceled,
+    r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), s->el, s->ev, JS_UNDEFINED, cb_result, &not_canceled,
                               out_cb, out_argc);
     if (r > 0) return r;
     if (r < 0) return JS_STEP_ABRUPT;

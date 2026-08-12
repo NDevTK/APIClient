@@ -34,6 +34,10 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/events/event.h"
+#include "core/events/message_event.h"
+#include "core/events/error_event.h"
+#include "core/events/page_transition_event.h"
+#include "core/events/before_unload_event.h"
 #include "core/events/event_path.h"
 #include "core/timing/timer.h"
 
@@ -698,6 +702,22 @@ static const JSCFunctionListEntry js_event_consts[] = {
     JS_PROP_INT32_DEF("BUBBLING_PHASE", 3, 0),
 };
 
+/* THE SUBCLASSES ARE DECLARED HERE, WITH THE INTERFACE THEY EXTEND, and that is not tidying. Each host had its
+ * own copy of the list — `event_init(ctx); message_event_init(ctx); error_event_init(ctx);` — which is the
+ * hand-picked list CLAUDE.md warns about, and it had already gone wrong: test_forced.c declared Event and
+ * ErrorEvent and NOT MessageEvent, so a `message` event in that host was a bare Event and `new MessageEvent`
+ * was a missing global, silently, in the one host the smoke test runs.
+ *
+ * WHY THIS IS THE RIGHT PLACE rather than a fourth list somewhere: an Event subclass's prototype chains to
+ * Event.prototype, so it is meaningless without this interface and can never be wanted separately. A build that
+ * has Event has all of them. The one list every host already goes through is therefore this function, and a
+ * subclass added to the tree is added HERE — one edit, and no host can be missing it.
+ *
+ * ORDER: after this interface's own class and members, because each subclass declares a prototype whose chain
+ * ends at Event.prototype and reads the ids declared above. */
+static void event_declare_subclasses(JSContext *ctx);
+static void event_free_subclasses(JSContext *ctx);
+
 void event_init(JSContext *ctx)
 {
     JSClassDef d = { "Event" };
@@ -720,6 +740,7 @@ void event_init(JSContext *ctx)
     idl_optional_from(1);   /* §2.2: `constructor(DOMString type, optional EventInit eventInitDict = {})` */
     g_ready = 1;
     realm_declare_intrinsic(event_install_proto);
+    event_declare_subclasses(ctx);
 }
 
 /* §2.2's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM — run where a realm's other intrinsics are added, exactly
@@ -775,10 +796,27 @@ void event_install(JSContext *ctx, JSValueConst global)
     JS_SetPropertyStr(ctx, (JSValue)global, "Event", ctor);
 }
 
+static void event_declare_subclasses(JSContext *ctx)
+{
+    message_event_init(ctx);
+    error_event_init(ctx);
+    page_transition_event_init(ctx);
+    before_unload_event_init(ctx);
+}
+
+static void event_free_subclasses(JSContext *ctx)
+{
+    message_event_free(ctx);
+    error_event_free(ctx);
+    page_transition_event_free(ctx);
+    before_unload_event_free(ctx);
+}
+
 void event_free(JSContext *ctx)
 {
     if (!g_ready)
         return;
+    event_free_subclasses(ctx);
     JS_FreeValue(ctx, g_key);   /* the prototypes are the REALMS' — each is released with its context */
     g_key = JS_UNDEFINED;
     g_ready = 0;

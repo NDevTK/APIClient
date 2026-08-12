@@ -169,7 +169,12 @@ void event_target_set_activation(bool (*has)(JSContext *ctx, JSValueConst el),
    `bubble_to` to pass, because the window is the document's parent and the spec already says so.
    It takes the EVENT, not a type and two flags: §2.9 dispatches an event, and a caller with a DERIVED one
    (PromiseRejectionEvent) has no way to hand it over if this mints its own. `ev` is CONSUMED. */
-void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev);
+/* `target_override` is §2.9 step 2's targetOverride — JS_UNDEFINED for an ordinary dispatch. HTML gives one
+   for `pagehide`, `pageshow`, `unload` and `beforeunload`, which are fired AT the Window with the DOCUMENT as
+   their target (what the spec spells as the legacy target override flag). It is the VALUE rather than a
+   boolean because the flag's whole content is "the target's associated Document" and the caller holds it;
+   asked as a boolean this component would have to resolve a Window whose realm it may not own. */
+void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev, JSValueConst target_override);
 /* THE SAME FIRE for a caller that can park — §2.9 is synchronous, and §3.2's `abort` is specified that way. One
    dispatch, two reaches: this is the REQUEST form, event_target_fire is the queued one. `phase` and `cb` belong
    to the calling machine and `cb` needs FOUR slots — pass it through STEP_CB so its capacity comes with it, as
@@ -177,7 +182,7 @@ void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev);
    the suspension, because §2.9 dispatches an event that exists rather than one the dispatch invents. Returns
    JS_STEP_CALL (return it) or 0 when it has answered. */
 int  event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, JSValueConst target,
-                           JSValueConst ev, JSValue in,
+                           JSValueConst ev, JSValueConst target_override, JSValue in,
                            bool *pnot_canceled, JSValue **out_cb, int *out_argc);
 
 #endif

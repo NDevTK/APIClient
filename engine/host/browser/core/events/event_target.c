@@ -1267,12 +1267,15 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                 /* §2.9 step 6.3: APPEND TO AN EVENT PATH with event, target, TARGETOVERRIDE, relatedTarget,
                    touchTargets and false. The path is the EVENT's — composedPath reads it — so it is published
                    on the event as it grows rather than kept privately here.
-                   targetOverride IS the target: step 2's other arm is the LEGACY TARGET OVERRIDE FLAG, which
-                   only HTML passes and only for a Window, and nothing in this engine passes it. So item 0's
-                   shadow-adjusted target is the target itself, which is what makes `invoke`'s backward scan
-                   terminate at every item. */
+                   STEP 2: targetOverride is the target, UNLESS the dispatch was given one. HTML gives one for
+                   `pagehide`, `pageshow`, `unload` and `beforeunload` — fired AT the Window with the DOCUMENT
+                   as their target — through what the spec spells as the legacy target override flag. Without
+                   it those events report the Window, which is what a page's `e.target` reads. */
+                JSValueConst given = step_arg(&s->hdr, 2);
+                JSValueConst override = JS_IsUndefined(given) ? target : given;
+
                 s->path = event_path_new(ctx);
-                event_path_append(ctx, s->path, target, target, related, touch,
+                event_path_append(ctx, s->path, target, override, related, touch,
                                   dispatch_is_closed_shadow_root(ctx, target), /*slotInClosedTree*/ false);
                 /* THE SIZE IS THE PATH'S, never a counter kept beside it: the two are read together at every
                    step of the two passes, and a counter that drifts by one walks off the end or drops the
@@ -1784,18 +1787,28 @@ static JSValue dispatch_fn_new(JSContext *ctx)
    cancelled. There is one dispatch now; what differs between the two reach-paths is only whether the caller
    can park, which is a property of the CALLER and not of the algorithm.
    The event stays TRUSTED, which is what distinguishes one the engine fired from one the page dispatched. */
-void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev)
+void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev, JSValueConst target_override)
 {
-    JSValueConst argv[2];
+    JSValueConst argv[3];
     JSValue fn;
 
     if (JS_IsException(ev)) { JS_FreeValue(ctx, ev); return; }
     argv[0] = target;
     argv[1] = ev;
+    /* §2.9 STEP 2's targetOverride, AS AN ARGUMENT. It is a parameter OF THE DISPATCH and not state on the
+       event — the same event fired twice, once with an override and once without, is two dispatches with two
+       different `target`s — so it travels with the invocation.
+       IT IS THE TARGET ITSELF rather than HTML's boolean, because the flag's whole content is "use the target's
+       associated Document", and the caller that passes it is the one holding that Document. Asked as a boolean,
+       this component would have to reach into document.c to resolve a Window it may not even own the realm of;
+       asked as the value, it is the spec's own parameter and there is nothing to resolve.
+       There was no way to pass it at all before, so `pagehide`, `pageshow`, `unload` and `beforeunload` — the
+       only fires HTML gives it to — would have reported the Window where the spec says the Document. */
+    argv[2] = target_override;
     fn = dispatch_fn_new(ctx);
     /* A JOB, so the dispatch runs as a call-root flow: preemptible, forkable and parkable like any other
        program, which is what every listener body needs and what a C activation cannot host. */
-    JS_EnqueueCallJob(ctx, fn, 2, argv);
+    JS_EnqueueCallJob(ctx, fn, 3, argv);
     JS_FreeValue(ctx, fn);
     JS_FreeValue(ctx, ev);
 }
@@ -1811,10 +1824,10 @@ void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev)
    that has decayed to a pointer can no longer say how big it is.
      0 = done (*pnot_canceled set when asked), 3 = the caller must return that step code. */
 int event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, JSValueConst target,
-                          JSValueConst ev, JSValue in,
+                          JSValueConst ev, JSValueConst target_override, JSValue in,
                           bool *pnot_canceled, JSValue **out_cb, int *out_argc)
 {
-    JSValueConst argv[2];
+    JSValueConst argv[3];
     JSValue out = JS_UNDEFINED;
     int r;
 
@@ -1823,14 +1836,15 @@ int event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_ca
         DCHECK(JS_IsObject(ev), "a synchronous fire was handed no event — §2.9 dispatches one that exists");
         argv[0] = target;
         argv[1] = ev;
+        argv[2] = target_override;   /* §2.9 step 2's targetOverride — see event_target_fire */
         /* step_call_run DUPS the callee into the request buffer, which is what holds it across the suspension —
            so this realm's dispatcher is released here and the parked call still owns one. */
-        r = step_call_run(ctx, phase, cb, cb_cap, fn, JS_UNDEFINED, 2, argv, in, &out, out_cb, out_argc);
+        r = step_call_run(ctx, phase, cb, cb_cap, fn, JS_UNDEFINED, 3, argv, in, &out, out_cb, out_argc);
         JS_FreeValue(ctx, fn);
         DCHECK(r == JS_STEP_CALL, "the dispatch request answered without parking");
         return r;
     }
-    r = step_call_run(ctx, phase, cb, cb_cap, JS_UNDEFINED, JS_UNDEFINED, 2, NULL, in, &out, out_cb, out_argc);
+    r = step_call_run(ctx, phase, cb, cb_cap, JS_UNDEFINED, JS_UNDEFINED, 3, NULL, in, &out, out_cb, out_argc);
     DCHECK(r == 0, "a synchronous fire resumed into something other than its answer");
     if (pnot_canceled) *pnot_canceled = JS_ToBool(ctx, out);
     JS_FreeValue(ctx, out);

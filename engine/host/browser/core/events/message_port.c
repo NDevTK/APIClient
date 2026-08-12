@@ -234,7 +234,7 @@ static JSValue js_port_deliver(JSContext *ctx, JSValueConst this_val, int argc, 
     }
     if (JS_IsException(ev))
         return JS_EXCEPTION;
-    event_target_fire(rctx, port, ev);
+    event_target_fire(rctx, port, ev, JS_UNDEFINED);
     return JS_UNDEFINED;
 }
 
