@@ -15,6 +15,12 @@ void message_port_free(JSContext *ctx);
    and a transfer list has to recognise one before it can refuse or move it. */
 bool message_port_is(JSValueConst v);
 
+/* HOW MANY LIVE MessagePorts HAVE THIS REALM AS THEIR RELEVANT REALM — §7.5.10 step 4's set, counted.
+   Destroying a Document must disentangle exactly those ports, and this is the enumeration the step needs; the
+   disentangle itself is a per-flow WRITE and a borrowed-pointer list cannot say whose flow a port belongs to,
+   so document_lifecycle.c uses the count to STOP rather than to reach into a timeline it cannot see. */
+int message_port_count_in_realm(JSContext *realm);
+
 /* §9.4.3's two entangled ports, for a caller that is not the MessageChannel constructor — a transferred port
    pair, and every specification that hands a page one end of a channel it owns the other of. Answers port1
    (owned) and writes port2 (owned) through the out-parameter. */

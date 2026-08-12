@@ -63,12 +63,19 @@ static JSValue js_win_closed(JSContext *ctx, JSValueConst this_val, int magic)
     return JS_NewBool(ctx, window_proxy_closed(ctx, document_window_proxy(ctx)));
 }
 
-/* §7.2.5.2 `close()`. A REAL STATE CHANGE, never a no-effect: the navigable is closed and `closed` reports it
-   from that point on, which is exactly what a page tests before touching a popup again. */
+/* §7.2.5.2 `close()`. A REAL STATE CHANGE, never a no-effect: is closing goes true and `closed` reports it from
+   that point on, which is exactly what a page tests before touching a popup again.
+   STEP 2 IS AN EARLY RETURN AND IT WAS MISSING HERE. `close()` on a FRAME's Window does nothing — the
+   traversable it names is not top-level — and this member closed whatever it was called on, so a frame could
+   close itself while the proxy spelling of the same method correctly refused. One method, one test, asked of
+   the component that holds the navigable's state. */
 static JSValue js_win_close(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
+    JSValueConst proxy = document_window_proxy(ctx);
+
     (void)this_val; (void)argc; (void)argv; (void)magic;
-    window_proxy_set_closed(ctx, document_window_proxy(ctx));
+    if (!window_proxy_is_top_level(proxy)) return JS_UNDEFINED;   /* step 2 */
+    window_proxy_set_closing(ctx, proxy);
     return JS_UNDEFINED;
 }
 

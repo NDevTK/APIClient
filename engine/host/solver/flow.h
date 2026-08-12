@@ -23,7 +23,11 @@
    event loop performs a microtask checkpoint between one task and the next, so a task may not run while this
    flow still holds a microtask. One array keeps the two in a single arrival order — which is what a task source
    needs among its own tasks — and the pick applies the checkpoint rule. */
-typedef struct { JSJobFunc *fn; int argc; JSValue *argv; int task; } FlowJob;
+/* `ctx` IS THE REALM THAT ENQUEUED IT — a document is one realm, and HTML §7.5.10 step 7 removes every task
+   whose document is a destroyed one WITHOUT running it. quickjs records the same field on the entries it keeps
+   itself; a job the host TOOK has to carry it too, or a destroyed document's reactions stay queued and run
+   against a Document whose browsing context is null. BORROWED: the agent owns its realms. */
+typedef struct { JSContext *ctx; JSJobFunc *fn; int argc; JSValue *argv; int task; } FlowJob;
 
 /* WHAT ONE STEP OF A FLOW ANSWERED. OWED is not a third kind of flow — it is the same flow reporting that the
    work it has left belongs to the host, so the scheduler can tell an exhausted frontier from a waiting one

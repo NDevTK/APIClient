@@ -113,10 +113,59 @@ bool message_port_is(JSValueConst v)
     return g_port_class != 0 && JS_GetOpaque(v, g_port_class) != NULL;
 }
 
+/* THE LIVE PORTS OF THIS AGENT, BY BORROWED POINTER — attr_shadow's pattern, for attr_shadow's reason: the key
+ * is a record the collector owns, so the entry is removed where the record is destroyed and the list is
+ * therefore bounded by LIVE ports rather than by every port the run ever had.
+ *
+ * IT EXISTS BECAUSE §7.5.10 ASKS A QUESTION NOTHING COULD ANSWER. Destroying a Document must disentangle "the
+ * MessagePorts whose relevant global object's associated Document is document", and a port's realm is on the
+ * port — but there was no way to reach the ports at all, so the step could not even be attempted. This is the
+ * enumeration half of it; the disentangle half is not built here, because a disentangle is a WRITE and a write
+ * belongs to the flow that made it. A list of borrowed pointers is agent-global and cannot tell whose port it
+ * is looking at, so destroying a document while any port of its realm is live STOPS at the DCHECK in
+ * document_lifecycle.c rather than reaching into a sibling flow's timeline. */
+static PortData **g_ports;
+static int        g_ports_n, g_ports_cap;
+
+static void port_track(PortData *d)
+{
+    if (g_ports_n == g_ports_cap) {
+        int cap = g_ports_cap ? g_ports_cap * 2 : 8;
+        PortData **g = realloc(g_ports, (size_t)cap * sizeof *g);
+
+        CHECK(g != NULL, "message port: OOM recording a live MessagePort — an unrecorded port is one §7.5.10 "
+                         "cannot see, and a destroyed document would keep an entangled channel with nothing "
+                         "to say so");
+        g_ports = g;
+        g_ports_cap = cap;
+    }
+    g_ports[g_ports_n++] = d;
+}
+
+static void port_untrack(const PortData *d)
+{
+    int i;
+
+    for (i = 0; i < g_ports_n; i++)
+        if (g_ports[i] == d) { g_ports[i] = g_ports[--g_ports_n]; return; }
+    DFAIL("a MessagePort was destroyed that was never recorded as live — the two sites are port_new and this "
+          "finalizer, so a port that reaches here unrecorded was built somewhere else");
+}
+
+int message_port_count_in_realm(JSContext *realm)
+{
+    int i, n = 0;
+
+    for (i = 0; i < g_ports_n; i++)
+        if (g_ports[i]->realm == realm) n++;
+    return n;
+}
+
 static void port_finalizer(JSRuntime *rt, JSValue val)
 {
     PortData *d = JS_GetOpaque(val, g_port_class);
     if (!d) return;
+    port_untrack(d);
     JS_FreeValueRT(rt, d->entangled);
     JS_FreeValueRT(rt, d->queue);
     free(d);
@@ -428,6 +477,7 @@ static JSValue port_new(JSContext *ctx)
     CHECK(d != NULL, "message port: OOM building a MessagePort");
     d->entangled = d->queue = JS_UNDEFINED;
     d->realm = ctx;   /* §9.4.2's relevant realm, taken where the port is created */
+    port_track(d);
     JS_SetOpaque(obj, d);
     return obj;
 }
@@ -584,4 +634,11 @@ void message_port_free(JSContext *ctx)
     g_deliver_fn = JS_UNDEFINED;   /* the prototypes are the REALMS' — released with their contexts */
     g_mp_rt = NULL;
     g_chan_ctor_stepid = -1;
+    /* THE LIST GOES WITH THE AGENT, and it must be EMPTY by the time it does: every entry names a PortData the
+       collector has not finalized, so a non-empty list here is a port the runtime teardown is about to leak. */
+    DCHECK(g_ports_n == 0, "MessagePorts were still live when the agent released its port machinery — each one "
+                           "is a PortData whose finalizer never ran");
+    free(g_ports);
+    g_ports = NULL;
+    g_ports_n = g_ports_cap = 0;
 }

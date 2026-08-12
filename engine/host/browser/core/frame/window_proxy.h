@@ -47,11 +47,28 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name);
 JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const char *origin, const char *name,
                                 JSValueConst parent, JSValueConst opener);
 
-/* §4.8.5's DESTROY A CHILD NAVIGABLE, from the side that owns the navigable: the proxy a page is holding stays
-   the object it was — the spec files check that it does — and reports `closed`, an empty `name`, and no active
-   document from that point on. Captured into the RUNNING FLOW's delta, so a sibling arm that never removed the
-   element still sees the frame it knew. */
-void window_proxy_close(JSContext *ctx, JSValueConst proxy);
+/* §7.2.5.2's IS CLOSING. The proxy a page is holding stays the object it was — the spec files check that it
+   does — and reports `closed` from here on. Captured into the RUNNING FLOW's delta, so a sibling arm that
+   never closed the window still sees it open. Only ever a TOP-LEVEL traversable: ask
+   window_proxy_is_top_level first, which is the early return §7.2.5.2 opens with. */
+void window_proxy_set_closing(JSContext *ctx, JSValueConst proxy);
+
+/* IS THIS NAVIGABLE A TOP-LEVEL TRAVERSABLE — §7.2.5.2's early return and §7.3's is-closing precondition, one
+   fact asked from one place so both spellings of close() make the same test. */
+bool window_proxy_is_top_level(JSValueConst proxy);
+
+/* §7.5.10 STEP 8: this navigable's active document was destroyed, so its browsing context is null — the half
+   of §7.2.5's `closed` that destruction owns, and what §7.5.10 step 5's wait reads off each child navigable.
+   Written only by the destroy job (core/frame/document_lifecycle.c). */
+void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy);
+bool window_proxy_destroyed(JSValueConst proxy);
+
+/* §7.5.10 STEPS 3-5's numberDestroyed, on the navigable it is about and counted DOWN. `_set` records how many
+   child navigables this one is waiting on, before any of them is queued; `_finish` reports one child's
+   destruction and answers true when it was the LAST — which is step 5's wait being over and the only moment
+   step 6 may be queued. Per-flow, so two forked arms destroying one subtree do not count into each other. */
+void window_proxy_destroy_wait_set(JSContext *ctx, JSValueConst proxy, uint32_t n);
+bool window_proxy_destroy_wait_finish(JSContext *ctx, JSValueConst proxy);
 
 /* §7.2.5.1's member surface FOR ONE REALM, so a component that owns one of the cross-origin-accessible members
    (postMessage) installs it where every proxy of that realm sees it. OWNED: the caller frees. */
@@ -65,10 +82,10 @@ JSValue window_proxy_proto(JSContext *ctx);
    member). */
 void window_proxy_install_proto(JSContext *ctx);
 
-/* §7.2.5's `closed` — a fact about the NAVIGABLE, so the Window's getter and the proxy's read the same byte.
+/* §7.2.5's `closed` — a fact about the NAVIGABLE, so the Window's getter and the proxy's read the same answer.
+   It is the spec's OR: true if the browsing context is null (the destruction ran) or is closing is true.
    Per-flow: captured into the running flow's delta, so a sibling arm that never closed it still sees it open. */
 bool window_proxy_closed(JSContext *ctx, JSValueConst proxy);
-void window_proxy_set_closed(JSContext *ctx, JSValueConst proxy);
 
 /* IS THIS ONE OF THE PROXY OBJECTS THIS COMPONENT MINTS? An implementation question, asked of values this
    component holds and about to read ProxyData out of. It is NOT the Web IDL type test — see below. */
@@ -113,6 +130,9 @@ bool window_proxy_materialized(JSValueConst proxy);
 /* §7.2.5's `parent`, `top` and `opener` — the NAVIGABLE's, so a Window answers them from the same record its
    own WindowProxy does. One navigable, one answer, whether a page reads `parent` or `otherW.parent`. Owned. */
 JSValue window_proxy_parent(JSContext *ctx, JSValueConst proxy);
+/* THE NAVIGABLE THIS ONE IS NESTED IN, for an ENGINE walk rather than for `window.parent`: JS_UNDEFINED at the
+   top instead of the proxy itself, because a walk up the tree wants "nothing above this". Owned. */
+JSValue window_proxy_parent_navigable(JSContext *ctx, JSValueConst proxy);
 JSValue window_proxy_top_of(JSContext *ctx, JSValueConst proxy);
 /* THE TOP-LEVEL TRAVERSABLE'S NAVIGABLE, which is NOT what `top` answers and that difference is load-bearing.
    `window.top` of the asking realm's own navigable is that realm's GLOBAL, because `window === window.top` is

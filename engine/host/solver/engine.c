@@ -900,11 +900,34 @@ static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueCo
         CHECK(f->jobs, "engine: OOM flow job queue — a dropped reaction corrupts async exploration");
     }
     FlowJob *j = &f->jobs[f->njob++];
-    j->fn = fn; j->argc = argc; j->task = is_task;
+    j->ctx = ctx; j->fn = fn; j->argc = argc; j->task = is_task;
     j->argv = argc ? malloc((size_t)argc * sizeof(JSValue)) : NULL;
     if (argc) CHECK(j->argv, "engine: OOM job argv");
     for (int i = 0; i < argc; i++) j->argv[i] = JS_DupValue(ctx, argv[i]);
     return 1;   /* host owns it */
+}
+
+/* THE OTHER HALF OF engine_enqueue_job (installed as JS_SetJobDropHook): HTML §7.5.10 step 7, for the jobs this
+   scheduler TOOK. Nothing else can do it — declining to register this hook would leave every destroyed
+   document's reactions queued on whichever flow enqueued them, and each one would later run in a Document
+   whose browsing context is null.
+   IT WALKS EVERY FLOW, not the running one. A job belongs to the flow that enqueued it and a document is
+   destroyed by whichever flow removed its container, which is not the same flow — a walk of the running flow's
+   queue alone would drop the ones that happen to be there and silently keep the rest. */
+static int engine_drop_jobs(JSContext *ctx) {
+    int dropped = 0;
+    for (int k = 0; ; k++) {
+        Flow *f = flow_at(k);
+        if (!f) break;
+        for (int i = f->njob - 1; i >= 0; i--) {
+            if (f->jobs[i].ctx != ctx) continue;
+            for (int a = 0; a < f->jobs[i].argc; a++) JS_FreeValue(ctx, f->jobs[i].argv[a]);
+            free(f->jobs[i].argv);
+            memmove(f->jobs + i, f->jobs + i + 1, (size_t)(--f->njob - i) * sizeof(FlowJob));
+            dropped++;
+        }
+    }
+    return dropped;
 }
 
 /* Run ONE of the flow's queued jobs under its currently-applied COW; free its args + result.
@@ -1263,6 +1286,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int f
     g_dom_capture = 1;                       /* record DOM writes into the running flow's delta (twin of FlowLocalMark) */
     JS_SetFlowControlHooks(forking ? &FC_EXPLORE : &FC_VERIFY);   /* preempt ALWAYS on; fork only when exploring */
     JS_SetJobEnqueueHook(engine_enqueue_job);   /* ASYNC-AS-FLOW: reactions route to the enqueuing flow's queue */
+    JS_SetJobDropHook(engine_drop_jobs);        /* …and §7.5.10 step 7 takes them back off it */
 }
 
 /* One QUANTUM. Returns ENGINE_STEP_DONE when the frontier is empty (the session is closed and its hooks are
@@ -1523,6 +1547,7 @@ int engine_sched_step(void) {
                "message this document never received, dropped with the session");
     }
     JS_SetJobEnqueueHook(NULL);
+    JS_SetJobDropHook(NULL);
     JS_SetFlowControlHooks(&FC_OFF);
     JS_SetFlowLocalMark(0);
     /* No flow is running, so no candidate substitution may be installed — the same mirror the switch-in keeps,

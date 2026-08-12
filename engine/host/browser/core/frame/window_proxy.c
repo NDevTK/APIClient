@@ -94,7 +94,22 @@ typedef struct {
        document happened to touch it first. A creation fact, so like `is_popup` no flow can change it.
        NULL for a navigable with an address (its policy comes with its response) and for the root. Owned. */
     char   *creator_csp;
-    uint8_t closed;    /* the navigable has been destroyed (§4.8.5) or closed (§7.2.5.2) */
+    /* §7.2.5's `closed` IS TWO FACTS AND THE GETTER IS THEIR OR — "true if this's browsing context is null or
+       its is closing is true". They are two because they happen at two TIMES. `close()` sets is-closing at its
+       own call site and QUEUES the destruction; §7.3.1's removal of a container queues one without setting
+       is-closing at all; and the browsing context does not become null until §7.5.10 step 8 runs, in a task.
+       Held as ONE byte those two times collapsed into the removal's, so a frame's WindowProxy reported a
+       destruction that had not happened — while its Document, its queued tasks and its entangled ports were
+       all still live, with nothing anywhere holding the fact that they had not been dealt with. */
+    uint8_t closing;     /* §7.3's IS CLOSING — §7.2.5.2's close(), and only ever a top-level traversable */
+    uint8_t destroyed;   /* §7.5.10 step 8 ran on this navigable's active document: its browsing context is null */
+    /* §7.5.10 STEP 3's numberDestroyed, COUNTED DOWN — how many of this navigable's child navigables have still
+       to report their destruction before step 6 may run for this one. It is here because it is PER-FLOW state
+       of a navigable, exactly like `closed` and `name`: two forked arms destroying the same subtree each count
+       in their own world, and a shared integer would let one arm's child complete the other arm's wait. Zero
+       for a navigable that is not being destroyed, which is what makes a child's report a no-op there rather
+       than a case its caller has to test for. */
+    uint32_t destroy_wait;
     /* WHICH DOCUMENT the navigable's active document IS — the same id the world registry names worlds by, so
        "is this remote?" is one comparison against one identity rather than a second naming scheme kept beside
        it. A proxy whose doc is this instance's has a live `window`; any other doc is in a peer instance and
@@ -103,6 +118,12 @@ typedef struct {
        prevent. */
     uint32_t doc;
 } ProxyData;
+
+/* §7.2.5's `closed` GETTER, AS ONE EXPRESSION — "true if this's browsing context is null or its is closing
+   is true". Written once here so that no member can ask half of it: a `closed` that read only the destroy
+   flag would report a closing popup as open, and one that read only is-closing would report a removed frame
+   as open. Both of those were the single byte this replaced, in the two directions it could be wrong. */
+static bool wp_closed(const ProxyData *p) { return p->closing != 0 || p->destroyed != 0; }
 
 static JSClassID g_proxy_class;
 static JSRuntime *g_wp_rt;
@@ -371,23 +392,68 @@ JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const char *origin
 }
 
 /* §7.2.5's `closed`, READ AND WRITTEN THROUGH THE ONE PLACE IT LIVES. It is a fact about the NAVIGABLE, so
-   `window.closed` and `iframe.contentWindow.closed` must be the same byte — they were two, and closing through
-   one left the other reporting open. Captured through proxy_of, so the flow that closed the window is the only
-   one whose timeline contains it. */
+   `window.closed` and `iframe.contentWindow.closed` must be the same answer — they were two bytes, and closing
+   through one left the other reporting open. Captured through proxy_of, so the flow that closed the window is
+   the only one whose timeline contains it.
+   IT IS AN OR OVER TWO FLAGS, which is the getter's own wording rather than a convenience: the two are set by
+   two different algorithms at two different times, and every read in this file goes through here so that no
+   member can accidentally ask only one of them. */
 bool window_proxy_closed(JSContext *ctx, JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);
     (void)ctx;
     DCHECK(p != NULL, "the closed state of something that is not a WindowProxy was read");
-    return p->closed != 0;
+    return wp_closed(p);
 }
 
-void window_proxy_set_closed(JSContext *ctx, JSValueConst proxy)
+/* §7.5.10 STEP 8's BROWSING CONTEXT IS NULL — the completion of a destruction, written only by the destroy
+   job. It is also what §7.5.10 step 5's wait reads off each child, which is why it is asked separately from
+   `closed`: a navigable whose top-level traversable is merely CLOSING has not been destroyed, and a wait that
+   accepted `closed` would finish before its subtree had. */
+void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);
     (void)ctx;
-    DCHECK(p != NULL, "something that is not a WindowProxy was closed");
-    p->closed = 1;
+    DCHECK(p != NULL, "something that is not a WindowProxy had its browsing context set to null");
+    p->destroyed = 1;
+}
+
+/* §7.5.10 STEP 3 — the number of child navigables this one is waiting on, recorded BEFORE any of them is
+   queued. Through proxy_of, so the count belongs to the flow performing the destruction. */
+void window_proxy_destroy_wait_set(JSContext *ctx, JSValueConst proxy, uint32_t n)
+{
+    ProxyData *p = proxy_of(proxy);
+    (void)ctx;
+    DCHECK(p != NULL, "something that is not a WindowProxy was given a destruction count");
+    DCHECK(p->destroy_wait == 0,
+           "§7.5.10 step 3 set a navigable's outstanding child count while it already had one — two "
+           "destructions of the same navigable are in flight, and the second one's children will report into "
+           "the first one's wait");
+    p->destroy_wait = n;
+}
+
+/* A CHILD REPORTED ITS DESTRUCTION — §7.5.10 step 4's incrementDestroyed, counted down. Answers true when this
+   was the LAST one, which is step 5's wait being over and the only moment step 6 may be queued.
+   A NAVIGABLE THAT IS NOT BEING DESTROYED ANSWERS FALSE, because its count is zero: a frame removed on its own
+   reports to a parent that is not going anywhere, and that report has to be a no-op rather than an underflow. */
+bool window_proxy_destroy_wait_finish(JSContext *ctx, JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+    (void)ctx;
+    DCHECK(p != NULL, "something that is not a WindowProxy was told a child navigable had been destroyed");
+    if (p->destroy_wait == 0) return false;
+    return --p->destroy_wait == 0;
+}
+
+bool window_proxy_destroyed(JSValueConst proxy)
+{
+    /* THROUGH proxy_of, LIKE EVERY OTHER READ OF THIS RECORD — the destruction of a child is written into the
+       destroying FLOW's delta, so a wait that read the baseline would never see the child it had just
+       destroyed and would park for ever. A read that reaches a record captures it; that is the contract, and
+       reading around it here would make the wait depend on which flow happened to run the child's job. */
+    ProxyData *p = proxy_of(proxy);
+    DCHECK(p != NULL, "the destroyed state of something that is not a WindowProxy was read");
+    return p->destroyed != 0;
 }
 
 void window_proxy_disown_opener(JSContext *ctx, JSValueConst proxy)
@@ -470,7 +536,7 @@ const char *window_proxy_name(JSValueConst proxy)
     DCHECK(p != NULL, "the name of something that is not a WindowProxy was asked for");
     /* A DESTROYED navigable has no name — the same answer the `name` getter gives, from the same two fields,
        so named access cannot find a frame the page has already removed. */
-    return p->closed || !p->name ? "" : p->name;
+    return wp_closed(p) || !p->name ? "" : p->name;
 }
 
 /* §7.11's `name`, AS A VALUE, and the ONE place it is computed. A Window and its WindowProxy are two spellings
@@ -491,7 +557,7 @@ JSValue window_proxy_name_value(JSContext *ctx, JSValueConst proxy)
     DCHECK(p != NULL, "the name of something that is not a WindowProxy was read");
     /* §7.2.5: a destroyed navigable has no name, and the destruction is what determined that — the spec files
        assert the empty string rather than the name it had. */
-    if (p->closed) return JS_NewStringLen(ctx, "", 0);
+    if (wp_closed(p)) return JS_NewStringLen(ctx, "", 0);
     if (p->name_known) return JS_NewString(ctx, p->name ? p->name : "");
     return concolic_new(ctx, "{window.name}", "window.name", JS_NewStringLen(ctx, "", 0));
 }
@@ -506,7 +572,7 @@ JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueCons
     const char *n;
 
     DCHECK(p != NULL, "the name of something that is not a WindowProxy was written");
-    if (p->closed) return JS_UNDEFINED;   /* a destroyed navigable has nothing to rename */
+    if (wp_closed(p)) return JS_UNDEFINED;   /* a destroyed navigable has nothing to rename */
     /* A CONCOLIC NAME IS A CAPABILITY THAT DOES NOT EXIST YET, not a value to stringify. `name` is stored as C
        bytes because named access compares it, so a concolic here would have to be de-tainted to be stored —
        which is the one thing a concolic must never survive. Storing the triple instead is what to build. */
@@ -702,7 +768,7 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
     case WP_OPENER:
         return win_or_proxy(ctx, JS_DupValue(ctx, p->opener));
     case WP_CLOSED:
-        return JS_NewBool(ctx, p->closed);
+        return JS_NewBool(ctx, wp_closed(p));
     case WP_NAME:
         return window_proxy_name_value(ctx, this_val);
     case WP_DOCUMENT:
@@ -711,7 +777,7 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
            the answer is that realm's own Document object, handed back in this turn: two same-origin documents
            are one heap and the corpus appends nodes across exactly this edge. A destroyed navigable has no
            active document. */
-        if (p->closed) return JS_NULL;
+        if (wp_closed(p)) return JS_NULL;
         return JS_DupValue(ctx, document_object(proxy_realm(ctx, this_val, p)));
     case WP_LOCATION:
         /* §7.2.5.1: a navigable has ONE Location, and it is the ACTIVE DOCUMENT's — so it is read off that
@@ -723,7 +789,7 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
            members are filtered to `href`'s setter and `replace`, over an object in another instance. Handing
            back THIS document's Location instead would be a cross-origin read that silently succeeded, which is
            the one failure the check exists to prevent, so proxy_realm's assert stops here and names it. */
-        if (p->closed) return JS_NULL;
+        if (wp_closed(p)) return JS_NULL;
         {
             JSContext *r = proxy_realm(ctx, this_val, p);
             JSValue g = JS_GetGlobalObject(r), loc = JS_GetPropertyStr(r, g, "location");
@@ -745,6 +811,19 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
 JSValue window_proxy_parent(JSContext *ctx, JSValueConst proxy)
 {
     return proxy_member_get(ctx, proxy, WP_PARENT);
+}
+
+/* THE NAVIGABLE THIS ONE IS NESTED IN, FOR AN ENGINE WALK — the same distinction window_proxy_top_navigable
+   draws, and for the same reason. §7.2.5's `parent` answers THIS proxy when there is no parent, because
+   `window.parent === window` is an identity a top-level page rests on; a walk UP the navigable tree wants
+   "nothing above this" and would otherwise report a top-level navigable as its own container and loop, or
+   deliver §7.5.10's child-destroyed report back to the navigable that sent it. JS_UNDEFINED at the top, and
+   the creator's Window for an auxiliary navigable — neither is a WindowProxy, which is the caller's test. */
+JSValue window_proxy_parent_navigable(JSContext *ctx, JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+    DCHECK(p != NULL, "the containing navigable of something that is not a WindowProxy was asked for");
+    return JS_DupValue(ctx, p->parent);
 }
 
 JSValue window_proxy_top_of(JSContext *ctx, JSValueConst proxy)
@@ -786,16 +865,33 @@ static JSValue proxy_close(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 
 /* §7.2.5.2 RETURNS EARLY for a navigable that is not a TOP-LEVEL traversable, and that is the whole of it
        for every proxy: the navigable is this agent's, so there is nothing to delegate and nothing to ask. */
-    if (JS_IsUndefined(p->parent)) p->closed = 1;
+    if (window_proxy_is_top_level(this_val)) p->closing = 1;
     return JS_UNDEFINED;
 }
 
-void window_proxy_close(JSContext *ctx, JSValueConst proxy)
+/* IS THIS NAVIGABLE A TOP-LEVEL TRAVERSABLE — one fact, asked from one place. §7.2.5.2's close() returns early
+   for anything else and §7.3's is-closing is only ever set on one, and both spellings of close() (the Window
+   member and the proxy's) have to make the SAME test or one of them closes something the other would not. */
+bool window_proxy_is_top_level(JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+    DCHECK(p != NULL, "something that is not a WindowProxy was asked whether it is a top-level traversable");
+    return JS_IsUndefined(p->parent);
+}
+
+/* §7.2.5.2's IS CLOSING, for the Window spelling of `close()` — window.c's member and the proxy's are the one
+   method on the one navigable, so they write the one flag through here. §7.2.5.2 RETURNS EARLY for a navigable
+   that is not a top-level traversable, and that early return is the method's, not this setter's: a caller that
+   has already made that test states it, and one that has not would otherwise silently mark a frame closing. */
+void window_proxy_set_closing(JSContext *ctx, JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);
     (void)ctx;
-    DCHECK(p != NULL, "something that is not a WindowProxy was destroyed");
-    p->closed = 1;
+    DCHECK(p != NULL, "something that is not a WindowProxy was closed");
+    DCHECK(JS_IsUndefined(p->parent),
+           "§7.2.5.2's is closing was set on a navigable that is not a TOP-LEVEL traversable — the flag is only "
+           "ever true for one, and close() returns early for anything else");
+    p->closing = 1;
 }
 
 typedef struct { uint32_t req; } ProxyGetState;
@@ -850,7 +946,7 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     }
     /* A DESTROYED NAVIGABLE HAS NO ACTIVE DOCUMENT to ask, and §7.2.5 answers for it here rather than parking
        a flow on an instance the host has already torn down. */
-    if (p->closed) { *presult = JS_NewInt32(ctx, 0); return JS_STEP_DONE; }
+    if (wp_closed(p)) { *presult = JS_NewInt32(ctx, 0); return JS_STEP_DONE; }
 
     if (s->req == 0) {
         char op[1024];
