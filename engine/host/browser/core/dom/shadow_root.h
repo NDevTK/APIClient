@@ -18,6 +18,12 @@ void shadow_root_free(JSContext *ctx);
    shadow-including root, "find a slot" and the event path all ask it with no realm in hand. §4.8 still says a
    ShadowRoot IS a DocumentFragment, which is node_is_document_fragment's job (node.h) and not this one's. */
 bool shadow_root_is(const lxb_dom_node_t *n);
+/* THE SAME QUESTION AS WEB IDL §3.2.15 ASKS IT — of a JS value, so an IDL position declared `ShadowRoot` can
+   state its brand in its DECLARATION. Every node wrapper shares one class, so `idl_iface_brand(node_class_id())`
+   says only "a Node" and `idl_iface_narrow(shadow_root_is_value)` is what says which kind — the same pairing
+   `HTMLElement anchor` already uses. `GetHTMLOptions.shadowRoots` is `sequence<ShadowRoot>`, and its elements
+   are branded with exactly this. */
+bool shadow_root_is_value(JSValueConst v);
 /* §4.8's HOST, which is never null for a shadow root. C state on a node the ATTACHING FLOW created, written
    once at creation and never again, so it needs no per-flow capture — the flow that created the node is the
    only one that can reach it until the node becomes baseline, after which it is immutable. */
@@ -29,6 +35,19 @@ bool shadow_root_is_open(const lxb_dom_node_t *n);
    the question rather than for the field, because "named" is the default and every algorithm branches on the
    other one. */
 bool shadow_root_slot_assignment_is_manual(JSContext *ctx, const lxb_dom_node_t *n);
+
+/* §4.8's THREE BOOLEAN FIELDS THAT ARE READ FROM OUTSIDE THIS COMPONENT — the three HTML §13.3 step 4.2 emits
+   as content attributes of the `<template shadowrootmode>` it writes. One reader over a declared field rather
+   than three getters, so the serializer names the FIELD the standard names and learns nothing about where the
+   record lives (which is the shadow root's WRAPPER — a per-flow fact, for the reason shadow_root.c states).
+   `mode` is shadow_root_is_open's and `slot assignment` is the question above, because those two have callers
+   that ask them as questions rather than as fields. */
+typedef enum {
+    SHADOW_ROOT_DELEGATES_FOCUS = 0,
+    SHADOW_ROOT_CLONABLE,
+    SHADOW_ROOT_SERIALIZABLE,
+} ShadowRootFlag;
+bool shadow_root_flag(JSContext *ctx, const lxb_dom_node_t *n, ShadowRootFlag which);
 
 /* "SHADOW-INCLUDING ROOT" — DOM §4.2: the root's host's shadow-including root when the root is a shadow root,
    otherwise the root. What `getRootNode({composed:true})` answers and what §4.4's `isConnected` is stated
@@ -51,8 +70,13 @@ lxb_dom_node_t *shadow_root_next_in_shadow_including(JSContext *ctx, lxb_dom_nod
    second copy of five refusals is five places for one of them to go missing. Returns the shadow root's wrapper
    (OWNED), or JS_EXCEPTION with the `NotSupportedError` pending — which the parser CATCHES, because tree
    construction throws nothing at the page. */
+/* `registry` is §4.8's own last parameter — "null or a CustomElementRegistry object" — set on the root at
+   step 14. JS_NULL is the spec's null and is NOT "use the document's": each caller resolves its own default
+   (attachShadow at its step 1, the declarative parser from §13.2.6.4.4), because a default resolved inside
+   this algorithm would hand a root a registry its caller never asked for. */
 JSValue shadow_root_attach(JSContext *ctx, JSValueConst el_wrap, const char *mode, bool delegates_focus,
-                           const char *slot_assignment, bool clonable, bool serializable);
+                           const char *slot_assignment, bool clonable, bool serializable,
+                           JSValueConst registry);
 /* DOM §4.4 "CLONE A NODE" STEPS 6.1-6.7, given the node being cloned and its copy. Step 6's three conditions
    are asked here — is `node` an element, is it a shadow host, is its shadow root's `clonable` true — because
    the second and third are §4.8 record reads and the record is this component's. Answers JS_NULL when any of
@@ -80,5 +104,13 @@ void shadow_root_mark_declarative(JSContext *ctx, JSValueConst sr_wrap);
 lxb_dom_node_t *shadow_root_of_element(JSContext *ctx, const lxb_dom_element_t *el);
 /* The same association as the WRAPPER §4.8's members hand back. OWNED; JS_NULL when there is none. */
 JSValue shadow_root_of_element_wrap(JSContext *ctx, JSValueConst el_wrap);
+
+/* §4.8's `keep custom element registry null` — "initially false", and DOM notes it "can only ever be true in
+   combination with declarative shadow roots". HTML §13.2.6.4.4 sets it for a
+   `<template shadowrootcustomelementregistry>`; DOM §4.5's adopt reads it, and without it that attribute is
+   undone by the first adoption, since adopt hands a shadow root with a null registry the new document's
+   unless this says otherwise. §4.4's clone step 6.7 carries it to the copy. */
+void shadow_root_set_keep_registry_null(JSContext *ctx, JSValueConst sr_wrap);
+bool shadow_root_keep_registry_null(JSContext *ctx, JSValueConst sr_wrap);
 
 #endif

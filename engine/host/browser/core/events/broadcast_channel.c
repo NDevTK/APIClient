@@ -128,7 +128,7 @@ static JSValue js_chan_deliver(JSContext *ctx, JSValueConst this_val, int argc, 
         JS_FreeValue(rctx, data);
     }
     if (JS_IsException(ev)) return JS_EXCEPTION;
-    event_target_fire(rctx, dest, ev);
+    event_target_fire(rctx, dest, ev, JS_UNDEFINED);
     return JS_UNDEFINED;
 }
 

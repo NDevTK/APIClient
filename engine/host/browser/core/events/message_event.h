@@ -27,4 +27,10 @@ bool message_event_is(JSContext *ctx, JSValueConst v);
 JSValue message_event_new(JSContext *ctx, const char *type, JSValueConst data, const char *origin,
                           JSValueConst source, JSValueConst ports);
 
+/* §9.4.2's and §9.4.4's `newPorts` — the MessagePorts among a StructuredDeserializeWithTransfer's
+   [[TransferredValues]], in order. A FILTER and not a conversion: a transferred ArrayBuffer is delivered and is
+   simply not a port, where `sequence<MessagePort>`'s conversion would make it a TypeError. Answers a plain
+   owned Array to hand straight to message_event_new, which is what freezes it. */
+JSValue message_event_ports_of(JSContext *ctx, JSValueConst transferred);
+
 #endif

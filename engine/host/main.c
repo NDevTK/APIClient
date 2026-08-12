@@ -127,8 +127,6 @@ static void engine_agent_init(JSContext *ctx, const char *origin)
     event_target_init(ctx);
     window_init(ctx);
     event_init(ctx);
-    message_event_init(ctx);
-    error_event_init(ctx);
     report_exception_init(ctx);
     message_port_init(ctx);
     xhr_init(ctx);   /* XHR §3, and §5's ProgressEvent under it */
@@ -441,8 +439,6 @@ QJS_EXPORT void qjs_teardown(void)
     broadcast_channel_free(g_ctx);
     message_port_free(g_ctx);
     xhr_free(g_ctx);
-    message_event_free(g_ctx);
-    error_event_free(g_ctx);
     report_exception_free(g_ctx);
     event_free(g_ctx);
     headers_free(g_ctx);    /* Headers.prototype and the name it interned */

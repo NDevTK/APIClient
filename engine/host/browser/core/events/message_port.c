@@ -18,10 +18,9 @@
  * page that only calls addEventListener('message') and never start() receives nothing. Everything already
  * queued is delivered when the queue is enabled, in order.
  *
- * WHAT IS NOT HERE. TRANSFERRING a port through another port (`postMessage(m, [port])`) needs
- * StructuredSerializeWithTransfer, which structured_clone.c does not have; the transfer list is refused with
- * the DataCloneError a non-transferable value would get. That is the honest answer while transfer does not
- * exist, and it is what makes MessageEvent's `ports` still always empty. */
+ * A PORT CROSSES A PORT. §9.4.2's transfer steps and transfer-receiving steps are below: `postMessage(m,
+ * [port])` MOVES that port's queue and its entanglement onto a new object at the other end and detaches the
+ * one that was sent, which is what fills the delivered event's `ports`. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -113,10 +112,59 @@ bool message_port_is(JSValueConst v)
     return g_port_class != 0 && JS_GetOpaque(v, g_port_class) != NULL;
 }
 
+/* THE LIVE PORTS OF THIS AGENT, BY BORROWED POINTER — attr_shadow's pattern, for attr_shadow's reason: the key
+ * is a record the collector owns, so the entry is removed where the record is destroyed and the list is
+ * therefore bounded by LIVE ports rather than by every port the run ever had.
+ *
+ * IT EXISTS BECAUSE §7.5.10 ASKS A QUESTION NOTHING COULD ANSWER. Destroying a Document must disentangle "the
+ * MessagePorts whose relevant global object's associated Document is document", and a port's realm is on the
+ * port — but there was no way to reach the ports at all, so the step could not even be attempted. This is the
+ * enumeration half of it; the disentangle half is not built here, because a disentangle is a WRITE and a write
+ * belongs to the flow that made it. A list of borrowed pointers is agent-global and cannot tell whose port it
+ * is looking at, so destroying a document while any port of its realm is live STOPS at the DCHECK in
+ * document_lifecycle.c rather than reaching into a sibling flow's timeline. */
+static PortData **g_ports;
+static int        g_ports_n, g_ports_cap;
+
+static void port_track(PortData *d)
+{
+    if (g_ports_n == g_ports_cap) {
+        int cap = g_ports_cap ? g_ports_cap * 2 : 8;
+        PortData **g = realloc(g_ports, (size_t)cap * sizeof *g);
+
+        CHECK(g != NULL, "message port: OOM recording a live MessagePort — an unrecorded port is one §7.5.10 "
+                         "cannot see, and a destroyed document would keep an entangled channel with nothing "
+                         "to say so");
+        g_ports = g;
+        g_ports_cap = cap;
+    }
+    g_ports[g_ports_n++] = d;
+}
+
+static void port_untrack(const PortData *d)
+{
+    int i;
+
+    for (i = 0; i < g_ports_n; i++)
+        if (g_ports[i] == d) { g_ports[i] = g_ports[--g_ports_n]; return; }
+    DFAIL("a MessagePort was destroyed that was never recorded as live — the two sites are port_new and this "
+          "finalizer, so a port that reaches here unrecorded was built somewhere else");
+}
+
+int message_port_count_in_realm(JSContext *realm)
+{
+    int i, n = 0;
+
+    for (i = 0; i < g_ports_n; i++)
+        if (g_ports[i]->realm == realm) n++;
+    return n;
+}
+
 static void port_finalizer(JSRuntime *rt, JSValue val)
 {
     PortData *d = JS_GetOpaque(val, g_port_class);
     if (!d) return;
+    port_untrack(d);
     JS_FreeValueRT(rt, d->entangled);
     JS_FreeValueRT(rt, d->queue);
     free(d);
@@ -178,14 +226,18 @@ static JSValue js_port_deliver(JSContext *ctx, JSValueConst this_val, int argc, 
         JS_FreeValue(rctx, ports);
         ev = message_event_new(rctx, "messageerror", JS_UNDEFINED, "", JS_UNDEFINED, JS_UNDEFINED);
     } else {
-        /* §9.4.2: `ports` is the [[TransferredValues]] — the ports that ARRIVED with this message. */
-        ev = message_event_new(rctx, "message", data, "", JS_UNDEFINED, ports);
-        JS_FreeValue(rctx, data);
+        /* §9.4.2: `ports` is `newPorts` — the MessagePorts among the [[TransferredValues]] that ARRIVED with
+           this message, in order. A transferred ArrayBuffer is in the same list and is not one of them. */
+        JSValue new_ports = message_event_ports_of(rctx, ports);
         JS_FreeValue(rctx, ports);
+        if (JS_IsException(new_ports)) { JS_FreeValue(rctx, data); return JS_EXCEPTION; }
+        ev = message_event_new(rctx, "message", data, "", JS_UNDEFINED, new_ports);
+        JS_FreeValue(rctx, data);
+        JS_FreeValue(rctx, new_ports);
     }
     if (JS_IsException(ev))
         return JS_EXCEPTION;
-    event_target_fire(rctx, port, ev);
+    event_target_fire(rctx, port, ev, JS_UNDEFINED);
     return JS_UNDEFINED;
 }
 
@@ -213,60 +265,80 @@ static void port_enable(JSContext *ctx, JSValueConst port, PortData *d)
 
 /* ---- the members -------------------------------------------------------------------------------------------- */
 
-/* §9.4.2's message port post message steps. `transfer` is refused for the reason the file comment gives. */
+/* §9.4.2's MESSAGE PORT POST MESSAGE STEPS, in the standard's order — and the order is the algorithm.
+ *
+ * targetPort IS READ AT STEP 1, before anything is transferred, because the transfer list may CONTAIN it: the
+ * standard's step 4 calls that case `doomed`, transfers the port anyway and then delivers nothing, which is a
+ * different thing from "there was no target". Reading `entangled` back after the transfer steps had already
+ * disentangled it happened to answer the same way for the shapes tried so far, and would have stopped the
+ * moment anything else moved that field — §scheduler's rule that an operation takes its inputs with it. */
 static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     PortData *d = port_of(this_val), *t;
     JSValueConst opts = argc > 1 ? argv[1] : JS_UNDEFINED;
-    JSValueConst target;
     StructuredWithTransfer swt;
-    JSValue list;
+    JSValue raw, transfer, target;
+    uint32_t n, i;
+    bool doomed = false;
 
     (void)magic;
     if (!d)
         return JS_ThrowTypeError(ctx, "not a MessagePort");
-    /* §9.4.2's second argument is either the transfer SEQUENCE or a StructuredSerializeOptions whose
-       `transfer` member is one — the two overloads the standard still carries. */
-    list = JS_IsArray(opts) ? JS_DupValue(ctx, opts)
-         : JS_IsObject(opts) ? JS_GetPropertyStr(ctx, opts, "transfer") : JS_UNDEFINED;
-    if (JS_IsException(list)) return JS_EXCEPTION;
+    /* §9.4.2 STEP 1 of `postMessage`: targetPort is the port this one is entangled with, TAKEN NOW. */
+    target = JS_DupValue(ctx, d->entangled);
 
-    /* §9.4.2 STEP 2: a transfer list naming THIS port is a DataCloneError. The check is here rather than in the
-       transfer steps because only the post knows which port it is going through, and it must happen before
-       anything is detached — a page that catches this error still has a working port. */
-    if (JS_IsObject(list)) {
-        uint32_t n = 0, i;
-        JSValue len = JS_GetPropertyStr(ctx, list, "length");
-        if (JS_IsException(len)) { JS_FreeValue(ctx, list); return JS_EXCEPTION; }
-        if (JS_ToUint32(ctx, &n, len) < 0) { JS_FreeValue(ctx, len); JS_FreeValue(ctx, list); return JS_EXCEPTION; }
-        JS_FreeValue(ctx, len);
-        for (i = 0; i < n; i++) {
-            JSValue e = JS_GetPropertyUint32(ctx, list, i);
-            bool self = JS_VALUE_GET_PTR(e) == JS_VALUE_GET_PTR(this_val);
-            JS_FreeValue(ctx, e);
-            if (self) {
-                JS_FreeValue(ctx, list);
-                return JS_ThrowDOMException(ctx, "DataCloneError",
-                                            "a port cannot be transferred through itself");
-            }
+    /* §9.4.2's second argument is either the transfer SEQUENCE or a StructuredSerializeOptions whose
+       `transfer` member is one — the two overloads the standard still carries. Whichever it is, it is
+       MATERIALIZED once: the three questions below and §2.7.7's two loops are five walks of one list, and a
+       page-supplied one can answer each of them differently. */
+    raw = JS_IsArray(opts) ? JS_DupValue(ctx, opts)
+        : JS_IsObject(opts) ? JS_GetPropertyStr(ctx, opts, "transfer") : JS_UNDEFINED;
+    if (JS_IsException(raw)) { JS_FreeValue(ctx, target); return JS_EXCEPTION; }
+    if (structured_transfer_list(ctx, raw, &transfer) < 0) {
+        JS_FreeValue(ctx, raw);
+        JS_FreeValue(ctx, target);
+        return JS_EXCEPTION;
+    }
+    JS_FreeValue(ctx, raw);
+
+    /* §9.4.2 STEPS 2-4. A transfer list naming THIS port is a DataCloneError; one naming the TARGET dooms the
+       message. Both are here rather than in the transfer steps because only the post knows which ports it is
+       between, and both precede any detaching — a page that catches the error still has a working port. */
+    n = structured_transfer_len(ctx, transfer);
+    for (i = 0; i < n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, transfer, i);
+        bool self = JS_VALUE_GET_PTR(e) == JS_VALUE_GET_PTR(this_val);
+
+        if (!JS_IsUndefined(target) && JS_VALUE_GET_PTR(e) == JS_VALUE_GET_PTR(target))
+            doomed = true;
+        JS_FreeValue(ctx, e);
+        if (self) {
+            JS_FreeValue(ctx, transfer);
+            JS_FreeValue(ctx, target);
+            return JS_ThrowDOMException(ctx, "DataCloneError",
+                                        "a port cannot be transferred through itself");
         }
     }
 
-    /* §9.4.2 step 5: SERIALIZE NOW, and run the transfer steps. The throw belongs to this call, not to the
+    /* §9.4.2 STEP 5: SERIALIZE NOW, and run the transfer steps. The throw belongs to this call, not to the
        delivery task — a page's try/catch around postMessage is where the standard puts the DataCloneError. It
        happens even when there is no target, which is why it precedes the null check. */
-    if (structured_serialize_transfer(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, list, &swt) < 0) {
-        JS_FreeValue(ctx, list);
+    if (structured_serialize_transfer(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, transfer, &swt) < 0) {
+        JS_FreeValue(ctx, transfer);
+        JS_FreeValue(ctx, target);
         return JS_EXCEPTION;
     }
-    JS_FreeValue(ctx, list);
+    JS_FreeValue(ctx, transfer);
 
-    /* §9.4.2 step 6: a port with nothing on the other end posts into nowhere, and that is not an error. The
-       transfer has still HAPPENED — the standard detaches before it looks at the target, and a page that
-       transfers into a closed port does not get its port back. */
-    target = d->entangled;
+    /* §9.4.2 STEP 6: a port with nothing on the other end posts into nowhere, and neither does a doomed one —
+       and neither is an error. The transfer has still HAPPENED in both cases: the standard detaches before it
+       looks at the target, so a page that transfers into a closed port does not get its port back. */
     t = JS_IsUndefined(target) ? NULL : port_of(target);
-    if (!t) { structured_with_transfer_free(ctx, &swt); return JS_UNDEFINED; }
+    if (!t || doomed) {
+        structured_with_transfer_free(ctx, &swt);
+        JS_FreeValue(ctx, target);
+        return JS_UNDEFINED;
+    }
 
     {
         /* ONE QUEUE ENTRY IS THE MESSAGE AND ITS TRANSFER HOLDERS. The bytes become an ArrayBuffer the collector
@@ -274,18 +346,24 @@ static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
            is js_malloc'd and an adopting ArrayBuffer frees with its own allocator. */
         JSValue buf = JS_NewArrayBufferCopy(ctx, swt.data.buf, swt.data.len);
         JSValue entry;
-        uint32_t n = 0;
-        if (JS_IsException(buf)) { structured_with_transfer_free(ctx, &swt); return JS_EXCEPTION; }
+        uint32_t qn = 0;
+        if (JS_IsException(buf)) { structured_with_transfer_free(ctx, &swt); JS_FreeValue(ctx, target); return JS_EXCEPTION; }
         entry = JS_NewArray(ctx);
-        if (JS_IsException(entry)) { JS_FreeValue(ctx, buf); structured_with_transfer_free(ctx, &swt); return JS_EXCEPTION; }
+        if (JS_IsException(entry)) {
+            JS_FreeValue(ctx, buf);
+            structured_with_transfer_free(ctx, &swt);
+            JS_FreeValue(ctx, target);
+            return JS_EXCEPTION;
+        }
         JS_SetPropertyUint32(ctx, entry, 0, buf);
         JS_SetPropertyUint32(ctx, entry, 1, JS_DupValue(ctx, swt.holders));
         structured_with_transfer_free(ctx, &swt);
-        if (!port_queue_len(ctx, t, &n)) { JS_FreeValue(ctx, entry); return JS_EXCEPTION; }
-        JS_SetPropertyUint32(ctx, t->queue, n, entry);
+        if (!port_queue_len(ctx, t, &qn)) { JS_FreeValue(ctx, entry); JS_FreeValue(ctx, target); return JS_EXCEPTION; }
+        JS_SetPropertyUint32(ctx, t->queue, qn, entry);
     }
     if (t->enabled)
         port_enqueue_delivery(ctx, target);
+    JS_FreeValue(ctx, target);
     return JS_UNDEFINED;
 }
 
@@ -407,8 +485,10 @@ static JSValue port_transfer_in(JSContext *ctx, JSValueConst holder)
     return obj;
 }
 
+/* §2.7.7's `interfaceName` for this interface's data holders, which is the identifier of §9.4.2's primary
+   interface and nothing else — §2.7.8 picks these two steps back out by it. */
 static const StructuredTransferable PORT_TRANSFERABLE = {
-    message_port_is, port_transfer_out, port_transfer_in
+    "MessagePort", message_port_is, port_transfer_out, port_transfer_in
 };
 
 /* ---- MessageChannel ------------------------------------------------------------------------------------------ */
@@ -428,6 +508,7 @@ static JSValue port_new(JSContext *ctx)
     CHECK(d != NULL, "message port: OOM building a MessagePort");
     d->entangled = d->queue = JS_UNDEFINED;
     d->realm = ctx;   /* §9.4.2's relevant realm, taken where the port is created */
+    port_track(d);
     JS_SetOpaque(obj, d);
     return obj;
 }
@@ -584,4 +665,11 @@ void message_port_free(JSContext *ctx)
     g_deliver_fn = JS_UNDEFINED;   /* the prototypes are the REALMS' — released with their contexts */
     g_mp_rt = NULL;
     g_chan_ctor_stepid = -1;
+    /* THE LIST GOES WITH THE AGENT, and it must be EMPTY by the time it does: every entry names a PortData the
+       collector has not finalized, so a non-empty list here is a port the runtime teardown is about to leak. */
+    DCHECK(g_ports_n == 0, "MessagePorts were still live when the agent released its port machinery — each one "
+                           "is a PortData whose finalizer never ran");
+    free(g_ports);
+    g_ports = NULL;
+    g_ports_n = g_ports_cap = 0;
 }

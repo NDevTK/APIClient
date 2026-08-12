@@ -93,10 +93,25 @@ void custom_elements_free(JSContext *ctx);
    the install). */
 JSValue custom_elements_html_constructor(JSContext *ctx);
 
-/* §4.13.4's "look up a custom element definition" by local name, for DOM §4.9 step 3 — the definition or
-   JS_UNDEFINED. OWNED. Its ONE reader is `create an element`, which needs the definition to decide between
-   step 5's synchronous Construct and step 6's plain creation. */
-JSValue custom_elements_definition_for_name(JSContext *ctx, const char *name, size_t len);
+/* §4.13.3's lookup performed FOR AN ELEMENT — its own custom element registry, its namespace, its local name
+   and its is value, which are the four arguments the algorithm takes. This is the form every caller that HAS a
+   node should use: it is the only one that can answer out of a SCOPED registry. OWNED; JS_UNDEFINED when there
+   is no definition (including when the element's registry is null, which is the algorithm's step 1). */
+JSValue custom_elements_definition_lookup_for_element(JSContext *ctx, JSValueConst el_wrap);
+
+/* THE REGISTRY QUESTIONS §4.8's attachShadow AND §4.9's create-an-element ASK BEFORE THEY CAN ACT — this
+   document's registry, whether a page-supplied value is a CustomElementRegistry at all, whether it is scoped,
+   and the association itself. Neither algorithm lives here, and neither may re-derive them: the record, the
+   `is scoped` flag, the once-only association rule and the scoped-registry latch are all this component's.
+   `custom_elements_document_registry` is OWNED; the association takes the node's WRAPPER, because the slot
+   is per-flow state on it. */
+bool    custom_elements_is_registry(JSValueConst v);
+bool    custom_elements_registry_is_scoped(JSContext *ctx, JSValueConst reg);
+void    custom_elements_node_associate_registry(JSContext *ctx, JSValueConst wrap, JSValueConst reg);
+JSValue custom_elements_document_registry(JSContext *ctx);
+/* A NODE'S own registry, derived where it holds none — for an algorithm that PASSES one on rather than looking
+   a definition up with it (DOM §4.4 clone step 6.2 hands the original shadow root's to the copy's). OWNED. */
+JSValue custom_elements_node_registry(JSContext *ctx, JSValueConst wrap);
 /* The definition's constructor — DOM §4.9 step 5.1.1's `C`, the value `create an element` Constructs. OWNED. */
 JSValue custom_elements_definition_constructor(JSContext *ctx, JSValueConst def);
 /* DOM §4.9 steps 5.1.4.2-11: the checks the spec runs on what the page's constructor RETURNED, and the state
@@ -110,8 +125,12 @@ int custom_elements_created_check(JSContext *ctx, JSValueConst result,
    from here and not by the caller because the state is this component's own record — and it is what stops the
    element being tried for upgrade again the moment it enters a document. */
 void custom_elements_mark_failed(JSContext *ctx, JSValueConst wrap);
-/* `window.customElements` — §4.13.4's CustomElementRegistry. */
+/* `window.customElements` — this realm's Document's CustomElementRegistry, and the `CustomElementRegistry`
+   interface object that makes `new CustomElementRegistry()` (a SCOPED one) constructible. */
 void custom_elements_install(JSContext *ctx, JSValueConst global);
+/* §4.13.4's interface PROTOTYPE for ONE realm — declared into core/realm.h's list, because the members on it
+   answer out of the realm that defined them. */
+void custom_elements_install_proto(JSContext *ctx);
 
 /* §4.13.4 step 15'S THREE BOOLEAN FIELDS OF A DEFINITION, named so a reader outside this component can ask for
    one without knowing how a definition is stored. `disable shadow` has no reader yet — §4.13.5 step 8.1 and
@@ -171,5 +190,20 @@ void custom_elements_disconnected(JSContext *ctx, lxb_dom_element_t *el);
    `observedAttributes` for a prefixed attribute nor be able to supply the fourth argument at all. */
 void custom_elements_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
                                        const char *old, size_t old_len, const char *val, size_t val_len);
+
+/* DOM §4.5 "ADOPT A NODE" STEP 3'S REGISTRY ARMS, for ONE shadow-including inclusive descendant the walk has
+   just moved from `old_document` into `document` — step 3.2 (a shadow root takes the new document's global
+   registry unless its own is scoped), step 3.3.2 (an element re-derives its registry from its PARENT, or from
+   the new document when it has none or is a child of an exclusive DocumentFragment) and step 3.3.3 (a CUSTOM
+   element gets an `adoptedCallback` reaction with « oldDocument, document »).
+   THE WHOLE ARM IS ONE ENTRY because every part of it is this component's record — the registry object, its
+   `is scoped` boolean, DOM §4.5's "effective global custom element registry", the node's registry slot, the
+   element's custom element state and its definition. node.c owns the WALK and step 3.1's node documents; it
+   must not be able to name any of the above, or there are two answers to what a node's registry is.
+   Called ONLY from inside that walk, which is why it asserts `document != old_document` rather than testing
+   it: step 3's condition is the walk's, and an arm reached without it rewrites a registry adoption never
+   touches. */
+void custom_elements_node_adopted(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_document_t *document,
+                                  lxb_dom_document_t *old_document);
 
 #endif

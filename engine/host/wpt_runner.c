@@ -1048,8 +1048,6 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
        path minting an event out of a class that had never been built. */
     event_target_init(ctx);
     event_init(ctx);
-    message_event_init(ctx);
-    error_event_init(ctx);
     report_exception_init(ctx);
     /* NAME THIS DOCUMENT. A WindowProxy answers "is this navigable remote?" by comparing against the one
        document identity the world registry owns, so the registry has to be up before the first proxy exists. */
@@ -1736,8 +1734,6 @@ int main(int argc, char **argv)
     remote_object_free(ctx);
     window_proxy_free(ctx);
     world_registry_free(ctx);
-    message_event_free(ctx);
-    error_event_free(ctx);
     report_exception_free(ctx);
     event_free(ctx);
     event_target_free(ctx);

@@ -31,7 +31,8 @@ void event_target_free(JSContext *ctx);
    has not established are shadow roots at all. */
 enum { EVENT_TREE_NOT_SHADOW_ROOT = -1, EVENT_TREE_SHADOW_OPEN = 0, EVENT_TREE_SHADOW_CLOSED = 1 };
 
-/* AND THE SIX SHADOW FACTS §2.9's WALK NEEDS, each one a DEFINED TERM of the standard rather than a decision.
+/* AND THE SEVEN SHADOW FACTS §2.9's WALK AND §4.8's RETARGETING NEED, each one a DEFINED TERM of the standard
+   rather than a decision.
    That split is the point: which COMBINATION of them retargets the event, hides a path entry or picks the
    activation target is §2.9's algorithm and stays in the dispatch machine; what a "shadow root", a "slot", an
    "assigned slottable" or a "shadow-including inclusive ancestor" IS belongs to the DOM, which is the only
@@ -47,7 +48,12 @@ enum { EVENT_TREE_NOT_SHADOW_ROOT = -1, EVENT_TREE_SHADOW_OPEN = 0, EVENT_TREE_S
      `is_assigned_slottable` is §4.2.2.2's "a slottable is assigned", which is also what makes a node's get the
        parent answer with its slot.
      `is_shadow_including_inclusive_ancestor` is §4.2's relation, asked as "is `a` one of `b`'s" — the relation
-       that climbs from a shadow root to its HOST, which is why it cannot be a parent-chain walk in this file. */
+       that climbs from a shadow root to its HOST, which is why it cannot be a parent-chain walk in this file.
+     `shadow_host` is §4.8's HOST of a shadow root, and it is the one fact none of the others can stand in for:
+       §4.8's retargeting step 2 is "set A to A's root's host", the single CLIMB in the standard that leaves a
+       tree for the thing containing it. `root` goes up INSIDE a tree and stops at its shadow root, and the
+       ancestor relation only TESTS — so without this, retarget(A, B) can decide that A must be hidden and has
+       nothing to answer with. OWNED; JS_NULL for anything that is not a shadow root. */
 typedef struct EventTargetTree {
     JSValue (*get_parent)(JSContext *ctx, JSValueConst target, JSValueConst ev);
     bool    (*default_passive_target)(JSContext *ctx, JSValueConst target);
@@ -57,8 +63,21 @@ typedef struct EventTargetTree {
     bool    (*is_slot)(JSContext *ctx, JSValueConst target);
     bool    (*is_assigned_slottable)(JSContext *ctx, JSValueConst target);
     bool    (*is_shadow_including_inclusive_ancestor)(JSContext *ctx, JSValueConst a, JSValueConst b);
+    JSValue (*shadow_host)(JSContext *ctx, JSValueConst shadow_root);
 } EventTargetTree;
 void event_target_set_tree(const EventTargetTree *tree);
+
+/* DOM §4.8's RETARGETING ALGORITHM — "to retarget an object A against an object B", the operation that decides
+   what an object inside a shadow tree is CALLED when it is reported to something outside it. It is not an event
+   algorithm and does not belong to any one caller: §2.9 runs it four times (the event's relatedTarget and each
+   of its touch targets, against the target and then against every ancestor) and Fullscreen runs it too, and the
+   standard states it ONCE. It lives in this file because the tree is registered here and the algorithm is three
+   tree questions and one climb — nothing else of it is this component's.
+   `a` is a potential event target and so is the ANSWER, which is OWNED. Never inline it at a call site: every
+   site would then have to know that "A is not a node" is answered by A having no root and that the climb is a
+   LOOP, and the first site to get either wrong reports a node out of a closed tree to a listener that must not
+   see it. */
+JSValue event_target_retarget(JSContext *ctx, JSValueConst a, JSValueConst b);
 /* §2.7's INTERFACE PROTOTYPE OBJECT, where addEventListener, removeEventListener and dispatchEvent live.
    An interface that INHERITS EventTarget — Node, AbortSignal, MessagePort, BroadcastChannel, Window — chains
    its own prototype to this one; it does not install the three members again. That is not a saving, it is the
@@ -92,6 +111,12 @@ void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask
    event handler IDL attributes above, so it is answered from the one list rather than from a second copy.
    Trusted Types §3.8 step 2 is the caller: an event handler content attribute maps to TrustedScript. */
 bool event_target_is_handler_attribute(const char *name);
+/* THE SAME SET, ENUMERATED. HTML §8.6.2's remove-unsafe step 4 appends every event handler content attribute
+   to a configuration's removeAttributes list, which is a deny-list it must BUILD — a caller that can only ask
+   "is this one" can filter an allow-list it already holds but cannot produce that. Both come off the one
+   X-list, so a handler added to §8.1.7.2's set is added to both at once. The names are static. */
+int         event_target_handler_attribute_count(void);
+const char *event_target_handler_attribute_at(int i);
 /* A handler attribute whose SETTER has a side effect. HTML has one: §9.4.2's `onmessage` on a MessagePort also
    starts the port, which is why assigning it is enough and addEventListener alone is not. The hook runs AFTER
    the handler is registered — start() delivers what is already queued, and delivering it first would fire at a
@@ -150,7 +175,12 @@ void event_target_set_activation(bool (*has)(JSContext *ctx, JSValueConst el),
    `bubble_to` to pass, because the window is the document's parent and the spec already says so.
    It takes the EVENT, not a type and two flags: §2.9 dispatches an event, and a caller with a DERIVED one
    (PromiseRejectionEvent) has no way to hand it over if this mints its own. `ev` is CONSUMED. */
-void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev);
+/* `target_override` is §2.9 step 2's targetOverride — JS_UNDEFINED for an ordinary dispatch. HTML gives one
+   for `pagehide`, `pageshow`, `unload` and `beforeunload`, which are fired AT the Window with the DOCUMENT as
+   their target (what the spec spells as the legacy target override flag). It is the VALUE rather than a
+   boolean because the flag's whole content is "the target's associated Document" and the caller holds it;
+   asked as a boolean this component would have to resolve a Window whose realm it may not own. */
+void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev, JSValueConst target_override);
 /* THE SAME FIRE for a caller that can park — §2.9 is synchronous, and §3.2's `abort` is specified that way. One
    dispatch, two reaches: this is the REQUEST form, event_target_fire is the queued one. `phase` and `cb` belong
    to the calling machine and `cb` needs FOUR slots — pass it through STEP_CB so its capacity comes with it, as
@@ -158,7 +188,7 @@ void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev);
    the suspension, because §2.9 dispatches an event that exists rather than one the dispatch invents. Returns
    JS_STEP_CALL (return it) or 0 when it has answered. */
 int  event_target_fire_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, JSValueConst target,
-                           JSValueConst ev, JSValue in,
+                           JSValueConst ev, JSValueConst target_override, JSValue in,
                            bool *pnot_canceled, JSValue **out_cb, int *out_argc);
 
 #endif

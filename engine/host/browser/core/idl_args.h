@@ -86,6 +86,41 @@ typedef enum {
        argument-position sequence does, rather than being walked from a body after every later member was
        already read. */
     IDL_SEQUENCE_DOMSTRING,
+    /* `sequence<T>` where T is an INTERFACE type — §3.2.21's iterator-protocol conversion with §3.2.15's brand
+       test as the element conversion. HTML §8.5's `GetHTMLOptions.shadowRoots` is `sequence<ShadowRoot>` and is
+       the first, and it is the same reason IDL_SEQUENCE_DOMSTRING is a declared type rather than a body's walk:
+       the protocol is the PAGE'S code at every step (the @@iterator read, its call, each `next()`, each
+       `done`/`value` read), so the machine parks on the element it is on, and a member driven from a body would
+       run it after every later member of the same dictionary was already read.
+       The element conversion itself runs NONE of the page's code — §3.2.15 is "if V implements I return it,
+       otherwise throw a TypeError" — so it is decided between two pulls of the cursor rather than being a third
+       rest point. The interface is named by idl_iface_brand / idl_iface_narrow, exactly as IDL_INTERFACE's is:
+       one statement of what the type is, whether it appears alone or inside a sequence. */
+    IDL_SEQUENCE_INTERFACE,
+    /* `sequence<(DOMString or D)>` where D is a DICTIONARY — §3.2.21's iterator protocol whose ELEMENT type is
+       §3.2.25's union of a string and a dictionary. It is the first declared type whose conversion CONTAINS
+       another one: an element that is an Object is a dictionary of type D, D's members are read one [[Get]] at
+       a time, and one of THOSE members can be a sequence of the same shape again. HTML §8.6.3's SanitizerConfig
+       is what declares it — `sequence<SanitizerElementWithAttributes> elements`, each entry
+       `(DOMString or SanitizerElementNamespaceWithAttributes)`, whose own `attributes` is
+       `sequence<SanitizerAttribute>` — so the conversion is a STACK of cursors, never C recursion: every pull,
+       every `done`/`value` read and every member [[Get]] is the page's code and rests where it is, at whatever
+       depth it is at. The stack's depth is a property of the DECLARED type tree (which is finite and ends at
+       its own leaves), so the pool computes it when the member declares itself and sizes the state for it —
+       page data nesting deeper does not make the conversion deeper.
+       The dictionary arm is named beside the member (IdlDictMember::dict), which is the other half of what this
+       type states, exactly as idl_iface_brand's class is for an interface arm. */
+    IDL_SEQUENCE_STRING_OR_DICT,
+    /* `(DOMString or D)` where D is a DICTIONARY — §3.2.25 over the union HTML §8.6.2's seven name-taking
+       modifiers take (`allowElement(SanitizerElementWithAttributes)` and its six siblings), and the union the
+       Sanitizer constructor's `(SanitizerConfig or SanitizerPresets)` is. Its rule is the union algorithm's own
+       ORDER, and the order is observable: null and undefined take the DICTIONARY arm (step 4, which then throws
+       for a `required` member the page did not write), ANY Object takes it too (step 10 — a function and a
+       String object included, since these unions name no callback type), and everything else falls through to
+       step 12's string arm. Reading it as "an object is the dictionary, a string is the string" agrees on the
+       two ordinary cases and disagrees on `allowElement(null)`, which must be a TypeError from the missing
+       `name` rather than the four characters "null". The dictionary is named beside the member. */
+    IDL_STRING_OR_DICT,
     /* A DICTIONARY. Web IDL converts one by READING each declared member IN ORDER and converting each by ITS
        OWN type — so a dictionary is that member list plus this very machine, not a second kind of thing. A read
        is one accessor or Proxy trap away from being the page's code, and so is each member's conversion, so
@@ -153,13 +188,43 @@ typedef enum {
    own members lexicographically among themselves, so `FilePropertyBag : BlobPropertyBag` reads endings, type,
    then lastModified — an order no single sorted list produces, because `lastModified` sorts before `type`.
    Stating the level is what lets the declaration express that AND still be checkable. */
+/* §3.2.17 step 4.1.5's DEFAULT VALUE, which is a THIRD state beside "the page wrote it" and "it is absent": a
+   member whose IDL writes `= …` EXISTS on the converted dictionary even when the page wrote nothing, carrying
+   that value. HTML §8.6.3 is where the difference bites — `SanitizerElementNamespace`'s namespace defaults to
+   the HTML namespace and `SanitizerAttributeNamespace`'s to null, and §8.6.2's canonicalize a sanitizer name
+   ASSERTS both members exist because of it, so `allowElement({name:"p"})` allows an HTML <p> and
+   `allowAttribute({name:"href"})` allows a null-namespace href. Only the two forms the platform declares are
+   here; a member whose IDL writes a different one names its own arm rather than being squeezed into a string. */
+typedef enum {
+    IDL_DEFAULT_NONE = 0,   /* the IDL writes no `= …`: an absent member does not exist */
+    IDL_DEFAULT_NULL,       /* `= null` */
+    IDL_DEFAULT_STRING,     /* `= "…"`, the string `dflt_str` holds */
+} IdlDictDefault;
+
+struct IdlDictDecl;
+
 typedef struct {
     const char *name;
     IdlArgType  type;
     bool        required;
     const char *const *values;
     uint8_t     level;
+    /* THE DICTIONARY ARM of an IDL_SEQUENCE_STRING_OR_DICT / IDL_STRING_OR_DICT member's union — half of what
+       that type states, the way idl_iface_brand's class is half of an interface arm. NULL for every other. */
+    const struct IdlDictDecl *dict;
+    IdlDictDefault dflt;
+    const char *dflt_str;
 } IdlDictMember;
+
+/* A DICTIONARY, DECLARED — its member list in §3.2.17's read order, and the identifier its IDL gives it. A
+   member's OWN dictionary argument is declared as the bare list (idl_method_id_dict); a NESTED one needs that
+   list NAMED, because the type that reaches it is stated on the member that holds it and a conversion
+   diagnostic has to be able to say which dictionary refused a value. */
+typedef struct IdlDictDecl {
+    const char          *name;
+    const IdlDictMember *members;
+    int                  n;
+} IdlDictDecl;
 
 /* A position the IDL does not list is passed through unconverted, which is what a variadic `any...` tail means
    and what an optional argument beyond the listed ones means. `nargs` is how many the IDL lists.

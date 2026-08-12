@@ -27,6 +27,9 @@
  * would be ceremony and a plain function anywhere else would be a hole in the flow machinery.
  *   - AbortSignal.timeout(ms) IS a machine: `[EnforceRange] unsigned long long` is ToNumber on whatever the
  *     page passed, so `AbortSignal.timeout({valueOf(){ for(;;){} }})` is the page's loop and has to suspend.
+ *   - AbortSignal.any(signals) IS a machine, and the most of one: `sequence<AbortSignal>` is Web IDL §3.2.21.1's
+ *     iterator protocol, which is the page's code at the @@iterator read, the call, every `next()` and every
+ *     `done`/`value` read off its result.
  *   - AbortController.abort() is NOT, and the reason is a spec correction rather than a concession: 3.2 uses
  *     `this.[[Signal]]`, an INTERNAL SLOT, not Get(this, "signal"). Reading the public property (which is what
  *     this file did) both ran a page getter from C and let a page that overrides `signal` redirect abort().
@@ -40,8 +43,10 @@
 #include "quickjs-step.h"
 #include "solver/concolic.h"
 #include "solver/decide.h"
+#include "core/idl_iter.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
+#include "core/timing/timer.h"
 #include "core/realm.h"
 #include "core/dom/abort.h"
 
@@ -192,10 +197,9 @@ static JSValue signal_new(JSContext *ctx, JSValue aborted, JSValue reason)
     JSValue sig, st;
     JSAtom k;
 
-    DCHECK(1,
-           "an AbortSignal was minted before abort_install built AbortSignal.prototype — the members live "
-           "there, so a signal made earlier would have none of them");
     {
+        /* abort_signal_proto ASSERTS that this realm ran its install — the members live on that prototype, so
+           a signal minted before it exists would have none of them. */
         JSValue sp = abort_signal_proto(ctx);
         sig = JS_NewObjectProto(ctx, sp);
         JS_FreeValue(ctx, sp);
@@ -234,8 +238,8 @@ static JSValue signal_list(JSContext *ctx, JSValueConst sig, const char *name, i
     if (!JS_IsArray(arr) && create) {
         JS_FreeValue(ctx, arr);
         arr = JS_NewArray(ctx);
-        if (!JS_IsException(arr))
-            JS_SetPropertyStr(ctx, slots, name, JS_DupValue(ctx, arr));
+        CHECK(!JS_IsException(arr), "a signal's dependency list could not be allocated");
+        JS_SetPropertyStr(ctx, slots, name, JS_DupValue(ctx, arr));
     }
     JS_FreeValue(ctx, slots);
     return arr;
@@ -247,7 +251,9 @@ static void signal_list_append(JSContext *ctx, JSValueConst sig, const char *nam
 {
     JSValue arr = signal_list(ctx, sig, name, 1);
 
-    if (!JS_IsArray(arr)) { JS_FreeValue(ctx, arr); return; }
+    /* The list is created on demand and the allocation is a CHECK, so the only way this is not an array is a
+       caller that handed a non-signal — which is a bug in the caller and not a case to skip quietly. */
+    DCHECK(JS_IsArray(arr), "a signal list was appended to on something that is not an AbortSignal");
     JS_SetPropertyUint32(ctx, arr, array_len(ctx, arr), JS_DupValue(ctx, v));
     JS_FreeValue(ctx, arr);
 }
@@ -278,20 +284,34 @@ static void signal_adopt_reason(JSContext *ctx, JSValueConst sig, JSValue reason
     JS_FreeValue(ctx, slots);
 }
 
-JSValue abort_signal_dependent_new(JSContext *ctx, JSValueConst *signals, int n)
+/* §3.2 "create a dependent abort signal", over a list held AS A JS ARRAY.
+ *
+ * THE LIST IS A JS VALUE AND NOT A C VECTOR, and that is the algorithm's shape rather than a convenience. Its
+ * one script-visible caller is `AbortSignal.any(sequence<AbortSignal>)`, whose Web IDL conversion SUSPENDS at
+ * every element — each `next()` and each `value` read is the page's code — so the half-built list has to be
+ * something the flow's snapshot carries and its per-flow COW delta captures. That is exactly the "platform data
+ * a flow queues is a JS value, never malloc'd C" rule: an Array's growth is a property write the delta already
+ * captures, and a malloc'd vector parked across a suspension is a leak no GC walk can see.
+ *
+ * THE REALM is `ctx`'s — the algorithm's third parameter — because signal_new mints on that realm's
+ * AbortSignal.prototype, which for a step machine is the realm that DEFINED the member. */
+static JSValue dependent_signal_new(JSContext *ctx, JSValueConst signals)
 {
-    JSValue result = signal_new(ctx, JS_FALSE, JS_UNDEFINED);
-    int i;
+    JSValue result = signal_new(ctx, JS_FALSE, JS_UNDEFINED);   /* Step 1 */
+    uint32_t i, n = array_len(ctx, signals);
 
     CHECK(!JS_IsException(result), "a dependent AbortSignal could not be allocated");
     /* Step 2: an already-aborted input decides the answer OUTRIGHT — the result is born aborted with that
        signal's reason and registers no dependency at all, which is why the operators' "if internal options's
        signal is aborted, reject and return" test answers correctly on the very first line. */
     for (i = 0; i < n; i++) {
-        if (abort_signal_aborted(ctx, signals[i])) {
-            signal_adopt_reason(ctx, result, abort_signal_reason(ctx, signals[i]));
+        JSValue sig = JS_GetPropertyUint32(ctx, signals, i);
+        bool aborted = abort_signal_aborted(ctx, sig);
+        if (aborted)
+            signal_adopt_reason(ctx, result, abort_signal_reason(ctx, sig));
+        JS_FreeValue(ctx, sig);
+        if (aborted)
             return result;
-        }
     }
     {   /* Step 3 */
         JSValue slots = signal_slots(ctx, result);
@@ -300,15 +320,14 @@ JSValue abort_signal_dependent_new(JSContext *ctx, JSValueConst *signals, int n)
         JS_FreeValue(ctx, slots);
     }
     for (i = 0; i < n; i++) {                                   /* Step 4 */
-        if (!signal_dependent(ctx, signals[i])) {
-            signal_list_append(ctx, result, "sources", signals[i]);
-            signal_list_append(ctx, signals[i], "deps", result);
-            continue;
-        }
-        /* Step 4.2: FLATTEN — a dependent input contributes its own SOURCES, never itself, so the graph this
-           builds is always exactly one hop deep. */
-        {
-            JSValue src = signal_list(ctx, signals[i], "sources", 0);
+        JSValue sig = JS_GetPropertyUint32(ctx, signals, i);
+        if (!signal_dependent(ctx, sig)) {
+            signal_list_append(ctx, result, "sources", sig);
+            signal_list_append(ctx, sig, "deps", result);
+        } else {
+            /* Step 4.2: FLATTEN — a dependent input contributes its own SOURCES, never itself, so the graph
+               this builds is always exactly one hop deep. */
+            JSValue src = signal_list(ctx, sig, "sources", 0);
             uint32_t k, m = JS_IsArray(src) ? array_len(ctx, src) : 0;
             for (k = 0; k < m; k++) {
                 JSValue s = JS_GetPropertyUint32(ctx, src, k);
@@ -321,7 +340,24 @@ JSValue abort_signal_dependent_new(JSContext *ctx, JSValueConst *signals, int n)
             }
             JS_FreeValue(ctx, src);
         }
+        JS_FreeValue(ctx, sig);
     }
+    return result;                                              /* Step 5 */
+}
+
+/* THE SAME ALGORITHM REACHED FROM C, for a caller whose list is two locals rather than a converted sequence —
+   §11's promise-returning operators, which pair their own controller's signal with the caller's. It builds the
+   list and delegates; there is ONE implementation of the algorithm and this is not a second one. */
+JSValue abort_signal_dependent_new(JSContext *ctx, JSValueConst *signals, int n)
+{
+    JSValue list = JS_NewArray(ctx), result;
+    int i;
+
+    CHECK(!JS_IsException(list), "the source list of a dependent AbortSignal could not be allocated");
+    for (i = 0; i < n; i++)
+        JS_SetPropertyUint32(ctx, list, (uint32_t)i, JS_DupValue(ctx, signals[i]));
+    result = dependent_signal_new(ctx, list);
+    JS_FreeValue(ctx, list);
     return result;
 }
 
@@ -356,8 +392,8 @@ static JSValue signal_algos(JSContext *ctx, JSValueConst sig, int create)
     if (!JS_IsArray(arr) && create) {
         JS_FreeValue(ctx, arr);
         arr = JS_NewArray(ctx);
-        if (!JS_IsException(arr))
-            JS_SetPropertyStr(ctx, slots, "algorithms", JS_DupValue(ctx, arr));
+        CHECK(!JS_IsException(arr), "a signal's abort-algorithm list could not be allocated");
+        JS_SetPropertyStr(ctx, slots, "algorithms", JS_DupValue(ctx, arr));
     }
     JS_FreeValue(ctx, slots);
     return arr;
@@ -382,7 +418,8 @@ void abort_signal_add_algorithm(JSContext *ctx, JSValueConst sig, JSValueConst f
     if (abort_signal_aborted(ctx, sig))
         return;
     arr = signal_algos(ctx, sig, 1);
-    if (!JS_IsArray(arr)) { JS_FreeValue(ctx, arr); return; }
+    DCHECK(JS_IsArray(arr), "an abort algorithm was registered on something that is not an AbortSignal — every "
+                            "caller brands its signal first, so this is a lost registration and not a no-op");
     JS_SetPropertyUint32(ctx, arr, array_len(ctx, arr), JS_DupValue(ctx, fn));
     JS_FreeValue(ctx, arr);
 }
@@ -563,7 +600,7 @@ int abort_signal_run(JSContext *ctx, AbortSignalWork *w, JSValueConst sig, JSVal
                has returned. */
             if (JS_IsUndefined(w->ev))
                 w->ev = event_new(ctx, "abort", /*bubbles*/ false, /*cancelable*/ false);
-            r = event_target_fire_run(ctx, &w->phase, STEP_CB(w->cb), cur, w->ev, in, NULL, out_cb, out_argc);
+            r = event_target_fire_run(ctx, &w->phase, STEP_CB(w->cb), cur, w->ev, JS_UNDEFINED, in, NULL, out_cb, out_argc);
             in = JS_UNDEFINED;
             if (r > 0) { JS_FreeValue(ctx, cur); return r; }
             if (r < 0) { JS_FreeValue(ctx, cur); return -1; }
@@ -759,6 +796,76 @@ static JSValue js_timeout_fini(JSContext *ctx, void *st, bool take_result)
     return r;
 }
 
+/* §3.2 STEP 3's COMPLETION STEPS — "queue a global task on the timer task source given global to signal abort
+ * given signal and a new TimeoutError DOMException". A machine, because signalling abort RUNS THE PAGE'S CODE:
+ * the signal's abort algorithms and then its `abort` listeners, with every dependent signal taking the reason
+ * first. HTML §8.6's timer_after performs it at the expiry, on the same task source the page's own timers are
+ * on, so a timeout signal is ordered against them the way a browser orders it.
+ *
+ * THE SIGNAL IS CAPTURED, NOT PASSED. §8.6 performs the completion steps with no arguments — it has none to
+ * give — so the one thing this needs travels as closure data, which is what JS_NewStepClosure is for. */
+#define TIMEOUT_FIRE_STAGES(X) \
+    X(TIMEOUT_FIRE_RUN, "DOM §3.2 AbortSignal.timeout step 3's queued task (signal abort on the timeout " \
+                        "signal with a new TimeoutError DOMException: its abort algorithms, then `abort`)")
+enum { TIMEOUT_FIRE_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const TIMEOUT_FIRE_STEPS[] = { TIMEOUT_FIRE_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSStepHdr      hdr;
+    AbortSignalWork w;   /* the shared "signal abort" operation's record — one implementation, two callers */
+    /* HAS THE WORK RECORD BEEN STARTED — a flag rather than a test on one of its fields, because a step state
+       arrives ZEROED and a zeroed JSValue is the INTEGER 0 rather than undefined (abort_signal_work_start says
+       so where it sets them). Zero is "not yet", which is the one thing readable before anything has written. */
+    uint8_t        started;
+} JSTimeoutFireState;
+
+static void js_timeout_fire_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSTimeoutFireState *s = st;
+    if (s->started) abort_signal_work_visit(ctx, &s->w, v);
+}
+
+static JSValue js_timeout_fire_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSTimeoutFireState *s = st;
+    (void)take_result;
+    /* ONLY WHAT WAS STARTED IS RELEASED. A machine torn down before its first entry holds a zeroed record, and
+       a zeroed JSValue is the integer 0 — releasing it would free a value nothing owns. */
+    if (s->started) abort_signal_work_release(ctx, &s->w);
+    return JS_UNDEFINED;
+}
+
+static int js_timeout_fire_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSTimeoutFireState *s = st;
+    JSValueConst sig = JS_StepClosureData(&s->hdr, 0);
+    JSValue reason;
+    int r;
+
+    DCHECK(s->hdr.stage == TIMEOUT_FIRE_RUN,
+           "the timeout signal's queued task resumed into a stage §3.2 does not have");
+    if (!s->started) {
+        abort_signal_work_start(&s->w);
+        s->started = 1;
+    }
+    /* A NEW DOMException EACH TIME, which is the step's own wording: the signal was CREATED holding a default
+       reason so `signal.reason` reads sensibly before the deadline, and the abort carries a fresh one. */
+    reason = abort_reason_default(ctx, "TimeoutError", "signal timed out");
+    r = abort_signal_run(ctx, &s->w, sig, reason, cb_result, out_cb, out_argc);
+    JS_FreeValue(ctx, reason);
+    if (r > 0) return r;
+    if (r < 0) return JS_STEP_ABRUPT;
+    return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef js_timeout_fire_def = {
+    sizeof(JSTimeoutFireState), js_timeout_fire_step, js_timeout_fire_fini, 0,
+    .visit = js_timeout_fire_visit,
+    .algorithm = "DOM §3.2 AbortSignal.timeout step 3's completion steps",
+    .steps = TIMEOUT_FIRE_STEPS
+};
+static int g_timeout_fire_stepid = -1;
+
 static int js_timeout_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSTimeoutState *s = st;
@@ -781,6 +888,28 @@ static int js_timeout_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     flag = concolic_new(ctx, "AbortSignal.timeout().aborted", "AbortSignal.timeout().aborted", JS_FALSE);
     CHECK(!JS_IsException(flag), "minting the timeout signal's aborted flag failed");
     s->result = signal_new(ctx, flag, abort_reason_default(ctx, "TimeoutError", "signal timed out"));
+    /* §3.2 STEP 3: "run steps after a timeout given global, \"AbortSignal-timeout\", milliseconds, and the
+       following step: queue a global task on the timer task source given global to signal abort given signal
+       and a new TimeoutError DOMException."
+       THE CONCOLIC FLAG ABOVE IS A DIFFERENT QUESTION and both are needed. It answers "has the deadline passed
+       by the time the code asks", which is unknown and forks; this schedules the abort that actually happens,
+       which RUNS THE PAGE'S CODE — the signal's abort algorithms and its `abort` listeners, with every
+       dependent signal taking the reason first. Without it `AbortSignal.timeout(0).addEventListener('abort',f)`
+       never ran f, a fetch's abort algorithm never shut the request down, and `AbortSignal.any([c.signal,
+       timeout])` had one arm that could not fire.
+       THE SIGNAL TRAVELS AS CLOSURE DATA because §8.6 performs the completion steps with no arguments. */
+    if (g_timeout_fire_stepid < 0)
+        g_timeout_fire_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_timeout_fire_def);
+    {
+        JSValueConst data = s->result;
+        JSValue steps = JS_NewStepClosure(ctx, g_timeout_fire_stepid, 0, 1, &data);
+
+        CHECK(!JS_IsException(steps),
+              "AbortSignal.timeout: the completion steps' callee could not be allocated — a timeout signal "
+              "whose abort was never scheduled reads as one that simply never fires");
+        timer_after(ctx, (double)ms, steps);
+        JS_FreeValue(ctx, steps);
+    }
     return JS_STEP_DONE;
 }
 
@@ -788,6 +917,126 @@ static const JSTrampStepDef js_timeout_def = {
     sizeof(JSTimeoutState), js_timeout_step, js_timeout_fini, 0, .visit = js_timeout_visit,
     .algorithm = "DOM §3.2 AbortSignal.timeout(milliseconds)", .steps = TIMEOUT_STEPS
 };
+
+/* ---- §3.2's AbortSignal.any(signals) ------------------------------------------------------------------------
+ *
+ * `[NewObject] static AbortSignal any(sequence<AbortSignal> signals)`, and DOM states its steps as exactly one:
+ * "return the result of creating a dependent abort signal from signals using AbortSignal and the current realm".
+ * So the member IS the dependent-signal machinery above, which is why that had to exist first — an `any` written
+ * as "add an algorithm to each input that aborts the result" would be a different algorithm wearing this one's
+ * name, one turn late and page-visible (see abort.h).
+ *
+ * EVERYTHING BEFORE THAT ONE STEP IS WEB IDL §3.2.21's CONVERSION, AND IT IS THE PAGE'S CODE FROM END TO END —
+ * the @@iterator read, the call that returns the iterator, the `next` read, every `next()` call and every
+ * `done`/`value` read off its result. A C loop over it is the drive-to-completion this engine aborts on, so the
+ * member is a machine driving core/idl_iter.h's shared cursor, exactly as URLSearchParams' sequence arm does:
+ * `AbortSignal.any({ *[Symbol.iterator]() { while (true) yield c.signal; } })` suspends and resumes at whichever
+ * `next()` it was inside, and a sibling flow runs meanwhile.
+ *
+ * THE ELEMENT TYPE IS CONVERTED AS EACH ELEMENT ARRIVES, NEVER AFTER THE WALK. §3.2.21.1 step 3.3 converts S_i
+ * the moment the iterator yielded it, so `AbortSignal.any([sig, 0, sig2])` throws its TypeError with the third
+ * element never asked for — collecting first and brand-checking after is one observable operation too many, and
+ * the operation count is what a test pins. */
+#define ANY_STAGES(X) \
+    X(ANY_START,   "Web IDL §3.6 step 5 and §3.2.21 step 1 (`signals` is required, so a call with no argument " \
+                   "empties the effective overload set; a non-Object is a TypeError before @@iterator is read)") \
+    X(ANY_ELEMENT, "Web IDL §3.2.21.1 step 3 (the next value of `sequence<AbortSignal> signals`, then step 3.3's " \
+                   "§3.2.15 interface-type conversion of what the iterator yielded)") \
+    X(ANY_CREATE,  "DOM §3.2 AbortSignal.any step 1 (create a dependent abort signal from signals using " \
+                   "AbortSignal and the current realm)")
+enum { ANY_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const ANY_STEPS[] = { ANY_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct JSAnyState {
+    JSStepHdr  hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
+    IterCursor cur;      /* §3.2.21.1's protocol over the argument, one value per turn */
+    JSValue    signals;  /* the sequence converted so far, an Array (owned) */
+    JSValue    result;   /* the dependent signal, once created (owned) */
+} JSAnyState;
+
+/* WHAT THIS MACHINE OWNS: the cursor's five in-flight values and its call buffer (the cursor declares its own),
+   the list being built, and the answer. A fork mid-conversion gives each arm its own list — two arms of a
+   branch inside the page's iterator hand `any()` two different sequences, which is the whole point. */
+static void js_any_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSAnyState *s = st;
+    iter_cursor_visit(ctx, &s->cur, v);
+    v->val(ctx, &s->signals);
+    v->val(ctx, &s->result);
+}
+
+static JSValue js_any_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSAnyState *s = st;
+    JSValue r = take_result ? s->result : JS_UNDEFINED;
+
+    if (take_result) s->result = JS_UNDEFINED;
+    iter_cursor_release(ctx, &s->cur);
+    JS_FreeValue(ctx, s->signals);
+    JS_FreeValue(ctx, s->result);
+    s->signals = s->result = JS_UNDEFINED;
+    return r;
+}
+
+static int js_any_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSAnyState *s = st;
+    JSValue in = cb_result;
+    int r;
+
+    if (s->hdr.stage == ANY_START) {
+        /* §3.6 step 5: `signals` is not optional, so a call with no argument removes the member's only entry
+           from the effective overload set and throws — which a page must be able to tell apart from
+           `AbortSignal.any([])`, a VALID call yielding a signal that nothing can ever abort.
+           THE STATE IS COMPLETE BEFORE EITHER THROW, because the teardown runs through fini either way. */
+        JS_FreeValue(ctx, in);
+        in = JS_UNDEFINED;
+        iter_cursor_init(&s->cur);
+        s->signals = s->result = JS_UNDEFINED;
+        if (s->hdr.argc < 1) {
+            JS_ThrowTypeError(ctx, "AbortSignal.any requires 1 argument, but only 0 were passed");
+            return JS_STEP_ABRUPT;
+        }
+        /* §3.2.21 step 1: a non-Object is a TypeError HERE, before @@iterator is asked for. It is not a
+           formality — `AbortSignal.any("")` must throw without reading String.prototype[@@iterator], and a
+           conversion that starts at the read would iterate a string's characters and fail one step later with
+           the wrong error after one operation too many. */
+        if (!JS_IsObject(step_arg(&s->hdr, 0))) {
+            JS_ThrowTypeError(ctx, "AbortSignal.any: the argument is not an object");
+            return JS_STEP_ABRUPT;
+        }
+        s->signals = JS_NewArray(ctx);
+        CHECK(!JS_IsException(s->signals), "AbortSignal.any: the sequence being converted could not be allocated");
+        s->hdr.stage = ANY_ELEMENT;
+    }
+
+    while (s->hdr.stage == ANY_ELEMENT) {
+        r = iter_cursor_run(ctx, &s->hdr, &s->cur, step_arg(&s->hdr, 0), in, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return JS_STEP_ABRUPT;
+        in = JS_UNDEFINED;
+        if (s->cur.done) { s->hdr.stage = ANY_CREATE; break; }
+        /* §3.2.15's interface-type conversion: a platform object implementing AbortSignal crosses as itself and
+           anything else is a TypeError. The brand is the private slot record, which the page cannot forge. */
+        if (!abort_signal_is(ctx, s->cur.value)) {
+            JS_ThrowTypeError(ctx, "AbortSignal.any: an element of the sequence is not an AbortSignal");
+            return JS_STEP_ABRUPT;
+        }
+        JS_SetPropertyUint32(ctx, s->signals, array_len(ctx, s->signals), JS_DupValue(ctx, s->cur.value));
+    }
+
+    /* Step 1, and the whole of it. It runs none of the page's code — every read it makes is an own slot and
+       every list it touches is the engine's — so it is one stage and the machine has nothing left to rest on. */
+    DCHECK(s->hdr.stage == ANY_CREATE, "AbortSignal.any resumed into a stage §3.2 does not have");
+    s->result = dependent_signal_new(ctx, s->signals);
+    return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef js_any_def = {
+    sizeof(JSAnyState), js_any_step, js_any_fini, 0, .visit = js_any_visit,
+    .algorithm = "DOM §3.2 AbortSignal.any(signals)", .steps = ANY_STEPS
+};
+static int g_any_stepid = -1;
 
 /* §3.2's IDL declares no constructor, so `new AbortSignal()` is a TypeError — and so is calling it. The
    interface object exists only to carry the statics and to be the thing `instanceof` names. */
@@ -808,6 +1057,7 @@ static void abort_build_agent(JSContext *ctx)
         g_abort_rt = JS_GetRuntime(ctx);
         g_timeout_stepid = JS_RegisterStepDef(g_abort_rt, &js_timeout_def);
         g_abort_stepid = JS_RegisterStepDef(g_abort_rt, &js_abort_def);
+        g_any_stepid = JS_RegisterStepDef(g_abort_rt, &js_any_def);
     }
     if (g_sig_class) return;
     JS_NewClassID(JS_GetRuntime(ctx), &g_sig_class);
@@ -897,6 +1147,10 @@ void abort_install(JSContext *ctx, JSValueConst global)
                       JS_NewCFunction(ctx, js_sig_static_abort, "abort", 0));
     JS_SetPropertyStr(ctx, sigctor, "timeout",
                       JS_NewCFunction2(ctx, NULL, "timeout", 1, JS_CFUNC_step, g_timeout_stepid));
+    /* §3.2's third static. Its ONE required argument is what `length` states, and the sequence conversion
+       behind it is the page's code, which is why it is a machine and `abort` beside it is not. */
+    JS_SetPropertyStr(ctx, sigctor, "any",
+                      JS_NewCFunction2(ctx, NULL, "any", 1, JS_CFUNC_step, g_any_stepid));
     {
         JSValue sp = abort_signal_proto(ctx);
         JS_SetConstructor(ctx, sigctor, sp);

@@ -55,6 +55,10 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
+/* §4.5 adopt's step 3 arm. The DOM defines a node's custom element registry and the standard states the
+   re-derivation right here, in §4.5; HTML owns what a registry IS. shadow_root.c reaches across the same
+   boundary for the same reason. */
+#include "core/html/custom_elements.h"
 #include "solver/engine.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
@@ -244,6 +248,22 @@ void node_set_element_resolver(JSValue (*fn)(JSContext *ctx, lxb_dom_element_t *
    entered the tree by insertBefore, by replaceChild, or by an innerHTML parse was never prepared and never
    upgraded. Eleven sites mutate the tree; one remembered. The chokepoint is the one place that cannot be
    forgotten, which is the same argument that put capture there. */
+/* §4.8's HOST OF A SHADOW ROOT, wrapped — the one climb the standard has that leaves a tree for the thing
+   containing it, and TWO §4.8 sentences make it: a shadow root's get the parent answers with its host, and
+   retargeting step 2 sets A to its root's host. Written once because the ASSERTION is the reason: node_wrap
+   answers JS_NULL for no node, so a hostless shadow root would have made both of them return "nothing above
+   this" — an event that silently stops at the shadow boundary, and an object hidden from a listener reported to
+   it as null. `n` is already established to be a shadow root by both callers. OWNED. */
+static JSValue node_shadow_host_wrap(JSContext *ctx, const lxb_dom_node_t *n)
+{
+    lxb_dom_element_t *host = shadow_root_host(n);
+
+    DCHECK(host != NULL, "§4.8's `attach a shadow root` sets the new root's host before anything can reach the "
+                         "root, so every shadow root has one — a null here is a shadow root this engine built "
+                         "without going through that algorithm");
+    return node_wrap(ctx, lxb_dom_interface_node(host));
+}
+
 /* §2.9's GET THE PARENT, answered for the events layer one step at a time — DOM §4.4: "A node's get the parent
    algorithm, given an event, returns the node's assigned slot, if node is assigned; otherwise node's parent",
    and HTML overrides it for a DOCUMENT: "returns null if event's type attribute value is `load` or document
@@ -295,7 +315,7 @@ static JSValue node_get_parent(JSContext *ctx, JSValueConst target, JSValueConst
             if (inside)
                 return JS_NULL;
         }
-        return node_wrap(ctx, lxb_dom_interface_node(shadow_root_host(n)));
+        return node_shadow_host_wrap(ctx, n);
     }
     /* §4.4: "A node's get the parent algorithm, given an event, returns the node's ASSIGNED SLOT, if node is
        assigned; otherwise node's parent." A slotted node's event therefore travels through the shadow tree that
@@ -371,10 +391,26 @@ static bool node_default_passive_target(JSContext *ctx, JSValueConst target)
     return document_is_passive_default_node(n);
 }
 
+/* §4.8's HOST OF A SHADOW ROOT — retargeting step 2's "set A to A's root's host", and the only tree question in
+   this list whose answer is a node of a DIFFERENT tree than the node it was asked about. `root` climbs INSIDE a
+   tree and stops at the shadow root; this is the step that leaves it, so the two together are what make the
+   retargeting loop terminate at the document tree.
+   JS_NULL for anything that is not a shadow root — the same "not a shadow root" answer node_event_shadow_root_mode
+   gives, asked of an EventTarget because §2.9 hands over path entries it has not established are nodes at all.
+   OWNED, like node_wrap. */
+static JSValue node_event_shadow_host(JSContext *ctx, JSValueConst target)
+{
+    lxb_dom_node_t *n = node_of(target);
+
+    if (!n || !shadow_root_is(n))
+        return JS_NULL;
+    return node_shadow_host_wrap(ctx, n);
+}
+
 static const EventTargetTree NODE_EVENT_TREE = {
     node_get_parent, node_default_passive_target, node_event_root, node_event_shadow_root_mode,
     node_event_is_window, node_event_is_slot, node_event_is_assigned_slottable,
-    node_event_is_shadow_including_inclusive_ancestor
+    node_event_is_shadow_including_inclusive_ancestor, node_event_shadow_host
 };
 
 /* §4.2.3's INSERTION AND REMOVING STEPS ARE A LIST, not a slot. The standard's own `remove` runs several
@@ -407,6 +443,156 @@ void node_add_tree_hook(NodeTreeHook fn)
     dom_cow_set_tree_hook(node_tree_hooks_run);
 }
 
+/* ---- DOM §4.5 "ADOPT A NODE" ----------------------------------------------------------------------------
+ *
+ * ONLY STEP 2 OF IT EXISTED, inline in `node_insert_at`, and step 2 is the one step that is not about
+ * adoption at all — it is the removal that makes a move a move. Everything the algorithm is FOR was missing:
+ * a node inserted into another document kept the node document it was created in, so `ownerDocument` lied,
+ * `document.createElement` on the wrong document's behalf built attributes that disagreed with their element
+ * (attr_list.c asserts exactly that pairing), a custom element moved between documents got no
+ * `adoptedCallback`, its registry was never re-derived, and a `<template>` carried its contents into a
+ * document that is not their owner. Nothing threw for any of it.
+ *
+ * THE WALK IS ITERATIVE OVER AN EXPLICIT STACK, and not because a rest point would be hard: `node_insert_at`
+ * is reached from `appendChild`, from the ChildNode/ParentNode mixins and from §5.5's range machines, and
+ * every one of those is a plain C body with no flow base under it, so there is nothing here that COULD
+ * suspend. What a page's tree can still do is make the walk as deep as its markup, and C recursion over that
+ * is the overflow this project has removed from every other tree algorithm (see `clone a node`'s level stack,
+ * declarative_shadow.c's list, §4.2's shadow-including walk). So the depth lives in a heap stack of FRAMES.
+ * A frame is one INVOCATION of `adopt`: step 3.4's adopting steps for a `<template>` adopt its contents into a
+ * DIFFERENT document, which is a nested adopt with its own `document` and its own `oldDocument`, and the frame
+ * carries both. The outer frame's cursor is advanced BEFORE the nested frame is pushed, so the nested walk
+ * runs exactly where step 3.4 puts it — between this descendant and the next one — rather than after the
+ * outer subtree, which is the order every reaction the walk enqueues is delivered in.
+ * WHEN THE CALLER CAN PARK, this becomes a stage block over the same frames and the stack becomes the state;
+ * nothing about the algorithm changes. */
+typedef struct {
+    lxb_dom_node_t     *root;   /* this invocation's `node` — what bounds its shadow-including walk */
+    lxb_dom_node_t     *cur;    /* the next inclusive descendant step 3 has still to visit */
+    lxb_dom_document_t *doc;    /* this invocation's `document` */
+    lxb_dom_document_t *old;    /* step 1's `oldDocument`, read before step 3 wrote a single node document */
+} NodeAdoptFrame;
+
+typedef struct {
+    NodeAdoptFrame *f;
+    int sp, cap;
+} NodeAdoptStack;
+
+/* §4.4's NODE DOCUMENT as a Lexbor question: a Document IS its own, and lexbor says so through the same
+   field, but reading it through one place is what keeps the assert below honest for both. */
+static lxb_dom_document_t *node_document_of(lxb_dom_node_t *n)
+{
+    if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT) return lxb_dom_interface_document(n);
+    return n->owner_document;
+}
+
+/* §4.5 adopt STEP 3.1 — "set inclusiveDescendant's node document to document", and step 3.3.1's same write
+   over an element's attribute list.
+   THE WRITE HAS NO PER-FLOW CAPTURE, which is the one thing about adoption this engine cannot yet do. A node's
+   document is shared baseline state exactly like its parent link: flow A adopting a node into another document
+   must be invisible to flow B, and dom_cow's delta has an entry kind for the tree, one for attributes and one
+   for character data — not one for this. So the assert fires precisely where the absence changes an answer:
+   while a flow's DOM writes are being captured. With capture off the write IS the baseline (the document
+   parse, a scratch parse) and there is nothing to revert. */
+static void node_set_node_document(lxb_dom_node_t *n, lxb_dom_document_t *doc)
+{
+    DCHECK(n->type != LXB_DOM_NODE_TYPE_DOCUMENT,
+           "DOM §4.5 adopt step 3.1 tried to set a DOCUMENT's node document — a document IS its own node "
+           "document, and `adoptNode` throws NotSupportedError rather than reaching one");
+    if (n->owner_document == doc) return;
+    /* THROUGH THE CHOKEPOINT, because a node document is shared baseline state exactly like a parent link: the
+       delta now has an entry kind for it, so a flow that adopts a subtree moves those nodes in ITS timeline
+       and a sibling arm that never adopted still reads the document it knew. */
+    dom_cow_set_node_document(n, doc);
+}
+
+static void node_adopt_push(NodeAdoptStack *s, lxb_dom_node_t *root, lxb_dom_document_t *doc)
+{
+    NodeAdoptFrame *f;
+
+    /* STEP 3's condition, asked where the invocation begins: an adopt into the document a node is already in
+       does nothing at all, so the frame is never pushed and the walk is never entered. */
+    if (node_document_of(root) == doc) return;
+    if (s->sp == s->cap) {
+        int want = s->cap ? s->cap * 2 : 4;
+        NodeAdoptFrame *n = realloc(s->f, sizeof(NodeAdoptFrame) * (size_t)want);
+        CHECK(n != NULL, "DOM §4.5 adopt could not grow its level stack");
+        s->f = n;
+        s->cap = want;
+    }
+    f = &s->f[s->sp++];
+    f->root = root;
+    f->cur = root;                       /* step 3's walk is INCLUSIVE — it starts at the node itself */
+    f->doc = doc;
+    f->old = node_document_of(root);     /* STEP 1 */
+}
+
+/* §4.5's STEP 3.4 — "run the adopting steps with inclusiveDescendant and oldDocument". HTML defines them for
+   exactly one element: a `<template>`, whose CONTENTS are a separate tree that no child link reaches, so
+   without this an adopted template's markup keeps a node document its element no longer has.
+   HTML §4.12.3 adopts them into the new node document's APPROPRIATE TEMPLATE CONTENTS OWNER DOCUMENT — an
+   inert Document with no browsing context, created once per document and remembered on it, which is what
+   keeps a template's scripts from running.
+   IT IS PUSHED ONTO THIS WALK'S STACK, NOT CALLED. A frame is one INVOCATION of adopt, and adopting the
+   contents is a second invocation with its own `document` and its own `oldDocument` — so it belongs on the
+   stack the walk already has. Calling node_adopt here instead would be C recursion whose depth is the page's
+   template nesting, which is the page's to choose; a `<template>` inside a `<template>` inside a `<template>`
+   is ordinary markup. The push is also what makes the nested adopt run BETWEEN this walk's descendants rather
+   than after all of them, which is the order step 3.4 is stated in. */
+static void node_adopting_steps(JSContext *ctx, NodeAdoptStack *s, lxb_dom_node_t *n, lxb_dom_document_t *doc)
+{
+    lxb_html_template_element_t *t;
+
+    if (n->type != LXB_DOM_NODE_TYPE_ELEMENT || !lxb_html_tree_node_is(n, LXB_TAG_TEMPLATE)) return;
+    t = lxb_html_interface_template(n);
+    /* A template always HAS its contents — §4.12.3 establishes them when the element is created — so an
+       element reaching here without one came from something that built a template interface by hand. */
+    DCHECK(t->content != NULL, "a <template> element has no template contents at DOM §4.5 adopt step 3.4");
+    if (!t->content) return;
+    node_adopt_push(s, &t->content->node,
+                    lxb_dom_interface_document(document_template_contents_owner(ctx, doc)));
+}
+
+/* DOM §4.5 "ADOPT A NODE", given `node` and `document`. */
+void node_adopt(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *document)
+{
+    NodeAdoptStack s = { NULL, 0, 0 };
+
+    DCHECK(node != NULL && document != NULL, "DOM §4.5 adopt was asked of nothing");
+    /* STEP 2. It is the capturing removal and not a raw detach because it IS a removal: the per-flow delta has
+       to see it, and so do §4.2.3's removing steps and §6.1's pre-remove steps. */
+    if (node->parent) dom_cow_remove_child(node);
+    node_adopt_push(&s, node, document);           /* STEPS 1 and 3's condition */
+    /* Step 3 mints wrappers and reads per-flow records off them, so it needs the realm — and only step 3 does,
+       which is why an adopt into the document a node is already in is answerable without one. */
+    DCHECK(s.sp == 0 || ctx != NULL,
+           "DOM §4.5 adopt's step 3 walk ran with no realm — every part of it (the shadow-including walk's "
+           "element→shadow-root association, the registry arm, the adoptedCallback reaction) is a per-flow "
+           "fact kept on a node's WRAPPER, and there is no realm to build one in");
+    while (s.sp > 0) {
+        NodeAdoptFrame *f = &s.f[s.sp - 1];
+        lxb_dom_node_t *d = f->cur;
+        lxb_dom_document_t *doc = f->doc, *old = f->old;
+
+        if (!d) { s.sp--; continue; }
+        /* Advanced BEFORE the steps run, so step 3.4's nested invocation lands between this descendant and the
+           next rather than after the whole subtree — and so this frame's pointer may be invalidated by the
+           push below without the cursor being lost. */
+        f->cur = shadow_root_next_in_shadow_including(ctx, d, f->root);
+
+        node_set_node_document(d, doc);                                              /* STEP 3.1 */
+        if (d->type == LXB_DOM_NODE_TYPE_ELEMENT) {                                  /* STEP 3.3.1 */
+            lxb_dom_attr_t *a;
+            for (a = lxb_dom_element_first_attribute(lxb_dom_interface_element(d)); a;
+                 a = lxb_dom_element_next_attribute(a))
+                node_set_node_document(&a->node, doc);
+        }
+        custom_elements_node_adopted(ctx, d, doc, old);       /* STEPS 3.2, 3.3.2 and 3.3.3 */
+        node_adopting_steps(ctx, &s, d, doc);                 /* STEP 3.4 */
+    }
+    free(s.f);
+}
+
 /* §4.2.3 "insert" — A DocumentFragment IS NOT INSERTED; ITS CHILDREN ARE, in order, and the fragment is left
    empty. That is not a detail: `createDocumentFragment` exists so a page can batch nodes and attach them in one
    call, so every use of it went wrong — the fragment NODE landed in the tree, `frag.childNodes.length` stayed
@@ -417,6 +603,16 @@ void node_add_tree_hook(NodeTreeHook fn)
    ask it would be the one place fragments quietly stopped working again.
    The children come OUT through the capturing chokepoint rather than a private detach: a fragment can be older
    than the fork that is running, so another flow's baseline may hold it. */
+/* §4.2.3 insert STEP 6.1 — "adopt node into parent's node document", which is where the ONE adopt above is
+   reached from. The realm is the PARENT'S DOCUMENT'S, because that is the document being adopted into and its
+   registry is what step 3 re-derives against; `node_insert_at` carries no JSContext of its own, deliberately,
+   and taking the running one instead would answer a second same-origin document's adoption out of whichever
+   realm happened to call. */
+static void node_insert_adopt(lxb_dom_node_t *parent, lxb_dom_node_t *node)
+{
+    node_adopt(document_realm_of(parent), node, node_document_of(parent));
+}
+
 void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref)
 {
     if (node_is_document_fragment(node)) {
@@ -428,7 +624,8 @@ void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t
         mutation_observer_batch_begin();
         for (c = node->first_child; c; c = next) {
             next = c->next;
-            dom_cow_remove_child(c);
+            dom_cow_remove_child(c);            /* STEP 4, with `suppressObservers` set */
+            node_insert_adopt(parent, c);       /* STEP 6.1, per node of `nodes` */
             if (ref) dom_cow_insert_before(ref, c);
             else     dom_cow_append_child(parent, c);
         }
@@ -438,14 +635,13 @@ void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t
     /* §4.2.3 PRE-INSERT STEP 2: a reference child that IS the node becomes the node's next sibling, decided
        before the node leaves its place. */
     if (ref == node) ref = node->next;
-    /* §4.5 "adopt" STEP 2, which §4.2.3's insert reaches at its step 6.1: "if node's parent is non-null, remove
-       node". Lexbor's insert does NOT unlink — it writes the new parent's links over the old ones and leaves
-       the old parent still naming the node as its child, so a MOVE (`doc.appendChild(p)` for a `p` that has a
-       parent) built a tree with two parents and a sibling chain that loops. Every walk in this engine then runs
-       forever, which is how it surfaced: §6.2's TreeWalker hung where the corpus regrafts a subtree.
-       It goes through the capturing chokepoint rather than a raw detach because it IS a removal — the per-flow
-       delta has to see it, and so do §4.2.3's removing steps and §6.1's pre-remove steps. */
-    if (node->parent) dom_cow_remove_child(node);
+    /* STEP 6.1. Adopt is what unlinks the node from its old parent (its own step 2) — lexbor's insert does NOT
+       unlink, it writes the new parent's links over the old ones and leaves the old parent still naming the
+       node as its child, so a MOVE (`doc.appendChild(p)` for a `p` that has a parent) built a tree with two
+       parents and a sibling chain that loops. Every walk in this engine then runs forever, which is how it
+       surfaced: §6.2's TreeWalker hung where the corpus regrafts a subtree. The removal used to be written
+       here, under a comment naming §4.5 step 2 — one step of an algorithm, standing in for the algorithm. */
+    node_insert_adopt(parent, node);
     if (ref) dom_cow_insert_before(ref, node);
     else     dom_cow_append_child(parent, node);
 }
@@ -1418,63 +1614,50 @@ static const IdlStepDecl NODE_NORM_STEP = {
     "DOM §4.4 Node.normalize()", NODE_NORM_STEPS
 };
 
-/* §4.4 cloneNode — A MACHINE, because a deep clone is a walk of the page's subtree and a COPY of it. Lexbor's
-   `lxb_dom_node_clone(n, true)` runs that walk to completion inside one opcode; it is iterative rather than
-   recursive, so it never blew the C stack, and that is exactly the kind of thing that hides how long it holds
-   the scheduler. `document.body.cloneNode(true)` is one opcode for the whole document.
-   LEXBOR STILL OWNS WHAT A COPY OF ONE NODE IS — `lxb_dom_node_clone(n, false)` is the document's own
-   clone_interface, so attributes, namespaces and per-interface fields are copied by the code the tree builder
-   uses. What moves here is the WALK, node by node, exactly as §8.4's serialiser did.
+/* §4.4 `clone a node` — A MACHINE, because a deep clone is a walk of the page's subtree and a COPY of it.
+   Lexbor's `lxb_dom_node_clone(n, true)` runs that walk to completion inside one opcode; it is iterative rather
+   than recursive, so it never blew the C stack, and that is exactly the kind of thing that hides how long it
+   holds the scheduler. `document.body.cloneNode(true)` is one opcode for the whole document.
+   LEXBOR STILL OWNS WHAT A COPY OF ONE NODE IS — `lxb_dom_document_import_node(doc, n, false)` is that
+   document's own clone_interface, so attributes, namespaces and per-interface fields are copied by the code the
+   tree builder uses. What moves here is the WALK, node by node, exactly as §8.4's serialiser did.
+   IT IS THE ALGORITHM AND NOT THE MEMBER: cloneNode is two steps over it and §5.5's extract and
+   clone-the-contents are six more, so the state, the stage list and the body are all exported (node.h) and the
+   member below is one caller of them. A second copier beside this one is a second answer to "what is a copy of
+   this node", missing step 3 and step 6.
    THE COPY IS A PRIVATE TREE. It is built by inserting into itself and it is in no document until the page
    inserts it, so those inserts are declared private rather than captured — capturing them would put the whole
    copy in the running flow's delta, when the delta exists to hold shared state the flow touched. */
-/* A LEVEL of the walk — a tree reached OTHER THAN through child links, which is a `<template>`'s content
-   fragment (HTML §4.12.3's cloning steps) and a shadow tree (§4.4 step 6.8). `stage` is where the level that
-   pushed this frame RESUMES, and it is not the same for the two: a template's content is cloned by step 3, so
-   the element's own step 5 is still to come, while a shadow tree is cloned by step 6, after which only step 7
-   remains. A frame with no resume stage is what made step 6 unimplementable — popping back always meant
-   "children next", so a shadow descent would have re-walked the light children it was standing after. */
-typedef struct {
-    lxb_dom_node_t *src, *dst, *root, *croot, *cnode;
-    bool deep;
-    int  stage;
-} CloneFrame;
+/* THE PHASES, FROM THE SAME X-LIST THE CALLERS' LABELS COME FROM. A caller's block holds the six in this order
+   and the body is written against the OFFSET into it, so the body names no caller's constants and the order
+   cannot drift from the labels — they are one list. */
+enum { NODE_CLONE_ALGO_STAGES(JS_STEP_STAGE_ENUM, NODE_CLONE_PHASE, "") NODE_CLONE_PHASE_N };
 
-typedef struct {
-    lxb_dom_node_t *src;     /* the cursor in the original */
-    lxb_dom_node_t *root;    /* what bounds the CURRENT level of the walk */
-    lxb_dom_node_t *dst;     /* the copy the next child is inserted into */
-    lxb_dom_node_t *copy;    /* the copy's root — the answer */
-    /* THE PRIVATE-TREE DECLARATION FOR THE CURRENT LEVEL, which is not always `copy`. A `<template>`'s content
-       is a SEPARATE tree — reached through the element's `content` field, not through child links — so once the
-       walk descends into it, the tree being built into is that fragment. It is private for the same reason the
-       copy is: clone_interface made it a moment ago and nothing has ever seen it. A cloned shadow tree is the
-       second such tree, reached through §4.9's association instead. */
-    lxb_dom_node_t *croot;
-    lxb_dom_node_t *cnode;   /* the copy of `src` — what its own children get inserted under */
-    /* `clone a node`'s `subtree` FOR THE CURRENT LEVEL, which is not one value for the whole call: step 5 is
-       conditioned on it, HTML §4.12.3 returns early without it, and step 6.8 passes TRUE regardless — so
-       `host.cloneNode(false)` clones no light children and the whole shadow tree. */
-    bool deep;
-    CloneFrame *stack;       /* the levels above this one */
-    int sp, scap;
-} NodeCloneState;
-
-static void node_clone_visit(JSContext *ctx, void *st, JSStepVisit *v)
+void node_clone_visit_state(JSContext *ctx, NodeCloneState *s, JSStepVisit *v)
 {
     /* The cursors own nothing — every one is a Lexbor node: the originals belong to the document, and the copy
        belongs to the document's memory pool from the moment clone_interface makes it. The template STACK is
        plain storage, and a forked arm must not share it: each unwinds its own levels. */
+    v->buf(ctx, (void **)&s->stack, sizeof(NodeCloneFrame) * (size_t)s->scap);
+}
+
+void node_clone_release_state(JSContext *ctx, NodeCloneState *s)
+{
+    (void)ctx;
+    free(s->stack);
+    s->stack = NULL;
+}
+
+static void node_clone_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
     NodeCloneState *s = st;
-    v->buf(ctx, (void **)&s->stack, sizeof(CloneFrame) * (size_t)s->scap);
+    node_clone_visit_state(ctx, s, v);
 }
 
 static void node_clone_release(JSContext *ctx, void *st)
 {
     NodeCloneState *s = st;
-    (void)ctx;
-    free(s->stack);
-    s->stack = NULL;
+    node_clone_release_state(ctx, s);
 }
 
 /* Leave this level for one below it, remembering the stage this one resumes at. */
@@ -1482,7 +1665,7 @@ static void clone_push(NodeCloneState *s, int resume_stage)
 {
     if (s->sp == s->scap) {
         int want = s->scap ? s->scap * 2 : 4;
-        CloneFrame *n = realloc(s->stack, sizeof(CloneFrame) * (size_t)want);
+        NodeCloneFrame *n = realloc(s->stack, sizeof(NodeCloneFrame) * (size_t)want);
         CHECK(n != NULL, "cloneNode could not grow its level stack");
         s->stack = n;
         s->scap = want;
@@ -1518,118 +1701,167 @@ static lxb_dom_node_t *clone_template_content(lxb_dom_node_t *n)
    the template descends into its own content again and the walk never ends.
    The invariant every stage keeps: `src` is the original being handled, `cnode` is its copy, and `dst` is the
    copy of the node the NEXT child goes under. */
-/* WHERE THIS MACHINE RESTS, AS THE STANDARDS NUMBER IT. cloneNode is two steps over `clone a node`, whose
-   own steps 2, 3, 5 and 7 are exactly the four the walk cycles through per node: clone a single node and append
-   it (2 and 4), run the cloning steps other specifications define — which for a template element is HTML
-   §4.12.3's, the reason the template LEVEL exists at all — recurse over the children (5), and return (7). Each
-   is its own stage because each is per node and the walk is the page's subtree; none of them can reach the
-   page's code, which is why the entry stage may name cloneNode's steps 1-2 together with `clone a node`'s 1-2.
+/* WHERE THIS MACHINE RESTS, AS THE STANDARDS NUMBER IT. `clone a node`'s own steps 2, 3, 5, 6 and 7 are exactly
+   what the walk cycles through per node: clone a single node and append it (2 and 4), run the cloning steps
+   other specifications define — which for a template element is HTML §4.12.3's, the reason the template LEVEL
+   exists at all — recurse over the children (5), clone a clonable shadow root (6), and return (7). Each is its
+   own stage because each is per node and the walk is the page's subtree.
    LEAVING A NODE IS ONE REST POINT, AND THAT IS WHAT STEP 7 IS. The cursor is flat over two trees, so the
    moment "this node's subtree is finished" used to arrive in two unrelated places — the `src = src->next`
    transition and the ascend loop — and neither was a stage, so there was nowhere to put a step that runs AFTER
-   step 5 (which is what step 6 is). Step 7 is that moment stated once: the walk arrives at CLONE_LEAVE exactly
-   when `clone a node` would RETURN for `src`, whether `src` is a leaf, the last child of its parent, or the
-   root of the whole clone. The ascend that used to be a `while` inside one opcode is now one rest point per
+   step 5 (which is what step 6 is). Step 7 is that moment stated once: the walk arrives at the LEAVE phase
+   exactly when `clone a node` would RETURN for `src`, whether `src` is a leaf, the last child of its parent, or
+   the root of the whole clone. The ascend that used to be a `while` inside one opcode is now one rest point per
    ancestor, because a page's tree is as deep as the page says and a loop bounded by "the depth already walked"
-   is bounded by the page. */
+   is bounded by the page.
+   The stage LIST is node.h's, because §5.5 declares it inside its own block too; what is here is the MEMBER's
+   two steps around it. */
 #define NODE_CLONE_STAGES(X) \
-    X(CLONE_ROOT,     "DOM §4.4 cloneNode steps 1-2 → clone a node steps 1-2 (clone a single node: the root of " \
-                      "the copy)") \
-    X(CLONE_COPY,     "DOM §4.4 clone a node steps 2 and 4 (clone a single node; append copy to parent), one " \
-                      "descendant per step") \
-    X(CLONE_TEMPLATE, "DOM §4.4 clone a node step 3 (HTML §4.12.3 the template element's cloning steps)") \
-    X(CLONE_CHILDREN, "DOM §4.4 clone a node step 5 (for each child of node's children, in tree order)") \
-    X(CLONE_SHADOW,   "DOM §4.4 clone a node step 6 (a shadow host's clonable shadow root: steps 6.1-6.7 attach " \
-                      "it onto the copy, 6.8 clones its children), after step 5") \
-    X(CLONE_LEAVE,    "DOM §4.4 clone a node step 7 (return copy): this node's clone is complete, and step 5's " \
-                      "loop over its parent's children advances")
+    X(CN_CHECK,  "DOM §4.4 cloneNode step 1 (a ShadowRoot receiver throws NotSupportedError)") \
+    NODE_CLONE_ALGO_STAGES(X, CN, "DOM §4.4 cloneNode step 2") \
+    X(CN_RETURN, "DOM §4.4 cloneNode step 2 (return the `clone a node` result)")
 enum { IDL_STEP_STAGE_BASE(NODE_CLONE_STAGES) NODE_CLONE_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const NODE_CLONE_STEPS[] = { NODE_CLONE_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
-                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+/* §4.4 "CLONE A SINGLE NODE", THE DOCUMENT CASE: "creating a document that implements the same interfaces as
+   node, given document's relevant realm", followed by the additional requirements the standard lists for
+   Document — "set copy's encoding, content type, URL, origin, type, mode, and allow declarative shadow roots to
+   those of node".
+   THE REALM IS THE SOURCE DOCUMENT'S, not the running one. §4.4 names `document`'s relevant realm and
+   `document` here is the node's own node document, so `otherDoc.cloneNode()` run from a second same-origin
+   realm of this agent builds the copy in the realm that owns `otherDoc` — which is also what makes every
+   wrapper of the copy's tree resolve its prototype there (node_wrap reads the document's realm).
+   WHICH OF THE SEVEN FIELDS THIS ENGINE HAS: the URL and the mode (lexbor's compat_mode, which
+   `document.compatMode` reads) are copied; the ORIGIN is the realm's and the copy is made in the source's
+   realm, so it is the same origin by construction; the ENCODING is UTF-8 for every document this engine builds
+   (document.c's characterSet answers exactly that), so there is nothing that could differ; the TYPE is the
+   interface set, which lexbor records as the document's dtype and which is the same because both documents are
+   made the same way; "allow declarative shadow roots" is a PARSE parameter here rather than stored state —
+   declarative_shadow.c takes it per parse — and no parse runs into a copy. The CONTENT TYPE is real state and
+   is read back off the source's record (document_content_type_of), because it is the one of the seven that a
+   copy could differ in: `new DOMParser().parseFromString(s, "text/xml").cloneNode()` is an XML document, and a
+   copy built with this engine's html default would answer "text/html" for a document that never was one. */
+static lxb_dom_node_t *clone_a_document(lxb_dom_document_t *src)
 {
-    NodeCloneState *s = st;
+    JSContext *realm = document_realm_of(lxb_dom_interface_node(src));
+    lxb_html_document_t *copy;
+    lxb_dom_document_t *cd;
+    JSValue w;
 
-    (void)out_cb; (void)out_argc;
-    JS_FreeValue(ctx, cb_result);
+    DCHECK(realm != NULL, "§4.4 creates a document copy in the SOURCE document's relevant realm, and this "
+                          "document has no realm — it came from neither document_install nor document_new, so "
+                          "there is no realm for its copy's prototypes either");
+    copy = lxb_html_document_create();
+    CHECK(copy != NULL, "clone a single node: OOM creating the Document copy");
+    cd = lxb_dom_interface_document(copy);
+    cd->compat_mode = src->compat_mode;      /* "…and MODE": the quirks flag compatMode reports */
+    DCHECK(cd->type == src->type, "§4.4 creates a document implementing the SAME INTERFACES as node, and the "
+                                  "copy's lexbor dtype is not the source's — one of the two was built by "
+                                  "something other than lxb_html_document_create");
+    w = document_new(realm, copy, document_url_of(src), document_content_type_of(src));
+    CHECK(JS_IsObject(w), "clone a single node: the Document copy's wrapper allocation failed");
+    /* The RECORD holds the wrapper (document_new dup'd it) and the record lives as long as the document, so
+       this reference has nothing left to do: the answer this algorithm returns is the NODE, and the member
+       that wants an object asks node_wrap for it exactly as it does for every other copy. */
+    JS_FreeValue(realm, w);
+    return lxb_dom_interface_node(copy);
+}
 
-    if (hdr->stage == CLONE_ROOT) {
-        lxb_dom_node_t *n = node_of(hdr->this_val);
-        /* `optional boolean subtree = false` — the declaration converted it, so this is a real boolean. */
-        bool deep = argc > 0 && JS_ToBool(ctx, argv[0]);
+void node_clone_start(JSStepHdr *hdr, NodeCloneState *s, lxb_dom_node_t *node, bool subtree, int base, int after)
+{
+    DCHECK(node != NULL, "`clone a node` was started on no node");
+    DCHECK(s->src == NULL, "a second `clone a node` was started while one was still walking — the state holds "
+                           "ONE walk, and the caller resumes at its `after` stage with the copy in hand");
+    s->src = node;
+    s->deep = subtree;
+    s->after = after;
+    hdr->stage = base + NODE_CLONE_PHASE_ROOT;
+}
 
-        if (!n) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
-        /* cloneNode step 1: "If this is a shadow root, then throw a NotSupportedError." A shadow root is
-           created by `attach a shadow root` and by nothing else — a copy of one would be a second root for a
-           host that already has one, which is why the standard refuses rather than answering. */
-        if (shadow_root_is(n)) {
-            JS_ThrowDOMException(ctx, "NotSupportedError", "cloneNode on a ShadowRoot");
-            return JS_STEP_ABRUPT;
-        }
+int node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
+{
+    int phase = hdr->stage - base;
+
+    DCHECK(phase >= 0 && phase < NODE_CLONE_PHASE_N,
+           "`clone a node` was resumed at a stage outside the block its caller declared for it");
+
+    if (phase == NODE_CLONE_PHASE_ROOT) {
+        lxb_dom_node_t *n = s->src;
+
+        /* STEP 1: "Assert: node is not a document or node is document." The `document` argument defaults to
+           node's node document, and lexbor makes a document its own owner_document, so the assert is about
+           this entry being the DEFAULTED one. */
+        DCHECK(n->type != LXB_DOM_NODE_TYPE_DOCUMENT || lxb_dom_interface_node(n->owner_document) == n,
+               "§4.4 step 1: a document is cloned only as its OWN `document` argument");
         if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT) {
-            JS_ThrowDOMException(ctx, "NotSupportedError", "cloning a Document is not supported");
-            return JS_STEP_ABRUPT;
+            /* STEP 2 for a document, and the line that makes the rest of the walk build the copy's own tree:
+               "if node is a document, then set document to copy". Every descendant's `clone a single node`
+               creates its copy in the COPY, so the cloned tree's node document is the clone and not the
+               original — which is what makes `document.cloneNode(true).body` a node of the copy. */
+            s->copy = clone_a_document(lxb_dom_interface_document(n));
+            s->doc = lxb_dom_interface_document(s->copy);
+        } else {
+            s->doc = n->owner_document;      /* the argument's default: node's node document */
+            s->copy = lxb_dom_document_import_node(s->doc, n, false);
+            CHECK(s->copy != NULL, "clone a node: the Lexbor node copy failed — returning nothing would hand "
+                                   "the page a null it has no way to distinguish from a node it never asked "
+                                   "for");
+            dom_cow_note_created(s->copy);   /* the clone ROOT only — its descendants are reachable through it */
         }
-        s->copy = lxb_dom_node_clone(n, false);
-        CHECK(s->copy != NULL, "cloneNode: the Lexbor node copy failed — returning nothing would hand the page a "
-                               "null it has no way to distinguish from a node it never asked for");
-        dom_cow_note_created(s->copy);   /* the clone ROOT only — its descendants are reachable only through it */
         /* NO EARLY RETURN FOR A SHALLOW CLONE. `subtree` gates step 5 and HTML §4.12.3, and step 6 is not
            conditioned on it at all: a clonable shadow root is cloned — deeply, because 6.8 passes TRUE — for
            `host.cloneNode()` exactly as for `host.cloneNode(true)`. So the walk runs either way and each step
            asks the flag itself. */
-        s->deep = deep;
-        s->root = s->src = n;
-        s->cnode = s->dst = s->croot = s->copy;   /* the root is already copied; the walk starts at its children */
-        hdr->stage = CLONE_TEMPLATE;
+        s->root = n;
+        s->cnode = s->dst = s->croot = s->copy;   /* the root is copied; the walk starts at its children */
+        hdr->stage = base + NODE_CLONE_PHASE_TEMPLATE;
         return JS_STEP_YIELD;
     }
 
-    if (hdr->stage == CLONE_COPY) {
-        /* ONE NODE PER STEP: copy it and hang it under the copy of its parent. */
-        s->cnode = lxb_dom_node_clone(s->src, false);
-        CHECK(s->cnode != NULL, "cloneNode: a descendant's Lexbor copy failed — the page would get a subtree "
+    if (phase == NODE_CLONE_PHASE_COPY) {
+        /* ONE NODE PER STEP: copy it into `document` and hang it under the copy of its parent. */
+        s->cnode = lxb_dom_document_import_node(s->doc, s->src, false);
+        CHECK(s->cnode != NULL, "clone a node: a descendant's Lexbor copy failed — the page would get a subtree "
                                 "with a hole in it and no way to tell");
         dom_cow_insert_private(s->croot, s->dst, s->cnode);
-        hdr->stage = CLONE_TEMPLATE;
+        hdr->stage = base + NODE_CLONE_PHASE_TEMPLATE;
         return JS_STEP_YIELD;
     }
 
-    if (hdr->stage == CLONE_TEMPLATE) {
+    if (phase == NODE_CLONE_PHASE_TEMPLATE) {
         /* HTML §4.12.3's cloning steps, step 1: "If subtree is false, then return." */
         lxb_dom_node_t *content = s->deep ? clone_template_content(s->src) : NULL;
-        hdr->stage = CLONE_CHILDREN;
+        hdr->stage = base + NODE_CLONE_PHASE_CHILDREN;
         if (content && content->first_child) {
             /* Leave this tree for the template's, on both sides at once. The frame is everything to come back
                to; the copy's fragment is its own private tree, made by clone_interface a moment ago. The
                template ELEMENT's own children are step 5's and still to come, so that is where it resumes. */
-            clone_push(s, CLONE_CHILDREN);
+            clone_push(s, base + NODE_CLONE_PHASE_CHILDREN);
             s->root = content;
             s->src = content->first_child;
             s->dst = s->croot = clone_template_content(s->cnode);
             s->deep = true;         /* §4.12.3: "subtree set to true" for every content child */
             DCHECK(s->dst != NULL, "a cloned <template> has no content fragment to copy into — lexbor's "
                                    "clone_interface built something other than a template interface");
-            hdr->stage = CLONE_COPY;
+            hdr->stage = base + NODE_CLONE_PHASE_COPY;
         }
         return JS_STEP_YIELD;
     }
 
-    if (hdr->stage == CLONE_CHILDREN) {
+    if (phase == NODE_CLONE_PHASE_CHILDREN) {
         /* Step 5: "If subtree is true, then for each child of node's children, in tree order …" */
         if (s->deep && s->src->first_child) {
             s->src = s->src->first_child;
             s->dst = s->cnode;
-            hdr->stage = CLONE_COPY;
+            hdr->stage = base + NODE_CLONE_PHASE_COPY;
         } else {
             /* A node with no children finishes step 5 the moment it starts it. */
-            hdr->stage = CLONE_SHADOW;
+            hdr->stage = base + NODE_CLONE_PHASE_SHADOW;
         }
         return JS_STEP_YIELD;
     }
 
-    if (hdr->stage == CLONE_SHADOW) {
+    if (phase == NODE_CLONE_PHASE_SHADOW) {
         /* STEP 6, AT THE ONE MOMENT STEP 5 IS FINISHED FOR `src`. Steps 6.1-6.7 belong to §4.8's record and
            are shadow_root.c's; what is this machine's is 6.8, which is `clone a node` over each shadow child
            and therefore this same walk one level down. */
@@ -1637,7 +1869,7 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
         lxb_dom_node_t *shadow, *from;
 
         if (JS_IsException(sr)) return JS_STEP_ABRUPT;
-        hdr->stage = CLONE_LEAVE;
+        hdr->stage = base + NODE_CLONE_PHASE_LEAVE;
         shadow = node_of(sr);
         if (shadow) {
             from = shadow_root_of_element(ctx, lxb_dom_interface_element(s->src));
@@ -1647,27 +1879,31 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
                 /* The second tree reached other than through child links, and the same descent the template
                    content level makes. `subtree` is TRUE here whatever the caller asked for, and the host
                    resumes at step 7: steps 5 and 6 are both behind it. */
-                clone_push(s, CLONE_LEAVE);
+                clone_push(s, base + NODE_CLONE_PHASE_LEAVE);
                 s->root = from;
                 s->src = from->first_child;
                 s->dst = s->croot = shadow;
                 s->deep = true;
-                hdr->stage = CLONE_COPY;
+                hdr->stage = base + NODE_CLONE_PHASE_COPY;
             }
         }
         JS_FreeValue(ctx, sr);
         return JS_STEP_YIELD;
     }
 
-    DCHECK(hdr->stage == CLONE_LEAVE, "cloneNode resumed into a stage §4.4 does not have");
+    DCHECK(phase == NODE_CLONE_PHASE_LEAVE, "`clone a node` resumed into a phase §4.4 does not have");
     /* STEP 7, "RETURN COPY" — `src` is cloned, its subtree is cloned, and this is the ONE place the walk says
        so. Everything a specification defines to happen after step 5 happens here and nowhere earlier. */
     if (s->src == s->root) {
-        /* THE LEVEL IS FINISHED. Only the OUTERMOST level's root is itself a copy — it is the node cloneNode
-           was called on, and its step 7 is the member's answer. An inner level's root is a `<template>`'s
+        /* THE LEVEL IS FINISHED. Only the OUTERMOST level's root is itself a copy — it is the node the
+           algorithm was started on, and its step 7 is the answer. An inner level's root is a `<template>`'s
            content fragment or a shadow root, neither of which is CLONED: `clone a node` is invoked on their
            CHILDREN, into a tree the copy already has, so arriving at one is the level ending and nothing else. */
-        if (s->sp == 0) { *presult = node_wrap(ctx, s->copy); return JS_STEP_DONE; }
+        if (s->sp == 0) {
+            s->src = NULL;              /* the walk is over: the state is idle and may be started again */
+            hdr->stage = s->after;
+            return JS_STEP_YIELD;
+        }
         /* §4.2.2.4 "assign slottables for a tree" for a shadow tree this walk just built. A browser reaches it
            through §4.2.3's insertion steps as each shadow child is inserted; these inserts are PRIVATE — the
            copy is a tree nothing has seen — so the slots have never been asked what they hold, exactly as
@@ -1687,7 +1923,7 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
     if (s->src->next) {
         /* Step 5's loop advances: the next child of the parent whose copy `dst` still is. */
         s->src = s->src->next;
-        hdr->stage = CLONE_COPY;
+        hdr->stage = base + NODE_CLONE_PHASE_COPY;
         return JS_STEP_YIELD;
     }
     /* ASCEND ONE, IN LOCKSTEP. The last child of a parent finishing means the PARENT's step 5 is finished too,
@@ -1701,8 +1937,44 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
     s->dst = s->dst->parent;
     /* The parent's step 6 comes next, because its step 5 has just finished — unless the parent is an inner
        level's ROOT, which is the one node in the level that is not being cloned and so has neither step. */
-    hdr->stage = s->src == s->root && s->sp > 0 ? CLONE_LEAVE : CLONE_SHADOW;
+    hdr->stage = s->src == s->root && s->sp > 0 ? base + NODE_CLONE_PHASE_LEAVE : base + NODE_CLONE_PHASE_SHADOW;
     return JS_STEP_YIELD;
+}
+
+static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NodeCloneState *s = st;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+
+    if (hdr->stage == CN_CHECK) {
+        lxb_dom_node_t *n = node_of(hdr->this_val);
+        /* `optional boolean subtree = false` — the declaration converted it, so this is a real boolean. */
+        bool deep = argc > 0 && JS_ToBool(ctx, argv[0]);
+
+        if (!n) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+        /* STEP 1: "If this is a shadow root, then throw a NotSupportedError." A shadow root is created by
+           `attach a shadow root` and by nothing else — a copy of one would be a second root for a host that
+           already has one, which is why the standard refuses rather than answering. A DOCUMENT is not refused
+           here and never was in the standard: §4.4 defines what its copy is, and clone_a_document builds it. */
+        if (shadow_root_is(n)) {
+            JS_ThrowDOMException(ctx, "NotSupportedError", "cloneNode on a ShadowRoot");
+            return JS_STEP_ABRUPT;
+        }
+        node_clone_start(hdr, s, n, deep, CN_ROOT, CN_RETURN);      /* STEP 2: `clone a node` given this */
+        return JS_STEP_YIELD;
+    }
+
+    if (hdr->stage != CN_RETURN)
+        return node_clone_run(ctx, hdr, s, CN_ROOT);
+
+    /* STEP 2's "return the result": the algorithm left the copy on the state and pointed the stage here. */
+    DCHECK(s->copy != NULL, "`clone a node` finished without a copy — its step 7 is what sets the answer, and "
+                            "the caller is only ever resumed from there");
+    *presult = node_wrap(ctx, s->copy);
+    return JS_STEP_DONE;
 }
 
 static const IdlStepDecl NODE_CLONE_STEP = {

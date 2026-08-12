@@ -45,4 +45,14 @@ void timer_set_script_sink(void (*queue)(const char *src));
    Returns 1 when a timer fired, so the driver knows it has work again; 0 when there is none. */
 int timer_run_due(JSContext *ctx);
 
+/* HTML §8.6's RUN STEPS AFTER A TIMEOUT, for an ENGINE algorithm rather than a page callback — what
+   `AbortSignal.timeout()` step 3 performs, and what every other specification that says "run steps after a
+   timeout" needs. `steps` is a CALLABLE the caller minted (a step-machine function object is the usual one),
+   because §8.6 performs the steps at the expiry and an engine algorithm that runs page code — signalling
+   abort runs the page's abort algorithms and fires an event — has to be a flow when it does.
+   It is the SAME timer source the page's timers are on, so the engine's own scheduled work is ordered against
+   them by the one clock. Answers §8.6's timerKey, which timer_cancel takes. */
+int  timer_after(JSContext *ctx, double ms, JSValueConst steps);
+void timer_cancel(JSContext *ctx, int key);
+
 #endif

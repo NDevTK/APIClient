@@ -22,6 +22,7 @@
 #include "core/events/event.h"
 #include "core/events/create_event.h"
 #include "core/events/event_target.h"
+#include "core/events/page_transition_event.h"
 #include "core/events/report_exception.h"
 #include "core/html/html_element.h"
 #include "core/html/html_form.h"
@@ -113,6 +114,15 @@ typedef struct Document {
     JSValue              impl;
     char                 url[2048]; /* the document's address, which §4.4 baseURI reads */
     char                 content_type[32];   /* §4.5 contentType — what this document was created as */
+    /* HTML §4.12.3's two facts about a Document, which are what its "appropriate template contents owner
+       document" is made of: the ASSOCIATED INERT TEMPLATE DOCUMENT, and whether this document IS one ("a
+       Document created by this algorithm"). The second is what ends the recursion — an inert document is its
+       own template contents owner — and it is a FIELD rather than a test on the tree because the algorithm
+       states it as one: a document is created by that algorithm or it is not, and nothing about an empty
+       Document can be inspected to tell. The inert document is on the realm's `next_created` chain like any
+       other baseline creation; this names it so the second ask finds the first one's answer. */
+    struct Document     *inert_template;
+    int                  is_inert_template;
     /* THE REALM'S CHAIN OF DOCUMENTS IT CREATED AT BASELINE. A document a FLOW creates is owned by that flow's
        COW delta (dom_cow_note_created_document) and dies with it; one created while capture is off is baseline,
        exactly like a baseline node, and the realm that made it is what outlives it. Head on the active
@@ -455,10 +465,90 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
 enum { IDL_STEP_STAGE_BASE(DCE_STAGES) DCE_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const DCE_STEPS[] = { DCE_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
+/* DOM §4.5's "FLATTEN ELEMENT CREATION OPTIONS", given `options` and the DOCUMENT the creation is for.
+ *
+ * It answers two things and step 3.2.1 is why they are one algorithm: naming BOTH an `is` and a
+ * `customElementRegistry` is a NotSupportedError, because a customized built-in's definition can only come from
+ * the registry its document already resolves in. `is` has no other reader in this engine — §4.13.4 rejects
+ * `extends`, so no definition a lookup could find by one can be committed — and it is read here because the
+ * throw is what the member does with it.
+ *
+ * STEP 1 IS PER DOCUMENT, NOT PER REALM. "Look up a custom element registry given document" answers NULL for a
+ * document that is not a Window's — a createHTMLDocument, DOMParser or `new Document()` one — which is exactly
+ * why an element parsed into one is never upgraded. The receiver is what names WHICH document, so the by-node
+ * entry is what can say that; this realm's own registry would answer for the wrong document the moment
+ * `otherDoc.createElement("x-y")` is written.
+ *
+ * Returns the registry — a CustomElementRegistry or JS_NULL, OWNED — or JS_EXCEPTION with the exception the
+ * step names pending. */
+static JSValue flatten_creation_options(JSContext *ctx, JSValueConst doc_wrap, JSValueConst options)
+{
+    JSValue registry = custom_elements_node_registry(ctx, doc_wrap);   /* STEP 1 */
+    JSValue is_v, reg_v;                                               /* STEP 2: `is` is null */
+
+    /* STEP 3, "if options is a dictionary". §3.2.25's union was resolved by the DECLARATION — null, undefined
+       and every Object took the dictionary arm and everything else took the DOMString — so what arrived being
+       the converted dictionary object IS the answer, and both members below were read as rest points rather
+       than by a [[Get]] from this C activation.
+       UNKNOWN EXTERNAL INPUT crosses the declaration as ITSELF rather than being read as a dictionary — that
+       is the boundary rule the argument conversion states — so it has no members this algorithm can name, and
+       the answer is the one an absent options gives rather than an invented member. */
+    if (!JS_IsObject(options) || concolic_is(options)) return registry;
+    is_v = idl_dict_get(ctx, options, "is");                           /* STEP 3.1 */
+    reg_v = idl_dict_get(ctx, options, "customElementRegistry");
+    /* WEB IDL §3.2.16 ON THE MEMBER'S DECLARED TYPE, which is `CustomElementRegistry?`. It runs BEFORE any of
+       the algorithm's own steps because a conversion does, so `{is:"x-y", customElementRegistry:5}` is a
+       TypeError and not step 3.2.1's NotSupportedError. It is here rather than in the declaration because the
+       class is custom_elements.c's own and this component may not name it — the shape §4.8's attachShadow uses
+       for the identical member. */
+    if (!JS_IsUndefined(reg_v) && !JS_IsNull(reg_v) && !custom_elements_is_registry(reg_v)) {
+        JS_FreeValue(ctx, is_v);
+        JS_FreeValue(ctx, reg_v);
+        JS_FreeValue(ctx, registry);
+        return JS_ThrowTypeError(ctx, "ElementCreationOptions's customElementRegistry is not a "
+                                      "CustomElementRegistry");
+    }
+    if (!JS_IsUndefined(reg_v)) {                                      /* STEP 3.2: the member EXISTS */
+        if (!JS_IsUndefined(is_v)) {                                   /* STEP 3.2.1 */
+            JS_FreeValue(ctx, is_v);
+            JS_FreeValue(ctx, reg_v);
+            JS_FreeValue(ctx, registry);
+            return JS_ThrowDOMException(ctx, "NotSupportedError",
+                                        "an element creation cannot name both `is` and "
+                                        "`customElementRegistry`");
+        }
+        JS_FreeValue(ctx, registry);
+        registry = reg_v;                                              /* STEP 3.2.2 (the reference moves) */
+    } else {
+        JS_FreeValue(ctx, reg_v);
+    }
+    JS_FreeValue(ctx, is_v);
+    /* STEP 3.3. The two registries a creation may name are a SCOPED one and the document's own; anything else
+       is a registry this document resolves nothing in, and handing it over would make every later lookup on
+       the element answer out of a set the document has nothing to do with. */
+    if (JS_IsObject(registry) && !custom_elements_registry_is_scoped(ctx, registry)) {
+        JSValue doc_reg = custom_elements_node_registry(ctx, doc_wrap);
+        bool same = JS_VALUE_GET_PTR(doc_reg) == JS_VALUE_GET_PTR(registry);
+
+        JS_FreeValue(ctx, doc_reg);
+        if (!same) {
+            JS_FreeValue(ctx, registry);
+            return JS_ThrowDOMException(ctx, "NotSupportedError",
+                                        "an element creation was given a custom element registry that is "
+                                        "neither scoped nor this document's");
+        }
+    }
+    return registry;
+}
+
 typedef struct {
     uint8_t phase;      /* the construct request's own cursor */
     JSValue cb[1];      /* [ctor] — §4.9 step 5.1.4.1 passes no arguments, so the buffer is one slot */
     JSValue def;        /* step 3's definition (owned) */
+    /* §4.9's "CREATE AN ELEMENT INTERNAL" result, made BEFORE step 3's lookup — see the LOOKUP stage. It is
+       the element step 6 answers with and the element step 5.1.4's failure arm answers with; only a
+       constructor that RETURNS discards it. Owned. */
+    JSValue el;
     JSValue local;      /* the local name the operation was given (owned) — step 5.1.4.8 compares against it */
     JSValue result;     /* what the page's constructor answered (owned) */
     JSValue exc;        /* step 5.1.4's caught exception (owned), held across the report's own park */
@@ -470,6 +560,7 @@ static void doc_create_el_visit(JSContext *ctx, void *st, JSStepVisit *v)
     DocCreateElState *s = st;
     v->val(ctx, &s->cb[0]);
     v->val(ctx, &s->def);
+    v->val(ctx, &s->el);
     v->val(ctx, &s->local);
     v->val(ctx, &s->result);
     v->val(ctx, &s->exc);
@@ -481,10 +572,11 @@ static void doc_create_el_release(JSContext *ctx, void *st)
     DocCreateElState *s = st;
     JS_FreeValue(ctx, s->cb[0]);
     JS_FreeValue(ctx, s->def);
+    JS_FreeValue(ctx, s->el);
     JS_FreeValue(ctx, s->local);
     JS_FreeValue(ctx, s->result);
     JS_FreeValue(ctx, s->exc);
-    s->cb[0] = s->def = s->local = s->result = s->exc = JS_UNDEFINED;
+    s->cb[0] = s->def = s->el = s->local = s->result = s->exc = JS_UNDEFINED;
     report_exception_work_release(ctx, &s->rw);
 }
 
@@ -495,39 +587,68 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
     int r;
 
     if (hdr->stage == DCE_LOOKUP) {
-        const char *tag;
-        size_t len = 0;
+        JSValue registry;
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         /* EVERY owned field before the first thing that can throw — the failure path tears this state down
            through doc_create_el_release, which frees exactly what the state holds and nothing else. */
-        s->cb[0] = s->def = s->local = s->result = s->exc = JS_UNDEFINED;
+        s->cb[0] = s->def = s->el = s->local = s->result = s->exc = JS_UNDEFINED;
         report_exception_work_start(&s->rw);
+        /* §4.5 createElement STEP 3, and it runs whatever the local name is: `{is, customElementRegistry}`
+           refuses itself before any element is created. */
+        registry = flatten_creation_options(ctx, hdr->this_val, argc > 1 ? argv[1] : JS_UNDEFINED);
+        if (JS_IsException(registry)) return -1;
         /* §4.9 step 3 needs a NAME to look a definition up by, and a concolic tag has none — the creation is
            the one below, over whatever example the source carries. */
         if (argc < 1 || concolic_is(argv[0])) {
+            JS_FreeValue(ctx, registry);
             *presult = js_doc_create_element(ctx, hdr->this_val, argc, argv, 0);
             return JS_IsException(*presult) ? -1 : 0;
         }
-        tag = JS_ToCStringLen(ctx, &len, argv[0]);   /* a real string by now: the declaration converted it */
-        if (!tag) return -1;
-        s->def = custom_elements_definition_for_name(ctx, tag, len);
+        /* §4.9's "CREATE AN ELEMENT INTERNAL", PERFORMED BEFORE STEP 3'S LOOKUP. The lookup is over
+           (registry, namespace, local name, is), and the only form of it that can answer out of a SCOPED
+           registry reads those four off an ELEMENT — so the element step 6 would create is created here and
+           carries them. It is not spent work: step 6 answers with exactly it, and so does step 5.1.4's failure
+           arm, whose element the standard also builds by creating an element internal. Only a constructor that
+           RETURNS an element of its own leaves this one unused. */
+        s->el = js_doc_create_element(ctx, hdr->this_val, argc, argv, 0);
+        if (JS_IsException(s->el)) { s->el = JS_UNDEFINED; JS_FreeValue(ctx, registry); return -1; }
+        /* "…custom element registry to registry", written through the component that owns the association —
+           the once-only rule and the scoped-registry latch belong with the slot and not with each writer. */
+        custom_elements_node_associate_registry(ctx, s->el, registry);
+        s->def = custom_elements_definition_lookup_for_element(ctx, s->el);   /* §4.9 STEP 3 */
+        /* §4.9 STEPS 5.1.2-5.1.3, WHICH DO NOT EXIST YET AND ARE NOW REACHABLE. They set the surrounding
+           agent's ACTIVE CUSTOM ELEMENT CONSTRUCTOR MAP[C] to `registry` for the duration of the construct,
+           and that map is the only thing that tells §4.13.2's `[HTMLConstructor]` which registry the element
+           it mints belongs to — with it absent the constructor derives the DOCUMENT's, so an element created
+           through a scoped registry would answer for a registry the page never named. Until this creation
+           option existed no scoped registry could reach a construct at all; now one can, so the case that
+           cannot be answered aborts here instead of answering wrongly. */
+        DCHECK(!JS_IsObject(s->def) || !JS_IsObject(registry) ||
+                   !custom_elements_registry_is_scoped(ctx, registry),
+               "DOM §4.9 steps 5.1.2-5.1.3 are unbuilt: a custom element was created through a SCOPED "
+               "CustomElementRegistry, and the agent's ACTIVE CUSTOM ELEMENT CONSTRUCTOR MAP is what carries "
+               "that registry into HTML §4.13.2's constructor. core/html/custom_elements.c owns it — the map "
+               "is per AGENT, keyed by the definition's constructor, set around the Construct and restored "
+               "after it (steps 5.1.5-5.1.6) — and §4.13.2 step 7 must read it instead of deriving the "
+               "current global's document's registry");
+        JS_FreeValue(ctx, registry);
         if (!JS_IsObject(s->def)) {                  /* §4.9 step 6: not a custom element */
-            JS_FreeCString(ctx, tag);
-            *presult = js_doc_create_element(ctx, hdr->this_val, argc, argv, 0);
-            return JS_IsException(*presult) ? -1 : 0;
+            *presult = s->el;
+            s->el = JS_UNDEFINED;
+            return 0;
         }
-        s->local = JS_NewStringLen(ctx, tag, len);
-        JS_FreeCString(ctx, tag);
-        if (JS_IsException(s->local)) { s->local = JS_UNDEFINED; return -1; }
+        /* Step 5.1.4.8 compares what the constructor made against the name this operation was GIVEN, which the
+           declaration has already converted to a string. */
+        s->local = JS_DupValue(ctx, argv[0]);
         hdr->stage = DCE_CONSTRUCT;
     }
     if (hdr->stage == DCE_CONSTRUCT) {
-        /* §4.9 steps 5.1.1-5.1.4.1. The agent's active custom element constructor map (steps 5.1.2-5.1.3, and
-           5.1.5-5.1.6's restore) is what a SCOPED registry is read through, and there are none, so the map has
-           one entry for every constructor and setting it changes nothing that can be read back. It becomes
-           real state in the same diff that makes `customElementRegistry` a creation option. */
+        /* §4.9 STEP 5.1.4.1 — constructing C. Steps 5.1.2-5.1.3's active custom element constructor map is
+           what a SCOPED registry would be carried into the constructor through; the LOOKUP stage asserts that
+           no scoped registry reaches here, and names the map as the thing to build, rather than this stage
+           constructing as though every registry were the document's. */
         JSValue ctor = custom_elements_definition_constructor(ctx, s->def);
         JSValue made = JS_UNDEFINED;
 
@@ -576,13 +697,17 @@ report:
        element the page gets back is an HTMLUnknownElement carrying the local name it asked for — which is how
        a page distinguishes a component whose constructor threw from one that worked. */
     {
-        /* Created through the member's own plain body, so the element lands in the RECEIVER's document — §4.5
-           step 5's "given this", which a create in the current global's document would get wrong for
-           `otherDoc.createElement(...)`. */
-        JSValue el = js_doc_create_element(ctx, hdr->this_val, argc, argv, 0);
+        /* THE ELEMENT THE LOOKUP STAGE ALREADY CREATED — §4.9's create an element internal, performed in the
+           RECEIVER's document (§4.5 step 5's "given this", which a create in the current global's document
+           would get wrong for `otherDoc.createElement(...)`) and carrying the registry step 3 flattened, which
+           is what this step names too. */
+        JSValue el = s->el;
         JSValue proto;
 
-        if (JS_IsException(el)) return -1;
+        s->el = JS_UNDEFINED;
+        DCHECK(JS_IsObject(el), "DOM §4.9 step 5.1.4's failure arm has no element to answer with — the element "
+                                "is created before step 3's lookup precisely so this arm and step 6 share one, "
+                                "and a report reached without one came from a stage that never made it");
         proto = html_unknown_element_proto(ctx);
         JS_SetPrototype(ctx, el, proto);
         JS_FreeValue(ctx, proto);
@@ -841,6 +966,43 @@ JSValue document_create_element_ns(JSContext *ctx, JSValueConst doc, int argc, J
     return js_doc_create_element_ns(ctx, doc, argc, argv, 0);
 }
 
+/* §4.5's `[CEReactions] Node adoptNode(Node node)` — four steps, and the algorithm they are stated over is DOM
+ * §4.5's "adopt a node", which core/dom/node.c owns because it is a shadow-including tree walk that writes each
+ * node's node document through the per-flow chokepoint.
+ *
+ * THE TWO REFUSALS ARE DIFFERENT EXCEPTIONS AND THAT IS THE MEMBER'S POINT: a Document is a NotSupportedError
+ * and a shadow root is a HierarchyRequestError, which a page's `catch (e) { e.name }` tells apart. They are
+ * refusals rather than asserts — a page calling `document.adoptNode(document)` is asking a question the spec
+ * answers, not violating an engine invariant.
+ *
+ * THE REALM IS THE RECEIVER DOCUMENT'S, not the running one. Adopt's step 3 mints wrappers and reads per-flow
+ * records off them (the shadow-root association, the registry re-derivation, the adoptedCallback reaction), and
+ * those are facts about the document being adopted INTO — the same rule node.c's own insert-adopt follows, and
+ * the one that answers a second same-origin document's adoption out of its own realm rather than out of
+ * whichever one happened to call. */
+static JSValue js_doc_adopt_node(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    Document *d = doc_receiver(ctx, this_val);
+    lxb_dom_node_t *n;
+
+    (void)magic;
+    if (!d) return JS_EXCEPTION;
+    DCHECK(argc >= 1, "adoptNode ran with no argument — `Node node` is required, so the declaration's own "
+                      "arity check answers that before this body is entered");
+    n = node_of(argv[0]);
+    DCHECK(n != NULL, "adoptNode was handed something that is not a Node — the argument is an INTERFACE type "
+                      "and the declaration brands it, so a non-Node is a TypeError before this body runs");
+    /* STEP 1. */
+    if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT)
+        return JS_ThrowDOMException(ctx, "NotSupportedError", "a Document cannot be adopted");
+    /* STEP 2. It is a HierarchyRequestError and not the same refusal as step 1's: a shadow root is a node the
+       tree could hold nowhere, where a Document is a node no document may own. */
+    if (shadow_root_is(n))
+        return JS_ThrowDOMException(ctx, "HierarchyRequestError", "a shadow root cannot be adopted");
+    node_adopt(d->realm, n, lxb_dom_interface_document(d->dom));           /* STEP 3: adopt node into this */
+    return JS_DupValue(ctx, argv[0]);                                      /* STEP 4 */
+}
+
 /* §4.5's `[SameObject] readonly attribute DOMImplementation implementation`. SameObject is the whole reason the
    object lives on the document's record: a page holds it and calls it later, and a fresh one per read would
    compare unequal to the one it kept. */
@@ -921,6 +1083,42 @@ static int document_readiness(JSContext *ctx)
     return r;
 }
 
+/* HTML §7.5.9's PAGE SHOWING, which is a Document's and lives where its readiness does.
+ *
+ * It is the boolean "used to ensure that scripts receive pageshow and pagehide events in a consistent manner
+ * (e.g., that they never receive two pagehide events in a row without an intervening pageshow, or vice
+ * versa)" — so it is not bookkeeping beside those two fires, it is the CONDITION on both of them: §13.2.7's
+ * "the end" asserts it is false and sets it true before firing `pageshow`, and §7.5.9 step 9 fires `pagehide`
+ * only if it is true, setting it false first.
+ *
+ * IT LIVES IN THIS REALM'S OWN BASELINE RECORD, the shape the readiness above and §6.6's visibility state
+ * already use, and for the same two reasons: the record is unreachable from the page, so nothing but this
+ * component can write the flag; and the write is an ordinary property write, so the heap COW captures it and
+ * one arm of a fork can unload its document without touching its sibling's. */
+static int g_showing_slot = -1;
+
+bool document_page_showing(JSContext *ctx)
+{
+    JSValue rec = realm_value_get(ctx, g_showing_slot), v;
+    int32_t on = 0;
+
+    DCHECK(JS_IsObject(rec), "a realm answered for its document's page showing with no record");
+    v = JS_GetPropertyStr(ctx, rec, "showing");
+    JS_ToInt32(ctx, &on, v);
+    JS_FreeValue(ctx, v);
+    JS_FreeValue(ctx, rec);
+    return on != 0;
+}
+
+void document_page_showing_set(JSContext *ctx, bool showing)
+{
+    JSValue rec = realm_value_get(ctx, g_showing_slot);
+
+    DCHECK(JS_IsObject(rec), "a realm was asked to set a page showing it has no record for");
+    JS_SetPropertyStr(ctx, rec, "showing", JS_NewInt32(ctx, showing ? 1 : 0));
+    JS_FreeValue(ctx, rec);
+}
+
 /* HTML §8.1.7.3 "update the rendering" step 3's RENDER-BLOCKED clause, answered by the component that owns the
    document's load lifecycle rather than guessed by the one that runs the steps.
  *
@@ -942,14 +1140,38 @@ static int document_done_stage(JSContext *ctx, int stage)
            listener registered on window hears it — the propagation path derives that from the document's
            ancestors now rather than the caller naming the window. It is not cancelable. */
         event_target_fire(ctx, doc_here(ctx)->doc_obj,
-                          event_new(ctx, "DOMContentLoaded", /*bubbles*/ true, /*cancelable*/ false));
+                          event_new(ctx, "DOMContentLoaded", /*bubbles*/ true, /*cancelable*/ false), JS_UNDEFINED);
         return 1;
     }
     DCHECK(stage == 1, "the document lifecycle was asked for a stage it does not have");
-    document_set_ready(ctx, 2);
-    /* HTML: `load` is fired at the WINDOW and does not bubble — there is nothing above it to bubble to. */
+    /* §13.2.7's "THE END", step 7. Its sub-steps are in this order and each of them is observable. */
+    document_set_ready(ctx, 2);                                                  /* step 7.1 */
+    /* STEP 7.2: "If the Document object's browsing context is null, then abort these steps." A document whose
+       navigable was destroyed under it — a frame removed, a traversable closed — must not fire `load` or
+       `pageshow` at a Window whose browsing context is gone, and §7.5.9 destroys documents while this walk is
+       still running. It is the destruction that is asked for and not `closed`: a traversable that is merely
+       CLOSING still has its browsing context, and its documents are still finishing. */
+    {
+        JSValueConst proxy = doc_here(ctx)->proxy;
+        if (window_proxy_is(proxy) && window_proxy_destroyed(proxy))
+            return 1;
+    }
+    /* STEP 7.5: `load` at the WINDOW — it does not bubble (there is nothing above it to bubble to) and it is
+       fired WITH THE LEGACY TARGET OVERRIDE FLAG SET, so a listener's `e.target` is the DOCUMENT. */
     event_target_fire(ctx, doc_here(ctx)->win_obj,
-                      event_new(ctx, "load", /*bubbles*/ false, /*cancelable*/ false));
+                      event_new(ctx, "load", /*bubbles*/ false, /*cancelable*/ false),
+                      doc_here(ctx)->doc_obj);
+    /* STEPS 7.8-7.10: the document is now SHOWING, and `pageshow` says so with `persisted` false — this
+       document was loaded rather than restored from a session history entry. §7.5.9's `pagehide` is the other
+       end of that pair and fires only because this ran. */
+    DCHECK(!document_page_showing(ctx),
+           "§13.2.7 \"the end\" step 7.8 asserts a document's page showing is false when its load completes — "
+           "a document that reached the end twice would fire two pageshows with no pagehide between them, "
+           "which is the exact inconsistency the flag exists to prevent");
+    document_page_showing_set(ctx, true);
+    event_target_fire(ctx, doc_here(ctx)->win_obj,
+                      page_transition_event_new(ctx, "pageshow", /*persisted*/ false),
+                      doc_here(ctx)->doc_obj);
     return 1;
 }
 
@@ -1225,13 +1447,32 @@ static JSClassID g_document_class;   /* §3.1.1's prototype slot, per realm */
 static int g_id_create_element = -1, g_id_create_text = -1, g_id_create_comment = -1,
            g_id_create_fragment = -1, g_id_create_element_ns = -1, g_id_create_iterator = -1,
            g_id_create_walker = -1, g_id_create_range = -1, g_id_create_event = -1,
-           g_id_create_cdata = -1, g_id_create_pi = -1, g_id_doc_ctor = -1;
+           g_id_create_cdata = -1, g_id_create_pi = -1, g_id_doc_ctor = -1, g_id_adopt_node = -1;
 
 static void document_declare_members(JSContext *ctx)
 {
-    /* §4.5's `[CEReactions, NewObject] Element createElement(DOMString localName, …)` — a STEP because §4.9
-       step 5.1.4.1 constructs the page's custom element class synchronously inside it. */
-    g_id_create_element = idl_method_id_step(ctx, IDL_1STR, 1, NULL, 0, &DOC_CREATE_EL_STEP, 0);
+    /* §4.5's `[CEReactions, NewObject] Element createElement(DOMString localName,
+       optional (DOMString or ElementCreationOptions) options = {})` — a STEP because §4.9 step 5.1.4.1
+       constructs the page's custom element class synchronously inside it.
+       THE OPTIONS ARGUMENT IS DECLARED, not read by the body: §3.2.25's union and the dictionary's two members
+       are conversions, and every one of them is a rest point — a page accessor on `customElementRegistry` is
+       its code, and a body reaching for it with JS_GetPropertyStr would run that inside a C activation. */
+    {
+        static const IdlArgType CREATE_EL[2] = { IDL_DOMSTRING, IDL_STRING_OR_DICT };
+        /* §4.5's `dictionary ElementCreationOptions { CustomElementRegistry? customElementRegistry;
+           DOMString is; }`, in the IDL's own order because that is the order Web IDL reads them in. The
+           registry crosses UNCONVERTED and is brand-tested by flatten_creation_options, because the class is
+           custom_elements.c's own and this component may not name it. */
+        static const IdlDictMember ELEMENT_CREATION_OPTIONS[] = {
+            { "customElementRegistry", IDL_ANY,       false, NULL, 0 },
+            { "is",                    IDL_DOMSTRING, false, NULL, 0 },
+        };
+        g_id_create_element = idl_method_id_step(ctx, CREATE_EL, 2, ELEMENT_CREATION_OPTIONS,
+                                                 (int)(sizeof ELEMENT_CREATION_OPTIONS /
+                                                       sizeof ELEMENT_CREATION_OPTIONS[0]),
+                                                 &DOC_CREATE_EL_STEP, 0);
+        idl_optional_from(1);
+    }
     g_id_create_text = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_text, 0);
     g_id_create_comment = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_comment, 0);
     g_id_create_cdata = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_xml_node, 0);
@@ -1255,6 +1496,15 @@ static void document_declare_members(JSContext *ctx)
     }
     g_id_create_range = idl_method_id(ctx, NULL, 0, js_doc_create_range, 0);
     g_id_create_event = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_event, 0);
+    {
+        /* §4.5's `[CEReactions] Node adoptNode(Node node)`. The argument is an INTERFACE type, so the
+           declaration brands it and a non-Node is a TypeError before the member's step 1; the `[CEReactions]`
+           half is the machine's own epilogue, which drains the adoptedCallback reactions adopt enqueued before
+           the member's value is returned. */
+        static const IdlArgType ONE_NODE[1] = { IDL_INTERFACE };
+        g_id_adopt_node = idl_method_id(ctx, ONE_NODE, 1, js_doc_adopt_node, 0);
+        idl_iface_brand(node_class_id());
+    }
 }
 
 static void document_install_members(JSContext *ctx, JSValueConst proto)
@@ -1273,6 +1523,11 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
             idl_install_accessor(ctx, proto, NAMES[k], js_doc_shortcut, (int)k, -1);
     }
     idl_install_method(ctx, proto, "createElementNS", 2, g_id_create_element_ns);
+    /* §4.5's adoptNode. `importNode` is NOT beside it and is honestly ABSENT: it is stated over "clone a node"
+       with `document` set to the receiver and a `fallbackRegistry`, and node.c's clone machine
+       (node_clone_start) takes neither — so a page's own TypeError names the gap rather than a member that
+       clones into the wrong document. */
+    idl_install_method(ctx, proto, "adoptNode", 1, g_id_adopt_node);
     /* §4.5's two ATTRIBUTE factories, declared beside the interface they build (attr.c) — "create an attribute"
        is §4.9.2's algorithm and belongs to the attribute component, not to a second copy of it here. */
     attr_install_document_members(ctx, proto);
@@ -1446,12 +1701,20 @@ void document_init(JSContext *ctx)
     JS_NewClass(JS_GetRuntime(ctx), g_document_class, &d);
     node_claim_type(LXB_DOM_NODE_TYPE_DOCUMENT, g_document_class);
     g_ready_slot = realm_value_declare(ctx, "HTML current document readiness");
+    /* §7.5.9's page showing is the readiness's twin — one Document's state, written by the same two algorithms
+       that move the readiness ("the end" sets it, unloading clears it) — so it is declared beside it. */
+    g_showing_slot = realm_value_declare(ctx, "HTML §7.5.9 page showing");
     document_declare_members(ctx);
     document_fragment_init(ctx);   /* §4.7, before any fragment is wrapped as a bare Node */
     shadow_root_init(ctx);         /* §4.8, whose prototype chains to §4.7's — declared after it */
     slot_init(ctx);                /* §4.2.2's slots, which only exist inside a §4.8 tree */
     document_type_init(ctx);       /* §4.6, before the parser's doctype is wrapped as a bare Node */
     dom_implementation_init(ctx);  /* §4.5.1, which every document's record builds one of */
+    /* §6.6's visibility state is a DOCUMENT's, and page_visibility_install already runs from
+       document_install_proto below — so its declaration is paired with it HERE rather than copied into each
+       host's own init list, which is the hand-picked list CLAUDE.md warns about: three hosts each declaring
+       their own is three places for the next component to be missing from one of. */
+    page_visibility_init(ctx);
     realm_declare_intrinsic(document_install_proto);
 }
 
@@ -1488,6 +1751,15 @@ void document_install_proto(JSContext *ctx)
         JS_SetPropertyStr(ctx, rec, "stage", JS_NewInt32(ctx, 0));
         realm_value_set(ctx, g_ready_slot, rec);
     }
+    /* §7.5.9: page showing is "initially false", and it is built HERE for the reason the readiness is — a
+       record made on first touch would be made inside whichever flow happened to read first, and would then be
+       that flow's document rather than the baseline every flow forks from. */
+    {
+        JSValue rec = JS_NewObjectProto(ctx, JS_NULL);
+        CHECK(!JS_IsException(rec), "this realm's §7.5.9 page-showing record could not be allocated");
+        JS_SetPropertyStr(ctx, rec, "showing", JS_NewInt32(ctx, 0));
+        realm_value_set(ctx, g_showing_slot, rec);
+    }
 }
 
 /* A DOCUMENT'S RECORD, AND THE ONE PLACE THE (document -> record) ANSWER IS ESTABLISHED.
@@ -1502,6 +1774,13 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
     Document *d;
 
     DCHECK(dom != NULL, "a document record was built for no document");
+    /* §4.5 GIVES EVERY DOCUMENT A CONTENT TYPE, so this is a required argument and not a defaulted one — the
+       address may legitimately be absent (a document with no browsing context has none to speak of), the type
+       may not, and §4.4's clone reads it back off the record it is copying. */
+    DCHECK(type != NULL && type[0] != '\0',
+           "a document record was built with no content type — §4.5's `contentType` is state every document "
+           "has, and a record that never received one would answer for its document with an empty string that "
+           "no parse, no createDocument and no clone could have produced");
     DCHECK(dd->user == NULL, "a second record was built for one Lexbor document — the first would be leaked and "
                              "every node of the tree would answer through whichever won");
     d = calloc(1, sizeof *d);
@@ -1563,30 +1842,98 @@ static void doc_rec_free(JSContext *ctx, Document *d)
         dom_cow_destroy_document(dom);
 }
 
-/* A SECOND DOCUMENT IN THIS REALM — see document.h. */
-JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *content_type)
+/* THE REALM OWNS THIS DOCUMENT — one of the two arms every Document created in this realm takes, and the one a
+   creation takes when it is BASELINE: it goes on the chain the realm's teardown walks and outlives every flow.
+   The other arm is the running flow's COW delta (dom_cow_note_created_document), which destroys the document
+   when the delta is discarded. Exactly one of the two, which is what `owned` records. */
+static void doc_realm_owns(JSContext *ctx, Document *d)
 {
-    Document *d = doc_rec_new(ctx, dom, url, content_type);
-    JSValue doc;
+    Document *active = doc_of(ctx);
 
-    /* WHO DESTROYS IT. A document a FLOW created is that flow's, exactly like a node it created: the COW delta
-       owns it and destroys it when the delta is discarded, so the frontier does not accumulate one document per
-       exploration arm. A creation made while capture is OFF is BASELINE — the boot flow's creations are the
-       baseline by definition — and the realm that made it is what outlives it, so it goes on the realm's chain
-       and dies with document_free. Exactly one of the two, which is what the flag records. */
-    if (!dom_cow_note_created_document(dom)) {
-        Document *active = doc_of(ctx);
-        DCHECK(active != NULL, "a document was created in a realm that has none — the chain that owns a baseline "
-                               "creation hangs off the realm's ACTIVE document, and there is none to hang it on");
-        d->owned = 1;
-        d->next_created = active->next_created;
-        active->next_created = d;
-    }
-    doc = node_wrap(ctx, lxb_dom_interface_node(dom));
+    DCHECK(active != NULL, "a document was created in a realm that has none — the chain that owns a baseline "
+                           "creation hangs off the realm's ACTIVE document, and there is none to hang it on");
+    d->owned = 1;
+    d->next_created = active->next_created;
+    active->next_created = d;
+}
+
+/* THE REST OF WHAT EVERY DOCUMENT IN THIS REALM HAS, whoever ends up owning its tree: the wrapper the identity
+   map holds, and §4.5's `[SameObject] implementation`. Returns the wrapper, OWNED. */
+static JSValue doc_finish(JSContext *ctx, Document *d)
+{
+    JSValue doc = node_wrap(ctx, lxb_dom_interface_node(d->dom));
+
     CHECK(JS_IsObject(doc), "a created Document's wrapper allocation failed");
     d->doc_obj = JS_DupValue(ctx, doc);
     d->impl = dom_implementation_new(ctx, doc);
     return doc;
+}
+
+/* A SECOND DOCUMENT IN THIS REALM — see document.h. */
+JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *content_type)
+{
+    Document *d = doc_rec_new(ctx, dom, url, content_type);
+
+    /* WHO DESTROYS IT. A document a FLOW created is that flow's, exactly like a node it created: the COW delta
+       owns it and destroys it when the delta is discarded, so the frontier does not accumulate one document per
+       exploration arm. A creation made while capture is OFF is BASELINE — the boot flow's creations are the
+       baseline by definition — and the realm that made it is what outlives it. */
+    if (!dom_cow_note_created_document(dom)) doc_realm_owns(ctx, d);
+    return doc_finish(ctx, d);
+}
+
+/* HTML §4.12.3's APPROPRIATE TEMPLATE CONTENTS OWNER DOCUMENT — the Document that owns the template contents of
+ * every `<template>` in `doc`, and the reason those contents are INERT: the owner has no browsing context, so
+ * its scripts do not run and its custom elements do not upgrade. DOM §4.5 adopt step 3.4 reaches it through
+ * HTML's adopting steps for a template element, which adopt the template's contents into the owner of the
+ * document the template was just adopted INTO.
+ *
+ * THE ALGORITHM IS TWO FACTS ABOUT A DOCUMENT and the record holds both. "If document is not a Document created
+ * by this algorithm" is the flag: an inert document IS its own template contents owner, which is what makes the
+ * standard's "template elements inside Document objects that are created by this algorithm just reuse the same
+ * Document owner" true rather than a second inert document per level.
+ *
+ * WHO OWNS THE INERT DOCUMENT: THE REALM, never the running flow's delta — the other of the two owners
+ * document_new chooses between, and the choice is not free here. The inert document is named by a Document
+ * RECORD, and a record is malloc'd C the COW delta has no entry kind for: a delta-owned inert document would be
+ * destroyed with the flow that first touched a template while the record every sibling flow reads went on
+ * naming it, which is a use-after-free with nothing to say so. The other direction costs nothing observable —
+ * a template's contents are a DocumentFragment, and a fragment is not a CHILD of the document that owns it, so
+ * the inert document's tree stays EMPTY and no flow can walk into a sibling's markup through it. Which is what
+ * the standard describes: "a single Document to act as its proxy for owning the template contents of all its
+ * template elements".
+ */
+lxb_html_document_t *document_template_contents_owner(JSContext *ctx, lxb_dom_document_t *doc)
+{
+    Document *d = doc_rec(doc), *inert;
+
+    DCHECK(d != NULL, "HTML §4.12.3 was asked for the template contents owner of a document with no record — "
+                      "document_install and document_new are the two places one is built, and a tree that came "
+                      "from neither names no realm to create the inert document in");
+    DCHECK(ctx == d->realm, "HTML §4.12.3 creates the inert template document in `document`'s RELEVANT REALM, "
+                            "which is the record's — a caller asking out of another realm of this agent would "
+                            "build it with another document's prototypes and hand a template contents whose "
+                            "nodes answer for the wrong global");
+    if (d->is_inert_template)      /* "a Document created by this algorithm": it is its own owner */
+        return d->dom;
+    if (!d->inert_template) {
+        lxb_html_document_t *dom = lxb_html_document_create();
+
+        CHECK(dom != NULL, "HTML §4.12.3: OOM creating an inert template document");
+        /* "If document is an HTML document, then mark newDocument as an HTML document also." What makes a
+           Document an HTML document here is its CONTENT TYPE — the same fact §4.5's createCDATASection refuses
+           on — and a document that is not one gets what "creating a document that implements Document"
+           produces, which is `application/xml` at `about:blank` with no browsing context. */
+        inert = doc_rec_new(d->realm, dom, "about:blank",
+                            strcmp(d->content_type, "text/html") == 0 ? "text/html" : "application/xml");
+        inert->is_inert_template = 1;
+        doc_realm_owns(d->realm, inert);
+        /* The wrapper the record itself holds is the one that outlives this: nothing here has a use for a
+           second reference to a document the page cannot name. */
+        JS_FreeValue(d->realm, doc_finish(d->realm, inert));
+        d->inert_template = inert;
+    }
+    return d->inert_template->dom;
 }
 
 const char *document_url_of(const lxb_dom_document_t *dom)
@@ -1596,6 +1943,16 @@ const char *document_url_of(const lxb_dom_document_t *dom)
     DCHECK(d != NULL, "a node's baseURI was read in a document with no record — §4.4 reads the NODE DOCUMENT's "
                       "address, and a tree that came from neither document_install nor document_new has none");
     return d->url;
+}
+
+const char *document_content_type_of(const lxb_dom_document_t *dom)
+{
+    Document *d = doc_rec(dom);
+
+    DCHECK(d != NULL, "a document's CONTENT TYPE was read from a document with no record — the string is set "
+                      "once, by whichever of document_install and document_new created the document, and a "
+                      "tree that came from neither never had one to answer with");
+    return d->content_type;
 }
 
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,

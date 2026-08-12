@@ -59,6 +59,15 @@ typedef struct DomUndo {
        at its root — a different destructor, over a different allocation, and a type pun through the node would
        compile and free the wrong thing. */
     lxb_html_document_t *doc;
+    /* kind 8: a node's NODE DOCUMENT. DOM §4.5's adopt writes it for every shadow-including inclusive
+       descendant of the node being adopted, and nothing captured it: a flow that adopted a subtree moved those
+       nodes into another document for EVERY flow, so a sibling arm that never adopted read `node.ownerDocument`
+       as the adopting arm's answer, and `createElement` on it built into the wrong tree.
+       TWO FIELDS AND NOT `doc` REUSED, for kind 5's stated reason one step further: kind 5 owns an
+       lxb_html_document_t it must DESTROY, this one holds two lxb_dom_document_t it must never destroy — it
+       only points a node back at one — and a type pun between them would compile and free a document the page
+       is still using. */
+    lxb_dom_document_t *doc_old, *doc_cur;
 } DomUndo;
 
 static DomUndo *g_dom_undo = NULL;
@@ -659,6 +668,53 @@ void dom_cow_move_private(lxb_dom_node_t *from_root, lxb_dom_node_t *to_root,
     lxb_dom_node_insert_child(parent, child);
 }
 
+/* INSERT BEFORE A SIBLING, inside one private tree — the positional form of dom_cow_insert_private.
+ *
+ * IT EXISTS BECAUSE POSITION IS THE WHOLE POINT OF THE OPERATION THAT NEEDED IT. HTML §8.6.4 step 1.5.2.5
+ * replaces an element with its children IN ITS PLACE, and an append would put them at the END of their new
+ * parent — the sanitizer would reorder the page's markup while claiming only to have removed an element, which
+ * is a wrong answer that looks like a correct one. Every other private operation happens to be an append
+ * because a parse builds in order; this one is not building, it is splicing.
+ *
+ * `ref` IS A CHILD OF `parent`, not merely in the tree, and that is asserted rather than trusted: lexbor's
+ * insert-before writes links relative to `ref`, so a `ref` under a different parent silently detaches a subtree
+ * from somewhere else in the same private tree.
+ * Nothing is captured, for the reason none of these capture: the tree is the running flow's own and no other
+ * flow can observe it. */
+void dom_cow_insert_before_private(lxb_dom_node_t *root, lxb_dom_node_t *ref, lxb_dom_node_t *child) {
+    dom_private_check(root);
+    DCHECK(ref && dom_root_of(ref) == root,
+           "dom_cow_insert_before_private before a reference node outside the declared private tree");
+    DCHECK(ref->parent != NULL,
+           "dom_cow_insert_before_private before the ROOT of the private tree — there is no position before it "
+           "and lexbor would link the child to a null parent");
+    DCHECK(child && !dom_is_attached(child),
+           "dom_cow_insert_before_private with a child that is already in a tree — that is a MOVE, which is a "
+           "structural change to wherever it came from and needs the capturing chokepoint");
+    DCHECK(!dom_is_inclusive_ancestor(child, ref),
+           "dom_cow_insert_before_private would put a node inside its own descendant — that is a cycle, and "
+           "every tree walk in this engine loops on one forever");
+    lxb_dom_node_insert_before(ref, child);
+}
+
+/* MOVE a node to a POSITION in a private tree — dom_cow_move_private's positional twin, and the one §8.6.4
+   step 1.5.2.5 actually performs: the children being spliced into their grandparent are already in the tree,
+   so they are moved rather than inserted. Both ends are the same declared private tree here, which is what
+   distinguishes it from move_private's two-root form. */
+void dom_cow_move_before_private(lxb_dom_node_t *root, lxb_dom_node_t *ref, lxb_dom_node_t *child) {
+    dom_private_check(root);
+    DCHECK(ref && dom_root_of(ref) == root,
+           "dom_cow_move_before_private before a reference node outside the declared private tree");
+    DCHECK(ref->parent != NULL,
+           "dom_cow_move_before_private before the ROOT of the private tree — there is no position before it");
+    DCHECK(child && dom_root_of(child) == root,
+           "dom_cow_move_before_private with a child outside the private tree it was declared to move within");
+    DCHECK(!dom_is_inclusive_ancestor(child, ref),
+           "dom_cow_move_before_private would put a node inside its own descendant — that is a cycle");
+    lxb_dom_node_remove(child);
+    lxb_dom_node_insert_before(ref, child);
+}
+
 /* Destroy the tree. For the fragment parse its children must already be gone — destroying one that still holds
    nodes would free tree the caller is about to insert — so the caller says which it means. */
 /* Every node in the subtree about to be freed, so each can hand back the wrapper the identity map holds for
@@ -902,6 +958,34 @@ void dom_cow_discard_private(lxb_dom_node_t *root, lxb_dom_node_t *node) {
    attribute and a node's presence: `text.data = x` mutates bytes the baseline owns, in place, on a node whose
    IDENTITY must survive the write — so it cannot be modelled as a remove+insert of a replacement node the way
    textContent legitimately is. Same shape as the attribute entry, over the node instead of the element. */
+/* DOM §4.5 ADOPT's WRITE OF A NODE'S NODE DOCUMENT — the chokepoint entry, because a node document is shared
+ * baseline state exactly like a parent link or an attribute value.
+ *
+ * IT WAS THE ONE PIECE OF TREE STATE WITH NO ENTRY KIND. adopt sets the node document of every
+ * shadow-including inclusive descendant it walks, and the delta had kinds for tree structure, attributes and
+ * character data and none for this — so a flow that adopted a subtree moved those nodes into another document
+ * for EVERY flow. A sibling arm that never adopted read `node.ownerDocument` as the adopting arm's answer, and
+ * anything it derived from that (the document a `createElement` on it builds into, §4.4's base URL, which
+ * registry §4.13 looks a definition up in) followed the wrong document. Nothing said so: node.c's write was a
+ * plain field assignment that DCHECKed capture was OFF, which is honest about the gap and is exactly the shape
+ * this entry closes.
+ *
+ * NOTHING IS DESTROYED ON REVERT. The entry points a node back at a document it did not create — kind 5 is the
+ * one that owns a document, and this one only ever moves a pointer. */
+void dom_cow_set_node_document(lxb_dom_node_t *node, lxb_dom_document_t *doc) {
+    DCHECK(node != NULL, "dom_cow_set_node_document on no node");
+    DCHECK(doc != NULL, "a node was given a NULL node document — §4.5 adopts INTO a document, and every node "
+                        "has one");
+    if (g_dom_capture && node->owner_document != doc) {
+        DomUndo u; memset(&u, 0, sizeof u);
+        u.kind = 8; u.node = node; u.sh_old = u.sh_cur = JS_UNDEFINED;
+        u.doc_old = node->owner_document;
+        u.doc_cur = doc;
+        dom_undo_push(u);
+    }
+    node->owner_document = doc;
+}
+
 void dom_cow_set_text(lxb_dom_node_t *node, const char *val, size_t val_len) {
     lxb_dom_character_data_t *cd;
     if (!node) return;
@@ -968,6 +1052,8 @@ void dom_revert(void) {   /* DISCARD the running flow's DOM writes -> baseline (
             shadow_restore(u->sh_owner, u->slot, u->ns, u->name, u->sh_old, u->sh_had);
             if (g_cow_ctx) { JS_FreeValue(g_cow_ctx, u->sh_old); JS_FreeValue(g_cow_ctx, u->sh_cur); }
             free(u->ns); free(u->name); free(u->old); free(u->cur);
+        } else if (u->kind == 8) {   /* node document: point the node back at the one the baseline had */
+            u->node->owner_document = u->doc_old;
         } else if (u->kind == 1 && !u->detached) {   /* inserted node: detach it (baseline had none) */
             lxb_dom_node_remove(u->node);
         } else if (u->kind == 2 && !u->reinserted) {   /* removed node: the baseline HAD it — put it back */
@@ -1025,6 +1111,11 @@ static void dom_unapply_entry(DomUndo *u) {
                               "flow's text write");
         memcpy(u->cur, cd->data.data, u->cur_len);
         lxb_dom_character_data_replace(cd, u->old, u->old_len, 0, cd->data.length);   /* baseline back */
+    } else if (u->kind == 8) {
+        /* Stash the flow's node document, restore the baseline's — the same shape every other kind has, and the
+           reason the entry holds two: a parked flow resumes into the document IT adopted the node into. */
+        u->doc_cur = u->node->owner_document;
+        u->node->owner_document = u->doc_old;
     } else if (u->kind == 1 && !u->detached) {
         u->parent = lxb_dom_interface_node(u->node)->parent;              /* remember re-insert position */
         u->next = lxb_dom_interface_node(u->node)->next;
@@ -1052,6 +1143,8 @@ static void dom_apply_entry(DomUndo *u) {
     } else if (u->kind == 3 && u->cur_had) {
         lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(u->node);
         lxb_dom_character_data_replace(cd, u->cur, u->cur_len, 0, cd->data.length);   /* the flow's text back */
+    } else if (u->kind == 8) {
+        u->node->owner_document = u->doc_cur;
     } else if (u->kind == 2 && u->reinserted) {
         /* resuming the flow: it had removed this node, so take it back out. */
         lxb_dom_node_remove(u->node); u->reinserted = 0;

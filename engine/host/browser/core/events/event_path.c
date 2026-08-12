@@ -41,7 +41,8 @@ uint32_t event_path_length(JSContext *ctx, JSValueConst path)
 }
 
 void event_path_append(JSContext *ctx, JSValueConst path, JSValueConst invocation_target,
-                       JSValueConst shadow_adjusted_target, bool root_of_closed_tree, bool slot_in_closed_tree)
+                       JSValueConst shadow_adjusted_target, JSValueConst related_target,
+                       JSValueConst touch_targets, bool root_of_closed_tree, bool slot_in_closed_tree)
 {
     JSValue item = idl_slots_new(ctx);
 
@@ -53,9 +54,18 @@ void event_path_append(JSContext *ctx, JSValueConst path, JSValueConst invocatio
            "§2.9's shadow-adjusted target is a POTENTIAL event target — an EventTarget or null, and null is the "
            "answer `invoke` step 1 walks backward past. Undefined is neither, and would end that walk at an "
            "item that is not the target");
+    DCHECK(JS_IsObject(related_target) || JS_IsNull(related_target),
+           "§2.9's item relatedTarget is a POTENTIAL event target — an EventTarget or null. Undefined is "
+           "neither, and `invoke` step 4 hands it straight to the event, where a page reads it as "
+           "`event.relatedTarget`");
+    DCHECK(JS_IsArray(touch_targets) || JS_IsNull(touch_targets),
+           "§2.9's item touch target list is a LIST of potential event targets — an Array, or null for the "
+           "empty list. Anything else is a list step 6.11 cannot look inside and `invoke` step 5 cannot set");
     CHECK(!JS_IsException(item), "§2.9's event path item could not be allocated");
     JS_SetPropertyStr(ctx, item, "invocationTarget", JS_DupValue(ctx, invocation_target));
     JS_SetPropertyStr(ctx, item, "shadowAdjustedTarget", JS_DupValue(ctx, shadow_adjusted_target));
+    JS_SetPropertyStr(ctx, item, "relatedTarget", JS_DupValue(ctx, related_target));
+    JS_SetPropertyStr(ctx, item, "touchTargets", JS_DupValue(ctx, touch_targets));
     JS_SetPropertyStr(ctx, item, "rootOfClosedTree", JS_NewBool(ctx, root_of_closed_tree));
     JS_SetPropertyStr(ctx, item, "slotInClosedTree", JS_NewBool(ctx, slot_in_closed_tree));
     JS_SetPropertyUint32(ctx, (JSValue)path, event_path_length(ctx, path), item);
@@ -94,6 +104,23 @@ JSValue event_path_invocation_target(JSContext *ctx, JSValueConst item)
 JSValue event_path_shadow_adjusted_target(JSContext *ctx, JSValueConst item)
 {
     return item_target(ctx, item, "shadowAdjustedTarget");
+}
+
+JSValue event_path_related_target(JSContext *ctx, JSValueConst item)
+{
+    return item_target(ctx, item, "relatedTarget");
+}
+
+JSValue event_path_touch_targets(JSContext *ctx, JSValueConst item)
+{
+    JSValue v;
+
+    DCHECK(JS_IsObject(item), "an event path item's touch target list was read off something that is not an item");
+    v = JS_GetPropertyStr(ctx, item, "touchTargets");
+    DCHECK(JS_IsArray(v) || JS_IsNull(v),
+           "an event path item's touch target list is neither a list nor the empty list — the item was built by "
+           "something that is not the append, and step 6.11 would then look for shadow-tree nodes inside it");
+    return v;
 }
 
 static bool item_flag(JSContext *ctx, JSValueConst item, const char *field)

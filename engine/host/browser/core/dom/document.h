@@ -46,6 +46,13 @@ int document_lifecycle_step(JSContext *ctx);
    document's parser has not finished, which is `readyState === "loading"`. */
 bool document_render_blocked(JSContext *ctx);
 
+/* HTML §7.5.9's PAGE SHOWING for THIS realm's Document — "initially false", set true by §13.2.7's "the end"
+   when it fires `pageshow`, and read-then-cleared by §7.5.9 step 9, which fires `pagehide` only if it is true.
+   The pair is what stops a page seeing two pagehides with no pageshow between them, so the flag is the
+   CONDITION on both fires rather than bookkeeping beside them. Per-realm and per-flow — see the definition. */
+bool document_page_showing(JSContext *ctx);
+void document_page_showing_set(JSContext *ctx, bool showing);
+
 /* §7.2.5.1's ONE WindowProxy for THIS realm's navigable — what `window.closed` reads the navigable's state
    through and what every message this document posts carries as `source`. BORROWED. It lives on the realm
    because it is one PER realm; a registry keyed by document would be an immortal root holding a proxy for
@@ -88,10 +95,25 @@ bool document_is_passive_default_node(const lxb_dom_node_t *n);
    when it is off, since a creation made at baseline is baseline. Returns the document's wrapper, OWNED. */
 JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *content_type);
 
+/* HTML §4.12.3's APPROPRIATE TEMPLATE CONTENTS OWNER DOCUMENT for `doc` — the inert Document a `<template>`'s
+   contents belong to, so that a template's markup is NOT live: the owner has no browsing context, which is what
+   the standard means by inert (its scripts do not run, its custom elements do not upgrade). `doc` itself when
+   `doc` is a Document this algorithm created; otherwise `doc`'s associated inert template document, created on
+   the first ask in `doc`'s RELEVANT REALM and remembered on it. Never NULL. The inert document is the REALM's —
+   see the definition for why the flow's delta may not own it. */
+lxb_html_document_t *document_template_contents_owner(JSContext *ctx, lxb_dom_document_t *doc);
+
 /* §4.4 baseURI's answer FOR ONE NODE: its NODE DOCUMENT's address. Not the same as document_base_url the moment
    a second Document exists — that one is the REALM's active document, which is HTML's "API base URL" and is
    what a fetch, a hyperlink and a navigation resolve against. */
 const char *document_url_of(const lxb_dom_document_t *dom);
+/* §4.5's CONTENT TYPE — the string `document.contentType` answers, as a fact about ONE document rather than
+   about the running realm. It is the field §4.4's "clone a single node" copies onto a Document's copy ("set
+   copy's encoding, content type, URL, origin, type, mode, and allow declarative shadow roots to those of
+   node"), and it is also what §4.5 makes an HTML document an HTML document rather than an XML one, so a copy
+   that took the creator's default instead would answer for a document it is not a copy of. BORROWED: the
+   record owns the bytes and outlives the tree they describe. */
+const char *document_content_type_of(const lxb_dom_document_t *dom);
 
 /* THE DOCUMENT IS ABOUT TO BE DESTROYED — release the record that names it, and everything the record holds
    (its wrapper, its DOMImplementation, its policy container). Called from the ONE place a document's lifetime

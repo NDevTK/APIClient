@@ -28,15 +28,20 @@
 #include "core/idl_args.h"
 #include "core/dom/attr_list.h"
 #include "core/dom/collections.h"
+#include "core/dom/document.h"
 #include "core/dom/node.h"
 #include "core/encoding/encoding.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
+#include "core/html/constraint_validation.h"
 #include "core/html/custom_elements.h"
 #include "core/html/form_data.h"
 #include "core/html/form_data_event.h"
 #include "core/html/form_entry_list.h"
 #include "core/html/html_form.h"
+#include "core/html/input_value.h"
+#include "core/html/submit_event.h"
+#include "core/url/url.h"
 #include "solver/attr_shadow.h"
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
@@ -96,14 +101,32 @@ static bool ascii_ci_is(const char *a, size_t alen, const char *lower)
  * is why each takes the WRAPPER: only a custom element's definition can say it is form-associated, and the tag
  * cannot. */
 
-/* An `input` element's `type` state, as the raw attribute — the caller compares it with ascii_ci_is. A missing
-   or invalid value is the TEXT state (§4.10.5.1.1's missing/invalid value default), which every comparison here
-   answers false for, so an absent attribute needs no case of its own. */
-static const char *input_type_of(lxb_dom_node_t *n, size_t *plen)
+/* §4.10.5.1's STATES OF THE `type` ATTRIBUTE, resolved once against the keyword table §4.10.5.1 is a section
+   per. The keywords are ASCII case-insensitive like every enumerated attribute's (§2.3.2), and a missing or
+   unrecognised one is the TEXT state — both defaults §4.10.5.1.2 declares. */
+HtmlInputState html_form_input_state(const lxb_dom_node_t *n)
 {
-    *plen = 0;
-    if (!tag_is(n, "input")) return NULL;
-    return attr_of(lxb_dom_interface_element(n), "type", plen);
+    static const struct { const char *keyword; HtmlInputState state; } TYPES[] = {
+        { "hidden", INPUT_STATE_HIDDEN },   { "text", INPUT_STATE_TEXT },
+        { "search", INPUT_STATE_SEARCH },   { "tel", INPUT_STATE_TEL },
+        { "url", INPUT_STATE_URL },         { "email", INPUT_STATE_EMAIL },
+        { "password", INPUT_STATE_PASSWORD }, { "date", INPUT_STATE_DATE },
+        { "month", INPUT_STATE_MONTH },     { "week", INPUT_STATE_WEEK },
+        { "time", INPUT_STATE_TIME },       { "datetime-local", INPUT_STATE_DATETIME_LOCAL },
+        { "number", INPUT_STATE_NUMBER },   { "range", INPUT_STATE_RANGE },
+        { "color", INPUT_STATE_COLOR },     { "checkbox", INPUT_STATE_CHECKBOX },
+        { "radio", INPUT_STATE_RADIO },     { "file", INPUT_STATE_FILE },
+        { "submit", INPUT_STATE_SUBMIT },   { "image", INPUT_STATE_IMAGE },
+        { "reset", INPUT_STATE_RESET },     { "button", INPUT_STATE_BUTTON },
+    };
+    size_t tlen = 0, i;
+    const char *t;
+
+    if (!tag_is((lxb_dom_node_t *)n, "input")) return INPUT_STATE_NONE;
+    t = attr_of(lxb_dom_interface_element((lxb_dom_node_t *)n), "type", &tlen);
+    for (i = 0; i < sizeof TYPES / sizeof TYPES[0]; i++)
+        if (ascii_ci_is(t, tlen, TYPES[i].keyword)) return TYPES[i].state;
+    return INPUT_STATE_TEXT;
 }
 
 bool html_form_is_submittable(JSContext *ctx, JSValueConst wrap)
@@ -129,16 +152,15 @@ static bool form_is_listed(JSContext *ctx, JSValueConst wrap)
 bool html_form_is_button(JSContext *ctx, JSValueConst wrap)
 {
     lxb_dom_node_t *n = node_of(wrap);
-    size_t tlen = 0;
-    const char *t;
+    HtmlInputState st;
 
     (void)ctx;
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
     if (tag_is(n, "button")) return true;   /* §4.10.6: "The element is a button." */
-    t = input_type_of(n, &tlen);
+    st = html_form_input_state(n);
     /* §4.10.5.1.18/.19/.20/.21 each end "The element is a button"; no other input state does. */
-    return ascii_ci_is(t, tlen, "submit") || ascii_ci_is(t, tlen, "image") ||
-           ascii_ci_is(t, tlen, "reset")  || ascii_ci_is(t, tlen, "button");
+    return st == INPUT_STATE_SUBMIT || st == INPUT_STATE_IMAGE ||
+           st == INPUT_STATE_RESET  || st == INPUT_STATE_BUTTON;
 }
 
 bool html_form_is_submit_button(JSContext *ctx, JSValueConst wrap)
@@ -150,9 +172,9 @@ bool html_form_is_submit_button(JSContext *ctx, JSValueConst wrap)
     (void)ctx;
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
     if (tag_is(n, "input")) {
-        t = input_type_of(n, &tlen);
+        HtmlInputState st = html_form_input_state(n);
         /* §4.10.5.1.18 and §4.10.5.1.19: "specifically a submit button". */
-        return ascii_ci_is(t, tlen, "submit") || ascii_ci_is(t, tlen, "image");
+        return st == INPUT_STATE_SUBMIT || st == INPUT_STATE_IMAGE;
     }
     if (!tag_is(n, "button")) return false;
     /* §4.10.6: a `button` is a submit button if its `type` is in the Submit Button state, or in the AUTO state
@@ -190,6 +212,17 @@ static void fb_add(FormBuf *b, const char *s, size_t len)
 }
 
 static void fb_str(FormBuf *b, const char *s) { fb_add(b, s, strlen(s)); }
+
+/* The length of a JS Array this file built — the control lists every walk here is over. */
+static uint32_t js_array_len(JSContext *ctx, JSValueConst arr)
+{
+    JSValue lv = JS_GetPropertyStr(ctx, arr, "length");
+    uint32_t n = 0;
+
+    JS_ToUint32(ctx, &n, lv);
+    JS_FreeValue(ctx, lv);
+    return n;
+}
 
 /* §4.10.10's "COLLECT OPTION TEXT given option and false" — the value of an `option` that carries no `value`
    attribute. It is NOT the node's text content: the algorithm SKIPS `script` and SVG `script` subtrees, and it
@@ -232,9 +265,16 @@ static JSValue option_collect_text(JSContext *ctx, lxb_dom_node_t *root)
     return r;
 }
 
-/* ---- a control's VALUE state ----------------------------------------------------------------------------- */
+/* ---- a control's VALUE state -----------------------------------------------------------------------------
+ *
+ * §4.10.5's `input` is NOT one of these. Its value is §4.10.5.1's — a piece of state whose CONTENT is decided
+ * by the `type` attribute's state through the value sanitization algorithm and whose relationship to the
+ * `value` content attribute is decided by the dirty value flag — and it lives in input_value.c because it is a
+ * different problem from "the element's assigned state, or its markup's default". What is left here is the two
+ * controls whose section states exactly that (§4.10.11's textarea and §4.10.10's option) and the `button`,
+ * whose value IS its `value` content attribute. */
 /* magic names whose DEFAULT applies when the page has assigned no state. */
-enum { CTRL_INPUT = 0, CTRL_TEXTAREA, CTRL_OPTION };
+enum { CTRL_ATTRIBUTE = 0, CTRL_TEXTAREA, CTRL_OPTION };
 
 static JSValue js_ctrl_get_value(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -274,6 +314,35 @@ static JSValue js_ctrl_set_value(JSContext *ctx, JSValueConst this_val, JSValueC
        slot keeps the VALUE, so a concolic stays a concolic all the way to the submission. */
     if (el) dom_cow_set_prop_taint(ctx, el, "value", val);
     return JS_UNDEFINED;
+}
+
+/* §4.10.5.4's `value` on HTMLInputElement, which input_value.c owns in full — the four modes and §4.10.5.1's
+   value sanitization algorithm. Here only Web IDL §3.7.5's BRAND CHECK, because the member is
+   HTMLInputElement's: `descriptor.get.call(textarea)` is a TypeError and not the empty string a shared accessor
+   would answer, and the two controls that share this file's other accessor are not `input` elements. */
+static JSValue js_input_brand(JSContext *ctx, JSValueConst this_val)
+{
+    if (html_form_input_state(node_of(this_val)) != INPUT_STATE_NONE) return JS_UNDEFINED;
+    return JS_ThrowTypeError(ctx, "HTMLInputElement's `value` was accessed on something that is not an "
+                                  "HTMLInputElement");
+}
+
+static JSValue js_input_get_value(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue bad = js_input_brand(ctx, this_val);
+
+    (void)magic;
+    if (JS_IsException(bad)) return bad;
+    return input_value_get(ctx, this_val);
+}
+
+static JSValue js_input_set_value(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    JSValue bad = js_input_brand(ctx, this_val);
+
+    (void)magic;
+    if (JS_IsException(bad)) return bad;
+    return input_value_set(ctx, this_val, val);
 }
 
 /* §4.10.5.1.15 checkedness, defaulting to the `checked` content attribute. */
@@ -362,10 +431,8 @@ static JSValue form_members(JSContext *ctx, JSValueConst form_wrap, FormMemberPr
 static bool form_elements_member(JSContext *ctx, JSValueConst wrap)
 {
     lxb_dom_node_t *n = node_of(wrap);
-    size_t tlen = 0;
-    const char *t = input_type_of(n, &tlen);
 
-    if (ascii_ci_is(t, tlen, "image")) return false;
+    if (html_form_input_state(n) == INPUT_STATE_IMAGE) return false;
     return form_is_listed(ctx, wrap);
 }
 
@@ -383,15 +450,31 @@ static JSValue js_form_elements(JSContext *ctx, JSValueConst this_val, int magic
     return form_members(ctx, this_val, form_elements_member);
 }
 
-/* ---- §4.10.21.3 "submit a form", and the two members that enter it ------------------------------------------
+/* ---- §4.10.22.3 "submit a form", and the two members that enter it ------------------------------------------
  *
- * BOTH ENTRY POINTS ARE MACHINES NOW, and the reason is the entry list. `submit()` was a plain C body on the
- * claim that "nothing on this path reaches the page's code" — which was true of the walk that used to stand
- * here and is FALSE of §4.10.22.4, whose step 7 fires a `formdata` event at the form. A page listening for one
- * appends to the FormData it is handed, and what it appends is part of the request; running that dispatch from
- * a C body would be the drive-to-completion the engine aborts on.
+ * ONE MACHINE, TWO ENTRY POINTS, AND THE DIFFERENCE BETWEEN THEM IS ONE BOOLEAN. §4.10.3's `submit()` steps are
+ * "submit this from this, WITH SUBMITTED FROM SUBMIT() METHOD SET TO TRUE"; `requestSubmit(submitter)` runs its
+ * own two checks and then submits with that boolean false. The boolean is exactly what step 5 tests, and step 5
+ * is the whole of the difference — the user-validity walk, the interactive validation and the `submit` EVENT
+ * all live under it, which is why `submit()` submits a form no handler can cancel. So the two members are two
+ * DEFINITIONS over ONE step function differing in `arg`, never two algorithms.
  *
- * IT IS NEVER FIRED. A submission mutates server state by construction, so this ends at endpoint_record. */
+ * IT IS A MACHINE BECAUSE IT RUNS THE PAGE'S CODE, at two steps and in two different ways: step 5.6 fires a
+ * `submit` event at the form, and step 7's entry-list construction fires `formdata`. Both are arbitrary page
+ * code — a loop, an `await`, a DOM mutation — so each is a STAGE BOUNDARY: the flow parks there, siblings run,
+ * and it resumes with the canceled flag it left behind. A C body hosting either would be the drive-to-completion
+ * this engine aborts on, and the `submit` event's verdict is not a detail to skip: a handler that calls
+ * preventDefault is doing its own fetch, and recording the form's request anyway is a finding the page never
+ * makes.
+ *
+ * THE REQUEST IS DERIVED AND NEVER SENT. A submission mutates server state by construction, and this engine's
+ * rule for such a request is that its values come from the forced-exec path rather than from firing it. So the
+ * two rows of step 26's table that BUILD A REQUEST — Mutate action URL and Submit as entity body — end at
+ * endpoint_record, and steps 18-25 (target, noopener, target navigable, history handling) are the operands of a
+ * NAVIGATION that consequently does not happen. Every OTHER row of that table navigates instead of building a
+ * request: a `javascript:` action EXECUTES, `mailto:` hands the URL to the OS, `ftp:`/`data:` load a document.
+ * Each of those CRASHES here naming what to build, because recording an endpoint for one would report a request
+ * the form never makes. */
 
 /* ONE ENTRY's value as display text: a concolic contributes its SHAPE, exactly as a concolic URL does when it
    reaches endpoint_record — so `input.value = location.hash` submits as `q={hash}` and the finding says where
@@ -434,209 +517,566 @@ static const char *form_pick_encoding(lxb_dom_element_t *form)
     return "UTF-8";
 }
 
-/* §4.10.21.2: the ACTION and the METHOD are the SUBMITTER's, not the form's — a submit button carrying
-   `formaction`/`formmethod` overrides them, which is how one form posts to two endpoints. The submitter is the
-   form itself when there was none, and a form has neither attribute, so one lookup answers both cases. */
-static const char *submitter_attr(lxb_dom_element_t *submitter, lxb_dom_element_t *form,
+/* ---- §4.10.19.6's ATTRIBUTES FOR FORM SUBMISSION ------------------------------------------------------------
+ *
+ * "Attributes for form submission can be specified both on form elements and on submit buttons ... When omitted,
+ * they default to the values given on the corresponding attributes on the form element." So every one of the
+ * five is ONE lookup: the SUBMITTER's `form*` attribute when the submitter is a submit button and has it, and
+ * the form's own otherwise. Asked of the submit-button predicate rather than of "is the submitter the form",
+ * because those are two different questions the moment a submitter is something else. */
+static const char *submitter_attr(JSContext *ctx, JSValueConst submitter, lxb_dom_element_t *form,
                                   const char *own, const char *fallback, size_t *plen)
 {
-    const char *v = submitter != form ? attr_of(submitter, own, plen) : NULL;
+    const char *v = NULL;
 
-    return v ? v : attr_of(form, fallback, plen);
+    *plen = 0;
+    if (html_form_is_submit_button(ctx, submitter)) {
+        lxb_dom_element_t *el = form_elem_of(submitter);
+        if (el) v = attr_of(el, own, plen);
+    }
+    if (v) return v;
+    *plen = 0;
+    return attr_of(form, fallback, plen);
 }
 
-/* §4.10.21.3 steps 18-23, as far as this engine goes: DERIVE the request the form would send and record it.
-   `entries` is §4.10.22.4's entry list, as the FormData it was constructed into. */
-static void form_record_request(JSContext *ctx, lxb_dom_element_t *form, lxb_dom_element_t *submitter,
-                                JSValueConst entries)
+/* §4.10.19.6's `method`/`formmethod` enumerated attribute: `get`, `post` and `dialog`, with the GET state as
+   both the missing value default and the invalid value default. `formmethod` has NO missing value default, which
+   is what makes an absent one fall through to the form's attribute rather than straight to GET — the lookup
+   above is that fall-through. */
+enum { FORM_METHOD_GET = 0, FORM_METHOD_POST, FORM_METHOD_DIALOG };
+
+static int form_method_state(JSContext *ctx, JSValueConst submitter, lxb_dom_element_t *form)
 {
-    size_t alen = 0, mlen = 0;
-    const char *action, *method;
-    bool post;
-    FormBuf b = { 0 };
-    JSValue url;
-    int i, n;
+    size_t len = 0;
+    const char *v = submitter_attr(ctx, submitter, form, "formmethod", "method", &len);
 
-    action = submitter_attr(submitter, form, "formaction", "action", &alen);
-    method = submitter_attr(submitter, form, "formmethod", "method", &mlen);
-    post = ascii_ci_is(method, mlen, "post");
+    if (ascii_ci_is(v, len, "post")) return FORM_METHOD_POST;
+    if (ascii_ci_is(v, len, "dialog")) return FORM_METHOD_DIALOG;
+    return FORM_METHOD_GET;
+}
 
-    if (action && alen) fb_add(&b, action, alen);   /* §4.10.21.3: an empty action submits to the document's URL */
-    /* The entry list is the QUERY for a GET and the BODY for a POST. It is appended either way, because an @H
-       record's `params` are the request's parameters and a POST's parameters are its body — what tells them
-       apart is the method, recorded beside them. */
-    n = form_data_entry_count(entries);
+/* §4.10.19.6's `enctype`/`formenctype`, the same shape: three keywords, with the urlencoded state as both
+   defaults. It is what step 26's "Submit as entity body" switches on, and the one thing about a POST an @H
+   record can carry without a body: its CONTENT TYPE. */
+enum { FORM_ENCTYPE_URLENCODED = 0, FORM_ENCTYPE_MULTIPART, FORM_ENCTYPE_TEXT };
+
+static int form_enctype_state(JSContext *ctx, JSValueConst submitter, lxb_dom_element_t *form)
+{
+    size_t len = 0;
+    const char *v = submitter_attr(ctx, submitter, form, "formenctype", "enctype", &len);
+
+    if (ascii_ci_is(v, len, "multipart/form-data")) return FORM_ENCTYPE_MULTIPART;
+    if (ascii_ci_is(v, len, "text/plain")) return FORM_ENCTYPE_TEXT;
+    return FORM_ENCTYPE_URLENCODED;
+}
+
+static const char *form_enctype_mime(int state)
+{
+    /* §4.10.22.3's "Submit as entity body" names the mimeType per enctype. The multipart one is stated as the
+       concatenation of `multipart/form-data; boundary=` and the boundary §4.10.22.8's encoder GENERATES, and
+       this surface records a request rather than encoding a body — so what is recorded is the type the form's
+       own attribute names, which is the whole of what an @H record can say about it. */
+    return state == FORM_ENCTYPE_MULTIPART ? "multipart/form-data"
+         : state == FORM_ENCTYPE_TEXT      ? "text/plain"
+                                           : "application/x-www-form-urlencoded";
+}
+
+/* §4.10.19.6: "The NO-VALIDATE STATE of an element is true if the element is a submit button and the element's
+   `formnovalidate` attribute is present, or if the element's form owner's `novalidate` attribute is present,
+   and false otherwise." It is a boolean-attribute PRESENCE question, so it is not the lookup above (which
+   answers with a value and would read an empty `formnovalidate=""` as absent). */
+static bool form_no_validate(JSContext *ctx, JSValueConst submitter, lxb_dom_element_t *form)
+{
+    lxb_dom_element_t *el = form_elem_of(submitter);
+
+    if (el && html_form_is_submit_button(ctx, submitter) && has_attr(el, "formnovalidate")) return true;
+    return has_attr(form, "novalidate");
+}
+
+/* §4.6.5's "CANNOT NAVIGATE", which steps 1, 5.9 and 9 each ask: "an element cannot navigate if its node
+   document is not FULLY ACTIVE, or it is not an `a` element and is not CONNECTED". A form is not an `a`, so
+   both clauses apply to it — and the reason the spec asks three times is that the page's code runs in between
+   and can detach the form or its document, which is exactly what this machine's stages park across. */
+static bool form_cannot_navigate(JSContext *ctx, JSValueConst form)
+{
+    return !document_fully_active(ctx) || !node_is_connected(node_of(form));
+}
+
+/* §4.10.22.3 step 4's condition, "form document's active sandboxing flag set has its SANDBOXED FORMS BROWSING
+   CONTEXT FLAG set". A document's sandboxing flags come from §7.6.2's navigable container — an `<iframe
+   sandbox>` — through §7.2.6's policy container, and this engine's policy container carries a CSP and nothing
+   else, so no document it builds has a flag set to read. That is the same kind of answer §4.10.22.4 step 5.8
+   gives a file control in an engine with no file picker: not a skipped step, a condition whose state cannot
+   exist, evaluated at the step that asks it. The day the flag set lands in the policy container, this is the
+   one site that reads it. */
+static bool form_document_sandboxes_forms(JSContext *ctx)
+{
+    (void)ctx;
+    return false;
+}
+
+/* §4.10.21's CONSTRAINT VALIDATION belongs to constraint_validation.c — §4.10.21.1's ten validity states are a
+   question about an ELEMENT and this file's only interest in them is step 5.4's verdict. What used to stand here
+   was the shape of that verdict with no states behind it: a candidacy test, and a crash for every control that
+   carried a constraint attribute. */
+
+/* ---- §4.10.22.3's own state: the FIRING SUBMISSION EVENTS boolean --------------------------------------------
+ *
+ * "Each form element has a firing submission events boolean, initially false." It is what steps 5.1 and 5.2 make
+ * step 5 non-reentrant with: a `submit` handler that calls `requestSubmit()` on the same form gets step 5.1's
+ * return rather than a second event. Held as an own slot on the form's wrapper under a Symbol this file minted
+ * and never published — so it is per-flow for free (a slot written as a property write is captured by the COW
+ * delta), which the flag has to be: two forked arms each submitting the same form each have their own. */
+static JSValue g_firing_key = JS_UNDEFINED;
+static JSAtom  g_atom_firing = JS_ATOM_NULL;
+
+static bool form_firing_events(JSContext *ctx, JSValueConst form)
+{
+    JSValue v;
+    bool b;
+
+    DCHECK(g_atom_firing != JS_ATOM_NULL,
+           "§4.10.22.3 step 5.1 asked before html_form_declare minted the firing-submission-events key");
+    if (!JS_IsObject(form)) return false;
+    if (JS_GetOwnSlot(ctx, &v, form, g_atom_firing) <= 0) return false;
+    b = JS_ToBool(ctx, v);
+    JS_FreeValue(ctx, v);
+    return b;
+}
+
+/* CONFIGURABLE AND WRITABLE for the reason the form-owner slot is: it is written twice per submission, and a
+   slot defined with no flags makes the second write a silent no-op. */
+static void form_firing_set(JSContext *ctx, JSValueConst form, bool on)
+{
+    if (!JS_IsObject(form)) return;
+    JS_DefinePropertyValue(ctx, (JSValue)form, g_atom_firing, JS_NewBool(ctx, on),
+                           JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
+}
+
+/* §4.10.22.6 "converting an entry list to a list of name-value pairs" followed by §4.10.22.7's serializer, as
+   far as an @H record needs them: a CONCOLIC value contributes its shape rather than being percent-encoded into
+   an invention, which is the same rule endpoint_record already applies to a concolic URL. */
+static void fb_pairs(JSContext *ctx, FormBuf *b, JSValueConst entries)
+{
+    int i, n = form_data_entry_count(entries);
+
     for (i = 0; i < n; i++) {
         size_t nlen = 0;
         const char *name = form_data_entry_name(entries, i, &nlen);
 
-        fb_str(&b, i == 0 ? "?" : "&");
-        fb_add(&b, name, nlen);
-        fb_str(&b, "=");
-        fb_value(ctx, &b, form_data_entry_value(entries, i));
+        if (i) fb_str(b, "&");
+        fb_add(b, name, nlen);
+        fb_str(b, "=");
+        fb_value(ctx, b, form_data_entry_value(entries, i));
     }
+}
 
-    url = JS_NewStringLen(ctx, b.s ? b.s : "", b.s ? b.n : 0);
-    endpoint_record(ctx, post ? "POST" : "GET", url, NULL, 0);
+/* Step 26's two request-building rows, as far as this engine goes: DERIVE the request and record it.
+   "MUTATE ACTION URL" SETS the parsed action's query component, which is a REPLACEMENT and not an append — a
+   form whose action already carries one (`/search?v=2`) submits to `/search?<the entries>`, and the append this
+   used to do produced a URL with two `?` in it. "SUBMIT AS ENTITY BODY" leaves the URL alone and makes the
+   entries the BODY; they are recorded in the same place because an @H record's `params` ARE the request's
+   parameters, and what tells a query from a body is the method recorded beside them. */
+static void form_record_request(JSContext *ctx, UrlRecord *action, int method, int enctype, JSValueConst entries)
+{
+    FormBuf b = { 0 };
+    EndpointHeader ct;
+    char *serialized;
+    JSValue url;
+
+    fb_pairs(ctx, &b, entries);
+    url_member_set(action, URL_SEARCH, b.s ? b.s : "", b.n);
+    serialized = url_serialize(action, /*exclude_fragment*/ false);
+    url = JS_NewString(ctx, serialized ? serialized : "");
+    if (method == FORM_METHOD_POST) {
+        ct.name = "Content-Type";
+        ct.value = form_enctype_mime(enctype);
+        endpoint_record(ctx, "POST", url, &ct, 1);
+    } else {
+        endpoint_record(ctx, "GET", url, NULL, 0);
+    }
     JS_FreeValue(ctx, url);
+    free(serialized);
     free(b.s);
 }
 
-/* WHERE THIS MACHINE RESTS. Two of §4.10.21.3's steps reach the page's code, and they are two STAGES because
-   the page runs between them: step 11's `submit` event (whose verdict decides whether the request exists at
-   all — a handler that calls preventDefault is doing its own fetch, and recording the form's request anyway
-   would be a finding the page never makes), and step 16's entry-list construction, which fires `formdata`.
-   The entry-list sub-sequence carries its OWN cursor, so this machine spends one stage on the whole of it. */
-#define SUBMIT_STAGES(X) \
-    X(SUBMIT_ENTER, "HTML §4.10.21.3 steps 1-10 (§4.10.21.4's submitter checks and the form's own guards, " \
-                    "before step 11's event)") \
-    X(SUBMIT_EVENT, "HTML §4.10.21.3 step 11 (fire an event named submit at form, cancelable), and step 13's " \
-                    "verdict") \
-    X(SUBMIT_ENTRIES, "HTML §4.10.21.3 steps 15-16 (pick an encoding, then construct the entry list with " \
-                      "form, submitter and encoding), and the request this engine records from it")
-enum { SUBMIT_STAGES(JS_STEP_STAGE_ENUM) };
-static const char *const SUBMIT_STEPS[] = { SUBMIT_STAGES(JS_STEP_STAGE_LABEL) NULL };
+/* WHERE THIS MACHINE RESTS — every stage at a step §4.10.22.3 names, and each boundary for a reason the step
+   itself states. Two of them are the page's code (the `submit` event, and the `formdata` event inside the entry
+   list) and two are walks of the PAGE's size (the user-validity walk and the constraint walk), which is the
+   other thing a stage exists for: a walk as long as the document, run inside one opcode, is the
+   drive-to-completion this engine has no other bound against. The entry-list sub-sequence carries its OWN
+   cursor, so this machine spends one stage on the whole of §4.10.22.4. */
+#define SUBMIT_STAGES(X, ENTRY_LABEL) \
+    X(SUBMIT_ENTER,     ENTRY_LABEL) \
+    X(SUBMIT_VALIDITY,  "HTML §4.10.22.3 step 5.3 (for each field in the list of submittable elements whose " \
+                        "form owner is form, set field's user validity to true)") \
+    X(SUBMIT_VALIDATE,  "HTML §4.10.22.3 step 5.4 (if the submitter element's no-validate state is false, " \
+                        "interactively validate the constraints of form and examine the result)") \
+    X(SUBMIT_FIRE,      "HTML §4.10.22.3 step 5.6 (fire an event named submit at form using SubmitEvent, with " \
+                        "submitter initialized to submitterButton, bubbles true and cancelable true)") \
+    X(SUBMIT_ENTRIES,   "HTML §4.10.22.3 step 7 (let entry list be the result of constructing the entry list " \
+                        "with form, submitter and encoding)") \
+    X(SUBMIT_REQUEST,   "HTML §4.10.22.3 step 26 (select the row for the action's scheme and the column for " \
+                        "the method, and run that row's steps)")
+enum { SUBMIT_STAGES(JS_STEP_STAGE_ENUM, "") };
+/* ONE list, expanded once per ALGORITHM: the two members reach this machine at two different steps of their
+   OWN, and a stage's label is the step it rests at — so the entry stage names the member that entered. */
+static const char *const SUBMIT_STEPS_METHOD[] = {
+    SUBMIT_STAGES(JS_STEP_STAGE_LABEL,
+                  "HTML §4.10.3 submit() step 1 (submit this from this, with submitted from submit() method "
+                  "set to true), through §4.10.22.3 steps 1-4")
+    NULL
+};
+static const char *const SUBMIT_STEPS_REQUEST[] = {
+    SUBMIT_STAGES(JS_STEP_STAGE_LABEL,
+                  "HTML §4.10.3 requestSubmit(submitter) steps 1-3 (the submit-button and form-owner checks, "
+                  "then submit this form element from submitter), through §4.10.22.3 steps 1-5.2")
+    NULL
+};
 
-/* `arg`: WHICH member entered §4.10.21.3, which is the algorithm's own "submitted from submit() method". */
+/* `arg`: WHICH member entered, which IS the algorithm's own "submitted from submit() method" boolean. */
 enum { SUBMIT_FROM_METHOD = 0, SUBMIT_FROM_REQUEST };
 
 typedef struct JSSubmitState {
-    JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
-    uint8_t   fphase;   /* the fire request's own phase */
-    JSValue   ev;       /* the event, minted once and held across the suspension (owned) */
-    JSValue   cb[4];    /* the fire request buffer: [this, dispatch, target, event] */
-    JSValue   submitter;             /* step 5's submitter — the form itself when none was given (owned) */
-    /* Step 15's PICKED ENCODING, latched at the moment step 15 runs rather than re-read on every resume: a
+    JSStepHdr hdr;         /* FIRST — the driver writes the def and the operand bounds through it */
+    uint8_t   fphase;      /* the submit-event fire request's own phase */
+    uint8_t   firing_set;  /* THIS run set the form's firing-submission-events, so THIS run must clear it */
+    uint32_t  i;           /* the cursor of whichever per-control walk is running (steps 5.3 and 5.4) */
+    JSValue   ev;          /* the SubmitEvent, minted once and held across the suspension (owned) */
+    JSValue   cb[4];       /* the fire request buffer: [this, dispatch, target, event] */
+    JSValue   submitter;   /* the algorithm's `submitter` — the form itself when none was given (owned) */
+    /* THE FORM, held by this machine even though the header already carries it as the receiver — because the
+       shared teardown RELEASES `this_val` before a definition's own fini runs, and an abandoned run has to
+       clear step 5.2's flag off the form after that point. The same reason §4.10.22.4's run holds one. */
+    JSValue   form;
+    JSValue   controls;    /* the walk's list of submittable elements, held across its yields (owned) */
+    JSValue   entry_list;  /* step 7's entry list, held from step 8 to step 26 (owned) */
+    /* Step 6's PICKED ENCODING, latched at the moment step 6 runs rather than re-read on every resume: a
        `formdata` handler can write `accept-charset`, and a re-read would hand the second half of one entry
        list an encoding the first half never saw. A static string from §4.10.22.5's table, owned by nobody. */
     const char *encoding;
     FormEntryListRun entries;        /* §4.10.22.4's own cursor, held across its `formdata` dispatch */
+    /* §4.10.21.2's own cursor, held across its `invalid` dispatches and its pattern matches. NULL until step
+       5.4 starts one, which is also the state a `novalidate` form's run is left in. */
+    ConstraintValidationRun *validation;
 } JSSubmitState;
 
 static void js_submit_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSSubmitState *s = st;
     int k;
+
     v->val(ctx, &s->ev);
     v->val(ctx, &s->submitter);
+    v->val(ctx, &s->form);
+    v->val(ctx, &s->controls);
+    v->val(ctx, &s->entry_list);
     for (k = 0; k < 4; k++)
         v->val(ctx, &s->cb[k]);
     form_entry_list_visit(ctx, &s->entries, v);
+    constraint_validation_visit(ctx, &s->validation, v);
 }
 
 static JSValue js_submit_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSSubmitState *s = st;
     int k;
+
     (void)take_result;
+    /* Step 5.7 clears the flag on every path THROUGH the algorithm; an ABANDONED run — a flow dropped inside
+       the `submit` dispatch, or one whose handler threw — has to clear it too, or the form can never fire a
+       submission event again. Same obligation §4.10.22.4's constructing-entry-list flag has, and the same
+       answer: the teardown is where a run that will not reach its own step 5.7 still ends. */
+    if (s->firing_set) {
+        form_firing_set(ctx, s->form, false);
+        s->firing_set = 0;
+    }
+    JS_FreeValue(ctx, s->form);
+    s->form = JS_UNDEFINED;
     JS_FreeValue(ctx, s->ev);
     s->ev = JS_UNDEFINED;
     JS_FreeValue(ctx, s->submitter);
     s->submitter = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->controls);
+    s->controls = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->entry_list);
+    s->entry_list = JS_UNDEFINED;
     for (k = 0; k < 4; k++) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
     }
     form_entry_list_release(ctx, &s->entries);
+    constraint_validation_release(ctx, &s->validation);
     return JS_UNDEFINED;   /* both members return undefined whatever the handlers did */
+}
+
+/* The list both of step 5's walks are over — §4.10.22.3 step 5.3's and §4.10.21.2 step 1's, which are the same
+   sentence. Built at the walk's first entry and released at its last, so the two walks are two READS of the
+   tree: the page's code runs between them the moment §4.10.21.2 step 5's `invalid` fire exists. */
+static uint32_t submit_walk_list(JSContext *ctx, JSSubmitState *s)
+{
+    if (JS_IsUndefined(s->controls)) {
+        s->controls = html_form_submittable_controls(ctx, s->hdr.this_val);
+        s->i = 0;
+    }
+    return js_array_len(ctx, s->controls);
+}
+
+static void submit_walk_end(JSContext *ctx, JSSubmitState *s, int next_stage)
+{
+    JS_FreeValue(ctx, s->controls);
+    s->controls = JS_UNDEFINED;
+    s->i = 0;
+    s->hdr.stage = (uint16_t)next_stage;
+}
+
+/* Steps 10-26 over an entry list that exists: the method, the dialog branch, the action URL, and the row of
+   step 26's table the scheme and the method select. */
+static int submit_request(JSContext *ctx, JSSubmitState *s)
+{
+    lxb_dom_element_t *form = form_elem_of(s->hdr.this_val);
+    lxb_dom_node_t *n = node_of(s->hdr.this_val), *a;
+    const char *base = document_base_url(ctx);
+    const char *action;
+    size_t alen = 0;
+    UrlRecord parsed, baserec;
+    int method, enctype;
+    bool have_base, ok;
+
+    method = form_method_state(ctx, s->submitter, form);            /* step 10 */
+    if (method == FORM_METHOD_DIALOG) {                             /* step 11 */
+        for (a = n ? n->parent : NULL; a; a = a->parent)
+            if (tag_is(a, "dialog")) break;
+        if (!a) return JS_STEP_DONE;                                /* step 11.1 */
+        DFAIL("a `method=dialog` form inside a dialog reached §4.10.22.3 step 11.6 — build §4.11.4's CLOSE THE "
+              "DIALOG (the dialog's return value, its `close` event and the open state it clears), which is "
+              "what this submission does instead of making a request");
+        return JS_STEP_DONE;
+    }
+    action = submitter_attr(ctx, s->submitter, form, "formaction", "action", &alen);   /* step 12 */
+    if (!action || !alen) {                                                            /* step 13 */
+        action = base;
+        alen = base ? strlen(base) : 0;
+    }
+    /* Step 14: ENCODING-PARSE the action relative to the submitter's node document, which is this realm's — one
+       component owns what this document's URL is. Step 15: a failure returns, which is what an action nothing
+       can resolve (a relative one in a document with no address) produces. */
+    url_record_init(&baserec);
+    have_base = base && *base && url_parse(&baserec, base, strlen(base), NULL);
+    url_record_init(&parsed);
+    ok = alen != 0 && url_parse(&parsed, action, alen, have_base ? &baserec : NULL);
+    url_record_free(&baserec);
+    if (!ok) {
+        url_record_free(&parsed);
+        return JS_STEP_DONE;                                        /* step 15 */
+    }
+    DCHECK(parsed.scheme != NULL, "the URL parser answered success with no scheme, which §4.4 cannot produce");
+    enctype = form_enctype_state(ctx, s->submitter, form);          /* step 17 */
+    /* Step 26's table. `http` and `https` are the two rows whose cells BUILD a request — Mutate action URL for
+       GET, Submit as entity body for POST — and this engine derives that request rather than navigating with
+       it. Every other row navigates, and none of them is an endpoint. */
+    if (strcmp(parsed.scheme, "http") == 0 || strcmp(parsed.scheme, "https") == 0) {
+        form_record_request(ctx, &parsed, method, enctype, s->entry_list);
+    } else if (strcmp(parsed.scheme, "javascript") == 0) {
+        DFAIL("a form submits to a `javascript:` action — §4.10.22.3 step 26's Get action URL PLANS TO NAVIGATE "
+              "to it, and navigating to a javascript: URL EXECUTES it in the form's document; build §7.4's "
+              "navigate for this scheme (the entry list is discarded) rather than recording an endpoint");
+    } else if (strcmp(parsed.scheme, "mailto") == 0) {
+        DFAIL("a form submits to a `mailto:` action — §4.10.22.3 step 26's Mail with headers / Mail as body "
+              "build a mailto: URL out of the entry list and PLAN TO NAVIGATE to it, which hands it to the "
+              "platform's mail client; build that row, never an endpoint record");
+    } else if (strcmp(parsed.scheme, "ftp") == 0 || strcmp(parsed.scheme, "data") == 0) {
+        DFAIL("a form submits to an `ftp:` or `data:` action — §4.10.22.3 step 26's cells for those schemes "
+              "PLAN TO NAVIGATE (Get action URL discards the entry list; data:'s GET cell mutates the URL "
+              "first); build §7.4's navigate for them rather than recording an endpoint");
+    } else {
+        DFAIL("a form submits to an action whose scheme §4.10.22.3's step 26 table does not list — the standard "
+              "says to act analogously to a similar scheme, so decide WHICH row this scheme takes and state it "
+              "in that table rather than falling out of the algorithm");
+    }
+    url_record_free(&parsed);
+    return JS_STEP_DONE;
 }
 
 static int js_submit_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSSubmitState *s = st;
-    bool not_canceled = true;
     int r;
 
     if (s->hdr.stage == SUBMIT_ENTER) {
         JSValueConst given = step_arg(&s->hdr, 0);
+        int k;
 
-        s->ev = JS_UNDEFINED;
-        s->submitter = JS_UNDEFINED;
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        /* EVERY owned field before the first thing that can throw: the failure path tears this state down
+           through js_submit_fini, which frees exactly what the state holds and nothing else. */
+        s->ev = s->submitter = s->form = s->controls = s->entry_list = JS_UNDEFINED;
         s->encoding = NULL;
-        s->cb[0] = s->cb[1] = s->cb[2] = s->cb[3] = JS_UNDEFINED;
+        s->validation = NULL;
+        s->i = 0;
+        s->firing_set = 0;
+        for (k = 0; k < 4; k++) s->cb[k] = JS_UNDEFINED;
         form_entry_list_init(&s->entries);
-        if (!form_elem_of(s->hdr.this_val)) {
-            JS_FreeValue(ctx, cb_result);
-            return JS_STEP_DONE;
+        /* Web IDL §3.7.5's brand check: both members are HTMLFormElement's, and one invoked on anything else
+           is a TypeError. It was a silent `return`, which told a page that `submit.call({})` had submitted. */
+        if (!html_form_is_form_element(s->hdr.this_val)) {
+            JS_ThrowTypeError(ctx, "submit/requestSubmit was called on something that is not an "
+                                   "HTMLFormElement");
+            return JS_STEP_ABRUPT;
         }
-        /* Step 2: "if form's constructing entry list is true, then return" — a form re-entered from its own
-           `formdata` handler submits NOTHING, and this is why that answer arrives before step 11 fires a
-           second `submit` event at it. §4.10.22.4 step 1 would notice the same fact, but only after the event
-           and only as the null step 17 asserts against. */
-        if (form_entry_list_constructing(ctx, s->hdr.this_val)) {
-            JS_FreeValue(ctx, cb_result);
-            return JS_STEP_DONE;
-        }
-        /* §4.10.21.4's requestSubmit steps 1-2. `submit()` names no submitter at all, so it takes step 2's
-           branch unconditionally: the submitter is the FORM, which is what makes step 5.1's "field is a button
-           but it is not submitter" drop every button. */
-        if (s->hdr.arg == SUBMIT_FROM_REQUEST && !JS_IsUndefined(given) && !JS_IsNull(given)) {
-            if (!html_form_is_submit_button(ctx, given)) {
-                JS_FreeValue(ctx, cb_result);
-                JS_ThrowTypeError(ctx, "requestSubmit was given a submitter that is not a submit button");
-                return JS_STEP_ABRUPT;
-            }
-            {
-                JSValue owner = html_form_owner_of(ctx, given);
-                bool mine = JS_VALUE_GET_PTR(owner) == JS_VALUE_GET_PTR(s->hdr.this_val);
-                JS_FreeValue(ctx, owner);
-                if (!mine) {
-                    JS_FreeValue(ctx, cb_result);
-                    JS_ThrowDOMException(ctx, "NotFoundError",
-                                         "the submitter's form owner is not this form element");
+        s->form = JS_DupValue(ctx, s->hdr.this_val);
+        if (s->hdr.arg == SUBMIT_FROM_REQUEST) {
+            /* §4.10.3's requestSubmit(submitter) step 1: "if submitter is not null". The IDL declares
+               `optional HTMLElement? submitter = null`, so an absent argument and an explicit undefined are
+               both the IDL null and both take step 2. */
+            if (!JS_IsUndefined(given) && !JS_IsNull(given)) {
+                if (!html_form_is_submit_button(ctx, given)) {
+                    /* Step 1.1 — a TypeError, because being a submit button is a fact about the ARGUMENT. */
+                    JS_ThrowTypeError(ctx, "requestSubmit was given a submitter that is not a submit button");
                     return JS_STEP_ABRUPT;
                 }
+                {
+                    /* Step 1.2 — a "NotFoundError" DOMException, because a submit button that belongs to
+                       ANOTHER form is a relationship this form does not have rather than a wrong type. */
+                    JSValue owner = html_form_owner_of(ctx, given);
+                    bool mine = JS_VALUE_GET_PTR(owner) == JS_VALUE_GET_PTR(s->hdr.this_val);
+
+                    JS_FreeValue(ctx, owner);
+                    if (!mine) {
+                        JS_ThrowDOMException(ctx, "NotFoundError",
+                                             "the submitter's form owner is not this form element");
+                        return JS_STEP_ABRUPT;
+                    }
+                }
+                s->submitter = JS_DupValue(ctx, given);
+            } else {
+                s->submitter = JS_DupValue(ctx, s->hdr.this_val);   /* step 2 */
             }
-            s->submitter = JS_DupValue(ctx, given);
         } else {
+            /* §4.10.3's submit() steps: "submit this from THIS" — the submitter is the form, which is what
+               makes §4.10.22.4 step 5.1's "field is a button but it is not submitter" drop every button. */
             s->submitter = JS_DupValue(ctx, s->hdr.this_val);
         }
-        /* Step 5: `submit()` sets "submitted from submit() method", which is what skips the validation and the
-           event entirely — so that entry point starts at the entry list. */
-        s->hdr.stage = (s->hdr.arg == SUBMIT_FROM_METHOD) ? SUBMIT_ENTRIES : SUBMIT_EVENT;
+        if (form_cannot_navigate(ctx, s->hdr.this_val)) return JS_STEP_DONE;              /* step 1 */
+        /* Step 2: "if form's constructing entry list is true, then return" — a form re-entered from its own
+           `formdata` handler submits NOTHING, and this is why that answer arrives before step 5.6 fires a
+           second `submit` event at it. §4.10.22.4 step 1 would notice the same fact, but only after the event
+           and only as the null step 8 asserts against. */
+        if (form_entry_list_constructing(ctx, s->hdr.this_val)) return JS_STEP_DONE;      /* step 2 */
+        if (form_document_sandboxes_forms(ctx)) return JS_STEP_DONE;                      /* steps 3-4 */
+        /* Step 5's condition IS this machine's `arg`: `submit()` sets "submitted from submit() method", which
+           skips the validity walk, the validation and the event entirely — so that entry point's next stage is
+           the entry list. */
+        if (s->hdr.arg == SUBMIT_FROM_METHOD) {
+            s->hdr.stage = SUBMIT_ENTRIES;
+        } else {
+            if (form_firing_events(ctx, s->hdr.this_val)) return JS_STEP_DONE;            /* step 5.1 */
+            form_firing_set(ctx, s->hdr.this_val, true);                                  /* step 5.2 */
+            s->firing_set = 1;
+            s->hdr.stage = SUBMIT_VALIDITY;
+        }
     }
-    if (s->hdr.stage == SUBMIT_EVENT) {
-        /* Step 11: "fire an event named submit at form ... with the cancelable attribute initialized to true"
-           — the ONE §2.9 dispatch, as a REQUEST, so the handlers run as ordinary preemptible page code and this
+    if (s->hdr.stage == SUBMIT_VALIDITY) {
+        /* Step 5.3: "for each element field in the list of submittable elements whose form owner is form, set
+           field's USER VALIDITY to true" — §4.10.18.1's boolean, which is what makes a control that has been
+           through a submission match :user-invalid afterwards. It is per-control state, so it lives in the
+           element's per-flow property slot beside its value and its checkedness, and time-travels with them. */
+        uint32_t n = submit_walk_list(ctx, s);
+
+        if (s->i < n) {
+            JSValue el = JS_GetPropertyUint32(ctx, s->controls, s->i++);
+            lxb_dom_element_t *e = form_elem_of(el);
+
+            if (e) dom_cow_set_prop_taint(ctx, e, "userValidity", JS_TRUE);
+            JS_FreeValue(ctx, el);
+            return JS_STEP_YIELD;   /* a walk of the PAGE's size offers a suspend point per element */
+        }
+        submit_walk_end(ctx, s, SUBMIT_VALIDATE);
+    }
+    if (s->hdr.stage == SUBMIT_VALIDATE) {
+        /* Step 5.4: "if the submitter element's no-validate state is false, then INTERACTIVELY VALIDATE the
+           constraints of form and EXAMINE THE RESULT: if the result was negative, then RETURN." A negative
+           result ends the submission here — no `submit` event, no entry list, no request — which is the whole
+           of what this step decides and why the validation is not advisory. §4.10.21.2 fires an `invalid` event
+           at every unsatisfied control, so it is a sub-sequence that suspends, exactly like the entry list. */
+        if (form_no_validate(ctx, s->submitter, form_elem_of(s->hdr.this_val))) {
+            s->hdr.stage = SUBMIT_FIRE;
+        } else {
+            bool positive = false;
+
+            r = constraint_validation_interactively_run(ctx, &s->hdr, &s->validation, s->hdr.this_val,
+                                                        cb_result, &positive, out_cb, out_argc);
+            cb_result = JS_UNDEFINED;
+            if (r > 0) return r;
+            if (r < 0) return JS_STEP_ABRUPT;
+            constraint_validation_release(ctx, &s->validation);
+            if (!positive) return JS_STEP_DONE;
+            s->hdr.stage = SUBMIT_FIRE;
+        }
+    }
+    if (s->hdr.stage == SUBMIT_FIRE) {
+        bool not_canceled = true;
+
+        if (JS_IsUndefined(s->ev)) {
+            /* Step 5.5: "let submitterButton be NULL if submitter is form; otherwise let submitterButton be
+               submitter" — which is the whole reason `e.submitter` is null for `form.requestSubmit()` and the
+               button for `form.requestSubmit(btn)`. Step 5.6 mints the event with it. */
+            JSValue button = JS_VALUE_GET_PTR(s->submitter) == JS_VALUE_GET_PTR(s->hdr.this_val)
+                                 ? JS_NULL : s->submitter;   /* BORROWED: submit_event_new dups what it keeps */
+
+            s->ev = submit_event_new(ctx, button);
+            if (JS_IsException(s->ev)) {
+                s->ev = JS_UNDEFINED;
+                return JS_STEP_ABRUPT;
+            }
+        }
+        /* Step 5.6's dispatch, as a REQUEST, so the handlers run as ordinary preemptible page code and this
            resumes after every one of them has returned. */
-        if (JS_IsUndefined(s->ev))
-            s->ev = event_new(ctx, "submit", /*bubbles*/ true, /*cancelable*/ true);
-        r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), s->hdr.this_val, s->ev, cb_result,
+        r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), s->hdr.this_val, s->ev, JS_UNDEFINED, cb_result,
                                   &not_canceled, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
-        if (!not_canceled) return JS_STEP_DONE;   /* step 13 */
+        form_firing_set(ctx, s->hdr.this_val, false);                                     /* step 5.7 */
+        s->firing_set = 0;
+        if (!not_canceled) return JS_STEP_DONE;                                           /* step 5.8 */
+        /* Step 5.9: cannot navigate is asked AGAIN, because a handler had the document in its hands. */
+        if (form_cannot_navigate(ctx, s->hdr.this_val)) return JS_STEP_DONE;
         s->hdr.stage = SUBMIT_ENTRIES;
     }
-    DCHECK(s->hdr.stage == SUBMIT_ENTRIES, "a form submission resumed into a stage §4.10.21.3 does not have");
-    {
+    if (s->hdr.stage == SUBMIT_ENTRIES) {
         JSValue list = JS_UNDEFINED;
 
-        /* Step 15, once — see the field's own note for why this is a latch and not a read. */
+        /* Step 6, once — see the field's own note for why this is a latch and not a read. */
         if (!s->encoding) s->encoding = form_pick_encoding(form_elem_of(s->hdr.this_val));
         r = form_entry_list_run(ctx, &s->entries, s->hdr.this_val, s->submitter, s->encoding, cb_result, &list,
-                                out_cb, out_argc);
+                                out_cb, out_argc);                                        /* step 7 */
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
-        /* §4.10.21.3 step 17 asserts the list is not null, and it holds here for the reason the spec says: step
-           2 already returned for a form whose constructing entry list is true, so nothing re-enters. */
+        /* Step 8 asserts the list is not null, and it holds here for the reason the spec says: step 2 already
+           returned for a form whose constructing entry list is true, so nothing re-enters. */
         DCHECK(!JS_IsNull(list),
-               "§4.10.21.3 step 17's assert failed — the entry list was null, which step 2 already excluded");
-        form_record_request(ctx, form_elem_of(s->hdr.this_val), form_elem_of(s->submitter), list);
-        JS_FreeValue(ctx, list);
+               "§4.10.22.3 step 8's assert failed — the entry list was null, which step 2 already excluded");
+        s->entry_list = list;
+        /* Step 9: cannot navigate a THIRD time, because the `formdata` handler had the document too. */
+        if (form_cannot_navigate(ctx, s->hdr.this_val)) return JS_STEP_DONE;
+        s->hdr.stage = SUBMIT_REQUEST;
     }
-    return JS_STEP_DONE;
+    DCHECK(s->hdr.stage == SUBMIT_REQUEST, "a form submission resumed into a stage §4.10.22.3 does not have");
+    return submit_request(ctx, s);
 }
 
 static const JSTrampStepDef js_submit_def = {
     sizeof(JSSubmitState), js_submit_step, js_submit_fini, SUBMIT_FROM_METHOD, .visit = js_submit_visit,
-    .algorithm = "HTML §4.10.21.3 submit a form (from submit())", .steps = SUBMIT_STEPS
+    .algorithm = "HTML §4.10.22.3 submit a form (from HTMLFormElement.submit())",
+    .steps = SUBMIT_STEPS_METHOD
 };
 
 static const JSTrampStepDef js_reqsubmit_def = {
     sizeof(JSSubmitState), js_submit_step, js_submit_fini, SUBMIT_FROM_REQUEST, .visit = js_submit_visit,
-    .algorithm = "HTML §4.10.21.3 submit a form (from requestSubmit)", .steps = SUBMIT_STEPS
+    .algorithm = "HTML §4.10.22.3 submit a form (from HTMLFormElement.requestSubmit())",
+    .steps = SUBMIT_STEPS_REQUEST
 };
 
 /* ---- §4.10.18.3 the form owner ------------------------------------------------------------------------------
@@ -885,9 +1325,14 @@ JSValue html_form_control_value(JSContext *ctx, JSValueConst wrap)
 {
     lxb_dom_node_t *n = node_of(wrap);
 
+    /* An `input`'s value is §4.10.5.1's, sanitized and mode-dependent — so the entry list and the constraint
+       validation read the SAME value the IDL attribute answers, which is the whole point of one accessor:
+       `<input type=url value=" http://x ">` reported a typeMismatch a browser does not, because a browser
+       stripped that whitespace before anything looked at the value. */
+    if (html_form_input_state(n) != INPUT_STATE_NONE) return input_value_get(ctx, wrap);
     return js_ctrl_get_value(ctx, wrap,
                              tag_is(n, "textarea") ? CTRL_TEXTAREA : tag_is(n, "option") ? CTRL_OPTION
-                                                                                         : CTRL_INPUT);
+                                                                                         : CTRL_ATTRIBUTE);
 }
 
 bool html_form_control_checked(JSContext *ctx, JSValueConst wrap)
@@ -907,27 +1352,27 @@ const char *html_form_control_name(JSValueConst wrap, size_t *plen)
     return el ? attr_of(el, "name", plen) : NULL;
 }
 
+/* Step 5.7's value IS §4.10.5.4's DEFAULT/ON MODE — "if the field element has a `value` attribute specified,
+   then let value be the value of that attribute; otherwise, let value be the string `on`" is that mode's getter
+   word for word, which is why the default is a word and not the empty string. So it is one algorithm and this
+   is where the entry list asks for it, never a second copy that reads the slot the value mode writes: a
+   `box.value = location.hash` is an assignment in DEFAULT/ON mode and lands on the CONTENT ATTRIBUTE, where the
+   taint shadow keeps it a source. */
 JSValue html_form_checkbox_value(JSContext *ctx, JSValueConst wrap)
 {
-    lxb_dom_element_t *el = form_elem_of(wrap);
-    size_t len = 0;
-    const char *a;
-    int i;
+    HtmlInputState st = html_form_input_state(node_of(wrap));
 
-    if (!el) return JS_NewStringLen(ctx, "on", 2);
-    /* The state the page assigned, first — the value slot is where an assignment lands and it is what carries a
-       CONCOLIC, so `box.value = location.hash` submits as the source rather than as the markup's default. */
-    i = attr_shadow_find(el, ATTR_SLOT_PROPERTY, NULL, "value");
-    if (i >= 0) return JS_DupValue(ctx, attr_shadow_opaque(i));
-    a = attr_of(el, "value", &len);
-    return a ? JS_NewStringLen(ctx, a, len) : JS_NewStringLen(ctx, "on", 2);
+    DCHECK(st == INPUT_STATE_CHECKBOX || st == INPUT_STATE_RADIO,
+           "§4.10.22.4 step 5.7's value was asked of a control that is not an `input` in the Checkbox or Radio "
+           "Button state — those are the two states html_form_field_kind answers FORM_FIELD_CHECKBOX for");
+    return input_value_get(ctx, wrap);
 }
 
 FormFieldKind html_form_field_kind(JSContext *ctx, JSValueConst wrap)
 {
     lxb_dom_node_t *n = node_of(wrap);
-    size_t tlen = 0, nlen = 0;
-    const char *t;
+    size_t nlen = 0;
+    HtmlInputState st;
 
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return FORM_FIELD_OTHER;
     if (tag_is(n, "select")) return FORM_FIELD_SELECT;
@@ -936,11 +1381,11 @@ FormFieldKind html_form_field_kind(JSContext *ctx, JSValueConst wrap)
            the chain, which costs nothing: nothing else can answer true for it. */
         return custom_elements_is_form_associated(ctx, wrap) ? FORM_FIELD_FACE : FORM_FIELD_OTHER;
     }
-    t = attr_of(lxb_dom_interface_element(n), "type", &tlen);
-    if (ascii_ci_is(t, tlen, "image")) return FORM_FIELD_IMAGE_BUTTON;
-    if (ascii_ci_is(t, tlen, "checkbox") || ascii_ci_is(t, tlen, "radio")) return FORM_FIELD_CHECKBOX;
-    if (ascii_ci_is(t, tlen, "file")) return FORM_FIELD_FILE;
-    if (ascii_ci_is(t, tlen, "hidden")) {
+    st = html_form_input_state(n);
+    if (st == INPUT_STATE_IMAGE) return FORM_FIELD_IMAGE_BUTTON;
+    if (st == INPUT_STATE_CHECKBOX || st == INPUT_STATE_RADIO) return FORM_FIELD_CHECKBOX;
+    if (st == INPUT_STATE_FILE) return FORM_FIELD_FILE;
+    if (st == INPUT_STATE_HIDDEN) {
         const char *name = attr_of(lxb_dom_interface_element(n), "name", &nlen);
         if (ascii_ci_is(name, nlen, "_charset_")) return FORM_FIELD_CHARSET;
     }
@@ -957,30 +1402,44 @@ bool html_form_has_datalist_ancestor(JSValueConst wrap)
     return false;
 }
 
+/* §3.2.6's AUTO-DIRECTIONALITY FORM-ASSOCIATED ELEMENTS, as a predicate over a NODE — the list two callers
+   need and neither of them owns. §3.2.6's auto directionality reads such an element's VALUE instead of its
+   text, and §4.10.22.4 step 5.12 submits such an element's directionality as a second entry; those are two
+   uses of one list, and a second copy of it is the second answer that is always subtly wrong. */
+bool html_form_is_auto_directionality_face(const lxb_dom_node_t *n)
+{
+    HtmlInputState st;
+
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    if (tag_is((lxb_dom_node_t *)n, "textarea")) return true;
+    st = html_form_input_state(n);
+    /* The TEXT state is the missing-value AND invalid-value default, so an absent or unrecognised `type` is in
+       it — which is why an unknown keyword answers true here rather than false. */
+    switch (st) {
+    case INPUT_STATE_HIDDEN: case INPUT_STATE_TEXT: case INPUT_STATE_SEARCH: case INPUT_STATE_TEL:
+    case INPUT_STATE_URL: case INPUT_STATE_EMAIL: case INPUT_STATE_PASSWORD: case INPUT_STATE_SUBMIT:
+    case INPUT_STATE_RESET: case INPUT_STATE_BUTTON:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* §3.2.6's ONE type-specific Undefined case: an `input` in the TELEPHONE state is 'ltr' whatever surrounds it,
+   because a phone number is read left to right in every script. */
+bool html_form_is_telephone_input(const lxb_dom_node_t *n)
+{
+    return html_form_input_state(n) == INPUT_STATE_TEL;
+}
+
 bool html_form_needs_dirname_entry(JSValueConst wrap)
 {
     lxb_dom_node_t *n = node_of(wrap);
-    size_t dlen = 0, tlen = 0;
-    const char *t;
+    size_t dlen = 0;
 
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
     if (!attr_of(lxb_dom_interface_element(n), "dirname", &dlen) || !dlen) return false;
-    if (tag_is(n, "textarea")) return true;
-    if (!tag_is(n, "input")) return false;
-    t = attr_of(lxb_dom_interface_element(n), "type", &tlen);
-    /* §3.2.6's list. The TEXT state is the missing-value AND invalid-value default, so an absent or unknown
-       `type` is in it — which is why an unrecognised keyword answers true here rather than false. */
-    if (!t || !tlen) return true;
-    return ascii_ci_is(t, tlen, "hidden") || ascii_ci_is(t, tlen, "text") || ascii_ci_is(t, tlen, "search") ||
-           ascii_ci_is(t, tlen, "tel") || ascii_ci_is(t, tlen, "url") || ascii_ci_is(t, tlen, "email") ||
-           ascii_ci_is(t, tlen, "password") || ascii_ci_is(t, tlen, "submit") ||
-           ascii_ci_is(t, tlen, "reset") || ascii_ci_is(t, tlen, "button") ||
-           !(ascii_ci_is(t, tlen, "checkbox") || ascii_ci_is(t, tlen, "radio") ||
-             ascii_ci_is(t, tlen, "file") || ascii_ci_is(t, tlen, "image") ||
-             ascii_ci_is(t, tlen, "date") || ascii_ci_is(t, tlen, "month") ||
-             ascii_ci_is(t, tlen, "week") || ascii_ci_is(t, tlen, "time") ||
-             ascii_ci_is(t, tlen, "datetime-local") || ascii_ci_is(t, tlen, "number") ||
-             ascii_ci_is(t, tlen, "range") || ascii_ci_is(t, tlen, "color"));
+    return html_form_is_auto_directionality_face(n);
 }
 
 /* ---- §4.10.7's LIST OF OPTIONS, and §4.10.10's SELECTEDNESS -------------------------------------------------
@@ -1056,14 +1515,31 @@ static long select_display_size(lxb_dom_element_t *sel)
     return r;
 }
 
-static uint32_t js_array_len(JSContext *ctx, JSValueConst arr)
+JSValue html_form_placeholder_label_option(JSContext *ctx, JSValueConst select)
 {
-    JSValue lv = JS_GetPropertyStr(ctx, arr, "length");
-    uint32_t n = 0;
+    lxb_dom_node_t *n = node_of(select);
+    lxb_dom_element_t *sel = n ? lxb_dom_interface_element(n) : NULL;
+    JSValue list, first, value, r = JS_NULL;
+    size_t vlen = 0;
+    const char *v;
 
-    JS_ToUint32(ctx, &n, lv);
-    JS_FreeValue(ctx, lv);
-    return n;
+    /* §4.10.7's three conditions, in the order it states them: `required` is specified, the display size is 1,
+       and the FIRST option in the list of options has the empty string as its value and the select — not an
+       optgroup — as its parent. */
+    if (!sel || !has_attr(sel, "required") || select_display_size(sel) != 1) return JS_NULL;
+    list = select_option_list(ctx, n);
+    if (js_array_len(ctx, list) == 0) { JS_FreeValue(ctx, list); return JS_NULL; }
+    first = JS_GetPropertyUint32(ctx, list, 0);
+    JS_FreeValue(ctx, list);
+    if (node_of(first) && node_of(first)->parent == n) {
+        value = html_form_control_value(ctx, first);
+        v = JS_ToCStringLen(ctx, &vlen, value);
+        if (v && !vlen) r = JS_DupValue(ctx, first);
+        if (v) JS_FreeCString(ctx, v);
+        JS_FreeValue(ctx, value);
+    }
+    JS_FreeValue(ctx, first);
+    return r;
 }
 
 JSValue html_form_selected_options(JSContext *ctx, JSValueConst select)
@@ -1131,16 +1607,30 @@ void html_form_declare(JSContext *ctx)
     CHECK(!JS_IsException(g_owner_key), "the form-owner slot key allocation failed");
     g_atom_owner = JS_ValueToAtom(ctx, g_owner_key);
     CHECK(g_atom_owner != JS_ATOM_NULL, "the form-owner slot key could not be interned");
-    /* §4.10.22.1's FormDataEvent, which §4.10.22.4 step 7 fires, and §4.10.22.4's own per-form flag key —
-       declared from here because both are §4.10's and this file is §4.10's declaration point. */
+    /* §4.10.22.3's own per-form boolean, under a Symbol of its own for the same reason: step 5's
+       non-reentrancy is state ON THE FORM, and a page must not be able to see or write it. */
+    g_firing_key = JS_NewSymbol(ctx, "firingSubmissionEvents", false);
+    CHECK(!JS_IsException(g_firing_key), "the firing-submission-events slot key allocation failed");
+    g_atom_firing = JS_ValueToAtom(ctx, g_firing_key);
+    CHECK(g_atom_firing != JS_ATOM_NULL, "the firing-submission-events slot key could not be interned");
+    /* §4.10.22.10's SubmitEvent, which step 5.6 fires; §4.10.22.11's FormDataEvent, which §4.10.22.4 step 7
+       fires; and §4.10.22.4's own per-form flag key — declared from here because all three are §4.10's and
+       this file is §4.10's declaration point. */
+    submit_event_init(ctx);
     form_data_event_init(ctx);
     form_entry_list_declare(ctx);
+    /* §4.10.21's constraint validation, declared from here for the same reason: its members go on the control
+       interfaces §4.10 owns the prototypes of, and step 5.4 above is its caller. */
+    constraint_validation_declare(ctx);
     /* BOTH submission members register their own step definition rather than declaring arguments to the args
        machine, so both install through the installer for that kind — see idl_install_step_method. `submit()`
        is one because §4.10.22.4's `formdata` event is the page's code and it runs on that path too. */
     g_id_submit = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_submit_def);
     g_id_reqsubmit = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_reqsubmit_def);
-    g_id_val_input = idl_setter_id(ctx, IDL_DOMSTRING, false, js_ctrl_set_value, CTRL_INPUT);
+    /* §4.10.5.4's `value` takes a DOMString like the others, and input_value.c decides what its four modes do
+       with it — including the File Upload state's throw, which reaches the page because a setter's exception
+       propagates out of the args machine like any other. */
+    g_id_val_input = idl_setter_id(ctx, IDL_DOMSTRING, false, js_input_set_value, 0);
     g_id_val_textarea = idl_setter_id(ctx, IDL_DOMSTRING, false, js_ctrl_set_value, CTRL_TEXTAREA);
     g_id_val_option = idl_setter_id(ctx, IDL_DOMSTRING, false, js_ctrl_set_value, CTRL_OPTION);
     g_id_checked = idl_setter_id(ctx, IDL_ANY, false, js_ctrl_set_checked, 0);   /* `boolean checked` is ToBoolean */
@@ -1154,20 +1644,27 @@ void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst inp
     idl_install_accessor(ctx, form_proto, "elements", js_form_elements, 0, -1);
     idl_install_step_method(ctx, form_proto, "submit", 0, g_id_submit);
     idl_install_step_method(ctx, form_proto, "requestSubmit", 0, g_id_reqsubmit);
-    idl_install_accessor(ctx, input_proto, "value", js_ctrl_get_value, CTRL_INPUT, g_id_val_input);
+    idl_install_accessor(ctx, input_proto, "value", js_input_get_value, 0, g_id_val_input);
     idl_install_accessor(ctx, textarea_proto, "value", js_ctrl_get_value, CTRL_TEXTAREA, g_id_val_textarea);
     idl_install_accessor(ctx, option_proto, "value", js_ctrl_get_value, CTRL_OPTION, g_id_val_option);
     idl_install_accessor(ctx, input_proto, "checked", js_ctrl_get_checked, 0, g_id_checked);
+    constraint_validation_install(ctx, input_proto, textarea_proto);
 }
 
 void html_form_free(JSContext *ctx)
 {
+    submit_event_free(ctx);
     form_data_event_free(ctx);
     form_entry_list_free(ctx);
-    /* The form-owner slot key is the AGENT's, so it is released with the agent — a Symbol nobody frees is a
-       live GC object the runtime's own walk counts as a leak. */
+    constraint_validation_free(ctx);
+    /* The slot keys are the AGENT's, so they are released with the agent — a Symbol nobody frees is a live GC
+       object the runtime's own walk counts as a leak. */
     JS_FreeAtom(ctx, g_atom_owner);
     g_atom_owner = JS_ATOM_NULL;
     JS_FreeValue(ctx, g_owner_key);
     g_owner_key = JS_UNDEFINED;
+    JS_FreeAtom(ctx, g_atom_firing);
+    g_atom_firing = JS_ATOM_NULL;
+    JS_FreeValue(ctx, g_firing_key);
+    g_firing_key = JS_UNDEFINED;
 }

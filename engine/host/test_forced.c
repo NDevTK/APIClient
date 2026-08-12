@@ -1755,7 +1755,6 @@ static void tf_agent_init(JSContext *ctx)
     window_proxy_init(ctx, "https://x.test");
     remote_object_init(ctx);   /* §7.2.5.1's object half */
     event_init(ctx);
-    error_event_init(ctx);
     report_exception_init(ctx);
     /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
     unhandled_rejection_init(ctx);
@@ -2437,8 +2436,6 @@ int main(int argc, char **argv) {
     event_target_free(ctx);
     realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */
     message_port_free(ctx);
-    message_event_free(ctx);
-    error_event_free(ctx);
     report_exception_free(ctx);
     event_free(ctx);
     headers_free(ctx);    /* Headers.prototype and the name it interned */

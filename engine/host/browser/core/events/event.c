@@ -18,10 +18,12 @@
  *
  * WHAT IS ABSENT AND WHY. CustomEvent and the typed events (MouseEvent, KeyboardEvent…) are their own interfaces
  * with their own state; they are honestly missing rather than approximated by an Event with extra properties,
- * and the IDL audit names them. With them are absent §2.2's `relatedTarget` and `touch target list` — neither
- * is an Event member, both belong to interfaces that do not exist here, and so §2.9's retargeting of them has
- * nothing to retarget. Retargeting of the TARGET itself is not in that list: it is §2.9's shadow-adjusted
- * target, it is real, and composedPath below is written over it. */
+ * and the IDL audit names them. §2.2's `relatedTarget` and `touch target list` are NOT with them, and reading
+ * the standard is what says so: they are associated values of the EVENT, initially null and the empty list, and
+ * UIEvents and Touch Events only define ATTRIBUTES over them. So they are slots here like every other, they
+ * are what §2.9 retargets at each path item and what `invoke` writes back at each one, and the interfaces that
+ * FILL them are the part that is missing. Retargeting of the TARGET is the third of the same family: it is
+ * §2.9's shadow-adjusted target, and composedPath below is written over it. */
 #include <stdbool.h>
 #include <string.h>
 
@@ -32,6 +34,10 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/events/event.h"
+#include "core/events/message_event.h"
+#include "core/events/error_event.h"
+#include "core/events/page_transition_event.h"
+#include "core/events/before_unload_event.h"
 #include "core/events/event_path.h"
 #include "core/timing/timer.h"
 
@@ -246,6 +252,78 @@ void event_set_current(JSContext *ctx, JSValueConst ev, JSValueConst current)
     JS_FreeValue(ctx, slots);   /* the PHASE is the walk's to set — it knows which step of the path this is */
 }
 
+/* §2.2's RELATEDTARGET and TOUCH TARGET LIST, read and written as slots. §2.9 asks for them at step 4 and at
+   every step 6.9.3 — once per ancestor — and `invoke` writes them at every path item, so the getters answer
+   with the slot itself rather than a copy of a list nobody may mutate. */
+static JSValue event_slot_get(JSContext *ctx, JSValueConst ev, const char *name)
+{
+    JSValue slots = event_slots(ctx, ev), v;
+
+    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return JS_NULL; }
+    v = JS_GetPropertyStr(ctx, slots, name);
+    JS_FreeValue(ctx, slots);
+    return v;
+}
+
+static void event_slot_set(JSContext *ctx, JSValueConst ev, const char *name, JSValueConst v)
+{
+    JSValue slots = event_slots(ctx, ev);
+
+    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return; }
+    JS_SetPropertyStr(ctx, slots, name, JS_DupValue(ctx, v));
+    JS_FreeValue(ctx, slots);
+}
+
+JSValue event_related_target(JSContext *ctx, JSValueConst ev)
+{
+    JSValue v = event_slot_get(ctx, ev, "relatedTarget");
+
+    DCHECK(JS_IsObject(v) || JS_IsNull(v),
+           "§2.2's relatedTarget is a POTENTIAL event target — an EventTarget or null — and §4.8's retargeting "
+           "is about to be run against it. Anything else means an interface that defines a relatedTarget "
+           "attribute wrote its own value into the slot instead of an EventTarget");
+    return v;
+}
+
+void event_set_related_target(JSContext *ctx, JSValueConst ev, JSValueConst related)
+{
+    DCHECK(JS_IsObject(related) || JS_IsNull(related),
+           "§2.2's relatedTarget was set to something that is not a potential event target");
+    event_slot_set(ctx, ev, "relatedTarget", related);
+}
+
+JSValue event_touch_target_list(JSContext *ctx, JSValueConst ev)
+{
+    JSValue v = event_slot_get(ctx, ev, "touchTargets");
+
+    DCHECK(JS_IsArray(v) || JS_IsNull(v),
+           "§2.2's touch target list is a LIST of potential event targets — an Array, or null for the empty "
+           "list, which is what every event that is not a TouchEvent carries");
+    return v;
+}
+
+void event_set_touch_target_list(JSContext *ctx, JSValueConst ev, JSValueConst list)
+{
+    DCHECK(JS_IsArray(list) || JS_IsNull(list),
+           "§2.2's touch target list was set to something that is neither a list nor the empty list");
+    event_slot_set(ctx, ev, "touchTargets", list);
+}
+
+/* §2.9 step 11. The target survives every other dispatch — a page reads `ev.target` after dispatchEvent
+   returns — and this is the one case where none of the three may: the outermost thing the event called its
+   target was inside a shadow tree, so handing any of them back would hand out a node from a tree the page was
+   never given. */
+void event_clear_targets(JSContext *ctx, JSValueConst ev)
+{
+    JSValue slots = event_slots(ctx, ev);
+
+    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return; }
+    JS_SetPropertyStr(ctx, slots, "target", JS_NULL);
+    JS_SetPropertyStr(ctx, slots, "relatedTarget", JS_NULL);
+    JS_SetPropertyStr(ctx, slots, "touchTargets", JS_NULL);
+    JS_FreeValue(ctx, slots);
+}
+
 /* §2.2 "initialize": the slot record every Event carries. `isTrusted` is the one thing that distinguishes an
    event the ENGINE fired from one the page constructed, and it is the reason this is a parameter rather than a
    constant — a page checks it. */
@@ -264,6 +342,11 @@ static JSValue event_make_proto(JSContext *ctx, JSValueConst proto, JSValueConst
     CHECK(!JS_IsException(slots) && k != JS_ATOM_NULL, "the Event slot record allocation failed");
     JS_SetPropertyStr(ctx, slots, "type", JS_DupValue(ctx, type));
     JS_SetPropertyStr(ctx, slots, "target", JS_NULL);
+    /* §2.2: every event has a relatedTarget and a touch target list, "unless stated otherwise" null and the
+       empty list. They are initialised here rather than left absent for the reason `path` is — §2.9 step 4
+       retargets the relatedTarget of EVERY event it dispatches, so this read must be a slot and never a miss. */
+    JS_SetPropertyStr(ctx, slots, "relatedTarget", JS_NULL);
+    JS_SetPropertyStr(ctx, slots, "touchTargets", JS_NULL);
     JS_SetPropertyStr(ctx, slots, "currentTarget", JS_NULL);
     JS_SetPropertyStr(ctx, slots, "eventPhase", JS_NewInt32(ctx, 0));   /* NONE until it is dispatched */
     JS_SetPropertyStr(ctx, slots, "bubbles", JS_NewBool(ctx, bubbles));
@@ -619,6 +702,22 @@ static const JSCFunctionListEntry js_event_consts[] = {
     JS_PROP_INT32_DEF("BUBBLING_PHASE", 3, 0),
 };
 
+/* THE SUBCLASSES ARE DECLARED HERE, WITH THE INTERFACE THEY EXTEND, and that is not tidying. Each host had its
+ * own copy of the list — `event_init(ctx); message_event_init(ctx); error_event_init(ctx);` — which is the
+ * hand-picked list CLAUDE.md warns about, and it had already gone wrong: test_forced.c declared Event and
+ * ErrorEvent and NOT MessageEvent, so a `message` event in that host was a bare Event and `new MessageEvent`
+ * was a missing global, silently, in the one host the smoke test runs.
+ *
+ * WHY THIS IS THE RIGHT PLACE rather than a fourth list somewhere: an Event subclass's prototype chains to
+ * Event.prototype, so it is meaningless without this interface and can never be wanted separately. A build that
+ * has Event has all of them. The one list every host already goes through is therefore this function, and a
+ * subclass added to the tree is added HERE — one edit, and no host can be missing it.
+ *
+ * ORDER: after this interface's own class and members, because each subclass declares a prototype whose chain
+ * ends at Event.prototype and reads the ids declared above. */
+static void event_declare_subclasses(JSContext *ctx);
+static void event_free_subclasses(JSContext *ctx);
+
 void event_init(JSContext *ctx)
 {
     JSClassDef d = { "Event" };
@@ -641,6 +740,7 @@ void event_init(JSContext *ctx)
     idl_optional_from(1);   /* §2.2: `constructor(DOMString type, optional EventInit eventInitDict = {})` */
     g_ready = 1;
     realm_declare_intrinsic(event_install_proto);
+    event_declare_subclasses(ctx);
 }
 
 /* §2.2's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM — run where a realm's other intrinsics are added, exactly
@@ -696,10 +796,27 @@ void event_install(JSContext *ctx, JSValueConst global)
     JS_SetPropertyStr(ctx, (JSValue)global, "Event", ctor);
 }
 
+static void event_declare_subclasses(JSContext *ctx)
+{
+    message_event_init(ctx);
+    error_event_init(ctx);
+    page_transition_event_init(ctx);
+    before_unload_event_init(ctx);
+}
+
+static void event_free_subclasses(JSContext *ctx)
+{
+    message_event_free(ctx);
+    error_event_free(ctx);
+    page_transition_event_free(ctx);
+    before_unload_event_free(ctx);
+}
+
 void event_free(JSContext *ctx)
 {
     if (!g_ready)
         return;
+    event_free_subclasses(ctx);
     JS_FreeValue(ctx, g_key);   /* the prototypes are the REALMS' — each is released with its context */
     g_key = JS_UNDEFINED;
     g_ready = 0;

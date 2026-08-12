@@ -37,9 +37,21 @@
  * `el instanceof X` true and left the class's constructor body — the routes it registers, the fetches it makes
  * — unrun, which is exactly the code this engine exists to reach.
  *
- * WHAT IS HONESTLY ABSENT: adoptedCallback (no adoption reaction yet), form-associated custom elements
- * (§4.13.5 step 10) and customized built-ins (`extends`), which §4.13.4 rejects here rather than registering as
- * autonomous — a silently-wrong registration is worse than a named refusal. */
+ * A REGISTRY IS A NODE'S STATE, NOT THE DOCUMENT'S. HTML's CustomElementRegistry is CONSTRUCTIBLE and can be
+ * associated with a Document, a ShadowRoot or an Element, and "look up a custom element definition" takes that
+ * registry as its first argument — so two `<x-a>` elements in one document, one of them inside a scoped tree,
+ * upgrade with two different classes. Everything here that used to ask "the" registry now asks the NODE:
+ * `try to upgrade`, `define`'s three set questions, `whenDefined`, `upgrade`, and §4.13.2's own step 3 through
+ * the agent's active custom element constructor map.
+ *
+ * WHAT IS HONESTLY ABSENT: customized built-ins (`extends`), which §4.13.4 rejects here rather than
+ * registering as autonomous — a silently-wrong registration is worse than a named refusal. ALL THREE DOM sites
+ * that WRITE a node's registry are now built: `create an element`'s flattened creation options
+ * (core/dom/document.c), `attach a shadow root`'s ShadowRootInit member (core/dom/shadow_root.c), and DOM §4.5
+ * `adopt`'s re-derivation — custom_elements_node_adopted is its steps 3.2/3.3.2/3.3.3, driven by
+ * core/dom/node.c's adopt walk. The registry-less creation entry that stood in for the first two, and the
+ * `claimed` latch whose only purpose was to make its DCHECK fire the moment their absence changed an answer,
+ * are deleted with them: an entry kept past its callers is a second way to ask a question that now has one. */
 #include <string.h>
 #include <stdlib.h>
 
@@ -60,30 +72,40 @@
 #include "core/html/custom_elements.h"
 #include "core/html/element_internals.h"
 
-/* §4.13.4 THE DEFINITION SET IS A HEAP OBJECT, AND THAT IS THE WHOLE ISOLATION STORY. A registry in C globals
-   is SHARED state outside the per-flow COW delta, so a flow that forks anywhere BEFORE `define()` runs it in
-   both arms — and the second arm throws NotSupportedError ("already defined") on a definition it never made.
-   That is not a hypothetical: it aborted the sibling arm and took the rest of that flow's exploration with it.
-   A plain JS object keyed by name needs no new primitive: the heap COW already captures a property ADD on a
-   baseline object, so one flow's definitions are invisible to its siblings for free, and a parked flow resumes
-   with exactly the registry it had. Null-prototyped so a name can never collide with Object.prototype, and
-   never exposed to a page, so a read from C runs no page code.
-   Each value is one definition object: { ctor, proto }. */
-/* §4.13.4: A REGISTRY IS PER WINDOW, AND SO IS ITS DEFINITION SET. One set for the agent meant
-   `frame.contentWindow.customElements.define('x-a', C)` defined `x-a` in the PARENT too, and the parent's
-   `customElements.get('x-a')` then handed back the child realm's constructor — a cross-realm constructor
-   handed out by a member that never crossed a boundary. */
-static int g_defs_slot = -1;
-
-/* THE SAME SET, IN DEFINITION ORDER — because §4.13.2 step 3 looks a definition up BY ITS CONSTRUCTOR and the
-   object above is keyed by NAME. A JS object cannot be keyed by a constructor (it is the page's function
-   object, and hanging an engine-minted symbol on it would put a slot on a page value that
-   `Object.getOwnPropertySymbols` reports), so the by-constructor question is answered by walking the set —
-   which is what §4.13.2 states it is. The keyed object is the NAME INDEX into this list, not a second set: both
-   are written by the one commit and hold the same definition objects, and a definition in one and not the other
-   is a DCHECK at the walk. An Array rather than a C list for the reason every queue here is one — it forks per
-   flow and parks with the flow that defined it. */
-static int g_deflist_slot = -1;
+/* ---- §4.13.4 A REGISTRY IS AN OBJECT, AND `customElements` IS ONE OF THEM --------------------------------
+ *
+ * THIS WAS A SET OF PER-REALM SLOTS with the four members installed onto a bare `JS_NewObject`, which IS the
+ * whole of what "there is one global registry" means: `new CustomElementRegistry()` did not exist, no node
+ * could be ASSOCIATED with a registry, and every lookup answered out of the realm's one set. HTML now defines
+ * `CustomElementRegistry` as a CONSTRUCTIBLE interface whose constructor sets its `is scoped` boolean, and DOM
+ * gives every Element, Document and ShadowRoot a `custom element registry` that §4.13.3's "look up a custom
+ * element definition" is performed AGAINST. So the definition set, the when-defined map and the definition
+ * order move ONTO the object, and every lookup asks the node — `element.customElementRegistry`, not "the".
+ *
+ * THE STATE IS ONE RECORD UNDER ONE SYMBOL. The registry is handed to the page (`window.customElements`), so a
+ * plain `defs` own property would be a string key of this engine's invention on an object every bundle
+ * touches, and `Object.keys(customElements)` would report it. One symbol-keyed slot holds a null-prototyped
+ * record; its own fields are then ordinary atoms because nothing outside can reach the record at all. Every
+ * field is a JS VALUE for the reason everything else in this file is: a definition a flow makes is invisible to
+ * its siblings and parks with the flow that made it, which a C registry in a module static could be neither.
+ *
+ * A REGISTRY IS STILL PER WINDOW — the DOCUMENT'S registry is this realm's, held in a realm slot, because
+ * "A Window's associated Document is always created with a new CustomElementRegistry object". One set for the
+ * agent meant `frame.contentWindow.customElements.define('x-a', C)` defined `x-a` in the PARENT too. */
+static JSClassID g_registry_class;
+/* §4.13.4's Window `customElements` getter: "this's associated Document's custom element registry". */
+static int g_registry_slot = -1;
+/* The registry's own record, under a symbol this component minted and never published. */
+static JSValue g_reg_key = JS_UNDEFINED;
+static JSAtom  g_atom_reg = JS_ATOM_NULL;
+/* The record's fields. It is engine-built and null-prototyped, so these are ordinary atoms — nothing of the
+   page's is on it and a read of one runs no accessor and no Proxy. */
+static JSAtom g_atom_defs = JS_ATOM_NULL;      /* §4.13.4's custom element definition set, keyed by NAME */
+static JSAtom g_atom_order = JS_ATOM_NULL;     /* the SAME set in definition order — §4.13.2 step 4's walk */
+static JSAtom g_atom_whendef = JS_ATOM_NULL;   /* §4.13.4's when-defined promise map */
+static JSAtom g_atom_scoped = JS_ATOM_NULL;    /* §4.13.4's `is scoped`, set by the constructor */
+static JSAtom g_atom_docs = JS_ATOM_NULL;      /* §4.13.4's scoped document set */
+static JSAtom g_atom_defining = JS_ATOM_NULL;  /* §4.13.4's `element definition is running` */
 
 /* §4.13.2's ACTIVE FUNCTION OBJECT, for the one interface that carries `[HTMLConstructor]` today. Step 5 is
    "the active function object must be HTMLElement" for an autonomous custom element, and that is an IDENTITY
@@ -92,34 +114,257 @@ static int g_deflist_slot = -1;
    html_element.c calls to build the interface object. */
 static int g_html_ctor_slot = -1;
 
-/* §4.13.4's WHEN-DEFINED PROMISE MAP, per realm for exactly the reason the definition set is: the promise
-   `whenDefined` hands back is settled by a `define` in THAT window, and one map for the agent would settle a
-   parent's promise on a child's registration. A plain null-prototyped object keyed by name, whose values are
-   one promise and the two halves of its capability as a three-element Array — a JS value, so it forks per flow
-   and parks with the flow that is waiting, which a malloc'd list of pending promises could do neither of. */
-static int g_whendef_slot = -1;
+/* DOM §4.4/§4.8/§4.9's NODE-ASSOCIATED custom element registry, on the node's WRAPPER under its own symbol —
+   the same store the element's definition and its custom element state already use, and per-flow for the same
+   reason. ABSENT and JS_NULL are DIFFERENT: null is the value DOM's own `customElementRegistry: null` creation
+   option writes, and absent means no operation has written one, which is DERIVED below. */
+static JSValue g_node_reg_key = JS_UNDEFINED;
+static JSAtom  g_atom_node_reg = JS_ATOM_NULL;
 
-/* THIS REALM'S definition set. OWNED: the caller frees. */
-static JSValue ce_defs(JSContext *ctx)
+/* CONFIGURABLE AND WRITABLE, because §4.13.5 writes the state THREE TIMES on its way through one element
+   ("failed", then "precustomized", then "custom") and the definition it writes at step 2 is DELETED again by
+   step 8.9.1. A slot defined with no flags is none of those things, and the second write is then a silent
+   no-op that leaves an element reporting the state it had two steps ago. The key is a symbol this component
+   minted and never published, so nothing outside can reach either slot however they are flagged. */
+#define CE_SLOT_FLAGS (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE)
+
+/* THE REGISTRY'S RECORD, and the BRAND TEST in one: an object with no record slot is not a
+   CustomElementRegistry, and the slot's key is a symbol nothing outside can name, so presence IS the brand
+   rather than standing in for one. OWNED; JS_UNDEFINED when the receiver is not a registry. */
+static JSValue ce_reg_record(JSContext *ctx, JSValueConst reg)
 {
-    DCHECK(g_defs_slot > 0, "a custom-element definition was reached before custom_elements_init declared the set");
-    return realm_value_get(ctx, g_defs_slot);
+    JSValue v;
+
+    if (!JS_IsObject(reg)) return JS_UNDEFINED;
+    if (JS_GetOwnSlot(ctx, &v, reg, g_atom_reg) <= 0) return JS_UNDEFINED;
+    return v;
 }
 
-/* THIS REALM'S when-defined promise map. OWNED: the caller frees. */
-static JSValue ce_whendef(JSContext *ctx)
+/* One field of it. OWNED. */
+static JSValue ce_reg_field(JSContext *ctx, JSValueConst reg, JSAtom f)
 {
-    DCHECK(g_whendef_slot > 0,
-           "§4.13.4's when-defined promise map was reached before custom_elements_init declared it");
-    return realm_value_get(ctx, g_whendef_slot);
+    JSValue rec = ce_reg_record(ctx, reg), v;
+
+    DCHECK(JS_IsObject(rec), "a custom element registry field was read off something that is not a registry — "
+                             "every member brand-checks its receiver before it reads one");
+    v = JS_GetProperty(ctx, rec, f);
+    JS_FreeValue(ctx, rec);
+    return v;
 }
 
-/* THIS REALM'S definition set in definition order. OWNED: the caller frees. */
-static JSValue ce_deflist(JSContext *ctx)
+static bool ce_reg_flag(JSContext *ctx, JSValueConst reg, JSAtom f)
 {
-    DCHECK(g_deflist_slot > 0, "a custom-element definition was reached before custom_elements_init declared "
-                               "the ordered set §4.13.2 step 3 walks");
-    return realm_value_get(ctx, g_deflist_slot);
+    JSValue rec = ce_reg_record(ctx, reg), v;
+    bool b;
+
+    if (!JS_IsObject(rec)) { JS_FreeValue(ctx, rec); return false; }
+    v = JS_GetProperty(ctx, rec, f);
+    b = JS_ToBool(ctx, v);
+    JS_FreeValue(ctx, v);
+    JS_FreeValue(ctx, rec);
+    return b;
+}
+
+static void ce_reg_set_flag(JSContext *ctx, JSValueConst reg, JSAtom f, bool b)
+{
+    JSValue rec = ce_reg_record(ctx, reg);
+
+    DCHECK(JS_IsObject(rec), "a custom element registry flag was written onto something that is not a registry");
+    JS_SetProperty(ctx, rec, f, b ? JS_TRUE : JS_FALSE);
+    JS_FreeValue(ctx, rec);
+}
+
+/* A NEW CustomElementRegistry — §4.13.4's five fields at their initial values, and the constructor's own step
+   ("set this's is scoped to true") as the argument that decides one of them. OWNED. */
+static JSValue ce_registry_new(JSContext *ctx, bool scoped)
+{
+    JSValue reg, rec, proto;
+
+    proto = JS_GetClassProto(ctx, g_registry_class);
+    DCHECK(!JS_IsNull(proto), "a CustomElementRegistry was minted in a realm that never ran its prototype "
+                              "install — §3.7 gives every realm its own, and the members on it answer out of "
+                              "the realm that defined them");
+    reg = JS_NewObjectProtoClass(ctx, proto, g_registry_class);
+    JS_FreeValue(ctx, proto);
+    CHECK(!JS_IsException(reg), "a CustomElementRegistry could not be allocated");
+    rec = JS_NewObjectProto(ctx, JS_NULL);
+    CHECK(!JS_IsException(rec), "a CustomElementRegistry's record could not be allocated");
+    {
+        /* The definition set keyed by name, and THE SAME SET IN DEFINITION ORDER — because §4.13.2 step 4 looks
+           a definition up BY ITS CONSTRUCTOR and a JS object cannot be keyed by one (it is the page's function
+           object, and hanging an engine-minted symbol on it would put a slot on a page value that
+           `Object.getOwnPropertySymbols` reports). Both are written by the one commit and hold the same
+           definition objects; a definition in one and not the other is a DCHECK at the walk. */
+        JSValue defs = JS_NewObjectProto(ctx, JS_NULL);
+        JSValue order = JS_NewArray(ctx);
+        JSValue pending = JS_NewObjectProto(ctx, JS_NULL);
+        JSValue docs = JS_NewArray(ctx);
+
+        CHECK(!JS_IsException(defs) && !JS_IsException(order) && !JS_IsException(pending) &&
+              !JS_IsException(docs),
+              "custom elements: OOM building a registry's definition set — a dropped definition is a class "
+              "whose lifecycle code never runs");
+        JS_SetProperty(ctx, rec, g_atom_defs, defs);
+        JS_SetProperty(ctx, rec, g_atom_order, order);
+        JS_SetProperty(ctx, rec, g_atom_whendef, pending);
+        JS_SetProperty(ctx, rec, g_atom_docs, docs);
+    }
+    JS_SetProperty(ctx, rec, g_atom_scoped, scoped ? JS_TRUE : JS_FALSE);
+    JS_SetProperty(ctx, rec, g_atom_defining, JS_FALSE);
+    JS_DefinePropertyValue(ctx, reg, g_atom_reg, rec, CE_SLOT_FLAGS);
+    return reg;
+}
+
+/* THIS REALM'S Document's custom element registry — §4.13.4's Window getter, and the "default" every creation
+   that names no registry resolves to. OWNED: the caller frees. */
+static JSValue ce_document_registry(JSContext *ctx)
+{
+    DCHECK(g_registry_slot > 0,
+           "the Document's custom element registry was reached before custom_elements_init declared its slot");
+    return realm_value_get(ctx, g_registry_slot);
+}
+
+/* WEB IDL §3.7.5's BRAND CHECK, whose failure is a TypeError thrown before the member's own step 1. The
+   receiver itself is what the member goes on using — it is the argument it already holds — so this answers
+   only whether it may. With the members on the PROTOTYPE this is the only thing standing between
+   `CustomElementRegistry.prototype.define.call({}, …)` and a definition committed onto nothing. */
+static bool ce_registry_this(JSContext *ctx, JSValueConst this_val)
+{
+    JSValue rec = ce_reg_record(ctx, this_val);
+    bool ok = JS_IsObject(rec);
+
+    JS_FreeValue(ctx, rec);
+    if (!ok) JS_ThrowTypeError(ctx, "not a CustomElementRegistry");
+    return ok;
+}
+
+/* The document a node belongs to — DOM §4.4's "node document", which for a Document is itself. */
+static lxb_dom_document_t *ce_node_document(lxb_dom_node_t *n)
+{
+    if (!n) return NULL;
+    if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT) return lxb_dom_interface_document(n);
+    return n->owner_document;
+}
+
+/* A DOCUMENT'S custom element registry. DOM: "Unless stated otherwise, a document's custom element registry is
+   NULL" — and the one document stated otherwise is the Window's, which "is always created with a new
+   CustomElementRegistry object". So a document this realm is not the window of (a `createDocument` /
+   `DOMParser` / `createHTMLDocument` document) answers NULL, which is exactly why an element parsed into one is
+   never upgraded until it is adopted. OWNED. */
+static JSValue ce_registry_of_document(JSContext *ctx, const lxb_dom_document_t *doc)
+{
+    lxb_dom_node_t *dn = node_of(document_object(ctx));
+
+    if (!doc || !dn || ce_node_document(dn) != doc) return JS_NULL;
+    return ce_document_registry(ctx);
+}
+
+/* §4.13.4's "LOOK UP A CUSTOM ELEMENT REGISTRY, given a node" — an Element's, a ShadowRoot's or a Document's
+   own registry, and null for anything else.
+ *
+ * ABSENT IS DERIVED, NOT NULL, and the derivation is the value the CREATING operation would have written. DOM
+ * sets the field at four sites — `create an element` (from the flattened creation options, defaulting to the
+ * document's), `attach a shadow root` (from ShadowRootInit, defaulting to the host's node document's),
+ * `create an element internal`, and `adopt`, which is the one of the four that now STAMPS
+ * (custom_elements_node_adopted). Two of the remaining three live in components this one may not write into
+ * (core/dom/document.c, core/dom/shadow_root.c). Deriving is not a stand-in for them: for every registry that
+ * is NOT scoped the derived answer IS the stored one, because all four sites write the node document's
+ * registry. Only a SCOPED registry is a value no derivation can produce, and that is why it must be STAMPED —
+ * by `initialize`, by §4.13.2's constructor, by `adopt` (whose derivation from the PARENT is what makes an
+ * element adopted under a scoped tree answer null rather than the new document's), and by the two sites above
+ * once they can pass one. OWNED. */
+static JSValue ce_registry_of_node(JSContext *ctx, JSValueConst wrap)
+{
+    lxb_dom_node_t *n, *root;
+    JSValue v;
+
+    if (!JS_IsObject(wrap)) return JS_NULL;
+    if (JS_GetOwnSlot(ctx, &v, wrap, g_atom_node_reg) > 0) return v;   /* the stamp — JS_NULL included */
+    n = node_of(wrap);
+    if (!n) return JS_NULL;
+    if (n->type != LXB_DOM_NODE_TYPE_ELEMENT && n->type != LXB_DOM_NODE_TYPE_DOCUMENT && !shadow_root_is(n))
+        return JS_NULL;                                                /* "Return null" for every other node */
+    /* An element in a SHADOW TREE was created by a fragment parse or a `createElement` performed against that
+       tree, both of which take the shadow root's registry — so a scoped root's descendants answer scoped
+       without every one of them carrying a stamp. Read through the EXISTING wrapper: a root nothing has
+       wrapped was never stamped, and minting one here would allocate a wrapper per element on the insertion
+       steps' hot path. */
+    root = node_root(n);
+    if (root && root != n && shadow_root_is(root)) {
+        JSValueConst rw = node_wrap_peek(root);
+        JSValue rv;
+
+        if (JS_IsObject(rw) && JS_GetOwnSlot(ctx, &rv, rw, g_atom_node_reg) > 0) return rv;
+    }
+    return ce_registry_of_document(ctx, ce_node_document(n));
+}
+
+/* HTML §4.13.4's "Once the custom element registry of a node is initialized to a CustomElementRegistry object,
+   it intentionally cannot be changed any further", AS THE INVARIANT DOM §4.5 LEAVES STANDING. The sentence is
+   about a SCOPED association: `adopt` step 3.2/3.3.2 re-derive a node's registry every time it crosses into
+   another document, and both arms are guarded on the current registry being null or GLOBAL, so what can never
+   be replaced is a scoped registry — which is exactly the association a page reasons about and an
+   implementation optimizes against. Asserting "never written twice" instead would have made adoption itself
+   the violation. */
+static void ce_node_set_registry(JSContext *ctx, JSValueConst wrap, JSValueConst reg)
+{
+    JSValue prev;
+
+    DCHECK(JS_IsObject(wrap), "a custom element registry was associated with something that is not a node");
+    if (JS_GetOwnSlot(ctx, &prev, wrap, g_atom_node_reg) > 0) {
+        bool same = JS_VALUE_GET_PTR(prev) == JS_VALUE_GET_PTR(reg);
+        bool was_scoped = JS_IsObject(prev) && ce_reg_flag(ctx, prev, g_atom_scoped);
+        JS_FreeValue(ctx, prev);
+        DCHECK(same || !was_scoped,
+               "a node's SCOPED custom element registry was replaced — HTML states the association cannot be "
+               "changed once it is made, and DOM §4.5 adopt's own re-derivation is guarded against exactly "
+               "this, so the second writer is one that read the node's registry wrong");
+    }
+    JS_DefinePropertyValue(ctx, (JSValue)wrap, g_atom_node_reg, JS_DupValue(ctx, reg), CE_SLOT_FLAGS);
+}
+
+/* §4.8's attachShadow AND §4.9's create-an-element BOTH resolve a registry before they can act, and neither
+ * lives here — so the questions they ask are exported rather than re-derived. They are the same ones §4.8's
+ * attachShadow steps 1-3 ask, in order: what is this document's registry, is a page-supplied one a
+ * CustomElementRegistry at all, and is it scoped.
+ *
+ * THE BRAND TEST IS ONE OF THEM AND NOT A CONVENIENCE. `init["customElementRegistry"]` is a page value: the
+ * declaration converts it to an object, and an object that is not one of these must not be associated with a
+ * node as though it were — every later lookup would read a record that is not there.
+ *
+ * THE ASSOCIATION IS EXPORTED AS AN OPERATION rather than as the slot: the once-only rule, the scoped-registry
+ * latch and the key are all this component's, so a caller states WHICH node and WHICH registry and nothing
+ * else. That is what keeps DOM's "once initialized it cannot be changed" a fact about the write instead of a
+ * convention every writer has to remember. */
+bool custom_elements_is_registry(JSValueConst v)
+{
+    return g_registry_class != 0 && JS_GetOpaque(v, g_registry_class) != NULL;
+}
+
+bool custom_elements_registry_is_scoped(JSContext *ctx, JSValueConst reg)
+{
+    DCHECK(custom_elements_is_registry(reg),
+           "§4.13.4's `is scoped` was asked of something that is not a CustomElementRegistry");
+    return ce_reg_flag(ctx, reg, g_atom_scoped);
+}
+
+void custom_elements_node_associate_registry(JSContext *ctx, JSValueConst wrap, JSValueConst reg)
+{
+    ce_node_set_registry(ctx, wrap, reg);
+}
+
+JSValue custom_elements_document_registry(JSContext *ctx)
+{
+    return ce_document_registry(ctx);
+}
+
+/* A NODE'S OWN CUSTOM ELEMENT REGISTRY, derived where it holds none — the read side of the association above,
+   for an algorithm that must PASS a node's registry on rather than look a definition up with it. DOM §4.4's
+   clone step 6.2 is the caller: the copy's shadow root takes the ORIGINAL root's registry, so a host inside a
+   scoped tree clones into a copy that resolves in the same scoped registry. OWNED. */
+JSValue custom_elements_node_registry(JSContext *ctx, JSValueConst wrap)
+{
+    return ce_registry_of_node(ctx, wrap);
 }
 static int    g_ready;
 static JSAtom g_atom_prototype = JS_ATOM_NULL;
@@ -201,21 +446,41 @@ static const char *const CE_CALLBACK_NAMES[CE_CB_COUNT] = {
     CE_LIFECYCLE_CALLBACKS(CE_CB_NAME) CE_FORM_CALLBACKS(CE_CB_NAME)
 };
 static JSAtom g_cb_atoms[CE_CB_COUNT];
-static int    g_id_define, g_id_get, g_id_when_defined, g_id_upgrade;   /* declared once per agent */
+/* declared once per agent */
+static int    g_id_define, g_id_get, g_id_get_name, g_id_when_defined, g_id_upgrade, g_id_initialize;
 
-/* The definition for a name, or JS_UNDEFINED. OWNED by the caller. */
-static JSValue ce_find(JSContext *ctx, const char *name, size_t len)
+/* §4.13.3's "LOOK UP A CUSTOM ELEMENT DEFINITION", steps 1 and 3, given the REGISTRY the caller resolved. Step
+   1 is "if registry is null, return null", which is why a node in a document that has no registry — a
+   `DOMParser` document, a template's contents — has no definitions at all rather than the window's. Step 4's
+   `is` arm is the customized-built-in half, which §4.13.4 refuses to register, so no definition can have a
+   name that differs from its local name and the arm has nothing to find; it becomes a real read in the diff
+   that makes `extends` registrable. OWNED by the caller. */
+static JSValue ce_find_in(JSContext *ctx, JSValueConst registry, const char *name, size_t len)
 {
-    JSAtom a = JS_NewAtomLen(ctx, name, len);
+    JSAtom a;
     JSValue def;
 
+    if (!JS_IsObject(registry)) return JS_UNDEFINED;             /* step 1 */
+    a = JS_NewAtomLen(ctx, name, len);
     CHECK(a != JS_ATOM_NULL, "custom elements: a name could not be interned");
     {
-        JSValue defs = ce_defs(ctx);
+        JSValue defs = ce_reg_field(ctx, registry, g_atom_defs);
         def = JS_GetProperty(ctx, defs, a);
         JS_FreeValue(ctx, defs);
     }
     JS_FreeAtom(ctx, a);
+    return def;
+}
+
+/* The same lookup performed FOR A NODE: its own registry, its local name. §4.13.3 step 2's "if namespace is not
+   the HTML namespace, return null" is the element's, and every element this engine can define one for is in it.
+   OWNED. */
+static JSValue ce_find_for_node(JSContext *ctx, JSValueConst wrap, const char *name, size_t len)
+{
+    JSValue reg = ce_registry_of_node(ctx, wrap);
+    JSValue def = ce_find_in(ctx, reg, name, len);
+
+    JS_FreeValue(ctx, reg);
     return def;
 }
 
@@ -276,13 +541,6 @@ static int ce_state_of(JSContext *ctx, JSValueConst wrap)
     return CE_STATE_UNCUSTOMIZED;
 }
 
-/* CONFIGURABLE AND WRITABLE, because §4.13.5 writes the state THREE TIMES on its way through one element
-   ("failed", then "precustomized", then "custom") and the definition it writes at step 2 is DELETED again by
-   step 8.9.1. A slot defined with no flags is none of those things, and the second write is then a silent
-   no-op that leaves an element reporting the state it had two steps ago. The key is a symbol this component
-   minted and never published, so nothing outside can reach either slot however they are flagged. */
-#define CE_SLOT_FLAGS (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE)
-
 static void ce_set_state(JSContext *ctx, JSValueConst wrap, int state)
 {
     DCHECK(JS_IsObject(wrap), "a custom element state was written onto something that is not an element wrapper");
@@ -338,6 +596,97 @@ static void ce_array_push(JSContext *ctx, JSValueConst arr, JSValue v)
 static void ce_array_set_len(JSContext *ctx, JSValueConst arr, uint32_t n)
 {
     JS_SetPropertyStr(ctx, (JSValue)arr, "length", JS_NewUint32(ctx, n));
+}
+
+/* ---- §4.13.4's ACTIVE CUSTOM ELEMENT CONSTRUCTOR MAP -------------------------------------------------------
+ * "Each similar-origin window agent has an associated active custom element constructor map, which is a map of
+ * constructors to CustomElementRegistry objects." It exists for ONE question, asked in exactly one place:
+ * §4.13.2 step 3, where the HTML element constructor must know WHICH registry the definition it is building
+ * for came from. Without it a `super()` inside a class registered in a scoped registry would look itself up in
+ * the document's set and throw a TypeError — the constructor would be unreachable, which is the whole feature.
+ *
+ * IT IS A STACK, AND THAT IS THE MAP. The spec's two writers are paired — §4.13.5 steps 7.5-7.6 save
+ * `previousRegistry` and set the entry, and the cleanup puts the previous value back or removes the entry —
+ * so a walk that finds the LAST entry for a constructor answers exactly what the map holds, and dropping the
+ * last entry restores exactly what the map restores. Nesting (a constructor that constructs its own class) is
+ * what makes `previousRegistry` non-null and what the stack models directly.
+ *
+ * AN ARRAY, AGENT-WIDE, in a module static for the reason the backup element queue is one: it is the AGENT's,
+ * not a realm's, and its entries are property writes the COW delta captures — so a flow parked inside a
+ * constructor carries the map state it was constructed under. */
+static JSValue g_active_ctor_map = JS_UNDEFINED;
+
+/* §4.13.2 step 3: "if map[NewTarget] exists, set registry to it". OWNED; JS_UNDEFINED when there is no entry,
+   which is the step's "otherwise". */
+static JSValue ce_active_registry(JSContext *ctx, JSValueConst ctor)
+{
+    uint32_t n, i;
+
+    DCHECK(JS_IsObject(g_active_ctor_map),
+           "§4.13.4's active custom element constructor map was read before custom_elements_init built it");
+    n = ce_array_len(ctx, g_active_ctor_map);
+    for (i = n; i > 0; i--) {
+        JSValue e = JS_GetPropertyUint32(ctx, g_active_ctor_map, i - 1);
+        JSValue c = JS_GetPropertyUint32(ctx, e, 0);
+        bool hit = JS_VALUE_GET_PTR(c) == JS_VALUE_GET_PTR(ctor);
+
+        JS_FreeValue(ctx, c);
+        if (hit) {
+            JSValue r = JS_GetPropertyUint32(ctx, e, 1);
+            JS_FreeValue(ctx, e);
+            return r;
+        }
+        JS_FreeValue(ctx, e);
+    }
+    return JS_UNDEFINED;
+}
+
+/* §4.13.5 step 7.6 / DOM §4.9 step 5.1.3: "set map[C] to element's custom element registry". */
+static void ce_active_push(JSContext *ctx, JSValueConst ctor, JSValueConst reg)
+{
+    JSValue e = JS_NewArray(ctx);
+
+    CHECK(!JS_IsException(e), "an active custom element constructor map entry could not be allocated");
+    JS_SetPropertyUint32(ctx, e, 0, JS_DupValue(ctx, ctor));
+    JS_SetPropertyUint32(ctx, e, 1, JS_DupValue(ctx, reg));
+    ce_array_push(ctx, g_active_ctor_map, e);
+}
+
+/* §4.13.5's cleanup: restore `previousRegistry`, or remove the entry when there was none. Dropping the last
+   entry IS both, because the entry below it is the previous value. */
+static void ce_active_pop(JSContext *ctx)
+{
+    uint32_t n = ce_array_len(ctx, g_active_ctor_map);
+
+    DCHECK(n > 0, "§4.13.4's active custom element constructor map was restored with nothing on it — the set "
+                  "and the restore are one pair and only §4.13.5 and DOM §4.9 step 5.1 write them");
+    ce_array_set_len(ctx, g_active_ctor_map, n - 1);
+}
+
+/* "APPEND … TO THIS'S SCOPED DOCUMENT SET" — a SET, so an append of a document already in it is not a second
+   entry: §4.13.4 step 17 walks it once per document and a duplicate would enqueue a second upgrade reaction
+   for every candidate. The entries are Document WRAPPERS, which is what makes the set park with the flow that
+   built it; a C list of `lxb_dom_document_t *` could name nothing across a session. */
+static void ce_scoped_docs_append(JSContext *ctx, JSValueConst registry, lxb_dom_node_t *n)
+{
+    lxb_dom_document_t *doc = ce_node_document(n);
+    JSValue docs, wrap;
+    uint32_t len, i;
+
+    if (!doc) return;
+    docs = ce_reg_field(ctx, registry, g_atom_docs);
+    wrap = node_wrap(ctx, lxb_dom_interface_node(doc));
+    if (!JS_IsObject(wrap)) { JS_FreeValue(ctx, wrap); JS_FreeValue(ctx, docs); return; }
+    len = ce_array_len(ctx, docs);
+    for (i = 0; i < len; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, docs, i);
+        bool same = JS_VALUE_GET_PTR(e) == JS_VALUE_GET_PTR(wrap);
+
+        JS_FreeValue(ctx, e);
+        if (same) { JS_FreeValue(ctx, wrap); JS_FreeValue(ctx, docs); return; }
+    }
+    ce_array_push(ctx, docs, wrap);
+    JS_FreeValue(ctx, docs);
 }
 
 /* An element's own reaction queue, created on first use. OWNED by the caller. */
@@ -523,12 +872,23 @@ static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el
         if (node_is_connected(node))                                                      /* step 5 */
             ce_enqueue_args(ctx, el, def, CE_CB_CONNECTED, 0, NULL);
         /* step 6: the element goes on the construction stack, which is how §4.13.2's `super()` returns THIS
-           node instead of making a second one. Steps 7.5-7.6's active custom element constructor map is a
-           scoped-registry mechanism and there are no scoped registries, so there is nothing to save. */
+           node instead of making a second one. */
         stack = JS_GetProperty(ctx, def, g_atom_stack);
         DCHECK(JS_IsObject(stack), "a custom element definition carries no §4.13.2 construction stack");
         ce_array_push(ctx, stack, JS_DupValue(ctx, el));
         JS_FreeValue(ctx, stack);
+        /* steps 7.5-7.6: the agent's active custom element constructor map takes THIS ELEMENT'S registry for
+           the duration of the construct, because that is the only way §4.13.2 step 3 can find a definition that
+           lives in a SCOPED registry. The push is paired with the pop below, which runs whether or not the
+           construction threw — the spec's "then, perform the following steps, regardless". */
+        {
+            JSValue ctor = JS_GetProperty(ctx, def, g_atom_ctor);
+            JSValue reg = ce_registry_of_node(ctx, el);
+
+            ce_active_push(ctx, ctor, reg);
+            JS_FreeValue(ctx, reg);
+            JS_FreeValue(ctx, ctor);
+        }
         ce_set_state(ctx, el, CE_STATE_PRECUSTOMIZED);                                    /* step 8.2 */
         q->up_stage = CE_UP_CONSTRUCT;
     }
@@ -554,6 +914,9 @@ static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el
         failed = 1;
     }
     if (failed) { JS_FreeValue(ctx, made); made = JS_UNDEFINED; }
+    /* steps 8.6-8.7: previousRegistry goes back into the active custom element constructor map — the pop that
+       the push at step 7.6 is one half of, run whether or not the construction threw. */
+    ce_active_pop(ctx);
     /* step 9: the last entry comes off the stack whether the construction threw or not. */
     stack = JS_GetProperty(ctx, def, g_atom_stack);
     {
@@ -822,10 +1185,19 @@ static JSValue ce_definition_of(JSContext *ctx, JSValueConst wrap)
     return v;
 }
 
-JSValue custom_elements_definition_for_name(JSContext *ctx, const char *name, size_t len)
+JSValue custom_elements_definition_lookup_for_element(JSContext *ctx, JSValueConst el_wrap)
 {
-    if (!g_ready) return JS_UNDEFINED;
-    return ce_find(ctx, name, len);
+    lxb_dom_node_t *n = node_of(el_wrap);
+    size_t len = 0;
+    const lxb_char_t *tag;
+
+    DCHECK(g_ready, "a custom element definition was looked up before custom_elements_init ran");
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return JS_UNDEFINED;
+    /* §4.13.3 step 2: not the HTML namespace, no definition. */
+    if (n->ns != LXB_NS_HTML) return JS_UNDEFINED;
+    tag = lxb_dom_element_local_name(lxb_dom_interface_element(n), &len);
+    if (!tag || !len) return JS_UNDEFINED;
+    return ce_find_for_node(ctx, el_wrap, (const char *)tag, len);
 }
 
 bool custom_elements_definition_flag(JSContext *ctx, JSValueConst def, CustomElementDefinitionFlag which)
@@ -934,10 +1306,27 @@ int custom_elements_created_check(JSContext *ctx, JSValueConst result,
             return -1;
         }
     }
-    /* steps 5.1.4.9-11 set the namespace prefix, the is value and the registry. The prefix is already null
-       (the creation passed none), the is value is null for an autonomous element, and scoped registries are
-       not built — so all three are already what these steps set, and writing them would be writing the value
-       that is there. When any of the three becomes expressible this is where it goes. */
+    /* Steps 5.1.4.9-10 set the namespace prefix and the is value: the prefix is already null (the creation
+       passed none) and the is value is null for an autonomous element, so both are already what the steps set.
+       STEP 5.1.4.11 IS "set result's custom element registry to REGISTRY" and it is a real write now. The
+       registry is the one the construct ran under, which is exactly what the agent's active custom element
+       constructor map holds for this constructor — so the element the page's constructor returned is
+       associated with the registry that defined its class rather than with whatever its tree implies. With no
+       entry (the creation was performed against the document's registry) the derivation already answers that,
+       and stamping it would be writing the value that is there. */
+    {
+        JSValue def = ce_definition_of(ctx, result);
+
+        if (JS_IsObject(def)) {
+            JSValue ctor = JS_GetProperty(ctx, def, g_atom_ctor);
+            JSValue reg = ce_active_registry(ctx, ctor);
+
+            if (JS_IsObject(reg)) ce_node_set_registry(ctx, result, reg);
+            JS_FreeValue(ctx, reg);
+            JS_FreeValue(ctx, ctor);
+        }
+        JS_FreeValue(ctx, def);
+    }
     return 0;
 }
 
@@ -972,13 +1361,15 @@ enum { IDL_STEP_STAGE_BASE(HC_STAGES) HC_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const HC_STEPS[] = { HC_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
-    JSValue def;     /* step 3's definition (owned) */
-    JSValue proto;   /* step 8's answer (owned) */
+    JSValue registry; /* steps 2-3's registry (owned) — step 7.6 writes it onto the element it builds */
+    JSValue def;      /* step 4's definition (owned) */
+    JSValue proto;    /* step 8's answer (owned) */
 } CeHtmlCtorState;
 
 static void ce_html_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     CeHtmlCtorState *s = st;
+    v->val(ctx, &s->registry);
     v->val(ctx, &s->def);
     v->val(ctx, &s->proto);
 }
@@ -986,18 +1377,22 @@ static void ce_html_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static void ce_html_ctor_release(JSContext *ctx, void *st)
 {
     CeHtmlCtorState *s = st;
+    JS_FreeValue(ctx, s->registry);
     JS_FreeValue(ctx, s->def);
     JS_FreeValue(ctx, s->proto);
-    s->def = s->proto = JS_UNDEFINED;
+    s->registry = s->def = s->proto = JS_UNDEFINED;
 }
 
-/* §4.13.2 step 3: the entry in the definition set whose CONSTRUCTOR is `ctor`. A walk of the ordered set,
-   which is what the spec's own wording is; the name-keyed index above cannot answer this question at all.
-   UNDEFINED when there is none, which is step 3's TypeError. OWNED. */
-static JSValue ce_definition_by_ctor(JSContext *ctx, JSValueConst ctor)
+/* §4.13.2 step 4: the entry in REGISTRY's definition set whose CONSTRUCTOR is `ctor`. A walk of the ordered
+   set, which is what the spec's own wording is; the name-keyed index cannot answer this question at all.
+   UNDEFINED when there is none, which is step 4's TypeError. OWNED. */
+static JSValue ce_definition_by_ctor(JSContext *ctx, JSValueConst registry, JSValueConst ctor)
 {
-    JSValue list = ce_deflist(ctx), found = JS_UNDEFINED;
+    JSValue list, found = JS_UNDEFINED;
     uint32_t n, i;
+
+    if (!JS_IsObject(registry)) return JS_UNDEFINED;
+    list = ce_reg_field(ctx, registry, g_atom_order);
 
     n = ce_array_len(ctx, list);
     for (i = 0; i < n && !JS_IsObject(found); i++) {
@@ -1030,7 +1425,7 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        s->def = s->proto = JS_UNDEFINED;
+        s->registry = s->def = s->proto = JS_UNDEFINED;
         /* Web IDL: an interface object is not callable. `HTMLElement()` with no `new` is a TypeError before
            §4.13.2 step 1, which JS_CFUNC_step_ctor states by delivering an UNDEFINED receiver. */
         if (JS_IsUndefined(ntgt)) {
@@ -1054,8 +1449,22 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                "built-in half of steps 5-6 needs the interface's valid local names, and §4.13.4 refuses "
                "`extends` until it exists, so no other interface may carry this machine yet");
         JS_FreeValue(ctx, active);
-        /* step 3: the definition whose constructor is NewTarget. */
-        s->def = ce_definition_by_ctor(ctx, ntgt);
+        /* STEPS 2-4: THE REGISTRY FIRST, AND THE DEFINITION OUT OF IT. Step 2 is the agent's active custom
+           element constructor map — set by §4.13.5 step 7.6 while an upgrade is constructing, and by DOM §4.9
+           step 5.1.3 while `create an element` is — and step 3 falls back to "the current global object's
+           associated Document's custom element registry" for a bare `new Router()`. Reading the document's set
+           unconditionally, which is what this did, made every class registered in a SCOPED registry throw a
+           TypeError from its own `super()`: the definition is real, it is just not in the set that was asked. */
+        {
+            JSValue reg = ce_active_registry(ctx, ntgt);                          /* step 2 */
+
+            if (!JS_IsObject(reg)) {
+                JS_FreeValue(ctx, reg);
+                reg = ce_document_registry(ctx);                                  /* step 3 */
+            }
+            s->registry = reg;
+        }
+        s->def = ce_definition_by_ctor(ctx, s->registry, ntgt);                   /* step 4 */
         if (!JS_IsObject(s->def)) {
             JS_ThrowTypeError(ctx, "this constructor is not a defined custom element constructor");
             return -1;
@@ -1113,6 +1522,10 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             JS_FreeCString(ctx, local);
             if (JS_IsException(el)) return -1;
             JS_SetPrototype(ctx, el, s->proto);
+            /* step 7.6: "set element's custom element registry to registry" — the one steps 2-3 resolved, so an
+               element built by `new Router()` where Router lives in a scoped registry carries THAT registry and
+               keeps answering out of it for every later lookup. */
+            ce_node_set_registry(ctx, el, s->registry);
             /* steps 7.7-7.8: custom element state "custom" and the definition. Both, and in that order — the
                state is what DOM §4.9 step 5.1.4's assert reads back and what a later insertion branches on. */
             ce_set_state(ctx, el, CE_STATE_CUSTOM);
@@ -1276,10 +1689,13 @@ static void ce_enqueue_upgrade(JSContext *ctx, JSValueConst wrap, JSValueConst d
     ce_enqueue_element(ctx, wrap);
 }
 
-/* §4.13.5 "try to upgrade an element": look the definition up by the element's local name and, if there is one,
-   enqueue an upgrade reaction. No state is read here — §4.13.5 step 1 is the one that decides whether an
-   element already past "undefined" is upgraded again, and it is read AT THE UPGRADE because a constructor
-   running between the enqueue and the drain can change the answer. */
+/* §4.13.5 "try to upgrade an element": look the definition up given THE ELEMENT'S OWN custom element registry,
+   its namespace, its local name and its is value, and if there is one, enqueue an upgrade reaction. The
+   registry is the element's and not the document's, which is the whole of what a scoped registry is: two
+   `<x-a>` elements in one document, one in a scoped tree, upgrade with two different classes. No state is read
+   here — §4.13.5 step 1 is the one that decides whether an element already past "undefined" is upgraded again,
+   and it is read AT THE UPGRADE because a constructor running between the enqueue and the drain can change the
+   answer. */
 static void ce_try_upgrade(JSContext *ctx, lxb_dom_element_t *el, JSValueConst wrap)
 {
     size_t len = 0;
@@ -1287,9 +1703,104 @@ static void ce_try_upgrade(JSContext *ctx, lxb_dom_element_t *el, JSValueConst w
     JSValue def;
 
     if (!tag || !len) return;
-    def = ce_find(ctx, (const char *)tag, len);
+    def = ce_find_for_node(ctx, wrap, (const char *)tag, len);
     if (JS_IsObject(def)) ce_enqueue_upgrade(ctx, wrap, def);
     JS_FreeValue(ctx, def);
+}
+
+/* DOM §4.5's "GLOBAL CUSTOM ELEMENT REGISTRY" and "EFFECTIVE GLOBAL CUSTOM ELEMENT REGISTRY" — two definitions
+   stated over "null or a CustomElementRegistry object", which is why both take a value that may be JS_NULL
+   rather than a registry. A registry is GLOBAL when it is non-null and its `is scoped` is false; a registry's
+   EFFECTIVE global is itself when it is global and null otherwise. They are the whole of what `adopt` writes,
+   which is what makes adoption unable to hand a node a SCOPED registry it was not created under. */
+static bool ce_registry_is_global(JSContext *ctx, JSValueConst reg)
+{
+    return JS_IsObject(reg) && !ce_reg_flag(ctx, reg, g_atom_scoped);
+}
+
+/* CONSUMES `reg` and returns the effective global, OWNED. */
+static JSValue ce_registry_effective_global(JSContext *ctx, JSValue reg)
+{
+    if (ce_registry_is_global(ctx, reg)) return reg;
+    JS_FreeValue(ctx, reg);
+    return JS_NULL;
+}
+
+void custom_elements_node_adopted(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_document_t *document,
+                                  lxb_dom_document_t *old_document)
+{
+    JSValue wrap, reg;
+
+    DCHECK(g_ready, "DOM §4.5 adopt reached the custom element registry arm before custom_elements_init ran");
+    DCHECK(n != NULL && document != NULL && old_document != NULL && document != old_document,
+           "DOM §4.5 adopt's step 3 arm ran for a node whose document did not change — step 3's own condition "
+           "is `document is not oldDocument`, and running the arm anyway rewrites a registry the algorithm "
+           "never reaches");
+    /* Steps 3.2 and 3.3 name a SHADOW ROOT and an ELEMENT and nothing else; every other node kind carries no
+       custom element registry at all (§4.13.4's "look up a custom element registry" returns null for one). */
+    if (n->type != LXB_DOM_NODE_TYPE_ELEMENT && !shadow_root_is(n)) return;
+
+    wrap = node_wrap(ctx, n);
+    if (!JS_IsObject(wrap)) { JS_FreeValue(ctx, wrap); return; }
+    reg = ce_registry_of_node(ctx, wrap);
+
+    if (shadow_root_is(n)) {
+        /* STEP 3.2 — a shadow root takes the new document's global registry when its own is null (and it is
+           not being kept null) or is itself a global one. A SCOPED registry is left alone, which is the whole
+           of HTML §4.13.4's "once the custom element registry of a node is initialized to a
+           CustomElementRegistry object, it intentionally cannot be changed any further": the sentence is about
+           the association a scoped registry makes, and `adopt` re-deriving a global one is stated by DOM
+           itself. */
+        /* §4.8's `keep custom element registry null` is the second half of the first condition, and it is a
+           real read: its one writer is HTML §13.2.6.4.4's `shadowrootcustomelementregistry` branch, and a root
+           that carries it resolves in NOTHING until something associates a registry — which this step would
+           otherwise undo on the very first adoption by handing it the new document's. */
+        if ((JS_IsNull(reg) && !shadow_root_keep_registry_null(ctx, wrap))
+            || (!JS_IsNull(reg) && ce_registry_is_global(ctx, reg))) {
+            JSValue want = ce_registry_effective_global(ctx, ce_registry_of_document(ctx, document));
+
+            ce_node_set_registry(ctx, wrap, want);
+            JS_FreeValue(ctx, want);
+        }
+    } else {
+        /* STEP 3.3.2 — an element whose registry is null or NOT scoped re-derives one. The derivation is
+           stated over the element's PARENT and not over the new document alone, because the walk reaches a
+           descendant after its parent: an element adopted into a scoped tree takes that tree's registry's
+           effective global (which is NULL, a scoped registry having none), and only a root — or a child of an
+           exclusive DocumentFragment, which is a fragment that is not a shadow root — falls back to the
+           document's. */
+        if (JS_IsNull(reg) || !ce_reg_flag(ctx, reg, g_atom_scoped)) {
+            JSValue registry, want;
+
+            if (JS_IsObject(reg) || n->parent == NULL ||
+                (node_is_document_fragment(n->parent) && !shadow_root_is(n->parent))) {
+                registry = ce_registry_of_document(ctx, document);
+            } else {
+                JSValue pw = node_wrap(ctx, n->parent);
+                registry = ce_registry_of_node(ctx, pw);
+                JS_FreeValue(ctx, pw);
+            }
+            want = ce_registry_effective_global(ctx, registry);
+            ce_node_set_registry(ctx, wrap, want);
+            JS_FreeValue(ctx, want);
+        }
+        /* STEP 3.3.3 — the `adoptedCallback` reaction, with « oldDocument, document ». Only a CUSTOM element
+           has one: §4.13.6's enqueue takes the element's own definition, and an element that was never
+           upgraded carries none. */
+        if (ce_state_of(ctx, wrap) == CE_STATE_CUSTOM) {
+            JSValue def = ce_definition_of(ctx, wrap);
+            JSValue args[2];
+
+            args[0] = node_wrap(ctx, lxb_dom_interface_node(old_document));
+            args[1] = node_wrap(ctx, lxb_dom_interface_node(document));
+            ce_enqueue_args(ctx, wrap, def, CE_CB_ADOPTED, 2, (JSValueConst *)args);
+            JS_FreeValue(ctx, args[1]);
+            JS_FreeValue(ctx, args[0]);
+            JS_FreeValue(ctx, def);
+        }
+    }
+    JS_FreeValue(ctx, reg);
+    JS_FreeValue(ctx, wrap);
 }
 
 /* NOTHING IS ALLOCATED FOR AN ORDINARY ELEMENT, and that is what keeps these two on the tree walk's hot path.
@@ -1334,6 +1845,18 @@ void custom_elements_element_connected(JSContext *ctx, lxb_dom_element_t *el)
     if (!g_ready || !ce_upgradable_name(el)) return;
     wrap = node_wrap(ctx, lxb_dom_interface_node(el));
     if (!JS_IsObject(wrap)) { JS_FreeValue(ctx, wrap); return; }
+    /* DOM §4.2.3 step 7's FIRST clause, which precedes the two below it: "if inclusiveDescendant's custom
+       element registry's is scoped is true, then append inclusiveDescendant's node document to that registry's
+       scoped document set". That set is what §4.13.4 step 17 walks when a scoped registry finally defines the
+       name — an element inserted into a second document under a scoped registry must be upgraded there too,
+       and a set the insertion never appended to would leave it un-upgraded forever. */
+    {
+        JSValue reg = ce_registry_of_node(ctx, wrap);
+
+        if (JS_IsObject(reg) && ce_reg_flag(ctx, reg, g_atom_scoped))
+            ce_scoped_docs_append(ctx, reg, lxb_dom_interface_node(el));
+        JS_FreeValue(ctx, reg);
+    }
     /* DOM §4.2.3's insertion steps, custom-element half: an element that is already CUSTOM gets a connected
        reaction — which is how a page that moves a node around keeps its lifecycle running — and any other
        element is tried for upgrade, whose own step 5 enqueues that same reaction if it succeeds. Doing both
@@ -1352,29 +1875,58 @@ void custom_elements_element_connected(JSContext *ctx, lxb_dom_element_t *el)
     JS_FreeValue(ctx, wrap);
 }
 
-/* §4.13.4 step 18: define() enqueues an upgrade reaction for every EXISTING matching element, not only the ones
-   inserted later — a definition that arrives after the parser is the ordinary case for a deferred bundle. The
-   upgrades then run at define()'s own `[CEReactions]` boundary, which is what makes `customElements.define(…)`
-   followed by a read of state the constructor set work on the next line. */
-static void ce_upgrade_document(JSContext *ctx, const char *name, size_t nlen, JSValueConst def)
+/* §4.13.4's "UPGRADE PARTICULAR ELEMENTS WITHIN A DOCUMENT", given a registry, a document, a definition and a
+   local name. Two things it is not: it is not "every element with this name" — the candidates are the ones
+   whose CUSTOM ELEMENT REGISTRY IS THIS ONE, which is what stops a scoped `define` from upgrading the
+   document's own `<x-a>` elements — and the walk is SHADOW-INCLUDING, which is what reaches a component's own
+   shadow tree, where the elements a page built before their definition arrived actually are.
+   §4.13.4 step 17: define() enqueues an upgrade reaction for every EXISTING matching element, not only the
+   ones inserted later — a definition that arrives after the parser is the ordinary case for a deferred bundle.
+   The upgrades then run at define()'s own `[CEReactions]` boundary, which is what makes
+   `customElements.define(…)` followed by a read of state the constructor set work on the next line. */
+static void ce_upgrade_particular(JSContext *ctx, JSValueConst registry, lxb_dom_node_t *root,
+                                  const char *name, size_t nlen, JSValueConst def)
 {
-    lxb_dom_node_t *root = document_root_node(ctx), *n;
+    lxb_dom_node_t *n;
     size_t len = 0;
 
     if (!root) return;
-    for (n = root; n; ) {
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
-            const lxb_char_t *tag = lxb_dom_element_local_name(lxb_dom_interface_element(n), &len);
-            if (tag && len == nlen && memcmp(tag, name, len) == 0) {
-                JSValue wrap = node_wrap(ctx, n);
-                ce_enqueue_upgrade(ctx, wrap, def);
-                JS_FreeValue(ctx, wrap);
-            }
-        }
-        if (n->first_child) { n = n->first_child; continue; }
-        while (n && !n->next) n = (n == root) ? NULL : n->parent;
-        n = n ? n->next : NULL;
+    for (n = root; n; n = shadow_root_next_in_shadow_including(ctx, n, root)) {
+        const lxb_char_t *tag;
+        JSValue wrap, reg;
+        bool mine;
+
+        if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        tag = lxb_dom_element_local_name(lxb_dom_interface_element(n), &len);
+        if (!tag || len != nlen || memcmp(tag, name, len) != 0) continue;
+        wrap = node_wrap(ctx, n);
+        reg = ce_registry_of_node(ctx, wrap);
+        mine = JS_VALUE_GET_PTR(reg) == JS_VALUE_GET_PTR(registry) && JS_IsObject(reg);
+        JS_FreeValue(ctx, reg);
+        if (mine) ce_enqueue_upgrade(ctx, wrap, def);
+        JS_FreeValue(ctx, wrap);
     }
+}
+
+/* §4.13.4 step 17's TWO ARMS. A scoped registry walks its own SCOPED DOCUMENT SET — every document one of its
+   nodes has been inserted into — and a global one walks the relevant global's associated Document, which is
+   this realm's. */
+static void ce_upgrade_candidates(JSContext *ctx, JSValueConst registry, const char *name, size_t nlen,
+                                  JSValueConst def)
+{
+    if (ce_reg_flag(ctx, registry, g_atom_scoped)) {
+        JSValue docs = ce_reg_field(ctx, registry, g_atom_docs);
+        uint32_t n = ce_array_len(ctx, docs), i;
+
+        for (i = 0; i < n; i++) {
+            JSValue d = JS_GetPropertyUint32(ctx, docs, i);
+            ce_upgrade_particular(ctx, registry, node_of(d), name, nlen, def);
+            JS_FreeValue(ctx, d);
+        }
+        JS_FreeValue(ctx, docs);
+        return;
+    }
+    ce_upgrade_particular(ctx, registry, document_root_node(ctx), name, nlen, def);
 }
 
 /* §4.13.3 "attribute changed": the reaction runs only for a name the definition declared as OBSERVED, which is
@@ -1426,9 +1978,11 @@ static JSValue js_ce_when_defined(JSContext *ctx, JSValueConst this_val, int arg
     const char *nm;
     size_t nlen;
     JSValue map, entry, promise, resolving[2], def;
+    JSValueConst reg = this_val;
     JSAtom a;
 
-    (void)this_val; (void)magic; (void)argc;
+    (void)magic; (void)argc;
+    if (!ce_registry_this(ctx, this_val)) return JS_EXCEPTION;
     nm = JS_ToCStringLen(ctx, &nlen, argv[0]);   /* a real string by now: the declaration converted it */
     if (!nm) return JS_EXCEPTION;
     if (!custom_elements_name_is_valid(nm, nlen)) {              /* step 1: a REJECTED promise, never a synchronous throw */
@@ -1445,7 +1999,7 @@ static JSValue js_ce_when_defined(JSContext *ctx, JSValueConst this_val, int arg
         JS_FreeValue(ctx, resolving[1]);
         return promise;
     }
-    def = ce_find(ctx, nm, nlen);                /* step 2: already defined — resolved with the constructor */
+    def = ce_find_in(ctx, reg, nm, nlen);        /* step 2: already defined — resolved with the constructor */
     if (JS_IsObject(def)) {
         JSValue ctor = JS_GetProperty(ctx, def, g_atom_ctor);
 
@@ -1463,7 +2017,7 @@ static JSValue js_ce_when_defined(JSContext *ctx, JSValueConst this_val, int arg
     a = JS_NewAtomLen(ctx, nm, nlen);
     CHECK(a != JS_ATOM_NULL, "custom elements: a whenDefined name could not be interned");
     JS_FreeCString(ctx, nm);
-    map = ce_whendef(ctx);
+    map = ce_reg_field(ctx, reg, g_atom_whendef);
     entry = JS_GetProperty(ctx, map, a);
     if (!JS_IsObject(entry)) {                   /* step 3: map[name] does not exist — a NEW promise */
         JS_FreeValue(ctx, entry);
@@ -1486,13 +2040,14 @@ static JSValue js_ce_when_defined(JSContext *ctx, JSValueConst this_val, int arg
 /* §4.13.4's last step: "If this's when-defined promise map[name] exists, resolve it with constructor and remove
    it." Reached from the commit, after the upgrade reactions the same step list enqueues — a page that awaits
    whenDefined and then reads state its constructor set must find the constructors already run. */
-static void ce_when_defined_resolve(JSContext *ctx, const char *name, size_t nlen, JSValueConst ctor)
+static void ce_when_defined_resolve(JSContext *ctx, JSValueConst registry, const char *name, size_t nlen,
+                                    JSValueConst ctor)
 {
     JSAtom a = JS_NewAtomLen(ctx, name, nlen);
     JSValue map, entry;
 
     CHECK(a != JS_ATOM_NULL, "custom elements: a name could not be interned");
-    map = ce_whendef(ctx);
+    map = ce_reg_field(ctx, registry, g_atom_whendef);
     entry = JS_GetProperty(ctx, map, a);
     if (JS_IsObject(entry)) {
         JSValue resolve = JS_GetPropertyUint32(ctx, entry, 1);
@@ -1557,6 +2112,10 @@ typedef struct {
     JSValue  raw;       /* what the observedAttributes / disabledFeatures getter answered (owned) */
     JSValue  names;     /* step 14.5.2's converted sequence<DOMString> (owned) */
     JSValue  features;  /* step 14.8's converted sequence<DOMString> (owned) */
+    /* THE RECEIVER, HELD — `define` is a method of ONE registry and every step from 3 onwards reads or writes
+       that registry's own state, so a resume must find the same one rather than the realm's. Owned, because a
+       parked machine's receiver is not kept alive by the call that is no longer on any stack. */
+    JSValue  registry;
     uint32_t flags;     /* step 15's three booleans, as CE_DEF_* bit positions */
 } CeDefineState;
 
@@ -1568,17 +2127,25 @@ static void ce_define_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->raw);
     v->val(ctx, &s->names);
     v->val(ctx, &s->features);
+    v->val(ctx, &s->registry);
 }
 
 static void ce_define_release(JSContext *ctx, void *st)
 {
     CeDefineState *s = st;
+    /* §4.13.4 step 14's "then, regardless of whether the above steps threw an exception or not: set this's
+       element definition is running to false". The teardown IS that "regardless": it runs on the throw path and
+       on the completion path, and on nothing in between, which is what a park in the middle of step 14.5
+       requires. */
+    if (JS_IsObject(s->registry) && ce_reg_flag(ctx, s->registry, g_atom_defining))
+        ce_reg_set_flag(ctx, s->registry, g_atom_defining, false);
     JS_FreeValue(ctx, s->proto);
     JS_FreeValue(ctx, s->callbacks);
     JS_FreeValue(ctx, s->raw);
     JS_FreeValue(ctx, s->names);
     JS_FreeValue(ctx, s->features);
-    s->proto = s->callbacks = s->raw = s->names = s->features = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->registry);
+    s->proto = s->callbacks = s->raw = s->names = s->features = s->registry = JS_UNDEFINED;
 }
 
 /* §4.13.4'S TWO `sequence<DOMString>` CONVERSIONS AS ONE WALK — step 14.5.2's observedAttributes and step
@@ -1639,7 +2206,7 @@ static bool ce_sequence_contains(JSContext *ctx, JSValueConst seq, const char *w
 /* §4.13.4 STEPS 1-7 — everything the spec decides BEFORE it touches the page's object. Its own function
    because its own STAGE: running it after the reads, which is where it used to live, made the page's getters
    observe a call the spec had already rejected. Returns <0 having thrown. */
-static int ce_define_checks(JSContext *ctx, int argc, JSValueConst *argv)
+static int ce_define_checks(JSContext *ctx, JSValueConst registry, int argc, JSValueConst *argv)
 {
     JSValue ext;
     const char *nm;
@@ -1659,7 +2226,7 @@ static int ce_define_checks(JSContext *ctx, int argc, JSValueConst *argv)
         JS_ThrowDOMException(ctx, "SyntaxError", "not a valid custom element name");
         return -1;
     }
-    prev = ce_find(ctx, nm, nlen);               /* step 3 */
+    prev = ce_find_in(ctx, registry, nm, nlen);  /* step 3 */
     taken = JS_IsObject(prev);
     JS_FreeValue(ctx, prev);
     JS_FreeCString(ctx, nm);
@@ -1669,9 +2236,11 @@ static int ce_define_checks(JSContext *ctx, int argc, JSValueConst *argv)
     }
     /* step 4: the definition set already contains an item with THIS CONSTRUCTOR. It is a second question and
        not the same one — `define('a-x', C); define('b-x', C)` passes step 3 both times — and answering it is
-       what the definition ORDER exists for, because a set keyed by name cannot be asked about a constructor. */
+       what the definition ORDER exists for, because a set keyed by name cannot be asked about a constructor.
+       IT IS THIS REGISTRY'S SET: the same class may be defined once in the document's registry and once in a
+       scoped one, which is exactly what a scoped registry is for. */
     {
-        JSValue list = ce_deflist(ctx);
+        JSValue list = ce_reg_field(ctx, registry, g_atom_order);
         uint32_t n = ce_array_len(ctx, list), i;
         bool dup = false;
 
@@ -1700,6 +2269,14 @@ static int ce_define_checks(JSContext *ctx, int argc, JSValueConst *argv)
     ext = idl_dict_get(ctx, argc > 2 ? argv[2] : JS_UNDEFINED, "extends");
     if (JS_IsString(ext)) {
         JS_FreeValue(ctx, ext);
+        /* step 7.1 is its OWN refusal and comes first: "if this's is scoped is true, then throw a
+           NotSupportedError". A scoped registry may not define a customized built-in AT ALL, whatever the name
+           is, and saying so separately is what keeps the two reasons distinguishable once `extends` is real. */
+        if (ce_reg_flag(ctx, registry, g_atom_scoped)) {
+            JS_ThrowDOMException(ctx, "NotSupportedError",
+                                 "a scoped CustomElementRegistry cannot define a customized built-in");
+            return -1;
+        }
         JS_ThrowDOMException(ctx, "NotSupportedError",
                              "a customized built-in (`extends`) is not modelled: this engine has no built-in "
                              "element to customize yet, and registering it as an autonomous element would "
@@ -1707,14 +2284,25 @@ static int ce_define_checks(JSContext *ctx, int argc, JSValueConst *argv)
         return -1;
     }
     JS_FreeValue(ctx, ext);
+    /* STEPS 8-9: "element definition is running". It exists because everything after it READS THE PAGE'S
+       OBJECT — a static `observedAttributes` getter that calls `define` again would otherwise run this whole
+       algorithm re-entrantly and commit two definitions for one name. The flag is cleared by
+       ce_define_release, which is this machine's teardown and therefore runs on BOTH exits, which is exactly
+       what step 14's "regardless of whether the above steps threw an exception or not" asks for. */
+    if (ce_reg_flag(ctx, registry, g_atom_defining)) {
+        JS_ThrowDOMException(ctx, "NotSupportedError",
+                             "customElements.define was re-entered while this registry was already defining");
+        return -1;
+    }
+    ce_reg_set_flag(ctx, registry, g_atom_defining, true);
     return 0;
 }
 
 /* §4.13.4 STEPS 15-16 AND 18 — the definition, the definition set, and the upgrade reactions. Plain C, and it
    stays that way: every value it needs is already real, and this is the part that touches only the component's
    own state. `proto` is step 14.1's answer, read as a request rather than here. */
-static JSValue ce_define_commit(JSContext *ctx, JSValueConst *argv, JSValueConst names, JSValueConst proto,
-                                JSValueConst callbacks, uint32_t flags)
+static JSValue ce_define_commit(JSContext *ctx, JSValueConst registry, JSValueConst *argv, JSValueConst names,
+                                JSValueConst proto, JSValueConst callbacks, uint32_t flags)
 {
     const char *nm;
     size_t nlen;
@@ -1755,9 +2343,9 @@ static JSValue ce_define_commit(JSContext *ctx, JSValueConst *argv, JSValueConst
         a = JS_NewAtomLen(ctx, nm, nlen);
         CHECK(a != JS_ATOM_NULL, "custom elements: a name could not be interned");
         {
-            JSValue defs = ce_defs(ctx);
-            JSValue list = ce_deflist(ctx);
-            /* ONE SET, TWO READINGS: the name index the lookups use, and the definition ORDER §4.13.2 step 3
+            JSValue defs = ce_reg_field(ctx, registry, g_atom_defs);
+            JSValue list = ce_reg_field(ctx, registry, g_atom_order);
+            /* ONE SET, TWO READINGS: the name index the lookups use, and the definition ORDER §4.13.2 step 4
                walks to answer "which definition has this constructor". Written together, here, because a
                definition in one and not the other is a definition half the platform can see. */
             JS_SetProperty(ctx, defs, a, JS_DupValue(ctx, def));
@@ -1766,8 +2354,8 @@ static JSValue ce_define_commit(JSContext *ctx, JSValueConst *argv, JSValueConst
             JS_FreeValue(ctx, defs);
         }
         JS_FreeAtom(ctx, a);
-        ce_upgrade_document(ctx, nm, nlen, def);
-        ce_when_defined_resolve(ctx, nm, nlen, argv[1]);
+        ce_upgrade_candidates(ctx, registry, nm, nlen, def);   /* step 17 */
+        ce_when_defined_resolve(ctx, registry, nm, nlen, argv[1]);
         JS_FreeValue(ctx, def);
     }
     JS_FreeCString(ctx, nm);
@@ -1785,7 +2373,7 @@ static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
         cb_result = JS_UNDEFINED;
         /* EVERY owned field before the first thing that can throw: the failure path tears this state down
            through ce_define_release, which frees exactly what the state holds and nothing else. */
-        s->proto = s->raw = JS_UNDEFINED;
+        s->proto = s->raw = s->registry = JS_UNDEFINED;
         s->flags = 0;
         s->callbacks = JS_NewArray(ctx);
         s->names = JS_NewArray(ctx);
@@ -1797,7 +2385,9 @@ static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
            count check has already thrown for a call with fewer — the body's copy of it was unreachable. */
         DCHECK(argc >= 2, "customElements.define reached its algorithm with fewer than the two arguments its "
                           "declaration requires — the count check belongs to Web IDL and it did not run");
-        if (ce_define_checks(ctx, argc, argv) < 0) return -1;
+        if (!ce_registry_this(ctx, hdr->this_val)) return -1;
+        s->registry = JS_DupValue(ctx, hdr->this_val);
+        if (ce_define_checks(ctx, s->registry, argc, argv) < 0) return -1;
         hdr->stage = CE_PROTOTYPE;
     }
     if (hdr->stage == CE_PROTOTYPE) {
@@ -1938,7 +2528,7 @@ static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
     }
     DCHECK(hdr->stage == CE_COMMIT, "customElements.define resumed into a stage §4.13.4 does not have");
     JS_FreeValue(ctx, cb_result);
-    *presult = ce_define_commit(ctx, argv, s->names, s->proto, s->callbacks, s->flags);
+    *presult = ce_define_commit(ctx, s->registry, argv, s->names, s->proto, s->callbacks, s->flags);
     if (JS_IsException(*presult)) { *presult = JS_UNDEFINED; return -1; }
     return 0;
 }
@@ -1948,21 +2538,39 @@ static const IdlStepDecl CE_DEFINE_STEP = {
     "HTML §4.13.4 CustomElementRegistry.define", CE_DEFINE_STEPS
 };
 
-/* §4.13.4 get(name) — the constructor a name is defined as, or undefined. */
+/* §4.13.4 get(name) — the constructor a name is defined as IN THIS REGISTRY, or undefined. */
 static JSValue js_ce_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     const char *nm;
     size_t nlen;
     JSValue def, r;
+    JSValueConst reg = this_val;
 
-    (void)this_val; (void)magic;
+    (void)magic;
+    if (!ce_registry_this(ctx, this_val)) return JS_EXCEPTION;
     if (argc < 1) return JS_UNDEFINED;
     nm = JS_ToCStringLen(ctx, &nlen, argv[0]);   /* a real string by now: the declaration converted it */
     if (!nm) return JS_EXCEPTION;
-    def = ce_find(ctx, nm, nlen);
+    def = ce_find_in(ctx, reg, nm, nlen);
     r = JS_IsObject(def) ? JS_GetProperty(ctx, def, g_atom_ctor) : JS_UNDEFINED;
     JS_FreeValue(ctx, def);
     JS_FreeCString(ctx, nm);
+    return r;
+}
+
+/* §4.13.4 getName(constructor) — the NAME a constructor is defined as, or null. The inverse reading of the
+   same set, and the reason the definition ORDER exists: a set keyed by name cannot be asked about a
+   constructor. It was ABSENT, which for a page whose bundle registers a class in one module and asks for its
+   tag in another is a `TypeError: not a function` on the line that asks. */
+static JSValue js_ce_get_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValue def, r;
+
+    (void)magic; (void)argc;
+    if (!ce_registry_this(ctx, this_val)) return JS_EXCEPTION;
+    def = ce_definition_by_ctor(ctx, this_val, argv[0]);
+    r = JS_IsObject(def) ? JS_GetProperty(ctx, def, g_atom_name) : JS_NULL;
+    JS_FreeValue(ctx, def);
     return r;
 }
 
@@ -1979,25 +2587,114 @@ static JSValue js_ce_get(JSContext *ctx, JSValueConst this_val, int argc, JSValu
 static JSValue js_ce_upgrade(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     lxb_dom_node_t *root, *n;
+    JSValueConst reg = this_val;
 
-    (void)this_val; (void)magic; (void)argc;
+    (void)magic; (void)argc;
+    if (!ce_registry_this(ctx, this_val)) return JS_EXCEPTION;
     root = node_of(argv[0]);
     if (!root) return JS_ThrowTypeError(ctx, "customElements.upgrade requires a Node");
     for (n = root; n; n = shadow_root_next_in_shadow_including(ctx, n, root)) {
         lxb_dom_element_t *el;
+        JSValue wrap, nreg;
+        bool mine;
 
-        if (n->type != LXB_DOM_NODE_TYPE_ELEMENT)
+        if (n->type != LXB_DOM_NODE_TYPE_ELEMENT)     /* step 1.1 */
             continue;
         el = lxb_dom_interface_element(n);
         /* The same cheap name test the insertion steps make, and for the same reason: reading an element's
            state means minting its WRAPPER, and `upgrade(document)` walks every node in the document. */
-        if (ce_upgradable_name(el)) {
-            JSValue wrap = node_wrap(ctx, n);
-            ce_try_upgrade(ctx, el, wrap);
-            JS_FreeValue(ctx, wrap);
-        }
+        if (!ce_upgradable_name(el))
+            continue;
+        wrap = node_wrap(ctx, n);
+        /* step 1.2: "if candidate's custom element registry is not this, then continue". Without it a page
+           holding both registries could upgrade a scoped tree's elements out of the document's set — the
+           definitions are different classes and the wrong one would run. */
+        nreg = ce_registry_of_node(ctx, wrap);
+        mine = JS_VALUE_GET_PTR(nreg) == JS_VALUE_GET_PTR(reg) && JS_IsObject(nreg);
+        JS_FreeValue(ctx, nreg);
+        if (mine) ce_try_upgrade(ctx, el, wrap);      /* step 1.3 */
+        JS_FreeValue(ctx, wrap);
     }
     return JS_UNDEFINED;
+}
+
+/* §4.13.4 `[CEReactions] undefined initialize(Node root)` — THE MEMBER THAT ASSOCIATES A SCOPED REGISTRY WITH A
+   SUBTREE. It is what makes a scoped registry reach nodes that were created without one: DOM says a node's
+   registry "intentionally cannot be changed any further" once it is set, so the only nodes this can claim are
+   the ones whose registry is NULL — a Document that is not a Window's, a shadow root attached with
+   `customElementRegistry: null`, an element created with the same option. Claiming a node whose registry is
+   already this one still TRIES TO UPGRADE it, which is what makes `initialize` idempotent and useful after a
+   later `define`.
+   Nothing here constructs: "try to upgrade" enqueues an upgrade reaction and the `[CEReactions]` epilogue every
+   declared member ends through is what drains it, which is exactly why this is an ordinary body. */
+static JSValue js_ce_initialize(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValueConst reg = this_val;
+    lxb_dom_node_t *root, *n;
+    bool scoped;
+
+    (void)magic; (void)argc;
+    if (!ce_registry_this(ctx, this_val)) return JS_EXCEPTION;
+    root = node_of(argv[0]);
+    if (!root) return JS_ThrowTypeError(ctx, "CustomElementRegistry.initialize requires a Node");
+    scoped = ce_reg_flag(ctx, reg, g_atom_scoped);
+    /* Step 1: a GLOBAL registry may only initialize within its own document, and never a Document node —
+       a global registry is already every node's answer there, so the call could only ever be a no-op or a
+       claim on a document that has one. */
+    if (!scoped) {
+        JSValue doc_reg = ce_registry_of_document(ctx, ce_node_document(root));
+        bool ours = JS_VALUE_GET_PTR(doc_reg) == JS_VALUE_GET_PTR(reg) && JS_IsObject(doc_reg);
+
+        JS_FreeValue(ctx, doc_reg);
+        if (root->type == LXB_DOM_NODE_TYPE_DOCUMENT || !ours)
+            return JS_ThrowDOMException(ctx, "NotSupportedError",
+                                        "a non-scoped CustomElementRegistry can only initialize a node of its "
+                                        "own document");
+    }
+    /* Steps 2-3: a Document or a ShadowRoot whose registry is null takes this one. Both are the same write on
+       the same slot; which node kind it is decides only which of the two steps it is. */
+    if (root->type == LXB_DOM_NODE_TYPE_DOCUMENT || shadow_root_is(root)) {
+        JSValue wrap = node_wrap(ctx, root);
+        JSValue cur = ce_registry_of_node(ctx, wrap);
+
+        if (JS_IsNull(cur)) ce_node_set_registry(ctx, wrap, reg);
+        JS_FreeValue(ctx, cur);
+        JS_FreeValue(ctx, wrap);
+    }
+    /* Step 4: INCLUSIVE DESCENDANTS IN TREE ORDER — not shadow-including, which the spec is deliberate about:
+       a shadow tree gets its own registry from its own `attachShadow`, and reaching into one here would
+       overwrite the boundary the tree was built with. */
+    for (n = root; n; n = node_next_in(n, root)) {
+        JSValue wrap, cur;
+        bool mine;
+
+        if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;   /* step 4.1 */
+        wrap = node_wrap(ctx, n);
+        cur = ce_registry_of_node(ctx, wrap);
+        if (JS_IsNull(cur)) {                                 /* step 4.2 */
+            ce_node_set_registry(ctx, wrap, reg);
+            if (scoped) ce_scoped_docs_append(ctx, reg, n);
+            mine = true;
+        } else {
+            mine = JS_VALUE_GET_PTR(cur) == JS_VALUE_GET_PTR(reg) && JS_IsObject(cur);
+        }
+        JS_FreeValue(ctx, cur);
+        if (mine && ce_upgradable_name(lxb_dom_interface_element(n)))
+            ce_try_upgrade(ctx, lxb_dom_interface_element(n), wrap);   /* steps 4.3-4.4 */
+        JS_FreeValue(ctx, wrap);
+    }
+    return JS_UNDEFINED;
+}
+
+/* §4.13.4's CONSTRUCTOR: "the new CustomElementRegistry() constructor steps are to set this's is scoped to
+   true". It runs none of the page's code — no argument, no read — so it is an ordinary constructor body and
+   not a machine. It did not exist at all, which is what made the registry a single global one. */
+static JSValue js_ce_registry_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    (void)argc; (void)argv;
+    if (JS_IsUndefined(new_target))
+        return JS_ThrowTypeError(ctx, "constructor CustomElementRegistry requires 'new'");
+    return ce_registry_new(ctx, true);
 }
 
 void custom_elements_init(JSContext *ctx)
@@ -2040,10 +2737,37 @@ void custom_elements_init(JSContext *ctx)
         g_cb_atoms[k] = JS_NewAtom(ctx, CE_CALLBACK_NAMES[k]);
         CHECK(g_cb_atoms[k] != JS_ATOM_NULL, "a §4.13.4 step 14 lifecycle callback name could not be interned");
     }
-    g_defs_slot = realm_value_declare(ctx, "§4.13.4 definition set");
-    g_deflist_slot = realm_value_declare(ctx, "§4.13.4 definition set, in definition order");
-    g_whendef_slot = realm_value_declare(ctx, "§4.13.4 when-defined promise map");
+    /* §4.13.4's registry as a real interface: a CLASS, so §3.7 gives every realm its own prototype through
+       quickjs's own per-context slot, and the state under a symbol on the instance. */
+    {
+        JSClassDef d = { "CustomElementRegistry" };
+        JS_NewClassID(JS_GetRuntime(ctx), &g_registry_class);
+        CHECK(JS_NewClass(JS_GetRuntime(ctx), g_registry_class, &d) == 0,
+              "the CustomElementRegistry class could not be declared");
+    }
+    g_reg_key = JS_NewSymbol(ctx, "customElementRegistryRecord", false);
+    CHECK(!JS_IsException(g_reg_key), "the CustomElementRegistry record slot key allocation failed");
+    g_atom_reg = JS_ValueToAtom(ctx, g_reg_key);
+    g_node_reg_key = JS_NewSymbol(ctx, "nodeCustomElementRegistry", false);
+    CHECK(!JS_IsException(g_node_reg_key), "the node custom element registry slot key allocation failed");
+    g_atom_node_reg = JS_ValueToAtom(ctx, g_node_reg_key);
+    g_atom_defs = JS_NewAtom(ctx, "defs");
+    g_atom_order = JS_NewAtom(ctx, "order");
+    g_atom_whendef = JS_NewAtom(ctx, "whenDefined");
+    g_atom_scoped = JS_NewAtom(ctx, "scoped");
+    g_atom_docs = JS_NewAtom(ctx, "docs");
+    g_atom_defining = JS_NewAtom(ctx, "defining");
+    CHECK(g_atom_reg != JS_ATOM_NULL && g_atom_node_reg != JS_ATOM_NULL && g_atom_defs != JS_ATOM_NULL &&
+          g_atom_order != JS_ATOM_NULL && g_atom_whendef != JS_ATOM_NULL && g_atom_scoped != JS_ATOM_NULL &&
+          g_atom_docs != JS_ATOM_NULL && g_atom_defining != JS_ATOM_NULL,
+          "a §4.13.4 CustomElementRegistry field name could not be interned");
+    g_registry_slot = realm_value_declare(ctx, "§4.13.4 the Document's CustomElementRegistry");
     g_html_ctor_slot = realm_value_declare(ctx, "§4.13.2's active function object (HTMLElement)");
+    /* §4.13.4's active custom element constructor map is the AGENT's, not a realm's — a class defined in one
+       realm's scoped registry and constructed from another must find the same entry. */
+    g_active_ctor_map = JS_NewArray(ctx);
+    CHECK(!JS_IsException(g_active_ctor_map),
+          "§4.13.4's active custom element constructor map could not be allocated");
     /* §4.13.6's stack, its backup queue and the two private keys the queues are read through. Built here, in
        the agent's own pre-boot realm, so a flow's push is captured by the heap COW rather than being that
        flow's private object. */
@@ -2062,8 +2786,9 @@ void custom_elements_init(JSContext *ctx)
        it — the same reason the internal event dispatcher is not on any prototype. */
     g_backup_fn = JS_NewCFunction2(ctx, NULL, "backupElementQueue", 0, JS_CFUNC_step, g_backup_stepid);
     CHECK(!JS_IsException(g_backup_fn), "the backup element queue's driver could not be allocated");
-    /* §4.13.4's two members, DECLARED once per agent: `customElements` is a per-realm object, so installing
-       from a fresh declaration would mint the pair again for a second realm's registry. */
+    /* §4.13.4's SIX members, DECLARED once per agent and installed on the per-realm PROTOTYPE: a declaration
+       made where they are installed would mint them again for every realm — and now also for every scoped
+       registry a page constructs, which is what makes the prototype the only place they can live. */
     g_id_define = idl_method_id_step(ctx, CE_DEFINE_ARGS, 3, CE_DEFINE_OPTS,
                                      (int)(sizeof(CE_DEFINE_OPTS) / sizeof(CE_DEFINE_OPTS[0])),
                                      &CE_DEFINE_STEP, 0);
@@ -2074,12 +2799,21 @@ void custom_elements_init(JSContext *ctx)
         g_id_when_defined = idl_method_id(ctx, ONE_STR, 1, js_ce_when_defined, 0);
     }
     {
-        /* `upgrade(Node root)` — the argument's INTERFACE type is what makes `customElements.upgrade({})` a
-           TypeError before step 1, rather than a body's hand-written check. */
+        /* `getName(CustomElementConstructor constructor)` — a callback function type, whose conversion IS a
+           brand check and nothing more (§3.2.22): a non-callable is a TypeError before step 1. */
+        static const IdlArgType ONE_CB[1] = { IDL_CALLBACK };
+        g_id_get_name = idl_method_id(ctx, ONE_CB, 1, js_ce_get_name, 0);
+    }
+    {
+        /* `upgrade(Node root)` / `initialize(Node root)` — the argument's INTERFACE type is what makes
+           `customElements.upgrade({})` a TypeError before step 1, rather than a body's hand-written check. */
         static const IdlArgType ONE_NODE[1] = { IDL_INTERFACE };
         g_id_upgrade = idl_method_id(ctx, ONE_NODE, 1, js_ce_upgrade, 0);
         idl_iface_brand(node_class_id());
+        g_id_initialize = idl_method_id(ctx, ONE_NODE, 1, js_ce_initialize, 0);
+        idl_iface_brand(node_class_id());
     }
+    realm_declare_intrinsic(custom_elements_install_proto);
     /* §4.13.2, DECLARED ONCE PER AGENT and minted per realm: HTMLElement is a per-realm interface object, so a
        declaration made where it is installed would mint the member again for every document. */
     g_id_html_ctor = idl_method_id_step(ctx, NULL, 0, NULL, 0, &CE_HTML_CTOR_STEP, 0);
@@ -2118,26 +2852,53 @@ void custom_elements_install(JSContext *ctx, JSValueConst global)
                          "`connectedMoveCallback` between disconnectedCallback and adoptedCallback — add it to "
                          "CE_LIFECYCLE_CALLBACKS and enqueue it from the move");
     }
-    /* Built with the REGISTRY it belongs to, and for the agent's own realm that is still pre-boot — so a write
-       to it during a flow is captured by the heap COW rather than being that flow's private object. */
-    {
-        JSValue defs = JS_NewObjectProto(ctx, JS_NULL);
-        JSValue order = JS_NewArray(ctx);
-        JSValue pending = JS_NewObjectProto(ctx, JS_NULL);
-        CHECK(!JS_IsException(defs), "the custom-element definition set could not be allocated");
-        CHECK(!JS_IsException(order), "the custom-element definition ORDER could not be allocated");
-        CHECK(!JS_IsException(pending), "the §4.13.4 when-defined promise map could not be allocated");
-        realm_value_set(ctx, g_defs_slot, defs);
-        realm_value_set(ctx, g_deflist_slot, order);
-        realm_value_set(ctx, g_whendef_slot, pending);
-    }
-    reg = JS_NewObject(ctx);
-    CHECK(!JS_IsException(reg), "the CustomElementRegistry allocation failed");
-    idl_install_method(ctx, reg, "define", 2, g_id_define);
-    idl_install_method(ctx, reg, "get", 1, g_id_get);
-    idl_install_method(ctx, reg, "whenDefined", 1, g_id_when_defined);
-    idl_install_method(ctx, reg, "upgrade", 1, g_id_upgrade);
+    /* §4.13.4: "A Window's associated Document is ALWAYS created with a new CustomElementRegistry object", and
+       this is that creation. Built for the agent's own realm while it is still pre-boot, so a definition a flow
+       adds to it is captured by the heap COW rather than being that flow's private object. `is scoped` is
+       false: this is the one registry the constructor cannot produce. */
+    reg = ce_registry_new(ctx, false);
+    realm_value_set(ctx, g_registry_slot, JS_DupValue(ctx, reg));
+    /* §4.13.4's Window `customElements` getter returns "this's associated Document's custom element registry",
+       and a realm has exactly one document for its whole life — so the value is fixed and the accessor would
+       compute the same answer forever. */
     JS_SetPropertyStr(ctx, (JSValue)global, "customElements", reg);
+    /* §3.7.1's INTERFACE OBJECT — constructible now, which is the whole of `new CustomElementRegistry()`. */
+    {
+        JSValue ctor = JS_NewCFunction2(ctx, (JSCFunction *)js_ce_registry_ctor, "CustomElementRegistry", 0,
+                                        JS_CFUNC_constructor, 0);
+        JSValue proto = JS_GetClassProto(ctx, g_registry_class);
+
+        CHECK(!JS_IsException(ctor), "the CustomElementRegistry interface object could not be allocated");
+        DCHECK(!JS_IsNull(proto), "CustomElementRegistry was installed into a realm that never ran its proto "
+                                  "build");
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+        JS_SetPropertyStr(ctx, (JSValue)global, "CustomElementRegistry", ctor);
+    }
+}
+
+/* §4.13.4's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. The members live HERE and not on the instance, which is
+   what Web IDL says and what a second registry made this observable: installed per object, every
+   `new CustomElementRegistry()` would carry its own function objects, `customElements.define ===
+   otherRegistry.define` would be false, and a page patching the prototype would reach none of them. */
+void custom_elements_install_proto(JSContext *ctx)
+{
+    JSValue proto, prev;
+
+    DCHECK(g_registry_class != 0, "a realm asked for CustomElementRegistry.prototype before the class existed");
+    prev = JS_GetClassProto(ctx, g_registry_class);
+    DCHECK(JS_IsNull(prev), "custom_elements_install_proto ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+    proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(proto), "CustomElementRegistry.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "CustomElementRegistry");
+    idl_install_method(ctx, proto, "define", 2, g_id_define);
+    idl_install_method(ctx, proto, "get", 1, g_id_get);
+    idl_install_method(ctx, proto, "getName", 1, g_id_get_name);
+    idl_install_method(ctx, proto, "whenDefined", 1, g_id_when_defined);
+    idl_install_method(ctx, proto, "upgrade", 1, g_id_upgrade);
+    idl_install_method(ctx, proto, "initialize", 1, g_id_initialize);
+    JS_SetClassProto(ctx, g_registry_class, proto);
 }
 
 void custom_elements_free(JSContext *ctx)
@@ -2145,11 +2906,25 @@ void custom_elements_free(JSContext *ctx)
     int k;
 
     if (!g_ready) return;
-    /* the definition sets are the REALMS' — released with their contexts */
+    /* the registries are the REALMS' — released with their contexts */
     JS_FreeValue(ctx, g_backup_fn);
     JS_FreeValue(ctx, g_ce_backup);
     JS_FreeValue(ctx, g_rq_key);
+    JS_FreeValue(ctx, g_active_ctor_map);
+    JS_FreeValue(ctx, g_reg_key);
+    JS_FreeValue(ctx, g_node_reg_key);
     g_backup_fn = g_ce_backup = g_rq_key = JS_UNDEFINED;
+    g_active_ctor_map = g_reg_key = g_node_reg_key = JS_UNDEFINED;
+    JS_FreeAtom(ctx, g_atom_reg);
+    JS_FreeAtom(ctx, g_atom_node_reg);
+    JS_FreeAtom(ctx, g_atom_defs);
+    JS_FreeAtom(ctx, g_atom_order);
+    JS_FreeAtom(ctx, g_atom_whendef);
+    JS_FreeAtom(ctx, g_atom_scoped);
+    JS_FreeAtom(ctx, g_atom_docs);
+    JS_FreeAtom(ctx, g_atom_defining);
+    g_atom_reg = g_atom_node_reg = g_atom_defs = g_atom_order = g_atom_whendef = JS_ATOM_NULL;
+    g_atom_scoped = g_atom_docs = g_atom_defining = JS_ATOM_NULL;
     g_current = NULL;
     JS_FreeAtom(ctx, g_atom_rq);
     JS_FreeAtom(ctx, g_atom_rq_head);

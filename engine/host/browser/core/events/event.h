@@ -64,6 +64,23 @@ bool    event_initialized(JSContext *ctx, JSValueConst ev);
    initialized flag UNSET. The factory owns the table; the slots are this component's. */
 void    event_uninitialize(JSContext *ctx, JSValueConst ev);
 void    event_set_phase(JSContext *ctx, JSValueConst ev, int phase);   /* AT_TARGET, then BUBBLING_PHASE */
+/* §2.2's RELATEDTARGET and TOUCH TARGET LIST — EVERY event has both, and neither is an Event IDL member: §2.2
+   gives the Event itself the associated values and UIEvents/Touch Events only DEFINE ATTRIBUTES over them
+   ("other specifications use relatedTarget to define a relatedTarget attribute"). So they are this component's
+   state whether or not an interface that fills them exists yet, and §2.9 retargets them at every path item
+   regardless — a dispatch that skipped them because no MouseEvent exists would be a dispatch missing step 4's
+   suppression and `invoke` steps 4-5.
+   The getters are OWNED. The relatedTarget is JS_NULL when there is none; the touch target list is JS_NULL when
+   it is EMPTY, which is the same state one allocation cheaper and the same spelling §2.9's path uses. */
+JSValue event_related_target(JSContext *ctx, JSValueConst ev);
+void    event_set_related_target(JSContext *ctx, JSValueConst ev, JSValueConst related);
+JSValue event_touch_target_list(JSContext *ctx, JSValueConst ev);
+void    event_set_touch_target_list(JSContext *ctx, JSValueConst ev, JSValueConst list);
+/* §2.9 step 11's CLEARTARGETS — target, relatedTarget and touch target list ALL back to their initial state,
+   as ONE operation because the spec states them as one step and because the target half shipped alone: an
+   event whose outermost target was inside a shadow tree kept handing out a retargeted relatedTarget after the
+   walk, which is the same leak step 11 exists to close. */
+void    event_clear_targets(JSContext *ctx, JSValueConst ev);
 /* §2.9 "invoke" steps 3 and 7, which are two steps: the target the event was dispatched at (set once for the
    whole walk) and the object whose listeners are running right now (set at every path item). */
 void    event_set_target(JSContext *ctx, JSValueConst ev, JSValueConst target);

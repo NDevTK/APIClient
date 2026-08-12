@@ -29,6 +29,7 @@
 #include "core/dom/element.h"
 #include "core/dom/node.h"
 #include "core/dom/document.h"
+#include "core/frame/document_lifecycle.h"
 #include "core/frame/navigable.h"
 #include "core/frame/window_proxy.h"
 #include "solver/engine.h"
@@ -89,17 +90,23 @@ void iframe_create_navigable(JSContext *ctx, JSValueConst wrap)
     JS_DefinePropertyValue(ctx, (JSValue)wrap, g_atom_navigable, proxy, JS_PROP_WRITABLE);
 }
 
-/* §4.8.5's REMOVING STEPS: an <iframe> that leaves a document DESTROYS its child navigable. Two halves, and
-   both are observable. The ELEMENT loses its navigable, so `contentWindow` is null from here on; the PROXY a
-   page is still holding stays the same object and reports `closed` and an empty `name`, because a WindowProxy
-   outlives the navigable it named — that is what the spec files check, and it is the same sentence that makes a
-   WindowProxy a separate object from its Window in the first place. */
+/* §4.8.5's REMOVING STEPS: an <iframe> that leaves a document runs §7.3.1's DESTROY A CHILD NAVIGABLE over the
+   navigable it contained. The container's half is SYNCHRONOUS and the document's half is a JOB, which is the
+   spec's own split and is why this used to be wrong: the element loses its navigable on this line (step 3, so
+   `contentWindow` is null from here on), while step 5's destruction of the active document and everything under
+   it is queued — it disentangles that document's ports, drops its queued tasks and only then nulls its browsing
+   context, none of which can happen inside a tree mutation.
+   WHAT WAS HERE INSTEAD WAS ONE BYTE. Setting `closed` on the proxy announced a destruction that had not
+   happened and never would: the child's Document, its Window, its realm, its queued tasks and its whole
+   subtree were left exactly as they were, and the announcement is what made that invisible. The proxy a page
+   is still holding does stay the same object and does end up reporting `closed` — a WindowProxy outlives the
+   navigable it named — but it reports it because the destruction ran, not instead of it. */
 void iframe_destroy_navigable(JSContext *ctx, JSValueConst wrap)
 {
     JSValue proxy = iframe_navigable(ctx, wrap);
 
-    if (JS_IsUndefined(proxy)) return;   /* this flow never had one */
-    window_proxy_close(ctx, proxy);
+    if (JS_IsUndefined(proxy)) return;   /* this flow never had one — §7.3.1 step 2 */
+    document_lifecycle_destroy_child(ctx, proxy);   /* §7.3.1 steps 4-5 */
     JS_FreeValue(ctx, proxy);
     /* CLEARED, not deleted: the slot is non-configurable so it cannot be deleted, and it does not need to be —
        an empty slot is what "this element has no navigable" means everywhere it is read. It is an ordinary

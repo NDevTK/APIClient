@@ -2,6 +2,9 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_HTML_FORM_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_HTML_FORM_H
 #include <stdbool.h>
+
+#include <lexbor/dom/dom.h>
+
 #include "quickjs.h"
 
 /* Install §4.10's members on the interfaces that DECLARE them. The html layer owns the per-tag prototypes and
@@ -62,6 +65,28 @@ bool html_form_control_is_disabled(JSContext *ctx, JSValueConst wrap);
  * because a FORM-ASSOCIATED CUSTOM ELEMENT is in every one of these categories and only its definition can say
  * so. */
 
+/* §4.10.5.1's STATES OF THE `type` ATTRIBUTE — the enumerated attribute's twenty-one keywords, resolved ONCE.
+   Every consumer of an input's type asks the same question of the same table, and asked as a chain of string
+   comparisons per consumer the table is written out again each time: §4.10.21's constraint attributes apply per
+   state, §3.2.6's auto-directionality is a list of states, §4.10.2's buttons are four of them. The TEXT state is
+   both the missing-value and the invalid-value default, so an absent or unrecognised keyword IS that state and
+   no consumer needs a case for it. */
+typedef enum {
+    INPUT_STATE_NONE = 0,        /* the element is not an `input` */
+    INPUT_STATE_HIDDEN, INPUT_STATE_TEXT, INPUT_STATE_SEARCH, INPUT_STATE_TEL, INPUT_STATE_URL,
+    INPUT_STATE_EMAIL, INPUT_STATE_PASSWORD, INPUT_STATE_DATE, INPUT_STATE_MONTH, INPUT_STATE_WEEK,
+    INPUT_STATE_TIME, INPUT_STATE_DATETIME_LOCAL, INPUT_STATE_NUMBER, INPUT_STATE_RANGE, INPUT_STATE_COLOR,
+    INPUT_STATE_CHECKBOX, INPUT_STATE_RADIO, INPUT_STATE_FILE, INPUT_STATE_SUBMIT, INPUT_STATE_IMAGE,
+    INPUT_STATE_RESET, INPUT_STATE_BUTTON,
+} HtmlInputState;
+HtmlInputState html_form_input_state(const lxb_dom_node_t *n);
+
+/* §4.10.7's PLACEHOLDER LABEL OPTION: with `required` specified and a display size of 1, the FIRST option in
+   the select's list of options, when its value is the empty string and its parent is the select itself. It is
+   here rather than beside the constraint that reads it because the list of options and the display size are
+   §4.10.7's and this file owns them. The option's wrapper, or JS_NULL. OWNED. */
+JSValue html_form_placeholder_label_option(JSContext *ctx, JSValueConst select);
+
 /* §4.10.2 SUBMITTABLE: button, input, select, textarea, and form-associated custom elements. §4.10.22.4 step 3
    walks exactly these. */
 bool html_form_is_submittable(JSContext *ctx, JSValueConst wrap);
@@ -97,8 +122,8 @@ FormFieldKind html_form_field_kind(JSContext *ctx, JSValueConst wrap);
 const char *html_form_control_name(JSValueConst wrap, size_t *plen);
 
 /* Step 5.7's value: "if the field element has a `value` attribute specified, then let value be the value of
-   that attribute; otherwise, let value be the string `on`" — §4.10.5.4's default/on mode, which is why the
-   default is a word and not the empty string a text control's value falls back to. OWNED. */
+   that attribute; otherwise, let value be the string `on`" — which IS §4.10.5.4's DEFAULT/ON mode word for
+   word, so this asks input_value.c for that mode rather than spelling the same two lines again. OWNED. */
 JSValue html_form_checkbox_value(JSContext *ctx, JSValueConst wrap);
 
 /* §4.10.7's LIST OF OPTIONS for a `select`, narrowed to step 5.6's condition — selectedness true and not
@@ -114,10 +139,24 @@ bool html_form_has_datalist_ancestor(JSValueConst wrap);
    URL, Email, Password, Submit Button, Reset Button or Button state, or a `textarea`). */
 bool html_form_needs_dirname_entry(JSValueConst wrap);
 
+/* §3.2.6's AUTO-DIRECTIONALITY FORM-ASSOCIATED ELEMENTS — an `input` in the Hidden, Text, Search, Telephone,
+   URL, Email, Password, Submit Button, Reset Button or Button state, or a `textarea`. The list §3.2.6's auto
+   directionality and §4.10.22.4 step 5.12 both read, stated once. */
+bool html_form_is_auto_directionality_face(const lxb_dom_node_t *n);
+
+/* §3.2.6's one type-specific Undefined case: an `input` in the TELEPHONE state is 'ltr' regardless of what
+   contains it. */
+bool html_form_is_telephone_input(const lxb_dom_node_t *n);
+
 /* §4.10.18.1's VALUE, and §4.10.5.1.15's CHECKEDNESS, for a caller that is not the IDL accessor — the entry
    list reads both off controls it did not receive as a receiver. `html_form_control_value` is OWNED and may be
    a CONCOLIC: the value slot holds a JSValue rather than bytes exactly so that `input.value = location.hash`
-   survives into the submission. */
+   survives into the submission.
+   FOR AN `input` IT IS input_value.c'S — §4.10.5.4's mode-dependent value, already through §4.10.5.1's value
+   sanitization algorithm. That is why it is ONE function and not a read each consumer does for itself: the
+   entry list, §4.10.21's constraint validation and §3.2.6's auto-directionality all read a control's value, and
+   an unsanitized one made all three wrong together (`<input type=url value=" http://x ">` reported a
+   typeMismatch no browser reports). */
 JSValue html_form_control_value(JSContext *ctx, JSValueConst wrap);
 bool    html_form_control_checked(JSContext *ctx, JSValueConst wrap);
 

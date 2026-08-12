@@ -77,10 +77,16 @@ bool    abort_signal_is(JSContext *ctx, JSValueConst v);
 JSValue abort_signal_reason(JSContext *ctx, JSValueConst sig);   /* dup'd */
 
 /* §3.2 "CREATE A DEPENDENT ABORT SIGNAL" — one signal that aborts when ANY of `signals` does, with that one's
- * reason. It is a real §3.2 concept and not a convenience: the Observable standard's promise-returning
- * operators each hold an AbortController of their own AND accept the caller's `options.signal`, and the
- * subscription they open has to end when EITHER fires — `every()` aborts its own controller the moment the
+ * reason. It is a real §3.2 concept and not a convenience: it is the WHOLE of `AbortSignal.any(signals)`, whose
+ * method steps are "return the result of creating a dependent abort signal from signals using AbortSignal and
+ * the current realm" and nothing else. The Observable standard's promise-returning operators reach the same
+ * algorithm from C — each holds an AbortController of its own AND accepts the caller's `options.signal`, and the
+ * subscription they open has to end when EITHER fires: `every()` aborts its own controller the moment the
  * predicate answers false, while the caller's signal may abort it first.
+ *
+ * THIS ENTRY IS THE C-VECTOR ADAPTER, for those callers whose list is two locals. `any()` converts a page's
+ * ITERABLE, suspending at every element, so the algorithm itself works over the list as a JS Array — the form a
+ * parked flow's snapshot carries and its COW delta captures. One algorithm, reached two ways; see abort.c.
  *
  * WHY IT CANNOT BE "add an algorithm to each that aborts the result". §3.2 states the propagation as STATE, not
  * as a listener: step 4 of signal abort sets each dependent's abort reason BEFORE any of the abort steps run,
