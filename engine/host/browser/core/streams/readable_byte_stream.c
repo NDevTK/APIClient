@@ -238,15 +238,12 @@ static JSValue byte_view(JSContext *ctx, int view_type, JSValueConst buffer, dou
     JSValueConst argv[3];
     JSValue o, l, r;
 
-    if (view_type < 0) {
-        /* %DataView% is a step machine in this engine (25.3.2.1's two ToIndex coercions are the page's code
-           for an ORDINARY construct), so there is no C entry that builds one — and a BYOB read whose view is a
-           DataView needs exactly that. */
-        DFAIL("a BYOB pull-into over a DataView reached its view construction: engine/qjs/quickjs.h declares "
-              "JS_NewTypedArray and no JS_NewDataView, so add one there (quickjs.c, over JS_CLASS_DATAVIEW, "
-              "beside JS_GetArrayBufferView) and route this arm to it");
-        return JS_ThrowTypeError(ctx, "a DataView BYOB pull-into is not supported by this build");
-    }
+    /* %DataView% is a step machine in this engine, because 25.3.2.1's two ToIndex coercions are the page's code
+       for an ORDINARY construct — but this is the `!` construct the standard names, over an ArrayBuffer and two
+       numbers this component already holds, so none of that runs. JS_NewDataView is the tail of that machine
+       with the coercions and the subclass prototype removed, which is exactly what a `!` means here. */
+    if (view_type < 0)
+        return JS_NewDataView(ctx, buffer, (uint64_t)offset, (uint64_t)len);
     o = JS_NewFloat64(ctx, offset);
     l = JS_NewFloat64(ctx, len);
     argv[0] = buffer;
