@@ -819,9 +819,15 @@ static JSValue js_html_attach_internals(JSContext *ctx, JSValueConst this_val, i
        §4.13.4 refuses to register one at all (ce_define_checks throws NotSupportedError for `extends`) — so no
        element in this engine can carry one, and this step has nothing to test rather than being skipped. It
        becomes a real read in the diff that makes customized built-ins registrable. */
-    /* Step 2: look up a custom element definition for this element. It is the ELEMENT'S OWN definition and not
-       a registry lookup by name: an element upgraded by one definition must keep answering for that one. */
-    def = custom_elements_definition_of_element(ctx, this_val);
+    /* Step 2: "let definition be the result of LOOKING UP A CUSTOM ELEMENT DEFINITION given this's CUSTOM
+       ELEMENT REGISTRY, this's namespace, this's local name, and null." It is the lookup and not the element's
+       own definition slot, and the difference is the whole reason the registry is a node's state: an element
+       whose upgrade has not started yet carries NO definition, so reading the slot answered step 3's
+       NotSupportedError where the spec reaches step 4's `disable internals` and step 6's state check — the
+       same DOMException name for the ordinary case and the wrong step for a class that disables internals.
+       The lookup goes to THIS ELEMENT'S registry, so a component defined in a scoped registry gets its own
+       definition here rather than the document's answer for the same tag name. */
+    def = custom_elements_definition_lookup_for_element(ctx, this_val);
     if (!JS_IsObject(def)) {                                            /* step 3 */
         JS_FreeValue(ctx, def);
         return JS_ThrowDOMException(ctx, "NotSupportedError",

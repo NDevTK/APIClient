@@ -93,10 +93,21 @@ void custom_elements_free(JSContext *ctx);
    the install). */
 JSValue custom_elements_html_constructor(JSContext *ctx);
 
-/* §4.13.4's "look up a custom element definition" by local name, for DOM §4.9 step 3 — the definition or
-   JS_UNDEFINED. OWNED. Its ONE reader is `create an element`, which needs the definition to decide between
-   step 5's synchronous Construct and step 6's plain creation. */
+/* §4.13.3's "look up a custom element definition" WITH THE REGISTRY DEFAULTED to the one DOM §4.9 step 2
+   resolves for a creation that names none — "look up a custom element registry given the DOCUMENT". The
+   definition or JS_UNDEFINED, OWNED. Its readers are `create an element`, which needs the definition to decide
+   between step 5's synchronous Construct and step 6's plain creation, and `attach a shadow root`, which needs
+   its `disable shadow`.
+   BOTH OF THEM MUST EVENTUALLY RESOLVE THE REGISTRY THEMSELVES — the lookup's first argument is the NODE's
+   registry, not the document's, and neither caller can name a scoped one through this entry. Its body carries
+   the DCHECK that fires the moment that matters and names what to build; when it does, this declaration goes
+   and the two callers take custom_elements_definition_lookup_for_element's shape. */
 JSValue custom_elements_definition_for_name(JSContext *ctx, const char *name, size_t len);
+/* §4.13.3's lookup performed FOR AN ELEMENT — its own custom element registry, its namespace, its local name
+   and its is value, which are the four arguments the algorithm takes. This is the form every caller that HAS a
+   node should use: it is the only one that can answer out of a SCOPED registry. OWNED; JS_UNDEFINED when there
+   is no definition (including when the element's registry is null, which is the algorithm's step 1). */
+JSValue custom_elements_definition_lookup_for_element(JSContext *ctx, JSValueConst el_wrap);
 /* The definition's constructor — DOM §4.9 step 5.1.1's `C`, the value `create an element` Constructs. OWNED. */
 JSValue custom_elements_definition_constructor(JSContext *ctx, JSValueConst def);
 /* DOM §4.9 steps 5.1.4.2-11: the checks the spec runs on what the page's constructor RETURNED, and the state
@@ -110,8 +121,12 @@ int custom_elements_created_check(JSContext *ctx, JSValueConst result,
    from here and not by the caller because the state is this component's own record — and it is what stops the
    element being tried for upgrade again the moment it enters a document. */
 void custom_elements_mark_failed(JSContext *ctx, JSValueConst wrap);
-/* `window.customElements` — §4.13.4's CustomElementRegistry. */
+/* `window.customElements` — this realm's Document's CustomElementRegistry, and the `CustomElementRegistry`
+   interface object that makes `new CustomElementRegistry()` (a SCOPED one) constructible. */
 void custom_elements_install(JSContext *ctx, JSValueConst global);
+/* §4.13.4's interface PROTOTYPE for ONE realm — declared into core/realm.h's list, because the members on it
+   answer out of the realm that defined them. */
+void custom_elements_install_proto(JSContext *ctx);
 
 /* §4.13.4 step 15'S THREE BOOLEAN FIELDS OF A DEFINITION, named so a reader outside this component can ask for
    one without knowing how a definition is stored. `disable shadow` has no reader yet — §4.13.5 step 8.1 and
