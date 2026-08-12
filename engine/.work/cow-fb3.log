@@ -1,8 +1,0 @@
-=== RESTART ===
-started. chrome pid=8252 port=9337 extId=pfncpmcmkgcohblmpllhofkdpjjbmngl
-=== GOTO ===
-navigated to http://localhost:8765/sdk_firebase.html
-=== DIAG 150 reload ===
-webworker: @WHY {"phase":"stack_overflow_recursion","file":"https://apis.google.com/_/scs/abc-static/_/js/k=gapi.lb.en.ch0Jz-JlMrQ.O/m=gapi_iframes/rt=j/sv=1/d=1/ed=1/rs=AHpOoo_YD4KoV8fTh_kLhktsiThAm3yJ5A/cb=gapi.loaded_0?le=scs","line":203,"col":173,"recurDepth":173,"recurLooped":1}
-background_page: @WHY {"phase":"stack_overflow_recursion","file":"https://apis.google.com/_/scs/abc-static/_/js/k=gapi.lb.en.ch0Jz-JlMrQ.O/m=gapi_iframes/rt=j/sv=1/d=1/ed=1/rs=AHpOoo_YD4KoV8fTh_kLhktsiThAm3yJ5A/cb=gapi.loaded_0?le=scs","line":203,"col":173,"recurDepth":173,"recurLooped":1}
-webworker: @WHY {"phase":"stack_overflow_recursion","file":"https://apis.google.com/_/scs/abc-static/_/js/k=gapi.lb.en.ch0Jz-JlMrQ.O/m=gapi_iframes/rt=j/sv=1/d=1/ed=1/rs=AHpOoo_YD4KoV8fTh_kLhktsiThAm3yJ5A/cb=gapi.loaded_0?le=scs","line":203,"col":173,"recurDepth":173,"recurLooped":1}
