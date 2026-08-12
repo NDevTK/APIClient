@@ -230,31 +230,95 @@ static JSValue byte_transfer(JSContext *ctx, JSValueConst buf)
     return nb;
 }
 
-/* ! Construct(ctor, « buffer, byteOffset, length ») for the constructors §4.9.5 names. It is a `!` in the
-   standard because the constructor is an INTRINSIC over an ArrayBuffer and two numbers: nothing of the page's
-   runs, which is why this is a C call and not a construct request. */
-static JSValue byte_view(JSContext *ctx, int view_type, JSValueConst buffer, double offset, double len)
+/* THE VIEW-CONSTRUCTION REQUEST BUFFER, AS A TYPE. step_construct_run's operand shape is [ctor, args…] and
+   « buffer, byteOffset, length » is three arguments, so the buffer is 1 + 3 slots wide. It is a TYPE for the
+   reason EventFireCb is one: a width every call site restates is a width every call site is free to be behind
+   on, and the slot past the end of a `JSValue cb[4]` is whatever struct field happens to follow it. */
+#define BYTE_VIEW_CB_SLOTS (1 + 3)
+typedef JSValue ByteViewCb[BYTE_VIEW_CB_SLOTS];
+
+/* ! Construct(ctor, « buffer, byteOffset, length ») for the constructors §4.9.5 names — AS A REQUEST, because
+   one of those constructors cannot be reached any other way. The typed array constructors are plain C bodies
+   and JS_NewTypedArray IS the engine's one implementation of them, so `view_type >= 0` answers on the spot.
+   %DataView% is a STEP MACHINE (JS_CFUNC_step_ctor / STEPDEF_DATAVIEW_CTOR), so there is no C entry to it that
+   is not a second implementation of a constructor — and js_call_c_function DFAILs on a step callee precisely
+   so that nobody writes one. `view_type < 0` therefore CONSTRUCTS it, from a controller that is already a
+   machine and can hold the suspension.
+   The constructor is the REALM's intrinsic, read through JS_GetClassCtor rather than off
+   `DataView.prototype.constructor` — that property is the page's to overwrite, and the standard's `!` names
+   the intrinsic. Per realm, because a C member runs in the realm that defined it.
+   `phase` and `cb` belong to the CALLING machine; `cb` is a ByteViewCb passed through STEP_CB so its capacity
+   travels with it. Returns JS_STEP_CONSTRUCT (return it) or 0 with *pout set — which may be JS_EXCEPTION, the
+   encoding both a failed JS_NewTypedArray and an abrupt construct request use. */
+static int byte_view_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, int view_type,
+                         JSValueConst buffer, double offset, double len, JSValue in,
+                         JSValue *pout, JSValue **out_cb, int *out_argc)
 {
     JSValueConst argv[3];
-    JSValue o, l, r;
+    JSValue o, l, ctor;
+    int r;
 
-    if (view_type < 0)
-        DFAIL("a BYOB pull-into over a DataView reached its view construction. %DataView% is a STEP MACHINE, "
-              "and the fix is to reach it as one — a construct REQUEST from this controller, which is already a "
-              "machine and can park on it — not a C entry that reproduces the machine's tail. A C entry was "
-              "added here and removed: it is a second implementation of a constructor, it drifts from the one "
-              "the page calls the moment either changes, and 'the page's code does not run on this path' is an "
-              "argument for writing one every time. Route this arm through step_construct_run over the realm's "
-              "%DataView% instead");
+    /* ASKED ON BOTH LEGS, because the resume leg forwards the same capacity and a caller that got the first
+       one right by accident must not get the second one wrong in silence. */
+    DCHECK(cb_cap >= BYTE_VIEW_CB_SLOTS,
+           "a view construction was handed a buffer narrower than « buffer, byteOffset, length » — declare it "
+           "ByteViewCb rather than counting the slots");
+
+    /* THE RESUME LEG READS NONE OF THE OPERANDS: `cb` is what carried them across the suspension, so a caller
+       resuming this hands over only which arm it is. */
+    if (*phase != 0) {
+        DCHECK(view_type < 0,
+               "a typed-array view construction resumed — only the %DataView% arm has a request to park on");
+        r = step_construct_run(ctx, phase, cb, cb_cap, JS_UNDEFINED, 3, NULL, in, pout, out_cb, out_argc);
+        DCHECK(r == 0, "a %DataView% construct request resumed into something other than its answer");
+        return r;
+    }
+    if (view_type >= 0) {
+        JS_FreeValue(ctx, in);
+        o = JS_NewFloat64(ctx, offset);
+        l = JS_NewFloat64(ctx, len);
+        argv[0] = buffer;
+        argv[1] = o;
+        argv[2] = l;
+        *pout = JS_NewTypedArray(ctx, 3, argv, (JSTypedArrayEnum)view_type);
+        JS_FreeValue(ctx, o);
+        JS_FreeValue(ctx, l);
+        return 0;
+    }
+    ctor = JS_GetClassCtor(ctx, JS_CLASS_DATAVIEW);
     o = JS_NewFloat64(ctx, offset);
     l = JS_NewFloat64(ctx, len);
     argv[0] = buffer;
     argv[1] = o;
     argv[2] = l;
-    r = JS_NewTypedArray(ctx, 3, argv, (JSTypedArrayEnum)view_type);
+    /* step_construct_run DUPS every operand into the request buffer, which is what holds them across the
+       suspension — so this realm's %DataView% and the two numbers are released here and the parked construct
+       still owns one reference to each. */
+    r = step_construct_run(ctx, phase, cb, cb_cap, ctor, 3, argv, in, pout, out_cb, out_argc);
+    JS_FreeValue(ctx, ctor);
     JS_FreeValue(ctx, o);
     JS_FreeValue(ctx, l);
+    DCHECK(r == JS_STEP_CONSTRUCT, "the %DataView% construct request answered without parking");
     return r;
+}
+
+/* THE SAME CONSTRUCTION AT A SITE THAT CANNOT PARK. §4.9.5 names %Uint8Array% outright in four places — the
+   BYOB request's view, FillReadRequestFromQueue's chunk, an enqueue answering a default reader, and the
+   auto-allocated descriptor — and that arm answers on the spot. This is not a second implementation: it is the
+   one above with the answer taken immediately, and the DCHECK is what keeps that true, so a site that starts
+   passing a descriptor's own view type through here crashes rather than reaching a request nobody can answer. */
+static JSValue byte_uint8_view(JSContext *ctx, JSValueConst buffer, double offset, double len)
+{
+    uint8_t phase = 0;
+    ByteViewCb cb;
+    JSValue out = JS_UNDEFINED, *ocb = NULL;
+    int oargc = 0, i, r;
+
+    STEP_CB_FOREACH(cb, i) cb[i] = JS_UNDEFINED;
+    r = byte_view_run(ctx, &phase, STEP_CB(cb), (int)JS_TYPED_ARRAY_UINT8, buffer, offset, len,
+                      JS_UNDEFINED, &out, &ocb, &oargc);
+    DCHECK(r == 0, "a %Uint8Array% view construction parked — only the %DataView% arm has a request to park on");
+    return out;
 }
 
 /* WHAT A VIEW IS OVER — [[ViewedArrayBuffer]], [[ByteOffset]], [[ByteLength]], and the element size and
@@ -498,24 +562,61 @@ static JSValue byte_process_pending(JSContext *ctx, ByteCtrlData *c)
     return filled;
 }
 
-/* §4.9.5's ReadableByteStreamControllerConvertPullIntoDescriptor: the descriptor's buffer is TRANSFERRED and
-   the answer is a view of the descriptor's own type over the bytes that were written into it. */
-static JSValue byte_convert_pull_into(JSContext *ctx, JSValueConst dsc)
+/* §4.9.5's ReadableByteStreamControllerConvertPullIntoDescriptor, AS A REQUEST: the descriptor's buffer is
+   TRANSFERRED and the answer is a view of the descriptor's OWN type over the bytes written into it — and a
+   descriptor made for a DataView names %DataView%, so step 6's Construct is the request byte_view_run makes.
+   The phase byte is SHARED with that construct and is why this is one function rather than a transfer followed
+   by a view: a resume must not detach the buffer a second time. It is the CALLER's byte, and it must be the
+   caller's OWN — a machine that handed this the phase it also parks its result-delivery call on would come
+   back at phase 1 and skip its own build block. */
+static int byte_convert_pull_into_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap,
+                                      JSValueConst dsc, JSValue in, JSValue *pout,
+                                      JSValue **out_cb, int *out_argc)
 {
-    double filled = rec_num(ctx, dsc, D_FILLED);
-    double elem   = rec_num(ctx, dsc, D_ELEM);
-    JSValue buf   = rec_obj(ctx, dsc, Q_BUFFER);
-    JSValue nb, view;
+    int vt = (int)rec_num(ctx, dsc, D_VIEW);
+    double filled, elem;
+    JSValue buf, nb;
+    int r;
 
+    if (*phase != 0)
+        return byte_view_run(ctx, phase, cb, cb_cap, vt, JS_UNDEFINED, 0, 0, in, pout, out_cb, out_argc);
+
+    filled = rec_num(ctx, dsc, D_FILLED);
+    elem   = rec_num(ctx, dsc, D_ELEM);
+    buf    = rec_obj(ctx, dsc, Q_BUFFER);
     DCHECK(filled <= rec_num(ctx, dsc, Q_LENGTH), "a pull-into was filled past the room it declared");
     DCHECK(fmod(filled, elem) == 0, "a pull-into was converted at a fill that is not a whole number of elements");
     nb = byte_transfer(ctx, buf);
     JS_FreeValue(ctx, buf);
-    if (JS_IsException(nb)) return nb;
+    if (JS_IsException(nb)) {
+        JS_FreeValue(ctx, in);
+        *pout = JS_EXCEPTION;
+        return 0;
+    }
     JS_SetPropertyStr(ctx, dsc, Q_BUFFER, JS_DupValue(ctx, nb));
-    view = byte_view(ctx, (int)rec_num(ctx, dsc, D_VIEW), nb, rec_num(ctx, dsc, Q_OFFSET), filled / elem);
+    r = byte_view_run(ctx, phase, cb, cb_cap, vt, nb, rec_num(ctx, dsc, Q_OFFSET), filled / elem, in, pout,
+                      out_cb, out_argc);
     JS_FreeValue(ctx, nb);
-    return view;
+    return r;
+}
+
+/* §4.9.5's ReadableByteStreamControllerPullInto, closed branch: "! Construct(ctor, « pullIntoDescriptor's
+   buffer, pullIntoDescriptor's byte offset, 0 »)" — the EMPTY view whose whole job is to hand the caller its
+   backing memory back, and which names the SAME constructor, so a BYOB read over a DataView parks here too. */
+static int byte_empty_view_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, JSValueConst dsc,
+                               JSValue in, JSValue *pout, JSValue **out_cb, int *out_argc)
+{
+    int vt = (int)rec_num(ctx, dsc, D_VIEW);
+    JSValue buf;
+    int r;
+
+    if (*phase != 0)
+        return byte_view_run(ctx, phase, cb, cb_cap, vt, JS_UNDEFINED, 0, 0, in, pout, out_cb, out_argc);
+    buf = rec_obj(ctx, dsc, Q_BUFFER);
+    r = byte_view_run(ctx, phase, cb, cb_cap, vt, buf, rec_num(ctx, dsc, Q_OFFSET), 0, in, pout,
+                      out_cb, out_argc);
+    JS_FreeValue(ctx, buf);
+    return r;
 }
 
 /* §4.9.5's ReadableByteStreamControllerGetBYOBRequest. */
@@ -528,9 +629,9 @@ static JSValue byte_get_byob_request(JSContext *ctx, ByteCtrlData *c, JSValueCon
     if (byte_pending_n(ctx, c) == 0) return JS_NULL;
     dsc = byte_first_pending(ctx, c);
     buf = rec_obj(ctx, dsc, Q_BUFFER);
-    view = byte_view(ctx, (int)JS_TYPED_ARRAY_UINT8, buf,
-                     rec_num(ctx, dsc, Q_OFFSET) + rec_num(ctx, dsc, D_FILLED),
-                     rec_num(ctx, dsc, Q_LENGTH) - rec_num(ctx, dsc, D_FILLED));
+    view = byte_uint8_view(ctx, buf,
+                           rec_num(ctx, dsc, Q_OFFSET) + rec_num(ctx, dsc, D_FILLED),
+                           rec_num(ctx, dsc, Q_LENGTH) - rec_num(ctx, dsc, D_FILLED));
     JS_FreeValue(ctx, buf);
     JS_FreeValue(ctx, dsc);
     if (JS_IsException(view)) return view;
@@ -739,28 +840,54 @@ typedef struct {
     JSValue filled;   /* an Array of pull-into descriptors */
     JSValue func;     /* the resolving function this commit is calling */
     JSValue value;    /* what it is being called with */
+    /* THE DESCRIPTOR THIS ITERATION IS CONVERTING, and the state that conversion parks on. Step 5's Convert
+       constructs the descriptor's own view type, and a BYOB read over a DataView makes that a request — so the
+       descriptor has to outlive the suspension, and the phase byte has to be this loop's OWN. Sharing
+       StreamWork's would come back at phase 1 and skip the block that takes the next descriptor. */
+    JSValue dsc;
+    ByteViewCb view_cb;
     uint32_t fi;      /* how many have been committed */
+    uint8_t view_phase;
+    /* Step 3-4's `done`, DECIDED BEFORE THE CONVERT, which is where the standard decides it. It was read off
+       the stream after the convert while the convert was a C call and could not be observed; the moment that
+       became a suspension point, a read after it would be reporting the state the stream is in when the
+       %DataView% construct finishes rather than the one the commit began in. */
+    uint8_t done;
 } ByteCommit;
 
 static void byte_commit_start(ByteCommit *cm)
 {
-    cm->filled = cm->func = cm->value = JS_UNDEFINED;
+    int i;
+    cm->filled = cm->func = cm->value = cm->dsc = JS_UNDEFINED;
+    STEP_CB_FOREACH(cm->view_cb, i) cm->view_cb[i] = JS_UNDEFINED;
     cm->fi = 0;
+    cm->view_phase = 0;
+    cm->done = 0;
 }
 
 static void byte_commit_visit(JSContext *ctx, ByteCommit *cm, JSStepVisit *v)
 {
+    int i;
     v->val(ctx, &cm->filled);
     v->val(ctx, &cm->func);
     v->val(ctx, &cm->value);
+    v->val(ctx, &cm->dsc);
+    STEP_CB_FOREACH(cm->view_cb, i) v->val(ctx, &cm->view_cb[i]);
 }
 
 static void byte_commit_release(JSContext *ctx, ByteCommit *cm)
 {
+    int i;
     JS_FreeValue(ctx, cm->filled);
     JS_FreeValue(ctx, cm->func);
     JS_FreeValue(ctx, cm->value);
-    cm->filled = cm->func = cm->value = JS_UNDEFINED;
+    JS_FreeValue(ctx, cm->dsc);
+    cm->filled = cm->func = cm->value = cm->dsc = JS_UNDEFINED;
+    STEP_CB_FOREACH(cm->view_cb, i) {
+        JS_FreeValue(ctx, cm->view_cb[i]);
+        cm->view_cb[i] = JS_UNDEFINED;
+    }
+    cm->view_phase = 0;
 }
 
 static int byte_commit_run(JSContext *ctx, StreamWork *w, ByteCommit *cm, StreamData *d,
@@ -771,26 +898,42 @@ static int byte_commit_run(JSContext *ctx, StreamWork *w, ByteCommit *cm, Stream
         JSValue out;
         int r;
 
+        /* w->phase != 0 means the ANSWER is parked mid-call and the descriptor is long done with; otherwise
+           this iteration is either starting (view_phase 0, no descriptor held) or resuming its convert. */
         if (w->phase == 0) {
-            JSValue dsc, view;
+            JSValue view = JS_UNDEFINED;
 
-            if (JS_IsUndefined(cm->filled) || cm->fi >= arr_len(ctx, cm->filled)) {
-                JS_FreeValue(ctx, in);
-                return 0;
+            if (cm->view_phase == 0) {
+                DCHECK(JS_IsUndefined(cm->dsc), "a commit took a second pull-into while it still held one");
+                if (JS_IsUndefined(cm->filled) || cm->fi >= arr_len(ctx, cm->filled)) {
+                    JS_FreeValue(ctx, in);
+                    return 0;
+                }
+                cm->dsc = JS_GetPropertyUint32(ctx, cm->filled, cm->fi++);
+                DCHECK(d->state != RS_ERRORED, "a pull-into was committed into an errored stream");   /* step 1 */
+                DCHECK((int)rec_num(ctx, cm->dsc, D_READER) != RT_NONE,                               /* step 2 */
+                       "a pull-into whose reader was released reached the commit");
+                cm->done = d->state == RS_CLOSED;                                                 /* steps 3-4 */
+                DCHECK(!cm->done ||
+                           fmod(rec_num(ctx, cm->dsc, D_FILLED), rec_num(ctx, cm->dsc, D_ELEM)) == 0,
+                       "a closed byte stream committed a pull-into at a fill that is not a whole number of "
+                       "elements");
             }
-            dsc = JS_GetPropertyUint32(ctx, cm->filled, cm->fi++);
-            DCHECK(d->state != RS_ERRORED, "a pull-into was committed into an errored stream");
-            DCHECK((int)rec_num(ctx, dsc, D_READER) != RT_NONE,
-                   "a pull-into whose reader was released reached the commit");
-            view = byte_convert_pull_into(ctx, dsc);
-            JS_FreeValue(ctx, dsc);
-            if (JS_IsException(view)) { JS_FreeValue(ctx, in); return -1; }
+            /* STEP 5 — and the one suspension point, because a descriptor made for a DataView names a step
+               machine as its view constructor. */
+            r = byte_convert_pull_into_run(ctx, &cm->view_phase, STEP_CB(cm->view_cb), cm->dsc, in, &view,
+                                           out_cb, out_argc);
+            if (r > 0) return r;
+            in = JS_UNDEFINED;
+            JS_FreeValue(ctx, cm->dsc);
+            cm->dsc = JS_UNDEFINED;
+            if (JS_IsException(view)) return -1;
             JS_FreeValue(ctx, cm->func);
-            cm->func = rs_take_read(ctx, d, 0);
+            cm->func = rs_take_read(ctx, d, 0);                                                   /* steps 6-7 */
             DCHECK(!JS_IsUndefined(cm->func), "a filled pull-into had no parked request to answer");
             JS_FreeValue(ctx, cm->value);
-            cm->value = rs_read_result(ctx, view, d->state == RS_CLOSED);
-            if (JS_IsException(cm->value)) { JS_FreeValue(ctx, in); return -1; }
+            cm->value = rs_read_result(ctx, view, cm->done);
+            if (JS_IsException(cm->value)) { cm->value = JS_UNDEFINED; return -1; }
         }
         arg = cm->value;
         r = step_call_run(ctx, &w->phase, STEP_CB(w->cb), cm->func, JS_UNDEFINED, 1, &arg, in, &out,
@@ -839,7 +982,7 @@ JSValue readable_byte_take_chunk(JSContext *ctx, JSValueConst ctrl)
     JS_FreeValue(ctx, e);
     c->queue_total -= len;
     if (c->queue_total < 0) c->queue_total = 0;
-    view = byte_view(ctx, (int)JS_TYPED_ARRAY_UINT8, buf, off, len);
+    view = byte_uint8_view(ctx, buf, off, len);
     JS_FreeValue(ctx, buf);
     return view;
 }
@@ -1243,7 +1386,7 @@ stages:
                 JS_FreeValue(ctx, first);
                 JS_FreeValue(ctx, byte_shift_pending(ctx, c));
             }
-            view = byte_view(ctx, (int)JS_TYPED_ARRAY_UINT8, s->chunk_buf, s->chunk_off, s->chunk_len);
+            view = byte_uint8_view(ctx, s->chunk_buf, s->chunk_off, s->chunk_len);
             JS_FreeValue(ctx, s->chunk_buf);
             s->chunk_buf = JS_UNDEFINED;
             if (JS_IsException(view)) return JS_STEP_ABRUPT;
@@ -1675,6 +1818,10 @@ static const JSTrampStepDef js_byobreq_defs[2] = { BQ_DEF(BQ_RESPOND), BQ_DEF(BQ
     X(BR_MIN, "Web IDL §3.2.18 (ReadableStreamBYOBReaderReadOptions[\"min\"] — the [[Get]] is the page's code)") \
     X(BR_MINNUM, "Web IDL §3.2.9 ([EnforceRange] unsigned long long min — ToNumber is the page's code)") \
     X(BR_INTO, "Streams §4.5 read() steps 1-11 and §4.9.5's ReadableByteStreamControllerPullInto") \
+    X(BR_EMPTYVIEW, "Streams §4.9.5 ReadableByteStreamControllerPullInto's closed branch (constructing the " \
+                    "EMPTY view that gives the caller its memory back — %DataView% is a step machine)") \
+    X(BR_QUEUEVIEW, "Streams §4.9.5 ReadableByteStreamControllerConvertPullIntoDescriptor, for a pull-into the " \
+                    "QUEUE filled outright (the same construct, over the bytes that were written)") \
     X(BR_DRAIN, "Streams §4.9.5 ReadableByteStreamControllerHandleQueueDrain / ReadableByteStreamControllerError " \
                 "(what the pull-into's outcome does to the stream before the promise is settled)") \
     X(BR_SETTLE, "Streams §4.5 read()'s read-into request steps (its chunk, close or error steps — settling " \
@@ -1689,30 +1836,48 @@ typedef struct {
     JSValue settle;    /* its resolve or reject function, or JS_UNDEFINED when the request PARKED */
     JSValue result;    /* what to settle it with */
     JSValue stream;
+    /* THE PULL-INTO DESCRIPTOR A VIEW IS BEING BUILT FROM, and the state that construction parks on. §4.9.5's
+       PullInto reaches its view constructor twice — the closed branch's EMPTY view and the queue-filled
+       branch's Convert — and both name the descriptor's own type, so a read whose view is a DataView
+       constructs a step machine and suspends. The two branches are mutually exclusive within one read, which
+       is why they share one phase byte and one buffer rather than carrying two of each. */
+    JSValue dsc;
+    ByteViewCb view_cb;
     double  min;
+    uint8_t view_phase;
 } JSByobReadState;
 
 static void js_byob_read_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSByobReadState *s = st;
+    int i;
     stream_work_visit(ctx, &s->w, v);
     v->val(ctx, &s->promise);
     v->val(ctx, &s->settle);
     v->val(ctx, &s->result);
     v->val(ctx, &s->stream);
+    v->val(ctx, &s->dsc);
+    STEP_CB_FOREACH(s->view_cb, i) v->val(ctx, &s->view_cb[i]);
 }
 
 static JSValue js_byob_read_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSByobReadState *s = st;
     JSValue r = take_result ? s->promise : JS_UNDEFINED;
+    int i;
     if (take_result) s->promise = JS_UNDEFINED;
     stream_work_release(ctx, &s->w);
     JS_FreeValue(ctx, s->promise);
     JS_FreeValue(ctx, s->settle);
     JS_FreeValue(ctx, s->result);
     JS_FreeValue(ctx, s->stream);
-    s->promise = s->settle = s->result = s->stream = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->dsc);
+    s->promise = s->settle = s->result = s->stream = s->dsc = JS_UNDEFINED;
+    STEP_CB_FOREACH(s->view_cb, i) {
+        JS_FreeValue(ctx, s->view_cb[i]);
+        s->view_cb[i] = JS_UNDEFINED;
+    }
+    s->view_phase = 0;
     return r;
 }
 
@@ -1745,13 +1910,17 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
     if (s->hdr.stage == BR_START) {
         ReaderData *rd = rs_reader_data(s->hdr.this_val);
         double off = 0, len = 0, elem = 1;
-        int vt = 0;
+        int vt = 0, i;
         JSValue buf;
 
         stream_work_start(&s->w);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        s->promise = s->settle = s->result = s->stream = JS_UNDEFINED;
+        /* EVERY OWNED FIELD IS PLACED BEFORE THE FIRST OPERATION THAT CAN THROW, because the failure path tears
+           this state down through fini, which frees exactly what the state holds and nothing else. */
+        s->promise = s->settle = s->result = s->stream = s->dsc = JS_UNDEFINED;
+        STEP_CB_FOREACH(s->view_cb, i) s->view_cb[i] = JS_UNDEFINED;
+        s->view_phase = 0;
         s->min = 1;
         if (!rd || !rd->byob) {
             JS_ThrowTypeError(ctx, "not a ReadableStreamBYOBReader");
@@ -1902,21 +2071,14 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
             goto into_done;
         }
         if (d->state == RS_CLOSED) {
-            /* The close steps take a view so the BACKING MEMORY goes back to the caller. */
-            JSValue empty, dbuf = rec_obj(ctx, dsc, Q_BUFFER);
-            empty = byte_view(ctx, vt, dbuf, off, 0);
-            JS_FreeValue(ctx, dbuf);
-            JS_FreeValue(ctx, dsc);
-            if (JS_IsException(empty)) {
-                JS_FreeValue(ctx, funcs[0]);
-                JS_FreeValue(ctx, funcs[1]);
-                return JS_STEP_ABRUPT;
-            }
-            s->result = rs_read_result(ctx, empty, true);
+            /* The close steps take a view so the BACKING MEMORY goes back to the caller — and the view is of
+               the descriptor's own type, so this construction is a REQUEST and its stage is its own. The
+               descriptor and the capability are handed to the state BEFORE the park, because from here on this
+               machine's teardown is what frees them. */
+            s->dsc = dsc;
             s->settle = funcs[0];
             JS_FreeValue(ctx, funcs[1]);
-            if (JS_IsException(s->result)) return JS_STEP_ABRUPT;
-            s->hdr.stage = BR_SETTLE;
+            s->hdr.stage = BR_EMPTYVIEW;
             goto into_done;
         }
         if (c->queue_total > 0) {
@@ -1928,25 +2090,10 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                 return JS_STEP_ABRUPT;
             }
             if (ready) {
-                JSValue filled_view = byte_convert_pull_into(ctx, dsc);
-                JS_FreeValue(ctx, dsc);
-                if (JS_IsException(filled_view)) {
-                    JS_FreeValue(ctx, funcs[0]);
-                    JS_FreeValue(ctx, funcs[1]);
-                    return JS_STEP_ABRUPT;
-                }
-                s->result = rs_read_result(ctx, filled_view, false);
+                s->dsc = dsc;
                 s->settle = funcs[0];
                 JS_FreeValue(ctx, funcs[1]);
-                if (JS_IsException(s->result)) return JS_STEP_ABRUPT;
-                /* HandleQueueDrain, BEFORE the chunk steps. */
-                if (readable_byte_drained(d->controller)) {
-                    readable_byte_clear_algorithms(ctx, d->controller);
-                    s->w.settle = S_CLOSE_SET;
-                } else {
-                    s->w.pull = P_TEST;
-                }
-                s->hdr.stage = BR_DRAIN;
+                s->hdr.stage = BR_QUEUEVIEW;
                 goto into_done;
             }
             if (c->close_requested) {
@@ -1969,6 +2116,45 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         s->w.pull = P_TEST;
         s->hdr.stage = BR_DRAIN;
     into_done:;
+    }
+
+    if (s->hdr.stage == BR_EMPTYVIEW) {
+        JSValue empty = JS_UNDEFINED;
+
+        r = byte_empty_view_run(ctx, &s->view_phase, STEP_CB(s->view_cb), s->dsc, cb_result, &empty,
+                                out_cb, out_argc);
+        if (r > 0) return r;
+        cb_result = JS_UNDEFINED;
+        JS_FreeValue(ctx, s->dsc);
+        s->dsc = JS_UNDEFINED;
+        if (JS_IsException(empty)) return JS_STEP_ABRUPT;
+        s->result = rs_read_result(ctx, empty, true);
+        if (JS_IsException(s->result)) { s->result = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        s->hdr.stage = BR_SETTLE;
+    }
+
+    if (s->hdr.stage == BR_QUEUEVIEW) {
+        StreamData *qd = rs_stream_data(s->stream);
+        JSValue filled_view = JS_UNDEFINED;
+
+        DCHECK(qd != NULL, "the BYOB read machine's stream stopped being a ReadableStream");
+        r = byte_convert_pull_into_run(ctx, &s->view_phase, STEP_CB(s->view_cb), s->dsc, cb_result,
+                                       &filled_view, out_cb, out_argc);
+        if (r > 0) return r;
+        cb_result = JS_UNDEFINED;
+        JS_FreeValue(ctx, s->dsc);
+        s->dsc = JS_UNDEFINED;
+        if (JS_IsException(filled_view)) return JS_STEP_ABRUPT;
+        s->result = rs_read_result(ctx, filled_view, false);
+        if (JS_IsException(s->result)) { s->result = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        /* HandleQueueDrain, BEFORE the chunk steps. */
+        if (readable_byte_drained(qd->controller)) {
+            readable_byte_clear_algorithms(ctx, qd->controller);
+            s->w.settle = S_CLOSE_SET;
+        } else {
+            s->w.pull = P_TEST;
+        }
+        s->hdr.stage = BR_DRAIN;
     }
 
     if (s->hdr.stage == BR_DRAIN) {
