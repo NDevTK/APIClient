@@ -500,14 +500,10 @@ static void node_set_node_document(lxb_dom_node_t *n, lxb_dom_document_t *doc)
            "DOM §4.5 adopt step 3.1 tried to set a DOCUMENT's node document — a document IS its own node "
            "document, and `adoptNode` throws NotSupportedError rather than reaching one");
     if (n->owner_document == doc) return;
-    DCHECK(!g_dom_capture,
-           "DOM §4.5 adopt changed a node's NODE DOCUMENT while a flow's DOM writes are being captured, and "
-           "the per-flow delta has no entry kind for it — a sibling flow would read this node in the document "
-           "this flow moved it to. engine/solver/dom_cow.c must add "
-           "`void dom_cow_set_node_document(lxb_dom_node_t *node, lxb_dom_document_t *doc)`, a capture-then-"
-           "write chokepoint whose delta entry restores the old document on unapply, beside the tree, "
-           "attribute and character-data entry kinds it already has");
-    n->owner_document = doc;
+    /* THROUGH THE CHOKEPOINT, because a node document is shared baseline state exactly like a parent link: the
+       delta now has an entry kind for it, so a flow that adopts a subtree moves those nodes in ITS timeline
+       and a sibling arm that never adopted still reads the document it knew. */
+    dom_cow_set_node_document(n, doc);
 }
 
 static void node_adopt_push(NodeAdoptStack *s, lxb_dom_node_t *root, lxb_dom_document_t *doc)

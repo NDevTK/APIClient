@@ -142,6 +142,13 @@ void dom_cow_move_private(lxb_dom_node_t *from_root, lxb_dom_node_t *to_root,
    `_insert_before_` takes a child that is in no tree; `_move_before_` takes one already in this same tree,
    which is what step 1.5.2.5 actually has. `ref` must be a node WITH a parent — there is no position before a
    private tree's root — and both assert it. */
+/* DOM §4.5 ADOPT's write of a node's NODE DOCUMENT — a chokepoint entry, because a node document is shared
+   baseline state exactly like a parent link. It was the one piece of tree state the delta had no kind for, so a
+   flow that adopted a subtree moved those nodes into another document for every flow; a sibling arm that never
+   adopted read the adopting arm's `ownerDocument`, and everything derived from it followed the wrong document.
+   Moves a pointer and destroys nothing — kind 5 is the entry that OWNS a document. */
+void dom_cow_set_node_document(lxb_dom_node_t *node, lxb_dom_document_t *doc);
+
 void dom_cow_insert_before_private(lxb_dom_node_t *root, lxb_dom_node_t *ref, lxb_dom_node_t *child);
 void dom_cow_move_before_private(lxb_dom_node_t *root, lxb_dom_node_t *ref, lxb_dom_node_t *child);
 /* DESTROY one node OF a private tree, in place. §13.2.6.4.4's `<template>` is the caller: the standard never
