@@ -23,6 +23,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/events/before_unload_event.h"
 #include "core/events/create_event.h"
 #include "core/events/event.h"
 #include "core/events/message_event.h"
@@ -49,8 +50,23 @@ static JSValue make_message_event(JSContext *ctx)
     return message_event_new(ctx, "", JS_NULL, "", JS_NULL, JS_UNDEFINED);
 }
 
+/* HTML §7.2.7.7 declares NO constructor for BeforeUnloadEvent, so this row is the ONLY way a page makes one —
+   which is what "There are no BeforeUnloadEvent-specific initialization methods" leaves behind, and why the
+   first row of §4.5's table names an interface whose IDL a page cannot otherwise reach.
+   §4.5 steps 6-8 then run over it, and this interface's own state is untouched by them: `returnValue` stays the
+   empty string §7.2.7.7 says creation gives it. */
+static JSValue make_before_unload_event(JSContext *ctx)
+{
+    return before_unload_event_new(ctx);
+}
+
+/* THERE IS NO PageTransitionEvent ROW, and that is §4.5's table rather than a gap here: the table names
+   BeforeUnloadEvent, CompositionEvent, CustomEvent, DeviceMotionEvent, DeviceOrientationEvent, DragEvent,
+   Event, FocusEvent, HashChangeEvent, KeyboardEvent, MessageEvent, MouseEvent, StorageEvent, TextEvent,
+   TouchEvent and UIEvent — and not that one. `document.createEvent('PageTransitionEvent')` is step 3's
+   NotSupportedError in every browser, and adding a row would make this engine answer where the spec throws. */
 static const CreateEventRow CREATE_EVENT[] = {
-    { "beforeunloadevent",      "BeforeUnloadEvent",      NULL },
+    { "beforeunloadevent",      "BeforeUnloadEvent",      make_before_unload_event },
     { "compositionevent",       "CompositionEvent",       NULL },
     { "customevent",            "CustomEvent",            NULL },
     { "devicemotionevent",      "DeviceMotionEvent",      NULL },
