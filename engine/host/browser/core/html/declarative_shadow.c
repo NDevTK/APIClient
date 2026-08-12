@@ -268,6 +268,13 @@ void declarative_shadow_parsed(JSContext *ctx, lxb_dom_node_t *tree, const lxb_d
                                     registry);
             JS_FreeValue(ctx, registry);
             JS_FreeValue(ctx, host_wrap);
+            /* "If templateStartTag has a shadowrootcustomelementregistry attribute, then set shadow's keep
+               custom element registry null to true." It is the SECOND half of that attribute and neither half
+               works alone: the null registry above says what the root resolves in NOW, and this says the first
+               adoption must not quietly replace it with the new document's. */
+            if (!JS_IsException(sr) && JS_IsObject(sr)
+                && bool_attr(lxb_dom_interface_element(n), "shadowrootcustomelementregistry"))
+                shadow_root_set_keep_registry_null(ctx, sr);
             if (JS_IsException(sr)) {
                 /* "If an exception is thrown, then catch it and: insert an element at the adjusted insertion
                    location with template; the user agent MAY report an error to the developer console;

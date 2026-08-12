@@ -1788,18 +1788,12 @@ void custom_elements_node_adopted(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_doc
            CustomElementRegistry object, it intentionally cannot be changed any further": the sentence is about
            the association a scoped registry makes, and `adopt` re-deriving a global one is stated by DOM
            itself. */
-        /* §4.8's `keep custom element registry null` is the second half of the first condition, and its ONE
-           writer is HTML §13.2.6.4.4's `shadowrootcustomelementregistry` branch. core/dom/shadow_root.c has no
-           such field and core/html/declarative_shadow.c does not read that attribute, so there is nothing here
-           to ask — and a NULL registry is the only state in which the answer differs, which is where this
-           crashes rather than guessing. What runs past it is the field's INITIAL value, false. */
-        DCHECK(!JS_IsNull(reg),
-               "DOM §4.5 adopt step 3.2 reached a shadow root whose custom element registry is NULL, where "
-               "§4.8's `keep custom element registry null` decides whether the new document's global registry "
-               "is adopted: core/dom/shadow_root.h must expose it (a SHADOW_ROOT_KEEP_REGISTRY_NULL entry on "
-               "shadow_root_flag, over a field of §4.8's record) and core/html/declarative_shadow.c must set "
-               "it from HTML §13.2.6.4.4's `shadowrootcustomelementregistry` attribute");
-        if (JS_IsNull(reg) || ce_registry_is_global(ctx, reg)) {
+        /* §4.8's `keep custom element registry null` is the second half of the first condition, and it is a
+           real read: its one writer is HTML §13.2.6.4.4's `shadowrootcustomelementregistry` branch, and a root
+           that carries it resolves in NOTHING until something associates a registry — which this step would
+           otherwise undo on the very first adoption by handing it the new document's. */
+        if ((JS_IsNull(reg) && !shadow_root_keep_registry_null(ctx, wrap))
+            || (!JS_IsNull(reg) && ce_registry_is_global(ctx, reg))) {
             JSValue want = ce_registry_effective_global(ctx, ce_registry_of_document(ctx, document));
 
             ce_node_set_registry(ctx, wrap, want);

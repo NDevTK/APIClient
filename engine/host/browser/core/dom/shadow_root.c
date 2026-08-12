@@ -224,11 +224,16 @@ lxb_dom_node_t *shadow_root_of_element(JSContext *ctx, const lxb_dom_element_t *
 
 /* WHICH of §4.8's fields — one enum, used as the getter magic and as the record's key set, so a field cannot be
    read under one name and written under another. */
+/* SR_KEEP_REGISTRY_NULL is §4.8's `keep custom element registry null`, "initially false", and DOM states the
+   one thing that makes it worth a field: "this can only ever be true in combination with declarative shadow
+   roots". HTML §13.2.6.4.4 is its only writer — a `<template shadowrootcustomelementregistry>` — and without
+   it that attribute would be undone by the first adoption: §4.5's adopt gives a shadow root with a NULL
+   registry the new document's, unless this says not to. */
 enum { SR_MODE = 0, SR_DELEGATES_FOCUS, SR_SLOT_ASSIGNMENT, SR_CLONABLE, SR_SERIALIZABLE, SR_HOST,
-       SR_AVAILABLE_TO_INTERNALS, SR_DECLARATIVE };
+       SR_AVAILABLE_TO_INTERNALS, SR_DECLARATIVE, SR_KEEP_REGISTRY_NULL };
 static const char *const SR_FIELD[] = {
     "mode", "delegatesFocus", "slotAssignment", "clonable", "serializable", "host",
-    "availableToElementInternals", "declarative"
+    "availableToElementInternals", "declarative", "keepCustomElementRegistryNull"
 };
 
 static JSValue sr_slots(JSContext *ctx, JSValueConst sr)
@@ -433,6 +438,9 @@ static JSValue sr_attach(JSContext *ctx, JSValueConst el_wrap, const char *mode,
                       JS_NewBool(ctx, state == CE_STATE_PRECUSTOMIZED || state == CE_STATE_CUSTOM));
     JS_SetPropertyStr(ctx, slots, SR_FIELD[SR_SLOT_ASSIGNMENT], JS_NewString(ctx, slot_assignment)); /* 10 */
     JS_SetPropertyStr(ctx, slots, SR_FIELD[SR_DECLARATIVE], JS_FALSE);                               /* 11 */
+    /* §4.8: `keep custom element registry null` is "initially false" — written here rather than left absent,
+       because an absent slot and a false one read the same only until something asks the difference. */
+    JS_SetPropertyStr(ctx, slots, SR_FIELD[SR_KEEP_REGISTRY_NULL], JS_FALSE);
     JS_SetPropertyStr(ctx, slots, SR_FIELD[SR_CLONABLE], JS_NewBool(ctx, clonable));                 /* 12 */
     JS_SetPropertyStr(ctx, slots, SR_FIELD[SR_SERIALIZABLE], JS_NewBool(ctx, serializable));         /* 13 */
     JS_DefinePropertyValue(ctx, wrap, g_atom_slots, slots, SR_SLOT_FLAGS);
@@ -464,7 +472,7 @@ JSValue shadow_root_clone_onto(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_nod
 {
     JSValueConst el_wrap;
     JSValue src, copy_wrap, current, sr, rec, src_reg;
-    bool declarative;
+    bool declarative, keep_null;
 
     DCHECK(g_ready, "§4.4 step 6 ran before shadow_root_init");
     DCHECK(node != NULL && copy != NULL, "§4.4 step 6 was asked about no node");
@@ -504,6 +512,11 @@ JSValue shadow_root_clone_onto(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_nod
        to element internals`, and step 6 does not — the clone's is whatever §4.8 step 9 just computed from the
        COPY's own custom element state, which is the state the standard says it is. */
     declarative = sr_flag(ctx, src, SR_DECLARATIVE);
+    /* STEP 6.7's flag is read HERE, beside step 6.6's, because both are read off the ORIGINAL and the original
+       is released on the next line. It rides with the registry it guards: a declaratively-parsed root that
+       resolves in nothing clones into one that still resolves in nothing, rather than into one the next
+       adoption hands the document's registry. */
+    keep_null = sr_flag(ctx, src, SR_KEEP_REGISTRY_NULL);
     JS_FreeValue(ctx, src);
     JS_FreeValue(ctx, copy_wrap);
     if (JS_IsException(sr))
@@ -511,9 +524,27 @@ JSValue shadow_root_clone_onto(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_nod
     rec = sr_slots(ctx, sr);
     DCHECK(JS_IsObject(rec), "§4.4 step 6.6: the shadow root attach a shadow root just made has no §4.8 record");
     JS_SetPropertyStr(ctx, rec, SR_FIELD[SR_DECLARATIVE], JS_NewBool(ctx, declarative));
+    JS_SetPropertyStr(ctx, rec, SR_FIELD[SR_KEEP_REGISTRY_NULL], JS_NewBool(ctx, keep_null));   /* step 6.7 */
     JS_FreeValue(ctx, rec);
-    /* Step 6.7's `keep custom element registry null` is the same absent field steps 6.2-6.4 are. */
     return sr;
+}
+
+/* §4.8's `keep custom element registry null`. HTML §13.2.6.4.4 is the only writer — a
+   `<template shadowrootcustomelementregistry>` — and DOM §4.5's adopt is the only reader, which is why both
+   halves are exported rather than kept private: without the flag that attribute is undone by the first
+   adoption, since adopt gives a shadow root with a NULL registry the new document's unless this says not to. */
+void shadow_root_set_keep_registry_null(JSContext *ctx, JSValueConst sr_wrap)
+{
+    JSValue rec = sr_slots(ctx, sr_wrap);
+
+    DCHECK(JS_IsObject(rec), "§4.8's keep-custom-element-registry-null was set on something with no §4.8 record");
+    JS_SetPropertyStr(ctx, rec, SR_FIELD[SR_KEEP_REGISTRY_NULL], JS_TRUE);
+    JS_FreeValue(ctx, rec);
+}
+
+bool shadow_root_keep_registry_null(JSContext *ctx, JSValueConst sr_wrap)
+{
+    return sr_flag(ctx, sr_wrap, SR_KEEP_REGISTRY_NULL);
 }
 
 void shadow_root_mark_declarative(JSContext *ctx, JSValueConst sr_wrap)

@@ -105,4 +105,12 @@ lxb_dom_node_t *shadow_root_of_element(JSContext *ctx, const lxb_dom_element_t *
 /* The same association as the WRAPPER §4.8's members hand back. OWNED; JS_NULL when there is none. */
 JSValue shadow_root_of_element_wrap(JSContext *ctx, JSValueConst el_wrap);
 
+/* §4.8's `keep custom element registry null` — "initially false", and DOM notes it "can only ever be true in
+   combination with declarative shadow roots". HTML §13.2.6.4.4 sets it for a
+   `<template shadowrootcustomelementregistry>`; DOM §4.5's adopt reads it, and without it that attribute is
+   undone by the first adoption, since adopt hands a shadow root with a null registry the new document's
+   unless this says otherwise. §4.4's clone step 6.7 carries it to the copy. */
+void shadow_root_set_keep_registry_null(JSContext *ctx, JSValueConst sr_wrap);
+bool shadow_root_keep_registry_null(JSContext *ctx, JSValueConst sr_wrap);
+
 #endif
