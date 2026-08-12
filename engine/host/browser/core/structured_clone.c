@@ -37,7 +37,13 @@
 #include "quickjs.h"
 #include "core/structured_clone.h"
 
-int structured_serialize(JSContext *ctx, JSValueConst v, StructuredData *out)
+/* §2.7.7's `memory` SEEDED WITH THE TRANSFER LIST, and §2.7.8's seeded with [[TransferredValues]] — a pair of
+   hooks on the engine's own writer and reader (JSTransferWriteHook / JSTransferReadHook), which is what makes a
+   transferable REACHED FROM INSIDE the message body serialize as its data holder and deserialize to the MOVED
+   object. Each is a PARAMETER of one serialization, so the two directions of a same-turn delivery never share
+   one map; NULL is an unseeded memory, which is every clone that transfers nothing. */
+static int sc_serialize(JSContext *ctx, JSValueConst v, StructuredData *out,
+                        const JSTransferWriteHook *transfer)
 {
     out->buf = NULL;
     out->len = 0;
@@ -53,7 +59,7 @@ int structured_serialize(JSContext *ctx, JSValueConst v, StructuredData *out)
        §2.7.3's structuredClone(), and the whole of what a same-agent port delivery needs.
        JS_WRITE_OBJ_REFERENCE is `memory`: a value reached twice comes back as the SAME object on the other
        side, and a cycle terminates instead of recursing. Without it `const a = {}; a.self = a` is a hang. */
-    out->buf = JS_WriteObject(ctx, &out->len, v, JS_WRITE_OBJ_REFERENCE);
+    out->buf = JS_WriteObject3(ctx, &out->len, v, JS_WRITE_OBJ_REFERENCE, NULL, transfer);
     if (!out->buf) {
         /* THE ENGINE'S REFUSAL IS THE STANDARD'S, RE-REPORTED. The writer throws its own error for a value it
            cannot encode — a function, a Proxy, a Promise — and every one of those is a value §2.7 refuses with
@@ -66,6 +72,11 @@ int structured_serialize(JSContext *ctx, JSValueConst v, StructuredData *out)
     return 0;
 }
 
+int structured_serialize(JSContext *ctx, JSValueConst v, StructuredData *out)
+{
+    return sc_serialize(ctx, v, out, NULL);
+}
+
 void structured_data_free(JSContext *ctx, StructuredData *d)
 {
     js_free(ctx, d->buf);
@@ -73,11 +84,11 @@ void structured_data_free(JSContext *ctx, StructuredData *d)
     d->len = 0;
 }
 
-JSValue structured_deserialize(JSContext *ctx, const StructuredData *in)
+static JSValue sc_deserialize(JSContext *ctx, const StructuredData *in, const JSTransferReadHook *transfer)
 {
     JSValue out;
     DCHECK(in->buf != NULL, "a serialized record was deserialized after it had been freed");
-    out = JS_ReadObject(ctx, in->buf, in->len, JS_READ_OBJ_REFERENCE);
+    out = JS_ReadObject3(ctx, in->buf, in->len, JS_READ_OBJ_REFERENCE, NULL, transfer);
     if (JS_IsException(out)) {
         /* A GRAPH THE WRITER PRODUCED AND THE READER REFUSED is not a page error — it is these two halves
            disagreeing, which is a should-never-happen and is worth a crash rather than a DOMException that
@@ -86,6 +97,11 @@ JSValue structured_deserialize(JSContext *ctx, const StructuredData *in)
               "disagree about the format, which no page input can cause");
     }
     return out;
+}
+
+JSValue structured_deserialize(JSContext *ctx, const StructuredData *in)
+{
+    return sc_deserialize(ctx, in, NULL);
 }
 
 JSValue structured_clone(JSContext *ctx, JSValueConst v)
@@ -249,6 +265,43 @@ int structured_transfer_list(JSContext *ctx, JSValueConst list, JSValue *out)
     return 0;
 }
 
+/* §2.7.7 STEP 1's `memory`, ANSWERED. The standard's map is keyed by the transferable itself and its value is
+   that transferable's data holder; the holders are appended in list order at step 5, so the INDEX in the list
+   names the holder without the holder having to exist yet — which it does not, because step 3 serializes the
+   body first. Identity is the object pointer, which is what a map keyed by the value means, and is the same
+   comparison step 2's duplicate check already makes. */
+typedef struct { JSValueConst list; uint32_t n; } SCTransferOut;
+
+static int sc_transfer_index(JSContext *ctx, void *opaque, JSValueConst obj)
+{
+    const SCTransferOut *m = opaque;
+    uint32_t i;
+
+    for (i = 0; i < m->n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, m->list, i);
+        bool same;
+        DCHECK(!JS_IsException(e), "reading an entry of the materialized transfer list threw — it is the "
+                                   "engine's own array and has no getters to run");
+        same = JS_VALUE_GET_PTR(e) == JS_VALUE_GET_PTR(obj);
+        JS_FreeValue(ctx, e);
+        if (same) return (int)i;
+    }
+    return -1;
+}
+
+/* §2.7.8's `memory`, ANSWERED: the object the transfer-receiving steps already built for that holder. It is
+   THE SAME object [[TransferredValues]] holds, never a copy — a moved port reached from the message body and
+   the same port in the event's `ports` are one object, and a page compares them. */
+static JSValue sc_transferred_value(JSContext *ctx, void *opaque, uint32_t index)
+{
+    JSValue v = JS_GetPropertyUint32(ctx, *(const JSValue *)opaque, index);
+    DCHECK(JS_IsObject(v), "a transfer reference resolved to something that is not a received object — the "
+                           "writer's index into the transfer list and this list of received values are the "
+                           "ONE numbering §2.7.7 and §2.7.8 build in step order, so a hole here means the two "
+                           "halves stopped agreeing about what that numbering counts");
+    return v;
+}
+
 int structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst transfer,
                                   StructuredWithTransfer *out)
 {
@@ -287,9 +340,15 @@ int structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst t
         JS_FreeValue(ctx, e);
     }
 
-    /* §2.7.7 STEP 3. */
-    if (structured_serialize(ctx, v, &out->data) < 0)
-        return -1;
+    /* §2.7.7 STEP 3, under the seeded `memory` step 1 built: an entry of the list reached from inside `v` is
+       written as its holder's index rather than cloned or refused. Nothing has been transferred yet, so a
+       transferable is still whole here — the ArrayBuffer arm below reads its bytes AFTER this. */
+    {
+        SCTransferOut m = { transfer, n };
+        JSTransferWriteHook hook = { sc_transfer_index, &m };
+        if (sc_serialize(ctx, v, &out->data, &hook) < 0)
+            return -1;
+    }
 
     /* §2.7.7 STEP 5: run each transfer step, in list order, and record the holder with its [[Type]]. Nothing is
        detached until the message itself has serialized, which is what a page retrying after a DataCloneError
@@ -327,9 +386,9 @@ JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTran
     *pvalues = JS_UNDEFINED;
     if (JS_IsException(values)) return JS_EXCEPTION;
     n = structured_transfer_len(ctx, in->holders);
-    /* §2.7.8 STEP 2: the transfer-receiving steps run BEFORE the message is deserialized, because the standard's
-       `memory` is seeded with their results. This engine cannot seed it — see structured_clone.h — but the
-       ORDER is kept, so what a receiving step does to the realm has happened by the time the message arrives. */
+    /* §2.7.8 STEP 2: the transfer-receiving steps run BEFORE the message is deserialized, because `memory` is
+       seeded with their results — so this loop is not merely ordered ahead of the body, it is what the body's
+       transfer references are resolved against. */
     for (i = 0; i < n; i++) {
         JSValue rec = JS_GetPropertyUint32(ctx, in->holders, i), h, nv;
         const StructuredTransferable *t;
@@ -363,7 +422,13 @@ JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTran
         JS_SetPropertyUint32(ctx, values, i, nv);
     }
     *pvalues = values;
-    return structured_deserialize(ctx, &in->data);
+    /* §2.7.8's LAST STEP, under the `memory` the loop above filled: a reference the writer left for a holder
+       resolves to the value that holder produced, so the message body carries the MOVED object and not a copy
+       of it — and reached twice, the one object. */
+    {
+        JSTransferReadHook hook = { sc_transferred_value, n, &values };
+        return sc_deserialize(ctx, &in->data, &hook);
+    }
 }
 
 void structured_with_transfer_free(JSContext *ctx, StructuredWithTransfer *d)
@@ -400,10 +465,10 @@ static JSValue js_structured_clone(JSContext *ctx, JSValueConst this_val, int ar
     /* §2.7.10 step 2, into THIS realm — `this`'s relevant realm is the one the method was reached through. */
     out = structured_deserialize_transfer(ctx, &swt, &values);
     structured_with_transfer_free(ctx, &swt);
-    /* §2.7.10 step 3 returns [[Deserialized]] alone, so [[TransferredValues]] is dropped — which under the
-       standard's seeded `memory` costs nothing, because a transferred object reached from the body IS one of
-       these. Without that seam it is instead an extra received object nobody holds; the page still sees the
-       right bytes, because the body serialized before the transfer steps detached anything. */
+    /* §2.7.10 step 3 returns [[Deserialized]] alone, so [[TransferredValues]] is dropped — and that costs
+       nothing, because `memory` is seeded: a transferred object reached from the body IS one of these and the
+       returned value already holds it. `structuredClone(buf, {transfer: [buf]})` therefore returns the MOVED
+       buffer rather than a copy beside one, which is the whole reason the standard drops this list. */
     JS_FreeValue(ctx, values);
     return out;
 }

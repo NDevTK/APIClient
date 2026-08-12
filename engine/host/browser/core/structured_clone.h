@@ -70,17 +70,19 @@ int structured_transfer_list(JSContext *ctx, JSValueConst list, JSValue *out);
 
 /* §2.7.7's StructuredSerializeWithTransfer and §2.7.8's StructuredDeserializeWithTransfer.
  *
- * ONE THING IS NOT BUILT AND IS NAMED RATHER THAN APPROXIMATED: §2.7.7 seeds `memory` with the transfer list, so
- * a transferable REACHED FROM INSIDE the message body serializes as its dataHolder and deserializes to the
- * MOVED object. quickjs's writer takes no such map, so a PLATFORM-OBJECT transferable inside the body is
- * refused — the right answer for a port that is not in the transfer list (a platform object is not
- * serializable) and the wrong one for a port that is: `port.postMessage({p: other}, [other])` is a
- * DataCloneError instead of a message carrying the moved port. What is missing is exactly a pair of hooks on
- * JS_WriteObject/JS_ReadObject — object → holder index on the way out, index → value on the way in — which is
- * quickjs.c's to grow.
- * A JS-SPEC transferable is NOT affected: an ArrayBuffer inside the body is serialized by the engine's own
- * writer, which round-trips its bytes and its [[ArrayBufferMaxByteLength]], and JS_WRITE_OBJ_REFERENCE already
- * makes two references to it come back as one object. */
+ * `memory` IS SEEDED WITH THE TRANSFER LIST, which is what makes these two more than "serialize, then move the
+ * named objects separately". A transferable REACHED FROM INSIDE the message body is neither cloned nor refused:
+ * §2.7.1's first step finds it in `memory` and writes its dataHolder, and §2.7.2's first step finds that holder
+ * in §2.7.8's `memory` and answers with the object the transfer-receiving steps built — THE SAME object as the
+ * matching entry of [[TransferredValues]], never a copy. So `port.postMessage({p: other}, [other])` delivers a
+ * message whose `p` is the moved port, and `event.ports[0] === event.data.p`.
+ * The seam is a PAIR OF HOOKS passed as parameters of the one serialization — JSTransferWriteHook answering an
+ * index into the transfer list on the way out, JSTransferReadHook resolving that index against
+ * [[TransferredValues]] on the way in — carried by JS_WriteObject3/JS_ReadObject3. A page cannot forge one: the
+ * reference tag is refused outright by a read that was given no hook.
+ * A transferable NOT in the transfer list is still refused, and that is the same rule rather than an exception:
+ * `memory` does not hold it, so it reaches the writer as what it is — a platform object, which §2.7 does not
+ * serialize. */
 typedef struct { StructuredData data; JSValue holders; } StructuredWithTransfer;
 /* `transfer` is the MATERIALIZED list from structured_transfer_list. Returns 0, or -1 with a throw live. */
 int  structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst transfer,
