@@ -774,6 +774,20 @@ static JSValue js_handler_set(JSContext *ctx, JSValueConst this_val, JSValueCons
    handler content attribute demands a TrustedScript, so `el.setAttribute("onclick", s)` throws under
    `require-trusted-types-for 'script'` while `el.setAttribute("title", s)` does not, and a copy of this list
    that fell one name behind would answer that question differently from the property that shares the name. */
+/* EVERY EVENT HANDLER CONTENT ATTRIBUTE NAME, ENUMERATED — §8.1.7.2 defines the set as the names of the event
+   handler IDL attributes, so both this and the predicate below come off the one X-list rather than a second
+   copy that would drift the first time a handler is added.
+   IT IS AN ENUMERATION AND NOT A FILTER, which is the difference HTML §8.6.2's remove-unsafe needs: its step 4
+   APPENDS every one of these to a configuration's removeAttributes list, and a caller that could only ask "is
+   this one" can filter an allow-list it already has but can never build the deny-list the step describes. */
+int event_target_handler_attribute_count(void) { return EH_COUNT; }
+
+const char *event_target_handler_attribute_at(int i)
+{
+    DCHECK(i >= 0 && i < EH_COUNT, "an event handler content attribute was asked for by an out-of-range index");
+    return EH_NAME[i];
+}
+
 bool event_target_is_handler_attribute(const char *name)
 {
     int i;

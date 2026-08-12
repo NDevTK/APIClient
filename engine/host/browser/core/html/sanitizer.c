@@ -496,38 +496,20 @@ static bool san_config_remove_unsafe(JSContext *ctx, JSValueConst cfg)
         if (san_config_remove_element(ctx, cfg, SAN_BASELINE_REMOVE_ELEMENTS[i].el,
                                       SAN_BASELINE_REMOVE_ELEMENTS[i].el_ns))
             result = true;
-    /* §8.6.5: the built-in safe baseline configuration's removeAttributes list is EMPTY, so step 3 removes
-       nothing — the attributes it stands for are the event handler ones, which step 4 names directly. */
-    /* STEP 4, over an ALLOW-LIST, is the list this configuration HAS: removing every event handler content
-       attribute from an allow-list is removing every entry of it that IS one, which is a walk of the
-       configuration. Over a REMOVE-LIST it is the other direction — one APPEND per handler name — and that
-       needs the NAMES, which event_target.c has as its EVENT_HANDLERS X-list and does not export. */
-    if (san_has(ctx, cfg, "attributes")) {
-        JSValue list = san_get(ctx, cfg, "attributes");
-        uint32_t n = san_len(ctx, list), i2 = 0;
-
-        while (i2 < n) {
-            JSValue e = JS_GetPropertyUint32(ctx, list, i2);
-            SanName nm;
-            bool handler = false;
-
-            if (san_name_of(ctx, e, &nm))
-                handler = nm.ns == NULL && event_target_is_handler_attribute(nm.name);
-            san_name_release(ctx, &nm);
-            JS_FreeValue(ctx, e);
-            if (!handler) { i2++; continue; }
-            san_remove_at(ctx, list, (int)i2);
-            n--;
+    /* STEP 4: EVERY EVENT HANDLER CONTENT ATTRIBUTE, REMOVED FROM THE CONFIGURATION. It is one call per name
+       through the operation that already exists, because "remove an attribute from a configuration" is the
+       same algorithm whichever list the configuration has — an allow-list drops the entry, a remove-list gains
+       one — and san_config_remove_attribute is where both arms live.
+       WHAT WAS HERE INSTEAD was a bespoke walk of the allow-list plus a DFAIL for the other shape, and the
+       DFAIL was right about why: filtering an allow-list for the entries that ARE handlers is only equivalent
+       to this step while the configuration happens to be an allow-list. Over a remove-list the step is an
+       APPEND per name, which needs the names — event_target.c now enumerates them off the one X-list §8.1.7.2
+       defines the set by, so a handler added there is removed here without anything else being edited.
+       §8.6.5's built-in safe baseline has an EMPTY removeAttributes list precisely because the attributes it
+       would otherwise carry are these, named here rather than duplicated there. */
+    for (i = 0; i < event_target_handler_attribute_count(); i++)
+        if (san_config_remove_attribute(ctx, cfg, event_target_handler_attribute_at(i), NULL))
             result = true;
-        }
-        JS_FreeValue(ctx, list);
-        return result;
-    }
-    DFAIL("§8.6.2's remove unsafe reached a configuration with a removeAttributes list, and its step 4 has to "
-          "APPEND every event handler content attribute to it — the NAMES live in event_target.c's "
-          "EVENT_HANDLERS X-list, which exports only the `is this one` predicate. Export the list beside "
-          "event_target_is_handler_attribute so this step names each one, rather than filtering a list that "
-          "happens to be an allow-list");
     return result;
 }
 

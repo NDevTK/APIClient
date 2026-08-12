@@ -111,6 +111,12 @@ void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask
    event handler IDL attributes above, so it is answered from the one list rather than from a second copy.
    Trusted Types §3.8 step 2 is the caller: an event handler content attribute maps to TrustedScript. */
 bool event_target_is_handler_attribute(const char *name);
+/* THE SAME SET, ENUMERATED. HTML §8.6.2's remove-unsafe step 4 appends every event handler content attribute
+   to a configuration's removeAttributes list, which is a deny-list it must BUILD — a caller that can only ask
+   "is this one" can filter an allow-list it already holds but cannot produce that. Both come off the one
+   X-list, so a handler added to §8.1.7.2's set is added to both at once. The names are static. */
+int         event_target_handler_attribute_count(void);
+const char *event_target_handler_attribute_at(int i);
 /* A handler attribute whose SETTER has a side effect. HTML has one: §9.4.2's `onmessage` on a MessagePort also
    starts the port, which is why assigning it is enough and addEventListener alone is not. The hook runs AFTER
    the handler is registered — start() delivers what is already queued, and delivering it first would fire at a
