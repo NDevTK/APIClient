@@ -24,12 +24,16 @@
  * ]»` and a processing instruction is `«[ "target" → … ]»`, because §8.6.2's operations are stated over exactly
  * those keys and a different internal spelling would be a second vocabulary to translate at every step.
  *
- * WHAT WALKS PAGE-SIZED DATA AND WHAT DOES NOT. The TREE is the page's, so §8.6.4's inner sanitize steps are a
- * machine that rests at every node and every attribute (see sanitizer.h). The CONFIGURATION is not: the only
- * thing that builds one here is §8.6.5's built-in tables below, because the one arm that would let the page
- * supply its own — a `SanitizerConfig` dictionary — crashes naming the conversion machine it needs. So the
- * members that walk a configuration (`get`, `removeUnsafe`) are ordinary bodies over data this file wrote, and
- * they become machines in the same diff that lets a page write one. */
+ * WHAT WALKS PAGE-SIZED DATA. The TREE is the page's, so §8.6.4's inner sanitize steps are a machine that rests
+ * at every node and every attribute (see sanitizer.h). THE CONFIGURATION IS THE PAGE'S TOO, now that §8.6.3's
+ * dictionaries are declared Web IDL types below: `new Sanitizer({elements:[…]})` and the seven name-taking
+ * modifiers take one, and BUILDING it rests at every element, every member and every attribute of every
+ * element, at whatever depth, because it is the args machine's IDL_SEQUENCE_STRING_OR_DICT conversion and not a
+ * walk written here.
+ * What is left un-yielding is the ALGORITHMS over the result — canonicalize the configuration, the validity
+ * check, `get`, `removeUnsafe` and the modifiers are C bodies over lists whose length the page chose, so each
+ * is one stretch proportional to the configuration with no suspend point in it. Their cursors are a list index
+ * and a member index, exactly as the sanitize walk's is a node. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -51,6 +55,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/url/url.h"
+#include "solver/concolic.h"
 #include "solver/cow.h"
 #include "solver/dom_cow.h"
 
@@ -60,6 +65,83 @@
 #define SAN_NS_SVG    "http://www.w3.org/2000/svg"
 #define SAN_NS_MATHML "http://www.w3.org/1998/Math/MathML"
 #define SAN_NS_XLINK  "http://www.w3.org/1999/xlink"
+
+/* ---- §8.6.3's CONFIGURATION DICTIONARIES, as Web IDL declares them ---------------------------------------- */
+
+/* `dictionary SanitizerAttributeNamespace { required DOMString name; DOMString? _namespace = null; };`
+   Web IDL's leading `_` escapes an identifier that would otherwise be a keyword — the member's NAME is
+   `namespace`. The DEFAULT is load-bearing rather than decoration: §8.6.2's canonicalize a sanitizer name
+   ASSERTS that both members exist, which is true precisely because the IDL writes one, and it is why
+   `allowAttribute({name:"href"})` allows a NULL-namespace href where the element dictionary's identical-looking
+   member defaults to the HTML namespace instead. */
+static const IdlDictMember SAN_ATTRIBUTE_MEMBERS[] = {
+    { "name",      IDL_DOMSTRING,          true,  NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
+    { "namespace", IDL_DOMSTRING_NULLABLE, false, NULL, 0, NULL, IDL_DEFAULT_NULL, NULL },
+};
+static const IdlDictDecl SAN_ATTRIBUTE_DICT = {
+    "SanitizerAttributeNamespace", SAN_ATTRIBUTE_MEMBERS,
+    (int)(sizeof SAN_ATTRIBUTE_MEMBERS / sizeof *SAN_ATTRIBUTE_MEMBERS)
+};
+
+/* `dictionary SanitizerElementNamespace { required DOMString name;
+       DOMString? _namespace = "http://www.w3.org/1999/xhtml"; };` */
+static const IdlDictMember SAN_ELEMENT_MEMBERS[] = {
+    { "name",      IDL_DOMSTRING,          true,  NULL, 0, NULL, IDL_DEFAULT_NONE,   NULL },
+    { "namespace", IDL_DOMSTRING_NULLABLE, false, NULL, 0, NULL, IDL_DEFAULT_STRING, SAN_NS_HTML },
+};
+static const IdlDictDecl SAN_ELEMENT_DICT = {
+    "SanitizerElementNamespace", SAN_ELEMENT_MEMBERS,
+    (int)(sizeof SAN_ELEMENT_MEMBERS / sizeof *SAN_ELEMENT_MEMBERS)
+};
+
+/* `dictionary SanitizerElementNamespaceWithAttributes : SanitizerElementNamespace {
+       sequence<SanitizerAttribute> attributes; sequence<SanitizerAttribute> removeAttributes; };`
+   The INHERITED members come first and each level is lexicographic among itself, which is §3.2.17's read order
+   and what a page with a getter on `name` and one on `attributes` observes. */
+static const IdlDictMember SAN_ELEMENT_ATTRS_MEMBERS[] = {
+    { "name",             IDL_DOMSTRING,               true,  NULL, 0, NULL,
+      IDL_DEFAULT_NONE,   NULL },
+    { "namespace",        IDL_DOMSTRING_NULLABLE,      false, NULL, 0, NULL,
+      IDL_DEFAULT_STRING, SAN_NS_HTML },
+    { "attributes",       IDL_SEQUENCE_STRING_OR_DICT, false, NULL, 1, &SAN_ATTRIBUTE_DICT,
+      IDL_DEFAULT_NONE,   NULL },
+    { "removeAttributes", IDL_SEQUENCE_STRING_OR_DICT, false, NULL, 1, &SAN_ATTRIBUTE_DICT,
+      IDL_DEFAULT_NONE,   NULL },
+};
+static const IdlDictDecl SAN_ELEMENT_ATTRS_DICT = {
+    "SanitizerElementNamespaceWithAttributes", SAN_ELEMENT_ATTRS_MEMBERS,
+    (int)(sizeof SAN_ELEMENT_ATTRS_MEMBERS / sizeof *SAN_ELEMENT_ATTRS_MEMBERS)
+};
+
+/* `dictionary SanitizerProcessingInstruction { required DOMString target; };` — keyed on the target alone,
+   which is why §8.6.2 canonicalizes a SanitizerPI to exactly that one member. */
+static const IdlDictMember SAN_PI_MEMBERS[] = {
+    { "target", IDL_DOMSTRING, true, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
+};
+static const IdlDictDecl SAN_PI_DICT = {
+    "SanitizerProcessingInstruction", SAN_PI_MEMBERS,
+    (int)(sizeof SAN_PI_MEMBERS / sizeof *SAN_PI_MEMBERS)
+};
+
+/* `dictionary SanitizerConfig` — its nine members in §3.2.17's read order, which for a dictionary that inherits
+   nothing is plain lexicographic. Seven of them are `sequence<(DOMString or D)>`, and the D of `elements` has
+   two more sequences inside it: that two-deep type tree is what the args machine sizes its conversion stack
+   from, and every step of it — the @@iterator read, each `next()`, each `done`/`value`, each member [[Get]] —
+   is the page's code with a rest point on it. */
+static const IdlDictMember SAN_CONFIG_MEMBERS[] = {
+    { "attributes",                   IDL_SEQUENCE_STRING_OR_DICT, false, NULL, 0, &SAN_ATTRIBUTE_DICT },
+    { "comments",                     IDL_BOOLEAN_NO_DEFAULT,      false, NULL, 0, NULL },
+    { "dataAttributes",               IDL_BOOLEAN_NO_DEFAULT,      false, NULL, 0, NULL },
+    { "elements",                     IDL_SEQUENCE_STRING_OR_DICT, false, NULL, 0, &SAN_ELEMENT_ATTRS_DICT },
+    { "processingInstructions",       IDL_SEQUENCE_STRING_OR_DICT, false, NULL, 0, &SAN_PI_DICT },
+    { "removeAttributes",             IDL_SEQUENCE_STRING_OR_DICT, false, NULL, 0, &SAN_ATTRIBUTE_DICT },
+    { "removeElements",               IDL_SEQUENCE_STRING_OR_DICT, false, NULL, 0, &SAN_ELEMENT_DICT },
+    { "removeProcessingInstructions", IDL_SEQUENCE_STRING_OR_DICT, false, NULL, 0, &SAN_PI_DICT },
+    { "replaceWithChildrenElements",  IDL_SEQUENCE_STRING_OR_DICT, false, NULL, 0, &SAN_ELEMENT_DICT },
+};
+static const IdlDictDecl SAN_CONFIG_DICT = {
+    "SanitizerConfig", SAN_CONFIG_MEMBERS, (int)(sizeof SAN_CONFIG_MEMBERS / sizeof *SAN_CONFIG_MEMBERS)
+};
 
 /* ---- §8.6.5's built-in configurations, as the standard's tables ------------------------------------------ */
 
@@ -607,6 +689,488 @@ static JSValue san_copy_list(JSContext *ctx, JSValueConst list, bool with_local_
     return out;
 }
 
+/* ---- §8.6.2's CANONICALIZE, and §8.6.4's "is valid" ------------------------------------------------------ */
+
+/* One matcher for the built-in pair tables, defined with the sanitize walk that first needed it. §8.6.4's
+   validity check and §8.6.2's `replaceElementWithChildren` both ask it the same question of the non-replaceable
+   elements list, and both are stated before it, so it is declared here rather than written twice. */
+static bool san_pair_lists(const SanPairRow *rows, int n, const char *el, const char *el_ns,
+                           const char *attr, const char *attr_ns);
+
+/* WHICH CANONICAL SHAPE an item takes — the only thing separating §8.6.2's four canonicalize algorithms: the
+   namespace a bare string gets by default, and whether the item carries attribute lists of its own. */
+typedef enum {
+    SAN_KIND_ELEMENT_WITH_ATTRS,   /* canonicalize a SanitizerElementWithAttributes */
+    SAN_KIND_ELEMENT,              /* canonicalize a sanitizer element — the HTML namespace by default */
+    SAN_KIND_ATTRIBUTE,            /* canonicalize a sanitizer name with the null default namespace */
+    SAN_KIND_PI,                   /* canonicalize a processing instruction: one `target` member */
+} SanKind;
+
+/* A NAME THIS CONFIGURATION CANNOT MATCH BY BYTES. The declared conversion lets unknown external input cross as
+   itself — a coercion must never de-taint it — and every question this file asks of a name is then a strcmp,
+   which has no answer for a value whose domain is not pinned. */
+static void san_require_known(JSValueConst v)
+{
+    if (!concolic_is(v)) return;
+    DFAIL("§8.6.2 canonicalized a sanitizer name, namespace or target that is UNKNOWN EXTERNAL INPUT. Every "
+          "question this configuration answers about it is a byte comparison — contains, remove, the sorted "
+          "get, and the inner sanitize steps' own lookups — so an unpinned name decides nothing. What belongs "
+          "here is the FORK: a domain that permits both outcomes runs the allowed arm AND the removed arm, "
+          "rather than collapsing the value to its example or to a name it never had");
+}
+
+/* §8.6.2's CANONICALIZE A SANITIZER NAME over one entry of a converted list: a DOMString becomes
+   «[ "name" → it, "namespace" → defaultNamespace ]», and a dictionary keeps its own two members with step 3's
+   empty-string namespace turned into null. Step 2's assert that both members exist holds because the IDL gives
+   `namespace` a default and the conversion applies it. */
+static JSValue san_canon_name(JSContext *ctx, JSValueConst item, const char *default_ns)
+{
+    JSValue o = JS_NewObject(ctx), ns;
+
+    san_require_known(item);
+    if (!JS_IsObject(item)) {
+        JS_SetPropertyStr(ctx, o, "name", JS_DupValue(ctx, item));
+        JS_SetPropertyStr(ctx, o, "namespace", default_ns ? JS_NewString(ctx, default_ns) : JS_NULL);
+        return o;
+    }
+    ns = JS_GetPropertyStr(ctx, item, "namespace");
+    san_require_known(ns);
+    if (JS_IsString(ns)) {
+        const char *nsc = JS_ToCString(ctx, ns);
+
+        if (nsc && !*nsc) { JS_FreeValue(ctx, ns); ns = JS_NULL; }   /* step 3: "" IS the null namespace */
+        if (nsc) JS_FreeCString(ctx, nsc);
+    }
+    {
+        JSValue nv = JS_GetPropertyStr(ctx, item, "name");
+
+        san_require_known(nv);
+        JS_SetPropertyStr(ctx, o, "name", nv);
+    }
+    JS_SetPropertyStr(ctx, o, "namespace", ns);
+    return o;
+}
+
+static JSValue san_canon_list(JSContext *ctx, JSValueConst list, SanKind kind);
+
+static JSValue san_canon_item(JSContext *ctx, JSValueConst item, SanKind kind)
+{
+    JSValue o;
+
+    if (kind == SAN_KIND_PI) {
+        JSValue t;
+
+        san_require_known(item);
+        t = JS_IsObject(item) ? JS_GetPropertyStr(ctx, item, "target") : JS_DupValue(ctx, item);
+        san_require_known(t);
+        o = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, o, "target", t);
+        return o;
+    }
+    o = san_canon_name(ctx, item, kind == SAN_KIND_ATTRIBUTE ? NULL : SAN_NS_HTML);
+    if (kind == SAN_KIND_ELEMENT_WITH_ATTRS) {
+        JSValue a = JS_IsObject(item) ? JS_GetPropertyStr(ctx, item, "attributes") : JS_UNDEFINED;
+        JSValue ra = JS_IsObject(item) ? JS_GetPropertyStr(ctx, item, "removeAttributes") : JS_UNDEFINED;
+
+        if (!JS_IsUndefined(a))
+            JS_SetPropertyStr(ctx, o, "attributes", san_canon_list(ctx, a, SAN_KIND_ATTRIBUTE));
+        if (!JS_IsUndefined(ra))
+            JS_SetPropertyStr(ctx, o, "removeAttributes", san_canon_list(ctx, ra, SAN_KIND_ATTRIBUTE));
+        /* "If neither result["attributes"] nor result["removeAttributes"] exists, then set
+           result["removeAttributes"] to an empty list" — which is what makes an element with no lists VALID
+           beside either kind of global list. */
+        if (JS_IsUndefined(a) && JS_IsUndefined(ra))
+            JS_SetPropertyStr(ctx, o, "removeAttributes", JS_NewArray(ctx));
+        JS_FreeValue(ctx, a);
+        JS_FreeValue(ctx, ra);
+    }
+    return o;
+}
+
+static JSValue san_canon_list(JSContext *ctx, JSValueConst list, SanKind kind)
+{
+    JSValue out = JS_NewArray(ctx);
+    uint32_t n, i;
+
+    san_require_known(list);
+    n = san_len(ctx, list);
+    for (i = 0; i < n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, list, i);
+
+        JS_SetPropertyUint32(ctx, out, i, san_canon_item(ctx, e, kind));
+        JS_FreeValue(ctx, e);
+    }
+    return out;
+}
+
+/* §8.6.2's CANONICALIZE THE CONFIGURATION, over the dictionary the args machine converted. It builds a NEW
+   object rather than mutating that one: the converted dictionary belongs to the machine's argument vector and
+   dies with the call, while the Sanitizer's configuration outlives it. */
+static JSValue san_canonicalize_config(JSContext *ctx, JSValueConst in, bool allow_comments_pis_data)
+{
+    static const struct { const char *name; SanKind kind; } LISTS[] = {
+        { "elements",                     SAN_KIND_ELEMENT_WITH_ATTRS },   /* step 4 */
+        { "removeElements",               SAN_KIND_ELEMENT },              /* step 5 */
+        { "attributes",                   SAN_KIND_ATTRIBUTE },            /* step 6 */
+        { "removeAttributes",             SAN_KIND_ATTRIBUTE },            /* step 7 */
+        { "replaceWithChildrenElements",  SAN_KIND_ELEMENT },              /* step 8 */
+        { "processingInstructions",       SAN_KIND_PI },                   /* step 9 */
+        { "removeProcessingInstructions", SAN_KIND_PI },                   /* step 9 */
+    };
+    JSValue cfg = JS_NewObject(ctx);
+    JSValue v;
+    int i;
+
+    for (i = 0; i < (int)(sizeof LISTS / sizeof *LISTS); i++) {
+        JSValue l = san_get(ctx, in, LISTS[i].name);
+
+        if (!JS_IsUndefined(l))
+            JS_SetPropertyStr(ctx, cfg, LISTS[i].name, san_canon_list(ctx, l, LISTS[i].kind));
+        JS_FreeValue(ctx, l);
+    }
+    if (!san_has(ctx, cfg, "elements") && !san_has(ctx, cfg, "removeElements"))            /* step 1 */
+        JS_SetPropertyStr(ctx, cfg, "removeElements", JS_NewArray(ctx));
+    if (!san_has(ctx, cfg, "attributes") && !san_has(ctx, cfg, "removeAttributes"))        /* step 2 */
+        JS_SetPropertyStr(ctx, cfg, "removeAttributes", JS_NewArray(ctx));
+    /* Step 3: which of the two processing instruction lists is created is the flag's own question — an empty
+       ALLOW list allows none at all, which is what a safe configuration means by not naming one. */
+    if (!san_has(ctx, cfg, "processingInstructions") &&
+        !san_has(ctx, cfg, "removeProcessingInstructions"))
+        JS_SetPropertyStr(ctx, cfg, allow_comments_pis_data ? "removeProcessingInstructions"
+                                                            : "processingInstructions", JS_NewArray(ctx));
+    v = san_get(ctx, in, "comments");                                                      /* step 10 */
+    if (JS_IsUndefined(v)) {
+        JS_FreeValue(ctx, v);
+        v = JS_NewBool(ctx, allow_comments_pis_data);
+    }
+    JS_SetPropertyStr(ctx, cfg, "comments", v);
+    /* Step 11: `dataAttributes` is an extension of the ATTRIBUTES allow-list, so it is defaulted only beside
+       one — and a page that writes it without one keeps it, which is exactly what the validity check refuses. */
+    v = san_get(ctx, in, "dataAttributes");
+    if (!JS_IsUndefined(v)) {
+        JS_SetPropertyStr(ctx, cfg, "dataAttributes", v);
+    } else {
+        JS_FreeValue(ctx, v);
+        if (san_has(ctx, cfg, "attributes"))
+            JS_SetPropertyStr(ctx, cfg, "dataAttributes", JS_NewBool(ctx, allow_comments_pis_data));
+    }
+    return cfg;
+}
+
+/* Infra's "has duplicates" over a canonical list: an item whose first occurrence is earlier than itself. */
+static bool san_list_has_dup(JSContext *ctx, JSValueConst list, bool pi)
+{
+    uint32_t n = san_len(ctx, list), i;
+
+    for (i = 0; i < n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, list, i);
+        bool dup = false;
+
+        if (pi) {
+            JSValue t = JS_IsObject(e) ? JS_GetPropertyStr(ctx, e, "target") : JS_UNDEFINED;
+            const char *tc = JS_ToCString(ctx, t);
+
+            if (tc) {
+                dup = san_pi_index_of(ctx, list, tc) < (int)i;
+                JS_FreeCString(ctx, tc);
+            }
+            JS_FreeValue(ctx, t);
+        } else {
+            SanName nm;
+
+            if (san_name_of(ctx, e, &nm)) dup = san_index_of(ctx, list, nm.name, nm.ns) < (int)i;
+            san_name_release(ctx, &nm);
+        }
+        JS_FreeValue(ctx, e);
+        if (dup) return true;
+    }
+    return false;
+}
+
+/* Infra's intersection, asked only as "is it empty" — which is all §8.6.4's validity wants of it. */
+static bool san_lists_intersect(JSContext *ctx, JSValueConst a, JSValueConst b)
+{
+    uint32_t n = san_len(ctx, a), i;
+
+    for (i = 0; i < n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, a, i);
+        SanName nm;
+        bool hit = false;
+
+        if (san_name_of(ctx, e, &nm)) hit = san_contains(ctx, b, nm.name, nm.ns);
+        san_name_release(ctx, &nm);
+        JS_FreeValue(ctx, e);
+        if (hit) return true;
+    }
+    return false;
+}
+
+/* Is every item of `a` in `b`? An absent list is the empty one, which is a subset of everything. */
+static bool san_list_subset(JSContext *ctx, JSValueConst a, JSValueConst b)
+{
+    uint32_t n = san_len(ctx, a), i;
+
+    for (i = 0; i < n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, a, i);
+        SanName nm;
+        bool in = false;
+
+        if (san_name_of(ctx, e, &nm)) in = san_contains(ctx, b, nm.name, nm.ns);
+        san_name_release(ctx, &nm);
+        JS_FreeValue(ctx, e);
+        if (!in) return false;
+    }
+    return true;
+}
+
+/* HTML §2.6.6's CUSTOM DATA ATTRIBUTE, as a canonical item: a `data-` name in the null namespace. Stated once
+   because three of §8.6.2's algorithms and the validity check all ask it. */
+static bool san_item_is_data_attribute(const SanName *nm)
+{
+    return nm->name && nm->ns == NULL && strncmp(nm->name, "data-", 5) == 0;
+}
+
+static bool san_list_has_data_attribute(JSContext *ctx, JSValueConst list)
+{
+    uint32_t n = san_len(ctx, list), i;
+
+    for (i = 0; i < n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, list, i);
+        SanName nm;
+        bool data;
+
+        san_name_of(ctx, e, &nm);
+        data = san_item_is_data_attribute(&nm);
+        san_name_release(ctx, &nm);
+        JS_FreeValue(ctx, e);
+        if (data) return true;
+    }
+    return false;
+}
+
+/* "Remove all items from `list` where the item is a custom data attribute" — §8.6.2's allowElement step
+   4.2.1.3 and setDataAttributes step 5, which are the same operation over two lists. */
+static void san_drop_data_attributes(JSContext *ctx, JSValueConst list)
+{
+    uint32_t n = san_len(ctx, list), i = 0;
+
+    while (i < n) {
+        JSValue e = JS_GetPropertyUint32(ctx, list, i);
+        SanName nm;
+        bool data;
+
+        san_name_of(ctx, e, &nm);
+        data = san_item_is_data_attribute(&nm);
+        san_name_release(ctx, &nm);
+        JS_FreeValue(ctx, e);
+        if (!data) { i++; continue; }
+        san_remove_at(ctx, list, (int)i);
+        n--;
+    }
+}
+
+/* Infra's "create a set from" — drop every item that repeats an earlier one, keeping the first. */
+static void san_dedup(JSContext *ctx, JSValueConst list)
+{
+    uint32_t n = san_len(ctx, list), i = 0;
+
+    while (i < n) {
+        JSValue e = JS_GetPropertyUint32(ctx, list, i);
+        SanName nm;
+        bool dup = false;
+
+        if (san_name_of(ctx, e, &nm)) dup = san_index_of(ctx, list, nm.name, nm.ns) < (int)i;
+        san_name_release(ctx, &nm);
+        JS_FreeValue(ctx, e);
+        if (!dup) { i++; continue; }
+        san_remove_at(ctx, list, (int)i);
+        n--;
+    }
+}
+
+/* Infra's DIFFERENCE (`keep_present` false) and INTERSECTION (true), in place over a canonical list — the two
+   operations §8.6.2's allowElement performs on an element's own attribute lists, which differ only in which
+   answer keeps the item. */
+static void san_filter_by(JSContext *ctx, JSValueConst list, JSValueConst other, bool keep_present)
+{
+    uint32_t n = san_len(ctx, list), i = 0;
+
+    while (i < n) {
+        JSValue e = JS_GetPropertyUint32(ctx, list, i);
+        SanName nm;
+        bool present = false;
+
+        if (san_name_of(ctx, e, &nm)) present = san_contains(ctx, other, nm.name, nm.ns);
+        san_name_release(ctx, &nm);
+        JS_FreeValue(ctx, e);
+        if (present == keep_present) { i++; continue; }
+        san_remove_at(ctx, list, (int)i);
+        n--;
+    }
+}
+
+/* §8.6.3: "dictionaries are considered equal when all of their members are equal" — for a canonical element,
+   the name, the namespace and the two attribute lists item for item. */
+static bool san_lists_equal(JSContext *ctx, JSValueConst a, JSValueConst b)
+{
+    uint32_t na, nb, i;
+
+    if (JS_IsUndefined(a) != JS_IsUndefined(b)) return false;
+    na = san_len(ctx, a);
+    nb = san_len(ctx, b);
+    if (na != nb) return false;
+    for (i = 0; i < na; i++) {
+        JSValue ea = JS_GetPropertyUint32(ctx, a, i);
+        JSValue eb = JS_GetPropertyUint32(ctx, b, i);
+        SanName nm;
+        bool eq = false;
+
+        if (san_name_of(ctx, eb, &nm)) eq = san_item_is(ctx, ea, nm.name, nm.ns);
+        san_name_release(ctx, &nm);
+        JS_FreeValue(ctx, ea);
+        JS_FreeValue(ctx, eb);
+        if (!eq) return false;
+    }
+    return true;
+}
+
+static bool san_element_equal(JSContext *ctx, JSValueConst a, JSValueConst b)
+{
+    JSValue aa = JS_GetPropertyStr(ctx, a, "attributes"), ba = JS_GetPropertyStr(ctx, b, "attributes");
+    JSValue ar = JS_GetPropertyStr(ctx, a, "removeAttributes");
+    JSValue br = JS_GetPropertyStr(ctx, b, "removeAttributes");
+    SanName nm;
+    bool eq = false;
+
+    if (san_name_of(ctx, a, &nm)) eq = san_item_is(ctx, b, nm.name, nm.ns);
+    san_name_release(ctx, &nm);
+    eq = eq && san_lists_equal(ctx, aa, ba) && san_lists_equal(ctx, ar, br);
+    JS_FreeValue(ctx, aa);
+    JS_FreeValue(ctx, ba);
+    JS_FreeValue(ctx, ar);
+    JS_FreeValue(ctx, br);
+    return eq;
+}
+
+/* §8.6.4's "determine whether a canonical SanitizerConfig is valid" — the check §8.6.2's `configure` step 2
+   throws a TypeError on, and the one that makes every "a canonical configuration has one of these two lists"
+   assertion in this file TRUE rather than hoped. Its own steps 1, 3 and 5 are asserts about what canonicalize
+   guarantees, so they are DCHECKs here and the rest are the answer. */
+static bool san_config_is_valid(JSContext *ctx, JSValueConst cfg)
+{
+    JSValue elements = san_get(ctx, cfg, "elements");
+    JSValue attributes = san_get(ctx, cfg, "attributes");
+    JSValue rwc = san_get(ctx, cfg, "replaceWithChildrenElements");
+    JSValue rem_el = san_get(ctx, cfg, "removeElements");
+    JSValue rem_at = san_get(ctx, cfg, "removeAttributes");
+    JSValue pis = san_get(ctx, cfg, "processingInstructions");
+    JSValue rem_pi = san_get(ctx, cfg, "removeProcessingInstructions");
+    JSValue data = san_get(ctx, cfg, "dataAttributes");
+    bool has_el = !JS_IsUndefined(elements), has_at = !JS_IsUndefined(attributes);
+    bool has_pi = !JS_IsUndefined(pis), has_rwc = !JS_IsUndefined(rwc);
+    bool data_on = JS_ToBool(ctx, data);
+    bool ok = false;
+    uint32_t n, i;
+
+    DCHECK(has_el || !JS_IsUndefined(rem_el),
+           "§8.6.4's validity was asked about a configuration with neither an elements list nor a "
+           "removeElements one — canonicalize the configuration creates the second, so this one never went "
+           "through it");
+    DCHECK(has_at || !JS_IsUndefined(rem_at),
+           "§8.6.4's validity was asked about a configuration with neither an attributes list nor a "
+           "removeAttributes one");
+    DCHECK(has_pi || !JS_IsUndefined(rem_pi),
+           "§8.6.4's validity was asked about a configuration with neither processing instruction list");
+    if (has_el && !JS_IsUndefined(rem_el)) goto done;                          /* step 2 */
+    if (has_pi && !JS_IsUndefined(rem_pi)) goto done;                          /* step 4 */
+    if (has_at && !JS_IsUndefined(rem_at)) goto done;                          /* step 6 */
+    if (san_list_has_dup(ctx, has_el ? elements : rem_el, false)) goto done;   /* step 8 */
+    if (has_rwc && san_list_has_dup(ctx, rwc, false)) goto done;               /* step 9 */
+    if (san_list_has_dup(ctx, has_pi ? pis : rem_pi, true)) goto done;         /* step 10 */
+    if (san_list_has_dup(ctx, has_at ? attributes : rem_at, false)) goto done; /* step 11 */
+    if (has_rwc) {                                                             /* step 12 */
+        n = san_len(ctx, rwc);
+        for (i = 0; i < n; i++) {
+            JSValue e = JS_GetPropertyUint32(ctx, rwc, i);
+            SanName nm;
+            bool bad = false;
+
+            if (san_name_of(ctx, e, &nm))
+                bad = san_pair_lists(SAN_NON_REPLACEABLE, SAN_NROWS(SAN_NON_REPLACEABLE),
+                                     nm.name, nm.ns, "", NULL);
+            san_name_release(ctx, &nm);
+            JS_FreeValue(ctx, e);
+            if (bad) goto done;
+        }
+        if (san_lists_intersect(ctx, has_el ? elements : rem_el, rwc)) goto done;
+    }
+    if (has_at) {                                                              /* step 13 */
+        DCHECK(!JS_IsUndefined(data),
+               "§8.6.4's validity found an attributes allow-list with no dataAttributes beside it — "
+               "canonicalize the configuration sets one whenever that list exists");
+        n = san_len(ctx, elements);
+        for (i = 0; i < n; i++) {
+            JSValue el = JS_GetPropertyUint32(ctx, elements, i);
+            JSValue local = JS_GetPropertyStr(ctx, el, "attributes");
+            JSValue lrem = JS_GetPropertyStr(ctx, el, "removeAttributes");
+            bool bad = san_list_has_dup(ctx, local, false) || san_list_has_dup(ctx, lrem, false) ||
+                       san_lists_intersect(ctx, attributes, local) ||
+                       !san_list_subset(ctx, lrem, attributes) ||
+                       (data_on && san_list_has_data_attribute(ctx, local));
+
+            JS_FreeValue(ctx, local);
+            JS_FreeValue(ctx, lrem);
+            JS_FreeValue(ctx, el);
+            if (bad) goto done;
+        }
+        if (data_on && san_list_has_data_attribute(ctx, attributes)) goto done;
+    } else {                                                                   /* step 14 */
+        n = san_len(ctx, elements);
+        for (i = 0; i < n; i++) {
+            JSValue el = JS_GetPropertyUint32(ctx, elements, i);
+            JSValue local = JS_GetPropertyStr(ctx, el, "attributes");
+            JSValue lrem = JS_GetPropertyStr(ctx, el, "removeAttributes");
+            bool bad = (!JS_IsUndefined(local) && !JS_IsUndefined(lrem)) ||
+                       san_list_has_dup(ctx, local, false) || san_list_has_dup(ctx, lrem, false) ||
+                       san_lists_intersect(ctx, rem_at, local) ||
+                       san_lists_intersect(ctx, rem_at, lrem);
+
+            JS_FreeValue(ctx, local);
+            JS_FreeValue(ctx, lrem);
+            JS_FreeValue(ctx, el);
+            if (bad) goto done;
+        }
+        if (!JS_IsUndefined(data)) goto done;
+    }
+    ok = true;
+done:
+    JS_FreeValue(ctx, elements);
+    JS_FreeValue(ctx, attributes);
+    JS_FreeValue(ctx, rwc);
+    JS_FreeValue(ctx, rem_el);
+    JS_FreeValue(ctx, rem_at);
+    JS_FreeValue(ctx, pis);
+    JS_FreeValue(ctx, rem_pi);
+    JS_FreeValue(ctx, data);
+    return ok;
+}
+
+/* §8.6.2's CONFIGURE a Sanitizer, steps 1 and 2: canonicalize the dictionary the conversion produced, and
+   refuse an invalid one with the TypeError the spec states. Returns the canonical configuration (owned). */
+static JSValue san_configure(JSContext *ctx, JSValueConst dict, bool allow_comments_pis_data)
+{
+    JSValue cfg;
+
+    san_require_known(dict);
+    cfg = san_canonicalize_config(ctx, dict, allow_comments_pis_data);
+    if (JS_IsException(cfg)) return cfg;
+    if (!san_config_is_valid(ctx, cfg)) {
+        JS_FreeValue(ctx, cfg);
+        return JS_ThrowTypeError(ctx, "the SanitizerConfig is not valid");
+    }
+    return cfg;
+}
+
 /* ---- the Sanitizer object -------------------------------------------------------------------------------- */
 
 typedef struct { JSValue config; } SanitizerRec;
@@ -614,7 +1178,9 @@ typedef struct { JSValue config; } SanitizerRec;
 static JSClassID g_class;
 static int g_ready;
 static int g_id_ctor = -1, g_id_get = -1, g_id_remove_unsafe = -1, g_id_set_comments = -1,
-           g_id_set_data_attributes = -1;
+           g_id_set_data_attributes = -1, g_id_allow_element = -1, g_id_remove_element = -1,
+           g_id_replace_with_children = -1, g_id_allow_pi = -1, g_id_remove_pi = -1,
+           g_id_allow_attribute = -1, g_id_remove_attribute = -1;
 
 /* THE RECORD TIME-TRAVELS. Its one owned value is named here and freed by the finalizer below — one list, read
    together, so a field added to the record is a field both of them get. */
@@ -679,12 +1245,25 @@ static JSValue san_new_object(JSContext *ctx, JSValue config)
     return obj;
 }
 
-/* §8.6.4's "if sanitizerSpec is a string / a dictionary" arms, over the ONE value a member was handed — the
-   `sanitizer` option and the constructor's argument are the same union, so they resolve it in one place.
+/* `enum SanitizerPresets { "default" };` — §3.2.18: a string that is not one of the enumeration's values is a
+   TypeError, never a silent fall back to the default. The preset's own step is "set configuration to the
+   built-in safe default configuration", which is canonical and valid by construction. */
+static JSValue san_preset_config(JSContext *ctx, JSValueConst spec)
+{
+    const char *s = JS_ToCString(ctx, spec);
+    bool is_default = s && strcmp(s, "default") == 0;
+
+    if (s) JS_FreeCString(ctx, s);
+    if (!is_default)
+        return JS_ThrowTypeError(ctx, "the sanitizer is not the SanitizerPresets value \"default\"");
+    return san_default_config(ctx);
+}
+
+/* §8.6.4's "get a sanitizer instance from options" arms, over the ONE value the `sanitizer` member was handed.
    Returns an OWNED canonical configuration, or JS_EXCEPTION with a TypeError pending. */
 static JSValue san_config_from_spec(JSContext *ctx, JSValueConst spec)
 {
-    DCHECK(!JS_IsUndefined(spec), "§8.6.4 step 4.1 resolved an ABSENT sanitizer here — which default it takes "
+    DCHECK(!JS_IsUndefined(spec), "§8.6.4 step 2 resolved an ABSENT sanitizer here — which default it takes "
                                   "is the DICTIONARY's (\"default\" for SetHTMLOptions, {} for "
                                   "SetHTMLUnsafeOptions), so the caller answers it and this never sees one");
     if (sanitizer_is(spec)) {
@@ -694,26 +1273,21 @@ static JSValue san_config_from_spec(JSContext *ctx, JSValueConst spec)
 
         return JS_DupValue(ctx, r->config);
     }
-    if (JS_IsString(spec)) {
-        const char *s = JS_ToCString(ctx, spec);
-        bool is_default = s && strcmp(s, "default") == 0;
-
-        if (s) JS_FreeCString(ctx, s);
-        /* `enum SanitizerPresets { "default" }` — §3.2.19: a string that is not one of the enumeration's
-           values is a TypeError, never a silent fall back to the default. */
-        if (!is_default)
-            return JS_ThrowTypeError(ctx, "the sanitizer is neither a Sanitizer, a SanitizerConfig nor the "
-                                          "SanitizerPresets value \"default\"");
-        return san_default_config(ctx);
-    }
-    DFAIL("§8.6.3's SanitizerConfig was supplied as a DICTIONARY and this engine cannot convert one — its "
-          "members are `sequence<(DOMString or SanitizerElementNamespace)>` and every step of §3.2.21's "
-          "iterator protocol is the page's code, as is each entry's `name`/`namespace`/`attributes` read. "
-          "Build that conversion as a step machine (an IterCursor per list plus an inner one for an element's "
-          "own attributes lists, resting on the entry it is on) and run §8.6.2's canonicalize the "
-          "configuration over its result — a C walk here would drive the page's iterator to completion");
-    /* A RELEASE BUILD CANNOT BUILD THE MISSING MACHINE, so the same unsupported arm is the page's TypeError
-       rather than a configuration that is not one — the abort above is what a dev build answers. */
+    if (JS_IsString(spec)) return san_preset_config(ctx, spec);
+    /* THE CONVERSION EXISTS; WHAT DOES NOT IS THE DECLARATION THAT REACHES THIS MEMBER. `new Sanitizer(cfg)`
+       and the seven modifiers take a real SanitizerConfig now, because their arguments declare
+       IDL_STRING_OR_DICT over SAN_CONFIG_MEMBERS and the args machine converts it. This value did not go
+       through that: core/dom/element.c declares SetHTMLOptions/SetHTMLUnsafeOptions's `sanitizer` member as
+       IDL_ANY, so what arrives is the page's own object, unconverted — and converting it HERE is a C walk of
+       the page's getters with no flow base under it, which is what this file must never do. */
+    DFAIL("HTML §8.6.4 was handed a SanitizerConfig DICTIONARY through SetHTMLOptions/SetHTMLUnsafeOptions's "
+          "`sanitizer` member, whose declared type is `(Sanitizer or SanitizerConfig or SanitizerPresets)` and "
+          "which core/dom/element.c declares as IDL_ANY — so it arrives unconverted. Declare that member with "
+          "the conversion the constructor uses: it needs a DICTIONARY-TYPED DICTIONARY MEMBER (one more frame "
+          "kind in idl_args.c's nested conversion, pushed from the member loop rather than from a sequence "
+          "element) plus the union's INTERFACE arm, which this member has and the constructor's does not");
+    /* A RELEASE BUILD CANNOT ADD THE DECLARATION, so the same unsupported arm is the page's TypeError rather
+       than a configuration that is not one — the abort above is what a dev build answers. */
     return JS_ThrowTypeError(ctx, "a SanitizerConfig dictionary is not yet convertible by this engine");
 }
 
@@ -735,9 +1309,10 @@ JSValue sanitizer_config_from_options(JSContext *ctx, JSValueConst options, bool
 }
 
 /* §8.6.2's constructor: `new Sanitizer(optional (SanitizerConfig or SanitizerPresets) configuration =
-   "default")`. Its steps are the preset resolution and then `configure`, whose canonicalize-and-validate is
-   what san_config_from_spec's arms already produce — the built-in configurations are canonical and valid by
-   construction, and the arm that is not yet convertible never reaches here. */
+   "default")`. The union's arm was resolved by the DECLARATION — §3.2.25 sends null, undefined and every
+   Object down the dictionary arm and everything else to the string one — so what arrives here is either a
+   DOMString or the converted SanitizerConfig, and this body performs step 1's preset resolution and step 2's
+   `configure`. Nothing it does can reach the page's code: the conversion already did all of that. */
 static JSValue js_san_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     JSValue cfg;
@@ -745,11 +1320,15 @@ static JSValue js_san_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     (void)magic;
     if (JS_IsUndefined(this_val))
         return JS_ThrowTypeError(ctx, "constructor Sanitizer requires 'new'");
-    /* The argument's IDL default is the PRESET `"default"`, which step 1.2 turns into the built-in safe
-       default configuration — a Sanitizer built with no argument is the safe one, and `sanitize` is what
-       removes unsafe on top of it when a SAFE member asked for it. */
-    if (argc == 0 || JS_IsUndefined(argv[0])) cfg = san_default_config(ctx);
-    else                                      cfg = san_config_from_spec(ctx, argv[0]);
+    /* The argument's IDL default is the PRESET `"default"`, so §3.6.2 leaves an absent one undefined and step
+       1.2 turns it into the built-in safe default configuration — a Sanitizer built with no argument is the
+       safe one, and `sanitize` is what removes unsafe on top of it when a SAFE member asked for it. */
+    if (argc == 0 || JS_IsUndefined(argv[0]))  cfg = san_default_config(ctx);
+    else if (JS_IsString(argv[0]))             cfg = san_preset_config(ctx, argv[0]);
+    /* `configure` with allowCommentsPIsAndDataAttributes TRUE, which the constructor states outright: a
+       configuration a page writes from scratch keeps comments and processing instructions unless it says
+       otherwise, and it is `setHTML`'s own safe path that removes what is unsafe on top. */
+    else                                       cfg = san_configure(ctx, argv[0], true);
     if (JS_IsException(cfg)) return cfg;
     return san_new_object(ctx, cfg);
 }
@@ -855,48 +1434,319 @@ static JSValue js_san_set_flag(JSContext *ctx, JSValueConst this_val, int argc, 
             JSValue el = JS_GetPropertyUint32(ctx, elements, i);
             JSValue local = JS_GetPropertyStr(ctx, el, "attributes");
 
-            if (!JS_IsUndefined(local)) {
-                uint32_t m = san_len(ctx, local), k = 0;
-
-                while (k < m) {
-                    JSValue e = JS_GetPropertyUint32(ctx, local, k);
-                    SanName nm;
-                    bool data;
-
-                    san_name_of(ctx, e, &nm);
-                    data = nm.name && nm.ns == NULL && strncmp(nm.name, "data-", 5) == 0;
-                    san_name_release(ctx, &nm);
-                    JS_FreeValue(ctx, e);
-                    if (!data) { k++; continue; }
-                    san_remove_at(ctx, local, (int)k);
-                    m--;
-                }
-            }
+            san_drop_data_attributes(ctx, local);
             JS_FreeValue(ctx, local);
             JS_FreeValue(ctx, el);
         }
-        {
-            uint32_t m = san_len(ctx, attrs), k = 0;
-
-            while (k < m) {
-                JSValue e = JS_GetPropertyUint32(ctx, attrs, k);
-                SanName nm;
-                bool data;
-
-                san_name_of(ctx, e, &nm);
-                data = nm.name && nm.ns == NULL && strncmp(nm.name, "data-", 5) == 0;
-                san_name_release(ctx, &nm);
-                JS_FreeValue(ctx, e);
-                if (!data) { k++; continue; }
-                san_remove_at(ctx, attrs, (int)k);
-                m--;
-            }
-        }
+        san_drop_data_attributes(ctx, attrs);
         JS_FreeValue(ctx, attrs);
         JS_FreeValue(ctx, elements);
     }
     JS_SetPropertyStr(ctx, r->config, member, JS_NewBool(ctx, allow));
     return JS_TRUE;
+}
+
+/* ---- §8.6.2's SEVEN NAME-TAKING MODIFIERS ---------------------------------------------------------------- */
+
+/* Each of them opens with "Let configuration be this's configuration. Assert: configuration is valid." — the
+   same two lines, so they are one helper, and the assert is the real §8.6.4 check rather than a comment saying
+   it holds. The only ways into a configuration are `configure` (which throws for an invalid one) and these
+   methods, so a failure here names one of them. */
+static SanitizerRec *san_modifier_rec(JSContext *ctx, JSValueConst this_val)
+{
+    SanitizerRec *r = san_rec_here(ctx, this_val);
+
+    if (r)
+        DCHECK(san_config_is_valid(ctx, r->config),
+               "§8.6.2: a modifier method found this Sanitizer's configuration INVALID — every one of them "
+               "opens by asserting it is valid, and the only things that write a configuration are `configure` "
+               "(which throws for an invalid one) and these methods themselves");
+    return r;
+}
+
+/* The canonical item a modifier was handed, and its name/namespace — the two lines every one of them starts
+   its own algorithm with. Returns false with a throw live when the canonical item has no name, which the
+   declared conversion's `required DOMString name` already refuses. */
+static bool san_modifier_item(JSContext *ctx, JSValueConst arg, SanKind kind, JSValue *pitem, SanName *nm)
+{
+    *pitem = san_canon_item(ctx, arg, kind);
+    if (san_name_of(ctx, *pitem, nm)) return true;
+    san_name_release(ctx, nm);
+    JS_FreeValue(ctx, *pitem);
+    *pitem = JS_UNDEFINED;
+    DFAIL("§8.6.2 canonicalized an item with no `name` member — the declared conversion makes `name` a "
+          "required member of every one of §8.6.3's dictionaries, so a canonical item always has one");
+    JS_ThrowTypeError(ctx, "the sanitizer item has no name");
+    return false;
+}
+
+/* §8.6.2's `allowElement(element)` — the one modifier whose steps are more than a list edit: the element's own
+   attribute lists are reconciled with the configuration's global one first, because a configuration in which
+   the same attribute is allowed globally and listed locally is not valid. */
+static JSValue js_san_allow_element(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                    int magic)
+{
+    SanitizerRec *r = san_modifier_rec(ctx, this_val);
+    JSValue el, list;
+    SanName nm;
+    bool modified = false, answer = false;
+
+    (void)argc; (void)magic;
+    if (!r) return JS_EXCEPTION;
+    if (!san_modifier_item(ctx, argv[0], SAN_KIND_ELEMENT_WITH_ATTRS, &el, &nm)) return JS_EXCEPTION;
+    if (san_has(ctx, r->config, "elements")) {                                  /* step 4 */
+        JSValue rwc = san_get(ctx, r->config, "replaceWithChildrenElements");
+        JSValue ga = san_get(ctx, r->config, "attributes");
+        JSValue local = san_get(ctx, el, "attributes");
+        JSValue lrem = san_get(ctx, el, "removeAttributes");
+        int idx;
+
+        modified = san_list_remove(ctx, rwc, nm.name, nm.ns);                   /* step 4.1 */
+        JS_FreeValue(ctx, rwc);
+        if (!JS_IsUndefined(ga)) {                                              /* step 4.2 */
+            if (!JS_IsUndefined(local)) {
+                JSValue d = san_get(ctx, r->config, "dataAttributes");
+
+                san_dedup(ctx, local);
+                san_filter_by(ctx, local, ga, false);      /* difference with the global allow-list */
+                if (JS_ToBool(ctx, d)) san_drop_data_attributes(ctx, local);
+                JS_FreeValue(ctx, d);
+            }
+            if (!JS_IsUndefined(lrem)) {
+                san_dedup(ctx, lrem);
+                san_filter_by(ctx, lrem, ga, true);        /* a local remove-list is a SUBSET of it */
+            }
+        } else {                                                                /* step 4.3 */
+            JSValue gr = san_get(ctx, r->config, "removeAttributes");
+
+            if (!JS_IsUndefined(local)) {
+                san_dedup(ctx, local);
+                san_filter_by(ctx, local, lrem, false);
+                /* "Remove element["removeAttributes"]" — beside a global remove-list an element may carry one
+                   local list or the other, never both. */
+                JS_SetPropertyStr(ctx, el, "removeAttributes", JS_UNDEFINED);
+                JS_FreeValue(ctx, lrem);
+                lrem = JS_UNDEFINED;
+                san_filter_by(ctx, local, gr, false);
+            } else if (!JS_IsUndefined(lrem)) {
+                san_dedup(ctx, lrem);
+                san_filter_by(ctx, lrem, gr, false);
+            }
+            JS_FreeValue(ctx, gr);
+        }
+        JS_FreeValue(ctx, local);
+        JS_FreeValue(ctx, lrem);
+        JS_FreeValue(ctx, ga);
+        list = san_get(ctx, r->config, "elements");
+        idx = san_index_of(ctx, list, nm.name, nm.ns);
+        if (idx < 0) {                                                          /* step 4.4 */
+            san_append(ctx, list, el);
+            el = JS_UNDEFINED;
+            answer = true;
+        } else {
+            JSValue cur = JS_GetPropertyUint32(ctx, list, (uint32_t)idx);       /* step 4.5 */
+
+            if (san_element_equal(ctx, el, cur)) {                              /* step 4.6 */
+                answer = modified;
+            } else {                                                            /* steps 4.7-4.9 */
+                san_remove_at(ctx, list, idx);
+                san_append(ctx, list, el);
+                el = JS_UNDEFINED;
+                answer = true;
+            }
+            JS_FreeValue(ctx, cur);
+        }
+        JS_FreeValue(ctx, list);
+    } else {                                                                    /* step 5 */
+        JSValue local = san_get(ctx, el, "attributes");
+        JSValue lrem = san_get(ctx, el, "removeAttributes");
+        /* Step 5.1: beside a global REMOVE-list there is no allow-list for a local list to be reconciled
+           against, so an element carrying one is refused outright rather than silently stripped. */
+        bool refuse = !JS_IsUndefined(local) || san_len(ctx, lrem) > 0;
+
+        JS_FreeValue(ctx, local);
+        JS_FreeValue(ctx, lrem);
+        if (!refuse) {
+            JSValue rwc = san_get(ctx, r->config, "replaceWithChildrenElements");
+
+            modified = san_list_remove(ctx, rwc, nm.name, nm.ns);               /* step 5.2 */
+            JS_FreeValue(ctx, rwc);
+            list = san_get(ctx, r->config, "removeElements");
+            if (!san_contains(ctx, list, nm.name, nm.ns)) answer = modified;    /* step 5.3 */
+            else { san_list_remove(ctx, list, nm.name, nm.ns); answer = true; } /* steps 5.4-5.5 */
+            JS_FreeValue(ctx, list);
+        }
+    }
+    san_name_release(ctx, &nm);
+    JS_FreeValue(ctx, el);
+    return JS_NewBool(ctx, answer);
+}
+
+/* §8.6.2's `removeElement(element)` and `removeAttribute(attribute)` — each is "return the result of removing
+   it from this's configuration", which is §8.6.4's operation this file already states. Magic 0 and 1: the two
+   differ in the canonical shape and in which operation, and in nothing else. */
+static JSValue js_san_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    SanitizerRec *r = san_modifier_rec(ctx, this_val);
+    JSValue item;
+    SanName nm;
+    bool answer;
+
+    (void)argc;
+    if (!r) return JS_EXCEPTION;
+    if (!san_modifier_item(ctx, argv[0], magic ? SAN_KIND_ATTRIBUTE : SAN_KIND_ELEMENT, &item, &nm))
+        return JS_EXCEPTION;
+    answer = magic ? san_config_remove_attribute(ctx, r->config, nm.name, nm.ns)
+                   : san_config_remove_element(ctx, r->config, nm.name, nm.ns);
+    san_name_release(ctx, &nm);
+    JS_FreeValue(ctx, item);
+    return JS_NewBool(ctx, answer);
+}
+
+/* §8.6.2's `replaceElementWithChildren(element)`. */
+static JSValue js_san_replace_with_children(JSContext *ctx, JSValueConst this_val, int argc,
+                                            JSValueConst *argv, int magic)
+{
+    SanitizerRec *r = san_modifier_rec(ctx, this_val);
+    JSValue el, list, rwc;
+    SanName nm;
+    bool modified, answer;
+
+    (void)argc; (void)magic;
+    if (!r) return JS_EXCEPTION;
+    if (!san_modifier_item(ctx, argv[0], SAN_KIND_ELEMENT, &el, &nm)) return JS_EXCEPTION;
+    /* Step 4: replacing one of these with its children re-parses into a different tree, which is why the
+       standard refuses it rather than leaving it to the author. */
+    if (san_pair_lists(SAN_NON_REPLACEABLE, SAN_NROWS(SAN_NON_REPLACEABLE), nm.name, nm.ns, "", NULL)) {
+        san_name_release(ctx, &nm);
+        JS_FreeValue(ctx, el);
+        return JS_FALSE;
+    }
+    list = san_get(ctx, r->config, "elements");                                 /* step 5 */
+    modified = san_list_remove(ctx, list, nm.name, nm.ns);
+    JS_FreeValue(ctx, list);
+    list = san_get(ctx, r->config, "removeElements");                           /* step 6 */
+    if (san_list_remove(ctx, list, nm.name, nm.ns)) modified = true;
+    JS_FreeValue(ctx, list);
+    rwc = san_get(ctx, r->config, "replaceWithChildrenElements");               /* step 7 */
+    if (!JS_IsObject(rwc)) {
+        /* Canonicalize creates neither replaceWithChildrenElements nor a place to append to, so the member's
+           own append is what brings the list into existence. */
+        JS_FreeValue(ctx, rwc);
+        rwc = JS_NewArray(ctx);
+        JS_SetPropertyStr(ctx, r->config, "replaceWithChildrenElements", JS_DupValue(ctx, rwc));
+    }
+    if (san_contains(ctx, rwc, nm.name, nm.ns)) {
+        answer = modified;
+    } else {
+        san_append(ctx, rwc, el);
+        el = JS_UNDEFINED;
+        answer = true;
+    }
+    JS_FreeValue(ctx, rwc);
+    san_name_release(ctx, &nm);
+    JS_FreeValue(ctx, el);
+    return JS_NewBool(ctx, answer);
+}
+
+/* §8.6.2's `allowAttribute(attribute)`. */
+static JSValue js_san_allow_attribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                      int magic)
+{
+    SanitizerRec *r = san_modifier_rec(ctx, this_val);
+    JSValue at, list;
+    SanName nm;
+    bool answer = false;
+
+    (void)argc; (void)magic;
+    if (!r) return JS_EXCEPTION;
+    if (!san_modifier_item(ctx, argv[0], SAN_KIND_ATTRIBUTE, &at, &nm)) return JS_EXCEPTION;
+    if (san_has(ctx, r->config, "attributes")) {                                /* step 4 */
+        JSValue d = san_get(ctx, r->config, "dataAttributes");
+        bool data_on = JS_ToBool(ctx, d);
+
+        JS_FreeValue(ctx, d);
+        list = san_get(ctx, r->config, "attributes");
+        /* Steps 4.1-4.2: a custom data attribute is already allowed when they all are, and listing it would be
+           the duplicate entry §8.6.3's validity refuses. */
+        if ((data_on && san_item_is_data_attribute(&nm)) || san_contains(ctx, list, nm.name, nm.ns)) {
+            answer = false;
+        } else {
+            JSValue elements = san_get(ctx, r->config, "elements");             /* step 4.3 */
+            uint32_t n = san_len(ctx, elements), i;
+
+            for (i = 0; i < n; i++) {
+                JSValue el = JS_GetPropertyUint32(ctx, elements, i);
+                JSValue local = JS_GetPropertyStr(ctx, el, "attributes");
+
+                san_list_remove(ctx, local, nm.name, nm.ns);
+                JS_FreeValue(ctx, local);
+                JS_FreeValue(ctx, el);
+            }
+            JS_FreeValue(ctx, elements);
+            san_append(ctx, list, at);                                          /* step 4.4 */
+            at = JS_UNDEFINED;
+            answer = true;
+        }
+        JS_FreeValue(ctx, list);
+    } else {                                                                    /* step 5 */
+        list = san_get(ctx, r->config, "removeAttributes");
+        if (san_list_remove(ctx, list, nm.name, nm.ns)) answer = true;
+        JS_FreeValue(ctx, list);
+    }
+    san_name_release(ctx, &nm);
+    JS_FreeValue(ctx, at);
+    return JS_NewBool(ctx, answer);
+}
+
+/* §8.6.2's `allowProcessingInstruction(pi)` (magic 0) and `removeProcessingInstruction(pi)` (magic 1). ONE
+   body because the two algorithms are the same question with the two lists exchanged: the member APPENDS to
+   the list that expresses its own answer and REMOVES from the other one, and each is a no-op when the list
+   already says what the member wants it to. */
+static JSValue js_san_pi(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    SanitizerRec *r = san_modifier_rec(ctx, this_val);
+    JSValue pi, tv, list;
+    const char *target;
+    bool has_allow, answer;
+    int idx;
+
+    (void)argc;
+    if (!r) return JS_EXCEPTION;
+    pi = san_canon_item(ctx, argv[0], SAN_KIND_PI);                             /* step 3 */
+    tv = JS_GetPropertyStr(ctx, pi, "target");
+    target = JS_ToCString(ctx, tv);
+    JS_FreeValue(ctx, tv);
+    if (!target) {
+        JS_FreeValue(ctx, pi);
+        return JS_EXCEPTION;
+    }
+    has_allow = san_has(ctx, r->config, "processingInstructions");
+    list = san_get(ctx, r->config, has_allow ? "processingInstructions"
+                                             : "removeProcessingInstructions");
+    DCHECK(JS_IsObject(list), "§8.6.3: a canonical configuration has one of the two processing instruction "
+                              "lists, and this one has neither");
+    idx = san_pi_index_of(ctx, list, target);
+    if (has_allow == (magic == 0)) {          /* the list is the member's OWN kind: append when it is absent */
+        if (idx >= 0) {
+            answer = false;
+        } else {
+            san_append(ctx, list, pi);
+            pi = JS_UNDEFINED;
+            answer = true;
+        }
+    } else {                                  /* the other kind: remove when it is there */
+        if (idx < 0) {
+            answer = false;
+        } else {
+            san_remove_at(ctx, list, idx);
+            answer = true;
+        }
+    }
+    JS_FreeCString(ctx, target);
+    JS_FreeValue(ctx, list);
+    JS_FreeValue(ctx, pi);
+    return JS_NewBool(ctx, answer);
 }
 
 /* ---- §8.6.4's inner sanitize steps, as the walk --------------------------------------------------------- */
@@ -1334,21 +2184,41 @@ static void sanitizer_install_realm(JSContext *ctx);
 
 void sanitizer_init(JSContext *ctx)
 {
-    static const IdlArgType ONE_ANY[1] = { IDL_ANY };
+    /* Every one of §8.6.2's dictionary-taking members declares the SAME type — `(DOMString or D)` — and
+       differs only in WHICH D, which is the member list each declaration passes beside it. */
+    static const IdlArgType ONE_UNION[1] = { IDL_STRING_OR_DICT };
     static const IdlArgType ONE_BOOL[1] = { IDL_BOOLEAN };
     JSClassDef d = { "Sanitizer", san_finalizer, san_gc_mark };
 
     DCHECK(!g_ready, "sanitizer_init ran twice — §8.6's interface is declared once per AGENT");
     JS_NewClassID(JS_GetRuntime(ctx), &g_class);
     JS_NewClass(JS_GetRuntime(ctx), g_class, &d);
-    /* `(SanitizerConfig or SanitizerPresets)` is IDL_ANY because its arms are a DICTIONARY and an ENUMERATION,
-       and the union's own rule — which arm a value takes — is stated at the one place that resolves it. */
-    g_id_ctor = idl_method_id(ctx, ONE_ANY, 1, js_san_ctor, 0);
+    /* `(SanitizerConfig or SanitizerPresets)`, DECLARED: §3.2.25 sends null, undefined and every Object down
+       the dictionary arm — whose nine members, and the sequences and dictionaries inside them, the args machine
+       converts before this file's body runs — and everything else to the enumeration's string. */
+    g_id_ctor = idl_method_id_dict(ctx, ONE_UNION, 1, SAN_CONFIG_DICT.members, SAN_CONFIG_DICT.n,
+                                   js_san_ctor, 0);
     idl_optional_from(0);
     g_id_get = idl_method_id(ctx, NULL, 0, js_san_get, 0);
     g_id_remove_unsafe = idl_method_id(ctx, NULL, 0, js_san_remove_unsafe, 0);
     g_id_set_comments = idl_method_id(ctx, ONE_BOOL, 1, js_san_set_flag, 0);
     g_id_set_data_attributes = idl_method_id(ctx, ONE_BOOL, 1, js_san_set_flag, 1);
+    /* THE SEVEN NAME-TAKING MODIFIERS. Each names the dictionary arm its own IDL states — `SanitizerElement`
+       for the two that take a bare element, `SanitizerElementWithAttributes` for allowElement (which is the
+       one whose entries carry attribute lists of their own), `SanitizerAttribute` and `SanitizerPI` for the
+       rest — because the arm is half of what `(DOMString or D)` states. */
+    g_id_allow_element = idl_method_id_dict(ctx, ONE_UNION, 1, SAN_ELEMENT_ATTRS_DICT.members,
+                                            SAN_ELEMENT_ATTRS_DICT.n, js_san_allow_element, 0);
+    g_id_remove_element = idl_method_id_dict(ctx, ONE_UNION, 1, SAN_ELEMENT_DICT.members,
+                                             SAN_ELEMENT_DICT.n, js_san_remove, 0);
+    g_id_replace_with_children = idl_method_id_dict(ctx, ONE_UNION, 1, SAN_ELEMENT_DICT.members,
+                                                    SAN_ELEMENT_DICT.n, js_san_replace_with_children, 0);
+    g_id_allow_pi = idl_method_id_dict(ctx, ONE_UNION, 1, SAN_PI_DICT.members, SAN_PI_DICT.n, js_san_pi, 0);
+    g_id_remove_pi = idl_method_id_dict(ctx, ONE_UNION, 1, SAN_PI_DICT.members, SAN_PI_DICT.n, js_san_pi, 1);
+    g_id_allow_attribute = idl_method_id_dict(ctx, ONE_UNION, 1, SAN_ATTRIBUTE_DICT.members,
+                                              SAN_ATTRIBUTE_DICT.n, js_san_allow_attribute, 0);
+    g_id_remove_attribute = idl_method_id_dict(ctx, ONE_UNION, 1, SAN_ATTRIBUTE_DICT.members,
+                                               SAN_ATTRIBUTE_DICT.n, js_san_remove, 1);
     g_ready = 1;
     realm_declare_intrinsic(sanitizer_install_realm);
 }
@@ -1365,14 +2235,16 @@ static void sanitizer_install_realm(JSContext *ctx)
     CHECK(!JS_IsException(proto), "Sanitizer.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "Sanitizer");
     idl_install_method(ctx, proto, "get", 0, g_id_get);
-    idl_install_method(ctx, proto, "removeUnsafe", 0, g_id_remove_unsafe);
+    idl_install_method(ctx, proto, "allowElement", 1, g_id_allow_element);
+    idl_install_method(ctx, proto, "removeElement", 1, g_id_remove_element);
+    idl_install_method(ctx, proto, "replaceElementWithChildren", 1, g_id_replace_with_children);
+    idl_install_method(ctx, proto, "allowProcessingInstruction", 1, g_id_allow_pi);
+    idl_install_method(ctx, proto, "removeProcessingInstruction", 1, g_id_remove_pi);
+    idl_install_method(ctx, proto, "allowAttribute", 1, g_id_allow_attribute);
+    idl_install_method(ctx, proto, "removeAttribute", 1, g_id_remove_attribute);
     idl_install_method(ctx, proto, "setComments", 1, g_id_set_comments);
     idl_install_method(ctx, proto, "setDataAttributes", 1, g_id_set_data_attributes);
-    /* §8.6.2's SIX NAME-TAKING MODIFIERS — allowElement, removeElement, replaceElementWithChildren,
-       allowAttribute, removeAttribute, allowProcessingInstruction, removeProcessingInstruction — are ABSENT
-       rather than stubbed: each takes a `(DOMString or dictionary)` whose conversion is the same machine
-       san_config_from_spec's dictionary arm names, so building that one is what installs these. A page calling
-       one gets the TypeError of a missing method, which is the honest answer. */
+    idl_install_method(ctx, proto, "removeUnsafe", 0, g_id_remove_unsafe);
     JS_SetClassProto(ctx, g_class, JS_DupValue(ctx, proto));
     ctor = idl_step_constructor(ctx, "Sanitizer", 0, g_id_ctor);
     CHECK(!JS_IsException(ctor), "the Sanitizer interface object could not be allocated");
@@ -1388,4 +2260,6 @@ void sanitizer_free(void)
     /* The prototypes and the interface objects are the REALMS' — each is released with its context. */
     g_ready = 0;
     g_id_ctor = g_id_get = g_id_remove_unsafe = g_id_set_comments = g_id_set_data_attributes = -1;
+    g_id_allow_element = g_id_remove_element = g_id_replace_with_children = -1;
+    g_id_allow_pi = g_id_remove_pi = g_id_allow_attribute = g_id_remove_attribute = -1;
 }
