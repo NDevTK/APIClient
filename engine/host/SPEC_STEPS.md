@@ -4340,21 +4340,19 @@ platform has the same gap and the same one-line answer.
 
 ### 16.6 What is honestly ABSENT, by name
 
-- **`shadowRoot`.** There is no Shadow DOM in this engine — no `attachShadow`, no `ShadowRoot`
-  interface — so §4.13.7.2's getter has no "is a shadow host" to ask. A getter that could only ever
-  answer `null` is the shape-only stub the IDL audit exists to expose, so the member is absent and
-  the page's own `TypeError` names it. §4.13.4's **disable shadow** boolean is collected anyway,
-  because it comes off the same sequence **disable internals** does; §4.13.5 step 8.1's check and
-  `attachShadow` are its two readers and both arrive together.
+- **`shadowRoot`.** The reason this entry used to give — "there is no Shadow DOM in this engine" — is
+  no longer true and is **deleted**: §17 built `attachShadow`, `ShadowRoot` and the slot algorithms,
+  so §4.13.7.2 steps 2-3 ("is a shadow host", "target's shadow root") both have real answers. What is
+  still missing is steps 4-5: the root's **available to element internals** field, which §4.8's
+  record carries as a WRITE (`shadow_root_mark_declarative`) with no reader. A getter that skipped
+  that check would hand a page the one shadow root §4.13.7.2 hides from it — a WRONG answer rather
+  than a partial one — so the member stays absent until the field is readable. §4.13.4's **disable
+  shadow** boolean is collected anyway, because it comes off the same sequence **disable internals**
+  does.
 - **ARIAMixin's eight ELEMENT-reflecting members** — `ariaActiveDescendantElement` and the seven
   `FrozenArray<Element>?` ones. They are not content-attribute reflections at all; they are the
   "explicitly set attr-element" machinery, with its own lifetime rules. The **46 `DOMString?`
   members are real** and reflect into §4.13.7.4's internal content attribute map.
-- **The SUBMISSION side of `setFormValue`.** The submission value and the state are stored exactly as
-  §4.13.7.3 says, and §4.13.7.3's **entry construction algorithm** has nothing to run in: form
-  submission's control list is a tree walk over the form's built-in descendants, and
-  `new FormData(form)` already `DFAIL`s on the same missing algorithm. Both widen together, and doing
-  so is what makes a form-associated custom element's value reach an `@H` record.
 - **`formStateRestoreCallback` and `formResetCallback` have no CALLER.** Both are collected by step
   14.13 and both are enqueueable through one entry point; the first needs a session-history state
   restore and the second needs `form.reset()`, neither of which exists.

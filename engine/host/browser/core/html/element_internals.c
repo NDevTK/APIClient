@@ -43,13 +43,14 @@
  *     `FrozenArray<Element>?` ones). They are not content-attribute reflections at all — they are the
  *     "explicitly set attr-element" machinery, which is its own mechanism with its own lifetime rules. The 46
  *     `DOMString?` members are real reflections into §4.13.7.4's internal content attribute map and are here.
- *   - The SUBMISSION side of `setFormValue`. The value and the state are stored exactly as §4.13.7.3 says, and
- *     §4.13.7.3's ENTRY CONSTRUCTION algorithm that turns them into form entries has nothing to run in: form
- *     submission's control list is `html_form.c`'s tree walk over the form's built-in descendants, and
- *     `new FormData(form)` already DFAILs on the same missing algorithm. Both widen together.
  *   - Resetting the form owner when some OTHER element's `id` changes, or when an element with an ID enters or
  *     leaves the document. Those triggers need a document-level id index, which this engine does not have
- *     (`getElementById` walks), and a tree walk per `id` write is not that index. */
+ *     (`getElementById` walks), and a tree walk per `id` write is not that index.
+ *
+ * THE SUBMISSION SIDE OF `setFormValue` USED TO BE ON THAT LIST AND IS BUILT. §4.13.7.3's ENTRY CONSTRUCTION
+ * algorithm is a STEP of HTML §4.10.22.4, which now exists as form_entry_list.c; its step 5.3 performs the
+ * construction and element_internals_submission_value below is what it reads. That is what carries a
+ * form-associated custom element's value into an @H record. */
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
