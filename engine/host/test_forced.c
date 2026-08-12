@@ -1770,6 +1770,11 @@ static void tf_agent_init(JSContext *ctx)
     fetch_init(ctx);   /* §5/§6/§5.3 declare their per-realm prototypes here, not from the install */
     abort_init(ctx);
     observable_init(ctx);
+    /* XHR §5's FormData — BEFORE element_init, because HTML §4.10.22.1's FormDataEvent declares a
+       `required FormData formData` member and a Web IDL brand is the CLASS, which has to exist to be named.
+       This fixture already frees the component (form_data_free below) and never declared it, so the free was
+       the only half of it that ran. */
+    form_data_init(ctx);
     element_init(ctx);
     iframe_init(ctx);
     document_init(ctx);   /* §4.8.5: the slot a child navigable lives in */
@@ -1831,6 +1836,7 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
        JS_AddIntrinsicDOMException fix: the intrinsic is per-context idempotent now, so JS_NewContext's own
        JS_AddIntrinsicAToB install plus this explicit one no longer overwrite one prototype with another. */
     CHECK(JS_AddIntrinsicDOMException(ctx) == 0, "the DOMException intrinsic failed to install");
+    form_data_install(ctx, g);   /* XHR §5: the FormData interface object, which `new FormData(form)` needs */
     event_install(ctx, g);   /* the Event interface object — `new Event(...)` and every `instanceof Event` */
     /* §2.7: the global reaches add/removeEventListener/dispatchEvent through Window.prototype ->
        EventTarget.prototype, which window_install chains it to. */

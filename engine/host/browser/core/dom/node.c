@@ -1494,7 +1494,7 @@ static lxb_dom_node_t *clone_template_content(lxb_dom_node_t *n)
     return t->content ? &t->content->node : NULL;
 }
 
-/* THE THREE STAGES, and why the template case forces three rather than two. A `<template>` can have BOTH: the
+/* THE STAGES, and why the template case forces a LEVEL rather than a stage. A `<template>` can have BOTH: the
    parser puts markup in its content fragment, and `t.appendChild(x)` appends to the ELEMENT — §4.10 is explicit
    that only the parser and `t.content` reach the fragment. So a template's copy has two child lists to fill, and
    coming back from the content walk must resume AFTER the content check and BEFORE the ordinary-children one, or
@@ -1502,18 +1502,28 @@ static lxb_dom_node_t *clone_template_content(lxb_dom_node_t *n)
    The invariant every stage keeps: `src` is the original being handled, `cnode` is its copy, and `dst` is the
    copy of the node the NEXT child goes under. */
 /* WHERE THIS MACHINE RESTS, AS THE STANDARDS NUMBER IT. cloneNode is two steps over `clone a node`, whose
-   own steps 2, 3 and 5 are exactly the three the walk cycles through per node: clone a single node and append
+   own steps 2, 3, 5 and 7 are exactly the four the walk cycles through per node: clone a single node and append
    it (2 and 4), run the cloning steps other specifications define — which for a template element is HTML
-   §4.12.3's, the reason this level exists at all — and then recurse over the children (5). Each is its own
-   stage because each is per node and the walk is the page's subtree; none of them can reach the page's code,
-   which is why the entry stage may name cloneNode's steps 1-2 together with `clone a node`'s 1-2. */
+   §4.12.3's, the reason the template LEVEL exists at all — recurse over the children (5), and return (7). Each
+   is its own stage because each is per node and the walk is the page's subtree; none of them can reach the
+   page's code, which is why the entry stage may name cloneNode's steps 1-2 together with `clone a node`'s 1-2.
+   LEAVING A NODE IS ONE REST POINT, AND THAT IS WHAT STEP 7 IS. The cursor is flat over two trees, so the
+   moment "this node's subtree is finished" used to arrive in two unrelated places — the `src = src->next`
+   transition and the ascend loop — and neither was a stage, so there was nowhere to put a step that runs AFTER
+   step 5 (which is what step 6 is). Step 7 is that moment stated once: the walk arrives at CLONE_LEAVE exactly
+   when `clone a node` would RETURN for `src`, whether `src` is a leaf, the last child of its parent, or the
+   root of the whole clone. The ascend that used to be a `while` inside one opcode is now one rest point per
+   ancestor, because a page's tree is as deep as the page says and a loop bounded by "the depth already walked"
+   is bounded by the page. */
 #define NODE_CLONE_STAGES(X) \
     X(CLONE_ROOT,     "DOM §4.4 cloneNode steps 1-2 → clone a node steps 1-2 (clone a single node: the root of " \
                       "the copy)") \
     X(CLONE_COPY,     "DOM §4.4 clone a node steps 2 and 4 (clone a single node; append copy to parent), one " \
                       "descendant per step") \
     X(CLONE_TEMPLATE, "DOM §4.4 clone a node step 3 (HTML §4.12.3 the template element's cloning steps)") \
-    X(CLONE_CHILDREN, "DOM §4.4 clone a node step 5 (for each child of node's children, in tree order)")
+    X(CLONE_CHILDREN, "DOM §4.4 clone a node step 5 (for each child of node's children, in tree order)") \
+    X(CLONE_LEAVE,    "DOM §4.4 clone a node step 7 (return copy): this node's clone is complete, and step 5's " \
+                      "loop over its parent's children advances")
 enum { IDL_STEP_STAGE_BASE(NODE_CLONE_STAGES) NODE_CLONE_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const NODE_CLONE_STEPS[] = { NODE_CLONE_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -1536,9 +1546,9 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
             return JS_STEP_ABRUPT;
         }
         s->copy = lxb_dom_node_clone(n, false);
-        dom_cow_note_created(s->copy);   /* the clone ROOT only — its descendants are reachable only through it */
         CHECK(s->copy != NULL, "cloneNode: the Lexbor node copy failed — returning nothing would hand the page a "
                                "null it has no way to distinguish from a node it never asked for");
+        dom_cow_note_created(s->copy);   /* the clone ROOT only — its descendants are reachable only through it */
         if (!deep) { *presult = node_wrap(ctx, s->copy); return JS_STEP_DONE; }
         s->root = s->src = n;
         s->cnode = s->dst = s->croot = s->copy;   /* the root is already copied; the walk starts at its children */
@@ -1573,21 +1583,26 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
         return JS_STEP_YIELD;
     }
 
-    DCHECK(hdr->stage == CLONE_CHILDREN, "cloneNode resumed into a stage §4.4 does not have");
-    if (s->src->first_child) {
-        s->src = s->src->first_child;
-        s->dst = s->cnode;
-        hdr->stage = CLONE_COPY;
+    if (hdr->stage == CLONE_CHILDREN) {
+        if (s->src->first_child) {
+            s->src = s->src->first_child;
+            s->dst = s->cnode;
+            hdr->stage = CLONE_COPY;
+        } else {
+            /* A node with no children finishes step 5 the moment it starts it. */
+            hdr->stage = CLONE_LEAVE;
+        }
         return JS_STEP_YIELD;
     }
-    for (;;) {
-        /* ASCEND IN LOCKSTEP. The two trees have the same shape by construction, so one loop moves both — and
-           it is bounded by the depth already walked, not by the page, which is why it is not its own stage. */
-        while (!s->src->next && s->src != s->root) {
-            s->src = s->src->parent;
-            s->dst = s->dst->parent;
-        }
-        if (s->src != s->root) { s->src = s->src->next; hdr->stage = CLONE_COPY; return JS_STEP_YIELD; }
+
+    DCHECK(hdr->stage == CLONE_LEAVE, "cloneNode resumed into a stage §4.4 does not have");
+    /* STEP 7, "RETURN COPY" — `src` is cloned, its subtree is cloned, and this is the ONE place the walk says
+       so. Everything a specification defines to happen after step 5 happens here and nowhere earlier. */
+    if (s->src == s->root) {
+        /* THE LEVEL IS FINISHED. Only the OUTERMOST level's root is itself a copy — it is the node cloneNode
+           was called on, and its step 7 is the member's answer. An inner level's root is a `<template>`'s
+           content fragment, which is NOT cloned: `clone a node` is invoked on its CHILDREN, into a fragment the
+           copy already has, so arriving at it is the level ending and nothing else. */
         if (s->sp == 0) { *presult = node_wrap(ctx, s->copy); return JS_STEP_DONE; }
         s->sp--;                        /* back to the template that owns this level, PAST its content check */
         s->src = s->stack[s->sp].src;
@@ -1595,8 +1610,25 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
         s->root = s->stack[s->sp].root;
         s->croot = s->stack[s->sp].croot;
         s->cnode = s->stack[s->sp].cnode;
+        hdr->stage = CLONE_CHILDREN;    /* the template ELEMENT's own children, which are not its content's */
         return JS_STEP_YIELD;
     }
+    if (s->src->next) {
+        /* Step 5's loop advances: the next child of the parent whose copy `dst` still is. */
+        s->src = s->src->next;
+        hdr->stage = CLONE_COPY;
+        return JS_STEP_YIELD;
+    }
+    /* ASCEND ONE, IN LOCKSTEP. The last child of a parent finishing means the PARENT's step 5 is finished too,
+       so the parent rests here in its turn — one rest point per ancestor rather than a loop over a depth the
+       page chose. `dst` is the copy of `src`'s parent, which is exactly the copy the parent becomes. */
+    DCHECK(s->src->parent != NULL && s->dst != NULL,
+           "the clone walk ran out of ancestors before reaching its level root — the two trees are walked in "
+           "lockstep and the copy is shorter than the original it was built from");
+    s->src = s->src->parent;
+    s->cnode = s->dst;
+    s->dst = s->dst->parent;
+    return JS_STEP_YIELD;               /* still CLONE_LEAVE: the parent's own step 7 */
 }
 
 static const IdlStepDecl NODE_CLONE_STEP = {

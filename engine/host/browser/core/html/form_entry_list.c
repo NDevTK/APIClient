@@ -89,6 +89,13 @@ static bool fel_flag_of(JSContext *ctx, JSValueConst form)
     return b;
 }
 
+bool form_entry_list_constructing(JSContext *ctx, JSValueConst form)
+{
+    DCHECK(g_atom_building != JS_ATOM_NULL,
+           "§4.10.21.3 step 2 asked before form_entry_list_declare minted the form's flag key");
+    return fel_flag_of(ctx, form);
+}
+
 /* CONFIGURABLE AND WRITABLE, for the reason the form-owner slot is: this is written twice per construction and
    a slot defined with no flags makes the second write a silent no-op. */
 static void fel_flag_set(JSContext *ctx, JSValueConst form, bool on)

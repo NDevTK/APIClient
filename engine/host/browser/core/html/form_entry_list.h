@@ -20,6 +20,11 @@
    Declared from html_form_declare, beside §4.10's other slot key, and released with the agent. */
 void form_entry_list_declare(JSContext *ctx);
 void form_entry_list_free(JSContext *ctx);
+/* §4.10.21.3 STEP 2's guard, over that same flag: "if form's constructing entry list is true, then return".
+   It is a separate reader rather than a second flag because the two steps are about the same fact — a form
+   re-entered from its own `formdata` handler — and step 2 has to answer BEFORE step 11 fires a second `submit`
+   event, which is earlier than §4.10.22.4 step 1 would notice. */
+bool form_entry_list_constructing(JSContext *ctx, JSValueConst form);
 
 typedef struct {
     uint8_t  phase;      /* this sub-sequence's own cursor — see form_entry_list.c's FEL_* */

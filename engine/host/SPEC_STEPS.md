@@ -4360,6 +4360,134 @@ platform has the same gap and the same one-line answer.
   re-entered from a getter the same `define()` invoked; the flag is state on the registry, which is
   per-realm, so it lands with the scoped-registry work that also makes step 7.1's "is scoped" real.
 
+**The SUBMISSION side of `setFormValue` came off this list**, and §16.7 is where it went.
+
+### 16.7 HTML §4.10.22.4 "constructing the entry list" — the algorithm three gaps were one gap of
+
+**Why it is in §16 at all.** §4.13.7.3's **entry construction algorithm** is not a thing beside form
+submission; it is *step 5.3 of* form submission's entry list. So "`ElementInternals.setFormValue`
+stores a value nothing consumes", "`new FormData(form)` `DFAIL`s", and "`form.elements` does not
+include form-associated custom elements" were three views of ONE missing algorithm, and they close
+together or not at all. Read from the live standard on **2026-08-12** (`https://html.spec.whatwg.org/`
+§4.10.2, §4.10.7, §4.10.10, §4.10.18.3, §4.10.18.4, §4.10.21, §4.10.22; `https://xhr.spec.whatwg.org/`
+§5). Step numbers are the standard's own list numbering as of that date.
+
+  1. If *form*'s **constructing entry list** is true, then return null. —
+  2. Set *form*'s constructing entry list to true. —
+  3. Let *controls* be a list of all the **submittable elements whose form owner is form**, in tree
+     order. —
+  4. Let *entry list* be a new empty entry list. —
+  5. For each element *field* in *controls*, in tree order:
+     1. If ANY of: *field* has a `datalist` ancestor; *field* is **disabled**; *field* is a **button**
+        but it is not *submitter*; *field* is an `input` in the Checkbox state with checkedness false;
+        or *field* is an `input` in the Radio Button state with checkedness false — then continue. —
+     2. If *field* is an `input` in the **Image Button** state: continue unless it is *submitter*;
+        then two entries, `name.x`/`name.y` (or bare `x`/`y` when unnamed), from the **selected
+        coordinate**. —
+     3. If *field* is a **form-associated custom element**, perform §4.13.7.3's entry construction
+        algorithm and continue. —
+     4. If *field* has no `name` attribute, or its value is the empty string, continue. —
+     6. `select`: one entry per option in the **list of options** whose **selectedness** is true and
+        that is not **disabled**. —
+     7. `input` Checkbox/Radio: the `value` **content attribute** if specified, otherwise `"on"`. —
+     8. `input` File Upload: one entry per selected file, or — **with no selected files** — a `File`
+        with an empty name, `application/octet-stream`, and an empty body. —
+     9. `input` Hidden named an ASCII case-insensitive `_charset_`: the **name of the encoding**. —
+    11. Otherwise: an entry with *name* and the element's **value**. —
+    12. `dirname`, when non-empty and the element is an **auto-directionality form-associated
+        element**: a second entry carrying `"ltr"`/`"rtl"`. —
+  6. Let *form data* be a new `FormData` object **associated with** *entry list*. —
+  7. **Fire an event named `formdata` at form using `FormDataEvent`**, with `formData` initialized to
+     *form data* and `bubbles` initialized to true. — **`[S]`**
+  8. Set *form*'s constructing entry list to false. —
+  9. Return **a clone of** *entry list*. —
+
+**Step 7 is the whole reason this is a machine, and it is why `form.submit()` became one too.** That
+member was a plain C body on the recorded claim that "nothing on this path reaches the page's code",
+which was true of the ad-hoc walk that used to stand in for this algorithm and is FALSE of the
+algorithm itself: a page's `form.addEventListener('formdata', e => e.formData.append('csrf', t))`
+runs *inside* step 7 with a live handle on the list, and what it appends is part of the request.
+`form.submit()`, `form.requestSubmit()` and `new FormData(form)` are therefore all step machines over
+one shared sub-sequence (`form_entry_list_run`), which holds its own cursor so each caller spends ONE
+of its stages on the whole construction.
+
+**Step 5 also YIELDS per control.** It walks a list of the PAGE's size, and a walk that long inside
+one opcode is the drive-to-completion nothing else here bounds — so it returns `JS_STEP_YIELD` at
+every field. Running no user code is not what makes a C body safe to leave un-parkable; being O(1)
+is.
+
+**Step 6's "associated with" is why the entry list IS a `FormData` here.** Nothing observes the list
+between steps 4 and 6, and from step 6 on the two are one object by definition — so the algorithm
+builds into the `FormData` from step 4. That is also what §State-isolation requires of it: the list
+is a JS value on the running flow's step state, so it forks per flow and parks to the IDB cold tier
+with the flow that is building it, which a malloc'd C list beside it could not do. A `formdata`
+handler that forks leaves two arms each appending their own entries, and that only works because the
+list is the thing the COW delta already carries.
+
+**Step 1/2/8's flag is per-FORM and per-FLOW**, held as an own slot on the form's wrapper under a
+private Symbol. It makes the algorithm non-reentrant, which is what turns a handler's
+`new FormData(theSameForm)` into XHR §5 step 1.3's `InvalidStateError`. A run that is ABANDONED —
+outranked and dropped inside step 5, or unwound by a throw — clears it from its teardown, because a
+flag left set makes every later submission of that form take step 1's early return and silently do
+nothing.
+
+**§4.10.18.4's `elements` is the same question with a wider category.** Both it and step 3 ask "which
+elements of the form's ROOT have this form as their form owner"; `elements` takes LISTED (minus
+`input type=image`, "for historical reasons") and step 3 takes SUBMITTABLE. The subtree walk that
+used to answer `elements` was neither: it missed an `<input form=f>` outside the form — which is the
+whole purpose of the `form` content attribute — and it missed form-associated custom elements
+entirely, which is the same gap `new FormData(form)` had from the other end. One walk now, with the
+category as the caller's predicate.
+
+**Selectedness is the `selected` content attribute, and that is exact rather than an approximation.**
+§4.10.10 decouples the two through an option's **dirtiness**, which is set by exactly four things:
+`option.selected =`, `select.value =`, `select.selectedIndex =`, and the user's "pick an option".
+This engine has none of them, so dirtiness can never be true and §4.10.10's own rule ("whenever an
+option element's `selected` attribute is added, **if its dirtiness is false**, its selectedness must
+be set to true") makes the two one boolean. §4.10.7's **selectedness setting algorithm** still runs
+on top of it, which is why `<select name=x><option>a<option>b</select>` submits `x=a` with no
+`selected` attribute anywhere.
+
+**XHR §5's constructor**, whose step 1 this is reached from:
+
+  1. If *form* is given:
+     1. If *submitter* is non-null: it must be a **submit button** (else `TypeError`) whose **form
+        owner** is *form* (else `NotFoundError`). —
+     2. Let *list* be the result of constructing the entry list for *form* and *submitter*. —
+        **`[S]`**
+     3. If *list* is null, throw `InvalidStateError`. —
+     4. Set this's entry list to *list*. —
+
+`optional HTMLFormElement form` is a real interface-typed position, so a non-form is a `TypeError`
+the TYPE throws — but `optional HTMLElement? submitter` is a NULLABLE interface, and one declaration
+carries one brand and one narrowing, so the two positions cannot both be expressed by the declaration
+surface (§16.5a's gap, one level further in). The submitter's check is therefore the constructor's
+first act, stated as such.
+
+**The encoding is a PARAMETER, not a read.** §4.10.22.4's own default is UTF-8 and that is what
+`new FormData(form)` passes; §4.10.21.3 step 15 passes the result of §4.10.22.5's **pick an
+encoding** (`accept-charset` split on ASCII whitespace, first label that resolves to an encoding,
+UTF-8 otherwise). Reading `accept-charset` from inside the algorithm would put a `_charset_` entry
+in a list XHR §5 builds without one — the same defect as any operation reading its inputs off the
+object it acts on rather than taking them with it.
+
+### 16.8 What §16.7 leaves ABSENT, by name
+
+- **Step 5.12's `dirname` entry**, which needs §3.2.6's **directionality**: the `dir` attribute chain
+  plus the first-strong-character scan `dir=auto` resolves by. A submitted control carrying a
+  non-empty `dirname` reaches a `DFAIL` naming it, rather than submitting one entry where a browser
+  submits two.
+- **`SubmitEvent`.** §4.10.21.3 step 11 fires `submit` **using `SubmitEvent`**, with a `submitter`
+  attribute; this engine fires a plain `Event`, so `e.submitter` is undefined. The interface is one
+  slot on one event — it lands with the click-activation path that makes a submitter reachable
+  without `requestSubmit`.
+- **A file control's SELECTED FILES are always empty, and that is not absent — it is the answer.**
+  There is no picker and no user, so step 5.8's "if there are no selected files" branch is the only
+  one reachable, and it is implemented: a named file control still contributes its entry.
+- **The image button's SELECTED COORDINATE is (0, 0)** for the same reason. §4.10.5.1.19 says it "is
+  initially (0, 0)" and only a user activating the control while explicitly selecting one ever moves
+  it.
+
 ## 17. DOM §4.8 and §4.2.2 — `attachShadow`, `ShadowRoot`, the slot algorithms, and event retargeting
 
 **Why this section exists.** Shadow DOM did not exist in this engine **at all**: no `attachShadow`,

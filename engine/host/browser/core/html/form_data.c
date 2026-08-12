@@ -24,7 +24,6 @@
 #include "core/file/blob.h"
 #include "core/html/form_data.h"
 #include "core/html/form_entry_list.h"
-#include "core/dom/node.h"
 #include "core/html/html_element.h"
 #include "core/html/html_form.h"
 #include "core/idl_args.h"
@@ -620,12 +619,16 @@ static int js_fd_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         }
         form_entry_list_init(&s->entries);
         /* `optional HTMLFormElement form` with no default: an omitted or explicitly-undefined argument is NOT
-           GIVEN (§3.6.2), which the declaration leaves unconverted, so this is what "if form is given" reads.
-           A `null` passed for it is a TypeError the DECLARATION throws — the position is interface-typed and
-           not nullable — so nothing here re-tests it. */
+           GIVEN (§3.6.2), so this is what "if form is given" reads. Anything else that is not an
+           HTMLFormElement is Web IDL's TypeError — `new FormData(null)` included, because the position is not
+           nullable. */
         if (JS_IsUndefined(form)) {
             *presult = form_data_new(ctx, NULL);
             return JS_IsException(*presult) ? -1 : 0;
+        }
+        if (!html_form_is_form_element(form)) {
+            JS_ThrowTypeError(ctx, "argument 1 of the FormData constructor is not an HTMLFormElement");
+            return -1;
         }
         /* Step 1.1. `submitter` IS nullable, and null is what the IDL's own default is, so both spellings mean
            "no submitter". The two refusals are in the order §5 lists them. */
@@ -688,11 +691,13 @@ void form_data_init(JSContext *ctx)
     JSClassDef def = { "FormData", .finalizer = form_data_finalizer, .gc_mark = form_data_gc_mark };
     JSRuntime *rt = JS_GetRuntime(ctx);
     static const IdlArgType TWO_STR[3] = { IDL_USVSTRING, IDL_ANY, IDL_USVSTRING };
-    /* §5's `optional HTMLFormElement form` is a real INTERFACE position, so a non-form is a TypeError the type
-       throws and no body re-tests. Its second argument stays IDL_ANY: `optional HTMLElement? submitter` is a
-       NULLABLE interface, and one declaration carries ONE brand and ONE narrowing, so the two positions cannot
-       both be expressed here — the constructor's step 1.1 makes the submitter's check as its first act. */
-    static const IdlArgType CTOR_ARGS[2] = { IDL_INTERFACE, IDL_ANY };
+    /* §5's two arguments are `optional HTMLFormElement form` and `optional HTMLElement? submitter`, and the
+       declaration surface can express NEITHER: `idl_iface_brand` carries one class and one narrowing per
+       MEMBER, so two differently-narrowed interface positions cannot both be stated (§16.5a's gap, one level
+       in), and there is no nullable-interface type for the second at all. Worse, the brand is a CLASS ID read
+       at declaration time and this component is declared before the DOM's — so a declared brand here would
+       capture zero. Both refusals are therefore the body's step 1, stated as such rather than left implicit. */
+    static const IdlArgType CTOR_ARGS[2] = { IDL_ANY, IDL_ANY };
 
     DCHECK(g_fd_rt == NULL || g_fd_rt == rt,
            "FormData was installed into a second runtime — its class id and step ids belong to the first, and "
@@ -718,8 +723,6 @@ void form_data_init(JSContext *ctx)
 
     g_fd_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, NULL, 0, &js_fd_ctor_decl, 0);
     idl_optional_from(0);   /* §5: both constructor arguments are optional */
-    idl_iface_brand(node_class_id());          /* every node wrapper is one class … */
-    idl_iface_narrow(html_form_is_form_element);   /* … so HTMLFormElement is the narrowing, per §16.5a */
     realm_declare_intrinsic(form_data_install_proto);
 }
 

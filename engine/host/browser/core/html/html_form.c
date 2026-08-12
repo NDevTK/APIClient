@@ -311,6 +311,24 @@ static JSValue js_ctrl_set_checked(JSContext *ctx, JSValueConst this_val, JSValu
  * had from the other end. One walk, and the CATEGORY is the caller's predicate. */
 typedef bool (*FormMemberPred)(JSContext *ctx, JSValueConst wrap);
 
+/* COULD this element be form-associated at all — asked of the TAG, with no wrapper. It exists because the two
+   real questions below need one (a form-associated custom element is only knowable through its definition, and
+   the form owner is a per-flow slot on the wrapper), and minting a wrapper for every element of the document
+   to ask them would materialise the whole tree on the first `form.elements` read. §4.10.2's categories are all
+   built-in tags plus custom elements, and a custom element is exactly an element whose local name is a valid
+   custom element name — so this filter drops nothing the categories contain. */
+static bool form_maybe_associated(lxb_dom_node_t *n)
+{
+    size_t len = 0;
+    const lxb_char_t *tag;
+
+    if (tag_is(n, "button") || tag_is(n, "fieldset") || tag_is(n, "input") || tag_is(n, "object") ||
+        tag_is(n, "output") || tag_is(n, "select") || tag_is(n, "textarea"))
+        return true;
+    tag = lxb_dom_element_local_name(lxb_dom_interface_element(n), &len);
+    return tag != NULL && len != 0 && custom_elements_name_is_valid((const char *)tag, len);
+}
+
 static JSValue form_members(JSContext *ctx, JSValueConst form_wrap, FormMemberPred want)
 {
     lxb_dom_node_t *form = node_of(form_wrap), *root, *n;
@@ -321,7 +339,7 @@ static JSValue form_members(JSContext *ctx, JSValueConst form_wrap, FormMemberPr
     if (!form) return arr;
     root = node_root(form);
     for (n = root; n; ) {
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT && form_maybe_associated(n)) {
             JSValue wrap = node_wrap(ctx, n);
             if (want(ctx, wrap)) {
                 JSValue owner = html_form_owner_of(ctx, wrap);
@@ -488,6 +506,10 @@ typedef struct JSSubmitState {
     JSValue   ev;       /* the event, minted once and held across the suspension (owned) */
     JSValue   cb[4];    /* the fire request buffer: [this, dispatch, target, event] */
     JSValue   submitter;             /* step 5's submitter — the form itself when none was given (owned) */
+    /* Step 15's PICKED ENCODING, latched at the moment step 15 runs rather than re-read on every resume: a
+       `formdata` handler can write `accept-charset`, and a re-read would hand the second half of one entry
+       list an encoding the first half never saw. A static string from §4.10.22.5's table, owned by nobody. */
+    const char *encoding;
     FormEntryListRun entries;        /* §4.10.22.4's own cursor, held across its `formdata` dispatch */
 } JSSubmitState;
 
@@ -530,9 +552,18 @@ static int js_submit_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
 
         s->ev = JS_UNDEFINED;
         s->submitter = JS_UNDEFINED;
+        s->encoding = NULL;
         s->cb[0] = s->cb[1] = s->cb[2] = s->cb[3] = JS_UNDEFINED;
         form_entry_list_init(&s->entries);
         if (!form_elem_of(s->hdr.this_val)) {
+            JS_FreeValue(ctx, cb_result);
+            return JS_STEP_DONE;
+        }
+        /* Step 2: "if form's constructing entry list is true, then return" — a form re-entered from its own
+           `formdata` handler submits NOTHING, and this is why that answer arrives before step 11 fires a
+           second `submit` event at it. §4.10.22.4 step 1 would notice the same fact, but only after the event
+           and only as the null step 17 asserts against. */
+        if (form_entry_list_constructing(ctx, s->hdr.this_val)) {
             JS_FreeValue(ctx, cb_result);
             return JS_STEP_DONE;
         }
@@ -582,8 +613,9 @@ static int js_submit_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
     {
         JSValue list = JS_UNDEFINED;
 
-        r = form_entry_list_run(ctx, &s->entries, s->hdr.this_val, s->submitter,
-                                form_pick_encoding(form_elem_of(s->hdr.this_val)), cb_result, &list,
+        /* Step 15, once — see the field's own note for why this is a latch and not a read. */
+        if (!s->encoding) s->encoding = form_pick_encoding(form_elem_of(s->hdr.this_val));
+        r = form_entry_list_run(ctx, &s->entries, s->hdr.this_val, s->submitter, s->encoding, cb_result, &list,
                                 out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
