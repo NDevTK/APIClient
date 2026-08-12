@@ -46,6 +46,7 @@
 #include "core/idl_iter.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
+#include "core/timing/timer.h"
 #include "core/realm.h"
 #include "core/dom/abort.h"
 
@@ -795,6 +796,76 @@ static JSValue js_timeout_fini(JSContext *ctx, void *st, bool take_result)
     return r;
 }
 
+/* §3.2 STEP 3's COMPLETION STEPS — "queue a global task on the timer task source given global to signal abort
+ * given signal and a new TimeoutError DOMException". A machine, because signalling abort RUNS THE PAGE'S CODE:
+ * the signal's abort algorithms and then its `abort` listeners, with every dependent signal taking the reason
+ * first. HTML §8.6's timer_after performs it at the expiry, on the same task source the page's own timers are
+ * on, so a timeout signal is ordered against them the way a browser orders it.
+ *
+ * THE SIGNAL IS CAPTURED, NOT PASSED. §8.6 performs the completion steps with no arguments — it has none to
+ * give — so the one thing this needs travels as closure data, which is what JS_NewStepClosure is for. */
+#define TIMEOUT_FIRE_STAGES(X) \
+    X(TIMEOUT_FIRE_RUN, "DOM §3.2 AbortSignal.timeout step 3's queued task (signal abort on the timeout " \
+                        "signal with a new TimeoutError DOMException: its abort algorithms, then `abort`)")
+enum { TIMEOUT_FIRE_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const TIMEOUT_FIRE_STEPS[] = { TIMEOUT_FIRE_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSStepHdr      hdr;
+    AbortSignalWork w;   /* the shared "signal abort" operation's record — one implementation, two callers */
+    /* HAS THE WORK RECORD BEEN STARTED — a flag rather than a test on one of its fields, because a step state
+       arrives ZEROED and a zeroed JSValue is the INTEGER 0 rather than undefined (abort_signal_work_start says
+       so where it sets them). Zero is "not yet", which is the one thing readable before anything has written. */
+    uint8_t        started;
+} JSTimeoutFireState;
+
+static void js_timeout_fire_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSTimeoutFireState *s = st;
+    if (s->started) abort_signal_work_visit(ctx, &s->w, v);
+}
+
+static JSValue js_timeout_fire_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSTimeoutFireState *s = st;
+    (void)take_result;
+    /* ONLY WHAT WAS STARTED IS RELEASED. A machine torn down before its first entry holds a zeroed record, and
+       a zeroed JSValue is the integer 0 — releasing it would free a value nothing owns. */
+    if (s->started) abort_signal_work_release(ctx, &s->w);
+    return JS_UNDEFINED;
+}
+
+static int js_timeout_fire_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSTimeoutFireState *s = st;
+    JSValueConst sig = JS_StepClosureData(&s->hdr, 0);
+    JSValue reason;
+    int r;
+
+    DCHECK(s->hdr.stage == TIMEOUT_FIRE_RUN,
+           "the timeout signal's queued task resumed into a stage §3.2 does not have");
+    if (!s->started) {
+        abort_signal_work_start(&s->w);
+        s->started = 1;
+    }
+    /* A NEW DOMException EACH TIME, which is the step's own wording: the signal was CREATED holding a default
+       reason so `signal.reason` reads sensibly before the deadline, and the abort carries a fresh one. */
+    reason = abort_reason_default(ctx, "TimeoutError", "signal timed out");
+    r = abort_signal_run(ctx, &s->w, sig, reason, cb_result, out_cb, out_argc);
+    JS_FreeValue(ctx, reason);
+    if (r > 0) return r;
+    if (r < 0) return JS_STEP_ABRUPT;
+    return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef js_timeout_fire_def = {
+    sizeof(JSTimeoutFireState), js_timeout_fire_step, js_timeout_fire_fini, 0,
+    .visit = js_timeout_fire_visit,
+    .algorithm = "DOM §3.2 AbortSignal.timeout step 3's completion steps",
+    .steps = TIMEOUT_FIRE_STEPS
+};
+static int g_timeout_fire_stepid = -1;
+
 static int js_timeout_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSTimeoutState *s = st;
@@ -817,24 +888,28 @@ static int js_timeout_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     flag = concolic_new(ctx, "AbortSignal.timeout().aborted", "AbortSignal.timeout().aborted", JS_FALSE);
     CHECK(!JS_IsException(flag), "minting the timeout signal's aborted flag failed");
     s->result = signal_new(ctx, flag, abort_reason_default(ctx, "TimeoutError", "signal timed out"));
-    /* §3.2 STEP 3, WHICH IS NOT BUILT AND CANNOT BE FROM HERE. The step reads: "run steps after a timeout given
-       global, "AbortSignal-timeout", milliseconds, and the following step: queue a global task on the TIMER TASK
-       SOURCE given global to SIGNAL ABORT given signal and a new TimeoutError DOMException."
-       The concolic flag above answers the QUESTION "has the deadline passed by the time the code asks", which is
-       unknown and forks — but it is not this step. Signalling abort RUNS THE PAGE'S CODE: the signal's abort
-       algorithms and then its `abort` listeners, and every signal DEPENDING on it takes the reason first. None
-       of that ever happens here, so `AbortSignal.timeout(0).addEventListener('abort', f)` never runs f, a
-       fetch's abort algorithm never shuts the request down, and `AbortSignal.any([c.signal, timeout])` has one
-       arm that can never fire — all of it code the solver exists to reach.
-       It cannot be built in this file: core/timing/timer.c owns the timer task source and exposes only the
-       page-facing members (setTimeout/setInterval/clearTimeout) plus the event loop's own timer_run_due, so a
-       host component has no way to queue a task whose work is an ENGINE algorithm rather than a page callback.
-       Firing immediately would be a wrong answer stated confidently (a zero-length timeout is still a task, and
-       every duration would abort before the caller could register anything); firing never is what this does
-       today. So it crashes at the site naming the edge to build. */
-    DFAIL("DOM §3.2 AbortSignal.timeout step 3 has no timer edge: core/timing/timer.h exposes no C entry for "
-          "HTML §8.6's \"run steps after a timeout\" that queues a global task on the timer task source running "
-          "an ENGINE algorithm — build one and signal abort on the timeout signal from it");
+    /* §3.2 STEP 3: "run steps after a timeout given global, \"AbortSignal-timeout\", milliseconds, and the
+       following step: queue a global task on the timer task source given global to signal abort given signal
+       and a new TimeoutError DOMException."
+       THE CONCOLIC FLAG ABOVE IS A DIFFERENT QUESTION and both are needed. It answers "has the deadline passed
+       by the time the code asks", which is unknown and forks; this schedules the abort that actually happens,
+       which RUNS THE PAGE'S CODE — the signal's abort algorithms and its `abort` listeners, with every
+       dependent signal taking the reason first. Without it `AbortSignal.timeout(0).addEventListener('abort',f)`
+       never ran f, a fetch's abort algorithm never shut the request down, and `AbortSignal.any([c.signal,
+       timeout])` had one arm that could not fire.
+       THE SIGNAL TRAVELS AS CLOSURE DATA because §8.6 performs the completion steps with no arguments. */
+    if (g_timeout_fire_stepid < 0)
+        g_timeout_fire_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_timeout_fire_def);
+    {
+        JSValueConst data = s->result;
+        JSValue steps = JS_NewStepClosure(ctx, g_timeout_fire_stepid, 0, 1, &data);
+
+        CHECK(!JS_IsException(steps),
+              "AbortSignal.timeout: the completion steps' callee could not be allocated — a timeout signal "
+              "whose abort was never scheduled reads as one that simply never fires");
+        timer_after(ctx, (double)ms, steps);
+        JS_FreeValue(ctx, steps);
+    }
     return JS_STEP_DONE;
 }
 
