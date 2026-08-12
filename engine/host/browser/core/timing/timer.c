@@ -269,6 +269,55 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
     return JS_NewInt32(ctx, t->id);   /* nothing is queued: the driver asks when the clock may move */
 }
 
+/* HTML §8.6's RUN STEPS AFTER A TIMEOUT — see timer.h. It is the SAME timer source `setTimeout` uses, and
+ * that is the whole design: the spec's `milliseconds` are measured on one clock and its ordering clause is
+ * about invocations on one queue, so an engine algorithm scheduled anywhere else would be ordered against the
+ * page's timers by nothing at all.
+ *
+ * THE COMPLETION STEPS ARE A CALLABLE, which is not a wrapper around C — it is what lets them SUSPEND. §8.6
+ * "performs" them at the expiry, and an engine algorithm that runs page code (signalling abort runs the page's
+ * abort algorithms and fires an event) has to be a flow when it does. A step-machine function object is
+ * already exactly that, and it then rides the same JS_EnqueueCallTask every page callback does, so there is
+ * one path from expiry to execution rather than a second one for the engine's own work.
+ *
+ * THE ORDERING IDENTIFIER IS NOT A PARAMETER, and that is an answer rather than an omission. Its whole effect
+ * is that an earlier invocation with the same identifier and a smaller-or-equal `milliseconds` completes
+ * first — and on one virtual clock a smaller delay started earlier already has an earlier expiry, with
+ * timer_earliest breaking an exact tie by the monotonically increasing handle. So the ordering the identifier
+ * buys is the ordering this queue already has, for every identifier at once. */
+int timer_after(JSContext *ctx, double ms, JSValueConst steps)
+{
+    Timer *t;
+
+    DCHECK(JS_IsFunction(ctx, steps),
+           "§8.6's completion steps must be callable — they are performed at the expiry and an engine algorithm "
+           "that runs page code has to be a flow when it does, which is what a callable makes it");
+    if (!(ms >= 0))
+        ms = 0;   /* §8.6 clamps a negative or non-finite timeout to 0, for an engine caller as for a page */
+    t = timer_slot(ctx);
+    t->id = g_next_id++;
+    t->when = g_now + ms;
+    t->every = -1;   /* §8.6's completion steps are performed once; there is no interval form of this */
+    t->fn = JS_DupValue(ctx, steps);
+    t->argc = 0;
+    t->argv = NULL;
+    return t->id;
+}
+
+/* §8.6's timerKey, used to cancel — the same clearing `clearTimeout` performs, reached by an engine caller.
+   Cancelling a key that names nothing does nothing, which is `clearTimeout`'s own answer and is what a
+   caller cancelling a timeout that has already fired needs. */
+void timer_cancel(JSContext *ctx, int key)
+{
+    int i;
+
+    for (i = 0; i < g_timers_n; i++)
+        if (g_timers[i].id == key) {
+            timer_entry_free(ctx, &g_timers[i]);
+            return;
+        }
+}
+
 static JSValue js_clear_timer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     int32_t id = 0;
