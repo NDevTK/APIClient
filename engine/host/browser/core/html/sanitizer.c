@@ -1098,12 +1098,14 @@ int sanitizer_walk_step(JSContext *ctx, JSStepHdr *hdr, SanitizerWalk *w)
                    "built-in non-replaceable elements, and this one does — replacing it with its children "
                    "re-parses into a different tree");
             if (drop)
-                DFAIL("§8.6.4 step 1.5.2.5 replaces an element with its children IN ITS PLACE, and dom_cow's "
-                      "private-tree operations can only APPEND (dom_cow_insert_private / "
-                      "dom_cow_move_private), which would move the children to the end of their new parent "
-                      "and reorder the page's markup. Build dom_cow_insert_before_private — a positional "
-                      "insert into a tree nothing else can see — and this step is then the spec's own five "
-                      "lines");
+                DFAIL("§8.6.4 step 1.5.2 replaces an element with its children IN ITS PLACE, and the ORDER of "
+                      "its five steps is what is left to build: the standard runs the INNER SANITIZE STEPS on "
+                      "the child FIRST and splices only on the way back out, so this walk has to carry the "
+                      "decision down and perform the splice POST-ORDER — deciding it here and splicing here "
+                      "would hoist an unsanitized subtree into the parent. The positional primitive it needs "
+                      "now exists (dom_cow_move_before_private moves each of the child's children before the "
+                      "child, then dom_cow_discard_private drops the emptied element), which is the whole of "
+                      "the spec's fragment-and-replace over a tree nothing else can see");
         }
         if (san_has(ctx, w->config, "elements")) {                                  /* step 1.5.3 */
             list = san_get(ctx, w->config, "elements");

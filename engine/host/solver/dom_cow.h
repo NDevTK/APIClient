@@ -135,6 +135,15 @@ void dom_cow_destroy_private(lxb_dom_node_t *root, bool with_children);  /* and 
    declaration it could infer wrongly. */
 void dom_cow_move_private(lxb_dom_node_t *from_root, lxb_dom_node_t *to_root,
                           lxb_dom_node_t *parent, lxb_dom_node_t *child);
+/* THE POSITIONAL FORMS, within ONE private tree. Every other operation here appends, because a parse builds in
+   order; these two SPLICE, and position is the whole point of the algorithm that needed them — HTML §8.6.4
+   step 1.5.2.5 replaces an element with its children IN ITS PLACE, and an append would move them to the end of
+   their new parent, reordering the page's markup while claiming only to have removed an element.
+   `_insert_before_` takes a child that is in no tree; `_move_before_` takes one already in this same tree,
+   which is what step 1.5.2.5 actually has. `ref` must be a node WITH a parent — there is no position before a
+   private tree's root — and both assert it. */
+void dom_cow_insert_before_private(lxb_dom_node_t *root, lxb_dom_node_t *ref, lxb_dom_node_t *child);
+void dom_cow_move_before_private(lxb_dom_node_t *root, lxb_dom_node_t *ref, lxb_dom_node_t *child);
 /* DESTROY one node OF a private tree, in place. §13.2.6.4.4's `<template>` is the caller: the standard never
    inserts it, this engine's parse did, and once its contents are the shadow root's there is nothing that can
    ever reach it again. Not take_private + destroy_private for the reason above — take_private records a

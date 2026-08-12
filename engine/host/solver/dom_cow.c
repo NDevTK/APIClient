@@ -659,6 +659,53 @@ void dom_cow_move_private(lxb_dom_node_t *from_root, lxb_dom_node_t *to_root,
     lxb_dom_node_insert_child(parent, child);
 }
 
+/* INSERT BEFORE A SIBLING, inside one private tree — the positional form of dom_cow_insert_private.
+ *
+ * IT EXISTS BECAUSE POSITION IS THE WHOLE POINT OF THE OPERATION THAT NEEDED IT. HTML §8.6.4 step 1.5.2.5
+ * replaces an element with its children IN ITS PLACE, and an append would put them at the END of their new
+ * parent — the sanitizer would reorder the page's markup while claiming only to have removed an element, which
+ * is a wrong answer that looks like a correct one. Every other private operation happens to be an append
+ * because a parse builds in order; this one is not building, it is splicing.
+ *
+ * `ref` IS A CHILD OF `parent`, not merely in the tree, and that is asserted rather than trusted: lexbor's
+ * insert-before writes links relative to `ref`, so a `ref` under a different parent silently detaches a subtree
+ * from somewhere else in the same private tree.
+ * Nothing is captured, for the reason none of these capture: the tree is the running flow's own and no other
+ * flow can observe it. */
+void dom_cow_insert_before_private(lxb_dom_node_t *root, lxb_dom_node_t *ref, lxb_dom_node_t *child) {
+    dom_private_check(root);
+    DCHECK(ref && dom_root_of(ref) == root,
+           "dom_cow_insert_before_private before a reference node outside the declared private tree");
+    DCHECK(ref->parent != NULL,
+           "dom_cow_insert_before_private before the ROOT of the private tree — there is no position before it "
+           "and lexbor would link the child to a null parent");
+    DCHECK(child && !dom_is_attached(child),
+           "dom_cow_insert_before_private with a child that is already in a tree — that is a MOVE, which is a "
+           "structural change to wherever it came from and needs the capturing chokepoint");
+    DCHECK(!dom_is_inclusive_ancestor(child, ref),
+           "dom_cow_insert_before_private would put a node inside its own descendant — that is a cycle, and "
+           "every tree walk in this engine loops on one forever");
+    lxb_dom_node_insert_before(ref, child);
+}
+
+/* MOVE a node to a POSITION in a private tree — dom_cow_move_private's positional twin, and the one §8.6.4
+   step 1.5.2.5 actually performs: the children being spliced into their grandparent are already in the tree,
+   so they are moved rather than inserted. Both ends are the same declared private tree here, which is what
+   distinguishes it from move_private's two-root form. */
+void dom_cow_move_before_private(lxb_dom_node_t *root, lxb_dom_node_t *ref, lxb_dom_node_t *child) {
+    dom_private_check(root);
+    DCHECK(ref && dom_root_of(ref) == root,
+           "dom_cow_move_before_private before a reference node outside the declared private tree");
+    DCHECK(ref->parent != NULL,
+           "dom_cow_move_before_private before the ROOT of the private tree — there is no position before it");
+    DCHECK(child && dom_root_of(child) == root,
+           "dom_cow_move_before_private with a child outside the private tree it was declared to move within");
+    DCHECK(!dom_is_inclusive_ancestor(child, ref),
+           "dom_cow_move_before_private would put a node inside its own descendant — that is a cycle");
+    lxb_dom_node_remove(child);
+    lxb_dom_node_insert_before(ref, child);
+}
+
 /* Destroy the tree. For the fragment parse its children must already be gone — destroying one that still holds
    nodes would free tree the caller is about to insert — so the caller says which it means. */
 /* Every node in the subtree about to be freed, so each can hand back the wrapper the identity map holds for
