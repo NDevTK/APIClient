@@ -1,0 +1,825 @@
+/* WEB-PLATFORM-TESTS — the browser half's correctness gate.
+ *
+ * WHY: test262 is the JS half's oracle, and the browser half had nothing equivalent. Its only checks were the
+ * IDL audit, which measures COVERAGE and can only say what is ABSENT, and a fixture of probes written by
+ * whoever wrote the component — which tests what that person already thought of. Both missed the same things:
+ * the audit had no row for Headers at all, then reported it COMPLETE with four members missing, and the fixture
+ * agreed because I wrote both. WPT is written by the people who wrote the spec, so it disagrees.
+ *
+ * ONE PROCESS PER TEST FILE, deliberately. A DCHECK is an abort — that is the whole point of it — so a runner
+ * that ran the corpus in one process would report the first unbuilt capability and nothing after it. Per-file
+ * isolation makes an abort a RESULT for that file and leaves the rest of the picture intact, which is the
+ * difference between a gate and a bisect.
+ *
+ * The corpus is pinned, like lexbor and test262: a moving corpus turns a regression into an argument.
+ *
+ * Usage:  node engine/wpt.mjs [subdir-or-file]
+ */
+import { spawnSync, spawn } from "node:child_process";
+import { existsSync, readdirSync, mkdtempSync, mkdirSync, openSync, readFileSync, statSync,
+         writeFileSync } from "node:fs";
+import { dirname, join, relative, sep } from "node:path";
+import { tmpdir, cpus, loadavg } from "node:os";
+
+function walk(dir) {
+  const out = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) out.push(...walk(p));
+    else if (e.name.endsWith(".c")) out.push(p);
+  }
+  return out;
+}
+
+const ENGINE = import.meta.dirname;
+const WORK = join(ENGINE, ".work");
+const WPT = join(WORK, "wpt");
+/* PINNED. The corpus is an oracle, and an oracle that changes under you turns "this regressed" into "did it?".
+   Re-pin deliberately, as a commit of its own, so the diff in results has one cause. */
+const WPT_REV = "bf4714d";
+
+/* A test's budget is the CPU it may CONSUME, plus a wall backstop for a test that consumes none because it is
+   deadlocked on I/O. See the spawn below for why elapsed time alone cannot be the verdict. */
+/* The HARD limit sits above the soft one so the kernel raises SIGXCPU at the soft limit and only escalates to
+   SIGKILL if the process ignores it. Set as one value, dash makes soft == hard and the first notification IS the
+   kill — measured: the same busy loop reports SIGKILL with `ulimit -t 1` and SIGXCPU with the pair. Both are
+   read as the CPU cause below; the pair just makes the usual path say so in its own signal. */
+const CPU_BUDGET_S = 60;
+const WALL_BACKSTOP_MS = 600_000;
+/* The kernel's own tick, asked for rather than assumed: /proc's CPU fields are in clock ticks and a hardcoded
+   100 is a constant this file would have no way of noticing had gone wrong. */
+const CLK_TCK = Number(spawnSync("getconf", ["CLK_TCK"], { encoding: "utf8" }).stdout.trim()) || 0;
+if (!CLK_TCK) { console.error("[wpt] getconf CLK_TCK answered nothing, so a child's CPU cannot be read"); process.exit(1); }
+/* WHAT IS CHECKED OUT. A sparse list rather than the whole 1 GB tree, and it grows as areas are covered — an
+   area absent here is honestly untested, which is a different statement from "passes". */
+/* `tools` is not a test area — it is WPT'S OWN SERVER and its vendored dependencies. The corpus is SERVED by
+   it rather than read off disk, because a `.py` path is a handler the server imports and calls, and because
+   the rewrites and content types are then wptserve's own rather than a table copied into this file. */
+/* A PATH THAT CONTAINS ANOTHER LISTED PATH IS REPORTED AT THE FINER ONE. `dom` is one standard and eight
+   COMPONENTS — Node/Document/Element, Event/EventTarget, AbortController, HTMLCollection, DOMTokenList, Range,
+   NodeIterator/TreeWalker, Observable — and three of those are not built at all, so a single `dom` row would
+   fold a hundred honest "this API does not exist" aborts into the same number as the nodes the engine does
+   implement. That is the sentence this file already applies to the TOTAL, one level down. So the list carries
+   both: `dom` is what is CHECKED OUT and RUN (its ten root-level test files belong to no subdirectory and would
+   otherwise be silently dropped), and `dom/nodes` and its siblings are REPORTING refinements — a path with a
+   listed ancestor is never walked a second time, and byArea takes the LONGEST match. */
+const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetch/api/resources", "url", "common",
+                   /* THE STANDARD, THEN ITS COMPONENTS — the same two-level shape as `dom` below, and for the
+                      same reason twice over. `FileAPI/blob` and three siblings were listed and the STANDARD was
+                      not, so ten test files living at FileAPI's own level — fileReader, unicode, idlharness —
+                      were checked out by cone mode and collected by nothing, and FileReader's and BlobURL's
+                      directories were not measured at all. */
+                   "FileAPI", "FileAPI/blob", "FileAPI/file", "FileAPI/support", "FileAPI/url",
+                   "FileAPI/BlobURL", "FileAPI/FileReader", "FileAPI/filelist-section",
+                   "FileAPI/reading-data-section",
+                   "encoding", "tools",
+                   /* THE WHATWG DOM. Eighteen DOM/HTML step machines were converted to rest at exact spec steps
+                      — createElement, setAttribute, the mutation algorithms, innerHTML/outerHTML — and the gate
+                      that would have judged them did not collect a single one of their tests, because this
+                      standard's directory had never been checked out. It was verified against html/browsers
+                      instead, which is a different component. `dom/ranges`, `dom/traversal` and `dom/observable`
+                      have no implementation at all; they are checked out for exactly that reason — an area
+                      absent from this list is untested, which is a different statement from "passes". */
+                   "dom", "dom/abort", "dom/collections", "dom/events", "dom/lists", "dom/nodes",
+                   "dom/observable", "dom/ranges", "dom/traversal",
+                   /* HTML §8.5.4/§8.5.5 — innerHTML, outerHTML, insertAdjacentHTML and the fragment parsing
+                      algorithm, which element.c implements and which SPEC_STEPS.md §4 is the conversion target
+                      for. DOMParser and XMLSerializer live here too and are absent, which this measures. */
+                   "domparsing",
+                   /* THE COMPONENTS' OWN SPEC DIRECTORIES, each named because the component exists in
+                      engine/host/browser/core and its tests were not being collected: request.c and body.c
+                      (fetch/api/headers and .../response were checked out and their two siblings were not),
+                      timer.c, structured_clone.c, form_data.c. */
+                   "fetch/api/request", "fetch/api/body", "fetch/api/abort",
+                   "html/webappapis/system-state-and-capabilities/the-navigator-object",
+                   "html/webappapis/timers", "html/webappapis/microtask-queuing",
+                   /* HTML §8.1.7.3's rendering loop and §8.9's animation frames — core/rendering. The
+                      component did not exist, so neither did this row; `requestAnimationFrame` was one of the
+                      ~1300 names browser/platform_names.h had the engine reporting as honestly ABSENT. Now
+                      that the rendering task source, "update the rendering" and §8.9's map are built, a
+                      directory that is not collected is an EXCLUDED TEST — which this file calls a failure
+                      one paragraph up. */
+                   "html/webappapis/animation-frames",
+                   "html/webappapis/structured-clone",
+                   /* XHR §3 and §5 — core/xhr. Its two SUPPORT directories were listed and the standard's own
+                      was not, so the 305 test files of the standard this engine had no component for were the
+                      largest single uncollected population in the checkout. `xhr` is the standard; the two
+                      below are its fixtures and the FormData tests that live under it. */
+                   "xhr", "xhr/formdata", "xhr/resources",
+                   /* custom_elements.c — HTML §4.13, the reactions that every [CEReactions] operation in
+                      SPEC_STEPS.md runs. */
+                   "custom-elements",
+                   /* shadow_root.c — DOM §4.8 and §4.2.2's slots, which did not exist in this engine at all
+                      until they did: no `attachShadow`, no ShadowRoot interface, no `<slot>`. The directory is
+                      the standard's own and its first number is expected to be bad, which is the honest first
+                      measurement rather than a reason not to take it. */
+                   "shadow-dom",
+                   /* Web IDL §3.2's ECMAScript binding — SPEC_STEPS.md §7's own directory, and the spec
+                      idl_args.c, idl_iter.c and idl_indexed.c implement: what an interface object is, how a
+                      DOMString/sequence/record argument is converted, what `has instance` and `toString`
+                      answer. The IDL audit in build.mjs measures which members EXIST; this measures whether
+                      the binding around them behaves. */
+                   /* AND THE STANDARD ITSELF, for the reason FileAPI and streams each carry above and this one
+                      makes three: `webidl/current-realm.html` and `webidl/idlharness.any.js` sit at Web IDL's
+                      own level, were checked out by cone mode, and were collected by nothing. Naming the
+                      standard adds no file to disk — `ecmascript-binding` is its only subdirectory — and adds
+                      the two tests that were being excluded. */
+                   "webidl", "webidl/ecmascript-binding",
+                   /* location.c — HTML §7.10's Location, whose own directory was never checked out even though
+                      the component is named in the project's own architecture. */
+                   "html/browsers/history/the-location-interface",
+                   /* THE COMPONENT'S OWN SPEC TESTS. readable_stream.c was written, and then measured against
+                      fetch and FileAPI — which use a stream but assert almost nothing ABOUT one. A component
+                      whose spec directory is not checked out is a component whose gate cannot fail, which is
+                      the same defect as a gate that only reads the spelling that existed when it was written. */
+                   /* And the standard itself, for the reason FileAPI carries above: queuing_strategy.c's own
+                      three test files sit at `streams`'s own level and no listed path reached them. */
+                   "streams", "streams/readable-streams", "streams/resources", "streams/writable-streams",
+                   "streams/piping", "streams/transform-streams", "streams/readable-byte-streams",
+                   "streams/transferable",
+                   /* HTML 9.4's MESSAGING. Cross-document and cross-worker messaging is where popups, iframes
+                      and this engine's one-WASM-instance-per-DOCUMENT rule meet, and it is also where the
+                      solver's `message.origin` attacker source comes from. None of it exists yet, so this
+                      directory is the honest measurement of that: a component whose spec directory is not
+                      checked out is a component whose gate cannot fail. */
+                   "webmessaging",
+                   /* HTML §7.2.5.1 AND §7.4 — WindowProxy and popups. `window.open`, `opener`, `parent`,
+                      `top`, `frames`, named access, and what a cross-origin WindowProxy may expose. This
+                      engine has just grown a WindowProxy member surface and §7.4's open(), and neither had a
+                      spec directory: a component whose spec directory is not checked out is a component whose
+                      gate cannot fail, which is the same defect as asserting only the spelling that existed
+                      when the assertion was written. */
+                   "html/browsers/windows", "html/browsers/the-window-object",
+                   /* THE HELPERS A CHECKED-OUT TEST'S META BLOCK NAMES, which are not areas and are checked out
+                      to BE USED — the same standing as `resources` and `common`. Four webmessaging files were
+                      reported as "META script not checked out", which is an EXCLUDED TEST wearing a reason:
+                      the gate had decided what it measures and then not measured four of them. Naming the
+                      helper's own `resources` directory checks out no test file at all, so nothing is added to
+                      the total except the four files that can now run. */
+                   "html/browsers/browsing-the-web/remote-context-helper/resources",
+                   "html/browsers/browsing-the-web/back-forward-cache/resources",
+                   /* `/html/resources/common.js` is named by a `<script src>` in dom/ranges, and a document
+                      whose script 404s runs a test nobody wrote. Its last segment is `resources`, so it is
+                      checked out to BE USED and contributes no test of its own. */
+                   "html/resources",
+                   /* The same, for `shadow-dom/reference-target/`: ten of its files name
+                      `/wai-aria/scripts/aria-utils.js`, and the gate reported all ten as ABORTED with "a
+                      <script src> the corpus does not serve" — which is an EXCLUDED TEST wearing a reason.
+                      The directory holds helper scripts and no testharness document, so it adds ten runnable
+                      files and no test of its own. */
+                   "wai-aria/scripts",
+                   "service-workers/service-worker/resources"];
+
+if (!existsSync(join(WPT, "resources", "testharness.js"))) {
+  /* NO --depth 1. The corpus is PINNED, and a depth-1 clone has only the tip — `git checkout bf4714d` in it
+     fails with "reference is not a tree", so the instructions this gate printed could not be followed. The
+     blob filter is what keeps a full-history clone cheap: it fetches commits and trees, and file contents only
+     for the paths the sparse checkout names. */
+  console.error("[wpt] corpus missing — provision it with:\n" +
+    `  git clone --filter=blob:none --sparse https://github.com/web-platform-tests/wpt.git ${WPT}\n` +
+    `  cd ${WPT} && git sparse-checkout set ${WPT_PATHS.join(" ")} && git checkout ${WPT_REV}`);
+  process.exit(1);
+}
+
+/* THE CHECKOUT IS ENFORCED, NOT ASSUMED. WPT_PATHS is this gate's statement of what it measures, and until now
+   nothing made the working tree agree with it: the presence of testharness.js was the whole test, so a corpus
+   missing an entire directory answered "provisioned" and every file in that directory silently stopped being
+   run. That is the same defect the list's own comment names one line up — a directory that is not checked out
+   is a directory whose gate cannot fail — except that here the gate LOOKED green rather than looking absent,
+   which is worse. It happened: `webmessaging` was added to this list, measured at 0/52, and then reverted out
+   of the working tree by an unrelated restore; the next run reported the same total as before and nothing said
+   the area had gone. `sparse-checkout set` is idempotent and takes about a second when the list already
+   matches, so it runs every time rather than being guarded by a check that can itself be wrong. */
+{
+  const set = spawnSync("git", ["sparse-checkout", "set", ...WPT_PATHS], { cwd: WPT, encoding: "utf8" });
+  if (set.status !== 0) {
+    console.error("[wpt] could not apply the sparse checkout this gate measures:\n" + (set.stderr || set.stdout));
+    process.exit(1);
+  }
+  const missing = WPT_PATHS.filter((p) => !existsSync(join(WPT, p)));
+  if (missing.length) {
+    console.error(`[wpt] the corpus has no ${missing.join(", ")} — the pinned revision ${WPT_REV} does not ` +
+                  "contain it, so this gate would report a total that silently excludes it");
+    process.exit(1);
+  }
+}
+
+/* WHICH FILES TO RUN — AND THE ANSWER IS THE CORPUS'S OWN, PORTED, not a set of endings this file grew one
+   defect at a time. Four times now the rule here has been a habit rather than the definition, and each time the
+   cost was invisible from inside: `.any.js` only, so html/browsers's twenty `.window.js` files made checking
+   those directories out change no total at all; then no documents, so 523 of 778 checked-out files — most of
+   the corpus — were never run and never counted while the total LOOKED complete; then `.html` alone, so 24 of
+   webmessaging's 26 `.htm` postMessage tests and url/a-element-xhtml.xhtml were collected by nothing; then the
+   harness path as a bare SUBSTRING, so eight human-driven `-manual` tests were run as if automated.
+   `tools/manifest/sourcefile.py` is what decides every file's type for WPT's own runs, it is checked out
+   (WPT_PATHS names `tools`), and every rule below is one of its properties, named after it. It has no holes
+   left to find, because it IS the definition.
+   TWO QUESTIONS, BOTH NEEDED, AND THE PORT KEEPS THEM APART. The NAME decides document-vs-script and
+   test-vs-manual — which is what a name genuinely determines — and the CONTENT decides test-vs-support for a
+   document, which no name can say. Reading the content of everything instead would take the corpus's own `.py`
+   handlers and `.md` notes as tests, since they name testharness.js too. */
+
+/* sourcefile.py's `type_flag` / `meta_flags`. `os.path.splitext` cuts at the LAST dot, and the flags are then
+   the dotted parts of the base name's last HYPHEN-separated chunk (`send-authentication-prompt-manual.htm` ⇒
+   type flag `manual`) or, with no hyphen, the dotted parts after the first (`historical.any.js` ⇒ meta flag
+   `any`). No suffix test can tell those apart: `.any.js` and `-manual.htm` are the same shape of name and mean
+   opposite things. */
+function fileFlags(filename) {
+  const dot = filename.lastIndexOf(".");
+  const name = dot <= 0 ? filename : filename.slice(0, dot);
+  const hyphen = name.lastIndexOf("-");
+  const parts = (hyphen >= 0 ? name.slice(hyphen + 1) : name).split(".");
+  return { ext: dot <= 0 ? "" : filename.slice(dot),
+           typeFlag: hyphen >= 0 ? parts[0] : null,
+           meta: parts.slice(1) };
+}
+/* sourcefile.py's `name_is_non_test` + `in_non_test_dir`. A SUPPORT PATH IS ANY PART OF THE PATH, which is
+   what this file had hand-copied as `p !== "common" && !p.endsWith("/resources")` — a list applied to the
+   WPT_PATHS ENTRY rather than to the file, so `FileAPI/support` was listed as an area and its support documents
+   were counted as this gate's tests. One rule, applied to the file, and the entry list needs no exclusions. */
+function nameIsNonTest(rel) {
+  const parts = rel.split("/");
+  const filename = parts[parts.length - 1];
+  if (parts.length === 1) return true;            /* a file at the corpus root: sourcefile.py's `dir_path == ""` */
+  if (parts[0] === "common") return true;         /* `root_dir_non_test` */
+  if (parts.some((p) => p === "resources" || p === "support" || p === "tools")) return true;  /* `dir_non_test` */
+  return filename.startsWith("MANIFEST") || filename === "META.yml" || filename === "WEB_FEATURES.yml" ||
+         filename.startsWith(".") || filename.endsWith(".headers") || filename.endsWith(".ini");
+}
+const DOC_EXT = /\.(html|htm|xhtml|xht|xml|svg)$/;   /* sourcefile.py's `markup_type` */
+function isDocument(p) { return DOC_EXT.test(p); }
+/* sourcefile.py's `content_is_testharness`: a markup file is a testharness TEST when it holds a
+   `<script src=/resources/testharness.js>` ELEMENT — an element, not the string anywhere in the bytes, which
+   also counts a support page that merely NAMES the harness in a comment or a template.
+   THE ELEMENT IS THE XHTML-NAMESPACED `script`, WHICH IS NOT ALWAYS SPELLED `script`. sourcefile.py matches
+   `{http://www.w3.org/1999/xhtml}script`, and an SVG test reaches that namespace through a PREFIX: the
+   thirteen `dom/nodes/*-svg.svg` tests declare `xmlns:h` and write `<h:script src="/resources/testharness.js"/>`.
+   A pattern anchored on the literal tag name dropped all thirteen — a narrowing that reads as tidier and
+   silently excludes real tests, which is the exact defect this collector exists to prevent. */
+function isTestDocument(p) {
+  try {
+    return /<(?:[A-Za-z][\w.-]*:)?script[^>]*\ssrc\s*=\s*(["']?)\/resources\/testharness\.js\1[\s/>]/i
+      .test(readFileSync(p, "utf8"));
+  } catch { return false; }
+}
+/* WHAT KIND OF TEST A FILE IS, or null when it is not one. The order is sourcefile.py's `manifest_items`
+   cascade, and the order is load-bearing: every NAME-based type is asked BEFORE the content, so a file that
+   loads testharness.js is still a manual test / a visual test / a crashtest if its name says so. A human clicks
+   a manual test and this gate cannot; a crashtest asserts only that the renderer survived, and its subtests are
+   not this corpus's oracle. It was collecting twenty-seven `-manual` files and `dom/svg-insert-crash.html` as
+   if they were ordinary automated tests.
+   THE PORT IS CHECKED AGAINST THE ORIGINAL, not asserted to match it: running sourcefile.py over the same
+   checkout and diffing the two classifications is one command, and it is what found the crashtest and the
+   thirteen prefixed-`script` SVG tests. Zero files where they disagree is the standard. */
+function testKind(rel) {
+  if (nameIsNonTest(rel)) return null;
+  const parts = rel.split("/");
+  const f = fileFlags(parts[parts.length - 1]);
+  if (f.typeFlag === "manual" || f.typeFlag === "visual") return null;
+  /* `name_is_crashtest` / `name_is_print_reftest`, both of which sourcefile.py gates on markup — a `.js` has no
+     markup type, so neither can claim one. Each is a type FLAG or a directory. */
+  if (isDocument(rel) && (f.typeFlag === "crash" || f.typeFlag === "print" ||
+                          parts.some((p) => p === "crashtests" || p === "print"))) return null;
+  if (f.ext === ".js")
+    /* `name_is_multi_global` / `name_is_window` / `name_is_worker`. A `.worker.js` needs a
+       DedicatedWorkerGlobalScope, which this engine does not have — so it fails loud on `importScripts`, which
+       NAMES the missing capability. Leaving it out named nothing and counted nothing. */
+    return ["any", "window", "worker"].some((g) => f.meta.includes(g)) ? "script" : null;
+  return isDocument(rel) && isTestDocument(join(WPT, rel)) ? "document" : null;
+}
+function collect(dir, out) {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    /* A DOTTED NAME IS NOT A TEST — sourcefile.py's `name_is_non_test`. It is also what keeps a walk of the
+       corpus ROOT out of `.git`, which is most of the 318 MB on disk. */
+    if (e.name.startsWith(".")) continue;
+    const p = join(dir, e.name);
+    if (e.isDirectory()) collect(p, out);
+    else if (testKind(relative(WPT, p).split(sep).join("/"))) out.push(p);
+  }
+  return out;
+}
+const arg = process.argv[2] || "";
+/* A NO-ARGUMENT RUN IS EVERY PATH THAT IS CHECKED OUT, not one hard-coded directory. It said "fetch", so
+   widening WPT_PATHS to `url` checked the corpus out and then never ran it — the gate reported the same number
+   as before and looked like the new component had changed nothing. The default is derived from WPT_PATHS for
+   the same reason the META scripts are read from the file: the two must not be able to disagree. */
+const root = arg ? join(WPT, arg) : WPT;
+/* A SINGLE-FILE ARGUMENT IS WHATEVER NAMES A FILE, not whatever matches an extension this file lists. The
+   extensions decide what a WALK collects; naming one path is an explicit instruction and needs no vote. */
+const argIsFile = Boolean(arg) && existsSync(root) && !statSync(root).isDirectory();
+const files = argIsFile ? [root]
+            : arg ? collect(root, []).sort()
+            /* A PATH WITH A LISTED ANCESTOR IS NOT WALKED TWICE. `dom/nodes` is listed so that its 331 files
+               get a row of their own; `dom` is listed because ten test files live at that directory's own level
+               and belong to no subdirectory. Walking both would run every dom file twice and report a total in
+               which the DOM standard counted double.
+               THAT IS THE WHOLE FILTER NOW. The support-path exclusions that used to sit here — `common`,
+               `tools`, `resources` and any entry ending in one — were the same rule spelled a second time
+               against the ENTRY, and being a second spelling it disagreed with the first: `FileAPI/support`
+               matched none of them, so its support documents were counted as this gate's tests.
+               `nameIsNonTest` answers for the FILE, so a listed support path now simply collects nothing and
+               needs no name here. */
+            : WPT_PATHS.filter((p) => !WPT_PATHS.some((q) => p.startsWith(q + "/")))
+                       .flatMap((p) => collect(join(WPT, p), [])).sort();
+if (!files.length) { console.error(`[wpt] no test files under ${root}`); process.exit(1); }
+
+/* A `// META:` BLOCK IS PARSED ONCE, HERE — sourcefile.py's `script_metadata`. It is the leading run of comment
+   lines, and past it the file is code. Two consumers read it (the scripts a test must be given, and the
+   variants it declares) and a second parser for the second consumer is how the two come to disagree about
+   where the block ends. */
+function scriptMetadata(file) {
+  const out = [];
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    if (!line.startsWith("// META:")) {
+      if (line.startsWith("//") || line.trim() === "") continue;
+      break;
+    }
+    const m = line.match(/^\/\/ META:\s*([^=]+)=(.*)$/);
+    if (m) out.push([m[1].trim(), m[2].trim()]);
+  }
+  return out;
+}
+/* A VARIANT IS A SEPARATE TEST RUN, and sourcefile.py says so in one line: `test_url + variant` for each
+   declared variant, and `[""]` — exactly one bare run — when a file declares none. So a file declaring four
+   variants is FOUR tests at four addresses, and the bare address is not among them; this gate ran the bare one
+   and none of the four. That is an excluded test wearing a file that IS collected, which is the hardest kind to
+   notice: the file appears in the count, passes, and three quarters of what it was written to check never
+   happened.
+   THE CORPUS'S VALIDATION COMES WITH THE RULE. sourcefile.py raises on a non-empty variant that is neither a
+   query nor a fragment, so this does too — a malformed declaration is a corpus fact this gate must not paper
+   over by silently running the file bare. */
+function testVariants(file, kind) {
+  const rel = relative(WPT, file).split(sep).join("/");
+  const rv = kind === "document"
+    ? [...readFileSync(file, "utf8").matchAll(/<meta\s[^>]*name=(["']?)variant\1[^>]*>/gi)]
+        .map((m) => m[0].match(/\scontent=(["']?)([^"'>]*)\1/i))
+        .filter(Boolean).map((m) => m[2])
+    : scriptMetadata(file).filter(([k]) => k === "variant").map(([, v]) => v);
+  for (const v of rv) {
+    if (v === "") continue;
+    if (v[0] !== "?" && v[0] !== "#")
+      throw new Error(`[wpt] ${rel} declares the variant ${JSON.stringify(v)}, which is neither a query nor a ` +
+                      "fragment — sourcefile.py rejects it and so does this gate");
+    if (v.length === 1 || (v[0] === "?" && v[1] === "#"))
+      throw new Error(`[wpt] ${rel} declares the empty variant ${JSON.stringify(v)}`);
+  }
+  return rv.length ? rv : [""];
+}
+/* THE UNIT OF A RUN IS (FILE, VARIANT), which is what WPT's manifest calls a test. Every count below — the
+   area rows, the total, the abort tally — is over these, because a file that declares four variants is four
+   things that can pass or fail and reporting it as one is reporting three of them as nothing. */
+const runs = files.flatMap((f) => {
+  const kind = testKind(relative(WPT, f).split(sep).join("/")) ||
+               (isDocument(f) ? "document" : "script");   /* an explicitly named single file is a run by fiat */
+  return testVariants(f, kind).map((variant) => ({ file: f, kind, variant }));
+});
+
+/* AND THE PORT IS CHECKED AGAINST THE ORIGINAL, EVERY RUN. Everything above is a port of sourcefile.py, and a
+   port nothing compares against its source is a copy that drifts — this one has drifted four times, and each
+   time the drift EXCLUDED tests while the total looked complete, which is the exact failure this gate exists to
+   catch. So sourcefile.py itself is run over the same checkout and the two classifications are diffed: which
+   files are testharness tests, and how many runs each is. A disagreement is FATAL and names every file, because
+   a collector that is not the corpus's own answer is a measurement of something else.
+   IT COVERS EVERY FILE ON DISK, not only the walked areas, so the stray census below is checked by the same
+   comparison. It costs about fifteen seconds against a gate measured in tens of minutes, and it runs BEFORE the
+   runner build so a collector defect is reported in seconds rather than after a link. */
+{
+  const cls = spawnSync("python3", [join(ENGINE, "wpt_classify.py"), WPT], { encoding: "utf8", maxBuffer: 1 << 26 });
+  if (cls.status !== 0) {
+    console.error("[wpt] sourcefile.py could not classify the corpus, so this gate cannot check its own " +
+                  "collector against WPT's:\n" + (cls.stderr || cls.stdout));
+    process.exit(1);
+  }
+  const oracle = new Map();
+  for (const line of cls.stdout.split("\n")) {
+    if (!line) continue;
+    const [rel, ...variants] = line.split("\t");
+    oracle.set(rel, variants);
+  }
+  const disagree = [];
+  const everyFile = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.name.startsWith(".")) continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) { everyFile(p); continue; }
+      const rel = relative(WPT, p).split(sep).join("/");
+      const mine = testKind(rel);
+      const theirs = oracle.get(rel);
+      if (Boolean(mine) !== Boolean(theirs)) {
+        disagree.push(`  ${rel}: this gate says ${mine ? "TEST" : "not a test"}, sourcefile.py says ` +
+                      `${theirs ? "TEST" : "not a test"}`);
+      } else if (mine) {
+        const a = testVariants(p, mine).filter(Boolean).join(" ");
+        const b = theirs.join(" ");
+        if (a !== b) disagree.push(`  ${rel}: variants [${a}] here, [${b}] in sourcefile.py`);
+      }
+    }
+  };
+  everyFile(WPT);
+  if (disagree.length) {
+    console.error(`[wpt] this gate's collector disagrees with WPT's own tools/manifest/sourcefile.py about ` +
+                  `${disagree.length} file(s):\n` + disagree.join("\n"));
+    process.exit(1);
+  }
+}
+
+/* THE RUNNER IS BUILT NATIVELY, like run-test262 and for the same reason: the gate is run per change, and an
+   eight-minute wasm link per iteration is a gate nobody runs. The flags mirror the shipped build where they
+   change the engine — ENABLE_DUMPS alters the interpreter's dispatch macros, and building the oracle without it
+   tested a different interpreter once already. */
+/* EVERY BROWSER AND SOLVER SOURCE, not a hand-picked list. The list was picked per component, and each new one
+   arrived by chasing undefined symbols until the link succeeded — which is a list that only ever describes what
+   was needed last time. Streams §5.4's AbortSignal is what made that untenable: it is an EventTarget, which
+   reaches the solver's decision hook, which reaches the scheduler, whose COW covers the DOM. The gate links
+   what the project SHIPS, and a component that cannot be linked is a component that cannot be tested. */
+const SRCS = [
+  "qjs/quickjs.c", "qjs/libregexp.c", "qjs/libunicode.c", "qjs/dtoa.c",
+  ...walk(join(ENGINE, "host", "browser")).map((f) => relative(ENGINE, f)),
+  ...walk(join(ENGINE, "host", "solver")).map((f) => relative(ENGINE, f)),
+  "host/wpt_runner.c",
+].map((f) => join(ENGINE, f));
+
+console.log("[wpt] building the native runner…");
+const bin = join(mkdtempSync(join(tmpdir(), "wpt-")), "wpt.exe");
+/* `-w` SILENCES STYLE, NEVER A MISSING PROTOTYPE. C89's implicit-declaration rule assumes `int (...)`, so a
+   function whose header was not included returns a 32-bit value — and a 64-bit POINTER comes back TRUNCATED.
+   That is not a warning-shaped problem: it segfaulted the whole corpus with no output, and it read as a crash
+   in the engine rather than as a missing #include, which is the most expensive shape a diagnostic can take.
+   -Werror on that one diagnostic makes it a build failure naming the function. */
+/* LEXBOR, BUILT NATIVELY ONCE. Streams §5.4 gives every writable controller a real AbortSignal, which is an
+   EventTarget, which reaches the solver's decision hook and through it the scheduler — and the scheduler's COW
+   covers the DOM, so the gate needs the same tree the shipped build has. Vendored and built on first use, like
+   the corpus itself; the .a is committed to nothing and rebuilt if the source moves. */
+const LEXBOR_SRC = join(WORK, "lexbor-src");
+const LEXBOR_BUILD = join(WORK, "lexbor-native");
+const LEXBOR_LIB = join(LEXBOR_BUILD, "liblexbor_static.a");
+if (!existsSync(LEXBOR_LIB)) {
+  console.log("[wpt] building lexbor natively (once)…");
+  mkdirSync(LEXBOR_BUILD, { recursive: true });
+  for (const [cmd, args] of [["cmake", ["-DCMAKE_BUILD_TYPE=Release", "-DLEXBOR_BUILD_SHARED=OFF",
+                                        "-DLEXBOR_BUILD_STATIC=ON", "-DLEXBOR_BUILD_TESTS=OFF",
+                                        "-DLEXBOR_BUILD_EXAMPLES=OFF", LEXBOR_SRC]],
+                             ["make", ["-j" + (cpus().length || 4)]]]) {
+    const b = spawnSync(cmd, args, { cwd: LEXBOR_BUILD, encoding: "utf8" });
+    if (b.status !== 0) { console.error(`[wpt] lexbor ${cmd} FAILED\n` + (b.stderr || "")); process.exit(1); }
+  }
+}
+
+const cc = spawnSync("gcc", ["-O1", "-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare", "-Wno-parentheses", "-Wno-format-truncation", "-Wno-format-overflow", "-Wno-array-bounds", "-Wno-stringop-overflow", "-Wno-maybe-uninitialized", "-Wno-misleading-indentation", "-Wno-dangling-pointer", "-Wno-char-subscripts", "-Wno-implicit-fallthrough", "-Werror=implicit-function-declaration", "-DNDEBUG", "-D_GNU_SOURCE", '-DCONFIG_VERSION="wpt"',
+  "-DAPICLIENT_DEV=1", "-DENABLE_DUMPS",
+  "-I" + join(ENGINE, "qjs"), "-I" + join(ENGINE, "host"), "-I" + join(ENGINE, "host", "browser"),
+  "-I" + join(LEXBOR_SRC, "source"),
+  ...SRCS, LEXBOR_LIB, "-o", bin, "-lm", "-lpthread"], { encoding: "utf8" });
+if (cc.status !== 0) { console.error("[wpt] runner build FAILED\n" + (cc.stderr || "")); process.exit(1); }
+
+
+/* The AREA a file belongs to: the checked-out path it lives under, which is what WPT_PATHS names — the LONGEST
+   such path, so that a standard listed alongside its components reports at the component. */
+const areas = new Map();
+function byArea(rel) {
+  const p = WPT_PATHS.filter((d) => rel === d || rel.startsWith(d + "/"))
+                     .reduce((a, b) => (b.length > a.length ? b : a), rel.split("/")[0]);
+  let a = areas.get(p);
+  if (!a) areas.set(p, (a = { name: p, expected: 0, done: 0, runs: 0, pass: 0, fail: 0, aborted: 0, lines: [] }));
+  return a;
+}
+
+/* A REPORT THAT ONLY EXISTS AT EXIT IS A REPORT YOU CANNOT GET ON A SLOW CORPUS. This driver printed everything
+   — every failure and every area row — after the last file, so a run that died at ninety percent yielded
+   NOTHING AT ALL: an hour of real measurement thrown away by where a print statement sits. It happened, on the
+   run that was supposed to produce this file's own numbers, and the corpus has just tripled in size, so it will
+   happen again. It is the same sentence CLAUDE.md applies to the engine's cost reporting — emitting them as the
+   run goes is the host's own job — and the same distinction the uncollected-file list draws: an area that
+   printed is measured, an area that did not is VISIBLY ABSENT rather than silently missing.
+   AN AREA IS FINISHED WHEN ITS LAST FILE IS, WHICH IS NOT WHEN THE NEXT AREA STARTS. The file list is sorted by
+   path, and a standard listed beside its own components interleaves with them — `dom/attributes-are-nodes.html`
+   sorts between `dom/abort/` and `dom/collections/` — so "the area changed" is not the same question as "the
+   area is done". Every area's file count is known before the first file runs, so the answer is exact. */
+for (const r of runs) byArea(relative(WPT, r.file)).expected++;
+const AREA_W = Math.max(...[...areas.keys()].map((n) => n.length));
+function areaRow(a) {
+  console.log(`  ${a.name.padEnd(AREA_W)}  runs ${String(a.runs).padStart(5)}  pass ${String(a.pass).padStart(7)}` +
+              `  fail ${String(a.fail).padStart(7)}  aborted ${String(a.aborted).padStart(3)}`);
+}
+/* An area's failure lines are held only until that area finishes, for the same reason: buffered to the end of
+   the RUN they are lost with it; buffered to the end of the AREA they arrive with the row they belong to. */
+function areaFinish(a) {
+  for (const l of a.lines) console.log(l);
+  a.lines.length = 0;
+  areaRow(a);
+}
+
+const HARNESS = join(WPT, "resources", "testharness.js");
+
+/* WPT'S OWN SERVER, started once for the run. Everything the corpus fetches goes through it, so the handlers
+   are the real ones and the rewrites are the real ones.
+   ITS OUTPUT GOES TO A FILE, AND A PIPE HERE IS A DEADLOCK — not a style preference. The server was spawned
+   with `stdio: ["ignore","pipe","pipe"]` and nothing ever read the stderr pipe, so wptserve's own logger filled
+   the 64 KiB socketpair and the next handler thread to log blocked in `write(2, …)` FOREVER, inside
+   `sock_alloc_send_pskb`, holding the connection it was answering. The runner then sat in `read()` in
+   `wpt_http` with zero CPU until the 600 s wall backstop killed it — measured, on the live process: server
+   thread blocked writing 1342 bytes to fd 2, runner blocked reading fd 3, both socket queues empty. Five `xhr`
+   files hung that way and cost ~50 minutes of every run, and WHICH five was deterministic: the ones served
+   after the pipe filled whose requests make the server log at all (a 500, a 400), while a request answered 200
+   logs nothing and sailed past.
+   DRAINING IT FROM NODE WOULD NOT FIX IT. The run is a sequence of `spawnSync` calls, each of which blocks this
+   process's event loop for as long as the test takes — up to the whole backstop — so a `data` listener runs
+   only between tests and the buffer fills within one. The fix has to be at the file descriptor: a real file
+   cannot exert back-pressure, so the server can never block on it whatever it writes and however busy this
+   driver is. READY is then read back from that file rather than off a pipe. The log is KEPT, not discarded —
+   it is what named the missing stash — and its path is printed so the next reader can look. */
+/* It lives beside THIS RUN'S binary, not in .work: the log is an artifact of one run, and a fixed path in a
+   shared work directory is one two concurrent runs would interleave and then read as one server's story. */
+const SERVER_LOG = join(dirname(bin), "wptserve.log");
+writeFileSync(SERVER_LOG, "");
+const serverLogFd = openSync(SERVER_LOG, "a");
+const server = spawn("python3", [join(ENGINE, "wptserve.py"), WPT, "0"],
+                     { stdio: ["ignore", serverLogFd, serverLogFd] });
+const serverAddr = await new Promise((resolve, reject) => {
+  const fail = setTimeout(() => reject(new Error("wptserve did not report READY within 60s")), 60_000);
+  const poll = setInterval(() => {
+    const m = /READY (\d+)/.exec(readFileSync(SERVER_LOG, "utf8"));
+    if (m) { clearTimeout(fail); clearInterval(poll); resolve("127.0.0.1:" + m[1]); }
+  }, 50);
+  server.on("exit", (c) => { clearTimeout(fail); clearInterval(poll); reject(new Error("wptserve exited with " + c)); });
+}).catch((e) => { console.error("[wpt] " + e.message); process.exit(1); });
+console.log(`[wpt] wptserve on ${serverAddr}; its log: ${SERVER_LOG}`);
+process.on("exit", () => server.kill());
+
+/* WPT's server does not serve every path from a file of that name. This is its rewrite table (tools/serve's
+   `rewrites`), reproduced for the entries the corpus actually asks for: /resources/WebIDLParser.js is the
+   webidl2 library under its historical name. A driver that skipped this would report the file as missing —
+   which is what it did — rather than as served from somewhere else. */
+const SERVER_REWRITES = {
+  "/resources/WebIDLParser.js": "/resources/webidl2/lib/webidl2.js",
+};
+
+/* `// META: script=` IS PART OF THE FILE. WPT's server reads those lines and emits a wrapper that loads each
+   named script before the test — a file whose META names idlharness.js is not a file that happens to want it,
+   it is a file that does not run without it. Reading them here is what makes the corpus run AS WRITTEN; the
+   runner keeps its one job of executing a list of programs in order.
+   A `/`-rooted path is WPT-root-relative and anything else is relative to the test's own directory, which is
+   the server's own resolution rule. */
+function metaScripts(file) {
+  return scriptMetadata(file).filter(([k]) => k === "script").map(([, v]) => {
+    /* THE REWRITE APPLIES HERE AND NOWHERE ELSE. A META script is a PROGRAM INPUT — the driver hands the runner
+       its file to execute before the test — so this path is resolved on disk and needs wptserve's rewrite table
+       to find /resources/WebIDLParser.js, which is the webidl2 library under its historical name. Everything the
+       test FETCHES goes through the real server, which applies its own rewrites; this table is not a second copy
+       of those, it is the one entry the driver itself must resolve. */
+    const ref = SERVER_REWRITES[v] || v;
+    return ref.startsWith("/") ? join(WPT, ref.slice(1)) : join(dirname(file), ref);
+  });
+}
+/* A `.sub.js` META SCRIPT IS NOT ITS BYTES ON DISK. wptserve SUBSTITUTES `{{host}}`, `{{ports[http][0]}}`
+   and friends when it serves one, and the whole point of common/get-host-info.sub.js is to hand a test the
+   REAL alternate hosts and ports of the server it is running against. Read off disk it hands back the
+   placeholders instead, so `get_host_info().HTTP_REMOTE_ORIGIN` is the literal string `http://{{hosts[alt][]}}`
+   — which is not a URL, which is why every cross-origin `window.open` in the corpus failed with "the URL to
+   open is not a URL" and every test built on one timed out. That is a GATE defect reported as an engine one.
+   Everything a test FETCHES already goes through the real server; a META script is the one input the driver
+   hands over itself, so it is the one that has to be fetched here. Memoized: the same helper is named by many
+   files and substitution is the server's work, not this loop's. */
+const g_subbed = new Map();
+async function substituted(dep) {
+  if (!/\.sub\.[a-z]+$/.test(dep)) return dep;
+  if (g_subbed.has(dep)) return g_subbed.get(dep);
+  const path = "/" + relative(WPT, dep).split(sep).join("/");
+  const r = await fetch("http://" + serverAddr + path);
+  if (!r.ok) return dep;   /* the corpus server does not serve it; the missing-dep report below names it */
+  const out = join(dirname(bin), relative(WPT, dep).split(sep).join("__"));
+  writeFileSync(out, await r.text());
+  g_subbed.set(dep, out);
+  return out;
+}
+
+let pass = 0, fail = 0, aborted = 0;
+
+console.log("\n==================== web-platform-tests ====================");
+for (const { file: f, kind, variant } of runs) {
+  /* THE RUN'S NAME CARRIES ITS VARIANT, because that is what distinguishes it from its siblings — four lines
+     reading `url/url-constructor.any.js` with four different failures name nothing a reader can act on. The
+     AREA is asked for the file's own path, since a variant does not live somewhere else. */
+  const path = relative(WPT, f);
+  const rel = path + variant;
+  const area = byArea(path);
+  const failures = area.lines;   /* held until this AREA finishes, not until the run does */
+  area.runs++;
+  try {
+    const deps = (await Promise.all(metaScripts(f).map(substituted)));
+    const missing = deps.filter((d) => !existsSync(d));
+    if (missing.length) {
+      /* A META script the sparse checkout does not have is a GATE defect, not a test result: the file would run
+         against a corpus it was not written for. Name the paths so WPT_PATHS can be widened. */
+      aborted++; area.aborted++;
+      failures.push(`  ABORT  ${rel}\n         META script not checked out: ${missing.map((d) => relative(WPT, d)).join(", ")}`);
+      continue;
+    }
+    /* WHETHER THE TEST IS A DOCUMENT IS DECIDED HERE AND NOWHERE ELSE. The runner used to re-derive it from the
+       file name — `.html`, and only `.html` — which is a second copy of the rule above and drifted from it the
+       moment the first `.htm` was collected: the driver would have handed the runner a document and the runner
+       would have executed the markup as JavaScript. One authority, passed as a flag; the runner carries no
+       extension list at all. */
+    /* AND THE VARIANT GOES WITH IT, for the same reason: the driver decided what this run IS, so the runner is
+       told rather than left to re-derive it. It becomes the run's address — what the runner GETs and what
+       `location.search` answers — which is the whole of what a variant is. */
+    /* THE BUDGET IS CPU, NOT WALL CLOCK, AND THAT IS THE WHOLE DIFFERENCE BETWEEN A RESULT AND AN ARTIFACT.
+       This was `timeout: 60_000` — sixty seconds of ELAPSED time — so a healthy test running on a loaded box was
+       killed and reported in the same column as a DCHECK naming a missing capability. It is not hypothetical: at
+       a load average of 13-18 on four cores, `dom/ranges` read 15743 pass against a 25056 baseline with an
+       IDENTICAL fail count, because one file was killed part-way and the subtests it had not yet printed simply
+       ceased to exist. The reader cannot tell that from a regression, which is the same shape as the aborted
+       files this gate was built to expose.
+       RLIMIT_CPU is the honest measure: it counts the CPU SECONDS this process consumed, so a test starved by
+       other work is never killed for waiting, however long it waits. The kernel raises SIGXCPU at the soft
+       limit, which is a DIFFERENT signal from the wall backstop's SIGTERM — so the two causes stay
+       distinguishable in the report rather than collapsing into "signal SIGTERM".
+       The wall backstop stays, generously, because RLIMIT_CPU cannot see a test BLOCKED on I/O — a deadlock
+       against wptserve burns no CPU at all. Two measures, two signals, and the report says which fired. */
+    /* AND THE BACKSTOP'S REPORT CARRIES THE CPU THE KILLED TEST ACTUALLY CONSUMED, because that number is the
+       whole verdict and it was missing. A SIGTERM at the backstop is TWO different facts wearing one signal: a
+       real test crawling on a saturated box (seconds of CPU per second of wall), and a test blocked on a socket
+       that will never answer (zero). This driver reported both as "load average N — re-run this file alone",
+       which is a claim about the BOX, and it sent three separate diagnoses in one day hunting a phantom before
+       anyone measured the process: 0.03 s of CPU over 600 s of wall, blocked in `read()`, against a wptserve
+       whose logging thread was itself blocked writing to a pipe nobody read. `cutime`/`cstime` in
+       /proc/self/stat accumulate the CPU of children this process has REAPED, and spawnSync reaps before it
+       returns, so the delta across the call IS that child's CPU — no wrapper, no accounting the kill can
+       destroy. */
+    const childCpu = () => {
+      const f = readFileSync("/proc/self/stat", "utf8");
+      const v = f.slice(f.lastIndexOf(")") + 2).split(" ");   /* comm may hold spaces; fields resume after it */
+      return (Number(v[11]) + Number(v[12])) / CLK_TCK;       /* stat(3) fields 16,17: cutime, cstime */
+    };
+    const cpu0 = childCpu();
+    const r = spawnSync("/bin/sh",
+                        ["-c", `ulimit -H -t ${CPU_BUDGET_S + 10} 2>/dev/null; ulimit -S -t ${CPU_BUDGET_S}; exec "$@"`, "sh", bin,
+                         ...(kind === "document" ? ["--test-document"] : []),
+                         ...(variant ? ["--variant", variant] : []), HARNESS, ...deps, f],
+                        { encoding: "utf8", maxBuffer: 1 << 28, timeout: WALL_BACKSTOP_MS,
+                          env: { ...process.env, WPT_SERVER: serverAddr } });
+    const cpuUsed = childCpu() - cpu0;
+    const out = (r.stdout || "") + (r.stderr || "");
+    /* An ABORT is a result about this file, not an accident: it is a DCHECK naming a capability the browser half
+       does not have, which is exactly what this gate is for. It is counted apart from a FAIL because the two ask
+       for different work — a fail is a wrong answer, an abort is a missing one. */
+    /* AN ABORT DOES NOT ERASE WHAT THE FILE ALREADY REPORTED. A DCHECK ends the process, but the results printed
+       before it are results — and discarding them here counted a file that had failed four subtests and then
+       leaked as a file that produced NOTHING, which is the "same failures with the count hidden" shape this gate
+       exists to avoid. It hid them from me, too: I diagnosed that file as ending with no results and went looking
+       for what it was waiting on. The abort is reported AND the subtests are counted; they are different facts. */
+    /* THE TWO @WHY SHAPES, because there are two emitters and losing one loses the name. The HOST's check.h
+       prints a machine-readable JSON line whose `reason` carries the message; the ENGINE's quickjs-check.h prints
+       `@WHY <msg> (file:line)` as plain text. Matching only the first reported the second as a bare
+       "signal SIGABRT" — an abort with the name thrown away, which is the one thing an abort is FOR. It cost a
+       round trip per diagnosis and taught nothing on its own. */
+    const why = out.match(/@WHY .*"reason":"([^"]*)/) || out.match(/^@WHY (.+)$/m);
+    const abortedHere = Boolean(why || r.signal);
+    if (abortedHere) {
+      aborted++; area.aborted++;
+      /* NAME WHICH OF THE THREE THIS IS. A DCHECK abort is a missing capability and is work; a CPU-budget kill
+         is a real statement about this test's cost and is also work; a wall-backstop kill is a fact about the
+         BOX, and reporting it as either of the others sends the next reader hunting a phantom. The load average
+         rides along with the third because it is the number that explains it. */
+      const cause = why ? why[1].slice(0, 160)
+                  : (r.signal === "SIGXCPU" || r.signal === "SIGKILL") ? `exceeded the ${CPU_BUDGET_S}s CPU budget (not wall time — this test really is that expensive)`
+                  : r.signal === "SIGTERM"
+                      ? (cpuUsed < 1
+                          ? `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuUsed.toFixed(2)}s of CPU — ` +
+                            `that is a BLOCK, not load: the process was asleep waiting for something that never came. ` +
+                            `Attach to it (gdb -p, /proc/PID/syscall) and look at the OTHER end`
+                          : `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuUsed.toFixed(1)}s of CPU, ` +
+                            `load average ${loadavg()[0].toFixed(1)} on ${cpus().length} cores — starved, not blocked; RE-RUN THIS FILE ALONE`)
+                  : "signal " + r.signal;
+      failures.push(`  ABORT  ${rel}\n         ${cause}`);
+    }
+    /* THE `@WPTHANDLER` BRANCH IS GONE, not disabled. It excused a test that asks for a wptserve `.py` handler
+       back when this driver served the corpus off disk — and engine/wptserve.py now runs WPT'S OWN server, which
+       imports those handlers and calls their `main`, so nothing has emitted that marker since. A branch whose
+       emitter no longer exists is not a safety net, it is a reader's mistake waiting to happen: it says this gate
+       cannot run handler tests, and this gate can. */
+    /* A `<script src>` THE CORPUS DOES NOT HAVE is the missing-META-script defect one layer in, and it was the
+       only one of the two that went uncounted: the document RAN, without a file it asked for, and whatever it
+       then reported was counted as an ordinary result unless the file happened to report nothing at all. It is
+       the same fact — this file ran against a corpus it was not written for — so it is the same ABORT, and it
+       names the path so WPT_PATHS can be widened. Its partial subtests are dropped for the reason the count
+       exists at all: they are numbers from a test that is not the test. */
+    const noscript = out.match(/^@WPTERR .*<script src> did not load: (.*)$/m);
+    if (noscript) {
+      aborted++; area.aborted++;
+      failures.push(`  ABORT  ${rel}\n         a <script src> the corpus does not serve: ${noscript[1]}`);
+      continue;
+    }
+    let filePass = 0, fileFail = 0;
+    for (const line of out.split("\n")) {
+      const m = line.match(/^@WPT (\{.*\})$/);
+      if (!m) continue;
+      let t; try { t = JSON.parse(m[1]); } catch { continue; }
+      if (t.status === 0) { filePass++; }
+      else { fileFail++; failures.push(`  FAIL   ${rel} :: ${t.name}\n         ${(t.message || "").slice(0, 200)}`); }
+    }
+    const err = out.match(/^@WPTERR (.*)$/m);
+    if (!abortedHere && err && !filePass && !fileFail) {
+      aborted++; area.aborted++;
+      failures.push(`  ERROR  ${rel}\n         ${err[1].slice(0, 200)}`);
+      continue;
+    }
+    /* A FILE THAT NEVER COMPLETED IS NOT A FILE WITH NOTHING IN IT. testharness reports through its completion
+       callback, so a run that ends without @WPTDONE — an async test that never settles, a harness that never
+       reached all_done — emitted no @WPT lines at all and contributed ZERO to every column. It read as though the
+       file held no tests, which is the same silent truncation as leaving a directory out of the checkout: the
+       number goes down and nothing says why. It is counted and NAMED. */
+    if (!abortedHere && !/^@WPTDONE /m.test(out)) {
+      aborted++; area.aborted++;
+      failures.push(`  ABORT  ${rel}\n         the harness never completed — no @WPTDONE, so its ` +
+                    `${filePass + fileFail} reported subtest(s) are not the whole file`);
+      continue;
+    }
+    pass += filePass;
+    fail += fileFail;
+    area.pass += filePass;
+    area.fail += fileFail;
+  } finally {
+    /* THE ONE PLACE THE AREA'S PROGRESS IS COUNTED, so that every `continue` above — a missing META script, a
+       missing <script src>, an abort, a harness that never completed — still advances it. A count kept at the
+       bottom of the body would be skipped by exactly the paths that matter most. */
+    if (++area.done === area.expected) areaFinish(area);
+  }
+}
+
+/* PER-AREA, NOT ONE NUMBER. `encoding` alone answers three quarters of a million subtests — one per code point
+   per legacy encoder — so a single total is a number in which every other area is invisible: a component that
+   lost a hundred subtests and one that gained them read identically. The areas are the checked-out paths, which
+   is the same list that decides what runs, so the breakdown cannot drift from the corpus.
+   THE ROWS ARE REPEATED HERE because the streamed ones are interleaved with their failure lines and a reader
+   wants them together; the streaming is what makes a killed run report, the summary is what makes a finished
+   run readable. Every area must have finished — each file passes through the accounting above exactly once —
+   so an unflushed area at this point is this driver miscounting, and it says so rather than printing a table
+   that quietly disagrees with the rows above it. */
+console.log("  ---- summary");
+{
+  const names = [...areas.keys()].sort();
+  for (const n of names) {
+    const a = areas.get(n);
+    if (a.done !== a.expected || a.lines.length)
+      throw new Error(`[wpt] area ${n} finished ${a.done} of ${a.expected} runs with ${a.lines.length} ` +
+                      "unreported line(s) — the per-area accounting is wrong, so this table cannot be trusted");
+    areaRow(a);
+  }
+}
+
+/* AND WHAT IS SITTING IN THE CHECKOUT THAT NOTHING RAN. A sparse checkout in CONE MODE gives you the files of
+   every directory on the path to a listed one, so naming `service-workers/service-worker/resources` as a
+   support path also puts 249 service-worker TESTS on disk, and naming `FileAPI/blob` put ten FileAPI tests one
+   level up. They were present, walked by nothing, counted by nothing, and NOTHING SAID SO — which is this
+   gate's own version of the defect it exists to catch, one level out from the corpus.
+   It is not fixed by running them: a directory this list does not name is honestly untested, and that is the
+   statement WPT_PATHS is for. It is fixed by NAMING them, every run, with counts. Then widening the list is a
+   decision someone makes, rather than a discovery someone eventually stumbles into.
+   AND A COUNT IS NOT A CENSUS. "573 test files" was one number for two populations that call for opposite
+   decisions, and reading it told you neither. One population is a STANDARD THIS GATE ALREADY MEASURES whose own
+   level no entry names — `webidl/idlharness.any.js` beside the listed `webidl/ecmascript-binding` — which is
+   exactly the defect FileAPI and streams already had twice, and the answer is always to name the standard. The
+   other is CONE-MODE COLLATERAL: `service-workers/service-worker/resources` is listed because two webmessaging
+   tests name a helper in it, and cone mode then puts 249 ServiceWorker tests on disk that nothing asked for.
+   Those two look identical in a tally by directory, so this reports WHICH LISTED ENTRY dragged each group in.
+   A group whose puller is a SUPPORT path is collateral; a group with no puller is a standard nobody named. */
+{
+  const named = (rel) => WPT_PATHS.some((d) => rel === d || rel.startsWith(d + "/"));
+  /* WHICH ENTRY PUT THIS DIRECTORY ON DISK. Cone mode checks out every file of every directory ON THE PATH to a
+     listed one, so a stray file's puller is any listed entry that lives BELOW its directory. */
+  const pullerOf = (dir) => WPT_PATHS.filter((d) => d.startsWith(dir + "/")).sort()[0];
+  const stray = new Map();
+  for (const f of collect(WPT, [])) {
+    const rel = relative(WPT, f).split(sep).join("/");
+    if (named(rel)) continue;
+    /* GROUPED BY DIRECTORY, at most two segments deep — the granularity a WPT_PATHS entry is written at. The
+       filename is not part of the key; taking the first two SEGMENTS made one row per file for everything
+       sitting at a standard's own level, which is a list of 300 rows saying "xhr". */
+    const k = rel.split("/").slice(0, -1).slice(0, 2).join("/") || ".";
+    stray.set(k, (stray.get(k) || 0) + 1);
+  }
+  const total = [...stray.values()].reduce((a, b) => a + b, 0);
+  console.log(`  ---- checked out and named by no WPT_PATHS entry, so run by nothing: ${total} test file(s)`);
+  for (const [k, n] of [...stray.entries()].sort((a, b) => b[1] - a[1])) {
+    const puller = pullerOf(k);
+    console.log(`       ${String(n).padStart(4)}  ${k}` +
+                (puller ? `   (on disk as an ancestor of the listed ${puller})` : "   (NAMED BY NOTHING)"));
+  }
+}
+
+/* AND WHAT THE VARIANTS CAME TO. A WPT `variant` is a SEPARATE TEST RUN of the same file at a different address
+   — `<meta name="variant" content="?wrapper">`, or `// META: variant=` — and WPT runs one per declaration,
+   never the bare file. This gate used to run the bare file and none of the variants, and reported the shortfall
+   here as a work item. It is now the work: the run unit is (file, variant), so this line states the SIZE of
+   what was being skipped rather than the fact that it was. */
+{
+  const vfiles = new Set(runs.filter((r) => r.variant).map((r) => r.file));
+  if (vfiles.size)
+    console.log(`  ---- ${vfiles.size} collected file(s) declare variants, run as ` +
+                `${runs.filter((r) => r.variant).length} distinct runs at their own addresses`);
+}
+console.log(`  files ${files.length}   runs ${runs.length}   subtests ${pass + fail}   pass ${pass}` +
+            `   fail ${fail}   aborted-runs ${aborted}`);
+console.log("===========================================================");
+process.exit(fail || aborted ? 1 : 0);

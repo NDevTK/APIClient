@@ -1,0 +1,8 @@
+{
+  "name": "claude-md-enforcer",
+  "version": "0.1.0",
+  "description": "Enforces CLAUDE.md L29-L31 via Stop, PostToolUse(Edit|Write|NotebookEdit), and UserPromptSubmit hooks. Re-injects the rules every turn, blocks premature stops, and forces a hack-vs-proper-fix self-review after every code edit.",
+  "author": {
+    "name": "API Security Researcher (project-local)"
+  }
+}

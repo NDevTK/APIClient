@@ -1,0 +1,31 @@
+#!/bin/sh
+# APIClient pre-commit guard — keep the engine SOURCE pointer and its shipped
+# RUNTIME ARTIFACT consistent.
+#
+# The forced-execution engine lives in the engine/qjs gitlink (a submodule-style
+# commit pointer into the apiclient-fork branch of our quickjs-ng fork). The
+# extension loads TWO pre-built artifacts staged from that source by
+# `node engine/build.mjs worker && stage`:
+#   extension/lib/qjs/qjs_worker.js   (the compiled wasm — from quickjs.c/qjs_dom.c/…)
+#   extension/lib/qjs/hostedge.gen.js (the JS shim — from hostedge.js + driver.js)
+# A C-source change moves the worker; a hostedge.js/driver.js change moves ONLY
+# the gen (the wasm is byte-identical). Bumping the gitlink WITHOUT re-staging the
+# artifact the change touched ships a stale runtime against new source. This guard
+# requires AT LEAST ONE artifact to be staged with a gitlink bump (a real bump
+# always rebuilds/restages at least one). Override a doc/comment-only source bump
+# (no artifact change) with `git commit --no-verify`.
+
+gitlink_staged=$(git diff --cached --name-only -- engine/qjs)
+artifact_staged=$(git diff --cached --name-only -- extension/lib/qjs/qjs_worker.js extension/lib/qjs/hostedge.gen.js)
+
+if [ -n "$gitlink_staged" ] && [ -z "$artifact_staged" ]; then
+  echo "pre-commit BLOCKED: engine/qjs gitlink is staged but neither runtime artifact is."
+  echo "  A new engine source pointer must ship the artifact built from it (worker for C, gen for the shim),"
+  echo "  or main's runtime != main's source."
+  echo "  Fix: node engine/build.mjs worker && node engine/build.mjs stage"
+  echo "       git add extension/lib/qjs/qjs_worker.js extension/lib/qjs/hostedge.gen.js"
+  echo "  Intentional doc/comment-only source bump (no artifact change): git commit --no-verify"
+  exit 1
+fi
+
+exit 0

@@ -1,0 +1,9 @@
+[sync] fetching upstream (origin = quickjs-ng)…
+[sync] vendored quickjs.h version : 0.15.1
+[sync] apiclient-fork git lineage : v0.15.1-210-g9d53055
+[sync] upstream origin/master      : v0.15.1-10-g4fb9b0c
+[sync] apiclient-fork is 4 upstream commit(s) behind
+[sync] BEHIND by 4 — run `node engine/sync.mjs apply`.
+[sync] ABORT: engine/qjs has uncommitted tracked changes:
+M quickjs.c
+  Commit or stash them first.

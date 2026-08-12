@@ -1,0 +1,22 @@
+[build] emcc 6 sources -> engine/host/out/qjs.mjs
+D:\APIClient\engine\host\main.c:493:112: error: use of undeclared identifier 'url'
+  493 |     if (name && host_opaque(argv[1]) && is_sink_attr(name)) emit_sink("setAttribute");   /* @S: tainted -> on*/url attr */
+      |                                                                                                                ^~~
+D:\APIClient\engine\host\main.c:495:17: error: use of undeclared identifier 'val'
+  495 |     if (name && val) { dom_attr_capture(el, name); lxb_dom_element_set_attribute(el, (const lxb_char_t *)name, strlen(name), (const lxb_char_t *)val, strlen(val)); }
+      |                 ^~~
+D:\APIClient\engine\host\main.c:495:146: error: use of undeclared identifier 'val'
+  495 |     if (name && val) { dom_attr_capture(el, name); lxb_dom_element_set_attribute(el, (const lxb_char_t *)name, strlen(name), (const lxb_char_t *)val, strlen(val)); }
+      |                                                                                                                                                  ^~~
+D:\APIClient\engine\host\main.c:495:158: error: use of undeclared identifier 'val'
+  495 |     if (name && val) { dom_attr_capture(el, name); lxb_dom_element_set_attribute(el, (const lxb_char_t *)name, strlen(name), (const lxb_char_t *)val, strlen(val)); }
+      |                                                                                                                                                              ^~~
+D:\APIClient\engine\host\main.c:497:9: error: use of undeclared identifier 'val'
+  497 |     if (val) JS_FreeCString(ctx, val);
+      |         ^~~
+D:\APIClient\engine\host\main.c:497:34: error: use of undeclared identifier 'val'
+  497 |     if (val) JS_FreeCString(ctx, val);
+      |                                  ^~~
+6 errors generated.
+emcc: error: ''D:/APIClient/engine/.work/emsdk/upstream/bin\clang.exe' -target wasm32-unknown-emscripten -fignore-exceptions -mllvm -combiner-global-alias-analysis=false -mllvm -enable-emscripten-sjlj -mllvm -disable-lsr '--sysroot=D:\APIClient\engine\.work\emsdk\upstream\emscripten\cache\sysroot' -Xclang '-iwithsysroot/include\fakesdl' -Xclang '-iwithsysroot/include\compat' '-ID:\APIClient\engine\qjs' '-ID:\APIClient\engine\lexbor\source' -O1 -w -D_GNU_SOURCE -c 'D:\APIClient\engine\host\main.c' -o 'C:\Users\lewis\AppData\Local\Temp\emscripten_temp_v_9x6sd8\main.o'' failed (returned 1)
+[build] FAILED rc=1

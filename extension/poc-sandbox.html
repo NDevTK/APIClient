@@ -1,0 +1,73 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>PoC sandbox</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #0d1117; color: #c9d1d9;
+    font-family: -apple-system, "Segoe UI", sans-serif; font-size: 12px; }
+  #wrap { padding: 8px; }
+  .hdr { font-size: 10px; text-transform: uppercase; letter-spacing: .4px;
+    color: #8b949e; margin-bottom: 4px; }
+  .hdr .origin { color: #6e7681; text-transform: none; letter-spacing: 0; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  button { background: #238636; color: #fff; border: 0; border-radius: 4px;
+    padding: 5px 12px; font-size: 12px; cursor: pointer; }
+  button:disabled { background: #21262d; color: #6e7681; cursor: default; }
+  #status { font-size: 11px; color: #8b949e; }
+  #status.ok { color: #6fd98a; }
+  #status.err { color: #ff8181; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div class="hdr">attacker sandbox <span class="origin">(null opaque origin — genuinely cross-origin to the target; normal web rules apply)</span></div>
+  <div class="row">
+    <button id="run" disabled>▶ Run PoC</button>
+    <span id="status">waiting for PoC…</span>
+  </div>
+</div>
+<script>
+// Sandboxed extension page (manifest `sandbox.pages`): unique opaque origin,
+// no chrome.* access, eval allowed. It runs the EXACT PoC JavaScript the popup
+// hands it — the same artifact a researcher would paste on https://example.com.
+// Running on the USER'S click provides real user activation, so the PoC's
+// window.open() is not popup-blocked (no `debugger` permission needed to fake a
+// gesture). X-Frame-Options / activation rules apply exactly as on a real page.
+(function () {
+  var pocJs = null, marker = null;
+  var runBtn = document.getElementById("run");
+  var statusEl = document.getElementById("status");
+  var parentWin = null, parentOrigin = "*";
+
+  // The PoC JavaScript is displayed by the popup (once) — this embed only RUNS
+  // it. We receive the exact code via POC_SETUP and eval it on the user's click.
+  window.addEventListener("message", function (e) {
+    if (window.origin !== 'null') return console.error('Not sandboxed');
+    if (!e.origin.startsWith('chrome-extension:') || e.source !== window.top) return console.error('Untrusted sender');
+    var d = e.data;
+    if (!d || d.type !== "POC_SETUP") return;
+    pocJs = String(d.pocJs || "");
+    marker = d.marker || null;
+    runBtn.disabled = !pocJs;
+    parentWin = e.source; parentOrigin = e.origin || "*";
+    statusEl.className = ""; statusEl.textContent = "ready — click Run";
+  });
+
+  runBtn.addEventListener("click", function () {
+    if (!pocJs) return;
+    statusEl.className = ""; statusEl.textContent = "running…";
+    var threw = null;
+    try { (0, eval)(pocJs); }            // user gesture present → window.open allowed
+    catch (err) { threw = (err && err.message) || String(err); }
+    if (threw) { statusEl.className = "err"; statusEl.textContent = "PoC threw: " + threw; }
+    else { statusEl.className = "ok"; statusEl.textContent = "PoC executed — verdict updates below when the sink fires"; }
+    try { (parentWin || parent).postMessage({ type: "POC_RAN", marker: marker, error: threw }, parentOrigin); } catch (_) {}
+  });
+
+  // Tell the popup we're ready to receive the PoC.
+  try { parent.postMessage({ type: "POC_READY" }, "*"); } catch (_) {}
+})();
+</script>
+</body>
+</html>

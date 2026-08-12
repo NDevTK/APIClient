@@ -1,0 +1,7 @@
+=== RESTART ===
+started. chrome pid=29172 port=9337 extId=ngeokdlcjlfpemhjhlchekpanlgejgje
+=== GOTO ===
+navigated to http://localhost:8765/sdk_firebase.html
+=== DIAG 90 reload ===
+background_page: [AST:merge] Fetch sites: %d call sites processed, %d endpoints registered 1 1
+background_page: [evict] dropped %d reviewed document(s) from state.docs 1

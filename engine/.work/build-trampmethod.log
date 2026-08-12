@@ -1,0 +1,7 @@
+
+[build] REFUSING TO BUILD: engine is 1 commit(s) behind quickjs-ng upstream (v0.15.1-4-gee29799).
+[build]   Keeping the fork current is mandatory. Sync first:
+[build]     node engine/sync.mjs apply      # FF master + 3-way merge into apiclient-fork
+[build]   then re-run the build, verify the FULL gate set + _idxdocs, and land.
+[build]   (offline-iteration-only override, NEVER to land: SKIP_UPSTREAM_CHECK=1)
+

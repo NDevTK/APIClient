@@ -1,0 +1,4 @@
+[submodule "engine/qjs"]
+	path = engine/qjs
+	url = https://github.com/NDevTK/APIClient-quickjs.git
+	branch = apiclient-v2

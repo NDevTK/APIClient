@@ -1,0 +1,13 @@
+[build] emcc 6 sources -> engine/host/out/qjs.mjs
+D:\APIClient\engine\qjs\quickjs.c:9088:16: error: typedef redefinition with different types ('void (*)(const char *, const char *)' vs 'void (*)(const char *)')
+ 9088 | typedef void (*JSGateHook)(const char *token, const char *src);   /* src = the tainted operand's source-leaf ("{origin}.x"/"{pm}.y") so the host routes the token by WHAT it constrains (origin vs data payload), not one flat list */
+      |                ^
+D:\APIClient\engine\qjs\quickjs.h:1132:16: note: previous definition is here
+ 1132 | typedef void (*JSGateHook)(const char *token);   /* concrete string a tainted value is tested against */
+      |                ^
+D:\APIClient\engine\qjs\quickjs.c:9096:35: error: too many arguments to function call, expected 1, have 2
+ 9096 |     if (s && s[0]) g_gate_hook(s, src);
+      |                    ~~~~~~~~~~~    ^~~
+2 errors generated.
+emcc: error: ''D:/APIClient/engine/.work/emsdk/upstream/bin\clang.exe' -target wasm32-unknown-emscripten -fignore-exceptions -mllvm -combiner-global-alias-analysis=false -mllvm -enable-emscripten-sjlj -mllvm -disable-lsr '--sysroot=D:\APIClient\engine\.work\emsdk\upstream\emscripten\cache\sysroot' -Xclang '-iwithsysroot/include\fakesdl' -Xclang '-iwithsysroot/include\compat' '-ID:\APIClient\engine\qjs' '-ID:\APIClient\engine\lexbor\source' -O1 -w -D_GNU_SOURCE -c 'D:\APIClient\engine\qjs\quickjs.c' -o 'C:\Users\lewis\AppData\Local\Temp\emscripten_temp_e0s1j55b\quickjs.o'' failed (returned 1)
+[build] FAILED rc=1

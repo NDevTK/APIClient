@@ -1,0 +1,7 @@
+[build] emcc 6 sources -> engine/host/out/qjs.mjs
+D:\APIClient\engine\qjs\quickjs.c:18765:33: error: expected expression
+ 18765 |                 fprintf(stderr, "[TRAMP] %s
+       |                                 ^
+1 error generated.
+emcc: error: ''D:/APIClient/engine/.work/emsdk/upstream/bin\clang.exe' -target wasm32-unknown-emscripten -fignore-exceptions -mllvm -combiner-global-alias-analysis=false -mllvm -enable-emscripten-sjlj -mllvm -disable-lsr '--sysroot=D:\APIClient\engine\.work\emsdk\upstream\emscripten\cache\sysroot' -Xclang '-iwithsysroot/include\fakesdl' -Xclang '-iwithsysroot/include\compat' '-ID:\APIClient\engine\qjs' '-ID:\APIClient\engine\lexbor\source' -O1 -w -D_GNU_SOURCE -c 'D:\APIClient\engine\qjs\quickjs.c' -o 'C:\Users\lewis\AppData\Local\Temp\emscripten_temp_91nft9df\quickjs.o'' failed (returned 1)
+[build] FAILED rc=1

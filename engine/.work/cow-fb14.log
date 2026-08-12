@@ -1,0 +1,7 @@
+started. chrome pid=49972 port=9337 extId=ngeokdlcjlfpemhjhlchekpanlgejgje
+navigated to http://localhost:8765/sdk_firebase.html
+background_page: [evict] dropped %d reviewed document(s) from state.docs 1
+endpoints: 1
+wasm aborted: 4
+host-model gap: 0
+lines: 89
