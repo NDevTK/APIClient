@@ -1428,8 +1428,17 @@ static const IdlStepDecl NODE_NORM_STEP = {
    THE COPY IS A PRIVATE TREE. It is built by inserting into itself and it is in no document until the page
    inserts it, so those inserts are declared private rather than captured — capturing them would put the whole
    copy in the running flow's delta, when the delta exists to hold shared state the flow touched. */
-/* A LEVEL of the walk — see the `<template>` case below. */
-typedef struct { lxb_dom_node_t *src, *dst, *root, *croot, *cnode; } CloneFrame;
+/* A LEVEL of the walk — a tree reached OTHER THAN through child links, which is a `<template>`'s content
+   fragment (HTML §4.12.3's cloning steps) and a shadow tree (§4.4 step 6.8). `stage` is where the level that
+   pushed this frame RESUMES, and it is not the same for the two: a template's content is cloned by step 3, so
+   the element's own step 5 is still to come, while a shadow tree is cloned by step 6, after which only step 7
+   remains. A frame with no resume stage is what made step 6 unimplementable — popping back always meant
+   "children next", so a shadow descent would have re-walked the light children it was standing after. */
+typedef struct {
+    lxb_dom_node_t *src, *dst, *root, *croot, *cnode;
+    bool deep;
+    int  stage;
+} CloneFrame;
 
 typedef struct {
     lxb_dom_node_t *src;     /* the cursor in the original */
@@ -1439,10 +1448,15 @@ typedef struct {
     /* THE PRIVATE-TREE DECLARATION FOR THE CURRENT LEVEL, which is not always `copy`. A `<template>`'s content
        is a SEPARATE tree — reached through the element's `content` field, not through child links — so once the
        walk descends into it, the tree being built into is that fragment. It is private for the same reason the
-       copy is: clone_interface made it a moment ago and nothing has ever seen it. */
+       copy is: clone_interface made it a moment ago and nothing has ever seen it. A cloned shadow tree is the
+       second such tree, reached through §4.9's association instead. */
     lxb_dom_node_t *croot;
     lxb_dom_node_t *cnode;   /* the copy of `src` — what its own children get inserted under */
-    CloneFrame *stack;       /* the template levels above this one */
+    /* `clone a node`'s `subtree` FOR THE CURRENT LEVEL, which is not one value for the whole call: step 5 is
+       conditioned on it, HTML §4.12.3 returns early without it, and step 6.8 passes TRUE regardless — so
+       `host.cloneNode(false)` clones no light children and the whole shadow tree. */
+    bool deep;
+    CloneFrame *stack;       /* the levels above this one */
     int sp, scap;
 } NodeCloneState;
 
@@ -1463,12 +1477,13 @@ static void node_clone_release(JSContext *ctx, void *st)
     s->stack = NULL;
 }
 
-static void clone_push(NodeCloneState *s)
+/* Leave this level for one below it, remembering the stage this one resumes at. */
+static void clone_push(NodeCloneState *s, int resume_stage)
 {
     if (s->sp == s->scap) {
         int want = s->scap ? s->scap * 2 : 4;
         CloneFrame *n = realloc(s->stack, sizeof(CloneFrame) * (size_t)want);
-        CHECK(n != NULL, "cloneNode could not grow its template stack");
+        CHECK(n != NULL, "cloneNode could not grow its level stack");
         s->stack = n;
         s->scap = want;
     }
@@ -1477,6 +1492,8 @@ static void clone_push(NodeCloneState *s)
     s->stack[s->sp].root = s->root;
     s->stack[s->sp].croot = s->croot;
     s->stack[s->sp].cnode = s->cnode;
+    s->stack[s->sp].deep = s->deep;
+    s->stack[s->sp].stage = resume_stage;
     s->sp++;
 }
 
@@ -1522,6 +1539,8 @@ static lxb_dom_node_t *clone_template_content(lxb_dom_node_t *n)
                       "descendant per step") \
     X(CLONE_TEMPLATE, "DOM §4.4 clone a node step 3 (HTML §4.12.3 the template element's cloning steps)") \
     X(CLONE_CHILDREN, "DOM §4.4 clone a node step 5 (for each child of node's children, in tree order)") \
+    X(CLONE_SHADOW,   "DOM §4.4 clone a node step 6 (a shadow host's clonable shadow root: steps 6.1-6.7 attach " \
+                      "it onto the copy, 6.8 clones its children), after step 5") \
     X(CLONE_LEAVE,    "DOM §4.4 clone a node step 7 (return copy): this node's clone is complete, and step 5's " \
                       "loop over its parent's children advances")
 enum { IDL_STEP_STAGE_BASE(NODE_CLONE_STAGES) NODE_CLONE_STAGES(JS_STEP_STAGE_ENUM) };
@@ -1541,6 +1560,13 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
         bool deep = argc > 0 && JS_ToBool(ctx, argv[0]);
 
         if (!n) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+        /* cloneNode step 1: "If this is a shadow root, then throw a NotSupportedError." A shadow root is
+           created by `attach a shadow root` and by nothing else — a copy of one would be a second root for a
+           host that already has one, which is why the standard refuses rather than answering. */
+        if (shadow_root_is(n)) {
+            JS_ThrowDOMException(ctx, "NotSupportedError", "cloneNode on a ShadowRoot");
+            return JS_STEP_ABRUPT;
+        }
         if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT) {
             JS_ThrowDOMException(ctx, "NotSupportedError", "cloning a Document is not supported");
             return JS_STEP_ABRUPT;
@@ -1549,7 +1575,11 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
         CHECK(s->copy != NULL, "cloneNode: the Lexbor node copy failed — returning nothing would hand the page a "
                                "null it has no way to distinguish from a node it never asked for");
         dom_cow_note_created(s->copy);   /* the clone ROOT only — its descendants are reachable only through it */
-        if (!deep) { *presult = node_wrap(ctx, s->copy); return JS_STEP_DONE; }
+        /* NO EARLY RETURN FOR A SHALLOW CLONE. `subtree` gates step 5 and HTML §4.12.3, and step 6 is not
+           conditioned on it at all: a clonable shadow root is cloned — deeply, because 6.8 passes TRUE — for
+           `host.cloneNode()` exactly as for `host.cloneNode(true)`. So the walk runs either way and each step
+           asks the flag itself. */
+        s->deep = deep;
         s->root = s->src = n;
         s->cnode = s->dst = s->croot = s->copy;   /* the root is already copied; the walk starts at its children */
         hdr->stage = CLONE_TEMPLATE;
@@ -1567,15 +1597,18 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
     }
 
     if (hdr->stage == CLONE_TEMPLATE) {
-        lxb_dom_node_t *content = clone_template_content(s->src);
+        /* HTML §4.12.3's cloning steps, step 1: "If subtree is false, then return." */
+        lxb_dom_node_t *content = s->deep ? clone_template_content(s->src) : NULL;
         hdr->stage = CLONE_CHILDREN;
         if (content && content->first_child) {
             /* Leave this tree for the template's, on both sides at once. The frame is everything to come back
-               to; the copy's fragment is its own private tree, made by clone_interface a moment ago. */
-            clone_push(s);
+               to; the copy's fragment is its own private tree, made by clone_interface a moment ago. The
+               template ELEMENT's own children are step 5's and still to come, so that is where it resumes. */
+            clone_push(s, CLONE_CHILDREN);
             s->root = content;
             s->src = content->first_child;
             s->dst = s->croot = clone_template_content(s->cnode);
+            s->deep = true;         /* §4.12.3: "subtree set to true" for every content child */
             DCHECK(s->dst != NULL, "a cloned <template> has no content fragment to copy into — lexbor's "
                                    "clone_interface built something other than a template interface");
             hdr->stage = CLONE_COPY;
@@ -1584,14 +1617,45 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
     }
 
     if (hdr->stage == CLONE_CHILDREN) {
-        if (s->src->first_child) {
+        /* Step 5: "If subtree is true, then for each child of node's children, in tree order …" */
+        if (s->deep && s->src->first_child) {
             s->src = s->src->first_child;
             s->dst = s->cnode;
             hdr->stage = CLONE_COPY;
         } else {
             /* A node with no children finishes step 5 the moment it starts it. */
-            hdr->stage = CLONE_LEAVE;
+            hdr->stage = CLONE_SHADOW;
         }
+        return JS_STEP_YIELD;
+    }
+
+    if (hdr->stage == CLONE_SHADOW) {
+        /* STEP 6, AT THE ONE MOMENT STEP 5 IS FINISHED FOR `src`. Steps 6.1-6.7 belong to §4.8's record and
+           are shadow_root.c's; what is this machine's is 6.8, which is `clone a node` over each shadow child
+           and therefore this same walk one level down. */
+        JSValue sr = shadow_root_clone_onto(ctx, s->src, s->cnode);
+        lxb_dom_node_t *shadow, *from;
+
+        if (JS_IsException(sr)) return JS_STEP_ABRUPT;
+        hdr->stage = CLONE_LEAVE;
+        shadow = node_of(sr);
+        if (shadow) {
+            from = shadow_root_of_element(ctx, lxb_dom_interface_element(s->src));
+            DCHECK(shadow_root_is(from), "§4.4 step 6.8 has no shadow tree to clone FROM, and step 6.5 just "
+                                         "attached one onto the copy — the two are read from one association");
+            if (from->first_child) {
+                /* The second tree reached other than through child links, and the same descent the template
+                   content level makes. `subtree` is TRUE here whatever the caller asked for, and the host
+                   resumes at step 7: steps 5 and 6 are both behind it. */
+                clone_push(s, CLONE_LEAVE);
+                s->root = from;
+                s->src = from->first_child;
+                s->dst = s->croot = shadow;
+                s->deep = true;
+                hdr->stage = CLONE_COPY;
+            }
+        }
+        JS_FreeValue(ctx, sr);
         return JS_STEP_YIELD;
     }
 
@@ -1601,16 +1665,23 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
     if (s->src == s->root) {
         /* THE LEVEL IS FINISHED. Only the OUTERMOST level's root is itself a copy — it is the node cloneNode
            was called on, and its step 7 is the member's answer. An inner level's root is a `<template>`'s
-           content fragment, which is NOT cloned: `clone a node` is invoked on its CHILDREN, into a fragment the
-           copy already has, so arriving at it is the level ending and nothing else. */
+           content fragment or a shadow root, neither of which is CLONED: `clone a node` is invoked on their
+           CHILDREN, into a tree the copy already has, so arriving at one is the level ending and nothing else. */
         if (s->sp == 0) { *presult = node_wrap(ctx, s->copy); return JS_STEP_DONE; }
-        s->sp--;                        /* back to the template that owns this level, PAST its content check */
+        /* §4.2.2.4 "assign slottables for a tree" for a shadow tree this walk just built. A browser reaches it
+           through §4.2.3's insertion steps as each shadow child is inserted; these inserts are PRIVATE — the
+           copy is a tree nothing has seen — so the slots have never been asked what they hold, exactly as
+           HTML §13.2.6.4.4's parsed shadow root had not. What they hold is the copy host's light children,
+           which step 5 cloned into place before step 6 ran. */
+        if (shadow_root_is(s->croot)) slot_assign_for_a_tree(ctx, s->croot);
+        s->sp--;                        /* back to the node that owns this level */
         s->src = s->stack[s->sp].src;
         s->dst = s->stack[s->sp].dst;
         s->root = s->stack[s->sp].root;
         s->croot = s->stack[s->sp].croot;
         s->cnode = s->stack[s->sp].cnode;
-        hdr->stage = CLONE_CHILDREN;    /* the template ELEMENT's own children, which are not its content's */
+        s->deep = s->stack[s->sp].deep;
+        hdr->stage = s->stack[s->sp].stage;
         return JS_STEP_YIELD;
     }
     if (s->src->next) {
@@ -1628,7 +1699,10 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
     s->src = s->src->parent;
     s->cnode = s->dst;
     s->dst = s->dst->parent;
-    return JS_STEP_YIELD;               /* still CLONE_LEAVE: the parent's own step 7 */
+    /* The parent's step 6 comes next, because its step 5 has just finished — unless the parent is an inner
+       level's ROOT, which is the one node in the level that is not being cloned and so has neither step. */
+    hdr->stage = s->src == s->root && s->sp > 0 ? CLONE_LEAVE : CLONE_SHADOW;
+    return JS_STEP_YIELD;
 }
 
 static const IdlStepDecl NODE_CLONE_STEP = {

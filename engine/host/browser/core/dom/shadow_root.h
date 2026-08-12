@@ -53,6 +53,19 @@ lxb_dom_node_t *shadow_root_next_in_shadow_including(JSContext *ctx, lxb_dom_nod
    construction throws nothing at the page. */
 JSValue shadow_root_attach(JSContext *ctx, JSValueConst el_wrap, const char *mode, bool delegates_focus,
                            const char *slot_assignment, bool clonable, bool serializable);
+/* DOM §4.4 "CLONE A NODE" STEPS 6.1-6.7, given the node being cloned and its copy. Step 6's three conditions
+   are asked here — is `node` an element, is it a shadow host, is its shadow root's `clonable` true — because
+   the second and third are §4.8 record reads and the record is this component's. Answers JS_NULL when any of
+   them is false (there is no shadow root to clone), the COPY's new shadow root's wrapper (OWNED) when there is,
+   and JS_EXCEPTION when step 6.5's attach threw. That last one is REACHABLE and step 6 does not catch it, so
+   `cloneNode` throws out of the walk: `attachShadow` on an element whose local name has no definition yet
+   succeeds, and a `define` for that name with `disabledFeatures: ["shadow"]` afterwards makes the same
+   element's COPY fail §4.8 step 3.
+   STEP 6.8 — cloning the shadow root's children into it — is NOT here. It is `clone a node` over a subtree,
+   which is node.c's walk, and re-running that walk here would be a second clone implementation reached only
+   through a shadow root. */
+JSValue shadow_root_clone_onto(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *copy);
+
 /* HTML §13.2.6.4.4's two writes on the root it just attached: "Set shadow's declarative to true" and "Set
    shadow's available to element internals to true". Both are fields of §4.8's record, which is this
    component's, which is why the parser asks rather than writes. This is `declarative`'s ONLY writer to true,

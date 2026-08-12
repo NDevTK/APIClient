@@ -32,9 +32,10 @@
  *     CLAUDE.md names as one fact answered from one place for many agents. A property write is captured.
  *
  * WHAT IS HONESTLY ABSENT, BY NAME — see SPEC_STEPS.md §17.6. `ShadowRootInit`'s `customElementRegistry`
- * member, `clonable`'s effect in `cloneNode`, `serializable`'s effect in `getHTML`, `delegatesFocus`'s effect
- * on focus, and HTML's `DocumentOrShadowRoot`/`ShadowRoot` additions (`innerHTML`, `activeElement`,
- * `styleSheets`). `declarative` has a writer as of HTML §13.2.6.4.4 — declarative_shadow.c. */
+ * member, `serializable`'s effect in `getHTML`, `delegatesFocus`'s effect on focus, and HTML's
+ * `DocumentOrShadowRoot`/`ShadowRoot` additions (`innerHTML`, `activeElement`, `styleSheets`).
+ * `declarative` has a writer as of HTML §13.2.6.4.4 — declarative_shadow.c — and `clonable` has a READER as of
+ * DOM §4.4 step 6, which is shadow_root_clone_onto below. */
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -406,6 +407,67 @@ JSValue shadow_root_attach(JSContext *ctx, JSValueConst el_wrap, const char *mod
                            const char *slot_assignment, bool clonable, bool serializable)
 {
     return sr_attach(ctx, el_wrap, mode, delegates_focus, slot_assignment, clonable, serializable);
+}
+
+/* DOM §4.4 "clone a node" STEP 6, its own steps 6.1-6.7. The standard runs it AFTER step 5 has cloned the light
+   children, and it is NOT conditioned on `subtree`: `host.cloneNode(false)` still gets the shadow tree, cloned
+   deeply, because step 6.8 passes subtree TRUE whatever the caller asked for. Every field step 6 PASSES or SETS
+   is read off the original's record — the one thing 6.5 hardcodes is `clonable` itself, which it passes as
+   true, and that is the same value the original has because it is the condition for being here at all. What
+   the new root does NOT take from the original is `available to element internals`: that one is §4.8 step 9's,
+   computed from the COPY's own custom element state, which is what the standard says it is. */
+JSValue shadow_root_clone_onto(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *copy)
+{
+    JSValueConst el_wrap;
+    JSValue src, copy_wrap, current, sr, rec;
+    bool declarative;
+
+    DCHECK(g_ready, "§4.4 step 6 ran before shadow_root_init");
+    DCHECK(node != NULL && copy != NULL, "§4.4 step 6 was asked about no node");
+    /* Step 6's three conditions. The first is the node's type; the second and third are the association and the
+       record, and a host that has NEITHER answers without allocating — an element with no wrapper cannot have
+       had `attachShadow` called on it. */
+    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT)
+        return JS_NULL;
+    el_wrap = node_wrap_peek(node);
+    if (!JS_IsObject(el_wrap))
+        return JS_NULL;
+    src = shadow_root_of_element_wrap(ctx, el_wrap);
+    if (!JS_IsObject(src)) { JS_FreeValue(ctx, src); return JS_NULL; }
+    if (!sr_flag(ctx, src, SR_CLONABLE)) { JS_FreeValue(ctx, src); return JS_NULL; }
+    /* The copy is about to hold an association, which lives on ITS wrapper, so this is where one is minted. */
+    copy_wrap = node_wrap(ctx, copy);
+    CHECK(JS_IsObject(copy_wrap), "§4.4 step 6: the clone's wrapper could not be allocated");
+    /* Step 6.1: "Assert: copy is not a shadow host." It is a `clone_interface` node made moments ago and the
+       association is a slot on a wrapper minted moments ago, so nothing can have attached one. */
+    current = shadow_root_of_element_wrap(ctx, copy_wrap);
+    DCHECK(!JS_IsObject(current), "§4.4 step 6.1: the copy is already a shadow host, so the attach below would "
+                                  "reach §4.8 step 4 and either throw or take over a root the clone invented");
+    JS_FreeValue(ctx, current);
+    /* Steps 6.2-6.4 are the shadow root's CUSTOM ELEMENT REGISTRY, and this engine has exactly one — the node
+       document's — so `shadowRootRegistry` is that one either way and the global-registry substitution in 6.3
+       has nothing to substitute. SPEC_STEPS.md §17.6 names the member that makes it a real read.
+       Step 6.5: attach a shadow root with the ORIGINAL's mode, serializable, delegates focus and slot
+       assignment, and `clonable` true. */
+    sr = sr_attach(ctx, copy_wrap, shadow_root_is_open(node_of(src)) ? "open" : "closed",
+                   sr_flag(ctx, src, SR_DELEGATES_FOCUS),
+                   shadow_root_slot_assignment_is_manual(ctx, node_of(src)) ? "manual" : "named",
+                   true, sr_flag(ctx, src, SR_SERIALIZABLE));
+    /* Step 6.6: "Set copy's shadow root's declarative to node's shadow root's declarative." NOT
+       shadow_root_mark_declarative, which is HTML §13.2.6.4.4's pair of writes: that one also sets `available
+       to element internals`, and step 6 does not — the clone's is whatever §4.8 step 9 just computed from the
+       COPY's own custom element state, which is the state the standard says it is. */
+    declarative = sr_flag(ctx, src, SR_DECLARATIVE);
+    JS_FreeValue(ctx, src);
+    JS_FreeValue(ctx, copy_wrap);
+    if (JS_IsException(sr))
+        return sr;
+    rec = sr_slots(ctx, sr);
+    DCHECK(JS_IsObject(rec), "§4.4 step 6.6: the shadow root attach a shadow root just made has no §4.8 record");
+    JS_SetPropertyStr(ctx, rec, SR_FIELD[SR_DECLARATIVE], JS_NewBool(ctx, declarative));
+    JS_FreeValue(ctx, rec);
+    /* Step 6.7's `keep custom element registry null` is the same absent field steps 6.2-6.4 are. */
+    return sr;
 }
 
 void shadow_root_mark_declarative(JSContext *ctx, JSValueConst sr_wrap)

@@ -4796,6 +4796,87 @@ that installs a document a navigation produced, passes true. The documents whose
 it, which is exactly why they keep their `<template>` elements, and `declarative-shadow-dom-opt-in.html`
 asserts each one.
 
+### 17.5b DOM §4.4 "clone a node" step 6 — the clonable shadow root, and the rest point it needed
+
+**Read from the live standards on 2026-08-12**: WHATWG DOM §4.4 ("clone a node", "clone a single
+node", `cloneNode(subtree)`) and §4.8 (`clonable`); WHATWG HTML §4.12.3 (the `template` element's
+cloning steps).
+
+**To clone a node given a node *node*, an optional document *document* (default *node*'s node
+document), boolean *subtree* (default false), node-or-null *parent* (default null), and null or a
+`CustomElementRegistry` *fallbackRegistry* (default null):**
+
+  1. Assert: *node* is not a document or *node* is *document*. —
+  2. Let *copy* be the result of **cloning a single node** given *node*, *document* and
+     *fallbackRegistry*. — (Lexbor's `clone_interface`; see below.)
+  3. Run any **cloning steps** defined for *node* in other specifications, passing *node*, *copy* and
+     *subtree* — `CLONE_TEMPLATE`. —
+  4. If *parent* is non-null, **append** *copy* to *parent* — `CLONE_COPY`, with step 2. —
+  5. If *subtree* is true, then for each *child* of *node*'s children, in tree order: clone a node
+     given *child*, with *document*, *subtree*, *parent* set to *copy* and *fallbackRegistry* —
+     `CLONE_CHILDREN`. —
+  6. If *node* is an element, *node* is a **shadow host**, and *node*'s shadow root's **clonable** is
+     true — `CLONE_SHADOW`:
+     1. Assert: *copy* is not a shadow host. —
+     2. Let *shadowRootRegistry* be *node*'s shadow root's custom element registry. — ABSENT
+     3. If *shadowRootRegistry* is a global custom element registry, set it to *document*'s custom
+        element registry's effective global custom element registry. — ABSENT
+     4. — (2-3 are one absent field; see 17.6.)
+     5. **Attach a shadow root** with *copy*, *node*'s shadow root's **mode**, **true**, *node*'s
+        shadow root's **serializable**, **delegates focus**, **slot assignment**, and
+        *shadowRootRegistry*. —
+     6. Set *copy*'s shadow root's **declarative** to *node*'s shadow root's declarative. —
+     7. Set *copy*'s shadow root's **keep custom element registry null** to *node*'s shadow root's. —
+        ABSENT
+     8. For each *child* of *node*'s shadow root's children, in tree order: clone a node given *child*
+        with *document*, **subtree set to true**, and *parent* set to *copy*'s shadow root. "This
+        intentionally does not pass the *fallbackRegistry* argument." —
+  7. Return *copy* — `CLONE_LEAVE`. —
+
+**`cloneNode(subtree)`**: 1. If **this** is a shadow root, throw a `NotSupportedError`. — 2. Return
+the result of cloning a node given **this** with *subtree* set to *subtree*. —
+
+**Three things the live text says that a reasonable person would remember differently.**
+
+1. **Step 6 is NOT conditioned on `subtree`, and step 6.8 passes `true`.** So `host.cloneNode()` — the
+   shallow clone — copies no light children and the ENTIRE shadow tree. Reading step 6 as "the deep
+   half of the algorithm" gets both halves of that backwards.
+2. **`cloneNode` step 1 throws for a SHADOW ROOT.** It says nothing about documents: `clone a node`
+   step 1 is an assert that a document only clones into ITSELF, which holds by the default of
+   *document*, so `document.cloneNode()` is a real operation the standard defines. This engine throws
+   `NotSupportedError` for it instead — a wrong answer named in 17.6.
+3. **HTML §4.12.3's template cloning steps return early on `subtree` false** and then pass **true**
+   for every content child — the same shape step 6.8 has, which is why both are LEVELS of one walk.
+
+**Why this needed a machine change first, and what the change was.** The clone machine is a flat
+cursor over two trees, and step 6 has to run at the one moment step 5 is finished for a node. That
+moment used to arrive in two unrelated places — the `src = src->next` transition and an ascend loop
+inside `CLONE_CHILDREN` — and neither was a stage, so there was nowhere to put step 6 that was not
+also step-6-before-step-5 for some node. `CLONE_LEAVE` is the standard's own step 7 (`clone a node`
+RETURNS for a node exactly when its subtree is complete) and it is now the ONE rest point at which a
+node is left, for a leaf, for a last child and for the root of the whole clone alike. The ascend
+became one rest point per ancestor: it was justified as bounded by "the depth already walked", which
+is the PAGE's depth, and it could not maintain `cnode` — the copy of the node being left, which is
+exactly the node step 6 attaches onto.
+
+**The frame stack gained a resume stage, and that is the other half.** A `<template>`'s content and a
+shadow tree are both trees reached other than through child links, so both are LEVELS with their own
+bound, their own private-tree root and their own `subtree`. What differs is where the level's owner
+resumes: a template's content is cloned by step 3, so the element's own step 5 is still to come, while
+a shadow tree is cloned by step 6, after which only step 7 remains. A frame with no resume stage
+always meant "children next", which for a shadow descent would have re-walked the light children it
+was standing after.
+
+**`assign slottables for a tree` is joined here, exactly as 17.5a joins it.** The copy is a private
+tree — its inserts declare that and run no §4.2.3 insertion steps — so the slots the walk just cloned
+have never been asked what they hold. What they hold is the copy host's light children, which step 5
+cloned into place before step 6 ran; one call per cloned shadow root, at the level's exit.
+
+**Step 6.5's attach CAN throw, and step 6 does not catch it.** `attachShadow` on an element whose
+local name has no definition yet succeeds; a `define` for that name with `disabledFeatures: ["shadow"]`
+afterwards makes the same element's COPY fail §4.8 step 3. So `cloneNode` throws out of the walk,
+which is what the standard says happens and is not a should-never-happen.
+
 ### 17.6 What is honestly ABSENT, by name
 
 - **`ShadowRootInit`'s `customElementRegistry`.** Its type is `CustomElementRegistry?`, and this
@@ -4817,15 +4898,27 @@ asserts each one.
 - **`shadowrootcustomelementregistry`** — a boolean content attribute reflected by a DOMString IDL
   attribute (`shadowRootCustomElementRegistry`), and 17.5a step 5.5's `registry` argument that reads
   it. It lands with `CustomElementRegistry`, for the reason the `ShadowRootInit` member above it does.
-- **`clonable`'s effect.** DOM §4.4 "clone a node" step 6 attaches a clonable shadow root onto the
-  copy and clones the shadow tree's children into it, AFTER step 5 has cloned the light children. The
-  field is stored, `shadowrootclonable` now sets it, and `cloneNode` does not consult it yet. The
-  clone machine's stages are `CLONE_COPY` (steps 2 and 4), `CLONE_TEMPLATE` (step 3) and
-  `CLONE_CHILDREN` (step 5), and its walk is a FLAT cursor over two trees: a node's subtree is
-  finished at the moment the cursor moves off it, which happens in two places (the `src = src->next`
-  transition and the ascend loop). Step 6 belongs at that moment and nowhere earlier, so it lands with
-  a stage that makes "leaving a node" a single rest point — not by naming step 6 at `CLONE_TEMPLATE`'s
-  position, which would be step 6 run before step 5 with a label saying otherwise.
+- **`clonable`'s effect is BUILT** — 17.5b, which is where the account of it lives. This entry used to
+  say the machine could not host step 6 and that the restructure was a ~60-line rewrite behind
+  `dom/nodes`' 25k subtests. The restructure is `CLONE_LEAVE` and it landed on its own first, with
+  cloning behaviour unchanged, which is what made step 6 a stage rather than a special case.
+- **Cloning a DOCUMENT.** `document.cloneNode()` throws `NotSupportedError` here, and §4.4 does not
+  say that — `clone a node` step 1 is an ASSERT that a document clones into itself, and "clone a single
+  node" defines what a Document copy is (a document implementing the same interfaces, with *node*'s
+  encoding, content type, URL, origin, type, mode and **allow declarative shadow roots**). This is a
+  WRONG ANSWER rather than an absence, and it is named that way. What it needs is the *document*
+  PARAMETER `clone a node` carries: every stage of the walk clones into `n->owner_document` today,
+  because that parameter has never had a second possible value, and the Document case is the one that
+  gives it one (step 5 of "clone a single node": "If node is a document, then set document to copy").
+  `dom_implementation.c`'s `createDocument` is the other half — it is what "create a document that
+  implements the same interfaces" already does for `DOMImplementation`.
+- **`Range.cloneContents()` clones no shadow root, and that is a SECOND `clone a node`.** §5.5 step 18
+  says "clone a node with subtree set to true" and `range.c` runs its own copier for it — a walk with
+  no step 3 and no step 6, so a `<template>` in a range already lost its content fragment and a
+  clonable host now loses its shadow tree as well. It is not a missing feature but a missing ROUTE:
+  the one clone machine is `NODE_CLONE_STEP`, and §5.5's frame should seed it rather than re-walk the
+  subtree beside it. That conversion needs the machine reachable as a sub-machine of another member's
+  frame, which is what makes it its own diff and not a paragraph of this one.
 - **`serializable`'s effect** — `getHTML(options)`, which is HTML §8.5's, not §4.8's.
 - **`delegatesFocus`'s effect**, which is HTML's focusing steps; this engine has no focus model.
 - **HTML's additions to `ShadowRoot`** — `innerHTML`, `activeElement`, `styleSheets`,
