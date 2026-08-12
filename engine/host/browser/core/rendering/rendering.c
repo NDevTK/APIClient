@@ -9,6 +9,7 @@
 #include "core/realm.h"
 #include "core/dom/document.h"
 #include "core/events/event_target.h"
+#include "core/events/report_exception.h"
 #include "core/frame/window_proxy.h"
 #include "core/frame/navigable.h"
 #include "core/css/media_query_list.h"
@@ -168,6 +169,12 @@ typedef struct JSUpdateRendering {
     uint8_t   snapped;      /* §8.9 step 2 has been taken for docs[i] */
     uint8_t   msnapped;     /* §4.2's collection snapshot has been taken for docs[i] */
     bool      not_canceled;
+    /* §8.1.4.6's REPORT AN EXCEPTION, for a callback that threw. The work record is THIS machine's, the way
+       abort.h's AbortSignalWork and the dispatch machine's own are their callers' — reporting fires an `error`
+       event, so it parks, and the state it parks with belongs to whoever is doing the reporting. */
+    ReportExceptionWork rep;
+    JSValue   exc;          /* the exception being reported, taken off the context (owned) */
+    uint8_t   reporting;    /* the report is in flight and must be resumed before the walk continues */
 } JSUpdateRendering;
 
 static void js_update_rendering_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -179,6 +186,8 @@ static void js_update_rendering_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->ev);
     v->val(ctx, &s->target);
     v->val(ctx, &s->fn);
+    v->val(ctx, &s->exc);
+    report_exception_work_visit(ctx, &s->rep, v);
     for (k = 0; k < 4; k++)
         v->val(ctx, &s->cb[k]);
 }
@@ -193,7 +202,9 @@ static JSValue js_update_rendering_fini(JSContext *ctx, void *st, bool take_resu
     JS_FreeValue(ctx, s->ev);
     JS_FreeValue(ctx, s->target);
     JS_FreeValue(ctx, s->fn);
-    s->docs = s->ev = s->target = s->fn = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->exc);
+    report_exception_work_release(ctx, &s->rep);
+    s->docs = s->ev = s->target = s->fn = s->exc = JS_UNDEFINED;
     for (k = 0; k < 4; k++) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
@@ -318,21 +329,18 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
        machine down — which is what used to happen, and it cost more than it looked like: steps 15 through 23
        of that frame were skipped, the remaining callbacks were left for the NEXT frame, and the exception
        itself was swallowed with nothing anywhere to say a page had thrown.
-       REPORTING IT IS A COMPONENT THIS ENGINE DOES NOT HAVE. HTML §8.1.4.6 "report an exception" fires `error`
-       at the global using an ErrorEvent carrying message/filename/lineno/colno/error, and neither ErrorEvent
-       nor the current script position an unmuted report needs exists here. It is not this component's to
-       invent: DOM §2.9's throwing listener needs the identical algorithm (event_target.c's dispatch machine
-       declares no catches_abrupt either, so a throwing listener aborts a dispatch today) and RESIZE OBSERVER
-       §3.4.6's "deliver resize loop error" is the same fire at step 16.3. One component, three callers. */
+       REPORTING IT IS §8.1.4.6, and it is a COMPONENT — core/events/report_exception.c, which fires `error` at
+       the global carrying an ErrorEvent. This site named it as absent and it was built for exactly this caller
+       (error_event.c's own comment says so); DOM §2.9's throwing listener is the second caller and RESIZE
+       OBSERVER §3.4.6's loop error is the third, all through the one operation.
+       THE REPORT PARKS, because firing that event runs the page's code — so the work record is this machine's
+       and the walk resumes at `report_throw` with the report finished. Reporting a throw by RESUMING rather
+       than by returning is what keeps steps 15-23 of the frame running, which is what "report and continue"
+       means. */
     if (JS_IsException(cb_result)) {
-        JSValue exc = JS_GetException(ctx);
-
-        DFAIL("the page's code threw inside update-the-rendering, and both callers here invoke it with "
-              "\"report\" (HTML §8.9 step 3, DOM §2.9 inner invoke) — build HTML §8.1.4.6 report-an-exception "
-              "as its own component: an ErrorEvent fired at the global, cancelable, carrying message/filename/"
-              "lineno/colno/error, with RESIZE OBSERVER §3.4.6's loop error as its third caller");
-        JS_FreeValue(ctx, exc);
         cb_result = JS_UNDEFINED;
+        s->exc = JS_GetException(ctx);
+        s->reporting = 1;
         /* The abandoned request's buffer is this machine's, so it is released HERE rather than left for a new
            request to overwrite — step_call_run only frees what it placed when it is RESUMED, and this one
            never will be. */
@@ -356,11 +364,31 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
         }
     }
 
+    /* §8.1.4.6, PERFORMED AND RESUMED. The report fires an `error` event, so it parks inside its own dispatch
+       and this machine is re-entered with that dispatch's answer — which is why the flag is sticky and the
+       resume is here rather than in the branch that set it. Reporting by RESUMING is the whole of what "report
+       and continue" buys: steps 15-23 of the frame still run, and the remaining callbacks are still this
+       frame's rather than the next one's. */
+    if (s->reporting) {
+        int rr = report_exception_run(ctx, &s->rep, s->exc, cb_result, out_cb, out_argc);
+
+        cb_result = JS_UNDEFINED;
+        if (rr > 0)
+            return rr;
+        s->reporting = 0;
+        JS_FreeValue(ctx, s->exc);
+        s->exc = JS_UNDEFINED;
+    }
+
     if (s->hdr.stage == UR_DOCS) {
         /* EVERY OWNED FIELD IS ON THE STATE BEFORE ANYTHING THAT CAN FAIL — the failure path tears the machine
            down through fini, which frees exactly what the state holds. */
-        s->docs = s->ev = s->target = s->fn = JS_UNDEFINED;
+        s->docs = s->ev = s->target = s->fn = s->exc = JS_UNDEFINED;
         for (k = 0; k < 4; k++) s->cb[k] = JS_UNDEFINED;
+        /* The report's own record, zeroed before anything can throw — a step state arrives with the INTEGER 0
+           in every JSValue slot, and the report's teardown frees exactly what it holds. */
+        report_exception_work_start(&s->rep);
+        s->reporting = 0;
         s->i = s->ndocs = s->nframe = s->k = s->nmedia = s->m = 0;
         s->fphase = s->cphase = s->snapped = s->msnapped = 0;
         s->hdr.stage = UR_REVEAL;
