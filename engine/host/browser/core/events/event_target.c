@@ -26,6 +26,7 @@
 #include "core/realm.h"
 #include "core/dom/abort.h"
 #include "core/events/event.h"
+#include "core/events/event_path.h"
 #include "core/events/report_exception.h"
 
 /* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
@@ -43,12 +44,9 @@ static int g_ready;
 /* §2.9's PROPAGATION PATH IS THE TREE'S QUESTION, not this component's. Naming node.c here made EVERY host that
    installs events link the whole DOM and lexbor with it, which is why the streams gate could not build with a
    real AbortSignal in it. The tree registers the walk; a host that registers none has a path of one, which is
-   exactly §2.7's own get the parent and exactly right for a host with no document. */
-static JSValue (*g_get_parent)(JSContext *ctx, JSValueConst target, JSValueConst ev);
-/* §2.7's DEFAULT PASSIVE VALUE also asks the tree: it is true only for four event types AND only when the
-   target is the window, the node document, its document element or its body. The type half is this file's; the
-   target half is the DOM's, for the reason the walk is. */
-static bool (*g_default_passive_target)(JSContext *ctx, JSValueConst target);
+   exactly §2.7's own get the parent and exactly right for a host with no document — and, for the same reason,
+   no shadow trees, which is the default every question below answers with. */
+static const EventTargetTree *g_tree;
 /* DOM §2.9's ACTIVATION BEHAVIOUR, declared by whoever owns the element — see event_target.h. */
 static bool (*g_has_activation)(JSContext *ctx, JSValueConst el);
 static int (*g_run_activation)(JSContext *ctx, JSValueConst el, JSValueConst ev,
@@ -205,11 +203,15 @@ void event_target_install_interface(JSContext *ctx, JSValueConst global)
 
 void event_target_set_tree(const EventTargetTree *tree)
 {
-    DCHECK(tree != NULL && tree->get_parent != NULL && tree->default_passive_target != NULL,
-           "half a tree was registered with the events layer — §2.9's walk and §2.7's default passive value are "
-           "both tree questions, and one answered without the other is a component that silently never runs");
-    g_get_parent = tree->get_parent;
-    g_default_passive_target = tree->default_passive_target;
+    DCHECK(tree != NULL && tree->get_parent != NULL && tree->default_passive_target != NULL &&
+           tree->root != NULL && tree->shadow_root_mode != NULL && tree->is_window != NULL &&
+           tree->is_slot != NULL && tree->is_assigned_slottable != NULL &&
+           tree->is_shadow_including_inclusive_ancestor != NULL,
+           "half a tree was registered with the events layer — §2.9's walk, §2.7's default passive value and the "
+           "six shadow facts the walk composes are all tree questions, and one answered without the others is a "
+           "component that silently never runs. It is ALL of them or none: a tree that answers the walk but not "
+           "the shadow terms would build a path that crosses boundaries without retargeting at them");
+    g_tree = tree;
 }
 
 void event_target_set_activation(bool (*has)(JSContext *ctx, JSValueConst el),
@@ -415,7 +417,7 @@ static bool default_passive_value(JSContext *ctx, const char *type, JSValueConst
 
     for (i = 0; PASSIVE_BY_DEFAULT[i]; i++)
         if (!strcmp(type, PASSIVE_BY_DEFAULT[i]))
-            return g_default_passive_target != NULL && g_default_passive_target(ctx, target);
+            return g_tree != NULL && g_tree->default_passive_target(ctx, target);
     return false;
 }
 
@@ -817,7 +819,7 @@ void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask
     }
 }
 
-/* §2.9 step 5: dispatch runs over a COPY of the listener list. That matters more here than in a browser — the
+/* §2.9 "invoke" step 8: the walk runs over a CLONE of the listener list. That matters more here than in a browser — the
    walk suspends across every listener, so one that adds or removes a listener has arbitrarily long to do it.
    ONE list walk, so the engine's own firing and the page's dispatchEvent can never disagree about which
    listeners a target has; what differs between them is only how each listener is DELIVERED. */
@@ -886,9 +888,11 @@ enum { DISPATCH_ARG = 0, CLICK_SYNTH = 1, DISPATCH_PAIR = 2 };
    between parents), inside a listener, and inside the activation behaviour. */
 #define DISPATCH_STAGES(X) \
     X(DISPATCH_INIT, "DOM §2.9 dispatch steps 1-6.8 (the dispatch flag, the target override, the target's own " \
-                     "path entry, whether the target is the activation target, and the first get the parent)") \
-    X(DISPATCH_PATH, "DOM §2.9 dispatch step 6.9 (walk get the parent, appending each ancestor to the event " \
-                     "path — one parent per yield, because the tree is the page's size)") \
+                     "path item, whether the target is the activation target, whether it is an assigned " \
+                     "slottable, and the first get the parent)") \
+    X(DISPATCH_PATH, "DOM §2.9 dispatch steps 6.9-6.11 (walk get the parent, appending an event path ITEM per " \
+                     "ancestor — retargeting at each shadow boundary and recording the closed-tree flags — one " \
+                     "parent per yield, because the tree is the page's size)") \
     X(DISPATCH_CAPTURE, "DOM §2.9 dispatch step 6.13 (invoke each path item in REVERSE order with phase " \
                         "\"capturing\" — parked on the listener being called)") \
     X(DISPATCH_BUBBLE, "DOM §2.9 dispatch step 6.14 (invoke each path item in order with phase \"bubbling\" — " \
@@ -903,7 +907,7 @@ typedef struct JSDispatchState {
     uint8_t   cphase;    /* the call request's own phase, so a stage can hold a call across a suspension */
     uint32_t  i, n;      /* THE RESUME POINT: the listener being called, and how many there are */
     uint32_t  ti, tn;    /* THE OTHER: how far into the current PASS, and how long the whole path is */
-    /* §2.9 step 6.4's isActivationEvent, decided once at step 6.4 and read again at 6.8.7 for every ancestor. */
+    /* §2.9 step 6.4's isActivationEvent, decided once at step 6.4 and read again at 6.9.5.1 for every ancestor. */
     uint8_t   is_activation;
     /* THE ACTIVATION BEHAVIOUR'S OWN SUSPENSION. §4.6.3's is a navigation and a navigation fetches, so the
        behaviour is a step like everything else that can wait on the host: `aphase` is its resume point and
@@ -925,13 +929,27 @@ typedef struct JSDispatchState {
        `reporting` is its resume marker, the third this walk needs: a listener can suspend on its operation
        lookup, on its own body, and on the report of what its body threw. */
     uint8_t   reporting;
+    /* §2.9 step 6.7's SLOT-IN-CLOSED-TREE, and step 6.10's CLEARTARGETS. Both are one-bit walk state that has
+       to survive a park between two ancestors, which is the whole reason they are on the state and not on the
+       C stack of a loop that does not exist. */
+    uint8_t   slot_in_closed_tree;
+    uint8_t   clear_targets;
     ReportExceptionWork rep;
     JSValue   exc;       /* what the listener threw, held across the report (owned) */
     JSValue   lcb;       /* the listener's callback object, held across its operation lookup (owned) */
     JSValue   type;      /* the event's type, resolved once per target and needed by `once` (owned) */
-    JSValue   path;      /* §2.9's propagation path — the target and its ancestors (owned) */
+    JSValue   path;      /* §2.9's propagation path — a list of event path ITEMS (owned) */
     JSValue   cur;       /* the target whose listeners are running, and the WALK's frontier while step 6.9
                             builds the path (owned) */
+    /* §2.9's `target` LOCAL, which the walk MOVES: step 6.9.7.1 sets it to the parent every time the walk
+       crosses out of a shadow tree, and every later item is appended with the shadow-adjusted target that
+       follows. It is not `cur` — `cur` is where the walk IS, this is what the walk currently calls the target —
+       and conflating them is how every item ends up with path[0] as its target. (owned) */
+    JSValue   tgt;
+    /* §2.9 step 6.6's SLOTTABLE: the node whose assigned slot the next get the parent will answer with, so that
+       step 6.9.1 can recognise that the parent it was handed is that slot and raise slot-in-closed-tree when
+       the slot's tree is closed. Null except across exactly that one hop. (owned) */
+    JSValue   slottable;
     /* §2.9's ACTIVATION TARGET: the nearest entry of the path, TARGET FIRST, that has an activation behaviour.
        Picked while the path is built and run after the walk — see event_target.h. (owned) */
     JSValue   act;
@@ -953,6 +971,8 @@ static void js_dispatch_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->exc);
     report_exception_work_visit(ctx, &s->rep, v);
     v->val(ctx, &s->cur);
+    v->val(ctx, &s->tgt);
+    v->val(ctx, &s->slottable);
     v->val(ctx, &s->act);
     v->val(ctx, &s->arr);
     v->val(ctx, &s->ev);
@@ -975,10 +995,13 @@ static JSValue js_dispatch_fini(JSContext *ctx, void *st, bool take_result)
     JS_FreeValue(ctx, s->exc);
     report_exception_work_release(ctx, &s->rep);
     JS_FreeValue(ctx, s->cur);
+    JS_FreeValue(ctx, s->tgt);
+    JS_FreeValue(ctx, s->slottable);
     JS_FreeValue(ctx, s->act);
     JS_FreeValue(ctx, s->arr);
     JS_FreeValue(ctx, s->ev);
     s->result = s->path = s->type = s->lcb = s->exc = s->cur = s->act = s->arr = s->ev = JS_UNDEFINED;
+    s->tgt = s->slottable = JS_UNDEFINED;
     for (k = 0; k < 3; k++) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
@@ -996,13 +1019,71 @@ static JSValue dispatch_get_parent(JSContext *ctx, JSValueConst target, JSValueC
 {
     JSValue parent;
 
-    if (!g_get_parent)
+    if (!g_tree)
         return JS_NULL;   /* a host with no tree: §2.7's default, a path of one */
-    parent = g_get_parent(ctx, target, ev);
+    parent = g_tree->get_parent(ctx, target, ev);
     DCHECK(JS_IsNull(parent) || JS_IsObject(parent),
            "§2.9's get the parent answered with something that is not an EventTarget and is not null — the "
            "walk appends whatever it is handed to the event path and then invokes listeners on it");
     return parent;
+}
+
+/* THE SHADOW TERMS, EACH WITH THE ANSWER A HOST WITH NO TREE HAS. A host that registered no tree has no
+   document, so nothing in it is a node, a slot, a shadow root or an ancestor of anything — which is not a
+   fallback but the same §2.7 default that gives such a host a path of one. Written once here so no step of the
+   walk below carries a `g_tree &&` of its own. */
+static bool dispatch_is_window(JSContext *ctx, JSValueConst t)
+{
+    return g_tree != NULL && g_tree->is_window(ctx, t);
+}
+
+static bool dispatch_is_slot(JSContext *ctx, JSValueConst t)
+{
+    return g_tree != NULL && g_tree->is_slot(ctx, t);
+}
+
+static bool dispatch_is_assigned_slottable(JSContext *ctx, JSValueConst t)
+{
+    return g_tree != NULL && g_tree->is_assigned_slottable(ctx, t);
+}
+
+/* §4.8's mode of `t` ITSELF — "invocationTarget is a shadow root whose mode is closed", which is "append to an
+   event path" step 4's root-of-closed-tree. */
+static bool dispatch_is_closed_shadow_root(JSContext *ctx, JSValueConst t)
+{
+    return g_tree != NULL && g_tree->shadow_root_mode(ctx, t) == EVENT_TREE_SHADOW_CLOSED;
+}
+
+/* The mode of `t`'s ROOT, which is a different question and is asked at two different steps: step 6.9.1.3's
+   "parent's root is a shadow root whose mode is closed", and step 6.11's "is a node whose root is a shadow
+   root" (`want_closed` false, which every mode but NOT_SHADOW_ROOT satisfies). */
+static bool dispatch_root_is_shadow_root(JSContext *ctx, JSValueConst t, bool want_closed)
+{
+    JSValue root;
+    int mode;
+
+    if (!g_tree)
+        return false;
+    root = g_tree->root(ctx, t);
+    mode = g_tree->shadow_root_mode(ctx, root);
+    JS_FreeValue(ctx, root);
+    return want_closed ? mode == EVENT_TREE_SHADOW_CLOSED : mode != EVENT_TREE_NOT_SHADOW_ROOT;
+}
+
+/* Step 6.9.5's second disjunct: "target's root is a shadow-including inclusive ancestor of parent". FALSE when
+   `target` is not a node, which is the answer that matters — it is what stops the walk treating the window as a
+   boundary crossing on the way past a detached target. */
+static bool dispatch_target_root_contains(JSContext *ctx, JSValueConst target, JSValueConst parent)
+{
+    JSValue root;
+    bool contains;
+
+    if (!g_tree)
+        return false;
+    root = g_tree->root(ctx, target);
+    contains = g_tree->is_shadow_including_inclusive_ancestor(ctx, root, parent);
+    JS_FreeValue(ctx, root);
+    return contains;
 }
 
 static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
@@ -1019,6 +1100,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         s->path = s->type = s->lcb = s->exc = s->cur = s->act = s->arr = s->ev = s->result = JS_UNDEFINED;
+        s->tgt = s->slottable = JS_UNDEFINED;
         s->cb[0] = s->cb[1] = s->cb[2] = JS_UNDEFINED;
         report_exception_work_start(&s->rep);
         /* THREE ENTRIES, ONE MACHINE, and `arg` is decided at REGISTRATION so no call site chooses:
@@ -1060,11 +1142,18 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         if (s->hdr.arg != DISPATCH_PAIR)
             event_set_trusted(ctx, s->ev, false);
         s->type = event_type(ctx, s->ev);
-        /* §2.9 step 6.3: APPEND TO AN EVENT PATH with the target itself. The path is the EVENT's — composedPath
-           reads it — so it is published on the event as it grows rather than kept privately here. */
-        s->path = JS_NewArray(ctx);
-        JS_SetPropertyUint32(ctx, s->path, 0, JS_DupValue(ctx, target));
-        s->tn = 1;
+        /* §2.9 step 6.3: APPEND TO AN EVENT PATH with event, target, TARGETOVERRIDE, relatedTarget,
+           touchTargets and false. The path is the EVENT's — composedPath reads it — so it is published on the
+           event as it grows rather than kept privately here.
+           targetOverride IS the target: step 2's other arm is the LEGACY TARGET OVERRIDE FLAG, which only HTML
+           passes and only for a Window, and nothing in this engine passes it. So item 0's shadow-adjusted
+           target is the target itself, which is what makes `invoke`'s backward scan terminate at every item. */
+        s->path = event_path_new(ctx);
+        event_path_append(ctx, s->path, target, target,
+                          dispatch_is_closed_shadow_root(ctx, target), /*slotInClosedTree*/ false);
+        /* THE SIZE IS THE PATH'S, never a counter kept beside it: the two are read together at every step of
+           the two passes, and a counter that drifts by one walks off the end or drops the root. */
+        s->tn = event_path_length(ctx, s->path);
         event_set_path(ctx, s->ev, s->path);
         /* §2.9 step 6.4's isActivationEvent. The spec says "event is a MouseEvent object and event's type is
            `click`"; this engine has no MouseEvent interface yet, so the type is the whole of what it can ask —
@@ -1076,11 +1165,20 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             if (t) JS_FreeCString(ctx, t);
         }
         /* §2.9 step 6.5: the TARGET is the activation target if it has one — no `bubbles` condition here, which
-           is the difference from step 6.8.7's test on an ancestor. */
+           is the difference from step 6.9.5.1's test on an ancestor. */
         if (s->is_activation && g_has_activation && g_has_activation(ctx, target))
             s->act = JS_DupValue(ctx, target);
-        /* step 6.8: the first get the parent. `cur` carries the walk's frontier from here to the end of 6.9. */
+        /* step 6.6: "Let slottable be target, if target is a slottable and is ASSIGNED, and null otherwise." An
+           assigned slottable's get the parent answers with its SLOT, and step 6.9.1 is the only place that can
+           tell that hop apart from an ordinary parent — so the fact is carried across the ask. */
+        if (dispatch_is_assigned_slottable(ctx, target))
+            s->slottable = JS_DupValue(ctx, target);
+        s->slot_in_closed_tree = 0;   /* step 6.7 */
+        s->clear_targets = 0;         /* step 5 */
+        /* step 6.8: the first get the parent. `cur` carries the walk's frontier from here to the end of 6.9,
+           and `tgt` carries the walk's own `target`, which 6.9.7.1 moves at every shadow boundary. */
         s->cur = JS_DupValue(ctx, target);
+        s->tgt = JS_DupValue(ctx, target);
         s->hdr.stage = DISPATCH_PATH;
     }
 
@@ -1096,22 +1194,77 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         JS_FreeValue(ctx, s->cur);
         s->cur = parent;
         if (JS_IsObject(parent)) {
-            JS_SetPropertyUint32(ctx, s->path, s->tn++, JS_DupValue(ctx, parent));
-            /* step 6.8.7: an ANCESTOR becomes the activation target only for an event that BUBBLES, and only
-               while none has been picked — the nearest one, target first, wins. */
-            if (s->is_activation && !JS_IsObject(s->act) && event_bubbles(ctx, s->ev) &&
-                g_has_activation && g_has_activation(ctx, parent))
-                s->act = JS_DupValue(ctx, parent);
+            /* step 6.9.1: the parent the walk was just handed is the SLOT the previous item is assigned to —
+               §4.4's get the parent says so, which is why this is an assert and not a test. Crossing INTO a
+               closed shadow tree through a slot is what slot-in-closed-tree records, and it records it for
+               THIS item, before the append below and until step 6.9.9 clears it. */
+            if (JS_IsObject(s->slottable)) {
+                DCHECK(dispatch_is_slot(ctx, parent),
+                       "§2.9 step 6.9.1: the previous path entry is an ASSIGNED slottable, so §4.4's get the "
+                       "parent must have answered with its assigned slot — a parent that is not a slot means "
+                       "the two algorithms disagree about what `assigned` means");
+                JS_FreeValue(ctx, s->slottable);
+                s->slottable = JS_UNDEFINED;
+                if (dispatch_root_is_shadow_root(ctx, parent, /*want_closed*/ true))
+                    s->slot_in_closed_tree = 1;
+            }
+            /* step 6.9.2: and this parent may itself be slotted, one component inside another. */
+            if (dispatch_is_assigned_slottable(ctx, parent))
+                s->slottable = JS_DupValue(ctx, parent);
+            /* steps 6.9.3-6.9.4 retarget the event's relatedTarget and touch target list against the parent.
+               ABSENT, and honestly so: see event_path.h — this engine has no interface that carries either. */
+            if (dispatch_is_window(ctx, parent) || dispatch_target_root_contains(ctx, s->tgt, parent)) {
+                /* step 6.9.5: still inside the tree the walk currently calls the target's, so the item gets NO
+                   shadow-adjusted target and `invoke` will keep answering with the one further in.
+                   6.9.5.1: an ANCESTOR becomes the activation target only for an event that BUBBLES, and only
+                   while none has been picked — the nearest one, target first, wins. */
+                if (s->is_activation && !JS_IsObject(s->act) && event_bubbles(ctx, s->ev) &&
+                    g_has_activation && g_has_activation(ctx, parent))
+                    s->act = JS_DupValue(ctx, parent);
+                event_path_append(ctx, s->path, parent, JS_NULL,
+                                  dispatch_is_closed_shadow_root(ctx, parent), s->slot_in_closed_tree);
+            } else {
+                /* step 6.9.7: the walk has left the tree it was in — this parent is the shadow HOST — so the
+                   event RETARGETS here: everything from this item outward reports the host as `target`, which
+                   is the whole of what a shadow tree hides. 6.9.6's "otherwise, if parent is relatedTarget"
+                   arm cannot be taken, for the reason 6.9.3 is absent.
+                   6.9.7.2 has NO `bubbles` condition, unlike 6.9.5.1 — the host of a shadow tree the event came
+                   out of is an activation target for a non-bubbling event too. */
+                JS_FreeValue(ctx, s->tgt);
+                s->tgt = JS_DupValue(ctx, parent);
+                if (s->is_activation && !JS_IsObject(s->act) && g_has_activation && g_has_activation(ctx, parent))
+                    s->act = JS_DupValue(ctx, parent);
+                event_path_append(ctx, s->path, parent, parent,
+                                  dispatch_is_closed_shadow_root(ctx, parent), s->slot_in_closed_tree);
+            }
+            s->tn = event_path_length(ctx, s->path);
+            s->slot_in_closed_tree = 0;   /* step 6.9.9, and it is per ITERATION, not per tree */
             return JS_STEP_YIELD;
         }
         JS_FreeValue(ctx, s->cur);
         s->cur = JS_UNDEFINED;
-        /* §2.9 "invoke" step 3: the event's TARGET is the path's shadow-adjusted target, which with no shadow
-           trees is path[0] for every item — so it is set once, here, rather than re-derived per item. */
+        JS_FreeValue(ctx, s->slottable);
+        s->slottable = JS_UNDEFINED;
+        /* steps 6.10-6.11: clearTargetsItem is the LAST item with a non-null shadow-adjusted target — the
+           outermost thing the event still calls its target — and if that target is inside a shadow tree the
+           event's target is CLEARED once the walk is over (step 11), so a page holding the event afterwards
+           cannot read a node out of a tree it was never given. The relatedTarget and touch-target halves of
+           step 6.11's condition are absent with the fields they are about. */
         {
-            JSValue first = JS_GetPropertyUint32(ctx, s->path, 0);
-            event_set_target(ctx, s->ev, first);
-            JS_FreeValue(ctx, first);
+            uint32_t k = s->tn;
+
+            while (k-- > 0) {
+                JSValue item = event_path_item(ctx, s->path, k);
+                JSValue sat = event_path_shadow_adjusted_target(ctx, item);
+                bool found = JS_IsObject(sat);
+
+                if (found)
+                    s->clear_targets = dispatch_root_is_shadow_root(ctx, sat, /*want_closed*/ false);
+                JS_FreeValue(ctx, sat);
+                JS_FreeValue(ctx, item);
+                if (found)
+                    break;
+            }
         }
         s->ti = 0;
         s->n = s->i = 0;
@@ -1296,13 +1449,12 @@ report_throw:
         }
         /* ON TO THE NEXT PATH ITEM, and then to the next pass. `ti` names the item ABOUT to be invoked and is
            advanced once its listeners are set up, so the FIRST item of each pass is ti == 0 and no entry point
-           has to say so twice. "invoke" step 6 returns immediately when the stop propagation flag is set, so it
-           is tested per ITEM — it is set by a listener that has already returned, exactly like
-           stopImmediatePropagation above. */
+           has to say so twice. */
         for (;;) {
             uint32_t idx;
             const char *type;
             bool at_target;
+            JSValue item, sat;
 
             if (s->ti >= s->tn) {
                 if (s->hdr.stage == DISPATCH_BUBBLE) goto walked;
@@ -1310,20 +1462,62 @@ report_throw:
                 s->ti = 0;
                 continue;
             }
-            if (event_stop_propagation(ctx, s->ev)) goto walked;
             /* the capturing pass walks the path in REVERSE (root first); the bubbling pass walks it forwards. */
             idx = (s->hdr.stage == DISPATCH_CAPTURE) ? (s->tn - 1 - s->ti) : s->ti;
-            at_target = (idx == 0);
+            item = event_path_item(ctx, s->path, idx);
+            sat = event_path_shadow_adjusted_target(ctx, item);
+            /* §2.9 steps 6.13.1 / 6.14.1: AT_TARGET is not "index zero", it is "this item HAS a shadow-adjusted
+               target" — which is true of every item the event retargeted at, so an event dispatched inside a
+               shadow tree is AT_TARGET twice, once for the node and once for its host. */
+            at_target = JS_IsObject(sat);
             /* §2.9 step 6.14.2.1: in the BUBBLING pass an item that is not the target is skipped entirely for an
                event that does not bubble. The TARGET is invoked either way — which is why a non-bubbling event
                still reaches the target's non-capturing listeners. */
-            if (!at_target && s->hdr.stage == DISPATCH_BUBBLE && !event_bubbles(ctx, s->ev)) { s->ti++; continue; }
+            if (!at_target && s->hdr.stage == DISPATCH_BUBBLE && !event_bubbles(ctx, s->ev)) {
+                JS_FreeValue(ctx, sat);
+                JS_FreeValue(ctx, item);
+                s->ti++;
+                continue;
+            }
+            /* §2.9 steps 6.13.1-6.13.2: the phase is AT_TARGET for an item that is a target, whichever pass is
+               running, and the pass's own phase otherwise. */
+            event_set_phase(ctx, s->ev, at_target ? 2 : (s->hdr.stage == DISPATCH_CAPTURE ? 1 : 3));
+            /* "invoke" steps 1-3: the event's TARGET is the nearest shadow-adjusted target AT OR BEFORE this
+               item — so every entry inside a shadow tree reports the node the event was dispatched at, and
+               every entry from the host outward reports the host. It is a walk BACKWARD along the path and not
+               a value set once for the dispatch, which is the whole of what retargeting is. */
+            {
+                uint32_t k = idx;
+
+                while (!JS_IsObject(sat) && k > 0) {
+                    JSValue back;
+
+                    JS_FreeValue(ctx, sat);
+                    back = event_path_item(ctx, s->path, --k);
+                    sat = event_path_shadow_adjusted_target(ctx, back);
+                    JS_FreeValue(ctx, back);
+                }
+                DCHECK(JS_IsObject(sat),
+                       "§2.9 invoke step 2 ran off the front of the event path — item 0 is appended at step 6.3 "
+                       "with the target as its shadow-adjusted target, so the backward walk always stops");
+            }
+            event_set_target(ctx, s->ev, sat);
+            JS_FreeValue(ctx, sat);
+            /* "invoke" steps 4-5 set the event's relatedTarget and touch target list from the item. ABSENT with
+               the fields they read — see event_path.h.
+               "invoke" step 6: a walk that has been stopped still RUNS, item by item, and returns before it
+               invokes anything. That is not the same as ending the walk here, which is what this did: the
+               event's `target` is written by steps 1-3 above BEFORE the return, so the outer entries of a
+               retargeted path go on adjusting it after a listener has called stopPropagation. */
+            if (event_stop_propagation(ctx, s->ev)) {
+                JS_FreeValue(ctx, item);
+                s->ti++;
+                continue;
+            }
             JS_FreeValue(ctx, s->cur);
             JS_FreeValue(ctx, s->arr);
-            s->cur = JS_GetPropertyUint32(ctx, s->path, idx);
-            /* §2.9 steps 6.13.1-6.13.2: the phase is AT_TARGET for the item that IS the target, whichever pass
-               is running, and the pass's own phase otherwise. */
-            event_set_phase(ctx, s->ev, at_target ? 2 : (s->hdr.stage == DISPATCH_CAPTURE ? 1 : 3));
+            s->cur = event_path_invocation_target(ctx, item);   /* "invoke" step 7 */
+            JS_FreeValue(ctx, item);
             event_set_current(ctx, s->ev, s->cur);
             type = JS_IsString(s->type) ? JS_ToCString(ctx, s->type) : NULL;
             s->arr = type ? listener_snapshot(ctx, s->cur, type) : JS_NewArray(ctx);
@@ -1341,6 +1535,13 @@ walked:
        flags UNSET — one operation, because the spec states them together and because leaving the stop flags set
        made the SAME event unusable for a second dispatch. */
     event_end_dispatch(ctx, s->ev);
+    /* §2.9 step 11: if clearTargets, the event's target, relatedTarget and touch target list are CLEARED. The
+       target survives every other dispatch — a page reads `ev.target` after dispatchEvent returns — and this is
+       the one case where it must not: the outermost thing the event called its target was inside a shadow tree,
+       so handing it back afterwards would hand out a node from a tree the page was never given. The other two
+       members are absent with the fields they name. */
+    if (s->clear_targets)
+        event_set_target(ctx, s->ev, JS_NULL);
 
 activation:
     /* §2.9's step 12, and it is last for a reason: the activation behaviour runs AFTER the whole walk and

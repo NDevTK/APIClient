@@ -55,6 +55,7 @@
 #include "core/dom/attr_list.h"   /* §4.9's (namespace, local name) lookup — the old value of THIS attribute */
 #include "core/dom/element.h"
 #include "core/dom/document.h"
+#include "core/dom/shadow_root.h"
 #include "core/html/html_element.h"
 #include "core/html/custom_elements.h"
 #include "core/html/element_internals.h"
@@ -1970,8 +1971,11 @@ static JSValue js_ce_get(JSContext *ctx, JSValueConst this_val, int argc, JSValu
    elements in tree order, and TRY TO UPGRADE each. Nothing here constructs — "try to upgrade" enqueues an
    upgrade reaction, and the `[CEReactions]` epilogue every declared member ends through is what drains it,
    which is exactly why this is an ordinary body and not a machine.
-   (§4.13.4 says shadow-including inclusive descendants and shadow-including tree order; with no shadow trees
-   in this engine those are the plain ones — the same identity node.c's `root` already relies on.) */
+   THE DESCENDANTS ARE SHADOW-INCLUDING, in shadow-including tree order, which the standard says and which the
+   walk here now does. It used to be a plain descendant walk with a comment saying the two were the same thing
+   because this engine had no shadow trees; it has them, and the difference is the case the member exists for —
+   a component's own shadow tree is precisely where the elements a page built before their definition arrived
+   are, so `customElements.upgrade(host)` upgraded everything except them. */
 static JSValue js_ce_upgrade(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     lxb_dom_node_t *root, *n;
@@ -1979,21 +1983,19 @@ static JSValue js_ce_upgrade(JSContext *ctx, JSValueConst this_val, int argc, JS
     (void)this_val; (void)magic; (void)argc;
     root = node_of(argv[0]);
     if (!root) return JS_ThrowTypeError(ctx, "customElements.upgrade requires a Node");
-    for (n = root; n; ) {
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
-            lxb_dom_element_t *el = lxb_dom_interface_element(n);
+    for (n = root; n; n = shadow_root_next_in_shadow_including(ctx, n, root)) {
+        lxb_dom_element_t *el;
 
-            /* The same cheap name test the insertion steps make, and for the same reason: reading an element's
-               state means minting its WRAPPER, and `upgrade(document)` walks every node in the document. */
-            if (ce_upgradable_name(el)) {
-                JSValue wrap = node_wrap(ctx, n);
-                ce_try_upgrade(ctx, el, wrap);
-                JS_FreeValue(ctx, wrap);
-            }
+        if (n->type != LXB_DOM_NODE_TYPE_ELEMENT)
+            continue;
+        el = lxb_dom_interface_element(n);
+        /* The same cheap name test the insertion steps make, and for the same reason: reading an element's
+           state means minting its WRAPPER, and `upgrade(document)` walks every node in the document. */
+        if (ce_upgradable_name(el)) {
+            JSValue wrap = node_wrap(ctx, n);
+            ce_try_upgrade(ctx, el, wrap);
+            JS_FreeValue(ctx, wrap);
         }
-        if (n->first_child) { n = n->first_child; continue; }
-        while (n && !n->next) n = (n == root) ? NULL : n->parent;
-        n = n ? n->next : NULL;
     }
     return JS_UNDEFINED;
 }

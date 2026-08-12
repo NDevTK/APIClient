@@ -16,9 +16,13 @@
  * It is also the brand: a page cannot forge the symbol, so "does it carry the slot record" IS `instanceof
  * Event` for the algorithms, and it stays true across subclassing the way a class-id check would not.
  *
- * WHAT IS ABSENT AND WHY. CustomEvent, the typed events (MouseEvent, KeyboardEvent…) and composed/shadow
- * retargeting are their own interfaces with their own state; they are honestly missing rather than approximated
- * by an Event with extra properties, and the IDL audit names them. */
+ * WHAT IS ABSENT AND WHY. CustomEvent and the typed events (MouseEvent, KeyboardEvent…) are their own interfaces
+ * with their own state; they are honestly missing rather than approximated by an Event with extra properties,
+ * and the IDL audit names them. With them are absent §2.2's `relatedTarget` and `touch target list` — neither
+ * is an Event member, both belong to interfaces that do not exist here, and so §2.9's retargeting of them has
+ * nothing to retarget. Retargeting of the TARGET itself is not in that list: it is §2.9's shadow-adjusted
+ * target, it is real, and composedPath below is written over it. */
+#include <stdbool.h>
 #include <string.h>
 
 #include "check.h"
@@ -28,6 +32,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/events/event.h"
+#include "core/events/event_path.h"
 #include "core/timing/timer.h"
 
 /* The private key the event's internal slots hang off — a Symbol, so a page enumerating the object cannot see
@@ -193,9 +198,9 @@ bool event_composed(JSContext *ctx, JSValueConst ev)
     return event_read_flag(ctx, ev, "composed");
 }
 
-JSValue event_path_first(JSContext *ctx, JSValueConst ev)
+JSValue event_path_first_invocation_target(JSContext *ctx, JSValueConst ev)
 {
-    JSValue slots = event_slots(ctx, ev), path, first;
+    JSValue slots = event_slots(ctx, ev), path, item, first;
 
     path = JS_GetPropertyStr(ctx, slots, "path");
     JS_FreeValue(ctx, slots);
@@ -203,7 +208,12 @@ JSValue event_path_first(JSContext *ctx, JSValueConst ev)
        which appends the target at step 6.3 before the first ask. */
     DCHECK(JS_IsArray(path), "§2.9's first event path item was asked for outside a dispatch — the event has no "
                              "path, so §4.8's composed-flag condition has no subject to be about");
-    first = JS_IsArray(path) ? JS_GetPropertyUint32(ctx, path, 0) : JS_UNDEFINED;
+    DCHECK(event_path_length(ctx, path) > 0,
+           "§2.9's event path is empty inside a dispatch — step 6.3 appends the target before the first get the "
+           "parent, so §4.8's condition would be about no item at all");
+    item = event_path_item(ctx, path, 0);
+    first = event_path_invocation_target(ctx, item);
+    JS_FreeValue(ctx, item);
     JS_FreeValue(ctx, path);
     return first;
 }
@@ -410,34 +420,107 @@ static JSValue js_event_flag(JSContext *ctx, JSValueConst this_val, int argc, JS
 /* §2.2 composedPath — THIS'S PATH, which §2.9 built and which this file now holds. It used to answer with the
    current target alone, because there was no walk to have a path from; there is one, and answering a walk's
    whole path with its last entry is not a smaller answer, it is a different one.
-   The spec's algorithm is written around CLOSED SHADOW TREES: it finds the current target in the path and then
-   walks outwards in both directions, skipping entries hidden behind a closed root. This engine has no shadow
-   trees, so every entry's root-of-closed-tree and slot-in-closed-tree are false, the hidden-level counters never
-   move, and the two loops degenerate to "every entry, in path order". They are written that way here rather than
-   carried as dead arithmetic; the day a ShadowRoot exists, the levels come back with it. */
+ *
+ * THE ALGORITHM IS ABOUT CLOSED SHADOW TREES AND NOTHING ELSE, and it is written as three walks because a
+ * listener may only see the parts of the path its own tree is allowed to see. It finds the CURRENT TARGET's
+ * index by scanning the path BACKWARD from the end, counting how deep inside closed trees that target sits
+ * (up one at every root-of-closed-tree it passes, down one at every slot-in-closed-tree); then it walks outward
+ * in both directions from that index, emitting an entry only while the running level is no deeper than the
+ * level the current target itself is at. A `maxHiddenLevel` that only ever DECREASES is what makes leaving a
+ * closed tree permanent — once the walk has climbed out through a slot, everything further out that is deeper
+ * again stays hidden.
+ * The two outward walks are mirror images with the two flags SWAPPED, because going outward from the target the
+ * boundary you cross first is a root going one way and a slot going the other. Writing one loop for both is how
+ * this gets subtly wrong; they are written out. */
 static JSValue js_event_composed_path(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
-    JSValue arr, path, slots;
-    uint32_t i, n = 0;
+    JSValue arr, path, slots, current;
+    uint32_t n, out = 0;
+    int32_t index, current_index = 0;
+    int hidden, current_hidden, max_hidden;
 
     (void)argc; (void)argv;
     if (!event_is(ctx, this_val))
         return JS_ThrowTypeError(ctx, "composedPath called on something that is not an Event");
-    arr = JS_NewArray(ctx);
+    arr = JS_NewArray(ctx);          /* step 1 */
     slots = event_slots(ctx, this_val);
-    path = JS_GetPropertyStr(ctx, slots, "path");
+    path = JS_GetPropertyStr(ctx, slots, "path");   /* step 2 */
+    current = JS_GetPropertyStr(ctx, slots, "currentTarget");
     JS_FreeValue(ctx, slots);
-    /* step 3: an event that is not being dispatched has an empty path, and composedPath answers the empty list. */
-    if (!JS_IsArray(path)) { JS_FreeValue(ctx, path); return arr; }
-    {
-        JSValue len_v = JS_GetPropertyStr(ctx, path, "length");
-        JS_ToUint32(ctx, &n, len_v);
-        JS_FreeValue(ctx, len_v);
+    /* step 3: an event that is not being dispatched has an empty path, and composedPath answers the empty list.
+       Its `path` is JS_NULL rather than an empty Array, which is the same state said in one fewer allocation —
+       and it is why this asks whether there is a path at all before asking the path how long it is. */
+    n = JS_IsArray(path) ? event_path_length(ctx, path) : 0;
+    if (n == 0) {
+        JS_FreeValue(ctx, path);
+        JS_FreeValue(ctx, current);
+        return arr;
     }
-    for (i = 0; i < n; i++)
-        JS_SetPropertyUint32(ctx, arr, i, JS_GetPropertyUint32(ctx, path, i));
+    /* steps 4-6. The assert is the standard's own step 5: a non-empty path means a dispatch is in flight, and
+       §2.9's `invoke` initialises currentTarget at every item it invokes. */
+    DCHECK(JS_IsObject(current), "§2.2 composedPath step 5: the event has a path but no currentTarget — the "
+                                 "walk is standing on an item whose invocation target it never published");
+    /* steps 7-10: find the current target's index, and the closed-tree depth it sits at, scanning BACKWARD. */
+    current_hidden = 0;
+    for (index = (int32_t)n - 1; index >= 0; index--) {
+        JSValue item = event_path_item(ctx, path, (uint32_t)index);
+        JSValue invocation = event_path_invocation_target(ctx, item);
+        bool is_current = JS_VALUE_GET_PTR(invocation) == JS_VALUE_GET_PTR(current);
+
+        if (event_path_root_of_closed_tree(ctx, item)) current_hidden++;
+        if (is_current) current_index = index;
+        else if (event_path_slot_in_closed_tree(ctx, item)) current_hidden--;
+        JS_FreeValue(ctx, invocation);
+        JS_FreeValue(ctx, item);
+        if (is_current) break;
+    }
+    /* steps 11-13: OUTWARD toward path[0], PREPENDING each kept entry. The walk runs from the current target
+       DOWN through the indices, so it MEETS the entries in the reverse of the order the answer holds them —
+       which is exactly what "prepend" says. They are collected in walk order and then read back in reverse into
+       the front of the answer, rather than shifting the answer along by one per entry. */
+    hidden = max_hidden = current_hidden;
+    {
+        uint32_t kept = 0, k;
+        JSValue before = JS_NewArray(ctx);
+
+        CHECK(!JS_IsException(before), "§2.2 composedPath's inner half could not be allocated");
+        for (index = current_index - 1; index >= 0; index--) {
+            JSValue item = event_path_item(ctx, path, (uint32_t)index);
+
+            if (event_path_root_of_closed_tree(ctx, item)) hidden++;
+            if (hidden <= max_hidden)
+                JS_SetPropertyUint32(ctx, before, kept++, event_path_invocation_target(ctx, item));
+            if (event_path_slot_in_closed_tree(ctx, item)) {
+                hidden--;
+                if (hidden < max_hidden) max_hidden = hidden;
+            }
+            JS_FreeValue(ctx, item);
+        }
+        for (k = kept; k-- > 0; )
+            JS_SetPropertyUint32(ctx, arr, out++, JS_GetPropertyUint32(ctx, before, k));
+        JS_FreeValue(ctx, before);
+    }
+    /* step 6, in its place in the ANSWER rather than in the algorithm's order: composedPath is built by
+       appending the current target and then prepending the inner half, and the two together are the entries up
+       to and including it, in path order. */
+    JS_SetPropertyUint32(ctx, arr, out++, JS_DupValue(ctx, current));
+    /* steps 14-16: outward toward the root, APPENDING, with the two flags swapped. */
+    hidden = max_hidden = current_hidden;
+    for (index = current_index + 1; index < (int32_t)n; index++) {
+        JSValue item = event_path_item(ctx, path, (uint32_t)index);
+
+        if (event_path_slot_in_closed_tree(ctx, item)) hidden++;
+        if (hidden <= max_hidden)
+            JS_SetPropertyUint32(ctx, arr, out++, event_path_invocation_target(ctx, item));
+        if (event_path_root_of_closed_tree(ctx, item)) {
+            hidden--;
+            if (hidden < max_hidden) max_hidden = hidden;
+        }
+        JS_FreeValue(ctx, item);
+    }
+    JS_FreeValue(ctx, current);
     JS_FreeValue(ctx, path);
-    return arr;
+    return arr;   /* step 17 */
 }
 
 /* §2.2 initEvent(type, bubbles, cancelable) — the legacy initializer, and it is NOT a no-op: it re-initialises

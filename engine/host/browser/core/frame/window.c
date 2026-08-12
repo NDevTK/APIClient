@@ -172,6 +172,16 @@ static JSValue js_win_set_name(JSContext *ctx, JSValueConst this_val, int argc, 
  * anyway — and the index test is the engine's own, not a re-parse of the atom's text. */
 static JSClassID g_window_class;
 
+/* "IS A Window OBJECT" — the brand, off the class the global carries. DOM §2.9 step 6.9.5 asks it of every
+   parent the event path walk reaches, because a Window is the one path entry that is NOT a node and so is the
+   one the shadow-including ancestor test cannot answer for. Asking it as "is it not a node" would be an
+   inference about who else can appear in a path rather than a fact about this object, and the class is what
+   makes it a fact: HTML's global IS the Window, and window_install gives the global exactly this class. */
+bool window_is(JSValueConst v)
+{
+    return g_window_class != 0 && JS_GetClassID(v) == g_window_class;
+}
+
 /* The child navigable this index names, or false. Owned on true. */
 static bool win_supported_index(JSContext *ctx, JSAtom prop, JSValue *out)
 {

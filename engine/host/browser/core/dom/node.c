@@ -58,6 +58,7 @@
 #include "solver/engine.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
+#include "core/frame/window.h"
 
 static const IdlArgType IDL_1NSTR[1] = { IDL_DOMSTRING_NULLABLE };
 
@@ -286,7 +287,7 @@ static JSValue node_get_parent(JSContext *ctx, JSValueConst target, JSValueConst
        still reaches the document: the host's root is not this shadow root. */
     if (shadow_root_is(n)) {
         if (!event_composed(ctx, ev)) {
-            JSValue first = event_path_first(ctx, ev);
+            JSValue first = event_path_first_invocation_target(ctx, ev);
             lxb_dom_node_t *fn = node_of(first);
             bool inside = fn != NULL && node_root(fn) == n;
 
@@ -296,7 +297,60 @@ static JSValue node_get_parent(JSContext *ctx, JSValueConst target, JSValueConst
         }
         return node_wrap(ctx, lxb_dom_interface_node(shadow_root_host(n)));
     }
+    /* §4.4: "A node's get the parent algorithm, given an event, returns the node's ASSIGNED SLOT, if node is
+       assigned; otherwise node's parent." A slotted node's event therefore travels through the shadow tree that
+       renders it rather than up its own light-tree ancestors — which is the whole reason §2.9's walk carries a
+       `slottable` and a slot-in-closed-tree flag, and why it can assert that the parent it gets back is a slot. */
+    {
+        lxb_dom_node_t *slot = slot_assigned_slot(ctx, n);
+        if (slot)
+            return node_wrap(ctx, slot);
+    }
     return node_wrap(ctx, n->parent);
+}
+
+/* §4.4's ROOT as §2.9 asks it — of an EventTarget, which may be a Window. JS_NULL says "not a node", which is
+   the same answer the walk needs for step 6.9.5's "parent is a node and …". OWNED, like node_wrap. */
+static JSValue node_event_root(JSContext *ctx, JSValueConst target)
+{
+    lxb_dom_node_t *n = node_of(target);
+
+    return n ? node_wrap(ctx, node_root(n)) : JS_NULL;
+}
+
+static int node_event_shadow_root_mode(JSContext *ctx, JSValueConst target)
+{
+    lxb_dom_node_t *n = node_of(target);
+
+    (void)ctx;
+    if (!n || !shadow_root_is(n))
+        return EVENT_TREE_NOT_SHADOW_ROOT;
+    return shadow_root_is_open(n) ? EVENT_TREE_SHADOW_OPEN : EVENT_TREE_SHADOW_CLOSED;
+}
+
+static bool node_event_is_window(JSContext *ctx, JSValueConst target)
+{
+    (void)ctx;
+    return window_is(target);
+}
+
+static bool node_event_is_slot(JSContext *ctx, JSValueConst target)
+{
+    (void)ctx;
+    return slot_is(node_of(target));
+}
+
+static bool node_event_is_assigned_slottable(JSContext *ctx, JSValueConst target)
+{
+    return slot_assigned_slot(ctx, node_of(target)) != NULL;
+}
+
+/* §4.2's relation, over EventTargets — the relation itself is shadow_root.c's, because it is a fact about the
+   tree and has three callers with nothing else in common. */
+static bool node_event_is_shadow_including_inclusive_ancestor(JSContext *ctx, JSValueConst a, JSValueConst b)
+{
+    (void)ctx;
+    return shadow_root_is_shadow_including_inclusive_ancestor(node_of(a), node_of(b));
 }
 
 /* §2.7's DEFAULT PASSIVE VALUE, the half that is a tree question: is this target the Window, the node document
@@ -317,7 +371,11 @@ static bool node_default_passive_target(JSContext *ctx, JSValueConst target)
     return document_is_passive_default_node(n);
 }
 
-static const EventTargetTree NODE_EVENT_TREE = { node_get_parent, node_default_passive_target };
+static const EventTargetTree NODE_EVENT_TREE = {
+    node_get_parent, node_default_passive_target, node_event_root, node_event_shadow_root_mode,
+    node_event_is_window, node_event_is_slot, node_event_is_assigned_slottable,
+    node_event_is_shadow_including_inclusive_ancestor
+};
 
 /* §4.2.3's INSERTION AND REMOVING STEPS ARE A LIST, not a slot. The standard's own `remove` runs several
    independent things in order — the live-range pre-remove steps, then §6.1's NodeIterator pre-remove steps,

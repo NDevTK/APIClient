@@ -59,6 +59,7 @@
 #include "core/idl_iter.h"
 #include "core/dom/attr_list.h"
 #include "core/dom/node.h"
+#include "core/dom/shadow_root.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/html/custom_elements.h"
@@ -559,16 +560,16 @@ static JSValue js_internals_set_validity(JSContext *ctx, JSValueConst this_val, 
                        (bits & (1u << VF_CUSTOM_ERROR)) ? msg : JS_NewStringLen(ctx, "", 0));
         if (!(bits & (1u << VF_CUSTOM_ERROR))) JS_FreeValue(ctx, msg);
     }
-    /* Steps 7-9: an omitted anchor is the element itself; a given one must be a shadow-including inclusive
-       descendant of it, which with no shadow trees in this engine is an inclusive descendant. */
+    /* Steps 7-9: an omitted anchor is the element itself; a given one must be a SHADOW-INCLUDING inclusive
+       descendant of it — which is the whole point of the member, because a form-associated custom element's
+       anchor is normally the `<input>` inside its own shadow tree, and a plain ancestor walk rejects exactly
+       that. The relation lives in shadow_root.c; this reads it. */
     if (argc < 3 || JS_IsUndefined(argv[2])) {
         JS_SetProperty(ctx, rec, g_atom_anchor, JS_DupValue(ctx, el));
     } else {
-        lxb_dom_node_t *anchor = node_of(argv[2]), *host = node_of(el), *u;
-        bool inside = false;
+        lxb_dom_node_t *anchor = node_of(argv[2]), *host = node_of(el);
+        bool inside = shadow_root_is_shadow_including_inclusive_ancestor(host, anchor);
 
-        for (u = anchor; u; u = u->parent)
-            if (u == host) { inside = true; break; }
         if (!inside) {
             JS_FreeValue(ctx, rec);
             JS_FreeValue(ctx, el);

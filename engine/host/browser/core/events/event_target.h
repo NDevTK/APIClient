@@ -27,9 +27,36 @@ void event_target_free(JSContext *ctx);
    `default_passive_target` is §2.7's default passive value, minus the type test this file makes: is this target
    the window, the node document, its document element, or its body. OWNED BY THE CALLER and must outlive the
    runtime — a static, as node.c's is. */
+/* §4.8's MODE, asked of any EventTarget rather than of a shadow root, because §2.9 asks it of path entries it
+   has not established are shadow roots at all. */
+enum { EVENT_TREE_NOT_SHADOW_ROOT = -1, EVENT_TREE_SHADOW_OPEN = 0, EVENT_TREE_SHADOW_CLOSED = 1 };
+
+/* AND THE SIX SHADOW FACTS §2.9's WALK NEEDS, each one a DEFINED TERM of the standard rather than a decision.
+   That split is the point: which COMBINATION of them retargets the event, hides a path entry or picks the
+   activation target is §2.9's algorithm and stays in the dispatch machine; what a "shadow root", a "slot", an
+   "assigned slottable" or a "shadow-including inclusive ancestor" IS belongs to the DOM, which is the only
+   component that can answer it and the only one that may link lexbor to do so. A hook that answered a BRANCH
+   instead ("does the event cross a boundary here") would put the standard's algorithm in node.c, where the step
+   numbers it implements are invisible.
+     `root` is §4.4's root — the topmost inclusive ancestor, which for a node inside a shadow tree is the SHADOW
+       ROOT and not the document. OWNED; JS_NULL for anything that is not a node, which is also how the walk
+       tells a Window from a node without a second question.
+     `shadow_root_mode` answers EVENT_TREE_NOT_SHADOW_ROOT for everything that is not a shadow root.
+     `is_window` is §2.9 step 6.9.5's first disjunct.
+     `is_slot` is what step 6.9.1's assert is about.
+     `is_assigned_slottable` is §4.2.2.2's "a slottable is assigned", which is also what makes a node's get the
+       parent answer with its slot.
+     `is_shadow_including_inclusive_ancestor` is §4.2's relation, asked as "is `a` one of `b`'s" — the relation
+       that climbs from a shadow root to its HOST, which is why it cannot be a parent-chain walk in this file. */
 typedef struct EventTargetTree {
     JSValue (*get_parent)(JSContext *ctx, JSValueConst target, JSValueConst ev);
     bool    (*default_passive_target)(JSContext *ctx, JSValueConst target);
+    JSValue (*root)(JSContext *ctx, JSValueConst target);
+    int     (*shadow_root_mode)(JSContext *ctx, JSValueConst target);
+    bool    (*is_window)(JSContext *ctx, JSValueConst target);
+    bool    (*is_slot)(JSContext *ctx, JSValueConst target);
+    bool    (*is_assigned_slottable)(JSContext *ctx, JSValueConst target);
+    bool    (*is_shadow_including_inclusive_ancestor)(JSContext *ctx, JSValueConst a, JSValueConst b);
 } EventTargetTree;
 void event_target_set_tree(const EventTargetTree *tree);
 /* §2.7's INTERFACE PROTOTYPE OBJECT, where addEventListener, removeEventListener and dispatchEvent live.

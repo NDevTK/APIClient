@@ -79,11 +79,14 @@ void    event_set_path(JSContext *ctx, JSValueConst ev, JSValueConst path);
 /* §2.2's IN PASSIVE LISTENER FLAG — set by "inner invoke" around a passive listener, and the reason that
    listener's preventDefault() does nothing. */
 void    event_set_in_passive(JSContext *ctx, JSValueConst ev, bool on);
-/* §2.2's COMPOSED FLAG and §2.9's FIRST EVENT PATH ITEM (OWNED, JS_UNDEFINED outside a dispatch) — the two
-   facts DOM §4.8's shadow-root get-the-parent asks about the EVENT. The rest of that condition is about the
-   TREE and is answered where nodes are known; this file never learns what a node is. */
+/* §2.2's COMPOSED FLAG and the INVOCATION TARGET of §2.9's FIRST EVENT PATH ITEM (OWNED) — the two facts DOM
+   §4.8's shadow-root get-the-parent asks about the EVENT ("returns null if event's composed flag is unset and
+   shadow root is the root of event's path's first event path item's INVOCATION TARGET"). The rest of that
+   condition is about the TREE and is answered where nodes are known; this file never learns what a node is.
+   It answers with the item's invocation target rather than the item, and rather than its shadow-adjusted
+   target: an item has both, and for the entries §4.8's condition is about they are different objects. */
 bool    event_composed(JSContext *ctx, JSValueConst ev);
-JSValue event_path_first(JSContext *ctx, JSValueConst ev);
+JSValue event_path_first_invocation_target(JSContext *ctx, JSValueConst ev);
 /* §2.9: an event that has been dispatched cannot be re-dispatched while in flight. */
 bool    event_dispatch_flag(JSContext *ctx, JSValueConst ev);
 void    event_set_dispatch_flag(JSContext *ctx, JSValueConst ev, bool on);
