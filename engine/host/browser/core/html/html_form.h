@@ -65,6 +65,28 @@ bool html_form_control_is_disabled(JSContext *ctx, JSValueConst wrap);
  * because a FORM-ASSOCIATED CUSTOM ELEMENT is in every one of these categories and only its definition can say
  * so. */
 
+/* §4.10.5.1's STATES OF THE `type` ATTRIBUTE — the enumerated attribute's twenty-one keywords, resolved ONCE.
+   Every consumer of an input's type asks the same question of the same table, and asked as a chain of string
+   comparisons per consumer the table is written out again each time: §4.10.21's constraint attributes apply per
+   state, §3.2.6's auto-directionality is a list of states, §4.10.2's buttons are four of them. The TEXT state is
+   both the missing-value and the invalid-value default, so an absent or unrecognised keyword IS that state and
+   no consumer needs a case for it. */
+typedef enum {
+    INPUT_STATE_NONE = 0,        /* the element is not an `input` */
+    INPUT_STATE_HIDDEN, INPUT_STATE_TEXT, INPUT_STATE_SEARCH, INPUT_STATE_TEL, INPUT_STATE_URL,
+    INPUT_STATE_EMAIL, INPUT_STATE_PASSWORD, INPUT_STATE_DATE, INPUT_STATE_MONTH, INPUT_STATE_WEEK,
+    INPUT_STATE_TIME, INPUT_STATE_DATETIME_LOCAL, INPUT_STATE_NUMBER, INPUT_STATE_RANGE, INPUT_STATE_COLOR,
+    INPUT_STATE_CHECKBOX, INPUT_STATE_RADIO, INPUT_STATE_FILE, INPUT_STATE_SUBMIT, INPUT_STATE_IMAGE,
+    INPUT_STATE_RESET, INPUT_STATE_BUTTON,
+} HtmlInputState;
+HtmlInputState html_form_input_state(const lxb_dom_node_t *n);
+
+/* §4.10.7's PLACEHOLDER LABEL OPTION: with `required` specified and a display size of 1, the FIRST option in
+   the select's list of options, when its value is the empty string and its parent is the select itself. It is
+   here rather than beside the constraint that reads it because the list of options and the display size are
+   §4.10.7's and this file owns them. The option's wrapper, or JS_NULL. OWNED. */
+JSValue html_form_placeholder_label_option(JSContext *ctx, JSValueConst select);
+
 /* §4.10.2 SUBMITTABLE: button, input, select, textarea, and form-associated custom elements. §4.10.22.4 step 3
    walks exactly these. */
 bool html_form_is_submittable(JSContext *ctx, JSValueConst wrap);

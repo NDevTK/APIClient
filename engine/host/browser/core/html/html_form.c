@@ -33,6 +33,7 @@
 #include "core/encoding/encoding.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
+#include "core/html/constraint_validation.h"
 #include "core/html/custom_elements.h"
 #include "core/html/form_data.h"
 #include "core/html/form_data_event.h"
@@ -99,14 +100,32 @@ static bool ascii_ci_is(const char *a, size_t alen, const char *lower)
  * is why each takes the WRAPPER: only a custom element's definition can say it is form-associated, and the tag
  * cannot. */
 
-/* An `input` element's `type` state, as the raw attribute — the caller compares it with ascii_ci_is. A missing
-   or invalid value is the TEXT state (§4.10.5.1.1's missing/invalid value default), which every comparison here
-   answers false for, so an absent attribute needs no case of its own. */
-static const char *input_type_of(lxb_dom_node_t *n, size_t *plen)
+/* §4.10.5.1's STATES OF THE `type` ATTRIBUTE, resolved once against the keyword table §4.10.5.1 is a section
+   per. The keywords are ASCII case-insensitive like every enumerated attribute's (§2.3.2), and a missing or
+   unrecognised one is the TEXT state — both defaults §4.10.5.1.2 declares. */
+HtmlInputState html_form_input_state(const lxb_dom_node_t *n)
 {
-    *plen = 0;
-    if (!tag_is(n, "input")) return NULL;
-    return attr_of(lxb_dom_interface_element(n), "type", plen);
+    static const struct { const char *keyword; HtmlInputState state; } TYPES[] = {
+        { "hidden", INPUT_STATE_HIDDEN },   { "text", INPUT_STATE_TEXT },
+        { "search", INPUT_STATE_SEARCH },   { "tel", INPUT_STATE_TEL },
+        { "url", INPUT_STATE_URL },         { "email", INPUT_STATE_EMAIL },
+        { "password", INPUT_STATE_PASSWORD }, { "date", INPUT_STATE_DATE },
+        { "month", INPUT_STATE_MONTH },     { "week", INPUT_STATE_WEEK },
+        { "time", INPUT_STATE_TIME },       { "datetime-local", INPUT_STATE_DATETIME_LOCAL },
+        { "number", INPUT_STATE_NUMBER },   { "range", INPUT_STATE_RANGE },
+        { "color", INPUT_STATE_COLOR },     { "checkbox", INPUT_STATE_CHECKBOX },
+        { "radio", INPUT_STATE_RADIO },     { "file", INPUT_STATE_FILE },
+        { "submit", INPUT_STATE_SUBMIT },   { "image", INPUT_STATE_IMAGE },
+        { "reset", INPUT_STATE_RESET },     { "button", INPUT_STATE_BUTTON },
+    };
+    size_t tlen = 0, i;
+    const char *t;
+
+    if (!tag_is((lxb_dom_node_t *)n, "input")) return INPUT_STATE_NONE;
+    t = attr_of(lxb_dom_interface_element((lxb_dom_node_t *)n), "type", &tlen);
+    for (i = 0; i < sizeof TYPES / sizeof TYPES[0]; i++)
+        if (ascii_ci_is(t, tlen, TYPES[i].keyword)) return TYPES[i].state;
+    return INPUT_STATE_TEXT;
 }
 
 bool html_form_is_submittable(JSContext *ctx, JSValueConst wrap)
@@ -132,16 +151,15 @@ static bool form_is_listed(JSContext *ctx, JSValueConst wrap)
 bool html_form_is_button(JSContext *ctx, JSValueConst wrap)
 {
     lxb_dom_node_t *n = node_of(wrap);
-    size_t tlen = 0;
-    const char *t;
+    HtmlInputState st;
 
     (void)ctx;
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
     if (tag_is(n, "button")) return true;   /* §4.10.6: "The element is a button." */
-    t = input_type_of(n, &tlen);
+    st = html_form_input_state(n);
     /* §4.10.5.1.18/.19/.20/.21 each end "The element is a button"; no other input state does. */
-    return ascii_ci_is(t, tlen, "submit") || ascii_ci_is(t, tlen, "image") ||
-           ascii_ci_is(t, tlen, "reset")  || ascii_ci_is(t, tlen, "button");
+    return st == INPUT_STATE_SUBMIT || st == INPUT_STATE_IMAGE ||
+           st == INPUT_STATE_RESET  || st == INPUT_STATE_BUTTON;
 }
 
 bool html_form_is_submit_button(JSContext *ctx, JSValueConst wrap)
@@ -153,9 +171,9 @@ bool html_form_is_submit_button(JSContext *ctx, JSValueConst wrap)
     (void)ctx;
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
     if (tag_is(n, "input")) {
-        t = input_type_of(n, &tlen);
+        HtmlInputState st = html_form_input_state(n);
         /* §4.10.5.1.18 and §4.10.5.1.19: "specifically a submit button". */
-        return ascii_ci_is(t, tlen, "submit") || ascii_ci_is(t, tlen, "image");
+        return st == INPUT_STATE_SUBMIT || st == INPUT_STATE_IMAGE;
     }
     if (!tag_is(n, "button")) return false;
     /* §4.10.6: a `button` is a submit button if its `type` is in the Submit Button state, or in the AUTO state
@@ -376,10 +394,8 @@ static JSValue form_members(JSContext *ctx, JSValueConst form_wrap, FormMemberPr
 static bool form_elements_member(JSContext *ctx, JSValueConst wrap)
 {
     lxb_dom_node_t *n = node_of(wrap);
-    size_t tlen = 0;
-    const char *t = input_type_of(n, &tlen);
 
-    if (ascii_ci_is(t, tlen, "image")) return false;
+    if (html_form_input_state(n) == INPUT_STATE_IMAGE) return false;
     return form_is_listed(ctx, wrap);
 }
 
@@ -562,82 +578,10 @@ static bool form_document_sandboxes_forms(JSContext *ctx)
     return false;
 }
 
-/* ---- §4.10.21's CONSTRAINT VALIDATION, as far as the state this engine models reaches ------------------------
- *
- * Step 5.4 is "if the submitter element's no-validate state is false, then INTERACTIVELY VALIDATE the
- * constraints of form and examine the result", and a negative result RETURNS — no event, no entry list, no
- * request. §4.10.21.2 states interactive validation as static validation plus a report to a user this engine
- * does not have, so what has to be answered here is §4.10.21.2's static half: for each control, is it a
- * CANDIDATE for constraint validation, and does it SATISFY ITS CONSTRAINTS. */
-
-/* §4.10.21.1: "A submittable element is a candidate for constraint validation except when a condition has
-   BARRED the element from constraint validation." The conditions, each where the standard states it: §4.10.19.5
-   disabled; §4.10.10's datalist ancestor; the `readonly` attribute on an `input` or a `textarea`; an `input` in
-   the Hidden, Reset Button or Button state; and a `button` that is not a submit button. */
-static bool form_is_validation_candidate(JSContext *ctx, JSValueConst wrap)
-{
-    lxb_dom_node_t *n = node_of(wrap);
-    lxb_dom_element_t *el = form_elem_of(wrap);
-    size_t tlen = 0;
-    const char *t;
-
-    if (!el) return false;
-    if (html_form_control_is_disabled(ctx, wrap)) return false;
-    if (html_form_has_datalist_ancestor(wrap)) return false;
-    if (tag_is(n, "textarea")) return !has_attr(el, "readonly");
-    if (tag_is(n, "button")) return html_form_is_submit_button(ctx, wrap);
-    if (tag_is(n, "input")) {
-        if (has_attr(el, "readonly")) return false;
-        t = input_type_of(n, &tlen);
-        return !(ascii_ci_is(t, tlen, "hidden") || ascii_ci_is(t, tlen, "reset") ||
-                 ascii_ci_is(t, tlen, "button"));
-    }
-    return true;   /* a `select`, and a form-associated custom element */
-}
-
-/* §4.10.21.2 step 3.2's question — "does field SATISFY ITS CONSTRAINTS", which §4.10.21.1 defines as being free
-   of every one of its ten VALIDITY STATES — asked of the state this engine HAS.
-   Nine of the ten are computed from a CONSTRAINT ATTRIBUTE (`required`, `pattern`, `minlength`, `maxlength`,
-   `min`, `max`, `step`) or from an input TYPE that constrains its own syntax (Email and URL), and the tenth is a
-   custom error, which for a built-in control is set only through `setCustomValidity` — a member this engine does
-   not have. A candidate carrying NONE of them therefore cannot be suffering from anything, and that is a
-   computed answer rather than an assumed one.
-   A candidate that carries one CRASHES HERE NAMING IT. Answering "satisfies" for it would record a request the
-   page cannot actually make — a browser returns a NEGATIVE result there and submits nothing — and answering
-   "does not" would need §4.10.21.2 step 5, which fires an `invalid` event at each invalid control and is the
-   stage this machine grows when those states exist to report. */
-static void form_check_field_constraints(JSContext *ctx, JSValueConst wrap)
-{
-    lxb_dom_element_t *el = form_elem_of(wrap);
-    lxb_dom_node_t *n = node_of(wrap);
-    size_t tlen = 0;
-    const char *t;
-
-    if (!el) return;
-    if (custom_elements_is_form_associated(ctx, wrap))
-        DFAIL("a form-associated custom element reached §4.10.21.2 step 3.2 — its validity flags are the ones "
-              "§4.13.7.3's setValidity wrote onto its ElementInternals, and element_internals.h exports no "
-              "reader for them; export the flags and answer this step from them, then build §4.10.21.2 step 5's "
-              "`invalid` fire for the controls that fail");
-    if (has_attr(el, "required"))
-        DFAIL("a submitted control carries `required` — build §4.10.21.1's SUFFERING FROM BEING MISSING (the "
-              "per-control rules: a text control's empty value, a checkbox's checkedness, a radio group, a "
-              "select's placeholder option, a file control's empty file list), or this submission records a "
-              "request a browser would have refused");
-    if (has_attr(el, "pattern") || has_attr(el, "minlength") || has_attr(el, "maxlength"))
-        DFAIL("a submitted control carries `pattern`, `minlength` or `maxlength` — build §4.10.21.1's PATTERN "
-              "MISMATCH / TOO LONG / TOO SHORT validity states over the control's value, or this submission "
-              "records a request a browser would have refused");
-    if (has_attr(el, "min") || has_attr(el, "max") || has_attr(el, "step"))
-        DFAIL("a submitted control carries `min`, `max` or `step` — build §4.10.21.1's UNDERFLOW / OVERFLOW / "
-              "STEP MISMATCH validity states, which need §4.10.5.1's value-to-number conversion for the "
-              "control's type, or this submission records a request a browser would have refused");
-    t = input_type_of(n, &tlen);
-    if (ascii_ci_is(t, tlen, "email") || ascii_ci_is(t, tlen, "url"))
-        DFAIL("a submitted `input` is in the Email or URL state — build §4.10.21.1's TYPE MISMATCH (the valid "
-              "email address / valid URL syntax its value is checked against), or this submission records a "
-              "request a browser would have refused");
-}
+/* §4.10.21's CONSTRAINT VALIDATION belongs to constraint_validation.c — §4.10.21.1's ten validity states are a
+   question about an ELEMENT and this file's only interest in them is step 5.4's verdict. What used to stand here
+   was the shape of that verdict with no states behind it: a candidacy test, and a crash for every control that
+   carried a constraint attribute. */
 
 /* ---- §4.10.22.3's own state: the FIRING SUBMISSION EVENTS boolean --------------------------------------------
  *
@@ -775,6 +719,9 @@ typedef struct JSSubmitState {
        list an encoding the first half never saw. A static string from §4.10.22.5's table, owned by nobody. */
     const char *encoding;
     FormEntryListRun entries;        /* §4.10.22.4's own cursor, held across its `formdata` dispatch */
+    /* §4.10.21.2's own cursor, held across its `invalid` dispatches and its pattern matches. NULL until step
+       5.4 starts one, which is also the state a `novalidate` form's run is left in. */
+    ConstraintValidationRun *validation;
 } JSSubmitState;
 
 static void js_submit_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -790,6 +737,7 @@ static void js_submit_visit(JSContext *ctx, void *st, JSStepVisit *v)
     for (k = 0; k < 4; k++)
         v->val(ctx, &s->cb[k]);
     form_entry_list_visit(ctx, &s->entries, v);
+    constraint_validation_visit(ctx, &s->validation, v);
 }
 
 static JSValue js_submit_fini(JSContext *ctx, void *st, bool take_result)
@@ -821,6 +769,7 @@ static JSValue js_submit_fini(JSContext *ctx, void *st, bool take_result)
         s->cb[k] = JS_UNDEFINED;
     }
     form_entry_list_release(ctx, &s->entries);
+    constraint_validation_release(ctx, &s->validation);
     return JS_UNDEFINED;   /* both members return undefined whatever the handlers did */
 }
 
@@ -927,6 +876,7 @@ static int js_submit_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
            through js_submit_fini, which frees exactly what the state holds and nothing else. */
         s->ev = s->submitter = s->form = s->controls = s->entry_list = JS_UNDEFINED;
         s->encoding = NULL;
+        s->validation = NULL;
         s->i = 0;
         s->firing_set = 0;
         for (k = 0; k < 4; k++) s->cb[k] = JS_UNDEFINED;
@@ -1008,23 +958,24 @@ static int js_submit_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         submit_walk_end(ctx, s, SUBMIT_VALIDATE);
     }
     if (s->hdr.stage == SUBMIT_VALIDATE) {
-        /* Step 5.4, whose interactive validation is §4.10.21.2's static validation plus a report to a user this
-           engine does not have — so what runs here is step 3's walk, and a control whose validity this engine
-           cannot compute crashes inside it naming the state to build. */
+        /* Step 5.4: "if the submitter element's no-validate state is false, then INTERACTIVELY VALIDATE the
+           constraints of form and EXAMINE THE RESULT: if the result was negative, then RETURN." A negative
+           result ends the submission here — no `submit` event, no entry list, no request — which is the whole
+           of what this step decides and why the validation is not advisory. §4.10.21.2 fires an `invalid` event
+           at every unsatisfied control, so it is a sub-sequence that suspends, exactly like the entry list. */
         if (form_no_validate(ctx, s->submitter, form_elem_of(s->hdr.this_val))) {
             s->hdr.stage = SUBMIT_FIRE;
         } else {
-            uint32_t n = submit_walk_list(ctx, s);
+            bool positive = false;
 
-            if (s->i < n) {
-                JSValue el = JS_GetPropertyUint32(ctx, s->controls, s->i++);
-
-                if (form_is_validation_candidate(ctx, el))                        /* step 3.1 */
-                    form_check_field_constraints(ctx, el);                        /* step 3.2 */
-                JS_FreeValue(ctx, el);
-                return JS_STEP_YIELD;
-            }
-            submit_walk_end(ctx, s, SUBMIT_FIRE);
+            r = constraint_validation_interactively_run(ctx, &s->hdr, &s->validation, s->hdr.this_val,
+                                                        cb_result, &positive, out_cb, out_argc);
+            cb_result = JS_UNDEFINED;
+            if (r > 0) return r;
+            if (r < 0) return JS_STEP_ABRUPT;
+            constraint_validation_release(ctx, &s->validation);
+            if (!positive) return JS_STEP_DONE;
+            s->hdr.stage = SUBMIT_FIRE;
         }
     }
     if (s->hdr.stage == SUBMIT_FIRE) {
@@ -1378,8 +1329,8 @@ JSValue html_form_checkbox_value(JSContext *ctx, JSValueConst wrap)
 FormFieldKind html_form_field_kind(JSContext *ctx, JSValueConst wrap)
 {
     lxb_dom_node_t *n = node_of(wrap);
-    size_t tlen = 0, nlen = 0;
-    const char *t;
+    size_t nlen = 0;
+    HtmlInputState st;
 
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return FORM_FIELD_OTHER;
     if (tag_is(n, "select")) return FORM_FIELD_SELECT;
@@ -1388,11 +1339,11 @@ FormFieldKind html_form_field_kind(JSContext *ctx, JSValueConst wrap)
            the chain, which costs nothing: nothing else can answer true for it. */
         return custom_elements_is_form_associated(ctx, wrap) ? FORM_FIELD_FACE : FORM_FIELD_OTHER;
     }
-    t = attr_of(lxb_dom_interface_element(n), "type", &tlen);
-    if (ascii_ci_is(t, tlen, "image")) return FORM_FIELD_IMAGE_BUTTON;
-    if (ascii_ci_is(t, tlen, "checkbox") || ascii_ci_is(t, tlen, "radio")) return FORM_FIELD_CHECKBOX;
-    if (ascii_ci_is(t, tlen, "file")) return FORM_FIELD_FILE;
-    if (ascii_ci_is(t, tlen, "hidden")) {
+    st = html_form_input_state(n);
+    if (st == INPUT_STATE_IMAGE) return FORM_FIELD_IMAGE_BUTTON;
+    if (st == INPUT_STATE_CHECKBOX || st == INPUT_STATE_RADIO) return FORM_FIELD_CHECKBOX;
+    if (st == INPUT_STATE_FILE) return FORM_FIELD_FILE;
+    if (st == INPUT_STATE_HIDDEN) {
         const char *name = attr_of(lxb_dom_interface_element(n), "name", &nlen);
         if (ascii_ci_is(name, nlen, "_charset_")) return FORM_FIELD_CHARSET;
     }
@@ -1415,38 +1366,28 @@ bool html_form_has_datalist_ancestor(JSValueConst wrap)
    uses of one list, and a second copy of it is the second answer that is always subtly wrong. */
 bool html_form_is_auto_directionality_face(const lxb_dom_node_t *n)
 {
-    size_t tlen = 0;
-    const char *t;
+    HtmlInputState st;
 
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
     if (tag_is((lxb_dom_node_t *)n, "textarea")) return true;
-    if (!tag_is((lxb_dom_node_t *)n, "input")) return false;
-    t = attr_of(lxb_dom_interface_element((lxb_dom_node_t *)n), "type", &tlen);
-    /* The TEXT state is the missing-value AND invalid-value default, so an absent or unknown `type` is in it —
-       which is why an unrecognised keyword answers true here rather than false. */
-    if (!t || !tlen) return true;
-    return ascii_ci_is(t, tlen, "hidden") || ascii_ci_is(t, tlen, "text") || ascii_ci_is(t, tlen, "search") ||
-           ascii_ci_is(t, tlen, "tel") || ascii_ci_is(t, tlen, "url") || ascii_ci_is(t, tlen, "email") ||
-           ascii_ci_is(t, tlen, "password") || ascii_ci_is(t, tlen, "submit") ||
-           ascii_ci_is(t, tlen, "reset") || ascii_ci_is(t, tlen, "button") ||
-           !(ascii_ci_is(t, tlen, "checkbox") || ascii_ci_is(t, tlen, "radio") ||
-             ascii_ci_is(t, tlen, "file") || ascii_ci_is(t, tlen, "image") ||
-             ascii_ci_is(t, tlen, "date") || ascii_ci_is(t, tlen, "month") ||
-             ascii_ci_is(t, tlen, "week") || ascii_ci_is(t, tlen, "time") ||
-             ascii_ci_is(t, tlen, "datetime-local") || ascii_ci_is(t, tlen, "number") ||
-             ascii_ci_is(t, tlen, "range") || ascii_ci_is(t, tlen, "color"));
+    st = html_form_input_state(n);
+    /* The TEXT state is the missing-value AND invalid-value default, so an absent or unrecognised `type` is in
+       it — which is why an unknown keyword answers true here rather than false. */
+    switch (st) {
+    case INPUT_STATE_HIDDEN: case INPUT_STATE_TEXT: case INPUT_STATE_SEARCH: case INPUT_STATE_TEL:
+    case INPUT_STATE_URL: case INPUT_STATE_EMAIL: case INPUT_STATE_PASSWORD: case INPUT_STATE_SUBMIT:
+    case INPUT_STATE_RESET: case INPUT_STATE_BUTTON:
+        return true;
+    default:
+        return false;
+    }
 }
 
 /* §3.2.6's ONE type-specific Undefined case: an `input` in the TELEPHONE state is 'ltr' whatever surrounds it,
    because a phone number is read left to right in every script. */
 bool html_form_is_telephone_input(const lxb_dom_node_t *n)
 {
-    size_t tlen = 0;
-    const char *t;
-
-    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT || !tag_is((lxb_dom_node_t *)n, "input")) return false;
-    t = attr_of(lxb_dom_interface_element((lxb_dom_node_t *)n), "type", &tlen);
-    return ascii_ci_is(t, tlen, "tel");
+    return html_form_input_state(n) == INPUT_STATE_TEL;
 }
 
 bool html_form_needs_dirname_entry(JSValueConst wrap)
@@ -1532,6 +1473,33 @@ static long select_display_size(lxb_dom_element_t *sel)
     return r;
 }
 
+JSValue html_form_placeholder_label_option(JSContext *ctx, JSValueConst select)
+{
+    lxb_dom_node_t *n = node_of(select);
+    lxb_dom_element_t *sel = n ? lxb_dom_interface_element(n) : NULL;
+    JSValue list, first, value, r = JS_NULL;
+    size_t vlen = 0;
+    const char *v;
+
+    /* §4.10.7's three conditions, in the order it states them: `required` is specified, the display size is 1,
+       and the FIRST option in the list of options has the empty string as its value and the select — not an
+       optgroup — as its parent. */
+    if (!sel || !has_attr(sel, "required") || select_display_size(sel) != 1) return JS_NULL;
+    list = select_option_list(ctx, n);
+    if (js_array_len(ctx, list) == 0) { JS_FreeValue(ctx, list); return JS_NULL; }
+    first = JS_GetPropertyUint32(ctx, list, 0);
+    JS_FreeValue(ctx, list);
+    if (node_of(first) && node_of(first)->parent == n) {
+        value = html_form_control_value(ctx, first);
+        v = JS_ToCStringLen(ctx, &vlen, value);
+        if (v && !vlen) r = JS_DupValue(ctx, first);
+        if (v) JS_FreeCString(ctx, v);
+        JS_FreeValue(ctx, value);
+    }
+    JS_FreeValue(ctx, first);
+    return r;
+}
+
 JSValue html_form_selected_options(JSContext *ctx, JSValueConst select)
 {
     lxb_dom_node_t *n = node_of(select);
@@ -1609,6 +1577,9 @@ void html_form_declare(JSContext *ctx)
     submit_event_init(ctx);
     form_data_event_init(ctx);
     form_entry_list_declare(ctx);
+    /* §4.10.21's constraint validation, declared from here for the same reason: its members go on the control
+       interfaces §4.10 owns the prototypes of, and step 5.4 above is its caller. */
+    constraint_validation_declare(ctx);
     /* BOTH submission members register their own step definition rather than declaring arguments to the args
        machine, so both install through the installer for that kind — see idl_install_step_method. `submit()`
        is one because §4.10.22.4's `formdata` event is the page's code and it runs on that path too. */
@@ -1632,6 +1603,7 @@ void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst inp
     idl_install_accessor(ctx, textarea_proto, "value", js_ctrl_get_value, CTRL_TEXTAREA, g_id_val_textarea);
     idl_install_accessor(ctx, option_proto, "value", js_ctrl_get_value, CTRL_OPTION, g_id_val_option);
     idl_install_accessor(ctx, input_proto, "checked", js_ctrl_get_checked, 0, g_id_checked);
+    constraint_validation_install(ctx, input_proto, textarea_proto);
 }
 
 void html_form_free(JSContext *ctx)
@@ -1639,6 +1611,7 @@ void html_form_free(JSContext *ctx)
     submit_event_free(ctx);
     form_data_event_free(ctx);
     form_entry_list_free(ctx);
+    constraint_validation_free(ctx);
     /* The slot keys are the AGENT's, so they are released with the agent — a Symbol nobody frees is a live GC
        object the runtime's own walk counts as a leak. */
     JS_FreeAtom(ctx, g_atom_owner);
