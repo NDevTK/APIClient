@@ -68,6 +68,7 @@
 #include "core/events/event_target.h"
 #include "core/html/custom_elements.h"
 #include "core/html/element_internals.h"
+#include "core/html/constraint_validation.h"
 #include "core/html/html_element.h"
 #include "core/html/form_data.h"
 #include "core/html/html_form.h"
@@ -109,27 +110,20 @@ static JSAtom g_atom_custom = JS_ATOM_NULL;   /* §4.10.21.1's custom validity e
 
 #define EI_SLOT_FLAGS (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE)
 
-/* ---- §4.10.21.1's VALIDITY STATES, as one X-list expanded three times ---------------------------------------
+/* ---- §4.10.21.1's VALIDITY STATES ----------------------------------------------------------------------------
  * The bit each flag occupies, the `ValidityStateFlags` dictionary member `setValidity` reads it from, and the
- * `ValidityState` attribute that reports it are ONE list: three hand-written lists is how `tooShort` ends up
- * set by a dictionary member named `tooLong`. The DICTIONARY's own order is not this one — Web IDL §3.2.18
- * reads a dictionary's members lexicographically and a page's getter sees it — so that list is stated
- * separately below and is checked against this one. */
-#define VALIDITY_FLAGS(X) \
-    X(VF_VALUE_MISSING,    "valueMissing") \
-    X(VF_TYPE_MISMATCH,    "typeMismatch") \
-    X(VF_PATTERN_MISMATCH, "patternMismatch") \
-    X(VF_TOO_LONG,         "tooLong") \
-    X(VF_TOO_SHORT,        "tooShort") \
-    X(VF_RANGE_UNDERFLOW,  "rangeUnderflow") \
-    X(VF_RANGE_OVERFLOW,   "rangeOverflow") \
-    X(VF_STEP_MISMATCH,    "stepMismatch") \
-    X(VF_BAD_INPUT,        "badInput") \
-    X(VF_CUSTOM_ERROR,     "customError")
-#define VF_ID(id, name)   id,
-#define VF_NAME(id, name) name,
-enum { VALIDITY_FLAGS(VF_ID) VF_COUNT };
-static const char *const VALIDITY_FLAG_NAMES[VF_COUNT] = { VALIDITY_FLAGS(VF_NAME) };
+ * `ValidityState` attribute that reports it are ONE list: hand-written lists is how `tooShort` ends up set by a
+ * dictionary member named `tooLong`. The DICTIONARY's own order is not this one — Web IDL §3.2.18 reads a
+ * dictionary's members lexicographically and a page's getter sees it — so that list is stated separately below
+ * and is checked against this one.
+ * THE LIST ITSELF IS constraint_validation.h's, and this file's copy of it is deleted. §4.10.21.1 defines the
+ * ten states once; a form-associated custom element's flags are WRITTEN here by setValidity and READ there by
+ * "statically validate the constraints", so two spellings of the same ten bits would let one component set the
+ * bit another reads as a different state — the exact failure the one-list comment above describes, one file
+ * further out. */
+static const char *const VALIDITY_FLAG_NAMES[CV_STATE_COUNT] = {
+    CONSTRAINT_VALIDATION_STATES(CV_STATE_NAME)
+};
 
 /* ---- the records -------------------------------------------------------------------------------------------
  * Every one of these reads or creates an own slot on a wrapper. Nothing here runs the page's code: the objects
@@ -179,6 +173,24 @@ static uint32_t ei_flags_of(JSContext *ctx, JSValueConst el)
     JS_FreeValue(ctx, v);
     JS_FreeValue(ctx, rec);
     return (uint32_t)bits;
+}
+
+/* §4.10.21.2's READER for a form-associated custom element's validity — the flags §4.13.7.3's `setValidity`
+ * wrote, in the SAME CV_* bits constraint_validation.h declares, so "statically validate the constraints" can
+ * ask a FACE the question it asks every other control.
+ *
+ * ONE FUNCTION, NOT TWO. The caller asked for a second — "does it have a custom error" — and that answer is
+ * already the CV_CUSTOM_ERROR bit of this one; what is NOT derivable from the bits is §4.10.21.1's validation
+ * MESSAGE, which is the string setValidity was given. Nothing reads that message yet (`validationMessage` is
+ * absent for built-in controls too), so the reader for it is not written here: an exported accessor with no
+ * caller is a shape nothing exercises, and it would arrive with a guess about what its answer should be for an
+ * element setValidity never touched.
+ * An element with no record answers the way the algorithm does: no record is no setValidity call, which is no
+ * flags. `el` is the ELEMENT, not its ElementInternals — the flags are the element's state, which is why
+ * setValidity writes them through its target rather than onto itself. */
+uint32_t element_internals_validity_flags(JSContext *ctx, JSValueConst el)
+{
+    return ei_flags_of(ctx, el);
 }
 
 /* The element THIS ElementInternals is for — §4.13.7.1's target element, and the brand test in one. An object
@@ -376,10 +388,10 @@ static JSValue js_validity_get(JSContext *ctx, JSValueConst this_val, int magic)
     }
     bits = ei_flags_of(ctx, el);
     JS_FreeValue(ctx, el);
-    /* magic VF_COUNT is `valid`: "none of the other conditions are true", which is the whole of §4.10.21.1's
+    /* magic CV_STATE_COUNT is `valid`: "none of the other conditions are true", which is the whole of §4.10.21.1's
        "an element satisfies its constraints if it is not suffering from any of the above validity states". */
-    if (magic == VF_COUNT) return JS_NewBool(ctx, bits == 0);
-    DCHECK(magic >= 0 && magic < VF_COUNT, "a ValidityState attribute ran with a magic §4.10.21.1 does not name");
+    if (magic == CV_STATE_COUNT) return JS_NewBool(ctx, bits == 0);
+    DCHECK(magic >= 0 && magic < CV_STATE_COUNT, "a ValidityState attribute ran with a magic §4.10.21.1 does not name");
     return JS_NewBool(ctx, (bits & (1u << magic)) != 0);
 }
 
@@ -532,7 +544,7 @@ static JSValue js_internals_set_validity(JSContext *ctx, JSValueConst this_val, 
     if (!JS_IsObject(el)) return JS_EXCEPTION;
     /* Step 4, read before step 3 needs it: "for each entry flag -> value of flags, set element's validity flag
        with the name flag to value". The dictionary is engine-built by now, so this reads no page code. */
-    for (i = 0; i < VF_COUNT; i++)
+    for (i = 0; i < CV_STATE_COUNT; i++)
         if (idl_dict_bool(ctx, flags, VALIDITY_FLAG_NAMES[i])) bits |= 1u << i;
     /* Step 3: one or more true flags with no message — or the empty string — is a TypeError, and it is thrown
        BEFORE any flag is written. */
@@ -561,8 +573,8 @@ static JSValue js_internals_set_validity(JSContext *ctx, JSValueConst this_val, 
         JSValue msg = JS_GetProperty(ctx, rec, g_atom_message);
 
         JS_SetProperty(ctx, rec, g_atom_custom,
-                       (bits & (1u << VF_CUSTOM_ERROR)) ? msg : JS_NewStringLen(ctx, "", 0));
-        if (!(bits & (1u << VF_CUSTOM_ERROR))) JS_FreeValue(ctx, msg);
+                       (bits & (1u << CV_CUSTOM_ERROR)) ? msg : JS_NewStringLen(ctx, "", 0));
+        if (!(bits & (1u << CV_CUSTOM_ERROR))) JS_FreeValue(ctx, msg);
     }
     /* Steps 7-9: an omitted anchor is the element itself; a given one must be a SHADOW-INCLUDING inclusive
        descendant of it — which is the whole point of the member, because a form-associated custom element's
@@ -989,11 +1001,11 @@ void element_internals_declare(JSContext *ctx)
        §4.10.21.1's order and the dictionary in Web IDL's lexicographic one, so neither can be derived from the
        other by ordering — but they must name the SAME ten members, and a member in one and not the other is a
        flag `setValidity` can never set or a dictionary key that silently does nothing. */
-    CHECK((int)(sizeof(EI_VALIDITY_FLAGS) / sizeof(EI_VALIDITY_FLAGS[0])) == VF_COUNT,
+    CHECK((int)(sizeof(EI_VALIDITY_FLAGS) / sizeof(EI_VALIDITY_FLAGS[0])) == CV_STATE_COUNT,
           "ValidityStateFlags declares a different number of members than §4.10.21.1 has validity flags");
-    for (i = 0; i < VF_COUNT; i++) {
+    for (i = 0; i < CV_STATE_COUNT; i++) {
         int j, seen = 0;
-        for (j = 0; j < VF_COUNT; j++)
+        for (j = 0; j < CV_STATE_COUNT; j++)
             if (!strcmp(EI_VALIDITY_FLAGS[j].name, VALIDITY_FLAG_NAMES[i])) seen++;
         DCHECK(seen == 1, "a §4.10.21.1 validity flag is named by no ValidityStateFlags member, or by two — "
                           "the bit it sets and the dictionary key that sets it are one member of one type");
@@ -1061,9 +1073,9 @@ static void element_internals_install_protos(JSContext *ctx)
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "ValidityState.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "ValidityState");
-    for (i = 0; i < VF_COUNT; i++)
+    for (i = 0; i < CV_STATE_COUNT; i++)
         idl_install_accessor(ctx, proto, VALIDITY_FLAG_NAMES[i], js_validity_get, i, -1);
-    idl_install_accessor(ctx, proto, "valid", js_validity_get, VF_COUNT, -1);
+    idl_install_accessor(ctx, proto, "valid", js_validity_get, CV_STATE_COUNT, -1);
     JS_SetClassProto(ctx, g_validity_class, proto);
 }
 

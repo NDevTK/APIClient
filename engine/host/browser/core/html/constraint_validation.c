@@ -36,6 +36,7 @@
 #include "core/events/event_target.h"
 #include "core/html/constraint_validation.h"
 #include "core/html/custom_elements.h"
+#include "core/html/element_internals.h"
 #include "core/html/html_form.h"
 #include "core/idl_args.h"
 #include "core/url/url.h"
@@ -663,13 +664,13 @@ static uint32_t cv_states(JSContext *ctx, JSValueConst wrap, const CvValue *v, i
 
     *punknown_bit = -1;
     *pneed_pattern = false;
+    /* §4.10.21.2 STEP 3.2 FOR A FORM-ASSOCIATED CUSTOM ELEMENT: its validity is not computed from attributes
+       at all — it is exactly what §4.13.7.3's `setValidity` wrote, so this answers from those bits and asks
+       none of the questions below. The bits are the SAME ten constraint_validation.h declares, which is why
+       element_internals.c now expands that list instead of its own copy: two spellings would let setValidity
+       set the bit this reads as a different state. */
     if (custom_elements_is_form_associated(ctx, wrap))
-        DFAIL("a form-associated custom element reached §4.10.21.2 step 3.2 — its validity flags are the ones "
-              "§4.13.7.3's setValidity wrote onto its ElementInternals, and element_internals.h exports no "
-              "reader for them; add `uint32_t element_internals_validity_flags(JSContext *ctx, JSValueConst "
-              "wrap)` over the same CV_* bits constraint_validation.h declares, plus "
-              "`bool element_internals_has_custom_error(JSContext *ctx, JSValueConst wrap)` for §4.10.21.1's "
-              "custom validity error message, and answer this element from those two");
+        return element_internals_validity_flags(ctx, wrap);
     if (cv_suffering_custom_error(ctx, wrap)) flags |= 1u << CV_CUSTOM_ERROR;
 
     if (cv_tag_is(n, "select")) {

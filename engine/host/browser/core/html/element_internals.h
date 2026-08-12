@@ -3,6 +3,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_ELEMENT_INTERNALS_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_ELEMENT_INTERNALS_H
 #include <stdbool.h>
+#include <stdint.h>
 #include "quickjs.h"
 
 /* Declared ONCE PER AGENT — the classes, the slot keys and the member pool entries — from the same place
@@ -35,5 +36,13 @@ void element_internals_reset_form_owner(JSContext *ctx, JSValueConst wrap,
    FormData)?`, so the caller distinguishes the FormData arm (an entry LIST appended wholesale) from the single
    value; JS_NULL when the element has never been given one. OWNED. */
 JSValue element_internals_submission_value(JSContext *ctx, JSValueConst wrap);
+
+/* §4.10.21.1's VALIDITY FLAGS OF A FORM-ASSOCIATED CUSTOM ELEMENT, in the CV_* bits constraint_validation.h
+   declares — the state §4.13.7.3's `setValidity` wrote, read by "statically validate the constraints" so a
+   FACE answers the same question every other control does. `el` is the ELEMENT, not its ElementInternals.
+   "Does it suffer a custom error" is the CV_CUSTOM_ERROR bit of this answer and needs no second entry. What is
+   not derivable from the bits is §4.10.21.1's validation MESSAGE — the string setValidity was given — and
+   nothing reads that yet, so no accessor for it is exported. */
+uint32_t element_internals_validity_flags(JSContext *ctx, JSValueConst el);
 
 #endif
