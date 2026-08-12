@@ -25,6 +25,7 @@
 #include "quickjs-step.h"
 #include "solver/endpoint.h"
 #include "core/fetch/fetch.h"
+#include "core/fetch/data_url.h"
 #include "core/file/blob.h"
 #include "core/frame/location.h"
 #include "core/dom/document.h"
@@ -271,6 +272,21 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
     return o;
 }
 
+/* SETTLING A SCHEME §4.3 ANSWERED LOCALLY. `data:` and `blob:` both produce their whole response inside this
+   agent, and both settle the same way: through a FLOW, because resolving reads `then` off the Response and the
+   page owns that prototype. One implementation, because the two arms differ in what they build and in nothing
+   at all about how it is delivered. `value` is consumed. */
+static void fetch_settle_local(JSContext *ctx, JSValue *resolving, JSValue value, int reject)
+{
+    if (JS_IsException(value))
+        return;
+    if (JS_CallAsFlow(ctx, resolving[reject], value) < 0) {
+        JSValue exc = JS_GetException(ctx);
+        JS_FreeValue(ctx, exc);   /* the page's own handler threw; that is its completion, not this call's */
+    }
+    JS_FreeValue(ctx, value);
+}
+
 static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method, JSValueConst input,
                           const HeaderList *hdrs, const char *body, size_t body_len)
 {
@@ -294,57 +310,91 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
     } else {
         u = JS_ToCString(ctx, url);
     }
-    if (u && !strncmp(u, "blob:", 5)) {
-        /* §5: a `blob:` URL is answered from the BLOB URL STORE, not from the network — the whole point of
-           `URL.createObjectURL` is that the bytes are already here. The FRAGMENT is stripped before the lookup,
-           because a fragment names a place within a resource and not a different entry.
-           The settle goes through a FLOW like every other delivery: resolving reads `then` off the Response,
-           which the page can own. */
+    if (u) {
+        /* §4.3 SCHEME FETCH: "Switch on request's current URL's scheme". The scheme is what the URL PARSER
+           says it is and not what the string starts with, so the URL is parsed ONCE here and every arm below
+           reads that record — which is also what lets §6 have the parsed URL it asserts on. A relative
+           reference with no base is the one input the parse refuses, and it names no scheme, so it is none of
+           the local arms and belongs to the trusted host below. */
         UrlRecord rec;
-        char *key = fetch_parse_url(ctx, &rec, u, strlen(u)) ? url_serialize(&rec, true) : NULL;
-        /* §5.3's CAPTURED ENTRY FIRST: a Request resolved its blob URL when it was built, so a page that
-           revoked the URL afterwards still fetches. The store is consulted only for a URL STRING, which has
-           nothing to have captured. */
-        JSValueConst captured = request_blob_entry(input);
-        JSValueConst blob = !JS_IsUndefined(captured) ? captured
-                          : (key ? blob_url_lookup(key, strlen(key)) : JS_UNDEFINED);
-        JSValue value;
-        int reject = 0;
-        /* §5: a blob fetch whose method is not GET is a NETWORK ERROR before the store is consulted. A blob URL
-           names bytes that are already here; there is nothing for a POST or a DELETE to mean. */
-        if (!JS_IsUndefined(method) && !JS_IsUndefined(blob)) {
-            const char *m = JS_ToCString(ctx, method);
-            if (m && strcmp(m, "GET")) blob = JS_UNDEFINED;
-            if (m) JS_FreeCString(ctx, m);
-        }
+        const char *scheme;
 
-        url_record_free(&rec);
-        free(key);
-        if (JS_IsUndefined(blob)) {
-            /* §5: no entry is a NETWORK ERROR, which `fetch` rejects with a TypeError. */
-            JS_ThrowTypeError(ctx, "Failed to fetch");
-            value = JS_GetException(ctx);
-            reject = 1;
-        } else {
-            size_t blen = 0;
-            const char *btype = NULL;
-            const char *bytes = blob_bytes_of(blob, &blen, &btype);
-            HeaderList bh = { 0 };
-            if (btype && *btype) header_list_append(&bh, "content-type", btype);
-            value = response_new(ctx, u, 200, "OK", btype && *btype ? &bh : NULL, bytes, blen);
-            header_list_free(&bh);
-        }
-        if (!JS_IsException(value)) {
-            if (JS_CallAsFlow(ctx, resolving[reject], value) < 0) {
-                JSValue exc = JS_GetException(ctx);
-                JS_FreeValue(ctx, exc);   /* the page's own handler threw; that is its completion, not this call's */
+        url_record_init(&rec);
+        scheme = fetch_parse_url(ctx, &rec, u, strlen(u)) ? rec.scheme : NULL;
+        if (scheme && !strcmp(scheme, "data")) {
+            /* §4.3's "data" step: §6's processor, and the response it names — status message `OK`, one
+               `Content-Type` header carrying the struct's MIME type SERIALIZED, and the struct's body. There
+               is nothing to request: a `data:` URL that reached the host request path went out as an HTTP GET
+               whose target was the MIME type and whose `Host:` was empty. */
+            DataUrlStruct ds;
+            JSValue value;
+            int reject = 0;
+
+            if (data_url_process(&rec, &ds)) {
+                char *ct = mime_type_serialize(&ds.mime);
+                HeaderList dh = { 0 };
+                header_list_append(&dh, "content-type", ct);
+                value = response_new(ctx, u, 200, "OK", &dh, ds.body, ds.body_len);
+                header_list_free(&dh);
+                free(ct);
+                data_url_struct_free(&ds);
+            } else {
+                /* §4.3: the processor's failure is a NETWORK ERROR, which `fetch` rejects with a TypeError. */
+                JS_ThrowTypeError(ctx, "Failed to fetch");
+                value = JS_GetException(ctx);
+                reject = 1;
             }
-            JS_FreeValue(ctx, value);
+            url_record_free(&rec);
+            fetch_settle_local(ctx, resolving, value, reject);
+            JS_FreeCString(ctx, u);
+            JS_FreeValue(ctx, resolving[0]);
+            JS_FreeValue(ctx, resolving[1]);
+            return promise;
         }
-        JS_FreeCString(ctx, u);
-        JS_FreeValue(ctx, resolving[0]);
-        JS_FreeValue(ctx, resolving[1]);
-        return promise;
+        if (scheme && !strcmp(scheme, "blob")) {
+            /* §4.3's "blob" step: answered from the BLOB URL STORE, not from the network — the whole point of
+               `URL.createObjectURL` is that the bytes are already here. The FRAGMENT is stripped before the
+               lookup, because a fragment names a place within a resource and not a different entry. */
+            char *key = url_serialize(&rec, /*exclude_fragment*/ true);
+            /* §5.3's CAPTURED ENTRY FIRST: a Request resolved its blob URL when it was built, so a page that
+               revoked the URL afterwards still fetches. The store is consulted only for a URL STRING, which has
+               nothing to have captured. */
+            JSValueConst captured = request_blob_entry(input);
+            JSValueConst blob = !JS_IsUndefined(captured) ? captured
+                              : (key ? blob_url_lookup(key, strlen(key)) : JS_UNDEFINED);
+            JSValue value;
+            int reject = 0;
+            /* §4.3: a blob fetch whose method is not GET is a NETWORK ERROR before the store is consulted. A
+               blob URL names bytes that are already here; there is nothing for a POST or a DELETE to mean. */
+            if (!JS_IsUndefined(method) && !JS_IsUndefined(blob)) {
+                const char *m = JS_ToCString(ctx, method);
+                if (m && strcmp(m, "GET")) blob = JS_UNDEFINED;
+                if (m) JS_FreeCString(ctx, m);
+            }
+
+            url_record_free(&rec);
+            free(key);
+            if (JS_IsUndefined(blob)) {
+                /* §4.3: no entry is a NETWORK ERROR, which `fetch` rejects with a TypeError. */
+                JS_ThrowTypeError(ctx, "Failed to fetch");
+                value = JS_GetException(ctx);
+                reject = 1;
+            } else {
+                size_t blen = 0;
+                const char *btype = NULL;
+                const char *bytes = blob_bytes_of(blob, &blen, &btype);
+                HeaderList bh = { 0 };
+                if (btype && *btype) header_list_append(&bh, "content-type", btype);
+                value = response_new(ctx, u, 200, "OK", btype && *btype ? &bh : NULL, bytes, blen);
+                header_list_free(&bh);
+            }
+            fetch_settle_local(ctx, resolving, value, reject);
+            JS_FreeCString(ctx, u);
+            JS_FreeValue(ctx, resolving[0]);
+            JS_FreeValue(ctx, resolving[1]);
+            return promise;
+        }
+        url_record_free(&rec);
     }
     if (u) {
         JSValue uv = JS_NewString(ctx, u);

@@ -59,11 +59,13 @@
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/fetch/body.h"
+#include "core/fetch/data_url.h"
 #include "core/fetch/fetch.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/request.h"
 #include "core/file/blob.h"
 #include "core/html/form_data.h"
+#include "core/mime/mime_type.h"
 #include "core/url/url.h"
 #include "core/url/url_search_params.h"
 #include "core/xhr/progress_event.h"
@@ -298,130 +300,97 @@ static void hl_to_header_list(JSContext *ctx, JSValueConst arr, HeaderList *out)
     }
 }
 
-/* ---- MIME, as far as §3.6.6 needs it ------------------------------------------------------------------------
+/* ---- §3.6.6's four MIME operations, over MIME Sniffing §4's RECORD ------------------------------------------
  *
- * Fetch §4.4's "parse a MIME type" produces a type, a subtype and a parameter map; §3.6.6 reads exactly two
- * things out of one — the ESSENCE (`type/subtype`, lowercased) and `parameters["charset"]`. Those two are what
- * is implemented here, and the limit is stated rather than hidden: a component that needs the whole record —
- * `Blob.type`, a multipart boundary — must not reach for these. */
+ * There were two functions here — a `mime_essence` that cut the string at the first ';' and a `mime_charset`
+ * that walked for a `charset=` — with a comment naming their own limit. The limit is now a component:
+ * core/mime/mime_type.c is §4.4's parser, §4.5's serializer and §4.6's groups, and Fetch §6's data: URL
+ * processor needed the same record, which is exactly the second caller that comment forbade.
+ *
+ * WHAT THE STANDARD SAYS THESE RETURN IS A RECORD, NOT AN ESSENCE, and the difference is observable at three
+ * of the four: "get a final MIME type" is what the blob arm gives `Blob.type` (its `charset` belongs there),
+ * "get a final encoding" reads `parameters["charset"]` off two records, and `overrideMimeType()` stores one.
+ *
+ * THE OVERRIDE MIME TYPE IS HELD AS ITS §4.5 SERIALIZATION, not as a C record. Every field of an
+ * XMLHttpRequest a flow can change is a JSValue so the COW delta captures it (see this file's head comment); a
+ * malloc'd record on the data would be state no delta can park and no session can resume. The write parses and
+ * stores the serialization — which is where §3.6.8 puts the failure substitution — and each read parses it
+ * back, §4.4 and §4.5 being inverses over a parsed record. */
 
-static char *mime_essence(const char *ct)
+/* The standard names a LITERAL MIME type as a substitute in three places (§3.6.6's text/xml, §3.6.8's
+   application/octet-stream, and the stored-override recovery below). Building the record by PARSING the
+   literal is what keeps one way of making a record; a hand-assembled one would be a second. */
+static void xhr_mime_literal(MimeType *out, const char *literal)
 {
-    size_t i = 0, end, k;
-    char *out;
+    bool ok;
 
-    if (!ct) return NULL;
-    while (ct[i] == ' ' || ct[i] == '\t') i++;
-    end = i;
-    while (ct[end] && ct[end] != ';') end++;
-    while (end > i && (ct[end - 1] == ' ' || ct[end - 1] == '\t')) end--;
-    /* Fetch §4.4: a MIME type with no `/`, or an empty type or subtype, is a parse FAILURE — which is the
-       answer §3.6.6 turns into `text/xml` and §3.6.7 turns into `application/octet-stream`. */
-    if (end == i) return NULL;
-    out = malloc(end - i + 1);
-    CHECK(out != NULL, "XMLHttpRequest: OOM taking a MIME essence");
-    for (k = 0; i < end; i++, k++)
-        out[k] = (ct[i] >= 'A' && ct[i] <= 'Z') ? (char)(ct[i] - 'A' + 'a') : ct[i];
-    out[k] = 0;
-    {
-        char *slash = strchr(out, '/');
-        if (!slash || slash == out || !slash[1]) { free(out); return NULL; }
+    mime_type_free(out);
+    ok = mime_type_parse(out, literal, strlen(literal));
+    DCHECK(ok, "a MIME type literal the standard names as a substitute did not parse — §4.4 accepts every one "
+               "of them, so a failure here is this engine's parser disagreeing with the standard");
+    (void)ok;
+}
+
+/* The record a stored serialization names. */
+static void xhr_mime_stored(MimeType *out, const char *serialized)
+{
+    if (!mime_type_parse(out, serialized, strlen(serialized))) {
+        DFAIL("a stored MIME type serialization did not parse back to a record — §4.4 and §4.5 are inverses "
+              "over a parsed record, and the only strings stored here are ones §4.5 produced");
+        xhr_mime_literal(out, "application/octet-stream");
     }
-    return out;
 }
 
-/* §3.6.6's `parameters["charset"]`, or NULL. Quoted or a token. Caller frees. */
-static char *mime_charset(const char *ct)
-{
-    const char *p = ct;
-
-    if (!ct) return NULL;
-    while ((p = strchr(p, ';')) != NULL) {
-        const char *q = p + 1, *e;
-        char *out;
-        size_t n;
-        while (*q == ' ' || *q == '\t') q++;
-        if (strncmp(q, "charset", 7) != 0) { p++; continue; }
-        q += 7;
-        while (*q == ' ' || *q == '\t') q++;
-        if (*q != '=') { p++; continue; }
-        q++;
-        while (*q == ' ' || *q == '\t') q++;
-        if (*q == '"') {
-            q++;
-            e = q;
-            while (*e && *e != '"') e++;
-        } else {
-            e = q;
-            while (*e && *e != ';' && *e != ' ' && *e != '\t') e++;
-        }
-        n = (size_t)(e - q);
-        out = malloc(n + 1);
-        CHECK(out != NULL, "XMLHttpRequest: OOM taking a MIME charset");
-        memcpy(out, q, n);
-        out[n] = 0;
-        return out;
-    }
-    return NULL;
-}
-
-static bool mime_is_html(const char *essence)
-{
-    return essence && !strcmp(essence, "text/html");
-}
-
-/* MIME Sniffing §4.6 "an XML MIME type": subtype ending in `+xml`, or `text/xml`/`application/xml`. */
-static bool mime_is_xml(const char *essence)
-{
-    size_t n;
-
-    if (!essence) return false;
-    if (!strcmp(essence, "text/xml") || !strcmp(essence, "application/xml")) return true;
-    n = strlen(essence);
-    return n > 4 && !strcmp(essence + n - 4, "+xml");
-}
-
-/* §3.6.6 "get a response MIME type": the response's Content-Type, or `text/xml` when there is none. Caller
-   frees. */
-static char *xhr_response_mime(JSContext *ctx, XhrData *d)
+/* §3.6.6 "get a response MIME type": Fetch §2.2.3's "extract a MIME type" over the response's header list, and
+   `text/xml` when that is failure. `out` always ends holding a record. */
+static void xhr_response_mime(JSContext *ctx, XhrData *d, MimeType *out)
 {
     char *ct = hl_get(ctx, d->response_headers, "content-type");
-    char *ess = mime_essence(ct);
+    bool ok = mime_type_extract(out, ct);
+
     free(ct);
-    if (!ess) { ess = strdup("text/xml"); CHECK(ess != NULL, "XMLHttpRequest: OOM naming the default MIME"); }
-    return ess;
+    if (!ok) xhr_mime_literal(out, "text/xml");
 }
 
-/* §3.6.6 "get a final MIME type": the override MIME type if there is one, else the response's. Caller frees. */
-static char *xhr_final_mime(JSContext *ctx, XhrData *d)
+/* §3.6.6 "get a final MIME type": the override MIME type if there is one, else the response's. */
+static void xhr_final_mime(JSContext *ctx, XhrData *d, MimeType *out)
 {
+    mime_type_init(out);
     if (!JS_IsNull(d->override_mime)) {
         const char *s = JS_ToCString(ctx, d->override_mime);
-        char *ess = mime_essence(s);
-        if (s) JS_FreeCString(ctx, s);
-        if (ess) return ess;
+        CHECK(s != NULL, "XMLHttpRequest: OOM reading the override MIME type back");
+        xhr_mime_stored(out, s);
+        JS_FreeCString(ctx, s);
+        return;
     }
-    return xhr_response_mime(ctx, d);
+    xhr_response_mime(ctx, d, out);
 }
 
-/* §3.6.6 "get a final encoding": the response MIME type's charset, overridden by the override MIME type's, and
-   `null` (returned as -1) when neither names one or the label is not an encoding. */
+/* §3.6.6 "get a final encoding": the RESPONSE MIME type's charset, overridden by the OVERRIDE MIME type's, and
+   `null` (returned as -1) when neither names one or the label is not an encoding. The standard's own note says
+   this deliberately does not use the final MIME type, "as it would not be web compatible" — so the two records
+   are read separately here rather than through xhr_final_mime. */
 static int xhr_final_encoding(JSContext *ctx, XhrData *d)
 {
-    char *ct = hl_get(ctx, d->response_headers, "content-type");
-    char *label = mime_charset(ct);
-    int enc;
+    MimeType resp, over;
+    const char *label;
+    int enc = -1;
 
-    free(ct);
+    mime_type_init(&over);
+    xhr_response_mime(ctx, d, &resp);
+    label = mime_type_parameter(&resp, "charset");
     if (!JS_IsNull(d->override_mime)) {
         const char *s = JS_ToCString(ctx, d->override_mime);
-        char *ov = mime_charset(s);
-        if (s) JS_FreeCString(ctx, s);
-        if (ov) { free(label); label = ov; }
+        const char *ov;
+        CHECK(s != NULL, "XMLHttpRequest: OOM reading the override MIME type back");
+        xhr_mime_stored(&over, s);
+        JS_FreeCString(ctx, s);
+        ov = mime_type_parameter(&over, "charset");
+        if (ov) label = ov;
     }
-    if (!label) return -1;
-    enc = encoding_lookup(label, strlen(label));
-    free(label);
+    if (label) enc = encoding_lookup(label, strlen(label));
+    mime_type_free(&resp);
+    mime_type_free(&over);
     return enc;
 }
 
@@ -851,7 +820,8 @@ static JSValue js_xhr_override_mime_type(JSContext *ctx, JSValueConst this_val, 
 {
     XhrData *d = xhr_receiver(ctx, this_val);
     const char *mime;
-    char *ess;
+    MimeType m;
+    char *ser;
 
     (void)magic;
     if (!d) return JS_EXCEPTION;
@@ -859,12 +829,17 @@ static JSValue js_xhr_override_mime_type(JSContext *ctx, JSValueConst this_val, 
         return JS_ThrowDOMException(ctx, "InvalidStateError", "overrideMimeType() while loading or done");
     mime = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
     if (!mime) return JS_EXCEPTION;
-    /* Steps 2-3: an unparsable MIME type becomes application/octet-stream. The whole string is kept, not just
-       the essence, because §3.6.6 reads `parameters["charset"]` off it. */
-    ess = mime_essence(mime);
+    /* Steps 2-3: the override MIME type is the result of PARSING the argument, and an unparsable one is
+       application/octet-stream. What is stored is §4.5's serialization of that record — so
+       `overrideMimeType("TEXT/XML; CHARSET=\"Shift_JIS\"")` is held as `text/xml;charset=Shift_JIS`, which is
+       the record and not the argument. It used to keep the argument verbatim and re-split it at every read. */
+    if (!mime_type_parse(&m, mime, strlen(mime)))
+        xhr_mime_literal(&m, "application/octet-stream");
+    ser = mime_type_serialize(&m);
     JS_FreeValue(ctx, d->override_mime);
-    d->override_mime = ess ? JS_NewString(ctx, mime) : JS_NewString(ctx, "application/octet-stream");
-    free(ess);
+    d->override_mime = JS_NewString(ctx, ser);
+    free(ser);
+    mime_type_free(&m);
     JS_FreeCString(ctx, mime);
     return JS_UNDEFINED;
 }
@@ -933,26 +908,38 @@ static JSValue xhr_text_response(JSContext *ctx, XhrData *d)
    navigable, no Window and therefore nothing to run a script in. */
 static void xhr_set_document_response(JSContext *ctx, XhrData *d)
 {
-    char *final_mime;
+    MimeType final_mime;
+    char *content_type;
     const char *bytes;
     size_t len = 0;
     lxb_html_document_t *dom;
     const char *url;
 
     if (d->network_error) return;                        /* step 1: a null body */
-    final_mime = xhr_final_mime(ctx, d);                 /* step 2 */
-    if (!mime_is_html(final_mime) && !mime_is_xml(final_mime)) { free(final_mime); return; }   /* step 3 */
-    if (d->response_type == RT_EMPTY && mime_is_html(final_mime)) { free(final_mime); return; }  /* step 4 */
-    if (!mime_is_html(final_mime)) {
+    xhr_final_mime(ctx, d, &final_mime);                 /* step 2 */
+    if (!mime_type_is_html(&final_mime) && !mime_type_is_xml(&final_mime)) {                     /* step 3 */
+        mime_type_free(&final_mime);
+        return;
+    }
+    if (d->response_type == RT_EMPTY && mime_type_is_html(&final_mime)) {                        /* step 4 */
+        mime_type_free(&final_mime);
+        return;
+    }
+    if (!mime_type_is_html(&final_mime)) {
         /* Step 6's XML arm. lexbor ships no XML parser, so there is nothing here to run — and answering with
            the spec's "the XML parser failed" null would be a claim about a parse that never happened. */
-        free(final_mime);
+        mime_type_free(&final_mime);
         DFAIL("XMLHttpRequest §3.6.6 'set a document response' reached its XML arm — build an XML parser "
               "(lexbor has no xml module; the HTML arm is lxb_html_document_parse) and route this branch to it");
         return;
     }
+    /* Step 10's content type. DOM §4.5 gives a document a content type that is a STRING, and every other place
+       the platform sets one sets an ESSENCE (createDocument's application/xml, DOMParser's own type) — so the
+       essence is what a document holds, and the parameters stay on the record this algorithm read them from. */
+    content_type = mime_type_essence(&final_mime);
+    mime_type_free(&final_mime);
     bytes = JS_ToCStringLen(ctx, &len, d->received);
-    if (!bytes) { free(final_mime); return; }
+    if (!bytes) { free(content_type); return; }
     dom = lxb_html_document_create();
     CHECK(dom != NULL, "XMLHttpRequest: OOM building the response document");
     /* Step 5's charset: the final encoding, then the prescan, then UTF-8. lexbor's parser takes UTF-8 and the
@@ -966,9 +953,9 @@ static void xhr_set_document_response(JSContext *ctx, XhrData *d)
     JS_FreeValue(ctx, d->response_object);
     /* Steps 8-11: the document's encoding, content type, URL and origin. document_new takes the address and
        the content type; the origin is the realm's, which is what a document made in this realm has. */
-    d->response_object = document_new(ctx, dom, url ? url : "", final_mime);
+    d->response_object = document_new(ctx, dom, url ? url : "", content_type);
     if (url) JS_FreeCString(ctx, url);
-    free(final_mime);
+    free(content_type);
 }
 
 /* §3.6.9 the response getter — a STEP GETTER because the "document" arm PARSES, which is work of the page's
@@ -1028,12 +1015,19 @@ static int js_xhr_response_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
     } else if (d->response_type == RT_BLOB) {
         size_t len = 0;
         const char *bytes = JS_ToCStringLen(ctx, &len, d->received);
-        char *mime = xhr_final_mime(ctx, d);
-        if (!bytes) { free(mime); return JS_STEP_ABRUPT; }
+        /* Step 6: "a new Blob object representing this's received bytes with type set to the result of get a
+           final MIME type" — the RECORD, and a Blob's type is a string, so it is §4.5's serialization. The
+           essence alone dropped the `charset` a page reads straight back off `blob.type`. */
+        MimeType m;
+        char *type;
+        xhr_final_mime(ctx, d, &m);
+        type = mime_type_serialize(&m);
+        mime_type_free(&m);
+        if (!bytes) { free(type); return JS_STEP_ABRUPT; }
         JS_FreeValue(ctx, d->response_object);
-        d->response_object = blob_new(ctx, bytes, len, mime ? mime : "");
+        d->response_object = blob_new(ctx, bytes, len, type);
         JS_FreeCString(ctx, bytes);
-        free(mime);
+        free(type);
     } else if (d->response_type == RT_DOCUMENT) {
         xhr_set_document_response(ctx, d);
     } else {
@@ -1338,6 +1332,50 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
     return json_buf_take(&b);
 }
 
+/* Fetch §4.3 SCHEME FETCH, for the request §3.5.6 sends. Returns true when the URL's scheme is one this agent
+   answers ITSELF — the response is already on the record when it does, either as a reply taken or as the
+   network error §3 says the response starts as.
+ *
+ * IT IS THE ROUTING §4.3 IS, not a test that selects a fallback: a `data:` URL has nothing for the trusted
+ * host to request, and it used to be handed to it anyway. The wire then carried
+ * `GET text/xml,<template …> HTTP/1.1` with an empty `Host:` and wptserve answered 400 — a malformed request
+ * to a server that had never heard of the URL, for every `xhr.open("GET", "data:…")` in the corpus.
+ *
+ * THE OTHER SCHEMES ARE ABSENT HERE ON PURPOSE. §4.3's "about" and "blob" arms are reachable from `fetch()`
+ * and not from this component (XHR §3.5.1 has no blob URL entry to capture), and the day one is, it is
+ * another case of this switch rather than another place that decides. */
+static bool xhr_scheme_fetch_local(JSContext *ctx, XhrData *d)
+{
+    const char *u = JS_ToCString(ctx, d->url);
+    UrlRecord rec;
+    DataUrlStruct ds;
+    bool local;
+
+    CHECK(u != NULL, "XMLHttpRequest: OOM reading the request URL back to switch on its scheme");
+    url_record_init(&rec);
+    local = fetch_parse_url(ctx, &rec, u, strlen(u)) && rec.scheme && !strcmp(rec.scheme, "data");
+    JS_FreeCString(ctx, u);
+    if (local && data_url_process(&rec, &ds)) {
+        /* §4.3's "data" step's response, through the ONE reply object every answer to this component takes —
+           status message `OK`, one `Content-Type` carrying the struct's MIME type serialized, and the body. */
+        char *ct = mime_type_serialize(&ds.mime);
+        HeaderList hl = { 0 };
+        JSValue reply;
+
+        header_list_append(&hl, "content-type", ct);
+        reply = fetch_reply_new(ctx, 200, "OK", &hl, ds.body, ds.body_len);
+        xhr_take_reply(ctx, d, reply);
+        JS_FreeValue(ctx, reply);
+        header_list_free(&hl);
+        free(ct);
+        data_url_struct_free(&ds);
+    }
+    /* §6's failure is §4.3's NETWORK ERROR, and §3 already has the response as one — so there is nothing to
+       write for it, and "handle errors" fires the request error steps on the way out. */
+    url_record_free(&rec);
+    return local;
+}
+
 static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSXhrRunState *s = st;
@@ -1356,25 +1394,32 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         s->cb[0] = s->cb[1] = s->cb[2] = s->cb[3] = JS_UNDEFINED;
         s->transmitted = s->length = 0;
         if (mode == XHR_MODE_ERROR) { s->hdr.stage = XR_ERR_BEGIN; goto error_steps; }
-        {
+        /* Fetch §4.3: the scheme decides WHO answers. A scheme this agent answers itself has its response on
+           the record already and owes the host nothing, so the wait below has nothing to wait for. */
+        if (xhr_scheme_fetch_local(ctx, d)) {
+            s->req = 0;
+            s->hdr.stage = XR_WAIT;
+        } else {
             char *op = xhr_request_op(ctx, d);
             if (!op) return JS_STEP_ABRUPT;
             s->req = engine_host_request(ctx, op);
             free(op);
+            s->hdr.stage = XR_WAIT;
+            return JS_STEP_YIELD;   /* the flow is BLOCKED on the answer; siblings run meanwhile */
         }
-        s->hdr.stage = XR_WAIT;
-        return JS_STEP_YIELD;   /* the flow is BLOCKED on the answer; siblings run meanwhile */
     }
 
     if (s->hdr.stage == XR_WAIT) {
         JSValueConst answer = JS_UNDEFINED;
         JS_FreeValue(ctx, in);
         in = JS_UNDEFINED;
-        if (!engine_host_answered(s->req, &answer))
-            return JS_STEP_YIELD;
-        xhr_take_reply(ctx, d, answer);
-        { JSValue taken = engine_host_take(ctx, s->req); JS_FreeValue(ctx, taken); }
-        s->req = 0;
+        if (s->req) {
+            if (!engine_host_answered(s->req, &answer))
+                return JS_STEP_YIELD;
+            xhr_take_reply(ctx, d, answer);
+            { JSValue taken = engine_host_take(ctx, s->req); JS_FreeValue(ctx, taken); }
+            s->req = 0;
+        }
         /* The upload has finished transmitting the moment the request is answered — the host answers a request
            whole, so there are no chunk boundaries between and processRequestBodyChunkLength never runs.
            requestBodyTransmitted therefore equals requestBodyLength exactly once. */

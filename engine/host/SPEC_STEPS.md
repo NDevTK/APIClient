@@ -2816,16 +2816,25 @@ AT_TARGET over the target with both kinds of listener in registration order, bub
 ancestors) and the standard's walk is TWO passes over the whole path. The two shapes agree on every
 example an implementer invents and disagree on the one the corpus asks for directly.
 
-**Network was available.** Everything below was read from the live standard on **2026-08-10**:
+**THE SECOND HALF OF THIS SECTION IS THE PATH ITEM.** The walk above was rebuilt as two passes and
+left one thing behind, named at the time: the path was a list of TARGETS, so every item's `target`
+was `path[0]` and `composedPath()` answered every entry it held. Shadow DOM (§17) landed after it and
+made both wrong — §4.8's get-the-parent now hands the walk a shadow root's HOST and a slottable's
+SLOT, which is precisely where the standard retargets and hides. So the path is a list of ITEMS,
+each carrying its own shadow-adjusted target and two closed-tree booleans, and §11.8-§11.11 below are
+those algorithms.
+
+**Network was available.** §11.1-§11.7 were read from the live standard on **2026-08-10**;
+§11.8-§11.11 on **2026-08-12**:
 
 | Standard | Source | Version read |
 | --- | --- | --- |
-| WHATWG DOM | `https://dom.spec.whatwg.org/` | Living Standard, §2.7, §2.8, §2.9 |
+| WHATWG DOM | `https://dom.spec.whatwg.org/` | Living Standard, §2.7, §2.8, §2.9, §4.2, §4.4 |
 | Web IDL (call a user object's operation) | `https://webidl.spec.whatwg.org/` | Living Standard, §3.12 |
 
 Step numbers are the standard's own list numbering as of that date.
 
-### 11.0 Four things the live text says that a reasonable person would remember differently
+### 11.0 Six things the live text says that a reasonable person would remember differently
 
 1. **At the target, a CAPTURING listener runs before a bubbling one however they were registered.**
    There is no "AT_TARGET phase" in the walk. There are two loops — step 6.13 over the path in
@@ -2844,6 +2853,17 @@ Step numbers are the standard's own list numbering as of that date.
    the listener list (invoke step 8) so an added listener does not run; a REMOVED one is skipped by
    inner invoke step 2's "whose removed is false". A clone with no `removed` field gets the second
    half backwards and re-runs a listener the page has just removed.
+5. **`AT_TARGET` is not "index 0", and a retargeted event is AT_TARGET more than once.** Steps
+   6.13.1 and 6.14.1 both say "if item's SHADOW-ADJUSTED TARGET is non-null", and step 6.9.7 gives a
+   non-null one to every item where the walk left a shadow tree. An event dispatched inside a shadow
+   tree is therefore `AT_TARGET` at the node AND at the host, with `event.target` reading as a
+   different object at each.
+6. **`invoke` sets `event.target` BEFORE it returns for a stopped propagation.** Step 3 writes the
+   target and step 6 is the "if event's stop propagation flag is set, then return". Neither loop has
+   an early exit, so a dispatch whose first listener calls `stopPropagation()` still runs `invoke`
+   for every remaining item of both passes — writing `target` at each. With no shadow trees that is
+   invisible (every item resolves to the same target); with them, the target a page reads after
+   `dispatchEvent` returns is the OUTERMOST retargeted one, not the innermost.
 
 ### 11.1 §2.7 "add an event listener", given eventTarget and listener
 
@@ -3806,20 +3826,107 @@ order IS the spec.
 
 ### 15.5 §3.6.6 The response body — four MIME operations and one absent parser
 
-- **get a response MIME type**: the response's `Content-Type`, or `text/xml` when it will not parse.
+**Every one of these four returns a MIME type RECORD, not a string**, and three of them are wrong if
+it is flattened to an essence early. Read from the live standards on **2026-08-12**:
+
+| Standard | Source | Version read |
+| --- | --- | --- |
+| WHATWG MIME Sniffing | `https://mimesniff.spec.whatwg.org/` | Living Standard, §4 |
+| WHATWG Fetch | `https://fetch.spec.whatwg.org/` | Living Standard, §2.2, §4.3, §6 |
+| WHATWG URL | `https://url.spec.whatwg.org/` | Living Standard, §4.4, §4.5 |
+| WHATWG XMLHttpRequest | `https://xhr.spec.whatwg.org/` | Living Standard, §3.6.6, §3.6.8, §3.6.9 |
+
+- **get a response MIME type**: **"extract a MIME type from the response's header list"** (Fetch
+  §2.2.3), or `text/xml` when that is failure. It is not "parse the `Content-Type`": §2.2.3 gets,
+  decodes and SPLITS the header value on commas that are not inside a quoted string, parses each
+  piece, SKIPS a piece that fails or whose essence is `*/*`, keeps the LAST that survives, and
+  CARRIES the `charset` forward from an earlier piece when the later one has the same essence and no
+  charset of its own. The standard's own worked example: `text/plain;charset=gbk, text/html` extracts
+  as `text/html` — no charset at all — and `text/html;charset=gbk, text/html` extracts as
+  `text/html;charset=gbk`.
 - **get a final MIME type**: the override MIME type if there is one, else the above.
-- **get a final encoding**: the response MIME type's `charset`, overridden by the override MIME
+- **get a final encoding**: the RESPONSE MIME type's `charset`, overridden by the OVERRIDE MIME
   type's — and the standard notes that this deliberately does NOT use the final MIME type, "as it
-  would not be web compatible".
+  would not be web compatible". So the two records are read separately; going through the final MIME
+  type would be one line shorter and a different algorithm.
 - **set a document response**: returns for a null body, for a final MIME type that is neither HTML
   nor XML, and for an HTML type when the response type is the empty string (the note: "This is
   restricted to xhr's response type being 'document' in order to prevent breaking legacy content").
+- **`overrideMimeType(mime)` (§3.6.8)** stores "the result of PARSING mime", and
+  `application/octet-stream` when that is failure — a record, so `overrideMimeType("TEXT/XML;
+  CHARSET=\"Shift_JIS\"")` afterwards answers `charset` as `Shift_JIS` and its essence as `text/xml`.
+- **the blob arm of the `response` getter (§3.6.9 step 6)** sets `Blob.type` to the final MIME type,
+  which is the whole record: the `charset` a page reads back off `blob.type` is part of the answer.
+
+**MIME Sniffing §4.4 and §4.5, exactly.** §4.4's parse is: strip HTTP whitespace (LF, CR, TAB, SPACE
+— **not** FF, which ASCII whitespace includes); collect up to `/` as the type and refuse it if empty
+or not solely HTTP token code points; collect up to `;` as the subtype, strip its TRAILING HTTP
+whitespace, same refusal; lowercase both. Then, per parameter: skip the `;`, skip HTTP whitespace,
+collect a name up to `;` or `=`, and — this is the shape a splitter never has — a name terminated by
+`;` is DROPPED (`text/html;test;charset=gbk` keeps only the charset), a value that is a quoted string
+is read by Fetch §2.2's "collect an HTTP quoted string" with the trailing junk up to the next `;`
+DISCARDED (`charset="shift_jis"iso-2022-jp` is `shift_jis`), an unquoted value has its trailing HTTP
+whitespace stripped and is dropped when empty (`charset=` sets nothing), and a parameter is recorded
+only when its name is a non-empty token, its value is solely HTTP quoted-string token code points,
+and the map does not already have that name. §4.5's serialize is the inverse: essence, then each
+parameter in map ORDER, quoting a value that is empty or not solely token code points and escaping
+`"` and `\` inside it — so serialize-then-parse gives the record back, which is what lets a record
+be HELD as its serialization.
+
+**HTTP quoted-string token code points are CODE POINTS.** U+0009, U+0020 to U+007E, and U+0080 to
+U+00FF. In a UTF-8 engine that is not a byte test: U+0100 arrives as two bytes both individually
+inside 0x80..0xFF, and it is not a quoted-string token code point, so the sequence has to be decoded
+to decide.
 
 The HTML arm is lexbor's parser over a `document.c` Document, which has NO browsing context — that
 is what "with scripting disabled" means here rather than a flag, because there is no Window for a
 script to run in. **The XML arm is a `DFAIL`**: lexbor ships no XML module, and answering with the
 spec's "the XML parser failed → null" would be a claim about a parse that never ran. That is the
 component's one honestly-absent capability and the assert names what to build.
+
+### 15.5.1 Fetch §4.3 scheme fetch and §6's `data:` URL processor — what `send()` actually fetches
+
+§3.5.6's send() FETCHES, and Fetch §4.3 "scheme fetch" **switches on the request's current URL's
+scheme** before anything reaches the network: `about`, `blob`, `data`, `file`, and only then
+HTTP(S) → HTTP fetch. Three of those five are answered inside the agent. Missing the switch is not a
+missing feature, it is a WRONG REQUEST: a `data:` URL handed to the host request path put
+
+```
+GET text/xml,<template xmlns='…'><test/></template> HTTP/1.1
+Host:
+```
+
+on the wire and wptserve answered `400 Bad request syntax` — a malformed HTTP request, to a server
+that had never heard of the URL, for every `xhr.open("GET", "data:…")` in the corpus.
+
+**The `data` step** is two lines: run §6's processor on the URL, failure → network error; otherwise
+a response whose status message is `OK`, whose header list is exactly one `Content-Type` carrying
+the struct's MIME type **serialized**, and whose body is the struct's body.
+
+**§6's processor, and the two ORDERS that are the algorithm.** The input is the URL SERIALIZED with
+the fragment excluded, less the leading `data:` — the serialization, because a `data:` URL has an
+OPAQUE PATH (URL §4.4's opaque-path state, entered because `data` is not a special scheme and no `/`
+follows the colon), so the parser has already decided which code points are percent-encoded and the
+processor decodes exactly those. Then:
+
+1. Collect up to the first `,` as the MIME part; strip leading and trailing **ASCII** whitespace from
+   it (the standard notes only U+0020 can survive, because the parser percent-encoded every C0
+   control in the path). **No `,` at all is FAILURE** — the first of the algorithm's only two.
+2. The rest is **percent-decoded FIRST, unconditionally** (step 10), and only THEN base64-decoded
+   if the MIME part called for it (step 11). `data:text/plain;base64,%41%41%41%41` is the base64
+   decode of `AAAA`, three bytes. Doing the two in the other order gives a different resource.
+3. The base64 marker is tested on the STRIPPED MIME part and is `;`, then zero or more U+0020, then
+   an ASCII case-insensitive `base64` — so `;BASE64,` counts and `;base64x,` does not. It comes off
+   in that order: six code points, then the spaces, then the `;`, which is what leaves `text/plain`
+   rather than `text/plain;`. A body the **forgiving-base64 decode** (Infra — the codec `atob` runs)
+   rejects is the second and last FAILURE.
+4. A MIME part starting with `;` gets `text/plain` prepended, so `data:;charset=UTF-8,x` is
+   `text/plain;charset=UTF-8`. A MIME part that then will not parse — including the empty one of
+   `data:,x` — is `text/plain;charset=US-ASCII`. **Neither is a failure**: the standard recovers.
+
+So exactly two inputs produce a network error (`fetch` rejects with a TypeError; XHR runs its request
+error steps), and every other malformed `data:` URL produces a **200 response** with a substituted
+MIME type. Getting that split wrong is invisible until a page depends on one of the halves.
 
 ### 15.6 Suspension points per entry point
 
