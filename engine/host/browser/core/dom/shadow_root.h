@@ -18,6 +18,12 @@ void shadow_root_free(JSContext *ctx);
    shadow-including root, "find a slot" and the event path all ask it with no realm in hand. §4.8 still says a
    ShadowRoot IS a DocumentFragment, which is node_is_document_fragment's job (node.h) and not this one's. */
 bool shadow_root_is(const lxb_dom_node_t *n);
+/* THE SAME QUESTION AS WEB IDL §3.2.15 ASKS IT — of a JS value, so an IDL position declared `ShadowRoot` can
+   state its brand in its DECLARATION. Every node wrapper shares one class, so `idl_iface_brand(node_class_id())`
+   says only "a Node" and `idl_iface_narrow(shadow_root_is_value)` is what says which kind — the same pairing
+   `HTMLElement anchor` already uses. `GetHTMLOptions.shadowRoots` is `sequence<ShadowRoot>`, and its elements
+   are branded with exactly this. */
+bool shadow_root_is_value(JSValueConst v);
 /* §4.8's HOST, which is never null for a shadow root. C state on a node the ATTACHING FLOW created, written
    once at creation and never again, so it needs no per-flow capture — the flow that created the node is the
    only one that can reach it until the node becomes baseline, after which it is immutable. */

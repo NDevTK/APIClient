@@ -101,9 +101,11 @@ typedef struct {
     int             sp, scap;
     char           *out;      /* the accumulator: malloc'd, because a fork gives each arm its own */
     size_t          out_len, out_cap;
-    /* §13.3's `serializableShadowRoots`. `shadowRoots` has no field because no declaration can convert one
-       yet — see FRAGSER_SETUP, which refuses the member rather than answering as though it were empty. */
+    /* §13.3's TWO ARGUMENTS. `shadow_roots` is step 4.2's list — an engine-built Array of ShadowRoot wrappers
+       the DECLARATION converted (IDL_SEQUENCE_INTERFACE), so nothing of the page's is left on it and reading it
+       runs none of the page's code. JS_UNDEFINED is « », which is what §8.5's `= []` default means. */
     bool            serializable_shadow_roots;
+    JSValue         shadow_roots;
 } FragSerState;
 
 static lxb_status_t ser_append(const lxb_char_t *data, size_t len, void *vctx)
@@ -233,12 +235,32 @@ static lxb_dom_node_t *ser_template_contents(lxb_dom_node_t *n)
 
 /* ---- §13.3 step 4's shadow-root branch ------------------------------------------------------------------- */
 
-/* Step 4.2's TWO conditions, either of which includes this shadow root in the output. The second —
-   "shadowRoots contains shadow" — is a list no declaration can build yet, and FRAGSER_SETUP refuses the member
-   at its source rather than letting this answer as though the page had passed « ». */
+/* Step 4.2's TWO conditions, either of which includes this shadow root in the output: it is SERIALIZABLE and
+   the caller asked for serializable ones, or the caller NAMED it. The second is a list the page passed, so the
+   membership test is over object IDENTITY — a shadow root is one node and one wrapper, so comparing the nodes
+   the wrappers hold IS `===`. It runs none of the page's code: the declaration already converted the sequence,
+   and what is left is an engine-built Array of platform objects. */
 static bool ser_shadow_included(JSContext *ctx, const FragSerState *s, lxb_dom_node_t *shadow)
 {
-    return s->serializable_shadow_roots && shadow_root_flag(ctx, shadow, SHADOW_ROOT_SERIALIZABLE);
+    uint32_t n = 0, i;
+    JSValue len;
+
+    if (s->serializable_shadow_roots && shadow_root_flag(ctx, shadow, SHADOW_ROOT_SERIALIZABLE)) return true;
+    if (!JS_IsObject(s->shadow_roots)) return false;
+    len = JS_GetPropertyStr(ctx, s->shadow_roots, "length");
+    JS_ToUint32(ctx, &n, len);
+    JS_FreeValue(ctx, len);
+    for (i = 0; i < n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, s->shadow_roots, i);
+        lxb_dom_node_t *en = node_of(e);
+
+        JS_FreeValue(ctx, e);
+        DCHECK(en != NULL && shadow_root_is(en),
+               "§8.5's shadowRoots list holds something that is not a shadow root — the sequence's element type "
+               "is what brands it, so a non-ShadowRoot here means the declaration lost its narrowing");
+        if (en == shadow) return true;
+    }
+    return false;
 }
 
 /* Steps 4.2.1-4.2.10: the `<template>` start tag §13.2.6.4.4 reads back. The attribute ORDER is the standard's
@@ -276,6 +298,10 @@ static int js_frag_ser_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     case FRAGSER_SETUP: {
         lxb_dom_node_t *n = node_of(hdr->this_val);
 
+        /* THE STATE IS ZEROED, AND A ZEROED JSValue IS THE INTEGER 0 — JS_TAG_INT is 0 — so a field that
+           carries a value has to be given one before anything can read it as "absent". */
+        s->shadow_roots = JS_UNDEFINED;
+
         /* WEB IDL §3.7.5's BRAND CHECK, and it is a THROW: a page reaches an accessor or a method off the
            prototype with `.call` on anything it likes, so what the receiver is is the PAGE's input and not
            this engine's invariant. §8.5.5's outerHTML is declared on Element alone; the other two are declared
@@ -288,15 +314,11 @@ static int js_frag_ser_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         }
         if (magic == FRAGMENT_SERIALIZE_GET_HTML) {
             JSValueConst options = argc > 0 ? argv[0] : JS_UNDEFINED;
-            JSValue roots = idl_dict_get(ctx, options, "shadowRoots");
 
-            if (!JS_IsUndefined(roots))
-                DFAIL("GetHTMLOptions's `shadowRoots` is a sequence<ShadowRoot> and idl_args.c has no "
-                      "interface-sequence type — declare IDL_SEQUENCE_INTERFACE beside IDL_SEQUENCE_BLOBPART "
-                      "so §3.2.20's iterator protocol runs in the DECLARATION, where every other sequence's "
-                      "does; walking it from this body would convert the member AFTER the dictionary instead "
-                      "of during it, which is observable the moment the page's iterator is its own code");
-            JS_FreeValue(ctx, roots);
+            /* Both of §8.5's members, as the declaration converted them: the iterator protocol behind
+               `shadowRoots` ran during the DICTIONARY's conversion, in the order §3.2.18 reads it, and what is
+               here is its result. */
+            s->shadow_roots = idl_dict_get(ctx, options, "shadowRoots");
             s->serializable_shadow_roots = idl_dict_bool(ctx, options, "serializableShadowRoots");
         }
         if (magic == FRAGMENT_SERIALIZE_SELF) {
@@ -429,17 +451,19 @@ static void js_frag_ser_visit(JSContext *ctx, void *st, JSStepVisit *v)
        every arm reaches by the same address. */
     v->buf(ctx, (void **)&s->out, s->out_cap);
     v->buf(ctx, (void **)&s->stack, sizeof(SerLevel) * (size_t)s->scap);
+    v->val(ctx, &s->shadow_roots);
 }
 
 static void js_frag_ser_release(JSContext *ctx, void *st)
 {
     FragSerState *s = st;
 
-    (void)ctx;
     free(s->out);
     free(s->stack);
     s->out = NULL;
     s->stack = NULL;
+    JS_FreeValue(ctx, s->shadow_roots);
+    s->shadow_roots = JS_UNDEFINED;
 }
 
 static const IdlStepDecl FRAGMENT_SERIALIZER_STEP = {
@@ -457,12 +481,13 @@ const IdlStepDecl *fragment_serializer_decl(void)
 /* ---- declaration and installation ------------------------------------------------------------------------ */
 
 /* §8.5's `dictionary GetHTMLOptions`. Web IDL §3.2.18 reads a dictionary's members LEXICOGRAPHICALLY, which
-   for these two is also their declaration order — and `shadowRoots` is declared IDL_ANY because no declared
-   type can convert a `sequence<ShadowRoot>` yet; the member's own conversion is what FRAGSER_SETUP refuses,
-   naming the type to build, rather than a body quietly walking the list at the wrong time. */
+   for these two is also their declaration order. `shadowRoots` is `sequence<ShadowRoot>`, and it is the
+   DECLARATION that runs §3.2.21's iterator protocol over it — the page's iterator, its `next`, and every
+   `done`/`value` read park this machine on the element they are on, in the order §3.2.18 states, which a body
+   walking the list afterwards could not reproduce. */
 static const IdlDictMember GET_HTML_OPTIONS[] = {
-    { "serializableShadowRoots", IDL_BOOLEAN, false, NULL, 0 },
-    { "shadowRoots",             IDL_ANY,     false, NULL, 0 },
+    { "serializableShadowRoots", IDL_BOOLEAN,             false, NULL, 0 },
+    { "shadowRoots",             IDL_SEQUENCE_INTERFACE,  false, NULL, 0 },
 };
 static const IdlArgType ONE_DICT[1] = { IDL_DICT };
 
@@ -473,6 +498,11 @@ void fragment_serializer_init(JSContext *ctx)
                                        (int)(sizeof(GET_HTML_OPTIONS) / sizeof(GET_HTML_OPTIONS[0])),
                                        &FRAGMENT_SERIALIZER_STEP, FRAGMENT_SERIALIZE_GET_HTML);
     idl_optional_from(0);   /* §8.5.3: `getHTML(optional GetHTMLOptions options = {})` */
+    /* `sequence<ShadowRoot>`'s ELEMENT TYPE. Every node wrapper is one class, so the class says "a Node" and
+       the narrowing says which kind — `getHTML({shadowRoots: [document.body]})` is a TypeError, thrown by the
+       type rather than by anything this file tests. */
+    idl_iface_brand(node_class_id());
+    idl_iface_narrow(shadow_root_is_value);
     g_ready = 1;
 }
 

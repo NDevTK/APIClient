@@ -38,8 +38,7 @@
  * §4.4 step 6, which is shadow_root_clone_onto below, and `serializable`, `delegatesFocus`, `clonable`, `mode`
  * and `slot assignment` are ALL read by HTML §13.3 step 4.2, which writes them back out as the
  * `<template shadowrootmode>` §13.2.6.4.4 reads. HTML §8.5's `partial interface ShadowRoot` — `innerHTML`,
- * `getHTML`, `setHTMLUnsafe` — is installed below; `setHTML` is the one member still absent, because it
- * sanitizes and HTML §8.6 does not exist here. */
+ * `getHTML`, `setHTMLUnsafe`, `setHTML` — is installed below, the last of them over HTML §8.6's sanitizer. */
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -64,7 +63,7 @@ static JSClassID g_sr_class;
 static int       g_ready;
 static int       g_id_attach = -1;
 /* HTML §8.5's `partial interface ShadowRoot` — the markup members, declared once per agent like every other. */
-static int       g_id_inner_get = -1, g_id_inner_set = -1, g_id_set_html_unsafe = -1;
+static int       g_id_inner_get = -1, g_id_inner_set = -1, g_id_set_html_unsafe = -1, g_id_set_html = -1;
 
 /* THE SLOT KEYS — Symbols this component minted and never published, so none of §4.8's state is a string
    property of the engine's invention sitting where `Object.keys` reports it. */
@@ -83,6 +82,11 @@ static JSAtom  g_atom_shadow = JS_ATOM_NULL;
 bool shadow_root_is(const lxb_dom_node_t *n)
 {
     return n != NULL && n->type == LXB_DOM_NODE_TYPE_SHADOW_ROOT;
+}
+
+bool shadow_root_is_value(JSValueConst v)
+{
+    return shadow_root_is(node_of(v));
 }
 
 lxb_dom_element_t *shadow_root_host(const lxb_dom_node_t *n)
@@ -599,12 +603,13 @@ void shadow_root_init(JSContext *ctx)
        target is not an element — one line of difference, expressed as a magic on element.c's one parse machine
        rather than as a second parse that can drift from it.
        `getHTML` is that component's own declaration, installed on both prototypes.
-       `setHTML` — the SAFE member — is honestly ABSENT: its steps are "set and filter HTML … and TRUE", which
-       is sanitization, and HTML §8.6 does not exist here. */
+       `setHTML` — the SAFE member — is the SAME machine with §8.6.4's `safe` true: what it filters with is
+       §8.6's sanitizer, and its own declaration is element.c's for the reason setHTMLUnsafe's is. */
     g_id_inner_get = idl_getter_id_step(ctx, fragment_serializer_decl(), FRAGMENT_SERIALIZE_CHILDREN);
     g_id_inner_set = idl_setter_id_step(ctx, IDL_DOMSTRING, true, element_set_html_decl(),
                                         SHADOW_ROOT_SET_INNER_HTML);
     g_id_set_html_unsafe = element_declare_set_html_unsafe(ctx, SHADOW_ROOT_SET_HTML_UNSAFE);
+    g_id_set_html = element_declare_set_html(ctx, SHADOW_ROOT_SET_HTML);
     g_ready = 1;
     realm_declare_intrinsic(shadow_root_install_proto);
 }
@@ -632,6 +637,7 @@ void shadow_root_install_proto(JSContext *ctx)
     /* HTML §8.5's partial interface. `serializable` above is no longer a flag with no reader: `getHTML`'s
        serializableShadowRoots argument is what reads it, and §13.3 step 4.2 is where. */
     idl_install_accessor_step(ctx, proto, "innerHTML", g_id_inner_get, g_id_inner_set);
+    idl_install_method(ctx, proto, "setHTML", 1, g_id_set_html);
     idl_install_method(ctx, proto, "setHTMLUnsafe", 1, g_id_set_html_unsafe);
     fragment_serializer_install_get_html(ctx, proto);
     /* §4.8's ONE event handler IDL attribute. It is declared on ShadowRoot itself and not through
@@ -670,6 +676,6 @@ void shadow_root_free(JSContext *ctx)
     JS_FreeValue(ctx, g_slots_key);
     JS_FreeValue(ctx, g_shadow_key);
     g_slots_key = g_shadow_key = JS_UNDEFINED;
-    g_id_attach = g_id_inner_get = g_id_inner_set = g_id_set_html_unsafe = -1;
+    g_id_attach = g_id_inner_get = g_id_inner_set = g_id_set_html_unsafe = g_id_set_html = -1;
     g_ready = 0;
 }

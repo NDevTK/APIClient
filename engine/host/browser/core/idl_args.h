@@ -86,6 +86,17 @@ typedef enum {
        argument-position sequence does, rather than being walked from a body after every later member was
        already read. */
     IDL_SEQUENCE_DOMSTRING,
+    /* `sequence<T>` where T is an INTERFACE type — §3.2.21's iterator-protocol conversion with §3.2.15's brand
+       test as the element conversion. HTML §8.5's `GetHTMLOptions.shadowRoots` is `sequence<ShadowRoot>` and is
+       the first, and it is the same reason IDL_SEQUENCE_DOMSTRING is a declared type rather than a body's walk:
+       the protocol is the PAGE'S code at every step (the @@iterator read, its call, each `next()`, each
+       `done`/`value` read), so the machine parks on the element it is on, and a member driven from a body would
+       run it after every later member of the same dictionary was already read.
+       The element conversion itself runs NONE of the page's code — §3.2.15 is "if V implements I return it,
+       otherwise throw a TypeError" — so it is decided between two pulls of the cursor rather than being a third
+       rest point. The interface is named by idl_iface_brand / idl_iface_narrow, exactly as IDL_INTERFACE's is:
+       one statement of what the type is, whether it appears alone or inside a sequence. */
+    IDL_SEQUENCE_INTERFACE,
     /* A DICTIONARY. Web IDL converts one by READING each declared member IN ORDER and converting each by ITS
        OWN type — so a dictionary is that member list plus this very machine, not a second kind of thing. A read
        is one accessor or Proxy trap away from being the page's code, and so is each member's conversion, so

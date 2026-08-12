@@ -40,6 +40,7 @@
 #include "core/html/trusted_types.h"
 #include "core/html/declarative_shadow.h"
 #include "core/html/fragment_serializer.h"
+#include "core/html/sanitizer.h"
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
 #include "core/dom/attr.h"
@@ -512,8 +513,13 @@ enum { PLACE_CHILDREN = 0, PLACE_BEFORE, PLACE_AFTER, PLACE_FIRST_CHILD, PLACE_R
 #define EL_SET_HTML_EXTRA(X) \
     X(FRAG_CLEAR, "HTML §8.5.4 step 5 / §8.6.4 set and filter HTML step 8 (replace all within target: remove " \
                   "one existing child per step)")
+/* AND §8.6.4's FILTER, whose stages are sanitizer.h's own X-list. They belong to the members that FILTER —
+   §8.5.2's setHTML and setHTMLUnsafe — and are numbered after this machine's because the walk runs between the
+   parse and the placement. The list is expanded HERE for the numbering and inside sanitizer.c for its own, from
+   the one declaration, and the base travels to the walk as SAN_CHILD so neither file states the offset. */
 enum { IDL_STEP_STAGE_BASE(FRAG_STAGES)
-       FRAG_STAGES(JS_STEP_STAGE_ENUM) EL_SET_HTML_EXTRA(JS_STEP_STAGE_ENUM) };
+       FRAG_STAGES(JS_STEP_STAGE_ENUM) EL_SET_HTML_EXTRA(JS_STEP_STAGE_ENUM)
+       SANITIZE_STAGES(JS_STEP_STAGE_ENUM) };
 
 typedef struct {
     uint8_t where;
@@ -534,6 +540,14 @@ typedef struct {
        that is in no tree, so this machine has to destroy it. Owned, and released on the throw path too. */
     lxb_dom_element_t *own_context;
     lxb_dom_node_t *anchor, *ref, *frag, *node;
+    /* §8.6.4's STEPS 4 AND 7. `san_config` is the canonical configuration the options resolved to, held from
+       step 4 (which reads the options, before the parse) until step 7 hands it to the walk that consumes it;
+       `sanitize` is whether this member filters at all, which is what tells §8.5.4's innerHTML setter and
+       §8.5.6's insertAdjacentHTML — neither of which is `set and filter HTML` — from the four that are. */
+    JSValue san_config;
+    uint8_t sanitize;
+    uint8_t safe;               /* §8.6.4's own `safe` argument — true for the two `setHTML` members */
+    SanitizerWalk san;
 } FragState;
 
 static void frag_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -546,6 +560,8 @@ static void frag_visit(JSContext *ctx, void *st, JSStepVisit *v)
        declaration and there is no such thing as half a tokenizer to clone. */
     DCHECK(s->parser == NULL, "a fragment parse was forked mid-parse");
     v->buf(ctx, (void **)&s->html, s->len ? s->len + 1 : 0);
+    v->val(ctx, &s->san_config);
+    sanitizer_walk_visit(ctx, &s->san, v);
 }
 
 static void frag_release(JSContext *ctx, void *st)
@@ -564,6 +580,9 @@ static void frag_release(JSContext *ctx, void *st)
     s->html = NULL;
     JS_FreeValue(ctx, s->compliant);
     s->compliant = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->san_config);
+    s->san_config = JS_UNDEFINED;
+    sanitizer_walk_release(ctx, &s->san);
 }
 
 /* Set the machine up for a parse of `html` into `where` around `anchor`, parsed in `context`'s tree-building
@@ -589,6 +608,22 @@ static void frag_begin(JSContext *ctx, FragState *s, lxb_dom_element_t *context,
     memcpy(s->html, html, s->len + 1);
     s->off = 0;
     s->node = NULL;
+}
+
+/* §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.6.4 step 8 — WHERE THE PARSE GOES NEXT, which is one
+   answer reached from two places: the end of the feed, and the end of §8.6.4's filter between them. Written
+   once because the two must not drift — a filter that resumed at the wrong one of these would place an
+   unsanitized fragment or clear the target twice. */
+static void frag_after_parse(FragState *s, JSStepHdr *hdr)
+{
+    if (s->clear_first) {
+        s->node = s->anchor->first_child;
+        hdr->stage = FRAG_CLEAR;
+        return;
+    }
+    if (!s->frag) { hdr->stage = FRAG_DONE; return; }
+    s->node = s->frag->first_child;
+    hdr->stage = FRAG_PLACE;
 }
 
 /* ONE STEP of the parse-and-place. Returns JS_STEP_YIELD while there is more, or 0 when the fragment is in the
@@ -653,14 +688,17 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
         s->ref = (s->where == PLACE_AFTER) ? s->anchor->next
                : (s->where == PLACE_FIRST_CHILD) ? s->anchor->first_child
                : s->anchor;
-        if (s->clear_first) {
-            s->node = s->anchor->first_child;
-            hdr->stage = FRAG_CLEAR;
+        /* §8.6.4 STEP 7, between the parse and the replacement: the fragment is filtered while it is still
+           this parse's private tree, which is the only moment at which removing from it is invisible to
+           everything else — and the only moment at which a `<script>` the configuration removes has not yet
+           been prepared by the insertion steps. */
+        if (s->sanitize && s->frag) {
+            sanitizer_walk_begin(ctx, &s->san, s->frag, s->san_config, s->safe != 0, SAN_CHILD);
+            s->san_config = JS_UNDEFINED;   /* the walk owns it now */
+            hdr->stage = SAN_CHILD;
             return JS_STEP_YIELD;
         }
-        if (!s->frag) { hdr->stage = FRAG_DONE; return 0; }
-        s->node = s->frag->first_child;
-        hdr->stage = FRAG_PLACE;
+        frag_after_parse(s, hdr);
         return JS_STEP_YIELD;
 
     case FRAG_PLACE: {
@@ -708,9 +746,13 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
    is true. */
 /* THE SINK NAME each member passes to §3.4, which is what a Trusted Types violation report names — so two
    sinks are distinguishable in one report. Indexed by the magic, beside the magic's own declaration. */
+/* The two SAFE members are here for the same reason every other magic is — the array is indexed by it — and
+   they name no sink because §8.5.2's `setHTML` invokes no trusted-type algorithm at all: its argument is a
+   plain DOMString, and what makes it safe is the sanitizer rather than a policy. */
 static const char *const FRAG_SINK[] = {
     "Element innerHTML", "Element outerHTML", "Element setHTMLUnsafe",
     "ShadowRoot innerHTML", "ShadowRoot setHTMLUnsafe",
+    NULL, NULL,
 };
 
 static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -718,7 +760,13 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
 {
     FragState *s = st;
     int magic = idl_step_magic(hdr);
+    /* §8.6.4's `safe`, and which members are `set and filter HTML` AT ALL — §8.5.4's innerHTML setter and
+       §8.5.5's outerHTML setter are not, so they parse and place without ever consulting a configuration. */
+    bool safe = magic == ELEMENT_SET_HTML || magic == SHADOW_ROOT_SET_HTML;
     bool unsafe = magic == ELEMENT_SET_HTML_UNSAFE || magic == SHADOW_ROOT_SET_HTML_UNSAFE;
+    bool filtered = safe || unsafe;
+    bool on_shadow = magic == SHADOW_ROOT_SET_INNER_HTML || magic == SHADOW_ROOT_SET_HTML_UNSAFE ||
+                     magic == SHADOW_ROOT_SET_HTML;
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
@@ -726,6 +774,24 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     DCHECK(magic >= 0 && magic < (int)(sizeof(FRAG_SINK) / sizeof(FRAG_SINK[0])),
            "the fragment-parse machine was declared with a magic no member of element.h's list names");
 
+    /* §8.6.4 STEP 7's WALK owns every stage past this machine's own, and it resumes into itself for as many
+       nodes as the fragment has. When it is done the member continues at step 8, which is the same placement
+       the unfiltered members reach straight from the parse. */
+    if (hdr->stage >= SAN_CHILD && hdr->stage <= SAN_POP) {
+        int r = sanitizer_walk_step(ctx, hdr, &s->san);
+
+        if (r) return r;
+        frag_after_parse(s, hdr);
+        return JS_STEP_YIELD;
+    }
+
+    if (hdr->stage == FRAG_TRUSTED && safe) {
+        /* §8.5.2's `setHTML(DOMString html, …)` — there is no union and therefore no step 1: the argument is
+           already the string the declaration converted, and the SANITIZER is what makes the member safe. The
+           stage is still entered and left, because a stage is where the machine is and not what it did. */
+        s->compliant = JS_DupValue(ctx, argc > 0 ? argv[0] : JS_UNDEFINED);
+        hdr->stage = FRAG_START;
+    }
     if (hdr->stage == FRAG_TRUSTED) {
         /* §8.5.4 / §8.5.5 / §8.5.2 step 1. It runs BEFORE the element and its parent are looked at, which is
            the order the standard writes and the order that decides what a page under a trusted-types policy
@@ -746,7 +812,7 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         /* WEB IDL §3.7.5's BRAND CHECK. `Element.prototype`'s members reach any receiver a page hands them
            with `.call`, and ShadowRoot's two are declared on an interface that is NOT an element — a
            DocumentFragment — so which of the two this is decides what the receiver must be. */
-        if (magic == SHADOW_ROOT_SET_INNER_HTML || magic == SHADOW_ROOT_SET_HTML_UNSAFE) {
+        if (on_shadow) {
             if (!shadow_root_is(n)) {
                 JS_ThrowTypeError(ctx, "a ShadowRoot markup member was written on something that is not a "
                                        "shadow root");
@@ -756,23 +822,32 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
             JS_ThrowTypeError(ctx, "an Element markup member was written on something that is not an element");
             return JS_STEP_ABRUPT;
         }
-        /* §8.5.2's OPTIONS, read before anything is parsed because §8.6.4 reads them at its steps 4 and 5 —
-           before its step 6's parse. Neither is a member this engine can honour yet, and each names what to
-           build rather than being silently ignored: a page that asks for sanitization and gets none is a page
-           whose DOM this engine builds differently from every browser, and a page whose `runScripts` scripts
-           never run is a page whose code this engine never reaches — the exact failure this tool exists to
-           not have. */
-        if (unsafe) {
+        /* §8.6.4's STEPS 3, 4 AND 5, read before anything is parsed because the standard reads them before its
+           step 6's parse — and the options are a dictionary the declaration already converted, so nothing of
+           the page's runs here. */
+        if (filtered) {
             JSValueConst options = argc > 1 ? argv[1] : JS_UNDEFINED;
-            JSValue sanitizer = idl_dict_get(ctx, options, "sanitizer");
 
-            if (!JS_IsUndefined(sanitizer))
-                DFAIL("§8.6.4's `sanitize` step was handed a sanitizer and HTML §8.6 does not exist in this "
-                      "engine — build core/html/sanitizer.c (the Sanitizer interface, §8.6.3's configuration "
-                      "and §8.6.4's inner sanitize steps as a step machine, since the walk is of the parsed "
-                      "fragment's size). An ABSENT member is the unsafe default `{}`, whose configuration "
-                      "removes nothing, which is why only a stated one stops here");
-            JS_FreeValue(ctx, sanitizer);
+            /* STEP 3: a SAFE member whose CONTEXT is a `script` returns having done nothing at all — not even
+               the parse. The context is step 1's, which for a ShadowRoot receiver is its host and not the
+               shadow root itself, and the namespace half of the condition is what makes SVG's `script` one
+               too. */
+            lxb_dom_node_t *context = on_shadow ? lxb_dom_interface_node(shadow_root_host(n)) : n;
+
+            if (safe && (context->ns == LXB_NS_HTML || context->ns == LXB_NS_SVG) &&
+                lxb_html_tree_node_is(context, LXB_TAG_SCRIPT))
+                return JS_STEP_DONE;
+            /* STEP 4. The configuration is resolved HERE and not at step 7, because §8.6.4 resolves it before
+               the parse and a page can tell: a `sanitizer` that is not one is a TypeError thrown before the
+               markup is parsed at all. */
+            s->san_config = sanitizer_config_from_options(ctx, options, safe);
+            if (JS_IsException(s->san_config)) { s->san_config = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+            s->sanitize = 1;
+            s->safe = safe ? 1 : 0;
+            /* STEP 5. `runScripts` is the one member of the pair this engine cannot honour, and it names what
+               to build rather than being silently ignored: a page whose scripts never run is a page whose code
+               this engine never reaches, which is the exact failure this tool exists to not have. Its step 5.1
+               asserts `safe` is false, which the IDL already guarantees — SetHTMLOptions has no such member. */
             if (idl_dict_bool(ctx, options, "runScripts"))
                 DFAIL("SetHTMLUnsafeOptions's `runScripts` asks for §13.4's Fragment parser scripting mode and "
                       "this engine's fragment parses are all Inert — build the scripting mode through "
@@ -831,7 +906,7 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
             /* §13.4 step 2: "Let context be target if target is an Element; otherwise target's HOST." A shadow
                root has no local name and no tokenizer state of its own, so the markup is parsed exactly as the
                host's children would be, and it REPLACES the shadow root's children. */
-            frag_begin(ctx, s, shadow_root_host(n), n, PLACE_CHILDREN, html, /*clear_first*/ true, unsafe);
+            frag_begin(ctx, s, shadow_root_host(n), n, PLACE_CHILDREN, html, /*clear_first*/ true, filtered);
         } else {
             /* §8.5.4 step 2.2 / §8.5.2 setHTMLUnsafe step 2: a <template>'s children are NOT what these
                replace — its TEMPLATE CONTENTS are, which is a separate tree reached through the element. The
@@ -847,7 +922,11 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
                                            "template one");
                 target = &t->content->node;
             }
-            frag_begin(ctx, s, el, target, PLACE_CHILDREN, html, /*clear_first*/ true, unsafe);
+            /* §8.6.4 step 6 invokes the fragment parsing algorithm with allowDeclarativeShadowRoots TRUE for
+               ALL FOUR of its members — a `<template shadowrootmode>` a SAFE member parses becomes a real
+               shadow root and is then sanitized like any other tree, which is what step 1.5.6 walks into.
+               §8.5.4's innerHTML setter is not one of them and passes false. */
+            frag_begin(ctx, s, el, target, PLACE_CHILDREN, html, /*clear_first*/ true, filtered);
         }
         JS_FreeCString(ctx, html);
         hdr->stage = FRAG_FEED;
@@ -857,7 +936,8 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
 }
 
 static const char *const EL_SET_HTML_STEPS[] = {
-    FRAG_STAGES(JS_STEP_STAGE_LABEL) EL_SET_HTML_EXTRA(JS_STEP_STAGE_LABEL) NULL
+    FRAG_STAGES(JS_STEP_STAGE_LABEL) EL_SET_HTML_EXTRA(JS_STEP_STAGE_LABEL)
+    SANITIZE_STAGES(JS_STEP_STAGE_LABEL) NULL
 };
 
 static const IdlStepDecl EL_SET_HTML_STEP = { js_el_set_html, sizeof(FragState), frag_visit, frag_release,
@@ -895,6 +975,30 @@ int element_declare_set_html_unsafe(JSContext *ctx, int magic)
            "setHTMLUnsafe was declared under a magic that is not one of the two interfaces that have it");
     id = idl_method_id_step(ctx, SET_HTML_UNSAFE_ARGS, 2, SET_HTML_UNSAFE_OPTIONS,
                             (int)(sizeof(SET_HTML_UNSAFE_OPTIONS) / sizeof(SET_HTML_UNSAFE_OPTIONS[0])),
+                            &EL_SET_HTML_STEP, magic);
+    idl_optional_from(1);
+    return id;
+}
+
+/* §8.5.2's `[CEReactions] undefined setHTML(DOMString html, optional SetHTMLOptions options = {})` — the SAFE
+   member, on both interfaces that have it, and the same machine as the three above with §8.6.4's `safe` true.
+   ITS OWN DECLARATION and not a magic on setHTMLUnsafe's, because the IDL is a different line: there is no
+   `(TrustedHTML or DOMString)` union (nothing is trusted — the SANITIZER is what makes it safe, which is also
+   why the member exists) and SetHTMLOptions declares ONE member where SetHTMLUnsafeOptions declares two. A
+   `runScripts` this declaration does not list is one the body can never see, which is what makes §8.6.4 step
+   5.1's assert structural here rather than a check. */
+int element_declare_set_html(JSContext *ctx, int magic)
+{
+    static const IdlArgType SET_HTML_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };
+    static const IdlDictMember SET_HTML_OPTIONS[] = {
+        { "sanitizer", IDL_ANY, false, NULL, 0 },
+    };
+    int id;
+
+    DCHECK(magic == ELEMENT_SET_HTML || magic == SHADOW_ROOT_SET_HTML,
+           "setHTML was declared under a magic that is not one of the two interfaces that have it");
+    id = idl_method_id_step(ctx, SET_HTML_ARGS, 2, SET_HTML_OPTIONS,
+                            (int)(sizeof(SET_HTML_OPTIONS) / sizeof(SET_HTML_OPTIONS[0])),
                             &EL_SET_HTML_STEP, magic);
     idl_optional_from(1);
     return id;
@@ -1640,7 +1744,7 @@ static JSClassID g_element_class;
 static int g_refl_base = -1, g_refl_n;
 static int g_id_get_attr = -1, g_id_set_attr = -1, g_id_matches = -1, g_id_closest = -1,
            g_id_inner_get = -1, g_id_inner_set = -1, g_id_outer_get = -1, g_id_outer_set = -1,
-           g_id_set_html_unsafe = -1,
+           g_id_set_html_unsafe = -1, g_id_set_html = -1,
            g_id_adj_html = -1, g_id_adj_el = -1, g_id_adj_text = -1, g_id_attr_names = -1,
            g_id_remove_attr = -1, g_id_has_attr = -1, g_id_toggle_attr = -1, g_id_get_attr_node = -1,
            g_id_has_attrs = -1,
@@ -1668,6 +1772,9 @@ void element_init(JSContext *ctx)
     /* §13.3's serializer, declared before the four members that name it — `getHTML` is its own declaration and
        innerHTML's and outerHTML's getters are two magics on the same machine. */
     fragment_serializer_init(ctx);
+    /* §8.6's Sanitizer, declared before the members that resolve one — §8.5.2's two filtering members read a
+       `sanitizer` option, and its own interface object is installed per realm from its declaration. */
+    sanitizer_init(ctx);
 
     /* `name`, `value` and `selectors` are DOMStrings, so each is ToString on whatever the page passed:
        `el.getAttribute({toString(){ … }})` is the page's code, and the declaration parks the machine on that
@@ -1689,6 +1796,7 @@ void element_init(JSContext *ctx)
     g_id_outer_get = idl_getter_id_step(ctx, fragment_serializer_decl(), FRAGMENT_SERIALIZE_SELF);
     g_id_outer_set = idl_setter_id_step(ctx, IDL_DOMSTRING, true, &EL_SET_HTML_STEP, ELEMENT_SET_OUTER_HTML);
     g_id_set_html_unsafe = element_declare_set_html_unsafe(ctx, ELEMENT_SET_HTML_UNSAFE);
+    g_id_set_html = element_declare_set_html(ctx, ELEMENT_SET_HTML);
     /* §4.9's three adjacent members. The HTML one takes two DOMStrings; the other two take a position and a
        value the IDL leaves alone (a Node, or a DOMString this stringifies into a Text node). */
     g_id_adj_html = idl_method_id_step(ctx, IDL_2STR, 2, NULL, 0, &EL_ADJACENT_HTML_STEP, 0);
@@ -1789,10 +1897,9 @@ void element_install_proto(JSContext *ctx)
     node_install_parent_mixin(ctx, proto);   /* append / prepend / replaceChildren */
     idl_install_accessor_step(ctx, proto, "innerHTML", g_id_inner_get, g_id_inner_set);
     idl_install_accessor_step(ctx, proto, "outerHTML", g_id_outer_get, g_id_outer_set);
-    /* §8.5's two partial-interface markup members. `setHTML` — the SAFE one — is not here, and it is not a
-       stub either: its steps are "set and filter HTML given target, html, options, and TRUE", which is
-       sanitization, and §8.6 does not exist. A page calling it gets the TypeError of a missing method, which
-       is the forcing function; a `setHTML` that skipped the sanitizer would insert markup a browser removes. */
+    /* §8.5's three partial-interface markup members. `setHTML` is the SAFE one — "set and filter HTML given
+       target, html, options, and TRUE" — which is §8.6's sanitizer, and it is here now that §8.6 is. */
+    idl_install_method(ctx, proto, "setHTML", 1, g_id_set_html);
     idl_install_method(ctx, proto, "setHTMLUnsafe", 1, g_id_set_html_unsafe);
     fragment_serializer_install_get_html(ctx, proto);
     idl_install_method(ctx, proto, "insertAdjacentHTML", 2, g_id_adj_html);
@@ -1866,6 +1973,7 @@ void element_free(JSContext *ctx)
     document_fragment_free(ctx);
     shadow_root_free(ctx);
     fragment_serializer_free();
+    sanitizer_free();
     slot_free(ctx);
     idl_indexed_free(ctx);
     /* the prototypes are the REALMS' — each is released with its context */

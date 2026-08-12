@@ -772,8 +772,8 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                    concolic member keeps forking control flow instead of collapsing at a coercion. */
                 if (mt != IDL_ANY && concolic_is(s->dict_v))
                     mt = IDL_ANY;
-                if (mt == IDL_SEQUENCE_DOMSTRING) {
-                    /* §3.2.20 over a dictionary member. A value that is not an Object is a TypeError before
+                if (mt == IDL_SEQUENCE_DOMSTRING || mt == IDL_SEQUENCE_INTERFACE) {
+                    /* §3.2.21 over a dictionary member. A value that is not an Object is a TypeError before
                        anything is read, exactly as it is in argument position — the check is on the TYPE and
                        not on iterability, so `{attributeFilter: "id"}` throws even though a string iterates.
                        The cursor is the machine's own (`seq`), which the argument-position conversion also
@@ -801,6 +801,23 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                             if (r > 0) return r;   /* parked ON THIS ELEMENT; the resume comes back to it */
                             if (r < 0) return JS_STEP_ABRUPT;
                             if (s->seq.done) break;
+                            /* §3.2.15's ELEMENT CONVERSION: a platform object implementing the interface
+                               crosses as itself and anything else is a TypeError. It runs none of the page's
+                               code, so it is decided here rather than being a rest point of its own. */
+                            if (mt == IDL_SEQUENCE_INTERFACE) {
+                                DCHECK(m->iface != 0,
+                                       "a dictionary declared a sequence of an interface type with no class to "
+                                       "brand against — idl_iface_brand is the other half of that type");
+                                if (!JS_GetOpaque(s->seq.value, m->iface) ||
+                                    (m->iface_narrow && !m->iface_narrow(s->seq.value))) {
+                                    JS_ThrowTypeError(ctx, "an element of dictionary member `%s` does not "
+                                                      "implement the declared interface", dm->name);
+                                    return JS_STEP_ABRUPT;
+                                }
+                                JS_SetPropertyUint32(ctx, s->seq_list, s->seq_n++,
+                                                     JS_DupValue(ctx, s->seq.value));
+                                continue;
+                            }
                             s->seq_phase = 2;
                         }
                         DCHECK(s->seq_phase == 2, "a dictionary member's sequence resumed at a phase it never "
@@ -892,7 +909,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            IDL converts arguments LEFT TO RIGHT, so a sequence that throws mid-iteration must run before the
            dictionary after it is read at all. Driven from the body it ran after every other argument, and
            `new Blob(throwingIterable, {get type(){…}})` called the type getter the spec never reaches. */
-        if (t == IDL_SEQUENCE_BLOBPART) {
+        if (t == IDL_SEQUENCE_BLOBPART || t == IDL_SEQUENCE_INTERFACE) {
             if (!JS_IsObject(a)) {
                 JS_FreeValue(ctx, cb_result);
                 JS_ThrowTypeError(ctx, "the sequence argument is not an object");
@@ -911,6 +928,21 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     if (r > 0) return r;   /* parked ON THIS ELEMENT; the resume comes back to it */
                     if (r < 0) return JS_STEP_ABRUPT;
                     if (s->seq.done) break;
+                    /* §3.2.15's ELEMENT CONVERSION — the brand test, which runs none of the page's code, so
+                       the cursor's next pull follows it in the same step. */
+                    if (t == IDL_SEQUENCE_INTERFACE) {
+                        DCHECK(m->iface != 0,
+                               "an interface-sequence argument was declared with no class to brand against — "
+                               "idl_iface_brand is the other half of that type");
+                        if (!JS_GetOpaque(s->seq.value, m->iface) ||
+                            (m->iface_narrow && !m->iface_narrow(s->seq.value))) {
+                            JS_ThrowTypeError(ctx, "an element of argument %d does not implement the declared "
+                                              "interface", s->i + 1);
+                            return JS_STEP_ABRUPT;
+                        }
+                        JS_SetPropertyUint32(ctx, s->seq_list, s->seq_n++, JS_DupValue(ctx, s->seq.value));
+                        continue;
+                    }
                     /* `BlobPart` is `(BufferSource or Blob or USVString)`, and its rule is a BRAND test: a
                        BufferSource and a Blob cross as themselves, everything else takes the USVString arm,
                        whose ToString is the page's code. Stated once, here, like BodyInit's. */
