@@ -47,6 +47,7 @@
 #include "core/realm.h"
 #include "core/html/html_iframe.h"
 #include "core/frame/navigable.h"
+#include "core/frame/document_lifecycle.h"
 #include "core/dom/document.h"
 #include <stdio.h>
 
@@ -103,13 +104,14 @@ typedef struct {
        all still live, with nothing anywhere holding the fact that they had not been dealt with. */
     uint8_t closing;     /* §7.3's IS CLOSING — §7.2.5.2's close(), and only ever a top-level traversable */
     uint8_t destroyed;   /* §7.5.10 step 8 ran on this navigable's active document: its browsing context is null */
-    /* §7.5.10 STEP 3's numberDestroyed, COUNTED DOWN — how many of this navigable's child navigables have still
-       to report their destruction before step 6 may run for this one. It is here because it is PER-FLOW state
-       of a navigable, exactly like `closed` and `name`: two forked arms destroying the same subtree each count
-       in their own world, and a shared integer would let one arm's child complete the other arm's wait. Zero
-       for a navigable that is not being destroyed, which is what makes a child's report a no-op there rather
-       than a case its caller has to test for. */
-    uint32_t destroy_wait;
+    /* THE SUBTREE WAIT, COUNTED DOWN AND PER OPERATION — how many of this navigable's child navigables have
+       still to report before this one's own body may run, for each of the operations that walk a subtree
+       (§7.4.2.4's beforeunload check, §7.5.9's unload, §7.5.10's destroy). It is here because it is PER-FLOW
+       state of a navigable, exactly like `closed` and `name`: two forked arms tearing down the same subtree
+       each count in their own world, and a shared integer would let one arm's child complete the other arm's
+       wait. Zero for a navigable not running that operation, which is what makes a child's report identify the
+       ROOT of the operation rather than being a case its caller has to test for. */
+    uint32_t child_wait[WP_SUBTREE_OP_N];
     /* WHICH DOCUMENT the navigable's active document IS — the same id the world registry names worlds by, so
        "is this remote?" is one comparison against one identity rather than a second naming scheme kept beside
        it. A proxy whose doc is this instance's has a live `window`; any other doc is in a peer instance and
@@ -418,31 +420,124 @@ void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy)
     p->destroyed = 1;
 }
 
-/* §7.5.10 STEP 3 — the number of child navigables this one is waiting on, recorded BEFORE any of them is
-   queued. Through proxy_of, so the count belongs to the flow performing the destruction. */
-void window_proxy_destroy_wait_set(JSContext *ctx, JSValueConst proxy, uint32_t n)
+/* THE WAIT'S STEP 3 — the number of child navigables this one is waiting on for this operation, recorded
+   BEFORE any of them is queued. Through proxy_of, so the count belongs to the flow performing the walk. */
+void window_proxy_child_wait_set(JSContext *ctx, JSValueConst proxy, int op, uint32_t n)
 {
     ProxyData *p = proxy_of(proxy);
     (void)ctx;
-    DCHECK(p != NULL, "something that is not a WindowProxy was given a destruction count");
-    DCHECK(p->destroy_wait == 0,
-           "§7.5.10 step 3 set a navigable's outstanding child count while it already had one — two "
-           "destructions of the same navigable are in flight, and the second one's children will report into "
-           "the first one's wait");
-    p->destroy_wait = n;
+    DCHECK(p != NULL, "something that is not a WindowProxy was given a subtree-operation count");
+    DCHECK(op >= 0 && op < WP_SUBTREE_OP_N,
+           "a subtree operation outside the WindowProxy record's capacity reported a count — widen "
+           "WP_SUBTREE_OP_N with the operation");
+    DCHECK(p->child_wait[op] == 0,
+           "a navigable's outstanding child count for one operation was set while it already had one — two "
+           "walks of the SAME kind over the same navigable are in flight, and the second one's children will "
+           "report into the first one's wait");
+    p->child_wait[op] = n;
 }
 
-/* A CHILD REPORTED ITS DESTRUCTION — §7.5.10 step 4's incrementDestroyed, counted down. Answers true when this
-   was the LAST one, which is step 5's wait being over and the only moment step 6 may be queued.
-   A NAVIGABLE THAT IS NOT BEING DESTROYED ANSWERS FALSE, because its count is zero: a frame removed on its own
-   reports to a parent that is not going anywhere, and that report has to be a no-op rather than an underflow. */
-bool window_proxy_destroy_wait_finish(JSContext *ctx, JSValueConst proxy)
+/* A CHILD REPORTED — the wait's incrementDestroyed/incrementUnloaded/completedTasks, counted down. Answers
+   WP_WAIT_LAST for the last child (the wait being over, and the only moment the waiting navigable's own body
+   may be queued), WP_WAIT_MORE while siblings are outstanding, and WP_WAIT_NONE when this navigable is not
+   running that operation at all — which is how the reporter learns it is the ROOT of the operation rather than
+   underflowing a count that was never raised. */
+int window_proxy_child_wait_report(JSContext *ctx, JSValueConst proxy, int op)
 {
     ProxyData *p = proxy_of(proxy);
     (void)ctx;
-    DCHECK(p != NULL, "something that is not a WindowProxy was told a child navigable had been destroyed");
-    if (p->destroy_wait == 0) return false;
-    return --p->destroy_wait == 0;
+    DCHECK(p != NULL, "something that is not a WindowProxy was told a child navigable had finished");
+    DCHECK(op >= 0 && op < WP_SUBTREE_OP_N,
+           "a subtree operation outside the WindowProxy record's capacity reported a child — widen "
+           "WP_SUBTREE_OP_N with the operation");
+    if (p->child_wait[op] == 0) return WP_WAIT_NONE;
+    return --p->child_wait[op] == 0 ? WP_WAIT_LAST : WP_WAIT_MORE;
+}
+
+/* §7.2.5.2 step 3's and §7.3's step 1's test — IS CLOSING alone, which is the half of `closed` that says a
+   close is under way rather than finished. Through proxy_of like every other read of this record: the flow
+   that called close() is the only one whose timeline contains it. */
+bool window_proxy_closing(JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+    DCHECK(p != NULL, "the is-closing state of something that is not a WindowProxy was read");
+    return p->closing != 0;
+}
+
+/* §7.3.2.2's FAMILIAR WITH — see window_proxy.h. A is the INCUMBENT realm's browsing context, which is this
+   agent's, so every "A's active document's origin" below is g_local_origin and every "is A" is this realm's
+   own Window or its proxy. */
+static bool proxy_is_incumbent_window(JSContext *ctx, JSValueConst v)
+{
+    JSValue g = JS_GetGlobalObject(ctx);
+    bool same = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(v);
+
+    JS_FreeValue(ctx, g);
+    return same || JS_VALUE_GET_PTR(v) == JS_VALUE_GET_PTR(document_window_proxy(ctx));
+}
+
+/* IS THIS LINK OF A NAVIGABLE CHAIN SAME ORIGIN WITH THE INCUMBENT? A link is either another navigable's proxy
+   or this agent's own Window, which is where the chain ENDS — window_proxy_new is handed the creator's Window
+   as a child or auxiliary navigable's parent. An agent is ORIGIN-KEYED, so its Window's origin IS the
+   incumbent's, and the comparison is then §7.2.5.1's one rule: an OPAQUE origin is same origin with nothing,
+   not even with itself, so a sandboxed document is not familiar with its own browsing context either. */
+static bool link_same_origin_as_incumbent(JSContext *ctx, JSValueConst v)
+{
+    ProxyData *q = JS_GetOpaque(v, g_proxy_class);
+
+    if (q) return proxy_same_origin(q);
+    if (!proxy_is_incumbent_window(ctx, v)) return false;
+    return strcmp(g_local_origin, "null") != 0;
+}
+
+bool window_proxy_familiar_with(JSContext *ctx, JSValueConst proxy)
+{
+    JSValue b = JS_DupValue(ctx, proxy);
+    bool ok = false;
+
+    DCHECK(window_proxy_is(proxy), "§7.3.2.2 was asked about something that is not a navigable's WindowProxy");
+    /* THE LOOP IS STEP 3's RECURSION, UNROLLED — "B is an auxiliary browsing context and A is familiar with
+       B's opener browsing context" is the same question about a different B, and an opener link is fixed when
+       the navigable is created (§7.2.5's setter only ever SEVERS one), so the chain is finite and acyclic:
+       every opener predates the navigable it opened. */
+    for (;;) {
+        ProxyData *p = JS_GetOpaque(b, g_proxy_class);
+        JSValue anc;
+
+        if (link_same_origin_as_incumbent(ctx, b)) { ok = true; break; }    /* step 1 */
+        /* Step 3's chain has reached a link that is not a navigable's proxy, which is this agent's own Window
+           — A itself, and step 1 has just answered for it. */
+        if (!p) break;
+        {                                                                   /* step 2: A's top-level IS B */
+            JSValue top = window_proxy_top_navigable(ctx, document_window_proxy(ctx));
+            bool is_b = JS_VALUE_GET_PTR(top) == JS_VALUE_GET_PTR(b);
+            JS_FreeValue(ctx, top);
+            if (is_b) { ok = true; break; }
+        }
+        /* Step 4: an ANCESTOR browsing context of B whose active document is same origin with A's — which
+           includes the case where A is that ancestor, since the chain ends at this agent's Window. */
+        anc = JS_DupValue(ctx, p->parent);
+        while (!JS_IsUndefined(anc)) {
+            ProxyData *q = JS_GetOpaque(anc, g_proxy_class);
+            JSValue up;
+
+            if (link_same_origin_as_incumbent(ctx, anc)) { ok = true; break; }
+            if (!q) break;                       /* the chain's end, and it was not same origin */
+            up = JS_DupValue(ctx, q->parent);
+            JS_FreeValue(ctx, anc);
+            anc = up;
+        }
+        JS_FreeValue(ctx, anc);
+        if (ok) break;
+        if (JS_IsNull(p->opener) || JS_IsUndefined(p->opener)) break;       /* B is not auxiliary */
+        {
+            JSValue o = JS_DupValue(ctx, p->opener);
+            JS_FreeValue(ctx, b);
+            b = o;                                                          /* step 3 */
+        }
+    }
+    JS_FreeValue(ctx, b);
+    return ok;
 }
 
 bool window_proxy_destroyed(JSValueConst proxy)
@@ -852,20 +947,18 @@ static JSValue proxy_name_set(JSContext *ctx, JSValueConst this_val, JSValueCons
     return window_proxy_name_assign(ctx, this_val, v);
 }
 
-/* §7.2.5.2's `close()`. A REAL STATE CHANGE, never a no-effect: the navigable is closed and `closed` reports it
-   from that point on, which is exactly what a page tests before touching a popup again. §7.2.5.2 returns early
-   for a navigable that is not a TOP-LEVEL traversable, so `iframe.contentWindow.close()` does nothing — a frame
-   is removed by removing its element, not by closing its window. */
+/* §7.2.5.2's `close()`. THE WHOLE METHOD IS document_lifecycle.c's, and this member is one of its two
+   spellings: `w.close()` from an opener and `window.close()` inside the popup are one method on one navigable,
+   and each carried a body of its own that stopped at step 3 — is closing went true and nothing else happened,
+   so `closed` reported a closed window over a document that was still running its timers, still holding its
+   subframes, and that had never fired a beforeunload or an unload listener. Steps 4-6 are the rest of it.
+   The navigable is this agent's whether or not its active document is, so there is nothing to delegate and
+   nothing to ask a peer: `this_val` IS thisTraversable, and `ctx` is the INCUMBENT realm step 6 asks about. */
 static JSValue proxy_close(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    ProxyData *p = proxy_of(this_val);
-
     (void)argc; (void)argv; (void)magic;
-    if (!p) return JS_UNDEFINED;
-
-/* §7.2.5.2 RETURNS EARLY for a navigable that is not a TOP-LEVEL traversable, and that is the whole of it
-       for every proxy: the navigable is this agent's, so there is nothing to delegate and nothing to ask. */
-    if (window_proxy_is_top_level(this_val)) p->closing = 1;
+    if (!window_proxy_is(this_val)) return JS_UNDEFINED;
+    document_lifecycle_window_close(ctx, this_val);
     return JS_UNDEFINED;
 }
 

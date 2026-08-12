@@ -52,6 +52,11 @@ JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const char *origin
    never closed the window still sees it open. Only ever a TOP-LEVEL traversable: ask
    window_proxy_is_top_level first, which is the early return §7.2.5.2 opens with. */
 void window_proxy_set_closing(JSContext *ctx, JSValueConst proxy);
+/* §7.2.5.2 step 3's and §7.3's own step 1's TEST — is closing ALONE, which is not what `closed` answers. A
+   traversable that is closing has not been destroyed yet (its documents are still unloading), and a navigable
+   whose document WAS destroyed was never closing at all, so a close path that asked `closed` would refuse to
+   close a frame's container's traversable and would re-enter itself for a destroyed one. */
+bool window_proxy_closing(JSValueConst proxy);
 
 /* IS THIS NAVIGABLE A TOP-LEVEL TRAVERSABLE — §7.2.5.2's early return and §7.3's is-closing precondition, one
    fact asked from one place so both spellings of close() make the same test. */
@@ -63,12 +68,34 @@ bool window_proxy_is_top_level(JSValueConst proxy);
 void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy);
 bool window_proxy_destroyed(JSValueConst proxy);
 
-/* §7.5.10 STEPS 3-5's numberDestroyed, on the navigable it is about and counted DOWN. `_set` records how many
-   child navigables this one is waiting on, before any of them is queued; `_finish` reports one child's
-   destruction and answers true when it was the LAST — which is step 5's wait being over and the only moment
-   step 6 may be queued. Per-flow, so two forked arms destroying one subtree do not count into each other. */
-void window_proxy_destroy_wait_set(JSContext *ctx, JSValueConst proxy, uint32_t n);
-bool window_proxy_destroy_wait_finish(JSContext *ctx, JSValueConst proxy);
+/* THE SUBTREE WAIT — §7.4.2.4's totalTasks, §7.5.9 step 5's numberUnloaded and §7.5.10 step 5's
+   numberDestroyed are one mechanism, on the navigable that is waiting and counted DOWN. `_set` records how
+   many child navigables this one is waiting on, before any of them is queued; `_report` reports one child's
+   completion. Per-flow, so two forked arms tearing down one subtree do not count into each other.
+   PER OPERATION, because two of them can be in flight over one tree: a page's `unload` listener may remove an
+   `<iframe>`, which starts §7.5.10 over a subtree while §7.5.9 is still counting children in it, and one count
+   would let that destroy's report empty the unload's wait. `op` is the operation's index — core/frame/
+   document_lifecycle.c names them, and WP_SUBTREE_OP_N is the record's capacity, asserted at every call so a
+   fourth operation cannot be added without widening it. */
+#define WP_SUBTREE_OP_N 3
+/* WHAT A REPORT MEANS, and the three answers are three cases rather than a boolean and a fallback:
+   LAST is the wait being over — the only moment the waiting navigable's own body may be queued;
+   MORE is a sibling still outstanding;
+   NONE is "no navigable above is running this operation", which makes the reporter the ROOT it was started at
+   and is where the operation's continuation belongs. A frame removed on its own reports NONE to a parent that
+   is not going anywhere; a boolean answer could not tell that from MORE, and the two want opposite things. */
+enum { WP_WAIT_NONE = 0, WP_WAIT_MORE, WP_WAIT_LAST };
+void window_proxy_child_wait_set(JSContext *ctx, JSValueConst proxy, int op, uint32_t n);
+int  window_proxy_child_wait_report(JSContext *ctx, JSValueConst proxy, int op);
+
+/* §7.3.2.2's "browsing context A is FAMILIAR WITH browsing context B", asked as "is the INCUMBENT realm's
+   browsing context familiar with the one `proxy` names" — which is the only form §7.2.5.2 step 6 uses, and the
+   form in which A is a realm this instance is standing in rather than a second proxy to resolve.
+   It is the standard's four-part disjunction over the navigable state this record already holds: same origin;
+   A's top-level browsing context IS B; B is auxiliary and A is familiar with B's opener; or an ancestor of B is
+   same origin with A. The third is what makes `w = open("https://other/"); w.close()` work — a cross-origin
+   popup this document opened is familiar through its opener even though the origins differ. */
+bool window_proxy_familiar_with(JSContext *ctx, JSValueConst proxy);
 
 /* §7.2.5.1's member surface FOR ONE REALM, so a component that owns one of the cross-origin-accessible members
    (postMessage) installs it where every proxy of that realm sees it. OWNED: the caller frees. */

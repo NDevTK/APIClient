@@ -46,6 +46,13 @@ int document_lifecycle_step(JSContext *ctx);
    document's parser has not finished, which is `readyState === "loading"`. */
 bool document_render_blocked(JSContext *ctx);
 
+/* HTML §7.5.9's PAGE SHOWING for THIS realm's Document — "initially false", set true by §13.2.7's "the end"
+   when it fires `pageshow`, and read-then-cleared by §7.5.9 step 9, which fires `pagehide` only if it is true.
+   The pair is what stops a page seeing two pagehides with no pageshow between them, so the flag is the
+   CONDITION on both fires rather than bookkeeping beside them. Per-realm and per-flow — see the definition. */
+bool document_page_showing(JSContext *ctx);
+void document_page_showing_set(JSContext *ctx, bool showing);
+
 /* §7.2.5.1's ONE WindowProxy for THIS realm's navigable — what `window.closed` reads the navigable's state
    through and what every message this document posts carries as `source`. BORROWED. It lives on the realm
    because it is one PER realm; a registry keyed by document would be an immortal root holding a proxy for

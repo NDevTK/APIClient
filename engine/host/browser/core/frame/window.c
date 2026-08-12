@@ -39,6 +39,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/frame/window.h"
+#include "core/frame/document_lifecycle.h"
 #include "core/frame/window_proxy.h"
 #include "core/dom/document.h"
 #include "core/url/url.h"
@@ -63,19 +64,17 @@ static JSValue js_win_closed(JSContext *ctx, JSValueConst this_val, int magic)
     return JS_NewBool(ctx, window_proxy_closed(ctx, document_window_proxy(ctx)));
 }
 
-/* §7.2.5.2 `close()`. A REAL STATE CHANGE, never a no-effect: is closing goes true and `closed` reports it from
-   that point on, which is exactly what a page tests before touching a popup again.
-   STEP 2 IS AN EARLY RETURN AND IT WAS MISSING HERE. `close()` on a FRAME's Window does nothing — the
-   traversable it names is not top-level — and this member closed whatever it was called on, so a frame could
-   close itself while the proxy spelling of the same method correctly refused. One method, one test, asked of
-   the component that holds the navigable's state. */
+/* §7.2.5.2 `close()`. THE METHOD IS ONE ALGORITHM AND THIS IS ONE OF ITS TWO SPELLINGS — `window.close()` here
+   and `w.close()` through the WindowProxy are the same six steps on the same navigable, and each carried a body
+   of its own that was step 2's early return and then a single byte: is closing went true and nothing else
+   happened. So `closed` reported a closed window over a document that was still running — its beforeunload and
+   unload listeners never fired, its timers stayed scheduled, its subframes stayed live. Steps 4-6 are what was
+   missing, and they live in document_lifecycle.c because what step 6 queues is §7.3's definitely close, which
+   unloads the subtree and then destroys it. */
 static JSValue js_win_close(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    JSValueConst proxy = document_window_proxy(ctx);
-
     (void)this_val; (void)argc; (void)argv; (void)magic;
-    if (!window_proxy_is_top_level(proxy)) return JS_UNDEFINED;   /* step 2 */
-    window_proxy_set_closing(ctx, proxy);
+    document_lifecycle_window_close(ctx, document_window_proxy(ctx));
     return JS_UNDEFINED;
 }
 

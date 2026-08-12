@@ -22,6 +22,7 @@
 #include "core/events/event.h"
 #include "core/events/create_event.h"
 #include "core/events/event_target.h"
+#include "core/events/page_transition_event.h"
 #include "core/events/report_exception.h"
 #include "core/html/html_element.h"
 #include "core/html/html_form.h"
@@ -921,6 +922,42 @@ static int document_readiness(JSContext *ctx)
     return r;
 }
 
+/* HTML §7.5.9's PAGE SHOWING, which is a Document's and lives where its readiness does.
+ *
+ * It is the boolean "used to ensure that scripts receive pageshow and pagehide events in a consistent manner
+ * (e.g., that they never receive two pagehide events in a row without an intervening pageshow, or vice
+ * versa)" — so it is not bookkeeping beside those two fires, it is the CONDITION on both of them: §13.2.7's
+ * "the end" asserts it is false and sets it true before firing `pageshow`, and §7.5.9 step 9 fires `pagehide`
+ * only if it is true, setting it false first.
+ *
+ * IT LIVES IN THIS REALM'S OWN BASELINE RECORD, the shape the readiness above and §6.6's visibility state
+ * already use, and for the same two reasons: the record is unreachable from the page, so nothing but this
+ * component can write the flag; and the write is an ordinary property write, so the heap COW captures it and
+ * one arm of a fork can unload its document without touching its sibling's. */
+static int g_showing_slot = -1;
+
+bool document_page_showing(JSContext *ctx)
+{
+    JSValue rec = realm_value_get(ctx, g_showing_slot), v;
+    int32_t on = 0;
+
+    DCHECK(JS_IsObject(rec), "a realm answered for its document's page showing with no record");
+    v = JS_GetPropertyStr(ctx, rec, "showing");
+    JS_ToInt32(ctx, &on, v);
+    JS_FreeValue(ctx, v);
+    JS_FreeValue(ctx, rec);
+    return on != 0;
+}
+
+void document_page_showing_set(JSContext *ctx, bool showing)
+{
+    JSValue rec = realm_value_get(ctx, g_showing_slot);
+
+    DCHECK(JS_IsObject(rec), "a realm was asked to set a page showing it has no record for");
+    JS_SetPropertyStr(ctx, rec, "showing", JS_NewInt32(ctx, showing ? 1 : 0));
+    JS_FreeValue(ctx, rec);
+}
+
 /* HTML §8.1.7.3 "update the rendering" step 3's RENDER-BLOCKED clause, answered by the component that owns the
    document's load lifecycle rather than guessed by the one that runs the steps.
  *
@@ -946,10 +983,34 @@ static int document_done_stage(JSContext *ctx, int stage)
         return 1;
     }
     DCHECK(stage == 1, "the document lifecycle was asked for a stage it does not have");
-    document_set_ready(ctx, 2);
-    /* HTML: `load` is fired at the WINDOW and does not bubble — there is nothing above it to bubble to. */
+    /* §13.2.7's "THE END", step 7. Its sub-steps are in this order and each of them is observable. */
+    document_set_ready(ctx, 2);                                                  /* step 7.1 */
+    /* STEP 7.2: "If the Document object's browsing context is null, then abort these steps." A document whose
+       navigable was destroyed under it — a frame removed, a traversable closed — must not fire `load` or
+       `pageshow` at a Window whose browsing context is gone, and §7.5.9 destroys documents while this walk is
+       still running. It is the destruction that is asked for and not `closed`: a traversable that is merely
+       CLOSING still has its browsing context, and its documents are still finishing. */
+    {
+        JSValueConst proxy = doc_here(ctx)->proxy;
+        if (window_proxy_is(proxy) && window_proxy_destroyed(proxy))
+            return 1;
+    }
+    /* STEP 7.5: `load` at the WINDOW — it does not bubble (there is nothing above it to bubble to) and it is
+       fired WITH THE LEGACY TARGET OVERRIDE FLAG SET, so a listener's `e.target` is the DOCUMENT. */
     event_target_fire(ctx, doc_here(ctx)->win_obj,
-                      event_new(ctx, "load", /*bubbles*/ false, /*cancelable*/ false), JS_UNDEFINED);
+                      event_new(ctx, "load", /*bubbles*/ false, /*cancelable*/ false),
+                      doc_here(ctx)->doc_obj);
+    /* STEPS 7.8-7.10: the document is now SHOWING, and `pageshow` says so with `persisted` false — this
+       document was loaded rather than restored from a session history entry. §7.5.9's `pagehide` is the other
+       end of that pair and fires only because this ran. */
+    DCHECK(!document_page_showing(ctx),
+           "§13.2.7 \"the end\" step 7.8 asserts a document's page showing is false when its load completes — "
+           "a document that reached the end twice would fire two pageshows with no pagehide between them, "
+           "which is the exact inconsistency the flag exists to prevent");
+    document_page_showing_set(ctx, true);
+    event_target_fire(ctx, doc_here(ctx)->win_obj,
+                      page_transition_event_new(ctx, "pageshow", /*persisted*/ false),
+                      doc_here(ctx)->doc_obj);
     return 1;
 }
 
@@ -1446,6 +1507,9 @@ void document_init(JSContext *ctx)
     JS_NewClass(JS_GetRuntime(ctx), g_document_class, &d);
     node_claim_type(LXB_DOM_NODE_TYPE_DOCUMENT, g_document_class);
     g_ready_slot = realm_value_declare(ctx, "HTML current document readiness");
+    /* §7.5.9's page showing is the readiness's twin — one Document's state, written by the same two algorithms
+       that move the readiness ("the end" sets it, unloading clears it) — so it is declared beside it. */
+    g_showing_slot = realm_value_declare(ctx, "HTML §7.5.9 page showing");
     document_declare_members(ctx);
     document_fragment_init(ctx);   /* §4.7, before any fragment is wrapped as a bare Node */
     shadow_root_init(ctx);         /* §4.8, whose prototype chains to §4.7's — declared after it */
@@ -1492,6 +1556,15 @@ void document_install_proto(JSContext *ctx)
         CHECK(!JS_IsException(rec), "this realm's document-readiness record could not be allocated");
         JS_SetPropertyStr(ctx, rec, "stage", JS_NewInt32(ctx, 0));
         realm_value_set(ctx, g_ready_slot, rec);
+    }
+    /* §7.5.9: page showing is "initially false", and it is built HERE for the reason the readiness is — a
+       record made on first touch would be made inside whichever flow happened to read first, and would then be
+       that flow's document rather than the baseline every flow forks from. */
+    {
+        JSValue rec = JS_NewObjectProto(ctx, JS_NULL);
+        CHECK(!JS_IsException(rec), "this realm's §7.5.9 page-showing record could not be allocated");
+        JS_SetPropertyStr(ctx, rec, "showing", JS_NewInt32(ctx, 0));
+        realm_value_set(ctx, g_showing_slot, rec);
     }
 }
 
