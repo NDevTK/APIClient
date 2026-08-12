@@ -27,7 +27,16 @@
 
 /* §6.6's two members, onto Document.prototype — called from document_install_proto, like every other
    component that puts something there. */
+/* Declared ONCE PER AGENT, like every other realm value — page_visibility_install then builds this realm's
+   record. */
+void page_visibility_init(JSContext *ctx);
 void page_visibility_install(JSContext *ctx, JSValueConst proto);
+
+/* §6.6's UPDATE THE VISIBILITY STATE. HTML §7.5.9 calls it with "hidden" while unloading a document, between
+   the pagehide event and the unload event. A state that is already the new one changes nothing and fires
+   nothing, which is the algorithm's own first step; otherwise the state moves and `visibilitychange` is fired
+   at the Document, bubbling. */
+void page_visibility_update(JSContext *ctx, bool hidden);
 
 /* IS THIS DOCUMENT HIDDEN, as the ENGINE must decide it — HTML §8.1.7.3 step 3 removes a doc whose visibility
    state is "hidden", and that step is C and cannot fork. It CONCRETIZES ON THE PIN: it asks the flow's own

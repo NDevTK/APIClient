@@ -1452,6 +1452,11 @@ void document_init(JSContext *ctx)
     slot_init(ctx);                /* §4.2.2's slots, which only exist inside a §4.8 tree */
     document_type_init(ctx);       /* §4.6, before the parser's doctype is wrapped as a bare Node */
     dom_implementation_init(ctx);  /* §4.5.1, which every document's record builds one of */
+    /* §6.6's visibility state is a DOCUMENT's, and page_visibility_install already runs from
+       document_install_proto below — so its declaration is paired with it HERE rather than copied into each
+       host's own init list, which is the hand-picked list CLAUDE.md warns about: three hosts each declaring
+       their own is three places for the next component to be missing from one of. */
+    page_visibility_init(ctx);
     realm_declare_intrinsic(document_install_proto);
 }
 
