@@ -95,6 +95,14 @@ bool document_is_passive_default_node(const lxb_dom_node_t *n);
    when it is off, since a creation made at baseline is baseline. Returns the document's wrapper, OWNED. */
 JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *content_type);
 
+/* HTML §4.12.3's APPROPRIATE TEMPLATE CONTENTS OWNER DOCUMENT for `doc` — the inert Document a `<template>`'s
+   contents belong to, so that a template's markup is NOT live: the owner has no browsing context, which is what
+   the standard means by inert (its scripts do not run, its custom elements do not upgrade). `doc` itself when
+   `doc` is a Document this algorithm created; otherwise `doc`'s associated inert template document, created on
+   the first ask in `doc`'s RELEVANT REALM and remembered on it. Never NULL. The inert document is the REALM's —
+   see the definition for why the flow's delta may not own it. */
+lxb_html_document_t *document_template_contents_owner(JSContext *ctx, lxb_dom_document_t *doc);
+
 /* §4.4 baseURI's answer FOR ONE NODE: its NODE DOCUMENT's address. Not the same as document_base_url the moment
    a second Document exists — that one is the REALM's active document, which is HTML's "API base URL" and is
    what a fetch, a hyperlink and a navigation resolve against. */
