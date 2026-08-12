@@ -20,12 +20,7 @@
  * 4 onward. §State-isolation requires exactly that of it — the list lives on the running flow's step state, so
  * it forks per flow and parks to the IDB cold tier with the flow that is building it, which a malloc'd C list
  * on the side could not do and which matters here more than usual: a `formdata` handler that forks leaves two
- * arms each appending their own entries.
- *
- * WHAT IS HONESTLY ABSENT, BY NAME:
- *   - `<input type=file>`'s SELECTED FILES are always empty, and that is not a gap: this engine has no file
- *     picker and no user, so step 5.8's "if there are no selected files" branch is the whole of what it can
- *     ever take. That branch is implemented, so a named file control still contributes its entry. */
+ * arms each appending their own entries. */
 #include <string.h>
 
 #include "check.h"
@@ -39,6 +34,7 @@
 #include "core/html/directionality.h"
 #include "core/html/element_internals.h"
 #include "core/html/html_form.h"
+#include "core/html/input_value.h"
 #include "core/dom/node.h"
 #include "solver/concolic.h"
 
@@ -174,15 +170,46 @@ static void fel_image_button_entries(JSContext *ctx, JSValueConst entries, JSVal
     free(key);
 }
 
-/* Step 5.8: the FILE UPLOAD state with no selected files — "create an entry with name and a new File object
-   with an empty name, application/octet-stream as type, and an empty body". */
-static void fel_file_entry(JSContext *ctx, JSValueConst entries, const char *name, size_t nlen)
+/* STEP 5.8, BOTH OF ITS BRANCHES:
+ *
+ *   "1. If there are no selected files, then create an entry with name and a new File object with an empty
+ *       name, application/octet-stream as type, and an empty body, and append it to entry list.
+ *    2. Otherwise, for each file in selected files, create an entry with name and a File object representing
+ *       the file, and append it to entry list."
+ *
+ * The second branch was written down as unreachable — "this engine has no file picker and no user" — which was
+ * a claim about the engine's INPUTS made where a claim about the CONTROL's state belonged, and input_value.c's
+ * list of selected files falsified it: `input.files = fl` and §4.10.5.1.17's update the file selection both
+ * fill that list, and a form submitted afterwards has to carry what is in it. The empty-list branch is not a
+ * fallback for the other — it is the standard's own answer for a control nothing selected into, and it is why
+ * a named file control contributes an entry at all.
+ *
+ * "A File object REPRESENTING THE FILE" is the File that IS in the list: create-an-entry's step 3 leaves a
+ * value that is already a File alone (it re-wraps only a plain Blob, or a File given an explicit filename), so
+ * `fd.get(name) === input.files[0]` holds exactly as it does in a browser. */
+static void fel_file_entries(JSContext *ctx, JSValueConst entries, JSValueConst field,
+                             const char *name, size_t nlen)
 {
-    static const char OCTET[] = "application/octet-stream";
-    JSValue f = file_new(ctx, "", 0, OCTET, sizeof(OCTET) - 1, "", 0, 0);
+    uint32_t n = input_files_count(ctx, field), k;
 
-    if (JS_IsException(f)) { JS_FreeValue(ctx, f); return; }
-    form_data_append_entry(ctx, entries, name, nlen, f);
+    if (!n) {
+        static const char OCTET[] = "application/octet-stream";
+        JSValue f = file_new(ctx, "", 0, OCTET, sizeof(OCTET) - 1, "", 0, 0);
+
+        CHECK(!JS_IsException(f),
+              "OOM building §4.10.22.4 step 5.8's empty File — a submission that silently drops a control's "
+              "entry is a different request from the one the form describes");
+        form_data_append_entry(ctx, entries, name, nlen, f);
+        return;
+    }
+    for (k = 0; k < n; k++) {
+        JSValue f = input_files_item(ctx, field, k);
+
+        DCHECK(!JS_IsUndefined(f),
+               "§4.10.22.4 step 5.8 walked past the end of a control's list of selected files — the count and "
+               "the items come from the one FileList, so an index below the count is an item");
+        form_data_append_entry(ctx, entries, name, nlen, f);
+    }
 }
 
 /* ONE CONTROL — step 5's body for a single field. Nothing in it reaches the page's code: every read is a
@@ -233,7 +260,7 @@ static void fel_one_field(JSContext *ctx, JSValueConst entries, JSValueConst fie
         fel_append(ctx, entries, name, nlen, html_form_checkbox_value(ctx, field));   /* step 5.7 */
         break;
     case FORM_FIELD_FILE:
-        fel_file_entry(ctx, entries, name, nlen);                                     /* step 5.8 */
+        fel_file_entries(ctx, entries, field, name, nlen);                            /* step 5.8 */
         break;
     case FORM_FIELD_CHARSET:
         /* Step 5.9: `_charset_` carries the NAME OF THE ENCODING the submission picked, which is the one thing

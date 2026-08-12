@@ -105,6 +105,10 @@ const INTERFACES = {
                         /* §7.2.5's BarProp objects — locationbar, menubar and the rest. */
                         "core/frame/bar_prop.c"],
   Navigator:            "core/frame/navigator.c",
+  /* HTML §6.4.4. The interface had no row at all, so the audit said nothing about it — and its two getters and
+     the object Navigator's `userActivation` answers with live with §6.4's state rather than with the Navigator
+     that exposes them, which is the file named here. */
+  UserActivation:       "core/html/user_activation.c",
   History:              "core/frame/history.c",
   Screen:               "core/frame/screen.c",
   URL:                  "core/url/url.c",

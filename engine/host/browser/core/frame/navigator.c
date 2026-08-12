@@ -28,6 +28,8 @@
 #include "quickjs.h"
 #include "solver/concolic.h"
 #include "core/frame/navigator.h"
+#include "core/html/user_activation.h"
+#include "core/idl_args.h"
 
 /* A real desktop Chrome's identity, used as the EXAMPLE for the environment members. `appVersion` is the user
    agent minus the leading "Mozilla/", which is what HTML says it is. */
@@ -57,6 +59,20 @@ static JSValue js_nav_false(JSContext *ctx, JSValueConst this_val, int argc, JSV
 {
     (void)ctx; (void)this_val; (void)argc; (void)argv;
     return JS_FALSE;
+}
+
+/* HTML §6.4.4: `partial interface Navigator { [SameObject] readonly attribute UserActivation userActivation; }`.
+   "The userActivation getter steps are to return this's relevant global object's associated UserActivation" —
+   which user_activation.c minted with this realm, so the SAME object comes back on every read without this
+   getter caching anything, and the two booleans behind it are §6.4.1's real state rather than a constant.
+   AN ACCESSOR, NOT A DATA PROPERTY, because the IDL says `readonly attribute` and a page assigning to it must
+   not replace the object. That every other member above is a data property a page can overwrite is Navigator's
+   own unbuilt half — this interface has no prototype here and its members are on the instance — and the way to
+   fix it is to give Navigator its interface, not to add one more member with the same defect. */
+static JSValue js_nav_user_activation(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    (void)this_val; (void)magic;
+    return user_activation_object(ctx);
 }
 
 void navigator_install(JSContext *ctx, JSValueConst global)
@@ -116,6 +132,11 @@ void navigator_install(JSContext *ctx, JSValueConst global)
     }
     JS_PreventExtensions(ctx, langs);
     JS_SetPropertyStr(ctx, nav, "languages", langs);
+
+    /* HTML §6.4.4's member on Navigator. It is installed HERE and not from user_activation.c because this is
+       the only thing that reaches the Navigator object, and the object it answers with was built with the
+       realm — so a `navigator.userActivation.isActive` gate reads the Window's real activation state. */
+    idl_install_accessor(ctx, nav, "userActivation", js_nav_user_activation, 0, -1);
 
     /* HTML: `clientInformation` is the SAME Navigator object, not a copy. */
     JS_SetPropertyStr(ctx, (JSValue)global, "clientInformation", JS_DupValue(ctx, nav));

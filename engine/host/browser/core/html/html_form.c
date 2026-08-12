@@ -1623,6 +1623,11 @@ void html_form_declare(JSContext *ctx)
     /* §4.10.21's constraint validation, declared from here for the same reason: its members go on the control
        interfaces §4.10 owns the prototypes of, and step 5.4 above is its caller. */
     constraint_validation_declare(ctx);
+    /* §4.10.5.4's `files` and §4.10.5.1.17's list of selected files behind it, declared here for exactly the
+       same reason: the member goes on HTMLInputElement.prototype, which §4.10 owns, and the algorithm belongs
+       to the file that owns the value. Without this line the whole of input_value.c's file half was code no
+       realm installed — an interface member reporting itself built and not existing. */
+    input_value_declare(ctx);
     /* §6.4's USER ACTIVATION STATE — declared here because §6.4.1's per-Window record has to exist BEFORE the
        first realm is built (a realm that missed it answers §7.4.2.4's sticky-activation conjunct out of a
        record that is not there), and this is the declaration point core/html reaches the agent through. It is
@@ -1656,6 +1661,7 @@ void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst inp
     idl_install_accessor(ctx, option_proto, "value", js_ctrl_get_value, CTRL_OPTION, g_id_val_option);
     idl_install_accessor(ctx, input_proto, "checked", js_ctrl_get_checked, 0, g_id_checked);
     constraint_validation_install(ctx, input_proto, textarea_proto);
+    input_value_install(ctx, input_proto);   /* §4.10.5.4's `files`, on the prototype §4.10 owns */
 }
 
 void html_form_free(JSContext *ctx)
@@ -1664,6 +1670,7 @@ void html_form_free(JSContext *ctx)
     form_data_event_free(ctx);
     form_entry_list_free(ctx);
     constraint_validation_free(ctx);
+    input_value_free();
     user_activation_free();
     /* The slot keys are the AGENT's, so they are released with the agent — a Symbol nobody frees is a live GC
        object the runtime's own walk counts as a leak. */

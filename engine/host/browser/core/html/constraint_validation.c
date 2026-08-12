@@ -40,6 +40,7 @@
 #include "core/html/custom_elements.h"
 #include "core/html/element_internals.h"
 #include "core/html/html_form.h"
+#include "core/html/input_value.h"
 #include "core/idl_args.h"
 #include "core/url/url.h"
 #include "solver/concolic.h"
@@ -724,10 +725,12 @@ static uint32_t cv_states(JSContext *ctx, JSValueConst wrap, const CvValue *v, i
         return flags;
     }
     if (st == INPUT_STATE_FILE) {
-        /* §4.10.5.1.17: required and the LIST OF SELECTED FILES is empty. This engine has no file picker, so
-           that list is empty for every file control — the same kind of answer §4.10.22.4 step 5.8 gives such a
-           control: a condition whose state cannot be anything else, evaluated at the step that asks it. */
-        if (cv_has(el, "required")) flags |= 1u << CV_VALUE_MISSING;
+        /* §4.10.5.1.17: "If the element is required and the list of selected files is empty, then the element
+           is suffering from being missing." BOTH conjuncts, and the second is a real question now that
+           input_value.c holds the list: `required` alone answered missing for every file control, so a form
+           whose picker HAD selected a file still refused to submit. There is no mutability conjunct here —
+           §4.10.5.3.4's has one and this does not — so it is not written in. */
+        if (cv_has(el, "required") && input_files_count(ctx, wrap) == 0) flags |= 1u << CV_VALUE_MISSING;
         return flags;
     }
     if (st == INPUT_STATE_COLOR) {

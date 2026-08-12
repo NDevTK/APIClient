@@ -72,4 +72,16 @@ void user_activation_notify(JSContext *ctx);
 void user_activation_consume(JSContext *ctx);
 void user_activation_consume_history_action(JSContext *ctx);
 
+/* §6.4.4's `UserActivation` OBJECT for this realm's Window — what §6.4.4's
+   `partial interface Navigator { [SameObject] readonly attribute UserActivation userActivation; }` answers
+   with, and the only thing navigator.c needs from this component. OWNED: the caller frees.
+
+   "Each Window has an associated UserActivation ... Upon creation of the Window object, its associated
+   UserActivation must be set to a new UserActivation object created in the Window object's relevant realm." So
+   the object is minted with the realm beside the record above, and `[SameObject]` is a property of WHERE IT IS
+   KEPT rather than of a cache the getter keeps: there is one object per realm to answer with, so
+   `navigator.userActivation === navigator.userActivation` holds by construction and a flow cannot mint a
+   baseline object by being the first to look. */
+JSValue user_activation_object(JSContext *ctx);
+
 #endif

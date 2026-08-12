@@ -4,6 +4,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
 #include "core/frame/window_proxy.h"
@@ -307,32 +308,141 @@ void user_activation_consume_history_action(JSContext *ctx)
     ua_consume_page(ctx, true);
 }
 
+/* ---- §6.4.4's UserActivation INTERFACE -----------------------------------------------------------------------
+ *
+ *   [Exposed=Window] interface UserActivation {
+ *     readonly attribute boolean hasBeenActive;
+ *     readonly attribute boolean isActive;
+ *   };
+ *
+ * THE OBJECT CARRIES NO STATE OF ITS OWN, and that is the standard's shape rather than a stub: both getters
+ * read "this's relevant global object", so the state they answer from is the record above and what the object
+ * IS is the identity a page holds and brand-checks. It is minted with the realm below — §6.4.4 says "upon
+ * creation of the Window object" — so the [SameObject] guarantee comes from the realm slot rather than from a
+ * cache in navigator.c's getter, and no flow can make its own first read into every sibling's baseline. */
+static JSClassID g_ua_class;
+static int g_obj_slot = -1;
+
+/* WEB IDL §3.7.5's BRAND CHECK. `UserActivation.prototype.isActive` read off a plain object is a TypeError, and
+   a page tells that apart from `false` — which is the whole reason the members cannot be plain data properties
+   on the one object. */
+static bool ua_brand(JSContext *ctx, JSValueConst this_val)
+{
+    DCHECK(g_ua_class != 0, "a UserActivation getter ran before user_activation_init declared the class — the "
+                            "getter is only reachable through a prototype the per-realm install builds, so "
+                            "there is no route here that has not run the declaration first");
+    if (JS_GetClassID(this_val) == g_ua_class) return true;
+    JS_ThrowTypeError(ctx, "a UserActivation getter was read off something that is not a UserActivation");
+    return false;
+}
+
+/* THE HALF OF "THIS'S RELEVANT GLOBAL OBJECT" THIS ENGINE CAN ANSWER, asserted rather than assumed. A C member
+   runs in the realm that DEFINED it (js_call_c_function takes `ctx` from the function object), so an ordinary
+   `navigator.userActivation.isActive` arrives with the ctx of the document whose prototype it went through —
+   the right Window, because this realm's object is reached through this realm's prototype. What does NOT
+   arrive right is one realm's getter applied to another's object; the two then name different Windows, and
+   there is no third thing to consult, because the object holds nothing that says whose it is. */
+static void ua_assert_this_window(JSContext *ctx, JSValueConst this_val)
+{
+    JSValue own = realm_value_get(ctx, g_obj_slot);
+    bool same = JS_VALUE_GET_PTR(own) == JS_VALUE_GET_PTR(this_val);
+
+    JS_FreeValue(ctx, own);
+    DCHECK(same, "§6.4.4's getter steps read THIS's relevant global object, and this UserActivation belongs to "
+                 "a different realm of this agent than the prototype it was reached through — answering out of "
+                 "the getter's own realm would report another document's activation. BUILD the object that "
+                 "names its own Window: hand each realm's UserActivation its navigable's WindowProxy once §7.4 "
+                 "has built one, resolve it with window_proxy_realm, and read the timestamps out of THAT realm");
+}
+
+/* "The hasBeenActive getter steps are to return true if this's relevant global object has sticky activation,
+   and false otherwise." */
+static JSValue js_ua_has_been_active(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    (void)magic;
+    if (!ua_brand(ctx, this_val)) return JS_EXCEPTION;
+    ua_assert_this_window(ctx, this_val);
+    return JS_NewBool(ctx, user_activation_sticky(ctx));
+}
+
+/* "The isActive getter steps are to return true if this's relevant global object has transient activation, and
+   false otherwise." */
+static JSValue js_ua_is_active(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    (void)magic;
+    if (!ua_brand(ctx, this_val)) return JS_EXCEPTION;
+    ua_assert_this_window(ctx, this_val);
+    return JS_NewBool(ctx, user_activation_transient(ctx));
+}
+
+JSValue user_activation_object(JSContext *ctx)
+{
+    return realm_value_get(ctx, g_obj_slot);   /* OWNED — realm_value_get asserts the realm ran its install */
+}
+
 /* ---- the declaration and the per-realm record ----------------------------------------------------------- */
 
 /* ONE RECORD PER REALM, BUILT WITH THE REALM. §6.4.1's values belong to a Window and a Window is created with
    its realm, so the record is written here and not lazily on the first read: a record built on first touch
    would be built inside whichever flow happened to ask first, and that flow's baseline would become every
-   other flow's. */
+   other flow's. §6.4.4's prototype, interface object and Window-associated object are built here for the same
+   reason and in the same breath — they are this Window's, and §3.7 gives every realm its own. */
 static void user_activation_install_realm(JSContext *ctx)
 {
     JSValue rec = JS_NewObjectProto(ctx, JS_NULL);
+    JSValue proto, prev, global, obj;
 
     CHECK(!JS_IsException(rec), "user activation: OOM building a realm's §6.4.1 record");
     JS_SetPropertyStr(ctx, rec, UA_LAST, JS_NewFloat64(ctx, INFINITY));
     JS_SetPropertyStr(ctx, rec, UA_HISTORY, JS_NewFloat64(ctx, INFINITY));
     realm_value_set(ctx, g_slot, rec);
+
+    prev = JS_GetClassProto(ctx, g_ua_class);
+    DCHECK(JS_IsNull(prev), "user_activation_install_realm ran twice in one realm — everything already holding "
+                            "the first UserActivation.prototype would answer out of a discarded object");
+    JS_FreeValue(ctx, prev);
+    proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(proto), "UserActivation.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "UserActivation");
+    idl_install_accessor(ctx, proto, "hasBeenActive", js_ua_has_been_active, 0, -1);
+    idl_install_accessor(ctx, proto, "isActive", js_ua_is_active, 0, -1);
+    JS_SetClassProto(ctx, g_ua_class, JS_DupValue(ctx, proto));
+
+    /* §3.7.1's INTERFACE OBJECT, on THIS realm's global. §6.4.4 declares no constructor, so `new
+       UserActivation()` is a TypeError — and its presence is what tells a feature-detecting bundle that the
+       interface exists at all, which is exactly the gate this component was built to stop lying about. */
+    global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "UserActivation", idl_interface_object(ctx, "UserActivation", proto));
+    JS_FreeValue(ctx, global);
+
+    /* "Upon creation of the Window object, its associated UserActivation must be set to a new UserActivation
+       object created in the Window object's relevant realm." */
+    obj = JS_NewObjectProtoClass(ctx, proto, g_ua_class);
+    JS_FreeValue(ctx, proto);
+    CHECK(!JS_IsException(obj), "the Window's associated UserActivation could not be allocated");
+    realm_value_set(ctx, g_obj_slot, obj);
 }
 
 void user_activation_init(JSContext *ctx)
 {
+    JSClassDef d = { "UserActivation" };
+
     DCHECK(g_slot < 0, "user_activation_init ran twice — the record's slot is declared once per AGENT");
     g_slot = realm_value_declare(ctx, "HTML §6.4.1 the Window's user activation timestamps");
+    /* THE CLASS IS BOTH THE PER-REALM PROTOTYPE SLOT AND THE BRAND: the one object per realm WEARS it, so
+       §3.7.5's check is a class-id comparison and a page cannot forge one. */
+    JS_NewClassID(JS_GetRuntime(ctx), &g_ua_class);
+    CHECK(JS_NewClass(JS_GetRuntime(ctx), g_ua_class, &d) == 0,
+          "UserActivation: the per-realm prototype slot could not be declared");
+    g_obj_slot = realm_value_declare(ctx, "HTML §6.4.4 the Window's associated UserActivation");
     realm_declare_intrinsic(user_activation_install_realm);
 }
 
 void user_activation_free(void)
 {
-    /* The RECORDS are the realms' — each is released with its context. What the agent holds is the slot, and a
-       slot id is a class id in a runtime that is going away with it. */
+    /* The RECORDS, the prototypes, the interface objects and the Window-associated objects are the realms' —
+       each is released with its context. What the agent holds is the two slots, and a slot id is a class id in
+       a runtime that is going away with it. */
     g_slot = -1;
+    g_obj_slot = -1;
 }
