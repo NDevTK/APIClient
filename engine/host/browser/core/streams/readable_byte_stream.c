@@ -238,12 +238,14 @@ static JSValue byte_view(JSContext *ctx, int view_type, JSValueConst buffer, dou
     JSValueConst argv[3];
     JSValue o, l, r;
 
-    /* %DataView% is a step machine in this engine, because 25.3.2.1's two ToIndex coercions are the page's code
-       for an ORDINARY construct — but this is the `!` construct the standard names, over an ArrayBuffer and two
-       numbers this component already holds, so none of that runs. JS_NewDataView is the tail of that machine
-       with the coercions and the subclass prototype removed, which is exactly what a `!` means here. */
     if (view_type < 0)
-        return JS_NewDataView(ctx, buffer, (uint64_t)offset, (uint64_t)len);
+        DFAIL("a BYOB pull-into over a DataView reached its view construction. %DataView% is a STEP MACHINE, "
+              "and the fix is to reach it as one — a construct REQUEST from this controller, which is already a "
+              "machine and can park on it — not a C entry that reproduces the machine's tail. A C entry was "
+              "added here and removed: it is a second implementation of a constructor, it drifts from the one "
+              "the page calls the moment either changes, and 'the page's code does not run on this path' is an "
+              "argument for writing one every time. Route this arm through step_construct_run over the realm's "
+              "%DataView% instead");
     o = JS_NewFloat64(ctx, offset);
     l = JS_NewFloat64(ctx, len);
     argv[0] = buffer;

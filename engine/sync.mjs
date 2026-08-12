@@ -99,14 +99,12 @@ function apply() {
   const conflicts = gSafe("git diff --name-only --diff-filter=U");
   if (conflicts) {
     console.error(`[sync] MERGE CONFLICT — needs a human to re-apply patches:\n${conflicts}`);
-    console.error("[sync] resolve, then: node engine/build.mjs worker && stage, run gates+_idxdocs, commit, push.");
+    console.error("[sync] resolve, then rebuild the worker, run _idxdocs, commit, push.");
     console.error("[sync] (to back out: git merge --abort)");
     process.exit(3);
   }
   console.log(`[sync] clean merge → ${gSafe("git describe --tags apiclient-fork")}`);
-  console.log("[sync] rebuilding worker…");
-  execSync("node engine/build.mjs worker && node engine/build.mjs stage", { cwd: ROOT, stdio: "inherit" });
-  console.log("\n[sync] MERGED + BUILT locally — NOTHING pushed yet (a clean merge can still break a real bundle). Next — the AGENT does these, not the user:");
+  console.log("\n[sync] MERGED locally — NOTHING pushed yet (a clean merge can still break a real bundle). Next — the AGENT does these, not the user:");
   console.log("  1. node testing/harness.js restart");
   console.log("  2. FULL polarity gate set + _idxdocs --deep (spin 0, converged, _xss 4x REAL_EXPLOIT)");
   console.log("  3. a real vendor bundle (Apple/MS) — no freeze, grind completes");
