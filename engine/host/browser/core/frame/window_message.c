@@ -20,9 +20,11 @@
  * a Window: the receiver holds a handle to the SENDER'S NAVIGABLE, not to a Window object it could never have.
  *
  * WHAT IS NOT BUILT, AND IS A CRASH RATHER THAN A WRONG ANSWER. A post whose target proxy names another
- * instance has to travel: the message, its origin, and — this is the part that is not a browser problem — the
- * SENDING FLOW'S WORLD, because two arms of a fork post two different messages and the receiver must not merge
- * them into one timeline. window_proxy_window crashes on such a proxy naming what to build. */
+ * instance travels — the message, its origin, and the SENDING FLOW'S WORLD, because two arms of a fork post two
+ * different messages and the receiver must not merge them into one timeline — but its TRANSFER LIST does not.
+ * §2.7.7 has detached the transferables by the time the notice is built, and a holder is a live JS value of
+ * this instance, so sending the bytes alone would destroy them silently. window_message_send_remote aborts
+ * there instead, naming the holder each kind needs. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -128,10 +130,20 @@ static JSValue js_window_deliver(JSContext *ctx, JSValueConst this_val, int argc
     } else {
         /* §9.4.4 steps 7.2 and 7.3: the origin is the SENDER'S and the source is the sender's WindowProxy —
            which is what a handler's `event.origin` check is about, and the whole reason this event is worth
-           anything to the solver. */
-        ev = message_event_new(tctx, "message", data, from, source, ports);
-        JS_FreeValue(tctx, data);
+           anything to the solver. `ports` is `newPorts`: the MessagePorts among the [[TransferredValues]], so a
+           transferred ArrayBuffer arrives inside `data` and is not one of them. */
+        JSValue new_ports = message_event_ports_of(tctx, ports);
         JS_FreeValue(tctx, ports);
+        if (JS_IsException(new_ports)) {
+            JS_FreeValue(tctx, data);
+            JS_FreeCString(ctx, from);
+            JS_FreeValue(ctx, sender_origin);
+            JS_FreeValue(ctx, source);
+            return JS_EXCEPTION;
+        }
+        ev = message_event_new(tctx, "message", data, from, source, new_ports);
+        JS_FreeValue(tctx, data);
+        JS_FreeValue(tctx, new_ports);
     }
     JS_FreeCString(ctx, from);
     JS_FreeValue(ctx, sender_origin);
@@ -177,7 +189,24 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
     size_t blen = 0, b64_cap, n;
     char world[512];
     char *op, *b64;
+    JSValue holders = JS_GetPropertyUint32(ctx, entry, PQ_HOLDERS);
+    uint32_t nheld = structured_transfer_len(ctx, holders);
 
+    JS_FreeValue(ctx, holders);
+    /* A TRANSFER DOES NOT CROSS AN INSTANCE YET, AND A DROPPED ONE IS WORSE THAN A THROW. §2.7.7 has already
+       DETACHED every object in the transfer list by the time this runs — the page no longer has its port or its
+       buffer — so sending the bytes without the holders delivers a message whose `ports` is empty and destroys
+       the transferables with nothing to say so. What is missing is named rather than approximated: a holder is
+       a live JS value belonging to this instance (a port's queue, its head and its entangled REMOTE PORT), and
+       none of those crosses as text. A MessagePort holder needs the remote-port handle window_proxy.c's
+       remote_object.c already builds for a WindowProxy, so the arriving port entangles back across the
+       boundary; an ArrayBuffer holder is bytes and needs only a second base64 field on this record. */
+    DCHECK(nheld == 0,
+           "postMessage transferred an object to ANOTHER INSTANCE — the transfer steps have already detached it "
+           "here, and the routed record has no field to carry a data holder, so the transferable would be "
+           "destroyed and the delivered event's `ports` would be empty. Build the cross-instance holder: a "
+           "remote-port handle for a MessagePort, a base64 field for an ArrayBuffer");
+    (void)nheld;   /* the count is the assert's, and the assert is compiled out of a release build */
     DCHECK(f != NULL, "a cross-instance post was made outside a flow — there would be no world to carry");
     bytes = JS_GetArrayBuffer(ctx, &blen, buf);
     DCHECK(bytes != NULL, "a queued window message held something that is not the bytes it stored");
@@ -251,7 +280,10 @@ void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const
                                      JS_UNDEFINED, JS_NULL);
     CHECK(!JS_IsException(source), "the sending document's WindowProxy could not be allocated");
     JS_SetPropertyUint32(ctx, entry, PQ_DATA, buf);
-    JS_SetPropertyUint32(ctx, entry, PQ_HOLDERS, JS_UNDEFINED);   /* transfer does not cross yet */
+    /* NO HOLDERS ARRIVE, because none can be SENT: window_message_send_remote aborts on a transfer rather than
+       dropping one, so a routed record carrying holders cannot exist. The empty list is that fact, not a
+       default — when the cross-instance holder is built, it is read here. */
+    JS_SetPropertyUint32(ctx, entry, PQ_HOLDERS, JS_UNDEFINED);
     JS_SetPropertyUint32(ctx, entry, PQ_TARGET_ORIGIN,
                          (target_origin && strcmp(target_origin, "*")) ? JS_NewString(ctx, target_origin)
                                                                        : JS_NULL);
@@ -303,7 +335,7 @@ void window_message_route(JSContext *ctx, const char *tail, const char *sender_d
 static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     JSValueConst second = argc > 1 ? argv[1] : JS_UNDEFINED;
-    JSValue list = JS_UNDEFINED, want = JS_NULL, entry, buf;
+    JSValue raw = JS_UNDEFINED, transfer, want = JS_NULL, entry, buf;
     StructuredWithTransfer swt;
     const char *to = NULL;
     /* §9.4.4 POSTS TO THE WINDOW IT WAS CALLED ON, and the receiver is how that is known. This discarded
@@ -321,7 +353,7 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     if (JS_IsString(second)) {
         to = JS_ToCString(ctx, second);
         if (!to) return JS_EXCEPTION;
-        list = argc > 2 ? JS_DupValue(ctx, argv[2]) : JS_UNDEFINED;
+        raw = argc > 2 ? JS_DupValue(ctx, argv[2]) : JS_UNDEFINED;
     } else if (JS_IsObject(second)) {
         JSValue t = JS_GetPropertyStr(ctx, second, "targetOrigin");
         if (JS_IsException(t)) return JS_EXCEPTION;
@@ -330,9 +362,17 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
             if (!to) { JS_FreeValue(ctx, t); return JS_EXCEPTION; }
         }
         JS_FreeValue(ctx, t);
-        list = JS_GetPropertyStr(ctx, second, "transfer");
-        if (JS_IsException(list)) { if (to) JS_FreeCString(ctx, to); return JS_EXCEPTION; }
+        raw = JS_GetPropertyStr(ctx, second, "transfer");
+        if (JS_IsException(raw)) { if (to) JS_FreeCString(ctx, to); return JS_EXCEPTION; }
     }
+    /* §3.2.21's `sequence<object>`, MATERIALIZED before anything else reads it — the one place the page's code
+       runs, and everything downstream walks the engine's own array. See structured_clone.h. */
+    if (structured_transfer_list(ctx, raw, &transfer) < 0) {
+        JS_FreeValue(ctx, raw);
+        if (to) JS_FreeCString(ctx, to);
+        return JS_EXCEPTION;
+    }
+    JS_FreeValue(ctx, raw);
 
     /* §9.4.4 step 4. "*" is any origin; "/" is the SENDER's own; anything else is a URL whose origin is taken,
        and a URL that does not parse is a SyntaxError — which is thrown HERE, at the call, because it is the
@@ -347,7 +387,7 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
             if (!url_parse(&rec, to, strlen(to), NULL)) {
                 url_record_free(&rec);
                 JS_FreeCString(ctx, to);
-                JS_FreeValue(ctx, list);
+                JS_FreeValue(ctx, transfer);
                 return JS_ThrowDOMException(ctx, "SyntaxError", "the target origin is not a URL");
             }
             o = url_serialize_origin(&rec);
@@ -359,12 +399,12 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     if (to) JS_FreeCString(ctx, to);
 
     /* §9.4.4 step 6: serialize and transfer NOW — the DataCloneError belongs to this call. */
-    if (structured_serialize_transfer(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, list, &swt) < 0) {
-        JS_FreeValue(ctx, list);
+    if (structured_serialize_transfer(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, transfer, &swt) < 0) {
+        JS_FreeValue(ctx, transfer);
         JS_FreeValue(ctx, want);
         return JS_EXCEPTION;
     }
-    JS_FreeValue(ctx, list);
+    JS_FreeValue(ctx, transfer);
 
     buf = JS_NewArrayBufferCopy(ctx, swt.data.buf, swt.data.len);
     entry = JS_IsException(buf) ? buf : JS_NewArray(ctx);

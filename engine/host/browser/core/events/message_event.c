@@ -15,13 +15,16 @@
  * as a property write is captured by the COW delta, so an event's state time-travels for free, and the symbol
  * is a brand a page cannot forge.
  *
- * TWO MEMBERS NAME TYPES THAT DO NOT EXIST YET, and they are HONEST about it rather than untyped. `source` is
- * a `MessageEventSource?` — a WindowProxy, a MessagePort or a ServiceWorker — and `ports` is a
- * `sequence<MessagePort>`. None of those three interfaces is built, so the only value either member can take
- * is its empty one, and anything else is the TypeError Web IDL's own conversion would raise. That is not a
- * restriction this file invents: it is what the conversion DOES when nothing satisfies the type. When §9.4.2's
- * MessagePort lands, the brand test in message_source_ok/ports_from_sequence is where it plugs in, and the
- * TypeError stops being reachable for a real port. */
+ * TWO MEMBERS NAME UNION AND SEQUENCE TYPES, and the brand tests are the types rather than checks this file
+ * invents. `source` is a `MessageEventSource?` — a WindowProxy, a MessagePort or a ServiceWorker, of which the
+ * first two exist and the third is the arm a value can still match nothing of — and `ports` is a
+ * `sequence<MessagePort>`, a per-element brand test whose failure is Web IDL's own TypeError.
+ *
+ * WHAT THE PLATFORM DELIVERS IS NOT THAT SEQUENCE, AND CONFLATING THE TWO IS A BUG. §9.4.2's delivery builds
+ * `newPorts` from "all MessagePort objects in deserializeRecord.[[TransferredValues]]" — a FILTER over a list
+ * that also holds transferred ArrayBuffers — while the constructor's `ports` member is a CONVERSION, where a
+ * non-port is a TypeError. message_event_ports_of is the filter; ports_from_sequence is the conversion; running
+ * the conversion over a transfer list made `port.postMessage(m, [buffer])` throw on delivery. */
 #include <stdio.h>
 #include <string.h>
 
@@ -156,6 +159,33 @@ static JSValue ports_from_sequence(JSContext *ctx, JSValueConst v)
         if (r < 0 || JS_PreventExtensions(ctx, arr) < 0) { JS_FreeValue(ctx, arr); return JS_EXCEPTION; }
     }
     return arr;
+}
+
+/* §9.4.2's and §9.4.4's `newPorts`: "all MessagePort objects in deserializeRecord.[[TransferredValues]],
+   maintaining their relative order". A transfer list may hold an ArrayBuffer as readily as a port, and those
+   are transferred and delivered — they are simply not in `ports`, because `ports` is typed. The answer is a
+   plain Array; message_event_new freezes it, so there is one place that knows FrozenArray. */
+JSValue message_event_ports_of(JSContext *ctx, JSValueConst transferred)
+{
+    JSValue out = JS_NewArray(ctx), len;
+    uint32_t n = 0, i, k = 0;
+
+    if (JS_IsException(out)) return out;
+    if (JS_IsUndefined(transferred) || JS_IsNull(transferred))
+        return out;
+    /* The [[TransferredValues]] list is the ENGINE'S own array — structured_deserialize_transfer built it — so
+       none of the page's code runs in this walk and a failure here is a should-never-happen. */
+    len = JS_GetPropertyStr(ctx, transferred, "length");
+    DCHECK(!JS_IsException(len), "reading the length of the engine's own [[TransferredValues]] threw");
+    if (JS_ToUint32(ctx, &n, len) < 0) { JS_FreeValue(ctx, len); JS_FreeValue(ctx, out); return JS_EXCEPTION; }
+    JS_FreeValue(ctx, len);
+    for (i = 0; i < n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, transferred, i);
+        DCHECK(!JS_IsException(e), "reading an element of the engine's own [[TransferredValues]] threw");
+        if (message_port_is(e)) JS_SetPropertyUint32(ctx, out, k++, e);
+        else JS_FreeValue(ctx, e);
+    }
+    return out;
 }
 
 /* ---- initialise ------------------------------------------------------------------------------------------- */
