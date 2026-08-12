@@ -632,6 +632,33 @@ void dom_cow_insert_private(lxb_dom_node_t *root, lxb_dom_node_t *parent, lxb_do
     lxb_dom_node_insert_child(parent, child);
 }
 
+/* Is `a` `b` or one of its ancestors — the cycle question the move below asks. Dev-only, and it climbs by
+   parent because that is the direction with a bound: the depth already built. */
+static bool dom_is_inclusive_ancestor(const lxb_dom_node_t *a, const lxb_dom_node_t *b) {
+    for (; b; b = b->parent)
+        if (a == b) return true;
+    return false;
+}
+
+/* MOVE between two private trees — see dom_cow.h for why this is neither of the two above. Both roots are
+   checked, and the child is checked against the one it is leaving: a child that is not in `from_root` is a
+   node this caller does not own, and moving one of those is a structural change to a tree some flow's baseline
+   still holds. Nothing is captured, because nothing shared changes at either end. */
+void dom_cow_move_private(lxb_dom_node_t *from_root, lxb_dom_node_t *to_root,
+                          lxb_dom_node_t *parent, lxb_dom_node_t *child) {
+    dom_private_check(from_root);
+    dom_private_check(to_root);
+    DCHECK(child && dom_root_of(child) == from_root,
+           "dom_cow_move_private with a child outside the private tree it was declared to be leaving");
+    DCHECK(parent && dom_root_of(parent) == to_root,
+           "dom_cow_move_private into a parent outside the declared destination tree");
+    DCHECK(!dom_is_inclusive_ancestor(child, parent),
+           "dom_cow_move_private would put a node inside its own descendant — that is a cycle, and every tree "
+           "walk in this engine loops on one forever");
+    lxb_dom_node_remove(child);
+    lxb_dom_node_insert_child(parent, child);
+}
+
 /* Destroy the tree. For the fragment parse its children must already be gone — destroying one that still holds
    nodes would free tree the caller is about to insert — so the caller says which it means. */
 /* Every node in the subtree about to be freed, so each can hand back the wrapper the identity map holds for
@@ -851,6 +878,24 @@ void dom_cow_destroy_private(lxb_dom_node_t *root, bool with_children) {
     if (g_cow_ctx)
         dom_forget_wrappers(g_cow_ctx, root);
     lxb_dom_node_destroy(root);
+}
+
+/* DESTROY ONE NODE OF a private tree — see dom_cow.h. `lxb_dom_node_destroy` detaches before it frees, and it
+   frees through the DOCUMENT's per-interface destructor, which for a `<template>` is what releases the empty
+   template contents fragment along with the element. */
+void dom_cow_discard_private(lxb_dom_node_t *root, lxb_dom_node_t *node) {
+    dom_private_check(root);
+    DCHECK(node && node != root && dom_root_of(node) == root,
+           "dom_cow_discard_private on a node outside the declared private tree — a node of the shared tree "
+           "freed here is memory another flow's baseline still names");
+    DCHECK(node->first_child == NULL,
+           "dom_cow_discard_private on a node that still has children — they would be freed with it, and this "
+           "operation exists because what was under it went somewhere else");
+    /* BEFORE the free, for the reason destroy_private states: a wrapper naming freed memory is inherited by
+       whatever the pool allocates at that address next. */
+    if (g_cow_ctx)
+        dom_forget_wrappers(g_cow_ctx, node);
+    lxb_dom_node_destroy(node);
 }
 
 /* A CHARACTER-DATA node's VALUE (§4.10 `data`). The third thing a flow can change about the tree, after an

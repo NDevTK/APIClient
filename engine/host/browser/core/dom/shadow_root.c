@@ -32,9 +32,9 @@
  *     CLAUDE.md names as one fact answered from one place for many agents. A property write is captured.
  *
  * WHAT IS HONESTLY ABSENT, BY NAME — see SPEC_STEPS.md §17.6. `ShadowRootInit`'s `customElementRegistry`
- * member, `declarative` shadow roots (the parser's `shadowrootmode`), `clonable`'s effect in `cloneNode`,
- * `serializable`'s effect in `getHTML`, `delegatesFocus`'s effect on focus, and HTML's
- * `DocumentOrShadowRoot`/`ShadowRoot` additions (`innerHTML`, `activeElement`, `styleSheets`). */
+ * member, `clonable`'s effect in `cloneNode`, `serializable`'s effect in `getHTML`, `delegatesFocus`'s effect
+ * on focus, and HTML's `DocumentOrShadowRoot`/`ShadowRoot` additions (`innerHTML`, `activeElement`,
+ * `styleSheets`). `declarative` has a writer as of HTML §13.2.6.4.4 — declarative_shadow.c. */
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -105,6 +105,71 @@ lxb_dom_node_t *shadow_root_shadow_including_root(lxb_dom_node_t *n)
     for (r = node_root(n); shadow_root_is(r); r = node_root(r))
         r = lxb_dom_interface_node(shadow_root_host(r));
     return r;
+}
+
+/* §4.2's "A is a SHADOW-INCLUDING INCLUSIVE ANCESTOR of B", which the standard states the other way round —
+   B is a shadow-including descendant of A if it is a descendant, or if B's ROOT is a shadow root whose HOST is
+   one. So it is decided by climbing from B: parents while there are parents, and at a shadow root the climb
+   continues at that root's host. A plain ancestor walk answers `false` for every node inside a shadow tree,
+   which is exactly the case each caller uses this to detect — §2.9's event path walk asks it to find the
+   boundary the event must retarget at, and §4.13.7's `setValidity` asks it of an anchor element. */
+bool shadow_root_is_shadow_including_inclusive_ancestor(const lxb_dom_node_t *a, const lxb_dom_node_t *b)
+{
+    const lxb_dom_node_t *n;
+
+    if (!a || !b)
+        return false;
+    for (n = b; n; ) {
+        if (n == a)
+            return true;
+        if (n->parent)
+            n = n->parent;
+        else if (shadow_root_is(n))
+            n = lxb_dom_interface_node(shadow_root_host(n));
+        else
+            n = NULL;
+    }
+    return false;
+}
+
+/* §4.2's SHADOW-INCLUDING TREE ORDER, as the one step every walk over it is made of: "tree order with the
+   addition of an element's shadow root's node tree inserted JUST AFTER the element is encountered". So a node's
+   successor is its shadow root if it has one, then its first child, and otherwise the climb — which, on leaving
+   a shadow tree, resumes at the HOST'S OWN CHILDREN rather than at the host's next sibling, because the shadow
+   tree was inserted before them.
+   Iterative and explicit, for the reason shadow_root_shadow_including_root is: the nesting is the page's. NULL
+   when the walk leaves `root`, so a caller writes the same `for` it writes with node_next_in. */
+lxb_dom_node_t *shadow_root_next_in_shadow_including(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *root)
+{
+    lxb_dom_node_t *u, *shadow;
+
+    DCHECK(n != NULL && root != NULL, "§4.2's shadow-including tree order walk was asked about no node");
+    if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+        shadow = shadow_root_of_element(ctx, lxb_dom_interface_element(n));
+        if (shadow)
+            return shadow;
+    }
+    if (n->first_child)
+        return n->first_child;
+    for (u = n; u; ) {
+        /* THE ROOT TEST COMES FIRST, and it is what makes a walk rooted AT a shadow root terminate: the climb
+           out of a shadow tree is a climb to the HOST, which is outside the walk when the shadow root is what
+           the caller asked about. */
+        if (u == root)
+            return NULL;
+        if (shadow_root_is(u)) {
+            lxb_dom_node_t *host = lxb_dom_interface_node(shadow_root_host(u));
+
+            if (host->first_child)
+                return host->first_child;
+            u = host;
+            continue;
+        }
+        if (u->next)
+            return u->next;
+        u = u->parent;
+    }
+    return NULL;
 }
 
 /* ---- the ELEMENT -> shadow root association ------------------------------------------------------------------ */
@@ -274,10 +339,11 @@ static JSValue sr_attach(JSContext *ctx, JSValueConst el_wrap, const char *mode,
             return JS_ThrowDOMException(ctx, "NotSupportedError",
                                         "this custom element's disabledFeatures contains \"shadow\"");
     }
-    /* Step 4: an element that is ALREADY a shadow host. The whole branch turns on `declarative`, which only the
-       HTML parser's `shadowrootmode` can set and which this engine therefore never sets — so every re-attach
-       reaches the throw. It is written as the standard writes it rather than collapsed to that throw, because
-       the day the parser builds a declarative root the difference is the whole of step 4. */
+    /* Step 4: an element that is ALREADY a shadow host. The whole branch turns on `declarative`, which HTML
+       §13.2.6.4.4's `shadowrootmode` sets and nothing else does — so `attachShadow({mode:"open"})` on a host
+       the PARSER gave an open declarative root EMPTIES that root and takes it over, while every other
+       re-attach reaches step 4.2's throw. That difference is what the branch is for, and it is now reached:
+       `declarative-shadow-dom-attachment.html` asserts both halves of it. */
     current = shadow_root_of_element_wrap(ctx, el_wrap);
     if (JS_IsObject(current)) {
         bool declarative = sr_flag(ctx, current, SR_DECLARATIVE);
@@ -334,6 +400,30 @@ static JSValue sr_attach(JSContext *ctx, JSValueConst el_wrap, const char *mode,
     /* Step 15: "Set element's shadow root to shadow." */
     JS_DefinePropertyValue(ctx, (JSValue)el_wrap, g_atom_shadow, JS_DupValue(ctx, wrap), SR_SLOT_FLAGS);
     return wrap;
+}
+
+JSValue shadow_root_attach(JSContext *ctx, JSValueConst el_wrap, const char *mode, bool delegates_focus,
+                           const char *slot_assignment, bool clonable, bool serializable)
+{
+    return sr_attach(ctx, el_wrap, mode, delegates_focus, slot_assignment, clonable, serializable);
+}
+
+void shadow_root_mark_declarative(JSContext *ctx, JSValueConst sr_wrap)
+{
+    JSValue rec;
+
+    DCHECK(shadow_root_is(node_of(sr_wrap)),
+           "HTML §13.2.6.4.4 marked something that is not a shadow root as declarative");
+    rec = sr_slots(ctx, sr_wrap);
+    DCHECK(JS_IsObject(rec), "a shadow root has no §4.8 record — the record is built by attach a shadow root, "
+                             "which is the only thing that makes one of these");
+    /* "Set shadow's declarative to true", and "set shadow's available to element internals to true" — the
+       second unconditionally, where step 9 set it only for a custom or precustomized host: a declarative root
+       is available to `ElementInternals.shadowRoot` whatever the host's custom element state is, because the
+       author wrote it in the markup the element upgrades out of. */
+    JS_SetPropertyStr(ctx, rec, SR_FIELD[SR_DECLARATIVE], JS_TRUE);
+    JS_SetPropertyStr(ctx, rec, SR_FIELD[SR_AVAILABLE_TO_INTERNALS], JS_TRUE);
+    JS_FreeValue(ctx, rec);
 }
 
 /* §4.9 `attachShadow(init)`. `init` is a dictionary, so the READ of each member is the page's code and the

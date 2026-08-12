@@ -855,15 +855,13 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
             return JS_STEP_YIELD;
         }
         s->frag = lxb_html_parse_fragment_chunk_end(s->parser);
-        /* The same parse boundary the document has: lexbor stamps every attribute it creates with the
-           ELEMENT's namespace, while HTML tree construction puts them in the null namespace unless "adjust
-           foreign attributes" moved them. Only here are the two still distinguishable. */
-        dom_attr_normalize_parsed(lxb_dom_interface_node(s->frag));
         lxb_html_parser_destroy(s->parser);
         s->parser = NULL;
         /* The same parse boundary the document has: tree construction produces attributes in the NULL
-           namespace, and lexbor stamps them with the element's. Corrected here, before a single node of this
-           fragment is moved into a tree anything can read. */
+           namespace, and lexbor stamps every one it creates with the ELEMENT's instead. Corrected here,
+           before a single node of this fragment is moved into a tree anything can read — and ONCE. It was
+           written twice, on the same node under two comments saying the same thing in different words, so
+           every `el.innerHTML = markup` walked the whole parsed fragment's attributes twice. */
         dom_attr_normalize_parsed(s->frag);
         /* The reference child is fixed BEFORE anything moves: inserting changes `anchor->next`. The clear that
            may follow cannot move it either — it only ever empties an append target, which frag_begin asserts. */

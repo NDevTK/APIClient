@@ -125,6 +125,23 @@ void dom_cow_set_prop_taint(JSContext *ctx, lxb_dom_element_t *el, const char *n
 void dom_cow_take_private(lxb_dom_node_t *root, lxb_dom_node_t *node);   /* out, on its way to the real tree */
 void dom_cow_insert_private(lxb_dom_node_t *root, lxb_dom_node_t *parent, lxb_dom_node_t *child);  /* build it */
 void dom_cow_destroy_private(lxb_dom_node_t *root, bool with_children);  /* and drop it */
+/* MOVE a node between two trees NEITHER of which is shared — the parse boundary's own operation. HTML
+   §13.2.6.4.4 sets a `<template>`'s template contents to the shadow root it attaches, and a parse that filled
+   the contents instead has to hand them over: the source is that parse's own product and the destination is a
+   shadow root created a statement earlier, so neither end is state another flow can hold. It is NOT
+   take_private followed by insert_private — take_private declares the node has LEFT the private tree for the
+   real one and makes the flow its owner, and a node that never leaves would then carry a creation entry the
+   discard asserts against. BOTH roots are declared, because a declaration this operation could infer is a
+   declaration it could infer wrongly. */
+void dom_cow_move_private(lxb_dom_node_t *from_root, lxb_dom_node_t *to_root,
+                          lxb_dom_node_t *parent, lxb_dom_node_t *child);
+/* DESTROY one node OF a private tree, in place. §13.2.6.4.4's `<template>` is the caller: the standard never
+   inserts it, this engine's parse did, and once its contents are the shadow root's there is nothing that can
+   ever reach it again. Not take_private + destroy_private for the reason above — take_private records a
+   creation, and freeing what a creation entry names is a use-after-free on the next discard. The node must
+   already be empty: everything under it would be freed with it, and this operation exists precisely because
+   what was under it went somewhere else. */
+void dom_cow_discard_private(lxb_dom_node_t *root, lxb_dom_node_t *node);
 
 /* Lower-level capture primitives the chokepoint is built on (record a mutation BEFORE it happens). Direct use is
    reserved for the mutation ops that compose them (the chokepoint above, and node-insert once it lands). */

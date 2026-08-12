@@ -363,7 +363,18 @@ static void assign_slottables(JSContext *ctx, lxb_dom_node_t *slot)
     if (!same)                                                                      /* step 2 */
         signal_a_slot_change(ctx, slot);
     /* Step 3: "Set slot's assigned nodes to slottables." The Array is REPLACED element-wise rather than
-       swapped, so the object identity a parked flow's delta names stays the one it named. */
+       swapped, so the object identity a parked flow's delta names stays the one it named.
+       THE SLOTTABLE THAT LEFT IS UNASSIGNED FIRST, and the standard's own text does not say so: step 4 only
+       ever WRITES an assigned slot, so a node removed from the host keeps naming the slot it is no longer in.
+       The two halves are one relation — "a slottable is assigned if its assigned slot is non-null", and §4.4's
+       get the parent RETURNS that slot instead of the node's parent — so a one-way write puts a detached node's
+       event path through a slot that does not hold it. The list being replaced is the previous membership,
+       which is exactly the set to check against. */
+    for (i = 0; i < m; i++) {
+        lxb_dom_node_t *was = list_node(ctx, current, i);
+        if (was && !list_contains(ctx, found, was))
+            slot_ref_set(ctx, was, g_atom_slot_of, NULL);
+    }
     for (i = 0; i < n; i++)
         JS_SetPropertyUint32(ctx, current, i, JS_GetPropertyUint32(ctx, found, i));
     JS_SetPropertyStr(ctx, current, "length", JS_NewInt32(ctx, (int)n));
@@ -382,16 +393,26 @@ static void assign_slottables_for_a_tree(JSContext *ctx, lxb_dom_node_t *root)
     lxb_dom_node_t *n;
 
     if (!root) return;
-    /* A TREE THAT IS NOT A SHADOW TREE HAS NOTHING TO ASSIGN, and this is a derivation rather than a shortcut:
-       "find slottables" returns the empty list for a slot whose root is not a shadow root, so every slot here
-       would compute empty — and a slot can only HAVE assigned nodes while its root is a shadow root, which the
-       remove steps clear on the way out. So the walk's whole effect is empty, and skipping it is what keeps the
-       standard's "assign slottables for a tree with node's root" out of the parser's per-node cost: it is run
-       on every insertion, and a document with no shadow tree in it would otherwise walk itself once per node. */
-    if (!shadow_root_is(node_root(root))) return;
+    /* NO GUARD HERE — this is the standard's algorithm and it has none. The optimisation that used to stand at
+       this line ("a tree that is not a shadow tree has nothing to assign") is TRUE FOR AN INSERTION and FALSE
+       FOR A REMOVAL, which is the one caller that reaches this with a tree outside a shadow root: a slot that
+       has just been removed from a shadow tree still HOLDS its assigned nodes, and emptying it is the entire
+       point of §4.2.3 remove step 7's second call. The guard skipped exactly that, so the removed slot kept its
+       nodes and each of those nodes kept naming it as its assigned slot — which §4.4's get the parent then
+       answered with, sending the event path into a detached subtree. The condition belongs at the INSERTION
+       call site, where it is a fact about that caller (see slot_insert_steps), and it is stated there. */
     if (slot_is(root)) assign_slottables(ctx, root);
     for (n = node_next_in(root, root); n; n = node_next_in(n, root))
         if (slot_is(n)) assign_slottables(ctx, n);
+}
+
+void slot_assign_for_a_tree(JSContext *ctx, lxb_dom_node_t *root)
+{
+    DCHECK(g_ready, "§4.2.2.4's assign slottables for a tree ran before slot_init");
+    DCHECK(shadow_root_is(root), "the parse boundary asked for slot assignment over a tree that is not a shadow "
+                                 "tree — the walk below skips every other root, so a caller reaching here with "
+                                 "one is asking a question whose answer is empty and does not know it");
+    assign_slottables_for_a_tree(ctx, root);
 }
 
 /* "To ASSIGN A SLOT, given a slottable slottable." */
@@ -444,8 +465,14 @@ void slot_insert_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *par
        the fallback of an unfilled slot has changed what is rendered. */
     if (slot_is(parent) && shadow_root_is(node_root(parent)) && slot_assigned_empty(ctx, parent))
         signal_a_slot_change(ctx, parent);
-    /* "Run ASSIGN SLOTTABLES FOR A TREE with node's root." */
-    assign_slottables_for_a_tree(ctx, node_root(node));
+    /* "Run ASSIGN SLOTTABLES FOR A TREE with node's root."
+       ONLY WHEN THAT ROOT IS A SHADOW ROOT, and that is a derivation about THIS call site rather than about the
+       algorithm: a slot whose root is not a shadow root computes the empty list at "find slottables", and a
+       tree being INSERTED holds no slot that already has assigned nodes — an insertion is how a node gets into
+       a tree, so nothing in it can have been assigned to anything yet. Without the test this runs on every
+       insertion, and a document with no shadow tree in it would walk itself once per node. */
+    if (shadow_root_is(node_root(node)))
+        assign_slottables_for_a_tree(ctx, node_root(node));
 }
 
 void slot_removed_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent)
@@ -672,6 +699,19 @@ static JSValue js_slottable_assigned_slot(JSContext *ctx, JSValueConst this_val,
         return JS_ThrowTypeError(ctx, "assignedSlot was read on something that is not a slottable");
     slot = find_a_slot(ctx, n, true);
     return slot ? node_wrap(ctx, slot) : JS_NULL;
+}
+
+/* §4.2.2's ASSIGNED SLOT — the STORED one, which is what "a slottable IS ASSIGNED" is defined over ("a
+   slottable is assigned if its assigned slot is non-null"). It is deliberately NOT `assignedSlot`: §4.2.9's
+   getter re-runs "find a slot" with the open flag so that a closed tree stays hidden from script, and the two
+   answers differ for exactly the slottables §2.9's event path cares about most. The callers are engine
+   algorithms — a node's get the parent, which returns this slot rather than the parent when it is non-null, and
+   the dispatch walk's slot-in-closed-tree bookkeeping — and neither is script. */
+lxb_dom_node_t *slot_assigned_slot(JSContext *ctx, const lxb_dom_node_t *n)
+{
+    if (!n || !slottable_is(n))
+        return NULL;
+    return slot_ref_of(ctx, n, g_atom_slot_of);
 }
 
 /* ---- declaration and installation ----------------------------------------------------------------------------- */

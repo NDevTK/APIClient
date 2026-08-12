@@ -2917,26 +2917,24 @@ this list observes; dropping it from the live list alone is invisible to the wal
    flag, which only HTML uses and only for a Window). —
 3. Let activationTarget be null. —
 4. Let relatedTarget be the result of **retargeting** event's relatedTarget against target. —
-   *(identity with no shadow trees)*
+   *(ABSENT: no interface here carries a relatedTarget — see §11.11)*
 5. Let clearTargets be false. —
 6. If target is not relatedTarget or target is event's relatedTarget:
    1. Let touchTargets be a new list. —
-   2. Retarget each of event's touch targets into it. —
+   2. Retarget each of event's touch targets into it. — *(ABSENT with the touch target list)*
    3. **Append to an event path** with event, target, targetOverride, relatedTarget, touchTargets,
-      false. —
+      false. — *(see §11.8)*
    4. Let **isActivationEvent** be true if event is a `MouseEvent` and its type is `"click"`. —
    5. If isActivationEvent and **target** has activation behavior, set activationTarget to target. —
-      *(no `bubbles` condition — this is the difference from 6.8.7)*
-   6. Let slottable be target if it is assigned, otherwise null. —
-   7. Let slotInClosedTree be false. —
+      *(no `bubbles` condition — this is the difference from 6.9.5.1)*
+   6. Let **slottable** be target if it is a slottable and is **assigned**, otherwise null. —
+   7. Let **slotInClosedTree** be false. —
    8. Let parent be the result of invoking target's **get the parent** with event. — **[S]** *(the
       DOM's own get the parent is straight-line; a host that defines it otherwise makes this one)*
-   9. **While parent is non-null:** append it to the path, retarget relatedTarget and the touch
-      targets against it, and set parent to the result of invoking ITS get the parent. Inside it,
-      **6.8.7**: if isActivationEvent, **event's bubbles is true**, activationTarget is null and
-      parent has activation behavior, set activationTarget to parent. — **walk of page size**
+   9. **While parent is non-null:** the nine sub-steps of §11.9 — **walk of page size**
    10. Let clearTargetsItem be the last path item with a non-null shadow-adjusted target. —
-   11. Set clearTargets if that item's target/relatedTarget/touch target is in a shadow tree. —
+   11. Set clearTargets if that item's shadow-adjusted target, its relatedTarget, or an EventTarget
+       in its touch target list **is a node whose root is a shadow root**. —
    12. Run activationTarget's **legacy-pre-activation behavior**, if it has one. —
    13. **For each item of event's path, IN REVERSE ORDER:** set eventPhase to `AT_TARGET` if the
        item's shadow-adjusted target is non-null and `CAPTURING_PHASE` otherwise, then **invoke**
@@ -2948,7 +2946,9 @@ this list observes; dropping it from the live list alone is invisible to the wal
 8. Set event's currentTarget to null. —
 9. Set event's **path to the empty list**. —
 10. **Unset event's dispatch flag, stop propagation flag, and stop immediate propagation flag.** —
-11. If clearTargets, set target, relatedTarget and the touch target list to null/empty. —
+11. If clearTargets, set target, relatedTarget and the touch target list to null/empty. — *(the
+    ONE case in which the target does not survive the dispatch, and it exists so that a page holding
+    the event afterwards cannot read a node out of a shadow tree it was never given)*
 12. If activationTarget is non-null: **1.** if event's canceled flag is unset, run activationTarget's
     **activation behavior** with event; **2.** otherwise run its legacy-canceled-activation
     behavior. — **[S]** *(§4.6.3's is a navigation, and a navigation fetches)*
@@ -2961,16 +2961,20 @@ kept the path privately can only answer with the one target it is standing on. `
 
 ### 11.4 §2.9 `invoke`, given a path item, event and phase
 
-1. Let targetItem be pathItem; **while** its shadow-adjusted target is null, step back. —
-2. Set event's **target** to targetItem's shadow-adjusted target. —
-3. Set event's relatedTarget and touch target list from pathItem. —
-4. **If event's stop propagation flag is set, return.** — *(tested per PATH ITEM, not per listener)*
-5. Initialize event's **currentTarget** to pathItem's invocation target. —
-6. Let listeners be a **clone** of currentTarget's event listener list. —
-7. **inner invoke** with event, listeners, phase, invocationTargetInShadowTree. —
+1-2. Let targetItem be pathItem; **while** its shadow-adjusted target is null, step BACK one item. —
+3. Set event's **target** to targetItem's shadow-adjusted target. —
+4-5. Set event's relatedTarget and touch target list from pathItem. — *(ABSENT — §11.11)*
+6. **If event's stop propagation flag is set, return.** — *(tested per PATH ITEM, not per listener,
+   and AFTER step 3 has already written the target)*
+7. Initialize event's **currentTarget** to pathItem's invocation target. —
+8. Let listeners be a **clone** of currentTarget's event listener list. —
+9-10. **inner invoke** with event, listeners, phase, invocationTargetInShadowTree. —
+11. The legacy `webkitAnimationEnd`-style retry when `found` is false and the event is trusted. —
+   *(not applicable: no animation or transition events exist here)*
 
-With no shadow trees every item's shadow-adjusted target is the target, so step 2 is one write for
-the whole walk and step 1's backward scan is empty.
+Steps 1-3 are the whole of what a page sees as retargeting. They are a walk BACKWARD along the path
+per item — not one write for the dispatch — so an item inside a shadow tree reports the node the
+event was dispatched at and an item from the host outward reports the host, from ONE list.
 
 ### 11.5 §2.9 `inner invoke`, given event, listeners and phase
 
@@ -2983,7 +2987,9 @@ the whole walk and step 1's backward scan is empty.
    5. If listener's **once** is true, **remove an event listener** given event's currentTarget and
       listener. — *(BEFORE the call, so a re-entrant dispatch cannot see it)*
    6. Let global be the listener callback's associated realm's global object. —
-   7-8. Save the global's **current event** and set it to event. —
+   7-8. Save the global's **current event** and set it to event — and set it only when the path
+      item's **invocation-target-in-shadow-tree** is false. — *(ABSENT: HTML's `window.event` does
+      not exist here, which is the whole reason §11.8 does not carry that field)*
    9. If listener's **passive** is true, set event's **in passive listener flag**. —
    10. Record timing info. — *(no scriptable result headless)*
    11. **Call a user object's operation** with listener's callback, `"handleEvent"`, « event », and
@@ -3032,6 +3038,7 @@ is **per global**, which is why it lives on the global object and not in the rep
 | `addEventListener(type, cb, options)` | 5 | four of them are the OPTIONS dictionary's `[[Get]]`s; the algorithm itself has none |
 | `removeEventListener(type, cb, options)` | 2 | `type`'s ToString runs even when the callback is null |
 | `dispatchEvent(event)` | 2 + 3 per listener + 1 | the second per-listener one is the `handleEvent` READ; the third is the `error` event REPORTING what the listener threw, and the walk continues after it |
+| `composedPath()` | 0 | three walks over an engine-built list of engine-built records — no page code, which is why it is a plain body beside a dispatch that is a machine |
 | the engine's own fire (`load`, `DOMContentLoaded`, `abort`) | the same | it is the SAME machine; only the reach differs |
 
 ### 11.7 Stage-boundary consequences for a step machine
@@ -3054,6 +3061,145 @@ is **per global**, which is why it lives on the global object and not in the rep
    that record is now `removed` and the walk would skip the very listener whose answer is arriving.
 5. **The activation behaviour is a stage after the cleanup**, not before it — a behaviour that reads
    `currentTarget` must see null.
+6. **The walk's own `target` is state, and it is NOT the walk's frontier.** Step 6.9.7.1 moves
+   `target` at every shadow boundary while `parent` goes on climbing, so a machine that keeps one
+   value for both appends every item with the same shadow-adjusted target — which is the bug this
+   section was written to fix, in the shape it had before there were shadow trees to expose it. Two
+   fields, and both have to survive a park between two ancestors.
+7. **`slotInClosedTree` and `clearTargets` are one-bit state on the machine for the same reason.**
+   They belong to a `while` loop that does not exist in C — the loop is one yield per ancestor — so
+   there is no stack frame for them to live in. `slotInClosedTree` in particular is written by step
+   6.9.1, read by the append two sub-steps later and cleared by 6.9.9, all in ONE iteration: park it
+   in the wrong place and a closed tree's slot is recorded against its neighbour.
+8. **The path's SIZE is the path's, not a counter beside it.** The two passes index it from both
+   ends; a count kept in step with the appends is a second answer to a question the list already
+   answers, and one that drifts by one walks off the end or drops the root.
+
+### 11.8 §2.9 "append to an event path", given event, invocationTarget, shadowAdjustedTarget, relatedTarget, touchTargets and slotInClosedTree
+
+1. Let invocationTargetInShadowTree be false. —
+2. If invocationTarget **is a node and its root is a shadow root**, set it to true. —
+3. Let rootOfClosedTree be false. —
+4. If invocationTarget **is a shadow root whose mode is "closed"**, set it to true. —
+5. Append a new event path item with **invocation target**, **invocation-target-in-shadow-tree**,
+   **shadow-adjusted target**, **relatedTarget**, **touch target list**, **root-of-closed-tree** and
+   **slot-in-closed-tree**. —
+
+Seven fields, and three of them decide everything §11.10 does. Note which node each of the two
+booleans is about: `root-of-closed-tree` is about the invocation target ITSELF being a closed shadow
+root, and `slot-in-closed-tree` is not computed here at all — it is passed in, by the walk, about the
+hop the walk just made.
+
+**This engine builds five of the seven.** `relatedTarget` and `touch target list` are the retargeted
+forms of two Event fields that do not exist here (§11.11), and `invocation-target-in-shadow-tree`
+has exactly one reader — inner invoke step 2.7.2, which suppresses HTML's `window.event` — and there
+is no `window.event` here either. A field with no producer and a field with no reader are both
+absent by name rather than carried as always-false state.
+
+### 11.9 §2.9 step 6.9's loop body — the nine sub-steps that are shadow DOM's whole effect on dispatch
+
+**While parent is non-null:**
+
+1. **If slottable is non-null:** assert parent **is a slot**; set slottable to null; and if parent's
+   root is a shadow root whose mode is `"closed"`, set **slotInClosedTree to true**. —
+2. If parent is a slottable and is assigned, set slottable to parent. —
+3. Let relatedTarget be retarget(event's relatedTarget, parent). — *(ABSENT)*
+4. Retarget each touch target against parent. — *(ABSENT)*
+5. **If parent is a `Window` object, OR parent is a node and target's root is a
+   SHADOW-INCLUDING INCLUSIVE ANCESTOR of parent:**
+   1. If isActivationEvent, **event's bubbles is true**, activationTarget is null and parent has
+      activation behavior, set activationTarget to parent. —
+   2. **Append to an event path** with parent, **null**, relatedTarget, touchTargets,
+      slotInClosedTree. —
+6. Otherwise, if parent is relatedTarget, then set parent to null. — *(ABSENT with relatedTarget)*
+7. **Otherwise:**
+   1. **Set target to parent.** —
+   2. If isActivationEvent, activationTarget is null and target has activation behavior, set
+      activationTarget to target. — *(NO `bubbles` condition, unlike 6.9.5.1)*
+   3. **Append to an event path** with parent, **parent** as the shadow-adjusted target,
+      relatedTarget, touchTargets, slotInClosedTree. —
+8. If parent is non-null, set parent to the result of invoking parent's get the parent. —
+9. **Set slotInClosedTree to false.** — *(per ITERATION, not per tree)*
+
+**Step 5 is the retargeting decision, and it is stated as a containment test rather than as "did we
+cross a boundary".** The walk's own `target` moves (7.1), so the question is asked afresh at every
+ancestor: while the parent is still inside the tree the current target's root spans, the item gets
+NO shadow-adjusted target and `invoke` keeps answering with the one further in; the first parent
+that is not — the shadow HOST — becomes the new target and carries its own. The relation is
+**shadow-including**, so it climbs from a node to its root's host, which is why a plain ancestor walk
+gets step 5 backwards for every node in a shadow tree.
+
+**Step 1's assert is why §4.4's get the parent has to be right.** "A node's get the parent algorithm,
+given an event, returns the node's **assigned slot**, if node is assigned; otherwise node's parent."
+So a slotted node's event travels through the shadow tree that RENDERS it, and steps 6.6/6.9.2 exist
+only to tell that one hop apart from an ordinary parent — which is what makes `slot-in-closed-tree`
+recordable at all. A get-the-parent that returned the light-tree parent would never take the hop, the
+assert would never fire, and the path would silently be a different one.
+
+**"Assigned" is the STORED assigned slot, never `assignedSlot`.** §4.2.9's getter re-runs "find a
+slot" with the `open` flag so that a closed tree stays hidden from script; answering the engine's
+question with it would route a closed tree's event around its own slot. The two differ for exactly
+the slottables this walk is about.
+
+### 11.10 §2.2 `composedPath()` — the three walks, and what the hidden-level counters are for
+
+1. Let composedPath be « ». —
+2. Let path be this's path. —
+3. **If path is empty, return composedPath.** —
+4-5. Let currentTarget be this's currentTarget; **assert** it is an EventTarget. —
+6. **Append currentTarget** to composedPath. —
+7-9. currentTargetIndex = 0; currentTargetHiddenSubtreeLevel = 0; index = path's size − 1. —
+10. **While index ≥ 0:** if path[index]'s **root-of-closed-tree**, increase the level; if its
+    invocation target IS currentTarget, set currentTargetIndex and **break**; if its
+    **slot-in-closed-tree**, decrease the level; decrease index. —
+11-13. currentHiddenLevel = maxHiddenLevel = currentTargetHiddenSubtreeLevel; index =
+    currentTargetIndex − 1; **while index ≥ 0:** root-of-closed-tree increases currentHiddenLevel;
+    **if currentHiddenLevel ≤ maxHiddenLevel, PREPEND** path[index]'s invocation target;
+    slot-in-closed-tree decreases currentHiddenLevel and LOWERS maxHiddenLevel to it when smaller;
+    decrease index. —
+14-16. The same again from currentTargetIndex + 1 **upward, APPENDING, with the two flags SWAPPED**
+    (slot-in-closed-tree increases, root-of-closed-tree decreases). —
+17. Return composedPath. —
+
+**What the counters mean.** Step 10 measures how deep inside closed trees the CURRENT TARGET is —
+that is the listener's own vantage point, and everything it may see is at that depth or shallower.
+The two outward walks then emit an entry only while the running level is no deeper. `maxHiddenLevel`
+only ever DECREASES, which is what makes leaving a closed tree permanent: once the walk has climbed
+out through a slot (inward) or a closed root (outward), anything further out that is deeper again
+stays hidden.
+
+**The two outward walks are mirror images, and the mirror is the flag pair.** Going inward from the
+target a closed ROOT is the boundary you enter and a SLOT is the one you leave; going outward it is
+the other way round. One shared loop with a direction parameter gets this wrong in a way no
+single-shadow-root test can see.
+
+**A listener INSIDE a closed tree sees the whole path; one outside sees none of that tree.** Both
+fall out of step 10 rather than out of a rule of their own: the inside listener starts at level 1, so
+the level-1 entries pass; the outside listener starts at 0, so they do not.
+
+### 11.11 §4.2 `retarget`, and what is honestly ABSENT
+
+**To retarget an object A against an object B, repeat until it returns:** if A is not a node, or A's
+root is not a shadow root, or B is a node and **A's root is a shadow-including inclusive ancestor of
+B**, return A; otherwise set A to **A's root's host**.
+
+**It has no caller here, and building it anyway would be dead code.** Retargeting in §2.9 is applied
+to exactly two things — the event's `relatedTarget` (steps 4 and 6.9.3) and each member of its
+`touch target list` (steps 6.1-6.2 and 6.9.4) — and neither exists in this engine: `relatedTarget` is
+a member of `MouseEvent` and `FocusEvent`, the touch target list of `TouchEvent`, and none of those
+three interfaces is built. Retargeting of the TARGET is not this algorithm at all: it is step 6.9.7's
+"set target to parent", which IS built.
+
+So what is absent, by name, is: `relatedTarget` and its retargeting, the touch target list and its
+retargeting, step 6.9.6's "otherwise, if parent is relatedTarget" arm of the walk, the relatedTarget
+and touch-target halves of step 6.11's clearTargets condition, step 11's clearing of those two
+fields, and the two path-item fields that hold them. All of them land WITH the first typed event
+interface that carries a relatedTarget, which is also what makes step 6.4's isActivationEvent
+("event is a MouseEvent object and …") askable as more than the type string.
+
+Also absent, for its own reason: **`invocation-target-in-shadow-tree`**, whose only reader is inner
+invoke step 2.7.2's `window.event` suppression, and **§2.9's legacy target override flag**, which
+only HTML passes and only for a `Window`, so `targetOverride` here is always the target itself.
 
 ## 12. DOM §5 "Ranges" and §4.10/§4.11 — the live range, and the three tree algorithms that move it
 
@@ -4388,10 +4534,124 @@ hooks the attribute.
 **"Assign slottables for a tree with node's root" runs on EVERY insertion**, and taken literally that
 is a walk of the whole tree per inserted node — quadratic in the page's own markup, paid by every
 document whether or not it has a shadow root. It is skipped when the root is not a shadow root, and
-that is a DERIVATION rather than a shortcut: "find slottables" returns the empty list for a slot whose
-root is not a shadow root, so every slot in such a tree computes empty, and a slot can only HAVE
-assigned nodes while its root is a shadow root — which the remove steps clear on the way out. The
+that is a DERIVATION about THE INSERTION rather than about the algorithm: "find slottables" returns
+the empty list for a slot whose root is not a shadow root, and a tree being INSERTED holds no slot
+that has assigned nodes already, because an insertion is how a node gets into a tree at all. The
 walk's whole effect is therefore empty, and the common case costs one node-type check.
+
+**The same test inside the algorithm was a BUG, and §4.2.3 remove step 7 is the caller it was wrong
+for.** "If node has an inclusive descendant that is a slot: run assign slottables for a tree with
+parent's root, AND WITH NODE" — the second call is over the subtree that has just LEFT the shadow
+tree, whose slots still hold their assigned nodes, and emptying them is the entire point of it. A
+guard inside the algorithm skipped exactly that call, so a removed slot kept its nodes and each of
+those nodes kept naming it as its `assigned slot` — which §4.4's get the parent answers with, so the
+event path of a node whose slot had been removed walked into a DETACHED subtree. The condition now
+stands at the insertion call site, where it is true.
+
+**And "set a slottable's assigned slot" is a ONE-WAY write in the standard**: "assign slottables"
+step 4 sets it for every slottable in the new list and nothing ever clears it for one that left, so
+the slot's assigned nodes and the slottable's assigned slot can disagree. They are one relation —
+`assigned` is defined as "its assigned slot is non-null" — so this engine unassigns the departed
+slottables at step 3, where the list being replaced is still readable.
+
+### 17.5a HTML §13.2.6.4.4 and §4.12.3 — DECLARATIVE shadow roots, the parser's `shadowrootmode`
+
+**Read from the live standards on 2026-08-12**: WHATWG HTML §4.12.3 (the `template` element),
+§13.2.6.4.4 (the "in head" insertion mode), §13.2.4.5 (the parser's *allow declarative shadow roots*),
+§2.6.1 (reflecting an enumerated attribute *limited to only known values*); WHATWG DOM §4.5 (a
+Document's *allow declarative shadow roots*) and §4.8 (`declarative`).
+
+**Why it is the whole of `declarative`.** §4.8 gives a shadow root a `declarative` boolean, initially
+false, and NOTHING in DOM ever sets it true — the writer is this HTML step and only this one. So
+before it, §4.8 "attach a shadow root" step 4's re-attach branch was unreachable code that 17.1 wrote
+out anyway, and a page shipping server-rendered Web Components (which is what declarative shadow DOM
+is FOR) had no shadow trees at all: the markup the author wrote for the shadow tree sat inside a
+`<template>`'s contents, every slot in it held nothing, and the page's own
+`host.shadowRoot.querySelector(...)` threw on the null.
+
+**A start tag whose tag name is "template", in the "in head" insertion mode** — the branch after the
+five ordinary template steps (insert a marker, frameset-ok, switch to "in template", push the
+template insertion mode):
+
+  1. Let *adjustedInsertionLocation* be the **appropriate place for inserting a node**. —
+  2. Let *intendedParent* be the element in which *adjustedInsertionLocation* finds itself. —
+  3. Let *document* be *intendedParent*'s node document. —
+  4. If ANY of these is false — *templateStartTag*'s `shadowrootmode` is not in the None state; the
+     parser's **allow declarative shadow roots** is true; the **adjusted current node** is not the
+     topmost element in the stack of open elements — then **insert an HTML element for the token**. —
+  5. Otherwise:
+     1. Let *declarativeShadowHostElement* be the adjusted current node. —
+     2. Let *template* be the result of **insert a foreign element** for *templateStartTag*, with the
+        HTML namespace and **true** — the true is `onlyAddToElementStack`, so the template goes on the
+        stack of open elements and into NO TREE. —
+     3. Let *mode* be `shadowrootmode`'s value; *slotAssignment* is "manual" only in the Manual state,
+        otherwise "named"; *clonable*, *serializable* and *delegatesFocus* are the PRESENCE of
+        `shadowrootclonable`, `shadowrootserializable` and `shadowrootdelegatesfocus`. —
+     4. If *declarativeShadowHostElement* is a shadow host, **insert an element at the adjusted
+        insertion location with template** — the second `<template shadowrootmode>` under one host is
+        left in the DOM as an ordinary template. —
+     5. Otherwise: **attach a shadow root**; if it THROWS, catch it, insert the element at the adjusted
+        insertion location, optionally report to the console, and RETURN. —
+     6. Set *shadow*'s **declarative** to true; set *template*'s **template contents** to *shadow*;
+        set *shadow*'s **available to element internals** to true. —
+
+**No step is `[S]`.** Tree construction runs no page code in this engine (element.c's fragment machine
+states the same invariant), and "attach a shadow root" is `[S]`-free by 17.1.
+
+**Step 5.6's middle clause is the whole mechanism, and it is why nothing needs moving in a browser.**
+"The appropriate place for inserting a node" INSIDE a template element is that template's *template
+contents* — so once the contents ARE the shadow root, every token after the start tag lands in the
+shadow tree with no further rule. Lexbor's tree builder has no such step: it inserts the template and
+fills the template's own contents fragment. `declarative_shadow.c` therefore runs the step at the
+PARSE BOUNDARY and joins the two ends the standard never separates — the contents lexbor collected are
+MOVED into the shadow root, and the template element the standard never inserted is discarded.
+
+**Why the boundary rather than tree construction, and why nothing can see the difference.** The step's
+effect is a write to the element's WRAPPER (17.1's step 15 — the association is per-flow, and §3.7
+makes a wrapper's prototype its document's REALM's). This engine installs a document's realm AFTER its
+lexbor parse returns, so during the parse there is no realm to mint one in. The step therefore runs
+where `dom_attr_normalize_parsed` already runs — on the tree the parse just built, before anything can
+read it — which is this engine's end of tree construction. There is no moment between the two at which
+a page could observe the `<template>`: the parse runs no page code, and `document_install` has not yet
+handed the document to anything.
+
+**Two conditions are answered differently after a parse, and both are exact.**
+*The adjusted current node is not the topmost element in the stack of open elements*: after the parse
+the topmost element is the DOCUMENT ELEMENT for a document parse and the fragment parsing algorithm's
+own root element for a fragment parse, so the condition is "the template's parent is not that
+element". It is what makes `div.setHTMLUnsafe("<template shadowrootmode=open>")` leave a template
+rather than attach a shadow root to the fragment's root.
+*A template whose parent is not an element* is one lexbor put in another template's CONTENTS, where
+the standard's adjusted current node is that outer TEMPLATE ELEMENT — whose local name is not a valid
+shadow host name, so 17.1's step 2 throws and step 5.5's catch leaves the template exactly where the
+condition does. Same answer, and only this spelling is expressible over a finished tree.
+
+**Slot assignment has to be asked for.** A browser reaches §4.2.2.4's "assign slottables for a tree"
+through §4.2.3's insertion steps as each node of the shadow tree is inserted. A parsed tree's nodes
+pass through none of them, so a declarative shadow root arrives fully populated with slots that have
+never been asked what they hold — and what they hold is the HOST's children, which the same parse
+already put in place beside the template. `slot_assign_for_a_tree` is that one call.
+
+**§4.12.3's six content attributes, and which three are plain reflections.**
+`shadowrootdelegatesfocus`, `shadowrootclonable` and `shadowrootserializable` are boolean attributes
+and `[CEReactions, Reflect] boolean` IDL attributes — three rows of html_element.c's own reflection
+table, where every other reflection in the engine is. `shadowrootmode` and `shadowrootslotassignment`
+are ENUMERATED and their IDL attributes are **limited to only known values**, which §2.6.1 defines as:
+the getter returns the CANONICAL keyword of the state the attribute's value corresponds to, or "" when
+that state has no keyword; the setter writes the given value verbatim. The two attributes differ ONLY
+in their missing/invalid value default — `shadowrootmode`'s is the None state, which has no keyword,
+so an absent or nonsense value reads back ""; `shadowrootslotassignment`'s is Named, which HAS one, so
+an absent or nonsense value reads back "named". Keywords are matched **ASCII** case-insensitively, not
+`strcasecmp`'s locale-insensitively: a Turkish locale folds `I` and would not recognise
+`shadowrootmode="OPEN"`.
+
+**Which documents opt in.** The parser's *allow declarative shadow roots* is the DOCUMENT's, and a
+Document's is false initially (DOM §4.5). HTML "read html" creates a navigation's parser with it TRUE,
+and §7.4's create-and-initialize sets the flag true — so `document_install`, which is the one function
+that installs a document a navigation produced, passes true. The documents whose flag is false —
+`createHTMLDocument`, `DOMParser`, XHR's `responseXML` — are built by `document_new` and never reach
+it, which is exactly why they keep their `<template>` elements, and `declarative-shadow-dom-opt-in.html`
+asserts each one.
 
 ### 17.6 What is honestly ABSENT, by name
 
@@ -4402,13 +4662,28 @@ walk's whole effect is therefore empty, and the common case costs one node-type 
   from the `NotSupportedError` step 3 throws (a registry that is not this document's), so it lands
   with the interface, together with §4.13.4 steps 8-9's "element definition is running" flag and
   step 7.1's "is scoped" that §16.6 already names.
-- **Declarative shadow roots** — the parser's `shadowrootmode`, `shadowrootdelegatesfocus`,
-  `shadowrootclonable` and `shadowrootserializable` attributes, and with them the only writer that
-  could ever set a shadow root's `declarative` to true.
-- **`clonable`'s effect.** §4.5's clone steps copy a clonable shadow root onto the clone; the field is
-  stored and read back, and `cloneNode` does not consult it yet.
-- **`serializable`'s effect** — `getHTML(options)` and `setHTMLUnsafe`, which are HTML §8.5's, not
-  §4.8's.
+- **The FRAGMENT parses that opt in** — `Element.setHTMLUnsafe`, `ShadowRoot.setHTMLUnsafe` and
+  `Document.parseHTMLUnsafe` (HTML §8.5.2, over §8.6.4's "set and filter HTML"). 17.5a's step runs at
+  the parse boundary and takes the parser's *allow declarative shadow roots* as a parameter; the only
+  caller passing true today is `document_install`, so a declarative shadow root in markup handed to a
+  fragment parse is correctly NOT attached — because every fragment parse this engine has is one whose
+  flag is false (`innerHTML`, `outerHTML`, `insertAdjacentHTML`). The three members above are the ones
+  that pass true, and each also needs §8.6.4's `options` — whose `sanitizer` and `runScripts` members
+  are the Sanitizer API, absent entirely, so they land together rather than as a member that silently
+  ignores a sanitizer it was handed.
+- **`shadowrootcustomelementregistry`** — a boolean content attribute reflected by a DOMString IDL
+  attribute (`shadowRootCustomElementRegistry`), and 17.5a step 5.5's `registry` argument that reads
+  it. It lands with `CustomElementRegistry`, for the reason the `ShadowRootInit` member above it does.
+- **`clonable`'s effect.** DOM §4.4 "clone a node" step 6 attaches a clonable shadow root onto the
+  copy and clones the shadow tree's children into it, AFTER step 5 has cloned the light children. The
+  field is stored, `shadowrootclonable` now sets it, and `cloneNode` does not consult it yet. The
+  clone machine's stages are `CLONE_COPY` (steps 2 and 4), `CLONE_TEMPLATE` (step 3) and
+  `CLONE_CHILDREN` (step 5), and its walk is a FLAT cursor over two trees: a node's subtree is
+  finished at the moment the cursor moves off it, which happens in two places (the `src = src->next`
+  transition and the ascend loop). Step 6 belongs at that moment and nowhere earlier, so it lands with
+  a stage that makes "leaving a node" a single rest point — not by naming step 6 at `CLONE_TEMPLATE`'s
+  position, which would be step 6 run before step 5 with a label saying otherwise.
+- **`serializable`'s effect** — `getHTML(options)`, which is HTML §8.5's, not §4.8's.
 - **`delegatesFocus`'s effect**, which is HTML's focusing steps; this engine has no focus model.
 - **HTML's additions to `ShadowRoot`** — `innerHTML`, `activeElement`, `styleSheets`,
   `adoptedStyleSheets` and the rest of `DocumentOrShadowRoot`.
@@ -4420,13 +4695,19 @@ walk's whole effect is therefore empty, and the common case costs one node-type 
   recursion, because the nesting is the page's) but it is one C activation, so a very deep component
   tree holds the scheduler for the length of one call. It becomes a declared machine the same way
   `innerHTML`'s serialiser did.
-- **Retargeting (§2.9's shadow-adjusted target) and `composedPath`'s closed-tree hiding.** The event
-  PATH is now correct — §4.8's get-the-parent stops a non-composed event at the shadow root and hands
-  a composed one the host — but every path item's `target` is still path[0], where the standard
-  retargets it against each item's root, and `composedPath()` answers every entry rather than hiding
-  the ones behind a closed root. Both need the path to become a list of ITEMS (invocation target,
-  shadow-adjusted target, root-of-closed-tree, slot-in-closed-tree) rather than a list of targets,
-  which is a change to the §2.9 machine's state and its own next diff.
+- **Retargeting (§2.9's shadow-adjusted target) and `composedPath`'s closed-tree hiding are BUILT** —
+  see §11.8-§11.11, which is where they belong, beside the rest of §2.9. The path is a list of items;
+  §4.4's get the parent answers with a slottable's assigned slot; the walk retargets at each shadow
+  boundary and records both closed-tree flags; `composedPath()` runs the three walks. What is absent
+  is §4.2's `retarget` itself and the two path-item fields it feeds (`relatedTarget`, touch target
+  list), because the interfaces that carry them — `MouseEvent`, `FocusEvent`, `TouchEvent` — do not
+  exist here; §11.11 names each piece and what lands with it.
+- **A `<script>` inside a declarative shadow root does not run.** `document_scripts.c` collects a
+  document's executable scripts by walking its CHILD links, and a shadow root is not a child of its
+  host — so a script the parser put in a shadow tree is parsed and never executed. The same walk is
+  what `iframe_document_parsed` uses, so an `<iframe>` in a declarative shadow root gets no child
+  navigable either. Both are the one missing walk: "shadow-including descendants, in shadow-including
+  tree order", which §17's event-path work is building.
 - **`slotchange` on a slot in a document with no shadow root**, which cannot happen — a slot outside a
   shadow tree has no assigned nodes by construction — and is named here only because it is the one
   case the guarded tree walk in 17.5 skips.

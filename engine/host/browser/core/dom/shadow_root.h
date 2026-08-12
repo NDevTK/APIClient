@@ -34,6 +34,30 @@ bool shadow_root_slot_assignment_is_manual(JSContext *ctx, const lxb_dom_node_t 
    otherwise the root. What `getRootNode({composed:true})` answers and what §4.4's `isConnected` is stated
    over, which is why it lives beside node_root rather than inside one member. */
 lxb_dom_node_t *shadow_root_shadow_including_root(lxb_dom_node_t *n);
+/* §4.2's "A is a SHADOW-INCLUDING INCLUSIVE ANCESTOR of B" — the containment relation that CROSSES a shadow
+   boundary, so a host is one of everything in its shadow tree. Every caller of it is a place where the plain
+   ancestor walk answers `false` for a node inside a shadow tree: §2.9's event path uses it to find the boundary
+   to retarget at, §4.13.7's `setValidity` to accept an anchor inside the element's own shadow tree. */
+bool shadow_root_is_shadow_including_inclusive_ancestor(const lxb_dom_node_t *a, const lxb_dom_node_t *b);
+/* §4.2's SHADOW-INCLUDING TREE ORDER, one step at a time — node_next_in's shape, with an element's shadow root
+   visited just after the element and before its children. NULL once the walk leaves `root`, so
+   "the shadow-including inclusive descendants of R, in shadow-including tree order" is
+   `for (n = R; n; n = shadow_root_next_in_shadow_including(ctx, n, R))`. It takes a `ctx` because the
+   element -> shadow root association is a per-flow fact kept on the element's WRAPPER. */
+lxb_dom_node_t *shadow_root_next_in_shadow_including(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *root);
+
+/* §4.8 "ATTACH A SHADOW ROOT", REACHED FROM C. `attachShadow` is one caller and HTML §13.2.6.4.4's template
+   start tag is the other: the parser runs the SAME algorithm on an element it found in the tree it built, and a
+   second copy of five refusals is five places for one of them to go missing. Returns the shadow root's wrapper
+   (OWNED), or JS_EXCEPTION with the `NotSupportedError` pending — which the parser CATCHES, because tree
+   construction throws nothing at the page. */
+JSValue shadow_root_attach(JSContext *ctx, JSValueConst el_wrap, const char *mode, bool delegates_focus,
+                           const char *slot_assignment, bool clonable, bool serializable);
+/* HTML §13.2.6.4.4's two writes on the root it just attached: "Set shadow's declarative to true" and "Set
+   shadow's available to element internals to true". Both are fields of §4.8's record, which is this
+   component's, which is why the parser asks rather than writes. This is `declarative`'s ONLY writer to true,
+   and therefore the only thing that makes §4.8 step 4's re-attach branch reachable. */
+void shadow_root_mark_declarative(JSContext *ctx, JSValueConst sr_wrap);
 
 /* AN ELEMENT'S SHADOW ROOT, or NULL — DOM §4.9's "shadow root" association, read from the element's WRAPPER,
    which is where a per-flow fact belongs (the heap COW delta captures a property write; a C field on the

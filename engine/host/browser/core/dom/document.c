@@ -28,6 +28,7 @@
 #include "core/html/custom_elements.h"
 #include "core/html/element_internals.h"
 #include "core/html/html_iframe.h"
+#include "core/html/declarative_shadow.h"
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
 #include "core/dom/mutation_observer.h"
@@ -1726,6 +1727,17 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     /* HTML tree construction produces attributes in the NULL namespace; lexbor stamps them with the element's
        namespace instead, and only here — on the tree the parse just built — are the two distinguishable. */
     dom_attr_normalize_parsed(lxb_dom_interface_node(dom));
+    /* HTML §13.2.6.4.4's template start tag, for the SAME tree and the same reason: `<template
+       shadowrootmode>` attaches a shadow root to its parent DURING tree construction, and a lexbor parse has
+       no such step — so the parsed tree's declarative shadow roots are attached here, before the document's
+       first script can read one. It runs BEFORE the iframe walk because a `<template shadowrootmode>` moves
+       its contents into a shadow root, and an `<iframe>` among them belongs to the tree it ends up in.
+       "Allow declarative shadow roots" is the DOCUMENT'S, and this is the one function that installs a
+       document a NAVIGATION produced — HTML "read html" creates that parser with the flag TRUE. The documents
+       whose flag is false (`createHTMLDocument`, `DOMParser`, XHR's `responseXML`) are built by document_new
+       and never reach here, which is why they keep their `<template>` elements. */
+    declarative_shadow_parsed(ctx, lxb_dom_interface_node(dom),
+                              lxb_dom_interface_node(dom->dom_document.element), /*allow*/ true);
     iframe_document_parsed(ctx);
     engine_set_document_done_hook(document_lifecycle_step);
 }

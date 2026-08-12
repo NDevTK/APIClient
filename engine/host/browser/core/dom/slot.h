@@ -15,6 +15,19 @@ void slot_free(JSContext *ctx);
 
 /* IS THIS AN HTML `<slot>` ELEMENT — §4.2.2's "slot", which is the element and nothing else. */
 bool slot_is(const lxb_dom_node_t *n);
+/* §4.2.2.2's ASSIGNED SLOT, or NULL — the STORED association, and with it "a slottable is ASSIGNED", which the
+   standard defines as exactly "its assigned slot is non-null". NOT §4.2.9's `assignedSlot` getter, which re-runs
+   "find a slot" with the open flag so a closed tree stays hidden from script: this is the engine-internal fact
+   §4.4's get the parent is stated over ("returns the node's assigned slot, if node is assigned"), and answering
+   that one with the script-facing getter would route a closed tree's event around its own slot. */
+lxb_dom_node_t *slot_assigned_slot(JSContext *ctx, const lxb_dom_node_t *n);
+
+/* §4.2.2.4's "ASSIGN SLOTTABLES FOR A TREE, given a node root", for the one caller that is not a mutation. A
+   browser reaches it through §4.2.3's insertion steps as each node of a shadow tree is inserted; a tree the
+   PARSER built never passes through them, so HTML §13.2.6.4.4's declarative shadow root arrives fully populated
+   with slots that have never been asked what they hold — and what they hold is the host's children, which the
+   same parse already put in place. */
+void slot_assign_for_a_tree(JSContext *ctx, lxb_dom_node_t *root);
 
 /* §4.2.3's SLOT-RELATED MUTATION STEPS, called from the tree-hook list in the standard's own order. `parent` is
    the node's parent — passed rather than read off the node, because the REMOVE half runs AFTER the detach and

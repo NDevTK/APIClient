@@ -43,6 +43,7 @@
 #include "core/css/css_style_declaration.h"
 #include "core/html/html_form.h"
 #include "core/html/dom_string_map.h"
+#include "core/html/declarative_shadow.h"
 
 static JSClassID g_html_class;      /* HTMLElement.prototype's per-realm slot */
 static JSClassID g_unknown_class;   /* HTMLUnknownElement — HTML's answer for a tag it does not know */
@@ -191,6 +192,15 @@ static const ElReflect R_CANVAS[] = { { "width", "width", REFLECT_STRING }, { "h
 static const ElReflect R_DIALOG[] = { { "open", "open", REFLECT_BOOL } };
 static const ElReflect R_DETAILS[]= { { "name", "name", REFLECT_STRING }, { "open", "open", REFLECT_BOOL } };
 static const ElReflect R_SLOT[]   = { { "name", "name", REFLECT_STRING } };
+/* §4.12.3's THREE PLAIN reflections. The other three shadow-root attributes are not plain mirrors:
+   `shadowrootmode` and `shadowrootslotassignment` are enumerated and LIMITED TO ONLY KNOWN VALUES, so they
+   live in declarative_shadow.c with the parser step that reads them, and `shadowrootcustomelementregistry`
+   is absent with the registry interface (SPEC_STEPS.md §17.6). */
+static const ElReflect R_TEMPLATE[] = {
+    { "shadowRootDelegatesFocus", "shadowrootdelegatesfocus", REFLECT_BOOL },
+    { "shadowRootClonable",       "shadowrootclonable",       REFLECT_BOOL },
+    { "shadowRootSerializable",   "shadowrootserializable",   REFLECT_BOOL },
+};
 static const ElReflect R_DATA[]   = { { "value", "value", REFLECT_STRING } };
 static const ElReflect R_METER[]  = { { "min", "min", REFLECT_STRING }, { "max", "max", REFLECT_STRING } };
 
@@ -245,7 +255,7 @@ static const struct { const char *tag; const char *iface; const ElReflect *refl;
     { "dialog",     "HTMLDialogElement",     RL(R_DIALOG) },
     { "details",    "HTMLDetailsElement",    RL(R_DETAILS) },
     { "slot",       "HTMLSlotElement",       RL(R_SLOT) },
-    { "template",   "HTMLTemplateElement",   RNONE },
+    { "template",   "HTMLTemplateElement",   RL(R_TEMPLATE) },
     { "html",       "HTMLHtmlElement",       RNONE },
     { "head",       "HTMLHeadElement",       RNONE },
     { "body",       "HTMLBodyElement",       RNONE },
@@ -369,10 +379,13 @@ static JSValue js_template_content(JSContext *ctx, JSValueConst this_val, int ma
     lxb_html_template_element_t *t;
 
     (void)magic;
-    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return JS_UNDEFINED;
-    DCHECK(lxb_html_tree_node_is(n, LXB_TAG_TEMPLATE),
-           "HTMLTemplateElement.content read on an element that is not a <template> — the accessor lives on the "
-           "per-tag prototype, so reaching it means the interface table handed out the wrong one");
+    /* WEB IDL §3.7.5's BRAND CHECK, and it is a THROW rather than an assert. This was a DCHECK whose message
+       said that reaching it meant the interface table handed out the wrong prototype — which is FALSE: a page
+       reaches an accessor off the prototype with `.call` on anything at all, so the receiver is the PAGE's
+       input and an abort there is this engine crashing on a line of ordinary JavaScript. */
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT || !lxb_html_tree_node_is(n, LXB_TAG_TEMPLATE))
+        return JS_ThrowTypeError(ctx, "HTMLTemplateElement.content read on something that is not a <template> "
+                                      "element");
     t = lxb_html_interface_template(n);
     DCHECK(t->content != NULL, "a <template> element has no content fragment — lexbor builds one in the "
                                "template interface's constructor, so an element without it was made some "
@@ -420,6 +433,10 @@ void html_element_init(JSContext *ctx)
     /* §4.13.7 — declared here because `attachInternals` is an HTMLElement member, which is what this file
        owns the table of; the algorithms are element_internals.c's. */
     element_internals_declare(ctx);
+    /* HTML §4.12.3's two enumerated `<template>` reflections and §13.2.6.4.4's parser step — declared here
+       because the members are HTMLTemplateElement's, which is what this file owns the table of; the algorithm
+       is declarative_shadow.c's. */
+    declarative_shadow_init(ctx);
     /* §3.2.2 dataset — on HTMLElement, which is where the IDL puts it. */
     dom_string_map_init(ctx);
     g_dataset_key = JS_NewAtom(ctx, "__datasetSlot");
@@ -524,6 +541,10 @@ void html_element_install_protos(JSContext *ctx)
                                                      JS_CFUNC_getter_magic, 0),
                                 JS_UNDEFINED, JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
         JS_FreeAtom(ctx, a);
+        /* §4.12.3's `shadowRootMode` and `shadowRootSlotAssignment` go on the same prototype and nowhere else,
+           handed it for the same reason the slot and forms members are: this file owns the table, that one
+           owns the enumerated-attribute states the parser reads. */
+        declarative_shadow_install_template_members(ctx, tpl);
         JS_FreeValue(ctx, tpl);
     }
 
@@ -589,6 +610,7 @@ bool html_element_is(JSValueConst v)
 void html_element_free(JSContext *ctx)
 {
     dom_string_map_free(ctx);
+    declarative_shadow_free();
     html_form_free(ctx);
     element_internals_free(ctx);
     if (g_dataset_key != JS_ATOM_NULL) { JS_FreeAtom(ctx, g_dataset_key); g_dataset_key = JS_ATOM_NULL; }
