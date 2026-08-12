@@ -70,8 +70,13 @@ lxb_dom_node_t *shadow_root_next_in_shadow_including(JSContext *ctx, lxb_dom_nod
    second copy of five refusals is five places for one of them to go missing. Returns the shadow root's wrapper
    (OWNED), or JS_EXCEPTION with the `NotSupportedError` pending — which the parser CATCHES, because tree
    construction throws nothing at the page. */
+/* `registry` is §4.8's own last parameter — "null or a CustomElementRegistry object" — set on the root at
+   step 14. JS_NULL is the spec's null and is NOT "use the document's": each caller resolves its own default
+   (attachShadow at its step 1, the declarative parser from §13.2.6.4.4), because a default resolved inside
+   this algorithm would hand a root a registry its caller never asked for. */
 JSValue shadow_root_attach(JSContext *ctx, JSValueConst el_wrap, const char *mode, bool delegates_focus,
-                           const char *slot_assignment, bool clonable, bool serializable);
+                           const char *slot_assignment, bool clonable, bool serializable,
+                           JSValueConst registry);
 /* DOM §4.4 "CLONE A NODE" STEPS 6.1-6.7, given the node being cloned and its copy. Step 6's three conditions
    are asked here — is `node` an element, is it a shadow host, is its shadow root's `clonable` true — because
    the second and third are §4.8 record reads and the record is this component's. Answers JS_NULL when any of

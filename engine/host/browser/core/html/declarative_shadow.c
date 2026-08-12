@@ -42,6 +42,7 @@
 #include "core/dom/shadow_root.h"
 #include "core/dom/slot.h"
 #include "core/html/declarative_shadow.h"
+#include "core/html/custom_elements.h"
 #include "core/idl_args.h"
 #include "solver/dom_cow.h"
 
@@ -211,7 +212,7 @@ void declarative_shadow_parsed(JSContext *ctx, lxb_dom_node_t *tree, const lxb_d
 
         for (n = node_next_in(root, root); n; n = next) {
             lxb_dom_node_t *contents, *host, *shadow, *child, *cnext;
-            JSValue host_wrap, current, sr;
+            JSValue host_wrap, current, sr, registry;
             int mode;
 
             next = node_next_in(n, root);
@@ -246,15 +247,26 @@ void declarative_shadow_parsed(JSContext *ctx, lxb_dom_node_t *tree, const lxb_d
                 continue;
             }
             JS_FreeValue(ctx, current);
-            /* "Attach a shadow root with declarativeShadowHostElement, mode, clonable, serializable,
-               delegatesFocus, slotAssignment, and registry." The registry is the node document's, which is the
-               one this engine has (shadow_root.c states why the init member that could override it is absent). */
+            /* "Let registry be NULL if templateStartTag has a shadowrootcustomelementregistry attribute;
+               otherwise declarativeShadowHostElement's node document's custom element registry."
+               THE ATTRIBUTE'S SENSE IS THE OPPOSITE OF ITS NAME, which is why it is written out rather than
+               read as a flag: `shadowrootcustomelementregistry` does not NAME a registry and does not opt the
+               tree INTO one — it says the root's registry is null, so the tree resolves nothing until
+               something associates one with it. Read the other way round, a declarative shadow root carrying
+               the attribute would have been given the document's registry, which is the one answer the
+               attribute exists to prevent.
+               "Attach a shadow root with declarativeShadowHostElement, mode, clonable, serializable,
+               delegatesFocus, slotAssignment, and registry." */
+            registry = bool_attr(lxb_dom_interface_element(n), "shadowrootcustomelementregistry")
+                           ? JS_NULL : custom_elements_document_registry(ctx);
             sr = shadow_root_attach(ctx, host_wrap, mode == 0 ? "open" : "closed",
                                     bool_attr(lxb_dom_interface_element(n), "shadowrootdelegatesfocus"),
                                     enum_state(lxb_dom_interface_element(n), DSD_SLOT_ASSIGNMENT) == 1
                                         ? "manual" : "named",
                                     bool_attr(lxb_dom_interface_element(n), "shadowrootclonable"),
-                                    bool_attr(lxb_dom_interface_element(n), "shadowrootserializable"));
+                                    bool_attr(lxb_dom_interface_element(n), "shadowrootserializable"),
+                                    registry);
+            JS_FreeValue(ctx, registry);
             JS_FreeValue(ctx, host_wrap);
             if (JS_IsException(sr)) {
                 /* "If an exception is thrown, then catch it and: insert an element at the adjusted insertion

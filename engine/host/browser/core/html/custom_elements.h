@@ -108,6 +108,20 @@ JSValue custom_elements_definition_for_name(JSContext *ctx, const char *name, si
    node should use: it is the only one that can answer out of a SCOPED registry. OWNED; JS_UNDEFINED when there
    is no definition (including when the element's registry is null, which is the algorithm's step 1). */
 JSValue custom_elements_definition_lookup_for_element(JSContext *ctx, JSValueConst el_wrap);
+
+/* THE REGISTRY QUESTIONS §4.8's attachShadow AND §4.9's create-an-element ASK BEFORE THEY CAN ACT — this
+   document's registry, whether a page-supplied value is a CustomElementRegistry at all, whether it is scoped,
+   and the association itself. Neither algorithm lives here, and neither may re-derive them: the record, the
+   `is scoped` flag, the once-only association rule and the scoped-registry latch are all this component's.
+   `custom_elements_document_registry` is OWNED; the association takes the node's WRAPPER, because the slot
+   is per-flow state on it. */
+bool    custom_elements_is_registry(JSValueConst v);
+bool    custom_elements_registry_is_scoped(JSContext *ctx, JSValueConst reg);
+void    custom_elements_node_associate_registry(JSContext *ctx, JSValueConst wrap, JSValueConst reg);
+JSValue custom_elements_document_registry(JSContext *ctx);
+/* A NODE'S own registry, derived where it holds none — for an algorithm that PASSES one on rather than looking
+   a definition up with it (DOM §4.4 clone step 6.2 hands the original shadow root's to the copy's). OWNED. */
+JSValue custom_elements_node_registry(JSContext *ctx, JSValueConst wrap);
 /* The definition's constructor — DOM §4.9 step 5.1.1's `C`, the value `create an element` Constructs. OWNED. */
 JSValue custom_elements_definition_constructor(JSContext *ctx, JSValueConst def);
 /* DOM §4.9 steps 5.1.4.2-11: the checks the spec runs on what the page's constructor RETURNED, and the state

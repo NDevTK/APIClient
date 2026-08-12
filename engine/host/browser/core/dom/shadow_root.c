@@ -31,9 +31,13 @@
  *     other; a C pointer on the lexbor element would be one answer for every flow, which is the defect class
  *     CLAUDE.md names as one fact answered from one place for many agents. A property write is captured.
  *
- * WHAT IS HONESTLY ABSENT, BY NAME — see SPEC_STEPS.md §17.6. `ShadowRootInit`'s `customElementRegistry`
- * member, `delegatesFocus`'s effect on focus, and HTML's `DocumentOrShadowRoot` additions (`activeElement`,
- * `styleSheets`).
+ * WHAT IS HONESTLY ABSENT, BY NAME — see SPEC_STEPS.md §17.6. `delegatesFocus`'s effect on focus, and HTML's
+ * `DocumentOrShadowRoot` additions (`activeElement`, `styleSheets`).
+ * `ShadowRootInit`'s `customElementRegistry` is no longer among them: §4.8's registry is a real parameter of
+ * "attach a shadow root", attachShadow resolves steps 1-3 (this document's registry, the member's override,
+ * and the NotSupportedError for one that is neither scoped nor this document's), and step 3.1's disable-shadow
+ * lookup asks the HOST ELEMENT'S registry rather than the document's — which is the only form that can refuse
+ * a host inside a scoped tree, or answer nothing for one whose registry is null.
  * `declarative` has a writer as of HTML §13.2.6.4.4 — declarative_shadow.c — `clonable` has a READER as of DOM
  * §4.4 step 6, which is shadow_root_clone_onto below, and `serializable`, `delegatesFocus`, `clonable`, `mode`
  * and `slot assignment` are ALL read by HTML §13.3 step 4.2, which writes them back out as the
@@ -328,8 +332,13 @@ static bool sr_valid_host_name(const char *name, size_t len)
 /* §4.8 "attach a shadow root", given element, mode, clonable, serializable, delegatesFocus, slotAssignment and
    registry. Every one of its five refusals is a `NotSupportedError`, which a page's `catch (e) { e.name }`
    reads directly. Returns the shadow root's wrapper (OWNED) or JS_EXCEPTION. */
+/* `registry` is §4.8's own parameter — "null or a CustomElementRegistry object" — which step 14 sets on the
+   shadow root. JS_NULL means the spec's null (a shadow tree that looks a definition up in nothing), and it is
+   NOT the same as "use the document's": attachShadow resolves that default at its step 1 before calling, and a
+   default resolved HERE would give a declaratively-parsed root a registry §13.2.6.4.4 did not ask for. */
 static JSValue sr_attach(JSContext *ctx, JSValueConst el_wrap, const char *mode, bool delegates_focus,
-                         const char *slot_assignment, bool clonable, bool serializable)
+                         const char *slot_assignment, bool clonable, bool serializable,
+                         JSValueConst registry)
 {
     lxb_dom_node_t *n = node_of(el_wrap);
     lxb_dom_element_t *el;
@@ -358,7 +367,12 @@ static JSValue sr_attach(JSContext *ctx, JSValueConst el_wrap, const char *mode,
        `extends`), so no element in this engine can carry one. It becomes a real read in the diff that makes
        customized built-ins registrable. */
     if (custom_elements_name_is_valid((const char *)local, len)) {
-        JSValue def = custom_elements_definition_for_name(ctx, (const char *)local, len);
+        /* §4.8 STEP 3.1 LOOKS THE DEFINITION UP AGAINST THE ELEMENT'S OWN REGISTRY — "given element's custom
+           element registry, its namespace, its local name, and its is value" — not against the document's. A
+           host inside a scoped tree must be refused by the definition ITS registry names, and answered by
+           nothing when its registry is null. The by-name entry resolved the document's default and could not
+           express either. */
+        JSValue def = custom_elements_definition_lookup_for_element(ctx, el_wrap);
         bool disabled = JS_IsObject(def) && custom_elements_definition_flag(ctx, def, CE_DEF_DISABLE_SHADOW);
 
         JS_FreeValue(ctx, def);
@@ -421,18 +435,22 @@ static JSValue sr_attach(JSContext *ctx, JSValueConst el_wrap, const char *mode,
     JS_SetPropertyStr(ctx, slots, SR_FIELD[SR_DECLARATIVE], JS_FALSE);                               /* 11 */
     JS_SetPropertyStr(ctx, slots, SR_FIELD[SR_CLONABLE], JS_NewBool(ctx, clonable));                 /* 12 */
     JS_SetPropertyStr(ctx, slots, SR_FIELD[SR_SERIALIZABLE], JS_NewBool(ctx, serializable));         /* 13 */
-    /* Step 14's `custom element registry` is the document's, which is what looking up a definition already
-       reads — see SPEC_STEPS.md §17.6 for why the init member that could override it is absent. */
     JS_DefinePropertyValue(ctx, wrap, g_atom_slots, slots, SR_SLOT_FLAGS);
+    /* STEP 14: "Set shadow's custom element registry to registry." It is the caller's answer, not this
+       algorithm's — attachShadow resolved the default at its own step 1 and the declarative parser has its own
+       — and it is written through the component that owns the association, because the once-only rule and the
+       scoped-registry latch belong with the slot rather than with each writer. */
+    custom_elements_node_associate_registry(ctx, wrap, registry);
     /* Step 15: "Set element's shadow root to shadow." */
     JS_DefinePropertyValue(ctx, (JSValue)el_wrap, g_atom_shadow, JS_DupValue(ctx, wrap), SR_SLOT_FLAGS);
     return wrap;
 }
 
 JSValue shadow_root_attach(JSContext *ctx, JSValueConst el_wrap, const char *mode, bool delegates_focus,
-                           const char *slot_assignment, bool clonable, bool serializable)
+                           const char *slot_assignment, bool clonable, bool serializable,
+                           JSValueConst registry)
 {
-    return sr_attach(ctx, el_wrap, mode, delegates_focus, slot_assignment, clonable, serializable);
+    return sr_attach(ctx, el_wrap, mode, delegates_focus, slot_assignment, clonable, serializable, registry);
 }
 
 /* DOM §4.4 "clone a node" STEP 6, its own steps 6.1-6.7. The standard runs it AFTER step 5 has cloned the light
@@ -445,7 +463,7 @@ JSValue shadow_root_attach(JSContext *ctx, JSValueConst el_wrap, const char *mod
 JSValue shadow_root_clone_onto(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *copy)
 {
     JSValueConst el_wrap;
-    JSValue src, copy_wrap, current, sr, rec;
+    JSValue src, copy_wrap, current, sr, rec, src_reg;
     bool declarative;
 
     DCHECK(g_ready, "§4.4 step 6 ran before shadow_root_init");
@@ -470,15 +488,17 @@ JSValue shadow_root_clone_onto(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_nod
     DCHECK(!JS_IsObject(current), "§4.4 step 6.1: the copy is already a shadow host, so the attach below would "
                                   "reach §4.8 step 4 and either throw or take over a root the clone invented");
     JS_FreeValue(ctx, current);
-    /* Steps 6.2-6.4 are the shadow root's CUSTOM ELEMENT REGISTRY, and this engine has exactly one — the node
-       document's — so `shadowRootRegistry` is that one either way and the global-registry substitution in 6.3
-       has nothing to substitute. SPEC_STEPS.md §17.6 names the member that makes it a real read.
+    /* STEPS 6.2-6.4: `shadowRootRegistry` is the ORIGINAL root's registry, which is now a real read — a host
+       inside a scoped tree clones into a copy that looks its definitions up in the same scoped registry, which
+       is the whole reason a registry is per node rather than per document.
        Step 6.5: attach a shadow root with the ORIGINAL's mode, serializable, delegates focus and slot
        assignment, and `clonable` true. */
+    src_reg = custom_elements_node_registry(ctx, src);
     sr = sr_attach(ctx, copy_wrap, shadow_root_is_open(node_of(src)) ? "open" : "closed",
                    sr_flag(ctx, src, SR_DELEGATES_FOCUS),
                    shadow_root_slot_assignment_is_manual(ctx, node_of(src)) ? "manual" : "named",
-                   true, sr_flag(ctx, src, SR_SERIALIZABLE));
+                   true, sr_flag(ctx, src, SR_SERIALIZABLE), src_reg);
+    JS_FreeValue(ctx, src_reg);
     /* Step 6.6: "Set copy's shadow root's declarative to node's shadow root's declarative." NOT
        shadow_root_mark_declarative, which is HTML §13.2.6.4.4's pair of writes: that one also sets `available
        to element internals`, and step 6 does not — the clone's is whatever §4.8 step 9 just computed from the
@@ -534,15 +554,43 @@ static JSValue js_el_attach_shadow(JSContext *ctx, JSValueConst this_val, int ar
                                    int magic)
 {
     JSValueConst init = argc > 0 ? argv[0] : JS_UNDEFINED;
-    JSValue mode_v, slot_v, result;
+    JSValue mode_v, slot_v, reg_v, registry, result;
     const char *mode, *slot_assignment;
 
     (void)magic;
     if (!node_of(this_val) || node_of(this_val)->type != LXB_DOM_NODE_TYPE_ELEMENT)
         return JS_ThrowTypeError(ctx, "attachShadow called on something that is not an element");
-    /* Steps 1-3 of `attachShadow` are the registry check, and this engine has exactly one registry, which IS
-       the node document's — so `registry` is that one, "is scoped" is false for it, and the comparison in step
-       3 cannot fail. The member that could make it fail is absent by name (SPEC_STEPS.md §17.6). */
+    /* STEPS 1-3, THE REGISTRY CHECK. Step 1's default is this document's registry; step 2 replaces it with
+       `init["customElementRegistry"]` when the page supplied one; step 3 throws when that one is neither
+       SCOPED nor this document's own — which is the whole point of the member: a page may hand a shadow tree a
+       scoped registry, or the very registry the document already uses, and nothing else.
+       THE BRAND TEST IS STEP 2's, not an extra: the declaration converts the member to an object and an object
+       that is not a CustomElementRegistry must not be associated with the root as though it were. */
+    reg_v = idl_dict_get(ctx, init, "customElementRegistry");
+    registry = custom_elements_document_registry(ctx);                                   /* step 1 */
+    if (JS_IsObject(reg_v)) {
+        if (!custom_elements_is_registry(reg_v)) {
+            JS_FreeValue(ctx, registry);
+            JS_FreeValue(ctx, reg_v);
+            return JS_ThrowTypeError(ctx, "ShadowRootInit's customElementRegistry is not a "
+                                          "CustomElementRegistry");
+        }
+        JS_FreeValue(ctx, registry);
+        registry = JS_DupValue(ctx, reg_v);                                              /* step 2 */
+    }
+    JS_FreeValue(ctx, reg_v);
+    if (JS_IsObject(registry) && !custom_elements_registry_is_scoped(ctx, registry)) {   /* step 3 */
+        JSValue doc_reg = custom_elements_document_registry(ctx);
+        bool same = JS_VALUE_GET_PTR(doc_reg) == JS_VALUE_GET_PTR(registry);
+
+        JS_FreeValue(ctx, doc_reg);
+        if (!same) {
+            JS_FreeValue(ctx, registry);
+            return JS_ThrowDOMException(ctx, "NotSupportedError",
+                                        "attachShadow was given a custom element registry that is neither "
+                                        "scoped nor this document's");
+        }
+    }
     mode_v = idl_dict_get(ctx, init, "mode");
     DCHECK(JS_IsString(mode_v), "ShadowRootInit's `mode` is required and the declaration converts it, so a "
                                 "body reaching here without a string means the conversion was skipped");
@@ -553,7 +601,9 @@ static JSValue js_el_attach_shadow(JSContext *ctx, JSValueConst this_val, int ar
     slot_assignment = JS_IsString(slot_v) ? JS_ToCString(ctx, slot_v) : NULL;
     result = sr_attach(ctx, this_val, mode ? mode : "open", idl_dict_bool(ctx, init, "delegatesFocus"),
                        slot_assignment ? slot_assignment : "named",
-                       idl_dict_bool(ctx, init, "clonable"), idl_dict_bool(ctx, init, "serializable"));
+                       idl_dict_bool(ctx, init, "clonable"), idl_dict_bool(ctx, init, "serializable"),
+                       registry);
+    JS_FreeValue(ctx, registry);
     if (mode) JS_FreeCString(ctx, mode);
     if (slot_assignment) JS_FreeCString(ctx, slot_assignment);
     JS_FreeValue(ctx, mode_v);

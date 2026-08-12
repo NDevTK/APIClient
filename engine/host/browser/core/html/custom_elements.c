@@ -334,6 +334,50 @@ static void ce_node_set_registry(JSContext *ctx, JSValueConst wrap, JSValueConst
         JS_FreeValue(ctx, doc_reg);
     }
 }
+
+/* §4.8's attachShadow AND §4.9's create-an-element BOTH resolve a registry before they can act, and neither
+ * lives here — so the questions they ask are exported rather than re-derived. They are the same ones §4.8's
+ * attachShadow steps 1-3 ask, in order: what is this document's registry, is a page-supplied one a
+ * CustomElementRegistry at all, and is it scoped.
+ *
+ * THE BRAND TEST IS ONE OF THEM AND NOT A CONVENIENCE. `init["customElementRegistry"]` is a page value: the
+ * declaration converts it to an object, and an object that is not one of these must not be associated with a
+ * node as though it were — every later lookup would read a record that is not there.
+ *
+ * THE ASSOCIATION IS EXPORTED AS AN OPERATION rather than as the slot: the once-only rule, the scoped-registry
+ * latch and the key are all this component's, so a caller states WHICH node and WHICH registry and nothing
+ * else. That is what keeps DOM's "once initialized it cannot be changed" a fact about the write instead of a
+ * convention every writer has to remember. */
+bool custom_elements_is_registry(JSValueConst v)
+{
+    return g_registry_class != 0 && JS_GetOpaque(v, g_registry_class) != NULL;
+}
+
+bool custom_elements_registry_is_scoped(JSContext *ctx, JSValueConst reg)
+{
+    DCHECK(custom_elements_is_registry(reg),
+           "§4.13.4's `is scoped` was asked of something that is not a CustomElementRegistry");
+    return ce_reg_flag(ctx, reg, g_atom_scoped);
+}
+
+void custom_elements_node_associate_registry(JSContext *ctx, JSValueConst wrap, JSValueConst reg)
+{
+    ce_node_set_registry(ctx, wrap, reg);
+}
+
+JSValue custom_elements_document_registry(JSContext *ctx)
+{
+    return ce_document_registry(ctx);
+}
+
+/* A NODE'S OWN CUSTOM ELEMENT REGISTRY, derived where it holds none — the read side of the association above,
+   for an algorithm that must PASS a node's registry on rather than look a definition up with it. DOM §4.4's
+   clone step 6.2 is the caller: the copy's shadow root takes the ORIGINAL root's registry, so a host inside a
+   scoped tree clones into a copy that resolves in the same scoped registry. OWNED. */
+JSValue custom_elements_node_registry(JSContext *ctx, JSValueConst wrap)
+{
+    return ce_registry_of_node(ctx, wrap);
+}
 static int    g_ready;
 static JSAtom g_atom_prototype = JS_ATOM_NULL;
 static JSAtom g_atom_ctor = JS_ATOM_NULL;
@@ -1165,9 +1209,9 @@ JSValue custom_elements_definition_for_name(JSContext *ctx, const char *name, si
        a SCOPED registry is associated with a node of this document, and the latch is what says so rather than
        a comment: core/dom/document.c's js_doc_create_element_step must perform DOM §4.5's "flatten element
        creation options" (its `customElementRegistry` member, and the NotSupportedError when the registry it
-       names is neither scoped nor this document's) and core/dom/shadow_root.c's sr_attach must look the
-       definition up against the HOST ELEMENT'S registry, both passing it to a registry-taking lookup — at
-       which point this entry has no callers left and goes. */
+       names is neither scoped nor this document's), passing what it resolves to a registry-taking lookup — at
+       which point this entry has no callers left and goes. §4.8's attach a shadow root was the other caller
+       and no longer is: it looks up against the HOST ELEMENT'S registry. */
     DCHECK(!ce_reg_flag(ctx, reg, g_atom_claimed),
            "a custom element definition was looked up through the registry-less creation entry while a SCOPED "
            "CustomElementRegistry holds a node of this document — core/dom/document.c (create an element: "
