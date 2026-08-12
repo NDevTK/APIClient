@@ -93,16 +93,6 @@ void custom_elements_free(JSContext *ctx);
    the install). */
 JSValue custom_elements_html_constructor(JSContext *ctx);
 
-/* §4.13.3's "look up a custom element definition" WITH THE REGISTRY DEFAULTED to the one DOM §4.9 step 2
-   resolves for a creation that names none — "look up a custom element registry given the DOCUMENT". The
-   definition or JS_UNDEFINED, OWNED. Its readers are `create an element`, which needs the definition to decide
-   between step 5's synchronous Construct and step 6's plain creation, and `attach a shadow root`, which needs
-   its `disable shadow`.
-   BOTH OF THEM MUST EVENTUALLY RESOLVE THE REGISTRY THEMSELVES — the lookup's first argument is the NODE's
-   registry, not the document's, and neither caller can name a scoped one through this entry. Its body carries
-   the DCHECK that fires the moment that matters and names what to build; when it does, this declaration goes
-   and the two callers take custom_elements_definition_lookup_for_element's shape. */
-JSValue custom_elements_definition_for_name(JSContext *ctx, const char *name, size_t len);
 /* §4.13.3's lookup performed FOR AN ELEMENT — its own custom element registry, its namespace, its local name
    and its is value, which are the four arguments the algorithm takes. This is the form every caller that HAS a
    node should use: it is the only one that can answer out of a SCOPED registry. OWNED; JS_UNDEFINED when there

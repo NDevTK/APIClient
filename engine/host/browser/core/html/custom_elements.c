@@ -45,12 +45,13 @@
  * the agent's active custom element constructor map.
  *
  * WHAT IS HONESTLY ABSENT: customized built-ins (`extends`), which §4.13.4 rejects here rather than
- * registering as autonomous — a silently-wrong registration is worse than a named refusal. TWO of the DOM
- * sites that must WRITE a node's registry live in components this one may not edit — `create an element`'s
- * flattened creation options (core/dom/document.c) and `attach a shadow root`'s ShadowRootInit member
- * (core/dom/shadow_root.c) — and custom_elements_definition_for_name carries the DCHECK that fires the moment
- * their absence changes an answer. The third, DOM §4.5 `adopt`'s re-derivation, is BUILT:
- * custom_elements_node_adopted is its steps 3.2/3.3.2/3.3.3, driven by core/dom/node.c's adopt walk. */
+ * registering as autonomous — a silently-wrong registration is worse than a named refusal. ALL THREE DOM sites
+ * that WRITE a node's registry are now built: `create an element`'s flattened creation options
+ * (core/dom/document.c), `attach a shadow root`'s ShadowRootInit member (core/dom/shadow_root.c), and DOM §4.5
+ * `adopt`'s re-derivation — custom_elements_node_adopted is its steps 3.2/3.3.2/3.3.3, driven by
+ * core/dom/node.c's adopt walk. The registry-less creation entry that stood in for the first two, and the
+ * `claimed` latch whose only purpose was to make its DCHECK fire the moment their absence changed an answer,
+ * are deleted with them: an entry kept past its callers is a second way to ask a question that now has one. */
 #include <string.h>
 #include <stdlib.h>
 
@@ -105,11 +106,6 @@ static JSAtom g_atom_whendef = JS_ATOM_NULL;   /* §4.13.4's when-defined promis
 static JSAtom g_atom_scoped = JS_ATOM_NULL;    /* §4.13.4's `is scoped`, set by the constructor */
 static JSAtom g_atom_docs = JS_ATOM_NULL;      /* §4.13.4's scoped document set */
 static JSAtom g_atom_defining = JS_ATOM_NULL;  /* §4.13.4's `element definition is running` */
-/* WHETHER A SCOPED REGISTRY HAS CLAIMED A NODE OF THIS DOCUMENT — the inverse reading of the scoped document
-   set, kept on the DOCUMENT's registry because that is the one registry every creation site can reach. Its one
-   reader is custom_elements_definition_for_name, whose DCHECK is what stops the registry-less creation entry
-   from silently answering out of the wrong set; see it for what must be built. */
-static JSAtom g_atom_claimed = JS_ATOM_NULL;
 
 /* §4.13.2's ACTIVE FUNCTION OBJECT, for the one interface that carries `[HTMLConstructor]` today. Step 5 is
    "the active function object must be HTMLElement" for an autonomous custom element, and that is an IDENTITY
@@ -215,7 +211,6 @@ static JSValue ce_registry_new(JSContext *ctx, bool scoped)
     }
     JS_SetProperty(ctx, rec, g_atom_scoped, scoped ? JS_TRUE : JS_FALSE);
     JS_SetProperty(ctx, rec, g_atom_defining, JS_FALSE);
-    JS_SetProperty(ctx, rec, g_atom_claimed, JS_FALSE);
     JS_DefinePropertyValue(ctx, reg, g_atom_reg, rec, CE_SLOT_FLAGS);
     return reg;
 }
@@ -326,13 +321,6 @@ static void ce_node_set_registry(JSContext *ctx, JSValueConst wrap, JSValueConst
                "this, so the second writer is one that read the node's registry wrong");
     }
     JS_DefinePropertyValue(ctx, (JSValue)wrap, g_atom_node_reg, JS_DupValue(ctx, reg), CE_SLOT_FLAGS);
-    /* The latch custom_elements_definition_for_name reads — see its DCHECK. */
-    if (JS_IsObject(reg) && ce_reg_flag(ctx, reg, g_atom_scoped)) {
-        JSValue doc_reg = ce_document_registry(ctx);
-
-        if (JS_IsObject(doc_reg)) ce_reg_set_flag(ctx, doc_reg, g_atom_claimed, true);
-        JS_FreeValue(ctx, doc_reg);
-    }
 }
 
 /* §4.8's attachShadow AND §4.9's create-an-element BOTH resolve a registry before they can act, and neither
@@ -1195,31 +1183,6 @@ static JSValue ce_definition_of(JSContext *ctx, JSValueConst wrap)
     if (!JS_IsObject(wrap)) return JS_UNDEFINED;
     if (JS_GetOwnSlot(ctx, &v, wrap, g_atom_def) <= 0) return JS_UNDEFINED;
     return v;
-}
-
-JSValue custom_elements_definition_for_name(JSContext *ctx, const char *name, size_t len)
-{
-    JSValue reg, def;
-
-    if (!g_ready) return JS_UNDEFINED;
-    reg = ce_document_registry(ctx);
-    /* §4.13.3's lookup takes a REGISTRY, and this entry is not given one, so it resolves the "default" — DOM
-       §4.9 step 2's "look up a custom element registry given DOCUMENT" — which is the right answer for every
-       creation and every shadow attachment that does not name one. It stops being the right answer the moment
-       a SCOPED registry is associated with a node of this document, and the latch is what says so rather than
-       a comment: core/dom/document.c's js_doc_create_element_step must perform DOM §4.5's "flatten element
-       creation options" (its `customElementRegistry` member, and the NotSupportedError when the registry it
-       names is neither scoped nor this document's), passing what it resolves to a registry-taking lookup — at
-       which point this entry has no callers left and goes. §4.8's attach a shadow root was the other caller
-       and no longer is: it looks up against the HOST ELEMENT'S registry. */
-    DCHECK(!ce_reg_flag(ctx, reg, g_atom_claimed),
-           "a custom element definition was looked up through the registry-less creation entry while a SCOPED "
-           "CustomElementRegistry holds a node of this document — core/dom/document.c (create an element: "
-           "flatten element creation options) and core/dom/shadow_root.c (attach a shadow root: the host's "
-           "registry) must resolve the registry themselves and pass it in");
-    def = ce_find_in(ctx, reg, name, len);
-    JS_FreeValue(ctx, reg);
-    return def;
 }
 
 JSValue custom_elements_definition_lookup_for_element(JSContext *ctx, JSValueConst el_wrap)
@@ -2794,10 +2757,9 @@ void custom_elements_init(JSContext *ctx)
     g_atom_scoped = JS_NewAtom(ctx, "scoped");
     g_atom_docs = JS_NewAtom(ctx, "docs");
     g_atom_defining = JS_NewAtom(ctx, "defining");
-    g_atom_claimed = JS_NewAtom(ctx, "claimed");
     CHECK(g_atom_reg != JS_ATOM_NULL && g_atom_node_reg != JS_ATOM_NULL && g_atom_defs != JS_ATOM_NULL &&
           g_atom_order != JS_ATOM_NULL && g_atom_whendef != JS_ATOM_NULL && g_atom_scoped != JS_ATOM_NULL &&
-          g_atom_docs != JS_ATOM_NULL && g_atom_defining != JS_ATOM_NULL && g_atom_claimed != JS_ATOM_NULL,
+          g_atom_docs != JS_ATOM_NULL && g_atom_defining != JS_ATOM_NULL,
           "a §4.13.4 CustomElementRegistry field name could not be interned");
     g_registry_slot = realm_value_declare(ctx, "§4.13.4 the Document's CustomElementRegistry");
     g_html_ctor_slot = realm_value_declare(ctx, "§4.13.2's active function object (HTMLElement)");
@@ -2961,9 +2923,8 @@ void custom_elements_free(JSContext *ctx)
     JS_FreeAtom(ctx, g_atom_scoped);
     JS_FreeAtom(ctx, g_atom_docs);
     JS_FreeAtom(ctx, g_atom_defining);
-    JS_FreeAtom(ctx, g_atom_claimed);
     g_atom_reg = g_atom_node_reg = g_atom_defs = g_atom_order = g_atom_whendef = JS_ATOM_NULL;
-    g_atom_scoped = g_atom_docs = g_atom_defining = g_atom_claimed = JS_ATOM_NULL;
+    g_atom_scoped = g_atom_docs = g_atom_defining = JS_ATOM_NULL;
     g_current = NULL;
     JS_FreeAtom(ctx, g_atom_rq);
     JS_FreeAtom(ctx, g_atom_rq_head);

@@ -532,20 +532,25 @@ static void node_adopt_push(NodeAdoptStack *s, lxb_dom_node_t *root, lxb_dom_doc
    without this an adopted template's markup keeps a node document its element no longer has.
    HTML §4.12.3 adopts them into the new node document's APPROPRIATE TEMPLATE CONTENTS OWNER DOCUMENT — an
    inert Document with no browsing context, created once per document and remembered on it, which is what
-   keeps a template's scripts from running. That is a Document FIELD, and core/dom/document.c owns the record
-   it would live on, so this is where the algorithm stops. */
-static void node_adopting_steps(NodeAdoptStack *s, lxb_dom_node_t *n, lxb_dom_document_t *doc)
+   keeps a template's scripts from running.
+   IT IS PUSHED ONTO THIS WALK'S STACK, NOT CALLED. A frame is one INVOCATION of adopt, and adopting the
+   contents is a second invocation with its own `document` and its own `oldDocument` — so it belongs on the
+   stack the walk already has. Calling node_adopt here instead would be C recursion whose depth is the page's
+   template nesting, which is the page's to choose; a `<template>` inside a `<template>` inside a `<template>`
+   is ordinary markup. The push is also what makes the nested adopt run BETWEEN this walk's descendants rather
+   than after all of them, which is the order step 3.4 is stated in. */
+static void node_adopting_steps(JSContext *ctx, NodeAdoptStack *s, lxb_dom_node_t *n, lxb_dom_document_t *doc)
 {
+    lxb_html_template_element_t *t;
+
     if (n->type != LXB_DOM_NODE_TYPE_ELEMENT || !lxb_html_tree_node_is(n, LXB_TAG_TEMPLATE)) return;
-    (void)s; (void)doc;
-    DFAIL("DOM §4.5 adopt step 3.4 reached HTML §4.12.3's adopting steps for a <template>: its template "
-          "contents are adopted into the new node document's APPROPRIATE TEMPLATE CONTENTS OWNER DOCUMENT, "
-          "which is that document's associated inert template document — a Document field. core/dom/document.c "
-          "must add `lxb_html_document_t *document_template_contents_owner(JSContext *ctx, "
-          "lxb_dom_document_t *doc)`: HTML §4.12.3 answers `doc` itself when `doc` was created by that "
-          "algorithm, and otherwise creates the inert Document on first ask (browsing context null, marked an "
-          "HTML document when `doc` is one), stores it as `doc`'s associated inert template document and "
-          "answers it");
+    t = lxb_html_interface_template(n);
+    /* A template always HAS its contents — §4.12.3 establishes them when the element is created — so an
+       element reaching here without one came from something that built a template interface by hand. */
+    DCHECK(t->content != NULL, "a <template> element has no template contents at DOM §4.5 adopt step 3.4");
+    if (!t->content) return;
+    node_adopt_push(s, &t->content->node,
+                    lxb_dom_interface_document(document_template_contents_owner(ctx, doc)));
 }
 
 /* DOM §4.5 "ADOPT A NODE", given `node` and `document`. */
@@ -583,7 +588,7 @@ void node_adopt(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *docume
                 node_set_node_document(&a->node, doc);
         }
         custom_elements_node_adopted(ctx, d, doc, old);       /* STEPS 3.2, 3.3.2 and 3.3.3 */
-        node_adopting_steps(&s, d, doc);                      /* STEP 3.4 */
+        node_adopting_steps(ctx, &s, d, doc);                 /* STEP 3.4 */
     }
     free(s.f);
 }
