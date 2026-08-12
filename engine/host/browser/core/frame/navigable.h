@@ -87,7 +87,12 @@ typedef JSContext *(*RealmBuilder)(JSRuntime *rt, lxb_html_document_t *dom, cons
                                    const char *csp, uint32_t doc_id, JSValueConst nav_proxy);
 void navigable_set_realm_builder(RealmBuilder b);
 
-/* BUILD THE REALM OF A SAME-ORIGIN NAVIGABLE THIS AGENT HOLDS, and hand the caller the reference.
+/* BUILD THE REALM OF A SAME-ORIGIN NAVIGABLE THIS AGENT HOLDS. The answer is BORROWED, and that is a statement
+ * about who owns a realm rather than a convention for this call: a realm is kept alive by its own function
+ * objects (each holds a counted reference to the realm that defined it), those hang off the Window, and the
+ * Window hangs off the navigable's WindowProxy — so a realm lives exactly as long as its NAVIGABLE is
+ * reachable, and dies as a garbage cycle when it is not. Anything that took an owning reference would be an
+ * external ROOT making its realm, and everything the realm reaches, permanently reachable. See navigable.c.
  *
  * WHEN IT IS BUILT IS DECIDED BY WHAT THE NAVIGABLE DOES, and the two answers are one spec sentence read from
  * both ends.
@@ -164,8 +169,10 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url);
 JSValue navigable_open(JSContext *ctx, const char *url, const char *target, const WindowFeatures *feat);
 void navigable_free(JSContext *ctx);
 
-/* HOW MANY CHILD REALMS THIS AGENT IS HOLDING — the working set child_document's OOM `CHECK` names, asked of
-   the only component that knows it. It exists because the alternative was inferring it from
+/* HOW MANY CHILD REALMS ARE LIVE — the working set child_document's OOM `CHECK` names, asked of the only
+   component that knows it. LIVE, not built: a realm leaves this count when it is torn down, which is when its
+   navigable stops being reachable, so the number tracks reachable navigables rather than flows that ever made
+   one. It exists because the alternative was inferring it from
    JS_ComputeMemoryUsage's `memory_used_*`, which is the runtime's MISCELLANEOUS bucket (every property array
    and every fast-array element vector lands in it) and answers a different question with a similar-looking
    number — see the @HEAP line in solver/engine.c. */

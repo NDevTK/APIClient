@@ -21,37 +21,70 @@
 static char *g_origin;   /* this AGENT's origin — what an about:blank child inherits (owned) */
 static RealmBuilder g_realm_builder;
 
-/* THE REALMS THIS AGENT BUILT, and the agent is what owns them. A child realm is created by §7.4 and referred
-   to by the WindowProxy over its navigable, but a proxy is a GC object and a realm is not: releasing one from
-   a finalizer would free JSValues during collection, and leaving it to the proxy meant nobody ran the
-   DOCUMENT's own teardown at all — the realm's `document`, its Window and its WindowProxy stayed referenced and
-   JS_FreeRuntime's gc_obj_list walk counted the whole child page as surviving objects. The agent holds them and
-   releases them with itself; a proxy BORROWS.
-   AND NOTHING RECLAIMS ONE BEFORE THE AGENT DIES, which is a CEILING and not a policy. A navigable with an
-   ADDRESS materializes its realm rather than deferring it — its scripts are an observable the creator never
-   touches — and forced execution runs the creating statement once per flow, so a page with one src'd iframe
-   asks for one child realm per flow and this list only grows. Measured: the fixture reaches 4022 flows and the
-   next child Document cannot allocate. THE MECHANISM THAT IS MISSING IS RECLAMATION, and its shape follows
-   from the sentence above: a realm belongs to its navigable, a navigable IS a GC object, so a realm whose
-   WindowProxy has been collected is dead — the finalizer cannot free it but it can NAME it, and the sweep runs
-   after the collection rather than inside it. §scheduler's cold tier is the same sentence one level further
-   out, and it is its own mechanism: a realm is not a snapshot, so paging one is not a rewording of paging a
-   flow.
-   IT IS A CEILING ON THE PROBE THAT MATERIALIZES ONE, AND IT IS NOT WHERE THIS ENGINE'S MEMORY GOES — measured,
-   because the paragraph above reads like an explanation of the whole heap and was taken for one. The default
-   smoke fixture builds ZERO child realms over 14003 flows (`childRealms` on the @HEAP line) while the C
-   allocator goes from 4.6 MB to 3.39 GB, of which quickjs's own allocator holds 1.27 GB in 7.4 MILLION live
-   blocks that no JS object, property, shape, string or bytecode accounts for. So the growth is ~500 leaked
-   allocations per CREATED flow in two places — inside the runtime and in the host's own malloc — and none of it
-   is here. The ceiling below is real and it is what keeps a src'd-iframe probe out of that fixture; it is not
-   the answer to "why does this run take gigabytes", and a reader who arrives with that question is told so
-   here rather than after a day of building reclamation that would not have moved the number. */
+/* THE CHILD REALMS THIS AGENT HAS LIVE, and it BORROWS every one of them. A realm is kept alive by its own
+   function objects — each holds a counted reference to the realm that defined it (js_call_c_function reads
+   `p->u.cfunc.realm`) — and those are reachable from the Window that the navigable's WindowProxy holds. So a
+   realm lives exactly as long as its NAVIGABLE is reachable, which is the spec's answer, and when the navigable
+   goes the realm is a garbage CYCLE that the collector breaks.
+   THE AGENT MUST NOT OWN ONE, and that is the whole mechanism rather than a preference. An agent-held reference
+   is an EXTERNAL ROOT: gc_decref answers "reachable" for the realm and therefore for everything the realm can
+   reach — which includes, through the child Document's own `proxy` field, the very WindowProxy whose collection
+   would have said the navigable was gone. A design that owns the realm and watches for its proxy to die is
+   waiting for something it is itself preventing. Ownership is handed to the navigable in navigable_realm, and
+   what is left here is a list of borrowed pointers whose only jobs are counting and answering "is this one
+   mine" at teardown.
+   THIS LIST IS NOT WHAT KEEPS A REALM ALIVE AND NOT WHAT TEARS ONE DOWN. A realm's teardown reaches the host
+   through JS_SetContextTeardownHook, because the last reference to a realm is normally released by the
+   COLLECTOR and no host call precedes it. The teardown is SPLIT BY PHASE in quickjs.c for that reason: the
+   reference releases (this hook among them) run inside the collection, the table and memory frees run in the
+   post-collection sweep. Measured before any of that existed: one src'd iframe in a forced-execution fixture
+   asks for one child realm per flow, the list only grew, and at 4022 flows the next child Document could not
+   allocate.
+   IT WAS NEVER WHERE THIS ENGINE'S MEMORY GOES — measured, because the paragraph above reads like an
+   explanation of the whole heap and was taken for one. The default smoke fixture builds ZERO child realms over
+   14003 flows (`childRealms` on the @HEAP line) while the C allocator goes from 4.6 MB to 3.39 GB, of which
+   quickjs's own allocator holds 1.27 GB in 7.4 MILLION live blocks that no JS object, property, shape, string
+   or bytecode accounts for. So that growth is ~500 leaked allocations per CREATED flow in two places — inside
+   the runtime and in the host's own malloc — and none of it is here. A reader who arrives with "why does this
+   run take gigabytes" is told so here rather than after a day spent on realms.
+   ONE EDGE OF THE CYCLE IS STILL INVISIBLE TO THE COLLECTOR, and it is the next thing to build rather than a
+   caveat on this one: a realm's Document record is reached through JS_GetContextOpaque and holds `doc_obj`,
+   `window` and `proxy` as COUNTED references that no gc_mark reports, so JS_MarkContext walks a realm without
+   ever naming them. gc_decref therefore never subtracts the record's reference to its own WindowProxy, the
+   proxy reads as externally rooted, and the cycle record→proxy→Window→function objects→realm survives a
+   collection that has nothing else holding it. Every counted reference a host record holds must be declared to
+   the collector the way core/dom's node wrappers declare theirs; until it is, a navigable that has become
+   unreachable is still not collectable, and what that costs is now VISIBLE — the gc_obj_list walk reports it
+   instead of navigable_free hiding it by freeing realms behind the collector's back.
+   §scheduler's cold tier is a further sentence again, and its own mechanism: a realm is not a snapshot, so
+   paging one is not a rewording of paging a flow. */
 static JSContext **g_realms;
 static int         g_realms_n, g_realms_cap;
 
 void navigable_set_realm_builder(RealmBuilder b) { g_realm_builder = b; }
 
 int navigable_realm_count(void) { return g_realms_n; }
+
+/* A REALM OF THIS AGENT IS BEING TORN DOWN — quickjs's realm-teardown hook, and the one moment a Document can
+   be released. It is reached from the phase-safe half of the realm's own teardown, which is where a host's
+   reference releases belong; document_free releases exactly that (the Document object, the Window, the
+   WindowProxy, the Lexbor trees this realm created) and frees its own record.
+   IT IS ASKED ABOUT EVERY REALM, this agent's first one included, because a Document dying with its realm is a
+   fact about realms rather than about children — and document_free answers for a realm that never had one. The
+   list below is consulted only to stop counting a child realm that is gone; a realm that is not in it is not an
+   error, it is the root, or a realm some other part of the host built. */
+static void navigable_realm_teardown(JSRuntime *rt, JSContext *cctx)
+{
+    int i;
+
+    (void)rt;
+    document_free(cctx);
+    for (i = 0; i < g_realms_n; i++) {
+        if (g_realms[i] != cctx) continue;
+        g_realms[i] = g_realms[--g_realms_n];   /* order means nothing here; membership does */
+        return;
+    }
+}
 
 
 /* THE CHILD'S ADDRESS AND ORIGIN, from ONE parse. An `about:blank` navigable — which is what `open()` with no
@@ -127,22 +160,15 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len)
        still reaches gigabytes (navigable_realm's note has the numbers), so a reader who arrives here must
        check `childRealms` on the @HEAP line before believing this paragraph is their answer. */
     CHECK(dom != NULL,
-          "OOM creating a child navigable's Document — CHECK @HEAP's `childRealms` FIRST: if it is small, this "
-          "OOM is a bystander and the memory is elsewhere in the run. If it is large, the working set is CHILD "
-          "REALMS, one per flow that created a navigable with an address, none of them ever reclaimed. The "
-          "reclamation "
-          "is NOT a reference the agent can drop: a child realm's refcount is far above one because every C "
-          "function object minted in it holds a counted reference to its own realm, so JS_FreeContext only "
-          "decrements and removing it from this agent's list orphans the context instead of tearing it down "
-          "(measured: 82 of html/browsers' 154 files turned into a gc_obj_list leak, pass/fail unchanged). A "
-          "JSContext is a GC object and quickjs frees one through the COLLECTOR, so this is a mechanism in the "
-          "collector's terms. MAKING IT REACHABLE FROM THERE IS NOT ENOUGH EITHER, and that was measured too: "
-          "routing a collected context into JS_FreeContext's teardown corrupts the atom table (an assert in "
-          "JS_FreeAtomStruct's hash walk, on the fixture's first run), because that teardown frees modules, "
-          "shapes and atoms while the collector's REMOVE_CYCLES phase is in force — a phase in which "
-          "JS_FreeValueRT only defers to a list and atom refcounts are mid-flight. So the teardown has to be "
-          "SPLIT by phase-safety the way free_object already is: the reference releases can run inside the "
-          "collection, the table and shape frees must run after it");
+          "OOM creating a child navigable's Document — CHECK @HEAP's `childRealms` FIRST: it counts the child "
+          "realms that are LIVE, and a realm is live exactly while its navigable is reachable. If it is small, "
+          "this OOM is a bystander and the memory is elsewhere in the run (measured: the smoke fixture builds "
+          "zero child realms over 14003 flows and still reaches 3.39 GB). If it is large, the working set is "
+          "REACHABLE NAVIGABLES — a flow per src'd iframe, each holding its document — and the question is what "
+          "still names them, never whether reclamation exists: a realm whose navigable is gone is a garbage "
+          "CYCLE (its function objects hold their realm and its Window holds them), the collector breaks it, "
+          "and the teardown that follows is split by phase in quickjs.c so the reference releases run inside "
+          "the collection and the tables in the sweep after it");
     CHECK(lxb_html_document_parse(dom, body ? (const lxb_char_t *)body : (const lxb_char_t *)EMPTY,
                                   body ? body_len : sizeof EMPTY - 1) == LXB_STATUS_OK,
           "a child navigable's Document did not parse");
@@ -170,11 +196,21 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
     if (g_realms_n == g_realms_cap) {
         int cap = g_realms_cap ? g_realms_cap * 2 : 8;
         JSContext **g = realloc(g_realms, (size_t)cap * sizeof *g);
-        CHECK(g != NULL, "navigable: OOM recording a child realm — an unrecorded realm is never torn down");
+        CHECK(g != NULL, "navigable: OOM recording a child realm");
         g_realms = g;
         g_realms_cap = cap;
     }
     g_realms[g_realms_n++] = cctx;
+    /* THE BUILDER'S REFERENCE IS HANDED TO THE NAVIGABLE — see the list's own note for why the agent must not
+       keep one. What holds the realm afterwards is its own graph: the WindowProxy holds the child's Window, the
+       Window's methods are C function objects, and every one of those holds a counted reference to the realm
+       that defined them. So the count cannot be at one here, and if it were, this line would free the realm
+       that all three of this function's callers are about to read. */
+    DCHECK(JS_ContextRefCount(cctx) > 1,
+           "a child realm was built holding nothing but the builder's own reference — its own function objects "
+           "are what keep a realm alive, and a realm with none of them is not a realm this agent can hand to a "
+           "navigable");
+    JS_FreeContext(cctx);
     return cctx;
 }
 
@@ -789,24 +825,26 @@ void navigable_install(JSContext *ctx, JSValueConst global, const char *origin)
         g_origin = strdup(origin ? origin : "null");
         CHECK(g_origin != NULL, "navigable: OOM recording this agent's origin");
     }
+    /* HOW A REALM'S DEATH REACHES THIS AGENT. Declared here because this is where a realm of this agent is
+       first known, and declared for the RUNTIME because that is what a realm belongs to — the same declaration
+       from a second document is the same function and quickjs says so. It outlives navigable_free on purpose:
+       a realm still reachable when the agent's own state goes is torn down after it, and its Document must go
+       with it or it is a leak the gc_obj_list walk reports with nothing to explain it. */
+    JS_SetContextTeardownHook(JS_GetRuntime(ctx), navigable_realm_teardown);
     idl_install_method(ctx, global, "open", 0, g_id_open);
 }
 
 void navigable_free(JSContext *ctx)
 {
-    int i;
-
-    /* THE GROUP'S LIST BEFORE THE REALMS. It holds a reference to every top-level traversable's proxy, and a
-       proxy keeps its Window; released here so the realms below are torn down with nothing left pointing in. */
+    /* THE GROUP'S LIST. It holds a reference to every top-level traversable's proxy, and a proxy keeps its
+       Window — so releasing it here is releasing the last thing this component holds ON a navigable, which is
+       what lets the realms behind those proxies become collectable. */
     JS_FreeValue(ctx, g_group);
     g_group = JS_UNDEFINED;
-    /* EACH CHILD REALM'S DOCUMENT FIRST, then the realm: document_free is what releases the references the
-       Document holds across its lifecycle — its `document` object, its Window and its WindowProxy — and a
-       realm freed without it leaves that graph referenced by nothing the GC can see. */
-    for (i = 0; i < g_realms_n; i++) {
-        document_free(g_realms[i]);
-        JS_FreeContext(g_realms[i]);
-    }
+    /* THE LIST GOES, THE REALMS DO NOT. Every entry is BORROWED (navigable_realm hands ownership to the
+       navigable), so there is nothing here to release and nothing here to free them with: a realm still
+       reachable at this point outlives this agent's own state and is torn down by whoever holds it, releasing
+       its Document through the teardown hook — which is deliberately left declared for exactly that. */
     free(g_realms);
     g_realms = NULL;
     g_realms_n = g_realms_cap = 0;
