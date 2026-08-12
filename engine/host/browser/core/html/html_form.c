@@ -1409,19 +1409,21 @@ bool html_form_has_datalist_ancestor(JSValueConst wrap)
     return false;
 }
 
-bool html_form_needs_dirname_entry(JSValueConst wrap)
+/* §3.2.6's AUTO-DIRECTIONALITY FORM-ASSOCIATED ELEMENTS, as a predicate over a NODE — the list two callers
+   need and neither of them owns. §3.2.6's auto directionality reads such an element's VALUE instead of its
+   text, and §4.10.22.4 step 5.12 submits such an element's directionality as a second entry; those are two
+   uses of one list, and a second copy of it is the second answer that is always subtly wrong. */
+bool html_form_is_auto_directionality_face(const lxb_dom_node_t *n)
 {
-    lxb_dom_node_t *n = node_of(wrap);
-    size_t dlen = 0, tlen = 0;
+    size_t tlen = 0;
     const char *t;
 
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
-    if (!attr_of(lxb_dom_interface_element(n), "dirname", &dlen) || !dlen) return false;
-    if (tag_is(n, "textarea")) return true;
-    if (!tag_is(n, "input")) return false;
-    t = attr_of(lxb_dom_interface_element(n), "type", &tlen);
-    /* §3.2.6's list. The TEXT state is the missing-value AND invalid-value default, so an absent or unknown
-       `type` is in it — which is why an unrecognised keyword answers true here rather than false. */
+    if (tag_is((lxb_dom_node_t *)n, "textarea")) return true;
+    if (!tag_is((lxb_dom_node_t *)n, "input")) return false;
+    t = attr_of(lxb_dom_interface_element((lxb_dom_node_t *)n), "type", &tlen);
+    /* The TEXT state is the missing-value AND invalid-value default, so an absent or unknown `type` is in it —
+       which is why an unrecognised keyword answers true here rather than false. */
     if (!t || !tlen) return true;
     return ascii_ci_is(t, tlen, "hidden") || ascii_ci_is(t, tlen, "text") || ascii_ci_is(t, tlen, "search") ||
            ascii_ci_is(t, tlen, "tel") || ascii_ci_is(t, tlen, "url") || ascii_ci_is(t, tlen, "email") ||
@@ -1433,6 +1435,28 @@ bool html_form_needs_dirname_entry(JSValueConst wrap)
              ascii_ci_is(t, tlen, "week") || ascii_ci_is(t, tlen, "time") ||
              ascii_ci_is(t, tlen, "datetime-local") || ascii_ci_is(t, tlen, "number") ||
              ascii_ci_is(t, tlen, "range") || ascii_ci_is(t, tlen, "color"));
+}
+
+/* §3.2.6's ONE type-specific Undefined case: an `input` in the TELEPHONE state is 'ltr' whatever surrounds it,
+   because a phone number is read left to right in every script. */
+bool html_form_is_telephone_input(const lxb_dom_node_t *n)
+{
+    size_t tlen = 0;
+    const char *t;
+
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT || !tag_is((lxb_dom_node_t *)n, "input")) return false;
+    t = attr_of(lxb_dom_interface_element((lxb_dom_node_t *)n), "type", &tlen);
+    return ascii_ci_is(t, tlen, "tel");
+}
+
+bool html_form_needs_dirname_entry(JSValueConst wrap)
+{
+    lxb_dom_node_t *n = node_of(wrap);
+    size_t dlen = 0;
+
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    if (!attr_of(lxb_dom_interface_element(n), "dirname", &dlen) || !dlen) return false;
+    return html_form_is_auto_directionality_face(n);
 }
 
 /* ---- §4.10.7's LIST OF OPTIONS, and §4.10.10's SELECTEDNESS -------------------------------------------------

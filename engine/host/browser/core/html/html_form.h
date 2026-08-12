@@ -2,6 +2,9 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_HTML_FORM_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_HTML_FORM_H
 #include <stdbool.h>
+
+#include <lexbor/dom/dom.h>
+
 #include "quickjs.h"
 
 /* Install §4.10's members on the interfaces that DECLARE them. The html layer owns the per-tag prototypes and
@@ -113,6 +116,15 @@ bool html_form_has_datalist_ancestor(JSValueConst wrap);
    auto-directionality form-associated element (§3.2.6's list: an `input` in the Hidden, Text, Search, Telephone,
    URL, Email, Password, Submit Button, Reset Button or Button state, or a `textarea`). */
 bool html_form_needs_dirname_entry(JSValueConst wrap);
+
+/* §3.2.6's AUTO-DIRECTIONALITY FORM-ASSOCIATED ELEMENTS — an `input` in the Hidden, Text, Search, Telephone,
+   URL, Email, Password, Submit Button, Reset Button or Button state, or a `textarea`. The list §3.2.6's auto
+   directionality and §4.10.22.4 step 5.12 both read, stated once. */
+bool html_form_is_auto_directionality_face(const lxb_dom_node_t *n);
+
+/* §3.2.6's one type-specific Undefined case: an `input` in the TELEPHONE state is 'ltr' regardless of what
+   contains it. */
+bool html_form_is_telephone_input(const lxb_dom_node_t *n);
 
 /* §4.10.18.1's VALUE, and §4.10.5.1.15's CHECKEDNESS, for a caller that is not the IDL accessor — the entry
    list reads both off controls it did not receive as a receiver. `html_form_control_value` is OWNED and may be

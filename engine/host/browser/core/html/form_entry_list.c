@@ -23,9 +23,6 @@
  * arms each appending their own entries.
  *
  * WHAT IS HONESTLY ABSENT, BY NAME:
- *   - Step 5.12's `dirname` entry, which needs §3.2.6's DIRECTIONALITY — the `dir` attribute chain plus the
- *     first-strong-character scan `dir=auto` resolves by. A control carrying one reaches a DFAIL naming it
- *     rather than silently submitting one entry where a browser submits two.
  *   - `<input type=file>`'s SELECTED FILES are always empty, and that is not a gap: this engine has no file
  *     picker and no user, so step 5.8's "if there are no selected files" branch is the whole of what it can
  *     ever take. That branch is implemented, so a named file control still contributes its entry. */
@@ -39,8 +36,10 @@
 #include "core/html/form_data.h"
 #include "core/html/form_data_event.h"
 #include "core/html/form_entry_list.h"
+#include "core/html/directionality.h"
 #include "core/html/element_internals.h"
 #include "core/html/html_form.h"
+#include "core/dom/node.h"
 #include "solver/concolic.h"
 
 /* This sub-sequence's own cursor. It is a phase and not a STAGE for the reason every other `*_run` helper's is:
@@ -213,13 +212,6 @@ static void fel_one_field(JSContext *ctx, JSValueConst entries, JSValueConst fie
     name = html_form_control_name(field, &nlen);
     if (!name || !nlen) return;
 
-    /* Step 5.12's condition, checked before the entry so the crash names the field rather than arriving after
-       half its entries are in the list. */
-    if (html_form_needs_dirname_entry(field))
-        DFAIL("a submitted control carries a non-empty `dirname` — build HTML §3.2.6's DIRECTIONALITY (the "
-              "`dir` attribute chain, and `dir=auto`'s first-strong-character scan), which is the value step "
-              "5.12's second entry carries");
-
     switch (kind) {
     case FORM_FIELD_SELECT: {
         /* Step 5.6: one entry per option whose selectedness is true and that is not disabled. */
@@ -252,6 +244,24 @@ static void fel_one_field(JSContext *ctx, JSValueConst entries, JSValueConst fie
         DCHECK(kind == FORM_FIELD_OTHER, "a form field was classified as a kind step 5's chain does not have");
         fel_append(ctx, entries, name, nlen, html_form_control_value(ctx, field));     /* step 5.11 */
         break;
+    }
+
+    /* STEP 5.12 — the `dirname` entry, AFTER the control's own and not before it. The order is the spec's and
+       it is observable: a server reading a multipart body in order sees `comment` then `comment.dir`, and a
+       form whose two entries arrive the other way round is a different request. §3.2.6's directionality is
+       what it carries, which is the whole reason that algorithm exists in a headless engine. */
+    if (html_form_needs_dirname_entry(field)) {
+        lxb_dom_node_t *n = node_of(field);
+        size_t dlen = 0;
+        const char *dirname = (const char *)lxb_dom_element_get_attribute(lxb_dom_interface_element(n),
+                                                                          (const lxb_char_t *)"dirname", 7,
+                                                                          &dlen);
+        int dir = directionality_of(ctx, lxb_dom_interface_element(n));
+
+        DCHECK(dirname != NULL && dlen != 0,
+               "step 5.12's condition held for a control whose `dirname` attribute is absent or empty — the "
+               "condition and the read are two spellings of one attribute and they disagreed");
+        fel_append(ctx, entries, dirname, dlen, JS_NewString(ctx, directionality_name(dir)));
     }
 }
 
