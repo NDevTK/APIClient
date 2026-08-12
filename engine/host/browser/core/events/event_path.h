@@ -19,18 +19,23 @@
 JSValue event_path_new(JSContext *ctx);
 
 /* "To APPEND TO AN EVENT PATH, given an event, an EventTarget invocationTarget, a potential event target
-   shadowAdjustedTarget, ... and a boolean slotInClosedTree." `shadow_adjusted_target` is JS_NULL for an item
-   the walk did not retarget at. `root_of_closed_tree` is the caller's because step 4 asks a TREE question
-   ("invocationTarget is a shadow root whose mode is closed") and this file never learns what a node is — the
-   same boundary that keeps the events layer free of lexbor.
-   TWO OF THE STANDARD'S SEVEN ITEM FIELDS ARE ABSENT, BY NAME, because nothing in this engine can produce a
-   value for them: `relatedTarget` and `touch target list` are the retargeted forms of an event's relatedTarget
-   and touch target list, and there is no MouseEvent, FocusEvent or TouchEvent here for either to come from —
-   §2.9's steps 4, 6.1-6.2 and 6.9.3-6.9.4 have nothing to retarget, and `invoke` steps 3-4 have nothing to
-   write. `invocation-target-in-shadow-tree` is absent for the same reason at one remove: its only reader is
-   inner invoke step 2.7.2, which suppresses HTML's `window.event`, and this engine has no `window.event`. */
+   shadowAdjustedTarget, a potential event target relatedTarget, a list of potential event targets touchTargets,
+   and a boolean slotInClosedTree." `shadow_adjusted_target` is JS_NULL for an item the walk did not retarget
+   at. `root_of_closed_tree` is the caller's because step 4 asks a TREE question ("invocationTarget is a shadow
+   root whose mode is closed") and this file never learns what a node is — the same boundary that keeps the
+   events layer free of lexbor.
+   `related_target` AND `touch_targets` ARE THE ITEM'S OWN, ALREADY RETARGETED — §2.9 runs §4.8's retargeting
+   against THIS item's invocation target before it appends, so the two are per-item values and not the event's.
+   That is the whole reason they are fields: `invoke` steps 4-5 set the event's relatedTarget and touch target
+   list FROM THE ITEM at every entry, so a listener outside a shadow tree reads the host where one inside reads
+   the node. `touch_targets` is JS_NULL for the EMPTY LIST — the same state one allocation cheaper, and the
+   spelling the event's own touch target list uses.
+   ONE OF THE STANDARD'S SEVEN ITEM FIELDS IS ABSENT, BY NAME: `invocation-target-in-shadow-tree`, whose only
+   reader is inner invoke step 2.7.2, which suppresses HTML's `window.event`, and this engine has no
+   `window.event`. */
 void event_path_append(JSContext *ctx, JSValueConst path, JSValueConst invocation_target,
-                       JSValueConst shadow_adjusted_target, bool root_of_closed_tree, bool slot_in_closed_tree);
+                       JSValueConst shadow_adjusted_target, JSValueConst related_target,
+                       JSValueConst touch_targets, bool root_of_closed_tree, bool slot_in_closed_tree);
 
 uint32_t event_path_length(JSContext *ctx, JSValueConst path);
 /* The item at `i`. OWNED. It is a DCHECK to ask past the end — every walk here is over the path's own size. */
@@ -39,6 +44,10 @@ JSValue event_path_item(JSContext *ctx, JSValueConst path, uint32_t i);
 /* An item's fields. The targets are OWNED; the shadow-adjusted target is JS_NULL when the item has none. */
 JSValue event_path_invocation_target(JSContext *ctx, JSValueConst item);
 JSValue event_path_shadow_adjusted_target(JSContext *ctx, JSValueConst item);
+/* OWNED. JS_NULL is a real answer for both: the item's relatedTarget is a POTENTIAL event target, and the
+   touch target list is JS_NULL when it is empty. */
+JSValue event_path_related_target(JSContext *ctx, JSValueConst item);
+JSValue event_path_touch_targets(JSContext *ctx, JSValueConst item);
 bool    event_path_root_of_closed_tree(JSContext *ctx, JSValueConst item);
 bool    event_path_slot_in_closed_tree(JSContext *ctx, JSValueConst item);
 

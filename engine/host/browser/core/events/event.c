@@ -18,10 +18,12 @@
  *
  * WHAT IS ABSENT AND WHY. CustomEvent and the typed events (MouseEvent, KeyboardEvent…) are their own interfaces
  * with their own state; they are honestly missing rather than approximated by an Event with extra properties,
- * and the IDL audit names them. With them are absent §2.2's `relatedTarget` and `touch target list` — neither
- * is an Event member, both belong to interfaces that do not exist here, and so §2.9's retargeting of them has
- * nothing to retarget. Retargeting of the TARGET itself is not in that list: it is §2.9's shadow-adjusted
- * target, it is real, and composedPath below is written over it. */
+ * and the IDL audit names them. §2.2's `relatedTarget` and `touch target list` are NOT with them, and reading
+ * the standard is what says so: they are associated values of the EVENT, initially null and the empty list, and
+ * UIEvents and Touch Events only define ATTRIBUTES over them. So they are slots here like every other, they
+ * are what §2.9 retargets at each path item and what `invoke` writes back at each one, and the interfaces that
+ * FILL them are the part that is missing. Retargeting of the TARGET is the third of the same family: it is
+ * §2.9's shadow-adjusted target, and composedPath below is written over it. */
 #include <stdbool.h>
 #include <string.h>
 
@@ -246,6 +248,78 @@ void event_set_current(JSContext *ctx, JSValueConst ev, JSValueConst current)
     JS_FreeValue(ctx, slots);   /* the PHASE is the walk's to set — it knows which step of the path this is */
 }
 
+/* §2.2's RELATEDTARGET and TOUCH TARGET LIST, read and written as slots. §2.9 asks for them at step 4 and at
+   every step 6.9.3 — once per ancestor — and `invoke` writes them at every path item, so the getters answer
+   with the slot itself rather than a copy of a list nobody may mutate. */
+static JSValue event_slot_get(JSContext *ctx, JSValueConst ev, const char *name)
+{
+    JSValue slots = event_slots(ctx, ev), v;
+
+    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return JS_NULL; }
+    v = JS_GetPropertyStr(ctx, slots, name);
+    JS_FreeValue(ctx, slots);
+    return v;
+}
+
+static void event_slot_set(JSContext *ctx, JSValueConst ev, const char *name, JSValueConst v)
+{
+    JSValue slots = event_slots(ctx, ev);
+
+    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return; }
+    JS_SetPropertyStr(ctx, slots, name, JS_DupValue(ctx, v));
+    JS_FreeValue(ctx, slots);
+}
+
+JSValue event_related_target(JSContext *ctx, JSValueConst ev)
+{
+    JSValue v = event_slot_get(ctx, ev, "relatedTarget");
+
+    DCHECK(JS_IsObject(v) || JS_IsNull(v),
+           "§2.2's relatedTarget is a POTENTIAL event target — an EventTarget or null — and §4.8's retargeting "
+           "is about to be run against it. Anything else means an interface that defines a relatedTarget "
+           "attribute wrote its own value into the slot instead of an EventTarget");
+    return v;
+}
+
+void event_set_related_target(JSContext *ctx, JSValueConst ev, JSValueConst related)
+{
+    DCHECK(JS_IsObject(related) || JS_IsNull(related),
+           "§2.2's relatedTarget was set to something that is not a potential event target");
+    event_slot_set(ctx, ev, "relatedTarget", related);
+}
+
+JSValue event_touch_target_list(JSContext *ctx, JSValueConst ev)
+{
+    JSValue v = event_slot_get(ctx, ev, "touchTargets");
+
+    DCHECK(JS_IsArray(v) || JS_IsNull(v),
+           "§2.2's touch target list is a LIST of potential event targets — an Array, or null for the empty "
+           "list, which is what every event that is not a TouchEvent carries");
+    return v;
+}
+
+void event_set_touch_target_list(JSContext *ctx, JSValueConst ev, JSValueConst list)
+{
+    DCHECK(JS_IsArray(list) || JS_IsNull(list),
+           "§2.2's touch target list was set to something that is neither a list nor the empty list");
+    event_slot_set(ctx, ev, "touchTargets", list);
+}
+
+/* §2.9 step 11. The target survives every other dispatch — a page reads `ev.target` after dispatchEvent
+   returns — and this is the one case where none of the three may: the outermost thing the event called its
+   target was inside a shadow tree, so handing any of them back would hand out a node from a tree the page was
+   never given. */
+void event_clear_targets(JSContext *ctx, JSValueConst ev)
+{
+    JSValue slots = event_slots(ctx, ev);
+
+    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return; }
+    JS_SetPropertyStr(ctx, slots, "target", JS_NULL);
+    JS_SetPropertyStr(ctx, slots, "relatedTarget", JS_NULL);
+    JS_SetPropertyStr(ctx, slots, "touchTargets", JS_NULL);
+    JS_FreeValue(ctx, slots);
+}
+
 /* §2.2 "initialize": the slot record every Event carries. `isTrusted` is the one thing that distinguishes an
    event the ENGINE fired from one the page constructed, and it is the reason this is a parameter rather than a
    constant — a page checks it. */
@@ -264,6 +338,11 @@ static JSValue event_make_proto(JSContext *ctx, JSValueConst proto, JSValueConst
     CHECK(!JS_IsException(slots) && k != JS_ATOM_NULL, "the Event slot record allocation failed");
     JS_SetPropertyStr(ctx, slots, "type", JS_DupValue(ctx, type));
     JS_SetPropertyStr(ctx, slots, "target", JS_NULL);
+    /* §2.2: every event has a relatedTarget and a touch target list, "unless stated otherwise" null and the
+       empty list. They are initialised here rather than left absent for the reason `path` is — §2.9 step 4
+       retargets the relatedTarget of EVERY event it dispatches, so this read must be a slot and never a miss. */
+    JS_SetPropertyStr(ctx, slots, "relatedTarget", JS_NULL);
+    JS_SetPropertyStr(ctx, slots, "touchTargets", JS_NULL);
     JS_SetPropertyStr(ctx, slots, "currentTarget", JS_NULL);
     JS_SetPropertyStr(ctx, slots, "eventPhase", JS_NewInt32(ctx, 0));   /* NONE until it is dispatched */
     JS_SetPropertyStr(ctx, slots, "bubbles", JS_NewBool(ctx, bubbles));

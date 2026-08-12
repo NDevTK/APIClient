@@ -31,7 +31,8 @@ void event_target_free(JSContext *ctx);
    has not established are shadow roots at all. */
 enum { EVENT_TREE_NOT_SHADOW_ROOT = -1, EVENT_TREE_SHADOW_OPEN = 0, EVENT_TREE_SHADOW_CLOSED = 1 };
 
-/* AND THE SIX SHADOW FACTS §2.9's WALK NEEDS, each one a DEFINED TERM of the standard rather than a decision.
+/* AND THE SEVEN SHADOW FACTS §2.9's WALK AND §4.8's RETARGETING NEED, each one a DEFINED TERM of the standard
+   rather than a decision.
    That split is the point: which COMBINATION of them retargets the event, hides a path entry or picks the
    activation target is §2.9's algorithm and stays in the dispatch machine; what a "shadow root", a "slot", an
    "assigned slottable" or a "shadow-including inclusive ancestor" IS belongs to the DOM, which is the only
@@ -47,7 +48,12 @@ enum { EVENT_TREE_NOT_SHADOW_ROOT = -1, EVENT_TREE_SHADOW_OPEN = 0, EVENT_TREE_S
      `is_assigned_slottable` is §4.2.2.2's "a slottable is assigned", which is also what makes a node's get the
        parent answer with its slot.
      `is_shadow_including_inclusive_ancestor` is §4.2's relation, asked as "is `a` one of `b`'s" — the relation
-       that climbs from a shadow root to its HOST, which is why it cannot be a parent-chain walk in this file. */
+       that climbs from a shadow root to its HOST, which is why it cannot be a parent-chain walk in this file.
+     `shadow_host` is §4.8's HOST of a shadow root, and it is the one fact none of the others can stand in for:
+       §4.8's retargeting step 2 is "set A to A's root's host", the single CLIMB in the standard that leaves a
+       tree for the thing containing it. `root` goes up INSIDE a tree and stops at its shadow root, and the
+       ancestor relation only TESTS — so without this, retarget(A, B) can decide that A must be hidden and has
+       nothing to answer with. OWNED; JS_NULL for anything that is not a shadow root. */
 typedef struct EventTargetTree {
     JSValue (*get_parent)(JSContext *ctx, JSValueConst target, JSValueConst ev);
     bool    (*default_passive_target)(JSContext *ctx, JSValueConst target);
@@ -57,8 +63,21 @@ typedef struct EventTargetTree {
     bool    (*is_slot)(JSContext *ctx, JSValueConst target);
     bool    (*is_assigned_slottable)(JSContext *ctx, JSValueConst target);
     bool    (*is_shadow_including_inclusive_ancestor)(JSContext *ctx, JSValueConst a, JSValueConst b);
+    JSValue (*shadow_host)(JSContext *ctx, JSValueConst shadow_root);
 } EventTargetTree;
 void event_target_set_tree(const EventTargetTree *tree);
+
+/* DOM §4.8's RETARGETING ALGORITHM — "to retarget an object A against an object B", the operation that decides
+   what an object inside a shadow tree is CALLED when it is reported to something outside it. It is not an event
+   algorithm and does not belong to any one caller: §2.9 runs it four times (the event's relatedTarget and each
+   of its touch targets, against the target and then against every ancestor) and Fullscreen runs it too, and the
+   standard states it ONCE. It lives in this file because the tree is registered here and the algorithm is three
+   tree questions and one climb — nothing else of it is this component's.
+   `a` is a potential event target and so is the ANSWER, which is OWNED. Never inline it at a call site: every
+   site would then have to know that "A is not a node" is answered by A having no root and that the climb is a
+   LOOP, and the first site to get either wrong reports a node out of a closed tree to a listener that must not
+   see it. */
+JSValue event_target_retarget(JSContext *ctx, JSValueConst a, JSValueConst b);
 /* §2.7's INTERFACE PROTOTYPE OBJECT, where addEventListener, removeEventListener and dispatchEvent live.
    An interface that INHERITS EventTarget — Node, AbortSignal, MessagePort, BroadcastChannel, Window — chains
    its own prototype to this one; it does not install the three members again. That is not a saving, it is the

@@ -887,12 +887,14 @@ enum { DISPATCH_ARG = 0, CLICK_SYNTH = 1, DISPATCH_PAIR = 2 };
    It can suspend at three points: while WALKING the tree that makes the path (a page-sized walk, so it yields
    between parents), inside a listener, and inside the activation behaviour. */
 #define DISPATCH_STAGES(X) \
-    X(DISPATCH_INIT, "DOM §2.9 dispatch steps 1-6.8 (the dispatch flag, the target override, the target's own " \
-                     "path item, whether the target is the activation target, whether it is an assigned " \
-                     "slottable, and the first get the parent)") \
+    X(DISPATCH_INIT, "DOM §2.9 dispatch steps 1-6.8 (the dispatch flag, the target override, the relatedTarget " \
+                     "retargeted against the target and the step 6 condition it decides, the target's own path " \
+                     "item, whether the target is the activation target, whether it is an assigned slottable, " \
+                     "and the first get the parent)") \
     X(DISPATCH_PATH, "DOM §2.9 dispatch steps 6.9-6.11 (walk get the parent, appending an event path ITEM per " \
-                     "ancestor — retargeting at each shadow boundary and recording the closed-tree flags — one " \
-                     "parent per yield, because the tree is the page's size)") \
+                     "ancestor — retargeting the target, the relatedTarget and the touch targets at each " \
+                     "shadow boundary and recording the closed-tree flags — one parent per yield, because the " \
+                     "tree is the page's size)") \
     X(DISPATCH_CAPTURE, "DOM §2.9 dispatch step 6.13 (invoke each path item in REVERSE order with phase " \
                         "\"capturing\" — parked on the listener being called)") \
     X(DISPATCH_BUBBLE, "DOM §2.9 dispatch step 6.14 (invoke each path item in order with phase \"bubbling\" — " \
@@ -1070,6 +1072,104 @@ static bool dispatch_root_is_shadow_root(JSContext *ctx, JSValueConst t, bool wa
     return want_closed ? mode == EVENT_TREE_SHADOW_CLOSED : mode != EVENT_TREE_NOT_SHADOW_ROOT;
 }
 
+/* IS THIS EVENTTARGET THAT ONE. Platform objects have identity — a node's wrapper is the same object for as
+   long as the node lives — so "target is relatedTarget" and "parent is relatedTarget" are pointer questions.
+   Written once because BOTH of §2.9's uses compare against a POTENTIAL event target, and `null is null` is not
+   the answer either of them wants: step 6's condition is about an event with a relatedTarget, and step 6.9.6
+   ends the walk at the ancestor that IS one. */
+static bool same_target(JSValueConst a, JSValueConst b)
+{
+    return JS_IsObject(a) && JS_IsObject(b) && JS_VALUE_GET_PTR(a) == JS_VALUE_GET_PTR(b);
+}
+
+/* DOM §4.8's RETARGETING ALGORITHM. See event_target.h for why it is a component function and not four inline
+   copies. It is a LOOP because one climb is not enough: a node inside a shadow tree inside a shadow tree is
+   retargeted to the outer host, and each iteration re-asks all three of step 1's disjuncts about the host it
+   just climbed to. */
+JSValue event_target_retarget(JSContext *ctx, JSValueConst a, JSValueConst b)
+{
+    JSValue cur, broot;
+    bool b_is_node;
+
+    DCHECK(JS_IsObject(a) || JS_IsNull(a),
+           "§4.8's retargeting was given an A that is not a potential event target — the answer is handed to a "
+           "listener as `event.relatedTarget`, and undefined is neither an EventTarget nor null");
+    DCHECK(JS_IsObject(b) || JS_IsNull(b),
+           "§4.8's retargeting was given a B that is not a potential event target — B is who A is about to be "
+           "made visible to, and step 1's third disjunct asks whether B is a node");
+    cur = JS_DupValue(ctx, a);
+    if (!g_tree)
+        return cur;   /* a host with no tree: nothing is a node, so step 1's first disjunct returns A at once */
+    /* "B is a node", asked ONCE: B does not move, and the tree answers a null root for everything that is not
+       a node — the same question the walk uses to tell a Window from a node without a second hook. */
+    broot = g_tree->root(ctx, b);
+    b_is_node = !JS_IsNull(broot);
+    JS_FreeValue(ctx, broot);
+    for (;;) {
+        JSValue root, host;
+
+        root = g_tree->root(ctx, cur);
+        /* step 1, first disjunct: "A is not a node" — a Window, an AbortSignal, a plain `new EventTarget()`. */
+        if (JS_IsNull(root)) {
+            JS_FreeValue(ctx, root);
+            return cur;
+        }
+        /* second: "A's root is not a shadow root" — A is in the document tree, so it is visible to everything
+           in it and is reported as itself. */
+        if (g_tree->shadow_root_mode(ctx, root) == EVENT_TREE_NOT_SHADOW_ROOT) {
+            JS_FreeValue(ctx, root);
+            return cur;
+        }
+        /* third: "B is a node and A's root is a shadow-including inclusive ancestor of B" — B is INSIDE the
+           same shadow tree, so it may already see A and nothing is hidden from it. */
+        if (b_is_node && g_tree->is_shadow_including_inclusive_ancestor(ctx, root, b)) {
+            JS_FreeValue(ctx, root);
+            return cur;
+        }
+        /* step 2: "set A to A's root's host", and go round again. */
+        DCHECK(g_tree->shadow_host != NULL,
+               "§4.8's retargeting has to climb from a shadow root to its HOST and the DOM registered no "
+               "`shadow_host` in its EventTargetTree — BUILD IT: dom/node.c's NODE_EVENT_TREE must answer §4.8's "
+               "host the way it already answers `root` and `shadow_root_mode`, by wrapping "
+               "shadow_root_host(node_of(target)) and answering JS_NULL for anything that is not a shadow root. "
+               "Until it does, an event whose relatedTarget or touch target is inside a shadow tree has no "
+               "object to be retargeted TO, and this is the step that would have to invent one");
+        host = g_tree->shadow_host(ctx, root);
+        JS_FreeValue(ctx, root);
+        DCHECK(JS_IsObject(host),
+               "§4.8's retargeting climbed to a shadow root's host and the tree answered with none — §4.8's "
+               "attach a shadow root gives every shadow root a host, so a null here is a shadow root whose host "
+               "the tree lost, and the object it was hiding would be reported as null");
+        JS_FreeValue(ctx, cur);
+        cur = host;
+    }
+}
+
+/* §2.9 steps 6.1-6.2 and 6.9.3-6.9.4: a NEW LIST holding each of the event's touch targets RETARGETED against
+   `against`. JS_NULL when the event's touch target list is empty, which is every event but a TouchEvent and is
+   the same list one allocation cheaper — the item's field carries that spelling too. OWNED. */
+static JSValue dispatch_retarget_touch_targets(JSContext *ctx, JSValueConst ev, JSValueConst against)
+{
+    JSValue list = event_touch_target_list(ctx, ev), out;
+    uint32_t i, n;
+
+    if (!JS_IsArray(list)) {
+        JS_FreeValue(ctx, list);
+        return JS_NULL;
+    }
+    n = arr_len(ctx, list);
+    out = JS_NewArray(ctx);
+    CHECK(!JS_IsException(out), "§2.9's retargeted touch target list could not be allocated");
+    for (i = 0; i < n; i++) {
+        JSValue t = JS_GetPropertyUint32(ctx, list, i);
+
+        JS_SetPropertyUint32(ctx, out, i, event_target_retarget(ctx, t, against));
+        JS_FreeValue(ctx, t);
+    }
+    JS_FreeValue(ctx, list);
+    return out;
+}
+
 /* Step 6.9.5's second disjunct: "target's root is a shadow-including inclusive ancestor of parent". FALSE when
    `target` is not a node, which is the answer that matters — it is what stops the walk treating the window as a
    boundary crossing on the way past a detached target. */
@@ -1142,44 +1242,73 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         if (s->hdr.arg != DISPATCH_PAIR)
             event_set_trusted(ctx, s->ev, false);
         s->type = event_type(ctx, s->ev);
-        /* §2.9 step 6.3: APPEND TO AN EVENT PATH with event, target, TARGETOVERRIDE, relatedTarget,
-           touchTargets and false. The path is the EVENT's — composedPath reads it — so it is published on the
-           event as it grows rather than kept privately here.
-           targetOverride IS the target: step 2's other arm is the LEGACY TARGET OVERRIDE FLAG, which only HTML
-           passes and only for a Window, and nothing in this engine passes it. So item 0's shadow-adjusted
-           target is the target itself, which is what makes `invoke`'s backward scan terminate at every item. */
-        s->path = event_path_new(ctx);
-        event_path_append(ctx, s->path, target, target,
-                          dispatch_is_closed_shadow_root(ctx, target), /*slotInClosedTree*/ false);
-        /* THE SIZE IS THE PATH'S, never a counter kept beside it: the two are read together at every step of
-           the two passes, and a counter that drifts by one walks off the end or drops the root. */
-        s->tn = event_path_length(ctx, s->path);
-        event_set_path(ctx, s->ev, s->path);
-        /* §2.9 step 6.4's isActivationEvent. The spec says "event is a MouseEvent object and event's type is
-           `click`"; this engine has no MouseEvent interface yet, so the type is the whole of what it can ask —
-           which is why `Event-dispatch-click` (a `new MouseEvent("click")`) is a MouseEvent gap and not a
-           dispatch one. */
-        if (JS_IsString(s->type)) {
-            const char *t = JS_ToCString(ctx, s->type);
-            s->is_activation = t != NULL && !strcmp(t, "click");
-            if (t) JS_FreeCString(ctx, t);
-        }
-        /* §2.9 step 6.5: the TARGET is the activation target if it has one — no `bubbles` condition here, which
-           is the difference from step 6.9.5.1's test on an ancestor. */
-        if (s->is_activation && g_has_activation && g_has_activation(ctx, target))
-            s->act = JS_DupValue(ctx, target);
-        /* step 6.6: "Let slottable be target, if target is a slottable and is ASSIGNED, and null otherwise." An
-           assigned slottable's get the parent answers with its SLOT, and step 6.9.1 is the only place that can
-           tell that hop apart from an ordinary parent — so the fact is carried across the ask. */
-        if (dispatch_is_assigned_slottable(ctx, target))
-            s->slottable = JS_DupValue(ctx, target);
-        s->slot_in_closed_tree = 0;   /* step 6.7 */
         s->clear_targets = 0;         /* step 5 */
-        /* step 6.8: the first get the parent. `cur` carries the walk's frontier from here to the end of 6.9,
-           and `tgt` carries the walk's own `target`, which 6.9.7.1 moves at every shadow boundary. */
-        s->cur = JS_DupValue(ctx, target);
-        s->tgt = JS_DupValue(ctx, target);
-        s->hdr.stage = DISPATCH_PATH;
+        {
+            /* §2.9 step 4: the event's relatedTarget RETARGETED against the target. Everything after it is
+               about THIS value and not about the event's, which is the difference step 6 turns on. */
+            JSValue er = event_related_target(ctx, s->ev);
+            JSValue related = event_target_retarget(ctx, er, target);
+            /* §2.9 step 6: "If target is not relatedTarget OR target is event's relatedTarget". When it fails,
+               the whole of steps 6.1-6.14 is skipped — no path, no listeners, no activation target — and the
+               dispatch runs steps 7-13 over an event that never propagated. That is what stops a `mouseover`
+               whose relatedTarget retargets to the target itself from firing at it: the pointer never left the
+               element as far as this element can tell. The second disjunct is the escape hatch for an event
+               deliberately dispatched AT its own relatedTarget, which did not move and must still fire. */
+            bool suppressed = same_target(target, related) && !same_target(target, er);
+            JSValue touch = suppressed ? JS_NULL : dispatch_retarget_touch_targets(ctx, s->ev, target);
+
+            JS_FreeValue(ctx, er);
+            if (suppressed) {
+                /* nothing to walk and nothing to invoke: both passes below find an empty path and fall through
+                   to step 7. The event's own path stays the empty list, so composedPath answers with it. */
+                s->tn = s->ti = s->n = s->i = 0;
+                s->hdr.stage = DISPATCH_CAPTURE;
+            } else {
+                /* §2.9 step 6.3: APPEND TO AN EVENT PATH with event, target, TARGETOVERRIDE, relatedTarget,
+                   touchTargets and false. The path is the EVENT's — composedPath reads it — so it is published
+                   on the event as it grows rather than kept privately here.
+                   targetOverride IS the target: step 2's other arm is the LEGACY TARGET OVERRIDE FLAG, which
+                   only HTML passes and only for a Window, and nothing in this engine passes it. So item 0's
+                   shadow-adjusted target is the target itself, which is what makes `invoke`'s backward scan
+                   terminate at every item. */
+                s->path = event_path_new(ctx);
+                event_path_append(ctx, s->path, target, target, related, touch,
+                                  dispatch_is_closed_shadow_root(ctx, target), /*slotInClosedTree*/ false);
+                /* THE SIZE IS THE PATH'S, never a counter kept beside it: the two are read together at every
+                   step of the two passes, and a counter that drifts by one walks off the end or drops the
+                   root. */
+                s->tn = event_path_length(ctx, s->path);
+                event_set_path(ctx, s->ev, s->path);
+                /* §2.9 step 6.4's isActivationEvent. The spec says "event is a MouseEvent object and event's
+                   type is `click`"; this engine has no MouseEvent interface yet, so the type is the whole of
+                   what it can ask — which is why `Event-dispatch-click` (a `new MouseEvent("click")`) is a
+                   MouseEvent gap and not a dispatch one. */
+                if (JS_IsString(s->type)) {
+                    const char *t = JS_ToCString(ctx, s->type);
+                    s->is_activation = t != NULL && !strcmp(t, "click");
+                    if (t) JS_FreeCString(ctx, t);
+                }
+                /* §2.9 step 6.5: the TARGET is the activation target if it has one — no `bubbles` condition
+                   here, which is the difference from step 6.9.5.1's test on an ancestor. */
+                if (s->is_activation && g_has_activation && g_has_activation(ctx, target))
+                    s->act = JS_DupValue(ctx, target);
+                /* step 6.6: "Let slottable be target, if target is a slottable and is ASSIGNED, and null
+                   otherwise." An assigned slottable's get the parent answers with its SLOT, and step 6.9.1 is
+                   the only place that can tell that hop apart from an ordinary parent — so the fact is carried
+                   across the ask. */
+                if (dispatch_is_assigned_slottable(ctx, target))
+                    s->slottable = JS_DupValue(ctx, target);
+                s->slot_in_closed_tree = 0;   /* step 6.7 */
+                /* step 6.8: the first get the parent. `cur` carries the walk's frontier from here to the end of
+                   6.9, and `tgt` carries the walk's own `target`, which 6.9.7.1 moves at every shadow
+                   boundary. */
+                s->cur = JS_DupValue(ctx, target);
+                s->tgt = JS_DupValue(ctx, target);
+                s->hdr.stage = DISPATCH_PATH;
+            }
+            JS_FreeValue(ctx, related);
+            JS_FreeValue(ctx, touch);
+        }
     }
 
     if (s->hdr.stage == DISPATCH_PATH) {
@@ -1211,45 +1340,67 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             /* step 6.9.2: and this parent may itself be slotted, one component inside another. */
             if (dispatch_is_assigned_slottable(ctx, parent))
                 s->slottable = JS_DupValue(ctx, parent);
-            /* steps 6.9.3-6.9.4 retarget the event's relatedTarget and touch target list against the parent.
-               ABSENT, and honestly so: see event_path.h — this engine has no interface that carries either. */
-            if (dispatch_is_window(ctx, parent) || dispatch_target_root_contains(ctx, s->tgt, parent)) {
-                /* step 6.9.5: still inside the tree the walk currently calls the target's, so the item gets NO
-                   shadow-adjusted target and `invoke` will keep answering with the one further in.
-                   6.9.5.1: an ANCESTOR becomes the activation target only for an event that BUBBLES, and only
-                   while none has been picked — the nearest one, target first, wins. */
-                if (s->is_activation && !JS_IsObject(s->act) && event_bubbles(ctx, s->ev) &&
-                    g_has_activation && g_has_activation(ctx, parent))
-                    s->act = JS_DupValue(ctx, parent);
-                event_path_append(ctx, s->path, parent, JS_NULL,
-                                  dispatch_is_closed_shadow_root(ctx, parent), s->slot_in_closed_tree);
-            } else {
-                /* step 6.9.7: the walk has left the tree it was in — this parent is the shadow HOST — so the
-                   event RETARGETS here: everything from this item outward reports the host as `target`, which
-                   is the whole of what a shadow tree hides. 6.9.6's "otherwise, if parent is relatedTarget"
-                   arm cannot be taken, for the reason 6.9.3 is absent.
-                   6.9.7.2 has NO `bubbles` condition, unlike 6.9.5.1 — the host of a shadow tree the event came
-                   out of is an activation target for a non-bubbling event too. */
-                JS_FreeValue(ctx, s->tgt);
-                s->tgt = JS_DupValue(ctx, parent);
-                if (s->is_activation && !JS_IsObject(s->act) && g_has_activation && g_has_activation(ctx, parent))
-                    s->act = JS_DupValue(ctx, parent);
-                event_path_append(ctx, s->path, parent, parent,
-                                  dispatch_is_closed_shadow_root(ctx, parent), s->slot_in_closed_tree);
+            /* steps 6.9.3-6.9.4: the event's relatedTarget and each of its touch targets, RETARGETED against
+               THIS parent. They are per-ancestor values and not the dispatch's — the same relatedTarget is one
+               object to an ancestor inside its shadow tree and the tree's host to one outside — which is why
+               they are computed here, per iteration, and go into the item rather than onto the state. */
+            {
+                JSValue er = event_related_target(ctx, s->ev);
+                JSValue related = event_target_retarget(ctx, er, parent);
+                JSValue touch = dispatch_retarget_touch_targets(ctx, s->ev, parent);
+                bool ended = false;
+
+                JS_FreeValue(ctx, er);
+                if (dispatch_is_window(ctx, parent) || dispatch_target_root_contains(ctx, s->tgt, parent)) {
+                    /* step 6.9.5: still inside the tree the walk currently calls the target's, so the item gets
+                       NO shadow-adjusted target and `invoke` will keep answering with the one further in.
+                       6.9.5.1: an ANCESTOR becomes the activation target only for an event that BUBBLES, and
+                       only while none has been picked — the nearest one, target first, wins. */
+                    if (s->is_activation && !JS_IsObject(s->act) && event_bubbles(ctx, s->ev) &&
+                        g_has_activation && g_has_activation(ctx, parent))
+                        s->act = JS_DupValue(ctx, parent);
+                    event_path_append(ctx, s->path, parent, JS_NULL, related, touch,
+                                      dispatch_is_closed_shadow_root(ctx, parent), s->slot_in_closed_tree);
+                } else if (same_target(parent, related)) {
+                    /* step 6.9.6: the walk has reached the retargeted relatedTarget itself. "Set parent to
+                       null" ENDS the walk without appending — the event never propagates past the object it is
+                       reported as coming from, which is what makes `mouseout` stop at the common ancestor. */
+                    ended = true;
+                } else {
+                    /* step 6.9.7: the walk has left the tree it was in — this parent is the shadow HOST — so
+                       the event RETARGETS here: everything from this item outward reports the host as `target`,
+                       which is the whole of what a shadow tree hides.
+                       6.9.7.2 has NO `bubbles` condition, unlike 6.9.5.1 — the host of a shadow tree the event
+                       came out of is an activation target for a non-bubbling event too. */
+                    JS_FreeValue(ctx, s->tgt);
+                    s->tgt = JS_DupValue(ctx, parent);
+                    if (s->is_activation && !JS_IsObject(s->act) && g_has_activation &&
+                        g_has_activation(ctx, parent))
+                        s->act = JS_DupValue(ctx, parent);
+                    event_path_append(ctx, s->path, parent, parent, related, touch,
+                                      dispatch_is_closed_shadow_root(ctx, parent), s->slot_in_closed_tree);
+                }
+                JS_FreeValue(ctx, related);
+                JS_FreeValue(ctx, touch);
+                if (!ended) {
+                    s->tn = event_path_length(ctx, s->path);
+                    s->slot_in_closed_tree = 0;   /* step 6.9.9, and it is per ITERATION, not per tree */
+                    return JS_STEP_YIELD;
+                }
+                /* step 6.9.6 set parent to null, so 6.9.8 does not ask again and the while ends: fall out of
+                   the walk with the path exactly as it stands. */
             }
-            s->tn = event_path_length(ctx, s->path);
-            s->slot_in_closed_tree = 0;   /* step 6.9.9, and it is per ITERATION, not per tree */
-            return JS_STEP_YIELD;
         }
         JS_FreeValue(ctx, s->cur);
         s->cur = JS_UNDEFINED;
         JS_FreeValue(ctx, s->slottable);
         s->slottable = JS_UNDEFINED;
         /* steps 6.10-6.11: clearTargetsItem is the LAST item with a non-null shadow-adjusted target — the
-           outermost thing the event still calls its target — and if that target is inside a shadow tree the
-           event's target is CLEARED once the walk is over (step 11), so a page holding the event afterwards
-           cannot read a node out of a tree it was never given. The relatedTarget and touch-target halves of
-           step 6.11's condition are absent with the fields they are about. */
+           outermost thing the event still calls its target — and if ANY of that item's three target-bearing
+           fields is a node inside a shadow tree, all three are CLEARED once the walk is over (step 11), so a
+           page holding the event afterwards cannot read a node out of a tree it was never given. It is a
+           DISJUNCTION over shadow-adjusted target, relatedTarget and every entry of the touch target list:
+           an event whose TARGET is in the document tree can still carry a relatedTarget that is not. */
         {
             uint32_t k = s->tn;
 
@@ -1258,8 +1409,25 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                 JSValue sat = event_path_shadow_adjusted_target(ctx, item);
                 bool found = JS_IsObject(sat);
 
-                if (found)
-                    s->clear_targets = dispatch_root_is_shadow_root(ctx, sat, /*want_closed*/ false);
+                if (found) {
+                    JSValue related = event_path_related_target(ctx, item);
+                    JSValue touch = event_path_touch_targets(ctx, item);
+
+                    s->clear_targets = dispatch_root_is_shadow_root(ctx, sat, /*want_closed*/ false) ||
+                                       dispatch_root_is_shadow_root(ctx, related, /*want_closed*/ false);
+                    if (!s->clear_targets && JS_IsArray(touch)) {
+                        uint32_t j, m = arr_len(ctx, touch);
+
+                        for (j = 0; j < m && !s->clear_targets; j++) {
+                            JSValue t = JS_GetPropertyUint32(ctx, touch, j);
+
+                            s->clear_targets = dispatch_root_is_shadow_root(ctx, t, /*want_closed*/ false);
+                            JS_FreeValue(ctx, t);
+                        }
+                    }
+                    JS_FreeValue(ctx, related);
+                    JS_FreeValue(ctx, touch);
+                }
                 JS_FreeValue(ctx, sat);
                 JS_FreeValue(ctx, item);
                 if (found)
@@ -1503,9 +1671,20 @@ report_throw:
             }
             event_set_target(ctx, s->ev, sat);
             JS_FreeValue(ctx, sat);
-            /* "invoke" steps 4-5 set the event's relatedTarget and touch target list from the item. ABSENT with
-               the fields they read — see event_path.h.
-               "invoke" step 6: a walk that has been stopped still RUNS, item by item, and returns before it
+            /* "invoke" steps 4-5: the event's relatedTarget and touch target list are THIS ITEM's — the forms
+               §2.9 retargeted against this item's invocation target while it built the path. They are set per
+               item and not once for the walk, for the same reason `target` is: a listener outside a shadow tree
+               must read the host where one inside reads the node. */
+            {
+                JSValue related = event_path_related_target(ctx, item);
+                JSValue touch = event_path_touch_targets(ctx, item);
+
+                event_set_related_target(ctx, s->ev, related);
+                event_set_touch_target_list(ctx, s->ev, touch);
+                JS_FreeValue(ctx, related);
+                JS_FreeValue(ctx, touch);
+            }
+            /* "invoke" step 6: a walk that has been stopped still RUNS, item by item, and returns before it
                invokes anything. That is not the same as ending the walk here, which is what this did: the
                event's `target` is written by steps 1-3 above BEFORE the return, so the outer entries of a
                retargeted path go on adjusting it after a listener has called stopPropagation. */
@@ -1535,13 +1714,11 @@ walked:
        flags UNSET — one operation, because the spec states them together and because leaving the stop flags set
        made the SAME event unusable for a second dispatch. */
     event_end_dispatch(ctx, s->ev);
-    /* §2.9 step 11: if clearTargets, the event's target, relatedTarget and touch target list are CLEARED. The
-       target survives every other dispatch — a page reads `ev.target` after dispatchEvent returns — and this is
-       the one case where it must not: the outermost thing the event called its target was inside a shadow tree,
-       so handing it back afterwards would hand out a node from a tree the page was never given. The other two
-       members are absent with the fields they name. */
+    /* §2.9 step 11: if clearTargets, the event's target, relatedTarget and touch target list are CLEARED —
+       ONE operation, because the standard states them as one step and because two of the three shipped without
+       the first. See event.h. */
     if (s->clear_targets)
-        event_set_target(ctx, s->ev, JS_NULL);
+        event_clear_targets(ctx, s->ev);
 
 activation:
     /* §2.9's step 12, and it is last for a reason: the activation behaviour runs AFTER the whole walk and
