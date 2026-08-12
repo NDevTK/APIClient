@@ -92,6 +92,13 @@ JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, 
    a second Document exists — that one is the REALM's active document, which is HTML's "API base URL" and is
    what a fetch, a hyperlink and a navigation resolve against. */
 const char *document_url_of(const lxb_dom_document_t *dom);
+/* §4.5's CONTENT TYPE — the string `document.contentType` answers, as a fact about ONE document rather than
+   about the running realm. It is the field §4.4's "clone a single node" copies onto a Document's copy ("set
+   copy's encoding, content type, URL, origin, type, mode, and allow declarative shadow roots to those of
+   node"), and it is also what §4.5 makes an HTML document an HTML document rather than an XML one, so a copy
+   that took the creator's default instead would answer for a document it is not a copy of. BORROWED: the
+   record owns the bytes and outlives the tree they describe. */
+const char *document_content_type_of(const lxb_dom_document_t *dom);
 
 /* THE DOCUMENT IS ABOUT TO BE DESTROYED — release the record that names it, and everything the record holds
    (its wrapper, its DOMImplementation, its policy container). Called from the ONE place a document's lifetime

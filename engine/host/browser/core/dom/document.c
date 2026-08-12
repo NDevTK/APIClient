@@ -1502,6 +1502,13 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
     Document *d;
 
     DCHECK(dom != NULL, "a document record was built for no document");
+    /* §4.5 GIVES EVERY DOCUMENT A CONTENT TYPE, so this is a required argument and not a defaulted one — the
+       address may legitimately be absent (a document with no browsing context has none to speak of), the type
+       may not, and §4.4's clone reads it back off the record it is copying. */
+    DCHECK(type != NULL && type[0] != '\0',
+           "a document record was built with no content type — §4.5's `contentType` is state every document "
+           "has, and a record that never received one would answer for its document with an empty string that "
+           "no parse, no createDocument and no clone could have produced");
     DCHECK(dd->user == NULL, "a second record was built for one Lexbor document — the first would be leaked and "
                              "every node of the tree would answer through whichever won");
     d = calloc(1, sizeof *d);
@@ -1596,6 +1603,16 @@ const char *document_url_of(const lxb_dom_document_t *dom)
     DCHECK(d != NULL, "a node's baseURI was read in a document with no record — §4.4 reads the NODE DOCUMENT's "
                       "address, and a tree that came from neither document_install nor document_new has none");
     return d->url;
+}
+
+const char *document_content_type_of(const lxb_dom_document_t *dom)
+{
+    Document *d = doc_rec(dom);
+
+    DCHECK(d != NULL, "a document's CONTENT TYPE was read from a document with no record — the string is set "
+                      "once, by whichever of document_install and document_new created the document, and a "
+                      "tree that came from neither never had one to answer with");
+    return d->content_type;
 }
 
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,

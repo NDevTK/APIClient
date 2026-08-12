@@ -244,6 +244,22 @@ void node_set_element_resolver(JSValue (*fn)(JSContext *ctx, lxb_dom_element_t *
    entered the tree by insertBefore, by replaceChild, or by an innerHTML parse was never prepared and never
    upgraded. Eleven sites mutate the tree; one remembered. The chokepoint is the one place that cannot be
    forgotten, which is the same argument that put capture there. */
+/* §4.8's HOST OF A SHADOW ROOT, wrapped — the one climb the standard has that leaves a tree for the thing
+   containing it, and TWO §4.8 sentences make it: a shadow root's get the parent answers with its host, and
+   retargeting step 2 sets A to its root's host. Written once because the ASSERTION is the reason: node_wrap
+   answers JS_NULL for no node, so a hostless shadow root would have made both of them return "nothing above
+   this" — an event that silently stops at the shadow boundary, and an object hidden from a listener reported to
+   it as null. `n` is already established to be a shadow root by both callers. OWNED. */
+static JSValue node_shadow_host_wrap(JSContext *ctx, const lxb_dom_node_t *n)
+{
+    lxb_dom_element_t *host = shadow_root_host(n);
+
+    DCHECK(host != NULL, "§4.8's `attach a shadow root` sets the new root's host before anything can reach the "
+                         "root, so every shadow root has one — a null here is a shadow root this engine built "
+                         "without going through that algorithm");
+    return node_wrap(ctx, lxb_dom_interface_node(host));
+}
+
 /* §2.9's GET THE PARENT, answered for the events layer one step at a time — DOM §4.4: "A node's get the parent
    algorithm, given an event, returns the node's assigned slot, if node is assigned; otherwise node's parent",
    and HTML overrides it for a DOCUMENT: "returns null if event's type attribute value is `load` or document
@@ -295,7 +311,7 @@ static JSValue node_get_parent(JSContext *ctx, JSValueConst target, JSValueConst
             if (inside)
                 return JS_NULL;
         }
-        return node_wrap(ctx, lxb_dom_interface_node(shadow_root_host(n)));
+        return node_shadow_host_wrap(ctx, n);
     }
     /* §4.4: "A node's get the parent algorithm, given an event, returns the node's ASSIGNED SLOT, if node is
        assigned; otherwise node's parent." A slotted node's event therefore travels through the shadow tree that
@@ -371,10 +387,26 @@ static bool node_default_passive_target(JSContext *ctx, JSValueConst target)
     return document_is_passive_default_node(n);
 }
 
+/* §4.8's HOST OF A SHADOW ROOT — retargeting step 2's "set A to A's root's host", and the only tree question in
+   this list whose answer is a node of a DIFFERENT tree than the node it was asked about. `root` climbs INSIDE a
+   tree and stops at the shadow root; this is the step that leaves it, so the two together are what make the
+   retargeting loop terminate at the document tree.
+   JS_NULL for anything that is not a shadow root — the same "not a shadow root" answer node_event_shadow_root_mode
+   gives, asked of an EventTarget because §2.9 hands over path entries it has not established are nodes at all.
+   OWNED, like node_wrap. */
+static JSValue node_event_shadow_host(JSContext *ctx, JSValueConst target)
+{
+    lxb_dom_node_t *n = node_of(target);
+
+    if (!n || !shadow_root_is(n))
+        return JS_NULL;
+    return node_shadow_host_wrap(ctx, n);
+}
+
 static const EventTargetTree NODE_EVENT_TREE = {
     node_get_parent, node_default_passive_target, node_event_root, node_event_shadow_root_mode,
     node_event_is_window, node_event_is_slot, node_event_is_assigned_slottable,
-    node_event_is_shadow_including_inclusive_ancestor
+    node_event_is_shadow_including_inclusive_ancestor, node_event_shadow_host
 };
 
 /* §4.2.3's INSERTION AND REMOVING STEPS ARE A LIST, not a slot. The standard's own `remove` runs several
@@ -1541,8 +1573,10 @@ static const char *const NODE_CLONE_STEPS[] = { NODE_CLONE_STAGES(JS_STEP_STAGE_
    (document.c's characterSet answers exactly that), so there is nothing that could differ; the TYPE is the
    interface set, which lexbor records as the document's dtype and which is the same because both documents are
    made the same way; "allow declarative shadow roots" is a PARSE parameter here rather than stored state —
-   declarative_shadow.c takes it per parse — and no parse runs into a copy. The CONTENT TYPE is the one field
-   that is real state with no reader, and it DFAILs below naming the reader to build. */
+   declarative_shadow.c takes it per parse — and no parse runs into a copy. The CONTENT TYPE is real state and
+   is read back off the source's record (document_content_type_of), because it is the one of the seven that a
+   copy could differ in: `new DOMParser().parseFromString(s, "text/xml").cloneNode()` is an XML document, and a
+   copy built with this engine's html default would answer "text/html" for a document that never was one. */
 static lxb_dom_node_t *clone_a_document(lxb_dom_document_t *src)
 {
     JSContext *realm = document_realm_of(lxb_dom_interface_node(src));
@@ -1560,10 +1594,7 @@ static lxb_dom_node_t *clone_a_document(lxb_dom_document_t *src)
     DCHECK(cd->type == src->type, "§4.4 creates a document implementing the SAME INTERFACES as node, and the "
                                   "copy's lexbor dtype is not the source's — one of the two was built by "
                                   "something other than lxb_html_document_create");
-    DFAIL("§4.4 clone a single node sets the copy's CONTENT TYPE to the source document's, and document.h "
-          "exposes no reader for it — build document_content_type_of(const lxb_dom_document_t *) beside "
-          "document_url_of and pass it to document_new here");
-    w = document_new(realm, copy, document_url_of(src), "text/html");
+    w = document_new(realm, copy, document_url_of(src), document_content_type_of(src));
     CHECK(JS_IsObject(w), "clone a single node: the Document copy's wrapper allocation failed");
     /* The RECORD holds the wrapper (document_new dup'd it) and the record lives as long as the document, so
        this reference has nothing left to do: the answer this algorithm returns is the NODE, and the member
