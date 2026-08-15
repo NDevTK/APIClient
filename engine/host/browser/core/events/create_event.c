@@ -27,6 +27,7 @@
 #include "core/events/create_event.h"
 #include "core/events/event.h"
 #include "core/events/focus_event.h"
+#include "core/events/hash_change_event.h"
 #include "core/events/keyboard_event.h"
 #include "core/events/message_event.h"
 #include "core/events/mouse_event.h"
@@ -64,10 +65,10 @@ static JSValue make_before_unload_event(JSContext *ctx)
     return before_unload_event_new(ctx);
 }
 
-/* THE UIEvent, MouseEvent, KeyboardEvent AND FocusEvent ROWS NEED NO MAKER OF THEIR OWN. Each of those
-   interfaces exports DOM §2.5's "create an event using X" — every attribute at its un-initialized value — and
-   that is exactly and only what a maker owes, so the interface's own entry IS the maker rather than a wrapper
-   restating it here.
+/* THE UIEvent, MouseEvent, KeyboardEvent, FocusEvent AND HashChangeEvent ROWS NEED NO MAKER OF THEIR OWN. Each
+   of those interfaces exports DOM §2.5's "create an event using X" — every attribute at its un-initialized
+   value — and that is exactly and only what a maker owes, so the interface's own entry IS the maker rather than
+   a wrapper restating it here.
    `mouseevents` and `uievents` are the same interface under §4.5's legacy alias, which is why two rows share
    one entry: the table's first column is a string, its second is the interface, and only the second decides
    what is built. */
@@ -86,7 +87,7 @@ static const CreateEventRow CREATE_EVENT[] = {
     { "event",                  "Event",                  make_event },
     { "events",                 "Event",                  make_event },
     { "focusevent",             "FocusEvent",             focus_event_new },
-    { "hashchangeevent",        "HashChangeEvent",        NULL },
+    { "hashchangeevent",        "HashChangeEvent",        hash_change_event_new },
     { "htmlevents",             "Event",                  make_event },
     { "keyboardevent",          "KeyboardEvent",          keyboard_event_new },
     { "messageevent",           "MessageEvent",           make_message_event },

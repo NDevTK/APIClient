@@ -17,16 +17,23 @@
  * and load nothing. That is also why they fire no event: the standard's own note records that "popstate events
  * fire for fragment navigations, but not for history.pushState() calls".
  *
- * `go`, `back` AND `forward` ARE HONESTLY ABSENT, and the IDL audit names them. All three are "delta traverse
- * this given <n>", which ends in §7.4.3's TRAVERSE THE HISTORY BY A DELTA and then §7.4.6's APPLY THE HISTORY
- * STEP — an algorithm that deactivates the displayed document, may populate a target entry from the network,
- * and fires `pagehide`/`pageswap`/`popstate`/`hashchange`/`pageshow` at the page's own listeners. This build has
- * neither PopStateEvent nor HashChangeEvent (core/events/create_event.c's table names both as interfaces
- * `createEvent` would build and nothing constructs), so the events those steps fire do not exist to be fired.
- * A `go()` that moved the current step without firing them would be the worst of the three states: a page that
- * believes it navigated, a router that never re-renders, and nothing anywhere to say so. So the members are
- * not installed, and history_install_realm asserts against the day PopStateEvent arrives — which is the two-
- * sided form, so the absence cannot outlive the thing it describes. */
+ * `go`, `back` AND `forward` ARE ONE ALGORITHM TOO, and §7.2.5 says so as plainly as it does for the other pair:
+ * all three "are to DELTA TRAVERSE this given" a number, and the numbers are the argument, −1 and +1. So they are
+ * one body with a magic, and the body is §7.2.5's delta-traverse steps in the standard's own order — because the
+ * order is observable: a detached iframe's `history.back()` is a SecurityError and not a silent no-op, since the
+ * fully-active check is step 2 and the traversal is step 5.
+ *
+ * WHAT THEY END IN IS NOT HERE. §7.4.3's TRAVERSE THE HISTORY BY A DELTA appends session history traversal steps
+ * to the traversable, and §7.4.6's APPLY THE HISTORY STEP then fires `popstate` and queues `hashchange` at the
+ * page's own listeners — which is the page's code, so it is a JOB that suspends and a step machine that resumes,
+ * both in core/frame/session_history.c. This interface schedules it and returns, which is what `undefined
+ * go(optional long delta = 0)` means: a page that calls `back()` and reads `location.href` on the next line
+ * still reads the address it was at.
+ *
+ * `go(0)` IS NOT A TRAVERSAL AT ALL — "if delta is 0, then RELOAD document's node navigable, and return" — and
+ * reloading is a capability this build does not have (every Location member's setter, `assign`, `replace` and
+ * `reload` end in Location-object navigate, which is likewise absent). It crashes at the step that needs it,
+ * naming it, rather than doing nothing and letting a page believe it reloaded. */
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,6 +51,7 @@
 static JSClassID g_history_class;
 static int g_obj_slot = -1;
 static int g_id_push = -1, g_id_replace = -1, g_id_scroll_setter = -1;
+static int g_id_go = -1, g_id_back = -1, g_id_forward = -1;
 
 /* §7.2.5's `enum ScrollRestoration { "auto", "manual" }` — the TYPE of the `scrollRestoration` attribute, so
    the list is what the declaration carries and not something the setter's body re-states. */
@@ -296,6 +304,74 @@ static JSValue js_hist_push_replace(JSContext *ctx, JSValueConst this_val, int a
     return JS_UNDEFINED;
 }
 
+/* ---- §7.2.5's DELTA TRAVERSE, and the three members that are it ---------------------------------------------
+ *
+ * "The go(delta) method steps are to DELTA TRAVERSE this given delta. The back() method steps are to delta
+ * traverse this given −1. The forward() method steps are to delta traverse this given +1." One algorithm, three
+ * spellings, so one body with a magic — and the magic says which of the three, not what the delta is, because
+ * `go`'s comes from its argument and the other two's are constants of the standard. */
+enum { HIST_TRAVERSE_GO = 0, HIST_TRAVERSE_BACK, HIST_TRAVERSE_FORWARD };
+
+static JSValue js_hist_delta_traverse(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                      int magic)
+{
+    int32_t delta = 0;
+
+    /* STEPS 1-2: the Document, and "if document is NOT FULLY ACTIVE, then throw a SecurityError DOMException".
+       It is the same opening every member of §7.2.5 has and it is reached through the same door — a THROW and
+       not an assert, because a page reaches it deliberately: removing an iframe and then calling
+       `frame.contentWindow.history.back()` is a thing the corpus does on purpose. It is FIRST, which is
+       observable: `go(0)` on a detached frame is a SecurityError and not a reload. */
+    if (!hist_entry(ctx, this_val)) return JS_EXCEPTION;
+    switch (magic) {
+    case HIST_TRAVERSE_BACK:    delta = -1; break;
+    case HIST_TRAVERSE_FORWARD: delta = +1; break;
+    case HIST_TRAVERSE_GO:
+        /* `optional long delta = 0`. An argument the page did not pass, and one it passed as `undefined` —
+           §3.6.2 makes those the same thing for an optional position — is the IDL's declared default, which is
+           why `history.go()` and `history.go(undefined)` both reload. Anything it did pass has already been
+           through the `long` conversion (ToNumber, then modulo 2^32 signed), so the page's `valueOf` ran on the
+           machine and this reads a number. */
+        if (argc >= 1 && !JS_IsUndefined(argv[0])) {
+            DCHECK(JS_IsNumber(argv[0]),
+                   "§7.2.5's `go` was handed something that is not a number — its argument is declared IDL_LONG, "
+                   "so Web IDL's `long` conversion produced one before this body was entered");
+            JS_ToInt32(ctx, &delta, argv[0]);
+        }
+        break;
+    default:
+        DFAIL("a History traversal member ran with a magic no member of this file declares — the magic IS which "
+              "of §7.2.5's three delta-traverse spellings was called");
+        return JS_UNDEFINED;
+    }
+    /* STEP 3: "if history's relevant global object's navigable's ALLOWED TO PERFORM A NAVIGATION OR HISTORY
+       UPDATE returns blocked, then return." The same implementation-defined algorithm §7.2.5's push/replace
+       steps evaluate above, with the same answer and for the same reason: HTML §7.3.1 gives its only example as
+       "this can return blocked if invoked too many times within a certain timespan", and a rate cap on how often
+       a bundle may route is a bound on the exploration. It returns ALLOWED for every navigable here. */
+    /* STEP 4: "if delta is 0, then RELOAD document's node navigable, AND RETURN." The return is the step's and
+       stands on its own — a zero delta never reaches §7.4.3 — so it is written here rather than left to the
+       crash above, which is dev-only. */
+    if (delta == 0) {
+        DFAIL("HTML §7.2.5's delta traverse step 4 answers a delta of 0 with a RELOAD of the document's node "
+              "navigable, and this build cannot reload one. §7.4.3's RELOAD A NAVIGABLE sets the active session "
+              "history entry's document state's RELOAD PENDING and applies the reload history step, which is "
+              "§7.4.6.1's apply-the-history-step with navigationType \"reload\" — the CROSS-DOCUMENT half: "
+              "§7.4.5's populate-the-history-entry's-document fetches the entry's URL, §7.4.6.1's DEACTIVATE "
+              "fires pageswap and unloads the displayed document (pagehide, the unload event, destroy), and "
+              "activate-history-entry then makes the new Document active. Build it in "
+              "core/frame/session_history.c beside the same-document traversal, driven from the same machine, "
+              "and core/frame/location.c's `reload` — which is the same algorithm reached from the other "
+              "member — installs with it");
+        return JS_UNDEFINED;
+    }
+    /* STEP 5: "TRAVERSE THE HISTORY BY A DELTA given document's node navigable's traversable navigable, delta,
+       and with sourceDocument set to document." It SCHEDULES the traversal — §7.4.3's steps are appended to the
+       traversable — so this member returns `undefined` with the page's own `popstate` listener not yet run. */
+    session_history_traverse_by_delta(ctx, delta);
+    return JS_UNDEFINED;
+}
+
 /* ---- the declaration and the per-realm install ------------------------------------------------------------- */
 
 /* §7.2.5: "A Document has a history object, a History object", and §7.2.2's `[Replaceable] readonly attribute
@@ -324,6 +400,11 @@ static void history_install_realm(JSContext *ctx)
     for (i = 0; i < HIST_N; i++)
         idl_install_accessor(ctx, proto, HIST_NAME[i], js_hist_get, i,
                              i == HIST_SCROLL_RESTORATION ? g_id_scroll_setter : -1);
+    /* §7.2.5's IDL order: go, back, forward, pushState, replaceState. `go`'s LENGTH is 0 — Web IDL §3.7.4.1's
+       length is the number of REQUIRED arguments, and `optional long delta = 0` is not one. */
+    idl_install_method(ctx, proto, "go", 0, g_id_go);
+    idl_install_method(ctx, proto, "back", 0, g_id_back);
+    idl_install_method(ctx, proto, "forward", 0, g_id_forward);
     idl_install_method(ctx, proto, "pushState", 2, g_id_push);
     idl_install_method(ctx, proto, "replaceState", 2, g_id_replace);
     JS_SetClassProto(ctx, g_history_class, JS_DupValue(ctx, proto));
@@ -367,6 +448,18 @@ void history_init(JSContext *ctx)
         g_id_replace = idl_method_id(ctx, ARGS, 3, js_hist_push_replace, HIST_REPLACE);
         idl_optional_from(2);
     }
+    /* §7.2.5's `undefined go(optional long delta = 0)`, `undefined back()` and `undefined forward()` — one
+       algorithm declared three times with the three magics its one body switches on. `back` and `forward` take
+       no arguments at all, which is what a declaration of zero says; `go`'s single argument is DECLARED
+       optional, so §3.6.2 hands the body `undefined` for an absent one and the body applies the IDL default. */
+    {
+        static const IdlArgType GO_ARGS[] = { IDL_LONG };
+
+        g_id_go = idl_method_id(ctx, GO_ARGS, 1, js_hist_delta_traverse, HIST_TRAVERSE_GO);
+        idl_optional_from(0);
+        g_id_back = idl_method_id(ctx, NULL, 0, js_hist_delta_traverse, HIST_TRAVERSE_BACK);
+        g_id_forward = idl_method_id(ctx, NULL, 0, js_hist_delta_traverse, HIST_TRAVERSE_FORWARD);
+    }
     /* §7.2.5's `attribute ScrollRestoration scrollRestoration`. The enumeration's value list IS the type, so it
        is declared here beside the member and the setter's body never sees an invalid value. */
     g_id_scroll_setter = idl_setter_id(ctx, IDL_ENUM, false, js_hist_set_scroll_restoration, 0);
@@ -381,4 +474,6 @@ void history_free(void)
        its context. What the agent holds is the slot, and a slot id is a class id in a runtime that is going
        away with it. */
     g_obj_slot = -1;
+    g_id_push = g_id_replace = g_id_scroll_setter = -1;
+    g_id_go = g_id_back = g_id_forward = -1;
 }

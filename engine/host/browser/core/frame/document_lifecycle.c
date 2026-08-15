@@ -97,13 +97,17 @@ static JSContext *active_realm(JSContext *ctx, JSValueConst proxy)
  * not an omission — a Worker subsystem arrives with its own owner set and its own entry here.
  *
  * STEP 9 IS SESSION HISTORY: "if document's node navigable is non-null, then set document's node navigable's
- * active session history entry's document state's document to null." §7.4.1's entries exist now
- * (core/frame/session_history.c), and this step is the half of them this file owes — but the field it nulls is
- * the document state's DOCUMENT, which is what a TRAVERSAL back to the entry would repopulate, and this build
- * performs no traversal. So the write has exactly one reader and that reader is unwritten, which is asserted at
- * the reader's own site (session_history.c's realm_awaits on PopStateEvent names the whole traversal) rather
- * than by nulling a field here that nothing consults. What step 8 records — the browsing context is null — is
- * the fact a page reads, through §7.2.5's `closed`. */
+ * active session history entry's document state's document to null." §7.4.1's entries exist
+ * (core/frame/session_history.c) and so does the READER of the field this nulls — §7.4.6.1's traversal asks
+ * whether the target entry's document state names a live Document and crashes naming §7.4.5's
+ * populate-a-session-history-entry when it does not. What is still missing is somewhere for the write to LAND:
+ * §7.4.1 puts the entries on the TRAVERSABLE, so they outlive any one Document, while this engine holds them on
+ * the navigable's REALM — and destroying a document destroys that realm and the entries with it, so there is no
+ * entry left here to null a field on. Nulling one before the realm goes would write to a record that is about to
+ * be freed and would be read by nobody. The build that changes this is the one that moves the entries list to
+ * the traversable so a destroyed document's entry survives it, and §7.4.6.1's cross-document assertion is what
+ * will then be reached by a traversal back to it. What step 8 records — the browsing context is null — is the
+ * fact a page reads, through §7.2.5's `closed`. */
 static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
 {
     JSContext *cctx = active_realm(ctx, proxy);
@@ -141,10 +145,12 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
  * false — and intendToKeepInBfcache is "true if the user agent intends to keep oldDocument alive in a session
  * history entry, such that it can later be used for history traversal". This user agent holds session history
  * entries (core/frame/session_history.c) and NO BFCACHE to keep a document in: §7.4.1.2's document state may
- * have its document nulled out precisely so a later traversal rebuilds it, and this build performs no traversal
- * to rebuild one for (a parked FLOW resumes into the document it was suspended in, which is the opposite
- * arrangement: the snapshot carries the document rather than a cache holding it). So intendToKeepInBfcache is
- * FALSE for every document, and salvageable is FALSE by the time any step reads it.
+ * have its document nulled out precisely so a later traversal rebuilds it, and the traversal this build performs
+ * is the SAME-DOCUMENT one, which rebuilds nothing — §7.4.6.1's cross-document arm, the only one that would want
+ * a document back, is the assertion session_history.c makes rather than a path it takes. (A parked FLOW resumes
+ * into the document it was suspended in, which is the opposite arrangement to a bfcache: the snapshot carries
+ * the document rather than a cache holding it.) So intendToKeepInBfcache is FALSE for every document, and
+ * salvageable is FALSE by the time any step reads it.
  *
  * SO THERE IS NO FIELD. A `salvageable` byte on the Document would be written once and read three times with
  * the same answer every time, which is a field nothing can ever read differently — and its three readers say

@@ -1,4 +1,5 @@
-/* HTML §7.4.1's SESSION HISTORY, and §7.4.4's URL and history update steps — see session_history.c.
+/* HTML §7.4.1's SESSION HISTORY, §7.4.3's TRAVERSAL, and §7.4.4's URL and history update steps — see
+ * session_history.c.
  *
  * WHAT WAS HERE BEFORE was nothing at all, and document_lifecycle.c said so at two of its steps: "STEP 9 IS
  * SESSION HISTORY, which this engine does not hold: there is no session history entry to null a document out
@@ -25,11 +26,23 @@
  * — so every append, every step assignment and every replacement is a PROPERTY WRITE the heap COW delta already
  * captures, and a half-built history parks to the IDB cold tier and resumes with the flow that built it.
  *
- * WHAT IS DELIBERATELY NOT HERE IS THE NAVIGATION API (§7.2.7 — `navigation.navigate`, NavigationHistoryEntry,
+ * A TRAVERSAL IS A JOB, AND IT SUSPENDS. §7.4.3 puts every step of traverse-the-history-by-a-delta after the
+ * third inside "APPEND THE FOLLOWING SESSION HISTORY TRAVERSAL STEPS to traversable", so `history.back()`
+ * schedules the traversal and does not perform it — and §7.4.6.2 then FIRES popstate at the page's own
+ * listeners, which is a §2.9 dispatch and therefore the page's code. So the traversal is a step machine on the
+ * ONE frontier: it parks on the dispatch, siblings run while a listener's loop or `await` is in flight, and it
+ * resumes at the spec step it rested at. §7.4.6.1's apply-the-history-step is ONE body with two entry points —
+ * the push/replace one cannot park and takes the update-only exit, which by the standard's own note is why
+ * `popstate` does not fire for `pushState`.
+ *
+ * WHAT IS DELIBERATELY NOT HERE IS THE NAVIGATION API (§7.2.6 — `navigation.navigate`, NavigationHistoryEntry,
  * NavigateEvent). It is a separate and larger interface with its own entry list, its own event and its own
  * promise-bearing method trackers; core/rendering/rendering.c already carries a `realm_awaits(docctx,
  * "navigation", …)` probe for it that is correctly silent. Every step of §7.4.4 and §7.4.6 that reads or writes
- * navigation API state is named at its site as belonging to that interface rather than skipped in silence. */
+ * navigation API state is named at its site as belonging to that interface rather than skipped in silence.
+ * NOR IS A CROSS-DOCUMENT TRAVERSAL OR A RELOAD: both need §7.4.5's populate-a-session-history-entry (a fetch)
+ * and §7.4.6.1's deactivate-a-document (pageswap, unload, pagehide), and each is asserted at the step that would
+ * reach it rather than approximated. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FRAME_SESSION_HISTORY_H
 #define ENGINE_HOST_BROWSER_CORE_FRAME_SESSION_HISTORY_H
 
@@ -72,6 +85,16 @@ void session_history_install_document(JSContext *ctx);
  * code runs inside this, which is why it is a plain C algorithm and not a step machine. */
 void session_history_url_and_history_update(JSContext *ctx, const char *new_url,
                                             const StructuredData *serialized, bool push);
+
+/* HTML §7.4.3's TRAVERSE THE HISTORY BY A DELTA, given this realm's navigable's traversable and an integer.
+ *
+ * It APPENDS the traversal to the traversable rather than performing it — the standard's steps 4.1-4.5 are
+ * inside "append the following session history traversal steps", and here that is a job on the ONE frontier — so
+ * §7.2.5's `go`, `back` and `forward` all return to their caller with the traversal scheduled. THE DELTA IS
+ * RESOLVED WHEN THE JOB RUNS, which is what makes `history.back(); history.back();` go back two.
+ * `delta` is NEVER 0: §7.2.5's delta traverse step 4 answers a zero delta with a RELOAD of the navigable and
+ * returns, which is a different algorithm and core/frame/history.c's to reach. Asserted here. */
+void session_history_traverse_by_delta(JSContext *ctx, int32_t delta);
 
 /* §7.2.5's `length` — "the number of overall session history entries for the current traversable navigable",
    which the History object holds as its own `length` and which §7.4.6 keeps in step with the traversable. */

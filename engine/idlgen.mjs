@@ -94,6 +94,10 @@ const INTERFACES = {
   FocusEvent:          ["core/events/focus_event.c", "core/events/ui_event.c", "core/events/event.c"],
   MouseEvent:          ["core/events/mouse_event.c", "core/events/ui_event.c", "core/events/event.c"],
   KeyboardEvent:       ["core/events/keyboard_event.c", "core/events/ui_event.c", "core/events/event.c"],
+  /* HTML §7.2.7.2 and §7.2.7.3 — the two events a SESSION HISTORY TRAVERSAL fires. Each names its own file plus
+     event.c, whose Event.prototype members really are reachable on one. */
+  PopStateEvent:       ["core/events/pop_state_event.c", "core/events/event.c"],
+  HashChangeEvent:     ["core/events/hash_change_event.c", "core/events/event.c"],
   /* HTML 9.4.2/9.4.3. MessagePort is an EventTarget, so its inherited members are event_target.c's. */
   MessagePort:         ["core/events/message_port.c", "core/events/event_target.c"],
   MessageChannel:       "core/events/message_port.c",
