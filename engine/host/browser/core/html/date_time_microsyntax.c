@@ -39,15 +39,129 @@ int html_date_time_days_in_month(int64_t year, int month)
 
 int html_date_time_jan1_weekday(int64_t year)
 {
-    /* The proleptic-Gregorian weekday of January 1st, counted from Sunday. The Gregorian calendar repeats every
-       400 years, so the day advances by one per common year and two per leap year since year 1 — which is the
-       count below, taken modulo 7. Year 1's January 1st is a Monday, the 1 the sum starts from. */
-    int64_t y = year - 1;
+    /* THE PROLEPTIC-GREGORIAN WEEKDAY OF JANUARY 1ST, COUNTED FROM SUNDAY, DERIVED FROM THE DAY COUNT — one
+       encoding of the calendar in this component and not two. It was a closed form of its own ("the day
+       advances by one per common year and two per leap year since year 1"), which is a second statement of the
+       leap rule: correct, and one edit away from disagreeing with html_date_time_is_leap_year at a century
+       year, with nothing to say so. 1970-01-01 was a THURSDAY, which is the 4 below.
+       THE YEAR IS REDUCED INTO ONE CYCLE FIRST, and that is not an optimisation: 400 Gregorian years are
+       exactly 146,097 days and therefore exactly 20,871 weeks, so the weekday depends on the year only through
+       its residue — while §2.3.5's year is UNBOUNDED ("four or more ASCII digits") and `2015000000000-W01`
+       parses, which the day count's era arithmetic could not hold. The residue is taken into [400, 799], which
+       is positive so the count itself stays on the calendar. */
+    int64_t cycle = year % 400 + 400;
 
     DCHECK(year > 0, "§2.3.5.8's week count was asked about a year that is not greater than zero — the year of "
                      "every date and time syntax in §2.3.5 is checked for that before it is used, so a year of "
                      "zero or less means a caller used a value from a parse that failed");
-    return (int)((1 + 5 * (y % 4) + 4 * (y % 100) + 6 * (y % 400)) % 7);
+    return (int)(((html_date_time_days_from_epoch(cycle, 1, 1) + 4) % 7 + 7) % 7);
+}
+
+/* ---- THE CALENDAR AS A DAY COUNT -------------------------------------------------------------------------------
+ *
+ * The civil-date/day-number pair, in closed form. It is the proleptic Gregorian calendar §2.3.5 is stated over
+ * and nothing else: 400 years are 146,097 days (the leap rule the era arithmetic below encodes is the same
+ * "divisible by 400, or by 4 but not by 100" html_date_time_is_leap_year states), and the two directions are
+ * inverses that assert each other, so the encoding cannot drift from the one above it without the assert
+ * firing on the first date that crosses it.
+ *
+ * MARCH IS THE FIRST MONTH of the internal year, which is what makes the leap day the LAST day of it and lets
+ * the day-of-year be a single expression with no table and no branch on leap-ness. 719,468 is the day number
+ * of 1970-01-01 in that scheme, subtracted so day 0 is the epoch. */
+int64_t html_date_time_days_from_epoch(int64_t year, int month, int day)
+{
+    int64_t y, era, yoe, doy, doe;
+
+    DCHECK(month >= 1 && month <= 12,
+           "a day count was asked for a month outside 1 ≤ month ≤ 12 — every §2.3.5 parse range-checks the "
+           "month before the components leave it, so this is a caller that filled an HtmlDate itself");
+    DCHECK(day >= 1 && day <= html_date_time_days_in_month(year, month),
+           "a day count was asked for a day outside the month it names — the parse bounds the day by "
+           "html_date_time_days_in_month, so a day past it is a date that is not in the calendar");
+    DCHECK(year > -(1LL << 40) && year < (1LL << 40),
+           "a day count was asked for a year whose era arithmetic would overflow an int64 — §2.3.5's year is "
+           "UNBOUNDED ('four or more ASCII digits'), so a caller holding a parsed year either reduces it (the "
+           "weekday of January 1st does, modulo the calendar's 400-year cycle, which is all it depends on) or "
+           "refuses the year before asking, as §4.10.5.1's conversions do at the platform's time-value range");
+    y = year - (month <= 2);
+    /* FLOOR division, spelled out: C truncates toward zero, and an era boundary crossed the wrong way puts a
+       date in the previous 400-year cycle. */
+    era = (y >= 0 ? y : y - 399) / 400;
+    yoe = y - era * 400;                                               /* [0, 399] */
+    doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;    /* [0, 365] */
+    doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;                       /* [0, 146096] */
+    DCHECK(yoe >= 0 && yoe <= 399 && doy >= 0 && doy <= 365 && doe >= 0 && doe <= 146096,
+           "the day count's era arithmetic left its own ranges — the year-of-era, day-of-year and day-of-era "
+           "are bounded by construction, so one of them out of range is an overflow or a wrong floor");
+    return era * 146097 + doe - 719468;
+}
+
+void html_date_time_date_from_days(int64_t days, HtmlDate *out)
+{
+    int64_t z = days + 719468, era, doe, yoe, y, doy, mp;
+    int d, m;
+
+    DCHECK(out != NULL, "a date was asked for with nowhere to put it");
+    era = (z >= 0 ? z : z - 146096) / 146097;
+    doe = z - era * 146097;                                            /* [0, 146096] */
+    yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;        /* [0, 399] */
+    y = yoe + era * 400;
+    doy = doe - (365 * yoe + yoe / 4 - yoe / 100);                      /* [0, 365] */
+    mp = (5 * doy + 2) / 153;                                           /* [0, 11] */
+    d = (int)(doy - (153 * mp + 2) / 5 + 1);                            /* [1, 31] */
+    m = (int)(mp + (mp < 10 ? 3 : -9));                                 /* [1, 12] */
+    out->year = y + (m <= 2);
+    out->month = m;
+    out->day = d;
+    /* THE INVERSE, ASSERTED. This is the whole of the checking these two need: a wrong era, a wrong floor or a
+       wrong month rotation cannot survive a round trip, and the assert stands at the day it fails on rather
+       than at whatever read the wrong date later reaches. */
+    DCHECK(html_date_time_days_from_epoch(out->year, out->month, out->day) == days,
+           "a day count and the date it names disagree — the two directions of the calendar are inverses and "
+           "one of them has an era, a floor or a month rotation wrong");
+}
+
+int64_t html_date_time_week_start_days(int64_t week_year, int week)
+{
+    int jan1 = html_date_time_jan1_weekday(week_year);         /* 0 Sunday .. 6 Saturday */
+    int iso = jan1 == 0 ? 7 : jan1;                            /* 1 Monday .. 7 Sunday */
+    int64_t jan1_day = html_date_time_days_from_epoch(week_year, 1, 1);
+    /* §2.3.5.8's week 1 is the week whose THURSDAY falls in the week-year, which is what the standard's week
+       count is stated over ("53 weeks if ... January 1st is a Thursday"). So January 1st belongs to week 1
+       when it is a Monday through a Thursday, and to the last week of the PREVIOUS week-year otherwise. */
+    int64_t week1 = jan1_day - (iso - 1) + (iso <= 4 ? 0 : 7);
+
+    DCHECK(week >= 1 && week <= html_date_time_weeks_in_week_year(week_year),
+           "§2.3.5.8's week start was asked for a week outside the week-year's own count — the parse bounds "
+           "the week by html_date_time_weeks_in_week_year, so a week past it is not one this year has");
+    DCHECK(((week1 + 4) % 7 + 7) % 7 == 1,
+           "§2.3.5.8's week 1 does not start on a Monday — a week is 'a seven-day period starting on a "
+           "Monday', so a start that is not one means the January 1st offset above is wrong");
+    return week1 + (int64_t)(week - 1) * 7;
+}
+
+bool html_date_time_week_of_days(int64_t days, HtmlWeek *out)
+{
+    /* The MONDAY of the week containing this day. Day 0 is a Thursday, so day −3 is a Monday and the offset
+       below is taken from there, floored so it is right on both sides of the epoch. */
+    int64_t mon = days - (((days + 3) % 7 + 7) % 7);
+    HtmlDate thursday;
+    int64_t start;
+
+    DCHECK(out != NULL, "§2.3.5.8's week was asked for with nowhere to put it");
+    /* The WEEK-YEAR is the calendar year of the week's Thursday — the same rule week 1 is picked by above. */
+    html_date_time_date_from_days(mon + 3, &thursday);
+    if (thursday.year <= 0) return false;
+    start = html_date_time_week_start_days(thursday.year, 1);
+    out->year = thursday.year;
+    out->week = (int)((mon - start) / 7 + 1);
+    DCHECK(mon >= start && (mon - start) % 7 == 0,
+           "a day's Monday is not a whole number of weeks after its week-year's first Monday — both are "
+           "Mondays of the same week-year by construction");
+    DCHECK(out->week >= 1 && out->week <= html_date_time_weeks_in_week_year(out->year),
+           "a day landed in a week its own week-year does not have — the week-year is the year of the week's "
+           "Thursday, so every day of it is inside that year's week count");
+    return true;
 }
 
 int html_date_time_weeks_in_week_year(int64_t year)
@@ -397,66 +511,126 @@ bool html_is_valid_local_date_and_time_string(const char *s, size_t len, HtmlDat
     return true;
 }
 
-size_t html_serialize_normalized_local_date_and_time(const HtmlDateTime *dt, char *out, size_t cap)
+/* ---- WRITING ONE BACK ------------------------------------------------------------------------------------------ */
+
+/* The one CHECK all four productions end in. A truncated value is a control reporting a date it does not hold,
+   and §4.10.22.4 would then submit it. */
+static size_t dtm_wrote(int n, size_t cap)
 {
-    int isec, ms, n;
+    CHECK(n > 0 && (size_t)n < cap,
+          "date/time: a §2.3.5 production did not fit the buffer it was given — a truncated value is a control "
+          "reporting a date it does not hold");
+    return (size_t)n;
+}
+
+static void dtm_check_year(int64_t year)
+{
+    DCHECK(year > 0,
+           "a §2.3.5 production was asked to write a year that is not greater than zero — every one of these "
+           "syntaxes states `where year > 0`, so such a year has no valid string and the caller owed this the "
+           "check before it asked");
+}
+
+size_t html_serialize_month(const HtmlMonth *m, char *out, size_t cap)
+{
+    DCHECK(m != NULL && out != NULL, "§2.3.5.1's month was asked for with no month or nowhere to put it");
+    DCHECK(cap >= HTML_MONTH_CAP, "§2.3.5.1's month was given a buffer smaller than HTML_MONTH_CAP");
+    dtm_check_year(m->year);
+    DCHECK(m->month >= 1 && m->month <= 12,
+           "§2.3.5.1's month was asked to write a month outside 1 ≤ month ≤ 12 — the parse range-checks it, so "
+           "one outside is a caller that filled the struct itself");
+    /* "Four or more ASCII digits, representing year, where year > 0; a U+002D HYPHEN-MINUS character; two ASCII
+       digits, representing the month." */
+    return dtm_wrote(snprintf(out, cap, "%04" PRId64 "-%02d", m->year, m->month), cap);
+}
+
+size_t html_serialize_date(const HtmlDate *d, char *out, size_t cap)
+{
+    DCHECK(d != NULL && out != NULL, "§2.3.5.2's date was asked for with no date or nowhere to put it");
+    DCHECK(cap >= HTML_DATE_CAP, "§2.3.5.2's date was given a buffer smaller than HTML_DATE_CAP");
+    dtm_check_year(d->year);
+    DCHECK(d->month >= 1 && d->month <= 12 && d->day >= 1 &&
+           d->day <= html_date_time_days_in_month(d->year, d->month),
+           "§2.3.5.2's date was asked to write a date that is not one — every field of an HtmlDate comes out of "
+           "a parse that range-checked it, so a date outside the calendar is a caller that filled the struct "
+           "itself");
+    /* "A valid month string, representing year and month; a U+002D HYPHEN-MINUS character; two ASCII digits,
+       representing day." */
+    return dtm_wrote(snprintf(out, cap, "%04" PRId64 "-%02d-%02d", d->year, d->month, d->day), cap);
+}
+
+size_t html_serialize_time(const HtmlTime *t, char *out, size_t cap)
+{
+    int isec, ms, fd = 3;
     double frac;
     char f[4];
+
+    DCHECK(t != NULL && out != NULL, "§2.3.5.4's time was asked for with no time or nowhere to put it");
+    DCHECK(cap >= HTML_TIME_CAP, "§2.3.5.4's time was given a buffer smaller than HTML_TIME_CAP");
+    DCHECK(t->hour >= 0 && t->hour <= 23 && t->minute >= 0 && t->minute <= 59 &&
+           t->second >= 0.0 && t->second < 60.0,
+           "§2.3.5.4's time was asked to write a time that is not one — the parse range-checks all three "
+           "components, and the seconds bound is the strict `second < 60` that makes leap seconds "
+           "unrepresentable");
+    DCHECK(t->fraction_digits >= 0 && t->fraction_digits <= 3,
+           "§2.3.5.4's time was asked to write a fractional second of more than three ASCII digits — a VALID "
+           "time string's fractional part is one, two or three digits, so such a time has no valid time string "
+           "to be expressed as; the caller owed this an html_is_valid_time_string and asked the parse instead");
+
+    isec = (int)t->second;
+    frac = t->second - (double)isec;
+    ms = (int)(frac * 1000.0 + 0.5);
+    DCHECK(fabs(frac * 1000.0 - (double)ms) < 1e-6,
+           "§2.3.5.4's time could not recover the fractional second's digits — at most three decimal digits go "
+           "into the double a parse produces, so scaling it by a thousand lands on an integer to well within "
+           "this tolerance, and missing it means the seconds value did not come from that parse");
+    DCHECK(ms >= 0 && ms <= 999, "a fractional second came out of §2.3.5.4's [0, 1) range");
+
+    /* The SHORTEST POSSIBLE STRING for the given time — §2.3.5.5's wording for its time half, which is the one
+       place the standard states which of a time's several valid strings to write: "e.g. omitting the seconds
+       component entirely if the given time is zero seconds past the minute". A trailing zero in the fraction is
+       a digit the time does not need either, and dropping it is the same rule. */
+    if (isec == 0 && ms == 0)
+        return dtm_wrote(snprintf(out, cap, "%02d:%02d", t->hour, t->minute), cap);
+    if (ms == 0)
+        return dtm_wrote(snprintf(out, cap, "%02d:%02d:%02d", t->hour, t->minute, isec), cap);
+    snprintf(f, sizeof f, "%03d", ms);
+    while (fd > 1 && f[fd - 1] == '0') fd--;
+    return dtm_wrote(snprintf(out, cap, "%02d:%02d:%02d.%.*s", t->hour, t->minute, isec, fd, f), cap);
+}
+
+size_t html_serialize_week(const HtmlWeek *w, char *out, size_t cap)
+{
+    DCHECK(w != NULL && out != NULL, "§2.3.5.8's week was asked for with no week or nowhere to put it");
+    DCHECK(cap >= HTML_WEEK_CAP, "§2.3.5.8's week was given a buffer smaller than HTML_WEEK_CAP");
+    dtm_check_year(w->year);
+    DCHECK(w->week >= 1 && w->week <= html_date_time_weeks_in_week_year(w->year),
+           "§2.3.5.8's week was asked to write a week the week-year does not have — the count is 52 or 53 and "
+           "the parse bounds the week by it");
+    /* "Four or more ASCII digits, representing year, where year > 0; a U+002D HYPHEN-MINUS character; a U+0057
+       LATIN CAPITAL LETTER W character; two ASCII digits, representing the week." */
+    return dtm_wrote(snprintf(out, cap, "%04" PRId64 "-W%02d", w->year, w->week), cap);
+}
+
+size_t html_serialize_normalized_local_date_and_time(const HtmlDateTime *dt, char *out, size_t cap)
+{
+    size_t n;
 
     DCHECK(dt != NULL && out != NULL, "§2.3.5.5's normalized form was asked for with no time or nowhere to put "
                                       "it");
     DCHECK(cap >= HTML_NORMALIZED_LOCAL_DATE_AND_TIME_CAP,
            "§2.3.5.5's normalized form was given a buffer smaller than the longest string it can produce — "
            "HTML_NORMALIZED_LOCAL_DATE_AND_TIME_CAP is that size and every caller declares one");
-    DCHECK(dt->date.year > 0 && dt->date.month >= 1 && dt->date.month <= 12 && dt->date.day >= 1 &&
-           dt->date.day <= html_date_time_days_in_month(dt->date.year, dt->date.month),
-           "§2.3.5.5's normalized form was asked for a date that is not one — every field of an HtmlDate comes "
-           "out of a parse that range-checked it, so a date outside the calendar is a caller that filled the "
-           "struct itself");
-    DCHECK(dt->time.hour >= 0 && dt->time.hour <= 23 && dt->time.minute >= 0 && dt->time.minute <= 59 &&
-           dt->time.second >= 0.0 && dt->time.second < 60.0,
-           "§2.3.5.5's normalized form was asked for a time that is not one — the parse range-checks all three "
-           "components, and the seconds bound is the strict `second < 60` that makes leap seconds "
-           "unrepresentable");
-    DCHECK(dt->time.fraction_digits >= 0 && dt->time.fraction_digits <= 3,
-           "§2.3.5.5's normalized form was asked for a time whose fractional second has more than three ASCII "
-           "digits — the normalized form is made of a VALID TIME STRING, whose fractional part is one, two or "
-           "three digits, so such a time has no valid time string to be expressed as; the caller owed this an "
-           "html_is_valid_local_date_and_time_string and asked the parse instead");
-
-    isec = (int)dt->time.second;
-    frac = dt->time.second - (double)isec;
-    ms = (int)(frac * 1000.0 + 0.5);
-    DCHECK(fabs(frac * 1000.0 - (double)ms) < 1e-6,
-           "§2.3.5.5's normalized form could not recover the fractional second's digits — at most three decimal "
-           "digits went into the double the parse produced, so scaling it by a thousand lands on an integer to "
-           "well within this tolerance, and missing it means the seconds value did not come from that parse");
-    DCHECK(ms >= 0 && ms <= 999, "a fractional second came out of §2.3.5.4's [0, 1) range");
-
     /* "A valid date string representing the date, a U+0054 LATIN CAPITAL LETTER T character (T), a valid time
-       string representing the time, expressed as the SHORTEST POSSIBLE STRING for the given time (e.g. omitting
-       the seconds component entirely if the given time is zero seconds past the minute)." The year is written
-       with FOUR OR MORE digits — the production's own words — so a year below 1000 carries leading zeros. */
-    if (isec == 0 && ms == 0) {
-        n = snprintf(out, cap, "%04" PRId64 "-%02d-%02dT%02d:%02d",
-                     dt->date.year, dt->date.month, dt->date.day, dt->time.hour, dt->time.minute);
-    } else if (ms == 0) {
-        n = snprintf(out, cap, "%04" PRId64 "-%02d-%02dT%02d:%02d:%02d",
-                     dt->date.year, dt->date.month, dt->date.day, dt->time.hour, dt->time.minute, isec);
-    } else {
-        int fd = 3;
-
-        /* The fractional part, shortest: a trailing zero is a digit the time does not need, and dropping it is
-           the same "shortest possible string" that drops the seconds component altogether. */
-        snprintf(f, sizeof f, "%03d", ms);
-        while (fd > 1 && f[fd - 1] == '0') fd--;
-        n = snprintf(out, cap, "%04" PRId64 "-%02d-%02dT%02d:%02d:%02d.%.*s",
-                     dt->date.year, dt->date.month, dt->date.day, dt->time.hour, dt->time.minute, isec, fd, f);
-    }
-    CHECK(n > 0 && (size_t)n < cap,
-          "date/time: §2.3.5.5's normalized form did not fit its buffer — a truncated value is a control "
-          "reporting a date it does not hold");
-    return (size_t)n;
+       string representing the time, expressed as the shortest possible string for the given time" — the two
+       productions and the T, which is what the sentence says it is made of. The components' own range checks
+       are the two productions' and are not restated here. */
+    n = html_serialize_date(&dt->date, out, cap);
+    CHECK(n + 1 < cap, "date/time: §2.3.5.5's normalized form has no room for its separator");
+    out[n++] = 'T';
+    n += html_serialize_time(&dt->time, out + n, cap - n);
+    DCHECK(out[n] == 0, "§2.3.5.5's normalized form was not NUL-terminated by the production that ended it");
+    return n;
 }
 
 /* ---- §2.3.5.8's WEEKS ------------------------------------------------------------------------------------------ */

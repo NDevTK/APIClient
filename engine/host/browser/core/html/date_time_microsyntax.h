@@ -104,6 +104,30 @@ int  html_date_time_weeks_in_week_year(int64_t year);
    names it and a caller computing it a second way would compute it differently. */
 int  html_date_time_jan1_weekday(int64_t year);
 
+/* ---- THE CALENDAR AS A DAY COUNT ------------------------------------------------------------------------------
+ *
+ * §4.10.5.1.7 through §4.10.5.1.11 are ARITHMETIC over these syntaxes — "the number of milliseconds elapsed
+ * from midnight UTC on the morning of 1970-01-01 ... to midnight UTC on the morning of the parsed date", "to
+ * the Monday of the parsed week" — and every one of them is a day count times 86,400,000. The count belongs
+ * HERE, beside the leap rule it is made of, for the reason §2.3.5's own arithmetic does: a second place that
+ * decides which years have 366 days is a second leap rule, and the two stop agreeing at the first century year.
+ * That is not hypothetical — the weekday of January 1st was a closed form of its own until this landed, and it
+ * is now derived from the day count, so there is ONE encoding of the calendar in this component and not two.
+ *
+ * Day 0 is 1970-01-01 and the count is negative before it. `year` may be ZERO OR NEGATIVE here, deliberately:
+ * a date arrived at by counting days back from the epoch lands there, and it is the CALLER that then has no
+ * valid date string to write (every §2.3.5 production requires year > 0). The parse's own year check is what
+ * keeps such a year from ever reaching the syntaxes. */
+int64_t html_date_time_days_from_epoch(int64_t year, int month, int day);
+void    html_date_time_date_from_days(int64_t days, HtmlDate *out);
+
+/* §2.3.5.8's WEEK, as days: the day count of the MONDAY that starts week `week` of week-year `week_year`, and
+   the week-year and week that a day belongs to. The two are inverses and each asserts the other.
+   `html_date_time_week_of_days` answers false when the week-year would not be greater than zero — the one
+   input for which there is no week to name, since §2.3.5.8's year is "greater than zero". */
+int64_t html_date_time_week_start_days(int64_t week_year, int week);
+bool    html_date_time_week_of_days(int64_t days, HtmlWeek *out);
+
 /* ---- THE PARSING RULES ---------------------------------------------------------------------------------------
  *
  * Each `_component` form is §2.3.5's rule of that name: it reads from `*pos` and, on success, leaves `*pos` one
@@ -148,14 +172,37 @@ bool html_is_valid_time_string(const char *s, size_t len, HtmlTime *out);
 bool html_is_valid_local_date_and_time_string(const char *s, size_t len, HtmlDateTime *out);
 bool html_is_valid_week_string(const char *s, size_t len);
 
-/* §2.3.5.5's VALID NORMALIZED LOCAL DATE AND TIME STRING — "a valid date string representing the date, a U+0054
- * LATIN CAPITAL LETTER T character (T), a valid time string representing the time, expressed as the SHORTEST
- * POSSIBLE STRING for the given time (e.g. omitting the seconds component entirely if the given time is zero
- * seconds past the minute)". Writes the string and a NUL into `out` and answers its length.
+/* ---- WRITING ONE BACK ------------------------------------------------------------------------------------------
  *
- * The date's year is written with FOUR OR MORE digits, which for a year below 1000 means leading zeros and for
- * a year above 9999 means as many digits as it has — both are the production, which says "four or more".
- * `cap` must admit the longest form this can produce; HTML_NORMALIZED_LOCAL_DATE_AND_TIME_CAP is that size. */
+ * The productions above, as the strings they are: each writes a valid X string for the components it is given,
+ * plus a NUL, into `out`, and answers its length. They are HERE because a production is what this component
+ * decides, and a caller that formatted one itself would be a second statement of the grammar — which is the
+ * same defect as a second parse, seen from the other side. §4.10.5.1.7 through §4.10.5.1.11's convert a number
+ * to a string is the caller these exist for: it does the ARITHMETIC and hands the components back.
+ *
+ * The YEAR is written with FOUR OR MORE digits, which for a year below 1000 means leading zeros and for a year
+ * above 9999 means as many digits as it has — both are the production, which says "four or more". Every one of
+ * them asserts its components are the ones its own parse would have produced, because a caller that computed
+ * a month of 13 has a bug this catches at the write rather than at the next read.
+ *
+ * `cap` must admit the longest form the production can produce; each has a CAP for the caller to declare. */
+#define HTML_MONTH_CAP 32
+#define HTML_DATE_CAP  32
+#define HTML_TIME_CAP  16
+#define HTML_WEEK_CAP  32
+size_t html_serialize_month(const HtmlMonth *m, char *out, size_t cap);
+size_t html_serialize_date(const HtmlDate *d, char *out, size_t cap);
+/* §2.3.5.4's valid time string, "expressed as the SHORTEST POSSIBLE STRING for the given time (e.g. omitting
+   the seconds component entirely if the given time is zero seconds past the minute)" — §2.3.5.5's wording for
+   the time half of its normalized form, which is where the shortest-form rule is stated and why it lives in
+   one place rather than in each caller that wants a time written. */
+size_t html_serialize_time(const HtmlTime *t, char *out, size_t cap);
+size_t html_serialize_week(const HtmlWeek *w, char *out, size_t cap);
+
+/* §2.3.5.5's VALID NORMALIZED LOCAL DATE AND TIME STRING — "a valid date string representing the date, a U+0054
+ * LATIN CAPITAL LETTER T character (T), a valid time string representing the time, expressed as the shortest
+ * possible string for the given time". Which is what it is BUILT of: the date production, the T, and the time
+ * production, rather than a third format string that could disagree with either. */
 #define HTML_NORMALIZED_LOCAL_DATE_AND_TIME_CAP 48
 size_t html_serialize_normalized_local_date_and_time(const HtmlDateTime *dt, char *out, size_t cap);
 

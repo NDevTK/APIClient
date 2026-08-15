@@ -46,6 +46,7 @@
  * without one, and what a headless engine actually lacks is bytes to select — which core/file/file_device.c
  * models the way storage.c models a disk. So a file control now HAS a list, empty until something selects into
  * it through input_files_pick, and every reader of it reads the real thing. */
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -63,7 +64,9 @@
 #include "core/file/file_list.h"
 #include "core/html/date_time_microsyntax.h"
 #include "core/html/html_form.h"
+#include "core/html/input_number.h"
 #include "core/html/input_value.h"
+#include "core/html/number_microsyntax.h"
 #include "core/idl_args.h"
 #include "solver/attr_shadow.h"
 #include "solver/concolic.h"
@@ -193,96 +196,6 @@ static bool iv_colorspace_is_display_p3(lxb_dom_element_t *el)
         if (c != P3[i]) return false;
     }
     return true;
-}
-
-/* ---- §2.3.4.3's NUMBERS, as ONE walk answering the two questions §4.10.5 asks of a numeral -------------------
- *
- * The Number and Range states' sanitization tests the PRODUCTION ("a valid floating-point number"); §4.10.5.3.7's
- * minimum and maximum run THE RULES FOR PARSING FLOATING-POINT NUMBER VALUES over the `min` and `max`
- * attributes. They are the same walk and differ only in what it may leave behind: the production forbids leading
- * whitespace and a leading U+002B, and consumes the WHOLE string. Written as one function because two walks are
- * two answers that stop agreeing — `1.` parses as 1 and is not a valid floating-point number, and only a shared
- * walk gets both halves of that right.
- * THE VALUE is the C library's conversion of the span the walk consumed: §2.3.4.3's own conversion step is "the
- * number in the set of doubles closest to value", one correctly-rounded conversion of the whole numeral, which
- * digit-by-digit accumulation in a double is not. Nothing in this engine calls setlocale, so the process is in
- * the "C" locale where the decimal separator is the U+002E the algorithm names. */
-static bool iv_fpn(const char *s, size_t len, double *out, bool *pvalid)
-{
-    size_t i = 0, start, n, digits = 0;
-    bool lead_ws = false, plus = false;
-    char buf[64], *heap = NULL, *p;
-
-    if (pvalid) *pvalid = false;
-    while (i < len && (s[i] == '\t' || s[i] == '\n' || s[i] == '\f' || s[i] == '\r' || s[i] == ' ')) {
-        i++;
-        lead_ws = true;
-    }
-    start = i;
-    if (i < len && (s[i] == '-' || s[i] == '+')) {
-        plus = s[i] == '+';
-        i++;
-    }
-    while (i < len && s[i] >= '0' && s[i] <= '9') { i++; digits++; }
-    if (i < len && s[i] == '.') {
-        size_t frac = 0, dot = i;
-
-        i++;
-        while (i < len && s[i] >= '0' && s[i] <= '9') { i++; frac++; }
-        /* "One or both of the following, in the given order": a run of digits, or a full stop followed by one.
-           A stop with digits on neither side is neither, and a stop with digits only before it is not part of
-           the numeral — which is what makes `1.` parse as 1 and fail the production. */
-        if (!frac && !digits) return false;
-        if (!frac) i = dot;
-    } else if (!digits) {
-        return false;
-    }
-    if (i < len && (s[i] == 'e' || s[i] == 'E')) {
-        size_t e = i, expdigits = 0;
-
-        i++;
-        if (i < len && (s[i] == '-' || s[i] == '+')) i++;
-        while (i < len && s[i] >= '0' && s[i] <= '9') { i++; expdigits++; }
-        if (!expdigits) i = e;   /* the algorithm jumps to conversion, leaving the E unconsumed */
-    }
-    n = i - start;
-    if (!n) return false;
-    if (pvalid) *pvalid = !lead_ws && !plus && i == len;
-    p = buf;
-    if (n + 1 > sizeof buf) {
-        /* An ALLOCATION SIZE and not a length limit: §2.3.4.3 puts no bound on how many digits a numeral has. */
-        heap = malloc(n + 1);
-        CHECK(heap != NULL, "input: OOM converting a numeral — a dropped value is a missing endpoint parameter");
-        p = heap;
-    }
-    memcpy(p, s + start, n);
-    p[n] = 0;
-    *out = strtod(p, NULL);
-    free(heap);
-    return true;
-}
-
-/* §2.3.4.3's "BEST REPRESENTATION OF THE NUMBER n AS A FLOATING-POINT NUMBER is the string obtained from
-   running ToString(n)" — ECMAScript's own Number-to-String, which is the engine's, never a printf format. */
-static JSValue iv_best_representation(JSContext *ctx, double n)
-{
-    JSValue num = JS_NewFloat64(ctx, n);
-    JSValue s = JS_ToString(ctx, num);
-
-    JS_FreeValue(ctx, num);
-    CHECK(!JS_IsException(s), "input: the best representation of a number could not be built");
-    return s;
-}
-
-/* §4.10.5.3.7's minimum/maximum for the Range state, whose defaults §4.10.5.1.13 states as 0 and 100 — the two
-   numbers its sanitization algorithm's DEFAULT VALUE is made of. */
-static double iv_range_bound(lxb_dom_element_t *el, const char *name, double dflt)
-{
-    size_t len = 0;
-    const char *v = (const char *)lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), &len);
-    double d;
-
-    return (v && iv_fpn(v, len, &d, NULL)) ? d : dflt;
 }
 
 /* ---- a growable byte buffer, for the algorithms that build one ---------------------------------------------- */
@@ -416,7 +329,7 @@ static JSValue iv_sanitize(JSContext *ctx, lxb_dom_element_t *el, HtmlInputState
         double d;
         bool valid = false;
 
-        if (len) iv_fpn(s, len, &d, &valid);
+        if (len) html_parse_floating_point(s, len, &d, &valid);
         if (valid) iv_add(&b, s, len);
         break;
     }
@@ -426,18 +339,26 @@ static JSValue iv_sanitize(JSContext *ctx, lxb_dom_element_t *el, HtmlInputState
        default value is the minimum". This is why an empty `<input type=range>` reads back as `50` and not as
        the empty string every other state falls to. */
     case INPUT_STATE_RANGE: {
-        double d, min, max;
+        double d;
         bool valid = false;
+        InputStepRange rg;
 
-        if (len) iv_fpn(s, len, &d, &valid);
+        if (len) html_parse_floating_point(s, len, &d, &valid);
         if (valid) { iv_add(&b, s, len); break; }
-        min = iv_range_bound(el, "min", 0);
-        max = iv_range_bound(el, "max", 100);
+        /* THE MINIMUM AND THE MAXIMUM ARE §4.10.5.3.7's, read through the component that owns them — including
+           §4.10.5.1.13's defaults of 0 and 100, which are that section's statement of a DEFAULT MINIMUM and
+           DEFAULT MAXIMUM and not two numbers belonging to this algorithm. Read here a second time they would
+           be the pair that stops agreeing with the underflow the same control is validated by. */
+        input_step_range_of(el, INPUT_STATE_RANGE, &rg);
+        DCHECK(rg.has_min && rg.has_max,
+               "the Range state answered with no minimum or no maximum — §4.10.5.1.13 states a default for "
+               "both, so this state always has both and its default value is always a number");
         JS_FreeCString(ctx, s);
         JS_FreeValue(ctx, value);
         free(b.s);
         if (pchanged) *pchanged = true;
-        return iv_best_representation(ctx, max < min ? min : min + (max - min) / 2);
+        return html_best_representation_of_number(ctx, rg.max < rg.min ? rg.min
+                                                                       : rg.min + (rg.max - rg.min) / 2);
     }
     /* §4.10.5.1.7, §4.10.5.1.8, §4.10.5.1.9 and §4.10.5.1.10 are ONE SENTENCE FOUR TIMES: "If the value of the
        element is not a valid date / month / week / time string, then set it to the empty string instead." They
@@ -894,21 +815,439 @@ static JSValue js_input_set_files(JSContext *ctx, JSValueConst this_val, JSValue
     return JS_UNDEFINED;
 }
 
+/* ---- §4.10.5.4's `valueAsNumber`, `valueAsDate`, `stepUp()` and `stepDown()` ---------------------------------
+ *
+ * THE SAME VALUE, INTERPRETED. Each of these four is stated over the element's value and one of §4.10.5.1's
+ * per-state conversions — which is why they are here, beside the value they read and write, and why the
+ * arithmetic they read it through is core/html/input_number.c and not written a second time in each member.
+ *
+ * WHAT "SET THE VALUE OF THE ELEMENT" MEANS is §4.10.5.4's value-mode setter above: the element's value, the
+ * dirty value flag, and the value sanitization algorithm. So a string these produce that the state's syntax
+ * does not accept is emptied by that algorithm on the way in, which is exactly what the standard's own
+ * composition does and is why none of them needs a case for a conversion that had no result.
+ *
+ * AN UNKNOWN VALUE STAYS UNKNOWN THROUGH THEM. `input.value = location.hash` makes the number these convert to
+ * unknown external input as well, and the answer is the one document.createElement gives an unknown tag: RUN
+ * the real conversion on the source's own EXAMPLE where it carries one, and hand back a value that records
+ * which operation produced it. A concrete NaN would decide the page's next branch, and an invented number is a
+ * fabricated observation. */
+
+/* A NUMBER OUT OF A VALUE THAT MAY BE UNKNOWN — the EXAMPLE an unknown carries, converted the way the IDL
+   boundary would have converted the value itself: ToNumber on a primitive (which runs none of the page's code)
+   and then §3.2's integer rule for the `long` the method declares. `dflt` is what a value with no example
+   answers, which is the IDL's own default for an absent argument. */
+static double iv_number_operand(JSContext *ctx, JSValueConst v, IdlArgType t, double dflt)
+{
+    JSValue ex = concolic_is(v) ? concolic_example(ctx, v) : JS_DupValue(ctx, v);
+    double d = dflt;
+
+    if (JS_IsNumber(ex) || JS_IsString(ex)) {
+        JS_ToFloat64(ctx, &d, ex);
+        if (t != IDL_UNRESTRICTED_DOUBLE) d = (double)idl_integer_of(t, d);
+    }
+    JS_FreeValue(ctx, ex);
+    return d;
+}
+
+/* The conversion, RUN ON THE EXAMPLE the unknown value carries — never predicted from it. `as_date` picks which
+   of the two per-state conversions is run, which is also what the result's recorded operation is named for.
+   OWNED. */
+static JSValue iv_number_of_unknown(JSContext *ctx, HtmlInputState st, JSValueConst value, bool as_date)
+{
+    JSValue ex = concolic_example(ctx, value), real = JS_UNDEFINED;
+    double n;
+
+    if (JS_IsString(ex)) {
+        size_t len = 0;
+        const char *s = JS_ToCStringLen(ctx, &len, ex);
+
+        CHECK(s != NULL, "input: an unknown value's example could not be read for §4.10.5.4's conversion");
+        if (as_date) {
+            if (input_number_date_from_string(st, s, len, &n)) real = JS_NewDate(ctx, n);
+        } else if (input_number_from_string(st, s, len, &n)) {
+            real = JS_NewFloat64(ctx, n);
+        }
+        JS_FreeCString(ctx, s);
+    }
+    JS_FreeValue(ctx, ex);
+    return concolic_builtin_hook(ctx, value, as_date ? "valueAsDate" : "valueAsNumber", real);
+}
+
+static JSValue js_input_get_value_as_number(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_element_t *el;
+    HtmlInputState st;
+    JSValue value;
+    double n;
+    bool ok;
+    size_t len = 0;
+    const char *s;
+
+    (void)magic;
+    if (!iv_is_input(this_val))
+        return JS_ThrowTypeError(ctx, "HTMLInputElement's `valueAsNumber` was accessed on something that is "
+                                      "not an HTMLInputElement");
+    st = iv_state_of(this_val, &el);
+    /* "On getting, if the valueAsNumber attribute DOES NOT APPLY, as defined for the input element's type
+       attribute's current state, then return a Not-a-Number (NaN) value." */
+    if (!el || !input_number_applies(st)) return JS_NewFloat64(ctx, NAN);
+    value = input_value_get(ctx, this_val);
+    if (concolic_is(value)) {
+        JSValue r = iv_number_of_unknown(ctx, st, value, false);
+
+        JS_FreeValue(ctx, value);
+        return r;
+    }
+    /* "Otherwise, run the algorithm to convert a string to a number defined for that state to the element's
+       value; if the algorithm returned a number, then return it, otherwise, return a NaN value." */
+    s = JS_ToCStringLen(ctx, &len, value);
+    CHECK(s != NULL, "input: a control's value could not be converted for §4.10.5.4's valueAsNumber");
+    ok = input_number_from_string(st, s, len, &n);
+    JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, value);
+    return JS_NewFloat64(ctx, ok ? n : NAN);
+}
+
+/* "Set the value of the element to X" — §4.10.5.4's value-mode setter, which is the only writer of a control's
+   value in this engine. `s` is CONSUMED, and JS_UNDEFINED is the conversion that had no result: the element's
+   value is then the empty string, because a string that is not this state's syntax is what its value
+   sanitization algorithm empties. */
+static JSValue iv_set_converted(JSContext *ctx, JSValueConst wrap, JSValue s)
+{
+    JSValue empty, r;
+
+    if (!JS_IsUndefined(s)) {
+        r = input_value_set(ctx, wrap, s);
+        JS_FreeValue(ctx, s);
+        return r;
+    }
+    empty = JS_NewStringLen(ctx, "", 0);
+    CHECK(!JS_IsException(empty), "input: the empty string could not be allocated for a value assignment");
+    r = input_value_set(ctx, wrap, empty);
+    JS_FreeValue(ctx, empty);
+    return r;
+}
+
+static JSValue js_input_set_value_as_number(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    lxb_dom_element_t *el;
+    HtmlInputState st;
+    double d = 0;
+
+    (void)magic;
+    if (!iv_is_input(this_val))
+        return JS_ThrowTypeError(ctx, "HTMLInputElement's `valueAsNumber` was assigned on something that is "
+                                      "not an HTMLInputElement");
+    st = iv_state_of(this_val, &el);
+    if (!concolic_is(val)) {
+        DCHECK(JS_IsNumber(val), "§4.10.5.4's valueAsNumber setter was handed something that is not a number — "
+                                 "its IDL type is `unrestricted double` and the declaration converts it, which "
+                                 "is also what makes the NaN branch below reachable rather than a type error");
+        JS_ToFloat64(ctx, &d, val);
+        /* "On setting, if the new value is INFINITE, then throw a TypeError exception." Before the
+           does-not-apply check, which is the order the standard's two sentences are in: `text.valueAsNumber =
+           Infinity` is a TypeError and not an InvalidStateError. */
+        if (isinf(d))
+            return JS_ThrowTypeError(ctx, "HTMLInputElement's `valueAsNumber` was assigned an infinite value");
+    }
+    /* "Otherwise, if the valueAsNumber attribute does not apply ... then throw an InvalidStateError." */
+    if (!el || !input_number_applies(st))
+        return JS_ThrowDOMException(ctx, "InvalidStateError",
+                                    "`valueAsNumber` does not apply to an `input` in this state — the member "
+                                    "is defined only for the states that define a conversion between their "
+                                    "value and a number");
+    if (concolic_is(val)) {
+        /* The number is unknown external input, so the string it converts to is too — and it reaches the
+           element's value as such, which is what carries the source through to §4.10.22.4's entry list. */
+        double e = iv_number_operand(ctx, val, IDL_UNRESTRICTED_DOUBLE, NAN);
+        JSValue real = isfinite(e) ? input_number_to_string(ctx, st, e) : JS_UNDEFINED;
+
+        return iv_set_converted(ctx, this_val, concolic_builtin_hook(ctx, val, "valueAsNumber=", real));
+    }
+    /* "Otherwise, if the new value is a Not-a-Number (NaN) value, then set the value of the element to the
+       empty string." */
+    if (isnan(d)) return iv_set_converted(ctx, this_val, JS_UNDEFINED);
+    /* "Otherwise, run the algorithm to convert a number to a string, as defined for that state, on the new
+       value, and set the value of the element to the resulting string." */
+    return iv_set_converted(ctx, this_val, input_number_to_string(ctx, st, d));
+}
+
+static JSValue js_input_get_value_as_date(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_element_t *el;
+    HtmlInputState st;
+    JSValue value;
+    double t;
+    bool ok;
+    size_t len = 0;
+    const char *s;
+
+    (void)magic;
+    if (!iv_is_input(this_val))
+        return JS_ThrowTypeError(ctx, "HTMLInputElement's `valueAsDate` was accessed on something that is not "
+                                      "an HTMLInputElement");
+    st = iv_state_of(this_val, &el);
+    /* "On getting, if the valueAsDate attribute does not apply ... then return null." */
+    if (!el || !input_number_date_applies(st)) return JS_NULL;
+    value = input_value_get(ctx, this_val);
+    if (concolic_is(value)) {
+        JSValue r = iv_number_of_unknown(ctx, st, value, true);
+
+        JS_FreeValue(ctx, value);
+        return r;
+    }
+    s = JS_ToCStringLen(ctx, &len, value);
+    CHECK(s != NULL, "input: a control's value could not be converted for §4.10.5.4's valueAsDate");
+    ok = input_number_date_from_string(st, s, len, &t);
+    JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, value);
+    /* "Otherwise, run the algorithm to convert a string to a Date object defined for that state to the
+       element's value; if the algorithm returned a Date object, then return it, otherwise, return null."
+       THE Date IS THE REALM'S OWN — JS_NewDate builds it from this context's %Date.prototype% and sets its
+       [[DateValue]], which is what "return a new Date object representing midnight UTC" is. It is not
+       `new Date(t)`: that would run the Date CONSTRUCTOR, which this engine makes a step machine precisely so
+       that no C entry constructs one, and the spec's own words name the object and not the constructor. */
+    return ok ? JS_NewDate(ctx, t) : JS_NULL;
+}
+
+static JSValue js_input_set_value_as_date(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    lxb_dom_element_t *el;
+    HtmlInputState st;
+    bool null_value = JS_IsNull(val) || JS_IsUndefined(val);
+
+    (void)magic;
+    if (!iv_is_input(this_val))
+        return JS_ThrowTypeError(ctx, "HTMLInputElement's `valueAsDate` was assigned on something that is not "
+                                      "an HTMLInputElement");
+    st = iv_state_of(this_val, &el);
+    /* THE TYPE'S OWN REFUSAL, MADE HERE, exactly as `files` states it: `attribute object? valueAsDate` is a
+       NULLABLE OBJECT type and the declaration surface has none, so the conversion is this body's first step —
+       null and undefined are the IDL null, and a PRIMITIVE is a TypeError from the TYPE, thrown before the
+       algorithm's step 1. The order is observable: `text.valueAsDate = "x"` is that TypeError and not the
+       InvalidStateError the same assignment of a Date would answer. */
+    if (!null_value && !JS_IsObject(val))
+        return JS_ThrowTypeError(ctx, "HTMLInputElement's `valueAsDate` was assigned a value that is not an "
+                                      "object");
+    /* Step 1: "if the valueAsDate attribute does not apply ... then throw an InvalidStateError." */
+    if (!el || !input_number_date_applies(st))
+        return JS_ThrowDOMException(ctx, "InvalidStateError",
+                                    "`valueAsDate` does not apply to an `input` in this state — the member is "
+                                    "defined only for the states that convert their value to a Date");
+    /* "otherwise, if the new value is not null and not a Date object throw a TypeError exception." UNKNOWN
+       EXTERNAL INPUT LANDS HERE and is refused like any other non-Date: a concolic is an object carrying a
+       string source, never a platform Date, and a TypeError for it is the same answer a browser gives that
+       object — it de-taints nothing, because the assignment did not happen in either world. */
+    if (!null_value && !JS_IsDate(val))
+        return JS_ThrowTypeError(ctx, "HTMLInputElement's `valueAsDate` was assigned an object that is not a "
+                                      "Date");
+    /* "otherwise, if the new value is null or a Date object representing the NAN TIME VALUE, then set the
+       value of the element to the empty string" — the object's own [[DateValue]], never its `getTime`, which
+       is the page's to replace. */
+    if (null_value || isnan(JS_GetDateValue(val))) return iv_set_converted(ctx, this_val, JS_UNDEFINED);
+    /* "otherwise, run the algorithm to convert a Date object to a string, as defined for that state, on the
+       new value, and set the value of the element to the resulting string." */
+    return iv_set_converted(ctx, this_val, input_number_date_to_string(ctx, st, JS_GetDateValue(val)));
+}
+
+/* §4.10.5.4's stepUp(n) and stepDown(n) STEPS 5 THROUGH 11 — the half of the algorithm that is arithmetic over
+ * a starting value, split out so the unknown-value path can run the very same steps over the example rather
+ * than a second implementation of them.
+ *
+ * `up` is which method was invoked; `have_value` is whether step 5's conversion produced a number. Answers the
+ * string step 11 sets the element's value to, or JS_UNDEFINED where the algorithm RETURNS without changing
+ * anything — which steps 3, 4 and 10 all do and which is why this is not a bool plus an out-parameter. */
+static JSValue iv_step_apply(JSContext *ctx, HtmlInputState st, const InputStepRange *r,
+                             double value, bool have_value, double n, bool up)
+{
+    double before;
+
+    DCHECK(r->has_step, "§4.10.5.4's step algorithm ran with no allowed value step — step 2 throws an "
+                        "InvalidStateError for that and this is reached only past it");
+    /* Step 5: "If applying the algorithm to convert a string to a number to the string given by the element's
+       value does not result in an error, then let value be the result of that algorithm. Otherwise, let value
+       be ZERO." — which is why stepUp() on an empty number control lands on the step and not on nothing. */
+    if (!have_value) value = 0;
+    before = value;                                                            /* step 6 */
+    if (input_step_mismatch(value, r)) {
+        /* Step 7's FIRST branch: "set value to the NEAREST value that, when subtracted from the step base, is
+           an integral multiple of the allowed value step, and that is LESS THAN value if the method invoked
+           was the stepDown() method, and MORE THAN value otherwise." The ARGUMENT IS NOT USED HERE — an
+           unaligned value snaps by one step's worth however large n is, which is the standard's own wording
+           and the half of this algorithm a summary loses. */
+        value = up ? input_step_align_up(value, r) : input_step_align_down(value, r);
+        DCHECK(up ? value > before : value < before,
+               "§4.10.5.4's step 7 snapped an unaligned value to the wrong side of it — the value is a step "
+               "mismatch, so the aligned value on each side is strictly beyond it");
+    } else {
+        /* Step 7's SECOND branch: delta is the allowed value step multiplied by n, negated for stepDown. */
+        double delta = r->step * n;
+
+        value += up ? delta : -delta;
+    }
+    /* Step 8: "If the element has a minimum, and value is less than that minimum, then set value to the
+       SMALLEST value that ... is an integral multiple of the allowed value step, and that is more than or
+       equal to that minimum." */
+    if (r->has_min && value < r->min) value = input_step_align_up(r->min, r);
+    /* Step 9: the same for the maximum, with the LARGEST aligned value not greater than it. */
+    if (r->has_max && value > r->max) value = input_step_align_down(r->max, r);
+    /* Step 10: "If either the method invoked was the stepDown() method and value is GREATER THAN
+       valueBeforeStepping, or the method invoked was the stepUp() method and value is LESS THAN
+       valueBeforeStepping, then return."
+       THIS IS THE STEP THE SPEC WROTE ITS OWN COUNTEREXAMPLE FOR: `<input type=number value=1 max=0>`. Step 7
+       carries 1 to 2, step 9 clamps it back to 0 — below where it started — and without this step stepUp()
+       would have moved the value DOWN. */
+    if (up ? value < before : value > before) return JS_UNDEFINED;
+    DCHECK(!input_step_mismatch(value, r),
+           "§4.10.5.4's step algorithm produced a value that is a step mismatch — every branch above lands on "
+           "an integral multiple of the allowed value step above the step base");
+    DCHECK(!r->has_min || value >= r->min - r->step / 16777216.0,
+           "§4.10.5.4's step algorithm produced a value below the element's minimum — step 8 puts it at or "
+           "above one, and the only thing that moves it afterwards is step 9's clamp to the maximum, which "
+           "step 4 has already established there is an aligned value below");
+    DCHECK(!r->has_max || value <= r->max + r->step / 16777216.0,
+           "§4.10.5.4's step algorithm produced a value above the element's maximum — step 9 is the last thing "
+           "that touches it and it clamps to the largest aligned value not greater than that maximum");
+    /* Step 11: "Let value as string be the result of running the algorithm to convert a number to a string, as
+       defined for the input element's type attribute's current state, on value." */
+    return input_number_to_string(ctx, st, value);
+}
+
+enum { IV_STEP_DOWN = 0, IV_STEP_UP = 1 };
+
+static JSValue js_input_step(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_element_t *el;
+    HtmlInputState st;
+    InputStepRange r;
+    JSValue value, s;
+    bool up = magic == IV_STEP_UP, have_value = false;
+    double x = 0, n = 1;
+
+    DCHECK(magic == IV_STEP_UP || magic == IV_STEP_DOWN,
+           "§4.10.5.4's step methods were installed with a magic that is neither of the two they have");
+    if (!iv_is_input(this_val))
+        return JS_ThrowTypeError(ctx, "HTMLInputElement's `stepUp`/`stepDown` was called on something that is "
+                                      "not an HTMLInputElement");
+    st = iv_state_of(this_val, &el);
+    /* Step 1: "If the stepDown() and stepUp() methods do not apply, as defined for the input element's type
+       attribute's current state, then throw an InvalidStateError." They apply exactly where the state defines
+       a conversion between its value and a number, which is what makes that one predicate. */
+    if (!el || !input_number_applies(st))
+        return JS_ThrowDOMException(ctx, "InvalidStateError",
+                                    "`stepUp()`/`stepDown()` do not apply to an `input` in this state");
+    input_step_range_of(el, st, &r);
+    /* Step 2: "If the element has NO ALLOWED VALUE STEP, then throw an InvalidStateError." Which is what
+       `step=any` means, and the reason it is a throw rather than a no-op: there is no granularity to step by. */
+    if (!r.has_step)
+        return JS_ThrowDOMException(ctx, "InvalidStateError",
+                                    "`stepUp()`/`stepDown()` were called on an `input` whose `step` attribute "
+                                    "is `any`, which gives the element no allowed value step");
+    /* Step 3: "If the element has a minimum and a maximum and the minimum is GREATER THAN the maximum, then
+       return." Stated over the minimum and the maximum themselves, so a REVERSED RANGE — a time control whose
+       range spans midnight — returns here too: there is no direction to step in when the allowed values are
+       the two ends of a period rather than an interval. */
+    if (r.has_min && r.has_max && r.min > r.max) return JS_UNDEFINED;
+    /* Step 4: "If the element has a minimum and a maximum and there is no value greater than or equal to the
+       element's minimum and less than or equal to the element's maximum that, when subtracted from the step
+       base, is an integral multiple of the allowed value step, then return." The smallest aligned value not
+       below the minimum is the only candidate, so this is one comparison. */
+    if (r.has_min && r.has_max && input_step_align_up(r.min, &r) > r.max) return JS_UNDEFINED;
+    /* THE ARGUMENT: `optional long n = 1`, so an absent one and an explicit `undefined` are both the IDL's
+       DEFAULT and not a conversion of undefined. Unknown external input carries its own example through the
+       same §3.2 integer rule the declaration would have applied to it; with no example the algorithm runs on
+       the default and the result below records that it is unknown rather than reporting the number it got. */
+    if (argc >= 1 && !JS_IsUndefined(argv[0])) {
+        DCHECK(JS_IsNumber(argv[0]) || concolic_is(argv[0]),
+               "§4.10.5.4's step methods were handed an argument that is neither a number nor unknown external "
+               "input — their IDL type is `long` and the declaration converts everything else");
+        n = iv_number_operand(ctx, argv[0], IDL_LONG, 1);
+    }
+    value = input_value_get(ctx, this_val);
+    {
+        /* Step 5's conversion, over the element's value — or over the EXAMPLE an unknown value carries, so the
+           arithmetic below is the real algorithm on a real number in both worlds. A value with no example
+           leaves step 5's "otherwise, let value be zero" standing, which is what it already answers for a
+           control whose value is not this state's syntax. */
+        JSValue text = concolic_is(value) ? concolic_example(ctx, value) : JS_DupValue(ctx, value);
+
+        if (JS_IsString(text)) {
+            size_t len = 0;
+            const char *cs = JS_ToCStringLen(ctx, &len, text);
+
+            CHECK(cs != NULL, "input: a control's value could not be read for §4.10.5.4's stepUp/stepDown");
+            have_value = input_number_from_string(st, cs, len, &x);
+            JS_FreeCString(ctx, cs);
+        }
+        JS_FreeValue(ctx, text);
+    }
+    s = iv_step_apply(ctx, st, &r, x, have_value, n, up);
+    if (concolic_is(value) || (argc >= 1 && concolic_is(argv[0]))) {
+        /* ONE OF THE INPUTS WAS UNKNOWN, so where the value lands is unknown — including whether it moved at
+           all, since steps 3, 4 and 10 all decide on the value. The element's value becomes that unknown,
+           carrying whatever the real algorithm produced from the example as its own example, which is what
+           keeps the source reaching §4.10.22.4's entry list through a stepped control. */
+        JSValue unknown = concolic_builtin_hook(ctx, concolic_is(value) ? value : argv[0],
+                                                up ? "stepUp" : "stepDown", s);
+
+        JS_FreeValue(ctx, value);
+        return iv_set_converted(ctx, this_val, unknown);
+    }
+    JS_FreeValue(ctx, value);
+    /* Steps 3, 4 and 10's "return" — and step 11 having no string to write. A value the algorithm declined to
+       move is LEFT ALONE, which is what returning from the middle of it means. */
+    if (JS_IsUndefined(s)) return JS_UNDEFINED;
+    return iv_set_converted(ctx, this_val, s);
+}
+
+/* §4.10.5.4's four members, declared once per AGENT beside `files` — see input_value_declare. */
+static int g_id_value_as_number = -1;
+static int g_id_value_as_date = -1;
+static int g_id_step_up = -1;
+static int g_id_step_down = -1;
+
 void input_value_declare(JSContext *ctx)
 {
+    static const IdlArgType ONE_LONG[1] = { IDL_LONG };
+
     DCHECK(g_id_files_set < 0, "input_value_declare ran twice — its member is declared once per AGENT, and a "
                                "second declaration would mint the setter per realm");
     g_id_files_set = idl_setter_id(ctx, IDL_ANY, false, js_input_set_files, 0);
+    /* `attribute unrestricted double valueAsNumber` — UNRESTRICTED, which is what makes the setter's NaN
+       branch reachable at all: a plain `double` rejects NaN and the infinities at the boundary, and the
+       algorithm's own "if the new value is infinite, then throw a TypeError" and "if the new value is a NaN
+       value, then set the value of the element to the empty string" would both be dead. */
+    g_id_value_as_number = idl_setter_id(ctx, IDL_UNRESTRICTED_DOUBLE, false, js_input_set_value_as_number, 0);
+    /* `attribute object? valueAsDate` — passed through unconverted, because the declaration surface has no
+       nullable-object type and the algorithm states the whole conversion itself (see the setter). */
+    g_id_value_as_date = idl_setter_id(ctx, IDL_ANY, false, js_input_set_value_as_date, 0);
+    /* `undefined stepUp(optional long n = 1)` and its twin. The argument is OPTIONAL FROM POSITION 0, so an
+       absent one and an explicit `undefined` both leave the body to apply the IDL's default of 1. */
+    g_id_step_up = idl_method_id(ctx, ONE_LONG, 1, js_input_step, IV_STEP_UP);
+    idl_optional_from(0);
+    g_id_step_down = idl_method_id(ctx, ONE_LONG, 1, js_input_step, IV_STEP_DOWN);
+    idl_optional_from(0);
 }
 
 void input_value_install(JSContext *ctx, JSValueConst input_proto)
 {
     DCHECK(g_id_files_set >= 0, "§4.10.5.4's `files` was installed before input_value_declare declared it");
+    DCHECK(g_id_value_as_number >= 0 && g_id_value_as_date >= 0 && g_id_step_up >= 0 && g_id_step_down >= 0,
+           "§4.10.5.4's value-as members were installed before input_value_declare declared them");
     DCHECK(JS_IsObject(input_proto), "`files` was installed with no HTMLInputElement.prototype");
     idl_install_accessor(ctx, input_proto, "files", js_input_get_files, 0, g_id_files_set);
+    idl_install_accessor(ctx, input_proto, "valueAsNumber", js_input_get_value_as_number, 0,
+                         g_id_value_as_number);
+    idl_install_accessor(ctx, input_proto, "valueAsDate", js_input_get_value_as_date, 0, g_id_value_as_date);
+    idl_install_method(ctx, input_proto, "stepUp", 0, g_id_step_up);
+    idl_install_method(ctx, input_proto, "stepDown", 0, g_id_step_down);
 }
 
 void input_value_free(void)
 {
     g_id_files_set = -1;
+    g_id_value_as_number = -1;
+    g_id_value_as_date = -1;
+    g_id_step_up = -1;
+    g_id_step_down = -1;
 }

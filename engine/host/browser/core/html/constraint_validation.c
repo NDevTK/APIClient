@@ -8,7 +8,8 @@
  * THE STATES ARE COMPUTED, NEVER ASSUMED. Each of §4.10.21.1's ten is stated per control type by the standard,
  * and every one of them is read here from the element's real value and its real constraint attributes:
  * `required` against the value/checkedness/selectedness the control actually has, `pattern` against a REGEXP
- * this engine compiles and RUNS, `min`/`max`/`step` against §2.3.4.3's floating-point parse. Two of the ten are
+ * this engine compiles and RUNS, `min`/`max`/`step` against the state's OWN convert a string to a number (a
+ * date's `min` is a date and a number's is a numeral — core/html/input_number.c). Two of the ten are
  * computed FALSE for a built-in control and that is an answer rather than a gap: `tooLong` and `tooShort` are
  * conditioned by §4.10.19.3 and §4.10.19.4 on the value having been "last changed by a USER EDIT", and
  * `badInput` is stated by every input state as a fact about what "the user interface is representing" — this
@@ -20,9 +21,7 @@
  * location.hash`) makes "does this control satisfy its constraints" a question with two feasible answers, and
  * both worlds are real: one submits the form and records the endpoint, the other is the browser refusing. That
  * is an outcome fork, not a guess — concretising it either way would silently delete one of them. */
-#include <math.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -40,6 +39,7 @@
 #include "core/html/custom_elements.h"
 #include "core/html/element_internals.h"
 #include "core/html/html_form.h"
+#include "core/html/input_number.h"
 #include "core/html/input_value.h"
 #include "core/idl_args.h"
 #include "core/url/url.h"
@@ -161,68 +161,6 @@ bool constraint_validation_is_candidate(JSContext *ctx, JSValueConst wrap)
 static bool cv_is_mutable(JSContext *ctx, JSValueConst wrap)
 {
     return !html_form_control_is_disabled(ctx, wrap) && !cv_has(cv_elem(wrap), "readonly");
-}
-
-/* ---- §2.3.4.3's FLOATING-POINT NUMBERS ------------------------------------------------------------------------
- *
- * "The rules for parsing floating-point number values", which §4.10.5.3.7's minimum and maximum, §4.10.5.3.8's
- * allowed value step and step base, and the Number and Range states' "convert a string to a number" all run.
- * The SYNTAX is walked exactly as the algorithm states it; the VALUE is then the C library's conversion of the
- * span the walk consumed, because the algorithm's own conversion step is "the number in the set of doubles
- * CLOSEST to value" — one correctly-rounded conversion of the whole numeral, which digit-by-digit accumulation
- * in a double is not. strtod is that conversion; nothing in this engine calls setlocale, so the process is in
- * the "C" locale where the decimal separator is the U+002E the algorithm names. */
-static bool cv_parse_double(const char *s, size_t len, double *out)
-{
-    size_t i = 0, start, n;
-    char buf[64], *p;
-
-    while (i < len && (s[i] == '\t' || s[i] == '\n' || s[i] == '\f' || s[i] == '\r' || s[i] == ' ')) i++;
-    start = i;
-    if (i < len && (s[i] == '-' || s[i] == '+')) i++;
-    {
-        size_t digits = 0;
-
-        while (i < len && s[i] >= '0' && s[i] <= '9') { i++; digits++; }
-        if (i < len && s[i] == '.') {
-            size_t frac = 0;
-            size_t dot = i;
-
-            i++;
-            while (i < len && s[i] >= '0' && s[i] <= '9') { i++; frac++; }
-            /* "One or both of the following, in the given order": digits, or a full stop followed by digits.
-               A lone `.` with digits on neither side is neither, so the stop is not part of the numeral. */
-            if (!frac && !digits) return false;
-            if (!frac) i = dot;
-        } else if (!digits) {
-            return false;
-        }
-    }
-    if (i < len && (s[i] == 'e' || s[i] == 'E')) {
-        size_t e = i, expdigits = 0;
-
-        i++;
-        if (i < len && (s[i] == '-' || s[i] == '+')) i++;
-        while (i < len && s[i] >= '0' && s[i] <= '9') { i++; expdigits++; }
-        if (!expdigits) i = e;   /* the algorithm jumps to conversion, leaving the E unconsumed */
-    }
-    n = i - start;
-    if (!n) return false;
-    /* The stack buffer is an ALLOCATION SIZE and not a length limit: a numeral longer than it is converted out
-       of a heap copy rather than refused, because §2.3.4.3 puts no bound on how many digits a numeral has. */
-    if (n < sizeof buf) {
-        p = buf;
-    } else {
-        p = malloc(n + 1);
-        CHECK(p != NULL, "constraint validation: OOM copying a numeric attribute for its conversion");
-    }
-    memcpy(p, s + start, n);
-    p[n] = 0;
-    *out = strtod(p, NULL);
-    if (p != buf) free(p);
-    /* "If rounded-value is 2^1024 or −2^1024, return an error" — the two special values the algorithm adds to
-       the set of doubles exactly so an overflowing numeral is an ERROR rather than an infinity. */
-    return isfinite(*out);
 }
 
 /* ---- §4.10.5.1.5's VALID EMAIL ADDRESS -----------------------------------------------------------------------
@@ -386,67 +324,6 @@ static void cv_radio_group(JSContext *ctx, JSValueConst wrap, bool *pany_require
         c = c ? c->next : NULL;
     }
     JS_FreeValue(ctx, owner);
-}
-
-/* §4.10.5.3.7's MINIMUM and MAXIMUM and §4.10.5.3.8's ALLOWED VALUE STEP / STEP BASE, for the two states whose
-   "convert a string to a number" this engine has: Number (§4.10.5.1.12) and Range (§4.10.5.1.13), both of which
-   define it as §2.3.4.3's floating-point parse and both of whose step scale factor is 1. */
-typedef struct {
-    bool   have_min, have_max, have_step;
-    double min, max, step, base;
-} CvRange;
-
-static void cv_range_of(JSValueConst wrap, HtmlInputState st, CvRange *r)
-{
-    lxb_dom_element_t *el = cv_elem(wrap);
-    size_t len = 0;
-    const char *a;
-    double d;
-
-    memset(r, 0, sizeof *r);
-    a = cv_attr(el, "min", &len);
-    if (a && cv_parse_double(a, len, &d)) { r->have_min = true; r->min = d; }
-    else if (st == INPUT_STATE_RANGE) { r->have_min = true; r->min = 0; }   /* the Range state's default minimum */
-    a = cv_attr(el, "max", &len);
-    if (a && cv_parse_double(a, len, &d)) { r->have_max = true; r->max = d; }
-    else if (st == INPUT_STATE_RANGE) { r->have_max = true; r->max = 100; } /* its default maximum */
-    /* "Otherwise, if the attribute is absent, the allowed value step is the DEFAULT STEP multiplied by the step
-       scale factor" — so an absent `step` is a constraint, not the absence of one, and only the keyword `any`
-       removes it. Both states' default step is 1 and both scale factors are 1. */
-    a = cv_attr(el, "step", &len);
-    if (a && len == 3 && (a[0] == 'a' || a[0] == 'A') && (a[1] == 'n' || a[1] == 'N') &&
-        (a[2] == 'y' || a[2] == 'Y')) {
-        r->have_step = false;
-    } else {
-        r->have_step = true;
-        r->step = (a && cv_parse_double(a, len, &d) && d > 0) ? d : 1;
-    }
-    /* THE STEP BASE: the `min` content attribute's number, else the `value` content attribute's, else zero.
-       The `value` CONTENT attribute and not the element's value — the default the markup carries is what the
-       author's steps are counted from, which is why `<input type=number value=1 step=2>` accepts 3 and not 2. */
-    r->base = 0;
-    a = cv_attr(el, "min", &len);
-    if (a && cv_parse_double(a, len, &d)) {
-        r->base = d;
-    } else {
-        a = cv_attr(el, "value", &len);
-        if (a && cv_parse_double(a, len, &d)) r->base = d;
-    }
-}
-
-/* §4.10.5.3.8's "that number subtracted from the step base is not an INTEGRAL MULTIPLE of the allowed value
-   step", in exact arithmetic — which is what the standard writes and what a double's remainder is not: 0.07 IS
-   an integral multiple of 0.01 and fmod says otherwise, because neither numeral is exactly representable. The
-   tolerance recovers the exact-math answer rather than relaxing it; it is scaled by the step so that a step of
-   1e-9 is still decided at its own magnitude. */
-static bool cv_step_mismatch(double value, const CvRange *r)
-{
-    double diff = fabs(value - r->base), rem, tol;
-
-    if (!r->have_step || r->step <= 0) return false;
-    rem = fmod(diff, r->step);
-    tol = r->step / 16777216.0;   /* the float mantissa's 2^24, the scale a double's accumulated error lives at */
-    return rem > tol && (r->step - rem) > tol;
 }
 
 /* ---- §4.10.5.3.6's COMPILED PATTERN REGULAR EXPRESSION -------------------------------------------------------
@@ -798,44 +675,36 @@ static uint32_t cv_states(JSContext *ctx, JSValueConst wrap, const CvValue *v, i
             }
         }
     }
-    /* §4.10.5.3.7's UNDERFLOW and OVERFLOW and §4.10.5.3.8's STEP MISMATCH, each of which needs the state's own
-       "convert a string to a number". */
-    if (st == INPUT_STATE_NUMBER || st == INPUT_STATE_RANGE) {
+    /* §4.10.5.3.7's UNDERFLOW and OVERFLOW and §4.10.5.3.8's STEP MISMATCH — ONE branch over the SEVEN states
+       that define a "convert a string to a number", because that is how the standard states them: three
+       sentences that name the algorithm and never a state, so a date and a number are the same constraint over
+       different arithmetic. core/html/input_number.c is that arithmetic and the domain it defines. */
+    if (input_number_applies(st)) {
         if (v->unknown) { if (*punknown_bit < 0) *punknown_bit = CV_RANGE_OVERFLOW; }
         else {
             double x;
-            CvRange rg;
+            InputStepRange rg;
 
-            cv_range_of(wrap, st, &rg);
-            /* Both states convert with §2.3.4.3's parse; a value that is not a number leaves all three
-               constraints unsatisfiable, which is what "and the result ... is a number" says. */
-            if (v->len && cv_parse_double(v->s, v->len, &x)) {
-                bool reversed = false;   /* neither state has a periodic domain, so neither can have one */
-
-                if (rg.have_min && !reversed && x < rg.min) flags |= 1u << CV_RANGE_UNDERFLOW;
-                if (rg.have_max && !reversed && x > rg.max) flags |= 1u << CV_RANGE_OVERFLOW;
-                if (cv_step_mismatch(x, &rg)) flags |= 1u << CV_STEP_MISMATCH;
+            input_step_range_of(el, st, &rg);
+            /* "…and the result of applying the algorithm to convert a string to a number to the string given by
+               the element's value IS A NUMBER" — a value that is not one leaves all three constraints
+               unsatisfiable, which is what that clause says and why the empty value is never out of range. */
+            if (v->len && input_number_from_string(st, v->s, v->len, &x)) {
+                if (rg.reversed) {
+                    /* "When an element has a REVERSED RANGE, and ... the number obtained from that algorithm is
+                       more than the maximum AND less than the minimum, the element is simultaneously suffering
+                       from an underflow and suffering from an overflow." The range spans midnight, so what is
+                       out of it is the interval BETWEEN the two bounds rather than what lies outside them —
+                       `min=21:00 max=06:00` admits 23:00 and refuses 12:00. */
+                    if (x > rg.max && x < rg.min)
+                        flags |= (1u << CV_RANGE_UNDERFLOW) | (1u << CV_RANGE_OVERFLOW);
+                } else {
+                    if (rg.has_min && x < rg.min) flags |= 1u << CV_RANGE_UNDERFLOW;
+                    if (rg.has_max && x > rg.max) flags |= 1u << CV_RANGE_OVERFLOW;
+                }
+                if (input_step_mismatch(x, &rg)) flags |= 1u << CV_STEP_MISMATCH;
             }
         }
-    } else if (st == INPUT_STATE_DATE || st == INPUT_STATE_MONTH || st == INPUT_STATE_WEEK ||
-               st == INPUT_STATE_TIME || st == INPUT_STATE_DATETIME_LOCAL) {
-        if (v->unknown || v->len)
-            DFAIL("an `input` in a date or time state has a value — §4.10.5.3.7's UNDERFLOW and OVERFLOW and "
-                  "§4.10.5.3.8's STEP MISMATCH are all stated over that state's own CONVERT A STRING TO A "
-                  "NUMBER, and that is what is missing here. §2.3.5's parsers are NOT missing any more: "
-                  "core/html/date_time_microsyntax.c holds them, and a value that reaches this point has "
-                  "already been through the one this state's value sanitization algorithm names. What is left "
-                  "is the ARITHMETIC each of the five states defines over the parsed components — §4.10.5.1.7 "
-                  "and §4.10.5.1.9's milliseconds from midnight UTC on 1970-01-01 to the parsed date and to "
-                  "the Monday of the parsed week, §4.10.5.1.8's count of months from January 1970, "
-                  "§4.10.5.1.10's milliseconds from midnight, and §4.10.5.1.11's milliseconds from "
-                  "1970-01-01T00:00:00.0 — plus cv_range_of parsing `min` and `max` with the SAME conversion "
-                  "rather than with §2.3.4.3's floating-point one, each state's STEP SCALE FACTOR and DEFAULT "
-                  "STEP (86,400,000 and 1 day; 1 and 1 month; 604,800,000 and 1 week with a step base of "
-                  "-259,200,000; 1000 and 60 seconds twice), and the Time state's PERIODIC DOMAIN, which is "
-                  "the `reversed` the Number and Range branch above can hardcode false and this one cannot. "
-                  "Every one of these types has a DEFAULT step, so the constraint applies with no attribute "
-                  "present");
     }
     /* §4.10.5.3.6's PATTERN MISMATCH is decided by running a regexp, which is the caller's next phase. An
        unknown value has no bytes to run it against, and the fork above already covers it. */
