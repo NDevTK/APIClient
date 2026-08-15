@@ -367,6 +367,19 @@ QJS_EXPORT int qjs_step(void)
            "qjs_step is returning to the host with the cooperative quantum's slice still OPEN — the host now "
            "pumps its port, streams findings and delivers replies on time the scheduler believes a flow is "
            "holding, and the CPU edge is still armed over it");
+    /* AND THE FLOW STAMP IS DOWN, which is the assert that would have caught the defect it now guards on the
+       day it was written. Every entry below this one runs HERE, on the host's own time, and each of them
+       creates objects: qjs_provide parses a reply record and dups it onto every parked flow's pending
+       register, qjs_host_answer parses an answer, qjs_route and qjs_perform build a delivery. With the stamp
+       still up those objects carry the running flow's generation, so `JS_ObjFlowGen(obj) > d->fork_gen` skips
+       them in every delta forked before — a later write by any flow that shares them is captured nowhere and
+       outlives that flow's unapply. The engine cannot see that from the inside (nothing crashes; the refcount
+       keeps the object alive and the value is simply wrong), so it is asserted at the boundary where the
+       ownership changes hands. */
+    DCHECK(JS_FlowGen() == 0,
+           "qjs_step is returning to the host with the flow stamp still up — every object the host now creates "
+           "would be stamped as belonging to the flow that just yielded, and a write to one of them by any "
+           "OTHER flow that shares it is skipped by that flow's delta and survives its rewind");
     if (r == ENGINE_STEP_STALLED)
         return ENGINE_STEP_YIELD;   /* the bridge speaks two values; a stall is "call me again", same as a slice */
     /* TWO VALUES, AND THIS ENTRY IS WHERE THAT IS TRUE. The scheduler has three codes and the fold above is
