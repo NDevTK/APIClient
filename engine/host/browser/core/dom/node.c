@@ -59,6 +59,7 @@
    re-derivation right here, in §4.5; HTML owns what a registry IS. shadow_root.c reaches across the same
    boundary for the same reason. */
 #include "core/html/custom_elements.h"
+#include "core/html/html_script.h"
 #include "solver/engine.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
@@ -1838,6 +1839,13 @@ int node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
     if (phase == NODE_CLONE_PHASE_TEMPLATE) {
         /* HTML §4.12.3's cloning steps, step 1: "If subtree is false, then return." */
         lxb_dom_node_t *content = s->deep ? clone_template_content(s->src) : NULL;
+        /* STEP 3 IS EVERY ELEMENT'S CLONING STEPS AND NOT ONLY `<template>`'s. HTML §4.12.1 states another
+           pair on this same step — "the cloning steps for script elements given node, copy, and subtree are to
+           set copy's already started to node's already started" — and it is not bookkeeping: a script the
+           fragment parse marked inert would otherwise have a live CLONE, so
+           `host.appendChild(parsed.cloneNode(true))` runs exactly the code §13.4's Inert mode exists to stop.
+           It is unconditional on `subtree` because §4.12.1's steps are, unlike §4.12.3's above. */
+        html_script_cloned(ctx, s->src, s->cnode);
         hdr->stage = base + NODE_CLONE_PHASE_CHILDREN;
         if (content && content->first_child) {
             /* Leave this tree for the template's, on both sides at once. The frame is everything to come back
