@@ -63,6 +63,10 @@ static JSClassID g_end_class;
    them is `arg`. */
 static JSTrampStepDef g_defs[IDL_ASYNC_ITER_MAX][AIT_OP_N];
 
+/* AND SO IS THE MEMBER'S — idl_method_id_step BORROWS the IdlStepDecl it is handed. One per interface, because
+   the state size it declares is this interface's initialization storage. */
+static IdlStepDecl g_make_decl[IDL_ASYNC_ITER_MAX];
+
 #define AIT_HANDLE(arg) ((arg) >> 3)
 #define AIT_OP(arg)     ((arg) & 7)
 
@@ -521,49 +525,125 @@ static int ait_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
 
 /* ---- §3.7.10's three members ------------------------------------------------------------------------------ */
 
+/* WHERE THE MEMBER RESTS, AS §3.7.10 NUMBERS ITS THREE IDENTICAL STEP LISTS. It is a MACHINE and not a plain
+   body because of the second stage: §2.5.10's initialization steps are the COMPONENT'S, and what a standard
+   writes into them is not this file's to bound — Streams §4.2.5's first step acquires a reader, whose §4.3
+   acquisition settles a promise. */
+#define AIM_STAGES(X) \
+    X(AIM_MINT, \
+      "Web IDL §3.7.10 steps 3.1.1-3.1.5 / 4.1.1-4.1.5 / 5.1.1-5.1.5 (the receiver, its \"does not implement " \
+      "definition\" TypeError, and the newly created default asynchronous iterator object for the interface)") \
+    X(AIM_INIT, \
+      "Web IDL §3.7.10 step 3.1.6 / 4.1.6 / 5.1.6 (running the asynchronous iterator initialization steps for " \
+      "the interface with idlObject, iterator and idlArgs)")
+enum { IDL_STEP_STAGE_BASE(AIM_STAGES) AIM_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const AIM_STEP_LABELS[] = { AIM_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* The member's state, with the initialization steps' own storage in its TAIL — one allocation carries both, for
+   the reason AitState carries the other two algorithms' the same way. */
+typedef struct {
+    JSValue  iter;      /* §3.7.10.1's object, owned until step 3.1.7 hands it back */
+    uint8_t  handle;    /* which declared interface, so the ownership declaration can reach its work_visit */
+    uint8_t  minted;    /* whether the tail below is the component's storage yet, or still zeroed bytes */
+    AitAlign work[1];   /* the initialization steps' own storage begins here */
+} AitMakeState;
+
+#define AIM_WORK(s) ((void *)(s)->work)
+
+static size_t ait_make_state_size(size_t work_size)
+{
+    return sizeof(AitMakeState) + (work_size > sizeof(AitAlign) ? work_size - sizeof(AitAlign) : 0);
+}
+
+/* THE ONE DECLARATION OF WHAT THIS STATE OWNS. The tail is visited only once the mint has run: a member torn
+   down by a THROWING ARGUMENT CONVERSION never reached this body at all, and its tail is then zeroed bytes
+   rather than the component's record — which is ownership that is conditional, and therefore an `if` around the
+   visit rather than a second list. */
+static void ait_make_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    AitMakeState *s = st;
+
+    v->val(ctx, &s->iter);
+    if (s->minted) {
+        const IdlAsyncIterOps *ops = g_async[s->handle].ops;
+        if (ops->work_visit) ops->work_visit(ctx, AIM_WORK(s), v);
+    }
+}
+
 /* §3.7.10 steps 3.1, 4.1 and 5.1 — one body, because the three differ only in the KIND they mint. `magic` packs
    the interface handle and that kind, since one C function serves every declared interface. */
-static JSValue js_idl_async_make(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+static int js_idl_async_make(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    int handle = magic >> 2, kind = magic & 3;
+    AitMakeState *s = st;
+    int magic = idl_step_magic(hdr), handle = magic >> 2, kind = magic & 3;
     const IdlAsyncIface *f = &g_async[handle];
     IdlAsyncIter *it;
-    JSValue obj, proto;
+    int r;
 
-    DCHECK(handle >= 0 && handle < g_async_n,
-           "an async_iterable<> member ran with a handle nothing declared");
-    /* step 3.1.3: "If jsValue does not implement definition, then throw a TypeError." */
-    if (!f->ops->implements(this_val))
-        return JS_ThrowTypeError(ctx, "not a %s", f->ops->iface);
-    /* §3.7.10.1's [[Prototype]] is THIS REALM'S asynchronous iterator prototype object — it inherits
-       %AsyncIteratorPrototype%, which is a per-realm intrinsic, so one shared object would give a child
-       document's `dir.values()` the parent realm's async-iterator helpers. */
-    proto = JS_GetClassProto(ctx, f->class_id);
-    DCHECK(!JS_IsNull(proto),
-           "an async_iterable<>'s iterator was minted in a realm that never ran its install — the member and "
-           "the prototype are installed together, so a mint here means one arrived without the other");
-    obj = JS_NewObjectProtoClass(ctx, proto, f->class_id);
-    JS_FreeValue(ctx, proto);
-    if (JS_IsException(obj)) return obj;
-    it = js_mallocz(ctx, sizeof *it);
-    if (!it) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
-    /* step 3.1.5: "a newly created default asynchronous iterator object ... with idlObject as its target, ...
-       as its kind, and is finished set to false". The record is COMPLETE before it is attached. */
-    it->target = JS_DupValue(ctx, this_val);
-    it->ongoing = JS_NULL;
-    it->state = JS_UNDEFINED;
-    it->kind = (uint8_t)kind;
-    it->finished = 0;
-    it->iface = (uint8_t)handle;
-    JS_SetOpaque(obj, it);
+    if (hdr->stage == AIM_MINT) {
+        JSValue obj, proto;
+
+        /* A ZEROED SLOT READS AS THE INTEGER 0, not as undefined — so the owned slot is made undefined before
+           the first thing that can fail, because the failure path tears this state down through the
+           declaration above and frees exactly what that names. */
+        s->iter = JS_UNDEFINED;
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        DCHECK(handle >= 0 && handle < g_async_n,
+               "an async_iterable<> member ran with a handle nothing declared");
+        /* step 3.1.3: "If jsValue does not implement definition, then throw a TypeError." */
+        if (!f->ops->implements(hdr->this_val)) {
+            JS_ThrowTypeError(ctx, "not a %s", f->ops->iface);
+            return -1;
+        }
+        /* §3.7.10.1's [[Prototype]] is THIS REALM'S asynchronous iterator prototype object — it inherits
+           %AsyncIteratorPrototype%, which is a per-realm intrinsic, so one shared object would give a child
+           document's `dir.values()` the parent realm's async-iterator helpers. */
+        proto = JS_GetClassProto(ctx, f->class_id);
+        DCHECK(!JS_IsNull(proto),
+               "an async_iterable<>'s iterator was minted in a realm that never ran its install — the member "
+               "and the prototype are installed together, so a mint here means one arrived without the other");
+        obj = JS_NewObjectProtoClass(ctx, proto, f->class_id);
+        JS_FreeValue(ctx, proto);
+        if (JS_IsException(obj)) return -1;
+        it = js_mallocz(ctx, sizeof *it);
+        if (!it) { JS_FreeValue(ctx, obj); return -1; }
+        /* step 3.1.5: "a newly created default asynchronous iterator object ... with idlObject as its target,
+           ... as its kind, and is finished set to false". The record is COMPLETE before it is attached. */
+        it->target = JS_DupValue(ctx, hdr->this_val);
+        it->ongoing = JS_NULL;
+        it->state = JS_UNDEFINED;
+        it->kind = (uint8_t)kind;
+        it->finished = 0;
+        it->iface = (uint8_t)handle;
+        JS_SetOpaque(obj, it);
+        s->iter = obj;
+        s->handle = (uint8_t)handle;
+        s->minted = 1;
+        if (!f->ops->init) {
+            *presult = s->iter;               /* step 3.1.7: "Return iterator." */
+            s->iter = JS_UNDEFINED;
+            return 0;
+        }
+        STEP_GOTO(hdr->stage, AIM_INIT, NULL);
+    }
+
+    DCHECK(hdr->stage == AIM_INIT,
+           "an async_iterable<> member resumed into a stage §3.7.10's three step lists do not have");
+    it = JS_GetOpaque(s->iter, f->class_id);
+    DCHECK(it != NULL,
+           "an async_iterable<> member's initialization steps ran on something that is not the default "
+           "asynchronous iterator object the stage before it minted");
     /* step 3.1.6: "Run the asynchronous iterator initialization steps for definition ... if any such steps
        exist." The state slot is written directly rather than through the capture accessor because this object
        was created by the running flow: it is flow-private, and the delta captures only shared baseline state. */
-    if (f->ops->init && f->ops->init(ctx, this_val, obj, argc, argv, &it->state) < 0) {
-        JS_FreeValue(ctx, obj);
-        return JS_EXCEPTION;
-    }
-    return obj;
+    r = f->ops->init(ctx, hdr, AIM_WORK(s), hdr->this_val, s->iter, argc, argv, &it->state,
+                     cb_result, out_cb, out_argc);
+    if (r != 0) return r;                     /* >0 parked inside the component's steps; <0 threw */
+    *presult = s->iter;                       /* step 3.1.7: "Return iterator." */
+    s->iter = JS_UNDEFINED;
+    return 0;
 }
 
 /* ---- declaration and per-realm install --------------------------------------------------------------------- */
@@ -637,6 +717,10 @@ int idl_async_iter_declare(JSContext *ctx, const IdlAsyncIterOps *ops)
            asynchronously iterable declaration, then define ..."), so a VALUE declaration declares neither —
            a member registered here and installed nowhere would be a pool entry no prototype can reach. */
         int nk = ops->pair ? 3 : 1, k;
+        /* THE DECLARATION IS BORROWED by the pool, so it is static storage per interface — the same reason
+           g_defs above is, and per interface because the initialization steps' storage is sized from THIS
+           declaration's `work_size`. */
+        IdlStepDecl *decl = &g_make_decl[handle];
         struct { int kind; int *pid; } m[3] = {
             { AIT_KIND_VALUE,    &f->id_values  },
             { AIT_KIND_KEYVALUE, &f->id_entries },
@@ -645,14 +729,17 @@ int idl_async_iter_declare(JSContext *ctx, const IdlAsyncIterOps *ops)
 
         DCHECK(ops->nargs == 0 || ops->arg_types != NULL,
                "an async_iterable<> declared an argument list with no types");
+        decl->body       = js_idl_async_make;
+        decl->state_size = ait_make_state_size(ops->work_size);
+        decl->visit      = ait_make_visit;
+        decl->release    = NULL;
+        decl->algorithm  = "Web IDL §3.7.10 an asynchronously iterable declaration's values, entries and keys";
+        decl->steps      = AIM_STEP_LABELS;
         f->id_values = f->id_entries = f->id_keys = -1;
         for (k = 0; k < nk; k++) {
             int magic = (handle << 2) | m[k].kind;
 
-            *m[k].pid = ops->members
-                        ? idl_method_id_dict(ctx, types, ops->nargs, ops->members, ops->nmembers,
-                                             js_idl_async_make, magic)
-                        : idl_method_id(ctx, types, ops->nargs, js_idl_async_make, magic);
+            *m[k].pid = idl_method_id_step(ctx, types, ops->nargs, ops->members, ops->nmembers, decl, magic);
             /* §2.5.10: "If given, an asynchronously iterable declaration's arguments must all be optional
                arguments." Stated HERE and not by the component, because it is the standard's requirement
                rather than any one interface's — and it is load-bearing: `for await (const x of obj)` calls

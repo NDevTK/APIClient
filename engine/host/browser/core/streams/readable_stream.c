@@ -24,6 +24,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/idl_async_iter.h"
 #include "core/realm.h"
 #include "core/streams/stream_work.h"
 #include "solver/cow.h"
@@ -62,7 +63,7 @@ typedef struct {
 
 static JSClassID g_stream_class, g_reader_class, g_ctrl_class;
 /* THE AGENT'S POOL ENTRIES for the members whose declaration cannot be repeated per realm. */
-static int       g_getreader_id = -1, g_values_id = -1, g_tee_id = -1, g_tee_clone_id = -1;
+static int       g_getreader_id = -1, g_tee_id = -1, g_tee_clone_id = -1;
 static JSRuntime *g_rs_rt;
 static int       g_ctor_stepid = -1, g_reader_ctor_stepid = -1, g_read_stepid = -1;
 static int       g_byob_ctor_stepid = -1, g_from_ctor_stepid = -1;
@@ -1775,51 +1776,11 @@ JSValue readable_ctrl_desired_size(JSContext *ctx, JSValueConst ctrl)
     return ctrl_desired_size(ctx, c);
 }
 
-/* ---- §4.4's ASYNCHRONOUS ITERATION ---------------------------------------------------------------------------
- *
- * `for await (const chunk of stream)`. Two specs meet here: §4.4 states what one iteration DOES (read through
- * the reader; release it when the stream finishes; cancel it on an early return unless preventCancel), and Web
- * IDL §3.7.11 states the SHAPE around that — an `is finished` flag, and an ONGOING PROMISE that makes each
- * next() wait for the previous one. The chain is not decoration: `Promise.allSettled([it.next(), it.next(),
- * it.next()])` on a source that enqueues once and then errors must report fulfilled, rejected, fulfilled in
- * that order, which only holds if the second call waits for the first.
- *
- * IT REACHES THE OPERATIONS, NOT THE MEMBERS. §4.4 performs ReadableStreamDefaultReaderRead and
- * ...GenericCancel, which are abstract operations, and a page that replaces
- * ReadableStreamDefaultReader.prototype.read must not thereby change what `for await` does — the corpus asserts
- * exactly that. So this holds the FUNCTION OBJECTS this component installed and calls those: the same
- * algorithms, reached by a reference the page cannot rebind, with no property read in between.
- *
- * EVERY STEP IS A CALL OF THE PAGE'S CODE — settling the promise it hands back, reading through the reader —
- * so the whole of §4.4 is ONE machine with eight entry points, the way §4.5's controller is one machine with
- * three. Four are the members and the chained continuations; four are the reactions to what a read or a cancel
- * answered, each a step closure over what it needs. */
-enum {
-    AI_NEXT = 0,     /* the `next()` member */
-    AI_RETURN,       /* the `return(value)` member */
-    AI_RUN_NEXT,     /* the same steps, reached as a reaction to the ongoing promise */
-    AI_RUN_RETURN,
-    AI_READ_OK,      /* what a read answered */
-    AI_READ_ERR,
-    AI_CANCEL_OK,    /* what the source's cancel answered */
-    AI_CANCEL_ERR,
-    AI_N
-};
+/* ---- THE ABSTRACT OPERATIONS §4 PERFORMS ON ITSELF ---------------------------------------------------------- */
 
-typedef struct {
-    JSValue stream;
-    JSValue reader;        /* the default reader this iterator holds for its whole life */
-    JSValue ongoing;       /* §3.7.11's ongoing promise, or JS_UNDEFINED before the first call */
-    uint8_t prevent_cancel;
-    uint8_t finished;      /* §3.7.11's `is finished` */
-} AsyncIterData;
-
-static JSClassID g_aiter_class;
-static int       g_aiter_stepids[AI_N];
-/* THE ORIGINAL FUNCTION OBJECTS — see the note above. */
-/* §4.4 AND §4.2 PERFORM THE ABSTRACT OPERATIONS, so the iterator, the tee and the drain keep the function
-   objects INSTALLED at each realm's build — a page that rebinds the members changes what its own calls do and
-   changes nothing about `for await`, `tee()` or Fetch's "clone a body".
+/* §4.2.5, §4.2 AND FETCH PERFORM THE ABSTRACT OPERATIONS, so the async iterator, the tee and the drain keep the
+   function objects INSTALLED at each realm's build — a page that rebinds the members changes what its own calls
+   do and changes nothing about `for await`, `tee()` or Fetch's "clone a body".
    PER REALM: a function object carries the realm it was minted in, so one set held for the agent ran a child
    document's every read, cancel and release through the first document's realm. */
 enum { RSF_READ = 0, RSF_RELEASE, RSF_CANCEL, RSF_GET_READER, RSF_TEE, RSF_TEE_CLONE, RSF_N };
@@ -1839,370 +1800,443 @@ static JSValue rs_ctrl_fn(JSContext *ctx, int which)   /* OWNED */
     return realm_value_get(ctx, g_ctrl_fn_slot[which]);
 }
 
-static void aiter_finalizer(JSRuntime *rt, JSValue val)
+/* ---- §4.2.5's ASYNCHRONOUS ITERATION --------------------------------------------------------------------------
+ *
+ * `for await (const chunk of stream)`. §4.2.1's IDL declares
+ * `async_iterable<any>(optional ReadableStreamIteratorOptions options = {})`, and Web IDL §3.7.10 owns the whole
+ * JavaScript binding of that declaration — `values`, %Symbol.asyncIterator%, §3.7.10.1's default asynchronous
+ * iterator object with its `ongoing promise` and `is finished`, and §3.7.10.2's prototype with its `next` and
+ * its `return`. core/idl_async_iter.c is where that is written ONCE, for every interface that declares one.
+ *
+ * WHAT IS §4.2.5'S IS THE THREE ALGORITHMS §2.5.10 ASKS THE PROSE FOR, and they are the three functions below.
+ * This file used to carry the other half as well — an eight-entry machine that re-derived §3.7.10.2's chaining
+ * rule, its `is finished` short circuit and its iteration-result wrapping — which was one object answering
+ * `next()` differently depending on which copy of that algorithm owned it. There is one copy now.
+ *
+ * IT REACHES THE OPERATIONS, NOT THE MEMBERS. §4.2.5 performs ReadableStreamDefaultReaderRead,
+ * ReadableStreamReaderGenericCancel and ReadableStreamDefaultReaderRelease, which are abstract operations, and a
+ * page that replaces ReadableStreamDefaultReader.prototype.read must not thereby change what `for await` does —
+ * the corpus asserts exactly that. So this reaches the FUNCTION OBJECTS this component installed, with no
+ * property read in between.
+ *
+ * THE ITERATOR'S OWN STATE — §4.2.5's "iterator's reader" and "iterator's prevent cancel" — lives in the ONE
+ * slot Web IDL §3.7.10.1 gives a component, and it is a JS VALUE for the reason §State-isolation gives: its
+ * writes are property writes the COW delta already captures, and it parks to the cold tier with the flow that
+ * owns it. A malloc'd C record would revert a POINTER on a context switch and leave the reader reachable from
+ * nothing. */
+enum { RSI_ST_READER = 0, RSI_ST_PREVENT_CANCEL };
+
+/* §4.2.1: `dictionary ReadableStreamIteratorOptions { boolean preventCancel = false; };` */
+static const IdlDictMember ITERATOR_OPTIONS[] = {
+    { "preventCancel", IDL_BOOLEAN },
+};
+static const IdlArgType ITERATOR_ARGS[1] = { IDL_DICT };
+
+static int g_rs_iter_handle = -1;
+
+/* §4.2.5's "iterator's reader", off that slot. OWNED. */
+static JSValue rsi_reader(JSContext *ctx, JSValueConst state)
 {
-    AsyncIterData *a = JS_GetOpaque(val, g_aiter_class);
-    if (!a) return;
-    JS_FreeValueRT(rt, a->stream);
-    JS_FreeValueRT(rt, a->reader);
-    JS_FreeValueRT(rt, a->ongoing);
-    js_free_rt(rt, a);
+    return JS_GetPropertyUint32(ctx, state, RSI_ST_READER);
 }
 
-static void aiter_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+/* §4.2.5's "iterator's prevent cancel". */
+static bool rsi_prevent_cancel(JSContext *ctx, JSValueConst state)
 {
-    AsyncIterData *a = JS_GetOpaque(val, g_aiter_class);
-    if (!a) return;
-    JS_MarkValue(rt, a->stream, mark_func);
-    JS_MarkValue(rt, a->reader, mark_func);
-    JS_MarkValue(rt, a->ongoing, mark_func);
+    JSValue v = JS_GetPropertyUint32(ctx, state, RSI_ST_PREVENT_CANCEL);
+    bool b = JS_ToBool(ctx, v) != 0;
+
+    JS_FreeValue(ctx, v);
+    return b;
 }
 
-static AsyncIterData *aiter_of(JSValueConst v) { return JS_GetOpaque(v, g_aiter_class); }
+/* THE THREE ALGORITHMS' OWN STEP STORAGE. ONE declaration, because core/idl_async_iter.c keeps one block for
+   whichever of them is running and ZEROES it before that algorithm's first entry — so 0 is "not yet started"
+   for each, and each enumerates its own sub-sequence from there. `at` is a SUB-SEQUENCE cursor inside one Web
+   IDL §3.7.10.2 stage, which is what stream_work.h's `settle` and `pull` are; the stage a parked flow reports
+   is the one that machine's header carries. */
+typedef struct {
+    StreamWork w;
+    JSValue    reader;    /* §4.2.5's "iterator's reader", taken off the state slot at each algorithm's step 1 */
+    JSValue    promise;   /* the next algorithm's step 3 promise, or the return algorithm's step 4.1 result */
+    JSValue    resolve;   /* that promise's capability, held until step 4's read request captures it */
+    JSValue    reject;
+    uint8_t    at;
+} RsIterWork;
 
-/* WHERE THIS MACHINE RESTS, AS §4.4 NUMBERS IT. `next()` and `return()` share it because the standard gives
-   them one shape: chain onto the ongoing promise, then read or cancel, then release, then settle. */
-#define AIS_STAGES(X) \
-    X(AIS_START, "Streams §4.4 next()/return(value) step 1 (the promise this call answers with, chained onto " \
-                 "the iterator's ongoing promise)") \
-    X(AIS_STEPS, "Streams §4.4 get the next iteration result step 1 / asynchronous iterator return step 1 " \
-                 "(which of read, cancel or release the reader's state calls for)") \
-    X(AIS_READ, "Streams §4.4 get the next iteration result step 2 (ReadableStreamDefaultReaderRead through " \
-                "the iterator's reader)") \
-    X(AIS_CANCEL, "Streams §4.4 asynchronous iterator return step 3 (ReadableStreamReaderGenericCancel with " \
-                  "the value)") \
-    X(AIS_RELEASE, "Streams §4.4 asynchronous iterator return step 5 / get the next iteration result's close " \
-                   "and error steps (ReadableStreamDefaultReaderRelease)") \
-    X(AIS_SETTLE, "Streams §4.4 (settling this call's promise with the iteration result, or rejecting it — " \
-                  "the resolving function's 27.2.1.3.2 step 8 `then` read is the page's)") \
-    X(AIS_DONE, "Streams §4.4 (the iteration step is complete)")
-enum { AIS_STAGES(JS_STEP_STAGE_ENUM) };
-static const char *const AIS_STEPS_LABELS[] = { AIS_STAGES(JS_STEP_STAGE_LABEL) NULL };
+static void rs_iter_visit(JSContext *ctx, void *work, JSStepVisit *v)
+{
+    RsIterWork *k = work;
+
+    stream_work_visit(ctx, &k->w, v);
+    v->val(ctx, &k->reader);
+    v->val(ctx, &k->promise);
+    v->val(ctx, &k->resolve);
+    v->val(ctx, &k->reject);
+}
+
+/* EVERY OWNED FIELD IN PLACE BEFORE THE FIRST THING THAT CAN THROW — the failure path tears the whole machine
+   down through the ownership declaration above, which frees exactly what it names, and a zeroed slot reads as
+   the INTEGER 0 rather than as undefined. */
+static void rs_iter_work_start(RsIterWork *k)
+{
+    stream_work_start(&k->w);
+    k->reader = k->promise = k->resolve = k->reject = JS_UNDEFINED;
+}
+
+/* §4.2.5: "The asynchronous iterator initialization steps for a ReadableStream, given stream, iterator, and
+   args, are: 1. Let reader be ? AcquireReadableStreamDefaultReader(stream). 2. Set iterator's reader to reader.
+   3. Let preventCancel be args[0]["preventCancel"]. 4. Set iterator's prevent cancel to preventCancel."
+   A STEP because step 1 is a CALL: §4.3's acquisition SETTLES the reader's `closed` promise at once on a stream
+   that has already closed or errored, and a resolving function is the page's code. */
+enum { RSI_INIT_START = 0, RSI_INIT_ACQUIRE };
+
+static int rs_iter_init(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueConst target, JSValueConst iter,
+                        int argc, JSValueConst *argv, JSValue *pstate, JSValue in,
+                        JSValue **out_cb, int *out_argc)
+{
+    RsIterWork *k = work;
+    JSValue reader, state;
+    int r;
+
+    (void)hdr; (void)iter;
+    if (k->at == RSI_INIT_START) {
+        rs_iter_work_start(k);
+        STEP_GOTO(k->at, RSI_INIT_ACQUIRE, &k->w.phase, NULL);
+    }
+    {
+        /* step 1: AcquireReadableStreamDefaultReader(stream) — `getReader()` with no options IS that
+           operation, reached through the function object this component installed. The `?` is why a LOCKED
+           stream's TypeError is the member's throw rather than a rejected promise: this returns <0 and Web IDL
+           §3.7.10 step 3.1.6 hands the throw straight out of `values()`. */
+        JSValue fn = rs_fn(ctx, RSF_GET_READER);
+
+        r = step_call_run(ctx, &k->w.phase, STEP_CB(k->w.cb), fn, target, 0, NULL, in, &reader,
+                          out_cb, out_argc);
+        JS_FreeValue(ctx, fn);
+    }
+    if (r > 0) return r;
+    if (JS_IsException(reader)) return -1;
+
+    state = JS_NewArray(ctx);
+    if (JS_IsException(state)) { JS_FreeValue(ctx, reader); return -1; }
+    /* Two defines and two checks, because each CONSUMES its value: folded into one `||` the second is never
+       handed over when the first fails, and leaks. */
+    if (JS_DefinePropertyValueUint32(ctx, state, RSI_ST_READER, reader, JS_PROP_C_W_E) < 0) {  /* step 2 */
+        JS_FreeValue(ctx, state);
+        return -1;
+    }
+    /* steps 3-4. `optional ReadableStreamIteratorOptions options = {}` means the dictionary is there even when
+       the page passed nothing, and its `preventCancel` has `= false` written in the IDL — so the read is
+       total and there is no "absent" state to model. */
+    if (JS_DefinePropertyValueUint32(ctx, state, RSI_ST_PREVENT_CANCEL,
+                                     JS_NewBool(ctx, argc > 0 && idl_dict_bool(ctx, argv[0], "preventCancel")),
+                                     JS_PROP_C_W_E) < 0) {
+        JS_FreeValue(ctx, state);
+        return -1;
+    }
+    DCHECK(JS_IsUndefined(*pstate),
+           "§4.2.5's initialization steps ran on an iterator that already had a reader — Web IDL §3.7.10 step "
+           "3.1.6 runs them exactly once, at the mint");
+    *pstate = state;
+    return 0;
+}
+
+/* §4.2.5's READ REQUEST, as the two reactions this component's read promise delivers its three item lists
+ * through: "4. Let readRequest be a new read request with the following items: chunk steps, given chunk —
+ * Resolve promise with chunk; close steps — Perform ! ReadableStreamDefaultReaderRelease(reader), Resolve
+ * promise with end of iteration; error steps, given e — Perform ! ReadableStreamDefaultReaderRelease(reader),
+ * Reject promise with e."
+ *
+ * THE RELEASE COMES FIRST IN TWO OF THE THREE, and it is a machine (it rejects the reader's `closed` promise
+ * and every request the reader had parked), so it is a stage of its own ahead of the settle. */
+enum { RSI_READ_OK = 0, RSI_READ_ERR, RSI_RXN_N };
+
+#define RSIX_STAGES(X) \
+    X(RSIX_START, "Streams §4.2.5 get the next iteration result step 4 (which of the read request's chunk, " \
+                  "close and error steps this settlement is)") \
+    X(RSIX_RELEASE, "Streams §4.2.5 get the next iteration result steps 4.2.1 and 4.3.1 (Perform ! " \
+                    "ReadableStreamDefaultReaderRelease(reader))") \
+    X(RSIX_SETTLE, "Streams §4.2.5 get the next iteration result steps 4.1.1, 4.2.2 and 4.3.2 (resolving " \
+                   "promise with the chunk or with end of iteration, or rejecting it with e)")
+enum { RSIX_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const RSIX_STEPS[] = { RSIX_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     JSStepHdr hdr;
-    uint8_t   phase;
-    uint8_t   reject;      /* which capability the settle stage calls */
-    JSValue   iter;
-    JSValue   promise;     /* what a member form hands back */
-    JSValue   resolve, reject_fn;
-    JSValue   value;       /* the member's argument, then the value to settle with */
-    JSValue   cb[3];
-} JSAiterState;
+    /* w.func is the capability function this settlement calls, w.value what it settles with — the same two
+       slots §2.4.1's iteration uses for the same purpose. */
+    StreamWork w;
+    JSValue    reader;
+} JSRsIterRxnState;
 
-static void js_aiter_visit(JSContext *ctx, void *st, JSStepVisit *v)
+static void js_rs_iter_rxn_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    JSAiterState *s = st;
-    int k;
-    v->val(ctx, &s->iter);
-    v->val(ctx, &s->promise);
-    v->val(ctx, &s->resolve);
-    v->val(ctx, &s->reject_fn);
-    v->val(ctx, &s->value);
-    for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
+    JSRsIterRxnState *s = st;
+
+    stream_work_visit(ctx, &s->w, v);
+    v->val(ctx, &s->reader);
 }
 
-static JSValue js_aiter_fini(JSContext *ctx, void *st, bool take_result)
+static JSValue js_rs_iter_rxn_fini(JSContext *ctx, void *st, bool take_result)
 {
-    JSAiterState *s = st;
-    JSValue r = take_result ? s->promise : JS_UNDEFINED;
-    int k;
-    if (take_result) s->promise = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->iter);
-    JS_FreeValue(ctx, s->promise);
-    JS_FreeValue(ctx, s->resolve);
-    JS_FreeValue(ctx, s->reject_fn);
-    JS_FreeValue(ctx, s->value);
-    s->iter = s->promise = s->resolve = s->reject_fn = s->value = JS_UNDEFINED;
-    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
-    return r;
+    /* A read request's items answer nothing: what a caller sees is the promise step 3 created and step 6
+       returned, which this settles. */
+    (void)take_result;
+    JS_StepVisitFree(ctx, js_rs_iter_rxn_visit, st);
+    return JS_UNDEFINED;
 }
 
-/* §4.4's read request steps and its return steps both RELEASE the reader, and a release is a machine — so it
-   is reached the way every other operation here is, through the function object this component installed. */
-static int aiter_call_run(JSContext *ctx, JSAiterState *s, JSValueConst fn, JSValueConst this_val,
-                          int argc, JSValueConst *argv, JSValue in, JSValue *pout,
-                          JSValue **out_cb, int *out_argc)
+static int js_rs_iter_rxn_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
-    return step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, this_val, argc, argv, in, pout, out_cb, out_argc);
-}
-
-static int js_aiter_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
-{
-    JSAiterState *s = st;
-    int op = s->hdr.arg;
-    AsyncIterData *a;
+    JSRsIterRxnState *s = st;
     JSValueConst arg;
     JSValue out;
     int r;
 
-    if (s->hdr.stage == AIS_START) {
-        JSValue funcs[2];
-
-        s->iter = s->promise = s->resolve = s->reject_fn = s->value = JS_UNDEFINED;
-        { int k; for (k = 0; k < 3; k++) s->cb[k] = JS_UNDEFINED; }
+    if (s->hdr.stage == RSIX_START) {
+        DCHECK(s->hdr.arg == RSI_READ_OK || s->hdr.arg == RSI_READ_ERR,
+               "a §4.2.5 read request ran with an item list the standard does not give it");
+        stream_work_start(&s->w);
+        s->reader = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 0));
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-
-        if (op == AI_NEXT || op == AI_RETURN) {
-            /* A MEMBER: the receiver is the iterator and this call owns the promise it hands back. */
-            s->iter = JS_DupValue(ctx, s->hdr.this_val);
-            a = aiter_of(s->iter);
-            if (!a) {
-                JS_ThrowTypeError(ctx, "not a ReadableStream async iterator");
-                return JS_STEP_ABRUPT;
-            }
-            s->value = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
-            s->promise = JS_NewPromiseCapability(ctx, funcs);
-            if (JS_IsException(s->promise)) return JS_STEP_ABRUPT;
-            s->resolve = funcs[0];
-            s->reject_fn = funcs[1];
-            if (!JS_IsUndefined(a->ongoing)) {
-                /* §3.7.11: this call's steps run only once the previous call has settled — either way, which
-                   is why one closure is attached as BOTH handlers. */
-                JSValueConst data[4];
-                int id;
-                data[0] = s->iter; data[1] = s->resolve; data[2] = s->reject_fn; data[3] = s->value;
-                id = g_aiter_stepids[op == AI_NEXT ? AI_RUN_NEXT : AI_RUN_RETURN];
-                r = stream_react(ctx, a->ongoing, id, id, data, 4);
-                JS_FreeValue(ctx, a->ongoing);
-                a->ongoing = JS_DupValue(ctx, s->promise);
-                return r < 0 ? JS_STEP_ABRUPT : JS_STEP_DONE;
-            }
-            JS_FreeValue(ctx, a->ongoing);
-            a->ongoing = JS_DupValue(ctx, s->promise);
-        } else if (op == AI_RUN_NEXT || op == AI_RUN_RETURN) {
-            s->iter      = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 0));
-            s->resolve   = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 1));
-            s->reject_fn = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 2));
-            s->value     = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 3));
-        } else if (op == AI_READ_OK || op == AI_READ_ERR) {
-            s->iter      = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 0));
-            s->resolve   = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 1));
-            s->reject_fn = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 2));
-            s->value     = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
+        if (s->hdr.arg == RSI_READ_ERR) {
+            /* error steps, given e */
+            s->w.func = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 2));
+            s->w.value = JS_DupValue(ctx, step_arg(&s->hdr, 0));
+            STEP_GOTO(s->hdr.stage, RSIX_RELEASE, &s->w.phase, NULL);
         } else {
-            DCHECK(op == AI_CANCEL_OK || op == AI_CANCEL_ERR,
-                   "a §4.4 machine ran with an operation this component does not have");
-            s->iter      = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 0));
-            s->resolve   = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 1));
-            s->reject_fn = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 2));
-            s->value     = op == AI_CANCEL_ERR ? JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0]
-                                                                                  : JS_UNDEFINED)
-                                               : JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 3));
-        }
-        s->hdr.stage = AIS_STEPS;
-    }
+            JSValueConst result = step_arg(&s->hdr, 0);
+            JSValue done_v;
+            int done;
 
-    a = aiter_of(s->iter);
-    DCHECK(a != NULL, "a §4.4 machine captured something that is not a ReadableStream async iterator");
-
-    if (s->hdr.stage == AIS_STEPS) {
-        switch (op) {
-        case AI_NEXT: case AI_RUN_NEXT:
-            if (a->finished) {
-                JS_FreeValue(ctx, s->value);
-                s->value = rs_read_result(ctx, JS_UNDEFINED, true);
-                if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
-                s->hdr.stage = AIS_SETTLE;
-            } else {
-                s->hdr.stage = AIS_READ;
-            }
-            break;
-        case AI_RETURN: case AI_RUN_RETURN:
-            if (a->finished) {
-                JSValue v = s->value;
-                s->value = rs_read_result(ctx, v, true);   /* §3.7.11 wraps the argument, whatever it was */
-                if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
-                s->hdr.stage = AIS_SETTLE;
-            } else {
-                a->finished = 1;
-                s->hdr.stage = a->prevent_cancel ? AIS_RELEASE : AIS_CANCEL;
-            }
-            break;
-        case AI_READ_OK: {
-            /* the result object is one this component built, so reading `done` off it runs nothing */
-            JSValue done_v = JS_GetPropertyStr(ctx, s->value, "done");
-            int done = JS_ToBool(ctx, done_v);
+            DCHECK(JS_IsObject(result),
+                   "§4.3's read() fulfilled with something that is not the iteration result object it built");
+            done_v = JS_GetPropertyStr(ctx, result, "done");
+            done = JS_ToBool(ctx, done_v);
             JS_FreeValue(ctx, done_v);
-            if (!done) { s->hdr.stage = AIS_SETTLE; break; }
-            a->finished = 1;
-            s->hdr.stage = AIS_RELEASE;   /* §4.4's close steps release the reader before answering */
-            break;
-        }
-        default:
-            DCHECK(op == AI_READ_ERR || op == AI_CANCEL_OK || op == AI_CANCEL_ERR,
-                   "a §4.4 machine reached its steps with an operation that has none");
-            if (op == AI_READ_ERR) {
-                a->finished = 1;
-                s->reject = 1;
-                s->hdr.stage = AIS_RELEASE;   /* §4.4's error steps release the reader before rejecting */
+            s->w.func = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 1));
+            if (done) {
+                /* close steps: release, and then resolve with Web IDL §2.5.10's END OF ITERATION — the marker
+                   outside the JavaScript value space, not `undefined`, which `async_iterable<any>` may
+                   legitimately yield as a chunk. */
+                s->w.value = idl_async_iter_end(ctx);
+                if (JS_IsException(s->w.value)) { s->w.value = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+                STEP_GOTO(s->hdr.stage, RSIX_RELEASE, &s->w.phase, NULL);
             } else {
-                JSValue v = s->value;
-                s->reject = op == AI_CANCEL_ERR;
-                s->value = s->reject ? v : rs_read_result(ctx, v, true);
-                if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
-                s->hdr.stage = AIS_SETTLE;
+                /* chunk steps, given chunk: "Resolve promise with chunk" — the CHUNK, and not the
+                   { value, done } object §4.3's read() wrapped it in. §3.7.10.2's fulfillSteps reads what the
+                   declaration's type says, and `async_iterable<any>` says the chunk. */
+                s->w.value = JS_GetPropertyStr(ctx, result, "value");
+                if (JS_IsException(s->w.value)) { s->w.value = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+                STEP_GOTO(s->hdr.stage, RSIX_SETTLE, &s->w.phase, NULL);
             }
-            break;
         }
     }
 
-    if (s->hdr.stage == AIS_READ) {
-        JSValueConst data[3];
-        {
-            JSValue fn = rs_fn(ctx, RSF_READ);
-            r = aiter_call_run(ctx, s, fn, a->reader, 0, NULL, cb_result, &out, out_cb, out_argc);
-            JS_FreeValue(ctx, fn);
-        }
-        if (r > 0) return r;
-        if (JS_IsException(out)) return JS_STEP_ABRUPT;
-        r = stream_react(ctx, out, g_aiter_stepids[AI_READ_OK], g_aiter_stepids[AI_READ_ERR],
-                         (data[0] = s->iter, data[1] = s->resolve, data[2] = s->reject_fn, data), 3);
-        JS_FreeValue(ctx, out);
-        return r < 0 ? JS_STEP_ABRUPT : JS_STEP_DONE;
-    }
+    if (s->hdr.stage == RSIX_RELEASE) {
+        JSValue fn = rs_fn(ctx, RSF_RELEASE);
 
-    if (s->hdr.stage == AIS_CANCEL) {
-        /* §4.4's return steps: cancel FIRST, then release, and the promise this member handed back settles
-           with the SOURCE's cancel promise rather than ahead of it. */
-        JSValueConst data[4];
-        arg = s->value;
-        {
-            JSValue fn = rs_fn(ctx, RSF_CANCEL);
-            r = aiter_call_run(ctx, s, fn, a->reader, 1, &arg, cb_result, &out, out_cb, out_argc);
-            JS_FreeValue(ctx, fn);
-        }
-        if (r > 0) return r;
-        if (JS_IsException(out)) return JS_STEP_ABRUPT;
-        r = stream_react(ctx, out, g_aiter_stepids[AI_CANCEL_OK], g_aiter_stepids[AI_CANCEL_ERR],
-                         (data[0] = s->iter, data[1] = s->resolve, data[2] = s->reject_fn,
-                          data[3] = s->value, data), 4);
-        JS_FreeValue(ctx, out);
-        if (r < 0) return JS_STEP_ABRUPT;
-        /* the release still has to happen, and it happens now — the reactions above answer the page later */
-        cb_result = JS_UNDEFINED;
-        s->hdr.stage = AIS_RELEASE;
-    }
-
-    if (s->hdr.stage == AIS_RELEASE) {
-        int settle_after = op != AI_RETURN && op != AI_RUN_RETURN;
-        {
-            JSValue fn = rs_fn(ctx, RSF_RELEASE);
-            r = aiter_call_run(ctx, s, fn, a->reader, 0, NULL, cb_result, &out, out_cb, out_argc);
-            JS_FreeValue(ctx, fn);
-        }
+        r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), fn, s->reader, 0, NULL, cb_result, &out,
+                          out_cb, out_argc);
+        JS_FreeValue(ctx, fn);
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
         JS_FreeValue(ctx, out);
         cb_result = JS_UNDEFINED;
-        if (!settle_after) {
-            /* a cancelling return has already attached its reactions; a preventCancel return answers now */
-            if (!a->prevent_cancel) return JS_STEP_DONE;
-            {
-                JSValue v = s->value;
-                s->value = rs_read_result(ctx, v, true);
-                if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
-            }
-        } else if (!s->reject) {
-            /* AI_READ_OK on a done result: the result object is already { undefined, true } */
-        }
-        s->hdr.stage = AIS_SETTLE;
+        STEP_GOTO(s->hdr.stage, RSIX_SETTLE, &s->w.phase, NULL);
     }
 
-    DCHECK(s->hdr.stage == AIS_SETTLE, "a §4.4 machine resumed in a stage it never parks in");
-    arg = s->value;
-    r = aiter_call_run(ctx, s, s->reject ? s->reject_fn : s->resolve, JS_UNDEFINED, 1, &arg,
-                       cb_result, &out, out_cb, out_argc);
+    DCHECK(s->hdr.stage == RSIX_SETTLE, "a §4.2.5 read request resumed in a stage it never parks in");
+    arg = s->w.value;
+    r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), s->w.func, JS_UNDEFINED, 1, &arg, cb_result, &out,
+                      out_cb, out_argc);
     if (r > 0) return r;
     if (JS_IsException(out)) return JS_STEP_ABRUPT;
     JS_FreeValue(ctx, out);
     return JS_STEP_DONE;
 }
 
-#define AITER_DEF(i) { sizeof(JSAiterState), js_aiter_step, js_aiter_fini, (i), \
-                       .catches_abrupt = 1, .visit = js_aiter_visit, \
-                       .algorithm = "Streams §4.4 the ReadableStream asynchronous iterator's next and return", \
-                       .steps = AIS_STEPS_LABELS }
-static const JSTrampStepDef js_aiter_defs[AI_N] = {
-    AITER_DEF(AI_NEXT), AITER_DEF(AI_RETURN), AITER_DEF(AI_RUN_NEXT), AITER_DEF(AI_RUN_RETURN),
-    AITER_DEF(AI_READ_OK), AITER_DEF(AI_READ_ERR), AITER_DEF(AI_CANCEL_OK), AITER_DEF(AI_CANCEL_ERR),
+#define RSI_RXN_DEF(i) { sizeof(JSRsIterRxnState), js_rs_iter_rxn_step, js_rs_iter_rxn_fini, (i), \
+                         .catches_abrupt = 1, .visit = js_rs_iter_rxn_visit, \
+                         .algorithm = "Streams §4.2.5 the ReadableStream async iterator's read request", \
+                         .steps = RSIX_STEPS }
+static const JSTrampStepDef js_rs_iter_rxn_defs[RSI_RXN_N] = {
+    RSI_RXN_DEF(RSI_READ_OK), RSI_RXN_DEF(RSI_READ_ERR),
 };
-#undef AITER_DEF
+#undef RSI_RXN_DEF
 
-/* §4.4's `values(options)`, which is also `[Symbol.asyncIterator]`. A MACHINE because it ACQUIRES A READER, and
-   §4.3's acquisition settles `closed` at once on a stream that has already finished. */
-static const IdlDictMember ITERATOR_OPTIONS[] = {
-    { "preventCancel", IDL_BOOLEAN },
-};
+static int g_rsi_stepids[RSI_RXN_N];
 
-/* WHERE THIS MACHINE RESTS. §4.4's initialization steps are three, and the first of them — acquiring the
-   reader — is a call. */
-#define VAL_STAGES(X) \
-    X(VAL_OPTIONS = IDL_STEP_FIRST, \
-      "Streams §4.4 values(options) (the ReadableStreamIteratorOptions the declaration has converted)") \
-    X(VAL_READER, "Streams §4.4 ReadableStream asynchronous iterator initialization steps 1-3 " \
-                  "(AcquireReadableStreamDefaultReader, then the iterator over it)")
-enum { VAL_STAGES(JS_STEP_STAGE_ENUM) };
-static const char *const VAL_STEPS[] = { VAL_STAGES(JS_STEP_STAGE_LABEL) NULL };
+/* §4.2.5: "The get the next iteration result steps for a ReadableStream, given stream and iterator, are:
+   1. Let reader be iterator's reader. 2. Assert: reader.[[stream]] is not undefined. 3. Let promise be a new
+   promise. 4. Let readRequest be a new read request with the following items ... 5. Perform !
+   ReadableStreamDefaultReaderRead(this, readRequest). 6. Return promise." */
+enum { RSI_NEXT_START = 0, RSI_NEXT_READ };
 
-typedef struct {
-    uint8_t phase;
-    uint8_t prevent_cancel;
-    JSValue cb[3];
-} JSValuesState;
-
-static void js_values_visit(JSContext *ctx, void *st, JSStepVisit *v)
+static int rs_iter_next(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueConst target, JSValueConst iter,
+                        JSValue *pstate, JSValue in, JSValue *ppromise, JSValue **out_cb, int *out_argc)
 {
-    JSValuesState *s = st;
-    int k;
-    for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
-}
-
-static int js_values_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
-                          JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
-{
-    JSValuesState *s = st;
-    AsyncIterData *a;
-    JSValue reader, obj;
+    RsIterWork *k = work;
+    JSValueConst data[3];
+    JSValue out;
     int r;
 
-    if (hdr->stage == VAL_OPTIONS) {
-        int k;
-        for (k = 0; k < 3; k++) s->cb[k] = JS_UNDEFINED;
-        s->prevent_cancel = argc > 0 && idl_dict_bool(ctx, argv[0], "preventCancel");
-        STEP_GOTO(hdr->stage, VAL_READER, &s->phase, NULL);
+    (void)hdr; (void)iter; (void)target;
+    if (k->at == RSI_NEXT_START) {
+        JSValue funcs[2];
+        ReaderData *rd;
+
+        rs_iter_work_start(k);
+        k->reader = rsi_reader(ctx, *pstate);                         /* step 1 */
+        rd = rs_reader_data(k->reader);
+        /* step 2: "Assert: reader.[[stream]] is not undefined." Web IDL §3.7.10.2's next step 8.2
+           short-circuits a FINISHED iterator, and it is the close and error steps above — the only two that
+           release this reader — whose end-of-iteration and rejection finish it. So a released reader here is a
+           next() that reached these steps after one of them, which the chaining rule makes impossible. */
+        DCHECK(rd != NULL && !JS_IsUndefined(rd->stream),
+               "§4.2.5's get the next iteration result step 2 found an iterator whose reader has already been "
+               "released");
+        (void)rd;
+        k->promise = JS_NewPromiseCapability(ctx, funcs);             /* step 3 */
+        if (JS_IsException(k->promise)) return -1;
+        k->resolve = funcs[0];
+        k->reject = funcs[1];
+        STEP_GOTO(k->at, RSI_NEXT_READ, &k->w.phase, NULL);
     }
     {
-        JSValue fn = rs_fn(ctx, RSF_GET_READER);
-        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, hdr->this_val, 0, NULL,
-                          cb_result, &reader, out_cb, out_argc);
+        /* step 5: ReadableStreamDefaultReaderRead — `read()` IS that operation, reached through the function
+           object this component installed. */
+        JSValue fn = rs_fn(ctx, RSF_READ);
+
+        r = step_call_run(ctx, &k->w.phase, STEP_CB(k->w.cb), fn, k->reader, 0, NULL, in, &out,
+                          out_cb, out_argc);
         JS_FreeValue(ctx, fn);
     }
     if (r > 0) return r;
-    if (JS_IsException(reader)) return -1;
-
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_aiter_class);
-        DCHECK(!JS_IsNull(proto), "an async iterator was minted in a realm that never ran its install");
-        obj = JS_NewObjectProtoClass(ctx, proto, g_aiter_class);
-        JS_FreeValue(ctx, proto);
-    }
-    if (JS_IsException(obj)) { JS_FreeValue(ctx, reader); return -1; }
-    a = js_mallocz(ctx, sizeof *a);
-    if (!a) { JS_FreeValue(ctx, obj); JS_FreeValue(ctx, reader); return -1; }
-    a->ongoing = JS_UNDEFINED;
-    a->stream = JS_DupValue(ctx, hdr->this_val);
-    a->reader = reader;
-    a->prevent_cancel = s->prevent_cancel;
-    JS_SetOpaque(obj, a);
-    *presult = obj;
+    if (JS_IsException(out)) return -1;
+    /* step 4's item lists, attached to what the read answered: the promise's own capability rides along,
+       because a read request's steps settle the promise step 3 created and nothing else. */
+    data[0] = k->reader; data[1] = k->resolve; data[2] = k->reject;
+    r = stream_react(ctx, out, g_rsi_stepids[RSI_READ_OK], g_rsi_stepids[RSI_READ_ERR], data, 3);
+    JS_FreeValue(ctx, out);
+    if (r < 0) return -1;
+    *ppromise = k->promise;                                           /* step 6 */
+    k->promise = JS_UNDEFINED;
     return 0;
 }
 
-static const IdlStepDecl js_values_decl = {
-    js_values_step, sizeof(JSValuesState), js_values_visit, NULL,
-    "Streams §4.4 values(options) and the asynchronous iterator initialization steps", VAL_STEPS
+/* §4.2.5: "The asynchronous iterator return steps for a ReadableStream, given stream, iterator, and arg, are:
+   1. Let reader be iterator's reader. 2. Assert: reader.[[stream]] is not undefined. 3. Assert:
+   reader.[[readRequests]] is empty, as the async iterator machinery guarantees that any previous calls to
+   next() have settled before this is called. 4. If iterator's prevent cancel is false: 4.1. Let result be !
+   ReadableStreamReaderGenericCancel(reader, arg). 4.2. Perform ! ReadableStreamDefaultReaderRelease(reader).
+   4.3. Return result. 5. Perform ! ReadableStreamDefaultReaderRelease(reader). 6. Return a promise resolved
+   with undefined."
+   Step 4.3 is the whole reason a return algorithm is declared at all: the promise the member hands back settles
+   with the SOURCE's cancel promise rather than ahead of it, and §2.5.10 passes a rejection out of it on to the
+   caller unchanged. */
+enum { RSI_RET_START = 0, RSI_RET_CANCEL, RSI_RET_RELEASE, RSI_RET_RESOLVE };
+
+static int rs_iter_return(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueConst target, JSValueConst iter,
+                          JSValue *pstate, JSValueConst value, JSValue in,
+                          JSValue *ppromise, JSValue **out_cb, int *out_argc)
+{
+    RsIterWork *k = work;
+    JSValue out;
+    int r;
+
+    (void)hdr; (void)iter; (void)target;
+    if (k->at == RSI_RET_START) {
+        rs_iter_work_start(k);
+        k->reader = rsi_reader(ctx, *pstate);                         /* step 1 */
+        {
+            /* steps 2-3, the two assertions the standard states. They are computed here rather than inside the
+               DCHECKs because both accessors CAPTURE their record into the running flow's COW delta, and a
+               condition a release build does not evaluate must not be the only place that happens. */
+            ReaderData *rd = rs_reader_data(k->reader);
+            StreamData *d = rd && !JS_IsUndefined(rd->stream) ? rs_stream_data(rd->stream) : NULL;
+            uint32_t parked = d ? rs_read_pending(ctx, d) : 1;
+
+            DCHECK(d != NULL,
+                   "§4.2.5's asynchronous iterator return step 2 found an iterator whose reader has already "
+                   "been released — Web IDL §3.7.10.2's return step 8.2 short-circuits a finished iterator");
+            DCHECK(parked == 0,
+                   "§4.2.5's asynchronous iterator return step 3 found a read request still parked — Web IDL "
+                   "§3.7.10.2 steps 9-11 chain this call onto the ongoing promise, so every previous next() "
+                   "has settled before these steps run");
+            (void)d; (void)parked;
+        }
+        /* step 4's condition, decided once, with every cursor at rest. */
+        STEP_GOTO(k->at, rsi_prevent_cancel(ctx, *pstate) ? RSI_RET_RELEASE : RSI_RET_CANCEL,
+                  &k->w.phase, NULL);
+    }
+
+    if (k->at == RSI_RET_CANCEL) {
+        /* step 4.1: ReadableStreamReaderGenericCancel(reader, arg) — the reader's `cancel()` IS that
+           operation, reached through the function object this component installed. */
+        JSValue fn = rs_fn(ctx, RSF_CANCEL);
+
+        r = step_call_run(ctx, &k->w.phase, STEP_CB(k->w.cb), fn, k->reader, 1, &value, in, &out,
+                          out_cb, out_argc);
+        JS_FreeValue(ctx, fn);
+        if (r > 0) return r;
+        if (JS_IsException(out)) return -1;
+        JS_FreeValue(ctx, k->promise);
+        k->promise = out;          /* step 4.3's result, handed over once step 4.2's release has run */
+        /* AND IT IS WHAT TELLS THE RELEASE BELOW WHICH ARM IT IS ON — step 4.2's or step 5's — so the two
+           arms are not re-derived from `prevent cancel` on a resume, which is the decision-taken-twice this
+           engine's stage rule forbids. That works only because step 4.1 always answers with a promise. */
+        DCHECK(JS_IsObject(k->promise),
+               "§4.2.5's asynchronous iterator return step 4.1 answered with something that is not a promise — "
+               "ReadableStreamReaderGenericCancel returns one for every input");
+        in = JS_UNDEFINED;
+        STEP_GOTO(k->at, RSI_RET_RELEASE, &k->w.phase, NULL);
+    }
+
+    if (k->at == RSI_RET_RELEASE) {
+        JSValue fn = rs_fn(ctx, RSF_RELEASE);   /* steps 4.2 and 5 */
+
+        r = step_call_run(ctx, &k->w.phase, STEP_CB(k->w.cb), fn, k->reader, 0, NULL, in, &out,
+                          out_cb, out_argc);
+        JS_FreeValue(ctx, fn);
+        if (r > 0) return r;
+        if (JS_IsException(out)) return -1;
+        JS_FreeValue(ctx, out);
+        in = JS_UNDEFINED;
+        if (!JS_IsUndefined(k->promise)) {
+            *ppromise = k->promise;                                   /* step 4.3 */
+            k->promise = JS_UNDEFINED;
+            return 0;
+        }
+        STEP_GOTO(k->at, RSI_RET_RESOLVE, &k->w.phase, NULL);
+    }
+
+    DCHECK(k->at == RSI_RET_RESOLVE,
+           "§4.2.5's asynchronous iterator return steps resumed at a cursor they never park at");
+    /* step 6: "Return a promise resolved with undefined." PromiseResolve, as the sub-sequence every §4/§5
+       "react to what this returned" begins with — `w.value` is the undefined rs_iter_work_start left. */
+    r = stream_promise_of_run(ctx, &k->w, 0, in, out_cb, out_argc);
+    if (r > 0) return r;
+    if (r < 0) return -1;
+    *ppromise = k->w.func;
+    k->w.func = JS_UNDEFINED;
+    return 0;
+}
+
+/* §4.2.1: `async_iterable<any>(optional ReadableStreamIteratorOptions options = {});` — ONE type parameter, so
+   it is a VALUE asynchronously iterable declaration and Web IDL §3.7.10 gives the prototype `values` and
+   %Symbol.asyncIterator% and neither `entries` nor `keys`. */
+static const IdlAsyncIterOps RS_ITER_OPS = {
+    "ReadableStream",
+    /*pair*/ false,
+    readable_stream_is,
+    rs_iter_init,
+    rs_iter_next,
+    rs_iter_return,
+    sizeof(RsIterWork), rs_iter_visit,
+    ITERATOR_ARGS, 1, ITERATOR_OPTIONS, (int)(sizeof ITERATOR_OPTIONS / sizeof *ITERATOR_OPTIONS)
 };
 
 /* ---- §4.2's TEE -----------------------------------------------------------------------------------------------
@@ -3906,22 +3940,15 @@ void readable_stream_init(JSContext *ctx)
     readable_byte_stream_init(ctx);
     g_byob_proto_slot = realm_value_declare(ctx, "ReadableStreamBYOBReader.prototype");
 
-    /* §4.4's asynchronous iteration. §3.7.11 puts %AsyncIteratorPrototype% under the iterator prototype
-       object, which is what gives it @@asyncIterator and the async-iterator helpers for nothing. */
-    {
-        JSClassDef ad = { "ReadableStream AsyncIterator", .finalizer = aiter_finalizer,
-                          .gc_mark = aiter_gc_mark };
-        JS_NewClassID(rt, &g_aiter_class);
-        JS_NewClass(rt, g_aiter_class, &ad);
-        for (i = 0; i < AI_N; i++) {
-            g_aiter_stepids[i] = JS_RegisterStepDef(rt, &js_aiter_defs[i]);
-            CHECK(g_aiter_stepids[i] >= 0, "streams: no step id for a §4.4 operation");
-        }
-        g_values_id = idl_method_id_step(ctx, ONE_DICT, 1, ITERATOR_OPTIONS,
-                                         (int)(sizeof ITERATOR_OPTIONS / sizeof *ITERATOR_OPTIONS),
-                                         &js_values_decl, 0);
-        idl_optional_from(0);   /* `async iterable<any>(optional ReadableStreamIteratorOptions options = {})` */
+    /* §4.2.1's `async_iterable<any>(optional ReadableStreamIteratorOptions options = {})`. The DECLARATION is
+       Web IDL's — the iterator class, its prototype, the three step machines behind `next` and `return`, and
+       §3.7.10's members — and all this component declares is §4.2.5's three algorithms and the two reactions
+       its read request is made of. */
+    for (i = 0; i < RSI_RXN_N; i++) {
+        g_rsi_stepids[i] = JS_RegisterStepDef(rt, &js_rs_iter_rxn_defs[i]);
+        CHECK(g_rsi_stepids[i] >= 0, "streams: no step id for a §4.2.5 read request");
     }
+    g_rs_iter_handle = idl_async_iter_declare(ctx, &RS_ITER_OPS);
 
     /* §4.2's tee. Its branches' pull and cancel are step closures, so they need the controller's members as
        function objects for the same reason §4.4 needs the reader's. */
@@ -3997,7 +4024,7 @@ void readable_stream_init(JSContext *ctx)
 void readable_stream_install_protos(JSContext *ctx)
 {
     static const char *const CTRL_NAMES[RS_CTRL_N] = { "enqueue", "close", "error" };
-    JSValue stream_p, reader_p, ctrl_p, aiter_p, prev, values_fn;
+    JSValue stream_p, reader_p, ctrl_p, prev;
     int i;
 
     DCHECK(g_stream_class != 0, "a realm asked for ReadableStream.prototype before the class was declared");
@@ -4011,13 +4038,11 @@ void readable_stream_install_protos(JSContext *ctx)
     idl_install_accessor(ctx, stream_p, "locked", js_stream_locked, 0, -1);
     idl_install_method(ctx, stream_p, "getReader", 0, g_getreader_id);
     idl_install_step_method(ctx, stream_p, "cancel", 0, g_cancel_stepids[CANCEL_ON_STREAM]);
-    idl_install_method(ctx, stream_p, "values", 0, g_values_id);
     idl_install_method(ctx, stream_p, "tee", 0, g_tee_id);
-    /* §3.7.11: @@asyncIterator IS the same function object as `values`, writable and configurable but not
-       enumerable — not a second function that forwards to it. */
-    values_fn = JS_GetPropertyStr(ctx, stream_p, "values");
-    JS_DefinePropertyValue(ctx, stream_p, JS_WellKnownSymbolAtom(JS_WKS_ASYNC_ITERATOR), values_fn,
-                           JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+    /* §4.2.1's `async_iterable<any>` — §3.7.10's `values` and %Symbol.asyncIterator% (the SAME function
+       object), §3.7.10.1's iterator and §3.7.10.2's prototype under this realm's %AsyncIteratorPrototype%. All
+       of it Web IDL's, installed here because the two halves are installed together or not at all. */
+    idl_async_iter_install(ctx, stream_p, g_rs_iter_handle);
     /* §4.2.4's ReadableStreamPipeTo is its own component — it holds a reader on one stream and a writer on
        another, so it belongs to neither half — but `pipeTo` and `pipeThrough` are §4.2's MEMBERS, and this is
        the prototype they go on. The declaration is piping's; the placement is this interface's. */
@@ -4054,19 +4079,6 @@ void readable_stream_install_protos(JSContext *ctx)
         idl_install_step_method(ctx, byob_p, "read", 1, readable_byob_read_stepid());
         idl_install_step_method(ctx, byob_p, "cancel", 0, g_cancel_stepids[CANCEL_ON_BYOB]);
         realm_value_set(ctx, g_byob_proto_slot, byob_p);
-    }
-
-    /* §4.4's asynchronous iteration. §3.7.11 puts %AsyncIteratorPrototype% under the iterator prototype
-       object, which is what gives it @@asyncIterator and the async-iterator helpers for nothing — and that
-       intrinsic is per realm, which is half of why this object is. */
-    {
-        JSValue aproto = JS_GetAsyncIteratorPrototype(ctx);
-        aiter_p = JS_NewObjectProto(ctx, aproto);
-        JS_FreeValue(ctx, aproto);
-        CHECK(!JS_IsException(aiter_p), "the async iterator prototype could not be allocated");
-        idl_install_step_method(ctx, aiter_p, "next", 0, g_aiter_stepids[AI_NEXT]);
-        idl_install_step_method(ctx, aiter_p, "return", 1, g_aiter_stepids[AI_RETURN]);
-        JS_SetClassProto(ctx, g_aiter_class, aiter_p);
     }
 
     /* THE ABSTRACT OPERATIONS, read off the prototypes nothing of the page's has touched yet. */
@@ -4146,7 +4158,8 @@ void readable_stream_free(JSContext *ctx)
     if (!g_rs_rt) return;
     pipe_free(ctx);
     /* the prototypes and the captured operations are the REALMS' — released with their contexts */
-    for (i = 0; i < AI_N; i++) g_aiter_stepids[i] = -1;
+    for (i = 0; i < RSI_RXN_N; i++) g_rsi_stepids[i] = -1;
+    g_rs_iter_handle = -1;
     for (i = 0; i < TEE_N; i++) g_tee_stepids[i] = -1;
     for (i = 0; i < FROM_N; i++) g_from_stepids[i] = -1;
     for (i = 0; i < DRAIN_N; i++) g_drain_stepids[i] = -1;

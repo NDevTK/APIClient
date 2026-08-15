@@ -565,12 +565,17 @@ static bool fsdir_is(JSValueConst v)
 
 /* §2.4.1: "The asynchronous iterator initialization steps for a FileSystemDirectoryHandle handle and its async
    iterator iterator are: Set iterator's past results to an empty set." */
-static int fsdir_iter_init(JSContext *ctx, JSValueConst target, JSValueConst iter,
-                           int argc, JSValueConst *argv, JSValue *pstate)
+static int fsdir_iter_init(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueConst target, JSValueConst iter,
+                           int argc, JSValueConst *argv, JSValue *pstate, JSValue in,
+                           JSValue **out_cb, int *out_argc)
 {
     JSValue set = JS_NewObjectProto(ctx, JS_NULL);
 
-    (void)target; (void)iter; (void)argc; (void)argv;
+    (void)hdr; (void)work; (void)target; (void)iter; (void)argc; (void)argv;
+    (void)out_cb; (void)out_argc;
+    /* These steps are one assignment and make no request, so they never park — and the answer slot every step
+       is handed is discharged here rather than left for a caller that has already given it away. */
+    JS_FreeValue(ctx, in);
     if (JS_IsException(set)) return -1;
     DCHECK(JS_IsUndefined(*pstate), "§2.4.1's initialization steps ran on an iterator that already had state — "
                                     "Web IDL §3.7.10 step 3.1.6 runs them exactly once, at the mint");

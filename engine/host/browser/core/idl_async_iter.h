@@ -47,11 +47,21 @@
 /* §2.5.10's ASYNCHRONOUS ITERATOR INITIALIZATION STEPS: "These receive the instance of the interface being
    iterated, the newly-created iterator object, and a list of IDL values representing the arguments passed, if
    any." `pstate` is the iterator's own state slot (JS_UNDEFINED on entry) — the File System Standard's "set
-   iterator's past results to an empty set" is one assignment to it. Returns <0 with a throw live; the member
-   then throws rather than answering with an iterator, which is what the `?` on Streams §4.2.5's step 1 means.
-   A declaration with no such prose declares NULL. */
-typedef int (*IdlAsyncIterInit)(JSContext *ctx, JSValueConst target, JSValueConst iter,
-                                int argc, JSValueConst *argv, JSValue *pstate);
+   iterator's past results to an empty set" is one assignment to it.
+ *
+ * IT IS A STEP, with the same return contract as the two algorithms below, because §3.7.10 step 3.1.6 runs it
+ * INSIDE the member and what a standard writes there is not bounded by this file. Streams §4.2.5's step 1 is
+ * `? AcquireReadableStreamDefaultReader(stream)`, and §4.3's acquisition SETTLES the reader's `closed` promise
+ * at once on a stream that has already closed or errored — a resolving function, which reaches 27.2.1.3.2 step
+ * 8's `then` read. A plain C body could only have driven that to completion.
+ * >0 means it parked (the member returns that code and this is re-entered at the same point with the answer in
+ * `in`), 0 means the iterator is initialised, -1 means it threw — and the member then throws rather than
+ * answering with an iterator, which is what the `?` on Streams §4.2.5's step 1 means.
+ * A declaration with no such prose declares NULL. */
+typedef int (*IdlAsyncIterInit)(JSContext *ctx, JSStepHdr *hdr, void *work,
+                                JSValueConst target, JSValueConst iter,
+                                int argc, JSValueConst *argv, JSValue *pstate, JSValue in,
+                                JSValue **out_cb, int *out_argc);
 
 /* §2.5.10's GET THE NEXT ITERATION RESULT — "Prose accompanying an interface with an asynchronously iterable
    declaration MUST define" it, so this is the one operation that has no default and no NULL.
@@ -105,9 +115,14 @@ typedef struct {
     IdlAsyncIterNext   next;    /* §2.5.10's get the next iteration result — required */
     IdlAsyncIterReturn ret;     /* §2.5.10's return algorithm, or NULL where the prose defines none */
 
-    /* The two algorithms' own step storage, and the ONE declaration of what it owns. There is no separate
+    /* The THREE algorithms' own step storage, and the ONE declaration of what it owns. There is no separate
        release: `visit` is the list, and the teardown discharges it through JS_StepVisitFree exactly as the
-       machine's own fields are discharged — a second hand-written list is the pair this engine forbids. */
+       machine's own fields are discharged — a second hand-written list is the pair this engine forbids.
+       ONE declaration serves all three because only ONE of them ever runs in a given block: the initialization
+       steps run inside the MEMBER's machine and the other two inside §3.7.10.2's, and each block is ZEROED
+       before that algorithm's first entry. So a component's cursor byte starts at 0 in each of them, and a
+       zeroed JSValue is the INTEGER 0 rather than undefined — which is why every algorithm here undefines its
+       slots before the first thing that can fail. */
     size_t work_size;
     void (*work_visit)(JSContext *ctx, void *work, JSStepVisit *v);
 
