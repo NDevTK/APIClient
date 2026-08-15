@@ -24,6 +24,7 @@
 #define ENGINE_HOST_SOLVER_COLD_H
 
 #include "quickjs.h"
+#include "solver/flow.h"   /* the park's unit is ONE member of the frontier */
 
 /* WHAT THE FRONTIER'S SNAPSHOTS ARE MADE OF. Every `*_bytes` is host `malloc` unless the row says otherwise:
    the runtime's own allocations (the frame chains, the step machines) are counted by quickjs and reported in
@@ -105,25 +106,39 @@ void cold_census(ColdCensus *out);
  * Ordinals are dense and ascending in EMISSION order, and a base is always emitted before anything that names
  * it, so the rebuild is one forward pass with nothing to patch up. */
 
-/* WRITE THE WHOLE FRONTIER OUT. Called with no flow switched in — the running flow's decision state is live in
-   decide.c rather than in its blob, so the scheduler switches it out first and this asserts that it did.
-   Idempotent it is NOT: parking twice would compose two documents and the host stores one.
-   THE WHOLE FRONTIER, and that is the Level-1 eviction §scheduler describes: the host ranks DOCUMENTS' engines,
-   asks the lowest-value one to give up its residue, and the RAM comes back when that instance is torn down.
-   It is deliberately not the same thing as the PARTIAL self-park of a lowest-value tail while an engine keeps
-   running, which is what a LONE over-budget engine needs and which this does not do — see the OOM CHECK in
-   engine.c's flow-compile path, which names what that one still needs. */
+/* WRITE ONE FLOW'S RECIPE INTO THE PARK DOCUMENT — the primitive, and the unit a PARTIAL self-park is made of
+   (§scheduler: "an engine self-parks its residue to the IDB cold tier under pressure"). The flow must be one
+   the scheduler is not switched into, for the same reason flow_release demands it: its decision state is live
+   in decide.c until a suspend freezes it, so its recipe would be short every arm it has taken since. It marks
+   the flow `paged`, which is what lets flow_release let go of a parked continuation, and refuses to write the
+   same flow twice — the host stores ONE value per bundle, so a flow named twice comes back as two flows on one
+   path. Writing it does NOT remove it: the caller decides whether this flow's RAM comes back now
+   (flow_release) or with the instance. */
+void cold_park_flow(Flow *f);
+
+/* WRITE THE WHOLE FRONTIER OUT — the loop over the primitive above, and nothing else. That is the Level-1
+   eviction §scheduler describes: the host ranks DOCUMENTS' engines, asks the lowest-value one to give up its
+   residue, and the RAM comes back when that instance is torn down. Called with no flow switched in, which the
+   primitive asserts per flow. It is deliberately not the TAIL SELECTION a lone over-budget engine needs — which
+   flows go and how far down the frontier to go — see the OOM CHECK in engine.c's flow-compile path. */
 void cold_park(void);
 
-/* THE PARK DOCUMENT, as a JSON array ready to drop into the result document — "[]" until a park happens, which
-   is what tells the host this engine finished rather than paged out (an empty recipe list DELETES the origin's
-   cold entry, which is the right answer for a document that is fully explored). Borrowed; freed by cold_free. */
+/* THE PARK DOCUMENT, as a JSON array ready to drop into the result document — "[]" until a flow is written,
+   which is what tells the host this engine finished rather than paged out (an empty recipe list DELETES the
+   origin's cold entry, which is the right answer for a document that is fully explored). ONE document per
+   session however many parks appended to it: the closing bracket is rendered by this call rather than stored,
+   so a later append lands inside the same array. Borrowed; freed by cold_free. */
 const char *cold_park_json(void);
 
-/* REBUILD a parked frontier: the ';'-joined records the host stored, back into flows on the ONE frontier,
-   re-ranked by the same weight as everything else. Each becomes a flow that RESUMES (it stands on a recorded
-   chain) with no frame and cursor 0, so it replays its arms as it re-runs the document from its first script
-   and forks normally the moment its recipe runs out. */
+/* MERGE a parked residue INTO the frontier: the ';'-joined records the host stored, back into flows on the ONE
+   frontier, re-ranked by the same weight as everything else. Each becomes a flow that RESUMES (it stands on a
+   recorded chain) with no frame and cursor 0, so it replays its arms as it re-runs the document from its first
+   script and forks normally the moment its recipe runs out.
+   IT APPENDS — it does not seed. The frontier it lands in may already have members (a partial park's tail comes
+   back to the flows that were not paged out), so the document's park-local ordinals are resolved against a
+   table local to THIS call and no live member is read, renumbered or displaced; both directions are asserted at
+   the merge. Whether a SESSION starts from a residue or from a fresh boot flow is engine_sched_begin's choice,
+   not this call's — they are alternatives, and the frontier is seeded once. */
 void cold_resume(JSContext *ctx, const char *recipes);
 
 void cold_free(void);

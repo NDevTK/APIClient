@@ -84,6 +84,17 @@ typedef struct Flow {
     int cand_fired;        /* this flow's X9 marker executed */
     int cand_verifying;    /* this flow is a candidate run: the sink takes the concrete arg */
 
+    /* HAS THIS FLOW'S RECIPE BEEN WRITTEN TO THE PARK DOCUMENT? A paged flow is not a dropped one — that is the
+       whole claim the cold tier makes — and it is a fact about THIS FLOW rather than about the session. It used
+       to be asked of the engine (`engine_frontier_paged`), which is true only of the whole-frontier park: a
+       PARTIAL self-park writes the lowest-value TAIL and releases it while the engine keeps running on its top
+       flows, so an engine-wide answer would excuse every later release of a flow that was never written down.
+       `flow_release` reads it (a continuation parked on a flow whose recipe exists is replayed next session; one
+       on a flow that was not written is dropped), and `cold_park_flow` sets it and refuses to write a flow that
+       already carries it — which is the same statement the old once-per-session park assert made, said per flow
+       so that it stays exact when the park runs several times. */
+    int paged;
+
     /* HAS THIS FLOW A RECORDED PATH TO STAND ON? 0 = fresh: decide_enter gives it an empty vector and every
        branch it meets is a new decision. 1 = it resumes from the blobs below — which is the snapshot-forked
        sibling (a live frame plus its chain), and equally the flow the COLD TIER rebuilt from a recipe (no

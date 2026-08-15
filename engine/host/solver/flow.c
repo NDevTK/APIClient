@@ -96,11 +96,16 @@ void flow_release(JSContext *ctx, Flow *f) {
            "the RUNNING flow was released — its heap delta, its document writes and its decision state are all "
            "live rather than parked, so this frees one copy of each while the scheduler still holds the other");
     /* A PAGED FLOW IS NOT A DROPPED ONE, which is the only thing this assert is about. A continuation left
-       parked here is an async activation nobody will ever resume — UNLESS the frontier was written to the cold
-       tier, in which case this flow's recipe replays the code that created that continuation and re-parks it in
-       the next session. That is the whole claim the cold tier makes, so it is stated where the drop would
-       otherwise be asserted rather than by teaching the assert to tolerate a NULL. */
-    DCHECK(engine_frontier_paged() || f->park_fn == NULL,
+       parked here is an async activation nobody will ever resume — UNLESS THIS FLOW was written to the cold
+       tier, in which case its recipe replays the code that created that continuation and re-parks it in the
+       next session. That is the whole claim the cold tier makes, so it is stated where the drop would
+       otherwise be asserted rather than by teaching the assert to tolerate a NULL.
+       IT ASKS THE FLOW, NOT THE ENGINE, and that is the correction a partial park forces. `engine_frontier_paged`
+       answers for the whole session, so once ANY park had happened it excused the release of every flow —
+       including one the park never wrote. A partial self-park releases a written TAIL while everything above it
+       keeps running and stays unwritten, so the engine-wide answer is true and false at the same moment; the
+       per-flow one is exact in both directions. */
+    DCHECK(f->paged || f->park_fn == NULL,
            "a flow was released with a continuation still parked — its suspended async activation is dropped, "
            "and nothing but the cold tier's replay can bring it back");
     /* …and it is DROPPED HERE, on the line after the assert that says when that is allowed, rather than left on

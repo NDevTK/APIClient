@@ -48,7 +48,15 @@ static void *decide_fork_blob(int cursor, int arm);   /* the sibling's hot decis
  * `g_c` is the cursor in WHOLE-VECTOR coordinates, so `below` on each segment is the index its first slot has —
  * stored rather than re-derived, for the reason TrampFrame's `local_slots` is: a length that is computed twice
  * can disagree with itself. */
-typedef struct DecSeg { signed char *e; int n, below; struct DecSeg *base; int refcount; } DecSeg;
+/* `park_id` IS THE SEGMENT'S NAME IN THE PARK DOCUMENT, and it lives HERE rather than in a pointer table the
+   pager keeps, because a pointer is not an identity across a FREE. The cold tier writes each frozen segment
+   once and names it by a dense ordinal; a park that runs several times in one session — which is what a PARTIAL
+   self-park is — releases the flows it wrote between two of those runs, so a segment nothing stands on any more
+   is freed and the allocator may hand the SAME ADDRESS back for a segment on a completely different path. A
+   table keyed by address would then answer the second segment with the first one's ordinal, and every flow
+   standing on it would resume onto a path it never took, silently. A name that dies with the thing it names
+   cannot do that: -1 until the pager assigns one, and every construction site below sets it. */
+typedef struct DecSeg { signed char *e; int n, below; struct DecSeg *base; int refcount; long park_id; } DecSeg;
 
 static DecSeg *g_dec_base = NULL;   /* the frozen prefix the running flow stands on (NULL = it has none) */
 static int g_dec_below = 0;         /* slots in that chain — the head's index origin */
@@ -151,6 +159,7 @@ static DecSeg *dec_freeze(void) {
     CHECK(s->e, "decide: OOM freezing the decision vector's entries");
     memcpy(s->e, g_dec, (size_t)g_dec_n);
     s->n = g_dec_n; s->below = g_dec_below; s->base = g_dec_base; s->refcount = 2;   /* running flow + caller */
+    s->park_id = -1;   /* unnamed: no park document has written this segment (see the struct) */
     g_dec_seg_live++; g_dec_seg_entries_live += s->n;
     g_dec_seg_bytes_live += (long)sizeof *s + s->n;
     g_dec_base = s; g_dec_below = s->below + s->n; g_dec_n = 0;
@@ -167,6 +176,7 @@ static DecSeg *dec_seg_arm(DecSeg *base, int arm) {
     s->e[0] = (signed char)arm;
     s->n = 1; s->below = base ? base->below + base->n : 0;
     s->base = base; s->refcount = 1;   /* the fork blob's, and nobody else's until the sibling resumes */
+    s->park_id = -1;   /* unnamed: no park document has written this segment (see the struct) */
     g_dec_seg_live++; g_dec_seg_entries_live += 1;
     g_dec_seg_bytes_live += (long)sizeof *s + 1;
     return s;
@@ -335,12 +345,36 @@ void *decide_seg_new(void *base, const signed char *arms, int n) {
        every segment it made until the whole park is decoded, because a segment's users are decoded after it. */
     if (b) b->refcount++;
     s->refcount = 1;
+    /* A REBUILT SEGMENT IS UNNAMED, and that is not merely bookkeeping: the ordinal a resume reads belongs to
+       the document it is READING, and the id here is the name in the document this session will WRITE. A
+       resumed flow that is parked again is written out under a fresh ordinal beside every other flow of this
+       session, which is the only thing that keeps one park document's ordinals dense in one namespace. */
+    s->park_id = -1;
     g_dec_seg_live++; g_dec_seg_entries_live += s->n;
     g_dec_seg_bytes_live += (long)sizeof *s + s->n;
     return s;
 }
 
 void decide_seg_release(void *seg) { dec_seg_unref(seg); }
+
+long decide_seg_park_id(const void *seg) {
+    const DecSeg *s = seg;
+    DCHECK(s != NULL, "the cold tier asked for the park name of a segment that does not exist");
+    return s->park_id;
+}
+
+void decide_seg_set_park_id(const void *seg, long id) {
+    DecSeg *s = (DecSeg *)seg;
+    DCHECK(s != NULL, "the cold tier named a segment that does not exist");
+    DCHECK(id >= 0, "a decision segment was given a negative park name — -1 is what says a segment is NOT in "
+                    "the document, so writing one as a name makes an emitted segment indistinguishable from an "
+                    "unemitted one and the next walk emits it a second time");
+    DCHECK(s->park_id < 0,
+           "a decision segment was named TWICE in one park document — the pager writes each segment once and "
+           "the ordinals are dense, so a second name means the walk re-emitted a segment it had already "
+           "written, and the flows standing on the two ordinals now share a chain that was written twice");
+    s->park_id = id;
+}
 
 void *decide_blob_new(void *seg) {
     DecideBlob *b = malloc(sizeof *b);

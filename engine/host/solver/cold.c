@@ -8,7 +8,6 @@
 #include "solver/world.h"
 #include "check.h"
 
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -93,14 +92,19 @@ void cold_census(ColdCensus *out)
 /* ─────────────────────────────────────────────────────────────────────────────────────────────────────────
    THE RECIPE — what crosses the tier. See cold.h for what it carries and what it deliberately does not.
  *
- * THE PARK DOCUMENT is built once, into one buffer, and handed to the host as part of the result document.
- * It is not streamed: the host stores it as ONE IndexedDB value keyed by (origin, bundle id), and a park that
- * emitted its records in pieces would need a second mechanism to say when the set was complete. */
+ * THE PARK DOCUMENT is ONE buffer per session, handed to the host as part of the result document. The host
+ * stores it as ONE IndexedDB value keyed by (origin, bundle id), so there is exactly one of these however many
+ * times the engine parks into it — and it parks more than once: a PARTIAL self-park writes the lowest-value
+ * TAIL and releases it while the engine keeps running, and the tail it writes an hour later has to land in the
+ * same document as the first, or whichever half the host does not store is a set of flows nothing will resume.
+ * SO THE DOCUMENT IS APPENDED TO, RECORD BY RECORD, and the JSON array's closing bracket is RENDERED by
+ * cold_park_json rather than accumulated — a bracket written into the buffer would be a terminator the next
+ * append had to reach back and unwrite, which is the one edit that silently produces two arrays in one value. */
 static char *g_park;
 static size_t g_park_len, g_park_cap;
 static long  g_park_recs;
 
-static void park_raw(const char *s, size_t n)
+static void park_reserve(size_t n)
 {
     if (g_park_len + n + 1 > g_park_cap) {
         size_t nc = g_park_cap ? g_park_cap : 256;
@@ -115,6 +119,11 @@ static void park_raw(const char *s, size_t n)
                       "would be dropped at the moment it was being saved");
         g_park_cap = nc;
     }
+}
+
+static void park_raw(const char *s, size_t n)
+{
+    park_reserve(n);
     memcpy(g_park + g_park_len, s, n);
     g_park_len += n;
     g_park[g_park_len] = 0;
@@ -142,64 +151,15 @@ static void park_rec(const char *s)
 }
 
 /* THE SEGMENT ORDINALS — the cross-tier NAME of a frozen decision segment, valid only inside one park document
-   (which is the whole of what has to agree about it). A pointer-keyed open-addressed index, because the walk is
-   once per flow over a chain as deep as the fork depth and a linear scan would make the park quadratic in the
-   very case it exists for. */
-static const void **g_seg;       /* ordinal -> segment */
-static long        *g_seg_slot;  /* hash slot -> ordinal + 1 */
-static long g_seg_n, g_seg_cap, g_slot_cap;
-
-static long seg_hash(const void *p)
-{
-    uintptr_t v = (uintptr_t)p;
-    v ^= v >> 16; v *= 2654435761u; v ^= v >> 13;
-    return (long)(v & 0x7fffffff);
-}
-
-static long seg_find(const void *s)
-{
-    long h;
-    if (!g_slot_cap) return -1;
-    h = seg_hash(s) & (g_slot_cap - 1);
-    while (g_seg_slot[h]) {
-        if (g_seg[g_seg_slot[h] - 1] == s) return g_seg_slot[h] - 1;
-        h = (h + 1) & (g_slot_cap - 1);
-    }
-    return -1;
-}
-
-static void seg_slot_put(long ordinal)
-{
-    long h = seg_hash(g_seg[ordinal]) & (g_slot_cap - 1);
-    while (g_seg_slot[h]) h = (h + 1) & (g_slot_cap - 1);
-    g_seg_slot[h] = ordinal + 1;
-}
-
-static long seg_intern(const void *s)
-{
-    if (g_seg_n >= g_seg_cap) {
-        g_seg_cap = g_seg_cap ? g_seg_cap * 2 : 64;
-        g_seg = realloc(g_seg, (size_t)g_seg_cap * sizeof *g_seg);
-        CHECK(g_seg, "the cold tier could not grow its segment table — the park would name a segment it never "
-                     "wrote and every flow standing on it would resume on the wrong path");
-    }
-    g_seg[g_seg_n++] = s;
-    if (!g_seg_slot || g_slot_cap < g_seg_n * 2) {
-        long i;
-        g_slot_cap = 64;
-        while (g_slot_cap < g_seg_n * 2) g_slot_cap *= 2;
-        g_seg_slot = realloc(g_seg_slot, (size_t)g_slot_cap * sizeof *g_seg_slot);
-        CHECK(g_seg_slot, "the cold tier could not grow its segment index");
-        memset(g_seg_slot, 0, (size_t)g_slot_cap * sizeof *g_seg_slot);
-        for (i = 0; i < g_seg_n; i++) seg_slot_put(i);
-    } else {
-        seg_slot_put(g_seg_n - 1);
-    }
-    DCHECK(seg_find(s) == g_seg_n - 1,
-           "a decision segment is not findable through the index it was just given — the next flow standing on "
-           "it would emit a SECOND copy, and the sharing this park exists to preserve would be gone");
-    return g_seg_n - 1;
-}
+   (which is the whole of what has to agree about it). The name lives ON THE SEGMENT (decide.h's
+   decide_seg_park_id), and the only thing kept here is which ordinal comes next.
+   IT USED TO BE A POINTER-KEYED HASH INDEX HERE, and that is a table this file must not own once the park can
+   run more than once in a session: a partial park RELEASES the tail it just wrote, so a segment nothing stands
+   on is freed between two parks and the allocator may hand its address back for a segment on an entirely
+   different path. The index would answer the new one with the dead one's ordinal — every flow standing on it
+   resuming onto a path nothing ever took, with no crash anywhere to say so. An identity that dies with the
+   thing it identifies cannot be re-used, so the fifty lines of open addressing are gone rather than guarded. */
+static long g_park_segs;   /* the next ordinal — dense and ascending across the WHOLE document */
 
 /* EMIT `seg` AND EVERY UNEMITTED SEGMENT BELOW IT, base first, and answer its ordinal. Iterative and not
    recursive for the reason every other walk of these chains is: the chain's depth is the fork depth, an
@@ -209,11 +169,11 @@ static const void **g_walk; static long g_walk_n, g_walk_cap;
 static long park_emit_chain(const void *seg)
 {
     const void *s;
-    long id = seg_find(seg);
+    long id = decide_seg_park_id(seg);
 
     if (id >= 0) return id;                     /* a sibling already wrote this prefix — that IS the sharing */
     g_walk_n = 0;
-    for (s = seg; s && seg_find(s) < 0; s = decide_seg_base(s)) {
+    for (s = seg; s && decide_seg_park_id(s) < 0; s = decide_seg_base(s)) {
         if (g_walk_n >= g_walk_cap) {
             g_walk_cap = g_walk_cap ? g_walk_cap * 2 : 64;
             g_walk = realloc(g_walk, (size_t)g_walk_cap * sizeof *g_walk);
@@ -227,13 +187,13 @@ static long park_emit_chain(const void *seg)
         const void *base = decide_seg_base(cur);
         const signed char *arms;
         int n = decide_seg_arms(cur, &arms), k;
-        long bid = base ? seg_find(base) : -1;
+        long bid = base ? decide_seg_park_id(base) : -1;
         char head[64];
 
         DCHECK(!base || bid >= 0,
                "a decision segment is being written before the one it stands on — the rebuild is a single "
                "forward pass, so a base that has no ordinal yet is a chain this walk descended wrongly");
-        snprintf(head, sizeof head, "s%ld,", g_seg_n);
+        snprintf(head, sizeof head, "s%ld,", g_park_segs);
         park_str(g_park_recs++ ? ",\"" : "\"");
         park_str(head);
         if (bid < 0) park_str("-");
@@ -248,90 +208,142 @@ static long park_emit_chain(const void *seg)
             park_raw(&c, 1);
         }
         park_str("\"");
-        seg_intern(cur);
+        decide_seg_set_park_id(cur, g_park_segs++);
     }
-    id = seg_find(seg);
+    id = decide_seg_park_id(seg);
     DCHECK(id >= 0, "a decision chain was walked and the segment it started from still has no ordinal");
     return id;
 }
 
+/* PARK ONE FLOW — the primitive, and the whole-frontier park below is the loop over it. See cold.h. */
+void cold_park_flow(Flow *f)
+{
+    const void *seg;
+    long id;
+    char rec[64];
+
+    DCHECK(f != NULL, "the cold tier was asked to write the recipe of no flow at all");
+    /* THE RUNNING FLOW'S PATH IS NOT IN ITS BLOB. decide.c keeps the live flow's evolving vector in its own
+       globals and only a suspend freezes it into the chain, so a park taken with this flow still switched in
+       would write its recipe from the chain it stood on at its LAST suspend — every arm it has taken since, and
+       every sibling those arms imply, silently absent from the path it resumes on. Asked PER FLOW rather than
+       of the scheduler, because a partial park writes a tail while a different flow legitimately holds the
+       thread; what may not be written is the one flow whose state is not in its own blob. */
+    DCHECK(f != flow_running(),
+           "the flow the scheduler is switched INTO was written to the park document — its decision state is "
+           "live in decide.c and not in its blob, so its recipe would be short every arm it has taken since its "
+           "last suspend");
+    /* WRITTEN ONCE. The host stores ONE value per bundle, so a flow named twice in it comes back as TWO flows
+       standing on the same path — a duplicate of itself that re-forks every branch it already took, growing the
+       frontier on every visit. This is the once-per-session assert the whole-frontier park used to make about
+       the DOCUMENT (`g_park == NULL`), said about the FLOW instead: the document is appended to now, and it is
+       the flow that may not be in it twice. */
+    DCHECK(!f->paged,
+           "a flow was written to the park document twice — the host stores one value per bundle, so the second "
+           "record resumes it as a SECOND flow standing on the same path, which re-forks every branch it has "
+           "already taken and grows a duplicate of the frontier on every visit");
+    /* WHAT A RECIPE CANNOT CARRY IS ASSERTED HERE, at the one point where it would otherwise be written
+       out wrong — never softened into a flow that resumes as something else. */
+    DCHECK(f->cand_src == NULL && f->cand_payload == NULL,
+           "an @S CANDIDATE SESSION was parked. Its identity is the SUBSTITUTION it carries (the source it "
+           "replaces, the breakout, and the sink that must fire), not merely its path — so a record holding "
+           "only the path resumes it as an ordinary exploration flow that re-runs the page with no payload "
+           "in it, and the search reports a candidate it never fired. Build the candidate recipe: the "
+           "source and the payload are text and cross as text, but `cand_sink` is a pointer into static "
+           "storage with no identity outside this session, so the sink crosses by NAME and is re-bound "
+           "through solve.c's table on resume");
+    DCHECK(f->deliver == NULL,
+           "a flow holding a routed cross-document record was parked — the peer's message is not in its "
+           "recipe and no replay can invent one, so it is dropped exactly as it would be at a finish. A "
+           "delivery is a work item on the one frontier: park it as one (the record and the sender origin "
+           "the trusted zone stamped are both text) or refuse the park while one is outstanding");
+    /* AND THE OTHER HALF OF THAT SHAPE, WHICH OWES AN ANSWER. flow.h says a cross-agent operation "is the same
+       shape as the delivery above and for the same reason, with one thing added" — the asking instance's flow
+       is SUSPENDED on the answer this one's program will produce. Dropping the record therefore does not merely
+       lose this flow's work: it parks a flow in ANOTHER instance forever, on a completion nothing will ever
+       send. The delivery was asserted here and this was not, which is the asymmetry a reader of the pair would
+       have to notice for themselves. */
+    DCHECK(f->perform == NULL && f->answer_token == NULL,
+           "a flow holding a CROSS-AGENT OPERATION was parked — the record and the rendezvous token are not in "
+           "its recipe, so the operation is dropped and the flow that ASKED for it, in another instance, stays "
+           "suspended on an answer nothing will ever send. Park it as what it is: the record and the token are "
+           "text and cross as text, and the answer is the program's COMPLETION, so a resumed flow re-queues the "
+           "program and answers the same token");
+    DCHECK(!f->started || f->dec_blob != NULL,
+           "a flow that has RUN was parked with no suspended decision state — its path is unrecorded, so "
+           "its record would name no segment and it would resume as a from-baseline flow, re-exploring the "
+           "un-forked path and never reaching the branch it was suspended past");
+
+    if (!g_park) park_str("[");   /* the array opens with the first record ever appended; see park_reserve */
+    seg = f->dec_blob ? decide_blob_seg(f->dec_blob) : NULL;
+    id = seg ? park_emit_chain(seg) : -1;
+    /* THE REWARD TRAVELS WITH THE FLOW because the ONE global frontier is ordered by it across sessions —
+       §scheduler's "a high-value flow suspended last week resumes ahead of a low-value fresh one today".
+       It is what the flow EMITTED, which is history and not a live value, so it is the one number here
+       that is neither re-derived nor re-fetched, and it is what breaks the tie at the instant a resumed
+       frontier starts: every member is then unrun (cpu 0, full optimism bonus), so without it the WFQ
+       would pick by registry position and call that value-of-information.
+       A REPLAY RE-EMITS, so a resumed flow is credited again for findings it is carrying credit for. That
+       is a real inflation and it is deliberately not corrected here: it applies to every resumed flow in
+       proportion to what it emitted, so the ORDER — which is the only thing a weight decides — is the one
+       this number exists to preserve. Correcting it would mean deciding which of this session's emissions
+       were "the same finding" as last session's, which is a question about the SERVER's surface today, not
+       about the flow. */
+    DCHECK(f->val == f->val && f->val >= 0.0 && f->val < 1e300,
+           "a flow was parked with a reward that is not a number the WFQ can order by — a NaN compares "
+           "false in both directions, so the resumed frontier's order would depend on array position, and "
+           "an infinity does not survive the round trip as a number at all");
+    if (id < 0) snprintf(rec, sizeof rec, "f-,%.17g", f->val);
+    else        snprintf(rec, sizeof rec, "f%ld,%.17g", id, f->val);
+    park_rec(rec);
+    f->paged = 1;   /* its recipe exists: flow_release may now let its parked continuation go (flow.h) */
+}
+
 void cold_park(void)
 {
-    const Flow *f;
+    Flow *f;
     int i, wseg = 0, wsegf = 0;
 
-    DCHECK(g_park == NULL,
-           "the frontier was parked twice — the second document is written after the first, the host stores "
-           "one value per bundle, and the flows named by whichever half is discarded are gone");
-    /* THE RUNNING FLOW'S PATH IS NOT IN ITS BLOB. decide.c keeps the live flow's evolving vector in its own
-       globals and only a suspend freezes it into the chain, so a park taken with a flow still switched in
-       would write that flow's recipe from the chain it stood on at its LAST suspend — every arm it has taken
-       since, and every sibling those arms imply, silently absent from the path it resumes on. */
-    DCHECK(flow_running() == NULL,
-           "the frontier was parked with a flow still switched in — its decision state is live in decide.c and "
-           "not in its blob, so its recipe would be short every arm it has taken since its last suspend");
+    /* AN EMPTY FRONTIER WRITES NOTHING, AND NOTHING IS A POSITIVE ANSWER — "[]" tells the host this document is
+       fully explored and DELETES its cold entry. That is the right answer for a frontier that drained and the
+       wrong one for a park the host asked for, so the two are separated where they differ rather than where
+       they are read. */
+    DCHECK(flow_count() > 0,
+           "the host asked this engine to page out a frontier with no members — an empty park document is how a "
+           "fully-explored document deletes its cold entry, so this stores 'nothing left to do' over whatever "
+           "residue the origin had");
     world_segment_stats(&wseg, &wsegf);
     /* ANOTHER INSTANCE'S FLOW STATE LIVES HERE, AND IT HAS NO RECIPE. A foreign world's segment is a peer
        document's timeline materialized in this instance; it belongs to a flow this frontier does not contain,
-       so no record written below names it and no replay of ours re-derives it. */
+       so no record written below names it and no replay of ours re-derives it. It is asked HERE and not in the
+       per-flow primitive because it is a fact about this ENGINE leaving memory, which is what a whole-frontier
+       park is and what a partial one is not. */
     DCHECK(wseg == 0,
            "the frontier was parked while this instance holds a segment of a FOREIGN world — that is a peer "
            "document's flow state living here, no record below names it, and paging this engine out drops it. "
            "Build the cross-instance park: a foreign segment travels with the WORLD's name (solver/world.h), "
            "not with this document's flows, and the offscreen is what re-routes it to the instance that "
            "rebuilds the peer");
-    park_str("[");
-    for (i = 0; (f = flow_at(i)) != NULL; i++) {
-        const void *seg;
-        long id;
-        char rec[64];
-
-        /* WHAT A RECIPE CANNOT CARRY IS ASSERTED HERE, at the one point where it would otherwise be written
-           out wrong — never softened into a flow that resumes as something else. */
-        DCHECK(f->cand_src == NULL && f->cand_payload == NULL,
-               "an @S CANDIDATE SESSION was parked. Its identity is the SUBSTITUTION it carries (the source it "
-               "replaces, the breakout, and the sink that must fire), not merely its path — so a record holding "
-               "only the path resumes it as an ordinary exploration flow that re-runs the page with no payload "
-               "in it, and the search reports a candidate it never fired. Build the candidate recipe: the "
-               "source and the payload are text and cross as text, but `cand_sink` is a pointer into static "
-               "storage with no identity outside this session, so the sink crosses by NAME and is re-bound "
-               "through solve.c's table on resume");
-        DCHECK(f->deliver == NULL,
-               "a flow holding a routed cross-document record was parked — the peer's message is not in its "
-               "recipe and no replay can invent one, so it is dropped exactly as it would be at a finish. A "
-               "delivery is a work item on the one frontier: park it as one (the record and the sender origin "
-               "the trusted zone stamped are both text) or refuse the park while one is outstanding");
-        DCHECK(!f->started || f->dec_blob != NULL,
-               "a flow that has RUN was parked with no suspended decision state — its path is unrecorded, so "
-               "its record would name no segment and it would resume as a from-baseline flow, re-exploring the "
-               "un-forked path and never reaching the branch it was suspended past");
-
-        seg = f->dec_blob ? decide_blob_seg(f->dec_blob) : NULL;
-        id = seg ? park_emit_chain(seg) : -1;
-        /* THE REWARD TRAVELS WITH THE FLOW because the ONE global frontier is ordered by it across sessions —
-           §scheduler's "a high-value flow suspended last week resumes ahead of a low-value fresh one today".
-           It is what the flow EMITTED, which is history and not a live value, so it is the one number here
-           that is neither re-derived nor re-fetched, and it is what breaks the tie at the instant a resumed
-           frontier starts: every member is then unrun (cpu 0, full optimism bonus), so without it the WFQ
-           would pick by registry position and call that value-of-information.
-           A REPLAY RE-EMITS, so a resumed flow is credited again for findings it is carrying credit for. That
-           is a real inflation and it is deliberately not corrected here: it applies to every resumed flow in
-           proportion to what it emitted, so the ORDER — which is the only thing a weight decides — is the one
-           this number exists to preserve. Correcting it would mean deciding which of this session's emissions
-           were "the same finding" as last session's, which is a question about the SERVER's surface today, not
-           about the flow. */
-        DCHECK(f->val == f->val && f->val >= 0.0 && f->val < 1e300,
-               "a flow was parked with a reward that is not a number the WFQ can order by — a NaN compares "
-               "false in both directions, so the resumed frontier's order would depend on array position, and "
-               "an infinity does not survive the round trip as a number at all");
-        if (id < 0) snprintf(rec, sizeof rec, "f-,%.17g", f->val);
-        else        snprintf(rec, sizeof rec, "f%ld,%.17g", id, f->val);
-        park_rec(rec);
-    }
-    park_str("]");
+    for (i = 0; (f = flow_at(i)) != NULL; i++) cold_park_flow(f);
 }
 
-const char *cold_park_json(void) { return g_park ? g_park : "[]"; }
+const char *cold_park_json(void)
+{
+    if (!g_park) return "[]";
+    /* THE CLOSING BRACKET IS RENDERED, NEVER ACCUMULATED. This is read at the END of a session and the document
+       may still be appended to after it — a partial park's records land in the same value — so the terminator
+       cannot be part of the content: an append would write past it and the host would store an array with a
+       bracket in the middle of it. Written one past the content instead, where the next append overwrites it,
+       and park_reserve(1) is what guarantees the room for the byte and its NUL. Idempotent, because the result
+       document asks for this twice (once to size the buffer, once to fill it). */
+    park_reserve(1);
+    g_park[g_park_len] = ']';
+    g_park[g_park_len + 1] = 0;
+    DCHECK(g_park[0] == '[',
+           "the park document does not begin with its array — the opening bracket is written with the first "
+           "record and nothing else may precede it, so this value is not JSON the host can store");
+    return g_park;
+}
 
 /* ONE FIELD SEPARATOR, asked for where it is required. A record that does not have it is a record this file
    did not write, and reading past it would silently take the NEXT field's digits as this one's. */
@@ -347,17 +359,26 @@ void cold_resume(JSContext *ctx, const char *recipes)
     void **seg = NULL;
     long seg_n = 0, seg_cap = 0, flows = 0, k;
     const char *p = recipes;
+    const int before = flow_count();
 
     DCHECK(recipes != NULL && *recipes != '\0',
            "the cold tier was asked to resume an empty park document — a document with no residue DELETES its "
            "cold entry, so a caller reaching here has confused 'fully explored' with 'paged out'");
-    /* THE FRONTIER IS SEEDED ONCE. A resumed document that also seeds a fresh boot flow explores the un-forked
-       path a SECOND time — and worse, that second boot flow re-forks every branch the residue already stands
-       on, so the frontier grows a duplicate of itself on every visit. */
-    DCHECK(flow_count() == 0,
-           "a parked frontier was rebuilt over a frontier that already has members — the boot flow and the "
-           "residue are alternatives, and seeding both explores the same path twice and re-forks every branch "
-           "the residue already took");
+    /* THIS IS AN APPEND, NOT A SEED, and the two used to be one act. It asserted the frontier was EMPTY and
+       assigned its park-local ordinals into it as though the document were the whole of what exists — which is
+       true of the session-start rebuild and false by construction of the thing this tier is for: a PARTIAL
+       self-park writes the lowest-value TAIL, and that tail comes back to a frontier still holding every flow
+       that was NOT paged out, possibly several times over a session.
+       THE SEEDING CLAIM DID NOT DISAPPEAR, IT MOVED TO THE PLACE THAT MAKES IT. "The boot flow and the residue
+       are alternatives" is a statement about STARTING a session, so engine_sched_begin asserts the frontier is
+       empty and then chooses one of the two; a rebuild has no business asserting anything about flows it did
+       not create.
+       NOTHING LIVE IS RENUMBERED, and the reason is structural rather than checked: the ordinals in the
+       document name segments in a table THIS CALL builds (`seg` below), every entry of which decide_seg_new
+       has just allocated. There is no lookup by pointer anywhere in the rebuild, so no live flow's segment can
+       be reached by an ordinal, and no live flow is read or written at all. What IS checked is the frontier's
+       shape either side of the merge: every rebuilt flow lands at the end, and the count grows by exactly the
+       number rebuilt. */
 
     while (*p) {
         const char *end = strchr(p, ';');
@@ -426,6 +447,15 @@ void cold_resume(JSContext *ctx, const char *recipes)
                this frontier, so there is no edge to carry. When cross-instance park is built, the world NAME
                is what will travel — never this document's flow ancestry. */
             fl = flow_add(ctx, JS_UNDEFINED, WORLD_NONE);
+            /* IT WENT ON THE END, WHICH IS THE HALF OF THE MERGE A LIVE FRONTIER CARES ABOUT. A rebuilt flow
+               must be an addition and never a substitution: the registry appends, so this one belongs at
+               `before` plus however many this document has rebuilt so far. If a member were ever displaced —
+               a reorder, a swap-remove, a registry that reused a slot — the flow that lived there would be
+               gone from the frontier with nothing else in the engine able to say so. Asked at the add rather
+               than counted at the end, so the assert names the record that did it. */
+            DCHECK(flow_at((int)(before + flows)) == fl,
+                   "a rebuilt flow did not land at the end of the frontier — a resume APPENDS, so anything "
+                   "else means a live member was displaced by a parked one and is now unreachable");
             fl->started = 1;
             fl->dec_blob = decide_blob_new(sid >= 0 ? seg[sid] : NULL);
             fl->pin_blob = concolic_pins_blob_empty();
@@ -445,6 +475,14 @@ void cold_resume(JSContext *ctx, const char *recipes)
     DCHECK(flows > 0,
            "a parked frontier rebuilt no flows at all — the document held segments with nobody standing on "
            "them, so the whole residue it was written to save is unreachable");
+    /* THE OTHER SIDE OF THE MERGE, AND IT IS THE RAZOR ITSELF: "a resume that drops, starves, skips, reorders
+       or forgets ANY flow is a CAP". Every record that named a flow produced one, and every member that was
+       already here is still here — one equality says both, because the registry only ever appends and the
+       per-record assert above proved each addition landed past the live members. */
+    DCHECK(flow_count() == before + (int)flows,
+           "the frontier did not grow by exactly the flows this document rebuilt — a parked flow was dropped on "
+           "the way in, or a live one left while the residue was landing, and either way the union of every "
+           "flow from every session is no longer what the frontier holds");
     /* THE ONE OBSERVABLE THAT THE RESUME RAN, and it had a READER and no WRITER. `extension/bridge.js` parses
        `@RESUMED <n>` and reports it in the per-run engine log beside the park count, so that "the full
        park->persist->rehydrate->resume SEQUENCE across all engines is observable" — its words. Nothing has
@@ -462,7 +500,8 @@ void cold_resume(JSContext *ctx, const char *recipes)
 void cold_free(void)
 {
     free(g_park); g_park = NULL; g_park_len = g_park_cap = 0; g_park_recs = 0;
-    free(g_seg); g_seg = NULL; g_seg_n = g_seg_cap = 0;
-    free(g_seg_slot); g_seg_slot = NULL; g_slot_cap = 0;
+    /* THE ORDINAL COUNTER GOES BACK TO ZERO WITH THE DOCUMENT IT NUMBERED, and the names it handed out died
+       with the segments (decide.c's `park_id`), which flow_registry_free has just asserted are all gone. */
+    g_park_segs = 0;
     free(g_walk); g_walk = NULL; g_walk_n = g_walk_cap = 0;
 }

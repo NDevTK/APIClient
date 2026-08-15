@@ -107,6 +107,15 @@ int         decide_seg_arms(const void *seg, const signed char **arms);   /* its
    the park's chain has taken its own, so a segment nothing references is freed rather than leaked. */
 void       *decide_seg_new(void *base, const signed char *arms, int n);
 void        decide_seg_release(void *seg);
+/* THE SEGMENT'S NAME IN THE PARK DOCUMENT BEING WRITTEN — -1 until the pager assigns one, and the ordinal
+   thereafter. It lives on the SEGMENT rather than in a table the pager keys by address because a park now runs
+   more than once per session (a PARTIAL self-park writes a low-value tail and releases it, then writes another
+   later), so between two of those runs a segment can be freed and its address handed to a segment on a
+   different path — and a table would answer that one with the dead segment's ordinal, resuming a flow onto a
+   path nothing ever took. The name dies with the segment instead. Set once per segment per document; the
+   setter asserts both halves. */
+long        decide_seg_park_id(const void *seg);
+void        decide_seg_set_park_id(const void *seg, long id);
 /* A resumed flow's decision state: the rebuilt chain, at CURSOR 0. It is a resume rather than an enter because
    the flow's arms are already recorded — it replays them from the top as it re-runs the document, and forks
    normally the moment the cursor reaches the end of what the recipe knew. */

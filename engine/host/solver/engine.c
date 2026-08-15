@@ -1507,24 +1507,33 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                    free the RAM for, and paging the whole frontier out to page it straight back in is not
                    progress). What that needs is the PARTIAL self-park §scheduler names: the lowest-value TAIL
                    of this frontier written out and REMOVED while the engine keeps running on its top flows.
-                   ONE OF THE TWO THINGS THAT NEEDED IS NOW BUILT, and this says so rather than going on naming
-                   it — a crash that asks for what already exists sends the next reader to write it twice. The
-                   per-flow RELEASE exists: flow_release (solver/flow.h) takes a flow the scheduler is not
+                   THE PLUMBING FOR THAT IS NOW BUILT, and this says which parts rather than going on naming
+                   them — a crash that asks for what already exists sends the next reader to write it twice.
+                   The per-flow RELEASE exists: flow_release (solver/flow.h) takes a flow the scheduler is not
                    switched into out of the frontier and gives its RAM back, walking the heap and the document
                    down only as far as the segments the release actually frees (cow_delta_release /
                    dom_base_release), so a tail can be dropped while another flow holds the thread. It is the
-                   path every finishing flow already takes, so it is exercised rather than merely written.
-                   WHAT IS STILL MISSING IS THE OTHER HALF, and it is a property of the RESUME rather than of
-                   the park: cold_resume rebuilds a park document by assigning park-local segment ordinals into
-                   an empty frontier and asserts that it is empty, so a partial park — which by construction
-                   comes back to a frontier that still holds the flows that were NOT paged out, and comes back
-                   possibly more than once — has nowhere to land. Until a resumed tail can be MERGED into a
-                   live frontier, writing one out would page a tail this engine could not read back. */
-                CHECK(!oom, "the frontier could not hold another flow — this is the physical RAM floor. The cold "
-                            "tier pages a WHOLE engine at the host's request and flow_release can now drop a "
-                            "single flow while the engine keeps running; what carries past THIS is the MERGE of "
-                            "a resumed tail into a frontier that already has members, which cold_resume asserts "
-                            "against today");
+                   path every finishing flow already takes, so it is exercised rather than merely written. The
+                   per-flow WRITE exists beside it: cold_park_flow appends ONE flow's recipe to a document that
+                   is appended to all session, so a park may take a subset and may take several; and the read
+                   back is a MERGE — cold_resume appends a residue to a frontier that already has members, and
+                   asserts that nothing live was displaced and nothing parked was dropped.
+                   WHAT IS STILL MISSING IS THE DECISION ITSELF, in two halves that must arrive together. The
+                   SELECTION: which flows go, which is ascending flow_weight — flow_best's own order read from
+                   the other end, never a second ranking, never a count and never a watermark — and how far
+                   down to go, which is not a number at all but this floor: park and release the lowest-value
+                   flow, retry the allocation, and stop when it succeeds. The TRIGGER: a NULL out of JS_FlowNew
+                   is ONE allocation site among all of them, so a selector driven only from here would leave
+                   every other allocation on the path still fatal; what it has to hang off is the runtime's own
+                   allocation-failure edge, so that the first refusal anywhere runs the tail park and retries. */
+                CHECK(!oom, "the frontier could not hold another flow — this is the physical RAM floor. Every "
+                            "part of the partial self-park now exists except the decision: cold_park_flow writes "
+                            "one flow's recipe, flow_release drops it while the engine keeps running, and "
+                            "cold_resume merges a tail back into a live frontier. What carries past THIS is the "
+                            "TAIL SELECTOR — ascending flow_weight (flow_best's own order), parking and "
+                            "releasing until the allocation succeeds — hung off the runtime's allocation-failure "
+                            "edge rather than off this one call site, which is only one of the places the "
+                            "frontier can refuse to grow");
                 /* AN @S CANDIDATE THAT DOES NOT PARSE is a dead candidate and nothing more — the search tries
                    several breakouts per sink precisely because most do not fit most contexts. A `javascript:`
                    URL that does not parse is HTML §7.4.2.3.2's abrupt evaluation, which produces no Document and
@@ -1800,7 +1809,16 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int f
        of the frontier on every visit. If the boot flow itself was still live at the park, it IS one of the
        records (an empty chain), so nothing is lost by not adding one here.
        CLAUDE.md §scheduler: a new page APPENDS to the ONE continuous cross-session frontier; it does not start
-       a new scheduler, and it does not start the same exploration twice. */
+       a new scheduler, and it does not start the same exploration twice.
+       THE CLAIM IS MADE HERE, WHERE THE CHOICE IS. It used to be asserted inside cold_resume — "the frontier is
+       empty" — which made the rebuild refuse to run over a live frontier and so made a PARTIAL park impossible
+       to read back: its tail returns to the flows that were not paged out. Emptiness is a property of STARTING
+       a session, not of rebuilding a residue, so it is asserted at the one call that starts one and the rebuild
+       is free to be the merge it has to be. */
+    DCHECK(flow_count() == 0,
+           "a session began over a frontier that already has members — the boot flow and a parked residue are "
+           "ALTERNATIVES, so whichever is chosen below would be a second seeding of the same document: the "
+           "un-forked path explored twice, and every branch the existing members already stand on re-forked");
     if (recipes && *recipes) cold_resume(ctx, recipes);
     else flow_add(ctx, JS_UNDEFINED, WORLD_NONE);   /* the first flow: the page's scripts, empty decision vector */
     JS_SetFlowLocalMark(1);                 /* objects created while a flow runs are flow-local (discarded) */
