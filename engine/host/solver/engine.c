@@ -1275,9 +1275,18 @@ static int preempt_hook(int kind) {
         g_last_ask = now;
     }
 #endif
+    /* THE RIVAL IS ONE THE THREAD CAN ACTUALLY BE HANDED TO. A flow that has told the scheduler it can make no
+       progress until the host answers is not a candidate: yielding to it hands the thread straight back, and
+       with one outranking the running flow the two thrashed — the hook demanded a yield at every back-edge and
+       the loop's pick returned the same flow, so it advanced one back-edge per scheduler iteration. It is the
+       SAME question the pick asks (flow.h), which is why it is the same call.
+       THE CACHE MAY LAG A MARK, AND ONLY IN THE HARMLESS DIRECTION. Marks are made during a slice and cleared
+       only at its top, so a cached rival can be one that has SINCE been marked — a yield the loop then declines
+       by re-picking the same flow, at the cost of one iteration. A mark can never make a flow wrongly ELIGIBLE,
+       which is the direction that would cost a yield that mattered. */
     if (flow_frontier_gen() != g_seen_gen || cur != g_seen_cur) {   /* (1) rescan for the rival only on change */
         g_seen_gen = flow_frontier_gen(); g_seen_cur = cur;
-        Flow *rival = cur ? flow_best_other(cur) : NULL;
+        Flow *rival = cur ? flow_best_runnable(cur) : NULL;
         g_rival_w = rival ? flow_weight(rival) : -1.0 / 0.0;
     }
     /* (0) BLOCKED BEATS BOTH RANKINGS. A flow holding an unanswered synchronous host request cannot make
@@ -1897,7 +1906,6 @@ static int engine_sched_slice(void) {
        decision that a notch of quantisation already absorbs. Charging nothing at all — which is what a
        release build did — is the error that matters here, not which of two flows pays for a swap. */
     int64_t now = quantum_thread_us();
-    int owed = 0;   /* consecutive picks that could not progress; == flow_count() means every member is waiting */
     /* THE SESSION THE HOST STEPPED IS STILL OPEN — and the way this fires is a CALLER THAT TRANSFORMED THE
        PREVIOUS ANSWER. Two exits close the session and both answer ENGINE_STEP_DONE: the frontier draining, and
        the PARK that writes the residue to the cold tier. A wrapper that folded DONE into YIELD — the way the ABI
@@ -1938,8 +1946,21 @@ static int engine_sched_slice(void) {
         engine_session_close();
         return ENGINE_STEP_DONE;
     }
+    /* EVERY MEMBER IS ASKABLE AGAIN, AND THIS IS THE ONLY PLACE THAT SAYS SO. Between two slices the HOST ran:
+       it provided fetch replies, filled document script slots, answered synchronous requests and routed records
+       onto the flows — every one of them exactly what a flow that reported itself host-owed is waiting for, and
+       none of them reachable from inside a slice. So the mark cannot outlive the slice that made it, the first
+       pick of every slice is identical to an unfiltered one, and the worst a mistaken mark can cost is that its
+       flow is re-asked one quantum later. Never that it is skipped, which is what the razor forbids. */
+    flow_clear_host_owed();
     for (;;) {
-        Flow *best = flow_best();           /* WFQ: highest value-of-information — a fresh fork (UCB) can preempt */
+        /* WFQ: highest value-of-information among the members that can still make progress — a fresh fork
+           (UCB) can preempt. The filter is the ONE order with the flows that have told the scheduler they are
+           waiting on the host taken out of the PICK only; they keep their weight, their place and every work
+           item they hold (flow.h). */
+        Flow *best = flow_best_runnable(NULL);
+        /* NOTHING LEFT TO RUN: either the frontier is empty, or every member is waiting on the host — which is
+           the STALL, decided by asking each member rather than by counting a run of unproductive picks. */
         if (!best) break;
         if (best != cur) {                  /* context switch: swap COW delta + decision + pins */
             if (cur) flow_switch_out(ctx, cur);
@@ -2169,17 +2190,28 @@ static int engine_sched_slice(void) {
                 }
             }
 #endif
-            if (r == FLOW_STEP_DONE) { solve_flow_end(cur); flow_finish(ctx, cur); cur = NULL; owed = 0; }
+            if (r == FLOW_STEP_DONE) { solve_flow_end(cur); flow_finish(ctx, cur); cur = NULL; }
             else if (r == FLOW_STEP_OWED) {
-                /* This flow can make no progress until the host supplies a reply. It is NOT skipped and NOT
-                   removed — it stays in the WFQ at its own weight, and the scheduler simply observes that it
-                   picked it and got nowhere. Once EVERY member has answered that in a row, no member can
-                   progress and the frontier is stalled. Counting the answers is what makes this lossless: a
-                   flow that gains work is picked again and resets the count, and nothing was ever excluded. */
-                if (++owed >= flow_count())
-                    break;
+                /* THIS FLOW CAN MAKE NO PROGRESS UNTIL THE HOST ANSWERS, and the scheduler records that ON THE
+                   FLOW. It is NOT skipped and NOT removed — it stays in the WFQ at its own weight with every
+                   work item it holds, and it is picked again at the top of the next slice — which is the first
+                   moment anything CAN have answered it, since only the host can.
+                   IT USED TO BE A COUNT of consecutive owed answers, broken at `flow_count()` on the claim that
+                   "every member has answered that in a row". The claim was false: this loop re-picks the SAME
+                   top-ranked flow, because an owed step burns microseconds and so moves neither its service
+                   notch nor its weight. N owed answers were therefore N answers from ONE flow, and the break
+                   declared the whole frontier stalled while runnable siblings had never been asked — which in
+                   the smoke host ends the run over them (the provider answers nothing and run_scheduler
+                   breaks). A no-progress count is in §NO-BOUNDS' own list, and this is why. */
+                flow_set_host_owed(cur);
             }
-            else owed = 0;
+            /* AND NOTHING IS CLEARED BY PROGRESS, which is a statement about what a slice can do rather than an
+               omission. No step of any flow can answer another flow's wait: every kind on the register — a
+               fetch reply, an external script's text, a synchronous request's answer, a routed record, a
+               cross-agent operation — is filled by the HOST, and the host does not run until this slice
+               returns. Clearing here instead would re-admit every marked flow after every step, and with a
+               marked flow outranking a working one that is a wasted step and two COW swaps per unit of real
+               progress. */
         }
         /* THREAD-SHARING, not value: the slice's budget is gone, so hand the thread back and keep the frontier.
            It is the SAME question preempt_hook asks — one budget, one edge, asked at the two levels it acts on:
@@ -2224,19 +2256,19 @@ static int engine_sched_slice(void) {
            "async: a job reached the global list (enqueued outside a flow) but was never drained");
     /* THE SAME RULE ONE LEVEL UP, over the FLOWS' OWN queues. flow_step asserts that a flow may not FINISH
        holding work, and that covers the flow that runs out of work — but the loop above can also LEAVE with a
-       flow still alive: every member answers host-owed in a row, the loop breaks on that, and this line closes
-       the session over the survivors. A reaction still on one of their queues is dropped exactly as it would
-       be at finish, and only the finish case was being checked, so the wider one was invisible. */
+       flow still alive: every member has reported itself host-owed, so no member can be picked, and this line
+       closes the session over the survivors. A reaction still on one of their queues is dropped exactly as it
+       would be at finish, and only the finish case was being checked, so the wider one was invisible. */
     for (int i = 0; i < flow_count(); i++) {
         DCHECK(flow_at(i)->njob == 0,
                "the frontier was declared exhausted while a live flow still held queued jobs — its promise "
                "reactions, timer callbacks and delivered messages die with the session");
         /* AND THE SAME RULE FOR A ROUTED RECORD, which is a work item exactly as a job is. flow_finish asserts
-           it for the flow that RUNS OUT of work; a flow that leaves this loop alive (every member host-owed in
-           a row) had nothing checking it, and the record then dies in flow_registry_free — the peer's message,
-           dropped, indistinguishable from a page that registered no handler. A flow suspended inside a live
-           frame is the shape that reaches here holding one: the delivery is made only where flow_step has no
-           frame, so if this fires, the enqueue belongs earlier than that branch. */
+           it for the flow that RUNS OUT of work; a flow that leaves this loop alive (every member host-owed, so
+           none is pickable) had nothing checking it, and the record then dies in flow_registry_free — the
+           peer's message, dropped, indistinguishable from a page that registered no handler. A flow suspended
+           inside a live frame is the shape that reaches here holding one: the delivery is made only where
+           flow_step has no frame, so if this fires, the enqueue belongs earlier than that branch. */
         DCHECK(flow_at(i)->perform == NULL && flow_at(i)->answer_token == NULL,
                "the frontier was declared exhausted while a live flow still owed a peer the answer to a "
                "cross-agent operation — the asking flow, in another instance, is suspended at the line that "

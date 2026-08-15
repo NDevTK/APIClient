@@ -95,6 +95,21 @@ typedef struct Flow {
        so that it stays exact when the park runs several times. */
     int paged;
 
+    /* HAS THIS FLOW TOLD THE SCHEDULER IT CAN MAKE NO PROGRESS? A flow answers FLOW_STEP_OWED when the only
+       thing left to it belongs to the HOST — a fetch not yet answered, a document script whose text has not
+       arrived, a synchronous cross-instance read the peer has not resolved. The scheduler must not hand it the
+       thread again until something could have changed, and the only alternative to recording that per flow is
+       what stood in its place: a COUNT of consecutive owed answers, broken at `flow_count()`. That count is a
+       no-progress bound in §NO-BOUNDS' own list, and it was not even a correct one. The WFQ re-picks the SAME
+       top-ranked flow — an owed step burns microseconds, so its aging does not move a service notch and its
+       weight does not move at all — so N owed answers were N answers from ONE flow, and the loop then declared
+       the whole frontier stalled while runnable siblings had never once been asked. That is the razor's
+       "starves, skips" exactly: in the smoke host the provider then answers nothing, run_scheduler breaks, and
+       every one of those flows dies unexplored with the result document reporting a clean drain.
+       IT IS A GENERATION STAMP, NOT A FLAG, so clearing every mark is one increment rather than a walk of a
+       frontier that has reached tens of thousands of members — see flow_clear_host_owed. */
+    unsigned owed_gen;
+
     /* HAS THIS FLOW A RECORDED PATH TO STAND ON? 0 = fresh: decide_enter gives it an empty vector and every
        branch it meets is a new decision. 1 = it resumes from the blobs below — which is the snapshot-forked
        sibling (a live frame plus its chain), and equally the flow the COLD TIER rebuilt from a recipe (no
@@ -197,11 +212,37 @@ int flow_blocked(const Flow *f);
 /* The WFQ priority of a flow (higher = run sooner). Pure function of the flow's reward/aging/visit state. */
 double flow_weight(const Flow *f);
 
-/* The highest-priority flow in the frontier, or NULL if empty. Does not remove it. */
+/* The highest-priority flow in the frontier, or NULL if empty — EVERY member, whether or not it can currently
+   make progress. It answers the host's Level-1 question (this document's best weight) and the census's; the
+   scheduler's own pick is flow_best_runnable below. Does not remove it. */
 Flow *flow_best(void);
 
-/* The highest-priority flow OTHER than `exclude` — the running flow's rival for the value-driven yield. */
-Flow *flow_best_other(const Flow *exclude);
+/* THE HIGHEST-PRIORITY FLOW THAT CAN STILL MAKE PROGRESS, other than `exclude` (NULL excludes nothing) — the
+ * dispatch loop's PICK, and the running flow's RIVAL for the value yield. The same comparator and the same
+ * order as flow_best: a FILTER over the ONE ranking, never a second one.
+ *
+ * IT IS ONE FUNCTION FOR BOTH BECAUSE THEY ARE ONE QUESTION — "who should hold the thread" — and the rival
+ * asked over ALL members (which `flow_best_other` was) answers a question nobody wants: a flow waiting on the
+ * host cannot use the thread, so yielding to it hands it straight back. With a host-owed flow outranking the
+ * running one, that pair thrashed — the hook demanded a yield at every back-edge and the pick handed the thread
+ * to the same flow again, so the running flow advanced one back-edge per scheduler iteration for as long as the
+ * rival stayed blocked.
+ *
+ * NULL means nothing can run: either the frontier is empty, or every member is waiting on the host — which is
+ * the STALL, decided by asking each member rather than by counting a run of unproductive picks. */
+Flow *flow_best_runnable(const Flow *exclude);
+
+/* THIS FLOW ANSWERED FLOW_STEP_OWED. It stays in the frontier at its own weight and keeps every work item it
+   holds — nothing is dropped, removed or reordered; it is simply not PICKED again for the rest of this slice. */
+void  flow_set_host_owed(Flow *f);
+
+/* EVERY MEMBER IS ASKABLE AGAIN — called at the top of every slice, and NOWHERE ELSE, which is exactly what
+   makes the mark safe. Nothing INSIDE a slice can answer a host-owed flow: a fetch reply, a document script's
+   text, a synchronous request's answer, a routed record and a cross-agent operation all arrive through the
+   host, which runs only between slices. So a mark cannot outlive the slice that made it, and the worst a
+   mistaken one can cost is that the flow is re-asked one quantum later — never that it is skipped, which is
+   what §scheduler's razor forbids. */
+void  flow_clear_host_owed(void);
 
 /* A counter bumped on every frontier membership change (add/remove). The value-yield recomputes its rival
    only when this changes (or the running flow switches), never per-opcode. */

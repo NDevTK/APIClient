@@ -362,14 +362,51 @@ static inline int64_t flow_cpu_to_sink(const Flow *f) {
     return (int64_t)((f->val + 1.0) / FLOW_AGE_RATE) + FLOW_SERVICE_US;
 }
 
-Flow *flow_best(void) {
+/* HOST-OWED MARKS — see flow.h for what a mark means and why the flow carries one at all.
+ *
+ * A GENERATION RATHER THAN A PER-FLOW FLAG, so clearing every mark is a single increment rather than a walk of
+ * a frontier that has reached tens of thousands of members. A flow is marked by stamping the current
+ * generation on it, and every stamp ages out the instant the generation moves. */
+static unsigned g_owed_gen = 1;   /* NEVER 0: a fresh (calloc'd) flow must read as RUNNABLE, not as marked */
+
+static int flow_host_owed(const Flow *f) { return f->owed_gen == g_owed_gen; }
+
+void flow_set_host_owed(Flow *f) {
+    DCHECK(f != NULL, "a host-owed report arrived with no flow — the scheduler marks the flow it just stepped, "
+                      "so this is a report about nobody, and the flow that made it is picked again immediately");
+    f->owed_gen = g_owed_gen;
+}
+
+void flow_clear_host_owed(void) {
+    /* THE WRAP IS HANDLED, NOT ARGUED AWAY. Four billion clears is a slice boundary each and it is not
+       impossible, and a stamp that aliased the new generation would read as owed on a flow that is runnable —
+       an exclusion lasting until the next clear, which is precisely the "skips ANY flow" §scheduler's razor
+       forbids. Resetting the stamps costs one walk per wrap. */
+    if (++g_owed_gen == 0) {
+        for (int i = 0; i < g_flows_n; i++) g_flows[i]->owed_gen = 0;
+        g_owed_gen = 1;
+    }
+}
+
+/* THE ONE ORDER, ASKED THROUGH ONE SCAN. Two questions are put to the ranking — who runs next (and its
+   variant, who is the running flow's rival for the value yield) and what this document's best weight is for
+   the host's Level-1 order — and they are FILTERS over ONE comparator, never separate rankings (§scheduler:
+   ONE WFQ policy at both levels). Written out per question, the order would have a place to drift per copy and
+   the monopolizer assertion below would guard whichever copy happened to carry it; written once, every pick is
+   made under it. */
+static Flow *flow_pick(const Flow *exclude, int runnable_only) {
     Flow *best = NULL; double bw = 0.0;
     /* A MEMBER WITH ZERO SERVICE: never run, or just emitted (flow_credit_emit zeroes cpu). Either way it
        carries the full optimism bonus and no aging, so its weight is its reward + 1.0 and hence at least 1.0 —
        which is the only property the assertion below needs, and it is the same property for both. */
     int unrun = 0;
     for (int i = 0; i < g_flows_n; i++) {
-        double w = flow_weight(g_flows[i]);
+        double w;
+        if (g_flows[i] == exclude) continue;
+        /* NOT A DROP AND NOT A DEPRIORITISATION: the flow keeps its weight, its place and every work item it
+           holds, and it is picked again the moment anything could have answered it (flow_clear_host_owed). */
+        if (runnable_only && flow_host_owed(g_flows[i])) continue;
+        w = flow_weight(g_flows[i]);
         if (g_flows[i]->cpu == 0) unrun = 1;
         if (!best || w > bw) { best = g_flows[i]; bw = w; }
     }
@@ -387,16 +424,9 @@ Flow *flow_best(void) {
     return best;
 }
 
-/* The highest-weight flow OTHER than `exclude` — the running flow's rival for the value-driven yield. */
-Flow *flow_best_other(const Flow *exclude) {
-    Flow *best = NULL; double bw = 0.0;
-    for (int i = 0; i < g_flows_n; i++) {
-        if (g_flows[i] == exclude) continue;
-        double w = flow_weight(g_flows[i]);
-        if (!best || w > bw) { best = g_flows[i]; bw = w; }
-    }
-    return best;
-}
+/* The two questions, each a filter over the one scan above. */
+Flow *flow_best(void) { return flow_pick(NULL, 0); }
+Flow *flow_best_runnable(const Flow *exclude) { return flow_pick(exclude, 1); }
 
 void flow_remove(JSContext *ctx, Flow *f) {
     /* WHAT THIS FUNCTION DOES NOT FREE, ASSERTED RATHER THAN ASSUMED. A Flow owns fourteen things and this

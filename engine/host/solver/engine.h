@@ -145,8 +145,14 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
 void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, const char *url);
 /* THE FRONTIER'S BEST WEIGHT — what the host ranks this document's engine by against every other live one.
    Level-1 and level-2 are ONE policy (§scheduler): the host orders engines by their best flow exactly as the
-   engine orders flows, so this is flow_weight of flow_best and nothing else. -inf when nothing is runnable, so
-   an engine with no work never outranks one that has some. */
+   engine orders flows, so this is flow_weight of flow_best and nothing else. -inf when the frontier is EMPTY,
+   so an engine with no work never outranks one that has some.
+   IT IS EVERY MEMBER, INCLUDING THE ONES WAITING ON THE HOST, and the line that used to say "-inf when nothing
+   is runnable" claimed otherwise. It could not be made true here: the host reads this BETWEEN slices, and a
+   flow's host-owed mark is cleared at the top of every slice precisely because the host is what answers it — so
+   at the moment this is asked, every member is askable again by construction. The Level-1 question it sounds
+   like ("is this engine merely waiting?") is answered where it is known, by the step code: a slice whose every
+   member is waiting returns ENGINE_STEP_STALLED, which is what moves the engine out of the pool's hot state. */
 double engine_top_weight(void);
 
 /* THE VALUE YIELD's floor: the weight of the best flow in the RUNNER-UP engine. The running flow hands the
