@@ -219,9 +219,18 @@ static bool document_can_have_url_rewritten(const UrlRecord *doc_url, const UrlR
 
 /* ---- §7.2.5's SHARED HISTORY PUSH/REPLACE STATE STEPS --------------------------------------------------------
  *
- * ONE STAGE OF ITS OWN, and it is step 10: everything before it is engine state — a serialization, a URL parse
- * and two refusals — and §7.4.4's own split is what makes the tail parkable while the head is not (see
- * core/frame/session_history.h). The member therefore holds only §7.4.4's work record. */
+ * TWO STAGES, AND THE FIRST OF THEM IS NOT A FORMALITY. This declared ONE — step 10 — on the ground that
+ * everything before it is engine state (a serialization, a URL parse and two refusals) and that §7.4.4's own
+ * split is what makes the tail parkable while the head is not. That reasoning is the one quickjs-step.h's
+ * JSTrampStepDef::steps forbids: what makes a rest point necessary is the ENGINE — RAM pressure paging the
+ * low-value tail to the cold tier, a cross-session resume, a flow that outranks this one — and none of those
+ * ask whether the span in front of them runs the page's code. Step 3's StructuredSerializeForStorage walks a
+ * graph the PAGE chose the size of, and step 5's encoding-parse walks a string it chose the length of.
+ *   IT ALSO COST A REAL BUG, which is what quickjs-step.h's STEP_DISPATCH now makes unwritable. With one stage
+ * declared, IDL_STEP_STAGE_BASE made that constant IDL_STEP_FIRST — the stage a member's body is ENTERED at —
+ * so `if (hdr->stage == HPR_UPDATE) goto update;` fired on the first entry and jumped past the serialization,
+ * the URL parse and both SecurityError refusals into a §7.4.4 work record nobody had begun. The member holds
+ * only that work record, which is why the head had nothing of its own to leave behind and the jump was silent. */
 #define HPR_STAGES(X)                                                                                     \
     X(HPR_CHECKS, "HTML §7.2.5 shared history push/replace state steps 1-9 (the fully-active check, "      \
                   "StructuredSerializeForStorage(data), encoding-parsing url, can-have-its-URL-rewritten, "\
@@ -258,8 +267,9 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
     bool have_target = false;
     int magic = idl_step_magic(hdr), r;
 
-    if (hdr->stage == HPR_UPDATE) goto update;
+    STEP_DISPATCH(HPR_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
 
+    STEP_ARM(HPR_CHECKS);
     DCHECK(magic == HIST_PUSH || magic == HIST_REPLACE,
            "§7.2.5's shared push/replace state steps ran with a mode neither of its two callers declares");
     session_history_url_update_start(&s->w);
@@ -357,9 +367,17 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
     structured_data_free(ctx, &serialized);
     url_record_free(&doc_url);
     url_record_free(&target);
-    hdr->stage = HPR_UPDATE;
+    /* AND IT RETURNS. Setting the stage and running on is what the declaration would then be lying about: the
+       driver never saw the boundary, so nothing could park between §7.2.5's head and §7.4.4's tail and the
+       second label named a rest point that did not exist. JS_STEP_YIELD hands the decision to the scheduler —
+       it parks the flow if a sibling outranks it and re-enters here immediately if none does. Nothing is
+       carried across: `cb_result` is this entry's (JS_UNDEFINED, since no request was in flight) and the tail's
+       own arrives on its re-entry. */
+    JS_FreeValue(ctx, cb_result);
+    STEP_GOTO(hdr->stage, HPR_UPDATE, &s->w.nav.phase, NULL);
+    return JS_STEP_YIELD;
 
-update:
+    STEP_ARM(HPR_UPDATE);
     /* §7.4.4 steps 11-13, the half that runs the page's code: the navigation API's `currententrychange` and
        `dispose`, then the finalize. */
     r = session_history_url_update_run(ctx, &s->w, cb_result, out_cb, out_argc);

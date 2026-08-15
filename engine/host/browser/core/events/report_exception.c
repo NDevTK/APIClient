@@ -77,6 +77,7 @@ static bool reporting_mode(JSContext *ctx, JSValueConst global, int set, bool on
 void report_exception_work_start(ReportExceptionWork *w)
 {
     w->stage = 0;
+    w->reporting = 0;
     w->phase = 0;
     w->ev = JS_UNDEFINED;
     w->cb[0] = w->cb[1] = w->cb[2] = w->cb[3] = JS_UNDEFINED;
@@ -99,13 +100,23 @@ void report_exception_work_unlock(JSContext *ctx, ReportExceptionWork *w)
        every one after it is swallowed, which reads exactly like "reporting does not work sometimes".
        IT IS ITS OWN FUNCTION because it is the only part of this record's teardown a `visit` cannot express: a
        global flag is not a reference, so no declaration names it. Everything else here IS named by the visit
-       above, and a teardown that restated it would be the second list. */
-    if (w->stage != 0) {
+       above, and a teardown that restated it would be the second list.
+       IT ASKS ABOUT THE LOCK, NOT ABOUT THE STAGE. This was `if (w->stage != 0)` — see report_exception.h: a
+       negation over the stages is a claim about every stage that is not the first, and §8.1.4.6 has two more
+       rest points to declare (step 2's extract walks a backtrace whose depth the page chose). The day either
+       lands, `stage != 0` would have started giving back a mode this record had not yet taken. */
+    if (w->reporting) {
         JSValue g = JS_GetGlobalObject(ctx);
         reporting_mode(ctx, g, /*set*/ 1, false);
         JS_FreeValue(ctx, g);
-        w->stage = 0;
+        w->reporting = 0;
     }
+    /* A TEARDOWN IS NOT A TRANSITION, which is why this is an assignment and not a STEP_GOTO: the record is
+       abandoned wherever it stood, so its fire request's cursor is legitimately mid-flight and the assert
+       STEP_GOTO makes — that no sub-sequence is left in flight across a stage move — is about a machine that
+       CONTINUES. What this restores is the start state, so a record reached again is asked from its first step
+       rather than resumed into a dispatch nobody is holding. */
+    w->stage = 0;
 }
 
 void report_exception_work_release(JSContext *ctx, ReportExceptionWork *w)
@@ -197,6 +208,7 @@ int report_exception_run(JSContext *ctx, ReportExceptionWork *w, JSValueConst ex
         w->ev = report_error_event(ctx, exception);
         if (JS_IsException(w->ev)) { w->ev = JS_UNDEFINED; return 0; }
         reporting_mode(ctx, global, /*set*/ 1, true);   /* step 5.1 */
+        w->reporting = 1;                               /* and this record now owes it back — see the unlock */
         STEP_GOTO(w->stage, 1, &w->phase, NULL);
         in = JS_UNDEFINED;
     }
@@ -207,6 +219,7 @@ int report_exception_run(JSContext *ctx, ReportExceptionWork *w, JSValueConst ex
     if (r)
         return r;
     reporting_mode(ctx, global, /*set*/ 1, false);      /* step 5.3 */
+    w->reporting = 0;                                   /* given back at the step that gives it back */
     /* step 6's notHandled is `not_canceled`: an `onerror` that returns true cancels the event, and that is how
        a page says it handled the error. Headless there is no developer console for step 7 to write to, so the
        flag has no further consumer here — a WORKER's global is where step 6.2 gives it one. */

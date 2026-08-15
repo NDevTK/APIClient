@@ -600,6 +600,12 @@ static bool sh_fragment_equal(const char *a_url, const char *b_url)
                          "PopStateEvent)")
 enum { SH_APPLY_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const SH_APPLY_STEPS[] = { SH_APPLY_STAGES(JS_STEP_STAGE_LABEL) NULL };
+/* ONE NAME FOR THE ALGORITHM THESE STAGES ARE STEPS OF. Three functions dispatch on this one stage list — the
+   traversal machine's step, the apply's second half, and §7.4.6.2 — and the machine's definition names it a
+   fourth time. Written out at each of them they are four statements of one fact, and the abort a
+   STEP_DISPATCH raises would name a different algorithm depending on which of the three it came from. */
+#define SH_APPLY_ALGORITHM "HTML §7.4.6.1 apply the history step, as the traversable's queued session history " \
+                           "traversal steps"
 
 /* §7.4.6.1's CHANGING NAVIGABLE CONTINUATION STATE — "a struct with: displayed document, target entry,
    navigable, update only" — plus the four values §7.4.6.1's second half is handed alongside it (the history
@@ -720,9 +726,9 @@ static int sh_update_document_for_history_step(JSContext *ctx, SHApply *a, JSVal
     bool documents_entry_changed;
     int r;
 
-    if (a->stage == SH_APPLY_NAV) goto nav_update;
-    if (a->stage == SH_APPLY_POPSTATE) goto fire_popstate;
+    STEP_DISPATCH(SH_APPLY_STAGES, a->stage, SH_APPLY_ALGORITHM, JS_STEP_ABRUPT);
 
+    STEP_ARM(SH_APPLY_STEP);
     rec = sh_record(ctx);
     latest = JS_GetPropertyStr(ctx, rec, SH_R_LATEST);
     /* STEP 1. */
@@ -771,8 +777,17 @@ static int sh_update_document_for_history_step(JSContext *ctx, SHApply *a, JSVal
     DCHECK(a->navigation_type != NULL,
            "§7.4.6.2 step 6.4.1 asserts a non-null NavigationType, and the only entry point that passes null is "
            "§7.4.6.1's update-for-navigable-creation/destruction — which never changes a document's entry");
-    a->stage = SH_APPLY_NAV;
-nav_update:
+    /* AND IT RETURNS RATHER THAN RUNNING ON. Step 6.4.1 ends here and step 6.4.2 is the next stage; a machine
+       that assigns the stage and falls into the next arm has crossed a boundary the driver never saw, so the
+       label would name a rest point the engine could not park at — which is the cap quickjs-step.h's
+       JSTrampStepDef::steps refuses. JS_STEP_YIELD is what asks: the scheduler parks this traversal if a
+       sibling flow outranks it and re-enters immediately if none does. `in` is this entry's request answer and
+       nothing below has asked for one yet, so it is released here rather than carried across the rest point. */
+    JS_FreeValue(ctx, in);
+    STEP_GOTO(a->stage, SH_APPLY_NAV, &a->nav.phase, &a->fire_phase, NULL);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(SH_APPLY_NAV);
     /* STEP 6.4.2: "UPDATE THE NAVIGATION API ENTRIES FOR A SAME-DOCUMENT NAVIGATION given navigation, entry
        and navigationType." IT RUNS THE PAGE'S CODE — `currententrychange` at the Navigation, then `dispose` at
        every entry the update threw away — so it is a request and this is where the traversal parks first. It
@@ -797,8 +812,13 @@ nav_update:
             return JS_STEP_ABRUPT;
         }
     }
-    a->stage = SH_APPLY_POPSTATE;
-fire_popstate:
+    /* The event is minted in the stage that ENDS and the fire is the stage that begins, for the reason
+       core/file/file_picker.c mints step 7.4's `dismissed` a stage early: the next arm is re-entered by its own
+       request cursor on every resume of the dispatch, so anything it built itself it would build again. */
+    STEP_GOTO(a->stage, SH_APPLY_POPSTATE, &a->nav.phase, &a->fire_phase, NULL);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(SH_APPLY_POPSTATE);
     global = JS_GetGlobalObject(ctx);
     /* `popstate` is not cancelable, so there is no cancellation to read back — §2.9's answer is discarded the
        way DOM's fire-an-event discards it for every event no algorithm branches on. */
@@ -808,7 +828,6 @@ fire_popstate:
     if (r > 0) return r;
     JS_FreeValue(ctx, a->popstate);
     a->popstate = JS_UNDEFINED;
-    a->stage = SH_APPLY_STEP;
     /* STEP 6.4.4. */
     sh_persisted_state(ctx);   /* "restore persisted state given entry" */
     /* STEP 6.4.5: "if oldURL's fragment is not equal to entry's URL's fragment, then QUEUE A GLOBAL TASK on the
@@ -843,6 +862,11 @@ activation_branch:
            "(or, for a \"replace\" from a same-origin non-initial-about:blank document, a fresh "
            "NavigationHistoryEntry over that entry), its new entry to navigation's current entry, and its "
            "navigation type to navigationType");
+    /* AND THE ALGORITHM IS BACK AT ITS FIRST STEP. §7.4.6.2 is finished, so the record its caller carries names
+       the step it would be re-entered at rather than the last one it rested at — which is what the traversal
+       machine copies onto its header. The update-only exit reaches here already there, which STEP_GOTO admits:
+       a write that changes nothing is not a transition. */
+    STEP_GOTO(a->stage, SH_APPLY_STEP, &a->nav.phase, &a->fire_phase, NULL);
     return 0;
 }
 
@@ -952,13 +976,19 @@ static int sh_apply_history_step_finish(JSContext *ctx, SHApply *a, JSValue in, 
     JSValue trec;
     int r;
 
-    /* THE GUARD NAMES THE ONE STAGE THIS HALF'S OWN STEPS BELONG TO, and it is not "anything but the last".
-       It was `!= SH_APPLY_POPSTATE` while there were two stages, and the moment §7.4.6.2 gained a rest point of
-       its own (step 6.4.2's navigation API update) that spelling started re-running activate-history-entry on
-       every resume through it — which the afterPotentialUnloads assertion below would then have reported as a
-       second history step having been applied across this one, naming a race that had not happened. A resume
-       guard written as a negation is wrong for every stage added after it. */
-    if (a->stage == SH_APPLY_STEP) {
+    /* THE DISPATCH IS THE DECLARATION'S, AND THAT IS WHY THIS HALF IS SAFE TO ADD A STAGE TO. It was
+       `if (a->stage != SH_APPLY_POPSTATE)` — "anything but the last stage" — while there were two rest points,
+       and the moment §7.4.6.2 gained a third (step 6.4.2's navigation API update) that spelling started
+       re-running activate-history-entry on every resume through it. The afterPotentialUnloads assertion below
+       would then have reported a SECOND history step applied across this one and sent its reader to build
+       §7.4.1.3's traversal queue for a race that never happened. A resume guard written as a negation is wrong
+       for every stage added after it, and a positive one that names only some of them is wrong for the arm it
+       does not name — so neither is written here: quickjs-step.h's STEP_DISPATCH generates the arms from
+       SH_APPLY_STAGES, and a fourth stage added to that list does not compile until it has a body. */
+    STEP_DISPATCH(SH_APPLY_STAGES, a->stage, SH_APPLY_ALGORITHM, JS_STEP_ABRUPT);
+
+    STEP_ARM(SH_APPLY_STEP);
+    {
         /* "If changingNavigableContinuation's update-only is true, OR targetEntry's document is
            displayedDocument: this is a SAME-DOCUMENT NAVIGATION, we proceed without unloading" — both hold, the
            second because _begin asserted the target entry names this Document. The other arm DEACTIVATES the
@@ -984,6 +1014,12 @@ static int sh_apply_history_step_finish(JSContext *ctx, SHApply *a, JSValue in, 
         /* "If targetEntry's document is equal to displayedDocument, then PERFORM updateDocument" — it is, so it
            runs here rather than as a queued task in the target document's realm. */
     }
+    /* AND THE THREE ARMS SHARE THIS TAIL, which is `case A: case B: case C:` and reads as one: §7.4.6.2 IS the
+       perform-updateDocument this step reaches, and the two later stages are rest points INSIDE it, so a resume
+       at either of them re-enters the same call. The stage has not moved across the arms above, so no rest
+       point is crossed by falling into it. */
+    STEP_ARM(SH_APPLY_NAV);
+    STEP_ARM(SH_APPLY_POPSTATE);
     r = sh_update_document_for_history_step(ctx, a, in, out_cb, out_argc);
     /* JS_STEP_CALL to park on the dispatch, JS_STEP_ABRUPT if the event could not be minted — either way the
        algorithm has not reached its last step, and only 0 means it has. A `> 0` test here would swallow the
@@ -1329,7 +1365,10 @@ static int js_sh_traverse_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
     int32_t delta = 0;
     int r;
 
-    if (s->hdr.stage == SH_APPLY_STEP) {
+    STEP_DISPATCH(SH_APPLY_STAGES, s->hdr.stage, SH_APPLY_ALGORITHM, JS_STEP_ABRUPT);
+
+    STEP_ARM(SH_APPLY_STEP);
+    {
         /* STEPS 4.1-4.4. `delta` arrived as the job's one argument, already converted by §7.2.5's `optional long
            delta = 0` declaration — a `long` is 32 bits and signed, which is why the arithmetic below is. */
         DCHECK(JS_IsNumber(step_arg(&s->hdr, 0)),
@@ -1349,6 +1388,10 @@ static int js_sh_traverse_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
            userInvolvement, and \"traverse\"". */
         sh_apply_history_step_begin(ctx, &s->apply, target, "traverse");
     }
+    /* THE SAME SHARED TAIL AS THE HALF IT DRIVES, for the same reason: §7.4.6.1's second half owns all three
+       stages, so a resume at either of the later two re-enters it and nothing above runs again. */
+    STEP_ARM(SH_APPLY_NAV);
+    STEP_ARM(SH_APPLY_POPSTATE);
     r = sh_apply_history_step_finish(ctx, &s->apply, cb_result, out_cb, out_argc);
     /* THE MACHINE'S REST POINT IS THE ALGORITHM'S — one declaration (SH_APPLY_STAGES), copied rather than
        restated, so a parked traversal names the spec step it is parked at and cannot name a different one from
@@ -1360,8 +1403,7 @@ static int js_sh_traverse_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
 
 static const JSTrampStepDef js_sh_traverse_def = {
     sizeof(SHTraverseState), js_sh_traverse_step, NULL, 0, .visit = js_sh_traverse_visit,
-    .algorithm = "HTML §7.4.3 traverse the history by a delta, as the traversable's queued session history "
-                 "traversal steps",
+    .algorithm = SH_APPLY_ALGORITHM,
     .steps = SH_APPLY_STEPS
 };
 static int g_traverse_stepid = -1;

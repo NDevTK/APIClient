@@ -17,6 +17,14 @@
  *   JS_STEP_CALL = return it, 0 = the report has finished. */
 typedef struct {
     uint8_t stage;     /* 0 = not started, 1 = the `error` event is in flight */
+    /* STEP 5.1'S FLAG IS HELD, NOT INFERRED FROM THE STAGE. The unlock below read `stage != 0` for "this record
+       set the global's error reporting mode and owes it back", which is the same negation this engine has now
+       been bitten by twice: it is a claim about EVERY stage that is not the first, so it is wrong for every
+       stage added after it — and §8.1.4.6's own steps 2 and 5.1 are two more rest points this record still owes
+       (its stages are the bare integers 0 and 1, which JSTrampStepDef::steps refuses for a definition and
+       nothing yet refuses for a work record). The lock is not a step of the algorithm, it is a thing the
+       algorithm is HOLDING, so it is its own field and the unlock asks about it directly. */
+    uint8_t reporting;
     uint8_t phase;     /* event_target_fire_run's own */
     JSValue ev;        /* the ErrorEvent, minted once and held across the dispatch (owned) */
     EventFireCb cb;
