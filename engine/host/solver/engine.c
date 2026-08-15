@@ -1717,6 +1717,10 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                    "a flow compiled a program it had already started — the suspended frame was lost and the "
                    "flow is REPLAYING it, re-running side effects against a delta that already holds them");
             f->last_compiled = f->script_i;
+            /* THE DEEPEST PROGRAM THIS DOCUMENT HAS EVER REACHED, recorded where a program is STARTED and by
+               whichever flow starts it — a coverage fact about the document, not about the flow holding the
+               thread (see g_deepest). */
+            if (f->script_i > g_deepest) g_deepest = f->script_i;
             /* IN THE REALM THE PROGRAM BELONGS TO, which for a CROSS-AGENT OPERATION is the realm of the
                document the PEER named and not the one this session was rooted in. A program compiled here is
                closed over the compiling realm's global (JS_FlowNew) and `globalThis[member]` is exactly the
@@ -1836,6 +1840,24 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
 static int g_switches = 0;
 int engine_switch_count(void) { return g_switches; }
 
+/* TWO FACTS THE SCHEDULER HAS AND HAS NEVER SAID, and both of them are questions that were being ANSWERED BY
+ * INFERENCE from numbers that do not mean what they were read as.
+ *
+ * `g_finished` — how many flows have ever reached flow_step's "all scripts, chunks, jobs, replies and load
+ * listeners done" and been finished. It was being read off `live == flows`, which is a comparison of the
+ * frontier's CURRENT size against the number ever CREATED: those are equal whenever creations and finishes
+ * happen to balance, and they are also equal when nothing has ever finished. One number says which, and "not
+ * one flow has ever completed" is a strong enough claim about a scheduler that it should not be a subtraction
+ * anyone has to trust.
+ *
+ * `g_deepest` — the highest program index this DOCUMENT has ever compiled, across every flow. The progress
+ * line's `script` is the CURRENT flow's cursor, which says what the flow holding the thread is doing and
+ * nothing about the document's coverage: a run reporting `script: 1` forever may be one where no flow has ever
+ * reached the second <script>, or one where thousands have and the flow that happens to hold the thread is at
+ * its first. Those need opposite fixes, and until now they read identically. */
+static long g_finished;
+static int  g_deepest = -1;
+
 /* THE WORK THIS ENGINE HAS PERFORMED — forks taken, flows created, jobs run, context switches. ONE definition,
    because two consumers ask the same question about it and they were asking two different ones.
  *
@@ -1894,6 +1916,7 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
 }
 
 static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down its interleaving state + remove */
+    g_finished++;   /* the one place a flow ever COMPLETES — see g_finished */
     /* "all scripts, chunks, jobs and fetches are done" cannot be true with a continuation still parked — the
        loop above resumes one before it can answer that. Asserting it here is what keeps the park inside the
        no-work-item-is-ever-dropped rule rather than merely intending to. */
@@ -2555,6 +2578,28 @@ static int engine_sched_slice(void) {
         }
     }
     g_sess_cur = cur;
+    /* THE STALL CLAIM, CHECKED OF EVERY MEMBER — the other half of the host-owed mark, and the half that would
+       catch the OPPOSITE failure from the one just fixed. flow_set_host_owed asserts that a mark is never
+       cleared by something that cannot have answered it; nothing asserted that a mark is never LAID DOWN on a
+       flow that could still have progressed. That failure is silent in the other direction: the engine stops
+       exploring early and reports a frontier "waiting on the host" that the host owes nothing, which from
+       outside is indistinguishable from a document that really is waiting.
+       Reaching this line means the pick found no runnable member, so every member is marked; each of them must
+       therefore hold something ONLY THE HOST can supply. That is an entry on its register — a fetch reply, a
+       document script's text, an answer to a synchronous request — or the one case with no register entry at
+       all: a document a peer still holds a reference into, whose last timeline reports host-owed INSTEAD of
+       finishing (engine_set_referenced), and which is waiting for an operation rather than for a reply.
+       IT IS ALSO WHERE "how many requests may one stall answer" IS DECIDED, and the answer is ALL of them:
+       engine_host_requests joins every outstanding record into a buffer that grows (no truncation, no cap) and
+       every host walks the whole list. So a frontier that stays blocked across a stall is not a seam that
+       answers one at a time — it is this set being REGENERATED by forking, since a fork re-issues its parent's
+       unanswered synchronous request under the sibling's own world (engine_fork_finalize). */
+    for (int i = 0; i < flow_count(); i++) {
+        DCHECK(pending_count(flow_at(i)->pending) > 0 || g_referenced,
+               "the frontier reported a STALL while one of its members owed the host NOTHING — its mark says it "
+               "cannot progress and its register is empty, so it was marked while it still had work to do and "
+               "the exploration of that timeline stops here for no reason at all");
+    }
     /* The exploration found sinks; each breakout is a FLOW on this same frontier, seeded once the exploring
        flows are done so a candidate never re-fires against a half-explored page. Seeding adds members, so the
        loop above has more to do — hence before the exhausted answer, not after it.
@@ -2751,7 +2796,12 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
                    marks are being cleared faster than the sweep can lay them down — the state that made this
                    document swap COW deltas 1.76 million times instead of reporting STALLED, and which had to be
                    inferred from a switch count because no number named it. On a healthy stall the two agree. */
+                /* `finished` AND `deepest` BESIDE THEM, because "not one flow has ever completed" and "the
+                   document never reaches its second script" were both being read off numbers that cannot say
+                   it: `live == flows` is the frontier's size against the number ever created, and `script` is
+                   the CURRENT flow's cursor. Both are facts this engine holds — see g_finished/g_deepest. */
                 printf("@COLD {\"flows\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
+                       "\"finished\":%ld,\"deepest\":%d,"
                        "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
                        "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendKiB\":%ld,"
                        "\"dynKiB\":%ld,\"miscKiB\":%ld,\"perFlowKiB\":%ld,"
@@ -2759,6 +2809,7 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
                        "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
                        "\"sharedKiB\":%ld,\"stepMachines\":%d}\n",
                        c.flows, c.framed, c.blocked, flow_host_owed_count(),
+                       g_finished, g_deepest,
                        c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
                        c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count,
                        c.pend_bytes / 1024, c.dyn_bytes / 1024, c.misc_bytes / 1024,
