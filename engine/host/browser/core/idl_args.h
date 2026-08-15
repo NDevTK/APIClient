@@ -534,6 +534,25 @@ void idl_install_accessor_exposed(JSContext *ctx, JSValueConst target, const cha
 void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
                           IdlGetter getter, int getter_magic, int setter_stepid);
 
+/* WEB IDL §3.4.10's [LegacyUnforgeable] ATTRIBUTE — the OTHER of the two places §3.7.6 puts an attribute, and
+ * a different member of the platform rather than a different way of writing the same one.
+ *
+ * §3.4.10: "the property will be non-configurable and will exist as an own property on the object itself rather
+ * than on its prototype", and §3.7.6 states the descriptor exactly — the same getter and setter, [[Enumerable]]
+ * true, and [[Configurable]] FALSE where the ordinary form's is true. §3.7.6's "define the regular attributes"
+ * REMOVES the unforgeable ones from what goes on the interface prototype object, so an interface whose members
+ * are all unforgeable has a prototype carrying only §3.7.3's `constructor` and @@toStringTag — which is exactly
+ * what `Object.getOwnPropertyNames(Location.prototype)` reports in a browser.
+ *
+ * SO THE CALLER PASSES THE INSTANCE, not the prototype, and the two facts arrive together: a member defined
+ * configurable and locked down afterwards is a member that was forgeable for the length of one install, and a
+ * member on a prototype is one a page can shadow with an own property of its own. HTML §7.2.4 marks every
+ * member of Location unforgeable for that reason and says so — "required by legacy code that consulted the
+ * Location interface, or stringified it, to determine the document URL, and then used it in a
+ * security-sensitive way" — so `foo[location] = bar` and `location + ""` cannot be misdirected. */
+void idl_install_accessor_unforgeable(JSContext *ctx, JSValueConst target, const char *name,
+                                      IdlGetter getter, int getter_magic, int setter_stepid);
+
 /* WEB IDL §3.7.6's [Replaceable] ATTRIBUTE. It is READONLY, and yet assigning to it works: the setter DEFINES
    an ordinary data property on the receiver, which replaces the accessor outright. So `window.length` is an
    accessor until a page writes to it and a `{writable:true}` data property afterwards, and the corpus reads

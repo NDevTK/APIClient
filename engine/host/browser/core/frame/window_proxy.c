@@ -47,6 +47,7 @@
 #include "core/realm.h"
 #include "core/html/html_iframe.h"
 #include "core/frame/navigable.h"
+#include "core/frame/location.h"
 #include "core/frame/document_lifecycle.h"
 #include "core/dom/document.h"
 #include <stdio.h>
@@ -939,12 +940,12 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
            back THIS document's Location instead would be a cross-origin read that silently succeeded, which is
            the one failure the check exists to prevent, so proxy_realm's assert stops here and names it. */
         if (wp_closed(p)) return JS_NULL;
-        {
-            JSContext *r = proxy_realm(ctx, this_val, p);
-            JSValue g = JS_GetGlobalObject(r), loc = JS_GetPropertyStr(r, g, "location");
-            JS_FreeValue(r, g);
-            return loc;
-        }
+        /* READ OFF THE REALM, not off its global. `location` is an IDL accessor now — §7.2.2 declares it
+           `[LegacyUnforgeable] readonly attribute Location`, so it is a non-configurable accessor on the
+           global — and a JS_GetPropertyStr that reaches a getter aborts, because a C activation has no flow
+           base under it. location.h's location_object is the same answer without the property read, exactly as
+           document_object is above. */
+        return location_object(proxy_realm(ctx, this_val, p));
     default:
         DFAIL("a WindowProxy member with no navigable-own answer reached this switch — WP_LENGTH and anything "
               "added beside it read the ACTIVE DOCUMENT and are declared on the step machine below");

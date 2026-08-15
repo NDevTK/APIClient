@@ -136,9 +136,13 @@ static void engine_agent_init(JSContext *ctx, const char *origin, const char *to
     report_exception_init(ctx);
     message_port_init(ctx);
     xhr_init(ctx);   /* XHR §3, and §5's ProgressEvent under it */
-    /* §7.2.5.1 and §7.4. `window.open` returns a WindowProxy, and so does §4.8.5's contentWindow. The proxy
+    /* §7.2.4's Location and CSSOM VIEW §4.3's Screen, DECLARED here and built per realm by the intrinsics they
+       register. Both are §3.7 per-realm objects — a prototype, an interface object and the one instance the
+       Window is associated with — so there is no install for this entry to call at document time.
+       §7.2.5.1 and §7.4. `window.open` returns a WindowProxy, and so does §4.8.5's contentWindow. The proxy
        class has to exist before any proxy is minted. */
     location_init(ctx);
+    screen_init(ctx);   /* the responsive gate: screen.width decides which router a bundle uses */
     navigable_init(ctx);
     timer_init(ctx);
     window_proxy_init(ctx, origin);
@@ -223,7 +227,6 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
        EventTarget.prototype, which window_install chains it to. */
     event_target_install_handlers(ctx, g, EH_GLOBAL | EH_WINDOW);   /* window IS the global (7.2.2) */
     fetch_install(ctx, g);
-    location_install(ctx, g, url);
     navigable_install(ctx, g, origin);
     unhandled_rejection_install(ctx, g);   /* PromiseRejectionEvent */
     animation_frame_install(ctx, g);       /* HTML §8.9: requestAnimationFrame/cancelAnimationFrame */
@@ -231,10 +234,10 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
     media_query_list_install(ctx, g);   /* CSSOM VIEW §4.2/§7: matchMedia, MediaQueryList */
     abort_install(ctx, g);   /* AbortController/AbortSignal: fetch takes a signal, so a bundle mints one early */
     observable_install(ctx, g);
-    /* NO navigator_install: §8.10.1's interface is a per-realm intrinsic, so `navigator`, `clientInformation`
-       and the `Navigator` interface object are already on this global — realm_install_intrinsics put them
-       there, through the ONE list every realm goes through rather than a line each host has to remember. */
-    screen_install(ctx, g);   /* the responsive gate: screen.width decides which router a bundle uses */
+    /* NO navigator_install, NO location_install, NO screen_install: §8.10.1's Navigator, §7.2.4's Location and
+       §4.3's Screen are per-realm intrinsics, so `navigator`, `clientInformation`, `location`, `screen` and
+       their three interface objects are already on this global — realm_install_intrinsics put them there,
+       through the ONE list every realm goes through rather than a line each host has to remember. */
     document_install(ctx, g, dom, url, csp, doc_id, nav_proxy);
     JS_FreeValue(ctx, g);
 }
@@ -493,6 +496,8 @@ QJS_EXPORT void qjs_teardown(void)
     idl_args_free(g_ctx);   /* the dictionary member atoms the declaration pool interned */
     navigable_free(g_ctx);
     navigator_free();   /* the two per-realm slot ids; each realm's Navigator went with its context */
+    location_free();
+    screen_free();
     window_free(g_ctx);
     remote_object_free(g_ctx);
     window_proxy_free(g_ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */

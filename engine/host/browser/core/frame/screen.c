@@ -1,4 +1,12 @@
-/* THE SCREEN INTERFACE — Blink core/frame, the output-device half of the browsing context.
+/* THE SCREEN INTERFACE — CSSOM VIEW §4.3, Blink core/frame, the output-device half of the browsing context.
+ *
+ * IT IS AN INTERFACE, AND IT WAS NOT ONE. This file built a PLAIN OBJECT with six own data properties and no
+ * prototype of its own, which is four things ordinary page code observes and real bundles do all four:
+ * `screen.width = 1` stuck (a browser ignores it in sloppy mode and throws in strict),
+ * `Object.getOwnPropertyNames(screen)` listed every member where a browser lists none, `delete screen.width`
+ * succeeded, and `Screen.prototype` and `window.Screen` did not exist at all — so `screen instanceof Screen`
+ * threw and every device-detection shim that patches the prototype patched nothing. That is the same defect
+ * Navigator had, in the same place, and it costs the same thing: coverage of the code behind those probes.
  *
  * EVERY MEMBER HERE IS THE ENVIRONMENT, so every member here is CONCOLIC with a real display's value as its
  * example. That is not a hedge, it is the whole point of the interface for this tool: `screen.width < 768` is
@@ -11,8 +19,16 @@
  * bundle that compares them is asking whether the OS reserves chrome (a taskbar), which is a different question
  * with its own two answers, and one shared source would tie the two branches together.
  *
- * `orientation`, `isExtended` and `onchange` are honestly ABSENT — the Screen Orientation API is its own
- * interface with its own state machine, and the IDL audit names them until it exists. */
+ * THE VALUES ARE MINTED WITH THE REALM, in the realm's own record, for the reason §3.7 makes every prototype
+ * per realm: a C member runs in the realm that DEFINED it (js_call_c_function takes `ctx` off the function
+ * object), so one prototype shared between documents would answer every document's `screen.width` out of
+ * whichever realm built it first — and a value minted lazily on the first READ is built inside whichever FLOW
+ * got there first, making that flow's baseline everyone's.
+ *
+ * `orientation`, `isExtended` and `onchange` are honestly ABSENT — Screen Orientation's `orientation` is its
+ * own interface with its own state machine, and Window Management's two are [SecureContext] members of a
+ * partial interface that makes Screen an EventTarget. The IDL audit names all three until they exist. */
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -20,6 +36,8 @@
 #include "quickjs.h"
 #include "solver/concolic.h"
 #include "core/frame/screen.h"
+#include "core/idl_args.h"
+#include "core/realm.h"
 
 /* THE MODELLED DISPLAY'S BIT DEPTH, stated ONCE. It is `screen.colorDepth`'s example and it is also what MEDIA
    QUERIES §4.5's `color` feature reports — as bits per COLOR COMPONENT, which is this divided by the three
@@ -36,19 +54,31 @@
 #define SCREEN_AVAIL_WIDTH  1920.0
 #define SCREEN_AVAIL_HEIGHT 1040.0
 
-/* An environment member: opaque for control flow, carrying what a real display reports. One helper, so a member
-   added later cannot quietly arrive as bare-concrete. */
-static void screen_env(JSContext *ctx, JSValueConst scr, const char *name, JSValue example)
-{
-    char path[64];
-    JSValue v;
+/* THE MEMBER LIST, IN ONE PLACE, in the order §4.3's IDL declares them, because it is read THREE times — the
+   magic a getter carries is an index into it, the per-realm record is filled at those indices, and the install
+   walks it to define the accessors. Three hand-kept lists is a member that exists in two of them and not the
+   third, which is a getter answering undefined with nothing to say so; one X-list makes that unspellable, and
+   the record's completeness check below is the other half of the assertion. */
+#define SCREEN_MEMBERS(X)                  \
+    X(AVAIL_WIDTH,  "availWidth")          \
+    X(AVAIL_HEIGHT, "availHeight")         \
+    X(WIDTH,        "width")               \
+    X(HEIGHT,       "height")              \
+    X(COLOR_DEPTH,  "colorDepth")          \
+    X(PIXEL_DEPTH,  "pixelDepth")
 
-    DCHECK(strlen(name) + 8 < sizeof(path), "a Screen member name longer than any in the IDL");
-    snprintf(path, sizeof(path), "screen.%s", name);
-    v = concolic_new(ctx, path, path, example);
-    CHECK(!JS_IsException(v), "minting a Screen environment value failed");
-    JS_SetPropertyStr(ctx, (JSValue)scr, name, v);
-}
+#define SCREEN_ENUM_ONE(id, str) SCR_##id,
+#define SCREEN_NAME_ONE(id, str) str,
+
+enum { SCREEN_MEMBERS(SCREEN_ENUM_ONE) SCR_N };
+static const char *const SCR_NAME[] = { SCREEN_MEMBERS(SCREEN_NAME_ONE) };
+
+/* THE CLASS IS THE BRAND. Web IDL §3.7.5's check on every getter is "does esValue implement the interface", and
+   the one object per realm WEARS the class, so the check is a class-id comparison a page cannot forge. It
+   carries no per-object data — the values are the realm's — so it needs no finalizer and no gc_mark. */
+static JSClassID g_screen_class;
+static int g_vals_slot = -1;   /* this realm's member VALUES, indexed by the enum above */
+static int g_obj_slot  = -1;   /* this realm's one Screen */
 
 int screen_color_depth(void)
 {
@@ -60,31 +90,181 @@ double screen_height(void)       { return SCREEN_HEIGHT; }
 double screen_avail_width(void)  { return SCREEN_AVAIL_WIDTH; }
 double screen_avail_height(void) { return SCREEN_AVAIL_HEIGHT; }
 
-void screen_install(JSContext *ctx, JSValueConst global)
+/* WEB IDL §3.7.5's BRAND CHECK. `Screen.prototype.width` read off a plain object is a TypeError, and a page
+   tells that apart from `undefined` — a feature detector that probes the descriptor and applies the getter
+   reads the throw as "this is a real interface". It is a real throw and not an assert for exactly that reason. */
+static bool screen_brand(JSContext *ctx, JSValueConst this_val)
 {
-    JSValue scr;
+    DCHECK(g_screen_class != 0, "a Screen member ran before screen_init declared the class — the member is only "
+                                "reachable through a prototype the per-realm install builds, so there is no "
+                                "route here that has not run the declaration first");
+    if (JS_GetClassID(this_val) == g_screen_class) return true;
+    JS_ThrowTypeError(ctx, "a Screen member was reached on something that is not a Screen");
+    return false;
+}
 
-    DCHECK(JS_IsObject(global), "screen_install was given something that is not the global object");
+/* THE HALF OF "THIS's ..." THIS ENGINE CAN ANSWER, asserted rather than assumed — the same shape, and the same
+   reason, as navigator.c's. An ordinary `screen.width` arrives with the ctx of the document whose prototype it
+   went through, which is the right Screen. What does NOT arrive right is one realm's getter applied to
+   ANOTHER realm's Screen: the values would come out of the getter's realm, so the two objects' members would
+   answer with the same numbers wearing different identities and a flow pinning one would leave the other
+   unpinned. */
+static void screen_assert_this_realm(JSContext *ctx, JSValueConst this_val)
+{
+    JSValue own = realm_value_get(ctx, g_obj_slot);
+    bool same = JS_VALUE_GET_PTR(own) == JS_VALUE_GET_PTR(this_val);
+
+    JS_FreeValue(ctx, own);
+    DCHECK(same, "a Screen member was reached through ONE realm's Screen.prototype on ANOTHER realm's Screen — "
+                 "answering out of the member's own realm hands back a concolic belonging to a different "
+                 "document, so a branch pinned in one realm leaves the other's value unpinned. BUILD the "
+                 "Screen that carries its own realm's record: give the instance the record as its class opaque "
+                 "(with the finalizer, gc_mark and cow_capture_host_record contract that entails) so the member "
+                 "reads it off THIS, and delete the two realm slots above");
+}
+
+/* EVERY DECLARED MEMBER'S GETTER, once. Its magic is its index; there is nothing per member to write, which is
+   what stops a member from arriving with a hand-written getter that forgets the brand check. */
+static JSValue js_screen_get(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue rec, v;
+
+    if (!screen_brand(ctx, this_val)) return JS_EXCEPTION;
+    screen_assert_this_realm(ctx, this_val);
+    DCHECK(magic >= 0 && magic < SCR_N, "a Screen getter was installed with a magic that is not a member index "
+                                        "— the magic IS the index into the one member X-list");
+    rec = realm_value_get(ctx, g_vals_slot);
+    v = JS_GetPropertyUint32(ctx, rec, (uint32_t)magic);
+    JS_FreeValue(ctx, rec);
+    DCHECK(!JS_IsUndefined(v), "a Screen member's realm record holds nothing at its index — the member list and "
+                               "the record builder are one X-list, so an empty index means a member was "
+                               "declared and never given the value its IDL says it answers with");
+    return v;
+}
+
+/* ---- the per-realm record --------------------------------------------------------------------------------- */
+
+/* An ENVIRONMENT member: opaque for control flow, carrying what a real display reports. One helper, so a member
+   added later cannot quietly arrive as bare-concrete — the shape and the source identity are the same string
+   here because a Screen member IS its own source, and the source is the DISPLAY rather than the document, so
+   it is not keyed per realm the way viewport.c's members are (a UA presents every document of a page on one
+   screen; it presents each in its own viewport). */
+static void screen_env(JSContext *ctx, JSValueConst rec, int idx, JSValue example)
+{
+    char path[64];
+    JSValue v;
+
+    DCHECK(idx >= 0 && idx < SCR_N, "a Screen environment value was minted for a non-member index");
+    DCHECK(strlen(SCR_NAME[idx]) + 8 < sizeof(path), "a Screen member name longer than any in the IDL");
+    CHECK(!JS_IsException(example), "a Screen member's example could not be allocated");
+    snprintf(path, sizeof(path), "screen.%s", SCR_NAME[idx]);
+    v = concolic_new(ctx, path, path, example);
+    CHECK(!JS_IsException(v), "minting a Screen environment value failed");
+    JS_SetPropertyUint32(ctx, rec, (uint32_t)idx, v);
+}
+
+/* THIS REALM'S MEMBER VALUES, built with the realm. Returns an OWNED array; the caller hands it to the realm
+   slot. */
+static JSValue screen_build_values(JSContext *ctx)
+{
+    JSValue rec = JS_NewArray(ctx);
+    int i;
+
+    CHECK(!JS_IsException(rec), "the Screen member record could not be allocated");
     /* §2.3's AVAILABLE area is a SUB-AREA of the screen area — a modelled display whose available half is the
        larger of the two is not a display any UA could report, and every consumer that positions something
-       inside the available area (viewport.c's client window) would then place it off the screen. */
+       inside the available area (viewport.c's client window) would then place it off the screen. Asserted here
+       because this is where the four numbers are read together. */
     DCHECK(SCREEN_AVAIL_WIDTH <= SCREEN_WIDTH && SCREEN_AVAIL_HEIGHT <= SCREEN_HEIGHT,
            "the modelled Web-exposed AVAILABLE screen area is larger than the Web-exposed screen area it is "
            "part of");
 
-    scr = JS_NewObject(ctx);
-    CHECK(!JS_IsException(scr), "the Screen allocation failed");
-
     /* The modelled display, out of the one statement of it above. The examples decide what the code COMPUTES;
-       the fork is what stops them deciding which code is reached. */
-    screen_env(ctx, scr, "width",  JS_NewInt32(ctx, (int)SCREEN_WIDTH));
-    screen_env(ctx, scr, "height", JS_NewInt32(ctx, (int)SCREEN_HEIGHT));
+       the fork is what stops them deciding which code is reached.
+       `width`/`height` are `long` and `colorDepth`/`pixelDepth` are `unsigned long`, which is the only thing
+       §4.3's two groups of IDL differ on here. */
+    screen_env(ctx, rec, SCR_WIDTH,  JS_NewInt32(ctx, (int)SCREEN_WIDTH));
+    screen_env(ctx, rec, SCR_HEIGHT, JS_NewInt32(ctx, (int)SCREEN_HEIGHT));
     /* Separate sources from width/height on purpose: `screen.availHeight < screen.height` is the "is there a
        taskbar" question, and sharing one source would make that branch answer the size branch. */
-    screen_env(ctx, scr, "availWidth",  JS_NewInt32(ctx, (int)SCREEN_AVAIL_WIDTH));
-    screen_env(ctx, scr, "availHeight", JS_NewInt32(ctx, (int)SCREEN_AVAIL_HEIGHT));
-    screen_env(ctx, scr, "colorDepth", JS_NewInt32(ctx, SCREEN_COLOR_DEPTH));
-    screen_env(ctx, scr, "pixelDepth", JS_NewInt32(ctx, SCREEN_COLOR_DEPTH));
+    screen_env(ctx, rec, SCR_AVAIL_WIDTH,  JS_NewInt32(ctx, (int)SCREEN_AVAIL_WIDTH));
+    screen_env(ctx, rec, SCR_AVAIL_HEIGHT, JS_NewInt32(ctx, (int)SCREEN_AVAIL_HEIGHT));
+    screen_env(ctx, rec, SCR_COLOR_DEPTH, JS_NewInt32(ctx, SCREEN_COLOR_DEPTH));
+    screen_env(ctx, rec, SCR_PIXEL_DEPTH, JS_NewInt32(ctx, SCREEN_COLOR_DEPTH));
 
-    JS_SetPropertyStr(ctx, (JSValue)global, "screen", scr);
+    /* THE OTHER HALF OF THE X-LIST'S ASSERTION: every declared member got a value. A member added to the list
+       and not to the builder is a getter that answers undefined, and this is where that is caught rather than
+       in whichever bundle happens to read it. */
+    for (i = 0; i < SCR_N; i++) {
+        JSValue v = JS_GetPropertyUint32(ctx, rec, (uint32_t)i);
+        bool got = !JS_IsUndefined(v);
+        JS_FreeValue(ctx, v);
+        DCHECK(got, "a Screen member was declared in the X-list and given no value by the record builder");
+    }
+    return rec;
+}
+
+/* ---- the declaration and the per-realm install ------------------------------------------------------------ */
+
+/* ONE PROTOTYPE, ONE INTERFACE OBJECT AND ONE SCREEN PER REALM, built WITH the realm — see the file comment for
+   why that is answers and not identities. */
+static void screen_install_realm(JSContext *ctx)
+{
+    JSValue proto, prev, global, scr;
+    int i;
+
+    prev = JS_GetClassProto(ctx, g_screen_class);
+    DCHECK(JS_IsNull(prev), "screen_install_realm ran twice in one realm — everything already holding the first "
+                            "Screen.prototype would answer out of a discarded object");
+    JS_FreeValue(ctx, prev);
+
+    realm_value_set(ctx, g_vals_slot, screen_build_values(ctx));
+
+    proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(proto), "Screen.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "Screen");
+    for (i = 0; i < SCR_N; i++)
+        idl_install_accessor(ctx, proto, SCR_NAME[i], js_screen_get, i, -1);
+    JS_SetClassProto(ctx, g_screen_class, JS_DupValue(ctx, proto));
+
+    /* §3.7.1's INTERFACE OBJECT, on THIS realm's global. Screen declares no constructor, so `new Screen()` is a
+       TypeError — and its PRESENCE is what `screen instanceof Screen` and every prototype-patching shim needs,
+       which is exactly what this interface had none of. */
+    global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "Screen", idl_interface_object(ctx, "Screen", proto));
+
+    scr = JS_NewObjectProtoClass(ctx, proto, g_screen_class);
+    JS_FreeValue(ctx, proto);
+    CHECK(!JS_IsException(scr), "the Window's associated Screen could not be allocated");
+    /* CSSOM VIEW §4's Window extension: `[SameObject, Replaceable] readonly attribute Screen screen`. It was a
+       plain data property, which is neither half of that — SameObject means every read is the one object this
+       realm built, and Replaceable means an assignment REPLACES the accessor with the assigned value rather
+       than being ignored, which is a distinction the corpus reads the descriptor on both sides of. */
+    idl_install_replaceable_value(ctx, global, "screen", JS_DupValue(ctx, scr));
+    realm_value_set(ctx, g_obj_slot, scr);
+    JS_FreeValue(ctx, global);
+}
+
+void screen_init(JSContext *ctx)
+{
+    JSClassDef d = { "Screen" };
+
+    DCHECK(g_vals_slot < 0, "screen_init ran twice — the class and the slots are declared once per AGENT");
+    /* THE CLASS IS BOTH THE PER-REALM PROTOTYPE SLOT AND THE BRAND: the one object per realm WEARS it, so
+       §3.7.5's check is a class-id comparison and a page cannot forge one. */
+    JS_NewClassID(JS_GetRuntime(ctx), &g_screen_class);
+    CHECK(JS_NewClass(JS_GetRuntime(ctx), g_screen_class, &d) == 0,
+          "Screen: the per-realm prototype slot could not be declared");
+    g_vals_slot = realm_value_declare(ctx, "CSSOM VIEW §4.3 the Screen's member values");
+    g_obj_slot  = realm_value_declare(ctx, "CSSOM VIEW §4 the Window's associated Screen");
+    realm_declare_intrinsic(screen_install_realm);
+}
+
+void screen_free(void)
+{
+    /* The prototypes, the interface objects, the Screens and their records are the REALMS' — each is released
+       with its context. What the agent holds is the two slots, and a slot id is a class id in a runtime that is
+       going away with it. */
+    g_vals_slot = -1;
+    g_obj_slot = -1;
 }

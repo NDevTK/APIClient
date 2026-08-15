@@ -1078,6 +1078,15 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
     flow_registry_init(doc_name);
     flow_set_running(flow_add(ctx, JS_UNDEFINED, NULL, 0, WORLD_NONE));
     window_init(ctx);
+    /* §7.2.4's Location, DECLARED here and built per realm by the intrinsic it registers. This runner used to
+       BUILD ITS OWN out of the address — eight members, its own put/prefix helpers, its own parse — because
+       location.c declares `search` and `hash` as concolic attacker SOURCES and a conformance run needs the real
+       strings; that was a second component answering `location`, and it cost exactly what a second component
+       costs (the §7.2.4 stringifier landed in location.c and this realm never saw it, so `new URL(path,
+       location)` went on handing the URL parser `[object Object]` and four files ended at their first import).
+       The source carries the example the ADDRESS actually has, so there is one Location and the overlay this
+       host declines no longer removes the value. AFTER concolic_init, which registers the class a source is. */
+    location_init(ctx);
     navigable_init(ctx);
     timer_init(ctx);
     window_proxy_init(ctx, origin);
@@ -1202,18 +1211,10 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
     fetch_install(ctx, global);
     { static const FetchProvider P = { wpt_owe }; fetch_set_provider(&P); }
 
-    /* THE CORPUS ROOT AND THE DOCUMENT ADDRESS. The driver hands this runner
-       `<root>/resources/testharness.js` first and the test file second, so the root is what precedes the one
-       and the address is the other, made server-relative — which is exactly what WPT's server serves from and
-       resolves against. A worker's `location` is a real WorkerLocation. */
-    /* THE ONE Location COMPONENT. This runner used to BUILD ITS OWN out of the address — eight members, its
-       own put/prefix helpers, its own parse — because location.c declares `search` and `hash` as concolic
-       attacker SOURCES and a conformance run needs the real strings. That is a second component answering
-       `location`, and it cost exactly what a second component costs: the §7.10.5 stringifier was added to
-       location.c and this realm never saw it, so `new URL(path, location)` went on handing the URL parser
-       `[object Object]` and four files ended at their first import. The source now carries the example the
-       ADDRESS actually has, so there is one Location and the concolic overlay no longer removes the value. */
-    location_install(ctx, global, url);
+    /* NO location_install: §7.2.4's Location is a per-realm intrinsic, so `location`, `Location` and
+       `Location.prototype` are already on this global — realm_install_intrinsics put them there, and it reads
+       the address off the DOCUMENT at each member call, which is why it can be built before document_install
+       above has decided what this realm's document is. */
     JS_FreeValue(ctx, global);
 }
 
@@ -1858,6 +1859,7 @@ int main(int argc, char **argv)
     media_query_list_free(ctx);
     viewport_free();
     visual_viewport_free();
+    location_free();
     animation_frame_free(ctx);
     timer_reset(ctx);
     headers_free(ctx);

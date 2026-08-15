@@ -2151,8 +2151,12 @@ void idl_install_accessor_exposed(JSContext *ctx, JSValueConst target, const cha
     idl_install_accessor(ctx, target, name, getter, getter_magic, setter_stepid);
 }
 
-void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
-                          IdlGetter getter, int getter_magic, int setter_stepid)
+/* §3.7.6's "define the attributes" step 1.5, which is the WHOLE of what an ordinary attribute and an
+   unforgeable one differ by: "Let configurable be false if attr is unforgeable and true otherwise." The
+   descriptor is otherwise identical — the same getter, the same setter, [[Enumerable]] true — so this is one
+   define with one flag decided by the member's IDL, not two installs. */
+static void idl_define_accessor(JSContext *ctx, JSValueConst target, const char *name,
+                                IdlGetter getter, int getter_magic, int setter_stepid, int flags)
 {
     DCHECK(setter_stepid < 0 || idl_declared_before_seal(setter_stepid), name);
     JSAtom a = JS_NewAtom(ctx, name);
@@ -2166,9 +2170,27 @@ void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
        the same way and named the same way. It was the fourth hand-written mint. */
     if (setter_stepid >= 0)
         st = idl_step_function(ctx, name, 1, setter_stepid);
-    JS_DefinePropertyGetSet(ctx, (JSValue)target, a, g, st,
-                            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+    JS_DefinePropertyGetSet(ctx, (JSValue)target, a, g, st, flags);
     JS_FreeAtom(ctx, a);
+}
+
+void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
+                          IdlGetter getter, int getter_magic, int setter_stepid)
+{
+    idl_define_accessor(ctx, target, name, getter, getter_magic, setter_stepid,
+                        JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+}
+
+/* §3.4.10's [LegacyUnforgeable] — see idl_args.h. The property is defined at the SAME moment and with the same
+   getter as any other attribute; what differs is the two things §3.7.6 and §3.4.10 state, and both are here:
+   it is defined on the object the caller passes (its INSTANCE, not its prototype) and it is NOT configurable. */
+void idl_install_accessor_unforgeable(JSContext *ctx, JSValueConst target, const char *name,
+                                      IdlGetter getter, int getter_magic, int setter_stepid)
+{
+    DCHECK(getter != NULL,
+           "an unforgeable attribute was installed with no getter — [LegacyUnforgeable] exists so that a read "
+           "of this member cannot be redirected, and a member with nothing to read is not that member");
+    idl_define_accessor(ctx, target, name, getter, getter_magic, setter_stepid, JS_PROP_ENUMERABLE);
 }
 
 /* §3.7.6's [Replaceable] SETTER, and its one implementation. The spec's steps are "Perform

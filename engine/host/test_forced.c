@@ -1762,6 +1762,10 @@ static void tf_agent_init(JSContext *ctx, const char *top_level_url)
        rather than a stand-in for it. */
     navigator_init(ctx);
     location_init(ctx);
+    /* CSSOM VIEW §4.3's Screen, DECLARED here and built per realm by the intrinsic it registers — the mobile
+       gate a responsive bundle routes on, so this fixture exercises the interface the ABI build installs
+       rather than a stand-in for it. */
+    screen_init(ctx);
     navigable_init(ctx);
     timer_init(ctx);
     window_proxy_init(ctx, "https://x.test");
@@ -1815,11 +1819,6 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval_sink, "eval", 1));   /* the eval sink */
     JS_SetPropertyStr(ctx, g, "setInnerHTML", JS_NewCFunction(ctx, js_html_sink, "setInnerHTML", 1));   /* the innerHTML sink */
     JS_SetPropertyStr(ctx, g, "setLocation", JS_NewCFunction(ctx, js_url_sink, "setLocation", 1));   /* the location/URL sink */
-    /* THE REAL Location, which the smoke test had never exercised: `setLocation` above stands in for the URL
-       SINK, and the two attacker SOURCES behind `location.hash`/`location.search` were reached by nothing. That
-       left the per-component percent-encode sets — the thing that decides whether an @S PoC reproduces in a
-       browser at all — with no test of any kind. */
-    location_install(ctx, g, url);
     /* HTML §8.6's TIMER TASK SOURCE. The fixture had none, so `setTimeout` was simply absent and any probe
        using one threw — which is how a great deal of real page code reaches the event loop, and it was the one
        platform edge the engine's own test could not exercise. */
@@ -1847,10 +1846,12 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     }
     JS_SetPropertyStr(ctx, g, "lastChildMark", JS_NewCFunction(ctx, js_last_child_mark, "lastChildMark", 0));   /* DOM node read */
     JS_SetPropertyStr(ctx, g, "state", concolic_new(ctx, "{state}", "{state}", JS_UNDEFINED));   /* injected/unknown app state */
-    /* NO navigator_install: §8.10.1's interface is a per-realm intrinsic, so `navigator`, `clientInformation`
-       and the `Navigator` interface object are already on this global — realm_install_intrinsics put them
-       there, through the ONE list every realm goes through rather than a line each host has to remember. */
-    screen_install(ctx, g);
+    /* NO navigator_install, NO location_install, NO screen_install: §8.10.1's Navigator, §7.2.4's Location —
+       which this fixture exercises for the two attacker SOURCES behind `location.hash`/`location.search`, and
+       so for the per-component percent-encode sets that decide whether an @S PoC reproduces in a browser at
+       all — and §4.3's Screen are per-realm intrinsics, so all three are already on this global.
+       realm_install_intrinsics put them there, through the ONE list every realm goes through rather than a
+       line each host has to remember. */
     /* The components the ABI entry installs, so this fixture runs the engine that ships. Unblocked by the
        JS_AddIntrinsicDOMException fix: the intrinsic is per-context idempotent now, so JS_NewContext's own
        JS_AddIntrinsicAToB install plus this explicit one no longer overwrite one prototype with another. */
@@ -2482,6 +2483,8 @@ int main(int argc, char **argv) {
     idl_args_free(ctx);   /* the dictionary member atoms the declaration pool interned */
     navigable_free(ctx);
     navigator_free();   /* the two per-realm slot ids; each realm's Navigator went with its context */
+    location_free();
+    screen_free();
     window_free(ctx);
     remote_object_free(ctx);
     window_proxy_free(ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */

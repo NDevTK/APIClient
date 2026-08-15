@@ -1,9 +1,14 @@
-/* The Screen interface — Blink core/frame. Installed on the baseline as `screen`. */
+/* CSSOM VIEW §4.3's Screen interface — Blink core/frame. See screen.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FRAME_SCREEN_H
 #define ENGINE_HOST_BROWSER_CORE_FRAME_SCREEN_H
 #include "quickjs.h"
 
-void screen_install(JSContext *ctx, JSValueConst global);
+/* Declared ONCE PER AGENT: the brand class, the two per-realm slots, and the per-realm install this REGISTERS,
+   so no host has an install line to remember. §3.7 gives every realm its own Screen.prototype, its own `Screen`
+   interface object and its own Screen — a host that does not want the interface declines it by not calling
+   this, which is how every other per-realm component is declined. */
+void screen_init(JSContext *ctx);
+void screen_free(void);
 
 /* THE MODELLED DISPLAY'S BIT DEPTH — the EXAMPLE `screen.colorDepth` carries, as a plain number. MEDIA QUERIES
    §4.5's `color` feature is the second reader of that one fact (bits per RGB component is this divided by

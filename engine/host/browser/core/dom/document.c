@@ -40,6 +40,7 @@
 #include "solver/world.h"
 #include "core/frame/window_proxy.h"
 #include "core/frame/navigable.h"
+#include "core/frame/location.h"
 #include "core/dom/page_visibility.h"
 #include "core/html/autofocus.h"
 #include "core/html/focus.h"
@@ -1240,15 +1241,15 @@ int document_lifecycle_step(JSContext *ctx)
    message channel, so 63 subtests across html/browsers failed on a property of undefined without ever reaching
    what they were testing. The IDL audit had it listed among Document's absent members the whole time.
    IT IS THE GLOBAL'S, not a second Location: a document and its window are one browsing context and §3.1.1 says
-   "the Location object of this's relevant global object", so this reads the one location.c installed rather
-   than building another that would compare unequal to it.
-   NULL WHEN THE DOCUMENT IS NOT FULLY ACTIVE, which is what §3.1.1's `Location?` is for — and it is also the
-   honest answer for a host that installed no Location at all (one whose document has no address), where
-   inventing an object would claim an address the engine was never given. */
+   "the Location object of this's relevant global object", so this reads the one location.c built for this realm
+   rather than building another that would compare unequal to it.
+   ASKED OF THE COMPONENT, not read off the global. `window.location` is §7.2.2's `[LegacyUnforgeable] readonly
+   attribute Location`, so it is an ACCESSOR, and a JS_GetPropertyStr that reaches a getter aborts — there is no
+   flow base under a C activation. The JS_IsUndefined arm that stood here went with it: it was the "a host
+   installed no Location at all" case, and a Location is a per-realm intrinsic now, so a realm without one is a
+   realm that declined the component and realm_value_get says so at the read instead of this answering null. */
 static JSValue js_doc_location(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    JSValue g, loc;
-
     (void)magic;
     /* §3.1.1: null when this document is not FULLY ACTIVE — and a document §4.5 created has no browsing context
        at all, so it can never be. It was the realm's `location` unconditionally, which handed a page an address
@@ -1258,11 +1259,7 @@ static JSValue js_doc_location(JSContext *ctx, JSValueConst this_val, int magic)
     if (!d) return JS_EXCEPTION;
     if (JS_IsUndefined(d->proxy))
         return JS_NULL;
-    g = JS_GetGlobalObject(ctx);
-    loc = JS_GetPropertyStr(ctx, g, "location");
-    JS_FreeValue(ctx, g);
-    if (JS_IsUndefined(loc)) { JS_FreeValue(ctx, loc); return JS_NULL; }
-    return loc;
+    return location_object(ctx);
 }
 
 
