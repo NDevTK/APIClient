@@ -183,6 +183,18 @@ uint32_t engine_host_request(JSContext *ctx, const char *op) {
                            "call site, in a world that never asked the question");
     pending_set_int(e, PEND_REQ, id);
     JS_FreeValue(ctx, e);
+    /* THE REQUEST IS WHAT MAKES THE FLOW BLOCKED, AND THE YIELD THAT FOLLOWS IS ONLY A PARK BECAUSE OF IT.
+       Every caller of this returns JS_STEP_YIELD, whose contract (quickjs-step.h) is "I have more work;
+       preempt me if you want" — the driver re-enters a machine that yields IMMEDIATELY unless the preempt hook
+       says otherwise, so a machine using the yield to WAIT is a busy spin unless preempt_hook's clause (0)
+       sees this entry on the register. Nothing else ties the two together: they are a step code in the engine
+       and a pending kind in the scheduler, and a pending kind added without pending_blocked's agreement would
+       turn every cross-instance read into a flow that burns the thread until the host answers — with the host
+       only asked BETWEEN steps, so the answer can never arrive. Asserted here because this is where the
+       blocking is claimed. */
+    DCHECK(flow_blocked(f), "a synchronous host request left its flow RUNNABLE — the caller is about to return "
+                            "JS_STEP_YIELD, which re-enters immediately, so the flow would spin on a question "
+                            "that is only answered between steps");
     return id;
 }
 

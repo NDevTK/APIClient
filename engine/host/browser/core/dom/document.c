@@ -245,7 +245,14 @@ static void qs_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static void qs_release(JSContext *ctx, void *st)
 {
     QsState *s = st;
-    (void)ctx;
+    /* THE COLLECTED MATCHES ARE THIS MACHINE'S UNTIL IT HANDS THEM OVER, and a field the `visit` names that
+       the teardown does not release is the leak reading the two together is what catches. The walk rests at
+       EVERY node (one JS_STEP_YIELD per step), so a flow dropped or outranked mid-querySelectorAll is the
+       ordinary case rather than an exotic one, and every element wrapper the array holds goes with it. The
+       success path has already handed the array to the static NodeList and left JS_UNDEFINED here, so this runs
+       on the abandoned path alone. */
+    JS_FreeValue(ctx, s->arr);
+    s->arr = JS_UNDEFINED;
     /* The throw path owns these too — a flow dropped mid-walk would otherwise leak a compiled selector list and
        the two contexts behind it. */
     if (s->list) lxb_css_selector_list_destroy_memory(s->list);
