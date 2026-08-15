@@ -630,7 +630,7 @@ void attr_install_protos(JSContext *ctx)
     idl_install_method(ctx, nnm_p, "setNamedItemNS", 1, g_set_named_id);
     /* §3.7.10: an interface with an indexed getter gets %Array.prototype.values% as its @@iterator, which is
        what makes `for (const a of el.attributes)` — the loop this gap was really about — ordinary code. */
-    idl_indexed_install_iterable(ctx, nnm_p, /*declares_iterable*/ false);   /* §4.9.1 declares no iterable<> */
+    idl_indexed_install_iterable(ctx, nnm_p);   /* §4.9.1 declares no iterable<>, so no value iterator */
     JS_SetClassProto(ctx, g_nnm_class, nnm_p);
 }
 

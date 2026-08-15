@@ -431,9 +431,13 @@ void dom_token_list_install_reflection(JSContext *ctx, JSValueConst proto, const
 {
     int i;
 
+    /* THE MEMBER INSTALLED IS THE ONE THE INTERFACE ASKED FOR. `TL_MEMBERS[i]` is the same bytes — strcmp just
+       said so — and naming the table cell instead said, to anything reading this line, that a call installs all
+       four of §7.1's reflections on whichever prototype it was handed. Which member and which prototype are
+       both the CALLER's, and an install a reader cannot attribute is an install a reader cannot review. */
     for (i = 0; i < TL_N; i++)
         if (!strcmp(TL_MEMBERS[i], member)) {
-            idl_install_accessor(ctx, proto, TL_MEMBERS[i], js_el_token_list, i, -1);
+            idl_install_accessor(ctx, proto, member, js_el_token_list, i, -1);
             return;
         }
     DFAIL("an interface asked for a token-list reflection §7.1 does not name — the member name and the content "
@@ -500,7 +504,8 @@ void dom_token_list_install_proto(JSContext *ctx)
     idl_install_method(ctx, proto, "toString", 0, g_to_string_id);
     /* §3.7.10: an interface with an indexed getter is iterable through %Array.prototype.values%, which is why
        `for (const c of el.classList)` is ordinary code — and had nothing. */
-    idl_indexed_install_iterable(ctx, proto, /*declares_iterable*/ true);   /* §7.1 `iterable<DOMString>` */
+    idl_indexed_install_iterable(ctx, proto);
+    idl_indexed_install_value_iterator(ctx, proto);   /* §7.1 `iterable<DOMString>` */
     JS_SetClassProto(ctx, g_tl_class, proto);
 }
 

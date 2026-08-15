@@ -37,10 +37,17 @@ void idl_indexed_free(JSContext *ctx);
 JSValue idl_indexed_new(JSContext *ctx, JSValueConst proto, const IdlIndexedDecl *decl);
 
 /* Web IDL §3.7.10: an interface with an indexed property getter and an integer `length` gets
-   %Array.prototype.values% as its @@iterator. `declares_iterable` is whether the interface ALSO declares
-   `iterable<V>`, which is what adds `entries`, `keys`, `values` and `forEach` — NodeList and DOMTokenList do,
-   HTMLCollection and NamedNodeMap do not, and one answer for all four gave an HTMLCollection a `forEach` the
-   standard says it has no such member. Installed on the PROTOTYPE, which is where the IDL puts them. */
-void idl_indexed_install_iterable(JSContext *ctx, JSValueConst proto, bool declares_iterable);
+   %Array.prototype.values% as its @@iterator. Installed on the PROTOTYPE, which is where the IDL puts it. */
+void idl_indexed_install_iterable(JSContext *ctx, JSValueConst proto);
+
+/* §3.7.10's OTHER clause, which is a DIFFERENT statement about a different set of interfaces: an interface that
+   declares `iterable<V>` also gets `entries`, `keys`, `values` and `forEach`. NodeList and DOMTokenList declare
+   one; HTMLCollection and NamedNodeMap do not, and one answer for all four gave an HTMLCollection a `forEach`
+   the standard says it has no such member.
+   IT IS ITS OWN CALL, not a flag on the one above: an interface says which members it has by INSTALLING them,
+   and a `true` passed at one call site out of five is a statement no reader — the IDL gap audit included — can
+   attribute to a prototype, so the four members read as installed on every indexed interface in the engine or
+   on none. */
+void idl_indexed_install_value_iterator(JSContext *ctx, JSValueConst proto);
 
 #endif

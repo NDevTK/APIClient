@@ -27,25 +27,38 @@
  * there) and never silently counted (which reads as a gap that is filled and is not). The UNRESOLVED list is
  * the audit's own gap report on itself, and it is the work queue for making the next name resolvable.
  *
- * WHAT COUNTS AS AN INSTALL TARGET. `JS_SetPropertyStr` and `JS_DefinePropertyValueStr` are the two forms that
- * are also how any ordinary object is built, so the NAME resolving is not enough — the object has to be one a
- * member can be installed on. fetch.c writes "status", "statusText" and "body" onto a plain record and Window
- * really does have a `status` member; event_target.c writes "removed", "once" and "passive" onto a listener
- * record. Counting those is exactly the false COMPLETE above, and refusing to count `fetch`, `navigator`,
- * `Node` and `Text` — which are installed on the global with the same call — is the false ABSENT.
+ * WHAT COUNTS AS AN INSTALL TARGET — AND IT IS THE SAME QUESTION AS WHICH INTERFACE IT IS, ASKED ONCE.
+ * `JS_SetPropertyStr` and `JS_DefinePropertyValueStr` are the two forms that are also how any ordinary object is
+ * built, so resolving the NAME is not enough: the object has to be one a page can reach a member ON. fetch.c
+ * writes "status", "statusText" and "body" onto a plain record and Window really does have a `status` member;
+ * event_target.c writes "removed", "once" and "passive" onto a listener record; viewport.c writes §13.1's
+ * "hasBeenRun" latch onto a per-realm record built with NO PROTOTYPE. Counting those is the false COMPLETE
+ * above, and refusing to count `fetch`, `navigator`, `Node` and `Text` — installed on the global with the same
+ * call — is the false ABSENT.
  *
- * So which objects are install targets is SOLVED rather than guessed, over the whole program at once. An object
- * is a target if an UNAMBIGUOUS form names it (`idl_install_*`, `JS_DefinePropertyGetSet`, `idl_interface_tag`,
- * `JS_SetPropertyFunctionList`), and the fact flows along the two edges that carry the object itself: an
- * assignment (`g = (JSValue)global`) and an argument passed to a function this corpus defines. Both edges are
- * bidirectional, because the object on each side is the same object. `window.c` installs `opener` on the global
- * with the IDL installer, which is what makes the global a target; the fact reaches `fetch_install`,
- * `document_install` and `node_install_interface_ctor` through the calls that hand the global to them, and it
- * reaches a listener record through nothing, because nothing ever installs a member on one.
+ * There WAS a second solve for this — an object was a target if any unambiguous form named it, and the fact
+ * flowed BIDIRECTIONALLY along assignments and along arguments into functions this corpus defines. Two-way
+ * argument flow is what made it wrong: a shared helper's parameter is not one object, it is the union of every
+ * caller's, so one real prototype handed to `realm_value_set` made EVERY other caller's record a target too, and
+ * §13.1's resize latch, §6.4.1's activation timestamps, §6.6.7's autofocus list and a converted FocusEvent
+ * dictionary were all read as objects with members installed on them. They then reported as UNATTRIBUTED — a
+ * report whose entries are mostly noise, which is where the string-literal scan ended up too.
  *
- * AND WHICH INTERFACE THAT TARGET IS, which is the same question one level down. Reading the install construct
- * fixed WHAT is installed and left WHERE untouched: the audit was FILE-granular, so a row credited every member
- * any of its files installed, and html_form.c's `value` — installed on HTMLTextAreaElement.prototype — counted
+ * That solve is DELETED, because the question it answered is already answered exactly by the one below: A PAGE
+ * REACHES AN OBJECT BECAUSE THE CORPUS DECLARES AN INTERFACE FOR IT. Web IDL §3.7.3's `idl_interface_tag`,
+ * §3.7.1's interface object, quickjs's per-realm class-prototype slot and §3.7.3's [Global] statement are the
+ * four declarations, and an object none of them reaches is an INTERNAL RECORD: a write onto it installs nothing.
+ * One graph decides both, so an install can no longer be "counted but unfilable", and the two failures stay
+ * visible from BOTH sides rather than being allowlisted: an AMBIGUOUS write on an undeclared object is reported
+ * by name (the caller prints it where the name is a member of the interface being audited, so a member really
+ * installed as a plain own property cannot go silent), and an UNAMBIGUOUS install on an undeclared object stays
+ * UNATTRIBUTED, named with file and line. The construction says the same thing from the other end and is
+ * asserted: an object built with NO PROTOTYPE (`JS_NewObjectProto(ctx, JS_NULL)`, `idl_slots_new`) is reachable
+ * from nothing the page holds, so an install form naming one is a CONTRADICTION — reported, never tolerated.
+ *
+ * WHICH INTERFACE THAT TARGET IS — the same solve, and the reason there is only one. Reading the install
+ * construct fixed WHAT is installed and left WHERE untouched: the audit was FILE-granular, so a row credited
+ * every member any of its files installed, and html_form.c's `value` — on HTMLTextAreaElement.prototype — counted
  * for HTMLInputElement. That is a false COMPLETE, which HIDES a gap rather than burying it in noise. So a
  * member is attributed to the interface its TARGET is, read out of Web IDL §3.7.3's @@toStringTag that the
  * component already installs on every interface prototype object (`idl_interface_tag`) and §3.7.3's [Global]
@@ -346,12 +359,30 @@ function scopeTables(masked, typedefs, fns) {
 
 const STRING_RE = /^\s*"((?:[^"\\]|\\.)*)"\s*$/;
 
+/* A STRING CONSTANT IS A DECLARATION OF A NAME, and it is the third spelling of the one a macro and a table
+   already are. §4.7's readable byte stream declares its queue-entry and pull-into-descriptor fields as
+   `static const char *const Q_BUFFER = "buffer";` and writes them thirty times, and this read a #define and an
+   initialised table and not that — so thirty constructs reported UNRESOLVED, which is the audit's own gap report
+   naming the form it had not learned. Only `const char *` declarations are read: an initialised pointer to char
+   IS a name and nothing else is one. Two declarations of the same identifier in one file resolve to nothing,
+   which is the same answer a doubly-declared table gives, because neither can be decided. */
+const CHAR_CONST_RE =
+  /(?:^|[;{}])\s*(?:static\s+)?const\s+char\s*\*\s*(?:const\s+)?([A-Za-z_]\w*)\s*=\s*((?:"(?:[^"\\]|\\.)*"\s*)+);/gm;
+
+function collectCharConsts(masked, into) {
+  CHAR_CONST_RE.lastIndex = 0;
+  let m;
+  while ((m = CHAR_CONST_RE.exec(masked))) into.set(m[1], into.has(m[1]) ? null : m[2].trim());
+}
+
 class Resolver {
-  constructor(macros, typedefs, tablesByFile, headerTables, file = null, fn = null) {
+  constructor(macros, typedefs, tablesByFile, headerTables, constsByFile, headerConsts, file = null, fn = null) {
     this.macros = macros;
     this.typedefs = typedefs;
     this.tablesByFile = tablesByFile;
     this.headerTables = headerTables;
+    this.constsByFile = constsByFile;
+    this.headerConsts = headerConsts;
     this.file = file;
     this.fn = fn;
   }
@@ -359,7 +390,14 @@ class Resolver {
   /* The same resolver reading ONE scope: the function's own tables, then the file's, then a header's — which
      is what C scoping already says, and the only reason two files may each spell a table `NAMES[]`. */
   for(file, fn = null) {
-    return new Resolver(this.macros, this.typedefs, this.tablesByFile, this.headerTables, file, fn);
+    return new Resolver(this.macros, this.typedefs, this.tablesByFile, this.headerTables, this.constsByFile,
+                        this.headerConsts, file, fn);
+  }
+
+  charConst(name) {
+    const scoped = this.file && this.constsByFile.get(this.file);
+    if (scoped && scoped.has(name)) return scoped.get(name);
+    return this.headerConsts.get(name) || null;
   }
 
   table(name) {
@@ -465,14 +503,20 @@ class Resolver {
       return out;
     }
     const bare = e.match(/^[A-Za-z_]\w*$/);
-    if (bare && locals && locals.has(e)) {
-      const out = [];
-      for (const assigned of locals.get(e)) {
-        const v = this.strings(assigned, locals, depth + 1);
-        if (!v) return null;
-        out.push(...v);
+    if (bare) {
+      if (locals && locals.has(e)) {
+        const out = [];
+        for (const assigned of locals.get(e)) {
+          const v = this.strings(assigned, locals, depth + 1);
+          if (!v) return null;
+          out.push(...v);
+        }
+        return out.length ? out : null;
       }
-      return out.length ? out : null;
+      /* the file's (or a header's) string constant — the third spelling of a declared name, after the macro
+         and the table; a LOCAL of the same name is the nearer scope and answered above */
+      const c = this.charConst(e);
+      if (c) return this.strings(c, locals, depth + 1);
     }
     return null;
   }
@@ -515,7 +559,8 @@ class Resolver {
 /* ---- the install vocabulary ------------------------------------------------------------------------------ */
 
 /* THE FORMS THAT DECLARE AN INSTALLATION. `target` and `name` are argument positions. `ambiguous` marks the two
-   forms that are also how any object is built, and which therefore require an install target (see the header).
+   forms that are also how any ordinary object is built, and which therefore count only where the object they
+   write on is one the corpus declares an interface for (see the header).
    `fn` is the position of the body, read only to catch a `js_noop` member — the lazy stub this audit exists to
    expose, and a ban that has to be expressed against the install FORM rather than against the file's text. */
 const CALL_FORMS = new Map(Object.entries({
@@ -534,7 +579,9 @@ const CALL_FORMS = new Map(Object.entries({
   JS_DefinePropertyValueStr:     { target: 1, name: 2, fn: 3, ambiguous: true },
 }));
 
-/* The forms that corroborate an object as an INSTALL TARGET without naming a member themselves. */
+/* The forms that state an object is one a page reaches members ON without naming a member themselves. Which
+   interface it is comes from the tag; these are read for the CONTRADICTION check the header describes — an
+   object the C builds with no prototype and one of these nonetheless names cannot be both. */
 const TARGET_FORMS = new Map(Object.entries({
   idl_interface_tag:          1,
   JS_SetPropertyFunctionList: 1,
@@ -846,12 +893,17 @@ export function loadEnvironment(root) {
     for (const f of fs) if (f.name && !byName.has(f.name)) byName.set(f.name, f.params);
   }
   const tablesByFile = new Map(), headerTables = new Map();
+  const constsByFile = new Map(), headerConsts = new Map();
   for (const [p, { masked }] of sources) {
     const t = scopeTables(masked, typedefs, fnsOf.get(p));
     tablesByFile.set(p, t);
     if (extname(p) === ".h") for (const [k, v] of t.file) headerTables.set(k, headerTables.has(k) ? null : v);
+    const c = new Map();
+    collectCharConsts(masked, c);
+    constsByFile.set(p, c);
+    if (extname(p) === ".h") for (const [k, v] of c) headerConsts.set(k, headerConsts.has(k) ? null : v);
   }
-  const resolver = new Resolver(macros, typedefs, tablesByFile, headerTables);
+  const resolver = new Resolver(macros, typedefs, tablesByFile, headerTables, constsByFile, headerConsts);
   /* THE SHARED INSTALL HELPERS. A function that forwards one of its own PARAMETERS into a member-name position
      IS an install form, at that parameter's position — navigator.c's `nav_env(ctx, nav, "userAgent", …)`
      installs a member and spells the name only at the call site, and node.c's `mixin_install(ctx, proto,
@@ -886,102 +938,79 @@ export function loadEnvironment(root) {
     if (!grew) break;
   }
 
-  /* THE INSTALL TARGETS, solved over the whole program. See the header: an object is a target because an
-     unambiguous form installs on it, and the fact travels with the object — along an assignment inside one
-     function and along an argument into another. Both edges are bidirectional because both sides ARE the same
-     object, and the graph is closed by BFS, so no propagation order has to be chosen. */
   const key = (path, fnName, v) => `${path}::${fnName}::${v}`;
-  const edges = new Map(), seeds = [];
-  const arrow = (a, b) => {
-    if (!edges.has(a)) edges.set(a, []);
-    edges.get(a).push(b);
+
+  /* ---- THE OBJECT WITH NO PROTOTYPE, and the assertion it makes ------------------------------------------ */
+
+  /* WHICH objects a member can be installed on is decided by the interface solve below — an object a page can
+     reach is an object the corpus DECLARES an interface for, and there is no second solve (see the header).
+     The C states the same fact from the other end at the CONSTRUCTION, and that statement is worth asserting
+     rather than believing: `JS_NewObjectProto(ctx, JS_NULL)` builds an object with NO PROTOTYPE, which is
+     reachable from nothing the page holds — a field read off one cannot reach the page, which is exactly why
+     the components build their per-realm state that way (viewport.c's §13.1 resize latch, user_activation.c's
+     §6.4.1 timestamps, autofocus.c's §6.6.7 list, focus_event.c's converted dictionary, and `idl_slots_new`,
+     which IS that call with a name on it).
+     So an object built with no prototype can never be an interface prototype object, and an install form that
+     names one is a CONTRADICTION — either the object should have been built as a prototype or the install is
+     on the wrong object. It is reported with file, line and form and never tolerated. This is the second
+     direction the classification is checked from: the declaration says an undeclared object is a record, and
+     the construction says a no-prototype object is a record, and the two are read against each other. */
+  const NULL_PROTO_RE = /^\s*JS_NewObjectProto\s*\(\s*[^,]+,\s*JS_NULL\s*\)\s*$/;
+  const recordCtors = new Set();
+  const isRecordExpr = (e) => {
+    const s = stripCast(e);
+    if (NULL_PROTO_RE.test(s)) return true;
+    const call = s.match(/^([A-Za-z_]\w*)\s*\(/);
+    return !!(call && recordCtors.has(call[1]) && matchAt(s, s.indexOf("(")) === s.length);
   };
-  const link = (a, b) => { arrow(a, b); arrow(b, a); };
-  for (const [path, { masked }] of sources) {
-    for (const f of fnsOf.get(path)) {
-      const here = (v) => key(path, f.name, v);
-      for (const [callee, form] of forms) {
-        if (form.ambiguous) continue;
-        for (const site of callSites(f.body, callee)) {
-          const t = stripCast(site.args[form.target] || "");
-          if (/^[A-Za-z_]\w*$/.test(t)) seeds.push(here(t));
-        }
+  /* A function whose EVERY return is such a construction builds records and nothing else, which is what
+     `idl_slots_new` is; a wrapper around one is reached by iterating to a fixed point. */
+  for (let pass = 0; pass < 4; pass++) {
+    let grew = false;
+    for (const fs of fnsOf.values())
+      for (const f of fs) {
+        if (!f.name || recordCtors.has(f.name)) continue;
+        const rets = [...f.body.matchAll(/\breturn\s+([^;]+);/g)].map((m) => m[1]);
+        if (rets.length && rets.every((r) => isRecordExpr(r))) { recordCtors.add(f.name); grew = true; }
       }
-      for (const [callee, pos] of TARGET_FORMS)
-        for (const site of callSites(f.body, callee)) {
-          const t = stripCast(site.args[pos] || "");
-          if (/^[A-Za-z_]\w*$/.test(t)) seeds.push(here(t));
-        }
-      /* the assignment edge: `g = (JSValue)global`; and the CREATION seed. An object built with a host CLASS
-         (JS_NewObjectClass / JS_NewObjectProtoClass) is a PLATFORM OBJECT — a MessageChannel, a Document
-         wrapper — and a member written on one is a member of that interface, however §3.7-shaped the write is.
-         A plain JS_NewObject or a null-prototyped JS_NewObjectProto is a RECORD: a listener registration, a
-         response summary, a mutation record. Nothing else separates event_target.c's "removed" from
-         message_port.c's "port1", and both are written with the same call. */
-      for (const [lhs, rhss] of localAssignments(f.body))
-        for (const rhs of rhss) {
-          const r = stripCast(rhs);
-          if (/^[A-Za-z_]\w*$/.test(r)) link(here(lhs), here(r));
-          if (/^\s*(?:JS_NewObject(?:Proto)?Class|JS_GetGlobalObject)\s*\(/.test(rhs)) seeds.push(here(lhs));
-          /* THE RETURN EDGE, and it is ONE-WAY: `doc = node_wrap(…)` is the object node_wrap built, so what the
-             callee returns decides what the caller holds — never the other way round. Two-way, every caller of a
-             shared constructor became one node: one target local anywhere made `idl_slots_new`'s result a
-             target everywhere, and event_target.c's handler map — an internal slot bag with no prototype — was
-             then an object this claimed members were installed on. */
-          const call = rhs.trim().match(/^([A-Za-z_]\w*)\s*\(/);
-          if (call && byName.has(call[1])) arrow(key("", call[1], "@return"), here(lhs));
-        }
-      for (const [, ret] of f.body.matchAll(/\breturn\s+([A-Za-z_]\w*)\s*;/g))
-        arrow(here(ret), key("", f.name, "@return"));
-      /* the argument edge: every call to a function this corpus defines. Found by walking the body's own call
-         syntax once, rather than by looking for each of several thousand known names in it. */
-      const CALL_RE = /\b([A-Za-z_]\w*)\s*\(/g;
-      let cm;
-      while ((cm = CALL_RE.exec(f.body))) {
-        const callee = cm[1];
-        const params = byName.get(callee);
-        if (!params || forms.has(callee) || callee === f.name) continue;
-        const open = f.body.indexOf("(", cm.index);
-        const end = matchAt(f.body, open);
-        if (end < 0) continue;
-        splitTop(f.body.slice(open + 1, end - 1)).forEach((a, k) => {
-          const v = stripCast(a);
-          if (k < params.length && /^[A-Za-z_]\w*$/.test(v)) link(here(v), key("", callee, params[k]));
-        });
-      }
-      /* a parameter is the same object inside its own function as at the call site */
-      for (const p of f.params) link(here(p), key("", f.name, p));
-    }
+    if (!grew) break;
   }
-  const targets = new Set();
-  const queue = [...seeds];
-  while (queue.length) {
-    const v = queue.pop();
-    if (targets.has(v)) continue;
-    targets.add(v);
-    for (const n of edges.get(v) || []) if (!targets.has(n)) queue.push(n);
-  }
-  /* An object this could NOT classify is not silently dropped — see installedMembers. A local built by a plain
-     JS_NewObject / JS_NewObjectProto and never named by an install form is a record and provably not a target;
-     anything else that a property write lands on is a question, and a question is reported. */
-  const records = new Set();
-  for (const [path, { masked }] of sources)
+  /* A variable EVERY assignment of which is such a construction. Every, because a variable is not one object:
+     a name reused for a record in one branch and a prototype in another is neither, and answering with the
+     first would manufacture the contradiction this reports. */
+  const noProtoVars = new Set();
+  for (const [path] of sources)
     for (const f of fnsOf.get(path))
       for (const [lhs, rhss] of localAssignments(f.body))
-        for (const rhs of rhss)
-          if (/^\s*JS_(?:NewObject(?:Proto)?|NewArray|NewObjectFromCtor)\s*\(/.test(rhs) &&
-              !targets.has(key(path, f.name, lhs)))
-            records.add(key(path, f.name, lhs));
+        if (rhss.length && rhss.every((r) => isRecordExpr(r))) noProtoVars.add(key(path, f.name, lhs));
+
+  const recordContradictions = [];
+  for (const [path, { orig }] of sources)
+    for (const f of fnsOf.get(path)) {
+      const named = (t) => /^[A-Za-z_]\w*$/.test(t) && noProtoVars.has(key(path, f.name, t));
+      const check = (callee, pos) => {
+        for (const site of callSites(f.body, callee)) {
+          const t = stripDup(site.args[pos] || "");
+          if (named(t))
+            recordContradictions.push({ file: path, line: lineOf(orig, f.start + site.at), form: callee, obj: t });
+        }
+      };
+      for (const [callee, form] of forms)
+        if (!form.ambiguous && form.target >= 0) check(callee, form.target);
+      for (const [callee, pos] of TARGET_FORMS) check(callee, pos);
+    }
 
   /* ---- WHICH INTERFACE EACH OBJECT IS, solved over the whole program ------------------------------------- */
 
-  /* The same shape as the target solve above and a DIFFERENT graph, because the two facts travel differently.
-     Targethood is symmetric — the object on each side of an edge is the same object, so if either is a target
-     both are. An interface NAME is not: a shared installer's parameter is EVERY object its callers hand it, so
-     the tags of those objects flow INTO it (and the members it installs land on all of them), but the union it
-     accumulates must never flow back OUT to one particular caller's object, which would tell window.c's global
-     that it is also an HTMLElement. So the argument edge is FORWARD ONLY, and a tag that crossed a CONDITIONAL
-     call carries that with it.
+  /* THE ONE SOLVE, and every question about an install target is asked of it: which interface a member lands
+     on, and — because an object no declaration reaches is a record — whether it lands on an interface at all.
+     A DELETED second solve carried "is this a target" as a SYMMETRIC fact, and symmetry is exactly what a
+     shared installer's parameter cannot carry: that parameter is EVERY object its callers hand it, so the facts
+     of those objects flow INTO it (and the members it installs land on all of them), but the union it
+     accumulates must never flow back OUT to one particular caller's object — which is how one real prototype
+     handed to `realm_value_set` told every per-realm record in the engine that it was a prototype too, and
+     would tell window.c's global that it is also an HTMLElement. So the argument edge is FORWARD ONLY, and a
+     tag that crossed a CONDITIONAL call carries that with it.
      A variable is keyed by the ASSIGNMENT that produced its value (see localDefs), so `proto` reused for three
      prototypes in one function is three objects and not one object with three interfaces. */
   const defsOf = new Map();                       /* path::fn -> Map(var -> [{at, rhs}]) */
@@ -1184,8 +1213,9 @@ export function loadEnvironment(root) {
       tagChecks.push({ kind: "contradicted", ifaces: o.ifaces, have, file: o.file, line: o.line });
   }
 
-  return { macros, typedefs, sources, resolver, forms, fnsOf, targets, records, targetKey: key,
-           tags, tagKey: (path, f, v, at) => tagKey(path, f, v, at), tagIssues, tagChecks, interfaceTables };
+  return { macros, typedefs, sources, resolver, forms, fnsOf,
+           tags, tagKey: (path, f, v, at) => tagKey(path, f, v, at), tagIssues, tagChecks, interfaceTables,
+           recordContradictions };
 }
 
 /* EVERY INSTALLED MEMBER, ATTRIBUTED TO THE INTERFACE ITS TARGET IS — one record per (member, site), carrying
@@ -1210,7 +1240,22 @@ export function installedMembers(paths, env) {
       if (!localsCache.has(f)) localsCache.set(f, localAssignments(f.body));
       return localsCache.get(f);
     };
-    const isTarget = (f, v) => env.targets.has(env.targetKey(path, f.name, v));
+    /* A NAME THIS FUNCTION WAS GIVEN, however many hops it took to reach the install. The forwarding line of a
+       shared installer resolves to nothing by construction — the name is the CALLER's, and every caller is
+       audited — but only `nav_env`-shaped helpers spell the parameter AT the install. `idl_install_accessor_step`
+       writes `a = JS_NewAtom(ctx, name); JS_DefinePropertyGetSet(ctx, target, a, …)`, and a rule that read only
+       the identifier at the site reported three of this engine's OWN install helpers as unresolvable constructs
+       — the forwarding lines of the very forms the audit is built out of. Literals are blanked first, so a
+       member whose name happens to spell a parameter is not mistaken for one. */
+    const fromParam = (f, expr, depth = 0) => {
+      if (!f || depth > 4) return false;
+      const locals = localsFor(f) || new Map();
+      for (const m of blankLiterals(String(expr)).matchAll(/[A-Za-z_]\w*/g)) {
+        if (f.params.includes(m[0])) return true;
+        if (locals.has(m[0]) && locals.get(m[0]).some((rhs) => fromParam(f, rhs, depth + 1))) return true;
+      }
+      return false;
+    };
     /* Every name is resolved in the SCOPE the construct stands in — the enclosing function's tables, then the
        file's, then a header's. */
     const scoped = (f) => env.resolver.for(path, f ? f.name : null);
@@ -1296,21 +1341,24 @@ export function installedMembers(paths, env) {
            its name is the caller's, and every caller is audited. Reporting it would name the one line that
            cannot resolve by construction, and hide the call sites that can. */
         const pos = form.name === undefined ? form.tableArg : form.name;
-        const raw = stripCast(site.args[pos] || "");
-        const root = (raw.match(/^([A-Za-z_]\w*)/) || [])[1];
-        if (forms.has(f.name) && root && f.params.includes(root)) continue;
+        if (forms.has(f.name) && fromParam(f, site.args[pos] || "")) continue;
         if (TABLE_FORMS.some((t) => t.install === f.name)) continue;
         const target = stripCast(site.args[form.target] || "");
-        if (form.ambiguous && !isTarget(f, target)) {
-          /* NOT an install target: nothing anywhere in the program installs a member on this object, so this is
-             a record field — a listener registration, an event's internal slot bag, a response summary. Not
-             counted, and not a gap either. It is recorded by NAME so the caller can say so when the name it
-             writes happens to be a member of the interface being audited: `document.title` and
-             `MessageChannel.port1` really are IDL members written this way, and calling either ABSENT would be
-             as false as counting every "removed" flag as installed. */
+        const a = interfacesOf(f, target, site.at);
+        if (form.ambiguous && !a.ifaces.length && !a.candidates.length) {
+          /* AN OBJECT NO INTERFACE DECLARATION REACHES — see the header. §3.7.3's tag, §3.7.1's interface
+             object, the per-realm class-prototype slot and [Global] are how the corpus says a page can reach an
+             object, and this write lands on one none of them names: a listener registration, a response
+             summary, an event's internal slot bag, a per-realm record built with no prototype at all. It
+             installs nothing, so it is not counted and it is not a gap.
+             It is recorded by NAME, because this is also where the classification can be WRONG in the other
+             direction — a real IDL member written as a plain own property of an instance, which `document.title`
+             is — and the caller prints it whenever the name is a member the interface being audited is
+             otherwise missing. Neither answer is silent. */
           const names = scoped(f).strings(site.args[pos] || "", localsFor(f));
           for (const n of names || [])
-            offInstaller.push({ name: n, file: path, line: lineOf(orig, site.at), target, form: callee });
+            offInstaller.push({ name: n, file: path, line: lineOf(orig, site.at), target, form: callee,
+                                why: a.why });
           continue;
         }
         if (site.args[pos] === undefined) { report(site.at, callee, "(no argument)"); continue; }
@@ -1334,7 +1382,7 @@ export function installedMembers(paths, env) {
           }
         }
         if (!names) { report(site.at, callee, site.args[pos]); continue; }
-        emit(names, noop, f, target, site.at, callee);
+        emitWith(names, noop, a, site.at, callee);
       }
     }
 

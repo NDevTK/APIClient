@@ -429,8 +429,8 @@ for (const [iface, where] of Object.entries(INTERFACES)) {
   if (absent.length) parts.push(`ABSENT ${absent.length} — ${absent.join(", ")}`);
   if (noop.length) parts.push(`js_noop-STUB ${noop.length} — ${noop.join(", ")}`);
   if (plain.length) parts.push(`PLAIN-PROPERTY ${plain.length} — ${plain.join(", ")} (written with ` +
-                               `JS_SetPropertyStr onto an object no installer names: either a member installed ` +
-                               `off-installer, or a record field of the same name)`);
+                               `JS_SetPropertyStr onto an object no interface declaration reaches: either a ` +
+                               `member installed as a plain own property, or a record field of the same name)`);
   if (cond.length) parts.push(`CONDITIONAL ${condNames.size} — ${[...condNames].join(", ")} (${cond[0].why})`);
   if (condStale.length) parts.push(`STALE EXCLUSION ${condStale.length} — ${condStale.map((e) => e.name).join(", ")}` +
                                    ` declared excluded at ${condStale[0].file}:${condStale[0].line} but the IDL ` +
@@ -511,6 +511,15 @@ for (const c of env.tagChecks)
       `prototype §3.7.3 tags ${c.have.join("/")}; one of the two names the wrong interface`
     : `the prototype §3.7.1's ${c.ifaces.join("/")} interface object is built over reaches no interface tag ` +
       `from here — this detector could not follow the object, so its members are unattributed`));
+/* THE CLASSIFICATION READ FROM THE OTHER END. Which objects a member can be installed on is decided by which
+   objects the corpus declares an interface for; the C states the same fact at the CONSTRUCTION, and the two must
+   agree. An object built with NO PROTOTYPE is reachable from nothing the page holds — it is how a component
+   holds per-realm state the COW delta captures — so an install form naming one is a contradiction: either the
+   object should have been built as a prototype, or the install is on the wrong object. Reported, never
+   tolerated, and it is what stops the record/prototype split from becoming a list of known-OK mismatches. */
+for (const c of env.recordContradictions)
+  console.log(`[idl-audit] ${c.file.replace(BROWSER + "/", "")}:${c.line}  CONTRADICTED OBJECT KIND — ` +
+              `${c.form}(… ${c.obj} …) installs on an object built with NO PROTOTYPE, which no page can reach`);
 
 /* ---------------------------------------------------------------------------------------------------------
  * THE PLATFORM SURFACE — every global name a browser exposes on Window, straight out of the IDL.

@@ -225,7 +225,7 @@ void file_list_install_protos(JSContext *ctx)
     /* §3.7.10: an interface with an indexed getter and an integer `length` is given %Array.prototype.values% as
        its @@iterator, which is why `for (const f of input.files)` is ordinary code. §5 declares NO `iterable<>`,
        so `entries`, `keys`, `values` and `forEach` are honestly absent — the same split HTMLCollection is on. */
-    idl_indexed_install_iterable(ctx, proto, /*declares_iterable*/ false);
+    idl_indexed_install_iterable(ctx, proto);
     JS_SetClassProto(ctx, g_fl_class, JS_DupValue(ctx, proto));
 
     /* §3.7.1's INTERFACE OBJECT, on THIS realm's global. §5 declares no constructor, so it throws a TypeError

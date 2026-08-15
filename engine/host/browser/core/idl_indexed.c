@@ -191,7 +191,7 @@ JSValue idl_indexed_new(JSContext *ctx, JSValueConst proto, const IdlIndexedDecl
     return obj;
 }
 
-void idl_indexed_install_iterable(JSContext *ctx, JSValueConst proto, bool declares_iterable)
+void idl_indexed_install_iterable(JSContext *ctx, JSValueConst proto)
 {
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue arr = JS_GetPropertyStr(ctx, global, "Array");
@@ -214,22 +214,30 @@ void idl_indexed_install_iterable(JSContext *ctx, JSValueConst proto, bool decla
         JS_FreeValue(ctx, it);
         JS_FreeValue(ctx, sym_ctor);
     }
-    /* THE VALUE-ITERATOR MEMBERS ARE A DIFFERENT CLAUSE, AND THEY ARE NOT EVERY INDEXED INTERFACE'S. §3.7.10
-       gives @@iterator to any interface with an indexed getter and an integer `length`; `entries`, `keys`,
-       `values` and `forEach` come from a `iterable<V>` DECLARATION, which NodeList and DOMTokenList carry and
-       HTMLCollection and NamedNodeMap do not. Installing all four unconditionally put `paragraphs.forEach` on
-       an HTMLCollection, which WPT asserts is absent — and the interface says so, so the interface says so
-       HERE, as an argument, rather than being one answer for four IDLs. */
-    if (declares_iterable) {
-        static const char *const NAMES[] = { "values", "keys", "entries", "forEach" };
-        unsigned k;
-        for (k = 0; k < sizeof(NAMES) / sizeof(NAMES[0]); k++) {
-            JSValue f = JS_GetPropertyStr(ctx, ap, NAMES[k]);
-            DCHECK(JS_IsFunction(ctx, f), "an Array.prototype iterator member named by §3.7.10 is missing");
-            JS_SetPropertyStr(ctx, (JSValue)proto, NAMES[k], f);
-        }
-    }
     JS_FreeValue(ctx, values);
+    JS_FreeValue(ctx, ap);
+    JS_FreeValue(ctx, arr);
+    JS_FreeValue(ctx, global);
+}
+
+/* THE VALUE-ITERATOR MEMBERS ARE A DIFFERENT CLAUSE, AND THEY ARE NOT EVERY INDEXED INTERFACE'S. §3.7.10 gives
+   @@iterator to any interface with an indexed getter and an integer `length`; `entries`, `keys`, `values` and
+   `forEach` come from an `iterable<V>` DECLARATION, which NodeList and DOMTokenList carry and HTMLCollection and
+   NamedNodeMap do not. Installing all four unconditionally put `paragraphs.forEach` on an HTMLCollection, which
+   WPT asserts is absent — so the interface that declares the iterable is the one that calls this. */
+void idl_indexed_install_value_iterator(JSContext *ctx, JSValueConst proto)
+{
+    static const char *const NAMES[] = { "values", "keys", "entries", "forEach" };
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue arr = JS_GetPropertyStr(ctx, global, "Array");
+    JSValue ap = JS_GetPropertyStr(ctx, arr, "prototype");
+    unsigned k;
+
+    for (k = 0; k < sizeof(NAMES) / sizeof(NAMES[0]); k++) {
+        JSValue f = JS_GetPropertyStr(ctx, ap, NAMES[k]);
+        DCHECK(JS_IsFunction(ctx, f), "an Array.prototype iterator member named by §3.7.10 is missing");
+        JS_SetPropertyStr(ctx, (JSValue)proto, NAMES[k], f);
+    }
     JS_FreeValue(ctx, ap);
     JS_FreeValue(ctx, arr);
     JS_FreeValue(ctx, global);
