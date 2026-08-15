@@ -1,7 +1,5 @@
 /* "UPDATE THE RENDERING" — HTML §8.1.7.3. See rendering.h for what this is, why it is not §14.3, and why it
    holds no loop of its own. */
-#include <string.h>
-
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
@@ -12,6 +10,7 @@
 #include "core/events/report_exception.h"
 #include "core/frame/window_proxy.h"
 #include "core/frame/navigable.h"
+#include "core/html/autofocus.h"
 #include "core/html/focus.h"
 #include "core/css/media_query_list.h"
 #include "core/dom/page_visibility.h"
@@ -35,75 +34,24 @@ static int    g_ready;
 
 /* ---- steps 2 to 5 ----------------------------------------------------------------------------------------
  *
- * A STEP OF §8.1.7.3 WHOSE SPECIFICATION IS NOT IN THIS BUILD. Twelve of the twenty-three steps are calls into
+ * A STEP OF §8.1.7.3 WHOSE SPECIFICATION IS NOT IN THIS BUILD. Eleven of the twenty-three steps are calls into
  * ANOTHER standard — CSSOM View's resize and scroll steps, Web Animations §4.4, Fullscreen, the canvas context
  * lost steps, Resize Observer §3.4, CSS View Transitions §7.2, Intersection Observer §3.2.2 — and this engine
  * has none of those standards. Their work-sets are therefore EMPTY BY CONSTRUCTION: the list a step drains is
  * filled by an interface that does not exist, so nothing can have filled it, and the page's own ReferenceError
  * on that interface is the forcing function §NO STUBS asks for.
  *
- * THAT IS AN ASSERTION AND NOT A SKIP, which is the whole reason this function exists rather than a comment at
- * each site. It is two-sided: `name` is the member whose arrival would give the step work, so the moment
- * somebody lands ResizeObserver, or a viewport, or Web Animations, THIS DCHECK fires — at the step of
- * update-the-rendering that must then be written, with the standard and the step number in the message. A
- * comment there would say the same thing and never fire. */
-/* `path` is resolved from the doc's GLOBAL, dot by dot — `ResizeObserver`, `Document.prototype.activeElement`,
-   `HTMLDialogElement.prototype.showModal`. A dotted path rather than a bare name because the INTERFACE OBJECT
-   is not the producer: `HTMLDialogElement` exists in this build (html_element.c installs one per tag) while
-   `showModal`, the member that puts an element in the TOP LAYER, does not — so naming the interface asserted
-   something that was already true and fired on the first page. The producer is a MEMBER, and the path is how
-   this says which one. A path names the INTERFACE OBJECT rather than an instance (`Document.prototype.
-   activeElement`, not `document.activeElement`) because that is where the member is declared, and because
-   resolving through an instance means traversing whatever accessors the instance carries. */
-/* THE LAST SEGMENT IS ASKED WITH [[HasProperty]], NOT [[Get]], and that is the whole of the difference between
-   a probe and a call. This walked the path with JS_GetPropertyStr to its end and tested the VALUE, which is
-   wrong twice over. It RUNS AN ACCESSOR — the page's code in a C activation with no flow base, which the engine
-   aborts on by design — and `document.activeElement` became an accessor the moment HTML §6.6's focus model
-   landed, so a probe that only ever wanted a yes or no took the entire run down with it. And a value is the
-   wrong evidence anyway: a member whose getter legitimately answers `undefined` reads as ABSENT, so the check
-   would go on believing a step had nothing to do long after its producer existed. [[HasProperty]] is the
-   question being asked, and it invokes nothing.
-   INTERMEDIATE segments still need their value to be traversed, and every one on every path here is an
-   interface object or a `prototype` — both plain data properties. A path is written to keep that true
-   (`Document.prototype.activeElement`, not `document.activeElement`): the interface object is where the member
-   is DECLARED, which is also the more accurate question. Should an intermediate ever become an accessor, the
-   engine's own getter abort names the property it stopped on. */
-static void step_awaits(JSContext *ctx, const char *path, const char *what)
-{
-    JSValue cur = JS_GetGlobalObject(ctx);
-    const char *p = path;
-    bool present = false;
-
-    for (;;) {
-        const char *dot = strchr(p, '.');
-        size_t n = dot ? (size_t)(dot - p) : strlen(p);
-        char name[64];
-        JSAtom atom;
-        int has;
-
-        DCHECK(n > 0 && n < sizeof(name), "an update-the-rendering step named a producer path this cannot read");
-        if (!JS_IsObject(cur)) break;            /* the path died on the way; the producer is absent */
-        memcpy(name, p, n);
-        name[n] = 0;
-
-        atom = JS_NewAtomLen(ctx, name, n);
-        has = JS_HasProperty(ctx, cur, atom);
-        CHECK(has >= 0, "an update-the-rendering producer probe threw — [[HasProperty]] over an engine global "
-                        "runs no page code and has nothing to throw with");
-        if (!has) { JS_FreeAtom(ctx, atom); break; }
-        if (!dot) { JS_FreeAtom(ctx, atom); present = true; break; }   /* the member exists: producer is built */
-
-        {
-            JSValue next = JS_GetProperty(ctx, cur, atom);
-            JS_FreeAtom(ctx, atom);
-            JS_FreeValue(ctx, cur);
-            cur = next;
-        }
-        p = dot + 1;
-    }
-    JS_FreeValue(ctx, cur);
-    DCHECK(!present, what);
-}
+ * THAT IS AN ASSERTION AND NOT A SKIP, and the mechanism is `realm_awaits` — core/realm.h, which states the
+ * whole of how it works and why. It is two-sided: the path names the member whose arrival would give the step
+ * work, so the moment somebody lands ResizeObserver, or a viewport, or Web Animations, the DCHECK fires AT the
+ * step of update-the-rendering that must then be written. It stood here as a static of this file; §6.6.7's
+ * flush autofocus candidates needed the same assertion for two conditions of its OWN, so it moved to the one
+ * place every realm goes through rather than being copied — a two-sided assertion's second copy is worse than
+ * ordinary duplication, because the copy nobody maintains goes on being silent.
+ *
+ * STEP 7 IS NO LONGER ONE OF THEM. Its producer — §6.6's focus model, and the FocusEvent its focusing steps
+ * fire — landed, this assertion fired at exactly this place in the order, and the step it named was built:
+ * core/html/autofocus.c is HTML §6.6.7, and UR_AUTO below is the step that flushes it. */
 
 /* Does this document give §8.1.7.3 anything to do? Step 4 removes a doc "for which the user agent believes
    updating the rendering would have no visible effect AND whose map of animation frame callbacks is empty" —
@@ -166,6 +114,10 @@ static JSValue rendering_collect_docs(JSContext *ctx)
                  "user-agent-skipped)")                                                                        \
     X(UR_REVEAL, "HTML §8.1.7.3 update the rendering step 6 (for each doc: reveal doc — HTML §7.4.6.3 fires "   \
                  "pagereveal at its relevant global object), one document per rest")                           \
+    X(UR_AUTO,   "HTML §8.1.7.3 update the rendering step 7 (for each doc whose node navigable is a "           \
+                 "TOP-LEVEL TRAVERSABLE: flush autofocus candidates — HTML §6.6.7 drains the document's "       \
+                 "candidates and runs §6.6.4's focusing steps for the first one that is still focusable, "      \
+                 "firing blur/focusout/focus/focusin), one document per rest")                                 \
     X(UR_MEDIA,  "HTML §8.1.7.3 update the rendering step 10 (for each doc: evaluate media queries and report " \
                  "changes — CSSOM VIEW §4.2 fires `change` at each MediaQueryList whose matches state has "     \
                  "changed, in the order they were created, oldest first), one MediaQueryList per rest")         \
@@ -195,9 +147,9 @@ typedef struct JSUpdateRendering {
     uint32_t  nframe, k;    /* §8.9 step 2's key snapshot for the current doc, and step 3's cursor */
     uint32_t  nmedia, m;    /* §4.2's collection snapshot for the current doc, and its cursor */
     uint8_t   fphase;       /* the fire request steps 6 and 10 park on */
-    /* The CALL request steps 14 and 17 park on. One byte for both because one call is ever in flight — a stage
-       leaves its loop only with the request finished, which is what makes it also the flag that says whether a
-       resume is landing inside the step's call or at the top of its walk. */
+    /* The CALL request steps 7, 14 and 17 park on. One byte for all three because one call is ever in flight —
+       a stage leaves its loop only with the request finished, which is what makes it also the flag that says
+       whether a resume is landing inside the step's call or at the top of its walk. */
     uint8_t   cphase;
     uint8_t   snapped;      /* §8.9 step 2 has been taken for docs[i] */
     uint8_t   msnapped;     /* §4.2's collection snapshot has been taken for docs[i] */
@@ -259,18 +211,19 @@ static JSContext *doc_realm(JSContext *ctx, JSUpdateRendering *s)
     return docctx;
 }
 
-/* Steps 7 to 9, asserted in order at the place the algorithm runs them. */
-static void steps_7_to_9(JSContext *docctx)
+/* STEP 7 IS WRITTEN — it is UR_AUTO, below, and its assertion is GONE rather than relaxed. That is the whole
+   point of the mechanism: HTML §6.6's focus model and its FocusEvent arrived, the DCHECK fired at this exact
+   place in the order, and the step it named was built (core/html/autofocus.c is HTML §6.6.7). A probe that
+   outlived the work it demanded would be a claim that the step is still unwritten.
+
+   Steps 8 and 9, asserted in order at the place the algorithm runs them. */
+static void steps_8_and_9(JSContext *docctx)
 {
-    step_awaits(docctx, "FocusEvent",
-                "update the rendering step 7 flushes doc's AUTOFOCUS CANDIDATES (HTML §6.6), whose step 5.11.3 "
-                "runs the focusing steps and fires blur/focusout/focus/focusin — this build now has focus "
-                "events, so that list has a producer and step 7 must be written");
-    step_awaits(docctx, "innerWidth",
+    realm_awaits(docctx, "innerWidth",
                 "update the rendering step 8 runs the RESIZE STEPS (CSSOM VIEW §13.1), which fire `resize` at "
                 "the Window when the viewport's width or height changed since the last run — this build now "
                 "models a viewport, so step 8 must compare it and fire");
-    step_awaits(docctx, "scrollTo",
+    realm_awaits(docctx, "scrollTo",
                 "update the rendering step 9 runs the SCROLL STEPS (CSSOM VIEW §13.2) over doc's pending "
                 "scroll events, firing scroll/scrollend/scrollsnapchange in the order they were added — this "
                 "build now has a way to scroll a scrolling box, so that list has a producer and step 9 must be "
@@ -284,17 +237,17 @@ static void steps_7_to_9(JSContext *docctx)
    Steps 11 to 13, asserted in order at the place the algorithm runs them. */
 static void steps_11_to_13(JSContext *docctx)
 {
-    step_awaits(docctx, "Animation",
+    realm_awaits(docctx, "Animation",
                 "update the rendering step 11 UPDATES ANIMATIONS AND SENDS EVENTS (WEB ANIMATIONS §4.4): "
                 "update the timelines, remove replaced animations, PERFORM A FULL MICROTASK CHECKPOINT (§4.4 "
                 "step 3, inside this step), stable-sort the pending animation events and dispatch each — this "
                 "build now has Animation, so step 11 must be written, and its internal checkpoint cannot be "
                 "one stage with anything around it");
-    step_awaits(docctx, "Document.prototype.exitFullscreen",
+    realm_awaits(docctx, "Document.prototype.exitFullscreen",
                 "update the rendering step 12 runs the FULLSCREEN STEPS, firing fullscreenchange/"
                 "fullscreenerror and resolving requestFullscreen()'s promise — this build now has fullscreen, "
                 "so step 12 must be written");
-    step_awaits(docctx, "CanvasRenderingContext2D",
+    realm_awaits(docctx, "CanvasRenderingContext2D",
                 "update the rendering step 13 runs the CONTEXT LOST STEPS for each 2D context whose backing "
                 "storage was lost: reset the context, fire `contextlost` CANCELABLE (its return value steers "
                 "the algorithm), and fire `contextrestored` on a successful restore — this build now has a 2D "
@@ -304,7 +257,7 @@ static void steps_11_to_13(JSContext *docctx)
 /* Step 16, likewise. */
 static void step_16(JSContext *docctx)
 {
-    step_awaits(docctx, "ResizeObserver",
+    realm_awaits(docctx, "ResizeObserver",
                 "update the rendering step 16 is a `while (true)` around recalculate-styles-and-update-layout "
                 "that GATHERS ACTIVE RESIZE OBSERVATIONS at an increasing depth and BROADCASTS them (RESIZE "
                 "OBSERVER §3.4.1/§3.4.5), re-entering style and layout after every author callback, then "
@@ -320,7 +273,7 @@ static void step_16(JSContext *docctx)
    Step 18, still asserted at the place the algorithm runs it. */
 static void step_18(JSContext *docctx)
 {
-    step_awaits(docctx, "ViewTransition",
+    realm_awaits(docctx, "ViewTransition",
                 "update the rendering step 18 PERFORMS PENDING TRANSITION OPERATIONS (CSS VIEW TRANSITIONS "
                 "§7.2): setup view transition calls the author's ViewTransitionUpdateCallback and settles "
                 "ready/updateCallbackDone/finished — this build now has ViewTransition, so step 18 must be "
@@ -334,13 +287,13 @@ static void step_18(JSContext *docctx)
    16, and swapping them changes observable ordering. */
 static void steps_19_to_23(JSContext *docctx)
 {
-    step_awaits(docctx, "IntersectionObserver",
+    realm_awaits(docctx, "IntersectionObserver",
                 "update the rendering step 19 runs the UPDATE INTERSECTION OBSERVATIONS steps (INTERSECTION "
                 "OBSERVER §3.2.2): compute each target's intersection rectangle, decide its threshold index "
                 "and QUEUE an IntersectionObserverEntry, which QUEUES A TASK on the IntersectionObserver task "
                 "source — the callbacks run from that task and NOT from this step. This build now has "
                 "IntersectionObserver, so step 19 must be written that way round");
-    step_awaits(docctx, "PerformanceObserver",
+    realm_awaits(docctx, "PerformanceObserver",
                 "update the rendering steps 20 and 21 RECORD RENDERING TIME and MARK PAINT TIMING, which queue "
                 "performance entries — this build now has a performance timeline to queue them on, so both "
                 "steps must be written");
@@ -350,7 +303,7 @@ static void steps_19_to_23(JSContext *docctx)
        scriptable result for it to produce and no interface whose arrival would give it one, so it is a
        documented no-effect rather than an assertion — the one place in this component where that is the
        honest answer. */
-    step_awaits(docctx, "HTMLDialogElement.prototype.showModal",
+    realm_awaits(docctx, "HTMLDialogElement.prototype.showModal",
                 "update the rendering step 23 PROCESSES TOP LAYER REMOVALS, and the top layer is filled by "
                 "`dialog.showModal()` and by fullscreen — this build now has showModal, so the top layer has a "
                 "producer and step 23 must be written");
@@ -400,6 +353,18 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
             JS_FreeValue(ctx, s->fn);
             s->fn = JS_UNDEFINED;
             s->k++;                      /* §8.9 removed the callback before invoking it: on to the next */
+        } else if (s->hdr.stage == UR_AUTO) {
+            /* AN ABRUPT COMPLETION HERE IS THIS ENGINE'S, NOT THE PAGE'S, for UR_FOCUS's reason one arm down:
+               §6.6.7 states no step that throws, and a `focus` listener's own exception is REPORTED inside
+               §2.9's dispatch. What is left is an allocation failure or a capability of §6.6.7's machine that
+               is not built — and the candidates list was emptied and the flag set before the focusing steps
+               ran (§6.6.7 steps 5.11.1-5.11.2), so this document's autofocus is spent either way and the walk
+               moves on rather than re-flushing a list that is now empty. */
+            DFAIL("update the rendering step 7's FLUSH AUTOFOCUS CANDIDATES completed abruptly — §6.6.7 states "
+                  "no step that throws and §2.9 reports a focus listener's own exception inside the dispatch, "
+                  "so this is the engine's own failure and doc's autofocus candidates were left half-drained");
+            s->cphase = 0;
+            s->i++;
         } else if (s->hdr.stage == UR_FOCUS) {
             /* AN ABRUPT COMPLETION HERE IS THIS ENGINE'S, NOT THE PAGE'S — which is what makes it a crash and
                not a report. §6.6.4 states no step that throws, and a `blur` listener that throws is REPORTED
@@ -465,11 +430,8 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
         /* STEP 6: "For each doc of docs: reveal doc." */
         for (;;) {
             if (s->i >= s->ndocs) {
-                for (s->i = 0; s->i < s->ndocs; s->i++)
-                    steps_7_to_9(doc_realm(ctx, s));
                 s->i = 0;
-                s->msnapped = 0;
-                s->hdr.stage = UR_MEDIA;
+                s->hdr.stage = UR_AUTO;
                 break;
             }
             docctx = doc_realm(ctx, s);
@@ -487,6 +449,40 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
             cb_result = JS_UNDEFINED;
             JS_FreeValue(docctx, s->ev);
             s->ev = JS_UNDEFINED;
+            s->i++;
+        }
+    }
+
+    if (s->hdr.stage == UR_AUTO) {
+        /* STEP 7: "For each doc of docs, FLUSH AUTOFOCUS CANDIDATES for doc IF ITS NODE NAVIGABLE IS A
+           TOP-LEVEL TRAVERSABLE."
+           THE CONDITION IS THE STEP'S, so it is asked here rather than inside the algorithm — and it is not
+           decoration. §6.6.7's insertion steps append to the TOP-LEVEL traversable's active document's list
+           however deeply nested the element is, so every other document's list is empty by construction;
+           flushing one would set a processed flag on a document whose candidates all live somewhere else.
+           §6.6.7 asserts the same condition at its own entry, from the other side.
+           IT IS ITS OWN STAGE, AND ONE DOCUMENT PER REST, because §6.6.7 step 5.11.3 runs §6.6.4's focusing
+           steps at the page's `blur`, `focusout`, `focus` and `focusin` listeners — a stage that spanned two
+           documents would be a stage the scheduler cannot preempt between. The WALK OF THE CANDIDATES is
+           §6.6.7's own machine and rests once per candidate there, which is what makes a document whose markup
+           marked a hundred controls resumable mid-list rather than drained in one step. */
+        for (;;) {
+            if (s->i >= s->ndocs) {
+                for (s->i = 0; s->i < s->ndocs; s->i++)
+                    steps_8_and_9(doc_realm(ctx, s));
+                s->i = 0;
+                s->msnapped = 0;
+                s->hdr.stage = UR_MEDIA;
+                break;
+            }
+            docctx = doc_realm(ctx, s);
+            if (s->cphase == 0 && !window_proxy_is_top_level(document_window_proxy(docctx))) {
+                s->i++;
+                continue;
+            }
+            r = autofocus_flush_run(docctx, &s->cphase, STEP_CB(s->cb), cb_result, out_cb, out_argc);
+            if (r > 0) return r;                     /* parked on the page's focus listeners */
+            cb_result = JS_UNDEFINED;
             s->i++;
         }
     }
@@ -624,7 +620,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                    this build has a Navigation API, every document that reaches step 17 has a flag to clear
                    when the branch is taken, and a probe that only ran on the branch could stay silent for a
                    whole session after its producer arrived. */
-                step_awaits(docctx, "navigation",
+                realm_awaits(docctx, "navigation",
                             "update the rendering step 17 also sets doc's relevant global object's NAVIGATION "
                             "API's `focus changed during ongoing navigation` to false when it repairs a "
                             "focused area (HTML §7.2.6.8) — this build now has a Navigation API, so that flag "
