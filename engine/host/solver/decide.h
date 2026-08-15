@@ -12,8 +12,20 @@
 #include "quickjs.h"
 #include "solver/flow.h"
 
-/* JSFlowControlHooks.branch (installed by the scheduler, engine_run). Returns the arm (0/1) for a concolic cond,
-   or -1 when the value is not concolic (interpreter falls through to the normal ToBool). */
+/* JSFlowControlHooks.branch (installed by the scheduler, engine_run). For a concolic cond it returns the arm
+   THIS flow takes, ORed with SOLVER_FORKED_BIT when a sibling was prepared for the other arm; -1 when the value
+   is not concolic (the interpreter falls through to the normal ToBool).
+   THE FORKED BIT IS PART OF THE RETURN VALUE AND THIS SAID IT WAS NOT. It documented "the arm (0/1)", and the
+   ONLY caller outside this component believed it: core/dom/abort.c asked `arm == 1`, which is false for the 257
+   a first-time fork returns — so the flow took the FALSE arm while its decision vector recorded TRUE, and the
+   two disagreed for the rest of the run. A protocol whose one caller got it wrong is a protocol nobody should
+   be asked to remember, so the two halves are named here and read through the accessors below. Never compare a
+   raw return value against an arm. */
+#define SOLVER_FORKED_BIT 0x100
+/* The arm this flow takes, from a solver_decide/solver_outcome result known to be >= 0. */
+#define SOLVER_ARM(r)     ((r) & (SOLVER_FORKED_BIT - 1))
+/* Whether a sibling flow was prepared for the other arm — the interpreter's cue to snapshot-fork the frame. */
+#define SOLVER_FORKED(r)  (((r) & SOLVER_FORKED_BIT) != 0)
 int  solver_decide(JSContext *ctx, JSValueConst cond);
 
 /* JSFlowControlHooks.outcome — the same decision, asked by a C BUILTIN that has no OP_if to ask it at. `over`

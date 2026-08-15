@@ -112,14 +112,27 @@ static JSValue signal_slots(JSContext *ctx, JSValueConst sig)
     return st;
 }
 
-/* IS THIS SIGNAL ABORTED, ASKED THE ONLY WAY A C BUILTIN MAY ASK. solver_decide answers 0/1 for a concolic
-   flag and parks the other arm as its own flow; -1 means the flag is an ordinary boolean and the real ToBool
-   is the answer. A bare `if` here would pick one arm of an unknown and delete the other's code. */
+/* IS THIS SIGNAL ABORTED, ASKED THE ONLY WAY A C BUILTIN MAY ASK. solver_decide answers with the arm this flow
+   takes for a concolic flag and parks the other arm as its own flow; -1 means the flag is an ordinary boolean
+   and the real ToBool is the answer. A bare `if` here would pick one arm of an unknown and delete the other's
+   code.
+   THE ARM IS READ THROUGH SOLVER_ARM, and that is not decoration. The result carries SOLVER_FORKED_BIT when a
+   sibling was prepared, so a first-time fork onto the true arm returns 257; this compared the raw value against
+   1, took the FALSE arm, and left the flow disagreeing with its own decision vector for the rest of the run.
+   The header documented the return as "the arm (0/1)", which is why the mistake was available to make. */
 static int signal_is_aborted(JSContext *ctx, JSValueConst slots)
 {
     JSValue flag = JS_GetPropertyStr(ctx, slots, "aborted");
-    int arm = solver_decide(ctx, flag);
-    int r = (arm < 0) ? JS_ToBool(ctx, flag) : (arm == 1);
+    int d = solver_decide(ctx, flag);
+    int r;
+
+    if (d < 0) {
+        r = JS_ToBool(ctx, flag);
+    } else {
+        DCHECK(SOLVER_ARM(d) == 0 || SOLVER_ARM(d) == 1,
+               "a two-armed decision answered with an arm that is neither of them");
+        r = SOLVER_ARM(d) == 1;
+    }
     JS_FreeValue(ctx, flag);
     return r;
 }

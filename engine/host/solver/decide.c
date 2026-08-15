@@ -402,7 +402,7 @@ int solver_decide(JSContext *ctx, JSValueConst cond) {
     /* the source equals tok on the arm that makes the EQ true (EQ&&true or NE&&false) -> the code pinned it */
     if (src && tok && ((op == OPCMP_EQ && arm == 1) || (op == OPCMP_NE && arm == 0)))
         concolic_pin(src, tok);
-    return forked ? (arm | 0x100) : arm;   /* 0x100 tells the interpreter to snapshot-fork this frame */
+    return forked ? (arm | SOLVER_FORKED_BIT) : arm;   /* the bit tells the interpreter to snapshot-fork this frame */
 }
 
 /* JSFlowControlHooks.outcome — the SAME decision asked from a C builtin, which has no OP_if to ask it at.
@@ -434,6 +434,6 @@ int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n) {
                             "completions cannot be constrained, so two asks about it would be one fact");
         snprintf(key, sizeof key, "%s\x02%s", src, op ? op : "");
         arm = decide_arm(key, &forked);
-        return forked ? (arm | 0x100) : arm;
+        return forked ? (arm | SOLVER_FORKED_BIT) : arm;
     }
 }
