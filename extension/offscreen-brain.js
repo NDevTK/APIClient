@@ -1076,16 +1076,25 @@ const _contentPings = new Map();  // documentId -> [{ at, pageUrl }, ...]
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return;
   if (!msg) return;
-  // Extension-origin sender = trusted (popup + SW). Authenticated by sender.URL
-  // here: the SERVICE WORKER (which forwards __evt) has no frame, so Chrome leaves
-  // its MessageSender.origin undefined (a browser quirk), and only sender.url carries
-  // the extension origin for a SW. Document->document hops use sender.ORIGIN instead
-  // (offscreen->SW in background.js, offscreen->popup in popup.js). A web content
-  // script's sender.url is a web URL -> untrusted -> handleContentMessage.
-  const fromExtOrigin = !!(sender.url && sender.url.startsWith(EXTENSION_ORIGIN + "/"));
+  // TWO PREDICATES, BECAUSE SECURITY.md STATES TWO RULES AND THEY ARE NOT THE SAME CHECK:
+  // "SW→offscreen (`__evt`) is authenticated by `sender.url`: a service worker has no frame, so Chrome
+  //  leaves its `MessageSender.origin` undefined (a browser quirk) and only `sender.url` carries the
+  //  extension origin. Document→document hops (offscreen→SW in background.js, offscreen→popup) use
+  //  `sender.origin === chrome-extension://<id>` (browser-set, and `"null"` for a sandboxed extension
+  //  page → rejected)."
+  // ONE url-prefix predicate answered BOTH questions here, which is the document→document rule DELETED:
+  // a sandboxed extension page's sender.url is still `chrome-extension://<id>/…` while its ORIGIN is the
+  // opaque `"null"`, so a url prefix hands an opaque-origin document the trusted popup command surface
+  // (GET_STATE, SEND_REQUEST, CLEAR_TAB) — the exact impersonation SECURITY.md's attack table says is
+  // mitigated. The popup itself already gates the reverse direction on sender.origin (popup.js); a
+  // boundary checked on one side only is not a boundary.
+  const fromExtUrl = !!(sender.url && sender.url.startsWith(EXTENSION_ORIGIN + "/"));   // SW OR extension document
+  const fromExtDocument = sender.origin === EXTENSION_ORIGIN;                            // a real (non-opaque) extension document
 
   if (msg.__evt) {
-    if (!fromExtOrigin) return;
+    // The SW's own hop: it has no frame, so sender.origin is undefined and sender.url is the only
+    // browser-set carrier of the extension origin.
+    if (!fromExtUrl) return;
     if (msg.__evt === "TAB_REMOVED") _onTabRemoved(msg.tabId);
     return;
   }
@@ -1098,7 +1107,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // trusted extension page never sends a CONTENT_TYPE, so an extension-origin one
   // is dropped (defense in depth).
   if (CONTENT_TYPES.has(msg.type)) {
-    if (fromExtOrigin) return;
+    // Defense in depth: no trusted extension context ever sends a CONTENT_TYPE. The URL predicate is the
+    // BROADER of the two (it also covers a sandboxed extension page, whose origin is "null"), so it is the
+    // right one to DROP on — dropping more here can only ever refuse.
+    if (fromExtUrl) return;
     // Chunked-message reassembly: content.js's _sendChunked splits payloads over
     // ~16 MiB; rebuild before dispatch (no truncation, no caps).
     if (msg.__chunk) {
@@ -1110,10 +1122,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return;
   }
 
-  // Discriminate by sender.url, NOT sender.tab: an action popup's sender.tab is
+  // Discriminate by sender.ORIGIN, NOT sender.tab: an action popup's sender.tab is
   // the ACTIVE tab (defined!), so a sender.tab check would wrongly drop popup
-  // messages. Extension-page origin (popup) → handlePopupMessage.
-  if (!fromExtOrigin) return;
+  // messages. This is the document→document hop, so it is the origin rule — an
+  // opaque ("null") extension document is NOT this extension's document and gets
+  // nothing. sender.url is deliberately NOT accepted here: the SW never sends a
+  // popup command, so widening this to it would only admit the sandboxed page.
+  if (!fromExtDocument) return;
   handlePopupMessage(msg, sender, sendResponse);
   return true; // keep sendResponse alive for async handlePopupMessage
 });
