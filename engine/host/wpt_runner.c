@@ -34,6 +34,8 @@
 #include "core/html/form_data.h"
 #include "core/file/blob.h"
 #include "core/file/file_system.h"
+#include "core/file/file_system_access.h"
+#include "core/file/file_picker.h"
 #include "core/file/file_system_handle.h"
 #include "core/file/file_system_writable.h"
 #include "core/streams/readable_stream.h"
@@ -1815,6 +1817,8 @@ int main(int argc, char **argv)
     queuing_strategy_free(ctx);
     readable_stream_free(ctx);
     blob_free(ctx);
+    file_picker_free();
+    file_system_access_free();
     fs_handle_free();
     fs_writable_free();
     file_system_free(ctx);

@@ -36,6 +36,8 @@
 #include "browser/core/html/form_data.h"
 #include "browser/core/file/blob.h"
 #include "browser/core/file/file_system.h"
+#include "browser/core/file/file_system_access.h"
+#include "browser/core/file/file_picker.h"
 #include "browser/core/file/file_system_handle.h"
 #include "browser/core/file/file_system_writable.h"
 #include "browser/core/file/storage_manager.h"
@@ -403,6 +405,8 @@ QJS_EXPORT void qjs_teardown(void)
     queuing_strategy_free(g_ctx);
     readable_stream_free(g_ctx);
     blob_free(g_ctx);
+    file_picker_free();
+    file_system_access_free();
     fs_handle_free();
     fs_writable_free();
     storage_manager_free();

@@ -19,6 +19,8 @@
 #include "core/fetch/fetch.h"
 #include "core/file/blob.h"
 #include "core/file/file_system.h"
+#include "core/file/file_system_access.h"
+#include "core/file/file_picker.h"
 #include "core/file/file_system_handle.h"
 #include "core/file/file_system_writable.h"
 #include "core/file/storage_manager.h"
@@ -86,6 +88,8 @@ static void d_file_system(JSContext *c, const PlatformAgent *a) { (void)a; file_
 static void d_fs_writable(JSContext *c, const PlatformAgent *a) { (void)a; fs_writable_init(c); }
 static void d_fs_handle(JSContext *c, const PlatformAgent *a) { (void)a; fs_handle_init(c); }
 static void d_storage_manager(JSContext *c, const PlatformAgent *a) { (void)a; storage_manager_init(c); }
+static void d_fs_access(JSContext *c, const PlatformAgent *a) { (void)a; file_system_access_init(c); }
+static void d_file_picker(JSContext *c, const PlatformAgent *a) { (void)a; file_picker_init(c); }
 static void d_event(JSContext *c, const PlatformAgent *a) { (void)a; event_init(c); }
 static void d_report_exception(JSContext *c, const PlatformAgent *a) { (void)a; report_exception_init(c); }
 static void d_message_port(JSContext *c, const PlatformAgent *a) { (void)a; message_port_init(c); }
@@ -193,6 +197,13 @@ static const PlatformComponent PLATFORM[] = {
     { "file_system_writable", d_fs_writable,        NULL },
     { "file_system_handle",  d_fs_handle,           NULL },
     { "storage_manager",     d_storage_manager,     NULL },
+    /* FILE SYSTEM ACCESS, a DIFFERENT standard over that same model: §2.2's "file-system" powerful feature and
+       §2.3's two members, then §3's three pickers. Both rows come after `navigator` because Permissions §4's
+       registry — where the feature's row lives — is declared under it, and after `file_system_handle` because
+       §2.3's members install onto the prototype that component builds and core/realm.h runs the per-realm
+       installs in declaration order. */
+    { "file_system_access",  d_fs_access,           NULL },
+    { "file_picker",         d_file_picker,         NULL },
     { "event",               d_event,               i_event },
     /* Declared by the components that own the events they carry; the interface objects are this realm's. */
     { "message_event",       NULL,                  i_message_event },

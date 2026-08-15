@@ -42,10 +42,19 @@
  * two store entries — the implication is evaluated instead, because there the answers are facts and can
  * disagree.
  *
- * WHAT THIS FILE DOES NOT DECIDE: §5.2's request permission and §5.3's prompt the user to choose. Both are
- * algorithms a POWERFUL FEATURE invokes ("ask the user for express permission for the CALLING ALGORITHM"), and
- * this engine has no powerful feature's API — no Geolocation, no Notification, no getUserMedia. Writing them
- * with no caller is a design that has never run; they arrive with the first feature that asks. */
+ * §5.2's REQUEST PERMISSION IS HERE, AND ITS CALLER IS THE FIRST POWERFUL FEATURE THIS ENGINE HOSTS. File
+ * System Access §2.2 registers the "file-system" feature and §2.3.2's `handle.requestPermission()` runs its
+ * permission request algorithm, whose last-but-one step is "Request permission to use desc" — this. So the
+ * algorithm arrives with a call site, which is the condition this file previously stated for writing it.
+ *   §5.3's PROMPT THE USER TO CHOOSE is still absent, and its absence is now a fact about the FEATURE rather
+ * than about this engine: §5.3 is invoked by a feature that asks the user to pick from a SET OF OPTIONS (a
+ * camera, a MIDI port), and "file-system"'s own algorithms invoke §5.2 and never §5.3. It arrives with the
+ * first feature whose permission is a choice among options rather than a yes/no.
+ *   §5.4's REACT TO THE USER REVOKING PERMISSION is likewise still absent, for the reason `remove a permission
+ * store entry` states below: its first step runs the FEATURE's permission revocation algorithm, and
+ * "file-system" declares none — File System Access §2.2 defines a descriptor type, permission state
+ * constraints and a permission request algorithm, and leaves every other column of §4's registry at its
+ * default. */
 #ifndef ENGINE_HOST_BROWSER_CORE_PERMISSIONS_PERMISSION_STORE_H
 #define ENGINE_HOST_BROWSER_CORE_PERMISSIONS_PERMISSION_STORE_H
 
@@ -69,9 +78,23 @@ int         permission_state_of(const char *s);
    permission descriptor type is the default `PermissionDescriptor`.
      ONE aspect member, because that is what every registered feature's descriptor type declares — Push's
    `userVisibleOnly`, Web MIDI's `sysex`, Media Capture's `panTiltZoom`, Clipboard's `allowWithoutGesture` are
-   each a single `boolean X = false`. A feature declaring two is a second bit here and a second read in the
-   conversion, and the registry's own assert names it. */
-typedef struct { int feature; bool aspect; } PermissionDescriptor;
+   each a single `boolean X = false`, and File System Access's `mode` is a two-valued ENUMERATION, which is the
+   same one bit read through a different conversion (permission_feature_aspect_values). A feature declaring two
+   MEMBERS is a second bit here and a second read in the conversion, and the registry's own assert names it.
+ *
+ * AND THE SUBJECT, WHICH IS THE MEMBER THAT SAYS *WHICH* INSTANCE OF THE FEATURE THIS DESCRIPTOR IS ABOUT.
+ * `FileSystemPermissionDescriptor` declares `required FileSystemHandle handle`, and it is the first registered
+ * descriptor type whose members are not all facts about the ORIGIN: two handles in one document can hold two
+ * different permission states, and the feature's own permission state constraints are written over the ENTRY
+ * the handle locates. It is a BORROWED value — the descriptor is a stack record living for the length of one
+ * algorithm, exactly as §3.3's descriptor is — and it is JS_UNDEFINED for every feature whose registry row
+ * names no subject member, which every other row does.
+ *   IT IS NOT PART OF THE STORE KEY, and that is the FEATURE's decision rather than this file's: §3.2 keys an
+ * entry by its descriptor, and "file-system"'s permission state constraints REWRITE a descriptor to the one
+ * whose state it must equal before any entry is looked up (see permission_constraints_declare), so the
+ * descriptors that ever reach the store are already canonical. A feature whose constraints do NOT collapse
+ * this way is a feature whose subject belongs in the key, and the store's own assert is what will say so. */
+typedef struct { int feature; bool aspect; JSValueConst subject; } PermissionDescriptor;
 
 /* Declared ONCE PER AGENT. The store, the per-feature sources and the key are the agent's, not a realm's —
    §3.2 says "the user agent maintains a SINGLE permission store", and SECURITY.md makes an instance one
@@ -90,6 +113,40 @@ const char *permission_feature_name(int feature);
    `PermissionDescriptor`'s `name`, or NULL where the type is the default one. The query's conversion reads it
    off the page's object; nothing else needs to know it exists. */
 const char *permission_feature_aspect(int feature);
+/* THE ASPECT MEMBER'S TYPE, as the only thing about it that differs between features: a NULL-terminated list of
+   the values an ENUMERATION admits, whose FIRST entry is the IDL's own default and whose SECOND is the value
+   that sets the aspect bit; or NULL where the member is a `boolean X = false` and ToBoolean is the whole
+   conversion. Web IDL §3.2.19 makes a value outside the list a TypeError, which for a promise-returning
+   operation is a rejection — so the list is part of the TYPE and the conversion must not fall back to
+   ToBoolean, under which `{mode:"read"}` and `{mode:"readwrite"}` are the same descriptor. */
+const char *const *permission_feature_aspect_values(int feature);
+/* THE SUBJECT MEMBER — the `required` member whose value identifies WHICH INSTANCE of the feature a descriptor
+   is about, or NULL where the descriptor type declares none. §6.2.1 step 5 reads it and a missing one is a
+   TypeError (Web IDL §3.2.18: for a dictionary, `undefined` IS absent); the value itself is opaque to this
+   component, which is why the feature's own component supplies the test below. */
+const char *permission_feature_subject(int feature);
+/* IS THIS VALUE THE SUBJECT MEMBER'S DECLARED TYPE — Web IDL §3.2.16's brand test, performed by the component
+   that owns the interface because this one must not learn what a FileSystemHandle is. Declared ONCE PER AGENT
+   by that component, from its own `_init`. */
+typedef bool (*PermissionSubjectFn)(JSValueConst v);
+void permission_subject_declare(int feature, PermissionSubjectFn is);
+bool permission_subject_is(int feature, JSValueConst v);
+
+/* §4's PERMISSION STATE CONSTRAINTS — "constraints on the values that the user agent can return as a
+ * descriptor's permission state", registered by the component that owns the feature for the same reason the
+ * brand test is: the constraints are written over the feature's OWN objects.
+ *
+ * TWO ANSWERS, because that is what the two shapes of constraint the platform writes actually are. A constraint
+ * may FIX the state ("if entry represents a file system entry in a bucket file system, this descriptor's
+ * permission state must always be granted") — `*fixed` takes a PERMISSION_* value and §5.1 answers it without
+ * reading the store and without asking the unknown. Or it may say a descriptor's state "must be EQUAL to the
+ * permission state for" ANOTHER descriptor — `*out` takes that one and §5.1 continues over it, which is what
+ * makes an entry written for the canonical descriptor the answer for every descriptor constrained to equal it.
+ * Returning false leaves §5.1's own steps to decide.
+ *   IT RUNS BEFORE §5.1 STEP 2, because "must ALWAYS be" admits no earlier step overriding it. */
+typedef bool (*PermissionConstraintFn)(JSContext *ctx, const PermissionDescriptor *d,
+                                       PermissionDescriptor *out, int *fixed);
+void permission_constraints_declare(int feature, PermissionConstraintFn fn);
 /* §4's DEFAULT PERMISSION STATE for the feature — "an PermissionState value that serves as a permission's
    default state ... If not specified, the permission's default state is prompt". It is the EXAMPLE the
    feature's source carries and the first arm of every chain asked over it, so both places read it from here
@@ -123,6 +180,40 @@ JSValue permission_state(JSContext *ctx, const PermissionDescriptor *d);
  *   Returns JS_STEP_FORK (the caller returns it and is re-entered at this same call site) or 0 with *out set
  * to one of the PERMISSION_* values. */
 int permission_state_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, const PermissionDescriptor *d, int *out);
+
+/* §5.2's REQUEST PERMISSION TO USE A DESCRIPTOR — "this algorithm returns either granted or denied".
+ *
+ *   1. Let current state be the descriptor's permission state.
+ *   2. If current state is not "prompt", return current state and abort these steps.
+ *   3. Ask the user for express permission for the calling algorithm to use the powerful feature described by
+ *      descriptor.
+ *   4. If the user gives express permission to use the powerful feature, set current state to "granted";
+ *      otherwise to "denied".
+ *   5. Let settings be the current settings object.  6. Let key be the result of generating a permission key.
+ *   7. Queue a task on the current settings object's responsible event loop to set a permission store entry
+ *      with descriptor, key, and current state.  8. Return current state.
+ *
+ * STEP 3 IS THE FORK AND STEP 7 IS WHAT ENDS IT. The user's express permission is the same unknown §5.1 step 8
+ * is — a decision taken in a UI this engine does not host — so it is asked through the same seam and BOTH arms
+ * run: a bundle's granted path (the read, the upload, the endpoints behind it) and its denied path (the
+ * fallback, the message, the re-prompt) are two worlds and a C `if` here would delete one. Outcome 0 is
+ * "granted", and that numbering is this algorithm's own rather than §5.1's: step_fork_run's rule is that
+ * outcome 0 is what a run with no forking policy takes, and for a REQUEST the ordinary completion is the one
+ * the calling algorithm was written to continue into.
+ *   AND THEN IT IS KNOWN. Step 7 writes the store entry, so every later read in this flow — §5.1 step 7,
+ * another status's, a second requestPermission() — answers the decision rather than forking over it again.
+ * Step 7 says "queue a task", and the store is written directly instead: the entry's only observable is a
+ * later read, every later read in this flow is ordered after this algorithm's own return, and a task that
+ * carried the write would have to carry the value §5.1 has already returned to the caller.
+ *   `phase` IS THE CALLER'S BYTE, exactly as permission_state_run's is — this algorithm asks §5.1's chain and
+ * then its own question, and which of them a parked flow is at cannot live in a C local. It starts at zero and
+ * an answered request leaves it at zero. THE CALLER STILL OWES THIS ONE A STAGE OF ITS OWN: a stage holding
+ * this and any other request would restart one of the two phases on every re-entry.
+ *   Returns JS_STEP_FORK (the caller returns it and is re-entered at this same call site) or 0 with *out set to
+ * PERMISSION_GRANTED or PERMISSION_DENIED — never PERMISSION_PROMPT, which is what "returns either granted or
+ * denied" means and what the assert at the end of it states. */
+int permission_request_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, const PermissionDescriptor *d,
+                           int *out);
 
 /* §3.2's STORE OPERATIONS, over the one store. `get` answers -1 where there is NO ENTRY — a different thing
    from an entry whose state is "prompt", and §5.1 step 7 branches on exactly that difference: one is the

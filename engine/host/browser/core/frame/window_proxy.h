@@ -194,6 +194,17 @@ void window_proxy_disown_opener(JSContext *ctx, JSValueConst proxy);
    An OPAQUE origin is same-origin with NOTHING, including another opaque one. */
 bool window_proxy_same_origin_of(JSValueConst proxy);
 
+/* IS THIS ENVIRONMENT'S ORIGIN SAME ORIGIN WITH ITS TOP-LEVEL ORIGIN? — the question HTML §4.10.5.4's
+   showPicker() step 2, Permissions §5.1 step 4's default 'self' allowlist and File System Access §2.2's and
+   §3.1's SecurityError checks each ask of the CURRENT realm, and which each of them had written out for
+   itself: fetch the top-level traversable's navigable and ask §7.2.5.1 of it. Three copies of one sentence is
+   three chances for the opaque-origin case to be read differently, and the opaque case is the one that decides
+   whether a sandboxed document reaches the local file system — window_proxy_same_origin_of answers false for a
+   navigable whose origin is opaque, so a top-level document with an opaque origin is correctly NOT same origin
+   with its own top.
+   A TOP-LEVEL DOCUMENT IS ITS OWN TOP, so the answer is true for one unless its origin is opaque. */
+bool window_proxy_same_origin_with_top(JSContext *ctx);
+
 /* THE BROWSING CONTEXT'S NAME, as this flow sees it — "" when it has none. §7.3.3's named access on the Window
    matches against it, so the walk that answers `window.myFrameName` needs to read it. BORROWED. */
 const char *window_proxy_name(JSValueConst proxy);

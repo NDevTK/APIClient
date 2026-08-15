@@ -715,6 +715,15 @@ bool window_proxy_same_origin_of(JSValueConst proxy)
     return proxy_same_origin(p);
 }
 
+bool window_proxy_same_origin_with_top(JSContext *ctx)
+{
+    JSValue top = window_proxy_top_navigable(ctx, document_window_proxy(ctx));
+    bool same = JS_IsObject(top) && window_proxy_same_origin_of(top);
+
+    JS_FreeValue(ctx, top);
+    return same;
+}
+
 const char *window_proxy_name(JSValueConst proxy)
 {
     ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);

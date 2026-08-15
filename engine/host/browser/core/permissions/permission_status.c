@@ -31,6 +31,11 @@
 #define PS_ASPECT     "aspect"
 #define PS_STATE      "state"
 #define PS_GENERATION "generation"
+/* §6.3's [[query]] SLOT IS THE WHOLE TYPED DESCRIPTOR, which for the one registered descriptor type that names
+   a SUBJECT member includes that member's value. Held here rather than re-read, because §6.3.4's update steps
+   run long after §6.2.1's conversion returned and the object the page passed is gone; and held as a slot rather
+   than as a C pointer, because a status outlives the algorithm that made it and its state has to park. */
+#define PS_SUBJECT    "subject"
 
 static JSValue g_key;
 static int     g_ready;
@@ -64,13 +69,18 @@ static void status_descriptor(JSContext *ctx, JSValueConst slots, PermissionDesc
 {
     JSValue f = JS_GetPropertyStr(ctx, slots, PS_FEATURE);
     JSValue a = JS_GetPropertyStr(ctx, slots, PS_ASPECT);
+    JSValue sub = JS_GetPropertyStr(ctx, slots, PS_SUBJECT);
     int32_t feature = -1;
 
     JS_ToInt32(ctx, &feature, f);
     d->feature = feature;
     d->aspect = JS_ToBool(ctx, a);
+    /* BORROWED, and the slot record is what keeps it alive — the record is reachable from the status for as
+       long as the status is, and a descriptor is a stack value that never outlives the algorithm reading it. */
+    d->subject = sub;
     JS_FreeValue(ctx, f);
     JS_FreeValue(ctx, a);
+    JS_FreeValue(ctx, sub);
     DCHECK(d->feature >= 0, "a PermissionStatus's [[query]] internal slot names no powerful feature — §6.3.1 "
                             "initializes it to a typed descriptor, and every descriptor comes from §4's "
                             "registry");
@@ -333,6 +343,7 @@ JSValue permission_status_new(JSContext *ctx, const PermissionDescriptor *d)
     /* §6.3.1 steps 3.1-3.2: [[query]] is the typed descriptor and `name` is its name. */
     JS_SetPropertyStr(ctx, slots, PS_FEATURE, JS_NewInt32(ctx, d->feature));
     JS_SetPropertyStr(ctx, slots, PS_ASPECT, JS_NewBool(ctx, d->aspect));
+    JS_SetPropertyStr(ctx, slots, PS_SUBJECT, JS_DupValue(ctx, d->subject));
     JS_SetPropertyStr(ctx, slots, PS_GENERATION, JS_NewInt32(ctx, 0));
     /* THE DEFAULT PERMISSION QUERY ALGORITHM — "set status's state to permissionDesc's permission state". It
        is §6.2.1 step 8.3 and §6.3.4 step 3 both, so it is performed in the one place that creates a status. */

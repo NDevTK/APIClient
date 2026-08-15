@@ -56,7 +56,15 @@ int permission_state_of(const char *s)
  *     `background-sync` and `clipboard-write` are powerful features that are NOT policy-controlled, which the
  *     registry states in its own column and their specs confirm by defining no policy-controlled feature.
  *   ASPECT — the ONE member the feature's permission descriptor type declares beyond `name`, or NULL where the
- *     type is the default `PermissionDescriptor`. Every one of them is a `boolean X = false`.
+ *     type is the default `PermissionDescriptor`. Most are a `boolean X = false`; File System Access's `mode`
+ *     is a two-valued ENUMERATION, which is the same one bit reached through §3.2.19's conversion rather than
+ *     through ToBoolean, and ASPECT_VALUES is what says which of the two a row is.
+ *   ASPECT_VALUES — that enumeration's values, first the IDL's default and second the one that sets the bit;
+ *     NULL for a boolean member. Under ToBoolean `{mode:"read"}` and `{mode:"readwrite"}` are one descriptor,
+ *     so this column is what keeps the read and the readwrite worlds apart.
+ *   SUBJECT — the `required` member identifying WHICH INSTANCE of the feature a descriptor is about, or NULL
+ *     where a descriptor is a fact about the origin alone (which every row but one is). Its value's TYPE is
+ *     the feature's own, so the brand test is registered by the feature's component rather than named here.
  *   STRONG — §4's PARTIAL ORDER, as the aspect value that is the STRONGER descriptor. It is not always `true`:
  *     Push states `{name:"push", userVisibleOnly:false}` is stronger than `{name:"push", userVisibleOnly:
  *     true}`, the opposite way round from Web MIDI's `sysex` and Media Capture's `panTiltZoom`.
@@ -74,50 +82,72 @@ int permission_state_of(const char *s)
  *     answers a `clipboard-read` query, and Chrome is confirmation rather than the source.
  *   "web-share" — the registry lists it as a policy-controlled feature that is NOT a powerful feature
  *     ("it doesn't require express permission to be used"), so it has no permission state to query. */
+/* THE TWO COLUMNS THE FIRST NON-BOOLEAN DESCRIPTOR TYPE ADDED. ASPECT_VALUES is the enumeration a feature's
+   aspect member is, NULL where it is a `boolean X = false`; SUBJECT is the `required` member naming WHICH
+   instance of the feature the descriptor is about, NULL where the descriptor is a fact about the origin alone.
+   Both are the same kind of statement as ASPECT itself — data read off §4's registry entry — which is why they
+   are columns and not a branch at the conversion. */
+static const char *const PF_MODE_VALUES[] = { "read", "readwrite", NULL };
+
 #define PERMISSION_FEATURES(X)                                                                                 \
     /* Geolocation API §3.4: "Geolocation is a DEFAULT powerful feature identified by the name geolocation". */\
-    X(GEOLOCATION,        "geolocation",          1, NULL,                 0, PERMISSION_PROMPT)               \
+    X(GEOLOCATION,        "geolocation",          1, NULL,                 0, PERMISSION_PROMPT, NULL, NULL)               \
     /* Notifications §2.2: "a powerful feature which is identified by the name notifications". */              \
-    X(NOTIFICATIONS,      "notifications",        0, NULL,                 0, PERMISSION_PROMPT)               \
+    X(NOTIFICATIONS,      "notifications",        0, NULL,                 0, PERMISSION_PROMPT, NULL, NULL)               \
     /* Push API: `dictionary PushPermissionDescriptor : PermissionDescriptor { boolean userVisibleOnly =       \
        false; }`, and `{userVisibleOnly:false}` is stronger than `{userVisibleOnly:true}`. */                   \
-    X(PUSH,               "push",                 0, "userVisibleOnly",    0, PERMISSION_PROMPT)               \
+    X(PUSH,               "push",                 0, "userVisibleOnly",    0, PERMISSION_PROMPT, NULL, NULL)               \
     /* Web MIDI: `MidiPermissionDescriptor { boolean sysex = false; }`; sysex:true is the stronger. */         \
-    X(MIDI,               "midi",                 1, "sysex",              1, PERMISSION_PROMPT)               \
+    X(MIDI,               "midi",                 1, "sysex",              1, PERMISSION_PROMPT, NULL, NULL)               \
     /* Media Capture §: two powerful features. Only `camera` carries an aspect —                               \
        `CameraDevicePermissionDescriptor { boolean panTiltZoom = false; }`, panTiltZoom:true the stronger. */   \
-    X(CAMERA,             "camera",               1, "panTiltZoom",        1, PERMISSION_PROMPT)               \
-    X(MICROPHONE,         "microphone",           1, NULL,                 0, PERMISSION_PROMPT)               \
+    X(CAMERA,             "camera",               1, "panTiltZoom",        1, PERMISSION_PROMPT, NULL, NULL)               \
+    X(MICROPHONE,         "microphone",           1, NULL,                 0, PERMISSION_PROMPT, NULL, NULL)               \
     /* Storage §5: the "persistent-storage" powerful feature, algorithms defaulted except for a permission     \
        state that must agree across every environment of an origin (which the one agent-wide store gives) and  \
        a revocation algorithm that demotes the default bucket. */                                              \
-    X(PERSISTENT_STORAGE, "persistent-storage",   0, NULL,                 0, PERMISSION_PROMPT)               \
+    X(PERSISTENT_STORAGE, "persistent-storage",   0, NULL,                 0, PERMISSION_PROMPT, NULL, NULL)               \
     /* Screen Wake Lock: the "screen-wake-lock" powerful feature, policy-controlled with 'self'. */            \
-    X(SCREEN_WAKE_LOCK,   "screen-wake-lock",     1, NULL,                 0, PERMISSION_PROMPT)               \
+    X(SCREEN_WAKE_LOCK,   "screen-wake-lock",     1, NULL,                 0, PERMISSION_PROMPT, NULL, NULL)               \
     /* Window Management §3.7: "a default powerful feature identified by the name window-management". */       \
-    X(WINDOW_MANAGEMENT,  "window-management",    1, NULL,                 0, PERMISSION_PROMPT)               \
+    X(WINDOW_MANAGEMENT,  "window-management",    1, NULL,                 0, PERMISSION_PROMPT, NULL, NULL)               \
     /* Local Font Access: "a default powerful feature that is identified by the name local-fonts". */          \
-    X(LOCAL_FONTS,        "local-fonts",          1, NULL,                 0, PERMISSION_PROMPT)               \
+    X(LOCAL_FONTS,        "local-fonts",          1, NULL,                 0, PERMISSION_PROMPT, NULL, NULL)               \
     /* Idle Detection: "the idle-detection permission is a default powerful feature". */                       \
-    X(IDLE_DETECTION,     "idle-detection",       1, NULL,                 0, PERMISSION_PROMPT)               \
+    X(IDLE_DETECTION,     "idle-detection",       1, NULL,                 0, PERMISSION_PROMPT, NULL, NULL)               \
     /* Background Sync: "a default powerful feature that is identified by the name background-sync". */        \
-    X(BACKGROUND_SYNC,    "background-sync",      0, NULL,                 0, PERMISSION_PROMPT)               \
+    X(BACKGROUND_SYNC,    "background-sync",      0, NULL,                 0, PERMISSION_PROMPT, NULL, NULL)               \
     /* Generic Sensor: a sensor type's SENSOR PERMISSION NAMES are powerful feature names, and each concrete   \
        sensor spec names its own. */                                                                           \
-    X(ACCELEROMETER,      "accelerometer",        1, NULL,                 0, PERMISSION_PROMPT)               \
-    X(GYROSCOPE,          "gyroscope",            1, NULL,                 0, PERMISSION_PROMPT)               \
-    X(MAGNETOMETER,       "magnetometer",         1, NULL,                 0, PERMISSION_PROMPT)               \
-    X(AMBIENT_LIGHT,      "ambient-light-sensor", 1, NULL,                 0, PERMISSION_PROMPT)               \
+    X(ACCELEROMETER,      "accelerometer",        1, NULL,                 0, PERMISSION_PROMPT, NULL, NULL)               \
+    X(GYROSCOPE,          "gyroscope",            1, NULL,                 0, PERMISSION_PROMPT, NULL, NULL)               \
+    X(MAGNETOMETER,       "magnetometer",         1, NULL,                 0, PERMISSION_PROMPT, NULL, NULL)               \
+    X(AMBIENT_LIGHT,      "ambient-light-sensor", 1, NULL,                 0, PERMISSION_PROMPT, NULL, NULL)               \
     /* Clipboard API §9: `ClipboardPermissionDescriptor { boolean allowWithoutGesture = false; }`, and         \
        `{allowWithoutGesture:true}` is stronger than `{allowWithoutGesture:false}`. */                          \
-    X(CLIPBOARD_WRITE,    "clipboard-write",      0, "allowWithoutGesture", 1, PERMISSION_PROMPT)
+    X(CLIPBOARD_WRITE,    "clipboard-write",      0, "allowWithoutGesture", 1, PERMISSION_PROMPT, NULL, NULL)                                                                                               \
+    /* File System Access §2.2: the "file-system" powerful feature, and the first registered one whose        \
+       permission descriptor type declares a member that is neither a name nor a boolean —                     \
+       `FileSystemPermissionDescriptor : PermissionDescriptor { required FileSystemHandle handle;              \
+       FileSystemPermissionMode mode = "read"; }`. `mode` is the ASPECT (a two-valued enumeration rather than a \
+       boolean, which is the same one bit through §3.2.19's conversion instead of ToBoolean) and `handle` is    \
+       the SUBJECT. §4's PARTIAL ORDER is the feature's own fourth permission state constraint read as an       \
+       order: "if desc['mode'] is readwrite ... if read state is not granted, this descriptor's permission      \
+       state must be equal to read state" says a granted readwrite forces read granted and a denied read        \
+       forces readwrite denied, which is exactly what STRONG=1 (the readwrite bit) states here. It is NOT a     \
+       policy-controlled feature: File System Access defines no Permissions-Policy feature and the Permissions  \
+       Policy registry lists none, so §5.1 step 4's outer condition is false for it. */                         \
+    X(FILE_SYSTEM,        "file-system",          0, "mode",              1, PERMISSION_PROMPT,                \
+      PF_MODE_VALUES, "handle")
 
-#define PF_ENUM_ONE(id, name, policy, aspect, strong, def) PF_##id,
-#define PF_NAME_ONE(id, name, policy, aspect, strong, def) name,
-#define PF_POLICY_ONE(id, name, policy, aspect, strong, def) policy,
-#define PF_ASPECT_ONE(id, name, policy, aspect, strong, def) aspect,
-#define PF_STRONG_ONE(id, name, policy, aspect, strong, def) strong,
-#define PF_DEFAULT_ONE(id, name, policy, aspect, strong, def) def,
+#define PF_ENUM_ONE(id, name, policy, aspect, strong, def, values, subject) PF_##id,
+#define PF_NAME_ONE(id, name, policy, aspect, strong, def, values, subject) name,
+#define PF_POLICY_ONE(id, name, policy, aspect, strong, def, values, subject) policy,
+#define PF_ASPECT_ONE(id, name, policy, aspect, strong, def, values, subject) aspect,
+#define PF_STRONG_ONE(id, name, policy, aspect, strong, def, values, subject) strong,
+#define PF_DEFAULT_ONE(id, name, policy, aspect, strong, def, values, subject) def,
+#define PF_VALUES_ONE(id, name, policy, aspect, strong, def, values, subject) values,
+#define PF_SUBJECT_ONE(id, name, policy, aspect, strong, def, values, subject) subject,
 
 enum { PERMISSION_FEATURES(PF_ENUM_ONE) PF_N };
 static const char *const PF_NAME[]   = { PERMISSION_FEATURES(PF_NAME_ONE) };
@@ -125,6 +155,13 @@ static const int         PF_POLICY[] = { PERMISSION_FEATURES(PF_POLICY_ONE) };
 static const char *const PF_ASPECT[] = { PERMISSION_FEATURES(PF_ASPECT_ONE) };
 static const int         PF_STRONG[] = { PERMISSION_FEATURES(PF_STRONG_ONE) };
 static const int         PF_DEFAULT[] = { PERMISSION_FEATURES(PF_DEFAULT_ONE) };
+static const char *const *const PF_VALUES[] = { PERMISSION_FEATURES(PF_VALUES_ONE) };
+static const char *const PF_SUBJECT[] = { PERMISSION_FEATURES(PF_SUBJECT_ONE) };
+/* THE FEATURE'S OWN ALGORITHMS, registered by the component that owns it — §4's registry is a table of them
+   and these two are the entries a feature whose descriptor names OBJECTS has to fill in. NULL is the default
+   §4 states for each: no subject member to brand, and "no constraints beyond the user's intent". */
+static PermissionSubjectFn    PF_SUBJECT_FN[PF_N];
+static PermissionConstraintFn PF_CONSTRAINT_FN[PF_N];
 
 /* A DESCRIPTOR'S INDEX in the store and in the source record: the feature and its aspect bit. §3.2 says an
    entry is denoted by its descriptor AND its key, and the key is asserted to be one value below — so within
@@ -258,13 +295,28 @@ int permission_store_get(JSContext *ctx, const PermissionDescriptor *d)
     return state;
 }
 
-void permission_store_set(JSContext *ctx, const PermissionDescriptor *d, int state)
+/* §3.2's store operations both take the descriptor a caller HAS and write or read the one §4's constraints
+   make it equal to — defined with §5.1's read below and used by both, because an entry written
+   under a non-canonical descriptor is an entry §5.1 would never read back. */
+static int permission_canonical(JSContext *ctx, PermissionDescriptor *d);
+
+void permission_store_set(JSContext *ctx, const PermissionDescriptor *din, int state)
 {
+    PermissionDescriptor c = *din;
+    const PermissionDescriptor *d = &c;
+    int fixed;
+
     DCHECK(g_ready, "§3.2's store was written before permission_store_init built it");
     DCHECK(state >= 0 && state < PERMISSION_STATE_N,
            "§3.2's set-a-permission-store-entry was given something that is not a PermissionState");
     DCHECK(d->feature >= 0 && d->feature < PF_N,
            "§3.2's store was written for a feature §4's registry has no row for");
+    fixed = permission_canonical(ctx, &c);
+    DCHECK(fixed < 0, "§3.2's set-a-permission-store-entry was given a descriptor whose feature's permission "
+                      "state CONSTRAINTS already fix its state — an entry for it could never be read back, "
+                      "since §5.1 answers the constraint ahead of the store, so writing one is a decision "
+                      "about a world the standard says cannot exist");
+    (void)fixed;
     permission_assert_key(ctx);
     /* §3.2: "If the user agent's permission store contains an entry whose descriptor is descriptor, and whose
        key is equal to key given descriptor, REPLACE that entry"; otherwise append. One slot per descriptor is
@@ -285,6 +337,7 @@ void permission_store_set(JSContext *ctx, const PermissionDescriptor *d, int sta
 
         o.feature = d->feature;
         o.aspect = !d->aspect;
+        o.subject = d->subject;   /* the SIBLING descriptor is the same instance with the other aspect value */
         other = permission_store_get(ctx, &o);
         if (other >= 0) {
             strong_state = this_is_strong ? state : other;
@@ -326,6 +379,65 @@ const char *permission_feature_aspect(int feature)
     return PF_ASPECT[feature];
 }
 
+const char *const *permission_feature_aspect_values(int feature)
+{
+    DCHECK(feature >= 0 && feature < PF_N, "a feature index §4's registry has no row for was asked for its "
+                                           "aspect member's enumeration");
+    DCHECK(!PF_VALUES[feature] || PF_ASPECT[feature],
+           "§4's registry names an aspect ENUMERATION for a feature that declares no aspect member — the values "
+           "are that member's TYPE, so a row carrying them and no member is half a descriptor type");
+#if APICLIENT_DEV
+    if (PF_VALUES[feature]) {
+        int n = 0;
+
+        while (PF_VALUES[feature][n]) n++;
+        DCHECK(n == 2, "§4's registry names an aspect enumeration that is not two-valued — the aspect is ONE "
+                       "BIT, so an enumeration with a third value is a descriptor type this component cannot "
+                       "index and the registry has to say how it maps onto the bit");
+    }
+#endif
+    return PF_VALUES[feature];
+}
+
+const char *permission_feature_subject(int feature)
+{
+    DCHECK(feature >= 0 && feature < PF_N, "a feature index §4's registry has no row for was asked for its "
+                                           "subject member");
+    return PF_SUBJECT[feature];
+}
+
+void permission_subject_declare(int feature, PermissionSubjectFn is)
+{
+    DCHECK(feature >= 0 && feature < PF_N, "a brand test was declared for a feature §4's registry has no row for");
+    DCHECK(PF_SUBJECT[feature] != NULL,
+           "a brand test was declared for a feature whose registry row names no SUBJECT member — the test is "
+           "that member's type, so a feature with no member has nothing for it to brand");
+    DCHECK(PF_SUBJECT_FN[feature] == NULL,
+           "a feature's subject brand test was declared twice — §4's registry entry is the AGENT's, and a "
+           "second declaration means two components both claim to own the feature");
+    PF_SUBJECT_FN[feature] = is;
+}
+
+bool permission_subject_is(int feature, JSValueConst v)
+{
+    DCHECK(feature >= 0 && feature < PF_N, "a value was branded against a feature §4's registry has no row for");
+    DCHECK(PF_SUBJECT_FN[feature] != NULL,
+           "§6.2.1 step 5 reached a feature's SUBJECT member with no brand test declared for it — the test is "
+           "declared once per agent by the component that owns the interface, so reaching here means that "
+           "component's own `_init` did not run before the member it guards became reachable");
+    return PF_SUBJECT_FN[feature](v);
+}
+
+void permission_constraints_declare(int feature, PermissionConstraintFn fn)
+{
+    DCHECK(feature >= 0 && feature < PF_N,
+           "permission state constraints were declared for a feature §4's registry has no row for");
+    DCHECK(PF_CONSTRAINT_FN[feature] == NULL,
+           "a feature's permission state constraints were declared twice — §4 gives a feature ONE such column, "
+           "and two would be two answers to a question the standard makes single-valued");
+    PF_CONSTRAINT_FN[feature] = fn;
+}
+
 int permission_feature_default(int feature)
 {
     DCHECK(feature >= 0 && feature < PF_N, "a feature index §4's registry has no row for was asked for its "
@@ -359,24 +471,58 @@ JSValue permission_unknown(JSContext *ctx, int feature)
  * holds, so there is no ignorance here and nothing to fork over. */
 static bool permission_allowed_to_use(JSContext *ctx, int feature)
 {
-    JSValueConst self = document_window_proxy(ctx);
-    JSValue top;
-    bool same;
-
     if (!PF_POLICY[feature])
         return true;                       /* not a policy-controlled feature: step 4's condition is false */
-    DCHECK(window_proxy_is(self), "§5.1 step 4 was asked of a realm with no navigable — every Window this agent "
-                                  "builds has one, and step 4 reads the document's position in the tree");
-    top = window_proxy_top_navigable(ctx, self);
-    same = JS_IsObject(top) && window_proxy_same_origin_of(top);
-    JS_FreeValue(ctx, top);
-    return same;
+    DCHECK(window_proxy_is(document_window_proxy(ctx)),
+           "§5.1 step 4 was asked of a realm with no navigable — every Window this agent builds has one, and "
+           "step 4 reads the document's position in the tree");
+    return window_proxy_same_origin_with_top(ctx);
 }
 
-JSValue permission_state(JSContext *ctx, const PermissionDescriptor *d)
+/* §4's PERMISSION STATE CONSTRAINTS, APPLIED BEFORE §5.1's OWN STEPS. A constraint that FIXES the state is
+ * answered here ("must ALWAYS be granted" admits no earlier step overriding it, and step 2's non-secure context
+ * is unreachable for the one feature that has such a constraint — every interface File System Access declares
+ * is [SecureContext], so a non-secure realm holds no handle to build the descriptor from).
+ *   A constraint that says a descriptor's state "must be EQUAL to" another descriptor's REWRITES `*d` and is
+ * asked again, because the constraint the rewrite lands on may itself rewrite: File System Access §2.2's third
+ * constraint walks an entry to its parent, and a path is a list, so the walk is a LOOP over strictly shorter
+ * paths and never C recursion. `*d` is left holding the CANONICAL descriptor — the one whose store entry is
+ * the answer for every descriptor constrained to equal it, which is why §3.2's key needs no subject.
+ *   Returns a PERMISSION_* value the constraint fixed, or -1 to continue with the rewritten descriptor. */
+static int permission_canonical(JSContext *ctx, PermissionDescriptor *d)
 {
-    int entry, other;
-    PermissionDescriptor o;
+    int fixed = -1;
+
+    /* THE BOUNDS ARE A `CHECK` AND NOT A DCHECK, and this is the one place in this file where that is true:
+       every other assert here reports a wrong ANSWER, and this one stands in front of an INDEX into the
+       registry's function tables. A feature naming no row would read a function pointer past the end of the
+       table and CALL it, which is a data-integrity failure that must not proceed in a release build either. */
+    CHECK(d->feature >= 0 && d->feature < PF_N,
+          "§4's permission state constraints were asked about a feature the registry has no row for");
+    while (PF_CONSTRAINT_FN[d->feature]) {
+        PermissionDescriptor out = *d;
+
+        if (!PF_CONSTRAINT_FN[d->feature](ctx, d, &out, &fixed))
+            return -1;                     /* no constraint binds this descriptor: §5.1's own steps decide */
+        if (fixed >= 0) {
+            DCHECK(fixed < PERMISSION_STATE_N,
+                   "a feature's permission state constraints fixed a value that is not a PermissionState");
+            return fixed;
+        }
+        DCHECK(out.feature == d->feature,
+               "a feature's permission state constraints rewrote a descriptor to a DIFFERENT feature — §4's "
+               "constraints are stated over descriptors of the SAME feature, and a cross-feature rewrite would "
+               "read one feature's store entry as another's");
+        *d = out;
+    }
+    return -1;
+}
+
+JSValue permission_state(JSContext *ctx, const PermissionDescriptor *din)
+{
+    PermissionDescriptor c = *din, o;
+    const PermissionDescriptor *d = &c;
+    int entry, other, fixed;
 
     DCHECK(g_ready, "§5.1 was asked for a permission state before permission_store_init built the model");
     DCHECK(d->feature >= 0 && d->feature < PF_N,
@@ -387,6 +533,15 @@ JSValue permission_state(JSContext *ctx, const PermissionDescriptor *d)
            "a descriptor carries an ASPECT for a feature whose permission descriptor type is the default one — "
            "the aspect bit is the value of the member the registry names, and a feature with no member has no "
            "second descriptor");
+    DCHECK(PF_SUBJECT[d->feature] == NULL || !JS_IsUndefined(d->subject),
+           "a descriptor for a feature whose permission descriptor type declares a REQUIRED subject member "
+           "carries none — §6.2.1 step 5's conversion makes an absent required member a TypeError before a "
+           "descriptor exists, so reaching here means a descriptor was built without reading it");
+
+    /* §4's PERMISSION STATE CONSTRAINTS, which bind before every step below — see above. */
+    fixed = permission_canonical(ctx, &c);
+    if (fixed >= 0)
+        return JS_NewString(ctx, permission_state_str(fixed));
 
     /* STEP 2: "If settings is a non-secure context, return denied." */
     if (!secure_context_is(ctx))
@@ -408,6 +563,7 @@ JSValue permission_state(JSContext *ctx, const PermissionDescriptor *d)
 
         o.feature = d->feature;
         o.aspect = !d->aspect;
+        o.subject = d->subject;
         other = permission_store_get(ctx, &o);
         if (!this_is_strong && other == PERMISSION_GRANTED)
             return JS_NewString(ctx, permission_state_str(PERMISSION_GRANTED));
@@ -478,6 +634,68 @@ int permission_state_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, const Per
     return 0;
 }
 
+/* ---- §5.2's REQUEST -----------------------------------------------------------------------------------------
+ *
+ * See permission_store.h for the algorithm and for why step 3 is a fork and step 7 is what ends it. Two phases,
+ * because two questions are asked in sequence and which of them a parked flow is at cannot live in a C local:
+ * §5.1's chain (which is itself two, separated by ITS own phase byte, kept here in the same byte because the
+ * two chains are never outstanding at the same moment) and then step 3's own. */
+enum { PR_ASK_STATE = 0, PR_ASK_EXPRESS };
+#define PR_OP_EXPRESS "Permissions §5.2 step 3 (ask the user for express permission for the calling algorithm " \
+                      "to use the powerful feature described by descriptor)"
+
+int permission_request_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, const PermissionDescriptor *d, int *out)
+{
+    int rc, arm = 0, current;
+
+    DCHECK(g_ready, "§5.2 was asked to request a permission before permission_store_init built the model");
+    if (*phase == PR_ASK_STATE) {
+        /* STEP 1: "Let current state be the descriptor's permission state." The read may itself FORK — the
+           user's decision is unknown until something has learned it — and §5.1's chain owns the phase byte
+           while it does. */
+        rc = permission_state_run(ctx, h, phase, d, &current);
+        if (rc) return rc;
+        /* STEP 2: "If current state is not prompt, return current state and abort these steps." A decision
+           already taken is not asked again, which is what makes a second requestPermission() in the same flow
+           answer the first one's arm rather than forking a world that contradicts it. */
+        if (current != PERMISSION_PROMPT) {
+            *out = current;
+            return 0;
+        }
+        *phase = PR_ASK_EXPRESS;
+    }
+    DCHECK(*phase == PR_ASK_EXPRESS, "§5.2's chain resumed in a phase it never parks in");
+    {
+        /* STEPS 3-4. The operand is the FEATURE's own source — the same value §5.1 step 8 answers with — so a
+           flow that has already decided this feature's state through one door answers consistently at the
+           other rather than forking a second, independent world over one user's one decision. */
+        JSValue over = permission_unknown(ctx, d->feature);
+
+        if (!concolic_is(over)) {
+            /* A HOST WITH NO SOURCE OVERLAY (a conformance run) has no unknown to ask about, and the honest
+               answer is the one a user agent gives a request nobody answered: §5.2 returns granted or denied,
+               never prompt, and a prompt nobody responded to is not permission given. */
+            JS_FreeValue(ctx, over);
+            *phase = PR_ASK_STATE;
+            *out = PERMISSION_DENIED;
+            return 0;
+        }
+        rc = step_fork_run(ctx, h, over, PR_OP_EXPRESS, 2, &arm);
+        JS_FreeValue(ctx, over);
+        if (rc) return rc;
+        current = (arm == 0) ? PERMISSION_GRANTED : PERMISSION_DENIED;
+    }
+    /* STEPS 5-7: the key is this agent's one key (asserted at the store touch), and the entry is set — which is
+       what turns the answer from a decision this flow took into a fact every later read in it answers with. */
+    permission_store_set(ctx, d, current);
+    *phase = PR_ASK_STATE;                 /* the chain is finished; the byte is ready for the next question */
+    DCHECK(current == PERMISSION_GRANTED || current == PERMISSION_DENIED,
+           "§5.2 answered with something other than granted or denied — the algorithm's own contract is those "
+           "two, and a `prompt` here is a request that decided nothing being reported as one that did");
+    *out = current;
+    return 0;
+}
+
 /* ---- the agent's declaration ------------------------------------------------------------------------------ */
 
 void permission_store_init(JSContext *ctx)
@@ -531,4 +749,9 @@ void permission_store_free(void)
     g_store = g_sources = g_key = JS_UNDEFINED;
     g_ready = 0;
     g_rt = NULL;
+    /* §4's per-feature ALGORITHMS are the agent's, declared by the components that own the features — so they
+       go with the agent, and the next agent's components declare their own. Left standing they would make the
+       second agent's declaration read as a duplicate. */
+    memset(PF_SUBJECT_FN, 0, sizeof PF_SUBJECT_FN);
+    memset(PF_CONSTRAINT_FN, 0, sizeof PF_CONSTRAINT_FN);
 }
