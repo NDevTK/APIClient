@@ -113,6 +113,27 @@ static JSValue ne_field(JSContext *ctx, JSValueConst ev, const char *name)
     return v;
 }
 
+bool navigate_event_is(JSValueConst v)
+{
+    DCHECK(g_ready, "a value was asked whether it is a NavigateEvent before the interface was declared — the "
+                    "class id the question is asked with is minted by navigate_event_init");
+    return JS_GetClassID(v) == g_nav_ev_class;
+}
+
+JSValue navigate_event_signal(JSContext *ctx, JSValueConst ev)
+{
+    JSValue v;
+
+    DCHECK(navigate_event_is(ev),
+           "§7.2.6.10.4 asked for the abort controller's signal of something that is not a NavigateEvent");
+    v = ne_field(ctx, ev, NE_NAME[NE_SIGNAL]);
+    DCHECK(abort_signal_is(ctx, v),
+           "a NavigateEvent's `signal` slot held something that is not an AbortSignal — both producers place "
+           "one there, the firing algorithm from the event's own abort controller and the constructor from a "
+           "`required AbortSignal signal` the declaration has already branded");
+    return v;
+}
+
 /* ---- the eleven attributes -------------------------------------------------------------------------------- */
 
 static JSValue js_ne_get(JSContext *ctx, JSValueConst this_val, int magic)

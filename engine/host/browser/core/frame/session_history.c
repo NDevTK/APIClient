@@ -1401,21 +1401,30 @@ static int js_sh_traverse_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
            which is satisfied whatever navigablesCrossingDocuments holds, so a same-document `history.back()`
            reaches it. A FALSE answer is "canceled-by-navigate" and the traversal must not apply at all.
            THE DISPATCH IS A REST POINT, so building it adds a stage to SH_APPLY_STAGES ahead of SH_APPLY_STEP
-           and this call moves behind it. §7.2.6.10.1's NavigateEvent and §7.2.6.10.3's NavigationDestination
-           both exist now, which is why the probe is no longer over either of them: what is missing is
-           §7.2.6.10.4's fire-a-traverse-navigate-event and the inner navigate event firing algorithm, and the
-           observable of a navigate event being fired at all is §7.2.6.2's `onnavigate` — core/frame/navigation.c
-           installs that handler attribute only when an algorithm dispatches the event. */
+           and this call moves behind it. The INNER navigate event firing algorithm now exists — it is
+           core/frame/navigate_event_fire.c, and §7.2.5's pushState drives it — so what is missing here is the
+           TRAVERSE WRAPPER and this site's stage, which is what the assertion says. It probes `onnavigate`
+           because that is the observable of a navigate event being fired at all, and this file's traversal is
+           now the one navigation in the build that fires none. */
         realm_awaits(ctx, "Navigation.prototype.onnavigate",
                      "HTML §7.4.6.1 step 5 CHECKS IF UNLOADING IS CANCELED before it applies a traverse history "
-                     "step, and this build now fires the navigate event. Run it here: §7.2.6.10.4's "
-                     "fire-a-traverse-navigate-event takes the entry sh_target_history_entry resolved for "
-                     "`target`, builds a NavigationDestination over its URL, its navigation API state and its "
-                     "NavigationHistoryEntry, and runs the inner navigate event firing algorithm. A FALSE "
-                     "answer is \"canceled-by-navigate\": return JS_STEP_DONE without calling "
-                     "sh_apply_history_step_begin at all, so `history.back()` cancelled by a `navigate` "
-                     "listener leaves the traversable's current step where it was. An intercept() instead "
-                     "converts it into §7.2.6.10.4's resume-applying-the-traverse-history-step path");
+                     "step, and this build fires the navigate event everywhere ELSE: a `history.pushState()` "
+                     "asks the page's `navigate` listeners and a `history.back()` does not, which is the "
+                     "inconsistency this fires on. Write §7.2.6.10.4's FIRE A TRAVERSE NAVIGATE EVENT beside "
+                     "the push/replace/reload wrapper in core/frame/navigate_event_fire.c: it takes the entry "
+                     "sh_target_history_entry resolved for `target` and builds a NavigationDestination over "
+                     "that entry's URL, over its NavigationHistoryEntry (navigation_entry_index_of finds it in "
+                     "the Navigation's entry list, and a destination whose entry is non-null is what makes the "
+                     "inner algorithm's step 3 reachable — the upcoming traverse API method trackers, which "
+                     "arrive with §7.2.6.7's traverseTo), over its navigation API state, and with is-same-"
+                     "document set from whether the entry's document is this one. The inner algorithm then "
+                     "needs the two things only a \"traverse\" reaches: step 8's traverseCanBeCanceled, whose "
+                     "third conjunct is HTML §6.6's HISTORY-ACTION ACTIVATION, and step 28's consume-history-"
+                     "action-user-activation. A FALSE answer is \"canceled-by-navigate\": return JS_STEP_DONE "
+                     "without calling sh_apply_history_step_begin at all, so a traversal a listener canceled "
+                     "leaves the traversable's current step where it was. THE STAGE IS THE OTHER HALF — the "
+                     "dispatch is a rest point, and SH_APPLY_STAGES is dispatched over by three functions, so "
+                     "the new stage needs an arm in each of them");
         sh_apply_history_step_begin(ctx, &s->apply, target, "traverse");
     }
     /* THE SAME SHARED TAIL AS THE HALF IT DRIVES, for the same reason: §7.4.6.1's second half owns all three

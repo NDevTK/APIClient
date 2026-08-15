@@ -66,10 +66,21 @@ JSValue navigate_event_new_to_fire(JSContext *ctx, const char *navigation_type, 
                                    JSValueConst signal, JSValueConst source_element,
                                    const StructuredData *classic_state);
 
-/* THE INTERNAL SLOTS §7.2.6.10.4's ALGORITHMS READ BACK — the abort controller's signal, the destination and
-   the navigation type — ARE NOT EXPORTED YET, and that is deliberate rather than an oversight. Nothing fires a
-   navigate event in this build, so each would be an entry point with no caller: the same defect as a field
-   nobody writes, one direction round. They come back with the algorithm that reads them, which is the diff the
-   two `realm_awaits` over `Navigation.prototype.onnavigate` name. */
+/* WEB IDL §3.7.5's BRAND, as a question — the class is agent-scoped, so this is the same test every accessor
+   in navigate_event.c makes and the one §7.2.6.10.4's algorithms make about a value they were handed. */
+bool navigate_event_is(JSValueConst v);
+
+/* §7.2.6.10.1's ABORT CONTROLLER'S SIGNAL, which is the `signal` attribute over it. THREE algorithms read it
+   back and each of them decides whether to do anything at all by asking whether it is aborted:
+   §7.2.6.10.4's commit-a-navigate-event step 4, its commit handler success steps step 2, and its step 28. That
+   is what makes this an export rather than a slot only this file reads — the value is the navigation's own
+   cancellation, and every later stage of the navigation asks it. OWNED. */
+JSValue navigate_event_signal(JSContext *ctx, JSValueConst ev);
+
+/* THE OTHER INTERNAL SLOTS §7.2.6.10.4 READS BACK — the destination and the navigation type — ARE STILL NOT
+   EXPORTED, and that is deliberate rather than an oversight: their readers are commit-a-navigate-event's step 5
+   and its step 7 switch, both of which are reached only when the interception state is not "none". Exporting
+   one before then would be an entry point with no caller, which is the same defect as a field nobody writes,
+   one direction round. They come out with `intercept()`. */
 
 #endif

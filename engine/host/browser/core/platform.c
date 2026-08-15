@@ -25,6 +25,7 @@
 #include "core/file/file_system_writable.h"
 #include "core/file/storage_manager.h"
 #include "core/frame/history.h"
+#include "core/frame/navigate_event_fire.h"
 #include "core/frame/navigation.h"
 #include "core/frame/navigation_destination.h"
 #include "core/frame/navigation_history_entry.h"
@@ -105,6 +106,7 @@ static void d_location(JSContext *c, const PlatformAgent *a) { (void)a; location
 static void d_session_history(JSContext *c, const PlatformAgent *a) { (void)a; session_history_init(c); }
 static void d_history(JSContext *c, const PlatformAgent *a) { (void)a; history_init(c); }
 static void d_navigation(JSContext *c, const PlatformAgent *a) { (void)a; navigation_init(c); }
+static void d_navigate_event_fire(JSContext *c, const PlatformAgent *a) { (void)a; navigate_event_fire_init(c); }
 static void d_nav_history_entry(JSContext *c, const PlatformAgent *a) { (void)a; navigation_history_entry_init(c); }
 static void d_nav_destination(JSContext *c, const PlatformAgent *a) { (void)a; navigation_destination_init(c); }
 static void d_screen(JSContext *c, const PlatformAgent *a) { (void)a; screen_init(c); }
@@ -138,6 +140,7 @@ static void d_module_loader(JSContext *c, const PlatformAgent *a) { (void)a; mod
 /* ---- the agent half, undone ----------------------------------------------------------------------------- */
 
 static void r_cookie_jar(void) { cookie_jar_free(); }
+static void r_navigate_event_fire(void) { navigate_event_fire_free(); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
@@ -241,6 +244,11 @@ static const PlatformComponent PLATFORM[] = {
     { "history",             d_history,             NULL },
     /* HTML §7.2.6's navigation API, AFTER §7.4.1's state machine whose entries it is a view over. */
     { "navigation",          d_navigation,          NULL },
+    /* HTML §7.2.6.10.4, which FIRES the navigate event at the Navigation the row above builds — its
+       declaration is the step definition of the commit handler job, which the runtime must know before
+       any navigation enqueues one. It installs no member of its own: the interfaces it builds objects of
+       are `navigation_destination` above and NavigateEvent under `event`. */
+    { "navigate_event_fire", d_navigate_event_fire, NULL,        r_navigate_event_fire },
     { "screen",              d_screen,              NULL },
     { "navigable",           d_navigable,           i_navigable },
     /* HTML §8.1.7's EVENT LOOP, before the task sources that are ordered by it: the virtual clock, §8.1.7.1's

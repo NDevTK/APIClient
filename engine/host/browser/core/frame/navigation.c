@@ -10,7 +10,9 @@
 #include "core/dom/document.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
+#include "core/events/navigate_event.h"
 #include "core/events/navigation_current_entry_change_event.h"
+#include "core/frame/navigate_event_fire.h"
 #include "core/frame/navigation.h"
 #include "core/frame/navigation_history_entry.h"
 #include "core/frame/session_history.h"
@@ -25,21 +27,27 @@ static JSClassID g_nav_class;
 static int       g_obj_slot = -1;
 static int       g_id_entries = -1, g_id_update_current_entry = -1;
 
-/* §7.2.6.3's THREE PIECES OF STATE THIS BUILD HOLDS, and §7.2.6.8's one flag.
+/* §7.2.6.3's TWO PIECES OF STATE, and TWO of §7.2.6.8's.
  *
  * "Each Navigation has an associated ENTRY LIST, a list of NavigationHistoryEntry objects, initially empty" and
  * "an associated CURRENT ENTRY INDEX, an integer, initially −1". They are an Array and a number on the
  * Navigation's own slot record rather than C fields, for the reason navigation.h gives: a property write is
  * what the per-flow COW delta captures, so two forked routers hold two entry lists with no new delta kind.
  *
- * §7.2.6.8's list of ongoing-navigation state is longer than this — an ongoing navigate event, a suppress
- * normal scroll restoration flag, an ongoing API method tracker, a map of upcoming traverse trackers — and
- * every one of those belongs to an algorithm this build does not have (see navigation.h). FOCUS CHANGED is the
- * one that does not: HTML §6.6.4's focus update steps set it and §8.1.7.3's update-the-rendering clears it, and
- * both of those algorithms are built, so the field is written by both of them here. */
+ * §7.2.6.8's list of ongoing-navigation state has five entries and this build holds the two whose WRITERS are
+ * built. FOCUS CHANGED is set by HTML §6.6.4's focus update steps and cleared by §8.1.7.3's
+ * update-the-rendering. THE ONGOING NAVIGATE EVENT is set by §7.2.6.10.4's inner algorithm and nulled by its
+ * commit handler success steps (core/frame/navigate_event_fire.c). The other three — the suppress normal
+ * scroll restoration flag, the ongoing API method tracker and the map of upcoming traverse trackers — belong to
+ * `intercept()` and to §7.2.6.7's methods, and a field with a writer and no reader is the fabricated datum
+ * §Consumer-defaults describes, so each arrives with the algorithm that writes it. */
 #define NAV_ENTRIES       "entryList"
 #define NAV_CURRENT_INDEX "currentEntryIndex"
 #define NAV_FOCUS_CHANGED "focusChanged"
+/* §7.2.6.8's ONGOING NAVIGATE EVENT — the second of that list this build holds, and it is held for the same
+   reason focus-changed is: both of its writers are built. §7.2.6.10.4's inner algorithm sets it to the event it
+   dispatches and its commit handler success steps null it out. */
+#define NAV_ONGOING_EVENT "ongoingNavigateEvent"
 
 /* ---- the object, and its slot record -------------------------------------------------------------------- */
 
@@ -127,7 +135,7 @@ static void nav_set_current_index(JSContext *ctx, int64_t i)
  * origin is same origin with NOTHING, not even another opaque one, so asking this navigable whether it is same
  * origin with ITSELF is false in exactly the one case where that origin is opaque. That is the same one
  * implementation core/file/storage_manager.c reaches for, rather than a second copy of the rule. */
-static bool nav_entries_and_events_disabled(JSContext *ctx)
+bool navigation_entries_and_events_disabled(JSContext *ctx)
 {
     if (!document_fully_active(ctx)) return true;
     if (session_history_is_initial_about_blank(ctx)) return true;
@@ -144,7 +152,7 @@ static JSValue nav_current_entry(JSContext *ctx)
     JSValue list, e;
     int64_t i;
 
-    if (nav_entries_and_events_disabled(ctx)) return JS_NULL;
+    if (navigation_entries_and_events_disabled(ctx)) return JS_NULL;
     i = nav_current_index(ctx);
     DCHECK(i != -1, "§7.2.6.3's current entry asserts the current entry index is not −1, and this Navigation's "
                     "is — the index is set away from −1 by initialize-the-navigation-API-entries-for-a-new-"
@@ -206,7 +214,7 @@ void navigation_initialize_entries(JSContext *ctx, JSValueConst new_shes, JSValu
     /* STEP 3. A Document with entries and events disabled gets NO wrappers at all, which is what makes
        `navigation.entries()` the empty list on the initial about:blank and in an opaque-origin document
        forever after — the list is never built rather than built and hidden. */
-    if (nav_entries_and_events_disabled(ctx)) return;
+    if (navigation_entries_and_events_disabled(ctx)) return;
     /* STEP 4: "For each newSHE of newSHEs: let newNHE be a new NavigationHistoryEntry created in the relevant
        realm of navigation; set newNHE's session history entry to newSHE; append newNHE to navigation's entry
        list." The realm is THIS one, which is why the wrapper is minted here and not by the caller. */
@@ -244,7 +252,7 @@ void navigation_update_work_start(NavigationUpdateWork *w)
     w->stage = NAV_UPD_BEGIN;
     w->phase = 0;
     w->i = 0;
-    w->disposed = w->ev = JS_UNDEFINED;
+    w->disposed = w->ev = w->navigate_event = JS_UNDEFINED;
     STEP_CB_FOREACH(w->cb, k) w->cb[k] = JS_UNDEFINED;
 }
 
@@ -254,6 +262,7 @@ void navigation_update_work_visit(JSContext *ctx, NavigationUpdateWork *w, JSSte
 
     v->val(ctx, &w->disposed);
     v->val(ctx, &w->ev);
+    v->val(ctx, &w->navigate_event);
     STEP_CB_FOREACH(w->cb, k) v->val(ctx, &w->cb[k]);
 }
 
@@ -263,7 +272,8 @@ void navigation_update_work_release(JSContext *ctx, NavigationUpdateWork *w)
 
     JS_FreeValue(ctx, w->disposed);
     JS_FreeValue(ctx, w->ev);
-    w->disposed = w->ev = JS_UNDEFINED;
+    JS_FreeValue(ctx, w->navigate_event);
+    w->disposed = w->ev = w->navigate_event = JS_UNDEFINED;
     STEP_CB_FOREACH(w->cb, k) {
         JS_FreeValue(ctx, w->cb[k]);
         w->cb[k] = JS_UNDEFINED;
@@ -288,7 +298,7 @@ int navigation_update_entries_run(JSContext *ctx, NavigationUpdateWork *w, JSVal
     /* STEP 1. It is asked HERE and not by the caller because it is a fact about this Document that can change
        under a listener: a `dispose` handler that removes this frame makes the NEXT update a no-op, and the
        caller has no business knowing that. */
-    if (nav_entries_and_events_disabled(ctx)) {
+    if (navigation_entries_and_events_disabled(ctx)) {
         JS_FreeValue(ctx, in);
         return 0;
     }
@@ -352,16 +362,20 @@ int navigation_update_entries_run(JSContext *ctx, NavigationUpdateWork *w, JSVal
         JS_SetPropertyUint32(ctx, list, (uint32_t)index, nhe);
     }
     JS_FreeValue(ctx, list);
-    /* STEPS 8 TO 10 — notify about the committed-to entry, the ongoing navigate event and the ongoing API
-       method tracker. All three read state §7.2.6.8 only ever writes from §7.2.6.7's methods and §7.2.6.10's
-       event firing, neither of which is built (navigation.h), so all three are null and steps 8 and 14 do
-       nothing. They are named here rather than skipped because they are what carries the `committed` promise
-       of a `navigation.navigate()` call, and this is the step that resolves it.
+    /* STEP 8 — "if navigation's ongoing API method tracker is non-null, then NOTIFY ABOUT THE COMMITTED-TO
+       ENTRY" — is what carries the `committed` promise of a `navigation.navigate()` call, and §7.2.6.7's
+       methods are the only producers of a tracker, so it is null and the step does nothing.
+       STEP 10: "let navigateEvent be navigation's ONGOING NAVIGATE EVENT." READ HERE, USED AT STEP 14, and the
+       standard's own note says why it is read this early: steps 12 and 13 fire `currententrychange` and then
+       `dispose`, and "event handlers could start another navigation, or otherwise change the value of" what
+       these steps are about. So the operation takes its input with it rather than reading it back four steps
+       later. STEP 9's apiMethodTracker is the same read for the tracker, and there is none.
        STEP 11's PREPARE TO RUN SCRIPT has nothing to suppress in this engine, which is an answer about this
        agent rather than a shrug: its own note says it is there to stop the JavaScript execution context stack
        becoming empty and forcing a microtask checkpoint between the event handlers below and the promise
        handlers of §7.2.6.7's methods. This scheduler has no job-queue drain to trigger — every enqueued job is
        a flow in the one WFQ — so there is no checkpoint for an extra execution context to hold back. */
+    w->navigate_event = navigation_ongoing_navigate_event(ctx);
     w->stage = NAV_UPD_ENTRY_CHANGE;
     /* STEP 12's event, minted before the dispatch and held across it. */
     w->ev = navigation_current_entry_change_event_new_to_fire(ctx, navigation_type, old_current);
@@ -413,9 +427,19 @@ fire_dispose:
         w->ev = JS_UNDEFINED;
         w->i++;
     }
-    /* STEP 14: "Run the navigate event intercept commit handler steps given navigation, navigateEvent, and
-       apiMethodTracker" — both of which are null here for the reason steps 9 and 10 give. STEP 15's clean up
-       after running script is step 11's other half. */
+    /* STEP 14: "Run the NAVIGATE EVENT INTERCEPT COMMIT HANDLER STEPS given navigation, navigateEvent, and
+       apiMethodTracker" — over the event step 10 took, not over whatever is ongoing now. They are what ENDS a
+       navigate event: they null the Navigation's ongoing navigate event out and fire `navigatesuccess`, and
+       they run in a microtask rather than here (core/frame/navigate_event_fire.c says why). The tracker is
+       null, which those steps' step 6 is the only reader of.
+       STEP 15's clean up after running script is step 11's other half. */
+    DCHECK(!JS_IsNull(w->navigate_event),
+           "§7.2.6.4 reached step 14 with NO ongoing navigate event — a same-document navigation got here "
+           "without one being fired, and the only path in this build that can is a TRAVERSAL: "
+           "core/frame/session_history.c's §7.4.6.1 step 5 still has to fire a TRAVERSE navigate event, and "
+           "the assertion naming that work is at that site, which is reached first");
+    if (navigate_event_is(w->navigate_event))
+        navigate_event_intercept_commit(ctx, w->navigate_event);
     JS_FreeValue(ctx, in);
     return 0;
 }
@@ -428,6 +452,33 @@ void navigation_set_focus_changed(JSContext *ctx, bool changed)
 
     JS_FreeValue(ctx, nav);
     JS_SetPropertyStr(ctx, slots, NAV_FOCUS_CHANGED, JS_NewBool(ctx, changed));
+    JS_FreeValue(ctx, slots);
+}
+
+/* ---- §7.2.6.8's ongoing navigate event ---------------------------------------------------------------------- */
+
+JSValue navigation_ongoing_navigate_event(JSContext *ctx)
+{
+    JSValue nav = navigation_object(ctx), slots = nav_slots(ctx, nav), ev;
+
+    JS_FreeValue(ctx, nav);
+    ev = JS_GetPropertyStr(ctx, slots, NAV_ONGOING_EVENT);
+    JS_FreeValue(ctx, slots);
+    DCHECK(JS_IsNull(ev) || navigate_event_is(ev),
+           "§7.2.6.8's ongoing navigate event held something that is neither a NavigateEvent nor null — the "
+           "field starts at null with the Navigation and its only writers are §7.2.6.10.4's inner algorithm "
+           "step 24 and its commit handler success steps step 4");
+    return ev;
+}
+
+void navigation_set_ongoing_navigate_event(JSContext *ctx, JSValueConst ev)
+{
+    JSValue nav = navigation_object(ctx), slots = nav_slots(ctx, nav);
+
+    JS_FreeValue(ctx, nav);
+    DCHECK(JS_IsNull(ev) || navigate_event_is(ev),
+           "§7.2.6.8's ongoing navigate event was set to something that is neither a NavigateEvent nor null");
+    JS_SetPropertyStr(ctx, slots, NAV_ONGOING_EVENT, JS_DupValue(ctx, ev));
     JS_FreeValue(ctx, slots);
 }
 
@@ -475,7 +526,7 @@ static JSValue js_nav_get(JSContext *ctx, JSValueConst this_val, int magic)
        entry, so an index of 0 already means the entry before this one is another origin's or does not exist,
        which is what §7.2.6.6's prose spells out. */
     case NAV_CAN_GO_BACK:
-        if (nav_entries_and_events_disabled(ctx)) return JS_FALSE;
+        if (navigation_entries_and_events_disabled(ctx)) return JS_FALSE;
         i = nav_current_index(ctx);
         DCHECK(i != -1, "§7.2.6.6's canGoBack asserts the current entry index is not −1 while entries and "
                         "events are enabled");
@@ -484,7 +535,7 @@ static JSValue js_nav_get(JSContext *ctx, JSValueConst this_val, int magic)
         JSValue list;
         uint32_t n;
 
-        if (nav_entries_and_events_disabled(ctx)) return JS_FALSE;
+        if (navigation_entries_and_events_disabled(ctx)) return JS_FALSE;
         i = nav_current_index(ctx);
         DCHECK(i != -1, "§7.2.6.6's canGoForward asserts the current entry index is not −1 while entries and "
                         "events are enabled");
@@ -515,7 +566,7 @@ static JSValue js_nav_entries(JSContext *ctx, JSValueConst this_val, int argc, J
     out = JS_NewArray(ctx);
     if (JS_IsException(out)) return out;
     /* STEP 1: "If this has entries and events disabled, then return the empty list." */
-    if (nav_entries_and_events_disabled(ctx)) return out;
+    if (navigation_entries_and_events_disabled(ctx)) return out;
     list = nav_entry_list(ctx);
     n = list_len(ctx, list);
     for (i = 0; i < n; i++)
@@ -662,10 +713,12 @@ void navigation_install_realm(JSContext *ctx)
     idl_install_method(ctx, proto, "updateCurrentEntry", 1, g_id_update_current_entry);
     idl_install_accessor(ctx, proto, NAV_GETTER_NAME[NAV_CAN_GO_BACK], js_nav_get, NAV_CAN_GO_BACK, -1);
     idl_install_accessor(ctx, proto, NAV_GETTER_NAME[NAV_CAN_GO_FORWARD], js_nav_get, NAV_CAN_GO_FORWARD, -1);
-    /* §7.2.6.2's event handler IDL attributes, declared ON this interface. Only `oncurrententrychange` is
-       installed: the other three (`onnavigate`, `onnavigatesuccess`, `onnavigateerror`) are the navigate
-       event's, which is absent — and an event handler attribute for an event nothing fires is exactly the
-       shape-only member NO STUBS forbids. */
+    /* §7.2.6.2's event handler IDL attributes, declared ON this interface. THREE of the four are installed:
+       `oncurrententrychange`, and now `onnavigate` and `onnavigatesuccess` — core/frame/navigate_event_fire.c
+       dispatches both of those events, and an event handler attribute is installed exactly when something
+       fires the event it handles. `onnavigateerror` is still ABSENT: its event is fired by §7.2.6.8's ABORT A
+       NavigateEvent, which is the algorithm the two DFAILs in that file name, and a handler attribute for an
+       event nothing dispatches is the shape-only member NO STUBS forbids. */
     event_target_install_handlers(ctx, proto, EH_NAVIGATION);
     JS_SetClassProto(ctx, g_nav_class, JS_DupValue(ctx, proto));
 
@@ -678,6 +731,10 @@ void navigation_install_realm(JSContext *ctx)
     JS_SetPropertyStr(ctx, slots, NAV_ENTRIES, entries);
     JS_SetPropertyStr(ctx, slots, NAV_CURRENT_INDEX, JS_NewInt64(ctx, -1));
     JS_SetPropertyStr(ctx, slots, NAV_FOCUS_CHANGED, JS_FALSE);
+    /* §7.2.6.8: "ongoing navigate event, a NavigateEvent or NULL, INITIALLY NULL" — written here rather than
+       left absent, because the standard's null is JS_NULL and an unwritten slot answers undefined, which is a
+       third state neither the field nor its readers have. */
+    JS_SetPropertyStr(ctx, slots, NAV_ONGOING_EVENT, JS_NULL);
     {
         JSAtom k = JS_ValueToAtom(ctx, g_key);
 

@@ -48,6 +48,7 @@
 #include "quickjs.h"
 #include "core/dom/document.h"
 #include "core/frame/history.h"
+#include "core/frame/navigate_event_fire.h"
 #include "core/frame/session_history.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -217,9 +218,36 @@ static bool document_can_have_url_rewritten(const UrlRecord *doc_url, const UrlR
     return str_equal_or_both_absent(doc_url->query, target->query);
 }
 
+bool history_document_can_have_url_rewritten(JSContext *ctx, const char *target_url)
+{
+    UrlRecord doc_url, target;
+    bool ok;
+
+    DCHECK(target_url != NULL && *target_url,
+           "§7.2.5's can-have-its-URL-rewritten was asked about no URL — both of its callers hold a serialized "
+           "absolute URL by the time they ask");
+    url_record_init(&doc_url);
+    url_record_init(&target);
+    CHECK(url_parse(&doc_url, document_base_url(ctx), strlen(document_base_url(ctx)), NULL),
+          "this realm's document address is not a URL — the host captured something this engine cannot make a "
+          "principal out of");
+    CHECK(url_parse(&target, target_url, strlen(target_url), NULL),
+          "§7.2.5's can-have-its-URL-rewritten was given a target that does not parse — the caller serialized "
+          "it out of a URL record, so a failure here is a serialization this engine cannot read back");
+    ok = document_can_have_url_rewritten(&doc_url, &target);
+    url_record_free(&doc_url);
+    url_record_free(&target);
+    return ok;
+}
+
 /* ---- §7.2.5's SHARED HISTORY PUSH/REPLACE STATE STEPS --------------------------------------------------------
  *
- * TWO STAGES, AND THE FIRST OF THEM IS NOT A FORMALITY. This declared ONE — step 10 — on the ground that
+ * THREE STAGES, AND THE MIDDLE ONE IS THE PAGE'S CHANCE TO REFUSE THE NAVIGATION. Steps 7-9 fire a navigate
+ * event at §7.2.6.2's Navigation and return when it answers false, so a router's `navigate` listener can stop a
+ * `pushState` — and the dispatch runs that listener, which is why it is a rest point of its own between the
+ * checks and §7.4.4. It was a `realm_awaits` naming exactly that stage for as long as §7.2.6.10.4 was absent.
+ *
+ * AND THE FIRST STAGE IS NOT A FORMALITY EITHER. This declared ONE — step 10 — on the ground that
  * everything before it is engine state (a serialization, a URL parse and two refusals) and that §7.4.4's own
  * split is what makes the tail parkable while the head is not. That reasoning is the one quickjs-step.h's
  * JSTrampStepDef::steps forbids: what makes a rest point necessary is the ENGINE — RAM pressure paging the
@@ -232,16 +260,28 @@ static bool document_can_have_url_rewritten(const UrlRecord *doc_url, const UrlR
  * the URL parse and both SecurityError refusals into a §7.4.4 work record nobody had begun. The member holds
  * only that work record, which is why the head had nothing of its own to leave behind and the jump was silent. */
 #define HPR_STAGES(X)                                                                                     \
-    X(HPR_CHECKS, "HTML §7.2.5 shared history push/replace state steps 1-9 (the fully-active check, "      \
-                  "StructuredSerializeForStorage(data), encoding-parsing url, can-have-its-URL-rewritten, "\
-                  "allowed-to-perform-a-navigation-or-history-update, and the navigate event)")            \
-    X(HPR_UPDATE, "HTML §7.2.5 shared history push/replace state steps step 10 (run the URL and history "  \
-                  "update steps given document and newURL)")
+    X(HPR_CHECKS,   "HTML §7.2.5 shared history push/replace state steps 1-6 (the fully-active check, "    \
+                    "StructuredSerializeForStorage(data), encoding-parsing url, "                          \
+                    "can-have-its-URL-rewritten, and allowed-to-perform-a-navigation-or-history-update)")  \
+    X(HPR_NAVIGATE, "HTML §7.2.5 shared history push/replace state steps 7-9 (fire a push/replace/reload " \
+                    "navigate event at navigation with isSameDocument true, and return if it answers "     \
+                    "false)")                                                                              \
+    X(HPR_UPDATE,   "HTML §7.2.5 shared history push/replace state steps step 10 (run the URL and history "\
+                    "update steps given document and newURL)")
 enum { IDL_STEP_STAGE_BASE(HPR_STAGES) HPR_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const HPR_STEPS[] = { HPR_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
+/* WHAT THE MEMBER HOLDS ACROSS THE NAVIGATE EVENT, and why it holds it rather than recomputing it. Steps 3 and
+   5 compute serializedData and newURL; step 10 uses both; and the navigate event fires BETWEEN them, running
+   every `navigate` listener the page has. A listener can push its own entry, replace the address, or navigate
+   away — so newURL re-derived after the dispatch would be a different URL, and the serialization would be of a
+   value the page has since mutated. The two ride the machine's state as a string and an ArrayBuffer, which is
+   what parks; §7.2.6.10.4's own work record takes its copy of both for exactly the same reason. */
 typedef struct {
     SessionHistoryUrlUpdate w;
+    NavigateEventFireWork   fire;
+    JSValue                 new_url;   /* step 5's newURL, serialized (owned string) */
+    JSValue                 classic;   /* step 3's serializedData, as the bytes (owned ArrayBuffer) */
 } HprState;
 
 static void hpr_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -249,6 +289,9 @@ static void hpr_visit(JSContext *ctx, void *st, JSStepVisit *v)
     HprState *s = st;
 
     session_history_url_update_visit(ctx, &s->w, v);
+    navigate_event_fire_work_visit(ctx, &s->fire, v);
+    v->val(ctx, &s->new_url);
+    v->val(ctx, &s->classic);
 }
 
 /* THERE IS NO `release`. §7.4.4's record holds two ENTRIES and the navigation API's request buffer, and every
@@ -272,7 +315,13 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
     STEP_ARM(HPR_CHECKS);
     DCHECK(magic == HIST_PUSH || magic == HIST_REPLACE,
            "§7.2.5's shared push/replace state steps ran with a mode neither of its two callers declares");
+    /* THE SLOTS ARE UNDEFINED BEFORE THEY ARE ANYTHING ELSE — a zeroed JSValue is the INTEGER 0, not undefined
+       (JS_TAG_INT is 0), so a slot the visit walks before its stage has written it would hand the fork a real
+       value the page can see. Every record this machine holds is started here, on the one entry that precedes
+       all of them. */
     session_history_url_update_start(&s->w);
+    navigate_event_fire_work_start(&s->fire);
+    s->new_url = s->classic = JS_UNDEFINED;
     /* STEPS 1-2. */
     if (!hist_entry(ctx, hdr->this_val)) { JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
     DCHECK(argc >= 2, "pushState/replaceState ran with fewer than its two required arguments — `any data` and "
@@ -342,46 +391,73 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
        so the algorithm returns ALLOWED for every navigable here. Evaluated at the step that asks it rather
        than dropped, exactly as core/html/autofocus.c evaluates the sandboxing flag it has no state for. */
 
+    /* newURL AND serializedData ARE TAKEN OUT OF THIS STAGE'S C LOCALS AND ONTO THE MACHINE, because the
+       navigate event fires between them and step 10 and its listeners are the page's own code. A string and an
+       ArrayBuffer are what park; the URL records and the serialization's bytes are freed here, where they were
+       made. */
+    new_url = have_target ? url_serialize(&target, false) : url_serialize(&doc_url, false);
+    CHECK(new_url != NULL, "history: the new address could not be serialized");
+    s->new_url = JS_NewString(ctx, new_url);
+    CHECK(!JS_IsException(s->new_url), "history: the new address could not be held across the navigate event");
+    s->classic = JS_NewArrayBufferCopy(ctx, serialized.buf, serialized.len);
+    CHECK(!JS_IsException(s->classic),
+          "history: the serialized state could not be held across the navigate event");
     /* STEPS 7-9: "let navigation be history's relevant global object's navigation API; let continue be the
        result of FIRING A PUSH/REPLACE/RELOAD NAVIGATE EVENT at navigation with navigationType set to
        historyHandling, isSameDocument set to true, destinationURL set to newURL, and classicHistoryAPIState set
        to serializedData; if continue is false, then return."
-       §7.2.6.10.1's NavigateEvent AND §7.2.6.10.3's NavigationDestination BOTH EXIST NOW, which is why this
-       assertion no longer probes for them: the interfaces are built and the step still cannot run, because what
-       is missing is §7.2.6.10.4 — the three wrapper algorithms and the INNER NAVIGATE EVENT FIRING ALGORITHM
-       that dispatches one. A probe over the interface would have been satisfied by an interface nothing fires,
-       which is the failure mode CLAUDE.md's §DFAIL paragraph describes: an assertion that stays true about the
-       SPEC and goes wrong about THIS TREE.
-       SO IT PROBES THE OBSERVABLE OF THE FIRING ITSELF. `onnavigate` is §7.2.6.2's event handler IDL attribute
-       on Navigation, and core/frame/navigation.c installs it only when an algorithm dispatches the event — an
-       event handler attribute for an event nothing fires is the shape-only member the IDL audit exists to
-       expose, so its presence and the firing are the same fact. */
-    realm_awaits(ctx, "Navigation.prototype.onnavigate",
-                 "HTML §7.2.5's shared history push/replace state steps 7-9 fire a PUSH/REPLACE/RELOAD NAVIGATE "
-                 "EVENT before the URL and history update steps — this build now fires the navigate event. Fire "
-                 "it here with navigationType set to historyHandling, isSameDocument TRUE, destinationURL newURL "
-                 "and classicHistoryAPIState serializedData, and RETURN when the inner navigate event firing "
-                 "algorithm answers false: a canceled or intercepted navigate event means step 10 must not run "
-                 "at all, because commit-a-navigate-event runs the URL and history update steps itself. The "
-                 "dispatch is a rest point, so it is a stage of its own between HPR_CHECKS and HPR_UPDATE");
-
-    /* STEP 10 — §7.4.4's two halves. _begin runs its steps 1-10 and touches none of the page's code, which is
-       what lets every allocation above be released here rather than carried across a suspension. */
-    new_url = have_target ? url_serialize(&target, false) : url_serialize(&doc_url, false);
-    CHECK(new_url != NULL, "history: the new address could not be serialized");
-    session_history_url_update_begin(ctx, &s->w, new_url, &serialized, magic == HIST_PUSH);
+       THE OPERATION IS CREATED HERE AND DRIVEN AT THE NEXT STAGE, and it takes newURL and serializedData WITH
+       it — core/frame/navigate_event_fire.h states why: between this line and the dispatch's answer every
+       `navigate` listener the page has runs, so an algorithm that read the destination back off the navigable
+       would resolve this navigation against whatever a listener left behind. */
+    navigate_event_fire_push_replace_reload_begin(ctx, &s->fire, magic == HIST_PUSH ? "push" : "replace",
+                                                  new_url, /*is_same_document*/ true, &serialized);
     free(new_url);
     structured_data_free(ctx, &serialized);
     url_record_free(&doc_url);
     url_record_free(&target);
     /* AND IT RETURNS. Setting the stage and running on is what the declaration would then be lying about: the
-       driver never saw the boundary, so nothing could park between §7.2.5's head and §7.4.4's tail and the
+       driver never saw the boundary, so nothing could park between §7.2.5's head and the dispatch and the
        second label named a rest point that did not exist. JS_STEP_YIELD hands the decision to the scheduler —
        it parks the flow if a sibling outranks it and re-enters here immediately if none does. Nothing is
-       carried across: `cb_result` is this entry's (JS_UNDEFINED, since no request was in flight) and the tail's
-       own arrives on its re-entry. */
+       carried across: `cb_result` is this entry's (JS_UNDEFINED, since no request was in flight) and the next
+       stage's own arrives on its re-entry. */
     JS_FreeValue(ctx, cb_result);
-    STEP_GOTO(hdr->stage, HPR_UPDATE, &s->w.nav.phase, NULL);
+    STEP_GOTO(hdr->stage, HPR_NAVIGATE, &s->fire.phase, &s->w.nav.phase, NULL);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(HPR_NAVIGATE);
+    {
+        /* §7.2.6.10.4 answers, having dispatched `navigate` at this realm's Navigation and run every listener
+           the page registered for it. */
+        bool proceed = false;
+
+        r = navigate_event_fire_run(ctx, &s->fire, cb_result, out_cb, out_argc, &proceed);
+        if (r != 0) return r;
+        /* STEP 9: "if continue is FALSE, then return." A listener called preventDefault(), or the firing
+           algorithm answered false before it ever built an event — either way §7.4.4 must not run, and the
+           member answers `undefined` exactly as it does when it succeeds. */
+        if (!proceed) {
+            *presult = JS_UNDEFINED;
+            return JS_STEP_DONE;
+        }
+    }
+    /* STEP 10 — §7.4.4's two halves. _begin runs its steps 1-10 and touches none of the page's code. Its two
+       arguments are the values this machine took with it before the dispatch; the StructuredData below is a
+       BORROWED view of the ArrayBuffer's storage, so it is not freed through structured_data_free — the buffer
+       owns those bytes and the machine's declaration frees the buffer. */
+    {
+        const char *url = JS_ToCString(ctx, s->new_url);
+        StructuredData held;
+
+        CHECK(url != NULL, "history: the new address could not be read back after the navigate event");
+        held.buf = JS_GetArrayBuffer(ctx, &held.len, s->classic);
+        DCHECK(held.buf != NULL, "history: the serialized state held across the navigate event is not the "
+                                 "bytes — this machine's own stage above is the only writer of that slot");
+        session_history_url_update_begin(ctx, &s->w, url, &held, magic == HIST_PUSH);
+        JS_FreeCString(ctx, url);
+    }
+    STEP_GOTO(hdr->stage, HPR_UPDATE, &s->fire.phase, &s->w.nav.phase, NULL);
     return JS_STEP_YIELD;
 
     STEP_ARM(HPR_UPDATE);
