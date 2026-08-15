@@ -1777,6 +1777,8 @@ int main(int argc, char **argv)
         g_owed_n = 0;
     }
 
+    /* THE PLATFORM'S OWN LIST, UNDONE — see main.c's teardown: one call, whatever this browser declared. */
+    platform_agent_free();
     rendering_free(ctx);
     page_reveal_free(ctx);
     media_query_list_free(ctx);

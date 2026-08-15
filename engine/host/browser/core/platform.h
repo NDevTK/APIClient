@@ -78,4 +78,20 @@ void platform_agent_init(JSContext *ctx, const PlatformAgent *agent);
    is smaller is a different browser. */
 void platform_document_install(JSContext *ctx, JSValueConst global, const PlatformDocument *doc);
 
+/* THE AGENT HALF, UNDONE — every component's agent-lifetime release, in the reverse of the declaration order,
+ * before the runtime is freed.
+ *
+ * IT IS THE THIRD COLUMN OF THE SAME ROW, and it is here for the reason the other two are. A component that
+ * holds state for the whole AGENT rather than for a realm — RFC 6265 §5.3's cookie store is the first — has
+ * nothing that goes with a JSContext, so it needs a call at teardown, and a call at teardown written into each
+ * host is the hand-copied list this file was built to abolish: the same list, in the same three places, drifting
+ * the same way (and it is not hypothetical — the shipped ABI entry's teardown had already drifted four frees
+ * from the fixture's, and the gate could not see it because the gate runs the other entry's main). A host calls
+ * this ONCE, and what it releases is what this browser declared.
+ *
+ * A RELEASE IS NOT A STEP MACHINE'S. It frees what a C static holds for the agent, which no `visit` names and
+ * no JSContext frees — a per-realm value belongs in core/realm.h's slot store, which the runtime already frees
+ * with the context, and a row that reaches for this column for one of those is answering the wrong question. */
+void platform_agent_free(void);
+
 #endif

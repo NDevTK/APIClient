@@ -373,6 +373,9 @@ QJS_EXPORT void qjs_teardown(void)
        endpoint tables, the flow registry) and so was the collection, so the shipped engine aborted at teardown
        on `list_empty(&rt->gc_obj_list)` and every finding it had produced was discarded as a crashed
        instance's. MEASURED on the live harness: a page analysed to "No findings" for that reason alone. */
+    /* THE PLATFORM'S OWN LIST, UNDONE — every component's agent-lifetime release, in one call, so the next one
+       to hold agent state is not a fourth copy of a list that has already drifted once. */
+    platform_agent_free();
     solve_free();
     endpoint_free();
     rendering_free(g_ctx);

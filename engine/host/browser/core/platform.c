@@ -39,6 +39,7 @@
 #include "core/html/form_data.h"
 #include "core/html/html_iframe.h"
 #include "core/html/unhandled_rejection.h"
+#include "core/loader/cookie_jar.h"
 #include "core/loader/module_loader.h"
 #include "core/platform.h"
 #include "core/realm.h"
@@ -62,11 +63,13 @@
    shuffles, and a component whose facts change breaks its own thunk and nothing else. */
 typedef void PlatformDeclare(JSContext *ctx, const PlatformAgent *a);
 typedef void PlatformInstall(JSContext *ctx, JSValueConst g, const PlatformDocument *d);
+typedef void PlatformRelease(void);
 
 typedef struct {
     const char      *name;      /* the component, as its file is named — every assert below says which */
     PlatformDeclare *declare;   /* once per AGENT, or NULL for a component another one declares */
     PlatformInstall *install;   /* once per REALM, or NULL for a component with no per-document members */
+    PlatformRelease *release;   /* once per AGENT at teardown, or NULL for a component that holds no agent state */
 } PlatformComponent;
 
 /* ---- the agent half ------------------------------------------------------------------------------------- */
@@ -118,10 +121,15 @@ static void d_observable(JSContext *c, const PlatformAgent *a) { (void)a; observ
 static void d_element(JSContext *c, const PlatformAgent *a) { (void)a; element_init(c); }
 static void d_iframe(JSContext *c, const PlatformAgent *a) { (void)a; iframe_init(c); }
 static void d_document(JSContext *c, const PlatformAgent *a) { (void)a; document_init(c); }
+static void d_cookie_jar(JSContext *c, const PlatformAgent *a) { (void)a; cookie_jar_init(c); }
 /* §16.2.1.9's host hook is the RUNTIME's, which is what an agent is. `import(specifier)` with none installed
    resolved to nothing at all — no module, no error, no record — and a page that asks to load code and is
    answered silently is the one shape an unbuilt capability must not have. */
 static void d_module_loader(JSContext *c, const PlatformAgent *a) { (void)a; module_loader_install(JS_GetRuntime(c)); }
+
+/* ---- the agent half, undone ----------------------------------------------------------------------------- */
+
+static void r_cookie_jar(void) { cookie_jar_free(); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
@@ -242,6 +250,11 @@ static const PlatformComponent PLATFORM[] = {
     { "observable",          d_observable,          i_observable },
     { "element",             d_element,             NULL },
     { "html_iframe",         d_iframe,              NULL },
+    /* RFC 6265 §5.3's COOKIE STORE, before the component whose §3.1.4 members read it. It is the first row with
+       a RELEASE, and the reason is the reason it is a row at all: the store is the USER AGENT's by the
+       standard's own words and an instance is one origin-keyed agent cluster, so it belongs to the JSRuntime
+       and not to any JSContext — which means nothing frees it when a realm goes. */
+    { "cookie_jar",          d_cookie_jar,          NULL,        r_cookie_jar },
     { "document",            d_document,            i_document },
     { "module_loader",       d_module_loader,       NULL },
 };
@@ -315,6 +328,12 @@ static void platform_check_table(void)
         DCHECK(PLATFORM[i].declare != NULL || PLATFORM[i].install != NULL,
                "a platform component builds neither an agent half nor a document half — a row that builds "
                "nothing is a component that is not in this browser, and it must be deleted rather than listed");
+        /* A RELEASE WITHOUT A DECLARATION HAS NOTHING TO RELEASE. Agent state is made by the agent half, so a
+           row that frees without declaring is either freeing another component's state or freeing nothing, and
+           both are worse than either alone. */
+        DCHECK(PLATFORM[i].release == NULL || PLATFORM[i].declare != NULL,
+               "a platform component releases agent state it never declared — the release column is the inverse "
+               "of the DECLARE column, and a row with only the inverse is undoing somebody else's work");
         for (k = 0; k < i; k++)
             DCHECK(strcmp(PLATFORM[k].name, PLATFORM[i].name) != 0,
                    "a platform component is listed twice — its declaration would mint a second class and a "
@@ -359,6 +378,21 @@ void platform_agent_init(JSContext *ctx, const PlatformAgent *agent)
        here, through the same one call a child navigable's realm makes — so the first document cannot get a
        different set from the rest, which is the whole failure mode this file and core/realm.h exist to end. */
     realm_install_intrinsics(ctx, agent->top_level_url);
+}
+
+void platform_agent_free(void)
+{
+    int i;
+
+    DCHECK(g_declared_in != NULL,
+           "the platform was released in an agent that never declared it — there is nothing here to undo, and a "
+           "host that reaches teardown without having reached platform_agent_init did not build this browser");
+    /* REVERSE DECLARATION ORDER, because the forward order is dependency order: a component declared after
+       another may hold a value that component minted, so it must give it up first. */
+    for (i = PLATFORM_N - 1; i >= 0; i--)
+        if (PLATFORM[i].release)
+            PLATFORM[i].release();
+    g_declared_in = NULL;
 }
 
 void platform_document_install(JSContext *ctx, JSValueConst global, const PlatformDocument *doc)

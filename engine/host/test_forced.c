@@ -2409,6 +2409,8 @@ int main(int argc, char **argv) {
         : "FAIL: @H or @S incorrect");
 
     free(js);
+    /* THE PLATFORM'S OWN LIST, UNDONE — see main.c's teardown: one call, whatever this browser declared. */
+    platform_agent_free();
     solve_free();
     endpoint_free();
 
