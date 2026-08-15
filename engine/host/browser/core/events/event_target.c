@@ -622,11 +622,11 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
     X("onabort", EH_GLOBAL | EH_SIGNAL | EH_XHR) X("onauxclick", EH_GLOBAL) X("onbeforeinput", EH_GLOBAL)          \
     X("onbeforematch", EH_GLOBAL) X("onbeforetoggle", EH_GLOBAL) X("onblur", EH_GLOBAL) X("oncancel", EH_GLOBAL)      \
     X("oncanplay", EH_GLOBAL) X("oncanplaythrough", EH_GLOBAL)                          \
-    /* `onchange` has TWO owners — GlobalEventHandlers and CSSOM VIEW §4.2's MediaQueryList — which is exactly
-       what the mask is a BITMASK for. A second X() line for the same name would put the name in this list
-       twice, and every consumer of the list (the IDL auditor, the content-attribute test) would then see a
-       member that does not exist twice over. */                                                              \
-    X("onchange", EH_GLOBAL | EH_MEDIA_QUERY_LIST) X("onclick", EH_GLOBAL)       \
+    /* `onchange` has THREE owners — GlobalEventHandlers, CSSOM VIEW §4.2's MediaQueryList and Permissions
+       §6.3's PermissionStatus — which is exactly what the mask is a BITMASK for. A second X() line for the
+       same name would put the name in this list twice, and every consumer of the list (the IDL auditor, the
+       content-attribute test) would then see a member that does not exist twice over. */                     \
+    X("onchange", EH_GLOBAL | EH_MEDIA_QUERY_LIST | EH_PERMISSION_STATUS) X("onclick", EH_GLOBAL)       \
     X("onclose", EH_GLOBAL) X("oncontextlost", EH_GLOBAL) X("oncontextmenu", EH_GLOBAL)                             \
     X("oncontextrestored", EH_GLOBAL) X("oncuechange", EH_GLOBAL) X("ondblclick", EH_GLOBAL) X("ondrag", EH_GLOBAL)   \
     X("ondragend", EH_GLOBAL) X("ondragenter", EH_GLOBAL) X("ondragleave", EH_GLOBAL) X("ondragover", EH_GLOBAL)      \

@@ -56,6 +56,7 @@
 #include "core/frame/navigator.h"
 #include "core/html/user_activation.h"
 #include "core/idl_args.h"
+#include "core/permissions/permissions.h"
 #include "core/realm.h"
 
 /* A real desktop Chrome's identity, used as the EXAMPLE for the environment members. §8.10.1.1's appVersion
@@ -215,6 +216,18 @@ static JSValue js_nav_user_activation(JSContext *ctx, JSValueConst this_val, int
     return user_activation_object(ctx);
 }
 
+/* PERMISSIONS §6.1: `partial interface Navigator { [SameObject] readonly attribute Permissions permissions; }`,
+   installed here for the reason `userActivation` is — the ATTRIBUTE belongs on §3.7's interface prototype
+   object, which is this component's, while the VALUE is the permissions component's one object for the realm.
+   [SameObject] therefore comes from where that object is KEPT and not from a cache in this getter. */
+static JSValue js_nav_permissions(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    (void)magic;
+    if (!nav_brand(ctx, this_val)) return JS_EXCEPTION;
+    nav_assert_this_realm(ctx, this_val);
+    return permissions_object(ctx);
+}
+
 /* HTML §7.2.5's two Window members that name this object. `navigator` is a plain `readonly attribute Navigator`
    and `clientInformation` is `[Replaceable] readonly attribute Navigator` — the legacy alias, which the IDL
    marks replaceable and the real one does not, so they install through different helpers. BOTH read the ONE
@@ -361,6 +374,7 @@ static void navigator_install_realm(JSContext *ctx)
     for (i = 0; i < NAV_N; i++)
         idl_install_accessor_exposed(ctx, proto, NAV_NAME[i], js_nav_get, i, -1, NAV_EXPOSURE[i]);
     idl_install_accessor(ctx, proto, "userActivation", js_nav_user_activation, 0, -1);
+    idl_install_accessor(ctx, proto, "permissions", js_nav_permissions, 0, -1);
     idl_install_method(ctx, proto, "javaEnabled", 0, g_id_java_enabled);
     idl_members_excluded(ctx, proto, "Navigator", NAV_MODE_EXCLUDED,
                          (int)(sizeof NAV_MODE_EXCLUDED / sizeof NAV_MODE_EXCLUDED[0]),
@@ -402,6 +416,12 @@ void navigator_init(JSContext *ctx)
        realm's prototype — which is what the pool's seal asserts against. */
     g_id_java_enabled = idl_method_id(ctx, NULL, 0, js_nav_java_enabled, 0);
     realm_declare_intrinsic(navigator_install_realm);
+    /* PERMISSIONS §6.1 IS A PARTIAL INTERFACE OF THIS ONE, so this is where its whole component is declared —
+       §3's model, §6.3's PermissionStatus and §6.2's Permissions. Declared AFTER the line above so the
+       realm-intrinsic order builds this realm's Navigator before anything that reaches for it, and declared
+       HERE rather than in each host's list because a host that has a Navigator has `navigator.permissions`:
+       a per-host line is the hand-copied list core/realm.h exists to abolish. */
+    permissions_init(ctx);
 }
 
 void navigator_free(void)
@@ -412,4 +432,7 @@ void navigator_free(void)
     g_vals_slot = -1;
     g_obj_slot = -1;
     g_id_java_enabled = -1;
+    /* PERMISSIONS §6's component is declared from navigator_init, so it is released from here — a component
+       released from a list its declaration is not on is a component some host frees and another leaks. */
+    permissions_free();
 }
