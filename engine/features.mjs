@@ -27,9 +27,21 @@ const QJS = join(import.meta.dirname, "qjs");
 const TESTS = join(import.meta.dirname, "tests");
 const SRCS = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c", "quickjs-libc.c", "run-test262.c"];
 
-console.log("[features] building native run-test262 (gcc, NDEBUG)…");
+console.log("[features] building native run-test262 (clang, NDEBUG)…");
 const bin = join(mkdtempSync(join(tmpdir(), "feat-")), "run262.exe");
-const cc = spawnSync("gcc", ["-O1", "-w", "-DNDEBUG", "-D_GNU_SOURCE", "-DCONFIG_VERSION=\"t262\"",
+/* THE COMPILER AND THE QUIET LIST ARE THE SHIPPED BUILD'S, for the two reasons engine/build.mjs gives at its
+   own CFLAGS. (1) Everything that ships is built by emcc, i.e. clang, so a gate on gcc certifies a translation
+   of these sources that nothing runs — quickjs-step.h's three struct tags are at file scope because each was
+   otherwise a fresh type per prototype, and "gcc -w hid all three; the project's clang build does not".
+   (2) `-w` was here, and `-w` is exactly what that sentence blames: it suppresses the diagnostic outright, so a
+   missing #include makes C assume `int (...)` and a returned 64-bit POINTER comes back TRUNCATED. That is not
+   hypothetical — window.c called window_proxy_name without its header and the whole corpus segfaulted inside
+   strcmp, with no diagnostic. A gate that silences the class of error it exists to catch is not a gate. */
+const cc = spawnSync("clang", ["-O1", "-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare",
+  "-Wno-parentheses", "-Wno-format-truncation", "-Wno-format-overflow", "-Wno-array-bounds",
+  "-Wno-stringop-overflow", "-Wno-maybe-uninitialized", "-Wno-misleading-indentation", "-Wno-dangling-pointer",
+  "-Wno-char-subscripts", "-Wno-implicit-fallthrough", "-Werror=implicit-function-declaration",
+  "-DNDEBUG", "-D_GNU_SOURCE", "-DCONFIG_VERSION=\"t262\"",
   "-DAPICLIENT_DEV=1", "-I.", ...SRCS, "-o", bin, "-lm", "-lpthread"], { cwd: QJS, encoding: "utf8" });
 if (cc.status !== 0) { console.error("[features] build FAILED\n" + (cc.stderr || "")); process.exit(1); }
 

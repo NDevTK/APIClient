@@ -177,7 +177,7 @@ if (LIST_SOURCES) {
  * reach switch two measures nothing, so the flag is DELETED rather than kept as a mode nobody can use.
  *
  * Native is not a workaround for that: it is where every other gate in this project already runs its C —
- * engine/wpt.mjs builds this same source list with gcc for the same reason (an eight-minute wasm link per
+ * engine/wpt.mjs builds this same source list natively for the same reason (an eight-minute wasm link per
  * iteration is a gate nobody runs), and a native ASan run over that runner is what named the attribute-lifetime
  * SEGV in one go. The flags below are wpt.mjs's, with the SMOKE entry instead of the WPT one, and DEV on so a
  * DCHECK stays live — a sanitized build with the asserts compiled out reports faults the engine's own
@@ -204,7 +204,7 @@ if (NATIVE) {
                  "-Wno-format-truncation", "-Wno-format-overflow", "-Wno-array-bounds", "-Wno-stringop-overflow",
                  "-Wno-maybe-uninitialized", "-Wno-misleading-indentation", "-Wno-dangling-pointer",
                  "-Wno-char-subscripts", "-Wno-implicit-fallthrough", "-Werror=implicit-function-declaration"];
-  const cc = spawnSync("gcc", [
+  const cc = spawnSync("clang", [
     "-O1", "-g", "-fno-omit-frame-pointer",
     ...(kind === "none" ? [] : ["-fsanitize=" + kind]),
     ...quiet,
