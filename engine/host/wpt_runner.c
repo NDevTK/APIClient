@@ -414,7 +414,10 @@ static bool wpt_drain_owed(JSContext *ctx)
             int status = 0;
             HeaderList rh = { 0 };
             body = wpt_http(&req, &len, &status, &rh);
-            arg = body ? fetch_reply_new(ctx, status, "", &rh, body, len) : JS_NULL;
+            /* §4.1's clone of the REQUEST's URL list. This runner serves the checked-out corpus and follows no
+               redirect, so the list is the one URL it was asked for — which is what makes `response.url` the
+               address the test fetched and `response.redirected` false, both computed rather than declared. */
+            arg = body ? fetch_reply_new(ctx, status, "", &rh, body, len, &req.url, 1) : JS_NULL;
             header_list_free(&rh);
         }
         /* AS A FLOW, not a JS_Call. Settling the promise reads `then` off the value, which the page can own —
@@ -857,7 +860,9 @@ static bool wpt_answer_host_requests(JSContext *ctx)
             req.body = bodys;
             req.body_len = blen;
             body = wpt_http(&req, &len, &status, &rh);
-            reply = body ? fetch_reply_new(ctx, status, "", &rh, body, len) : JS_NULL;
+            /* §4.1's clone of the REQUEST's URL list — see the fetch drain above; XHR's `responseURL` is the
+               same fact and comes from the same place. */
+            reply = body ? fetch_reply_new(ctx, status, "", &rh, body, len, &req.url, 1) : JS_NULL;
             /* Also the host's own — §3.5.6's fetch, answered out of the network; a network error is a reply
                this component reads, never a thrown value. */
             engine_host_answer(ctx, id, reply, ENGINE_COMPLETION_NORMAL);

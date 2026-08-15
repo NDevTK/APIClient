@@ -574,19 +574,38 @@ QJS_EXPORT const char *qjs_chunks(void)
     return module_loader_chunks();
 }
 
-QJS_EXPORT void qjs_provide(const char *url, const char *body)
+/* THE REPLY CROSSES AS TEXT AND CARRIES ITS TYPE — JSON, exactly as qjs_host_answer's does and for the same
+   reason. It used to cross as the BODY'S BYTES and nothing else, so everything the trusted zone had actually
+   seen was thrown away at this line and re-invented on the other side: the engine's drain built a reply with
+   status 200, status message "OK", no headers, and no URL LIST — which is what `response.url` and
+   `response.redirected` are, so every reply in the extension reported no redirect however many the fetch had
+   followed. The record is `{status, statusText, headers: [[name, value], …], body, urlList: [url, …]}`, which
+   is the SAME record fetch_reply_new builds for the hosts that fetch in C; JSON `null` is a NETWORK ERROR, and
+   the delivery machine already rejects with the TypeError §5.6 names.
+   ONE delivery for every parked request. A fetch's reply, the DOCUMENT's own external script and a lazy CHUNK's
+   source all settle a park the flow registered before it suspended, and one engine_provide fills every entry
+   naming that URL whatever its kind — so there is ONE record and the kinds read the fields they need. */
+QJS_EXPORT void qjs_provide(const char *url, const char *reply)
 {
-    DCHECK(g_begun, "a body was provided to an engine that never ran");
-    /* ONE delivery for every parked request. A fetch's reply and a lazy CHUNK's source both settle a promise the
-       flow registered before it suspended — the chunk's is the module loader's source promise, so the load
-       finishes on its reaction and the page's `await import(...)` continues. Neither is the host's to
-       distinguish, and neither re-runs anything. */
+    DCHECK(g_begun, "a reply was provided to an engine that never ran");
+    DCHECK(reply != NULL, "a reply was provided with no text at all — a network error is the JSON `null`, "
+                          "which is a value the engine's delivery distinguishes from a reply it never got");
     {
-        JSValue v = body ? JS_NewString(g_ctx, body) : JS_UNDEFINED;
-        int n = engine_provide(g_ctx, url, v);
+        JSValue v = JS_ParseJSON(g_ctx, reply, strlen(reply), "<reply>");
+        int n;
+        if (JS_IsException(v)) {
+            JS_FreeValue(g_ctx, JS_GetException(g_ctx));
+            /* ABORTS in dev, which is the point: a host sending anything but its reply record through this
+               edge is the bug. In release there is no reply to deliver, and "no reply" is a NETWORK ERROR
+               rather than an empty 200 — the delivery machine rejects with §5.6's TypeError. */
+            DFAIL("the host provided a reply that is not JSON — the trusted zone stringifies its reply record, "
+                  "and a bare body sent through this edge is a host still delivering only bytes");
+            v = JS_NULL;
+        }
+        n = engine_provide(g_ctx, url, v);
         JS_FreeValue(g_ctx, v);
         if (n == 0)
-            DFAIL("a body was provided for a URL no flow is parked on — the host's pending/provide pairing is "
+            DFAIL("a reply was provided for a URL no flow is parked on — the host's pending/provide pairing is "
                   "off, and resolving nothing would leave the flow that IS parked waiting forever");
     }
 }

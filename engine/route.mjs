@@ -54,7 +54,7 @@ async function makeEngine(html, url, docId, csp, topLevelUrl) {
   M.ccall('qjs_init', 'number', ['number','number','number','number','number'],
     [cs(html), cs(url), cs(docId), cs(csp || ''), cs(topLevelUrl)]);
   M.ccall('qjs_begin', 'void', ['number'], [cs('')]);
-  return { M, cs, str, docId, origin: new URL(url).origin, done: false };
+  return { M, cs, str, docId, docUrl: url, origin: new URL(url).origin, done: false };
 }
 
 const engines = [];
@@ -72,7 +72,13 @@ async function service(e) {
   for (const u of e.str('qjs_pending').split('\n').filter(Boolean)) {
     if (u.includes('/hold')) continue;
     if (u.includes('/got')) { got.push(u); console.log(`  [${e.docId}] DELIVERED: ${u}`); }
-    e.M.ccall('qjs_provide', 'void', ['number','number'], [e.cs(u), e.cs('{}')]);
+    /* THE ONE REPLY RECORD every host of this engine delivers, crossing as JSON so it carries its type. This
+       zone follows no redirect, so Fetch §4.1 gives the response a clone of the REQUEST's URL list — one item,
+       RESOLVED against this document's address because a URL list holds URLs and `response.url` serializes the
+       last of them. */
+    const reply = { status: 200, statusText: 'OK', headers: [], body: '{}',
+                    urlList: [new URL(u, e.docUrl).href] };
+    e.M.ccall('qjs_provide', 'void', ['number','number'], [e.cs(u), e.cs(JSON.stringify(reply))]);
   }
   /* ONE OP IS ANSWERED, exactly as the offscreen answers exactly one: a `document.fetch` is a network fetch this
      zone can genuinely perform. Every other request is left UNANSWERED — the asking flow stays parked with its

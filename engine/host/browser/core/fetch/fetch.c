@@ -112,12 +112,17 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
 /* Park the request on the FLOW that issued it: the URL the trusted host must fetch, and the capability that
    delivers the body into this flow's continuation. There is ONE pending register and it is the flow's own —
    a second one beside it cannot resolve into the flow that owns the reaction, which is the whole point. */
-/* THE REPLY BECOMES A RESPONSE HERE, in the component that promised one. The host delivers bytes and knows
-   nothing about the Fetch API; this closure sits between them, so `fetch()` keeps its contract (a
-   Promise<Response>) without the host learning what a Response is. func_data = [resolve, url, reject].
-   A NULL delivery is §5.5's NETWORK ERROR and REJECTS with a TypeError. It used to be stringified into the
+/* THE REPLY BECOMES A RESPONSE HERE, in the component that promised one. The host delivers a reply RECORD and
+   knows nothing about the Fetch API; this closure sits between them, so `fetch()` keeps its contract (a
+   Promise<Response>) without the host learning what a Response is. func_data = [resolve, reject].
+   A NULL delivery is §5.6's NETWORK ERROR and REJECTS with a TypeError. It used to be stringified into the
    body like any other value, so a request the host could not satisfy resolved with a Response reading "null"
-   — a page's `.catch` never ran, and the failure arrived disguised as data. */
+   — a page's `.catch` never ran, and the failure arrived disguised as data.
+   THE URL IS NOT CAPTURED HERE ANY MORE. This closure held the REQUEST's URL and handed it to the Response as
+   its `url`, which is a different fact from the one §2.2.6 defines: the response's URL is the LAST item of its
+   URL LIST, and the list is what the fetch — which is the trusted host's — observed. A captured request URL
+   cannot express a redirect at all, so `redirected` had nothing to read and was the literal `false`. The list
+   rides the reply record instead, and this capture is gone with the question it answered. */
 /* THE REPLY'S DELIVERY IS A STEP MACHINE, because settling the promise is the PAGE'S code. 27.2.1.3.2 step 8
  * reads `Get(resolution, "then")` off the value being resolved with, and the value here is a Response — an
  * ordinary object whose prototype the page owns, so `Object.prototype.then = { get(){…} }` makes that read the
@@ -129,7 +134,7 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
  * capture, and the work it does (settling) is work only a machine may do. Those two were mutually exclusive
  * before: JS_NewCFunctionData gives capture without the machine, JS_CFUNC_step gives the machine without
  * capture. What it captured is read back off the callee its own header carries. */
-enum { FETCH_DELIVER_RESOLVE = 0, FETCH_DELIVER_URL, FETCH_DELIVER_REJECT };
+enum { FETCH_DELIVER_RESOLVE = 0, FETCH_DELIVER_REJECT };
 
 /* WHERE THIS MACHINE RESTS. §5.6 step 12's processResponse is what a reply runs, and its five sub-steps split
    exactly once: everything up to and including "creating a Response object" runs on the engine's own values,
@@ -189,7 +194,10 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
         } else {
             /* THE REPLY THE HOST BUILT. It is this engine's own object, so these reads run none of the page's
                code — the value never passes through the page's hands between the host and here. */
-            const char *u = JS_ToCString(ctx, JS_StepClosureData(&s->hdr, FETCH_DELIVER_URL));
+            /* §2.2.6's URL LIST, which is the whole of what `url` and `redirected` are, and the one field only
+               the host can answer: the fetch is the TRUSTED zone's (SECURITY.md), so the redirect chain is
+               observed there and crosses here as TEXT carrying its type — an Array of serialized URLs. */
+            JSValue ul_v = JS_GetPropertyStr(ctx, body_v, "urlList");
             JSValue st_v = JS_GetPropertyStr(ctx, body_v, "status");
             JSValue stx_v = JS_GetPropertyStr(ctx, body_v, "statusText");
             JSValue hs_v = JS_GetPropertyStr(ctx, body_v, "headers");
@@ -218,12 +226,18 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
                 if (vc) JS_FreeCString(ctx, vc);
                 JS_FreeValue(ctx, nv); JS_FreeValue(ctx, vv); JS_FreeValue(ctx, pair);
             }
-            s->value = response_new(ctx, u ? u : "", (int)status, stx ? stx : "",
+            /* THE ENGINE↔HOST CONTRACT, ASSERTED AT THE EDGE IT CROSSES. A reply without a URL list is not a
+               reply this component can answer `url` or `redirected` from, and taking `undefined` for it would
+               make every response report no redirect — the exact silence the literal `false` used to be. */
+            DCHECK(JS_IsArray(ul_v),
+                   "the host delivered a reply carrying no `urlList` — §2.2.6's URL list is what `url` and "
+                   "`redirected` are, and the host is the only zone that performed the fetch that grew it");
+            s->value = response_new(ctx, ul_v, (int)status, stx ? stx : "",
                                     hn ? &hl : NULL, body ? body : "", body ? body_len : 0);
             header_list_free(&hl);
-            if (u) JS_FreeCString(ctx, u);
             if (stx) JS_FreeCString(ctx, stx);
             if (body) JS_FreeCString(ctx, body);
+            JS_FreeValue(ctx, ul_v);
             JS_FreeValue(ctx, st_v); JS_FreeValue(ctx, stx_v);
             JS_FreeValue(ctx, hs_v); JS_FreeValue(ctx, bd_v);
             if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
@@ -249,15 +263,23 @@ static const JSTrampStepDef js_fetch_deliver_def = {
 };
 static int g_deliver_stepid = -1;
 
-/* §5.5's REPLY, as one engine-built object every host delivers. It is engine-built, so the reads on the other
-   side run none of the page's code — which is why this is an object and not a second provider callback. */
+/* THE REPLY, as one engine-built object every host delivers. It is engine-built, so the reads on the other
+   side run none of the page's code — which is why this is an object and not a second provider callback.
+   `url_list` is §2.2.6's URL list, and it is a PARAMETER rather than a field this function invents: a host
+   that followed a redirect saw a list of more than one, a host that did not saw the request's own URL, and
+   only the host knows which. It is the same shape the trusted zone's JSON reply carries, so there is ONE reply
+   record and not one per host. */
 JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, const HeaderList *headers,
-                        const char *body, size_t body_len)
+                        const char *body, size_t body_len, const char *const *url_list, int url_list_n)
 {
     JSValue o = JS_NewObject(ctx), h;
     int i;
 
     if (JS_IsException(o)) return o;
+    DCHECK(url_list_n >= 1,
+           "a host built a reply with an empty URL list — §4.1 gives a fetched response at least a clone of "
+           "the request's URL list, and `url`/`redirected` are read off nothing else");
+    JS_SetPropertyStr(ctx, o, "urlList", response_url_list(ctx, url_list, url_list_n));
     JS_SetPropertyStr(ctx, o, "status", JS_NewInt32(ctx, status));
     JS_SetPropertyStr(ctx, o, "statusText", JS_NewString(ctx, status_text ? status_text : ""));
     JS_SetPropertyStr(ctx, o, "body", JS_NewStringLen(ctx, body ? body : "", body_len));
@@ -291,7 +313,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
                           const HeaderList *hdrs, const char *body, size_t body_len)
 {
     JSValue promise, resolving[2], deliver;
-    JSValueConst data[3];
+    JSValueConst data[2];
     const char *u;
 
     promise = JS_NewPromiseCapability(ctx, resolving);
@@ -333,8 +355,17 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
             if (data_url_process(&rec, &ds)) {
                 char *ct = mime_type_serialize(&ds.mime);
                 HeaderList dh = { 0 };
+                /* §4.1: the response's URL list is a clone of the REQUEST's, which for a scheme answered here
+                   is the one URL this fetch was given — SERIALIZED off the record that was already parsed,
+                   never the raw argument, because a URL list holds URLs and `url` parses the last one back. */
+                char *abs = url_serialize(&rec, /*exclude_fragment*/ false);
+                JSValue ul;
+                CHECK(abs, "fetch: OOM serializing a data: URL for the response's URL list");
+                ul = response_url_list(ctx, (const char *const *)&abs, 1);
                 header_list_append(&dh, "content-type", ct);
-                value = response_new(ctx, u, 200, "OK", &dh, ds.body, ds.body_len);
+                value = response_new(ctx, ul, 200, "OK", &dh, ds.body, ds.body_len);
+                JS_FreeValue(ctx, ul);
+                free(abs);
                 header_list_free(&dh);
                 free(ct);
                 data_url_struct_free(&ds);
@@ -356,6 +387,10 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
                `URL.createObjectURL` is that the bytes are already here. The FRAGMENT is stripped before the
                lookup, because a fragment names a place within a resource and not a different entry. */
             char *key = url_serialize(&rec, /*exclude_fragment*/ true);
+            /* §4.1's clone of the request's URL list, taken here because the record is freed below and a URL
+               list holds URLs: the KEY has its fragment stripped (a fragment names a place within a resource,
+               not a different entry) and the response's URL keeps it. */
+            char *abs = url_serialize(&rec, /*exclude_fragment*/ false);
             /* §5.3's CAPTURED ENTRY FIRST: a Request resolved its blob URL when it was built, so a page that
                revoked the URL afterwards still fetches. The store is consulted only for a URL STRING, which has
                nothing to have captured. */
@@ -387,10 +422,15 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
                 const char *btype = NULL;
                 const char *bytes = blob_bytes_of(blob, &blen, &btype);
                 HeaderList bh = { 0 };
+                JSValue ul;
+                CHECK(abs, "fetch: OOM serializing a blob: URL for the response's URL list");
+                ul = response_url_list(ctx, (const char *const *)&abs, 1);
                 if (btype && *btype) header_list_append(&bh, "content-type", btype);
-                value = response_new(ctx, u, 200, "OK", btype && *btype ? &bh : NULL, bytes, blen);
+                value = response_new(ctx, ul, 200, "OK", btype && *btype ? &bh : NULL, bytes, blen);
+                JS_FreeValue(ctx, ul);
                 header_list_free(&bh);
             }
+            free(abs);
             fetch_settle_local(ctx, resolving, value, reject);
             JS_FreeValue(ctx, looked);
             JS_FreeCString(ctx, u);
@@ -401,13 +441,14 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
         url_record_free(&rec);
     }
     if (u) {
-        JSValue uv = JS_NewString(ctx, u);
+        /* TWO CAPTURES, not three. The request's URL used to ride the closure and become the Response's `url`;
+           §2.2.6 makes that the last item of the response's URL LIST, which the trusted host observes and
+           delivers on the reply — so the capture is gone rather than kept beside the list as a second answer
+           to one question. */
         data[0] = resolving[0];
-        data[1] = uv;
-        data[2] = resolving[1];
+        data[1] = resolving[1];
         DCHECK(g_deliver_stepid >= 0, "fetch() parked a reply before its delivery machine was declared");
-        deliver = JS_NewStepClosure(ctx, g_deliver_stepid, 1, 3, data);
-        JS_FreeValue(ctx, uv);
+        deliver = JS_NewStepClosure(ctx, g_deliver_stepid, 1, 2, data);
         if (!JS_IsException(deliver)) {
             DCHECK(g_provider != NULL && g_provider->owe != NULL,
                    "fetch() was called with no host network provider installed — the promise would be owed to "

@@ -36,8 +36,19 @@
 // over-restrictive `connect-src` — the CSP must allow https:/http:.
 //
 // Returns a plain object { ok, status, statusText, headers (lowercased), body
-// (text) } — NOT a Response — so it is identical in the offscreen document and the
-// Worker. Loaded in both: offscreen-brain.js via <script> (ast-worker.html) and
+// (text), urlList } — NOT a Response — so it is identical in the offscreen document
+// and the Worker.
+// urlList is Fetch §2.2.6's RESPONSE URL LIST, and this is the ONLY zone that can
+// report it: the redirect chain exists here and nowhere else. §5.5 defines
+// `response.url` as its LAST item and `response.redirected` as "its size is greater
+// than 1", so an engine that never receives it cannot compute either — which is why
+// `redirected` was the literal false. The spec also says "Except for the first and
+// last URL, if any, a response's URL list is not directly exposed to script as that
+// would violate atomic HTTP redirect handling", and first + last is exactly what a
+// browser fetch exposes to US (the requested href and resp.url), so this list is
+// [requested] when nothing redirected and [requested, final] when something did —
+// the whole of what any caller may ever observe. A blocked or failed read reports
+// [requested]: the request URL is a fact even when the reply is not. Loaded in both: offscreen-brain.js via <script> (ast-worker.html) and
 // ast-thread.js via importScripts.
 // CORB/ORB for a SCRIPT load (opts.as==="script"): a chunk/import becomes
 // executable code under QuickJS control, so the response must be JS-typed (or
@@ -120,13 +131,30 @@ function _isPrivateHost(host) {
 //               has a normal URL but an opaque origin). No shared global (concurrent
 //               grinds would contaminate it); unknown principal -> public + opaque
 //               -> private targets and credentialed cross-origin reads blocked.
+// Fetch §2.2.6's URL list as far as script may ever see it: the FIRST item (the URL
+// we requested, which §4.1 clones from the request) and the LAST (resp.url, after
+// redirect:"follow" walked the chain). Both authorities are the browser's own and
+// each answers one question: resp.redirected says whether the list has more than one
+// item, resp.url says what the last one is. Deriving "did it redirect" from
+// resp.url !== requested instead would report a 3xx that lands back on its own
+// address as no redirect at all, which is a chain the list DID grow along.
+function _urlList(requested, resp) {
+  var redirected = false, final = requested;
+  try { redirected = !!(resp && resp.redirected); } catch (e) {}
+  try { if (resp && resp.url) final = String(resp.url); } catch (e) {}
+  return redirected ? [requested, final] : [requested];
+}
+
 async function safeFetch(url, opts) {
   opts = opts || {};
   var parsed;
   try { parsed = new URL(String(url)); }
-  catch (e) { return { ok: false, status: 0, statusText: "bad-url", headers: {}, body: "" }; }
+  // No URL at all, so there is no URL list either — « » is the honest report, and
+  // the engine's `response.url` is then the empty string the spec names for it.
+  catch (e) { return { ok: false, status: 0, statusText: "bad-url", headers: {}, body: "", urlList: [] }; }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
-    return { ok: false, status: 0, statusText: "blocked-scheme:" + parsed.protocol, headers: {}, body: "" };
+    return { ok: false, status: 0, statusText: "blocked-scheme:" + parsed.protocol, headers: {}, body: "",
+             urlList: [parsed.href] };
   // Origin-relative SSRF (see header). The PRINCIPAL is the analyzed PAGE's origin,
   // passed PER CALL as opts.pageUrl — NOT a shared global: two grinds run
   // concurrently in one worker, so a worker-global principal would let one page's
@@ -139,7 +167,8 @@ async function safeFetch(url, opts) {
   var _pageHost = ""; try { if (_po) _pageHost = new URL(_po).hostname; } catch (e) {}
   var _pagePrivate = _isPrivateHost(_pageHost);
   if (_isPrivateHost(parsed.hostname) && !_pagePrivate)
-    return { ok: false, status: 0, statusText: "blocked-private-from-public", headers: {}, body: "" };
+    return { ok: false, status: 0, statusText: "blocked-private-from-public", headers: {}, body: "",
+             urlList: [parsed.href] };
   // opts.credentialed: replay a learned GET with the user's COOKIES to fetch the REAL
   // authenticated reply (the logged-in API surface), instead of a useless 401. Still
   // GET-only (method is forced below) so a well-designed server performs no account
@@ -160,7 +189,8 @@ async function safeFetch(url, opts) {
   // request itself for extension fetches; this stops the data from being ingested.)
   try {
     if (resp.url && _isPrivateHost(new URL(resp.url).hostname) && !_pagePrivate)
-      return { ok: false, status: 0, statusText: "blocked-private-redirect", headers: {}, body: "" };
+      return { ok: false, status: 0, statusText: "blocked-private-redirect", headers: {}, body: "",
+               urlList: [parsed.href] };
   } catch (e) {}
   var headers = {};
   try { resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; }); } catch (e) {}
@@ -174,7 +204,8 @@ async function safeFetch(url, opts) {
       !_corbAllowsScript(headers["content-type"] || "",
         (headers["x-content-type-options"] || "").toLowerCase().indexOf("nosniff") >= 0,
         body, parsed.href, opts.pageOrigin || ""))
-    return { ok: false, status: 0, statusText: "blocked-corb", headers: headers, body: "" };
+    return { ok: false, status: 0, statusText: "blocked-corb", headers: headers, body: "",
+             urlList: _urlList(parsed.href, resp) };
   // OWN SOP/CORS for a CREDENTIALED reply. The browser does NOT apply the same-origin
   // policy to an extension fetch with host_permissions (it can read any origin), so
   // when cookies are attached we MUST enforce SOP + CORS HERE on the bytes before
@@ -204,9 +235,11 @@ async function safeFetch(url, opts) {
       var _acao = headers["access-control-allow-origin"] || "";
       var _acac = (headers["access-control-allow-credentials"] || "").toLowerCase();
       if (!_isRealOrigin(_pageOrigin) || _acao !== _pageOrigin || _acac !== "true")
-        return { ok: false, status: 0, statusText: "blocked-cors-credentialed", headers: {}, body: "" };
+        return { ok: false, status: 0, statusText: "blocked-cors-credentialed", headers: {}, body: "",
+                 urlList: _urlList(parsed.href, resp) };
     }
   }
-  return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: body };
+  return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: body,
+           urlList: _urlList(parsed.href, resp) };
 }
 if (typeof self !== "undefined") self.safeFetch = safeFetch;

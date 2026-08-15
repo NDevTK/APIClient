@@ -189,20 +189,45 @@ static int fixture_owed(void) { return engine_pending_urls()[0] != 0 || engine_h
 
 static int fixture_provide(JSContext *ctx) {
     const char *urls = engine_pending_urls();
-    JSValue body = JS_NewString(ctx, "{\"region\":\"us-west-2\"}");
     int filled = 0;
+    UrlRecord base;
+
+    /* THE HOST RESOLVES THE REQUEST'S ADDRESS, which is what makes the reply's URL list a list of URLs. A page
+       fetches `/api/admin`; §4.1 gives the response a clone of the REQUEST's URL list, and `response.url` is
+       the last item of that list SERIALIZED — so a relative reference in it is not a URL and there is nothing
+       to serialize. The extension's trusted zone does exactly this (`new URL(u, sourceUrl)`); this fixture
+       stands in for it and resolves against the same address it installed the Document at. */
+    url_record_init(&base);
+    CHECK(url_parse(&base, "https://x.test/p", strlen("https://x.test/p"), NULL),
+          "the fixture could not parse its own document address");
     while (*urls) {
         const char *nl = strchr(urls, '\n');
         size_t len = nl ? (size_t)(nl - urls) : strlen(urls);
         char *one = malloc(len + 1);
+        UrlRecord rec;
+        char *abs;
+        JSValue reply;
+        bool ok;
+
         CHECK(one, "the fixture could not name the URL it is answering");
         memcpy(one, urls, len); one[len] = 0;
-        filled += engine_provide(ctx, one, body);
+        url_record_init(&rec);
+        ok = url_parse(&rec, one, len, &base);
+        DCHECK(ok, "the fixture was asked for a URL that will not parse even against its document's address");
+        abs = ok ? url_serialize(&rec, /*exclude_fragment*/ false) : NULL;
+        url_record_free(&rec);
+        CHECK(abs, "the fixture could not serialize the URL it is answering");
+        /* THE ONE REPLY RECORD every host delivers — the same shape the trusted zone stringifies as JSON. */
+        reply = fetch_reply_new(ctx, 200, "OK", NULL, "{\"region\":\"us-west-2\"}",
+                                strlen("{\"region\":\"us-west-2\"}"), (const char *const *)&abs, 1);
+        filled += engine_provide(ctx, one, reply);
+        JS_FreeValue(ctx, reply);
+        free(abs);
         free(one);
         if (!nl) break;
         urls = nl + 1;
     }
-    JS_FreeValue(ctx, body);
+    url_record_free(&base);
     return filled + hostreq_answer_all(ctx);
 }
 

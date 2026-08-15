@@ -227,8 +227,15 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
     _forceparkSteps = 2;   // park after boot + the first flow burst: flows have RUN + SUSPENDED (real decvecs) but not yet drained
   }
   const canFetch = typeof self.safeFetch === "function" && msg && msg.sourceUrl;
-  const fetched = async (u, asScript) => {   // safe-fetch a pending reply/chunk url -> body ("" if unavailable)
-    if (!canFetch || hasHole(u)) return "";
+  /* THE REPLY RECORD THE ENGINE PARSES, which is the ONE shape every host of this engine delivers —
+     `{status, statusText, headers: [[name, value], …], body, urlList}`, the same record the C hosts build with
+     fetch_reply_new. It used to hand back the BODY'S BYTES alone, so everything this zone had actually seen was
+     dropped at this line and re-invented on the other side: the engine reported status 200, status message
+     "OK", no headers, and — because Fetch §2.2.6's URL LIST is what `response.url` and `response.redirected`
+     are — no redirect, ever, for any reply. `null` is a NETWORK ERROR (the engine rejects with §5.6's
+     TypeError), which is what a URL this zone must not or cannot fetch honestly is; it is NOT an empty 200. */
+  const fetched = async (u, asScript) => {
+    if (!canFetch || hasHole(u)) return null;
     try {
       const abs = new URL(u, msg.sourceUrl).href;
       // chunks: as-script (CORB), never credentialed. replies: opt-in credentialed -> the AUTHENTICATED
@@ -236,8 +243,17 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
       const opts = asScript ? { pageUrl: msg.sourceUrl, as: "script" }
                             : { pageUrl: msg.sourceUrl, credentialed: !!(msg && msg.credentialed) };
       const r = await self.safeFetch(abs, opts);
-      return (r && r.ok && typeof r.body === "string") ? r.body : "";
-    } catch (_) { return ""; }
+      if (!r || typeof r.body !== "string") return null;
+      /* §2.2.6's URL list, straight from the chokepoint that performed the fetch. safeFetch always reports at
+         least the URL it requested — §4.1's "If internalResponse's URL list is empty, then set it to a clone of
+         request's URL list" — and the engine DCHECKs that at both ends, so an empty one is a bug here rather
+         than a response that silently claims never to have redirected. */
+      DCHECK(Array.isArray(r.urlList) && r.urlList.length >= 1,
+             "safeFetch answered a reply with no URL list — response.url and response.redirected are read off " +
+             "nothing else, and the engine would report every redirect as none");
+      return { status: r.status, statusText: r.statusText || "", headers: Object.entries(r.headers || {}),
+               body: r.body, urlList: r.urlList };
+    } catch (_) { return null; }
   };
   // §7.4 STEP 14's RESPONSE, which is the SAME safeFetch and a DIFFERENT answer: a Document is judged against
   // the policy its response carried, so the header travels with the bytes. `fetched` above cannot serve this —
@@ -281,10 +297,15 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
 function engineWeight(eng) { return eng.state === "hot" ? +eng.M.ccall("qjs_top_weight", "number", [], []) : -Infinity; }
 async function engineServiceFetch(eng) {   // one round: resolve every pending reply/chunk, then the engine is hot again
   const M = eng.M;
+  /* THE REPLY CROSSES AS TEXT AND CARRYING ITS TYPE — JSON, exactly as qjs_host_answer's answer does. A bare
+     string could not say `null` for a network error without it being the four characters "null", and could not
+     carry the URL list, the status or the headers at all. */
   const replies = String(M.ccall("qjs_pending", "string", [], [])).split("\n").filter(Boolean);
-  for (const u of replies) M.ccall("qjs_provide", "void", ["string", "string"], [u, await eng.fetched(u, false)]);
+  for (const u of replies)
+    M.ccall("qjs_provide", "void", ["string", "string"], [u, JSON.stringify(await eng.fetched(u, false))]);
   const chunks = String(M.ccall("qjs_chunks", "string", [], [])).split("\n").filter(Boolean);
-  for (const u of chunks) M.ccall("qjs_provide", "void", ["string", "string"], [u, await eng.fetched(u, true)]);
+  for (const u of chunks)
+    M.ccall("qjs_provide", "void", ["string", "string"], [u, JSON.stringify(await eng.fetched(u, true))]);
   await engineServiceHostRequests(eng);
 }
 

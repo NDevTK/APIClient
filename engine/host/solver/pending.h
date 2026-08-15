@@ -41,7 +41,7 @@
    injected <script src> has no promise at all — its reply is more of this flow's PROGRAM, queued as another
    script the one BFS runs. The kind is on the entry because it is the entry's business: the register, the
    dedup and the stall accounting are identical either way, and only the delivery differs. */
-#define FLOW_PENDING_RESOLVE   0   /* fetch(): call `resolve` with the reply */
+#define FLOW_PENDING_RESOLVE   0   /* fetch(): call `resolve` with the reply RECORD, which becomes a Response */
 #define FLOW_PENDING_SCRIPT    1   /* injected <script src>: queue the reply as this flow's next program */
 #define FLOW_PENDING_DOCSCRIPT 2   /* the document's OWN <script src>: the reply fills script slot `scriptI` */
 /* A SYNCHRONOUS REQUEST ONLY THE HOST CAN ANSWER, and the one kind the flow cannot proceed past. A
@@ -52,6 +52,13 @@
    why the rendezvous is a REQUEST ID rather than a URL — two flows asking the same question in different
    worlds must get different answers, so answers are never shared the way a fetched body is. */
 #define FLOW_PENDING_HOSTREQ   3
+/* A DYNAMIC `import()`: call `resolve` with the reply's BODY, because what a module load is owed is SOURCE
+   TEXT and not a Response — JS_ModuleLoadPending compiles whatever the promise settles with. It shared
+   FLOW_PENDING_RESOLVE with fetch() while both were owed a bare body string; the moment a reply became a
+   RECORD the two stopped wanting the same value, and one kind answering two questions would have handed the
+   compiler `{status: 200, …}` to parse. Same register, same dedup, same stall accounting; only the delivery
+   differs, which is what the kind is for. */
+#define FLOW_PENDING_MODULE    4
 
 /* THE RECORD'S FIELDS, IN ONE PLACE, WITH WHAT THE FORK DOES WITH EACH.
  *   SHARE  — the sibling takes a REFERENCE. Right for an immutable value (a JS string, the request body's

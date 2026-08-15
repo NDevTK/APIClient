@@ -73,6 +73,21 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
     JS_FreeValue(ctx, e);
 }
 
+/* PARK ON A DYNAMIC `import()`. The same register and the same URL, and a DIFFERENT delivery: a module load is
+   owed SOURCE TEXT, so the drain settles `resolve` with the reply's body rather than with the reply record a
+   `fetch()` becomes a Response from. */
+void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, const char *url) {
+    Flow *f = flow_running();
+    JSValue e;
+    DCHECK(f != NULL, "a dynamic import was issued outside a running flow");
+    DCHECK(url != NULL && *url, "a dynamic import parked with no module URL for the host to fetch");
+    e = pending_push(&f->pending, FLOW_PENDING_MODULE);
+    pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
+    pending_set(e, PEND_URL, JS_NewString(ctx, url));
+    pending_set(e, PEND_METHOD, JS_NewString(ctx, "GET"));   /* a chunk load states its own method */
+    JS_FreeValue(ctx, e);
+}
+
 /* PARK ON AN EXTERNAL DOCUMENT SCRIPT. Registered at most once per flow per slot — the flow is asked again on
    every scheduler pass while it waits, and a second registration would make the host owe the same URL twice. */
 void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
@@ -646,6 +661,19 @@ int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
    rather than spinning on a drain that would resolve nothing. */
 static int flow_pending_ready(const Flow *f) { return pending_ready(f->pending); }
 
+/* THE BODY OUT OF THE HOST'S REPLY RECORD. Every kind on the register is filled by ONE engine_provide call —
+   a URL two flows parked on for two different reasons gets one value — so the record is the same shape for all
+   three, and the two PROGRAM kinds read the field they need out of it. A network error (JS_NULL) is a script
+   that did not load, which runs nothing; the fetch kind rejects on the same value, in the delivery machine. */
+static JSValue reply_body_of(JSContext *ctx, JSValueConst reply) {
+    DCHECK(JS_IsObject(reply) || JS_IsNull(reply),
+           "a provided reply is neither the host's reply record nor a network error — qjs_provide parses the "
+           "trusted zone's JSON and every host builds the same record");
+    if (JS_IsNull(reply))
+        return JS_NewString(ctx, "");
+    return JS_GetPropertyStr(ctx, reply, "body");
+}
+
 static int flow_drain_pending(JSContext *ctx, Flow *f) {
     int n = 0, i = 0;
     while (i < pending_count(f->pending)) {
@@ -671,17 +699,32 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
             /* the DOCUMENT's text, shared by every flow: fill the slot once and all waiters proceed in order */
             int si = (int)pending_get_int(p, PEND_SCRIPT_I);
             if (!g_sess_bodies[si]) {
-                const char *body = JS_ToCString(ctx, pv);
+                JSValue bv = reply_body_of(ctx, pv);
+                const char *body = JS_ToCString(ctx, bv);
                 DCHECK(body != NULL, "an external document script's body did not arrive as text");
                 g_sess_bodies[si] = body ? strdup(body) : strdup("");
                 CHECK(g_sess_bodies[si], "engine: OOM storing an external document script");
                 if (body) JS_FreeCString(ctx, body);
+                JS_FreeValue(ctx, bv);
             }
         } else if (kind == FLOW_PENDING_SCRIPT) {
             /* the reply is PROGRAM: it joins this flow's script sequence, and the one BFS runs it */
-            const char *body = JS_ToCString(ctx, pv);
+            JSValue bv = reply_body_of(ctx, pv);
+            const char *body = JS_ToCString(ctx, bv);
             DCHECK(body != NULL, "an injected script's body did not arrive as text");
             if (body) { engine_queue_script(body); JS_FreeCString(ctx, body); }
+            JS_FreeValue(ctx, bv);
+        } else if (kind == FLOW_PENDING_MODULE) {
+            /* the reply is a MODULE's SOURCE: settle the load's promise with the text, and the import's own
+               reaction compiles, links and continues the flow that wrote `await import(...)`. */
+            JSValue bv = reply_body_of(ctx, pv);
+            JSValue resolve = pending_get(p, PEND_RESOLVE);
+            if (JS_CallAsFlow(ctx, resolve, bv) < 0) {
+                JSValue exc = JS_GetException(ctx);
+                JS_FreeValue(ctx, exc);   /* a rejected load is the page's to observe, not this drain's */
+            }
+            JS_FreeValue(ctx, resolve);
+            JS_FreeValue(ctx, bv);
         } else {
             /* A SYNCHRONOUS ANSWER IS TAKEN, NEVER DRAINED, and that is asserted here because this branch is
                where it would land if it were not. The machine that asked resumes through its park and consumes
@@ -696,20 +739,21 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
                `Object.prototype.then = { get(){…} }` makes that read the page's code. Out of this drain it ran
                in a C activation with no flow base, which is the drive-to-completion this engine aborts on;
                prototype pollution is a gadget class the solver exists to RUN rather than assume away. */
-            /* THE REPLY, in the one shape every host delivers. This host is handed the body by the trusted
-               zone; the status and headers safeFetch saw are what it owes next, and building the reply here is
-               what makes that a change in one place rather than a second delivery shape. */
-            size_t rlen = 0;
-            const char *rbody = JS_ToCStringLen(ctx, &rlen, pv);
-            JSValue reply = fetch_reply_new(ctx, 200, "OK", NULL, rbody ? rbody : "", rbody ? rlen : 0);
+            /* THE REPLY THE TRUSTED ZONE ANSWERED, DELIVERED AS IT ARRIVED. It used to be re-wrapped here —
+               `fetch_reply_new(ctx, 200, "OK", NULL, body, len)` — which threw away everything safeFetch had
+               seen and invented the rest: every reply this host delivered reported status 200, status message
+               "OK", NO headers at all, and a URL list this zone could not have known. The record now crosses
+               whole (qjs_provide parses it), so the reply the page reads is the reply the trusted zone made,
+               and JS_NULL is the network error the delivery machine already knows how to reject with. */
             JSValue resolve = pending_get(p, PEND_RESOLVE);
-            if (rbody) JS_FreeCString(ctx, rbody);
-            if (JS_CallAsFlow(ctx, resolve, reply) < 0) {
+            DCHECK(JS_IsObject(pv) || JS_IsNull(pv),
+                   "a fetch reply arrived as something other than the host's reply record — qjs_provide parses "
+                   "the trusted zone's JSON, and a bare string here is a host still delivering only bytes");
+            if (JS_CallAsFlow(ctx, resolve, pv) < 0) {
                 JSValue exc = JS_GetException(ctx);
                 JS_FreeValue(ctx, exc);   /* a rejected delivery is the page's to observe, not this drain's */
             }
             JS_FreeValue(ctx, resolve);
-            JS_FreeValue(ctx, reply);
         }
         JS_FreeValue(ctx, pv);
         JS_FreeValue(ctx, p);

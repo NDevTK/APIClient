@@ -17,7 +17,6 @@
 
 #include "check.h"
 #include "quickjs.h"
-#include "core/fetch/fetch.h"
 #include "solver/engine.h"
 #include "core/loader/module_loader.h"
 
@@ -70,13 +69,12 @@ static JSModuleDef *module_load(JSContext *ctx, const char *module_name, void *o
     /* The URL goes on the FLOW's pending register, so the reaction that finishes the load belongs to the flow
        that imported — and to its COW delta. The flow cannot finish while the chunk is owed, which is what keeps
        a lazily-imported endpoint reachable. */
-    {
-        /* A dynamic import is a GET of the module's URL with no body — the seam carries the whole request now,
-           because the trusted zone's safeFetch is what decides SOP, CORS, method and credentials, and it
-           cannot decide about a method it was never told. A chunk load states its own. */
-        FetchRequest req = { "GET", module_name, NULL, NULL, 0 };
-        engine_pending_fetch_url(ctx, resolving[0], JS_UNDEFINED, &req);
-    }
+    /* A dynamic import is a GET of the module's URL with no body, and what it is owed is SOURCE TEXT. It used
+       to park through engine_pending_fetch_url, which is the FETCH park: the two were indistinguishable while
+       a host delivered a bare body string, and stopped being so the moment a reply became the record
+       `fetch()` builds a Response out of — JS_ModuleLoadPending would have been handed that record to compile.
+       Its own kind settles this promise with the reply's body. */
+    engine_pending_module_url(ctx, resolving[0], module_name);
     JS_FreeValue(ctx, resolving[0]);
     JS_FreeValue(ctx, resolving[1]);
     JS_ModuleLoadPending(ctx, promise);   /* ownership transfers */

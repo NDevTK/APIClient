@@ -53,8 +53,14 @@ bool fetch_parse_url(JSContext *ctx, UrlRecord *rec, const char *url, size_t len
    it had no status but 200 and NO HEADERS AT ALL — `response.headers.get(...)` was null for everything a page
    fetched, and with it went the Content-Type that decides whether `.formData()` parses a body and the
    `Location` an endpoint's redirect is made of. A host builds one of these with whatever it knows; `headers`
-   may be NULL for a host that knows none, which is a different statement from a reply that HAD none. */
+   may be NULL for a host that knows none, which is a different statement from a reply that HAD none.
+   `url_list`/`url_list_n` are §2.2.6's URL LIST, and they are the host's to report because the host is what
+   FETCHED: only it saw the redirect chain, and `response.url` (the list's last item) and `response.redirected`
+   (its size > 1) are read off nothing else. A host that followed no redirect reports the one URL it requested
+   — §4.1's "If internalResponse's URL list is empty, then set it to a clone of request's URL list" — so the
+   list is never empty and the DCHECKs at both ends say so. Only the FIRST and LAST items are ever exposed to
+   script, which is why a host that cannot enumerate the middle of a chain still reports a faithful list. */
 JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, const HeaderList *headers,
-                        const char *body, size_t body_len);
+                        const char *body, size_t body_len, const char *const *url_list, int url_list_n);
 
 #endif
