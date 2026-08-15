@@ -46,13 +46,14 @@ static int    g_ready;
  * somebody lands ResizeObserver, or a viewport, or Web Animations, THIS DCHECK fires — at the step of
  * update-the-rendering that must then be written, with the standard and the step number in the message. A
  * comment there would say the same thing and never fire. */
-/* `path` is read from the doc's GLOBAL, dot by dot — `matchMedia`, `document.exitFullscreen`,
+/* `path` is resolved from the doc's GLOBAL, dot by dot — `ResizeObserver`, `Document.prototype.activeElement`,
    `HTMLDialogElement.prototype.showModal`. A dotted path rather than a bare name because the INTERFACE OBJECT
    is not the producer: `HTMLDialogElement` exists in this build (html_element.c installs one per tag) while
    `showModal`, the member that puts an element in the TOP LAYER, does not — so naming the interface asserted
    something that was already true and fired on the first page. The producer is a MEMBER, and the path is how
-   this says which one. UNDEFINED anywhere along it means the producer is absent; a member that EXISTS and
-   answers null (`document.activeElement`) is present, so only undefined counts. */
+   this says which one. A path names the INTERFACE OBJECT rather than an instance (`Document.prototype.
+   activeElement`, not `document.activeElement`) because that is where the member is declared, and because
+   resolving through an instance means traversing whatever accessors the instance carries. */
 /* THE LAST SEGMENT IS ASKED WITH [[HasProperty]], NOT [[Get]], and that is the whole of the difference between
    a probe and a call. This walked the path with JS_GetPropertyStr to its end and tested the VALUE, which is
    wrong twice over. It RUNS AN ACCESSOR — the page's code in a C activation with no flow base, which the engine
