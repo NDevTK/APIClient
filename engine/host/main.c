@@ -89,6 +89,7 @@
 #include "solver/engine.h"
 #include "solver/req2proto.h"
 #include "solver/flow.h"
+#include "solver/quantum.h"
 #include "solver/world.h"
 #include "solver/result.h"
 #include "solver/solve.h"
@@ -353,6 +354,19 @@ QJS_EXPORT int qjs_step(void)
     if (g_done)
         return ENGINE_STEP_DONE;   /* the session is over; stepping it again is not a question to ask twice */
     r = engine_sched_step();
+    /* THE OTHER HALF OF THE SLICE INVARIANT, and it belongs HERE because this is the only entry in this ABI
+       that opens one. preempt_hook asserts that the engine may only EXECUTE inside a slice; this asserts that
+       the slice is CLOSED before the thread goes back to the host — and together they are what makes every
+       other entry below (provide, route, perform, answer, result, teardown) host-time BY CONSTRUCTION rather
+       than by inspection: a slice cannot survive this line, so anything one of them reaches that consults the
+       scheduler's policy crashes at the consultation instead of being answered against a slice belonging to
+       nothing. Asserted before the STALLED fold, so the stall path is covered too — it is the exit the reply
+       entries are called on. engine_sched_step brackets exactly one slice around exactly one call, so a hit
+       here means something opened a slice OUTSIDE that bracket. */
+    DCHECK(!quantum_slice_open(),
+           "qjs_step is returning to the host with the cooperative quantum's slice still OPEN — the host now "
+           "pumps its port, streams findings and delivers replies on time the scheduler believes a flow is "
+           "holding, and the CPU edge is still armed over it");
     if (r == ENGINE_STEP_STALLED)
         return ENGINE_STEP_YIELD;   /* the bridge speaks two values; a stall is "call me again", same as a slice */
     /* TWO VALUES, AND THIS ENTRY IS WHERE THAT IS TRUE. The scheduler has three codes and the fold above is

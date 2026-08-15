@@ -1259,6 +1259,26 @@ static int64_t g_last_ask = 0, g_max_gap = 0;
 static int preempt_hook(int kind) {
     (void)kind;
     Flow *cur = flow_running();
+    /* THE POLICY IS ONLY EVER ASKED BY THE SCHEDULER, and this is the ONE point it is asked from, so this is
+       where that is stated. Both of this hook's decisions are about the flow the scheduler is CURRENTLY
+       RUNNING — its rank against the frontier, and the slice it is holding the thread on — and between two
+       engine_sched_step calls there is no such flow: the thread belongs to the host, which is precisely why
+       quantum_end disarms the edge over it. Something entering the interpreter on the host's own time and
+       reaching this hook is therefore asking whether to park a flow nobody is driving, and the answer it gets
+       is measured against a slice that belongs to nothing.
+       IT WAS ONLY EVER CAUGHT FROM ONE SIDE, which is why it is asserted here rather than left to
+       quantum_expired's own precondition: clause (0) and clause (1) below can both answer 1 and RETURN before
+       the budget is ever consulted, so a host-time consultation that happened to be outranked or blocked was
+       answered — with a real-looking verdict — and said nothing. The measured instance was the shipped ABI's
+       reply record: qjs_provide ran the JSON parser between two steps, the parser consulted this hook at every
+       completed value, and every reply the extension delivered aborted here. The parser offers to its DRIVER
+       now (quickjs.c's json_parse_step) and asks no policy, so a hit on this line is a NEW host-time entry
+       into the interpreter — give it a driver that can act on the answer, or stop consulting the policy from
+       it; never widen the slice to cover it. */
+    DCHECK(quantum_slice_open(),
+           "the scheduler's preempt policy was consulted with NO SLICE OPEN — whoever is running this code is "
+           "not the scheduler, so there is no flow whose rank or budget this answer could be about; some entry "
+           "reached the interpreter on the HOST's own time between two steps");
     /* THE GAP CENSUS IS THE SEAM MESSAGE'S, SO IT IS COMPILED OUT WITH IT. Every one of these three statics is
        read only inside this file's `#if APICLIENT_DEV` seam assertion, and the clock they are built from is the
        WALL clock — which is neither the slice's measure nor a verdict, by design. A release build was therefore

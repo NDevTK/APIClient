@@ -98,14 +98,23 @@ void quantum_end(void)
     g_slice_open = 0;
 }
 
-/* ASKED ONLY INSIDE A SLICE, and that is what catches a HOST DRIVING FLOWS WITHOUT THE SCHEDULER'S BRACKET.
-   Three hosts run this engine's flows: main.c and test_forced.c reach the interpreter through
-   engine_sched_step, which opens and closes the slice around it, and wpt_runner.c drives JS_FlowNew/
-   JS_FlowResume with its own preempt policy and no frontier to be fair between — it declines the edge, and
-   nothing said so. Left unasserted the decline is indistinguishable from a fourth host that forgot: on THIS
-   branch the answer would be measured against a start time of zero, which reads as EXPIRED and would park
-   every flow at its first opcode forever. So the day a host reaches the quantum from outside the bracket it
-   says which host, at the read, instead of behaving strangely somewhere else. */
+int quantum_slice_open(void) { return g_slice_open; }
+
+/* ASKED ONLY INSIDE A SLICE, and that is what catches CODE REACHING THE INTERPRETER WITHOUT THE SCHEDULER'S
+   BRACKET. Left unasserted, the two hosts answer OPPOSITE lies and neither says why: on THIS branch the budget
+   is measured against a start time of zero, which reads as EXPIRED and would park every flow at its first
+   opcode forever; on the native branch nothing is armed, which reads as NEVER expired and lets a flow keep the
+   thread with nobody able to ask for it back.
+   IT FIRED, AND WHAT IT CAUGHT WAS NOT A FOURTH HOST — it was the two hosts this comment used to certify. It
+   said main.c and test_forced.c "reach the interpreter through engine_sched_step", which is true of how they
+   run FLOWS and false of how they run BUILTINS: both parse a fetch reply with JS_ParseJSON between two steps
+   (main.c's qjs_provide on the trusted zone's reply record, and engine_provide's req2proto learning under
+   every host), the JSON step machine consulted the flow-control preempt policy at each completed value, and
+   every reply either host has ever delivered aborted here. The parse now OFFERS the thread to whichever driver
+   drove it and consults no policy (quickjs.c's json_parse_step), so this assertion is back to naming the case
+   it was written for. wpt_runner.c is the one host that genuinely declines the edge — it drives JS_FlowNew/
+   JS_FlowResume under its own preempt policy with no frontier to be fair between — and that decline is
+   deliberate rather than a silence, which is the other thing this line exists to keep true. */
 int quantum_expired(void)
 {
     DCHECK(g_slice_open,
@@ -257,11 +266,14 @@ void quantum_end(void)
     g_slice_open = 0;
 }
 
-/* ASKED ONLY INSIDE A SLICE — see the same assertion on the other branch for the host it catches. Here the
-   silent answer would be the opposite one and no less wrong: no timer is armed outside a slice, so the budget
-   reads NEVER expired and a flow driven outside the bracket would hold the thread with nothing able to ask for
-   it back. Two hosts bracket their steps (main.c, test_forced.c, both through engine_sched_step); wpt_runner.c
-   declines the edge deliberately, and this is where that stops being a silence. */
+int quantum_slice_open(void) { return g_slice_open; }
+
+/* ASKED ONLY INSIDE A SLICE — see the same assertion on the other branch for what it caught and why the claim
+   "both hosts reach the interpreter through engine_sched_step" was true of their FLOWS and false of their
+   BUILTINS. Here the silent answer is the opposite one and no less wrong: no timer is armed outside a slice,
+   so the budget reads NEVER expired and code driven outside the bracket holds the thread with nothing able to
+   ask for it back. test_forced.c's fixture_provide is the native shape of the same defect — it answers a park
+   from run_scheduler's stall seam, between two slices, and engine_provide learns from the reply's body there. */
 int quantum_expired(void)
 {
     DCHECK(g_slice_open,

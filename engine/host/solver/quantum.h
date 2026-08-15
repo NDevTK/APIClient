@@ -68,6 +68,18 @@ void quantum_end(void);
    flow parks at its first opcode) and the timer host has nothing armed (never expired, so the flow keeps the
    thread) — and neither would say why. */
 int quantum_expired(void);
+/* IS A SLICE OPEN RIGHT NOW — the scheduler's bracket as a FACT this component owns, asked rather than each
+   host keeping its own copy of it. It exists for exactly two ASSERTIONS, and they are the two halves of one
+   invariant that had only ever been checked from one side:
+     - the engine may only be EXECUTING inside a slice. solver/engine.c's preempt_hook asserts it at the ONE
+       point the scheduling policy is consulted, which is where a flow is by definition running.
+     - the shipped ABI may never RETURN to the host holding one. main.c's qjs_step asserts it, and that is what
+       makes every OTHER entry in that ABI (provide, route, perform, answer, result) host-time by construction
+       rather than by inspection.
+   NEVER CONTROL FLOW. A caller that BRANCHES on this is choosing between a scheduled path and an unscheduled
+   one, which is the fallback §C-stack bans — the whole point of the pair above is that there is one path and
+   the other case crashes. */
+int quantum_slice_open(void);
 /* This thread's consumed CPU in microseconds — the currency the WFQ's aging term is denominated in, and the
    same one the slice is. Where the host has no CPU clock this is its wall clock and quantum_measure() says so. */
 int64_t quantum_thread_us(void);
