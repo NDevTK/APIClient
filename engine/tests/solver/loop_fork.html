@@ -1,0 +1,22 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>loop fork</title>
+<script>
+/* ONE PROBLEM: a loop's back-edges, which is where the forced preempt fires. Under the `preempt` schedule the
+ * flow is outranked after every step, so this loop is suspended and rebuilt many times over — thousands of
+ * heap-frame suspend/resume cycles, each one swapping the COW delta, the decision state and the pins out and
+ * back in. `acc` is a per-iteration accumulation the flow OWNS, so if a swap ever restores another flow's
+ * slot, the value that reaches the endpoint below is wrong and this document says so by name.
+ *
+ * The fork is AFTER the loop so both arms carry the same computed value: the two endpoints must differ in
+ * their path and in nothing else. */
+var acc = 0;
+for (var i = 0; i < 32; i++) {
+  acc = acc + i;
+}
+if (__CFG.beta) {
+  fetch("/api/beta?acc=" + acc);
+} else {
+  fetch("/api/stable?acc=" + acc);
+}
+</script>
