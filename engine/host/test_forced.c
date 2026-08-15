@@ -30,6 +30,8 @@
 #include "core/html/trusted_types.h"
 #include "core/dom/node.h"
 #include "core/dom/element.h"
+#include "core/frame/history.h"
+#include "core/frame/session_history.h"
 #include "core/frame/location.h"
 #include "core/idl_args.h"
 #include "core/dom/document.h"
@@ -1762,6 +1764,14 @@ static void tf_agent_init(JSContext *ctx, const char *top_level_url)
        rather than a stand-in for it. */
     navigator_init(ctx);
     location_init(ctx);
+    /* HTML §7.4.1's SESSION HISTORY and §7.2.5's History, DECLARED here and built per realm by the intrinsics
+       they register. The state machine goes FIRST: realm.h runs the intrinsics in declaration order, and every
+       member of History reads the record session_history's install builds. This is what a client-side router
+       navigates with — `history.pushState()` is how React Router, Vue Router, Angular and every hand-rolled
+       router change route — so without it a routing bundle threw on its first navigation and every route, lazy
+       chunk and endpoint behind one went unexplored. */
+    session_history_init(ctx);
+    history_init(ctx);
     /* CSSOM VIEW §4.3's Screen, DECLARED here and built per realm by the intrinsic it registers — the mobile
        gate a responsive bundle routes on, so this fixture exercises the interface the ABI build installs
        rather than a stand-in for it. */
@@ -2484,6 +2494,8 @@ int main(int argc, char **argv) {
     navigable_free(ctx);
     navigator_free();   /* the two per-realm slot ids; each realm's Navigator went with its context */
     location_free();
+    session_history_free();
+    history_free();
     screen_free();
     window_free(ctx);
     remote_object_free(ctx);

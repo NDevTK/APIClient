@@ -226,4 +226,18 @@ const char *window_proxy_origin(JSValueConst proxy);
 void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm, uint32_t doc,
                            const char *url, const char *top_level_url, const char *origin);
 
+/* HAS THIS NAVIGABLE'S ACTIVE DOCUMENT BEEN REPLACED BY A NAVIGATION — HTML §7.4.4 step 4's "document's IS
+   INITIAL about:blank", asked of the navigable because that is what can answer it. §7.4 creates every navigable
+   with the initial about:blank Document and window_proxy_navigate above is the ONE site that replaces it, so
+   `false` here plus an `about:blank` address IS the standard's fact. Testing the address alone is wrong in this
+   tree: §7.4 step 14's load navigates to `about:blank` for real, and that document is not the initial one.
+   PER FLOW, through the same capture every other read of this record goes through. */
+bool window_proxy_ever_navigated(JSValueConst proxy);
+
+/* HTML §7.3's "IS CREATED BY WEB CONTENT" for a top-level traversable — one of the two disjuncts of §7.2.5.2's
+   SCRIPT-CLOSABLE, and the one that decides whether `w = open(...); w.close()` closes a window whose session
+   history has grown past a single entry. True for every navigable §7.4 created (window_proxy_new), false for
+   the one the instance started in (window_proxy_new_self), which the host loaded. */
+bool window_proxy_created_by_web_content(JSValueConst proxy);
+
 #endif

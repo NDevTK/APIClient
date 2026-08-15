@@ -71,6 +71,11 @@ JSValueConst document_object(JSContext *ctx);
 /* §4.4 baseURI's answer: the document's address. ONE component owns what this document's URL is — two answers
    to that question is how they drift apart. */
 const char *document_base_url(JSContext *ctx);
+/* HTML's SET THE URL — what HTML §7.4.4's URL and history update steps step 8 performs, and the only way a
+   Document's address changes without a new Document being installed. PER FLOW: the address rides the running
+   flow's COW delta, so the arm that called `history.pushState(s, "", "/b")` is the only one whose
+   `location.pathname` is `/b`. See the definition for why the capture is the POD one. */
+void document_set_url(JSContext *ctx, const char *url);
 
 /* §4.2.3's STEPS RUN IN THE NODE'S DOCUMENT'S REALM — see document.c. `document_realm_of` answers NULL for a
    document no record was ever built for (a solver scratch parse), which is a caller's business to assert. */

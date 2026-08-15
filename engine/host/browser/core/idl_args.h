@@ -374,6 +374,18 @@ void idl_iface_brand(JSClassID iface);
    idl_iface_brand and idl_optional_from do. */
 void idl_iface_narrow(bool (*is)(JSValueConst v));
 
+/* DECLARE THE VALUES AN IDL_ENUM POSITION ADMITS — §3.2.19's enumeration, whose value list IS the type. A
+   NULL-terminated array of the identifiers the IDL lists, which the conversion checks the string ToString
+   produced against and throws a TypeError for anything else.
+   IT WAS EXPRESSIBLE ONLY ON A DICTIONARY MEMBER, and the conversion stood at a DCHECK saying so: "an
+   ENUMERATION was declared as a positional argument — the value list lives on a dictionary member … give the
+   declaration somewhere to carry the list". HTML §7.2.5's `attribute ScrollRestoration scrollRestoration` is
+   that position — a setter, one value, no dictionary — and `history.scrollRestoration = "bogus"` is a
+   TypeError from the TYPE rather than from the algorithm, which is why the check belongs here and not in the
+   setter's body. Set after the declaration, naming the member the LAST one made, as idl_iface_brand and
+   idl_optional_from do; `values` must outlive the declaration, so every caller passes a static. */
+void idl_enum_values(const char *const *values);
+
 int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
                        const IdlDictMember *members, int nmembers,
                        const IdlStepDecl *decl, int magic);

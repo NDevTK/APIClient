@@ -113,6 +113,23 @@ typedef struct {
        Held as ONE byte those two times collapsed into the removal's, so a frame's WindowProxy reported a
        destruction that had not happened — while its Document, its queued tasks and its entangled ports were
        all still live, with nothing anywhere holding the fact that they had not been dealt with. */
+    /* HAS THIS NAVIGABLE EVER BEEN NAVIGATED — HTML §7.4.4 step 4's "document's IS INITIAL about:blank", read
+       from the navigable's side, which is the side that can answer it. §7.4 creates EVERY navigable with the
+       initial about:blank Document, and the only thing that ever replaces a navigable's active document is a
+       navigation — window_proxy_navigate below, the one site — so a navigable that has not been navigated is
+       still showing the Document §7.4 created it with. The alternative, testing the document's ADDRESS, is
+       WRONG in this tree and not merely imprecise: navigable.c's load job navigates to `about:blank` for real
+       ("the corpus does it while an initial load is still pending"), and that document is not the initial one.
+       PER-FLOW like everything else in this record: an arm that navigated the frame and a sibling that did not
+       must not share the answer, which is what the capture in proxy_of gives it for free. */
+    uint8_t ever_navigated;
+    /* HTML §7.3's "IS CREATED BY WEB CONTENT" — a top-level traversable's, and one of the two disjuncts of
+       §7.2.5.2's SCRIPT-CLOSABLE. §7.3's create-a-new-top-level-traversable is reached from `window.open()`,
+       which is this engine's navigable_open, so every navigable minted by window_proxy_new was created by web
+       content and the one minted by window_proxy_new_self — the navigable the instance STARTED in, which the
+       host loaded — was not. It is a CREATION fact, so like `is_popup` no flow can change it and the delta has
+       nothing to capture. */
+    uint8_t created_by_web_content;
     uint8_t closing;     /* §7.3's IS CLOSING — §7.2.5.2's close(), and only ever a top-level traversable */
     uint8_t destroyed;   /* §7.5.10 step 8 ran on this navigable's active document: its browsing context is null */
     /* THE SUBTREE WAIT, COUNTED DOWN AND PER OPERATION — how many of this navigable's child navigables have
@@ -313,6 +330,30 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
            "a navigable was navigated with no top-level creation URL for the new document's environment — the "
            "realm the caller just built has one, and these two must be the same string");
     p->top_level_url = proxy_strdup(top_level_url);
+    /* THE NAVIGABLE IS NO LONGER SHOWING WHAT §7.4 CREATED IT WITH — see `ever_navigated`. Written here
+       because this is the one site that replaces a navigable's active document, which is exactly what makes
+       the flag answerable at all. */
+    p->ever_navigated = 1;
+}
+
+/* HTML §7.4.4 step 4's "is initial about:blank", from the navigable's side — see `ever_navigated`. Read
+   THROUGH proxy_of like every other read of this record, so the answer is the running flow's. */
+bool window_proxy_ever_navigated(JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+
+    DCHECK(p != NULL, "something that is not a WindowProxy was asked whether its navigable has been navigated");
+    return p->ever_navigated != 0;
+}
+
+/* §7.3's IS CREATED BY WEB CONTENT — see the field. Read off the opaque directly rather than through proxy_of:
+   it is a creation fact no flow can change, so there is nothing here for a delta to isolate. */
+bool window_proxy_created_by_web_content(JSValueConst proxy)
+{
+    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+
+    DCHECK(p != NULL, "something that is not a WindowProxy was asked whether web content created it");
+    return p->created_by_web_content != 0;
 }
 
 /* THE SELF PROXY'S REALM IS THE ONE ASKING — already built, so there is nothing to materialize. Stated as its
@@ -350,6 +391,9 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const ch
     if (JS_IsException(obj)) return obj;
     p = calloc(1, sizeof *p);
     CHECK(p != NULL, "window proxy: OOM building a WindowProxy");
+    /* §7.3's IS CREATED BY WEB CONTENT — this mint IS §7.4's create a new navigable, whose top-level form is
+       `window.open()`. See the field. */
+    p->created_by_web_content = 1;
     p->window = JS_UNDEFINED;   /* materialized by proxy_realm — at creation, or on the first read */
     p->realm  = NULL;
     p->url    = url ? proxy_strdup(url) : NULL;   /* NULL only for the self proxy, whose realm is already built */

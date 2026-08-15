@@ -205,6 +205,12 @@ typedef struct {
     /* THE NARROWING half of that brand — see idl_iface_narrow. NULL for a member whose interface a class id
        already names exactly, which is most of them. */
     bool     (*iface_narrow)(JSValueConst v);
+    /* §3.2.19's VALUE LIST for this member's IDL_ENUM position — the list IS the type, so a declaration
+       carrying one is a declaration stating what it takes. It lived only on IdlDictMember, which is why a
+       positional enumeration stood at a DCHECK naming this field as the thing to build; the enumeration
+       attribute that needed it is HTML §7.2.5's `scrollRestoration`, whose setter a router calls. NULL for
+       every member with no such position, which is nearly all of them. */
+    const char *const *enum_values;
     const char *name;       /* what to call this member in a diagnostic; set when it is installed */
 } IdlMember;
 
@@ -1650,17 +1656,23 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             *slot = JS_DupValue(ctx, a);
             goto placed;
         }
-        DCHECK(t != IDL_ENUM,
-               "an ENUMERATION was declared as a positional argument — the value list lives on a dictionary "
-               "member, so a positional one has nothing to check against; give the declaration somewhere to "
-               "carry the list");
-        DCHECK(t == IDL_DOMSTRING || t == IDL_BYTESTRING || t == IDL_USVSTRING,
+        DCHECK(t != IDL_ENUM || m->enum_values != NULL,
+               "an ENUMERATION was declared at a positional argument with no value list — the list IS the "
+               "type (§3.2.19), so idl_enum_values must name it beside the declaration");
+        DCHECK(t == IDL_DOMSTRING || t == IDL_BYTESTRING || t == IDL_USVSTRING || t == IDL_ENUM,
                "an IDL argument was declared with a type this machine does not convert");
         r = step_tostring_run(ctx, &s->hdr, a, cb_result, slot, out_cb, out_argc);
         cb_result = JS_UNDEFINED;
         if (r > 0) return r;          /* parked ON THIS ARGUMENT; the resume comes back to it */
         if (r < 0) return JS_STEP_ABRUPT;
         if (t == IDL_BYTESTRING && idl_bytestring_check(ctx, *slot) < 0) return JS_STEP_ABRUPT;
+        /* §3.2.19's ENUMERATION, AT A POSITIONAL ARGUMENT — the same check the dictionary path makes, over the
+           string ToString produced, against the list the declaration named. It is here rather than in a body
+           because it is part of the TYPE: `history.scrollRestoration = "bogus"` is a TypeError from the
+           conversion, before the setter's algorithm runs at all, and a body performing it would be one body's
+           private copy of a rule every enumeration member has. */
+        if (t == IDL_ENUM && idl_enum_check(ctx, *slot, m->enum_values, "argument") < 0)
+            return JS_STEP_ABRUPT;
         if (t == IDL_USVSTRING) {
             *slot = JS_ToScalarValueString(ctx, *slot);
             if (JS_IsException(*slot)) return JS_STEP_ABRUPT;
@@ -1911,6 +1923,7 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
     idl_member(idx)->steps = NULL;
     idl_member(idx)->variadic = false;
     idl_member(idx)->iface = 0;
+    idl_member(idx)->enum_values = NULL;
     /* THE STATE CARRIES THE MEMBER'S OWN ARGUMENT VECTOR AND NESTED-CONVERSION FRAMES, which is why its size is
        per-member and not a constant: a getter pays for neither, a fifteen-argument legacy initializer gets
        fifteen slots, and a member declaring a sequence-of-union type gets exactly the depth its declared type
@@ -2010,6 +2023,19 @@ void idl_iface_brand(JSClassID iface)
     DCHECK(iface != 0, "an interface brand named no class — the class is half of what the type states");
     idl_member(g_n - 1)->iface = iface;
     idl_member(g_n - 1)->iface_narrow = NULL;   /* a fresh brand narrows to nothing until the member says so */
+}
+
+/* §3.2.19's ENUMERATION VALUES for the member's IDL_ENUM position — see idl_args.h. Named after the
+   declaration, on the member the LAST one made, exactly as idl_iface_brand and idl_optional_from are and for
+   the same reason: the id a declaration returns is the RUNTIME's step id, not this pool's index. */
+void idl_enum_values(const char *const *values)
+{
+    DCHECK(g_n > 0, "an enumeration's value list was declared before any member was");
+    DCHECK(!g_sealed, IDL_LAST_DECL_ONLY);
+    DCHECK(values != NULL && values[0] != NULL,
+           "an enumeration declared an empty value list — every §3.2.19 enumeration has at least one value, and "
+           "a member whose type admits nothing is a member no assignment can satisfy");
+    idl_member(g_n - 1)->enum_values = values;
 }
 
 void idl_iface_narrow(bool (*is)(JSValueConst v))

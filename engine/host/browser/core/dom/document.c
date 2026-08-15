@@ -16,6 +16,7 @@
 
 #include "check.h"
 #include "solver/dom_cow.h"   /* dom_cow_note_created — a created node belongs to the flow's delta */
+#include "solver/cow.h"       /* cow_capture_host_state — the document's ADDRESS is per-flow state */
 #include "quickjs.h"
 #include "solver/concolic.h"
 #include "solver/engine.h"
@@ -41,6 +42,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/frame/navigable.h"
 #include "core/frame/location.h"
+#include "core/frame/session_history.h"
 #include "core/dom/page_visibility.h"
 #include "core/html/autofocus.h"
 #include "core/html/focus.h"
@@ -1047,6 +1049,40 @@ const char *document_base_url(JSContext *ctx)
     Document *d = doc_here(ctx);
     DCHECK(d->url[0] != '\0', "a node's baseURI was read before the document was installed");
     return d->url;
+}
+
+/* HTML's SET THE URL — "set document's URL to url", which §7.4.4's URL and history update steps step 8
+ * performs and which is the only way a Document's address changes without a new Document.
+ *
+ * IT IS PER-FLOW, AND THE CAPTURE IS THE POD ONE ON PURPOSE. A flow that called `history.pushState(s, "",
+ * "/b")` is the only flow whose `location.pathname` is `/b`; a sibling arm that never pushed still reads the
+ * address it forked at, and a parked flow resumes onto its own. The captured bytes are the ADDRESS ALONE and
+ * not the record: solver/cow.h reserves the raw byte capture for a POD LATCH precisely because a memcpy of a
+ * JSValue makes a reference it does not count, and this record holds four of them — and `next_created` and
+ * `inert_template` are chain POINTERS, which is the other half of that rule (a context switch would revert the
+ * pointer and leave the documents reachable from nothing). `url` is a plain char array with neither, so a byte
+ * copy of it is a complete description of what it is.
+ *
+ * THE OWNER IS THE `document` OBJECT, which is what holds these bytes alive for a parked flow that still names
+ * them — the same contract every other host-record capture in this engine states. */
+void document_set_url(JSContext *ctx, const char *url)
+{
+    Document *d = doc_here(ctx);
+
+    DCHECK(url != NULL && url[0] != '\0',
+           "a Document's URL was set to nothing — every caller of this has already parsed and serialized a URL "
+           "record, and an empty address is what a document with no browsing context has rather than something "
+           "an algorithm assigns");
+    DCHECK(strlen(url) < sizeof d->url,
+           "a Document's URL is longer than the record can hold — the address is a fixed buffer here, so a URL "
+           "past it would be silently truncated and every base-URL resolution against it would be wrong. BUILD "
+           "IT: make the record's address an allocated string, released with the record and never freed on a "
+           "change (a parked flow's captured bytes still name the old one)");
+    DCHECK(JS_IsObject(d->doc_obj),
+           "a Document's URL was set before its `document` object existed — the object is what owns the bytes "
+           "the flow's delta captures, so there would be nothing to keep them alive for a parked flow");
+    cow_capture_host_state(ctx, d->doc_obj, d->url, sizeof d->url);
+    snprintf(d->url, sizeof d->url, "%s", url);
 }
 
 /* HTML's CURRENT DOCUMENT READINESS, and the reason it is not simply `readyState`. §3.1.1 declares readyState
@@ -2073,6 +2109,14 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        writer so the record and the reflecting `readyState` cannot disagree. */
     document_set_ready(ctx, 0);
     d->win_obj = JS_DupValue(ctx, global);
+    /* HTML §7.4.1's FIRST SESSION HISTORY ENTRY for this navigable — the entry §7.4.5 populates and §7.4.6
+       activates for a document a load produced, reached directly because the load is what built this document
+       rather than something this engine can be inside of. It is here rather than in the per-realm install for
+       the reason core/frame/location.c reads the address at the call: a realm's intrinsics are built before its
+       navigable has a document, and an entry holds that document's URL, id and origin. All three exist by this
+       line, and this line is still the pre-boot BASELINE, so the entry belongs to every flow rather than to
+       whichever one happened to push first. */
+    session_history_install_document(ctx);
     /* The interface OBJECTS, now that every prototype exists. Node's goes first because the derived ones
        inherit from it; each component names the one it owns rather than node.c enumerating them. */
     node_install_interfaces(ctx, global);

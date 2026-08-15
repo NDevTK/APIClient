@@ -78,6 +78,8 @@
 #include "core/dom/element.h"
 #include "core/dom/document.h"
 #include "core/loader/document_scripts.h"
+#include "core/frame/history.h"
+#include "core/frame/session_history.h"
 #include "core/frame/location.h"
 #include "core/encoding/encoding.h"
 #include "core/encoding/text_stream.h"
@@ -1087,6 +1089,14 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
        The source carries the example the ADDRESS actually has, so there is one Location and the overlay this
        host declines no longer removes the value. AFTER concolic_init, which registers the class a source is. */
     location_init(ctx);
+    /* HTML §7.4.1's SESSION HISTORY and §7.2.5's History, DECLARED here and built per realm by the intrinsics
+       they register. The state machine goes FIRST: realm.h runs the intrinsics in declaration order, and every
+       member of History reads the record session_history's install builds. This is what a client-side router
+       navigates with — `history.pushState()` is how React Router, Vue Router, Angular and every hand-rolled
+       router change route — so without it a routing bundle threw on its first navigation and every route, lazy
+       chunk and endpoint behind one went unexplored. */
+    session_history_init(ctx);
+    history_init(ctx);
     navigable_init(ctx);
     timer_init(ctx);
     window_proxy_init(ctx, origin);
@@ -1860,6 +1870,8 @@ int main(int argc, char **argv)
     viewport_free();
     visual_viewport_free();
     location_free();
+    session_history_free();
+    history_free();
     animation_frame_free(ctx);
     timer_reset(ctx);
     headers_free(ctx);

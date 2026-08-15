@@ -56,6 +56,8 @@
 #include "browser/core/structured_clone.h"
 #include "browser/core/events/event_target.h"
 #include "browser/core/realm.h"
+#include "browser/core/frame/history.h"
+#include "browser/core/frame/session_history.h"
 #include "browser/core/frame/location.h"
 #include "browser/core/frame/navigator.h"
 #include "browser/core/frame/screen.h"
@@ -142,6 +144,14 @@ static void engine_agent_init(JSContext *ctx, const char *origin, const char *to
        §7.2.5.1 and §7.4. `window.open` returns a WindowProxy, and so does §4.8.5's contentWindow. The proxy
        class has to exist before any proxy is minted. */
     location_init(ctx);
+    /* HTML §7.4.1's SESSION HISTORY and §7.2.5's History, DECLARED here and built per realm by the intrinsics
+       they register. The state machine goes FIRST: realm.h runs the intrinsics in declaration order, and every
+       member of History reads the record session_history's install builds. This is what a client-side router
+       navigates with — `history.pushState()` is how React Router, Vue Router, Angular and every hand-rolled
+       router change route — so without it a routing bundle threw on its first navigation and every route, lazy
+       chunk and endpoint behind one went unexplored. */
+    session_history_init(ctx);
+    history_init(ctx);
     screen_init(ctx);   /* the responsive gate: screen.width decides which router a bundle uses */
     navigable_init(ctx);
     timer_init(ctx);
@@ -497,6 +507,8 @@ QJS_EXPORT void qjs_teardown(void)
     navigable_free(g_ctx);
     navigator_free();   /* the two per-realm slot ids; each realm's Navigator went with its context */
     location_free();
+    session_history_free();
+    history_free();
     screen_free();
     window_free(g_ctx);
     remote_object_free(g_ctx);
