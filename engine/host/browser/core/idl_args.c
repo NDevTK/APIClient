@@ -2283,6 +2283,44 @@ void idl_install_step_method(JSContext *ctx, JSValueConst target, const char *na
                       JS_NewCFunction2(ctx, NULL, name, length, JS_CFUNC_step, stepid));
 }
 
+/* WEB IDL SAYS THE MEMBER EXISTS; THE SPEC'S PROSE SAYS IT EXISTS ONLY UNDER A CONDITION THIS USER AGENT DOES
+   NOT MEET. Both halves are true, and neither the IDL corpus nor a reader of this prototype can tell that state
+   apart from a member nobody has written yet. §8.10.1.1's `taintEnabled()` and `oscpu` are the case: the
+   published `html.idl` carries their partial FLAT, and the condition — "if the navigator compatibility mode is
+   Gecko" — is a sentence above it. So the ENGINE states it, here, where the members would otherwise go, and
+   this call is what makes the statement CODE rather than a comment: it asserts, per realm, that the prototype
+   really does lack every name it claims to exclude. Re-add one and this fires at the origin.
+   The IDL gap auditor reads the SAME call, so a name declared here leaves its ABSENT list — and the auditor
+   checks the other direction, that each name is still a member of the interface in the current corpus, so an
+   exclusion for a member the spec has dropped is a loud error rather than a line nobody revisits. That pair is
+   the whole difference between this and an exclusion list: a list is unfalsifiable, and this is checked from
+   both sides by things that are not this file. */
+void idl_members_excluded(JSContext *ctx, JSValueConst proto, const char *iface,
+                          const char *const *names, int n, const char *why)
+{
+    DCHECK(iface != NULL && why != NULL,
+           "a conditional-member exclusion was declared with no interface or no reason — the reason IS the "
+           "declaration, because it is the spec sentence the IDL could not carry");
+    DCHECK(n > 0, "a conditional-member exclusion declared no members");
+    DCHECK(JS_IsObject(proto), "a conditional-member exclusion was declared against no prototype");
+#if APICLIENT_DEV
+    {
+        int i;
+        for (i = 0; i < n; i++) {
+            JSAtom a = JS_NewAtom(ctx, names[i]);
+            int has;
+            CHECK(a != JS_ATOM_NULL, "an excluded member's name could not be interned");
+            has = JS_HasProperty(ctx, proto, a);
+            JS_FreeAtom(ctx, a);
+            /* The interface INSTALLS a member it declares this user agent cannot have. */
+            DCHECK(has == 0, names[i]);
+        }
+    }
+#else
+    (void)ctx; (void)proto; (void)iface; (void)names; (void)n; (void)why;
+#endif
+}
+
 /* The pool interns one atom per dictionary member, for the runtime's life — release them with it. */
 void idl_args_free(JSContext *ctx)
 {

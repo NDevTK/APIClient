@@ -109,6 +109,14 @@
 enum { NAV_MEMBERS(NAV_ENUM_ONE) NAV_N };
 static const char *const NAV_NAME[] = { NAV_MEMBERS(NAV_NAME_ONE) };
 
+/* THE TWO MEMBERS THIS MODE FORBIDS. §8.10.1.1 puts them in a partial interface the user agent supports only
+   "if the navigator compatibility mode is Gecko", and the published html.idl carries that partial FLAT — the
+   condition is a sentence, not an extended attribute. So an audit of this file against the corpus sees two
+   members nobody installed and cannot tell "this UA must not have them" from "nobody has written them yet",
+   which is how a member the spec FORBIDS here gets added by someone working an ABSENT list. Stated here, beside
+   the mode the four lines above commit to, and asserted per realm by idl_members_excluded. */
+static const char *const NAV_MODE_EXCLUDED[] = { "taintEnabled", "oscpu" };
+
 /* THE CLASS IS THE BRAND. Web IDL §3.7.5's check on every getter is "does esValue have the interface's internal
    slot", and the one object per realm WEARS the class, so the check is a class-id comparison a page cannot
    forge. It carries no per-object data — the values are the realm's — so it needs no finalizer and no gc_mark. */
@@ -336,6 +344,11 @@ static void navigator_install_realm(JSContext *ctx)
         idl_install_accessor(ctx, proto, NAV_NAME[i], js_nav_get, i, -1);
     idl_install_accessor(ctx, proto, "userActivation", js_nav_user_activation, 0, -1);
     idl_install_method(ctx, proto, "javaEnabled", 0, g_id_java_enabled);
+    idl_members_excluded(ctx, proto, "Navigator", NAV_MODE_EXCLUDED,
+                         (int)(sizeof NAV_MODE_EXCLUDED / sizeof NAV_MODE_EXCLUDED[0]),
+                         "HTML §8.10.1.1: the user agent supports this partial interface only if the "
+                         "navigator compatibility mode is Gecko, and this one is Chrome — productSub is "
+                         "\"20030107\" and vendor is \"Google Inc.\"");
     JS_SetClassProto(ctx, g_nav_class, JS_DupValue(ctx, proto));
 
     /* §3.7.1's INTERFACE OBJECT, on THIS realm's global. Navigator declares no constructor, so

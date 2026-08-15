@@ -524,4 +524,14 @@ void idl_install_method(JSContext *ctx, JSValueConst target, const char *name, i
    they are separate things, and each asserts it was handed its own kind. */
 void idl_install_step_method(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid);
 
+/* THE MEMBERS THIS USER AGENT MUST NOT HAVE — the other half of an install, and the one the IDL cannot state.
+   A member whose existence the spec makes CONDITIONAL in prose (HTML §8.10.1.1's `taintEnabled()` and `oscpu`,
+   which a user agent supports only "if the navigator compatibility mode is Gecko") reaches the published .idl
+   with the condition stripped, so an absent one is indistinguishable from an unbuilt one — by the gap auditor
+   and by the next person reading the prototype. Declaring it here says which it is, ASSERTS per realm that the
+   prototype indeed lacks each name, and hands the auditor the same list to check against the live corpus.
+   `why` is the spec sentence, not a label. See idl_args.c. */
+void idl_members_excluded(JSContext *ctx, JSValueConst proto, const char *iface,
+                          const char *const *names, int n, const char *why);
+
 #endif

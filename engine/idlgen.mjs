@@ -5,6 +5,15 @@
  * prints the missing members so we implement them at the root — never a generated noop/DCHECK stub. Runs at
  * build time (best-effort: skipped if the idl toolchain isn't installed).
  *
+ * WHAT A COMPONENT INSTALLS IS READ FROM THE INSTALL CONSTRUCTS THEMSELVES (engine/idl_installed.mjs), never
+ * from the file's text. It used to be a scan for any string literal, which made the audit lie in both
+ * directions and made it IMPOSSIBLE TO EXTEND: naming html_form.c, input_value.c or constraint_validation.c in
+ * the map below would have credited every content-attribute name in them ("required", "pattern", "min",
+ * "step") as an installed member, turning a false ABSENT into a false COMPLETE — so those rows had to be
+ * withheld, and an auditor a row can make lie is an auditor whose silence means nothing. An install construct
+ * whose member name cannot be resolved statically is reported UNRESOLVED with its file and line rather than
+ * being dropped (a gap that is not there) or counted (a gap that is filled and is not).
+ *
  * IT ALSO GENERATES THE ONE THING THE IDL — AND ONLY THE IDL — CAN ANSWER: WHICH GLOBAL NAMES THE PLATFORM OWNS.
  * absent.c has to tell a Web API this engine has not built (whose ReferenceError is the forcing function that
  * names the next component) from server-injected app state (which is unknown INPUT and must fork). That question
@@ -22,9 +31,11 @@ import { parse } from "webidl2";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { loadEnvironment, installedMembers } from "./idl_installed.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BROWSER = join(HERE, "host", "browser");
+const HOST = join(HERE, "host");
+const BROWSER = join(HOST, "browser");
 
 // interface -> the component .c that implements it, or the componentS: one interface's surface can be split
 // across components when the spec puts unrelated capabilities on one object. Window is the case that forces it —
@@ -103,17 +114,21 @@ const INTERFACES = {
      members absent that every such interface has. */
   Headers:             ["core/fetch/headers.c", "core/idl_iter.c"],
   Notification:         "modules/notification.c",
+  /* THE GLOBAL ITSELF — the interface a page touches before any other. §7.2.5's members are spread over the
+     components that own them: the browsing-context half, §7.4's `open` (which lives with the navigable it
+     creates, not with the Window it hangs off), the six BarProps, the event-loop timers, §9.4.4's postMessage,
+     and EventTarget, which Window inherits. Its ABSENT list is long, and that is the measurement rather than a
+     reason not to take it.
+     THIS ROW WAS WRITTEN TWICE, and a duplicate key in an object literal is not a merge — the second one
+     REPLACED the first, silently, so fetch.c, module_loader.c, abort.c and the CSSOM were dropped out of the
+     row that ran and `fetch`, `structuredClone` and `AbortController` read as ABSENT while they were shipping.
+     One row, the union of both. */
   Window:              ["core/frame/window.c", "core/dom/document.c", "core/frame/location.c",
                         "core/fetch/fetch.c", "core/events/event_target.c", "core/loader/module_loader.c",
                         "core/timing/timer.c", "core/frame/navigator.c", "core/frame/screen.c",
                         "core/dom/abort.c", "core/css/css_style_declaration.c",
-                        /* §7.4's `open` lives with the navigable it creates, not with the Window it hangs off.
-                           Leaving it out reported `open` ABSENT while it was installed and working — a FALSE
-                           gap, which costs exactly what a hidden one does: the audit is only worth reading if
-                           every line of it is real. */
-                        "core/frame/navigable.c",
-                        /* §7.2.5's BarProp objects — locationbar, menubar and the rest. */
-                        "core/frame/bar_prop.c"],
+                        "core/frame/navigable.c", "core/frame/bar_prop.c",
+                        "core/frame/window_message.c", "core/structured_clone.c"],
   Navigator:            "core/frame/navigator.c",
   /* HTML §6.4.4. The interface had no row at all, so the audit said nothing about it — and its two getters and
      the object Navigator's `userActivation` answers with live with §6.4's state rather than with the Navigator
@@ -172,8 +187,20 @@ const INTERFACES = {
   HTMLImageElement:    [...HTML_BASE],
   /* §4.8.5's navigable members are their own component, for the same reason the hyperlink mixin's are. */
   HTMLIFrameElement:   [...HTML_BASE, "core/html/html_iframe.c"],
-  HTMLFormElement:     [...HTML_BASE],
-  HTMLInputElement:    [...HTML_BASE],
+  /* §4.10's OWN COMPONENTS, which had to be withheld while the installed side was a string scan: html_form.c,
+     input_value.c and constraint_validation.c are full of CONTENT ATTRIBUTE names — "required", "pattern",
+     "min", "step", "size" — which are the same words as the IDL members that reflect them, so naming these
+     files would have credited an interface with members nobody installs. They are named now because the
+     installed side reads the install CONSTRUCT: `required` counts for HTMLInputElement because the reflection
+     table declares it, and not because the string appears. §4.10.22's `submit`/`requestSubmit`/`elements` are
+     html_form.c's, §4.10.5.4's `value`/`checked`/`files` are html_form.c's and input_value.c's, and
+     §4.10.21.3's `willValidate` and `setCustomValidity` are constraint_validation.c's. element_internals.c is
+     NOT named: it installs `validity`, `validationMessage`, `checkValidity`, `labels` and `form` on
+     ElementInternals.prototype, which is a different interface — naming it here would credit HTMLInputElement
+     with five members that are not on it, which is the file-granular version of the same lie. */
+  HTMLFormElement:     [...HTML_BASE, "core/html/html_form.c"],
+  HTMLInputElement:    [...HTML_BASE, "core/html/html_form.c", "core/html/input_value.c",
+                        "core/html/constraint_validation.c"],
   HTMLButtonElement:   [...HTML_BASE],
   HTMLLinkElement:     [...HTML_BASE],
   HTMLMetaElement:     [...HTML_BASE],
@@ -184,14 +211,6 @@ const INTERFACES = {
      ChildNode mixin it INCLUDES is installed. DOMImplementation inherits nothing, so it names only its own. */
   DOMImplementation:    "core/dom/dom_implementation.c",
   DocumentType:        ["core/dom/document_type.c", "core/dom/node.c", "core/events/event_target.c"],
-  /* THE GLOBAL ITSELF, which had no row at all — the interface a page touches before any other, and the audit
-     said nothing about it. §7.2.5's members are spread over the components that own them: the browsing-context
-     half, §7.4's open, the six bars, the event-loop timers, §9.4.4's postMessage, and EventTarget, which Window
-     inherits. Its ABSENT list is long, and that is the measurement rather than a reason not to take it. */
-  Window:              ["core/frame/window.c", "core/frame/navigable.c", "core/frame/bar_prop.c",
-                        "core/timing/timer.c", "core/frame/window_message.c", "core/events/event_target.c",
-                        "core/frame/location.c", "core/frame/navigator.c", "core/frame/screen.c",
-                        "core/dom/document.c", "core/structured_clone.c"],
   HTMLTemplateElement: [...HTML_BASE],
   /* HTML §4.13.7. ElementInternals INCLUDES ARIAMixin, whose 54 members are therefore members the audit
      expects on it — which is what makes the eight element-reflecting ones show up as the real gap they are
@@ -270,44 +289,71 @@ function members(name) {
   return out;
 }
 
+/* The install constructs of the WHOLE engine, read once. Whole-engine and not per-row because which objects are
+   install targets is a fact about the program (a prototype handed from the file that tags it to the file that
+   installs on it), and because a macro or a table is followed to the header it is defined in. */
+const env = loadEnvironment(HOST);
+
 let totalMissing = 0;
 /* The DISTINCT names, because the per-interface counts legitimately repeat an inherited gap: HTMLElement's
    getBoundingClientRect is absent on every one of the twelve HTML interfaces that inherit it, and one
    implementation fixes all twelve. The per-interface list stays exact — it is what that interface's IDL says —
    and the headline says how many things there are to BUILD. */
 const distinct = new Set();
+const unresolvedAll = new Map();
 for (const [iface, where] of Object.entries(INTERFACES)) {
   const paths = Array.isArray(where) ? where : [where];
   const file = paths.join(" + ");
-  let src = "", missing = [];
+  let src = "", missing = [], present = [];
   for (const one of paths) {
-    try { src += readFileSync(join(BROWSER, one), "utf8"); } catch { missing.push(one); }
+    try { src += readFileSync(join(BROWSER, one), "utf8"); present.push(join(BROWSER, one)); }
+    catch { missing.push(one); }
   }
   if (missing.length === paths.length) { console.warn(`[idl-audit] ${iface}: component ${file} not found`); continue; }
   if (missing.length) console.warn(`[idl-audit] ${iface}: ${missing.join(", ")} not found — audited without it`);
-  // The property names the component actually installs appear as string literals (JS_SetPropertyStr / JS_NewAtom
-  // / def_getset(..., "name", ...)). A member absent from every literal is unimplemented; a member wired to
-  // js_noop is STUBBED (present but does nothing — the banned lazy stub the audit exists to expose).
-  const installed = new Set([...src.matchAll(/"([A-Za-z_$][\w$]*)"/g)].map((m) => m[1]));
-  // js_noop reaches a member two ways: the JS_SetPropertyStr form (`"name", JS_NewCFunction(ctx, js_noop`) and
-  // the IDL member-TABLE form (`{ "name", IDL_METHOD, js_noop, ... }`). Catch BOTH — a table-form stub is just
-  // as banned and was previously invisible to the name-scan.
-  const stubbed = new Set([
-    ...src.matchAll(/"([A-Za-z_$][\w$]*)"\s*,\s*JS_NewCFunction\w*\(\s*ctx\s*,\s*js_noop\b/g),
-    ...src.matchAll(/"([A-Za-z_$][\w$]*)"\s*,\s*IDL_(?:METHOD|ATTRIBUTE)\s*,\s*js_noop\b/g),
-  ].map((m) => m[1]));
+  /* WHAT THE COMPONENT INSTALLS, from the install constructs — see engine/idl_installed.mjs. A member wired to
+     js_noop is STUBBED (present but does nothing — the banned lazy stub the audit exists to expose), and an
+     install whose member name cannot be decided statically is UNRESOLVED rather than assumed either way. */
+  const { installed, stubbed, unresolved, offInstaller, excluded } = installedMembers(present, env);
   // The g_opaque-as-prototype fallback is a BANNED shrug: it silently serves EVERY unbuilt member as an opaque
   // value, hiding a missing browser feature (it is not our choice which features to omit — a browser has them
   // all). A component must implement its real surface and DFAIL loud on an unbuilt member, never opaque-shrug it.
   const bannedShrug = /JS_SetPrototype\s*\([^)]*\bg_opaque\b/.test(src);
-  const absent = members(iface).filter((n) => !installed.has(n));
-  const noop = members(iface).filter((n) => stubbed.has(n));
+  const spec = members(iface);
+  /* A CONDITIONAL member — one the component DECLARES this user agent must not have (idl_members_excluded). It
+     is not a gap and it is not installed, so it is neither counted nor dropped: it is named, with the spec
+     sentence that excludes it, so nobody works it off the ABSENT list and builds a member the spec forbids.
+     The declaration is CHECKED here, which is what stops it being an exclusion list: a name it excludes that
+     the corpus no longer carries is stale, and one the component installs anyway contradicts itself. */
+  const cond = excluded.filter((e) => e.iface === iface);
+  const condStale = cond.filter((e) => !spec.includes(e.name));
+  const condInstalled = cond.filter((e) => installed.has(e.name));
+  const condNames = new Set(cond.map((e) => e.name));
+  const absent = spec.filter((n) => !installed.has(n) && !condNames.has(n));
+  const noop = spec.filter((n) => stubbed.has(n));
   totalMissing += absent.length + noop.length;
   for (const n of absent) distinct.add(n);
   for (const n of noop) distinct.add(n);
+  for (const u of unresolved)
+    unresolvedAll.set(`${u.file}:${u.line}:${u.expr}`, u);
+  /* A property write with a member's NAME onto an object no installer ever names. Not counted (it may be a
+     record field that happens to share the name) and not hidden (it may be an IDL member installed as a plain
+     own property, which `document.title` and `screen.width` are) — reported, so both are visible. */
+  const plain = [...new Set(offInstaller.filter((o) => absent.includes(o.name)).map((o) => o.name))];
   const parts = [];
   if (absent.length) parts.push(`ABSENT ${absent.length} — ${absent.join(", ")}`);
   if (noop.length) parts.push(`js_noop-STUB ${noop.length} — ${noop.join(", ")}`);
+  if (plain.length) parts.push(`PLAIN-PROPERTY ${plain.length} — ${plain.join(", ")} (written with ` +
+                               `JS_SetPropertyStr onto an object no installer names: either a member installed ` +
+                               `off-installer, or a record field of the same name)`);
+  if (cond.length) parts.push(`CONDITIONAL ${condNames.size} — ${[...condNames].join(", ")} (${cond[0].why})`);
+  if (condStale.length) parts.push(`STALE EXCLUSION ${condStale.length} — ${condStale.map((e) => e.name).join(", ")}` +
+                                   ` declared excluded at ${condStale[0].file}:${condStale[0].line} but the IDL ` +
+                                   `no longer carries the member — delete the exclusion`);
+  if (condInstalled.length) parts.push(`CONTRADICTED EXCLUSION ${condInstalled.length} — ` +
+                                       `${condInstalled.map((e) => e.name).join(", ")} is declared excluded and ` +
+                                       `installed anyway`);
+  if (unresolved.length) parts.push(`UNRESOLVED ${unresolved.length}`);
   if (bannedShrug) parts.push(`BANNED g_opaque-prototype shrug (silently serves unbuilt members as opaque — remove it, build the features or DFAIL)`);
   if (parts.length) console.log(`[idl-audit] ${iface} (${file}): ${parts.join(" | ")}`);
   else console.log(`[idl-audit] ${iface}: complete`);
@@ -315,6 +361,16 @@ for (const [iface, where] of Object.entries(INTERFACES)) {
 if (totalMissing)
   console.log(`[idl-audit] ${distinct.size} distinct spec members not yet implemented (${totalMissing} across ` +
               `all interfaces, since an inherited gap is absent on each) — implement each at the root, never a stub.`);
+/* THE AUDIT'S GAP REPORT ON ITSELF. An install whose member name is decided at RUNTIME cannot be diffed against
+   the IDL, and pretending either way is what this rewrite exists to stop: counted, it fills a gap that is open;
+   dropped, it opens a gap that is filled. Named here with file and line, it is a work queue — make the name
+   static, or teach the detector the construct. */
+if (unresolvedAll.size) {
+  console.log(`[idl-audit] ${unresolvedAll.size} install construct(s) whose member name could not be resolved ` +
+              `statically — neither counted as installed nor reported as a gap:`);
+  for (const u of unresolvedAll.values())
+    console.log(`[idl-audit]   ${u.file.replace(BROWSER + "/", "")}:${u.line}  ${u.form}(… ${u.expr} …)`);
+}
 
 /* ---------------------------------------------------------------------------------------------------------
  * THE PLATFORM SURFACE — every global name a browser exposes on Window, straight out of the IDL.
