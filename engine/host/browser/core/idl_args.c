@@ -275,6 +275,40 @@ static const char *const IDL_EPILOGUE_STEPS[] = {
 };
 #define IDL_EPILOGUE_NSTEPS ((int)(sizeof IDL_EPILOGUE_STEPS / sizeof *IDL_EPILOGUE_STEPS))
 
+/* THE STAGES A MEMBER HAS WHEN IT DECLARES NO ALGORITHM OF ITS OWN — which is not "no stages". Every declared
+ * member passes through the prologue and the epilogue whether or not anything runs between them, and a flow
+ * RESTS in both (an argument's `toString`, a lifecycle callback), so those rest points need naming for exactly
+ * the reason every other rest point does: a parked flow reports where it is, and a cold-tier resume resolves
+ * that label back to a stage.
+ *
+ * This exists because the runtime now REFUSES a definition that declares neither (js_step_def_check, at
+ * JS_RegisterStepDef), and the refusal caught something worth having caught. Both halves of the declaration
+ * were being written AFTER the registration: a plain member never got one at all, and a step member got its
+ * algorithm and its joined step list assigned to the pool entry once idl_method_id_step had returned from
+ * idl_method_id_dict — so at the moment the runtime was handed the definition, EVERY member's was empty. The
+ * fix belongs here rather than in the check, because a member whose only stages are the shared ones still has
+ * stages, and answering the runtime with "none" was never true of any member.
+ *
+ * Built once, joined from the same two lists by the same loops rather than restated as a third literal — the
+ * drift this file avoids everywhere else. A step member overwrites both fields with its own longer list once
+ * its declaration is in hand; until then this is the truthful answer, not a placeholder. */
+static const char *const *idl_plain_steps(void)
+{
+    static const char *joined[IDL_STEP_FIRST + IDL_EPILOGUE_NSTEPS + 1];
+    int k;
+
+    if (joined[0] != NULL) return joined;
+    for (k = 0; k < IDL_STEP_FIRST; k++) joined[k] = IDL_PROLOGUE_STEPS[k];
+    for (k = 0; k < IDL_EPILOGUE_NSTEPS; k++) joined[IDL_STEP_FIRST + k] = IDL_EPILOGUE_STEPS[k];
+    joined[IDL_STEP_FIRST + IDL_EPILOGUE_NSTEPS] = NULL;
+    return joined;
+}
+/* What that machine IS, for a member contributing no steps between the two shared ends. Named as the two
+   standards that own those ends, because that is the whole of what runs: a plain member's own body executes
+   inside one stage without resting, which is what makes it plain rather than a step machine. */
+#define IDL_PLAIN_ALGORITHM \
+    "Web IDL §3.6.2 (an operation's argument handling), inside HTML §4.13.6's custom element reactions steps"
+
 /* The DOM layer's tree-steps edge — see idl_args.h. NULL until the DOM registers it, which is what the
    platform-less test builds and the pre-DOM boot look like. */
 static const IdlTreeSteps *g_tree;
@@ -1987,6 +2021,12 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
        Nowhere ELSE does this machine catch — an argument coercion's throw and the member body's own request
        propagate exactly as before, which js_idl_args_step_inner re-raises at its top. */
     idl_def(idx)->catches_abrupt = 1;
+    /* DECLARED BEFORE THE REGISTRATION, WHICH IS THE WHOLE POINT — the runtime is handed this definition on the
+       next line and refuses one that names no algorithm. Both fields used to be written after, by
+       idl_method_id_step, which is to say after this call had already returned; a step member's real list
+       overwrites these below, and a plain member keeps them. */
+    idl_def(idx)->algorithm = IDL_PLAIN_ALGORITHM;
+    idl_def(idx)->steps     = idl_plain_steps();
     {
         int sid = JS_RegisterStepDef(rt, idl_def(idx));
         idl_map_step(sid, idx);   /* the one place the runtime's id and this pool's index are both in hand */
@@ -2386,7 +2426,9 @@ JSValue idl_step_function(JSContext *ctx, const char *name, int length, int step
     /* NAMING THE OFFENDER IS THE POINT. "some member was never declared" sends whoever hits it grepping every
        install site; the name is right here in the argument, so the assert says it. */
     if (idx < 0) {
-        char why[160];
+        /* Sized past the format's own minimum, which the compiler computes and warns about: this message ends
+           by naming the install function to use instead, and a truncated DFAIL loses exactly that tail. */
+        char why[288];
         snprintf(why, sizeof why,
                  "step function '%s' was minted for a member this pool never declared — a step machine that is "
                  "not an args-machine member installs through idl_install_step_method", name ? name : "?");
