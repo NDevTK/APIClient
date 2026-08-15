@@ -131,9 +131,13 @@ CssColor css_system_color(CssSystemColorId id)
     css_system_color_check_theme();
 #endif
     rgb = CSS_SYSTEM_COLOR_THEME[id];
-    c.r = ((rgb >> 16) & 0xffu) / 255.0;
-    c.g = ((rgb >> 8) & 0xffu) / 255.0;
-    c.b = (rgb & 0xffu) / 255.0;
+    /* A system colour is an sRGB value with no missing components — §6.2's own table gives each keyword an
+       opaque RGB triple, and there is no syntax for a `none` in a keyword. */
+    c.space = CSS_COLOR_SPACE_SRGB;
+    c.c[0] = ((rgb >> 16) & 0xffu) / 255.0;
+    c.c[1] = ((rgb >> 8) & 0xffu) / 255.0;
+    c.c[2] = (rgb & 0xffu) / 255.0;
     c.a = 1.0;
+    c.missing = 0u;
     return c;
 }

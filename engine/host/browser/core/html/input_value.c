@@ -406,33 +406,48 @@ static JSValue iv_sanitize(JSContext *ctx, lxb_dom_element_t *el, HtmlInputState
            `#000000` and never as the empty string. */
         CssColor c;
         char hex[8];
+        char fn[CSS_COLOR_FUNCTION_MAX];
+        bool alpha = iv_has_attr(el, "alpha");
 
-        /* `serialize a color well control color` steps 3 and 4. The Limited sRGB state with no `alpha`
-           attribute is the branch that ends in §16.2.1's HTML-compatible serialization — the `#rrggbb` form —
-           and it is the only branch reached without the `color()` function, which the CSS grammar this engine
-           binds to does not have in either direction. */
-        if (iv_has_attr(el, "alpha"))
-            DFAIL("an `input` in the Color state has an `alpha` attribute — §4.10.5.1.14's `serialize a color "
-                  "well control color` then KEEPS the colour's alpha component (step 3 makes it fully opaque "
-                  "only when the attribute is absent) and step 4.4 converts the colour using the `color()` "
-                  "function, so the value serializes as `color(srgb R G B / A)` rather than as a hex colour. "
-                  "That form needs two things this engine has not built: CSS Color 4 §16.2.2's `color()` "
-                  "serialization, and the `color()` PARSE that reads the control's own value back (lexbor's "
-                  "<color> grammar answers failure for it, and css_color_parse resolves a `none` component to "
-                  "0 where that serialization must preserve it) — build both in core/css/css_color.c");
-        if (iv_colorspace_is_display_p3(el))
-            DFAIL("an `input` in the Color state has its `colorspace` attribute in the Display P3 state — "
-                  "§4.10.5.1.14's `serialize a color well control color` step 5 converts the colour to the "
-                  "'display-p3' colour space and serializes it as `color(display-p3 R G B)`. That needs CSS "
-                  "Color 4 §17's sRGB-to-Display-P3 conversion, §16.2.2's `color()` serialization, and the "
-                  "`color()` PARSE that reads the control's own value back — build all three in "
-                  "core/css/css_color.c");
-        if (!css_color_parse(s, len, &c)) c = CSS_COLOR_OPAQUE_BLACK;   /* step 3's opaque black */
-        /* Step 3 of the serialization: the `alpha` attribute is not specified — established above — so the
-           colour's alpha component is set fully opaque, which is also what makes §16.2.1's form apply. */
-        c.a = 1.0;
-        css_color_serialize_html(&c, hex);
-        iv_add(&b, hex, 7);
+        if (!css_color_parse(s, len, &c)) c = CSS_COLOR_OPAQUE_BLACK;   /* update step 3's opaque black */
+
+        /* `serialize a color well control color` STEP 3: "If element's alpha attribute is not specified, then
+           set color's alpha component to be fully opaque." The attribute is what decides whether the end user
+           may move the alpha at all, so a control without it does not merely hide the alpha — it discards the
+           one the value carried, and the value it reads back has none. Fully opaque also means MISSING is no
+           longer the right answer for it: the alpha is now a real 1, not a `none` a serialization would echo. */
+        if (!alpha) {
+            c.a = 1.0;
+            c.missing &= ~CSS_COLOR_MISSING_ALPHA;
+        }
+
+        if (!iv_colorspace_is_display_p3(el)) {
+            /* STEP 4, the Limited sRGB state — the missing value default, so the state of nearly every colour
+               well there is. Its two sub-branches are one algorithm with two serializations: the colour is
+               converted to 'srgb' (4.1) and each component rounded into 0 to 255 (4.2) either way, and only
+               then does the `alpha` attribute decide the FORM. Without it the value is §16.2.1's
+               HTML-compatible `#rrggbb` (4.3), which the spec keeps "for compatibility with an earlier version
+               of the color well control"; with it the same 8-bit colour is written through §16.5's `color()`
+               function (4.4), which is the only one of the two forms that can carry an alpha at all. */
+            css_color_convert(&c, CSS_COLOR_SPACE_SRGB);
+            css_color_quantize_8bit(&c);
+            if (!alpha) {
+                css_color_serialize_html(&c, hex);
+                iv_add(&b, hex, 7);
+            }
+            else {
+                iv_add(&b, fn, css_color_serialize_function(&c, fn));
+            }
+        }
+        else {
+            /* STEP 5, the Display P3 state: "Set color to color converted to the 'display-p3' color space",
+               and serialize that. There is NO rounding step here and no gamut clip — the 8-bit quantization
+               belongs to the Limited sRGB state alone, and §10.1 retains an out-of-gamut component rather than
+               mapping it, which is why the spec's own example of this state's value is
+               `color(display-p3 1.84 -0.19 0.72 / 0.6)`: red above 1 and green below 0, both preserved. */
+            css_color_convert(&c, CSS_COLOR_SPACE_DISPLAY_P3);
+            iv_add(&b, fn, css_color_serialize_function(&c, fn));
+        }
         break;
     }
     default:

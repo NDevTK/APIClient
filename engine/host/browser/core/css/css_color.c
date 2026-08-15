@@ -1,6 +1,6 @@
 /* CSS COLOR — CSS Color Module Level 4's `<color>`. See css_color.h for why this is its own component.
  *
- * THE PARSE IS LEXBOR'S, REACHED THROUGH A DECLARATION. Lexbor's `<color>` production is
+ * MOST OF THE PARSE IS LEXBOR'S, REACHED THROUGH A DECLARATION. Lexbor's `<color>` production is
  * `lxb_css_property_state_color`, the state function its property registry runs for the `color` property, and
  * the entry point it EXPOSES to that machinery is `lxb_css_declaration_list_parse`. So the input is parsed as
  * the value of a `color:` declaration and the `lxb_css_value_color_t` is read back out of the result. Three
@@ -10,10 +10,19 @@
  * consuming (`red;` ends a declaration where a `<color>` would have ended). Without them `input.value = 'red;'`
  * would sanitize to `#ff0000` where a browser gives `#000000`.
  *
+ * THE ONE PRODUCTION LEXBOR DOES NOT HAVE IS §10.1's `color()`, and it is read HERE over lexbor's own
+ * TOKENIZER. Lexbor's colour handler answers `case LXB_CSS_VALUE_COLOR: default: return false` for it, so what
+ * is missing is the grammar rule and nothing else: the escapes, comments, numbers and percentages are still
+ * tokenized by `lxb_css_syntax_tokenizer_t`, and only the production — a colour space keyword, three
+ * `<number> | <percentage> | none` components and an optional slash-separated alpha — is ported here. The two
+ * readers are disjoint by construction (a string whose first token is the `color(` function reaches only this
+ * one) and the seam is asserted from both sides: the reader checks that the function name it matched is the
+ * very value id lexbor declines, and that lexbor still rejects every string this reader was given.
+ *
  * THE ARITHMETIC IS THE SPEC'S. Lexbor hands back the parsed FORM — hex digits, rgb() components, an hsl()
  * triple — and converting those to sRGB is CSS Color 4's own §7.1 and §8.1 sample algorithms and §6.1's named
  * colour table, ported as arithmetic and data. The four spaces whose conversion is a matrix pipeline rather
- * than a formula — `lab()`, `lch()`, `oklab()` and `oklch()` — are §12's algorithm and live in their own
+ * than a formula — `lab()`, `lch()`, `oklab()` and `oklch()` — are §11's algorithm and live in their own
  * component, css_color_convert.c; this file's job for them is the part that IS about the parsed value: which
  * percentage reference range each component uses, §9.3/§9.4's parse-time clamping, and `none`.
  *
@@ -23,6 +32,7 @@
  * the `color` property, which §3.2 gives as CanvasText. The nineteen `<system-color>` keywords are read from
  * this UA's own colour theme in css_system_color.c. */
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -33,7 +43,7 @@
 #include "core/css/css_color_convert.h"
 #include "core/css/css_system_color.h"
 
-const CssColor CSS_COLOR_OPAQUE_BLACK = { 0.0, 0.0, 0.0, 1.0 };
+const CssColor CSS_COLOR_OPAQUE_BLACK = { CSS_COLOR_SPACE_SRGB, { 0.0, 0.0, 0.0 }, 1.0, 0u };
 
 /* ---- CSS Color 4 §6.1's NAMED COLORS -------------------------------------------------------------------------
  *
@@ -113,6 +123,76 @@ static const CssNamedColor *css_named_color(const char *name)
     return NULL;
 }
 
+/* ---- CSS Color 4 §10's COLOUR SPACE KEYWORDS -----------------------------------------------------------------
+ *
+ * ONE TABLE, BOTH DIRECTIONS. `color()`'s grammar names ten keywords for nine spaces, and §16.5 serializes a
+ * space back "with ASCII lowercase letters for ... the color space name" — so the keyword-to-space map and the
+ * space-to-keyword map are the same fact and are read out of one place. The FIRST row for a space is the name
+ * §16.5 writes, which is why `xyz-d65` precedes the `xyz` that §10.9 defines as the same space: the two
+ * keywords are one space, and a serialization has to pick the one that says which white it is. */
+typedef struct { const char *name; CssColorSpace space; } CssColorSpaceKeyword;
+
+static const CssColorSpaceKeyword CSS_COLOR_SPACE_KEYWORDS[] = {
+    { "srgb",              CSS_COLOR_SPACE_SRGB },
+    { "srgb-linear",       CSS_COLOR_SPACE_SRGB_LINEAR },
+    { "display-p3",        CSS_COLOR_SPACE_DISPLAY_P3 },
+    { "display-p3-linear", CSS_COLOR_SPACE_DISPLAY_P3_LINEAR },
+    { "a98-rgb",           CSS_COLOR_SPACE_A98_RGB },
+    { "prophoto-rgb",      CSS_COLOR_SPACE_PROPHOTO_RGB },
+    { "rec2020",           CSS_COLOR_SPACE_REC2020 },
+    { "xyz-d50",           CSS_COLOR_SPACE_XYZ_D50 },
+    { "xyz-d65",           CSS_COLOR_SPACE_XYZ_D65 },
+    { "xyz",               CSS_COLOR_SPACE_XYZ_D65 },
+};
+
+/* A CSS keyword is ASCII case-insensitive — §16.5's own example serializes `color(dIsPlAy-P3 ...)` — and the
+   token's text is whatever the author wrote, so the comparison folds rather than the table. */
+static bool css_ascii_ci_eq(const char *a, size_t alen, const char *b)
+{
+    size_t i;
+
+    for (i = 0; i < alen; i++) {
+        char c = a[i];
+
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (b[i] == '\0' || c != b[i]) return false;
+    }
+    return b[alen] == '\0';
+}
+
+static bool css_color_space_by_name(const char *name, size_t len, CssColorSpace *out)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof CSS_COLOR_SPACE_KEYWORDS / sizeof CSS_COLOR_SPACE_KEYWORDS[0]; i++) {
+        if (css_ascii_ci_eq(name, len, CSS_COLOR_SPACE_KEYWORDS[i].name)) {
+            *out = CSS_COLOR_SPACE_KEYWORDS[i].space;
+            return true;
+        }
+    }
+    /* §10.1: "If the <ident> names a non-existent color space ... this argument represents an invalid color."
+       The grammar's own <predefined-rgb> and <xyz-space> productions are CLOSED keyword lists, so an ident
+       outside them does not match the production at all and the parse fails — and for every caller of this
+       component the two readings agree anyway, because §10.1's invalid colour has a used value of opaque black
+       and that is exactly what a failed parse gives HTML §4.10.5.1.14. A CSS Color 5 <dashed-ident> custom
+       space is the same answer for the same reason: there is no @color-profile rule in this engine for one to
+       have been defined by, so every dashed-ident names a non-existent colour space. */
+    return false;
+}
+
+static const char *css_color_space_name(CssColorSpace space)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof CSS_COLOR_SPACE_KEYWORDS / sizeof CSS_COLOR_SPACE_KEYWORDS[0]; i++) {
+        if (CSS_COLOR_SPACE_KEYWORDS[i].space == space) return CSS_COLOR_SPACE_KEYWORDS[i].name;
+    }
+    DFAIL("a colour space has no keyword in CSS Color 4 §10's table — every member of CssColorSpace is a space "
+          "the color() grammar names, so a member without a name is one that was added to the enum and not to "
+          "the keyword table it is parsed and serialized through");
+    return "srgb";
+}
+
 /* ---- the numeric pieces of a parsed colour ------------------------------------------------------------------ */
 
 static double css_clamp01(double v) { return v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v); }
@@ -120,12 +200,15 @@ static double css_clamp01(double v) { return v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v)
 static double css_clamp(double v, double lo, double hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
 /* An rgb() component: a `<number>` in the 0-255 reference range, a `<percentage>` in 0%-100%, or `none`.
-   §16.2's "any missing values are converted to 0 if the chosen serialization form cannot represent the none
-   keyword" is applied here, because the HTML-compatible hex form is the only one this component writes. */
-static double css_rgb_component(const lxb_css_value_number_percentage_t *np)
+   A `none` is reported to the caller as a MISSING COMPONENT rather than resolved here: rgb() is an sRGB value,
+   so a caller that serializes it in the sRGB space is not converting it, and §11 only replaces a missing
+   component with zero when it converts. The zero is stored anyway — §4.4's "a missing component behaves as a
+   zero value" — so nothing downstream has to consult the flag to compute with the colour. */
+static double css_rgb_component(const lxb_css_value_number_percentage_t *np, bool *missing)
 {
+    *missing = false;
     switch (np->type) {
-    case LXB_CSS_VALUE_NONE:        return 0.0;
+    case LXB_CSS_VALUE_NONE:        *missing = true; return 0.0;
     case LXB_CSS_VALUE__NUMBER:     return css_clamp01(np->u.number.num / 255.0);
     case LXB_CSS_VALUE__PERCENTAGE: return css_clamp01(np->u.percentage.num / 100.0);
     default:
@@ -138,11 +221,12 @@ static double css_rgb_component(const lxb_css_value_number_percentage_t *np)
 /* An `<alpha-value>`: a `<number>` in 0-1, a `<percentage>`, `none`, or ABSENT — and absent is the interesting
    one, because CSS Color 4 makes an omitted alpha "an implicit value of 1 (fully opaque)" and lexbor leaves the
    field at the zeroed type its property allocator produced. */
-static double css_alpha(const lxb_css_value_number_percentage_t *np)
+static double css_alpha(const lxb_css_value_number_percentage_t *np, bool *missing)
 {
+    *missing = false;
     switch (np->type) {
     case LXB_CSS_VALUE__UNDEF:      return 1.0;
-    case LXB_CSS_VALUE_NONE:        return 0.0;
+    case LXB_CSS_VALUE_NONE:        *missing = true; return 0.0;
     case LXB_CSS_VALUE__NUMBER:     return css_clamp01(np->u.number.num);
     case LXB_CSS_VALUE__PERCENTAGE: return css_clamp01(np->u.percentage.num / 100.0);
     default:
@@ -152,7 +236,9 @@ static double css_alpha(const lxb_css_value_number_percentage_t *np)
 }
 
 /* An hsl()/hwb() percentage argument, in its own 0-100 reference range. Clamped there: CSS Color 4 states the
-   parse-time clamping its §7.1 sample code then assumes has already happened. */
+   parse-time clamping its §7.1 sample code then assumes has already happened. A `none` is a zero and NOT a
+   missing component of the answer: what is missing is the saturation or the whiteness, and once §7.1 has run
+   there is no such component left to be missing — the three the caller receives are red, green and blue. */
 static double css_percentage(const lxb_css_value_percentage_type_t *pt)
 {
     if (pt->type == LXB_CSS_VALUE_NONE) return 0.0;
@@ -162,8 +248,9 @@ static double css_percentage(const lxb_css_value_percentage_type_t *pt)
 }
 
 /* A `<hue>` in DEGREES. CSS Values 4 defines the four angle units against the degree, and `none` is a missing
-   component, which §16.2 resolves to 0 for the form this component serializes. The value is NOT normalised into
-   [0, 360): §7.1's own algorithm takes the hue modulo 12 after dividing by 30, which is where the wrap belongs. */
+   component, which resolves to 0 for the same reason the saturation above does. The value is NOT normalised
+   into [0, 360): §7.1's own algorithm takes the hue modulo 12 after dividing by 30, which is where the wrap
+   belongs. */
 static double css_hue_degrees(const lxb_css_value_hue_t *h)
 {
     double n;
@@ -190,9 +277,9 @@ static double css_hue_degrees(const lxb_css_value_hue_t *h)
    percentage is that fraction of it. The ranges are symmetric where the component is signed, which is why the
    a and b axes need no second parameter: §9.3 gives lab's as "-100% = -125, 100% = 125" and §9.4 gives
    oklab's as "-100% = -0.4, 100% = 0.4", and -100% × pct100 / 100 is exactly the negative endpoint.
-   A `none` component is 0 here for the reason §4.4 gives, which is stronger than the serialization rule the
-   rgb() reader cites: "for all other purposes, a missing component behaves as a zero value ... This includes
-   rendering the color directly, CONVERTING IT TO ANOTHER COLOR SPACE", and a conversion is what happens next. */
+   A `none` component is 0 here for the reason §11 gives, which is stronger than the reason the rgb() reader
+   keeps its own missing components: the four Lab spaces are CONVERTED by this parse (see css_color.h), and
+   §11's step 2 replaces every missing component with zero before it converts. */
 static double css_lab_component(const lxb_css_value_number_percentage_t *np, double pct100)
 {
     switch (np->type) {
@@ -253,30 +340,32 @@ static void css_hwb_to_srgb(double hue, double white, double black, double *rgb)
     }
 }
 
-/* ---- a parsed `<color>`, RESOLVED TO sRGB -------------------------------------------------------------------- */
+/* ---- a parsed `<color>`, RESOLVED TO A USED COLOUR ----------------------------------------------------------- */
 
-/* The three components a §12 conversion produced, paired with the alpha this file resolved. They are written
-   through UNCLAMPED, which is the one thing that separates this from the hsl()/hwb() writers above: those two
-   spaces cannot leave the sRGB gamut and their clamp is only guarding float error, while Lab, LCH, Oklab and
-   OkLCh all can and routinely do. `true` is returned so a case can be one line — every caller of this is a
-   `<color>` that resolved, and the false answer belongs to the CSS-wide keywords alone. */
-static bool css_color_from_srgb(const double rgb[3], double alpha, CssColor *out)
+/* An sRGB colour with no missing components — every form below that is neither rgb() nor a `color()` function
+   is one of those: a hex colour, a named colour, `transparent`, a system colour, and the four Lab spaces once
+   §11 has converted them (which is where their missing components became zeroes). */
+static bool css_color_srgb(const double rgb[3], double alpha, CssColor *out)
 {
-    out->r = rgb[0];
-    out->g = rgb[1];
-    out->b = rgb[2];
+    out->space = CSS_COLOR_SPACE_SRGB;
+    out->c[0] = rgb[0];
+    out->c[1] = rgb[1];
+    out->c[2] = rgb[2];
     out->a = alpha;
+    out->missing = 0u;
     return true;
 }
 
 /* Answers false when the value lexbor produced is not a `<color>` at all — which is the CSS-wide keywords, the
    only other thing `lxb_css_property_state_color` writes into this record. `initial` is a valid value of the
    `color` PROPERTY and is not a colour, so `<input type=color value=initial>` is opaque black in a browser. */
-static bool css_color_to_srgb(const lxb_css_value_color_t *c, CssColor *out)
+static bool css_color_to_used(const lxb_css_value_color_t *c, CssColor *out)
 {
     const lxb_css_data_t *kw;
     const CssNamedColor *named;
     double rgb[3];
+    bool missing;
+    int i;
 
     switch (c->type) {
     case LXB_CSS_VALUE_INITIAL: case LXB_CSS_VALUE_INHERIT:
@@ -290,29 +379,25 @@ static bool css_color_to_srgb(const lxb_css_value_color_t *c, CssColor *out)
            three-digit form's alpha is the one field lexbor fills as a byte rather than a nibble. */
         switch (c->u.hex.type) {
         case LXB_CSS_PROPERTY_COLOR_HEX_TYPE_3:
-            out->r = c->u.hex.rgba.r * 17 / 255.0;
-            out->g = c->u.hex.rgba.g * 17 / 255.0;
-            out->b = c->u.hex.rgba.b * 17 / 255.0;
-            out->a = 1.0;
-            return true;
+            rgb[0] = c->u.hex.rgba.r * 17 / 255.0;
+            rgb[1] = c->u.hex.rgba.g * 17 / 255.0;
+            rgb[2] = c->u.hex.rgba.b * 17 / 255.0;
+            return css_color_srgb(rgb, 1.0, out);
         case LXB_CSS_PROPERTY_COLOR_HEX_TYPE_4:
-            out->r = c->u.hex.rgba.r * 17 / 255.0;
-            out->g = c->u.hex.rgba.g * 17 / 255.0;
-            out->b = c->u.hex.rgba.b * 17 / 255.0;
-            out->a = c->u.hex.rgba.a * 17 / 255.0;
-            return true;
+            rgb[0] = c->u.hex.rgba.r * 17 / 255.0;
+            rgb[1] = c->u.hex.rgba.g * 17 / 255.0;
+            rgb[2] = c->u.hex.rgba.b * 17 / 255.0;
+            return css_color_srgb(rgb, c->u.hex.rgba.a * 17 / 255.0, out);
         case LXB_CSS_PROPERTY_COLOR_HEX_TYPE_6:
-            out->r = c->u.hex.rgba.r / 255.0;
-            out->g = c->u.hex.rgba.g / 255.0;
-            out->b = c->u.hex.rgba.b / 255.0;
-            out->a = 1.0;
-            return true;
+            rgb[0] = c->u.hex.rgba.r / 255.0;
+            rgb[1] = c->u.hex.rgba.g / 255.0;
+            rgb[2] = c->u.hex.rgba.b / 255.0;
+            return css_color_srgb(rgb, 1.0, out);
         case LXB_CSS_PROPERTY_COLOR_HEX_TYPE_8:
-            out->r = c->u.hex.rgba.r / 255.0;
-            out->g = c->u.hex.rgba.g / 255.0;
-            out->b = c->u.hex.rgba.b / 255.0;
-            out->a = c->u.hex.rgba.a / 255.0;
-            return true;
+            rgb[0] = c->u.hex.rgba.r / 255.0;
+            rgb[1] = c->u.hex.rgba.g / 255.0;
+            rgb[2] = c->u.hex.rgba.b / 255.0;
+            return css_color_srgb(rgb, c->u.hex.rgba.a / 255.0, out);
         }
         DFAIL("a hex colour carried a digit count that is not three, four, six or eight — those are the four "
               "<hex-color> forms CSS Color 4 defines");
@@ -320,37 +405,40 @@ static bool css_color_to_srgb(const lxb_css_value_color_t *c, CssColor *out)
 
     case LXB_CSS_VALUE_TRANSPARENT:
         /* CSS Color 4: "transparent black", the same colour as opaque black but fully transparent. */
-        out->r = out->g = out->b = 0.0;
-        out->a = 0.0;
-        return true;
+        rgb[0] = rgb[1] = rgb[2] = 0.0;
+        return css_color_srgb(rgb, 0.0, out);
 
     case LXB_CSS_VALUE_RGB: case LXB_CSS_VALUE_RGBA:
-        out->r = css_rgb_component(&c->u.rgb.r);
-        out->g = css_rgb_component(&c->u.rgb.g);
-        out->b = css_rgb_component(&c->u.rgb.b);
-        out->a = css_alpha(&c->u.rgb.a);
+        out->space = CSS_COLOR_SPACE_SRGB;
+        out->missing = 0u;
+        out->c[0] = css_rgb_component(&c->u.rgb.r, &missing);
+        if (missing) out->missing |= CSS_COLOR_MISSING_COMPONENT(0);
+        out->c[1] = css_rgb_component(&c->u.rgb.g, &missing);
+        if (missing) out->missing |= CSS_COLOR_MISSING_COMPONENT(1);
+        out->c[2] = css_rgb_component(&c->u.rgb.b, &missing);
+        if (missing) out->missing |= CSS_COLOR_MISSING_COMPONENT(2);
+        out->a = css_alpha(&c->u.rgb.a, &missing);
+        if (missing) out->missing |= CSS_COLOR_MISSING_ALPHA;
         return true;
 
     case LXB_CSS_VALUE_HSL: case LXB_CSS_VALUE_HSLA:
         css_hsl_to_srgb(css_hue_degrees(&c->u.hsl.h), css_percentage(&c->u.hsl.s),
                         css_percentage(&c->u.hsl.l), rgb);
-        out->r = css_clamp01(rgb[0]);
-        out->g = css_clamp01(rgb[1]);
-        out->b = css_clamp01(rgb[2]);
-        out->a = css_alpha(&c->u.hsl.a);
+        for (i = 0; i < 3; i++) rgb[i] = css_clamp01(rgb[i]);
+        css_color_srgb(rgb, css_alpha(&c->u.hsl.a, &missing), out);
+        if (missing) out->missing |= CSS_COLOR_MISSING_ALPHA;
         return true;
 
     case LXB_CSS_VALUE_HWB:
         /* The whiteness and blackness ride the same record as hsl()'s saturation and lightness. */
         css_hwb_to_srgb(css_hue_degrees(&c->u.hwb.h), css_percentage(&c->u.hwb.s),
                         css_percentage(&c->u.hwb.l), rgb);
-        out->r = css_clamp01(rgb[0]);
-        out->g = css_clamp01(rgb[1]);
-        out->b = css_clamp01(rgb[2]);
-        out->a = css_alpha(&c->u.hwb.a);
+        for (i = 0; i < 3; i++) rgb[i] = css_clamp01(rgb[i]);
+        css_color_srgb(rgb, css_alpha(&c->u.hwb.a, &missing), out);
+        if (missing) out->missing |= CSS_COLOR_MISSING_ALPHA;
         return true;
 
-    /* THE FOUR SPACES §12 CONVERTS. The lab and lch records are shared by their OK counterparts — lexbor
+    /* THE FOUR SPACES §11 CONVERTS. The lab and lch records are shared by their OK counterparts — lexbor
        parses `oklab()` into `u.lab` and `oklch()` into `u.lch` — so what separates the pairs here is entirely
        the percentage reference range and the parse-time clamp each function declares, which is why the four
        cases are written out rather than folded. The result is EXTENDED sRGB and is deliberately not clamped:
@@ -361,14 +449,18 @@ static bool css_color_to_srgb(const lxb_css_value_color_t *c, CssColor *out)
         css_lab_to_srgb(css_clamp(css_lab_component(&c->u.lab.l, 100.0), 0.0, 100.0),
                         css_lab_component(&c->u.lab.a, 125.0),
                         css_lab_component(&c->u.lab.b, 125.0), rgb);
-        return css_color_from_srgb(rgb, css_alpha(&c->u.lab.alpha), out);
+        css_color_srgb(rgb, css_alpha(&c->u.lab.alpha, &missing), out);
+        if (missing) out->missing |= CSS_COLOR_MISSING_ALPHA;
+        return true;
 
     case LXB_CSS_VALUE_OKLAB:
         /* §9.4: L is 0% = 0.0, 100% = 1.0, clamped to that range; a and b are -100% = -0.4, 100% = 0.4. */
         css_oklab_to_srgb(css_clamp(css_lab_component(&c->u.lab.l, 1.0), 0.0, 1.0),
                           css_lab_component(&c->u.lab.a, 0.4),
                           css_lab_component(&c->u.lab.b, 0.4), rgb);
-        return css_color_from_srgb(rgb, css_alpha(&c->u.lab.alpha), out);
+        css_color_srgb(rgb, css_alpha(&c->u.lab.alpha, &missing), out);
+        if (missing) out->missing |= CSS_COLOR_MISSING_ALPHA;
+        return true;
 
     case LXB_CSS_VALUE_LCH:
         /* §9.3: L as in lab(); C is 0% = 0, 100% = 150, clamped below at 0; H is a <hue>, and 0deg points
@@ -376,14 +468,18 @@ static bool css_color_to_srgb(const lxb_css_value_color_t *c, CssColor *out)
         css_lch_to_srgb(css_clamp(css_lab_component(&c->u.lch.l, 100.0), 0.0, 100.0),
                         css_clamp_chroma(css_lab_component(&c->u.lch.c, 150.0)),
                         css_hue_degrees(&c->u.lch.h), rgb);
-        return css_color_from_srgb(rgb, css_alpha(&c->u.lch.a), out);
+        css_color_srgb(rgb, css_alpha(&c->u.lch.a, &missing), out);
+        if (missing) out->missing |= CSS_COLOR_MISSING_ALPHA;
+        return true;
 
     case LXB_CSS_VALUE_OKLCH:
         /* §9.4: L as in oklab(); C is 0% = 0.0, 100% = 0.4, clamped below at 0. */
         css_oklch_to_srgb(css_clamp(css_lab_component(&c->u.lch.l, 1.0), 0.0, 1.0),
                           css_clamp_chroma(css_lab_component(&c->u.lch.c, 0.4)),
                           css_hue_degrees(&c->u.lch.h), rgb);
-        return css_color_from_srgb(rgb, css_alpha(&c->u.lch.a), out);
+        css_color_srgb(rgb, css_alpha(&c->u.lch.a, &missing), out);
+        if (missing) out->missing |= CSS_COLOR_MISSING_ALPHA;
+        return true;
 
     /* §4.5 STEP 2's USED-COLOUR RESOLUTION, for the two kinds of value that need one. This entry point has no
        context element to resolve against — §4.5 says "use element if it was passed, or the initial values of
@@ -415,6 +511,13 @@ static bool css_color_to_srgb(const lxb_css_value_color_t *c, CssColor *out)
     case LXB_CSS_VALUE_ACCENTCOLOR:      *out = css_system_color(CSS_SYSTEM_COLOR_ACCENTCOLOR);      return true;
     case LXB_CSS_VALUE_ACCENTCOLORTEXT:  *out = css_system_color(CSS_SYSTEM_COLOR_ACCENTCOLORTEXT);  return true;
 
+    case LXB_CSS_VALUE_COLOR:
+        DFAIL("lexbor's <color> grammar returned a parsed `color()` function — its own colour handler answers "
+              "`case LXB_CSS_VALUE_COLOR: default: return false` for that token, so this component reads the "
+              "production itself over lexbor's tokenizer. Lexbor has grown the production: delete "
+              "css_color_parse_function and read the value out of this record instead");
+        return false;
+
     default:
         break;
     }
@@ -423,11 +526,10 @@ static bool css_color_to_srgb(const lxb_css_value_color_t *c, CssColor *out)
     DCHECK(kw != NULL, "a parsed <color> carried a value id lexbor's own registry does not know");
     named = kw ? css_named_color((const char *)kw->name) : NULL;
     if (named) {
-        out->r = ((named->rgb >> 16) & 0xff) / 255.0;
-        out->g = ((named->rgb >> 8) & 0xff) / 255.0;
-        out->b = (named->rgb & 0xff) / 255.0;
-        out->a = 1.0;
-        return true;
+        rgb[0] = ((named->rgb >> 16) & 0xff) / 255.0;
+        rgb[1] = ((named->rgb >> 8) & 0xff) / 255.0;
+        rgb[2] = (named->rgb & 0xff) / 255.0;
+        return css_color_srgb(rgb, 1.0, out);
     }
     DFAIL("a <color> lexbor's grammar accepted is neither one of the forms above nor a keyword in CSS Color 4 "
           "§6.1's named-colour table — the grammar has gained a member the table and the cases above have not, "
@@ -435,7 +537,7 @@ static bool css_color_to_srgb(const lxb_css_value_color_t *c, CssColor *out)
     return false;
 }
 
-/* ---- the two entry points ------------------------------------------------------------------------------------ */
+/* ---- the lexbor-driven reader --------------------------------------------------------------------------- */
 
 static bool css_is_whitespace(char c)
 {
@@ -443,7 +545,7 @@ static bool css_is_whitespace(char c)
     return c == '\n' || c == '\r' || c == '\f' || c == '\t' || c == ' ';
 }
 
-bool css_color_parse(const char *text, size_t len, CssColor *out)
+static bool css_color_parse_lexbor(const char *text, size_t len, CssColor *out)
 {
     static const char PREFIX[] = "color:";
     const size_t plen = sizeof PREFIX - 1;
@@ -453,7 +555,6 @@ bool css_color_parse(const char *text, size_t len, CssColor *out)
     char *buf;
     bool ok = false;
 
-    DCHECK(out != NULL, "css color: a parse was asked for with nowhere to put the result");
     buf = malloc(plen + len + 1);
     CHECK(buf != NULL, "css color: OOM building the declaration a <color> is parsed as");
     memcpy(buf, PREFIX, plen);
@@ -489,7 +590,7 @@ bool css_color_parse(const char *text, size_t len, CssColor *out)
         /* A FAILED declaration is kept in the list with its type rewritten to lexbor's `__undef`, which is why
            the type is asked rather than the list being empty-checked. */
         if (d->type == LXB_CSS_PROPERTY_COLOR && !d->important && tail_is_ws)
-            ok = css_color_to_srgb((const lxb_css_value_color_t *)d->u.color, out);
+            ok = css_color_to_used((const lxb_css_value_color_t *)d->u.color, out);
     }
 
     lxb_css_memory_destroy(mem, true);
@@ -498,11 +599,201 @@ bool css_color_parse(const char *text, size_t len, CssColor *out)
     return ok;
 }
 
+/* THE SEAM, from lexbor's side. Only a DCHECK calls this, and only after this component's own reader has
+   claimed the string: the two grammars must not both accept one input, and the day lexbor's does, its answer
+   is the one to use and the reader below is the code to delete. */
+static bool css_color_lexbor_accepts(const char *text, size_t len)
+{
+    CssColor scratch;
+
+    return css_color_parse_lexbor(text, len, &scratch);
+}
+
+/* ---- §10.1's `color()`, the production lexbor does not have ------------------------------------------------
+ *
+ * color() = color( <colorspace-params> [ / [ <alpha-value> | none ] ]? )
+ * <colorspace-params> = [ <predefined-rgb-params> | <xyz-params> ]
+ * <predefined-rgb-params> = <predefined-rgb> [ <number> | <percentage> | none ]{3}
+ * <predefined-rgb> = srgb | srgb-linear | display-p3 | display-p3-linear | a98-rgb | prophoto-rgb | rec2020
+ * <xyz-params> = <xyz-space> [ <number> | <percentage> | none ]{3}
+ * <xyz-space> = xyz | xyz-d50 | xyz-d65
+ *
+ * Every space in the grammar shares one percent reference range — §10.2 through §10.9 each state "0% = 0.0,
+ * 100% = 1.0" for their three components — so a `<percentage>` is one hundredth of itself and nothing here
+ * needs to know which space it is reading. Components are NOT clamped: "An out of gamut color has component
+ * values less than 0 or 0%, or greater than 1 or 100%. These are not invalid, and are retained." The alpha IS
+ * clamped, per §16.1.2's "<alpha-value>s which were specified outside the valid range are clamped at parse
+ * time". A comma anywhere is a parse failure and needs no case of its own: "Using commas inside this function
+ * is an error", and no step below accepts one. */
+typedef enum {
+    CSS_COLOR_FN_NOT_A_COLOR_FUNCTION,   /* the input does not begin with the `color(` function token */
+    CSS_COLOR_FN_FAILURE,                /* it does, and it is not a valid color() */
+    CSS_COLOR_FN_PARSED
+} CssColorFnResult;
+
+/* The next token, whitespace skipped, still UNCONSUMED — and NULL is never a parse answer. Lexbor's tokenizer
+   returns NULL only where it failed to allocate (its own state functions set no other status), so a NULL here
+   is the allocation floor and not a colour that failed to parse. */
+static const lxb_css_syntax_token_t *css_color_peek(lxb_css_syntax_tokenizer_t *tkz)
+{
+    const lxb_css_syntax_token_t *t = lxb_css_syntax_token_wo_ws(tkz);
+
+    CHECK(t != NULL, "css color: OOM tokenizing a color() function");
+    return t;
+}
+
+/* A `<number> | <percentage> | none` component of `color()`, or false for anything else. */
+static bool css_color_fn_component(const lxb_css_syntax_token_t *t, double *value, bool *missing)
+{
+    *missing = false;
+    switch (t->type) {
+    case LXB_CSS_SYNTAX_TOKEN_NUMBER:
+        *value = lxb_css_syntax_token_number(t)->num;
+        return true;
+    case LXB_CSS_SYNTAX_TOKEN_PERCENTAGE:
+        *value = lxb_css_syntax_token_percentage(t)->num / 100.0;
+        return true;
+    case LXB_CSS_SYNTAX_TOKEN_IDENT:
+        if (css_ascii_ci_eq((const char *)lxb_css_syntax_token_ident(t)->data,
+                            lxb_css_syntax_token_ident(t)->length, "none")) {
+            *value = 0.0;              /* §4.4: "a missing component behaves as a zero value" */
+            *missing = true;
+            return true;
+        }
+        return false;
+    default:
+        return false;
+    }
+}
+
+static CssColorFnResult css_color_parse_function(const char *text, size_t len, CssColor *out)
+{
+    lxb_css_syntax_tokenizer_t *tkz;
+    const lxb_css_syntax_token_t *t;
+    CssColor c = { CSS_COLOR_SPACE_SRGB, { 0.0, 0.0, 0.0 }, 1.0, 0u };
+    CssColorFnResult res = CSS_COLOR_FN_FAILURE;
+    double value;
+    bool missing;
+    int i;
+
+    tkz = lxb_css_syntax_tokenizer_create();
+    CHECK(tkz != NULL, "css color: the CSS tokenizer allocation failed");
+    CHECK(lxb_css_syntax_tokenizer_init(tkz) == LXB_STATUS_OK,
+          "css color: the CSS tokenizer could not initialise");
+    lxb_css_syntax_tokenizer_buffer_set(tkz, (const lxb_char_t *)text, len);
+
+    /* A STRING TOKEN'S TEXT LIVES UNTIL THE NEXT TOKEN IS PRODUCED — lexbor decodes it into the tokenizer's
+       one temporary buffer and copies it into the arena only when the following token arrives — so every
+       comparison below reads the token it was handed BEFORE asking for another. That is the same discipline
+       lexbor's own property state functions keep. */
+    t = css_color_peek(tkz);
+    if (t->type != LXB_CSS_SYNTAX_TOKEN_FUNCTION
+        || !css_ascii_ci_eq((const char *)lxb_css_syntax_token_function(t)->data,
+                            lxb_css_syntax_token_function(t)->length, "color"))
+    {
+        res = CSS_COLOR_FN_NOT_A_COLOR_FUNCTION;
+        goto done;
+    }
+    /* THE SEAM, from this side: the token claimed here is the one lexbor's own colour handler declines by id.
+       If lexbor ever resolves this name to something else, its grammar and this reader are no longer talking
+       about the same production. */
+    DCHECK(lxb_css_value_by_name(lxb_css_syntax_token_function(t)->data,
+                                 lxb_css_syntax_token_function(t)->length) == LXB_CSS_VALUE_COLOR,
+           "lexbor's value registry no longer maps the `color` function name to LXB_CSS_VALUE_COLOR — that is "
+           "the id its <color> handler declines, and this component reads that production on the strength of "
+           "it, so the two are no longer describing the same token");
+    lxb_css_syntax_token_consume(tkz);
+
+    t = css_color_peek(tkz);
+    if (t->type != LXB_CSS_SYNTAX_TOKEN_IDENT) goto done;
+    if (!css_color_space_by_name((const char *)lxb_css_syntax_token_ident(t)->data,
+                                 lxb_css_syntax_token_ident(t)->length, &c.space)) goto done;
+    lxb_css_syntax_token_consume(tkz);
+
+    for (i = 0; i < 3; i++) {
+        t = css_color_peek(tkz);
+        if (!css_color_fn_component(t, &value, &missing)) goto done;
+        c.c[i] = value;
+        if (missing) c.missing |= CSS_COLOR_MISSING_COMPONENT(i);
+        lxb_css_syntax_token_consume(tkz);
+    }
+
+    t = css_color_peek(tkz);
+    if (t->type == LXB_CSS_SYNTAX_TOKEN_DELIM && lxb_css_syntax_token_delim_char(t) == '/') {
+        lxb_css_syntax_token_consume(tkz);
+        t = css_color_peek(tkz);
+        if (!css_color_fn_component(t, &value, &missing)) goto done;
+        c.a = css_clamp01(value);
+        if (missing) c.missing |= CSS_COLOR_MISSING_ALPHA;
+        lxb_css_syntax_token_consume(tkz);
+        t = css_color_peek(tkz);
+    }
+
+    if (t->type != LXB_CSS_SYNTAX_TOKEN_R_PARENTHESIS) goto done;
+    lxb_css_syntax_token_consume(tkz);
+
+    /* §4.5 parses the WHOLE input as a `<color>`, so anything after the closing parenthesis that is not
+       whitespace makes this not a colour — the same rule the lexbor-driven reader enforces on its own tail. */
+    t = css_color_peek(tkz);
+    if (t->type != LXB_CSS_SYNTAX_TOKEN__EOF) goto done;
+
+    *out = c;
+    res = CSS_COLOR_FN_PARSED;
+
+done:
+    lxb_css_syntax_tokenizer_destroy(tkz);
+    return res;
+}
+
+/* ---- the entry points ------------------------------------------------------------------------------------ */
+
+bool css_color_parse(const char *text, size_t len, CssColor *out)
+{
+    CssColorFnResult r;
+
+    DCHECK(out != NULL, "css color: a parse was asked for with nowhere to put the result");
+    r = css_color_parse_function(text, len, out);
+    if (r != CSS_COLOR_FN_NOT_A_COLOR_FUNCTION) {
+        DCHECK(!css_color_lexbor_accepts(text, len),
+               "lexbor's <color> grammar has GAINED the color() production this component reads itself — the "
+               "two now both accept one string and only one of them can own it. Delete css_color_parse_function "
+               "and the routing below, and read the parsed value out of lexbor's record");
+        return r == CSS_COLOR_FN_PARSED;
+    }
+    return css_color_parse_lexbor(text, len, out);
+}
+
+void css_color_convert(CssColor *c, CssColorSpace dest)
+{
+    double xyz[3];
+    int i;
+
+    DCHECK(c != NULL, "css color: a conversion was asked for with no colour");
+    for (i = 0; i < 3; i++) {
+        DCHECK(!(c->missing & CSS_COLOR_MISSING_COMPONENT(i)) || c->c[i] == 0.0,
+               "a missing component carries a value other than zero — §11 step 2's `replace any missing "
+               "component with zero` is a no-op in this component ONLY because §4.4's zero is stored beside "
+               "the flag at every point a colour is built, and one of those points stored something else");
+    }
+    /* §11 defines the conversion "where src and dest are different". Where they are the same there is nothing
+       to convert, and that is not a shortcut: it is the whole reason a missing component can survive to a
+       serialization at all. */
+    if (c->space == dest) return;
+
+    /* §11 step 2: "Replace any missing component with zero." The zero is already in place — §4.4 keeps every
+       missing component's value at zero — so what this does is forget that they were missing, which is what
+       makes the difference observable in the serialization. The ALPHA's flag is NOT cleared: the pipeline
+       below is the two spaces' transfer functions, matrices and white points, and alpha is in none of them. */
+    c->missing &= ~(CSS_COLOR_MISSING_COMPONENT(0) | CSS_COLOR_MISSING_COMPONENT(1)
+                    | CSS_COLOR_MISSING_COMPONENT(2));
+    css_color_space_to_xyz_d65(c->space, c->c, xyz);
+    css_color_space_from_xyz_d65(dest, xyz, c->c);
+    c->space = dest;
+}
+
 /* HTML §4.10.5.1.14 step 4.2's rounding: into the range 0 to 255 inclusive, to the nearest integer with a tie
    going towards +infinity — CSS Values 4's rule, which is `floor(x + 0.5)` and NOT C's `round`, whose tie goes
-   away from zero and therefore answers -1.5 differently. This step is ALSO where the gamut clip happens, and
-   the only place it is allowed to: a lab() or oklch() colour outside the sRGB gamut arrives here with a real
-   component below 0 or above 1, and "in the range 0 to 255 inclusive" is what §4.10.5.1.14 does about it.
+   away from zero and therefore answers -1.5 differently.
    A NaN is the one input the two comparisons below cannot place — both are false for it and the cast is then
    undefined — so it is asserted rather than silently becoming whatever the cast produced. */
 static int css_round_255(double v)
@@ -517,21 +808,164 @@ static int css_round_255(double v)
     return (int)n;
 }
 
+void css_color_quantize_8bit(CssColor *c)
+{
+    int i;
+
+    DCHECK(c != NULL, "css color: an 8-bit quantization was asked for with no colour");
+    DCHECK(c->space == CSS_COLOR_SPACE_SRGB,
+           "HTML §4.10.5.1.14 step 4.2's rounding reached a colour that is not sRGB — step 4.1 converts to "
+           "'srgb' first and the two steps are in that order because `the range 0 to 255` is the Limited sRGB "
+           "state's 8 bits per component, so its caller ran them the other way round or skipped 4.1");
+    for (i = 0; i < 3; i++)
+        c->c[i] = css_round_255(c->c[i]) / 255.0;
+}
+
 void css_color_serialize_html(const CssColor *c, char out[8])
 {
     static const char HEX[] = "0123456789abcdef";
     int v[3], i;
 
+    DCHECK(c->space == CSS_COLOR_SPACE_SRGB,
+           "CSS Color 4 §16.2.1's HTML-compatible serialization is defined for an sRGB value, and the colour "
+           "reaching it is in another colour space — HTML §4.10.5.1.14 step 4.1 converts to 'srgb' before it "
+           "chooses this form, so its caller skipped the conversion");
     DCHECK(c->a == 1.0, "CSS Color 4 §16.2.1 states the HTML-compatible serialization only for an alpha of 1, "
                         "and a caller reaching it with any other alpha skipped the step that makes it 1 — for "
                         "HTML §4.10.5.1.14 that is `serialize a color well control color` step 3");
-    v[0] = css_round_255(c->r);
-    v[1] = css_round_255(c->g);
-    v[2] = css_round_255(c->b);
+    for (i = 0; i < 3; i++) {
+        DCHECK(c->c[i] >= 0.0 && c->c[i] <= 1.0
+               && fabs(c->c[i] * 255.0 - floor(c->c[i] * 255.0 + 0.5)) < 1e-9,
+               "a component that is not one of the 256 this form can write reached §16.2.1's serialization — "
+               "HTML §4.10.5.1.14 step 4.2 rounds every component into 0 to 255 before step 6 serializes, so "
+               "its caller skipped css_color_quantize_8bit");
+        v[i] = css_round_255(c->c[i]);
+    }
     out[0] = '#';
     for (i = 0; i < 3; i++) {
         out[1 + i * 2] = HEX[(v[i] >> 4) & 0xf];
         out[2 + i * 2] = HEX[v[i] & 0xf];
     }
     out[7] = 0;
+}
+
+/* §16.5's and §16.1.2's `<number>`: base ten, "." as the decimal separator, a leading zero that "must not be
+   omitted", six decimal places with trailing fractional zeroes omitted along with a then-empty decimal point,
+   and "rounded towards +∞, not truncated".
+ *
+ * THE ROUNDING IS DONE ON THE DECIMAL EXPANSION, not by scaling the double, because both of the obvious
+ * shortcuts get the tie wrong and the tie is reachable. `printf("%.6f")` rounds a tie to EVEN, which answers
+ * 0.007812 for the exactly-representable 0.0078125 where §16.5 asks for 0.007813; multiplying by a million
+ * first rounds twice, and the second rounding can invent a tie the value did not have. So the value is printed
+ * with far more decimals than the grid — enough that no double can be closer to a midpoint than the printed
+ * digits can show — and the string is then rounded at the sixth decimal, with the midpoint going to the
+ * GREATER of the two candidates, which is what "towards +∞" means for a negative component too. */
+static size_t css_color_write_number(double v, char *out, size_t cap)
+{
+    char buf[384];
+    int n;
+    size_t dot, first, tail, i, len;
+    bool up = false;
+
+    DCHECK(isfinite(v), "a non-finite component reached CSS Color 4 §16.5's serialization — §16.5 allows an "
+                        "implementation-defined limit for values approaching infinity and this component does "
+                        "not impose one, so build that limit where the components are computed");
+    n = snprintf(buf, sizeof buf, "%.30f", v);
+    CHECK(n > 0 && (size_t)n + 2 <= sizeof buf,
+          "css color: a <number>'s decimal expansion did not fit the buffer §16.5's serialization prints it in");
+    len = (size_t)n;
+
+    first = buf[0] == '-' ? 1u : 0u;
+    for (dot = first; dot < len && buf[dot] != '.'; dot++) { }
+    DCHECK(dot < len && len > dot + 30,
+           "the decimal expansion of a <number> came back from snprintf without the thirty decimal places it "
+           "was asked for — the rounding below indexes them by position");
+
+    /* Round at the sixth decimal: the digits beyond it decide, and an exact midpoint goes upwards. */
+    tail = dot + 7;
+    if (buf[tail] > '5') {
+        up = true;
+    }
+    else if (buf[tail] == '5') {
+        for (i = tail + 1; i < len && buf[i] == '0'; i++) { }
+        up = i < len ? true : (first == 0);   /* an exact midpoint: towards +∞, so up in magnitude only if + */
+    }
+
+    if (up) {
+        i = dot + 6;
+        for (;;) {
+            if (buf[i] == '.') { i--; continue; }
+            if (buf[i] < '9') { buf[i]++; break; }
+            buf[i] = '0';
+            if (i == first) {
+                /* Every digit carried — 9.9999996 becomes 10.000000 — so the number grew a place. */
+                memmove(buf + first + 1, buf + first, len - first + 1);
+                buf[first] = '1';
+                dot++;
+                len++;
+                break;
+            }
+            i--;
+        }
+    }
+
+    len = dot + 7;
+    while (len > 0 && buf[len - 1] == '0') len--;
+    if (len > 0 && buf[len - 1] == '.') len--;
+    buf[len] = 0;
+
+    CHECK(len + 1 <= cap, "css color: §16.5's serialization ran out of room for a component");
+    memcpy(out, buf, len + 1);
+    return len;
+}
+
+size_t css_color_serialize_function(const CssColor *c, char out[CSS_COLOR_FUNCTION_MAX])
+{
+    static const char NONE[] = "none";
+    size_t len = 0;
+    int i, n;
+
+    DCHECK(c != NULL, "css color: a color() serialization was asked for with no colour");
+    n = snprintf(out, CSS_COLOR_FUNCTION_MAX, "color(%s", css_color_space_name(c->space));
+    CHECK(n > 0 && (size_t)n < CSS_COLOR_FUNCTION_MAX, "css color: §16.5's function name did not fit");
+    len = (size_t)n;
+
+    for (i = 0; i < 3; i++) {
+        CHECK(len + 1 < CSS_COLOR_FUNCTION_MAX, "css color: §16.5's component separator did not fit");
+        out[len++] = ' ';
+        if (c->missing & CSS_COLOR_MISSING_COMPONENT(i)) {
+            CHECK(len + sizeof NONE <= CSS_COLOR_FUNCTION_MAX, "css color: §16's `none` keyword did not fit");
+            memcpy(out + len, NONE, sizeof NONE);
+            len += sizeof NONE - 1;
+        }
+        else {
+            len += css_color_write_number(c->c[i], out + len, CSS_COLOR_FUNCTION_MAX - len);
+        }
+    }
+
+    /* §16.1: "If, after clamping to the range [0, 1] the alpha is 1, it is omitted from the serialization; an
+       implicit value of 1 (fully opaque) is the default." A MISSING alpha is not 1 and is not omitted — §16
+       serializes a missing component of a non-legacy form as the `none` keyword. */
+    if ((c->missing & CSS_COLOR_MISSING_ALPHA) || c->a != 1.0) {
+        CHECK(len + 3 < CSS_COLOR_FUNCTION_MAX, "css color: §16.5's alpha separator did not fit");
+        out[len++] = ' ';
+        out[len++] = '/';
+        out[len++] = ' ';
+        if (c->missing & CSS_COLOR_MISSING_ALPHA) {
+            CHECK(len + sizeof NONE <= CSS_COLOR_FUNCTION_MAX, "css color: §16's `none` keyword did not fit");
+            memcpy(out + len, NONE, sizeof NONE);
+            len += sizeof NONE - 1;
+        }
+        else {
+            DCHECK(c->a >= 0.0 && c->a <= 1.0,
+                   "an alpha outside [0, 1] reached §16.5's serialization — CSS Color 4 §16.1.2 states that an "
+                   "<alpha-value> outside the range is clamped at parse time, so it was not");
+            len += css_color_write_number(c->a, out + len, CSS_COLOR_FUNCTION_MAX - len);
+        }
+    }
+
+    CHECK(len + 2 <= CSS_COLOR_FUNCTION_MAX, "css color: §16.5's closing parenthesis did not fit");
+    out[len++] = ')';
+    out[len] = 0;
+    return len;
 }
