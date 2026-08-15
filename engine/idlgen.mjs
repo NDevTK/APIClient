@@ -162,6 +162,13 @@ const INTERFACES = {
   UserActivation:       "core/html/user_activation.c",
   History:              "core/frame/history.c",
   Screen:               "core/frame/screen.c",
+  /* HTML §7.2.4. The interface had no row at all, so the audit said nothing about it — its setters, `assign`,
+     `replace`, `reload` and `ancestorOrigins` were not reported as zero gaps, they were not reported.
+     Its members are NOT on Location.prototype and that is the spec, not a shortcut: every one of them is
+     [LegacyUnforgeable], and Web IDL §3.7.6 REMOVES the unforgeable attributes from the interface prototype
+     object and puts them on the object itself. Attribution follows the instance the component builds over the
+     prototype it tagged, which is the same edge that files MessageChannel's `port1`/`port2`. */
+  Location:             "core/frame/location.c",
   URL:                  "core/url/url.c",
   URLSearchParams:     ["core/url/url_search_params.c", "core/idl_iter.c"],
   CSSStyleDeclaration:  "core/css/css_style_declaration.c",

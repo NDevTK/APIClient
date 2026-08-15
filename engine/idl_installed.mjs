@@ -520,6 +520,10 @@ class Resolver {
    expose, and a ban that has to be expressed against the install FORM rather than against the file's text. */
 const CALL_FORMS = new Map(Object.entries({
   idl_install_accessor:          { target: 1, name: 2, fn: 3 },
+  /* Web IDL §3.4.10's [LegacyUnforgeable]: the same attribute, defined on the object that IMPLEMENTS the
+     interface rather than on its prototype and non-configurable. It is an install like any other — where it
+     LANDS is what differs, and the attribution graph already follows the object. */
+  idl_install_accessor_unforgeable: { target: 1, name: 2, fn: 3 },
   idl_install_accessor_step:     { target: 1, name: 2 },
   idl_install_method:            { target: 1, name: 2 },
   idl_install_step_method:       { target: 1, name: 2 },
@@ -1084,6 +1088,19 @@ export function loadEnvironment(root) {
           if (src) { if (named(r)) tlink(at(lhs, d.at), src); else tarrow(src, at(lhs, d.at), null); }
           const io = r.match(/^idl_interface_object\s*\(\s*[^,]+,\s*([^,]+),\s*([^)]*)\)/);
           if (io && named(stripDup(io[2]))) tlink(at(lhs, d.at), tagKey(path, f, stripDup(io[2]), d.at - 1));
+          /* AN INSTANCE IS ITS PROTOTYPE'S INTERFACE. `JS_NewObjectProtoClass(ctx, proto, cls)` builds a
+             PLATFORM OBJECT over an interface prototype object, so what it implements is whatever that
+             prototype was tagged with — and TWO of Web IDL's rules put an interface's members on such an
+             object rather than on the prototype: §3.4.10's [LegacyUnforgeable] (HTML §7.2.4's Location marks
+             every member of the interface that way) and §3.7.3's [Global]. Without this edge those members are
+             UNATTRIBUTED, which the audit reports as a gap that is not there — MessageChannel's `port1` and
+             `port2` were in exactly that state, defined as [SameObject] own properties of the channel.
+             ONE-WAY, for the reason the return edge is: the interface flows from the prototype to the instance
+             built over it, and never back — an instance is one of many, so what is written on one says nothing
+             about what its prototype carries. */
+          const inst = r.match(/^JS_NewObjectProtoClass\s*\(\s*[^,]+,\s*([^,]+),/);
+          if (inst && named(stripDup(inst[1])))
+            tarrow(tagKey(path, f, stripDup(inst[1]), d.at - 1), at(lhs, d.at), null);
           const call = r.match(/^([A-Za-z_]\w*)\s*\(/);
           if (call && byName.has(call[1])) {
             /* A CALL THAT NAMES AN INTERFACE GETS THAT INTERFACE'S OBJECT. `html_iface_proto(ctx,
