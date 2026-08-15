@@ -105,9 +105,25 @@ void flow_release(JSContext *ctx, Flow *f) {
        including one the park never wrote. A partial self-park releases a written TAIL while everything above it
        keeps running and stays unwritten, so the engine-wide answer is true and false at the same moment; the
        per-flow one is exact in both directions. */
-    DCHECK(f->paged || f->park_fn == NULL,
-           "a flow was released with a continuation still parked — its suspended async activation is dropped, "
-           "and nothing but the cold tier's replay can bring it back");
+    /* AND IT IS THE SAME QUESTION FOR ALL FIVE THINGS A RELEASED FLOW CAN STILL BE CARRYING, which is why they
+       are ONE assert and not one assert plus four silent frees. `paged` was asked of the parked continuation
+       alone, and the four things released below it — the suspended FRAME (this flow's whole heap-frame chain,
+       every activation it is stopped across), the REPLIES the host still owed it, the JOBS on its queue, and
+       its own loaded chunk BODIES — were given back with nothing saying whether they were work items being
+       dropped. Every one of them is a work item on the ONE frontier, and §scheduler forbids dropping one; the
+       justification written beside the frees is precisely the cold tier's ("the recipe re-enqueues the
+       reactions and re-issues the requests as it replays"), which is the `paged` flag and nothing else. So a
+       flow that was NOT written out may hold none of them, and the honest teardown of a session that ends over
+       live flows either paged them or had nothing to lose.
+       THIS IS THE ONE THAT FIRES ON THE SMOKE HOST'S GIVE-UP PATH — a provider that answers nothing ends
+       run_scheduler, main.c tears the instance down, and flow_registry_free releases survivors that are
+       suspended mid-frame with replies outstanding. That abort is the point: it names the flows a run threw
+       away at the moment it threw them, which no counter, no census line and no result field has ever said. */
+    DCHECK(f->paged || (f->park_fn == NULL && f->frame == NULL && f->njob == 0 &&
+                        pending_count(f->pending) == 0),
+           "a flow was released holding WORK — a parked continuation, a suspended frame, queued reactions or "
+           "replies the host still owed it — and it was never written to the cold tier, so nothing replays it "
+           "and every one of those is a work item the ONE frontier just dropped");
     /* …and it is DROPPED HERE, on the line after the assert that says when that is allowed, rather than left on
        a Flow that is about to be freed. The slot borrows: `opaque` is an activation reachable from the frame
        chain released just below, so what goes is the intention to resume it and not the memory. flow_remove
