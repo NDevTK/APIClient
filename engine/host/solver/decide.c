@@ -104,10 +104,17 @@ static void dec_clear(void) {
 
 static int dec_total(void) { return g_dec_below + g_dec_n; }
 
-/* The arm recorded at whole-vector index `k`. The head first, because that is where every read a resumed flow
-   performs lands: a sibling resumes with its cursor AT the branch it was forked over, so the one slot it
-   replays is the topmost. A from-baseline flow replaying a birth vector reads out of the head too, since
-   decide_enter loads that vector there. The chain walk below is for a replay that outlives a freeze. */
+/* The arm recorded at whole-vector index `k`. The head first, because that is where a SIBLING's read lands: it
+   resumes with its cursor AT the branch it was forked over, so the one slot it replays is the topmost.
+   THE COLD TIER'S RESUMED FLOW READS THE OTHER END, and that is worth saying because the walk below is O(chain)
+   per read for it: it starts at cursor 0, so its first read is the BOTTOM segment and the loop descends the
+   whole chain to reach it, then the next read descends all but one, and so on — O(depth^2) to replay a path of
+   depth D, with D forks-deep chains made of one-arm segments. That is a few tens of milliseconds at the depths
+   this engine has measured (8000) and it is not a bound (nothing is dropped or truncated), but it is the cost
+   that grows fastest in a resume and it has one obvious root fix: a resume walks its arms in ASCENDING order,
+   so the chain can be indexed ONCE at decide_resume into the flow that is running — one array for the one
+   switched-in flow, never one per parked flow, which is the distinction that made the flat vector the wrong
+   shape to park in the first place. */
 static int dec_at(int k) {
     const DecSeg *s;
     DCHECK(k >= 0 && k < dec_total(),
@@ -165,12 +172,16 @@ static DecSeg *dec_seg_arm(DecSeg *base, int arm) {
     return s;
 }
 
+/* A FRESH FLOW STANDS ON NOTHING — an empty vector, cursor 0, and every branch it reaches is a new decision.
+   It used to copy a BIRTH VECTOR off the flow, and no caller ever supplied one: the field was the from-baseline
+   replay mechanism, built and never reached, which is exactly the shape the cold tier needed and could not use
+   (a flat array per flow is the quadratic the chain above deleted). A flow that carries a recorded path is not
+   fresh — it RESUMES, over the chain the cold tier rebuilt, at cursor 0. So there is one representation of a
+   decision vector in this engine and it is the shared chain. */
 void decide_enter(JSContext *ctx, Flow *f) {
     (void)ctx;
     dec_clear();   /* whatever the previous flow was standing on is not this one's */
-    dec_ensure(f->dec_n);
-    if (f->dec_n) memcpy(g_dec, f->dec, (size_t)f->dec_n);
-    g_dec_n = f->dec_n;
+    g_dec_n = 0;
     g_c = 0;
     g_cur_fn = f->fn;   /* borrowed */
     g_running = 1;
@@ -248,9 +259,11 @@ const char *decide_fork_at(int i, long *hits)
 
 long decide_fork_total(void) { return g_fork_total; }
 
-/* Swap the running decision state when the scheduler interleaves flows. A flow paused mid-execution keeps its
-   evolving vector (forks may have extended g_dec past f->dec) + its cursor, so on resume it consumes the SAME
-   decisions from where it left off. decide_suspend snapshots; decide_resume restores + re-binds cur_fn. */
+/* Swap the running decision state when the scheduler interleaves flows. A flow paused mid-execution keeps the
+   whole vector it has accumulated (every arm it appended while it ran) + its cursor, so on resume it consumes
+   the SAME decisions from where it left off. decide_suspend snapshots; decide_resume restores + re-binds
+   cur_fn. It is also the shape the cold tier rebuilds a parked flow into — a chain and a cursor is the whole of
+   one flow's decision state whether the chain was frozen by this session or read back out of a recipe. */
 /* A BLOB IS A POINTER AT A SEGMENT and a cursor — the whole of one flow's parked decision state, and it is
    O(1) whatever the depth of the vector it names. It was a `malloc(dec_n)` + `memcpy` of the entire vector, on
    every park AND on every fork, which is where the quadratic came from. */
@@ -275,6 +288,71 @@ void decide_resume(void *blob, JSValueConst fn) {
     g_running = 1;
 }
 void decide_blob_free(void *blob) { DecideBlob *b = blob; if (b) { dec_seg_unref(b->seg); free(b); } }
+
+/* THE COLD TIER'S READ AND WRITE OF THIS CHAIN — see decide.h for why the chain is the only part of a snapshot
+   that has an identity outside this session's heap, and why the SEGMENTS rather than the flattened vector are
+   what crosses. The pointers are opaque to the caller: it names a segment by a park-local ordinal it assigns
+   itself, never by anything of this file's. */
+const void *decide_blob_seg(const void *blob) {
+    const DecideBlob *b = blob;
+    DCHECK(b != NULL, "the cold tier asked for the decision chain of a flow that has none parked — a flow that "
+                      "has run is switched OUT before the frontier is walked, so a missing blob here means the "
+                      "walk is reading a flow the scheduler still holds");
+    return b->seg;
+}
+
+const void *decide_seg_base(const void *seg) {
+    DCHECK(seg != NULL, "the cold tier walked below the bottom of a decision chain — the walk ends at the "
+                        "segment whose base is NULL, and asking that one for a base again is a walk that "
+                        "cannot terminate");
+    return ((const DecSeg *)seg)->base;
+}
+
+int decide_seg_arms(const void *seg, const signed char **arms) {
+    const DecSeg *s = seg;
+    DCHECK(s != NULL, "the cold tier asked for the arms of a segment that does not exist");
+    DCHECK(s->n > 0, "a frozen decision segment holds no arms — dec_freeze refuses an empty head and an arm "
+                     "segment is exactly one, so a zero-length one is a chain this file did not build");
+    *arms = s->e;
+    return s->n;
+}
+
+void *decide_seg_new(void *base, const signed char *arms, int n) {
+    DecSeg *b = base, *s;
+
+    DCHECK(n > 0, "a decision segment was rebuilt with no arms — every flow standing on it would replay its "
+                  "path one decision short, and every branch after that would read the next flow's answer");
+    s = malloc(sizeof *s);
+    CHECK(s, "decide: OOM rebuilding a parked decision segment");
+    s->e = malloc((size_t)n);
+    CHECK(s->e, "decide: OOM rebuilding a parked decision segment's arms");
+    memcpy(s->e, arms, (size_t)n);
+    s->n = n;
+    s->below = b ? b->below + b->n : 0;
+    s->base = b;
+    /* ONE reference for the base link, exactly as a freeze transfers one, and ONE for the rebuilder — which is
+       the only difference between building a chain forwards and freezing one backwards: the rebuilder holds
+       every segment it made until the whole park is decoded, because a segment's users are decoded after it. */
+    if (b) b->refcount++;
+    s->refcount = 1;
+    g_dec_seg_live++; g_dec_seg_entries_live += s->n;
+    g_dec_seg_bytes_live += (long)sizeof *s + s->n;
+    return s;
+}
+
+void decide_seg_release(void *seg) { dec_seg_unref(seg); }
+
+void *decide_blob_new(void *seg) {
+    DecideBlob *b = malloc(sizeof *b);
+    CHECK(b, "decide: OOM rebuilding a parked flow's decision state");
+    b->seg = seg;
+    if (seg) ((DecSeg *)seg)->refcount++;
+    /* CURSOR 0 — the whole of what makes this a REPLAY. The flow re-runs the document from its first script and
+       consumes one recorded arm at each branch it re-reaches; when the cursor catches up with the end of the
+       chain it forks like any other flow, which is where its exploration continues. */
+    b->c = 0;
+    return b;
+}
 
 /* See decide.h. `entries` is how many decisions the flow stands on, which is a property of the CHAIN and is
    therefore SHARED with every ancestor; `bytes` is what the flow itself owns, which is now the blob and nothing
@@ -342,23 +420,30 @@ int decide_value_arm(JSValueConst cond)
 static int decide_arm(const char *key, int *forked) {
     int arm;
     *forked = 0;
-    if (g_c < dec_total()) {             /* REPLAY: this run is re-reaching a recorded decision — take that arm */
+    if (key && (arm = concolic_branch_decided(key)) >= 0) {
+        /* FEASIBLE REFINEMENT, AND IT IS ASKED FIRST. This flow has already decided this exact predicate, so
+           the other arm is CONTRADICTED: same unknown input, same test, one answer. Forking it again would add
+           a flow that explores nothing and still carries a COW delta, and a bundle testing one flag in twenty
+           places would cost a million of them. It consumes NO SLOT, precisely because it adds no decision — it
+           is a consequence of the ones already recorded.
+           THE ORDER IS THE WHOLE RULE, and it used to be the other way round for a reason that has been fixed
+           at its root instead. What the vector records is ONE SLOT PER BRANCH THIS FLOW HAD NOT ALREADY
+           DECIDED, so a replay reproduces the original run exactly when it asks the same question in the same
+           order: constraint first (no slot), then the recorded arm, then a new fork. Asking the vector first
+           only appeared to work because the one replaying flow this engine had — a snapshot-forked sibling —
+           replays exactly ONE slot, at a branch whose answer the fork had ALSO pre-recorded into its
+           constraint; the two agreed, and the vector had to win or the cursor would fall behind (the case the
+           deleted comment named: the false-arm sibling of `cfg.admin` reading the admin slot as its
+           `state.beta` decision). That pre-record is gone from the fork below, because the sibling re-executes
+           the branch and records the arm itself. With it gone the constraint is never ahead of the cursor, the
+           two orders stop competing, and a flow that replays its WHOLE path — the cold tier's, which starts at
+           cursor 0 with an empty constraint and re-runs the document — consumes exactly the slots the original
+           run recorded. Asking the vector first would have that flow consume a slot at every REPEAT test of a
+           flag the original decided for free, and every decision after the first repeat would be some other
+           predicate's answer. */
+    } else if (g_c < dec_total()) {      /* REPLAY: this run is re-reaching a recorded decision — take that arm */
         arm = dec_at(g_c) ? 1 : 0;
         g_c++;
-    } else if (key && concolic_branch_decided(key) >= 0) {
-        /* FEASIBLE REFINEMENT. This flow has already decided this exact predicate, so the other arm is
-           CONTRADICTED: same unknown input, same test, one answer. Forking it again would add a flow that
-           explores nothing and still carries a COW delta, and a bundle testing one flag in twenty places would
-           cost a million of them.
-           It is checked HERE and not earlier, which is the whole of its correctness. A branch with a RECORDED
-           decision owns a slot in the vector — it was a real fork when it was first taken — and answering it
-           from the constraint instead would leave the cursor behind, so the NEXT branch would read that slot as
-           its own answer. That is exactly what it did: the false-arm sibling of `cfg.admin` replayed the admin
-           decision as its `state.beta` decision and one of the four combinations vanished. A constraint decides
-           only a branch that would OTHERWISE BE A NEW FORK, and it consumes no slot precisely because it adds
-           no decision — it is a consequence of the ones already recorded, and it re-derives identically on
-           every resume from the constraint that rides the flow beside that vector. */
-        arm = concolic_branch_decided(key);
     } else {
         /* NEW decision -> FRAME-SNAPSHOT FORK: prepare the FALSE sibling's hot state (its decision vector +
            the current constraint), and signal the interpreter (0x100 bit) to CLONE this frame at the branch. The
@@ -366,13 +451,17 @@ static int decide_arm(const char *key, int *forked) {
            TRUE. No re-run vector, no fallback. */
         void *dblob = decide_fork_blob(g_c, 0);
         fork_key_count(key ? key : "(no source identity)");
-        /* the sibling's constraint must already say FALSE when its snapshot is taken — it is the arm the
-           sibling IS, so a later test of the same predicate over there is decided too. Recorded, snapshotted,
-           then overwritten with this flow's arm; the two orders are one statement apart and getting them
-           backwards hands the sibling this flow's answer. */
-        if (key) concolic_constrain_branch(key, 0);
+        /* THE SIBLING'S SNAPSHOT DOES NOT PRE-RECORD ITS ARM, and that deletion is what makes the order above
+           one rule instead of two. It used to write FALSE into the constraint, take the snapshot, then
+           overwrite with TRUE — so the sibling was born already knowing the answer to the branch it was about
+           to re-execute, its constraint was AHEAD of its cursor, and the vector had to be consulted before the
+           constraint or the sibling's one recorded slot would be read by the NEXT branch. It buys nothing: the
+           sibling resumes AT this branch, re-asks it, takes FALSE out of its recorded slot and records FALSE
+           itself on the line below — the same constraint, one branch later, derived rather than planted. What
+           the sibling DOES inherit is everything this flow knew BEFORE the branch, which is what the snapshot
+           is. */
         void *pblob = concolic_pins_suspend();
-        if (key) concolic_constrain_branch(key, 1);
+        if (key) concolic_constrain_branch(key, 1);   /* THIS flow's arm, into the head above the shared freeze */
         engine_prepare_fork(dblob, pblob);
         dec_append(1);                   /* this flow: TRUE arm, onto the head the freeze above just emptied */
         g_c++;

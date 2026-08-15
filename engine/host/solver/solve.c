@@ -3,6 +3,7 @@
 #include "solver/solve.h"
 #include "core/json_buf.h"
 #include "core/frame/policy_container.h"
+#include "core/html/trusted_types.h"
 #include "core/dom/document.h"
 #include "solver/concolic.h"
 #include "solver/endpoint.h"
@@ -41,11 +42,17 @@ static void set_fired(void)      { int *p = fired_slot(); if (p) *p = 1; }
 typedef struct { char *src; int sink; int tried; } Cand;
 static Cand *g_pending = NULL; static int g_pending_n = 0, g_pending_cap = 0;
 
-static const char *sink_name(int sink) {
-    return sink == SINK_HTML ? "innerHTML" : sink == SINK_URL ? "location" : "eval";
-}
+/* THE SINK CLASS TABLE, defined below its candidate sets. Everything a report says about a sink is a row of
+   it, so these two are how the rest of the file reaches one. */
+typedef struct SinkClass SinkClass;
+static const SinkClass *sink_class(int sink);
+static const char      *sink_name(int sink);
 
-typedef struct { char *sink; char *source; char *poc; } Finding;   /* verified PoCs only */
+/* A FIRE-VERIFIED PoC. The sink is held as its CLASS, not as its display name: every fact the reproduction
+   envelope states — the CSP question, the Trusted Types question, what makes the breakout run — is a fact
+   about the class, and holding the name meant asking for them with a `strcmp` chain over display text at emit
+   time. That chain computed the CSP question and threw the other two away. */
+typedef struct { int cls; char *source; char *poc; } Finding;   /* verified PoCs only */
 static Finding *g_sinks = NULL; static int g_sinks_n = 0, g_sinks_cap = 0;
 
 static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)ctx; (void)t; (void)c; (void)v; set_fired(); return JS_UNDEFINED; }
@@ -63,15 +70,6 @@ static void fire_js(const char *src, size_t len) {
     memcpy(body, src, len); body[len] = 0;
     engine_queue_candidate(body);
     free(body);
-}
-
-void solve_init(JSContext *ctx) {
-    g_pending = NULL; g_pending_n = g_pending_cap = 0;
-    g_cands_seeded = 0;
-    g_sinks = NULL; g_sinks_n = g_sinks_cap = 0;
-    JSValue g = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, g, "X9", JS_NewCFunction(ctx, js_x9, "X9", 0));
-    JS_FreeValue(ctx, g);
 }
 
 /* Breakout CANDIDATES — one per common JS context. We do NOT statically detect which context applies (that
@@ -99,8 +97,82 @@ static const char *CANDS_URL[] = {
     "javascript:X9()//",
     NULL
 };
-static const char **cand_set(int sink) {
-    return sink == SINK_HTML ? CANDS_HTML : sink == SINK_URL ? CANDS_URL : CANDS_JS;
+/* THE SINK CLASSES — one row per lexical context the solver breaks out of, and the row holds everything that
+   is a fact about THE SINK rather than about a run. They are one row because they are one thing: the sink's
+   FIRE ORACLE. Before this they were four scattered statements of it, and one of the four did not exist:
+   the breakout set was a function keyed by the class, the CSP question was a `strcmp` chain over the class's
+   DISPLAY NAME written at emit time, the Trusted Types question was asked by nobody at all though
+   trusted_types.c answers it, and what makes a fired breakout actually RUN was never stated anywhere — so a
+   reader of a PoC could not tell one that fires at parse time from one that needs a navigation, which §S(d)
+   requires every emitted PoC to carry.
+   `fires_on` IS THE ORACLE'S OWN SEMANTICS, read off the oracle rather than chosen beside it:
+     - the eval oracle hands the sink's own argument to the flow's program queue, because that is what the sink
+       itself does with it — so a fired eval PoC runs the instant the page reaches that call;
+     - html_fire_walk runs `onload` and `onerror` and NOTHING else (the AUTO-firing handlers — `onmouseover`
+       needs interaction) over markup it has just parsed, and CANDS_HTML is auto-firing elements for exactly
+       that reason, so a fired HTML PoC runs at insertion and never needs a click;
+     - url_fire runs a URL's JS only when the scheme is `javascript:`, which is code that runs when the
+       NAVIGATION happens — for this engine's URL sink, a form whose action the page wrote, on submission.
+   THE TRUSTED TYPES COLUMN IS THE SPEC'S, NOT THIS ENGINE'S CODE PATH: TT §3.8 makes the markup sinks
+   TrustedHTML sinks and `eval` a TrustedScript sink, and navigating to a `javascript:` URL is not a TT sink at
+   all — which is why the URL row declares none, and why its absence from the record is a positive statement
+   rather than a gap.
+   The cold tier's parked-candidate DCHECK names this table as where a parked candidate's sink re-binds BY NAME
+   on resume; `sink_class_of_name` is that binding. */
+struct SinkClass {
+    const char       *name;      /* the display name a report and a parked entry carry */
+    const char      **cands;     /* the breakout set this lexical context needs */
+    PolicyScriptKind  policy;    /* which of CSP's four script questions a fired breakout turns on */
+    int               tt;        /* the TrustedTypeKind gating this sink, or -1 — the spec makes it no TT sink */
+    const char       *fires_on;  /* what makes the fired breakout RUN, from the oracle above */
+};
+static const SinkClass SINKS[] = {
+    [SINK_EVAL] = { "eval",      CANDS_JS,   POLICY_EVAL,            TRUSTED_TYPE_SCRIPT, "sink-evaluates" },
+    [SINK_HTML] = { "innerHTML", CANDS_HTML, POLICY_INLINE_HANDLER,  TRUSTED_TYPE_HTML,   "parse-insert"   },
+    [SINK_URL]  = { "location",  CANDS_URL,  POLICY_JAVASCRIPT_URL,  -1,                  "navigation"     },
+};
+#define SINK_CLASS_N ((int)(sizeof SINKS / sizeof SINKS[0]))
+
+/* CHECK rather than DCHECK: every row of the report is written straight out of this table, so an index it does
+   not have is the report reading past its own data. */
+static const SinkClass *sink_class(int sink) {
+    CHECK(sink >= 0 && sink < SINK_CLASS_N,
+          "an @S record named a sink class this table does not have — the whole report is written from it");
+    return &SINKS[sink];
+}
+static const char *sink_name(int sink) { return sink_class(sink)->name; }
+
+/* THE NAME A CANDIDATE FLOW CARRIES, BACK TO ITS CLASS. A flow holds `cand_sink` as the table's OWN pointer,
+   so the binding is identity and not a string compare — and a name from anywhere else is a candidate this
+   table did not seed, which is precisely what a cold resume that rebinds by text must not produce. */
+static int sink_class_of_name(const char *name) {
+    int i;
+    for (i = 0; i < SINK_CLASS_N; i++) if (SINKS[i].name == name) return i;
+    DFAIL("a candidate flow carried a sink name that is not one of the sink classes' own — the name is this "
+          "table's pointer, so a flow holding another was built somewhere that does not go through it (a cold "
+          "resume rebinding a parked candidate BY NAME must land back on this table's row)");
+    return -1;
+}
+
+/* Installed AFTER the table so the one point every session goes through can assert it — see the loop. */
+void solve_init(JSContext *ctx) {
+    g_pending = NULL; g_pending_n = g_pending_cap = 0;
+    g_cands_seeded = 0;
+    g_sinks = NULL; g_sinks_n = g_sinks_cap = 0;
+    /* EVERY SINK CLASS DECLARES ITS WHOLE ROW. A row IS the sink's contract — the breakout set a candidate is
+       seeded with, the CSP question, the Trusted Types question, and the fire semantics a PoC states — and a
+       row added with a field left out does not fail: it emits a finding missing exactly that fact, which is
+       the silent half-envelope this record exists to end.
+       (`tt` is deliberately not asserted non-negative: -1 is the POSITIVE statement that the standard makes
+       this sink no Trusted Types sink at all, which is what the URL row means.) */
+    for (int i = 0; i < SINK_CLASS_N; i++) {
+        DCHECK(SINKS[i].name && SINKS[i].cands && SINKS[i].cands[0] && SINKS[i].fires_on,
+               "a sink class was declared without its display name, its breakout set or the fire semantics its "
+               "oracle gives it — a PoC cannot state how it reproduces without that row being whole");
+    }
+    JSValue g = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, g, "X9", JS_NewCFunction(ctx, js_x9, "X9", 0));
+    JS_FreeValue(ctx, g);
 }
 
 static void add_pending(const char *src, int sink) {
@@ -115,7 +187,7 @@ static void add_pending(const char *src, int sink) {
     flow_credit_emit(1.0);   /* a NEW attacker-source-reaches-sink: value-of-information for the running flow */
 }
 
-static void record_sink(const char *sink, const char *source, const char *poc) {
+static void record_sink(int cls, const char *source, const char *poc) {
     /* A finding is a pending sink that SOLVED, so the two lists are one list in two states — the parked-search
        emit subtracts one from the other by (sink, source) and a finding with no pending twin would report as
        both fired and parked. Asserted at the origin because a future detector that records a PoC without first
@@ -123,13 +195,14 @@ static void record_sink(const char *sink, const char *source, const char *poc) {
     {
         int have = 0;
         for (int i = 0; i < g_pending_n; i++)
-            if (!strcmp(sink_name(g_pending[i].sink), sink) && !strcmp(g_pending[i].src, source)) { have = 1; break; }
+            if (g_pending[i].sink == cls && !strcmp(g_pending[i].src, source)) { have = 1; break; }
         DCHECK(have, "an @S finding was recorded for a sink that was never detected as pending");
     }
-    for (int i = 0; i < g_sinks_n; i++) if (!strcmp(g_sinks[i].sink, sink) && !strcmp(g_sinks[i].source, source)) return;
+    sink_class(cls);   /* the row exists before anything is stored against it */
+    for (int i = 0; i < g_sinks_n; i++) if (g_sinks[i].cls == cls && !strcmp(g_sinks[i].source, source)) return;
     if (g_sinks_n >= g_sinks_cap) { g_sinks_cap = g_sinks_cap ? g_sinks_cap * 2 : 8; g_sinks = realloc(g_sinks, (size_t)g_sinks_cap * sizeof(Finding)); CHECK(g_sinks, "solve: OOM @S store"); }
     Finding *f = &g_sinks[g_sinks_n++];
-    f->sink = strdup(sink); f->source = strdup(source ? source : "?"); f->poc = strdup(poc);
+    f->cls = cls; f->source = strdup(source ? source : "?"); f->poc = strdup(poc);
 }
 
 void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
@@ -247,9 +320,9 @@ int solve_seed_candidates(JSContext *ctx) {
     for (int i = 0; i < g_pending_n; i++) {
         const char **cands;
         if (g_pending[i].tried) continue;
-        cands = cand_set(g_pending[i].sink);
+        cands = sink_class(g_pending[i].sink)->cands;
         for (int c = 0; cands[c]; c++) {
-            Flow *f = flow_add(ctx, JS_UNDEFINED, NULL, 0, WORLD_NONE);   /* a candidate session runs from the baseline */
+            Flow *f = flow_add(ctx, JS_UNDEFINED, WORLD_NONE);   /* a candidate session runs from the baseline */
             f->cand_src     = strdup(g_pending[i].src);
             f->cand_payload = strdup(cands[c]);
             f->cand_sink    = sink_name(g_pending[i].sink);
@@ -287,15 +360,39 @@ void solve_flow_end(Flow *f) {
     if (!f || !f->cand_src) return;
     f->cand_verifying = 0;
     if (f->cand_fired)
-        record_sink(f->cand_sink, f->cand_src, f->cand_payload);
+        record_sink(sink_class_of_name(f->cand_sink), f->cand_src, f->cand_payload);
 }
 
 /* ── @S JSON emit (C-native) ── the writer is core/json_buf.h's, which this file and endpoint.c each used to
    carry a private copy of. */
-static int solved(const char *sink, const char *src) {
+static int solved(int cls, const char *src) {
     for (int i = 0; i < g_sinks_n; i++)
-        if (!strcmp(g_sinks[i].sink, sink) && !strcmp(g_sinks[i].source, src)) return 1;
+        if (g_sinks[i].cls == cls && !strcmp(g_sinks[i].source, src)) return 1;
     return 0;
+}
+
+/* THE SOURCE'S DECLARED BROWSER DELIVERY, written identically into BOTH entry shapes because it is ONE
+   declaration and the two entries need different halves of it: `sourceEncodes` is what a BREAKOUT had to
+   survive (the parked entry's constraint), and the mechanism plus its address component are what a
+   REPRODUCTION has to perform (§S(d)'s envelope). Splitting them across two writers is how one of them went
+   missing before.
+   AN UNDECLARED SOURCE WRITES NOTHING, and that silence is the fact that there IS no declaration — server-
+   injected page state is written by the attacker directly, no component carries or transforms it, and a
+   consumer must say exactly that rather than invent a vector. The vocabulary is the engine's: the delivery
+   layer switches on these tokens and states its own inability to perform one, but it never decides which
+   source uses which — the component that owns the source already did. */
+static void emit_delivery(JsonBuf *b, const char *src) {
+    const char *enc = concolic_source_encodes(src), *kind = NULL;
+    char prefix = 0;
+
+    if (enc) { json_buf_puts(b, ",\"sourceEncodes\":"); json_buf_str(b, enc); }
+    if (concolic_source_delivery(src, &kind, &prefix) && kind) {
+        json_buf_puts(b, ",\"delivery\":"); json_buf_str(b, kind);
+        if (prefix) {
+            char p[2] = { prefix, 0 };
+            json_buf_puts(b, ",\"deliveryPrefix\":"); json_buf_str(b, p);
+        }
+    }
 }
 
 /* EVERY DETECTED SINK IS REPORTED — the ones with a fire-verified PoC, AND the ones whose search has not solved.
@@ -313,38 +410,55 @@ char *solve_json_array(JSContext *ctx) {
     int n = 0;
     json_buf_puts(&b, "[");
     for (int i = 0; i < g_sinks_n; i++) {
+        const SinkClass *sc = sink_class(g_sinks[i].cls);
+        const PolicyContainer *pc = document_policy(ctx);
+
         if (n++) json_buf_puts(&b, ",");
-        json_buf_puts(&b, "{\"sink\":"); json_buf_str(&b, g_sinks[i].sink);
+        json_buf_puts(&b, "{\"sink\":"); json_buf_str(&b, sc->name);
         json_buf_puts(&b, ",\"source\":"); json_buf_str(&b, g_sinks[i].source);
         json_buf_puts(&b, ",\"poc\":"); json_buf_str(&b, g_sinks[i].poc);
+        /* §S(d): EVERY PoC CARRIES ITS REPRODUCTION ENVELOPE. What makes it RUN is the first thing a reader
+           needs and the last thing this record carried — the vector was decided one line below, for the CSP
+           question, and thrown away. It comes off the sink's own fire oracle (see the table). */
+        json_buf_puts(&b, ",\"firesOn\":"); json_buf_str(&b, sc->fires_on);
         /* §S: A FIRING BREAKOUT IN THE MODEL IS NOT YET A WORKING EXPLOIT. The PoC has to run under the page's
            ACTUAL policy, and an inline `onerror` is dead under `script-src 'self'`. Reporting a bare XSS there
            is a false positive a reader cannot tell from a real one; reporting nothing would hide a sink that IS
            real. So the finding stays, and it CARRIES what blocks it — "sink REAL, CSP blocks", which is the
            standard's own distinction and the only one that survives being read by someone else. */
-        {
-            const PolicyContainer *pc = document_policy(ctx);
-            PolicyScriptKind kind = !strcmp(g_sinks[i].sink, "eval")      ? POLICY_EVAL
-                                  : !strcmp(g_sinks[i].sink, "location")  ? POLICY_JAVASCRIPT_URL
-                                                                          : POLICY_INLINE_HANDLER;
-            if (!policy_allows(pc, kind)) {
-                json_buf_puts(&b, ",\"cspBlocks\":");
-                json_buf_str(&b, policy_container_csp(pc));
-            }
+        if (!policy_allows(pc, sc->policy)) {
+            json_buf_puts(&b, ",\"cspBlocks\":");
+            json_buf_str(&b, policy_container_csp(pc));
         }
+        /* AND THE SAME RULE ONE ALGORITHM EARLIER. Under `require-trusted-types-for 'script'` an innerHTML
+           assignment THROWS before the markup is ever parsed, so the model's breakout is real and the write
+           that carries it never happens on the real page. trusted_types.c has answered this question all
+           along and nothing asked it. The emitted value is the SINK GROUP the CSP names, because that is what
+           the directive is written in terms of and what a reader has to add a policy for. */
+        if (sc->tt >= 0 && trusted_types_required(ctx, (TrustedTypeKind)sc->tt)) {
+            json_buf_puts(&b, ",\"trustedTypes\":");
+            json_buf_str(&b, "script");
+        }
+        /* THE DELIVERY — including whether this is §S(b)'s TWO-STAGE plant-then-load PoC. There is deliberately
+           no separate `stored` boolean: "is it stored" is not a second fact beside the mechanism, it IS the
+           mechanism (a `plant` delivery is two-stage and every other one is a single load), and two fields for
+           one fact is precisely the drift that made five names on this record mean nothing. */
+        emit_delivery(&b, g_sinks[i].source);
         json_buf_puts(&b, "}");
     }
     for (int i = 0; i < g_pending_n; i++) {
-        const char *sk = sink_name(g_pending[i].sink), *enc;
         char t[32];
-        if (solved(sk, g_pending[i].src)) continue;
+        if (solved(g_pending[i].sink, g_pending[i].src)) continue;
         if (n++) json_buf_puts(&b, ",");
-        json_buf_puts(&b, "{\"sink\":"); json_buf_str(&b, sk);
+        json_buf_puts(&b, "{\"sink\":"); json_buf_str(&b, sink_name(g_pending[i].sink));
         json_buf_puts(&b, ",\"source\":"); json_buf_str(&b, g_pending[i].src);
         json_buf_puts(&b, ",\"search\":\"parked\",\"tried\":");
         snprintf(t, sizeof t, "%d", g_pending[i].tried); json_buf_puts(&b, t);
-        enc = concolic_source_encodes(g_pending[i].src);
-        if (enc) { json_buf_puts(&b, ",\"sourceEncodes\":"); json_buf_str(&b, enc); }
+        /* The parked entry carries the DECLARATION, not the envelope: a search that has not solved has no
+           vector to state and no PoC to reproduce, so `firesOn`/`cspBlocks`/`trustedTypes` would be claims
+           about a PoC that does not exist. What it does carry is the whole source declaration — the bytes a
+           candidate must survive AND how the attacker would have to reach the victim if one ever fires. */
+        emit_delivery(&b, g_pending[i].src);
         json_buf_puts(&b, "}");
     }
     json_buf_puts(&b, "]");
@@ -356,6 +470,6 @@ int solve_count(void) { return g_sinks_n; }
 void solve_free(void) {
     for (int i = 0; i < g_pending_n; i++) free(g_pending[i].src);
     free(g_pending); g_pending = NULL; g_pending_n = g_pending_cap = 0;
-    for (int i = 0; i < g_sinks_n; i++) { free(g_sinks[i].sink); free(g_sinks[i].source); free(g_sinks[i].poc); }
+    for (int i = 0; i < g_sinks_n; i++) { free(g_sinks[i].source); free(g_sinks[i].poc); }
     free(g_sinks); g_sinks = NULL; g_sinks_n = g_sinks_cap = 0;
 }

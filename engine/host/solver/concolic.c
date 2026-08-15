@@ -218,6 +218,20 @@ void concolic_pins_resume(void *blob) {
     g_pins_base = b->seg;
     if (g_pins_base) g_pins_base->refcount++;   /* the blob keeps its own reference until it is freed */
 }
+/* A CONSTRAINT THAT HAS LEARNED NOTHING YET, for a flow that RESUMES without ever having run in this session —
+   the cold tier's. Such a flow is not fresh (it stands on a recorded decision chain, so the scheduler resumes it
+   rather than entering it) and it holds no knowledge (its facts were narrowed from values this session's heap
+   does not contain, and it re-derives every one of them as it replays the gates that produced them). The resume
+   path asserts that a blob exists, and it is right to: a flow resumed with none would re-fork every branch it
+   had already decided. This is the honest way to satisfy it — an empty chain, not a NULL the assert is taught
+   to tolerate. */
+void *concolic_pins_blob_empty(void) {
+    PinBlob *b = malloc(sizeof *b);
+    CHECK(b, "concolic: a resumed flow's empty path constraint could not be allocated");
+    b->seg = NULL;
+    return b;
+}
+
 void concolic_pins_blob_free(void *blob) {
     PinBlob *b = blob; if (!b) return;
     cons_seg_unref(b->seg);
@@ -252,14 +266,37 @@ static char *g_cand_src = NULL, *g_cand_payload = NULL;
 /* THE DECLARED SOURCES and what their component does to an attacker's bytes. Small and fixed: a source that
    declares nothing delivers as-is, which is right for injected server state (`window.__STATE`) — the attacker
    writes that JSON directly and no component transforms it. */
-typedef struct { char *src; char *encode; char prefix; } SourceDelivery;
+typedef struct { char *src; char *encode; char prefix; SourceDeliverKind deliver; } SourceDelivery;
 static SourceDelivery *g_srcs;
 static int g_srcs_n, g_srcs_cap;
 
-void concolic_declare_source(const char *src, const char *encode, char prefix)
+/* THE TOKEN A REPORT CARRIES for a mechanism, spelled once so the engine owns the whole source vocabulary —
+   the declaration side is the enum, the emission side is this, and a delivery layer switches on what comes out
+   of here. A mechanism added to the enum without a token would cross as nothing at all, so it says so. */
+static const char *deliver_token(SourceDeliverKind k)
+{
+    switch (k) {
+    case SRC_DELIVER_ADDRESS:           return "address";
+    case SRC_DELIVER_PLANT:             return "plant";
+    case SRC_DELIVER_REFERRING_ADDRESS: return "referring-address";
+    case SRC_DELIVER_USER_FILE:         return "user-file";
+    }
+    DFAIL("a source declared a delivery mechanism with no report token — the token is what the reproduction "
+          "envelope states and what the delivery layer switches on, so the mechanism would cross as nothing");
+    return NULL;
+}
+
+void concolic_declare_source(const char *src, const char *encode, char prefix, SourceDeliverKind deliver)
 {
     int i;
     CHECK(src != NULL, "a source was declared with no identity");
+    /* THE TWO HALVES OF ONE DECLARATION MUST AGREE. A value carried in the victim's own address has the
+       component it is carried at, and a value carried by any other mechanism has none — so a `#` beside a
+       `plant`, or an `address` with no component, is a declaration whose reproduction cannot be built from it
+       and whose candidate delivery would prepend a character no browser puts there. */
+    DCHECK((deliver == SRC_DELIVER_ADDRESS) == (prefix != 0),
+           "a source's delivery mechanism and its address component disagree — only a value carried in the "
+           "victim's own address has a component, and it always has one");
     for (i = 0; i < g_srcs_n; i++)
         if (!strcmp(g_srcs[i].src, src)) {
             DCHECK(0, "a source declared its browser delivery twice — one component owns one source");
@@ -274,8 +311,23 @@ void concolic_declare_source(const char *src, const char *encode, char prefix)
     g_srcs[g_srcs_n].src = strdup(src);
     g_srcs[g_srcs_n].encode = strdup(encode ? encode : "");
     g_srcs[g_srcs_n].prefix = prefix;
+    g_srcs[g_srcs_n].deliver = deliver;
     CHECK(g_srcs[g_srcs_n].src && g_srcs[g_srcs_n].encode, "concolic: OOM declaring a source's delivery");
     g_srcs_n++;
+}
+
+int concolic_source_delivery(const char *src, const char **kind, char *prefix)
+{
+    int i;
+
+    DCHECK(kind != NULL && prefix != NULL, "a source's declared delivery was asked for with nowhere to put it");
+    for (i = 0; i < g_srcs_n; i++)
+        if (src && !strcmp(g_srcs[i].src, src)) {
+            *kind = deliver_token(g_srcs[i].deliver);
+            *prefix = g_srcs[i].prefix;
+            return 1;
+        }
+    return 0;
 }
 
 const char *concolic_source_encodes(const char *src)

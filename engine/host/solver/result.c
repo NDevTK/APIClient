@@ -9,6 +9,7 @@
 #include "solver/engine.h"
 #include "solver/flow.h"
 #include "solver/world.h"   /* what the cross-instance seam materialized here — see world_segment_stats */
+#include "solver/cold.h"    /* …and what it PARKED, if the host asked this engine to page out */
 
 /* THE PAGE'S OWN UNCAUGHT ERRORS, deduped. See result.h: a script that throws is the forcing function naming an
    unbuilt capability, and it was silent. This is a plain string set — the message is the page's own, so nothing
@@ -149,7 +150,11 @@ char *result_json(JSContext *ctx) {
        counters whose full-width decimals are 104 more. It was 192 for a shape whose widest form was already
        197 — inside only because the real numbers are small — and the two added below would have taken it
        further past. The DCHECK under the snprintf is the second half of this, not a substitute for it. */
-    n = strlen(eps) + strlen(sinks) + strlen(errs) + 384;
+    /* THE PARK DOCUMENT RIDES THE RESULT, because it IS a result: it is what this engine has left to say about
+       a page it did not finish, and the host already does one JSON.parse of one document. "[]" — the ordinary
+       case — tells the host this engine drained rather than paged out, which is what DELETES the origin's cold
+       entry instead of leaving a stale residue that would be resumed forever. */
+    n = strlen(eps) + strlen(sinks) + strlen(errs) + strlen(cold_park_json()) + 384;
     out = malloc(n);
     if (out) {
         /* THE THREE COST NUMBERS, together. A switch count on its own cannot say whether a run that took six
@@ -163,9 +168,9 @@ char *result_json(JSContext *ctx) {
         m = snprintf(out, n, "{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
                              "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d,"
                              "\"_jobsQueued\":%ld,\"_jobsRun\":%ld,"
-                             "\"_worldSegments\":%d,\"_worldSegmentsForked\":%d}",
+                             "\"_worldSegments\":%d,\"_worldSegmentsForked\":%d,\"_park\":%s}",
                      eps, sinks, errs, engine_switch_count(), flow_created_count(), solve_candidate_count(),
-                     engine_jobs_queued(), engine_jobs_run(), seg, segf);
+                     engine_jobs_queued(), engine_jobs_run(), seg, segf, cold_park_json());
         /* THE SLACK IS ASSERTED RATHER THAN EYEBALLED. It was 192 bytes for three counters and is now carrying
            five, whose widest form is 82 digits beside 115 bytes of literal — inside the slack only because the
            real numbers are small. A truncation here does not lose a digit, it loses the closing brace: the host

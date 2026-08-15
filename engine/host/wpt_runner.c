@@ -52,6 +52,7 @@
 #include "core/frame/window.h"
 #include "core/frame/window_proxy.h"
 #include "core/frame/remote_object.h"
+#include "core/frame/remote_op.h"
 #include "core/html/html_iframe.h"
 #include "core/frame/navigable.h"
 #include "solver/world.h"
@@ -86,6 +87,8 @@
 #include "core/dom/document.h"
 #include "core/loader/document_scripts.h"
 #include "core/frame/history.h"
+#include "core/frame/navigation.h"
+#include "core/frame/navigation_history_entry.h"
 #include "core/frame/session_history.h"
 #include "core/frame/location.h"
 #include "core/encoding/encoding.h"
@@ -1088,7 +1091,7 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
        all, so §7.4's open() aborted on "issued outside a flow" — correctly. One flow, set running for the whole
        run: this harness exercises components, and the BFS that would rank many of them is the engine's. */
     flow_registry_init(doc_name);
-    flow_set_running(flow_add(ctx, JS_UNDEFINED, NULL, 0, WORLD_NONE));
+    flow_set_running(flow_add(ctx, JS_UNDEFINED, WORLD_NONE));
     /* THE DOM CHOKEPOINT'S CONTEXT. §4.2.3's insertion and removing steps are fired from the solver's tree
        chokepoint, which needs the runtime they run in — and this runner never named one, so it ran NONE of
        them: no <script> preparation, no custom-element upgrade, no §4.8.5 child navigable. It failed
@@ -1304,51 +1307,34 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
    running", because its serve loop is its scheduler. */
 static CowDelta *g_cur_seg;
 
-/* WHICH OPERATION A RECORD IS. One enumeration for the whole channel, because the FIELD LAYOUT and the field
-   COUNT are both facts about the operation and stating them apart is how the id came back as zero once already. */
-enum { WPT_OP_POST, WPT_OP_WPGET, WPT_OP_GET, WPT_OP_SET, WPT_OP_DELETE, WPT_OP_APPLY };
-
-static int wpt_op_of(const char *verb)
+/* THE CONTEXT SWITCH, done in this host because this serve loop IS this instance's scheduler: unapply whatever
+   world the last answer ran under, install this one's segment, answer, and leave it installed for the next
+   question — the same "move only as far as the two differ" the engine's own switch does.
+   THE WORLD ARRIVES WITH ITS ANCESTRY and both are used. A world minted in another document has a segment here
+   only if a flow of that world has written here; the ancestry is what makes the segment inherit what the flow's
+   ANCESTORS wrote, by forking the nearest one this instance already holds. Without it every cross-document
+   operation would answer from a baseline the asking flow left behind — which is not a stale answer, it is a
+   different timeline. It is what makes a WRITE tractable at all: two arms of a fork writing through one
+   reference are two timelines, and one baseline for both would be a third neither arm was in. */
+static void wpt_child_install_world(JSContext *ctx, WorldId w, const WorldId *anc, int n_anc)
 {
-    if (!strcmp(verb, "windowproxy.post")) return WPT_OP_POST;
-    if (!strcmp(verb, "windowproxy.get"))  return WPT_OP_WPGET;
-    if (!strcmp(verb, "object.get"))       return WPT_OP_GET;
-    if (!strcmp(verb, "object.set"))       return WPT_OP_SET;
-    if (!strcmp(verb, "object.delete"))    return WPT_OP_DELETE;
-    if (!strcmp(verb, "object.apply"))     return WPT_OP_APPLY;
-    DFAIL("a cross-instance record named an operation this instance does not perform — an unanswered record "
-          "parks the asking flow forever, so the operation has to be built rather than ignored");
-    return WPT_OP_WPGET;
+    CowDelta *seg;
+
+    if (world_is_none(w)) return;
+    seg = world_segment(ctx, w, anc, n_anc);
+    if (seg == g_cur_seg) return;
+    cow_unapply(ctx, g_cur_seg);
+    g_cur_seg = seg;
+    cow_set_current(seg);
+    cow_apply(ctx, seg);
 }
 
-/* THE FIELDS OF ONE RECORD, SPLIT ONCE AND WITHOUT A CEILING. The split was a fixed array of eight, which is a
-   cap on how many ARGUMENTS may cross — `object.apply` carries one field per argument — and the ninth would
-   have been read as part of the eighth. One split, then index; `line` is modified in place and the caller frees
-   the vector. */
-static char **wpt_split(char *line, int *pn)
-{
-    char **f = NULL, *q = line;
-    int n = 0, cap = 0;
-
-    for (;;) {
-        char *t = strchr(q, '\t');
-        if (n == cap) {
-            cap = cap ? cap * 2 : 8;
-            f = realloc(f, (size_t)cap * sizeof *f);
-            CHECK(f != NULL, "wpt: OOM splitting a cross-instance record");
-        }
-        f[n++] = q;
-        if (!t) break;
-        *t = 0;
-        q = t + 1;
-    }
-    *pn = n;
-    return f;
-}
-
-/* %Reflect.set% and %Reflect.apply% of THIS instance's realm, captured before its scripts run — see the
-   capture in wpt_child_main for why the operation is not spelled in the peer-side program's text. */
-static JSValue g_op_set = JS_UNDEFINED, g_op_apply = JS_UNDEFINED;
+/* WHAT AN OPERATION IS — its verb, its field layout, its operands and the program that performs it — is NOT
+   here any more, and that is the point of the file it moved to. It was written out in this serve loop, where
+   the production ABI entry could not reach it, so the shipped engine had a sender with no receiver; a second
+   copy written for that entry would have been two spellings of one grammar. core/frame/remote_op.h.
+   WHAT STAYS IS THIS HOST'S OWN: the channel it speaks (one line in, one line out), the world switch its serve
+   loop performs because that loop IS this instance's scheduler, and its driver for running a program. */
 
 /* A CHILD CANNOT INITIATE, so its notices ride back on the answer pipe prefixed `N\t` and the parent's router
    takes them from there. Drained before every answer, because the answer is the only moment this instance is
@@ -1414,22 +1400,9 @@ static int wpt_child_main(int argc, char **argv)
 
     JS_SetFlowControlHooks(&WPT_HOOKS_ON);
 
-    /* THE OPERATIONS THIS INSTANCE PERFORMS ON BEHALF OF A PEER, captured BEFORE the document's own scripts
-       run and handed to each program through a SLOT.
-       WHY NOT `Reflect.set(…)` SPELLED IN THE PROGRAM'S TEXT. `Reflect` is a global and the page may replace
-       it, so a peer answering a cross-agent [[Set]] through the page's own function would report a write that
-       never happened and would run the page's code where the spec puts an internal method. Two of the four
-       operations have a pure-syntax form nothing can intercept — `o[k]` IS 10.1.8 and `delete o[k]` IS 10.1.10,
-       and a SLOPPY-mode `delete` yields exactly the boolean the trap owes — and the two that do not reach the
-       operation through the intrinsic captured here: an assignment expression discards the boolean 10.1.9
-       completes with, and a call needs its argument list spread. */
-    {
-        static const char SET_SRC[] = "Reflect.set", APPLY_SRC[] = "Reflect.apply";
-        CHECK(!run_program_value(ctx, SET_SRC, sizeof SET_SRC - 1, "<cross-agent intrinsic>", &g_op_set) &&
-              !run_program_value(ctx, APPLY_SRC, sizeof APPLY_SRC - 1, "<cross-agent intrinsic>", &g_op_apply),
-              "wpt: a child document's realm has no Reflect.set / Reflect.apply — a peer performs a cross-agent "
-              "write and call through them, and a realm without them can answer neither");
-    }
+    /* THE TWO INTRINSICS A PEER PERFORMS A WRITE AND A CALL THROUGH are captured by the component that performs
+       them, at this realm's install — before this document's scripts run, which is the whole of what makes them
+       intrinsics rather than whatever the page has left on `Reflect`. There is nothing for this host to do. */
 
     {
         DocScripts ds = document_exec_scripts(g_wpt_dom);
@@ -1454,138 +1427,65 @@ static int wpt_child_main(int argc, char **argv)
         CHECK(nl != NULL || feof(stdin), "wpt: a cross-instance record was longer than this child's line buffer");
         JSValue v = JS_UNDEFINED;
         WorldId w = WORLD_NONE, anc[16];
-        const char *worlds, *prog = NULL;
-        char *enc, **f;
-        int n_anc = 0, nf = 0, op, need, completion = ENGINE_COMPLETION_NORMAL;
+        char *enc;
+        int n_anc = 0, completion = ENGINE_COMPLETION_NORMAL;
+        /* `windowproxy.post <world> <sender origin> <target origin> <base64 bytes>` — §9.4.4 step 7 arriving
+           from another instance. It is not an operation: nothing is asked of this document, a delivery is MADE
+           to it, so it carries no target document and its vector is the FIRST field. THIS ONE IS THE CHANNEL'S,
+           which is why it is split here: the parent rewrote the engine's record to insert the sender origin
+           only it may state, so the record on this pipe is this host's own framing and not the engine's. */
+        int is_post = !strncmp(line, "windowproxy.post\t", 17);
 
         if (nl) *nl = 0;
-        f = wpt_split(line, &nf);
-        op = wpt_op_of(f[0]);
-        /* HOW MANY FIELDS EACH OPERATION IS, declared beside the operation rather than at the read: a record
-           shorter than its operation used to be SKIPPED, which parks the asking flow on an answer that never
-           comes and reports nothing at all. */
-        need = op == WPT_OP_POST ? 5 : op == WPT_OP_WPGET ? 4 : op == WPT_OP_SET ? 6 : 5;
-        DCHECK(nf >= need, "a cross-instance record arrived with fewer fields than its operation carries — the "
-                           "writer and this reader disagree about the grammar, and answering from the fields "
-                           "that did arrive would answer a different question");
-        if (nf < need) { free(f); continue; }   /* in release there is no field to read; reading one is worse */
-        /* `windowproxy.post <world> <sender origin> <target origin> <base64 bytes>` — §9.4.4 step 7 arriving
-           from another instance. It is not a read: nothing is asked of this document, a delivery is MADE to it,
-           so its vector is the FIRST field where every other operation names a target document first. */
-        worlds = (op == WPT_OP_POST) ? f[1] : f[2];
-
-        /* THE WORLD THE ANSWER IS TRUE IN, and the ancestry that lets this instance HAVE one. A world minted
-           in another document has a segment here only if a flow of that world has written here; the ancestry
-           is what makes the segment inherit what the flow's ANCESTORS wrote, by forking the nearest one this
-           instance already holds. Without it every cross-document operation would answer from a baseline the
-           asking flow left behind — which is not a stale answer, it is a different timeline. It is what makes a
-           WRITE tractable at all: two arms of a fork writing through one reference are two timelines, and one
-           baseline for both would be a third neither arm was in. */
-        n_anc = world_parse(worlds, &w, anc, (int)(sizeof anc / sizeof anc[0]));
-
-        /* THE CONTEXT SWITCH, done here because this loop IS this instance's scheduler: unapply whatever world
-           the last answer ran under, install this one's segment, answer, and leave it installed for the next
-           question — which is the same "move only as far as the two differ" the engine's own switch does. */
-        if (!world_is_none(w)) {
-            CowDelta *seg = world_segment(ctx, w, anc, n_anc);
-            if (seg != g_cur_seg) {
-                cow_unapply(ctx, g_cur_seg);
-                g_cur_seg = seg;
-                cow_set_current(seg);
-                cow_apply(ctx, seg);
-            }
-        }
-
-        if (op == WPT_OP_POST) {
+        if (is_post) {
+            char *f[5], *q;
+            int nf = 0;
+            /* THE LAST FIELD KEEPS THE REMAINDER VERBATIM: it is base64 and carries no tab, but stopping the
+               split at the last field is what makes that a property of the reader rather than a hope. */
+            for (q = line, f[nf++] = q; *q && nf < 5; q++)
+                if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
+            CHECK(nf == 5, "wpt: a routed message arrived with fewer fields than §9.4.4's delivery carries");
+            n_anc = world_parse(f[1], &w, anc, (int)(sizeof anc / sizeof anc[0]));
+            wpt_child_install_world(ctx, w, anc, n_anc);
             /* THE DELIVERY, under the world just installed, and taken apart by the file that WROTE the record.
                The decode and the sender-document split were done here by hand, which is window_message.c's
                grammar restated where nothing can check it against the writer; the head of the world vector
                names the sender, so world_parse above already answered that too. */
-            size_t cap = strlen(f[3]) + strlen(f[4]) + 2;
-            char *tail = malloc(cap);
+            {
+                size_t cap = strlen(f[3]) + strlen(f[4]) + 2;
+                char *tail = malloc(cap);
 
-            CHECK(tail != NULL, "wpt: OOM receiving a routed message");
-            snprintf(tail, cap, "%s\t%s", f[3], f[4]);
-            window_message_route(ctx, tail, world_doc_name(w.doc), f[2]);
-            free(tail);
+                CHECK(tail != NULL, "wpt: OOM receiving a routed message");
+                snprintf(tail, cap, "%s\t%s", f[3], f[4]);
+                window_message_route(ctx, tail, world_doc_name(w.doc), f[2]);
+                free(tail);
+            }
             /* THE TASK IS ENQUEUED, NOT RUN: the scheduler is what runs it, and entering it is what a turn of
                this loop does. An empty program is that turn — it drains the posted-message task source the way
                any other turn would, rather than this host driving the delivery itself. */
             run_program(ctx, "", 0, "<routed message>");
-            wpt_child_emit_notices();
             /* THE ACK IS A COMPLETION TOO. Nothing is asked of a delivery, so it is the normal completion of
                `undefined` — written through the one encoder so this pipe has ONE grammar rather than one for
                the answers and a bare `u` for this. */
-            {
-                char *ack = remote_completion_encode(ctx, ENGINE_COMPLETION_NORMAL, JS_UNDEFINED);
-                fputs(ack, stdout);
-                fputc('\n', stdout);
-                free(ack);
-            }
-            fflush(stdout);
-            free(f);
-            continue;
-        }
+        } else {
+            /* WHAT IS BEING PERFORMED is the component's, not this host's — core/frame/remote_op.h. What is
+               left here is running it, which is this host's driver, and the world switch, which is this loop's
+               because this loop IS this instance's scheduler. */
+            RemoteOp *op = remote_op_parse(line);
+            const char *prog;
 
-        /* WHAT IS BEING PERFORMED. `windowproxy.get` reads a member of THIS document's Window; the four
-           `object.*` operations are the internal methods of an object this document LENT OUT. Every one of them
-           is performed by running a PROGRAM, because an IDL accessor, a page's setter and a page's function are
-           the page's code and a C activation has no flow base under it.
-           EVERY OPERAND REACHES THE PROGRAM THROUGH A SLOT, the property name included. It used to be spliced
-           into the text inside double quotes, which is a property name READ AS CODE the first time one carries
-           a quote or a backslash — and the comment beside it claimed the opposite. */
-        {
-            JSValue g = JS_GetGlobalObject(ctx);
-
-            if (op == WPT_OP_WPGET) {
-                JS_SetPropertyStr(ctx, g, "__apiclientKey", JS_NewString(ctx, f[3]));
-                prog = "globalThis[__apiclientKey]";
-            } else {
-                JSValueConst held = remote_object_by_id((uint32_t)strtoul(f[3], NULL, 10));
-                DCHECK(!JS_IsUndefined(held),
-                       "a peer named an object this agent never lent — the name it used was minted somewhere "
-                       "else, or the export table was lost between the lend and the operation");
-                JS_SetPropertyStr(ctx, g, "__apiclientLent", JS_DupValue(ctx, held));
-                if (op == WPT_OP_APPLY) {
-                    JSValue args = JS_NewArray(ctx);
-                    int i;
-                    /* THE ARGUMENT LIST IS FLAT ON THE WIRE — one field per argument, in the one grammar — so
-                       there is no second grammar for a list and no ceiling on how many may cross. */
-                    for (i = 5; i < nf; i++)
-                        JS_SetPropertyUint32(ctx, args, (uint32_t)(i - 5), remote_object_decode(ctx, f[i]));
-                    JS_SetPropertyStr(ctx, g, "__apiclientThis", remote_object_decode(ctx, f[4]));
-                    JS_SetPropertyStr(ctx, g, "__apiclientArgs", args);
-                    JS_SetPropertyStr(ctx, g, "__apiclientOp", JS_DupValue(ctx, g_op_apply));
-                    prog = "__apiclientOp(__apiclientLent, __apiclientThis, __apiclientArgs)";
-                } else {
-                    JS_SetPropertyStr(ctx, g, "__apiclientKey", remote_object_decode(ctx, f[4]));
-                    if (op == WPT_OP_SET) {
-                        JS_SetPropertyStr(ctx, g, "__apiclientVal", remote_object_decode(ctx, f[5]));
-                        JS_SetPropertyStr(ctx, g, "__apiclientOp", JS_DupValue(ctx, g_op_set));
-                        prog = "__apiclientOp(__apiclientLent, __apiclientKey, __apiclientVal)";
-                    } else if (op == WPT_OP_DELETE) {
-                        /* SLOPPY MODE ON PURPOSE: `delete` yields 10.1.10's boolean here and THROWS for a false
-                           in strict mode, and the boolean is exactly what 10.5.10 step 8 asks the trap for. */
-                        prog = "delete __apiclientLent[__apiclientKey]";
-                    } else {
-                        prog = "__apiclientLent[__apiclientKey]";
-                    }
-                }
-            }
-            JS_FreeValue(ctx, g);
-        }
-        {
-            int failed;
-            DCHECK(prog != NULL, "a cross-instance operation reached the peer's program runner with no program "
-                                 "— an operation this loop routes but does not perform");
-            failed = run_program_value(ctx, prog, strlen(prog), "<cross-agent operation>", &v);
+            n_anc = world_parse(remote_op_worlds(op), &w, anc, (int)(sizeof anc / sizeof anc[0]));
+            wpt_child_install_world(ctx, w, anc, n_anc);
+            prog = remote_op_program(ctx, op);
             /* THE THROW IS THE ANSWER. The peer performs every operation by running a program — an IDL
                accessor, the page's setter, the page's function — and a program that throws has completed just
                as truly as one that returned. It is NOT reported as this instance's error: it is encoded with
                its completion type and raised in the flow that asked, at the line that asked, so that page's
                own `try`/`catch` runs. The thrown value crosses by the ordinary rules, so an Error object
                crosses as a NAME and the catch clause holds a reference to THIS instance's Error. */
-            completion = failed ? ENGINE_COMPLETION_THROW : ENGINE_COMPLETION_NORMAL;
+            completion = run_program_value(ctx, prog, strlen(prog), "<cross-agent operation>", &v)
+                         ? ENGINE_COMPLETION_THROW : ENGINE_COMPLETION_NORMAL;
+            remote_op_free(op);
         }
         enc = remote_completion_encode(ctx, completion, v);
         JS_FreeValue(ctx, v);
@@ -1594,13 +1494,9 @@ static int wpt_child_main(int argc, char **argv)
         fputc('\n', stdout);
         fflush(stdout);
         free(enc);
-        free(f);
     }
     cow_unapply(ctx, g_cur_seg);
     cow_set_current(NULL);
-    JS_FreeValue(ctx, g_op_set);
-    JS_FreeValue(ctx, g_op_apply);
-    g_op_set = g_op_apply = JS_UNDEFINED;
     JS_SetFlowControlHooks(&WPT_HOOKS_OFF);
     return 0;
 }
@@ -1787,6 +1683,8 @@ int main(int argc, char **argv)
     location_free();
     session_history_free();
     history_free();
+    navigation_free(ctx);              /* HTML §7.2.6 the navigation API */
+    navigation_history_entry_free(ctx);
     animation_frame_free(ctx);
     timer_free(ctx);        /* §8.6's declaration; each global's map went with its realm */
     event_loop_free(ctx);   /* §8.1.7's own record — the virtual clock and the moments beside it */

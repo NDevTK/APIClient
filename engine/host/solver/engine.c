@@ -813,7 +813,7 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
     /* THE SIBLING'S WORLD IS A CHILD OF THE PARENT'S, and the edge is recorded so another instance that
    already holds a segment for the parent can materialize the sibling's by forking it — the same O(1)
    shared-base-segment fork this line performs locally, performed there. */
-    Flow *sib = flow_add(ctx, parent->fn, NULL, 0, parent->world);
+    Flow *sib = flow_add(ctx, parent->fn, parent->world);
     sib->started = 1;                 /* HOT: resume from the cloned frame + blobs, never a fresh re-run */
     sib->frame = clone;               /* the frame snapshot taken AT the branch */
     sib->script_i = parent->script_i; /* same position in the script sequence */
@@ -1274,10 +1274,23 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                 bool oom = JS_IsOutOfMemoryError(ctx, exc);
 
                 /* OOM IS A `CHECK`, in dev and in release alike: a dropped flow corrupts the frontier, and
-                   there is no version of this the engine may proceed past. It is also the honest name for the
-                   RAM→disk floor this build has no cold tier under. */
-                CHECK(!oom, "the frontier could not hold another flow — this is the physical RAM floor, and the "
-                            "cold tier that pages the lowest-value tail to disk is what carries past it");
+                   there is no version of this the engine may proceed past.
+                   THE COLD TIER NOW EXISTS AND STILL DOES NOT CARRY THIS CASE, which is worth stating exactly
+                   rather than leaving the older sentence ("this build has no cold tier") to go quietly false.
+                   What exists is a WHOLE-ENGINE park: the host sees the pressure across documents, asks this
+                   engine to give up its residue (engine_request_park), and the whole frontier leaves as recipes
+                   at the next step boundary. That is Level-1 eviction and it is what frees RAM when several
+                   documents compete. It cannot help HERE, because reaching this line means ONE engine could not
+                   hold one more flow — and a lone engine is never asked to park (there is no other document to
+                   free the RAM for, and paging the whole frontier out to page it straight back in is not
+                   progress). What that needs is the PARTIAL self-park §scheduler names: the lowest-value TAIL
+                   of this frontier written out and REMOVED while the engine keeps running on its top flows,
+                   which needs the two things a whole-engine park did not — a per-flow release that unapplies
+                   and frees a delta the scheduler is not switched into, and a merge of a resumed tail into a
+                   frontier that already has members (cold_resume asserts it is seeding an empty one). */
+                CHECK(!oom, "the frontier could not hold another flow — this is the physical RAM floor. The cold "
+                            "tier pages a WHOLE engine at the host's request; what carries past THIS is the "
+                            "partial self-park of the lowest-value tail while the engine keeps running");
                 /* AN @S CANDIDATE THAT DOES NOT PARSE is a dead candidate and nothing more — the search tries
                    several breakouts per sink precisely because most do not fit most contexts. A `javascript:`
                    URL that does not parse is HTML §7.4.2.3.2's abrupt evaluation, which produces no Document and
@@ -1477,13 +1490,60 @@ static int64_t engine_now_us(void) {
 }
 static int64_t engine_now_ms(void) { return engine_now_us() / 1000; }
 
-void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int forking) {
+/* THE SESSION'S HOOKS COME BACK OFF, in ONE place, because there are now two ways for a session to end and
+   they must leave the runtime in the same state. A frontier that DRAINED and a frontier that was PAGED OUT
+   differ in what remains on the queue, not in what this engine has installed in the runtime — and a second
+   copy of this list is exactly the hand-copied list build.mjs warns about, where the park path would quietly
+   leave a fork hook installed over a runtime whose flows are gone. */
+static void engine_session_close(void) {
+    JS_SetJobEnqueueHook(NULL);
+    JS_SetJobDropHook(NULL);
+    JS_SetFlowControlHooks(&FC_OFF);
+    JS_SetFlowLocalMark(0);
+    /* No flow is running, so no candidate substitution may be installed — the same mirror the switch-in keeps,
+       completed at the one point where the answer is "none". Without it the LAST flow to run leaves its
+       payload and its endpoint suppression standing over everything that reads the frontier afterwards. */
+    solve_flow_begin(NULL);
+    g_dom_capture = 0;
+    g_sess_live = 0;
+}
+
+/* THE RAM→DISK FLOOR, and the two flags that carry it. The host decides there is pressure — it is the only
+   zone that can see the OTHER documents' engines and the summed working set — and asks THIS engine to give up
+   its residue; the engine decides WHEN, which is at a scheduler step boundary with no flow switched in,
+   because that is the only moment every flow's decision state is in its own blob rather than in decide.c's
+   globals. `g_parked` then says, for the rest of the instance's life, that the frontier was WRITTEN OUT
+   rather than dropped — which is what the teardown asserts read: a paged flow's continuation, its owed
+   replies and its queued jobs are all regenerated by the replay its recipe drives, so none of them is the
+   dropped work item those asserts exist to catch. */
+static int g_park_req, g_parked;
+
+void engine_request_park(void) {
+    DCHECK(g_sess_live, "a park was requested of an engine with no live session — there is no frontier to "
+                        "write out, and the host would then store an empty residue over a real one");
+    g_park_req = 1;
+}
+
+int engine_frontier_paged(void) { return g_parked; }
+
+void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int forking, const char *recipes) {
     DCHECK(!g_sess_live, "engine_sched_begin while a session is already running — one scheduler, one session");
     g_sess_ctx = ctx; g_sess_bodies = bodies; g_sess_srcs = srcs; g_sess_n = n; g_sess_cur = NULL; g_sess_live = 1;
+    g_parked = 0;
     /* WHAT AN UNCANCELLED REJECTION MEANS is this half's answer: the browser half fires the event and honours
        preventDefault, and a reason that survives that is a page error exactly like a script that threw. */
     unhandled_rejection_set_report_hook(result_page_error_value);
-    flow_add(ctx, JS_UNDEFINED, NULL, 0, WORLD_NONE);   /* the first flow: the page's scripts, empty decision vector */
+    /* THE FRONTIER IS SEEDED ONCE, FROM ONE OF TWO PLACES, and they are alternatives rather than layers. A
+       document nobody has explored starts with ONE flow: the page's scripts over an empty decision vector. A
+       document with a PARKED RESIDUE starts with that residue — every flow the last session could not finish,
+       each standing on the path it had taken — and adding a fresh boot flow beside them would explore the
+       un-forked path a second time and re-fork every branch the residue already stands on, growing a duplicate
+       of the frontier on every visit. If the boot flow itself was still live at the park, it IS one of the
+       records (an empty chain), so nothing is lost by not adding one here.
+       CLAUDE.md §scheduler: a new page APPENDS to the ONE continuous cross-session frontier; it does not start
+       a new scheduler, and it does not start the same exploration twice. */
+    if (recipes && *recipes) cold_resume(ctx, recipes);
+    else flow_add(ctx, JS_UNDEFINED, WORLD_NONE);   /* the first flow: the page's scripts, empty decision vector */
     JS_SetFlowLocalMark(1);                 /* objects created while a flow runs are flow-local (discarded) */
     dom_cow_set_ctx(ctx);                   /* the DOM delta needs ctx for the attribute taint-shadow dup/free */
     cow_set_ctx(ctx);                       /* …and the heap delta needs one for the component records it captures */
@@ -1537,6 +1597,26 @@ int engine_sched_step(void) {
     DCHECK(cur == NULL || flow_is_member(cur),
            "the flow this quantum resumes is no longer in the frontier — it was removed while the scheduler was "
            "returned to the host, so the resume is neither the same flow nor a byte-identical frontier");
+    /* THE PARK IS TAKEN HERE — BEFORE the first pick, and that position is the mechanism rather than a
+       convenience. Every flow's decision state has to be in its OWN blob for the walk to read it, and the one
+       flow whose state is NOT is whichever the scheduler is holding: decide.c keeps the running flow's
+       evolving vector in its globals. So the running flow is switched out first — the ordinary suspend, the
+       same one a context switch performs — and from that instant the frontier is a set of snapshots, which is
+       exactly what a park needs and exactly what §Time-travel-resume says a parked flow is.
+       IT IS NOT A DROP AND NOT A BOUND. Nothing is truncated, skipped or forgotten: every member is written,
+       in full, and the host stores the document under this bundle's key. The flows themselves are released by
+       the instance teardown that follows, which is what frees the RAM the host asked for — Level-1 eviction is
+       a whole document's engine leaving memory, and its residue coming back is the SAME admission step, ranked
+       by the same one order. */
+    if (g_park_req) {
+        if (cur) { flow_switch_out(ctx, cur); cur = NULL; }
+        cold_park();
+        g_park_req = 0;
+        g_parked = 1;
+        g_sess_cur = NULL;
+        engine_session_close();
+        return ENGINE_STEP_DONE;
+    }
     for (;;) {
         Flow *best = flow_best();           /* WFQ: highest value-of-information — a fresh fork (UCB) can preempt */
         if (!best) break;
@@ -1802,16 +1882,7 @@ int engine_sched_step(void) {
                "the frontier was declared exhausted while a live flow still held a routed record — a peer's "
                "message this document never received, dropped with the session");
     }
-    JS_SetJobEnqueueHook(NULL);
-    JS_SetJobDropHook(NULL);
-    JS_SetFlowControlHooks(&FC_OFF);
-    JS_SetFlowLocalMark(0);
-    /* No flow is running, so no candidate substitution may be installed — the same mirror the switch-in keeps,
-       completed at the one point where the answer is "none". Without it the LAST flow to run leaves its
-       payload and its endpoint suppression standing over everything that reads the frontier afterwards. */
-    solve_flow_begin(NULL);
-    g_dom_capture = 0;
-    g_sess_live = 0;
+    engine_session_close();
     return ENGINE_STEP_DONE;
 }
 
@@ -1863,7 +1934,10 @@ void engine_set_provider(int (*provide)(JSContext *ctx)) { g_provider = provide;
 
 static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int forking) {
     int next = ENGINE_PROGRESS_EVERY, last_cands = -1, r;
-    engine_sched_begin(ctx, bodies, srcs, n, forking);
+    /* NO PARKED RESIDUE: this driver is a host with nothing else to do and no store to have kept one in — it
+       runs a document to exhaustion in one call. The cold tier's resume belongs to the host that has an
+       IndexedDB to have written the residue to, which is the extension's. */
+    engine_sched_begin(ctx, bodies, srcs, n, forking, NULL);
     for (;;) {
         r = engine_sched_step();
         if (r == ENGINE_STEP_DONE)

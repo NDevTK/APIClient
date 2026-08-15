@@ -10,6 +10,7 @@
 #include "solver/dom_cow.h"    /* …and its DOM delta head + shared base segment */
 #include "solver/decide.h"     /* …and its suspended decision vector */
 #include "solver/concolic.h"   /* …and its suspended path constraint */
+#include "solver/cold.h"       /* …and the park document written out of all of them */
 #include "check.h"
 #include <stdlib.h>
 
@@ -103,7 +104,12 @@ void flow_registry_free(JSContext *ctx) {
            survivor therefore retained the entire realm, and the runtime's leak walk reported it as a Window, a
            context and seventeen hundred anonymous Functions with nothing naming the owner. That is precisely
            the shape a leak takes when the ROOT is one dropped handle. */
-        DCHECK(f->park_fn == NULL,
+        /* A PAGED FLOW IS NOT A DROPPED ONE, which is the only thing this assert is about. A continuation left
+           parked here is an async activation nobody will ever resume — UNLESS the frontier was written to the
+           cold tier, in which case this flow's recipe replays the code that created that continuation and
+           re-parks it in the next session. That is the whole claim the cold tier makes, so it is stated where
+           the drop would otherwise be asserted rather than by teaching the assert to tolerate a NULL. */
+        DCHECK(engine_frontier_paged() || f->park_fn == NULL,
                "a flow reached the frontier's teardown with a continuation still parked — its suspended async "
                "activation is dropped, and only the flow that FINISHES was being checked for this");
         if (f->frame) { JS_FlowFree(ctx, (JSValue *)f->frame); f->frame = NULL; }
@@ -121,7 +127,6 @@ void flow_registry_free(JSContext *ctx) {
         free(f->dyn); free(f->dyn_cand);
         free(f->cand_src); free(f->cand_payload);
         JS_FreeValue(ctx, f->fn);
-        free(f->dec);
         free(f->deliver); free(f->deliver_origin);
         for (int k = 0; k < f->njob; k++) {   /* free any undrained microtask jobs */
             for (int a = 0; a < f->jobs[k].argc; a++) JS_FreeValue(ctx, f->jobs[k].argv[a]);
@@ -155,6 +160,11 @@ void flow_registry_free(JSContext *ctx) {
        the line would leak the whole chain with nothing to say so, which is exactly how the world registry's
        own release came to be missing from one of them. It belongs to the frontier, so it goes down with it. */
     decide_free();
+    /* AND THE PARK DOCUMENT WRITTEN OUT OF THIS FRONTIER, released here for the same reason the decision chain
+       is: it is the frontier's own residue, the host has already read it out of the result document by the
+       time any teardown runs, and putting the free in each host's teardown instead would be the hand-copied
+       list that has already drifted once. */
+    cold_free();
     /* AND THE PENDING REGISTER'S INTERNED FIELD NAMES, for the same reason and in the same place: the corpus
        hosts take a runtime down and bring another up per file, so an atom left here is a handle into a freed
        table that the next session's first push would write through. */
@@ -169,7 +179,7 @@ long flow_created_count(void) { return g_flows_created; }
 
 /* THE ONE CONSTRUCTOR. Every flow is born here with a world already decided, so no flow can exist without one
    and no caller can hand one a second. */
-static Flow *flow_new(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n, WorldId w) {
+static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     g_flows_created++;
     if (g_flows_n >= g_flows_cap) {
         g_flows_cap = g_flows_cap ? g_flows_cap * 2 : 32;
@@ -187,7 +197,6 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, signed char *dec, int dec
     /* …and the register's own context, named HERE because this is the one point every flow passes through.
        Putting it in each host's setup would be the hand-copied list build.mjs warns about. */
     pending_set_ctx(ctx);
-    f->dec = dec; f->dec_n = dec_n;
     f->val = 0.0; f->cpu = 0;
     f->cand_src = NULL; f->cand_payload = NULL; f->cand_sink = NULL;
     f->last_compiled = -1;   /* nothing compiled yet; see the no-replay DCHECK at the compile site */
@@ -197,11 +206,11 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, signed char *dec, int dec
     return f;
 }
 
-Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n, WorldId parent) {
+Flow *flow_add(JSContext *ctx, JSValueConst fn, WorldId parent) {
     /* THE WORLD IS MINTED HERE so no flow can exist without one. A fork passes its parent's world and the
        child records the edge, which is what lets another instance materialize this flow's segment by forking
        the nearest ancestor it already holds. A from-baseline flow passes WORLD_NONE and gets a root. */
-    return flow_new(ctx, fn, dec, dec_n, world_is_none(parent) ? world_mint() : world_mint_child(parent));
+    return flow_new(ctx, fn, world_is_none(parent) ? world_mint() : world_mint_child(parent));
 }
 
 /* BLOCKED = holding an unanswered synchronous host request. Scanned rather than counted because a counter is
@@ -361,7 +370,6 @@ void flow_remove(JSContext *ctx, Flow *f) {
     for (int i = 0; i < g_flows_n; i++) {
         if (g_flows[i] == f) {
             JS_FreeValue(ctx, f->fn);
-            free(f->dec);
             free(f->deliver); free(f->deliver_origin);
             /* THE CANDIDATE IT WAS VERIFYING. Both strings are this flow's own copies, and the only other place
                that frees them is the frontier's teardown — which walks the flows that are STILL THERE, so a

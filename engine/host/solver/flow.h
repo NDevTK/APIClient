@@ -43,8 +43,14 @@ typedef struct Flow {
        its targets by live heap pointers), so the name is what crosses — see solver/world.h. */
     WorldId world;
     JSValue fn;            /* the function this flow re-drives (JS_UNDEFINED for a boot/session flow) */
-    signed char *dec;      /* the DECISION VECTOR — the arm (0/1) this flow takes at each branch, in order */
-    int dec_n;             /* length of dec */
+    /* THE DECISION VECTOR IS NOT A FIELD HERE, and the flat `signed char *dec` + `dec_n` that used to be is
+       DELETED. It was the from-baseline replay mechanism — a birth vector a flow would replay from cursor 0 —
+       and no caller ever supplied one, so it had exactly one prospective user (the cold tier's resume) and was
+       the wrong shape for it: a flat per-flow array is the quadratic decide.c's shared chain deleted, and a
+       park that wrote one per flow would multiply the sharing back out on the way to disk. A flow's vector
+       lives in `dec_blob` below — the shared frozen chain — whether it was frozen by a suspend, by a fork, or
+       rebuilt by the cold tier from a recipe. ONE representation, so a resumed flow and a forked one are the
+       same kind of thing to everything downstream. */
     double val;            /* accumulated emitted VALUE (new @H + @S) — the WFQ's reward term, ONE POINT PER
                               EMISSION (both detectors credit exactly 1.0) */
     /* THE AGING TERM, AND ITS UNIT IS THE WHOLE OF WHETHER THE TERM WORKS. Thread time in MICROSECONDS burned
@@ -78,7 +84,13 @@ typedef struct Flow {
     int cand_fired;        /* this flow's X9 marker executed */
     int cand_verifying;    /* this flow is a candidate run: the sink takes the concrete arg */
 
-    int   started;         /* decide_enter has run (fresh) — else resume from the blobs below */
+    /* HAS THIS FLOW A RECORDED PATH TO STAND ON? 0 = fresh: decide_enter gives it an empty vector and every
+       branch it meets is a new decision. 1 = it resumes from the blobs below — which is the snapshot-forked
+       sibling (a live frame plus its chain), and equally the flow the COLD TIER rebuilt from a recipe (no
+       frame, cursor 0, replaying its recorded arms as it re-runs the document from its first script). Those
+       two are deliberately one state: a resumed flow is not a third kind of flow, it is a flow whose decision
+       state was rebuilt somewhere other than a fork. */
+    int   started;
     void *frame;           /* the current script's live preemptible frame (JS_FlowNew handle), NULL between scripts */
     /* THE DOCUMENT'S LOAD STAGE IS NOT HERE, and the field that was is DELETED. One integer cannot hold N
        documents: an agent is an origin-keyed CLUSTER, so a flow reaches several Documents and HTML gives each
@@ -143,10 +155,12 @@ typedef struct Flow {
 void  flow_registry_init(const char *doc_name);
 void  flow_registry_free(JSContext *ctx);
 
-/* Add a flow to the frontier. Takes ownership of `dec` (freed with the flow) and dups `fn`. `dec` may be NULL
-   (dec_n 0) for a from-baseline flow. Returns the stored Flow* (stable until removed). Never fails (OOM aborts
-   via CHECK — a dropped flow corrupts the frontier). */
-Flow *flow_add(JSContext *ctx, JSValueConst fn, signed char *dec, int dec_n, WorldId parent);
+/* Add a flow to the frontier, standing on nothing: an empty decision vector, which is what a from-baseline flow
+   IS. A flow with a recorded path gets it by having its `dec_blob` installed after the add — by the fork that
+   prepared it, or by the cold tier that rebuilt it — because that path is a reference on a SHARED chain and
+   never an array this call could take ownership of. Dups `fn`. Returns the stored Flow* (stable until removed).
+   Never fails (OOM aborts via CHECK — a dropped flow corrupts the frontier). */
+Flow *flow_add(JSContext *ctx, JSValueConst fn, WorldId parent);
 /* How many flows this document ever created — the other half of the switch count. A run whose cost jumped needs
    to say WHICH grew: the frontier, or the work per flow. */
 long flow_created_count(void);

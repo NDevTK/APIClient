@@ -54,6 +54,11 @@ function assertResultDocument(r) {
   DCHECK(typeof r._switches === "number",
          "the engine's result document carries no _switches count — it is the one OBSERVABLE that the single " +
          "BFS actually context-switches rather than running its flows FIFO");
+  DCHECK(Array.isArray(r._park),
+         "the engine's result document carries no _park array — that is the PARKED RESIDUE (solver/cold.h), " +
+         "the recipes this zone writes to IndexedDB and hands back to qjs_begin next session. An absent one " +
+         "reads exactly like a fully-explored document, so every flow the engine paged out would be dropped " +
+         "here and the cross-session frontier would silently restart from the boot flow on every visit");
 }
 function linesToAnalysis(lines, msg, expectResult) {
   let result = null;
@@ -147,6 +152,53 @@ function originOf(u) { try { return new URL(u).origin; } catch (_) { return ""; 
    (the ordinary "accept my sandboxed widget" check) would otherwise never match. So the comparison value
    stays internal and the DELIVERED value is the serialization. */
 function stampOrigin(o) { return _isRealOrigin(o) ? o : "null"; }
+/* THE AGENT CLUSTER AN INSTANCE IS — SECURITY.md's `(browsing-context group, origin)` — computed HERE because
+   both halves are BROWSER-STATED and the untrusted engine may state neither.
+
+   IT REPLACES A PER-DOCUMENT KEY, AND THAT IS NOT A LOOSENING. `admit` used to ask "does an instance already
+   hold this exact documentId?", so a page and its SAME-ORIGIN iframe — one similar-origin window agent, which
+   HTML puts in ONE heap and then RELIES on it — were handed two WASM instances and two heaps. In that split
+   `iframe.contentDocument.body.appendChild(x)` cannot be what §4.5 says it is: adopt-then-insert leaves
+   `x.parentNode` a node belonging to the OTHER document while the wrapper stays the same object, and
+   `frame.contentWindow.onunload = fn` hands that document this agent's live CLOSURE to call. Neither is a
+   property read that could suspend across an instance boundary — they are one object graph, and passing them
+   by name is an unbounded bidirectional export table whose `===` answers wrong. The engine has always modelled
+   this correctly (navigable.c's `child_in_this_agent` builds a same-origin child as a second REALM in the same
+   JSRuntime and only a CROSS-origin one as a peer instance); it was this zone that split what the engine joins.
+   The security invariant is untouched, because it was never keyed on the document: one instance still holds
+   exactly one ORIGIN, so a fetch out of it still has exactly one principal.
+
+   THE GROUP HALF IS `sender.tab.id`. No extension API exposes a browsing-context group; a TAB is exactly one
+   top-level traversable and every nested navigable under it is in that traversable's group, so the tab id is
+   the browser-stated fact closest to the group, and — the direction that matters — it never JOINS two documents
+   that are in different groups, which is what would put two principals behind one instance. RESIDUAL, named
+   because it is a NARROWING and narrowing is the wrong direction: an auxiliary browsing context opened by
+   `window.open()` without `noopener` is in the SAME group as its opener and lands in ANOTHER tab, so this key
+   splits that pair. Closing it needs `openerTabId`, which `MessageSender` does not carry. (An auxiliary the
+   ENGINE opens never travels this path — it is provisioned from the create notice below, which takes its
+   CREATOR's group precisely so that this residual does not reach the case the engine can see.)
+
+   THE ORIGIN HALF IS `_senderOrigin`'S, AND IT IS ALREADY OPAQUE-UNIQUE. SECURITY.md: "An opaque origin is
+   unique per spec → never same-origin with anything (the `"null"==="null"` collision is closed)." The offscreen
+   hands over the browser's `MessageSender.origin` for a tuple origin and a STABLE per-document `"null:<uuid>"`
+   token for an opaque one, so two sandboxed iframes of one page land in two clusters and two instances — the
+   case a naive `origin === origin` gets wrong, and it costs nothing here because the value that arrives is
+   already the right one. It is also why this key is never `originOf(sourceUrl)`: a sandboxed document's address
+   parses to a tuple origin the browser refused to give it.
+
+   AN EMPTY ORIGIN HALF BELONGS TO A REHYDRATED COLD RECIPE, which has no live browser document and therefore no
+   browser-stated principal to resume with. Its GROUP is its frontier key (`cold:<origin>|<bundle>`), unique per
+   recipe and never equal to a tab id, so an empty origin there cannot collide with anything — it is a cluster
+   of one, which is the truth about a resumed frontier rather than a default.
+
+   A NUL SEPARATOR, because neither half can contain one. */
+function clusterKeyOf(msg) {
+  DCHECK(msg && msg.groupId != null && msg.groupId !== "",
+         "a document reached the pool naming no browsing-context group — an instance IS its (group, origin) " +
+         "agent cluster, so a document with no group would share one cluster (and one heap, and one principal) " +
+         "with every document of its origin in every tab the user has open");
+  return String(msg && msg.groupId) + "\u0000" + String((msg && msg.origin) || "");
+}
 /* Stable BUNDLE IDENTITY for the frontier key: the EXTERNAL <script src> set (content-hash filenames
    like main.abc123.js ARE the app version), NOT the volatile HTML wrapper (per-request nonces/CSRF
    tokens would change the key every visit -> the frontier would never resume). A redeploy changes a src
@@ -218,7 +270,8 @@ function frontierWeight(e) {
 /* ────────────────────────────────────────────────────────────────────────────────────────────────────
    HOST-LEVEL WFQ (Level-1 of the ONE attention): interleave the LIVE document engines by value-of-
    information, in SLICES, so no single document (or one deep path within it) monopolizes CPU. Each
-   document is one wasm instance (SECURITY.md: one instance per page); the engine exposes its best flow's
+   AGENT CLUSTER is one wasm instance (SECURITY.md: one instance per (browsing-context group, origin) — never
+   per page, which is what this line used to say and what admit used to key on); the engine exposes its best flow's
    weight (qjs_top_weight) and yields HOT after a slice (qjs_step -> 2). The host ranks all live engines by
    that weight and advances the winner one slice, then re-ranks — the same WFQ policy the C engine runs
    over flows WITHIN a document, now over engines ACROSS documents. RAM is the bound: at most POOL_CAP hot
@@ -328,6 +381,14 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
   // (hostSchedule requests park only after engines have stepped, line ~285). Requesting it pre-step parked at
   // work=1 with EMPTY decvecs (nothing had run), so decvec REPLAY (the whole point of a recipe) went untested;
   // deferring parks real residue whose recipes carry non-empty decision vectors AND handler-driven async flows.
+  // THE DEFERRAL IS LOAD-BEARING AND NOT AN ARBITRARY DELAY, and the engine side now says exactly why in the
+  // one shape it produces: a park taken before any step writes ONE record, `f-,0` — a flow standing on no
+  // decision segment with no reward — which solver/cold.c's resume rebuilds into a flow indistinguishable from
+  // the boot flow a fresh visit seeds anyway. The round trip would then complete, persist, rehydrate and
+  // report success while having carried NOTHING across it. Two dispatches is the smallest count at which the
+  // boot flow has forked, so the document holds `s…` segment records and the `f…` records name them; that is
+  // the thing under test. If this number is ever changed, the property to preserve is "the park document
+  // contains at least one `s` record", never the count itself.
   // Only on the INITIAL park (no recipes to resume yet); firing while resuming would re-park the rehydrated
   // recipes forever (the stored sourceUrl keeps the query param), so a cold/re-visit resume never runs.
   let _forceparkSteps = 0;
@@ -482,8 +543,14 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
   /* `_resolvers` IS A LIST BECAUSE ONE DOCUMENT MAY BE ASKED FOR MORE THAN ONCE while a single instance holds
      it (the RESHIP re-delivery). Every caller waiting on this document is answered by the ONE engine's
      finalize; a second engine is never built to give a second caller its own copy. */
+  /* `cluster` IS THIS INSTANCE'S IDENTITY and `docId` is only which document it is ROOTED at. They used to be
+     the same field, and that is the whole defect: an instance is an ORIGIN-KEYED AGENT CLUSTER holding one
+     realm per same-origin document (main.c's `engine_child_realm`), so the document it was started from names
+     it no more than a tree is named by its root. `groupId` is kept beside the key because a document this
+     instance CREATES inherits its creator's browsing-context group and the key alone cannot be taken apart. */
   return { M, ptrs, lines, fkey, prior, msg, persist, fetched, fetchedDocument, fetchedXhr, code, html, state: "hot",
-           docId: _docId, origin: (msg && msg.origin) || "", _resolvers: [], _forceparkSteps };
+           docId: _docId, cluster: clusterKeyOf(msg), groupId: msg && msg.groupId,
+           origin: (msg && msg.origin) || "", _resolvers: [], _forceparkSteps };
 }
 /* THE LEVEL-1 WFQ'S ONE INPUT. A NaN would order this engine against every other by a comparison that is
    false in both directions, so the pool's pick would depend on array order — a fairness invariant silently
@@ -529,6 +596,18 @@ function hostHolderOf(docName) {
   return null;
 }
 
+/* THE INSTANCE OF AN AGENT CLUSTER — and it is a DIFFERENT QUESTION from the one above, which is why they are
+   two functions. `hostHolderOf` asks WHERE A NAMED DOCUMENT IS, and is ROUTING: it answers for the one document
+   an instance is ROOTED at, and a message posted to a document nothing holds is a dropped delivery. This asks
+   WHICH INSTANCE A NEW DOCUMENT BELONGS IN, and is ADMISSION: it answers by the (group, origin) cluster, so a
+   document the engine has already created inside that heap answers here even though nothing has ever named it
+   to this zone. `admit` used to ask the ROUTING question and take a "no" as licence to build a second instance
+   — one question standing in for the other, which is exactly how a same-origin pair ended up in two heaps. */
+function hostClusterOf(key) {
+  for (const e of _pool) if (e.cluster === key) return e;
+  return null;
+}
+
 /* WHAT THIS ZONE OWES A ONE-WAY NOTICE. Two ops today, and each is an ACTION only this zone can take —
    SECURITY.md makes the offscreen the only zone that knows which instance holds which document.
    `navigable.create <child> <creator> <url> <origin> <topLevelUrl> <csp>` — the engine has already named the document and
@@ -558,8 +637,13 @@ async function hostNotice(eng, line) {
        (attribute or CSP) has an OPAQUE origin that this derivation cannot see — the sandbox flag set is not
        yet carried on the notice, so such a child is currently stamped with its address's tuple origin. Carry
        the flags on the notice and mint a per-document opaque token here, the way _senderOrigin does. */
+    /* THE CHILD'S BROWSING-CONTEXT GROUP IS ITS CREATOR'S, and that is the spec rather than a convenience: a
+       nested navigable is in its parent's group by construction, and §7.4's auxiliary one is too unless
+       `noopener` severed it. So the child's cluster key is (creator's group, the origin of the URL this zone
+       fetched) — which is what makes two cross-origin children of ONE page at the SAME origin one cluster, the
+       way HTML says they are, instead of two heaps for a pair that can script each other. */
     const msg = { type: "AST_ANALYZE", pageHtml: (loaded && loaded.body) || "", sourceUrl: f[3],
-                  origin: originOf(f[3]),
+                  origin: originOf(f[3]), groupId: eng.groupId,
                   responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     /* THE POLICY IS THE RESPONSE'S, AND THE CREATOR'S CLONE IS THE FALLBACK — §7.2.6/§7.4 in the order the
        spec states them: a Document is judged against the policy container its own response carried, and a
@@ -576,6 +660,28 @@ async function hostNotice(eng, line) {
        navigable, the navigable's own address for an auxiliary one) and this zone carries, because the new
        instance cannot see what embeds it. §8.1.3.5 reads it to decide whether the child is a SECURE CONTEXT,
        and Web IDL §3.3.13's members exist in that child or do not by that answer. */
+    /* AND IT MAY ONLY BE PROVISIONED IF ITS CLUSTER HAS NO INSTANCE YET. A SAME-ORIGIN child never reaches this
+       line at all — navigable.c's `child_in_this_agent` builds it as a realm in the creator's own heap and
+       emits no notice — so a cluster hit here is a SECOND CROSS-ORIGIN document of one cluster (two `<iframe
+       src="https://cdn/…">` of one page), which HTML puts in ONE heap for exactly the reasons the same-origin
+       pair is in one. Building a second instance for it is the defect this file was keyed against; the entry
+       that would put it in the right heap is the join below, and until that exists NOT provisioning is the
+       honest state and the one navigable.h already names: "A HOST THAT WILL NOT HOST THE CHILD … simply never
+       provisions the instance, and every read through the proxy parks. That is a host gap, visible as a parked
+       flow." A dropped delivery to it is caught by the post branch's own assert. */
+    const _ckey = clusterKeyOf(msg);
+    DCHECK(_ckey !== eng.cluster,
+           "the engine sent a create notice for a child in its OWN agent cluster — a same-origin child is a " +
+           "second REALM in that heap and never leaves it, so this zone and navigable.c's child_in_this_agent " +
+           "have answered one origin question two ways");
+    if (hostClusterOf(_ckey)) {
+      DFAIL("a second cross-origin document of ONE agent cluster was announced — its cluster already has an " +
+            "instance, and the two documents are one similar-origin window agent that HTML puts in one heap. " +
+            "This needs an ABI entry beside qjs_init that JOINS a document to a LIVE instance (a second Lexbor " +
+            "parse, a realm through main.c's engine_child_realm, and its scripts seeded on the same frontier), " +
+            "which does not exist yet; provisioning a second instance instead is the split this key deleted");
+      return;
+    }
     const child = await engineCreate("", msg.pageHtml, msg, false, f[1], f[5]);
     /* A CHILD DOCUMENT IS A DOCUMENT: it joins the ONE pool and is ranked, sliced, parked and finalized by the
        one host WFQ like every other. It has no caller to resolve to, so its findings merge the way a
@@ -897,15 +1003,54 @@ const _hostOps = {
   serviceFetch: engineServiceFetch,
   admit: async () => {   // gate CREATION to the RAM budget: build an instance only under memory pressure headroom
     // 1) seat waiting LIVE documents (the user's open tabs) first
-    while (_waiting.length && (_pool.length === 0 || _residentBytes() < HOT_RAM_BUDGET)) {
-      const job = _waiting.shift();
-      /* ONE INSTANCE PER DOCUMENT, ASKED OF THE POOL — which IS the register of who holds what, so nothing
-         here remembers a document it no longer holds. A document already seated takes the waiting caller
-         onto its OWN finalize instead of getting a second WASM instance built for the same principal; a
-         document that already finished and left the pool is simply run again, which is a re-visit and is
-         supposed to append to the frontier, not be skipped. */
-      const held = job.msg && job.msg.documentId ? hostHolderOf(String(job.msg.documentId)) : null;
-      if (held) { held._resolvers.push(job); continue; }
+    /* AN INDEX WALK RATHER THAN A SHIFT, because one waiting document can be legitimately UNSEATABLE YET (the
+       defer below) and a shift would either drop it or spin this loop forever re-reading it. */
+    let i = 0;
+    while (i < _waiting.length && (_pool.length === 0 || _residentBytes() < HOT_RAM_BUDGET)) {
+      const job = _waiting[i];
+      /* ONE INSTANCE PER AGENT CLUSTER, ASKED OF THE POOL — which IS the register of who holds what, so nothing
+         here remembers a document it no longer holds. This asked ONE INSTANCE PER DOCUMENT, by documentId, and
+         that is the split CLAUDE.md calls wrong rather than strict: a page and its same-origin iframe are one
+         similar-origin window agent, HTML puts them in one heap and then relies on it, and two heaps make
+         `iframe.contentDocument.body.appendChild(x)` unrepresentable. */
+      const key = clusterKeyOf(job.msg);
+      const cluster = hostClusterOf(key);
+      const docId = String(job.msg.documentId);
+      /* BROWSER-SET, LIKE EVERY OTHER HALF OF THIS KEY: frame 0 is the group's top-level traversable. It is not
+         the frame's claim about itself (SECURITY.md's reason for not recording an "isTop" a frame reports —
+         a fenced frame is its own tree's root and would impersonate it); `sender.frameId` comes from the
+         browser process, which is the same provenance as `sender.tab.url`. */
+      const isTop = !job.msg.frameId;
+      if (cluster) {
+        /* THE CLUSTER'S INSTANCE ALREADY HOLDS THIS DOCUMENT, and that is a statement about the ENGINE rather
+           than about this table. A same-origin sub-frame is created INSIDE that heap by §4.8.5's insertion
+           steps (navigable.c mints its name, adopts it into this agent, and §7.4 step 14 loads its address
+           through this same safeFetch chokepoint), so the instance is already running it as a realm of its own.
+           The caller is therefore answered by that instance's finalize — its findings ARE this document's —
+           which is the same path the RESHIP re-delivery of one document already took. What is deleted is the
+           branch beside it that built a second WASM instance, i.e. a second heap for one agent. */
+        DCHECK(!isTop || cluster.docId === docId,
+               "the TOP document of a browsing-context group arrived for a cluster whose instance is rooted at " +
+               "a different document — the group's top was REPLACED (a same-origin navigation, or a COOP " +
+               "navigation that severed the group), so the new document is NOT one this instance is running " +
+               "and attaching it reports the page that was replaced. This needs §7.4's destroy-a-navigable for " +
+               "the old document plus an ABI entry beside qjs_init that JOINS a document to a live instance " +
+               "(`qjs_join`: a second Lexbor parse, a realm through main.c's engine_child_realm, its scripts " +
+               "seeded on the same frontier) — neither exists yet, and neither is a second instance");
+        cluster._resolvers.push(job);
+        _waiting.splice(i, 1);
+        continue;
+      }
+      /* A SUB-FRAME MAY NOT ROOT ITS OWN CLUSTER WHILE THE GROUP'S TOP IS SAME-ORIGIN WITH IT. Its cluster's
+         instance is the TOP document's — the top creates this frame and runs it in its heap — and CONTENT_HTML
+         arrival order across frames is not the document order: a sub-frame that reported first would otherwise
+         root the cluster, and the top would then arrive at an instance rooted elsewhere and fire the assert
+         above for a reason that is an artifact of message timing rather than a replaced document. So it WAITS,
+         in place, and is seated by the next admit once the top has landed. `_isRealOrigin` is what keeps this
+         off the opaque case: a sandboxed top's frames are opaque too, their per-document tokens never equal
+         `originOf(topLevelUrl)`, and each is correctly its own cluster of one. */
+      if (!isTop && _isRealOrigin(job.msg.origin) && originOf(job.msg.topLevelUrl) === job.msg.origin) { i++; continue; }
+      _waiting.splice(i, 1);
       try { const eng = await _engineFactory(job.code, job.html, job.msg, job.persist); eng._resolvers.push(job); _pool.push(eng); }
       // boot/creation abort: LOUD failure, not a quiet degenerate result. An invariant abort from the creation
       // path (the init return code, the bundle id, the frontier key's origin) is NOT a boot abort and must not
@@ -925,8 +1070,14 @@ const _hostOps = {
              c.sourceUrl without re-fabricating the tuple origin a sandboxed document does not have. A recipe
              written before this field carries "", and the stamp site refuses to deliver a message for it
              rather than inventing one. */
+          /* A RESUMED RECIPE IS A CLUSTER OF ONE, and its GROUP says so rather than borrowing a tab's. The
+             browsing-context group it parked in is gone — the tab was closed, or the session was — so there is
+             no live document it may share a heap with, and the frontier key (origin|bundle, already unique per
+             recipe and never equal to a tab id) is the honest name for the group it resumes into. That is also
+             what lets the origin half stay "" for a recipe written before the principal was part of one: an
+             empty half of a key whose other half is unique collides with nothing, so nothing is invented. */
           const msg = { type: "AST_ANALYZE", pageHtml: c.html, code: c.code, sourceUrl: c.sourceUrl,
-                        origin: c.origin || "",
+                        origin: c.origin || "", groupId: "cold:" + c.key,
                         topLevelUrl: c.topLevelUrl, credentialed: c.credentialed, persist: true };
           const eng = await engineCreate(c.code || "", c.html || "", msg, true);   // a rehydrated cold recipe always participates in the frontier
           eng._cold = true; _pool.push(eng);
@@ -983,7 +1134,13 @@ function _hostKick() {
   hostSchedule(_pool, _hostOps).catch((e) => {
     crashBanner("host-wfq", String((e && e.stack) || e));
     if (self.APICLIENT_DEV) throw e;
-  }).finally(() => { _hostDriving = false; if (_pool.length || _waiting.length) _hostKick(); });
+    /* RE-KICK ON THE POOL ALONE. `|| _waiting.length` stood here so a document held back by the RAM floor was
+       picked up when a slot freed — but a freed slot is a pool that is not empty, and with an EMPTY pool RAM is
+       free by definition, so the only document that can still be waiting is one admit DEFERRED (a sub-frame
+       whose same-origin top has not reported yet). Re-kicking for that one spins the loop at full speed on a
+       condition nothing in this file can change; the thing that changes it is the top's CONTENT_HTML, which
+       kicks the pool itself when it arrives. */
+  }).finally(() => { _hostDriving = false; if (_pool.length) _hostKick(); });
 }
 /* The offscreen kicks the pool on idle so parked COLD recipes get pulled in (admit re-checks the frontier)
    even when no new document arrives — the single ATTENTION keeps advancing across sessions. */
@@ -1054,6 +1211,22 @@ self.astDispatch = async function astDispatch(msg) {
     DCHECK(!!msg.documentId,
            "an AST_ANALYZE for a live document carried no documentId — it is the name the pool answers " +
            "\"which instance holds this document?\" by, so without it a re-delivered document is seated twice");
+    /* AND IT ARRIVES CARRYING ITS AGENT CLUSTER, WHOSE BOTH HALVES ARE BROWSER-STATED. These are asserted here,
+       where the facts are BORN, rather than at the pool: a missing group would silently put every document of
+       one origin in every tab into ONE heap behind ONE principal, and a missing origin would do the same to
+       every document of one tab — both of which look exactly like the design working. `frameId` is asserted for
+       its PRESENCE and not its value, because 0 is the top frame and `undefined` would read as one. */
+    DCHECK(msg.groupId != null && msg.groupId !== "",
+           "an AST_ANALYZE for a live document named no browsing-context group — an instance is its " +
+           "(group, origin) agent cluster, and analyze.js carries the browser's sender.tab.id as the group");
+    DCHECK(typeof msg.origin === "string" && msg.origin !== "",
+           "an AST_ANALYZE for a live document named no principal — the cluster's origin half is the browser's " +
+           "MessageSender.origin (opaque-unique via _senderOrigin), and an empty one collapses every document " +
+           "of this tab into one heap; it is never derived from the address, which a sandboxed document's lies about");
+    DCHECK(typeof msg.frameId === "number",
+           "an AST_ANALYZE for a live document carried no frameId — the pool reads it to tell a sub-frame " +
+           "(which its cluster's instance already runs) from the group's TOP document (which it does not), and " +
+           "an absent one is indistinguishable from frame 0");
     const persist = !!msg.persist;
     /* THE WAITER CARRIES BOTH SETTLERS. A Clear must be able to tell a document that was never seated that its
        analysis is not coming, and "cleared" is the exact error analyze.js reads to abandon its tail without

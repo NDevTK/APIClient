@@ -70,7 +70,33 @@ void        concolic_set_candidate(const char *src, const char *payload);
    `encode` lists the bytes this component percent-encodes (C0 controls and DEL are always encoded, so they are
    not listed); `prefix` is the character the component's value carries — `#` for a fragment, `?` for a query,
    0 for none. Data rather than code, because that is what differs between sources. */
-void        concolic_declare_source(const char *src, const char *encode, char prefix);
+/* AND `deliver` IS THE OTHER HALF OF THE SAME DECLARATION — the half a REPRODUCTION needs where `encode` and
+   `prefix` are the half a BREAKOUT needs. §S(d) requires every emitted PoC to carry its reproduction envelope,
+   and the envelope's two hardest facts — is this a TWO-STAGE plant-then-load PoC (§S(b)), and can a delivery
+   layer perform the delivery at all — are facts about the SOURCE, so they are stated by the component that
+   OWNS the source and never re-derived from its name by whoever renders the report. That re-derivation is not
+   hypothetical: the offscreen matched `/\{(hash|search|pm|reply)\}/` against a display shape the engine has
+   never emitted, so live verify could not build a PoC for any finding this engine produces, and the taxonomy
+   it invented had a `pm` entry for a source no component declares.
+   FOUR MECHANISMS, not one row per source: what differs between two sources carried in the victim's own
+   address is only the component `prefix` already names. */
+/* The two address mechanisms are named as the PAIR they are — whose address carries the payload — because that
+   is the whole difference between them and because `navigation` is already a word the FIRING vocabulary uses
+   for something else (`firesOn`), and one word meaning two things across two vocabularies on one record is how
+   the last set of names went wrong. */
+typedef enum {
+    SRC_DELIVER_ADDRESS = 0,          /* the payload rides the VICTIM'S OWN address, at `prefix`'s component */
+    SRC_DELIVER_PLANT,                /* placed BEFORE the victim's load, read back on it — §S(b) two-stage */
+    SRC_DELIVER_REFERRING_ADDRESS,    /* the payload rides the address the victim ARRIVES FROM */
+    SRC_DELIVER_USER_FILE,            /* the user hands the document a file whose bytes the attacker chose */
+} SourceDeliverKind;
+void        concolic_declare_source(const char *src, const char *encode, char prefix, SourceDeliverKind deliver);
+/* THE DECLARED DELIVERY as a report states it: the mechanism's TOKEN and the address component the payload
+   rides (0 for every mechanism that is not an address). Returns 0 when this source declared none — which is a
+   FACT, not a default: server-injected page state (`window.__FLAGS`) is written by the attacker directly and
+   no component transforms or carries it, so there is nothing to declare and a consumer must say exactly that
+   rather than guess a vector. */
+int         concolic_source_delivery(const char *src, const char **kind, char *prefix);
 /* The bytes this source's component percent-encodes, or NULL if the source declared no delivery (it is handed
    over as-is). A PARKED @S search reports it because it is the constraint every candidate had to survive, and
    it is a FACT read from the declaration rather than a guess at why nothing fired. */
@@ -115,6 +141,10 @@ void        concolic_clear_pins(void);                        /* per-flow: clear
 void       *concolic_pins_suspend(void);
 void        concolic_pins_resume(void *blob);
 void        concolic_pins_blob_free(void *blob);
+/* The empty one, for a flow the COLD TIER resumed: it stands on a recorded decision chain (so the scheduler
+   resumes rather than enters it) and has learned nothing yet in this session — it re-derives every pin and every
+   decided predicate as it replays the gates that produced them. See the definition. */
+void       *concolic_pins_blob_empty(void);
 /* WHAT THE FROZEN CONSTRAINT CHAIN IS HOLDING — the third of the three chains built on cow.c's refcounted
    immutable segment, reported beside the other two for the reason they are reported beside each other: a
    per-flow allocation nobody released looks identical from any one of them, and only the number that CLIMBS
