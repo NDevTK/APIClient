@@ -44,6 +44,13 @@
   // it. We receive the exact code via POC_SETUP and eval it on the user's click.
   window.addEventListener("message", function (e) {
     if (window.origin !== 'null') return console.error('Not sandboxed');
+    // WHY A PREFIX IS ENOUGH HERE, AND WHAT WOULD MAKE IT NOT BE. A sandboxed page has no chrome.* at all, so
+    // it cannot learn its own extension id to compare exactly — the prefix plus `e.source === window.top` is
+    // the whole of what it can check. That is sufficient ONLY because this file is in no
+    // `web_accessible_resources` entry: nothing outside this extension can frame or open it, so the only
+    // document that can ever be its top is one of ours. Adding it to web_accessible_resources makes the prefix
+    // a hole (any other extension's page could embed it and hand it a PoC to run) — at that point the embedder
+    // must state the expected origin in the frame URL and this check must compare it exactly.
     if (!e.origin.startsWith('chrome-extension:') || e.source !== window.top) return console.error('Untrusted sender');
     var d = e.data;
     if (!d || d.type !== "POC_SETUP") return;

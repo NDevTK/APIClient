@@ -76,6 +76,20 @@ chrome.tabs.onRemoved.addListener((tabId) => { toBrain({ __evt: "TAB_REMOVED", t
 // chrome.scripting) and the brain selects one by name, passing only serializable
 // args. These are the probe's fixed primitives; the orchestration (session state,
 // payload shaping, PROBE_HIT correlation) stays in the brain.
+// @security-finding  NOTHING CALLS `scripting.exec` — grep the whole extension for it and the only hit is the
+// RPC arm below. These injectors are therefore an UNUSED privilege, and the privilege is the largest one this
+// extension has: arbitrary MAIN-world execution in any tab (`world: "MAIN"`, `target.allFrames`), i.e. full
+// same-origin control of every site the user has open, plus the `scripting` permission that exists only for
+// them. The live PoC verification took a different route — the popup embeds the sandboxed poc-sandbox.html and
+// the payload is delivered by the PoC itself (window.open / postMessage), with intercept.js's apiclientsink
+// relaying the hit — so `seedStorage`, `postMessage`, `dispatchEvents` and `readExecFlag` have no caller and
+// `tabs.create` / `tabs.remove` / `tabs.get` below have none either.
+// It is gated to the offscreen document (the only trusted zone), so it is not reachable today; what it is, is
+// the blast radius of any future hole in that gate, held open for a caller that does not exist. Either the
+// probe orchestration this file's comment promises lands and uses it, or this arm, the injectors, the three
+// unused tabs.* arms and the `scripting` permission are DELETED together. It is named here rather than
+// deleted in a security review because removing it decides that the injected-probe design is not coming back
+// — that is the probe design's call, not this review's.
 const _PROBE_INJECTORS = {
   // Read the per-marker execution flag intercept.js's apiclientsink() populated —
   // proof the browser actually ran the payload (vs. taint merely reaching a sink).
