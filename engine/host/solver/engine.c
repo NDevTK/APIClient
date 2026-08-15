@@ -1506,13 +1506,25 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                    hold one more flow — and a lone engine is never asked to park (there is no other document to
                    free the RAM for, and paging the whole frontier out to page it straight back in is not
                    progress). What that needs is the PARTIAL self-park §scheduler names: the lowest-value TAIL
-                   of this frontier written out and REMOVED while the engine keeps running on its top flows,
-                   which needs the two things a whole-engine park did not — a per-flow release that unapplies
-                   and frees a delta the scheduler is not switched into, and a merge of a resumed tail into a
-                   frontier that already has members (cold_resume asserts it is seeding an empty one). */
+                   of this frontier written out and REMOVED while the engine keeps running on its top flows.
+                   ONE OF THE TWO THINGS THAT NEEDED IS NOW BUILT, and this says so rather than going on naming
+                   it — a crash that asks for what already exists sends the next reader to write it twice. The
+                   per-flow RELEASE exists: flow_release (solver/flow.h) takes a flow the scheduler is not
+                   switched into out of the frontier and gives its RAM back, walking the heap and the document
+                   down only as far as the segments the release actually frees (cow_delta_release /
+                   dom_base_release), so a tail can be dropped while another flow holds the thread. It is the
+                   path every finishing flow already takes, so it is exercised rather than merely written.
+                   WHAT IS STILL MISSING IS THE OTHER HALF, and it is a property of the RESUME rather than of
+                   the park: cold_resume rebuilds a park document by assigning park-local segment ordinals into
+                   an empty frontier and asserts that it is empty, so a partial park — which by construction
+                   comes back to a frontier that still holds the flows that were NOT paged out, and comes back
+                   possibly more than once — has nowhere to land. Until a resumed tail can be MERGED into a
+                   live frontier, writing one out would page a tail this engine could not read back. */
                 CHECK(!oom, "the frontier could not hold another flow — this is the physical RAM floor. The cold "
-                            "tier pages a WHOLE engine at the host's request; what carries past THIS is the "
-                            "partial self-park of the lowest-value tail while the engine keeps running");
+                            "tier pages a WHOLE engine at the host's request and flow_release can now drop a "
+                            "single flow while the engine keeps running; what carries past THIS is the MERGE of "
+                            "a resumed tail into a frontier that already has members, which cold_resume asserts "
+                            "against today");
                 /* AN @S CANDIDATE THAT DOES NOT PARSE is a dead candidate and nothing more — the search tries
                    several breakouts per sink precisely because most do not fit most contexts. A `javascript:`
                    URL that does not parse is HTML §7.4.2.3.2's abrupt evaluation, which produces no Document and
@@ -1669,37 +1681,36 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
            "a flow finished holding a cross-agent operation — either the record was never performed, or its "
            "program's completion was never sent, and either way the flow that ASKED is suspended at the line "
            "that asked it with nothing coming");
-    decide_leave(ctx);
-    cow_unapply(ctx, (CowDelta *)f->delta); cow_set_current(NULL);
-    cow_delta_free(ctx, (CowDelta *)f->delta); f->delta = NULL;
-    /* f is CURRENT here (its head+base are loaded as the globals, and the head may have realloc'd during the run
-       so f->dom is stale). dom_revert restores baseline + frees the head entries + unrefs the base chain; then
-       free the now-empty global head ARRAY. Never touch the stale f->dom/f->dom_base — the live buffers are the
-       globals. */
-    dom_revert();
-    { int dn, dc; free(dom_buf_take(&dn, &dc)); }
-    f->dom = NULL; f->dom_n = f->dom_cap = 0; f->dom_base = NULL;
-    for (int i = 0; i < f->dyn_n; i++) free(f->dyn[i]);
-    free(f->dyn); f->dyn = NULL;
-    free(f->dyn_cand); f->dyn_cand = NULL;
-    f->dyn_n = f->dyn_cap = 0;
     /* THE QUEUE AND THE PENDING LIST ARE EMPTY HERE, AND THAT IS ASSERTED RATHER THAN CLEANED UP AFTER. Both
-       used to be walked and freed "defensively", which is the fallback shape: the walk can only ever run when
-       a work item is being DROPPED, and freeing it quietly is precisely how that drop stays invisible. Neither
-       is reachable — flow_step decides "finished" only after offering the job queue a turn (njob > 0 runs one),
-       and only when the register is empty, since a pending entry with a value drains and one without reports
-       host-owed.
-       So the loops were dead, and the one state that would have entered them is the bug. The ARRAY still has to
-       be freed: it is this flow's allocation whether or not it ever held an entry. */
+       used to be walked and freed "defensively" right here, which is the fallback shape: the walk can only ever
+       run when a work item is being DROPPED, and freeing it quietly is precisely how that drop stays invisible.
+       Neither is reachable — flow_step decides "finished" only after offering the job queue a turn (njob > 0
+       runs one), and only when the register is empty, since a pending entry with a value drains and one without
+       reports host-owed. The release below DOES free both, because an EVICTED flow legitimately holds them (the
+       cold tier's recipe re-enqueues the reactions and re-issues the requests as it replays). So the assertion
+       has to stand HERE, where "finished" is the claim being made, and not there. */
     DCHECK(f->njob == 0, "a finishing flow still held queued jobs — its promise reactions and timer callbacks "
-                         "are being dropped, and freeing them here is what used to hide that");
-    free(f->jobs); f->jobs = NULL; f->jobcap = 0;
+                         "are being dropped, and the release below is what would hide that");
     DCHECK(pending_count(f->pending) == 0,
            "a finishing flow still held pending host replies — a flow awaiting one is parked, not finished, "
-           "and releasing them here is what used to hide that");
-    pending_free(ctx, &f->pending);
+           "and the release below is what would hide that");
+    /* A FINISH IS A SWITCH-OUT FOLLOWED BY A RELEASE, and it is spelled that way rather than as its own
+       teardown. It used to be one: `dom_revert` restored the document and discarded the head, `cow_delta_free`
+       reverted the whole installed chain to the baseline, and nine fields were freed inline — a second copy of
+       what the frontier's teardown does, which had already drifted from it. The release (solver/flow.h) is the
+       one that also serves an EVICTED flow, so routing the finish through it is what keeps the eviction path
+       exercised by every flow that ever ends instead of only by an OOM no test reaches.
+       decide_leave rather than decide_suspend: a finishing flow's chain reference ends here, and there is no
+       blob for the release to free. Everything else is the switch-out, in its order — the heap delta unapplied
+       and un-currented, then the document, whose head and base chain come back ONTO the flow so the release
+       frees the live buffers rather than the stale pointers the run may have realloc'd away from. */
+    decide_leave(ctx);
+    cow_unapply(ctx, (CowDelta *)f->delta); cow_set_current(NULL);
+    dom_unapply();
+    f->dom = dom_buf_take(&f->dom_n, &f->dom_cap);
+    f->dom_base = dom_base_take();
     flow_set_running(NULL);
-    flow_remove(ctx, f);
+    flow_release(ctx, f);
 }
 
 /* THE ONE BFS SCHEDULER — explore and @S candidate-verify are the SAME loop, differing ONLY in whether a concolic
@@ -1734,6 +1745,16 @@ static int64_t engine_now_ms(void) { return engine_now_us() / 1000; }
    copy of this list is exactly the hand-copied list build.mjs warns about, where the park path would quietly
    leave a fork hook installed over a runtime whose flows are gone. */
 static void engine_session_close(void) {
+    /* THE FRONTIER A CLOSED SESSION LEAVES BEHIND IS A SET OF SNAPSHOTS, and that is a property of ENDING rather
+       than of the park path that happened to need it first. Every flow's decision state has to be in its own
+       blob, its COW delta unapplied and its DOM head detached — which is true of every member except the one
+       the scheduler is HOLDING, whose state is live in decide.c's globals and applied to the heap and the
+       document. So the last act of a session is the ordinary suspend, exactly as the park takes it (and the
+       park path, which must take it before it WRITES, has already left g_sess_cur NULL by the time it gets
+       here). Without this a session that ended any other way handed flow_registry_free a flow whose delta was
+       still applied, and the teardown freed the head as if it were parked — leaving that flow's writes standing
+       in the shared baseline with nothing left that could ever unapply them. flow_release asserts it now. */
+    if (g_sess_cur) { flow_switch_out(g_sess_ctx, g_sess_cur); g_sess_cur = NULL; }
     JS_SetJobEnqueueHook(NULL);
     JS_SetJobDropHook(NULL);
     JS_SetFlowControlHooks(&FC_OFF);
@@ -2256,6 +2277,9 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
            stopped at its fetch, and its continuation — the part that reads the reply — never ran at all. A
            provider that fills nothing ends the run, which is the honest answer to "nobody can supply this". */
         if (r == ENGINE_STEP_STALLED) {
+            /* NOBODY CAN SUPPLY IT, so this driver stops driving — and STOPPING IS NOT THE SAME AS THE SESSION
+               ENDING, which is why the close is below rather than here. The frontier that remains is real
+               (every flow parked on a reply that never came), and it is handed to the teardown as SNAPSHOTS. */
             if (!g_provider || g_provider(ctx) == 0)
                 break;
         }
@@ -2435,6 +2459,13 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
             fflush(stdout);
         }
     }
+    /* THE SESSION IS CLOSED ON EVERY EXIT, not only on the one that drained. `engine_sched_step` closes it when
+       it answers DONE; the OTHER way out of this loop — a stall nobody can supply — left the session LIVE, with
+       the scheduler's hooks still installed over a frontier the host was about to tear down and one flow still
+       switched in. That is exactly what engine_session_close's own comment says must not differ between the two
+       ways a session ends, and the way it ended here was the one nothing said. */
+    if (r != ENGINE_STEP_DONE)
+        engine_session_close();
 }
 
 /* EXPLORE: seed boot + drain the frontier, forking at every concolic branch. */

@@ -99,7 +99,6 @@ static DomSeg *g_dom_base = NULL;
  * at a fork and immutable after, so any two holders read the same values from it.
  * The HEAD is different and is always swapped: it is mutable and private to one flow. */
 static DomSeg *g_dom_installed = NULL;
-static void dom_unapply_seg(DomSeg *s);   /* fwd: dom_revert (defined earlier) walks the base chain */
 static void dom_seg_unref(DomSeg *s);
 static void dom_note_created_attr(lxb_dom_attr_t *a);   /* fwd: the chokepoint is above the creation records */
 
@@ -1036,51 +1035,17 @@ void dom_cow_insert_before(lxb_dom_node_t *ref, lxb_dom_node_t *child) {
     DCHECK(!g_tree_hook || g_cow_ctx, TREE_HOOK_NO_CTX);
     if (g_tree_hook) g_tree_hook(g_cow_ctx, child, child->parent, 1);
 }
-void dom_revert(void) {   /* DISCARD the running flow's DOM writes -> baseline (reverse order); empties the delta */
-    g_dom_version++;
-    for (int i = g_dom_undo_n - 1; i >= 0; i--) {
-        DomUndo *u = &g_dom_undo[i];
-        if (u->kind == 0) {   /* named slot: restore old value (attributes only) + old taint shadow */
-            if (u->slot == ATTR_SLOT_ATTRIBUTE) {
-                /* PRESENCE decides, not whether there were BYTES. `had && old` treated an attribute with an
-                   empty value as one the baseline never had, so a revert REMOVED it — and `<input required>`
-                   is exactly that attribute. */
-                if (u->had) attr_put(u, u->attr, u->attr_next, u->old, u->old_len);
-                else attr_drop(u);
-            }
-            shadow_restore(u->sh_owner, u->slot, u->ns, u->name, u->sh_old, u->sh_had);
-            if (g_cow_ctx) { JS_FreeValue(g_cow_ctx, u->sh_old); JS_FreeValue(g_cow_ctx, u->sh_cur); }
-            free(u->ns); free(u->prefix); free(u->name); free(u->old); free(u->cur);
-        } else if (u->kind == 3) {   /* character data: put the baseline's text back */
-            lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(u->node);
-            lxb_dom_character_data_replace(cd, u->old, u->old_len, 0, cd->data.length);
-            free(u->old); free(u->cur);
-        } else if (u->kind == 7) {   /* a DETACHED attribute's value: put the baseline's bytes back */
-            dom_attr_set_value(lxb_dom_interface_attr(u->node), (const char *)(u->old ? u->old : (lxb_char_t *)""),
-                               u->old_len);
-            shadow_restore(u->sh_owner, u->slot, u->ns, u->name, u->sh_old, u->sh_had);
-            if (g_cow_ctx) { JS_FreeValue(g_cow_ctx, u->sh_old); JS_FreeValue(g_cow_ctx, u->sh_cur); }
-            free(u->ns); free(u->name); free(u->old); free(u->cur);
-        } else if (u->kind == 8) {   /* node document: point the node back at the one the baseline had */
-            u->node->owner_document = u->doc_old;
-        } else if (u->kind == 1 && !u->detached) {   /* inserted node: detach it (baseline had none) */
-            lxb_dom_node_remove(u->node);
-        } else if (u->kind == 2 && !u->reinserted) {   /* removed node: the baseline HAD it — put it back */
-            if (u->next) lxb_dom_node_insert_before(u->next, u->node);
-            else if (u->parent) lxb_dom_node_insert_child(u->parent, u->node);
-        }
-    }
-    /* The head's creations die here, BEFORE the base segments below: a head node inserted into a segment's
-       node is the child, and a child must be freed before the parent it hangs under is freed deep. */
-    dom_release_created_all(g_dom_undo, g_dom_undo_n);
-    g_dom_undo_n = 0;
-    /* A DISCARD, so the document goes all the way back to the baseline and NOTHING stays installed — the
-       segments this flow held may be freed below, and an installed pointer into freed memory is what the next
-       switch would walk. */
-    dom_unapply_seg(g_dom_installed);
-    g_dom_installed = NULL;
-    dom_seg_unref(g_dom_base); g_dom_base = NULL;   /* drop this flow's reference; base freed iff no sibling holds it */
-}
+/* dom_revert — the "DISCARD the running flow's writes -> baseline" twin of dom_unapply — is DELETED, and this
+ * note is here because the deletion is the point rather than a tidy-up. It was the ONE caller's (flow_finish's)
+ * private discard: the same per-entry restore dom_unapply already does, minus the stash into `cur`, plus
+ * dom_release_created_all over the head and a blanket unapply of the whole installed chain. So a finishing flow
+ * and an evicted one tore their document down through two different code paths that had to agree — and they had
+ * already stopped agreeing, because the blanket unapply reverted the document all the way to the baseline even
+ * when a SIBLING still held the chain, which the next switch-in then replayed in full.
+ * A finish is now a switch-out followed by a release (engine.c's flow_finish), so the head goes through
+ * dom_unapply + dom_buf_take and its creations die in dom_buf_free, and the chain through dom_base_release,
+ * which walks the document down to the deepest segment that actually survives. ONE path, exercised by every
+ * flow that finishes rather than only by an eviction no test reaches. */
 /* per-entry UNAPPLY (flow -> parked): stash the flow's value/taint into cur, restore the baseline. */
 static void dom_unapply_entry(DomUndo *u) {
     g_dom_version++;
@@ -1219,11 +1184,6 @@ static void dom_install_chain(DomSeg *want)
     g_dom_installed = want;
 }
 
-static void dom_unapply_seg(DomSeg *s)
-{
-    for (; s; s = s->base)
-        for (int i = s->n - 1; i >= 0; i--) dom_unapply_entry(&s->e[i]);
-}
 /* drop a chain reference: refcount--, free the segment's entries (parked: old/cur held) when it hits 0, recurse. */
 /* WHAT THE DOCUMENT'S CHAIN IS HOLDING — the same pair the heap chain reports, counted at the same two points
    (the fork that freezes a segment and this unref), and reported beside it because a per-flow delta that is
@@ -1241,6 +1201,16 @@ long dom_cow_head_bytes(int cap) { return (long)cap * (long)sizeof(DomUndo); }
 static void dom_seg_unref(DomSeg *s) {
     while (s && --s->refcount <= 0) {
         DomSeg *base = s->base;
+        /* THE DOCUMENT MAY NOT BE SHOWING WHAT IS ABOUT TO BE FREED — the heap half asserts the same thing at
+           the same point and for the same reason. `g_dom_installed` holds no reference, so a refcount reaching
+           zero says nothing about whether the segment is applied, and here the consequence is worse than a
+           dangling pointer: dom_release_created_all destroys the nodes a segment's entries created, and a
+           segment still applied has those nodes IN THE TREE. dom_base_release is what brings the document down
+           to the deepest survivor first. */
+        DCHECK(s != g_dom_installed,
+               "a frozen DOM segment was freed while the document was still SHOWING it — the nodes it created "
+               "are live tree, its writes stay standing in the baseline, and the installed chain points into "
+               "freed memory");
         g_dom_seg_live--; g_dom_seg_entries_live -= s->n;
         dom_release_created_all(s->e, s->n);
         for (int i = 0; i < s->n; i++) { DomUndo *u = &s->e[i];
@@ -1287,7 +1257,20 @@ void *dom_cow_fork(void) {
 /* Take / install the shared BASE chain alongside the head (a flow's full DOM delta is head + base chain). */
 void *dom_base_take(void) { void *b = g_dom_base; g_dom_base = NULL; return b; }
 void dom_base_load(void *base) { g_dom_base = (DomSeg *)base; }
-void dom_base_free(void *base) { if (base) dom_seg_unref((DomSeg *)base); }
+/* RELEASE one flow's reference on the document's frozen chain — the DOM twin of cow_delta_release, and the same
+   walk for the same reason. The document comes back down to the deepest segment that SURVIVES the release and
+   no further: a segment a sibling still holds stays applied (a switch to that sibling then costs nothing), and a
+   dying one is unapplied BEFORE dom_seg_unref destroys the nodes its entries created — which, unlike the heap
+   half, is not merely a dangling pointer but live tree being freed out of the document. */
+void dom_base_release(void *base) {
+    DomSeg *surv, *s;
+
+    if (!base) return;
+    for (surv = (DomSeg *)base; surv && surv->refcount == 1; surv = surv->base) ;
+    for (s = (DomSeg *)base; s != surv; s = s->base)
+        if (s == g_dom_installed) { dom_install_chain(surv); break; }
+    dom_seg_unref((DomSeg *)base);
+}
 void dom_base_ref(void *base) { if (base) ((DomSeg *)base)->refcount++; }   /* each orphan forks the document flow's shared DOM delta */
 /* Free a parked DOM delta buffer — and the nodes the flow CREATED go with it. The comment here used to read
    "its nodes stay detached, owned by the doc", which was the leak stated as if it were a design. */

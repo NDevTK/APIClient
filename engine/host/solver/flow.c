@@ -86,57 +86,69 @@ void flow_age_running(int64_t us) {
     g_running->cpu += us;
 }
 
+/* RELEASE ONE FLOW — see flow.h. This is where every field a Flow owns is given back, and the only place. */
+void flow_release(JSContext *ctx, Flow *f) {
+    /* THE SCHEDULER IS NOT SWITCHED INTO IT. Everything below is released as PARKED state — the heap delta's
+       head is freed rather than unapplied, the DOM head's created nodes are destroyed on the assumption they
+       are detached, and the decision/pin state is read out of blobs rather than out of decide.c's live globals.
+       All three are false for the running flow, and each fails differently and late; asked once, here. */
+    DCHECK(f != g_running,
+           "the RUNNING flow was released — its heap delta, its document writes and its decision state are all "
+           "live rather than parked, so this frees one copy of each while the scheduler still holds the other");
+    /* A PAGED FLOW IS NOT A DROPPED ONE, which is the only thing this assert is about. A continuation left
+       parked here is an async activation nobody will ever resume — UNLESS the frontier was written to the cold
+       tier, in which case this flow's recipe replays the code that created that continuation and re-parks it in
+       the next session. That is the whole claim the cold tier makes, so it is stated where the drop would
+       otherwise be asserted rather than by teaching the assert to tolerate a NULL. */
+    DCHECK(engine_frontier_paged() || f->park_fn == NULL,
+           "a flow was released with a continuation still parked — its suspended async activation is dropped, "
+           "and nothing but the cold tier's replay can bring it back");
+    /* …and it is DROPPED HERE, on the line after the assert that says when that is allowed, rather than left on
+       a Flow that is about to be freed. The slot borrows: `opaque` is an activation reachable from the frame
+       chain released just below, so what goes is the intention to resume it and not the memory. flow_remove
+       asserts the field is clear, which is the other side of this and stays exact for every caller. */
+    f->park_ctx = NULL; f->park_fn = NULL; f->park_opaque = NULL;
+    /* `frame` is the JS_FlowNew handle holding this flow's whole heap-frame chain — every activation, closure
+       and local it is suspended across — so one left behind retains the entire realm, and the runtime's leak
+       walk reports it as a Window, a context and seventeen hundred anonymous Functions with nothing naming the
+       owner. That is precisely the shape a leak takes when the ROOT is one dropped handle. */
+    if (f->frame) { JS_FlowFree(ctx, (JSValue *)f->frame); f->frame = NULL; }
+    /* the REPLIES it was still owed. Each entry is a request the host never answered; the whole register is one
+       JS value, so its resolve capabilities, its reply values and every string in it go with one release. */
+    pending_free(ctx, &f->pending);
+    cow_delta_release(ctx, (CowDelta *)f->delta); f->delta = NULL;
+    /* THE HEAD BEFORE THE CHAIN BELOW IT: a head node inserted under a segment's node is that node's child, and
+       a child must be freed before the parent it hangs under is freed deep. */
+    if (f->dom) dom_buf_free(f->dom, f->dom_n);
+    f->dom = NULL; f->dom_n = f->dom_cap = 0;
+    dom_base_release(f->dom_base); f->dom_base = NULL;
+    decide_blob_free(f->dec_blob); f->dec_blob = NULL;
+    concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
+    for (int k = 0; k < f->dyn_n; k++) free(f->dyn[k]);
+    free(f->dyn); f->dyn = NULL;
+    free(f->dyn_cand); f->dyn_cand = NULL;
+    f->dyn_n = f->dyn_cap = 0;
+    for (int k = 0; k < f->njob; k++) {   /* any undrained microtask/task jobs */
+        for (int a = 0; a < f->jobs[k].argc; a++) JS_FreeValue(ctx, f->jobs[k].argv[a]);
+        free(f->jobs[k].argv);
+    }
+    free(f->jobs); f->jobs = NULL; f->njob = 0; f->jobcap = 0;
+    flow_remove(ctx, f);
+}
+
 void flow_registry_free(JSContext *ctx) {
     /* THE WORLD NAMESPACE GOES DOWN WITH THE FRONTIER, for the reason it came up with it. Any segment this
        instance still holds for a PEER's world is a foreign flow's state in this document — nothing else is
        going to free it, and it is malloc'd, so the runtime's GC walk would never name it. */
     world_registry_free(ctx);
-    for (int i = 0; i < g_flows_n; i++) {
-        Flow *f = g_flows[i];
-        /* A FLOW LEFT IN THE FRONTIER IS THE ORDINARY CASE, NOT AN ERROR — and everything it is still holding
-           has to be released HERE, because nothing else will. The session closes over its survivors by design
-           (engine_sched_step's exhausted path leaves every host-owed flow alive, and in the product a parked
-           flow OUTLIVES the session entirely), so this is the teardown for a flow that never finished and it
-           must release exactly what flow_finish releases for one that did.
-           It released four fields and left the rest, and the two that matter are not small: `frame` is the
-           JS_FlowNew handle holding this flow's whole heap-frame chain — every activation, closure and local
-           it is suspended across — and `delta` is the COW state naming every shared value it captured. One
-           survivor therefore retained the entire realm, and the runtime's leak walk reported it as a Window, a
-           context and seventeen hundred anonymous Functions with nothing naming the owner. That is precisely
-           the shape a leak takes when the ROOT is one dropped handle. */
-        /* A PAGED FLOW IS NOT A DROPPED ONE, which is the only thing this assert is about. A continuation left
-           parked here is an async activation nobody will ever resume — UNLESS the frontier was written to the
-           cold tier, in which case this flow's recipe replays the code that created that continuation and
-           re-parks it in the next session. That is the whole claim the cold tier makes, so it is stated where
-           the drop would otherwise be asserted rather than by teaching the assert to tolerate a NULL. */
-        DCHECK(engine_frontier_paged() || f->park_fn == NULL,
-               "a flow reached the frontier's teardown with a continuation still parked — its suspended async "
-               "activation is dropped, and only the flow that FINISHES was being checked for this");
-        if (f->frame) { JS_FlowFree(ctx, (JSValue *)f->frame); f->frame = NULL; }
-        /* the REPLIES it was still owed. Each entry is a request the host never answered; the whole register
-           is one JS value now, so its resolve capabilities, its reply values and every string in it go with
-           one release — which is the difference between a record whose free path had to be kept in step with
-           its fields and one that cannot be. */
-        pending_free(ctx, &f->pending);
-        cow_delta_free(ctx, (CowDelta *)f->delta); f->delta = NULL;
-        if (f->dom) dom_buf_free(f->dom, f->dom_n);
-        if (f->dom_base) dom_base_free(f->dom_base);
-        decide_blob_free(f->dec_blob);
-        concolic_pins_blob_free(f->pin_blob);
-        for (int k = 0; k < f->dyn_n; k++) free(f->dyn[k]);
-        free(f->dyn); free(f->dyn_cand);
-        free(f->cand_src); free(f->cand_payload);
-        JS_FreeValue(ctx, f->fn);
-        free(f->deliver); free(f->deliver_origin);
-        free(f->perform); free(f->answer_token);
-        for (int k = 0; k < f->njob; k++) {   /* free any undrained microtask jobs */
-            for (int a = 0; a < f->jobs[k].argc; a++) JS_FreeValue(ctx, f->jobs[k].argv[a]);
-            free(f->jobs[k].argv);
-        }
-        free(f->jobs);
-        free(f);
-    }
-    free(g_flows); g_flows = NULL; g_flows_n = g_flows_cap = 0;
+    /* A FLOW LEFT IN THE FRONTIER IS THE ORDINARY CASE, NOT AN ERROR: the session closes over its survivors by
+       design (engine_sched_step's exhausted path leaves every host-owed flow alive, and in the product a parked
+       flow OUTLIVES the session entirely). So this is the teardown for a flow that never finished, and it is
+       the SAME operation as evicting one and as finishing one — which is why it is one call and not a fourteen-
+       field list restated here. It used to be that list, it released four of the fields and left the rest, and
+       the drift was invisible until a leak walk named a Window nobody owned. */
+    while (g_flows_n) flow_release(ctx, g_flows[0]);
+    free(g_flows); g_flows = NULL; g_flows_cap = 0;
     /* NOT ONE HEAP CALL FRAME AND NOT ONE STEP MACHINE MAY OUTLIVE THE FRONTIER, and this is the only point in
        the program where that is a decidable question. A TrampFrame and a suspended builtin's state are the two
        largest things in the @HEAP line's `unattributed` residual, they are invisible to the runtime's own
@@ -154,6 +166,27 @@ void flow_registry_free(JSContext *ctx) {
                "the frontier is gone and STEP MACHINES are still live — a continuation-holding builtin's state "
                "outlived the flow that was suspended inside it, along with every argument it captured");
     }
+    /* AND NOT ONE FROZEN SEGMENT, which is the other side of the release above and the reason it can be trusted.
+       A segment of the heap chain or the document chain is referenced ONLY by the deltas forked below it and by
+       the segments above it — the world registry's foreign segments and the frontier's flows, both released by
+       the two lines above — so with all of them gone the count must be zero, exactly as decide_free asserts for
+       the third chain built on the same primitive. A non-zero one is a delta reference nobody dropped: pure
+       garbage holding no live JSValue, invisible to the runtime's gc_obj_list walk, and previously visible only
+       as a process that grew by a delta per flow. This is the assertion that makes cow_delta_release's and
+       dom_base_release's refcount arithmetic checkable rather than argued. */
+    {
+        long segs = 0, entries = 0;
+        cow_chain_stats(&segs, &entries);
+        DCHECK(segs == 0,
+               "a frozen HEAP segment outlived the frontier — every reference on the chain belongs to a delta "
+               "the flows and the world registry have just released, so one still live is a delta nobody "
+               "released and the whole history it names is unreachable memory");
+        dom_cow_chain_stats(&segs, &entries);
+        DCHECK(segs == 0,
+               "a frozen DOCUMENT segment outlived the frontier — beyond the memory, it holds the nodes the "
+               "flows below it created, so nothing will ever destroy them or take them out of the identity map "
+               "that names them");
+    }
     /* AND THE DECISION STATE THE FRONTIER STANDS ON, released HERE and not by each host. Every flow's parked
        vector is a reference on a shared frozen chain, and the running flow holds one more in decide.c's
        globals; the blobs went with the flows in the loop above, so this is the last of them. Putting it in the
@@ -161,6 +194,22 @@ void flow_registry_free(JSContext *ctx) {
        the line would leak the whole chain with nothing to say so, which is exactly how the world registry's
        own release came to be missing from one of them. It belongs to the frontier, so it goes down with it. */
     decide_free();
+    /* AND THE PATH CONSTRAINT THE SAME DECISIONS WERE MADE UNDER, which is the FOURTH chain built on the same
+       refcounted immutable segment and the only one with no teardown at all. Its blobs went with the flows; the
+       one reference left is the globals', held by whichever flow was switched out last — every session has
+       leaked that flow's frozen constraint, its entries and every key and value string in them, with no counter
+       naming an owner because a segment is not a GC object. Released here for the reason the decision chain is:
+       it belongs to the frontier, and putting it in the three hosts' teardowns instead is the hand-copied list
+       that has already drifted once. */
+    concolic_clear_pins();
+    {
+        long segs = 0, entries = 0, bytes = 0;
+        concolic_chain_stats(&segs, &entries, &bytes);
+        DCHECK(segs == 0,
+               "a frozen CONSTRAINT segment outlived the frontier — every reference on that chain is a parked "
+               "flow's blob or the running flow's globals, and both are gone by here, so one still live is a "
+               "blob nobody released and the whole narrowing it names is unreachable memory");
+    }
     /* AND THE PARK DOCUMENT WRITTEN OUT OF THIS FRONTIER, released here for the same reason the decision chain
        is: it is the frontier's own residue, the host has already read it out of the result document by the
        time any teardown runs, and putting the free in each host's teardown instead would be the hand-copied
@@ -346,15 +395,16 @@ Flow *flow_best_other(const Flow *exclude) {
 
 void flow_remove(JSContext *ctx, Flow *f) {
     /* WHAT THIS FUNCTION DOES NOT FREE, ASSERTED RATHER THAN ASSUMED. A Flow owns fourteen things and this
-       releases five; the other nine belong to the caller's teardown (engine.c's flow_finish), which runs while
-       the flow is switched IN because releasing a COW delta or a DOM head means unapplying it from the live
-       heap and document first. That split is correct and it is also invisible: nothing said so, so a second
-       caller — an eviction, a cancelled candidate, a frontier trim — would compile, run, and leak the flow's
-       entire delta, its DOM head, its queued jobs and its suspended frame with no counter naming the owner.
-       That is precisely the shape the delta leak took (a per-flow allocation nobody freed, holding no live
-       JSValue by then, so the runtime's own leak walk could not see it either).
-       Asserted at the ROOT of the contract instead: a field added to Flow gets a line here, and a caller that
-       has not run flow_finish crashes at the removal instead of two hundred megabytes later. */
+       releases five; the other nine belong to flow_release above, which is the ONE caller and the one place
+       that knows a flow has to be switched OUT before its COW delta and DOM head can be given back. That split
+       is correct and it is also invisible: nothing said so, so a second caller — an eviction, a cancelled
+       candidate, a frontier trim — would compile, run, and leak the flow's entire delta, its DOM head, its
+       queued jobs and its suspended frame with no counter naming the owner. That is precisely the shape the
+       delta leak took (a per-flow allocation nobody freed, holding no live JSValue by then, so the runtime's own
+       leak walk could not see it either).
+       Asserted at the ROOT of the contract instead: a field added to Flow gets a line in flow_release and a line
+       here, and a caller that skipped the release crashes at the removal instead of two hundred megabytes
+       later. */
     DCHECK(f->delta == NULL && f->dom == NULL && f->dom_base == NULL,
            "a flow was removed with its COW state still attached — the heap delta and the DOM head must be "
            "UNAPPLIED from the live heap and document before they can be freed, which is why flow_finish owns "

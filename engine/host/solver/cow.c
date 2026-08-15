@@ -793,6 +793,16 @@ static void cow_entries_free(JSContext *ctx, CowEntry *e, int n);
 static void cow_seg_unref(JSContext *ctx, CowSeg *s) {
     while (s && --s->refcount <= 0) {
         CowSeg *base = s->base;
+        /* THE HEAP MAY NOT BE SHOWING WHAT IS ABOUT TO BE FREED, asserted at the free rather than at each caller
+           that could arrange it. `g_cow_installed` is a property of the HEAP and holds no reference, so nothing
+           about a refcount reaching zero says the segment is unapplied — and an installed pointer into freed
+           memory is what the very next context switch walks. cow_delta_release is what brings the chain down to
+           the deepest SURVIVOR first; reaching here with the installed segment means a reference was dropped
+           without going through it. */
+        DCHECK(s != g_cow_installed,
+               "a frozen heap segment was freed while the heap was still SHOWING it — the installed chain would "
+               "point into freed memory and the next context switch walks it, and every write in the segment "
+               "stays standing in the baseline with nothing left that can unapply it");
         cow_entries_free(ctx, s->e, s->n);
         g_seg_live--; g_seg_entries_live -= s->n;
         free(s->e); free(s);
@@ -855,14 +865,34 @@ static void cow_install_chain(JSContext *ctx, CowSeg *want) {
     if (touched > g_swap_max) g_swap_max = touched;
 }
 
-void cow_delta_free(JSContext *ctx, CowDelta *d) {
+void cow_delta_release(JSContext *ctx, CowDelta *d) {
+    CowSeg *surv, *s;
+
     if (!d) return;
-    /* The heap must be at the BASELINE once no flow is running, and these segments may be freed below — an
-       installed pointer into freed memory is what the next switch would walk. */
-    if (g_cow_installed == d->base) {
-        for (CowSeg *s = g_cow_installed; s; s = s->base) cow_unapply_entries(ctx, s->e, s->n);
-        g_cow_installed = NULL;
-    }
+    /* THE SCHEDULER IS NOT SWITCHED INTO THIS DELTA, which is the release's whole contract — see cow.h. The head
+       is FREED below and never unapplied, so an applied one leaves this flow's writes standing in the shared
+       baseline with nothing left that could take them back out, and every other flow reads them as baseline from
+       then on. `g_current` is exactly "the delta the scheduler is switched into" — cow_set_current(NULL) is what
+       a switch-out does after cow_unapply — so the two facts are one fact and this is where it is asked. */
+    DCHECK(d != g_current,
+           "a COW delta was released while the scheduler was still switched into it — its head is APPLIED to the "
+           "live heap, so freeing the entries leaves this flow's writes standing in the shared baseline with "
+           "nothing that can unapply them; switch the flow out first");
+    /* THE DEEPEST SEGMENT THAT SURVIVES. A segment dies exactly when this delta held its last reference, and the
+       dying set is a contiguous prefix from `d->base` down — freeing one drops its own reference on the one
+       below it. Everything from `surv` down has another holder and must not be touched at all. */
+    for (surv = d->base; surv && surv->refcount == 1; surv = surv->base) ;
+    /* IS THE HEAP SHOWING SOMETHING THAT IS ABOUT TO BE FREED? Only then does anything move, and then it moves
+       exactly as far as the free reaches. One walk for the two cases this used to answer with a blanket revert
+       to the baseline: a FINISHING flow, whose own chain is installed and held by nobody else (the heap now
+       comes down to the deepest sibling-held segment rather than all the way to the baseline, which the next
+       switch-in then had to replay in full), and a PARKED one — an evicted tail, a foreign world's segment —
+       where the installed chain belongs to whichever flow is RUNNING and a blanket revert silently rewound that
+       flow's heap and left `g_cow_installed` NULL under it. */
+    g_capturing = 1;   /* the scheduler's own unapply is not a flow's write */
+    for (s = d->base; s != surv; s = s->base)
+        if (s == g_cow_installed) { cow_install_chain(ctx, surv); break; }
+    g_capturing = 0;
     cow_seg_unref(ctx, d->base); d->base = NULL;
     cow_entries_free(ctx, d->e, d->n);
     /* AND THE DELTA'S OWN ALLOCATIONS, which this function did not free — it released what the entries POINTED
@@ -903,7 +933,11 @@ static void cow_entries_free(JSContext *ctx, CowEntry *e, int n) {
     }
 }
 
-void cow_free(JSContext *ctx) { (void)ctx; g_current = NULL; }
+/* `cow_free` — a session teardown that set `g_current` to NULL and did nothing else — is DELETED: it had NO
+   CALLER, which is the defect class this codebase has been bitten by repeatedly (a producer nobody runs reads
+   exactly like one that works). What it claimed to do is now a property the frontier's teardown ASSERTS instead
+   of a function nobody called: with every delta released, no frozen segment may still be live and the heap may
+   not still be showing one — see the chain assertions in flow_registry_free. */
 
 /* THE time-travel hook set — see cow.h. Installed AFTER the context's own globals exist, so the baseline is
    pre-flow and nothing set up before it lands in a delta.

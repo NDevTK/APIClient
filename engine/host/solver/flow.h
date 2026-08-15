@@ -206,7 +206,25 @@ void  flow_credit_emit(double v);   /* a NEW @H/@S from the running flow: raise 
    of the interval). Never a step count: see the `cpu` field. */
 void  flow_age_running(int64_t us);
 
-/* Remove + free a flow (its emitted work is done, or it was evicted). */
+/* RELEASE A FLOW THE SCHEDULER IS NOT SWITCHED INTO — the ONE teardown for a member of the frontier, and the
+ * primitive the PARTIAL self-park needs (§scheduler: "an engine self-parks its residue to the IDB cold tier
+ * under pressure"; §Time-travel-resume: "under RAM pressure the cold low-value tail serializes to IDB").
+ *
+ * IT TAKES THE FLOW OUT OF THE FRONTIER AND GIVES ITS RAM BACK — its suspended frame chain, its heap COW delta,
+ * its DOM head and its reference on the document's frozen chain, its decision and pin blobs, its chunk bodies,
+ * its queued jobs and the replies the host owed it. Everything is released as PARKED state: the delta's head is
+ * freed rather than unapplied, and only what the release actually FREES is walked back out of the live heap and
+ * document (cow_delta_release / dom_base_release), so releasing a low-value tail while another flow runs cannot
+ * disturb the flow holding the thread. Switch the flow out first; both halves assert that you did.
+ *
+ * WHY IT IS THE ONLY TEARDOWN. The same fourteen fields were released in two other places — the frontier's own
+ * teardown and the scheduler's finish path — and a list restated is a list that drifts: the finish path grew a
+ * `park_fn` claim the teardown did not make, and the teardown freed a delta the finish path had already
+ * unapplied differently. A field added to `Flow` now has exactly one place that must learn about it, and
+ * `flow_remove` asserts from the other side that it did. */
+void  flow_release(JSContext *ctx, Flow *f);
+
+/* Remove + free a flow whose state has already been released. Asserts what flow_release owes it. */
 void  flow_remove(JSContext *ctx, Flow *f);
 
 int   flow_count(void);

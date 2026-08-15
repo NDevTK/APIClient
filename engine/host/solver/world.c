@@ -121,7 +121,7 @@ void world_registry_free(JSContext *ctx)
 {
     int i;
     for (i = 0; i < g_segs_n; i++)
-        cow_delta_free(ctx, g_segs[i].delta);
+        cow_delta_release(ctx, g_segs[i].delta);
     free(g_segs);
     g_segs = NULL;
     g_segs_n = g_segs_cap = 0;
@@ -377,6 +377,6 @@ void world_release(JSContext *ctx, WorldId w)
     /* A WORLD THAT NEVER WROTE HERE NEVER HAD A SEGMENT, and the sender cannot know which peers a flow reached
        — it would have to track that to avoid telling one, which is state kept only to avoid a no-op. */
     if (!s) return;
-    cow_delta_free(ctx, s->delta);
+    cow_delta_release(ctx, s->delta);
     *s = g_segs[--g_segs_n];
 }

@@ -22,7 +22,20 @@
 typedef struct CowDelta CowDelta;
 
 CowDelta *cow_delta_new(void);
-void      cow_delta_free(JSContext *ctx, CowDelta *d);
+/* RELEASE ONE FLOW'S DELTA — the head it owns, and its reference on the frozen chain below it.
+ *
+ * IT IS THE DELTA THE SCHEDULER IS *NOT* SWITCHED INTO, and that is the whole contract rather than a caveat:
+ * the head's entries are freed, never unapplied, so a head still applied to the live heap would leave this
+ * flow's writes standing in the baseline with nothing left that could take them back out. The switch-out
+ * (cow_unapply + cow_set_current(NULL)) is what makes that true and this asserts it.
+ *
+ * WHAT IT UNAPPLIES IS EXACTLY WHAT IT IS ABOUT TO FREE, which is the half a whole-engine park never needed.
+ * `g_cow_installed` is not a counted reference, so a segment can be the one the heap is SHOWING and still be
+ * held by nobody but this delta — which is every finishing flow. The heap is walked back down to the deepest
+ * segment that SURVIVES the release, no further: a segment a sibling still holds stays applied, so releasing a
+ * PARKED flow (an evicted tail, a foreign world's segment) costs nothing and — the part that matters — cannot
+ * revert the RUNNING flow's heap out from under it, which a blanket revert-to-baseline silently did. */
+void      cow_delta_release(JSContext *ctx, CowDelta *d);
 
 /* Fork a delta at a branch: freeze src's HEAD into a shared immutable base segment (refcount 2) that both src
    and the returned sibling reference, so the sibling inherits src's branch-point state in O(1) — NOT a copy —
@@ -150,8 +163,6 @@ void      cow_unapply(JSContext *ctx, CowDelta *d);
    two chains' lowest common one), then replay its head on top. After this the heap shows exactly what this flow
    last saw. */
 void      cow_apply(JSContext *ctx, CowDelta *d);
-
-void      cow_free(JSContext *ctx);
 
 /* INSTALL THE TIME-TRAVEL RECORD BOUNDARY — the per-flow COW capture set, declared once for the reason the
    concolic set is: two entries each spelled it out as a struct literal, which is a list that can drift, and one

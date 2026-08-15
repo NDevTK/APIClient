@@ -172,15 +172,20 @@ void dom_cow_discard_private(lxb_dom_node_t *root, lxb_dom_node_t *node);
    reserved for the mutation ops that compose them (the chokepoint above, and node-insert once it lands). */
 void dom_insert_capture(lxb_dom_node_t *node);                    /* an inserted node */
 
-/* Scheduler hooks — swap the running flow's DOM writes. */
-void dom_revert(void);      /* DISCARD the running flow's writes -> baseline (flow completed) */
+/* Scheduler hooks — swap the running flow's DOM writes. There is no `dom_revert` twin that DISCARDS them: a
+   flow that finishes is switched out like any other and then RELEASED, which is the same path an evicted flow
+   takes (see the note where dom_revert used to be, and flow_release in solver/flow.h). */
 void dom_unapply(void);     /* flow -> parked: stash the flow's values, restore the baseline */
 void dom_apply(void);       /* parked -> flow: restore the flow's values over the baseline */
 
 /* Park/resume the delta buffer as an opaque handle (the scheduler stores it on the Flow as void*). */
 void *dom_buf_take(int *n, int *cap);          /* detach the current buffer (returns it; delta now empty) */
 void dom_buf_load(void *buf, int n, int cap);  /* attach a parked buffer as the current delta */
-void dom_buf_free(void *buf, int n);           /* free a parked buffer (its nodes stay owned by the doc) */
+/* Free a PARKED buffer — the head's entries and the nodes the flow CREATED, which die with it. It must be a
+   parked one: the creations are destroyed deep, and a head still applied has them in the tree (asserted where
+   they are released). Call it BEFORE dom_base_release: a head node inserted under a segment's node is that
+   node's child, and a child must be freed before the parent it hangs under is freed deep. */
+void dom_buf_free(void *buf, int n);
 
 /* Persistent-versioned-DOM fork (mirrors the heap's JS_CowFork): freeze the running flow's DOM head into a
    shared immutable base segment (refcount 2) a snapshot-forked sibling references in O(1). The base chain rides
@@ -188,7 +193,12 @@ void dom_buf_free(void *buf, int n);           /* free a parked buffer (its node
 void *dom_cow_fork(void);       /* freeze head -> shared base; returns it (the sibling stores the 2nd reference) */
 void *dom_base_take(void);      /* detach the shared base chain (park it on the flow) */
 void dom_base_load(void *base); /* install a parked flow's base chain (before dom_apply) */
-void dom_base_free(void *base); /* drop a flow's reference to a base chain (free iff last) */
+/* Drop a flow's reference on a base chain (freed iff last), bringing the DOCUMENT back down to the deepest
+   segment that survives it first — never further. The heap twin is cow_delta_release and the reason is the
+   same one twice: `g_dom_installed` holds no reference, so a dying segment can be the one the document is
+   showing, and here that is not a dangling pointer but the nodes the segment created being destroyed while
+   they are still live tree. */
+void dom_base_release(void *base);
 void dom_base_ref(void *base);  /* add ONE ref (each orphan forks the document flow's shared DOM delta) */
 
 /* WHAT THE DOCUMENT'S CHAIN IS HOLDING RIGHT NOW — frozen segments still referenced, and the entries in them.

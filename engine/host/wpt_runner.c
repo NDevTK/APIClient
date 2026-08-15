@@ -1703,6 +1703,14 @@ int main(int argc, char **argv)
     message_port_free(ctx);
     window_message_free(ctx);
     navigable_free(ctx);
+    /* THIS HOST'S SCHEDULER GIVES THE THREAD BACK BEFORE THE FRONTIER GOES DOWN. The serve loop IS this
+       instance's scheduler and it holds ONE flow running for the whole run (see flow_registry_init above), so
+       nothing else ever performs the switch-out that every other scheduler performs when its session ends. A
+       frontier torn down with a flow still switched in is one whose delta, DOM head and decision state are LIVE
+       rather than parked, and the release frees them as if they were parked — which flow_release asserts
+       against. Here the flow has neither (this runner drives quickjs flows directly), so the switch-out is
+       exactly this line; it is stated rather than left to the accident that its delta happens to be empty. */
+    flow_set_running(NULL);
     flow_registry_free(ctx);
     document_free(ctx);
     iframe_free(ctx);
