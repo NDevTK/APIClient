@@ -33,6 +33,7 @@
  * READS are pure Lexbor and run no page code, so they are ordinary C. WRITES go through the solver's
  * chokepoints (dom_cow_*) because a DOM write is per-flow TIME-TRAVEL state: two forked arms mutate the same
  * tree differently and each reads back its own. */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -1957,7 +1958,10 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
 
-    if (hdr->stage == CN_CHECK) {
+    STEP_DISPATCH(NODE_CLONE_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(CN_CHECK);
+    {
         lxb_dom_node_t *n = node_of(hdr->this_val);
         /* `optional boolean subtree = false` — the declaration converted it, so this is a real boolean. */
         bool deep = argc > 0 && JS_ToBool(ctx, argv[0]);
@@ -1975,9 +1979,21 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
         return JS_STEP_YIELD;
     }
 
-    if (hdr->stage != CN_RETURN)
-        return node_clone_run(ctx, hdr, s, CN_ROOT);
+    /* STEP 2's `clone a node`, WHOSE SIX REST POINTS ARE THIS MEMBER'S SIX STAGES. The walk is shared, so each
+       of its stages is named here and all six enter it — `case A: case B:` and nothing else. This was
+       `if (hdr->stage != CN_RETURN)`, a negation that is a claim about every stage that is not the last: the
+       day §4.4 gains a rest point AFTER the return — or this member gains a step of its own after step 2 — the
+       new stage falls into the walk, which re-enters `clone a node` on a state whose answer is already built.
+       Named individually, a stage added to NODE_CLONE_ALGO_STAGES does not compile until it has an arm here. */
+    STEP_ARM(CN_ROOT);
+    STEP_ARM(CN_COPY);
+    STEP_ARM(CN_TEMPLATE);
+    STEP_ARM(CN_CHILDREN);
+    STEP_ARM(CN_SHADOW);
+    STEP_ARM(CN_LEAVE);
+    return node_clone_run(ctx, hdr, s, CN_ROOT);
 
+    STEP_ARM(CN_RETURN);
     /* STEP 2's "return the result": the algorithm left the copy on the state and pointed the stage here. */
     DCHECK(s->copy != NULL, "`clone a node` finished without a copy — its step 7 is what sets the answer, and "
                             "the caller is only ever resumed from there");
