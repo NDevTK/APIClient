@@ -1159,6 +1159,38 @@ JSValue event_target_retarget(JSContext *ctx, JSValueConst a, JSValueConst b)
     }
 }
 
+/* WEB IDL §3.2.16's `EventTarget?` — see event_target.h for why the conversion is stated here and once. */
+JSValue event_target_nullable_of(JSContext *ctx, JSValueConst v, const char *what)
+{
+    JSValue p, target;
+    bool ok = false;
+
+    DCHECK(what != NULL && *what,
+           "the `EventTarget?` conversion was asked to convert a value for a member it cannot name — the name "
+           "is the whole of what the TypeError tells the page");
+    if (JS_IsUndefined(v) || JS_IsNull(v))
+        return JS_NULL;
+    /* THE WALK NEVER TOUCHES A PROXY. JS_GetPrototype on one runs its getPrototypeOf trap — the page's code,
+       from inside a C activation — and a Proxy is not a platform object implementing the interface anyway, so
+       a link that is one ends the walk instead of being asked. */
+    if (!JS_IsObject(v) || JS_IsProxy(v))
+        return JS_ThrowTypeError(ctx, "%s must be an EventTarget or null", what);
+    target = event_target_proto(ctx);
+    p = JS_GetPrototype(ctx, v);
+    while (JS_IsObject(p) && !JS_IsProxy(p)) {
+        JSValue next;
+        if (JS_VALUE_GET_PTR(p) == JS_VALUE_GET_PTR(target)) { ok = true; break; }
+        next = JS_GetPrototype(ctx, p);
+        JS_FreeValue(ctx, p);
+        p = next;
+    }
+    JS_FreeValue(ctx, p);
+    JS_FreeValue(ctx, target);
+    if (!ok)
+        return JS_ThrowTypeError(ctx, "%s must be an EventTarget or null", what);
+    return JS_DupValue(ctx, v);
+}
+
 /* §2.9 steps 6.1-6.2 and 6.9.3-6.9.4: a NEW LIST holding each of the event's touch targets RETARGETED against
    `against`. JS_NULL when the event's touch target list is empty, which is every event but a TouchEvent and is
    the same list one allocation cheaper — the item's field carries that spelling too. OWNED. */

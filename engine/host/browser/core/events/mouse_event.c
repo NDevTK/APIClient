@@ -126,40 +126,6 @@ static int32_t md_button_of(JSContext *ctx, JSValueConst init)
     return u >= 0x8000u ? (int32_t)u - 0x10000 : (int32_t)u;
 }
 
-/* `EventTarget?` — Web IDL §3.2.16 over the `relatedTarget` member. null and undefined are the IDL null; any
-   other value must IMPLEMENT EventTarget, and there is no single class to brand against because every Node,
-   every Window, every MessagePort and every `new EventTarget()` is one. So the question is asked of the
-   object's PROTOTYPE CHAIN, which is where an interface's members actually live: a platform object implements
-   EventTarget exactly when this realm's EventTarget.prototype is on its chain.
-   THE WALK NEVER TOUCHES A PROXY. JS_GetPrototype on a Proxy runs its getPrototypeOf trap — the page's code,
-   from inside a C activation — and a Proxy is not a platform object implementing the interface anyway, so a
-   link that is one ends the walk instead of being asked. Answers JS_NULL / an owned dup, or JS_EXCEPTION with
-   the TypeError live. */
-static JSValue md_related_of(JSContext *ctx, JSValueConst v)
-{
-    JSValue p, target;
-    bool ok = false;
-
-    if (JS_IsUndefined(v) || JS_IsNull(v))
-        return JS_NULL;
-    if (!JS_IsObject(v) || JS_IsProxy(v))
-        return JS_ThrowTypeError(ctx, "a MouseEvent's `relatedTarget` must be an EventTarget or null");
-    target = event_target_proto(ctx);
-    p = JS_GetPrototype(ctx, v);
-    while (JS_IsObject(p) && !JS_IsProxy(p)) {
-        JSValue next;
-        if (JS_VALUE_GET_PTR(p) == JS_VALUE_GET_PTR(target)) { ok = true; break; }
-        next = JS_GetPrototype(ctx, p);
-        JS_FreeValue(ctx, p);
-        p = next;
-    }
-    JS_FreeValue(ctx, p);
-    JS_FreeValue(ctx, target);
-    if (!ok)
-        return JS_ThrowTypeError(ctx, "a MouseEvent's `relatedTarget` must be an EventTarget or null");
-    return JS_DupValue(ctx, v);
-}
-
 /* The eight own slots, placed on an event whose Event and UIEvent halves are already built, plus the ninth
    value that is the EVENT'S: §2.2's relatedTarget. Returns -1 with the throw live. */
 static int md_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
@@ -176,8 +142,11 @@ static int md_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
         if (k != JS_ATOM_NULL) JS_FreeAtom(ctx, k);
         return -1;
     }
+    /* `EventTarget? relatedTarget = null` — the type's own conversion, which is event_target.c's because the
+       question it asks is "does this implement EventTarget", and because FocusEventInit declares the same
+       member over the same §2.2 value. */
     given = idl_dict_get(ctx, init, "relatedTarget");
-    related = md_related_of(ctx, given);
+    related = event_target_nullable_of(ctx, given, "a MouseEvent's `relatedTarget`");
     JS_FreeValue(ctx, given);
     if (JS_IsException(related)) {
         JS_FreeValue(ctx, slots);

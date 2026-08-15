@@ -39,13 +39,12 @@
  * traversable, which is another instance; that read crosses the instance boundary and is not built, so it
  * aborts where it is asked rather than answering for a traversable this instance cannot see.
  *
- * FIRING A FOCUS EVENT NEEDS AN INTERFACE THIS TREE HAS NOT GOT. §6.6.4's "fire a focus event" fires "using
- * FocusEvent, with the relatedTarget attribute initialized to r, the view attribute initialized to t's node
- * document's relevant global object, and the composed flag set". This engine has no FocusEvent and no UIEvent —
- * create_event.c's row for it has no maker, and asserts that the interface is not exposed — so the mint DFAILs
- * and names it. Firing a plain Event instead would be worse than the crash: a listener reading `e.relatedTarget`
- * would get undefined where the spec computes a real value, and a page that distinguishes a real focus event
- * from a synthetic one would be told the wrong thing. */
+ * FIRING A FOCUS EVENT IS A FocusEvent, AND NOTHING LESS IS THE SAME EVENT. §6.6.4's "fire a focus event"
+ * fires "using FocusEvent, with the relatedTarget attribute initialized to r, the view attribute initialized to
+ * t's node document's relevant global object, and the composed flag set" — three facts a plain Event cannot
+ * carry: `e.relatedTarget` is what a page reads to learn where the focus WENT, `e.view` is the document it
+ * moved in, and the composed flag is what decides whether the event escapes a shadow tree at all. The interface
+ * is core/events/focus_event.c and the mint below is its one internal caller. */
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -59,6 +58,7 @@
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
 #include "core/events/event_target.h"
+#include "core/events/focus_event.h"
 #include "core/frame/window_proxy.h"
 #include "core/html/focus.h"
 #include "core/html/html_form.h"
@@ -685,27 +685,42 @@ static void currently_focused_area(JSContext *ctx, int *pk, JSValue *pv)
 
 /* ---- §6.6.4's "fire a focus event" ------------------------------------------------------------------------- */
 
-/* THE ONE THING §6.6 NEEDS THAT THIS TREE HAS NOT GOT. "To fire a focus event named e at an element t with a
-   given related target r, fire an event named e at t, USING FocusEvent, with the relatedTarget attribute
-   initialized to r, the view attribute initialized to t's node document's relevant global object, and the
-   COMPOSED FLAG SET." Three of those four — the interface, `relatedTarget` and `view` — are FocusEvent's, and
-   FocusEvent inherits UIEvent, and this engine has neither: create_event.c carries a row for FocusEvent with no
-   maker and asserts that the interface is not exposed.
-   A plain Event would be a WRONG answer rather than a partial one — `e.relatedTarget` is what a page reads to
-   learn where the focus went, and `e.composed` is what decides whether the event escapes a shadow tree at all —
-   so the mint aborts and names the component to build. */
-static JSValue fire_a_focus_event_new(JSContext *ctx, const char *type, bool bubbles, JSValueConst related)
+/* "To fire a focus event named e at an element t with a given related target r, fire an event named e at t,
+   USING FocusEvent, with the relatedTarget attribute initialized to r, the view attribute initialized to t's
+   NODE DOCUMENT'S RELEVANT GLOBAL OBJECT, and the COMPOSED FLAG SET." This is the EVENT; the fire is the
+   caller's, because §2.9's dispatch is a request this machine parks on and the same object is fired once and
+   released.
+   IT IS THE CHAIN ENTRY THAT NAMES THE DOCUMENT, NOT THE EVENT TARGET. Steps 2.2 and 4.2 make the event target
+   of a DOCUMENT entry that document's relevant global object, so `t` is then a Window — and asking a Window for
+   its node document is a question about the wrong object. The entry is the Element or the Document itself,
+   which is what §6.6.4 means by "t's node document" in both cases.
+   AND THE EVENT IS MINTED IN THAT DOCUMENT'S REALM. A focus move into a same-origin iframe fires at that
+   document's listeners, and DOM §2.5 creates an event in the relevant realm of its target: minted here instead
+   it would chain to the running document's FocusEvent.prototype and `view` would be a Window belonging to
+   neither. The two facts are one — the realm the event is built in is the realm whose global `view` is.
+   SO IT TAKES NO RUNNING REALM, which is the point rather than an omission: every value it needs is a fact
+   about the ENTRY, and there is nothing left here for the realm that happens to be executing to decide. */
+static JSValue fire_a_focus_event_new(int kind, JSValueConst entry, const char *type,
+                                      bool bubbles, JSValueConst related)
 {
-    (void)ctx; (void)type; (void)bubbles; (void)related;
-    DFAIL("HTML §6.6.4's FIRE A FOCUS EVENT needs the FocusEvent interface, which this engine does not have: "
-          "`interface FocusEvent : UIEvent { constructor(DOMString type, optional FocusEventInit init); "
-          "readonly attribute EventTarget? relatedTarget; }` (UI Events §3.3.1), over `interface UIEvent : "
-          "Event { readonly attribute Window? view; readonly attribute long detail; }` (UI Events §3.2.1). "
-          "Build core/events/ui_event.c and core/events/focus_event.c, fill create_event.c's `focusevent` row "
-          "with the maker (its DCHECK asserts the row and the exposed interface agree), and mint the event "
-          "here with relatedTarget, view = the target's node document's relevant global object, and the "
-          "composed flag set");
-    return JS_UNDEFINED;
+    lxb_dom_node_t *n = node_of(entry);
+    JSContext *realm;
+    JSValueConst view;
+
+    DCHECK(kind == FA_ELEMENT || kind == FA_DOCUMENT,
+           "§6.6.4's fire a focus event was reached for a chain entry that fires none — a viewport's event "
+           "target is null and the caller returns before the mint");
+    DCHECK(n != NULL, "§6.6.4's fire a focus event was given a chain entry that is not a node — every entry "
+                      "that has an event target is an Element or a Document");
+    realm = document_realm_of(n);
+    DCHECK(realm != NULL, "§6.6.4's fire a focus event reached a node whose document has no realm — a focus "
+                          "chain is built from the currently focused area of a top-level traversable, so every "
+                          "document in it is some realm's active document");
+    view = document_window_of(n);   /* t's node document's relevant global object */
+    DCHECK(JS_IsObject(view), "§6.6.4's fire a focus event reached a document with no relevant global object — "
+                              "a document with no browsing context has no focused area and cannot be in a "
+                              "focus chain at all");
+    return focus_event_new_to_fire(realm, type, bubbles, related, view);
 }
 
 /* ---- §6.6.6's activeElement and hasFocus ------------------------------------------------------------------- */
@@ -825,7 +840,12 @@ typedef struct {
     uint32_t old_n, new_n;           /* how many ENTRIES of each are live — step 1's pop shortens both */
     uint32_t i, j;                   /* step 2's cursor, and step 4's count of entries already visited */
     JSValue  ev;                     /* the event being fired (owned) */
-    JSValue  cb[4];                  /* the fire request's buffer: [this, dispatch, target, event] */
+    /* THE FIRE REQUEST'S BUFFER, AS THE TYPE THAT CARRIES ITS WIDTH. It was `JSValue cb[4]` for a dispatch
+       that takes [this, dispatch, target, event, targetOverride] — five slots — so the FIRST focus event this
+       machine ever managed to mint would have dupped one past the end of the array, over whatever field
+       follows it. event_target.h names the type for exactly that reason: a caller that writes the number
+       cannot be anything but an argument behind the algorithm. */
+    EventFireCb cb;
 } FocusState;
 
 static void focus_state_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -837,7 +857,7 @@ static void focus_state_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->old_chain);
     v->val(ctx, &s->new_chain);
     v->val(ctx, &s->ev);
-    for (k = 0; k < 4; k++) v->val(ctx, &s->cb[k]);
+    STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
 }
 
 static void focus_state_release(JSContext *ctx, void *st)
@@ -850,7 +870,7 @@ static void focus_state_release(JSContext *ctx, void *st)
     JS_FreeValue(ctx, s->new_chain);
     JS_FreeValue(ctx, s->ev);
     s->target = s->old_chain = s->new_chain = s->ev = JS_UNDEFINED;
-    for (k = 0; k < 4; k++) {
+    STEP_CB_FOREACH(s->cb, k) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
     }
@@ -867,7 +887,7 @@ static bool focus_state_init(JSContext *ctx, FocusState *s)
     s->kind = FA_NONE;
     s->old_n = s->new_n = s->i = s->j = 0;
     s->fphase = 0;
-    for (k = 0; k < 4; k++) s->cb[k] = JS_UNDEFINED;
+    STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
     s->old_chain = JS_NewArray(ctx);
     s->new_chain = JS_NewArray(ctx);
     return !JS_IsException(s->old_chain) && !JS_IsException(s->new_chain);
@@ -1161,19 +1181,9 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
             if (JS_IsUndefined(s->ev)) {
                 JSValue related = chain_related(ctx, s->new_chain, s->new_n,
                                                 kind == FA_ELEMENT && s->i + 1 == s->old_n);
-                s->ev = fire_a_focus_event_new(ctx, blur ? "blur" : "focusout", !blur, related);
+                s->ev = fire_a_focus_event_new(kind, entry, blur ? "blur" : "focusout", !blur, related);
                 JS_FreeValue(ctx, related);
                 if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; JS_FreeValue(ctx, entry); return -1; }
-            }
-            if (JS_IsUndefined(s->ev)) {
-                /* A release build, where the mint's DFAIL is compiled out and there is no interface to fire
-                   with. Nothing is dispatched — a plain Event here would report a focus event that carries
-                   neither its related target nor its composed flag. */
-                JS_FreeValue(ctx, entry);
-                if (blur) { hdr->stage = FOC_FOCUSOUT; continue; }
-                s->i++;
-                hdr->stage = FOC_CHANGE;
-                return JS_STEP_YIELD;
             }
             r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), tgt, s->ev, JS_UNDEFINED, cb_result,
                                       NULL, out_cb, out_argc);
@@ -1234,15 +1244,9 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
             if (JS_IsUndefined(s->ev)) {
                 JSValue related = chain_related(ctx, s->old_chain, s->old_n,
                                                 kind == FA_ELEMENT && at + 1 == s->new_n);
-                s->ev = fire_a_focus_event_new(ctx, focus ? "focus" : "focusin", !focus, related);
+                s->ev = fire_a_focus_event_new(kind, entry, focus ? "focus" : "focusin", !focus, related);
                 JS_FreeValue(ctx, related);
                 if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; JS_FreeValue(ctx, entry); return -1; }
-            }
-            if (JS_IsUndefined(s->ev)) {                                    /* release: see FOC_BLUR's note */
-                JS_FreeValue(ctx, entry);
-                if (focus) { hdr->stage = FOC_FOCUSIN; continue; }
-                s->j++;
-                return JS_STEP_YIELD;
             }
             r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), tgt, s->ev, JS_UNDEFINED, cb_result,
                                       NULL, out_cb, out_argc);

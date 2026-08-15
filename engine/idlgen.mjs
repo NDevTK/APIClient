@@ -56,6 +56,16 @@ const INTERFACES = {
   /* HTML 9.4.1. Its two type-constrained members (source, ports) name interfaces that do not exist yet, so the
      audit is what will notice the day they do and this file still answers only their empty value. */
   MessageEvent:        ["core/events/message_event.c", "core/events/event.c"],
+  /* UI Events §3.2.1 and §3.3.1, and the two interfaces that share UIEvent's dictionary levels. Each names its
+     own file plus everything it INHERITS — a member installed on UIEvent.prototype really is reachable on a
+     FocusEvent, so reporting it absent would be the audit lying in the direction that gets a real gap ignored.
+     They had no row at all, which is the audit lying by OMISSION: an interface nobody audits is an interface
+     whose gaps are not zero but unreported. ui_event.c carries the four modifier attributes and
+     getModifierState that MouseEvent and KeyboardEvent declare over its shared key modifier state. */
+  UIEvent:             ["core/events/ui_event.c", "core/events/event.c"],
+  FocusEvent:          ["core/events/focus_event.c", "core/events/ui_event.c", "core/events/event.c"],
+  MouseEvent:          ["core/events/mouse_event.c", "core/events/ui_event.c", "core/events/event.c"],
+  KeyboardEvent:       ["core/events/keyboard_event.c", "core/events/ui_event.c", "core/events/event.c"],
   /* HTML 9.4.2/9.4.3. MessagePort is an EventTarget, so its inherited members are event_target.c's. */
   MessagePort:         ["core/events/message_port.c", "core/events/event_target.c"],
   MessageChannel:       "core/events/message_port.c",

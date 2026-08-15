@@ -78,6 +78,19 @@ void event_target_set_tree(const EventTargetTree *tree);
    LOOP, and the first site to get either wrong reports a node out of a closed tree to a listener that must not
    see it. */
 JSValue event_target_retarget(JSContext *ctx, JSValueConst a, JSValueConst b);
+/* WEB IDL §3.2.16's `EventTarget?`, over the ONE value DOM §2.2 gives every Event — the associated
+   relatedTarget, which §2.9 step 4 retargets and which MouseEventInit and FocusEventInit each declare a member
+   over. It is stated HERE, once, because "does this value implement EventTarget" is this component's question
+   and neither event interface's: written out in one of them, the second copy is a brand test a body wrote by
+   hand, which is exactly what a declared type exists to replace.
+   THERE IS NO SINGLE CLASS TO BRAND AGAINST — every Node, every Window, every MessagePort, every AbortSignal
+   and every `new EventTarget()` implements the interface — so the question is asked of the object's PROTOTYPE
+   CHAIN, which is where an interface's members actually live: a platform object implements EventTarget exactly
+   when this realm's EventTarget.prototype is on its chain.
+   `what` NAMES THE MEMBER being converted ("a FocusEvent's `relatedTarget`") and is the subject of the
+   TypeError, because the one thing a page needs from it is which value it handed over was wrong.
+   Answers JS_NULL / an owned dup, or JS_EXCEPTION with the TypeError live. */
+JSValue event_target_nullable_of(JSContext *ctx, JSValueConst v, const char *what);
 /* §2.7's INTERFACE PROTOTYPE OBJECT, where addEventListener, removeEventListener and dispatchEvent live.
    An interface that INHERITS EventTarget — Node, AbortSignal, MessagePort, BroadcastChannel, Window — chains
    its own prototype to this one; it does not install the three members again. That is not a saving, it is the

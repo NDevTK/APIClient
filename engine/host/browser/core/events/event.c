@@ -43,6 +43,7 @@
 #include "core/events/ui_event.h"
 #include "core/events/mouse_event.h"
 #include "core/events/keyboard_event.h"
+#include "core/events/focus_event.h"
 #include "core/events/event_path.h"
 #include "core/timing/timer.h"
 
@@ -809,10 +810,12 @@ static void event_declare_subclasses(JSContext *ctx)
     before_unload_event_init(ctx);
     /* THE ORDER IS THE CHAIN. Each of these declares a per-realm install and realm.h runs them in declaration
        order, so an interface must declare AFTER the one it extends or its prototype chains to a slot no realm
-       has filled yet: `MouseEvent : UIEvent : Event` and `KeyboardEvent : UIEvent : Event`. */
+       has filled yet: `MouseEvent : UIEvent : Event`, `KeyboardEvent : UIEvent : Event` and
+       `FocusEvent : UIEvent : Event`. */
     ui_event_init(ctx);
     mouse_event_init(ctx);
     keyboard_event_init(ctx);
+    focus_event_init(ctx);
 }
 
 static void event_free_subclasses(JSContext *ctx)
@@ -824,6 +827,7 @@ static void event_free_subclasses(JSContext *ctx)
     ui_event_free(ctx);
     mouse_event_free(ctx);
     keyboard_event_free(ctx);
+    focus_event_free(ctx);
 }
 
 void event_free(JSContext *ctx)
