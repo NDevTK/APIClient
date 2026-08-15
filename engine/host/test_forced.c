@@ -1648,9 +1648,13 @@ static int hostreq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
     /* RE-ENTERED. Until the answer lands the machine yields again — and because the flow is blocked, that
        yield is a suspension rather than a spin. */
     if (!engine_host_answered(s->req, &answer)) return JS_STEP_YIELD;
-    *presult = engine_host_take(ctx, s->req);
-    s->req = 0;
-    return JS_STEP_DONE;
+    /* THE ANSWER IS A COMPLETION: a host that answers by relaying a peer's program may answer with a THROW,
+       and it is raised here, at the read that parked, exactly as the cross-agent machines raise theirs. */
+    {
+        int r = engine_host_take_completion(ctx, s->req, presult);
+        s->req = 0;
+        return r;
+    }
 }
 
 /* WHERE THIS MACHINE RESTS. It has one stage and rests at it repeatedly: a blocked read yields until the host
@@ -1722,7 +1726,9 @@ static int hostreq_answer_all(JSContext *ctx)
             /* ONE ANSWER PER REQUEST. Answering inside a branch AND here answered twice, which the engine's own
                assert named at the site — a second answer would overwrite a value the asking machine may
                already have read. */
-            n += engine_host_answer(ctx, id, v);
+            /* This fixture stands in for the trusted zone and answers out of its own tables, so every answer
+               it gives is a NORMAL completion — there is no peer program here to have thrown in one. */
+            n += engine_host_answer(ctx, id, v, ENGINE_COMPLETION_NORMAL);
             JS_FreeValue(ctx, v);
         }
         p = end + 1;
