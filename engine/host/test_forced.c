@@ -1290,13 +1290,18 @@ static const char *HTML_MIN =
        NOT the cause, though it was named as one: the per-position ask DOES return to the scheduler. The driver
        consults the preempt hook at every outcome fork (JS_PREEMPT_FORK, quickjs.c), so a yield is offered per
        position and the seam assertion's `asked == 0` never holds here.
-       STILL RED, and this is the measured reason: the WALKING FLOW IS NEVER OUTRANKED. flow_weight is
-       reward + optimism - aging, the walker's reward is every endpoint it emitted EARLIER in this document
+       FIXED, and it was the reason this row read 227 seconds: the WALKING FLOW WAS NEVER OUTRANKED. flow_weight
+       is reward + optimism - aging; the walker's reward is every endpoint it emitted EARLIER in this document
        while a fresh sibling starts at zero, and the aging that §scheduler says must sink "a monopolizer that
-       burns CPU without emitting" is 1e-6 per scheduler step - about 10^7 steps to give back ONE emission's
-       worth of rank. So the scheduler is offered the yield, declines it, and re-picks the walker: 227 seconds
-       of run with `switches` still at 1 and nothing else in the frontier ever dispatched. The aging term has to
-       be commensurate with the reward it is weighed against; that is the next mechanism, and it is flow.c's.
+       burns CPU without emitting" was 1e-6 per SCHEDULER STEP - about 10^7 steps to give back ONE emission's
+       worth of rank, and denominated in something the reward was not. So the scheduler was offered the yield,
+       declined it, and re-picked the walker: 227 seconds of run with `switches` still at 1 and nothing else in
+       the frontier ever dispatched. The charge is now MICROSECONDS OF THREAD TIME at the same 1e-6, i.e. one
+       emitted finding per second held without emitting, so a flow that has emitted V findings and then stops
+       falls below a never-run sibling after V + 1 seconds - and flow_best asserts that crossing rather than
+       claiming it, so a rate that stops being commensurate crashes here instead of reading as a slow run. The
+       227 seconds is the PRE-FIX measurement and is kept as the thing the unit is judged against; what the row
+       costs now has not been re-measured, and the number to look at when it is is `switches`, which was 1.
        AND BEHIND THAT, the walk is unbounded by design (§NO BOUNDS: every length is a world and the walker
        takes the "longer" arm forever), so the frontier NEVER DRAINS - and this harness's completion condition
        is that it drains. What carries past that is the mechanism engine.c already names at its own flow-compile

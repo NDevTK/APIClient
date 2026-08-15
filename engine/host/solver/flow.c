@@ -5,6 +5,7 @@
  * freed. The alternative — a scheduler that must remember to sweep the survivors before the registry goes down
  * — is the shape where a host that forgets retains the whole runtime with nothing to name the owner. */
 #include "solver/flow.h"
+#include "solver/engine.h"     /* ENGINE_QUANTUM_MS — the scheduler's slice IS this file's service quantum */
 #include "solver/cow.h"        /* a survivor's heap COW delta */
 #include "solver/dom_cow.h"    /* …and its DOM delta head + shared base segment */
 #include "solver/decide.h"     /* …and its suspended decision vector */
@@ -40,15 +41,36 @@ Flow *flow_running(void) { return g_running; }
    (endpoint.c / solve.c) when they record something NEW — this is what makes the WFQ value-of-information
    ordered rather than merely breadth-first by visit count. The frontier gen bumps so the value-yield re-ranks. */
 void flow_credit_emit(double v) {
+    /* ONE EMISSION IS ONE POINT, and the aging term's exchange rate is stated against exactly that. A credit of
+       zero or less would leave a flow's rank unchanged while resetting its aging, which is the one way a
+       monopolizer could refresh its lead without producing anything — so the reward's sign is asserted where it
+       enters rather than assumed by the comparator that subtracts against it. */
+    DCHECK(v > 0.0, "a flow was credited a non-positive emission — the WFQ's reward term counts NEW @H/@S "
+                    "findings at one point each, and a zero credit resets the aging that outranks a monopolizer "
+                    "while adding nothing to weigh it against");
     if (!g_running) return;
     g_running->val += v;
     g_running->cpu = 0;   /* emitted -> no longer a CPU-burning monopolizer */
     g_gen++;              /* rank changed: let the value-yield recompute */
 }
 
-/* Age the running flow: CPU burned since its last emit. A monopolizer that runs without emitting sinks below
-   productive + unrun flows. Called once per scheduler step. */
-void flow_age_running(long units) { if (g_running) g_running->cpu += units; }
+/* Age the running flow by the MICROSECONDS of thread time its step just burned. A monopolizer that runs without
+   emitting sinks below productive + unrun flows — see FLOW_AGE_RATE for the exchange that makes that true.
+   NO `if (g_running)` GUARD. There is exactly one caller and it charges between a switch-in and a finish, so a
+   charge with nothing running would mean the scheduler lost track of which flow burned the time — and silently
+   discarding it is how a monopolizer stops aging altogether. It crashes instead. */
+void flow_age_running(int64_t us) {
+    DCHECK(g_running != NULL,
+           "thread time was charged with no flow running — the scheduler charges the flow it just stepped, so "
+           "this is time nobody is billed for and a flow that never ages");
+    /* THE CLOCK THE SCHEDULER AGES BY IS MONOTONIC, ASSERTED WHERE ITS READING ARRIVES. A negative charge does
+       not merely lose the aging: it RAISES the flow's weight, so a flow that burns the thread would climb to the
+       top of the frontier and stay there. That is the exact failure this term exists to prevent, and the only
+       way to get one is a non-monotonic (or wrapping) clock at the call site. */
+    DCHECK(us >= 0, "a NEGATIVE thread-time charge reached the WFQ — the aging clock ran backwards, which does "
+                    "not slow a monopolizer down, it promotes it");
+    g_running->cpu += us;
+}
 
 void flow_registry_free(JSContext *ctx) {
     /* THE WORLD NAMESPACE GOES DOWN WITH THE FRONTIER, for the reason it came up with it. Any segment this
@@ -96,6 +118,23 @@ void flow_registry_free(JSContext *ctx) {
         free(f);
     }
     free(g_flows); g_flows = NULL; g_flows_n = g_flows_cap = 0;
+    /* NOT ONE HEAP CALL FRAME AND NOT ONE STEP MACHINE MAY OUTLIVE THE FRONTIER, and this is the only point in
+       the program where that is a decidable question. A TrampFrame and a suspended builtin's state are the two
+       largest things in the @HEAP line's `unattributed` residual, they are invisible to the runtime's own
+       gc_obj_list walk (neither is a GC object), and every one of them belongs to some flow's suspended chain —
+       so with every flow released the census must be zero. It was NOT: JS_FlowFree could not tear down a
+       DEEP-suspended flow at all, and each survivor took its whole activation chain with it into nothing with
+       no counter anywhere naming the owner. The census exists precisely so that question has an answer; asking
+       it here is what turns it into a gate rather than a number in a progress line. */
+    {
+        JSRuntime *rt = JS_GetRuntime(ctx);
+        DCHECK(JS_TrampFrameCount(rt) == 0,
+               "the frontier is gone and heap CALL FRAMES are still live — a suspended chain that no flow owns "
+               "is unreachable memory, and every frame of it holds its locals, its closed cells and its callee");
+        DCHECK(JS_StepMachineCount(rt) == 0,
+               "the frontier is gone and STEP MACHINES are still live — a continuation-holding builtin's state "
+               "outlived the flow that was suspended inside it, along with every argument it captured");
+    }
     /* AND THE DECISION STATE THE FRONTIER STANDS ON, released HERE and not by each host. Every flow's parked
        vector is a reference on a shared frozen chain, and the running flow holds one more in decide.c's
        globals; the blobs went with the flows in the loop above, so this is the last of them. Putting it in the
@@ -172,10 +211,39 @@ int flow_blocked(const Flow *f) { return pending_blocked(f->pending); }
  * rival then takes its turn. Nothing is dropped, nothing is truncated and no flow is skipped — it is an ORDER
  * decision, which is the only thing the WFQ is allowed to be.
  *
+ * QUANTISING IS NOT AN ARTEFACT OF THE OLD UNIT — it is MORE load-bearing now that the charge is a clock
+ * reading. A step count moved the weight once per step; elapsed time moves it continuously, so without the
+ * notch the running flow would fall below a tied rival between two consecutive consultations of the preempt
+ * hook, which is the same thrash at a finer grain.
+ *
+ * AND THE NOTCH IS THE COOPERATIVE QUANTUM, not a number of its own. Rank moving faster than the thread can
+ * actually be handed over IS the sub-quantum resolution described above, and ENGINE_QUANTUM_MS is the smallest
+ * slice this scheduler ever hands anyone. A private constant here would be the hand-copied value build.mjs
+ * warns about: the two would drift, and the drift would surface as thrash that neither file explained.
+ *
  * AN EMIT STILL PREEMPTS IMMEDIATELY. flow_credit_emit zeroes cpu and bumps the generation, so a flow that
  * produces value jumps the queue within the quantum — the quantum bounds thrash between EQUALS, never the
  * response to something that actually changed the ranking. */
-#define FLOW_SERVICE_QUANTUM 4096
+#define FLOW_SERVICE_US ((int64_t)ENGINE_QUANTUM_MS * 1000)
+
+/* THE EXCHANGE RATE BETWEEN THE TWO TERMS, and it is the entire mechanism: 1e-6 POINTS PER MICROSECOND — ONE
+ * EMITTED FINDING PER SECOND of thread time a flow holds without emitting one.
+ *
+ * THE NUMBER IS UNCHANGED AND ITS UNIT IS NOT, which is precisely the defect. It was points per SCHEDULER STEP,
+ * and a step count cannot price a monopolizer at all: at 1e-6 per step, giving back ONE emission's worth of rank
+ * took about 10^7 steps, so test_forced.c's unknown-length walk (`Array.from(state.items)`, one outcome fork per
+ * position, emitting nothing further) held the thread for 227 SECONDS with `switches` still at 1 — every yield
+ * offered, every yield declined, because its reward from earlier in the document outweighed an aging term
+ * denominated in something the reward was not.
+ *
+ * WHY ONE SECOND PER FINDING. The rate has to price silence on the timescale at which silence is monopolising,
+ * and it has to leave a flow that is still producing alone. It does both, exactly and checkably: a flow that has
+ * emitted V findings and then stops falls below a never-run sibling — whose weight is its own reward plus the
+ * full optimism bonus, hence at least 1.0 — after V + 1 seconds of unproductive thread time. Nothing holds the
+ * thread for a silent second and keeps its lead; nothing productive is demoted for the step in which it emits.
+ * Measured against the case above: 227 seconds of silence now costs 227 points, and no flow in any run of this
+ * engine has emitted anything close to 227 findings, so the walk sinks in its first seconds instead of never.
+ * That crossing is not left as prose — flow_best asserts it below, and it FIRES on the tree this replaced. */
 #define FLOW_AGE_RATE 1e-6
 
 /* Anytime-bandit priority: reward + UCB optimism − CPU aging. Additive (never a value/cpu ratio — the aging
@@ -188,37 +256,57 @@ double flow_weight(const Flow *f) {
        is what the term is for: a flow that has never RUN has no service, so it carries the full bonus and
        cannot be starved. What is gone is a rank that moves because of a decision rather than because of work.
        ZERO SERVICE IS ITS OWN NOTCH, and that is the whole of the guarantee rather than a rounding detail.
-       Quantising with a FLOOR put a flow that has never run and a flow that has burned 4095 units of CPU into
-       the SAME notch, so they tied — and flow_best keeps the incumbent on a tie. "A never-run flow is never
-       starved" is then not a guarantee at all: for a whole service quantum the term cannot tell the two apart,
-       and the one already holding the thread wins. A CEILING restores it and costs the anti-thrash property
-       nothing: service 0 is the never-run notch and is strictly better than every serviced flow, while
-       1..QUANTUM all land on notch 1 and tie with each other exactly as they did, so two flows that have both
-       run still hold the thread for a whole quantum and trade places once, never per step. Measured on the
-       full smoke fixture: same PASS, 13796 flows against 14003, 37002 context switches against 14000 — the
-       extra switches are fresh forks taking their turn, which is what the term is for.
-       WHAT THIS DOES NOT FIX, measured, so that the next reader does not credit it with more than it does: a
-       flow that has already EMITTED carries that reward forever (`reward = f->val`), and a fresh sibling starts
-       at zero, so the notch never comes into it — the emitting flow outranks by whole points while the aging
-       meant to give those points back is 1e-6 per scheduler step, about 10^7 steps per point. An unknown-length
-       walk (`Array.from(state.items)`, one outcome fork per position) is a flow that emits nothing more and
-       never finishes, and it held the thread for 227 seconds with `switches` still at 1. §scheduler says the
-       aging term sinks "a monopolizer that burns CPU without emitting" below productive AND unrun flows; at
-       this rate it cannot, and making it commensurate with the reward it is subtracted from is the next
-       mechanism here. */
-    long served   = (f->cpu + FLOW_SERVICE_QUANTUM - 1) / FLOW_SERVICE_QUANTUM;   /* 0 IFF never serviced */
-    double ucb    = 1.0 / (1.0 + (double)served);
-    double aging  = (double)(f->cpu / FLOW_SERVICE_QUANTUM)
-                  * (FLOW_SERVICE_QUANTUM * FLOW_AGE_RATE);   /* same rate, quantised — see above */
+       Quantising with a FLOOR put a flow that has never run and a flow that has burned a quantum-minus-one of
+       CPU into the SAME notch, so they tied — and a tie does not dislodge the running flow, because the value
+       yield asks whether a rival's weight is STRICTLY greater (engine.c's preempt hook). "A never-run flow is
+       never starved" is then not a guarantee at all: for a whole service quantum the term cannot tell the two
+       apart, and the one already holding the thread wins. A CEILING restores it and costs the anti-thrash
+       property nothing: service 0 is the never-run notch and is strictly better than every serviced flow, while
+       everything up to one quantum lands on notch 1 and ties with itself exactly as it did, so two flows that
+       have both run still hold the thread for a whole quantum and trade places once, never per step. Measured on
+       the full smoke fixture: same PASS, 13796 flows against 14003, 37002 context switches against 14000 — the
+       extra switches are fresh forks taking their turn, which is what the term is for. */
+    int64_t served = (f->cpu + FLOW_SERVICE_US - 1) / FLOW_SERVICE_US;   /* 0 IFF never serviced */
+    double ucb     = 1.0 / (1.0 + (double)served);
+    /* THE AGING, IN THE SAME CURRENCY AS THE REWARD ABOVE — see FLOW_AGE_RATE. Quantised to the same notch the
+       optimism term uses, so a flow's weight is constant between two service quanta, which is also what lets the
+       preempt hook's cached rival stay exact at O(1) (engine.c). */
+    double aging   = (double)(f->cpu / FLOW_SERVICE_US) * ((double)FLOW_SERVICE_US * FLOW_AGE_RATE);
     return reward + ucb - aging;
+}
+
+/* THE CPU AT WHICH A FLOW IS GUARANTEED TO RANK BELOW ANY NEVER-RUN SIBLING — the crossing §scheduler's sentence
+   claims exists, computed from the flow's OWN reward rather than a fixed threshold that could fire falsely on a
+   very productive flow. A never-run flow carries the full optimism bonus and no aging, so its weight is its
+   reward + 1.0 and therefore at least 1.0; a serviced flow's is at most val + 0.5 − aging, and aging is at least
+   (cpu − one quantum) * RATE. Past this charge the second is below −0.5 and the comparison cannot go the other
+   way for any reward. `static inline` so release (where the DCHECK's condition is unevaluated) does not warn. */
+static inline int64_t flow_cpu_to_sink(const Flow *f) {
+    return (int64_t)((f->val + 1.0) / FLOW_AGE_RATE) + FLOW_SERVICE_US;
 }
 
 Flow *flow_best(void) {
     Flow *best = NULL; double bw = 0.0;
+    /* A MEMBER WITH ZERO SERVICE: never run, or just emitted (flow_credit_emit zeroes cpu). Either way it
+       carries the full optimism bonus and no aging, so its weight is its reward + 1.0 and hence at least 1.0 —
+       which is the only property the assertion below needs, and it is the same property for both. */
+    int unrun = 0;
     for (int i = 0; i < g_flows_n; i++) {
         double w = flow_weight(g_flows[i]);
+        if (g_flows[i]->cpu == 0) unrun = 1;
         if (!best || w > bw) { best = g_flows[i]; bw = w; }
     }
+    /* §scheduler'S SENTENCE, ASSERTED WHERE THE CHOICE IS MADE — "CPU-AGING so a monopolizer that burns CPU
+       without emitting sinks below productive+unrun flows". This is the one line in the engine that decides
+       which flow runs, so it is where the claim is either true or a comment. It is not a tautology dressed as a
+       check: it FIRES on the tree this replaced, where the charge was one unit per scheduler step and the walk
+       above was re-picked at every iteration for 227 seconds with unrun siblings waiting. It fires again on any
+       future edit that clamps the aging term, caps it, or lets the reward grow with the CPU it is weighed
+       against — which is exactly the shape a "fix" for the thrash this quantum handles would take. */
+    DCHECK(!best || !unrun || best->cpu < flow_cpu_to_sink(best),
+           "the WFQ re-picked a flow that has burned more thread time since its last emit than its entire "
+           "accumulated reward is worth, while a never-run flow was waiting — the aging term is no longer "
+           "commensurate with the reward it is subtracted from, so a monopolizer cannot sink");
     return best;
 }
 

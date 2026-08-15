@@ -45,8 +45,19 @@ typedef struct Flow {
     JSValue fn;            /* the function this flow re-drives (JS_UNDEFINED for a boot/session flow) */
     signed char *dec;      /* the DECISION VECTOR — the arm (0/1) this flow takes at each branch, in order */
     int dec_n;             /* length of dec */
-    double val;            /* accumulated emitted VALUE (new @H + @S) — the WFQ's reward term */
-    long cpu;              /* CPU units consumed since last emit — the WFQ's aging term */
+    double val;            /* accumulated emitted VALUE (new @H + @S) — the WFQ's reward term, ONE POINT PER
+                              EMISSION (both detectors credit exactly 1.0) */
+    /* THE AGING TERM, AND ITS UNIT IS THE WHOLE OF WHETHER THE TERM WORKS. Thread time in MICROSECONDS burned
+       since this flow's last emit — never a step/opcode/visit count. A count is not commensurate with `val`
+       above: a step used to be a whole drain and became one unit of work, so the same charge billed a flow the
+       same amount for twelve milliseconds of execution as for advancing a script index, and §scheduler's
+       sentence ("a monopolizer that burns CPU without emitting sinks below productive AND unrun flows") could
+       not be true at any rate expressible in steps. In microseconds the two terms share a currency and the
+       exchange is stated once, at FLOW_AGE_RATE.
+       int64 rather than long because `long` is 32 bits in wasm: 2147 seconds of unproductive CPU would overflow
+       it, and a NEGATIVE cpu makes the monopolizer the highest-ranked flow in the frontier — the exact failure
+       this term exists to prevent, arriving silently after 36 minutes. */
+    int64_t cpu;
 
     /* INTERLEAVING STATE — persisted while this flow is PAUSED so the scheduler can run another flow and come
        back. A flow is preempted mid-execution (cooperative quantum) and resumed byte-identically; its COW
@@ -163,7 +174,11 @@ unsigned flow_frontier_gen(void);
 void  flow_set_running(Flow *f);
 Flow *flow_running(void);
 void  flow_credit_emit(double v);   /* a NEW @H/@S from the running flow: raise reward, reset aging */
-void  flow_age_running(long units); /* CPU burned this step without emitting */
+/* CHARGE THE RUNNING FLOW FOR THE THREAD TIME A STEP JUST BURNED, in MICROSECONDS — the same currency as the
+   reward above, which is the only reason the aging term can ever outweigh it. Charged AFTER the step, because
+   the quantity is not known before it, and by the scheduler alone (it is the only caller that holds both ends
+   of the interval). Never a step count: see the `cpu` field. */
+void  flow_age_running(int64_t us);
 
 /* Remove + free a flow (its emitted work is done, or it was evicted). */
 void  flow_remove(JSContext *ctx, Flow *f);

@@ -721,7 +721,20 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
 /* Snapshot-fork handoff: solver_decide stashes the sibling's hot decision + pins here at a forking branch;
    the interpreter then clones the frame and calls engine_fork_finalize, which assembles the sibling flow. */
 static void *g_fork_dec = NULL, *g_fork_pins = NULL;
-void engine_prepare_fork(void *dec_blob, void *pin_blob) { g_fork_dec = dec_blob; g_fork_pins = pin_blob; }
+/* THE HANDOFF IS FILLED AND EMPTIED WITHIN ONE FORK, AND THAT IS ASSERTED HERE RATHER THAN HOPED FOR. Two
+   pointers held between a `prepare` and a `finalize` are a slot with exactly one legal occupant: a second
+   prepare arriving with the first still in it means the interpreter took the FORKED bit and never reached its
+   fork hook, and the assignment then overwrites a decision blob and a pin blob that nothing else names — a leak
+   per unconsumed fork, of the shared decision chain reference the sibling was going to stand on, so the whole
+   frozen prefix under it stays alive too. That is the exact shape the abort seam was found in, and the only
+   reason it was found is that someone went looking. The invariant belongs where it can be broken. */
+void engine_prepare_fork(void *dec_blob, void *pin_blob) {
+    DCHECK(g_fork_dec == NULL && g_fork_pins == NULL,
+           "a sibling's snapshot state was prepared while a PREVIOUS one was still unconsumed — the branch that "
+           "prepared it never reached its fork hook, and this assignment drops that flow's decision and pin "
+           "blobs on the floor with nothing naming them");
+    g_fork_dec = dec_blob; g_fork_pins = pin_blob;
+}
 
 /* GENERATOR-STATE fork stash: clone_deep_flow fires gen_fork for each generator body frame it clones (during
    JS_FlowClone), BEFORE engine_fork_finalize exists to hold the sibling's delta. Append here; the finalize
@@ -742,6 +755,12 @@ void engine_gen_fork(JSContext *ctx, JSValueConst genobj, void *base_gd, void *c
 static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
     Flow *parent = flow_running();
     DCHECK(parent != NULL && g_fork_dec != NULL, "engine_fork_finalize: fork without a running flow / prepared state");
+    /* A SIBLING WITHOUT A SNAPSHOT IS NOT A SIBLING. `started` is set below, so a NULL frame here produces a flow
+       the scheduler believes is hot and which has nothing to resume — it compiles the program again and REPLAYS
+       side effects the parent already performed. The engine's clone now CHECKs before it calls this, so this is
+       the receiving end of that same contract said where the pointer arrives. */
+    DCHECK(clone != NULL, "engine_fork_finalize: a fork arrived with no frame snapshot — the sibling would be "
+                          "marked hot with nothing to resume and would replay the program from its start");
     /* A DELIVERY IS MADE BEFORE ANY CODE RUNS, so no flow can be at a branch while still holding its record. If
        one is, the record would be inherited by the sibling and delivered TWICE — the same message arriving in
        two timelines of one document, which no peer sent. */
@@ -834,6 +853,16 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
         }
         JS_FreeValue(ctx, p);
     }
+    /* THE HANDOFFS ARE DRAINED, SAID AT THE END OF THE ONE OPERATION THAT DRAINS THEM. Both are module statics
+       filled by somebody else and emptied here, which is the shape where an arm added later takes an early
+       return and leaves one behind — a leaked decision blob keeps the whole frozen prefix chain under it alive,
+       and a leaked generator-fork record leaves the sibling's cloned gen_data owned by nobody. */
+    DCHECK(g_fork_dec == NULL && g_fork_pins == NULL,
+           "a fork finished without consuming the sibling's prepared decision and pin blobs — they are freed by "
+           "nothing else, and the decision blob is a reference on the shared frozen prefix chain");
+    DCHECK(g_genfork_n == 0,
+           "a fork finished with generator-state swaps still in the stash — the sibling's cloned gen_data was "
+           "never recorded on its delta, so it is owned by nobody and its body frame is unreachable");
 }
 
 /* The frame-agnostic REPLAY fork is DELETED: re-running a nested/deep flow from its start is BANNED (not
@@ -907,7 +936,17 @@ void engine_queue_javascript_url(const char *body) { engine_queue(body, DYN_JAVA
 static int64_t engine_now_ms(void);   /* the gap clock below; defined with the session */
 static int64_t g_slice_start = 0;
 static void engine_slice_begin(void) { g_slice_start = engine_now_ms(); }
-static unsigned g_seen_gen = 0; static Flow *g_seen_cur = NULL; static int g_outranked = 0;
+/* THE RIVAL IS CACHED; THE COMPARISON IS NOT — and caching the comparison was a second way the monopolizer kept
+   the thread. `g_outranked` was a boolean recomputed only when the frontier's membership changed or the running
+   flow switched, which is sound only while nothing else can move a weight. The running flow's `cpu` moves on
+   every charge and bumps no generation, so the instant aging became a real quantity the cached verdict was a
+   comparison made before the flow had aged: the term would have demoted it correctly and the hook would never
+   have looked again.
+   Only the RUNNING flow's weight moves between generation bumps — a parked flow burns no CPU, and an emit both
+   changes `val` and bumps the generation — so the RIVAL's weight is constant across the cache's key and the
+   O(flows) scan for it still happens only on a change. The running flow's own weight is recomputed at every
+   consultation: two divisions beside a clock read the hook already performs, and exact rather than stale. */
+static unsigned g_seen_gen = 0; static Flow *g_seen_cur = NULL; static double g_rival_w = -1.0 / 0.0;
 /* SUSPEND POINTS REACHED — every call to this hook IS one, which is the number the seam assertion needs and
    the one quickjs's counters do not give. g_flow_preempt_requested is incremented only where the hook returns
    TRUE, so it counts preempts WANTED, not points offered: a step showing requested=1 may have reached one
@@ -932,16 +971,16 @@ static int preempt_hook(int kind) {
     g_preempt_asked++;
     if (now - g_last_ask > g_max_gap) g_max_gap = now - g_last_ask;
     g_last_ask = now;
-    if (flow_frontier_gen() != g_seen_gen || cur != g_seen_cur) {   /* (1) recompute rival only on change */
+    if (flow_frontier_gen() != g_seen_gen || cur != g_seen_cur) {   /* (1) rescan for the rival only on change */
         g_seen_gen = flow_frontier_gen(); g_seen_cur = cur;
         Flow *rival = cur ? flow_best_other(cur) : NULL;
-        g_outranked = (rival && cur && flow_weight(rival) > flow_weight(cur));
+        g_rival_w = rival ? flow_weight(rival) : -1.0 / 0.0;
     }
     /* (0) BLOCKED BEATS BOTH RANKINGS. A flow holding an unanswered synchronous host request cannot make
        progress no matter how it ranks, and the answer cannot arrive while it holds the thread — the host is
        only asked between steps. Deciding this by weight would re-enter it immediately and spin. */
     if (cur && flow_blocked(cur)) return 1;
-    if (g_outranked) return 1;                        /* value yield */
+    if (cur && g_rival_w > flow_weight(cur)) return 1;   /* value yield — the rival is cached, the verdict is not */
     /* (2) COOPERATIVE-QUANTUM floor — thread-sharing, not value, and measured on the clock the slice is bounded
        by. Nothing is dropped, starved or reordered across it: the flow parks and the SAME flow resumes
        byte-identically unless the WFQ says otherwise. */
@@ -1360,13 +1399,23 @@ static const JSFlowControlHooks FC_EXPLORE = { .branch = solver_decide, .outcome
 static const JSFlowControlHooks FC_VERIFY  = { .preempt = preempt_hook };   /* candidate re-fire: no fork, still preemptible */
 static const JSFlowControlHooks FC_OFF     = { 0 };
 
-/* The quantum's wall clock. CLOCK_MONOTONIC, because the slice is about elapsed thread time and a wall-clock
-   adjustment must not shorten or extend it. */
-static int64_t engine_now_ms(void) {
+/* THE SCHEDULER'S CLOCK, and it is ONE clock for both things this file times: the cooperative slice and the
+   WFQ's aging charge. CLOCK_MONOTONIC, because both are about elapsed thread time and a wall-clock adjustment
+   must not shorten or extend either — and because a charge that ran BACKWARDS would not merely lose aging, it
+   would PROMOTE the flow that burned the thread (asserted at flow_age_running).
+   MICROSECONDS IS THE PRIMITIVE, and the resolution is load-bearing rather than tidy. The aging charge is one
+   step's share of it, and a scheduler step is routinely under a millisecond: read in milliseconds, a thousand
+   consecutive 900-microsecond steps each charge ZERO and the flow that burned nearly a second of thread ages by
+   nothing at all — the same defect as the step unit, arriving through the clock instead. It is also why the
+   scheduler reads this ONCE per iteration and uses the reading as both the previous step's end and the next
+   step's start: consecutive readings TELESCOPE, so whatever the platform's clock granularity, the total charged
+   is the total elapsed and no quantisation is lost between steps. */
+static int64_t engine_now_us(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
-    return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+    return (int64_t)t.tv_sec * 1000000 + t.tv_nsec / 1000;
 }
+static int64_t engine_now_ms(void) { return engine_now_us() / 1000; }
 
 void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int forking) {
     DCHECK(!g_sess_live, "engine_sched_begin while a session is already running — one scheduler, one session");
@@ -1404,7 +1453,17 @@ int engine_sched_step(void) {
     char **bodies = g_sess_bodies;
     int n = g_sess_n;
     Flow *cur = g_sess_cur;
-    int64_t deadline = engine_now_ms() + ENGINE_QUANTUM_MS;
+    /* ONE CLOCK READING PER ITERATION, carried. It closes the step just run (the WFQ's aging charge), opens the
+       next one, and decides the slice — three uses of a quantity that is read once, so the charges TELESCOPE
+       across the whole quantum and the loop costs no more clock reads than the deadline check alone ever did.
+       WHAT TELESCOPING PUTS ON THE WRONG BILL, said plainly rather than left to be discovered: the context
+       switch and the finish that happen BETWEEN two readings are charged to the flow stepped next, not to the
+       one they were performed for. That is one COW delta swap of misattribution, it is bounded by the swap this
+       scheduler already counts, and buying it back would cost a second clock read per iteration for an ORDER
+       decision that a notch of quantisation already absorbs. Charging nothing at all — which is what a
+       release build did — is the error that matters here, not which of two flows pays for a swap. */
+    int64_t now = engine_now_us();
+    int64_t deadline = now + (int64_t)ENGINE_QUANTUM_MS * 1000;
     int owed = 0;   /* consecutive picks that could not progress; == flow_count() means every member is waiting */
     engine_slice_begin();   /* the hook's floor measures THIS slice, so it starts when the slice does */
     DCHECK(g_sess_live, "engine_sched_step with no live session");
@@ -1433,30 +1492,58 @@ int engine_sched_step(void) {
                total, not the last slice's. */
             g_switches++;
         }
-        flow_age_running(1);   /* this step burned CPU; flow_credit_emit resets it when the flow emits value */
         {
-            /* AGING IS CHARGED IN MILLISECONDS OF CPU, not in steps, and the difference is what a step MEANS.
+            /* AGING IS CHARGED IN THREAD TIME, not in steps, and the difference is what a step MEANS.
                `flow_age_running(1)` was written when a step was a whole drain — a long, roughly comparable
                chunk of work — so one unit per step approximated CPU. A step is now ONE unit of work, so the
                same charge bills a flow the same amount for twelve milliseconds of execution as for advancing a
-               single script index, and the running flow loses its rank the instant it is preemptible. Adding
-               suspend points made flows preemptible everywhere, which turned that approximation into a
-               round-robin with a COW delta swap per switch: 108000 switches on a fixture that explores 7168
-               flows, with the switch count tracking elapsed time instead of exploration.
-               §scheduler says the term demotes "a monopolizer that burns CPU without emitting", so it is CPU
-               that must be measured. The step is already timed for the seam assertion; this is that number. */
+               single script index. §scheduler says the term demotes "a monopolizer that burns CPU without
+               emitting", so it is time that must be measured, and in the SAME currency as the reward it is
+               subtracted from (flow.c's FLOW_AGE_RATE: one emitted finding per second held without emitting).
+               THE READING IS UNCONDITIONAL, and it was the one thing wrong with the paragraph that used to
+               stand here. It said "the step is already timed for the seam assertion; this is that number" while
+               the only clock read on this path sat inside `#if APICLIENT_DEV` — so a release build charged the
+               constant 1 per step and had no aging policy at all. CLAUDE.md's release exemption covers DCHECKs,
+               which assert; it never covers the engine's BEHAVIOUR, and a WFQ that is fair only in development
+               is not the one policy §scheduler requires. It costs nothing to fix: the reading is carried in
+               `now`, so this loop performs exactly the clock reads its deadline check always did.
+               IT IS ELAPSED THREAD TIME, NOT PROCESS CPU, AND THAT IS SAID RATHER THAN IMPLIED. This host has no
+               CPU clock — emscripten answers CLOCK_PROCESS_CPUTIME_ID and CLOCK_THREAD_CPUTIME_ID from
+               emscripten_get_now() like every other clock, which is wall time (the seam verdict below says the
+               same thing and is why it stopped using a clock at all). The two consumers differ in what a wrong
+               reading COSTS, which is the whole reason one may use it and the other may not: the seam assertion
+               reaches a VERDICT and aborts, so a descheduled step that looks like a seamless one produces a
+               false crash and sends the next reader hunting a phantom. This is an ORDER decision. A flow that
+               was descheduled is charged for time it did not burn, so it is demoted one notch early and a
+               sibling runs sooner — nothing is dropped, truncated, skipped or reordered out of the frontier,
+               which is the only thing the WFQ is allowed to be and the razor §scheduler states.
+               WORK-DONE WOULD BE THE WRONG QUANTITY HERE even though it is the right one below: a flow that
+               forks nothing, queues nothing and emits nothing — a tight compute loop over opaque input — burns
+               the thread while its share of engine_work_done() stays at zero, so aging by work would never
+               demote the very shape this term exists for. */
+            int64_t t0 = now;   /* this step's start: the previous iteration's reading, carried */
 #if APICLIENT_DEV
-            int64_t t0 = engine_now_ms();
             uint64_t pq0 = 0, pf0 = 0, pa0 = g_preempt_asked;
             /* THE WORK THIS STEP PERFORMS, sampled beside the clock and for a reason the clock cannot serve —
                see the verdict below. Forks, flows and jobs are things the engine DID; no amount of being
                descheduled can inflate them. */
             long w0 = engine_work_done();
             JS_FlowPreemptStats(&pq0, &pf0);
-            g_max_gap = 0; g_last_ask = t0;   /* this step's gaps, measured from the moment it starts */
+            g_max_gap = 0; g_last_ask = t0 / 1000;   /* this step's gaps, measured from the moment it starts */
             idl_slowest_reset();              /* ...and this step's slowest single Web API member step */
 #endif
             int r = flow_step(ctx, cur, bodies, n);
+            /* THE CHARGE, AND IT IS CHARGED TO THE FLOW THAT RAN. `flow_age_running` bills whoever the registry
+               says is running, and that is only the flow this step advanced while nothing between the switch-in
+               above and here has changed it — a step that returned with a different flow running would bill the
+               wrong one, and the symptom would be a monopolizer that never ages and a sibling demoted for time
+               it never spent. The finish path clears it, which is why this stands BEFORE the r == DONE branch. */
+            DCHECK(flow_running() == cur,
+                   "the flow the scheduler stepped is not the one it is about to charge for that step's thread "
+                   "time — the aging term would demote a flow that did not burn it and leave the one that did "
+                   "holding its rank");
+            now = engine_now_us();
+            flow_age_running(now - t0);
             /* THE COOPERATIVE-QUANTUM CONTRACT, ASSERTED AT ITS SITE. A flow_step is supposed to reach a
                suspend point — a bytecode back-edge where the preempt hook runs, a step machine's boundary —
                within the quantum, which is what makes the frontier parkable at all. A path with NO suspend
@@ -1472,8 +1559,11 @@ int engine_sched_step(void) {
                it has no seam at all. */
 #if APICLIENT_DEV
             {
-                int64_t done = engine_now_ms();
-                int64_t spent = done - t0;
+                /* THE SAME READING THE CHARGE ABOVE TOOK, not a second one: the step's end is a fact, and asking
+                   the clock twice for it would make the aging charge and the reported duration two different
+                   numbers for one interval. */
+                int64_t done = now / 1000;
+                int64_t spent = done - t0 / 1000;
                 (void)spent;
                 /* the TAIL closes the last gap: a step that offers a point and then runs for seconds before
                    returning has that silence between its last offer and its end, and nothing else records it. */
@@ -1597,7 +1687,7 @@ int engine_sched_step(void) {
             }
             else owed = 0;
         }
-        if (engine_now_ms() >= deadline) {   /* THREAD-SHARING, not value: hand the thread back, keep the frontier */
+        if (now >= deadline) {   /* THREAD-SHARING, not value: hand the thread back, keep the frontier */
             g_sess_cur = cur;
             return ENGINE_STEP_YIELD;
         }
@@ -1824,10 +1914,15 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
                    whose `cLive` is flat while `arena` climbs is not leaking at all, it is fragmenting, and the
                    two have entirely different fixes. Nothing in this engine could tell those apart before. */
                 {
-                    long long attributed = (long long)mem.atom_size + mem.str_size + mem.obj_size +
-                        mem.prop_size + mem.shape_size + mem.js_func_size + mem.js_func_code_size +
-                        mem.js_func_pc2line_size + mem.memory_used_size +
-                        (long long)mem.fast_array_elements * (long long)sizeof(JSValue);
+                    /* `memory_used_size` IS THE TOTAL, NOT A ROW BESIDE THE OTHERS. JS_ComputeMemoryUsage's last
+                       two statements add atoms, strings, objects, properties, shapes, function bytecode and
+                       pc2line INTO it, and every fast-array element vector was already added to it in the
+                       object walk — so summing those rows again beside it counted the whole named heap TWICE
+                       and subtracted it twice from malloc_size. `unattributed` was therefore too small by the
+                       size of the entire attributed heap, and could read as a healthy residual while the named
+                       part of the heap was the thing growing. The residual is one subtraction: what the
+                       allocator holds, minus everything the runtime can name. */
+                    long long attributed = (long long)mem.memory_used_size;
                     printf("@HEAP {\"allocations\":%lld,\"atoms\":%lld,\"strings\":%lld,\"objects\":%lld,"
                            "\"shapes\":%lld,\"props\":%lld,\"funcs\":%lld,\"funcCode\":%lld,\"arrays\":%lld,"
                            "\"miscBytes\":%lld,\"miscParts\":%lld,\"childRealms\":%d,"
