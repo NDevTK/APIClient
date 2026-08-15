@@ -6,10 +6,13 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
+#include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/events/report_exception.h"
 #include "core/frame/window_proxy.h"
 #include "core/frame/navigable.h"
+#include "core/frame/viewport.h"
+#include "core/frame/visual_viewport.h"
 #include "core/html/autofocus.h"
 #include "core/html/focus.h"
 #include "core/css/media_query_list.h"
@@ -118,6 +121,10 @@ static JSValue rendering_collect_docs(JSContext *ctx)
                  "TOP-LEVEL TRAVERSABLE: flush autofocus candidates — HTML §6.6.7 drains the document's "       \
                  "candidates and runs §6.6.4's focusing steps for the first one that is still focusable, "      \
                  "firing blur/focusout/focus/focusin), one document per rest")                                 \
+    X(UR_RESIZE, "HTML §8.1.7.3 update the rendering step 8 (for each doc: run the resize steps — CSSOM VIEW "  \
+                 "§13.1 fires `resize` at the Window when doc's viewport has had its width or height changed "  \
+                 "since the last run, and at the VisualViewport when its scale, width or height has), one "     \
+                 "target per rest")                                                                            \
     X(UR_MEDIA,  "HTML §8.1.7.3 update the rendering step 10 (for each doc: evaluate media queries and report " \
                  "changes — CSSOM VIEW §4.2 fires `change` at each MediaQueryList whose matches state has "     \
                  "changed, in the order they were created, oldest first), one MediaQueryList per rest")         \
@@ -146,7 +153,11 @@ typedef struct JSUpdateRendering {
     uint32_t  ndocs, i;     /* the cursor every "for each doc of docs" step shares */
     uint32_t  nframe, k;    /* §8.9 step 2's key snapshot for the current doc, and step 3's cursor */
     uint32_t  nmedia, m;    /* §4.2's collection snapshot for the current doc, and its cursor */
-    uint8_t   fphase;       /* the fire request steps 6 and 10 park on */
+    uint8_t   fphase;       /* the fire request steps 6, 8 and 10 park on */
+    /* WHICH OF STEP 8's TWO FIRES docs[i] is on — CSSOM VIEW §13.1 is two ordered conditions over two
+       different targets, the Window and its VisualViewport, and each fire runs the page's listeners. So it is a
+       cursor like `m` is over step 10's MediaQueryLists rather than two stages: the walk rests between them. */
+    uint8_t   rhalf;
     /* The CALL request steps 7, 14 and 17 park on. One byte for all three because one call is ever in flight —
        a stage leaves its loop only with the request finished, which is what makes it also the flag that says
        whether a resume is landing inside the step's call or at the top of its walk. */
@@ -216,13 +227,16 @@ static JSContext *doc_realm(JSContext *ctx, JSUpdateRendering *s)
    place in the order, and the step it named was built (core/html/autofocus.c is HTML §6.6.7). A probe that
    outlived the work it demanded would be a claim that the step is still unwritten.
 
-   Steps 8 and 9, asserted in order at the place the algorithm runs them. */
-static void steps_8_and_9(JSContext *docctx)
+   STEP 8 IS WRITTEN TOO — it is UR_RESIZE, below, and its assertion is gone for the same reason. It named
+   `innerWidth` and said "this build now models a viewport, so step 8 must compare it and fire": the members
+   arrived (core/frame/viewport.c installs CSSOM VIEW §4's), the DCHECK fired here, and CSSOM VIEW §13.1's two
+   conditions were built. What this component does NOT own is the comparison — `viewport_resize_changed` and
+   `visual_viewport_resize_changed` are the two halves, each latching in the component that owns the geometry,
+   because a viewport this file remembered for itself would be a second answer to the one fact.
+
+   Step 9, still asserted at the place the algorithm runs it. */
+static void step_9(JSContext *docctx)
 {
-    realm_awaits(docctx, "innerWidth",
-                "update the rendering step 8 runs the RESIZE STEPS (CSSOM VIEW §13.1), which fire `resize` at "
-                "the Window when the viewport's width or height changed since the last run — this build now "
-                "models a viewport, so step 8 must compare it and fire");
     realm_awaits(docctx, "scrollTo",
                 "update the rendering step 9 runs the SCROLL STEPS (CSSOM VIEW §13.2) over doc's pending "
                 "scroll events, firing scroll/scrollend/scrollsnapchange in the order they were added — this "
@@ -348,6 +362,15 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
             JS_FreeValue(ctx, s->target);
             s->ev = s->target = JS_UNDEFINED;
             s->m++;                      /* §4.2 latched the new state before the fire: on to the next target */
+        } else if (s->hdr.stage == UR_RESIZE) {
+            s->fphase = 0;
+            JS_FreeValue(ctx, s->ev);
+            JS_FreeValue(ctx, s->target);
+            s->ev = s->target = JS_UNDEFINED;
+            /* §13.1 latched the new dimensions before the fire — the condition is "changed since the last time
+               these steps were RUN", and they ran — so the same size never fires twice and the walk moves to
+               the other half of the step rather than re-asking. */
+            if (++s->rhalf > 1) { s->rhalf = 0; s->i++; }
         } else if (s->hdr.stage == UR_FRAMES) {
             s->cphase = 0;
             JS_FreeValue(ctx, s->fn);
@@ -468,11 +491,9 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
            marked a hundred controls resumable mid-list rather than drained in one step. */
         for (;;) {
             if (s->i >= s->ndocs) {
-                for (s->i = 0; s->i < s->ndocs; s->i++)
-                    steps_8_and_9(doc_realm(ctx, s));
                 s->i = 0;
-                s->msnapped = 0;
-                s->hdr.stage = UR_MEDIA;
+                s->rhalf = 0;
+                s->hdr.stage = UR_RESIZE;
                 break;
             }
             docctx = doc_realm(ctx, s);
@@ -484,6 +505,63 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
             if (r > 0) return r;                     /* parked on the page's focus listeners */
             cb_result = JS_UNDEFINED;
             s->i++;
+        }
+    }
+
+    if (s->hdr.stage == UR_RESIZE) {
+        /* STEP 8: "For each doc of docs: run the RESIZE STEPS for doc." CSSOM VIEW §13.1 is those steps, and it
+           is TWO ordered conditions over two different targets:
+             1. if doc's viewport has had its width or height changed since the last time these steps were run,
+                fire an event named `resize` at the Window object associated with doc;
+             2. if the VisualViewport associated with doc has had its scale, width or height changed since the
+                last time these steps were run, fire `resize` at the VisualViewport.
+           NEITHER COMPARISON IS MADE HERE. The viewport is viewport.c's fact and the visual viewport is
+           visual_viewport.c's, and each latches what it saw into a per-realm record whose writes the COW delta
+           captures — so a flow that reached this frame has its own answer to "since the last time", which is
+           what makes the question meaningful when several flows are exploring one document. A width remembered
+           in this machine's state would be a second answer to the one fact, and it would be the frame's rather
+           than the flow's.
+           `resize` IS A PLAIN Event, not bubbling and not cancelable: §13.1 says "fire an event named resize",
+           and DOM §2.4's fire uses the Event interface and leaves both flags unset unless the caller says
+           otherwise. It is TRUSTED, because the user agent is what fired it.
+           IT IS ITS OWN STAGE, AND ONE TARGET PER REST, because each fire runs the page's `resize` listeners —
+           and a page's resize handler is characteristically the most expensive one it has. */
+        for (;;) {
+            if (s->i >= s->ndocs) {
+                for (s->i = 0; s->i < s->ndocs; s->i++)
+                    step_9(doc_realm(ctx, s));
+                s->i = 0;
+                s->msnapped = 0;
+                s->hdr.stage = UR_MEDIA;
+                break;
+            }
+            docctx = doc_realm(ctx, s);
+            if (s->fphase == 0 && JS_IsUndefined(s->ev)) {
+                bool changed = s->rhalf == 0 ? viewport_resize_changed(docctx)
+                                             : visual_viewport_resize_changed(docctx);
+                if (!changed) {
+                    if (++s->rhalf > 1) { s->rhalf = 0; s->i++; }
+                    continue;
+                }
+                s->ev = event_new(docctx, "resize", false, false);
+                CHECK(!JS_IsException(s->ev), "the resize steps could not allocate their event");
+                /* THE TARGET IS HELD ACROSS THE FIRE, because the fire parks: §13.1's two targets are the
+                   Window and the object `visualViewport` answers with, and the second is only reachable while
+                   doc is fully active — which it is, because step 2 collected only fully active documents. */
+                s->target = s->rhalf == 0 ? JS_GetGlobalObject(docctx) : visual_viewport_object(docctx);
+                DCHECK(JS_IsObject(s->target),
+                       "the resize steps found no target for a document step 2 collected — step 2's list is "
+                       "fully active documents, and a fully active document has both a Window and the "
+                       "VisualViewport §4 says its `visualViewport` answers with");
+            }
+            r = event_target_fire_run(docctx, &s->fphase, STEP_CB(s->cb), s->target, s->ev, JS_UNDEFINED,
+                                      cb_result, &s->not_canceled, out_cb, out_argc);
+            if (r > 0) return r;                     /* parked on the page's `resize` listeners */
+            cb_result = JS_UNDEFINED;
+            JS_FreeValue(docctx, s->ev);
+            JS_FreeValue(docctx, s->target);
+            s->ev = s->target = JS_UNDEFINED;
+            if (++s->rhalf > 1) { s->rhalf = 0; s->i++; }
         }
     }
 

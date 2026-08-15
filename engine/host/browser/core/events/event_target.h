@@ -114,8 +114,12 @@ void event_target_install_interface(JSContext *ctx, JSValueConst global);
 /* EH_SHADOW_ROOT is DOM §4.8's `onslotchange`, which that interface declares ON ITSELF. It is also one of
    GlobalEventHandlers' names, so the one entry carries both bits — the mask is which MIXIN a target includes,
    and a name declared by two mixins is installed by both. */
+/* EH_VISUAL_VIEWPORT is CSSOM VIEW §12's three, which that interface declares ON ITSELF. All three are also
+   GlobalEventHandlers names, so each entry carries both bits — the mask is which MIXIN a target includes, and a
+   name declared by two mixins is installed by both. */
 enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 16,
-       EH_MEDIA_QUERY_LIST = 32, EH_XHR = 64, EH_XHR_READYSTATE = 128, EH_SHADOW_ROOT = 256 };
+       EH_MEDIA_QUERY_LIST = 32, EH_XHR = 64, EH_XHR_READYSTATE = 128, EH_SHADOW_ROOT = 256,
+       EH_VISUAL_VIEWPORT = 512 };
 /* HTML §3.2.2 click() — "fire a synthetic pointer event named click", which IS §2.9 dispatch, so it is the same
    machine under a second entry rather than a second implementation of it. */
 void event_target_install_click(JSContext *ctx, JSValueConst target);

@@ -213,9 +213,11 @@ static void mq_env(JSContext *ctx, MqEnv *e)
     e->height = viewport_height(ctx);
     e->dppx = viewport_device_pixel_ratio(ctx);
     /* §12's device-* features report the OUTPUT DEVICE. The modelled display is screen.c's, in device pixels,
-       expressed in CSS pixels here because every length in a media query is one. */
-    e->dev_width = 1920.0 / e->dppx;
-    e->dev_height = 1080.0 / e->dppx;
+       expressed in CSS pixels here because every length in a media query is one. ASKED of screen.c rather than
+       written out: this held its own literal 1920 and 1080, which is the same fact answered from two places —
+       the defect CLAUDE.md names — and the copy that is not maintained is the one that goes on being wrong. */
+    e->dev_width = screen_width() / e->dppx;
+    e->dev_height = screen_height() / e->dppx;
     /* §4.5: `color` is the bits per COLOUR COMPONENT of the output device. screen.c owns the depth. */
     e->color_bits = screen_color_depth() / 3;
 }

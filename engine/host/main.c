@@ -59,6 +59,8 @@
 #include "browser/core/frame/location.h"
 #include "browser/core/frame/navigator.h"
 #include "browser/core/frame/screen.h"
+#include "browser/core/frame/viewport.h"
+#include "browser/core/frame/visual_viewport.h"
 #include "browser/core/frame/window.h"
 #include "browser/core/css/media_query_list.h"
 #include "browser/core/rendering/animation_frame.h"
@@ -153,6 +155,12 @@ static void engine_agent_init(JSContext *ctx, const char *origin)
        first because step 14 consumes it and §7.4.6.3 after Event, whose prototype PageRevealEvent chains to. */
     animation_frame_init(ctx);
     page_reveal_init(ctx);
+    /* CSSOM VIEW §4, §12 and §13.1 — the viewport's Window extensions (`innerWidth`, `outerHeight`,
+       `scrollY`, `screenLeft`, `devicePixelRatio`), the VisualViewport, and the per-realm record each keeps
+       of what the RESIZE STEPS last saw. DECLARED before the rendering loop because update-the-rendering
+       STEP 8 is their algorithm, and after §2.7 because VisualViewport.prototype chains to EventTarget's. */
+    viewport_init(ctx);
+    visual_viewport_init(ctx);
     /* CSSOM VIEW §4.2 and §7 — `matchMedia`, MediaQueryList and MediaQueryListEvent. DECLARED before the
        rendering loop because update-the-rendering STEP 10 is its algorithm, and after §2.7 and §2.2 because
        both of its prototypes chain to theirs. */
@@ -432,6 +440,8 @@ QJS_EXPORT void qjs_teardown(void)
     rendering_free(g_ctx);
     page_reveal_free(g_ctx);
     media_query_list_free(g_ctx);
+    viewport_free();
+    visual_viewport_free();
     animation_frame_free(g_ctx);
     unhandled_rejection_free(g_ctx);
     abort_free(g_ctx);

@@ -637,8 +637,11 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
     X("onloadstart", EH_GLOBAL | EH_XHR) X("onmousedown", EH_GLOBAL) X("onmouseenter", EH_GLOBAL) X("onmouseleave", EH_GLOBAL) \
     X("onmousemove", EH_GLOBAL) X("onmouseout", EH_GLOBAL) X("onmouseover", EH_GLOBAL) X("onmouseup", EH_GLOBAL)      \
     X("onpause", EH_GLOBAL) X("onplay", EH_GLOBAL) X("onplaying", EH_GLOBAL) X("onprogress", EH_GLOBAL | EH_XHR)               \
-    X("onratechange", EH_GLOBAL) X("onreset", EH_GLOBAL) X("onresize", EH_GLOBAL) X("onscroll", EH_GLOBAL)            \
-    X("onscrollend", EH_GLOBAL) X("onsecuritypolicyviolation", EH_GLOBAL) X("onseeked", EH_GLOBAL)                  \
+    X("onratechange", EH_GLOBAL) X("onreset", EH_GLOBAL)                                                          \
+    /* CSSOM VIEW §12 declares these three on VisualViewport as well, which is what the second bit says. */     \
+    X("onresize", EH_GLOBAL | EH_VISUAL_VIEWPORT) X("onscroll", EH_GLOBAL | EH_VISUAL_VIEWPORT)                 \
+    X("onscrollend", EH_GLOBAL | EH_VISUAL_VIEWPORT) X("onsecuritypolicyviolation", EH_GLOBAL)                  \
+    X("onseeked", EH_GLOBAL)                  \
     X("onseeking", EH_GLOBAL) X("onselect", EH_GLOBAL) X("onslotchange", EH_GLOBAL | EH_SHADOW_ROOT) X("onstalled", EH_GLOBAL)         \
     X("onsubmit", EH_GLOBAL) X("onsuspend", EH_GLOBAL) X("ontimeupdate", EH_GLOBAL) X("ontoggle", EH_GLOBAL)          \
     X("onvolumechange", EH_GLOBAL) X("onwaiting", EH_GLOBAL) X("onwheel", EH_GLOBAL)                                \

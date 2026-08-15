@@ -128,8 +128,17 @@ const INTERFACES = {
                         "core/timing/timer.c", "core/frame/navigator.c", "core/frame/screen.c",
                         "core/dom/abort.c", "core/css/css_style_declaration.c",
                         "core/frame/navigable.c", "core/frame/bar_prop.c",
-                        "core/frame/window_message.c", "core/structured_clone.c"],
+                        "core/frame/window_message.c", "core/structured_clone.c",
+                        /* CSSOM VIEW §4's Window extensions — innerWidth/innerHeight, outerWidth/outerHeight,
+                           scrollX/pageXOffset, scrollY/pageYOffset, screenX/screenLeft, screenY/screenTop and
+                           devicePixelRatio — live with the viewport they read, not with the Window they hang
+                           off, for the per-realm reason viewport.h gives. */
+                        "core/frame/viewport.c", "core/frame/visual_viewport.c"],
   Navigator:            "core/frame/navigator.c",
+  /* CSSOM VIEW §12. Its own seven attributes are its file's; the three event handler IDL attributes it
+     declares (`onresize`, `onscroll`, `onscrollend`) and the three members it INHERITS from EventTarget come
+     off the shared component, which is the same rule Node's row states. */
+  VisualViewport:      ["core/frame/visual_viewport.c", "core/events/event_target.c"],
   /* HTML §6.4.4. The interface had no row at all, so the audit said nothing about it — and its two getters and
      the object Navigator's `userActivation` answers with live with §6.4's state rather than with the Navigator
      that exposes them, which is the file named here. */

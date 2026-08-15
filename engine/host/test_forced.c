@@ -18,6 +18,8 @@
 #include "core/loader/document_scripts.h"
 #include "core/frame/navigator.h"
 #include "core/frame/screen.h"
+#include "core/frame/viewport.h"
+#include "core/frame/visual_viewport.h"
 #include "core/dom/abort.h"
 #include "core/dom/observable.h"
 #include "core/html/unhandled_rejection.h"
@@ -1765,6 +1767,12 @@ static void tf_agent_init(JSContext *ctx)
     /* HTML §8.1.7.3's IN-PARALLEL HALF — the rendering task source and "update the rendering". */
     animation_frame_init(ctx);
     page_reveal_init(ctx);
+    /* CSSOM VIEW §4, §12 and §13.1 — the viewport's Window extensions (`innerWidth`, `outerHeight`,
+       `scrollY`, `screenLeft`, `devicePixelRatio`), the VisualViewport, and the per-realm record each keeps
+       of what the RESIZE STEPS last saw. DECLARED before the rendering loop because update-the-rendering
+       STEP 8 is their algorithm, and after §2.7 because VisualViewport.prototype chains to EventTarget's. */
+    viewport_init(ctx);
+    visual_viewport_init(ctx);
     /* CSSOM VIEW §4.2 and §7 — `matchMedia`, MediaQueryList and MediaQueryListEvent. DECLARED before the
        rendering loop because update-the-rendering STEP 10 is its algorithm, and after §2.7 and §2.2 because
        both of its prototypes chain to theirs. */
@@ -2430,6 +2438,8 @@ int main(int argc, char **argv) {
     rendering_free(ctx);
     page_reveal_free(ctx);
     media_query_list_free(ctx);
+    viewport_free();
+    visual_viewport_free();
     animation_frame_free(ctx);
     unhandled_rejection_free(ctx);
     abort_free(ctx);
