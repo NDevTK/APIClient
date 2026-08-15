@@ -200,7 +200,7 @@ const globalStore = {
   scopes: new Map(), // service → string[]
   securityFindings: new Map(), // sourceUrl → { sourceUrl, securitySinks[], dangerousPatterns[] }
   /* NO scriptCache. It was a (analyzer fingerprint + origin + SHA-256 of the page HTML) → stored result map
-     that the handoff below consulted BEFORE dispatching, and a hit replayed the stored result and returned without
+     that analyze.js consulted BEFORE dispatching, and a hit replayed the stored result and returned without
      ever creating an engine — so a revisited page never resumed the flows it had parked. §NO BOUNDS bans a
      seen-set outright, and this one was keyed on document IDENTITY, which is exactly what may never stand in
      for emitted output as proof that a flow is finished. */
@@ -487,180 +487,8 @@ function collectKeysForService(tab, service, hostname) {
 
 // (Response-body protocol decoding -- handleResponseBody -- extracted to lib/response-decode.js, first.)
 
-/* THE ONE HANDOFF from a delivered document to the ONE frontier — and it is now beside the CONTENT_HTML
-   handler that writes the buffer and hands it over on the next line, instead of in a file of its own.
-   `lib/analyze.js` held it and is DELETED. What went with it was not a step in the handoff; it was four
-   mechanisms reading fields NO PRODUCER WRITES, each held together by a `||`:
-
-     * PER-SCRIPT FINDING ATTRIBUTION (`_findScriptForLine`, the combined→per-script line shift). It read
-       `sink.location`, `finding.taintPath` and `finding.sanitizerReport`. `solve.c`'s sink record carries
-       sink/source/poc/firesOn/cspBlocks/trustedTypes/delivery and NO location, and `taintPath` /
-       `sanitizerReport` appear NOWHERE in the engine — they were written only by the host that shifted them.
-       So every sink took the `scriptOffsets[0] || {url:null}` fallback and was filed under the page URL: the
-       machinery's entire observable effect was ONE page-keyed entry, which is exactly what merge.js's own
-       security merge produces, and the per-script attribution it appeared to perform was fabricated. That is
-       why the split is DELETED rather than moved to result.c: a location is a fact only the running engine
-       holds, and when solve.c records one the attribution is the ENGINE's, never a host re-derivation from
-       line offsets. `analysis._securityMerged` went too — it existed to pre-empt merge.js's merge in favour
-       of this one, so removing it leaves ONE security merge instead of two.
-     * `_markSecurityFindingChanges` — wrote `_changeType` and `_fixedCount`. Neither name has a reader.
-     * THE SCRIPT CONCATENATION (`combined`/`scriptOffsets`/`scriptUrls`/`totalChars`/`_analyzeDiag`). The
-       CONTENT_HTML handler sets `_buf.scripts = []` and nothing ever pushes to it — the engine sources every
-       script itself (Lexbor parses the HTML; `qjs_run_doc_scripts` runs inline + external in document order).
-       The concatenation therefore built `""`, `analysis.scriptOffsets` had no reader, and `_analyzeDiag`
-       reported `n:0, hasCDN:false` for every document there has ever been — a diagnostic answering from a
-       collection its producer stopped filling.
-     * the `_timings` block — the bridge's result view emits no `_timings`, and neither `_lastAstTimings` nor
-       `_analysisTimings` is read anywhere.
-
-   §"A FIELD A CONSUMER DEFAULTS IS A FIELD NOBODY WILL NOTICE IS NEVER WRITTEN": every one of those was one
-   `||` away from being a crash. Nothing here defaults an engine field any more — the two this function reads
-   are DCHECKed for their shape, and the rest are asserted by `assertResultDocument` in bridge.js.
-
-   NOT awaited by its caller and NOT wrapped in a catch: an assertion in here (or anywhere down the dispatch)
-   is an invariant abort, and an unhandled rejection is the honest shape of it. A `.catch` that printed one
-   debug line is what let the bridge's own contract checks land in a log nothing reads. */
-async function _dispatchDocument(docKey) {
-  var buf = _scriptBuffers.get(docKey);
-  /* THE BUFFER IS THIS DOCUMENT'S RECORD AND THE HANDLER JUST WROTE IT. `if (!buf || !buf.pageHtml) return`
-     stood here and made three different broken states — no buffer, a buffer for another document, and a
-     document whose HTML never arrived — indistinguishable from a page legitimately having nothing to
-     analyse, which is the one outcome that produces no symptom at all. content.js THROWS on an empty body
-     rather than shipping one, so an empty pageHtml at this point is our own delivery path having lost it. */
-  DCHECK(!!buf, "a document was handed to the analysis with no script buffer — the CONTENT_HTML handler " +
-                "creates the buffer immediately before this call, so its absence is that record being lost " +
-                "between the two lines");
-  DCHECK(buf.docKey === docKey, "a script buffer is filed under a documentId that is not its own — every " +
-                                "principal this analysis runs under (the SSRF origin, window.location, the " +
-                                "credentialed-read origin) is read off this buffer, so a mis-filed one " +
-                                "analyses a document under another document's identity");
-  DCHECK(!!buf.pageHtml, "a document reached the analysis with no page HTML — content.js refuses to ship an " +
-                         "empty body (it throws), so this is the bundle that was fetched being lost on the " +
-                         "way here, and analysing nothing would report the page as clean");
-  var tabId = buf.tabId;
-  var tab = getDoc(docKey);
-  var _ep = _dataEpoch;   // a Clear during the engine round-trip invalidates this run
-
-  // This run's merge re-registers every AST-derived endpoint, so drop the previous round's first — a
-  // re-delivered document would otherwise double-register them. (The `AST DYN ` prefix this also tested for
-  // is a prefix OF `AST `, so it was one condition written twice.)
-  var keysToDelete = [];
-  tab.endpoints.forEach(function (val, key) { if (key.startsWith("AST ")) keysToDelete.push(key); });
-  for (var di = 0; di < keysToDelete.length; di++) tab.endpoints.delete(keysToDelete[di]);
-
-  // Source URL for the analysis. SECURITY: this becomes the analysis PRINCIPAL — safeFetch's
-  // origin-relative SSRF origin (self.__sfPageOrigin in the worker) AND window.location. It MUST derive
-  // only from the browser-provided sender.url (captured into buf.url on CONTENT_HTML), NEVER a
-  // content-script-supplied value (msg.url -> scripts[0].url) — else a hostile page could claim a localhost
-  // origin to defeat the SSRF guard. No untrusted fallback: unknown origin leaves tabUrl "" -> safeFetch's
-  // safe default (block private) + a placeholder window.location. Per-DOCUMENT principal: buf.url is THIS
-  // document's own browser-provided url, not the tab's — a sub-frame analyses as its own origin, never the
-  // embedder's.
-  var tabUrl = buf.url || buf.pageUrl || "";
-  var response;
-  try {
-    response = await sendToOffscreen({
-      type: "AST_ANALYZE", sourceUrl: tabUrl, documentId: docKey, origin: buf.origin,
-      // THE AGENT CLUSTER THIS DOCUMENT BELONGS TO — SECURITY.md keys one WASM instance on
-      // `(browsing-context group, origin)`, and BOTH halves have to be BROWSER-STATED because the untrusted
-      // engine may state neither. `origin` above is the MessageSender principal (opaque-unique per document);
-      // `groupId` is the tab, which is the browser-set fact closest to a browsing-context group — a tab is
-      // exactly one top-level traversable and every navigable nested under it is in that traversable's group.
-      // NOTE THE DISTINCTION FROM THE RULE THIS FILE OTHERWISE KEEPS: a tabId may never key a DOCUMENT (a tab
-      // holds many, and a (tab,frame) pair is reused across navigations with a different origin). A GROUP is
-      // not a document, and it is the only thing the tab id is used as here — the origin half is what keeps
-      // two documents of one tab in two clusters when they are cross-origin. `frameId` distinguishes the
-      // group's TOP document from a sub-frame, which the pool needs because a same-origin sub-frame is created
-      // and run INSIDE its cluster's instance (§4.8.5's insertion steps) while a top document is not.
-      groupId: buf.tabId, frameId: buf.frameId,
-      // HTML §8.1.3.1's TOP-LEVEL CREATION URL — the browser-provided address of the top of this document's
-      // navigable chain, captured on CONTENT_HTML from sender.tab.url. It is NOT sourceUrl: this document may
-      // be a sub-frame, and §8.1.3.5 decides secure-context (and therefore which [SecureContext] members the
-      // engine installs) from the TOP of the chain rather than from the frame's own address.
-      topLevelUrl: buf.topLevelUrl || tabUrl,
-      pageHtml: tab._pageHtml || null,
-      responseHeaders: tab._responseHeaders || {},   // real CSP/Content-Type -> engine (header-CSP is the PRIMARY policy; meta-CSP is secondary)
-      // Participate in the GLOBAL cross-session frontier: this engine's residue parks to IDB under RAM
-      // pressure (resource-driven, host-side) and rehydrates by value order later. With headroom the page
-      // runs to completion in one visit — nothing is lost to a clock; there is NO dispatch/step quantum.
-      persist: true,
-    });
-  } catch (e) {
-    /* AN INVARIANT ABORT IS NOT A DISPATCH FAILURE. Everything down this call — the bridge's result-document
-       contract, the notice router's field counts, the merge's own checks — throws through here, and recording
-       it as this document's `_astError` would let the zone carry on with a contract it has already proved
-       broken. RETHROW_FATAL is what keeps the ONE assertion mechanism from being locally disabled. */
-    RETHROW_FATAL(e);
-    console.debug("[AST] dispatch failed for tab=%d: %s", tabId, e.message || e);
-    tab._astError = "sendToOffscreen threw: " + (e.message || String(e));
-    return;
-  }
-  if (!response || !response.success) {
-    // The Clear button terminated the engine mid-analysis. Abort cleanly — do NOT fall back to a second,
-    // degraded analysis, which would re-flood the freshly respawned engine right after a Clear and
-    // repopulate the just-wiped store.
-    if (response && response.error === "cleared") {
-      console.debug("[AST] tab=%d aborted — engine cleared", tabId);
-      return;
-    }
-    console.debug("[AST] analysis failed for tab=%d: %s", tabId, response ? response.error : "no response");
-    if (response && response.stack) console.debug(response.stack);
-    // SURFACE the failure — there is no fallback path. A page is reviewed as the COMBINATION of all its
-    // scripts in one realm; emitting a degraded result would MASK the real failure. `_astError` + the
-    // engine's @WHY/@E are the signal to root-cause; the resumable frontier retries via replay recipes.
-    tab._astError = "offscreen unsuccessful: " + (response ? (response.error + " | " + (response.stack || "")) : "no response");
-    return;
-  }
-  tab._astError = null;
-  // The bin/Clear reset fired while this analysis was in the engine. Its result predates the wipe, so
-  // merging it would repopulate the just-cleared store. Abandon the whole tail.
-  if (_ep !== _dataEpoch) {
-    console.debug("[AST] tab=%d result discarded — store reset mid-analysis", tabId);
-    return;
-  }
-  var analysis = response.result;
-
-  /* THE PAGE'S OWN UNCAUGHT ERRORS. A script that throws names an unbuilt capability, so this is a P1 the
-     reviewer must SEE — it goes to the popup's diagnostic view (serialize.js reads `tab._resolverErrors`),
-     never console-only. NOT `analysis.resolverErrors || []`: the bridge builds this array unconditionally
-     from the engine's `pageErrors`, so its absence is that edge broken, not a page with nothing to say.
-     There is no dedup set here either — `result_page_error` in result.c already refuses a message it is
-     holding, so a second one on this side would be a host-side identity set standing over the producer's
-     own answer. */
-  DCHECK(Array.isArray(analysis.resolverErrors),
-         "the engine result carried no resolverErrors array — bridge.js builds it from the engine's own " +
-         "pageErrors on every result, so its absence is that relay broken and every error the engine " +
-         "recorded while running this page is being dropped silently");
-  if (analysis.resolverErrors.length) {
-    if (!Array.isArray(tab._resolverErrors)) tab._resolverErrors = [];
-    for (var _rei = 0; _rei < analysis.resolverErrors.length; _rei++) {
-      var _re = analysis.resolverErrors[_rei];
-      console.debug("[AST:page-error] %s: %s", _re.context, _re.message);
-      tab._resolverErrors.push({ context: _re.context, message: _re.message, snippet: _re.snippet || null });
-    }
-  }
-
-  DCHECK(Array.isArray(analysis.securitySinks) && Array.isArray(analysis.fetchCallSites),
-         "the engine result reached the merge without its two finding arrays — every endpoint and every @S " +
-         "record for this page travels in them, and merging a document that has neither reports the page as " +
-         "analysed and clean");
-  console.debug("[AST] tab=%d: %d fetchSites, %d secSinks, %d pageErrors", tabId,
-    analysis.fetchCallSites.length, analysis.securitySinks.length, analysis.resolverErrors.length);
-
-  /* MERGED UNCONDITIONALLY. A `hasFindings` gate stood here and RETURNED before all four lines below when the
-     engine emitted no endpoint and no sink — so `tab._astResults` was never written, and `_evictReviewedDocs`
-     reads exactly that slot to decide a document's run has returned. A page with nothing to find was therefore
-     pinned in `state.docs` forever, holding its buffer, and the one case that produces no symptom is again the
-     one that was broken. "The engine found nothing" is a RESULT and is recorded as one. */
-  tab._astResults = [analysis];
-  mergeASTResultsIntoVDD(tab, [analysis], tabId);
-  mergeToGlobal(tab);
-  notifyPopup(tabId);
-
-  // Idle burst of the ONE host-level attention: advance other origins' parked frontiers by value
-  // (non-blocking, serialized). This page's own residue (if it parked) is now in the global frontier.
-  _driveGlobalFrontierBurst();
-}
+// (Analysis handoff -- _analyzeCombinedScripts, the ONE call that appends a delivered document to the ONE
+// frontier, plus its per-script finding attribution -- lives in lib/analyze.js, loaded first.)
 
 // (Engine-result -> doc merge -- mergeASTResultsIntoVDD -- extracted to lib/merge.js, loaded first.)
 
@@ -878,7 +706,7 @@ function handleContentMessage(msg, sender) {
        WFQ in bridge.js, which ranks live engines by their best flow's weight (qjs_top_weight) and admits
        against the RAM working-set floor — a policy this zone cannot hold, because no instance can rank the
        others. */
-    _dispatchDocument(_dk);   // straight to astDispatch -> the ONE host WFQ pool. No queue, no cache, no in-flight register.
+    _analyzeCombinedScripts(_dk);   // straight to astDispatch -> the ONE host WFQ pool. No queue, no cache, no in-flight register.
     notifyPopup(tabId);
     return;
   }

@@ -494,13 +494,78 @@ async function cmdDumpBundle(args) {
   });
 }
 
-/* `dumpscripts` DELETED with lib/analyze.js. It dumped `_scriptBuffers[].scripts` — the per-document
-   list of script bodies the brain used to concatenate. The engine has sourced every script itself for a
-   long time (Lexbor parses CONTENT_HTML; qjs_run_doc_scripts runs inline + external in document order),
-   so the CONTENT_HTML handler sets that array to `[]` and nothing pushes to it: the command skipped
-   every buffer as empty and answered "no live buffer" for every page there has ever been. A diagnostic
-   that reads a collection its producer stopped filling reports an absence as a finding. The engine-side
-   equivalent that still has a producer is `dumpbundle`. */
+// Dump the LIVE in-flight shallow-review script buffer (_scriptBuffers) from
+// the offscreen brain for the active page tab — captures the *pre-analysis*
+// combined JS that the worker is about to chew on, BEFORE a heavy bundle
+// review starts (or while it's running — the brain side stays responsive
+// even when the worker is wedged on a synchronous wasm schedule). Writes
+// <out> (the code, in execution order: order-sorted, concatenated with
+// "\n;\n" separators — same as _analyzeCombinedScripts) and a sibling
+// <out>.scripts.json describing the per-script urls/offsets/lengths so a
+// native profiler can attribute time back to a specific source script. Used
+// to obtain a representative real-site fixture without depending on
+// feDeepDB (which is only populated by the cross-session deep grind, not
+// the shallow review where the wall-time regression manifests).
+async function cmdDumpScripts(args) {
+  // Optional `find:<substr>` selects the buffer whose COMBINED code contains
+  // <substr> (e.g. find:index-docs), regardless of which tab is active — the
+  // freezing chunk is often in a background tab's buffer, not the foreground
+  // page, so active-page matching grabs the wrong one.
+  let find = null;
+  const rest = args.filter((a) => { const m = /^find:(.*)$/.exec(a); if (m) { find = m[1]; return false; } return true; });
+  const out = (rest.join(" ").trim()) || "engine/qjs/_curbundle.js";
+  await withBrowser(async (browser) => {
+    const page = await getActivePage(browser).catch(() => null);
+    const pageUrl = page ? await page.evaluate(() => location.href).catch(() => "") : "";
+    const lock = await readLock();
+    const extId = lock?.extId;
+    const ourl = `chrome-extension://${extId}/ast-worker.html`;
+    let pg = null;
+    for (let i = 0; i < 40 && !pg; i++) {
+      const t = browser.targets().find(t => t.url().startsWith(ourl));
+      if (t) pg = await t.page().catch(() => null);
+      if (!pg) await sleep(150);
+    }
+    if (!pg) { log("(no offscreen target — extension running?)"); return; }
+    const rec = await pg.evaluate((wantUrl, find) => {
+      if (typeof _scriptBuffers === "undefined") return { err: "_scriptBuffers not visible from offscreen scope" };
+      let best = null;
+      const haveTabs = [];
+      for (const [tid, b] of _scriptBuffers.entries()) {
+        if (!b || !b.scripts || b.scripts.length === 0) continue;
+        haveTabs.push((b.pageUrl || "") + "(" + b.scripts.length + " scripts)");
+        if (find) {
+          // Select the buffer that actually CONTAINS the wanted code (by url or
+          // source text) — the freezing chunk's tab, not the active one.
+          if (b.scripts.some((s) => (s.url && s.url.indexOf(find) >= 0) || (s.code && s.code.indexOf(find) >= 0))) { best = { tid, b }; break; }
+          continue;
+        }
+        if (wantUrl && b.pageUrl && b.pageUrl.split("#")[0] === wantUrl.split("#")[0]) { best = { tid, b }; break; }
+        if (!best) best = { tid, b };
+      }
+      if (!best) return { err: "no live buffer" + (find ? " containing '" + find + "'" : " (any tab); pageUrl=" + wantUrl) + "; buffers=[" + haveTabs.join(" | ") + "]" };
+      const scripts = best.b.scripts.slice().sort((a, b) => (a.order == null ? 1e9 : a.order) - (b.order == null ? 1e9 : b.order));
+      let combined = "";
+      const map = [];
+      for (const s of scripts) {
+        map.push({ url: s.url || "(inline)", offset: combined.length, length: s.code.length });
+        combined += s.code + "\n;\n";
+      }
+      // pageHtml is on the per-tab state (set by CONTENT_HTML), not the script buffer.
+      // The worker needs it to bootstrap Lexbor with the real SSR DOM so the
+      // bundle's render-gated paths run.
+      let html = null;
+      try { html = (typeof getTab === "function") ? (getTab(best.tid)._pageHtml || null) : null; } catch (_) {}
+      return { tid: best.tid, pageUrl: best.b.pageUrl || wantUrl || "", combined, map, html };
+    }, pageUrl, find);
+    if (rec.err) { log("dumpscripts: " + rec.err); return; }
+    const abs = path.isAbsolute(out) ? out : path.join(ROOT, out);
+    fs.writeFileSync(abs, rec.combined, "utf8");
+    fs.writeFileSync(abs + ".scripts.json", JSON.stringify({ pageUrl: rec.pageUrl, scripts: rec.map }, null, 2), "utf8");
+    if (rec.html) fs.writeFileSync(abs.replace(/\.js$/, ".pre.js"), "globalThis.__pageUrl=" + JSON.stringify((rec.pageUrl || "").split("#")[0]) + ";globalThis.__pageHtml=" + JSON.stringify(rec.html) + ";\n", "utf8");
+    log(`dumped ${rec.combined.length} bytes (${rec.map.length} scripts, pageUrl=${rec.pageUrl}, tab=${rec.tid}) -> ${abs}`);
+  });
+}
 
 // Evaluate an expression in the OFFSCREEN document (the learning brain lives
 // there now, not the SW) — for DIAGNOSING a stalled learning pipeline (script
@@ -1233,7 +1298,7 @@ async function cmdNetDiff(args) {
 }
 
 
-const CMDS = { start: cmdStart, restart: cmdRestart, "restart-keep": (a) => cmdRestart(a, true), page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, profile: cmdProfile, capture: cmdCapture, dumpbundle: cmdDumpBundle, srcloc: cmdSrcLoc, learnstate: cmdLearnState, reachgap: cmdReachGap, triage: cmdTriage, multitab: cmdMultiTab, netdiff: cmdNetDiff };
+const CMDS = { start: cmdStart, restart: cmdRestart, "restart-keep": (a) => cmdRestart(a, true), page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, profile: cmdProfile, capture: cmdCapture, dumpbundle: cmdDumpBundle, dumpscripts: cmdDumpScripts, srcloc: cmdSrcLoc, learnstate: cmdLearnState, reachgap: cmdReachGap, triage: cmdTriage, multitab: cmdMultiTab, netdiff: cmdNetDiff };
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);

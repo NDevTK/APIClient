@@ -311,19 +311,11 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
       }
     }
 
-    /* THE ONE SECURITY MERGE. `!analysis._securityMerged` guarded this, and the flag's other writer was
-       lib/analyze.js pre-empting this block to do its own per-script split — a split over `sink.location`,
-       which solve.c does not emit, so it filed every finding under the page URL and produced exactly what
-       this block produces. That file is deleted and so is the flag: the replace-then-push below is already
-       idempotent for a repeated merge of one analysis, which is all the flag ever bought.
-       `dangerousPatterns` is NOT a defaulted engine field — bridge.js emits it as a host-side constant `[]`
-       (the engine has no such surface), so it is read here as the empty statement it is. */
-    var secSinks = analysis.securitySinks;
-    var dangerousPats = analysis.dangerousPatterns;
-    DCHECK(Array.isArray(secSinks) && Array.isArray(dangerousPats),
-           "an analysis reached the security merge without its finding arrays — bridge.js builds both on " +
-           "every result document, so an absent one is that relay broken and this page would merge as clean");
-    if (secSinks.length || dangerousPats.length) {
+    // Store security findings on tab state (only once per analysis — skip if already merged)
+    var secSinks = analysis.securitySinks || [];
+    var dangerousPats = analysis.dangerousPatterns || [];
+    if ((secSinks.length || dangerousPats.length) && !analysis._securityMerged) {
+      analysis._securityMerged = true;
       if (!tab._securityFindings) tab._securityFindings = [];
       var _mfMeta = tab || null;
       // REPLACE any prior entry for this source, don't append — the deep grind
