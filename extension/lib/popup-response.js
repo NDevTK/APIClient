@@ -32,8 +32,8 @@ function renderResponse(result) {
       : "resp-status-error";
   statusEl.innerHTML =
     `<span class="${statusClass}">${esc(String(result.status))} ${esc(result.statusText || "")}</span>` +
-    ` <span class="resp-timing">${result.timing || 0}ms</span>` +
-    ` <span class="resp-size">${result.body?.size || 0} bytes</span>`;
+    ` <span class="resp-timing">${esc(String(result.timing || 0))}ms</span>` +
+    ` <span class="resp-size">${esc(String(result.body?.size || 0))} bytes</span>`;
 
   const headersTable = document.getElementById("send-response-headers");
   headersTable.innerHTML = "";

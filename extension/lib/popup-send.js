@@ -1,6 +1,6 @@
 /* Popup send-panel controls — extracted from popup.js (classic script, shares the popup global scope +
    DOM). renderSendPanel + its selectors: service grouping, method dropdown, frame selector, service-origin
-   hint, API-key selector (+ onKeySelectionChange/truncateKey), and the endpoint fields table. */
+   hint, API-key selector (+ onKeySelectionChange/truncateKey). */
 // ─── Send Panel ──────────────────────────────────────────────────────────────
 
 function renderSendPanel() {
@@ -68,33 +68,53 @@ function _renderServiceGrouping() {
       + (g.firstUrl ? '<div class="grouping-first">first request: <code>' + esc(g.firstUrl) + '</code></div>' : '');
   }
 
-  // Bucket quality: count methods by discovery source. AST-discovered
-  // methods are the reviewer's primary target — listed first so the
-  // reviewer sees the code-analysis yield at a glance.
+  // Bucket quality: count methods by origin. THE UNUSED BUCKET IS THE PRODUCT — "what the bundle CAN do but
+  // didn't" — so it is named that here and in the dropdown tag, from the ONE classifier below, and it is
+  // listed first.
   if (svcData.doc) {
-    let astCount = 0, astLiveCount = 0, liveOnlyCount = 0, assetCount = 0, total = 0;
+    const n = { unused: 0, "unused+fired": 0, fired: 0, declared: 0, asset: 0 };
+    let total = 0;
     for (const bucket of Object.values(svcData.doc.resources || {})) {
       for (const m of Object.values(bucket.methods || {})) {
         total++;
-        if (m._responseKind === "asset") { assetCount++; continue; }
-        const hasAst = !!m._astInferred;
-        const hasLive = !!(m._stats && m._stats.requestCount);
-        if (hasAst && hasLive) astLiveCount++;
-        else if (hasAst) astCount++;
-        else if (hasLive) liveOnlyCount++;
+        n[_methodOrigin(m)]++;
       }
     }
     if (total > 0) {
       const parts = [];
-      if (astCount) parts.push(astCount + " AST");
-      if (astLiveCount) parts.push(astLiveCount + " AST+live");
-      if (liveOnlyCount) parts.push(liveOnlyCount + " live");
-      if (assetCount) parts.push(assetCount + " asset");
+      if (n.unused) parts.push(n.unused + " UNUSED (in bundle, never fired)");
+      if (n["unused+fired"]) parts.push(n["unused+fired"] + " in bundle + fired");
+      if (n.fired) parts.push(n.fired + " fired only (no bundle origin)");
+      if (n.declared) parts.push(n.declared + " declared by a discovery doc, never fired");
+      if (n.asset) parts.push(n.asset + " asset");
       html += '<div class="grouping-first">methods: ' + esc(parts.join(", ")) + '  (' + total + ' total)</div>';
     }
   }
 
   el.innerHTML = html;
+}
+
+// WHICH BUCKET A METHOD IS IN — asked in ONE place. The grouping summary and the dropdown tag each derived
+// this from `_astInferred` / `_stats.requestCount` on their own, which is one fact answered from two places
+// for the SAME method, and the two spellings ("AST" / "[ast]") did not even agree on what to call it.
+//
+// "unused" is the whole claim of the tool: learned from the bundle, never observed on the wire — the
+// login/click/route/flag-gated, dead-but-shipped, lazy-chunk endpoint a sniffer cannot see. It is the word
+// used, not "ast", because "ast" names the mechanism and hides the finding.
+//
+// ENGINE/STORE GAP: this class is a FACT about the record and should be stamped ON it where the record is
+// built (the offscreen store, from the engine's @H surface plus the request log), not re-derived by the view
+// every render. The view then paints a field instead of classifying.
+function _methodOrigin(m) {
+  if (m._responseKind === "asset") return "asset";
+  const inBundle = !!m._astInferred;
+  const fired = !!(m._stats && m._stats.requestCount);
+  if (inBundle && fired) return "unused+fired";
+  if (inBundle) return "unused";
+  // Neither: a method that came from a PROBED discovery document, so it is declared by the service and never
+  // observed here. Declared-not-fired is not the same claim as in-the-bundle-not-fired, and collapsing the two
+  // would credit the solver with a surface it did not learn.
+  return fired ? "fired" : "declared";
 }
 
 function renderMethodDropdown() {
@@ -123,24 +143,23 @@ function renderMethodDropdown() {
             const opt = document.createElement("option");
             const key = `DISCOVERY ${m.httpMethod} ${svcName} ${m.id}`;
             opt.value = key;
-            // Review tags reflect what the reviewer cares about:
-            //   [ast]        — discovered via source-code AST, reviewer's
-            //                  primary target (endpoint that exists in the
-            //                  bundle, may or may not have been exercised).
-            //   [ast+live]   — AST-discovered AND real traffic observed.
-            //   [live]       — only observed in traffic (no AST origin).
-            //   [asset:X]    — response magic-bytes classified as static
-            //                  (deprioritise — usually noise).
+            // The tag IS the product's differentiator, so it says the finding, not the mechanism:
+            //   [UNUSED]     — learned from the bundle, never observed on the wire. The headline: what the
+            //                  bundle CAN do but didn't (login/click/route/flag-gated, dead-but-shipped,
+            //                  lazy-chunk). A sniffer cannot produce this row.
+            //   [in bundle + fired]      — learned AND observed; a sniffer sees it too.
+            //   [fired only]             — observed in traffic with no bundle origin.
+            //   [declared, never fired]  — from a probed discovery document, not from this bundle.
+            //   [asset:X]                — response magic-bytes classified as static (usually noise).
+            // Class from _methodOrigin — the same one the service summary counts, never a second derivation.
+            const origin = _methodOrigin(m);
             let tag = "";
-            if (m._responseKind === "asset") {
+            if (origin === "asset") {
               tag = " [asset" + (m._responseLabel ? ":" + String(m._responseLabel).split(";")[0].trim() : "") + "]";
-            } else {
-              const hasAst = !!m._astInferred;
-              const hasLive = !!(m._stats && m._stats.requestCount);
-              if (hasAst && hasLive) tag = " [ast+live]";
-              else if (hasAst) tag = " [ast]";
-              else if (hasLive) tag = " [live]";
-            }
+            } else if (origin === "unused") tag = " [UNUSED]";
+            else if (origin === "unused+fired") tag = " [in bundle + fired]";
+            else if (origin === "fired") tag = " [fired only]";
+            else tag = " [declared, never fired]";
             // Substitute source-map-resolved param names into the displayed id
             // (e.g. `github.com.{e}_{a}_issues_preheat_index` →
             // `github.com.{owner}_{repo}_issues_preheat_index`) so the reviewer
@@ -435,46 +454,3 @@ function onKeySelectionChange() {
   }
 }
 
-function renderFieldsTable(rootFields) {
-  // Iterative DFS pre-order: each stack frame holds (entries, idx,
-  // depth). Process the top frame: emit one row at entries[idx],
-  // bump idx, and if the field has children push a new frame for them
-  // (children render immediately after their parent — that's the visual
-  // tree layout). Pop empty frames. Replaces self-recursion so deeply-
-  // nested field trees render without growing the JS call stack.
-  let html = `<table class="fields-table"><thead><tr><th>#</th><th>Field</th><th>Type</th><th>Message Type</th><th>Label</th></tr></thead><tbody>`;
-  const stack = [{ entries: rootFields, idx: 0, depth: 0 }];
-  while (stack.length > 0) {
-    const top = stack[stack.length - 1];
-    if (top.idx >= top.entries.length) {
-      stack.pop();
-      continue;
-    }
-    const [name, f] = top.entries[top.idx];
-    top.idx++;
-    const depth = top.depth;
-    const indent = depth > 0 ? `padding-left:${depth * 16}px` : "";
-    const labelClass = f.required
-      ? "f-req"
-      : f.label === "repeated"
-        ? "f-repeated"
-        : "";
-    const labelText = f.required ? "required" : f.label || "";
-    html += `<tr>
-      <td class="f-num">${f.number ?? ""}</td>
-      <td class="f-name"${indent ? ` data-indent="${depth}"` : ""}>${depth > 0 ? "&#x2514; " : ""}${esc(name)}</td>
-      <td class="f-type">${esc(f.type)}</td>
-      <td class="f-msg">${esc(f.messageType || "")}</td>
-      <td class="${labelClass}">${esc(labelText)}</td>
-    </tr>`;
-    if (f.children?.length) {
-      const childEntries = f.children.map((c) => [
-        c.name || `field_${c.number}`,
-        c,
-      ]);
-      stack.push({ entries: childEntries, idx: 0, depth: depth + 1 });
-    }
-  }
-  html += `</tbody></table>`;
-  return html;
-}

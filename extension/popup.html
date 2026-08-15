@@ -43,7 +43,15 @@
 
     <!-- Security Panel -->
     <section id="panel-security" class="panel">
-      <div class="empty" id="security-empty">No security findings yet.</div>
+      <!-- AN ABSENCE IS NOT A VERDICT. "No security findings" reads as "this page is clean", which is the
+           "safe"/verified:false claim CLAUDE.md §@S forbids: a sink attacker input reaches can stay unsolved
+           for a long time, and a custom input may still break one the search has not. Say what the emptiness
+           actually is — nothing emitted yet — and never that anything was cleared. -->
+      <div class="empty" id="security-empty">
+        No sink has been reported for this document yet — <strong>not</strong> a verdict that it is safe.
+        A reached-but-unsolved sink appears under “Reached, search parked”; a fired PoC appears under
+        “Working XSS PoCs”. Neither list being present means neither has been emitted yet.
+      </div>
       <div id="security-findings"></div>
     </section>
 
@@ -200,6 +208,11 @@
     <script src="lib/popup-reqlog.js"></script>
     <script src="lib/popup-security.js"></script>
     <script src="lib/popup-send.js"></script>
+    <!-- The popup is a bridge EDGE (it renders the engine's result), so per CLAUDE.md §Architecture it gets
+         the same DCHECK mechanism the offscreen has: a malformed/drifted engine record crashes LOUD where it
+         is read, instead of a card quietly rendering less than it claims. Loaded before popup.js; every
+         renderer only DEFINES functions at load, so this position is before any assertion can run. -->
+    <script src="check.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

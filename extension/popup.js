@@ -983,7 +983,7 @@ function renderDataPanel() {
 
       html += `<div class="card">
         <div class="card-label">${esc(info.name || "API Key")} ${info.source === "page_source" ? '<span class="badge badge-source">page source</span>' : '<span class="badge badge-source">network</span>'}
-          ${reqCount > 0 ? `<span class="badge badge-status">${reqCount} req</span>` : ""}
+          ${reqCount > 0 ? `<span class="badge badge-status">${esc(String(reqCount))} req</span>` : ""}
         </div>
         <div class="card-value">${esc(key)}</div>
         <div class="card-meta">
@@ -1145,7 +1145,7 @@ function renderChainInfo(chains) {
         `<span class="chain-arrow">&larr;</span>` +
         `<span class="chain-source">${esc(link.sourceMethodId)}</span>` +
         `<span class="chain-field">.${esc(link.sourceFieldPath)}</span>` +
-        (link.observedCount > 1 ? `<span class="chain-count">${link.observedCount}x</span>` : "") +
+        (link.observedCount > 1 ? `<span class="chain-count">${esc(String(link.observedCount))}x</span>` : "") +
         `</div>`;
     }
     html += '</div>';
@@ -1158,7 +1158,7 @@ function renderChainInfo(chains) {
         `<span class="chain-arrow">&rarr;</span>` +
         `<span class="chain-source">${esc(link.targetMethodId)}</span>` +
         `<span class="chain-param">.${esc(link.paramName)}</span>` +
-        (link.observedCount > 1 ? `<span class="chain-count">${link.observedCount}x</span>` : "") +
+        (link.observedCount > 1 ? `<span class="chain-count">${esc(String(link.observedCount))}x</span>` : "") +
         `</div>`;
     }
     html += '</div>';

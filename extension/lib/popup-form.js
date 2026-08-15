@@ -1,7 +1,7 @@
 /* Popup form-field builder — extracted from popup.js (classic script, shares the popup global scope +
    DOM). Builds the Send-panel input UI from a request schema: buildFormFields + the recursive field/
    message/repeated builders (_buildFieldStep/_buildMessageGroup/...) + createSingleInput. Called by
-   renderFieldsTable / the send panel via the global scope; formFieldsToMap (value collection) stays. */
+   the send panel via the global scope; formFieldsToMap (value collection) stays. */
 function buildFormFields(schema, initialData = null) {
   const container = document.getElementById("send-form-fields");
   container.innerHTML = "";
@@ -305,8 +305,11 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
     labelHtml += ` <span class="btn-rename" title="Rename field" data-schema="${esc(fieldDef.parentSchema || "params")}" data-key="${esc(name)}">✎</span>`;
   }
 
+  // esc(): `number` is not guaranteed numeric — openapi-import.js takes it verbatim from an imported spec's
+  // `x-field-numbers`, which is a file the researcher was handed. Every value on this path came from
+  // somewhere hostile; none of them is escaped by being "probably a number".
   if (fieldDef.number)
-    labelHtml += ` <span class="field-number">#${fieldDef.number}</span>`;
+    labelHtml += ` <span class="field-number">#${esc(String(fieldDef.number))}</span>`;
   labelHtml += ` <span class="field-type">${esc(fieldDef.type || "string")}</span>`;
   if (fieldDef.required)
     labelHtml += ` <span class="field-required">required</span>`;
@@ -323,15 +326,22 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
   if (fieldDef._defaultValue != null) {
     labelHtml += ` <span class="field-stat badge-default">default: ${esc(String(fieldDef._defaultValue))}</span>`;
   }
+  // A DOMAIN IS RENDERED AS A DOMAIN. `5–100` on its own reads like a pair of observed values; it is the
+  // range the field's observations spanned, which is a constraint on what the value can be, never a value the
+  // code produced. Saying "range" is the difference between a shape and an example — CLAUDE.md §@H: a param
+  // known only to satisfy a range stays a domain-annotated shape, and inventing a member of it fabricates an
+  // observed key. The input below is NOT prefilled from it (pickExampleValue deleted its "range-min" tier).
   if (fieldDef._range) {
-    labelHtml += ` <span class="field-stat badge-range">${fieldDef._range.min}–${fieldDef._range.max}</span>`;
+    labelHtml += ` <span class="field-stat badge-range" title="the domain this field's observations spanned — a constraint, not a value the code computed">range ${esc(String(fieldDef._range.min))}–${esc(String(fieldDef._range.max))}</span>`;
   }
-  // When the form was prefilled from an example value (vs a captured
-  // request's initialData), show the provenance so the user knows
-  // whether the value came from observed traffic, AST analysis, or a
-  // type-default fallback. Never a guess without attribution.
-  if (fieldDef._exampleValueSource && initialValue != null && (fieldDef._exampleValue === initialValue || String(fieldDef._exampleValue) === String(initialValue))) {
-    labelHtml += ` <span class="field-stat badge-prefill" title="Prefilled from ${esc(fieldDef._exampleValueSource)}">prefill: ${esc(fieldDef._exampleValueSource)}</span>`;
+  // A PREFILLED BOX ALWAYS CARRIES ITS PROVENANCE. The badge is driven by the SAME resolvePrefill() the input
+  // reads, so the box can never show a value the label does not attribute — which is what happened for a
+  // single AST-observed value: createSingleInput typed it into the field on its own, and this badge (keyed on
+  // _exampleValueSource) stayed silent, so a value the code merely LISTS rendered exactly like a value
+  // observed on the wire.
+  var _pf = resolvePrefill(fieldDef, initialValue);
+  if (_pf.source) {
+    labelHtml += ` <span class="field-stat badge-prefill" title="Prefilled from ${esc(_pf.source)}">prefill: ${esc(_pf.source)}</span>`;
   }
   if (fieldDef.format && fieldDef.format !== fieldDef.type) {
     labelHtml += ` <span class="field-stat badge-format">${esc(fieldDef.format)}</span>`;
@@ -545,8 +555,34 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// ONE ANSWER to "what value will this input carry, and where did that value come from" — read by the label
+// badge and by the input itself. Two places used to decide it independently: the label attributed
+// `_exampleValue` and the input separately typed in a lone `_astValidValues[0]`, so the one prefill the
+// analyzer is LEAST sure of (a value the bundle lists as valid, which the server may never accept) was the
+// one that arrived with no attribution at all. Provenance is a fact about the value; it belongs where the
+// value is decided.
+//
+// It never INVENTS: a field whose only knowledge is a domain (`_range`, a multi-valued `_astValidValues`)
+// resolves to no value, so the box stays empty and the domain shows as a badge/placeholder beside it.
+// CLAUDE.md §@H — a range never picks a member.
+function resolvePrefill(fieldDef, initialValue) {
+  if (initialValue !== null && initialValue !== undefined) {
+    // A captured request's value is the value itself; it is attributed only when it IS the analyzer's example
+    // (otherwise it came off the wire in front of the user and needs no badge).
+    const matches = fieldDef._exampleValue === initialValue
+      || String(fieldDef._exampleValue) === String(initialValue);
+    return { value: initialValue, source: (fieldDef._exampleValueSource && matches) ? fieldDef._exampleValueSource : null };
+  }
+  const vv = fieldDef._astValidValues;
+  // ONE observed value in the bundle = the bundle only ever set this param one way. >= 2 is a set to choose
+  // from, never a pick: auto-selecting one would report an observation the code never made.
+  if (Array.isArray(vv) && vv.length === 1) return { value: vv[0], source: "ast-constraint" };
+  return { value: null, source: null };
+}
+
 function createSingleInput(fieldDef, initialValue = null, category = null) {
   const type = fieldDef.type || "string";
+  const pf = resolvePrefill(fieldDef, initialValue);
 
   if ((type === "enum" || fieldDef.enum) && fieldDef.enum?.length) {
     const sel = document.createElement("select");
@@ -589,18 +625,13 @@ function createSingleInput(fieldDef, initialValue = null, category = null) {
     // datalist (no orphaned <datalist> nodes accumulating in the DOM).
     const dlId = "astvals-" + (fieldDef.name || "field").replace(/[^A-Za-z0-9]/g, "_") + "-" + (category || "");
     inp.setAttribute("list", dlId);
-    if (initialValue !== null && initialValue !== undefined) {
-      inp.value = String(initialValue);
-    } else if (fieldDef._astValidValues.length === 1) {
-      /* Single observed AST value AND no initialValue → prefill it.
-         The bundle only set this param one way during forced execution,
-         so the analyzer's confidence on this single value is highest.
-         For multi-valued params (>=2 distinct observed values) the
-         input stays empty so the user picks from the datalist; per
-         CLAUDE.md never auto-pick one of multiple observations as if
-         it were "the" value. */
-      inp.value = String(fieldDef._astValidValues[0]);
-    }
+    /* The prefill (and its attribution in the label) is resolvePrefill's ONE decision — a lone AST value is
+       taken, a set of >= 2 is not, per CLAUDE.md's never-auto-pick rule. The datalist below offers the whole
+       set either way, so nothing observed is hidden by not being chosen. */
+    if (pf.value !== null && pf.value !== undefined) inp.value = String(pf.value);
+    /* The DOMAIN, where one is known and no value was resolved: shown as a placeholder, which is greyed and
+       never submitted, so the box states what the value must satisfy without asserting a member of it. */
+    else if (fieldDef._range) inp.placeholder = (type || "value") + " in " + fieldDef._range.min + "–" + fieldDef._range.max;
     const dl = document.createElement("datalist");
     dl.id = dlId;
     for (let i = 0; i < fieldDef._astValidValues.length; i++) {
@@ -628,7 +659,7 @@ function createSingleInput(fieldDef, initialValue = null, category = null) {
       inp.className = "form-input form-input-enum";
       inp.placeholder = "enum value (integer)";
       inp.min = "0";
-      if (initialValue !== null) inp.value = initialValue;
+      if (pf.value !== null) inp.value = pf.value;
       return inp;
     }
     case "int32":
@@ -646,9 +677,10 @@ function createSingleInput(fieldDef, initialValue = null, category = null) {
       const inp = document.createElement("input");
       inp.type = "number";
       inp.className = "form-input form-input-number";
-      inp.placeholder = type;
+      // The DOMAIN in the placeholder where one is known — a constraint stated, never a member picked.
+      inp.placeholder = fieldDef._range ? (type + " in " + fieldDef._range.min + "\u2013" + fieldDef._range.max) : type;
       if (type === "double" || type === "float") inp.step = "any";
-      if (initialValue !== null) inp.value = initialValue;
+      if (pf.value !== null) inp.value = pf.value;
       return inp;
     }
     case "bytes": {
@@ -656,7 +688,7 @@ function createSingleInput(fieldDef, initialValue = null, category = null) {
       ta.className = "form-input form-input-bytes";
       ta.placeholder = "base64-encoded bytes";
       ta.rows = 2;
-      if (initialValue !== null) ta.value = initialValue;
+      if (pf.value !== null) ta.value = pf.value;
       return ta;
     }
     default: {
@@ -664,11 +696,11 @@ function createSingleInput(fieldDef, initialValue = null, category = null) {
       inp.type = "text";
       inp.className = "form-input form-input-string";
       inp.placeholder = type || "value";
-      if (initialValue !== null) {
+      if (pf.value !== null) {
         inp.value =
-          typeof initialValue === "object"
-            ? JSON.stringify(initialValue)
-            : initialValue;
+          typeof pf.value === "object"
+            ? JSON.stringify(pf.value)
+            : pf.value;
       }
       return inp;
     }

@@ -238,8 +238,8 @@ function renderMultipartBatchResponse(bodyText, contentType) {
     const part = parts[i];
     const statusBadge = part.status
       ? (part.status >= 200 && part.status < 300
-          ? `<span class="badge badge-found">${part.status}</span>`
-          : `<span class="badge badge-notfound">${part.status}</span>`)
+          ? `<span class="badge badge-found">${esc(String(part.status))}</span>`
+          : `<span class="badge badge-notfound">${esc(String(part.status))}</span>`)
       : "";
 
     let bodyHtml;
