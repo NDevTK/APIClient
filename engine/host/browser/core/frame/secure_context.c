@@ -57,10 +57,15 @@ static bool tuple_origin_trustworthy(const char *scheme, const UrlHost *h)
         if (n > 10 && !memcmp(host + n - 10, ".localhost", 10)) return true;
     }
 
-    /* STEP 6: "If origin's scheme is `file`, return Potentially Trustworthy." The spec's own note is that a
-       user agent MAY be stricter; this one is not, because a file document is exactly the case a developer
-       runs a bundle from before deploying it, and refusing it would hide that bundle's gated code. */
-    if (!strcmp(scheme, "file")) return true;
+    /* STEP 6 — "If origin's scheme is `file`, return Potentially Trustworthy" — IS UNREACHABLE HERE, AND THAT
+       IS A DECISION THIS ENGINE HAS ALREADY MADE ELSEWHERE rather than a step skipped. The step exists for a
+       user agent that gives `file:` URLs a TUPLE origin; URL §4.7 leaves that to the implementation ("when in
+       doubt, return a new opaque origin") and core/url/origin.c takes the opaque answer, which is also what
+       stops two unrelated local files being same origin. So §3.1 step 1 answers first for every file URL, and
+       §3.1's own note — "the user agent SHOULD treat file URLs as potentially trustworthy" — is stated at the
+       one layer that still knows the URL: secure_context_url_potentially_trustworthy below. Two components
+       disagreeing about what a file URL's origin IS was the previous arrangement, and it is the defect this
+       one removes. */
 
     /* STEPS 7 AND 8 have no answer to give here, and that is a statement rather than an omission. Step 7 is
        "a scheme the user agent considers authenticated" — §7.1's packaged applications, `app:` and
@@ -122,9 +127,18 @@ bool secure_context_url_potentially_trustworthy(const char *url)
        navigable takes its creator's top-level creation URL (core/realm.h), so an `about:blank` iframe of an
        http page never reaches this line with `about:blank`. What does reach it is a TOP-LEVEL about:blank,
        whose creator is the user agent itself. */
-    r = url_is_about(&u, "blank") || url_is_about(&u, "srcdoc") ||
-        (u.scheme && !strcmp(u.scheme, "data")) ||
-        secure_context_origin_potentially_trustworthy(&u);   /* STEP 3 */
+    /* STEP 2 is `data:`, and the LINE AFTER IT IS §3.1's NOTE, made at this layer because this is the layer
+       that still has a URL. "The user agent SHOULD treat file URLs as potentially trustworthy … treating such
+       resources as potentially trustworthy is convenient for developers building an application before
+       deploying it to the public" — which is exactly the case a bundle is run from before it ships, and
+       refusing it would hide that bundle's gated code. §3.1's step 6 says the same thing over an ORIGIN whose
+       scheme is `file`, and this engine has no such origin: URL §4.7 leaves file's origin to the
+       implementation and core/url/origin.c gives it an OPAQUE one, so that step is unreachable (see it) and
+       this is where the SHOULD is honoured. */
+    r = url_is_about(&u, "blank") || url_is_about(&u, "srcdoc") ||   /* step 1 */
+        (u.scheme && !strcmp(u.scheme, "data")) ||                   /* step 2 */
+        (u.scheme && !strcmp(u.scheme, "file")) ||
+        secure_context_origin_potentially_trustworthy(&u);           /* step 3 */
     url_record_free(&u);
     return r;
 }
