@@ -168,6 +168,19 @@ JSValue navigable_tree_order(JSContext *ctx);
 
 JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url);
 
+/* HTML §7.4.2.3.2's EVALUATE A JAVASCRIPT: URL, over a navigable whose active document is THIS one — which is
+ * every `javascript:` navigation whose chosen navigable is the initiator's own, the `_self` case and the one a
+ * `javascript:` href or form action takes when nothing names another target.
+ *
+ * IT IS NOT A FETCH AND IT IS NOT §7.4 STEP 14'S LOAD. Navigating to a `javascript:` URL has its own section
+ * precisely because nothing is fetched: the URL's own bytes ARE the program. So this does what that section
+ * says and nothing else — serialize, remove the leading `javascript:`, percent-decode, UTF-8 decode, and RUN
+ * the classic script — and it runs it as a PROGRAM OF THE RUNNING FLOW rather than through a C `JS_Eval`,
+ * because the source is the page's code and may hold a loop, an `await` or a recursion that has to park.
+ *
+ * `url` is the SERIALIZED URL, whose scheme must be `javascript`; the caller has already parsed it. */
+void navigable_evaluate_javascript_url(JSContext *ctx, const char *url);
+
 /* §7.4 STEPS 6 AND 14 AS ONE OPERATION — choose a navigable for `target` and navigate it to `url`, creating one
    and giving it the name when nothing answers to it. TWO callers, and they are not variants of each other:
    `window.open()` reaches it after parsing a features string, and §4.6.3's FOLLOWING A HYPERLINK reaches it

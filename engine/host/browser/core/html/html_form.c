@@ -33,11 +33,13 @@
 #include "core/encoding/encoding.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
+#include "core/frame/navigable.h"
 #include "core/html/constraint_validation.h"
 #include "core/html/custom_elements.h"
 #include "core/html/form_data.h"
 #include "core/html/form_data_event.h"
 #include "core/html/form_entry_list.h"
+#include "core/html/html_dialog.h"
 #include "core/html/html_form.h"
 #include "core/html/input_picker.h"
 #include "core/html/input_value.h"
@@ -48,6 +50,7 @@
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
 #include "solver/endpoint.h"
+#include "solver/solve.h"
 
 static lxb_dom_element_t *form_elem_of(JSValueConst v)
 {
@@ -470,13 +473,15 @@ static JSValue js_form_elements(JSContext *ctx, JSValueConst this_val, int magic
  * makes.
  *
  * THE REQUEST IS DERIVED AND NEVER SENT. A submission mutates server state by construction, and this engine's
- * rule for such a request is that its values come from the forced-exec path rather than from firing it. So the
- * two rows of step 26's table that BUILD A REQUEST — Mutate action URL and Submit as entity body — end at
- * endpoint_record, and steps 18-25 (target, noopener, target navigable, history handling) are the operands of a
- * NAVIGATION that consequently does not happen. Every OTHER row of that table navigates instead of building a
- * request: a `javascript:` action EXECUTES, `mailto:` hands the URL to the OS, `ftp:`/`data:` load a document.
- * Each of those CRASHES here naming what to build, because recording an endpoint for one would report a request
- * the form never makes. */
+ * rule for such a request is that its values come from the forced-exec path rather than from firing it. So an
+ * `http`/`https` action ends at endpoint_record, and steps 18-25 (target, noopener, target navigable, history
+ * handling) are the operands of a NAVIGATION that consequently does not happen for it.
+ *
+ * EVERY OTHER SCHEME NAVIGATES, AND NONE OF THEM IS AN ENDPOINT — which is why step 26's table is written out
+ * below as a table rather than left as a chain of scheme comparisons. Recording an endpoint for a `mailto:` or
+ * a `data:` submission would put a request the form never makes onto the @H surface, which is worse than a
+ * crash; and a `javascript:` action is not a request at all but a code-execution SINK, since navigating to one
+ * EXECUTES it in this document. */
 
 /* ONE ENTRY's value as display text: a concolic contributes its SHAPE, exactly as a concolic URL does when it
    reaches endpoint_record — so `input.value = location.hash` submits as `q={hash}` and the finding says where
@@ -526,19 +531,47 @@ static const char *form_pick_encoding(lxb_dom_element_t *form)
  * five is ONE lookup: the SUBMITTER's `form*` attribute when the submitter is a submit button and has it, and
  * the form's own otherwise. Asked of the submit-button predicate rather than of "is the submitter the form",
  * because those are two different questions the moment a submitter is something else. */
+/* `pfrom`/`pname` report WHICH element and WHICH attribute the answer came from, for the one caller that needs
+   more than the bytes: the action is a URL the page's own code may have written, so the solver has to be able
+   to ask that attribute for its TAINT — and asking the attribute means knowing which of the two this lookup
+   chose. Re-deciding it at that caller would be a second copy of §4.10.19.6's order, and the two copies would
+   stop agreeing the first time either moved. Both may be NULL.
+   THE FALL-THROUGH IS DECIDED BY PRESENCE, not by whether the attribute has a value buffer. "When omitted, they
+   default to the values given on the corresponding attributes on the form element" — and `<button formaction="">`
+   is not omitted. It matters twice over: the HTML parser stores a valueless attribute with no value buffer at
+   all, so reading the VALUE pointer called an EMPTY one absent too, and every one of these five attributes then
+   answered with the form's when the submitter had explicitly overridden it with the empty string (`formmethod=""`
+   is an INVALID value, whose default is GET, and it was silently reading the form's `method=post`). NULL here
+   means the attribute is on neither element; the empty string means it is present and empty. */
+static const char *submitter_attr_from(JSContext *ctx, JSValueConst submitter, lxb_dom_element_t *form,
+                                       const char *own, const char *fallback, size_t *plen,
+                                       lxb_dom_element_t **pfrom, const char **pname)
+{
+    lxb_dom_element_t *el = NULL;
+    const char *v;
+
+    *plen = 0;
+    if (pfrom) *pfrom = form;
+    if (pname) *pname = fallback;
+    if (html_form_is_submit_button(ctx, submitter)) el = form_elem_of(submitter);
+    if (el && has_attr(el, own)) {
+        v = attr_of(el, own, plen);
+        if (pfrom) *pfrom = el;
+        if (pname) *pname = own;
+        return v ? v : "";
+    }
+    *plen = 0;
+    if (form && has_attr(form, fallback)) {
+        v = attr_of(form, fallback, plen);
+        return v ? v : "";
+    }
+    return NULL;
+}
+
 static const char *submitter_attr(JSContext *ctx, JSValueConst submitter, lxb_dom_element_t *form,
                                   const char *own, const char *fallback, size_t *plen)
 {
-    const char *v = NULL;
-
-    *plen = 0;
-    if (html_form_is_submit_button(ctx, submitter)) {
-        lxb_dom_element_t *el = form_elem_of(submitter);
-        if (el) v = attr_of(el, own, plen);
-    }
-    if (v) return v;
-    *plen = 0;
-    return attr_of(form, fallback, plen);
+    return submitter_attr_from(ctx, submitter, form, own, fallback, plen, NULL, NULL);
 }
 
 /* §4.10.19.6's `method`/`formmethod` enumerated attribute: `get`, `post` and `dialog`, with the GET state as
@@ -593,6 +626,48 @@ static bool form_no_validate(JSContext *ctx, JSValueConst submitter, lxb_dom_ele
 
     if (el && html_form_is_submit_button(ctx, submitter) && has_attr(el, "formnovalidate")) return true;
     return has_attr(form, "novalidate");
+}
+
+/* §4.6.3's "GET AN ELEMENT'S TARGET", which step 20 runs given the submitter's form owner and step 19's
+   `formtarget`: the given target when there is one, otherwise the element's own `target` attribute, otherwise
+   the value of the `target` attribute of the FIRST `base` element in the element's node document that has one,
+   otherwise the empty string. The `base` leg is not decoration — `<base target=_blank>` retargets every form
+   and link in the document at once, and an engine that skipped it would decide the rows below in the wrong
+   navigable while looking like it had asked. */
+static const char *form_base_target(lxb_dom_node_t *form_node, size_t *plen)
+{
+    lxb_dom_node_t *root, *n;
+
+    *plen = 0;
+    if (!form_node || !form_node->owner_document) return NULL;
+    root = lxb_dom_interface_node(form_node->owner_document);
+    for (n = node_next_in(root, root); n; n = node_next_in(n, root)) {
+        /* "the FIRST such base element" — the first one that HAS the attribute, which is a presence question
+           like the one submitter_attr_from asks, not a question about its value being non-empty. */
+        if (tag_is(n, "base") && has_attr(lxb_dom_interface_element(n), "target")) {
+            const char *v = attr_of(lxb_dom_interface_element(n), "target", plen);
+            return v ? v : "";
+        }
+    }
+    return NULL;
+}
+
+static const char *form_element_target(JSContext *ctx, JSValueConst submitter, lxb_dom_element_t *form,
+                                       lxb_dom_node_t *form_node, size_t *plen)
+{
+    const char *v = submitter_attr(ctx, submitter, form, "formtarget", "target", plen);
+
+    if (v) return v;   /* NULL only when NEITHER element carries the attribute — see submitter_attr_from */
+    return form_base_target(form_node, plen);
+}
+
+/* §7.1's RULES FOR CHOOSING A NAVIGABLE, for the only answer this engine can act in: `_self` and the empty
+   string both choose the navigable the form is already in, which is this document. Every other target — a
+   keyword or a name — chooses one this engine has not computed, because steps 18-21 exist for a navigation and
+   the recording rows never needed a navigable. */
+static bool form_target_is_self(const char *t, size_t len)
+{
+    return !t || len == 0 || ascii_ci_is(t, len, "_self");
 }
 
 /* §4.6.5's "CANNOT NAVIGATE", which steps 1, 5.9 and 9 each ask: "an element cannot navigate if its node
@@ -673,21 +748,35 @@ static void fb_pairs(JSContext *ctx, FormBuf *b, JSValueConst entries)
     }
 }
 
-/* Step 26's two request-building rows, as far as this engine goes: DERIVE the request and record it.
-   "MUTATE ACTION URL" SETS the parsed action's query component, which is a REPLACEMENT and not an append — a
-   form whose action already carries one (`/search?v=2`) submits to `/search?<the entries>`, and the append this
-   used to do produced a URL with two `?` in it. "SUBMIT AS ENTITY BODY" leaves the URL alone and makes the
-   entries the BODY; they are recorded in the same place because an @H record's `params` ARE the request's
-   parameters, and what tells a query from a body is the method recorded beside them. */
-static void form_record_request(JSContext *ctx, UrlRecord *action, int method, int enctype, JSValueConst entries)
+/* §4.10.22.9's TEXT/PLAIN ENCODING ALGORITHM, which "Mail as body" runs for a `text/plain` form: for each pair,
+   the name, U+003D, the value, and a CRLF. It shares fb_value's rule for a concolic entry for the same reason
+   §4.10.22.7's serializer does — a shape is what the value is known to be, and percent-encoding one would
+   invent bytes. */
+static void fb_text_plain(JSContext *ctx, FormBuf *b, JSValueConst entries)
 {
-    FormBuf b = { 0 };
+    int i, n = form_data_entry_count(entries);
+
+    for (i = 0; i < n; i++) {
+        size_t nlen = 0;
+        const char *name = form_data_entry_name(entries, i, &nlen);
+
+        fb_add(b, name, nlen);
+        fb_str(b, "=");
+        fb_value(ctx, b, form_data_entry_value(entries, i));
+        fb_str(b, "\r\n");
+    }
+}
+
+/* An http/https submission, as far as this engine goes: DERIVE the request and record it. It is the ONE place
+   step 26's plan-to-navigate is not performed, because a submission mutates server state by construction and
+   this engine never fires one. The entries are already in the URL's query by the time this runs — see the two
+   cells below for why the POST cell puts them there too. */
+static void form_record_request(JSContext *ctx, UrlRecord *action, int method, int enctype)
+{
     EndpointHeader ct;
     char *serialized;
     JSValue url;
 
-    fb_pairs(ctx, &b, entries);
-    url_member_set(action, URL_SEARCH, b.s ? b.s : "", b.n);
     serialized = url_serialize(action, /*exclude_fragment*/ false);
     url = JS_NewString(ctx, serialized ? serialized : "");
     if (method == FORM_METHOD_POST) {
@@ -699,7 +788,88 @@ static void form_record_request(JSContext *ctx, UrlRecord *action, int method, i
     }
     JS_FreeValue(ctx, url);
     free(serialized);
-    free(b.s);
+}
+
+/* §4.10.22.3's HAND-OFF TO EXTERNAL SOFTWARE — §7.11's navigate step for a URL "handled using a mechanism that
+   does not affect targetNavigable ... because url's scheme is handled externally". The navigation ends there:
+   the URL goes to whatever the platform registered for its scheme and the navigable keeps the document it had.
+   IT HAS NO SCRIPTABLE RESULT, and that is the standard's answer rather than this engine's gap — "hand-off to
+   external software" is user-agent-defined and defines nothing a page can observe, which is the same kind of
+   answer `element.click()` gives for a UA with no user. What a page CAN observe is that its document did not
+   change, and that is exactly what happens. It takes the URL because the operation does; an operation whose
+   input is not passed to it is an operation nobody can later give a real handler to. */
+static void form_hand_off_to_external(JSContext *ctx, const UrlRecord *action)
+{
+    (void)ctx;
+    DCHECK(action != NULL && action->scheme != NULL,
+           "a hand-off to external software was given a URL with no scheme — the SCHEME is the whole of what "
+           "decided that this URL is handled externally, so a record without one cannot have reached here");
+}
+
+/* ---- §4.10.22.3 STEP 26'S TABLE ------------------------------------------------------------------------------
+ *
+ * "Select the appropriate row in the table below based on scheme as given by the first cell of each row. Then,
+ * select the appropriate cell on that row based on method as given in the first cell of each column."
+ *
+ *                     GET                    POST
+ *      http           Mutate action URL      Submit as entity body
+ *      https          Mutate action URL      Submit as entity body
+ *      ftp            Get action URL         Get action URL
+ *      javascript     Get action URL         Get action URL
+ *      data           Mutate action URL      Get action URL
+ *      mailto         Mail with headers      Mail as body
+ *
+ * IT IS A TABLE HERE BECAUSE IT IS A TABLE THERE. Written as a chain of scheme comparisons, a missing row is
+ * invisible — which is how five of them came to be crashes rather than behaviour — and the two columns of a row
+ * end up in two different places. Written out, the shape of the standard's own answer is readable, which is
+ * what decides the row it does not have (below).
+ *
+ * EVERY CELL ENDS IN "PLAN TO NAVIGATE". What differs between them is only what goes into the URL first: the
+ * entry list as a query, the entry list as a body, nothing at all, or a mailto:'s headers or body. */
+enum { CELL_MUTATE_ACTION_URL = 0, CELL_ENTITY_BODY, CELL_GET_ACTION_URL,
+       CELL_MAIL_WITH_HEADERS, CELL_MAIL_AS_BODY };
+
+static const struct { const char *scheme; uint8_t get, post; } SUBMIT_SCHEME_TABLE[] = {
+    { "http",       CELL_MUTATE_ACTION_URL,   CELL_ENTITY_BODY },
+    { "https",      CELL_MUTATE_ACTION_URL,   CELL_ENTITY_BODY },
+    { "ftp",        CELL_GET_ACTION_URL,      CELL_GET_ACTION_URL },
+    { "javascript", CELL_GET_ACTION_URL,      CELL_GET_ACTION_URL },
+    { "data",       CELL_MUTATE_ACTION_URL,   CELL_GET_ACTION_URL },
+    { "mailto",     CELL_MAIL_WITH_HEADERS,   CELL_MAIL_AS_BODY },
+};
+#define SUBMIT_SCHEME_TABLE_N ((int)(sizeof(SUBMIT_SCHEME_TABLE) / sizeof(SUBMIT_SCHEME_TABLE[0])))
+
+/* THE ROW THE TABLE DOES NOT HAVE. "If scheme is not one of those listed in this table, then the behavior is
+ * not defined by this specification. User agents should, in the absence of another specification defining this,
+ * act in a manner analogous to that defined in this specification for similar schemes." That sentence is an
+ * instruction to DECIDE, so this engine decides, and the decision is stated in the table rather than left as a
+ * fallthrough that reads like an oversight.
+ *
+ * THE DECISION: `Get action URL`, in BOTH columns — the entry list is discarded and the parsed action is
+ * navigated to unchanged.
+ *
+ * THE REASONING is the shape of the six rows above. A cell writes the entry list INTO the URL only where that
+ * URL's query is defined to mean something to whatever consumes it: `http`/`https` in both columns (the query
+ * IS the request's), `data:` in the GET column (a data: URL's query is part of the data), and `mailto:` through
+ * two cells of its own (a mailto: query is a header list). The two schemes for which a query means nothing —
+ * `ftp` and `javascript` — take `Get action URL` in BOTH columns, and an unlisted scheme is exactly that case:
+ * nothing here knows what a query denotes for it. WHATWG URL makes this concrete rather than cautious — a
+ * scheme outside the special set gets an OPAQUE PATH, so writing a query onto one does not merely fail to help,
+ * it changes what the URL denotes. Discarding the entry list is the only cell that cannot corrupt the address,
+ * and it is also the only one that does not depend on the method, which is the right property for a row chosen
+ * without knowing what the scheme does. */
+static int submit_cell_for(const char *scheme, int method)
+{
+    int i;
+
+    DCHECK(scheme != NULL, "step 26 was asked for a row with no scheme — §4.4's parser cannot answer success "
+                           "without one");
+    DCHECK(method == FORM_METHOD_GET || method == FORM_METHOD_POST,
+           "step 26's table has two columns and the dialog method reaches step 11's return long before it");
+    for (i = 0; i < SUBMIT_SCHEME_TABLE_N; i++)
+        if (strcmp(SUBMIT_SCHEME_TABLE[i].scheme, scheme) == 0)
+            return method == FORM_METHOD_POST ? SUBMIT_SCHEME_TABLE[i].post : SUBMIT_SCHEME_TABLE[i].get;
+    return CELL_GET_ACTION_URL;   /* the unlisted-scheme row, decided above */
 }
 
 /* WHERE THIS MACHINE RESTS — every stage at a step §4.10.22.3 names, and each boundary for a reason the step
@@ -719,7 +889,9 @@ static void form_record_request(JSContext *ctx, UrlRecord *action, int method, i
     X(SUBMIT_ENTRIES,   "HTML §4.10.22.3 step 7 (let entry list be the result of constructing the entry list " \
                         "with form, submitter and encoding)") \
     X(SUBMIT_REQUEST,   "HTML §4.10.22.3 step 26 (select the row for the action's scheme and the column for " \
-                        "the method, and run that row's steps)")
+                        "the method, and run that row's steps)") \
+    X(SUBMIT_DIALOG,    "HTML §4.10.22.3 step 11.6 (close the dialog subject with result and null) — §4.11.4's " \
+                        "own algorithm, which fires `beforetoggle` at the dialog and so rests here")
 enum { SUBMIT_STAGES(JS_STEP_STAGE_ENUM, "") };
 /* ONE list, expanded once per ALGORITHM: the two members reach this machine at two different steps of their
    OWN, and a stage's label is the step it rests at — so the entry stage names the member that entered. */
@@ -761,6 +933,16 @@ typedef struct JSSubmitState {
     /* §4.10.21.2's own cursor, held across its `invalid` dispatches and its pattern matches. NULL until step
        5.4 starts one, which is also the state a `novalidate` form's run is left in. */
     ConstraintValidationRun *validation;
+    /* STEP 11'S TWO ANSWERS, LATCHED WHERE THE STEPS COMPUTE THEM AND CARRIED INTO §4.11.4 — not re-derived on
+       each resume. Step 11.2's `subject` is the form's nearest ancestor `dialog` AT STEP 11, and step 11.4/11.5's
+       `result` is the submitter's selected coordinate or optional value AT STEP 11; the close fires
+       `beforetoggle` at the dialog, so the page's code runs in the middle and can move the form out of the
+       dialog or rewrite the submitter's `value`. An operation that becomes a work item takes its inputs with
+       it, and reading either back afterwards would answer with a real value belonging to the wrong moment. */
+    JSValue   dialog_subject;   /* step 11.2's nearest ancestor dialog element (owned) */
+    JSValue   dialog_result;    /* steps 11.3-11.5's result: JS_NULL or a string (owned) */
+    /* §4.11.4's own run, held across its `beforetoggle` dispatch. NULL until step 11.6 starts one. */
+    DialogCloseRun *closing;
 } JSSubmitState;
 
 static void js_submit_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -773,10 +955,13 @@ static void js_submit_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->form);
     v->val(ctx, &s->controls);
     v->val(ctx, &s->entry_list);
+    v->val(ctx, &s->dialog_subject);
+    v->val(ctx, &s->dialog_result);
     STEP_CB_FOREACH(s->cb, k)
         v->val(ctx, &s->cb[k]);
     form_entry_list_visit(ctx, &s->entries, v);
     constraint_validation_visit(ctx, &s->validation, v);
+    html_dialog_close_visit(ctx, &s->closing, v);
 }
 
 static JSValue js_submit_fini(JSContext *ctx, void *st, bool take_result)
@@ -803,12 +988,17 @@ static JSValue js_submit_fini(JSContext *ctx, void *st, bool take_result)
     s->controls = JS_UNDEFINED;
     JS_FreeValue(ctx, s->entry_list);
     s->entry_list = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->dialog_subject);
+    s->dialog_subject = JS_UNDEFINED;
+    JS_FreeValue(ctx, s->dialog_result);
+    s->dialog_result = JS_UNDEFINED;
     STEP_CB_FOREACH(s->cb, k) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
     }
     form_entry_list_release(ctx, &s->entries);
     constraint_validation_release(ctx, &s->validation);
+    html_dialog_close_release(ctx, &s->closing);
     return JS_UNDEFINED;   /* both members return undefined whatever the handlers did */
 }
 
@@ -832,8 +1022,193 @@ static void submit_walk_end(JSContext *ctx, JSSubmitState *s, int next_stage)
     s->hdr.stage = (uint16_t)next_stage;
 }
 
+/* STEP 11'S RESULT, computed where step 11 computes it: "if submitter is an input element whose type attribute
+   is in the Image Button state, let (x, y) be the selected coordinate and set result to x, ',' and y;
+   otherwise, if submitter is a submit button, set result to submitter's OPTIONAL VALUE". §4.10.18.1's optional
+   value "largely mirrors the value but doesn't normalize to an empty string": for both `button` and
+   `input type=submit` it is the `value` content attribute's value if there is one, and NULL otherwise — which
+   is why `<button>` with no `value` closes the dialog without touching its `returnValue`.
+   The coordinate is (0, 0) for the reason §4.10.22.4 step 5.2 states once: §4.10.5.1.19 initialises it there and
+   only a user activating the control while selecting a point ever moves it. Answers JS_NULL or a string. */
+static JSValue submit_dialog_result(JSContext *ctx, JSValueConst submitter)
+{
+    lxb_dom_element_t *el = form_elem_of(submitter);
+    lxb_dom_node_t *n = node_of(submitter);
+    size_t vlen = 0;
+    const char *v;
+
+    if (!el) return JS_NULL;
+    if (html_form_input_state(n) == INPUT_STATE_IMAGE)
+        return JS_NewString(ctx, "0,0");                            /* step 11.4 */
+    if (!html_form_is_submit_button(ctx, submitter)) return JS_NULL;
+    /* Step 11.5, and PRESENCE decides it: the optional value is null only when there is no `value` attribute at
+       all, so `<button value="">` closes the dialog with the empty string and clears its `returnValue`, which
+       is a different outcome from `<button>` leaving the previous one standing. */
+    if (!has_attr(el, "value")) return JS_NULL;
+    v = attr_of(el, "value", &vlen);
+    return JS_NewStringLen(ctx, v ? v : "", v ? vlen : 0);
+}
+
+/* STEP 26'S CELL, performed: what this row puts into the parsed action before it plans to navigate. */
+static void submit_run_cell(JSContext *ctx, JSSubmitState *s, UrlRecord *parsed, int cell, int method,
+                            int enctype)
+{
+    FormBuf b = { 0 };
+
+    switch (cell) {
+    case CELL_MUTATE_ACTION_URL:
+        /* "Let pairs be … converting to a list of name-value pairs with entry list; let query be … the
+           urlencoded serializer with pairs and encoding; SET parsed action's query component to query." A
+           REPLACEMENT and not an append — a form whose action already carries one (`/search?v=2`) submits to
+           `/search?<the entries>`, and an append produces a URL with two `?` in it. */
+        fb_pairs(ctx, &b, s->entry_list);
+        url_member_set(parsed, URL_SEARCH, b.s ? b.s : "", b.n);
+        break;
+    case CELL_ENTITY_BODY:
+        DCHECK(method == FORM_METHOD_POST,
+               "§4.10.22.3's Submit as entity body asserts the method is POST, and the table only reaches it "
+               "from the POST column");
+        /* The cell leaves the URL alone and makes the entries the request's BODY. THEY GO IN THE URL ANYWAY,
+           and that is this engine's recording rather than a misreading of the cell: an @H record carries a
+           request's PARAMETERS and the method beside them, with no body field, because what a reviewer
+           reproduces from one is the parameters — and the recorded method plus the Content-Type header are
+           exactly what say whether they travel as a query or as a body. */
+        fb_pairs(ctx, &b, s->entry_list);
+        url_member_set(parsed, URL_SEARCH, b.s ? b.s : "", b.n);
+        break;
+    case CELL_GET_ACTION_URL:
+        break;   /* "Plan to navigate to parsed action. Entry list is discarded." */
+    case CELL_MAIL_WITH_HEADERS: {
+        /* "…let headers be the urlencoded serializer with pairs and encoding; REPLACE occurrences of U+002B
+           PLUS SIGN in headers with the string `%20`; set parsed action's query to headers." The replacement is
+           the whole point of the cell: a mailto: query is a HEADER LIST, and `+` in a header value is a plus
+           sign rather than the space the urlencoded form makes it. */
+        size_t i;
+
+        fb_pairs(ctx, &b, s->entry_list);
+        {
+            FormBuf h = { 0 };
+
+            for (i = 0; i < b.n; i++) {
+                if (b.s[i] == '+') fb_str(&h, "%20");
+                else fb_add(&h, b.s + i, 1);
+            }
+            url_member_set(parsed, URL_SEARCH, h.s ? h.s : "", h.n);
+            free(h.s);
+        }
+        break;
+    }
+    case CELL_MAIL_AS_BODY: {
+        /* "Switch on enctype: text/plain → body is the text/plain encoding algorithm over pairs, then UTF-8
+           PERCENT-ENCODE using the default encode set; otherwise → body is the urlencoded serializer. If parsed
+           action's query is null, set it to the empty string; if it is not the empty string, append `&`; append
+           `body=`; append body." The default encode set is the URL Standard's PATH percent-encode set, which is
+           the same anchor that definition carries. */
+        FormBuf q = { 0 };
+        char *existing = url_member_get(parsed, URL_SEARCH);
+        char *encoded = NULL;
+        const char *body;
+        size_t body_n;
+
+        if (enctype == FORM_ENCTYPE_TEXT) {
+            fb_text_plain(ctx, &b, s->entry_list);
+            encoded = url_percent_encode(b.s ? b.s : "", b.n, URL_SET_PATH);
+            CHECK(encoded != NULL, "form: OOM percent-encoding a mailto: body");
+            body = encoded;
+            body_n = strlen(encoded);
+        } else {
+            fb_pairs(ctx, &b, s->entry_list);
+            body = b.s ? b.s : "";
+            body_n = b.n;
+        }
+        /* url_member_get answers `search` the way the member reads it — with its leading `?` when there is a
+           query and the empty string when there is none — so the `?` is dropped here and the query the
+           standard is appending to is what remains. */
+        if (existing && existing[0] == '?') fb_str(&q, existing + 1);
+        if (q.n) fb_str(&q, "&");
+        fb_str(&q, "body=");
+        fb_add(&q, body, body_n);
+        url_member_set(parsed, URL_SEARCH, q.s ? q.s : "", q.n);
+        free(existing);
+        free(encoded);
+        free(q.s);
+        break;
+    }
+    default:
+        DFAIL("step 26 selected a cell §4.10.22.3's table does not have — the five behaviours below the table "
+              "are the whole of it, and a sixth means the table above grew a value with no arm here");
+    }
+    free(b.s);
+}
+
+/* §4.10.22.3's PLAN TO NAVIGATE, which every cell ends in, dispatched on the scheme that chose the row. */
+static void submit_plan_to_navigate(JSContext *ctx, JSSubmitState *s, UrlRecord *parsed, int method,
+                                    int enctype, lxb_dom_element_t *form)
+{
+    const char *scheme = parsed->scheme;
+    size_t tlen = 0;
+    const char *target;
+    char *serialized;
+
+    /* http/https: the ONE case in which the planned navigation is not performed — it is a REQUEST, and this
+       engine derives it from the forced-exec path instead of firing it (see this section's header). */
+    if (strcmp(scheme, "http") == 0 || strcmp(scheme, "https") == 0) {
+        form_record_request(ctx, parsed, method, enctype);
+        return;
+    }
+    /* `mailto:` and `ftp:` are HANDLED EXTERNALLY, so §7.11's navigate hands the URL off and the navigable
+       keeps the document it had. For `mailto:` that is what the two Mail cells exist to build a URL for — the
+       platform's mail client is what consumes it. For `ftp:` it is a UA DECISION the standard leaves open
+       ("handled using a mechanism that does not affect targetNavigable, e.g. because url's scheme is handled
+       externally"), and this engine takes it: nothing here fetches FTP, the host's chokepoint is HTTP, and
+       every shipping browser hands the scheme to the operating system. Neither is an endpoint, which is the
+       whole reason the rows are written out — an @H record for either would be a request the form never makes.
+       The target navigable does not enter into it: a hand-off affects no navigable, so there is nothing here
+       that steps 18-21 would decide. */
+    if (strcmp(scheme, "mailto") == 0 || strcmp(scheme, "ftp") == 0) {
+        form_hand_off_to_external(ctx, parsed);
+        return;
+    }
+    /* Everything below NAVIGATES a navigable, and steps 18-21 are what say WHICH — get an element's target,
+       get an element's noopener, then the rules for choosing a navigable. This engine does not run them,
+       because until now no row needed a navigable at all: the recording rows derive a request and the two
+       hand-offs affect none. `_self` and the empty string are the one target whose chosen navigable is the
+       form's own, which is this document, so that is the case the rows below can act in and the rest is named
+       as the work it is. */
+    target = form_element_target(ctx, s->submitter, form, node_of(s->hdr.this_val), &tlen);
+    if (strcmp(scheme, "javascript") == 0) {
+        if (!form_target_is_self(target, tlen))
+            DFAIL("a form submits to a `javascript:` action while naming another navigable in `target` or "
+                  "`formtarget` — §4.10.22.3 steps 18-21 choose that navigable and §7.4.2.3.2 evaluates the "
+                  "URL in ITS active document, under ITS settings object and API base URL; build steps 18-21 "
+                  "(get an element's target, get an element's noopener, the rules for choosing a navigable) "
+                  "and evaluate the URL in the navigable they choose");
+        serialized = url_serialize(parsed, /*exclude_fragment*/ false);
+        CHECK(serialized != NULL, "form: OOM serializing a javascript: action URL");
+        navigable_evaluate_javascript_url(ctx, serialized);
+        free(serialized);
+        return;
+    }
+    if (strcmp(scheme, "data") == 0)
+        DFAIL("a form submits to a `data:` action — §4.10.22.3 step 26 plans to navigate to it (the GET cell "
+              "having mutated its query first), and navigating to a data: URL builds a Document out of the "
+              "URL's OWN bytes with no network involved. §7.4's navigate can only load an address the HOST "
+              "fetches (navigable.c's js_nav_load_step asks `document.fetch\\t<url>`, which for a data: URL is "
+              "a GET of the literal text); build the data: URL processor and the navigate that takes a "
+              "RESPONSE THE ENGINE ALREADY HAS, then route this row through it");
+    /* The unlisted-scheme row took `Get action URL` above, which is a decision about the TABLE; what the
+       navigation then does is §7.11's business and depends on the scheme — `file:` and `blob:` load a
+       document, a registered `web+foo:` hands off — and nothing here knows which. */
+    DFAIL("a form submits to an action whose scheme §4.10.22.3's step 26 table does not list. The TABLE row is "
+          "decided — `Get action URL` in both columns, so the entry list is discarded and the parsed action is "
+          "navigated to unchanged (see submit_cell_for) — and what is missing is the navigation: §7.11's "
+          "navigate has to decide, per scheme, between loading a document and handing off to external "
+          "software, and this engine's navigate does neither for a scheme it has never seen");
+}
+
 /* Steps 10-26 over an entry list that exists: the method, the dialog branch, the action URL, and the row of
-   step 26's table the scheme and the method select. */
+   step 26's table the scheme and the method select. Answers a step code, because step 11 ends in §4.11.4's
+   close the dialog and that fires an event at the page. */
 static int submit_request(JSContext *ctx, JSSubmitState *s)
 {
     lxb_dom_element_t *form = form_elem_of(s->hdr.this_val);
@@ -842,20 +1217,44 @@ static int submit_request(JSContext *ctx, JSSubmitState *s)
     const char *action;
     size_t alen = 0;
     UrlRecord parsed, baserec;
-    int method, enctype;
+    int method, enctype, cell;
     bool have_base, ok;
 
     method = form_method_state(ctx, s->submitter, form);            /* step 10 */
     if (method == FORM_METHOD_DIALOG) {                             /* step 11 */
         for (a = n ? n->parent : NULL; a; a = a->parent)
-            if (tag_is(a, "dialog")) break;
+            if (html_dialog_is_dialog(a)) break;
         if (!a) return JS_STEP_DONE;                                /* step 11.1 */
-        DFAIL("a `method=dialog` form inside a dialog reached §4.10.22.3 step 11.6 — build §4.11.4's CLOSE THE "
-              "DIALOG (the dialog's return value, its `close` event and the open state it clears), which is "
-              "what this submission does instead of making a request");
-        return JS_STEP_DONE;
+        /* Steps 11.2-11.5, computed HERE and carried on this state — see the fields' own note for why neither
+           may be read back after §4.11.4 has run the page's `beforetoggle` handler. */
+        DCHECK(JS_IsUndefined(s->dialog_subject),
+               "step 11.2 ran twice in one submission — the subject is latched once and the stage that follows "
+               "it never returns here");
+        s->dialog_subject = node_wrap(ctx, a);                      /* step 11.2 */
+        s->dialog_result = submit_dialog_result(ctx, s->submitter); /* steps 11.3-11.5 */
+        s->hdr.stage = SUBMIT_DIALOG;                               /* step 11.6, and step 11.7's return */
+        return JS_STEP_YIELD;
     }
-    action = submitter_attr(ctx, s->submitter, form, "formaction", "action", &alen);   /* step 12 */
+    {
+        lxb_dom_element_t *from = NULL;
+        const char *aname = NULL;
+
+        action = submitter_attr_from(ctx, s->submitter, form, "formaction", "action", &alen,
+                                     &from, &aname);                                   /* step 12 */
+        /* THE ACTION IS A URL SINK WHEN THE PAGE'S OWN CODE WROTE IT. Step 26 plans to NAVIGATE to whatever
+           this attribute holds, and navigating to a `javascript:` URL executes it in this document — which is
+           the same sink `location = x` is, and the solver's URL-context breakout is exactly the `javascript:`
+           scheme. It is reported HERE and not inside the javascript: row below, because the row is chosen by
+           the scheme of the value the page HAPPENED to write and the attacker's candidate is the value that
+           would replace it: an action assigned from `location.hash` selects the `https` row today and the
+           `javascript` row under the breakout. An attribute carrying no taint is not a sink, and the solver
+           drops it — the taint is BORROWED, so nothing here frees it. */
+        if (from) {
+            JSValue taint = dom_cow_attr_taint(from, aname);
+
+            if (!JS_IsUndefined(taint)) solve_url_sink(ctx, taint);
+        }
+    }
     if (!action || !alen) {                                                            /* step 13 */
         action = base;
         alen = base ? strlen(base) : 0;
@@ -874,28 +1273,9 @@ static int submit_request(JSContext *ctx, JSSubmitState *s)
     }
     DCHECK(parsed.scheme != NULL, "the URL parser answered success with no scheme, which §4.4 cannot produce");
     enctype = form_enctype_state(ctx, s->submitter, form);          /* step 17 */
-    /* Step 26's table. `http` and `https` are the two rows whose cells BUILD a request — Mutate action URL for
-       GET, Submit as entity body for POST — and this engine derives that request rather than navigating with
-       it. Every other row navigates, and none of them is an endpoint. */
-    if (strcmp(parsed.scheme, "http") == 0 || strcmp(parsed.scheme, "https") == 0) {
-        form_record_request(ctx, &parsed, method, enctype, s->entry_list);
-    } else if (strcmp(parsed.scheme, "javascript") == 0) {
-        DFAIL("a form submits to a `javascript:` action — §4.10.22.3 step 26's Get action URL PLANS TO NAVIGATE "
-              "to it, and navigating to a javascript: URL EXECUTES it in the form's document; build §7.4's "
-              "navigate for this scheme (the entry list is discarded) rather than recording an endpoint");
-    } else if (strcmp(parsed.scheme, "mailto") == 0) {
-        DFAIL("a form submits to a `mailto:` action — §4.10.22.3 step 26's Mail with headers / Mail as body "
-              "build a mailto: URL out of the entry list and PLAN TO NAVIGATE to it, which hands it to the "
-              "platform's mail client; build that row, never an endpoint record");
-    } else if (strcmp(parsed.scheme, "ftp") == 0 || strcmp(parsed.scheme, "data") == 0) {
-        DFAIL("a form submits to an `ftp:` or `data:` action — §4.10.22.3 step 26's cells for those schemes "
-              "PLAN TO NAVIGATE (Get action URL discards the entry list; data:'s GET cell mutates the URL "
-              "first); build §7.4's navigate for them rather than recording an endpoint");
-    } else {
-        DFAIL("a form submits to an action whose scheme §4.10.22.3's step 26 table does not list — the standard "
-              "says to act analogously to a similar scheme, so decide WHICH row this scheme takes and state it "
-              "in that table rather than falling out of the algorithm");
-    }
+    cell = submit_cell_for(parsed.scheme, method);                  /* step 26's row and column */
+    submit_run_cell(ctx, s, &parsed, cell, method, enctype);
+    submit_plan_to_navigate(ctx, s, &parsed, method, enctype, form);
     url_record_free(&parsed);
     return JS_STEP_DONE;
 }
@@ -914,8 +1294,10 @@ static int js_submit_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         /* EVERY owned field before the first thing that can throw: the failure path tears this state down
            through js_submit_fini, which frees exactly what the state holds and nothing else. */
         s->ev = s->submitter = s->form = s->controls = s->entry_list = JS_UNDEFINED;
+        s->dialog_subject = s->dialog_result = JS_UNDEFINED;
         s->encoding = NULL;
         s->validation = NULL;
+        s->closing = NULL;
         s->i = 0;
         s->firing_set = 0;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
@@ -1065,8 +1447,17 @@ static int js_submit_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         if (form_cannot_navigate(ctx, s->hdr.this_val)) return JS_STEP_DONE;
         s->hdr.stage = SUBMIT_REQUEST;
     }
-    DCHECK(s->hdr.stage == SUBMIT_REQUEST, "a form submission resumed into a stage §4.10.22.3 does not have");
-    return submit_request(ctx, s);
+    if (s->hdr.stage == SUBMIT_REQUEST) return submit_request(ctx, s);
+    DCHECK(s->hdr.stage == SUBMIT_DIALOG, "a form submission resumed into a stage §4.10.22.3 does not have");
+    /* Step 11.6: "close the dialog subject with result and NULL" — the source is null because a form
+       submission is not an element-sourced close the way `requestClose()` is. §4.11.4 fires `beforetoggle` at
+       the dialog, so this is a sub-sequence that suspends, exactly like the entry list and the validation. */
+    r = html_dialog_close_run(ctx, &s->closing, s->dialog_subject, s->dialog_result, JS_NULL, cb_result,
+                              out_cb, out_argc);
+    if (r > 0) return r;
+    if (r < 0) return JS_STEP_ABRUPT;
+    html_dialog_close_release(ctx, &s->closing);
+    return JS_STEP_DONE;                                            /* step 11.7's return: no request is made */
 }
 
 static const JSTrampStepDef js_submit_def = {

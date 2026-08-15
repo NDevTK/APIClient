@@ -81,11 +81,13 @@ typedef struct Flow {
        replay re-executes side effects the flow already performed against a delta that already holds them. */
     int   last_compiled;   /* -1 until the flow compiles its first program */
     char **dyn; int dyn_n, dyn_cap;   /* this flow's OWN lazily-loaded chunk bodies (per-flow, not global) */
-    /* WHICH OF THOSE ARE @S CANDIDATES rather than the page's own script. A page script that does not compile is
-       a real problem and asserts; a CANDIDATE that does not compile is the ordinary case — most breakouts do not
-       fit most sink contexts, which is why the solver tries several and keeps the one that FIRES. CLAUDE.md
-       names it: an unsolved @S candidate is a parked search, never a @WHY. Kept as a parallel array so the
-       page-script assert stays fully armed inside a candidate flow, which still loads real chunks. */
+    /* WHAT KIND each of those programs is (a DynKind, engine.c). A page script that does not compile is a real
+       problem and asserts; the two other kinds are ORDINARY when they do not. An @S CANDIDATE that does not
+       compile is the common case — most breakouts do not fit most sink contexts, which is why the solver tries
+       several and keeps the one that FIRES, and CLAUDE.md names it: an unsolved @S candidate is a parked search,
+       never a @WHY. A `javascript:` URL that does not compile is HTML §7.4.2.3.2's abrupt evaluation, which
+       simply produces no Document. Kept as a parallel array so the page-script assert stays fully armed inside a
+       candidate flow, which still loads real chunks. */
     unsigned char *dyn_cand;
     void *delta;           /* this flow's isolated HEAP COW delta (CowDelta*), applied while running */
     void *dom; int dom_n, dom_cap;   /* this flow's isolated DOM COW delta HEAD buffer (dom_cow), swapped with the

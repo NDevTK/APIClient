@@ -24,6 +24,19 @@ void engine_queue_script(const char *body);
    to compile, because most breakouts do not fit most sink contexts and a candidate that does not parse simply
    never fires. A page script that does not compile still asserts. */
 void engine_queue_candidate(const char *body);
+/* A `javascript:` URL's SCRIPT SOURCE, queued as the program HTML §7.4.2.3.2's evaluate-a-javascript:-URL runs.
+   Same queue, and it is the same thing — code the page caused to run — but it differs from a page <script> at
+   both ends of that program's life, which is why it is its own entry point rather than a third caller of the
+   one above.
+     It is ALLOWED NOT TO COMPILE. "Create a classic script" with a syntax error produces a script whose
+   evaluation is an abrupt completion, which the caller turns into a null newDocument and a navigation that does
+   not happen — a page's `javascript:{{{` does nothing at all, where a <script> that will not parse is this
+   engine's own assert.
+     Its COMPLETION VALUE DECIDES A NAVIGATION. A <script>'s is unobservable; this one's is step 9's whole
+   condition — "if evaluationStatus.[[Value]] is a String", the Document is REPLACED by an HTML parse of that
+   string. The scheduler is the only place that value exists, so that is where the engine says it cannot yet act
+   on one. */
+void engine_queue_javascript_url(const char *body);
 /* Park the running flow on an injected <script src>: the host fetches it, and the reply becomes this flow's next
    program rather than a promise's value. */
 void engine_pending_script_url(JSContext *ctx, const char *url);
@@ -119,13 +132,36 @@ void engine_set_yield_floor(double floor);
    rendezvous is the returned id, never the request text: the answer is computed under the ASKING FLOW'S world,
    so two identical questions from two flows are two questions with two answers. */
 uint32_t engine_host_request(JSContext *ctx, const char *op);
-/* Has it been answered? BORROWED, so a machine re-entered before it is ready to consume may read it again. */
+/* Has it been answered? BORROWED, so a machine re-entered before it is ready to consume may read it again.
+   It answers about the ANSWER'S ARRIVAL and not about its completion type: a throw has arrived exactly as a
+   value has, and a machine that yielded until "answered" must be re-entered for either. */
 int      engine_host_answered(uint32_t req, JSValueConst *out);
-/* Take the answer; the request leaves the register. OWNED by the caller. */
-JSValue  engine_host_take(JSContext *ctx, uint32_t req);
+
+/* AN ANSWER IS A COMPLETION (ECMA-262 6.2.4), NOT A VALUE — and that is the whole reason these three
+ * signatures carry a type beside the value.
+ *
+ * A peer resolves a cross-instance operation by RUNNING A PROGRAM, and a program either returns or THROWS. A
+ * channel with a field for the value and none for its type delivers the peer's throw as `undefined`: the
+ * asking flow's `try { remote.x = 1 } catch (e) {}` never runs its handler, and the flow proceeds on a write
+ * that did not happen. So the type is a parameter of the delivery rather than a second entry point beside it —
+ * a host answering a request must decide which completion it is answering with, and cannot answer without
+ * saying. The THROWN VALUE is a value like any other and crosses by the same rules: an Error is an object, so
+ * it crosses as a NAME (remote_object.h) and the catch clause holds a reference to the peer's Error. */
+enum { ENGINE_COMPLETION_NORMAL, ENGINE_COMPLETION_THROW };
+
+/* Take the answer; the request leaves the register. The value is OWNED by the caller, and `*pcompletion` says
+   what it IS — a result, or a thrown value to re-raise. Required, because a taker that does not read the type
+   is a taker that delivers a throw as a value. */
+JSValue  engine_host_take(JSContext *ctx, uint32_t req, int *pcompletion);
+/* TAKE THE ANSWER AS THE COMPLETION IT IS, which is what every cross-instance step machine wants: a normal
+   completion's value is placed in `*presult` and the machine is DONE; a THROW is RE-RAISED in the asking flow
+   at the call site that parked on it, exactly as it would have been raised had the operation been local, and
+   the machine is ABRUPT. Returns JS_STEP_DONE or JS_STEP_ABRUPT (quickjs-step.h) — one place that knows a
+   peer's throw comes back as a throw, rather than that knowledge copied into each machine. */
+int      engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult);
 /* The host delivers. Routed by id to ONE call site — never broadcast the way a fetched body is. Returns 0 when
    the asking flow is gone, which is not an error: nobody is waiting. */
-int      engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value);
+int      engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int completion);
 /* What the host still owes, as `id<TAB>op` lines. Pulled each step, and deliberately NOT deduped. */
 const char *engine_host_requests(void);
 

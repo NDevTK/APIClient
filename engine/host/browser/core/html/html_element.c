@@ -40,6 +40,7 @@
 #include "core/dom/slot.h"
 #include "core/html/element_internals.h"
 #include "core/html/focus.h"
+#include "core/html/html_dialog.h"
 #include "core/html/html_element.h"
 #include "core/css/css_style_declaration.h"
 #include "core/html/form_data_event.h"
@@ -422,6 +423,11 @@ void html_element_init(JSContext *ctx)
     hyperlink_declare(ctx);
     iframe_declare(ctx);
     html_form_declare(ctx);
+    /* §4.11.4's dialog state and CLOSE THE DIALOG — declared here because its `returnValue` member goes on
+       HTMLDialogElement.prototype, which is what this file owns the table of, and because §4.10.22.3 step 11.6
+       (a `method=dialog` submission) is its caller. It comes AFTER html_form_declare for no ordering reason of
+       its own; §4.11 is simply the next section this file reaches. */
+    html_dialog_declare(ctx);
     /* §4.13.7 — declared here because `attachInternals` is an HTMLElement member, which is what this file
        owns the table of; the algorithms are element_internals.c's. */
     element_internals_declare(ctx);
@@ -556,6 +562,14 @@ void html_element_install_protos(JSContext *ctx)
         html_form_install(ctx, f, in, ta, op);
         JS_FreeValue(ctx, f); JS_FreeValue(ctx, in); JS_FreeValue(ctx, ta); JS_FreeValue(ctx, op);
     }
+
+    /* §4.11.4's `returnValue` goes on HTMLDialogElement and nowhere else, handed the prototype for the same
+       reason §4.10's members are: this file owns the table, that one owns the algorithm that writes it. */
+    {
+        JSValue dp = html_iface_proto(ctx, "HTMLDialogElement");
+        html_dialog_install(ctx, dp);
+        JS_FreeValue(ctx, dp);
+    }
 }
 
 void html_element_install(JSContext *ctx, JSValueConst global)
@@ -607,6 +621,7 @@ void html_element_free(JSContext *ctx)
     dom_string_map_free(ctx);
     declarative_shadow_free();
     html_form_free(ctx);
+    html_dialog_free(ctx);
     element_internals_free(ctx);
     if (g_dataset_key != JS_ATOM_NULL) { JS_FreeAtom(ctx, g_dataset_key); g_dataset_key = JS_ATOM_NULL; }
     /* the prototypes are the REALMS' — each is released with its context; the AGENT holds only class ids */

@@ -352,7 +352,18 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     JS_FreeCString(ctx, body);
     JS_FreeValue(ctx, cspv);
     JS_FreeValue(ctx, bodyv);
-    if (s->req) { JS_FreeValue(ctx, engine_host_take(ctx, s->req)); s->req = 0; }
+    if (s->req) {
+        /* §7.4 step 14's response is the HOST'S OWN — it fetched the bytes; it did not run a peer's program —
+           so a throw completion here is a host that answered a network request with something other than the
+           network's answer, not a document that threw. */
+        int completion = ENGINE_COMPLETION_NORMAL;
+        JSValue taken = engine_host_take(ctx, s->req, &completion);
+        DCHECK(completion == ENGINE_COMPLETION_NORMAL,
+               "a document load's fetch was answered with a THROW completion — this request is answered by the "
+               "trusted zone out of the network, and there is no program of a peer's for it to have thrown in");
+        JS_FreeValue(ctx, taken);
+        s->req = 0;
+    }
     JS_FreeCString(ctx, origin);
     JS_FreeCString(ctx, addr);
     return JS_STEP_DONE;
@@ -440,6 +451,38 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
     free(addr);
     free(origin);
     return JS_DupValue(ctx, proxy);
+}
+
+/* §7.4.2.3.2's EVALUATE A JAVASCRIPT: URL — see navigable.h for why it is not a load and not a fetch. */
+void navigable_evaluate_javascript_url(JSContext *ctx, const char *url)
+{
+    static const char SCHEME[] = "javascript:";
+    const char *encoded;
+    char *source;
+    size_t n = 0;
+
+    (void)ctx;
+    DCHECK(url != NULL, "evaluate a javascript: URL was handed no URL — step 1 serializes one that exists");
+    /* Steps 1-2: the URL serializer, then "remove the leading `javascript:` from urlString". The caller parsed
+       the URL, so the scheme is already decided and this asserts rather than re-deciding it — two answers to
+       "is this a javascript: URL" is exactly how a caller ends up running the wrong bytes. */
+    DCHECK(strncmp(url, SCHEME, sizeof SCHEME - 1) == 0,
+           "evaluate a javascript: URL was handed a URL of another scheme — step 2 removes a prefix that is "
+           "not there, and what would run is the whole URL");
+    encoded = url + (sizeof SCHEME - 1);
+    /* Step 3: "the UTF-8 decoding of the percent-decoding of encodedScriptSource". The percent-decode is the
+       URL Standard's; the UTF-8 decode is the identity over this engine's byte strings, which are UTF-8. */
+    source = url_percent_decode(encoded, strlen(encoded), &n);
+    CHECK(source != NULL, "navigable: OOM percent-decoding a javascript: URL's script source");
+    DCHECK(strlen(source) == n,
+           "a javascript: URL's script source percent-decoded to bytes containing a U+0000, and the program "
+           "queue holds a NUL-terminated body — build the queue over a length so a source with a NUL in it "
+           "runs whole rather than truncated at it");
+    /* Steps 4-7: the classic script is created with the target navigable's active document's settings and API
+       base URL — this document's, which is what makes this the same-navigable case the header names — and RUN.
+       Its completion value decides step 9, and the scheduler is the only place that value exists (engine.h). */
+    engine_queue_javascript_url(source);
+    free(source);
 }
 
 /* §7.1's RULES FOR CHOOSING A NAVIGABLE, for the four KEYWORD targets — the ones whose leading underscore says

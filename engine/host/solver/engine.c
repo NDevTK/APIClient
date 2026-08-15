@@ -1,6 +1,7 @@
 /* The dispatch loop — see engine.h. */
 #include "core/fetch/fetch.h"
 #include "solver/engine.h"
+#include "quickjs-step.h"   /* a host answer is TAKEN by a step machine, and a throw ends it JS_STEP_ABRUPT */
 #include "core/html/unhandled_rejection.h"
 #include "core/idl_args.h"   /* the one point every Web API member passes through — see idl_slowest_step */   /* HTML §8.1.7.5: what the browser half owes this checkpoint */
 #include "solver/result.h"
@@ -215,14 +216,26 @@ int engine_host_answered(uint32_t req, JSValueConst *out) {
 /* THE MACHINE TAKES ITS ANSWER and the request leaves the register. Separate from the read above because a
    machine may be re-entered several times before it is ready to consume, and taking it early would leave the
    next re-entry with nothing. */
-JSValue engine_host_take(JSContext *ctx, uint32_t req) {
+JSValue engine_host_take(JSContext *ctx, uint32_t req, int *pcompletion) {
     Flow *f = flow_running();
     JSValue v;
     DCHECK(f != NULL, "a host answer was taken outside a flow");
+    DCHECK(pcompletion != NULL,
+           "a host answer was taken without reading the COMPLETION TYPE it carries — an answer is a completion "
+           "record and a taker that reads only its value delivers a peer's THROW as `undefined` to the call "
+           "site that parked on it");
     for (int i = 0, n = pending_count(f->pending); i < n; i++) {
         JSValue e = pending_entry(f->pending, i);
         if ((uint32_t)pending_get_int(e, PEND_REQ) == req) {
+            JSValue c;
             DCHECK(pending_get_int(e, PEND_HAVE_VALUE), "a host answer was taken before it arrived");
+            /* THE TYPE AND THE VALUE ARE ONE WRITE (engine_host_answer), so an answered request with no type
+               is a delivery that went round this file — and reading it as a normal completion is exactly the
+               silent lie this field exists to make impossible. */
+            c = pending_get(e, PEND_COMPLETION);
+            DCHECK(JS_IsNumber(c), "an answered host request carries no completion type");
+            JS_FreeValue(ctx, c);
+            *pcompletion = (int)pending_get_int(e, PEND_COMPLETION);
             v = pending_get(e, PEND_VALUE);   /* the caller's reference; the register's goes with the entry */
             JS_FreeValue(ctx, e);
             pending_remove(&f->pending, i);
@@ -234,10 +247,32 @@ JSValue engine_host_take(JSContext *ctx, uint32_t req) {
     return JS_UNDEFINED;
 }
 
+int engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult) {
+    int completion = ENGINE_COMPLETION_NORMAL;
+    JSValue v = engine_host_take(ctx, req, &completion);
+
+    DCHECK(presult != NULL, "a host completion was taken with nowhere to place its value");
+    if (completion == ENGINE_COMPLETION_THROW) {
+        /* RE-RAISED AT THE CALL SITE THAT PARKED ON IT. The flow suspended inside the operation, so this is
+           where the peer's throw belongs — the page's own `try`/`catch` around the read, the write or the call
+           is the handler that runs, exactly as it would for a local one. JS_Throw consumes the value. */
+        *presult = JS_UNDEFINED;
+        JS_Throw(ctx, v);
+        return JS_STEP_ABRUPT;
+    }
+    DCHECK(completion == ENGINE_COMPLETION_NORMAL,
+           "a host answer arrived under a completion type ECMA-262 6.2.4 does not have — a cross-instance "
+           "operation completes normally or throws, and `return`/`break`/`continue` do not cross a call site");
+    *presult = v;
+    return JS_STEP_DONE;
+}
+
 /* Deliver the host's answer. Routed by id to ONE flow's ONE call site — never broadcast the way a fetched
    body is, because the answer was computed under that flow's world. */
-int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value) {
+int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int completion) {
     DCHECK(req != 0, "the host answered a request with no id");
+    DCHECK(completion == ENGINE_COMPLETION_NORMAL || completion == ENGINE_COMPLETION_THROW,
+           "the host answered a request with a completion type that is neither normal nor a throw");
     for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
         for (int i = 0, n = pending_count(f->pending); i < n; i++) {
             JSValue p = pending_entry(f->pending, i);
@@ -247,6 +282,7 @@ int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value) {
                    "the host answered one request twice — the second answer would overwrite a value the "
                    "asking machine may already have read");
             pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
+            pending_set(p, PEND_COMPLETION, JS_NewInt32(ctx, completion));
             pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
             JS_FreeValue(ctx, p);
             return 1;
@@ -793,7 +829,12 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
    body on the tramp chain now DFAILs in the engine (see branch_arm_fork) until the sound async-frame snapshot
    is built; there is no re-run fallback to hide that gap. */
 
-static void engine_queue(const char *body, int is_candidate) {
+/* WHAT KIND OF PROGRAM a queued body is. It is ONE queue because they are one thing — code the page caused to
+   run — and the kind decides exactly two questions, both of them at the ends of that program's life: may it
+   fail to COMPILE, and does anything read its COMPLETION VALUE. */
+typedef enum { DYN_PAGE_SCRIPT = 0, DYN_CANDIDATE, DYN_JAVASCRIPT_URL } DynKind;
+
+static void engine_queue(const char *body, DynKind kind) {
     Flow *f = flow_running();   /* the running flow owns the lazy chunk it loads */
     if (!body || !f) return;
     if (f->dyn_n >= f->dyn_cap) {
@@ -803,17 +844,32 @@ static void engine_queue(const char *body, int is_candidate) {
         CHECK(f->dyn && f->dyn_cand, "engine: OOM dynamic-script queue");
     }
     f->dyn[f->dyn_n] = strdup(body); CHECK(f->dyn[f->dyn_n], "engine: OOM dynamic-script body");
-    f->dyn_cand[f->dyn_n] = (unsigned char)(is_candidate != 0);
+    f->dyn_cand[f->dyn_n] = (unsigned char)kind;
     f->dyn_n++;
 }
 
-void engine_queue_script(const char *body) { engine_queue(body, 0); }
+/* WHICH KIND THE PROGRAM AT `script_i` IS, asked at the two places that need it — the compile and the resume.
+   It is RE-DERIVED from the cursor rather than latched in a field, because the cursor is what already says
+   which program is running and a second copy of that fact is a second copy that can be behind. */
+static DynKind flow_dyn_kind(const Flow *f, int n) {
+    if (f->script_i < n) return DYN_PAGE_SCRIPT;                    /* one of the document's own <script>s */
+    if (f->script_i - n >= f->dyn_n) return DYN_PAGE_SCRIPT;
+    return (DynKind)f->dyn_cand[f->script_i - n];
+}
+
+void engine_queue_script(const char *body) { engine_queue(body, DYN_PAGE_SCRIPT); }
 
 /* AN @S CANDIDATE, queued as the program it would be if it fired. It is the same queue because it IS the same
    thing — code the page caused to run — but it carries the one difference that matters: it is allowed not to
    compile. Most breakouts do not fit most sink contexts, which is exactly why the solver tries several and
    keeps whichever FIRES; a candidate that does not parse simply never fires. */
-void engine_queue_candidate(const char *body) { engine_queue(body, 1); }
+void engine_queue_candidate(const char *body) { engine_queue(body, DYN_CANDIDATE); }
+
+/* HTML §7.4.2.3.2's EVALUATE A JAVASCRIPT: URL, steps 6-7 — "let script be the result of creating a classic
+   script given scriptSource … let evaluationStatus be the result of running the classic script script". The
+   source is the page's own code, so it is a program of the running flow like a lazy chunk: preemptible,
+   forkable and parkable, which a C `JS_Eval` under the live flow could never be. */
+void engine_queue_javascript_url(const char *body) { engine_queue(body, DYN_JAVASCRIPT_URL); }
 
 /* Preempt hook, two orthogonal yield decisions at the one per-back-edge check:
    (1) VALUE yield — suspend the running flow the MOMENT a parked flow outranks it (the WFQ, not a clock,
@@ -987,7 +1043,8 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
         if (JS_ResumeParkedFlow(JS_GetRuntime(ctx))) return flow_blocked(f) ? FLOW_STEP_OWED : 0;
         if (!f->frame) {
             const char *body;
-            int is_cand = 0;   /* an @S candidate is allowed not to parse; a page script is not */
+            /* WHICH KIND the program about to be compiled is — only a page <script> must parse. */
+            DynKind kind = DYN_PAGE_SCRIPT;
             /* THE ROUTED DELIVERY THIS FLOW EXISTS TO MAKE, and it is first because it is the flow's reason to
                exist: the task it enqueues is what every branch below then finds on the queue. Consumed once —
                the record is freed and cleared — so a resumed delivery flow falls through to its jobs. */
@@ -1009,7 +1066,7 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                 }
             }
             else if (f->script_i - n < f->dyn_n) { body = f->dyn[f->script_i - n];
-                                                   is_cand = f->dyn_cand[f->script_i - n]; }
+                                                   kind = flow_dyn_kind(f, n); }
             else if (f->njob > 0) {
                 /* A JOB CAN PARK, and until now that park was invisible to the scheduler. A queued step machine
                    that suspends on a synchronous host request is parked by reaction_flow_step (JS_ParkFlow) and
@@ -1102,9 +1159,11 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                 CHECK(!oom, "the frontier could not hold another flow — this is the physical RAM floor, and the "
                             "cold tier that pages the lowest-value tail to disk is what carries past it");
                 /* AN @S CANDIDATE THAT DOES NOT PARSE is a dead candidate and nothing more — the search tries
-                   several breakouts per sink precisely because most do not fit most contexts. A PAGE script that
-                   does not compile is a different thing entirely and still asserts. */
-                DCHECK(is_cand, "flow_step: a page <script>/chunk did not compile");
+                   several breakouts per sink precisely because most do not fit most contexts. A `javascript:`
+                   URL that does not parse is HTML §7.4.2.3.2's abrupt evaluation, which produces no Document and
+                   no navigation — `<a href="javascript:{{{">` is a link that does nothing, not an engine bug. A
+                   PAGE script that does not compile is a different thing entirely and still asserts. */
+                DCHECK(kind != DYN_PAGE_SCRIPT, "flow_step: a page <script>/chunk did not compile");
                 JS_FreeValue(ctx, exc);
                 /* STEP OVER IT. Not advancing left the flow pointing at the same unparseable body, so the next
                    scheduler step compiled it again, and again — the flow could never finish and never made
@@ -1129,6 +1188,21 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                 result_page_error_value(ctx, e);
                 JS_FreeValue(ctx, e);
             }
+            /* ONE PROGRAM'S COMPLETION VALUE IS READ, AND IT DECIDES A NAVIGATION. HTML §7.4.2.3.2's
+               evaluate-a-javascript:-URL step 9: "if evaluationStatus is a normal completion, and
+               evaluationStatus.[[Value]] is a String, then set result to it" — and a non-null result becomes a
+               new Document, built from a synthesized `text/html` response whose body is that string, which
+               REPLACES the target navigable's active document. Every other completion is step 10's null, which
+               is the ordinary `javascript:doThing()` and is finished here.
+               This is the only place in the engine where that value exists, which is why the condition is
+               asked here rather than at the row that queued the program. */
+            if (r == 0 && JS_IsString(cv) && flow_dyn_kind(f, n) == DYN_JAVASCRIPT_URL)
+                DFAIL("a `javascript:` URL evaluated to a STRING — HTML §7.4.2.3.2 step 9 turns that into a new "
+                      "Document that REPLACES the target navigable's active document, built from a synthesized "
+                      "`text/html;charset=utf-8` response whose body is the string. §7.4's navigate can only "
+                      "load an address the host FETCHES (navigable.c's js_nav_load_step asks "
+                      "`document.fetch\\t<url>`), so build the navigate that takes a RESPONSE THE ENGINE ALREADY "
+                      "HAS and route this through it");
             JS_FreeValue(ctx, cv);
             if (r == 1) {
                 /* A MID-FRAME YIELD, and the one case where it is not "more work". A flow that suspended
