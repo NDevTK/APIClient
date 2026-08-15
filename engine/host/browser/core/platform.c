@@ -29,6 +29,7 @@
 #include "core/frame/navigable.h"
 #include "core/frame/navigator.h"
 #include "core/frame/remote_object.h"
+#include "core/frame/remote_op.h"
 #include "core/frame/screen.h"
 #include "core/frame/session_history.h"
 #include "core/frame/viewport.h"
@@ -106,6 +107,7 @@ static void d_event_loop(JSContext *c, const PlatformAgent *a) { (void)a; event_
 static void d_timer(JSContext *c, const PlatformAgent *a) { (void)a; timer_init(c); }
 static void d_window_proxy(JSContext *c, const PlatformAgent *a) { window_proxy_init(c, a->origin); }
 static void d_remote_object(JSContext *c, const PlatformAgent *a) { (void)a; remote_object_init(c); }
+static void d_remote_op(JSContext *c, const PlatformAgent *a) { (void)a; remote_op_init(c); }
 static void d_window_message(JSContext *c, const PlatformAgent *a) { (void)a; window_message_init(c); }
 static void d_broadcast_channel(JSContext *c, const PlatformAgent *a) { broadcast_channel_init(c, a->origin); }
 static void d_unhandled_rejection(JSContext *c, const PlatformAgent *a) { (void)a; unhandled_rejection_init(c); }
@@ -232,6 +234,10 @@ static const PlatformComponent PLATFORM[] = {
     { "timer",               d_timer,               i_timer },
     { "window_proxy",        d_window_proxy,        NULL },
     { "remote_object",       d_remote_object,       NULL },
+    /* The PEER's half of the same seam: what this agent does when it is ASKED to perform one. Its per-realm
+       install captures %Reflect.set%/%Reflect.apply%, so it declares before any component whose install could
+       run page code — which is none of them, and is why it sits beside the asking half rather than at the end. */
+    { "remote_op",           d_remote_op,           NULL },
     /* AFTER window_proxy: §9.4.4's `postMessage` is installed on the WindowProxy PROTOTYPE. */
     { "window_message",      d_window_message,      i_window_message },
     { "broadcast_channel",   d_broadcast_channel,   i_broadcast_channel },
