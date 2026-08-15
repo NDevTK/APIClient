@@ -30,13 +30,18 @@
 #include "core/dom/node.h"
 #include "core/realm.h"
 #include "core/idl_args.h"
+#include "solver/dom_cow.h"   /* dom_cow_note_created — a created node belongs to the flow's delta */
 
 /* PER REALM — §3.7. The node-type table names the CLASS; the prototype lives in its context slot. */
 static JSClassID g_frag_class;
 static int     g_ready;
 
-/* `constructor()` — §4.7. The fragment belongs to the document's memory, and is in no tree until the page puts
-   it in one, so there is nothing to capture: an uninserted node is flow-private. */
+/* `constructor()` — §4.7. There is nothing to CAPTURE, because being in no tree means nothing shared changed;
+   but the fragment belongs to the document's Lexbor memory, so the flow that made it must OWN it. Those are two
+   different statements and only the first one was here. A fragment is emptied by the insertion that consumes it
+   and never becomes reachable from the tree, so without the creation entry every one ever built stays in the
+   document's arena for the life of the instance — with no owner, and invisible to the runtime's gc_obj_list
+   walk, which only sees GC objects. */
 static JSValue js_frag_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
 {
     lxb_dom_node_t *root = document_root_node(ctx);
@@ -47,6 +52,7 @@ static JSValue js_frag_ctor(JSContext *ctx, JSValueConst new_target, int argc, J
     frag = lxb_dom_document_fragment_interface_create(root->owner_document);
     CHECK(frag != NULL, "DocumentFragment: the Lexbor fragment allocation failed — handing back a null the page "
                         "cannot tell from a node it never asked for is not an option");
+    dom_cow_note_created(lxb_dom_interface_node(frag));   /* this flow made it: the delta owns it */
     return node_wrap(ctx, lxb_dom_interface_node(frag));
 }
 

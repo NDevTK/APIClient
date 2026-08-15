@@ -397,6 +397,12 @@ static JSValue js_doc_create_fragment(JSContext *ctx, JSValueConst this_val, int
     DCHECK(n != NULL, "createDocumentFragment ran on something that is not the document");
     frag = lxb_dom_document_fragment_interface_create(n->owner_document);
     CHECK(frag != NULL, "createDocumentFragment: the Lexbor fragment allocation failed");
+    /* THIS FLOW MADE IT, exactly as its five siblings on this interface say of theirs. A fragment is detached
+       and that is not the question the entry answers: the node came out of the DOCUMENT's Lexbor arena, so a
+       flow that creates one and is then discarded — which is every flow, since a fragment is emptied by the
+       insertion that consumes it and never becomes reachable from the tree — leaves it in that arena with no
+       owner at all, invisible to the runtime's gc_obj_list walk because it is not a GC object. */
+    dom_cow_note_created(lxb_dom_interface_node(frag));
     return node_wrap(ctx, lxb_dom_interface_node(frag));
 }
 
