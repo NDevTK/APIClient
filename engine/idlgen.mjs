@@ -387,6 +387,20 @@ let totalMissing = 0;
    getBoundingClientRect is absent on every one of the twelve HTML interfaces that inherit it, and one
    implementation fixes all twelve. The per-interface list stays exact — it is what that interface's IDL says —
    and the headline says how many things there are to BUILD. */
+/* INTERFACES THIS ENGINE HAS NOT BUILT, each with the reason it is absent rather than merely the fact.
+ * The row above still names where the component WILL go, which is what makes the audit's belief checkable;
+ * this says the absence is intended and by whom it is named elsewhere, so a reader hitting the report is sent
+ * to the crash that already describes the gap instead of concluding the auditor is broken.
+ * Every entry is checked from BOTH sides at each run: an interface here whose component EXISTS is reported as
+ * a stale declaration, exactly as a member exclusion is. */
+const UNBUILT = {
+  IntersectionObserver: "no layout, so no intersection to compute — rendering.c's realm_awaits names it",
+  ResizeObserver:       "no layout, so no box to observe — rendering.c's realm_awaits names it",
+  PerformanceObserver:  "no performance timeline to observe — rendering.c's realm_awaits names it",
+  Notification:         "no notification surface; nothing in the tree constructs one",
+};
+const unbuiltSeen = [], unmapped = [], stale = [];
+
 const distinct = new Set();
 const unresolvedAll = new Map();
 for (const [iface, where] of Object.entries(INTERFACES)) {
@@ -397,7 +411,21 @@ for (const [iface, where] of Object.entries(INTERFACES)) {
     try { src += readFileSync(join(BROWSER, one), "utf8"); present.push(join(BROWSER, one)); }
     catch { missing.push(one); }
   }
-  if (missing.length === paths.length) { console.warn(`[idl-audit] ${iface}: component ${file} not found`); continue; }
+  if (missing.length === paths.length) {
+    /* AN INTERFACE WITH NO COMPONENT IS ACCOUNTED FOR, NOT SKIPPED. This warned once and `continue`d, so the
+       interface left the audit entirely: it appeared in no total, contributed no absent members, and read the
+       same whether it is deliberately unbuilt or whether the row names a path that was renamed under it. That
+       is the excluded-check shape one level up from the members — the very thing the two-sided
+       idl_members_excluded exists to prevent — so the same two sides apply here. */
+    if (UNBUILT[iface]) unbuiltSeen.push([iface, file, UNBUILT[iface]]);
+    else                unmapped.push([iface, file]);
+    continue;
+  }
+  if (UNBUILT[iface])
+    /* THE OTHER SIDE: the declaration says this interface has no component, and the component is right there.
+       A stale exemption reads as an intention and hides a real audit — the interface's members would be judged
+       against a file the row claims does not exist. */
+    stale.push([iface, present.join(", ")]);
   if (missing.length) console.warn(`[idl-audit] ${iface}: ${missing.join(", ")} not found — audited without it`);
   /* WHAT THIS INTERFACE HAS, from the install constructs and the interface each install TARGET is — see
      engine/idl_installed.mjs. Its own members plus everything it INHERITS, because a member on a base
@@ -480,6 +508,20 @@ for (const [iface, where] of Object.entries(INTERFACES)) {
 if (totalMissing)
   console.log(`[idl-audit] ${distinct.size} distinct spec members not yet implemented (${totalMissing} across ` +
               `all interfaces, since an inherited gap is absent on each) — implement each at the root, never a stub.`);
+/* THE INTERFACES THAT NEVER REACHED THE AUDIT, reported in the same breath as the members that did, because a
+   surface the run silently declined to look at is indistinguishable in the total from one it looked at and
+   found complete. The three lists are the three answers, and only the first is an acceptable steady state. */
+if (unbuiltSeen.length) {
+  console.log(`[idl-audit] ${unbuiltSeen.length} interface(s) declared unbuilt — no component, absence intended:`);
+  for (const [iface, file, why] of unbuiltSeen) console.log(`[idl-audit]   ${iface} (${file}) — ${why}`);
+}
+for (const [iface, file] of unmapped)
+  console.log(`[idl-audit] ${iface}: component ${file} not found and NOT declared unbuilt — either the row names ` +
+              `a path that moved (the audit for a shipping interface is silently not running) or the interface ` +
+              `is absent on purpose and belongs in UNBUILT with its reason.`);
+for (const [iface, files] of stale)
+  console.log(`[idl-audit] ${iface}: STALE UNBUILT declaration — it is declared to have no component and ${files} ` +
+              `exists. Remove the declaration so this interface is audited against the file that implements it.`);
 /* THE AUDIT'S GAP REPORT ON ITSELF. An install whose member name is decided at RUNTIME cannot be diffed against
    the IDL, and pretending either way is what this rewrite exists to stop: counted, it fills a gap that is open;
    dropped, it opens a gap that is filled. Named here with file and line, it is a work queue — make the name
