@@ -201,7 +201,7 @@ static int js_response_clone_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
         if (response_set(ctx, c, d->url, d->status, d->status_text, d->type, NULL, 0,
                          headers_list_of(d->headers), headers_guard_of(d->headers)) < 0)
             return -1;
-        hdr->stage = CL_BODY;
+        STEP_GOTO(hdr->stage, CL_BODY, &s->phase, NULL);
     }
 
     DCHECK(hdr->stage == CL_BODY, "Response.clone resumed in a stage §6.4 does not have");
@@ -211,7 +211,7 @@ static int js_response_clone_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
     r = body_clone_run(ctx, &s->phase, s->cb, 2, &c->body, &d->body, cb_result, out_cb, out_argc);
     if (r > 0) return r;
     if (r < 0) return -1;
-    hdr->stage = CL_DONE;
+    STEP_GOTO(hdr->stage, CL_DONE, &s->phase, NULL);
     *presult = s->obj;
     s->obj = JS_UNDEFINED;
     return 0;
@@ -408,7 +408,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
             JS_ThrowTypeError(ctx, "constructor Response requires 'new'");
             return -1;
         }
-        hdr->stage = entry == RESP_ENTRY_JSON ? RESP_SERIALIZE : RESP_INIT;
+        STEP_GOTO(hdr->stage, entry == RESP_ENTRY_JSON ? RESP_SERIALIZE : RESP_INIT, &s->cphase, NULL);
     }
 
     if (hdr->stage == RESP_SERIALIZE) {
@@ -433,7 +433,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
             JS_ThrowTypeError(ctx, "the value has no JSON representation");
             return -1;
         }
-        hdr->stage = RESP_INIT;
+        STEP_GOTO(hdr->stage, RESP_INIT, &s->cphase, NULL);
     }
 
     if (hdr->stage == RESP_INIT) {
@@ -485,7 +485,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
             if (r < 0) { JS_FreeValue(ctx, cb_result); return -1; }
         }
         headers_fill_init(&s->fill);
-        hdr->stage = RESP_HEADERS;
+        STEP_GOTO(hdr->stage, RESP_HEADERS, &s->cphase, NULL);
     }
 
     if (hdr->stage == RESP_HEADERS) {
@@ -503,7 +503,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
         JS_FreeValue(ctx, d->headers);
         d->headers = headers_new(ctx, &s->list, HEADERS_GUARD_RESPONSE);
         if (JS_IsException(d->headers)) return -1;
-        hdr->stage = RESP_BODY;
+        STEP_GOTO(hdr->stage, RESP_BODY, &s->cphase, NULL);
     }
 
     DCHECK(hdr->stage == RESP_BODY,

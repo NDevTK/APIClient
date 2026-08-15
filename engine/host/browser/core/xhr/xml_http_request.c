@@ -580,7 +580,7 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         d->state = XHR_OPENED;
         s->ev = event_new(ctx, "readystatechange", /*bubbles*/ false, /*cancelable*/ false);
         if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return JS_STEP_ABRUPT; }
-        hdr->stage = OPEN_FIRE;
+        STEP_GOTO(hdr->stage, OPEN_FIRE, &s->phase, NULL);
     }
 
     DCHECK(hdr->stage == OPEN_FIRE, "the open() machine resumed at a stage §3.5.1 does not have");
@@ -1732,7 +1732,7 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         if (m && (!strcmp(m, "GET") || !strcmp(m, "HEAD"))) body = JS_NULL;   /* step 3 */
         if (m) JS_FreeCString(ctx, m);
         s->body = JS_DupValue(ctx, body);
-        hdr->stage = SEND_BODY_STR;
+        STEP_GOTO(hdr->stage, SEND_BODY_STR, &s->phase, &hdr->get_phase, NULL);
     }
     if (hdr->stage == SEND_BODY_STR) {
         /* The union's USVString arm: a value that is not one of the interface arms is ToString'd, and that is
@@ -1749,7 +1749,7 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             JS_FreeValue(ctx, in);
         }
         in = JS_UNDEFINED;
-        hdr->stage = SEND_BODY;
+        STEP_GOTO(hdr->stage, SEND_BODY, &s->phase, &hdr->get_phase, NULL);
     }
     if (hdr->stage == SEND_BODY) {
         JS_FreeValue(ctx, in);
@@ -1776,7 +1776,7 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                 free(mime);
             }
         }
-        hdr->stage = SEND_FLAGS;
+        STEP_GOTO(hdr->stage, SEND_FLAGS, &s->phase, &hdr->get_phase, NULL);
     }
     if (hdr->stage == SEND_FLAGS) {
         JS_FreeValue(ctx, in);
@@ -1790,7 +1790,7 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         if (JS_IsNull(d->request_body)) d->upload_complete = 1;  /* step 9 */
         d->send_invoked = 1;                                     /* step 10 */
         s->body_len = JS_IsNull(d->request_body) ? 0 : s->body_len;
-        hdr->stage = d->synchronous ? SEND_RUN : SEND_LOADSTART;
+        STEP_GOTO(hdr->stage, d->synchronous ? SEND_RUN : SEND_LOADSTART, &s->phase, &hdr->get_phase, NULL);
     }
     if (hdr->stage == SEND_LOADSTART) {
         if (JS_IsUndefined(s->ev)) {
@@ -1804,7 +1804,7 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         if (r < 0) return -1;
         JS_FreeValue(ctx, s->ev);
         s->ev = JS_UNDEFINED;
-        hdr->stage = SEND_UPLOAD_LOADSTART;
+        STEP_GOTO(hdr->stage, SEND_UPLOAD_LOADSTART, &s->phase, &hdr->get_phase, NULL);
         /* Step 12.6: a listener that aborted or reopened stops the send here. */
         if (d->state != XHR_OPENED || !d->send_invoked) { *presult = JS_UNDEFINED; return 0; }
     }
@@ -1826,7 +1826,7 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             in = JS_UNDEFINED;
         }
         if (d->state != XHR_OPENED || !d->send_invoked) { *presult = JS_UNDEFINED; return 0; }
-        hdr->stage = SEND_RUN;
+        STEP_GOTO(hdr->stage, SEND_RUN, &s->phase, &hdr->get_phase, NULL);
     }
 
     DCHECK(hdr->stage == SEND_RUN, "the send() machine resumed at a stage §3.5.6 does not have");
@@ -1924,9 +1924,9 @@ static int js_xhr_abort_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
                    "parked inside it, so nothing in this agent can be the caller");
             s->fn = xhr_run_closure(ctx, hdr->this_val, XHR_MODE_ERROR, XHR_ERR_ABORT);
             if (JS_IsException(s->fn)) { s->fn = JS_UNDEFINED; return -1; }
-            hdr->stage = ABORT_ERROR;
+            STEP_GOTO(hdr->stage, ABORT_ERROR, &s->phase, NULL);
         } else {
-            hdr->stage = ABORT_RESET;
+            STEP_GOTO(hdr->stage, ABORT_RESET, &s->phase, NULL);
         }
     }
     if (hdr->stage == ABORT_ERROR) {
@@ -1936,7 +1936,7 @@ static int js_xhr_abort_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         if (r > 0) return r;
         if (JS_IsException(out)) return -1;
         JS_FreeValue(ctx, out);
-        hdr->stage = ABORT_RESET;
+        STEP_GOTO(hdr->stage, ABORT_RESET, &s->phase, NULL);
         in = JS_UNDEFINED;
     }
     DCHECK(hdr->stage == ABORT_RESET, "the abort() machine resumed at a stage §3.5.7 does not have");

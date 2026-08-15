@@ -316,8 +316,16 @@ static int js_mo_notify_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         if (s->reporting) {
             r = report_exception_run(ctx, &s->rep, s->exc, cb_result, out_cb, out_argc);
             cb_result = JS_UNDEFINED;
-            if (r > 0) { s->hdr.stage = MO_NOTIFY_REPORT; return r; }
+            if (r > 0) return r;
             s->reporting = 0;
+            /* BACK TO STEP 6.4, AND THE TRANSITION IS HERE RATHER THAN AT THE PARK. The stage used to be
+               assigned from inside the `r > 0` arms of both sub-sequences — after the request had parked, with
+               its cursor already at 1 — which is the shape STEP_GOTO refuses. It was harmless only because this
+               machine re-derives its position from `reporting` and `cur` on the way back in, so the resume
+               reached the call site it left; a machine that dispatched on the stage would have collected the
+               other sub-sequence's answer. Each transition is now taken where the two sub-sequences are both at
+               rest: entering a report is where the throw is caught, and leaving one is here. */
+            STEP_GOTO(s->hdr.stage, MO_NOTIFY_CALLBACK, &s->phase, NULL);
             JS_FreeValue(ctx, s->exc);
             s->exc = JS_UNDEFINED;
         }
@@ -333,7 +341,7 @@ static int js_mo_notify_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                     JS_FreeValue(ctx, s->notify);
                     s->notify = JS_UNDEFINED;
                     s->i = 0;
-                    s->hdr.stage = MO_NOTIFY_SLOTCHANGE;
+                    STEP_GOTO(s->hdr.stage, MO_NOTIFY_SLOTCHANGE, &s->phase, NULL);
                     r = slot_change_work_run(ctx, &s->slots, cb_result, out_cb, out_argc);
                     if (r > 0) return r;
                     return JS_STEP_DONE;
@@ -377,7 +385,7 @@ static int js_mo_notify_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                               out_cb, out_argc);
             JS_FreeValue(ctx, cbfn);
             cb_result = JS_UNDEFINED;
-            if (r > 0) { s->hdr.stage = MO_NOTIFY_CALLBACK; return JS_STEP_CALL; }
+            if (r > 0) return JS_STEP_CALL;
         }
         /* "and \"report\"": §4.3 invokes the callback with "report", so a callback that throws is reported and
            the walk goes on to the next observer. Without this one throwing callback would tear down the
@@ -386,6 +394,7 @@ static int js_mo_notify_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
             ignored = JS_UNDEFINED;
             s->exc = JS_GetException(ctx);
             s->reporting = 1;
+            STEP_GOTO(s->hdr.stage, MO_NOTIFY_REPORT, &s->phase, NULL);
         }
         JS_FreeValue(ctx, ignored);                 /* MutationCallback returns undefined; anything else is discarded */
         JS_FreeValue(ctx, s->cur);

@@ -803,14 +803,14 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
         switch (op) {
         case OP_START_OK:
             c->started = 1;
-            s->hdr.stage = S_ADVANCE;
+            STEP_GOTO(s->hdr.stage, S_ADVANCE, &s->w.phase, NULL);
             break;
         case OP_START_ERR:
             /* §5.4: a start that rejects errors the stream, even with nothing written. */
             c->started = 1;
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, step_arg(&s->hdr, 0));
-            s->hdr.stage = S_ERROR;
+            STEP_GOTO(s->hdr.stage, S_ERROR, &s->w.phase, NULL);
             break;
         case OP_WRITE_OK: {
             JSValue pair[2];
@@ -822,7 +822,7 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_UNDEFINED;
             s->w.settle = W_ONE;
-            s->hdr.stage = S_SETTLE;
+            STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             s->next = S_WRITE_DONE;
             break;
         }
@@ -838,7 +838,7 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_DupValue(ctx, s->w.err);
             s->w.settle = W_ONE;
-            s->hdr.stage = S_SETTLE;
+            STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             s->next = S_ERROR;
             break;
         }
@@ -852,7 +852,7 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_UNDEFINED;
             s->w.settle = W_ONE;
-            s->hdr.stage = S_SETTLE;
+            STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             s->next = S_CLOSE_DONE;
             break;
         }
@@ -868,20 +868,20 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_DupValue(ctx, s->w.err);
             s->w.settle = W_ONE;
-            s->hdr.stage = S_SETTLE;
+            STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             s->next = S_CLOSE_ERR2;
             break;
         }
         case OP_ABORT_OK:
             s->w.settle = W_ABORT_RES;
-            s->hdr.stage = S_SETTLE;
+            STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             s->next = S_ERR_CLOSE;
             break;
         case OP_ABORT_ERR:
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, step_arg(&s->hdr, 0));
             s->w.settle = W_ABORT_REJ;
-            s->hdr.stage = S_SETTLE;
+            STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             s->next = S_ERR_CLOSE;
             break;
 
@@ -893,7 +893,7 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             }
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_DupValue(ctx, step_arg(&s->hdr, 0));
-            s->hdr.stage = S_SIGNAL;
+            STEP_GOTO(s->hdr.stage, S_SIGNAL, &s->w.phase, NULL);
             break;
 
         case OP_WS_CLOSE: case OP_WR_CLOSE:
@@ -907,20 +907,20 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             if (JS_IsException(s->promise)) return JS_STEP_ABRUPT;
             /* §5.2 step 7: a writer waiting on backpressure is released by the close — nothing more is coming,
                so `ready` resolves rather than staying pending forever. */
-            s->hdr.stage = S_SETTLE;
+            STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             s->next = S_ADVANCE;
             s->w.settle = (!JS_IsUndefined(d->writer) && d->backpressure && d->state == WS_WRITABLE)
                         ? W_READY_RES : W_IDLE;
             /* §5.4's Close: the sentinel goes on the tail, so it is taken after every queued chunk. */
             wc_enqueue(ctx, c, JS_UNDEFINED, 0);
             c->close_queued = 1;
-            if (s->w.settle == W_IDLE) s->hdr.stage = S_ADVANCE;
+            if (s->w.settle == W_IDLE) STEP_GOTO(s->hdr.stage, S_ADVANCE, &s->w.phase, NULL);
             break;
 
         case OP_WR_WRITE:
             JS_FreeValue(ctx, s->chunk);
             s->chunk = JS_DupValue(ctx, step_arg(&s->hdr, 0));
-            s->hdr.stage = S_SIZE;
+            STEP_GOTO(s->hdr.stage, S_SIZE, &s->w.phase, NULL);
             break;
 
         case OP_WR_RELEASE:
@@ -930,7 +930,7 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_GetException(ctx);
             s->w.settle = W_READY_REJ;
-            s->hdr.stage = S_SETTLE;
+            STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             s->next = S_RELEASE;
             break;
 
@@ -939,7 +939,7 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             if (d->state != WS_WRITABLE) return JS_STEP_DONE;
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, step_arg(&s->hdr, 0));
-            s->hdr.stage = S_ERROR;
+            STEP_GOTO(s->hdr.stage, S_ERROR, &s->w.phase, NULL);
             break;
         }
     }
@@ -950,12 +950,12 @@ run:
 
     for (;;) {
         if (s->hdr.stage == S_SETTLE) {
-            if (s->w.settle == W_IDLE) { s->hdr.stage = s->next; continue; }
+            if (s->w.settle == W_IDLE) { STEP_GOTO(s->hdr.stage, s->next, &s->w.phase, NULL); continue; }
             r = ws_settle_run(ctx, &s->w, s->stream, cb_result, out_cb, out_argc);
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
             cb_result = JS_UNDEFINED;
-            s->hdr.stage = s->next;
+            STEP_GOTO(s->hdr.stage, s->next, &s->w.phase, NULL);
         }
 
         if (s->hdr.stage == S_SIGNAL) {
@@ -963,12 +963,15 @@ run:
                operation, as a request — it runs the signal's abort algorithms and then fires `abort` at it, and
                both of those run code, which is why the state the stream is in is re-read in the next stage
                rather than remembered across this one. */
-            if (!c || JS_IsUndefined(c->signal)) { s->hdr.stage = S_ABORT_SETUP; continue; }
+            if (!c || JS_IsUndefined(c->signal)) {
+                STEP_GOTO(s->hdr.stage, S_ABORT_SETUP, &s->w.phase, NULL);
+                continue;
+            }
             r = abort_signal_run(ctx, &s->sig, c->signal, s->w.value, cb_result, out_cb, out_argc);
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
             cb_result = JS_UNDEFINED;
-            s->hdr.stage = S_ABORT_SETUP;
+            STEP_GOTO(s->hdr.stage, S_ABORT_SETUP, &s->w.phase, NULL);
         }
 
         if (s->hdr.stage == S_ABORT_SETUP) {
@@ -980,7 +983,7 @@ run:
                 /* §5.2 step 5: a second abort() answers the FIRST one's promise. */
                 JS_FreeValue(ctx, s->promise);
                 s->promise = JS_DupValue(ctx, d->abort_p);
-                s->hdr.stage = S_DONE;
+                STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL);
                 continue;
             }
             d->abort_was_erroring = (d->state == WS_ERRORING);
@@ -991,10 +994,10 @@ run:
             if (JS_IsException(d->abort_p)) return JS_STEP_ABRUPT;
             d->abort_pending = 1;
             s->promise = JS_DupValue(ctx, d->abort_p);
-            if (d->abort_was_erroring) { s->hdr.stage = S_DONE; continue; }
+            if (d->abort_was_erroring) { STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL); continue; }
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, s->w.value);
-            s->hdr.stage = S_ERROR;
+            STEP_GOTO(s->hdr.stage, S_ERROR, &s->w.phase, NULL);
         }
 
         if (s->hdr.stage == S_SIZE) {
@@ -1002,7 +1005,7 @@ run:
                not propagate, and the state checks below are what then reject this write. */
             if (JS_IsUndefined(c->size_fn)) {
                 s->size = 1;
-                s->hdr.stage = S_WRITE_QUEUE;
+                STEP_GOTO(s->hdr.stage, S_WRITE_QUEUE, &s->w.phase, NULL);
             } else {
                 JSValueConst arg = s->chunk;
                 r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), c->size_fn, JS_UNDEFINED, 1, &arg, cb_result,
@@ -1013,13 +1016,13 @@ run:
                 if (JS_IsException(out)) {
                     JS_FreeValue(ctx, s->w.err);
                     s->w.err = JS_GetException(ctx);
-                    s->hdr.stage = d->state == WS_WRITABLE ? S_ERROR : S_WRITE_QUEUE;
+                    STEP_GOTO(s->hdr.stage, d->state == WS_WRITABLE ? S_ERROR : S_WRITE_QUEUE, &s->w.phase, NULL);
                     s->tail = S_WRITE_QUEUE;
                     continue;
                 }
                 if (JS_ToFloat64(ctx, &s->size, out) < 0) JS_FreeValue(ctx, JS_GetException(ctx));
                 JS_FreeValue(ctx, out);
-                s->hdr.stage = S_WRITE_QUEUE;
+                STEP_GOTO(s->hdr.stage, S_WRITE_QUEUE, &s->w.phase, NULL);
             }
         }
 
@@ -1048,12 +1051,12 @@ run:
                 JS_ThrowRangeError(ctx, "a queuing strategy's size must be a finite, non-negative number");
                 JS_FreeValue(ctx, s->w.err);
                 s->w.err = JS_GetException(ctx);
-                s->hdr.stage = S_ERROR;
+                STEP_GOTO(s->hdr.stage, S_ERROR, &s->w.phase, NULL);
                 continue;
             }
             wc_enqueue(ctx, c, s->chunk, s->size);
             s->w.settle = ws_update_backpressure(ctx, d, c);
-            s->hdr.stage = S_SETTLE;
+            STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             s->next = S_ADVANCE;
             continue;
         }
@@ -1068,47 +1071,50 @@ run:
                    its own thrown error was an abort request. */
                 ws_start_erroring(ctx, d, s->w.err);
                 s->w.settle = W_READY_REJ;
-                s->hdr.stage = S_SETTLE;
+                STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
                 s->next = S_FINISH_ERR;
                 continue;
             }
-            s->hdr.stage = S_FINISH_ERR;
+            STEP_GOTO(s->hdr.stage, S_FINISH_ERR, &s->w.phase, NULL);
         }
 
         if (s->hdr.stage == S_FINISH_ERR) {
             /* §5.2's FinishErroring runs only when NOTHING is in flight: the sink is still busy otherwise, and
                reporting the stream errored while the page's own write promise is pending is exactly the
                reordering the erroring state exists to prevent. */
-            if (d->state != WS_ERRORING || ws_in_flight(d) || !c->started) { s->hdr.stage = s->tail; continue; }
+            if (d->state != WS_ERRORING || ws_in_flight(d) || !c->started) {
+                STEP_GOTO(s->hdr.stage, s->tail, &s->w.phase, NULL);
+                continue;
+            }
             d->state = WS_ERRORED;
             wc_reset_queue(ctx, c);
-            s->hdr.stage = S_ERR_WRITES;
+            STEP_GOTO(s->hdr.stage, S_ERR_WRITES, &s->w.phase, NULL);
         }
 
         if (s->hdr.stage == S_ERR_WRITES) {
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, d->stored_error);
             s->w.settle = W_REJECT_WRITES;
-            s->hdr.stage = S_SETTLE;
+            STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             s->next = S_ERR_ABORT;
             continue;
         }
 
         if (s->hdr.stage == S_ERR_ABORT) {
-            if (!d->abort_pending) { s->hdr.stage = S_ERR_CLOSE; continue; }
+            if (!d->abort_pending) { STEP_GOTO(s->hdr.stage, S_ERR_CLOSE, &s->w.phase, NULL); continue; }
             if (d->abort_was_erroring) {
                 /* §5.2 step 10: an abort that arrived while the stream was already failing rejects with the
                    stream's own reason rather than getting the sink asked a second time. */
                 JS_FreeValue(ctx, s->w.err);
                 s->w.err = JS_DupValue(ctx, d->stored_error);
                 s->w.settle = W_ABORT_REJ;
-                s->hdr.stage = S_SETTLE;
+                STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
                 s->next = S_ERR_CLOSE;
                 continue;
             }
             if (JS_IsUndefined(c->abort_fn)) {
                 s->w.settle = W_ABORT_RES;
-                s->hdr.stage = S_SETTLE;
+                STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
                 s->next = S_ERR_CLOSE;
                 continue;
             }
@@ -1129,17 +1135,20 @@ run:
                     s->w.value = out;
                     s->reject = 0;
                 }
-                s->hdr.stage = S_SINK_REACT;
+                STEP_GOTO(s->hdr.stage, S_SINK_REACT, &s->w.phase, NULL);
                 continue;
             }
         }
 
         if (s->hdr.stage == S_ERR_CLOSE) {
-            if (JS_IsUndefined(d->close_request[0])) { s->hdr.stage = S_ERR_CLOSED; continue; }
+            if (JS_IsUndefined(d->close_request[0])) {
+                STEP_GOTO(s->hdr.stage, S_ERR_CLOSED, &s->w.phase, NULL);
+                continue;
+            }
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, d->stored_error);
             s->w.settle = W_CLOSE_REQ_REJ;
-            s->hdr.stage = S_SETTLE;
+            STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             s->next = S_ERR_CLOSED;
             continue;
         }
@@ -1148,16 +1157,16 @@ run:
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, d->stored_error);
             s->w.settle = W_CLOSED_REJ;
-            s->hdr.stage = S_SETTLE;
+            STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             s->next = s->tail;
             continue;
         }
 
         if (s->hdr.stage == S_ADVANCE) {
             /* §5.4's AdvanceQueueIfNeeded. */
-            if (!c->started || ws_in_flight(d)) { s->hdr.stage = s->tail; continue; }
-            if (d->state == WS_ERRORING) { s->hdr.stage = S_FINISH_ERR; continue; }
-            if (wc_queued(ctx, c) == 0) { s->hdr.stage = s->tail; continue; }
+            if (!c->started || ws_in_flight(d)) { STEP_GOTO(s->hdr.stage, s->tail, &s->w.phase, NULL); continue; }
+            if (d->state == WS_ERRORING) { STEP_GOTO(s->hdr.stage, S_FINISH_ERR, &s->w.phase, NULL); continue; }
+            if (wc_queued(ctx, c) == 0) { STEP_GOTO(s->hdr.stage, s->tail, &s->w.phase, NULL); continue; }
             if (c->close_queued && wc_queued(ctx, c) == 1) {
                 /* §5.4's ProcessClose: the sentinel is taken and dequeued at once. */
                 JSValue pair[2];
@@ -1166,7 +1175,7 @@ run:
                 ws_take_pair(d->close_request, pair);
                 d->in_flight_close[0] = pair[0];
                 d->in_flight_close[1] = pair[1];
-                s->hdr.stage = S_SINK_CLOSE;
+                STEP_GOTO(s->hdr.stage, S_SINK_CLOSE, &s->w.phase, NULL);
             } else {
                 /* §5.4's ProcessWrite PEEKS: the chunk stays on the queue while the write is in flight, so
                    `desiredSize` still counts it, and the fulfilment is what dequeues. */
@@ -1177,7 +1186,7 @@ run:
                 DCHECK(!JS_IsUndefined(pair[0]), "§5.4 advanced onto a chunk with no write request behind it");
                 d->in_flight_write[0] = pair[0];
                 d->in_flight_write[1] = pair[1];
-                s->hdr.stage = S_SINK_WRITE;
+                STEP_GOTO(s->hdr.stage, S_SINK_WRITE, &s->w.phase, NULL);
             }
         }
 
@@ -1209,7 +1218,7 @@ run:
                 s->w.value = out;
                 s->reject = 0;
             }
-            s->hdr.stage = S_SINK_REACT;
+            STEP_GOTO(s->hdr.stage, S_SINK_REACT, &s->w.phase, NULL);
         }
 
         if (s->hdr.stage == S_SINK_REACT) {
@@ -1225,7 +1234,7 @@ run:
             s->w.func = JS_UNDEFINED;
             s->is_close = 0;
             if (r < 0) return JS_STEP_ABRUPT;
-            s->hdr.stage = S_DONE;
+            STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL);
             continue;
         }
 
@@ -1234,7 +1243,7 @@ run:
             wc_dequeue(ctx, c);
             s->w.settle = (!ws_close_queued_or_in_flight(d) && d->state == WS_WRITABLE)
                         ? ws_update_backpressure(ctx, d, c) : W_IDLE;
-            s->hdr.stage = S_SETTLE;
+            STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             s->next = S_ADVANCE;
             continue;
         }
@@ -1247,18 +1256,18 @@ run:
                 d->stored_error = JS_UNDEFINED;
                 if (d->abort_pending) {
                     s->w.settle = W_ABORT_RES;
-                    s->hdr.stage = S_SETTLE;
+                    STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
                     s->next = S_CLOSE_DONE2;
                     continue;
                 }
             }
-            s->hdr.stage = S_CLOSE_DONE2;
+            STEP_GOTO(s->hdr.stage, S_CLOSE_DONE2, &s->w.phase, NULL);
         }
 
         if (s->hdr.stage == S_CLOSE_DONE2) {
             d->state = WS_CLOSED;
             s->w.settle = W_CLOSED_RES;
-            s->hdr.stage = S_SETTLE;
+            STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             s->next = S_DONE;
             continue;
         }
@@ -1268,11 +1277,11 @@ run:
                what the close was serving. */
             if (d->abort_pending) {
                 s->w.settle = W_ABORT_REJ;
-                s->hdr.stage = S_SETTLE;
+                STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
                 s->next = S_ERROR;
                 continue;
             }
-            s->hdr.stage = S_ERROR;
+            STEP_GOTO(s->hdr.stage, S_ERROR, &s->w.phase, NULL);
             continue;
         }
 
@@ -1283,7 +1292,7 @@ run:
                stage that decides what to do next by reading a variable the step before it has just reset is a
                dead branch that reads like a live one. */
             s->w.settle = W_CLOSED_REJ;
-            s->hdr.stage = S_SETTLE;
+            STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             s->next = S_RELEASE2;
             continue;
         }
@@ -1295,7 +1304,7 @@ run:
             d->writer = JS_UNDEFINED;
             JS_FreeValue(ctx, wr->stream);
             wr->stream = JS_UNDEFINED;
-            s->hdr.stage = S_DONE;
+            STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL);
             continue;
         }
 
@@ -1615,7 +1624,7 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             JS_ThrowTypeError(ctx, "the underlying sink must be an object");
             return -1;
         }
-        hdr->stage = WSC_PROTO;
+        STEP_GOTO(hdr->stage, WSC_PROTO, &s->w.phase, &hdr->get_phase, NULL);
     }
 
     if (hdr->stage == WSC_PROTO) {
@@ -1629,7 +1638,7 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         if (r > 0) return r;
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
-        hdr->stage = JS_IsObject(sink) ? WSC_READ : WSC_BUILD;
+        STEP_GOTO(hdr->stage, JS_IsObject(sink) ? WSC_READ : WSC_BUILD, &s->w.phase, &hdr->get_phase, NULL);
     }
 
     while (hdr->stage == WSC_READ) {
@@ -1646,7 +1655,7 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                 stream_callback_member(ctx, s->snk[SNK_START], "sink", "start") < 0 ||
                 stream_callback_member(ctx, s->snk[SNK_WRITE], "sink", "write") < 0)
                 return -1;
-            hdr->stage = WSC_BUILD;
+            STEP_GOTO(hdr->stage, WSC_BUILD, &s->w.phase, &hdr->get_phase, NULL);
             break;
         }
         a = JS_NewAtom(ctx, SNK_NAMES[s->member]);
@@ -1698,7 +1707,8 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         c->sink = JS_DupValue(ctx, sink);
         s->start_fn = s->snk[SNK_START];  s->snk[SNK_START] = JS_UNDEFINED;
         s->w.value = JS_UNDEFINED;
-        hdr->stage = JS_IsFunction(ctx, s->start_fn) ? WSC_CALL : WSC_RESOLVE;
+        STEP_GOTO(hdr->stage, JS_IsFunction(ctx, s->start_fn) ? WSC_CALL : WSC_RESOLVE, &s->w.phase,
+                  &hdr->get_phase, NULL);
     }
 
     if (hdr->stage == WSC_CALL) {
@@ -1712,14 +1722,14 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         JS_FreeValue(ctx, s->w.value);
         s->w.value = res;
         cb_result = JS_UNDEFINED;
-        hdr->stage = WSC_RESOLVE;
+        STEP_GOTO(hdr->stage, WSC_RESOLVE, &s->w.phase, &hdr->get_phase, NULL);
     }
     if (hdr->stage == WSC_RESOLVE) {
         r = stream_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
-        hdr->stage = WSC_THEN;
+        STEP_GOTO(hdr->stage, WSC_THEN, &s->w.phase, &hdr->get_phase, NULL);
     }
 
     DCHECK(hdr->stage == WSC_THEN,

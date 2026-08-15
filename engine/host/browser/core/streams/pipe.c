@@ -268,24 +268,6 @@ static JSValue js_pipe_fini(JSContext *ctx, void *st, bool take_result)
     return r;
 }
 
-/* LEAVING A STAGE WITH A CALL STILL IN FLIGHT IS THE BUG THIS ASSERT EXISTS FOR.
- *
- * A request is two-phase: the stage that issues it is re-entered with `phase == 1` and MUST reach the same
- * step_call_run to collect the result. A stage that re-evaluates its decision on the way back in can decide
- * differently — the shutdown's close action did exactly that, because issuing the close is what made
- * `WritableStreamCloseQueuedOrInFlight` true, so the resume took the "already closing" branch and walked away
- * from its own call. The phase byte stayed 1, the NEXT stage's request read it as a resume, and
- * `writer.releaseLock()` was never called at all: the pipe fulfilled with the destination still locked.
- *
- * The rule that prevents it is structural: a stage's DECISION is made once, at phase 0, and a stage that holds
- * a call does nothing but hold it. Every transition goes through here so that violating it aborts at the
- * transition rather than three stages later in a request that silently answered without asking. */
-static void pipe_goto(JSPipeState *s, int stage)
-{
-    DCHECK(s->w.phase == 0, "a §4.2.4 stage was left with a call still in flight");
-    s->hdr.stage = (uint16_t)stage;
-}
-
 /* Attach one reaction pair to `promise`, both entries re-entering this machine with the record. */
 static int pipe_react(JSContext *ctx, JSValueConst promise, int ok_op, int err_op, JSValueConst pipe)
 {
@@ -302,7 +284,7 @@ static int pipe_short(JSContext *ctx, JSPipeState *s, int reject, JSValue value)
     JS_FreeValue(ctx, s->w.value);
     s->w.value = value;
     s->reject = (uint8_t)reject;
-    pipe_goto(s, S_RESULT);
+    STEP_GOTO(s->hdr.stage, S_RESULT, &s->w.phase, NULL);
     return 0;
 }
 
@@ -313,7 +295,7 @@ static void pipe_begin_shutdown(JSContext *ctx, JSPipeState *s, PipeData *p, int
 {
     if (p->shutting_down) {
         JS_FreeValue(ctx, error);
-        pipe_goto(s, S_DONE);
+        STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL);
         return;
     }
     p->shutting_down = 1;
@@ -321,7 +303,7 @@ static void pipe_begin_shutdown(JSContext *ctx, JSPipeState *s, PipeData *p, int
     p->action = (uint8_t)action;
     JS_FreeValue(ctx, p->error);
     p->error = error;
-    pipe_goto(s, S_SHUTDOWN);
+    STEP_GOTO(s->hdr.stage, S_SHUTDOWN, &s->w.phase, NULL);
 }
 
 /* §4.2.4's two SOURCE-side rules, applied from the one place both reach — whether at once or after the read
@@ -367,24 +349,24 @@ static int js_pipe_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
             case OP_READY_OK:
                 /* backpressure has cleared: read the next chunk — unless the pipe is already stopping, in
                    which case the loop simply ends here and shutdown owns what happens next. */
-                pipe_goto(s, p->shutting_down ? S_DONE : S_READ);
+                STEP_GOTO(s->hdr.stage, p->shutting_down ? S_DONE : S_READ, &s->w.phase, NULL);
                 break;
             case OP_READ_ERR:
                 /* a rejected read means the SOURCE failed, which its `closed` watcher reports — this only ends
                    the loop. The read is delivered either way, so a rule held behind it may now run. */
                 p->read_pending = 0;
-                pipe_goto(s, p->deferred_op ? S_DEFERRED : S_DONE);
+                STEP_GOTO(s->hdr.stage, p->deferred_op ? S_DEFERRED : S_DONE, &s->w.phase, NULL);
                 break;
             case OP_READY_ERR:
                 /* THE LOOP STOPS AND REPORTS NOTHING. A rejected `ready` means the destination failed and a
                    rejected read means the source did; each of those has its own watcher on the matching
                    `closed` promise, and that watcher is what the spec makes responsible for the shutdown.
                    Reporting it here as well would settle the pipe twice over. */
-                pipe_goto(s, S_DONE);
+                STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL);
                 break;
             case OP_READ_OK:
                 p->read_pending = 0;
-                pipe_goto(s, S_READ_DONE);
+                STEP_GOTO(s->hdr.stage, S_READ_DONE, &s->w.phase, NULL);
                 break;
             case OP_WRITE_SETTLED:
                 DCHECK(p->writes > 0, "a §4.2.4 write settled that was never counted as outstanding");
@@ -396,9 +378,9 @@ static int js_pipe_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                    released. Naming the stages made it visible; nothing about the numbers could. */
                 if (p->waiting_writes && p->writes == 0) {
                     p->waiting_writes = 0;
-                    pipe_goto(s, S_ACT_PICK);
+                    STEP_GOTO(s->hdr.stage, S_ACT_PICK, &s->w.phase, NULL);
                 } else {
-                    pipe_goto(s, S_DONE);
+                    STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL);
                 }
                 break;
             case OP_SRC_ERRORED:
@@ -410,7 +392,7 @@ static int js_pipe_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                     p->deferred_op = (uint8_t)op;
                     JS_FreeValue(ctx, p->deferred_err);
                     p->deferred_err = JS_DupValue(ctx, s->value);
-                    pipe_goto(s, S_DONE);
+                    STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL);
                     break;
                 }
                 pipe_apply_source_rule(ctx, s, p, op, s->value);
@@ -440,7 +422,7 @@ static int js_pipe_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                         JS_FreeValue(ctx, p->error);
                         p->error = JS_DupValue(ctx, s->value);
                     }
-                    pipe_goto(s, S_FINALIZE);
+                    STEP_GOTO(s->hdr.stage, S_FINALIZE, &s->w.phase, NULL);
                     break;
                 }
                 /* THE SIGNAL'S COMPOUND IS A Promise.all, so it answers only when BOTH have settled and it
@@ -453,14 +435,14 @@ static int js_pipe_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                     JS_FreeValue(ctx, p->acts_error);
                     p->acts_error = JS_DupValue(ctx, s->value);
                 }
-                if (p->acts_pending) { pipe_goto(s, S_DONE); break; }
+                if (p->acts_pending) { STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL); break; }
                 if (p->acts_failed) {
                     p->is_error = 1;
                     JS_FreeValue(ctx, p->error);
                     p->error = p->acts_error;
                     p->acts_error = JS_UNDEFINED;
                 }
-                pipe_goto(s, S_FINALIZE);
+                STEP_GOTO(s->hdr.stage, S_FINALIZE, &s->w.phase, NULL);
                 break;
             }
             default: {
@@ -483,7 +465,7 @@ static int js_pipe_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
             if (pipe_short(ctx, s, 1, JS_GetException(ctx)) < 0) return JS_STEP_ABRUPT;
             goto run;
         }
-        pipe_goto(s, s->through ? S_TRANSFORM : S_OPT);
+        STEP_GOTO(s->hdr.stage, s->through ? S_TRANSFORM : S_OPT, &s->w.phase, NULL);
     }
 
 run:
@@ -534,7 +516,7 @@ run:
                 s->member++;
             }
             s->member = 0;
-            pipe_goto(s, S_OPT);
+            STEP_GOTO(s->hdr.stage, S_OPT, &s->w.phase, NULL);
             continue;
 
         case S_OPT: {
@@ -583,7 +565,7 @@ run:
                 }
                 s->member++;
             }
-            pipe_goto(s, S_LOCKS);
+            STEP_GOTO(s->hdr.stage, S_LOCKS, &s->w.phase, NULL);
         opt_done:
             continue;
         }
@@ -612,7 +594,7 @@ run:
             p->prevent[OPT_CLOSE] = s->prevent[OPT_CLOSE];
             p->promise = JS_NewPromiseCapability(ctx, p->funcs);
             if (JS_IsException(p->promise)) return JS_STEP_ABRUPT;
-            pipe_goto(s, S_ACQ_READER);
+            STEP_GOTO(s->hdr.stage, S_ACQ_READER, &s->w.phase, NULL);
             continue;
         }
 
@@ -625,7 +607,7 @@ run:
             cb_result = JS_UNDEFINED;
             if (JS_IsException(out)) return JS_STEP_ABRUPT;
             p->reader = out;
-            pipe_goto(s, S_ACQ_WRITER);
+            STEP_GOTO(s->hdr.stage, S_ACQ_WRITER, &s->w.phase, NULL);
             continue;
         }
 
@@ -640,7 +622,7 @@ run:
             cb_result = JS_UNDEFINED;
             if (JS_IsException(out)) return JS_STEP_ABRUPT;
             p->writer = out;
-            pipe_goto(s, S_WIRE);
+            STEP_GOTO(s->hdr.stage, S_WIRE, &s->w.phase, NULL);
             continue;
 
         case S_WIRE: {
@@ -705,7 +687,7 @@ run:
                 pipe_begin_shutdown(ctx, s, p, 1, err, p->prevent[OPT_CANCEL] ? ACT_NONE : ACT_CANCEL_SOURCE);
                 continue;
             }
-            pipe_goto(s, S_LOOP);
+            STEP_GOTO(s->hdr.stage, S_LOOP, &s->w.phase, NULL);
             continue;
         }
 
@@ -713,12 +695,12 @@ run:
             /* ONE TURN OF THE LOOP IS ONE REACTION. Waiting on the writer's `ready` IS waiting for the
                destination's backpressure to clear, which is the whole of the flow control. */
             JSValue ready;
-            if (p->shutting_down) { pipe_goto(s, S_DONE); continue; }
+            if (p->shutting_down) { STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL); continue; }
             ready = writable_writer_ready(ctx, p->writer);
             r = pipe_react(ctx, ready, OP_READY_OK, OP_READY_ERR, s->pipe);
             JS_FreeValue(ctx, ready);
             if (r < 0) return JS_STEP_ABRUPT;
-            pipe_goto(s, S_DONE);
+            STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL);
             continue;
         }
 
@@ -734,7 +716,7 @@ run:
             JS_FreeValue(ctx, out);
             if (r < 0) return JS_STEP_ABRUPT;
             p->read_pending = 1;
-            pipe_goto(s, S_DONE);
+            STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL);
             continue;
         }
 
@@ -754,12 +736,12 @@ run:
             if (done) {
                 /* the close-forward rule owns what happens next, through the reader's `closed` watcher */
                 JS_FreeValue(ctx, chunk);
-                pipe_goto(s, p->deferred_op ? S_DEFERRED : S_DONE);
+                STEP_GOTO(s->hdr.stage, p->deferred_op ? S_DEFERRED : S_DONE, &s->w.phase, NULL);
                 continue;
             }
             JS_FreeValue(ctx, s->w.value);
             s->w.value = chunk;
-            pipe_goto(s, S_WRITE);
+            STEP_GOTO(s->hdr.stage, S_WRITE, &s->w.phase, NULL);
             continue;
         }
 
@@ -783,7 +765,7 @@ run:
             if (r < 0) return JS_STEP_ABRUPT;
             /* THE WRITE IS ISSUED BEFORE THE HELD RULE RUNS, which is the whole point of holding it: the
                destination now has the chunk, so the shutdown's wait-for-writes covers it. */
-            pipe_goto(s, p->deferred_op ? S_DEFERRED : S_LOOP);
+            STEP_GOTO(s->hdr.stage, p->deferred_op ? S_DEFERRED : S_LOOP, &s->w.phase, NULL);
             continue;
         }
 
@@ -806,24 +788,24 @@ run:
             writable_stream_query(p->dest, &ds, NULL, &close_queued);
             if (ds == WS_WRITABLE && !close_queued && p->writes > 0) {
                 p->waiting_writes = 1;
-                pipe_goto(s, S_DONE);
+                STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL);
                 continue;
             }
-            pipe_goto(s, S_ACT_PICK);
+            STEP_GOTO(s->hdr.stage, S_ACT_PICK, &s->w.phase, NULL);
             continue;
         }
 
         case S_ACT_PICK: {
             /* WHICH operation this shutdown performs, decided ONCE. Nothing here calls anything, which is what
                makes it safe to branch on state the calls below will change. */
-            if (p->action == ACT_NONE) { pipe_goto(s, S_FINALIZE); continue; }
+            if (p->action == ACT_NONE) { STEP_GOTO(s->hdr.stage, S_FINALIZE, &s->w.phase, NULL); continue; }
             if (p->action == ACT_SIGNAL) {
                 p->acts_pending = 0;
                 p->acts_failed = 0;
                 JS_FreeValue(ctx, p->acts_error);
                 p->acts_error = JS_UNDEFINED;
                 s->member = 0;
-                pipe_goto(s, S_SIG_PICK);
+                STEP_GOTO(s->hdr.stage, S_SIG_PICK, &s->w.phase, NULL);
                 continue;
             }
             JS_FreeValue(ctx, s->act_fn);
@@ -846,19 +828,22 @@ run:
                 DCHECK(p->action == ACT_CLOSE_DEST, "a §4.2.4 shutdown carried an action this file does not have");
                 s->act_fn = s->act_recv = JS_UNDEFINED;
                 writable_stream_query(p->dest, &ds, NULL, &close_queued);
-                if (close_queued || ds == WS_CLOSED) { pipe_goto(s, S_FINALIZE); continue; }
+                if (close_queued || ds == WS_CLOSED) {
+                    STEP_GOTO(s->hdr.stage, S_FINALIZE, &s->w.phase, NULL);
+                    continue;
+                }
                 if (ds == WS_ERRORED) {
                     p->is_error = 1;
                     JS_FreeValue(ctx, p->error);
                     p->error = writable_stream_stored_error(ctx, p->dest);
-                    pipe_goto(s, S_FINALIZE);
+                    STEP_GOTO(s->hdr.stage, S_FINALIZE, &s->w.phase, NULL);
                     continue;
                 }
                 s->act_fn = writable_stream_op(ctx, WS_OP_CLOSE);
                 s->act_recv = JS_DupValue(ctx, p->writer);
                 s->act_argc = 0;
             }
-            pipe_goto(s, S_ACTION);
+            STEP_GOTO(s->hdr.stage, S_ACTION, &s->w.phase, NULL);
             continue;
         }
 
@@ -872,7 +857,7 @@ run:
             r = pipe_react(ctx, out, OP_ACT_OK, OP_ACT_ERR, s->pipe);
             JS_FreeValue(ctx, out);
             if (r < 0) return JS_STEP_ABRUPT;
-            pipe_goto(s, S_DONE);
+            STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL);
             continue;
         }
 
@@ -885,7 +870,7 @@ run:
             bool run_it;
             if (s->member >= 2) {
                 /* Neither ran — Promise.all of nothing fulfils at once. */
-                pipe_goto(s, p->acts_pending ? S_DONE : S_FINALIZE);
+                STEP_GOTO(s->hdr.stage, p->acts_pending ? S_DONE : S_FINALIZE, &s->w.phase, NULL);
                 continue;
             }
             JS_FreeValue(ctx, s->act_fn);
@@ -905,7 +890,7 @@ run:
             }
             s->act_argc = 1;
             if (!run_it) { s->member++; continue; }
-            pipe_goto(s, S_SIG_CALL);
+            STEP_GOTO(s->hdr.stage, S_SIG_CALL, &s->w.phase, NULL);
             continue;
         }
 
@@ -921,7 +906,7 @@ run:
             JS_FreeValue(ctx, out);
             if (r < 0) return JS_STEP_ABRUPT;
             s->member++;
-            pipe_goto(s, S_SIG_PICK);
+            STEP_GOTO(s->hdr.stage, S_SIG_PICK, &s->w.phase, NULL);
             continue;
         }
 
@@ -937,7 +922,7 @@ run:
             cb_result = JS_UNDEFINED;
             if (JS_IsException(out)) return JS_STEP_ABRUPT;
             JS_FreeValue(ctx, out);
-            pipe_goto(s, S_REL_READER);
+            STEP_GOTO(s->hdr.stage, S_REL_READER, &s->w.phase, NULL);
             continue;
 
         case S_REL_READER: {
@@ -955,7 +940,7 @@ run:
             s->w.value = p->is_error ? JS_DupValue(ctx, p->error) : JS_UNDEFINED;
             JS_FreeValue(ctx, s->w.func);
             s->w.func = JS_DupValue(ctx, p->funcs[p->is_error]);
-            pipe_goto(s, S_SETTLE);
+            STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             continue;
         }
 
@@ -967,7 +952,7 @@ run:
             cb_result = JS_UNDEFINED;
             if (JS_IsException(out)) return JS_STEP_ABRUPT;
             JS_FreeValue(ctx, out);
-            pipe_goto(s, S_DONE);
+            STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL);
             continue;
         }
 
@@ -979,7 +964,7 @@ run:
             cb_result = JS_UNDEFINED;
             if (JS_IsException(out)) return JS_STEP_ABRUPT;
             JS_FreeValue(ctx, out);
-            pipe_goto(s, S_DONE);
+            STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL);
             continue;
         }
 

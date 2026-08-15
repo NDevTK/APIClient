@@ -164,7 +164,7 @@ static int sm_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         }
         s->func = funcs[reject];
         JS_FreeValue(ctx, funcs[reject ^ 1]);
-        hdr->stage = SM_SETTLE;
+        STEP_GOTO(hdr->stage, SM_SETTLE, &s->cphase, NULL);
     }
 
     DCHECK(hdr->stage == SM_SETTLE, "getDirectory() resumed into a stage §3 does not have");

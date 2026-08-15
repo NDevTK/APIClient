@@ -674,7 +674,7 @@ static int js_ei_validity_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
             s->answer = 1;
             return JS_STEP_DONE;
         }
-        s->hdr.stage = EIV_FIRE;
+        STEP_GOTO(s->hdr.stage, EIV_FIRE, &s->fphase, NULL);
     }
     DCHECK(s->hdr.stage == EIV_FIRE, "check/report validity resumed into a stage §4.10.21.1 does not have");
     if (JS_IsUndefined(s->ev))

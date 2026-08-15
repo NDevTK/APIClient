@@ -995,7 +995,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                 s->kind = FA_NAVIGABLE;
                 s->target = JS_DupValue(ctx, document_window_proxy(ctx));
                 s->allow_win = JS_DupValue(ctx, document_window_proxy(ctx));
-                hdr->stage = FOC_ALLOW;
+                STEP_GOTO(hdr->stage, FOC_ALLOW, &s->fphase, &s->ua_phase, NULL);
                 continue;
             }
             if (magic == FOCUS_VIEWPORT) {
@@ -1011,7 +1011,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                        "for §6.6.4's focusing steps to be given");
                 s->kind = FA_VIEWPORT;
                 s->target = JS_DupValue(ctx, document_object(ctx));
-                hdr->stage = FOC_AREA;
+                STEP_GOTO(hdr->stage, FOC_AREA, &s->fphase, &s->ua_phase, NULL);
                 continue;
             }
             if (magic == FOCUS_AUTOFOCUS) {
@@ -1039,7 +1039,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                        "top-level traversable, so this is the ordinary case and not the exotic one)");
                 s->kind = FA_ELEMENT;
                 s->target = JS_DupValue(ctx, argv[0]);
-                hdr->stage = FOC_AREA;
+                STEP_GOTO(hdr->stage, FOC_AREA, &s->fphase, &s->ua_phase, NULL);
                 continue;
             }
             /* WEB IDL §3.7.5's brand check — a TypeError, not an assert, because
@@ -1052,7 +1052,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
             s->kind = FA_ELEMENT;
             s->target = JS_DupValue(ctx, hdr->this_val);
             if (magic == FOCUS_EL_BLUR) {
-                hdr->stage = FOC_UNFOCUS;
+                STEP_GOTO(hdr->stage, FOC_UNFOCUS, &s->fphase, &s->ua_phase, NULL);
                 continue;
             }
             DCHECK(magic == FOCUS_EL_FOCUS,
@@ -1088,7 +1088,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
             doc = n->owner_document ? document_active_realm_of(lxb_dom_interface_node(n->owner_document)) : NULL;
             if (!doc) return 0;
             s->allow_win = JS_DupValue(ctx, document_window_proxy(doc));
-            hdr->stage = FOC_ALLOW;
+            STEP_GOTO(hdr->stage, FOC_ALLOW, &s->fphase, &s->ua_phase, NULL);
             continue;
         }
 
@@ -1109,7 +1109,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
             r = focus_allow_focus_steps_run(doc, hdr, &s->ua_phase, &allowed);
             if (r) return r;
             if (!allowed) return 0;
-            hdr->stage = FOC_AREA;
+            STEP_GOTO(hdr->stage, FOC_AREA, &s->fphase, &s->ua_phase, NULL);
             continue;
         }
 
@@ -1179,7 +1179,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                 s->target = last;
                 s->kind = FA_VIEWPORT;
                 s->old_n = 0;   /* the focusing steps build their own chains from the current state */
-                hdr->stage = FOC_AREA;
+                STEP_GOTO(hdr->stage, FOC_AREA, &s->fphase, &s->ua_phase, NULL);
                 continue;
             }
         }
@@ -1220,7 +1220,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                 JS_FreeValue(ctx, focused);
                 if (already) return 0;
             }
-            hdr->stage = FOC_CHAINS;
+            STEP_GOTO(hdr->stage, FOC_CHAINS, &s->fphase, &s->ua_phase, NULL);
             continue;
         }
 
@@ -1252,7 +1252,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
             }
             s->i = 0;
             s->j = 0;
-            hdr->stage = FOC_CHANGE;
+            STEP_GOTO(hdr->stage, FOC_CHANGE, &s->fphase, &s->ua_phase, NULL);
             continue;
         }
 
@@ -1263,8 +1263,8 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                not (no browser fires `change` for one either). So no old-chain entry meets it and no `change`
                is fired; the stage still exists because the day an input device is modelled, this is where its
                uncommitted edit is committed. */
-            if (s->i >= s->old_n) { hdr->stage = FOC_FOCUS; continue; }
-            hdr->stage = FOC_BLUR;
+            if (s->i >= s->old_n) { STEP_GOTO(hdr->stage, FOC_FOCUS, &s->fphase, &s->ua_phase, NULL); continue; }
+            STEP_GOTO(hdr->stage, FOC_BLUR, &s->fphase, &s->ua_phase, NULL);
             continue;
         }
 
@@ -1279,9 +1279,9 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
             tgt = chain_event_target(kind, entry);
             if (!JS_IsObject(tgt)) {
                 JS_FreeValue(ctx, entry);
-                if (blur) { hdr->stage = FOC_FOCUSOUT; continue; }
+                if (blur) { STEP_GOTO(hdr->stage, FOC_FOCUSOUT, &s->fphase, &s->ua_phase, NULL); continue; }
                 s->i++;
-                hdr->stage = FOC_CHANGE;
+                STEP_GOTO(hdr->stage, FOC_CHANGE, &s->fphase, &s->ua_phase, NULL);
                 return JS_STEP_YIELD;   /* one chain entry per step */
             }
             if (JS_IsUndefined(s->ev)) {
@@ -1300,9 +1300,9 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
             JS_FreeValue(ctx, s->ev);
             s->ev = JS_UNDEFINED;
             s->fphase = 0;
-            if (blur) { hdr->stage = FOC_FOCUSOUT; continue; }
+            if (blur) { STEP_GOTO(hdr->stage, FOC_FOCUSOUT, &s->fphase, &s->ua_phase, NULL); continue; }
             s->i++;
-            hdr->stage = FOC_CHANGE;
+            STEP_GOTO(hdr->stage, FOC_CHANGE, &s->fphase, &s->ua_phase, NULL);
             continue;
         }
 
@@ -1343,7 +1343,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
             tgt = chain_event_target(kind, entry);
             if (!JS_IsObject(tgt)) {
                 JS_FreeValue(ctx, entry);
-                if (focus) { hdr->stage = FOC_FOCUSIN; continue; }
+                if (focus) { STEP_GOTO(hdr->stage, FOC_FOCUSIN, &s->fphase, &s->ua_phase, NULL); continue; }
                 s->j++;
                 return JS_STEP_YIELD;   /* one chain entry per step */
             }
@@ -1363,7 +1363,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
             JS_FreeValue(ctx, s->ev);
             s->ev = JS_UNDEFINED;
             s->fphase = 0;
-            if (focus) { hdr->stage = FOC_FOCUSIN; continue; }
+            if (focus) { STEP_GOTO(hdr->stage, FOC_FOCUSIN, &s->fphase, &s->ua_phase, NULL); continue; }
             s->j++;
             continue;
         }

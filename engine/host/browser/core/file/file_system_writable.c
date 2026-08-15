@@ -782,7 +782,7 @@ static int fwm_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         if (r > 0) return r;
         if (JS_IsException(s->writer)) return -1;
         cb_result = JS_UNDEFINED;
-        hdr->stage = FWM_WRITE;
+        STEP_GOTO(hdr->stage, FWM_WRITE, &s->cphase, NULL);
     }
 
     if (hdr->stage == FWM_WRITE) {
@@ -802,7 +802,7 @@ static int fwm_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         if (r > 0) return r;
         if (JS_IsException(s->result)) return -1;
         cb_result = JS_UNDEFINED;
-        hdr->stage = FWM_RELEASE;
+        STEP_GOTO(hdr->stage, FWM_RELEASE, &s->cphase, NULL);
     }
 
     DCHECK(hdr->stage == FWM_RELEASE, "a §2.5 convenience method resumed into a stage it does not have");

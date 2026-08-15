@@ -185,7 +185,7 @@ static int js_dialog_toggle_step(JSContext *ctx, void *st, JSValue cb_result, JS
             s->ev = JS_UNDEFINED;
             return JS_STEP_ABRUPT;
         }
-        s->hdr.stage = DT_FIRE;
+        STEP_GOTO(s->hdr.stage, DT_FIRE, &s->fphase, NULL);
     }
     DCHECK(s->hdr.stage == DT_FIRE, "the dialog toggle task resumed at a stage §4.11.4 does not have");
     r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), element, s->ev, JS_UNDEFINED, cb_result,

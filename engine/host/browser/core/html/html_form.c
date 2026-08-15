@@ -1353,12 +1353,12 @@ static int js_submit_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
            skips the validity walk, the validation and the event entirely — so that entry point's next stage is
            the entry list. */
         if (s->hdr.arg == SUBMIT_FROM_METHOD) {
-            s->hdr.stage = SUBMIT_ENTRIES;
+            STEP_GOTO(s->hdr.stage, SUBMIT_ENTRIES, &s->fphase, NULL);
         } else {
             if (form_firing_events(ctx, s->hdr.this_val)) return JS_STEP_DONE;            /* step 5.1 */
             form_firing_set(ctx, s->hdr.this_val, true);                                  /* step 5.2 */
             s->firing_set = 1;
-            s->hdr.stage = SUBMIT_VALIDITY;
+            STEP_GOTO(s->hdr.stage, SUBMIT_VALIDITY, &s->fphase, NULL);
         }
     }
     if (s->hdr.stage == SUBMIT_VALIDITY) {
@@ -1385,7 +1385,7 @@ static int js_submit_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
            of what this step decides and why the validation is not advisory. §4.10.21.2 fires an `invalid` event
            at every unsatisfied control, so it is a sub-sequence that suspends, exactly like the entry list. */
         if (form_no_validate(ctx, s->submitter, form_elem_of(s->hdr.this_val))) {
-            s->hdr.stage = SUBMIT_FIRE;
+            STEP_GOTO(s->hdr.stage, SUBMIT_FIRE, &s->fphase, NULL);
         } else {
             bool positive = false;
 
@@ -1396,7 +1396,7 @@ static int js_submit_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
             if (r < 0) return JS_STEP_ABRUPT;
             constraint_validation_release(ctx, &s->validation);
             if (!positive) return JS_STEP_DONE;
-            s->hdr.stage = SUBMIT_FIRE;
+            STEP_GOTO(s->hdr.stage, SUBMIT_FIRE, &s->fphase, NULL);
         }
     }
     if (s->hdr.stage == SUBMIT_FIRE) {
@@ -1427,7 +1427,7 @@ static int js_submit_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         if (!not_canceled) return JS_STEP_DONE;                                           /* step 5.8 */
         /* Step 5.9: cannot navigate is asked AGAIN, because a handler had the document in its hands. */
         if (form_cannot_navigate(ctx, s->hdr.this_val)) return JS_STEP_DONE;
-        s->hdr.stage = SUBMIT_ENTRIES;
+        STEP_GOTO(s->hdr.stage, SUBMIT_ENTRIES, &s->fphase, NULL);
     }
     if (s->hdr.stage == SUBMIT_ENTRIES) {
         JSValue list = JS_UNDEFINED;
@@ -1445,7 +1445,7 @@ static int js_submit_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         s->entry_list = list;
         /* Step 9: cannot navigate a THIRD time, because the `formdata` handler had the document too. */
         if (form_cannot_navigate(ctx, s->hdr.this_val)) return JS_STEP_DONE;
-        s->hdr.stage = SUBMIT_REQUEST;
+        STEP_GOTO(s->hdr.stage, SUBMIT_REQUEST, &s->fphase, NULL);
     }
     if (s->hdr.stage == SUBMIT_REQUEST) return submit_request(ctx, s);
     DCHECK(s->hdr.stage == SUBMIT_DIALOG, "a form submission resumed into a stage §4.10.22.3 does not have");

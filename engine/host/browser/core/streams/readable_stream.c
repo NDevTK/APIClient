@@ -916,7 +916,7 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
             JS_ThrowTypeError(ctx, "not a ReadableStreamDefaultReader");
             return JS_STEP_ABRUPT;
         }
-        s->hdr.stage = RD_SETTLE;
+        STEP_GOTO(s->hdr.stage, RD_SETTLE, &s->w.phase, NULL);
         if (JS_IsUndefined(rd->stream)) {
             /* §4.3: a released reader's read() REJECTS rather than throwing — it is a promise-returning
                member, and a page's `.catch` is where it expects to see this. */
@@ -960,10 +960,10 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                    actually closes it — a page that calls close() with chunks still queued must see every one
                    of them before `done`. Otherwise the drain is what makes room, so the source is pulled. */
                 if (drained) {
-                    s->hdr.stage = RD_CLOSE;
+                    STEP_GOTO(s->hdr.stage, RD_CLOSE, &s->w.phase, NULL);
                     s->w.settle = S_CLOSE_SET;
                 } else {
-                    s->hdr.stage = RD_PULL;
+                    STEP_GOTO(s->hdr.stage, RD_PULL, &s->w.phase, NULL);
                     s->w.pull = P_TEST;
                 }
             } else {
@@ -985,7 +985,7 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                 s->promise = JS_NewPromiseCapability(ctx, funcs);
                 if (JS_IsException(s->promise)) return JS_STEP_ABRUPT;
                 rs_park_read(ctx, d, funcs);
-                s->hdr.stage = RD_PULL;
+                STEP_GOTO(s->hdr.stage, RD_PULL, &s->w.phase, NULL);
                 s->w.pull = P_TEST;
                 goto have_promise;
             }
@@ -1004,7 +1004,7 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
-        s->hdr.stage = RD_SETTLE;
+        STEP_GOTO(s->hdr.stage, RD_SETTLE, &s->w.phase, NULL);
     }
     if (s->hdr.stage == RD_PULL) {
         StreamData *d = rs_stream_data(s->stream);
@@ -1013,7 +1013,7 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
-        s->hdr.stage = RD_SETTLE;
+        STEP_GOTO(s->hdr.stage, RD_SETTLE, &s->w.phase, NULL);
     }
 
     DCHECK(s->hdr.stage == RD_SETTLE, "the read machine resumed in a stage it never parks in");
@@ -1231,7 +1231,7 @@ static int js_get_reader_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         s->reader = JS_UNDEFINED;
-        hdr->stage = GRS_DONE;
+        STEP_GOTO(hdr->stage, GRS_DONE, &s->w.phase, NULL);
         if (ctor && JS_IsUndefined(hdr->this_val)) {
             JS_ThrowTypeError(ctx, "constructor %s requires 'new'",
                               byob ? "ReadableStreamBYOBReader" : "ReadableStreamDefaultReader");
@@ -1282,7 +1282,7 @@ static int js_get_reader_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
         JS_FreeValue(ctx, rd->closed_funcs[d->state == RS_ERRORED ? 0 : 1]);
         rd->closed_funcs[0] = rd->closed_funcs[1] = JS_UNDEFINED;
         s->w.value = d->state == RS_ERRORED ? JS_DupValue(ctx, d->stored_error) : JS_UNDEFINED;
-        hdr->stage = GRS_SETTLE;
+        STEP_GOTO(hdr->stage, GRS_SETTLE, &s->w.phase, NULL);
     }
 
     if (hdr->stage == GRS_SETTLE) {
@@ -1400,7 +1400,7 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         if (rd && !JS_IsUndefined(rd->stream)) d = rs_stream_data(rd->stream);
         s->promise = JS_NewPromiseCapability(ctx, s->funcs);
         if (JS_IsException(s->promise)) return JS_STEP_ABRUPT;
-        s->hdr.stage = CN_SETTLE;
+        STEP_GOTO(s->hdr.stage, CN_SETTLE, &s->w.phase, NULL);
         if (!d) {
             JS_ThrowTypeError(ctx, magic == CANCEL_ON_STREAM ? "not a ReadableStream"
                                  : rd                        ? "this reader has been released"
@@ -1422,7 +1422,7 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
             } else if (d->state == RS_CLOSED) {
                 s->w.value = JS_UNDEFINED;   /* §4.2 step 2: already closed, and the source is not asked */
             } else {
-                s->hdr.stage = CN_CLOSE;
+                STEP_GOTO(s->hdr.stage, CN_CLOSE, &s->w.phase, NULL);
                 s->w.settle = S_CLOSE_SET;
             }
         }
@@ -1439,7 +1439,7 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
-        s->hdr.stage = CN_CLOSE_INTO;
+        STEP_GOTO(s->hdr.stage, CN_CLOSE_INTO, &s->w.phase, NULL);
         {
             /* §4.9.1 step 6, which ReadableStreamClose deliberately does NOT do: a BYOB reader's read-into
                requests are answered here, with `undefined` rather than a view — a cancel DISCARDS the backing
@@ -1457,7 +1457,7 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
             if (r < 0) return JS_STEP_ABRUPT;
             cb_result = JS_UNDEFINED;
         }
-        s->hdr.stage = CN_CALL;
+        STEP_GOTO(s->hdr.stage, CN_CALL, &s->w.phase, NULL);
     }
 
     if (s->hdr.stage == CN_CALL) {
@@ -1508,7 +1508,7 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
             JS_FreeValue(ctx, c->cancel_fn);
             c->pull_fn = c->cancel_fn = JS_UNDEFINED;
         }
-        s->hdr.stage = CN_RESOLVE;
+        STEP_GOTO(s->hdr.stage, CN_RESOLVE, &s->w.phase, NULL);
     }
 
     if (s->hdr.stage == CN_RESOLVE) {
@@ -1516,7 +1516,7 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
-        s->hdr.stage = CN_THEN;
+        STEP_GOTO(s->hdr.stage, CN_THEN, &s->w.phase, NULL);
     }
 
     if (s->hdr.stage == CN_THEN) {
@@ -1641,12 +1641,12 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                straight to a reader is never weighed, because it never enters the queue. */
             s->w.func = rs_take_read(ctx, d, 0);
             if (JS_IsUndefined(s->w.func)) {
-                s->hdr.stage = JS_IsUndefined(c->size_fn) ? CS_ENQUEUE : CS_SIZE;
+                STEP_GOTO(s->hdr.stage, JS_IsUndefined(c->size_fn) ? CS_ENQUEUE : CS_SIZE, &s->w.phase, NULL);
                 s->size = 1;   /* the implicit strategy: one per chunk */
             } else {
                 s->w.value = rs_read_result(ctx, JS_DupValue(ctx, a0), false);
                 if (JS_IsException(s->w.value)) return JS_STEP_ABRUPT;
-                s->hdr.stage = CS_SETTLE;
+                STEP_GOTO(s->hdr.stage, CS_SETTLE, &s->w.phase, NULL);
             }
             s->w.pull = P_TEST;   /* §4.5 step 4: an enqueue always ends in CallPullIfNeeded */
         } else if (op == CTRL_CLOSE) {
@@ -1658,13 +1658,13 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
             /* §4.5: a close with chunks STILL QUEUED waits for them — the state moves when the queue drains,
                so a reader sees every chunk before `done`. */
             if (stream_queued(ctx, d) > 0) return JS_STEP_DONE;
-            s->hdr.stage = CS_SETTLE_ALL;
+            STEP_GOTO(s->hdr.stage, CS_SETTLE_ALL, &s->w.phase, NULL);
             s->w.settle = S_CLOSE_SET;
         } else {
             DCHECK(op == CTRL_ERROR, "a controller member ran with an operation this component does not have");
             if (d->state != RS_READABLE) return JS_STEP_DONE;
             s->w.err = JS_DupValue(ctx, a0);
-            s->hdr.stage = CS_SETTLE_ALL;
+            STEP_GOTO(s->hdr.stage, CS_SETTLE_ALL, &s->w.phase, NULL);
             s->w.settle = S_ERR_SET;
         }
     }
@@ -1688,10 +1688,10 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
             s->w.err = JS_GetException(ctx);
             s->rethrow = JS_DupValue(ctx, s->w.err);
             s->w.settle = S_ERR_SET;
-            s->hdr.stage = CS_RETHROW;
+            STEP_GOTO(s->hdr.stage, CS_RETHROW, &s->w.phase, NULL);
             s->w.pull = P_IDLE;
         } else {
-            s->hdr.stage = CS_ENQUEUE;
+            STEP_GOTO(s->hdr.stage, CS_ENQUEUE, &s->w.phase, NULL);
         }
     }
     if (s->hdr.stage == CS_ENQUEUE) {
@@ -1699,7 +1699,7 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         stream_enqueue(ctx, d, chunk, s->size);
-        s->hdr.stage = CS_PULL;
+        STEP_GOTO(s->hdr.stage, CS_PULL, &s->w.phase, NULL);
     }
     if (s->hdr.stage == CS_RETHROW) {
         /* the stream errors first — every parked read is rejected — and only then does enqueue() itself
@@ -1719,7 +1719,7 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
         JS_FreeValue(ctx, out);
         cb_result = JS_UNDEFINED;
-        s->hdr.stage = CS_PULL;
+        STEP_GOTO(s->hdr.stage, CS_PULL, &s->w.phase, NULL);
     }
     if (s->hdr.stage == CS_SETTLE_ALL) {
         r = rs_settle_run(ctx, &s->w, d, cb_result, out_cb, out_argc);
@@ -2186,7 +2186,7 @@ static int js_values_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         int k;
         for (k = 0; k < 3; k++) s->cb[k] = JS_UNDEFINED;
         s->prevent_cancel = argc > 0 && idl_dict_bool(ctx, argv[0], "preventCancel");
-        hdr->stage = VAL_READER;
+        STEP_GOTO(hdr->stage, VAL_READER, &s->phase, NULL);
     }
     {
         JSValue fn = rs_fn(ctx, RSF_GET_READER);
@@ -2418,7 +2418,7 @@ static int js_tee_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
                 return JS_STEP_DONE;
             }
             t->reading = 1;
-            s->hdr.stage = TS_READ;
+            STEP_GOTO(s->hdr.stage, TS_READ, &s->phase, NULL);
             break;
         case TEE_CANCEL1: case TEE_CANCEL2: {
             int i = op == TEE_CANCEL1 ? 0 : 1;
@@ -2433,7 +2433,7 @@ static int js_tee_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
             if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
             JS_SetPropertyUint32(ctx, s->value, 0, JS_DupValue(ctx, t->reason[0]));
             JS_SetPropertyUint32(ctx, s->value, 1, JS_DupValue(ctx, t->reason[1]));
-            s->hdr.stage = TS_CANCEL_SOURCE;
+            STEP_GOTO(s->hdr.stage, TS_CANCEL_SOURCE, &s->phase, NULL);
             break;
         }
         case TEE_READ_OK: {
@@ -2448,7 +2448,7 @@ static int js_tee_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
                 s->value = chunk;
                 t->read_again = 0;
             }
-            s->hdr.stage = TS_B0;
+            STEP_GOTO(s->hdr.stage, TS_B0, &s->phase, NULL);
             break;
         }
         default:
@@ -2461,7 +2461,7 @@ static int js_tee_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
             }
             s->value = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
             s->done = 2;   /* the closed-rejection arm: both branches are ERRORED with the reason */
-            s->hdr.stage = TS_B0;
+            STEP_GOTO(s->hdr.stage, TS_B0, &s->phase, NULL);
             break;
         }
     }
@@ -2489,7 +2489,7 @@ again:
     if (s->hdr.stage == TS_B0 || s->hdr.stage == TS_B1) {
         int i = s->hdr.stage == TS_B1;
         for (; i < 2; i++) {
-            s->hdr.stage = i ? TS_B1 : TS_B0;
+            STEP_GOTO(s->hdr.stage, i ? TS_B1 : TS_B0, &s->phase, NULL);
             /* §4.2: a branch the page has already cancelled is not fed, closed or errored. */
             if (s->done != 2 && t->canceled[i]) continue;
             /* §4.9.7 step 13.2: BRANCH 2 gets a STRUCTURED CLONE of the chunk when the flag is set, and a
@@ -2503,7 +2503,7 @@ again:
                     s->value = e;
                     s->done = 2;          /* both branches error, with the clone's own reason */
                     i = 0;                /* restart the pair: branch 1 has not been errored yet */
-                    s->hdr.stage = TS_B0;
+                    STEP_GOTO(s->hdr.stage, TS_B0, &s->phase, NULL);
                     continue;
                 }
                 JS_FreeValue(ctx, s->value);
@@ -2523,7 +2523,7 @@ again:
                    as a recursive call, so the machine's own stages stay flat */
                 t->read_again = 0;
                 t->reading = 1;
-                s->hdr.stage = TS_READ;
+                STEP_GOTO(s->hdr.stage, TS_READ, &s->phase, NULL);
                 cb_result = JS_UNDEFINED;
                 goto again;   /* a LOOP, never a call: this machine may not recurse into itself */
             }
@@ -2532,7 +2532,7 @@ again:
         if (s->done == 1) t->reading = 0;
         /* CLOSE and ERROR both settle the tee's own cancel promise, so a branch cancelled afterwards is not
            left waiting on a source that is already finished. */
-        s->hdr.stage = TS_RESOLVE_CANCEL;
+        STEP_GOTO(s->hdr.stage, TS_RESOLVE_CANCEL, &s->phase, NULL);
     }
 
     if (s->hdr.stage == TS_RESOLVE_CANCEL) {
@@ -2562,7 +2562,7 @@ again:
         /* TWO CALLS, TWO STAGES. One `phase` byte serves one call at a time: writing the two in a row under a
            single byte made the resume re-enter the FIRST call with the SECOND's phase, which issued the second
            call again forever — a livelock the corpus found as a killed process, not as a failure. */
-        s->hdr.stage = TS_CANCEL_ADOPT;
+        STEP_GOTO(s->hdr.stage, TS_CANCEL_ADOPT, &s->phase, NULL);
     }
 
     DCHECK(s->hdr.stage == TS_CANCEL_ADOPT, "a tee machine resumed in a stage it never parks in");
@@ -2665,7 +2665,7 @@ static int tee_call_run(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
         StreamData *sd;
         stream_work_start(&s->w);
         s->tee = s->reader = JS_UNDEFINED;
-        hdr->stage = TC_READER;
+        STEP_GOTO(hdr->stage, TC_READER, &s->w.phase, NULL);
         sd = rs_stream_data(hdr->this_val);
         if (!sd) {
             JS_FreeValue(ctx, cb_result);
@@ -2721,14 +2721,14 @@ static int tee_call_run(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
         /* §4.5's set-up: neither branch is STARTED until a microtask has run, so a pull cannot happen inside
            tee() itself. One resolved promise serves both, which is the same tick each would have had. */
         s->w.value = JS_UNDEFINED;
-        hdr->stage = TC_BUILD;
+        STEP_GOTO(hdr->stage, TC_BUILD, &s->w.phase, NULL);
     }
     if (hdr->stage == TC_BUILD) {
         r = stream_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
-        hdr->stage = TC_STARTED;
+        STEP_GOTO(hdr->stage, TC_STARTED, &s->w.phase, NULL);
     }
     JS_FreeValue(ctx, cb_result);
     t = tee_of(s->tee);
@@ -2890,10 +2890,10 @@ static int js_from_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                 return JS_STEP_ABRUPT;
             }
             if (op == FROM_RET_OK) return JS_STEP_DONE;   /* the value is discarded: §4.2 answers undefined */
-            s->hdr.stage = FS_READ_DONE;
+            STEP_GOTO(s->hdr.stage, FS_READ_DONE, &s->phase, &s->hdr.get_phase, NULL);
         } else {
             s->value = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
-            s->hdr.stage = FS_CALL;
+            STEP_GOTO(s->hdr.stage, FS_CALL, &s->phase, &s->hdr.get_phase, NULL);
         }
     }
 
@@ -2921,7 +2921,7 @@ static int js_from_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                     JS_ThrowTypeError(ctx, "an iterator's `return` is not callable");
                     JS_FreeValue(ctx, s->value);
                     s->value = JS_GetException(ctx);
-                    s->hdr.stage = FS_REJECT;
+                    STEP_GOTO(s->hdr.stage, FS_REJECT, &s->phase, &s->hdr.get_phase, NULL);
                     goto settle_promise;
                 }
                 JS_FreeValue(ctx, s->result);
@@ -2945,11 +2945,11 @@ static int js_from_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                a rejecting one takes. */
             JS_FreeValue(ctx, s->value);
             s->value = JS_GetException(ctx);
-            s->hdr.stage = FS_REJECT;
+            STEP_GOTO(s->hdr.stage, FS_REJECT, &s->phase, &s->hdr.get_phase, NULL);
         } else {
             JS_FreeValue(ctx, s->value);
             s->value = out;
-            s->hdr.stage = FS_RESOLVE;
+            STEP_GOTO(s->hdr.stage, FS_RESOLVE, &s->phase, &s->hdr.get_phase, NULL);
         }
         cb_result = JS_UNDEFINED;
     }
@@ -2978,7 +2978,7 @@ settle_promise:
         JS_FreeValue(ctx, s->chain);
         s->chain = JS_UNDEFINED;
         cb_result = JS_UNDEFINED;
-        s->hdr.stage = FS_REACT;
+        STEP_GOTO(s->hdr.stage, FS_REACT, &s->phase, &s->hdr.get_phase, NULL);
     }
 
     if (s->hdr.stage == FS_REACT) {
@@ -3005,7 +3005,7 @@ settle_promise:
         cb_result = JS_UNDEFINED;
         s->done = (uint8_t)JS_ToBool(ctx, out);
         JS_FreeValue(ctx, out);
-        s->hdr.stage = s->done ? FS_FEED : FS_READ_VALUE;
+        STEP_GOTO(s->hdr.stage, s->done ? FS_FEED : FS_READ_VALUE, &s->phase, &s->hdr.get_phase, NULL);
     }
     if (s->hdr.stage == FS_READ_VALUE) {
         JSValue v;
@@ -3017,7 +3017,7 @@ settle_promise:
         cb_result = JS_UNDEFINED;
         JS_FreeValue(ctx, s->value);
         s->value = v;
-        s->hdr.stage = FS_FEED;
+        STEP_GOTO(s->hdr.stage, FS_FEED, &s->phase, &s->hdr.get_phase, NULL);
     }
 
     DCHECK(s->hdr.stage == FS_FEED, "a §4.2 `from` machine resumed in a stage it never parks in");
@@ -3121,11 +3121,11 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         /* 7.4.2 GetIterator with the ASYNC hint: @@asyncIterator first, and only a NULLISH one falls back. */
         r = step_getprop_run(ctx, hdr, src, JS_WellKnownSymbolAtom(JS_WKS_ASYNC_ITERATOR), cb_result,
                              &s->method, out_cb, out_argc);
-        if (r > 0) { hdr->stage = FC_START; return r; }
+        if (r > 0) return r;
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
         s->is_sync = JS_IsUndefined(s->method) || JS_IsNull(s->method);
-        hdr->stage = s->is_sync ? FC_SYNC_GET : FC_ASYNC_CALL;
+        STEP_GOTO(hdr->stage, s->is_sync ? FC_SYNC_GET : FC_ASYNC_CALL, &s->w.phase, &hdr->get_phase, NULL);
     }
     if (hdr->stage == FC_SYNC_GET) {
         JS_FreeValue(ctx, s->method);
@@ -3139,7 +3139,7 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
             JS_ThrowTypeError(ctx, "ReadableStream.from was given something that is not iterable");
             return -1;
         }
-        hdr->stage = FC_SYNC_CALL;
+        STEP_GOTO(hdr->stage, FC_SYNC_CALL, &s->w.phase, &hdr->get_phase, NULL);
     }
     if (hdr->stage == FC_ASYNC_CALL || hdr->stage == FC_SYNC_CALL) {
         if (!JS_IsFunction(ctx, s->method)) {
@@ -3156,7 +3156,7 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
             JS_ThrowTypeError(ctx, "an iterator method answered with something that is not an object");
             return -1;
         }
-        hdr->stage = FC_NEXT;
+        STEP_GOTO(hdr->stage, FC_NEXT, &s->w.phase, &hdr->get_phase, NULL);
     }
     if (hdr->stage == FC_NEXT) {
         JSAtom atom = JS_NewAtom(ctx, "next");
@@ -3175,7 +3175,7 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
             s->iterator = wrapped;
             s->next_fn = nextw;
         }
-        hdr->stage = FC_BUILD;
+        STEP_GOTO(hdr->stage, FC_BUILD, &s->w.phase, &hdr->get_phase, NULL);
     }
     if (hdr->stage == FC_BUILD) {
         JSValueConst data[1];
@@ -3208,7 +3208,7 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         c->cancel_fn = JS_NewStepClosure(ctx, g_from_stepids[FROM_CANCEL], 1, 1, data);
         if (JS_IsException(c->cancel_fn)) { c->cancel_fn = JS_UNDEFINED; return -1; }
         s->w.value = JS_UNDEFINED;
-        hdr->stage = FC_STARTED;
+        STEP_GOTO(hdr->stage, FC_STARTED, &s->w.phase, &hdr->get_phase, NULL);
     }
     if (hdr->stage == FC_STARTED) {
         r = stream_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
@@ -3377,13 +3377,13 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
                released with it — there is nothing left to read. */
             s->reject = 1;
             s->value = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
-            s->hdr.stage = DS_RELEASE;
+            STEP_GOTO(s->hdr.stage, DS_RELEASE, &s->phase, NULL);
         } else {
             JSValue done_v = JS_GetPropertyStr(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED, "done");
             int done = JS_ToBool(ctx, done_v);
             JS_FreeValue(ctx, done_v);
             if (done) {
-                s->hdr.stage = DS_RELEASE;
+                STEP_GOTO(s->hdr.stage, DS_RELEASE, &s->phase, NULL);
             } else {
                 JSValue chunk = JS_GetPropertyStr(ctx, s->hdr.argv[0], "value");
                 int bad = drain_append(ctx, dr, chunk) < 0;
@@ -3391,9 +3391,9 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
                 if (bad) {
                     s->reject = 1;
                     s->value = JS_GetException(ctx);
-                    s->hdr.stage = DS_RELEASE;
+                    STEP_GOTO(s->hdr.stage, DS_RELEASE, &s->phase, NULL);
                 } else {
-                    s->hdr.stage = DS_READ;
+                    STEP_GOTO(s->hdr.stage, DS_READ, &s->phase, NULL);
                 }
             }
         }
@@ -3440,7 +3440,7 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
                 s->reject = 1;
             }
         }
-        s->hdr.stage = DS_SETTLE;
+        STEP_GOTO(s->hdr.stage, DS_SETTLE, &s->phase, NULL);
     }
 
     DCHECK(s->hdr.stage == DS_SETTLE, "a drain machine resumed in a stage it never parks in");
@@ -3710,7 +3710,7 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         s->member = 0;
         s->bytes = 0;
         s->auto_alloc = 0;
-        hdr->stage = RSC_PROTO;
+        STEP_GOTO(hdr->stage, RSC_PROTO, &s->w.phase, &hdr->get_phase, NULL);
     }
 
     if (hdr->stage == RSC_PROTO) {
@@ -3724,13 +3724,13 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         if (r > 0) return r;
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
-        hdr->stage = JS_IsObject(source) ? RSC_READ : RSC_BUILD;
+        STEP_GOTO(hdr->stage, JS_IsObject(source) ? RSC_READ : RSC_BUILD, &s->w.phase, &hdr->get_phase, NULL);
     }
 
     while (hdr->stage == RSC_READ || hdr->stage == RSC_ALLOC) {
         if (hdr->stage == RSC_READ) {
             JSAtom a;
-            if (s->member >= SRC_N) { hdr->stage = RSC_TYPE; break; }
+            if (s->member >= SRC_N) { STEP_GOTO(hdr->stage, RSC_TYPE, &s->w.phase, &hdr->get_phase, NULL); break; }
             a = JS_NewAtom(ctx, SRC_NAMES[s->member]);
             r = step_getprop_run(ctx, hdr, source, a, cb_result, &s->src[s->member], out_cb, out_argc);
             JS_FreeAtom(ctx, a);
@@ -3740,7 +3740,8 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             s->member++;
             /* §3.2.18 converts each member AS IT IS READ, and this one's conversion is ToNumber — the page's
                `valueOf`, running before `cancel` is even read. */
-            if (s->member == SRC_CANCEL && !JS_IsUndefined(s->src[SRC_CHUNKSIZE])) hdr->stage = RSC_ALLOC;
+            if (s->member == SRC_CANCEL && !JS_IsUndefined(s->src[SRC_CHUNKSIZE]))
+                STEP_GOTO(hdr->stage, RSC_ALLOC, &s->w.phase, &hdr->get_phase, NULL);
             continue;
         }
         {
@@ -3756,7 +3757,7 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                 return -1;
             }
             s->auto_alloc = (uint64_t)x;
-            hdr->stage = RSC_READ;
+            STEP_GOTO(hdr->stage, RSC_READ, &s->w.phase, &hdr->get_phase, NULL);
         }
     }
 
@@ -3791,7 +3792,7 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         if (stream_callback_member(ctx, s->src[SRC_PULL], "source", "pull") < 0) return -1;
         if (stream_callback_member(ctx, s->src[SRC_START], "source", "start") < 0) return -1;
         cb_result = JS_UNDEFINED;
-        hdr->stage = RSC_BUILD;
+        STEP_GOTO(hdr->stage, RSC_BUILD, &s->w.phase, &hdr->get_phase, NULL);
     }
 
     if (hdr->stage == RSC_BUILD) {
@@ -3852,7 +3853,8 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         }
         s->start_fn = s->src[SRC_START];
         s->src[SRC_START] = JS_UNDEFINED;
-        hdr->stage = JS_IsFunction(ctx, s->start_fn) ? RSC_CALL : RSC_RESOLVE;
+        STEP_GOTO(hdr->stage, JS_IsFunction(ctx, s->start_fn) ? RSC_CALL : RSC_RESOLVE, &s->w.phase,
+                  &hdr->get_phase, NULL);
     }
 
     if (hdr->stage == RSC_CALL) {
@@ -3864,14 +3866,14 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         JS_FreeValue(ctx, s->w.value);
         s->w.value = res;
         cb_result = JS_UNDEFINED;
-        hdr->stage = RSC_RESOLVE;
+        STEP_GOTO(hdr->stage, RSC_RESOLVE, &s->w.phase, &hdr->get_phase, NULL);
     }
     if (hdr->stage == RSC_RESOLVE) {
         r = stream_promise_of_run(ctx, &s->w, 0, cb_result, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
-        hdr->stage = RSC_THEN;
+        STEP_GOTO(hdr->stage, RSC_THEN, &s->w.phase, &hdr->get_phase, NULL);
     }
 
     DCHECK(hdr->stage == RSC_THEN, "the ReadableStream constructor resumed in a stage it never parks in");

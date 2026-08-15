@@ -419,7 +419,7 @@ static int flush_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
             return 0;                                                                       /* step 4.3 */
         }
         JS_FreeValue(ctx, list);
-        hdr->stage = AF_CANDIDATE;
+        STEP_GOTO(hdr->stage, AF_CANDIDATE, &s->fphase, NULL);
         return JS_STEP_YIELD;
     }
 
@@ -477,7 +477,7 @@ static int flush_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
         af_mark_processed(ctx);                                                             /* step 5.11.2 */
         JS_FreeValue(ctx, list);
         s->target = el;                          /* ownership moves onto the state for the request below */
-        hdr->stage = AF_FOCUS;
+        STEP_GOTO(hdr->stage, AF_FOCUS, &s->fphase, NULL);
     }
 
     DCHECK(hdr->stage == AF_FOCUS, "§6.6.7's flush resumed into a stage the algorithm does not have");

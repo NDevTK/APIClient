@@ -1248,7 +1248,8 @@ static int js_byte_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                 JS_FreeValue(ctx, first);
             }
             if (!JS_IsUndefined(d->reader) && !rs_reader_data(d->reader)->byob) {
-                s->hdr.stage = BS_DRAIN;      /* ProcessReadRequestsUsingQueue, then the chunk itself */
+                /* ProcessReadRequestsUsingQueue, then the chunk itself */
+                STEP_GOTO(s->hdr.stage, BS_DRAIN, &s->w.phase, NULL);
             } else if (!JS_IsUndefined(d->reader)) {
                 if (byte_enqueue_chunk(ctx, c, s->chunk_buf, s->chunk_off, s->chunk_len) < 0) {
                     s->chunk_buf = JS_UNDEFINED;
@@ -1257,7 +1258,7 @@ static int js_byte_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                 s->chunk_buf = JS_UNDEFINED;
                 s->cm.filled = byte_process_pending(ctx, c);
                 if (JS_IsException(s->cm.filled)) { s->cm.filled = JS_UNDEFINED; return JS_STEP_ABRUPT; }
-                s->hdr.stage = BS_COMMIT;
+                STEP_GOTO(s->hdr.stage, BS_COMMIT, &s->w.phase, NULL);
             } else {
                 DCHECK(JS_IsUndefined(d->reader), "an unlocked byte stream reached the locked enqueue arm");
                 if (byte_enqueue_chunk(ctx, c, s->chunk_buf, s->chunk_off, s->chunk_len) < 0) {
@@ -1265,7 +1266,7 @@ static int js_byte_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                     return JS_STEP_ABRUPT;
                 }
                 s->chunk_buf = JS_UNDEFINED;
-                s->hdr.stage = BS_PULL;
+                STEP_GOTO(s->hdr.stage, BS_PULL, &s->w.phase, NULL);
                 s->w.pull = P_TEST;
             }
         } else if (op == BC_CLOSE) {
@@ -1298,13 +1299,13 @@ static int js_byte_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                     byte_reset_queue(ctx, c);
                     readable_byte_clear_algorithms(ctx, s->hdr.this_val);
                     s->w.settle = S_ERR_SET;
-                    s->hdr.stage = BS_RETHROW;
+                    STEP_GOTO(s->hdr.stage, BS_RETHROW, &s->w.phase, NULL);
                 }
             }
             if (s->hdr.stage == BS_RETHROW) goto stages;
             readable_byte_clear_algorithms(ctx, s->hdr.this_val);
             s->w.settle = S_CLOSE_SET;
-            s->hdr.stage = BS_SETTLE;
+            STEP_GOTO(s->hdr.stage, BS_SETTLE, &s->w.phase, NULL);
         } else {
             DCHECK(op == BC_ERROR, "a byte controller member ran with an operation this component does not have");
             if (d->state != RS_READABLE) return JS_STEP_DONE;
@@ -1313,7 +1314,7 @@ static int js_byte_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
             readable_byte_clear_algorithms(ctx, s->hdr.this_val);
             s->w.err = JS_DupValue(ctx, a0);
             s->w.settle = S_ERR_SET;
-            s->hdr.stage = BS_SETTLE;
+            STEP_GOTO(s->hdr.stage, BS_SETTLE, &s->w.phase, NULL);
         }
     }
 stages:
@@ -1373,7 +1374,7 @@ stages:
                 return JS_STEP_ABRUPT;
             }
             s->chunk_buf = JS_UNDEFINED;
-            s->hdr.stage = BS_PULL;
+            STEP_GOTO(s->hdr.stage, BS_PULL, &s->w.phase, NULL);
             s->w.pull = P_TEST;
         } else {
             JSValue view;
@@ -1395,7 +1396,7 @@ stages:
             JS_FreeValue(ctx, s->cm.value);
             s->cm.value = rs_read_result(ctx, view, false);
             if (JS_IsException(s->cm.value)) { s->cm.value = JS_UNDEFINED; return JS_STEP_ABRUPT; }
-            s->hdr.stage = BS_FEED;
+            STEP_GOTO(s->hdr.stage, BS_FEED, &s->w.phase, NULL);
         }
     }
 
@@ -1409,7 +1410,7 @@ stages:
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
         JS_FreeValue(ctx, out);
         cb_result = JS_UNDEFINED;
-        s->hdr.stage = BS_PULL;
+        STEP_GOTO(s->hdr.stage, BS_PULL, &s->w.phase, NULL);
         s->w.pull = P_TEST;
     }
 
@@ -1418,7 +1419,7 @@ stages:
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
-        s->hdr.stage = BS_PULL;
+        STEP_GOTO(s->hdr.stage, BS_PULL, &s->w.phase, NULL);
         s->w.pull = P_TEST;
     }
 
@@ -1931,14 +1932,14 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         buf = byte_view_parts(ctx, view, &off, &len, &elem, &vt);
         if (JS_IsException(buf)) { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
         JS_FreeValue(ctx, buf);
-        s->hdr.stage = BR_MIN;
+        STEP_GOTO(s->hdr.stage, BR_MIN, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);
     }
 
     if (s->hdr.stage == BR_MIN) {
         /* §3.2.18's dictionary conversion, which is a [[Get]] of `min` and then §3.2.9's coercion — both the
            page's code, and both BEFORE §4.5's own steps 1-8. */
         if (JS_IsUndefined(opts) || JS_IsNull(opts)) {
-            s->hdr.stage = BR_INTO;
+            STEP_GOTO(s->hdr.stage, BR_INTO, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);
         } else if (!JS_IsObject(opts)) {
             JS_ThrowTypeError(ctx, "the read options must be an object");
             { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
@@ -1952,7 +1953,8 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
             cb_result = JS_UNDEFINED;
             JS_FreeValue(ctx, s->result);
             s->result = got;
-            s->hdr.stage = JS_IsUndefined(got) ? BR_INTO : BR_MINNUM;
+            STEP_GOTO(s->hdr.stage, JS_IsUndefined(got) ? BR_INTO : BR_MINNUM, &s->w.phase, &s->view_phase,
+                      &s->hdr.get_phase, NULL);
         }
     }
 
@@ -1969,7 +1971,7 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
             { if (byob_read_reject(ctx, s) < 0) return JS_STEP_ABRUPT; goto settle; }
         }
         s->min = x;
-        s->hdr.stage = BR_INTO;
+        STEP_GOTO(s->hdr.stage, BR_INTO, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);
     }
 
     if (s->hdr.stage == BR_INTO) {
@@ -2026,7 +2028,7 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
             s->result = JS_DupValue(ctx, d->stored_error);
             s->settle = funcs[1];
             JS_FreeValue(ctx, funcs[0]);
-            s->hdr.stage = BR_SETTLE;
+            STEP_GOTO(s->hdr.stage, BR_SETTLE, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);
             goto into_done;
         }
         /* §4.9.5's ReadableByteStreamControllerPullInto. */
@@ -2037,7 +2039,7 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
             s->result = JS_GetException(ctx);
             s->settle = funcs[1];
             JS_FreeValue(ctx, funcs[0]);
-            s->hdr.stage = BR_SETTLE;
+            STEP_GOTO(s->hdr.stage, BR_SETTLE, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);
             goto into_done;
         }
         dsc = JS_NewObjectProto(ctx, JS_NULL);
@@ -2067,7 +2069,7 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                source is already working on the head of the list. */
             arr_push(ctx, c->pending, dsc);
             rs_park_read(ctx, d, funcs);
-            s->hdr.stage = BR_SETTLE;
+            STEP_GOTO(s->hdr.stage, BR_SETTLE, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);
             goto into_done;
         }
         if (d->state == RS_CLOSED) {
@@ -2078,7 +2080,7 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
             s->dsc = dsc;
             s->settle = funcs[0];
             JS_FreeValue(ctx, funcs[1]);
-            s->hdr.stage = BR_EMPTYVIEW;
+            STEP_GOTO(s->hdr.stage, BR_EMPTYVIEW, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);
             goto into_done;
         }
         if (c->queue_total > 0) {
@@ -2093,7 +2095,7 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                 s->dsc = dsc;
                 s->settle = funcs[0];
                 JS_FreeValue(ctx, funcs[1]);
-                s->hdr.stage = BR_QUEUEVIEW;
+                STEP_GOTO(s->hdr.stage, BR_QUEUEVIEW, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);
                 goto into_done;
             }
             if (c->close_requested) {
@@ -2107,14 +2109,14 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                 byte_reset_queue(ctx, c);
                 readable_byte_clear_algorithms(ctx, d->controller);
                 s->w.settle = S_ERR_SET;
-                s->hdr.stage = BR_DRAIN;
+                STEP_GOTO(s->hdr.stage, BR_DRAIN, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);
                 goto into_done;
             }
         }
         arr_push(ctx, c->pending, dsc);
         rs_park_read(ctx, d, funcs);
         s->w.pull = P_TEST;
-        s->hdr.stage = BR_DRAIN;
+        STEP_GOTO(s->hdr.stage, BR_DRAIN, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);
     into_done:;
     }
 
@@ -2130,7 +2132,7 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         if (JS_IsException(empty)) return JS_STEP_ABRUPT;
         s->result = rs_read_result(ctx, empty, true);
         if (JS_IsException(s->result)) { s->result = JS_UNDEFINED; return JS_STEP_ABRUPT; }
-        s->hdr.stage = BR_SETTLE;
+        STEP_GOTO(s->hdr.stage, BR_SETTLE, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);
     }
 
     if (s->hdr.stage == BR_QUEUEVIEW) {
@@ -2154,7 +2156,7 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         } else {
             s->w.pull = P_TEST;
         }
-        s->hdr.stage = BR_DRAIN;
+        STEP_GOTO(s->hdr.stage, BR_DRAIN, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);
     }
 
     if (s->hdr.stage == BR_DRAIN) {
@@ -2166,7 +2168,7 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
-        s->hdr.stage = BR_SETTLE;
+        STEP_GOTO(s->hdr.stage, BR_SETTLE, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);
     }
 
 settle:

@@ -1311,7 +1311,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                 /* nothing to walk and nothing to invoke: both passes below find an empty path and fall through
                    to step 7. The event's own path stays the empty list, so composedPath answers with it. */
                 s->tn = s->ti = s->n = s->i = 0;
-                s->hdr.stage = DISPATCH_CAPTURE;
+                STEP_GOTO(s->hdr.stage, DISPATCH_CAPTURE, &s->aphase, &s->cphase, &s->hdr.get_phase, NULL);
             } else {
                 /* §2.9 step 6.3: APPEND TO AN EVENT PATH with event, target, TARGETOVERRIDE, relatedTarget,
                    touchTargets and false. The path is the EVENT's — composedPath reads it — so it is published
@@ -1356,7 +1356,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                    boundary. */
                 s->cur = JS_DupValue(ctx, target);
                 s->tgt = JS_DupValue(ctx, target);
-                s->hdr.stage = DISPATCH_PATH;
+                STEP_GOTO(s->hdr.stage, DISPATCH_PATH, &s->aphase, &s->cphase, &s->hdr.get_phase, NULL);
             }
             JS_FreeValue(ctx, related);
             JS_FreeValue(ctx, touch);
@@ -1488,7 +1488,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         }
         s->ti = 0;
         s->n = s->i = 0;
-        s->hdr.stage = DISPATCH_CAPTURE;
+        STEP_GOTO(s->hdr.stage, DISPATCH_CAPTURE, &s->aphase, &s->cphase, &s->hdr.get_phase, NULL);
     }
 
     if (s->hdr.stage == DISPATCH_ACTIVATION) {
@@ -1678,7 +1678,7 @@ report_throw:
 
             if (s->ti >= s->tn) {
                 if (s->hdr.stage == DISPATCH_BUBBLE) goto walked;
-                s->hdr.stage = DISPATCH_BUBBLE;
+                STEP_GOTO(s->hdr.stage, DISPATCH_BUBBLE, &s->aphase, &s->cphase, &s->hdr.get_phase, NULL);
                 s->ti = 0;
                 continue;
             }
@@ -1782,7 +1782,7 @@ activation:
         /* STAGE 2 IS THE RESUME POINT. The behaviour may wait on the host, and when it does the whole dispatch
            parks here — after the walk, with the event already cleaned up — and re-enters at exactly this line
            rather than replaying three legs of listeners. */
-        s->hdr.stage = DISPATCH_ACTIVATION;
+        STEP_GOTO(s->hdr.stage, DISPATCH_ACTIVATION, &s->aphase, &s->cphase, &s->hdr.get_phase, NULL);
         ar = g_run_activation(ctx, s->act, s->ev, &s->aphase, &s->areq);
         if (ar != JS_STEP_DONE) return ar;
     }

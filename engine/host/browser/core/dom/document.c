@@ -661,7 +661,7 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
         /* Step 5.1.4.8 compares what the constructor made against the name this operation was GIVEN, which the
            declaration has already converted to a string. */
         s->local = JS_DupValue(ctx, argv[0]);
-        hdr->stage = DCE_CONSTRUCT;
+        STEP_GOTO(hdr->stage, DCE_CONSTRUCT, &s->phase, NULL);
     }
     if (hdr->stage == DCE_CONSTRUCT) {
         /* §4.9 STEP 5.1.4.1 — constructing C. Steps 5.1.2-5.1.3's active custom element constructor map is
@@ -681,11 +681,11 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
         if (r < 0 || JS_IsException(made)) {
             JS_FreeValue(ctx, made);
             s->exc = JS_GetException(ctx);
-            hdr->stage = DCE_REPORT;
+            STEP_GOTO(hdr->stage, DCE_REPORT, &s->phase, NULL);
             goto report;
         }
         s->result = made;
-        hdr->stage = DCE_CHECKS;
+        STEP_GOTO(hdr->stage, DCE_CHECKS, &s->phase, NULL);
     }
     if (hdr->stage == DCE_CHECKS) {
         size_t len = 0;
@@ -700,7 +700,11 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
         JS_FreeCString(ctx, local);
         /* The checks are INSIDE step 5.1.4's catch too — a constructor that gave its element an attribute, a
            child, a parent or the wrong local name throws a NotSupportedError the spec REPORTS. */
-        if (r < 0) { s->exc = JS_GetException(ctx); hdr->stage = DCE_REPORT; goto report; }
+        if (r < 0) {
+            s->exc = JS_GetException(ctx);
+            STEP_GOTO(hdr->stage, DCE_REPORT, &s->phase, NULL);
+            goto report;
+        }
         *presult = s->result;
         s->result = JS_UNDEFINED;
         return 0;

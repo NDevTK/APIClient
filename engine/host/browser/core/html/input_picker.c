@@ -224,7 +224,7 @@ static int picker_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
         }
         /* Step 4 is a `select` element's and this member's receiver is an `input`, so the method's remaining
            step is step 3 — asked at its own stage below. */
-        hdr->stage = SP_ALLOWED;
+        STEP_GOTO(hdr->stage, SP_ALLOWED, &s->ua_phase, NULL);
     }
 
     if (hdr->stage == SP_ALLOWED) {
@@ -235,7 +235,7 @@ static int picker_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
                                  "showPicker() requires transient user activation");
             return -1;
         }
-        hdr->stage = SP_APPLICABLE;                                        /* step 5 */
+        STEP_GOTO(hdr->stage, SP_APPLICABLE, &s->ua_phase, NULL);           /* step 5 */
     }
 
     if (hdr->stage == SP_APPLICABLE) {
@@ -244,7 +244,7 @@ static int picker_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
         /* Steps 1 and 2 RETURN rather than throw — this algorithm's callers include an activation behavior,
            which has nowhere to throw to. */
         if (!ok || !html_form_input_is_mutable(ctx, hdr->this_val)) return JS_STEP_DONE;   /* step 2 */
-        hdr->stage = SP_CONSUME;
+        STEP_GOTO(hdr->stage, SP_CONSUME, &s->ua_phase, NULL);
     }
 
     if (hdr->stage == SP_CONSUME) {
@@ -274,7 +274,7 @@ static int picker_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
         s->dismissed = concolic_source_wrap(ctx, PICKER_DIALOG_SHAPE, PICKER_DIALOG_SRC, JS_FALSE);
         CHECK(!JS_IsException(s->dismissed),
               "showPicker: the file dialog's outcome could not be allocated");
-        hdr->stage = SP_DIALOG;
+        STEP_GOTO(hdr->stage, SP_DIALOG, &s->ua_phase, NULL);
     }
 
     DCHECK(hdr->stage == SP_DIALOG, "showPicker resumed into a stage §4.10.5.4 does not have");

@@ -260,7 +260,7 @@ static int js_reject_notify_step(JSContext *ctx, void *st, JSValue cb_result, JS
     if (s->hdr.stage == REJECT_EVENT) {
         s->ev = JS_UNDEFINED;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
-        s->hdr.stage = REJECT_FIRE;
+        STEP_GOTO(s->hdr.stage, REJECT_FIRE, &s->fphase, NULL);
         /* §8.1.4.7: `unhandledrejection` does not bubble and IS cancelable — the cancel is the whole point. */
         s->ev = pre_new(ctx, event_new(ctx, "unhandledrejection", false, true), promise, reason);
         if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }

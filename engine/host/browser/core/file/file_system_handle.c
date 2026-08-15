@@ -404,7 +404,7 @@ static int fsh_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
                 break;
             }
             s->entry = JS_DupValue(ctx, entry);
-            hdr->stage = FSH_STREAM;
+            STEP_GOTO(hdr->stage, FSH_STREAM, &s->w.phase, NULL);
             break;
         case M_GET_FILE_HANDLE:
         case M_GET_DIRECTORY_HANDLE:
@@ -484,7 +484,7 @@ static int fsh_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         JS_FreeValue(ctx, entry);
         s->func = funcs[reject];
         JS_FreeValue(ctx, funcs[reject ^ 1]);
-        if (hdr->stage == FSH_RUN) hdr->stage = FSH_SETTLE;
+        if (hdr->stage == FSH_RUN) STEP_GOTO(hdr->stage, FSH_SETTLE, &s->w.phase, NULL);
     }
 
     if (hdr->stage == FSH_STREAM) {
@@ -499,7 +499,7 @@ static int fsh_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         JS_FreeValue(ctx, s->value);
         s->value = s->stream;
         s->stream = JS_UNDEFINED;
-        hdr->stage = FSH_SETTLE;
+        STEP_GOTO(hdr->stage, FSH_SETTLE, &s->w.phase, NULL);
     }
 
     DCHECK(hdr->stage == FSH_SETTLE, "a FileSystemHandle member resumed into a stage §2.3-§2.4 does not have");

@@ -536,7 +536,7 @@ int abort_signal_run(JSContext *ctx, AbortSignalWork *w, JSValueConst sig, JSVal
         if (!signal_abort_state(ctx, sig, JS_DupValue(ctx, reason))) {
             /* Already aborted: §3.2 step 1 returns, so nothing runs and nothing fires. */
             JS_FreeValue(ctx, in);
-            w->stage = SA_DONE;
+            STEP_GOTO(w->stage, SA_DONE, &w->phase, NULL);
             return 0;
         }
         /* STEPS 3-4, ENTIRELY BEFORE ANY OF THE PAGE'S CODE RUNS. Every non-aborted dependent takes THIS
@@ -560,7 +560,7 @@ int abort_signal_run(JSContext *ctx, AbortSignalWork *w, JSValueConst sig, JSVal
             JS_FreeValue(ctx, deps);
         }
         w->j = 0;
-        w->stage = SA_TAKE;
+        STEP_GOTO(w->stage, SA_TAKE, &w->phase, NULL);
     }
 
     /* STEPS 5-6: "run the abort steps" for the signal, then for each dependent that took its reason. One walk,
@@ -571,7 +571,7 @@ int abort_signal_run(JSContext *ctx, AbortSignalWork *w, JSValueConst sig, JSVal
         if (w->stage == SA_DONE)
             break;
         DCHECK(JS_IsArray(w->targets), "a signal-abort request resumed with no target list");
-        if (w->j >= array_len(ctx, w->targets)) { w->stage = SA_DONE; break; }
+        if (w->j >= array_len(ctx, w->targets)) { STEP_GOTO(w->stage, SA_DONE, &w->phase, NULL); break; }
         cur = JS_GetPropertyUint32(ctx, w->targets, w->j);
 
         if (w->stage == SA_TAKE) {
@@ -589,12 +589,15 @@ int abort_signal_run(JSContext *ctx, AbortSignalWork *w, JSValueConst sig, JSVal
                 JS_FreeValue(ctx, slots);
             }
             w->i = 0;
-            w->stage = SA_ALGOS;
+            STEP_GOTO(w->stage, SA_ALGOS, &w->phase, NULL);
         }
 
         while (w->stage == SA_ALGOS) {
             JSValue out;
-            if (!JS_IsArray(w->algos) || w->i >= array_len(ctx, w->algos)) { w->stage = SA_FIRE; break; }
+            if (!JS_IsArray(w->algos) || w->i >= array_len(ctx, w->algos)) {
+                STEP_GOTO(w->stage, SA_FIRE, &w->phase, NULL);
+                break;
+            }
             {
                 JSValue fn = JS_GetPropertyUint32(ctx, w->algos, w->i);
                 r = step_call_run(ctx, &w->phase, STEP_CB(w->cb), fn, JS_UNDEFINED, 0, NULL, in, &out,
@@ -623,7 +626,7 @@ int abort_signal_run(JSContext *ctx, AbortSignalWork *w, JSValueConst sig, JSVal
             JS_FreeValue(ctx, w->ev);
             w->ev = JS_UNDEFINED;
             w->j++;
-            w->stage = SA_TAKE;
+            STEP_GOTO(w->stage, SA_TAKE, &w->phase, NULL);
         }
         JS_FreeValue(ctx, cur);
     }

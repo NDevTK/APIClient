@@ -192,7 +192,7 @@ int report_exception_run(JSContext *ctx, ReportExceptionWork *w, JSValueConst ex
         w->ev = report_error_event(ctx, exception);
         if (JS_IsException(w->ev)) { w->ev = JS_UNDEFINED; return 0; }
         reporting_mode(ctx, global, /*set*/ 1, true);   /* step 5.1 */
-        w->stage = 1;
+        STEP_GOTO(w->stage, 1, &w->phase, NULL);
         in = JS_UNDEFINED;
     }
     /* step 5.2: fire `error` at the global, using ErrorEvent, cancelable. It is the SAME §2.9 dispatch every
@@ -207,6 +207,6 @@ int report_exception_run(JSContext *ctx, ReportExceptionWork *w, JSValueConst ex
        flag has no further consumer here — a WORKER's global is where step 6.2 gives it one. */
     JS_FreeValue(ctx, w->ev);
     w->ev = JS_UNDEFINED;
-    w->stage = 0;
+    STEP_GOTO(w->stage, 0, &w->phase, NULL);
     return 0;
 }

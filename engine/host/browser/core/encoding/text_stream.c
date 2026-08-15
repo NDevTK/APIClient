@@ -364,7 +364,7 @@ static int js_tx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
         cb_result = JS_UNDEFINED;
         /* §7.6 step 1 is ToString on what the page wrote, which is the page's own `toString`. §7.5's chunk is
            a buffer source and needs no coercion, so only the encoder takes this stage. */
-        s->hdr.stage = which == ALG_ENCODE ? TX_STRING : TX_BUILD;
+        STEP_GOTO(s->hdr.stage, which == ALG_ENCODE ? TX_STRING : TX_BUILD, &s->phase, &s->hdr.get_phase, NULL);
     }
 
     if (s->hdr.stage == TX_STRING) {
@@ -372,7 +372,7 @@ static int js_tx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
-        s->hdr.stage = TX_BUILD;
+        STEP_GOTO(s->hdr.stage, TX_BUILD, &s->phase, &s->hdr.get_phase, NULL);
     }
 
     if (s->hdr.stage == TX_BUILD) {
@@ -385,8 +385,11 @@ static int js_tx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
                  : which == ALG_ENCODE    ? tx_encode(ctx, t, s->input)
                                           : tx_encode_flush(ctx, t);
         if (JS_IsException(s->chunk)) { s->chunk = JS_UNDEFINED; return JS_STEP_ABRUPT; }
-        if (!tx_has_chunk(ctx, s->chunk)) { s->hdr.stage = TX_DONE; return JS_STEP_DONE; }
-        s->hdr.stage = TX_ENQUEUE;
+        if (!tx_has_chunk(ctx, s->chunk)) {
+            STEP_GOTO(s->hdr.stage, TX_DONE, &s->phase, &s->hdr.get_phase, NULL);
+            return JS_STEP_DONE;
+        }
+        STEP_GOTO(s->hdr.stage, TX_ENQUEUE, &s->phase, &s->hdr.get_phase, NULL);
     }
 
     if (s->hdr.stage == TX_ENQUEUE) {
@@ -400,7 +403,7 @@ static int js_tx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
         if (r > 0) return r;
         if (JS_IsException(out)) return JS_STEP_ABRUPT;
         JS_FreeValue(ctx, out);
-        s->hdr.stage = TX_DONE;
+        STEP_GOTO(s->hdr.stage, TX_DONE, &s->phase, &s->hdr.get_phase, NULL);
         return JS_STEP_DONE;
     }
 
@@ -524,7 +527,7 @@ static int tc_run(JSContext *ctx, JSStepHdr *hdr, JSTcState *s, JSValue cb_resul
             JS_FreeValue(ctx, t->transform);
             t->transform = out;
         }
-        hdr->stage = TC_DONE;
+        STEP_GOTO(hdr->stage, TC_DONE, &s->phase, NULL);
         *presult = s->obj;
         s->obj = JS_UNDEFINED;
         return 0;
