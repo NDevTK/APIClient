@@ -51,12 +51,23 @@
  * naming itself rather than being answered out of the empty target, which would report a cross-agent object as
  * having no properties, no prototype and no keys.
  *
- * Three more absences, each a crash at its own site rather than a line here. A SYMBOL key is not "unnameable"
- * — it is three encodings nobody has written (well-known, registered, unique), and remote_object_encode says
- * so. A [[Get]] or [[Set]] whose RECEIVER is not the reference itself needs the peer to ask BACK, and this
- * transport runs one way. And an ABRUPT completion has no field in the answer's grammar, so a peer's throw is
- * the peer's crash rather than an `undefined` delivered to a `try`/`catch` that then never runs — the assert
- * for that one is at the peer, in wpt_runner.c, because that is where the completion is produced. */
+ * AN ANSWER IS A COMPLETION AND NOT A VALUE, which is the other half of "what crosses is text and it carries
+ * its type": the peer performs every operation by running a program, and a program either returns or THROWS.
+ * The completion type rides in front of the value (remote_completion_encode), the thrown value crosses by the
+ * ordinary rules — an Error is an object, so it crosses as a NAME — and the asking flow's step machine RAISES
+ * it at the call site that parked, so a page's `try`/`catch` around a cross-agent operation runs its handler.
+ *
+ * A SYMBOL KEY CROSSES, and it is three encodings rather than one because a symbol is three kinds of thing. A
+ * WELL-KNOWN symbol is a distinct value in every agent denoting the same slot, so it crosses as its
+ * [[Description]] and resolves to the receiving agent's own — which is what keeps `"" + remote` (a
+ * Get(remote, @@toPrimitive) on the first line that logs a reference) from taking the engine down. A
+ * REGISTERED symbol IS its Symbol.for key. A UNIQUE symbol is identity and nothing else, needs an export like
+ * an object, and is the one remote_object_encode still aborts on.
+ *
+ * ONE absence is left at its own site: a [[Get]] or [[Set]] whose RECEIVER is not the reference itself. The
+ * peer's algorithm ends on the receiver, so the peer would have to perform an internal method BACK in the
+ * agent that asked — and that is not one more record, it is a second direction the channel does not have. The
+ * DFAIL in ref_op_step names the three things it needs. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -176,7 +187,153 @@ uint32_t remote_object_id(JSContext *ctx, JSValueConst v)
     return r->id;
 }
 
+/* ---- THE WELL-KNOWN SYMBOLS OF THIS AGENT ---------------------------------------------------------------- */
+
+/* 6.1.5's Table 1, READ OUT OF THIS AGENT'S OWN %Symbol% INTRINSIC rather than listed here. A hand-copied
+   table is wrong in both directions and both have happened to lists like it: the spec's grows (asyncDispose
+   and dispose are recent), so a list would abort on a symbol the engine has, and an engine that lacks one
+   would let the list claim a symbol nothing can resolve. What is well-known is exactly "an own property of
+   %Symbol% whose value is a symbol", which is what the table below collects.
+   CAPTURED BEFORE THE DOCUMENT'S SCRIPTS RUN, in remote_object_init, for the reason the peer captures
+   %Reflect.set% there: `Symbol` is an ordinary writable global binding, so a page's `Symbol = {iterator: 1}`
+   would otherwise decide what a cross-agent key means. Held for the agent's life, because a well-known symbol
+   is agent-wide — every realm of one agent shares it, which is why one capture answers for all of them. */
+typedef struct { char *desc; JSValue sym; } WellKnown;
+static WellKnown *g_wk;
+static int        g_wk_n;
+
+static int wk_by_value(JSValueConst v)
+{
+    int i;
+    for (i = 0; i < g_wk_n; i++)
+        if (JS_VALUE_GET_PTR(g_wk[i].sym) == JS_VALUE_GET_PTR(v)) return i;
+    return -1;
+}
+
+static int wk_by_desc(const char *desc)
+{
+    int i;
+    for (i = 0; i < g_wk_n; i++)
+        if (!strcmp(g_wk[i].desc, desc)) return i;
+    return -1;
+}
+
+static void wk_capture(JSContext *ctx)
+{
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue sym_ctor = JS_GetPropertyStr(ctx, global, "Symbol");
+    JSPropertyEnum *tab = NULL;
+    uint32_t n = 0, i;
+
+    JS_FreeValue(ctx, global);
+    CHECK(JS_IsObject(sym_ctor),
+          "remote object: this realm has no %Symbol% — a cross-agent key that is a well-known symbol is "
+          "resolved against it, and a realm without one can encode none of them");
+    /* NOT ENUM_ONLY: 6.1.5's members of %Symbol% are non-enumerable, and asking for the enumerable ones
+       returns a table with no well-known symbol in it at all. */
+    CHECK(JS_GetOwnPropertyNames(ctx, &tab, &n, sym_ctor, JS_GPN_STRING_MASK) == 0,
+          "remote object: %Symbol%'s own properties could not be read");
+    for (i = 0; i < n; i++) {
+        JSValue member = JS_GetProperty(ctx, sym_ctor, tab[i].atom);
+        JSAtom a;
+        const char *desc;
+        size_t dlen = 0;
+
+        if (!JS_IsSymbol(member)) { JS_FreeValue(ctx, member); continue; }
+        /* THE NAME ON THE WIRE IS THE SYMBOL'S OWN [[Description]], not the property it hangs off — those
+           agree today ("Symbol.iterator" on `Symbol.iterator`) and the description is the one the spec's Table
+           1 states, so reading it from the value keeps the wire name a fact about the symbol. */
+        a = JS_ValueToAtom(ctx, member);
+        desc = JS_AtomToCStringLen(ctx, &dlen, a);
+        CHECK(desc != NULL, "remote object: OOM reading a well-known symbol's description");
+        DCHECK(dlen > 0 && strlen(desc) == dlen && !strchr(desc, '\t') && !strchr(desc, '\n'),
+               "a well-known symbol's [[Description]] is empty or carries a tab, a newline or a NUL — these "
+               "records are one tab-separated line and the peer would read one field as two");
+        g_wk = realloc(g_wk, (size_t)(g_wk_n + 1) * sizeof *g_wk);
+        CHECK(g_wk != NULL, "remote object: OOM recording this agent's well-known symbols");
+        g_wk[g_wk_n].desc = strdup(desc);
+        CHECK(g_wk[g_wk_n].desc != NULL, "remote object: OOM recording a well-known symbol's description");
+        g_wk[g_wk_n].sym = member;   /* held: the table outlives whatever else names it */
+        g_wk_n++;
+        JS_FreeCString(ctx, desc);
+        JS_FreeAtom(ctx, a);
+    }
+    JS_FreePropertyEnum(ctx, tab, n);
+    JS_FreeValue(ctx, sym_ctor);
+    DCHECK(g_wk_n > 0, "this agent's %Symbol% carries no well-known symbol — 6.1.5 defines fifteen and the "
+                       "engine's own iterators need @@iterator, so the capture read something that is not it");
+}
+
+/* IS THIS SYMBOL IN THE GLOBAL REGISTRY, and under what key? 20.4.2.2's registry is keyed BY the description,
+   and `JS_NewSymbol(…, is_global)` is the same lookup `Symbol.for` performs — so the symbol the registry holds
+   for this symbol's own description IS this symbol exactly when this symbol is registered. It is decided
+   without running any of the page's code, which a `Symbol.keyFor` call would be. The registered symbol the
+   lookup may CREATE is unobservable: the registry cannot be enumerated, and `Symbol.for(k)` would mint the
+   same one on demand. */
+static bool sym_registered_key(JSContext *ctx, JSValueConst v, char **pkey, size_t *pkeylen)
+{
+    JSAtom a = JS_ValueToAtom(ctx, v);
+    size_t len = 0;
+    const char *desc = JS_AtomToCStringLen(ctx, &len, a);
+    JSValue reg;
+    bool same;
+
+    CHECK(desc != NULL, "remote object: OOM reading a symbol's description");
+    /* ASKED BEFORE THE LOOKUP, because the lookup itself cannot see past a NUL: JS_NewSymbol names a registry
+       key by a C STRING, so `Symbol.for("a\0b")` would be compared against the registry's entry for "a" and
+       report itself UNIQUE — a wrong answer wearing the right shape. The description is where the truncation
+       happens, so this is where it is asserted. */
+    DCHECK(strlen(desc) == len,
+           "a symbol's description carries a NUL, and the registry is keyed by a C string here — a REGISTERED "
+           "symbol whose Symbol.for key holds one cannot be told from a unique symbol, so it would cross as "
+           "the wrong kind or not at all. Reach the registry by string-and-length to close it");
+    reg = JS_NewSymbol(ctx, desc, true);
+    CHECK(!JS_IsException(reg), "remote object: OOM asking the symbol registry for a key");
+    same = JS_VALUE_GET_PTR(reg) == JS_VALUE_GET_PTR(v);
+    if (same) {
+        *pkey = malloc(len + 1);
+        CHECK(*pkey != NULL, "remote object: OOM copying a registered symbol's key");
+        memcpy(*pkey, desc, len + 1);
+        *pkeylen = len;
+    }
+    JS_FreeValue(ctx, reg);
+    JS_FreeCString(ctx, desc);
+    JS_FreeAtom(ctx, a);
+    return same;
+}
+
 /* ---- WHAT CROSSES, AND HOW IT CARRIES ITS TYPE ----------------------------------------------------------- */
+
+/* `tag` + base64 of `len` bytes — the one form every page-chosen text crosses in, because these records are
+   tab-separated and a property name, a written value and a registry key may each hold a tab or a newline. */
+static char *enc_b64(char tag, const char *bytes, size_t len)
+{
+    size_t cap = JS_Base64EncodedSize(len) + 2, n;
+    char *out = malloc(cap);
+
+    CHECK(out != NULL, "remote object: OOM encoding text for another agent");
+    out[0] = tag;
+    n = JS_Base64Encode(out + 1, cap - 1, (const uint8_t *)bytes, len);
+    CHECK(n > 0 || len == 0, "the base64 buffer was sized wrong for a cross-agent string");
+    out[1 + n] = 0;
+    return out;
+}
+
+/* …and back. Returns malloc'd bytes with a NUL after them; `*plen` is the real length, which is not
+   strlen(bytes) when the text carried one. */
+static char *dec_b64(const char *b64, size_t *plen)
+{
+    size_t n = strlen(b64), cap = JS_Base64DecodedMax(n) + 1;
+    char *bytes = malloc(cap);
+    int err = 0;
+
+    CHECK(bytes != NULL, "remote object: OOM decoding text from another agent");
+    *plen = JS_Base64Decode((uint8_t *)bytes, cap, b64, n, &err);
+    DCHECK(!err, "a cross-agent text field is not base64 — the record was written by something that does not "
+                 "share this file's grammar");
+    bytes[*plen] = 0;
+    return bytes;
+}
 
 char *remote_object_encode(JSContext *ctx, JSValueConst v)
 {
@@ -194,18 +351,50 @@ char *remote_object_encode(JSContext *ctx, JSValueConst v)
         return out;
     }
     if (JS_IsString(v)) {
-        size_t len = 0, cap, n;
+        size_t len = 0;
         const char *t = JS_ToCStringLen(ctx, &len, v);
         CHECK(t != NULL, "remote object: OOM encoding a string for another agent");
-        cap = JS_Base64EncodedSize(len) + 2;
-        out = malloc(cap);
-        CHECK(out != NULL, "remote object: OOM encoding a string for another agent");
-        out[0] = 's';
-        n = JS_Base64Encode(out + 1, cap - 1, (const uint8_t *)t, len);
-        CHECK(n > 0 || len == 0, "the base64 buffer was sized wrong for a cross-agent string");
-        out[1 + n] = 0;
+        out = enc_b64('s', t, len);
         JS_FreeCString(ctx, t);
         return out;
+    }
+    if (JS_IsSymbol(v)) {
+        /* A WELL-KNOWN SYMBOL IS A DIFFERENT VALUE IN EVERY AGENT AND THE SAME SLOT IN ALL OF THEM, so it
+           crosses as the name of the slot. This is what makes `"" + remote` possible at all: a string
+           coercion performs Get(remote, @@toPrimitive), which is a symbol-keyed read on the first line of
+           code that so much as logs a cross-agent object. */
+        int k;
+        char *key = NULL;
+        size_t keylen = 0;
+
+        DCHECK(g_wk_n > 0,
+               "a symbol crossed an agent boundary before this agent captured its well-known symbols — "
+               "remote_object_init has not run, and every well-known key would be reported as a unique symbol "
+               "by a table that simply has nothing in it");
+        k = wk_by_value(v);
+        if (k >= 0) {
+            size_t cap = strlen(g_wk[k].desc) + 2;
+            out = malloc(cap);
+            CHECK(out != NULL, "remote object: OOM naming a well-known symbol for another agent");
+            snprintf(out, cap, "w%s", g_wk[k].desc);
+            return out;
+        }
+        /* A REGISTERED SYMBOL IS ITS KEY. 20.4.2.2 makes `Symbol.for(k)` the agent's ONE symbol for k, so the
+           key is the whole of the identity and the peer's own registry answers with the peer's own symbol. */
+        if (sym_registered_key(ctx, v, &key, &keylen)) {
+            out = enc_b64('g', key, keylen);
+            free(key);
+            return out;
+        }
+        DFAIL("a UNIQUE symbol crossed an agent boundary. Unlike a well-known symbol (which denotes the same "
+              "slot in every agent) and a registered one (which IS its Symbol.for key), a unique symbol is "
+              "identity and nothing else, so it crosses the way an object does: EXPORT it — an id minted once "
+              "per symbol in this agent's export table, carried as `<document>:<id>` — and give the importing "
+              "agent a per-(doc, id) LOCAL symbol standing for it, with the pairing remembered in both "
+              "directions so a name that comes home resolves to the original symbol and `k === k` holds on "
+              "both sides. That local stand-in is a symbol and not a Proxy, which is why it is a mechanism of "
+              "its own rather than a call to ref_mint");
+        return strdup("u");
     }
     if (JS_IsObject(v)) {
         /* AN OBJECT CROSSES AS ITS NAME, AND THE NAME SAYS WHOSE. A value that is ALREADY a reference re-emits
@@ -226,11 +415,6 @@ char *remote_object_encode(JSContext *ctx, JSValueConst v)
         snprintf(out, cap, "%c%s:%u", tag, doc_name, id);
         return out;
     }
-    DCHECK(!JS_IsSymbol(v),
-           "a SYMBOL crossed an agent boundary and this protocol has no encoding for one. It is not that a "
-           "symbol cannot cross — it is three encodings nobody has written: a WELL-KNOWN symbol crosses as its "
-           "@@name and is resolved to the receiving agent's own, a REGISTERED one as its Symbol.for key, and a "
-           "unique one as an export like any other value with identity");
     DFAIL("a value crossed an agent boundary that this protocol does not name — a BigInt is the primitive that "
           "is left, and its text form is not built");
     return strdup("u");
@@ -245,16 +429,34 @@ JSValue remote_object_decode(JSContext *ctx, const char *text)
     case 'b': return JS_NewBool(ctx, text[1] == '1');
     case 'n': return JS_NewFloat64(ctx, strtod(text + 1, NULL));
     case 's': {
-        size_t n = strlen(text + 1), cap = JS_Base64DecodedMax(n) + 1, len;
-        uint8_t *bytes = malloc(cap);
-        JSValue s;
-        int err = 0;
-        CHECK(bytes != NULL, "remote object: OOM decoding a string from another agent");
-        len = JS_Base64Decode(bytes, cap, text + 1, n, &err);
-        DCHECK(!err, "a cross-agent string field is not base64 — the record was written by something that does "
-                     "not share this file's grammar");
-        s = JS_NewStringLen(ctx, (const char *)bytes, len);
+        size_t len = 0;
+        char *bytes = dec_b64(text + 1, &len);
+        JSValue s = JS_NewStringLen(ctx, bytes, len);
         free(bytes);
+        return s;
+    }
+    /* A WELL-KNOWN SYMBOL RESOLVES TO THIS AGENT'S OWN — the name denotes the SLOT, and answering with a
+       symbol minted here would be a value that keys nothing the peer meant. */
+    case 'w': {
+        int k = wk_by_desc(text + 1);
+        DCHECK(k >= 0, "a peer named a well-known symbol this agent does not have — 6.1.5's table is read out "
+                       "of each agent's own %Symbol%, so the two engines disagree about which symbols exist "
+                       "and there is no slot here for the one the peer meant");
+        if (k < 0) return JS_UNDEFINED;
+        return JS_DupValue(ctx, g_wk[k].sym);
+    }
+    /* A REGISTERED SYMBOL IS LOOKED UP IN THIS AGENT'S OWN REGISTRY, which is what 20.4.2.2 makes it: the key
+       decides the symbol, so `Symbol.for(k)` here and there name one another's. */
+    case 'g': {
+        size_t len = 0;
+        char *key = dec_b64(text + 1, &len);
+        JSValue s;
+        DCHECK(strlen(key) == len,
+               "a registered symbol's key carries a NUL — JS_NewSymbol names a key by a C string, so this "
+               "agent would look up a shorter key, which is a different symbol");
+        s = JS_NewSymbol(ctx, key, true);
+        free(key);
+        CHECK(!JS_IsException(s), "remote object: OOM resolving a registered symbol from another agent");
         return s;
     }
     case 'o': case 'f': case 'c': {
@@ -290,6 +492,44 @@ JSValue remote_object_decode(JSContext *ctx, const char *text)
     }
     DFAIL("a cross-agent record carried a typed value under a tag this protocol does not name");
     return JS_UNDEFINED;
+}
+
+/* ---- AND WHAT AN ANSWER IS: A COMPLETION ----------------------------------------------------------------- */
+
+/* THE TYPE IN FRONT OF THE VALUE. Neither character is a value tag, so a value record read as a completion —
+   or a completion read as a value — crashes at the decoder instead of resolving a peer's throw to a `u`. */
+#define REMOTE_COMPLETION_NORMAL_TAG '.'
+#define REMOTE_COMPLETION_THROW_TAG  '!'
+
+char *remote_completion_encode(JSContext *ctx, int completion, JSValueConst v)
+{
+    char *value = remote_object_encode(ctx, v);
+    size_t cap = strlen(value) + 2;
+    char *out = malloc(cap);
+
+    DCHECK(completion == ENGINE_COMPLETION_NORMAL || completion == ENGINE_COMPLETION_THROW,
+           "a cross-agent answer was encoded under a completion type ECMA-262 6.2.4 does not have — an "
+           "operation performed in another instance returns or throws, and nothing crosses a call site");
+    CHECK(out != NULL, "remote object: OOM encoding a completion for another agent");
+    out[0] = completion == ENGINE_COMPLETION_THROW ? REMOTE_COMPLETION_THROW_TAG
+                                                   : REMOTE_COMPLETION_NORMAL_TAG;
+    memcpy(out + 1, value, cap - 1);
+    free(value);
+    return out;
+}
+
+JSValue remote_completion_decode(JSContext *ctx, const char *text, int *pcompletion)
+{
+    DCHECK(pcompletion != NULL,
+           "a cross-agent completion was decoded with nowhere to put its TYPE — the type is the half that says "
+           "whether the value is a result or a throw, and a caller that cannot receive it will deliver a throw "
+           "as a value");
+    CHECK(text != NULL, "remote object: a cross-agent answer arrived as no text at all");
+    DCHECK(*text == REMOTE_COMPLETION_NORMAL_TAG || *text == REMOTE_COMPLETION_THROW_TAG,
+           "a cross-agent answer did not begin with a completion type — every answer is a completion record, "
+           "so a record that starts with a value tag was written by something that does not share this grammar");
+    *pcompletion = *text == REMOTE_COMPLETION_THROW_TAG ? ENGINE_COMPLETION_THROW : ENGINE_COMPLETION_NORMAL;
+    return remote_object_decode(ctx, text + 1);
 }
 
 /* ---- THE ONE MACHINE THE FOUR BUILT INTERNAL METHODS ARE ------------------------------------------------- */
@@ -401,31 +641,34 @@ static int ref_op_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
         if (!r) return ref_unbuilt_here(ctx, "a cross-agent trap lost its target");
 
         /* EVERY VALIDATION BEFORE THE FIRST ALLOCATION, so a refusal has nothing to unwind. */
-        if (op != REF_OP_APPLY && !JS_IsString(argv[1])) {
-            DCHECK(JS_IsSymbol(argv[1]), "a cross-agent keyed operation was handed a key that is neither a "
-                                         "string nor a symbol — a property key is one of the two");
-            DFAIL("a SYMBOL-keyed operation on a cross-agent reference. The old answer here was `undefined`, "
-                  "justified by a symbol being unique to the agent that minted it — which is false for the two "
-                  "kinds a page actually uses: `remote[Symbol.iterator]` and `remote[Symbol.toPrimitive]` name "
-                  "WELL-KNOWN symbols, which every agent has its own of and which cross as their @@name, and a "
-                  "registered one crosses as its Symbol.for key. Build the symbol encoding in "
-                  "remote_object_encode; a unique symbol is the residue and is an export like any other value "
-                  "with identity");
-            return ref_unbuilt_here(ctx, "a symbol-keyed operation on a cross-agent reference is not built");
-        }
+        /* 6.1.7: A PROPERTY KEY IS A STRING OR A SYMBOL, and both cross — the encoder owns which of the three
+           symbol encodings a symbol takes, so there is nothing for this site to decide. */
+        DCHECK(op == REF_OP_APPLY || JS_IsString(argv[1]) || JS_IsSymbol(argv[1]),
+               "a cross-agent keyed operation was handed a key that is neither a string nor a symbol — a "
+               "property key is one of the two, and the trap is handed the key the operator site already "
+               "converted");
         /* 10.5.8 step 9 / 10.5.9 step 9 hand the trap the RECEIVER, and it is the reference itself for every
            ordinary `remote.x` / `remote.x = v`. When it is anything else — `Object.create(remote).x = v`,
-           `Reflect.set(remote, k, v, other)` — the peer's OrdinarySetWithOwnDescriptor would run
-           CreateDataProperty on an object in THIS agent, so the receiver has to cross and the peer has to be
-           able to ask BACK. That is the reverse direction of this transport and it does not exist. */
+           `Reflect.set(remote, k, v, other)` — the peer's OrdinarySetWithOwnDescriptor ends on the RECEIVER
+           (10.1.9.2 step 3 does CreateDataProperty on it), which is an object in THIS agent. */
         if (op == REF_OP_GET || op == REF_OP_SET) {
             RefData *rr = ref_of_proxy(ctx, argv[op == REF_OP_SET ? 3 : 2]);
             if (!rr || rr->doc != r->doc || rr->id != r->id) {
-                DFAIL("a cross-agent [[Get]]/[[Set]] whose RECEIVER is not the reference itself — the peer's "
-                      "algorithm ends on the receiver (10.1.9.2 defines the property THERE), so the operation "
-                      "would land on an object in this agent. Build the reverse direction: the peer must be "
-                      "able to issue a request back to the agent that asked, which is a second route the "
-                      "trusted zone owns and this transport has only one of");
+                DFAIL("a cross-agent [[Get]]/[[Set]] whose RECEIVER is not the reference itself. 10.1.9.2 ends "
+                      "on the receiver, so the peer — mid-operation, inside the program that is answering this "
+                      "request — would have to perform an internal method on an object of the agent that ASKED. "
+                      "That is a request in the reverse direction, and it is not one more record on this "
+                      "channel: (1) the channel is a synchronous call-and-answer, one question outstanding, so "
+                      "the asking host is BLOCKED reading the answer line and cannot answer anything while it "
+                      "waits — both directions have to become asynchronous, id-multiplexed records rather than "
+                      "a write followed by a read; (2) the asking agent must answer BY RUNNING A PROGRAM under "
+                      "the peer's flow's world, which it can only do from its own pump, so the peer's flow has "
+                      "to PARK on a request of its own at 10.1.9.2 step 3 — the answering side needs the same "
+                      "suspend the asking side has, which is what makes it a flow rather than a callback; and "
+                      "(3) the peer's serve loop installs ONE world's segment per turn and holds it across the "
+                      "answer, so a half-answered operation parked mid-turn needs the world switch to belong to "
+                      "the parked operation instead of to the loop. Build those three and the receiver crosses "
+                      "as a name like any other object");
                 return ref_unbuilt_here(ctx, "a cross-agent operation with a foreign receiver is not built");
             }
         }
@@ -470,10 +713,20 @@ static int ref_op_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
     }
     if (!engine_host_answered(s->req, &answer))
         return JS_STEP_YIELD;
-    *presult = engine_host_take(ctx, s->req);
-    s->req = 0;
+    /* THE PEER'S COMPLETION, RAISED WHERE THE OPERATION WAS WRITTEN. The peer performs the internal method by
+       running a program — an IDL accessor, a page's setter, a page's function — and every one of those can
+       throw. The throw belongs at THIS call site, so the page's own `try { remote.x = 1 } catch (e)` around
+       the operation runs its handler exactly as it would for a local object, and the reference stops being the
+       one kind of object whose failures are silently `undefined`. */
+    {
+        int r = engine_host_take_completion(ctx, s->req, presult);
+        s->req = 0;
+        if (r != JS_STEP_DONE) return r;
+    }
     /* 10.5.9 / 10.5.10 ToBoolean the trap's result, so a non-boolean here is not a page's doing — it is the
-       peer having answered a [[Set]] or a [[Delete]] with something that is not the operation's completion. */
+       peer having answered a [[Set]] or a [[Delete]] with something that is not the operation's completion.
+       It is asked of a NORMAL completion only: a throw completion's value is the thrown value, and 10.5.9's
+       boolean does not exist on a path that did not complete. */
     DCHECK(!(op == REF_OP_SET || op == REF_OP_DELETE) || JS_IsBool(*presult),
            "a peer answered a cross-agent [[Set]] or [[Delete]] with something that is not a boolean — those "
            "internal methods complete with the operation's success, and anything else means the peer ran a "
@@ -668,6 +921,11 @@ void remote_object_init(JSContext *ctx)
 
     g_refs = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_refs), "the cross-agent reference table could not be allocated");
+
+    /* THIS AGENT'S WELL-KNOWN SYMBOLS, taken from its own %Symbol% BEFORE any document script runs — the same
+       moment and the same reason the peer captures %Reflect.set%. A page that replaces the `Symbol` binding
+       cannot make a cross-agent `remote[Symbol.iterator]` name a different slot. */
+    wk_capture(ctx);
 }
 
 void remote_object_free(JSContext *ctx)
@@ -678,6 +936,12 @@ void remote_object_free(JSContext *ctx)
     free(g_exports);
     g_exports = NULL;
     g_exports_n = g_exports_cap = 0;
+    /* THE WELL-KNOWN TABLE HOLDS A REFERENCE PER SYMBOL and a string per description — both are this file's,
+       and the runtime's own leak walk counts the symbol if this does not. */
+    for (k = 0; k < g_wk_n; k++) { JS_FreeValue(ctx, g_wk[k].sym); free(g_wk[k].desc); }
+    free(g_wk);
+    g_wk = NULL;
+    g_wk_n = 0;
     JS_FreeValue(ctx, g_refs);
     g_refs = JS_UNDEFINED;
     g_ref_class = g_ref_fn_class = 0;

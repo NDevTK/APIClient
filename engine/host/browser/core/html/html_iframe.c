@@ -279,9 +279,13 @@ static int iframe_content_document_step(JSContext *ctx, JSStepHdr *hdr, void *st
                         "peer was asked and nothing was");
     if (!engine_host_answered(s->req, &answer))
         return JS_STEP_YIELD;
-    *presult = engine_host_take(ctx, s->req);
-    s->req = 0;
-    return JS_STEP_DONE;
+    /* The peer answered with a COMPLETION: §7.3.1's read runs the peer's own program, and a throw from it is
+       raised here, at the `iframe.contentDocument` that parked. */
+    {
+        int r = engine_host_take_completion(ctx, s->req, presult);
+        s->req = 0;
+        return r;
+    }
 }
 
 static const IdlStepDecl CONTENT_DOC_DECL = { iframe_content_document_step, sizeof(ContentDocState),

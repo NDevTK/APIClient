@@ -577,10 +577,20 @@ QJS_EXPORT const char *qjs_host_notices(void)
    because a policy is a property of THE RESPONSE, and a cross-origin `otherW.length` is a NUMBER that a page
    distinguishes from "0". That is the same sentence SECURITY.md states for the cross-instance encoder, applied
    to the seam one layer down. Redefining it costs nothing: the bridge has never answered a request, so this
-   entry had no caller to break. */
-QJS_EXPORT void qjs_host_answer(unsigned req, const char *json)
+   entry had no caller to break.
+   AND AN ANSWER IS A COMPLETION, NOT A VALUE — `completion` is 0 for a normal one and 1 for a THROW whose
+   value is the JSON. The offscreen relays a cross-agent operation performed by ANOTHER WASM INSTANCE, and that
+   instance answers BY RUNNING A PROGRAM: an IDL accessor, a page's setter, a page's own function. With no
+   parameter for it the only completion this entry could express was a normal one, so a peer's throw would
+   arrive at the asking flow as `undefined` and the page's `try`/`catch` around the operation would never run —
+   the identical hole the cross-instance grammar had one layer up. It is a PARAMETER and not a second entry
+   point beside this one, so a zone answering a request has to say which completion it is answering with. */
+QJS_EXPORT void qjs_host_answer(unsigned req, const char *json, unsigned completion)
 {
     DCHECK(g_begun, "an answer was provided to an engine that never ran");
+    DCHECK(completion == ENGINE_COMPLETION_NORMAL || completion == ENGINE_COMPLETION_THROW,
+           "the trusted zone answered a request with a completion type ECMA-262 6.2.4 does not have — an "
+           "operation performed in another instance returns or throws, and nothing else crosses a call site");
     {
         JSValue v = json ? JS_ParseJSON(g_ctx, json, strlen(json), "<host-answer>") : JS_UNDEFINED;
         /* A MALFORMED ANSWER IS THE HOST'S BUG, not the page's. Delivering the exception instead would surface
@@ -591,7 +601,7 @@ QJS_EXPORT void qjs_host_answer(unsigned req, const char *json)
         /* Routed to ONE call site by id — never broadcast the way a fetched body is, because the answer was
            computed under the ASKING FLOW's world. A zero return means that flow is gone, which is not an
            error: nobody is waiting on the answer. */
-        engine_host_answer(g_ctx, (uint32_t)req, v);
+        engine_host_answer(g_ctx, (uint32_t)req, v, (int)completion);
         JS_FreeValue(g_ctx, v);
     }
 }

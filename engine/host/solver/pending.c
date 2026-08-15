@@ -173,6 +173,7 @@ JSValue pending_push(JSValue *reg, int kind)
        The defaults are each field's "nothing yet": no address, no answer, no rendezvous. */
     pend_put(e, PEND_RESOLVE, JS_UNDEFINED);
     pend_put(e, PEND_VALUE, JS_UNDEFINED);
+    pend_put(e, PEND_COMPLETION, JS_UNDEFINED);   /* no answer yet, so no completion type */
     pend_put(e, PEND_URL, JS_NULL);
     pend_put(e, PEND_HAVE_VALUE, JS_FALSE);
     pend_put(e, PEND_KIND, JS_NewInt32(pend_ctx(), kind));

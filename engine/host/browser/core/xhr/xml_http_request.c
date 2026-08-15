@@ -1417,7 +1417,17 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
             if (!engine_host_answered(s->req, &answer))
                 return JS_STEP_YIELD;
             xhr_take_reply(ctx, d, answer);
-            { JSValue taken = engine_host_take(ctx, s->req); JS_FreeValue(ctx, taken); }
+            {
+                /* §3.5.6's fetch is answered by the trusted zone out of the network, not by a peer running a
+                   program, so its completion is normal or the host answered a question nobody asked. A network
+                   FAILURE is a reply this component reads off the record, never a throw completion. */
+                int completion = ENGINE_COMPLETION_NORMAL;
+                JSValue taken = engine_host_take(ctx, s->req, &completion);
+                DCHECK(completion == ENGINE_COMPLETION_NORMAL,
+                       "an XMLHttpRequest's fetch was answered with a THROW completion — the host answers it "
+                       "out of the network, and a network error is a reply rather than a thrown value");
+                JS_FreeValue(ctx, taken);
+            }
             s->req = 0;
         }
         /* The upload has finished transmitting the moment the request is answered — the host answers a request

@@ -65,9 +65,16 @@
  * own-property-count DCHECK — the assert at the origin CLAUDE.md §Architecture names, rather than a comment. */
 #define PEND_SHARE  0
 #define PEND_STRUCT 1
+/* `completion` IS THE ANSWER'S OTHER HALF — ECMA-262 6.2.4 says a completion is a TYPE and a VALUE, and a
+   register with a slot for the value and none for the type delivers a peer's THROW as `undefined`. It rides
+   the record beside the value it belongs to, is SHARED for the same reason the value is (an answer that
+   arrived before a fork was computed in a world both arms were in), and parks with it. Its default is
+   JS_UNDEFINED — "no answer yet, so no completion type" — and engine_host_answer writes the two together, so a
+   record that has a value and no type crashes at the take rather than reading as a normal completion. */
 #define PENDING_FIELDS(X)                    \
     X(RESOLVE,    "resolve",   PEND_SHARE)   \
     X(VALUE,      "value",     PEND_SHARE)   \
+    X(COMPLETION, "completion",PEND_SHARE)   \
     X(URL,        "url",       PEND_SHARE)   \
     X(HAVE_VALUE, "haveValue", PEND_SHARE)   \
     X(KIND,       "kind",      PEND_SHARE)   \

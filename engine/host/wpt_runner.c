@@ -429,13 +429,21 @@ static bool wpt_drain_owed(JSContext *ctx)
 /* Report the pending exception. JS_ToCString would run the thrown object's own `toString` from C — which is
    the drive-to-completion the engine aborts on, and did abort on here, so the report of a failure became a
    crash that hid it. JS_DiagCString is the engine's answer for a host with no flow to run page code on. */
-static void wpt_report_exception(JSContext *ctx, const char *name, const char *what)
+/* Report a THROWN VALUE the caller already holds. Split from the pending-exception form below because a
+   program's completion is now taken by its caller — a test file's throw is a failure to report, and a
+   cross-agent operation's throw is its ANSWER, and only the caller knows which of the two it has. */
+static void wpt_report_thrown(JSContext *ctx, const char *name, const char *what, JSValueConst e)
 {
-    JSValue e = JS_GetException(ctx);
     char *owned = NULL;
     const char *msg = JS_DiagCString(ctx, e, &owned);
     fprintf(report_out(), "@WPTERR %s: %s%s\n", name, what, msg ? msg : "?");
     JS_DiagFreeCString(ctx, msg, owned);
+}
+
+static void wpt_report_exception(JSContext *ctx, const char *name, const char *what)
+{
+    JSValue e = JS_GetException(ctx);
+    wpt_report_thrown(ctx, name, what, e);
     JS_FreeValue(ctx, e);
 }
 
@@ -754,9 +762,13 @@ static bool wpt_answer_host_requests(JSContext *ctx)
                     if (answer) {
                         /* THE ANSWER'S GRAMMAR IS remote_object.c's, in both processes and both directions —
                            an object name says WHICH agent's namespace it is in, so a name that came home
-                           resolves to the original object rather than to a proxy of it. */
-                        JSValue v = remote_object_decode(ctx, answer);
-                        engine_host_answer(ctx, id, v);
+                           resolves to the original object rather than to a proxy of it. AND AN ANSWER IS A
+                           COMPLETION: the peer ran a program, so it may have thrown, and this zone relays the
+                           type rather than deciding anything about it — the asking flow's own machine raises
+                           the throw at the call site that parked on it. */
+                        int completion = ENGINE_COMPLETION_NORMAL;
+                        JSValue v = remote_completion_decode(ctx, answer, &completion);
+                        engine_host_answer(ctx, id, v, completion);
                         answered = true;
                         JS_FreeValue(ctx, v);
                     }
@@ -783,7 +795,9 @@ static bool wpt_answer_host_requests(JSContext *ctx)
             JS_SetPropertyStr(ctx, v, "csp", csp ? JS_NewString(ctx, csp) : JS_NULL);
             free(body);
             free(csp);
-            engine_host_answer(ctx, id, v);
+            /* THE HOST'S OWN ANSWER, so a NORMAL completion: this zone fetched bytes, it did not run a peer's
+               program, and a load that did not load is `{body: null}` rather than a throw. */
+            engine_host_answer(ctx, id, v, ENGINE_COMPLETION_NORMAL);
             answered = true;
             JS_FreeValue(ctx, v);
         }
@@ -838,7 +852,9 @@ static bool wpt_answer_host_requests(JSContext *ctx)
             req.body_len = blen;
             body = wpt_http(&req, &len, &status, &rh);
             reply = body ? fetch_reply_new(ctx, status, "", &rh, body, len) : JS_NULL;
-            engine_host_answer(ctx, id, reply);
+            /* Also the host's own — §3.5.6's fetch, answered out of the network; a network error is a reply
+               this component reads, never a thrown value. */
+            engine_host_answer(ctx, id, reply, ENGINE_COMPLETION_NORMAL);
             answered = true;
             JS_FreeValue(ctx, reply);
             free(body);
@@ -951,36 +967,51 @@ static void wpt_derive_addresses(int argc, char **argv)
 }
 
 /* Run one program as a FLOW, exactly as the test262 harness does: park and rebuild the whole frame chain at
-   every back-edge. A throw is reported and ends the file — a test file that cannot run is a failure, never a
-   skip. */
-/* Run one program as a flow and KEEP ITS VALUE. A member read answered on behalf of another document is a
+   every back-edge. */
+/* Run one program as a flow and KEEP ITS COMPLETION. A member read answered on behalf of another document is a
    program like any other and must run as a flow like any other: reading `self.length` from C would reach the
-   getter with no flow base under it, which is the one thing this engine refuses. `*pres` is owned. */
+   getter with no flow base under it, which is the one thing this engine refuses.
+   IT HANDS BACK THE COMPLETION, NOT A RESULT AND A REPORT. `*pres` is the value the program completed with —
+   its result, or the THROWN VALUE when the return is 1 — and it is owned by the caller either way. This used
+   to report the throw here and answer `undefined`, which is right for a test file and WRONG for a peer
+   answering a cross-agent operation: there the throw IS the answer and has to cross as one. A program that
+   does not compile completes abruptly with the SyntaxError, which is the same shape and says so in its own
+   message. */
 static int run_program_value(JSContext *ctx, const char *src, size_t len, const char *name, JSValue *pres)
 {
-    JSValue *flow = JS_FlowNew(ctx, src, len, name, JS_EVAL_TYPE_GLOBAL);
+    JSValue *flow;
     JSValue res = JS_UNDEFINED;
-    int failed = 0;
 
-    if (pres) *pres = JS_UNDEFINED;
+    DCHECK(pres != NULL,
+           "a program was run with nowhere to place its completion — a throw would be left pending on the "
+           "context and surface at whatever asked the engine for anything next");
+    *pres = JS_UNDEFINED;
+    flow = JS_FlowNew(ctx, src, len, name, JS_EVAL_TYPE_GLOBAL);
     if (!flow) {
-        wpt_report_exception(ctx, name, "compile: ");
+        *pres = JS_GetException(ctx);
         return 1;
     }
     while (JS_FlowResume(ctx, flow, &res)) { wpt_answer_host_requests(ctx); }
     if (JS_IsException(res)) {
-        wpt_report_exception(ctx, name, "");
-        failed = 1;
+        *pres = JS_GetException(ctx);
+        JS_FlowFree(ctx, flow);
+        return 1;
     }
-    if (pres && !failed) *pres = res;
-    else JS_FreeValue(ctx, res);
+    *pres = res;
     JS_FlowFree(ctx, flow);
-    return failed;
+    return 0;
 }
 
+/* A PROGRAM WHOSE THROW IS A FAILURE — a test file, the harness, a document's own script. That is a judgement
+   about this caller's program and not a property of running one, which is why it lives here. */
 static int run_program(JSContext *ctx, const char *src, size_t len, const char *name)
 {
-    return run_program_value(ctx, src, len, name, NULL);
+    JSValue completion = JS_UNDEFINED;
+    int failed = run_program_value(ctx, src, len, name, &completion);
+
+    if (failed) wpt_report_thrown(ctx, name, "", completion);
+    JS_FreeValue(ctx, completion);
+    return failed;
 }
 
 static lxb_html_document_t *g_wpt_dom;   /* the runner's parsed document */
@@ -1501,7 +1532,7 @@ static int wpt_child_main(int argc, char **argv)
         WorldId w = WORLD_NONE, anc[16];
         const char *worlds, *prog = NULL;
         char *enc, **f;
-        int n_anc = 0, nf = 0, op, need;
+        int n_anc = 0, nf = 0, op, need, completion = ENGINE_COMPLETION_NORMAL;
 
         if (nl) *nl = 0;
         f = wpt_split(line, &nf);
@@ -1558,7 +1589,15 @@ static int wpt_child_main(int argc, char **argv)
                any other turn would, rather than this host driving the delivery itself. */
             run_program(ctx, "", 0, "<routed message>");
             wpt_child_emit_notices();
-            fputs("u\n", stdout);
+            /* THE ACK IS A COMPLETION TOO. Nothing is asked of a delivery, so it is the normal completion of
+               `undefined` — written through the one encoder so this pipe has ONE grammar rather than one for
+               the answers and a bare `u` for this. */
+            {
+                char *ack = remote_completion_encode(ctx, ENGINE_COMPLETION_NORMAL, JS_UNDEFINED);
+                fputs(ack, stdout);
+                fputc('\n', stdout);
+                free(ack);
+            }
             fflush(stdout);
             free(f);
             continue;
@@ -1616,18 +1655,15 @@ static int wpt_child_main(int argc, char **argv)
             DCHECK(prog != NULL, "a cross-instance operation reached the peer's program runner with no program "
                                  "— an operation this loop routes but does not perform");
             failed = run_program_value(ctx, prog, strlen(prog), "<cross-agent operation>", &v);
-            /* AN ABRUPT COMPLETION DOES NOT CROSS YET, and swallowing one answers the asking flow with
-               `undefined` where the spec propagates a throw — a page's `try { remote.x } catch` would never
-               run its handler. The record has one field for a completion VALUE and none for its TYPE; adding
-               the type is the mechanism, and until it exists a peer's throw is this instance's crash rather
-               than a lie delivered to another agent. */
-            DCHECK(!failed, "a cross-agent operation ended in an ABRUPT completion and this transport carries "
-                            "only a value — the peer's throw would arrive as `undefined` at the asking flow's "
-                            "call site. Build the completion TYPE into the answer's grammar (remote_object.c) "
-                            "and re-raise it at the step machine that took it");
-            if (failed) v = JS_UNDEFINED;
+            /* THE THROW IS THE ANSWER. The peer performs every operation by running a program — an IDL
+               accessor, the page's setter, the page's function — and a program that throws has completed just
+               as truly as one that returned. It is NOT reported as this instance's error: it is encoded with
+               its completion type and raised in the flow that asked, at the line that asked, so that page's
+               own `try`/`catch` runs. The thrown value crosses by the ordinary rules, so an Error object
+               crosses as a NAME and the catch clause holds a reference to THIS instance's Error. */
+            completion = failed ? ENGINE_COMPLETION_THROW : ENGINE_COMPLETION_NORMAL;
         }
-        enc = remote_object_encode(ctx, v);
+        enc = remote_completion_encode(ctx, completion, v);
         JS_FreeValue(ctx, v);
         wpt_child_emit_notices();
         fputs(enc, stdout);

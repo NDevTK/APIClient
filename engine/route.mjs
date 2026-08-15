@@ -83,7 +83,10 @@ async function service(e) {
     const id = +l.slice(0, l.indexOf('\t')), op = l.slice(l.indexOf('\t') + 1);
     console.log(`  [${e.docId}] request: ${op.slice(0, 90)}`);
     if (!op.startsWith('document.fetch\t')) continue;
-    e.M.ccall('qjs_host_answer', 'void', ['number','number'], [id, e.cs(JSON.stringify({ body: HTML_B, csp: null }))]);
+    /* THE TRAILING 0 IS THE NORMAL COMPLETION — an answer is a completion record, and this zone fetched bytes
+       rather than relaying another instance's program, so it has nothing to have thrown in. */
+    e.M.ccall('qjs_host_answer', 'void', ['number','number','number'],
+              [id, e.cs(JSON.stringify({ body: HTML_B, csp: null })), 0]);
   }
   for (const n of e.str('qjs_host_notices').split('\n').filter(Boolean)) {
     const f = n.split('\t');

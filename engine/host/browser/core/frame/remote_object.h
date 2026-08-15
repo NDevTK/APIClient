@@ -22,10 +22,20 @@ JSValueConst remote_object_by_id(uint32_t id);
  *
  *   u  undefined            N  null              b0 / b1  a boolean
  *   n  a double, %.17g      s  base64 UTF-8      o / f / c  an OBJECT, by NAME: `<document>:<id>`
+ *   w  a WELL-KNOWN symbol, by its [[Description]]   g  a REGISTERED symbol, by base64 of its Symbol.for key
  *
  * A STRING RIDES AS BASE64 because these records are TAB-SEPARATED and a property name or a written value may
  * contain a tab or a newline. The codec is the ENGINE's (JS_Base64Encode), the one the spec already made it
- * implement for `btoa`, rather than a second one grown here.
+ * implement for `btoa`, rather than a second one grown here. A REGISTERED symbol's key is a string the page
+ * chose and rides the same way for the same reason; a well-known symbol's [[Description]] is the ENGINE's own
+ * and is asserted tab-free where it is captured.
+ *
+ * A SYMBOL IS NOT ONE THING, and the claim that it cannot cross is false for the two kinds pages use. 6.1.5's
+ * WELL-KNOWN symbols are a distinct value in every agent that denotes the same well-known slot — `@@iterator`
+ * here IS `@@iterator` there — so one crosses as its [[Description]] and is resolved to the receiving agent's
+ * own. A REGISTERED symbol (20.4.2.2) is defined BY its key: `Symbol.for("k")` in any agent is that agent's
+ * one symbol for "k", so the key is the whole of its identity. Only a UNIQUE symbol has identity and nothing
+ * else, and that one is an export like an object — remote_object_encode says so at its own site.
  *
  * `o`, `f` and `c` are one kind of thing said three ways, and the distinction is not decoration: a Proxy is
  * callable only if its TARGET is, and constructible only if its target is, so an object whose callability did
@@ -39,6 +49,25 @@ JSValueConst remote_object_by_id(uint32_t id);
  * this heap. `remote_object_encode` returns a malloc'd record the caller frees. */
 char   *remote_object_encode(JSContext *ctx, JSValueConst v);
 JSValue remote_object_decode(JSContext *ctx, const char *text);
+
+/* AND WHAT AN ANSWER IS: A COMPLETION, NOT A VALUE (ECMA-262 6.2.4). The peer resolves every operation by
+ * RUNNING A PROGRAM, and a program either returns or throws; an answer grammar with a slot for the value and
+ * none for its type hands the asking flow `undefined` where the spec propagates a throw, so a page's
+ * `try { remote.x = 1 } catch (e) {}` never runs its handler and the flow proceeds on a write that did not
+ * happen.
+ *
+ * A completion is the value record with its TYPE in front — `.` for a normal completion, `!` for a throw —
+ * because a completion is not a value and must not be spelled as one: neither character is a value tag, so a
+ * decoder reading one where the other belongs crashes instead of resolving a throw to `undefined`. The THROWN
+ * VALUE crosses by the ordinary rules, which is the point of layering it this way rather than inventing a
+ * second encoding: an Error is an OBJECT, so it crosses as a name, and the catch clause holds a reference to
+ * the peer's Error whose `.message` is another cross-agent read.
+ *
+ * `completion` is engine.h's ENGINE_COMPLETION_*, the same enumeration the flow's register stores, because a
+ * completion type spelled twice is two things to keep in step. `remote_completion_encode` returns a malloc'd
+ * record the caller frees. */
+char   *remote_completion_encode(JSContext *ctx, int completion, JSValueConst v);
+JSValue remote_completion_decode(JSContext *ctx, const char *text, int *pcompletion);
 
 /* IS THIS a reference to an object in another agent, and WHICH object — the (document, id) the name it was
    minted from carried. Asked by the encoder, which must re-emit that name rather than lend the proxy. */

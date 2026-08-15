@@ -390,14 +390,18 @@ async function engineServiceHostRequests(eng) {
     // exact line the page wrote `send()` on, which is what a synchronous XMLHttpRequest is.
     if (op.startsWith("xhr.send\t")) {
       const r = await eng.fetchedXhr(op.slice("xhr.send\t".length));
-      M.ccall("qjs_host_answer", "void", ["number", "string"], [id, JSON.stringify(r)]);
+      // 0 IS THE NORMAL COMPLETION. An answer is a completion record and not a value (ECMA-262 6.2.4): this
+      // zone fetched bytes rather than running another instance's program, so it has nothing to have thrown
+      // in. A relayed cross-agent operation answers with 1 and the thrown value, which is what lets the
+      // asking page's `try`/`catch` around it run.
+      M.ccall("qjs_host_answer", "void", ["number", "string", "number"], [id, JSON.stringify(r), 0]);
       continue;
     }
     if (!op.startsWith("document.fetch\t")) continue;
     const r = await eng.fetchedDocument(op.slice("document.fetch\t".length));
     // JSON, because the answer carries its TYPE across this seam: `{body:null}` is a load that did not load,
     // and the string "null" is a one-word document.
-    M.ccall("qjs_host_answer", "void", ["number", "string"], [id, JSON.stringify(r)]);
+    M.ccall("qjs_host_answer", "void", ["number", "string", "number"], [id, JSON.stringify(r), 0]);
   }
 }
 function engineFinalize(eng) {

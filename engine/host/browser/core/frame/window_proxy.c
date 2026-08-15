@@ -1117,9 +1117,14 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     }
     if (!engine_host_answered(s->req, &answer))
         return JS_STEP_YIELD;
-    *presult = engine_host_take(ctx, s->req);
-    s->req = 0;
-    return JS_STEP_DONE;
+    /* THE PEER'S COMPLETION, NOT ITS VALUE. §7.2.5.1's member is an IDL getter the peer RUNS, so it can throw
+       — a SecurityError from a member outside the cross-origin list, or the page's own accessor — and the
+       throw belongs at the line that read the member. */
+    {
+        int r = engine_host_take_completion(ctx, s->req, presult);
+        s->req = 0;
+        return r;
+    }
 }
 
 static const IdlStepDecl PROXY_GET_DECL = { proxy_get_step, sizeof(ProxyGetState), proxy_get_visit, NULL,
