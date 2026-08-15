@@ -18,6 +18,7 @@
 #include "solver/dom_cow.h"   /* the DOM half of time-travel — swapped per-flow alongside the heap COW delta */
 #include "solver/cold.h"      /* what the frontier's parked snapshots are made of — the cold tier's census */
 #include "solver/quantum.h"   /* the cooperative quantum's asynchronous edge, and what THIS host can measure */
+#include "solver/reclaim.h"   /* …and its RAM edge: which allocators can sell a flow rather than fail */
 #include "solver/req2proto.h" /* an API's own rejection is a description of the request it wanted — see engine_provide */
 #include "check.h"
 #include <time.h>
@@ -2015,7 +2016,7 @@ static void engine_session_close(void) {
        past this line there is no scheduler to page for, and the teardown that follows allocates (the result
        document, the leak walk) — an allocation there must fail as an allocation, not reach into a frontier that
        is being torn down. */
-    JS_SetMemoryReclaimHook(JS_GetRuntime(g_sess_ctx), NULL, NULL);
+    reclaim_uninstall(JS_GetRuntime(g_sess_ctx));
     JS_SetJobEnqueueHook(NULL);
     JS_SetJobDropHook(NULL);
     JS_SetFlowControlHooks(&FC_OFF);
@@ -2174,10 +2175,14 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int f
     JS_SetFlowControlHooks(forking ? &FC_EXPLORE : &FC_VERIFY);   /* preempt ALWAYS on; fork only when exploring */
     JS_SetJobEnqueueHook(engine_enqueue_job);   /* ASYNC-AS-FLOW: reactions route to the enqueuing flow's queue */
     JS_SetJobDropHook(engine_drop_jobs);        /* …and §7.5.10 step 7 takes them back off it */
-    /* THE FRONTIER IS THE ENGINE'S RESERVE, and this is what lets the runtime spend it. Installed with the
-       session because that is exactly when there is a frontier to page: the allocator's refusal edge asks
-       engine_reclaim_tail, which sells the lowest-weight member to the cold tier and answers "retry". */
-    JS_SetMemoryReclaimHook(JS_GetRuntime(ctx), engine_reclaim_tail, NULL);
+    /* THE FRONTIER IS THE ENGINE'S RESERVE, and this is what lets an allocator spend it. Installed with the
+       session because that is exactly when there is a frontier to page: a refusal asks engine_reclaim_tail,
+       which sells the lowest-weight member to the cold tier and answers "retry".
+       EVERY ALLOCATOR, NOT THE RUNTIME'S ALONE — which is what solver/reclaim.h is, and it is there because
+       measurement said so: with the edge in the runtime's allocator only, the fixture under a 2 GB wall paged
+       nothing and aborted inside LEXBOR's, holding 315 MB of frozen document segments against 23 MB of heap
+       ones. Most of this engine's memory is the HTML parser's, so most refusals are its. */
+    reclaim_install(JS_GetRuntime(ctx), engine_reclaim_tail, NULL);
 }
 
 /* One QUANTUM. Returns ENGINE_STEP_DONE when the frontier is empty (the session is closed and its hooks are
