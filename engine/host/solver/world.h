@@ -73,6 +73,29 @@ bool world_doc_hosted(uint32_t doc);
    agent's. Minting a name, hosting, and building the realm are three separate statements in that order. */
 void world_doc_adopt(uint32_t doc);
 
+/* AND THE THIRD OF THOSE THREE STATEMENTS: WHICH REALM `doc` IS. A realm IS a document (core/dom/document.c),
+ * so this is a fact about the document and it lives on the document's own row rather than in a table of its
+ * own — document.c rejects a second list of documents in as many words, and names the failure mode that would
+ * bite here: a stale row answering for a realm that is gone. The two edges are the document's, which is what
+ * keeps the row honest without a walk: `document_install` is the moment a realm becomes the realm OF a
+ * document, and `document_free` — reached from the realm's own teardown hook — is the moment it stops being
+ * one.
+ *
+ * WHY THE QUESTION EXISTS AT ALL. An instance is an ORIGIN-KEYED AGENT CLUSTER (SECURITY.md), so SEVERAL
+ * documents are this one's and a peer may hold a reference into any of them — `event.source` names the
+ * document whose script posted, which is a child navigable as often as it is the root. A cross-instance
+ * operation or delivery therefore arrives naming a document by NAME, and running it in this instance's root
+ * realm instead would answer about the wrong document: `length` would be the count of the ROOT's child
+ * navigables handed back as the child's. This is the direction HTML §7.3 states as "the navigable whose active
+ * document is node's node document" — a document identifies exactly one of them, which is what makes the
+ * answer a lookup rather than a search.
+ *
+ * NULL IS A REAL ANSWER AND NEVER "NOT FOUND": a hosted document with no realm is one whose initial
+ * about:blank Document nothing has read through yet (navigable.h), and only the NAVIGABLE can materialize it.
+ * The caller says what that means for it. */
+void       world_doc_realm_set(uint32_t doc, JSContext *realm);
+JSContext *world_doc_realm(uint32_t doc);
+
 /* A DOCUMENT IS NAMED, AND A `uint32_t doc` IS THIS INSTANCE'S HANDLE FOR A NAME — an index into the local
    table, 1-based so zero stays the NONE value. Handles are local and mean nothing to a peer; the NAME is what
    crosses the seam, which is why every request that carries a document carries world_doc_name.

@@ -184,6 +184,16 @@ typedef struct Flow {
        Both owned; NULL on a flow with no operation outstanding. */
     char *perform;
     char *answer_token;
+    /* AND WHICH DOCUMENT OF THIS AGENT THE OPERATION NAMES, which is WHERE its program runs. An instance is an
+       origin-keyed agent CLUSTER, so the document a peer asks about is a child navigable as often as it is the
+       root — and §7.2.5.1's member is read of THAT document's Window, so a program compiled in the root's
+       realm would count the root's child navigables and hand them back as the child's. It is held beside the
+       token and cleared with it, for the same reason the token outlives `perform`: the program is compiled
+       after the record is consumed, and the realm has to be selected then.
+       A DOCUMENT HANDLE AND NOT A JSContext*, because a handle is what crossed the wire, what a park can carry
+       and what a resumed flow can still resolve — a realm is none of the three. 0 on a flow with no operation
+       outstanding, which is every flow that has never been asked one. */
+    uint32_t perform_doc;
 } Flow;
 
 /* `doc_name` is THIS INSTANCE'S DOCUMENT identity, and it is a parameter rather than a separate init call so a

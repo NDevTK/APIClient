@@ -2324,6 +2324,12 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     /* THE REALM'S ACTIVE DOCUMENT FROM HERE ON — set before the early return below, because the policy was
        already built and §7.4 clones it for an about:blank child whether or not this document got an address. */
     JS_SetContextOpaque(ctx, d);
+    /* AND THE SAME SENTENCE FROM THE DOCUMENT'S SIDE: this realm is the realm OF `doc_id`, which is the only
+       direction a name arriving from ANOTHER INSTANCE can be read in. It is stated here rather than derived by
+       a walk for the reason document_realm_of's slot is: this is the one moment the pair exists, so a row
+       written here cannot disagree with anything. Before the no-address return, because a document with no
+       address still has a navigable a peer can hold a reference into. */
+    world_doc_realm_set(doc_id, ctx);
     /* §7.2.5.1's ONE WindowProxy FOR THIS NAVIGABLE, minted WITH the realm because that is what it is one of.
        Before the early return below: a document with no address still has a navigable, and `window.closed`
        reads the navigable's state through this object. */
@@ -2497,6 +2503,12 @@ void document_free(JSContext *ctx)
     /* THE DOCUMENTS THIS REALM CREATED AT BASELINE go first: each holds a wrapper of the ACTIVE document's realm
        and each owns a whole Lexbor tree, and the active record is what the chain hangs off. */
     for (c = d->next_created; c; c = next) { next = c->next_created; doc_rec_free(ctx, c); }
+    /* THIS REALM STOPS BEING THE REALM OF ITS DOCUMENT HERE, and the row goes with it. A stale one would hand
+       a peer's operation a JSContext the collector has freed — the failure mode this file names when it
+       refuses a registry, closed by writing the clear at the same site as the set rather than by not keeping
+       the row. The documents above never had a name in the world registry: they have no browsing context, so
+       no navigable names them and no peer can reach them. */
+    world_doc_realm_set(d->doc, NULL);
     doc_rec_free(ctx, d);
     JS_SetContextOpaque(ctx, NULL);
 }

@@ -487,18 +487,21 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
     /* ROUTED TO THE WRONG INSTANCE is the trusted zone's bug, not the page's, and it is silent in every other
        form: delivering anyway would fire the message at THIS document's listeners, which is a message the page
        never received arriving as if it had. */
+    /* WHICH of this agent's documents it names is NOT decided here, and the router does not need to know: an
+       instance is an ORIGIN-KEYED AGENT CLUSTER, so several documents are this one's, and the REALM that
+       delivers is selected where the delivery RUNS (flow_deliver) for the same reason the world segment is
+       asked for again there — a hosted navigable's realm is materialized by whichever flow first reads through
+       it (navigable.h), so which realm answers is a property of the run and not of the record's arrival. */
     DCHECK(world_doc_hosted(world_doc_intern(doc)),
            "a record was routed to an instance that does not hold the document it names — the offscreen is the "
            "only zone that knows which instance holds which document, and it sent this one to the wrong place");
-    DCHECK(world_doc_intern(doc) == world_local_doc(),
-           "a record was routed to a document this agent hosts but is not its root — delivering it needs the "
-           "REALM of that document (document_realm_of), which this router does not select yet: build the "
-           "per-document realm lookup here before a child navigable can receive a routed message");
     {
         WorldId w, anc[16];
         int n_anc = world_parse(worlds, &w, anc, (int)(sizeof anc / sizeof anc[0]));
-        DCHECK(w.doc != world_local_doc(), "a record was routed back to the instance whose flow sent it — a "
-                                           "message to one's own document is delivered locally and never leaves");
+        /* AGAINST EVERY DOCUMENT THIS AGENT HOLDS, not against its root: an agent is an origin-keyed CLUSTER,
+           so a message from a SAME-ORIGIN child is delivered in this heap and never reaches a transport. */
+        DCHECK(!world_doc_hosted(w.doc), "a record was routed back to the instance whose flow sent it — a "
+                                         "message to one's own document is delivered locally and never leaves");
         /* RECEIVER-FLOW-WORLD ∧ SENDER-VECTOR, AS TWO REAL OBJECTS. The receiving half is the delta of the flow
            that will make the delivery — the page's `message` listener was registered by a script, so it lives
            in THAT flow's delta and in no baseline. The sending half is THIS INSTANCE'S SEGMENT for the sender's
@@ -576,6 +579,34 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
     }
 }
 
+/* WHICH REALM OF THIS AGENT ANSWERS FOR A DOCUMENT NAMED BY A PEER — the one lookup both halves of the
+ * cross-instance seam need, and the reason neither of them is restricted to this instance's ROOT document any
+ * more. An instance is an ORIGIN-KEYED AGENT CLUSTER (SECURITY.md), so several documents are this one's and a
+ * peer holds references into them as a matter of course: `event.source` names the document whose script
+ * posted, which is a child navigable as often as it is the root. Performing the work in the root's realm
+ * instead would answer about the wrong document — `length` would be the count of the ROOT's child navigables
+ * handed back as the child's, the same silent lie the routing check crashes on when the whole INSTANCE is
+ * wrong. HTML §7.3 states this direction as "the navigable whose active document is node's node document": a
+ * document identifies exactly one, which is what makes this a lookup and not a search.
+ *
+ * ASKED WHERE THE WORK RUNS, never where the record arrived — the same sentence the world segment beside it
+ * carries. A hosted navigable's realm is materialized by whichever flow first reads through it (navigable.h),
+ * so a realm that does not exist when the trusted zone routes the record may exist by the time the receiving
+ * flow is scheduled, and the answer is a property of the run. */
+static JSContext *doc_realm(uint32_t doc)
+{
+    JSContext *realm = world_doc_realm(doc);
+
+    DCHECK(realm != NULL,
+           "a peer reached through a navigable this agent holds whose active document has never been "
+           "MATERIALIZED — §7.4 created it with the initial about:blank Document, and only a read through that "
+           "navigable's own WindowProxy builds the realm, which needs the NAVIGABLE and not just the "
+           "document's name. Build the (document -> navigable) direction HTML §7.3 calls the node navigable — "
+           "the navigable whose active document this is — and materialize it here through window_proxy_realm, "
+           "exactly as a local read does");
+    return realm;
+}
+
 /* THE DELIVERY ITSELF, made by the receiving flow's own step — so it runs with that flow switched in, under its
    delta, and the task it enqueues lands on that flow's own queue like every other job. This is the dispatch on
    the op, and the ONLY place a routed op is turned into a call: an op with no component here is a transport
@@ -586,12 +617,19 @@ static void flow_deliver(JSContext *ctx, Flow *f)
     WorldId w, anc[16];
     int n_anc;
     CowDelta *seg;
+    JSContext *rctx;
 
     DCHECK(flow_running() == f, "a routed delivery was made while another flow was switched in — it would run "
                                 "against that flow's delta and its task would land on that flow's queue");
     doc = strchr(dup, '\t');    *doc++ = 0;
     worlds = strchr(doc, '\t'); *worlds++ = 0;
     tail = strchr(worlds, '\t'); *tail++ = 0;
+    /* THE RECEIVING DOCUMENT'S REALM, which is what "delivered to that document" means: the event is
+       constructed in it, `event.source` is minted in it, and the task is enqueued at ITS Window. Delivering
+       into this instance's root instead would fire the message at a document the sender never named — a
+       message the page never received arriving as if it had, which is the same failure the routing check
+       crashes on one level up. */
+    rctx = doc_realm(world_doc_intern(doc));
     /* THE SENDING DOCUMENT IS THE HEAD OF THE WORLD VECTOR — a world is minted by a flow of exactly one
        document, so the vector already names the sender and a second field for it could disagree with it. */
     n_anc = world_parse(worlds, &w, anc, (int)(sizeof anc / sizeof anc[0]));
@@ -609,7 +647,7 @@ static void flow_deliver(JSContext *ctx, Flow *f)
            "instance — the message arrives at a document missing everything its sender did here. Build the join "
            "of the two deltas that engine_route names");
     if (!strcmp(dup, "windowproxy.post"))
-        window_message_route(ctx, tail, world_doc_name(w.doc), f->deliver_origin);
+        window_message_route(rctx, tail, world_doc_name(w.doc), f->deliver_origin);
     else
         DFAIL("a record was routed with an op no component receives — the sending half emits it, so the "
               "receiving half is the unbuilt one; build it rather than dropping the delivery");
@@ -655,20 +693,23 @@ void engine_perform(JSContext *ctx, const char *token, const char *record)
     op = remote_op_parse(record);
     /* ROUTED TO THE WRONG INSTANCE is the trusted zone's bug, and answering anyway is worse than not answering:
        `length` would be the count of THIS document's frames returned as the other document's. */
+    /* WHICH of this agent's documents it names is the OPERATION's business and not the router's, exactly as it
+       is for a routed delivery: the realm that performs it is selected where the program is queued
+       (flow_perform), with the answering flow switched in and after every other flow has had its turn to
+       materialize a navigable this one may reach through. */
     DCHECK(world_doc_hosted(world_doc_intern(remote_op_doc(op))),
            "a cross-agent operation was routed to an instance that does not hold the document it names — the "
            "offscreen is the only zone that knows which instance holds which document, and it sent this one to "
            "the wrong place");
-    DCHECK(world_doc_intern(remote_op_doc(op)) == world_local_doc(),
-           "a cross-agent operation named a document this agent hosts but is not its root — performing it needs "
-           "the REALM of that document (document_realm_of), which this router does not select yet: build the "
-           "per-document realm lookup here before a peer can read through a child navigable");
     {
         WorldId w, anc[16];
         int n_anc = world_parse(remote_op_worlds(op), &w, anc, (int)(sizeof anc / sizeof anc[0]));
-        DCHECK(w.doc != world_local_doc(), "a cross-agent operation came back to the instance whose flow asked "
-                                           "it — an operation on this agent's own object is performed locally "
-                                           "and never leaves");
+        /* THE ASKING WORLD BELONGS TO A PEER — asserted against every document THIS AGENT HOLDS rather than
+           against its root, because an agent is an origin-keyed CLUSTER: an operation on an object of a
+           SAME-ORIGIN child is performed in this heap at its call site and never reaches a transport. */
+        DCHECK(!world_doc_hosted(w.doc), "a cross-agent operation came back to the instance whose flow asked "
+                                         "it — an operation on this agent's own object is performed locally "
+                                         "and never leaves");
         /* THE ASKING WORLD'S SEGMENT IN THIS INSTANCE, materialized here for the reason engine_route does it
            here: on its own line, because a DCHECK's condition is compiled out in release and a segment created
            inside one would exist in dev and not in production. The conjunction of it with the answering flow's
@@ -1015,6 +1056,13 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
     if (parent->answer_token) {
         sib->answer_token = strdup(parent->answer_token);
         CHECK(sib->answer_token, "engine: OOM forking a cross-agent operation's rendezvous token");
+        /* AND THE DOCUMENT IT WAS ASKED OF. The sibling resumes the SAME program, which was compiled in that
+           document's realm; a sibling that inherited the token without it would answer the question and then
+           compile the operation's next program somewhere else. They are one fact and travel together. */
+        DCHECK(parent->perform_doc != 0,
+               "a flow holding a cross-agent operation's token names no document — the two are written and "
+               "cleared together, so one without the other means a program was queued outside flow_perform");
+        sib->perform_doc = parent->perform_doc;
     }
     if (parent->dyn_n) {              /* inherit the lazy chunks loaded up to the branch */
         sib->dyn = malloc((size_t)parent->dyn_n * sizeof(char *)); CHECK(sib->dyn, "engine: OOM fork dyn");
@@ -1165,16 +1213,29 @@ void engine_queue_javascript_url(const char *body) { engine_queue(body, DYN_JAVA
    of these is the page's own code — an IDL getter, a page's setter, a page's function — which a C activation
    has no flow base under. Queued with the flow switched in, so the operands the program reads are written into
    THIS flow's delta and no sibling sees them. */
+/* AND IT RUNS IN THE REALM OF THE DOCUMENT THE PEER NAMED. Every operand is installed there and the program is
+   compiled there (flow_step), because that is what the operation IS: §7.2.5.1's member is read of the OTHER
+   navigable's active document, and a getter answered out of this instance's root would count the root's child
+   navigables and hand them back as the child's. The document is held on the flow as the HANDLE that crossed the
+   wire rather than as the JSContext, for the reason every other queued platform datum is a name and not a
+   pointer: a handle survives a park and a realm does not. */
 static void flow_perform(JSContext *ctx, Flow *f)
 {
     RemoteOp *op = remote_op_parse(f->perform);
     WorldId w, anc[16];
     int n_anc;
     CowDelta *seg;
+    JSContext *rctx;
 
     DCHECK(flow_running() == f, "a cross-agent operation was performed while another flow was switched in — its "
                                 "operands would be written into that flow's delta and its program would run "
                                 "against that flow's document");
+    DCHECK(f->perform_doc == 0,
+           "a flow began a cross-agent operation while still naming the document of another one — the two "
+           "programs would be compiled in whichever realm was written last, and one peer's question answered "
+           "out of the other's document");
+    f->perform_doc = world_doc_intern(remote_op_doc(op));
+    rctx = doc_realm(f->perform_doc);
     n_anc = world_parse(remote_op_worlds(op), &w, anc, (int)(sizeof anc / sizeof anc[0]));
     /* ASKED AGAIN AT THE MOMENT IT RUNS, for the reason flow_deliver asks it again: the scheduler has run other
        flows since the record arrived, and which world holds writes here is a property of the run. */
@@ -1184,7 +1245,7 @@ static void flow_perform(JSContext *ctx, Flow *f)
            "a cross-agent operation ran in the answering flow's timeline alone while the asking world holds "
            "writes in this instance — it answers about a document missing everything the asking flow did here. "
            "Build the join of the two deltas that engine_route names");
-    engine_queue(remote_op_program(ctx, op), DYN_CROSS_AGENT_OP);
+    engine_queue(remote_op_program(rctx, op), DYN_CROSS_AGENT_OP);
     remote_op_free(op);
     free(f->perform); f->perform = NULL;   /* the TOKEN outlives it: the answer is the program's completion */
 }
@@ -1211,7 +1272,10 @@ static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
         completion = ENGINE_COMPLETION_THROW;
         cv = thrown;
     }
-    enc = remote_completion_encode(ctx, completion, cv);
+    /* ENCODED IN THE REALM THE PROGRAM RAN IN, because the value is that realm's — §3.7 gives every realm its
+       own intrinsics, and a value converted through another document's is converted by a platform that is not
+       the one that produced it. It is the same realm the program was compiled in, asked the same way. */
+    enc = remote_completion_encode(doc_realm(f->perform_doc), completion, cv);
     cap = strlen(f->answer_token) + strlen(enc) + 24;
     rec = malloc(cap);
     CHECK(rec != NULL, "engine: OOM writing a cross-agent operation's answer — a dropped answer parks the "
@@ -1222,6 +1286,10 @@ static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
     free(enc);
     JS_FreeValue(ctx, thrown);
     free(f->answer_token); f->answer_token = NULL;
+    /* THE DOCUMENT GOES WITH THE TOKEN, because the two are one fact: the question and the realm it was asked
+       of. Left behind, the next operation this flow performs would compile its program in the previous one's
+       document — and the assert that catches that is in flow_perform, which is why this is not merely tidy. */
+    f->perform_doc = 0;
 }
 
 /* Preempt hook, two orthogonal yield decisions at the one per-opcode suspend point:
@@ -1621,7 +1689,13 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                    "a flow compiled a program it had already started — the suspended frame was lost and the "
                    "flow is REPLAYING it, re-running side effects against a delta that already holds them");
             f->last_compiled = f->script_i;
-            f->frame = JS_FlowNew(ctx, body, strlen(body), NULL, 0);   /* page <script>/chunk: classic non-strict global */
+            /* IN THE REALM THE PROGRAM BELONGS TO, which for a CROSS-AGENT OPERATION is the realm of the
+               document the PEER named and not the one this session was rooted in. A program compiled here is
+               closed over the compiling realm's global (JS_FlowNew) and `globalThis[member]` is exactly the
+               read the operation is, so compiling it in the root would read the ROOT Window's member and hand
+               it back as the child's — the whole reason a document names its realm at all. */
+            f->frame = JS_FlowNew(kind == DYN_CROSS_AGENT_OP ? doc_realm(f->perform_doc) : ctx,
+                                  body, strlen(body), NULL, 0);   /* page <script>/chunk: classic non-strict global */
             if (f->frame == NULL) {
                 /* WHAT ACTUALLY FAILED, read before anything is decided from it. A compile can fail two ways
                    and they are not the same event: a SyntaxError is the program's, and OUT OF MEMORY is the

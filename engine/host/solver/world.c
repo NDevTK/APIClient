@@ -26,7 +26,7 @@ static uint32_t g_next_serial;
 /* THE DOCUMENT NAME TABLE. A handle is an index+1, so 0 stays the NONE value; the table is append-only for the
    life of the instance because a handle already stored in a WindowProxy or a WorldId must never come to mean a
    different document. It is small by construction — one entry per document this instance has ever named. */
-typedef struct { char *name; uint32_t next_child; bool hosted; } DocEntry;
+typedef struct { char *name; uint32_t next_child; bool hosted; JSContext *realm; } DocEntry;
 static DocEntry *g_docs;
 static uint32_t g_docs_n, g_docs_cap;
 
@@ -72,6 +72,43 @@ void world_doc_adopt(uint32_t doc)
     DCHECK(!g_docs[doc - 1].hosted, "a realm was built twice for one document — a document has ONE realm, and a "
                                     "second would give the same name two globals with two object graphs");
     g_docs[doc - 1].hosted = true;
+}
+
+/* See world.h. The realm is BORROWED: a realm is kept alive by its own function objects and dies with its
+   navigable (navigable.c), so a counted reference here would be an external root making every document this
+   instance ever named immortal. */
+void world_doc_realm_set(uint32_t doc, JSContext *realm)
+{
+    DCHECK(doc != 0, "a realm was recorded against the NONE document");
+    /* THE TABLE MAY ALREADY BE GONE, AND ONLY FOR THE CLEAR. A host frees the world registry and then the
+       runtime, so the agent's last realms are torn down after the table that named their documents — there is
+       no row left to clear because every row went with the table. Stated for the NULL write alone: a realm
+       ARRIVING after the registry is gone is a realm named by nothing, which is a real and different defect
+       and still crashes below. */
+    if (realm == NULL && g_docs_n == 0) return;
+    DCHECK(doc <= g_docs_n, "a realm was recorded against a document handle that names no document — a handle "
+                            "is this instance's index into its own name table and means nothing else");
+    DCHECK(g_docs[doc - 1].hosted,
+           "a realm was recorded for a document this agent does not HOLD — hosting is decided by §7.4 before "
+           "the realm is built (world_doc_adopt), so the two statements were made in the wrong order and every "
+           "cross-instance route keyed on `hosted` would still call this document a peer's");
+    DCHECK(realm == NULL || g_docs[doc - 1].realm == NULL,
+           "a SECOND realm was built for one document — a Document has one Window, so these are two of them "
+           "wearing one name, and a peer routing on that name cannot tell which one it asked. It is the LAZY "
+           "MATERIALIZATION meeting a FORK: proxy_realm builds the initial about:blank Document's realm through "
+           "the PER-FLOW WindowProxy record (navigable.h), so two arms that each read through one srcless "
+           "navigable each build one. The fix is where the second is made and not here — either the built realm "
+           "is state the flow's delta carries, or the navigable is materialized once for all of its timelines");
+    g_docs[doc - 1].realm = realm;
+}
+
+JSContext *world_doc_realm(uint32_t doc)
+{
+    DCHECK(doc != 0 && doc <= g_docs_n, "the realm of a document handle that names no document was asked for");
+    DCHECK(g_docs[doc - 1].hosted,
+           "the realm of a document this agent does not HOLD was asked for — that document lives in a peer "
+           "instance, so it has no realm here and every read through it crosses the seam");
+    return g_docs[doc - 1].realm;
 }
 
 uint32_t world_mint_doc(uint32_t parent)
