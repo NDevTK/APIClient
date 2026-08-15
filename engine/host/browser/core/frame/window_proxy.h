@@ -217,7 +217,7 @@ const char *window_proxy_origin(JSValueConst proxy);
    the two halves of one navigable named different documents; that is why they are one call and not six
    setters. `top_level_url` is the environment the CALLER built the new realm under: §7.11 moves it to the new
    address for a top-level traversable and leaves a nested navigable's where its creation put it, and the
-   caller is the one that knows which, because it is a fact about the operation's target. */
+   caller is the one that knows which, because it is a fact about the operation's target.
    PER FLOW: the whole record is captured into the running flow's delta at the accessor, so a sibling arm that
    never navigated still resolves this proxy to the document it knew, and a parked flow resumes into its own.
    `realm` is BORROWED — the agent owns every realm it built (navigable.c) — and the superseded one is NOT torn
