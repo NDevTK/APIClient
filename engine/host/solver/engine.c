@@ -130,12 +130,6 @@ void engine_pending_script_url(JSContext *ctx, const char *url) {
 /* THE SESSION'S SCRIPT SEQUENCE — the document's own scripts in order. Entry i is inline (bodies[i] is its text)
    or external (srcs[i] is its URL and bodies[i] is filled when the host replies). Declared here because the
    pending DRAIN writes into it: an external script's text is the DOCUMENT's, shared by every flow. */
-/* A PEER HOLDS A REFERENCE INTO THIS DOCUMENT — see engine.h's engine_set_referenced. It is a property of the
-   INSTANCE and not of a session, so it is set once by the host that provisioned this instance and survives
-   every session boundary; it is read by flow_step (a timeline that may not finish) and by the slice (a
-   frontier that may not be declared exhausted), which are the two halves of one statement. */
-static int g_referenced;
-
 /* The browser layer's document-load lifecycle, asked when a flow has run everything the document gave it. */
 static int (*g_docdone_hook)(JSContext *ctx);
 void engine_set_document_done_hook(int (*fn)(JSContext *ctx)) { g_docdone_hook = fn; }
@@ -1259,6 +1253,12 @@ static int64_t engine_now_ms(void);   /* the WALL clock, for the gap census belo
    O(flows) scan for it still happens only on a change. The running flow's own weight is recomputed at every
    consultation: two divisions beside a clock read the hook already performs, and exact rather than stale. */
 static unsigned g_seen_gen = 0; static Flow *g_seen_cur = NULL; static double g_rival_w = -1.0 / 0.0;
+/* WHAT THE FLOW HOLDING THE THREAD WAS RANKED ON WHEN IT TOOK IT — the three quantities the value yield's
+   verdict is a pure function of, recorded at the switch-in and read by the assertion in the hook's value
+   clause. They are not policy and they are not a cache: nothing is decided from them, and the hook's answer is
+   identical with them removed. They exist so that the sentence "a top-ranked flow runs on at ~zero switch
+   cost" is a check rather than a claim, at the one point where it can be false. */
+static unsigned g_ranked_gen = 0; static int64_t g_ranked_notch = 0; static double g_ranked_val = 0.0;
 /* SUSPEND POINTS REACHED — every call to this hook IS one, which is the number the seam assertion needs and
    the one quickjs's counters do not give. g_flow_preempt_requested is incremented only where the hook returns
    TRUE, so it counts preempts WANTED, not points offered: a step showing requested=1 may have reached one
@@ -1326,14 +1326,41 @@ static int preempt_hook(int kind) {
        which is the direction that would cost a yield that mattered. */
     if (flow_frontier_gen() != g_seen_gen || cur != g_seen_cur) {   /* (1) rescan for the rival only on change */
         g_seen_gen = flow_frontier_gen(); g_seen_cur = cur;
-        Flow *rival = cur ? flow_best_runnable(cur) : NULL;
+        Flow *rival = cur ? flow_rival_of(cur) : NULL;
         g_rival_w = rival ? flow_weight(rival) : -1.0 / 0.0;
     }
     /* (0) BLOCKED BEATS BOTH RANKINGS. A flow holding an unanswered synchronous host request cannot make
        progress no matter how it ranks, and the answer cannot arrive while it holds the thread — the host is
        only asked between steps. Deciding this by weight would re-enter it immediately and spin. */
     if (cur && flow_blocked(cur)) return 1;
-    if (cur && g_rival_w > flow_weight(cur)) return 1;   /* value yield — the rival is cached, the verdict is not */
+    if (cur && g_rival_w > flow_weight(cur)) {   /* value yield — the rival is cached, the verdict is not */
+        /* THE VALUE YIELD MAY ONLY FIRE ON A RANK CHANGE, AND THIS IS WHERE THAT IS EITHER TRUE OR A SENTENCE
+           IN CLAUDE.md. §scheduler says the yield fires "the moment a parked flow outranks (or on an emit/fork/
+           suspension that changes ranks)" and that "a top-ranked flow runs on at ~zero switch cost" — so a flow
+           that was picked to run, and against which NOTHING has since changed, must still be running.
+           THREE THINGS CAN CHANGE THE ANSWER and they are exactly the three snapshotted at the switch-in: the
+           frontier GENERATION (a fork or a finish added or removed a member, and an emission bumps it too), the
+           running flow's own SERVICE NOTCH (it consumed a whole quantum — a published change, and the same
+           edge the cooperative yield fires on), and its own REWARD. Nothing else moves either side of the
+           comparison: a parked flow burns no CPU, and its `val` cannot change without it running, which cannot
+           happen while this one holds the thread. So the comparison is a pure function of those three, and a
+           yield with all three unchanged means the WFQ answered two different things about one unchanged state.
+           IT FIRES ON THE TREE THIS FIXES, which is the whole reason it is worth writing. The optimism term
+           quantised service with a CEILING, so the first MICROSECOND a flow was ever charged moved its notch
+           from 0 to 1 and cost it half the entire bonus — the notch changed, so this assertion would have
+           permitted it, and the flow was then strictly outranked by every never-run sibling at its next
+           back-edge. What this catches is the version of that defect with no published change at all: a tie
+           handed on by the pick's registry order, a rival recomputed against a stale cache, a weight term that
+           moves with something this list does not name. Any of those is a swap of two COW deltas bought with
+           nothing, and at 512 flows that was 1.28 million of them for one document. */
+        DCHECK(flow_frontier_gen() != g_ranked_gen ||
+               flow_service_notch(cur) != g_ranked_notch || cur->val != g_ranked_val,
+               "the VALUE YIELD fired on a flow whose rank nothing changed since the scheduler switched it in — "
+               "same frontier generation, same service notch, same reward on both sides of the comparison, so "
+               "the pick and the hook are answering one unchanged state two different ways and every swap this "
+               "buys is a COW delta swap for no ranking decision at all");
+        return 1;
+    }
     /* (2) COOPERATIVE-QUANTUM floor — thread-sharing, not value. The same expiry the scheduler loop returns to
        the host on, asked at both levels so a flow that parks on it and a step that returns on it are one event
        seen twice. Nothing is dropped, starved or reordered across it: the flow parks and the SAME flow resumes
@@ -1567,12 +1594,6 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                    like a page that registered no handler. Asserted at the one place "finished" is decided. */
                 DCHECK(f->njob == 0, "a flow finished holding queued jobs — a promise reaction, a timer "
                                      "callback or a delivered message would be dropped with it");
-                /* …AND A FLOW OF A REFERENCED DOCUMENT MAY NOT FINISH AT ALL — engine.h's engine_set_referenced.
-                   Having nothing left to run is not being done when a peer can still ask this timeline
-                   something; it is waiting on the host for the next operation, which is exactly what OWED
-                   means. The flow keeps its snapshot, its delta and its rank and is out of the pick until the
-                   host has something for it. */
-                if (g_referenced) return FLOW_STEP_OWED;
                 return 1;   /* all scripts + chunks + microtask jobs + live fetches + load listeners done */
             }
             /* NULL ScriptOrModule name: an inline page script's name is the DOCUMENT's URL, which this host does
@@ -1751,6 +1772,11 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
         concolic_pins_resume(f->pin_blob);   concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
     }
     flow_set_running(f);
+    /* WHAT THIS FLOW WAS RANKED ON WHEN IT TOOK THE THREAD. Recorded HERE because this is the moment the WFQ's
+       answer was "this one" — the pick that led here compared it against every runnable member and found none
+       strictly better, so from this instant the value yield may only fire if one of these three moves. The
+       hook's assertion reads them; nothing decides from them. */
+    g_ranked_gen = flow_frontier_gen(); g_ranked_notch = flow_service_notch(f); g_ranked_val = f->val;
 }
 
 static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down its interleaving state + remove */
@@ -2025,8 +2051,6 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int f
 static int (*g_stall_hook)(void);
 void engine_set_stall_hook(int (*owed)(void)) { g_stall_hook = owed; }
 
-void engine_set_referenced(int referenced) { g_referenced = referenced; }
-
 static double g_yield_floor = -1.0 / 0.0;
 void engine_set_yield_floor(double w) { g_yield_floor = w; }
 
@@ -2108,8 +2132,14 @@ static int engine_sched_slice(void) {
         /* WFQ: highest value-of-information among the members that can still make progress — a fresh fork
            (UCB) can preempt. The filter is the ONE order with the flows that have told the scheduler they are
            waiting on the host taken out of the PICK only; they keep their weight, their place and every work
-           item they hold (flow.h). */
-        Flow *best = flow_best_runnable(NULL);
+           item they hold (flow.h).
+           THE FLOW THAT HOLDS THE THREAD IS PASSED IN, and that is what makes this a SCHEDULE rather than a
+           ranking read out loud. Asked without it, the pick returned the first maximum in registry order, so a
+           field of equal-weight members — which is most frontiers, since most flows have emitted the same
+           amount and usually none — moved the thread to g_flows[0] on every iteration and paid a COW delta swap
+           for a ranking that had not changed. The incumbent is displaced only by a STRICTLY better flow, which
+           is the same comparison the preempt hook makes, so the two ends of the decision cannot disagree. */
+        Flow *best = flow_next_to_run(cur);
         /* NOTHING LEFT TO RUN: either the frontier is empty, or every member is waiting on the host — which is
            the STALL, decided by asking each member rather than by counting a run of unproductive picks. */
         if (!best) break;
@@ -2407,13 +2437,6 @@ static int engine_sched_slice(void) {
        supply. Ask the one seam BEFORE closing — the session and every parked snapshot stay live, and the host
        steps again once it has provided. */
     if (g_stall_hook && g_stall_hook())
-        return ENGINE_STEP_STALLED;
-    /* AND THE OTHER REASON A FRONTIER IS NOT EXHAUSTED, which is not a reply the host owes but a QUESTION it
-       has not yet been asked: a document another instance holds a reference into can be asked something at any
-       moment, so its timelines are parked (flow_step returns OWED for them) rather than finished, and the
-       session stays live with every snapshot intact. Closing here instead would leave the next operation with
-       no timeline to answer in — which engine_perform's own assert names, from the other end. */
-    if (g_referenced)
         return ENGINE_STEP_STALLED;
     /* ASYNC-AS-FLOW forcing function: every flow has run to completion, so NO microtask/promise reaction may
        still be queued. If one is, the scheduler DROPPED it — the not-yet-built async-as-flow capability (a

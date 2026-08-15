@@ -103,21 +103,6 @@ void engine_run(JSContext *ctx, char **bodies, char **srcs, int n);
    what a reply is, and the host holds no idea of what a flow is. */
 void engine_set_stall_hook(int (*owed)(void));
 
-/* THIS INSTANCE'S DOCUMENT IS ONE ANOTHER INSTANCE HOLDS A REFERENCE INTO, so its timelines may not RUN OUT.
-   A document's state IS its flows (engine_perform says so where it attaches an operation to every one of
-   them), so a peer that still holds a WindowProxy for this document can ask it something at any moment — and a
-   frontier that drained has nothing left to answer in. Seeding a fresh flow at that point is not the same
-   document: the page's own scripts wrote into the delta of the flow that ran them, so a flow starting from the
-   baseline answers about a document where none of them ever ran, silently.
-   So the last timeline does not finish; it reports itself HOST-OWED (flow.h) — waiting, not finished — and the
-   session STALLS instead of closing. Nothing spins on that: a host-owed flow is out of the pick, so the
-   scheduler returns to the host, which is blocked on the channel the next operation arrives over. It is the
-   ordinary park: the flow keeps its snapshot, its delta and its place in the WFQ, and the operation that
-   arrives is the work that resumes it.
-   Set by the HOST, because whether a peer holds a reference is a fact about the instance's provisioning and not
-   one the engine can see: a child instance exists precisely because some other agent created its navigable. */
-void engine_set_referenced(int referenced);
-
 /* HOW THE HOST PAYS WHAT IT OWES, for the driver that runs the frontier to completion in one call
    (engine_run). The stepping entry answers a stall by returning to its caller, which is what the extension's
    qjs_step does; a one-call driver has no such caller, so a stall with nobody to answer it ended the run — and

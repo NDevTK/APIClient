@@ -214,23 +214,31 @@ double flow_weight(const Flow *f);
 
 /* The highest-priority flow in the frontier, or NULL if empty — EVERY member, whether or not it can currently
    make progress. It answers the host's Level-1 question (this document's best weight) and the census's; the
-   scheduler's own pick is flow_best_runnable below. Does not remove it. */
+   scheduler's own pick is flow_next_to_run below. Does not remove it. */
 Flow *flow_best(void);
 
-/* THE HIGHEST-PRIORITY FLOW THAT CAN STILL MAKE PROGRESS, other than `exclude` (NULL excludes nothing) — the
- * dispatch loop's PICK, and the running flow's RIVAL for the value yield. The same comparator and the same
- * order as flow_best: a FILTER over the ONE ranking, never a second one.
- *
- * IT IS ONE FUNCTION FOR BOTH BECAUSE THEY ARE ONE QUESTION — "who should hold the thread" — and the rival
- * asked over ALL members (which `flow_best_other` was) answers a question nobody wants: a flow waiting on the
- * host cannot use the thread, so yielding to it hands it straight back. With a host-owed flow outranking the
- * running one, that pair thrashed — the hook demanded a yield at every back-edge and the pick handed the thread
- * to the same flow again, so the running flow advanced one back-edge per scheduler iteration for as long as the
- * rival stayed blocked.
- *
+/* WHICH FLOW SHOULD HOLD THE THREAD, given the one that holds it now (NULL when nobody does) — the dispatch
+ * loop's PICK. The same comparator and the same order as flow_best, with two things said on top of it, and
+ * both of them are what separates a RANKING from a SCHEDULE:
+ *   - a flow that has reported itself host-owed is not a candidate (it cannot use the thread, so handing it
+ *     over hands it straight back), and
+ *   - the INCUMBENT keeps the thread unless a candidate is STRICTLY better — the identical comparison the
+ *     preempt hook's value clause makes, so the two ends of one decision cannot disagree. A tie is not a
+ *     reason to swap two COW deltas.
  * NULL means nothing can run: either the frontier is empty, or every member is waiting on the host — which is
  * the STALL, decided by asking each member rather than by counting a run of unproductive picks. */
-Flow *flow_best_runnable(const Flow *exclude);
+Flow *flow_next_to_run(const Flow *incumbent);
+
+/* WHO THE RUNNING FLOW IS DEFENDING AGAINST — the best flow that could USE the thread, other than `cur`. The
+ * preempt hook compares it against the running flow itself, which is why this one excludes rather than seeds.
+ * It is the same scan, so the hook and the pick can never rank two flows differently. */
+Flow *flow_rival_of(const Flow *cur);
+
+/* HOW MANY WHOLE QUANTA OF THREAD TIME THIS FLOW HAS CONSUMED — the quantised reading of `cpu` that BOTH terms
+ * of flow_weight are built from, exposed because it is what a rank CHANGE is made of. Between two notches a
+ * flow's own weight cannot move except through an emission, and that pair of facts is exactly the invariant
+ * engine.c's seam assertion holds the value yield to. */
+int64_t flow_service_notch(const Flow *f);
 
 /* THE LOWEST-PRIORITY MEMBER OTHER THAN `exclude` — the TAIL the cold tier gives up first at the RAM floor, and
  * the SAME comparator as flow_best read in the other direction. Not a second ranking: the flow that is paged

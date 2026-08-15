@@ -323,41 +323,62 @@ int flow_blocked(const Flow *f) { return pending_blocked(f->pending); }
  * That crossing is not left as prose — flow_best asserts it below, and it FIRES on the tree this replaced. */
 #define FLOW_AGE_RATE 1e-6
 
+/* HOW MANY WHOLE QUANTA OF THE THREAD THIS FLOW HAS ACTUALLY CONSUMED — the ONE quantised reading of `cpu`,
+ * and the unit both terms of the weight are denominated in. It is public because it is what a rank CHANGE is
+ * made of: between two notches a flow's weight cannot move except by an emission, which is exactly the
+ * invariant engine.c's seam assertion checks. */
+int64_t flow_service_notch(const Flow *f) { return f->cpu / FLOW_SERVICE_US; }
+
 /* Anytime-bandit priority: reward + UCB optimism − CPU aging. Additive (never a value/cpu ratio — the aging
    term already yields value-per-CPU behaviour without the 0/0 degeneracy on an unrun flow). */
 double flow_weight(const Flow *f) {
     double reward = f->val;
-    /* OPTIMISM DECAYS WITH SERVICE, NOT WITH BEING PICKED. Keyed on the DISPATCH COUNT it fell by 0.167 the first time the
-       scheduler chose a flow — forty times a quantum of aging — so the act of switching to a flow was enough to
-       make it no longer the best one, and the scheduler switched straight back. The guarantee is unchanged and
-       is what the term is for: a flow that has never RUN has no service, so it carries the full bonus and
-       cannot be starved. What is gone is a rank that moves because of a decision rather than because of work.
-       ZERO SERVICE IS ITS OWN NOTCH, and that is the whole of the guarantee rather than a rounding detail.
-       Quantising with a FLOOR put a flow that has never run and a flow that has burned a quantum-minus-one of
-       CPU into the SAME notch, so they tied — and a tie does not dislodge the running flow, because the value
-       yield asks whether a rival's weight is STRICTLY greater (engine.c's preempt hook). "A never-run flow is
-       never starved" is then not a guarantee at all: for a whole service quantum the term cannot tell the two
-       apart, and the one already holding the thread wins. A CEILING restores it and costs the anti-thrash
-       property nothing: service 0 is the never-run notch and is strictly better than every serviced flow, while
-       everything up to one quantum lands on notch 1 and ties with itself exactly as it did, so two flows that
-       have both run still hold the thread for a whole quantum and trade places once, never per step. Measured on
-       the full smoke fixture: same PASS, 13796 flows against 14003, 37002 context switches against 14000 — the
-       extra switches are fresh forks taking their turn, which is what the term is for. */
-    int64_t served = (f->cpu + FLOW_SERVICE_US - 1) / FLOW_SERVICE_US;   /* 0 IFF never serviced */
+    /* OPTIMISM DECAYS WITH SERVICE, NOT WITH BEING PICKED — and SERVICE IS WHAT WAS ACTUALLY CONSUMED, which is
+       a FLOOR of the cooperative quantum, the unit this scheduler hands the thread out in. Keyed on the
+       DISPATCH COUNT it fell by 0.167 the first time the scheduler chose a flow, so the act of switching to a
+       flow was enough to make it no longer the best one; keyed on service it moves because of WORK.
+       IT WAS A CEILING, AND THE CEILING IS WHAT MADE THIS SCHEDULER STOP EXECUTING. `(cpu + Q - 1) / Q` puts
+       ONE MICROSECOND of consumed CPU in the same notch as a whole quantum, so the first charge a flow ever
+       takes — flow_age_running runs after its very first step — costs it 0.5, HALF the entire optimism range,
+       while every flow that has not run yet and every flow that has just emitted (flow_credit_emit zeroes cpu)
+       stands at 1.0. A flow that has run AT ALL is therefore STRICTLY outranked by every fresh fork and every
+       recent emitter, so the value yield fires at its next back-edge, the pick hands the thread on, and that
+       flow's own first charge does the same to it one step later. Measured on one document, two frozen
+       worktrees, same box, same wall time: 1,286,199 context switches against 11,878, the frontier frozen at
+       512 flows (the complete 2^9 fork tree of that document's decisions, nothing forked past it), NOT ONE flow
+       ever finishing (live == flows at every sample), the heap unchanged across 1,288 progress samples and zero
+       @S candidates found. A perfect round robin at one back-edge per flow: it satisfies every fairness rule in
+       this file and executes nothing.
+       THE GUARANTEE THE CEILING WAS ADDED FOR SURVIVES THE FLOOR, and the paragraph that argued otherwise had
+       the mechanism right and the conclusion backwards. With a floor a never-run flow TIES with a flow that has
+       burned a quantum-minus-one, and a tie does not dislodge the incumbent — the value yield asks whether a
+       rival is STRICTLY greater, and flow_pick seeds its scan with the incumbent for the same reason. That is
+       not starvation, it is the service quantum doing the one thing it exists to do: the incumbent holds the
+       thread until it has consumed a whole quantum, at which point its notch advances, its bonus halves, and
+       every never-run sibling outranks it STRICTLY and is picked. A never-run flow waits at most one quantum per
+       flow ahead of it, which is what "never starved" can mean for a scheduler that hands the thread out in
+       quanta at all — and it is the only reading under which "a top-ranked flow runs on at ~zero switch cost"
+       (§scheduler) is true of anything. */
+    int64_t served = flow_service_notch(f);
     double ucb     = 1.0 / (1.0 + (double)served);
-    /* THE AGING, IN THE SAME CURRENCY AS THE REWARD ABOVE — see FLOW_AGE_RATE. Quantised to the same notch the
-       optimism term uses, so a flow's weight is constant between two service quanta, which is also what lets the
-       preempt hook's cached rival stay exact at O(1) (engine.c). */
-    double aging   = (double)(f->cpu / FLOW_SERVICE_US) * ((double)FLOW_SERVICE_US * FLOW_AGE_RATE);
+    /* THE AGING, IN THE SAME CURRENCY AS THE REWARD ABOVE — see FLOW_AGE_RATE. It reads the SAME notch the
+       optimism term does, which this line only now literally does: it computed its own floor beside a ceiling,
+       so the two terms disagreed about what one unit of service was. A flow's weight is therefore constant
+       between two service quanta, which is also what lets the preempt hook's cached rival stay exact at O(1)
+       (engine.c) and what its seam assertion is written against. */
+    double aging   = (double)served * ((double)FLOW_SERVICE_US * FLOW_AGE_RATE);
     return reward + ucb - aging;
 }
 
 /* THE CPU AT WHICH A FLOW IS GUARANTEED TO RANK BELOW ANY NEVER-RUN SIBLING — the crossing §scheduler's sentence
    claims exists, computed from the flow's OWN reward rather than a fixed threshold that could fire falsely on a
    very productive flow. A never-run flow carries the full optimism bonus and no aging, so its weight is its
-   reward + 1.0 and therefore at least 1.0; a serviced flow's is at most val + 0.5 − aging, and aging is at least
-   (cpu − one quantum) * RATE. Past this charge the second is below −0.5 and the comparison cannot go the other
-   way for any reward. `static inline` so release (where the DCHECK's condition is unevaluated) does not warn. */
+   reward + 1.0 and therefore at least 1.0; a serviced flow's is at most val + 1.0 − aging, and aging is at least
+   (cpu − one quantum) * RATE. Past this charge the second is at or below ZERO and the comparison cannot go the
+   other way for any reward — the margin was half a point while the optimism term used a ceiling (a serviced
+   flow's bonus could not exceed 0.5) and it is the never-run flow's own bonus now, which is what the assertion
+   compares against and is why the crossing still closes strictly.
+   `static inline` so release (where the DCHECK's condition is unevaluated) does not warn. */
 static inline int64_t flow_cpu_to_sink(const Flow *f) {
     return (int64_t)((f->val + 1.0) / FLOW_AGE_RATE) + FLOW_SERVICE_US;
 }
@@ -388,21 +409,39 @@ void flow_clear_host_owed(void) {
     }
 }
 
-/* THE ONE ORDER, ASKED THROUGH ONE SCAN. Two questions are put to the ranking — who runs next (and its
-   variant, who is the running flow's rival for the value yield) and what this document's best weight is for
-   the host's Level-1 order — and they are FILTERS over ONE comparator, never separate rankings (§scheduler:
-   ONE WFQ policy at both levels). Written out per question, the order would have a place to drift per copy and
-   the monopolizer assertion below would guard whichever copy happened to carry it; written once, every pick is
-   made under it. */
-static Flow *flow_pick(const Flow *exclude, int runnable_only, int worst) {
+/* THE ONE ORDER, ASKED THROUGH ONE SCAN. Four questions are put to the ranking — who should be running, who
+   the running flow is defending against, what this document's best weight is for the host's Level-1 order, and
+   which member the pager gives up first — and they are a SEED, FILTERS and a DIRECTION over ONE comparator,
+   never separate rankings (§scheduler: ONE WFQ policy at both levels). Written out per question, the order
+   would have a place to drift per copy and the monopolizer assertion below would guard whichever copy happened
+   to carry it; written once, every pick is made under it.
+   THE INCUMBENT IS THE SEED, NOT A CANDIDATE LIKE THE REST, and that is the difference between "which flow is
+   best" and "which flow should be RUNNING". The scan takes a STRICT comparison, so seeding it with the flow
+   that already holds the thread states the rule exactly: the thread moves only for a flow that is strictly
+   better — the identical rule the preempt hook's value clause applies, now applied at the other end of the same
+   decision. Without the seed the pick returned the first maximum in REGISTRY ORDER, so a field of flows on
+   equal weight (the ordinary state of a frontier whose members have all emitted the same amount, which is very
+   often none) handed the thread to g_flows[0] on every single iteration and paid a full COW delta swap for a
+   ranking that had not changed at all. It is not a hysteresis margin, a minimum service or a switch budget:
+   there is no number in it, and a strictly better flow takes the thread at the very next opcode. */
+static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only, int worst) {
     Flow *best = NULL; double bw = 0.0;
     /* A MEMBER WITH ZERO SERVICE: never run, or just emitted (flow_credit_emit zeroes cpu). Either way it
        carries the full optimism bonus and no aging, so its weight is its reward + 1.0 and hence at least 1.0 —
        which is the only property the assertion below needs, and it is the same property for both. */
     int unrun = 0;
+    DCHECK(!(seed && worst), "the eviction tail was asked with an incumbent to defend — the seed states who "
+                             "keeps the THREAD, and the flow the pager gives up is not a question about that");
+    /* THE SEED IS ELIGIBLE ON THE SAME TERMS AS EVERY CANDIDATE — a member of the frontier, and not one that
+       has told the scheduler it can make no progress. A flow that answered OWED is the one case where the
+       incumbent must NOT keep the thread: keeping it is the spin the mark exists to end. */
+    if (seed && flow_is_member(seed) && !(runnable_only && flow_host_owed(seed))) {
+        best = (Flow *)seed; bw = flow_weight(seed);
+        if (seed->cpu == 0) unrun = 1;
+    }
     for (int i = 0; i < g_flows_n; i++) {
         double w;
-        if (g_flows[i] == exclude) continue;
+        if (g_flows[i] == exclude || g_flows[i] == seed) continue;
         /* NOT A DROP AND NOT A DEPRIORITISATION: the flow keeps its weight, its place and every work item it
            holds, and it is picked again the moment anything could have answered it (flow_clear_host_owed). */
         if (runnable_only && flow_host_owed(g_flows[i])) continue;
@@ -429,12 +468,19 @@ static Flow *flow_pick(const Flow *exclude, int runnable_only, int worst) {
     return best;
 }
 
-/* The three questions, each a filter or a direction over the one scan above. */
-Flow *flow_best(void) { return flow_pick(NULL, 0, 0); }
-Flow *flow_best_runnable(const Flow *exclude) { return flow_pick(exclude, 1, 0); }
+/* The four questions, each a seed, a filter or a direction over the one scan above. */
+Flow *flow_best(void) { return flow_pick(NULL, NULL, 0, 0); }
+
+/* WHICH FLOW SHOULD HOLD THE THREAD — the dispatch loop's pick, defending the incumbent on a tie. */
+Flow *flow_next_to_run(const Flow *incumbent) { return flow_pick(incumbent, NULL, 1, 0); }
+
+/* WHO THE INCUMBENT IS DEFENDING AGAINST — the same scan with the incumbent taken OUT rather than seeded in,
+   because the hook applies the strict comparison itself. Asking it with the seed would answer `cur` and the
+   value yield would compare a flow against itself. */
+Flow *flow_rival_of(const Flow *cur) { return flow_pick(NULL, cur, 1, 0); }
 
 Flow *flow_worst(const Flow *exclude) {
-    Flow *tail = flow_pick(exclude, 0, 1);
+    Flow *tail = flow_pick(NULL, exclude, 0, 1);
     /* EVERY MEMBER, RUNNABLE OR NOT — and that is not an oversight in the filter, it is what eviction is about.
        A flow waiting on the host cannot use the thread, which is why the PICK skips it; it is still a snapshot
        occupying RAM, and it is the CHEAPEST thing in the frontier to page, because its recipe re-issues the
