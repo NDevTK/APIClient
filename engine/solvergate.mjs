@@ -252,23 +252,29 @@ const SURFACES = ["fetchCallSites", "securitySinks", "pageErrors"];
    it says it does. It is the same check engine/build.mjs makes between QJS_ABI and main.c's QJS_EXPORT
    entries, for the same reason — a list and the thing it describes are one fact and must be asked, not
    restated. */
+/* BOTH DIRECTIONS, because either one alone is silent. A key in NEITHER list is a surface nobody compares; a
+   SURFACE that is not in the document is a comparison over nothing, which reads as agreement. Asked once per
+   run, so surfaceSet below can assume what it is handed — the impossible state is made impossible here rather
+   than defended against there. */
 function checkCoverage(doc, sched, result) {
   const cost = DROP.get("");
   const unknown = Object.keys(result).filter((k) => !SURFACES.includes(k) && !cost.has(k));
-  if (!unknown.length) return true;
-  console.log(`  FAILED ${doc} [${sched}]\n         the result document carries ${unknown.join(", ")}, which ` +
-              "this gate neither compares as a finding surface nor names as a schedule-dependent cost. " +
-              "Classify it in engine/solvergate.mjs: a FINDING goes in SURFACES and is held invariant across " +
-              "schedules; a COST goes in DROP[\"\"] with the reason it legitimately differs. Until then the " +
-              "gate is measuring less than it claims to.");
+  const absent = SURFACES.filter((k) => !Array.isArray(result[k]));
+  if (!unknown.length && !absent.length) return true;
+  if (unknown.length)
+    console.log(`  FAILED ${doc} [${sched}]\n         the result document carries ${unknown.join(", ")}, which ` +
+                "this gate neither compares as a finding surface nor names as a schedule-dependent cost. " +
+                "Classify it in engine/solvergate.mjs: a FINDING goes in SURFACES and is held invariant across " +
+                "schedules; a COST goes in DROP[\"\"] with the reason it legitimately differs. Until then the " +
+                "gate is measuring less than it claims to.");
+  if (absent.length)
+    console.log(`  FAILED ${doc} [${sched}]\n         the result document has no ${absent.join(", ")} array — ` +
+                "result.c composes all three, so an absent one is a contract this gate and the engine no " +
+                "longer share, and comparing it would compare nothing and call that agreement.");
   return false;
 }
 function surfaceSet(result, surface) {
-  const v = result[surface];
-  if (!Array.isArray(v))
-    throw new Error(`the result document has no \`${surface}\` array — result.c composes all three, so an ` +
-                    "absent one is a contract this gate and the engine no longer share");
-  return v.map((e) => canonStr(e, "." + surface + "[]"));
+  return result[surface].map((e) => canonStr(e, "." + surface + "[]"));
 }
 
 /* ─── the driver ────────────────────────────────────────────────────────────────────────────────────────────*/
