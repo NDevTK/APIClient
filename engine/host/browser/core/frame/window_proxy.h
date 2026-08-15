@@ -191,7 +191,19 @@ void window_proxy_disown_opener(JSContext *ctx, JSValueConst proxy);
 /* IS THE NAVIGABLE'S ACTIVE DOCUMENT SAME-ORIGIN WITH THIS ONE? §7.2.5.1's check, exported because §4.8.5's
    `contentDocument` makes the same decision one layer up — and must make it BEFORE asking the peer, since a
    cross-origin answer is null and asking for it would both leak and suspend a flow on a settled question.
-   An OPAQUE origin is same-origin with NOTHING, including another opaque one. */
+
+   AN OPAQUE ORIGIN ANSWERS FALSE HERE, AND §7.5 SAYS TRUE FOR ONE OF THE TWO CASES THAT REACHES IT. The
+   standard's step 1 is "if A and B are THE SAME OPAQUE ORIGIN, then return true" — an identity comparison,
+   which this component cannot make because it holds SERIALIZATIONS and every opaque origin serializes to
+   "null". So false is right for two distinct opaque origins (two sandboxed frames must not script each other)
+   and wrong for one opaque origin asked about itself, which §7.3.1's determine-the-origin creates deliberately
+   by handing sourceOrigin to an about:srcdoc or about:blank Document. window_proxy.c's proxy_read_permitted
+   ASSERTS the case rather than leaving it silent, and the fix is a nonce on the opaque origin.
+   THAT ALSO MAKES THIS THE WRONG PREDICATE FOR A QUESTION FOUR CALLERS ASK THROUGH IT. §7.2.6.3's "has entries
+   and events disabled", File System Access's storage-manager and picker checks and Permissions §5.1 want "is
+   this origin OPAQUE", and they get it today only because this answers false for one. They are asking a
+   different question and must ask it directly — the day step 1 is decided on a nonce, every one of them
+   inverts. */
 bool window_proxy_same_origin_of(JSValueConst proxy);
 
 /* IS THIS ENVIRONMENT'S ORIGIN SAME ORIGIN WITH ITS TOP-LEVEL ORIGIN? — the question HTML §4.10.5.4's
@@ -200,8 +212,10 @@ bool window_proxy_same_origin_of(JSValueConst proxy);
    itself: fetch the top-level traversable's navigable and ask §7.2.5.1 of it. Three copies of one sentence is
    three chances for the opaque-origin case to be read differently, and the opaque case is the one that decides
    whether a sandboxed document reaches the local file system — window_proxy_same_origin_of answers false for a
-   navigable whose origin is opaque, so a top-level document with an opaque origin is correctly NOT same origin
-   with its own top.
+   navigable whose origin is opaque, so a top-level document with an opaque origin is NOT same origin with its
+   own top HERE. §7.5 step 1 says it IS (a document's origin is the same opaque origin as itself), so what
+   these callers actually want is the SANDBOXED bit and not §7.2.5.1 — see the note above. The answer they get
+   is the one they want; the route to it is a coincidence that ends when the nonce lands.
    A TOP-LEVEL DOCUMENT IS ITS OWN TOP, so the answer is true for one unless its origin is opaque. */
 bool window_proxy_same_origin_with_top(JSContext *ctx);
 

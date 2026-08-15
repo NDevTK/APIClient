@@ -192,11 +192,28 @@ static ProxyData *proxy_of(JSValueConst v)
     return p;
 }
 
-/* §7.2.5.1's SAME-ORIGIN CHECK, and the one rule that makes it more than a string compare: an OPAQUE origin is
-   unique per spec, so it is same-origin with NOTHING — not even with another opaque one, and not with itself.
-   A sandboxed frame serializes its origin as "null", and treating two "null"s as equal would let one sandboxed
-   document script another. SECURITY.md states the same rule for the credentialed-read principal, and it is the
-   same rule because it is the same concept. */
+/* §7.2.5.1's SAME-ORIGIN CHECK, AND THE ONE PLACE THIS COMPONENT CANNOT ASK THE SPEC'S QUESTION.
+ *
+ * §7.5's algorithm has TWO steps, and this is a string compare, so it answers the second and GUESSES the first:
+ * "Two origins, A and B, are said to be same origin if the following algorithm returns true: 1. If A and B are
+ * THE SAME OPAQUE ORIGIN, then return true. 2. If A and B are both tuple origins and their schemes, hosts, and
+ * port are identical, then return true. 3. Return false."
+ *
+ * Step 1 is an IDENTITY comparison, and an identity is exactly what a SERIALIZATION drops: §7.5's serializer
+ * answers "null" for EVERY opaque origin, so the two facts this component would need to tell apart — one opaque
+ * origin looked at twice, and two distinct opaque origins — arrive here as the same two bytes. It guesses
+ * "distinct", which is right for two sandboxed frames (treating two "null"s as equal would let one script the
+ * other, the rule SECURITY.md states for the credentialed-read principal) and WRONG for step 1's own case: a
+ * document whose origin is opaque is same origin WITH ITSELF, and §7.3.1's determine-the-origin hands the same
+ * opaque origin to more than one Document on purpose — "if url is about:srcdoc … return sourceOrigin", "if url
+ * matches about:blank and sourceOrigin is non-null, then return sourceOrigin", with the standard's own note
+ * that "the cases that return sourceOrigin result in two Documents that end up with the same underlying
+ * origin". A `data:` document's `about:blank` child is that pair, and here its `contentDocument` is null.
+ *
+ * THE FIX IS AN ORIGIN WITH AN IDENTITY, not a better string compare: an opaque origin carries a nonce (Blink's
+ * SecurityOrigin keeps one), it is COPIED by the inheritance cases above and MINTED fresh by the sandboxed
+ * origin browsing context flag, and step 1 compares nonces. Until this component holds one, the guess is
+ * ASSERTED where it decides rather than assumed everywhere — see proxy_read_permitted. */
 static bool proxy_same_origin(const ProxyData *p)
 {
     DCHECK(g_local_origin != NULL, "the same-origin check ran before window_proxy_init named this document's "
@@ -886,7 +903,27 @@ static const bool PROXY_CROSS_ORIGIN[WP_MEMBER_N] = {
    member" about one it cannot see. */
 static bool proxy_read_permitted(const ProxyData *p, int magic)
 {
-    return PROXY_CROSS_ORIGIN[magic] || proxy_same_origin(p);
+    if (PROXY_CROSS_ORIGIN[magic])
+        return true;   /* the fixed list is answered whatever the origins are, so nothing below is asked */
+    /* THE GUESS IS ASSERTED WHERE IT DECIDES. proxy_same_origin cannot run §7.5's step 1 — "if A and B are the
+       same opaque origin, then return true" is an identity comparison and this component holds serializations,
+       in which every opaque origin is the string "null". Both sides opaque is therefore the ONE case where the
+       answer below is a guess rather than a computation, and it is also the case where the guess is wrong: two
+       Documents sharing one opaque origin are what §7.3.1's determine-the-origin produces on purpose (about:
+       srcdoc, and about:blank with a non-null sourceOrigin), so this SecurityError is thrown at a read the
+       standard permits, and `contentDocument` next door answers null for a document the page owns. Give an
+       opaque origin a NONCE — copied by those two inheritance cases, minted fresh by the sandboxed origin
+       browsing context flag — and compare nonces here; the string compare below then only ever sees tuple
+       origins, which is the only thing it can decide. */
+    DCHECK(!(p->origin && g_local_origin && !strcmp(p->origin, "null") && !strcmp(g_local_origin, "null")),
+           "§7.2.5.1 asked whether two OPAQUE origins are same origin, and §7.5 step 1 answers that by IDENTITY "
+           "— \"if A and B are the same opaque origin, then return true\" — which a serialization cannot carry: "
+           "every opaque origin serializes to \"null\", so this component cannot tell one origin read twice from "
+           "two distinct ones and has been guessing \"two\". Build the opaque origin's nonce (§7.3.1 copies it "
+           "for about:srcdoc and for about:blank with a non-null sourceOrigin, and mints a new one for the "
+           "sandboxed origin browsing context flag) and decide step 1 on it here. Until then a document with an "
+           "opaque origin is refused every member of its OWN navigable outside §7.2.5.1's fixed list.");
+    return proxy_same_origin(p);
 }
 
 /* §7.2.5's `top`: the TOP-LEVEL traversable's proxy. Walked rather than stored, because a navigable's parent
