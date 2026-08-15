@@ -1230,10 +1230,22 @@ static int64_t g_last_ask = 0, g_max_gap = 0;
 static int preempt_hook(int kind) {
     (void)kind;
     Flow *cur = flow_running();
-    int64_t now = engine_now_ms();
-    g_preempt_asked++;
-    if (now - g_last_ask > g_max_gap) g_max_gap = now - g_last_ask;
-    g_last_ask = now;
+    /* THE GAP CENSUS IS THE SEAM MESSAGE'S, SO IT IS COMPILED OUT WITH IT. Every one of these three statics is
+       read only inside this file's `#if APICLIENT_DEV` seam assertion, and the clock they are built from is the
+       WALL clock — which is neither the slice's measure nor a verdict, by design. A release build was therefore
+       taking a clock reading at EVERY suspend-point consultation to feed numbers nothing would ever print, and
+       on the host that matters most that reading is not a vDSO call at all: emscripten answers clock_gettime by
+       calling into JS. This is the mirror of the defect the aging charge had — that one was a real policy left
+       inside a DEV guard, this one a DEV diagnostic left outside it — and both are the same question asked once
+       per hook: is this number something the ENGINE decides on, or something a developer reads? */
+#if APICLIENT_DEV
+    {
+        int64_t now = engine_now_ms();
+        g_preempt_asked++;
+        if (now - g_last_ask > g_max_gap) g_max_gap = now - g_last_ask;
+        g_last_ask = now;
+    }
+#endif
     if (flow_frontier_gen() != g_seen_gen || cur != g_seen_cur) {   /* (1) rescan for the rival only on change */
         g_seen_gen = flow_frontier_gen(); g_seen_cur = cur;
         Flow *rival = cur ? flow_best_other(cur) : NULL;
@@ -1818,7 +1830,16 @@ static int engine_sched_slice(void) {
        release build did — is the error that matters here, not which of two flows pays for a swap. */
     int64_t now = quantum_thread_us();
     int owed = 0;   /* consecutive picks that could not progress; == flow_count() means every member is waiting */
-    DCHECK(g_sess_live, "engine_sched_step with no live session");
+    /* THE SESSION THE HOST STEPPED IS STILL OPEN — and the way this fires is a CALLER THAT TRANSFORMED THE
+       PREVIOUS ANSWER. Two exits close the session and both answer ENGINE_STEP_DONE: the frontier draining, and
+       the PARK that writes the residue to the cold tier. A wrapper that folded DONE into YIELD — the way the ABI
+       entry legitimately folds STALLED, because the bridge speaks two values — would send the host straight back
+       in here with nothing live, and the abort would read as a bug in whatever the park had just done rather
+       than in the fold. So DONE is propagated unchanged by every layer above this (engine_sched_step brackets
+       the slice and returns it verbatim; qjs_step latches it in g_done and answers DONE to every later step). */
+    DCHECK(g_sess_live,
+           "a slice was opened on a session that is no longer live — the previous step answered "
+           "ENGINE_STEP_DONE and the host stepped again anyway");
     /* THE FLOW CARRIED ACROSS A QUANTUM BOUNDARY IS STILL A MEMBER OF THE FRONTIER. §scheduler's razor says the
        cooperative yield resumes "the SAME top flow on the byte-identical frontier", and the whole of what makes
        that true here is a raw `Flow *` held in a static across a RETURN TO THE HOST — during which the host

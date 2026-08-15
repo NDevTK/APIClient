@@ -60,7 +60,13 @@ void quantum_begin(void);
 void quantum_end(void);
 /* Has this slice's budget been consumed? Read by preempt_hook (park the running flow) and by the scheduler
    loop (return the thread to the host). ONE budget, one edge, two consumers — a flow that parks on it and a
-   step that returns on it are the same event seen from two levels. */
+   step that returns on it are the same event seen from two levels.
+   ONLY INSIDE AN OPEN SLICE, and that is ASSERTED rather than assumed, because a host that drives flows without
+   the scheduler's bracket already exists: wpt_runner.c runs JS_FlowNew/JS_FlowResume under its own preempt
+   policy with no frontier to be fair between, and it declines this edge deliberately. Outside a slice the two
+   hosts answer OPPOSITE lies — the clock host measures against a start time never set (always expired, so every
+   flow parks at its first opcode) and the timer host has nothing armed (never expired, so the flow keeps the
+   thread) — and neither would say why. */
 int quantum_expired(void);
 /* This thread's consumed CPU in microseconds — the currency the WFQ's aging term is denominated in, and the
    same one the slice is. Where the host has no CPU clock this is its wall clock and quantum_measure() says so. */

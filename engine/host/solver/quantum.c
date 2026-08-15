@@ -47,23 +47,39 @@ int quantum_measure_is_cpu(void) { return 0; }
    THE FAILURE IS GOOD NEWS AND THE MESSAGE SAYS SO: it means this host grew a CPU clock, and the whole
    emscripten branch of this file should then be the native one. It is checked ONCE, at the first slice, because
    what it tests is a property of the toolchain and not of a slice. */
+/* AND IT IS DEV-ONLY WORK, so it is compiled out with the asserts that are its only readers — the same question
+   preempt_hook's gap census had to answer. Three clock reads once per instance is a small bill, but a release
+   build paying ANY of it is a diagnostic that has quietly become behaviour. */
 static void quantum_check_clock(void)
 {
-    struct timespec a, cpu, b;
+#if APICLIENT_DEV
+    struct timespec cpu = { 0, 0 };
+    int64_t ta, tc, tb;
+    int rc;
+
     if (g_clock_checked) return;
     g_clock_checked = 1;
-    if (clock_gettime(CLOCK_MONOTONIC, &a) != 0) return;
-    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu) != 0) return;   /* ENOSYS is the same news, said louder */
-    if (clock_gettime(CLOCK_MONOTONIC, &b) != 0) return;
-    {
-        int64_t ta = (int64_t)a.tv_sec * 1000000000 + a.tv_nsec;
-        int64_t tc = (int64_t)cpu.tv_sec * 1000000000 + cpu.tv_nsec;
-        int64_t tb = (int64_t)b.tv_sec * 1000000000 + b.tv_nsec;
-        DCHECK(tc >= ta && tc <= tb,
-               "this host answered CLOCK_THREAD_CPUTIME_ID from something other than its monotonic clock — it "
-               "has a REAL cpu clock now, so the quantum must be measured on it and this file's emscripten "
-               "branch replaced by the native one (timer + signal still need the shared-memory transport)");
-    }
+    /* The two brackets are taken through this host's OWN reader, so the missing-monotonic-clock case is
+       reported by the CHECK that already stands at the one place this file reads a clock, rather than by a
+       second copy of it here that could disagree with the first. */
+    ta = quantum_thread_us();
+    rc = clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu);
+    tc = (int64_t)cpu.tv_sec * 1000000 + cpu.tv_nsec / 1000;
+    tb = quantum_thread_us();
+    /* A FAILED READ IS THE SAME NEWS AS A MISMATCH, and it was being SWALLOWED: this was three
+       `if (clock_gettime(...) != 0) return;` lines, one of them carrying a comment saying ENOSYS was "the same
+       news, said louder" while the code returned in silence. A check that quietly declines to run on the very
+       input it exists to judge is the concealment §Offensive-programming names — the assumption this whole
+       branch is built on would be false and nothing anywhere would say so. */
+    DCHECK(rc == 0,
+           "this host refused CLOCK_THREAD_CPUTIME_ID outright — it is then NOT answering it from "
+           "emscripten_get_now() like every other clock, which is the assumption this file's emscripten branch "
+           "is built on; find out what it does answer and measure the quantum on that");
+    DCHECK(tc >= ta && tc <= tb,
+           "this host answered CLOCK_THREAD_CPUTIME_ID from something other than its monotonic clock — it "
+           "has a REAL cpu clock now, so the quantum must be measured on it and this file's emscripten "
+           "branch replaced by the native one (timer + signal still need the shared-memory transport)");
+#endif
 }
 
 void quantum_begin(void)
@@ -82,8 +98,20 @@ void quantum_end(void)
     g_slice_open = 0;
 }
 
+/* ASKED ONLY INSIDE A SLICE, and that is what catches a HOST DRIVING FLOWS WITHOUT THE SCHEDULER'S BRACKET.
+   Three hosts run this engine's flows: main.c and test_forced.c reach the interpreter through
+   engine_sched_step, which opens and closes the slice around it, and wpt_runner.c drives JS_FlowNew/
+   JS_FlowResume with its own preempt policy and no frontier to be fair between — it declines the edge, and
+   nothing said so. Left unasserted the decline is indistinguishable from a fourth host that forgot: on THIS
+   branch the answer would be measured against a start time of zero, which reads as EXPIRED and would park
+   every flow at its first opcode forever. So the day a host reaches the quantum from outside the bracket it
+   says which host, at the read, instead of behaving strangely somewhere else. */
 int quantum_expired(void)
 {
+    DCHECK(g_slice_open,
+           "the cooperative quantum's budget was asked outside an open slice — whoever is running this flow is "
+           "not the scheduler, so the budget being consulted belongs to no slice at all (here: measured from a "
+           "start time that was never set, i.e. always expired)");
     return quantum_thread_us() - g_slice_start_us >= (int64_t)ENGINE_QUANTUM_MS * 1000;
 }
 
@@ -118,13 +146,13 @@ static int     g_slice_open;
    rather than merely benefiting from it.
    JS_RequestFlowYield is one relaxed lock-free store to a thread-local byte. It is not on POSIX's
    async-signal-safe list because that list is about the standard library; what makes THIS call safe is what it
-   does. Two properties, both required: the store is lock-free (asserted at the byte's declaration in
-   quickjs.c), and the thread-local it stores to is reached by a constant offset from the thread pointer rather
-   than through __tls_get_addr — true because every build in this tree links quickjs.c into the PROGRAM
-   (build.mjs and wpt.mjs both compile the sources straight into the executable; nothing here is a dlopen'd
-   shared object), which is what makes the compiler emit local-exec TLS. A build that made the engine a
-   dynamically-loaded module would break that property, and it would break the trampoline's thread-local flow
-   base with it. */
+   does. Two properties are required, and NEITHER is argued for here — both are DECLARED at the byte itself
+   (quickjs.c's g_flow_yield_req), which is the only place that can enforce them: the object is a lock-free
+   atomic (a _Static_assert), and it is local-exec TLS (an attribute), so the store is a constant offset from
+   the thread pointer with no __tls_get_addr call — the one thing in that store that could have taken the
+   loader's lock against the interpreter this handler interrupted. Each is a BUILD failure if it stops holding.
+   An earlier version of this paragraph reasoned the second one out from how the tree happens to be compiled;
+   that is a property nothing checked, and a handler is the last place to hold one of those. */
 static void quantum_on_cpu_edge(int signo)
 {
     (void)signo;
@@ -229,7 +257,19 @@ void quantum_end(void)
     g_slice_open = 0;
 }
 
-int quantum_expired(void) { return g_fired != 0; }
+/* ASKED ONLY INSIDE A SLICE — see the same assertion on the other branch for the host it catches. Here the
+   silent answer would be the opposite one and no less wrong: no timer is armed outside a slice, so the budget
+   reads NEVER expired and a flow driven outside the bracket would hold the thread with nothing able to ask for
+   it back. Two hosts bracket their steps (main.c, test_forced.c, both through engine_sched_step); wpt_runner.c
+   declines the edge deliberately, and this is where that stops being a silence. */
+int quantum_expired(void)
+{
+    DCHECK(g_slice_open,
+           "the cooperative quantum's budget was asked outside an open slice — whoever is running this flow is "
+           "not the scheduler, so no CPU timer is armed for it and the budget can never expire; the flow holds "
+           "the thread and the host is never given a turn to ask for it back");
+    return g_fired != 0;
+}
 
 #else
 #error "solver/quantum.c: this host has no cooperative-quantum edge. §scheduler requires one (a lone engine \
