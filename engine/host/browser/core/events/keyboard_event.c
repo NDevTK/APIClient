@@ -39,10 +39,9 @@
  * THE SLOTS ARE OWN PROPERTIES UNDER A PRIVATE SYMBOL, for the reason event.c gives: a property write is
  * captured by the COW delta, so the event's state time-travels, and the symbol is a brand a page cannot forge.
  *
- * `initKeyboardEvent` IS NOT INSTALLED. §6.1.2 declares it with TEN arguments and core/idl_args.h's
- * IDL_MAX_DECLARED is 8; a member cannot be declared past that ceiling, and converting the arguments past it
- * inside the body would run the page's valueOf from C. It is honestly ABSENT — a page calling it gets its own
- * TypeError — until that ceiling is the platform's real widest (initMouseEvent's fifteen). */
+ * `initKeyboardEvent` is §6.1.2, with TEN arguments — the legacy initializer a bundle old enough to use
+ * `document.createEvent('KeyboardEvent')` finishes making one with, and the only thing that sets §2.2's
+ * initialized flag on an event §4.5 produced. */
 #include "check.h"
 #include "quickjs.h"
 #include "core/events/keyboard_event.h"
@@ -56,6 +55,7 @@ static JSClassID g_ke_class;    /* the class exists for its per-REALM prototype 
 static int       g_ready;
 static int       g_ctor_stepid = -1;
 static int       g_modifier_state_id = -1;
+static int       g_init_kb_id = -1;
 
 JSValue keyboard_event_proto(JSContext *ctx)
 {
@@ -220,6 +220,88 @@ static JSValue js_ke_get_modifier_state(JSContext *ctx, JSValueConst this_val, i
     return ui_event_get_modifier_state(ctx, this_val, argv[0]);
 }
 
+/* ---- §6.1.2's legacy initializer ------------------------------------------------------------------------------
+ *
+ *     partial interface KeyboardEvent {
+ *       undefined initKeyboardEvent(DOMString typeArg,
+ *         optional boolean bubblesArg = false,   optional boolean cancelableArg = false,
+ *         optional Window? viewArg = null,       optional DOMString keyArg = "",
+ *         optional unsigned long locationArg = 0,
+ *         optional boolean ctrlKey = false,      optional boolean altKey = false,
+ *         optional boolean shiftKey = false,     optional boolean metaKey = false);
+ *     };
+ *
+ * WHAT THIS ARGUMENT LIST DOES NOT HAVE IS PART OF THE SPEC, and §6.1.2 opens by saying so: "the argument list
+ * to this legacy KeyboardEvent initializer does not include the detailArg (present in other initializers) and
+ * adds the locale argument; it is necessary to preserve this inconsistency for compatibility with existing
+ * implementations." So `detail` is NOT written — "the value of detail remains undefined" — and neither are
+ * `code`, `repeat`, `isComposing`, `charCode` or `keyCode`, none of which the list names. Writing a zero into
+ * any of them would be inventing an initialization the spec does not perform, which a page that constructed the
+ * event with a dictionary and then re-initialized it can see. (The `locale` the sentence mentions is not in the
+ * IDL block the section then gives, and this implements the IDL.)
+ *
+ * The four modifier arguments arrive ctrl, ALT, SHIFT, meta — not the order KE_MODIFIER is written in, so the
+ * pairing is stated once, below. */
+static const IdlArgType KE_INIT_KB_ARGS[10] = {
+    IDL_DOMSTRING, IDL_BOOLEAN, IDL_BOOLEAN, IDL_ANY /* Window? — ui_event_view_of */,
+    IDL_DOMSTRING, IDL_UNSIGNED_LONG,
+    IDL_BOOLEAN, IDL_BOOLEAN, IDL_BOOLEAN, IDL_BOOLEAN,
+};
+
+static const struct { int arg; int modifier; } KE_INIT_KB_MODIFIERS[] = {
+    { 6, KE_CTRL }, { 7, KE_ALT }, { 8, KE_SHIFT }, { 9, KE_META },
+};
+
+static JSValue js_ke_init_keyboard_event(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                         int magic)
+{
+    JSValue view, key_v, slots;
+    uint32_t location = 0;
+    unsigned i;
+
+    (void)magic;
+    if (!keyboard_event_is(ctx, this_val))
+        return JS_ThrowTypeError(ctx, "initKeyboardEvent called on something that is not a KeyboardEvent");
+    /* Only `typeArg` is required, and §3.6.2 step 1's check for it is the declaration's. */
+    DCHECK(argc >= 1, "initKeyboardEvent's body ran with no typeArg");
+    /* `Window?` is a CONVERSION, so it runs — and throws — before the algorithm's first step and before the
+       dispatch-flag early return. */
+    view = ui_event_view_of(ctx, argc > 3 ? argv[3] : JS_UNDEFINED);
+    if (JS_IsException(view))
+        return view;
+    /* `= ""` is the IDL's default for an absent keyArg, and it is also this attribute's un-initialized value.
+       It is built HERE, before anything is written, because an allocation that fails after the event is half
+       re-initialized leaves a state neither the old nor the new one. What a PRESENT keyArg holds is whatever
+       the declaration's DOMString conversion produced — a real string, or unknown external input, which crosses
+       every conversion as itself and must reach the slot untouched. */
+    key_v = (argc > 4 && !JS_IsUndefined(argv[4])) ? JS_DupValue(ctx, argv[4]) : JS_NewString(ctx, "");
+    if (JS_IsException(key_v)) {
+        JS_FreeValue(ctx, view);
+        return key_v;
+    }
+    /* `= 0` for an absent locationArg, which is also this attribute's un-initialized value. What a present one
+       holds is the `unsigned long` the declaration already produced, so reading it runs none of the page's. */
+    if (argc > 5 && !JS_IsUndefined(argv[5]))
+        JS_ToUint32(ctx, &location, argv[5]);
+    /* "the same behavior as UIEvent.initUIEvent()" — with its early return, which every half must honour. */
+    if (!ui_event_reinit(ctx, this_val, argv[0], argc > 1 && JS_ToBool(ctx, argv[1]),
+                         argc > 2 && JS_ToBool(ctx, argv[2]), view)) {
+        JS_FreeValue(ctx, key_v);
+        return JS_UNDEFINED;
+    }
+    slots = ke_slots(ctx, this_val);
+    DCHECK(JS_IsObject(slots),
+           "initKeyboardEvent passed its brand check and then found no KeyboardEvent slot record");
+    JS_SetPropertyStr(ctx, slots, "key", key_v);
+    JS_SetPropertyStr(ctx, slots, "location", JS_NewUint32(ctx, location));
+    JS_FreeValue(ctx, slots);
+    for (i = 0; i < sizeof(KE_INIT_KB_MODIFIERS) / sizeof(KE_INIT_KB_MODIFIERS[0]); i++)
+        ui_event_set_modifier_state(ctx, this_val, KE_MODIFIER[KE_INIT_KB_MODIFIERS[i].modifier],
+                                    KE_INIT_KB_MODIFIERS[i].arg < argc &&
+                                    JS_ToBool(ctx, argv[KE_INIT_KB_MODIFIERS[i].arg]));
+    return JS_UNDEFINED;
+}
+
 /* ---- the constructor ----------------------------------------------------------------------------------------
  *
  * `constructor(DOMString type, optional KeyboardEventInit eventInitDict = {})`. KeyboardEventInit inherits
@@ -289,6 +371,8 @@ void keyboard_event_init(JSContext *ctx)
        function objects — which is what makes calling one on the other's instance a TypeError. The BODY they
        reach is one, in ui_event.c, because the state is one. */
     g_modifier_state_id = idl_method_id(ctx, MODIFIER_STATE_ARGS, 1, js_ke_get_modifier_state, 0);
+    g_init_kb_id = idl_method_id(ctx, KE_INIT_KB_ARGS, 10, js_ke_init_keyboard_event, 0);
+    idl_optional_from(1);   /* §6.1.2: every argument but `typeArg` is optional */
     g_ctor_stepid = idl_method_id_dict(ctx, KE_CTOR_ARGS, 2, KE_INIT,
                                        (int)(sizeof(KE_INIT) / sizeof(KE_INIT[0])), js_ke_ctor, 0);
     idl_optional_from(1);   /* `constructor(DOMString type, optional KeyboardEventInit eventInitDict = {})` */
@@ -314,6 +398,7 @@ void keyboard_event_install_protos(JSContext *ctx)
     JS_SetPropertyFunctionList(ctx, proto, js_ke_consts,
                                (int)(sizeof(js_ke_consts) / sizeof(js_ke_consts[0])));
     idl_install_method(ctx, proto, "getModifierState", 1, g_modifier_state_id);
+    idl_install_method(ctx, proto, "initKeyboardEvent", 1, g_init_kb_id);
     JS_SetClassProto(ctx, g_ke_class, JS_DupValue(ctx, proto));
 
     /* §3.7.1's interface object on THIS realm's global — see ui_event.c. */
@@ -334,5 +419,5 @@ void keyboard_event_free(JSContext *ctx)
     JS_FreeValue(ctx, g_key);   /* the prototypes are the REALMS' — each is released with its context */
     g_key = JS_UNDEFINED;
     g_ready = 0;
-    g_ctor_stepid = g_modifier_state_id = -1;
+    g_ctor_stepid = g_modifier_state_id = g_init_kb_id = -1;
 }

@@ -148,19 +148,26 @@ static int idl_enum_check(JSContext *ctx, JSValueConst v, const char *const *val
    never moved — an address handed out stays valid for the life of the runtime, which is the property the borrow
    needs, and there is nothing left to run out of. */
 #define IDL_POOL_CHUNK 128
-#define IDL_MAX_ARGS     8
 
 typedef struct {
     IdlSetter  setter;      /* set instead of `body` for an attribute setter */
     bool       null_to_empty;
     IdlBody    body;
-    IdlArgType types[IDL_MAX_DECLARED];
+    /* THE DECLARED TYPES, ALLOCATED, one per position the IDL lists. It was `IdlArgType[IDL_MAX_DECLARED]`
+       with a CHECK — the ceiling-as-detector this pool has now replaced three times (the member array, the
+       dictionary atoms, and this) — and the members it kept out were real: `initMouseEvent` declares fifteen
+       arguments and `initKeyboardEvent` ten, so both were ABSENT from the platform and both named this array
+       as the reason. The list is COPIED at declaration (a caller may pass a stack array), never moved, and
+       freed with the pool. */
+    IdlArgType *types;
     int        nargs;      /* how many the IDL lists; a variadic tail repeats the last */
     /* THE FIRST OPTIONAL ARGUMENT's index. §3.6.2 resolves an `undefined` passed for an optional argument with
        no default as the argument being ABSENT — `new URL("aaa:b", undefined)` is a one-argument call, not a
        call with the base "undefined". Declared per member rather than assumed, because the same undefined at a
        REQUIRED position is the string "undefined" and collapsing the two is wrong in one direction or the
-       other. Defaults past the end, so a member that does not declare it converts every position as before. */
+       other. Its "there are none" value is `nargs` — one past the member's own last position, so a member that
+       does not declare it converts every position it lists. It was IDL_MAX_DECLARED + 1, a sentinel that could
+       only exist while there was a ceiling to derive it from, and that named a position no member had. */
     int        first_optional;
     int        magic;
     /* An IDL_DICT argument's members, and their names INTERNED at registration. The atom must be live at both
@@ -468,17 +475,13 @@ typedef struct {
     uint8_t   dict_phase;   /* 0 = read the member, 1 = convert what was read. Both can park, so a member needs
                                two resume points, not one — a resume in the CONVERSION must not re-read. */
     JSValue   dict_v;   /* the member's value between those two phases (owned) */
-    /* WHAT ToNumber PRODUCED, before the type's arithmetic — kept as the NUMBER because that is what §3.2 says
-       to work from, and a saturating int64 has already lost the modulo and the half-to-even rounding. */
-    double    nums[IDL_MAX_ARGS];
-    JSValue   args[IDL_MAX_ARGS];
-    /* A VARIADIC member's converted arguments, which cannot live in the fixed array above and must not be
-       truncated to fit it: `ul.append(...items)` has as many as the page has items. It is an ARRAY rather than
-       a heap block because that is what `visit` can carry — a deep fork byte-copies the state and re-takes what
-       visit names, so a block pointer would be SHARED by two flows that both free it, and a pointer into the
-       state itself would survive the copy still aimed at the original. One owned value, one v->val, no new
-       ownership contract. Non-variadic members never touch it: their arguments are exactly the declared ones,
-       so the fixed array is always big enough by IDL_MAX_DECLARED. */
+    /* A VARIADIC member's converted arguments, which cannot live in the per-position vector the declaration
+       sizes: `ul.append(...items)` has as many as the page has items, and no declaration knows that number. It
+       is an ARRAY rather than a heap block because that is what `visit` can carry — a deep fork byte-copies the
+       state and re-takes what visit names, so a block pointer would be SHARED by two flows that both free it,
+       and a pointer into the state itself would survive the copy still aimed at the original. One owned value,
+       one v->val, no new ownership contract. Non-variadic members never touch it: their arguments are exactly
+       the positions their declaration lists, which is exactly what the vector holds. */
     JSValue   conv;
     JSValue   vstage;   /* the variadic argument being converted, before it joins `conv` */
     /* §3.2.20's `sequence<T>` CONVERSION: the ES iterator protocol, whose every step is the page's code — so the
@@ -517,17 +520,82 @@ typedef struct {
     JSValue   ce_exc;
 } JSIdlArgsState;
 
-/* THE NESTED CONVERSION'S FRAMES, and the member's own step state, both in this machine's block: the frames
-   first (their count is the member's declared depth), the body's state after them. One statement of the layout
-   rather than the same pointer arithmetic at each of the four places that needs it. */
-static IdlConvFrame *idl_frames(void *st)
+/* THE STATE BLOCK'S TAIL, WHOSE SIZE IS THE MEMBER'S AND NOT THIS MACHINE'S. Three things live after the fixed
+   state, each sized by the DECLARATION rather than by a maximum: the CONVERTED ARGUMENTS (one slot per position
+   the IDL lists), the nested conversion's FRAMES (one per declared sequence level), and the member's own STEP
+   STATE. They live in the block rather than in a side allocation because a deep fork BYTE-COPIES the state and
+   re-takes only what `visit` names: a malloc'd argument vector would be one allocation two flows both free, and
+   a pointer into the state itself would survive the copy still aimed at the original.
+   ONE STATEMENT OF THE LAYOUT — each offset is expressed in terms of the one before it, so a fourth section is
+   added in one place and the size the definition declares cannot drift from where the accessors read.
+   EACH SECTION STARTS AT ITS OWN ALIGNMENT, computed rather than assumed, and the rounding is worded in
+   ALIGNMENTS and never in SIZES: sizeof(JSValue) is 16 on a 64-bit host while _Alignof(JSValue) is 8, so an
+   offset worded in terms of a size states something that is not the invariant (and an assert worded that way
+   can refuse to compile on a host where the two differ). A JSValue's alignment covers every other thing in this
+   tail — its union holds a double and a pointer — so it is the one number here; the member's own step state is
+   a struct this file has never seen, and it can need no more than that, because the whole block comes from ONE
+   js_mallocz and nothing in it can be aligned better than the block itself. */
+#define IDL_ALIGN_UP(n, a) (((size_t)(n) + (size_t)(a) - 1) & ~((size_t)(a) - 1))
+
+static size_t idl_off_args(void)
 {
-    return (IdlConvFrame *)((char *)st + sizeof(JSIdlArgsState));
+    return IDL_ALIGN_UP(sizeof(JSIdlArgsState), _Alignof(JSValue));
+}
+static size_t idl_off_frames(int nargs)
+{
+    return IDL_ALIGN_UP(idl_off_args() + (size_t)nargs * sizeof(JSValue), _Alignof(IdlConvFrame));
+}
+static size_t idl_off_body(int nargs, int conv_depth)
+{
+    return IDL_ALIGN_UP(idl_off_frames(nargs) + (size_t)conv_depth * sizeof(IdlConvFrame),
+                        _Alignof(JSValue));
+}
+/* IDL_ALIGN_UP's mask needs each alignment to be a POWER OF TWO, which every alignment on every C
+   implementation is — asserted rather than assumed because the mask does not fail loudly if it is not, it
+   quietly rounds to the wrong address. */
+typedef char idl_tail_alignments_are_powers_of_two[
+    ((_Alignof(JSValue)      & (_Alignof(JSValue) - 1))      == 0 &&
+     (_Alignof(IdlConvFrame) & (_Alignof(IdlConvFrame) - 1)) == 0 &&
+     _Alignof(IdlConvFrame) <= _Alignof(JSValue)) ? 1 : -1];
+
+/* THE CONVERTED ARGUMENTS. The vector holds exactly the positions the member declares, so the body's argv IS
+   this pointer for every member that is not variadic. */
+static JSValue *idl_args_vec(void *st)
+{
+    return (JSValue *)((char *)st + idl_off_args());
+}
+
+/* ONE ARGUMENT'S SLOT, with the declaration's own bound asserted at every reach — an index past `nargs` is a
+   member converting a position its IDL never listed, which is the state the vector's size makes impossible and
+   this is what says so at the origin. */
+static JSValue *idl_arg_slot(const IdlMember *m, void *st, int i)
+{
+    DCHECK(i >= 0 && i < m->nargs,
+           "an IDL member reached a converted-argument slot past the positions its declaration lists — the "
+           "vector is sized from `nargs`, so this index has nothing behind it");
+    return &idl_args_vec(st)[i];
+}
+
+static IdlConvFrame *idl_frames(const IdlMember *m, void *st)
+{
+    return (IdlConvFrame *)((char *)st + idl_off_frames(m->nargs));
 }
 
 static void *idl_body_state(const IdlMember *m, void *st)
 {
-    return (char *)st + sizeof(JSIdlArgsState) + (size_t)m->conv_depth * sizeof(IdlConvFrame);
+    return (char *)st + idl_off_body(m->nargs, m->conv_depth);
+}
+
+/* HOW MANY POSITIONS THE IDL LISTS AS ORDINARY ARGUMENTS. A VARIADIC member's last declared type is the type of
+   "every argument from here on" and not a position of its own, which is why the count differs — and why §3.6.2's
+   absent-optional rule stops there: each value a page passes to a `T...` tail is CONVERTED, so
+   `el.append('a', undefined)` appends the text "undefined" rather than skipping an argument. */
+static int idl_declared_positions(const IdlMember *m)
+{
+    DCHECK(!m->variadic || m->nargs >= 1,
+           "a variadic member declared no types at all — the tail's type is what `T...` means, so there is "
+           "always at least one");
+    return m->variadic ? m->nargs - 1 : m->nargs;
 }
 
 /* Release everything one frame holds and leave it empty. Safe on a frame that was never used: a zeroed state's
@@ -555,7 +623,7 @@ static int idl_conv_push(JSContext *ctx, JSIdlArgsState *s, const IdlMember *m, 
     CHECK(s->conv_sp < m->conv_depth,
           "a nested IDL conversion went deeper than the DECLARED type tree — the depth is computed from the "
           "declaration and the state is sized for it, so this means the two have drifted apart");
-    f = &idl_frames(s)[s->conv_sp++];
+    f = &idl_frames(m, s)[s->conv_sp++];
     idl_conv_frame_clear(ctx, f);
     iter_cursor_init(&f->cur);
     f->d = d;
@@ -566,10 +634,10 @@ static int idl_conv_push(JSContext *ctx, JSIdlArgsState *s, const IdlMember *m, 
     return 0;
 }
 
-static void idl_conv_pop(JSContext *ctx, JSIdlArgsState *s)
+static void idl_conv_pop(JSContext *ctx, JSIdlArgsState *s, const IdlMember *m)
 {
     DCHECK(s->conv_sp > 0, "a nested IDL conversion popped a frame it never pushed");
-    idl_conv_frame_clear(ctx, &idl_frames(s)[--s->conv_sp]);
+    idl_conv_frame_clear(ctx, &idl_frames(m, s)[--s->conv_sp]);
 }
 
 /* DRIVE the stack one re-entry's worth. Returns >0 (the caller returns it — the machine is parked inside the
@@ -582,7 +650,7 @@ static int idl_conv_run(JSContext *ctx, JSIdlArgsState *s, const IdlMember *m, J
 
     DCHECK(s->conv_sp > 0, "the nested conversion was driven with no frame under it");
     for (;;) {
-        IdlConvFrame *f = &idl_frames(s)[s->conv_sp - 1];
+        IdlConvFrame *f = &idl_frames(m, s)[s->conv_sp - 1];
 
         if (f->phase == IDL_CONV_PULL) {
             r = iter_cursor_run(ctx, &s->hdr, &f->cur, f->src, in, out_cb, out_argc);
@@ -593,10 +661,10 @@ static int idl_conv_run(JSContext *ctx, JSIdlArgsState *s, const IdlMember *m, J
                 JSValue done = f->list;
 
                 f->list = JS_UNDEFINED;
-                idl_conv_pop(ctx, s);
+                idl_conv_pop(ctx, s, m);
                 if (s->conv_sp == 0) { *pout = done; return 0; }
                 {   /* the frame below is the MEMBER that named this sequence, waiting for its value */
-                    IdlConvFrame *p = &idl_frames(s)[s->conv_sp - 1];
+                    IdlConvFrame *p = &idl_frames(m, s)[s->conv_sp - 1];
 
                     DCHECK(p->phase == IDL_CONV_MEMBERS && p->mphase == 1,
                            "a nested sequence finished under a frame that was not converting a member — a "
@@ -731,6 +799,9 @@ static void js_idl_args_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSIdlArgsState *s = st;
     const IdlMember *m;
     int i;
+
+    DCHECK(s->hdr.arg >= 0 && s->hdr.arg < g_n, "an IDL member's visit ran with no pool entry behind it");
+    m = idl_member(s->hdr.arg);
     v->val(ctx, &s->result);
     v->val(ctx, &s->dict_v);
     v->val(ctx, &s->conv);
@@ -738,21 +809,21 @@ static void js_idl_args_visit(JSContext *ctx, void *st, JSStepVisit *v)
     iter_cursor_visit(ctx, &s->seq, v);
     v->val(ctx, &s->seq_list);
     v->val(ctx, &s->ce_exc);
-    for (i = 0; i < IDL_MAX_ARGS; i++)
-        v->val(ctx, &s->args[i]);
-    DCHECK(s->hdr.arg >= 0 && s->hdr.arg < g_n, "an IDL member's visit ran with no pool entry behind it");
+    /* EVERY declared position — the vector's size is the member's `nargs`, so this loop and the tail the
+       declaration allocated are the same number read from the same place. */
+    for (i = 0; i < m->nargs; i++)
+        v->val(ctx, &idl_args_vec(st)[i]);
     /* A FORK CANNOT HAPPEN MID-DRAIN, and that is why this buffer needs no clone contract. A fork is a concolic
        branch, which is bytecode; the drain runs none — every per-node effect is an enqueue. If this ever fires,
        the drain grew a call into the page and the buffer needs a real ownership declaration. */
     DCHECK(s->tree == NULL, "an IDL member was forked while draining its tree steps");
     custom_elements_queue_visit(ctx, &s->ce, v);
-    m = idl_member(s->hdr.arg);
     /* EVERY declared frame, not only the live ones. A popped frame holds JS_UNDEFINED and a never-used one the
        zeroed state's non-refcounted integer, so visiting all of them takes no reference it should not — where a
        loop bounded by `conv_sp` would silently drop whatever a frame still held if the cursor and the frames
        ever disagreed. */
     for (i = 0; i < m->conv_depth; i++) {
-        IdlConvFrame *f = &idl_frames(st)[i];
+        IdlConvFrame *f = &idl_frames(m, st)[i];
 
         iter_cursor_visit(ctx, &f->cur, v);
         v->val(ctx, &f->src);
@@ -997,9 +1068,9 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            VARIADIC one takes every argument the page passed, however many that is. */
         s->n = m->variadic ? s->hdr.argc
              : (s->hdr.argc < m->nargs ? s->hdr.argc : m->nargs);
-        DCHECK(m->variadic || s->n <= IDL_MAX_ARGS,
-               "a member declared more arguments than this machine carries — IDL_MAX_DECLARED bounds what a "
-               "member may declare, so this means the two have drifted apart");
+        DCHECK(m->variadic || s->n <= m->nargs,
+               "a non-variadic member is converting more positions than its declaration lists — the argument "
+               "vector in this state's tail is sized from that same `nargs`, so there is nothing behind them");
         {
             /* §3.6.2 STEP 1: a call with fewer arguments than the member has REQUIRED ones is a TypeError, and
                it is thrown before any conversion runs. `new File()` built a File out of nothing; `new File([])`
@@ -1010,7 +1081,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                `el.append()` require nothing even though the member declares the tail's type. Stated here
                rather than per member: a variadic member that had to remember to say so is a member whose
                forgetting turns into a TypeError the spec does not have. */
-            int declared = m->variadic ? m->nargs - 1 : m->nargs;
+            int declared = idl_declared_positions(m);
             int required = m->first_optional < declared ? m->first_optional : declared;
             if (s->hdr.argc < required) {
                 JS_FreeValue(ctx, cb_result);
@@ -1023,8 +1094,8 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         s->dict_v = JS_UNDEFINED;
         s->conv = m->variadic ? JS_NewArray(ctx) : JS_UNDEFINED;
         s->vstage = JS_UNDEFINED;
-        for (r = 0; r < IDL_MAX_ARGS; r++)
-            s->args[r] = JS_UNDEFINED;
+        for (r = 0; r < m->nargs; r++)
+            idl_args_vec(s)[r] = JS_UNDEFINED;
         s->i = 0;
         s->tree = NULL;
         s->tree_after_body = 0;
@@ -1043,7 +1114,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         /* ONE STORE PER ARGUMENT, at the bottom of the loop. Every branch below writes the converted value
            into `slot` and falls through to `placed`, so the variadic append happens in exactly one place and
            cannot be forgotten by whichever branch is added next. */
-        JSValue *slot = m->variadic ? &s->vstage : &s->args[s->i];
+        JSValue *slot = m->variadic ? &s->vstage : idl_arg_slot(m, s, s->i);
         /* A POSITION THE IDL DOES NOT LIST IS NOT CONVERTED. Repeating the last declared type instead was a
            catch-all with a real victim: addEventListener declares one DOMString, so the repeat converted its
            CALLBACK to a string and every listener registered was the string "function () {…}". A variadic
@@ -1052,8 +1123,9 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                      : (m->variadic ? m->types[m->nargs - 1] : IDL_ANY);
 
         /* §3.6.2: an optional argument given `undefined` is ABSENT, so nothing is converted and the body sees
-           undefined — which is what lets it tell "no base" from the base "undefined". */
-        if (s->i >= m->first_optional && JS_IsUndefined(a)) {
+           undefined — which is what lets it tell "no base" from the base "undefined". A VARIADIC TAIL is not
+           one of those positions (see idl_declared_positions): every value passed to a `T...` is converted. */
+        if (s->i < idl_declared_positions(m) && s->i >= m->first_optional && JS_IsUndefined(a)) {
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
             *slot = JS_UNDEFINED;
@@ -1102,15 +1174,21 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         }
 
         if (t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST) {
-            DCHECK(!m->variadic || s->i < m->nargs,
-                   "a dictionary argument landed in a VARIADIC tail — the conversion cursor is per-member, so "
-                   "a dictionary repeated by the tail would read the first one's names");
+            /* A DICTIONARY ARGUMENT IS BUILT IN PLACE, in the vector slot, rather than through `slot` and
+               `placed:` — its members are written onto the object across many re-entries, so there is nothing to
+               append at the end. That is why a VARIADIC member may not declare one at all: its body reads the
+               converted arguments out of `conv`, which this store never reaches, and the member would receive an
+               undefined where its dictionary belongs. The old form of this assert allowed one at a declared
+               position and only refused it in the tail, which is the half of the rule that leaves a hole. */
+            DCHECK(!m->variadic,
+                   "a VARIADIC member declared a dictionary argument — a dictionary is built in the argument "
+                   "vector and a variadic member's body reads `conv`, so the two never meet");
             /* `optional D options = {}`: undefined and null have no members to read, so every one defaults and
                no page code runs. An object's members are read IN ORDER and each is converted by ITS OWN type,
                parking on either half. A `required` member is checked here rather than in the body, because
                `required` is part of the TYPE the declaration states. */
-            if (JS_IsUndefined(s->args[s->i]))
-                s->args[s->i] = JS_NewObject(ctx);
+            if (JS_IsUndefined(*idl_arg_slot(m, s, s->i)))
+                *idl_arg_slot(m, s, s->i) = JS_NewObject(ctx);
             /* §3.2.18 step 2: a value that is NOT undefined, null or an Object is a TypeError before any member
                is read — `new Blob([], 123)` throws, and reading `123.type` instead answered undefined and built
                a Blob. The union form is exempt because its whole rule is that a non-object IS a member. */
@@ -1128,7 +1206,8 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     DCHECK(m->dict[0].type == IDL_BOOLEAN,
                            "a (dictionary or boolean) union declared a non-boolean first member — the union's "
                            "rule is that the bare value IS that member");
-                    JS_SetPropertyStr(ctx, s->args[s->i], m->dict[0].name, JS_NewBool(ctx, JS_ToBool(ctx, a)));
+                    JS_SetPropertyStr(ctx, *idl_arg_slot(m, s, s->i), m->dict[0].name,
+                                      JS_NewBool(ctx, JS_ToBool(ctx, a)));
                 }
                 for (r = 0; r < m->dict_n; r++) {
                     if (m->dict[r].required)
@@ -1141,7 +1220,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                         JSValue dv = idl_default_value(ctx, &m->dict[r]);
 
                         if (JS_IsException(dv)) return JS_STEP_ABRUPT;
-                        JS_SetPropertyStr(ctx, s->args[s->i], m->dict[r].name, dv);
+                        JS_SetPropertyStr(ctx, *idl_arg_slot(m, s, s->i), m->dict[r].name, dv);
                     }
                 }
                 s->dict_i = m->dict_n;
@@ -1296,12 +1375,20 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     }
                 }
                 else if (idl_is_numeric(mt)) {
-                    r = step_todouble_run(ctx, &s->hdr, s->dict_v, cb_result, &s->nums[s->i], out_cb, out_argc);
+                    /* WHAT ToNumber PRODUCED, before the type's arithmetic — the NUMBER, because that is what
+                       §3.2 works from and a saturating int64 has already lost the modulo and the half-to-even
+                       rounding. It is a LOCAL and not state: step_todouble_run writes it only on the entry that
+                       COMPLETES the coercion, so a park leaves nothing behind to carry across. It used to be an
+                       array indexed by the argument cursor, which a variadic member with a numeric tail would
+                       have run off the end of. */
+                    double num;
+
+                    r = step_todouble_run(ctx, &s->hdr, s->dict_v, cb_result, &num, out_cb, out_argc);
                     cb_result = JS_UNDEFINED;
                     if (r > 0) return r;   /* parked ON THIS MEMBER's conversion; the read does not re-run */
                     if (r < 0) return JS_STEP_ABRUPT;
                     JS_FreeValue(ctx, s->dict_v);
-                    s->dict_v = idl_num_of(ctx, mt, s->nums[s->i]);
+                    s->dict_v = idl_num_of(ctx, mt, num);
                 }
                 else if (mt == IDL_DOMSTRING || mt == IDL_DOMSTRING_NULLABLE || mt == IDL_BYTESTRING ||
                          mt == IDL_USVSTRING || mt == IDL_USVSTRING_NULLABLE || mt == IDL_ENUM) {
@@ -1327,7 +1414,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                             return JS_STEP_ABRUPT;
                     }
                 }
-                JS_SetPropertyStr(ctx, s->args[s->i], dm->name, s->dict_v);
+                JS_SetPropertyStr(ctx, *idl_arg_slot(m, s, s->i), dm->name, s->dict_v);
                 s->dict_v = JS_UNDEFINED;
                 s->dict_phase = 0;
                 s->dict_i++;
@@ -1523,11 +1610,13 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             goto placed;
         }
         if (idl_is_numeric(t)) {
-            r = step_todouble_run(ctx, &s->hdr, a, cb_result, &s->nums[s->i], out_cb, out_argc);
+            double num;   /* see the dictionary member's arm: a local, because a park writes nothing */
+
+            r = step_todouble_run(ctx, &s->hdr, a, cb_result, &num, out_cb, out_argc);
             cb_result = JS_UNDEFINED;
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
-            *slot = idl_num_of(ctx, t, s->nums[s->i]);
+            *slot = idl_num_of(ctx, t, num);
             goto placed;
         }
         if (t == IDL_CALLBACK) {
@@ -1603,7 +1692,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            conversion loop above is skipped and the resume lands back inside the body — which is what makes the
            body's stage the SECOND resume point of this machine, beside the argument cursor. */
         r = m->step->body(ctx, &s->hdr, idl_body_state(m, s), s->n,
-                          (JSValueConst *)(argv_vec ? argv_vec : s->args),
+                          (JSValueConst *)(argv_vec ? argv_vec : idl_args_vec(s)),
                           cb_result, &s->result, out_cb, out_argc);
         idl_free_vec(ctx, argv_vec, s->n);
         if (r < 0) {
@@ -1630,8 +1719,9 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         return idl_ce_finish(ctx, s, JS_UNDEFINED, out_cb, out_argc);
     }
     s->result = m->setter
-        ? m->setter(ctx, s->hdr.this_val, s->n > 0 ? s->args[0] : JS_UNDEFINED, m->magic)
-        : m->body(ctx, s->hdr.this_val, s->n, (JSValueConst *)(argv_vec ? argv_vec : s->args), m->magic);
+        ? m->setter(ctx, s->hdr.this_val, s->n > 0 ? *idl_arg_slot(m, s, 0) : JS_UNDEFINED, m->magic)
+        : m->body(ctx, s->hdr.this_val, s->n,
+                  (JSValueConst *)(argv_vec ? argv_vec : idl_args_vec(s)), m->magic);
     idl_free_vec(ctx, argv_vec, s->n);
     if (JS_IsException(s->result)) {
         s->result = JS_UNDEFINED;
@@ -1661,7 +1751,7 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
     /* A NESTED CONVERSION THAT NEVER FINISHED — the member threw mid-iteration, or the flow was dropped inside
        one of the page's getters. Every declared frame, for the reason the visit walks every one. */
     for (i = 0; i < m->conv_depth; i++)
-        idl_conv_frame_clear(ctx, &idl_frames(st)[i]);
+        idl_conv_frame_clear(ctx, &idl_frames(m, st)[i]);
     s->conv_sp = 0;
     /* An abandoned drain — the member threw, or the flow was dropped mid-walk. The remaining nodes' steps do
        not run, which is what an abrupt completion means, but the buffer is still this machine's to free. */
@@ -1685,9 +1775,11 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
     iter_cursor_release(ctx, &s->seq);
     JS_FreeValue(ctx, s->seq_list);
     s->seq_list = JS_UNDEFINED;
-    for (i = 0; i < IDL_MAX_ARGS; i++) {
-        JS_FreeValue(ctx, s->args[i]);
-        s->args[i] = JS_UNDEFINED;
+    /* EVERY declared position, for the reason the visit walks every one: the vector is sized from `nargs`, and
+       a slot the conversion never reached holds the zeroed state's non-refcounted integer. */
+    for (i = 0; i < m->nargs; i++) {
+        JS_FreeValue(ctx, idl_args_vec(st)[i]);
+        idl_args_vec(st)[i] = JS_UNDEFINED;
     }
     return r;
 }
@@ -1715,6 +1807,10 @@ int idl_method_id_ext(JSContext *ctx, const IdlArgType *types, int nargs, bool v
                       IdlBody body, int magic)
 {
     int id = idl_method_id_dict(ctx, types, nargs, NULL, 0, body, magic);
+
+    DCHECK(!variadic || nargs >= 1,
+           "a variadic member declared no argument types — the LAST one is the tail's type, which is what `T...` "
+           "states, so there is always at least one");
     idl_member(g_n - 1)->variadic = variadic;
     idl_member(g_n - 1)->iface = iface;
     return id;
@@ -1738,20 +1834,33 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
     g_rt = rt;
     idx = g_n++;
     idl_pool_reserve(idx);   /* the pool grows to fit the platform; there is nothing here to run out of */
-    CHECK(nargs >= 0 && nargs <= IDL_MAX_DECLARED,
-          "a member declared more argument types than IDL_MAX_DECLARED holds");   /* 0 = a getter, which takes none */
+    DCHECK(nargs >= 0, "a member declared a negative number of argument positions");   /* 0 = a getter */
+    DCHECK(nargs == 0 || types != NULL,
+           "a member declared argument positions and named no types for them — the type list IS the declaration");
     idl_member(idx)->body          = body;
     idl_member(idx)->setter        = NULL;
     idl_member(idx)->null_to_empty = false;
     idl_member(idx)->nargs = nargs;
-    idl_member(idx)->first_optional = IDL_MAX_DECLARED + 1;   /* none, until the member says otherwise */
+    /* NO OPTIONAL ARGUMENTS, stated in the member's OWN terms: one past its last position. There is nothing
+       here to overflow and nothing to keep in step with a ceiling — see idl_optional_from. */
+    idl_member(idx)->first_optional = nargs;
     /* HOW MANY THE CALLER MUST PASS. §3.6.2 throws a TypeError before ANY conversion when a call has fewer
        arguments than the member has required ones — `new File()` throws rather than building a File with no
        bits. It is the same number `first_optional` already states, capped at what the IDL declares, so a member
        that never calls idl_optional_from requires every argument it listed. */
     idl_member(idx)->magic = magic;
-    for (k = 0; k < nargs; k++)
-        idl_member(idx)->types[k] = types[k];
+    /* THE DECLARED TYPES, COPIED — the caller's array is usually a `static const` and sometimes a local (a
+       setter declares one type on the stack), so the pool owns its own copy for the life of the runtime. The
+       allocation failing is a member that cannot be declared, which is an API the page cannot call: a CHECK,
+       fatal in release too, never a truncation to whatever would fit. */
+    idl_member(idx)->types = NULL;
+    if (nargs > 0) {
+        idl_member(idx)->types = malloc(sizeof(IdlArgType) * (size_t)nargs);
+        CHECK(idl_member(idx)->types != NULL,
+              "idl: OOM copying a member's declared argument types — a member that cannot be declared is an API "
+              "the page cannot call");
+        memcpy(idl_member(idx)->types, types, sizeof(IdlArgType) * (size_t)nargs);
+    }
     idl_member(idx)->dict = members;
     idl_member(idx)->dict_n = 0;
     idl_member(idx)->dict_atoms = NULL;
@@ -1781,11 +1890,12 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
     idl_member(idx)->steps = NULL;
     idl_member(idx)->variadic = false;
     idl_member(idx)->iface = 0;
-    /* THE STATE CARRIES THE MEMBER'S OWN NESTED-CONVERSION FRAMES, which is why its size is per-member: a
-       member declaring no sequence-of-union type pays nothing, and one that does gets exactly the depth its
-       declared type tree has. */
-    idl_def(idx)->size  = sizeof(JSIdlArgsState) +
-                          (size_t)idl_member(idx)->conv_depth * sizeof(IdlConvFrame);
+    /* THE STATE CARRIES THE MEMBER'S OWN ARGUMENT VECTOR AND NESTED-CONVERSION FRAMES, which is why its size is
+       per-member and not a constant: a getter pays for neither, a fifteen-argument legacy initializer gets
+       fifteen slots, and a member declaring a sequence-of-union type gets exactly the depth its declared type
+       tree has. One statement of the layout (idl_off_body) computes both the size here and every offset the
+       accessors read, so the definition and the reads cannot drift. */
+    idl_def(idx)->size  = idl_off_body(nargs, idl_member(idx)->conv_depth);
     idl_def(idx)->step  = js_idl_args_step;
     idl_def(idx)->fini  = idl_args_result;
     idl_def(idx)->arg   = idx;
@@ -1843,12 +1953,31 @@ int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
     return id;
 }
 
-/* See idl_args.h. It names the member the LAST declaration made, the way idl_method_id_ext sets `variadic` and
-   `iface` — the id a declaration returns is the RUNTIME's step id and not this pool's index, so reaching the
-   entry through the id was reading past the pool. */
+/* A SETTER THAT NAMES THE LAST DECLARATION MAY ONLY BE CALLED FROM A DECLARATION. All three of these
+   (idl_optional_from, idl_iface_brand, idl_iface_narrow) describe "the member the LAST declaration made",
+   because the id a declaration returns is the RUNTIME's step id and not this pool's index — so reaching the
+   entry through the id was reading past the pool. That works only where the declaration is the thing that just
+   happened. Called from an INSTALL it names whichever component declared last, and writes one member's rule
+   onto a stranger: `postMessage`'s per-realm install did exactly that, once per realm, and nothing said so.
+   The seal is where that becomes checkable — after it, no declaration can be correct, so neither can anything
+   that describes one. Before it, the surrounding order is the caller's to keep, which is why each of these
+   also asserts what it can about the member it lands on. */
+#define IDL_LAST_DECL_ONLY                                                                            \
+    "a member's declaration was described from outside a declaration — these setters name the LAST "  \
+    "member declared, so after the platform is sealed they name whichever component declared last, "  \
+    "not the member being installed. State it where the member is declared"
+
+/* See idl_args.h. It names the member the LAST declaration made. */
 void idl_optional_from(int first_optional)
 {
     DCHECK(g_n > 0, "an optional-argument index was declared before any member was");
+    DCHECK(!g_sealed, IDL_LAST_DECL_ONLY);
+    /* IT IS AN INDEX INTO THIS MEMBER'S OWN LIST, so `nargs` — one past the last position — is the largest it
+       can be, and that value is what "no optional arguments" already means. A member naming a position it never
+       declared is a declaration that disagrees with its own IDL, and it used to be expressible because the
+       "none" value was derived from a CEILING rather than from the member. */
+    DCHECK(first_optional >= 0 && first_optional <= idl_member(g_n - 1)->nargs,
+           "a member's first OPTIONAL argument is not one of the positions it declares");
     idl_member(g_n - 1)->first_optional = first_optional;
 }
 
@@ -1856,6 +1985,7 @@ void idl_optional_from(int first_optional)
 void idl_iface_brand(JSClassID iface)
 {
     DCHECK(g_n > 0, "an interface brand was declared before any member was");
+    DCHECK(!g_sealed, IDL_LAST_DECL_ONLY);
     DCHECK(iface != 0, "an interface brand named no class — the class is half of what the type states");
     idl_member(g_n - 1)->iface = iface;
     idl_member(g_n - 1)->iface_narrow = NULL;   /* a fresh brand narrows to nothing until the member says so */
@@ -1864,6 +1994,7 @@ void idl_iface_brand(JSClassID iface)
 void idl_iface_narrow(bool (*is)(JSValueConst v))
 {
     DCHECK(g_n > 0, "an interface narrowing was declared before any member was");
+    DCHECK(!g_sealed, IDL_LAST_DECL_ONLY);
     DCHECK(idl_member(g_n - 1)->iface != 0,
            "an interface narrowing was declared for a member with no class brand — it narrows a brand, so the "
            "brand has to be there to narrow");
@@ -2161,6 +2292,10 @@ void idl_args_free(JSContext *ctx)
             JS_FreeAtom(ctx, idl_member(i)->dict_atoms[k]);
         free(idl_member(i)->dict_atoms);
         idl_member(i)->dict_atoms = NULL;
+        /* The declared type list, copied at the declaration and owned for the runtime's life — the third thing
+           this pool allocates per member, and it is freed here beside the other two. */
+        free(idl_member(i)->types);
+        idl_member(i)->types = NULL;
         /* The joined stage labels — the strings themselves are statics belonging to the member and to this
            file; the array that names them is this pool's. */
         free((void *)idl_member(i)->steps);

@@ -29,6 +29,33 @@ JSValue ui_event_new_derived(JSContext *ctx, JSValue proto, JSValueConst type, J
 /* Does this object carry UIEvent's own slot record — the brand a derived interface's members share. */
 bool ui_event_is(JSContext *ctx, JSValueConst v);
 
+/* §3.2.1's `Window?` CONVERSION, over `view` and over every legacy initializer's `viewArg`. null and undefined
+   are the IDL null, a Window crosses as itself, and anything else is Web IDL's own TypeError. It is public
+   because it is a CONVERSION and not an algorithm step: Web IDL performs it before the initializer's first
+   step, so an initializer whose other arguments also need converting has to be able to order the two.
+   Answers JS_NULL, an owned dup, or JS_EXCEPTION with the TypeError live. */
+JSValue ui_event_view_of(JSContext *ctx, JSValueConst v);
+
+/* §6.1.1's initUIEvent, AS THE PREFIX EVERY LEGACY INITIALIZER SHARES. All three of them — initUIEvent,
+   Pointer Events 4's initMouseEvent and §6.1.2's initKeyboardEvent — begin with the same four arguments and
+   the same sentence ("this method has the same behavior as initEvent()", then `view`), so it is one
+   implementation rather than the same four lines written in three files with three chances to drop the early
+   return. `view` is CONSUMED (pass what ui_event_view_of answered).
+   Answers FALSE when the event's DISPATCH FLAG is set: §2.2's initialise-an-existing-event returns early, and
+   a derived initializer must honour that before writing a single slot of its own. */
+bool ui_event_reinit(JSContext *ctx, JSValueConst ev, JSValueConst type, bool bubbles, bool cancelable,
+                     JSValue view);
+
+/* §3.2.1's `detail`, written by an initializer whose argument list HAS a detailArg — initUIEvent's and
+   initMouseEvent's do; initKeyboardEvent's does not, and §6.1.2 says so in as many words ("the value of detail
+   remains undefined"), which is why this is a call the member makes rather than part of the prefix above. */
+void ui_event_set_detail(JSContext *ctx, JSValueConst ev, int32_t detail);
+
+/* THE INTERNAL KEY MODIFIER STATE, WRITTEN. The legacy initializers take four booleans each, and §6.1.2 states
+   every one of them as "specifies whether the <X> key modifier is active" — so a FALSE is as much a statement
+   as a true and clears the modifier, which is why this takes the flag rather than only adding names. */
+void ui_event_set_modifier_state(JSContext *ctx, JSValueConst ev, const char *name, bool on);
+
 /* THE INTERNAL KEY MODIFIER STATE — Pointer Events 4 "Constructing Mouse Events": a set of key modifier names,
    set from EventModifierInit and queried by getModifierState(). It lives with the dictionary that fills it
    rather than with either interface that declares the member, because BOTH declare it over the same state.

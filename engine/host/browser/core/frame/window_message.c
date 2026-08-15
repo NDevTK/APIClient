@@ -458,8 +458,12 @@ void window_message_install_proto(JSContext *ctx)
     JSValue proto = window_proxy_proto(ctx);
 
     DCHECK(g_id_post >= 0, "postMessage was installed before window_message_init declared it");
+    /* THE OPTIONAL INDEX IS THE DECLARATION'S, and it is stated there (window_message_init) and nowhere else.
+       A second `idl_optional_from(1)` used to sit on this line, in the per-REALM install — and that setter
+       names the member the LAST DECLARATION made, which by install time is whichever component happened to
+       declare last. So it did not restate this member's rule twice; it wrote it onto a stranger, once per
+       realm. The declaration is the only place that knows which member is being described. */
     idl_install_method(ctx, proto, "postMessage", 1, g_id_post);
-    idl_optional_from(1);
     JS_FreeValue(ctx, proto);
 }
 

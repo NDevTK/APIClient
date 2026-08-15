@@ -226,20 +226,21 @@ typedef struct IdlDictDecl {
     int                  n;
 } IdlDictDecl;
 
-/* A position the IDL does not list is passed through unconverted, which is what a variadic `any...` tail means
-   and what an optional argument beyond the listed ones means. `nargs` is how many the IDL lists.
-   THE NUMBER IS A REAL MEMBER'S, not a guess: HTML 9.4.1's
-   `initMessageEvent(type, bubbles, cancelable, data, origin, lastEventId, source, ports)` declares eight, and
-   it is the widest the platform has. It was four, which is what the members written so far happened to need —
-   a limit that describes the past rather than the type system, and one whose CHECK fires at install time so a
-   member that outgrows it cannot ship silently. It matches IDL_MAX_ARGS, which is the machine's own per-call
-   storage: the two are the same bound seen from the declaration side and the call side, and they were allowed
-   to differ only while no member came close to either. */
-#define IDL_MAX_DECLARED 8
-
 /* DECLARE a member: the IDL types of its arguments, and the body to run once they are converted. Returns the
    step id, which the caller CACHES. Registration and installation are separate on purpose: Element's members
-   are installed on every wrapper the tree hands out, so registering there would mint a definition per element. */
+   are installed on every wrapper the tree hands out, so registering there would mint a definition per element.
+   A position the IDL does not list is passed through unconverted, which is what a variadic `any...` tail means
+   and what an optional argument beyond the listed ones means. `nargs` is how many the IDL lists, and THERE IS
+   NO CEILING ON IT. There was one — IDL_MAX_DECLARED, which sized an inline type array in the member record
+   and a per-call argument array in the machine's state, "the same bound seen from the declaration side and the
+   call side". It was four, then eight, and each time its comment named the widest member then written as
+   though that were a fact about the platform: eight was HTML 9.4.1's `initMessageEvent`, and Pointer Events 4's
+   `initMouseEvent` (fifteen) and UI Events §6.1.2's `initKeyboardEvent` (ten) were BOTH already past it, both
+   absent from this engine, and both said so in a comment naming this line. A ceiling that decides which spec
+   members may exist is a cap on the platform, and raising it only moves the next member that cannot ship.
+   So the DECLARATION owns its type list (copied at registration, freed with the pool) and the state's argument
+   vector is sized from the same number — a member is as wide as its IDL, and there is nothing left to outgrow.
+   `types` is COPIED, so a caller may pass a stack array. */
 int  idl_method_id(JSContext *ctx, const IdlArgType *types, int nargs, IdlBody body, int magic);
 
 /* §3.2's INTEGER conversion, over the double a ToNumber has already produced — sign(x)·floor(|x|) taken modulo
@@ -348,7 +349,12 @@ typedef struct {
    converting that undefined would give the base URL the string "undefined" and throw. Set after the
    declaration — it names the member the LAST one made, the way idl_method_id_ext sets `variadic`, because the
    id a declaration returns is the RUNTIME's step id and not this pool's index. A member that never calls this
-   converts every declared position, which is right for a member whose arguments are all required. */
+   converts every declared position, which is right for a member whose arguments are all required.
+   IT IS AN INDEX INTO THE MEMBER'S OWN LIST, and its "there are none" value is `nargs` — one past the last
+   position the member declares, which is the only place "no optional arguments" can mean anything. It used to
+   be IDL_MAX_DECLARED + 1, a sentinel derived from the CEILING: a member could name a position past what it
+   declared and past what any member may declare, and the value that meant "none" changed whenever the ceiling
+   did. The declaration asserts the bound, so the state cannot be reached. */
 void idl_optional_from(int first_optional);
 
 /* DECLARE THE CLASS AN IDL_INTERFACE / IDL_STRING_UNLESS_IFACE POSITION BRANDS AGAINST. Set after the

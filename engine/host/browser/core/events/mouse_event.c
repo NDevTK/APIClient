@@ -54,12 +54,10 @@
  * THE SLOTS ARE OWN PROPERTIES UNDER A PRIVATE SYMBOL, for the reason event.c gives: a property write is
  * captured by the COW delta, so the event's state time-travels, and the symbol is a brand a page cannot forge.
  *
- * `initMouseEvent` IS NOT INSTALLED, and it is the one member of this interface that is not. Pointer Events 4
- * declares it with FIFTEEN arguments; core/idl_args.h's IDL_MAX_DECLARED is 8, and its comment states that
- * eight "is the widest the platform has" — which initMouseEvent(15) and initKeyboardEvent(10) contradict. A
- * member cannot be declared past that ceiling, and converting arguments 9..15 inside the body would run the
- * page's valueOf from C, which is the drive-to-completion this engine aborts on. So the member is honestly
- * ABSENT — a page calling it gets its own TypeError — until that ceiling is the platform's real widest. */
+ * `initMouseEvent` is Pointer Events 4's §"Legacy Event Initializers", and it is the widest member the platform
+ * has: FIFTEEN declared arguments. It is how a bundle old enough to use `document.createEvent('MouseEvent')`
+ * finishes making one, so the factory row and this member are one feature — without it §4.5 leaves the
+ * initialized flag unset and the event can never be dispatched. */
 #include "check.h"
 #include "quickjs.h"
 #include "core/events/event.h"
@@ -75,6 +73,7 @@ static JSClassID g_me_class;    /* the class exists for its per-REALM prototype 
 static int       g_ready;
 static int       g_ctor_stepid = -1;
 static int       g_modifier_state_id = -1;
+static int       g_init_mouse_id = -1;
 
 JSValue mouse_event_proto(JSContext *ctx)
 {
@@ -116,14 +115,44 @@ bool mouse_event_is(JSContext *ctx, JSValueConst v)
    in the final fold into the signed range, and the pool declares no `short`, so the member is declared with the
    width it has and folded here. The DCHECK is the contract that makes that exact: what arrives must already be
    the 16-bit modulo, so the day the pool gains the type this fold is deleted and nothing else moves. */
+static int32_t md_button_fold(uint32_t u)
+{
+    DCHECK(u <= 0xFFFFu, "`button` reached its fold outside the 16-bit range the declared type produces — the "
+                         "modulo is the declaration's half of §3.2.5 and this is the signed fold that completes "
+                         "it");
+    return u >= 0x8000u ? (int32_t)u - 0x10000 : (int32_t)u;
+}
+
 static int32_t md_button_of(JSContext *ctx, JSValueConst init)
 {
-    uint32_t u = ui_event_dict_u32(ctx, init, "button");
+    return md_button_fold(ui_event_dict_u32(ctx, init, "button"));
+}
 
-    DCHECK(u <= 0xFFFFu, "MouseEventInit's `button` reached its fold outside the 16-bit range the declared "
-                         "type produces — the modulo is the declaration's half of §3.2.5 and this is the "
-                         "signed fold that completes it");
-    return u >= 0x8000u ? (int32_t)u - 0x10000 : (int32_t)u;
+/* AN ARGUMENT THE DECLARATION HAS ALREADY CONVERTED, read back out. An absent one is the IDL's `= 0` default,
+   which is also the un-initialized value of every attribute `initMouseEvent` writes — so there is one number
+   here and no second table of defaults. It runs none of the page's code: what arrives is a value the args
+   machine produced, or unknown external input, which crosses every conversion as itself. */
+static int32_t md_arg_i32(JSContext *ctx, int argc, JSValueConst *argv, int i)
+{
+    int32_t n = 0;
+
+    if (i < argc && !JS_IsUndefined(argv[i]))
+        JS_ToInt32(ctx, &n, argv[i]);
+    return n;
+}
+
+static uint32_t md_arg_u32(JSContext *ctx, int argc, JSValueConst *argv, int i)
+{
+    uint32_t n = 0;
+
+    if (i < argc && !JS_IsUndefined(argv[i]))
+        JS_ToUint32(ctx, &n, argv[i]);
+    return n;
+}
+
+static bool md_arg_bool(JSContext *ctx, int argc, JSValueConst *argv, int i)
+{
+    return i < argc && JS_ToBool(ctx, argv[i]);
 }
 
 /* The eight own slots, placed on an event whose Event and UIEvent halves are already built, plus the ninth
@@ -254,6 +283,91 @@ static JSValue js_md_get_modifier_state(JSContext *ctx, JSValueConst this_val, i
     return ui_event_get_modifier_state(ctx, this_val, argv[0]);
 }
 
+/* ---- Pointer Events 4 §"Initializers for interface MouseEvent" ----------------------------------------------
+ *
+ *     partial interface MouseEvent {
+ *       undefined initMouseEvent(DOMString typeArg,
+ *         optional boolean bubblesArg = false,      optional boolean cancelableArg = false,
+ *         optional Window? viewArg = null,          optional long detailArg = 0,
+ *         optional long screenXArg = 0,             optional long screenYArg = 0,
+ *         optional long clientXArg = 0,             optional long clientYArg = 0,
+ *         optional boolean ctrlKeyArg = false,      optional boolean altKeyArg = false,
+ *         optional boolean shiftKeyArg = false,     optional boolean metaKeyArg = false,
+ *         optional short buttonArg = 0,             optional EventTarget? relatedTargetArg = null);
+ *     };
+ *
+ * THE ARGUMENT LIST IS THE SPEC'S, IN ITS ORDER, AND IT IS NOT THE ATTRIBUTE ORDER. The four modifiers arrive
+ * ctrl, ALT, SHIFT, meta — a different order from the one §3.5.3 pairs the attributes in, and from the one
+ * MD_MODIFIER is written in — so the pairing is stated once, below, rather than being read off a table that
+ * means something else. `buttons`, `layerX` and `layerY` have no argument here and are left exactly as they
+ * were, which is what an argument list that does not name them means.
+ *
+ * `short buttonArg` is declared IDL_UNSIGNED_SHORT and folded, for the reason md_button_fold gives: the pool
+ * declares no `short`, and §3.2.5's two halves are the modulo (the declaration's) and the signed fold (this
+ * file's), so the member is declared with the WIDTH it has. */
+static const IdlArgType MD_INIT_MOUSE_ARGS[15] = {
+    IDL_DOMSTRING, IDL_BOOLEAN, IDL_BOOLEAN, IDL_ANY /* Window? — ui_event_view_of */, IDL_LONG,
+    IDL_LONG, IDL_LONG, IDL_LONG, IDL_LONG,
+    IDL_BOOLEAN, IDL_BOOLEAN, IDL_BOOLEAN, IDL_BOOLEAN,
+    IDL_UNSIGNED_SHORT /* `short`, folded below */, IDL_ANY /* EventTarget? — event_target_nullable_of */,
+};
+
+/* WHICH ARGUMENT SETS WHICH KEY MODIFIER — the spec's list order paired with this file's own modifier table,
+   in the one place both are in hand. */
+static const struct { int arg; int modifier; } MD_INIT_MOUSE_MODIFIERS[] = {
+    { 9, MD_CTRL }, { 10, MD_ALT }, { 11, MD_SHIFT }, { 12, MD_META },
+};
+
+static JSValue js_md_init_mouse_event(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                      int magic)
+{
+    JSValue view, related, slots;
+    unsigned i;
+
+    (void)magic;
+    if (!mouse_event_is(ctx, this_val))
+        return JS_ThrowTypeError(ctx, "initMouseEvent called on something that is not a MouseEvent");
+    /* Only `typeArg` is required, and §3.6.2 step 1's check for it is the declaration's. */
+    DCHECK(argc >= 1, "initMouseEvent's body ran with no typeArg");
+    /* THE TWO UNION-TYPED POSITIONS ARE CONVERSIONS, so they run BEFORE the algorithm's first step and in
+       ARGUMENT ORDER — `viewArg` is argument 4 and `relatedTargetArg` argument 15, and a call that gets both
+       wrong reports the first one, which is what Web IDL's left-to-right conversion means. Both throw ahead of
+       the dispatch-flag early return below for the same reason: a conversion is not a step of the algorithm. */
+    view = ui_event_view_of(ctx, argc > 3 ? argv[3] : JS_UNDEFINED);
+    if (JS_IsException(view))
+        return view;
+    related = event_target_nullable_of(ctx, argc > 14 ? argv[14] : JS_UNDEFINED,
+                                       "a MouseEvent's `relatedTarget`");
+    if (JS_IsException(related)) {
+        JS_FreeValue(ctx, view);
+        return related;
+    }
+    /* "the same behavior as UIEvent.initUIEvent()" — §2.2's initialise-an-existing-event and `view`, with its
+       early return: an event being dispatched is left exactly as it is, in every half. */
+    if (!ui_event_reinit(ctx, this_val, argv[0], md_arg_bool(ctx, argc, argv, 1),
+                         md_arg_bool(ctx, argc, argv, 2), view)) {
+        JS_FreeValue(ctx, related);
+        return JS_UNDEFINED;
+    }
+    ui_event_set_detail(ctx, this_val, md_arg_i32(ctx, argc, argv, 4));
+    slots = md_slots(ctx, this_val);
+    DCHECK(JS_IsObject(slots), "initMouseEvent passed its brand check and then found no MouseEvent slot record");
+    JS_SetPropertyStr(ctx, slots, "screenX", JS_NewInt32(ctx, md_arg_i32(ctx, argc, argv, 5)));
+    JS_SetPropertyStr(ctx, slots, "screenY", JS_NewInt32(ctx, md_arg_i32(ctx, argc, argv, 6)));
+    JS_SetPropertyStr(ctx, slots, "clientX", JS_NewInt32(ctx, md_arg_i32(ctx, argc, argv, 7)));
+    JS_SetPropertyStr(ctx, slots, "clientY", JS_NewInt32(ctx, md_arg_i32(ctx, argc, argv, 8)));
+    JS_SetPropertyStr(ctx, slots, "button",
+                      JS_NewInt32(ctx, md_button_fold(md_arg_u32(ctx, argc, argv, 13))));
+    JS_FreeValue(ctx, slots);
+    for (i = 0; i < sizeof(MD_INIT_MOUSE_MODIFIERS) / sizeof(MD_INIT_MOUSE_MODIFIERS[0]); i++)
+        ui_event_set_modifier_state(ctx, this_val, MD_MODIFIER[MD_INIT_MOUSE_MODIFIERS[i].modifier],
+                                    md_arg_bool(ctx, argc, argv, MD_INIT_MOUSE_MODIFIERS[i].arg));
+    /* §2.2's associated relatedTarget, on the EVENT — see the file comment. */
+    event_set_related_target(ctx, this_val, related);
+    JS_FreeValue(ctx, related);
+    return JS_UNDEFINED;
+}
+
 /* ---- the constructor ----------------------------------------------------------------------------------------
  *
  * `constructor(DOMString type, optional MouseEventInit eventInitDict = {})`. MouseEventInit inherits
@@ -316,6 +430,8 @@ void mouse_event_init(JSContext *ctx)
     /* DECLARED HERE, at agent init, and not from the per-realm install: a fresh id minted per realm is a member
        being minted per realm, which idl_declared_before_seal exists to catch. */
     g_modifier_state_id = idl_method_id(ctx, MODIFIER_STATE_ARGS, 1, js_md_get_modifier_state, 0);
+    g_init_mouse_id = idl_method_id(ctx, MD_INIT_MOUSE_ARGS, 15, js_md_init_mouse_event, 0);
+    idl_optional_from(1);   /* every argument but `typeArg` is optional */
     g_ctor_stepid = idl_method_id_dict(ctx, MD_CTOR_ARGS, 2, MD_INIT,
                                        (int)(sizeof(MD_INIT) / sizeof(MD_INIT[0])), js_md_ctor, 0);
     idl_optional_from(1);   /* `constructor(DOMString type, optional MouseEventInit eventInitDict = {})` */
@@ -340,6 +456,7 @@ void mouse_event_install_protos(JSContext *ctx)
     idl_interface_tag(ctx, proto, "MouseEvent");
     JS_SetPropertyFunctionList(ctx, proto, js_md_proto, (int)(sizeof(js_md_proto) / sizeof(js_md_proto[0])));
     idl_install_method(ctx, proto, "getModifierState", 1, g_modifier_state_id);
+    idl_install_method(ctx, proto, "initMouseEvent", 1, g_init_mouse_id);
     JS_SetClassProto(ctx, g_me_class, JS_DupValue(ctx, proto));
 
     /* §3.7.1's interface object on THIS realm's global — see ui_event.c. */
@@ -358,5 +475,5 @@ void mouse_event_free(JSContext *ctx)
     JS_FreeValue(ctx, g_key);   /* the prototypes are the REALMS' — each is released with its context */
     g_key = JS_UNDEFINED;
     g_ready = 0;
-    g_ctor_stepid = g_modifier_state_id = -1;
+    g_ctor_stepid = g_modifier_state_id = g_init_mouse_id = -1;
 }

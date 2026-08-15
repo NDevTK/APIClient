@@ -141,11 +141,11 @@ uint32_t ui_event_dict_u32(JSContext *ctx, JSValueConst init, const char *name)
     return n;
 }
 
-/* `Window?` — Web IDL §3.2.16 over the `view` member and over initUIEvent's `viewArg`. null and undefined are
-   the IDL null; a Window (which in this engine is the realm's global, and is also what `window` hands a page)
-   crosses as itself; anything else matches the type not at all, which is Web IDL's own TypeError and not a
-   rule this file invents. Answers JS_NULL / an owned dup, or JS_EXCEPTION with the throw live. */
-static JSValue ui_view_of(JSContext *ctx, JSValueConst v)
+/* `Window?` — Web IDL §3.2.16 over the `view` member and over every legacy initializer's `viewArg`. null and
+   undefined are the IDL null; a Window (which in this engine is the realm's global, and is also what `window`
+   hands a page) crosses as itself; anything else matches the type not at all, which is Web IDL's own TypeError
+   and not a rule this file invents. Answers JS_NULL / an owned dup, or JS_EXCEPTION with the throw live. */
+JSValue ui_event_view_of(JSContext *ctx, JSValueConst v)
 {
     if (JS_IsUndefined(v) || JS_IsNull(v))
         return JS_NULL;
@@ -187,7 +187,7 @@ static int ui_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
         return -1;
     }
     given = idl_dict_get(ctx, init, "view");
-    view = ui_view_of(ctx, given);
+    view = ui_event_view_of(ctx, given);
     JS_FreeValue(ctx, given);
     if (JS_IsException(view)) {
         JS_FreeValue(ctx, slots);
@@ -315,10 +315,68 @@ static const IdlArgType UE_INIT_UI_ARGS[5] = {
     IDL_DOMSTRING, IDL_BOOLEAN, IDL_BOOLEAN, IDL_ANY /* Window? */, IDL_LONG,
 };
 
+/* §2.2's initialise-an-existing-event steps and this interface's `view`, INCLUDING the early return: an event
+   whose dispatch flag is set is left alone, and a derived initializer must not write its own half either. It
+   is the prefix all three legacy initializers share — see ui_event.h. */
+bool ui_event_reinit(JSContext *ctx, JSValueConst ev, JSValueConst type, bool bubbles, bool cancelable,
+                     JSValue view)
+{
+    JSValue slots;
+
+    DCHECK(ui_event_is(ctx, ev),
+           "the shared legacy-initializer prefix was reached on something with no UIEvent slots — the interface "
+           "that declares the member brand-checks its own receiver first, which is what makes that impossible");
+    if (!event_reinit(ctx, ev, type, bubbles, cancelable)) {
+        JS_FreeValue(ctx, view);
+        return false;
+    }
+    slots = ue_slots(ctx, ev);
+    DCHECK(JS_IsObject(slots), "a legacy initializer passed its brand check and then found no UIEvent slots");
+    JS_SetPropertyStr(ctx, slots, "view", view);
+    JS_FreeValue(ctx, slots);
+    return true;
+}
+
+void ui_event_set_detail(JSContext *ctx, JSValueConst ev, int32_t detail)
+{
+    JSValue slots = ue_slots(ctx, ev);
+
+    DCHECK(JS_IsObject(slots), "a UIEvent's `detail` was written on something with no UIEvent slots");
+    JS_SetPropertyStr(ctx, slots, "detail", JS_NewInt32(ctx, detail));
+    JS_FreeValue(ctx, slots);
+}
+
+void ui_event_set_modifier_state(JSContext *ctx, JSValueConst ev, const char *name, bool on)
+{
+    JSValue slots = ue_slots(ctx, ev), mods;
+
+    DCHECK(name != NULL && *name, "the internal key modifier state was written with no key modifier name");
+    DCHECK(JS_IsObject(slots), "the internal key modifier state was written on something with no UIEvent slots");
+    mods = JS_GetPropertyStr(ctx, slots, "modifiers");
+    JS_FreeValue(ctx, slots);
+    DCHECK(JS_IsObject(mods), "a UIEvent carried no internal key modifier state — every one is built with the "
+                              "record, empty when the dictionary set no modifier");
+    /* THE RECORD IS THE SET OF ACTIVE NAMES, so switching a modifier OFF removes its key rather than storing a
+       false beside the true ones — the same shape `ui_modifiers_of` builds, so the state has one spelling
+       whichever route wrote it. A delete is captured by the per-flow COW delta exactly as a write is
+       (quickjs.c's delete_property records the slot's pre-delete value first), so an initializer running in one
+       flow does not clear a modifier in its sibling. */
+    if (on) {
+        JS_SetPropertyStr(ctx, mods, name, JS_TRUE);
+    } else {
+        JSAtom a = JS_NewAtom(ctx, name);
+
+        DCHECK(a != JS_ATOM_NULL, "a key modifier name could not be interned");
+        JS_DeleteProperty(ctx, mods, a, 0);
+        JS_FreeAtom(ctx, a);
+    }
+    JS_FreeValue(ctx, mods);
+}
+
 static JSValue js_ue_init_ui_event(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                    int magic)
 {
-    JSValue slots, view;
+    JSValue view;
     int32_t detail = 0;
 
     (void)magic;
@@ -327,25 +385,17 @@ static JSValue js_ue_init_ui_event(JSContext *ctx, JSValueConst this_val, int ar
     /* Only `typeArg` is required, and §3.6.2 step 1's check for it is the declaration's. The other four are
        optional and genuinely absent when the page passes fewer. */
     DCHECK(argc >= 1, "initUIEvent's body ran with no typeArg");
-    view = ui_view_of(ctx, argc > 3 ? argv[3] : JS_UNDEFINED);
+    view = ui_event_view_of(ctx, argc > 3 ? argv[3] : JS_UNDEFINED);
     if (JS_IsException(view))
         return view;
     if (argc > 4 && JS_ToInt32(ctx, &detail, argv[4]) < 0) {
         JS_FreeValue(ctx, view);
         return JS_EXCEPTION;
     }
-    /* §2.2's initialise-an-existing-event steps, INCLUDING their early return: an event whose dispatch flag is
-       set is left alone, and a derived initializer must not write its own half either. */
-    if (!event_reinit(ctx, this_val, argv[0],
-                      argc > 1 && JS_ToBool(ctx, argv[1]), argc > 2 && JS_ToBool(ctx, argv[2]))) {
-        JS_FreeValue(ctx, view);
+    if (!ui_event_reinit(ctx, this_val, argv[0],
+                         argc > 1 && JS_ToBool(ctx, argv[1]), argc > 2 && JS_ToBool(ctx, argv[2]), view))
         return JS_UNDEFINED;
-    }
-    slots = ue_slots(ctx, this_val);
-    DCHECK(JS_IsObject(slots), "initUIEvent passed its brand check and then found no UIEvent slot record");
-    JS_SetPropertyStr(ctx, slots, "view", view);
-    JS_SetPropertyStr(ctx, slots, "detail", JS_NewInt32(ctx, detail));
-    JS_FreeValue(ctx, slots);
+    ui_event_set_detail(ctx, this_val, detail);
     return JS_UNDEFINED;
 }
 
