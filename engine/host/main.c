@@ -59,6 +59,7 @@
 #include "browser/core/xhr/xml_http_request.h"
 #include "browser/core/structured_clone.h"
 #include "browser/core/events/event_target.h"
+#include "browser/core/platform.h"
 #include "browser/core/realm.h"
 #include "browser/core/frame/history.h"
 #include "browser/core/frame/session_history.h"
@@ -105,169 +106,52 @@ static JSContext           *g_ctx;
 static int                  g_begun;
 static int                  g_done;
 
-/* THE AGENT AND THE DOCUMENT, SPLIT — see wpt_runner.c for the same split and the same reason. An AGENT is a
-   JSRuntime: every class registration, the world registry, the flow frontier. A DOCUMENT is a JSContext in it.
-   A SAME-ORIGIN CHILD NAVIGABLE IS A SECOND DOCUMENT IN THIS AGENT, so what a document IS has to be one
-   description that runs twice — and while it was one block inside engine init, a second document could only
-   have been a second INSTANCE, which for a same-origin child is the wrong answer (HTML's similar-origin window
-   agent is one heap, and the corpus moves live nodes and live closures across that boundary).
+/* THE AGENT AND THE DOCUMENT, SPLIT. An AGENT is a JSRuntime: every class registration, the world registry,
+   the flow frontier. A DOCUMENT is a JSContext in it. A SAME-ORIGIN CHILD NAVIGABLE IS A SECOND DOCUMENT IN
+   THIS AGENT, so what a document IS has to be one description that runs twice.
 
-   WHERE THE NEXT GAP IS: a component that builds its PROTOTYPE in its _init builds it in whichever realm was
-   current, so a second realm shares it where §3.7 gives every realm its own. window.c is converted (its
-   prototypes live in quickjs's per-context class-proto slot); the rest name themselves as they are reached. */
+   AND IT IS NOW ONE DESCRIPTION FOR THE THREE HOSTS AS WELL — core/platform.h. This file used to write out by
+   hand which components an agent declares and which a document installs, and so did wpt_runner.c and
+   test_forced.c; three copies is the point at which a list stops being maintained, and they had already
+   drifted (the WPT gate had no `navigator` and therefore none of Permissions, Storage, File System Access or
+   UserActivation, and reported numbers for those areas as if it had run them). What is left in a host is only
+   what is genuinely the host's: its EDGES — WHO answers the network, WHO evaluates a string handler — which
+   are parameters rather than presence, and which each component asserts for itself at its first use. */
 static void engine_agent_init(JSContext *ctx, const char *origin, const char *top_level_url)
 {
-    /* WHAT THE PLATFORM OWNS is WEB IDL's answer, not a list here: absent.c reads the generated
-       browser/platform_names.h (every name [Exposed=Window]). A list typed at this spot covered 22 names
-       of ~1300, so every interface it missed — Node, Element, Event, DOMException — was mistaken for
-       server-injected app state and a branch on it forked instead of throwing. */
-    url_init(ctx);
-    usp_init(ctx);
-    form_data_init(ctx);
-    readable_stream_init(ctx);
-    queuing_strategy_init(ctx);
-    writable_stream_init(ctx);
-    transform_stream_init(ctx);
-    blob_init(ctx);
-    encoding_init(ctx);
-    text_stream_init(ctx);
-    /* §2.7 BEFORE §7.2.5: Window.prototype is CHAINED to EventTarget.prototype, so the prototype has to exist
-       before the window is installed. */
-    event_target_init(ctx);
-    window_init(ctx);
-    /* §8.10.1's Navigator, DECLARED here and built per realm by the intrinsic it registers — its prototype,
-       its interface object and the Window's one Navigator are §3.7 per-realm objects, so there is no install
-       for this entry to call at document time. */
-    navigator_init(ctx);
-    /* THE ONE VIRTUAL FILESYSTEM, and the File System Standard over it. The MODEL goes first (its two roots are
-       built at this pre-boot baseline, so no flow's creation becomes every sibling's); §2.5's stream is
-       DECLARED after §5's WritableStream because its prototype chains to that one and core/realm.h runs the
-       per-realm installs in declaration order; §2.2-§2.4's handles after the stream because `createWritable()`
-       mints one; and §3's StorageManager after §8.10.1's Navigator, because `navigator.storage` is a partial
-       interface member installed on the object that component builds. */
-    file_system_init(ctx);
-    fs_writable_init(ctx);
-    fs_handle_init(ctx);
-    storage_manager_init(ctx);   /* Storage §2's `navigator.storage`, and File System §3's getDirectory() */
-    event_init(ctx);
-    report_exception_init(ctx);
-    message_port_init(ctx);
-    xhr_init(ctx);   /* XHR §3, and §5's ProgressEvent under it */
-    /* §7.2.4's Location and CSSOM VIEW §4.3's Screen, DECLARED here and built per realm by the intrinsics they
-       register. Both are §3.7 per-realm objects — a prototype, an interface object and the one instance the
-       Window is associated with — so there is no install for this entry to call at document time.
-       §7.2.5.1 and §7.4. `window.open` returns a WindowProxy, and so does §4.8.5's contentWindow. The proxy
-       class has to exist before any proxy is minted. */
-    location_init(ctx);
-    /* HTML §7.4.1's SESSION HISTORY and §7.2.5's History, DECLARED here and built per realm by the intrinsics
-       they register. The state machine goes FIRST: realm.h runs the intrinsics in declaration order, and every
-       member of History reads the record session_history's install builds. This is what a client-side router
-       navigates with — `history.pushState()` is how React Router, Vue Router, Angular and every hand-rolled
-       router change route — so without it a routing bundle threw on its first navigation and every route, lazy
-       chunk and endpoint behind one went unexplored. */
-    session_history_init(ctx);
-    history_init(ctx);
-    screen_init(ctx);   /* the responsive gate: screen.width decides which router a bundle uses */
-    navigable_init(ctx);
-    /* HTML §8.1.7's EVENT LOOP, before the task sources that are ordered by it: the virtual clock, §8.1.7.1's
-       last render opportunity time and the insertion order a source breaks its ties by are the LOOP's, and
-       they are per-flow heap state, so the record has to exist before any flow can write one. */
-    event_loop_init(ctx);
-    timer_init(ctx);
-    window_proxy_init(ctx, origin);
-    remote_object_init(ctx);   /* §7.2.5.1's object half: a peer's object crosses as a NAME */
-    /* HTML §9.4.4 AND §9.5 — `window.postMessage` and `BroadcastChannel`. Both components are built and both
-       were reachable only from the test runner: the SHIPPED engine had neither, so a bundle calling
-       postMessage threw on a missing method and every message-driven code path behind it went unexplored.
-       That is the largest class of code in a modern SPA that this engine was silently not entering. */
-    window_message_init(ctx);
-    broadcast_channel_init(ctx, origin);
-    /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
-    unhandled_rejection_init(ctx);
-    /* HTML §8.1.7.3's IN-PARALLEL HALF — the rendering task source and "update the rendering". §8.9's map goes
-       first because step 14 consumes it and §7.4.6.3 after Event, whose prototype PageRevealEvent chains to. */
-    animation_frame_init(ctx);
-    page_reveal_init(ctx);
-    /* CSSOM VIEW §4, §12 and §13.1 — the viewport's Window extensions (`innerWidth`, `outerHeight`,
-       `scrollY`, `screenLeft`, `devicePixelRatio`), the VisualViewport, and the per-realm record each keeps
-       of what the RESIZE STEPS last saw. DECLARED before the rendering loop because update-the-rendering
-       STEP 8 is their algorithm, and after §2.7 because VisualViewport.prototype chains to EventTarget's. */
-    viewport_init(ctx);
-    visual_viewport_init(ctx);
-    /* CSSOM VIEW §4.2 and §7 — `matchMedia`, MediaQueryList and MediaQueryListEvent. DECLARED before the
-       rendering loop because update-the-rendering STEP 10 is its algorithm, and after §2.7 and §2.2 because
-       both of its prototypes chain to theirs. */
-    media_query_list_init(ctx);
-    rendering_init(ctx);
-    fetch_init(ctx);   /* §5/§6/§5.3 declare their per-realm prototypes here, not from the install */
-    abort_init(ctx);
-    observable_init(ctx);
-    element_init(ctx);
-    iframe_init(ctx);
-    document_init(ctx);   /* §4.8.5: the slot a child navigable lives in */
-    module_loader_install(g_rt);
+    PlatformAgent agent;
+
     /* THE HOST'S NETWORK. SECURITY.md puts every byte of it behind the trusted chokepoint, so this host's
-       answer is to PARK the request on the flow's pending register and let the trusted zone fetch it. */
+       answer is to PARK the request on the flow's pending register and let the trusted zone fetch it.
+       fetch.c aborts on a fetch issued with no provider, which is what asserts this line is here. */
     { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
     timer_set_script_sink(engine_queue_script);   /* HTML 8.6: a string handler is evaluated, as a flow */
-    /* THE AGENT'S FIRST REALM IS A REALM. Every per-realm intrinsic the components above declared is built
-       here, through the same one call a child navigable's realm makes — so the first document cannot get a
-       different set from the rest, which is the whole failure mode of a hand-copied list.
-       IT CARRIES THE ENVIRONMENT (core/realm.h). §8.1.3.5 reads the top-level creation URL to decide whether
-       this realm is a SECURE CONTEXT, and Web IDL §3.3.13's members are installed or absent by that answer —
-       so the environment has to exist before the first intrinsic does, which is why it arrives here. */
-    realm_install_intrinsics(ctx, top_level_url);
+
+    agent.origin = origin;
+    agent.top_level_url = top_level_url;
+    platform_agent_init(ctx, &agent);
 }
 
-/* ONE DOCUMENT — the per-realm half, run once per document including the first. */
-/* `url` IS THE DOCUMENT'S ADDRESS AND `origin` IS ITS PRINCIPAL, and they are two different facts. This host
+/* ONE DOCUMENT — the per-realm half, run once per document including the first.
+   `url` IS THE DOCUMENT'S ADDRESS AND `origin` IS ITS PRINCIPAL, and they are two different facts. This host
    passed the ORIGIN for both, so every document's §4.4 API BASE URL was `https://site` where the page was at
    `https://site/app/dashboard` — and the base URL is what `fetch("api/users")` resolves against, so the tool's
-   own headline output named `https://site/api/users` for a request the page makes to `https://site/app/api/users`.
-   The two other hosts already pass a real address; only the shipped one did not. */
+   own headline output named `https://site/api/users` for a request the page makes to
+   `https://site/app/api/users`. They are two FIELDS of the one document record now, which is what makes that
+   substitution unspellable rather than merely fixed. */
 static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
                                  const char *csp, uint32_t doc_id, JSValueConst nav_proxy)
 {
+    PlatformDocument doc;
     JSValue g = JS_GetGlobalObject(ctx);
 
-    /* THE PLATFORM GLOBALS, installed by their one caller rather than smuggled inside window_install.
-       They are not browsing-context members and window.c does not own them. */
-    url_install(ctx, g);
-    usp_install(ctx, g);
-    form_data_install(ctx, g);
-    readable_stream_install(ctx, g);
-    queuing_strategy_install(ctx, g);
-    writable_stream_install(ctx, g);
-    transform_stream_install(ctx, g);
-    blob_install(ctx, g);
-    encoding_install(ctx, g);
-    text_stream_install(ctx, g);
-    window_install(ctx, g, url);      /* window/self/frames/parent/top/opener/closed/origin, and name */
-    timer_install(ctx, g);            /* setTimeout/setInterval/clearTimeout/clearInterval/queueMicrotask */
-    event_install(ctx, g);            /* the Event interface object */
-    message_event_install(ctx, g);    /* HTML 9.4.1: the event every messaging path dispatches */
-    error_event_install(ctx, g);      /* HTML §8.1.4.6's report-an-exception fires one of these */
-    message_port_install(ctx, g);     /* HTML 9.4.2/9.4.3 */
-    xhr_install(ctx, g);              /* XHR §3, §5: XMLHttpRequest and ProgressEvent */
-    window_message_install(ctx, g, origin);   /* HTML 9.4.4: window.postMessage, and §9.4.4's delivery task */
-    broadcast_channel_install(ctx, g);        /* HTML 9.5: the named same-origin bus */
-    structured_clone_install(ctx, g); /* HTML 2.7.3 */
-    /* §2.7: the global reaches add/removeEventListener/dispatchEvent through Window.prototype ->
-       EventTarget.prototype, which window_install chains it to. */
-    event_target_install_handlers(ctx, g, EH_GLOBAL | EH_WINDOW);   /* window IS the global (7.2.2) */
-    fetch_install(ctx, g);
-    navigable_install(ctx, g, origin);
-    unhandled_rejection_install(ctx, g);   /* PromiseRejectionEvent */
-    animation_frame_install(ctx, g);       /* HTML §8.9: requestAnimationFrame/cancelAnimationFrame */
-    page_reveal_install(ctx, g);           /* HTML §7.4.6.3: PageRevealEvent */
-    media_query_list_install(ctx, g);   /* CSSOM VIEW §4.2/§7: matchMedia, MediaQueryList */
-    abort_install(ctx, g);   /* AbortController/AbortSignal: fetch takes a signal, so a bundle mints one early */
-    observable_install(ctx, g);
-    /* NO navigator_install, NO location_install, NO screen_install: §8.10.1's Navigator, §7.2.4's Location and
-       §4.3's Screen are per-realm intrinsics, so `navigator`, `clientInformation`, `location`, `screen` and
-       their three interface objects are already on this global — realm_install_intrinsics put them there,
-       through the ONE list every realm goes through rather than a line each host has to remember. */
-    document_install(ctx, g, dom, url, csp, doc_id, nav_proxy);
+    doc.dom = dom;
+    doc.url = url;
+    doc.origin = origin;
+    doc.csp = csp;
+    doc.doc_id = doc_id;
+    doc.nav_proxy = nav_proxy;
+    platform_document_install(ctx, g, &doc);
     JS_FreeValue(ctx, g);
 }
 

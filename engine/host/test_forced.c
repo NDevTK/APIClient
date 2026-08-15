@@ -43,6 +43,7 @@
 #include "core/events/message_port.h"
 #include "core/frame/policy_container.h"
 #include "core/events/event_target.h"
+#include "core/platform.h"
 #include "core/realm.h"
 #include "core/fetch/response.h"
 #include "core/fetch/request.h"
@@ -1772,13 +1773,23 @@ static int hostreq_answer_all(JSContext *ctx)
 /* THE AGENT AND THE DOCUMENT, SPLIT — the same split wpt_runner.c and main.c carry, for the same reason: a
    SAME-ORIGIN CHILD NAVIGABLE IS A SECOND DOCUMENT IN THIS AGENT (HTML's similar-origin window agent is one
    heap), so what a document of this build IS has to be one description that runs twice. This fixture's probes
-   read `_cw.parent === window` through exactly that child. */
+   read `_cw.parent === window` through exactly that child.
+
+   AND WHAT EACH HALF *IS* IS core/platform.h's ONE LIST, not a copy typed out here. The copy that stood in
+   this file claimed, in its own comment, to install "the components the ABI entry installs, so this fixture
+   runs the engine that ships" — and was missing twenty-one of them: url, url_search_params, blob, all four
+   stream standards, encoding and text_stream, message_port, xml_http_request, broadcast_channel,
+   window_message, structured_clone, message_event, error_event, the three File System Access components,
+   storage_manager and module_loader. A fixture that runs a smaller browser than the one that ships is
+   measuring a different browser, and every @H example and @S PoC it verifies is a claim about that other
+   browser. What stays below is what is genuinely this fixture's: its host EDGES and its sinks. */
 static int g_id_host_read, g_id_append_child;   /* declared once per agent — a member has one pool entry */
 
-static void tf_agent_init(JSContext *ctx, const char *top_level_url)
+static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_level_url)
 {
     static const IdlArgType HR_ARGS[1] = { IDL_DOMSTRING };
     static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
+    PlatformAgent agent;
 
     /* THE SYNCHRONOUS HOST READ. A DECLARED step member, because suspending and answering at the same call
        site is the only thing a plain C body cannot do. */
@@ -1786,144 +1797,50 @@ static void tf_agent_init(JSContext *ctx, const char *top_level_url)
     /* A DECLARED member, like every DOM member — this host-edge mutates the tree, and §4.2.3's insertion steps
        are drained by the machine every declared member converges on. */
     g_id_append_child = idl_method_id(ctx, ONE_STR, 1, js_append_child, 0);
+    /* THIS FIXTURE'S EDGES — WHO answers, which is the half that is legitimately per-host. */
     { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
     timer_set_script_sink(engine_queue_script);   /* §8.6: a STRING handler is evaluated, as a flow */
-    event_target_init(ctx);
-    window_init(ctx);
-    /* §8.10.1's Navigator, DECLARED here and built per realm by the intrinsic it registers — a UA/touch gate is
-       where a bundle hides its other endpoints, so this fixture exercises the interface the ABI build installs
-       rather than a stand-in for it. */
-    navigator_init(ctx);
-    location_init(ctx);
-    /* HTML §7.4.1's SESSION HISTORY and §7.2.5's History, DECLARED here and built per realm by the intrinsics
-       they register. The state machine goes FIRST: realm.h runs the intrinsics in declaration order, and every
-       member of History reads the record session_history's install builds. This is what a client-side router
-       navigates with — `history.pushState()` is how React Router, Vue Router, Angular and every hand-rolled
-       router change route — so without it a routing bundle threw on its first navigation and every route, lazy
-       chunk and endpoint behind one went unexplored. */
-    session_history_init(ctx);
-    history_init(ctx);
-    /* CSSOM VIEW §4.3's Screen, DECLARED here and built per realm by the intrinsic it registers — the mobile
-       gate a responsive bundle routes on, so this fixture exercises the interface the ABI build installs
-       rather than a stand-in for it. */
-    screen_init(ctx);
-    navigable_init(ctx);
-    /* HTML §8.1.7's EVENT LOOP, before the task sources that are ordered by it: the virtual clock, §8.1.7.1's
-       last render opportunity time and the insertion order a source breaks its ties by are the LOOP's, and
-       they are per-flow heap state, so the record has to exist before any flow can write one. */
-    event_loop_init(ctx);
-    timer_init(ctx);
-    window_proxy_init(ctx, "https://x.test");
-    remote_object_init(ctx);   /* §7.2.5.1's object half */
-    event_init(ctx);
-    report_exception_init(ctx);
-    /* HTML §8.1.7.5: a rejection nobody handles is a page error, and it was invisible. */
-    unhandled_rejection_init(ctx);
-    /* HTML §8.1.7.3's IN-PARALLEL HALF — the rendering task source and "update the rendering". */
-    animation_frame_init(ctx);
-    page_reveal_init(ctx);
-    /* CSSOM VIEW §4, §12 and §13.1 — the viewport's Window extensions (`innerWidth`, `outerHeight`,
-       `scrollY`, `screenLeft`, `devicePixelRatio`), the VisualViewport, and the per-realm record each keeps
-       of what the RESIZE STEPS last saw. DECLARED before the rendering loop because update-the-rendering
-       STEP 8 is their algorithm, and after §2.7 because VisualViewport.prototype chains to EventTarget's. */
-    viewport_init(ctx);
-    visual_viewport_init(ctx);
-    /* CSSOM VIEW §4.2 and §7 — `matchMedia`, MediaQueryList and MediaQueryListEvent. DECLARED before the
-       rendering loop because update-the-rendering STEP 10 is its algorithm, and after §2.7 and §2.2 because
-       both of its prototypes chain to theirs. */
-    media_query_list_init(ctx);
-    rendering_init(ctx);
-    fetch_init(ctx);   /* §5/§6/§5.3 declare their per-realm prototypes here, not from the install */
-    abort_init(ctx);
-    observable_init(ctx);
-    /* XHR §5's FormData — BEFORE element_init, because HTML §4.10.22.1's FormDataEvent declares a
-       `required FormData formData` member and a Web IDL brand is the CLASS, which has to exist to be named.
-       This fixture already frees the component (form_data_free below) and never declared it, so the free was
-       the only half of it that ran. */
-    form_data_init(ctx);
-    element_init(ctx);
-    iframe_init(ctx);
-    document_init(ctx);   /* §4.8.5: the slot a child navigable lives in */
-    /* THE AGENT'S FIRST REALM IS A REALM. Every per-realm intrinsic the components above declared is built
-       here, through the same one call a child navigable's realm makes — so the first document cannot get a
-       different set from the rest, which is the whole failure mode of a hand-copied list.
-       IT CARRIES THE ENVIRONMENT (core/realm.h): §8.1.3.5 reads the top-level creation URL to decide whether
-       this realm is a secure context, which decides which of Web IDL §3.3.13's members exist in it. */
-    realm_install_intrinsics(ctx, top_level_url);
+
+    agent.origin = origin;
+    agent.top_level_url = top_level_url;
+    platform_agent_init(ctx, &agent);
 }
 
-/* ONE DOCUMENT — run once per document including the first. */
+/* ONE DOCUMENT — run once per document including the first. THE PLATFORM FIRST, then this fixture's own
+   globals: a host ADDS to the one list and cannot subtract from it, and adding afterwards is also what lets
+   the `eval` sink below stand where the language's own `eval` would. */
 static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
                              const char *csp, uint32_t doc_id, JSValueConst nav_proxy)
 {
+    PlatformDocument doc;
     JSValue g = JS_GetGlobalObject(ctx);
-    /* THE HOST'S NETWORK. SECURITY.md puts every byte of it behind the trusted chokepoint, so this host's
-       answer is to PARK the request on the flow's pending register and let the trusted zone fetch it. */
-    fetch_install(ctx, g);   /* the REAL component: `fetch`, and with it Response and Headers */
+
+    doc.dom = dom;
+    doc.url = url;
+    doc.origin = origin;
+    doc.csp = csp;
+    doc.doc_id = doc_id;
+    doc.nav_proxy = nav_proxy;
+    platform_document_install(ctx, g, &doc);
+
+    /* THE FIXTURE'S OWN SURFACE — the @S sinks and the host-edge stand-ins the probes drive. Every one of
+       these is this fixture's, which is why it is here and not in the list. */
     JS_SetPropertyStr(ctx, g, "loadScript", JS_NewCFunction(ctx, js_load_script, "loadScript", 1));   /* lazy-chunk load */
     JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval_sink, "eval", 1));   /* the eval sink */
     JS_SetPropertyStr(ctx, g, "setInnerHTML", JS_NewCFunction(ctx, js_html_sink, "setInnerHTML", 1));   /* the innerHTML sink */
     JS_SetPropertyStr(ctx, g, "setLocation", JS_NewCFunction(ctx, js_url_sink, "setLocation", 1));   /* the location/URL sink */
-    /* HTML §8.6's TIMER TASK SOURCE. The fixture had none, so `setTimeout` was simply absent and any probe
-       using one threw — which is how a great deal of real page code reaches the event loop, and it was the one
-       platform edge the engine's own test could not exercise. */
-    timer_install(ctx, g);
-    /* §7.2.2's BROWSING-CONTEXT SURFACE, which this fixture did not have at all: `window`, `self`, `parent`,
-       `top`, `closed`, `close()`, the bars. A probe that reads `_cw.parent === window` cannot be written
-       without it, and a document with no `window` is not a document any page script would survive. */
-    /* §2.7 BEFORE §7.2.5: Window.prototype is CHAINED to EventTarget.prototype, so the prototype has to
-       exist before the window is installed. */
-    window_install(ctx, g, url);
-    /* §7.4's `window.open`, which hands back a WindowProxy for a document in ANOTHER instance at its own call
-       site — the child's name is minted in this instance, so nothing suspends. */
-    navigable_install(ctx, g, origin);
     /* THE SYNCHRONOUS HOST READ. A DECLARED step member, because suspending and answering at the same call
        site is the only thing a plain C body cannot do. */
     idl_install_method(ctx, g, "hostRead", 1, g_id_host_read);
     JS_SetPropertyStr(ctx, g, "setBodyAttr", JS_NewCFunction(ctx, js_set_body_attr, "setBodyAttr", 2));   /* DOM attr write (per-flow) */
     JS_SetPropertyStr(ctx, g, "getBodyAttr", JS_NewCFunction(ctx, js_get_body_attr, "getBodyAttr", 1));   /* DOM attr read (per-flow) */
-    {
-        /* A DECLARED member, like every DOM member — this host-edge mutates the tree, and §4.2.3's insertion
-           steps are drained by the machine every declared member converges on. As a raw JS_CFUNC_DEF its steps
-           never ran at all; nothing showed it, because the <span> it appends is neither a script nor a custom
-           element. The engine asserts on exactly this now, which is what caught it. */
-        idl_install_method(ctx, g, "appendChild", 1, g_id_append_child);
-    }
+    /* A DECLARED member, like every DOM member — this host-edge mutates the tree, and §4.2.3's insertion
+       steps are drained by the machine every declared member converges on. As a raw JS_CFUNC_DEF its steps
+       never ran at all; nothing showed it, because the <span> it appends is neither a script nor a custom
+       element. The engine asserts on exactly this now, which is what caught it. */
+    idl_install_method(ctx, g, "appendChild", 1, g_id_append_child);
     JS_SetPropertyStr(ctx, g, "lastChildMark", JS_NewCFunction(ctx, js_last_child_mark, "lastChildMark", 0));   /* DOM node read */
     JS_SetPropertyStr(ctx, g, "state", concolic_new(ctx, "{state}", "{state}", JS_UNDEFINED));   /* injected/unknown app state */
-    /* NO navigator_install, NO location_install, NO screen_install: §8.10.1's Navigator, §7.2.4's Location —
-       which this fixture exercises for the two attacker SOURCES behind `location.hash`/`location.search`, and
-       so for the per-component percent-encode sets that decide whether an @S PoC reproduces in a browser at
-       all — and §4.3's Screen are per-realm intrinsics, so all three are already on this global.
-       realm_install_intrinsics put them there, through the ONE list every realm goes through rather than a
-       line each host has to remember. */
-    /* The components the ABI entry installs, so this fixture runs the engine that ships. Unblocked by the
-       JS_AddIntrinsicDOMException fix: the intrinsic is per-context idempotent now, so JS_NewContext's own
-       JS_AddIntrinsicAToB install plus this explicit one no longer overwrite one prototype with another. */
-    CHECK(JS_AddIntrinsicDOMException(ctx) == 0, "the DOMException intrinsic failed to install");
-    form_data_install(ctx, g);   /* XHR §5: the FormData interface object, which `new FormData(form)` needs */
-    event_install(ctx, g);   /* the Event interface object — `new Event(...)` and every `instanceof Event` */
-    /* §2.7: the global reaches add/removeEventListener/dispatchEvent through Window.prototype ->
-       EventTarget.prototype, which window_install chains it to. */
-    /* HTML §8.1.7.2: window's IDL mixes in GlobalEventHandlers AND WindowEventHandlers — `window.onload` is
-       how a great deal of real code starts. */
-    event_target_install_handlers(ctx, g, EH_GLOBAL | EH_WINDOW);
-    unhandled_rejection_install(ctx, g);   /* PromiseRejectionEvent */
-    animation_frame_install(ctx, g);       /* HTML §8.9: requestAnimationFrame/cancelAnimationFrame */
-    page_reveal_install(ctx, g);           /* HTML §7.4.6.3: PageRevealEvent */
-    media_query_list_install(ctx, g);   /* CSSOM VIEW §4.2/§7: matchMedia, MediaQueryList */
-    abort_install(ctx, g);
-    observable_install(ctx, g);
-
-    /* Browser layer: parse the document with the real Lexbor HTML parser BEFORE the DOM interfaces install,
-       because `document` is a wrapper over this tree — the parse itself creates no JS object, so it belongs on
-       the baseline beside the globals rather than after the hooks. */
-
-    /* THE REAL DOM, so the tree components are exercised by a fixture at all. They had none: the page above
-       reached the tree through host-edge stand-ins (setBodyAttr, appendChild), so node.c, element.c and
-       document.c — every wrapper, every prototype, every IDL coercion in them — ran only in the shipped ABI
-       build where nothing asserts on the result. */
-    document_install(ctx, g, dom, url, csp, doc_id, nav_proxy);
     JS_FreeValue(ctx, g);
 }
 
@@ -1979,7 +1896,7 @@ int main(int argc, char **argv) {
        THIS FIXTURE'S DOCUMENT IS ITS OWN TOP-LEVEL TRAVERSABLE, so §8.1.3.1's top-level creation URL is the
        address it is installed at below — and `https:` makes it a SECURE CONTEXT, which is what a real bundle
        runs in and therefore what the fixture must exercise. */
-    tf_agent_init(ctx, "https://x.test/p");
+    tf_agent_init(ctx, "https://x.test", "https://x.test/p");
     navigable_set_realm_builder(tf_child_realm);
     int min_doc = arg_has(argc, argv, "--min");   /* fast per-change memory gate: the minimal clone/COW doc */
     const char *doc = min_doc ? HTML_MIN : HTML;

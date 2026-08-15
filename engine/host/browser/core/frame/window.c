@@ -570,6 +570,12 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
                             JS_NewCFunction(ctx, js_win_get_name, "get name", 0),
                             JS_NewCFunction(ctx, js_win_set_name, "set name", 1),
                             JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+    /* HTML §8.1.7.2: Window includes GlobalEventHandlers AND WindowEventHandlers, so `window.onload`,
+       `onerror`, `onmessage` and the rest are THIS interface's members and belong to this install — the same
+       reason §2.7's interface object is installed above. They were a separate line in each host's per-document
+       list, which is how the WPT runner came to have none of them: every unqualified `onload = f` in the
+       corpus wrote a plain own property that nothing ever fired. A member of Window is installed by Window. */
+    event_target_install_handlers(ctx, g, EH_GLOBAL | EH_WINDOW);
     JS_FreeValue(ctx, gp);   /* the realm's class-proto slot and the chain hold it now */
 }
 

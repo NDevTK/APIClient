@@ -93,6 +93,20 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                    "fetch/api/request", "fetch/api/body", "fetch/api/abort",
                    "html/webappapis/system-state-and-capabilities/the-navigator-object",
                    "html/webappapis/timers", "html/webappapis/microtask-queuing",
+                   /* EVERYTHING ROOTED AT `navigator`, which this gate could not have measured whatever it
+                      checked out: wpt_runner.c never called navigator_init, so its realm had no `navigator`
+                      at all. The-navigator-object above WAS collected and was therefore failing on a missing
+                      global rather than on the component — and the three standards that hang off partial
+                      interfaces of Navigator were not checked out either, so their components (core/
+                      permissions, core/file's virtual filesystem and StorageManager, core/html/
+                      user_activation) had a gate that could not fail. Both halves are fixed together,
+                      because either one alone still reports a number about the other's absence.
+                      Permissions §6.2 is `navigator.permissions`; File System Access is reached through
+                      Storage §3's `navigator.storage.getDirectory()`, which is why `fs` and `storage` are one
+                      surface and not two; HTML §6.4.4 is `navigator.userActivation`. First numbers here are
+                      expected to be bad, and a bad first number is the honest measurement this gate exists to
+                      take rather than a reason to leave the directories out. */
+                   "permissions", "storage", "fs", "html/user-activation",
                    /* HTML §8.1.7.3's rendering loop and §8.9's animation frames — core/rendering. The
                       component did not exist, so neither did this row; `requestAnimationFrame` was one of the
                       ~1300 names browser/platform_names.h had the engine reporting as honestly ABSENT. Now
