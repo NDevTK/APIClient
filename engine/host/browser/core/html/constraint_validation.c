@@ -821,11 +821,21 @@ static uint32_t cv_states(JSContext *ctx, JSValueConst wrap, const CvValue *v, i
                st == INPUT_STATE_TIME || st == INPUT_STATE_DATETIME_LOCAL) {
         if (v->unknown || v->len)
             DFAIL("an `input` in a date or time state has a value — §4.10.5.3.7's UNDERFLOW and OVERFLOW and "
-                  "§4.10.5.3.8's STEP MISMATCH are all stated over that state's `convert a string to a number`, "
-                  "which is §2.3.5's date/time microsyntax parse (a valid date / month / week / time / local "
-                  "date and time string, to milliseconds since 1970-01-01T00:00:00.0Z or to a month count); "
-                  "build those parsers as their own component and answer the three states from them — every "
-                  "one of these types has a DEFAULT step, so the constraint applies with no attribute present");
+                  "§4.10.5.3.8's STEP MISMATCH are all stated over that state's own CONVERT A STRING TO A "
+                  "NUMBER, and that is what is missing here. §2.3.5's parsers are NOT missing any more: "
+                  "core/html/date_time_microsyntax.c holds them, and a value that reaches this point has "
+                  "already been through the one this state's value sanitization algorithm names. What is left "
+                  "is the ARITHMETIC each of the five states defines over the parsed components — §4.10.5.1.7 "
+                  "and §4.10.5.1.9's milliseconds from midnight UTC on 1970-01-01 to the parsed date and to "
+                  "the Monday of the parsed week, §4.10.5.1.8's count of months from January 1970, "
+                  "§4.10.5.1.10's milliseconds from midnight, and §4.10.5.1.11's milliseconds from "
+                  "1970-01-01T00:00:00.0 — plus cv_range_of parsing `min` and `max` with the SAME conversion "
+                  "rather than with §2.3.4.3's floating-point one, each state's STEP SCALE FACTOR and DEFAULT "
+                  "STEP (86,400,000 and 1 day; 1 and 1 month; 604,800,000 and 1 week with a step base of "
+                  "-259,200,000; 1000 and 60 seconds twice), and the Time state's PERIODIC DOMAIN, which is "
+                  "the `reversed` the Number and Range branch above can hardcode false and this one cannot. "
+                  "Every one of these types has a DEFAULT step, so the constraint applies with no attribute "
+                  "present");
     }
     /* §4.10.5.3.6's PATTERN MISMATCH is decided by running a regexp, which is the caller's next phase. An
        unknown value has no bytes to run it against, and the fork above already covers it. */

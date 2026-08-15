@@ -61,6 +61,7 @@
 #include "core/file/blob.h"
 #include "core/file/file_device.h"
 #include "core/file/file_list.h"
+#include "core/html/date_time_microsyntax.h"
 #include "core/html/html_form.h"
 #include "core/html/input_value.h"
 #include "core/idl_args.h"
@@ -438,20 +439,42 @@ static JSValue iv_sanitize(JSContext *ctx, lxb_dom_element_t *el, HtmlInputState
         if (pchanged) *pchanged = true;
         return iv_best_representation(ctx, max < min ? min : min + (max - min) / 2);
     }
-    case INPUT_STATE_DATE: case INPUT_STATE_MONTH: case INPUT_STATE_WEEK:
-    case INPUT_STATE_TIME: case INPUT_STATE_DATETIME_LOCAL:
-        /* §4.10.5.1.7 through §4.10.5.1.11: each sets the value to the empty string unless it is a valid date /
-           month / week / time / local date and time string, and the Local Date and Time state additionally
-           NORMALISES the one it keeps. An empty value is none of those strings, so it sanitizes to itself
-           without asking — which is the only case decidable without the parser. */
-        if (len)
-            DFAIL("an `input` in a date or time state has a value — §4.10.5.1.7 through §4.10.5.1.11's value "
-                  "sanitization algorithms each keep the value only while it is a valid date / month / week / "
-                  "time / local date and time string (and §4.10.5.1.11 rewrites the one it keeps as a valid "
-                  "NORMALIZED local date and time string), which is §2.3.5's date/time microsyntax parse; build "
-                  "those parsers as their own component and answer this from them, as §4.10.5.3.7's underflow "
-                  "and overflow and §4.10.5.3.8's step mismatch also must");
+    /* §4.10.5.1.7, §4.10.5.1.8, §4.10.5.1.9 and §4.10.5.1.10 are ONE SENTENCE FOUR TIMES: "If the value of the
+       element is not a valid date / month / week / time string, then set it to the empty string instead." They
+       differ only in which of §2.3.5's productions they name, and NONE of them rewrites the value it keeps — so
+       an accepted value is the author's own bytes, `12:30:00.500` keeping its trailing zeros and `2015-06-06`
+       its exact form. The empty string is not any of these productions, which is why an empty value falls out
+       as itself with no case of its own. */
+    case INPUT_STATE_DATE:
+        if (html_is_valid_date_string(s, len)) iv_add(&b, s, len);
         break;
+    case INPUT_STATE_MONTH:
+        if (html_is_valid_month_string(s, len)) iv_add(&b, s, len);
+        break;
+    case INPUT_STATE_WEEK:
+        if (html_is_valid_week_string(s, len)) iv_add(&b, s, len);
+        break;
+    case INPUT_STATE_TIME:
+        if (html_is_valid_time_string(s, len, NULL)) iv_add(&b, s, len);
+        break;
+    /* §4.10.5.1.11 IS NOT THAT SENTENCE, and the difference is the point: "If the value of the element is a
+       valid local date and time string, then set it to a valid NORMALIZED local date and time string
+       representing the same date and time; otherwise, set it to the empty string instead." So this is the one
+       date state that REWRITES what it keeps — §2.3.5.5 defines two productions and the one a value may be
+       written in is not the one it is stored in. `2015-06-06 12:00:00.000` is accepted and stored back as
+       `2015-06-06T12:00`: the U+0020 SPACE separator becomes the T, and the zero seconds are dropped because
+       the normalized form's time is "expressed as the shortest possible string for the given time". */
+    case INPUT_STATE_DATETIME_LOCAL: {
+        HtmlDateTime dt;
+        char norm[HTML_NORMALIZED_LOCAL_DATE_AND_TIME_CAP];
+
+        /* ONE WALK ANSWERS BOTH HALVES of the sentence — whether the value is that production, and the date and
+           time the normalized form is then built from. Asking the production and then parsing again would be
+           two walks over the same bytes, and "the same date and time" would be whatever the second one said. */
+        if (html_is_valid_local_date_and_time_string(s, len, &dt))
+            iv_add(&b, norm, html_serialize_normalized_local_date_and_time(&dt, norm, sizeof norm));
+        break;
+    }
     case INPUT_STATE_COLOR: {
         /* §4.10.5.1.14: "Run UPDATE A COLOR WELL CONTROL COLOR for the element". That algorithm's step 2 picks
            the value out of the element the same way this component's callers already did — the `value` content
