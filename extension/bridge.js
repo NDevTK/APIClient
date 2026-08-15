@@ -83,6 +83,18 @@ function linesToAnalysis(lines, msg) {
    it used to be, and the engine cast it away, so a caller that put extra scripts in it was silently
    running none of them. */
 function originOf(u) { try { return new URL(u).origin; } catch (_) { return ""; } }
+/* THE ORIGIN A DELIVERED MESSAGE IS STAMPED WITH, serialized the way HTML serializes one. SECURITY.md:
+   "identity may be minted by the untrusted side because it is only a name, but ROUTING and the ORIGIN
+   STAMPED ON A DELIVERED MESSAGE are the trusted zone's alone. A forgeable `event.origin` would defeat
+   every origin check in every bundle the engine analyses — it would report exploits that are not real and
+   miss ones that are."
+   The value this zone HOLDS for an opaque document is `_senderOrigin`'s per-document uniqueness token
+   ("null:<uuid>"), which exists so two opaque documents never compare same-origin. That token is an
+   internal identity and must never reach a page: HTML §7.5 serializes an opaque origin as the literal
+   "null", which is what a real browser puts in `event.origin`, and a bundle testing `e.origin === "null"`
+   (the ordinary "accept my sandboxed widget" check) would otherwise never match. So the comparison value
+   stays internal and the DELIVERED value is the serialization. */
+function stampOrigin(o) { return _isRealOrigin(o) ? o : "null"; }
 /* Stable BUNDLE IDENTITY for the frontier key: the EXTERNAL <script src> set (content-hash filenames
    like main.abc123.js ARE the app version), NOT the volatile HTML wrapper (per-request nonces/CSRF
    tokens would change the key every visit -> the frontier would never resume). A redeploy changes a src
@@ -240,6 +252,19 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
       const abs = new URL(u, msg.sourceUrl).href;
       // chunks: as-script (CORB), never credentialed. replies: opt-in credentialed -> the AUTHENTICATED
       // logged-in reply (the moat headline), gated by safeFetch's own SOP/CORS + GET-only. Default off.
+      /* @security-finding  NO `pageOrigin` REACHES THE CHOKEPOINT FROM HERE, AND ONE MUST BEFORE
+         `credentialed` IS EVER TURNED ON. safeFetch's credentialed SOP/CORS is written against
+         `opts.pageOrigin` — SECURITY.md: "the requesting frame's MessageSender.origin, opaque-unique —
+         an opaque/"null" principal is same-origin with nothing" — and this zone passes none, so every
+         credentialed read currently fails CLOSED (`_isRealOrigin("")` is false, so no ACAO can match).
+         Nothing sets `msg.credentialed` today, so no credentialed read happens at all; the danger is the
+         obvious "fix" when one is enabled, which is to pass `originOf(msg.sourceUrl)`. That is the exact
+         URL-derivation the credentialed principal exists to forbid, and it would hand a page's own
+         sandboxed iframe (opaque origin, ordinary-looking address) same-origin access to the EMBEDDER's
+         authenticated bytes. THE VALUE TO PASS IS `msg.origin` (the browser's MessageSender.origin,
+         plumbed by analyze.js) — never the address. Wiring it also loosens CORB for a genuinely
+         same-origin chunk, which is spec-correct and is a deliberate decision to take at that time, not a
+         side effect of this line. */
       const opts = asScript ? { pageUrl: msg.sourceUrl, as: "script" }
                             : { pageUrl: msg.sourceUrl, credentialed: !!(msg && msg.credentialed) };
       const r = await self.safeFetch(abs, opts);
@@ -284,6 +309,17 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
     if (!canFetch) return { body: null, status: 0, statusText: "", headers: [] };
     try {
       const abs = new URL(q.url, msg.sourceUrl).href;
+      /* @security-finding  THREE OF THESE FOUR ARGUMENTS ARE NOT READ BY THE CHOKEPOINT, AND ITS REFUSAL IS
+         SILENT. safeFetch forces `method:"GET"`, takes credentials only from `opts.credentialed`, and never
+         looks at `body` — which is SECURITY.md's rule holding ("GET only … POST/PUT/DELETE endpoints are
+         RECORDED by forced exec, never issued"), but holding invisibly: a page's `xhr.open("POST", u)` is
+         answered with the reply to a GET of `u`, and the engine models that reply as the POST's. The engine
+         then reasons about a response the server never gave for that request. The chokepoint should REFUSE a
+         non-GET the way it refuses a scheme (a `blocked-method` status the engine turns into §3.5.6's error
+         event), rather than downgrade it — that is a behaviour change to the analysis, so it is named here
+         and not taken silently. `headers` IS read, and comes from the untrusted bundle: within the model
+         (uncredentialed GET to a public host, forbidden header names stripped by the browser), but it is why
+         safeFetch's "analyzer probe headers only" comment is no longer the whole truth. */
       const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, method: q.method, headers: q.headers,
                                             body: q.body, credentials: q.credentials });
       if (!r || typeof r.body !== "string") return { body: null, status: 0, statusText: "", headers: [] };
@@ -291,8 +327,20 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
                headers: Object.entries(r.headers || {}) };
     } catch (_) { return { body: null, status: 0, statusText: "", headers: [] }; }
   };
+  /* THE PRINCIPAL IS BROWSER-STATED, NEVER PARSED OFF THE ADDRESS. This read `originOf(msg.sourceUrl)`, and a
+     document's address does not determine its origin: a page that sandboxes its own iframe
+     (`<iframe sandbox="allow-scripts" src="/widget.html">`) gives that document an OPAQUE origin while its
+     address still reads `https://site/widget.html`. The offscreen already has the authoritative answer —
+     `_senderOrigin(sender)` from the browser's MessageSender, which SECURITY.md requires precisely because
+     "a page can sandbox its own iframe, giving it an opaque ("null") origin whose URL still looks normal" —
+     and analyze.js hands it over as `msg.origin`. Parsing the address instead re-fabricated the tuple origin
+     the browser had already refused to give that document, and then STAMPED it on every message the document
+     posts (hostNotice below), which is the one field a bundle's cross-origin check is written against.
+     A document this zone provisioned itself carries the origin of the URL THIS zone fetched (hostNotice sets
+     it); "" belongs to a rehydrated recipe that predates the field, and the stamp site refuses it rather than
+     inventing one. */
   return { M, ptrs, lines, fkey, prior, msg, persist, fetched, fetchedDocument, fetchedXhr, code, html, state: "hot",
-           docId: _docId, origin: originOf((msg && msg.sourceUrl) || ""), _forceparkSteps };
+           docId: _docId, origin: (msg && msg.origin) || "", _forceparkSteps };
 }
 function engineWeight(eng) { return eng.state === "hot" ? +eng.M.ccall("qjs_top_weight", "number", [], []) : -Infinity; }
 async function engineServiceFetch(eng) {   // one round: resolve every pending reply/chunk, then the engine is hot again
@@ -338,7 +386,17 @@ async function hostNotice(eng, line) {
     DCHECK(f.length >= 7, "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL and policy");
     if (hostHolderOf(f[1])) return;   // already provisioned: the engine announces a document once
     const loaded = await eng.fetchedDocument(f[3]);
+    /* THE CHILD'S PRINCIPAL IS THE ORIGIN OF THE URL THIS ZONE FETCHED — derived HERE and not read off the
+       notice, even though the notice carries one at f[4]. SECURITY.md draws that line at this exact record:
+       "identity may be minted by the untrusted side because it is only a name, but ROUTING and the ORIGIN
+       STAMPED ON A DELIVERED MESSAGE are the trusted zone's alone." The name is a name; the origin is the
+       thing every bundle's cross-origin check is written against, so it comes from the load this zone
+       performed. RESIDUAL, named because it is not yet built: a child whose creator applied `sandbox`
+       (attribute or CSP) has an OPAQUE origin that this derivation cannot see — the sandbox flag set is not
+       yet carried on the notice, so such a child is currently stamped with its address's tuple origin. Carry
+       the flags on the notice and mint a per-document opaque token here, the way _senderOrigin does. */
     const msg = { type: "AST_ANALYZE", pageHtml: (loaded && loaded.body) || "", sourceUrl: f[3],
+                  origin: originOf(f[3]),
                   responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     /* THE POLICY IS THE RESPONSE'S, AND THE CREATOR'S CLONE IS THE FALLBACK — §7.2.6/§7.4 in the order the
        spec states them: a Document is judged against the policy container its own response carried, and a
@@ -369,7 +427,15 @@ async function hostNotice(eng, line) {
     DCHECK(target !== null, "a message was posted to a document no instance in this pool holds — the create " +
                             "notice naming it was dropped, or that instance was finalized while a peer still " +
                             "held a WindowProxy for it");
-    target.M.ccall("qjs_route", "void", ["string", "string"], [line, eng.origin]);
+    /* THE STAMP IS THE SENDER'S BROWSER-STATED ORIGIN, SERIALIZED. An empty one means this instance was
+       rehydrated from a cold recipe written before the principal was part of it — this zone then does not know
+       whose message this is, and the one thing it may not do is invent it (a wrong `event.origin` makes the
+       engine report exploits that are not real and miss ones that are). CHECK, not DCHECK: in release the
+       delivery would otherwise carry a fabricated identity into a security decision. */
+    CHECK(!!eng.origin, "a cross-document message was posted by an instance with no recorded principal — only " +
+                        "the trusted zone may state a sender's origin, and this one has none to state; carry " +
+                        "the document's browser-stated origin into the cold recipe so a resumed instance keeps it");
+    target.M.ccall("qjs_route", "void", ["string", "string"], [line, stampOrigin(eng.origin)]);
     return;
   }
   DFAIL("an engine emitted a notice with an op this zone does not act on — the engine's half is built, so the " +
@@ -602,7 +668,13 @@ const _hostOps = {
       for (const c of cold) {
         if (_pool.length > 0 && _residentBytes() >= HOT_RAM_BUDGET) break;
         try {
+          /* THE PRINCIPAL RESUMES WITH THE RECIPE. A parked flow's world is only the same world if the
+             document it resumes into is the same PRINCIPAL — and this zone cannot re-derive one from
+             c.sourceUrl without re-fabricating the tuple origin a sandboxed document does not have. A recipe
+             written before this field carries "", and the stamp site refuses to deliver a message for it
+             rather than inventing one. */
           const msg = { type: "AST_ANALYZE", pageHtml: c.html, code: c.code, sourceUrl: c.sourceUrl,
+                        origin: c.origin || "",
                         topLevelUrl: c.topLevelUrl, credentialed: c.credentialed, persist: true };
           const eng = await engineCreate(c.code || "", c.html || "", msg, true);   // a rehydrated cold recipe always participates in the frontier
           eng._cold = true; _pool.push(eng);
@@ -620,7 +692,11 @@ const _hostOps = {
            ENVIRONMENT it parked in: §8.1.3.5 decides secure-context from it, so a rehydration that lost it
            would rebuild the realm with a different set of Web IDL §3.3.13 members and resume flows into a
            platform surface they never ran against. */
-        key: result._fkey, sourceUrl: eng.msg.sourceUrl, topLevelUrl: eng.msg.topLevelUrl, html: eng.html, code: eng.code,
+        /* AND SO IS THE PRINCIPAL, for the same reason one step down: the origin is browser-stated, this zone
+           cannot re-derive it from the address (a sandboxed document's address lies about it), and a resumed
+           instance that posts a cross-document message must stamp the origin the parked one had. */
+        key: result._fkey, sourceUrl: eng.msg.sourceUrl, topLevelUrl: eng.msg.topLevelUrl, origin: eng.origin,
+        html: eng.html, code: eng.code,
         credentialed: !!eng.msg.credentialed, recipes: (result._park || []).join(";"),
         emit: ((prior && prior.emit) || 0) + (result.fetchCallSites || []).length, visits: ((prior && prior.visits) || 0) + 1, ts: Date.now(),
       });

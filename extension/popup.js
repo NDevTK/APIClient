@@ -935,68 +935,15 @@ function render() {
   populateTabFilter();
 }
 
-// Background deep unused-feature grind progress. The grind drives lazy-chunk
-// orphan functions (e.g. github's login-gated `preheat`) over MINUTES at a low
-// CPU duty cycle; without this line the user can't tell whether it's running,
-// done, or stuck — and can't tell a not-yet-reached endpoint from a missing one.
+// Analyzer gaps for this document. `resolverErrors` is the one field the engine
+// actually reports here (bridge.js linesToAnalysis -> serializeTabData): host
+// calls forced execution REACHED but could not resolve (a fully-opaque URL or
+// method), and host-model gaps (a bundle throw under the host model). Per
+// CLAUDE.md these are P1 to close and MUST be visible, not console-only: they
+// distinguish a reached-but-unresolved endpoint from one never reached at all.
 function renderDeepStatus() {
   const el = document.getElementById("deep-status");
   if (!el) return;
-  const ds = tabData && tabData.deepStats;
-  const all = (tabData && Array.isArray(tabData.allDeepStats)) ? tabData.allDeepStats : [];
-  // Per-tab summary line — uses the SHARED LearnState classifier (lib/
-  // learnstate.js), the same verdict the harness `learnstate` command and the
-  // worker heartbeat use, so the UI never drifts from the harness on what
-  // "complete" means. The worker's live heartbeat carries the authoritative
-  // state (learningState) — prefer it; fall back to classifying the stored
-  // per-tab _deepStats when no live heartbeat field is present (e.g. a
-  // background tab's last snapshot). The "stalled" verdict is now surfaced
-  // (was hidden as a perpetual "X% — learning…") so a prioritization stall is
-  // visible to the user, not silently mistaken for slow progress.
-  let head = "";
-  if (ds && typeof ds.total === "number" && ds.total >= 0) {
-    const verdict = (typeof ds.learningState === "string")
-      ? { state: ds.learningState, total: ds.total, rem: Math.max(0, ds.rem | 0),
-          driven: ds.total - Math.max(0, ds.rem | 0),
-          pct: ds.total > 0 ? Math.floor(((ds.total - Math.max(0, ds.rem | 0)) / ds.total) * 100) : -1 }
-      : self.LearnState.learningStateOf({ rem: ds.rem, total: ds.total,
-          running: ds.running | 0, queued: ds.queued | 0,
-          msSinceProgress: (typeof ds.msSinceProgress === "number") ? ds.msSinceProgress : -1 });
-    head = self.LearnState.learningLabelOf(verdict);
-    el.className = "deep-status " + (verdict.state === "complete" ? "done" : verdict.state === "stalled" ? "stalled" : "active");
-  }
-  // Cross-tab background work — honest visibility into the rotation (which
-  // OTHER tabs have incomplete grinds, whether any paused for a higher-priority
-  // review). Display-only; the scheduler isn't user-controllable by design.
-  let crossHtml = "";
-  if (all.length > 1 || (all.length === 1 && (!ds || all[0].tabId !== ds.tabId))) {
-    const rows = all.map((s) => {
-      const total = s.total || 0;
-      // Same shared classifier as the head line + harness (DRY).
-      const v = (typeof s.learningState === "string")
-        ? { state: s.learningState, total: total, rem: Math.max(0, s.rem | 0),
-            driven: total - Math.max(0, s.rem | 0),
-            pct: total > 0 ? Math.floor(((total - Math.max(0, s.rem | 0)) / total) * 100) : -1 }
-        : self.LearnState.learningStateOf({ rem: s.rem, total: total, running: s.running | 0, queued: s.queued | 0,
-            msSinceProgress: (typeof s.msSinceProgress === "number") ? s.msSinceProgress : -1 });
-      let label;
-      if (total === 0) label = "queued";
-      else if (v.state === "complete") label = "complete";
-      else if (v.state === "stalled") label = "STALLED (scheduling)";
-      else if (s.stop && s.stop.indexOf("yielded") === 0) label = "paused (preempted by a live review)";
-      else label = `${v.pct >= 0 ? v.pct : 0}% (${v.driven >= 0 ? v.driven : 0}/${total})`;
-      const page = s.pageUrl ? new URL(s.pageUrl).hostname + new URL(s.pageUrl).pathname.replace(/\/$/, "") : ("tab " + s.tabId);
-      return `<div class="deep-row" title="${esc(s.pageUrl || "")}"><span class="deep-page">${esc(page.slice(0, 60))}</span> — <span class="deep-label">${esc(label)}</span></div>`;
-    }).join("");
-    crossHtml = `<details class="deep-cross-tab"><summary>Background work across tabs (${all.length})</summary>${rows}</details>`;
-  }
-  // Analyzer gaps (resolverErrors): host calls the forced-exec REACHED but
-  // couldn't resolve (fully-opaque URL/method), or host-model gaps (a bundle
-  // throw under the host model — a Web API not modelled correctly). Per
-  // CLAUDE.md these are P1 to close and MUST be visible, not console-only:
-  // they tell the reviewer "there's a fetch here the engine saw but couldn't
-  // pin down" — distinguishing a reached-but-unresolved endpoint from one the
-  // engine never reached at all.
   let resolverHtml = "";
   const rerrs = (tabData && Array.isArray(tabData.resolverErrors)) ? tabData.resolverErrors : [];
   if (rerrs.length) {
@@ -1005,21 +952,8 @@ function renderDeepStatus() {
     ).join("");
     resolverHtml = `<details class="deep-cross-tab"><summary>Analyzer gaps — reached-but-unresolved / host-model (${rerrs.length})</summary>${rows}</details>`;
   }
-  // Driving-completeness frontier: of the @T functions the deep grind
-  // directed-drove, how many fired NO host call — split threw (an opaque op
-  // raised before the fetch) vs returned (the host call's branch arm wasn't
-  // forced, or it's an event-gated handler registered-not-dispatched, or the
-  // opaque broke a deep call chain to a nested fetch). This is the precise
-  // residue the unused-feature surface is still hiding behind; surfacing the
-  // shape per CLAUDE.md's no-silent-zero rule turns "explored N functions" into
-  // "explored N, M of them reached no endpoint — and here's why".
-  let dnfHtml = "";
-  if (ds && ((ds.dnfThrew | 0) + (ds.dnfRet | 0)) > 0) {
-    const threw = ds.dnfThrew | 0, ret = ds.dnfRet | 0;
-    dnfHtml = `<div class="deep-row deep-dnf" title="Driven unused functions that fired no fetch/XHR/WebSocket. threw: an opaque op raised before the host call. returned: the host-call branch wasn't forced, or the handler is event-gated / behind a deep opaque-broken call chain.">${threw + ret} driven functions reached no endpoint (${threw} threw, ${ret} returned) — driving-completeness frontier</div>`;
-  }
-  if (!head && !crossHtml && !resolverHtml && !dnfHtml) { el.style.display = "none"; return; }
-  el.innerHTML = (head ? `<div class="deep-head">${esc(head)}</div>` : "") + dnfHtml + crossHtml + resolverHtml;
+  if (!resolverHtml) { el.style.display = "none"; return; }
+  el.innerHTML = resolverHtml;
   el.style.display = "block";
 }
 

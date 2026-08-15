@@ -79,26 +79,6 @@ function swRpc(api) {
 // swFetch / SW relay any more — the offscreen document fetches cross-origin itself.
 // Credentialed same-origin requests (schema.verify) still use pageContextFetch.
 
-// Inlined from ast.js — extracts sourceMappingURL from the last 500 chars.
-// Runs synchronously in the service worker (no Babel needed).
-function extractSourceMapUrl(code) {
-  var tail = code.length > 500 ? code.slice(-500) : code;
-  var marker = "sourceMappingURL=";
-  var idx = tail.lastIndexOf(marker);   // last occurrence = the real trailing annotation
-  if (idx === -1) return null;
-  var start = idx + marker.length;
-  while (start < tail.length && (tail.charCodeAt(start) === 32 || tail.charCodeAt(start) === 9)) start++;
-  var end = start;
-  while (end < tail.length && tail.charCodeAt(end) > 32) end++;
-  var url = tail.substring(start, end);
-  // Strip the trailing `*/` from the block-comment form `/*# … */` (github
-  // ships both `//#` line and `/*# … */` block styles) so the fetch URL
-  // doesn't end in `*/` and 404.
-  var star = url.indexOf("*/");
-  if (star >= 0) url = url.slice(0, star);
-  return url.length ? url : null;
-}
-
 // ─── State ───────────────────────────────────────────────────────────────────
 
 const state = {
@@ -247,12 +227,6 @@ const globalStore = {
   securityFindings: new Map(), // sourceUrl → { sourceUrl, securitySinks[], dangerousPatterns[] }
   scriptCache: new Map(), // SHA-256 hash → { version, result, timestamp }
   discoveryChanges: new Map(), // service → [{ timestamp, fetchUrl, changes }]
-  // pageUrl(no query) → { scriptOffsets, sourceMapScripts, savedAt }. The deep
-  // (chunk-fold) round spawns a resumable grind that can outlive an SW
-  // eviction; when it finishes via AST_RESUMED the SW has lost the per-script
-  // line map + the chunk source-map URL list, so path-param names (owner/repo)
-  // can't be resolved. Persisting just those two small artefacts lets the
-  // resume merge re-run the eager path's source-map name resolution.
 };
 
 // In-flight exploit-probe sessions, keyed by marker. The EXPLOIT_PROBE

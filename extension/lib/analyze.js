@@ -1,8 +1,13 @@
 // lib/analyze.js — AST/engine-worker analysis orchestration: hash + cache combined scripts, drive the wasm
-// worker (astDispatch) over the combined bundle, replay cached results, drain the review queue, recover source
-// maps, resolve path-param names, and mark security-finding changes. Extracted from the offscreen-brain.js
-// monolith (one problem per file); loaded before it, resolves mergeASTResultsIntoVDD + astDispatch at
-// call-time. This is the JS BRIDGE driving the engine -- the analysis itself is in the wasm.
+// worker (astDispatch) over the combined bundle, replay cached results, drain the review queue, and mark
+// security-finding changes. Extracted from the offscreen-brain.js monolith (one problem per file); loaded
+// before it, resolves mergeASTResultsIntoVDD + astDispatch at call-time.
+//
+// This file is step 0 of `node extension/jsaudit.mjs`'s queue and it is a DELETION, not a move: the review
+// queue (_reviewQueue/_analysisInflight) is a second, per-document, recency-ordered scheduler beside the ONE
+// BFS/WFQ, and globalStore.scriptCache/_replayCachedAST is a content-hash SEEN-SET that skips the engine
+// entirely on a revisit — so a page whose HTML is byte-identical never resumes its parked frontier at all.
+// What survives both is one astDispatch call, and that is bridge.js's.
 
 function _hashScriptCode(code) {
   var h = 0;
@@ -31,51 +36,6 @@ function _findScriptForLine(line, scriptOffsets) {
   // result (every DOM-XSS + inline-script endpoint silently lost). A null url is
   // the correct inline attribution: page URL, original line numbers.
   return scriptOffsets[0] || { url: null, lineStart: 1 };
-}
-
-// Resolve an AST endpoint's path-param names (minified, in URL order) to the
-// page's REAL declared names via its chunk's source map. No minified pattern-
-// matching and no value guessing: it maps the fetch call-site position through
-// the map to the original position, reads that line from the map's own
-// `sourcesContent`, and takes the URL template's path interpolation identifiers
-// in order — e.g. `await fetch(\`/${owner}/${repo}/…?source=${source}\`)` →
-// ["owner","repo"]. Returns the names array, or null if anything's missing.
-function _resolvePathParamNames(callSite, scriptOffsets, traceMapsByUrl) {
-  // Resolve a SHOWN finding's minified path params (e/a) to their declared names
-  // (owner/repo) by running the source-map LIBRARY (@jridgewell/trace-mapping)
-  // on the finding's own call-site location — the position the engine already
-  // emits via its normal stack trace (NO engine instrumentation, NO bundle
-  // transform). originalPositionFor() + sourceContentFor() hand back the
-  // ORIGINAL fetch line; we read its template literal's path interpolations.
-  try {
-    if (!callSite || !callSite.loc || !scriptOffsets || !scriptOffsets.length || !traceMapsByUrl) return null;
-    var sc = _findScriptForLine(callSite.loc.line, scriptOffsets);
-    if (!sc || !sc.url) return null;
-    var tm = traceMapsByUrl[sc.url];
-    if (!tm) return null;
-    var genLine = callSite.loc.line - sc.lineStart + 1;            // 1-based line within the chunk
-    var col0 = (callSite.loc.column != null ? callSite.loc.column : (callSite.loc.col || 1)) - 1;
-    if (col0 < 0) col0 = 0;
-    var op = traceMapping.originalPositionFor(tm, { line: genLine, column: col0 });
-    if (!op || op.source == null || op.line == null) return null;
-    var content = traceMapping.sourceContentFor(tm, op.source);
-    if (!content) return null;
-    var lines = content.split("\n");
-    var BT = String.fromCharCode(96);   // backtick
-    // The fetch's original line(s) hold the URL template literal; scan a small
-    // window (beautified calls can wrap) for the first backtick template, then
-    // read its PATH interpolations (before '?'), last identifier of each ${...}.
-    var win = (lines[op.line - 1] || "") + " " + (lines[op.line] || "") + " " + (lines[op.line - 2] || "");
-    var bt = win.indexOf(BT);
-    if (bt < 0) return null;
-    var bt2 = win.indexOf(BT, bt + 1);
-    var tmpl = bt2 > bt ? win.slice(bt + 1, bt2) : win.slice(bt + 1);
-    var qm = tmpl.indexOf("?");
-    var pathPart = qm >= 0 ? tmpl.slice(0, qm) : tmpl;
-    var names = [], re = /\$\{\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)*([A-Za-z_$][\w$]*)\s*\}/g, mm;
-    while ((mm = re.exec(pathPart))) names.push(mm[1]);
-    return names.length ? names : null;
-  } catch (e) { return null; }
 }
 
 // Compare new security findings against globalStore to mark as new/existing/fixed
@@ -112,7 +72,7 @@ function _markSecurityFindingChanges(scriptUrl, findings) {
 
 // Replay a cached AST analysis result — mirrors the post-analysis flow in
 // _analyzeCombinedScripts() but skips the offscreen worker entirely.
-function _replayCachedAST(tabId, tab, cached, sourceMapScripts, buf) {
+function _replayCachedAST(tabId, tab, cached, buf) {
   // Clear previous AST-derived endpoints only. _astResults and
   // _securityFindings are swapped in atomically below (see the same
   // rationale in _analyzeCombinedScripts above): consumers should never
@@ -141,7 +101,7 @@ function _replayCachedAST(tabId, tab, cached, sourceMapScripts, buf) {
     (analysis.securitySinks && analysis.securitySinks.length) ||
     (analysis.dangerousPatterns && analysis.dangerousPatterns.length);
 
-  if (!hasFindings && sourceMapScripts.length === 0) return;
+  if (!hasFindings) return;
 
   if (hasFindings) {
     analysis._securityMerged = true;
@@ -203,10 +163,6 @@ function _replayCachedAST(tabId, tab, cached, sourceMapScripts, buf) {
     notifyPopup(tabId);
   }
 
-  // Fetch source maps (not cached — they're fetched separately and may change)
-  for (var smi = 0; smi < sourceMapScripts.length; smi++) {
-    _fetchSourceMapForScript(tabId, tab, analysis, sourceMapScripts[smi].scriptUrl, sourceMapScripts[smi].smUrl);
-  }
   // Lazy chunks are loaded by the ONE scheduler IN PLACE: the engine emits @CHUNK during forced
   // execution, runEngine fetches it (self.safeFetch) and qjs_provide evals it in the live instance,
   // surfacing its endpoints in the SAME run. No host-side re-fetch/re-analyze round (that was a second
@@ -330,15 +286,6 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   console.debug("[AST:combined] Analyzing %d scripts (%d total chars) for tab=%d",
     scripts.length, totalChars, tabId);
 
-  // Extract source map URLs from individual scripts before concatenation
-  var sourceMapScripts = []; // [{url, smUrl}]
-  for (var si = 0; si < scripts.length; si++) {
-    var smUrl = extractSourceMapUrl(scripts[si].code);
-    if (smUrl) {
-      sourceMapScripts.push({ scriptUrl: scripts[si].url, smUrl: smUrl });
-    }
-  }
-
   // ─── AST Cache Check ───────────────────────────────────────────────
   // Hash each script individually, then combine hashes into a cache key.
   // If the exact same set of scripts was analyzed before AND the
@@ -383,7 +330,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
       console.debug("[AST:cache] Cache HIT for tab=%d (%d scripts, key=%s…)",
         tabId, scripts.length, cacheKey.slice(0, 16));
       cached.timestamp = Date.now();      // LRU touch
-      _replayCachedAST(tabId, tab, cached, sourceMapScripts, buf);
+      _replayCachedAST(tabId, tab, cached, buf);
       return;
     }
     console.debug("[AST:cache] Cache MISS for tab=%d (%d scripts, key=%s…)",
@@ -448,13 +395,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
       // engine installs) from the TOP of the chain rather than from the frame's own address.
       topLevelUrl: buf.topLevelUrl || tabUrl,
       scriptUrls: scriptUrls,
-      // Per-chunk line offsets + each chunk's sourceMappingURL so the OFFSCREEN
-      // worker (long-lived, owns IndexedDB) can fetch maps and resolve minified
-      // path-param names (e→owner) itself — the SW is evicted mid-grind and must
-      // not fetch maps. sourceMapScripts = [{scriptUrl, smUrl}] (smUrl is the
-      // bundle's real pragma: relative filename OR full address).
       scriptOffsets: scriptOffsets,
-      sourceMapScripts: sourceMapScripts,
       pageHtml: getDoc(buf.docKey)._pageHtml || null,
       responseHeaders: getDoc(buf.docKey)._responseHeaders || {},   // real CSP/Content-Type -> engine (header-CSP is the PRIMARY policy; meta-CSP is secondary)
       // Participate in the GLOBAL cross-session frontier: this engine's residue parks to IDB under RAM
@@ -585,7 +526,7 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
     analysis.fetchCallSites.length || analysis.sourceMapUrl ||
     (analysis.securitySinks && analysis.securitySinks.length) ||
     (analysis.dangerousPatterns && analysis.dangerousPatterns.length);
-  if (!hasFindings && sourceMapScripts.length === 0) {
+  if (!hasFindings) {
     console.debug("[AST:combined] No findings for tab=%d", tabId);
     // The deep orphan-residue drive already ran IN the ONE scheduler (seed_orphans is continuous,
     // chunks eval'd in place) — nothing more to dispatch here.
@@ -694,105 +635,9 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   // (non-blocking, serialized). This page's own residue (if it parked) is now in the global frontier.
   _driveGlobalFrontierBurst(4);
 
-  // Fetch source maps — SCOPED to the chunks that actually hold a learned
-  // fetch call site (so path-param names like e/a → owner/repo resolve),
-  // not all ~661 shipped maps. The deep grind's endpoints (e.g. preheat) live
-  // in lazy chunks, so this must consider the combined-bundle loc of every
-  // fetchCallSite, mapped back to its chunk via scriptOffsets.
-  var _needSM = new Set();
-  for (var _fi = 0; _fi < analysis.fetchCallSites.length; _fi++) {
-    var _fcl = analysis.fetchCallSites[_fi];
-    if (_fcl && _fcl.loc && typeof _fcl.loc.line === "number") {
-      var _fsc = _findScriptForLine(_fcl.loc.line, scriptOffsets);
-      if (_fsc && _fsc.url) _needSM.add(_fsc.url);
-    }
-  }
-  for (var smi = 0; smi < sourceMapScripts.length; smi++) {
-    if (_needSM.size && !_needSM.has(sourceMapScripts[smi].scriptUrl)) continue;
-    _fetchSourceMapForScript(tabId, tab, analysis, sourceMapScripts[smi].scriptUrl, sourceMapScripts[smi].smUrl);
-  }
-
   // Lazy chunks were already fetched + eval'd IN PLACE by the ONE scheduler during this run
   // (@CHUNK → runEngine safeFetch → qjs_provide), so their endpoints are in `analysis` already.
   // No host-side re-fetch/re-analyze round.
-}
-
-function _fetchSourceMapForScript(tabId, tab, analysis, scriptUrl, smUrl) {
-  var _ep = _dataEpoch;   // a Clear during the (async) source-map fetch invalidates this re-merge
-  try {
-    if (!/^https?:\/\//i.test(smUrl)) {
-      smUrl = new URL(smUrl, new URL(scriptUrl)).href;
-    }
-  } catch (_) {
-    console.debug("[AST:sourcemap] Failed to resolve URL: %s (base: %s)", smUrl, scriptUrl);
-    return;
-  }
-  console.debug("[AST:sourcemap] Fetching: %s (from %s)", smUrl, scriptUrl);
-  pageContextFetch(tabId, smUrl, { method: "GET" }, tab && tab.documentId)
-    .then(async function(smResp) {
-      if (!smResp.body || smResp.error) {
-        console.debug("[AST:sourcemap] Fetch failed for %s: %s", smUrl, smResp.error || "empty body");
-        return;
-      }
-      try {
-        var smJson = JSON.parse(smResp.body);
-        // Name resolution (e→owner) uses the standard library on the
-        // engine-stamped hole position; stored per chunk URL (each lazy chunk
-        // has its own map). The AST_PARSE_SOURCEMAP call below stays only for
-        // proto-file/type extraction from the map's sources/sourcesContent.
-        try { analysis.traceMapsByUrl = analysis.traceMapsByUrl || {}; analysis.traceMapsByUrl[scriptUrl] = new traceMapping.TraceMap(smJson); }
-        catch (e) { console.debug("[AST:sourcemap] TraceMap failed for %s: %s", scriptUrl, e && e.message); }
-        var smResp2 = await sendToOffscreen({ type: "AST_PARSE_SOURCEMAP", sourceMapJson: smJson });
-        if (!smResp2 || !smResp2.success) {
-          console.debug("[AST:sourcemap] parseSourceMap failed for %s: %s", smUrl, smResp2 ? smResp2.error : "no response");
-          return;
-        }
-        var smData = smResp2.result;
-        analysis.sourceMap = smData;
-        // Per-script map store: a page loads many chunks, each with its OWN
-        // map; `analysis.sourceMap` keeps only the last fetched, so param-name
-        // resolution must look up the map for the SPECIFIC chunk an endpoint's
-        // call site lives in (via scriptOffsets), not the last one.
-        analysis.sourceMapsByUrl = analysis.sourceMapsByUrl || {};
-        analysis.sourceMapsByUrl[scriptUrl] = smData;
-        console.debug("[AST:sourcemap] Parsed: %d sources, %d names, %d proto files, %d API client files",
-          smData.sources.length, smData.names.length, smData.protoFileNames.length, smData.apiClientFiles.length);
-        if (smData.sourcesContent && smData.sourcesContent.length) {
-          var typesResp = await sendToOffscreen({
-            type: "AST_EXTRACT_TYPES",
-            sourcesContent: smData.sourcesContent,
-            sources: smData.sources
-          });
-          if (typesResp && typesResp.success) {
-            analysis.sourceMapTypes = typesResp.result;
-            if (analysis.sourceMapTypes.length) {
-              console.debug("[AST:sourcemap] Extracted %d types", analysis.sourceMapTypes.length);
-            }
-          }
-          // Per-file security analysis on sourcemap sourcesContent is
-          // intentionally disabled. It was meant to catch sinks that the
-          // main bundled analysis missed, but in practice every sink
-          // surfaces in both coord spaces. The dedup key was
-          // `(type, sink, line, column)` — bundled findings sit at
-          // minified (line=2, col=big-number), source-mapped findings
-          // sit at beautified (line=107, col=8), so the key never
-          // matches and EVERY source-mapped sink duplicates one that
-          // already exists. Duplicates then can't be opened in the
-          // viewer (the source-mapped URL isn't HTTP-fetchable), so
-          // they're pure reviewer noise. Re-enable only after a proper
-          // cross-coord dedup (reverse-map the source-mapped location
-          // through smData back to bundled coords, compare those).
-        }
-        if (_ep !== _dataEpoch) return;   // store was reset while this map was fetching — don't repopulate
-        mergeASTResultsIntoVDD(tab, [analysis], tabId);
-        mergeToGlobal(tab);
-        notifyPopup(tabId);
-      } catch (e) {
-        console.debug("[AST:sourcemap] Parse error for %s: %s", smUrl, e.message);
-      }
-    }).catch(function(e) {
-      console.debug("[AST:sourcemap] Network error for %s: %s", smUrl, e.message || e);
-    });
 }
 
 // ─── AST Bundle Analysis ─────────────────────────────────────────────────────

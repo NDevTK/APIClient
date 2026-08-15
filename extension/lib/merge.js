@@ -150,21 +150,6 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
         // a learnable endpoint. Skip before new URL(null) fabricates a
         // "/null" path.
         if (callSite.url == null || callSite.url === "") continue;
-        // Source-map: resolve this finding's minified path params (e/a) → the
-        // page's declared names (owner/repo) by running the library on the
-        // finding's own call-site location (originalPositionFor → original fetch
-        // line). Tag each PATH param in URL order. Library-only, on shown
-        // findings, no engine instrumentation, no bundle transform.
-        var _smNames = _resolvePathParamNames(callSite, analysis.scriptOffsets, analysis.traceMapsByUrl);
-        if (_smNames && callSite.params) {
-          var _spi = 0;
-          for (var _sp = 0; _sp < callSite.params.length; _sp++) {
-            if ((callSite.params[_sp].location || "query") === "path") {
-              if (_spi < _smNames.length) callSite.params[_sp]._sourceMapName = _smNames[_spi];
-              _spi++;
-            }
-          }
-        }
         // Skip data:/blob:/about: URLs — those are inline content, not
         // API endpoints. Registering them as services produces empty-
         // host records with garbled paths (the URL parser reads the
