@@ -39,7 +39,7 @@
 #include "core/file/blob.h"
 #include "core/file/file_system.h"
 #include "core/idl_slots.h"
-#include "core/timing/timer.h"
+#include "core/timing/event_loop.h"
 #include "solver/concolic.h"
 
 /* §2.1's FIELD NAMES, on the record an entry IS. They are spelled once here so the model and every reader of it
@@ -249,7 +249,7 @@ static JSValue fs_entry_new(JSContext *ctx, const char *kind, const char *name)
         /* §2.4.2's create branch: "set child's binary data to an empty byte sequence", "set child's
            modification timestamp to the current time", and §2.1's lock, "initially open". */
         JS_SetPropertyStr(ctx, e, FS_DATA, JS_NewStringLen(ctx, "", 0));
-        JS_SetPropertyStr(ctx, e, FS_MODIFIED, JS_NewFloat64(ctx, timer_now()));
+        JS_SetPropertyStr(ctx, e, FS_MODIFIED, JS_NewFloat64(ctx, event_loop_now(ctx)));
         JS_SetPropertyStr(ctx, e, FS_LOCK, JS_NewString(ctx, FS_LOCK_OPEN));
         JS_SetPropertyStr(ctx, e, FS_SHARED, JS_NewInt32(ctx, 0));
         JS_SetPropertyStr(ctx, e, FS_TYPE, JS_NewStringLen(ctx, "", 0));
@@ -392,7 +392,7 @@ double file_system_modified(JSContext *ctx, JSValueConst file)
 void file_system_touch(JSContext *ctx, JSValueConst file)
 {
     DCHECK(file_system_is_file(file), "a modification timestamp was written to an entry that is not a file");
-    JS_SetPropertyStr(ctx, file, FS_MODIFIED, JS_NewFloat64(ctx, timer_now()));
+    JS_SetPropertyStr(ctx, file, FS_MODIFIED, JS_NewFloat64(ctx, event_loop_now(ctx)));
 }
 
 /* ---- §2.1's locks ---------------------------------------------------------------------------------------- */

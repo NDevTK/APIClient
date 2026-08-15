@@ -429,7 +429,7 @@ static int js_beforeunload_step(JSContext *ctx, void *st, JSValue cb_result, JSV
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
         s->fphase = 0;
         s->ua_phase = 0;
-        s->hdr.stage = BU_FIRE;
+        STEP_GOTO(s->hdr.stage, BU_FIRE, &s->fphase, &s->ua_phase, NULL);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         /* A document nothing has ever run in has no listener for this event and no returnValue to set, so the
@@ -461,7 +461,7 @@ static int js_beforeunload_step(JSContext *ctx, void *st, JSValue cb_result, JSV
            machine may have exactly one request outstanding and this stage already spends it on the dispatch. */
         if (before_unload_event_asks_to_cancel(cctx, s->ev)          /* the event's own two-part answer */
             && !document_sandboxes_modals(cctx))
-            s->hdr.stage = BU_PROMPT;
+            STEP_GOTO(s->hdr.stage, BU_PROMPT, &s->fphase, &s->ua_phase, NULL);
     }
     if (s->hdr.stage == BU_PROMPT) {
         bool sticky = false;
@@ -525,7 +525,7 @@ static int js_unload_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
         s->fphase = 0;
         s->showing = 0;
-        s->hdr.stage = UNLOAD_PAGEHIDE;
+        STEP_GOTO(s->hdr.stage, UNLOAD_PAGEHIDE, &s->fphase, NULL);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         /* STEPS 8 AND 9: salvageable becomes false (see UNLOAD_SALVAGEABLE), and then — only if the document
@@ -553,7 +553,7 @@ static int js_unload_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
             s->ev = JS_UNDEFINED;
         }
         s->fphase = 0;
-        s->hdr.stage = UNLOAD_UNLOAD;
+        STEP_GOTO(s->hdr.stage, UNLOAD_UNLOAD, &s->fphase, NULL);
         /* STEP 9.3, INSIDE step 9's branch: update the visibility state of oldDocument to "hidden", which fires
            `visibilitychange` at the Document when it was not hidden already. A document that was never showing
            never had a visibility state a page could have observed changing. */
@@ -575,7 +575,7 @@ static int js_unload_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
             JS_FreeValue(cctx, s->ev);
             s->ev = JS_UNDEFINED;
         }
-        s->hdr.stage = UNLOAD_DESTROY;
+        STEP_GOTO(s->hdr.stage, UNLOAD_DESTROY, &s->fphase, NULL);
         /* The cleanup and the destruction run no page code, so the flow is offered to the scheduler here rather
            than carried through them: the listeners that just ran are exactly when a sibling flow is most likely
            to have overtaken this one. */
@@ -587,16 +587,10 @@ static int js_unload_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         /* STEP 18's UNLOADING DOCUMENT CLEANUP STEPS. The WebSocket, WebTransport and EventSource loops iterate
            sets that are EMPTY BY CONSTRUCTION — this engine has none of those three interfaces, so "for each"
            runs zero times, exactly as §7.5.10's worker loops do. What remains is the salvageable-false branch's
-           second half: "clear window's map of active timers".
-           §8.6 GIVES EVERY GLOBAL ITS OWN MAP AND THIS ENGINE HAS ONE. core/timing/timer.c keeps a single
-           agent-wide list with no Window key, so there is no map of THIS window's to clear: clearing what
-           exists would take a sibling navigable's timers with it, and a same-origin popup this document opened
-           is such a sibling. The assert fires exactly when there is something to clear. */
-        DCHECK(timer_next_due() < 0,
-               "§7.5.9 step 18 must clear the unloading window's map of active timers, and this agent's timers "
-               "are ONE list shared by every document in it — BUILD the per-Window map: §8.6's map of active "
-               "timers belongs to a global, so core/timing/timer.c has to key each entry by the realm that set "
-               "it before an unload can clear one document's without taking the whole agent's");
+           second half: "clear window's map of active timers", and it is THIS window's — §8.6 gives every
+           global its own map, and core/timing/timer.c now keeps one per realm, so clearing it takes nothing
+           from a same-origin popup this document opened. */
+        timer_clear_map(cctx);
     }
     /* STEP 20: salvageable is false, so the document is destroyed. The DESCENDANTS are already gone — each one
        ran this same body and destroyed itself at its own step 20 — so this is §7.5.10's single-document form

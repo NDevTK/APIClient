@@ -25,125 +25,277 @@
  *
  * TIME IS VIRTUAL, AND THAT IS THE SPEC'S OWN MODEL. HTML orders the timer task source by expiry, and this
  * engine has no wall clock to wait on: nothing else advances while a timer is outstanding, so the clock jumps to
- * the next expiry. Ordering is therefore (when, id) — `setTimeout(f, 0)` runs before `setTimeout(g, 100)`, and
- * two timers with equal delay run in the order they were set, which is exactly what a browser does. Modelling
- * the ORDER is the point: a page that sequences work across two delays gets the sequence it wrote.
+ * the next expiry. Ordering is therefore (when, insertion order) — `setTimeout(f, 0)` runs before
+ * `setTimeout(g, 100)`, and two timers with equal delay run in the order they were set, which is exactly what a
+ * browser does. Modelling the ORDER is the point: a page that sequences work across two delays gets the
+ * sequence it wrote. The clock itself is the EVENT LOOP's and lives there (core/timing/event_loop.c).
+ *
+ * §8.6's MAP OF ACTIVE TIMERS IS THE GLOBAL'S, AND IT TIME-TRAVELS — the two facts that decide where it lives.
+ *
+ *   PER GLOBAL, because HTML says so: "each object that implements the WindowOrWorkerGlobalScope mixin has a
+ *   map of active timers" and a timer identifier of its own. It was ONE agent-wide `js_realloc`'d array with
+ *   no Window key, which §7.5.9 step 18 could not clear for an unloading document without taking a same-origin
+ *   popup's timers with it — a DCHECK in core/frame/document_lifecycle.c named exactly this and is gone with
+ *   the reason for it. So the map is a per-realm record, reached through the realm (core/realm.h), and the
+ *   event loop's step asks every fully active document of the agent for its earliest entry.
+ *
+ *   PER FLOW, because a timer is state one code flow set and another must not see. The array owned a JSValue
+ *   callback and a `js_malloc`'d argument vector, captured by nothing: `timer_run_due` picked the earliest
+ *   entry of the whole agent regardless of which flow set it, and JS_EnqueueCallTask then attributed it to
+ *   whichever flow was RUNNING — so flow A's `setTimeout(cb, 0)` fired in flow B's job queue under B's COW
+ *   delta, which is precisely the "one flow's async effect leaks into another's timeline" bug class. A
+ *   `clearTimeout` in one arm cleared it for every arm, and the identifier was one counter for the agent so
+ *   two forked arms got DIFFERENT handles for the same source line and a replayed decision vector's
+ *   `clearTimeout(id)` named something else. The map is therefore a JS Array on the realm's record: its
+ *   mutations are property writes the per-flow COW delta already captures, it parks to the cold tier and
+ *   resumes with the flow, and both arms of a fork now mint the SAME handle for the same source line.
  *
  * CANCELLATION IS REAL, so clearTimeout is not a no-op. A job cannot be pulled back out of the queue once
- * enqueued, so what is enqueued is a STEP of this component — timer_step — and the entry it fires is looked up
- * at that moment. Clearing removes the entry; the step then finds the next one, or nothing. Two hops, each a
- * job, and no C activation ever runs page code.
+ * enqueued, so nothing is enqueued in advance: the driver asks for the earliest entry only when it has nothing
+ * else to run, and a cleared entry is simply not there to be found.
  *
  * A STRING HANDLER IS A SCRIPT, and an @S sink. `setTimeout("evil()")` compiles and runs its argument in the
  * global scope, which is the engine's existing "queue this source as a script flow" path — the same one an
  * injected <script> takes. It is not evaluated here: this component does not run page code. */
-#include <stdlib.h>
-#include <string.h>
-
 #include "check.h"
 #include "quickjs.h"
 #include "core/timing/timer.h"
+#include "core/timing/event_loop.h"
+#include "core/frame/navigable.h"
+#include "core/frame/window_proxy.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "solver/engine.h"
 
-typedef struct {
-    int     id;          /* the handle setTimeout returned; 0 = this slot is free */
-    double  when;        /* virtual expiry, in ms since the document started */
-    double  every;       /* setInterval's period; -1 for a one-shot */
-    JSValue fn;          /* the callback (a function; the string form became a script instead) */
-    int     argc;
-    JSValue *argv;       /* the extra arguments HTML passes the callback */
-} Timer;
+/* ONE ENTRY OF §8.6's MAP, as an Array — the shape §8.9's map of animation frame callbacks uses, for the
+   reason CLAUDE.md gives: platform data a flow queues is a JS value, so the collector owns it, the COW delta
+   captures it and the snapshot machinery parks it. A hole in the map is `undefined` — a free slot, which the
+   next timer set in this realm reuses, so a page that sets and clears a million timeouts does not grow the
+   array. The extra arguments HTML passes the callback are the entry's tail rather than a second allocation. */
+enum { TE_HANDLE = 0, TE_WHEN, TE_EVERY, TE_SEQ, TE_FN, TE_ARG0 };
 
-static Timer *g_timers;
-static int    g_timers_n, g_timers_cap;
-static int    g_next_id = 1;
-static double g_now;          /* the virtual clock: the expiry of the timer that fired last */
+static int      g_slot = -1;
+static JSAtom   g_atom_map = JS_ATOM_NULL, g_atom_next = JS_ATOM_NULL;
+static int      g_ready;
+static int      g_id_set_timeout, g_id_set_interval, g_id_clear_timeout, g_id_clear_interval;
+static void   (*g_script_sink)(const char *src);
 
-/* THE VIRTUAL CLOCK, for the components that need to stamp a moment (an Event's timeStamp). One clock: a second
-   time source would order events differently from the task queue that ran them, which is the one thing the
-   virtual clock exists to keep consistent. */
-double timer_now(void) { return g_now; }
+static void timer_install_map(JSContext *ctx);
 
-static void timer_entry_free(JSContext *ctx, Timer *t)
+/* THIS REALM's record, OWNED. */
+static JSValue timer_store(JSContext *ctx)
 {
-    int i;
-    JS_FreeValue(ctx, t->fn);
-    for (i = 0; i < t->argc; i++)
-        JS_FreeValue(ctx, t->argv[i]);
-    js_free(ctx, t->argv);
-    memset(t, 0, sizeof(*t));
+    JSValue st;
+
+    DCHECK(g_ready, "a Window's map of active timers was reached before §8.6 was declared");
+    st = realm_value_get(ctx, g_slot);
+    DCHECK(JS_IsObject(st),
+           "a realm answered §8.6's map of active timers with no map — every global is given one at creation, "
+           "so this realm never ran timer_install_map and its `setTimeout` would register into nothing");
+    return st;
 }
 
-void timer_reset(JSContext *ctx)
+/* THIS REALM's map, OWNED. */
+static JSValue timer_map(JSContext *ctx)
 {
-    int i;
-    for (i = 0; i < g_timers_n; i++)
-        if (g_timers[i].id)
-            timer_entry_free(ctx, &g_timers[i]);
-    js_free(ctx, g_timers);
-    g_timers = NULL;
-    g_timers_n = g_timers_cap = 0;
-    g_next_id = 1;
-    g_now = 0;
+    JSValue st = timer_store(ctx), q = JS_GetProperty(ctx, st, g_atom_map);
+
+    JS_FreeValue(ctx, st);
+    DCHECK(JS_IsArray(q), "§8.6's map of active timers lost its entry list");
+    return q;
 }
 
-static Timer *timer_slot(JSContext *ctx)
+/* The length of a JS Array — the map, the entry, or the walk's list of navigables. */
+static uint32_t arr_len(JSContext *ctx, JSValueConst q)
 {
-    int i;
-    for (i = 0; i < g_timers_n; i++)
-        if (!g_timers[i].id)
-            return &g_timers[i];
-    if (g_timers_n == g_timers_cap) {
-        int c = g_timers_cap ? g_timers_cap * 2 : 8;
-        Timer *a = js_realloc(ctx, g_timers, sizeof(*a) * (size_t)c);
-        CHECK(a != NULL, "timer: the timer table allocation failed — a dropped timer loses the flow it owed");
-        memset(a + g_timers_cap, 0, sizeof(*a) * (size_t)(c - g_timers_cap));
-        g_timers = a; g_timers_cap = c;
+    JSValue len = JS_GetPropertyStr(ctx, q, "length");
+    uint32_t n = 0;
+
+    JS_ToUint32(ctx, &n, len);
+    JS_FreeValue(ctx, len);
+    return n;
+}
+
+static double timer_entry_num(JSContext *ctx, JSValueConst e, int field)
+{
+    JSValue v = JS_GetPropertyUint32(ctx, e, (uint32_t)field);
+    double d = 0;
+
+    DCHECK(JS_IsNumber(v), "an entry of §8.6's map of active timers lost one of its numeric fields — the "
+                           "handle, the expiry, the period and the insertion order are all written at the set");
+    JS_ToFloat64(ctx, &d, v);
+    JS_FreeValue(ctx, v);
+    return d;
+}
+
+/* THE EARLIEST ENTRY OF ONE GLOBAL's MAP: least expiry, ties broken by the order it was set. Returns its index,
+   or -1 when this global has none.
+ *
+ * AND THIS IS WHERE THE ISOLATION IS ASSERTED, because it is the one place every entry a flow can see is
+ * looked at. §8.6's map and the event loop's insertion counter ride the SAME per-flow COW delta, so a flow can
+ * only see an entry whose sequence number its OWN counter has already handed out — an entry from a sibling's
+ * timeline carries a number this flow never allocated. That is the exact statement of "a timer set by one flow
+ * is not visible to another", and it is what fires if either half of the pair is ever moved back out of the
+ * heap while the other stays in it. */
+static int timer_earliest_in(JSContext *ctx, double *pwhen, double *pseq)
+{
+    JSValue q = timer_map(ctx);
+    uint32_t i, n = arr_len(ctx, q);
+    double seq_next = event_loop_task_seq_peek(ctx);
+    int best = -1;
+
+    for (i = 0; i < n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, q, i);
+        double when, seq;
+
+        if (!JS_IsObject(e)) { JS_FreeValue(ctx, e); continue; }   /* a free slot */
+        when = timer_entry_num(ctx, e, TE_WHEN);
+        seq = timer_entry_num(ctx, e, TE_SEQ);
+        JS_FreeValue(ctx, e);
+        DCHECK(seq < seq_next,
+               "a flow reached a timer that was queued with an event-loop insertion number this flow never "
+               "allocated — §8.6's map of active timers and §8.1.7's insertion counter ride the SAME per-flow "
+               "COW delta, so an entry another flow's timeline queued cannot be visible here. One of the two "
+               "is being answered from outside the delta, and the effect is flow A's setTimeout firing in flow "
+               "B's job queue under B's heap");
+        if (best < 0 || when < *pwhen || (when == *pwhen && seq < *pseq)) {
+            best = (int)i;
+            *pwhen = when;
+            *pseq = seq;
+        }
     }
-    return &g_timers[g_timers_n++];
-}
-
-/* The next entry to fire: least expiry, ties broken by the order they were set (the id is monotonic). */
-static Timer *timer_earliest(void)
-{
-    Timer *best = NULL;
-    int i;
-    for (i = 0; i < g_timers_n; i++) {
-        Timer *t = &g_timers[i];
-        if (!t->id)
-            continue;
-        if (!best || t->when < best->when || (t->when == best->when && t->id < best->id))
-            best = t;
-    }
+    JS_FreeValue(ctx, q);
     return best;
 }
 
-/* THE CLOCK IS THE EVENT LOOP'S — see timer.h. §8.1.7.3's rendering task source becomes due at moments on the
-   same clock, so the two are compared rather than raced, and the comparison needs both halves askable. */
-double timer_next_due(void)
+/* THE EARLIEST ENTRY OF THE WHOLE EVENT LOOP. §8.6 gives every global its own map and §8.1.7 runs them all on
+   ONE task source, so the source's next task is the least (expiry, insertion order) across every fully active
+   document of this agent — a same-origin popup's `setTimeout(f, 0)` is ahead of this document's
+   `setTimeout(g, 100)`, which is what one event loop MEANS. The walk is navigable.c's because the tree is;
+   `docctx` is the realm the task is queued on, which is the global whose map holds it and not whichever realm
+   happened to drive the loop. */
+static JSContext *timer_earliest(JSContext *ctx, int *pidx, double *pwhen, double *pseq)
 {
-    Timer *t = timer_earliest();
-    return t ? t->when : -1;
+    JSValue all = navigable_tree_order(ctx);
+    uint32_t i, n = arr_len(ctx, all);
+    JSContext *best = NULL;
+
+    for (i = 0; i < n; i++) {
+        JSValue proxy = JS_GetPropertyUint32(ctx, all, i);
+        JSContext *docctx = window_proxy_realm(ctx, proxy);
+        double when = 0, seq = 0;
+        int idx;
+
+        DCHECK(docctx != NULL, "a navigable in this agent's tree order answered with no realm — the walk "
+                               "reports only materialized ones, and a materialized navigable has a realm");
+        idx = timer_earliest_in(docctx, &when, &seq);
+        if (idx >= 0 && (!best || when < *pwhen || (when == *pwhen && seq < *pseq))) {
+            best = docctx;
+            *pidx = idx;
+            *pwhen = when;
+            *pseq = seq;
+        }
+        JS_FreeValue(ctx, proxy);
+    }
+    JS_FreeValue(ctx, all);
+    return best;
 }
 
-void timer_advance_to(double when)
+/* THE CLOCK IS THE EVENT LOOP'S — see event_loop.h. §8.1.7.3's rendering task source becomes due at moments on
+   the same clock, so the two are compared rather than raced, and the comparison needs both halves askable. */
+double timer_next_due(JSContext *ctx)
 {
-    Timer *t = timer_earliest();
+    double when = 0, seq = 0;
+    int idx = -1;
 
-    DCHECK(when >= g_now, "the event loop's clock was asked to move BACKWARDS — a moment already passed is a "
-                          "task that should have run before whatever is asking");
-    DCHECK(!t || when <= t->when,
-           "the event loop's clock was moved PAST a due timer — a task source that steps over an earlier one "
-           "runs the page's work in an order the page did not write, which is exactly what virtual time makes "
-           "easy to get wrong (a long timeout landing in the middle of the work it was set to outlast)");
-    g_now = when;
+    return timer_earliest(ctx, &idx, &when, &seq) ? when : -1;
 }
-
-static void (*g_script_sink)(const char *src);
 
 void timer_set_script_sink(void (*queue)(const char *src)) { g_script_sink = queue; }
 
+/* SET ONE TIMER in `ctx`'s global's map — §8.6's shared tail for `setTimeout`, `setInterval` and the engine's
+   own "run steps after a timeout". Returns the handle §8.6 gives back.
+ *
+ * THE HANDLE COMES FROM THE GLOBAL and the INSERTION ORDER comes from the event loop, and those are two
+ * different counters because they answer two different questions: §8.6's identifier is what `clearTimeout`
+ * names, and it is per-global (two same-origin documents both hand out 1); the insertion order breaks a tie
+ * between two globals' entries on the one task source, so it has to be the loop's. Both ride the per-flow
+ * delta, which is why two arms of a fork mint the SAME handle for the same source line. */
+static int timer_set(JSContext *ctx, double delay, double every, JSValueConst fn, int argc, JSValueConst *argv)
+{
+    JSValue st = timer_store(ctx), q, entry, nv;
+    uint32_t handle = 0, i, slot, n;
+
+    nv = JS_GetProperty(ctx, st, g_atom_next);
+    JS_ToUint32(ctx, &handle, nv);
+    JS_FreeValue(ctx, nv);
+    DCHECK(handle >= 1, "§8.6's timer identifier started below 1 — 0 is the handle a page gets back for "
+                        "nothing, and `clearTimeout(0)` must name no entry");
+    JS_SetProperty(ctx, st, g_atom_next, JS_NewUint32(ctx, handle + 1));
+    JS_FreeValue(ctx, st);
+
+    entry = JS_NewArray(ctx);
+    CHECK(!JS_IsException(entry), "timer: OOM recording a timer — a dropped one is work the page asked for "
+                                  "and never gets");
+    JS_SetPropertyUint32(ctx, entry, TE_HANDLE, JS_NewUint32(ctx, handle));
+    JS_SetPropertyUint32(ctx, entry, TE_WHEN, JS_NewFloat64(ctx, event_loop_now(ctx) + delay));
+    JS_SetPropertyUint32(ctx, entry, TE_EVERY, JS_NewFloat64(ctx, every));
+    JS_SetPropertyUint32(ctx, entry, TE_SEQ, JS_NewFloat64(ctx, event_loop_task_seq(ctx)));
+    JS_SetPropertyUint32(ctx, entry, TE_FN, JS_DupValue(ctx, fn));
+    for (i = 0; i < (uint32_t)argc; i++)
+        JS_SetPropertyUint32(ctx, entry, TE_ARG0 + i, JS_DupValue(ctx, argv[i]));
+
+    q = timer_map(ctx);
+    n = arr_len(ctx, q);
+    for (slot = 0; slot < n; slot++) {   /* reuse a cleared entry's slot before growing the map */
+        JSValue e = JS_GetPropertyUint32(ctx, q, slot);
+        int free_slot = !JS_IsObject(e);
+        JS_FreeValue(ctx, e);
+        if (free_slot) break;
+    }
+    JS_SetPropertyUint32(ctx, q, slot, entry);
+    JS_FreeValue(ctx, q);
+    return (int)handle;
+}
+
+/* CLEAR ONE HANDLE from `ctx`'s global's map. §8.6: a handle that names nothing does nothing, which is what a
+   page clearing a timeout that has already fired needs. */
+static void timer_clear(JSContext *ctx, uint32_t want)
+{
+    JSValue q = timer_map(ctx);
+    uint32_t i, n = arr_len(ctx, q);
+
+    for (i = 0; i < n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, q, i);
+        int hit;
+
+        if (!JS_IsObject(e)) { JS_FreeValue(ctx, e); continue; }
+        hit = (uint32_t)timer_entry_num(ctx, e, TE_HANDLE) == want;
+        JS_FreeValue(ctx, e);
+        if (hit) { JS_SetPropertyUint32(ctx, q, i, JS_UNDEFINED); break; }
+    }
+    JS_FreeValue(ctx, q);
+}
+
+/* HTML §7.5.9 step 18's "clear window's map of active timers", for the unloading document's global — the step
+ * that could not be written while this component kept ONE agent-wide list with no Window key, because clearing
+ * what existed would have taken a same-origin popup's timers with it.
+ *
+ * IT IS THE MAP AND NOT THE IDENTIFIER. §8.6's timer identifier keeps counting: the document is going away, so
+ * nothing will ask it again, and resetting it would be a second statement of a fact the destruction already
+ * makes. */
+void timer_clear_map(JSContext *ctx)
+{
+    JSValue q = timer_map(ctx);
+    uint32_t i, n = arr_len(ctx, q);
+
+    /* ENTRY BY ENTRY, not by truncating `length`. Each element write is what the per-flow COW delta captures;
+       a length truncation deletes the elements underneath it with nothing captured for them, so unapplying
+       this flow would restore the length and not the entries a sibling still holds. */
+    for (i = 0; i < n; i++)
+        JS_SetPropertyUint32(ctx, q, i, JS_UNDEFINED);
+    JS_FreeValue(ctx, q);
+}
 
 /* FIRE THE EARLIEST DUE TIMER — the event loop's own step, and the reason it is not a queued task.
  *
@@ -160,62 +312,82 @@ void timer_set_script_sink(void (*queue)(const char *src)) { g_script_sink = que
  * when it has nothing else to run, which is exactly when "the clock may move" is true. Everything that is
  * already due (a queued task, a pending microtask, a reply the host owes) is by construction ahead of it.
  *
- * AND THE SECOND HOP IS GONE WITH IT. The step existed because a queued job cannot be pulled back out, so
- * clearTimeout had to work by emptying the entry and letting the step find nothing. With nothing queued in
- * advance, a cleared timer simply is not there to be found — the compensation went with the thing it
- * compensated for.
+ * AND IT IS THE RUNNING FLOW'S TIMER, WITHOUT ASKING WHICH FLOW THAT IS. The driver calls this from inside a
+ * flow's step, so that flow's COW delta is the one applied: every map it walks holds exactly the entries that
+ * flow set or inherited, and a sibling's are not in the heap to be found. A flow whose timer is due while
+ * ANOTHER flow is being stepped therefore does not fire here, and must not — its expiry is a moment on ITS
+ * clock, and the WFQ already owes it a turn. It fires when that flow is next scheduled and reaches this same
+ * idle branch, which is the one system CLAUDE.md allows: no timer wheel beside the frontier, no cross-flow
+ * wakeup, nothing to re-rank.
  *
  * Returns 1 when a timer fired (the driver has work again), 0 when there is none. */
 int timer_run_due(JSContext *ctx)
 {
-    Timer *t = timer_earliest();
-    JSValue fn;
-    JSValue *args = NULL;
-    int n, i;
+    double when = 0, seq = 0, every;
+    int idx = -1;
+    JSContext *docctx = timer_earliest(ctx, &idx, &when, &seq);
+    JSValue q, e, fn, *args = NULL;
+    uint32_t i, n;
 
-    if (!t)
+    if (!docctx)
         return 0;
 
-    /* 8.6: the clock advances to this task's expiry — every later timer is measured from here. */
-    DCHECK(t->when >= g_now, "timer: the earliest expiry is behind the virtual clock — time ran backwards");
-    g_now = t->when;
+    /* 8.6: the clock advances to this task's expiry — every later timer is measured from here. It is the ONE
+       source that is due, so nothing else constrains the move. */
+    event_loop_advance_to(docctx, when, when);
 
-    /* Take what the callback needs BEFORE the entry can be reused: an interval re-arms in place, and a one-shot
-       frees its slot, so neither the function nor the arguments may still be read out of the entry afterwards. */
-    fn = JS_DupValue(ctx, t->fn);
-    n = t->argc;
+    q = timer_map(docctx);
+    e = JS_GetPropertyUint32(docctx, q, (uint32_t)idx);
+    DCHECK(JS_IsObject(e), "the timer the event loop selected is no longer in its global's map — nothing runs "
+                           "between the selection and this read");
+    /* Take what the callback needs BEFORE the entry can be reused: an interval re-arms in place and a one-shot
+       frees its slot, so neither the function nor the arguments may still be read out of the entry after. */
+    fn = JS_GetPropertyUint32(docctx, e, TE_FN);
+    DCHECK(JS_IsFunction(docctx, fn),
+           "§8.6's map held an entry whose handler is not callable — the string form became a script instead "
+           "of an entry, so nothing else can be in the map");
+    n = arr_len(docctx, e);
+    DCHECK(n >= TE_ARG0,
+           "an entry of §8.6's map of active timers is shorter than its own fixed head — the handle, expiry, "
+           "period, insertion order and handler are all written at the set, and the extra arguments HTML "
+           "passes the callback are what follows them");
+    n -= TE_ARG0;
     if (n > 0) {
-        args = js_malloc(ctx, sizeof(*args) * (size_t)n);
+        args = js_malloc(docctx, sizeof(*args) * (size_t)n);
         CHECK(args != NULL, "timer: the callback argument copy failed");
         for (i = 0; i < n; i++)
-            args[i] = JS_DupValue(ctx, t->argv[i]);
+            args[i] = JS_GetPropertyUint32(docctx, e, TE_ARG0 + i);
     }
-
-    if (t->every >= 0) {
+    every = timer_entry_num(docctx, e, TE_EVERY);
+    if (every >= 0) {
         /* setInterval: the same entry is scheduled again at now + period. UNBOUNDED by design — a page's
            interval never stops on its own, and the WFQ deprioritises one that stops emitting rather than a
            counter cutting it off. It needs no re-enqueue now: it is simply the earliest entry again when the
-           driver next has nothing to do. */
-        t->when = g_now + (t->every > 0 ? t->every : 1);
+           driver next has nothing to do. Its insertion order is REFRESHED, because the re-arm is a new task on
+           the source and a timer set in the meantime for the same moment was set first. */
+        JS_SetPropertyUint32(docctx, e, TE_WHEN, JS_NewFloat64(docctx, when + (every > 0 ? every : 1)));
+        JS_SetPropertyUint32(docctx, e, TE_SEQ, JS_NewFloat64(docctx, event_loop_task_seq(docctx)));
     } else {
-        timer_entry_free(ctx, t);
+        JS_SetPropertyUint32(docctx, q, (uint32_t)idx, JS_UNDEFINED);
     }
+    JS_FreeValue(docctx, e);
+    JS_FreeValue(docctx, q);
 
     /* THE CALLBACK IS STILL A TASK, and still the page's own code — so it goes through the flow machinery
-       exactly as before. Only the decision of WHEN moved. */
-    JS_EnqueueCallTask(ctx, fn, n, (JSValueConst *)args);
-    JS_FreeValue(ctx, fn);
+       exactly as before. Only the decision of WHEN moved. It is queued in the realm whose map held it, which
+       is §8.6's "queue a GLOBAL task": the global is the one the timer was set on, never whichever realm the
+       driver happens to be stepping. */
+    JS_EnqueueCallTask(docctx, fn, (int)n, (JSValueConst *)args);
+    JS_FreeValue(docctx, fn);
     for (i = 0; i < n; i++)
-        JS_FreeValue(ctx, args[i]);
-    js_free(ctx, args);
+        JS_FreeValue(docctx, args[i]);
+    js_free(docctx, args);
     return 1;
 }
 
 static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     double delay = 0;
-    Timer *t;
-    int i;
 
     (void)this_val;
     if (argc < 1)
@@ -239,6 +411,9 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
         /* TimerHandler is `(DOMString or Function)`: the declaration converted the non-callable arm to a
            string already, so this reads one rather than running the page's toString from C. */
         const char *src;
+        JSValue st, nv;
+        uint32_t handle = 0;
+
         DCHECK(JS_IsString(argv[0]),
                "setTimeout's handler reached the body neither callable nor a string — the TimerHandler union's "
                "conversion is the declaration's, not this body's");
@@ -250,23 +425,20 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
                "8.6 evaluates it when the timer fires, and dropping it would lose whatever it was going to do");
         g_script_sink(src);
         JS_FreeCString(ctx, src);
-        return JS_NewInt32(ctx, g_next_id++);
+        /* §8.6 still hands back a handle from THIS global's identifier, and it still names no entry — the
+           script is queued, and there is nothing left for `clearTimeout` to find. */
+        st = timer_store(ctx);
+        nv = JS_GetProperty(ctx, st, g_atom_next);
+        JS_ToUint32(ctx, &handle, nv);
+        JS_FreeValue(ctx, nv);
+        JS_SetProperty(ctx, st, g_atom_next, JS_NewUint32(ctx, handle + 1));
+        JS_FreeValue(ctx, st);
+        return JS_NewInt32(ctx, (int32_t)handle);   /* §8.6's return type is a `long` */
     }
 
-    t = timer_slot(ctx);
-    t->id = g_next_id++;
-    t->when = g_now + delay;
-    t->every = magic ? delay : -1;
-    t->fn = JS_DupValue(ctx, argv[0]);
-    t->argc = argc > 2 ? argc - 2 : 0;
-    t->argv = NULL;
-    if (t->argc > 0) {
-        t->argv = js_malloc(ctx, sizeof(*t->argv) * (size_t)t->argc);
-        CHECK(t->argv != NULL, "timer: the callback argument allocation failed");
-        for (i = 0; i < t->argc; i++)
-            t->argv[i] = JS_DupValue(ctx, argv[i + 2]);
-    }
-    return JS_NewInt32(ctx, t->id);   /* nothing is queued: the driver asks when the clock may move */
+    return JS_NewInt32(ctx, timer_set(ctx, delay, magic ? delay : -1, argv[0],
+                                      argc > 2 ? argc - 2 : 0, argc > 2 ? argv + 2 : NULL));
+    /* nothing is queued: the driver asks when the clock may move */
 }
 
 /* HTML §8.6's RUN STEPS AFTER A TIMEOUT — see timer.h. It is the SAME timer source `setTimeout` uses, and
@@ -282,48 +454,32 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
  *
  * THE ORDERING IDENTIFIER IS NOT A PARAMETER, and that is an answer rather than an omission. Its whole effect
  * is that an earlier invocation with the same identifier and a smaller-or-equal `milliseconds` completes
- * first — and on one virtual clock a smaller delay started earlier already has an earlier expiry, with
- * timer_earliest breaking an exact tie by the monotonically increasing handle. So the ordering the identifier
- * buys is the ordering this queue already has, for every identifier at once. */
+ * first — and on one virtual clock a smaller delay started earlier already has an earlier expiry, with the
+ * event loop's insertion order breaking an exact tie. So the ordering the identifier buys is the ordering this
+ * queue already has, for every identifier at once. */
 int timer_after(JSContext *ctx, double ms, JSValueConst steps)
 {
-    Timer *t;
-
     DCHECK(JS_IsFunction(ctx, steps),
            "§8.6's completion steps must be callable — they are performed at the expiry and an engine algorithm "
            "that runs page code has to be a flow when it does, which is what a callable makes it");
     if (!(ms >= 0))
         ms = 0;   /* §8.6 clamps a negative or non-finite timeout to 0, for an engine caller as for a page */
-    t = timer_slot(ctx);
-    t->id = g_next_id++;
-    t->when = g_now + ms;
-    t->every = -1;   /* §8.6's completion steps are performed once; there is no interval form of this */
-    t->fn = JS_DupValue(ctx, steps);
-    t->argc = 0;
-    t->argv = NULL;
-    return t->id;
+    /* §8.6's completion steps are performed once; there is no interval form of this. */
+    return timer_set(ctx, ms, -1, steps, 0, NULL);
 }
 
-/* §8.6's timerKey, used to cancel — the same clearing `clearTimeout` performs, reached by an engine caller.
-   Cancelling a key that names nothing does nothing, which is `clearTimeout`'s own answer and is what a
-   caller cancelling a timeout that has already fired needs. */
+/* §8.6's timerKey, used to cancel — the same clearing `clearTimeout` performs, reached by an engine caller in
+   the global it scheduled the steps on. */
 void timer_cancel(JSContext *ctx, int key)
 {
-    int i;
-
-    for (i = 0; i < g_timers_n; i++)
-        if (g_timers[i].id == key) {
-            timer_entry_free(ctx, &g_timers[i]);
-            return;
-        }
+    timer_clear(ctx, (uint32_t)key);
 }
 
 static JSValue js_clear_timer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     int32_t id = 0;
-    int i;
 
-    (void)this_val;
+    (void)this_val; (void)magic;
     /* `handle` is a Web IDL `long`, converted by the declaration. */
     if (argc < 1)
         return JS_UNDEFINED;   /* 8.6: clearing a handle that names nothing does nothing */
@@ -331,11 +487,7 @@ static JSValue js_clear_timer(JSContext *ctx, JSValueConst this_val, int argc, J
            "clearTimeout's `handle` reached the body unconverted");
     if (JS_ToInt32(ctx, &id, argv[0]) < 0)
         return JS_UNDEFINED;
-    for (i = 0; i < g_timers_n; i++)
-        if (g_timers[i].id == id) {
-            timer_entry_free(ctx, &g_timers[i]);
-            break;
-        }
+    timer_clear(ctx, (uint32_t)id);
     return JS_UNDEFINED;
 }
 
@@ -350,8 +502,6 @@ static JSValue js_queue_microtask(JSContext *ctx, JSValueConst this_val, int arg
     return JS_UNDEFINED;
 }
 
-static int g_id_set_timeout, g_id_set_interval, g_id_clear_timeout, g_id_clear_interval;
-
 /* HTML 8.6's own IDL, declared rather than approximated:
      long setTimeout(TimerHandler handler, optional long timeout = 0, any... arguments)
      undefined clearTimeout(optional long handle = 0)
@@ -365,6 +515,7 @@ void timer_init(JSContext *ctx)
     static const IdlArgType SET_TIMER[2] = { IDL_STRING_UNLESS_CALLABLE, IDL_LONG };
     static const IdlArgType CLEAR_TIMER[1] = { IDL_LONG };
 
+    DCHECK(!g_ready, "timer_init ran twice — §8.6's members are declared once per agent");
     g_id_set_timeout = idl_method_id(ctx, SET_TIMER, 2, js_set_timer, 0);
     idl_optional_from(1);   /* 8.6: `setTimeout(handler, optional timeout, ...arguments)` */
     g_id_set_interval = idl_method_id(ctx, SET_TIMER, 2, js_set_timer, 1);
@@ -373,6 +524,33 @@ void timer_init(JSContext *ctx)
     idl_optional_from(0);   /* 8.6: `clearTimeout(optional long id = 0)` */
     g_id_clear_interval = idl_method_id(ctx, CLEAR_TIMER, 1, js_clear_timer, 0);
     idl_optional_from(0);   /* 8.6: `clearInterval(optional long id = 0)` */
+    g_atom_map = JS_NewAtom(ctx, "activeTimers");
+    g_atom_next = JS_NewAtom(ctx, "timerIdentifier");
+    CHECK(g_atom_map != JS_ATOM_NULL && g_atom_next != JS_ATOM_NULL,
+          "timer: the map's own keys could not be interned");
+    g_slot = realm_value_declare(ctx, "§8.6 map of active timers");
+    g_ready = 1;
+    realm_declare_intrinsic(timer_install_map);
+}
+
+/* THE MAP IS BUILT AT REALM INSTALL, which puts a top-level realm's in the pre-boot BASELINE. Built lazily on
+   the first `setTimeout` instead it would be whichever FLOW touched it first that owned it, and every sibling
+   would then be registering into an object created inside another flow's delta. */
+static void timer_install_map(JSContext *ctx)
+{
+    JSValue st;
+
+    DCHECK(g_ready, "a realm asked for §8.6's map before the interface was declared");
+    /* Running twice in one realm is asserted by realm_value_set, which is where the first value is standing. */
+    st = JS_NewObjectProto(ctx, JS_NULL);
+    CHECK(!JS_IsException(st), "timer: this global's map of active timers could not be allocated");
+    {
+        JSValue q = JS_NewArray(ctx);
+        CHECK(!JS_IsException(q), "timer: this global's entry list could not be allocated");
+        JS_SetProperty(ctx, st, g_atom_map, q);
+    }
+    JS_SetProperty(ctx, st, g_atom_next, JS_NewUint32(ctx, 1));   /* §8.6: handles start at 1 */
+    realm_value_set(ctx, g_slot, st);
 }
 
 void timer_install(JSContext *ctx, JSValueConst global)
@@ -389,4 +567,18 @@ void timer_install(JSContext *ctx, JSValueConst global)
     idl_install_method(ctx, g, "clearInterval", 1, g_id_clear_interval);
     JS_SetPropertyStr(ctx, g, "queueMicrotask",
                       JS_NewCFunction(ctx, js_queue_microtask, "queueMicrotask", 1));
+}
+
+void timer_free(JSContext *ctx)
+{
+    if (!g_ready) return;
+    g_ready = 0;
+    /* The MAPS are the realms' — each is released with its context, which is what the per-realm slot array is
+       for, and each flow's own entries go with the delta that holds them. What this owns is the two interned
+       keys. */
+    JS_FreeAtom(ctx, g_atom_map);
+    JS_FreeAtom(ctx, g_atom_next);
+    g_atom_map = g_atom_next = JS_ATOM_NULL;
+    g_slot = -1;
+    g_script_sink = NULL;
 }

@@ -8,6 +8,7 @@
 #include "solver/flow.h"
 #include "solver/world.h"
 #include "core/frame/navigable.h"
+#include "core/timing/event_loop.h"
 #include "core/timing/timer.h"
 #include "core/frame/window.h"
 #include "core/frame/window_proxy.h"
@@ -1782,6 +1783,10 @@ static void tf_agent_init(JSContext *ctx, const char *top_level_url)
        rather than a stand-in for it. */
     screen_init(ctx);
     navigable_init(ctx);
+    /* HTML §8.1.7's EVENT LOOP, before the task sources that are ordered by it: the virtual clock, §8.1.7.1's
+       last render opportunity time and the insertion order a source breaks its ties by are the LOOP's, and
+       they are per-flow heap state, so the record has to exist before any flow can write one. */
+    event_loop_init(ctx);
     timer_init(ctx);
     window_proxy_init(ctx, "https://x.test");
     remote_object_init(ctx);   /* §7.2.5.1's object half */
@@ -2471,6 +2476,8 @@ int main(int argc, char **argv) {
     viewport_free();
     visual_viewport_free();
     animation_frame_free(ctx);
+    timer_free(ctx);        /* §8.6's declaration; each global's map went with its realm */
+    event_loop_free(ctx);   /* §8.1.7's own record — the virtual clock and the moments beside it */
     unhandled_rejection_free(ctx);
     abort_free(ctx);
     observable_free(ctx);

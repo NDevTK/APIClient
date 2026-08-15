@@ -228,7 +228,7 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
             JS_FreeValue(ctx, hs_v); JS_FreeValue(ctx, bd_v);
             if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
         }
-        s->hdr.stage = FETCH_DELIVER_SETTLE;
+        STEP_GOTO(s->hdr.stage, FETCH_DELIVER_SETTLE, &s->cphase, NULL);
     }
 
     DCHECK(s->hdr.stage == FETCH_DELIVER_SETTLE,
@@ -360,8 +360,11 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
                revoked the URL afterwards still fetches. The store is consulted only for a URL STRING, which has
                nothing to have captured. */
             JSValueConst captured = request_blob_entry(input);
-            JSValueConst blob = !JS_IsUndefined(captured) ? captured
-                              : (key ? blob_url_lookup(key, strlen(key)) : JS_UNDEFINED);
+            /* OWNED, because the store is a per-flow heap Array now: `looked` is this scope's reference and is
+               released on the one way out below, while `blob` is the borrowed alias the steps read through. */
+            JSValue looked = JS_IsUndefined(captured) && key ? blob_url_lookup(ctx, key, strlen(key))
+                                                             : JS_UNDEFINED;
+            JSValueConst blob = !JS_IsUndefined(captured) ? captured : looked;
             JSValue value;
             int reject = 0;
             /* §4.3: a blob fetch whose method is not GET is a NETWORK ERROR before the store is consulted. A
@@ -389,6 +392,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
                 header_list_free(&bh);
             }
             fetch_settle_local(ctx, resolving, value, reject);
+            JS_FreeValue(ctx, looked);
             JS_FreeCString(ctx, u);
             JS_FreeValue(ctx, resolving[0]);
             JS_FreeValue(ctx, resolving[1]);

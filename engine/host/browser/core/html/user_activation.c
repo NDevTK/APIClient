@@ -11,7 +11,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/html/html_iframe.h"
 #include "core/html/user_activation.h"
-#include "core/timing/timer.h"
+#include "core/timing/event_loop.h"
 #include "solver/concolic.h"
 
 /* §6.4.1's TWO PER-WINDOW VALUES, and the initial value of each is the whole of what "never activated" means.
@@ -142,12 +142,12 @@ static int ua_ask(JSContext *ctx, JSStepHdr *h, JSValue last, const char *op, bo
     return 0;
 }
 
-/* §6.4.1's "current high resolution time given W" — the event loop's one virtual clock (timer.h). A second
-   time source would order an activation against the tasks that observe it differently from the queue that ran
-   them, which is the one thing that clock exists to keep consistent. */
-static double ua_now(void)
+/* §6.4.1's "current high resolution time given W" — the event loop's one virtual clock (event_loop.h). A
+   second time source would order an activation against the tasks that observe it differently from the queue
+   that ran them, which is the one thing that clock exists to keep consistent. */
+static double ua_now(JSContext *ctx)
 {
-    return timer_now();
+    return event_loop_now(ctx);
 }
 
 int user_activation_sticky_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, bool *out)
@@ -161,7 +161,7 @@ int user_activation_sticky_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, boo
            "— the two questions would then answer each other, since the second is only ever asked inside the "
            "first's true arm");
     if (!concolic_is(last)) {
-        *out = ua_now() >= ua_number(ctx, last);
+        *out = ua_now(ctx) >= ua_number(ctx, last);
         JS_FreeValue(ctx, last);
         return 0;
     }
@@ -178,7 +178,7 @@ int user_activation_transient_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, 
     int rc;
 
     if (!concolic_is(last)) {
-        double l = ua_number(ctx, last), now = ua_now();
+        double l = ua_number(ctx, last), now = ua_now(ctx);
 
         JS_FreeValue(ctx, last);
         DCHECK(*phase == UA_PH_STICKY,
@@ -369,7 +369,7 @@ static void ua_notify_descendants(JSContext *ctx, JSContext *from, double now)
 void user_activation_notify(JSContext *ctx)
 {
     JSValueConst self = document_window_proxy(ctx);
-    double now = ua_now();
+    double now = ua_now(ctx);
 
     /* STEP 1. A document that is not fully active is not being interacted with: it is not the active document
        of a navigable in the tree, so there is no input path to it at all. */

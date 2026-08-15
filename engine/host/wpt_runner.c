@@ -70,6 +70,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include "core/timing/event_loop.h"
 #include "core/timing/timer.h"
 #include "core/css/media_query_list.h"
 #include "core/frame/viewport.h"
@@ -1101,6 +1102,10 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
     session_history_init(ctx);
     history_init(ctx);
     navigable_init(ctx);
+    /* HTML §8.1.7's EVENT LOOP, before the task sources that are ordered by it: the virtual clock, §8.1.7.1's
+       last render opportunity time and the insertion order a source breaks its ties by are the LOOP's, and
+       they are per-flow heap state, so the record has to exist before any flow can write one. */
+    event_loop_init(ctx);
     timer_init(ctx);
     window_proxy_init(ctx, origin);
     /* §7.2.5.1 one agent further out: a same-origin cross-document read answers with an OBJECT, and an object
@@ -1885,7 +1890,8 @@ int main(int argc, char **argv)
     session_history_free();
     history_free();
     animation_frame_free(ctx);
-    timer_reset(ctx);
+    timer_free(ctx);        /* §8.6's declaration; each global's map went with its realm */
+    event_loop_free(ctx);   /* §8.1.7's own record — the virtual clock and the moments beside it */
     headers_free(ctx);
     response_free(ctx);
     request_free(ctx);

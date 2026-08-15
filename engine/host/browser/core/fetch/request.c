@@ -367,7 +367,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
                    identity, which is why the lookup key excludes it. */
                 if (rec.scheme && !strcmp(rec.scheme, "blob")) {
                     char *key = url_serialize(&rec, true);
-                    d->blob_entry = JS_DupValue(ctx, blob_url_lookup(key, strlen(key)));
+                    d->blob_entry = blob_url_lookup(ctx, key, strlen(key));
                     free(key);
                 }
             }

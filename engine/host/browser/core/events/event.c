@@ -39,13 +39,15 @@
 #include "core/events/message_event.h"
 #include "core/events/error_event.h"
 #include "core/events/page_transition_event.h"
+#include "core/events/pop_state_event.h"
+#include "core/events/hash_change_event.h"
 #include "core/events/before_unload_event.h"
 #include "core/events/ui_event.h"
 #include "core/events/mouse_event.h"
 #include "core/events/keyboard_event.h"
 #include "core/events/focus_event.h"
 #include "core/events/event_path.h"
-#include "core/timing/timer.h"
+#include "core/timing/event_loop.h"
 
 /* The private key the event's internal slots hang off — a Symbol, so a page enumerating the object cannot see
    it and cannot collide with it, for the reason the platform uses internal slots. */
@@ -362,7 +364,7 @@ static JSValue event_make_proto(JSContext *ctx, JSValueConst proto, JSValueConst
     /* §2.2 timeStamp — the moment the event was created, on the VIRTUAL clock the timer task source orders by.
        There is no wall clock in a headless run and a second time source would disagree with the queue that runs
        the listeners, so there is one clock and this reads it. */
-    JS_SetPropertyStr(ctx, slots, "timeStamp", JS_NewFloat64(ctx, timer_now()));
+    JS_SetPropertyStr(ctx, slots, "timeStamp", JS_NewFloat64(ctx, event_loop_now(ctx)));
     JS_SetPropertyStr(ctx, slots, "canceled", JS_FALSE);
     JS_SetPropertyStr(ctx, slots, "stopPropagation", JS_FALSE);
     JS_SetPropertyStr(ctx, slots, "stopImmediate", JS_FALSE);
@@ -807,6 +809,11 @@ static void event_declare_subclasses(JSContext *ctx)
     message_event_init(ctx);
     error_event_init(ctx);
     page_transition_event_init(ctx);
+    /* HTML §7.2.7.2 and §7.2.7.3 — the two events a SESSION HISTORY TRAVERSAL fires. They are declared here
+       rather than from core/frame/session_history.c for the same reason every other Event subclass is: their
+       prototypes chain to this realm's Event.prototype, and realm.h runs the intrinsics in declaration order. */
+    pop_state_event_init(ctx);
+    hash_change_event_init(ctx);
     before_unload_event_init(ctx);
     /* THE ORDER IS THE CHAIN. Each of these declares a per-realm install and realm.h runs them in declaration
        order, so an interface must declare AFTER the one it extends or its prototype chains to a slot no realm
@@ -823,6 +830,8 @@ static void event_free_subclasses(JSContext *ctx)
     message_event_free(ctx);
     error_event_free(ctx);
     page_transition_event_free(ctx);
+    pop_state_event_free(ctx);
+    hash_change_event_free(ctx);
     before_unload_event_free(ctx);
     ui_event_free(ctx);
     mouse_event_free(ctx);

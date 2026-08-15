@@ -51,7 +51,9 @@ void blob_set_source(JSContext *ctx, JSValueConst v, const char *shape, const ch
  * `create` returns a malloc'd URL string, or NULL with a TypeError live when the argument is not a Blob. */
 char *blob_url_create(JSContext *ctx, JSValueConst obj);
 void  blob_url_revoke(JSContext *ctx, const char *url, size_t len);
-/* THE BLOB A `blob:` URL NAMES, or JS_UNDEFINED — what a fetch of one resolves through. Borrowed. */
-JSValueConst blob_url_lookup(const char *url, size_t len);
+/* THE BLOB A `blob:` URL NAMES, or JS_UNDEFINED — what a fetch of one resolves through. OWNED: the store is a
+   per-flow heap Array, so an entry a borrowed reference named could be freed by the next revoke or the next
+   context switch. */
+JSValue blob_url_lookup(JSContext *ctx, const char *url, size_t len);
 
 #endif

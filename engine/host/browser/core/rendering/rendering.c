@@ -20,6 +20,7 @@
 #include "core/rendering/animation_frame.h"
 #include "core/rendering/page_reveal.h"
 #include "core/rendering/rendering.h"
+#include "core/timing/event_loop.h"
 #include "core/timing/timer.h"
 #include "solver/engine.h"
 
@@ -28,10 +29,15 @@
 #define RENDERING_REFRESH_HZ 60.0
 #define RENDERING_FRAME_MS   (1000.0 / RENDERING_REFRESH_HZ)
 
-/* §8.1.7.1: the event loop's LAST RENDER OPPORTUNITY TIME. It belongs to the event LOOP, which is the agent's
-   — one per similar-origin window agent — and so it lives beside the virtual clock rather than in the heap:
-   it is not a document's state and no flow owns it, exactly as `timer_now()` is not a flow's clock. */
-static double g_last_render_opportunity;
+/* §8.1.7.1's LAST RENDER OPPORTUNITY TIME LIVES WITH THE CLOCK IT IS A MOMENT ON — core/timing/event_loop.c.
+   It belongs to the event LOOP, which is the agent's, and this file used to say exactly that while holding it
+   in a `static double` "rather than in the heap: it is not a document's state and no flow owns it, exactly as
+   `timer_now()` is not a flow's clock". Both halves of that were wrong the same way. A flow IS a timeline of
+   this event loop: it queues its own rendering task and advances its own clock, so a frame flow A took moved
+   flow B's next frame and, through the clock move below it, B's clock with it — a parked flow resuming into a
+   moment another timeline reached, which §Time-travel-resume's razor calls a cap. The record it moved to is a heap
+   object whose property writes the per-flow COW delta captures, so the field is still ONE per agent and is
+   now also one per timeline. */
 static int    g_stepid = -1, g_driver_slot = -1;
 static int    g_ready;
 
@@ -432,10 +438,10 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
         s->reporting = 0;
         s->i = s->ndocs = s->nframe = s->k = s->nmedia = s->m = 0;
         s->fphase = s->cphase = s->snapped = s->msnapped = 0;
-        s->hdr.stage = UR_REVEAL;
+        STEP_GOTO(s->hdr.stage, UR_REVEAL, &s->cphase, &s->fphase, NULL);
         /* STEP 1: frameTimestamp is the event loop's LAST RENDER OPPORTUNITY TIME — the moment the in-parallel
            loop recorded when it decided there was one, not the moment this task happens to run. */
-        s->frame_ts = g_last_render_opportunity;
+        s->frame_ts = event_loop_last_render(ctx);
         /* STEPS 2-5 */
         s->docs = rendering_collect_docs(ctx);
         {
@@ -454,7 +460,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
         for (;;) {
             if (s->i >= s->ndocs) {
                 s->i = 0;
-                s->hdr.stage = UR_AUTO;
+                STEP_GOTO(s->hdr.stage, UR_AUTO, &s->cphase, &s->fphase, NULL);
                 break;
             }
             docctx = doc_realm(ctx, s);
@@ -493,7 +499,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
             if (s->i >= s->ndocs) {
                 s->i = 0;
                 s->rhalf = 0;
-                s->hdr.stage = UR_RESIZE;
+                STEP_GOTO(s->hdr.stage, UR_RESIZE, &s->cphase, &s->fphase, NULL);
                 break;
             }
             docctx = doc_realm(ctx, s);
@@ -532,7 +538,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                     step_9(doc_realm(ctx, s));
                 s->i = 0;
                 s->msnapped = 0;
-                s->hdr.stage = UR_MEDIA;
+                STEP_GOTO(s->hdr.stage, UR_MEDIA, &s->cphase, &s->fphase, NULL);
                 break;
             }
             docctx = doc_realm(ctx, s);
@@ -578,7 +584,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                     steps_11_to_13(doc_realm(ctx, s));
                 s->i = 0;
                 s->snapped = 0;
-                s->hdr.stage = UR_FRAMES;
+                STEP_GOTO(s->hdr.stage, UR_FRAMES, &s->cphase, &s->fphase, NULL);
                 break;
             }
             docctx = doc_realm(ctx, s);
@@ -621,7 +627,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                    the moment step 17 became an algorithm that runs the page's `blur` listeners: the interval
                    step 20 reports would then have excluded the style and layout it is named after and included
                    none of it. */
-                s->layout_start = timer_now();
+                s->layout_start = event_loop_now(ctx);
                 DCHECK(s->layout_start >= s->frame_ts,
                        "update the rendering step 15 recorded a style-and-layout start time BEFORE the "
                        "frameTimestamp its task was queued with — both come from the ONE virtual clock, and "
@@ -629,7 +635,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                 for (s->i = 0; s->i < s->ndocs; s->i++)
                     step_16(doc_realm(ctx, s));
                 s->i = 0;
-                s->hdr.stage = UR_FOCUS;
+                STEP_GOTO(s->hdr.stage, UR_FOCUS, &s->cphase, &s->fphase, NULL);
                 break;
             }
             docctx = doc_realm(ctx, s);
@@ -688,7 +694,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                 for (s->i = 0; s->i < s->ndocs; s->i++)
                     step_18(doc_realm(ctx, s));
                 s->i = 0;
-                s->hdr.stage = UR_PAINT;
+                STEP_GOTO(s->hdr.stage, UR_PAINT, &s->cphase, &s->fphase, NULL);
                 break;
             }
             docctx = doc_realm(ctx, s);
@@ -756,19 +762,21 @@ int rendering_run_opportunity(JSContext *ctx)
         return 0;
     if (!rendering_any_opportunity(ctx))
         return 0;                                    /* step 1: nothing might have one */
-    now = timer_now();
-    next = g_last_render_opportunity + RENDERING_FRAME_MS;
+    now = event_loop_now(ctx);
+    next = event_loop_last_render(ctx) + RENDERING_FRAME_MS;
     if (next < now)
         next = now;                                  /* the clock moved past this frame while work was due */
     /* ONE CLOCK, TWO SOURCES. §8.1.7.3 step 2.1 gives the scheduler exactly one freedom — which task queue to
        take a task from — and it is not a freedom to run a task before the moment it becomes due. A timer that
        expires before the next frame is ahead of it on the same clock, so this yields and the timer source
        runs; the frame is still there to be taken on the next pass, at its own moment. */
-    due = timer_next_due();
+    due = timer_next_due(ctx);
     if (due >= 0 && due < next)
         return 0;
-    timer_advance_to(next);
-    g_last_render_opportunity = next;                /* step 2 */
+    /* The timer source is the other thing due on this clock, and it is not due before `next` — which is the
+       comparison just made, handed to the move rather than made twice. */
+    event_loop_advance_to(ctx, next, due);
+    event_loop_set_last_render(ctx, next);           /* step 2 */
 
     /* STEP 3: "queue a global task on the rendering task source given that navigable's active window to update
        the rendering". The task is given the TOP-LEVEL TRAVERSABLE's window, which is whose driver runs the
@@ -796,7 +804,6 @@ void rendering_init(JSContext *ctx)
     g_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_update_rendering_def);
     CHECK(g_stepid >= 0, "no step id for update-the-rendering");
     g_driver_slot = realm_value_declare(ctx, "§8.1.7.3 updateTheRendering");
-    g_last_render_opportunity = 0;
     g_ready = 1;
     realm_declare_intrinsic(rendering_install_driver);
     /* THE DRIVER MUST ASK, so it is told where to — registered exactly as the timer step is, and for the same
@@ -823,6 +830,5 @@ void rendering_free(JSContext *ctx)
     (void)ctx;
     if (!g_ready) return;
     g_ready = 0;
-    g_driver_slot = -1;
-    g_last_render_opportunity = 0;   /* the drivers are the REALMS' — each goes with its context */
+    g_driver_slot = -1;   /* the drivers are the REALMS' — each goes with its context */
 }

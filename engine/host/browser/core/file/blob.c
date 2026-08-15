@@ -218,22 +218,90 @@ static JSValue blob_alloc(JSContext *ctx, JSValueConst proto, const char *bytes,
  * THE URL IS DERIVED, NOT DRAWN AT RANDOM. §8.1 says the path is a UUID, and a browser generates one; this
  * engine is deterministic on purpose — a time-travel resume must produce the byte-identical URL, or a flow that
  * stored one and a flow that resumes to read it disagree about which entry they mean. A counter is unique for
- * exactly as long as a random UUID is, and it is unique by construction rather than with high probability. */
-typedef struct { char *url; JSValue blob; } BlobUrlEntry;
-static BlobUrlEntry *g_blob_urls;
-static int g_blob_url_n, g_blob_url_cap;
-static unsigned g_blob_url_counter;
+ * exactly as long as a random UUID is, and it is unique by construction rather than with high probability.
+ *
+ * AND THE STORE THAT SENTENCE IS ABOUT IS THE PART THAT COULD NOT RESUME. It was a `realloc`'d array of
+ * `{ char *url; JSValue blob; }` with the counter beside it as a `static unsigned`, which is the shape
+ * CLAUDE.md names in as many words: platform data a flow queues is a JS value, never malloc'd C. Every
+ * consequence was live. `URL.createObjectURL` in one arm registered for EVERY arm and `revokeObjectURL` in one
+ * revoked for every arm, so an arm that revoked eagerly broke a sibling's `<img src>`. The counter was one for
+ * the agent, so two arms of a fork minting a URL at the SAME source line got DIFFERENT URLs — which is exactly
+ * what the determinism above exists to prevent, stated and then defeated one line below. And the entries were
+ * C memory reachable only from a static: parked to the cold tier they went nowhere, and freed with a delta
+ * they would have been a leak the runtime's own GC walk cannot see.
+ *
+ * SO IT IS A HEAP OBJECT: an Array of `[url, blob, mint]` and the counter beside it, built at agent init so it
+ * is BASELINE, and every mutation is a property write the per-flow COW delta captures. A revoked entry leaves
+ * a hole the next mint reuses, so a page that creates and revokes in a loop does not grow the Array. */
+static JSValue g_blob_url_store = JS_UNDEFINED;
+static JSAtom  g_atom_urls = JS_ATOM_NULL, g_atom_url_next = JS_ATOM_NULL;
 
-static void blob_url_store_free(JSContext *ctx)
+enum { BU_URL = 0, BU_BLOB, BU_MINT };
+
+/* The store's entry list, OWNED. */
+static JSValue blob_url_list(JSContext *ctx)
 {
-    int i;
-    for (i = 0; i < g_blob_url_n; i++) {
-        free(g_blob_urls[i].url);
-        JS_FreeValue(ctx, g_blob_urls[i].blob);
+    JSValue q;
+
+    DCHECK(JS_IsObject(g_blob_url_store),
+           "File API §8's blob URL store was reached in an agent that never ran blob_init — the store has to "
+           "be built there, which is pre-boot, or the first flow to mint a URL creates it inside its own delta "
+           "and every sibling then looks in an object that is not there");
+    q = JS_GetProperty(ctx, g_blob_url_store, g_atom_urls);
+    DCHECK(JS_IsArray(q), "File API §8's blob URL store lost its entry list");
+    return q;
+}
+
+static uint32_t blob_url_count(JSContext *ctx, JSValueConst q)
+{
+    JSValue len = JS_GetPropertyStr(ctx, q, "length");
+    uint32_t n = 0;
+
+    JS_ToUint32(ctx, &n, len);
+    JS_FreeValue(ctx, len);
+    return n;
+}
+
+/* WHICH ENTRY THIS URL NAMES, or -1. `q` is the list; the caller holds it.
+ *
+ * AND THIS IS WHERE THE ISOLATION IS ASSERTED, because it is the one place every entry a flow can see is
+ * looked at. The list and the mint counter ride the SAME per-flow COW delta, so an entry a flow can see must
+ * carry a mint number its OWN counter has already handed out; an entry from a sibling's timeline carries one
+ * this flow never allocated. That is the exact statement of "a URL minted by one flow is not visible to
+ * another", and it fires if either half of the pair is ever answered from outside the delta. */
+static int blob_url_find(JSContext *ctx, JSValueConst q, const char *url, size_t len)
+{
+    uint32_t i, n = blob_url_count(ctx, q);
+    double next = 0;
+    JSValue nv = JS_GetProperty(ctx, g_blob_url_store, g_atom_url_next);
+    int hit = -1;
+
+    JS_ToFloat64(ctx, &next, nv);
+    JS_FreeValue(ctx, nv);
+    for (i = 0; i < n && hit < 0; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, q, i), u, m;
+        const char *s;
+        size_t slen = 0;
+        double mint = 0;
+
+        if (!JS_IsObject(e)) { JS_FreeValue(ctx, e); continue; }   /* a revoked entry's slot */
+        m = JS_GetPropertyUint32(ctx, e, BU_MINT);
+        JS_ToFloat64(ctx, &mint, m);
+        JS_FreeValue(ctx, m);
+        DCHECK(mint < next,
+               "a flow reached a blob URL entry minted with a counter value this flow never allocated — "
+               "File API §8's store and its mint counter ride the SAME per-flow COW delta, so an entry another "
+               "flow's timeline created cannot be visible here. One of the two is being answered from outside "
+               "the delta, and the effect is one arm's createObjectURL registering for every arm");
+        u = JS_GetPropertyUint32(ctx, e, BU_URL);
+        s = JS_ToCStringLen(ctx, &slen, u);
+        if (s && slen == len && !memcmp(s, url, len))
+            hit = (int)i;
+        JS_FreeCString(ctx, s);
+        JS_FreeValue(ctx, u);
+        JS_FreeValue(ctx, e);
     }
-    free(g_blob_urls);
-    g_blob_urls = NULL;
-    g_blob_url_n = g_blob_url_cap = 0;
+    return hit;
 }
 
 char *blob_url_create(JSContext *ctx, JSValueConst obj)
@@ -242,6 +310,8 @@ char *blob_url_create(JSContext *ctx, JSValueConst obj)
     const char *base_str = document_base_url(ctx);
     char *origin = NULL, *url;
     size_t n;
+    uint32_t mint = 0, slot, have;
+    JSValue q, entry, nv;
 
     if (!blob_is(obj)) {
         JS_ThrowTypeError(ctx, "createObjectURL requires a Blob");
@@ -256,50 +326,63 @@ char *blob_url_create(JSContext *ctx, JSValueConst obj)
             origin = url_serialize_origin(&base);
         url_record_free(&base);
     }
+    q = blob_url_list(ctx);
+    nv = JS_GetProperty(ctx, g_blob_url_store, g_atom_url_next);
+    JS_ToUint32(ctx, &mint, nv);
+    JS_FreeValue(ctx, nv);
+    JS_SetProperty(ctx, g_blob_url_store, g_atom_url_next, JS_NewUint32(ctx, mint + 1));
+
     /* `blob:` + origin + `/` + a 36-character UUID + the NUL. It was 32 — the length of a UUID's HEX DIGITS
        rather than of a UUID, which truncated the last group and made the path fail the shape the spec gives
        it. */
     n = strlen("blob:") + strlen(origin ? origin : "null") + 1 + 36 + 1;
     url = malloc(n);
     CHECK(url, "blob: OOM minting an object URL");
-    snprintf(url, n, "blob:%s/%08x-0000-4000-8000-%012x", origin ? origin : "null",
-             g_blob_url_counter, g_blob_url_counter);
-    g_blob_url_counter++;
+    snprintf(url, n, "blob:%s/%08x-0000-4000-8000-%012x", origin ? origin : "null", mint, mint);
     free(origin);
 
-    if (g_blob_url_n == g_blob_url_cap) {
-        BlobUrlEntry *g = realloc(g_blob_urls,
-                                  sizeof *g * (size_t)(g_blob_url_cap = g_blob_url_cap ? g_blob_url_cap * 2 : 8));
-        CHECK(g, "blob: OOM growing the object-URL store");
-        g_blob_urls = g;
+    entry = JS_NewArray(ctx);
+    CHECK(!JS_IsException(entry), "blob: OOM recording an object URL");
+    JS_SetPropertyUint32(ctx, entry, BU_URL, JS_NewString(ctx, url));
+    JS_SetPropertyUint32(ctx, entry, BU_BLOB, JS_DupValue(ctx, obj));
+    JS_SetPropertyUint32(ctx, entry, BU_MINT, JS_NewUint32(ctx, mint));
+    have = blob_url_count(ctx, q);
+    for (slot = 0; slot < have; slot++) {   /* reuse a revoked entry's slot before growing the list */
+        JSValue e = JS_GetPropertyUint32(ctx, q, slot);
+        int free_slot = !JS_IsObject(e);
+        JS_FreeValue(ctx, e);
+        if (free_slot) break;
     }
-    g_blob_urls[g_blob_url_n].url = strdup(url);
-    CHECK(g_blob_urls[g_blob_url_n].url, "blob: OOM recording an object URL");
-    g_blob_urls[g_blob_url_n].blob = JS_DupValue(ctx, obj);
-    g_blob_url_n++;
+    JS_SetPropertyUint32(ctx, q, slot, entry);
+    JS_FreeValue(ctx, q);
     return url;
 }
 
 void blob_url_revoke(JSContext *ctx, const char *url, size_t len)
 {
-    int i;
+    JSValue q = blob_url_list(ctx);
     /* §8.2: a URL that names no entry is a NO-OP, not an error — a page revoking twice is ordinary cleanup. */
-    for (i = 0; i < g_blob_url_n; i++) {
-        if (strlen(g_blob_urls[i].url) != len || memcmp(g_blob_urls[i].url, url, len)) continue;
-        free(g_blob_urls[i].url);
-        JS_FreeValue(ctx, g_blob_urls[i].blob);
-        g_blob_urls[i] = g_blob_urls[--g_blob_url_n];
-        return;
-    }
+    int i = blob_url_find(ctx, q, url, len);
+
+    if (i >= 0)
+        JS_SetPropertyUint32(ctx, q, (uint32_t)i, JS_UNDEFINED);
+    JS_FreeValue(ctx, q);
 }
 
-JSValueConst blob_url_lookup(const char *url, size_t len)
+/* OWNED, and it has to be: the entry lives in a heap Array now, so a borrowed reference would be one the next
+   revoke or the next context switch can free under the caller. */
+JSValue blob_url_lookup(JSContext *ctx, const char *url, size_t len)
 {
-    int i;
-    for (i = 0; i < g_blob_url_n; i++)
-        if (strlen(g_blob_urls[i].url) == len && !memcmp(g_blob_urls[i].url, url, len))
-            return g_blob_urls[i].blob;
-    return JS_UNDEFINED;
+    JSValue q = blob_url_list(ctx), blob = JS_UNDEFINED;
+    int i = blob_url_find(ctx, q, url, len);
+
+    if (i >= 0) {
+        JSValue e = JS_GetPropertyUint32(ctx, q, (uint32_t)i);
+        blob = JS_GetPropertyUint32(ctx, e, BU_BLOB);
+        JS_FreeValue(ctx, e);
+    }
+    JS_FreeValue(ctx, q);
+    return blob;
 }
 
 /* ---- §3.3's readers ---------------------------------------------------------------------------------------
@@ -660,6 +743,22 @@ void blob_init(JSContext *ctx)
     if (g_blob_rt == rt)
         return;
     g_blob_rt = rt;
+    /* §8's STORE, BUILT AT AGENT INIT, which is pre-boot and therefore BASELINE — the same rule §8.6's map of
+       active timers and §8.9's map of animation frame callbacks are built under. Built lazily on the first
+       `createObjectURL` instead, it would belong to whichever FLOW minted the first URL and every sibling
+       would be registering into an object created inside another flow's delta. */
+    g_atom_urls = JS_NewAtom(ctx, "blobUrlStore");
+    g_atom_url_next = JS_NewAtom(ctx, "blobUrlCounter");
+    CHECK(g_atom_urls != JS_ATOM_NULL && g_atom_url_next != JS_ATOM_NULL,
+          "blob: the URL store's own keys could not be interned");
+    g_blob_url_store = JS_NewObjectProto(ctx, JS_NULL);
+    CHECK(!JS_IsException(g_blob_url_store), "blob: File API §8's URL store could not be allocated");
+    {
+        JSValue q = JS_NewArray(ctx);
+        CHECK(!JS_IsException(q), "blob: File API §8's URL store could not be allocated");
+        JS_SetProperty(ctx, g_blob_url_store, g_atom_urls, q);
+    }
+    JS_SetProperty(ctx, g_blob_url_store, g_atom_url_next, JS_NewUint32(ctx, 0));
     JS_NewClassID(rt, &g_blob_class);
     JS_NewClass(rt, g_blob_class, &def);
     {
@@ -749,7 +848,13 @@ void blob_free(JSContext *ctx)
 {
     if (!g_blob_rt)
         return;
-    blob_url_store_free(ctx);
+    /* The ENTRIES are the flows' — each arm's are in the delta that captured them, and the collector owns the
+       bytes. What the agent owns is the record itself and the two keys it is read by. */
+    JS_FreeValue(ctx, g_blob_url_store);
+    g_blob_url_store = JS_UNDEFINED;
+    JS_FreeAtom(ctx, g_atom_urls);
+    JS_FreeAtom(ctx, g_atom_url_next);
+    g_atom_urls = g_atom_url_next = JS_ATOM_NULL;
     file_list_free(ctx);
     /* the prototypes are the REALMS' — released with their contexts */
     g_blob_rt = NULL;

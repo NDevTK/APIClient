@@ -72,6 +72,7 @@
 #include "browser/core/rendering/animation_frame.h"
 #include "browser/core/rendering/page_reveal.h"
 #include "browser/core/rendering/rendering.h"
+#include "browser/core/timing/event_loop.h"
 #include "browser/core/timing/timer.h"
 #include "browser/core/loader/document_scripts.h"
 #include "browser/core/loader/module_loader.h"
@@ -168,6 +169,10 @@ static void engine_agent_init(JSContext *ctx, const char *origin, const char *to
     history_init(ctx);
     screen_init(ctx);   /* the responsive gate: screen.width decides which router a bundle uses */
     navigable_init(ctx);
+    /* HTML §8.1.7's EVENT LOOP, before the task sources that are ordered by it: the virtual clock, §8.1.7.1's
+       last render opportunity time and the insertion order a source breaks its ties by are the LOOP's, and
+       they are per-flow heap state, so the record has to exist before any flow can write one. */
+    event_loop_init(ctx);
     timer_init(ctx);
     window_proxy_init(ctx, origin);
     remote_object_init(ctx);   /* §7.2.5.1's object half: a peer's object crosses as a NAME */
@@ -490,6 +495,8 @@ QJS_EXPORT void qjs_teardown(void)
     viewport_free();
     visual_viewport_free();
     animation_frame_free(g_ctx);
+    timer_free(g_ctx);        /* §8.6's declaration; each global's map went with its realm */
+    event_loop_free(g_ctx);   /* §8.1.7's own record — the virtual clock and the moments beside it */
     unhandled_rejection_free(g_ctx);
     abort_free(g_ctx);
     observable_free(g_ctx);
