@@ -967,38 +967,20 @@ static void js_submit_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static JSValue js_submit_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSSubmitState *s = st;
-    int k;
 
     (void)take_result;
-    /* Step 5.7 clears the flag on every path THROUGH the algorithm; an ABANDONED run — a flow dropped inside
-       the `submit` dispatch, or one whose handler threw — has to clear it too, or the form can never fire a
-       submission event again. Same obligation §4.10.22.4's constructing-entry-list flag has, and the same
-       answer: the teardown is where a run that will not reach its own step 5.7 still ends. */
+    /* THE TWO FLAGS, WHICH ARE ALL THIS OWNS BESIDE ITS DECLARATION. Step 5.7 clears the firing flag on every
+       path THROUGH the algorithm; an ABANDONED run — a flow dropped inside the `submit` dispatch, or one whose
+       handler threw — has to clear it too, or the form can never fire a submission event again. §4.10.22.4's
+       constructing-entry-list flag is the same obligation, which is why the entry-list record is UNLOCKED here
+       and its references left to js_submit_visit. Everything else the state holds — the form, the event, the
+       submitter, both control lists, the dialog pair, the fire request, and the validation and dialog-close
+       runs — is named by that declaration and released through it. */
     if (s->firing_set) {
         form_firing_set(ctx, s->form, false);
         s->firing_set = 0;
     }
-    JS_FreeValue(ctx, s->form);
-    s->form = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->ev);
-    s->ev = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->submitter);
-    s->submitter = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->controls);
-    s->controls = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->entry_list);
-    s->entry_list = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->dialog_subject);
-    s->dialog_subject = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->dialog_result);
-    s->dialog_result = JS_UNDEFINED;
-    STEP_CB_FOREACH(s->cb, k) {
-        JS_FreeValue(ctx, s->cb[k]);
-        s->cb[k] = JS_UNDEFINED;
-    }
-    form_entry_list_release(ctx, &s->entries);
-    constraint_validation_release(ctx, &s->validation);
-    html_dialog_close_release(ctx, &s->closing);
+    form_entry_list_unlock(ctx, &s->entries);
     return JS_UNDEFINED;   /* both members return undefined whatever the handlers did */
 }
 

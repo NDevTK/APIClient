@@ -661,14 +661,6 @@ void headers_fill_visit(JSContext *ctx, HeadersFill *f, JSStepVisit *v)
     iter_cursor_visit(ctx, &f->inner, v);
 }
 
-/* The declaration above IS the list; this discharges it and states nothing of its own. Kept as a function for
-   the callers that release this record mid-algorithm rather than at a teardown — a machine whose own `visit`
-   names it must NOT call this, because its teardown already discharges the same declaration. */
-void headers_fill_release(JSContext *ctx, HeadersFill *f)
-{
-    headers_fill_visit(ctx, f, JS_StepFreeVisitor());
-}
-
 /* §3.2.21 step 5.2's `typedKey = key converted to K`, and K is ByteString — run BEFORE the value's [[Get]] is
    issued, which is what makes a record of {a:"b", "\uFFFF":"d"} five operations and not six. A SYMBOL cannot
    be a ByteString, so an ENUMERABLE symbol key is a TypeError; skipping it was the older, wrong answer. */

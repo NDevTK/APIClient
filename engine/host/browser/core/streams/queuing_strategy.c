@@ -99,9 +99,8 @@ static JSValue js_byte_size_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSByteSizeState *s = st;
     JSValue r = take_result ? s->value : JS_UNDEFINED;
+    (void)ctx;
     if (take_result) s->value = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->value);
-    s->value = JS_UNDEFINED;
     return r;
 }
 

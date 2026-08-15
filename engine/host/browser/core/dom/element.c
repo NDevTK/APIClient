@@ -214,14 +214,6 @@ static void set_attr_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->buf(ctx, (void **)&s->name, s->name_len ? s->name_len + 1 : 0);
 }
 
-static void set_attr_release(JSContext *ctx, void *st)
-{
-    SetAttrState *s = st;
-    (void)ctx;   /* `verified` is a reference set_attr_visit names; the declaration is what releases it */
-    free(s->name);
-    s->name = NULL;
-}
-
 static int js_el_set_attribute(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                                JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -248,7 +240,7 @@ static int js_el_set_attribute(JSContext *ctx, JSStepHdr *hdr, void *st, int arg
             return JS_STEP_ABRUPT;
         }
         s->name_len = strlen(name);
-        s->name = malloc(s->name_len + 1);
+        s->name = js_malloc(ctx, s->name_len + 1);
         CHECK(s->name != NULL, "setAttribute could not copy its own attribute name");
         memcpy(s->name, name, s->name_len + 1);
         JS_FreeCString(ctx, name);
@@ -283,7 +275,9 @@ static int js_el_set_attribute(JSContext *ctx, JSStepHdr *hdr, void *st, int arg
 }
 
 static const IdlStepDecl EL_SET_ATTR_STEP = {
-    js_el_set_attribute, sizeof(SetAttrState), set_attr_visit, set_attr_release,
+    /* No release: `verified` and the name buffer are BOTH set_attr_visit's, and the teardown discharges that
+       one declaration. */
+    js_el_set_attribute, sizeof(SetAttrState), set_attr_visit, NULL,
     "DOM §4.9 Element.setAttribute", EL_SET_ATTR_STEPS
 };
 
@@ -333,14 +327,6 @@ static void set_attr_ns_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->buf(ctx, (void **)&s->ns, s->ns_len ? s->ns_len + 1 : 0);
 }
 
-static void set_attr_ns_release(JSContext *ctx, void *st)
-{
-    SetAttrNsState *s = st;
-    (void)ctx;   /* `verified` is a reference set_attr_ns_visit names; the declaration releases it */
-    free(s->qname); s->qname = NULL;
-    free(s->ns); s->ns = NULL;
-}
-
 static int js_el_set_attribute_ns(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                                   JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -367,14 +353,14 @@ static int js_el_set_attribute_ns(JSContext *ctx, JSStepHdr *hdr, void *st, int 
         ok = dom_validate_and_extract(ctx, ns_arg, ns_arg_len, qn, qn_len, DOM_NAME_ATTRIBUTE, &ex);   /* step 1 */
         if (ok) {
             s->qname_len = qn_len;
-            s->qname = malloc(qn_len + 1);
+            s->qname = js_malloc(ctx, qn_len + 1);
             CHECK(s->qname != NULL, "setAttributeNS could not copy its own qualified name");
             memcpy(s->qname, qn, qn_len + 1);
             s->prefix_len = ex.prefix ? ex.prefix_len : 0;
             if (s->prefix_len) s->qname[s->prefix_len] = 0;   /* the colon IS the separator, now a terminator */
             if (ex.ns) {
                 s->ns_len = ex.ns_len;
-                s->ns = malloc(ex.ns_len + 1);
+                s->ns = js_malloc(ctx, ex.ns_len + 1);
                 CHECK(s->ns != NULL, "setAttributeNS could not copy its own namespace");
                 memcpy(s->ns, ex.ns, ex.ns_len); s->ns[ex.ns_len] = 0;
             }
@@ -405,7 +391,8 @@ static int js_el_set_attribute_ns(JSContext *ctx, JSStepHdr *hdr, void *st, int 
 }
 
 static const IdlStepDecl EL_SET_ATTR_NS_STEP = {
-    js_el_set_attribute_ns, sizeof(SetAttrNsState), set_attr_ns_visit, set_attr_ns_release,
+    /* No release: `verified` and both name buffers are set_attr_ns_visit's, discharged with the rest. */
+    js_el_set_attribute_ns, sizeof(SetAttrNsState), set_attr_ns_visit, NULL,
     "DOM §4.9 Element.setAttributeNS", EL_SET_ATTR_NS_STEPS
 };
 
@@ -619,9 +606,11 @@ static const char *frag_unforkable(const void *st)
          : NULL;
 }
 
-/* WHAT NO DECLARATION NAMES: a lexbor element, a lexbor parser, THE PARSE'S OWN TREE, and two plain buffers.
-   `compliant`, the sanitizer's `config` and the source string are references frag_visit names, and the
-   teardown discharges that one declaration. */
+/* WHAT NO DECLARATION NAMES: a lexbor element, a lexbor parser, and THE PARSE'S OWN TREE.
+   `compliant`, the sanitizer's `config`, the markup copy and the sanitizer walk's level stack are all named by
+   frag_visit — the two buffers as `buf`, which is why they are allocated with the RUNTIME's allocator: the
+   fork's copy of a `buf` is js_malloc'd, so a sibling arm releasing a plain malloc'd one would hand the wrong
+   allocator a runtime block, and the accounting the runtime keeps of both would be wrong in each direction. */
 static void frag_release(JSContext *ctx, void *st)
 {
     FragState *s = st;
@@ -657,9 +646,6 @@ static void frag_release(JSContext *ctx, void *st)
         dom_cow_destroy_private(s->frag, /*with_children*/ true);
         s->frag = NULL;
     }
-    free(s->html);
-    s->html = NULL;
-    sanitizer_walk_free_stack(&s->san);
 }
 
 /* Set the machine up for a parse of `html` into `where` around `anchor`, parsed in `context`'s tree-building
@@ -667,7 +653,6 @@ static void frag_release(JSContext *ctx, void *st)
 static void frag_begin(JSContext *ctx, FragState *s, lxb_dom_element_t *context, lxb_dom_node_t *anchor,
                        int where, const char *html, bool clear_first, bool allow_declarative)
 {
-    (void)ctx;
     /* The clear is `replace all within TARGET`, and the target is the anchor — which for a <template> is its
        content fragment rather than the element. Only the children-replacing member asks for it, which is what
        lets the placement's reference child be computed before the clear rather than after it. */
@@ -680,7 +665,7 @@ static void frag_begin(JSContext *ctx, FragState *s, lxb_dom_element_t *context,
     s->clear_first = clear_first;
     s->allow_declarative = allow_declarative;
     s->len = strlen(html);
-    s->html = malloc(s->len + 1);
+    s->html = js_malloc(ctx, s->len + 1);
     CHECK(s->html != NULL, "the fragment parse could not copy its markup");
     memcpy(s->html, html, s->len + 1);
     s->off = 0;

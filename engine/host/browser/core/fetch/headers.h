@@ -56,7 +56,7 @@ char *header_list_get(const HeaderList *l, const char *name);
    ToString per key — every one of them the page's code on a Proxy or an accessor, so every one of them a
    request. It lives outside the Headers constructor because `fetch(u, {headers: ...})` performs the SAME
    conversion and the spec states it once; a machine performing it embeds this cursor, declares it in its own
-   `visit` (headers_fill_visit) and releases it in its teardown (headers_fill_release).
+   `visit` (headers_fill_visit); the driver's teardown discharges that one declaration.
      Returns >0 (the caller returns it), 0 when the list is filled, or -1 with a throw live. */
 
 typedef struct {
@@ -69,7 +69,6 @@ typedef struct {
 } HeadersFill;
 void headers_fill_init(HeadersFill *f);
 void headers_fill_visit(JSContext *ctx, HeadersFill *f, JSStepVisit *v);
-void headers_fill_release(JSContext *ctx, HeadersFill *f);
 int  headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst init, HeaderList *out,
                       HeadersGuard guard, JSValue in, JSValue **out_cb, int *out_argc);
 

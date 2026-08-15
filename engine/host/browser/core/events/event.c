@@ -39,6 +39,7 @@
 #include "core/events/message_event.h"
 #include "core/events/error_event.h"
 #include "core/events/page_transition_event.h"
+#include "core/events/navigation_current_entry_change_event.h"
 #include "core/events/pop_state_event.h"
 #include "core/events/hash_change_event.h"
 #include "core/events/before_unload_event.h"
@@ -814,6 +815,10 @@ static void event_declare_subclasses(JSContext *ctx)
        prototypes chain to this realm's Event.prototype, and realm.h runs the intrinsics in declaration order. */
     pop_state_event_init(ctx);
     hash_change_event_init(ctx);
+    /* HTML §7.2.7.1 — the event a NAVIGATION API entry-list change fires. It is declared here for the same
+       reason: its prototype chains to this realm's Event.prototype. Its `from` member brands against
+       core/frame/navigation_history_entry.c's class, which core/platform.c declares before this row. */
+    navigation_current_entry_change_event_init(ctx);
     before_unload_event_init(ctx);
     /* THE ORDER IS THE CHAIN. Each of these declares a per-realm install and realm.h runs them in declaration
        order, so an interface must declare AFTER the one it extends or its prototype chains to a slot no realm
@@ -832,6 +837,7 @@ static void event_free_subclasses(JSContext *ctx)
     page_transition_event_free(ctx);
     pop_state_event_free(ctx);
     hash_change_event_free(ctx);
+    navigation_current_entry_change_event_free(ctx);
     before_unload_event_free(ctx);
     ui_event_free(ctx);
     mouse_event_free(ctx);

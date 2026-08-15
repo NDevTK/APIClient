@@ -304,10 +304,8 @@ static JSValue js_ts_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSTsState *s = st;
     JSValue r = take_result ? s->promise : JS_UNDEFINED;
+    (void)ctx;
     if (take_result) s->promise = JS_UNDEFINED;
-    /* The declaration IS the list — see JS_StepVisitFree. This machine holds no lexbor handle and no foreign
-       allocation, so there is nothing beside it to release and no hook that would exist only to be called. */
-    JS_StepVisitFree(ctx, js_ts_visit, st);
     return r;
 }
 

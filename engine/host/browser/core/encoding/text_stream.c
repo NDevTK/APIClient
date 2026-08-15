@@ -228,23 +228,8 @@ static void js_tx_visit(JSContext *ctx, void *st, JSStepVisit *v)
     for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
 }
 
-static void js_tx_release(JSContext *ctx, void *st)
-{
-    JSTxState *s = st;
-    int k;
-    JS_FreeValue(ctx, s->self);
-    JS_FreeValue(ctx, s->input);
-    JS_FreeValue(ctx, s->chunk);
-    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
-    s->self = s->input = s->chunk = JS_UNDEFINED;
-}
-
-static JSValue js_tx_fini(JSContext *ctx, void *st, bool take_result)
-{
-    (void)take_result;
-    js_tx_release(ctx, st);
-    return JS_UNDEFINED;   /* §9.3.1's wrapper discards a non-promise result; all four answer undefined */
-}
+/* DELETED: js_tx_release, a second copy of js_tx_visit's list. §9.3.1's wrapper discards a non-promise result
+   and all four algorithms answer undefined, so this machine has no completion to state at all. */
 
 /* §7.5's "decode and enqueue a chunk" and "flush and enqueue" — the same decoder, differing only in whether
    this is the end of the stream. Returns the produced string, or JS_EXCEPTION with the TypeError live. */
@@ -413,7 +398,7 @@ static int js_tx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
     return JS_STEP_DONE;
 }
 
-#define TX_DEF(i) { sizeof(JSTxState), js_tx_step, js_tx_fini, (i), .visit = js_tx_visit, \
+#define TX_DEF(i) { sizeof(JSTxState), js_tx_step, NULL, (i), .visit = js_tx_visit, \
                    .algorithm = "Encoding §7.5/§7.6 the text stream transform and flush algorithms", \
                    .steps = TX_STEPS }
 static const JSTrampStepDef js_tx_defs[ALG_N] = { TX_DEF(0), TX_DEF(1), TX_DEF(2), TX_DEF(3) };

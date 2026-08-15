@@ -241,30 +241,15 @@ static void js_pipe_visit(JSContext *ctx, void *st, JSStepVisit *v)
     for (k = 0; k < 2; k++) v->val(ctx, &s->funcs[k]);
 }
 
-static void js_pipe_release(JSContext *ctx, void *st)
-{
-    JSPipeState *s = st;
-    int k;
-    stream_work_release(ctx, &s->w);
-    JS_FreeValue(ctx, s->pipe);
-    JS_FreeValue(ctx, s->value);
-    for (k = 0; k < TR_N; k++) { JS_FreeValue(ctx, s->tr[k]); s->tr[k] = JS_UNDEFINED; }
-    JS_FreeValue(ctx, s->sig);
-    JS_FreeValue(ctx, s->act_fn);
-    JS_FreeValue(ctx, s->act_recv);
-    JS_FreeValue(ctx, s->promise);
-    for (k = 0; k < 2; k++) { JS_FreeValue(ctx, s->funcs[k]); s->funcs[k] = JS_UNDEFINED; }
-    s->pipe = s->value = s->sig = s->act_fn = s->act_recv = s->promise = JS_UNDEFINED;
-}
-
+/* DELETED: js_pipe_release, which restated js_pipe_visit field for field. */
 /* The member's ANSWER: pipeTo's promise, or pipeThrough's `readable`. A reaction has none — its answer is the
    settling it performed — so an undefined here is the right result for one. */
 static JSValue js_pipe_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSPipeState *s = st;
     JSValue r = take_result ? s->promise : JS_UNDEFINED;
+    (void)ctx;
     if (take_result) s->promise = JS_UNDEFINED;
-    js_pipe_release(ctx, st);
     return r;
 }
 

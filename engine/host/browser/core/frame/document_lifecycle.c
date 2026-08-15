@@ -403,18 +403,6 @@ static void js_descend_visit(JSContext *ctx, void *st, JSStepVisit *v)
     if (s->took) v->val(ctx, &s->kids);   /* before step 2 the slot holds no value to visit — see `took` */
 }
 
-static JSValue js_descend_fini(JSContext *ctx, void *st, bool take_result)
-{
-    DescendState *s = st;
-
-    (void)take_result;
-    if (s->took) {
-        JS_FreeValue(ctx, s->kids);
-        s->took = 0;
-    }
-    return JS_UNDEFINED;
-}
-
 /* ---- the three per-document bodies ---------------------------------------------------------------------------
  *
  * Each is the task §7.4.2.4 step 6 / §7.5.9 step 5 / §7.5.10 step 6 queues for ONE document, and each ends in
@@ -501,21 +489,6 @@ static void js_beforeunload_visit(JSContext *ctx, void *st, JSStepVisit *v)
 
     v->val(ctx, &s->ev);
     STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
-}
-
-static JSValue js_beforeunload_fini(JSContext *ctx, void *st, bool take_result)
-{
-    BeforeUnloadState *s = st;
-    int k;
-
-    (void)take_result;
-    JS_FreeValue(ctx, s->ev);
-    s->ev = JS_UNDEFINED;
-    STEP_CB_FOREACH(s->cb, k) {
-        JS_FreeValue(ctx, s->cb[k]);
-        s->cb[k] = JS_UNDEFINED;
-    }
-    return JS_UNDEFINED;
 }
 
 static int js_unload_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
@@ -615,21 +588,6 @@ static void js_unload_visit(JSContext *ctx, void *st, JSStepVisit *v)
     STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
 }
 
-static JSValue js_unload_fini(JSContext *ctx, void *st, bool take_result)
-{
-    UnloadState *s = st;
-    int k;
-
-    (void)take_result;
-    JS_FreeValue(ctx, s->ev);
-    s->ev = JS_UNDEFINED;
-    STEP_CB_FOREACH(s->cb, k) {
-        JS_FreeValue(ctx, s->cb[k]);
-        s->cb[k] = JS_UNDEFINED;
-    }
-    return JS_UNDEFINED;
-}
-
 #define SELF_DESTROY_STAGES(X) \
     X(SELF_DESTROY, "HTML §7.5.10 destroy a document and its descendants step 6 → destroy a Document, steps " \
                     "1-11, then report this destruction to the navigable that is waiting on it (step 5)")
@@ -658,12 +616,6 @@ static int js_self_destroy_step(JSContext *ctx, void *st, JSValue cb_result, JSV
 static void js_self_destroy_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     (void)ctx; (void)st; (void)v;   /* the navigable is the header's argument, and the flow owns those */
-}
-
-static JSValue js_self_destroy_fini(JSContext *ctx, void *st, bool take_result)
-{
-    (void)ctx; (void)st; (void)take_result;
-    return JS_UNDEFINED;
 }
 
 /* ---- §7.3's DEFINITELY CLOSE, the task §7.2.5.2 step 6 queues -------------------------------------------------
@@ -706,45 +658,39 @@ static void js_close_visit(JSContext *ctx, void *st, JSStepVisit *v)
     (void)ctx; (void)st; (void)v;
 }
 
-static JSValue js_close_fini(JSContext *ctx, void *st, bool take_result)
-{
-    (void)ctx; (void)st; (void)take_result;
-    return JS_UNDEFINED;
-}
-
 /* ---- the declarations ---------------------------------------------------------------------------------------
  *
  * THREE DEFINITIONS OVER ONE FAN-OUT: the `arg` is the operation, and the labels are the section each one is
  * performing — so a flow parked in the middle of a subtree walk says which STANDARD's step it is parked at,
  * which one shared definition could not. */
-static const JSTrampStepDef js_bu_descend_def = { sizeof(DescendState), js_descend_step, js_descend_fini,
+static const JSTrampStepDef js_bu_descend_def = { sizeof(DescendState), js_descend_step, NULL,
                                                   LC_BEFOREUNLOAD, .visit = js_descend_visit,
                                                   .algorithm = "HTML §7.4.2.4 check if unloading is canceled",
                                                   .steps = BU_DESCEND_STEPS };
-static const JSTrampStepDef js_unload_descend_def = { sizeof(DescendState), js_descend_step, js_descend_fini,
+static const JSTrampStepDef js_unload_descend_def = { sizeof(DescendState), js_descend_step, NULL,
                                                       LC_UNLOAD, .visit = js_descend_visit,
                                                       .algorithm = "HTML §7.5.9 unload a document and its "
                                                                    "descendants, steps 2-5",
                                                       .steps = UNLOAD_DESCEND_STEPS };
-static const JSTrampStepDef js_destroy_descend_def = { sizeof(DescendState), js_descend_step, js_descend_fini,
+static const JSTrampStepDef js_destroy_descend_def = { sizeof(DescendState), js_descend_step, NULL,
                                                        LC_DESTROY, .visit = js_descend_visit,
                                                        .algorithm = "HTML §7.5.10 destroy a document and its "
                                                                     "descendants, steps 2-5",
                                                        .steps = DESTROY_DESCEND_STEPS };
 static const JSTrampStepDef js_beforeunload_def = { sizeof(BeforeUnloadState), js_beforeunload_step,
-                                                    js_beforeunload_fini, 0, .visit = js_beforeunload_visit,
+                                                    NULL, 0, .visit = js_beforeunload_visit,
                                                     .algorithm = "HTML §7.4.2.4 the steps to fire beforeunload",
                                                     .steps = BEFOREUNLOAD_STEPS };
-static const JSTrampStepDef js_unload_def = { sizeof(UnloadState), js_unload_step, js_unload_fini, 0,
+static const JSTrampStepDef js_unload_def = { sizeof(UnloadState), js_unload_step, NULL, 0,
                                               .visit = js_unload_visit,
                                               .algorithm = "HTML §7.5.9 unload a document",
                                               .steps = UNLOAD_STEPS };
 static const JSTrampStepDef js_self_destroy_def = { sizeof(SelfDestroyState), js_self_destroy_step,
-                                                    js_self_destroy_fini, 0, .visit = js_self_destroy_visit,
+                                                    NULL, 0, .visit = js_self_destroy_visit,
                                                     .algorithm = "HTML §7.5.10 destroy a document and its "
                                                                  "descendants, step 6",
                                                     .steps = SELF_DESTROY_STEPS };
-static const JSTrampStepDef js_close_def = { sizeof(CloseState), js_close_step, js_close_fini, 0,
+static const JSTrampStepDef js_close_def = { sizeof(CloseState), js_close_step, NULL, 0,
                                              .visit = js_close_visit,
                                              .algorithm = "HTML §7.3 definitely close a top-level traversable",
                                              .steps = CLOSE_STEPS };

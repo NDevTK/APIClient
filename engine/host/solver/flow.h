@@ -146,6 +146,18 @@ typedef struct Flow {
        Both owned; NULL on a flow with nothing to deliver, and NULL again the moment the delivery is made. */
     char *deliver;
     char *deliver_origin;
+    /* A CROSS-AGENT OPERATION THIS INSTANCE WAS ASKED TO PERFORM — the record the asking instance wrote
+       (core/frame/remote_op.h) and the trusted zone's rendezvous TOKEN for the flow that is waiting on it.
+       IT IS THE SAME SHAPE AS THE DELIVERY ABOVE AND FOR THE SAME REASON, with one thing added: a delivery is
+       one-way and this one owes an ANSWER. A document's state IS its flows, so `otherW.length` has N answers
+       for N timelines — the record is attached to every live flow exactly as a delivery is, and each of them
+       answers under its own delta. A channel that carried one answer would silently pick a timeline.
+       `perform` is consumed when the flow QUEUES the operation's program; `answer_token` outlives it, because
+       the answer is the program's COMPLETION and that does not exist until the program ends. A fork inside that
+       program is a peer timeline that also answers, so the sibling inherits the token rather than dropping it.
+       Both owned; NULL on a flow with no operation outstanding. */
+    char *perform;
+    char *answer_token;
 } Flow;
 
 /* `doc_name` is THIS INSTANCE'S DOCUMENT identity, and it is a parameter rather than a separate init call so a

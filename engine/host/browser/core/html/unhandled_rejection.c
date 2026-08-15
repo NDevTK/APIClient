@@ -236,20 +236,6 @@ static void js_reject_notify_visit(JSContext *ctx, void *st, JSStepVisit *v)
         v->val(ctx, &s->cb[k]);
 }
 
-static JSValue js_reject_notify_fini(JSContext *ctx, void *st, bool take_result)
-{
-    JSRejectNotify *s = st;
-    int k;
-    (void)take_result;
-    JS_FreeValue(ctx, s->ev);
-    s->ev = JS_UNDEFINED;
-    STEP_CB_FOREACH(s->cb, k) {
-        JS_FreeValue(ctx, s->cb[k]);
-        s->cb[k] = JS_UNDEFINED;
-    }
-    return JS_UNDEFINED;
-}
-
 static int js_reject_notify_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSRejectNotify *s = st;
@@ -279,7 +265,7 @@ static int js_reject_notify_step(JSContext *ctx, void *st, JSValue cb_result, JS
 }
 
 static const JSTrampStepDef js_reject_notify_def = {
-    sizeof(JSRejectNotify), js_reject_notify_step, js_reject_notify_fini, 0, .visit = js_reject_notify_visit,
+    sizeof(JSRejectNotify), js_reject_notify_step, NULL, 0, .visit = js_reject_notify_visit,
     .algorithm = "HTML §8.1.4.7 notify about rejected promises — step 4's queued task, one promise",
     .steps = REJECT_NOTIFY_STEPS
 };

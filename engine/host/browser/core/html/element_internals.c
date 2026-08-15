@@ -635,17 +635,10 @@ static void js_ei_validity_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static JSValue js_ei_validity_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSEiValidityState *s = st;
-    int k;
 
-    JS_FreeValue(ctx, s->el);
-    JS_FreeValue(ctx, s->ev);
-    s->el = s->ev = JS_UNDEFINED;
-    STEP_CB_FOREACH(s->cb, k) {
-        JS_FreeValue(ctx, s->cb[k]);
-        s->cb[k] = JS_UNDEFINED;
-    }
     /* §4.10.21.1 returns a boolean, and a machine's RESULT is what its fini yields. A teardown that is not
-       taking the result (the throw path) must yield nothing, which is what `take_result` distinguishes. */
+       taking the result (the throw path) must yield nothing, which is what `take_result` distinguishes.
+       The element, the event and the fire request are js_ei_validity_visit's, released through it. */
     return take_result ? JS_NewBool(ctx, s->answer) : JS_UNDEFINED;
 }
 

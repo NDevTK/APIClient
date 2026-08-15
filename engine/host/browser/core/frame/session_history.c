@@ -2,6 +2,7 @@
    session_history.h. */
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "check.h"
@@ -11,6 +12,7 @@
 #include "core/events/event_target.h"
 #include "core/events/hash_change_event.h"
 #include "core/events/pop_state_event.h"
+#include "core/frame/navigation.h"
 #include "core/frame/session_history.h"
 #include "core/frame/window_proxy.h"
 #include "core/realm.h"
@@ -27,15 +29,23 @@ static int g_slot = -1;
  * assertion away rather than a silent `undefined`.
  *
  * THE FIELDS THIS ENGINE DOES NOT HOLD ARE NAMED WHERE THEY ARE NOT HELD, not omitted. §7.4.1.1 also gives an
- * entry a NAVIGATION API STATE, KEY and ID — §7.2.6's, whose whole interface is out of this component — and a
- * SCROLL POSITION DATA and PERSISTED USER STATE, which §7.4.6.5's save/restore are the only writers and readers
- * of. A traversal reaches those two, and reaches them through sh_persisted_state, which asserts against the
- * `scrollTo` that would give this user agent a scroll position to save in the first place. */
+ * entry a SCROLL POSITION DATA and a PERSISTED USER STATE, which §7.4.6.5's save/restore are the only writers
+ * and readers of. A traversal reaches those two, and reaches them through sh_persisted_state, which asserts
+ * against the `scrollTo` that would give this user agent a scroll position to save in the first place.
+ *
+ * THE NAVIGATION API'S THREE FIELDS ARE HELD, and they are §7.4.1.1's own rather than §7.2.6's: an entry has a
+ * navigation API STATE (serialized, initially StructuredSerializeForStorage(UNDEFINED) — not null, which is
+ * what the classic state's initial value is, and the difference is observable through `entry.getState()`), a
+ * navigation API KEY and a navigation API ID. core/frame/navigation.c reads all three through the accessors at
+ * the foot of this file and writes none of them directly. */
 #define SH_E_STEP    "step"        /* a non-negative integer, or the string "pending" */
 #define SH_E_URL     "url"
 #define SH_E_DOCSTATE "documentState"
 #define SH_E_CLASSIC "classicState" /* serialized state — an ArrayBuffer of §2.7 bytes, never a live value */
 #define SH_E_SCROLL  "scrollRestoration"
+#define SH_E_NAV_STATE "navigationState" /* §7.2.6's serialized state — an ArrayBuffer, never a live value */
+#define SH_E_NAV_KEY   "navigationKey"
+#define SH_E_NAV_ID    "navigationId"
 
 /* §7.4.1.2's document state. Its `document` is a Document or null, and a DOCUMENT IS NAMED BY ITS ID here —
    the same id the world registry names documents by, which is what crosses an instance, a session and a park.
@@ -73,6 +83,11 @@ static int g_slot = -1;
 #define SH_R_STATE   "state"
 #define SH_R_LENGTH  "length"
 #define SH_R_INDEX   "index"
+/* THE COUNTER §7.4.1.1's "generate a random UUID" IS ANSWERED FROM — see session_history.h for why a counter
+   and not a draw. It is on the RECORD rather than in a C static for the reason core/file/blob.c's mint counter
+   is: a static is one number for the whole agent, so two arms of a fork minting an entry at the same source
+   line would get DIFFERENT keys, which is precisely what the determinism exists to prevent. */
+#define SH_R_UUID    "uuidCounter"
 
 static JSValue sh_record(JSContext *ctx)
 {
@@ -188,14 +203,21 @@ static JSValue sh_state_buffer(JSContext *ctx, const StructuredData *d)
     return buf;
 }
 
-/* §2.7's StructuredSerializeForStorage(null) — §7.4.1.1's initial classic history API state. `out` is the
-   caller's to free with structured_data_free. */
-static void sh_serialize_null(JSContext *ctx, StructuredData *out)
+/* §2.7's StructuredSerializeForStorage of a PRIMITIVE — §7.4.1.1's two initial values, and they are two
+   DIFFERENT primitives: the classic history API state starts at serialized NULL and the navigation API state
+   at serialized UNDEFINED. The difference is observable (`history.state` is null on a fresh document while
+   `navigation.currentEntry.getState()` is undefined), which is why this takes the value rather than baking one
+   in. `out` is the caller's to free with structured_data_free. */
+static void sh_serialize_primitive(JSContext *ctx, JSValueConst v, StructuredData *out)
 {
-    int r = structured_serialize(ctx, JS_NULL, out);
+    int r = structured_serialize(ctx, v, out);
 
-    CHECK(r == 0, "session history: StructuredSerializeForStorage(null) failed — null is serializable by "
-                  "every clause of §2.7, so a refusal here is the serializer being unable to allocate");
+    DCHECK(JS_IsNull(v) || JS_IsUndefined(v),
+           "§7.4.1.1's initial serialized states are null and undefined and this is neither — a value that can "
+           "run the page's code has no business being serialized from a plain C call");
+    CHECK(r == 0, "session history: StructuredSerializeForStorage of a primitive failed — null and undefined "
+                  "are serializable by every clause of §2.7, so a refusal here is the serializer being unable "
+                  "to allocate");
 }
 
 /* §7.4.1.2's DOCUMENT STATE for the Document of `ctx`. Its `ever populated` is TRUE: this engine's Documents
@@ -216,10 +238,30 @@ static JSValue sh_document_state_new(JSContext *ctx)
     return ds;
 }
 
-/* §7.4.1.1's "a session history entry is a struct with the following items", built with the four this engine
-   holds. `doc_state` and `classic` are CONSUMED; `url` and `scroll` are copied. */
+/* §7.4.1.1's "the result of GENERATING A RANDOM UUID", answered deterministically — see session_history.h for
+   why, and core/file/blob.c for the same rule stated where it was first paid for. The shape is a version-4
+   UUID's, because a page reads these as opaque UUID strings and some of them validate the shape; what fills it
+   is this DOCUMENT's id and a counter on the per-realm record, which makes it unique by construction across
+   every entry of every document in the agent rather than unique with high probability. OWNED. */
+static JSValue sh_mint_uuid(JSContext *ctx)
+{
+    JSValue rec = sh_record(ctx);
+    uint32_t n = rec_uint(ctx, rec, SH_R_UUID);
+    char buf[40];
+
+    rec_set_uint(ctx, rec, SH_R_UUID, n + 1);
+    JS_FreeValue(ctx, rec);
+    snprintf(buf, sizeof buf, "%08x-0000-4000-8000-%012x", (unsigned)document_doc(ctx), (unsigned)n);
+    return JS_NewString(ctx, buf);
+}
+
+/* §7.4.1.1's "a session history entry is a struct with the following items", built with the seven this engine
+   holds. `doc_state`, `classic` and `nav_state` are CONSUMED; `url` and `scroll` are copied. The KEY and the ID
+   are minted here and are never arguments: §7.4.4's new entry takes neither from the entry it replaces, and
+   §7.4.2.3.1's cross-document finalize — the one algorithm that DOES carry a key across — is not in this build
+   (see sh_finalize_same_document_navigation). */
 static JSValue sh_entry_new(JSContext *ctx, const char *url, JSValue doc_state, JSValue classic,
-                            const char *scroll)
+                            JSValue nav_state, const char *scroll)
 {
     JSValue e = JS_NewObjectProto(ctx, JS_NULL);
 
@@ -230,6 +272,9 @@ static JSValue sh_entry_new(JSContext *ctx, const char *url, JSValue doc_state, 
     JS_SetPropertyStr(ctx, e, SH_E_URL, JS_NewString(ctx, url));
     JS_SetPropertyStr(ctx, e, SH_E_DOCSTATE, doc_state);
     JS_SetPropertyStr(ctx, e, SH_E_CLASSIC, classic);
+    JS_SetPropertyStr(ctx, e, SH_E_NAV_STATE, nav_state);
+    JS_SetPropertyStr(ctx, e, SH_E_NAV_KEY, sh_mint_uuid(ctx));
+    JS_SetPropertyStr(ctx, e, SH_E_NAV_ID, sh_mint_uuid(ctx));
     JS_SetPropertyStr(ctx, e, SH_E_SCROLL, JS_NewString(ctx, scroll));
     return e;
 }
@@ -356,6 +401,107 @@ static JSValue sh_target_history_entry(JSContext *ctx, JSValueConst entries, uin
     return e;
 }
 
+/* ---- §7.4.1.4's GET SESSION HISTORY ENTRIES FOR THE NAVIGATION API ------------------------------------------
+ *
+ * IT IS NOT THE ENTRIES LIST. The navigation API sees only the SAME-ORIGIN CONTIGUOUS RUN around the entry the
+ * document is at: the algorithm starts at the entry with the greatest step less than or equal to targetStep,
+ * walks BACKWARDS while each entry's document state's origin is same origin with that one's and stops at the
+ * first that is not, then walks FORWARDS the same way. That truncation is the whole reason §7.2.6.6's
+ * `canGoBack` is documented as "there is a previous session history entry for this navigable, AND its document
+ * state's origin is same origin with the current Document's" — a cross-origin entry two steps back is simply
+ * not in the list, so an index of 0 already means there is nothing this API may go back to.
+ *
+ * EVERY ENTRY THIS BUILD CREATES SHARES ONE DOCUMENT STATE, so every origin in the run is this document's and
+ * neither walk ever breaks — which makes the answer the whole list today and makes the origin comparison a
+ * branch nothing yet takes. It is written anyway, because the first cross-document navigation puts an entry
+ * with another origin in the middle of the list, and it compares against the STARTING entry's origin, which is
+ * what the standard says and is not the same thing as this realm's.
+ *
+ * The answer is a new JS Array holding the entries themselves. OWNED. */
+
+/* A §7.4.1.2 document state's origin, as a string. `hold` receives the JSValue the string is borrowed from and
+   is the caller's to free after the string. OWNED — released with JS_FreeCString. */
+static const char *sh_entry_origin(JSContext *ctx, JSValueConst e, JSValue *hold)
+{
+    JSValue ds = JS_GetPropertyStr(ctx, e, SH_E_DOCSTATE);
+    const char *s;
+
+    DCHECK(JS_IsObject(ds), "a session history entry held no §7.4.1.2 document state");
+    *hold = JS_GetPropertyStr(ctx, ds, SH_D_ORIGIN);
+    JS_FreeValue(ctx, ds);
+    s = JS_ToCString(ctx, *hold);
+    CHECK(s != NULL, "session history: a §7.4.1.2 document state's origin could not be read");
+    return s;
+}
+
+/* §7.2.5.1's SAME ORIGIN over two of those. An OPAQUE ORIGIN is same origin with NOTHING, not even another
+   opaque one — the same rule SECURITY.md states for the credentialed-read principal, and the reason this is
+   not a plain strcmp over the two serializations. */
+static bool sh_origin_same(const char *a, const char *b)
+{
+    if (!strcmp(a, "null") || !strcmp(b, "null")) return false;
+    return strcmp(a, b) == 0;
+}
+
+JSValue session_history_entries_for_navigation_api(JSContext *ctx)
+{
+    JSValue entries = sh_entries(ctx), trec = sh_traversable_record(ctx), out = JS_NewArray(ctx);
+    JSValue hold = JS_UNDEFINED, start;
+    uint32_t target_step, n, k = 0;
+    const char *start_origin;
+    int64_t i;
+
+    CHECK(!JS_IsException(out), "session history: §7.4.1.4's navigation API entry list could not be allocated");
+    target_step = rec_uint(ctx, trec, SH_R_STEP);
+    JS_FreeValue(ctx, trec);
+    sh_assert_steps_are_the_run(ctx, entries);
+    n = list_len(ctx, entries);
+    DCHECK(target_step < n, "§7.4.1.4's get-session-history-entries-for-the-navigation-API was given a step "
+                            "past the end of a run of entries — over a run every step in range is used, so a "
+                            "starting index outside it names no entry to start from");
+    /* "Let startingIndex be the index of the session history entry in rawEntries who has the GREATEST STEP LESS
+       THAN OR EQUAL TO targetStep" — over the run 0..n-1 that is targetStep itself, which the assertion above
+       keeps true. */
+    start = JS_GetPropertyUint32(ctx, entries, target_step);
+    start_origin = sh_entry_origin(ctx, start, &hold);
+    JS_SetPropertyUint32(ctx, out, k++, start);   /* CONSUMES start */
+    /* The BACKWARD walk. The standard's condition is `while i > 0`, so the entry at index 0 is reached by the
+       body when i is 1 and index 0 itself is never tested — written here as the same bound rather than as
+       `i >= 0`, because the difference is one entry and it is the FIRST one. */
+    for (i = (int64_t)target_step - 1; i > 0; i--) {
+        JSValue e = JS_GetPropertyUint32(ctx, entries, (uint32_t)i), h = JS_UNDEFINED;
+        const char *o = sh_entry_origin(ctx, e, &h);
+        bool same = sh_origin_same(o, start_origin);
+        uint32_t j;
+
+        JS_FreeCString(ctx, o);
+        JS_FreeValue(ctx, h);
+        if (!same) { JS_FreeValue(ctx, e); break; }
+        /* PREPEND — the list stays in session-history order, which is what makes §7.2.6.5's `index` mean what
+           a page reads it as. A shift is what a prepend over an Array is; its length is the session history's
+           and not anything one navigation grows. */
+        for (j = k; j > 0; j--)
+            JS_SetPropertyUint32(ctx, out, j, JS_GetPropertyUint32(ctx, out, j - 1));
+        JS_SetPropertyUint32(ctx, out, 0, e);
+        k++;
+    }
+    /* The FORWARD walk. */
+    for (i = (int64_t)target_step + 1; i < (int64_t)n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, entries, (uint32_t)i), h = JS_UNDEFINED;
+        const char *o = sh_entry_origin(ctx, e, &h);
+        bool same = sh_origin_same(o, start_origin);
+
+        JS_FreeCString(ctx, o);
+        JS_FreeValue(ctx, h);
+        if (!same) { JS_FreeValue(ctx, e); break; }
+        JS_SetPropertyUint32(ctx, out, k++, e);
+    }
+    JS_FreeCString(ctx, start_origin);
+    JS_FreeValue(ctx, hold);
+    JS_FreeValue(ctx, entries);
+    return out;
+}
+
 /* §7.4.3 steps 4.1-4.4: "let allSteps be the result of GETTING ALL USED HISTORY STEPS for traversable; let
    currentStepIndex be the INDEX OF traversable's current session history step WITHIN allSteps; let
    targetStepIndex be currentStepIndex plus delta; if allSteps[targetStepIndex] does not exist, then ABORT THESE
@@ -440,10 +586,15 @@ static bool sh_fragment_equal(const char *a_url, const char *b_url)
  * WHERE THIS MACHINE RESTS. `stage` is on the continuation state rather than only on the step header because the
  * synchronous caller has no header and must still be told, by the same field, that the algorithm wants to park —
  * which it asserts against. The traversal machine copies it onto its header, so there is ONE declaration of the
- * two rest points and the two cannot drift. */
+ * rest points and the two cannot drift. There are THREE now: the traversal's own resolve, step 6.4.2's
+ * navigation API update (which fires `currententrychange` and then `dispose` at each disposed entry, so the
+ * walk inside it has its own sub-cursor) and step 6.4.3's popstate. */
 #define SH_APPLY_STAGES(X)                                                                              \
     X(SH_APPLY_STEP,     "HTML §7.4.3 traverse the history by a delta steps 4.1-4.5 (get all used "      \
                          "history steps, resolve the delta, apply the traverse history step)")           \
+    X(SH_APPLY_NAV,      "HTML §7.4.6.2 update document for history step application step 6.4.2 (update " \
+                         "the navigation API entries for a same-document navigation: currententrychange, " \
+                         "then dispose at each disposed entry)")                                          \
     X(SH_APPLY_POPSTATE, "HTML §7.4.6.2 update document for history step application step 6.4.3 (fire "  \
                          "an event named popstate at the document's relevant global object, using "      \
                          "PopStateEvent)")
@@ -470,6 +621,10 @@ typedef struct {
     JSValue     popstate;        /* owned across the dispatch */
     uint8_t     fire_phase;
     EventFireCb fire_cb;
+    /* §7.4.6.2 step 6.4.2's request. It sits BESIDE the popstate fire rather than sharing its buffer, because
+       the two are different dispatches at different targets and the algorithm runs one strictly before the
+       other — a shared phase would resume the navigation API's walk into the popstate's answer. */
+    NavigationUpdateWork nav;
 } SHApply;
 
 static void sh_restore_history_object_state(JSContext *ctx, JSValueConst entry);
@@ -487,6 +642,7 @@ static void sh_apply_free(JSContext *ctx, SHApply *a)
         JS_FreeValue(ctx, a->fire_cb[k]);
         a->fire_cb[k] = JS_UNDEFINED;
     }
+    navigation_update_work_release(ctx, &a->nav);
 }
 
 /* §7.4.6.5's SAVE PERSISTED STATE TO a session history entry, and its twin RESTORE PERSISTED STATE FROM one.
@@ -552,10 +708,11 @@ static void sh_activate_history_entry(JSContext *ctx, JSValueConst entry)
  * THE THREE BRANCHES THIS BUILD DOES NOT TAKE ARE EVALUATED, NOT DROPPED. documentIsNew is false because a
  * Document reaching this always has a latest entry (session_history_install_document gives it one before any
  * page script runs), so step 8's WebDriver BiDi branch and step 6.5's initialize-the-navigation-API-entries
- * branch are unreachable and say so. Step 7's NavigationActivation branch has a REAL condition — "navigationType
- * is 'reload' or previousEntryForActivation's document is not document" — which is evaluated here and is false
- * for both callers, because neither a push/replace nor a same-document traversal changes the document; the
- * branch's body is §7.2.6's navigation API, which is deliberately not built (session_history.h). */
+ * branch are unreachable and say so — the latter is run at the document's install instead, which is where this
+ * engine's collapsed populate-and-activate happens. Step 7's NavigationActivation branch has a REAL condition —
+ * "navigationType is 'reload' or previousEntryForActivation's document is not document" — which is evaluated
+ * here and is false for both callers, because neither a push/replace nor a same-document traversal changes the
+ * document. */
 static int sh_update_document_for_history_step(JSContext *ctx, SHApply *a, JSValue in,
                                                JSValue **out_cb, int *out_argc)
 {
@@ -563,6 +720,7 @@ static int sh_update_document_for_history_step(JSContext *ctx, SHApply *a, JSVal
     bool documents_entry_changed;
     int r;
 
+    if (a->stage == SH_APPLY_NAV) goto nav_update;
     if (a->stage == SH_APPLY_POPSTATE) goto fire_popstate;
 
     rec = sh_record(ctx);
@@ -578,8 +736,9 @@ static int sh_update_document_for_history_step(JSContext *ctx, SHApply *a, JSVal
     /* STEPS 3 AND 4 — the real values, replacing §7.4.4 step 6's "temporary best-guess" ones. */
     rec_set_uint(ctx, rec, SH_R_INDEX, a->index);
     rec_set_uint(ctx, rec, SH_R_LENGTH, a->length);
-    /* STEP 5 is "let navigation be history's relevant global object's NAVIGATION API" — §7.2.6's interface,
-       deliberately not built here, and every later step that reads `navigation` names it below. */
+    /* STEP 5 is "let navigation be history's relevant global object's NAVIGATION API" — this realm's, which
+       core/frame/navigation.c answers for; the two later steps that read it reach it through that component
+       rather than holding one here. */
     if (!documents_entry_changed) {
         /* STEP 9: "otherwise, if documentsEntryChanged is false and doNotReactivate is false, REACTIVATE
            document". doNotReactivate is update-only, and the two are false together only when a Document comes
@@ -589,7 +748,8 @@ static int sh_update_document_for_history_step(JSContext *ctx, SHApply *a, JSVal
                "§7.4.6.2 reached step 9 — documentsEntryChanged is false and doNotReactivate is false, which is "
                "a Document being RESTORED FROM BFCACHE. §7.4.6.2's REACTIVATE has to be written: reset every "
                "autofill=off form control, resume the suspended timer handles by the suspension's duration, "
-               "restore persisted state, and initialize the navigation API entries for a new document");
+               "restore persisted state, and run §7.2.6.4's UPDATE THE NAVIGATION API ENTRIES FOR REACTIVATION "
+               "(core/frame/navigation.c holds its two siblings and names this one at its initialize)");
         JS_FreeValue(ctx, latest);
         JS_FreeValue(ctx, rec);
         /* `in` is a REQUEST'S ANSWER and every exit owns it: the dispatch below consumes it, so an exit that
@@ -611,11 +771,16 @@ static int sh_update_document_for_history_step(JSContext *ctx, SHApply *a, JSVal
     DCHECK(a->navigation_type != NULL,
            "§7.4.6.2 step 6.4.1 asserts a non-null NavigationType, and the only entry point that passes null is "
            "§7.4.6.1's update-for-navigable-creation/destruction — which never changes a document's entry");
-    /* STEP 6.4.2 is "UPDATE THE NAVIGATION API ENTRIES FOR A SAME-DOCUMENT NAVIGATION given navigation, entry
-       and navigationType" — §7.2.6's interface, which this component deliberately does not build
-       (session_history.h). Its absence is asserted where the interface would be: the realm_awaits probe in
-       core/rendering/rendering.c. A page cannot observe the difference without it, because there is no
-       `navigation` object to read an entry list off. */
+    a->stage = SH_APPLY_NAV;
+nav_update:
+    /* STEP 6.4.2: "UPDATE THE NAVIGATION API ENTRIES FOR A SAME-DOCUMENT NAVIGATION given navigation, entry
+       and navigationType." IT RUNS THE PAGE'S CODE — `currententrychange` at the Navigation, then `dispose` at
+       every entry the update threw away — so it is a request and this is where the traversal parks first. It
+       runs BEFORE the popstate below, which is the standard's order and is observable: a `currententrychange`
+       listener sees `navigation.currentEntry` already moved while `history.state` has just been restored. */
+    r = navigation_update_entries_run(ctx, &a->nav, a->target_entry, a->navigation_type, in, out_cb, out_argc);
+    if (r != 0) return r;
+    in = JS_UNDEFINED;
     /* STEP 6.4.3 — the popstate event. `hasUAVisualTransition` is "true if a VISUAL TRANSITION, to display a
        cached rendered state of the latest entry, was done by the user agent"; this user agent performs none, so
        it is false — a computed answer about this agent and not a default. The `state` is the history object's,
@@ -668,13 +833,16 @@ fire_popstate:
 activation_branch:
     /* STEP 7's condition, EVALUATED. Its third disjunct is "navigationType is 'reload' or
        previousEntryForActivation's DOCUMENT is not document" — and both callers here are same-document, so the
-       branch is not entered. The moment a cross-document traversal or a reload exists it is, and its body is
-       §7.2.6's NavigationActivation. */
+       branch is not entered. The moment a cross-document traversal or a reload exists it is. */
     DCHECK(strcmp(a->navigation_type, "reload") != 0 && sh_entry_is_this_document(ctx, a->displayed_entry),
            "§7.4.6.2 step 7 was reached with a previous entry belonging to ANOTHER Document, or with a reload — "
-           "its body is §7.2.6's NAVIGATION ACTIVATION: create a NavigationActivation in the navigation API's "
-           "relevant realm, set its old entry from the previous entry's index in the entry list, its new entry "
-           "to navigation's current entry, and its navigation type to navigationType");
+           "its body is §7.2.6.9's NAVIGATION ACTIVATION, an interface core/frame/navigation.c does not build "
+           "(its `activation` member is absent for exactly this reason). Build NavigationActivation there — "
+           "old entry, new entry, navigation type — and then here: create one in the navigation API's relevant "
+           "realm if it has none, set its old entry from previousEntryForActivation's index in the entry list "
+           "(or, for a \"replace\" from a same-origin non-initial-about:blank document, a fresh "
+           "NavigationHistoryEntry over that entry), its new entry to navigation's current entry, and its "
+           "navigation type to navigationType");
     return 0;
 }
 
@@ -695,6 +863,7 @@ static void sh_apply_history_step_begin(JSContext *ctx, SHApply *a, uint32_t ste
     a->target_entry = a->displayed_entry = a->old_url = a->popstate = JS_UNDEFINED;
     a->fire_phase = 0;
     STEP_CB_FOREACH(a->fire_cb, k) a->fire_cb[k] = JS_UNDEFINED;
+    navigation_update_work_start(&a->nav);
     a->begin_step = rec_uint(ctx, trec, SH_R_STEP);
 
     /* STEP 2: "let targetStep be the result of GETTING THE USED STEP given traversable and step" — the greatest
@@ -754,9 +923,20 @@ static void sh_apply_history_step_begin(JSContext *ctx, SHApply *a, uint32_t ste
                "and-its-descendants, pagehide), then activate-history-entry over the new Document. Build it in "
                "this file beside the same-document path, driven from the same machine");
         /* "If navigable is not traversable, and targetEntry is not navigable's current session history entry,
-           and oldOrigin is the same as … then FIRE A TRAVERSE NAVIGATE EVENT" — §7.2.6's navigation API again,
-           and its first conjunct is false here for the reason sh_entries states: this navigable IS its own
-           traversable. */
+           and oldOrigin is the same as … then FIRE A TRAVERSE NAVIGATE EVENT" — §7.2.6.10.4's, and the first
+           conjunct is FALSE here for the reason sh_entries states: this navigable IS its own traversable, so
+           the branch is not taken and the traversal is not cancelable from a nested navigable.
+           THE OTHER PLACE A TRAVERSE NAVIGATE EVENT FIRES IS §7.4.6.1's own traversal entry, which reaches a
+           TOP-LEVEL traversable and would fire it here — so the arrival of the event is asserted against
+           rather than written down, and the assert names the algorithm to write. */
+        realm_awaits(ctx, "NavigateEvent",
+                     "HTML §7.4.6.1's traversal fires a TRAVERSE NAVIGATE EVENT before it changes a "
+                     "navigable's entry — this build now has one. §7.2.6.10.4's fire-a-traverse-navigate-event "
+                     "takes the destination session history entry, builds a NavigationDestination over its "
+                     "URL and its navigation API state, and runs the inner navigate event firing algorithm; a "
+                     "FALSE result means the page canceled the traversal and this per-navigable job must "
+                     "abort instead of activating targetEntry, and an intercept() converts it into the "
+                     "resume-applying-the-traverse-history-step path");
     }
     /* "Let (scriptHistoryLength, scriptHistoryIndex) be the result of GETTING THE HISTORY OBJECT LENGTH AND
        INDEX given traversable and targetStep." */
@@ -772,7 +952,13 @@ static int sh_apply_history_step_finish(JSContext *ctx, SHApply *a, JSValue in, 
     JSValue trec;
     int r;
 
-    if (a->stage != SH_APPLY_POPSTATE) {
+    /* THE GUARD NAMES THE ONE STAGE THIS HALF'S OWN STEPS BELONG TO, and it is not "anything but the last".
+       It was `!= SH_APPLY_POPSTATE` while there were two stages, and the moment §7.4.6.2 gained a rest point of
+       its own (step 6.4.2's navigation API update) that spelling started re-running activate-history-entry on
+       every resume through it — which the afterPotentialUnloads assertion below would then have reported as a
+       second history step having been applied across this one, naming a race that had not happened. A resume
+       guard written as a negation is wrong for every stage added after it. */
+    if (a->stage == SH_APPLY_STEP) {
         /* "If changingNavigableContinuation's update-only is true, OR targetEntry's document is
            displayedDocument: this is a SAME-DOCUMENT NAVIGATION, we proceed without unloading" — both hold, the
            second because _begin asserted the target entry names this Document. The other arm DEACTIVATES the
@@ -901,6 +1087,13 @@ static void sh_finalize_same_document_navigation(JSContext *ctx, JSValueConst ta
         target_step = sh_entry_step(ctx, entry_to_replace);
         JS_SetPropertyStr(ctx, (JSValue)target_entry, SH_E_STEP, JS_NewUint32(ctx, target_step));
         JS_SetPropertyUint32(ctx, entries, at, JS_DupValue(ctx, target_entry));
+        /* THE NAVIGATION API KEY IS NOT CARRIED ACROSS, and that is the standard's own asymmetry rather than an
+           omission here: §7.4.2.3.1's finalize-a-CROSS-document-navigation has the line ("if historyEntry's
+           document state's origin is same origin with entryToReplace's … set historyEntry's navigation API key
+           to entryToReplace's navigation API key") and §7.4.2.3.3's finalize — this one, the one a
+           `replaceState` reaches — does not. So `replaceState` mints a fresh key, which is what the spec text
+           says and what a reader coming from §7.2.6.5's prose about keys surviving a replace will not expect.
+           Checked against the standard, not inferred; do not "fix" it without the line to point at. */
         /* "Set targetStep to traversable's current session history step" — a replace does not move it. */
         target_step = current;
     }
@@ -961,17 +1154,56 @@ static bool sh_is_initial_about_blank(JSContext *ctx)
     return !window_proxy_ever_navigated(document_window_proxy(ctx));
 }
 
-void session_history_url_and_history_update(JSContext *ctx, const char *new_url,
-                                            const StructuredData *serialized, bool push)
+bool session_history_is_initial_about_blank(JSContext *ctx)
 {
-    JSValue active, doc_state, classic, new_entry, rec, to_replace;
+    return sh_is_initial_about_blank(ctx);
+}
+
+/* §7.4.4's TWO HALVES — see session_history.h for where the split is and why it is there.
+ *
+ * ONE REST POINT, which is step 11's request. Steps 12 and 13 after it are the finalize and the
+ * apply-the-push/replace-history-step, both of which take §7.4.6.1's update-only exit and run none of the
+ * page's code (sh_apply_push_replace_history_step asserts exactly that, and its assertion is why the whole tail
+ * can be a plain call). */
+void session_history_url_update_start(SessionHistoryUrlUpdate *w)
+{
+    /* A zeroed JSValue is the INTEGER 0, not undefined — the same rule core/streams/stream_work.h states, and
+       the same one this record would be read through if a caller forgot. */
+    w->push = false;
+    w->new_entry = w->to_replace = JS_UNDEFINED;
+    navigation_update_work_start(&w->nav);
+}
+
+void session_history_url_update_visit(JSContext *ctx, SessionHistoryUrlUpdate *w, JSStepVisit *v)
+{
+    v->val(ctx, &w->new_entry);
+    v->val(ctx, &w->to_replace);
+    navigation_update_work_visit(ctx, &w->nav, v);
+}
+
+void session_history_url_update_release(JSContext *ctx, SessionHistoryUrlUpdate *w)
+{
+    JS_FreeValue(ctx, w->new_entry);
+    JS_FreeValue(ctx, w->to_replace);
+    w->new_entry = w->to_replace = JS_UNDEFINED;
+    navigation_update_work_release(ctx, &w->nav);
+}
+
+void session_history_url_update_begin(JSContext *ctx, SessionHistoryUrlUpdate *w, const char *new_url,
+                                      const StructuredData *serialized, bool push)
+{
+    JSValue active, doc_state, classic, nav_state, rec;
     const char *scroll;
     JSValue scroll_v;
+    StructuredData undef;
 
     DCHECK(g_slot >= 0, "§7.4.4's URL and history update steps ran before session_history_init declared the "
                         "record");
     DCHECK(new_url != NULL, "§7.4.4 runs with a URL — its step 2 defaults it to the document's own address, so "
                             "the caller always has one");
+    DCHECK(JS_IsUndefined(w->new_entry),
+           "§7.4.4's _begin ran twice over one work record — the algorithm builds ONE entry and the second "
+           "would leave the first as the navigable's active entry and in no list");
     /* STEPS 1-3: the new entry, with the ACTIVE entry's DOCUMENT STATE — shared by reference, which is what
        §7.4.1.2's "several contiguous entries in a session history can share the same document state" is, and
        what makes ten pushState calls ten entries of ONE Document rather than ten documents. */
@@ -985,7 +1217,14 @@ void session_history_url_and_history_update(JSContext *ctx, const char *new_url,
         classic = sh_state_buffer(ctx, serialized);
     else
         classic = JS_GetPropertyStr(ctx, active, SH_E_CLASSIC);   /* "otherwise activeEntry's classic … state" */
-    new_entry = sh_entry_new(ctx, new_url, doc_state, classic, scroll);
+    /* §7.4.4's new entry names FIVE fields and the navigation API state is not one of them, so it takes
+       §7.4.1.1's initial value — serialized UNDEFINED — rather than the active entry's. That is why
+       `history.pushState(x, "")` leaves `navigation.currentEntry.getState()` undefined while
+       `navigation.navigate(url, {state:x})` does not: the two stores are unrelated, which §7.2.6.5 says. */
+    sh_serialize_primitive(ctx, JS_UNDEFINED, &undef);
+    nav_state = sh_state_buffer(ctx, &undef);
+    structured_data_free(ctx, &undef);
+    w->new_entry = sh_entry_new(ctx, new_url, doc_state, classic, nav_state, scroll);
     JS_FreeCString(ctx, scroll);
     JS_FreeValue(ctx, scroll_v);
 
@@ -993,15 +1232,16 @@ void session_history_url_and_history_update(JSContext *ctx, const char *new_url,
        standard's own note — "this means that pushState() on an initial about:blank Document behaves as a
        replaceState() call". */
     if (sh_is_initial_about_blank(ctx)) push = false;
+    w->push = push;
     /* STEP 5. */
-    to_replace = push ? JS_NULL : JS_DupValue(ctx, active);
+    w->to_replace = push ? JS_NULL : JS_DupValue(ctx, active);
 
     rec = sh_record(ctx);
     /* STEP 6's TEMPORARY BEST-GUESS VALUES, "for immediate synchronous access" — a page reading
        `history.length` on the line after a pushState reads these, and §7.4.6.1's apply-the-push/replace step
-       below overwrites them with the real ones in the same turn. Written even so: they are what the standard
-       says the field holds between these two points, and a reader that could observe the difference is a
-       reader that could observe a step machine parking between them. */
+       overwrites them with the real ones. They are no longer merely notional: step 11 below RUNS THE PAGE'S
+       CODE, so a `currententrychange` listener really does observe the algorithm between these two writes,
+       which is exactly the state the standard describes them as holding. */
     if (push) {
         uint32_t index = rec_uint(ctx, rec, SH_R_INDEX) + 1;
 
@@ -1009,24 +1249,37 @@ void session_history_url_and_history_update(JSContext *ctx, const char *new_url,
         rec_set_uint(ctx, rec, SH_R_LENGTH, index + 1);
     }
     /* STEP 7. */
-    if (serialized) sh_restore_history_object_state(ctx, new_entry);
+    if (serialized) sh_restore_history_object_state(ctx, w->new_entry);
     /* STEP 8: "set the URL given document to newURL". The standard's note is why nothing is fired here —
        "since this is neither a navigation nor a history traversal, it does not cause a hashchange event to be
        fired". */
     document_set_url(ctx, new_url);
     /* STEPS 9 AND 10 — the Document's latest entry and the NAVIGABLE's active session history entry. Both are
        set before the finalize below, which is what makes its step 2 hold. */
-    JS_SetPropertyStr(ctx, rec, SH_R_LATEST, JS_DupValue(ctx, new_entry));
-    JS_SetPropertyStr(ctx, rec, SH_R_ACTIVE, JS_DupValue(ctx, new_entry));
+    JS_SetPropertyStr(ctx, rec, SH_R_LATEST, JS_DupValue(ctx, w->new_entry));
+    JS_SetPropertyStr(ctx, rec, SH_R_ACTIVE, JS_DupValue(ctx, w->new_entry));
     JS_FreeValue(ctx, rec);
-    /* STEP 11 is "update the navigation API entries for a same-document navigation", which belongs to §7.2.6's
-       navigation API — a separate interface this component deliberately does not build (session_history.h).
-       Its absence is asserted where the interface would be: core/rendering/rendering.c's realm_awaits probe. */
-    /* STEPS 12-13. */
-    sh_finalize_same_document_navigation(ctx, new_entry, to_replace, push ? "push" : "replace");
-    JS_FreeValue(ctx, to_replace);
-    JS_FreeValue(ctx, new_entry);
     JS_FreeValue(ctx, active);
+}
+
+int session_history_url_update_run(JSContext *ctx, SessionHistoryUrlUpdate *w, JSValue in,
+                                   JSValue **out_cb, int *out_argc)
+{
+    int r;
+
+    DCHECK(JS_IsObject(w->new_entry),
+           "§7.4.4's _run reached a work record with no entry — _begin builds it and must run first");
+    /* STEP 11: "UPDATE THE NAVIGATION API ENTRIES FOR A SAME-DOCUMENT NAVIGATION given document's relevant
+       global object's navigation API, newEntry, and historyHandling." This is the step that makes a pushState
+       run the page's code, and its position is load-bearing: it is BEFORE the finalize, so a
+       `currententrychange` listener sees the Document's URL and `history.state` already changed while the
+       entry is not yet in §7.4.1's list and `history.length` still holds step 6's best guess. */
+    r = navigation_update_entries_run(ctx, &w->nav, w->new_entry, w->push ? "push" : "replace", in,
+                                      out_cb, out_argc);
+    if (r != 0) return r;
+    /* STEPS 12-13. */
+    sh_finalize_same_document_navigation(ctx, w->new_entry, w->to_replace, w->push ? "push" : "replace");
+    return 0;
 }
 
 /* ---- §7.4.3's TRAVERSE THE HISTORY BY A DELTA, AS A JOB -------------------------------------------------------
@@ -1066,15 +1319,7 @@ static void js_sh_traverse_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->apply.popstate);
     STEP_CB_FOREACH(s->apply.fire_cb, k)
         v->val(ctx, &s->apply.fire_cb[k]);
-}
-
-static JSValue js_sh_traverse_fini(JSContext *ctx, void *st, bool take_result)
-{
-    SHTraverseState *s = st;
-
-    (void)take_result;
-    sh_apply_free(ctx, &s->apply);
-    return JS_UNDEFINED;
+    navigation_update_work_visit(ctx, &s->apply.nav, v);
 }
 
 static int js_sh_traverse_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
@@ -1114,7 +1359,7 @@ static int js_sh_traverse_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
 }
 
 static const JSTrampStepDef js_sh_traverse_def = {
-    sizeof(SHTraverseState), js_sh_traverse_step, js_sh_traverse_fini, 0, .visit = js_sh_traverse_visit,
+    sizeof(SHTraverseState), js_sh_traverse_step, NULL, 0, .visit = js_sh_traverse_visit,
     .algorithm = "HTML §7.4.3 traverse the history by a delta, as the traversable's queued session history "
                  "traversal steps",
     .steps = SH_APPLY_STEPS
@@ -1207,6 +1452,61 @@ void session_history_set_scroll_restoration(JSContext *ctx, const char *mode)
     JS_FreeValue(ctx, e);
 }
 
+/* ---- what §7.2.6's navigation API reads off a §7.4.1.1 entry ------------------------------------------------ */
+
+/* The two UUIDs, as the strings §7.2.6.5's `key` and `id` return. They are read rather than computed: an
+   entry's key and id are minted once, at sh_entry_new, and nothing rewrites them — §7.4.2.3.1's cross-document
+   finalize is the one algorithm in the standard that ever assigns a key to an existing entry, and it is not in
+   this build (sh_finalize_same_document_navigation names the asymmetry). */
+static JSValue sh_entry_string(JSContext *ctx, JSValueConst e, const char *field)
+{
+    JSValue v = JS_GetPropertyStr(ctx, e, field);
+
+    DCHECK(JS_IsString(v), "a §7.4.1.1 entry's navigation API key or ID is not a string — both are minted by "
+                           "sh_entry_new and neither has another writer");
+    return v;
+}
+
+JSValue session_history_entry_nav_key(JSContext *ctx, JSValueConst e)
+{
+    return sh_entry_string(ctx, e, SH_E_NAV_KEY);
+}
+
+JSValue session_history_entry_nav_id(JSContext *ctx, JSValueConst e)
+{
+    return sh_entry_string(ctx, e, SH_E_NAV_ID);
+}
+
+JSValue session_history_entry_url(JSContext *ctx, JSValueConst e)
+{
+    return sh_entry_string(ctx, e, SH_E_URL);
+}
+
+bool session_history_entry_is_this_document(JSContext *ctx, JSValueConst e)
+{
+    return sh_entry_is_this_document(ctx, e);
+}
+
+JSValue session_history_entry_nav_state(JSContext *ctx, JSValueConst e)
+{
+    JSValue buf = JS_GetPropertyStr(ctx, e, SH_E_NAV_STATE), v;
+    StructuredData d;
+
+    d.buf = JS_GetArrayBuffer(ctx, &d.len, buf);
+    DCHECK(d.buf != NULL, "§7.4.1.1's navigation API state held something that is not the serialized bytes — "
+                          "every writer of the field is in this file and every one writes an ArrayBuffer");
+    /* A FRESH DESERIALIZATION, which is what §7.2.6.5's `getState()` promises and why it is a method: "unless
+       the state value is a primitive, entry.getState() !== entry.getState()". */
+    v = structured_deserialize(ctx, &d);
+    JS_FreeValue(ctx, buf);
+    return v;
+}
+
+void session_history_entry_set_nav_state(JSContext *ctx, JSValueConst e, const StructuredData *d)
+{
+    JS_SetPropertyStr(ctx, (JSValue)e, SH_E_NAV_STATE, sh_state_buffer(ctx, d));
+}
+
 /* ---- declaration and install --------------------------------------------------------------------------------- */
 
 /* THE RECORD IS BUILT WITH THE REALM and the ENTRY with the DOCUMENT — see session_history.h for why the two
@@ -1230,13 +1530,14 @@ static void session_history_install_realm(JSContext *ctx)
     JS_SetPropertyStr(ctx, rec, SH_R_STATE, JS_NULL);
     JS_SetPropertyStr(ctx, rec, SH_R_LENGTH, JS_NewUint32(ctx, 0));
     JS_SetPropertyStr(ctx, rec, SH_R_INDEX, JS_NewUint32(ctx, 0));
+    JS_SetPropertyStr(ctx, rec, SH_R_UUID, JS_NewUint32(ctx, 0));
     realm_value_set(ctx, g_slot, rec);
 }
 
 void session_history_install_document(JSContext *ctx)
 {
     JSValue rec, entry, entries;
-    StructuredData nul;
+    StructuredData nul, undef;
 
     DCHECK(g_slot >= 0, "a document reached §7.4.1 before session_history_init declared the record");
     rec = sh_record(ctx);
@@ -1249,9 +1550,11 @@ void session_history_install_document(JSContext *ctx)
                      "here, so that is a NAVIGATION, and a navigation appends an entry through §7.4.6's "
                      "activate-history-entry rather than replacing the list this navigable already has");
     }
-    sh_serialize_null(ctx, &nul);
+    sh_serialize_primitive(ctx, JS_NULL, &nul);
+    sh_serialize_primitive(ctx, JS_UNDEFINED, &undef);
     entry = sh_entry_new(ctx, document_base_url(ctx), sh_document_state_new(ctx), sh_state_buffer(ctx, &nul),
-                         "auto");
+                         sh_state_buffer(ctx, &undef), "auto");
+    structured_data_free(ctx, &undef);
     structured_data_free(ctx, &nul);
     /* THE FIRST ENTRY IS STEP 0 and the traversable's current step is 0 — the state §7.4.6's apply-the-history
        -step leaves a freshly loaded document in, reached here directly because the load is what built the
@@ -1283,7 +1586,27 @@ void session_history_install_document(JSContext *ctx)
                "a realm is installed once, so a non-empty list means a second document reached this install");
         JS_SetPropertyUint32(ctx, entries, 0, entry);   /* CONSUMES entry */
         JS_FreeValue(ctx, entries);
+        /* §7.2.6.4's INITIALIZE THE NAVIGATION API ENTRIES FOR A NEW DOCUMENT, run HERE because this call is
+           where this engine's collapsed populate-and-activate happens (see the header). §7.4.6.2 step 6.5 is
+           where the standard runs it, and that step is unreachable in this build for the reason
+           sh_update_document_for_history_step states: a Document that reaches §7.4.6.2 already has a latest
+           entry, so documentIsNew is false there and this is the only place it can be true.
+           It goes AFTER the entry is in the list, because §7.4.1.4's get-session-history-entries-for-the-
+           navigation-API reads that list and §7.2.6.4 step 5 then looks the initial entry up inside it. */
+        {
+            JSValue for_nav = session_history_entries_for_navigation_api(ctx);
+            JSValue active = sh_active_entry(ctx);
+
+            navigation_initialize_entries(ctx, for_nav, active);
+            JS_FreeValue(ctx, active);
+            JS_FreeValue(ctx, for_nav);
+        }
     } else {
+        /* A CHILD NAVIGABLE GETS NO ENTRY LIST AND NO NAVIGATION API ENTRIES, for the one reason above: its
+           §7.4.1 entries live in a nested history nothing builds, and §7.4.1.4's walk over them is what
+           sh_assert_is_traversable names. Its Navigation therefore keeps §7.2.6.3's initial current entry index
+           of −1, and the crash is at the first member that needs an entry — which is where the missing
+           capability is USED, exactly as `pushState` is. */
         JS_FreeValue(ctx, entry);
     }
     JS_FreeValue(ctx, rec);

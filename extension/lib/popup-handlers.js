@@ -345,8 +345,15 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         const session = startExploitProbe(msg);
         // Return the EXACT PoC JS so the popup displays AND the sandbox runs the
         // one artifact. error surfaces a build failure (e.g. opaque page URL).
-        sendResponse({ success: true, sessionId: session.marker, pocJs: session.pocJs || null, error: session.error || null });
+        // `pocWhy` is the OTHER answer and it was being dropped here: when the source's engine-declared
+        // delivery is one this zone cannot PERFORM (a planted cookie, an attacker-served referrer, a
+        // user-supplied file), there is no pocJs and the reason is the whole content of the reply. Without
+        // it the popup could only say "no pocJs", which reads as a broken build rather than as the
+        // mechanism it actually is.
+        sendResponse({ success: true, sessionId: session.marker, pocJs: session.pocJs || null,
+                       pocWhy: session.pocWhy || null, error: session.error || null });
       } catch (e) {
+        RETHROW_FATAL(e);   // an invariant abort is never reported as a probe that failed to build
         sendResponse({ error: (e && e.message) || String(e) });
       }
       return true;

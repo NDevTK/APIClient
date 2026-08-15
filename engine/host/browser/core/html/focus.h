@@ -38,9 +38,12 @@ void focus_install_window_members(JSContext *ctx, JSValueConst global);
  *
  * "For each doc of docs, if the focused area of doc is not a focusable area, then run the focusing steps for
  * doc's viewport, and set doc's relevant global object's navigation API's focus changed during ongoing
- * navigation to false." Both halves the rendering algorithm needs are §6.6's, so both are answered HERE and the
- * step reads as the sentence it implements — the alternative is a second copy of "what a focusable area is" in
- * rendering.c, which is the one-fact-two-answers defect.
+ * navigation to false." TWO of the three things the step needs are §6.6's — the CONDITION and the ACTION — so
+ * both are answered HERE and the step reads as the sentence it implements; the alternative is a second copy of
+ * "what a focusable area is" in rendering.c, which is the one-fact-two-answers defect. The THIRD is the flag,
+ * which is HTML §7.2.6.8's field of the NAVIGATION API and not this component's: rendering.c clears it through
+ * core/frame/navigation.h, and §6.6.4's focus update steps step 4.1.1 — in focus.c, where the designation
+ * happens — is what sets it.
  *
  * THE CONDITION. §6.6.2 designates ONE focusable area of each Document as its focused area, and this step
  * exists because the tree can stop making that designation true after the fact: `hidden` added to an ancestor,

@@ -119,9 +119,15 @@ void event_target_install_interface(JSContext *ctx, JSValueConst global);
    name declared by two mixins is installed by both. */
 /* EH_PERMISSION_STATUS is Permissions §6.3's `onchange`, which that interface declares ON ITSELF — a third
    owner of the same name, which is exactly what a bitmask is for. */
+/* EH_NAVIGATION is HTML §7.2.6.2's set on Navigation and EH_NAVIGATION_HISTORY_ENTRY is §7.2.6.5's one on
+   NavigationHistoryEntry, each declared ON its own interface. Neither name belongs to any other mixin, so
+   `oncurrententrychange` and `ondispose` arrive in the one X-list through these two bits — and only the
+   handlers whose events something actually fires are listed there, because an event handler IDL attribute for
+   an event no algorithm dispatches is the shape-only member the IDL audit exists to expose. */
 enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 16,
        EH_MEDIA_QUERY_LIST = 32, EH_XHR = 64, EH_XHR_READYSTATE = 128, EH_SHADOW_ROOT = 256,
-       EH_VISUAL_VIEWPORT = 512, EH_PERMISSION_STATUS = 1024 };
+       EH_VISUAL_VIEWPORT = 512, EH_PERMISSION_STATUS = 1024, EH_NAVIGATION = 2048,
+       EH_NAVIGATION_HISTORY_ENTRY = 4096 };
 /* HTML §3.2.2 click() — "fire a synthetic pointer event named click", which IS §2.9 dispatch, so it is the same
    machine under a second entry rather than a second implementation of it. */
 void event_target_install_click(JSContext *ctx, JSValueConst target);

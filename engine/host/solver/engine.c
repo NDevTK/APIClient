@@ -12,9 +12,12 @@
 #include "solver/cow.h"
 #include "solver/world.h"   /* the routed record's world vector: whose timeline a delivery belongs to */
 #include "core/frame/window_message.h"   /* the receiving half of a routed `windowproxy.post` */
+#include "core/frame/remote_op.h"        /* the receiving half of a cross-agent OPERATION: what performs it */
+#include "core/frame/remote_object.h"    /* …and the grammar its completion crosses back in */
 #include "core/frame/navigable.h"   /* @HEAP's realm count: the one component that holds this agent's realms */
 #include "solver/dom_cow.h"   /* the DOM half of time-travel — swapped per-flow alongside the heap COW delta */
 #include "solver/cold.h"      /* what the frontier's parked snapshots are made of — the cold tier's census */
+#include "solver/quantum.h"   /* the cooperative quantum's asynchronous edge, and what THIS host can measure */
 #include "check.h"
 #include <time.h>
 #include <stdlib.h>
@@ -305,9 +308,22 @@ int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int com
             JSValue p = pending_entry(f->pending, i);
             if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
                 (uint32_t)pending_get_int(p, PEND_REQ) != req) { JS_FreeValue(ctx, p); continue; }
+            /* A SECOND ANSWER TO ONE QUESTION IS NOT A DUPLICATE — it is a SECOND PEER TIMELINE, and this is
+               where the asking side's half of that is missing. A peer's document state IS its flows, so a
+               cross-agent operation is performed by every live timeline it has and each one completes with its
+               own answer; `otherW.length` has N answers for N peer timelines and they are all true. Taking the
+               first and asserting on the rest picks a timeline; overwriting picks the last, after the machine
+               may already have read the first. What belongs here is a FORK of the asking flow at the point it
+               parked — a sibling per additional answer, resuming the same suspended frame with that answer's
+               value — which is the same snapshot fork a concolic branch takes, asked for from the outside
+               rather than at a branch. Build that; until it exists this crashes rather than choosing.
+               (A host-COMPUTED answer — a fetch this zone performed — genuinely has one answer, and answering
+               one of those twice is the host bug this assert used to be about. Both readings end here.) */
             DCHECK(!pending_get_int(p, PEND_HAVE_VALUE),
-                   "the host answered one request twice — the second answer would overwrite a value the "
-                   "asking machine may already have read");
+                   "one request was answered twice. If the answers came from a PEER, that is two of its "
+                   "timelines answering and both are true: fork the asking flow at its park — a sibling per "
+                   "additional answer, resuming the same suspended frame with that answer — instead of letting "
+                   "one of them overwrite a value the asking machine may already have read");
             pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
             pending_set(p, PEND_COMPLETION, JS_NewInt32(ctx, completion));
             pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
@@ -577,6 +593,96 @@ static void flow_deliver(JSContext *ctx, Flow *f)
     free(f->deliver_origin); f->deliver_origin = NULL;
 }
 
+/* ---- ASKED TO PERFORM ONE, WHICH IS THE HALF WITH AN ANSWER ---------------------------------------------- */
+
+/* engine_route carries a one-way delivery. THIS one is asked, and everything about its shape follows from that.
+ *
+ * IT IS NOT A REQUEST/RESPONSE PAIR, because a document's state IS its flows. `otherW.length` is the child-
+ * navigable count of the peer's ACTIVE DOCUMENT, and the peer holds N timelines in which that document is N
+ * different documents — so the honest answer is N answers, and a channel with one slot for "the" answer picks
+ * one of them with nothing to say which. The record is therefore attached to EVERY live flow, exactly as a
+ * delivery is and for the same reason, and each of them answers under its own delta. The asking flow's side of
+ * that — forking per answer rather than taking the first — is named where the second answer arrives
+ * (engine_host_answer), because that is where the mechanism is missing.
+ *
+ * THE ANSWER IS A PROGRAM'S COMPLETION, so it does not exist until a program has finished: the operation is
+ * QUEUED as that flow's next program (flow_perform) and the completion is read where the scheduler reads one
+ * (flow_step). It is a flow on the one frontier — preemptible, parkable at any depth, ranked with everything
+ * else — which is the whole reason a peer answering a read that has to suspend is possible at all. A serve loop
+ * that ran the program to completion would be a second scheduler and a drive-to-completion, twice over.
+ *
+ * `token` IS THE TRUSTED ZONE'S and is opaque here: this instance echoes it on the answer so the zone can route
+ * the completion back to the instance and the request id that asked. It is not the asking flow's request id
+ * because that id is unique only within the asking instance, and two peers may ask this one the same number. */
+void engine_perform(JSContext *ctx, const char *token, const char *record)
+{
+    RemoteOp *op;
+    int n;
+
+    DCHECK(record != NULL && *record, "a cross-agent operation arrived with no text to perform");
+    DCHECK(token != NULL && *token, "a cross-agent operation arrived with no rendezvous token — the completion "
+                                    "would have nothing to name and the asking flow would park forever");
+    DCHECK(strchr(token, '\t') == NULL && strchr(token, '\n') == NULL,
+           "a rendezvous token carries a record separator — the answer notice would be read as two notices and "
+           "the tail routed as an operation");
+    DCHECK(g_sess_live, "a cross-agent operation was asked of an instance with no live session — there is no "
+                        "scheduler to run the program that answers it");
+
+    op = remote_op_parse(record);
+    /* ROUTED TO THE WRONG INSTANCE is the trusted zone's bug, and answering anyway is worse than not answering:
+       `length` would be the count of THIS document's frames returned as the other document's. */
+    DCHECK(world_doc_hosted(world_doc_intern(remote_op_doc(op))),
+           "a cross-agent operation was routed to an instance that does not hold the document it names — the "
+           "offscreen is the only zone that knows which instance holds which document, and it sent this one to "
+           "the wrong place");
+    DCHECK(world_doc_intern(remote_op_doc(op)) == world_local_doc(),
+           "a cross-agent operation named a document this agent hosts but is not its root — performing it needs "
+           "the REALM of that document (document_realm_of), which this router does not select yet: build the "
+           "per-document realm lookup here before a peer can read through a child navigable");
+    {
+        WorldId w, anc[16];
+        int n_anc = world_parse(remote_op_worlds(op), &w, anc, (int)(sizeof anc / sizeof anc[0]));
+        DCHECK(w.doc != world_local_doc(), "a cross-agent operation came back to the instance whose flow asked "
+                                           "it — an operation on this agent's own object is performed locally "
+                                           "and never leaves");
+        /* THE ASKING WORLD'S SEGMENT IN THIS INSTANCE, materialized here for the reason engine_route does it
+           here: on its own line, because a DCHECK's condition is compiled out in release and a segment created
+           inside one would exist in dev and not in production. The conjunction of it with the answering flow's
+           own timeline is the JOIN engine_route names, and it is the identity exactly while the segment is
+           empty. */
+        CowDelta *seg = world_segment(ctx, w, anc, n_anc);
+        (void)seg;
+        DCHECK(cow_delta_empty(seg),
+               "the asking world has WRITTEN in this instance, so the operation must be performed in the "
+               "conjunction of the answering flow's timeline with those writes — the same JOIN engine_route "
+               "names, and the same reason: stacking one over the other overwrites whichever slot both touched "
+               "and unapplies to the baseline rather than to the flow's value");
+    }
+    remote_op_free(op);
+
+    n = flow_count();
+    DCHECK(n > 0, "a cross-agent operation was asked of a document whose every timeline had already finished — "
+                  "a document a peer still holds a reference into can still be asked, so its flows must stay "
+                  "live while that reference exists: build that before this can be answered");
+    for (int i = 0; i < n; i++) {
+        Flow *f = flow_at(i);
+        /* ONE OUTSTANDING OPERATION PER TIMELINE. A second one arriving before this flow has ANSWERED the first
+           is two questions whose answers are two programs' completions, and this flow has one slot for the
+           token that says which. They are sequential rather than alternative (the asking side parks on each in
+           turn), so the mechanism is a QUEUE per flow — not a fork, which is what two CONTRADICTORY askers
+           would need. The zone that routes them has to be able to ask twice before it can, so this crashes
+           rather than answering the second question with the first one's token. */
+        DCHECK(f->perform == NULL && f->answer_token == NULL,
+               "a second cross-agent operation reached a flow that has not answered its first — an answer is a "
+               "program's completion and this flow holds one token, so the second would be answered under the "
+               "first one's name. Build the per-flow operation QUEUE (they are sequential, not alternative)");
+        f->perform = strdup(record);
+        f->answer_token = strdup(token);
+        CHECK(f->perform && f->answer_token, "engine: OOM attaching a cross-agent operation to a flow");
+    }
+}
+
+
 const char *engine_host_notices(void) {
     static char *drained;
     free(drained);
@@ -810,6 +916,16 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
        two timelines of one document, which no peer sent. */
     DCHECK(parent->deliver == NULL, "a flow forked while still holding a routed record — the sibling would "
                                     "inherit it and deliver the peer's one message a second time");
+    /* THE SAME SENTENCE FOR AN UNSTARTED OPERATION and the OPPOSITE one for a running answer. A cross-agent
+       operation is turned into a program before any code runs, so no flow can be at a branch still holding the
+       RECORD — two flows would then perform one operation twice and the peer would get two answers for a
+       question it asked of one timeline. But the ANSWER TOKEN is different in kind: the program that answers is
+       the page's own code, so a branch inside it is a real peer timeline in which the answer differs, and the
+       sibling must carry the token and answer too. That is the multiplicity §7.2.5.1 has when a document's
+       state is its flows, and dropping it here would silently pick this arm's answer. */
+    DCHECK(parent->perform == NULL, "a flow forked while still holding an unstarted cross-agent operation — the "
+                                    "sibling would inherit the record and perform the peer's one operation a "
+                                    "second time under the same token");
     /* THE SIBLING'S WORLD IS A CHILD OF THE PARENT'S, and the edge is recorded so another instance that
    already holds a segment for the parent can materialize the sibling's by forking it — the same O(1)
    shared-base-segment fork this line performs locally, performed there. */
@@ -829,6 +945,12 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
     sib->dom_base = dom_cow_fork();
     sib->dec_blob = g_fork_dec; g_fork_dec = NULL;
     sib->pin_blob = g_fork_pins; g_fork_pins = NULL;
+    /* THE ANSWER TOKEN TRAVELS, per the assertion above: this sibling resumes the same operation's program from
+       the branch and completes it in its own timeline, so it owes the same peer an answer of its own. */
+    if (parent->answer_token) {
+        sib->answer_token = strdup(parent->answer_token);
+        CHECK(sib->answer_token, "engine: OOM forking a cross-agent operation's rendezvous token");
+    }
     if (parent->dyn_n) {              /* inherit the lazy chunks loaded up to the branch */
         sib->dyn = malloc((size_t)parent->dyn_n * sizeof(char *)); CHECK(sib->dyn, "engine: OOM fork dyn");
         /* THE FLAGS COME WITH THE BODIES. A field added to the queue is an obligation at every clone, free and
@@ -931,7 +1053,10 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
 /* WHAT KIND OF PROGRAM a queued body is. It is ONE queue because they are one thing — code the page caused to
    run — and the kind decides exactly two questions, both of them at the ends of that program's life: may it
    fail to COMPILE, and does anything read its COMPLETION VALUE. */
-typedef enum { DYN_PAGE_SCRIPT = 0, DYN_CANDIDATE, DYN_JAVASCRIPT_URL } DynKind;
+/* A CROSS-AGENT OPERATION is a fourth kind and answers those two questions differently from all three: its
+   program is the ENGINE's own text, so a compile failure is this engine's bug and not the page's; and its
+   completion is not merely read, it is the ANSWER a peer's flow is parked on. */
+typedef enum { DYN_PAGE_SCRIPT = 0, DYN_CANDIDATE, DYN_JAVASCRIPT_URL, DYN_CROSS_AGENT_OP } DynKind;
 
 static void engine_queue(const char *body, DynKind kind) {
     Flow *f = flow_running();   /* the running flow owns the lazy chunk it loads */
@@ -970,30 +1095,93 @@ void engine_queue_candidate(const char *body) { engine_queue(body, DYN_CANDIDATE
    forkable and parkable, which a C `JS_Eval` under the live flow could never be. */
 void engine_queue_javascript_url(const char *body) { engine_queue(body, DYN_JAVASCRIPT_URL); }
 
-/* Preempt hook, two orthogonal yield decisions at the one per-back-edge check:
+/* THE OPERATION BECOMES THIS FLOW'S NEXT PROGRAM. Not a call: a peer answers by RUNNING a program, and every one
+   of these is the page's own code — an IDL getter, a page's setter, a page's function — which a C activation
+   has no flow base under. Queued with the flow switched in, so the operands the program reads are written into
+   THIS flow's delta and no sibling sees them. */
+static void flow_perform(JSContext *ctx, Flow *f)
+{
+    RemoteOp *op = remote_op_parse(f->perform);
+    WorldId w, anc[16];
+    int n_anc;
+    CowDelta *seg;
+
+    DCHECK(flow_running() == f, "a cross-agent operation was performed while another flow was switched in — its "
+                                "operands would be written into that flow's delta and its program would run "
+                                "against that flow's document");
+    n_anc = world_parse(remote_op_worlds(op), &w, anc, (int)(sizeof anc / sizeof anc[0]));
+    /* ASKED AGAIN AT THE MOMENT IT RUNS, for the reason flow_deliver asks it again: the scheduler has run other
+       flows since the record arrived, and which world holds writes here is a property of the run. */
+    seg = world_segment(ctx, w, anc, n_anc);
+    (void)seg;
+    DCHECK(cow_delta_empty(seg),
+           "a cross-agent operation ran in the answering flow's timeline alone while the asking world holds "
+           "writes in this instance — it answers about a document missing everything the asking flow did here. "
+           "Build the join of the two deltas that engine_route names");
+    engine_queue(remote_op_program(ctx, op), DYN_CROSS_AGENT_OP);
+    remote_op_free(op);
+    free(f->perform); f->perform = NULL;   /* the TOKEN outlives it: the answer is the program's completion */
+}
+
+/* AND THE COMPLETION, READ WHERE THE SCHEDULER READS ONE. `cv` is what the program completed with — its value,
+   or JS_EXCEPTION with the throw pending. THE THROW IS THE ANSWER: the peer ran a program and a program that
+   threw completed just as truly as one that returned, so it is encoded with its type and raised in the flow
+   that ASKED, at the line that asked, where that page's own try/catch is. Reporting it as this document's page
+   error instead would lose it and answer `undefined`.
+   IT CROSSES AS AN EMISSION, one-way: nothing here waits for it, so nothing has to un-send it when this flow
+   parks or is outranked — the same argument that makes a cross-document message an emission. */
+static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
+{
+    JSValue thrown = JS_UNDEFINED;
+    int completion = ENGINE_COMPLETION_NORMAL;
+    char *enc, *rec;
+    size_t cap;
+
+    DCHECK(f->answer_token != NULL,
+           "a cross-agent operation's program completed with no rendezvous token — the completion names no "
+           "question, so the flow that asked would park on it forever");
+    if (JS_IsException(cv)) {
+        thrown = JS_GetException(ctx);
+        completion = ENGINE_COMPLETION_THROW;
+        cv = thrown;
+    }
+    enc = remote_completion_encode(ctx, completion, cv);
+    cap = strlen(f->answer_token) + strlen(enc) + 24;
+    rec = malloc(cap);
+    CHECK(rec != NULL, "engine: OOM writing a cross-agent operation's answer — a dropped answer parks the "
+                       "asking flow on a question nothing will answer again");
+    snprintf(rec, cap, "remoteop.answer\t%s\t%s", f->answer_token, enc);
+    engine_host_notify(ctx, rec);
+    free(rec);
+    free(enc);
+    JS_FreeValue(ctx, thrown);
+    free(f->answer_token); f->answer_token = NULL;
+}
+
+/* Preempt hook, two orthogonal yield decisions at the one per-opcode suspend point:
    (1) VALUE yield — suspend the running flow the MOMENT a parked flow outranks it (the WFQ, not a clock,
        decides which flow runs). The rival is recomputed only when the frontier membership changes (a fork
-       adds a flow) or the running flow switches — cached by (gen, cur) so this is O(1) per back-edge, never
+       adds a flow) or the running flow switches — cached by (gen, cur) so this is O(1) per consultation, never
        an O(flows) scan per opcode.
-   (2) COOPERATIVE-QUANTUM yield — a thread-sharing floor: even a top-ranked flow breathes every Q back-edges
-       so the host loop can interleave / pump / snapshot. NOT a step cap: it drops/reorders no flow and the
-       flow resumes byte-identically. */
-/* THE COOPERATIVE QUANTUM IS WALL-CLOCK, and it was a COUNT — which §scheduler bans by name: the yield comes
-   "after a bounded wall-clock slice", "never after N opcodes (an opcode-budget counter is a step cap, banned)".
-   The difference is not academic. Measured on the fixture's main program: 64 suspend points were offered over
-   FIVE SECONDS, the WFQ declined 63 of them because no sibling outranked the runner, and the 64th tick was the
-   only thing that ever parked it. A count cannot bound a slice when the work between two suspend points is
-   ~78ms; only the clock can. Reading it per consultation is the point — a stride would reintroduce exactly the
-   count this replaces, and at any stride worth having the same five seconds fit inside it. */
-/* AND THE LINE IT DESCRIBES WAS THE COUNT. The paragraph above was written when the clock replaced
-   `(++g_qtick % FLOW_QUANTUM) == 0`; the tree this file now lives in was rebuilt from a restore point that
-   carried the prose and not the code, so the comment was accurate about §scheduler and wrong about the line
-   under it — authoritative-sounding text over the banned counter, which is the failure mode a stale DFAIL has.
-   The slice's start is set by engine_sched_step, the one place that knows when a slice begins, and the hook
-   already reads the clock on every consultation for the gap census below, so asking it costs nothing. */
-static int64_t engine_now_ms(void);   /* the gap clock below; defined with the session */
-static int64_t g_slice_start = 0;
-static void engine_slice_begin(void) { g_slice_start = engine_now_ms(); }
+   (2) COOPERATIVE-QUANTUM yield — a thread-sharing floor: even a top-ranked flow breathes once it has consumed
+       a slice, so the host loop can interleave / pump / snapshot. NOT a step cap: it drops/reorders no flow and
+       the flow resumes byte-identically. */
+/* THE QUANTUM'S EXPIRY IS ASKED, NOT COMPUTED HERE — and the clock it used to be computed from is gone with the
+   arithmetic. It was `now - g_slice_start >= ENGINE_QUANTUM_MS` on a WALL clock read at each consultation, and
+   that was wrong in two ways at once.
+   WRONG MEASURE: §Testing says measure the thing the invariant is about — CPU actually consumed, never elapsed
+   time. The quantum is about thread-SHARING, and a descheduled thread is denying nobody anything (the host that
+   would use the returned thread is the same thread, descheduled with it), so wall time it did not run for is
+   not budget it spent.
+   WRONG SOURCE, WHICH IS THE HALF THAT ACTUALLY BROKE IT: this hook runs only when something RAISED a yield
+   request, and until now everything that raised one was a shape of the PAGE'S OWN BYTECODE — a loop back-edge,
+   a call, a concolic fork. A stretch of straight-line call-free code raised nothing, so the clause was not
+   merely computed from the wrong clock, it was not EVALUATED AT ALL for as long as that stretch ran. A budget
+   whose expiry is only noticed when the debtor volunteers is not a budget.
+   Both are now one component's problem: solver/quantum.h owns the edge that raises the request asynchronously
+   (a per-thread CPU timer natively) AND the measure the expiry is decided on, per host, so the answer here is a
+   question rather than an arithmetic. This hook keeps the POLICY, which is all §scheduler ever wanted here. */
+static int64_t engine_now_ms(void);   /* the WALL clock, for the gap census below — reported, never a verdict */
 /* THE RIVAL IS CACHED; THE COMPARISON IS NOT — and caching the comparison was a second way the monopolizer kept
    the thread. `g_outranked` was a boolean recomputed only when the frontier's membership changed or the running
    flow switched, which is sound only while nothing else can move a weight. The running flow's `cpu` moves on
@@ -1021,7 +1209,7 @@ static uint64_t g_preempt_asked = 0;
 static int64_t g_last_ask = 0, g_max_gap = 0;
 
 /* The solver's policy does not care WHICH kind of point it was offered — its two decisions are the WFQ ranking
-   and the wall-clock slice, and both ask whether this flow should still hold the thread. */
+   and the consumed slice, and both ask whether this flow should still hold the thread. */
 static int preempt_hook(int kind) {
     (void)kind;
     Flow *cur = flow_running();
@@ -1039,10 +1227,11 @@ static int preempt_hook(int kind) {
        only asked between steps. Deciding this by weight would re-enter it immediately and spin. */
     if (cur && flow_blocked(cur)) return 1;
     if (cur && g_rival_w > flow_weight(cur)) return 1;   /* value yield — the rival is cached, the verdict is not */
-    /* (2) COOPERATIVE-QUANTUM floor — thread-sharing, not value, and measured on the clock the slice is bounded
-       by. Nothing is dropped, starved or reordered across it: the flow parks and the SAME flow resumes
+    /* (2) COOPERATIVE-QUANTUM floor — thread-sharing, not value. The same expiry the scheduler loop returns to
+       the host on, asked at both levels so a flow that parks on it and a step that returns on it are one event
+       seen twice. Nothing is dropped, starved or reordered across it: the flow parks and the SAME flow resumes
        byte-identically unless the WFQ says otherwise. */
-    return now - g_slice_start >= ENGINE_QUANTUM_MS;
+    return quantum_expired();
 }
 
 /* Advance flow `f` by up to one quantum. Returns 1 when the flow has FINISHED all its scripts + lazy chunks,
@@ -1169,6 +1358,10 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                exist: the task it enqueues is what every branch below then finds on the queue. Consumed once —
                the record is freed and cleared — so a resumed delivery flow falls through to its jobs. */
             if (f->deliver) { g_step_unit = "routed-delivery"; flow_deliver(ctx, f); return 0; }
+            /* AND THE OPERATION A PEER IS PARKED ON, before this flow's own programs for the reason the
+               delivery is: it is a work item another agent's flow is suspended at, and it becomes one of THIS
+               flow's programs — after which the loop below runs it like any other. */
+            if (f->perform) { g_step_unit = "cross-agent-operation"; flow_perform(ctx, f); return 0; }
             if (f->script_i < n) {
                 body = bodies[f->script_i];
                 if (!body) {
@@ -1297,6 +1490,12 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                    no navigation — `<a href="javascript:{{{">` is a link that does nothing, not an engine bug. A
                    PAGE script that does not compile is a different thing entirely and still asserts. */
                 DCHECK(kind != DYN_PAGE_SCRIPT, "flow_step: a page <script>/chunk did not compile");
+                /* A CROSS-AGENT OPERATION'S PROGRAM IS THE ENGINE'S OWN TEXT (core/frame/remote_op.c), so it
+                   parses or this engine wrote it wrong — and skipping it would leave the peer's flow parked on
+                   an answer that is now never coming. */
+                DCHECK(kind != DYN_CROSS_AGENT_OP,
+                       "the program that performs a cross-agent operation did not compile — it is this engine's "
+                       "own text, and skipping it parks the asking flow on an answer nothing will send");
                 JS_FreeValue(ctx, exc);
                 /* STEP OVER IT. Not advancing left the flow pointing at the same unparseable body, so the next
                    scheduler step compiled it again, and again — the flow could never finish and never made
@@ -1314,9 +1513,15 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
             JSValue cv = JS_UNDEFINED;
             g_step_unit = "resume-program";
             int r = JS_FlowResume(ctx, (JSValue *)f->frame, &cv);
+            /* A CROSS-AGENT OPERATION'S COMPLETION IS AN ANSWER, AND IT IS ASKED FIRST because the two readings
+               of a throw are mutually exclusive: this program is another agent's operation, so its throw
+               belongs to the flow that ASKED — reported here as this document's page error it would be lost and
+               the peer would resume with `undefined` where the spec propagates a throw. */
+            if (r == 0 && flow_dyn_kind(f, n) == DYN_CROSS_AGENT_OP)
+                flow_answer_perform(ctx, f, cv);
             /* A SCRIPT THAT THREW names a capability the page needed and this engine does not have. Ending the
                flow there is intentional; losing WHICH capability was not. */
-            if (JS_IsException(cv)) {
+            else if (JS_IsException(cv)) {
                 JSValue e = JS_GetException(ctx);
                 result_page_error_value(ctx, e);
                 JS_FreeValue(ctx, e);
@@ -1429,6 +1634,12 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
                              "everything those frames close over, is retained by a handle nothing will free");
     DCHECK(f->deliver == NULL, "a delivery flow finished without making its delivery — the record it was seeded "
                                "with is a message the peer sent and this document never received");
+    /* AND THE SAME FOR AN OPERATION, at both ends of it: a record never turned into a program is a question
+       nobody performed, and a token never spent is a peer's flow parked at the line that asked, forever. */
+    DCHECK(f->perform == NULL && f->answer_token == NULL,
+           "a flow finished holding a cross-agent operation — either the record was never performed, or its "
+           "program's completion was never sent, and either way the flow that ASKED is suspended at the line "
+           "that asked it with nothing coming");
     decide_leave(ctx);
     cow_unapply(ctx, (CowDelta *)f->delta); cow_set_current(NULL);
     cow_delta_free(ctx, (CowDelta *)f->delta); f->delta = NULL;
@@ -1472,17 +1683,15 @@ static const JSFlowControlHooks FC_EXPLORE = { .branch = solver_decide, .outcome
 static const JSFlowControlHooks FC_VERIFY  = { .preempt = preempt_hook };   /* candidate re-fire: no fork, still preemptible */
 static const JSFlowControlHooks FC_OFF     = { 0 };
 
-/* THE SCHEDULER'S CLOCK, and it is ONE clock for both things this file times: the cooperative slice and the
-   WFQ's aging charge. CLOCK_MONOTONIC, because both are about elapsed thread time and a wall-clock adjustment
-   must not shorten or extend either — and because a charge that ran BACKWARDS would not merely lose aging, it
-   would PROMOTE the flow that burned the thread (asserted at flow_age_running).
-   MICROSECONDS IS THE PRIMITIVE, and the resolution is load-bearing rather than tidy. The aging charge is one
-   step's share of it, and a scheduler step is routinely under a millisecond: read in milliseconds, a thousand
-   consecutive 900-microsecond steps each charge ZERO and the flow that burned nearly a second of thread ages by
-   nothing at all — the same defect as the step unit, arriving through the clock instead. It is also why the
-   scheduler reads this ONCE per iteration and uses the reading as both the previous step's end and the next
-   step's start: consecutive readings TELESCOPE, so whatever the platform's clock granularity, the total charged
-   is the total elapsed and no quantisation is lost between steps. */
+/* THE WALL CLOCK, AND IT NOW TIMES NOTHING THE SCHEDULER DECIDES ON. It used to be "ONE clock for both things
+   this file times: the cooperative slice and the WFQ's aging charge", and both of those moved to the quantum's
+   own measure (solver/quantum.h) — the slice because §Testing says a budget is CPU actually consumed, the aging
+   charge because §WFQ calls its term CPU-aging and the two must be in one currency. What is left for elapsed
+   time is the seam message's REPORTED numbers: the gap between two suspend points, and how long a step took on
+   the wall. Both are printed and neither is a verdict, which is exactly the distinction §Testing insists on.
+   CLOCK_MONOTONIC, so a wall-clock adjustment cannot make a reported gap negative and read as an impossibility.
+   MICROSECONDS IS THE PRIMITIVE and the resolution is still load-bearing: milliseconds would quantise a
+   sub-millisecond step to zero, and the gap census is built out of exactly those. */
 static int64_t engine_now_us(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
@@ -1554,9 +1763,10 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int f
 }
 
 /* One QUANTUM. Returns ENGINE_STEP_DONE when the frontier is empty (the session is closed and its hooks are
-   uninstalled) and ENGINE_STEP_YIELD when the slice expired with the frontier intact. The slice is wall-clock
-   and it is NOT a cap: nothing is dropped, starved, reordered or forgotten across it — the next call resumes the
-   same top flow on the same frontier, which is the razor §scheduler states. */
+   uninstalled) and ENGINE_STEP_YIELD when the slice expired with the frontier intact. The slice is a budget of
+   CPU actually consumed (solver/quantum.h says what each host can measure) and it is NOT a cap: nothing is
+   dropped, starved, reordered or forgotten across it — the next call resumes the same top flow on the same
+   frontier, which is the razor §scheduler states. */
 static int (*g_stall_hook)(void);
 void engine_set_stall_hook(int (*owed)(void)) { g_stall_hook = owed; }
 
@@ -1568,24 +1778,29 @@ double engine_top_weight(void) {
     return b ? flow_weight(b) : -1.0 / 0.0;
 }
 
-int engine_sched_step(void) {
+static int engine_sched_slice(void) {
     JSContext *ctx = g_sess_ctx;
     char **bodies = g_sess_bodies;
     int n = g_sess_n;
     Flow *cur = g_sess_cur;
-    /* ONE CLOCK READING PER ITERATION, carried. It closes the step just run (the WFQ's aging charge), opens the
-       next one, and decides the slice — three uses of a quantity that is read once, so the charges TELESCOPE
-       across the whole quantum and the loop costs no more clock reads than the deadline check alone ever did.
+    /* ONE READING OF THE SLICE'S OWN MEASURE PER ITERATION, carried. It closes the step just run (the WFQ's
+       aging charge) and opens the next one, so the charges TELESCOPE across the whole quantum and no
+       quantisation is lost between steps.
+       IT IS THE QUANTUM'S MEASURE AND NOT A SECOND CLOCK, which is the correction this line carries. It used to
+       be `engine_now_us()` — CLOCK_MONOTONIC — with a paragraph explaining that "this host has no CPU clock" and
+       that an ORDER decision can afford a wrong reading. Half of that was true of emscripten and none of it was
+       true of the native host, which has had a per-thread CPU clock all along; and §WFQ names the term CPU-AGING
+       — "a monopolizer that burns CPU without emitting" — so the currency the aging charge is denominated in has
+       to be the one the slice is. quantum_thread_us() is that one quantity, answered per host, and where the
+       host genuinely has no CPU clock quantum_measure() says so instead of this comment claiming it.
        WHAT TELESCOPING PUTS ON THE WRONG BILL, said plainly rather than left to be discovered: the context
        switch and the finish that happen BETWEEN two readings are charged to the flow stepped next, not to the
        one they were performed for. That is one COW delta swap of misattribution, it is bounded by the swap this
-       scheduler already counts, and buying it back would cost a second clock read per iteration for an ORDER
+       scheduler already counts, and buying it back would cost a second reading per iteration for an ORDER
        decision that a notch of quantisation already absorbs. Charging nothing at all — which is what a
        release build did — is the error that matters here, not which of two flows pays for a swap. */
-    int64_t now = engine_now_us();
-    int64_t deadline = now + (int64_t)ENGINE_QUANTUM_MS * 1000;
+    int64_t now = quantum_thread_us();
     int owed = 0;   /* consecutive picks that could not progress; == flow_count() means every member is waiting */
-    engine_slice_begin();   /* the hook's floor measures THIS slice, so it starts when the slice does */
     DCHECK(g_sess_live, "engine_sched_step with no live session");
     /* THE FLOW CARRIED ACROSS A QUANTUM BOUNDARY IS STILL A MEMBER OF THE FRONTIER. §scheduler's razor says the
        cooperative yield resumes "the SAME top flow on the byte-identical frontier", and the whole of what makes
@@ -1645,18 +1860,19 @@ int engine_sched_step(void) {
                the only clock read on this path sat inside `#if APICLIENT_DEV` — so a release build charged the
                constant 1 per step and had no aging policy at all. CLAUDE.md's release exemption covers DCHECKs,
                which assert; it never covers the engine's BEHAVIOUR, and a WFQ that is fair only in development
-               is not the one policy §scheduler requires. It costs nothing to fix: the reading is carried in
-               `now`, so this loop performs exactly the clock reads its deadline check always did.
-               IT IS ELAPSED THREAD TIME, NOT PROCESS CPU, AND THAT IS SAID RATHER THAN IMPLIED. This host has no
-               CPU clock — emscripten answers CLOCK_PROCESS_CPUTIME_ID and CLOCK_THREAD_CPUTIME_ID from
-               emscripten_get_now() like every other clock, which is wall time (the seam verdict below says the
-               same thing and is why it stopped using a clock at all). The two consumers differ in what a wrong
-               reading COSTS, which is the whole reason one may use it and the other may not: the seam assertion
-               reaches a VERDICT and aborts, so a descheduled step that looks like a seamless one produces a
-               false crash and sends the next reader hunting a phantom. This is an ORDER decision. A flow that
-               was descheduled is charged for time it did not burn, so it is demoted one notch early and a
-               sibling runs sooner — nothing is dropped, truncated, skipped or reordered out of the frontier,
-               which is the only thing the WFQ is allowed to be and the razor §scheduler states.
+               is not the one policy §scheduler requires. It costs nothing: the reading is carried in `now`, so
+               this loop performs exactly the readings its slice check always did.
+               IT IS THE QUANTUM'S OWN MEASURE (solver/quantum.h), which is CPU actually consumed wherever the
+               host has a CPU clock — natively CLOCK_THREAD_CPUTIME_ID, the same clock the slice's timer is armed
+               on. The paragraph that stood here said flatly that "this host has no CPU clock", which was a claim
+               about emscripten written into a file that also compiles for Linux, and it was the licence for
+               charging aging in wall time. Where it IS true — the extension's wasm instance, whose every WASI
+               clock is emscripten_get_now() — the fallback is the same wall clock as before and quantum_measure()
+               names it, so nothing here has to claim anything. On that host a descheduled step is charged for
+               time it did not burn, so a flow is demoted one notch early and a sibling runs sooner; nothing is
+               dropped, truncated, skipped or reordered out of the frontier, which is the only thing the WFQ is
+               allowed to be and the razor §scheduler states. The seam assertion below may not take that trade,
+               because it reaches a VERDICT and aborts — which is why it decides on WORK and not on any clock.
                WORK-DONE WOULD BE THE WRONG QUANTITY HERE even though it is the right one below: a flow that
                forks nothing, queues nothing and emits nothing — a tight compute loop over opaque input — burns
                the thread while its share of engine_work_done() stays at zero, so aging by work would never
@@ -1664,12 +1880,18 @@ int engine_sched_step(void) {
             int64_t t0 = now;   /* this step's start: the previous iteration's reading, carried */
 #if APICLIENT_DEV
             uint64_t pq0 = 0, pf0 = 0, pa0 = g_preempt_asked;
-            /* THE WORK THIS STEP PERFORMS, sampled beside the clock and for a reason the clock cannot serve —
+            /* THE WORK THIS STEP PERFORMS, sampled beside the clocks and for a reason no clock can serve —
                see the verdict below. Forks, flows and jobs are things the engine DID; no amount of being
                descheduled can inflate them. */
             long w0 = engine_work_done();
+            /* AND THE WALL CLOCK, READ SEPARATELY BECAUSE IT MEASURES A DIFFERENT THING. `now` is the slice's
+               measure (CPU, where the host has one); the gap census and the step duration below are WALL
+               quantities the seam message REPORTS and never decides on, so mixing the two units into one
+               subtraction would produce a "wall gap" that is neither. Two numbers, two clocks, one verdict —
+               and the verdict is neither of them. */
+            int64_t wall0_ms = engine_now_ms();
             JS_FlowPreemptStats(&pq0, &pf0);
-            g_max_gap = 0; g_last_ask = t0 / 1000;   /* this step's gaps, measured from the moment it starts */
+            g_max_gap = 0; g_last_ask = wall0_ms;   /* this step's gaps, measured from the moment it starts */
             idl_slowest_reset();              /* ...and this step's slowest single Web API member step */
 #endif
             int r = flow_step(ctx, cur, bodies, n);
@@ -1682,13 +1904,13 @@ int engine_sched_step(void) {
                    "the flow the scheduler stepped is not the one it is about to charge for that step's thread "
                    "time — the aging term would demote a flow that did not burn it and leave the one that did "
                    "holding its rank");
-            now = engine_now_us();
+            now = quantum_thread_us();
             flow_age_running(now - t0);
             /* THE COOPERATIVE-QUANTUM CONTRACT, ASSERTED AT ITS SITE. A flow_step is supposed to reach a
                suspend point — a bytecode back-edge where the preempt hook runs, a step machine's boundary —
                within the quantum, which is what makes the frontier parkable at all. A path with NO suspend
-               point on it does not slow the run down, it STOPS it: the deadline below is never reached, the
-               scheduler never returns, and the whole engine spins at 100% with the switch count frozen.
+               point on it does not slow the run down, it STOPS it: the slice's expiry below is never observed,
+               the scheduler never returns, and the whole engine spins at 100% with the switch count frozen.
                Nothing else catches that. The preempt-fired-vs-requested stat cannot: a pure C loop reaches no
                back-edge, so no preempt is ever REQUESTED and the ratio stays a perfect 100% while the engine
                hangs. So the hang was silent, and localising one meant bisecting the fixture by hand.
@@ -1699,11 +1921,12 @@ int engine_sched_step(void) {
                it has no seam at all. */
 #if APICLIENT_DEV
             {
-                /* THE SAME READING THE CHARGE ABOVE TOOK, not a second one: the step's end is a fact, and asking
-                   the clock twice for it would make the aging charge and the reported duration two different
-                   numbers for one interval. */
-                int64_t done = now / 1000;
-                int64_t spent = done - t0 / 1000;
+                /* THE WALL CLOCK'S OTHER END, taken once, for the two REPORTED numbers below. It is deliberately
+                   a different reading from the aging charge above: that one is the slice's measure and this one
+                   is elapsed time, and a message that printed one of them under the other's name is exactly the
+                   confusion §Testing's four false reds came from. */
+                int64_t done = engine_now_ms();
+                int64_t spent = done - wall0_ms;
                 (void)spent;
                 /* the TAIL closes the last gap: a step that offers a point and then runs for seconds before
                    returning has that silence between its last offer and its end, and nothing else records it. */
@@ -1721,12 +1944,14 @@ int engine_sched_step(void) {
                    a tree whose seam was intact, and the same commit run alone passed; the resulting diagnosis
                    was published and had to be retracted. A false failure is worse than a missing one, because it
                    sends the next reader hunting a phantom in whichever component happened to be under test.
-                   CPU TIME WOULD BE THE RIGHT MEASURE AND THIS HOST DOES NOT HAVE ONE. Emscripten's WASI
-                   clock_time_get answers every non-realtime clock — CLOCK_MONOTONIC, and CLOCK_PROCESS_CPUTIME_ID
-                   / CLOCK_THREAD_CPUTIME_ID, which is what ISO C `clock()` is built on — from
-                   emscripten_get_now(), i.e. wall time. So there is no process-CPU source to switch to, and
-                   leaving a wall clock in the verdict while calling it CPU would be worse than saying so.
-                   WHAT IS MEASURED INSTEAD IS WHAT THE STEP DID. Forks, flows created and jobs run are work the
+                   CPU TIME IS THE RIGHT MEASURE AND ONE OF THE TWO HOSTS HAS IT — see the second verdict below.
+                   This paragraph used to say flatly that "this host does not have one", which was true of the
+                   extension's wasm instance (emscripten's WASI clock_time_get answers CLOCK_MONOTONIC and both
+                   CPUTIME clocks from emscripten_get_now(), i.e. wall time) and false of the native build, which
+                   this same file compiles for. solver/quantum.h answers it per host instead of a comment
+                   claiming it for both, and quantum_measure_is_cpu() is what the CPU verdict is gated on so
+                   there is never a wall clock inside something calling itself CPU.
+                   WHAT IS MEASURED HERE IS WHAT THE STEP DID. Forks, flows created and jobs run are work the
                    engine PERFORMED; being descheduled cannot inflate any of them, because a thread that is not
                    running performs none. A step that mints thousands of siblings without once consulting the
                    preempt hook has no seam on that path whatever the machine's load — that is the invariant,
@@ -1737,12 +1962,34 @@ int engine_sched_step(void) {
                    step immediately after each fork, so one scheduler step mints an unbounded chain of siblings
                    and never comes back to be ranked.
                    THE ONE CASE THIS CANNOT SEE is a seamless stretch that also does no observable work — a bare
-                   `for(;;);`. Nothing inside the process can distinguish that from being descheduled without a
-                   CPU clock, so it is named here rather than papered over with a threshold that would fire on
-                   both. An outside observer (the host's own watchdog) is where that one belongs. */
+                   `for(;;);` inside C, which forks nothing, queues nothing and emits nothing. That is what the
+                   SECOND verdict below is for, and it exists only because the native host now has a real thread
+                   CPU clock: consumed CPU cannot be inflated by load, so it separates a seamless stretch from a
+                   descheduled one where a wall clock never could. It is a SEPARATE verdict with its own message
+                   deliberately — §Testing: two measures must never collapse into one answer, or a reader cannot
+                   tell which one decided. */
                 long work = engine_work_done() - w0;
+                /* THE CPU VERDICT — the seamless stretch that does no observable work, which the work verdict
+                   below is blind to by construction. Gated on the host actually having a CPU clock rather than
+                   assumed: on emscripten this quantity is wall time, a loaded machine would falsify it, and a
+                   false red is worse than a missing one (§Testing). Its own message, its own margin, so the two
+                   answers are never confused for each other. */
+                if (quantum_measure_is_cpu() && (now - t0) > ENGINE_SEAMLESS_CPU_US && g_preempt_asked == pa0) {
+                    char why[256];
+                    snprintf(why, sizeof why,
+                             "%d ms of THREAD CPU consumed in one step with NO suspend point offered (measure: "
+                             "%s; %ld units of work, which is why the work verdict cannot see this one) — this "
+                             "stretch has no suspend/resume seam; unit=%s script_i=%d",
+                             (int)((now - t0) / 1000), quantum_measure(), work, g_step_unit,
+                             cur ? cur->script_i : -1);
+                    DFAIL(why);
+                }
                 if (work > ENGINE_SEAMLESS_WORK && g_preempt_asked == pa0) {
-                    char why[448];
+                    /* Sized for the whole line INCLUDING quantum_measure(), which on the host that has no CPU
+                       clock is a sentence rather than a word — it names the transport requirement, and a buffer
+                       that truncated it would drop the payload and the body, which are the two fields that
+                       localise the stretch. */
+                    char why[640];
                     int wi = 0;
                     const char *sk = cur && cur->cand_sink ? cur->cand_sink : "(exploration flow)";
                     const char *pl = cur ? cur->cand_payload : NULL;
@@ -1788,13 +2035,14 @@ int engine_sched_step(void) {
                        the point. */
                     wi += snprintf(why, sizeof why,
                                    "%ld units of work (forks+flows+jobs) with NO suspend point offered "
-                                   "(wall gap %d ms, step ran %d ms — reported, NOT the verdict: this host has "
-                                   "no CPU clock; points asked=%llu, preempts wanted=%llu fired=%llu; slowest "
+                                   "(wall gap %d ms, step ran %d ms — reported, NOT the verdict; the slice's own "
+                                   "measure here is %s; points asked=%llu, preempts wanted=%llu fired=%llu; slowest "
                                    "Web API member step: %s %dms of %dms over %ld member steps; wrapper map "
                                    "%ld/%ld; live objects %lld, heap %lld KiB) — this stretch has no "
                                    "suspend/resume seam; unit=%s script_i=%d "
                                    "flow=%s payload=",
-                                   work, (int)gap, (int)spent, (unsigned long long)(g_preempt_asked - pa0),
+                                   work, (int)gap, (int)spent, quantum_measure(),
+                                   (unsigned long long)(g_preempt_asked - pa0),
                                    (unsigned long long)(pq - pq0),
                                    (unsigned long long)(pf - pf0), slow_name, (int)slow_ms,
                                    (int)steps_ms, steps_n, wrap_n, wrap_cap,
@@ -1827,7 +2075,12 @@ int engine_sched_step(void) {
             }
             else owed = 0;
         }
-        if (now >= deadline) {   /* THREAD-SHARING, not value: hand the thread back, keep the frontier */
+        /* THREAD-SHARING, not value: the slice's budget is gone, so hand the thread back and keep the frontier.
+           It is the SAME question preempt_hook asks — one budget, one edge, asked at the two levels it acts on:
+           there the running flow parks, here the step returns. Asking it twice from one source is what makes a
+           flow that parked on the quantum and a step that ends on it the same event rather than two policies
+           that have to be kept in step. */
+        if (quantum_expired()) {
             g_sess_cur = cur;
             return ENGINE_STEP_YIELD;
         }
@@ -1878,12 +2131,30 @@ int engine_sched_step(void) {
            dropped, indistinguishable from a page that registered no handler. A flow suspended inside a live
            frame is the shape that reaches here holding one: the delivery is made only where flow_step has no
            frame, so if this fires, the enqueue belongs earlier than that branch. */
+        DCHECK(flow_at(i)->perform == NULL && flow_at(i)->answer_token == NULL,
+               "the frontier was declared exhausted while a live flow still owed a peer the answer to a "
+               "cross-agent operation — the asking flow, in another instance, is suspended at the line that "
+               "asked and this session is about to end without ever telling it anything");
         DCHECK(flow_at(i)->deliver == NULL,
                "the frontier was declared exhausted while a live flow still held a routed record — a peer's "
                "message this document never received, dropped with the session");
     }
     engine_session_close();
     return ENGINE_STEP_DONE;
+}
+
+/* THE SLICE'S BRACKET, and it is a WRAPPER because the body has seven exits. Opening the budget is arming an
+   asynchronous edge (solver/quantum.h) and closing it is disarming that edge, so a return that forgot one would
+   leave a CPU timer running over the host's own time between two steps — the signal would land while the host
+   pumps its port, raise a request nothing is there to answer, and expire the NEXT slice at its first opcode.
+   Seven `quantum_end()` calls before seven returns is the shape where one of them is eventually missing; one
+   bracket around one call is the shape where it cannot be. */
+int engine_sched_step(void) {
+    int r;
+    quantum_begin();
+    r = engine_sched_slice();
+    quantum_end();
+    return r;
 }
 
 /* A host that has nothing else to do between quanta — the node smoke test — drives the SAME steps in a loop.

@@ -94,6 +94,7 @@
 #include "core/encoding/encoding.h"
 #include "core/encoding/text_stream.h"
 #include "core/idl_args.h"
+#include "core/idl_async_iter.h"
 
 /* Forced preemption at every back-edge, sampled at calls — the same policy run-test262 arms, and for the same
    reason: a call is reached orders of magnitude more often than a back-edge, so forcing every one of them buys
@@ -1731,5 +1732,10 @@ int main(int argc, char **argv)
     wpt_children_free();
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
+    /* AFTER JS_FreeRuntime, and it is the one teardown line whose ORDER is part of its meaning: what
+       this releases is part of a step DEFINITION, which JS_RegisterStepDef borrows and requires to
+       outlive the runtime — JS_FreeRuntime's own [stepleak] report reads `def->steps` to name each
+       unfinished machine by the step it rests at. */
+    idl_async_iter_free();
     return failed ? 1 : 0;
 }

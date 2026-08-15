@@ -33,12 +33,17 @@
    ANSWERED, and the `/got` they produce carries `typeof e.data.n` — which is what distinguishes the number 0
    from the string "0", the sentence SECURITY.md states about this seam.
 
-   SO THIS DRIVER IS RED, AND THAT IS THE MEASUREMENT. The peer has no entry by which it can be ASKED: the
-   trusted zone can relay the record (`qjs_route` carries a one-way delivery and returns void), but nothing in
-   the ABI performs a cross-agent operation and hands back its COMPLETION. The asking flow parks with its
-   snapshot intact, the request keeps being reported by `qjs_host_requests`, and the fail line below names the
-   entry to build. The forked segment stays EMPTY for the same reason — the producer of a non-empty one is the
-   peer answering this read by running a program under the asking world. */
+   AND THE PEER NOW ANSWERS IT, which is what this zone does with a `windowproxy.get` below: it hands the
+   record to the instance that HOLDS the document (`qjs_perform`), pumps that instance until the program its
+   answer is — an IDL getter, run as a flow on its own frontier — completes, and relays the COMPLETION back to
+   the asking instance (`qjs_host_answer_remote`) in remote_object.c's grammar rather than as JSON, because a
+   member whose value is an OBJECT crosses as a NAME and JSON cannot express one. This zone reads neither: it
+   routes text, and only an engine knows what a name means.
+   THE ANSWER IS PER TIMELINE, and the fourth and fifth records are what show it: both ARMS of `a`'s fork make
+   the read, so one peer is asked the same question by two different worlds and answers each under the segment
+   that world has here. A peer holding SEVERAL timelines answers each question that many times — its document's
+   state IS its flows — and the asking flow must then FORK per answer; that half is named where the second
+   answer arrives (engine_host_answer) and this fixture's `b` has one timeline, so it is not reached here. */
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -91,8 +96,13 @@ const got = [];     /* every /got the receiving page fetched — one per message
 /* EVERY CROSS-AGENT OPERATION THIS ZONE WAS ASKED TO PERFORM, keyed by the asking engine's request id, and
    whether it was ever answered. Keyed rather than counted because `qjs_host_requests` deliberately does NOT
    dedupe — an unanswered request is re-reported on every single step, so a count would be a step count, and
-   the log line below would be one line per step for the rest of the run. */
+   the log line below would be one line per step for the rest of the run.
+   THAT KEY IS ALSO THE RENDEZVOUS TOKEN the performing instance echoes on its answer. It has to be this zone's
+   and not the asking flow's request id, because an id is unique only inside the instance that minted it and two
+   askers may hold the same number — which is exactly the fact only the routing zone has. */
 const reads = new Map();
+/* The completions performing instances have emitted, by token, until the asker is handed each one. */
+const answers = new Map();
 
 /* ONE STEP of `e`, then everything the host owes it. Returns false once the engine reports its frontier done. */
 async function service(e) {
@@ -120,10 +130,26 @@ async function service(e) {
        how a seam whose read half has never run reports OK. */
     if (op.startsWith('windowproxy.get\t') || op.startsWith('object.')) {
       const key = `${e.docId}#${id}`;
-      if (!reads.has(key)) {
-        reads.set(key, { asker: e.docId, op, answered: false });
-        console.log(`  [${e.docId}] cross-agent read asked: ${op}`);
-      }
+      /* AN UNANSWERED REQUEST IS RE-REPORTED EVERY STEP, so the first sighting is the one that acts. */
+      if (reads.has(key)) continue;
+      /* EVERY CROSS-AGENT OPERATION NAMES ITS TARGET DOCUMENT as its first operand, which is the one fact only
+         this zone can act on: it is what says which instance holds the object. */
+      const holder = holderOf(op.split('\t')[1]);
+      if (!holder) { console.log('  ROUTE FAILED: no instance holds', op.split('\t')[1]); continue; }
+      reads.set(key, { asker: e.docId, op, answered: false });
+      console.log(`  [${e.docId}] cross-agent read asked: ${op}`);
+      /* THE PEER IS ASKED, AND NOTHING IS ANSWERED INSIDE THAT CALL. It answers by RUNNING A PROGRAM — the IDL
+         getter §7.2.5.1 defines the member as — as a flow on its own frontier, so the completion arrives on a
+         later step of that instance and comes out through its notices like every other emission. Pumping it
+         here is this zone's job precisely because the answer is not a return value. */
+      holder.M.ccall('qjs_perform', 'void', ['number','number'], [holder.cs(key), holder.cs(op)]);
+      for (let i = 0; i < 400 && !answers.has(key); i++) if (!(await service(holder))) break;
+      if (!answers.has(key)) { console.log(`  NOT ANSWERED: ${key}`); continue; }
+      /* RELAYED VERBATIM. The completion is in the engines' own grammar and this zone does not read it: a value
+         that is an OBJECT is a NAME in the answering agent's namespace, which means nothing out here. */
+      e.M.ccall('qjs_host_answer_remote', 'void', ['number','number'], [id, e.cs(answers.get(key))]);
+      answers.delete(key);
+      reads.get(key).answered = true;
       continue;
     }
     console.log(`  [${e.docId}] request: ${op.slice(0, 90)}`);
@@ -141,6 +167,9 @@ async function service(e) {
        is LAST because it is the record's remainder — a raw CSP header may contain HTAB. */
     if (f[0] === 'navigable.create') engines.push(await makeEngine(HTML_B, f[3], f[1], f.slice(6).join('\t'), f[5]));
     else if (f[0] === 'windowproxy.post') posts.push({ doc: f[1], world: f[2], record: n, origin: e.origin });
+    /* A COMPLETION THIS INSTANCE PRODUCED for an operation it was asked to perform, naming the token this zone
+       minted. Held rather than delivered here: the asker is another instance and this loop is inside its step. */
+    else if (f[0] === 'remoteop.answer') answers.set(f[1], f.slice(2).join('\t'));
     else throw new Error('a notice this host does not act on: ' + f[0]);
   }
   return r !== 0;
@@ -204,20 +233,16 @@ if (!reads.size)
   fail('`w.length` on a cross-origin WindowProxy asked the peer nothing — §7.2.5.1 answers it from the child-' +
        "navigable count of the PEER's active document, so an answer that never left this instance counted the " +
        "asking document's own frames");
-/* AND ANSWERED IS THE SECOND, AND IT IS THE ENTRY THAT DOES NOT EXIST. Every mechanism above this line is the
-   ASKING half — the world vector, its ancestry, the segment the peer materializes from it, the origin stamp.
-   They are exercised end to end and they still describe a design that has never carried a value back, because
-   nothing can ASK the peer: `qjs_route` hands an instance a one-way delivery and returns void, and
-   `qjs_host_answer` is how the TRUSTED ZONE answers a request it computed itself. Neither of them is a peer
-   PERFORMING an operation. */
+/* AND ANSWERED IS THE SECOND, AND IT IS THE HALF THAT CARRIES A VALUE BACK. Everything above this line is the
+   ASKING half — the world vector, its ancestry, the segment the peer materializes from it, the origin stamp. A
+   read that is asked and never answered leaves the asking flow parked with its snapshot intact, which is the
+   correct behaviour and an unfinished seam: the peer has to install the asking world's segment and answer BY
+   RUNNING A PROGRAM, on its own frontier, and hand back a COMPLETION rather than a value. */
 if (readsAnswered !== reads.size)
-  fail(`${reads.size} cross-agent read(s) asked and ${readsAnswered} answered — build the ABI entry by which ` +
-       'an instance is ASKED to perform a cross-agent operation and hands back its COMPLETION. It is not ' +
-       '`qjs_route` (one-way, void) and not `qjs_host_answer` (the zone answering a request it computed ' +
-       'itself). The peer must install the asking world\'s segment and answer BY RUNNING A PROGRAM — a flow ' +
-       'on the one frontier, parkable at any depth — and the completion must cross in remote_object.c\'s ' +
-       'grammar, not as JSON, because a member whose value is an OBJECT crosses as a NAME and JSON cannot ' +
-       'express one. engine/host/wpt_runner.c performs exactly this over a pipe to a child PROCESS and is the ' +
-       'only implementation of it; hoist it so there is one, rather than writing a second here');
+  fail(`${reads.size} cross-agent read(s) asked and ${readsAnswered} answered — the instance holding the ` +
+       'document did not produce a completion for one of them. Either no instance holds the document the ' +
+       'operation names (a `navigable.create` notice this zone dropped), or the performing instance never ' +
+       'reached the end of the program its answer is — which is a flow on its frontier and can be parked ' +
+       'behind anything else that frontier is doing');
 console.log('[route] OK — two instances, every routed record delivered, ancestry-forked segments: ' + forked +
             `, cross-agent reads answered: ${readsAnswered}`);

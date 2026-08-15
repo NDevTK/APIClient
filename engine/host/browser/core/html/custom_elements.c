@@ -810,12 +810,6 @@ void custom_elements_queue_unlock(JSContext *ctx, CustomElementQueue *q)
     report_exception_work_unlock(ctx, &q->rep);
 }
 
-void custom_elements_queue_release(JSContext *ctx, CustomElementQueue *q)
-{
-    custom_elements_queue_unlock(ctx, q);
-    custom_elements_queue_visit(ctx, q, JS_StepFreeVisitor());
-}
-
 /* Which of §4.13.6 step 1.3.1's arms the drain last parked in — see custom_elements.h. */
 int custom_elements_queue_arm(const CustomElementQueue *q)
 {
@@ -1152,7 +1146,10 @@ static JSValue js_ce_backup_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSCeBackup *s = st;
     (void)take_result;
-    custom_elements_queue_release(ctx, &s->q);
+    /* THE LOCK ONLY. The queue's reactions are references js_ce_backup_visit names and the teardown discharges
+       that list; what no declaration can carry is §8.1.4.6 step 5's error-reporting flag, which a backup queue
+       abandoned mid-drain would otherwise leave raised on the global forever. */
+    custom_elements_queue_unlock(ctx, &s->q);
     return JS_UNDEFINED;
 }
 

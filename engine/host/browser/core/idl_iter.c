@@ -340,15 +340,6 @@ static void js_idl_pair_foreach_visit(JSContext *ctx, void *st, JSStepVisit *v)
         v->val(ctx, &s->cb[k]);
 }
 
-static JSValue js_idl_pair_foreach_fini(JSContext *ctx, void *st, bool take_result)
-{
-    IdlPairForEachState *s = st;
-    int k;
-    (void)take_result;
-    for (k = 0; k < PAIR_FOREACH_CB_SLOTS; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
-    return JS_UNDEFINED;   /* forEach returns undefined */
-}
-
 /* WHERE THIS MACHINE RESTS. §3.7.10's forEach is four steps and only one of them can suspend — step 4.2's
    invocation of the callback — so the whole walk is that one stage, with `i` as its cursor. Step 4.3's
    re-read of the pairs is why `count` is asked again on every entry rather than once. */
@@ -423,7 +414,7 @@ int idl_pair_iter_declare(JSContext *ctx, const IdlPairIterOps *ops)
     JSValue intrinsic;
     char name[64];
     static JSTrampStepDef foreach_def = {
-        sizeof(IdlPairForEachState), js_idl_pair_foreach_step, js_idl_pair_foreach_fini, 0,
+        sizeof(IdlPairForEachState), js_idl_pair_foreach_step, NULL, 0,   /* forEach returns undefined */
         .visit = js_idl_pair_foreach_visit,
         .algorithm = "Web IDL §3.7.10 forEach(callback, thisArg) of an iterable<> interface",
         .steps = PAIR_FOREACH_STEPS

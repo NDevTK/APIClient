@@ -25,6 +25,8 @@
 #include "core/file/file_system_writable.h"
 #include "core/file/storage_manager.h"
 #include "core/frame/history.h"
+#include "core/frame/navigation.h"
+#include "core/frame/navigation_history_entry.h"
 #include "core/frame/location.h"
 #include "core/frame/navigable.h"
 #include "core/frame/navigator.h"
@@ -101,6 +103,8 @@ static void d_xhr(JSContext *c, const PlatformAgent *a) { (void)a; xhr_init(c); 
 static void d_location(JSContext *c, const PlatformAgent *a) { (void)a; location_init(c); }
 static void d_session_history(JSContext *c, const PlatformAgent *a) { (void)a; session_history_init(c); }
 static void d_history(JSContext *c, const PlatformAgent *a) { (void)a; history_init(c); }
+static void d_navigation(JSContext *c, const PlatformAgent *a) { (void)a; navigation_init(c); }
+static void d_nav_history_entry(JSContext *c, const PlatformAgent *a) { (void)a; navigation_history_entry_init(c); }
 static void d_screen(JSContext *c, const PlatformAgent *a) { (void)a; screen_init(c); }
 static void d_navigable(JSContext *c, const PlatformAgent *a) { (void)a; navigable_init(c); }
 static void d_event_loop(JSContext *c, const PlatformAgent *a) { (void)a; event_loop_init(c); }
@@ -193,6 +197,10 @@ static const PlatformComponent PLATFORM[] = {
     { "text_stream",         d_text_stream,         i_text_stream },
     /* §2.7 before §7.2.5, and its per-document half is inside window_install for the reason above. */
     { "event_target",        d_event_target,        NULL },
+    /* HTML §7.2.6.5's NavigationHistoryEntry, whose prototype chains to §2.7's and whose CLASS is what
+       §7.2.7.1's `required NavigationHistoryEntry from` brands against — so it is declared before `event`,
+       which is where every Event subclass including that one is declared. */
+    { "navigation_history_entry", d_nav_history_entry, NULL },
     { "window",              d_window,              i_window },
     /* §8.10.1's Navigator, and with it Permissions §6 (navigator.permissions), Storage §2 and File System §3
        (navigator.storage) and §6.4.4's UserActivation. This row is the one whose absence from one host's copy
@@ -225,6 +233,8 @@ static const PlatformComponent PLATFORM[] = {
     /* §7.4.1's state machine BEFORE §7.2.5's History, whose every member reads the record it builds. */
     { "session_history",     d_session_history,     NULL },
     { "history",             d_history,             NULL },
+    /* HTML §7.2.6's navigation API, AFTER §7.4.1's state machine whose entries it is a view over. */
+    { "navigation",          d_navigation,          NULL },
     { "screen",              d_screen,              NULL },
     { "navigable",           d_navigable,           i_navigable },
     /* HTML §8.1.7's EVENT LOOP, before the task sources that are ordered by it: the virtual clock, §8.1.7.1's
@@ -288,6 +298,8 @@ static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
     { "location",              "location" },
     { "screen",                "screen" },
     { "history",               "history" },
+    { "navigation",            "navigation" },
+    { "NavigationHistoryEntry", "navigation_history_entry" },
     { "open",                  "navigable" },
     { "fetch",                 "fetch" },
     { "setTimeout",            "timer" },

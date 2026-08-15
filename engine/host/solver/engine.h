@@ -79,15 +79,25 @@ void engine_run(JSContext *ctx, char **bodies, char **srcs, int n);
    closes the session on an empty run-queue and those flows are never resumed, which is how a page whose config
    gates its later endpoints loses everything after the first request. */
 #define ENGINE_STEP_STALLED 3
-#define ENGINE_QUANTUM_MS  12  /* a thread-sharing floor, not a cap: nothing is dropped across it */
+#define ENGINE_QUANTUM_MS  12  /* a thread-sharing floor, not a cap: nothing is dropped across it. It is a budget
+                                  of CPU actually consumed — solver/quantum.h owns the edge that expires it and
+                                  says what each host can measure. */
 /* THE SEAM ASSERTION'S MARGIN, counted in WORK the step performed (forks + flows created + jobs run) rather
-   than in milliseconds — see the verdict in engine_sched_step for why a wall clock cannot decide this on a
-   loaded machine and why this host has no CPU clock to switch to. A step that performs this much work without
-   once consulting the preempt hook has no suspend/resume seam on that path, whatever else is running on the
-   box. Deliberately enormous: an ordinary step forks a handful of times between two suspend points, so nothing
-   short of a genuinely non-returning stretch approaches it. It is a DIAGNOSTIC, never a bound — it truncates
-   no work, drops no flow, and is compiled out of release. */
+   than in milliseconds — see the verdict in engine_sched_step for why a WALL clock cannot decide this on a
+   loaded machine. A step that performs this much work without once consulting the preempt hook has no
+   suspend/resume seam on that path, whatever else is running on the box. Deliberately enormous: an ordinary step
+   forks a handful of times between two suspend points, so nothing short of a genuinely non-returning stretch
+   approaches it. It is a DIAGNOSTIC, never a bound — it truncates no work, drops no flow, and is compiled out
+   of release. */
 #define ENGINE_SEAMLESS_WORK 1000
+/* THE OTHER MARGIN, in CPU ACTUALLY CONSUMED, for the seamless stretch the work count is blind to by
+   construction: a bare `for(;;);` inside C forks nothing, queues nothing and emits nothing, so it reaches
+   ENGINE_SEAMLESS_WORK never and hangs the engine silently. Consumed CPU is the one quantity a loaded machine
+   cannot inflate, which is what makes this decidable where a wall clock was not — so it is asked only where
+   quantum_measure_is_cpu() says the reading IS CPU. 400x the quantum: anything under it is merely a slow step,
+   anything over it has offered the scheduler nothing across four hundred slices' worth of thread it actually
+   burned. A DIAGNOSTIC on the same terms as the one above — no truncation, no drop, absent in release. */
+#define ENGINE_SEAMLESS_CPU_US ((int64_t)ENGINE_QUANTUM_MS * 1000 * 400)
 /* WHAT THE HOST IS OWED. The scheduler asks this ONE seam before it decides the frontier is exhausted; a
    non-zero answer means STALLED rather than DONE. It is a question, not policy: the scheduler holds no idea of
    what a reply is, and the host holds no idea of what a flow is. */
@@ -204,6 +214,17 @@ const char *engine_host_notices(void);
    contributes is its SEGMENT in this instance — see engine.c, where the conjunction of the two is stated and
    the part of it that cannot yet be built crashes. There is no inbound queue because the frontier is one. */
 void engine_route(JSContext *ctx, const char *record, const char *sender_origin);
+
+/* THE INBOUND HALF THAT OWES AN ANSWER — a cross-agent OPERATION (core/frame/remote_op.h) another instance's
+   flow is parked on, routed here by the trusted zone because this instance holds the document it names.
+   IT IS ATTACHED TO EVERY LIVE TIMELINE, exactly as a routed delivery is, and for a reason the one-way case
+   only hints at: a peer's document state IS its flows, so `otherW.length` has N answers for N timelines and a
+   channel with one answer slot would silently pick one. Each flow performs the operation as its own next
+   PROGRAM — a peer answers by running one, never by reading a property from C — and emits that program's
+   COMPLETION as a notice naming `token`, which the zone routes back to the instance and request that asked.
+   `token` is the ZONE's rendezvous, opaque here: the asking flow's request id is unique only inside the
+   instance that minted it, and two peers may ask this one the same number. Nothing runs inside this call. */
+void engine_perform(JSContext *ctx, const char *token, const char *record);
 
 const char *engine_pending_urls(void);                                  /* newline-joined, or "" */
 int engine_provide(JSContext *ctx, const char *url, JSValueConst value); /* entries filled */

@@ -94,6 +94,35 @@ typedef int (*IdlAsyncIterReturn)(JSContext *ctx, JSStepHdr *hdr, void *work,
                                   JSValueConst value, JSValue in,
                                   JSValue *ppromise, JSValue **out_cb, int *out_argc);
 
+/* THE FIRST STAGE THAT IS THE COMPONENT'S OWN — one per hosting machine, and the same mechanism idl_args.h's
+ * IDL_STEP_FIRST is, for the same reason.
+ *
+ * A COMPONENT'S ALGORITHM RUNS INSIDE ONE OF THIS FILE'S TWO MACHINES: the initialization steps inside §3.7.10's
+ * member, and the other two inside §3.7.10.2's `next`/`return`. Those machines own the stages up to and
+ * including the one that RUNS the component's algorithm, so a component that rests inside its own algorithm
+ * needs stages of its own beyond them — otherwise its rest point is reported as the hosting stage, which names
+ * Web IDL where the standard that is actually suspended is the component's (a flow parked in Streams §4.2.5's
+ * AcquireReadableStreamDefaultReader reported "Web IDL §3.7.10.2 return step 8.4"). A private cursor byte in
+ * the component's `work` is the same defect one layer down: the driver's assert cannot see it, a park cannot
+ * report it and a later build cannot resolve it back to a step.
+ *
+ * So a component numbers its own X-list from here, exactly as a declared IDL member numbers its own from
+ * IDL_STEP_FIRST:
+ *
+ *     enum { IDL_ASYNC_ITER_STAGE_BASE(RSI_STAGES) RSI_STAGES(JS_STEP_STAGE_ENUM) };
+ *     static const char *const RSI_STEPS[] = { RSI_STAGES(JS_STEP_STAGE_LABEL) NULL };
+ *
+ * and hands the labels to the declaration, which JOINS them onto the hosting machine's — the one place the
+ * component's declaration and the hosting definition are both in hand, so no component restates this file's
+ * stages and none can index its own from the wrong base. The two numbers are checked against the two enums
+ * they mirror at COMPILE time in idl_async_iter.c; they are stated here because a component cannot see those
+ * enums, which are this file's own. */
+#define IDL_ASYNC_ITER_STEP_FIRST      5
+#define IDL_ASYNC_ITER_INIT_STEP_FIRST (IDL_STEP_FIRST + 2)
+
+#define IDL_ASYNC_ITER_STAGE_BASE(list)      list##_base = IDL_ASYNC_ITER_STEP_FIRST - 1,
+#define IDL_ASYNC_ITER_INIT_STAGE_BASE(list) list##_base = IDL_ASYNC_ITER_INIT_STEP_FIRST - 1,
+
 typedef struct {
     /* The interface's identifier. §3.7.10.2: "The class string of an asynchronous iterator prototype object for
        a given interface is the result of concatenating the identifier of the interface and the string
@@ -115,9 +144,24 @@ typedef struct {
     IdlAsyncIterNext   next;    /* §2.5.10's get the next iteration result — required */
     IdlAsyncIterReturn ret;     /* §2.5.10's return algorithm, or NULL where the prose defines none */
 
+    /* WHERE THE COMPONENT'S OWN ALGORITHMS REST, joined onto the two definitions that host them — see the
+       bases below. `init_steps` is the initialization steps' list, numbered from IDL_ASYNC_ITER_INIT_STEP_FIRST
+       and joined onto §3.7.10's member; `steps` is ONE list for the OTHER TWO, numbered from
+       IDL_ASYNC_ITER_STEP_FIRST and joined onto §3.7.10.2's machine — one, because `next` and `return` share
+       that machine and therefore share its step list, so their stages are numbered in one space and no two of
+       them may name the same step (idl_async_iter.c asserts that at the join, and quickjs.c's step_stage_check
+       asserts the round trip again at every rest).
+       NULL is for an algorithm that never rests at a step of its OWN: the File System Standard's
+       initialization steps are one assignment and make no request, so the hosting stage is the only rest point
+       there is. An algorithm that PARKS with no stage of its own is refused where it parks — its rest point
+       would be the hosting algorithm's stage, which names the wrong standard, and its re-entry would re-run
+       its first steps. */
+    const char *const *init_steps;
+    const char *const *steps;
+
     /* The THREE algorithms' own step storage, and the ONE declaration of what it owns. There is no separate
-       release: `visit` is the list, and the teardown discharges it through JS_StepVisitFree exactly as the
-       machine's own fields are discharged — a second hand-written list is the pair this engine forbids.
+       release: `visit` is the list, and the driver's teardown discharges it exactly as it discharges the
+       machine's own fields — a second hand-written list is the pair this engine forbids.
        ONE declaration serves all three because only ONE of them ever runs in a given block: the initialization
        steps run inside the MEMBER's machine and the other two inside §3.7.10.2's, and each block is ZEROED
        before that algorithm's first entry. So a component's cursor byte starts at 0 in each of them, and a
@@ -162,5 +206,13 @@ void idl_async_iter_install(JSContext *ctx, JSValueConst proto, int handle);
  * `undefined` cannot be the marker even though the File System Standard's prose says "resolve promise with
  * undefined"), and carrying no state to get wrong. OWNED. */
 JSValue idl_async_iter_end(JSContext *ctx);
+
+/* RELEASE what the DECLARATIONS allocated — the joined stage-label arrays, one pair per declared interface,
+   held for the agent's life because the definitions BORROW them (JS_RegisterStepDef's contract) and freed with
+   it, exactly as idl_args_free releases the pool's own join. The declarations themselves are the AGENT's, so
+   this puts the table back where it was before the first one: a next agent in this process declares again, and
+   §2.5.10's end-of-iteration class is re-declared with its runtime rather than kept as an id no live runtime
+   has a class for. */
+void idl_async_iter_free(void);
 
 #endif

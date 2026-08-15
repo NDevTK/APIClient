@@ -615,15 +615,6 @@ static void js_fwd_visit(JSContext *ctx, void *st, JSStepVisit *v)
     for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
 }
 
-static JSValue js_fwd_fini(JSContext *ctx, void *st, bool take_result)
-{
-    JSFwdState *s = st;
-    int k;
-    (void)take_result;
-    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
-    return JS_UNDEFINED;
-}
-
 static int js_fwd_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSFwdState *s = st;
@@ -646,7 +637,7 @@ static int js_fwd_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
 enum { FWD_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const FWD_STEPS[] = { FWD_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-#define FWD_DEF(i) { sizeof(JSFwdState), js_fwd_step, js_fwd_fini, (i), \
+#define FWD_DEF(i) { sizeof(JSFwdState), js_fwd_step, NULL, (i), \
                      .catches_abrupt = 1, .visit = js_fwd_visit, \
                      .algorithm = "Streams §4 (forward a promise's settlement to a resolving function)", \
                      .steps = FWD_STEPS }
@@ -771,14 +762,6 @@ static void js_rxn_visit(JSContext *ctx, void *st, JSStepVisit *v)
     stream_work_visit(ctx, &s->w, v);
 }
 
-static JSValue js_rxn_fini(JSContext *ctx, void *st, bool take_result)
-{
-    JSRxnState *s = st;
-    (void)take_result;
-    stream_work_release(ctx, &s->w);
-    return JS_UNDEFINED;
-}
-
 static int js_rxn_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSRxnState *s = st;
@@ -823,7 +806,7 @@ static int js_rxn_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
     return JS_STEP_DONE;
 }
 
-#define RXN_DEF(i, alg) { sizeof(JSRxnState), js_rxn_step, js_rxn_fini, (i), \
+#define RXN_DEF(i, alg) { sizeof(JSRxnState), js_rxn_step, NULL, (i), \
                           .catches_abrupt = 1, .visit = js_rxn_visit, \
                           .algorithm = (alg), .steps = RXN_STEPS }
 static const JSTrampStepDef js_rxn_defs[4] = {
@@ -885,13 +868,8 @@ static JSValue js_read_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSReadState *s = st;
     JSValue r = take_result ? s->promise : JS_UNDEFINED;
+    (void)ctx;
     if (take_result) s->promise = JS_UNDEFINED;
-    stream_work_release(ctx, &s->w);
-    JS_FreeValue(ctx, s->promise);
-    JS_FreeValue(ctx, s->settle);
-    JS_FreeValue(ctx, s->result);
-    JS_FreeValue(ctx, s->stream);
-    s->promise = s->settle = s->result = s->stream = JS_UNDEFINED;
     return r;
 }
 
@@ -1072,16 +1050,6 @@ static void js_release_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->stream);
 }
 
-static JSValue js_release_fini(JSContext *ctx, void *st, bool take_result)
-{
-    JSReleaseState *s = st;
-    (void)take_result;
-    stream_work_release(ctx, &s->w);
-    JS_FreeValue(ctx, s->stream);
-    s->stream = JS_UNDEFINED;
-    return JS_UNDEFINED;
-}
-
 static int js_release_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSReleaseState *s = st;
@@ -1122,7 +1090,7 @@ static int js_release_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     return JS_STEP_DONE;
 }
 
-#define REL_DEF(i) { sizeof(JSReleaseState), js_release_step, js_release_fini, (i), .catches_abrupt = 1, \
+#define REL_DEF(i) { sizeof(JSReleaseState), js_release_step, NULL, (i), .catches_abrupt = 1, \
                      .visit = js_release_visit, \
                      .algorithm = "Streams §4.4/§4.5 releaseLock(), through §4.9.3 ReadableStream*ReaderRelease", \
                      .steps = REL_STEPS }
@@ -1355,14 +1323,8 @@ static JSValue js_cancel_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSCancelState *s = st;
     JSValue r = take_result ? s->promise : JS_UNDEFINED;
+    (void)ctx;
     if (take_result) s->promise = JS_UNDEFINED;
-    stream_work_release(ctx, &s->w);
-    JS_FreeValue(ctx, s->promise);
-    JS_FreeValue(ctx, s->funcs[0]);
-    JS_FreeValue(ctx, s->funcs[1]);
-    JS_FreeValue(ctx, s->settle);
-    JS_FreeValue(ctx, s->stream);
-    s->promise = s->funcs[0] = s->funcs[1] = s->settle = s->stream = JS_UNDEFINED;
     return r;
 }
 
@@ -1589,16 +1551,6 @@ static void js_ctrl_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->rethrow);
 }
 
-static JSValue js_ctrl_fini(JSContext *ctx, void *st, bool take_result)
-{
-    JSCtrlState *s = st;
-    (void)take_result;
-    stream_work_release(ctx, &s->w);
-    JS_FreeValue(ctx, s->rethrow);
-    s->rethrow = JS_UNDEFINED;
-    return JS_UNDEFINED;
-}
-
 static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSCtrlState *s = st;
@@ -1728,7 +1680,7 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
     return JS_STEP_DONE;
 }
 
-#define CTRL_DEF(i) { sizeof(JSCtrlState), js_ctrl_step, js_ctrl_fini, (i), \
+#define CTRL_DEF(i) { sizeof(JSCtrlState), js_ctrl_step, NULL, (i), \
                       .algorithm = "Streams §4.5 enqueue(chunk) / close() / error(e)", .steps = CS_STEPS, \
                       .catches_abrupt = 1, .visit = js_ctrl_visit }
 static const JSTrampStepDef js_ctrl_defs[3] = {
@@ -1851,17 +1803,19 @@ static bool rsi_prevent_cancel(JSContext *ctx, JSValueConst state)
 }
 
 /* THE THREE ALGORITHMS' OWN STEP STORAGE. ONE declaration, because core/idl_async_iter.c keeps one block for
-   whichever of them is running and ZEROES it before that algorithm's first entry — so 0 is "not yet started"
-   for each, and each enumerates its own sub-sequence from there. `at` is a SUB-SEQUENCE cursor inside one Web
-   IDL §3.7.10.2 stage, which is what stream_work.h's `settle` and `pull` are; the stage a parked flow reports
-   is the one that machine's header carries. */
+   whichever of them is running and ZEROES it before that algorithm's first entry.
+   THERE IS NO CURSOR BYTE HERE. There was one — `at` — and it was a STAGE wearing the wrong clothes: the three
+   algorithms rest at §4.2.5's steps, and a byte in this record is invisible to the driver's assert, unnameable
+   at a park (a flow suspended inside AcquireReadableStreamDefaultReader reported "Web IDL §3.7.10.2 return step
+   8.4") and unresolvable back to a step by the build that resumes it. The stages below are the machine's own,
+   joined onto Web IDL's at the declaration. What remains here are the sub-sequence cursors inside one stage,
+   which is exactly what stream_work.h's `phase`, `settle` and `pull` are. */
 typedef struct {
     StreamWork w;
     JSValue    reader;    /* §4.2.5's "iterator's reader", taken off the state slot at each algorithm's step 1 */
     JSValue    promise;   /* the next algorithm's step 3 promise, or the return algorithm's step 4.1 result */
     JSValue    resolve;   /* that promise's capability, held until step 4's read request captures it */
     JSValue    reject;
-    uint8_t    at;
 } RsIterWork;
 
 static void rs_iter_visit(JSContext *ctx, void *work, JSStepVisit *v)
@@ -1888,8 +1842,17 @@ static void rs_iter_work_start(RsIterWork *k)
    args, are: 1. Let reader be ? AcquireReadableStreamDefaultReader(stream). 2. Set iterator's reader to reader.
    3. Let preventCancel be args[0]["preventCancel"]. 4. Set iterator's prevent cancel to preventCancel."
    A STEP because step 1 is a CALL: §4.3's acquisition SETTLES the reader's `closed` promise at once on a stream
-   that has already closed or errored, and a resolving function is the page's code. */
-enum { RSI_INIT_START = 0, RSI_INIT_ACQUIRE };
+   that has already closed or errored, and a resolving function is the page's code — which is the ONE place
+   these steps rest, and therefore the one stage they declare. It is numbered from
+   IDL_ASYNC_ITER_INIT_STEP_FIRST because Web IDL §3.7.10 step 3.1.6 is what runs it, and joined onto that
+   member's list at the declaration. */
+#define RSI_INIT_STAGES(X) \
+    X(RSI_INIT_ACQUIRE, \
+      "Streams §4.2.5 asynchronous iterator initialization steps step 1 (reader is ? " \
+      "AcquireReadableStreamDefaultReader(stream), whose §4.3 acquisition settles the reader's closed promise " \
+      "at once on a stream that has already closed or errored)")
+enum { IDL_ASYNC_ITER_INIT_STAGE_BASE(RSI_INIT_STAGES) RSI_INIT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const RSI_INIT_STEPS[] = { RSI_INIT_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 static int rs_iter_init(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueConst target, JSValueConst iter,
                         int argc, JSValueConst *argv, JSValue *pstate, JSValue in,
@@ -1899,11 +1862,15 @@ static int rs_iter_init(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueConst
     JSValue reader, state;
     int r;
 
-    (void)hdr; (void)iter;
-    if (k->at == RSI_INIT_START) {
+    (void)iter;
+    /* A STAGE BELOW THE FIRST OF THESE IS THE HOSTING MEMBER'S, which is what a first entry looks like: Web IDL
+       §3.7.10 step 3.1.6 is the stage that RUNS these steps, and it is one lower than theirs. */
+    if (hdr->stage < IDL_ASYNC_ITER_INIT_STEP_FIRST) {
         rs_iter_work_start(k);
-        STEP_GOTO(k->at, RSI_INIT_ACQUIRE, &k->w.phase, NULL);
+        STEP_GOTO(hdr->stage, RSI_INIT_ACQUIRE, &k->w.phase, NULL);
     }
+    DCHECK(hdr->stage == RSI_INIT_ACQUIRE,
+           "§4.2.5's asynchronous iterator initialization steps resumed at a step they never rest at");
     {
         /* step 1: AcquireReadableStreamDefaultReader(stream) — `getReader()` with no options IS that
            operation, reached through the function object this component installed. The `?` is why a LOCKED
@@ -1978,15 +1945,6 @@ static void js_rs_iter_rxn_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->reader);
 }
 
-static JSValue js_rs_iter_rxn_fini(JSContext *ctx, void *st, bool take_result)
-{
-    /* A read request's items answer nothing: what a caller sees is the promise step 3 created and step 6
-       returned, which this settles. */
-    (void)take_result;
-    JS_StepVisitFree(ctx, js_rs_iter_rxn_visit, st);
-    return JS_UNDEFINED;
-}
-
 static int js_rs_iter_rxn_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSRsIterRxnState *s = st;
@@ -2058,7 +2016,9 @@ static int js_rs_iter_rxn_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
     return JS_STEP_DONE;
 }
 
-#define RSI_RXN_DEF(i) { sizeof(JSRsIterRxnState), js_rs_iter_rxn_step, js_rs_iter_rxn_fini, (i), \
+/* No fini: a read request's items answer nothing — what a caller sees is the promise step 3 created and
+   step 6 returned, which the machine settles. */
+#define RSI_RXN_DEF(i) { sizeof(JSRsIterRxnState), js_rs_iter_rxn_step, NULL, (i), \
                          .catches_abrupt = 1, .visit = js_rs_iter_rxn_visit, \
                          .algorithm = "Streams §4.2.5 the ReadableStream async iterator's read request", \
                          .steps = RSIX_STEPS }
@@ -2072,8 +2032,26 @@ static int g_rsi_stepids[RSI_RXN_N];
 /* §4.2.5: "The get the next iteration result steps for a ReadableStream, given stream and iterator, are:
    1. Let reader be iterator's reader. 2. Assert: reader.[[stream]] is not undefined. 3. Let promise be a new
    promise. 4. Let readRequest be a new read request with the following items ... 5. Perform !
-   ReadableStreamDefaultReaderRead(this, readRequest). 6. Return promise." */
-enum { RSI_NEXT_START = 0, RSI_NEXT_READ };
+   ReadableStreamDefaultReaderRead(this, readRequest). 6. Return promise."
+
+   WHERE THESE TWO ALGORITHMS REST — ONE list, because Web IDL §3.7.10.2 runs both of them on ONE machine and a
+   machine has ONE step list. They are numbered from IDL_ASYNC_ITER_STEP_FIRST and joined onto that machine's
+   own stages at the declaration, so a flow parked inside the cancel reports §4.2.5's step and not §3.7.10.2's
+   return step 8.4, which is the step that RUNS this algorithm rather than the one being run. */
+#define RSI_STAGES(X) \
+    X(RSI_NEXT_READ, \
+      "Streams §4.2.5 get the next iteration result step 5 (Perform ! ReadableStreamDefaultReaderRead(this, " \
+      "readRequest))") \
+    X(RSI_RET_CANCEL, \
+      "Streams §4.2.5 asynchronous iterator return step 4.1 (result is ! " \
+      "ReadableStreamReaderGenericCancel(reader, arg))") \
+    X(RSI_RET_RELEASE, \
+      "Streams §4.2.5 asynchronous iterator return steps 4.2 and 5 (Perform ! " \
+      "ReadableStreamDefaultReaderRelease(reader), on whichever arm of step 4's condition this is)") \
+    X(RSI_RET_RESOLVE, \
+      "Streams §4.2.5 asynchronous iterator return step 6 (a promise resolved with undefined)")
+enum { IDL_ASYNC_ITER_STAGE_BASE(RSI_STAGES) RSI_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const RSI_STEPS[] = { RSI_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 static int rs_iter_next(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueConst target, JSValueConst iter,
                         JSValue *pstate, JSValue in, JSValue *ppromise, JSValue **out_cb, int *out_argc)
@@ -2083,8 +2061,10 @@ static int rs_iter_next(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueConst
     JSValue out;
     int r;
 
-    (void)hdr; (void)iter; (void)target;
-    if (k->at == RSI_NEXT_START) {
+    (void)iter; (void)target;
+    /* A STAGE BELOW THE FIRST OF THESE IS §3.7.10.2's — its next step 8.4, the stage that RUNS this algorithm,
+       which is what a first entry looks like. */
+    if (hdr->stage < IDL_ASYNC_ITER_STEP_FIRST) {
         JSValue funcs[2];
         ReaderData *rd;
 
@@ -2103,8 +2083,10 @@ static int rs_iter_next(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueConst
         if (JS_IsException(k->promise)) return -1;
         k->resolve = funcs[0];
         k->reject = funcs[1];
-        STEP_GOTO(k->at, RSI_NEXT_READ, &k->w.phase, NULL);
+        STEP_GOTO(hdr->stage, RSI_NEXT_READ, &k->w.phase, NULL);
     }
+    DCHECK(hdr->stage == RSI_NEXT_READ,
+           "§4.2.5's get the next iteration result resumed at a step it never rests at");
     {
         /* step 5: ReadableStreamDefaultReaderRead — `read()` IS that operation, reached through the function
            object this component installed. */
@@ -2136,9 +2118,9 @@ static int rs_iter_next(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueConst
    with undefined."
    Step 4.3 is the whole reason a return algorithm is declared at all: the promise the member hands back settles
    with the SOURCE's cancel promise rather than ahead of it, and §2.5.10 passes a rejection out of it on to the
-   caller unchanged. */
-enum { RSI_RET_START = 0, RSI_RET_CANCEL, RSI_RET_RELEASE, RSI_RET_RESOLVE };
-
+   caller unchanged.
+   ITS STAGES ARE THE ONES DECLARED BESIDE THE NEXT ALGORITHM'S, for the reason stated there: one machine, one
+   step list. */
 static int rs_iter_return(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueConst target, JSValueConst iter,
                           JSValue *pstate, JSValueConst value, JSValue in,
                           JSValue *ppromise, JSValue **out_cb, int *out_argc)
@@ -2147,8 +2129,10 @@ static int rs_iter_return(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueCon
     JSValue out;
     int r;
 
-    (void)hdr; (void)iter; (void)target;
-    if (k->at == RSI_RET_START) {
+    (void)iter; (void)target;
+    /* A STAGE BELOW THE FIRST OF THESE IS §3.7.10.2's — its return step 8.4, the stage that RUNS this
+       algorithm, which is what a first entry looks like. */
+    if (hdr->stage < IDL_ASYNC_ITER_STEP_FIRST) {
         rs_iter_work_start(k);
         k->reader = rsi_reader(ctx, *pstate);                         /* step 1 */
         {
@@ -2169,11 +2153,11 @@ static int rs_iter_return(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueCon
             (void)d; (void)parked;
         }
         /* step 4's condition, decided once, with every cursor at rest. */
-        STEP_GOTO(k->at, rsi_prevent_cancel(ctx, *pstate) ? RSI_RET_RELEASE : RSI_RET_CANCEL,
+        STEP_GOTO(hdr->stage, rsi_prevent_cancel(ctx, *pstate) ? RSI_RET_RELEASE : RSI_RET_CANCEL,
                   &k->w.phase, NULL);
     }
 
-    if (k->at == RSI_RET_CANCEL) {
+    if (hdr->stage == RSI_RET_CANCEL) {
         /* step 4.1: ReadableStreamReaderGenericCancel(reader, arg) — the reader's `cancel()` IS that
            operation, reached through the function object this component installed. */
         JSValue fn = rs_fn(ctx, RSF_CANCEL);
@@ -2192,10 +2176,10 @@ static int rs_iter_return(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueCon
                "§4.2.5's asynchronous iterator return step 4.1 answered with something that is not a promise — "
                "ReadableStreamReaderGenericCancel returns one for every input");
         in = JS_UNDEFINED;
-        STEP_GOTO(k->at, RSI_RET_RELEASE, &k->w.phase, NULL);
+        STEP_GOTO(hdr->stage, RSI_RET_RELEASE, &k->w.phase, NULL);
     }
 
-    if (k->at == RSI_RET_RELEASE) {
+    if (hdr->stage == RSI_RET_RELEASE) {
         JSValue fn = rs_fn(ctx, RSF_RELEASE);   /* steps 4.2 and 5 */
 
         r = step_call_run(ctx, &k->w.phase, STEP_CB(k->w.cb), fn, k->reader, 0, NULL, in, &out,
@@ -2210,11 +2194,11 @@ static int rs_iter_return(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueCon
             k->promise = JS_UNDEFINED;
             return 0;
         }
-        STEP_GOTO(k->at, RSI_RET_RESOLVE, &k->w.phase, NULL);
+        STEP_GOTO(hdr->stage, RSI_RET_RESOLVE, &k->w.phase, NULL);
     }
 
-    DCHECK(k->at == RSI_RET_RESOLVE,
-           "§4.2.5's asynchronous iterator return steps resumed at a cursor they never park at");
+    DCHECK(hdr->stage == RSI_RET_RESOLVE,
+           "§4.2.5's asynchronous iterator return steps resumed at a step they never rest at");
     /* step 6: "Return a promise resolved with undefined." PromiseResolve, as the sub-sequence every §4/§5
        "react to what this returned" begins with — `w.value` is the undefined rs_iter_work_start left. */
     r = stream_promise_of_run(ctx, &k->w, 0, in, out_cb, out_argc);
@@ -2228,15 +2212,24 @@ static int rs_iter_return(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueCon
 /* §4.2.1: `async_iterable<any>(optional ReadableStreamIteratorOptions options = {});` — ONE type parameter, so
    it is a VALUE asynchronously iterable declaration and Web IDL §3.7.10 gives the prototype `values` and
    %Symbol.asyncIterator% and neither `entries` nor `keys`. */
+/* DESIGNATED, and every declaration of this shape must be: the struct has gained fields twice, and a
+   POSITIONAL initializer re-aims every value after the new one — silently wherever the two types happen to
+   agree, which two adjacent pointer fields always do. Naming each one is what makes a field added tomorrow
+   land nowhere rather than one slot early. */
 static const IdlAsyncIterOps RS_ITER_OPS = {
-    "ReadableStream",
-    /*pair*/ false,
-    readable_stream_is,
-    rs_iter_init,
-    rs_iter_next,
-    rs_iter_return,
-    sizeof(RsIterWork), rs_iter_visit,
-    ITERATOR_ARGS, 1, ITERATOR_OPTIONS, (int)(sizeof ITERATOR_OPTIONS / sizeof *ITERATOR_OPTIONS)
+    .iface = "ReadableStream",
+    .pair = false,
+    .implements = readable_stream_is,
+    .init = rs_iter_init,
+    .next = rs_iter_next,
+    .ret = rs_iter_return,
+    /* the three algorithms' own rest points, joined onto the two Web IDL machines that host them */
+    .init_steps = RSI_INIT_STEPS,
+    .steps = RSI_STEPS,
+    .work_size = sizeof(RsIterWork),
+    .work_visit = rs_iter_visit,
+    .arg_types = ITERATOR_ARGS, .nargs = 1,
+    .members = ITERATOR_OPTIONS, .nmembers = (int)(sizeof ITERATOR_OPTIONS / sizeof *ITERATOR_OPTIONS)
 };
 
 /* ---- §4.2's TEE -----------------------------------------------------------------------------------------------
@@ -2374,13 +2367,8 @@ static JSValue js_tee_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSTeeState *s = st;
     JSValue r = take_result ? s->result : JS_UNDEFINED;
-    int k;
+    (void)ctx;
     if (take_result) s->result = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->tee);
-    JS_FreeValue(ctx, s->value);
-    JS_FreeValue(ctx, s->result);
-    s->tee = s->value = s->result = JS_UNDEFINED;
-    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
     return r;
 }
 
@@ -2864,14 +2852,8 @@ static JSValue js_from_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSFromState *s = st;
     JSValue r = take_result ? s->result : JS_UNDEFINED;
-    int k;
+    (void)ctx;
     if (take_result) s->result = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->from);
-    JS_FreeValue(ctx, s->value);
-    JS_FreeValue(ctx, s->result);
-    JS_FreeValue(ctx, s->chain);
-    s->from = s->value = s->result = s->chain = JS_UNDEFINED;
-    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
     return r;
 }
 
@@ -3335,18 +3317,6 @@ static void js_drain_visit(JSContext *ctx, void *st, JSStepVisit *v)
     for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
 }
 
-static JSValue js_drain_fini(JSContext *ctx, void *st, bool take_result)
-{
-    JSDrainState *s = st;
-    int k;
-    (void)take_result;
-    JS_FreeValue(ctx, s->drain);
-    JS_FreeValue(ctx, s->value);
-    s->drain = s->value = JS_UNDEFINED;
-    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
-    return JS_UNDEFINED;
-}
-
 static int drain_react(JSContext *ctx, JSValueConst promise, JSValueConst drain)
 {
     JSValueConst data[1];
@@ -3453,7 +3423,7 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     return JS_STEP_DONE;
 }
 
-#define DRAIN_DEF(i) { sizeof(JSDrainState), js_drain_step, js_drain_fini, (i), \
+#define DRAIN_DEF(i) { sizeof(JSDrainState), js_drain_step, NULL, (i), \
                        .catches_abrupt = 1, .visit = js_drain_visit, \
                        .algorithm = "Fetch §5.2 fully read a body step 5 (read all bytes from a reader)", \
                        .steps = DS_STEPS }

@@ -652,16 +652,6 @@ static void js_abort_visit(JSContext *ctx, void *st, JSStepVisit *v)
     abort_signal_work_visit(ctx, &s->w, v);
 }
 
-static JSValue js_abort_fini(JSContext *ctx, void *st, bool take_result)
-{
-    JSAbortState *s = st;
-    (void)take_result;
-    JS_FreeValue(ctx, s->sig);
-    s->sig = JS_UNDEFINED;
-    abort_signal_work_release(ctx, &s->w);
-    return JS_UNDEFINED;   /* §3.2 abort() returns undefined whatever the listeners did */
-}
-
 /* WHERE THIS MACHINE RESTS. §3.2's abort() is one step — "signal abort on this's signal with reason" — and
    that abstract operation is what runs the signal's abort algorithms and fires `abort` at it, which is the
    page's code. So the operand is one stage and the operation is the other; `started` was a private flag
@@ -707,7 +697,8 @@ static int js_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
 }
 
 static const JSTrampStepDef js_abort_def = {
-    sizeof(JSAbortState), js_abort_step, js_abort_fini, 0, .visit = js_abort_visit,
+    sizeof(JSAbortState), js_abort_step, NULL, 0,   /* §3.2 abort() returns undefined whatever the listeners did */
+    .visit = js_abort_visit,
     .algorithm = "DOM §3.2 AbortController.abort(reason)", .steps = ABORT_STEPS
 };
 static int g_abort_stepid = -1;
@@ -808,8 +799,8 @@ static JSValue js_timeout_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSTimeoutState *s = st;
     JSValue r = take_result ? s->result : JS_UNDEFINED;
+    (void)ctx;
     if (take_result) s->result = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->result);
     return r;
 }
 
@@ -842,16 +833,6 @@ static void js_timeout_fire_visit(JSContext *ctx, void *st, JSStepVisit *v)
     if (s->started) abort_signal_work_visit(ctx, &s->w, v);
 }
 
-static JSValue js_timeout_fire_fini(JSContext *ctx, void *st, bool take_result)
-{
-    JSTimeoutFireState *s = st;
-    (void)take_result;
-    /* ONLY WHAT WAS STARTED IS RELEASED. A machine torn down before its first entry holds a zeroed record, and
-       a zeroed JSValue is the integer 0 — releasing it would free a value nothing owns. */
-    if (s->started) abort_signal_work_release(ctx, &s->w);
-    return JS_UNDEFINED;
-}
-
 static int js_timeout_fire_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSTimeoutFireState *s = st;
@@ -876,7 +857,7 @@ static int js_timeout_fire_step(JSContext *ctx, void *st, JSValue cb_result, JSV
 }
 
 static const JSTrampStepDef js_timeout_fire_def = {
-    sizeof(JSTimeoutFireState), js_timeout_fire_step, js_timeout_fire_fini, 0,
+    sizeof(JSTimeoutFireState), js_timeout_fire_step, NULL, 0,
     .visit = js_timeout_fire_visit,
     .algorithm = "DOM §3.2 AbortSignal.timeout step 3's completion steps",
     .steps = TIMEOUT_FIRE_STEPS
@@ -987,11 +968,8 @@ static JSValue js_any_fini(JSContext *ctx, void *st, bool take_result)
     JSAnyState *s = st;
     JSValue r = take_result ? s->result : JS_UNDEFINED;
 
+    (void)ctx;
     if (take_result) s->result = JS_UNDEFINED;
-    iter_cursor_release(ctx, &s->cur);
-    JS_FreeValue(ctx, s->signals);
-    JS_FreeValue(ctx, s->result);
-    s->signals = s->result = JS_UNDEFINED;
     return r;
 }
 

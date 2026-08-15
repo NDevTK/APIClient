@@ -1504,10 +1504,11 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     s->dict_v = idl_num_of(ctx, mt, num);
                 }
                 else if (mt == IDL_DOMSTRING || mt == IDL_DOMSTRING_NULLABLE || mt == IDL_BYTESTRING ||
-                         mt == IDL_USVSTRING || mt == IDL_USVSTRING_NULLABLE || mt == IDL_ENUM) {
-                    if ((mt == IDL_DOMSTRING_NULLABLE || mt == IDL_USVSTRING_NULLABLE) &&
-                        JS_IsNull(s->dict_v)) {
-                        /* `DOMString?`: null is the IDL null, never the string "null". */
+                         mt == IDL_USVSTRING || mt == IDL_USVSTRING_NULLABLE || mt == IDL_ENUM ||
+                         mt == IDL_ENUM_NULLABLE) {
+                    if ((mt == IDL_DOMSTRING_NULLABLE || mt == IDL_USVSTRING_NULLABLE ||
+                         mt == IDL_ENUM_NULLABLE) && JS_IsNull(s->dict_v)) {
+                        /* `DOMString?` / `NavigationType?`: null is the IDL null, never the string "null". */
                     } else {
                         JSValue str = JS_UNDEFINED;
                         r = step_tostring_run(ctx, &s->hdr, s->dict_v, cb_result, &str, out_cb, out_argc);
@@ -1522,7 +1523,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                             s->dict_v = JS_ToScalarValueString(ctx, s->dict_v);
                             if (JS_IsException(s->dict_v)) return JS_STEP_ABRUPT;
                         }
-                        if (mt == IDL_ENUM &&
+                        if ((mt == IDL_ENUM || mt == IDL_ENUM_NULLABLE) &&
                             idl_enum_check(ctx, s->dict_v, dm->values, dm->name) < 0)
                             return JS_STEP_ABRUPT;
                     }
@@ -1855,7 +1856,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
     return idl_ce_finish(ctx, s, JS_UNDEFINED, out_cb, out_argc);
 }
 
-/* THE TEARDOWN IS THE DECLARATION, DISCHARGED — it does not restate it.
+/* THE COMPLETION, AND THE TWO THINGS NO DECLARATION CAN CARRY — it neither restates the list nor discharges it.
  *
  * Every JSValue this machine owns — its result, its converted argument vector, its dictionary and sequence
  * cursors, its element-reaction queue, its nested conversion frames, and the member body's own state — is named
@@ -1905,17 +1906,19 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
     }
 
     /* §8.1.4.6 step 5's FLAG, if this member's reaction drain was abandoned holding it. Not a reference, so no
-       declaration names it and the discharge below cannot give it back; leaving it set would put the global in
-       error reporting mode forever and silently swallow every later report. */
+       declaration names it and the discharge the driver runs after this cannot give it back; leaving it set
+       would put the global in error reporting mode forever and silently swallow every later report. */
     custom_elements_queue_unlock(ctx, &s->ce);
 
-    /* AND NOW THE ONE LIST. It covers the whole state: the converted argument vector, every declared conversion
-       frame, the sequence cursor and its collected elements, the drain buffer of an abandoned §4.2.3 walk, the
+    /* AND THE ONE LIST IS DISCHARGED BY THE DRIVER, after this returns — tramp_step_state_free_1 reads
+       js_idl_args_visit exactly as it reads every other machine's, so this function neither restates it nor
+       calls it. It covers the whole state: the converted argument vector, every declared conversion frame, the
+       sequence cursor and its collected elements, the drain buffer of an abandoned §4.2.3 walk, the
        element-reaction queue of a flow dropped mid-member, and — through its last line — the member body's own
-       owned values. An abandoned queue's reactions die with the flow, which is what an abandoned flow means. */
-    JS_StepVisitFree(ctx, js_idl_args_visit, st);
-    /* The cursors the declaration cannot carry: a zeroed state means "nothing in flight", and these are what
-       say so. `ce_threw` is the epilogue's caught-completion flag, `conv_sp` the nested-conversion depth. */
+       owned values. An abandoned queue's reactions die with the flow, which is what an abandoned flow means.
+       The cursors below are what no declaration can carry: a zeroed state means "nothing in flight", and these
+       are what say so. `ce_threw` is the epilogue's caught-completion flag, `conv_sp` the nested-conversion
+       depth. */
     s->conv_sp = 0;
     s->ce_threw = 0;
     return r;

@@ -645,12 +645,27 @@ static JSValue fsdir_iter_pick(JSContext *ctx, const FsLocator *l, JSValueConst 
     return idl_async_iter_end(ctx);
 }
 
-/* The iteration's own step storage. ONE StreamWork, because the only sub-sequence §2.4.1 has is the settle. */
+/* The iteration's own step storage. ONE StreamWork, because the only sub-sequence §2.4.1 has is the settle.
+   NO CURSOR BYTE. There was one — `started` — and it was this algorithm's STAGE kept where nothing could read
+   it: the driver's assert cannot see a private byte, a park cannot report it, and a later build cannot resolve
+   it back to a step. The stage below is the machine's own, joined onto Web IDL §3.7.10.2's at the declaration,
+   and `w.phase` remains what it is — a sub-sequence cursor INSIDE that stage. */
 typedef struct {
     StreamWork w;
     JSValue    promise;   /* §2.4.1 step 1's "let promise be a new promise" (owned) */
-    uint8_t    started;   /* a zeroed state reads as the INTEGER 0, so this is what says "not yet" */
 } FsDirIterWork;
+
+/* WHERE §2.4.1's ITERATION RESTS — at its SETTLE, which is a Call of a resolving function and therefore reaches
+   27.2.1.3.2 step 8's `then` read on the value pair it is handed (an Array, one
+   `Object.defineProperty(Array.prototype, "then", …)` away from being the page's code). Numbered from
+   IDL_ASYNC_ITER_STEP_FIRST and joined onto Web IDL §3.7.10.2's own stages at the declaration, so a flow parked
+   there reports the File System Standard's step rather than the Web IDL step that RUNS this algorithm. */
+#define FSD_STAGES(X) \
+    X(FSD_NEXT_SETTLE, \
+      "File System §2.4.1 get the next iteration result steps 2.3.2, 2.3.5 and 2.3.8 (rejecting promise with a " \
+      "NotFoundError DOMException, or resolving it with end of iteration or with « child's name, result »)")
+enum { IDL_ASYNC_ITER_STAGE_BASE(FSD_STAGES) FSD_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const FSD_STEPS[] = { FSD_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 static void fsdir_iter_visit(JSContext *ctx, void *work, JSStepVisit *v)
 {
@@ -671,8 +686,10 @@ static int fsdir_iter_next(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueCo
     JSValue settled = JS_UNDEFINED;
     int r;
 
-    (void)hdr; (void)iter;
-    if (!k->started) {
+    (void)iter;
+    /* A STAGE BELOW THIS ALGORITHM'S FIRST IS §3.7.10.2's — its next step 8.4, the stage that RUNS these
+       steps, which is what a first entry looks like. */
+    if (hdr->stage < IDL_ASYNC_ITER_STEP_FIRST) {
         const FsLocator *l = fsh_locator(target);
         JSValue entry, funcs[2];
         int reject = 0;
@@ -681,7 +698,6 @@ static int fsdir_iter_next(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueCo
            machine down through the ownership declaration, which frees exactly what it names. */
         stream_work_start(&k->w);
         k->promise = JS_UNDEFINED;
-        k->started = 1;
         DCHECK(l != NULL, "§2.4.1's iteration reached a target that is not a FileSystemHandle — the iterator's "
                           "target is the receiver Web IDL §3.7.10 step 3.1.3 has already brand-checked");
         k->promise = JS_NewPromiseCapability(ctx, funcs);   /* step 1: "Let promise be a new promise." */
@@ -707,7 +723,10 @@ static int fsdir_iter_next(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueCo
         }
         k->w.func = funcs[reject];
         JS_FreeValue(ctx, funcs[reject ^ 1]);
+        STEP_GOTO(hdr->stage, FSD_NEXT_SETTLE, &k->w.phase, NULL);
     }
+    DCHECK(hdr->stage == FSD_NEXT_SETTLE,
+           "§2.4.1's get the next iteration result resumed at a step it never rests at");
     r = step_call_run(ctx, &k->w.phase, STEP_CB(k->w.cb), k->w.func, JS_UNDEFINED, 1,
                       (JSValueConst *)&k->w.value, in, &settled, out_cb, out_argc);
     if (r > 0) return r;       /* parked ON THE SETTLE; the `then` read runs with a flow base under it */
@@ -721,17 +740,26 @@ static int fsdir_iter_next(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueCo
    iterator prototype no `return` at all — which is observable: breaking out of a `for await` loop over a
    directory runs AsyncIteratorClose, whose GetMethod finds undefined and calls nothing. An iteration this
    component had to unwind (a lock, a cursor) would be where that algorithm goes; this one holds neither. */
+/* DESIGNATED, and every declaration of this shape must be: the struct has gained fields twice, and a
+   POSITIONAL initializer re-aims every value after the new one — silently wherever the two types happen to
+   agree, which two adjacent pointer fields always do. Naming each one is what makes a field added tomorrow
+   land nowhere rather than one slot early. */
 static const IdlAsyncIterOps FS_DIR_ITER_OPS = {
-    "FileSystemDirectoryHandle",
-    /*pair*/ true,          /* `async_iterable<USVString, FileSystemHandle>` — two type parameters */
-    fsdir_is,
-    fsdir_iter_init,
-    fsdir_iter_next,
-    /*ret*/ NULL,
-    sizeof(FsDirIterWork), fsdir_iter_visit,
+    .iface = "FileSystemDirectoryHandle",
+    .pair = true,           /* `async_iterable<USVString, FileSystemHandle>` — two type parameters */
+    .implements = fsdir_is,
+    .init = fsdir_iter_init,
+    .next = fsdir_iter_next,
+    .ret = NULL,
+    /* §2.4.1's initialization steps are ONE assignment and make no request, so they rest at no step of their
+       own and the stage that runs them is the only rest point there is; the iteration itself rests at one. */
+    .init_steps = NULL,
+    .steps = FSD_STEPS,
+    .work_size = sizeof(FsDirIterWork),
+    .work_visit = fsdir_iter_visit,
     /* the declaration takes no arguments: "In the future we might want to add arguments ... to support for
        example recursive iteration" is an open issue, not a member of the IDL this engine implements. */
-    NULL, 0, NULL, 0
+    .arg_types = NULL, .nargs = 0, .members = NULL, .nmembers = 0
 };
 
 /* ---- declaration and per-realm install --------------------------------------------------------------------- */

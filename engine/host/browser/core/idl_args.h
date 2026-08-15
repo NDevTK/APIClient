@@ -70,6 +70,14 @@ typedef enum {
        a TypeError: `new Blob([], {endings: "bogus"})` throws, and an unrecognised value is never silently the
        default. The values are declared beside the member, because they are part of the type. */
     IDL_ENUM,
+    /* A NULLABLE ENUMERATION — `NavigationType? navigationType = null`, and the difference from IDL_ENUM is
+       the whole reason it exists. §3.2.19's conversion is ToString-then-membership, and null ToStrings to the
+       string "null", which no enumeration lists — so a nullable enumeration declared as IDL_ENUM makes the
+       IDL's OWN default value a TypeError. The alternative was IDL_ANY plus the rule written out in the body,
+       which is the shape the declared types exist to replace and which here would run ToString on the page's
+       value from a plain C body: the getter this engine aborts on, in the one place a page controls. So null
+       and undefined are the IDL null and cross as null; anything else is §3.2.19's conversion exactly. */
+    IDL_ENUM_NULLABLE,
     /* A `(DOMString or Function)` union, which is TimerHandler and nothing else so far: callable crosses as
        itself, anything else is a DOMString. Named for the rule rather than for the member, because the rule is
        what the IDL states. */
@@ -323,8 +331,9 @@ typedef int (*IdlStepBody)(JSContext *ctx, JSStepHdr *hdr, void *state, int argc
 
 /* The state's OWNERSHIP contract. `visit` is the ONE declaration of what the state holds, and it has three
    consumers, none of which knows about the others: the deep-fork clone takes a second reference to each field,
-   the teardown releases each (JS_StepVisitFree, driven by idl_args_result), and the teardown's own assert folds
-   it into a number to check that `release` did not touch it.
+   the teardown releases each (tramp_step_state_free_1 discharges it after idl_args_result has stated the
+   member's completion), and idl_args_result's own assert folds it into a number to check that `release` did not
+   touch it.
    THERE IS NO SECOND LIST. `release` used to be that — the same JSValues, by hand, in another function — and
    the pair is exactly what this engine forbids: adding a field to a state then creates an obligation in two
    places and nothing catches the one that is missed. It had already been missed, in querySelectorAll: `visit`

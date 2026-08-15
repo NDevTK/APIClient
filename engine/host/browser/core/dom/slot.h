@@ -58,7 +58,6 @@ typedef struct {
 
 void slot_change_work_start(SlotChangeWork *w);
 void slot_change_work_visit(JSContext *ctx, SlotChangeWork *w, JSStepVisit *v);
-void slot_change_work_release(JSContext *ctx, SlotChangeWork *w);
 /* Steps 4 and 5: clone the agent's signal slots and empty it. The Array is not replaced — it is the agent's,
    and swapping the static would make one flow's replacement visible to every other. */
 void slot_signal_slots_take(JSContext *ctx, SlotChangeWork *w);

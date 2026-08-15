@@ -292,40 +292,17 @@ static void js_obs_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->rerr);
 }
 
-static void js_obs_release(JSContext *ctx, void *st)
-{
-    JSObsState *s = st;
-    int k;
-
-    JS_FreeValue(ctx, s->result);  s->result = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->obs);     s->obs    = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->sub);     s->sub    = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->io);      s->io     = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->sig);     s->sig    = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->list);    s->list   = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->value);   s->value  = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->creason); s->creason = JS_UNDEFINED;
-    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->iocb[k]); s->iocb[k] = JS_UNDEFINED; }
-    JS_FreeValue(ctx, s->src);     s->src  = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->st);      s->st   = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->op1);     s->op1  = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->op2);     s->op2  = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->op3);     s->op3  = JS_UNDEFINED;
-    for (k = 0; k < 6; k++) { JS_FreeValue(ctx, s->cb[k]);   s->cb[k]   = JS_UNDEFINED; }
-    abort_signal_work_release(ctx, &s->aw);
-    stream_work_release(ctx, &s->sw);
-    report_exception_work_release(ctx, &s->rw);
-    JS_FreeValue(ctx, s->rerr);
-    s->rerr = JS_UNDEFINED;
-}
-
+/* DELETED: js_obs_release, which restated js_obs_visit field for field — twenty-two values, three sub-records
+   and the same order. The declaration is the one list and the teardown discharges it. */
 static JSValue js_obs_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSObsState *s = st;
     JSValue r = take_result ? s->result : JS_UNDEFINED;
 
     if (take_result) s->result = JS_UNDEFINED;
-    js_obs_release(ctx, st);
+    /* §8.1.4.6 step 5's FLAG — the one part of the report record that is not a reference, so no declaration
+       names it and leaving it set would put this global in error reporting mode forever. */
+    report_exception_work_unlock(ctx, &s->rw);
     return r;
 }
 

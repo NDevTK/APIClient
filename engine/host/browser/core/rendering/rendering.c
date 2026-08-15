@@ -11,6 +11,7 @@
 #include "core/events/report_exception.h"
 #include "core/frame/window_proxy.h"
 #include "core/frame/navigable.h"
+#include "core/frame/navigation.h"
 #include "core/frame/viewport.h"
 #include "core/frame/visual_viewport.h"
 #include "core/html/autofocus.h"
@@ -197,20 +198,11 @@ static void js_update_rendering_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static JSValue js_update_rendering_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSUpdateRendering *s = st;
-    int k;
 
     (void)take_result;
-    JS_FreeValue(ctx, s->docs);
-    JS_FreeValue(ctx, s->ev);
-    JS_FreeValue(ctx, s->target);
-    JS_FreeValue(ctx, s->fn);
-    JS_FreeValue(ctx, s->exc);
-    report_exception_work_release(ctx, &s->rep);
-    s->docs = s->ev = s->target = s->fn = s->exc = JS_UNDEFINED;
-    STEP_CB_FOREACH(s->cb, k) {
-        JS_FreeValue(ctx, s->cb[k]);
-        s->cb[k] = JS_UNDEFINED;
-    }
+    /* §8.1.4.6 step 5's FLAG, if an animation-frame callback's report was abandoned holding it. Not a
+       reference, so no declaration names it; the record's references are js_update_rendering_visit's. */
+    report_exception_work_unlock(ctx, &s->rep);
     return JS_UNDEFINED;
 }
 
@@ -699,18 +691,12 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
             }
             docctx = doc_realm(ctx, s);
             if (s->cphase == 0) {
-                /* THE STEP'S SECOND HALF, asserted where the algorithm performs it. It is asked of every doc
-                   rather than only of the ones being repaired, because the obligation is the STEP's: the day
-                   this build has a Navigation API, every document that reaches step 17 has a flag to clear
-                   when the branch is taken, and a probe that only ran on the branch could stay silent for a
-                   whole session after its producer arrived. */
-                realm_awaits(docctx, "navigation",
-                            "update the rendering step 17 also sets doc's relevant global object's NAVIGATION "
-                            "API's `focus changed during ongoing navigation` to false when it repairs a "
-                            "focused area (HTML §7.2.6.8) — this build now has a Navigation API, so that flag "
-                            "exists and step 17 must clear it here, and §6.6.4's focus update steps step "
-                            "4.1.1 must SET it where core/html/focus.c names the same absence");
                 if (focus_focused_area_is_focusable(docctx)) { s->i++; continue; }
+                /* THE STEP'S SECOND HALF: "and set doc's relevant global object's NAVIGATION API's `focus
+                   changed during ongoing navigation` to false" (HTML §7.2.6.8's flag). It is INSIDE the branch,
+                   where the standard puts it — the repair and the clear are one conditional, and §6.6.4's focus
+                   update steps step 4.1.1 is what SET the flag in the first place. */
+                navigation_set_focus_changed(docctx, false);
             }
             r = focus_viewport_run(docctx, &s->cphase, STEP_CB(s->cb), cb_result, out_cb, out_argc);
             if (r > 0) return r;                     /* parked on the page's focus listeners */

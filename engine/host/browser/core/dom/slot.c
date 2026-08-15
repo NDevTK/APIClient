@@ -541,15 +541,6 @@ void slot_change_work_visit(JSContext *ctx, SlotChangeWork *w, JSStepVisit *v)
     STEP_CB_FOREACH(w->cb, k) v->val(ctx, &w->cb[k]);
 }
 
-void slot_change_work_release(JSContext *ctx, SlotChangeWork *w)
-{
-    int k;
-    JS_FreeValue(ctx, w->set);
-    JS_FreeValue(ctx, w->ev);
-    w->set = w->ev = JS_UNDEFINED;
-    STEP_CB_FOREACH(w->cb, k) { JS_FreeValue(ctx, w->cb[k]); w->cb[k] = JS_UNDEFINED; }
-}
-
 void slot_signal_slots_take(JSContext *ctx, SlotChangeWork *w)
 {
     uint32_t i, n;

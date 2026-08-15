@@ -560,11 +560,14 @@ JSValue file_system_file_new(JSContext *ctx, JSValueConst entry)
    attacker's bytes on the way in, and for a file it does NOTHING — a file is read verbatim, with no
    percent-encoding and no leading character — which is a FACT worth declaring rather than an absence to leave
    undeclared: §S reports a parked search's delivery constraint, and "nothing is encoded" is the strongest one
-   there is. Declared once per name, because a device may hold a file, lose it and hold it again. */
+   there is. Declared once per name, because a device may hold a file, lose it and hold it again.
+   The DELIVERY is the user handing the document the file: no address carries these bytes and no navigation
+   brings them, so a PoC over a file source reproduces only where the person reproducing it supplies the file —
+   which is a fact that belongs in the emitted envelope rather than in a reader's head. */
 static void fs_declare_bytes_source(const char *src)
 {
     if (concolic_source_encodes(src)) return;
-    concolic_declare_source(src, "", 0);
+    concolic_declare_source(src, "", 0, SRC_DELIVER_USER_FILE);
 }
 
 void file_system_local_add(JSContext *ctx, const char *name, const char *type,

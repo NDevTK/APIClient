@@ -1178,17 +1178,6 @@ static void js_xhr_run_visit(JSContext *ctx, void *st, JSStepVisit *v)
     STEP_CB_FOREACH(s->cb, i) v->val(ctx, &s->cb[i]);
 }
 
-static JSValue js_xhr_run_fini(JSContext *ctx, void *st, bool take_result)
-{
-    JSXhrRunState *s = st;
-    int i;
-    (void)take_result;
-    JS_FreeValue(ctx, s->ev);
-    s->ev = JS_UNDEFINED;
-    STEP_CB_FOREACH(s->cb, i) { JS_FreeValue(ctx, s->cb[i]); s->cb[i] = JS_UNDEFINED; }
-    return JS_UNDEFINED;
-}
-
 /* Fire one event at `target`, minting it first. Returns >0 (the caller returns it), 0 when it has been
    dispatched, or -1. `progress` decides which interface §3.7's table names for that event. */
 static int xhr_fire_run(JSContext *ctx, JSXhrRunState *s, JSValueConst target, const char *type,
@@ -1619,7 +1608,7 @@ error_steps:
 }
 
 static const JSTrampStepDef js_xhr_run_def = {
-    sizeof(JSXhrRunState), js_xhr_run_step, js_xhr_run_fini, 0, .visit = js_xhr_run_visit,
+    sizeof(JSXhrRunState), js_xhr_run_step, NULL, 0, .visit = js_xhr_run_visit,
     .algorithm = "XHR §3.5.6 send()'s fetch, processResponse, handle response end-of-body and the request "
                  "error steps",
     .steps = js_xhr_run_steps

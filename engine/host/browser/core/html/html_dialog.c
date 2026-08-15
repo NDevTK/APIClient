@@ -164,7 +164,7 @@ static int js_dialog_toggle_step(JSContext *ctx, void *st, JSValue cb_result, JS
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         /* EVERY owned field before the first thing that can fail — the failure path tears this state down
-           through js_dialog_toggle_fini, which frees exactly what the state holds, and a zeroed block is not
+           through js_dialog_toggle_visit, which frees exactly what the state holds, and a zeroed block is not
            a block of JS_UNDEFINEDs. */
         s->ev = JS_UNDEFINED;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
@@ -206,23 +206,8 @@ static void js_dialog_toggle_visit(JSContext *ctx, void *st, JSStepVisit *v)
         v->val(ctx, &s->cb[k]);
 }
 
-static JSValue js_dialog_toggle_fini(JSContext *ctx, void *st, bool take_result)
-{
-    DialogToggleTask *s = st;
-    int k;
-
-    (void)take_result;
-    JS_FreeValue(ctx, s->ev);
-    s->ev = JS_UNDEFINED;
-    STEP_CB_FOREACH(s->cb, k) {
-        JS_FreeValue(ctx, s->cb[k]);
-        s->cb[k] = JS_UNDEFINED;
-    }
-    return JS_UNDEFINED;
-}
-
 static const JSTrampStepDef js_dialog_toggle_def = {
-    sizeof(DialogToggleTask), js_dialog_toggle_step, js_dialog_toggle_fini, 0,
+    sizeof(DialogToggleTask), js_dialog_toggle_step, NULL, 0,
     .visit = js_dialog_toggle_visit,
     .algorithm = "HTML §4.11.4 the dialog toggle event task",
     .steps = DIALOG_TOGGLE_STEPS

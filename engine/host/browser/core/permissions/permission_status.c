@@ -187,16 +187,6 @@ static void psc_visit(JSContext *ctx, void *st, JSStepVisit *v)
     if (s->started) v->val(ctx, &s->over);
 }
 
-static JSValue psc_fini(JSContext *ctx, void *st, bool take_result)
-{
-    PermChangeState *s = st;
-
-    (void)take_result;
-    if (s->started) JS_FreeValue(ctx, s->over);
-    s->started = 0;
-    return JS_UNDEFINED;
-}
-
 /* SEED THE NEXT ASK. §6.3.4 has no "next" — the user agent simply becomes aware again — so what this schedules
    is the QUESTION and not an event: one job per generation, each of which forks or terminates. The status
    travels as closure data because the update steps take no arguments. */
@@ -317,7 +307,9 @@ out:
 }
 
 static const JSTrampStepDef psc_def = {
-    sizeof(PermChangeState), psc_step, psc_fini, 0, .visit = psc_visit,
+    /* No fini: `over` is psc_visit's and `started` is the flag that declaration reads, so clearing it here
+       would hide the value from the one list that frees it. */
+    sizeof(PermChangeState), psc_step, NULL, 0, .visit = psc_visit,
     .algorithm = "Permissions §6.3.4 the PermissionStatus update steps",
     .steps = PSC_STEPS
 };

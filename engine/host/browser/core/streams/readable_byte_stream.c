@@ -760,14 +760,6 @@ static void js_byte_rxn_visit(JSContext *ctx, void *st, JSStepVisit *v)
     stream_work_visit(ctx, &s->w, v);
 }
 
-static JSValue js_byte_rxn_fini(JSContext *ctx, void *st, bool take_result)
-{
-    JSByteRxnState *s = st;
-    (void)take_result;
-    stream_work_release(ctx, &s->w);
-    return JS_UNDEFINED;
-}
-
 static int js_byte_rxn_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSByteRxnState *s = st;
@@ -816,7 +808,7 @@ static int js_byte_rxn_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     return JS_STEP_DONE;
 }
 
-#define BRX_DEF(i, alg) { sizeof(JSByteRxnState), js_byte_rxn_step, js_byte_rxn_fini, (i), \
+#define BRX_DEF(i, alg) { sizeof(JSByteRxnState), js_byte_rxn_step, NULL, (i), \
                           .catches_abrupt = 1, .visit = js_byte_rxn_visit, \
                           .algorithm = (alg), .steps = BRX_STEPS }
 static const JSTrampStepDef js_byte_rxn_defs[4] = {
@@ -873,21 +865,6 @@ static void byte_commit_visit(JSContext *ctx, ByteCommit *cm, JSStepVisit *v)
     v->val(ctx, &cm->value);
     v->val(ctx, &cm->dsc);
     STEP_CB_FOREACH(cm->view_cb, i) v->val(ctx, &cm->view_cb[i]);
-}
-
-static void byte_commit_release(JSContext *ctx, ByteCommit *cm)
-{
-    int i;
-    JS_FreeValue(ctx, cm->filled);
-    JS_FreeValue(ctx, cm->func);
-    JS_FreeValue(ctx, cm->value);
-    JS_FreeValue(ctx, cm->dsc);
-    cm->filled = cm->func = cm->value = cm->dsc = JS_UNDEFINED;
-    STEP_CB_FOREACH(cm->view_cb, i) {
-        JS_FreeValue(ctx, cm->view_cb[i]);
-        cm->view_cb[i] = JS_UNDEFINED;
-    }
-    cm->view_phase = 0;
 }
 
 static int byte_commit_run(JSContext *ctx, StreamWork *w, ByteCommit *cm, StreamData *d,
@@ -1154,18 +1131,6 @@ static void js_byte_ctrl_visit(JSContext *ctx, void *st, JSStepVisit *v)
     byte_commit_visit(ctx, &s->cm, v);
     v->val(ctx, &s->chunk_buf);
     v->val(ctx, &s->rethrow);
-}
-
-static JSValue js_byte_ctrl_fini(JSContext *ctx, void *st, bool take_result)
-{
-    JSByteCtrlState *s = st;
-    (void)take_result;
-    stream_work_release(ctx, &s->w);
-    byte_commit_release(ctx, &s->cm);
-    JS_FreeValue(ctx, s->chunk_buf);
-    JS_FreeValue(ctx, s->rethrow);
-    s->chunk_buf = s->rethrow = JS_UNDEFINED;
-    return JS_UNDEFINED;
 }
 
 static int js_byte_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
@@ -1445,7 +1410,7 @@ stages:
     return JS_STEP_DONE;
 }
 
-#define BC_DEF(i) { sizeof(JSByteCtrlState), js_byte_ctrl_step, js_byte_ctrl_fini, (i), \
+#define BC_DEF(i) { sizeof(JSByteCtrlState), js_byte_ctrl_step, NULL, (i), \
                     .catches_abrupt = 1, .visit = js_byte_ctrl_visit, \
                     .algorithm = "Streams §4.7 enqueue(chunk) / close() / error(e)", .steps = BS_STEPS }
 static const JSTrampStepDef js_byte_ctrl_defs[3] = {
@@ -1516,18 +1481,6 @@ static void js_byobreq_visit(JSContext *ctx, void *st, JSStepVisit *v)
     byte_commit_visit(ctx, &s->cm, v);
     v->val(ctx, &s->rethrow);
     v->val(ctx, &s->ctrl);
-}
-
-static JSValue js_byobreq_fini(JSContext *ctx, void *st, bool take_result)
-{
-    JSByobReqState *s = st;
-    (void)take_result;
-    stream_work_release(ctx, &s->w);
-    byte_commit_release(ctx, &s->cm);
-    JS_FreeValue(ctx, s->rethrow);
-    JS_FreeValue(ctx, s->ctrl);
-    s->rethrow = s->ctrl = JS_UNDEFINED;
-    return JS_UNDEFINED;
 }
 
 /* §4.9.5's ReadableByteStreamControllerRespondInClosedState — every pull-into a BYOB reader is still waiting
@@ -1804,7 +1757,7 @@ static int js_byobreq_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     return JS_STEP_DONE;
 }
 
-#define BQ_DEF(i) { sizeof(JSByobReqState), js_byobreq_step, js_byobreq_fini, (i), \
+#define BQ_DEF(i) { sizeof(JSByobReqState), js_byobreq_step, NULL, (i), \
                     .catches_abrupt = 1, .visit = js_byobreq_visit, \
                     .algorithm = "Streams §4.8 respond(bytesWritten) / respondWithNewView(view)", \
                     .steps = BQ_STEPS }
@@ -1865,20 +1818,8 @@ static JSValue js_byob_read_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSByobReadState *s = st;
     JSValue r = take_result ? s->promise : JS_UNDEFINED;
-    int i;
+    (void)ctx;
     if (take_result) s->promise = JS_UNDEFINED;
-    stream_work_release(ctx, &s->w);
-    JS_FreeValue(ctx, s->promise);
-    JS_FreeValue(ctx, s->settle);
-    JS_FreeValue(ctx, s->result);
-    JS_FreeValue(ctx, s->stream);
-    JS_FreeValue(ctx, s->dsc);
-    s->promise = s->settle = s->result = s->stream = s->dsc = JS_UNDEFINED;
-    STEP_CB_FOREACH(s->view_cb, i) {
-        JS_FreeValue(ctx, s->view_cb[i]);
-        s->view_cb[i] = JS_UNDEFINED;
-    }
-    s->view_phase = 0;
     return r;
 }
 

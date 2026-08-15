@@ -379,13 +379,8 @@ static void js_nav_load_visit(JSContext *ctx, void *st, JSStepVisit *v)
     (void)ctx; (void)st; (void)v;
 }
 
-static JSValue js_nav_load_fini(JSContext *ctx, void *st, bool take_result)
-{
-    (void)ctx; (void)st; (void)take_result;
-    return JS_UNDEFINED;   /* the state holds no JSValue of its own — the job's arguments are the header's */
-}
-
-static const JSTrampStepDef js_nav_load_def = { sizeof(NavLoadState), js_nav_load_step, js_nav_load_fini, 0,
+/* No fini: the state holds no JSValue of its own — the job's arguments are the header's. */
+static const JSTrampStepDef js_nav_load_def = { sizeof(NavLoadState), js_nav_load_step, NULL, 0,
                                                 .visit = js_nav_load_visit,
                                                 .algorithm = "HTML §7.4 step 14's document load, as a job",
                                                 .steps = NAV_LOAD_STEPS };

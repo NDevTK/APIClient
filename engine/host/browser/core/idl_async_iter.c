@@ -5,6 +5,7 @@
  * requires the prose accompanying such an interface to define "get the next iteration result", and this file
  * calls it. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
@@ -46,6 +47,12 @@ typedef struct {
     JSClassID class_id;                 /* the iterator object's class, and its per-realm prototype slot */
     int       stepid[AIT_OP_N];
     int       id_keys, id_values, id_entries;
+    /* THE TWO JOINED STAGE LISTS — this file's stages followed by the component's, one for each machine that
+       hosts one of its algorithms. Owned here and freed with the declarations, because the definitions BORROW
+       them: JS_RegisterStepDef requires a definition to outlive the runtime, and a definition's `steps` is part
+       of it. The strings are the two sides' own statics; the array naming them is this file's. */
+    const char **steps;        /* AIT_STEP_LABELS + ops->steps, on §3.7.10.2's seven definitions */
+    const char **init_steps;   /* AIM_STEP_LABELS + ops->init_steps, handed to idl_method_id_step */
 } IdlAsyncIface;
 
 static IdlAsyncIface g_async[IDL_ASYNC_ITER_MAX];
@@ -167,7 +174,10 @@ static JSValue ait_iter_result(JSContext *ctx, JSValue value, bool done)
 
 /* WHERE THIS MACHINE RESTS, AS §3.7.10.2 NUMBERS ITS TWO ALGORITHMS. `next` and `return` share the list because
    they share the shape: check the receiver, chain onto the ongoing promise or run the steps here, short-circuit
-   on `is finished`, ask the component, settle. */
+   on `is finished`, ask the component, settle.
+   AND THE COMPONENT'S OWN STAGES ARE JOINED AFTER THE LAST OF THEM — AIT_SOURCE is where this machine RUNS the
+   component's algorithm, so a rest INSIDE that algorithm is a stage of the component's, numbered from
+   IDL_ASYNC_ITER_STEP_FIRST. Both algorithms' stages are in that one space, since both run on this machine. */
 #define AIT_STAGES(X) \
     X(AIT_START, \
       "Web IDL §3.7.10.2 next steps 1-11 / return steps 1-11 (the receiver check, and then either chaining " \
@@ -186,6 +196,11 @@ static JSValue ait_iter_result(JSContext *ctx, JSValue value, bool done)
       "/ return step 8.4 (running the asynchronous iterator return algorithm for the interface)")
 enum { AIT_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const AIT_STEP_LABELS[] = { AIT_STAGES(JS_STEP_STAGE_LABEL) NULL };
+/* The two are one number seen from two sides — how many stages this machine owns, and where a component's own
+   stages begin — so they agree at COMPILE time rather than by a comment asking them to. A stage added here
+   without moving the base would put every component's first label on this machine's last step. */
+typedef char ait_stages_match_step_first[
+    ((int)(sizeof AIT_STEP_LABELS / sizeof *AIT_STEP_LABELS) - 1) == IDL_ASYNC_ITER_STEP_FIRST ? 1 : -1];
 
 /* The component's own step storage sits in the TAIL of this state, so one allocation carries both and the
    component never owns a second lifetime. The union is what makes that tail's alignment the widest of anything
@@ -234,8 +249,8 @@ static JSValue ait_fini(JSContext *ctx, void *st, bool take_result)
     AitState *s = st;
     JSValue r = JS_UNDEFINED;
 
+    (void)ctx;
     if (take_result) { r = s->result; s->result = JS_UNDEFINED; }
-    JS_StepVisitFree(ctx, ait_visit, st);
     return r;
 }
 
@@ -470,8 +485,10 @@ static int ait_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
         cb_result = JS_UNDEFINED;
         /* step 8.2.3: return nextPromiseCapability.[[Promise]], which s->result already holds */
     } else {
-        DCHECK(s->hdr.stage == AIT_SOURCE,
-               "a §3.7.10.2 machine resumed into a stage neither of its algorithms has");
+        /* AIT_SOURCE OR PAST IT: past it is the COMPONENT'S own stage, joined onto this machine's list at the
+           declaration, which is where its algorithm parks. */
+        DCHECK(s->hdr.stage >= AIT_SOURCE,
+               "a §3.7.10.2 machine resumed into a stage neither of its algorithms nor its component's has");
         if (returning) {
             DCHECK(f->ops->ret != NULL,
                    "§3.7.10.2's `return` ran for an interface whose prose defines no asynchronous iterator "
@@ -482,7 +499,19 @@ static int ait_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
             r = f->ops->next(ctx, &s->hdr, AIT_WORK(s), rec->target, s->iter, &rec->state,
                              cb_result, &s->source, out_cb, out_argc);
         }
-        if (r > 0) return r;                 /* parked INSIDE the component's algorithm; the resume returns here */
+        if (r > 0) {
+            /* PARKED INSIDE THE COMPONENT'S ALGORITHM, so the stage must be the COMPONENT'S — this is the
+               assertion that makes a private cursor byte impossible to reintroduce. A park still standing at
+               AIT_SOURCE reports Web IDL's step for a suspension inside the component's standard, and the
+               resume re-enters the algorithm at its first step, which re-runs whatever it did before the
+               request. The resume returns here either way. */
+            DCHECK(s->hdr.stage >= IDL_ASYNC_ITER_STEP_FIRST,
+                   "an async_iterable<>'s get the next iteration result or return algorithm parked at Web IDL "
+                   "§3.7.10.2's own stage — declare the step it rests at in IdlAsyncIterOps::steps and reach "
+                   "it with STEP_GOTO before the request, so the park names the component's standard and the "
+                   "resume continues where it left off");
+            return r;
+        }
         if (r < 0) return JS_STEP_ABRUPT;
         cb_result = JS_UNDEFINED;
         /* THE RECORD MAY HAVE MOVED UNDER US: the component's algorithm can suspend, and a resume re-derives
@@ -538,6 +567,11 @@ static int ait_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
       "the interface with idlObject, iterator and idlArgs)")
 enum { IDL_STEP_STAGE_BASE(AIM_STAGES) AIM_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const AIM_STEP_LABELS[] = { AIM_STAGES(JS_STEP_STAGE_LABEL) NULL };
+/* The same one number from two sides as the machine above, offset by the prologue idl_args.c prepends to every
+   declared member: AIM_INIT is where this member RUNS the initialization steps, so the component's own stages
+   begin one past it. */
+typedef char aim_stages_match_init_step_first[
+    (AIM_INIT + 1) == IDL_ASYNC_ITER_INIT_STEP_FIRST ? 1 : -1];
 
 /* The member's state, with the initialization steps' own storage in its TAIL — one allocation carries both, for
    the reason AitState carries the other two algorithms' the same way. */
@@ -629,8 +663,11 @@ static int js_idl_async_make(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         STEP_GOTO(hdr->stage, AIM_INIT, NULL);
     }
 
-    DCHECK(hdr->stage == AIM_INIT,
-           "an async_iterable<> member resumed into a stage §3.7.10's three step lists do not have");
+    /* AIM_INIT OR PAST IT: past it is the initialization steps' OWN stage, joined onto this member's list at
+       the declaration, which is where the component's algorithm parks. */
+    DCHECK(hdr->stage >= AIM_INIT,
+           "an async_iterable<> member resumed into a stage neither §3.7.10's three step lists nor its "
+           "component's initialization steps have");
     it = JS_GetOpaque(s->iter, f->class_id);
     DCHECK(it != NULL,
            "an async_iterable<> member's initialization steps ran on something that is not the default "
@@ -640,13 +677,72 @@ static int js_idl_async_make(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
        was created by the running flow: it is flow-private, and the delta captures only shared baseline state. */
     r = f->ops->init(ctx, hdr, AIM_WORK(s), hdr->this_val, s->iter, argc, argv, &it->state,
                      cb_result, out_cb, out_argc);
-    if (r != 0) return r;                     /* >0 parked inside the component's steps; <0 threw */
+    if (r != 0) {                             /* >0 parked inside the component's steps; <0 threw */
+        /* PARKED INSIDE THE INITIALIZATION STEPS, so the stage must be theirs — the same assertion the other
+           two algorithms make, for the same reason: a park still standing at AIM_INIT names §3.7.10's step for
+           a suspension inside the component's standard, and its resume re-runs the steps before the request. */
+        DCHECK(r < 0 || hdr->stage >= IDL_ASYNC_ITER_INIT_STEP_FIRST,
+               "an async_iterable<>'s asynchronous iterator initialization steps parked at Web IDL §3.7.10's "
+               "own stage — declare the step they rest at in IdlAsyncIterOps::init_steps and reach it with "
+               "STEP_GOTO before the request, so the park names the component's standard and the resume "
+               "continues where it left off");
+        return r;
+    }
     *presult = s->iter;                       /* step 3.1.7: "Return iterator." */
     s->iter = JS_UNDEFINED;
     return 0;
 }
 
 /* ---- declaration and per-realm install --------------------------------------------------------------------- */
+
+/* TWO STAGES MAY NOT NAME ONE STEP, asserted at the JOIN — which is where the two lists first stand beside each
+   other and therefore where a collision is BORN. quickjs.c's step_stage_check asserts the same round trip at
+   every rest, but only for the stages a flow happens to park at: a duplicate between this file's list and a
+   component's would sit there silently until the one flow that rests at it, and what it costs then is a resume
+   in a later build continuing at the FIRST of the two, which nothing downstream can tell from the right one. */
+static void ait_steps_distinct(const char *const *all, const char *iface)
+{
+#if APICLIENT_DEV
+    int i, k;
+
+    for (i = 0; all[i]; i++)
+        for (k = i + 1; all[k]; k++)
+            if (!strcmp(all[i], all[k])) {
+                char why[640];   /* the tail names what to fix; a truncated DFAIL loses it */
+
+                snprintf(why, sizeof why,
+                         "%s's asynchronous iteration declares the step \"%s\" at both stage %d and stage %d — "
+                         "a parked machine holds its LABEL, so a resume resolves that one label to two stages "
+                         "and continues at the first. Name the two steps apart: the component's stages are "
+                         "joined onto Web IDL's, so a component's label must name ITS standard's step",
+                         iface, all[i], i, k);
+                DFAIL(why);
+            }
+#else
+    (void)all; (void)iface;
+#endif
+}
+
+/* JOIN a component's own stage labels onto the hosting algorithm's — the one place a rest point inside a
+   component's algorithm gets its number, so no component restates this file's stages and none can index its own
+   from the wrong base. `own` is NULL for an algorithm that rests at no step of its own, which joins nothing.
+   OWNED by the caller; borrowed by the definitions it is handed to. */
+static const char **ait_join_steps(const char *const *base, const char *const *own, const char *iface)
+{
+    int nb = 0, no = 0, k;
+    const char **all;
+
+    while (base[nb]) nb++;
+    while (own && own[no]) no++;
+    all = malloc(sizeof(*all) * (size_t)(nb + no + 1));
+    CHECK(all != NULL, "idl_async_iter: OOM joining a component's declared stages onto Web IDL's — an "
+                       "asynchronous iteration whose stages cannot be named is a rest point nothing can check");
+    for (k = 0; k < nb; k++) all[k] = base[k];
+    for (k = 0; k < no; k++) all[nb + k] = own[k];
+    all[nb + no] = NULL;
+    ait_steps_distinct(all, iface);
+    return all;
+}
 
 int idl_async_iter_declare(JSContext *ctx, const IdlAsyncIterOps *ops)
 {
@@ -671,9 +767,17 @@ int idl_async_iter_declare(JSContext *ctx, const IdlAsyncIterOps *ops)
            "without one the fork hands two flows one state and the teardown frees none of it");
     DCHECK(ops->nmembers == 0 || ops->members != NULL,
            "an async_iterable<>'s argument list declares a dictionary with no members");
+    DCHECK(ops->init_steps == NULL || ops->init != NULL,
+           "an async_iterable<> declared stages for §2.5.10's initialization steps and no such steps — the "
+           "stages would be rest points in an algorithm that never runs");
 
     f = &g_async[handle];
     f->ops = ops;
+    /* THE COMPONENT'S STAGES, JOINED ONTO THE TWO MACHINES THAT HOST ITS ALGORITHMS, before either definition
+       is registered — so the runtime's own declaration check (js_step_def_check, which refuses a definition
+       whose labels argue from the page) sees the joined list rather than this file's half of it. */
+    f->steps = ait_join_steps(AIT_STEP_LABELS, ops->steps, ops->iface);
+    f->init_steps = ait_join_steps(AIM_STEP_LABELS, ops->init_steps, ops->iface);
 
     /* §2.5.10's END OF ITERATION, minted with the first declaration: agent-level, so every interface's
        algorithms speak the same marker and it belongs to no realm. */
@@ -702,7 +806,7 @@ int idl_async_iter_declare(JSContext *ctx, const IdlAsyncIterOps *ops)
         d->arg = (handle << 3) | i;
         d->visit = ait_visit;
         d->algorithm = "Web IDL §3.7.10.2 an asynchronous iterator prototype object's next and return";
-        d->steps = AIT_STEP_LABELS;
+        d->steps = f->steps;
         f->stepid[i] = JS_RegisterStepDef(rt, d);
         CHECK(f->stepid[i] >= 0, "no step id for an async_iterable<>'s iteration steps");
     }
@@ -734,7 +838,10 @@ int idl_async_iter_declare(JSContext *ctx, const IdlAsyncIterOps *ops)
         decl->visit      = ait_make_visit;
         decl->release    = NULL;
         decl->algorithm  = "Web IDL §3.7.10 an asynchronously iterable declaration's values, entries and keys";
-        decl->steps      = AIM_STEP_LABELS;
+        /* The MEMBER's stages and the initialization steps' own, joined — which idl_method_id_step then joins
+           onto the prologue's and the epilogue's, so a rest inside §2.5.10's initialization steps is named by
+           the component and numbered from this file's last stage. */
+        decl->steps      = f->init_steps;
         f->id_values = f->id_entries = f->id_keys = -1;
         for (k = 0; k < nk; k++) {
             int magic = (handle << 2) | m[k].kind;
@@ -812,4 +919,26 @@ void idl_async_iter_install(JSContext *ctx, JSValueConst proto, int handle)
           "an async_iterable<>'s %Symbol.asyncIterator% was taken before the member it is the same object as");
     JS_DefinePropertyValue(ctx, proto, JS_WellKnownSymbolAtom(JS_WKS_ASYNC_ITERATOR),
                            entries, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+}
+
+/* See core/idl_async_iter.h. The joined arrays are this file's; the STRINGS in them are statics belonging to
+   this file and to the components, so nothing here frees one. */
+void idl_async_iter_free(void)
+{
+    int i;
+
+    for (i = 0; i < g_async_n; i++) {
+        free((void *)g_async[i].steps);
+        free((void *)g_async[i].init_steps);
+        g_async[i].steps = g_async[i].init_steps = NULL;
+        g_async[i].ops = NULL;
+    }
+    g_async_n = 0;
+    g_async_sealed = false;
+    /* §2.5.10's END OF ITERATION marker went down with the runtime that registered its class, so the id it was
+       minted from names no class any more. Zeroing it is what makes the NEXT agent's first declaration mint and
+       REGISTER one again — JS_NewClassID keeps a non-zero id, and the class this file registers beside it is
+       the runtime's. The per-interface iterator classes need no such line: their JS_NewClass runs on every
+       declaration, so a kept id is re-registered on whichever runtime is current. */
+    g_end_class = 0;
 }

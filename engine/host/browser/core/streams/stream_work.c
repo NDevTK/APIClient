@@ -27,12 +27,6 @@ void stream_work_visit(JSContext *ctx, StreamWork *w, JSStepVisit *v)
     for (k = 0; k < (int)(sizeof(w->cb) / sizeof(w->cb[0])); k++) v->val(ctx, &w->cb[k]);
 }
 
-/* The declaration above discharged, and nothing restated — see headers_fill_release for why this stays a
-   function while the machines whose `visit` names this record no longer call it. */
-void stream_work_release(JSContext *ctx, StreamWork *w)
-{
-    stream_work_visit(ctx, w, JS_StepFreeVisitor());
-}
 int stream_callback_member(JSContext *ctx, JSValueConst v, const char *kind, const char *name)
 {
     if (JS_IsUndefined(v) || JS_IsFunction(ctx, v)) return 0;

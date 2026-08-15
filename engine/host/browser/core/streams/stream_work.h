@@ -51,9 +51,6 @@ void stream_work_start(StreamWork *w)
 void stream_work_visit(JSContext *ctx, StreamWork *w, JSStepVisit *v)
 ;
 
-void stream_work_release(JSContext *ctx, StreamWork *w)
-;
-
 /* A CALLBACK MEMBER of an underlying source, sink or transformer: ABSENT, or something the page can call.
    Anything else is the TypeError Web IDL's callback-function type states, and taking it would leave a stream
    that silently never starts. `kind` names which dictionary it came from, because that is the whole of what

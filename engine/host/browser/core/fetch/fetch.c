@@ -163,17 +163,6 @@ static void js_fetch_deliver_visit(JSContext *ctx, void *st, JSStepVisit *v)
     for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
 }
 
-static JSValue js_fetch_deliver_fini(JSContext *ctx, void *st, bool take_result)
-{
-    JSFetchDeliverState *s = st;
-    int k;
-    (void)take_result;   /* a resolving function's return value is undefined and unobservable */
-    JS_FreeValue(ctx, s->value);
-    s->value = JS_UNDEFINED;
-    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
-    return JS_UNDEFINED;
-}
-
 static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSFetchDeliverState *s = st;
@@ -256,7 +245,8 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
 }
 
 static const JSTrampStepDef js_fetch_deliver_def = {
-    sizeof(JSFetchDeliverState), js_fetch_deliver_step, js_fetch_deliver_fini, 0,
+    /* a resolving function's return value is undefined and unobservable, so there is no completion to state */
+    sizeof(JSFetchDeliverState), js_fetch_deliver_step, NULL, 0,
     .visit = js_fetch_deliver_visit,
     .algorithm = "Fetch §5.6 fetch(input, init) step 12's processResponse",
     .steps = js_fetch_deliver_steps
@@ -489,17 +479,10 @@ static JSValue js_fetch_fini(JSContext *ctx, void *st, bool take_result)
         promise = fetch_park(ctx, s->url, s->method, s->input, &s->hdrs,
                              s->body.has ? s->body.bytes : NULL, s->body.len);
     }
-    JS_FreeValue(ctx, s->method);
-    JS_FreeValue(ctx, s->url);
-    JS_FreeValue(ctx, s->input);
-    JS_FreeValue(ctx, s->hinit);
-    JS_FreeValue(ctx, s->binit);
-    JS_FreeValue(ctx, s->reject_promise);
-    s->reject_promise = JS_UNDEFINED;
+    /* WHAT NO DECLARATION NAMES. The request's values — method, url, input, the two inits, the mime and the
+       rejection promise — and the header-fill's own slots are js_fetch_visit's, and the teardown discharges
+       that list. These two are foreign C allocations: the body bytes and the parsed header list. */
     body_state_free(JS_GetRuntime(ctx), &s->body);
-    JS_FreeValue(ctx, s->body_mime);
-    s->body_mime = JS_UNDEFINED;
-    headers_fill_release(ctx, &s->fill);
     header_list_free(&s->hdrs);
     return promise;
 }

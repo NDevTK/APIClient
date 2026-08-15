@@ -652,17 +652,8 @@ static JSValue js_ws_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSWsState *s = st;
     JSValue r = take_result ? s->promise : JS_UNDEFINED;
+    (void)ctx;
     if (take_result) s->promise = JS_UNDEFINED;
-    stream_work_release(ctx, &s->w);
-    JS_FreeValue(ctx, s->ctrl);
-    JS_FreeValue(ctx, s->stream);
-    JS_FreeValue(ctx, s->chunk);
-    JS_FreeValue(ctx, s->promise);
-    JS_FreeValue(ctx, s->funcs[0]);
-    JS_FreeValue(ctx, s->funcs[1]);
-    abort_signal_work_release(ctx, &s->sig);
-    s->ctrl = s->stream = s->chunk = s->promise = JS_UNDEFINED;
-    s->funcs[0] = s->funcs[1] = JS_UNDEFINED;
     return r;
 }
 

@@ -60,6 +60,7 @@
 #include "core/dom/shadow_root.h"
 #include "core/events/event_target.h"
 #include "core/events/focus_event.h"
+#include "core/frame/navigation.h"
 #include "core/frame/window_proxy.h"
 #include "core/html/focus.h"
 #include "core/html/html_form.h"
@@ -1317,9 +1318,12 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                 DCHECK(realm != NULL, "§6.6.4 step 4.1.2 designates the focused area of a document that is no "
                                       "realm's active document");
                 if (realm) {
-                    /* Step 4.1.1 sets the document's relevant global object's NAVIGATION API's "focus changed
-                       during ongoing navigation" — this engine has no Navigation API (no `window.navigation`),
-                       so there is no such flag to set and none is invented. */
+                    /* Step 4.1.1: "set the document's relevant global object's NAVIGATION API's `focus changed
+                       during ongoing navigation` to true" — HTML §7.2.6.8's flag, which §8.1.7.3's update-the-
+                       rendering step 17 clears when it repairs a focused area and which §7.2.6.10.5's
+                       potentially-reset-the-focus reads to decide whether an intercepted navigation may move
+                       the focus. It is set in the realm whose document is being designated, not in this one. */
+                    navigation_set_focus_changed(realm, true);
                     focused_area_designate(realm, kind == FA_VIEWPORT ? JS_NULL : entry);
                 }
             }

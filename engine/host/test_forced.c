@@ -32,9 +32,12 @@
 #include "core/dom/node.h"
 #include "core/dom/element.h"
 #include "core/frame/history.h"
+#include "core/frame/navigation.h"
+#include "core/frame/navigation_history_entry.h"
 #include "core/frame/session_history.h"
 #include "core/frame/location.h"
 #include "core/idl_args.h"
+#include "core/idl_async_iter.h"
 #include "core/dom/document.h"
 #include "core/events/event.h"
 #include "core/events/error_event.h"
@@ -2452,6 +2455,8 @@ int main(int argc, char **argv) {
     location_free();
     session_history_free();
     history_free();
+    navigation_free(ctx);              /* HTML §7.2.6 the navigation API */
+    navigation_history_entry_free(ctx);
     screen_free();
     window_free(ctx);
     remote_object_free(ctx);
@@ -2466,5 +2471,10 @@ int main(int argc, char **argv) {
     JS_RunGC(rt);   /* collect flow-local garbage from the runs before teardown */
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
+    /* AFTER JS_FreeRuntime, and it is the one teardown line whose ORDER is part of its meaning: what
+       this releases is part of a step DEFINITION, which JS_RegisterStepDef borrows and requires to
+       outlive the runtime — JS_FreeRuntime's own [stepleak] report reads `def->steps` to name each
+       unfinished machine by the step it rests at. */
+    idl_async_iter_free();
     return h_ok ? 0 : 1;
 }

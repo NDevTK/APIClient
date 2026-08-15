@@ -165,7 +165,10 @@ const INTERFACES = {
                            scrollX/pageXOffset, scrollY/pageYOffset, screenX/screenLeft, screenY/screenTop and
                            devicePixelRatio — live with the viewport they read, not with the Window they hang
                            off, for the per-realm reason viewport.h gives. */
-                        "core/frame/viewport.c", "core/frame/visual_viewport.c"],
+                        "core/frame/viewport.c", "core/frame/visual_viewport.c",
+                        /* §7.2.6.2's `[Replaceable] readonly attribute Navigation navigation`, installed
+                           with the object it answers with rather than with the Window it hangs off. */
+                        "core/frame/navigation.c"],
   Navigator:            "core/frame/navigator.c",
   /* CSSOM VIEW §12. Its own seven attributes are its file's; the three event handler IDL attributes it
      declares (`onresize`, `onscroll`, `onscrollend`) and the three members it INHERITS from EventTarget come
@@ -176,6 +179,22 @@ const INTERFACES = {
      that exposes them, which is the file named here. */
   UserActivation:       "core/html/user_activation.c",
   History:              "core/frame/history.c",
+  /* HTML §7.2.6, the navigation API. Its entry list is a view over §7.4.1's session history entries, and the
+     three fields it reads off one (their navigation API state, key and id) belong to the ENTRY — so
+     session_history.c is named beside it, the way node.c's row names the mixin it also installs. The
+     `dispose` and `currententrychange` event handler IDL attributes come off the shared EventTarget
+     component, which is the same rule VisualViewport's row states. */
+  Navigation:               ["core/frame/navigation.c", "core/events/event_target.c"],
+  NavigationHistoryEntry:   ["core/frame/navigation_history_entry.c", "core/events/event_target.c"],
+  NavigationCurrentEntryChangeEvent: "core/events/navigation_current_entry_change_event.c",
+  /* §7.2.6.10 and its three neighbours, DECLARED UNBUILT below and given the paths their components will take
+     — which is what makes the declaration checkable from both sides: the day one of these files exists, the
+     audit reports the exemption as STALE instead of going on believing it. */
+  NavigateEvent:            "core/events/navigate_event.c",
+  NavigationDestination:    "core/frame/navigation_destination.c",
+  NavigationPrecommitController: "core/frame/navigation_precommit_controller.c",
+  NavigationTransition:     "core/frame/navigation_transition.c",
+  NavigationActivation:     "core/frame/navigation_activation.c",
   Screen:               "core/frame/screen.c",
   /* HTML §7.2.4. The interface had no row at all, so the audit said nothing about it — its setters, `assign`,
      `replace`, `reload` and `ancestorOrigins` were not reported as zero gaps, they were not reported.
@@ -398,6 +417,19 @@ const UNBUILT = {
   ResizeObserver:       "no layout, so no box to observe — rendering.c's realm_awaits names it",
   PerformanceObserver:  "no performance timeline to observe — rendering.c's realm_awaits names it",
   Notification:         "no notification surface; nothing in the tree constructs one",
+  /* HTML §7.2.6.10 and its neighbours — the NAVIGATE EVENT half of the navigation API. The entry list, the
+     entries and the events that maintain it are built (core/frame/navigation.c); what is not is the event a
+     navigation fires before it commits, the interception that converts one into a same-document navigation,
+     and the two objects that report an ongoing or a completed one. Each is named at the step that would fire
+     it: core/frame/history.c's shared push/replace state steps 7-9 and core/frame/session_history.c's
+     §7.4.6.1 traverse both carry a realm_awaits over `NavigateEvent`, and §7.4.6.2 step 7's DCHECK names
+     NavigationActivation. */
+  NavigateEvent:        "the navigate event is not fired yet — history.c and session_history.c realm_awaits it",
+  NavigationDestination: "the navigate event carries it; absent with the event — history.c realm_awaits it",
+  NavigationPrecommitController: "intercept()'s precommit half; absent with the navigate event",
+  NavigationTransition: "reports an ONGOING navigation, which only the navigate event creates",
+  NavigationActivation: "written by §7.4.6.2 step 7, whose branch is unreachable without a cross-document "
+                        + "traversal or a reload — session_history.c's DCHECK names it",
 };
 const unbuiltSeen = [], unmapped = [], stale = [];
 

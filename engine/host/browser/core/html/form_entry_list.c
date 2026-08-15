@@ -334,12 +334,6 @@ void form_entry_list_unlock(JSContext *ctx, FormEntryListRun *r)
     }
 }
 
-void form_entry_list_release(JSContext *ctx, FormEntryListRun *r)
-{
-    form_entry_list_unlock(ctx, r);
-    form_entry_list_visit(ctx, r, JS_StepFreeVisitor());
-}
-
 int form_entry_list_run(JSContext *ctx, FormEntryListRun *r, JSValueConst form, JSValueConst submitter,
                         const char *encoding, JSValue in, JSValue *pout, JSValue **out_cb, int *out_argc)
 {

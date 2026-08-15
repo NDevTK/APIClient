@@ -14,8 +14,14 @@
  *
  * NEITHER OF THEM FETCHES. The steps they end in are §7.4.4's URL AND HISTORY UPDATE STEPS — the standard's
  * NON-FRAGMENT SYNCHRONOUS "navigation" section — which change the Document's address and its session history
- * and load nothing. That is also why they fire no event: the standard's own note records that "popstate events
- * fire for fragment navigations, but not for history.pushState() calls".
+ * and load nothing. That is also why they fire no `popstate`: the standard's own note records that "popstate
+ * events fire for fragment navigations, but not for history.pushState() calls".
+ *
+ * BUT THEY DO RUN THE PAGE'S CODE, AND SO THEY ARE STEP MACHINES. §7.4.4 step 11 updates the NAVIGATION API
+ * entries, which fires `currententrychange` at `navigation` and then `dispose` at every entry a push threw off
+ * the forward history — so a `pushState` after a `back()` runs a page's own listeners in the middle of itself,
+ * and the member suspends there like every other member that dispatches. It was a plain C body for exactly as
+ * long as §7.2.6 was absent.
  *
  * `go`, `back` AND `forward` ARE ONE ALGORITHM TOO, and §7.2.5 says so as plainly as it does for the other pair:
  * all three "are to DELTA TRAVERSE this given" a number, and the numbers are the argument, −1 and +1. So they are
@@ -211,21 +217,54 @@ static bool document_can_have_url_rewritten(const UrlRecord *doc_url, const UrlR
     return str_equal_or_both_absent(doc_url->query, target->query);
 }
 
-/* ---- §7.2.5's SHARED HISTORY PUSH/REPLACE STATE STEPS -------------------------------------------------------- */
+/* ---- §7.2.5's SHARED HISTORY PUSH/REPLACE STATE STEPS --------------------------------------------------------
+ *
+ * ONE STAGE OF ITS OWN, and it is step 10: everything before it is engine state — a serialization, a URL parse
+ * and two refusals — and §7.4.4's own split is what makes the tail parkable while the head is not (see
+ * core/frame/session_history.h). The member therefore holds only §7.4.4's work record. */
+#define HPR_STAGES(X)                                                                                     \
+    X(HPR_CHECKS, "HTML §7.2.5 shared history push/replace state steps 1-9 (the fully-active check, "      \
+                  "StructuredSerializeForStorage(data), encoding-parsing url, can-have-its-URL-rewritten, "\
+                  "allowed-to-perform-a-navigation-or-history-update, and the navigate event)")            \
+    X(HPR_UPDATE, "HTML §7.2.5 shared history push/replace state steps step 10 (run the URL and history "  \
+                  "update steps given document and newURL)")
+enum { IDL_STEP_STAGE_BASE(HPR_STAGES) HPR_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const HPR_STEPS[] = { HPR_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-static JSValue js_hist_push_replace(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                    int magic)
+typedef struct {
+    SessionHistoryUrlUpdate w;
+} HprState;
+
+static void hpr_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
+    HprState *s = st;
+
+    session_history_url_update_visit(ctx, &s->w, v);
+}
+
+/* THERE IS NO `release`. §7.4.4's record holds two ENTRIES and the navigation API's request buffer, and every
+   one of them is a JSValue the visit above already names — so the teardown frees them through that ONE list,
+   which is the whole reason IdlStepDecl states its ownership once. A `release` here would be the second list,
+   and idl_args.c asserts across the call that a release freed nothing the declaration owns. */
+
+static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                                JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    HprState *s = state;
     StructuredData serialized;
     UrlRecord doc_url, target;
     const char *url_arg = NULL;
     char *new_url = NULL;
     bool have_target = false;
+    int magic = idl_step_magic(hdr), r;
+
+    if (hdr->stage == HPR_UPDATE) goto update;
 
     DCHECK(magic == HIST_PUSH || magic == HIST_REPLACE,
            "§7.2.5's shared push/replace state steps ran with a mode neither of its two callers declares");
+    session_history_url_update_start(&s->w);
     /* STEPS 1-2. */
-    if (!hist_entry(ctx, this_val)) return JS_EXCEPTION;
+    if (!hist_entry(ctx, hdr->this_val)) { JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
     DCHECK(argc >= 2, "pushState/replaceState ran with fewer than its two required arguments — `any data` and "
                       "`DOMString unused` are both required, so §3.6.2's arity check answered that before this "
                       "body was entered");
@@ -236,7 +275,10 @@ static JSValue js_hist_push_replace(JSContext *ctx, JSValueConst this_val, int a
        [[ArrayBufferData]] is shared and which "cannot be serialized for storage". This engine has no
        SharedArrayBuffer at all (core/structured_clone.c states it: "a SharedArrayBuffer is a different class,
        so it is not transferable here"), so the two variants coincide and this IS the ForStorage one. */
-    if (structured_serialize(ctx, argv[0], &serialized) < 0) return JS_EXCEPTION;
+    if (structured_serialize(ctx, argv[0], &serialized) < 0) {
+        JS_FreeValue(ctx, cb_result);
+        return JS_STEP_ABRUPT;
+    }
 
     /* STEP 4: "let newURL be document's URL." */
     url_record_init(&doc_url);
@@ -262,8 +304,10 @@ static JSValue js_hist_push_replace(JSContext *ctx, JSValueConst this_val, int a
             structured_data_free(ctx, &serialized);
             url_record_free(&doc_url);
             url_record_free(&target);
-            return JS_ThrowDOMException(ctx, "SecurityError", "the URL passed to %s could not be parsed",
-                                        magic == HIST_PUSH ? "pushState" : "replaceState");
+            JS_FreeValue(ctx, cb_result);
+            JS_ThrowDOMException(ctx, "SecurityError", "the URL passed to %s could not be parsed",
+                                 magic == HIST_PUSH ? "pushState" : "replaceState");
+            return JS_STEP_ABRUPT;
         }
         have_target = true;
         if (!document_can_have_url_rewritten(&doc_url, &target)) {
@@ -271,9 +315,11 @@ static JSValue js_hist_push_replace(JSContext *ctx, JSValueConst this_val, int a
             structured_data_free(ctx, &serialized);
             url_record_free(&doc_url);
             url_record_free(&target);
-            return JS_ThrowDOMException(ctx, "SecurityError",
-                                        "this document cannot have its URL rewritten to the URL passed to %s",
-                                        magic == HIST_PUSH ? "pushState" : "replaceState");
+            JS_FreeValue(ctx, cb_result);
+            JS_ThrowDOMException(ctx, "SecurityError",
+                                 "this document cannot have its URL rewritten to the URL passed to %s",
+                                 magic == HIST_PUSH ? "pushState" : "replaceState");
+            return JS_STEP_ABRUPT;
         }
     }
     if (url_arg) JS_FreeCString(ctx, url_arg);
@@ -286,23 +332,46 @@ static JSValue js_hist_push_replace(JSContext *ctx, JSValueConst this_val, int a
        so the algorithm returns ALLOWED for every navigable here. Evaluated at the step that asks it rather
        than dropped, exactly as core/html/autofocus.c evaluates the sandboxing flag it has no state for. */
 
-    /* STEPS 7-9 are §7.2.7's NAVIGATION API: fire a push/replace/reload navigate event at `navigation` with
-       classicHistoryAPIState set to serializedData, and return if it is canceled. That whole interface —
-       `navigation`, NavigationHistoryEntry, NavigateEvent and its interception — is deliberately not built
-       here (core/frame/session_history.h), and its absence is asserted where the interface would be: the
-       realm_awaits probe in core/rendering/rendering.c. A page cannot observe the difference without it,
-       because there is no `navigation` object to add a listener to. */
+    /* STEPS 7-9: "let navigation be history's relevant global object's navigation API; let continue be the
+       result of FIRING A PUSH/REPLACE/RELOAD NAVIGATE EVENT at navigation with navigationType set to
+       historyHandling, isSameDocument set to true, destinationURL set to newURL, and classicHistoryAPIState set
+       to serializedData; if continue is false, then return."
+       §7.2.6 exists now, but its NAVIGATE EVENT does not (core/frame/navigation.h names what has to land), so
+       the step is asserted against the interface's arrival rather than written down as a comment: the moment
+       NavigateEvent is in this realm, this is where it must be fired and where a page's `preventDefault()` on
+       it must stop a `pushState` from ever reaching step 10. */
+    realm_awaits(ctx, "NavigateEvent",
+                 "HTML §7.2.5's shared history push/replace state steps 7-9 fire a PUSH/REPLACE/RELOAD NAVIGATE "
+                 "EVENT before the URL and history update steps — this build now has a NavigateEvent. Fire it "
+                 "here with navigationType set to historyHandling, isSameDocument TRUE, destinationURL newURL "
+                 "and classicHistoryAPIState serializedData, and RETURN when the inner navigate event firing "
+                 "algorithm answers false: a canceled or intercepted navigate event means step 10 must not run "
+                 "at all, because commit-a-navigate-event runs the URL and history update steps itself");
 
-    /* STEP 10. */
+    /* STEP 10 — §7.4.4's two halves. _begin runs its steps 1-10 and touches none of the page's code, which is
+       what lets every allocation above be released here rather than carried across a suspension. */
     new_url = have_target ? url_serialize(&target, false) : url_serialize(&doc_url, false);
     CHECK(new_url != NULL, "history: the new address could not be serialized");
-    session_history_url_and_history_update(ctx, new_url, &serialized, magic == HIST_PUSH);
+    session_history_url_update_begin(ctx, &s->w, new_url, &serialized, magic == HIST_PUSH);
     free(new_url);
     structured_data_free(ctx, &serialized);
     url_record_free(&doc_url);
     url_record_free(&target);
-    return JS_UNDEFINED;
+    hdr->stage = HPR_UPDATE;
+
+update:
+    /* §7.4.4 steps 11-13, the half that runs the page's code: the navigation API's `currententrychange` and
+       `dispose`, then the finalize. */
+    r = session_history_url_update_run(ctx, &s->w, cb_result, out_cb, out_argc);
+    if (r != 0) return r;
+    *presult = JS_UNDEFINED;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl HPR_DECL = {
+    js_hist_push_replace, sizeof(HprState), hpr_visit, NULL,
+    "HTML §7.2.5 the shared history push/replace state steps", HPR_STEPS
+};
 
 /* ---- §7.2.5's DELTA TRAVERSE, and the three members that are it ---------------------------------------------
  *
@@ -417,10 +486,13 @@ static void history_install_realm(JSContext *ctx)
     hist = JS_NewObjectProtoClass(ctx, proto, g_history_class);
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(hist), "the Document's associated History could not be allocated");
-    /* §7.2.2's `[Replaceable] readonly attribute History history` — an accessor until a page assigns to it and
-       a plain data property afterwards, which is what Replaceable means and what a plain data property could
-       never be. */
-    idl_install_replaceable(ctx, global, "history", js_win_history, 0);
+    /* §7.2.2's `readonly attribute History history` — and it carries NO [Replaceable], which is the extended
+       attribute the neighbouring `[Replaceable] readonly attribute Navigation navigation` does carry. The two
+       differ in a way a page can see: `window.navigation = 1` replaces the accessor with a data property and
+       `window.history = 1` does not (it is silently ignored in sloppy mode and a TypeError in strict), so this
+       is an ordinary accessor. It was installed replaceable with a comment quoting an extended attribute the
+       IDL does not have — checked against §7.2.2's interface block, not inferred. */
+    idl_install_accessor(ctx, global, "history", js_win_history, 0, -1);
     realm_value_set(ctx, g_obj_slot, hist);
     JS_FreeValue(ctx, global);
 }
@@ -443,9 +515,9 @@ void history_init(JSContext *ctx)
     {
         static const IdlArgType ARGS[] = { IDL_ANY, IDL_DOMSTRING, IDL_USVSTRING_NULLABLE };
 
-        g_id_push = idl_method_id(ctx, ARGS, 3, js_hist_push_replace, HIST_PUSH);
+        g_id_push = idl_method_id_step(ctx, ARGS, 3, NULL, 0, &HPR_DECL, HIST_PUSH);
         idl_optional_from(2);
-        g_id_replace = idl_method_id(ctx, ARGS, 3, js_hist_push_replace, HIST_REPLACE);
+        g_id_replace = idl_method_id_step(ctx, ARGS, 3, NULL, 0, &HPR_DECL, HIST_REPLACE);
         idl_optional_from(2);
     }
     /* §7.2.5's `undefined go(optional long delta = 0)`, `undefined back()` and `undefined forward()` — one

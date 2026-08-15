@@ -100,19 +100,9 @@ static JSValue js_byte_reader_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSByteReaderState *s = st;
     JSValue r = take_result ? s->promise : JS_UNDEFINED;
-    int k;
 
+    (void)ctx;
     if (take_result) s->promise = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->promise);
-    JS_FreeValue(ctx, s->func);
-    JS_FreeValue(ctx, s->value);
-    JS_FreeValue(ctx, s->stream);
-    JS_FreeValue(ctx, s->reader);
-    s->promise = s->func = s->value = s->stream = s->reader = JS_UNDEFINED;
-    for (k = 0; k < 3; k++) {
-        JS_FreeValue(ctx, s->cb[k]);
-        s->cb[k] = JS_UNDEFINED;
-    }
     return r;
 }
 

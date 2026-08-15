@@ -128,6 +128,7 @@ void flow_registry_free(JSContext *ctx) {
         free(f->cand_src); free(f->cand_payload);
         JS_FreeValue(ctx, f->fn);
         free(f->deliver); free(f->deliver_origin);
+        free(f->perform); free(f->answer_token);
         for (int k = 0; k < f->njob; k++) {   /* free any undrained microtask jobs */
             for (int a = 0; a < f->jobs[k].argc; a++) JS_FreeValue(ctx, f->jobs[k].argv[a]);
             free(f->jobs[k].argv);
@@ -371,6 +372,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
         if (g_flows[i] == f) {
             JS_FreeValue(ctx, f->fn);
             free(f->deliver); free(f->deliver_origin);
+            free(f->perform); free(f->answer_token);
             /* THE CANDIDATE IT WAS VERIFYING. Both strings are this flow's own copies, and the only other place
                that frees them is the frontier's teardown — which walks the flows that are STILL THERE, so a
                flow removed here took them with it into nothing. `cand_sink` is static text and is not one. */

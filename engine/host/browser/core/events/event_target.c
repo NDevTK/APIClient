@@ -657,7 +657,12 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
     /* Document's own — §3.1.1 and the Page Visibility API. */                                                 \
     X("onreadystatechange", EH_DOCUMENT | EH_XHR_READYSTATE) X("onvisibilitychange", EH_DOCUMENT) \
     /* XHR §3.3 — the two of its seven that belong to NO other mixin, so this list is where they arrive. */ \
-    X("onloadend", EH_XHR) X("ontimeout", EH_XHR)
+    X("onloadend", EH_XHR) X("ontimeout", EH_XHR)                                                            \
+    /* HTML §7.2.6.2's Navigation and §7.2.6.5's NavigationHistoryEntry, each declaring its own. The other
+       three of §7.2.6.2's four — `onnavigate`, `onnavigatesuccess` and `onnavigateerror` — are the NAVIGATE
+       EVENT's, which §7.2.6.10 is not built for, so they are absent here rather than installed over an event
+       nothing fires (core/frame/navigation.h names what has to land with them). */                        \
+    X("oncurrententrychange", EH_NAVIGATION) X("ondispose", EH_NAVIGATION_HISTORY_ENTRY)
 
 /* The NAMES are string literals, not stringified identifiers, so the IDL gap auditor — which scans a component
    for the property names it installs — can SEE them. Behind a `#n` it saw none of these and reported all ninety
@@ -1004,27 +1009,12 @@ static JSValue js_dispatch_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSDispatchState *s = st;
     JSValue r = take_result ? s->result : JS_UNDEFINED;
-    int k;
 
     if (take_result) s->result = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->result);
-    JS_FreeValue(ctx, s->path);
-    JS_FreeValue(ctx, s->type);
-    JS_FreeValue(ctx, s->lcb);
-    JS_FreeValue(ctx, s->exc);
-    report_exception_work_release(ctx, &s->rep);
-    JS_FreeValue(ctx, s->cur);
-    JS_FreeValue(ctx, s->tgt);
-    JS_FreeValue(ctx, s->slottable);
-    JS_FreeValue(ctx, s->act);
-    JS_FreeValue(ctx, s->arr);
-    JS_FreeValue(ctx, s->ev);
-    s->result = s->path = s->type = s->lcb = s->exc = s->cur = s->act = s->arr = s->ev = JS_UNDEFINED;
-    s->tgt = s->slottable = JS_UNDEFINED;
-    for (k = 0; k < 3; k++) {
-        JS_FreeValue(ctx, s->cb[k]);
-        s->cb[k] = JS_UNDEFINED;
-    }
+    /* §8.1.4.6 step 5's FLAG, if the dispatch was abandoned inside a report. It is not a reference, so no
+       declaration names it; the report record's references ARE named by js_dispatch_visit, which is why this
+       is the unlock and not the whole release. */
+    report_exception_work_unlock(ctx, &s->rep);
     return r;
 }
 

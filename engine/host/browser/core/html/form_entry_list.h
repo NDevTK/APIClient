@@ -50,8 +50,6 @@ void form_entry_list_visit(JSContext *ctx, FormEntryListRun *r, JSStepVisit *v);
    `release` calls — the flag is not a reference, so no declaration can name it, and it READS `r->form`, so it
    must run before that declaration is discharged. */
 void form_entry_list_unlock(JSContext *ctx, FormEntryListRun *r);
-/* Both halves, for a caller that holds this run outside a step machine's declaration. */
-void form_entry_list_release(JSContext *ctx, FormEntryListRun *r);
 
 /* §4.10.22.4 itself. `encoding` is the encoding NAME step 5.9's `_charset_` entry carries — "UTF-8" for the
    default the algorithm declares. Returns JS_STEP_CALL or JS_STEP_YIELD (the caller returns it), -1 with the

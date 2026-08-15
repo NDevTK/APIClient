@@ -261,19 +261,6 @@ static void fww_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->num);
 }
 
-static JSValue fww_fini(JSContext *ctx, void *st, bool take_result)
-{
-    FwWriteState *s = st;
-
-    (void)take_result;
-    JS_FreeValue(ctx, s->rec);
-    JS_FreeValue(ctx, s->input);
-    JS_FreeValue(ctx, s->data);
-    JS_FreeValue(ctx, s->num);
-    s->rec = s->input = s->data = s->num = JS_UNDEFINED;
-    return JS_UNDEFINED;   /* §5.4 reads nothing from a sink algorithm but whether it threw */
-}
-
 /* Web IDL §3.2.25 over `(BufferSource or Blob or USVString or WriteParams)`. The three non-dictionary arms are
    brand tests that run none of the page's code; everything else — including null and undefined, by step 3 —
    is the DICTIONARY, whose `required type` member then throws for them, which is the TypeError §2.5's own
@@ -346,7 +333,7 @@ static int fww_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         /* EVERY OWNED FIELD IN PLACE BEFORE THE FIRST THING THAT CAN THROW — the failure path tears this state
-           down through fww_fini, which frees exactly what the state holds and nothing else. */
+           down through the declaration, which frees exactly what the state holds and nothing else. */
         s->rec = JS_DupValue(ctx, JS_StepClosureData(&s->hdr, 0));
         s->input = JS_DupValue(ctx, chunk);
         s->data = JS_UNDEFINED;
@@ -550,12 +537,6 @@ static const char *const FWA_STEPS[] = { FWA_STAGES(JS_STEP_STAGE_LABEL) NULL };
 typedef struct { JSStepHdr hdr; } FwEndState;
 
 static void fwe_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
-static JSValue fwe_fini(JSContext *ctx, void *st, bool take_result)
-{
-    (void)ctx; (void)st; (void)take_result;
-    return JS_UNDEFINED;
-}
-
 /* THE RECORD IS THE CLOSURE'S CAPTURE — §2.5's three algorithms are written as closures over `stream`, and
    what they actually reach through it is its three internal slots. Capturing the RECORD rather than the stream
    is what breaks the only circularity in the creation: §5.4 wants the algorithms in order to build the stream,
@@ -612,15 +593,16 @@ static int fwa_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
 }
 
 static const JSTrampStepDef FWW_DEF = {
-    sizeof(FwWriteState), fww_step, fww_fini, 0, .visit = fww_visit,
+    /* §5.4 reads nothing from a sink algorithm but whether it threw, so there is no completion to state */
+    sizeof(FwWriteState), fww_step, NULL, 0, .visit = fww_visit,
     .algorithm = "File System §2.5 write a chunk", .steps = FWW_STEPS
 };
 static const JSTrampStepDef FWC_DEF = {
-    sizeof(FwEndState), fwc_step, fwe_fini, 0, .visit = fwe_visit,
+    sizeof(FwEndState), fwc_step, NULL, 0, .visit = fwe_visit,
     .algorithm = "File System §2.5 the close algorithm of a FileSystemWritableFileStream", .steps = FWC_STEPS
 };
 static const JSTrampStepDef FWA_DEF = {
-    sizeof(FwEndState), fwa_step, fwe_fini, 0, .visit = fwe_visit,
+    sizeof(FwEndState), fwa_step, NULL, 0, .visit = fwe_visit,
     .algorithm = "File System §2.5 the abort algorithm of a FileSystemWritableFileStream", .steps = FWA_STEPS
 };
 

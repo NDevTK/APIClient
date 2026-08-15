@@ -53,6 +53,7 @@
 #include "browser/core/dom/document.h"
 #include "browser/core/dom/element.h"
 #include "browser/core/idl_args.h"
+#include "browser/core/idl_async_iter.h"
 #include "browser/core/events/event.h"
 #include "browser/core/events/error_event.h"
 #include "browser/core/events/message_event.h"
@@ -64,6 +65,8 @@
 #include "browser/core/platform.h"
 #include "browser/core/realm.h"
 #include "browser/core/frame/history.h"
+#include "browser/core/frame/navigation.h"
+#include "browser/core/frame/navigation_history_entry.h"
 #include "browser/core/frame/session_history.h"
 #include "browser/core/frame/location.h"
 #include "browser/core/frame/navigator.h"
@@ -447,6 +450,8 @@ QJS_EXPORT void qjs_teardown(void)
     location_free();
     session_history_free();
     history_free();
+    navigation_free(g_ctx);              /* HTML §7.2.6 the navigation API */
+    navigation_history_entry_free(g_ctx);
     screen_free();
     window_free(g_ctx);
     remote_object_free(g_ctx);
@@ -460,6 +465,11 @@ QJS_EXPORT void qjs_teardown(void)
     if (g_rt) JS_RunGC(g_rt);
     if (g_ctx) { JS_FreeContext(g_ctx); g_ctx = NULL; }
     if (g_rt)  { JS_FreeRuntime(g_rt);  g_rt  = NULL; }
+    /* AFTER JS_FreeRuntime, and it is the one teardown line whose ORDER is part of its meaning: what
+       this releases is part of a step DEFINITION, which JS_RegisterStepDef borrows and requires to
+       outlive the runtime — JS_FreeRuntime's own [stepleak] report reads `def->steps` to name each
+       unfinished machine by the step it rests at. */
+    idl_async_iter_free();
     lxb_html_document_destroy(g_dom);
     g_dom = NULL;
     g_begun = 0;
@@ -593,6 +603,55 @@ QJS_EXPORT void qjs_route(const char *record, const char *sender_origin)
     DCHECK(g_begun, "a record was routed to an engine whose frontier was never seeded — there is no scheduler to "
                     "run the delivery, so it would be dropped");
     engine_route(g_ctx, record, sender_origin);
+}
+
+/* AND THE ONE THAT IS ASKED. `qjs_route` hands this instance a one-way delivery and returns void;
+ * `qjs_host_answer` is the trusted zone answering a request it computed ITSELF. Neither of them is a peer
+ * PERFORMING an operation, which is the whole of the cross-instance seam's other direction — and its absence is
+ * why the shipped engine could EMIT `windowproxy.get` and never be on the receiving end of one.
+ *
+ * `record` is the operation VERBATIM as the asking instance wrote it (the text after the id on that instance's
+ * `qjs_host_requests` line), routed here because this instance holds the document it names. `token` is the
+ * ZONE's rendezvous and is opaque to both engines: it says which instance and which request the answer belongs
+ * to, which the asking flow's own id cannot, since two peers may hold the same number.
+ *
+ * NOTHING RUNS INSIDE THIS CALL and there is no answer to read when it returns. A peer answers BY RUNNING A
+ * PROGRAM — an IDL getter, a page's setter, a page's function — so the operation becomes a program of every
+ * live timeline of the named document, on the ONE frontier, preemptible and parkable at any depth. Each
+ * completion leaves through `qjs_host_notices` as `remoteop.answer<TAB><token><TAB><completion>`, and there are
+ * as many of them as that document has timelines: its state IS its flows, so `otherW.length` has an answer per
+ * timeline and every one of them is true. */
+QJS_EXPORT void qjs_perform(const char *token, const char *record)
+{
+    DCHECK(g_begun, "a cross-agent operation was asked of an engine whose frontier was never seeded — there is "
+                    "no timeline to perform it in and no scheduler to run the program that answers it");
+    engine_perform(g_ctx, token, record);
+}
+
+/* THE PEER'S COMPLETION, COMING BACK — and it crosses in remote_object.c's grammar rather than as JSON, which
+ * is why it is a second entry beside qjs_host_answer and not a third argument on it. The two carry different
+ * kinds of thing and neither grammar can express the other's: an answer the ZONE computed is a data record
+ * (§7.4 step 14's load is `{body, csp}`, which the object-by-NAME grammar cannot say), and an answer a PEER
+ * computed may be an OBJECT, which crosses as a name into that peer's namespace and which JSON would have to
+ * either serialize — returning something that is not the thing — or drop. The decode happens HERE, inside the
+ * asking instance, because a name only means something to an engine: the trusted zone routes the text and
+ * never reads it.
+ * `req` is this instance's own request id, which the zone recovers from the token it minted. */
+QJS_EXPORT void qjs_host_answer_remote(unsigned req, const char *completion)
+{
+    int type = ENGINE_COMPLETION_NORMAL;
+    JSValue v;
+
+    DCHECK(g_begun, "a peer's completion was delivered to an engine that never ran");
+    DCHECK(completion != NULL && *completion,
+           "a peer's completion arrived with no text — a completion record carries its TYPE in front of its "
+           "value, so an empty one is not `undefined`, it is a relay that lost the answer");
+    v = remote_completion_decode(g_ctx, completion, &type);
+    /* Routed to ONE call site by id, exactly as qjs_host_answer's is: the operation was performed under the
+       ASKING FLOW's world, so this answer belongs to that flow and to no other. A zero return means that flow
+       is gone, which is not an error — nobody is waiting on the answer. */
+    engine_host_answer(g_ctx, (uint32_t)req, v, type);
+    JS_FreeValue(g_ctx, v);
 }
 
 QJS_EXPORT double qjs_top_weight(void)
