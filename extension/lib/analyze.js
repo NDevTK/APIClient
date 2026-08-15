@@ -442,6 +442,11 @@ async function _analyzeCombinedScriptsInner(tabId, buf) {
   try {
     response = await sendToOffscreen({
       type: "AST_ANALYZE", code: combined, sourceUrl: tabUrl, documentId: buf.docKey, origin: buf.origin, forceScript: true,
+      // HTML §8.1.3.1's TOP-LEVEL CREATION URL — the browser-provided address of the top of this document's
+      // navigable chain, captured on CONTENT_HTML from sender.tab.url. It is NOT sourceUrl: this document may
+      // be a sub-frame, and §8.1.3.5 decides secure-context (and therefore which [SecureContext] members the
+      // engine installs) from the TOP of the chain rather than from the frame's own address.
+      topLevelUrl: buf.topLevelUrl || tabUrl,
       scriptUrls: scriptUrls,
       // Per-chunk line offsets + each chunk's sourceMappingURL so the OFFSCREEN
       // worker (long-lived, owns IndexedDB) can fetch maps and resolve minified

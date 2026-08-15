@@ -102,7 +102,7 @@ function idbOpen() {
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
 }
-/* A frontier entry (the GLOBAL union spans all origins): { key: origin|hash, sourceUrl, html, code,
+/* A frontier entry (the GLOBAL union spans all origins): { key: origin|hash, sourceUrl, topLevelUrl, html, code,
    recipes: "idx,dec;...", emit, visits, ts, credentialed }. Rehydration re-runs (html,code) + resumes
    recipes -- so a parked flow on ANY site can be advanced later, even when that page isn't open. */
 async function frontierGet(key) {
@@ -154,7 +154,12 @@ function _residentBytes() { let b = 0; for (const e of _pool) { try { b += (e.M 
 /* `docName` is set ONLY for a document another engine CREATED — its name arrived in that engine's
    navigable.create notice, minted there because HTML §4.8.5 creates a child navigable inside the insertion
    steps and cannot ask this zone for a name. A root document is named here, by the counter above. */
-async function engineCreate(code, html, msg, persist, docName) {
+/* `topLevelUrl` is HTML §8.1.3.1's TOP-LEVEL CREATION URL for this document's environment. A ROOT document is
+   its own top-level traversable, so its address is it; a document a peer engine CREATED carries its creator's
+   decision on the navigable.create notice. It is a separate argument from the address because one WASM
+   instance is one DOCUMENT regardless of origin — this document may be NESTED in a document of another
+   instance, and §8.1.3.5 decides secure-context from the TOP of that chain. */
+async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
   const lines = [];
   const createQJS = await getCreateQJS();
   // @DBG is the ONLY dev-trace channel: routed to console.debug, NEVER into `lines` — so it is never parsed
@@ -183,6 +188,13 @@ async function engineCreate(code, html, msg, persist, docName) {
   // which is exactly the set that can message each other today. It is not yet persisted, because a parked
   // foreign segment does not yet outlive a session; when segments park, this becomes a persisted allocator.
   const _docId = docName || String(++nextDocumentId);
+  // HTML §8.1.3.1's TOP-LEVEL CREATION URL. THREE PROVENANCES AND ALL THREE ARE BROWSER-STATED, never
+  // derived here: a document a PEER engine created carries its creator's §7.4 decision on the navigable.create
+  // notice (hostNotice below, which passes it as the argument); a document a content script reported carries
+  // the TAB's url, captured from sender.tab.url where the trusted zone receives it; and a REHYDRATED cold
+  // recipe carries what its own session recorded. §8.1.3.5 reads it to decide whether this realm is a SECURE
+  // CONTEXT, which decides which of Web IDL §3.3.13's members exist in it, so the engine refuses an empty one.
+  const _tlu = topLevelUrl || (msg && msg.topLevelUrl) || "";
   // NO `code` ARGUMENT: identity and the script inventory are the engine's own Lexbor <script> scan of `html`,
   // because a concatenation of a page's scripts cannot represent per-script scope and shifts with an inline
   // script the page did not ship. It used to be passed and cast away on the other side.
@@ -191,8 +203,8 @@ async function engineCreate(code, html, msg, persist, docName) {
   // a page at /app/dashboard calling fetch("api/users") was reported as /api/users. The engine derives the
   // origin from the address itself (§4.7's serialization, which its own url.c implements), so the principal
   // and the address are one fact from one place instead of two that can disagree.
-  M.ccall("qjs_init", "number", ["number", "number", "number", "number"],
-    [arg(html || ""), arg((msg && msg.sourceUrl) || ""), arg(_docId), arg(_csp)]);
+  M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number"],
+    [arg(html || ""), arg((msg && msg.sourceUrl) || ""), arg(_docId), arg(_csp), arg(_tlu)]);
   const _bid = (M.ccall("qjs_bundle_id", "number", [], []) >>> 0).toString(36);
   const fkey = originOf(msg && msg.sourceUrl) + "|" + _bid;
   const prior = persist ? await frontierGet(fkey) : null;
@@ -287,7 +299,7 @@ function hostHolderOf(docName) {
 
 /* WHAT THIS ZONE OWES A ONE-WAY NOTICE. Two ops today, and each is an ACTION only this zone can take —
    SECURITY.md makes the offscreen the only zone that knows which instance holds which document.
-   `navigable.create <child> <creator> <url> <origin> <csp>` — the engine has already named the document and
+   `navigable.create <child> <creator> <url> <origin> <topLevelUrl> <csp>` — the engine has already named the document and
    already handed the page a WindowProxy for it; what is missing is an INSTANCE. This provisions one under that
    name, loading the child's own document through the one safeFetch chokepoint.
    `windowproxy.post <target> <world> <targetOrigin> <base64>` — routed VERBATIM to the instance holding
@@ -296,12 +308,13 @@ function hostHolderOf(docName) {
 async function hostNotice(eng, line) {
   const f = line.split("\t");
   if (f[0] === "navigable.create") {
-    /* SIX FIELDS, because the POLICY is one of them and it is read below. The count said five, so a record that
-       stopped at the origin passed the assert and then took `undefined` for the creator's policy clone — a
-       child document judged under NO policy, which is §7.4's inheritance silently deleted, and the one field a
-       CSP-blocked sink verdict is decided against. An assert that permits the record it is about to misread is
-       the shape of check that reports green while the value is missing. */
-    DCHECK(f.length >= 6, "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin and policy");
+    /* SEVEN FIELDS, because the POLICY and HTML §8.1.3.1's TOP-LEVEL CREATION URL are both read below. The
+       count said five once, so a record that stopped at the origin passed the assert and then took `undefined`
+       for the creator's policy clone — a child document judged under NO policy, which is §7.4's inheritance
+       silently deleted, and the one field a CSP-blocked sink verdict is decided against. An assert that
+       permits the record it is about to misread is the shape of check that reports green while the value is
+       missing, so it counts every field the reader below indexes. */
+    DCHECK(f.length >= 7, "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL and policy");
     if (hostHolderOf(f[1])) return;   // already provisioned: the engine announces a document once
     const loaded = await eng.fetchedDocument(f[3]);
     const msg = { type: "AST_ANALYZE", pageHtml: (loaded && loaded.body) || "", sourceUrl: f[3],
@@ -309,14 +322,19 @@ async function hostNotice(eng, line) {
     /* THE POLICY IS THE RESPONSE'S, AND THE CREATOR'S CLONE IS THE FALLBACK — §7.2.6/§7.4 in the order the
        spec states them: a Document is judged against the policy container its own response carried, and a
        response that carried none inherits the clone of its creator's, which is the field the notice carries.
-       THE CLONE IS THE REST OF THE RECORD, not the sixth field: it is a raw CSP header value and HTTP allows
+       THE CLONE IS THE REST OF THE RECORD, not one field: it is a raw CSP header value and HTTP allows
        HTAB inside one (this engine's own CSP parser treats tab as source-list whitespace), so a policy carrying
-       one splits into more fields than the record has. The C router already reads it this way — its splitter
-       stops at six and keeps the remainder verbatim — and two readers of one format that disagree about where
-       a field ends are two formats. */
-    const policy = (loaded && loaded.csp) || f.slice(5).join("\t") || "";
+       one splits into more fields than the record has. That is also why it is LAST and why the top-level
+       creation URL sits before it. The C router already reads it this way — its splitter stops at the policy
+       and keeps the remainder verbatim — and two readers of one format that disagree about where a field ends
+       are two formats. */
+    const policy = (loaded && loaded.csp) || f.slice(6).join("\t") || "";
     if (policy) msg.responseHeaders["content-security-policy"] = policy;
-    const child = await engineCreate("", msg.pageHtml, msg, false, f[1]);
+    /* HTML §8.1.3.1's TOP-LEVEL CREATION URL, which the CREATOR decided (§7.4: the creator's own for a nested
+       navigable, the navigable's own address for an auxiliary one) and this zone carries, because the new
+       instance cannot see what embeds it. §8.1.3.5 reads it to decide whether the child is a SECURE CONTEXT,
+       and Web IDL §3.3.13's members exist in that child or do not by that answer. */
+    const child = await engineCreate("", msg.pageHtml, msg, false, f[1], f[5]);
     /* A CHILD DOCUMENT IS A DOCUMENT: it joins the ONE pool and is ranked, sliced, parked and finalized by the
        one host WFQ like every other. It has no caller to resolve to, so its findings merge the way a
        rehydrated cold engine's do rather than being returned to a requester that never asked for it. */
@@ -559,7 +577,8 @@ const _hostOps = {
       for (const c of cold) {
         if (_pool.length > 0 && _residentBytes() >= HOT_RAM_BUDGET) break;
         try {
-          const msg = { type: "AST_ANALYZE", pageHtml: c.html, code: c.code, sourceUrl: c.sourceUrl, credentialed: c.credentialed, persist: true };
+          const msg = { type: "AST_ANALYZE", pageHtml: c.html, code: c.code, sourceUrl: c.sourceUrl,
+                        topLevelUrl: c.topLevelUrl, credentialed: c.credentialed, persist: true };
           const eng = await engineCreate(c.code || "", c.html || "", msg, true);   // a rehydrated cold recipe always participates in the frontier
           eng._cold = true; _pool.push(eng);
         } catch (e) { crashBanner("create-cold", String((e && e.message) || e)); }   // was silently swallowed — a cold-rehydration abort must be LOUD too
@@ -572,7 +591,11 @@ const _hostOps = {
     if (eng.persist && result._fkey) {   // persist into the GLOBAL frontier (cross-session cold tier)
       const prior = result._prior;
       await frontierPut(result._fkey, {
-        key: result._fkey, sourceUrl: eng.msg.sourceUrl, html: eng.html, code: eng.code,
+        /* THE TOP-LEVEL CREATION URL IS PART OF THE RECIPE, because a resumed flow must resume into the same
+           ENVIRONMENT it parked in: §8.1.3.5 decides secure-context from it, so a rehydration that lost it
+           would rebuild the realm with a different set of Web IDL §3.3.13 members and resume flows into a
+           platform surface they never ran against. */
+        key: result._fkey, sourceUrl: eng.msg.sourceUrl, topLevelUrl: eng.msg.topLevelUrl, html: eng.html, code: eng.code,
         credentialed: !!eng.msg.credentialed, recipes: (result._park || []).join(";"),
         emit: ((prior && prior.emit) || 0) + (result.fetchCallSites || []).length, visits: ((prior && prior.visits) || 0) + 1, ts: Date.now(),
       });

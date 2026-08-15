@@ -25,8 +25,21 @@ void window_proxy_free(JSContext *ctx);
    navigable is created with this. Taken HERE rather than at materialization, because that Document's realm is
    built lazily and the realm that builds it need not be the one that created the navigable. A LATER document —
    the one step 14's load brings — has a policy of its own, and the load carries it (navigable.c). */
+/* `top_level_url` is HTML §8.1.3.1's TOP-LEVEL CREATION URL for the environments of this navigable's
+   documents, and it rides here for the identical reason `creator_csp` does: it is decided by the OPERATION
+   that created the navigable, the realm that will read it is built later, and the document that builds it need
+   not be the creator. WHICH url it is, is §7.4 read from both ends — a CHILD navigable is nested, so it
+   inherits its creator's (core/realm.h), while an AUXILIARY one is its own top-level traversable and its
+   documents' top-level creation URL is its OWN address. Never NULL: every environment has one. */
 JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const char *origin, const char *name,
-                         bool is_popup, const char *creator_csp, JSValueConst parent, JSValueConst opener);
+                         bool is_popup, const char *creator_csp, const char *top_level_url,
+                         JSValueConst parent, JSValueConst opener);
+
+/* THE TOP-LEVEL CREATION URL THE DOCUMENTS OF THIS NAVIGABLE ARE CREATED UNDER. BORROWED — the proxy owns the
+   bytes, and like every other string it has ever held they outlive it (see proxy_of), so a parked flow that
+   still names an older one resumes onto live memory. NULL only for a REMOTE proxy, whose documents' realms are
+   a peer's to build. */
+const char *window_proxy_top_level_url(JSValueConst proxy);
 
 /* §7.4's "popup window is requested" for this navigable — §7.2.5.3's BarProps are the negation of it. */
 bool window_proxy_is_popup(JSValueConst proxy);
@@ -199,15 +212,18 @@ const char *window_proxy_origin(JSValueConst proxy);
 /* NAVIGATE — REPLACE THE NAVIGABLE'S ACTIVE DOCUMENT while the proxy object stays the same, which is the whole
    reason a WindowProxy exists: a page holding `iframe.contentWindow` across a navigation holds the same object
    and reaches the NEW document through it.
-   ALL FIVE FACTS MOVE AT ONCE — realm, Window, document id, address, origin — because they are one binding.
-   An earlier attempt replaced the Window and the origin and left the REALM behind, so the two halves of one
-   navigable named different documents; that is why they are one call and not five setters.
+   ALL SIX FACTS MOVE AT ONCE — realm, Window, document id, address, top-level creation URL, origin — because
+   they are one binding. An earlier attempt replaced the Window and the origin and left the REALM behind, so
+   the two halves of one navigable named different documents; that is why they are one call and not six
+   setters. `top_level_url` is the environment the CALLER built the new realm under: §7.11 moves it to the new
+   address for a top-level traversable and leaves a nested navigable's where its creation put it, and the
+   caller is the one that knows which, because it is a fact about the operation's target. */
    PER FLOW: the whole record is captured into the running flow's delta at the accessor, so a sibling arm that
    never navigated still resolves this proxy to the document it knew, and a parked flow resumes into its own.
    `realm` is BORROWED — the agent owns every realm it built (navigable.c) — and the superseded one is NOT torn
    down here: a flow parked inside it resumes there, which is what makes it a time-travel entity rather than a
    page a browser could throw away. */
 void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm, uint32_t doc,
-                           const char *url, const char *origin);
+                           const char *url, const char *top_level_url, const char *origin);
 
 #endif

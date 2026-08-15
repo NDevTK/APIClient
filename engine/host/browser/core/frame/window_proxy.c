@@ -95,6 +95,16 @@ typedef struct {
        document happened to touch it first. A creation fact, so like `is_popup` no flow can change it.
        NULL for a navigable with an address (its policy comes with its response) and for the root. Owned. */
     char   *creator_csp;
+    /* HTML §8.1.3.1's TOP-LEVEL CREATION URL for the environments of this navigable's documents — kept beside
+       the policy container because it is the same KIND of fact and arrives the same way: decided by the
+       operation that created the navigable, read when a realm is finally built. §7.4 makes a CHILD navigable
+       inherit its creator's and gives an AUXILIARY one its own address, and §7.11's navigation of a top-level
+       traversable moves it to the new address while a nested navigable's stays where its creation put it.
+       IT IS PER-FLOW, exactly like `url`: navigating a top-level traversable moves it, so an arm that
+       navigated and an arm that did not must not share one. It is a POD pointer inside the bytes proxy_of
+       captures, and — like every other string here — it is never freed on a navigation, because a parked
+       flow's saved bytes still name the old one. */
+    char   *top_level_url;
     /* §7.2.5's `closed` IS TWO FACTS AND THE GETTER IS THEIR OR — "true if this's browsing context is null or
        its is closing is true". They are two because they happen at two TIMES. `close()` sets is-closing at its
        own call site and QUEUES the destruction; §7.3.1's removal of a container queues one without setting
@@ -262,7 +272,12 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
            deferred, it is IMPOSSIBLE: this runs inside the property read that reached through the navigable,
            and a fetch suspends. The document an address serves arrives on the load job instead, which is a
            flow and can park (navigable.c). */
-        p->realm = navigable_realm(ctx, p->doc, p->url, p->origin, proxy, NULL, 0, p->creator_csp);
+        /* THE ENVIRONMENT'S TOP-LEVEL CREATION URL IS THE NAVIGABLE'S, not the reading realm's — the read that
+           materializes an about:blank child may come from any same-origin document, and answering from `ctx`
+           would give the child whichever document happened to touch it first. The same sentence as
+           `creator_csp` beside it, and the same field for the same reason. */
+        p->realm = navigable_realm(ctx, p->doc, p->url, p->top_level_url, p->origin, proxy, NULL, 0,
+                                   p->creator_csp);
         p->window = JS_GetGlobalObject(p->realm);
     }
     return p->realm;
@@ -270,7 +285,7 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
 
 /* §7.2.5.1's NAVIGATE — see window_proxy.h. Reached from navigable.c, which owns the fetch and the realm. */
 void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm, uint32_t doc,
-                           const char *url, const char *origin)
+                           const char *url, const char *top_level_url, const char *origin)
 {
     ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — the WHOLE binding rides the delta */
 
@@ -288,6 +303,15 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
        here would resume that flow onto freed memory; they are the PROXY's and are released with it. */
     p->url    = proxy_strdup(url);
     p->origin = proxy_strdup(origin ? origin : "null");
+    /* THE NEW DOCUMENT'S ENVIRONMENT MOVED WITH IT, and the caller states where to — a navigation of a
+       TOP-LEVEL traversable puts the environment at the new address, while a nested navigable's stays where
+       its creation put it (HTML §8.1.3.1). It is not re-derived here from `url`, because whether this
+       navigable is nested is a fact about the OPERATION's target and the realm the caller has ALREADY BUILT
+       was built under this exact string: deriving it a second time is the second answer that disagrees. */
+    DCHECK(top_level_url != NULL && *top_level_url,
+           "a navigable was navigated with no top-level creation URL for the new document's environment — the "
+           "realm the caller just built has one, and these two must be the same string");
+    p->top_level_url = proxy_strdup(top_level_url);
 }
 
 /* THE SELF PROXY'S REALM IS THE ONE ASKING — already built, so there is nothing to materialize. Stated as its
@@ -306,7 +330,8 @@ static void proxy_adopt_realm(JSContext *ctx, JSValueConst proxy, JSContext *rea
 }
 
 JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const char *origin, const char *name,
-                         bool is_popup, const char *creator_csp, JSValueConst parent, JSValueConst opener)
+                         bool is_popup, const char *creator_csp, const char *top_level_url,
+                         JSValueConst parent, JSValueConst opener)
 {
     JSValue obj;
     ProxyData *p;
@@ -334,6 +359,15 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const ch
     p->name_known = 1;
     p->is_popup = is_popup ? 1 : 0;
     p->creator_csp = creator_csp && *creator_csp ? proxy_strdup(creator_csp) : NULL;
+    /* EVERY ENVIRONMENT HAS A TOP-LEVEL CREATION URL, so unlike the policy container there is no "none" here
+       to spell: §7.4 either nests the navigable (inherit the creator's) or makes it a top-level traversable
+       (its own address), and both are addresses. A caller with nothing to pass has not decided which of the
+       two it is building, and every member gated on §8.1.3.5 would then be installed on a guess. */
+    DCHECK(top_level_url != NULL && *top_level_url,
+           "a navigable was created with no TOP-LEVEL CREATION URL — HTML §8.1.3.5 reads it to decide whether "
+           "the documents of this navigable are SECURE CONTEXTS, and §7.4 says which url it is: the creator's "
+           "for a nested navigable, this navigable's own address for an auxiliary one");
+    p->top_level_url = proxy_strdup(top_level_url);
     p->parent = JS_DupValue(ctx, parent);
     p->opener = JS_DupValue(ctx, opener);
     p->doc = doc;
@@ -352,8 +386,19 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name)
        nothing about it and its chrome is whole. */
     /* NO CREATOR'S POLICY EITHER, for the same reason: nothing here created this navigable, so there is no
        container to clone. Its document's policy is the one it was installed with — the host's response. */
-    JSValue obj = window_proxy_new(ctx, doc, NULL, g_local_origin, name, false, NULL, JS_UNDEFINED, JS_NULL);
+    /* THE REALM IS ALREADY BUILT, SO ITS ENVIRONMENT ALREADY HAS THE ANSWER — and it is read from there rather
+       than passed in, for the same reason the origin is: a caller-supplied one could only ever agree or be
+       wrong. This is the navigable the HOST started the instance in, so the top-level creation URL its
+       documents were created under is the one the host handed realm_install_intrinsics. */
+    JSValue tlu = realm_top_level_creation_url(ctx);
+    const char *tlus = JS_ToCString(ctx, tlu);
+    JSValue obj;
     ProxyData *p;
+
+    CHECK(tlus != NULL, "the realm's top-level creation URL would not convert to a C string");
+    obj = window_proxy_new(ctx, doc, NULL, g_local_origin, name, false, NULL, tlus, JS_UNDEFINED, JS_NULL);
+    JS_FreeCString(ctx, tlus);
+    JS_FreeValue(ctx, tlu);
 
     if (JS_IsException(obj)) return obj;
     p = JS_GetOpaque(obj, g_proxy_class);
@@ -698,6 +743,15 @@ const char *window_proxy_origin(JSValueConst proxy)
     ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
     DCHECK(p != NULL, "the origin of something that is not a WindowProxy was asked for");
     return p->origin;
+}
+
+/* Through the capturing accessor rather than the raw opaque: this is per-flow state, and a flow that reads it
+   is on its way to building a realm under it. */
+const char *window_proxy_top_level_url(JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+    DCHECK(p != NULL, "the top-level creation URL of something that is not a WindowProxy was asked for");
+    return p->top_level_url;
 }
 
 

@@ -28,8 +28,32 @@ typedef void (*RealmIntrinsic)(JSContext *ctx);
 /* Declared ONCE PER AGENT, by the component, from its own `_init`. */
 void realm_declare_intrinsic(RealmIntrinsic install);
 /* Run for EVERY realm — the agent's first one after its `_init`s, and each child navigable's realm as it is
-   built. Exactly once per realm: each component's install asserts its own prototype is not already there. */
-void realm_install_intrinsics(JSContext *ctx);
+   built. Exactly once per realm: each component's install asserts its own prototype is not already there.
+ *
+ * IT ALSO CREATES THE REALM'S ENVIRONMENT, and that is why the one call every realm goes through takes an
+ * argument now. HTML §8.1.3.2 creates an environment settings object WITH the realm, and one of its fields is
+ * read before any page script runs: §8.1.3.5 decides from the TOP-LEVEL CREATION URL whether this environment
+ * is a SECURE CONTEXT, and Web IDL §3.3.13's [SecureContext] members are then INSTALLED OR NOT — so the fact
+ * has to exist before the intrinsics do. A component cannot supply it (a realm intrinsic has no document in
+ * front of it), and a line each host writes before this call is the hand-copied list this whole file exists to
+ * abolish; an ARGUMENT is the version a host cannot forget, because forgetting it does not compile. */
+void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url);
+
+/* HTML §8.1.3.1's TOP-LEVEL CREATION URL of THIS realm's environment — "a URL that represents the creation
+ * URL of the `top-level` environment".
+ *
+ * IT IS INHERITED, NOT LOOKED UP. A nested navigable's environment takes the field from its PARENT
+ * environment at creation, exactly as §7.2.6's policy container is cloned from the creator at creation — so a
+ * document does not walk to its top to answer, and a later navigation of the top cannot retroactively change
+ * what a child was created under. That inheritance is where the ancestral rule Secure Contexts §4.2 argues for
+ * actually lives: an `https` iframe inside an `http` page holds the `http` address here and is correctly NOT a
+ * secure context, while an `about:blank` iframe holds its creator's address rather than the free pass §3.2
+ * gives `about:blank` at the top.
+ *
+ * OWNED — a JS string, released by the caller. It is a JS value because a per-realm fact is held in quickjs's
+ * own per-context slot (below), which is the store that is already freed with the realm. */
+JSValue realm_top_level_creation_url(JSContext *ctx);
+
 /* Agent teardown: the declarations are the agent's. */
 void realm_intrinsics_free(void);
 

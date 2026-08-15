@@ -39,6 +39,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/frame/window.h"
+#include "core/frame/secure_context.h"
 #include "core/frame/document_lifecycle.h"
 #include "core/frame/window_proxy.h"
 #include "core/dom/document.h"
@@ -63,6 +64,23 @@ static JSValue js_win_closed(JSContext *ctx, JSValueConst this_val, int magic)
 {
     (void)this_val; (void)magic;
     return JS_NewBool(ctx, window_proxy_closed(ctx, document_window_proxy(ctx)));
+}
+
+/* HTML §8.1.7.1's WindowOrWorkerGlobalScope: `readonly attribute boolean isSecureContext`. "The
+   isSecureContext getter steps are to return true if this's relevant settings object is a secure context, or
+   false otherwise" — §8.1.3.5's algorithm, which secure_context.c owns, over THIS realm's environment. A C
+   member runs in the realm that DEFINED it, so `ctx` is this document's and an `http` iframe of an `https`
+   page answers out of its own environment rather than out of whichever realm was built first.
+   IT IS COMPUTED, NEVER CONCOLIC. This engine's documents have real addresses, so a realm's secure-context
+   answer is a fact the engine HAS — CLAUDE.md's rule is that the concolic value is for what is unknowable, and
+   forking a boolean whose sibling world does not exist spends the frontier on a document that was never
+   loaded. The other arm is reached by exploring a document at a different ADDRESS, which is a real navigation.
+   IT IS AN ACCESSOR AND NOT A STORED BOOLEAN because §7.11's navigation replaces a Window's Document while the
+   global survives, and a byte written at install would then be the previous document's answer. */
+static JSValue js_win_is_secure_context(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    (void)this_val; (void)magic;
+    return JS_NewBool(ctx, secure_context_is(ctx));
 }
 
 /* §7.2.5.2 `close()`. THE METHOD IS ONE ALGORITHM AND THIS IS ONE OF ITS TWO SPELLINGS — `window.close()` here
@@ -541,6 +559,12 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
         }
         url_record_free(&rec);
     }
+
+    /* HTML §8.1.7.1's other WindowOrWorkerGlobalScope answer about this environment, beside `origin` because
+       the two are the pair a page reads together — §8.1.7.1's own note tells developers to prefer `self.origin`
+       over `location.origin` for exactly the reason this one exists: they are facts about the ENVIRONMENT and
+       not about whatever URL the Document happens to be showing. */
+    idl_install_accessor(ctx, g, "isSecureContext", js_win_is_secure_context, 0, -1);
 
     JS_DefinePropertyGetSet(ctx, g, JS_NewAtom(ctx, "name"),
                             JS_NewCFunction(ctx, js_win_get_name, "get name", 0),

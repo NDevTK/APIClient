@@ -108,7 +108,7 @@ static int                  g_done;
    WHERE THE NEXT GAP IS: a component that builds its PROTOTYPE in its _init builds it in whichever realm was
    current, so a second realm shares it where §3.7 gives every realm its own. window.c is converted (its
    prototypes live in quickjs's per-context class-proto slot); the rest name themselves as they are reached. */
-static void engine_agent_init(JSContext *ctx, const char *origin)
+static void engine_agent_init(JSContext *ctx, const char *origin, const char *top_level_url)
 {
     /* WHAT THE PLATFORM OWNS is WEB IDL's answer, not a list here: absent.c reads the generated
        browser/platform_names.h (every name [Exposed=Window]). A list typed at this spot covered 22 names
@@ -179,8 +179,11 @@ static void engine_agent_init(JSContext *ctx, const char *origin)
     timer_set_script_sink(engine_queue_script);   /* HTML 8.6: a string handler is evaluated, as a flow */
     /* THE AGENT'S FIRST REALM IS A REALM. Every per-realm intrinsic the components above declared is built
        here, through the same one call a child navigable's realm makes — so the first document cannot get a
-       different set from the rest, which is the whole failure mode of a hand-copied list. */
-    realm_install_intrinsics(ctx);
+       different set from the rest, which is the whole failure mode of a hand-copied list.
+       IT CARRIES THE ENVIRONMENT (core/realm.h). §8.1.3.5 reads the top-level creation URL to decide whether
+       this realm is a SECURE CONTEXT, and Web IDL §3.3.13's members are installed or absent by that answer —
+       so the environment has to exist before the first intrinsic does, which is why it arrives here. */
+    realm_install_intrinsics(ctx, top_level_url);
 }
 
 /* ONE DOCUMENT — the per-realm half, run once per document including the first. */
@@ -247,8 +250,8 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
    `(void)url;`: `window.open("/admin")` produced a popup whose scripts never ran and nothing in the output
    distinguished it from a page that had none. */
 static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
-                                     const char *origin, const char *csp, uint32_t doc_id,
-                                     JSValueConst nav_proxy)
+                                     const char *top_level_url, const char *origin, const char *csp,
+                                     uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSContext *ctx = JS_NewContext(rt);
 
@@ -257,8 +260,11 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
     /* §3.7: a realm gets its OWN intrinsics — the members on them run in the realm that DEFINED them, so a
        child sharing the agent realm's EventTarget.prototype would resolve every unqualified
        `addEventListener` against the PARENT's window. They come from the ONE list the components declared
-       themselves into, so a component added anywhere is installed in every realm with no host to edit. */
-    realm_install_intrinsics(ctx);
+       themselves into, so a component added anywhere is installed in every realm with no host to edit.
+       §7.4 DECIDED THE CHILD'S TOP-LEVEL CREATION URL and handed it over — the creator's for a nested
+       navigable, the navigable's own address for an auxiliary one — so this passes it rather than `url`,
+       which would make an about:blank iframe of an http page a secure context. */
+    realm_install_intrinsics(ctx, top_level_url);
     engine_realm_install(ctx, dom, url, origin, csp, doc_id, nav_proxy);
     return ctx;
 }
@@ -280,7 +286,16 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
  * send the origin it had computed itself with `new URL(u).origin`, which is one fact arriving from two places
  * and the address arriving from none: §4.4's API base URL, `location.pathname` and `document.baseURI` were all
  * the bare origin. Deriving it here also makes it §4.7's real serialization, which url.c already implements. */
-QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, const char *csp)
+/* `top_level_url` IS HTML §8.1.3.1's TOP-LEVEL CREATION URL, and only the trusted zone can state it. One
+ * WASM instance is one DOCUMENT regardless of origin, so this instance's document may itself be NESTED in a
+ * document of another instance — and §8.1.3.5 decides whether this realm is a SECURE CONTEXT from the address
+ * at the TOP of that chain, not from this document's own. Deriving it from `url` here would report an https
+ * frame inside an http page as secure, which is exactly the ancestral hole Secure Contexts §4.2 exists to
+ * close, and this engine cannot see its own embedder: the offscreen is the only zone that knows which instance
+ * holds which document. For a top-level document the zone passes the address itself; for a document this
+ * engine's peer created, it passes the field that peer put on its `navigable.create` notice. */
+QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, const char *csp,
+                        const char *top_level_url)
 {
     char *origin;
 
@@ -294,6 +309,11 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
         CHECK(origin != NULL, "the document address has no serializable origin");
         url_record_free(&rec);
     }
+    CHECK(top_level_url != NULL && *top_level_url,
+          "the host started this engine with no TOP-LEVEL CREATION URL — HTML §8.1.3.5 reads it to decide "
+          "whether this document's realm is a secure context, and Web IDL §3.3.13's members exist or do not by "
+          "that answer, so the platform surface this bundle runs against would be a guess. A top-level document "
+          "passes its own address; a nested one passes its embedder's, which only the trusted zone knows");
 
     g_rt = JS_NewRuntime();
     CHECK(g_rt != NULL, "the runtime allocation failed: a dropped engine loses the whole frontier");
@@ -336,7 +356,7 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
     /* The web-platform surface, installed on the BASELINE — before any flow runs, so these globals are
        pre-flow state and never land in a delta. Each is a real component under browser/; what is not built
        yet is absent, and the page's own throw on reading it names the next one to write. */
-    engine_agent_init(g_ctx, origin);
+    engine_agent_init(g_ctx, origin, top_level_url);
     /* §7.4 CALLS BACK HERE FOR A SAME-ORIGIN CHILD: a same-origin document is a second REALM in this heap
        (HTML's similar-origin window agent), and what the platform surface of a document of THIS build is, is
        this file's answer and nobody else's. */

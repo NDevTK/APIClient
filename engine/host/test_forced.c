@@ -1736,7 +1736,7 @@ static int hostreq_answer_all(JSContext *ctx)
    read `_cw.parent === window` through exactly that child. */
 static int g_id_host_read, g_id_append_child;   /* declared once per agent — a member has one pool entry */
 
-static void tf_agent_init(JSContext *ctx)
+static void tf_agent_init(JSContext *ctx, const char *top_level_url)
 {
     static const IdlArgType HR_ARGS[1] = { IDL_DOMSTRING };
     static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
@@ -1791,8 +1791,10 @@ static void tf_agent_init(JSContext *ctx)
     document_init(ctx);   /* §4.8.5: the slot a child navigable lives in */
     /* THE AGENT'S FIRST REALM IS A REALM. Every per-realm intrinsic the components above declared is built
        here, through the same one call a child navigable's realm makes — so the first document cannot get a
-       different set from the rest, which is the whole failure mode of a hand-copied list. */
-    realm_install_intrinsics(ctx);
+       different set from the rest, which is the whole failure mode of a hand-copied list.
+       IT CARRIES THE ENVIRONMENT (core/realm.h): §8.1.3.5 reads the top-level creation URL to decide whether
+       this realm is a secure context, which decides which of Web IDL §3.3.13's members exist in it. */
+    realm_install_intrinsics(ctx, top_level_url);
 }
 
 /* ONE DOCUMENT — run once per document including the first. */
@@ -1874,8 +1876,9 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
 }
 
 /* A SAME-ORIGIN CHILD NAVIGABLE'S REALM — a second JSContext in the SAME JSRuntime. */
-static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url, const char *origin,
-                                 const char *csp, uint32_t doc_id, JSValueConst nav_proxy)
+static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
+                                 const char *top_level_url, const char *origin, const char *csp,
+                                 uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSContext *ctx = JS_NewContext(rt);
 
@@ -1883,8 +1886,10 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
     /* §3.7: a realm gets its OWN intrinsics — the members on them run in the realm that DEFINED them, so a
        child sharing the agent realm's EventTarget.prototype would resolve every unqualified
        `addEventListener` against the PARENT's window. They come from the ONE list the components declared
-       themselves into, so a component added anywhere is installed in every realm with no host to edit. */
-    realm_install_intrinsics(ctx);
+       themselves into, so a component added anywhere is installed in every realm with no host to edit.
+       §7.4 decided this child's top-level creation URL and handed it over — using `url` would make an
+       about:blank iframe of an http page a secure context. */
+    realm_install_intrinsics(ctx, top_level_url);
     tf_realm_install(ctx, dom, url, origin, csp, doc_id, nav_proxy);
     return ctx;
 }
@@ -1918,8 +1923,11 @@ int main(int argc, char **argv) {
     endpoint_init();
     solve_init(ctx);
 
-    /* BASELINE setup (mark 0): the globals here must NOT be captured, so install the COW hook AFTER. */
-    tf_agent_init(ctx);
+    /* BASELINE setup (mark 0): the globals here must NOT be captured, so install the COW hook AFTER.
+       THIS FIXTURE'S DOCUMENT IS ITS OWN TOP-LEVEL TRAVERSABLE, so §8.1.3.1's top-level creation URL is the
+       address it is installed at below — and `https:` makes it a SECURE CONTEXT, which is what a real bundle
+       runs in and therefore what the fixture must exercise. */
+    tf_agent_init(ctx, "https://x.test/p");
     navigable_set_realm_builder(tf_child_realm);
     int min_doc = arg_has(argc, argv, "--min");   /* fast per-change memory gate: the minimal clone/COW doc */
     const char *doc = min_doc ? HTML_MIN : HTML;

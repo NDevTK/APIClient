@@ -29,13 +29,42 @@ void realm_declare_intrinsic(RealmIntrinsic install)
     g_list[g_n++] = install;
 }
 
-void realm_install_intrinsics(JSContext *ctx)
+/* HTML §8.1.3.1's TOP-LEVEL CREATION URL, in the per-realm store this file already owns. Zero is the "not
+   declared" value because it is also the invalid slot realm_value_set asserts against, so there is one
+   sentinel rather than two. The DECLARATION is per AGENT (a slot is a class id, which belongs to a runtime),
+   so it happens on the first realm and is released with the agent below. */
+static int g_top_level_url_slot;
+
+void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url)
 {
+    JSValue url;
     int i;
 
     DCHECK(ctx != NULL, "the per-realm intrinsics were installed into no realm");
+    /* EVERY ENVIRONMENT HAS ONE. §8.1.3.1's field is null only for a worker or a worklet, and this engine has
+       neither — every environment it builds is a Window one, created AT an address. A host with nothing to
+       pass here has not decided which document this realm is, which is the same thing location.c's install
+       asserts one layer up and for the same reason: the empty string used to be answered quietly and the
+       quiet answer hid a host passing the wrong field entirely. */
+    DCHECK(top_level_creation_url != NULL && *top_level_creation_url,
+           "a realm was built with no TOP-LEVEL CREATION URL — HTML §8.1.3.5 reads it to decide whether this "
+           "environment is a SECURE CONTEXT, and Web IDL §3.3.13's members are installed or absent by that "
+           "answer, so a realm without it is a realm whose platform surface is undecided");
+    if (!g_top_level_url_slot)
+        g_top_level_url_slot = realm_value_declare(ctx, "HTML §8.1.3.1 the environment's top-level creation URL");
+    url = JS_NewString(ctx, top_level_creation_url);
+    CHECK(!JS_IsException(url), "realm: the environment's top-level creation URL could not be allocated");
+    realm_value_set(ctx, g_top_level_url_slot, url);
     for (i = 0; i < g_n; i++)
         g_list[i](ctx);
+}
+
+JSValue realm_top_level_creation_url(JSContext *ctx)
+{
+    DCHECK(g_top_level_url_slot != 0,
+           "a realm's top-level creation URL was read in an agent where no realm has been built — the field is "
+           "created WITH the realm, so a reader that gets here is standing outside every realm there is");
+    return realm_value_get(ctx, g_top_level_url_slot);   /* asserts THIS realm ran the install */
 }
 
 void realm_intrinsics_free(void)
@@ -43,6 +72,9 @@ void realm_intrinsics_free(void)
     free(g_list);
     g_list = NULL;
     g_n = g_cap = 0;
+    /* The slot's VALUES are the realms' and went with them; what the agent holds is the slot id, which is a
+       class id in a runtime that is going away with it. */
+    g_top_level_url_slot = 0;
 }
 
 /* A slot IS a class id whose per-context prototype slot holds something that is not a prototype. Nothing is

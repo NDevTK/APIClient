@@ -492,7 +492,8 @@ static ChildDoc *wpt_child_for(const char *name)
 
 /* §7.4/§4.8.5's create, from the host's side: provision an instance for a document the engine has already
    named and already handed the page a WindowProxy for. */
-static void wpt_spawn_child(const char *name, const char *url, const char *origin, const char *csp)
+static void wpt_spawn_child(const char *name, const char *url, const char *origin, const char *csp,
+                            const char *top_level_url)
 {
     int down[2], up[2];
     pid_t pid;
@@ -515,7 +516,8 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
         dup2(down[0], 0);
         dup2(up[1], 1);
         close(down[0]); close(down[1]); close(up[0]); close(up[1]);
-        execl(g_self_exe, g_self_exe, "--document", name, url, origin, csp ? csp : "", (char *)NULL);
+        execl(g_self_exe, g_self_exe, "--document", name, url, origin, csp ? csp : "",
+              top_level_url ? top_level_url : "", (char *)NULL);
         _exit(127);
     }
     close(down[0]); close(up[1]);
@@ -658,12 +660,17 @@ static void wpt_route_post(JSContext *ctx, const char *doc, const char *world, c
 
 static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin)
 {
-    char *f[6]; int nf = 0; char *q;
+    char *f[7]; int nf = 0; char *q;
 
-    for (q = line, f[nf++] = q; *q && nf < 6; q++)
+    /* THE SPLIT STOPS AT THE LAST FIELD AND KEEPS THE REMAINDER VERBATIM, because the last field of a
+       navigable.create IS a raw CSP header and HTTP allows HTAB inside one. */
+    for (q = line, f[nf++] = q; *q && nf < 7; q++)
         if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
-    if (nf == 6 && !strcmp(f[0], "navigable.create")) {
-        wpt_spawn_child(f[1], f[3], f[4], f[5]);
+    if (nf == 7 && !strcmp(f[0], "navigable.create")) {
+        /* FIELD 5 IS HTML §8.1.3.1's TOP-LEVEL CREATION URL, which crosses for the same reason field 6's
+           policy container does: the child's environment is decided by the operation that created it, and the
+           instance that will host the child has no way to derive it. */
+        wpt_spawn_child(f[1], f[3], f[4], f[6], f[5]);
         return;
     }
     /* `windowproxy.post <target doc> <world> <target origin> <base64>` — §9.4.4 across instances. THE ORIGIN
@@ -1001,7 +1008,8 @@ static JSRuntime *g_rt;
  * up, and a second realm then SHARES it — where a browser gives each realm its own intrinsics, so
  * `frames[0].Element === Element` is false in Chrome and would be true here. The fix is per-component and lands
  * in each component's own init; there is no agent-level place to put it, which is exactly why it is not here. */
-static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *origin)
+static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *origin,
+                           const char *top_level_url)
 {
     /* THE COMPONENTS UNDER TEST. Named one by one rather than "everything", because a component that is not
        installed makes its tests fail LOUDLY on a missing global — which is the honest report — while quietly
@@ -1085,8 +1093,11 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
     rendering_init(ctx);
     /* THE AGENT'S FIRST REALM IS A REALM. Every per-realm intrinsic the components above declared is built
        here, through the same one call a child navigable's realm makes — so the first document cannot get a
-       different set from the rest, which is the whole failure mode of a hand-copied list. */
-    realm_install_intrinsics(ctx);
+       different set from the rest, which is the whole failure mode of a hand-copied list.
+       IT CARRIES THE ENVIRONMENT (core/realm.h): §8.1.3.5 decides from the top-level creation URL whether
+       this realm is a secure context, and Web IDL §3.3.13's members exist or do not by that answer — so it
+       has to be known before the first intrinsic is installed, which is why it is an argument here. */
+    realm_install_intrinsics(ctx, top_level_url);
 }
 
 /* ONE DOCUMENT. Runs once per document INCLUDING the first, which is what makes it the one description of what
@@ -1223,8 +1234,8 @@ static bool wpt_run_pending(void)
 }
 
 static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
-                                  const char *origin, const char *csp, uint32_t doc_id,
-                                  JSValueConst nav_proxy)
+                                  const char *top_level_url, const char *origin, const char *csp,
+                                  uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSContext *ctx = JS_NewContext(rt);
 
@@ -1232,8 +1243,10 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
     /* §3.7: a realm gets its OWN intrinsics — the members on them run in the realm that DEFINED them, so a
        child sharing the agent realm's EventTarget.prototype would resolve every unqualified
        `addEventListener` against the PARENT's window. They come from the ONE list the components declared
-       themselves into, so a component added anywhere is installed in every realm with no host to edit. */
-    realm_install_intrinsics(ctx);
+       themselves into, so a component added anywhere is installed in every realm with no host to edit.
+       §7.4 decided the CHILD's top-level creation URL and handed it over; a builder that used `url` here
+       would make an about:blank iframe of an http page a secure context. */
+    realm_install_intrinsics(ctx, top_level_url);
     wpt_realm_install(ctx, dom, url, origin, csp, doc_id, nav_proxy);
     /* THE CHILD'S SCRIPTS ARE THE CHILD'S, run in ITS realm — they are what make a popup a participant rather
        than an empty frame, since message-opener.html's whole body is one script that posts to its opener.
@@ -1265,7 +1278,7 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
 /* THE FIRST DOCUMENT, which is also what brings the agent up. A REAL LEXBOR PARSE — the same one the engine
    runs — of the test's own bytes when the test is an HTML file, and otherwise of the minimal document WPT's
    server wraps a `.window.js` in. One parse either way; the only difference is whose bytes. */
-static JSContext *wpt_build_document(const char *doc_name, const char *origin,
+static JSContext *wpt_build_document(const char *doc_name, const char *origin, const char *top_level_url,
                                      const char *html, size_t html_n)
 {
     static const char DOC[] = "<!doctype html><html><head></head><body></body></html>";
@@ -1277,7 +1290,7 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin,
     rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);
     ctx = JS_NewContext(rt);
-    wpt_agent_init(ctx, doc_name, origin);
+    wpt_agent_init(ctx, doc_name, origin, top_level_url);
     /* §7.4 CALLS BACK HERE FOR A SAME-ORIGIN CHILD, because what a document of this build IS is this runner's
        answer and not the engine's — a child with a different platform surface would make every fidelity number
        measured in it a number about a different browser. */
@@ -1403,6 +1416,12 @@ static void wpt_child_emit_notices(void)
 static int wpt_child_main(int argc, char **argv)
 {
     const char *name = argv[2], *url = argv[3], *origin = argv[4], *csp = argc > 5 ? argv[5] : "";
+    /* HTML §8.1.3.1's TOP-LEVEL CREATION URL, from the parent process that created this navigable. NOT
+       defaulted to this document's own address: this instance's document may be NESTED, and answering from
+       its own address would make an https child of an http page report itself a secure context — which is the
+       ancestral hole Secure Contexts §4.2 exists to close, so a missing one is a parent that has not decided
+       what it created rather than a value to guess. */
+    const char *top_level_url = argc > 6 ? argv[6] : NULL;
     JSContext *ctx;
     char *html = NULL;
     size_t html_n = 0;
@@ -1417,6 +1436,10 @@ static int wpt_child_main(int argc, char **argv)
         CHECK(sv && *sv, "wpt: a child document was started with no corpus server to load its address from");
         snprintf(g_server, sizeof g_server, "%s", sv);
     }
+    CHECK(top_level_url != NULL && *top_level_url,
+          "wpt: a child document was started with no TOP-LEVEL CREATION URL — HTML §8.1.3.5 reads it to decide "
+          "whether this document's realm is a secure context, and Web IDL §3.3.13's members exist or do not by "
+          "that answer, so the platform surface of this instance would be a guess");
     snprintf(g_base_url, sizeof g_base_url, "%s", url && *url ? url : "about:blank");
     /* `about:blank` HAS NO BYTES TO FETCH — its Document is the empty one §7.4 creates, which is what makes it
        synchronous in a browser and what makes an <iframe> with no src scriptable immediately. */
@@ -1426,7 +1449,12 @@ static int wpt_child_main(int argc, char **argv)
            navigable exists — so this is about:blank rather than a dead instance. */
         if (!html) html_n = 0;
     }
-    ctx = wpt_build_document(name, origin, html, html_n);
+    /* THE CHILD PROCESS'S TOP-LEVEL CREATION URL came from the parent with the rest of the environment —
+       this instance's document may be NESTED in a document of another instance, and only the zone that
+       created it knows which. A cross-origin child that answered from its OWN address would report itself a
+       secure context inside an insecurely-delivered page, which is exactly the ancestral hole Secure
+       Contexts §4.2 exists to close. */
+    ctx = wpt_build_document(name, origin, top_level_url, html, html_n);
     free(html);
 
     JS_SetFlowControlHooks(&WPT_HOOKS_ON);
@@ -1663,7 +1691,9 @@ int main(int argc, char **argv)
        running the test's scripts against the wrong tree. */
     wpt_derive_addresses(argc, argv);
     /* THE TEST DOCUMENT. One call, because a child document is built by the same one — see above. */
-    ctx = wpt_build_document("wpt", WPT_TOP_ORIGIN, NULL, 0);
+    /* THE TEST DOCUMENT IS THIS PROCESS'S TOP-LEVEL TRAVERSABLE, so its environment's top-level creation
+       URL is its own address — the runner navigated to it and nothing embeds it. */
+    ctx = wpt_build_document("wpt", WPT_TOP_ORIGIN, g_base_url, NULL, 0);
     /* THE REALM A RELAYED NOTICE IS DELIVERED INTO. A child's notice arrives while this process is blocked
        inside wpt_child_ask, which has no ctx of its own — this names the one it routes into, and a notice
        arriving before there is one is a message with nowhere to go. */

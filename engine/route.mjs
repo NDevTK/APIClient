@@ -45,11 +45,14 @@ const HTML_B = `<!doctype html><script>
   window.addEventListener("message", function (e) { fetch("/got?origin=" + e.origin + "&hello=" + e.data.hello); });
 </script>`;
 
-async function makeEngine(html, url, docId, csp) {
+/* `topLevelUrl` is HTML §8.1.3.1's TOP-LEVEL CREATION URL — this zone's to state, because one instance is
+   one document and only the zone that routed the create knows what embeds it. */
+async function makeEngine(html, url, docId, csp, topLevelUrl) {
   const M = await boot();
   const cs = (s) => { const n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n); M.stringToUTF8(s, p, n); return p; };
   const str = (f, ...a) => String(M.ccall(f, 'string', a.map(() => 'number'), a.map(cs)) ?? '');
-  M.ccall('qjs_init', 'number', ['number','number','number','number'], [cs(html), cs(url), cs(docId), cs(csp || '')]);
+  M.ccall('qjs_init', 'number', ['number','number','number','number','number'],
+    [cs(html), cs(url), cs(docId), cs(csp || ''), cs(topLevelUrl)]);
   M.ccall('qjs_begin', 'void', ['number'], [cs('')]);
   return { M, cs, str, docId, origin: new URL(url).origin, done: false };
 }
@@ -85,14 +88,19 @@ async function service(e) {
   for (const n of e.str('qjs_host_notices').split('\n').filter(Boolean)) {
     const f = n.split('\t');
     console.log(`  [${e.docId}] notice: ${f[0]} ${f.slice(1, 3).join(' ')}`);
-    if (f[0] === 'navigable.create') engines.push(await makeEngine(HTML_B, f[3], f[1], f[5] || ''));
+    /* FIELD 5 IS THE CHILD'S TOP-LEVEL CREATION URL, decided by the creator's §7.4 and carried on the
+       notice for the same reason field 6's policy container is: the new instance cannot derive it. The policy
+       is LAST because it is the record's remainder — a raw CSP header may contain HTAB. */
+    if (f[0] === 'navigable.create') engines.push(await makeEngine(HTML_B, f[3], f[1], f.slice(6).join('\t'), f[5]));
     else if (f[0] === 'windowproxy.post') posts.push({ doc: f[1], world: f[2], record: n, origin: e.origin });
     else throw new Error('a notice this host does not act on: ' + f[0]);
   }
   return r !== 0;
 }
 
-engines.push(await makeEngine(HTML_A, 'https://a.test/', 'd1', ''));
+/* THE ROOT DOCUMENT IS ITS OWN TOP-LEVEL TRAVERSABLE, so its environment's top-level creation URL is its
+   own address. */
+engines.push(await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/'));
 
 /* PHASE 1 — run `a` out, collecting its posts. Nothing is routed yet, so `b` holds no record and each one below
    can be delivered on its own; two records on one flow is a merge of possibly-contradictory senders, which the

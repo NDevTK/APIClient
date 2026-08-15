@@ -730,6 +730,15 @@ function handleContentMessage(msg, sender) {
     _buf.docKey = _dk;
     _buf.origin = doc.origin;                                         // credentialed-read principal (per-document; = _senderOrigin(sender))
     _buf.url = doc.url || (sender.tab && sender.tab.url) || "";       // SSRF origin + window.location (document's own url)
+    // HTML §8.1.3.1's TOP-LEVEL CREATION URL for this document's environment — the address of the document at
+    // the TOP of its navigable chain, which is the TAB's url and is browser-provided exactly like sender.url
+    // (SECURITY.md already keys authorization on sender.tab.url for the same reason: a frame cannot state it
+    // about itself). §8.1.3.5 reads it to decide whether the engine's realm for this document is a SECURE
+    // CONTEXT, and Web IDL §3.3.13's members exist in that realm or do not by that answer — so a sub-frame that
+    // answered from its OWN address would report an https frame inside an http page as secure, which is the
+    // ancestral hole Secure Contexts §4.2 exists to close. A sender with NO TAB is not in one, so it is its own
+    // top: that is the real answer for it, not a fallback for a value that went missing.
+    _buf.topLevelUrl = (sender.tab && sender.tab.url) || _buf.url;
     _buf.pageHtml = doc._pageHtml;
     _buf.scripts = [];   // engine-sourced: Lexbor parses the HTML, qjs_run_doc_scripts runs inline + external scripts — one system
     _buf.pending = 0;

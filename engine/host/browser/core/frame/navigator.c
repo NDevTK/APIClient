@@ -74,40 +74,49 @@
    below is the other half of the assertion.
    `userActivation` is NOT here: it is the one member whose value is not a fact stored for the realm but §6.4.1
    state read at the moment of the call, so it has its own getter. */
-#define NAV_MEMBERS(X)                                        \
-    /* NavigatorID — §8.10.1.1 */                             \
-    X(APP_CODE_NAME,         "appCodeName")                   \
-    X(APP_NAME,              "appName")                       \
-    X(APP_VERSION,           "appVersion")                    \
-    X(PLATFORM,              "platform")                      \
-    X(PRODUCT,               "product")                       \
-    X(PRODUCT_SUB,           "productSub")                    \
-    X(USER_AGENT,            "userAgent")                     \
-    X(VENDOR,                "vendor")                        \
-    X(VENDOR_SUB,            "vendorSub")                     \
-    /* NavigatorLanguage — §8.10.1.2 */                       \
-    X(LANGUAGE,              "language")                      \
-    X(LANGUAGES,             "languages")                     \
-    /* NavigatorOnLine — §8.10.1.3 */                         \
-    X(ON_LINE,               "onLine")                        \
-    /* NavigatorCookies — §8.10.1.5 */                        \
-    X(COOKIE_ENABLED,        "cookieEnabled")                 \
-    /* NavigatorPlugins — §8.10.1.6 */                        \
-    X(PDF_VIEWER_ENABLED,    "pdfViewerEnabled")              \
-    /* NavigatorConcurrentHardware — HTML §10 */              \
-    X(HARDWARE_CONCURRENCY,  "hardwareConcurrency")           \
-    /* NavigatorAutomationInformation — WebDriver §12 */      \
-    X(WEBDRIVER,             "webdriver")                     \
-    /* NavigatorDeviceMemory — Device Memory §3 */            \
-    X(DEVICE_MEMORY,         "deviceMemory")                  \
-    /* partial interface Navigator — Pointer Events §12 */    \
-    X(MAX_TOUCH_POINTS,      "maxTouchPoints")
+/* THE THIRD COLUMN IS WEB IDL §3.9's EXPOSURE, and it is a column rather than a branch for the same reason the
+   other two are: a member's IDL states it, so it is DATA about the member and the install reads it off the one
+   list. `NavigatorDeviceMemory` is the mixin that carries [SecureContext] — the attribute is on the MIXIN, so
+   every member of it inherits the condition — and Chrome accordingly has no `deviceMemory` property on
+   Navigator.prototype over `http`. That is not a value difference a page shrugs at: `if (navigator.deviceMemory
+   > 4)` and `'deviceMemory' in navigator` both take the other road, and whatever is down that road is code
+   this engine would otherwise never run. */
+#define NAV_MEMBERS(X)                                                             \
+    /* NavigatorID — §8.10.1.1 */                                                  \
+    X(APP_CODE_NAME,         "appCodeName",          IDL_EXPOSED)                  \
+    X(APP_NAME,              "appName",              IDL_EXPOSED)                  \
+    X(APP_VERSION,           "appVersion",           IDL_EXPOSED)                  \
+    X(PLATFORM,              "platform",             IDL_EXPOSED)                  \
+    X(PRODUCT,               "product",              IDL_EXPOSED)                  \
+    X(PRODUCT_SUB,           "productSub",           IDL_EXPOSED)                  \
+    X(USER_AGENT,            "userAgent",            IDL_EXPOSED)                  \
+    X(VENDOR,                "vendor",               IDL_EXPOSED)                  \
+    X(VENDOR_SUB,            "vendorSub",            IDL_EXPOSED)                  \
+    /* NavigatorLanguage — §8.10.1.2 */                                            \
+    X(LANGUAGE,              "language",             IDL_EXPOSED)                  \
+    X(LANGUAGES,             "languages",            IDL_EXPOSED)                  \
+    /* NavigatorOnLine — §8.10.1.3 */                                              \
+    X(ON_LINE,               "onLine",               IDL_EXPOSED)                  \
+    /* NavigatorCookies — §8.10.1.5 */                                             \
+    X(COOKIE_ENABLED,        "cookieEnabled",        IDL_EXPOSED)                  \
+    /* NavigatorPlugins — §8.10.1.6 */                                             \
+    X(PDF_VIEWER_ENABLED,    "pdfViewerEnabled",     IDL_EXPOSED)                  \
+    /* NavigatorConcurrentHardware — HTML §10 */                                   \
+    X(HARDWARE_CONCURRENCY,  "hardwareConcurrency",  IDL_EXPOSED)                  \
+    /* NavigatorAutomationInformation — WebDriver §12 */                           \
+    X(WEBDRIVER,             "webdriver",            IDL_EXPOSED)                  \
+    /* NavigatorDeviceMemory — Device Memory §3, and the mixin is `[SecureContext]` */ \
+    X(DEVICE_MEMORY,         "deviceMemory",         IDL_SECURE_CONTEXT)           \
+    /* partial interface Navigator — Pointer Events §12 */                         \
+    X(MAX_TOUCH_POINTS,      "maxTouchPoints",       IDL_EXPOSED)
 
-#define NAV_ENUM_ONE(id, str) NAV_##id,
-#define NAV_NAME_ONE(id, str) str,
+#define NAV_ENUM_ONE(id, str, exposure) NAV_##id,
+#define NAV_NAME_ONE(id, str, exposure) str,
+#define NAV_EXPOSURE_ONE(id, str, exposure) exposure,
 
 enum { NAV_MEMBERS(NAV_ENUM_ONE) NAV_N };
 static const char *const NAV_NAME[] = { NAV_MEMBERS(NAV_NAME_ONE) };
+static const IdlExposure NAV_EXPOSURE[] = { NAV_MEMBERS(NAV_EXPOSURE_ONE) };
 
 /* THE TWO MEMBERS THIS MODE FORBIDS. §8.10.1.1 puts them in a partial interface the user agent supports only
    "if the navigator compatibility mode is Gecko", and the published html.idl carries that partial FLAT — the
@@ -341,7 +350,7 @@ static void navigator_install_realm(JSContext *ctx)
     CHECK(!JS_IsException(proto), "Navigator.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "Navigator");
     for (i = 0; i < NAV_N; i++)
-        idl_install_accessor(ctx, proto, NAV_NAME[i], js_nav_get, i, -1);
+        idl_install_accessor_exposed(ctx, proto, NAV_NAME[i], js_nav_get, i, -1, NAV_EXPOSURE[i]);
     idl_install_accessor(ctx, proto, "userActivation", js_nav_user_activation, 0, -1);
     idl_install_method(ctx, proto, "javaEnabled", 0, g_id_java_enabled);
     idl_members_excluded(ctx, proto, "Navigator", NAV_MODE_EXCLUDED,

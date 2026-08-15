@@ -27,6 +27,7 @@
 #include "quickjs-step.h"
 #include "solver/concolic.h"
 #include "core/idl_args.h"
+#include "core/frame/secure_context.h"   /* §3.9's exposure conditions: HTML §8.1.3.5's answer for this realm */
 #include "core/streams/readable_stream.h"
 #include "core/idl_iter.h"
 #include "core/file/blob.h"
@@ -2100,6 +2101,34 @@ void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *
     JS_DefinePropertyGetSet(ctx, (JSValue)target, a, g, st,
                             JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
     JS_FreeAtom(ctx, a);
+}
+
+/* WEB IDL §3.9's "is exposed in realm", for the conditions this engine models — see idl_args.h for why the
+   question is asked HERE and the answer is stated by the component as data.
+   IT IS `static` DELIBERATELY. A public predicate is an invitation to write `if (idl_exposed(ctx, ...))` at a
+   call site, which is the per-member conditional the parameter exists to remove; the only way to reach this is
+   to hand an installer the attribute the IDL states. When a [SecureContext] member of a shape that has no
+   exposed-form installer yet arrives (an operation — HTML's registerProtocolHandler is the one waiting), that
+   installer gets the same parameter and the same one line, rather than this becoming reachable from outside. */
+static bool idl_exposed(JSContext *ctx, IdlExposure exposure)
+{
+    switch (exposure) {
+    case IDL_EXPOSED:        return true;
+    case IDL_SECURE_CONTEXT: return secure_context_is(ctx);   /* §3.9 step 2 */
+    }
+    DFAIL("a member was installed with an exposure condition Web IDL §3.9 has no step for — every value of "
+          "IdlExposure is one of §3.9's numbered conditions, so a new one is a new step to write here");
+    return true;
+}
+
+void idl_install_accessor_exposed(JSContext *ctx, JSValueConst target, const char *name,
+                                  IdlGetter getter, int getter_magic, int setter_stepid, IdlExposure exposure)
+{
+    /* §3.3.13: the member is simply NOT THERE. Nothing is minted, nothing is defined, and `name in target` is
+       false — which is what a page's feature detection reads and what makes the non-secure arm of that branch
+       a different program rather than the same one with a different value in it. */
+    if (!idl_exposed(ctx, exposure)) return;
+    idl_install_accessor(ctx, target, name, getter, getter_magic, setter_stepid);
 }
 
 void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,

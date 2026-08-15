@@ -15,6 +15,7 @@
 #include "quickjs-step.h"            /* §7.4 step 14's load is a step machine on the one frontier */
 #include "core/url/url.h"
 #include "core/idl_args.h"
+#include "core/realm.h"              /* §8.1.3.1's environment: the creator's top-level creation URL */
 #include "solver/engine.h"
 #include "solver/world.h"
 
@@ -180,18 +181,23 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len)
    is materializing the initial about:blank and has none. THE POLICY TRAVELS WITH THE TREE, because §7.2.6's
    container is built from both and a builder handed only the tree would judge the document against its
    `<meta>` policies alone. */
-JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *origin,
-                           JSValueConst nav_proxy, const char *body, size_t body_len, const char *csp)
+JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *top_level_url,
+                           const char *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
+                           const char *csp)
 {
     lxb_html_document_t *dom;
     JSContext *cctx;
 
+    DCHECK(top_level_url != NULL && *top_level_url,
+           "a child navigable's realm was asked for with no TOP-LEVEL CREATION URL — §8.1.3.5 reads it to "
+           "decide whether the environment is a secure context, so the realm's platform surface depends on it "
+           "and a builder handed nothing would install a surface belonging to no document");
     DCHECK(g_realm_builder != NULL,
            "a same-origin child navigable was reached in an agent whose host declared no realm builder — a "
            "same-origin document is a second REALM in this heap, and only the host knows which platform "
            "surface a document of this build has; declare it with navigable_set_realm_builder");
     dom = child_document(body, body_len);
-    cctx = g_realm_builder(JS_GetRuntime(ctx), dom, url, origin, csp, doc, nav_proxy);
+    cctx = g_realm_builder(JS_GetRuntime(ctx), dom, url, top_level_url, origin, csp, doc, nav_proxy);
     CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
     if (g_realms_n == g_realms_cap) {
         int cap = g_realms_cap ? g_realms_cap * 2 : 8;
@@ -276,7 +282,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     NavLoadState *s = st;
     JSValueConst proxy = step_arg(&s->hdr, 0);
     JSValueConst answer = JS_UNDEFINED;
-    const char *addr, *origin, *csp = NULL, *body = NULL;
+    const char *addr, *origin, *csp = NULL, *body = NULL, *tlu;
     JSValue bodyv = JS_UNDEFINED, cspv = JS_UNDEFINED;
     size_t body_len = 0;
     JSContext *cctx;
@@ -328,8 +334,20 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     } else {
         doc = window_proxy_doc(proxy);   /* §7.4 minted and adopted it when it created the navigable */
     }
-    cctx = navigable_realm(ctx, doc, addr, origin, proxy, body, body_len, csp);
-    window_proxy_navigate(ctx, proxy, cctx, doc, addr, origin);
+    /* WHERE THE NEW DOCUMENT'S ENVIRONMENT SITS, which HTML §8.1.3.1 answers by asking what this navigable IS
+       rather than what it is loading. Navigating a TOP-LEVEL TRAVERSABLE moves the top-level environment to
+       the address being loaded — it IS the top. Navigating a NESTED navigable does not: its environment's
+       top-level creation URL is the one it was created with and belongs to its ancestor chain, which is why
+       loading an `https` document into an `http` page's iframe leaves it a non-secure context (Secure Contexts
+       §4.2 — otherwise an iframe plus postMessage is a shim around every gated API).
+       This is the one thing about the operation the TARGET legitimately decides, exactly like the document's
+       identity below: whether a navigable is nested is a fact about the navigable and not about the load. */
+    tlu = window_proxy_is_top_level(proxy) ? addr : window_proxy_top_level_url(proxy);
+    DCHECK(tlu != NULL && *tlu,
+           "a nested navigable was navigated with no top-level creation URL on its proxy — §7.4 gives every "
+           "navigable one when it creates it, so a proxy without one was minted somewhere that did not");
+    cctx = navigable_realm(ctx, doc, addr, tlu, origin, proxy, body, body_len, csp);
+    window_proxy_navigate(ctx, proxy, cctx, doc, addr, tlu, origin);
     JS_FreeCString(ctx, csp);
     JS_FreeCString(ctx, body);
     JS_FreeValue(ctx, cspv);
@@ -583,8 +601,22 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     JSValue proxy;
     char *op;
     size_t n;
+    /* HTML §7.2's CREATE A NEW BROWSING CONTEXT AND DOCUMENT, verbatim: "Let topLevelCreationURL be
+       about:blank if embedder is null; otherwise embedder's relevant settings object's top-level creation
+       URL." The embedder is the element this navigable is nested THROUGH, so `is_child` IS that condition —
+       an auxiliary navigable has none and is its own top, and the about:blank it is created with is the
+       address of the top-level environment until step 14's navigation moves it (js_nav_load_step).
+       READ FROM THE CREATOR'S REALM, which is what "embedder's relevant settings object" says: this document
+       is the embedder, `ctx` is its realm, and the field is the one its own environment was built with. */
+    JSValue creator_tlu = realm_top_level_creation_url(ctx);
+    const char *creator_tlu_s = JS_ToCString(ctx, creator_tlu);
+    const char *tlu;
 
+    CHECK(creator_tlu_s != NULL, "navigable: this realm's top-level creation URL would not convert");
+    tlu = is_child ? creator_tlu_s : "about:blank";
     if (!child_address(ctx, url, &addr, &origin)) {   /* the reference does not parse; the caller decides what that means */
+        JS_FreeCString(ctx, creator_tlu_s);
+        JS_FreeValue(ctx, creator_tlu);
         free(addr); free(origin);
         return JS_UNDEFINED;
     }
@@ -627,6 +659,16 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                                     realm is built later and by whichever same-origin document reads through
                                     it first, which need not be its creator. */
                                  csp,
+                                 /* HTML §8.1.3.1's TOP-LEVEL CREATION URL, and §7.4 states it from both ends.
+                                    A CHILD navigable is NESTED, so its documents' environments inherit their
+                                    creator's — this document's, read off its own realm — and an `about:blank`
+                                    iframe of an `http` page is therefore not a secure context even though
+                                    §3.2 hands a TOP-LEVEL `about:blank` a free pass. An AUXILIARY navigable
+                                    IS a top-level traversable, so it is its own top and its environment's
+                                    top-level creation URL is the address it was created at. Taken at creation
+                                    like the policy container, and for the same reason: the realm is built
+                                    later and by whichever same-origin document reads through it first. */
+                                 tlu,
                                  is_child ? document_window_proxy(ctx) : JS_UNDEFINED,
                                  (is_child || (feat && feat->noopener)) ? JS_NULL
                                                                         : document_window_proxy(ctx));
@@ -665,12 +707,20 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            child's; the POLICY is §7.4's CLONE OF THE CREATOR'S, serialized — which the policy container can do
            precisely because it is a flat parse over one owned string, so the clone that crosses an instance and
            the clone that crosses a session are the same operation. */
+        /* AND §8.1.3.1's TOP-LEVEL CREATION URL, which crosses for exactly the reason the policy container
+           does: the child's ENVIRONMENT is decided by the operation that created it, the instance that will
+           host the child cannot derive it, and a peer that answered from the child's own address would report
+           an https document nested in an http page as a secure context. IT GOES BEFORE THE POLICY, because
+           the policy is the RECORD'S REMAINDER: a raw CSP header may contain HTAB (this engine's own parser
+           treats tab as source-list whitespace), so every reader of this record stops splitting at the policy
+           and keeps the rest verbatim. A field after it would be swallowed by it. A URL cannot contain a tab —
+           url_serialize percent-encodes one — so it is safe in a split field. */
         n = strlen(world_doc_name(child)) + strlen(world_doc_name(document_doc(ctx))) +
-            strlen(addr) + strlen(origin) + strlen(csp ? csp : "") + 32;
+            strlen(addr) + strlen(origin) + strlen(csp ? csp : "") + strlen(tlu) + 32;
         op = malloc(n);
         CHECK(op != NULL, "navigable: OOM building the create notice");
-        snprintf(op, n, "navigable.create\t%s\t%s\t%s\t%s\t%s", world_doc_name(child),
-                 world_doc_name(document_doc(ctx)), addr, origin, csp ? csp : "");
+        snprintf(op, n, "navigable.create\t%s\t%s\t%s\t%s\t%s\t%s", world_doc_name(child),
+                 world_doc_name(document_doc(ctx)), addr, origin, tlu, csp ? csp : "");
         engine_host_notify(ctx, op);
         free(op);
         proxy = window_proxy_new_remote(ctx, child, origin, name,
@@ -679,6 +729,8 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                                                                                : document_window_proxy(ctx));
         CHECK(!JS_IsException(proxy), "a navigable's WindowProxy could not be allocated");
     }
+    JS_FreeCString(ctx, creator_tlu_s);
+    JS_FreeValue(ctx, creator_tlu);
     free(addr);
     free(origin);
     return proxy;

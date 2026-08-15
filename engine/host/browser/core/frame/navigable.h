@@ -83,7 +83,15 @@
    clone of the CREATOR's for an `about:` child, which came from no response at all. NULL when there is neither.
    It travels with the parsed tree because §7.2.6's container is built from BOTH, and a builder handed only the
    tree would silently install a document judged against its `<meta>` policies alone. */
-typedef JSContext *(*RealmBuilder)(JSRuntime *rt, lxb_html_document_t *dom, const char *url, const char *origin,
+/* `top_level_url` is HTML §8.1.3.1's TOP-LEVEL CREATION URL for the environment this realm is built with, and
+   it is a SEPARATE argument from `url` because the two answer different questions and only sometimes agree.
+   `url` is THIS document's address; `top_level_url` is the address of the environment at the top of the
+   navigable's chain, which §8.1.3.5 reads to decide whether this realm is a SECURE CONTEXT and therefore which
+   of Web IDL §3.3.13's members exist in it at all. They differ for every nested navigable — an `https` iframe
+   inside an `http` page is not a secure context and an `about:blank` iframe of one is not either — so a
+   builder handed only `url` would install a platform surface belonging to a document it is not building. */
+typedef JSContext *(*RealmBuilder)(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
+                                   const char *top_level_url, const char *origin,
                                    const char *csp, uint32_t doc_id, JSValueConst nav_proxy);
 void navigable_set_realm_builder(RealmBuilder b);
 
@@ -124,8 +132,9 @@ void navigable_set_realm_builder(RealmBuilder b);
    clone that is depends on the operation and only the caller knows: creating a navigable clones the CREATOR's
    (kept on the navigable, because a srcless child's realm is built later and by whichever document reads
    through it first), navigating one clones the INITIATOR's, the document whose script ran. */
-JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *origin,
-                           JSValueConst nav_proxy, const char *body, size_t body_len, const char *csp);
+JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *top_level_url,
+                           const char *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
+                           const char *csp);
 
 /* Install §7.4's scriptable entry point — `window.open`. `origin` is this document's, which the initial
    about:blank child inherits along with the policy container. */

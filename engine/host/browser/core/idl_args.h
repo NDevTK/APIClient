@@ -484,6 +484,40 @@ void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface);
    rewrite. Returns <0 with an exception pending. */
 int idl_freeze_array(JSContext *ctx, JSValueConst arr);
 
+/* WEB IDL §3.9's EXPOSURE CONDITIONS — the extended attributes that decide whether a member EXISTS in a
+ * realm, as opposed to what it answers. §3.9's "is exposed in realm" is four steps and this is the one of them
+ * that is not about which global the member is on.
+ *
+ * §3.3.13's [SecureContext] REMOVES THE MEMBER. The spec's own example is unambiguous — "in a non-secure
+ * context there will be no `calculateSecretResult` property on ExampleFeature.prototype" — so this is never a
+ * getter that throws and never one that answers undefined. A page distinguishes all three: `'deviceMemory' in
+ * navigator`, `if (navigator.deviceMemory)` and a try/catch around the read go three different ways, and each
+ * of those is a branch this engine exists to explore correctly.
+ *
+ * THE ATTRIBUTE IS DATA THE COMPONENT STATES, NOT A CONDITION IT EVALUATES. A `if (secure) install(...)` at
+ * each gated member is the hand-picked list in miniature: every member added afterwards is exposed everywhere
+ * by default and nothing says so, and each site re-derives what [SecureContext] MEANS (absent? throwing?
+ * undefined?) with nothing to keep the derivations equal. So the member's install carries its IDL's exposure
+ * the same way it already carries its IDL's argument types, and this file — the one place every declared
+ * member converges on — is where the condition is asked. A component that states the attribute has done
+ * everything the IDL asks of it.
+ *
+ * THE OTHER TWO §3.9 CONDITIONS ARE HONESTLY ABSENT, and their absence is not a default. [Exposed] is decided
+ * by WHICH global a component installs on and this engine has exactly one global kind (there is no
+ * WorkerGlobalScope), so every member's exposure set is trivially satisfied. [CrossOriginIsolated] needs
+ * §8.1.3.2's cross-origin isolated capability, which needs COOP and COEP response headers that nothing here
+ * reads yet — the day one arrives, it is a value in this enum and the gate below grows a case, rather than a
+ * second gate somewhere else. */
+typedef enum {
+    IDL_EXPOSED = 0,        /* the member's IDL carries no exposure condition — it is in every realm */
+    IDL_SECURE_CONTEXT,     /* [SecureContext] — ABSENT, not throwing, in a non-secure realm */
+} IdlExposure;
+
+/* AN ATTRIBUTE THAT STATES ITS IDL'S EXPOSURE. This is the general form; the plain `idl_install_accessor`
+   below is the same install for a member whose IDL carries no exposure condition, which is most of them. */
+void idl_install_accessor_exposed(JSContext *ctx, JSValueConst target, const char *name,
+                                  IdlGetter getter, int getter_magic, int setter_stepid, IdlExposure exposure);
+
 void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
                           IdlGetter getter, int getter_magic, int setter_stepid);
 
