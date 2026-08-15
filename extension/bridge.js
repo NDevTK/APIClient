@@ -316,9 +316,10 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
   // lowercased) is the PRIMARY policy the engine uses for policy-relative XSS verdicts — header-CSP overrides
   // the <meta> scan, which alone missed the header entirely (a header-CSP-blocked sink was reported exploitable).
   const _csp = (msg && msg.responseHeaders && msg.responseHeaders["content-security-policy"]) || "";
-  // THE DOCUMENT ID. One WASM instance is one DOCUMENT regardless of origin, so a flow that scripts an iframe
-  // or a popup writes state in a PEER instance, and that peer keys its segment of the flow's world by an id
-  // minted here. The offscreen mints it because SECURITY.md makes the offscreen the only zone that knows which
+  // THE DOCUMENT ID — the ROOT one, because an instance is an agent CLUSTER and holds one realm per same-origin
+  // document. A flow that scripts a CROSS-ORIGIN iframe or popup writes state in a PEER instance (a same-origin
+  // one is a realm in this same heap and needs no peer at all), and that peer keys its segment of the flow's
+  // world by an id minted here. The offscreen mints it because SECURITY.md makes the offscreen the only zone that knows which
   // instance holds which document — the same reason it owns the routing. The engine rejects 0.
   // SCOPE, stated rather than assumed: this counter is unique across the instances ALIVE in this offscreen,
   // which is exactly the set that can message each other today. It is not yet persisted, because a parked

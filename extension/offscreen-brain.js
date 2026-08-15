@@ -666,6 +666,13 @@ function handleContentMessage(msg, sender) {
     // race. We do NOT record "isTop": a frame can't prove it is the main frame from
     // its own report — a fenced frame is its tree's root and would impersonate it.
     _buf.tabId = tabId;
+    /* THE FRAME'S OWN ID, BROWSER-SET, and it is on the buffer because the ANALYSIS needs it: bridge.js keys a
+       WASM instance on the (browsing-context group, origin) agent cluster, and telling a SUB-FRAME (which its
+       cluster's instance already runs as a realm of its own — §4.8.5 creates it inside that heap) from the
+       group's TOP document (which it does not) is what frame 0 answers. This is not the "isTop" the comment
+       above refuses to record: that would be a frame's claim ABOUT ITSELF, and `sender.frameId` comes from the
+       browser process, the same provenance as `sender.tab.url`. */
+    _buf.frameId = doc.frameId;
     _buf.docKey = _dk;
     _buf.origin = doc.origin;                                         // credentialed-read principal (per-document; = _senderOrigin(sender))
     // THIS DOCUMENT'S OWN ADDRESS, WHICH IS THE SSRF PRINCIPAL — and a sub-frame must never analyse under the

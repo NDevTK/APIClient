@@ -1,9 +1,12 @@
 /* THE WORLD REGISTRY — how one flow's COW delta stays coherent across documents in different WASM instances.
  *
- * THE PROBLEM. One WASM instance is one DOCUMENT, regardless of origin. A flow that scripts an iframe or a
- * popup therefore writes state in TWO instances, and those writes are one world: rewinding that flow has to
- * rewind both, and parking it has to park both. A per-instance delta that only agrees locally is two timelines
- * wearing one name — the same bug class as modelling async state globally.
+ * THE PROBLEM. One WASM instance is one ORIGIN-KEYED AGENT CLUSTER — `(browsing-context group, origin)` — so a
+ * flow that scripts a CROSS-ORIGIN iframe or popup writes state in TWO instances, and those writes are one
+ * world: rewinding that flow has to rewind both, and parking it has to park both. A per-instance delta that
+ * only agrees locally is two timelines wearing one name — the same bug class as modelling async state globally.
+ * (A SAME-ORIGIN child is a second REALM in this same heap and needs none of this; that is why the boundary is
+ * tractable at all. This paragraph said "one instance is one document regardless of origin", which is the model
+ * SECURITY.md rejects and would have made every same-origin frame read cross this transport.)
  *
  * WHY THE DELTA CANNOT TRAVEL. A CowEntry names its target by a LIVE HEAP POINTER. A pointer has no meaning
  * outside the linear memory it was taken from, which is exactly why CLAUDE.md forbids paging delta bytes to the

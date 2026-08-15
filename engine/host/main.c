@@ -217,7 +217,17 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
 {
     char *origin;
 
-    CHECK(g_dom == NULL, "qjs_init ran twice in one WASM instance — one instance is one document");
+    /* THIS ENTRY ROOTS THE AGENT AT ONE DOCUMENT, which is not the same statement as "one instance is one
+       document" — the sentence that used to stand here and the model the host was keyed on. An instance is an
+       ORIGIN-KEYED AGENT CLUSTER and holds one realm per same-origin document (engine_child_realm below), so
+       what may not happen twice is the ROOTING: the runtime, the class registrations, the world registry and
+       the frontier are the agent's and exist once. A SECOND document of this cluster that this agent did not
+       itself create — the trusted zone reporting a same-origin frame it did not model, or a navigation
+       replacing the root — has no entry to arrive through yet: it needs a `qjs_join` beside this one that
+       parses a second document, builds its realm through engine_child_realm, and seeds its scripts on the SAME
+       frontier. Calling this twice is not that entry, and it would silently be a second agent. */
+    CHECK(g_dom == NULL, "qjs_init ran twice in one WASM instance — it ROOTS the agent, and a second document "
+                         "of this origin-keyed cluster joins through the join entry rather than re-rooting it");
     {
         UrlRecord rec;
         CHECK(url != NULL && *url && url_parse(&rec, url, strlen(url), NULL),

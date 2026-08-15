@@ -2,11 +2,16 @@
  *
  * IT CROSSES INSTANCES, and the initial about:blank is what forces that. A child created with no URL —
  * `window.open()`, an `<iframe>` with no src — gets its Document synchronously and has no response to take a
- * policy from; §7.4 says its container is a CLONE OF THE CREATOR'S. One WASM instance is one DOCUMENT
- * regardless of origin, so that clone is a CROSS-INSTANCE operation: the creator's container is serialized to
- * the child's instance, and the requesting flow SUSPENDS across the boundary the same way it suspends at an
- * await. Same-origin is not an exemption — co-locating two documents to make the clone a local memcpy is
- * dodging the transport, and it is the one design this file must not encourage.
+ * policy from; §7.4 says its container is a CLONE OF THE CREATOR'S. When the child is CROSS-ORIGIN it lives in
+ * another instance, so that clone is a CROSS-INSTANCE operation: the creator's container is serialized to the
+ * child's instance, and the requesting flow SUSPENDS across the boundary the same way it suspends at an await.
+ * WHICH SIDE OF THAT A CHILD FALLS ON IS ITS ORIGIN'S ANSWER, NOT A COST DECISION. This said "one WASM instance
+ * is one DOCUMENT regardless of origin, so … same-origin is not an exemption", and that premise is the model
+ * SECURITY.md rejects: an instance is an `(browsing-context group, origin)` AGENT CLUSTER, a same-origin child
+ * is a second REALM in the creator's own heap (navigable.c's child_in_this_agent), and its clone is therefore
+ * an ordinary in-heap copy — not because a memcpy is cheaper but because there is no boundary between them to
+ * cross. Splitting a same-origin pair to make one is the design this file must not encourage, because HTML's
+ * similar-origin window agent is one heap and DOM adoption and cross-frame closures rely on it.
  *
  * WHICH IS WHY IT IS A VALUE, NOT A POINTER GRAPH. Everything here is a flat parse over one owned string, so a
  * container serializes to its `csp_text` and reconstitutes by parsing it again — the clone that crosses an

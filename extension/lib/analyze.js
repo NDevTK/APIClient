@@ -188,6 +188,18 @@ async function _analyzeCombinedScripts(docKey) {
   try {
     response = await sendToOffscreen({
       type: "AST_ANALYZE", code: combined, sourceUrl: tabUrl, documentId: docKey, origin: buf.origin, forceScript: true,
+      // THE AGENT CLUSTER THIS DOCUMENT BELONGS TO — SECURITY.md keys one WASM instance on
+      // `(browsing-context group, origin)`, and BOTH halves have to be BROWSER-STATED because the untrusted
+      // engine may state neither. `origin` above is the MessageSender principal (opaque-unique per document);
+      // `groupId` is the tab, which is the browser-set fact closest to a browsing-context group — a tab is
+      // exactly one top-level traversable and every navigable nested under it is in that traversable's group.
+      // NOTE THE DISTINCTION FROM THE RULE THIS FILE OTHERWISE KEEPS: a tabId may never key a DOCUMENT (a tab
+      // holds many, and a (tab,frame) pair is reused across navigations with a different origin). A GROUP is
+      // not a document, and it is the only thing the tab id is used as here — the origin half is what keeps
+      // two documents of one tab in two clusters when they are cross-origin. `frameId` distinguishes the
+      // group's TOP document from a sub-frame, which the pool needs because a same-origin sub-frame is created
+      // and run INSIDE its cluster's instance (§4.8.5's insertion steps) while a top document is not.
+      groupId: buf.tabId, frameId: buf.frameId,
       // HTML §8.1.3.1's TOP-LEVEL CREATION URL — the browser-provided address of the top of this document's
       // navigable chain, captured on CONTENT_HTML from sender.tab.url. It is NOT sourceUrl: this document may
       // be a sub-frame, and §8.1.3.5 decides secure-context (and therefore which [SecureContext] members the

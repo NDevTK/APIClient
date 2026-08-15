@@ -92,8 +92,8 @@ The bundle runs inside QuickJS (WASM linear memory), reaching the host only thro
 - It **cannot** read or set the principal (it lives in worker JS, outside the WASM, set per page) and
   **cannot** do raw network — its own `fetch()` calls are *recorded*, not issued; its `import()`
   targets become **untrusted URLs** that `safeFetch` gates (origin-relative SSRF + CORB).
-- **One WASM instance per ORIGIN-KEYED AGENT CLUSTER** — `(browsing-context group, origin)`,
-  `freshInstance`, isolated memory — never per tab and never per page, because a tab holds documents
+- **One WASM instance per ORIGIN-KEYED AGENT CLUSTER** — `(browsing-context group, origin)`, isolated memory
+  — never per tab and never per page, because a tab holds documents
   that may be cross-origin to each other and an iframe or a popup gets its own instance the moment its
   origin differs. The instance IS the principal: a fetch is governed by a single, correct origin
   because there is exactly one origin in the instance that issued it, and that stays exactly true when
@@ -101,6 +101,21 @@ The bundle runs inside QuickJS (WASM linear memory), reaching the host only thro
   an instance across ORIGINS would put two principals behind one `pageOrigin`; splitting one across
   same-origin documents would instead break HTML's own single-heap agent, which same-origin DOM
   adoption and cross-frame closures rely on.
+  **BOTH HALVES OF THE KEY ARE BROWSER-STATED** (`clusterKeyOf` in `bridge.js`, over what `analyze.js`
+  carries off the browser's `MessageSender`), because the untrusted engine may state neither: the ORIGIN
+  half is `_senderOrigin`'s — the browser's `MessageSender.origin`, opaque-unique per document, so two
+  sandboxed iframes of one page are two clusters and two instances — and the GROUP half is
+  `sender.tab.id`, a tab being exactly one top-level traversable with every nested navigable under it in
+  that traversable's group. A document the engine itself creates never goes through that key: it
+  inherits its CREATOR's group on the `navigable.create` notice. RESIDUAL, and it is a narrowing rather
+  than a merge: an auxiliary opened by `window.open()` without `noopener` is in the same group as its
+  opener but lands in another tab, so this key splits that pair; closing it needs `openerTabId`, which
+  `MessageSender` does not carry. UNBUILT, and named because the alternative is a second instance: a
+  document of a cluster that the cluster's instance is not already running — a same-origin frame the
+  engine did not model, a second cross-origin child at one origin, a navigation replacing the group's
+  top — has no way in yet. It needs a `qjs_join` beside `qjs_init` (a second Lexbor parse, a realm
+  through `engine_child_realm`, its scripts seeded on the same frontier), and the host asserts at each
+  such arrival rather than provisioning a second heap for one agent.
 - **The engine NAMES its own child documents; the offscreen ROUTES them.** An `<iframe>` insertion or
   a `window.open()` mints the child's name inside the instance (`"<parent>.<n>"`, unique by induction)
   and announces it as a one-way notice; the offscreen is what provisions an instance for that name and
