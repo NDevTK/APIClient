@@ -568,34 +568,58 @@ static void frag_visit(JSContext *ctx, void *st, JSStepVisit *v)
 
 /* THE ONE CAPABILITY LEFT, AND ITS NAME. Everything else this machine holds between two FRAG_FEED steps is
    already engine-owned and already parks: the markup is `html`, the position in it is `off`, the placement is
-   `where`/`anchor`, and frag_visit declares all of it. What does not park is `parser` — and the sentence the
-   fork prints is the specification of what to build, because the reader of a @WHY is standing at the clone
-   with nothing else to go on.
+   `where`/`anchor`, the partial tree is `frag` (which frag_release now owns — see there), and frag_visit
+   declares the references. What does not park is `parser` — and the sentence the fork prints is the
+   specification of what to build, because the reader of a @WHY is standing at the clone with nothing else to
+   go on.
    IT IS ASKED AT THE FORK, and it used to be a DCHECK inside frag_visit instead, whose comment sent the next
    reader to "give the parser a real ownership declaration" if it ever fired. That instruction was wrong twice
    over: `visit` now has three consumers, so the assert fires on a TEARDOWN where nothing is being cloned, and
    no ownership declaration would have helped there because a tokenizer has nothing to declare. A machine must
-   never learn which consumer is visiting it; this is how it answers the fork alone. */
+   never learn which consumer is visiting it; this is how it answers the fork alone.
+
+   AND THE SENTENCE IT PRINTED WAS WRONG ABOUT WHAT TO BUILD, which is the failure mode a @WHY has: it stays
+   accurate about the goal and goes wrong about THIS tree, so it reads as authoritative while sending the next
+   reader to write the wrong thing. It said to copy "the partially built fragment and its TEMPORARY DOCUMENT".
+   There is no such unit. lxb_html_parse_fragment_chunk_begin builds the temporary document with
+   lxb_html_document_interface_create(document), and lxb_dom_document_init with a non-NULL owner INHERITS
+   mraw, text, tags, attrs, ns, prefix, css and parser from the document it was given and sets
+   node.owner_document to it — so the temporary document is allocated INSIDE the real document's arena, every
+   node the parse builds belongs to the REAL document (which is what makes the placement legal with no §4.5
+   adopt, and which frag_step asserts at the parse boundary), and every custom tag name and attribute name the
+   parse interns goes into the REAL document's hashes. A "copy of the temporary document" would therefore be a
+   second partial subtree in the SAME shared arena, and what the clone actually needs is that subtree plus a
+   node->node map to remap the tree builder's arrays onto it.
+   WHAT THE MESSAGE SAYS NOW IS ORDERED, because the two halves are not equally reachable and the order decides
+   which one is written first. See the header above frag_step for the rest of the ordering. */
 static const char *frag_unforkable(const void *st)
 {
     return ((const FragState *)st)->parser
-         ? "a fragment parse cannot be forked mid-parse — BUILD lxb_html_parser CLONING and delete this. "
-           "lxb_html_tokenizer: state and state_return, the start/pos/end/begin/last cursor into the incoming "
-           "buffer, the token under construction with its dobj_token/dobj_token_attr pools and mraw temp "
-           "strings, and the entity SBST cursor. lxb_html_tree: mode and original_mode, open_elements, "
-           "active_formatting, template_insertion_modes, pending_table, form, foster_parenting/frameset_ok — "
-           "over the sibling's own COPY of the partially built fragment and its temporary document, with every "
-           "node pointer in those arrays remapped onto that copy. The two halves cannot be cloned separately: "
-           "lxb_html_tokenizer holds a `tree` back-pointer its own header calls a leak abstraction, and "
-           "foreign-content and RCDATA/RAWTEXT tokenization read through it. The same absent copy is why a flow "
-           "parked inside this parse cannot serialize to the IDB cold tier, so it is the frontier's gap and not "
-           "only the fork's"
+         ? "a fragment parse cannot be forked mid-parse — BUILD THE TREE-BUILDER COPY FIRST and then the "
+           "tokenizer's. (1) lxb_html_tree: deep-copy the partial subtree under `frag` into the same document "
+           "arena, building a node->node map, then copy mode, original_mode, open_elements, active_formatting, "
+           "template_insertion_modes, pending_table, form, fragment, foster_parenting, frameset_ok and "
+           "scripting, remapping every node pointer through the map. Every one of those is reachable: "
+           "lxb_html_tree is a public struct and all 26 insertion modes are declared in tree/insertion_mode.h, "
+           "so this half needs no change to lexbor — which cannot be changed, being a pinned pristine clone "
+           "engine/build.mjs re-clones. (2) lxb_html_tokenizer: state and state_return, the start/pos/end temp "
+           "buffer, the begin/last/markup/temp cursors — which point into THIS machine's `html`, and frag_visit "
+           "hands the sibling a COPY of that buffer, so they are rebased by offset and not copied — the token "
+           "under construction with its dobj_token/dobj_token_attr pools and mraw temp strings, the entity SBST "
+           "cursor, and the `tree` back-pointer its own header calls a leak abstraction (foreign-content and "
+           "RCDATA/RAWTEXT tokenization read the tree through it, so it is repointed at the copy from (1) and "
+           "the two halves cannot be cloned separately). (3) THAT STILL DOES NOT PARK. A snapshot crosses a "
+           "session, so every field must have a NAME, and lexbor exports only 7 of its ~90 tokenizer states "
+           "(tokenizer/state.h; the rest are static in state*.c) — a raw code pointer means nothing to the "
+           "build that resumes it. Cloning buys the FORK and not the cold tier; the tier needs HTML §13.2.5's "
+           "tokenizer as an engine component whose state is a spec-named enum, feeding this tree builder "
+           "through lxb_html_tree_construction_dispatcher"
          : NULL;
 }
 
-/* WHAT NO DECLARATION NAMES: a lexbor element, a lexbor parser, and two plain buffers. `compliant`, the
-   sanitizer's `config` and the source string are references frag_visit names, and the teardown discharges that
-   one declaration. */
+/* WHAT NO DECLARATION NAMES: a lexbor element, a lexbor parser, THE PARSE'S OWN TREE, and two plain buffers.
+   `compliant`, the sanitizer's `config` and the source string are references frag_visit names, and the
+   teardown discharges that one declaration. */
 static void frag_release(JSContext *ctx, void *st)
 {
     FragState *s = st;
@@ -607,8 +631,30 @@ static void frag_release(JSContext *ctx, void *st)
     }
     /* THE THROW PATH OWNS THE PARSER TOO. A flow dropped mid-parse would otherwise leak a tokenizer, an
        open-element stack and the temporary document behind them. */
-    if (s->parser) { lxb_html_parse_fragment_chunk_end(s->parser); lxb_html_parser_destroy(s->parser); }
-    s->parser = NULL;
+    if (s->parser) {
+        /* AND IT OWNS WHAT THE PARSER BUILT, which is the half that was missing. chunk_end HANDS BACK the root
+           element §13.4 step 8 created — the whole partially built fragment hangs under it — and the value was
+           discarded here, so a flow abandoned between the first byte and the placement leaked every node the
+           parse had produced. Nothing else can ever collect them: they are allocated out of the REAL document's
+           arena (see frag_unforkable for why the temporary document is not an arena of its own) and they are in
+           no tree, so no delta, no discard and no document destroy names them.
+           A machine cannot COPY what it does not OWN, so this is also the fork's first subproblem, discharged:
+           the sibling arm's copy of the partial tree is exactly the object this statement frees. */
+        lxb_dom_node_t *root = lxb_html_parse_fragment_chunk_end(s->parser);
+        lxb_html_parser_destroy(s->parser);
+        s->parser = NULL;
+        /* NULL is chunk_end's failure answer, and it destroyed the root itself on the way out. Otherwise it is
+           the same object `frag` names once the feed has finished, so the one statement below covers both
+           shapes — the abandoned parse and the abandoned placement. */
+        if (root) s->frag = root;
+    }
+    /* WHATEVER OF THE PARSE IS LEFT. After a completed placement this is NULL, because FRAG_PLACE's terminal
+       destroys the emptied root and gives up its claim there; a placement or a §8.6.4 filter that threw
+       half-way leaves the un-placed remainder here, still holding nodes. */
+    if (s->frag) {
+        dom_cow_destroy_private(s->frag, /*with_children*/ true);
+        s->frag = NULL;
+    }
     free(s->html);
     s->html = NULL;
     sanitizer_walk_free_stack(&s->san);
@@ -645,12 +691,15 @@ static void frag_begin(JSContext *ctx, FragState *s, lxb_dom_element_t *context,
    unsanitized fragment or clear the target twice. */
 static void frag_after_parse(FragState *s, JSStepHdr *hdr)
 {
+    /* THE PARSE ALWAYS PRODUCED ONE. chunk_begin creates the root element before the first byte and only an
+       allocation failure clears it, which is now fatal at the feed — so the `if (!s->frag) go to DONE` this
+       used to open with described a state that cannot arise, and the same test stood in two more places. */
+    DCHECK(s->frag != NULL, "the fragment placement was reached with no parsed fragment");
     if (s->clear_first) {
         s->node = s->anchor->first_child;
         hdr->stage = FRAG_CLEAR;
         return;
     }
-    if (!s->frag) { hdr->stage = FRAG_DONE; return; }
     s->node = s->frag->first_child;
     hdr->stage = FRAG_PLACE;
 }
@@ -666,7 +715,7 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
            order the setter states. */
         lxb_dom_node_t *next;
         if (!s->node) {
-            if (!s->frag) { hdr->stage = FRAG_DONE; return 0; }
+            DCHECK(s->frag != NULL, "the fragment clear finished with no parsed fragment to place");
             s->node = s->frag->first_child;
             hdr->stage = FRAG_PLACE;
             return JS_STEP_YIELD;
@@ -682,19 +731,42 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
             s->parser = lxb_html_parser_create();
             CHECK(s->parser != NULL && lxb_html_parser_init(s->parser) == LXB_STATUS_OK,
                   "the fragment parser could not be created");
-            lxb_html_parse_fragment_chunk_begin(s->parser,
-                lxb_html_interface_document(cn->owner_document), cn->local_name, cn->ns);
+            /* EVERY ONE OF THESE STATUSES WAS DROPPED, and dropping them is not a missing report — it is a
+               WRONG DOM. Each of the three entries responds to a failure by destroying the root, clearing
+               parser->root and moving the parser to ERROR, from which every later chunk_process returns
+               WRONG_STAGE and discards its byte in silence; the feed then ran to the end of the markup and
+               chunk_end handed back NULL, so `el.innerHTML = markup` left the element EMPTY and said nothing.
+               Every path that sets a non-OK status here is an allocation failure or an internal table lookup
+               that cannot miss — lexbor's tree builder reaches lxb_html_tree_process_abort only from those,
+               never from malformed markup, which it handles by the spec's own error rules — so this is
+               CHECK's case (allocation, dev AND release) and not a DCHECK's. */
+            CHECK(lxb_html_parse_fragment_chunk_begin(s->parser,
+                      lxb_html_interface_document(cn->owner_document), cn->local_name, cn->ns)
+                  == LXB_STATUS_OK,
+                  "the fragment parse could not be started");
             return JS_STEP_YIELD;
         }
         if (s->off < s->len) {
             /* ONE BYTE. lexbor's incoming-buffer machinery is what makes a token able to span two of these. */
-            lxb_html_parse_fragment_chunk_process(s->parser, (const lxb_char_t *)s->html + s->off, 1);
+            CHECK(lxb_html_parse_fragment_chunk_process(s->parser,
+                      (const lxb_char_t *)s->html + s->off, 1) == LXB_STATUS_OK,
+                  "the fragment parse failed on a byte of its markup");
             s->off++;
             return JS_STEP_YIELD;
         }
         s->frag = lxb_html_parse_fragment_chunk_end(s->parser);
         lxb_html_parser_destroy(s->parser);
         s->parser = NULL;
+        CHECK(s->frag != NULL, "the fragment parse produced no root element");
+        /* THE PARSE'S NODES BELONG TO THE REAL DOCUMENT, and everything after this line depends on it: the
+           placement moves them into that document's tree with no §4.5 adopt, and their tag ids and attribute
+           names are only meaningful against that document's hashes. It holds because §13.4's temporary
+           document is created against this one and lxb_dom_document_init INHERITS its arenas — see
+           frag_unforkable, where the same fact is what decides the shape of the copy a fork needs. */
+        DCHECK(s->frag->owner_document == lxb_dom_interface_node(s->context)->owner_document,
+               "a fragment parse produced nodes belonging to a document other than its context element's — the "
+               "placement below inserts them with no adopt, so their node document would be wrong for every "
+               "flow that reads it");
         /* The same parse boundary the document has: tree construction produces attributes in the NULL
            namespace, and lexbor stamps every one it creates with the ELEMENT's instead. Corrected here,
            before a single node of this fragment is moved into a tree anything can read — and ONCE. It was
@@ -734,7 +806,7 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
            this parse's private tree, which is the only moment at which removing from it is invisible to
            everything else — and the only moment at which a `<script>` the configuration removes has not yet
            been prepared by the insertion steps. */
-        if (s->sanitize && s->frag) {
+        if (s->sanitize) {
             sanitizer_walk_begin(ctx, &s->san, s->frag, s->san_config, s->safe != 0, SAN_CHILD);
             s->san_config = JS_UNDEFINED;   /* the walk owns it now */
             hdr->stage = SAN_CHILD;
@@ -749,6 +821,9 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
         lxb_dom_node_t *node = s->node, *next;
         if (!node) {
             dom_cow_destroy_private(s->frag, /*with_children*/ false);
+            /* THE CLAIM IS SPENT HERE, the way a delta entry's is — frag_release owns whatever `frag` still
+               names, so leaving the pointer behind after this free is the double free that ownership buys. */
+            s->frag = NULL;
             if (s->where == PLACE_REPLACE) dom_cow_remove_child(s->anchor);
             hdr->stage = FRAG_DONE;
             return 0;

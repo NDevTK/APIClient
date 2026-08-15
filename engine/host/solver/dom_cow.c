@@ -928,12 +928,21 @@ void dom_cow_destroy_private(lxb_dom_node_t *root, bool with_children) {
     DCHECK(with_children || root->first_child == NULL,
            "a private tree was destroyed with children still in it — those nodes are about to be freed under "
            "whatever took a reference to them");
-    (void)with_children;
     /* BEFORE the free, because after it the nodes are gone and the map would be left naming freed memory —
        which is the state a pool allocator turns into another node inheriting this one's wrapper. */
     if (g_cow_ctx)
         dom_forget_wrappers(g_cow_ctx, root);
-    lxb_dom_node_destroy(root);
+    /* AND `with_children` HAS TO MEAN SOMETHING. It was `(void)`'d and the free was lxb_dom_node_destroy, which
+       frees exactly ONE node — so a caller that passed true had every child leaked with its parent link naming
+       freed memory, while dom_forget_wrappers above had already walked the WHOLE subtree and dropped those
+       children out of the identity map, so a JS wrapper for one of them survived pointing at a node the map no
+       longer knew. Nothing had caught it because the only caller passing true destroys a childless element.
+       The argument was a claim about a capability that did not exist, which is the same defect as a comment
+       where a DCHECK belongs — the DCHECK above reads as the guard for a `true` path that then did not happen.
+       lxb_dom_node_destroy_deep is what a tree destroy is, and it is what the delta's own creation release
+       already uses for a subtree a flow built. */
+    if (with_children) lxb_dom_node_destroy_deep(root);
+    else               lxb_dom_node_destroy(root);
 }
 
 /* DESTROY ONE NODE OF a private tree — see dom_cow.h. `lxb_dom_node_destroy` detaches before it frees, and it

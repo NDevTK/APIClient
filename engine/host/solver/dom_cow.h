@@ -131,7 +131,9 @@ void dom_cow_set_prop_taint(JSContext *ctx, lxb_dom_element_t *el, const char *n
    holds it. The declared root is checked against every live removal entry, which is what tells them apart. */
 void dom_cow_take_private(lxb_dom_node_t *root, lxb_dom_node_t *node);   /* out, on its way to the real tree */
 void dom_cow_insert_private(lxb_dom_node_t *root, lxb_dom_node_t *parent, lxb_dom_node_t *child);  /* build it */
-void dom_cow_destroy_private(lxb_dom_node_t *root, bool with_children);  /* and drop it */
+/* and drop it — `with_children` false is an emptied root and asserts it; true DEEP-destroys, which is the
+   abandoned-parse case (a machine torn down mid-placement still holds everything it has not moved yet). */
+void dom_cow_destroy_private(lxb_dom_node_t *root, bool with_children);
 /* MOVE a node between two trees NEITHER of which is shared — the parse boundary's own operation. HTML
    §13.2.6.4.4 sets a `<template>`'s template contents to the shadow root it attaches, and a parse that filled
    the contents instead has to hand them over: the source is that parse's own product and the destination is a
