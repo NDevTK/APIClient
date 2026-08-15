@@ -53,26 +53,50 @@ static int    g_ready;
    something that was already true and fired on the first page. The producer is a MEMBER, and the path is how
    this says which one. UNDEFINED anywhere along it means the producer is absent; a member that EXISTS and
    answers null (`document.activeElement`) is present, so only undefined counts. */
+/* THE LAST SEGMENT IS ASKED WITH [[HasProperty]], NOT [[Get]], and that is the whole of the difference between
+   a probe and a call. This walked the path with JS_GetPropertyStr to its end and tested the VALUE, which is
+   wrong twice over. It RUNS AN ACCESSOR — the page's code in a C activation with no flow base, which the engine
+   aborts on by design — and `document.activeElement` became an accessor the moment HTML §6.6's focus model
+   landed, so a probe that only ever wanted a yes or no took the entire run down with it. And a value is the
+   wrong evidence anyway: a member whose getter legitimately answers `undefined` reads as ABSENT, so the check
+   would go on believing a step had nothing to do long after its producer existed. [[HasProperty]] is the
+   question being asked, and it invokes nothing.
+   INTERMEDIATE segments still need their value to be traversed, and every one on every path here is an
+   interface object or a `prototype` — both plain data properties. A path is written to keep that true
+   (`Document.prototype.activeElement`, not `document.activeElement`): the interface object is where the member
+   is DECLARED, which is also the more accurate question. Should an intermediate ever become an accessor, the
+   engine's own getter abort names the property it stopped on. */
 static void step_awaits(JSContext *ctx, const char *path, const char *what)
 {
     JSValue cur = JS_GetGlobalObject(ctx);
     const char *p = path;
-    bool present = true;
+    bool present = false;
 
-    while (present) {
+    for (;;) {
         const char *dot = strchr(p, '.');
         size_t n = dot ? (size_t)(dot - p) : strlen(p);
         char name[64];
-        JSValue next;
+        JSAtom atom;
+        int has;
 
         DCHECK(n > 0 && n < sizeof(name), "an update-the-rendering step named a producer path this cannot read");
+        if (!JS_IsObject(cur)) break;            /* the path died on the way; the producer is absent */
         memcpy(name, p, n);
         name[n] = 0;
-        next = JS_GetPropertyStr(ctx, cur, name);
-        JS_FreeValue(ctx, cur);
-        cur = next;
-        present = !JS_IsUndefined(cur);
-        if (!dot) break;
+
+        atom = JS_NewAtomLen(ctx, name, n);
+        has = JS_HasProperty(ctx, cur, atom);
+        CHECK(has >= 0, "an update-the-rendering producer probe threw — [[HasProperty]] over an engine global "
+                        "runs no page code and has nothing to throw with");
+        if (!has) { JS_FreeAtom(ctx, atom); break; }
+        if (!dot) { JS_FreeAtom(ctx, atom); present = true; break; }   /* the member exists: producer is built */
+
+        {
+            JSValue next = JS_GetProperty(ctx, cur, atom);
+            JS_FreeAtom(ctx, atom);
+            JS_FreeValue(ctx, cur);
+            cur = next;
+        }
         p = dot + 1;
     }
     JS_FreeValue(ctx, cur);
@@ -257,7 +281,7 @@ static void steps_11_to_13(JSContext *docctx)
                 "step 3, inside this step), stable-sort the pending animation events and dispatch each — this "
                 "build now has Animation, so step 11 must be written, and its internal checkpoint cannot be "
                 "one stage with anything around it");
-    step_awaits(docctx, "document.exitFullscreen",
+    step_awaits(docctx, "Document.prototype.exitFullscreen",
                 "update the rendering step 12 runs the FULLSCREEN STEPS, firing fullscreenchange/"
                 "fullscreenerror and resolving requestFullscreen()'s promise — this build now has fullscreen, "
                 "so step 12 must be written");
@@ -277,7 +301,7 @@ static void steps_16_to_18(JSContext *docctx)
                 "OBSERVER §3.4.1/§3.4.5), re-entering style and layout after every author callback, then "
                 "delivers the resize loop error (§3.4.6) for any skipped observation — this build now has "
                 "ResizeObserver, so step 16 must be written, and its loop cannot be one stage");
-    step_awaits(docctx, "document.activeElement",
+    step_awaits(docctx, "Document.prototype.activeElement",
                 "update the rendering step 17 runs the FOCUSING STEPS for doc's viewport when doc's focused "
                 "area is no longer focusable — the spec's own note is that this usually fires `blur` and "
                 "possibly `change` — this build now tracks a focused area, so step 17 must be written");

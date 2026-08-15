@@ -17,6 +17,9 @@ extension/lib/qjs/qjs.wasm
 engine/.work/llvm-mingw-extract/
 engine/.work/llvm-mingw.zip
 engine/.work/lxobj/
+# The per-source object cache `node engine/build.mjs` compiles into (one .o + .d per translation unit,
+# rebuilt whenever the source or any header it recorded is newer). Regenerable build output, not source.
+engine/.work/obj/
 # A gate's own output is not source: a corpus run writes its transcript beside the build
 # artifacts, and it belongs to the run rather than to the repository.
 engine/.work/*.log

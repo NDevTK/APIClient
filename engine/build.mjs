@@ -12,10 +12,10 @@
  * + link + boot). Design-correctness verification stays on the live Chrome
  * harness once the browser target is wired.
  */
-import { spawnSync } from "node:child_process";
-import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, statSync } from "node:fs";
+import { spawnSync, spawn } from "node:child_process";
+import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, statSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { cpus } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
@@ -114,7 +114,6 @@ function walkC(dir, out = []) {
   return out.sort();
 }
 
-const ABI = process.argv.includes("abi");          // build the production qjs_* entry instead of the smoke main()
 /* WHICH DOCUMENT THE SMOKE DRIVES. `min` selects test_forced.c's minimal clone/COW/verify fixture and its probe
    subset — the per-change MEMORY gate, seconds instead of minutes, and the one to pair with `sanitize` (that
    fixture exists precisely to avoid the full document's fork-tree blowup under a sanitizer).
@@ -124,7 +123,12 @@ const ABI = process.argv.includes("abi");          // build the production qjs_*
    the build can run is an excluded test, and an excluded test is a failure (CLAUDE.md, Testing). */
 const MIN = process.argv.includes("min");
 const SOLVER = (f) => join(HOST, "solver", f);     // the Time-Travel Solver (the novel half)
-const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
+/* THE TWO ENTRIES, NAMED — they are alternatives at the LINK and identical everywhere else, which is the whole
+   reason both can be verified for the price of one. test_forced.c owns main() and runs on load; main.c owns the
+   qjs_* ABI the bridge drives through ccall and must not run on load. */
+const ENTRY_SMOKE = join(HOST, "test_forced.c");
+const ENTRY_ABI   = join(HOST, "main.c");
+const SHARED_SOURCES = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
   .map((f) => join(QJS, f))
   .concat([
     /* EVERY BROWSER AND SOLVER SOURCE, WALKED — not a hand-picked list. The list that stood here named each
@@ -137,11 +141,12 @@ const sources = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
        ORDER IS STABLE (sorted), so a build is reproducible and a diff of this list is a diff of the tree. */
     ...walkC(join(HOST, "solver")),
     ...walkC(join(HOST, "browser")),
-    // THE ENTRY. `abi` builds the production qjs_* surface the extension bridge drives; the default builds
-    // test_forced.c's main() as the node smoke test. They are alternatives, never both: test_forced.c owns
-    // main() and runs on load, which a bridge-loaded module must not do.
-    join(HOST, ABI ? "main.c" : "test_forced.c"),
   ]);
+/* WHAT THE PROGRAM IS — BOTH entries, because both are compiled and both are linked. This used to be whichever
+   single entry the `abi` argument selected, and that argument is gone: it chose which of the two programs a run
+   produced, and a run now produces both, so nothing is left for it to select. check_recursion.sh shells in here
+   for this list, and an answer naming one entry excluded the other from the recursion check too. */
+const sources = SHARED_SOURCES.concat([ENTRY_SMOKE, ENTRY_ABI]);
 
 /* WHAT THE PROGRAM IS, asked rather than copied. check_recursion.sh needs exactly this list — its header says
    "the unit list mirrors engine/build.mjs" — and it was a second copy that had drifted to a THIRD of it: every
@@ -205,7 +210,8 @@ if (NATIVE) {
     ...quiet,
     "-D_GNU_SOURCE", "-DENABLE_DUMPS", '-DCONFIG_VERSION="native"', "-DAPICLIENT_DEV=1",
     "-I" + QJS, "-I" + HOST, "-I" + join(HOST, "browser"), "-I" + join(WORK, "lexbor-src", "source"),
-    ...sources, LEXBOR_NATIVE, "-o", bin, "-lm", "-lpthread",
+    /* THE SMOKE ENTRY, always: this target BUILDS AND RUNS a fixture, and main.c has no main() to run. */
+    ...SHARED_SOURCES, ENTRY_SMOKE, LEXBOR_NATIVE, "-o", bin, "-lm", "-lpthread",
   ], { stdio: "inherit" });
   if (cc.status !== 0) { console.error("[build] native build FAILED rc=" + cc.status); process.exit(cc.status || 1); }
   console.log("[build] OK -> " + bin);
@@ -228,9 +234,17 @@ const QJS_ABI = ["qjs_init", "qjs_bundle_id", "qjs_begin", "qjs_step", "qjs_resu
                  "qjs_request_park", "qjs_emit_partial",
                  "qjs_host_requests", "qjs_host_answer", "qjs_host_notices", "qjs_route"];
 
-const args = [
-  ...sources,
-  LEXBOR_LIB,                 // link the cached Lexbor DOM archive
+/* COMPILE FLAGS AND LINK FLAGS ARE SEPARATED, and that separation is what lets both entries be verified.
+   They used to be one list handed to one emcc invocation that compiled and linked together, which forced two
+   things: every build recompiled all 130-odd sources from scratch, and only ONE entry could be produced per
+   run. The consequence was that the shipped ABI entry — the one the extension actually loads — was never
+   LINKED by any default gate. It was compiled to a throwaway object, which catches a missing #include and a
+   bad declaration and catches NOTHING about an undefined symbol; a qjs_* body calling a function deleted from
+   the tree passed that check and would have failed only in the extension. §Testing's rule is that the shipped
+   entry is the one that rots, and half a check is how it rots quietly.
+   The two programs differ ONLY in which entry object enters the link, so compiling once into shared objects
+   and linking twice costs one extra link and closes that hole completely. */
+const CFLAGS = [
   "-I", QJS,
   "-I", HOST, "-I", join(HOST, "browser"),   // include by FULL path from the host root: a browser component is "core/dom/dom_element.h", a solver component "solver/concolic.h" — the layer is always explicit (no bare-name -I solver shortcut, so a cross-layer include names its layer)
   "-I", LEXBOR_INC,           // <lexbor/html/html.h> etc for main.c's DOM host-edges
@@ -246,6 +260,10 @@ const args = [
   // aborts LOUD at its origin; a `release` arg compiles them out (the release exemption — the user is not
   // crashed on an unsupportable state). CHECK (OOM/security) stays fatal in both.
   "-DAPICLIENT_DEV=" + (process.argv.includes("release") ? "0" : "1"),
+];
+
+const LDFLAGS_COMMON = [
+  LEXBOR_LIB,                 // link the cached Lexbor DOM archive
   // Opt-in `assert` build: emscripten ASSERTIONS=2 turns a bare terse `Aborted()` into an INFORMATIVE crash
   // (the failing C assert + file:line — e.g. a refcount/gc_obj_list leak), the offensive-programming ideal of a
   // LOUD *and* diagnosable dev failure. Off by default so normal dev builds stay fast; enable when debugging.
@@ -261,79 +279,119 @@ const args = [
      was a mode that had never run. */
   "-sALLOW_MEMORY_GROWTH=1", "-sMAXIMUM_MEMORY=4294967296",
   "-sSTACK_SIZE=8388608",
-  // The smoke entry RUNS on load and exits with the @H/@S pass code; the ABI entry is driven by the bridge
-  // through ccall, so its runtime must stay alive across qjs_step re-entries and be importable as an ES module.
-  ...(ABI
-      ? ["-sEXPORTED_FUNCTIONS=" + JSON.stringify(QJS_ABI.map((f) => "_" + f).concat(["_malloc", "_free"])),
-         "-sEXPORTED_RUNTIME_METHODS=" + JSON.stringify(["ccall", "lengthBytesUTF8", "stringToUTF8"]),
-         "-sMODULARIZE=1", "-sEXPORT_ES6=1", "-sEXPORT_NAME=createQJS", "-sINVOKE_RUN=0"]
-      : ["-sEXIT_RUNTIME=1"]),
-  /* THE ABI ARTIFACT STAGES WHERE THE EXTENSION LOADS IT: bridge.js does import("./lib/qjs/qjs.mjs"), so that
-     is the output path, not engine/host/out. It also keeps the two targets from colliding — emcc derives the
-     .wasm name from the -o basename, so both emitting into out/qjs.* shared one qjs.wasm and overwrote each
-     other, leaving a loader pair that was valid only until the next smoke build. Two artifacts, two homes. */
-  "-o", ABI ? join(EXT_QJS, "qjs.mjs") : join(OUT, "qjs.js"),
+];
+// The smoke entry RUNS on load and exits with the @H/@S pass code; the ABI entry is driven by the bridge
+// through ccall, so its runtime must stay alive across qjs_step re-entries and be importable as an ES module.
+const LDFLAGS_SMOKE = ["-sEXIT_RUNTIME=1"];
+const LDFLAGS_ABI = [
+  "-sEXPORTED_FUNCTIONS=" + JSON.stringify(QJS_ABI.map((f) => "_" + f).concat(["_malloc", "_free"])),
+  "-sEXPORTED_RUNTIME_METHODS=" + JSON.stringify(["ccall", "lengthBytesUTF8", "stringToUTF8"]),
+  "-sMODULARIZE=1", "-sEXPORT_ES6=1", "-sEXPORT_NAME=createQJS", "-sINVOKE_RUN=0",
 ];
 
-console.log("[build] emcc " + sources.length + " sources -> engine/host/out/qjs." + (ABI ? "mjs (production ABI)" : "js (new-world smoke test)"));
-const r = spawnSync(EMCC, args, { stdio: "inherit", shell: true, cwd: QJS });
-if (r.status !== 0) { console.error("[build] FAILED rc=" + r.status); process.exit(r.status || 1); }
-console.log("[build] OK -> " + resolve(join(OUT, "qjs.js")));
+/* ── OBJECTS, COMPILED ONCE AND CACHED ────────────────────────────────────────────────────────────────────
+   An object is rebuilt when it is missing, when its source is newer, or when any HEADER it included is newer —
+   the last of which is the one a hand-rolled cache always gets wrong, so it is not hand-rolled: clang emits the
+   real dependency list with -MMD and this reads it back. A cache that misses a header edit is worse than no
+   cache, because it reports a stale binary as a fresh one. */
+const OBJDIR = join(WORK, "obj");
+mkdirSync(OBJDIR, { recursive: true });
+const objPath = (src) => join(OBJDIR, resolve(src).replace(/[\\/:]/g, "_") + ".o");
+
+function objIsStale(src, obj) {
+  if (!existsSync(obj)) return true;
+  const objTime = statSync(obj).mtimeMs;
+  if (statSync(src).mtimeMs > objTime) return true;
+  const dep = obj.replace(/\.o$/, ".d");
+  if (!existsSync(dep)) return true;   /* no recorded deps is not "no deps" — it is no information */
+  for (const f of readFileSync(dep, "utf8")
+                    .replace(/\\\r?\n/g, " ").split(/\s+/).slice(1).filter(Boolean)) {
+    if (!existsSync(f)) return true;   /* a header that vanished changes the compile */
+    if (statSync(f).mtimeMs > objTime) return true;
+  }
+  return false;
+}
+
+/* Both entries are compiled every time, because both are LINKED every time. */
+const TO_COMPILE = SHARED_SOURCES.concat([ENTRY_SMOKE, ENTRY_ABI]);
+const stale = TO_COMPILE.filter((s) => objIsStale(s, objPath(s)));
+console.log("[build] " + TO_COMPILE.length + " sources, " + stale.length + " to compile" +
+            (stale.length < TO_COMPILE.length ? " (rest cached)" : ""));
+
+if (stale.length) {
+  /* IN PARALLEL, bounded by the cores actually present. A cold build is ~130 translation units and the machine
+     is otherwise idle while each one runs. */
+  const JOBS = Math.max(1, cpus().length - 1);
+  let next = 0, failed = 0, running = 0;
+  await new Promise((done) => {
+    const pump = () => {
+      while (running < JOBS && next < stale.length) {
+        const src = stale[next++], obj = objPath(src);
+        running++;
+        const p = spawn(EMCC, [...CFLAGS, "-MMD", "-MF", obj.replace(/\.o$/, ".d"), "-c", src, "-o", obj],
+                        { stdio: "inherit", shell: true, cwd: QJS });
+        p.on("exit", (code) => {
+          if (code !== 0) failed++;
+          running--;
+          if (next >= stale.length && running === 0) done();
+          else pump();
+        });
+      }
+      if (next >= stale.length && running === 0) done();
+    };
+    pump();
+  });
+  if (failed) { console.error("[build] FAILED — " + failed + " source(s) did not compile"); process.exit(1); }
+}
+
+const OBJS_SHARED = SHARED_SOURCES.map(objPath);
+
+/* ── LINK BOTH PROGRAMS ───────────────────────────────────────────────────────────────────────────────────
+   THE ABI ARTIFACT STAGES WHERE THE EXTENSION LOADS IT: bridge.js does import("./lib/qjs/qjs.mjs"), so that is
+   the output path, not engine/host/out. Two artifacts, two homes — emcc derives the .wasm name from the -o
+   basename, so both emitting into out/qjs.* would share one qjs.wasm and overwrite each other. */
+function link(what, entryObj, ldflags, out) {
+  const l = spawnSync(EMCC, [...OBJS_SHARED, entryObj, ...LDFLAGS_COMMON, ...ldflags, "-o", out],
+                      { stdio: "inherit", shell: true, cwd: QJS });
+  if (l.status !== 0) { console.error("[build] " + what + " LINK FAILED rc=" + l.status); process.exit(l.status || 1); }
+  console.log("[build] OK -> " + out);
+}
+link("smoke", objPath(ENTRY_SMOKE), LDFLAGS_SMOKE, join(OUT, "qjs.js"));
+link("production ABI", objPath(ENTRY_ABI), LDFLAGS_ABI, join(EXT_QJS, "qjs.mjs"));
 
 // Milestone smoke test: run test_forced.c's main (the @H merge + @S sink fire-verification on a fixture doc) —
 // the design-correctness signal until the live-Chrome harness is re-wired to a rebuilt production ABI entry.
 // (The old ES6-module + qjs.wasm staging into extension/lib/qjs served the deleted qjs_* entry; it returns when
 // that entry is rebuilt.)
-/* THE ENTRY THIS BUILD DID NOT LINK IS STILL COMPILED, because otherwise it is not in the gate at all.
-   test_forced.c and main.c are alternatives — each owns main()/the ABI surface — so a plain `node
-   engine/build.mjs` never touched main.c, and main.c stopped compiling: a missing `#include` for
-   transform_stream and a `(void)unused;` naming an argument that does not exist, four errors, across many
-   commits in which every gate was green. That is the same defect as a corpus file the collector does not
-   collect (CLAUDE.md, Testing): the total LOOKS complete. Compiling the other entry as an object is a few
-   seconds and it is the whole difference between the shipped entry being verified and merely existing. */
+/* BOTH PROGRAMS ARE RUN, in the build that produced them. A target that is only built is the excluded test one
+   layer down: the whole point of each is the stream it prints and the report it ends with.
+   The compile-only check that used to stand here — the unlinked entry compiled to a throwaway object — is
+   DELETED rather than kept beside this. It existed only because one invocation could produce one program, and
+   it answered a strictly weaker question than the link above now answers: it caught a missing #include and a
+   bad declaration, and nothing at all about an undefined symbol. Leaving it would be a second, worse check of
+   the same thing (CLAUDE.md: a superseded system is deleted in the same diff, never kept as a fallback). */
+
+/* The trailing arguments reach main()'s argv — the channel getenv could not be, since emscripten's ENV never
+   merges the launching process's environment. */
 {
-  const other = join(HOST, ABI ? "test_forced.c" : "main.c");
-  /* THE SAME FLAGS THE LINK USED, taken FROM `args` rather than restated — a second copy of the include paths
-     and the -W list is how a check ends up compiling something the real build does not. The -I flags are
-     two-token pairs there, so they are re-joined here. */
-  const flags = [];
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "-I") { flags.push("-I" + args[++i]); continue; }
-    if (typeof args[i] === "string" && (args[i].startsWith("-D") || args[i].startsWith("-W") || args[i] === "-O1"))
-      flags.push(args[i]);
-  }
-  /* The object goes to a TEMP path, not into the tree: it is a yes/no answer, not an artifact, and
-     engine/.work is checked in. */
-  const c = spawnSync(EMCC, [...flags, "-c", other, "-o", join(tmpdir(), "apiclient-entry-check.o")],
-                      { stdio: "inherit", shell: true, cwd: QJS });
-  if (c.status !== 0) {
-    console.error("[build] the OTHER entry (" + other + ") does not compile — it is part of this program even " +
-                  "when it is not the one being linked");
-    process.exit(c.status || 1);
-  }
-  console.log("[build] OK -> " + other + " compiles too");
+  const t = spawnSync(process.execPath, [join(OUT, "qjs.js"), ...(MIN ? ["--min"] : [])],
+                      { stdio: "inherit", shell: false });
+  if (t.status !== 0) { console.error("[build] smoke test FAILED rc=" + (t.status ?? "signal")); process.exit(t.status || 1); }
+  console.log("[build] smoke test PASS (new-world @H + @S" + (MIN ? ", minimal document" : "") + ")");
 }
 
-if (ABI) {
-  console.log("[build] OK -> " + resolve(join(EXT_QJS, "qjs.mjs")));
-  /* AND IT IS RUN, THROUGH THE SURFACE THE BRIDGE ACTUALLY CALLS. "The ABI entry has no main()" was true and was
-     not a reason: the entry is DRIVEN, so its smoke test is a driver, and engine/route.mjs is one — it boots the
-     module the line above just wrote, provisions a SECOND instance from the create notice, and routes a post
-     between them. That is the shipped qjs_init/qjs_begin/qjs_step/qjs_pending/qjs_host_notices/qjs_route path,
-     end to end, in the build that produces it. §Testing's rule is that the shipped entry is the one that rots;
-     compiling it (above) stops half of that, and running it stops the other half. It is also the only thing in
-     the tree that provisions two instances at all, which §SECURITY makes the precondition for believing any
-     cross-instance mechanism has ever run. */
+/* THE SHIPPED ENTRY, DRIVEN THROUGH THE SURFACE THE BRIDGE ACTUALLY CALLS. "The ABI entry has no main()" was
+   true and was not a reason: the entry is DRIVEN, so its smoke test is a driver, and engine/route.mjs is one —
+   it boots the module just linked, provisions a SECOND instance from the create notice, and routes a post
+   between them. That is the shipped qjs_init/qjs_begin/qjs_step/qjs_pending/qjs_host_notices/qjs_route path,
+   end to end. It is also the only thing in the tree that provisions two instances at all, which §SECURITY makes
+   the precondition for believing any cross-instance mechanism has ever run — and it used to run only when
+   somebody remembered to pass `abi`, which is to say almost never. */
+{
   const t = spawnSync(process.execPath, [join(ENGINE, "route.mjs")], { stdio: "inherit", shell: false });
   if (t.status !== 0) {
     console.error("[build] the two-instance ABI drive FAILED rc=" + (t.status ?? "signal"));
     process.exit(t.status || 1);
   }
-} else {
-  /* The trailing arguments reach main()'s argv — the channel getenv could not be, since emscripten's ENV never
-     merges the launching process's environment. */
-  const t = spawnSync(process.execPath, [join(OUT, "qjs.js"), ...(MIN ? ["--min"] : [])],
-                      { stdio: "inherit", shell: false });
-  if (t.status !== 0) { console.error("[build] smoke test FAILED rc=" + (t.status ?? "signal")); process.exit(t.status || 1); }
-  console.log("[build] smoke test PASS (new-world @H + @S" + (MIN ? ", minimal document" : "") + ")");
+  console.log("[build] two-instance ABI drive PASS");
 }
