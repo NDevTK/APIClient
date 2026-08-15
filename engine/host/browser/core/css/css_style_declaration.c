@@ -28,7 +28,6 @@
 #include <stdbool.h>
 
 #include <lexbor/css/css.h>
-#include <lexbor/selectors/selectors.h>
 
 #include "check.h"
 #include "quickjs.h"
@@ -37,6 +36,7 @@
 #include "core/realm.h"
 #include "core/dom/node.h"
 #include "core/dom/element.h"
+#include "core/dom/selector_match.h"
 #include "core/css/css_style_declaration.h"
 #include "solver/dom_cow.h"
 
@@ -117,7 +117,6 @@ static lxb_dom_element_t *cssd_element(JSContext *ctx, JSValueConst v, int *pmod
 
 /* ---- the parser, and the declaration list of a chunk of CSS text ---------------------------------------- */
 static lxb_css_parser_t *g_parser;
-static lxb_selectors_t  *g_selectors;
 
 /* Parse `text` as a declaration BLOCK (the contents of a style="" attribute). The returned list owns a memory
    arena that the caller destroys — one arena per parse, so nothing outlives the read that asked for it, which
@@ -199,19 +198,10 @@ static char *cssd_inline_value(lxb_dom_element_t *el, const char *name, bool *pi
    is parsed, every style rule's selector is matched against THIS element with Lexbor's own matcher, and the
    winner is the highest specificity, later document order breaking a tie — which is the cascade. It is redone
    per read on purpose: a cache would be shared state the flow machinery does not swap, so a `<style>` one arm
-   injected would decide another arm's computed values. */
-typedef struct { bool matched; lxb_css_selector_specificity_t spec; } CssMatch;
-
-static lxb_status_t cssd_match_cb(lxb_dom_node_t *node, lxb_css_selector_specificity_t spec, void *ctx)
-{
-    CssMatch *m = ctx;
-    (void)node;
-    /* A selector LIST matches through whichever of its selectors matched, and the cascade uses the highest —
-       `#id, div { … }` on a div with that id contributes the id's weight, not the tag's. */
-    if (!m->matched || spec > m->spec) m->spec = spec;
-    m->matched = true;
-    return LXB_STATUS_OK;
-}
+   injected would decide another arm's computed values.
+   THE MATCH ITSELF IS core/dom/selector_match.c's, which is where the agent's one lxb_selectors_t lives. This
+   file held a second one, so "does this element match this selector" had two implementations that could
+   disagree — and the arena is scratch either way: the match cleans its own pools before it returns. */
 
 static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
 {
@@ -243,11 +233,10 @@ static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
                 lxb_css_rule_t *r;
                 for (r = lxb_css_rule_list(sst->root)->first; r; r = r->next) {
                     lxb_css_rule_style_t *st = lxb_css_rule_style(r);
-                    CssMatch m = { false, 0 };
+                    lxb_css_selector_specificity_t spec = 0;
                     lxb_css_rule_t *dr;
                     if (r->type != LXB_CSS_RULE_STYLE || !st->selector || !st->declarations) continue;
-                    lxb_selectors_match_node(g_selectors, self, st->selector, cssd_match_cb, &m);
-                    if (!m.matched) continue;
+                    if (!selector_match_node(self, st->selector, &spec)) continue;
                     for (dr = st->declarations->first; dr; dr = dr->next) {
                         lxb_css_rule_declaration_t *d = lxb_css_rule_declaration(dr);
                         bool wins;
@@ -256,15 +245,15 @@ static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
                            document ORDER. Order alone is what this compared at first, which is wrong in the
                            most ordinary way there is — `#main { display:block }` written before
                            `div { display:none }` would have lost, and every page puts its general rules last.
-                           Lexbor reports the specificity through the match callback; throwing it away and
+                           selector_match_node reports the specificity that matched; throwing it away and
                            calling document order "the cascade" was skipping the subproblem. */
                         wins = !have
                             || (d->important && !best_important)
-                            || (d->important == best_important && m.spec >= best_spec);
+                            || (d->important == best_important && spec >= best_spec);
                         if (!wins) continue;
                         free(out);
                         out = cssd_decl_value(d);
-                        best_spec = m.spec;
+                        best_spec = spec;
                         best_important = d->important;
                         have = true;
                     }
@@ -665,9 +654,6 @@ void cssom_init(JSContext *ctx)
     g_parser = lxb_css_parser_create();
     CHECK(g_parser != NULL && lxb_css_parser_init(g_parser, NULL) == LXB_STATUS_OK,
           "the CSS parser could not be created");
-    g_selectors = lxb_selectors_create();
-    CHECK(g_selectors != NULL && lxb_selectors_init(g_selectors) == LXB_STATUS_OK,
-          "the CSS selector matcher could not be created");
     g_key = JS_NewSymbol(ctx, "cssStyleDeclaration", false);
     CHECK(!JS_IsException(g_key), "the CSSStyleDeclaration key allocation failed");
     {
@@ -774,7 +760,6 @@ void cssom_free(JSContext *ctx)
     if (!g_ready) return;
     JS_FreeValue(ctx, g_key);   /* the prototypes are the REALMS' — released with their contexts */
     g_key = JS_UNDEFINED;
-    if (g_selectors) { lxb_selectors_destroy(g_selectors, true); g_selectors = NULL; }
     if (g_parser) { lxb_css_parser_destroy(g_parser, true); g_parser = NULL; }
     g_ready = 0;
 }

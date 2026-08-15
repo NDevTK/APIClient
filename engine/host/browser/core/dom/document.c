@@ -36,6 +36,7 @@
 #include "core/dom/mutation_observer.h"
 #include "core/dom/attr.h"
 #include "core/dom/attr_list.h"
+#include "core/dom/selector_match.h"
 #include "core/css/css_style_declaration.h"
 #include "core/dom/document.h"
 #include "core/dom/document_metadata.h"
@@ -198,20 +199,37 @@ static Document *doc_receiver(JSContext *ctx, JSValueConst this_val)
  * of these, and what the four members differ in is WHERE the cursor goes and WHAT is done with a match —
  * declared as a magic, not as four bodies.
  *
- * lxb_selectors_match_node is what makes the walk equivalent to lxb_selectors_find rather than an approximation
- * of it: a combinator is resolved by walking UP from the candidate, through the whole document, so
- * §4.2.6's scoped matching still holds — `el.querySelectorAll('div p')` finds a <p> under `el` whose <div>
+ * core/dom/selector_match.c is what makes the walk equivalent to lxb_selectors_find rather than an
+ * approximation of it: a combinator is resolved by walking UP from the candidate, through the whole document,
+ * so §4.2.6's scoped matching still holds — `el.querySelectorAll('div p')` finds a <p> under `el` whose <div>
  * ancestor is OUTSIDE `el`, because the selector is evaluated against the document and only the RESULTS are
  * filtered to the subtree. That is asserted rather than assumed; it is the case an implementation that walks a
- * subtree in isolation gets wrong. */
+ * subtree in isolation gets wrong.
+ *
+ * AND WHAT THIS MACHINE HOLDS ACROSS A REST POINT IS THE COMPILED SELECTOR AND A CURSOR — nothing else. It
+ * held a live lxb_css_parser_t and an lxb_selectors_t as well, and DECLARED ITSELF UNFORKABLE because of them,
+ * with a reason that was an argument about the PAGE: the walk runs no bytecode, so no branch can fork it. That
+ * is not a property of the machine, and the scheduler's own reasons to take a snapshot of a parked flow — a
+ * higher-value sibling, RAM pressure, a cold-tier eviction, a cross-session resume — never ask what the page
+ * is doing. Neither object was state: the parser had finished compiling before the first rest, and the
+ * matching arena cleans itself at the end of every match. Both moved to the component that owns them, the
+ * compiled list is SHARED by reference between forked arms, and the declaration is gone. */
 enum { QS_FIRST = 0, QS_ALL, QS_MATCHES, QS_CLOSEST };
 
 /* WHERE THIS MACHINE RESTS, AS THE STANDARD NUMBERS IT. All four members are the same two steps: parse the
  * selector, then match it — §1.3 states them for querySelector and querySelectorAll (through scope-match a
  * selectors string) and §4.9 restates them for matches and closest, with the same wording and the same order.
- * The parse is ONE stage because no page code can run between "parse a selector" and "if it is failure, throw"
- * — nothing observes the intermediate — and the label says the range. The match is its own stage because it is
- * a walk of the page's tree, and it rests once per node so a sibling flow can overtake it there. */
+ * The match is a walk of the page's tree, so it is a stage per NODE — it rests at every one, and the scheduler
+ * is asked there rather than at the end of the walk.
+ * THE PARSE IS ONE STAGE BECAUSE LEXBOR'S SELECTOR PARSER HAS NO SMALLER ENTRY, and that is a stretch of
+ * engine execution proportional to the SELECTOR'S LENGTH, which is the page's to choose. It is not defended by
+ * "no page code runs between steps 1 and 2" — that argument is the one this file's own machine had to unlearn
+ * (see the header above), and it would justify a span of any size. Splitting it means feeding the CSS
+ * tokenizer through lxb_css_syntax_tokenizer_next_chunk and holding it across the rests — which puts a live
+ * lexbor tokenizer back into this machine's state and makes it unforkable again. So the two are ONE
+ * subproblem, and it is the one frag_unforkable names: a lexbor tokenizer that can be COPIED. Until that
+ * exists, a parkable compile and a forkable walk cannot both be had, and this machine keeps the forkable
+ * walk. */
 #define QS_STAGES(X) \
     X(QS_PARSE, "DOM §1.3 steps 1-2 / §4.9 steps 1-2 (parse a selector; SyntaxError if it is failure)") \
     X(QS_MATCH, "DOM §1.3 step 3 (match a selector against a tree) / §4.9 matches step 3 / closest steps 3-5, " \
@@ -220,66 +238,21 @@ enum { IDL_STEP_STAGE_BASE(QS_STAGES) QS_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const QS_STEPS[] = { QS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
-    lxb_css_parser_t       *parser;
-    lxb_selectors_t        *selectors;
-    lxb_css_selector_list_t *list;
+    SelectorList *compiled;   /* SELECTORS §5's parsed selector, SHARED by reference with every forked arm */
     lxb_dom_node_t *root, *cursor;
     JSValue arr;      /* QS_ALL's collected matches (owned) */
     uint32_t n;
 } QsState;
 
-static lxb_status_t qs_hit_cb(lxb_dom_node_t *node, lxb_css_selector_specificity_t spec, void *vctx)
-{
-    (void)node; (void)spec;
-    *(bool *)vctx = true;
-    return LXB_STATUS_OK;
-}
-
+/* EVERYTHING THIS MACHINE OWNS, and the whole of it — which is what makes it forkable. The compiled selector
+   is refcounted and read-only, so the sibling arm takes a reference rather than a copy: nothing writes it
+   after selector_list_compile built it, and the interior pointers a match takes into it therefore stay valid
+   in both arms. The cursor and the root are borrowed tree pointers the COW delta already isolates. */
 static void qs_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     QsState *s = st;
     v->val(ctx, &s->arr);
-}
-
-/* WHAT LETS THE COMPILED SELECTOR LIST BE HELD AS A BARE POINTER — there is no such thing as half a selector
-   context to hand a second flow, so a fork mid-walk is refused rather than served.
-   IT IS ASKED AT THE FORK, and it used to be a DCHECK inside qs_visit instead. That was correct while `visit`
-   had one consumer and became a false report the moment it had three: the teardown drives the same declaration
-   to release what the state owns, and the assert that fires there is an ordinary abandoned querySelector being
-   reported as a fork. A machine must never learn WHICH consumer is visiting it — this is the field that lets
-   it answer the fork's question without asking that. */
-static const char *qs_unforkable(const void *st)
-{
-    return ((const QsState *)st)->parser
-         ? "a selector walk cannot be forked mid-walk — it holds a live lexbor parser, a selectors context and "
-           "a compiled selector list, and a tokenizer standing at a position has no halves to give two arms"
-         : NULL;
-}
-
-/* THE LEXBOR HALF, WHICH IS ALL A `release` MAY OWN. The collected-matches array is a REFERENCE and is named
-   by qs_visit, so the teardown discharges it through that one declaration — it used to be freed here as well,
-   which is how the omission that leaked every abandoned querySelectorAll's element wrappers was repaired the
-   first time, and repairing a missing entry in a second list leaves the next omission just as invisible.
-   These three are not references and no declaration names them: a compiled selector list and the two contexts
-   behind it, which a flow dropped mid-walk would otherwise leak. */
-static void qs_release(JSContext *ctx, void *st)
-{
-    QsState *s = st;
-    (void)ctx;
-    if (s->list) lxb_css_selector_list_destroy_memory(s->list);
-    if (s->selectors) lxb_selectors_destroy(s->selectors, true);
-    if (s->parser) lxb_css_parser_destroy(s->parser, true);
-    s->list = NULL; s->selectors = NULL; s->parser = NULL;
-}
-
-/* Does the compiled selector match this node? The one place lexbor is asked, so the four members cannot
-   disagree about what a selector means. */
-static bool qs_matches(QsState *s, lxb_dom_node_t *node)
-{
-    bool hit = false;
-    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
-    lxb_selectors_match_node(s->selectors, node, s->list, qs_hit_cb, &hit);
-    return hit;
+    v->shared(ctx, (void **)&s->compiled, s->compiled ? &s->compiled->refs : NULL, selector_list_destroy);
 }
 
 static int js_document_qs(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -302,16 +275,11 @@ static int js_document_qs(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         }
         sel = concolic_name_cstr(ctx, argv[0]);   /* the declaration passes UNKNOWN input through as itself, so an unknown name denotes its SHAPE */
         if (!sel) return JS_STEP_ABRUPT;
-        s->parser = lxb_css_parser_create();
-        s->selectors = lxb_selectors_create();
-        if (!s->parser || lxb_css_parser_init(s->parser, NULL) != LXB_STATUS_OK ||
-            !s->selectors || lxb_selectors_init(s->selectors) != LXB_STATUS_OK) {
-            JS_FreeCString(ctx, sel);
-            CHECK_FAIL("the CSS selector engine could not be initialised");
-        }
-        s->list = lxb_css_selectors_parse(s->parser, (const lxb_char_t *)sel, strlen(sel));
+        /* SELECTORS §5, AND IT IS OVER BEFORE THE FIRST REST POINT. The parser that compiles this lives and
+           dies inside selector_list_compile; what comes back is the read-only list the walk below reads. */
+        s->compiled = selector_list_compile(sel);
         JS_FreeCString(ctx, sel);
-        if (!s->list) {
+        if (!s->compiled) {
             /* §4.2.6 AND §4.9: an unparseable selector is a SyntaxError from ALL FOUR members. matches and
                closest already threw; querySelector and querySelectorAll answered null and an empty list, so a
                page with a typo in a selector got "no such element" instead of being told, and the branch behind
@@ -347,7 +315,7 @@ static int js_document_qs(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         return JS_STEP_DONE;
     }
 
-    if (qs_matches(s, s->cursor)) {
+    if (selector_match_node(s->cursor, s->compiled->list, NULL)) {
         switch (magic) {
         case QS_ALL:
             JS_SetPropertyUint32(ctx, s->arr, s->n++, node_wrap(ctx, s->cursor));
@@ -370,9 +338,12 @@ static int js_document_qs(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     return JS_STEP_YIELD;
 }
 
-static const IdlStepDecl QS_STEP = { js_document_qs, sizeof(QsState), qs_visit, qs_release,
+/* NO `release`: everything this machine owns is a REFERENCE qs_visit names, so the teardown discharges the one
+   declaration. The lexbor half a release used to own is gone — the parser died in the compile and the matching
+   arena is the agent's — which is what left this machine with nothing outside its ownership list. */
+static const IdlStepDecl QS_STEP = { js_document_qs, sizeof(QsState), qs_visit, NULL,
                                      "DOM §1.3 scope-match a selectors string / §4.9 Element.matches, closest",
-                                     QS_STEPS, .unforkable = qs_unforkable };
+                                     QS_STEPS };
 
 const IdlStepDecl *document_qs_decl(void) { return &QS_STEP; }
 

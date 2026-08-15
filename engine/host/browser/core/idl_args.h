@@ -370,8 +370,10 @@ typedef struct {
     /* WHY THIS MEMBER'S STATE MUST NOT BE FORKED RIGHT NOW — the reason, or NULL when it may be. Forwarded onto
        the pool's definition, so the fork asks the MEMBER through the same one door it asks everything else; see
        JSTrampStepDef.unforkable for the capability this restores and for why the question belongs at the fork
-       rather than inside the member's `visit`. NULL for a member that may always be forked, which is nearly all
-       of them: the two that declare one hold a live lexbor parser, which has no halves. */
+       rather than inside the member's `visit`. NULL for a member that may always be forked, which is every one
+       of them but the FRAGMENT PARSE: between two of its one-byte steps it holds a live lxb_html_parser_t, and
+       lexbor exposes no copy of one. That declaration names the capability to build, and when it is built this
+       field goes with it. */
     const char *(*unforkable)(const void *state);
 } IdlStepDecl;
 /* DECLARE WHERE THE OPTIONAL ARGUMENTS START. §3.6.2 makes an `undefined` passed for an optional argument with

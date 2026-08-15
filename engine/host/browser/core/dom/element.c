@@ -46,6 +46,7 @@
 #include "core/html/sanitizer.h"
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
+#include "core/dom/selector_match.h"
 #include "core/dom/attr.h"
 #include "core/dom/document_fragment.h"
 #include "core/idl_indexed.h"
@@ -478,9 +479,13 @@ enum { PLACE_CHILDREN = 0, PLACE_BEFORE, PLACE_AFTER, PLACE_FIRST_CHILD, PLACE_R
  * parse is independent by construction. The old `in_parse` re-entry DCHECK is gone with it: it asserted that a
  * parse never overlaps, which is now exactly what this machine is built to allow.
  *
- * IT STILL RUNS NO PAGE CODE. That is what keeps a suspended parse safe to leave lying around: the tree builder
- * cannot reach a script — under §13.2.4.5's Inert mode a parsed one never runs at all — so nothing can observe
- * a half-built fragment, and nothing can fork this flow while the machine is on its chain. */
+ * AND IT IS THE ONE MACHINE LEFT THAT CANNOT BE FORKED, which is a fact about the ENGINE and not about the
+ * page. The reason written here used to be that the tree builder runs no script, so no branch can fork the
+ * flow while this machine is on its chain — an argument about what the page happens to be doing, and the
+ * scheduler's own reasons to snapshot a parked flow (a higher-value sibling, RAM pressure, a cold-tier
+ * eviction, a cross-session resume) never ask that. The real reason is one sentence: between two FRAG_FEED
+ * steps this machine holds an lxb_html_parser_t, and lexbor exposes no way to copy one. What must be built is
+ * named at frag_unforkable, which is where the fork aborts. */
 /* WHERE THIS MACHINE RESTS. The three members that parse markup are the same shape — a few leading steps of
    their own, then "let fragment be the result of invoking the fragment parsing algorithm steps", then a
    placement — so the stages after the entry belong to those two operations and each member's declaration names
@@ -561,8 +566,11 @@ static void frag_visit(JSContext *ctx, void *st, JSStepVisit *v)
     sanitizer_walk_visit(ctx, &s->san, v);
 }
 
-/* THERE IS NO SUCH THING AS HALF A TOKENIZER — a lexbor html parser holds an open-element stack, an insertion
-   mode and a position in the source, and two arms handed one of them corrupt both.
+/* THE ONE CAPABILITY LEFT, AND ITS NAME. Everything else this machine holds between two FRAG_FEED steps is
+   already engine-owned and already parks: the markup is `html`, the position in it is `off`, the placement is
+   `where`/`anchor`, and frag_visit declares all of it. What does not park is `parser` — and the sentence the
+   fork prints is the specification of what to build, because the reader of a @WHY is standing at the clone
+   with nothing else to go on.
    IT IS ASKED AT THE FORK, and it used to be a DCHECK inside frag_visit instead, whose comment sent the next
    reader to "give the parser a real ownership declaration" if it ever fired. That instruction was wrong twice
    over: `visit` now has three consumers, so the assert fires on a TEARDOWN where nothing is being cloned, and
@@ -571,8 +579,17 @@ static void frag_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static const char *frag_unforkable(const void *st)
 {
     return ((const FragState *)st)->parser
-         ? "a fragment parse cannot be forked mid-parse — it holds a live lexbor parser standing at a position "
-           "in the source, with an open-element stack and an insertion mode, and none of that has halves"
+         ? "a fragment parse cannot be forked mid-parse — BUILD lxb_html_parser CLONING and delete this. "
+           "lxb_html_tokenizer: state and state_return, the start/pos/end/begin/last cursor into the incoming "
+           "buffer, the token under construction with its dobj_token/dobj_token_attr pools and mraw temp "
+           "strings, and the entity SBST cursor. lxb_html_tree: mode and original_mode, open_elements, "
+           "active_formatting, template_insertion_modes, pending_table, form, foster_parenting/frameset_ok — "
+           "over the sibling's own COPY of the partially built fragment and its temporary document, with every "
+           "node pointer in those arrays remapped onto that copy. The two halves cannot be cloned separately: "
+           "lxb_html_tokenizer holds a `tree` back-pointer its own header calls a leak abstraction, and "
+           "foreign-content and RCDATA/RAWTEXT tokenization read through it. The same absent copy is why a flow "
+           "parked inside this parse cannot serialize to the IDB cold tier, so it is the frontier's gap and not "
+           "only the fork's"
          : NULL;
 }
 
@@ -1929,6 +1946,9 @@ void element_init(JSContext *ctx)
 
     g_attrs_key = JS_NewAtom(ctx, "__attributesSlot");
     CHECK(g_attrs_key != JS_ATOM_NULL, "the attributes slot key could not be interned");
+    /* SELECTORS §3's matching arena, before anything that can run a query. It is the AGENT's and not a
+       machine's, which is what lets a selector walk park and fork with nothing lexbor-shaped in its state. */
+    selector_match_init();
     collections_init(ctx);      /* NodeList and HTMLCollection, which childNodes and children are */
     dom_token_list_init(ctx);   /* its class must exist before classList names it */
     /* §6's TRAVERSERS, before the tree hooks below: §4.2.3's remove runs §6.1's pre-remove steps BEFORE the
@@ -2061,6 +2081,7 @@ void element_free(JSContext *ctx)
     element_view_free();
     html_element_free(ctx);
     cssom_free(ctx);
+    selector_match_free();   /* after every component that can still match a selector */
     custom_elements_free(ctx);
     html_script_free(ctx);
     mutation_observer_free(ctx);
