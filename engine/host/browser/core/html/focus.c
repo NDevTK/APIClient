@@ -797,7 +797,7 @@ static JSValue js_has_focus(JSContext *ctx, JSValueConst this_val, int argc, JSV
                     "the branch on the top document's system focus)") \
     X(FOC_AREA,     "HTML §6.6.4 focusing steps steps 1-5 (get the focusable area over the focus delegate " \
                     "search, the fallback target, the navigable container, inert, and the already-focused " \
-                    "early return — one stage because none of them can reach the page's code)") \
+                    "early return)") \
     X(FOC_CHAINS,   "HTML §6.6.4 focusing steps steps 6-7 and focus update steps step 1 (the old chain, the " \
                     "new chain, and popping their common tail)") \
     X(FOC_CHANGE,   "HTML §6.6.4 focus update steps step 2.1 (one old-chain entry: fire `change` at an input " \

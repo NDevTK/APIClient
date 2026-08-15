@@ -348,9 +348,13 @@ typedef struct {
        `steps` is indexed from IDL_STEP_FIRST and NULL-terminated: `steps[0]` is the step the body rests at on
        its first entry. The label is the standard's own wording ("DOM §4.4 step 3"), because the point of it is
        that a parked flow can SAY where it is parked and that the number means the same thing in the next
-       session as in this one. A stage may name a RANGE of steps only when no page code can run between them —
-       a getter, a setter, a callback or a custom-element reaction in the middle is a stage that must SPLIT —
-       and then the label says the range.
+       session as in this one. A stage names ONE spec step, and what may share one is decided by the ENGINE and
+       never by the page: quickjs-step.h's JSTrampStepDef::steps carries the rule and the reason — a boundary is
+       a rest point because the engine may have to park there (RAM pressure, a cold-tier eviction, a
+       cross-session resume, a flow that outranks this one), and none of those consult the page. A member may
+       therefore name a RANGE only when the whole range is ONE O(1) engine action, and the label says the range
+       in those terms; a span of the PAGE'S size is a stage per step, whose walking stage returns JS_STEP_YIELD
+       at every turn. js_step_def_check refuses a label that argues from the page's code at all.
        Both or neither: a member declaring one without the other is half a declaration, which the pool refuses
        rather than accepting an algorithm with unnamed steps or steps belonging to no algorithm. */
     const char *algorithm;

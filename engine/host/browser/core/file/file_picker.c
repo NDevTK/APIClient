@@ -13,10 +13,12 @@
  *
  * THREE CHECKS, AND ONE OF THEM IS A REQUEST. Steps 1 and 2 read this document's own origin and its position
  * in the navigable tree — facts this engine holds, computed, nothing to fork over — while step 4 asks whether
- * a user has interacted, which is unknown external state and therefore a FORK. A machine may hold exactly one
- * request outstanding, so what needs a stage of its own is the ASK: steps 1 and 2 run no page code and cannot
- * suspend, so a stage each would be three rest points where the algorithm has one, and core/idl_args.h's own
- * rule is that a stage may name a range of steps exactly when no page code can run between them.
+ * a user has interacted, which is unknown external state and therefore a FORK. Steps 1 and 2 are ONE stage and
+ * step 4 is another, and the reason is not that the first two run none of the page's code: core/idl_args.h and
+ * quickjs-step.h now state that the page decides nothing about where this engine may park, because what parks
+ * a flow is RAM pressure, a cold-tier eviction, a cross-session resume or a flow that outranks it. Steps 1 and
+ * 2 share a stage because they are ONE O(1) engine action — an opaque origin is same origin with nothing, so
+ * §7.2.5.1's single comparison decides both — and every other step of these algorithms has a stage of its own.
  *
  * THE ASYMMETRY IN THOSE FOUR STEPS IS THE STANDARD'S AND IT IS NOT OBSERVABLE. Steps 1 and 2 say "return a
  * promise rejected with", step 4 says "throw" — and the callers invoke this at their own step 5, BEFORE the
@@ -447,20 +449,52 @@ static JSValue picker_select_save(JSContext *ctx, JSValueConst start_path, const
 
 /* ---- the machine ------------------------------------------------------------------------------------------ */
 
+/* ONE SPEC STEP PER STAGE, AND THE ENGINE IS ASKED AT EVERY ONE OF THEM.
+ *
+ * This was four stages, and the first of them named "§3.3/§3.4/§3.5 steps 1-3 and §3.1's verify steps 1-2" on
+ * the ground that the checks in it run none of the page's code "and neither of which can therefore rest". That
+ * is the reasoning core/idl_args.h and quickjs-step.h now forbid, and this member is where it was written down:
+ * what makes a rest point necessary is the ENGINE — RAM pressure paging the low-value tail to the IDB cold
+ * tier, a cross-session resume, a flow that outranks this one — and none of those events consult the page. A
+ * span of four spec steps the engine cannot park inside is a cap, and the page being quiet across it changes
+ * nothing about that.
+ *
+ * So the stages are the algorithm's steps, and each of them RETURNS: a machine that sets its stage and falls
+ * through into the next `if` has crossed a boundary the driver never saw, so the label said "rest point" where
+ * there was none. JS_STEP_YIELD is what hands the decision back — the scheduler parks the flow if something
+ * outranks it and re-enters immediately if nothing does, which costs one predicted call per stage. The switch
+ * is what makes the fall-through impossible to write again; there is no arm that runs two stages' bodies. */
 #define FPK_STAGES(X)                                                                                          \
-    X(FPK_ENTER,  "File System Access §3.3/§3.4/§3.5 steps 1-3 and §3.1's verify steps 1-2 (the settings "      \
-                  "object; PROCESS ACCEPT TYPES; DETERMINE THE DIRECTORY THE PICKER WILL START IN; then the "   \
-                  "opaque-origin and same-origin-with-top checks, neither of which runs any of the page's "     \
-                  "code and neither of which can therefore rest)")                                              \
-    X(FPK_ACTIVE, "File System Access §3.1's verify step 4 (global has TRANSIENT ACTIVATION — unknown external " \
-                  "state, so the SecurityError arm and the picker arm are two worlds and this is where the "    \
-                  "flow forks)")                                                                                \
-    X(FPK_DIALOG, "File System Access §3.3/§3.5 step 7.4 and §3.4 step 7.3 (the file dialog's outcome — the "   \
-                  "USER'S decision, so the AbortError arm and the selection arm fork here), then steps 7.7 to " \
-                  "7.11 (the entries, the handles, remember a picked directory, and PERFORM THE ACTIVATION "    \
-                  "NOTIFICATION STEPS)")                                                                        \
-    X(FPK_SETTLE, "File System Access §3.3/§3.4/§3.5 step 7's resolve or reject (27.2.1.3.2 step 8's `then` "   \
-                  "read is the page's)")
+    X(FPK_ACCEPTS,   "File System Access §3.3/§3.4 step 2 (accepts options is the result of PROCESS ACCEPT "    \
+                     "TYPES given options; §3.5 declares no `types` and its steps do not perform it)")          \
+    X(FPK_STARTDIR,  "File System Access §3.3/§3.4/§3.5 step 3 (starting directory is DETERMINE THE DIRECTORY " \
+                     "THE PICKER WILL START IN, given options[\"id\"], options[\"startIn\"] and environment — " \
+                     "§3.2.25's union over `startIn` is that step's own input, which this member's declaration " \
+                     "cannot express and which is therefore read here)")                                        \
+    X(FPK_SUGGESTED, "File System Access §3.4's sanitization of `suggestedName` (\"If the suggestedName is "    \
+                     "deemed too dangerous, user agents should ignore or sanitize the suggested file name\") — " \
+                     "a walk of a string whose length the page chose")                                          \
+    X(FPK_VERIFY,    "File System Access §3.3/§3.4/§3.5 step 5 -> §3.1's verify steps 1-2 (environment's "      \
+                     "origin is not opaque, and is same origin with its top-level origin) — ONE O(1) engine "   \
+                     "action, since an opaque origin is same origin with nothing and §7.2.5.1's single "        \
+                     "comparison therefore decides both")                                                       \
+    X(FPK_ACTIVE,    "File System Access §3.1's verify step 4 (global has TRANSIENT ACTIVATION — unknown "      \
+                     "external state, so the SecurityError arm and the picker arm are two worlds and this is "  \
+                     "where the flow forks)")                                                                   \
+    X(FPK_DIALOG,    "File System Access §3.3/§3.5 step 7.4 and §3.4 step 7.3 (the file dialog's outcome — the " \
+                     "USER'S decision, so the AbortError arm and the selection arm fork here)")                 \
+    X(FPK_SELECT,    "File System Access §3.3/§3.4/§3.5 steps 7.5-7.9 (the prompt's selection over this "       \
+                     "device's entries, the sensitivity judgement the standard leaves to the user agent, and "  \
+                     "the handles it creates)")                                                                 \
+    X(FPK_REMEMBER,  "File System Access §3.3/§3.4/§3.5 step 7.10 (REMEMBER A PICKED DIRECTORY, given "         \
+                     "options[\"id\"], entries[0] and environment)")                                            \
+    X(FPK_GRANT,     "File System Access §3.1's grant (\"at the time the promise ... resolves, permission "     \
+                     "state for a descriptor with handle set to the returned handle, and mode set to read "     \
+                     "should be granted\"), over every handle the selection produced")                          \
+    X(FPK_NOTIFY,    "File System Access §3.3/§3.4/§3.5 step 7.11 (PERFORM THE ACTIVATION NOTIFICATION STEPS "  \
+                     "in global's browsing context)")                                                           \
+    X(FPK_SETTLE,    "File System Access §3.3/§3.4/§3.5 step 7.12's resolve, or the reject step 7.6 and §3.1 "  \
+                     "reach (27.2.1.3.2 step 8's `then` read is the page's)")
 enum { IDL_STEP_STAGE_BASE(FPK_STAGES) FPK_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const FPK_STEPS[] = { FPK_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -468,7 +502,6 @@ typedef struct {
     uint8_t cphase;
     uint8_t ua_phase;
     uint8_t reject;
-    uint8_t multiple;
     uint8_t started;
     JSValue promise;     /* owned */
     JSValue funcs[2];    /* the capability's [resolve, reject] (owned) */
@@ -477,6 +510,10 @@ typedef struct {
     JSValue id;          /* options["id"] as read, carried for step 7.10 (owned) */
     JSValue suggested;   /* §3.4's sanitized suggestedName, or undefined (owned) */
     JSValue dismissed;   /* step 7.4's unknown (owned) */
+    /* THE PICKED ENTRY'S PATH, held from step 7.9's selection to step 7.10's remember. It became a field when
+       those two stopped being one stage: a value that survives a rest point cannot live in a C local, and it is
+       owned here, so it is in `visit` (a fork mid-selection gives each arm its own) and in `release`. */
+    JSValue picked;
     JSValue cb[3];
 } PickerState;
 
@@ -495,6 +532,7 @@ static void fpk_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->id);
     v->val(ctx, &s->suggested);
     v->val(ctx, &s->dismissed);
+    v->val(ctx, &s->picked);
     STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
 }
 
@@ -513,8 +551,9 @@ static void fpk_release(JSContext *ctx, void *st)
     JS_FreeValue(ctx, s->id);
     JS_FreeValue(ctx, s->suggested);
     JS_FreeValue(ctx, s->dismissed);
+    JS_FreeValue(ctx, s->picked);
     s->promise = s->funcs[0] = s->funcs[1] = s->value = JS_UNDEFINED;
-    s->start_path = s->id = s->suggested = s->dismissed = JS_UNDEFINED;
+    s->start_path = s->id = s->suggested = s->dismissed = s->picked = JS_UNDEFINED;
     STEP_CB_FOREACH(s->cb, k) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
     s->started = 0;
 }
@@ -582,8 +621,8 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         s->promise = s->funcs[0] = s->funcs[1] = s->value = JS_UNDEFINED;
-        s->start_path = s->id = s->suggested = s->dismissed = JS_UNDEFINED;
-        s->cphase = s->ua_phase = s->reject = s->multiple = 0;
+        s->start_path = s->id = s->suggested = s->dismissed = s->picked = JS_UNDEFINED;
+        s->cphase = s->ua_phase = s->reject = 0;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
         s->started = 1;
         /* THE CAPABILITY BEFORE THE FIRST THING THAT CAN FAIL — see the file header: Web IDL §3.7.7 makes an
@@ -593,16 +632,28 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         if (JS_IsException(s->promise)) return -1;
     }
 
-    if (hdr->stage == FPK_ENTER) {
-        JSValue id_v, start_in, suggested_v;
-
+    /* ONE STAGE'S BODY PER ENTRY. Every arm below ends in a return, so the driver is between any two of this
+       algorithm's steps — which is what makes each of them a rest point rather than a label claiming to be
+       one. FPK_SETTLE is the one arm reached by an ordinary fall-out (`goto reject`), and it too is entered on
+       its own invocation. */
+    switch (hdr->stage) {
+    case FPK_ACCEPTS:
+        /* NO STAGE BELOW BUT FPK_SETTLE IS A CALL-RESUME, so an incoming result belongs to nothing in them and
+           is released rather than carried to the settle — the settle has its own stage and its own entry.
+           Releasing JS_UNDEFINED is a no-op, which is what this is on every entry but a re-entry after an
+           abandoned request. */
         JS_FreeValue(ctx, cb_result);
-        cb_result = JS_UNDEFINED;
         /* STEP 2 — process accept types, which showDirectoryPicker does not perform (DirectoryPickerOptions
            declares no `types` and §3.5's steps do not list it). */
         if (magic != M_DIRECTORY)
             picker_process_accept_types(ctx, options);
-        s->multiple = (uint8_t)(magic == M_OPEN && idl_dict_bool(ctx, options, "multiple"));
+        STEP_GOTO(hdr->stage, FPK_STARTDIR, &s->cphase, &s->ua_phase, NULL);
+        return JS_STEP_YIELD;
+
+    case FPK_STARTDIR: {
+        JSValue id_v, start_in;
+
+        JS_FreeValue(ctx, cb_result);
         id_v = idl_dict_get(ctx, options, "id");
         start_in = idl_dict_get(ctx, options, "startIn");
         /* `StartInDirectory` is `(WellKnownDirectory or FileSystemHandle)` — a union whose two arms are an
@@ -638,17 +689,27 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
             goto reject;
         }
         s->id = id_v;
-        if (magic == M_SAVE) {
-            const char *sug;
+        STEP_GOTO(hdr->stage, FPK_SUGGESTED, &s->cphase, &s->ua_phase, NULL);
+        return JS_STEP_YIELD;
+    }
 
-            suggested_v = idl_dict_get(ctx, options, "suggestedName");
-            sug = picker_sanitize_suggested(ctx, suggested_v);
+    case FPK_SUGGESTED:
+        JS_FreeValue(ctx, cb_result);
+        if (magic == M_SAVE) {
+            JSValue suggested_v = idl_dict_get(ctx, options, "suggestedName");
+            const char *sug = picker_sanitize_suggested(ctx, suggested_v);
+
             JS_FreeValue(ctx, suggested_v);
             if (sug) {
                 s->suggested = JS_NewString(ctx, sug);
                 JS_FreeCString(ctx, sug);
             }
         }
+        STEP_GOTO(hdr->stage, FPK_VERIFY, &s->cphase, &s->ua_phase, NULL);
+        return JS_STEP_YIELD;
+
+    case FPK_VERIFY:
+        JS_FreeValue(ctx, cb_result);
         /* STEP 5 — §3.1's VERIFY, steps 1 and 2. An OPAQUE origin is same origin with NOTHING, not even with
            itself, so window_proxy_same_origin_with_top answers false for one and the two checks are one test
            through the one implementation of §7.2.5.1 — which is also why a second comparison here would be a
@@ -659,16 +720,11 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
                                      "and is same origin with its top-level origin");
             goto reject;
         }
-        hdr->stage = FPK_ACTIVE;
-    }
+        STEP_GOTO(hdr->stage, FPK_ACTIVE, &s->cphase, &s->ua_phase, NULL);
+        return JS_STEP_YIELD;
 
-    if (hdr->stage == FPK_ACTIVE) {
-        /* NEITHER OF THE TWO STAGES BELOW IS A CALL-RESUME, so an incoming result belongs to nothing here and
-           is released rather than carried to the settle — the settle has its own stage and a re-entry into it
-           skips both of these. Releasing JS_UNDEFINED is a no-op, which is what this already is on the path
-           that fell through from the entry. */
+    case FPK_ACTIVE:
         JS_FreeValue(ctx, cb_result);
-        cb_result = JS_UNDEFINED;
         /* §3.1's VERIFY step 4. */
         rc = user_activation_transient_run(ctx, hdr, &s->ua_phase, &ok);
         if (rc) return rc;
@@ -683,16 +739,13 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
            the only completion — forking it would park a sibling flow that does what this one does. */
         s->dismissed = concolic_source_wrap(ctx, PICKER_DIALOG_SHAPE, PICKER_DIALOG_SRC, JS_FALSE);
         CHECK(!JS_IsException(s->dismissed), "file picker: the dialog's outcome could not be allocated");
-        hdr->stage = FPK_DIALOG;
-    }
+        STEP_GOTO(hdr->stage, FPK_DIALOG, &s->cphase, &s->ua_phase, NULL);
+        return JS_STEP_YIELD;
 
-    if (hdr->stage == FPK_DIALOG) {
+    case FPK_DIALOG: {
         int arm = 0;
-        JSValue picked_path = JS_UNDEFINED, result = JS_UNDEFINED;
-        bool empty;
 
         JS_FreeValue(ctx, cb_result);
-        cb_result = JS_UNDEFINED;
         if (concolic_is(s->dismissed)) {
             rc = step_fork_run(ctx, hdr, s->dismissed, PICKER_DIALOG_OP, 2, &arm);
             if (rc) return rc;
@@ -706,7 +759,16 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
             s->value = fpk_dom_error(ctx, "AbortError", "the file picker was dismissed");
             goto reject;
         }
-        /* STEPS 7.7-7.9. "If entry is deemed too sensitive or dangerous to be exposed to this website by the
+        STEP_GOTO(hdr->stage, FPK_SELECT, &s->cphase, &s->ua_phase, NULL);
+        return JS_STEP_YIELD;
+    }
+
+    case FPK_SELECT: {
+        JSValue result = JS_UNDEFINED;
+        bool empty;
+
+        JS_FreeValue(ctx, cb_result);
+        /* STEPS 7.5-7.9. "If entry is deemed too sensitive or dangerous to be exposed to this website by the
            user agent" is a judgement this user agent makes for no entry: everything on this device was put
            there by the host through core/file/file_system.c's one edge, or written by the page itself, so
            there is no notion of sensitivity here to consult — and inventing one would suppress exactly the
@@ -714,12 +776,13 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         if (magic == M_SAVE) {
             const char *sug = JS_IsString(s->suggested) ? JS_ToCString(ctx, s->suggested) : NULL;
 
-            result = picker_select_save(ctx, s->start_path, sug, &picked_path);
+            result = picker_select_save(ctx, s->start_path, sug, &s->picked);
             if (sug) JS_FreeCString(ctx, sug);
             empty = JS_IsUninitialized(result);
             if (empty) result = JS_UNDEFINED;
         } else {
-            JSValue list = picker_select(ctx, s->start_path, magic, s->multiple != 0, &picked_path);
+            bool multiple = (magic == M_OPEN && idl_dict_bool(ctx, options, "multiple"));
+            JSValue list = picker_select(ctx, s->start_path, magic, multiple, &s->picked);
             JSValue len_v = JS_GetPropertyStr(ctx, list, "length");
             uint32_t n = 0;
 
@@ -737,62 +800,81 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         if (empty) {
             /* STEP 7.6's other half — "or if the user dismissed the prompt without making a selection". */
             JS_FreeValue(ctx, result);
-            JS_FreeValue(ctx, picked_path);
+            JS_FreeValue(ctx, s->picked);
+            s->picked = JS_UNDEFINED;
             s->value = fpk_dom_error(ctx, "AbortError",
                                      "the file picker was dismissed without a selection being made");
             goto reject;
         }
+        s->value = result;                                        /* step 7.12's `result`, settled at the end */
+        STEP_GOTO(hdr->stage, FPK_REMEMBER, &s->cphase, &s->ua_phase, NULL);
+        return JS_STEP_YIELD;
+    }
+
+    case FPK_REMEMBER:
+        JS_FreeValue(ctx, cb_result);
         /* STEP 7.10 — remember a picked directory, given options["id"], entries[0] and environment. */
-        DCHECK(!JS_IsUndefined(picked_path),
+        DCHECK(!JS_IsUndefined(s->picked),
                "a file picker made a selection and recorded no path for it — §3.3 step 7.10 remembers the "
                "directory entries[0] was picked from, and the path is the only thing that names it");
-        picker_remember(ctx, s->id, picked_path, magic == M_DIRECTORY);
-        JS_FreeValue(ctx, picked_path);
+        picker_remember(ctx, s->id, s->picked, magic == M_DIRECTORY);
+        JS_FreeValue(ctx, s->picked);
+        s->picked = JS_UNDEFINED;
+        STEP_GOTO(hdr->stage, FPK_GRANT, &s->cphase, &s->ua_phase, NULL);
+        return JS_STEP_YIELD;
+
+    case FPK_GRANT:
+        JS_FreeValue(ctx, cb_result);
         /* FILE SYSTEM ACCESS §3.1's GRANT, which is the sentence that makes the returned handle usable: "at
            the time the promise ... resolves, permission state for a descriptor with handle set to the returned
            handle, and mode set to read should be granted", and additionally readwrite for showSaveFilePicker. */
         if (magic == M_OPEN) {
             uint32_t i, n = 0;
-            JSValue len_v = JS_GetPropertyStr(ctx, result, "length");
+            JSValue len_v = JS_GetPropertyStr(ctx, s->value, "length");
 
             JS_ToUint32(ctx, &n, len_v);
             JS_FreeValue(ctx, len_v);
             for (i = 0; i < n; i++) {
-                JSValue h = JS_GetPropertyUint32(ctx, result, i);
+                JSValue h = JS_GetPropertyUint32(ctx, s->value, i);
 
                 fs_access_grant(ctx, h, /*readwrite*/ false);
                 JS_FreeValue(ctx, h);
             }
         } else {
-            fs_access_grant(ctx, result, /*readwrite*/ magic == M_SAVE);
+            fs_access_grant(ctx, s->value, /*readwrite*/ magic == M_SAVE);
         }
+        STEP_GOTO(hdr->stage, FPK_NOTIFY, &s->cphase, &s->ua_phase, NULL);
+        return JS_STEP_YIELD;
+
+    case FPK_NOTIFY:
+        JS_FreeValue(ctx, cb_result);
         /* STEP 7.11 — "Perform the activation notification steps in global's browsing context." Its own note
            says what it is for: "this lets a website immediately perform operations on the returned handles
            that might require user activation, such as requesting more permissions" — which in this engine is
            §2.3.2's requestPermission, whose step 6 is the very transient-activation gate this restores. */
         user_activation_notify(ctx);
-        s->value = result;                                        /* step 7.12: resolve p with result */
-        hdr->stage = FPK_SETTLE;
-    }
-    goto settle;
+        STEP_GOTO(hdr->stage, FPK_SETTLE, &s->cphase, &s->ua_phase, NULL);
+        return JS_STEP_YIELD;
 
-reject:
-    s->reject = 1;
-    hdr->stage = FPK_SETTLE;
-
-settle:
-    DCHECK(hdr->stage == FPK_SETTLE, "a file picker settled from a stage §3 does not have");
-    {
+    case FPK_SETTLE: {
         JSValue settled = JS_UNDEFINED;
 
         rc = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), s->funcs[s->reject], JS_UNDEFINED, 1,
                            (JSValueConst *)&s->value, cb_result, &settled, out_cb, out_argc);
         if (rc > 0) return rc;
         JS_FreeValue(ctx, settled);
+        *presult = s->promise;
+        s->promise = JS_UNDEFINED;
+        return JS_STEP_DONE;
     }
-    *presult = s->promise;
-    s->promise = JS_UNDEFINED;
-    return JS_STEP_DONE;
+    }
+    DFAIL("a file picker was stepped at a stage §3.3-§3.5 does not declare");
+    return -1;
+
+reject:
+    s->reject = 1;
+    STEP_GOTO(hdr->stage, FPK_SETTLE, &s->cphase, &s->ua_phase, NULL);
+    return JS_STEP_YIELD;
 }
 
 static const IdlStepDecl FPK_DECL = {
