@@ -471,40 +471,25 @@ function isBinaryContentType(ct) {
 
 // ─── Fetch Adapters ──────────────────────────────────────────────────────────
 
-/**
- * Default fetch function (used when no page-context relay is available).
- * Normalizes the response to { status, headers, body }.
- * Binary protobuf responses are base64-encoded with bodyEncoding: "base64".
- */
-async function defaultFetchFn(url, opts) {
-  // Handle binary request body (base64 from binary probe payloads)
-  if (opts.bodyEncoding === "base64") {
-    const decoded = base64ToUint8(opts.body);
-    opts = { ...opts, body: decoded };
-    delete opts.bodyEncoding;
-  }
-
-  const resp = await fetch(url, opts);
-  const headers = {};
-  resp.headers.forEach((v, k) => {
-    headers[k] = v;
-  });
-  const ct = resp.headers.get("content-type") || "";
-
-  // Binary response: read as ArrayBuffer and base64-encode for uniform handling
-  if (isBinaryContentType(ct)) {
-    const buf = await resp.arrayBuffer();
-    return {
-      ok: resp.ok,
-      status: resp.status,
-      headers,
-      body: uint8ToBase64(new Uint8Array(buf)),
-      bodyEncoding: "base64",
-    };
-  }
-
-  const body = await resp.text();
-  return { ok: resp.ok, status: resp.status, headers, body };
+// THERE IS NO DEFAULT FETCH. SECURITY.md, 'Network — one chokepoint': 'Every analyzer-driven request goes
+// through safeFetch (lib/safe-fetch.js); credentialed / page-context requests go through pageContextFetch
+// (as the actual page, browser-CORS/PNA-gated). There is no raw fetch on any analyzer path.'
+//
+// A `defaultFetchFn` living here WAS that raw fetch: an unconditional `fetch(url, opts)` in the TRUSTED
+// offscreen document, which holds <all_urls> host permissions — so it carried none of the chokepoint's
+// guarantees (no http(s)-only, no origin-relative SSRF classification, no GET forcing, no CORB) and it
+// issued the probe's POST bodies at whatever URL an error-probe target resolved to. Every real caller
+// already passes `fetchFn: makePageFetchFn(tabId, documentId)` (the pageContextFetch relay), so the only
+// thing it ever did was stand ready to be selected by a caller that forgot — the shape of a legacy
+// fallback, whose whole failure mode is that it silently works.
+//
+// It is DELETED, and the absence CRASHES rather than degrading: a caller with no relay has no principal
+// and no document to fetch as, which is not a request this zone may make on its own authority.
+function _requireFetchFn(fn, who) {
+  CHECK(typeof fn === "function",
+        "req2proto: " + who + " was called with no opts.fetchFn — every analyzer request goes through the " +
+        "pageContextFetch relay (or safeFetch); there is no raw-fetch path for one to fall back to");
+  return fn;
 }
 
 // ─── Probing ─────────────────────────────────────────────────────────────────
@@ -629,7 +614,7 @@ async function sendProbe(url, payload, contentType, headers, fetchFn) {
  */
 async function probeApiEndpoint(url, headers = {}, opts = {}) {
   const maxDepth = opts.maxDepth ?? 2;
-  const fetchFn = opts.fetchFn || defaultFetchFn;
+  const fetchFn = _requireFetchFn(opts.fetchFn, "probeApiEndpoint");
   const probeUrl = ensureAltJson(url);
   // For binary protobuf, don't force ?alt=json (it's a JSON-only parameter)
   const rawUrl = url;
@@ -843,7 +828,7 @@ async function probeApiEndpoint(url, headers = {}, opts = {}) {
  * @returns {object} { service, method, scopes, contentTypes, details }
  */
 async function discoverServiceInfo(url, headers = {}, opts = {}) {
-  const fetchFn = opts.fetchFn || defaultFetchFn;
+  const fetchFn = _requireFetchFn(opts.fetchFn, "discoverServiceInfo");
 
   // Content types to try (gapi-service main.go lines 42-49)
   const contentTypes = [
