@@ -126,6 +126,10 @@ static void engine_agent_init(JSContext *ctx, const char *origin)
        before the window is installed. */
     event_target_init(ctx);
     window_init(ctx);
+    /* §8.10.1's Navigator, DECLARED here and built per realm by the intrinsic it registers — its prototype,
+       its interface object and the Window's one Navigator are §3.7 per-realm objects, so there is no install
+       for this entry to call at document time. */
+    navigator_init(ctx);
     event_init(ctx);
     report_exception_init(ctx);
     message_port_init(ctx);
@@ -216,7 +220,9 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
     media_query_list_install(ctx, g);   /* CSSOM VIEW §4.2/§7: matchMedia, MediaQueryList */
     abort_install(ctx, g);   /* AbortController/AbortSignal: fetch takes a signal, so a bundle mints one early */
     observable_install(ctx, g);
-    navigator_install(ctx, g);
+    /* NO navigator_install: §8.10.1's interface is a per-realm intrinsic, so `navigator`, `clientInformation`
+       and the `Navigator` interface object are already on this global — realm_install_intrinsics put them
+       there, through the ONE list every realm goes through rather than a line each host has to remember. */
     screen_install(ctx, g);   /* the responsive gate: screen.width decides which router a bundle uses */
     document_install(ctx, g, dom, url, csp, doc_id, nav_proxy);
     JS_FreeValue(ctx, g);
@@ -456,6 +462,7 @@ QJS_EXPORT void qjs_teardown(void)
     request_free(g_ctx);   /* Response.prototype — one object, held for the runtime's life */
     idl_args_free(g_ctx);   /* the dictionary member atoms the declaration pool interned */
     navigable_free(g_ctx);
+    navigator_free();   /* the two per-realm slot ids; each realm's Navigator went with its context */
     window_free(g_ctx);
     remote_object_free(g_ctx);
     window_proxy_free(g_ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */

@@ -133,31 +133,10 @@ static JSValue ports_from_sequence(JSContext *ctx, JSValueConst v)
         }
         JS_SetPropertyUint32(ctx, arr, i, e);
     }
-    /* FROZEN, per the FrozenArray type — and an ARRAY is not frozen by preventing extensions, which is the
-       trap this hit. `Object.isFrozen([])` was FALSE afterwards, because an array always carries an own
-       `length` and `length` is writable; SetIntegrityLevel("frozen") makes every own property non-writable, and
-       `length` is one of them. So every index gets it too, now that there can be indices. */
-    {
-        int r = 0;
-        for (i = 0; i < (uint32_t)n && r >= 0; i++) {
-            char buf[16];
-            JSAtom k;
-            snprintf(buf, sizeof buf, "%u", i);
-            k = JS_NewAtom(ctx, buf);
-            if (k == JS_ATOM_NULL) { r = -1; break; }
-            r = JS_DefineProperty(ctx, arr, k, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED,
-                                  JS_PROP_HAS_WRITABLE | JS_PROP_HAS_CONFIGURABLE);
-            JS_FreeAtom(ctx, k);
-        }
-        if (r >= 0) {
-            JSAtom len_atom = JS_NewAtom(ctx, "length");
-            if (len_atom == JS_ATOM_NULL) { JS_FreeValue(ctx, arr); return JS_EXCEPTION; }
-            r = JS_DefineProperty(ctx, arr, len_atom, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED,
-                                  JS_PROP_HAS_WRITABLE);   /* writable BIT clear = non-writable */
-            JS_FreeAtom(ctx, len_atom);
-        }
-        if (r < 0 || JS_PreventExtensions(ctx, arr) < 0) { JS_FreeValue(ctx, arr); return JS_EXCEPTION; }
-    }
+    /* FROZEN, per the FrozenArray type — through the ONE implementation of §3.2.24, because FrozenArray is a
+       Web IDL TYPE and not something each member that answers one re-derives. It was written out here, and the
+       second member that needed one got only half of it. */
+    if (idl_freeze_array(ctx, arr) < 0) { JS_FreeValue(ctx, arr); return JS_EXCEPTION; }
     return arr;
 }
 

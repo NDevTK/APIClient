@@ -1749,6 +1749,10 @@ static void tf_agent_init(JSContext *ctx)
     timer_set_script_sink(engine_queue_script);   /* §8.6: a STRING handler is evaluated, as a flow */
     event_target_init(ctx);
     window_init(ctx);
+    /* §8.10.1's Navigator, DECLARED here and built per realm by the intrinsic it registers — a UA/touch gate is
+       where a bundle hides its other endpoints, so this fixture exercises the interface the ABI build installs
+       rather than a stand-in for it. */
+    navigator_init(ctx);
     location_init(ctx);
     navigable_init(ctx);
     timer_init(ctx);
@@ -1827,9 +1831,9 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     }
     JS_SetPropertyStr(ctx, g, "lastChildMark", JS_NewCFunction(ctx, js_last_child_mark, "lastChildMark", 0));   /* DOM node read */
     JS_SetPropertyStr(ctx, g, "state", concolic_new(ctx, "{state}", "{state}", JS_UNDEFINED));   /* injected/unknown app state */
-    /* the REAL component, not a synthetic edge: a UA/touch gate is where a bundle hides its other endpoints,
-       so this fixture exercises the interface the ABI build installs rather than a stand-in for it. */
-    navigator_install(ctx, g);
+    /* NO navigator_install: §8.10.1's interface is a per-realm intrinsic, so `navigator`, `clientInformation`
+       and the `Navigator` interface object are already on this global — realm_install_intrinsics put them
+       there, through the ONE list every realm goes through rather than a line each host has to remember. */
     screen_install(ctx, g);
     /* The components the ABI entry installs, so this fixture runs the engine that ships. Unblocked by the
        JS_AddIntrinsicDOMException fix: the intrinsic is per-context idempotent now, so JS_NewContext's own
@@ -2453,6 +2457,7 @@ int main(int argc, char **argv) {
     request_free(ctx);   /* Response.prototype — one object, held for the runtime's life */
     idl_args_free(ctx);   /* the dictionary member atoms the declaration pool interned */
     navigable_free(ctx);
+    navigator_free();   /* the two per-realm slot ids; each realm's Navigator went with its context */
     window_free(ctx);
     remote_object_free(ctx);
     window_proxy_free(ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */

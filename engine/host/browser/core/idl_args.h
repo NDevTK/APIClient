@@ -468,6 +468,16 @@ int64_t idl_step_total(long *count);
    non-enumerable, configurable. Every interface prototype has one, so every interface calls this. */
 void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface);
 
+/* §3.2.24's CREATE FROZEN ARRAY, over an Array the caller has already filled: SetIntegrityLevel(array, frozen).
+   AN ARRAY IS NOT FROZEN BY PREVENTING EXTENSIONS — it always carries an own `length` and `length` is writable,
+   so `Object.isFrozen` answers false afterwards and a page can still truncate the array in place. Every own
+   property has to lose writable and configurable, `length` included.
+   ONE implementation, because FrozenArray is one TYPE and not a thing each member re-derives: it was written
+   out inside MessageEvent's `ports` conversion, and the second member that needed one — NavigatorLanguage's
+   `languages` — got only the preventExtensions half and shipped an array the spec calls frozen and a page could
+   rewrite. Returns <0 with an exception pending. */
+int idl_freeze_array(JSContext *ctx, JSValueConst arr);
+
 void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
                           IdlGetter getter, int getter_magic, int setter_stepid);
 

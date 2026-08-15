@@ -1915,6 +1915,43 @@ void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface)
                            JS_NewString(ctx, iface), JS_PROP_CONFIGURABLE);
 }
 
+/* §3.2.24's CREATE FROZEN ARRAY — see idl_args.h for why the preventExtensions half alone is not it. */
+int idl_freeze_array(JSContext *ctx, JSValueConst arr)
+{
+    JSValue len_v;
+    uint32_t n = 0, i;
+    JSAtom k;
+    int r;
+
+    DCHECK(JS_IsArray(arr), "idl_freeze_array was handed something that is not an Array — a FrozenArray IS an "
+                            "Array at §3.2.24's integrity level, and freezing anything else here would answer "
+                            "a different type with the right name on it");
+    len_v = JS_GetPropertyStr(ctx, arr, "length");
+    if (JS_IsException(len_v)) return -1;
+    r = JS_ToUint32(ctx, &n, len_v);
+    JS_FreeValue(ctx, len_v);
+    if (r < 0) return -1;
+    /* Every own INDEX loses writable and configurable... */
+    for (i = 0; i < n; i++) {
+        char buf[16];
+        snprintf(buf, sizeof buf, "%u", i);
+        k = JS_NewAtom(ctx, buf);
+        if (k == JS_ATOM_NULL) return -1;
+        r = JS_DefineProperty(ctx, arr, k, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED,
+                              JS_PROP_HAS_WRITABLE | JS_PROP_HAS_CONFIGURABLE);
+        JS_FreeAtom(ctx, k);
+        if (r < 0) return -1;
+    }
+    /* ...and so does `length`, which is the own property an array always has and the one a freeze that only
+       prevented extensions left writable — `arr.length = 0` still emptied a "frozen" array. */
+    k = JS_NewAtom(ctx, "length");
+    if (k == JS_ATOM_NULL) return -1;
+    r = JS_DefineProperty(ctx, arr, k, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_PROP_HAS_WRITABLE);
+    JS_FreeAtom(ctx, k);
+    if (r < 0) return -1;
+    return JS_PreventExtensions(ctx, arr) < 0 ? -1 : 0;
+}
+
 void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *name,
                                int getter_stepid, int setter_stepid)
 {
