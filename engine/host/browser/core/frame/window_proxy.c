@@ -213,7 +213,8 @@ static ProxyData *proxy_of(JSValueConst v)
  * THE FIX IS AN ORIGIN WITH AN IDENTITY, not a better string compare: an opaque origin carries a nonce (Blink's
  * SecurityOrigin keeps one), it is COPIED by the inheritance cases above and MINTED fresh by the sandboxed
  * origin browsing context flag, and step 1 compares nonces. Until this component holds one, the guess is
- * ASSERTED where it decides rather than assumed everywhere — see proxy_read_permitted. */
+ * ASSERTED where it decides rather than assumed everywhere — see proxy_same_origin_decides, which is the one
+ * place that assert lives and which BOTH filters over this record go through. */
 static bool proxy_same_origin(const ProxyData *p)
 {
     DCHECK(g_local_origin != NULL, "the same-origin check ran before window_proxy_init named this document's "
@@ -898,13 +899,12 @@ static const bool PROXY_CROSS_ORIGIN[WP_MEMBER_N] = {
     true,  /* location — §7.2.5.1 DOES list it; the filtering is the Location object's own, not this table's */
 };
 
-/* §7.2.5.1: a read the origins do not permit is a SecurityError, and it is thrown at the READ rather than
-   answered with undefined — a page distinguishes the two, and undefined would say "this window has no such
-   member" about one it cannot see. */
-static bool proxy_read_permitted(const ProxyData *p, int magic)
+/* §7.5's SAME-ORIGIN, ASKED AT THE ONE MOMENT ITS ANSWER DECIDES SOMETHING — which is where the guess inside it
+   is worth asserting, and why this is a function rather than a call to proxy_same_origin at each site. TWO
+   filters consult it (the member's own permission below, and §7.2.3.5's [[GetOwnProperty]] further down), and
+   an assert written into only one of them is silent in whichever path the next read happens to take. */
+static bool proxy_same_origin_decides(const ProxyData *p)
 {
-    if (PROXY_CROSS_ORIGIN[magic])
-        return true;   /* the fixed list is answered whatever the origins are, so nothing below is asked */
     /* THE GUESS IS ASSERTED WHERE IT DECIDES. proxy_same_origin cannot run §7.5's step 1 — "if A and B are the
        same opaque origin, then return true" is an identity comparison and this component holds serializations,
        in which every opaque origin is the string "null". Both sides opaque is therefore the ONE case where the
@@ -925,6 +925,201 @@ static bool proxy_read_permitted(const ProxyData *p, int magic)
            "opaque origin is refused every member of its OWN navigable outside §7.2.5.1's fixed list.");
     return proxy_same_origin(p);
 }
+
+/* §7.2.5.1: a read the origins do not permit is a SecurityError, and it is thrown at the READ rather than
+   answered with undefined — a page distinguishes the two, and undefined would say "this window has no such
+   member" about one it cannot see. */
+static bool proxy_read_permitted(const ProxyData *p, int magic)
+{
+    if (PROXY_CROSS_ORIGIN[magic])
+        return true;   /* the fixed list is answered whatever the origins are, so nothing below is asked */
+    return proxy_same_origin_decides(p);
+}
+
+/* ---- §7.2.3.5's CROSS-ORIGIN BRANCH — the half of the filter that has no member to hang off ---------------
+ *
+ * THE TABLE ABOVE ANSWERS A DIFFERENT QUESTION FROM THIS ONE, and that is why both exist rather than one being
+ * a copy of the other. `PROXY_CROSS_ORIGIN` is indexed by MEMBER MAGIC: it answers "may this INSTALLED accessor
+ * be read across origins", and it is consulted from inside the accessor, which means it is only ever asked
+ * about a name this component installed. Every other name — `alert`, `document.cookie`'s owner, anything a page
+ * probes for — reaches no accessor at all, walks off the end of the prototype chain, and answers `undefined`.
+ *
+ * AND `undefined` IS THE ONE ANSWER §7.2.1.3.2 FORBIDS. Its last step is "throw a SecurityError DOMException",
+ * and a page distinguishes the two: `undefined` says "that window has no such member", which is a fact about
+ * the peer's document, while the SecurityError says "you may not look" — a `try`/`catch` around the read is how
+ * a page feature-detects a cross-origin window at all. So the surface was not merely incomplete, it was
+ * answering a security question with a datum, and it was silent by exactly the mechanism §CLAUDE.md's
+ * defaulted-field rule names: the wrong value is a plausible one.
+ *
+ * SO THE LIST IS THE STANDARD'S OWN, AND IT IS NOT THE MEMBER TABLE. §7.2.1.3.1 names THIRTEEN cross-origin
+ * accessible window property names, and four of them (`close`, `focus`, `blur`, `postMessage`) are not members
+ * of the table above — `close` and `postMessage` are installed as methods by this component and
+ * window_message.c, and `focus`/`blur` are honestly ABSENT. A name on this list is therefore answered by
+ * whatever owns it, INCLUDING nothing: an absent member is `undefined` at the end of the prototype chain, which
+ * is the truthful answer for a member the origins permit and this engine has not built. The two tables are tied
+ * to each other by an assert at capture rather than by a reader keeping them in step.
+ *
+ * IT IS DECLARED HERE AND ASKED ONCE, at the object's own [[GetOwnProperty]], because that is where §7.2.3.5
+ * puts it — before the prototype walk, so a name outside the list never reaches a member at all. Asking it
+ * per-member is what produced the silence above. */
+static const char *const CROSS_ORIGIN_NAME[] = {
+    "window", "self", "location", "close", "closed", "focus", "blur", "frames",
+    "length", "top", "opener", "parent", "postMessage"
+};
+#define CROSS_ORIGIN_NAME_N ((int)(sizeof CROSS_ORIGIN_NAME / sizeof CROSS_ORIGIN_NAME[0]))
+static JSAtom g_xo_atom[CROSS_ORIGIN_NAME_N];
+/* §7.2.1.3.2 step 1's FOUR NAMES, which are the exception to the throw: `then` (so a cross-origin WindowProxy
+   is not mistaken for a thenable and awaited), and the three well-known symbols an engine touches while doing
+   something else entirely. They answer `undefined` as a real property descriptor rather than by falling off the
+   chain, because §7.2.3.10 lists them among the own keys. */
+#define XO_FALLBACK_N 4
+static JSAtom g_xo_fallback[XO_FALLBACK_N];
+
+/* CAPTURED ONCE PER AGENT, from THIS realm's %Symbol%, before any page script runs — the same rule and the same
+   reason as remote_object.c's well-known table: `Symbol` is a global a page may replace, and a well-known
+   symbol resolved after that names whatever the page put there. Atoms are the RUNTIME's, and an agent is one
+   runtime, so one capture serves every realm this agent builds. */
+static void proxy_capture_names(JSContext *ctx)
+{
+    static const char *const FALLBACK_SYM[XO_FALLBACK_N - 1] = { "toStringTag", "hasInstance",
+                                                                 "isConcatSpreadable" };
+    JSValue global, sym_ctor;
+    int i;
+
+    for (i = 0; i < CROSS_ORIGIN_NAME_N; i++) {
+        g_xo_atom[i] = JS_NewAtom(ctx, CROSS_ORIGIN_NAME[i]);
+        CHECK(g_xo_atom[i] != JS_ATOM_NULL,
+              "window proxy: §7.2.1.3.1's cross-origin property names could not be interned — without them "
+              "every cross-origin read is decided by comparing against nothing");
+    }
+    g_xo_fallback[0] = JS_NewAtom(ctx, "then");
+    CHECK(g_xo_fallback[0] != JS_ATOM_NULL, "window proxy: §7.2.1.3.2's `then` could not be interned");
+
+    global = JS_GetGlobalObject(ctx);
+    sym_ctor = JS_GetPropertyStr(ctx, global, "Symbol");
+    JS_FreeValue(ctx, global);
+    CHECK(JS_IsObject(sym_ctor),
+          "window proxy: this realm has no %Symbol% — §7.2.1.3.2's fallback is three well-known symbols, and a "
+          "realm without the intrinsic can recognise none of them");
+    for (i = 0; i < XO_FALLBACK_N - 1; i++) {
+        /* A DATA PROPERTY of %Symbol% (6.1.5 makes every well-known symbol one, non-writable and
+           non-configurable), so this read runs none of the page's code — which it must not, since it runs from
+           C with no flow base under it. */
+        JSValue s = JS_GetPropertyStr(ctx, sym_ctor, FALLBACK_SYM[i]);
+        CHECK(JS_IsSymbol(s), "window proxy: %Symbol% carries no well-known symbol under one of the three names "
+                              "§7.2.1.3.2's fallback is defined over");
+        g_xo_fallback[1 + i] = JS_ValueToAtom(ctx, s);
+        JS_FreeValue(ctx, s);
+        CHECK(g_xo_fallback[1 + i] != JS_ATOM_NULL, "window proxy: a well-known symbol could not be interned");
+    }
+    JS_FreeValue(ctx, sym_ctor);
+
+    /* THE TWO TABLES ARE ONE FACT AND ARE CHECKED AGAINST EACH OTHER. A member marked cross-origin-readable
+       whose NAME is not on §7.2.1.3.1's list would be permitted by its own accessor and never reached, because
+       [[GetOwnProperty]] throws before the prototype walk; a member marked same-origin-only whose name IS on
+       the list would be reached and then refuse. Both are silent, and neither can survive this loop. */
+    for (i = 0; i < WP_MEMBER_N; i++) {
+        bool listed = false;
+        int k;
+        for (k = 0; k < CROSS_ORIGIN_NAME_N; k++)
+            if (!strcmp(PROXY_MEMBER[i], CROSS_ORIGIN_NAME[k])) { listed = true; break; }
+        DCHECK(listed == PROXY_CROSS_ORIGIN[i],
+               "a WindowProxy member's own cross-origin flag disagrees with §7.2.1.3.1's list of cross-origin "
+               "accessible window property names. The list decides whether the read reaches a member at all "
+               "(§7.2.3.5 throws before the prototype walk) and the flag decides what the member then answers, "
+               "so a disagreement is either a member that can never be read across origins however it is "
+               "marked, or one that is reached and then refuses — both of them silent");
+    }
+}
+
+/* ECMA-262 6.1.7's ARRAY INDEX, spelled out rather than parsed: a canonical numeric string for an integer in
+   [0, 2**32-1). "01", "1.0" and " 1" are ordinary property names and a strtoul would call all three indices. */
+static bool proxy_atom_is_array_index(JSContext *ctx, JSAtom prop)
+{
+    JSValue v = JS_AtomToValue(ctx, prop);
+    const char *s;
+    bool idx = false;
+
+    if (!JS_IsString(v)) { JS_FreeValue(ctx, v); return false; }   /* a symbol is never an index */
+    s = JS_ToCString(ctx, v);
+    JS_FreeValue(ctx, v);
+    if (!s) return false;
+    if (s[0] && (s[0] != '0' || s[1] == 0)) {
+        uint64_t n = 0;
+        int i;
+        idx = true;
+        for (i = 0; s[i]; i++) {
+            if (i >= 10 || s[i] < '0' || s[i] > '9') { idx = false; break; }
+            n = n * 10 + (uint64_t)(s[i] - '0');
+        }
+        if (idx && n >= 4294967295u) idx = false;
+    }
+    JS_FreeCString(ctx, s);
+    return idx;
+}
+
+/* HTML §7.2.3.5 [[GetOwnProperty]], CROSS-ORIGIN BRANCH ONLY.
+ *
+ * The SAME-ORIGIN branch is `OrdinaryGetOwnProperty(W, P)` — a forwarding to the other realm's Window that this
+ * component does not perform, deliberately (see proxy_member_get: `otherW.self` must answer with the PROXY and
+ * not with the other realm's global). Standing aside there leaves the prototype's accessors to answer exactly
+ * as they do today; taking it over would be a second, larger change wearing this one's clothes. */
+static int proxy_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom prop)
+{
+    ProxyData *p = proxy_of(obj);   /* CAPTURED: the origin this read is filtered by is per-flow state */
+    int i;
+
+    if (!p) return 0;
+    /* A NAME TABLE THAT WAS NEVER FILLED COMPARES EVERY PROPERTY AGAINST JS_ATOM_NULL and matches none, which
+       would refuse §7.2.1.3.1's whole list rather than answer it — a filter that throws for everything passes
+       any test that only checks the throw. */
+    DCHECK(g_xo_atom[0] != JS_ATOM_NULL && g_xo_fallback[0] != JS_ATOM_NULL,
+           "a WindowProxy read reached §7.2.3.5 before this agent interned §7.2.1.3.1's property names — the "
+           "class was registered without proxy_capture_names running beside it");
+
+    /* ASKED BEFORE THE ORIGINS ARE, and that order is the same one proxy_read_permitted uses for the same
+       reason: a name on the standard's list is answered by the member that owns it whatever the origins are,
+       so the origin question is never put — which is what keeps the opaque-origin assert inside
+       proxy_same_origin_decides firing only where the answer actually turns on it. */
+    for (i = 0; i < CROSS_ORIGIN_NAME_N; i++)
+        if (prop == g_xo_atom[i]) return 0;   /* the member that owns it answers — including no member at all */
+
+    /* §7.2.3.5's SAME-ORIGIN BRANCH IS NOT THIS HOOK'S — see the block comment. */
+    if (proxy_same_origin_decides(p)) return 0;
+
+    for (i = 0; i < XO_FALLBACK_N; i++)
+        if (prop == g_xo_fallback[i]) {
+            if (!desc) return 1;
+            /* §7.2.1.3.2 step 1's descriptor exactly: undefined, non-writable, non-enumerable, CONFIGURABLE. */
+            desc->flags = JS_PROP_CONFIGURABLE;
+            desc->value = JS_UNDEFINED;
+            desc->getter = JS_UNDEFINED;
+            desc->setter = JS_UNDEFINED;
+            return 1;
+        }
+
+    if (proxy_atom_is_array_index(ctx, prop))
+        DFAIL("an INDEXED read of a cross-origin WindowProxy. §7.2.3.5 answers it out of the peer's document-"
+              "tree child navigables — `w[0]` is that child's WindowProxy when the index is in range and a "
+              "SecurityError when it is not — so neither answer can be produced without the peer's child "
+              "navigable LIST, which is a cross-instance read this engine does not make (`length` is the only "
+              "member that leaves the instance, and a count is not a list). Build it as a second "
+              "`windowproxy.get`-shaped operation returning the child's document name, mint the remote proxy "
+              "from it, and this branch becomes the in-range/out-of-range split. Answering `undefined` here is "
+              "what this hook exists to stop, and a SecurityError would be wrong for every in-range index");
+
+    /* §7.2.1.3.2 step 2. */
+    JS_ThrowDOMException(ctx, "SecurityError",
+                         "the origins do not permit reading this member of that Window");
+    return -1;
+}
+
+/* CONSULTS THIS COMPONENT'S OWN STRINGS AND ATOMS AND NOTHING ELSE, so the engine's own accessor walks may run
+   it from C with no flow base under them — which is what the declaration states and quickjs.c asserts. */
+static const JSClassExoticMethods PROXY_EXOTIC = {
+    .get_own_property = proxy_get_own,
+    .get_own_property_no_user_code = true,
+};
 
 /* §7.2.5's `top`: the TOP-LEVEL traversable's proxy. Walked rather than stored, because a navigable's parent
    chain is the only place the answer lives and a cached one goes stale the moment a frame is reparented. */
@@ -1262,7 +1457,10 @@ void window_proxy_install_proto(JSContext *ctx)
 
 void window_proxy_init(JSContext *ctx, const char *origin)
 {
-    JSClassDef d = { "WindowProxy", .finalizer = proxy_finalizer, .gc_mark = proxy_gc_mark };
+    /* §7.2.3.5's cross-origin branch is the CLASS's, not the prototype's: it runs BEFORE the prototype walk,
+       which is the whole reason a name that is not a member can be refused at all. */
+    JSClassDef d = { "WindowProxy", .finalizer = proxy_finalizer, .gc_mark = proxy_gc_mark,
+                     .exotic = &PROXY_EXOTIC };
     JSRuntime *rt = JS_GetRuntime(ctx);
 
     DCHECK(g_wp_rt == NULL || g_wp_rt == rt, "WindowProxy was installed into a second runtime");
@@ -1273,6 +1471,7 @@ void window_proxy_init(JSContext *ctx, const char *origin)
     CHECK(g_local_origin != NULL, "window proxy: OOM recording this document's origin");
     JS_NewClassID(rt, &g_proxy_class);
     JS_NewClass(rt, g_proxy_class, &d);
+    proxy_capture_names(ctx);
     /* THE POOL ENTRIES ARE THE AGENT'S — a declaration is a runtime registration, and every realm's members
        carry the same ids. Only the OBJECTS below are per realm. */
     g_wp_len_getter_id  = idl_getter_id_step(ctx, &PROXY_GET_DECL, WP_LENGTH);
@@ -1292,9 +1491,13 @@ JSValue window_proxy_proto(JSContext *ctx)
 void window_proxy_free(JSContext *ctx)
 {
     OwnedStr *e = g_strings;
+    int i;
     if (!g_wp_rt) return;
     while (e) { OwnedStr *n = e->next; free(e->s); free(e); e = n; }
     g_strings = NULL;
+    /* §7.2.1.3.1's and §7.2.1.3.2's names, released with the agent that interned them. */
+    for (i = 0; i < CROSS_ORIGIN_NAME_N; i++) { JS_FreeAtom(ctx, g_xo_atom[i]); g_xo_atom[i] = JS_ATOM_NULL; }
+    for (i = 0; i < XO_FALLBACK_N; i++) { JS_FreeAtom(ctx, g_xo_fallback[i]); g_xo_fallback[i] = JS_ATOM_NULL; }
     /* the prototypes are the REALMS' — released with their contexts */
     free(g_local_origin);
     g_local_origin = NULL;
