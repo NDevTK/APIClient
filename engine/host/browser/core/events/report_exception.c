@@ -7,19 +7,26 @@
  * to say a page threw) or swallow it silently — and rendering.c carried a DFAIL naming this file rather than
  * choosing either.
  *
- * IT IS A REQUEST, not a call, because step 5.2 FIRES AN EVENT and firing one runs the page's `onerror`. The
+ * IT IS A REQUEST, not a call, because step 6.2 FIRES AN EVENT and firing one runs the page's `onerror`. The
  * work record belongs to the CALLING machine, exactly as abort.h's AbortSignalWork does: a fork mid-report must
  * not hand two arms one dispatch, and the caller is what has a `visit`.
+ *
+ * THE STEP NUMBERS IN THIS FILE WERE ONE BEHIND THE STANDARD, and every one of them is fixed here. §8.1.4.6
+ * takes `optional boolean omitError (default false)` and spends step 5 on it ("if omitError is true, then set
+ * errorInfo[error] to null"), which moved the error-reporting-mode block from step 5 to step 6 and the
+ * notHandled block from step 6 to step 7. A stale step number is the stale-DFAIL failure exactly — it stays
+ * true about the algorithm the day it was written and goes wrong about the STANDARD, so it reads as
+ * authoritative while naming a step that is now something else — and the stage labels below are resolved by a
+ * cross-session resume, so here it would be resolved against the wrong step rather than merely read.
  *
  * WHAT IS NOT MODELLED, AND WHY THAT IS NOT A STUB. errorInfo's `message`, `filename`, `lineno` and `colno` are
  * IMPLEMENTATION-DEFINED by the standard's own words ("implementation-defined values derived from exception"),
  * so deriving the message from the exception without a script position is a permitted implementation and not a
- * gap. `error` is the exception itself and is the one the standard pins. The MUTED-ERRORS branch (steps 3-4) is
- * about a classic script fetched cross-origin without CORS, which is a fact about the script fetch; when the
- * loader records it, this is the one place that reads it. */
-#include <string.h>
-
+ * gap. `error` is the exception itself and is the one the standard pins. What each of the standard's other
+ * steps does here is stated once, at the stage declaration below, rather than twice. */
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "check.h"
 #include "quickjs.h"
@@ -28,8 +35,51 @@
 #include "core/events/error_event.h"
 #include "core/events/event_target.h"
 #include "core/events/report_exception.h"
+#include "core/realm.h"
 
-/* §8.1.4.6 step 5's IN ERROR REPORTING MODE, which is a flag on the GLOBAL and not on this component: a report
+/* WHERE A PARKED REPORT IS, AS A STEP OF §8.1.4.6 RATHER THAN AS A PRIVATE INTEGER.
+ *
+ * This record rested at the bare integers 0 and 1. JSTrampStepDef::steps refuses that for a DEFINITION — an
+ * index means nothing to the build that resumes a parked flow, so the rest point a machine holds has to be a
+ * LABEL — and nothing refuses it for a WORK RECORD, which is the only reason it survived here. A record is not
+ * exempt: it suspends inside the page's `error` listeners, it rides the calling machine's snapshot to the cold
+ * tier and back, and the caller's own stage says only "report an exception" and cannot say which step of it.
+ *
+ * THE EXTRACT IS THE STAGE THIS RECORD DID NOT HAVE. Step 2's extract derives the message, filename, lineno and
+ * colno the standard leaves implementation-defined, and this engine derives the last three by RENDERING THE
+ * BACKTRACE the exception carries — one CallSite per frame, so the work is the page's own recursion depth. That
+ * sat inside what was the entry span, ahead of the first guard, which is the one place a stage's body can hide.
+ * It is its own stage and it ends in JS_STEP_YIELD, so the scheduler is ASKED between the walk and step 6
+ * instead of being told the whole head is one uninterruptible step.
+ *
+ * STEPS 3 AND 4 ARE PERFORMED AND ARE THE IDENTITY, which is not the same as being skipped. Step 3 says "let
+ * script be a script found in an implementation-defined way, OR NULL"; this agent finds null, which is the
+ * standard's own alternative, and step 4's condition ("script is a classic script and script's muted errors is
+ * true") is therefore false. The day the classic-script loader records muted errors for a cross-origin script
+ * fetched without CORS, step 4 is read here and nowhere else. Step 5 is `omitError`, whose only true is passed
+ * by step 7.2 — see the assertion at step 7.
+ *
+ * A STAGE THAT IS NOT A REST POINT IS NOT DECLARED. Step 6.3 (set the mode back to false) and step 7 run in the
+ * arm the fire ENDS in, because the algorithm does not stop there — the label names where the record is
+ * re-entered, and nothing re-enters it after the dispatch has answered. */
+#define RX_STAGES(X)                                                                                        \
+    X(RX_EXTRACT, "HTML §8.1.4.6 step 2 (errorInfo is the result of extracting error information from "      \
+                  "exception, whose own step 3 derives message, filename, lineno and colno — here by "       \
+                  "rendering the backtrace the exception carries, one CallSite per frame)")                  \
+    X(RX_MODE,    "HTML §8.1.4.6 steps 6-6.1 (global is not in error reporting mode; set global's in error "  \
+                  "reporting mode to true — the range is one O(1) read and one O(1) write of one flag on "   \
+                  "the global, and the test and the set are the one operation the standard states)")         \
+    X(RX_FIRE,    "HTML §8.1.4.6 step 6.2 (notHandled is the result of firing an event named error at "      \
+                  "global, using ErrorEvent, with the cancelable attribute initialized to true and "         \
+                  "additional attributes initialized according to errorInfo)")
+enum { RX_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const RX_STEPS[] = { RX_STAGES(JS_STEP_STAGE_LABEL) NULL };
+#define RX_STAGE_COUNT ((int)(sizeof RX_STEPS / sizeof *RX_STEPS) - 1)
+/* ONE NAME FOR THE ALGORITHM THESE STAGES ARE STEPS OF — the dispatch's abort and the teardown's assertion
+   share it, so neither can name a different algorithm from the other. */
+#define RX_ALGORITHM "HTML §8.1.4.6 report an exception"
+
+/* §8.1.4.6 step 6's IN ERROR REPORTING MODE, which is a flag on the GLOBAL and not on this component: a report
    whose own `error` listener throws must not report that throw recursively, and "recursively" is per global.
    It hangs off the global under a private Symbol, which is also what makes it per-flow for free — a flag set by
    one forked arm is a property write the COW delta captures. */
@@ -76,7 +126,7 @@ static bool reporting_mode(JSContext *ctx, JSValueConst global, int set, bool on
 
 void report_exception_work_start(ReportExceptionWork *w)
 {
-    w->stage = 0;
+    w->stage = RX_EXTRACT;
     w->reporting = 0;
     w->phase = 0;
     w->ev = JS_UNDEFINED;
@@ -95,16 +145,20 @@ void report_exception_work_unlock(JSContext *ctx, ReportExceptionWork *w)
 {
     /* THE FLAG IS A LOCK, SO ITS OWNER HAS TO RELEASE IT ON EVERY EXIT. A report that is ABANDONED — the flow
        it belongs to is dropped, or the dispatch machine holding it is torn down while the `error` event is
-       still in flight — would otherwise leave the global in error reporting mode forever, and step 5 then
+       still in flight — would otherwise leave the global in error reporting mode forever, and step 6 then
        silently skips EVERY later report on that global. That is invisible: the first exception is reported and
        every one after it is swallowed, which reads exactly like "reporting does not work sometimes".
        IT IS ITS OWN FUNCTION because it is the only part of this record's teardown a `visit` cannot express: a
        global flag is not a reference, so no declaration names it. Everything else here IS named by the visit
        above, and a teardown that restated it would be the second list.
-       IT ASKS ABOUT THE LOCK, NOT ABOUT THE STAGE. This was `if (w->stage != 0)` — see report_exception.h: a
-       negation over the stages is a claim about every stage that is not the first, and §8.1.4.6 has two more
-       rest points to declare (step 2's extract walks a backtrace whose depth the page chose). The day either
-       lands, `stage != 0` would have started giving back a mode this record had not yet taken. */
+       IT ASKS ABOUT THE LOCK, NOT ABOUT THE STAGE, and the stages it would have been asking about are now
+       declared: `if (w->stage != 0)` reads RX_MODE — the stage that has finished the extract and has NOT yet
+       taken the mode — as a record that owes the flag back, and would clear a mode some other report is holding.
+       That is what a negation over the stages always is: a claim about every stage that is not the first, made
+       before those stages exist. The lock is not a step of the algorithm, it is a thing the algorithm HOLDS. */
+    DCHECK(w->stage < RX_STAGE_COUNT,
+           RX_ALGORITHM " abandoned a report at a cursor its stage declaration does not name — a record torn "
+           "down at a stage nobody declares is one whose step 6.1 lock nobody can say was taken");
     if (w->reporting) {
         JSValue g = JS_GetGlobalObject(ctx);
         reporting_mode(ctx, g, /*set*/ 1, false);
@@ -168,9 +222,15 @@ static void report_position(JSContext *ctx, JSValueConst exception, char *file, 
     JS_FreeCString(ctx, s);
 }
 
-/* §8.1.4.6 step 2: "extract error information from exception". `error` is the exception; the other four are
-   implementation-defined, and the message is derived WITHOUT running the page's `toString` — a host reporting
-   what went wrong must not depend on the code that went wrong, which is exactly what JS_DiagCString is for. */
+/* §8.1.4.6 step 2's EXTRACT ERROR INFORMATION, materialized as the event step 6.2 fires. `error` is the
+   exception; the other four are implementation-defined, and the message is derived WITHOUT running the page's
+   `toString` — a host reporting what went wrong must not depend on the code that went wrong, which is exactly
+   what JS_DiagCString is for.
+   THE ERROREVENT *IS* THIS ENGINE'S errorInfo. The standard's errorInfo is "a map keyed by IDL attributes"
+   whose only consumer is "additional attributes initialized according to errorInfo" — so the map and the event
+   built from it hold the same five values, and the event is what a rest point between step 2 and step 6.2 can
+   carry (a C map of borrowed strings could not park). Steps 3-5 are the only writers the standard puts between
+   the two, and all three are the identity here — see the stage declaration. */
 static JSValue report_error_event(JSContext *ctx, JSValueConst exception)
 {
     char *owned = NULL;
@@ -195,36 +255,74 @@ int report_exception_run(JSContext *ctx, ReportExceptionWork *w, JSValueConst ex
 {
     JSValue g = JS_GetGlobalObject(ctx);
     JSValueConst global = g;
+    /* STEP 1: "let notHandled be true". It is above the dispatch because it is a statement about every entry —
+       the fire is the only writer, and the entry that collects the fire's answer is the only entry in which
+       step 7 reads anything but this. Code that legitimately runs on EVERY entry belongs here, which is a
+       statement about it rather than an accident of where a guard happened to land. */
     bool not_canceled = true;
     int r;
 
     JS_FreeValue(ctx, g);   /* a realm owns its global for the realm's whole life — this is a borrow */
-    if (w->stage == 0) {
-        JS_FreeValue(ctx, in);
-        /* §8.1.4.6 step 5: the whole of steps 5.1-5.3 happen only when the global is NOT already reporting.
-           Nothing else in the algorithm is observable headless, so a re-entrant report is finished here. */
-        if (reporting_mode(ctx, global, /*set*/ 0, false))
-            return 0;
-        w->ev = report_error_event(ctx, exception);
-        if (JS_IsException(w->ev)) { w->ev = JS_UNDEFINED; return 0; }
-        reporting_mode(ctx, global, /*set*/ 1, true);   /* step 5.1 */
-        w->reporting = 1;                               /* and this record now owes it back — see the unlock */
-        STEP_GOTO(w->stage, 1, &w->phase, NULL);
-        in = JS_UNDEFINED;
-    }
-    /* step 5.2: fire `error` at the global, using ErrorEvent, cancelable. It is the SAME §2.9 dispatch every
+
+    STEP_DISPATCH(RX_STAGES, w->stage, RX_ALGORITHM, JS_STEP_ABRUPT);
+
+    STEP_ARM(RX_EXTRACT);
+    JS_FreeValue(ctx, in);   /* nothing has asked for anything yet, so this entry's answer belongs to nobody */
+    /* STEP 2. It walks the backtrace, so the stage ENDS here and the scheduler is asked before step 6 rather
+       than after the whole head has run. A mint that fails is an allocation failure and nothing else — this
+       runs none of the page's code — which is why it is a CHECK and not a swallowed exception: returning 0 here
+       left the caller continuing with a live throw in the context and a report that had reported nothing. */
+    w->ev = report_error_event(ctx, exception);
+    CHECK(!JS_IsException(w->ev), "the ErrorEvent carrying §8.1.4.6 step 2's errorInfo could not be allocated");
+    /* STEPS 3-5 are performed and are the identity — script is null, so step 4's condition is false, and this
+       component takes no omitError, so step 5's is too. See the stage declaration for both, and step 7 for the
+       assertion that names the day step 5 acquires a caller. */
+    STEP_GOTO(w->stage, RX_MODE, &w->phase, NULL);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(RX_MODE);
+    JS_FreeValue(ctx, in);
+    /* STEP 6: the whole of steps 6.1-6.3 happen only when the global is NOT already reporting. A re-entrant
+       report skips them and arrives at step 7 with notHandled still step 1's true, which is what the standard
+       says and is not the same as being finished. */
+    if (reporting_mode(ctx, global, /*set*/ 0, false))
+        goto not_handled;
+    reporting_mode(ctx, global, /*set*/ 1, true);   /* step 6.1 */
+    w->reporting = 1;                               /* and this record now owes it back — see the unlock */
+    /* AND IT RETURNS RATHER THAN RUNNING ON. The fire is the next stage; a body that sets its stage and falls
+       into the next arm has crossed a boundary the driver never saw, so the label would claim a rest point the
+       engine cannot park at. JS_STEP_YIELD is what asks: the scheduler parks this report if a sibling flow
+       outranks it and re-enters immediately if none does. */
+    STEP_GOTO(w->stage, RX_FIRE, &w->phase, NULL);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(RX_FIRE);
+    /* STEP 6.2: fire `error` at the global, using ErrorEvent, cancelable. It is the SAME §2.9 dispatch every
        other fire in this engine uses — reached as a REQUEST because this caller can park. */
     r = event_target_fire_run(ctx, &w->phase, STEP_CB(w->cb), global, w->ev, JS_UNDEFINED, in,
                               &not_canceled, out_cb, out_argc);
     if (r)
         return r;
-    reporting_mode(ctx, global, /*set*/ 1, false);      /* step 5.3 */
+    reporting_mode(ctx, global, /*set*/ 1, false);      /* step 6.3 */
     w->reporting = 0;                                   /* given back at the step that gives it back */
-    /* step 6's notHandled is `not_canceled`: an `onerror` that returns true cancels the event, and that is how
-       a page says it handled the error. Headless there is no developer console for step 7 to write to, so the
-       flag has no further consumer here — a WORKER's global is where step 6.2 gives it one. */
+not_handled:
+    /* STEP 7's notHandled is `not_canceled`: an `onerror` that returns true cancels the event, and that is how
+       a page says it handled the error. Step 7.1 nulls errorInfo[error], whose only readers are 7.2 and 7.3;
+       7.3 is a developer console this build does not have, and 7.2 is the WORKER branch — which is also the one
+       caller in the standard that passes step 5's omitError true. */
+    if (not_canceled)
+        realm_awaits(ctx, "Worker",
+                     "§8.1.4.6 step 7.2 queues a global task on the DOM manipulation task source, at the "
+                     "worker's owner, that fires `error` at the Worker object using ErrorEvent and — if that "
+                     "is not handled either — REPORTS the exception again for the owner's global with "
+                     "omitError true. That parameter is step 5, which this component does not yet take, so "
+                     "both land together: give report_exception_run an omitError argument that nulls the "
+                     "ErrorEvent's `error` before the fire, and write 7.1 and 7.2 here. `Worker` is what makes "
+                     "a DedicatedWorkerGlobalScope reachable, so with it in this build they are due");
     JS_FreeValue(ctx, w->ev);
     w->ev = JS_UNDEFINED;
-    STEP_GOTO(w->stage, 0, &w->phase, NULL);
+    /* AND THE ALGORITHM IS BACK AT ITS FIRST STEP: the record a caller holds names the step it would be
+       ENTERED at rather than the last one it rested at, so a record reached again is asked from step 2. */
+    STEP_GOTO(w->stage, RX_EXTRACT, &w->phase, NULL);
     return 0;
 }
