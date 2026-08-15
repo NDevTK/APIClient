@@ -1,0 +1,1644 @@
+/* THE MEDIA ELEMENT — HTML §4.8.11, as a real state machine with a MOCK MEDIA DEVICE under it.
+ *
+ * WHAT WAS HERE BEFORE, AND WHY IT WAS THE BIGGEST GAP LEFT. `<audio>` and `<video>` had SIX reflected content
+ * attributes on two prototypes that inherited from HTMLElement directly, and nothing else: no `play`, no
+ * `paused`, no `readyState`, no `currentTime`, no `duration`, no `error`, no `canPlayType`, and no
+ * HTMLMediaElement interface at all. Every one of those is a page-visible value the spec COMPUTES, so a bundle
+ * asking `if (v.canPlayType('video/mp4;codecs="avc1.42E01E"'))` or `v.play().catch(fallback)` threw a
+ * TypeError on the first line and everything behind it — the fallback player, the telemetry endpoint, the
+ * "your browser can't play this" route — was never reached. §Headless names this file's job exactly: the only
+ * missing piece is a physical IO device, and the spec still defines the whole state machine without one.
+ *
+ * THE DEVICE IS MODELLED AS AN UNBOUNDED STREAM, AND EVERY NUMBER IT ANSWERS IS THE SPEC'S OWN. This is the
+ * one decision the rest follows from, and it invents nothing (§Attacker-sources: COMPUTE OR SHAPE, NEVER
+ * INVENT). No bytes are fetched, so the length of the resource is not known — and §4.8.11.6 already says what
+ * `duration` is for a resource "not known to be bounded": positive Infinity. From that one spec-derived fact
+ * everything else follows without a single invented constant:
+ *   - `seekable` and `buffered` are ONE range, [0, duration) — §4.8.11.9's "if the user agent can seek to
+ *     anywhere in the media resource … one range whose start is the earliest possible position and whose end
+ *     is the same plus the duration";
+ *   - `played` is EMPTY until the position advances, because §4.8.11.8 defines it as the ranges reached
+ *     "through the usual monotonic increase of the current playback position during normal playback" and no
+ *     media timeline clock has advanced;
+ *   - `ended` is false forever, because §4.8.11.8's ended playback requires the position to reach the end of
+ *     the resource and an unbounded stream has none. A page waiting for `ended` on a live stream waits in a
+ *     real browser too.
+ * A shorter modelled duration would be a number nobody computed, which is what §H forbids — and it would make
+ * `ended` a lie the moment a page seeked past it.
+ *
+ * WHAT IS UNKNOWABLE IS THE ONE THING THAT FORKS: WHETHER THE RESOURCE IS USABLE. Whether the bytes at
+ * `currentSrc` decode is a fact about a server this engine has not read, so §4.8.11.5's media data processing
+ * steps are an OUTCOME FORK (solver/decide.h's seam, the same one JSON.parse over unknown text uses). Outcome
+ * 0 — the arm a run with no forking policy takes, which is step_fork_run's rule — is the resource being
+ * USABLE, because that is the ordinary completion and the one an @S candidate re-fire must follow to a sink.
+ * Outcome 1 is §4.8.11.5's "failed with attribute" branch, which sets `error` to a MEDIA_ERR_SRC_NOT_SUPPORTED
+ * MediaError and fires `error`. Both arms are real code in real pages and they run DIFFERENT endpoints: one
+ * flow reaches `oncanplay`/`onloadedmetadata`, its sibling reaches `onerror` and whatever fallback it fetches.
+ * That fork is the whole value of this file to the solver, and it is why the load path had to be a state
+ * machine rather than a getter that shrugs.
+ *
+ * AND `duration` IS CONCOLIC WITH THAT MODELLED ANSWER AS ITS EXAMPLE — matchMedia's rule for `.matches`
+ * (core/css/media_query_list.c), for matchMedia's reason. The modelled device answers +Infinity so a
+ * conformance host reads a real number, and an exploring host reads a concolic carrying it, so
+ * `if (v.duration > 60)` still forks into the world where the resource is long. Collapsing it to bare
+ * concrete would delete that world; shrugging to opaque would delete the value.
+ *
+ * THE STATE IS OWN SLOTS ON THE ELEMENT'S WRAPPER, WHICH IS WHAT MAKES IT TIME-TRAVEL. §State-isolation's rule
+ * is that platform data a flow queues is a JS VALUE and never malloc'd C: a record hung off a private Symbol
+ * is written with ordinary property writes, which the per-flow heap COW delta already captures — so two forked
+ * arms that both call `play()` each hold their own `paused`, their own pending play promises and their own
+ * `error`, and a flow parked at an `await` between two of them resumes with exactly what it wrote. The list of
+ * pending play promises is a JS Array for the same reason: a malloc'd list captured by pointer reverts the
+ * POINTER on a context switch and leaves the nodes reachable from nothing.
+ *
+ * WHAT IS HONESTLY ABSENT. The TRACK surface — `audioTracks`, `videoTracks`, `textTracks` and `addTextTrack` —
+ * is four members over five interfaces (AudioTrackList, VideoTrackList, TextTrackList, TextTrack,
+ * TextTrackCue) that this file does not build, so it does not install them: a page reading `v.textTracks`
+ * gets `undefined` and its own TypeError, which is this engine's forcing function, and engine/idlgen.mjs's
+ * audit reports the four by name against this component. The two steps of §4.8.11.5 that would DRAIN those
+ * lists — "forget the media element's media-resource-specific tracks" and the media data processing steps'
+ * addtrack — assert their producer's absence through realm_awaits, so the day someone lands TextTrackList the
+ * DCHECK fires AT the step that must then be written rather than the step silently doing nothing forever. */
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "check.h"
+#include "quickjs.h"
+#include "quickjs-step.h"
+#include "core/dom/element.h"
+#include "core/dom/node.h"
+#include "core/events/event.h"
+#include "core/events/event_target.h"
+#include "core/html/media_element.h"
+#include "core/idl_args.h"
+#include "core/idl_slots.h"
+#include "core/mime/mime_type.h"
+#include "core/realm.h"
+#include "solver/concolic.h"
+#include "solver/decide.h"
+
+/* §4.8.11.4's network states and §4.8.11.7's ready states, as the IDL's own constants. */
+enum { NETWORK_EMPTY = 0, NETWORK_IDLE = 1, NETWORK_LOADING = 2, NETWORK_NO_SOURCE = 3 };
+enum { HAVE_NOTHING = 0, HAVE_METADATA = 1, HAVE_CURRENT_DATA = 2, HAVE_FUTURE_DATA = 3, HAVE_ENOUGH_DATA = 4 };
+/* §4.8.11.1's error codes. */
+enum { MEDIA_ERR_ABORTED = 1, MEDIA_ERR_NETWORK = 2, MEDIA_ERR_DECODE = 3, MEDIA_ERR_SRC_NOT_SUPPORTED = 4 };
+
+/* §4.8.11.8's muted STATE, which is three-valued ("either true, false, or `default`") and not a boolean. */
+enum { MUTED_DEFAULT = 0, MUTED_TRUE = 1, MUTED_FALSE = 2 };
+
+/* PER REALM — §3.7, and here it decides ANSWERS: a C member runs in the realm that DEFINED it, so a prototype
+   held in a module static would answer every document's question with the defining realm's. These are
+   quickjs's own per-context class-proto slots. HTMLMediaElement has no instances of its own class (an instance
+   is an `<audio>` or `<video>` element wrapper, whose class is html_element.c's); the class id is how this
+   realm's prototype is held, exactly as HTMLElement.prototype is held by html_element.c's. */
+static JSClassID g_media_class, g_error_class, g_ranges_class;
+/* The private Symbol §4.8.11's per-element state hangs off, and the atom for the own-slot read. */
+static JSValue g_state_key = JS_UNDEFINED;
+static JSAtom  g_atom_state = JS_ATOM_NULL;
+/* Declared once per AGENT; installed into every realm. */
+static int g_refl_base = -1;
+static int g_id_load = -1, g_id_can_play = -1, g_id_play = -1, g_id_pause = -1, g_id_fast_seek = -1,
+           g_id_start_date = -1, g_id_range_start = -1, g_id_range_end = -1;
+static int g_set_src = -1, g_set_src_object = -1, g_set_current_time = -1, g_set_volume = -1, g_set_muted = -1,
+           g_set_rate = -1, g_set_default_rate = -1, g_set_pitch = -1, g_set_loading = -1;
+static int g_task_stepid = -1, g_select_stepid = -1;
+static int g_ready;
+
+/* ---- the element, and its state record --------------------------------------------------------------------- */
+
+/* WHICH ELEMENTS ARE MEDIA ELEMENTS — §4.8.11's first sentence, and the brand every member of this file
+   performs. It is asked of the LOCAL NAME rather than of a wrapper class, because that is what the spec says a
+   media element is and because `HTMLMediaElement.prototype.play.call(x)` is a call any page can write. */
+static bool media_is(JSContext *ctx, JSValueConst v)
+{
+    lxb_dom_element_t *el = element_of_value(v);
+    const char *ns = NULL, *local = NULL;
+    char nsbuf[64], lobuf[64];
+
+    (void)ctx;
+    if (!el) return false;
+    element_ns_and_local(el, &ns, &local, nsbuf, sizeof nsbuf, lobuf, sizeof lobuf);
+    if (!local) return false;
+    return !strcmp(local, "audio") || !strcmp(local, "video");
+}
+
+/* THE STATE RECORD, created where a flow first REACHES the element — core/css/media_query_list.c's rule for a
+   record a flow may write, and here it is also the record's only creation site, so there is no write site left
+   to miss. Every field is an ordinary property, so every write is captured by the running flow's COW delta.
+   The initial values are §4.8.11's own: paused true, muted state "default", volume 1.0, both playback rates
+   1.0, preservesPitch true, the three positions zero, the timeline offset NaN, `can autoplay` true. */
+static JSValue media_state(JSContext *ctx, JSValueConst el)
+{
+    JSValue st;
+
+    DCHECK(g_ready, "a media element's state was reached before §4.8.11 was declared");
+    if (JS_GetOwnSlot(ctx, &st, el, g_atom_state) > 0) return st;
+
+    st = idl_slots_new(ctx);
+    CHECK(!JS_IsException(st), "§4.8.11: OOM building a media element's state");
+    JS_SetPropertyStr(ctx, st, "networkState", JS_NewInt32(ctx, NETWORK_EMPTY));
+    JS_SetPropertyStr(ctx, st, "readyState", JS_NewInt32(ctx, HAVE_NOTHING));
+    JS_SetPropertyStr(ctx, st, "currentSrc", JS_NewString(ctx, ""));
+    JS_SetPropertyStr(ctx, st, "error", JS_NULL);
+    JS_SetPropertyStr(ctx, st, "srcObject", JS_NULL);
+    JS_SetPropertyStr(ctx, st, "paused", JS_TRUE);
+    JS_SetPropertyStr(ctx, st, "seeking", JS_FALSE);
+    JS_SetPropertyStr(ctx, st, "showPoster", JS_TRUE);
+    JS_SetPropertyStr(ctx, st, "canAutoplay", JS_TRUE);
+    JS_SetPropertyStr(ctx, st, "current", JS_NewFloat64(ctx, 0));
+    JS_SetPropertyStr(ctx, st, "official", JS_NewFloat64(ctx, 0));
+    JS_SetPropertyStr(ctx, st, "defaultStart", JS_NewFloat64(ctx, 0));
+    JS_SetPropertyStr(ctx, st, "duration", JS_NewFloat64(ctx, NAN));
+    JS_SetPropertyStr(ctx, st, "timelineOffset", JS_NewFloat64(ctx, NAN));
+    JS_SetPropertyStr(ctx, st, "rate", JS_NewFloat64(ctx, 1.0));
+    JS_SetPropertyStr(ctx, st, "defaultRate", JS_NewFloat64(ctx, 1.0));
+    JS_SetPropertyStr(ctx, st, "preservesPitch", JS_TRUE);
+    JS_SetPropertyStr(ctx, st, "volume", JS_NewFloat64(ctx, 1.0));
+    JS_SetPropertyStr(ctx, st, "muted", JS_NewInt32(ctx, MUTED_DEFAULT));
+    JS_SetPropertyStr(ctx, st, "loadedData", JS_FALSE);   /* §4.8.11.7's "first time … since load()" latch */
+    {
+        JSValue promises = JS_NewArray(ctx);
+        CHECK(!JS_IsException(promises), "§4.8.11.8: OOM building the list of pending play promises");
+        JS_SetPropertyStr(ctx, st, "playPromises", promises);
+    }
+    JS_DefinePropertyValue(ctx, (JSValue)el, g_atom_state, JS_DupValue(ctx, st),
+                           JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
+    return st;
+}
+
+/* The receiver's state, or NULL with a TypeError pending — one brand check, spelled once. */
+static JSValue media_state_of(JSContext *ctx, JSValueConst this_val, const char *member)
+{
+    if (!media_is(ctx, this_val))
+        return JS_ThrowTypeError(ctx, "%s called on something that is not a media element", member);
+    return media_state(ctx, this_val);
+}
+
+static int32_t st_int(JSContext *ctx, JSValueConst st, const char *name)
+{
+    JSValue v = JS_GetPropertyStr(ctx, st, name);
+    int32_t n = 0;
+
+    DCHECK(JS_IsNumber(v), "§4.8.11's state answered a numeric field with something that is not a number — "
+                           "every field is written by this file and by nothing else");
+    JS_ToInt32(ctx, &n, v);
+    JS_FreeValue(ctx, v);
+    return n;
+}
+
+static double st_num(JSContext *ctx, JSValueConst st, const char *name)
+{
+    JSValue v = JS_GetPropertyStr(ctx, st, name);
+    double d = 0;
+
+    DCHECK(JS_IsNumber(v), "§4.8.11's state answered a position with something that is not a number");
+    JS_ToFloat64(ctx, &d, v);
+    JS_FreeValue(ctx, v);
+    return d;
+}
+
+static bool st_bool(JSContext *ctx, JSValueConst st, const char *name)
+{
+    JSValue v = JS_GetPropertyStr(ctx, st, name);
+    bool b;
+
+    DCHECK(JS_IsBool(v), "§4.8.11's state answered a flag with something that is not a boolean");
+    b = JS_ToBool(ctx, v) != 0;
+    JS_FreeValue(ctx, v);
+    return b;
+}
+
+static void st_set_int(JSContext *ctx, JSValueConst st, const char *name, int32_t v)
+{
+    JS_SetPropertyStr(ctx, (JSValue)st, name, JS_NewInt32(ctx, v));
+}
+
+static void st_set_num(JSContext *ctx, JSValueConst st, const char *name, double v)
+{
+    JS_SetPropertyStr(ctx, (JSValue)st, name, JS_NewFloat64(ctx, v));
+}
+
+static void st_set_bool(JSContext *ctx, JSValueConst st, const char *name, bool v)
+{
+    JS_SetPropertyStr(ctx, (JSValue)st, name, JS_NewBool(ctx, v));
+}
+
+/* ---- the MOCK MEDIA DEVICE ---------------------------------------------------------------------------------
+ *
+ * Two questions a real device answers from hardware and this one answers from the spec: which types it renders
+ * (§4.8.11.3's canPlayType), and what the timeline of a resource it has selected looks like (§4.8.11.6). */
+
+/* §4.8.11.3: "a type that the user agent knows it cannot render is one that describes a resource that the user
+   agent definitely does not support, for example because it doesn't recognize the container type". These are
+   the container types the modelled device recognises — a UA capability, stated as data the way the modelled
+   viewport is, and NOT a MIME group (Sniffing §4.6's audio-or-video group answers a different question: what a
+   byte stream IS, not what this device can play). */
+static const char *const DEVICE_CONTAINERS[] = {
+    "audio/mpeg", "audio/mp4", "audio/aac", "audio/ogg", "audio/wav", "audio/webm", "audio/flac",
+    "video/mp4", "video/webm", "video/ogg", "video/mpeg", "video/quicktime",
+    "application/vnd.apple.mpegurl",
+};
+
+/* §4.8.11.3's three answers, computed. "" when the type is one the device knows it cannot render or is
+   `application/octet-stream` with no parameters; "probably" when the container is recognised AND a codecs
+   parameter names what is in it (the spec: "a user agent should never return probably for a type that allows
+   the codecs parameter if that parameter is not present"); "maybe" otherwise. */
+static const char *device_can_play(const char *type)
+{
+    MimeType m;
+    char *essence;
+    const char *answer = "";
+    int i;
+
+    mime_type_init(&m);
+    if (!mime_type_parse(&m, type, strlen(type))) { mime_type_free(&m); return ""; }
+    essence = mime_type_essence(&m);
+    CHECK(essence != NULL, "§4.8.11.3: OOM taking a MIME type's essence");
+    /* The one special case the standard names: `application/octet-stream` with NO parameters is never a type
+       the user agent knows it cannot render, and canPlayType must answer the empty string for it anyway. */
+    if (!strcmp(essence, "application/octet-stream")) {
+        free(essence);
+        mime_type_free(&m);
+        return "";
+    }
+    for (i = 0; i < (int)(sizeof(DEVICE_CONTAINERS) / sizeof(DEVICE_CONTAINERS[0])); i++)
+        if (!strcmp(essence, DEVICE_CONTAINERS[i])) {
+            answer = mime_type_parameter(&m, "codecs") ? "probably" : "maybe";
+            break;
+        }
+    free(essence);
+    mime_type_free(&m);
+    return answer;
+}
+
+/* §4.8.11.6's ESTABLISH THE MEDIA TIMELINE for the modelled device: the resource is not known to be bounded,
+   so its duration is positive Infinity and its earliest possible position is zero. */
+#define DEVICE_DURATION  INFINITY
+
+/* THE SOURCE IDENTITY of "the bytes at this address" — what the outcome fork is keyed by and what `duration`
+   is tagged with. The ADDRESS is part of it because two `<video>` elements pointing at two URLs are two
+   different questions, and one key would let a fork taken for one decide the other. */
+static void media_source_id(JSContext *ctx, JSValueConst st, char *shape, size_t nshape, char *src,
+                            size_t nsrc)
+{
+    JSValue cur = JS_GetPropertyStr(ctx, st, "currentSrc");
+    const char *url = JS_ToCString(ctx, cur);
+
+    snprintf(shape, nshape, "{media:%s}", url ? url : "");
+    snprintf(src, nsrc, "{media}%s", url ? url : "");
+    if (url) JS_FreeCString(ctx, url);
+    JS_FreeValue(ctx, cur);
+}
+
+/* THE MEDIA RESOURCE, AS A VALUE THE OUTCOME SEAM CAN BE ASKED ABOUT. In an exploring host this is a concolic
+   with no example — the bytes are external input nobody has read, which is the most general concolic value —
+   and in a conformance host it is JS_UNDEFINED, which is not concolic, so the fork is never asked and the
+   modelled device's own answer (the resource is usable) stands. */
+static JSValue media_resource_value(JSContext *ctx, JSValueConst st)
+{
+    char shape[256], src[256];
+
+    media_source_id(ctx, st, shape, sizeof shape, src, sizeof src);
+    return concolic_source_wrap(ctx, shape, src, JS_UNDEFINED);
+}
+
+/* ---- §4.8.11.14's TimeRanges --------------------------------------------------------------------------------
+ *
+ * A TimeRanges object is "ranges, a list of zero or more time ranges", each a start and an end. The list is an
+ * own slot holding a JS Array of [start, end] pairs, for the reason the element's state is one: it is built
+ * inside a flow (every getter that returns one mints a NEW object, which the spec enshrines) and every write
+ * to it is a property write the delta captures. */
+
+static JSValue ranges_new(JSContext *ctx, const double *pairs, int n)
+{
+    JSValue proto = JS_GetClassProto(ctx, g_ranges_class), obj, list;
+    int i;
+
+    DCHECK(!JS_IsNull(proto), "a TimeRanges was minted in a realm that never ran §4.8.11's install");
+    obj = JS_NewObjectProtoClass(ctx, proto, g_ranges_class);
+    JS_FreeValue(ctx, proto);
+    if (JS_IsException(obj)) return obj;
+    list = JS_NewArray(ctx);
+    CHECK(!JS_IsException(list), "§4.8.11.14: OOM building a TimeRanges' ranges");
+    for (i = 0; i < n; i++) {
+        JSValue pair = JS_NewArray(ctx);
+        CHECK(!JS_IsException(pair), "§4.8.11.14: OOM building a time range");
+        JS_SetPropertyUint32(ctx, pair, 0, JS_NewFloat64(ctx, pairs[2 * i]));
+        JS_SetPropertyUint32(ctx, pair, 1, JS_NewFloat64(ctx, pairs[2 * i + 1]));
+        JS_SetPropertyUint32(ctx, list, (uint32_t)i, pair);
+    }
+    JS_DefinePropertyValue(ctx, obj, g_atom_state, list, JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
+    return obj;
+}
+
+/* The ranges list, or NULL with a TypeError pending. */
+static JSValue ranges_list(JSContext *ctx, JSValueConst this_val, const char *member)
+{
+    JSValue list;
+
+    if (JS_GetOwnSlot(ctx, &list, this_val, g_atom_state) <= 0)
+        return JS_ThrowTypeError(ctx, "%s called on something that is not a TimeRanges", member);
+    /* One private Symbol carries the internal state of all three of this file's object kinds, so the brand is
+       WHAT IS UNDER IT: only a TimeRanges keeps a ranges list there, and `TimeRanges.prototype.start.call(x)`
+       on a MediaError must be the TypeError §3.7.5 gives it rather than an IndexSizeError. */
+    if (!JS_IsArray(list)) {
+        JS_FreeValue(ctx, list);
+        return JS_ThrowTypeError(ctx, "%s called on something that is not a TimeRanges", member);
+    }
+    return list;
+}
+
+static uint32_t arr_len(JSContext *ctx, JSValueConst arr)
+{
+    JSValue len = JS_GetPropertyStr(ctx, arr, "length");
+    uint32_t n = 0;
+
+    JS_ToUint32(ctx, &n, len);
+    JS_FreeValue(ctx, len);
+    return n;
+}
+
+static JSValue js_ranges_length(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue list = ranges_list(ctx, this_val, "length");
+    uint32_t n;
+
+    (void)magic;
+    if (JS_IsException(list)) return list;
+    n = arr_len(ctx, list);
+    JS_FreeValue(ctx, list);
+    return JS_NewUint32(ctx, n);
+}
+
+/* §4.8.11.14's start(index) and end(index): "if index is greater than or equal to this's ranges's size, then
+   throw an IndexSizeError", otherwise the range's start or end. `magic` is which of the two ends. */
+static JSValue js_ranges_at(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValue list = ranges_list(ctx, this_val, magic ? "end" : "start"), pair, out;
+    uint32_t i = 0;
+
+    DCHECK(argc >= 1, "TimeRanges.start/end reached its body with no index — §3.6.2 step 1's TypeError for a "
+                      "call short of a member's required arguments is the declaration's");
+    if (JS_IsException(list)) return list;
+    JS_ToUint32(ctx, &i, argv[0]);
+    if (i >= arr_len(ctx, list)) {
+        JS_FreeValue(ctx, list);
+        return JS_ThrowDOMException(ctx, "IndexSizeError", "the index is not in the TimeRanges' ranges");
+    }
+    pair = JS_GetPropertyUint32(ctx, list, i);
+    out = JS_GetPropertyUint32(ctx, pair, (uint32_t)(magic ? 1 : 0));
+    JS_FreeValue(ctx, pair);
+    JS_FreeValue(ctx, list);
+    return out;
+}
+
+/* §4.8.11.9's seekable and §4.8.11.5's buffered, for the modelled device: ONE range over the whole timeline
+   once the metadata is known, and nothing before that. `played` is empty until the position advances. */
+static JSValue media_ranges_for(JSContext *ctx, JSValueConst st, bool played)
+{
+    double pair[2];
+
+    if (played || st_int(ctx, st, "readyState") < HAVE_METADATA)
+        return ranges_new(ctx, NULL, 0);
+    pair[0] = 0;
+    pair[1] = st_num(ctx, st, "duration");
+    return ranges_new(ctx, pair, 1);
+}
+
+/* ---- §4.8.11.1's MediaError ---------------------------------------------------------------------------------
+ *
+ * "To create a MediaError, given an error code … return a new MediaError object whose code is the given error
+ * code and whose message is a string containing any details the user agent is able to supply … or the empty
+ * string if the user agent is unable to supply such details." This user agent has no decoder to report from,
+ * so the message is the empty string, which is what that sentence asks for. */
+static JSValue media_error_new(JSContext *ctx, int code)
+{
+    JSValue proto = JS_GetClassProto(ctx, g_error_class), obj, slots;
+
+    DCHECK(!JS_IsNull(proto), "a MediaError was minted in a realm that never ran §4.8.11's install");
+    obj = JS_NewObjectProtoClass(ctx, proto, g_error_class);
+    JS_FreeValue(ctx, proto);
+    if (JS_IsException(obj)) return obj;
+    slots = idl_slots_new(ctx);
+    CHECK(!JS_IsException(slots), "§4.8.11.1: OOM building a MediaError's slots");
+    JS_SetPropertyStr(ctx, slots, "code", JS_NewInt32(ctx, code));
+    JS_SetPropertyStr(ctx, slots, "message", JS_NewString(ctx, ""));
+    JS_DefinePropertyValue(ctx, obj, g_atom_state, slots, JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
+    return obj;
+}
+
+static JSValue js_media_error_field(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue slots, v;
+
+    if (JS_GetOwnSlot(ctx, &slots, this_val, g_atom_state) <= 0)
+        return JS_ThrowTypeError(ctx, "a MediaError member was read on something that is not a MediaError");
+    v = JS_GetPropertyStr(ctx, slots, magic ? "message" : "code");
+    JS_FreeValue(ctx, slots);
+    return v;
+}
+
+/* ---- §4.8.11's MEDIA ELEMENT EVENT TASK SOURCE ---------------------------------------------------------------
+ *
+ * "To queue a media element task with a media element element and a series of steps steps, queue an element
+ * task on the media element's media element event task source given element and steps." The task is a JOB,
+ * which in this engine is a call-root FLOW: preemptible, forkable and parkable — it has to be, because it
+ * FIRES events and every listener body is the page's code.
+ *
+ * ONE MACHINE, because the tasks §4.8.11 queues differ in exactly two ways: which events they fire, in order,
+ * and what they do to the list of pending play promises when the fires are done. Both are ARGUMENTS. A machine
+ * per event name would be the same algorithm written out once per string. */
+enum { MTA_FIRE = 0, MTA_RESOLVE, MTA_REJECT_ABORT, MTA_REJECT_NOT_SUPPORTED };
+
+typedef struct {
+    JSStepHdr hdr;
+    /* HAVE I STARTED — a machine can never answer that from its stage, because the first stage IS the entry
+       stage (quickjs-step.h), and this machine's owned fields must be JS_UNDEFINED before the first thing that
+       can fail: a zeroed block is not a block of JS_UNDEFINEDs. */
+    uint8_t   started;
+    uint32_t  i;        /* which event of the list is next */
+    uint8_t   fphase;   /* the fire request's own phase */
+    uint8_t   cphase;   /* the settle call's own phase */
+    JSValue   ev;       /* the event being fired, held across the suspension (owned) */
+    JSValue   reason;   /* the DOMException a rejecting task rejects with (owned) */
+    EventFireCb cb;     /* the fire request buffer */
+    JSValue   ccb[3];   /* the settle call's buffer: [this, func, value] */
+} MediaTask;
+
+#define MEDIA_TASK_STAGES(X) \
+    X(MT_FIRE,   "HTML §4.8.11 the queued media element task (fire an event named e at the media element)") \
+    X(MT_SETTLE, "HTML §4.8.11.8 resolve pending play promises / reject pending play promises (settle the " \
+                 "promises this task took, one per entry)")
+enum { MEDIA_TASK_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const MEDIA_TASK_STEPS[] = { MEDIA_TASK_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static void media_task_visit(JSContext *ctx, void *stp, JSStepVisit *v)
+{
+    MediaTask *s = stp;
+    int k;
+
+    v->val(ctx, &s->ev);
+    v->val(ctx, &s->reason);
+    STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
+    STEP_CB_FOREACH(s->ccb, k) v->val(ctx, &s->ccb[k]);
+}
+
+static int media_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    MediaTask *s = stp;
+    JSValueConst element = step_arg(&s->hdr, 0);
+    JSValueConst events = step_arg(&s->hdr, 1);
+    JSValueConst promises = step_arg(&s->hdr, 2);
+    int action = 0, r;
+
+    {
+        int32_t a = 0;
+        JS_ToInt32(ctx, &a, step_arg(&s->hdr, 3));
+        action = a;
+    }
+
+    STEP_DISPATCH(MEDIA_TASK_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(MT_FIRE);
+        if (!s->started) {
+            int k;
+
+            s->started = 1;
+            s->i = 0;
+            s->fphase = s->cphase = 0;
+            s->ev = s->reason = JS_UNDEFINED;
+            STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+            STEP_CB_FOREACH(s->ccb, k) s->ccb[k] = JS_UNDEFINED;
+        }
+        for (;;) {
+            if (JS_IsUndefined(s->ev)) {
+                JSValue name;
+                const char *type;
+
+                if (s->i >= arr_len(ctx, events)) break;
+                name = JS_GetPropertyUint32(ctx, events, s->i);
+                type = JS_ToCString(ctx, name);
+                JS_FreeValue(ctx, name);
+                CHECK(type != NULL, "§4.8.11: OOM reading a queued task's event name");
+                /* None of §4.8.11's own events bubbles and none is cancelable — the standard names each fire
+                   as "fire an event named e at the element" and gives no initialiser. */
+                s->ev = event_new(ctx, type, /*bubbles*/ false, /*cancelable*/ false);
+                JS_FreeCString(ctx, type);
+                if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+            }
+            r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), element, s->ev, JS_UNDEFINED, cb_result,
+                                      NULL, out_cb, out_argc);
+            if (r > 0) return r;
+            cb_result = JS_UNDEFINED;
+            JS_FreeValue(ctx, s->ev);
+            s->ev = JS_UNDEFINED;
+            if (r < 0) return JS_STEP_ABRUPT;
+            s->i++;
+            /* One event per turn: a listener list is of the PAGE'S size, so the scheduler is asked between
+               two fires rather than after all of them. */
+            if (s->i < arr_len(ctx, events)) return JS_STEP_YIELD;
+        }
+        if (action == MTA_FIRE) return JS_STEP_DONE;
+        s->i = 0;
+        STEP_GOTO(s->hdr.stage, MT_SETTLE, &s->fphase, &s->cphase, NULL);
+        /* The driver re-enters at the stage this arm just set: an arm ENDS in a return, and one that runs on
+           into the next has claimed a rest point the driver never saw. */
+        return JS_STEP_YIELD;
+
+    STEP_ARM(MT_SETTLE);
+        DCHECK(JS_IsArray(promises), "a settling media element task was queued with no promise list — the "
+                                     "take-pending-play-promises step hands one over even when it is empty");
+        if (action != MTA_RESOLVE && JS_IsUndefined(s->reason)) {
+            /* §4.8.11.8's two rejections name their exception: an "AbortError" for a load or a pause that
+               interrupted the play, a "NotSupportedError" for the dedicated media source failure steps. */
+            JS_ThrowDOMException(ctx, action == MTA_REJECT_ABORT ? "AbortError" : "NotSupportedError",
+                                 action == MTA_REJECT_ABORT
+                                     ? "the media element's play() was interrupted"
+                                     : "the media resource is not suitable");
+            s->reason = JS_GetException(ctx);
+        }
+        while (s->i < arr_len(ctx, promises)) {
+            JSValue pair = JS_GetPropertyUint32(ctx, promises, s->i);
+            JSValue fn = JS_GetPropertyUint32(ctx, pair, action == MTA_RESOLVE ? 0 : 1);
+            JSValueConst arg = action == MTA_RESOLVE ? JS_UNDEFINED : (JSValueConst)s->reason;
+            JSValue settled = JS_UNDEFINED;
+
+            JS_FreeValue(ctx, pair);
+            r = step_call_run(ctx, &s->cphase, STEP_CB(s->ccb), fn, JS_UNDEFINED, 1, &arg, cb_result, &settled,
+                              out_cb, out_argc);
+            JS_FreeValue(ctx, fn);
+            if (r > 0) return r;
+            cb_result = JS_UNDEFINED;
+            JS_FreeValue(ctx, settled);
+            if (r < 0) return JS_STEP_ABRUPT;
+            s->i++;
+        }
+        return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef media_task_def = {
+    sizeof(MediaTask), media_task_step, NULL, 0,
+    .visit = media_task_visit,
+    .algorithm = "HTML §4.8.11 the media element event task source",
+    .steps = MEDIA_TASK_STEPS
+};
+
+/* QUEUE ONE. `events` and `promises` are CONSUMED. */
+static void media_queue_task(JSContext *ctx, JSValueConst el, JSValue events, JSValue promises, int action)
+{
+    JSValueConst argv[4];
+    JSValue fn, act;
+
+    DCHECK(g_task_stepid >= 0, "a media element task was queued before §4.8.11 registered its machine");
+    /* THE CALLEE IS MINTED IN THE ENQUEUING REALM: a C function runs in the realm that DEFINED it, and this
+       one fires events at an element of THIS document. */
+    fn = JS_NewCFunction2(ctx, NULL, "mediaElementTask", 4, JS_CFUNC_step, g_task_stepid);
+    CHECK(!JS_IsException(fn), "§4.8.11: the media element task's callee could not be allocated");
+    act = JS_NewInt32(ctx, action);
+    argv[0] = el;
+    argv[1] = events;
+    argv[2] = promises;
+    argv[3] = act;
+    JS_EnqueueCallJob(ctx, fn, 4, argv);
+    JS_FreeValue(ctx, fn);
+    JS_FreeValue(ctx, events);
+    JS_FreeValue(ctx, promises);
+    JS_FreeValue(ctx, act);
+}
+
+static JSValue media_event_list(JSContext *ctx, const char *const *names, int n)
+{
+    JSValue arr = JS_NewArray(ctx);
+    int i;
+
+    CHECK(!JS_IsException(arr), "§4.8.11: OOM building a queued task's event list");
+    for (i = 0; i < n; i++)
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewString(ctx, names[i]));
+    return arr;
+}
+
+/* "Queue a media element task given the media element to fire an event named e at the media element" — the
+   shape §4.8.11 states twenty times. */
+static void media_queue_fire(JSContext *ctx, JSValueConst el, const char *name)
+{
+    media_queue_task(ctx, el, media_event_list(ctx, &name, 1), JS_UNDEFINED, MTA_FIRE);
+}
+
+/* §4.8.11.8's TAKE PENDING PLAY PROMISES: "copy the media element's list of pending play promises to promises,
+   clear the list, and return promises". The copy is the ARRAY the state holds; clearing it means giving the
+   state a fresh one, which is one property write the delta captures. */
+static JSValue media_take_play_promises(JSContext *ctx, JSValueConst st)
+{
+    JSValue taken = JS_GetPropertyStr(ctx, st, "playPromises");
+    JSValue fresh = JS_NewArray(ctx);
+
+    CHECK(!JS_IsException(fresh), "§4.8.11.8: OOM clearing the list of pending play promises");
+    JS_SetPropertyStr(ctx, (JSValue)st, "playPromises", fresh);
+    return taken;
+}
+
+/* §4.8.11.8's NOTIFY ABOUT PLAYING: take the pending play promises, then queue a task that fires `playing` and
+   resolves them. */
+static void media_notify_playing(JSContext *ctx, JSValueConst el, JSValueConst st)
+{
+    static const char *const PLAYING[] = { "playing" };
+
+    media_queue_task(ctx, el, media_event_list(ctx, PLAYING, 1), media_take_play_promises(ctx, st),
+                     MTA_RESOLVE);
+}
+
+/* ---- §4.8.11.7's READY STATE TRANSITIONS ---------------------------------------------------------------------
+ *
+ * "When the ready state of a media element whose networkState is not NETWORK_EMPTY changes, the user agent
+ * must follow the steps given below" — the event cascade a page's `onloadedmetadata`/`oncanplay` handlers hang
+ * off, and the reason this is one function rather than a line at each caller. */
+static bool media_eligible_for_autoplay(JSContext *ctx, JSValueConst el, JSValueConst st)
+{
+    char *autoplay;
+    bool eligible;
+
+    /* §4.8.11.7's list, of which this engine can answer the first three: the can autoplay flag, `paused`, and
+       an `autoplay` content attribute. The sandboxing flag and the "autoplay" permission-policy feature are
+       both absent from this build, and neither can make an element eligible that these three do not. */
+    if (!st_bool(ctx, st, "canAutoplay") || !st_bool(ctx, st, "paused")) return false;
+    autoplay = element_attr_get(ctx, el, "autoplay");
+    eligible = autoplay != NULL;
+    free(autoplay);
+    return eligible;
+}
+
+static void media_set_ready_state(JSContext *ctx, JSValueConst el, JSValueConst st, int to)
+{
+    int from = st_int(ctx, st, "readyState");
+
+    DCHECK(st_int(ctx, st, "networkState") != NETWORK_EMPTY,
+           "§4.8.11.7's ready state transition ran on an element whose networkState is NETWORK_EMPTY — such an "
+           "element is always in HAVE_NOTHING and has no transition to report");
+    if (to == from) return;
+    st_set_int(ctx, st, "readyState", to);
+
+    if (from == HAVE_NOTHING && to == HAVE_METADATA) {
+        media_queue_fire(ctx, el, "loadedmetadata");
+        return;
+    }
+    if (from == HAVE_METADATA && to >= HAVE_CURRENT_DATA) {
+        /* "If this is the first time this occurs for this media element since the load() algorithm was last
+           invoked" — the latch the load algorithm resets. */
+        if (!st_bool(ctx, st, "loadedData")) {
+            st_set_bool(ctx, st, "loadedData", true);
+            media_queue_fire(ctx, el, "loadeddata");
+        }
+    }
+    if (from >= HAVE_FUTURE_DATA && to <= HAVE_CURRENT_DATA) {
+        /* The element was potentially playing and no longer can be: §4.8.11.7's timeupdate-then-waiting. */
+        if (!st_bool(ctx, st, "paused")) {
+            media_queue_fire(ctx, el, "timeupdate");
+            media_queue_fire(ctx, el, "waiting");
+        }
+        return;
+    }
+    if (from <= HAVE_CURRENT_DATA && to >= HAVE_FUTURE_DATA) {
+        media_queue_fire(ctx, el, "canplay");
+        if (!st_bool(ctx, st, "paused")) media_notify_playing(ctx, el, st);
+    }
+    if (to == HAVE_ENOUGH_DATA) {
+        media_queue_fire(ctx, el, "canplaythrough");
+        if (media_eligible_for_autoplay(ctx, el, st)) {
+            /* §4.8.11.7's autoplay substeps, which this user agent runs: it has no user preference to honour
+               and no viewport intersection to observe, and the alternative — never autoplaying — would delete
+               every endpoint a page reaches from its `play` handler. */
+            st_set_bool(ctx, st, "paused", false);
+            st_set_bool(ctx, st, "showPoster", false);
+            media_queue_fire(ctx, el, "play");
+            media_notify_playing(ctx, el, st);
+        }
+    }
+}
+
+/* ---- §4.8.11.5's RESOURCE SELECTION ALGORITHM -----------------------------------------------------------------
+ *
+ * "This algorithm is always invoked as part of a task, but one of the first steps in the algorithm is to
+ * return and continue running the remaining steps in parallel" — so it is a JOB, like every task above, and a
+ * step machine because it holds the OUTCOME FORK that decides whether the resource is usable. */
+typedef struct {
+    JSStepHdr hdr;
+    JSValue   over;   /* the media resource the fork is asked about (owned across the ask) */
+} MediaSelect;
+
+#define MEDIA_SELECT_STAGES(X) \
+    X(MS_SELECT, "HTML §4.8.11.5 resource selection algorithm steps 1-9 (the network state, the mode, the " \
+                 "candidate, currentSrc, and the queued loadstart)") \
+    X(MS_FETCH,  "HTML §4.8.11.5 the media data processing steps list (whether the resource is usable)")
+enum { MEDIA_SELECT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const MEDIA_SELECT_STEPS[] = { MEDIA_SELECT_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+#define MEDIA_FETCH_OP "HTML §4.8.11.5 the media data processing steps list (is the resource usable)"
+
+static void media_select_visit(JSContext *ctx, void *stp, JSStepVisit *v)
+{
+    MediaSelect *s = stp;
+
+    v->val(ctx, &s->over);
+}
+
+/* §4.8.11.5's DEDICATED MEDIA SOURCE FAILURE STEPS, with the pending play promises this run took. */
+static void media_failure(JSContext *ctx, JSValueConst el, JSValueConst st)
+{
+    static const char *const ERROR_EV[] = { "error" };
+    JSValue err = media_error_new(ctx, MEDIA_ERR_SRC_NOT_SUPPORTED);
+
+    CHECK(!JS_IsException(err), "§4.8.11.1: OOM creating a MediaError");
+    JS_SetPropertyStr(ctx, (JSValue)st, "error", err);
+    st_set_int(ctx, st, "networkState", NETWORK_NO_SOURCE);
+    st_set_bool(ctx, st, "showPoster", true);
+    media_queue_task(ctx, el, media_event_list(ctx, ERROR_EV, 1), media_take_play_promises(ctx, st),
+                     MTA_REJECT_NOT_SUPPORTED);
+}
+
+/* §4.8.11.5's mode selection, steps 6-9: the srcObject takes priority, then the src attribute, then a `source`
+   element child. Returns the currentSrc the algorithm sets, or NULL when there is no candidate at all. */
+static char *media_select_resource(JSContext *ctx, JSValueConst el, JSValueConst st)
+{
+    JSValue obj = JS_GetPropertyStr(ctx, st, "srcObject");
+    bool has_object = !JS_IsNull(obj) && !JS_IsUndefined(obj);
+    char *src;
+    lxb_dom_node_t *child;
+
+    JS_FreeValue(ctx, obj);
+    /* Mode OBJECT: "set the currentSrc attribute to the empty string" — an assigned media provider object has
+       no URL, and the empty string is what the page reads back. */
+    if (has_object) {
+        char *empty = malloc(1);
+        CHECK(empty != NULL, "§4.8.11.5: OOM setting currentSrc for a media provider object");
+        empty[0] = 0;
+        return empty;
+    }
+    /* Mode ATTRIBUTE: "if the src attribute's value is the empty string … jump down to the failed with
+       attribute step", otherwise currentSrc is the resolved URL. The resolution is the reflection's, which is
+       the raw attribute in this engine. */
+    src = element_attr_get(ctx, el, "src");
+    if (src) {
+        if (src[0]) return src;
+        free(src);
+        return NULL;
+    }
+    /* Mode CHILDREN: "the first source element child in tree order" — its `src` attribute is the candidate.
+       §4.8.11.5's pointer walk over later `source` children exists to try the NEXT candidate when one fails,
+       and this engine has no failure to retry after: the outcome fork decides the resource, not the list. */
+    for (child = lxb_dom_interface_node(element_of_value(el))->first_child; child; child = child->next) {
+        const char *ns = NULL, *local = NULL;
+        char nsbuf[64], lobuf[64];
+
+        if (child->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        element_ns_and_local(lxb_dom_interface_element(child), &ns, &local, nsbuf, sizeof nsbuf,
+                             lobuf, sizeof lobuf);
+        if (!local || strcmp(local, "source")) continue;
+        {
+            JSValue wrapper = element_wrap(ctx, lxb_dom_interface_element(child));
+            src = element_attr_get(ctx, wrapper, "src");
+            JS_FreeValue(ctx, wrapper);
+        }
+        if (src && src[0]) return src;
+        free(src);
+    }
+    return NULL;
+}
+
+static int media_select_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    MediaSelect *s = stp;
+    JSValueConst el = step_arg(&s->hdr, 0);
+    JSValue st = media_state(ctx, el);
+    int arm = 0, rc;
+
+    JS_FreeValue(ctx, cb_result);
+    (void)out_cb; (void)out_argc;
+
+    STEP_DISPATCH(MEDIA_SELECT_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(MS_SELECT); {
+        char *chosen;
+
+        s->over = JS_UNDEFINED;
+        /* Steps 1-2: NETWORK_NO_SOURCE, and the show poster flag. */
+        st_set_int(ctx, st, "networkState", NETWORK_NO_SOURCE);
+        st_set_bool(ctx, st, "showPoster", true);
+        chosen = media_select_resource(ctx, el, st);
+        if (!chosen) {
+            /* Step 9's otherwise: NETWORK_EMPTY, and the algorithm ends without a loadstart. */
+            st_set_int(ctx, st, "networkState", NETWORK_EMPTY);
+            JS_FreeValue(ctx, st);
+            return JS_STEP_DONE;
+        }
+        JS_SetPropertyStr(ctx, st, "currentSrc", JS_NewString(ctx, chosen));
+        free(chosen);
+        st_set_int(ctx, st, "networkState", NETWORK_LOADING);
+        media_queue_fire(ctx, el, "loadstart");
+        s->over = media_resource_value(ctx, st);
+        STEP_GOTO(s->hdr.stage, MS_FETCH, NULL);
+        JS_FreeValue(ctx, st);
+        return JS_STEP_YIELD;   /* the driver re-enters at MS_FETCH; an arm ends in a return */
+    }
+
+    STEP_ARM(MS_FETCH);
+        /* THE ONE UNKNOWABLE: whether the bytes at this address are a resource this user agent can render.
+           Outcome 0 is the ordinary completion — the resource IS usable — because that is the arm a run with
+           no forking policy takes and the one an @S candidate re-fire must not be diverted from. */
+        if (concolic_is(s->over)) {
+            rc = step_fork_run(ctx, &s->hdr, s->over, MEDIA_FETCH_OP, 2, &arm);
+            if (rc) { JS_FreeValue(ctx, st); return rc; }
+        }
+        JS_FreeValue(ctx, s->over);
+        s->over = JS_UNDEFINED;
+        if (arm != 0) {
+            media_failure(ctx, el, st);
+            JS_FreeValue(ctx, st);
+            return JS_STEP_DONE;
+        }
+        /* The media data processing steps' "once enough of the media data has been fetched to determine the
+           duration of the media resource": establish the timeline, set both positions to the earliest possible
+           position, update the duration, and walk the ready state up to HAVE_ENOUGH_DATA — which is what a
+           device with the whole resource available reports. Each transition queues its own events. */
+        realm_awaits(ctx, "HTMLMediaElement.prototype.audioTracks",
+                     "HTML §4.8.11.5's media data processing steps must create an AudioTrack and a VideoTrack "
+                     "for the tracks the resource is found to have, update the element's AudioTrackList and "
+                     "VideoTrackList, and fire `addtrack` at each — write those steps here");
+        st_set_num(ctx, st, "current", 0);
+        st_set_num(ctx, st, "official", 0);
+        st_set_num(ctx, st, "duration", DEVICE_DURATION);
+        st_set_int(ctx, st, "networkState", NETWORK_IDLE);
+        media_queue_fire(ctx, el, "durationchange");
+        media_set_ready_state(ctx, el, st, HAVE_METADATA);
+        media_set_ready_state(ctx, el, st, HAVE_ENOUGH_DATA);
+        media_queue_fire(ctx, el, "suspend");
+        JS_FreeValue(ctx, st);
+        return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef media_select_def = {
+    sizeof(MediaSelect), media_select_step, NULL, 0,
+    .visit = media_select_visit,
+    .algorithm = "HTML §4.8.11.5 the resource selection algorithm",
+    .steps = MEDIA_SELECT_STEPS
+};
+
+/* "Invoke the media element's resource selection algorithm" — as the task the standard says it is. */
+static void media_invoke_selection(JSContext *ctx, JSValueConst el)
+{
+    JSValue fn;
+
+    DCHECK(g_select_stepid >= 0, "§4.8.11.5 was invoked before its machine was registered");
+    fn = JS_NewCFunction2(ctx, NULL, "mediaResourceSelection", 1, JS_CFUNC_step, g_select_stepid);
+    CHECK(!JS_IsException(fn), "§4.8.11.5: the resource selection task's callee could not be allocated");
+    JS_EnqueueCallJob(ctx, fn, 1, &el);
+    JS_FreeValue(ctx, fn);
+}
+
+/* ---- §4.8.11.5's MEDIA ELEMENT LOAD ALGORITHM ------------------------------------------------------------- */
+static void media_load_algorithm(JSContext *ctx, JSValueConst el, JSValueConst st)
+{
+    int network = st_int(ctx, st, "networkState");
+
+    /* Step 5: an abort event when the element was already fetching. */
+    if (network == NETWORK_LOADING || network == NETWORK_IDLE)
+        media_queue_fire(ctx, el, "abort");
+    if (network != NETWORK_EMPTY) {
+        media_queue_fire(ctx, el, "emptied");
+        realm_awaits(ctx, "HTMLMediaElement.prototype.textTracks",
+                     "HTML §4.8.11.5 step 6.4 must FORGET the media element's media-resource-specific tracks — "
+                     "remove them from the list of text tracks and empty the AudioTrackList and "
+                     "VideoTrackList — write that step here");
+        if (st_int(ctx, st, "readyState") != HAVE_NOTHING)
+            st_set_int(ctx, st, "readyState", HAVE_NOTHING);
+        if (!st_bool(ctx, st, "paused")) {
+            static const char *const NONE[] = { "" };
+
+            st_set_bool(ctx, st, "paused", true);
+            /* "Take pending play promises and reject pending play promises with the result and an AbortError"
+               — a task with no fires at all, which is what an empty event list is. */
+            media_queue_task(ctx, el, media_event_list(ctx, NONE, 0), media_take_play_promises(ctx, st),
+                             MTA_REJECT_ABORT);
+        }
+        if (st_bool(ctx, st, "seeking")) st_set_bool(ctx, st, "seeking", false);
+        if (st_num(ctx, st, "current") != 0 || st_num(ctx, st, "official") != 0) {
+            st_set_num(ctx, st, "current", 0);
+            st_set_num(ctx, st, "official", 0);
+            media_queue_fire(ctx, el, "timeupdate");
+        }
+        st_set_num(ctx, st, "timelineOffset", NAN);
+        /* "Update the duration attribute to NaN. The user agent will not fire a durationchange event for this
+           particular change of the duration." */
+        st_set_num(ctx, st, "duration", NAN);
+    }
+    st_set_num(ctx, st, "rate", st_num(ctx, st, "defaultRate"));
+    JS_SetPropertyStr(ctx, (JSValue)st, "error", JS_NULL);
+    st_set_bool(ctx, st, "canAutoplay", true);
+    st_set_bool(ctx, st, "loadedData", false);
+    media_invoke_selection(ctx, el);
+}
+
+/* ---- the members ------------------------------------------------------------------------------------------- */
+
+/* MAGICS for the getters that share one body — a getter is one C function over the state record's fields. */
+enum {
+    MG_NETWORK_STATE = 0, MG_READY_STATE, MG_CURRENT_SRC, MG_ERROR, MG_SRC_OBJECT, MG_PAUSED, MG_SEEKING,
+    MG_DEFAULT_RATE, MG_RATE, MG_PRESERVES_PITCH, MG_VOLUME, MG_MUTED, MG_ENDED,
+};
+
+static JSValue js_media_get(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue st = media_state_of(ctx, this_val, "a media element member"), out;
+
+    if (JS_IsException(st)) return st;
+    switch (magic) {
+    case MG_NETWORK_STATE: out = JS_NewInt32(ctx, st_int(ctx, st, "networkState")); break;
+    case MG_READY_STATE:   out = JS_NewInt32(ctx, st_int(ctx, st, "readyState")); break;
+    case MG_CURRENT_SRC:   out = JS_GetPropertyStr(ctx, st, "currentSrc"); break;
+    case MG_ERROR:         out = JS_GetPropertyStr(ctx, st, "error"); break;
+    case MG_SRC_OBJECT:    out = JS_GetPropertyStr(ctx, st, "srcObject"); break;
+    case MG_PAUSED:        out = JS_NewBool(ctx, st_bool(ctx, st, "paused")); break;
+    case MG_SEEKING:       out = JS_NewBool(ctx, st_bool(ctx, st, "seeking")); break;
+    case MG_DEFAULT_RATE:  out = JS_NewFloat64(ctx, st_num(ctx, st, "defaultRate")); break;
+    case MG_RATE:          out = JS_NewFloat64(ctx, st_num(ctx, st, "rate")); break;
+    case MG_PRESERVES_PITCH: out = JS_NewBool(ctx, st_bool(ctx, st, "preservesPitch")); break;
+    case MG_VOLUME:        out = JS_NewFloat64(ctx, st_num(ctx, st, "volume")); break;
+    /* §4.8.11.8: "a media element is muted if … its muted state is true, or its muted state is `default` and
+       it has a muted content attribute" — three states, one boolean answer. */
+    case MG_MUTED: {
+        int m = st_int(ctx, st, "muted");
+        bool muted;
+
+        if (m == MUTED_DEFAULT) {
+            char *attr = element_attr_get(ctx, this_val, "muted");
+            muted = attr != NULL;
+            free(attr);
+        } else {
+            muted = m == MUTED_TRUE;
+        }
+        out = JS_NewBool(ctx, muted);
+        break;
+    }
+    /* §4.8.11.8's ENDED PLAYBACK. The modelled resource is unbounded, so the current playback position can
+       never be the end of it — which is the same answer a real browser gives for a live stream. */
+    case MG_ENDED:
+        out = JS_NewBool(ctx, st_int(ctx, st, "readyState") >= HAVE_METADATA &&
+                              st_num(ctx, st, "current") >= st_num(ctx, st, "duration"));
+        break;
+    default:
+        DFAIL("a media element getter was declared with a magic §4.8.11 does not have");
+        out = JS_UNDEFINED;
+    }
+    JS_FreeValue(ctx, st);
+    return out;
+}
+
+/* §4.8.11.6's `duration`: the modelled device's own answer, carried as the EXAMPLE of a concolic keyed on the
+   resource — so `if (v.duration > 60)` forks into the world where the resource is long instead of collapsing
+   onto one modelled number. concolic_source_wrap hands back the plain double where no source overlay is
+   installed, which is what keeps this component testable against the standard. */
+static JSValue js_media_duration(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue st = media_state_of(ctx, this_val, "duration"), out;
+    char shape[256], src[256];
+
+    (void)magic;
+    if (JS_IsException(st)) return st;
+    out = JS_NewFloat64(ctx, st_num(ctx, st, "duration"));
+    if (st_int(ctx, st, "readyState") >= HAVE_METADATA) {
+        media_source_id(ctx, st, shape, sizeof shape, src, sizeof src);
+        out = concolic_source_wrap(ctx, shape, src, out);
+    }
+    JS_FreeValue(ctx, st);
+    return out;
+}
+
+/* §4.8.11.6's `currentTime` getter: "the media element's default playback start position, unless that is zero,
+   in which case the element's official playback position". */
+static JSValue js_media_current_time(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue st = media_state_of(ctx, this_val, "currentTime");
+    double start;
+
+    (void)magic;
+    if (JS_IsException(st)) return st;
+    start = st_num(ctx, st, "defaultStart");
+    {
+        double out = start != 0 ? start : st_num(ctx, st, "official");
+        JS_FreeValue(ctx, st);
+        return JS_NewFloat64(ctx, out);
+    }
+}
+
+/* §4.8.11.9's SEEK, which the currentTime setter and fastSeek() both perform. The seekable ranges are one
+   range over the whole timeline once the metadata is known, so a position at or after zero is always in one;
+   with no metadata there are no ranges at all and step 8 sets `seeking` back to false and returns. */
+static void media_seek(JSContext *ctx, JSValueConst el, JSValueConst st, double to)
+{
+    st_set_bool(ctx, st, "showPoster", false);
+    if (st_int(ctx, st, "readyState") == HAVE_NOTHING) return;
+    st_set_bool(ctx, st, "seeking", true);
+    if (to > st_num(ctx, st, "duration")) to = st_num(ctx, st, "duration");
+    if (to < 0) to = 0;
+    media_queue_fire(ctx, el, "seeking");
+    st_set_num(ctx, st, "current", to);
+    st_set_num(ctx, st, "official", to);
+    /* The media data for the new position is available the moment the position moves — the modelled device
+       holds the whole resource — so the synchronous section runs with nothing to wait for. */
+    st_set_bool(ctx, st, "seeking", false);
+    media_queue_fire(ctx, el, "timeupdate");
+    media_queue_fire(ctx, el, "seeked");
+}
+
+static JSValue js_media_set_current_time(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    JSValue st = media_state_of(ctx, this_val, "currentTime");
+    double to = 0;
+
+    (void)magic;
+    if (JS_IsException(st)) return st;
+    DCHECK(JS_IsNumber(val), "the currentTime setter's value reached the body unconverted — §4.8.11.6 declares "
+                             "it a double and the args machine converts it before the body runs");
+    JS_ToFloat64(ctx, &to, val);
+    if (st_int(ctx, st, "readyState") == HAVE_NOTHING)
+        st_set_num(ctx, st, "defaultStart", to);
+    else
+        media_seek(ctx, this_val, st, to);
+    JS_FreeValue(ctx, st);
+    return JS_UNDEFINED;
+}
+
+/* §4.8.11.9's `fastSeek(time)`: "seek to the time given by time, with the approximate-for-speed flag set". The
+   flag lets a user agent snap to a nearby key frame; the modelled device has no frames to snap to, so the
+   adjusted position is the requested one — which the spec's own constraint (the adjustment must stay on the
+   same side of the current position) permits exactly. */
+static JSValue js_media_fast_seek(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                  int magic)
+{
+    JSValue st = media_state_of(ctx, this_val, "fastSeek");
+    double to = 0;
+
+    (void)magic;
+    DCHECK(argc >= 1, "fastSeek reached its body with no time — §3.6.2 step 1's TypeError is the declaration's");
+    if (JS_IsException(st)) return st;
+    JS_ToFloat64(ctx, &to, argv[0]);
+    media_seek(ctx, this_val, st, to);
+    JS_FreeValue(ctx, st);
+    return JS_UNDEFINED;
+}
+
+/* §4.8.11.6's `getStartDate()`: "return a new Date object representing the current timeline offset". The
+   modelled resource declares no start date, so the offset is NaN and the Date is an invalid one — which is
+   exactly what a real browser answers for a file with no explicit time and date. */
+static JSValue js_media_start_date(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                   int magic)
+{
+    JSValue st = media_state_of(ctx, this_val, "getStartDate"), out;
+
+    (void)argc; (void)argv; (void)magic;
+    if (JS_IsException(st)) return st;
+    out = JS_NewDate(ctx, st_num(ctx, st, "timelineOffset"));
+    JS_FreeValue(ctx, st);
+    return out;
+}
+
+/* The three TimeRanges getters — each mints a NEW object, which §4.8.11.8 enshrines ("returning a new object
+   each time is a bad pattern … only enshrined here as it would be costly to change it"). */
+enum { MR_BUFFERED = 0, MR_SEEKABLE, MR_PLAYED };
+
+static JSValue js_media_ranges(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue st = media_state_of(ctx, this_val, "a TimeRanges attribute"), out;
+
+    if (JS_IsException(st)) return st;
+    out = media_ranges_for(ctx, st, magic == MR_PLAYED);
+    JS_FreeValue(ctx, st);
+    return out;
+}
+
+/* §4.8.11.2's `src`: the reflection, plus the rule the reflection alone cannot carry — "if a src attribute of
+   a media element is set or changed, the user agent must invoke the media element's media element load
+   algorithm". That invocation is what makes `v.src = url; v.onerror = f` reach `f`. */
+static JSValue js_media_get_src(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    char *src;
+    JSValue out;
+
+    (void)magic;
+    if (!media_is(ctx, this_val))
+        return JS_ThrowTypeError(ctx, "src read on something that is not a media element");
+    src = element_attr_get(ctx, this_val, "src");
+    out = JS_NewString(ctx, src ? src : "");
+    free(src);
+    return out;
+}
+
+static JSValue js_media_set_src(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    JSValue st = media_state_of(ctx, this_val, "src");
+    const char *s;
+
+    (void)magic;
+    if (JS_IsException(st)) return st;
+    s = JS_ToCString(ctx, val);   /* a real string by now: the declared USVString cannot reach the page here */
+    if (!s) { JS_FreeValue(ctx, st); return JS_EXCEPTION; }
+    element_attr_set(ctx, this_val, "src", s);
+    JS_FreeCString(ctx, s);
+    media_load_algorithm(ctx, this_val, st);
+    JS_FreeValue(ctx, st);
+    return JS_UNDEFINED;
+}
+
+/* §4.8.11.2's `srcObject` setter: "set this's assigned media provider object to the given value. Invoke this's
+   media element load algorithm." The IDL type is `(MediaStream or MediaSource or Blob)?`, and of those three
+   only Blob exists in this build — so a page can only ever hand over a Blob or null, and the value is stored
+   as it arrives rather than brand-checked against two interfaces that are honestly absent. */
+static JSValue js_media_set_src_object(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    JSValue st = media_state_of(ctx, this_val, "srcObject");
+
+    (void)magic;
+    if (JS_IsException(st)) return st;
+    JS_SetPropertyStr(ctx, st, "srcObject",
+                      JS_IsUndefined(val) ? JS_NULL : JS_DupValue(ctx, val));
+    media_load_algorithm(ctx, this_val, st);
+    JS_FreeValue(ctx, st);
+    return JS_UNDEFINED;
+}
+
+/* §4.8.11.8's `volume` setter: "if the given value is not in the range 0.0 to 1.0 inclusive, then throw an
+   IndexSizeError", then set the playback volume — which fires `volumechange` when the value CHANGES and does
+   nothing at all when it does not. */
+static JSValue js_media_set_volume(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    JSValue st = media_state_of(ctx, this_val, "volume");
+    double v = 0;
+
+    (void)magic;
+    if (JS_IsException(st)) return st;
+    JS_ToFloat64(ctx, &v, val);
+    if (!(v >= 0.0 && v <= 1.0)) {
+        JS_FreeValue(ctx, st);
+        return JS_ThrowDOMException(ctx, "IndexSizeError", "the volume is not in the range 0.0 to 1.0");
+    }
+    if (v != st_num(ctx, st, "volume")) {
+        st_set_num(ctx, st, "volume", v);
+        media_queue_fire(ctx, this_val, "volumechange");
+    }
+    JS_FreeValue(ctx, st);
+    return JS_UNDEFINED;
+}
+
+/* §4.8.11.8's `muted` setter: "set the muted state of this to the given value", which is the three-valued
+   state going to true or false and a `volumechange` when it changed. */
+static JSValue js_media_set_muted(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    JSValue st = media_state_of(ctx, this_val, "muted");
+    int to = JS_ToBool(ctx, val) ? MUTED_TRUE : MUTED_FALSE;
+
+    (void)magic;
+    if (JS_IsException(st)) return st;
+    if (to != st_int(ctx, st, "muted")) {
+        st_set_int(ctx, st, "muted", to);
+        media_queue_fire(ctx, this_val, "volumechange");
+    }
+    JS_FreeValue(ctx, st);
+    return JS_UNDEFINED;
+}
+
+/* §4.8.11.8's two playback rates. Both fire `ratechange` when they change value; `playbackRate` additionally
+   throws a NotSupportedError for a rate this user agent does not support, and this one supports every finite
+   rate because it renders no audio to resample. */
+enum { MS_DEFAULT_RATE = 0, MS_RATE };
+
+static JSValue js_media_set_rate(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    JSValue st = media_state_of(ctx, this_val, magic == MS_RATE ? "playbackRate" : "defaultPlaybackRate");
+    const char *field = magic == MS_RATE ? "rate" : "defaultRate";
+    double v = 0;
+
+    if (JS_IsException(st)) return st;
+    JS_ToFloat64(ctx, &v, val);
+    if (v != st_num(ctx, st, field)) {
+        st_set_num(ctx, st, field, v);
+        media_queue_fire(ctx, this_val, "ratechange");
+    }
+    JS_FreeValue(ctx, st);
+    return JS_UNDEFINED;
+}
+
+/* §4.8.11.8's `preservesPitch`: "the setter steps are to correspondingly switch the pitch-preserving algorithm
+   on or off". There is no audio to pitch-shift, so what the flag switches is the value the getter reads back,
+   which is the whole of what a page can observe. */
+static JSValue js_media_set_pitch(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    JSValue st = media_state_of(ctx, this_val, "preservesPitch");
+
+    (void)magic;
+    if (JS_IsException(st)) return st;
+    st_set_bool(ctx, st, "preservesPitch", JS_ToBool(ctx, val) != 0);
+    JS_FreeValue(ctx, st);
+    return JS_UNDEFINED;
+}
+
+/* An ASCII CASE-INSENSITIVE match — HTML's own comparison for a keyword of an enumerated attribute, which is
+   what `<video loading="LAZY">` needs and what the C library's locale-dependent strcasecmp is not. */
+static bool media_ascii_eq(const char *a, const char *b)
+{
+    size_t i;
+
+    for (i = 0; a[i] && b[i]; i++) {
+        char x = a[i], y = b[i];
+
+        if (x >= 'A' && x <= 'Z') x = (char)(x - 'A' + 'a');
+        if (y >= 'A' && y <= 'Z') y = (char)(y - 'A' + 'a');
+        if (x != y) return false;
+    }
+    return a[i] == b[i];
+}
+
+/* §4.8.11.5's `loading` — an enumerated attribute limited to only known values, whose invalid and missing
+   value defaults are both the Eager state. The getter therefore returns the canonical keyword of the state the
+   content value corresponds to, which is what "limited to only known values" means (§2.6.1's reflect rules)
+   and is why this is not a plain string reflection. */
+static JSValue js_media_get_loading(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    char *v;
+    bool lazy;
+
+    (void)magic;
+    if (!media_is(ctx, this_val))
+        return JS_ThrowTypeError(ctx, "loading read on something that is not a media element");
+    v = element_attr_get(ctx, this_val, "loading");
+    lazy = v && media_ascii_eq(v, "lazy");
+    free(v);
+    return JS_NewString(ctx, lazy ? "lazy" : "eager");
+}
+
+static JSValue js_media_set_loading(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    const char *s;
+
+    (void)magic;
+    if (!media_is(ctx, this_val))
+        return JS_ThrowTypeError(ctx, "loading set on something that is not a media element");
+    s = JS_ToCString(ctx, val);
+    if (!s) return JS_EXCEPTION;
+    element_attr_set(ctx, this_val, "loading", s);
+    JS_FreeCString(ctx, s);
+    return JS_UNDEFINED;
+}
+
+/* §4.8.11.3's `canPlayType(type)`. */
+static JSValue js_media_can_play_type(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                      int magic)
+{
+    const char *type;
+    JSValue out;
+
+    (void)magic;
+    DCHECK(argc >= 1, "canPlayType reached its body with no type — §3.6.2 step 1's TypeError is the "
+                      "declaration's");
+    if (!media_is(ctx, this_val))
+        return JS_ThrowTypeError(ctx, "canPlayType called on something that is not a media element");
+    /* An UNKNOWN type is still a type: concolic_name_cstr gives the SHAPE, which is a real, stable string, and
+       the answer for a container nobody recognises is the empty string — the honest answer for a type nobody
+       has pinned, and the same rule matchMedia applies to an unknown query. */
+    type = concolic_name_cstr(ctx, argv[0]);
+    if (!type) return JS_EXCEPTION;
+    out = JS_NewString(ctx, device_can_play(type));
+    JS_FreeCString(ctx, type);
+    return out;
+}
+
+/* §4.8.11.5's `load()`. */
+static JSValue js_media_load(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValue st = media_state_of(ctx, this_val, "load");
+
+    (void)argc; (void)argv; (void)magic;
+    if (JS_IsException(st)) return st;
+    media_load_algorithm(ctx, this_val, st);
+    JS_FreeValue(ctx, st);
+    return JS_UNDEFINED;
+}
+
+/* §4.8.11.8's `play()` and its INTERNAL PLAY STEPS. The promise is created here and appended to the list of
+   pending play promises; every settlement of it happens in a queued task, which is what the spec says and what
+   keeps a resolve out of this C body. */
+static JSValue js_media_play(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValue st = media_state_of(ctx, this_val, "play"), promise, error, pair, list;
+    JSValue funcs[2];
+    int ready;
+
+    (void)argc; (void)argv; (void)magic;
+    if (JS_IsException(st)) return st;
+
+    /* Step 2: "if the media element's error attribute is not null and its code is
+       MEDIA_ERR_SRC_NOT_SUPPORTED, then return a promise rejected with a NotSupportedError". */
+    error = JS_GetPropertyStr(ctx, st, "error");
+    if (!JS_IsNull(error) && !JS_IsUndefined(error)) {
+        JSValue code = JS_UNDEFINED, slots;
+        int32_t c = 0;
+
+        if (JS_GetOwnSlot(ctx, &slots, error, g_atom_state) > 0) {
+            code = JS_GetPropertyStr(ctx, slots, "code");
+            JS_FreeValue(ctx, slots);
+            JS_ToInt32(ctx, &c, code);
+            JS_FreeValue(ctx, code);
+        }
+        if (c == MEDIA_ERR_SRC_NOT_SUPPORTED) {
+            JSValue rejected;
+
+            JS_FreeValue(ctx, error);
+            JS_FreeValue(ctx, st);
+            JS_ThrowDOMException(ctx, "NotSupportedError", "the media resource is not suitable");
+            rejected = JS_GetException(ctx);
+            promise = JS_NewPromiseCapability(ctx, funcs);
+            if (JS_IsException(promise)) { JS_FreeValue(ctx, rejected); return promise; }
+            /* A promise REJECTED WITH a value. The resolving function is called AS A CALL-ROOT FLOW, never as
+               a C activation: JS_Call from here has no flow base under it, which is what every other host
+               delivery in this engine avoids for the same reason. */
+            if (JS_CallAsFlow(ctx, funcs[1], rejected) < 0) JS_FreeValue(ctx, JS_GetException(ctx));
+            JS_FreeValue(ctx, funcs[0]);
+            JS_FreeValue(ctx, funcs[1]);
+            JS_FreeValue(ctx, rejected);
+            return promise;
+        }
+    }
+    JS_FreeValue(ctx, error);
+
+    /* Step 5: "let promise be a new promise and append promise to the list of pending play promises". */
+    promise = JS_NewPromiseCapability(ctx, funcs);
+    if (JS_IsException(promise)) { JS_FreeValue(ctx, st); return promise; }
+    pair = JS_NewArray(ctx);
+    CHECK(!JS_IsException(pair), "§4.8.11.8: OOM appending a pending play promise");
+    JS_SetPropertyUint32(ctx, pair, 0, funcs[0]);
+    JS_SetPropertyUint32(ctx, pair, 1, funcs[1]);
+    list = JS_GetPropertyStr(ctx, st, "playPromises");
+    JS_SetPropertyUint32(ctx, list, arr_len(ctx, list), pair);
+    JS_FreeValue(ctx, list);
+
+    /* The INTERNAL PLAY STEPS. */
+    if (st_int(ctx, st, "networkState") == NETWORK_EMPTY)
+        media_invoke_selection(ctx, this_val);
+    ready = st_int(ctx, st, "readyState");
+    if (st_bool(ctx, st, "paused")) {
+        st_set_bool(ctx, st, "paused", false);
+        st_set_bool(ctx, st, "showPoster", false);
+        media_queue_fire(ctx, this_val, "play");
+        if (ready <= HAVE_CURRENT_DATA)
+            media_queue_fire(ctx, this_val, "waiting");
+        else
+            media_notify_playing(ctx, this_val, st);
+    } else if (ready >= HAVE_FUTURE_DATA) {
+        /* "The media element is already playing": take the pending play promises and queue a task to resolve
+           them, with no event at all. */
+        static const char *const NONE[] = { "" };
+
+        media_queue_task(ctx, this_val, media_event_list(ctx, NONE, 0), media_take_play_promises(ctx, st),
+                         MTA_RESOLVE);
+    }
+    st_set_bool(ctx, st, "canAutoplay", false);
+    JS_FreeValue(ctx, st);
+    return promise;
+}
+
+/* §4.8.11.8's `pause()` and its INTERNAL PAUSE STEPS. */
+static JSValue js_media_pause(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValue st = media_state_of(ctx, this_val, "pause");
+
+    (void)argc; (void)argv; (void)magic;
+    if (JS_IsException(st)) return st;
+    if (st_int(ctx, st, "networkState") == NETWORK_EMPTY)
+        media_invoke_selection(ctx, this_val);
+    st_set_bool(ctx, st, "canAutoplay", false);
+    if (!st_bool(ctx, st, "paused")) {
+        static const char *const PAUSE_EV[] = { "timeupdate", "pause" };
+
+        st_set_bool(ctx, st, "paused", true);
+        media_queue_task(ctx, this_val, media_event_list(ctx, PAUSE_EV, 2), media_take_play_promises(ctx, st),
+                         MTA_REJECT_ABORT);
+        st_set_num(ctx, st, "official", st_num(ctx, st, "current"));
+    }
+    JS_FreeValue(ctx, st);
+    return JS_UNDEFINED;
+}
+
+/* ---- declare / install --------------------------------------------------------------------------------------- */
+
+/* §4.8.11's REFLECTIONS, which the IDL puts on HTMLMediaElement and not on the two interfaces that inherit
+   them. They were on HTMLAudioElement.prototype and HTMLVideoElement.prototype — two copies of one member,
+   which is what `Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'src')` returning a descriptor
+   makes visible in this engine and undefined in a browser. `src` is not here: §4.8.11.2 gives its setter a
+   step no plain reflection can carry (invoke the media element load algorithm). */
+static const ElReflect R_MEDIA[] = {
+    { "crossOrigin", "crossorigin", REFLECT_STRING },
+    { "preload",     "preload",     REFLECT_STRING },
+    { "autoplay",    "autoplay",    REFLECT_BOOL },
+    { "loop",        "loop",        REFLECT_BOOL },
+    { "controls",    "controls",    REFLECT_BOOL },
+    { "defaultMuted", "muted",      REFLECT_BOOL },
+};
+
+/* §4.8.11's constants. Web IDL puts a `const` on BOTH the interface object and the prototype. */
+static const JSCFunctionListEntry MEDIA_CONSTS[] = {
+    JS_PROP_INT32_DEF("NETWORK_EMPTY", NETWORK_EMPTY, 0),
+    JS_PROP_INT32_DEF("NETWORK_IDLE", NETWORK_IDLE, 0),
+    JS_PROP_INT32_DEF("NETWORK_LOADING", NETWORK_LOADING, 0),
+    JS_PROP_INT32_DEF("NETWORK_NO_SOURCE", NETWORK_NO_SOURCE, 0),
+    JS_PROP_INT32_DEF("HAVE_NOTHING", HAVE_NOTHING, 0),
+    JS_PROP_INT32_DEF("HAVE_METADATA", HAVE_METADATA, 0),
+    JS_PROP_INT32_DEF("HAVE_CURRENT_DATA", HAVE_CURRENT_DATA, 0),
+    JS_PROP_INT32_DEF("HAVE_FUTURE_DATA", HAVE_FUTURE_DATA, 0),
+    JS_PROP_INT32_DEF("HAVE_ENOUGH_DATA", HAVE_ENOUGH_DATA, 0),
+};
+
+static const JSCFunctionListEntry ERROR_CONSTS[] = {
+    JS_PROP_INT32_DEF("MEDIA_ERR_ABORTED", MEDIA_ERR_ABORTED, 0),
+    JS_PROP_INT32_DEF("MEDIA_ERR_NETWORK", MEDIA_ERR_NETWORK, 0),
+    JS_PROP_INT32_DEF("MEDIA_ERR_DECODE", MEDIA_ERR_DECODE, 0),
+    JS_PROP_INT32_DEF("MEDIA_ERR_SRC_NOT_SUPPORTED", MEDIA_ERR_SRC_NOT_SUPPORTED, 0),
+};
+
+/* The four members of §4.8.11.10 and §4.8.11.11 this build does not have, asserted absent per realm rather
+   than left as a silence the auditor and the next reader each have to re-derive. */
+static const char *const MEDIA_ABSENT[] = { "audioTracks", "videoTracks", "textTracks", "addTextTrack" };
+
+void media_element_declare(JSContext *ctx)
+{
+    static const IdlArgType STR1[1] = { IDL_DOMSTRING };
+    static const IdlArgType DBL1[1] = { IDL_DOUBLE };
+    static const IdlArgType IDX1[1] = { IDL_UNSIGNED_LONG };
+    JSRuntime *rt = JS_GetRuntime(ctx);
+
+    DCHECK(!g_ready, "media_element_declare ran twice — §4.8.11's interfaces are declared once per AGENT");
+    {
+        JSClassDef m = { "HTMLMediaElement" }, e = { "MediaError" }, r = { "TimeRanges" };
+        JS_NewClassID(rt, &g_media_class);
+        JS_NewClass(rt, g_media_class, &m);
+        JS_NewClassID(rt, &g_error_class);
+        JS_NewClass(rt, g_error_class, &e);
+        JS_NewClassID(rt, &g_ranges_class);
+        JS_NewClass(rt, g_ranges_class, &r);
+    }
+    g_state_key = JS_NewSymbol(ctx, "mediaElementState", false);
+    CHECK(!JS_IsException(g_state_key), "§4.8.11: the media element state slot key allocation failed");
+    g_atom_state = JS_ValueToAtom(ctx, g_state_key);
+    CHECK(g_atom_state != JS_ATOM_NULL, "§4.8.11: the media element state slot key could not be interned");
+
+    g_refl_base = element_declare_reflections(ctx, R_MEDIA, (int)(sizeof(R_MEDIA) / sizeof(R_MEDIA[0])));
+    g_id_load = idl_method_id(ctx, NULL, 0, js_media_load, 0);
+    g_id_play = idl_method_id(ctx, NULL, 0, js_media_play, 0);
+    g_id_pause = idl_method_id(ctx, NULL, 0, js_media_pause, 0);
+    g_id_start_date = idl_method_id(ctx, NULL, 0, js_media_start_date, 0);
+    g_id_can_play = idl_method_id(ctx, STR1, 1, js_media_can_play_type, 0);
+    g_id_fast_seek = idl_method_id(ctx, DBL1, 1, js_media_fast_seek, 0);
+    g_id_range_start = idl_method_id(ctx, IDX1, 1, js_ranges_at, 0);
+    g_id_range_end = idl_method_id(ctx, IDX1, 1, js_ranges_at, 1);
+
+    g_set_src = idl_setter_id(ctx, IDL_USVSTRING, false, js_media_set_src, 0);
+    g_set_src_object = idl_setter_id(ctx, IDL_ANY, false, js_media_set_src_object, 0);
+    g_set_current_time = idl_setter_id(ctx, IDL_DOUBLE, false, js_media_set_current_time, 0);
+    g_set_volume = idl_setter_id(ctx, IDL_DOUBLE, false, js_media_set_volume, 0);
+    g_set_muted = idl_setter_id(ctx, IDL_BOOLEAN, false, js_media_set_muted, 0);
+    g_set_rate = idl_setter_id(ctx, IDL_DOUBLE, false, js_media_set_rate, MS_RATE);
+    g_set_default_rate = idl_setter_id(ctx, IDL_DOUBLE, false, js_media_set_rate, MS_DEFAULT_RATE);
+    g_set_pitch = idl_setter_id(ctx, IDL_BOOLEAN, false, js_media_set_pitch, 0);
+    g_set_loading = idl_setter_id(ctx, IDL_DOMSTRING, false, js_media_set_loading, 0);
+
+    g_task_stepid = JS_RegisterStepDef(rt, &media_task_def);
+    g_select_stepid = JS_RegisterStepDef(rt, &media_select_def);
+    g_ready = 1;
+}
+
+JSValue media_element_proto(JSContext *ctx)
+{
+    JSValue p = JS_GetClassProto(ctx, g_media_class);
+
+    DCHECK(!JS_IsNull(p), "HTMLMediaElement.prototype was asked for in a realm that never ran §4.8.11's "
+                          "install — the two interfaces that inherit it are built ON this object");
+    return p;
+}
+
+void media_element_install_proto(JSContext *ctx, JSValueConst html_proto)
+{
+    JSValue proto, prev;
+
+    DCHECK(g_ready, "a realm asked for §4.8.11's prototypes before the interfaces were declared");
+    prev = JS_GetClassProto(ctx, g_media_class);
+    DCHECK(JS_IsNull(prev), "media_element_install_proto ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+
+    /* MediaError.prototype and TimeRanges.prototype first — neither inherits from anything but Object, and
+       both are minted by algorithms on the media element's own prototype. */
+    proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(proto), "MediaError.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "MediaError");
+    JS_SetPropertyFunctionList(ctx, proto, ERROR_CONSTS,
+                               (int)(sizeof(ERROR_CONSTS) / sizeof(ERROR_CONSTS[0])));
+    idl_install_accessor(ctx, proto, "code", js_media_error_field, 0, -1);
+    idl_install_accessor(ctx, proto, "message", js_media_error_field, 1, -1);
+    JS_SetClassProto(ctx, g_error_class, proto);
+
+    proto = JS_NewObject(ctx);
+    CHECK(!JS_IsException(proto), "TimeRanges.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "TimeRanges");
+    idl_install_accessor(ctx, proto, "length", js_ranges_length, 0, -1);
+    idl_install_method(ctx, proto, "start", 1, g_id_range_start);
+    idl_install_method(ctx, proto, "end", 1, g_id_range_end);
+    JS_SetClassProto(ctx, g_ranges_class, proto);
+
+    /* §4.8.11's `interface HTMLMediaElement : HTMLElement`. */
+    proto = JS_NewObjectProto(ctx, html_proto);
+    CHECK(!JS_IsException(proto), "HTMLMediaElement.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "HTMLMediaElement");
+    JS_SetPropertyFunctionList(ctx, proto, MEDIA_CONSTS,
+                               (int)(sizeof(MEDIA_CONSTS) / sizeof(MEDIA_CONSTS[0])));
+    element_install_reflections(ctx, proto, g_refl_base, (int)(sizeof(R_MEDIA) / sizeof(R_MEDIA[0])));
+
+    idl_install_accessor(ctx, proto, "error", js_media_get, MG_ERROR, -1);
+    idl_install_accessor(ctx, proto, "src", js_media_get_src, 0, g_set_src);
+    idl_install_accessor(ctx, proto, "srcObject", js_media_get, MG_SRC_OBJECT, g_set_src_object);
+    idl_install_accessor(ctx, proto, "currentSrc", js_media_get, MG_CURRENT_SRC, -1);
+    idl_install_accessor(ctx, proto, "networkState", js_media_get, MG_NETWORK_STATE, -1);
+    idl_install_accessor(ctx, proto, "buffered", js_media_ranges, MR_BUFFERED, -1);
+    idl_install_accessor(ctx, proto, "readyState", js_media_get, MG_READY_STATE, -1);
+    idl_install_accessor(ctx, proto, "seeking", js_media_get, MG_SEEKING, -1);
+    idl_install_accessor(ctx, proto, "currentTime", js_media_current_time, 0, g_set_current_time);
+    idl_install_accessor(ctx, proto, "duration", js_media_duration, 0, -1);
+    idl_install_accessor(ctx, proto, "paused", js_media_get, MG_PAUSED, -1);
+    idl_install_accessor(ctx, proto, "defaultPlaybackRate", js_media_get, MG_DEFAULT_RATE, g_set_default_rate);
+    idl_install_accessor(ctx, proto, "playbackRate", js_media_get, MG_RATE, g_set_rate);
+    idl_install_accessor(ctx, proto, "preservesPitch", js_media_get, MG_PRESERVES_PITCH, g_set_pitch);
+    idl_install_accessor(ctx, proto, "played", js_media_ranges, MR_PLAYED, -1);
+    idl_install_accessor(ctx, proto, "seekable", js_media_ranges, MR_SEEKABLE, -1);
+    idl_install_accessor(ctx, proto, "ended", js_media_get, MG_ENDED, -1);
+    idl_install_accessor(ctx, proto, "volume", js_media_get, MG_VOLUME, g_set_volume);
+    idl_install_accessor(ctx, proto, "muted", js_media_get, MG_MUTED, g_set_muted);
+    idl_install_accessor(ctx, proto, "loading", js_media_get_loading, 0, g_set_loading);
+    idl_install_method(ctx, proto, "load", 0, g_id_load);
+    idl_install_method(ctx, proto, "canPlayType", 1, g_id_can_play);
+    idl_install_method(ctx, proto, "fastSeek", 1, g_id_fast_seek);
+    idl_install_method(ctx, proto, "getStartDate", 0, g_id_start_date);
+    idl_install_method(ctx, proto, "play", 0, g_id_play);
+    idl_install_method(ctx, proto, "pause", 0, g_id_pause);
+    idl_members_excluded(ctx, proto, "HTMLMediaElement", MEDIA_ABSENT,
+                         (int)(sizeof(MEDIA_ABSENT) / sizeof(MEDIA_ABSENT[0])),
+                         "§4.8.11.10's AudioTrackList and VideoTrackList and §4.8.11.11's TextTrackList are "
+                         "not built, so the four members that answer with one are ABSENT rather than shape-"
+                         "only — a page's own TypeError is the forcing function, and §4.8.11.5's two steps "
+                         "that drain those lists assert the producer through realm_awaits");
+    JS_SetClassProto(ctx, g_media_class, proto);
+}
+
+void media_element_install(JSContext *ctx, JSValueConst global)
+{
+    JSValue proto, ctor;
+
+    DCHECK(g_ready, "§4.8.11's interface objects were installed before the interfaces were declared");
+    /* HTMLMediaElement's interface object goes up through the DOM's installer, which is what every other
+       element interface object in this build uses — so `HTMLVideoElement` and `HTMLMediaElement` sit on the
+       same [[Prototype]] rather than one of them being reachable a different way. The CONSTANTS are placed on
+       it before it goes, because Web IDL puts a `const` on the interface object as well as the prototype. */
+    proto = media_element_proto(ctx);
+    ctor = idl_interface_object(ctx, "HTMLMediaElement", proto);
+    CHECK(!JS_IsException(ctor), "the HTMLMediaElement interface object could not be allocated");
+    JS_SetPropertyFunctionList(ctx, ctor, MEDIA_CONSTS,
+                               (int)(sizeof(MEDIA_CONSTS) / sizeof(MEDIA_CONSTS[0])));
+    node_install_interface_ctor(ctx, global, "HTMLMediaElement", proto, ctor);
+    JS_FreeValue(ctx, proto);
+
+    proto = JS_GetClassProto(ctx, g_error_class);
+    DCHECK(!JS_IsNull(proto), "MediaError was installed in a realm with no prototype for it");
+    ctor = idl_interface_object(ctx, "MediaError", proto);
+    CHECK(!JS_IsException(ctor), "the MediaError interface object could not be allocated");
+    JS_SetPropertyFunctionList(ctx, ctor, ERROR_CONSTS,
+                               (int)(sizeof(ERROR_CONSTS) / sizeof(ERROR_CONSTS[0])));
+    JS_FreeValue(ctx, proto);
+    JS_SetPropertyStr(ctx, (JSValue)global, "MediaError", ctor);
+
+    proto = JS_GetClassProto(ctx, g_ranges_class);
+    DCHECK(!JS_IsNull(proto), "TimeRanges was installed in a realm with no prototype for it");
+    ctor = idl_interface_object(ctx, "TimeRanges", proto);
+    CHECK(!JS_IsException(ctor), "the TimeRanges interface object could not be allocated");
+    JS_FreeValue(ctx, proto);
+    JS_SetPropertyStr(ctx, (JSValue)global, "TimeRanges", ctor);
+}
+
+void media_element_free(JSContext *ctx)
+{
+    if (!g_ready) return;
+    g_ready = 0;
+    /* The prototypes are the REALMS' — each goes with its context. */
+    JS_FreeAtom(ctx, g_atom_state);
+    g_atom_state = JS_ATOM_NULL;
+    JS_FreeValue(ctx, g_state_key);
+    g_state_key = JS_UNDEFINED;
+    g_refl_base = g_id_load = g_id_can_play = g_id_play = g_id_pause = g_id_fast_seek = -1;
+    g_id_start_date = g_id_range_start = g_id_range_end = -1;
+    g_set_src = g_set_src_object = g_set_current_time = g_set_volume = g_set_muted = -1;
+    g_set_rate = g_set_default_rate = g_set_pitch = g_set_loading = -1;
+}

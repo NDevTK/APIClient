@@ -283,6 +283,18 @@ const INTERFACES = {
   DOMImplementation:    "core/dom/dom_implementation.c",
   DocumentType:        ["core/dom/document_type.c", "core/dom/node.c", "core/events/event_target.c"],
   HTMLTemplateElement: [...HTML_BASE],
+  /* HTML §4.8.11's media elements. HTMLMediaElement is a real state machine over a modelled device, and the
+     two element interfaces that INHERIT it install almost nothing of their own — which is exactly what the
+     inheritance rule above is for: `play`, `paused`, `duration` and the six reflections are reachable on both
+     because they are on HTMLMediaElement.prototype, and reporting them absent per tag would be the audit
+     lying in the direction that buries the real gap. That real gap is the four TRACK members
+     (audioTracks/videoTracks/textTracks/addTextTrack), which nothing installs and which this row is what
+     makes visible. MediaError and TimeRanges are minted by the same component. */
+  HTMLMediaElement:    [...HTML_BASE, "core/html/media_element.c"],
+  HTMLVideoElement:    [...HTML_BASE, "core/html/media_element.c"],
+  HTMLAudioElement:    [...HTML_BASE, "core/html/media_element.c"],
+  MediaError:           "core/html/media_element.c",
+  TimeRanges:           "core/html/media_element.c",
   /* HTML §4.13.7. ElementInternals INCLUDES ARIAMixin, whose 54 members are therefore members the audit
      expects on it — which is what makes the eight element-reflecting ones show up as the real gap they are
      rather than as nothing at all. CustomStateSet's setlike members and both iterator surfaces come from the

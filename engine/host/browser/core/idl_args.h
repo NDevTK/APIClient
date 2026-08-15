@@ -61,6 +61,12 @@ typedef enum {
        type, which is exactly why QueuingStrategy's `highWaterMark` is declared with it and why the stream's
        own RangeError for a NaN mark has to be the STREAM's check rather than the type's. */
     IDL_UNRESTRICTED_DOUBLE,
+    /* `double` — §3.2.6, and the RESTRICTION is the whole difference from the type above: ToNumber, and then a
+       NaN or an infinity is a TypeError rather than a value. HTML §4.8.11.6's `attribute double currentTime`
+       is what needs it — `video.currentTime = NaN` throws in every browser, and a member declared
+       unrestricted would hand the seek algorithm a position no step of it is written for. The check belongs to
+       the TYPE and not to the four setters that share it, for the reason every other row here does. */
+    IDL_DOUBLE,
     /* A CALLBACK FUNCTION type — §3.2.22. The conversion is a brand check and nothing more: a callable crosses
        as itself and anything else is a TypeError. Declared rather than checked in the body because an optional
        member that is absent must NOT be rejected, and every body that wrote that test by hand is a body that

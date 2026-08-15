@@ -118,7 +118,7 @@ int64_t idl_integer_of(IdlArgType t, double x)
    done with the double it answers, which is what makes them one branch rather than two. */
 static bool idl_is_numeric(IdlArgType t)
 {
-    return idl_is_integer(t) || t == IDL_UNRESTRICTED_DOUBLE;
+    return idl_is_integer(t) || t == IDL_UNRESTRICTED_DOUBLE || t == IDL_DOUBLE;
 }
 
 /* §3.2.9's `unsigned long long` AS THE MAGNITUDE IT IS. Public because a conversion that happens OUTSIDE this
@@ -136,6 +136,13 @@ double idl_unsigned_long_long_of(double x)
 static JSValue idl_num_of(JSContext *ctx, IdlArgType t, double x)
 {
     if (t == IDL_UNRESTRICTED_DOUBLE) return JS_NewFloat64(ctx, x);
+    /* §3.2.6: "if V is NaN, +Infinity or -Infinity, then throw a TypeError". The two call sites below place
+       what this returns and check it for the exception, so a restricted double is refused by the TYPE. */
+    if (t == IDL_DOUBLE) {
+        if (!isfinite(x))
+            return JS_ThrowTypeError(ctx, "the provided double value is non-finite");
+        return JS_NewFloat64(ctx, x);
+    }
     /* AN `unsigned long long` DOES NOT FIT IN AN int64_t, and the half of its range that does not is exactly
        the half a page reaches by writing a negative: §3.2.9's conversion of -1 is 2**64-1, which as an int64_t
        is the bit pattern -1 again, so handing it back through JS_NewInt64 would undo the whole conversion. The
@@ -1513,6 +1520,10 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     if (r < 0) return JS_STEP_ABRUPT;
                     JS_FreeValue(ctx, s->dict_v);
                     s->dict_v = idl_num_of(ctx, mt, num);
+                    if (JS_IsException(s->dict_v)) {   /* §3.2.6's restricted double refused the value */
+                        s->dict_v = JS_UNDEFINED;
+                        return JS_STEP_ABRUPT;
+                    }
                 }
                 else if (mt == IDL_DOMSTRING || mt == IDL_DOMSTRING_NULLABLE || mt == IDL_BYTESTRING ||
                          mt == IDL_USVSTRING || mt == IDL_USVSTRING_NULLABLE || mt == IDL_ENUM ||
@@ -1742,6 +1753,10 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
             *slot = idl_num_of(ctx, t, num);
+            if (JS_IsException(*slot)) {   /* §3.2.6's restricted double refused the value */
+                *slot = JS_UNDEFINED;
+                return JS_STEP_ABRUPT;
+            }
             goto placed;
         }
         if (t == IDL_CALLBACK) {

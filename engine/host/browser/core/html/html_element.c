@@ -19,9 +19,11 @@
  * built — is written once in element.c and here. An interface with no reflections is still an entry, because
  * `instanceof` is observable even when the member list is not.
  *
- * WHAT IS HONESTLY ABSENT. The interfaces that need layout (offsetWidth, getBoundingClientRect), CSSOM (`style`),
- * or a media device are not here; the IDL audit names their members. A tag whose interface this table does not
- * list gets HTMLUnknownElement, which is what HTML says for an unknown element — not a shrug. */
+ * WHAT IS HONESTLY ABSENT. The interfaces that need layout (offsetWidth, getBoundingClientRect) are not here;
+ * the IDL audit names their members. §4.8.11's media elements no longer belong on that list — HTMLMediaElement
+ * is a real state machine over a modelled device (core/html/media_element.c), and this file's table names it as
+ * the PARENT of the two interfaces whose IDL inherits from it. A tag whose interface this table does not list
+ * gets HTMLUnknownElement, which is what HTML says for an unknown element — not a shrug. */
 #include <string.h>
 
 #include <lexbor/html/html.h>   /* <template>'s content fragment — §4.12.3 */
@@ -41,6 +43,7 @@
 #include "core/html/element_internals.h"
 #include "core/html/focus.h"
 #include "core/html/html_dialog.h"
+#include "core/html/media_element.h"
 #include "core/html/html_element.h"
 #include "core/css/css_style_declaration.h"
 #include "core/html/form_data_event.h"
@@ -161,17 +164,11 @@ static const ElReflect R_TRACK[]  = {
     { "label", "label", REFLECT_STRING }, { "kind", "kind", REFLECT_STRING },
     { "default", "default", REFLECT_BOOL },
 };
-static const ElReflect R_MEDIA[]  = {
-    { "src", "src", REFLECT_STRING }, { "crossOrigin", "crossorigin", REFLECT_STRING },
-    { "preload", "preload", REFLECT_STRING },
-    { "autoplay", "autoplay", REFLECT_BOOL }, { "loop", "loop", REFLECT_BOOL },
-    { "controls", "controls", REFLECT_BOOL },
-};
+/* §4.8.9's HTMLVideoElement declares TWO reflections of its own; the six `<audio>` and `<video>` share are
+   HTMLMediaElement's, and they live on THAT prototype (core/html/media_element.c) rather than being repeated
+   here per tag — which is what the IDL says and what makes `video.src` one member rather than two. */
 static const ElReflect R_VIDEO[]  = {
-    { "src", "src", REFLECT_STRING }, { "poster", "poster", REFLECT_STRING },
-    { "crossOrigin", "crossorigin", REFLECT_STRING }, { "preload", "preload", REFLECT_STRING },
-    { "autoplay", "autoplay", REFLECT_BOOL }, { "loop", "loop", REFLECT_BOOL },
-    { "controls", "controls", REFLECT_BOOL }, { "playsInline", "playsinline", REFLECT_BOOL },
+    { "poster", "poster", REFLECT_STRING }, { "playsInline", "playsinline", REFLECT_BOOL },
 };
 static const ElReflect R_OBJECT[] = {
     { "data", "data", REFLECT_STRING }, { "type", "type", REFLECT_STRING },
@@ -234,7 +231,7 @@ static const struct { const char *tag; const char *iface; const ElReflect *refl;
     { "base",       "HTMLBaseElement",       RL(R_BASE) },
     { "source",     "HTMLSourceElement",     RL(R_SOURCE) },
     { "track",      "HTMLTrackElement",      RL(R_TRACK) },
-    { "audio",      "HTMLAudioElement",      RL(R_MEDIA) },
+    { "audio",      "HTMLAudioElement",      RNONE },
     { "video",      "HTMLVideoElement",      RL(R_VIDEO) },
     { "object",     "HTMLObjectElement",     RL(R_OBJECT) },
     { "embed",      "HTMLEmbedElement",      RL(R_EMBED) },
@@ -428,6 +425,9 @@ void html_element_init(JSContext *ctx)
        (a `method=dialog` submission) is its caller. It comes AFTER html_form_declare for no ordering reason of
        its own; §4.11 is simply the next section this file reaches. */
     html_dialog_declare(ctx);
+    /* §4.8.11's media element state machine — declared here because HTMLMediaElement.prototype is the parent
+       of two rows of the table above, so this file is what decides when it must exist. */
+    media_element_declare(ctx);
     /* §4.13.7 — declared here because `attachInternals` is an HTMLElement member, which is what this file
        owns the table of; the algorithms are element_internals.c's. */
     element_internals_declare(ctx);
@@ -482,6 +482,11 @@ void html_element_install_protos(JSContext *ctx)
     focus_install_html_members(ctx, html_p);
     JS_SetClassProto(ctx, g_html_class, JS_DupValue(ctx, html_p));
 
+    /* §4.8.11's `interface HTMLMediaElement : HTMLElement`, built BEFORE the per-tag loop because the two
+       interfaces below inherit from it rather than from HTMLElement — `audio.play` is a property of
+       HTMLMediaElement.prototype, and a table that parented both to html_p would have made it two. */
+    media_element_install_proto(ctx, html_p);
+
     unknown_p = JS_NewObjectProto(ctx, html_p);   /* §4: `interface HTMLUnknownElement : HTMLElement` */
     CHECK(!JS_IsException(unknown_p), "HTMLUnknownElement.prototype could not be allocated");
     idl_interface_tag(ctx, unknown_p, "HTMLUnknownElement");
@@ -493,7 +498,16 @@ void html_element_install_protos(JSContext *ctx)
         for (j = 0; j < i; j++)
             if (g_iface_class[j] == g_iface_class[i]) break;
         if (j < i) continue;
-        p = JS_NewObjectProto(ctx, html_p);
+        /* §4.8.9 and §4.8.10: `HTMLVideoElement : HTMLMediaElement` and `HTMLAudioElement : HTMLMediaElement`.
+           The parent is decided by the INTERFACE, which is what the IDL states, rather than by the tag. */
+        {
+            bool media = !strcmp(HTML_IFACE[i].iface, "HTMLAudioElement") ||
+                         !strcmp(HTML_IFACE[i].iface, "HTMLVideoElement");
+            JSValue parent = media ? media_element_proto(ctx) : JS_DupValue(ctx, html_p);
+
+            p = JS_NewObjectProto(ctx, parent);
+            JS_FreeValue(ctx, parent);
+        }
         CHECK(!JS_IsException(p), "a per-tag interface prototype could not be allocated");
         idl_interface_tag(ctx, p, HTML_IFACE[i].iface);
         if (HTML_IFACE[i].nrefl)
@@ -593,6 +607,9 @@ void html_element_install(JSContext *ctx, JSValueConst global)
        algorithm is form_entry_list.c's; this file owns which names the global carries. */
     form_data_event_install(ctx, global);
     node_install_interface(ctx, global, "HTMLUnknownElement", up);
+    /* §4.8.11's three interface objects — HTMLMediaElement, MediaError and TimeRanges. They go up where §4's
+       do because this file owns which names the global carries; the algorithms are media_element.c's. */
+    media_element_install(ctx, global);
     JS_FreeValue(ctx, hp);
     JS_FreeValue(ctx, up);
     for (i = 0; i < HTML_IFACE_N; i++) {
@@ -622,6 +639,7 @@ void html_element_free(JSContext *ctx)
     declarative_shadow_free();
     html_form_free(ctx);
     html_dialog_free(ctx);
+    media_element_free(ctx);
     element_internals_free(ctx);
     if (g_dataset_key != JS_ATOM_NULL) { JS_FreeAtom(ctx, g_dataset_key); g_dataset_key = JS_ATOM_NULL; }
     /* the prototypes are the REALMS' — each is released with its context; the AGENT holds only class ids */
