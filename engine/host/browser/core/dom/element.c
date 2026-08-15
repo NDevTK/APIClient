@@ -1121,6 +1121,7 @@ static JSValue js_el_insert_adjacent(JSContext *ctx, JSValueConst this_val, int 
             JS_FreeCString(ctx, s);
             if (!t) return JS_UNDEFINED;
             added = lxb_dom_interface_node(t);
+            dom_cow_note_created(added);   /* this flow made it: the delta owns it and destroys it on discard */
         }
         ref = (where == PLACE_AFTER) ? n->next : (where == PLACE_FIRST_CHILD ? n->first_child : n);
         switch (where) {

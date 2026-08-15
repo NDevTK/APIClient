@@ -704,7 +704,14 @@ static lxb_dom_node_t *node_from_arg(JSContext *ctx, lxb_dom_node_t *owner, JSVa
     if (!s) return NULL;
     text = lxb_dom_document_create_text_node(owner->owner_document, (const lxb_char_t *)s, slen);
     JS_FreeCString(ctx, s);
-    return text ? lxb_dom_interface_node(text) : NULL;
+    if (!text) return NULL;
+    /* THIS FLOW MADE IT, so the delta owns it and destroys it when the delta is discarded — the same record
+       `createTextNode` and `splitText` push at their own creation sites. The INSERTION that follows is a
+       different fact (an insertion also covers a baseline node being moved), so it cannot stand in for this:
+       without the entry the node was detached on revert and then leaked into the document's arena, where no
+       GC walk names it. */
+    dom_cow_note_created(lxb_dom_interface_node(text));
+    return lxb_dom_interface_node(text);
 }
 
 static JSValue js_node_mixin(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -2603,8 +2610,10 @@ static JSValue js_node_set_text_content(JSContext *ctx, JSValueConst this_val, J
     if (len) {
         text = lxb_dom_document_create_text_node(n->owner_document, (const lxb_char_t *)str, len);
         DCHECK(text != NULL, "textContent= produced no Text node — the page's text would silently not be there");
-        if (text)
+        if (text) {
+            dom_cow_note_created(lxb_dom_interface_node(text));   /* this flow made it: the delta owns it */
             dom_cow_append_child(n, lxb_dom_interface_node(text));
+        }
     }
     if (owned_cstr)
         JS_FreeCString(ctx, str);

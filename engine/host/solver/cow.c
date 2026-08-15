@@ -510,6 +510,15 @@ void cow_capture_host_state(JSContext *ctx, JSValueConst owner, void *p, size_t 
     if (g_capturing || !g_current) return;
     CowDelta *d = g_current;
     DCHECK(p != NULL && n > 0, "a component asked to capture no state — the call site has nothing to isolate");
+    /* A POD LATCH ONLY, and this is where that is stated rather than only described. The blob is a memcpy, so a
+       JSValue inside it becomes a reference nothing counts and the next restore frees a value the blob still
+       names — cow.h's whole reason for the record arm below. A latch is a SCALAR; a record with several fields
+       goes through cow_capture_host_record, which takes the layout (with n_val 0 when the record owns no value,
+       as BroadcastChannel's does). Anything wider than a scalar reaching here is a record captured as bytes. */
+    DCHECK(n == 1 || n == 2 || n == 4 || n == 8,
+           "a component captured MORE THAN A SCALAR through the byte arm — cow_capture_host_state is for a POD "
+           "latch, and a memcpy of a struct makes an uncounted reference out of any JSValue in it; capture the "
+           "record through cow_capture_host_record with a CowRecord layout naming its owned values");
     DCHECK(JS_IsObject(owner), "a component's state was captured with no owning object — the storage it points "
                                "into would be freed out from under a parked flow's delta");
     if (JS_ObjFlowGen(owner) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
@@ -547,6 +556,23 @@ void cow_capture_host_record(JSValueConst owner, void *p, const CowRecord *rec) 
     DCHECK(p != NULL && rec != NULL && rec->size > 0, "a component record was captured with no layout");
     DCHECK(JS_IsObject(owner), "a component record was captured with no owning object — the storage it points "
                                "into would be freed out from under a parked flow's delta");
+    /* THE LAYOUT IS A REFERENCE-COUNT CONTRACT, so its shape is asserted where it is used and not left to the
+       reader of the offset list. Each entry names a JSValue this capture will DUP and this delta will later
+       FREE, so an offset that runs off the end of the record dups whatever is next in memory, an unaligned one
+       reads a value that is not there, and a DUPLICATED offset dups one field twice and frees it twice — which
+       is the failure a hand-written `*_VALS[]` produces when a field is added by copying the line above it. */
+    for (int vi = 0; vi < rec->n_val; vi++) {
+        DCHECK((size_t)rec->val_off[vi] + sizeof(JSValue) <= rec->size,
+               "a component record's layout names an owned value PAST THE END of the record — the capture would "
+               "dup whatever follows it in memory and the restore would free it");
+        DCHECK(rec->val_off[vi] % _Alignof(JSValue) == 0,
+               "a component record's layout names an owned value at an offset no JSValue can sit at — the field "
+               "named is not the field the finalizer frees");
+        for (int vj = 0; vj < vi; vj++)
+            DCHECK(rec->val_off[vj] != rec->val_off[vi],
+                   "a component record's layout names one owned value TWICE — the capture dups it twice and the "
+                   "delta frees it twice, which is a refcount underflow on a value the page still holds");
+    }
     if (JS_ObjFlowGen(owner) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
     for (int i = 0; i < d->n; i++)
         if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_HOST_REC && d->e[i].target == p) return;
