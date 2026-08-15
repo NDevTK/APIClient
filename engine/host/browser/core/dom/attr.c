@@ -370,13 +370,6 @@ static void attr_set_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->verified);
 }
 
-static void attr_set_release(JSContext *ctx, void *st)
-{
-    AttrSetState *s = st;
-    JS_FreeValue(ctx, s->verified);
-    s->verified = JS_UNDEFINED;
-}
-
 static int js_attr_set_attribute(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                                  JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -452,7 +445,7 @@ static int js_attr_set_attribute(JSContext *ctx, JSStepHdr *hdr, void *st, int a
 }
 
 static const IdlStepDecl ATTR_SET_STEP = {
-    js_attr_set_attribute, sizeof(AttrSetState), attr_set_visit, attr_set_release,
+    js_attr_set_attribute, sizeof(AttrSetState), attr_set_visit, NULL,
     "DOM §4.9 \"set an attribute\"", ATTR_SET_STEPS
 };
 

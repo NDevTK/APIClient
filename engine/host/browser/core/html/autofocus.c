@@ -350,19 +350,6 @@ static void flush_visit(JSContext *ctx, void *st, JSStepVisit *v)
     STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
 }
 
-static void flush_release(JSContext *ctx, void *st)
-{
-    FlushState *s = st;
-    int k;
-
-    JS_FreeValue(ctx, s->target);
-    s->target = JS_UNDEFINED;
-    STEP_CB_FOREACH(s->cb, k) {
-        JS_FreeValue(ctx, s->cb[k]);
-        s->cb[k] = JS_UNDEFINED;
-    }
-}
-
 /* The realm whose ACTIVE DOCUMENT a candidate's node document is. §6.6.7 step 5.4 admits a candidate from any
    document under topDocument's top-level traversable, so this is routinely a CHILD realm and never assumed to
    be the flushing one. */
@@ -395,7 +382,7 @@ static int flush_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
 
     if (hdr->stage == AF_START) {
         /* EVERY OWNED FIELD IS ON THE STATE BEFORE ANYTHING THAT CAN FAIL — the failure path tears this state
-           down through flush_release, which frees exactly what the state holds and nothing else. */
+           down through flush_visit, which names exactly what the state owns and nothing else. */
         s->target = JS_UNDEFINED;
         s->fphase = 0;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
@@ -501,7 +488,7 @@ static int flush_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
 }
 
 static const IdlStepDecl FLUSH_STEP = {
-    flush_step, sizeof(FlushState), flush_visit, flush_release,
+    flush_step, sizeof(FlushState), flush_visit, NULL,
     "HTML §6.6.7 flush autofocus candidates, run by §8.1.7.3 update the rendering step 7",
     FLUSH_STEPS
 };

@@ -95,18 +95,6 @@ static void sm_visit(JSContext *ctx, void *st, JSStepVisit *v)
     STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
 }
 
-static void sm_release(JSContext *ctx, void *st)
-{
-    SmState *s = st;
-    int k;
-
-    JS_FreeValue(ctx, s->promise);
-    JS_FreeValue(ctx, s->func);
-    JS_FreeValue(ctx, s->value);
-    s->promise = s->func = s->value = JS_UNDEFINED;
-    STEP_CB_FOREACH(s->cb, k) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
-}
-
 static int sm_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                    JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -182,7 +170,7 @@ static int sm_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
 }
 
 static const IdlStepDecl SM_DECL = {
-    sm_step, sizeof(SmState), sm_visit, sm_release,
+    sm_step, sizeof(SmState), sm_visit, NULL,
     "File System §3 StorageManager.getDirectory()", SM_STEPS
 };
 

@@ -661,16 +661,12 @@ void headers_fill_visit(JSContext *ctx, HeadersFill *f, JSStepVisit *v)
     iter_cursor_visit(ctx, &f->inner, v);
 }
 
+/* The declaration above IS the list; this discharges it and states nothing of its own. Kept as a function for
+   the callers that release this record mid-algorithm rather than at a teardown — a machine whose own `visit`
+   names it must NOT call this, because its teardown already discharges the same declaration. */
 void headers_fill_release(JSContext *ctx, HeadersFill *f)
 {
-    record_cursor_release(ctx, &f->rec);
-    JS_FreeValue(ctx, f->name);
-    JS_FreeValue(ctx, f->value);
-    JS_FreeValue(ctx, f->item[0]);
-    JS_FreeValue(ctx, f->item[1]);
-    f->name = f->value = f->item[0] = f->item[1] = JS_UNDEFINED;
-    iter_cursor_release(ctx, &f->outer);
-    iter_cursor_release(ctx, &f->inner);
+    headers_fill_visit(ctx, f, JS_StepFreeVisitor());
 }
 
 /* §3.2.21 step 5.2's `typedKey = key converted to K`, and K is ByteString — run BEFORE the value's [[Get]] is
@@ -927,13 +923,13 @@ static void js_headers_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->result);
 }
 
+/* THE HEADER LIST ALONE — a malloc'd array of malloc'd name/value pairs, which is not a reference and which no
+   declaration names. Everything else this state holds is named by js_headers_ctor_visit and released through
+   that one list. */
 static void js_headers_ctor_release(JSContext *ctx, void *st)
 {
-    JSHeadersCtorState *s = st;
-    headers_fill_release(ctx, &s->fill);
-    header_list_free(&s->list);
-    JS_FreeValue(ctx, s->result);
-    s->result = JS_UNDEFINED;
+    (void)ctx;
+    header_list_free(&((JSHeadersCtorState *)st)->list);
 }
 
 static int js_headers_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,

@@ -835,13 +835,6 @@ static void open_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &((OpenState *)st)->result);
 }
 
-static void open_release(JSContext *ctx, void *st)
-{
-    OpenState *s = st;
-    JS_FreeValue(ctx, s->result);
-    s->result = JS_UNDEFINED;
-}
-
 static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -884,7 +877,7 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     return JS_STEP_DONE;
 }
 
-static const IdlStepDecl OPEN_DECL = { js_win_open_step, sizeof(OpenState), open_visit, open_release,
+static const IdlStepDecl OPEN_DECL = { js_win_open_step, sizeof(OpenState), open_visit, NULL,
                                       "HTML §7.4 open(url, target, features)", OPEN_STEPS };
 
 static int g_id_open;

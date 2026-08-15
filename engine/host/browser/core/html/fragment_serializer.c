@@ -458,12 +458,11 @@ static void js_frag_ser_release(JSContext *ctx, void *st)
 {
     FragSerState *s = st;
 
+    (void)ctx;   /* `shadow_roots` is a reference js_frag_ser_visit names; the declaration releases it */
     free(s->out);
     free(s->stack);
     s->out = NULL;
     s->stack = NULL;
-    JS_FreeValue(ctx, s->shadow_roots);
-    s->shadow_roots = JS_UNDEFINED;
 }
 
 static const IdlStepDecl FRAGMENT_SERIALIZER_STEP = {

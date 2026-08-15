@@ -104,7 +104,11 @@ void sanitizer_walk_begin(JSContext *ctx, SanitizerWalk *w, lxb_dom_node_t *root
 /* ONE step. Returns JS_STEP_YIELD while there is more to do and 0 when the walk is over; the caller owns what
    happens next, which for §8.6.4 is step 8's replacement. */
 int  sanitizer_walk_step(JSContext *ctx, JSStepHdr *hdr, SanitizerWalk *w);
+/* WHAT THIS RECORD OWNS, declared once. The machine that holds it names this in its own `visit`, so the fork
+   clones it and the teardown releases it through that ONE list. */
 void sanitizer_walk_visit(JSContext *ctx, SanitizerWalk *w, JSStepVisit *v);
-void sanitizer_walk_release(JSContext *ctx, SanitizerWalk *w);
+/* And the half a declaration cannot carry — the level stack is plain storage, not a reference. Called by that
+   machine's `release`; the config it also holds goes through the declaration above and nowhere else. */
+void sanitizer_walk_free_stack(SanitizerWalk *w);
 
 #endif

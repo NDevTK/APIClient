@@ -308,16 +308,13 @@ static void js_usp_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->item[1]);
 }
 
+/* THE PARAMETER LIST ALONE — a malloc'd array of malloc'd name/value pairs, which is not a reference and which
+   no declaration names. The two cursors and the pair being read are named by js_usp_ctor_visit, and the
+   teardown discharges that one list. */
 static void js_usp_ctor_release(JSContext *ctx, void *st)
 {
-    JSUspCtorState *s = st;
-    iter_cursor_release(ctx, &s->outer);
-    iter_cursor_release(ctx, &s->inner);
-    record_cursor_release(ctx, &s->rec);
-    JS_FreeValue(ctx, s->item[0]);
-    JS_FreeValue(ctx, s->item[1]);
-    s->item[0] = s->item[1] = JS_UNDEFINED;
-    usp_list_free(&s->list);
+    (void)ctx;
+    usp_list_free(&((JSUspCtorState *)st)->list);
 }
 
 /* §6.2 step 5.2's key conversion is to USVString, which every String and no Symbol is. */

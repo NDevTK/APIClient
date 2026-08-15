@@ -28,6 +28,12 @@ void report_exception_free(JSContext *ctx);
 
 void report_exception_work_start(ReportExceptionWork *w);
 void report_exception_work_visit(JSContext *ctx, ReportExceptionWork *w, JSStepVisit *v);
+/* STEP 5'S FLAG, GIVEN BACK — the half of this record's teardown that is NOT a reference and therefore not
+   something the visit above can carry. A step machine whose own `visit` names this record discharges the
+   references through that declaration (JS_StepVisitFree) and calls THIS for the flag; calling the whole
+   release from such a machine would be the second list its declaration exists to be. */
+void report_exception_work_unlock(JSContext *ctx, ReportExceptionWork *w);
+/* Both halves, for a caller that holds this record OUTSIDE a step machine's declaration. */
 void report_exception_work_release(JSContext *ctx, ReportExceptionWork *w);
 /* `exception` is BORROWED — the caller took it off the context with JS_GetException and owns it. */
 int  report_exception_run(JSContext *ctx, ReportExceptionWork *w, JSValueConst exception, JSValue in,

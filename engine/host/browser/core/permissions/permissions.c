@@ -1,5 +1,7 @@
 /* PERMISSIONS §6.1 AND §6.2 — the Permissions interface and `query()`. See permissions.h. */
 
+#include <string.h>
+
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
@@ -60,8 +62,13 @@ static bool permissions_brand(JSContext *ctx, JSValueConst this_val)
     X(PQ_NAME, "Permissions §6.2.1 step 2 (Get(permissionDesc, \"name\") — the required member of the "         \
                "PermissionDescriptor the object is converted to)")                                             \
     X(PQ_NAME_STR, "Permissions §6.2.1 step 2 (converting permissionDesc[\"name\"] to its DOMString)")          \
+    X(PQ_SUBJECT, "Permissions §6.2.1 step 5 (converting permissionDesc to the permission descriptor type "     \
+                  "rootDesc's name identifies — the REQUIRED member that type declares to identify which "     \
+                  "instance of the feature the descriptor is about)")                                          \
     X(PQ_ASPECT, "Permissions §6.2.1 step 5 (converting permissionDesc to the permission descriptor type "      \
                  "rootDesc's name identifies — the one aspect member that type declares)")                     \
+    X(PQ_ASPECT_STR, "Permissions §6.2.1 step 5 (Web IDL §3.2.19's ToString on an aspect member whose type is " \
+                     "an enumeration)")                                                                        \
     X(PQ_RUN, "Permissions §6.2.1 steps 7-8 (a new promise; create a PermissionStatus with typedDescriptor, "   \
               "run the permission query algorithm, and queue a global task to resolve promise with status)")
 enum { IDL_STEP_STAGE_BASE(PQ_STAGES) PQ_STAGES(JS_STEP_STAGE_ENUM) };
@@ -71,7 +78,15 @@ typedef struct {
     JSValue promise;
     JSValue funcs[2];   /* the capability's [resolve, reject] */
     JSValue name_v;     /* permissionDesc["name"] as read, then as its DOMString */
+    /* THE SUBJECT MEMBER'S VALUE (owned) — the `required FileSystemHandle handle` of the one registered
+       descriptor type that names one. It is held from step 5's read to step 8's descriptor because the
+       descriptor BORROWS it, and the two are separated by the aspect member's own read (and by that read's
+       possible suspension), so a borrowed reference to a value nothing on this state held would be a use after
+       free the moment the page's getter dropped its last other reference. */
+    JSValue subject_v;
+    JSValue aspect_v;   /* the aspect member as read, then as its DOMString where the member is an enumeration */
     JSAtom  aspect;     /* the feature's aspect member, interned for the length of step 5's read */
+    JSAtom  subject;    /* and its subject member, interned for the length of the same step */
     int     feature;
     uint8_t aspect_on;
     uint8_t started;
@@ -81,30 +96,40 @@ static void pq_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     PermQueryState *s = st;
 
+    /* THE ASPECT ATOM IS OWNED AND WAS NAMED BY NOTHING. Step 5's read of the feature's aspect member parks on
+       the page's getter, so a concolic fork lands inside it — and the byte copy the fork makes would hand two
+       arms one interned name with one reference, which both of them then free. It is visited BEFORE the
+       started-guard because it is interned by step 5 whether or not the promise half of the algorithm has
+       begun. */
+    v->atom(ctx, &s->aspect);
+    v->atom(ctx, &s->subject);
     if (!s->started)
         return;
     v->val(ctx, &s->promise);
     v->val(ctx, &s->funcs[0]);
     v->val(ctx, &s->funcs[1]);
     v->val(ctx, &s->name_v);
+    v->val(ctx, &s->subject_v);
+    v->val(ctx, &s->aspect_v);
 }
 
-static void pq_release(JSContext *ctx, void *st)
+/* WHICH STAGE STEP 5's CONVERSION STARTS AT, from the registry row alone. The derived permission descriptor
+   type adds a SUBJECT member, an ASPECT member, both or neither, and §3.2.18's lexicographic order over the
+   derived type's own members puts `handle` before `mode` — so the one type that declares both is read in that
+   order and every other type skips straight past what it does not declare. */
+static int pq_after_name(PermQueryState *s)
 {
-    PermQueryState *s = st;
+    if (permission_feature_subject(s->feature)) return PQ_SUBJECT;
+    if (permission_feature_aspect(s->feature))  return PQ_ASPECT;
+    return PQ_RUN;
+}
 
-    if (s->aspect != JS_ATOM_NULL) {
-        JS_FreeAtom(ctx, s->aspect);
-        s->aspect = JS_ATOM_NULL;
-    }
-    if (!s->started)
-        return;
-    JS_FreeValue(ctx, s->promise);
-    JS_FreeValue(ctx, s->funcs[0]);
-    JS_FreeValue(ctx, s->funcs[1]);
-    JS_FreeValue(ctx, s->name_v);
-    s->promise = s->funcs[0] = s->funcs[1] = s->name_v = JS_UNDEFINED;
-    s->started = 0;
+static void pq_intern_aspect(JSContext *ctx, PermQueryState *s)
+{
+    DCHECK(s->aspect == JS_ATOM_NULL, "§6.2.1 interned a feature's aspect member name twice — a re-entry at the "
+                                      "same stage would leak the first, and the read is made once");
+    s->aspect = JS_NewAtom(ctx, permission_feature_aspect(s->feature));
+    CHECK(s->aspect != JS_ATOM_NULL, "a feature's aspect member name could not be interned");
 }
 
 /* EVERY FAILURE STEP OF §6.2.1, as the one operation all of them are: settle the promise this algorithm has
@@ -144,7 +169,8 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
        already-set. */
     if (!s->started) {
         s->promise = s->funcs[0] = s->funcs[1] = s->name_v = JS_UNDEFINED;
-        s->aspect = JS_ATOM_NULL;
+        s->subject_v = s->aspect_v = JS_UNDEFINED;
+        s->aspect = s->subject = JS_ATOM_NULL;
         s->feature = -1;
         s->aspect_on = 0;
         /* STEP 7's PROMISE, CREATED FIRST. See pq_reject: every failure step of this algorithm settles it. */
@@ -232,27 +258,94 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
             }
             if (nm) JS_FreeCString(ctx, nm);
         }
-        /* STEP 5's conversion adds exactly one member — the feature's aspect — or nothing at all, where its
-           permission descriptor type is the default `PermissionDescriptor`. */
-        if (permission_feature_aspect(s->feature)) {
-            s->aspect = JS_NewAtom(ctx, permission_feature_aspect(s->feature));
-            CHECK(s->aspect != JS_ATOM_NULL, "a feature's aspect member name could not be interned");
-            hdr->stage = PQ_ASPECT;
-        } else {
-            hdr->stage = PQ_RUN;
+        /* STEP 5's CONVERSION, AND ITS ORDER IS WEB IDL'S. §3.2.18 reads a dictionary's INHERITED members
+           first — `name`, above — and then the derived type's OWN members LEXICOGRAPHICALLY among themselves,
+           so `FileSystemPermissionDescriptor`'s two are read `handle` then `mode`. The derived type adds at
+           most a SUBJECT and at most an ASPECT, and a feature whose type is the default `PermissionDescriptor`
+           adds neither. */
+        hdr->stage = pq_after_name(s);
+        if (hdr->stage == PQ_SUBJECT) {
+            s->subject = JS_NewAtom(ctx, permission_feature_subject(s->feature));
+            CHECK(s->subject != JS_ATOM_NULL, "a feature's subject member name could not be interned");
+        } else if (hdr->stage == PQ_ASPECT) {
+            pq_intern_aspect(ctx, s);
         }
     }
-    if (hdr->stage == PQ_ASPECT) {
-        JSValue v;
-
-        r = step_getprop_run(ctx, hdr, desc, s->aspect, cb_result, &v, out_cb, out_argc);
+    if (hdr->stage == PQ_SUBJECT) {
+        r = step_getprop_run(ctx, hdr, desc, s->subject, cb_result, &s->subject_v, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return pq_reject(ctx, s, presult);
         cb_result = JS_UNDEFINED;
-        /* `boolean X = false`: an absent member takes the IDL's default, and a present one is ToBoolean —
-           which runs none of the page's code, so there is nothing after this read to rest on. */
-        s->aspect_on = JS_IsUndefined(v) ? 0 : (uint8_t)JS_ToBool(ctx, v);
-        JS_FreeValue(ctx, v);
+        /* WEB IDL §3.2.18 again: a `required` member the object does not have is a TypeError, and `undefined`
+           IS not having it. */
+        if (JS_IsUndefined(s->subject_v)) {
+            JS_ThrowTypeError(ctx, "a permission descriptor for '%s' has no `%s`, which its permission "
+                                   "descriptor type declares as a required member",
+                              permission_feature_name(s->feature), permission_feature_subject(s->feature));
+            return pq_reject(ctx, s, presult);
+        }
+        /* §3.2.16's INTERFACE conversion: "a platform object implementing the interface crosses as itself and
+           anything else is a TypeError". The brand belongs to the component that owns the interface, which is
+           why the registry holds a test rather than a class id. */
+        if (!permission_subject_is(s->feature, s->subject_v)) {
+            JS_ThrowTypeError(ctx, "the `%s` of a permission descriptor for '%s' is not of the interface type "
+                                   "its permission descriptor type declares",
+                              permission_feature_subject(s->feature), permission_feature_name(s->feature));
+            return pq_reject(ctx, s, presult);
+        }
+        hdr->stage = permission_feature_aspect(s->feature) ? PQ_ASPECT : PQ_RUN;
+        if (hdr->stage == PQ_ASPECT) pq_intern_aspect(ctx, s);
+    }
+    if (hdr->stage == PQ_ASPECT) {
+        r = step_getprop_run(ctx, hdr, desc, s->aspect, cb_result, &s->aspect_v, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return pq_reject(ctx, s, presult);
+        cb_result = JS_UNDEFINED;
+        /* AN ABSENT MEMBER TAKES THE IDL'S DEFAULT, whichever type it is: `= false` for a boolean, and the
+           enumeration's first listed value for `FileSystemPermissionMode mode = "read"` — both of which are
+           aspect bit 0, which is what makes the two types one bit. */
+        if (JS_IsUndefined(s->aspect_v)) {
+            s->aspect_on = 0;
+            hdr->stage = PQ_RUN;
+        } else if (!permission_feature_aspect_values(s->feature)) {
+            /* `boolean X = false`: ToBoolean, which runs none of the page's code, so there is nothing after
+               this read to rest on. */
+            s->aspect_on = (uint8_t)JS_ToBool(ctx, s->aspect_v);
+            hdr->stage = PQ_RUN;
+        } else {
+            hdr->stage = PQ_ASPECT_STR;    /* §3.2.19's ToString may be the page's, so it rests */
+        }
+    }
+    if (hdr->stage == PQ_ASPECT_STR) {
+        const char *const *values = permission_feature_aspect_values(s->feature);
+        const char *v;
+
+        DCHECK(values != NULL, "§6.2.1 reached the enumeration conversion for an aspect member whose registry "
+                               "row declares no enumeration");
+        if (!JS_IsString(s->aspect_v)) {
+            JSValue str;
+
+            r = step_tostring_run(ctx, hdr, s->aspect_v, cb_result, &str, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return pq_reject(ctx, s, presult);
+            JS_FreeValue(ctx, s->aspect_v);
+            s->aspect_v = str;
+        } else {
+            JS_FreeValue(ctx, cb_result);
+        }
+        cb_result = JS_UNDEFINED;
+        /* §3.2.19: "if S is not one of the enumeration's values, throw a TypeError". Never the default — an
+           unrecognised value is an error, and silently taking `read` for it would answer a question the page
+           did not ask. */
+        v = JS_ToCString(ctx, s->aspect_v);
+        if (!v || (strcmp(v, values[0]) && strcmp(v, values[1]))) {
+            JS_ThrowTypeError(ctx, "'%s' is not a value of the enumeration `%s` names",
+                              v ? v : "", permission_feature_aspect(s->feature));
+            if (v) JS_FreeCString(ctx, v);
+            return pq_reject(ctx, s, presult);
+        }
+        s->aspect_on = (uint8_t)(strcmp(v, values[1]) == 0);
+        JS_FreeCString(ctx, v);
         hdr->stage = PQ_RUN;
     }
     DCHECK(hdr->stage == PQ_RUN, "§6.2.1's query resumed into a stage it does not have");
@@ -261,6 +354,7 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
                             "returns, so a descriptor here always names a registry row");
     d.feature = s->feature;
     d.aspect = s->aspect_on != 0;
+    d.subject = s->subject_v;
     /* STEP 8.1-8.3: create a PermissionStatus with typedDescriptor and run the permission query algorithm over
        its [[query]] slot — both of which permission_status_new performs, because §6.3.4's update steps perform
        the identical pair and two copies of one algorithm is one of them being wrong later. */
@@ -280,7 +374,7 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
 }
 
 static const IdlStepDecl PQ_DECL = {
-    pq_step, sizeof(PermQueryState), pq_visit, pq_release,
+    pq_step, sizeof(PermQueryState), pq_visit, NULL,
     "Permissions §6.2.1 query(permissionDesc)", PQ_STEPS,
     /* catches_abrupt: §6.2.1's every failure step REJECTS. A read that throws after suspending would otherwise
        tear this machine down and propagate the throw synchronously, past the `.catch` the page wrote. */

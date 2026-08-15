@@ -27,15 +27,11 @@ void stream_work_visit(JSContext *ctx, StreamWork *w, JSStepVisit *v)
     for (k = 0; k < (int)(sizeof(w->cb) / sizeof(w->cb[0])); k++) v->val(ctx, &w->cb[k]);
 }
 
+/* The declaration above discharged, and nothing restated — see headers_fill_release for why this stays a
+   function while the machines whose `visit` names this record no longer call it. */
 void stream_work_release(JSContext *ctx, StreamWork *w)
 {
-    int k;
-    JS_FreeValue(ctx, w->func);
-    JS_FreeValue(ctx, w->value);
-    JS_FreeValue(ctx, w->chain);
-    JS_FreeValue(ctx, w->err);
-    w->func = w->value = w->chain = w->err = JS_UNDEFINED;
-    for (k = 0; k < (int)(sizeof(w->cb) / sizeof(w->cb[0])); k++) { JS_FreeValue(ctx, w->cb[k]); w->cb[k] = JS_UNDEFINED; }
+    stream_work_visit(ctx, w, JS_StepFreeVisitor());
 }
 int stream_callback_member(JSContext *ctx, JSValueConst v, const char *kind, const char *name)
 {

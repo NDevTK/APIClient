@@ -41,6 +41,7 @@
 #include "core/html/html_iframe.h"
 #include "core/html/trusted_types.h"
 #include "core/html/declarative_shadow.h"
+#include "core/html/html_script.h"
 #include "core/html/fragment_serializer.h"
 #include "core/html/sanitizer.h"
 #include "core/dom/dom_token_list.h"
@@ -215,10 +216,9 @@ static void set_attr_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static void set_attr_release(JSContext *ctx, void *st)
 {
     SetAttrState *s = st;
+    (void)ctx;   /* `verified` is a reference set_attr_visit names; the declaration is what releases it */
     free(s->name);
     s->name = NULL;
-    JS_FreeValue(ctx, s->verified);
-    s->verified = JS_UNDEFINED;
 }
 
 static int js_el_set_attribute(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -335,10 +335,9 @@ static void set_attr_ns_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static void set_attr_ns_release(JSContext *ctx, void *st)
 {
     SetAttrNsState *s = st;
+    (void)ctx;   /* `verified` is a reference set_attr_ns_visit names; the declaration releases it */
     free(s->qname); s->qname = NULL;
     free(s->ns); s->ns = NULL;
-    JS_FreeValue(ctx, s->verified);
-    s->verified = JS_UNDEFINED;
 }
 
 static int js_el_set_attribute_ns(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -454,8 +453,9 @@ static JSValue js_el_get_tag(JSContext *ctx, JSValueConst this_val)
    LEXBOR MUST NOT RUN PAGE CODE. That is what lets a parser — a state machine with a great deal of internal
    position — live inside an engine whose flows suspend and resume at any depth: the parse holds no continuation
    across anything the page can preempt, so it never has to be suspended and never has to be part of a snapshot.
-   It completes inside one opcode over bytes, and any <script> it produces is QUEUED as a flow by
-   element_prepare_script rather than executed by the tree builder.
+   It completes inside one opcode over bytes, and the tree builder never reaches a `<script>`: §13.4 makes
+   every fragment parse here §13.2.4.5's INERT scripting mode, so the FRAG_FEED boundary marks each parsed
+   `<script>` already started and §4.12.1 step 1 refuses it when the placement's insertion steps prepare it.
    Re-entry is what a violation would look like: page code running mid-parse and reaching one of these again.
    Asserted rather than assumed, because the day it stops holding is the day a half-built tree ends up inside
    another flow's delta. */
@@ -479,8 +479,8 @@ enum { PLACE_CHILDREN = 0, PLACE_BEFORE, PLACE_AFTER, PLACE_FIRST_CHILD, PLACE_R
  * parse never overlaps, which is now exactly what this machine is built to allow.
  *
  * IT STILL RUNS NO PAGE CODE. That is what keeps a suspended parse safe to leave lying around: the tree builder
- * cannot reach a script (element_prepare_script QUEUES one), so nothing can observe a half-built fragment, and
- * nothing can fork this flow while the machine is on its chain. */
+ * cannot reach a script — under §13.2.4.5's Inert mode a parsed one never runs at all — so nothing can observe
+ * a half-built fragment, and nothing can fork this flow while the machine is on its chain. */
 /* WHERE THIS MACHINE RESTS. The three members that parse markup are the same shape — a few leading steps of
    their own, then "let fragment be the result of invoking the fragment parsing algorithm steps", then a
    placement — so the stages after the entry belong to those two operations and each member's declaration names
@@ -566,9 +566,13 @@ static void frag_visit(JSContext *ctx, void *st, JSStepVisit *v)
     sanitizer_walk_visit(ctx, &s->san, v);
 }
 
+/* WHAT NO DECLARATION NAMES: a lexbor element, a lexbor parser, and two plain buffers. `compliant`, the
+   sanitizer's `config` and the source string are references frag_visit names, and the teardown discharges that
+   one declaration. */
 static void frag_release(JSContext *ctx, void *st)
 {
     FragState *s = st;
+    (void)ctx;
     /* §8.5.5 step 5's `body` never entered a tree, so nothing else will ever free it. */
     if (s->own_context) {
         dom_cow_destroy_private(lxb_dom_interface_node(s->own_context), /*with_children*/ true);
@@ -580,11 +584,7 @@ static void frag_release(JSContext *ctx, void *st)
     s->parser = NULL;
     free(s->html);
     s->html = NULL;
-    JS_FreeValue(ctx, s->compliant);
-    s->compliant = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->san_config);
-    s->san_config = JS_UNDEFINED;
-    sanitizer_walk_release(ctx, &s->san);
+    sanitizer_walk_free_stack(&s->san);
 }
 
 /* Set the machine up for a parse of `html` into `where` around `anchor`, parsed in `context`'s tree-building
@@ -674,6 +674,19 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
            written twice, on the same node under two comments saying the same thing in different words, so
            every `el.innerHTML = markup` walked the whole parsed fragment's attributes twice. */
         dom_attr_normalize_parsed(s->frag);
+        /* HTML §13.2.6.4.4's `script` START TAG under §13.2.4.5's INERT scripting mode, which §13.4 makes the
+           default of every fragment parse and which all five of the members below take: "if the parser's
+           scripting mode is Inert, then set the script element's already started to true (fragment case)".
+           That flag is the ONLY thing that stops the placement below from running the markup's scripts — the
+           placement goes through dom_cow_append_child, which runs §4.2.3's insertion steps, which prepare an
+           inserted `<script>` — and §4.12.1 step 1 is where it is read. It runs at this boundary, beside the
+           namespace correction above and before the declarative-shadow conversion below, because the scripts
+           the parse produced are still children of `frag`: the conversion moves a `<template>`'s contents into
+           a shadow root, and a walk after it would not reach a `<script>` that went with them.
+           BEFORE ANY NODE IS PLACED, which is what makes the substitution of one walk for a per-start-tag
+           stamp unobservable: this parse runs no page code, so nothing can look at a `script` element between
+           the start tag that created it and this statement. */
+        html_script_parsed_inert(ctx, s->frag);
         /* HTML §13.2.6.4.4's template start tag, over the fragment this parse just built — the same seam the
            document's parse runs it at, and the reason §13.4 takes `allowDeclarativeShadowRoots` at all.
            THE TOPMOST ELEMENT IS NONE. The step's third condition names "the topmost element in the stack of
@@ -851,10 +864,16 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
                this engine never reaches, which is the exact failure this tool exists to not have. Its step 5.1
                asserts `safe` is false, which the IDL already guarantees — SetHTMLOptions has no such member. */
             if (idl_dict_bool(ctx, options, "runScripts"))
-                DFAIL("SetHTMLUnsafeOptions's `runScripts` asks for §13.4's Fragment parser scripting mode and "
-                      "this engine's fragment parses are all Inert — build the scripting mode through "
-                      "frag_begin so a <script> the fragment carries is PREPARED when the insertion steps "
-                      "reach it, the way the document parse's already is");
+                DFAIL("SetHTMLUnsafeOptions's `runScripts` asks for §13.2.4.5's FRAGMENT parser scripting "
+                      "mode, and every fragment parse here takes §13.4's default INERT — html_script_parsed_"
+                      "inert runs unconditionally at the FRAG_FEED boundary, so the markup's scripts are "
+                      "marked already started and §4.12.1 step 1 stops the placement from running them. Carry "
+                      "the mode as a FragState field frag_begin takes and each member states, and skip that "
+                      "marking when it is Fragment: §13.2.6.4.4 sets `already started` only under Inert and "
+                      "sets `parser document` only when the mode is NOT Fragment, so under Fragment the "
+                      "placement's §4.2.3 insertion steps prepare the script exactly as they do one the page "
+                      "appended itself, which is what §13.2.4.5 means by 'executed as soon as they are "
+                      "inserted'");
         }
         el = n->type == LXB_DOM_NODE_TYPE_ELEMENT ? lxb_dom_interface_element(n) : NULL;
         if (magic == ELEMENT_SET_OUTER_HTML) {
@@ -1411,50 +1430,6 @@ void element_install_reflections(JSContext *ctx, JSValueConst proto, int base, i
                              g_reflect_set[base + i]);
 }
 
-/* 4.12.1 "prepare the script", the insertion half. A page loads code conditionally in three ways and this is the
-   second: `s = createElement("script"); s.src = u; body.appendChild(s)`. Before this the injection was a SILENT
-   no-op — the element went into the tree and the code it named was never fetched, never run, never even
-   reported, so every endpoint and sink behind an A/B flag or a feature gate was missing with nothing to say so.
-   The loaded code is more PROGRAM OF THE INJECTING FLOW: it joins that flow's script sequence, so it runs under
-   the delta, the pins and the position in the BFS of the world that injected it, and a sibling that never took
-   the branch never sees it.
-   INSERTION is the trigger, which is why this is here and not in the innerHTML path: markup parsed into
-   innerHTML does not execute its scripts, and that difference is load-bearing for the @S breakout contexts. */
-static void element_prepare_script(JSContext *ctx, lxb_dom_element_t *el)
-{
-    size_t n = 0, vl = 0;
-    const lxb_char_t *tag = lxb_dom_element_qualified_name(el, &n);
-    const lxb_char_t *src;
-    JSValue t;
-
-    if (!tag || n != 6 || memcmp(tag, "script", 6) != 0)
-        return;
-    /* An UNKNOWN src is a URL this engine cannot fetch, but it is still a request the page makes — recorded so
-       it reaches the @H surface as the shape it is, rather than disappearing. */
-    t = dom_cow_attr_taint(el, "src");
-    if (!JS_IsUndefined(t)) {
-        endpoint_record(ctx, "GET", t, NULL, 0);
-        return;
-    }
-    src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &vl);
-    if (src && vl) {
-        char *u = malloc(vl + 1);
-        CHECK(u, "element: OOM copying an injected script's URL");
-        memcpy(u, src, vl); u[vl] = 0;
-        engine_pending_script_url(ctx, u);
-        free(u);
-        return;
-    }
-    /* No src: the element's own text IS the program, and it runs on insertion. */
-    {
-        lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &n);
-        if (txt) {
-            if (n) engine_queue_script((const char *)txt);
-            lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
-        }
-    }
-}
-
 /* The READ-ONLY members: pure walks over the flow's own tree, so they are ordinary C getters. */
 /* §4.9 the three parts of an element's name, each a pure Lexbor read. */
 static const JSCFunctionListEntry js_element_name_parts[] = {
@@ -1643,7 +1618,10 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h)
                         JS_FreeValue(ctx, w);
                     }
                 }
-                element_prepare_script(ctx, el);   /* HTML 4.12.1: an inserted <script> is PREPARED */
+                /* HTML §4.12.1: an inserted `<script>` is PREPARED — and its step 1 is what makes a script the
+                   fragment parse produced inert, because §13.4's default scripting mode marked it already
+                   started. core/html/html_script.c owns both halves of that pair. */
+                html_script_prepare(ctx, el);
                 /* DOM §4.2.3's insertion steps: an element that ENTERS a document gets its connectedCallback if
                    it is already custom, and is otherwise tried for upgrade — the other half of "learned by
                    execution", beside the <script> preparation right above it. The upgrade is ENQUEUED, never
@@ -1965,6 +1943,7 @@ void element_init(JSContext *ctx)
     realm_declare_intrinsic(element_install_proto);
     element_view_init(ctx);   /* CSSOM VIEW §6's `partial interface Element`, installed on the prototype below */
     custom_elements_init(ctx);
+    html_script_init(ctx);    /* §4.12.1's `already started` slot, which the fragment parse below writes */
     cssom_init(ctx);          /* CSSStyleDeclaration, which HTMLElement's `style` attribute names */
     html_element_init(ctx);   /* the HTML half, which builds HTMLElement and the per-tag interfaces on this */
 }
@@ -2073,6 +2052,7 @@ void element_free(JSContext *ctx)
     html_element_free(ctx);
     cssom_free(ctx);
     custom_elements_free(ctx);
+    html_script_free(ctx);
     mutation_observer_free(ctx);
     range_free(ctx);
     tree_walker_free(ctx);

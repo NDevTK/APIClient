@@ -627,16 +627,24 @@ static int idl_declared_positions(const IdlMember *m)
     return m->variadic ? m->nargs - 1 : m->nargs;
 }
 
+/* WHAT ONE NESTED-CONVERSION FRAME OWNS, declared ONCE. The state's own visit walks every declared frame
+   through this, and the reset below discharges the same declaration with the freeing consumer — so a value
+   added to a frame is added in one place and both consumers see it. */
+static void idl_conv_frame_visit(JSContext *ctx, IdlConvFrame *f, JSStepVisit *v)
+{
+    iter_cursor_visit(ctx, &f->cur, v);
+    v->val(ctx, &f->src);
+    v->val(ctx, &f->list);
+    v->val(ctx, &f->esrc);
+    v->val(ctx, &f->eout);
+    v->val(ctx, &f->mv);
+}
+
 /* Release everything one frame holds and leave it empty. Safe on a frame that was never used: a zeroed state's
    JSValue is the non-refcounted integer 0, so freeing it does nothing. */
 static void idl_conv_frame_clear(JSContext *ctx, IdlConvFrame *f)
 {
-    iter_cursor_release(ctx, &f->cur);
-    JS_FreeValue(ctx, f->src);
-    JS_FreeValue(ctx, f->list);
-    JS_FreeValue(ctx, f->esrc);
-    JS_FreeValue(ctx, f->eout);
-    JS_FreeValue(ctx, f->mv);
+    idl_conv_frame_visit(ctx, f, JS_StepFreeVisitor());
     memset(f, 0, sizeof *f);
     f->src = f->list = f->esrc = f->eout = f->mv = JS_UNDEFINED;
 }
@@ -858,17 +866,13 @@ static void js_idl_args_visit(JSContext *ctx, void *st, JSStepVisit *v)
        zeroed state's non-refcounted integer, so visiting all of them takes no reference it should not — where a
        loop bounded by `conv_sp` would silently drop whatever a frame still held if the cursor and the frames
        ever disagreed. */
-    for (i = 0; i < m->conv_depth; i++) {
-        IdlConvFrame *f = &idl_frames(m, st)[i];
-
-        iter_cursor_visit(ctx, &f->cur, v);
-        v->val(ctx, &f->src);
-        v->val(ctx, &f->list);
-        v->val(ctx, &f->esrc);
-        v->val(ctx, &f->eout);
-        v->val(ctx, &f->mv);
-    }
-    if (m->step && m->step->visit) m->step->visit(ctx, idl_body_state(m, st), v);
+    for (i = 0; i < m->conv_depth; i++)
+        idl_conv_frame_visit(ctx, &idl_frames(m, st)[i], v);
+    /* UNCONDITIONAL, because a step member's declaration is now REQUIRED (idl_method_id_step asserts it). The
+       guard used to be `m->step->visit != NULL`, and a false arm that visits nothing is how a body's owned
+       values would be invisible to the fork AND to the teardown at once — which is the same state the pool
+       refuses at the declaration rather than tolerating here. */
+    if (m->step) m->step->visit(ctx, idl_body_state(m, st), v);
 }
 
 static void idl_free_vec(JSContext *ctx, JSValue *vec, int n)
@@ -1791,51 +1795,69 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
     return idl_ce_finish(ctx, s, JS_UNDEFINED, out_cb, out_argc);
 }
 
+/* THE TEARDOWN IS THE DECLARATION, DISCHARGED — it does not restate it.
+ *
+ * Every JSValue this machine owns — its result, its converted argument vector, its dictionary and sequence
+ * cursors, its element-reaction queue, its nested conversion frames, and the member body's own state — is named
+ * by js_idl_args_visit, because a deep fork has to take a second reference to each. So this function used to be
+ * that same list written out a second time, in another order, forty lines long: exactly the pair this engine
+ * forbids, where adding a field to a state creates an obligation in TWO places and nothing catches the one that
+ * is missed. It had already been missed — querySelectorAll's collected-matches array was named by qs_visit and
+ * freed by nothing, so every abandoned selector walk leaked its element wrappers, and the repair was to hand-add
+ * the free to the second list, which left the next omission exactly as invisible.
+ *
+ * There is one list now. What remains here is only what a declaration cannot express: the POD cursors the
+ * zeroed state reads as "nothing in flight", and the member's own `release`, whose contract is asserted below
+ * rather than described. */
 static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
 {
     JSIdlArgsState *s = st;
     JSValue r = take_result ? s->result : JS_UNDEFINED;
     const IdlMember *m;
-    int i;
 
     DCHECK(s->hdr.arg >= 0 && s->hdr.arg < g_n, "an IDL member's teardown ran with no pool entry behind it");
     m = idl_member(s->hdr.arg);
-    /* The step body's state goes FIRST: it may hold values this machine's arguments are the only other
-       reference to, and a release that runs after they are freed reads what it no longer owns. */
-    if (m->step && m->step->release) m->step->release(ctx, idl_body_state(m, st));
-    /* A NESTED CONVERSION THAT NEVER FINISHED — the member threw mid-iteration, or the flow was dropped inside
-       one of the page's getters. Every declared frame, for the reason the visit walks every one. */
-    for (i = 0; i < m->conv_depth; i++)
-        idl_conv_frame_clear(ctx, &idl_frames(m, st)[i]);
-    s->conv_sp = 0;
-    /* An abandoned drain — the member threw, or the flow was dropped mid-walk. The remaining nodes' steps do
-       not run, which is what an abrupt completion means, but the buffer is still this machine's to free. */
-    if (s->tree && g_tree) { g_tree->release(ctx, s->tree); s->tree = NULL; }
-    /* AND AN ABANDONED ELEMENT QUEUE. A flow dropped anywhere inside a member may hold reactions nobody will
-       ever invoke; they die with the flow, which is what an abandoned flow means. */
-    custom_elements_queue_release(ctx, &s->ce);
-    JS_FreeValue(ctx, s->ce_exc);
-    s->ce_exc = JS_UNDEFINED;
-    s->ce_threw = 0;
-
+    /* HANDED OVER, so the declaration must not release it. Cleared BEFORE the discharge rather than after,
+       because the discharge is the only thing that reads the slot. */
     if (take_result) s->result = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->result);
-    s->result = JS_UNDEFINED;
-    JS_FreeValue(ctx, s->dict_v);   /* a member read whose conversion never completed — the throw path owns it */
-    JS_FreeValue(ctx, s->conv);
-    JS_FreeValue(ctx, s->vstage);
-    s->dict_v = s->conv = s->vstage = JS_UNDEFINED;
-    /* A sequence argument whose walk never finished — the iterator the cursor still holds, and the elements
-       converted so far. Both are this machine's, on the throw path exactly as on the normal one. */
-    iter_cursor_release(ctx, &s->seq);
-    JS_FreeValue(ctx, s->seq_list);
-    s->seq_list = JS_UNDEFINED;
-    /* EVERY declared position, for the reason the visit walks every one: the vector is sized from `nargs`, and
-       a slot the conversion never reached holds the zeroed state's non-refcounted integer. */
-    for (i = 0; i < m->nargs; i++) {
-        JS_FreeValue(ctx, idl_args_vec(st)[i]);
-        idl_args_vec(st)[i] = JS_UNDEFINED;
+
+    /* THE MEMBER'S OWN RELEASE GOES FIRST, AND IT OWNS NO REFERENCE. It runs first because the work it does is
+       real algorithm work that READS what this machine owns — §4.13.4 step 14's "regardless of whether the
+       above steps threw" lowers a flag off `s->registry` — and it may free only what the declaration does NOT
+       name: a lexbor handle, a foreign C allocation, a flag its algorithm took. That split is measured, not
+       trusted: freeing a declared value is silent both ways it can be written (free-and-null leaves the
+       discharge a no-op; free-without-null makes the discharge the second free), so the declaration is folded
+       into a number on each side of the call and the two must agree. */
+    if (m->step && m->step->release) {
+#if APICLIENT_DEV
+        uint64_t owned_before = JS_StepVisitOwnedFingerprint(ctx, m->step->visit, idl_body_state(m, st));
+        uint64_t owned_after;
+#endif
+        m->step->release(ctx, idl_body_state(m, st));
+#if APICLIENT_DEV
+        owned_after = JS_StepVisitOwnedFingerprint(ctx, m->step->visit, idl_body_state(m, st));
+        DCHECK(owned_after == owned_before,
+               "a member's `release` freed a value its own `visit` already names — the visit IS the one list of "
+               "what the state owns and the teardown discharges it; a second list beside it leaks whatever the "
+               "next field misses, and double-frees whatever this one did not null. Release only what the "
+               "declaration does not name (a lexbor handle, a foreign allocation, a flag to lower)");
+#endif
     }
+
+    /* §8.1.4.6 step 5's FLAG, if this member's reaction drain was abandoned holding it. Not a reference, so no
+       declaration names it and the discharge below cannot give it back; leaving it set would put the global in
+       error reporting mode forever and silently swallow every later report. */
+    custom_elements_queue_unlock(ctx, &s->ce);
+
+    /* AND NOW THE ONE LIST. It covers the whole state: the converted argument vector, every declared conversion
+       frame, the sequence cursor and its collected elements, the drain buffer of an abandoned §4.2.3 walk, the
+       element-reaction queue of a flow dropped mid-member, and — through its last line — the member body's own
+       owned values. An abandoned queue's reactions die with the flow, which is what an abandoned flow means. */
+    JS_StepVisitFree(ctx, js_idl_args_visit, st);
+    /* The cursors the declaration cannot carry: a zeroed state means "nothing in flight", and these are what
+       say so. `ce_threw` is the epilogue's caught-completion flag, `conv_sp` the nested-conversion depth. */
+    s->conv_sp = 0;
+    s->ce_threw = 0;
     return r;
 }
 
@@ -1980,6 +2002,14 @@ int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
     int idx = g_n - 1;
     /* the pool entry idl_method_id_dict just filled — a step member differs only in WHAT runs once the
        conversions are done, and in needing room after this machine's state for that thing to run in. */
+    /* THE OWNERSHIP DECLARATION IS MANDATORY, asserted where the member enters the pool — the same place and
+       the same reason the algorithm and its steps are. It is the ONE list: the fork clones through it, the
+       teardown releases through it, and the teardown's assert folds it to check that `release` left it alone.
+       A member without one has a state whose values are invisible to all three at once, which is not "it owns
+       nothing" — a member that owns nothing writes a visit that visits nothing, and that is one line. */
+    DCHECK(decl->visit != NULL,
+           "an IDL member declared a step body with no `visit` — the visit is the one list of what its state "
+           "owns, so without it a deep fork hands two flows one state and the teardown frees none of it");
     idl_member(idx)->step = decl;
     idl_def(idx)->size += decl->state_size;   /* after this machine's state AND its conversion frames */
     /* THE MEMBER'S STAGES, JOINED TO THIS MACHINE'S, ONTO THE DEFINITION THE DRIVER ALREADY ASSERTS ON. The

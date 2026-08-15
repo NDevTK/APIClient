@@ -446,15 +446,6 @@ static void js_xhr_open_visit(JSContext *ctx, void *st, JSStepVisit *v)
     STEP_CB_FOREACH(s->cb, i) v->val(ctx, &s->cb[i]);
 }
 
-static void js_xhr_open_release(JSContext *ctx, void *st)
-{
-    JSXhrOpenState *s = st;
-    int i;
-    JS_FreeValue(ctx, s->ev);
-    s->ev = JS_UNDEFINED;
-    STEP_CB_FOREACH(s->cb, i) { JS_FreeValue(ctx, s->cb[i]); s->cb[i] = JS_UNDEFINED; }
-}
-
 /* §3.5.1 step 11's reset, which is also what a second open() on a sent object performs. */
 static void xhr_reset_request(JSContext *ctx, XhrData *d)
 {
@@ -593,7 +584,7 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 }
 
 static const IdlStepDecl XHR_OPEN_DECL = {
-    js_xhr_open_step, sizeof(JSXhrOpenState), js_xhr_open_visit, js_xhr_open_release,
+    js_xhr_open_step, sizeof(JSXhrOpenState), js_xhr_open_visit, NULL,
     "XHR §3.5.1 open(method, url, async, username, password)", OPEN_STEPS_LABELS
 };
 
@@ -1361,9 +1352,15 @@ static bool xhr_scheme_fetch_local(JSContext *ctx, XhrData *d)
         char *ct = mime_type_serialize(&ds.mime);
         HeaderList hl = { 0 };
         JSValue reply;
+        /* §4.1: the response's URL list is a clone of the REQUEST's, which here is the one `data:` URL this
+           request named — serialized off the record just parsed, because a URL list holds URLs. */
+        char *abs = url_serialize(&rec, /*exclude_fragment*/ false);
 
+        CHECK(abs, "XMLHttpRequest: OOM serializing a data: URL for the response's URL list");
         header_list_append(&hl, "content-type", ct);
-        reply = fetch_reply_new(ctx, 200, "OK", &hl, ds.body, ds.body_len);
+        reply = fetch_reply_new(ctx, 200, "OK", &hl, ds.body, ds.body_len,
+                                (const char *const *)&abs, 1);
+        free(abs);
         xhr_take_reply(ctx, d, reply);
         JS_FreeValue(ctx, reply);
         header_list_free(&hl);
@@ -1678,17 +1675,6 @@ static void js_xhr_send_visit(JSContext *ctx, void *st, JSStepVisit *v)
     STEP_CB_FOREACH(s->cb, i) v->val(ctx, &s->cb[i]);
 }
 
-static void js_xhr_send_release(JSContext *ctx, void *st)
-{
-    JSXhrSendState *s = st;
-    int i;
-    JS_FreeValue(ctx, s->ev);
-    JS_FreeValue(ctx, s->body);
-    JS_FreeValue(ctx, s->fn);
-    s->ev = s->body = s->fn = JS_UNDEFINED;
-    STEP_CB_FOREACH(s->cb, i) { JS_FreeValue(ctx, s->cb[i]); s->cb[i] = JS_UNDEFINED; }
-}
-
 /* §3's `XMLHttpRequestBodyInit` = `(Blob or BufferSource or FormData or URLSearchParams or USVString)`. Web
    IDL §3.2.25 picks an INTERFACE arm for a platform object of that interface and the USVString arm for
    everything else — including a plain `{}`, which reaches the server as "[object Object]" and is what a page
@@ -1862,7 +1848,7 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 }
 
 static const IdlStepDecl XHR_SEND_DECL = {
-    js_xhr_send_step, sizeof(JSXhrSendState), js_xhr_send_visit, js_xhr_send_release,
+    js_xhr_send_step, sizeof(JSXhrSendState), js_xhr_send_visit, NULL,
     "XHR §3.5.6 send(body)", SEND_STEPS
 };
 
@@ -1889,15 +1875,6 @@ static void js_xhr_abort_visit(JSContext *ctx, void *st, JSStepVisit *v)
     int i;
     v->val(ctx, &s->fn);
     STEP_CB_FOREACH(s->cb, i) v->val(ctx, &s->cb[i]);
-}
-
-static void js_xhr_abort_release(JSContext *ctx, void *st)
-{
-    JSXhrAbortState *s = st;
-    int i;
-    JS_FreeValue(ctx, s->fn);
-    s->fn = JS_UNDEFINED;
-    STEP_CB_FOREACH(s->cb, i) { JS_FreeValue(ctx, s->cb[i]); s->cb[i] = JS_UNDEFINED; }
 }
 
 static int js_xhr_abort_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -1950,7 +1927,7 @@ static int js_xhr_abort_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
 }
 
 static const IdlStepDecl XHR_ABORT_DECL = {
-    js_xhr_abort_step, sizeof(JSXhrAbortState), js_xhr_abort_visit, js_xhr_abort_release,
+    js_xhr_abort_step, sizeof(JSXhrAbortState), js_xhr_abort_visit, NULL,
     "XHR §3.5.7 abort()", ABORT_STEPS
 };
 

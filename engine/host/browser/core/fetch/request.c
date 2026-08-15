@@ -269,13 +269,11 @@ static void js_request_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->result);
 }
 
+/* The header list alone — see js_headers_ctor_release. The rest is js_request_ctor_visit's declaration. */
 static void js_request_ctor_release(JSContext *ctx, void *st)
 {
-    JSRequestCtorState *s = st;
-    headers_fill_release(ctx, &s->fill);
-    header_list_free(&s->list);
-    JS_FreeValue(ctx, s->result);
-    s->result = JS_UNDEFINED;
+    (void)ctx;
+    header_list_free(&((JSRequestCtorState *)st)->list);
 }
 
 /* A dictionary member as a plain string, or `dflt` when the page did not supply it. The declaration has

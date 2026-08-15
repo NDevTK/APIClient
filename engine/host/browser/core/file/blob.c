@@ -535,7 +535,6 @@ static const char *const BLOB_CTOR_STEPS[] = { BLOB_CTOR_STAGES(JS_STEP_STAGE_LA
 typedef struct { int unused; } JSBlobCtorState;
 
 static void js_blob_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
-static void js_blob_ctor_release(JSContext *ctx, void *st) { (void)ctx; (void)st; }
 
 /* §3.1's "convert line endings to native", which `endings: "native"` asks for. The native ending on this host is
    LF, so every CRLF, lone CR and lone LF becomes one LF — which is a real transform and not a no-op, because a
@@ -705,7 +704,7 @@ fail:
 }
 
 static const IdlStepDecl js_blob_ctor_decl = {
-    js_blob_ctor_step, sizeof(JSBlobCtorState), js_blob_ctor_visit, js_blob_ctor_release,
+    js_blob_ctor_step, sizeof(JSBlobCtorState), js_blob_ctor_visit, NULL,
     "File API §3.1 new Blob(blobParts, options) / §4.1 new File(fileBits, fileName, options)", BLOB_CTOR_STEPS
 };
 

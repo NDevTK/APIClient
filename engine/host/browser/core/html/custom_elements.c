@@ -804,22 +804,16 @@ void custom_elements_queue_visit(JSContext *ctx, CustomElementQueue *q, JSStepVi
     for (k = 0; k < 2 + CE_MAX_REACTION_ARGS; k++) v->val(ctx, &q->cb[k]);
 }
 
+void custom_elements_queue_unlock(JSContext *ctx, CustomElementQueue *q)
+{
+    q->reporting = 0;
+    report_exception_work_unlock(ctx, &q->rep);
+}
+
 void custom_elements_queue_release(JSContext *ctx, CustomElementQueue *q)
 {
-    int k;
-    JS_FreeValue(ctx, q->queue);
-    q->queue = JS_UNDEFINED;
-    JS_FreeValue(ctx, q->exc);
-    q->exc = JS_UNDEFINED;
-    q->reporting = 0;
-    JS_FreeValue(ctx, q->cur);
-    JS_FreeValue(ctx, q->cur_el);
-    q->cur = q->cur_el = JS_UNDEFINED;
-    report_exception_work_release(ctx, &q->rep);
-    for (k = 0; k < 2 + CE_MAX_REACTION_ARGS; k++) {
-        JS_FreeValue(ctx, q->cb[k]);
-        q->cb[k] = JS_UNDEFINED;
-    }
+    custom_elements_queue_unlock(ctx, q);
+    custom_elements_queue_visit(ctx, q, JS_StepFreeVisitor());
 }
 
 /* Which of §4.13.6 step 1.3.1's arms the drain last parked in — see custom_elements.h. */
@@ -1403,15 +1397,6 @@ static void ce_html_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->proto);
 }
 
-static void ce_html_ctor_release(JSContext *ctx, void *st)
-{
-    CeHtmlCtorState *s = st;
-    JS_FreeValue(ctx, s->registry);
-    JS_FreeValue(ctx, s->def);
-    JS_FreeValue(ctx, s->proto);
-    s->registry = s->def = s->proto = JS_UNDEFINED;
-}
-
 /* §4.13.2 step 4: the entry in REGISTRY's definition set whose CONSTRUCTOR is `ctor`. A walk of the ordered
    set, which is what the spec's own wording is; the name-keyed index cannot answer this question at all.
    UNDEFINED when there is none, which is step 4's TypeError. OWNED. */
@@ -1583,7 +1568,7 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 }
 
 static const IdlStepDecl CE_HTML_CTOR_STEP = {
-    js_ce_html_ctor, sizeof(CeHtmlCtorState), ce_html_ctor_visit, ce_html_ctor_release,
+    js_ce_html_ctor, sizeof(CeHtmlCtorState), ce_html_ctor_visit, NULL,
     "HTML §4.13.2 the HTMLElement constructor", HC_STEPS
 };
 static int g_id_html_ctor = -1;
@@ -2159,22 +2144,17 @@ static void ce_define_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->registry);
 }
 
+/* §4.13.4 step 14's "then, regardless of whether the above steps threw an exception or not: set this's element
+   definition is running to false". The teardown IS that "regardless": it runs on the throw path and on the
+   completion path, and on nothing in between, which is what a park in the middle of step 14.5 requires.
+   IT IS THE WHOLE OF THIS HOOK, and it is also why the hook runs BEFORE the declaration is discharged: the flag
+   lives on `s->registry`, so lowering it READS a value this state owns. Reading one here is correct; freeing
+   one is not — every value below the flag is named by ce_define_visit, which is the one list. */
 static void ce_define_release(JSContext *ctx, void *st)
 {
     CeDefineState *s = st;
-    /* §4.13.4 step 14's "then, regardless of whether the above steps threw an exception or not: set this's
-       element definition is running to false". The teardown IS that "regardless": it runs on the throw path and
-       on the completion path, and on nothing in between, which is what a park in the middle of step 14.5
-       requires. */
     if (JS_IsObject(s->registry) && ce_reg_flag(ctx, s->registry, g_atom_defining))
         ce_reg_set_flag(ctx, s->registry, g_atom_defining, false);
-    JS_FreeValue(ctx, s->proto);
-    JS_FreeValue(ctx, s->callbacks);
-    JS_FreeValue(ctx, s->raw);
-    JS_FreeValue(ctx, s->names);
-    JS_FreeValue(ctx, s->features);
-    JS_FreeValue(ctx, s->registry);
-    s->proto = s->callbacks = s->raw = s->names = s->features = s->registry = JS_UNDEFINED;
 }
 
 /* §4.13.4'S TWO `sequence<DOMString>` CONVERSIONS AS ONE WALK — step 14.5.2's observedAttributes and step

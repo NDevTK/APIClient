@@ -454,16 +454,6 @@ static void js_tc_visit(JSContext *ctx, void *st, JSStepVisit *v)
     for (k = 0; k < 5; k++) v->val(ctx, &s->cb[k]);
 }
 
-static void js_tc_release(JSContext *ctx, void *st)
-{
-    JSTcState *s = st;
-    int k;
-    JS_FreeValue(ctx, s->obj);
-    s->obj = JS_UNDEFINED;
-    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->fns[k]); s->fns[k] = JS_UNDEFINED; }
-    for (k = 0; k < 5; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
-}
-
 /* Build the object, its codec and the two algorithm closures over it. Returns -1 with an exception live. */
 static int tc_build(JSContext *ctx, JSTcState *s, bool decoder, int enc, bool fatal, bool ignore_bom)
 {
@@ -594,13 +584,13 @@ static int js_tes_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 }
 
 static const IdlStepDecl js_tds_ctor_decl = {
-    js_tds_ctor_step, sizeof(JSTcState), js_tc_visit, js_tc_release,
+    js_tds_ctor_step, sizeof(JSTcState), js_tc_visit, NULL,
     "Encoding §7.5 new TextDecoderStream(label, options)", TC_STEPS
 };
 /* THE SAME STATE AND THE SAME STAGES — §7.5 and §7.6 differ in what they put in the algorithms and in nothing
    after that, which is why one struct, one visit and one stage list serve both. */
 static const IdlStepDecl js_tes_ctor_decl = {
-    js_tes_ctor_step, sizeof(JSTcState), js_tc_visit, js_tc_release,
+    js_tes_ctor_step, sizeof(JSTcState), js_tc_visit, NULL,
     "Encoding §7.6 new TextEncoderStream()", TC_STEPS
 };
 

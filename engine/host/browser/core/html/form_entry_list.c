@@ -321,26 +321,23 @@ void form_entry_list_visit(JSContext *ctx, FormEntryListRun *r, JSStepVisit *v)
         v->val(ctx, &r->cb[k]);
 }
 
-void form_entry_list_release(JSContext *ctx, FormEntryListRun *r)
+void form_entry_list_unlock(JSContext *ctx, FormEntryListRun *r)
 {
-    int k;
-
     /* Step 8 for a run that never reached it. A flow abandoned inside step 5 — outranked and dropped, or
        unwound by a throw — would otherwise leave the form's flag set forever, and every later submission of
-       that form would take step 1's early return and silently do nothing. */
+       that form would take step 1's early return and silently do nothing.
+       IT IS ITS OWN FUNCTION because the flag is not a reference and no `visit` can name it — and it READS
+       `r->form`, which is why it must run BEFORE the holding machine's declaration is discharged. */
     if (r->flag_set) {
         fel_flag_set(ctx, r->form, false);
         r->flag_set = 0;
     }
-    JS_FreeValue(ctx, r->form);
-    JS_FreeValue(ctx, r->controls);
-    JS_FreeValue(ctx, r->entries);
-    JS_FreeValue(ctx, r->ev);
-    r->form = r->controls = r->entries = r->ev = JS_UNDEFINED;
-    STEP_CB_FOREACH(r->cb, k) {
-        JS_FreeValue(ctx, r->cb[k]);
-        r->cb[k] = JS_UNDEFINED;
-    }
+}
+
+void form_entry_list_release(JSContext *ctx, FormEntryListRun *r)
+{
+    form_entry_list_unlock(ctx, r);
+    form_entry_list_visit(ctx, r, JS_StepFreeVisitor());
 }
 
 int form_entry_list_run(JSContext *ctx, FormEntryListRun *r, JSValueConst form, JSValueConst submitter,

@@ -540,7 +540,6 @@ static const char *const CHAN_CTOR_STEPS[] = { CHAN_CTOR_STAGES(JS_STEP_STAGE_LA
 
 typedef struct { int unused; } JSChanCtorState;
 static void js_chan_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
-static void js_chan_release(JSContext *ctx, void *st) { (void)ctx; (void)st; }
 
 /* §9.4.3's `new MessageChannel()`. It takes no arguments and reads nothing of the page's, so its body runs to
    completion; it is declared through the IDL machine because that is how a constructor is declared here. */
@@ -572,7 +571,7 @@ static int js_chan_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
 }
 
 static const IdlStepDecl js_chan_ctor_decl = {
-    js_chan_ctor_step, sizeof(JSChanCtorState), js_chan_visit, js_chan_release,
+    js_chan_ctor_step, sizeof(JSChanCtorState), js_chan_visit, NULL,
     "HTML §9.4.3 new MessageChannel()", CHAN_CTOR_STEPS
 };
 

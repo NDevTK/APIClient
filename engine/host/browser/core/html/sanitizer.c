@@ -1794,10 +1794,10 @@ void sanitizer_walk_visit(JSContext *ctx, SanitizerWalk *w, JSStepVisit *v)
     v->buf(ctx, (void **)&w->stack, sizeof(SanLevel) * (size_t)w->scap);
 }
 
-void sanitizer_walk_release(JSContext *ctx, SanitizerWalk *w)
+/* THE LEVEL STACK ALONE. `config` is a reference sanitizer_walk_visit names, so the machine that holds this
+   record discharges it through its own declaration; freeing it here as well would be the second list. */
+void sanitizer_walk_free_stack(SanitizerWalk *w)
 {
-    JS_FreeValue(ctx, w->config);
-    w->config = JS_UNDEFINED;
     free(w->stack);
     w->stack = NULL;
     w->scap = w->sp = 0;

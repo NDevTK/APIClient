@@ -45,7 +45,6 @@ typedef struct {
 
 void record_cursor_init(RecordCursor *c);
 void record_cursor_visit(JSContext *ctx, RecordCursor *c, JSStepVisit *v);
-void record_cursor_release(JSContext *ctx, RecordCursor *c);
 /* ONE PAIR per successful return: `c->done` says the keys are exhausted, otherwise `c->name` and `c->value`
    hold it (owned by the cursor). Returns >0 (the caller returns it), 0, or -1 with a throw live. */
 int  record_cursor_run(JSContext *ctx, JSStepHdr *h, RecordCursor *c, JSValueConst src, JSValue in,

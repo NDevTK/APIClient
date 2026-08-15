@@ -60,8 +60,28 @@ static JSValue response_json_stringify(JSContext *ctx)
    trusted host had already fetched) and wrong the moment the page can build one: `new Response("", {status:
    404})` is not 200, and every `if (r.ok)` in a page that constructs its own responses forked the wrong way.
    The BODY is §5.2's mixin, whose one implementation Request includes too. */
+/* §2.2.6's URL LIST, AND WHY IT IS A JS ARRAY.
+ *
+ * "A response has an associated URL list (a list of zero or more URLs). Unless stated otherwise, it is « »."
+ * and "A response has an associated URL. It is a pointer to the last URL in response's URL list and null if
+ * response's URL list is empty." There was ONE `char *url` here, so every question that is really about the
+ * LIST had to be answered by something else: `redirected` — "return true if this's response's URL list's size
+ * is greater than 1" — was the literal `false`, which is not a value this file computed but a value it
+ * asserted, and a bundle's `if (r.redirected)` never forked the arm that handles one.
+ *
+ * IT IS A JS VALUE for the reason CLAUDE.md §State-isolation gives: a list that must PARK to the cold tier and
+ * FORK per-flow gets both for free from a JS Array — the snapshot machinery already carries it, and the
+ * runtime's own leak walk (the gc_obj_list pass the gates count leaks with) can SEE it, which it cannot do for
+ * a `char **`. It is also the shape `headers` beside it already is, so the record has ONE ownership rule for
+ * its owned values rather than two. It is not mutated after the response is built — a fetch grows the list
+ * (§4.5 "Append locationURL to request's URL list") and hands it over complete — so nothing here has a write
+ * site to capture; it forks and parks as a value, which is what the rule is about.
+ *
+ * ITS ITEMS ARE SERIALIZED URLS, because that is what crosses the host bridge: a live URL record crosses
+ * neither an instance, nor a session, nor a park. `url` runs the real parser back over the last one to answer
+ * "serialized with exclude fragment set to true". */
 typedef struct {
-    char   *url;              /* the response's URL; "" when it has none, which is what `url` reports */
+    JSValue url_list;         /* §2.2.6's URL list — an Array of serialized URLs; « » is the empty Array */
     BodyState body;           /* §5.2's mixin, one implementation shared with Request */
     int     status;
     char   *status_text;      /* the response's "status message" */
@@ -84,18 +104,22 @@ static void response_finalizer(JSRuntime *rt, JSValue val)
     ResponseData *d = JS_GetOpaque(val, g_response_class);
     if (d) {
         JS_FreeValueRT(rt, d->headers);
+        JS_FreeValueRT(rt, d->url_list);
         body_state_free(rt, &d->body);
-        js_free_rt(rt, d->url); js_free_rt(rt, d->status_text); js_free_rt(rt, d);
+        js_free_rt(rt, d->status_text); js_free_rt(rt, d);
     }
 }
 
-/* The Headers object a Response holds is a JSValue in the class opaque, which the collector cannot see through
-   — and a Headers can reach back (nothing today, but the cycle is the collector's problem to be told about,
-   not the component's to promise will not form). */
+/* The Headers object and the URL list a Response holds are JSValues in the class opaque, which the collector
+   cannot see through — and a Headers can reach back (nothing today, but the cycle is the collector's problem to
+   be told about, not the component's to promise will not form). This list is the SAME list the finalizer above
+   frees, for the reason CLAUDE.md §Architecture gives: a field added to one and not the other is caught by
+   reading the two together. */
 static void response_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     ResponseData *d = JS_GetOpaque(val, g_response_class);
     if (d) JS_MarkValue(rt, d->headers, mark_func);
+    if (d) JS_MarkValue(rt, d->url_list, mark_func);
     if (d) body_state_mark(rt, &d->body, mark_func);
 }
 
@@ -120,9 +144,76 @@ static BodyState *response_body_of(JSValueConst v)
 /* Allocation and filling, declared here because clone() is written above them and because splitting them is
    what lets the constructor allocate before it knows the body — see their definitions. */
 static JSValue response_alloc(JSContext *ctx, ResponseData **pd);
-static int response_set(JSContext *ctx, ResponseData *d, const char *url, int status, const char *status_text,
-                        int type, const char *body, size_t body_len, const HeaderList *headers,
-                        HeadersGuard guard);
+static int response_set(JSContext *ctx, ResponseData *d, JSValueConst url_list, int status,
+                        const char *status_text, int type, const char *body, size_t body_len,
+                        const HeaderList *headers, HeadersGuard guard);
+
+/* §2.2.6's URL list, from the SERIALIZED URLs a caller observed. `n == 0` is the spec's « ». Every item is an
+   ABSOLUTE URL: §5.4's constructor parses a request's URL before it fetches and §4.5 parses a redirect's
+   Location against it, so a relative reference or a concolic display shape reaching here is a host that
+   reported something that is not a URL, and `url` below would then have nothing to serialize. */
+JSValue response_url_list(JSContext *ctx, const char *const *urls, int n)
+{
+    JSValue a = JS_NewArray(ctx);
+    int i;
+
+    DCHECK(n >= 0, "a response's URL list was asked for with a negative size");
+    if (JS_IsException(a))
+        return a;
+    for (i = 0; i < n; i++) {
+        DCHECK(urls[i] != NULL,
+               "a response's URL list was built with a hole in it — a host reports every item of the list it "
+               "observed, or none of them, and a missing item silently shortens the list `redirected` is read "
+               "off");
+        if (JS_SetPropertyUint32(ctx, a, (uint32_t)i, JS_NewString(ctx, urls[i])) < 0) {
+            JS_FreeValue(ctx, a);
+            return JS_EXCEPTION;
+        }
+    }
+    return a;
+}
+
+/* A COPY of a URL list, which is what §2.2.6's "clone a response" — "Let newResponse be a copy of response,
+   except for its body", the operation §5.5's clone() step 2 performs — takes. The items are immutable strings,
+   so the copy is a reference each; the ARRAY is new because two responses sharing one would be one list
+   wearing two names. */
+static JSValue response_url_list_copy(JSContext *ctx, JSValueConst src)
+{
+    JSValue out = JS_NewArray(ctx);
+    int64_t n = 0, i;
+
+    if (JS_IsException(out) || JS_IsUndefined(src))
+        return out;                        /* JS_UNDEFINED is how a caller spells the spec's « » */
+    if (JS_GetLength(ctx, src, &n) < 0) { JS_FreeValue(ctx, out); return JS_EXCEPTION; }
+    for (i = 0; i < n; i++) {
+        JSValue u = JS_GetPropertyUint32(ctx, src, (uint32_t)i);
+        if (JS_IsException(u)) { JS_FreeValue(ctx, out); return JS_EXCEPTION; }
+        DCHECK(JS_IsString(u), "a response's URL list held something that is not a serialized URL");
+        if (JS_SetPropertyUint32(ctx, out, (uint32_t)i, u) < 0) {
+            JS_FreeValue(ctx, out);
+            return JS_EXCEPTION;
+        }
+    }
+    return out;
+}
+
+/* §2.2.6: "A response has an associated URL. It is a pointer to the last URL in response's URL list and null if
+   response's URL list is empty." — the ONE place that reads the list's end, so `url` and anything after it
+   agree by construction. Returns the list's size through `*psize` because §5.5's `redirected` is the SAME
+   read ("this's response's URL list's size is greater than 1") and a second walk could disagree with this one.
+   The returned value is JS_NULL for the null URL, otherwise the owned serialized-URL string. */
+static JSValue response_url_of(JSContext *ctx, ResponseData *d, int64_t *psize)
+{
+    int64_t n = 0;
+
+    DCHECK(JS_IsArray(d->url_list), "a Response reached its URL list before response_alloc built one");
+    if (JS_GetLength(ctx, d->url_list, &n) < 0)
+        return JS_EXCEPTION;
+    *psize = n;
+    if (n == 0)
+        return JS_NULL;
+    return JS_GetPropertyUint32(ctx, d->url_list, (uint32_t)(n - 1));
+}
 
 /* 6.4 clone(). A caching or interceptor layer is written as `const copy = res.clone()` before it reads the
    body, because reading is single-use — so without this the FIRST thing such a bundle does with a reply is
@@ -161,15 +252,6 @@ static void js_clone_visit(JSContext *ctx, void *st, JSStepVisit *v)
     for (k = 0; k < 2; k++) v->val(ctx, &s->cb[k]);
 }
 
-static void js_clone_release(JSContext *ctx, void *st)
-{
-    JSCloneState *s = st;
-    int k;
-    JS_FreeValue(ctx, s->obj);
-    s->obj = JS_UNDEFINED;
-    for (k = 0; k < 2; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
-}
-
 static int js_response_clone_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                                   JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -198,7 +280,7 @@ static int js_response_clone_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
            200 and type "basic" for a 404 the page had just constructed. The headers are a NEW Headers over the
            same list, because [SameObject] is per response and `r.clone().headers === r.headers` is false. The
            BODY is not among them: it is the tee below, not a copy. */
-        if (response_set(ctx, c, d->url, d->status, d->status_text, d->type, NULL, 0,
+        if (response_set(ctx, c, d->url_list, d->status, d->status_text, d->type, NULL, 0,
                          headers_list_of(d->headers), headers_guard_of(d->headers)) < 0)
             return -1;
         STEP_GOTO(hdr->stage, CL_BODY, &s->phase, NULL);
@@ -218,7 +300,7 @@ static int js_response_clone_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
 }
 
 static const IdlStepDecl js_response_clone_decl = {
-    js_response_clone_step, sizeof(JSCloneState), js_clone_visit, js_clone_release,
+    js_response_clone_step, sizeof(JSCloneState), js_clone_visit, NULL,
     "Fetch §6.4 Response.clone()", RESP_CLONE_STEPS
 };
 
@@ -233,8 +315,55 @@ static JSValue js_response_get(JSContext *ctx, JSValueConst this_val, int magic)
     case 0: return JS_NewBool(ctx, d->status >= 200 && d->status <= 299);
     case 1: return JS_NewInt32(ctx, d->status);
     case 2: return JS_NewString(ctx, d->status_text ? d->status_text : "");
-    case 3: return JS_NewString(ctx, d->url ? d->url : "");
-    case 4: return JS_NewBool(ctx, false);                                   /* redirected: no redirect yet */
+    /* §5.5 `url`: "return the empty string if this's response's URL is null; otherwise this's response's URL,
+       serialized with exclude fragment set to true". The exclusion is the URL PARSER'S — the list holds
+       serialized URLs, so the parser is run back over the last one and asked to serialize it again without its
+       fragment, rather than this file deciding where a fragment starts. */
+    case 3: {
+        int64_t n = 0;
+        JSValue last = response_url_of(ctx, d, &n);
+        const char *s;
+        size_t len = 0;
+        UrlRecord rec;
+        char *ser;
+        JSValue out;
+        bool ok;
+
+        if (JS_IsException(last)) return last;
+        if (JS_IsNull(last)) return JS_NewString(ctx, "");   /* the response's URL is null */
+        s = JS_ToCStringLen(ctx, &len, last);
+        JS_FreeValue(ctx, last);
+        if (!s) return JS_EXCEPTION;
+        url_record_init(&rec);
+        ok = url_parse(&rec, s, len, NULL);
+        JS_FreeCString(ctx, s);
+        /* NO BASE, because every item of a response's URL list is ABSOLUTE by the time it is in one. A failure
+           here is a host that reported something that is not a URL, and the honest answer is then to refuse
+           rather than to hand the page back the unparsed string as if this getter had performed its
+           serialization. */
+        DCHECK(ok, "a response's URL list held a string the URL parser refuses — §2.2.6's list is a list of "
+                   "URLs, so the host that filled it reported a relative reference, a concolic display shape "
+                   "or an empty string where a serialized absolute URL belongs");
+        if (!ok) {
+            url_record_free(&rec);
+            return JS_ThrowTypeError(ctx, "the response's URL is not a URL");
+        }
+        ser = url_serialize(&rec, /*exclude_fragment*/ true);
+        url_record_free(&rec);
+        CHECK(ser != NULL, "response: OOM serializing the response's URL");
+        out = JS_NewString(ctx, ser);
+        free(ser);
+        return out;
+    }
+    /* §5.5 `redirected`: "return true if this's response's URL list's size is greater than 1; otherwise
+       false." It was the literal `false`, so a bundle's redirect-handling arm was never reached. */
+    case 4: {
+        int64_t n = 0;
+        JSValue last = response_url_of(ctx, d, &n);
+        if (JS_IsException(last)) return last;
+        JS_FreeValue(ctx, last);
+        return JS_NewBool(ctx, n > 1);
+    }
     case 5: return JS_NewString(ctx, RESPONSE_TYPE_NAME[d->type]);
     default:
         DCHECK(magic == 6, "a Response accessor was declared with a magic this component does not answer");
@@ -242,10 +371,12 @@ static JSValue js_response_get(JSContext *ctx, JSValueConst this_val, int magic)
     }
 }
 
-/* §6.4's attributes and clone(). `body` IS NOT HERE, and its absence is the honest report: the spec's type is
-   `ReadableStream?`, this engine has no ReadableStream, and a getter answering null for a response that HAS a
-   body would be a lie the page cannot tell from the null-body case. `blob()` and `formData()` are absent for
-   the same reason — there is no Blob and no FormData to answer with. */
+/* §5.5's ATTRIBUTES. The seven here are Response's own; `body`, `bodyUsed` and the six readers — `text`,
+   `json`, `arrayBuffer`, `bytes`, `blob`, `formData` — are §5.3's Body mixin and are installed by body.c, from the
+   one implementation Request includes too. This comment used to say `body`, `blob()` and `formData()` were
+   ABSENT because "this engine has no ReadableStream" and no Blob and no FormData; all three exist (body.c's
+   BODY_READERS and body_install, over §4's ReadableStream and File API's Blob), so the prose was telling the
+   next reader to build what was already built. */
 static const JSCFunctionListEntry js_response_proto_funcs[] = {
     JS_CGETSET_MAGIC_DEF("ok", js_response_get, NULL, 0),
     JS_CGETSET_MAGIC_DEF("status", js_response_get, NULL, 1),
@@ -277,21 +408,31 @@ static JSValue response_alloc(JSContext *ctx, ResponseData **pd)
     d = js_mallocz(ctx, sizeof(*d));
     if (!d) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
     d->headers = JS_UNDEFINED;
+    /* §2.2.6's "Unless stated otherwise, it is « »" — a new response HAS a URL list, an empty one, so it is
+       built HERE rather than left as a tag the getters would have to test for. The zeroed record's JSValue is
+       the integer 0 and not JS_UNDEFINED, which is the trap this file has paid for elsewhere; an Array is a
+       real answer to `url` and to `redirected` from the first instant the object exists. */
+    d->url_list = JS_NewArray(ctx);
     d->status = 200;
     JS_SetOpaque(obj, d);
+    if (JS_IsException(d->url_list)) { d->url_list = JS_UNDEFINED; JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
     *pd = d;
     return obj;
 }
 
-/* Fill a freshly allocated response. `body` NULL is the spec's NULL BODY, which is not the empty body. Returns
-   -1 with an exception live. */
-static int response_set(JSContext *ctx, ResponseData *d, const char *url, int status, const char *status_text,
-                        int type, const char *body, size_t body_len, const HeaderList *headers,
-                        HeadersGuard guard)
+/* Fill a freshly allocated response. `body` NULL is the spec's NULL BODY, which is not the empty body.
+   `url_list` is §2.2.6's URL list and is COPIED, never adopted — JS_UNDEFINED spells the spec's « », which is
+   what §5.5's constructor, error() and redirect() each create ("a new response"). Returns -1 with an exception
+   live. */
+static int response_set(JSContext *ctx, ResponseData *d, JSValueConst url_list, int status,
+                        const char *status_text, int type, const char *body, size_t body_len,
+                        const HeaderList *headers, HeadersGuard guard)
 {
-    d->url = js_strdup(ctx, url ? url : "");
+    JS_FreeValue(ctx, d->url_list);
+    d->url_list = response_url_list_copy(ctx, url_list);
+    if (JS_IsException(d->url_list)) { d->url_list = JS_UNDEFINED; return -1; }
     d->status_text = js_strdup(ctx, status_text ? status_text : "");
-    if (!d->url || !d->status_text) return -1;
+    if (!d->status_text) return -1;
     d->status = status;
     d->type = (uint8_t)type;
     if (body_state_set(ctx, &d->body, body, body_len) < 0) return -1;
@@ -357,16 +498,11 @@ static void js_response_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
 }
 
+/* The header list alone — see js_headers_ctor_release. The rest is js_response_ctor_visit's declaration. */
 static void js_response_ctor_release(JSContext *ctx, void *st)
 {
-    JSResponseCtorState *s = st;
-    int k;
-    headers_fill_release(ctx, &s->fill);
-    header_list_free(&s->list);
-    JS_FreeValue(ctx, s->result);
-    JS_FreeValue(ctx, s->json);
-    s->result = s->json = JS_UNDEFINED;
-    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
+    (void)ctx;
+    header_list_free(&((JSResponseCtorState *)st)->list);
 }
 
 /* §6.4 "a null body status": the statuses HTTP defines as carrying no body, which a constructed Response may
@@ -478,7 +614,9 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
                 JS_FreeValue(ctx, cb_result);
                 return -1;
             }
-            r = response_set(ctx, d, "", status, t ? t : "", RESPONSE_TYPE_DEFAULT, NULL, 0, NULL,
+            /* §5.5 step 3 creates "a new response", whose URL list is « » — so `url` answers "" (its URL is
+               null) and `redirected` answers false, both computed from the list rather than declared. */
+            r = response_set(ctx, d, JS_UNDEFINED, status, t ? t : "", RESPONSE_TYPE_DEFAULT, NULL, 0, NULL,
                              HEADERS_GUARD_RESPONSE);
             JS_FreeCString(ctx, t);
             JS_FreeValue(ctx, v_text);
@@ -565,7 +703,8 @@ static JSValue js_response_error(JSContext *ctx, JSValueConst this_val, int argc
     (void)this_val; (void)argc; (void)argv;
     if (JS_IsException(obj))
         return obj;
-    if (response_set(ctx, d, "", 0, "", RESPONSE_TYPE_ERROR, NULL, 0, NULL, HEADERS_GUARD_IMMUTABLE) < 0) {
+    if (response_set(ctx, d, JS_UNDEFINED, 0, "", RESPONSE_TYPE_ERROR, NULL, 0, NULL,
+                     HEADERS_GUARD_IMMUTABLE) < 0) {
         JS_FreeValue(ctx, obj);
         return JS_EXCEPTION;
     }
@@ -616,7 +755,10 @@ static JSValue js_response_redirect(JSContext *ctx, JSValueConst this_val, int a
        be refused by the guard the same step sets. */
     header_list_append(&hl, "location", serialized);
     free(serialized);
-    ok = response_set(ctx, d, "", (int)status, "", RESPONSE_TYPE_DEFAULT, NULL, 0, &hl,
+    /* §5.5's redirect() creates "a new response" and sets its STATUS and its `Location` header — and nothing
+       else. Its URL list stays « », so `responseObject.url` is "" and `redirected` is false: the address the
+       page passed is the redirect TARGET, which the list does not hold. */
+    ok = response_set(ctx, d, JS_UNDEFINED, (int)status, "", RESPONSE_TYPE_DEFAULT, NULL, 0, &hl,
                       HEADERS_GUARD_IMMUTABLE) == 0;
     header_list_free(&hl);
     if (!ok) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
@@ -742,21 +884,37 @@ void response_free(JSContext *ctx)
     g_ctor_stepid = g_json_stepid = g_redirect_stepid = -1;
 }
 
-/* THE REPLY THE TRUSTED HOST FETCHED — type "basic", status 200, and headers the page may not write, which is
-   the §6.4 "immutable" guard and the reason that guard exists at all. */
-JSValue response_new(JSContext *ctx, const char *url, int status, const char *status_text,
+/* THE REPLY THE TRUSTED HOST FETCHED — headers the page may not write, which is the §5.5 "immutable" guard and
+   the reason that guard exists at all. */
+JSValue response_new(JSContext *ctx, JSValueConst url_list, int status, const char *status_text,
                      const HeaderList *headers, const char *body, size_t body_len)
 {
     ResponseData *d;
-    JSValue obj = response_alloc(ctx, &d);
+    JSValue obj;
+    int64_t n = 0;
+    int lr;
 
+    /* THE FETCH'S OWN URL LIST, which is the whole of what `url` and `redirected` are. §4.1's main fetch says
+       "If internalResponse's URL list is empty, then set it to a clone of request's URL list", so a reply a
+       host answered carries at least the request's own URL; an empty one here is a host that reported no list
+       at all, and `redirected` would then be false for every redirect there ever was.
+       The read runs BEFORE the assert rather than inside it, because a DCHECK's condition is compiled out in
+       release and this one allocates. */
+    lr = JS_GetLength(ctx, url_list, &n);
+    DCHECK(JS_IsArray(url_list) && lr == 0 && n >= 1,
+           "a host delivered a reply whose URL list is missing or empty — §4.1 gives a fetched response at "
+           "least a clone of the request's URL list, so `url` and `redirected` have nothing to be computed "
+           "from and the host's reply record is the thing to fix");
+    if (lr < 0)
+        return JS_EXCEPTION;
+    obj = response_alloc(ctx, &d);
     if (JS_IsException(obj))
         return obj;
     /* THE REPLY'S OWN status and headers, not this component's guesses. They were 200/"OK"/none, which is what
        a host that could only hand over bytes forced — and a page reading `r.status` or `r.headers.get(...)` off
-       a real reply got an answer this file invented. The guard is §6.4's "immutable": a reply the page did not
+       a real reply got an answer this file invented. The guard is §5.5's "immutable": a reply the page did not
        construct is not a reply the page may rewrite. */
-    if (response_set(ctx, d, url, status, status_text ? status_text : "", RESPONSE_TYPE_BASIC,
+    if (response_set(ctx, d, url_list, status, status_text ? status_text : "", RESPONSE_TYPE_BASIC,
                      body ? body : "", body_len, headers, HEADERS_GUARD_IMMUTABLE) < 0) {
         JS_FreeValue(ctx, obj);
         return JS_EXCEPTION;

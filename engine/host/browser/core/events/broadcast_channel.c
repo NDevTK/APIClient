@@ -195,7 +195,6 @@ static JSValue js_chan_close(JSContext *ctx, JSValueConst this_val, int argc, JS
 
 typedef struct { uint8_t unused; } JSBcCtorState;
 static void js_bc_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
-static void js_bc_release(JSContext *ctx, void *st) { (void)ctx; (void)st; }
 
 /* WHERE THIS MACHINE RESTS. §9.5's constructor is three steps — the name, the origin and adding the channel
    to the registry — and none of them reaches the page's code, because the declaration converted the name
@@ -257,7 +256,7 @@ static int js_bc_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 }
 
 static const IdlStepDecl js_bc_ctor_decl = {
-    js_bc_ctor_step, sizeof(JSBcCtorState), js_bc_visit, js_bc_release,
+    js_bc_ctor_step, sizeof(JSBcCtorState), js_bc_visit, NULL,
     "HTML §9.5 new BroadcastChannel(name)", BC_CTOR_STEPS
 };
 

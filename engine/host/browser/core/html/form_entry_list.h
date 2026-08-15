@@ -45,8 +45,12 @@ void form_entry_list_init(FormEntryListRun *r);
 /* WHAT THIS RUN OWNS — the caller's `visit` forwards to it, so a fork mid-construction gives each arm its own
    entry list rather than two flows one. */
 void form_entry_list_visit(JSContext *ctx, FormEntryListRun *r, JSStepVisit *v);
-/* The caller's teardown forwards to it. An abandoned run CLEARS the form's constructing-entry-list flag, which
-   step 8 would otherwise have done: a flow dropped inside step 5 must not leave the form unable to submit. */
+/* An abandoned run CLEARS the form's constructing-entry-list flag, which step 8 would otherwise have done: a
+   flow dropped inside step 5 must not leave the form unable to submit. THIS is what a holding machine's
+   `release` calls — the flag is not a reference, so no declaration can name it, and it READS `r->form`, so it
+   must run before that declaration is discharged. */
+void form_entry_list_unlock(JSContext *ctx, FormEntryListRun *r);
+/* Both halves, for a caller that holds this run outside a step machine's declaration. */
 void form_entry_list_release(JSContext *ctx, FormEntryListRun *r);
 
 /* §4.10.22.4 itself. `encoding` is the encoding NAME step 5.9's `_charset_` entry carries — "UTF-8" for the

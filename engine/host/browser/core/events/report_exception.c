@@ -90,23 +90,28 @@ void report_exception_work_visit(JSContext *ctx, ReportExceptionWork *w, JSStepV
         v->val(ctx, &w->cb[i]);
 }
 
-void report_exception_work_release(JSContext *ctx, ReportExceptionWork *w)
+void report_exception_work_unlock(JSContext *ctx, ReportExceptionWork *w)
 {
-    int i;
     /* THE FLAG IS A LOCK, SO ITS OWNER HAS TO RELEASE IT ON EVERY EXIT. A report that is ABANDONED — the flow
        it belongs to is dropped, or the dispatch machine holding it is torn down while the `error` event is
        still in flight — would otherwise leave the global in error reporting mode forever, and step 5 then
        silently skips EVERY later report on that global. That is invisible: the first exception is reported and
-       every one after it is swallowed, which reads exactly like "reporting does not work sometimes". */
+       every one after it is swallowed, which reads exactly like "reporting does not work sometimes".
+       IT IS ITS OWN FUNCTION because it is the only part of this record's teardown a `visit` cannot express: a
+       global flag is not a reference, so no declaration names it. Everything else here IS named by the visit
+       above, and a teardown that restated it would be the second list. */
     if (w->stage != 0) {
         JSValue g = JS_GetGlobalObject(ctx);
         reporting_mode(ctx, g, /*set*/ 1, false);
         JS_FreeValue(ctx, g);
         w->stage = 0;
     }
-    JS_FreeValue(ctx, w->ev);
-    w->ev = JS_UNDEFINED;
-    STEP_CB_FOREACH(w->cb, i) { JS_FreeValue(ctx, w->cb[i]); w->cb[i] = JS_UNDEFINED; }
+}
+
+void report_exception_work_release(JSContext *ctx, ReportExceptionWork *w)
+{
+    report_exception_work_unlock(ctx, w);
+    report_exception_work_visit(ctx, w, JS_StepFreeVisitor());
 }
 
 /* THE THROW SITE, OUT OF THE BACKTRACE THE ENGINE ALREADY RECORDED — the other three of step 2's

@@ -1202,14 +1202,6 @@ static void js_get_reader_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->reader);
 }
 
-static void js_get_reader_release(JSContext *ctx, void *st)
-{
-    JSGetReaderState *s = st;
-    stream_work_release(ctx, &s->w);
-    JS_FreeValue(ctx, s->reader);
-    s->reader = JS_UNDEFINED;
-}
-
 static int js_get_reader_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                               JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -1301,7 +1293,7 @@ done:
 }
 
 static const IdlStepDecl js_get_reader_decl = {
-    js_get_reader_step, sizeof(JSGetReaderState), js_get_reader_visit, js_get_reader_release,
+    js_get_reader_step, sizeof(JSGetReaderState), js_get_reader_visit, NULL,
     "Streams §4.7 SetUpReadableStreamDefaultReader (getReader() and the reader constructor both)", GR_STEPS
 };
 
@@ -2167,13 +2159,6 @@ static void js_values_visit(JSContext *ctx, void *st, JSStepVisit *v)
     for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
 }
 
-static void js_values_release(JSContext *ctx, void *st)
-{
-    JSValuesState *s = st;
-    int k;
-    for (k = 0; k < 3; k++) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
-}
-
 static int js_values_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                           JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -2216,7 +2201,7 @@ static int js_values_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
 }
 
 static const IdlStepDecl js_values_decl = {
-    js_values_step, sizeof(JSValuesState), js_values_visit, js_values_release,
+    js_values_step, sizeof(JSValuesState), js_values_visit, NULL,
     "Streams §4.4 values(options) and the asynchronous iterator initialization steps", VAL_STEPS
 };
 
@@ -2605,15 +2590,6 @@ static void js_tee_call_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->reader);
 }
 
-static void js_tee_call_release(JSContext *ctx, void *st)
-{
-    JSTeeCallState *s = st;
-    stream_work_release(ctx, &s->w);
-    JS_FreeValue(ctx, s->tee);
-    JS_FreeValue(ctx, s->reader);
-    s->tee = s->reader = JS_UNDEFINED;
-}
-
 /* A BRANCH: a stream and a controller whose pull and cancel are the tee's, not a page's. */
 static int tee_branch(JSContext *ctx, TeeData *t, JSValueConst tee_v, int i)
 {
@@ -2756,13 +2732,13 @@ static int js_tee_clone_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
 }
 
 static const IdlStepDecl js_tee_call_decl = {
-    js_tee_call_step, sizeof(JSTeeCallState), js_tee_call_visit, js_tee_call_release,
+    js_tee_call_step, sizeof(JSTeeCallState), js_tee_call_visit, NULL,
     "Streams §4.2 tee(), through §4.9.7 ReadableStreamDefaultTee", TC_STEPS
 };
 /* THE SAME STATE AND THE SAME VISIT — one struct, one ownership contract, which is what the step-visits gate
    requires and what makes these two declarations of one algorithm rather than two algorithms. */
 static const IdlStepDecl js_tee_clone_decl = {
-    js_tee_clone_step, sizeof(JSTeeCallState), js_tee_call_visit, js_tee_call_release,
+    js_tee_clone_step, sizeof(JSTeeCallState), js_tee_call_visit, NULL,
     "Fetch §5.2 clone a body, through §4.9.7 ReadableStreamDefaultTee with cloneForBranch2 set", TC_STEPS
 };
 
@@ -3086,18 +3062,6 @@ static void js_from_call_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->from);
 }
 
-static void js_from_call_release(JSContext *ctx, void *st)
-{
-    JSFromCallState *s = st;
-    stream_work_release(ctx, &s->w);
-    JS_FreeValue(ctx, s->method);
-    JS_FreeValue(ctx, s->iterator);
-    JS_FreeValue(ctx, s->next_fn);
-    JS_FreeValue(ctx, s->stream);
-    JS_FreeValue(ctx, s->from);
-    s->method = s->iterator = s->next_fn = s->stream = s->from = JS_UNDEFINED;
-}
-
 static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                              JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -3225,7 +3189,7 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
 }
 
 static const IdlStepDecl js_from_call_decl = {
-    js_from_call_step, sizeof(JSFromCallState), js_from_call_visit, js_from_call_release,
+    js_from_call_step, sizeof(JSFromCallState), js_from_call_visit, NULL,
     "Streams §4.2 from(asyncIterable), through §4.9.6 ReadableStreamFromIterable", FC_STEPS
 };
 
@@ -3660,20 +3624,6 @@ static void js_rs_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->proto);
 }
 
-static void js_rs_ctor_release(JSContext *ctx, void *st)
-{
-    JSRsCtorState *s = st;
-    int k;
-    stream_work_release(ctx, &s->w);
-    for (k = 0; k < SRC_N; k++) { JS_FreeValue(ctx, s->src[k]); s->src[k] = JS_UNDEFINED; }
-    JS_FreeValue(ctx, s->stream);
-    JS_FreeValue(ctx, s->controller);
-    JS_FreeValue(ctx, s->start_fn);
-    JS_FreeValue(ctx, s->source);
-    JS_FreeValue(ctx, s->proto);
-    s->stream = s->controller = s->start_fn = s->source = s->proto = JS_UNDEFINED;
-}
-
 
 static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
@@ -3888,7 +3838,7 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 }
 
 static const IdlStepDecl js_rs_ctor_decl = {
-    js_rs_ctor_step, sizeof(JSRsCtorState), js_rs_ctor_visit, js_rs_ctor_release,
+    js_rs_ctor_step, sizeof(JSRsCtorState), js_rs_ctor_visit, NULL,
     "Streams §4.2 new ReadableStream(underlyingSource, strategy)", RSC_STEPS
 };
 

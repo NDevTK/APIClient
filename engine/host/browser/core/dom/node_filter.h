@@ -78,6 +78,10 @@ typedef struct NodeFilterCall {
 static inline bool node_filter_in_flight(const NodeFilterCall *c) { return c->phase != 0; }
 
 void node_filter_call_visit(JSContext *ctx, NodeFilterCall *c, JSStepVisit *v);
+/* §6.4 steps 6-7's flag and the cursors — the half of this record's teardown a declaration cannot name. A step
+   machine whose own `visit` names this record calls THIS and lets the declaration release the references. */
+void node_filter_call_unlock(NodeFilterCall *c);
+/* Both halves, for §6.4's own exits, which release the record mid-algorithm rather than at a teardown. */
 void node_filter_call_release(JSContext *ctx, NodeFilterCall *c);
 
 /* §6.4 "to filter a node `node` within a traverser". `node` is the node's WRAPPER, because that is what step 6

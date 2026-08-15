@@ -857,25 +857,8 @@ static void focus_state_visit(JSContext *ctx, void *st, JSStepVisit *v)
     STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
 }
 
-static void focus_state_release(JSContext *ctx, void *st)
-{
-    FocusState *s = st;
-    int k;
-
-    JS_FreeValue(ctx, s->target);
-    JS_FreeValue(ctx, s->allow_win);
-    JS_FreeValue(ctx, s->old_chain);
-    JS_FreeValue(ctx, s->new_chain);
-    JS_FreeValue(ctx, s->ev);
-    s->target = s->allow_win = s->old_chain = s->new_chain = s->ev = JS_UNDEFINED;
-    STEP_CB_FOREACH(s->cb, k) {
-        JS_FreeValue(ctx, s->cb[k]);
-        s->cb[k] = JS_UNDEFINED;
-    }
-}
-
 /* Every owned field in place before the first thing that can fail — the failure path tears this state down
-   through focus_state_release, which frees exactly what the state holds and nothing else. */
+   through focus_state_visit, which names exactly what the state owns and nothing else. */
 static bool focus_state_init(JSContext *ctx, FocusState *s)
 {
     int k;
@@ -1376,27 +1359,27 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
 }
 
 static const IdlStepDecl EL_FOCUS_STEP = {
-    focus_step, sizeof(FocusState), focus_state_visit, focus_state_release,
+    focus_step, sizeof(FocusState), focus_state_visit, NULL,
     "HTML §6.6.6 HTMLOrSVGOrMathMLElement.focus(options), over §6.6.4's focusing and focus update steps",
     FOCUS_STEPS
 };
 static const IdlStepDecl EL_BLUR_STEP = {
-    focus_step, sizeof(FocusState), focus_state_visit, focus_state_release,
+    focus_step, sizeof(FocusState), focus_state_visit, NULL,
     "HTML §6.6.6 HTMLOrSVGOrMathMLElement.blur(), over §6.6.4's unfocusing steps",
     FOCUS_STEPS
 };
 static const IdlStepDecl WIN_FOCUS_STEP = {
-    focus_step, sizeof(FocusState), focus_state_visit, focus_state_release,
+    focus_step, sizeof(FocusState), focus_state_visit, NULL,
     "HTML §6.6.6 Window.focus(), over §6.6.4's focusing and focus update steps",
     FOCUS_STEPS
 };
 static const IdlStepDecl VIEWPORT_STEP = {
-    focus_step, sizeof(FocusState), focus_state_visit, focus_state_release,
+    focus_step, sizeof(FocusState), focus_state_visit, NULL,
     "HTML §8.1.7.3 update the rendering step 17, over §6.6.4's focusing and focus update steps",
     FOCUS_STEPS
 };
 static const IdlStepDecl AUTOFOCUS_STEP = {
-    focus_step, sizeof(FocusState), focus_state_visit, focus_state_release,
+    focus_step, sizeof(FocusState), focus_state_visit, NULL,
     "HTML §6.6.7 flush autofocus candidates step 5.11.3, over §6.6.4's focusing and focus update steps",
     FOCUS_STEPS
 };

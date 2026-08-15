@@ -133,12 +133,12 @@ static void tw_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->wrap);
 }
 
+/* §6.4 step 7's flag alone — `wrap` and everything the filter call holds are references tw_visit names, and the
+   teardown discharges that one declaration. */
 static void tw_release(JSContext *ctx, void *st)
 {
-    TreeWalkState *s = st;
-    node_filter_call_release(ctx, &s->f);
-    JS_FreeValue(ctx, s->wrap);
-    s->wrap = JS_UNDEFINED;
+    (void)ctx;
+    node_filter_call_unlock(&((TreeWalkState *)st)->f);
 }
 
 /* §6.4 over `s->node`. Returns >0 (park), 0 with s->result set, or -1. */

@@ -1608,7 +1608,6 @@ static const char *const URL_CTOR_STEPS[] = { URL_CTOR_STAGES(JS_STEP_STAGE_LABE
 typedef struct { int unused; } JSUrlCtorState;
 
 static void js_url_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
-static void js_url_ctor_release(JSContext *ctx, void *st) { (void)ctx; (void)st; }
 
 static int js_url_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
@@ -1690,7 +1689,7 @@ static int js_url_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 }
 
 static const IdlStepDecl js_url_ctor_decl = {
-    js_url_ctor_step, sizeof(JSUrlCtorState), js_url_ctor_visit, js_url_ctor_release,
+    js_url_ctor_step, sizeof(JSUrlCtorState), js_url_ctor_visit, NULL,
     "URL §5.1 new URL(url, base)", URL_CTOR_STEPS
 };
 

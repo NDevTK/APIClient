@@ -245,12 +245,12 @@ static void ni_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->wrap);
 }
 
+/* §6.4 step 7's flag alone — `wrap` and everything the filter call holds are references ni_visit names, and the
+   teardown discharges that one declaration. */
 static void ni_release(JSContext *ctx, void *st)
 {
-    NodeIterState *s = st;
-    node_filter_call_release(ctx, &s->f);
-    JS_FreeValue(ctx, s->wrap);
-    s->wrap = JS_UNDEFINED;
+    (void)ctx;
+    node_filter_call_unlock(&((NodeIterState *)st)->f);
 }
 
 /* Step 4's "set iterator's candidate reference to null", which is also step 3.4's abrupt exit. */

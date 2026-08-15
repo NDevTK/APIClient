@@ -818,7 +818,6 @@ static const char *const DEC_CTOR_STEPS[] = { DEC_CTOR_STAGES(JS_STEP_STAGE_LABE
 typedef struct { int unused; } JSDecoderCtorState;
 
 static void js_dec_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
-static void js_dec_ctor_release(JSContext *ctx, void *st) { (void)ctx; (void)st; }
 
 static int js_dec_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
@@ -859,7 +858,7 @@ static int js_dec_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 }
 
 static const IdlStepDecl js_dec_ctor_decl = {
-    js_dec_ctor_step, sizeof(JSDecoderCtorState), js_dec_ctor_visit, js_dec_ctor_release,
+    js_dec_ctor_step, sizeof(JSDecoderCtorState), js_dec_ctor_visit, NULL,
     "Encoding §7.1 new TextDecoder(label, options)", DEC_CTOR_STEPS
 };
 
@@ -954,7 +953,6 @@ static const char *const ENC_CTOR_STEPS[] = { ENC_CTOR_STAGES(JS_STEP_STAGE_LABE
 typedef struct { int unused; } JSEncoderCtorState;
 
 static void js_enc_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
-static void js_enc_ctor_release(JSContext *ctx, void *st) { (void)ctx; (void)st; }
 
 static int js_enc_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
@@ -974,7 +972,7 @@ static int js_enc_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 }
 
 static const IdlStepDecl js_enc_ctor_decl = {
-    js_enc_ctor_step, sizeof(JSEncoderCtorState), js_enc_ctor_visit, js_enc_ctor_release,
+    js_enc_ctor_step, sizeof(JSEncoderCtorState), js_enc_ctor_visit, NULL,
     "Encoding §7.2 new TextEncoder()", ENC_CTOR_STEPS
 };
 

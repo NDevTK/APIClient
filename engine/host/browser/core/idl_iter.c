@@ -27,13 +27,12 @@ void iter_cursor_visit(JSContext *ctx, IterCursor *c, JSStepVisit *v)
     for (k = 0; k < 2; k++) v->val(ctx, &c->cb[k]);
 }
 
+/* The declaration above discharged, and nothing restated. §6.2's own conversion releases a cursor MID-walk (the
+   previous pair's iterator, before the next pair's), which is why this stays a function; a machine whose `visit`
+   names a cursor must not call it at a teardown, because the teardown discharges the same declaration. */
 void iter_cursor_release(JSContext *ctx, IterCursor *c)
 {
-    int k;
-    JS_FreeValue(ctx, c->iterfn); JS_FreeValue(ctx, c->iter); JS_FreeValue(ctx, c->next_fn);
-    JS_FreeValue(ctx, c->res);    JS_FreeValue(ctx, c->value);
-    c->iterfn = c->iter = c->next_fn = c->res = c->value = JS_UNDEFINED;
-    for (k = 0; k < 2; k++) { JS_FreeValue(ctx, c->cb[k]); c->cb[k] = JS_UNDEFINED; }
+    iter_cursor_visit(ctx, c, JS_StepFreeVisitor());
 }
 
 int iter_cursor_run(JSContext *ctx, JSStepHdr *h, IterCursor *c, JSValueConst src,
@@ -128,12 +127,6 @@ void record_cursor_init(RecordCursor *c)
 void record_cursor_visit(JSContext *ctx, RecordCursor *c, JSStepVisit *v)
 {
     v->val(ctx, &c->keys); v->val(ctx, &c->name); v->val(ctx, &c->value);
-}
-
-void record_cursor_release(JSContext *ctx, RecordCursor *c)
-{
-    JS_FreeValue(ctx, c->keys); JS_FreeValue(ctx, c->name); JS_FreeValue(ctx, c->value);
-    c->keys = c->name = c->value = JS_UNDEFINED;
 }
 
 int record_cursor_run(JSContext *ctx, JSStepHdr *h, RecordCursor *c, JSValueConst src, JSValue in,

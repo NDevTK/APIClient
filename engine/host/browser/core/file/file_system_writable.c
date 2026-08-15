@@ -727,17 +727,6 @@ static void fwm_visit(JSContext *ctx, void *st, JSStepVisit *v)
     STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
 }
 
-static void fwm_release(JSContext *ctx, void *st)
-{
-    FwMethodState *s = st;
-    int k;
-
-    JS_FreeValue(ctx, s->writer);
-    JS_FreeValue(ctx, s->result);
-    s->writer = s->result = JS_UNDEFINED;
-    STEP_CB_FOREACH(s->cb, k) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
-}
-
 /* §2.5.2 and §2.5.3's chunks — «[ "type" → "seek", "position" → position ]» and its truncate twin. Built with
    DEFINE rather than assignment (core/idl_slots.h's sibling rule): an engine-built object creates OWN
    properties, and a page that put a setter on Object.prototype must not intercept them. */
@@ -821,7 +810,7 @@ static int fwm_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
 }
 
 static const IdlStepDecl FWM_DECL = {
-    fwm_step, sizeof(FwMethodState), fwm_visit, fwm_release,
+    fwm_step, sizeof(FwMethodState), fwm_visit, NULL,
     "File System §2.5.1-3 FileSystemWritableFileStream.write() / .seek() / .truncate()", FWM_STEPS
 };
 

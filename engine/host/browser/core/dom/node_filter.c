@@ -55,23 +55,23 @@ void node_filter_call_visit(JSContext *ctx, NodeFilterCall *c, JSStepVisit *v)
         v->val(ctx, &c->cb[k]);
 }
 
-void node_filter_call_release(JSContext *ctx, NodeFilterCall *c)
+void node_filter_call_unlock(NodeFilterCall *c)
 {
-    int k;
     /* §6.4 STEPS 6-7, BOTH OF THEM. This runs on the normal exit (where the flag is already down) and on the
        abrupt one (where the driver tore the machine down without ever re-entering the algorithm), so the
-       standard's "set is active to false and rethrow" has exactly one implementation. */
+       standard's "set is active to false and rethrow" has exactly one implementation.
+       IT IS ITS OWN FUNCTION because a traverser's flag and a phase cursor are not references, so no `visit`
+       can name them — and everything that IS a reference here is named by node_filter_call_visit, which is the
+       one list a holding machine's teardown discharges. */
     if (c->t) { c->t->active = 0; c->t = NULL; }
-    JS_FreeValue(ctx, c->owner);
-    c->owner = JS_UNDEFINED;
-    JS_FreeValue(ctx, c->res);
-    c->res = JS_UNDEFINED;
-    for (k = 0; k < 3; k++) {
-        JS_FreeValue(ctx, c->cb[k]);
-        c->cb[k] = JS_UNDEFINED;
-    }
     c->phase = 0;
     c->cphase = 0;
+}
+
+void node_filter_call_release(JSContext *ctx, NodeFilterCall *c)
+{
+    node_filter_call_unlock(c);
+    node_filter_call_visit(ctx, c, JS_StepFreeVisitor());
 }
 
 /* §6.4's abrupt exit. The flag comes down inside the release, which is also where the driver's own teardown

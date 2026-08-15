@@ -1413,15 +1413,6 @@ static void js_gw_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->stream);
 }
 
-static void js_gw_release(JSContext *ctx, void *st)
-{
-    JSGetWriterState *s = st;
-    stream_work_release(ctx, &s->w);
-    JS_FreeValue(ctx, s->obj);
-    JS_FreeValue(ctx, s->stream);
-    s->obj = s->stream = JS_UNDEFINED;
-}
-
 static int js_gw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                       JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -1523,7 +1514,7 @@ static int js_gw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
     return 0;
 }
 
-static const IdlStepDecl js_gw_decl = { js_gw_step, sizeof(JSGetWriterState), js_gw_visit, js_gw_release,
+static const IdlStepDecl js_gw_decl = { js_gw_step, sizeof(JSGetWriterState), js_gw_visit, NULL,
     "Streams §5.3 SetUpWritableStreamDefaultWriter (getWriter() and the writer constructor both)",
     GW_STEPS };
 
@@ -1582,20 +1573,6 @@ static void js_ws_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->start_fn);
     v->val(ctx, &s->sink);
     v->val(ctx, &s->proto);
-}
-
-static void js_ws_ctor_release(JSContext *ctx, void *st)
-{
-    JSWsCtorState *s = st;
-    int k;
-    stream_work_release(ctx, &s->w);
-    for (k = 0; k < SNK_N; k++) { JS_FreeValue(ctx, s->snk[k]); s->snk[k] = JS_UNDEFINED; }
-    JS_FreeValue(ctx, s->stream);
-    JS_FreeValue(ctx, s->ctrl);
-    JS_FreeValue(ctx, s->start_fn);
-    JS_FreeValue(ctx, s->sink);
-    JS_FreeValue(ctx, s->proto);
-    s->stream = s->ctrl = s->start_fn = s->sink = s->proto = JS_UNDEFINED;
 }
 
 
@@ -1742,7 +1719,7 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 }
 
 static const IdlStepDecl js_ws_ctor_decl = {
-    js_ws_ctor_step, sizeof(JSWsCtorState), js_ws_ctor_visit, js_ws_ctor_release,
+    js_ws_ctor_step, sizeof(JSWsCtorState), js_ws_ctor_visit, NULL,
     "Streams §5.2 new WritableStream(underlyingSink, strategy)", WSC_STEPS
 };
 

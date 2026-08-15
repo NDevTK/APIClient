@@ -596,10 +596,11 @@ static void js_fd_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     form_entry_list_visit(ctx, &s->entries, v);
 }
 
+/* HTML §4.10.22.4 step 8's FLAG alone. Every value the run holds is named by js_fd_ctor_visit and released
+   through that one declaration; the flag is not a reference, so nothing can name it. */
 static void js_fd_ctor_release(JSContext *ctx, void *st)
 {
-    JSFormDataCtorState *s = st;
-    form_entry_list_release(ctx, &s->entries);
+    form_entry_list_unlock(ctx, &((JSFormDataCtorState *)st)->entries);
 }
 
 static int js_fd_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,

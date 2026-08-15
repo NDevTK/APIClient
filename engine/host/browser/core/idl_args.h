@@ -321,12 +321,24 @@ typedef int (*IdlStepBody)(JSContext *ctx, JSStepHdr *hdr, void *state, int argc
    enumerator with no value as its predecessor + 1, which is the whole mechanism. */
 #define IDL_STEP_STAGE_BASE(list) list##_base = IDL_STEP_FIRST - 1,
 
-/* The state's OWNERSHIP contract, and the two things every step state must state: what it holds (traced for the
-   GC and cloned at a deep fork) and how to release it (at teardown, including the throw path). */
+/* The state's OWNERSHIP contract. `visit` is the ONE declaration of what the state holds, and it has three
+   consumers, none of which knows about the others: the deep-fork clone takes a second reference to each field,
+   the teardown releases each (JS_StepVisitFree, driven by idl_args_result), and the teardown's own assert folds
+   it into a number to check that `release` did not touch it.
+   THERE IS NO SECOND LIST. `release` used to be that — the same JSValues, by hand, in another function — and
+   the pair is exactly what this engine forbids: adding a field to a state then creates an obligation in two
+   places and nothing catches the one that is missed. It had already been missed, in querySelectorAll: `visit`
+   named the collected-matches array, the teardown named nothing, and every abandoned selector walk leaked its
+   element wrappers. */
 typedef struct {
     IdlStepBody body;
     size_t      state_size;
     void      (*visit)(JSContext *ctx, void *state, JSStepVisit *v);
+    /* WHAT THE DECLARATION CANNOT NAME, and nothing else: a lexbor handle, a foreign C allocation, a global or
+       per-object FLAG the algorithm took and must give back on every exit (§4.13.4 step 14's "regardless of
+       whether the above steps threw", HTML §4.10.22.3 step 8's constructing-entry-list flag). It runs BEFORE
+       the declaration is discharged, so it may READ an owned value — those flags live on one — and idl_args.c
+       asserts across the call that it FREED none. A member with nothing of that kind declares NULL. */
     void      (*release)(JSContext *ctx, void *state);
     /* WHICH ALGORITHM THIS MEMBER IS, AND WHICH OF ITS STEPS EACH STAGE RESTS AT — the host half of
        JSTrampStepDef's own declaration, and it lands on the same field of the same definition: the pool builds

@@ -245,19 +245,16 @@ static void qs_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->arr);
 }
 
+/* THE LEXBOR HALF, WHICH IS ALL A `release` MAY OWN. The collected-matches array is a REFERENCE and is named
+   by qs_visit, so the teardown discharges it through that one declaration — it used to be freed here as well,
+   which is how the omission that leaked every abandoned querySelectorAll's element wrappers was repaired the
+   first time, and repairing a missing entry in a second list leaves the next omission just as invisible.
+   These three are not references and no declaration names them: a compiled selector list and the two contexts
+   behind it, which a flow dropped mid-walk would otherwise leak. */
 static void qs_release(JSContext *ctx, void *st)
 {
     QsState *s = st;
-    /* THE COLLECTED MATCHES ARE THIS MACHINE'S UNTIL IT HANDS THEM OVER, and a field the `visit` names that
-       the teardown does not release is the leak reading the two together is what catches. The walk rests at
-       EVERY node (one JS_STEP_YIELD per step), so a flow dropped or outranked mid-querySelectorAll is the
-       ordinary case rather than an exotic one, and every element wrapper the array holds goes with it. The
-       success path has already handed the array to the static NodeList and left JS_UNDEFINED here, so this runs
-       on the abandoned path alone. */
-    JS_FreeValue(ctx, s->arr);
-    s->arr = JS_UNDEFINED;
-    /* The throw path owns these too — a flow dropped mid-walk would otherwise leak a compiled selector list and
-       the two contexts behind it. */
+    (void)ctx;
     if (s->list) lxb_css_selector_list_destroy_memory(s->list);
     if (s->selectors) lxb_selectors_destroy(s->selectors, true);
     if (s->parser) lxb_css_parser_destroy(s->parser, true);
@@ -586,17 +583,13 @@ static void doc_create_el_visit(JSContext *ctx, void *st, JSStepVisit *v)
     report_exception_work_visit(ctx, &s->rw, v);
 }
 
+/* §8.1.4.6 step 5's FLAG, and nothing else: every value this state holds — the report's own included — is named
+   by doc_create_el_visit, which is the one list the teardown discharges. A flag on the global is not a
+   reference, so no declaration can name it, and leaving it set would put the global in error reporting mode
+   forever and swallow every later report on it. */
 static void doc_create_el_release(JSContext *ctx, void *st)
 {
-    DocCreateElState *s = st;
-    JS_FreeValue(ctx, s->cb[0]);
-    JS_FreeValue(ctx, s->def);
-    JS_FreeValue(ctx, s->el);
-    JS_FreeValue(ctx, s->local);
-    JS_FreeValue(ctx, s->result);
-    JS_FreeValue(ctx, s->exc);
-    s->cb[0] = s->def = s->el = s->local = s->result = s->exc = JS_UNDEFINED;
-    report_exception_work_release(ctx, &s->rw);
+    report_exception_work_unlock(ctx, &((DocCreateElState *)st)->rw);
 }
 
 static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,

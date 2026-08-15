@@ -300,31 +300,14 @@ static void js_ts_visit(JSContext *ctx, void *st, JSStepVisit *v)
     for (k = 0; k < 2; k++) { v->val(ctx, &s->funcs[k]); v->val(ctx, &s->held_funcs[k]); }
 }
 
-static void js_ts_release(JSContext *ctx, void *st)
-{
-    JSTsState *s = st;
-    int k;
-    stream_work_release(ctx, &s->w);
-    JS_FreeValue(ctx, s->ts);
-    JS_FreeValue(ctx, s->ctrl);
-    for (k = 0; k < TR_N; k++) { JS_FreeValue(ctx, s->tr[k]); s->tr[k] = JS_UNDEFINED; }
-    for (k = 0; k < 4; k++) { JS_FreeValue(ctx, s->strat[k]); s->strat[k] = JS_UNDEFINED; }
-    JS_FreeValue(ctx, s->promise);
-    JS_FreeValue(ctx, s->reason);
-    JS_FreeValue(ctx, s->proto);
-    for (k = 0; k < 2; k++) {
-        JS_FreeValue(ctx, s->funcs[k]);      s->funcs[k] = JS_UNDEFINED;
-        JS_FreeValue(ctx, s->held_funcs[k]); s->held_funcs[k] = JS_UNDEFINED;
-    }
-    s->ts = s->ctrl = s->promise = s->reason = s->proto = JS_UNDEFINED;
-}
-
 static JSValue js_ts_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSTsState *s = st;
     JSValue r = take_result ? s->promise : JS_UNDEFINED;
     if (take_result) s->promise = JS_UNDEFINED;
-    js_ts_release(ctx, st);
+    /* The declaration IS the list — see JS_StepVisitFree. This machine holds no lexbor handle and no foreign
+       allocation, so there is nothing beside it to release and no hook that would exist only to be called. */
+    JS_StepVisitFree(ctx, js_ts_visit, st);
     return r;
 }
 
@@ -1352,7 +1335,7 @@ static int js_ts_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
    forwarded to it was a second declaration of the same ownership, which is exactly the shape that lets a field
    get added to one and not the other; the step-visits gate rejects it by struct for that reason. */
 static const IdlStepDecl js_ts_ctor_decl = {
-    js_ts_ctor_step, sizeof(JSTsState), js_ts_visit, js_ts_release,
+    js_ts_ctor_step, sizeof(JSTsState), js_ts_visit, NULL,
     "Streams §6.2 new TransformStream(transformer, writableStrategy, readableStrategy)", TS_STEPS
 };
 

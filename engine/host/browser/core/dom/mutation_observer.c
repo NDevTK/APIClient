@@ -909,7 +909,6 @@ static JSValue js_mo_take_records(JSContext *ctx, JSValueConst this_val, int arg
 
 typedef struct { uint8_t unused; } JSMoCtorState;
 static void js_mo_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
-static void js_mo_ctor_release(JSContext *ctx, void *st) { (void)ctx; (void)st; }
 
 #define MO_CTOR_STAGES(X) \
     X(MO_CTOR_BUILD = IDL_STEP_FIRST, \
@@ -950,7 +949,7 @@ static int js_mo_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 }
 
 static const IdlStepDecl js_mo_ctor_decl = {
-    js_mo_ctor_step, sizeof(JSMoCtorState), js_mo_ctor_visit, js_mo_ctor_release,
+    js_mo_ctor_step, sizeof(JSMoCtorState), js_mo_ctor_visit, NULL,
     "DOM §4.3.1 new MutationObserver(callback)", MO_CTOR_STEPS
 };
 

@@ -25,10 +25,9 @@
  * synchronous one), so `for await (const [name, h] of dir)` is honestly ABSENT rather than a `values()` that
  * answers with something that is not an async iterator. §2.6's FileSystemSyncAccessHandle is
  * `[Exposed=DedicatedWorker]` and this engine has no WorkerGlobalScope, so its exposure set is empty here. File
- * System Access §2.3's `queryPermission`/`requestPermission` belong with the PICKERS that produce a handle
- * whose permission state can be anything but granted; a bucket-file-system handle's is "granted" always
- * (§2.2's permission state constraints), so a pair of members answering only that would be answering for a
- * world this build cannot yet reach. */
+ * System Access §2.3's `queryPermission`/`requestPermission` are a PARTIAL interface of this one and live in
+ * core/file/file_system_access.c beside the "file-system" powerful feature they are the two doors onto; they
+ * install onto the prototype this file builds, through fs_handle_proto. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -83,6 +82,26 @@ bool fs_handle_is(JSValueConst v)
 static FsLocator *fsh_locator(JSValueConst v)
 {
     return g_handle_class ? JS_GetOpaque(v, g_handle_class) : NULL;
+}
+
+bool fs_handle_locator(JSValueConst v, bool *directory, const char **root, const char *const **path, int *npath)
+{
+    FsLocator *l = fsh_locator(v);
+
+    if (!l) return false;
+    *directory = l->directory;
+    *root = l->root;
+    *path = (const char *const *)l->path;
+    *npath = l->npath;
+    DCHECK(*npath >= 1, "a handle's locator holds a path with no items — §2.1's path is a list of ONE OR "
+                        "MORE strings, and fs_handle_new asserts that at the mint");
+    return true;
+}
+
+JSValue fs_handle_proto(JSContext *ctx)
+{
+    DCHECK(g_handle_class != 0, "§2.2's prototype was asked for before fs_handle_init declared the class");
+    return JS_GetClassProto(ctx, g_handle_class);
 }
 
 JSValue fs_handle_new(JSContext *ctx, bool directory, const char *root, const char *const *path, int npath)
@@ -230,19 +249,6 @@ static void fsh_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->stream);
 }
 
-static void fsh_release(JSContext *ctx, void *st)
-{
-    FsHandleState *s = st;
-
-    stream_work_release(ctx, &s->w);
-    JS_FreeValue(ctx, s->promise);
-    JS_FreeValue(ctx, s->func);
-    JS_FreeValue(ctx, s->value);
-    JS_FreeValue(ctx, s->entry);
-    JS_FreeValue(ctx, s->stream);
-    s->promise = s->func = s->value = s->entry = s->stream = JS_UNDEFINED;
-}
-
 /* THE REJECTION VALUE A DOMException IS, without throwing out of the member: every one of §2.3 and §2.4's
    failures REJECTS a promise the member has already returned, so the exception is a VALUE here and not a
    completion. Returns it (owned). */
@@ -335,7 +341,7 @@ static int fsh_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         /* EVERY OWNED FIELD IN PLACE BEFORE THE FIRST THING THAT CAN THROW — the failure path tears this state
-           down through fsh_release, which frees exactly what the state holds and nothing else. */
+           down through fsh_visit, which names exactly what the state owns and nothing else. */
         stream_work_start(&s->w);
         s->promise = s->func = s->value = s->entry = s->stream = JS_UNDEFINED;
         if (!l) {
@@ -517,7 +523,7 @@ static int fsh_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
 }
 
 static const IdlStepDecl FSH_DECL = {
-    fsh_step, sizeof(FsHandleState), fsh_visit, fsh_release,
+    fsh_step, sizeof(FsHandleState), fsh_visit, NULL,
     "File System §2.2-§2.4 the FileSystemHandle members", FSH_STEPS
 };
 

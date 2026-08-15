@@ -94,20 +94,6 @@ static bool input_supports_picker(HtmlInputState st)
     return st == INPUT_STATE_FILE;
 }
 
-/* THE METHOD'S STEP 2, WHOSE TWO HALVES ARE ONE SENTENCE. "this's relevant settings object's origin is not
-   same origin with this's relevant settings object's top-level origin" is the same question §6.6.6's allow
-   focus steps ask of the `focus-without-user-activation` feature's default allowlist, asked here of the
-   settings object rather than of a feature: the document's origin against the TOP-LEVEL traversable's. A
-   top-level document is its own top, so it is same origin with itself and the check never fires for one. */
-static bool picker_cross_origin(JSContext *ctx)
-{
-    JSValue top = window_proxy_top_navigable(ctx, document_window_proxy(ctx));
-    bool same = JS_IsObject(top) && window_proxy_same_origin_of(top);
-
-    JS_FreeValue(ctx, top);
-    return !same;
-}
-
 /* STEP 5.4's OTHER HALF — "queue an element task on the user interaction task source given element to fire an
    event named cancel at element, with the bubbles attribute initialized to true". QUEUED, which is what
    event_target_fire is: the dispatch becomes a first-class flow the one scheduler drives, so a `cancel`
@@ -168,14 +154,6 @@ static void picker_visit(JSContext *ctx, void *st, JSStepVisit *v)
 /* A machine torn down BEFORE its first entry holds a zeroed state, and a zeroed JSValue is the INTEGER 0 —
    which JS_FreeValue leaves alone, because an integer owns nothing. So this needs no started flag: it releases
    exactly what the state holds, whether that is the dialog's unknown or nothing at all. */
-static void picker_release(JSContext *ctx, void *st)
-{
-    ShowPickerState *s = st;
-
-    JS_FreeValue(ctx, s->dismissed);
-    s->dismissed = JS_UNDEFINED;
-}
-
 /* §4.10.5.4's TWO ALGORITHMS AS ONE MACHINE. The method's steps 1-4 are the throwing prologue and step 5 hands
    over to "show the picker, if applicable", which repeats the first two of them — deliberately, because that
    algorithm is also reached from the File Upload state's INPUT ACTIVATION BEHAVIOR where no method ran first.
@@ -196,7 +174,7 @@ static int picker_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
         HtmlInputState state = html_form_input_state(node_of(hdr->this_val));
 
         /* EVERY OWNED FIELD IN PLACE BEFORE THE FIRST THING THAT CAN THROW — the throw path tears this state
-           down through picker_release, which frees exactly what the state holds and nothing else. */
+           down through picker_visit, which names exactly what the state owns and nothing else. */
         s->dismissed = JS_UNDEFINED;
         s->ua_phase = 0;
         s->type_state = (uint8_t)state;
@@ -216,7 +194,10 @@ static int picker_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
            behavior also shows their pickers, and has never been guarded by an origin check" — so the exemption
            is about which pickers a CLICK could already have opened, and it is stated by state, not by whether
            this agent has a device for one. */
-        if (picker_cross_origin(ctx) && state != INPUT_STATE_FILE && state != INPUT_STATE_COLOR) {
+        /* "this's relevant settings object's origin is not same origin with this's relevant settings object's
+           top-level origin" — core/frame/window_proxy.h's one implementation of that sentence, which File
+           System Access §2.2 and §3.1 ask in the same words. */
+        if (!window_proxy_same_origin_with_top(ctx) && state != INPUT_STATE_FILE && state != INPUT_STATE_COLOR) {
             JS_ThrowDOMException(ctx, "SecurityError",
                                  "showPicker() was called in a document that is not same origin with its "
                                  "top-level document");
@@ -299,7 +280,7 @@ static int picker_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
     return JS_STEP_DONE;
 }
 
-static const IdlStepDecl SHOWPICKER_DECL = { picker_step, sizeof(ShowPickerState), picker_visit, picker_release,
+static const IdlStepDecl SHOWPICKER_DECL = { picker_step, sizeof(ShowPickerState), picker_visit, NULL,
                                              "HTML §4.10.5.4 HTMLInputElement.showPicker()", SHOWPICKER_STEPS };
 static int g_id_show_picker = -1;
 
