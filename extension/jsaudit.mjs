@@ -31,18 +31,8 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
    serves cross the JS↔WASM boundary the architecture rule exists to delete. Callees before callers; leaf
    producers (they consume only a host edge the engine already owns) before aggregators; the popup's own
    offscreen-side compute last, because it is driven by a popup RPC the engine cannot answer until the moat
-   itself is in C.
-
-   STEP 0 IS DONE AND ITS ROW IS GONE, and what it turned out to be is worth keeping: `lib/analyze.js` was a
-   DELETION rather than a move, but not for the reason this comment used to give. It said step 0 came first
-   "because until it is gone the engine does not run at all on a revisit" — that was the content-hash seen-set,
-   which had ALREADY been deleted when the sentence was written, so the row was reading as authoritative about
-   work already done. What was actually left was per-script finding attribution over `sink.location`,
-   `taintPath` and `sanitizerReport` — three names the engine has never emitted — plus a concatenation of a
-   script array the CONTENT_HTML handler stopped filling when the engine started sourcing its own scripts. None
-   of it moved to result.c: a sink's location is a fact only the running engine holds, and the host's version
-   was filing every finding under the first script. The surviving ~40-line handoff sits beside the handler that
-   writes the buffer, in offscreen-brain.js, whose own row already queues it. */
+   itself is in C. step 0 is a DELETION, not a move, and it comes first because until it is gone the engine
+   does not run at all on a revisit — every measurement of every later step is taken through it. */
 const LEDGER = [
   // ── BRIDGE — irreducible platform edge ───────────────────────────────────────────────────────────────
   { f: "bridge.js", zone: "BRIDGE:1,2,5",
@@ -71,6 +61,8 @@ const LEDGER = [
   { f: "lib/popup-console.js", zone: "BRIDGE:4", why: "WS/postMessage console." },
 
   // ── LOGIC / MIXED — the queue ────────────────────────────────────────────────────────────────────────
+  { f: "lib/analyze.js", zone: "MIXED", step: 0, dest: "engine/host/solver/result.c + bridge.js",
+    split: "the second scheduler (_reviewQueue/_analysisInflight, a per-document recency queue with its own in-flight register) and the content-hash seen-set (globalStore.scriptCache/_replayCachedAST, whose hit skipped the engine entirely on a revisit) are DELETED: a delivered document now goes straight to the ONE host WFQ and a revisit resumes its parked flows. What is LEFT is the dispatch, which is bridge.js's, and the per-script finding attribution (_findScriptForLine, the combined→per-script line shift, _markSecurityFindingChanges), which is LOGIC — the engine already knows which script each sink came from, so result.c emits script-local locations and the new/existing/fixed diff instead of the host re-deriving both from line offsets." },
   { f: "lib/discovery.js", zone: "LOGIC", step: 1, dest: "engine/host/solver/discovery.c",
     why: "candidate discovery-doc URLs + fetch strategies. §Active discovery is REQUIRED and is the engine's." },
   { f: "lib/discovery-probe.js", zone: "LOGIC", step: 1, dest: "engine/host/solver/discovery.c",
@@ -95,7 +87,7 @@ const LEDGER = [
   { f: "lib/serialize.js", zone: "LOGIC", step: 5, dest: "engine/host/solver/result.c",
     why: "the popup snapshot IS the engine's result view once the moat is in C. Cannot precede step 4 — it serializes what step 4 owns." },
   { f: "offscreen-brain.js", zone: "MIXED", step: 6, dest: "engine/host/solver/moat.c + bridge.js",
-    split: "globalStore, the request log, _handleFormSubmit and buildExportRequest are LOGIC. buildLiveDelivery is BRIDGE: the delivery VOCABULARY moved into C (each source declares its mechanism beside its encode set in concolic_declare_source; the @S record carries `delivery`+`deliveryPrefix`), so what is left here is the MECHANISM — window.open, the sandboxed attacker page, the real user gesture — which is exactly what a bridge edge is. It replaced buildPocFromShape, which matched a host-side {hash}|{search}|{pm}|{reply} taxonomy against a `shape` field the engine has never emitted. The chrome.runtime.onMessage router + the sender.tab.url trust gate are BRIDGE:3 and fold into bridge.js. _dispatchDocument (what step 0 left of lib/analyze.js) is BRIDGE:3 with it: it reads the browser-stated facts off the document's own buffer, builds the AST_ANALYZE message and hands it to the ONE pool — every field it carries is asserted on arrival in bridge.js." },
+    split: "globalStore, the request log, _handleFormSubmit and buildExportRequest are LOGIC. buildLiveDelivery is BRIDGE: the delivery VOCABULARY moved into C (each source declares its mechanism beside its encode set in concolic_declare_source; the @S record carries `delivery`+`deliveryPrefix`), so what is left here is the MECHANISM — window.open, the sandboxed attacker page, the real user gesture — which is exactly what a bridge edge is. It replaced buildPocFromShape, which matched a host-side {hash}|{search}|{pm}|{reply} taxonomy against a `shape` field the engine has never emitted. The chrome.runtime.onMessage router + the sender.tab.url trust gate are BRIDGE:3 and fold into bridge.js." },
   { f: "lib/popup-handlers.js", zone: "MIXED", step: 6, dest: "bridge.js",
     split: "runs in the OFFSCREEN, not the popup, so it cannot claim reason 4: it is the popup RPC surface. The dispatch is BRIDGE:3; every per-command backend it calls is LOGIC that moves with its own step." },
   { f: "lib/send.js", zone: "LOGIC", step: 7, dest: "engine/host/solver/moat.c",

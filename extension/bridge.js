@@ -122,7 +122,7 @@ function linesToAnalysis(lines, msg, expectResult) {
        nothing on the engine side has ever written — so every error the engine recorded while running the page
        was dropped here, and the `|| []` beside it is precisely what made the drop invisible: the field the
        brain reads existed, held the host's own errors, and looked complete. The consumer (popup.js,
-       _dispatchDocument) reads {context, message, snippet}; the engine's are strings. */
+       analyze.js) reads {context, message, snippet}; the engine's are strings. */
     resolverErrors: (result.pageErrors || []).map((e) => ({ context: "page", message: String(e), snippet: null, replyExample: null })).concat(extraErrors),
     /* The engine does NOT carry chunk URLs in the result document — they cross on their own ABI edge
        (qjs_chunks, drained and fetched every service round), so this is a host-side empty like the block
@@ -432,7 +432,7 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
          URL-derivation the credentialed principal exists to forbid, and it would hand a page's own
          sandboxed iframe (opaque origin, ordinary-looking address) same-origin access to the EMBEDDER's
          authenticated bytes. THE VALUE TO PASS IS `msg.origin` (the browser's MessageSender.origin,
-         plumbed by _dispatchDocument) — never the address. Wiring it also loosens CORB for a genuinely
+         plumbed by analyze.js) — never the address. Wiring it also loosens CORB for a genuinely
          same-origin chunk, which is spec-correct and is a deliberate decision to take at that time, not a
          side effect of this line. */
       const opts = asScript ? { pageUrl: msg.sourceUrl, as: "script" }
@@ -547,7 +547,7 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
      address still reads `https://site/widget.html`. The offscreen already has the authoritative answer —
      `_senderOrigin(sender)` from the browser's MessageSender, which SECURITY.md requires precisely because
      "a page can sandbox its own iframe, giving it an opaque ("null") origin whose URL still looks normal" —
-     and _dispatchDocument hands it over as `msg.origin`. Parsing the address instead re-fabricated the tuple origin
+     and analyze.js hands it over as `msg.origin`. Parsing the address instead re-fabricated the tuple origin
      the browser had already refused to give that document, and then STAMPED it on every message the document
      posts (hostNotice below), which is the one field a bundle's cross-origin check is written against.
      A document this zone provisioned itself carries the origin of the URL THIS zone fetched (hostNotice sets
@@ -1260,7 +1260,7 @@ self.kickHostPool = _hostKick;
    operation: the HOT engines leave the pool (hostSchedule breaks the moment it is empty, and an engine no
    longer in the pool is never stepped, never finalized and so never persists its residue), and the COLD tier
    is emptied. A document still waiting for a slot is REJECTED with "cleared", which is the exact error
-   _dispatchDocument reads to abandon its tail without recording a page-level failure. */
+   analyze.js reads to abandon its tail without recording a page-level failure. */
 async function frontierClear() {
   try {
     const db = await idbOpen();
@@ -1310,7 +1310,7 @@ self.astDispatch = async function astDispatch(msg) {
     /* AND IT ARRIVES CARRYING THE BROWSER'S NAME FOR IT. `admit` asks the pool whether an instance already
        holds this document before it builds one, which is what keeps the RESHIP re-delivery from putting two
        instances behind one principal — and a job with no documentId skips that question SILENTLY, seating a
-       second engine with nothing to say so. Every live document comes from _dispatchDocument, which reads the id off
+       second engine with nothing to say so. Every live document comes from analyze.js, which reads the id off
        the browser-provided sender; the two callers that legitimately have no browser document (a child
        navigable a peer engine announced, a rehydrated cold recipe) build their engine directly and never
        reach this line. */
@@ -1324,7 +1324,7 @@ self.astDispatch = async function astDispatch(msg) {
        its PRESENCE and not its value, because 0 is the top frame and `undefined` would read as one. */
     DCHECK(msg.groupId != null && msg.groupId !== "",
            "an AST_ANALYZE for a live document named no browsing-context group — an instance is its " +
-           "(group, origin) agent cluster, and _dispatchDocument carries the browser's sender.tab.id as the group");
+           "(group, origin) agent cluster, and analyze.js carries the browser's sender.tab.id as the group");
     DCHECK(typeof msg.origin === "string" && msg.origin !== "",
            "an AST_ANALYZE for a live document named no principal — the cluster's origin half is the browser's " +
            "MessageSender.origin (opaque-unique via _senderOrigin), and an empty one collapses every document " +
@@ -1335,7 +1335,7 @@ self.astDispatch = async function astDispatch(msg) {
            "an absent one is indistinguishable from frame 0");
     const persist = !!msg.persist;
     /* THE WAITER CARRIES BOTH SETTLERS. A Clear must be able to tell a document that was never seated that its
-       analysis is not coming, and "cleared" is the exact error _dispatchDocument reads to abandon its tail without
+       analysis is not coming, and "cleared" is the exact error analyze.js reads to abandon its tail without
        recording a page-level failure — resolving it with a plausible empty result instead would report the
        wiped page as analysed and clean. */
     const result = await new Promise((resolve, reject) => { _waiting.push({ code, html, msg, persist, resolve, reject }); _hostKick(); });

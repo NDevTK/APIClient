@@ -15,6 +15,16 @@
  * (JS_FlowNew/JS_FlowResume) under forced preemption — every loop back-edge parks and rebuilds the heap-frame
  * chain — so a Headers iteration that suspends mid-walk is exercised by the same run that checks its answer.
  *
+ * AND THE EXECUTION MODEL IT RUNS IS THE PRODUCT'S, WHICH IS A STRONGER STATEMENT AND IS TRUE OF HALF OF THIS
+ * FILE SO FAR. Parking a frame is not the same thing as being scheduled: a `while (JS_FlowResume)` exercises
+ * the park-and-rebuild machinery while the SCHEDULER never runs, so a gate built on one measures a model the
+ * product does not have. The CHILD DOCUMENT — this process re-executed for a cross-origin navigable — is on
+ * the one scheduler: engine_sched_begin seeds its document's scripts on the frontier, engine_sched_step is the
+ * only thing that enters JS, engine_route attaches a delivery to every live timeline and engine_perform makes a
+ * peer's operation a program of each of them. The TOP-LEVEL half still drives its programs itself and still
+ * pumps quickjs's global job list; run_program names the two scheduler capabilities that stand between it and
+ * the same treatment, and the top-level flow it fabricates in main() names itself.
+ *
  * The files are given in load order: resources/testharness.js, the test, then an epilogue this runner supplies
  * that registers a completion callback and calls done(). Results come out as one @WPT line per subtest, which
  * the driver reads. */
@@ -445,21 +455,18 @@ static bool wpt_drain_owed(JSContext *ctx)
 /* Report the pending exception. JS_ToCString would run the thrown object's own `toString` from C — which is
    the drive-to-completion the engine aborts on, and did abort on here, so the report of a failure became a
    crash that hid it. JS_DiagCString is the engine's answer for a host with no flow to run page code on. */
-/* Report a THROWN VALUE the caller already holds. Split from the pending-exception form below because a
-   program's completion is now taken by its caller — a test file's throw is a failure to report, and a
-   cross-agent operation's throw is its ANSWER, and only the caller knows which of the two it has. */
-static void wpt_report_thrown(JSContext *ctx, const char *name, const char *what, JSValueConst e)
-{
-    char *owned = NULL;
-    const char *msg = JS_DiagCString(ctx, e, &owned);
-    fprintf(report_out(), "@WPTERR %s: %s%s\n", name, what, msg ? msg : "?");
-    JS_DiagFreeCString(ctx, msg, owned);
-}
-
+/* THE PENDING EXCEPTION, REPORTED. The `wpt_report_thrown` half that used to stand beside this — a thrown value
+   the caller already held — existed for exactly one caller, the cross-agent operation whose throw is its ANSWER
+   rather than a failure; that operation is performed by the scheduler now (flow_answer_perform encodes the
+   completion with its type), so the split has nothing left on the other side of it and goes with it. */
 static void wpt_report_exception(JSContext *ctx, const char *name, const char *what)
 {
     JSValue e = JS_GetException(ctx);
-    wpt_report_thrown(ctx, name, what, e);
+    char *owned = NULL;
+    const char *msg = JS_DiagCString(ctx, e, &owned);
+
+    fprintf(report_out(), "@WPTERR %s: %s%s\n", name, what, msg ? msg : "?");
+    JS_DiagFreeCString(ctx, msg, owned);
     JS_FreeValue(ctx, e);
 }
 
@@ -645,17 +652,23 @@ static char *wpt_get_csp(const char *url, size_t *plen, char **pcsp);
    engine may not name for itself: it is what a routed message is stamped with. `line` is modified in place. */
 static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin);
 
-/* Relay one message to whichever instance holds `doc` — a child, or this process's own document. */
-static void wpt_route_post(JSContext *ctx, const char *doc, const char *world, const char *from_origin,
-                           const char *target_origin, const char *b64)
+/* Relay one message to whichever instance holds `doc` — a child, or this process's own document.
+   `record` is the emitting engine's notice VERBATIM. It used to be taken apart here and written back out in a
+   shape of this host's own — the doc field dropped, the sender origin spliced into its place — which is
+   window_message.c's grammar restated where nothing can check it against the writer, and it is also what made
+   the receiving side unable to use the engine's own entry for it. The zone's job is to ROUTE the record and to
+   STAMP the origin the emitting engine may not name for itself (SECURITY.md); the origin therefore travels
+   BESIDE the record rather than inside it, and the record crosses untouched. */
+static void wpt_route_post(JSContext *ctx, const char *doc, const char *record, const char *from_origin,
+                           const char *world, const char *target_origin, const char *b64)
 {
     ChildDoc *c = wpt_child_for(doc);
 
     if (c) {
-        size_t cap = strlen(world) + strlen(from_origin) + strlen(target_origin) + strlen(b64) + 64;
+        size_t cap = strlen(from_origin) + strlen(record) + 16;
         char *op = malloc(cap);
         CHECK(op != NULL, "wpt: OOM routing a message to a child document");
-        snprintf(op, cap, "windowproxy.post\t%s\t%s\t%s\t%s", world, from_origin, target_origin, b64);
+        snprintf(op, cap, "post\t%s\t%s", from_origin, record);
         wpt_child_ask(c, op);   /* a bare ack; nothing is asked of the receiver */
         free(op);
         return;
@@ -685,7 +698,12 @@ static void wpt_route_post(JSContext *ctx, const char *doc, const char *world, c
 static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin)
 {
     char *f[7]; int nf = 0; char *q;
+    /* THE RECORD THE EMITTING ENGINE WROTE, kept whole before this router takes it apart. The split below
+       writes NULs into `line`, and a routed post crosses to its instance VERBATIM — the receiving engine's own
+       entry parses it, so a rejoin of the fields here would be this host restating a grammar it does not own. */
+    char *whole = strdup(line);
 
+    CHECK(whole != NULL, "wpt: OOM keeping a host notice whole");
     /* THE SPLIT STOPS AT THE LAST FIELD AND KEEPS THE REMAINDER VERBATIM, because the last field of a
        navigable.create IS a raw CSP header and HTTP allows HTAB inside one. */
     for (q = line, f[nf++] = q; *q && nf < 7; q++)
@@ -695,15 +713,18 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
            policy container does: the child's environment is decided by the operation that created it, and the
            instance that will host the child has no way to derive it. */
         wpt_spawn_child(f[1], f[3], f[4], f[6], f[5]);
+        free(whole);
         return;
     }
     /* `windowproxy.post <target doc> <world> <target origin> <base64>` — §9.4.4 across instances. THE ORIGIN
        IS STAMPED HERE, by the zone that knows who sent it: the engine may not name its own sender
        (SECURITY.md), so the notice carries none and this adds the one it knows. */
     if (nf == 5 && !strcmp(f[0], "windowproxy.post")) {
-        wpt_route_post(ctx, f[1], f[2], from_origin, f[3], f[4]);
+        wpt_route_post(ctx, f[1], whole, from_origin, f[2], f[3], f[4]);
+        free(whole);
         return;
     }
+    free(whole);
     DFAIL("a host notice reached the router under an operation it does not route — a notice this host drops is "
           "a capability the engine emitted for and nothing performs, which is invisible at the emitting end");
 }
@@ -774,7 +795,20 @@ static bool wpt_answer_host_requests(JSContext *ctx)
                                   "asking its PARENT, which is the reverse direction of a transport that has "
                                   "only one: a child answers, it never initiates");
                 if (c) {
-                    const char *answer = wpt_child_ask(c, rec);
+                    /* THE ZONE'S RENDEZVOUS TOKEN travels with the operation, because the instance that
+                       performs it answers by EMITTING a completion that names one (engine.h's engine_perform)
+                       rather than by returning a value to whoever called it. This channel carries one question
+                       at a time, so the asking request's own id is a token that cannot collide on it — and it
+                       is minted HERE, by the zone, for the reason engine_perform gives: a request id is unique
+                       only inside the instance that minted it, and two peers may hand this one the same
+                       number. */
+                    size_t opcap = strlen(rec) + 32;
+                    char *ask = malloc(opcap);
+                    const char *answer;
+                    CHECK(ask != NULL, "wpt: OOM asking a child document to perform an operation");
+                    snprintf(ask, opcap, "op\t%lu\t%s", (unsigned long)id, rec);
+                    answer = wpt_child_ask(c, ask);
+                    free(ask);
                     if (answer) {
                         /* THE ANSWER'S GRAMMAR IS remote_object.c's, in both processes and both directions —
                            an object name says WHICH agent's namespace it is in, so a name that came home
@@ -986,50 +1020,42 @@ static void wpt_derive_addresses(int argc, char **argv)
 
 /* Run one program as a FLOW, exactly as the test262 harness does: park and rebuild the whole frame chain at
    every back-edge. */
-/* Run one program as a flow and KEEP ITS COMPLETION. A member read answered on behalf of another document is a
-   program like any other and must run as a flow like any other: reading `self.length` from C would reach the
-   getter with no flow base under it, which is the one thing this engine refuses.
-   IT HANDS BACK THE COMPLETION, NOT A RESULT AND A REPORT. `*pres` is the value the program completed with —
-   its result, or the THROWN VALUE when the return is 1 — and it is owned by the caller either way. This used
-   to report the throw here and answer `undefined`, which is right for a test file and WRONG for a peer
-   answering a cross-agent operation: there the throw IS the answer and has to cross as one. A program that
-   does not compile completes abruptly with the SyntaxError, which is the same shape and says so in its own
-   message. */
-static int run_program_value(JSContext *ctx, const char *src, size_t len, const char *name, JSValue *pres)
+/* THE TOP-LEVEL DOCUMENT'S PROGRAM DRIVER, AND THE ONE DRIVE-TO-COMPLETION LEFT IN THIS FILE. It is not what a
+ * program is in this engine — a program is a work item on the ONE frontier, ranked, preemptible and parkable at
+ * any depth — and every yield `JS_FlowResume` reports here is handed straight back to the same program by the
+ * next iteration, so the flow machinery's park-and-rebuild runs while the SCHEDULER never does.
+ *
+ * THE CHILD DOCUMENT NO LONGER USES IT: wpt_child_main runs its document's scripts, its deliveries and the
+ * programs that answer a peer's operations through engine_sched_begin/engine_sched_step, which is the same
+ * scheduler main.c and test_forced.c drive. Two things stand between THIS half and that, and neither is a
+ * decision — both are capabilities the scheduler does not have yet, and each is checkable in one line:
+ *   - the session's program sequence is compiled in ONE realm (flow_step's JS_FlowNew takes the session's
+ *     ctx), and this host queues programs belonging to a CHILD REALM's document (wpt_queue_program), which has
+ *     no way onto the frontier;
+ *   - the host's reply seam names a URL and nothing else (engine_pending_urls / engine_provide), and the
+ *     corpus asks this host for POSTs whose answer depends on the BODY it sent — so a fetch parked on the
+ *     frontier could not be answered correctly, which is why this half still owes its replies through g_owed.
+ * A `while (JS_FlowResume)` per program is what the absence of those two costs, and it is stated here rather
+ * than left to be rediscovered from the shape of the loop. */
+static int run_program(JSContext *ctx, const char *src, size_t len, const char *name)
 {
     JSValue *flow;
     JSValue res = JS_UNDEFINED;
 
-    DCHECK(pres != NULL,
-           "a program was run with nowhere to place its completion — a throw would be left pending on the "
-           "context and surface at whatever asked the engine for anything next");
-    *pres = JS_UNDEFINED;
     flow = JS_FlowNew(ctx, src, len, name, JS_EVAL_TYPE_GLOBAL);
     if (!flow) {
-        *pres = JS_GetException(ctx);
+        wpt_report_exception(ctx, name, "");
         return 1;
     }
     while (JS_FlowResume(ctx, flow, &res)) { wpt_answer_host_requests(ctx); }
     if (JS_IsException(res)) {
-        *pres = JS_GetException(ctx);
+        wpt_report_exception(ctx, name, "");
         JS_FlowFree(ctx, flow);
         return 1;
     }
-    *pres = res;
+    JS_FreeValue(ctx, res);
     JS_FlowFree(ctx, flow);
     return 0;
-}
-
-/* A PROGRAM WHOSE THROW IS A FAILURE — a test file, the harness, a document's own script. That is a judgement
-   about this caller's program and not a property of running one, which is why it lives here. */
-static int run_program(JSContext *ctx, const char *src, size_t len, const char *name)
-{
-    JSValue completion = JS_UNDEFINED;
-    int failed = run_program_value(ctx, src, len, name, &completion);
-
-    if (failed) wpt_report_thrown(ctx, name, "", completion);
-    JS_FreeValue(ctx, completion);
-    return failed;
 }
 
 static lxb_html_document_t *g_wpt_dom;   /* the runner's parsed document */
@@ -1088,11 +1114,13 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
        input: the spec answers that with a ReferenceError, and the corpus tests exactly that. */
     concolic_install_hooks();
     /* THE SOLVER FRONTIER, because a member that SUSPENDS parks on a flow's pending register and that register
-       is the frontier's. This runner drives quickjs flows (JS_FlowNew/JS_FlowResume) but had no solver flow at
-       all, so §7.4's open() aborted on "issued outside a flow" — correctly. One flow, set running for the whole
-       run: this harness exercises components, and the BFS that would rank many of them is the engine's. */
+       is the frontier's. WHAT IS IN IT IS THE SCHEDULER'S — engine_sched_begin seeds it and asserts that it
+       finds it empty, so an agent init that put a flow there could never be the agent of a session. This one
+       did: it added ONE flow and left it switched in for the whole run, which is what let every drive-to-
+       completion loop in this file exist without anything crashing — flow_running() answered a flow that ran
+       nothing and parked never. A host that fabricates the scheduler's state is a second scheduler with the
+       loop left out. */
     flow_registry_init(doc_name);
-    flow_set_running(flow_add(ctx, JS_UNDEFINED, WORLD_NONE));
     /* THE DOM CHOKEPOINT'S CONTEXT. §4.2.3's insertion and removing steps are fired from the solver's tree
        chokepoint, which needs the runtime they run in — and this runner never named one, so it ran NONE of
        them: no <script> preparation, no custom-element upgrade, no §4.8.5 child navigable. It failed
@@ -1304,54 +1332,80 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
  * it answers, materializing it by forking the nearest ancestor this instance already holds. That matters for a
  * READ and is what makes a WRITE possible at all — two arms of one fork writing through one reference are two
  * timelines, and a peer that performed both against one baseline would build a third neither arm was in. */
-/* The foreign world's segment currently INSTALLED in this instance — the child's answer to "which flow is
-   running", because its serve loop is its scheduler. */
-static CowDelta *g_cur_seg;
-
-/* THE CONTEXT SWITCH, done in this host because this serve loop IS this instance's scheduler: unapply whatever
-   world the last answer ran under, install this one's segment, answer, and leave it installed for the next
-   question — the same "move only as far as the two differ" the engine's own switch does.
-   THE WORLD ARRIVES WITH ITS ANCESTRY and both are used. A world minted in another document has a segment here
-   only if a flow of that world has written here; the ancestry is what makes the segment inherit what the flow's
-   ANCESTORS wrote, by forking the nearest one this instance already holds. Without it every cross-document
-   operation would answer from a baseline the asking flow left behind — which is not a stale answer, it is a
-   different timeline. It is what makes a WRITE tractable at all: two arms of a fork writing through one
-   reference are two timelines, and one baseline for both would be a third neither arm was in. */
-static void wpt_child_install_world(JSContext *ctx, WorldId w, const WorldId *anc, int n_anc)
-{
-    CowDelta *seg;
-
-    if (world_is_none(w)) return;
-    seg = world_segment(ctx, w, anc, n_anc);
-    if (seg == g_cur_seg) return;
-    cow_unapply(ctx, g_cur_seg);
-    g_cur_seg = seg;
-    cow_set_current(seg);
-    cow_apply(ctx, seg);
-}
-
 /* WHAT AN OPERATION IS — its verb, its field layout, its operands and the program that performs it — is NOT
    here any more, and that is the point of the file it moved to. It was written out in this serve loop, where
    the production ABI entry could not reach it, so the shipped engine had a sender with no receiver; a second
    copy written for that entry would have been two spellings of one grammar. core/frame/remote_op.h.
-   WHAT STAYS IS THIS HOST'S OWN: the channel it speaks (one line in, one line out), the world switch its serve
-   loop performs because that loop IS this instance's scheduler, and its driver for running a program. */
+   AND NEITHER IS THE WORLD SWITCH, WHICH WAS THE REST OF THE SECOND SCHEDULER. This loop used to unapply the
+   last answer's segment and apply the new one itself, "because this serve loop IS this instance's scheduler" —
+   which is exactly the sentence that had to stop being true. engine_route and engine_perform materialize the
+   asking world's segment where they attach the record, flow_deliver and flow_perform ask again at the moment
+   the work actually runs, and the switch between timelines is flow_switch_in/out's, once, for every kind of
+   work. What is left here is this host's own: the CHANNEL it speaks (one line in, one line out) and the
+   ROUTING of what arrives on it. */
 
 /* A CHILD CANNOT INITIATE, so its notices ride back on the answer pipe prefixed `N\t` and the parent's router
-   takes them from there. Drained before every answer, because the answer is the only moment this instance is
-   allowed to speak — a notice held past it waits for the next question that may never come. */
-static void wpt_child_emit_notices(void)
+   takes them from there. Drained after every step, because a notice held is a delivery its target instance has
+   not been told about — and because one of them is not a notice at all: `remoteop.answer` is the COMPLETION of
+   the operation this channel asked for, so it leaves as the answer LINE. It is recognised by its rendezvous
+   TOKEN and not by being the only one of its kind: a document's state is its flows, so a document with N
+   timelines answers N times, and a second answer arriving for one question is a real thing this channel cannot
+   yet carry rather than something to overwrite the first with. */
+static char *g_child_answer;   /* the completion for the token in flight, owned here until it is written */
+
+static void wpt_child_emit_notices(const char *token)
 {
     const char *notices = engine_host_notices();
     const char *p;
 
     for (p = notices; *p; ) {
         const char *end = strchr(p, '\n');
+        size_t n;
         if (!end) break;
+        n = (size_t)(end - p);
+        if (token && !strncmp(p, "remoteop.answer\t", 16)) {
+            const char *tok = p + 16;
+            const char *tab = memchr(tok, '\t', n - 16);
+            DCHECK(tab != NULL, "a cross-agent operation's answer carried no completion after its token — the "
+                                "channel would relay a rendezvous with nothing in it and the asking flow would "
+                                "park on a question it has already been answered");
+            if (tab && (size_t)(tab - tok) == strlen(token) && !memcmp(tok, token, strlen(token))) {
+                DCHECK(g_child_answer == NULL,
+                       "a second completion arrived for one cross-agent operation — this document has more than "
+                       "one timeline and every one of their answers is true, so the channel that asked has to "
+                       "be able to carry N of them: build the multi-answer reply before a peer may fork here");
+                g_child_answer = strndup(tab + 1, n - (size_t)(tab + 1 - p));
+                CHECK(g_child_answer != NULL, "wpt: OOM keeping a cross-agent operation's completion");
+                p = end + 1;
+                continue;
+            }
+        }
         fputs("N\t", stdout);
-        fwrite(p, 1, (size_t)(end - p), stdout);
+        fwrite(p, 1, n, stdout);
         fputc('\n', stdout);
         p = end + 1;
+    }
+}
+
+/* THIS HOST'S LOOP OVER THE ONE SCHEDULER — a host with nothing else to do between quanta, which is what
+   engine.h says a driver like this is: the state machine is unchanged and a quantum boundary is invisible to
+   it. It is not a second scheduler and it is not a drive-to-completion: every program this instance runs (its
+   document's scripts, a delivery's task, the program that performs a peer's operation) is a work item on the
+   ONE frontier, preemptible and parkable at any depth, and this only hands the thread over and takes it back.
+   IT ENDS AT THE STALL AND NEVER AT DONE. A document a peer holds a reference into may not run out of
+   timelines (engine.h's engine_set_referenced), so its frontier is never exhausted — it stalls, waiting for
+   the next thing to arrive on this channel, which is precisely where the thread belongs. */
+static void wpt_child_run(const char *token)
+{
+    for (;;) {
+        int r = engine_sched_step();
+        wpt_child_emit_notices(token);
+        if (r == ENGINE_STEP_YIELD) continue;
+        DCHECK(r == ENGINE_STEP_STALLED,
+               "the scheduler declared this instance's frontier EXHAUSTED — a document another agent holds a "
+               "reference into has no such state, so either engine_set_referenced was not set for it or the "
+               "session was closed while a peer could still ask it something");
+        return;
     }
 }
 
@@ -1368,6 +1422,10 @@ static int wpt_child_main(int argc, char **argv)
     char *html = NULL;
     size_t html_n = 0;
     char line[65536];   /* a routed message rides this channel base64'd — see windowproxy.post below */
+    /* THE SESSION'S PROGRAM SEQUENCE, which outlives every statement in this function: the scheduler BORROWS
+       these arrays for the life of the session (engine_sched_begin), so a document's scripts may not be a
+       block-scoped temporary the way they were when this host ran them itself. */
+    DocScripts ds;
 
     (void)csp;
     /* THE ANSWER PIPE IS STDOUT HERE, so nothing else may write to it — see report_out. */
@@ -1399,106 +1457,110 @@ static int wpt_child_main(int argc, char **argv)
     ctx = wpt_build_document(name, origin, top_level_url, html, html_n);
     free(html);
 
-    JS_SetFlowControlHooks(&WPT_HOOKS_ON);
+    /* THIS INSTANCE EXISTS BECAUSE A PEER CREATED ITS NAVIGABLE and still holds a WindowProxy for it, so its
+       timelines may not run out — engine.h's engine_set_referenced, and the reason this line comes before the
+       session rather than after it. Without it the one flow below finishes with its last script, the frontier
+       drains, the session closes, and the first thing a peer asks arrives at a document with no timeline to
+       answer in. Stated by the HOST because provisioning is the host's fact: the engine cannot see its own
+       embedder. */
+    engine_set_referenced(1);
 
     /* THE TWO INTRINSICS A PEER PERFORMS A WRITE AND A CALL THROUGH are captured by the component that performs
        them, at this realm's install — before this document's scripts run, which is the whole of what makes them
        intrinsics rather than whatever the page has left on `Reflect`. There is nothing for this host to do. */
 
+    /* THIS DOCUMENT'S SCRIPTS ARE THE SESSION'S PROGRAM SEQUENCE, and this host no longer runs them: it hands
+       them to the ONE scheduler and steps it. What that deletes is a `while (JS_FlowResume)` per script — a
+       drive-to-completion with the frontier bypassed, which is the one thing §scheduler forbids at every depth
+       and which this host had at the very top of every program it ran.
+       AN EXTERNAL SCRIPT IS FETCHED INTO ITS OWN SLOT, in position, because classic scripts run in document
+       order and one that did not load is a script that runs nothing rather than one that moves the others up.
+       (The engine's own answer for an external script is the docscript park — the flow waits and the host
+       fills the shared slot — and this host will use it the moment its network edge can carry a REQUEST rather
+       than a URL; today's `fetch` seam names only the URL, which cannot say which POST body a corpus handler
+       is being asked to echo.) */
+    ds = document_exec_scripts(g_wpt_dom);
     {
-        DocScripts ds = document_exec_scripts(g_wpt_dom);
         int i;
         for (i = 0; i < ds.n; i++) {
-            if (ds.bodies[i]) run_program(ctx, ds.bodies[i], strlen(ds.bodies[i]), g_base_url);
-            else if (ds.srcs[i]) {
+            if (ds.bodies[i] || !ds.srcs[i]) continue;
+            {
                 size_t len = 0;
                 char *body = wpt_get(ds.srcs[i], &len);
-                if (!body) continue;
-                run_program(ctx, body, len, ds.srcs[i]);
-                free(body);
+                ds.bodies[i] = body ? body : strdup("");
+                CHECK(ds.bodies[i] != NULL, "wpt: OOM loading a child document's external script");
             }
         }
-        doc_scripts_free(&ds);
     }
+    engine_sched_begin(ctx, ds.bodies, ds.srcs, ds.n, /*forking*/0, NULL);
+    /* THE DOCUMENT RUNS BEFORE THE FIRST QUESTION ARRIVES, which is what makes a child a participant rather
+       than an empty frame — message-opener.html's whole body is one script that posts to its opener, and that
+       post has to be on this channel before the parent asks anything. */
+    wpt_child_run(NULL);
 
     while (fgets(line, sizeof line, stdin)) {
         char *nl = strchr(line, '\n');
         /* A RECORD THAT DID NOT FIT arrived as two, and the tail would then be read as an operation of its own.
            The channel is line-oriented, so the only safe answer to a truncated read is to stop. */
         CHECK(nl != NULL || feof(stdin), "wpt: a cross-instance record was longer than this child's line buffer");
-        JSValue v = JS_UNDEFINED;
-        WorldId w = WORLD_NONE, anc[16];
-        char *enc;
-        int n_anc = 0, completion = ENGINE_COMPLETION_NORMAL;
-        /* `windowproxy.post <world> <sender origin> <target origin> <base64 bytes>` — §9.4.4 step 7 arriving
-           from another instance. It is not an operation: nothing is asked of this document, a delivery is MADE
-           to it, so it carries no target document and its vector is the FIRST field. THIS ONE IS THE CHANNEL'S,
-           which is why it is split here: the parent rewrote the engine's record to insert the sender origin
-           only it may state, so the record on this pipe is this host's own framing and not the engine's. */
-        int is_post = !strncmp(line, "windowproxy.post\t", 17);
+        char *answer;
+        /* THE CHANNEL'S TWO SHAPES, and only the first field is this host's — everything after it is the
+           EMITTING ENGINE'S RECORD, verbatim, handed to the entry that reads it. The zone contributes exactly
+           the two things a record may not carry itself: the SENDER'S ORIGIN, which only the trusted zone may
+           state (SECURITY.md), and the RENDEZVOUS TOKEN, which is the zone's because a request id is unique
+           only inside the instance that minted it.
+             `post <sender origin> <record>`  — §9.4.4 step 7 arriving. Nothing is asked; a delivery is MADE.
+             `op <token> <record>`            — a cross-agent operation this document is asked to perform. */
+        int is_post = !strncmp(line, "post\t", 5);
+        int is_op   = !strncmp(line, "op\t", 3);
+        char *f1, *rec;
 
         if (nl) *nl = 0;
+        CHECK(is_post || is_op, "wpt: a record arrived on a child's channel under a verb it does not carry");
+        f1 = line + (is_post ? 5 : 3);
+        rec = strchr(f1, '\t');
+        CHECK(rec != NULL, "wpt: a record arrived on a child's channel with no engine record after the "
+                           "transport's own field");
+        *rec++ = 0;
+        DCHECK(g_child_answer == NULL,
+               "a completion for the previous question was never written to this channel — the parent is "
+               "blocked on a line that is not coming");
         if (is_post) {
-            char *f[5], *q;
-            int nf = 0;
-            /* THE LAST FIELD KEEPS THE REMAINDER VERBATIM: it is base64 and carries no tab, but stopping the
-               split at the last field is what makes that a property of the reader rather than a hope. */
-            for (q = line, f[nf++] = q; *q && nf < 5; q++)
-                if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
-            CHECK(nf == 5, "wpt: a routed message arrived with fewer fields than §9.4.4's delivery carries");
-            n_anc = world_parse(f[1], &w, anc, (int)(sizeof anc / sizeof anc[0]));
-            wpt_child_install_world(ctx, w, anc, n_anc);
-            /* THE DELIVERY, under the world just installed, and taken apart by the file that WROTE the record.
-               The decode and the sender-document split were done here by hand, which is window_message.c's
-               grammar restated where nothing can check it against the writer; the head of the world vector
-               names the sender, so world_parse above already answered that too. */
-            {
-                size_t cap = strlen(f[3]) + strlen(f[4]) + 2;
-                char *tail = malloc(cap);
-
-                CHECK(tail != NULL, "wpt: OOM receiving a routed message");
-                snprintf(tail, cap, "%s\t%s", f[3], f[4]);
-                window_message_route(ctx, tail, world_doc_name(w.doc), f[2]);
-                free(tail);
-            }
-            /* THE TASK IS ENQUEUED, NOT RUN: the scheduler is what runs it, and entering it is what a turn of
-               this loop does. An empty program is that turn — it drains the posted-message task source the way
-               any other turn would, rather than this host driving the delivery itself. */
-            run_program(ctx, "", 0, "<routed message>");
-            /* THE ACK IS A COMPLETION TOO. Nothing is asked of a delivery, so it is the normal completion of
-               `undefined` — written through the one encoder so this pipe has ONE grammar rather than one for
-               the answers and a bare `u` for this. */
+            /* NOTHING RUNS INSIDE THIS CALL. The record becomes a work item of every live timeline of this
+               document, and each of them makes its own delivery when the scheduler next runs it, under its own
+               delta — which is the whole reason the delivery is attached rather than performed: the page's
+               `message` listener was registered by a script, so it lives in the delta of the flow that ran that
+               script and nowhere else. This host used to take the record apart itself, route the payload, and
+               then run an EMPTY PROGRAM to completion as a way of turning the task queue over. */
+            engine_route(ctx, rec, f1);
+            wpt_child_run(NULL);
+            /* THE ACK IS THE TRANSPORT'S, not a program's completion: nothing was asked, so there is nothing
+               for a timeline to answer. It is written through the one encoder so this pipe has ONE grammar
+               rather than one for the answers and a bare `u` for this. */
+            answer = remote_completion_encode(ctx, ENGINE_COMPLETION_NORMAL, JS_UNDEFINED);
         } else {
-            /* WHAT IS BEING PERFORMED is the component's, not this host's — core/frame/remote_op.h. What is
-               left here is running it, which is this host's driver, and the world switch, which is this loop's
-               because this loop IS this instance's scheduler. */
-            RemoteOp *op = remote_op_parse(line);
-            const char *prog;
-
-            n_anc = world_parse(remote_op_worlds(op), &w, anc, (int)(sizeof anc / sizeof anc[0]));
-            wpt_child_install_world(ctx, w, anc, n_anc);
-            prog = remote_op_program(ctx, op);
-            /* THE THROW IS THE ANSWER. The peer performs every operation by running a program — an IDL
-               accessor, the page's setter, the page's function — and a program that throws has completed just
-               as truly as one that returned. It is NOT reported as this instance's error: it is encoded with
-               its completion type and raised in the flow that asked, at the line that asked, so that page's
-               own `try`/`catch` runs. The thrown value crosses by the ordinary rules, so an Error object
-               crosses as a NAME and the catch clause holds a reference to THIS instance's Error. */
-            completion = run_program_value(ctx, prog, strlen(prog), "<cross-agent operation>", &v)
-                         ? ENGINE_COMPLETION_THROW : ENGINE_COMPLETION_NORMAL;
-            remote_op_free(op);
+            /* A PEER ANSWERS BY RUNNING A PROGRAM, and the program is a FLOW on this instance's frontier — so
+               an answer that has to suspend can exist at all, and every other timeline of this document keeps
+               running while it does. What this host does is hand the operation over and step the scheduler
+               until it has nothing runnable; the completion arrives the way every other emission does, as a
+               notice naming the token, and wpt_child_emit_notices takes it off the stream.
+               THE THROW IS THE ANSWER and needs nothing here: flow_answer_perform encodes the completion with
+               its TYPE, so a peer's `try`/`catch` runs at the line that asked. */
+            engine_perform(ctx, f1, rec);
+            wpt_child_run(f1);
+            DCHECK(g_child_answer != NULL,
+                   "this instance stalled without answering the operation it was asked — every timeline it was "
+                   "attached to either finished without completing its program or is parked on something this "
+                   "host owes and does not know it owes; the asking flow is suspended at the line that asked");
+            answer = g_child_answer;
+            g_child_answer = NULL;
         }
-        enc = remote_completion_encode(ctx, completion, v);
-        JS_FreeValue(ctx, v);
-        wpt_child_emit_notices();
-        fputs(enc, stdout);
+        CHECK(answer != NULL, "wpt: OOM writing a completion to this child's channel");
+        fputs(answer, stdout);
         fputc('\n', stdout);
         fflush(stdout);
-        free(enc);
+        free(answer);
     }
-    cow_unapply(ctx, g_cur_seg);
-    cow_set_current(NULL);
-    JS_SetFlowControlHooks(&WPT_HOOKS_OFF);
     return 0;
 }
 
@@ -1556,6 +1618,15 @@ int main(int argc, char **argv)
        arriving before there is one is a message with nowhere to go. */
     g_wpt_ctx = ctx;
     rt = g_rt;
+
+    /* THE TOP-LEVEL DOCUMENT'S FLOW, FABRICATED — this half of the runner has not been converted to the one
+       scheduler yet, and this line is the whole of what stands in for it: a single flow, switched in for the
+       run, so that the program driver below and everything that asks flow_running() (a live fetch, a
+       synchronous host request, §7.4's open) has an answer. It is a scheduler's STATE with no scheduler, and
+       it cannot quietly survive one arriving: engine_sched_begin asserts the frontier is empty, so the first
+       session opened over this document crashes here rather than seeding a second timeline beside it. The
+       CHILD document below is on the real thing (engine_sched_begin/engine_sched_step) and does not have it. */
+    flow_set_running(flow_add(ctx, JS_UNDEFINED, WORLD_NONE));
 
     JS_SetFlowControlHooks(&WPT_HOOKS_ON);
     if (g_html_mode) {

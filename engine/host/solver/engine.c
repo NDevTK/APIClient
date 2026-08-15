@@ -130,6 +130,12 @@ void engine_pending_script_url(JSContext *ctx, const char *url) {
 /* THE SESSION'S SCRIPT SEQUENCE — the document's own scripts in order. Entry i is inline (bodies[i] is its text)
    or external (srcs[i] is its URL and bodies[i] is filled when the host replies). Declared here because the
    pending DRAIN writes into it: an external script's text is the DOCUMENT's, shared by every flow. */
+/* A PEER HOLDS A REFERENCE INTO THIS DOCUMENT — see engine.h's engine_set_referenced. It is a property of the
+   INSTANCE and not of a session, so it is set once by the host that provisioned this instance and survives
+   every session boundary; it is read by flow_step (a timeline that may not finish) and by the slice (a
+   frontier that may not be declared exhausted), which are the two halves of one statement. */
+static int g_referenced;
+
 /* The browser layer's document-load lifecycle, asked when a flow has run everything the document gave it. */
 static int (*g_docdone_hook)(JSContext *ctx);
 void engine_set_document_done_hook(int (*fn)(JSContext *ctx)) { g_docdone_hook = fn; }
@@ -1561,6 +1567,12 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                    like a page that registered no handler. Asserted at the one place "finished" is decided. */
                 DCHECK(f->njob == 0, "a flow finished holding queued jobs — a promise reaction, a timer "
                                      "callback or a delivered message would be dropped with it");
+                /* …AND A FLOW OF A REFERENCED DOCUMENT MAY NOT FINISH AT ALL — engine.h's engine_set_referenced.
+                   Having nothing left to run is not being done when a peer can still ask this timeline
+                   something; it is waiting on the host for the next operation, which is exactly what OWED
+                   means. The flow keeps its snapshot, its delta and its rank and is out of the pick until the
+                   host has something for it. */
+                if (g_referenced) return FLOW_STEP_OWED;
                 return 1;   /* all scripts + chunks + microtask jobs + live fetches + load listeners done */
             }
             /* NULL ScriptOrModule name: an inline page script's name is the DOCUMENT's URL, which this host does
@@ -2013,6 +2025,8 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int f
 static int (*g_stall_hook)(void);
 void engine_set_stall_hook(int (*owed)(void)) { g_stall_hook = owed; }
 
+void engine_set_referenced(int referenced) { g_referenced = referenced; }
+
 static double g_yield_floor = -1.0 / 0.0;
 void engine_set_yield_floor(double w) { g_yield_floor = w; }
 
@@ -2393,6 +2407,13 @@ static int engine_sched_slice(void) {
        supply. Ask the one seam BEFORE closing — the session and every parked snapshot stay live, and the host
        steps again once it has provided. */
     if (g_stall_hook && g_stall_hook())
+        return ENGINE_STEP_STALLED;
+    /* AND THE OTHER REASON A FRONTIER IS NOT EXHAUSTED, which is not a reply the host owes but a QUESTION it
+       has not yet been asked: a document another instance holds a reference into can be asked something at any
+       moment, so its timelines are parked (flow_step returns OWED for them) rather than finished, and the
+       session stays live with every snapshot intact. Closing here instead would leave the next operation with
+       no timeline to answer in — which engine_perform's own assert names, from the other end. */
+    if (g_referenced)
         return ENGINE_STEP_STALLED;
     /* ASYNC-AS-FLOW forcing function: every flow has run to completion, so NO microtask/promise reaction may
        still be queued. If one is, the scheduler DROPPED it — the not-yet-built async-as-flow capability (a
