@@ -229,10 +229,17 @@ if (NATIVE) {
 
 // The exports the bridge ccalls. Emscripten drops anything not named here, so a function missing from this
 // list is a runtime "no such symbol" in the extension rather than a link error — the list IS the ABI.
+/* AND AN ENTRY MISSING FROM IT IS AN ENTRY THAT DOES NOT EXIST, which is the excluded-translation-unit defect
+   one layer in: main.c COMPILES and LINKS a body nothing can reach, so every gate that builds the entry stays
+   green while the shipped ABI is short of it. `qjs_perform` and `qjs_host_answer_remote` — the peer's half of
+   the cross-instance seam, the only entries by which one instance is ASKED to perform another's operation —
+   were written, linked and dropped here: emscripten internalises what this list does not name, so the two-
+   instance driver's ccall failed on a missing symbol before it reached a single assertion of its own. */
 const QJS_ABI = ["qjs_init", "qjs_bundle_id", "qjs_begin", "qjs_step", "qjs_result", "qjs_teardown",
                  "qjs_pending", "qjs_chunks", "qjs_provide", "qjs_top_weight", "qjs_set_yield_floor",
                  "qjs_request_park", "qjs_emit_partial",
-                 "qjs_host_requests", "qjs_host_answer", "qjs_host_notices", "qjs_route"];
+                 "qjs_host_requests", "qjs_host_answer", "qjs_host_notices", "qjs_route",
+                 "qjs_perform", "qjs_host_answer_remote"];
 
 /* COMPILE FLAGS AND LINK FLAGS ARE SEPARATED, and that separation is what lets both entries be verified.
    They used to be one list handed to one emcc invocation that compiled and linked together, which forced two

@@ -549,9 +549,14 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
      realm per same-origin document (main.c's `engine_child_realm`), so the document it was started from names
      it no more than a tree is named by its root. `groupId` is kept beside the key because a document this
      instance CREATES inherits its creator's browsing-context group and the key alone cannot be taken apart. */
+  /* `_remoteAsked` IS THIS INSTANCE'S OWN — the request ids of cross-agent operations already carried to the
+     peer that holds the object. It belongs to the engine and not to the zone's token map because the question
+     it answers is "has THIS instance's request already been asked", and an unanswered request is re-reported by
+     qjs_host_requests on every single step; asking again would perform the peer's operation — a program, with
+     the page's own side effects — once per step. */
   return { M, ptrs, lines, fkey, prior, msg, persist, fetched, fetchedDocument, fetchedXhr, code, html, state: "hot",
            docId: _docId, cluster: clusterKeyOf(msg), groupId: msg && msg.groupId,
-           origin: (msg && msg.origin) || "", _resolvers: [], _forceparkSteps };
+           origin: (msg && msg.origin) || "", _resolvers: [], _forceparkSteps, _remoteAsked: new Set() };
 }
 /* THE LEVEL-1 WFQ'S ONE INPUT. A NaN would order this engine against every other by a comparison that is
    false in both directions, so the pool's pick would depend on array order — a fairness invariant silently
@@ -608,6 +613,20 @@ function hostClusterOf(key) {
   for (const e of _pool) if (e.cluster === key) return e;
   return null;
 }
+
+/* THE RENDEZVOUS FOR A CROSS-AGENT OPERATION, and it is THIS ZONE'S because neither engine can hold it. The
+   asking instance knows only its own request id, which is unique inside that instance alone — two peers may
+   ask one holder the same number — and the holder must echo something back that says which instance and which
+   call site the completion belongs to. So the token is minted here, is opaque to both engines (main.c states
+   that at both entries), and carries nothing an untrusted engine could state for itself.
+   IT IS NOT DELETED WHEN THE FIRST COMPLETION ARRIVES, and that is the design rather than a leak. A peer
+   document's state IS its flows: the operation is performed by EVERY live timeline the holder has and each one
+   completes with its own answer, so one token names N completions and all of them are true. Relaying every one
+   is what makes the asking engine's own assert — engine_host_answer's, which names the fork the asking flow
+   still owes — reachable at all; dropping the second here would hide the missing half in this zone instead.
+   One entry per operation that actually crossed, dropped with the instance that asked (engineFinalize). */
+const _remoteOps = new Map();   // token -> { asker, req }
+let _nextRemoteToken = 1;
 
 /* WHAT THIS ZONE OWES A ONE-WAY NOTICE. Two ops today, and each is an ACTION only this zone can take —
    SECURITY.md makes the offscreen the only zone that knows which instance holds which document.
@@ -708,6 +727,34 @@ async function hostNotice(eng, line) {
     target.M.ccall("qjs_route", "void", ["string", "string"], [line, stampOrigin(eng.origin)]);
     return;
   }
+  /* `remoteop.answer <token> <completion>` — a COMPLETION this instance produced for an operation it was asked
+     to perform, naming the token this zone minted. It leaves as a NOTICE and not as a return value because a
+     peer answers BY RUNNING A PROGRAM (an IDL getter, a page's setter, a page's function) as a flow on its own
+     frontier, so the answer does not exist when qjs_perform returns and may be parked behind anything else that
+     frontier is doing.
+     RELAYED VERBATIM AND UNREAD. The completion is in remote_object.c's grammar, not JSON, because a member
+     whose value is an OBJECT crosses as a NAME in the answering agent's namespace — which means nothing outside
+     an engine, and which JSON could only either serialize (returning something that is not the thing) or drop.
+     This zone routes text; only an engine knows what a name means, so the remainder is kept whole rather than
+     re-joined field by field on a grammar this file does not own. */
+  if (f[0] === "remoteop.answer") {
+    DCHECK(f.length >= 3, "a remoteop.answer notice was short of its fields — the engine writes the rendezvous " +
+                          "token and the completion record, and a notice missing either names no call site");
+    const to = _remoteOps.get(f[1]);
+    /* A TOKEN THIS ZONE DID NOT MINT names no asker, and the answer is then unroutable: the flow that asked is
+       parked on a completion that will never arrive, which is silent everywhere. It is this zone's own key, so
+       an unknown one means the holder echoed something other than what it was handed. */
+    DCHECK(to !== undefined, "a peer answered a cross-agent operation under a rendezvous token this zone never " +
+                             "minted — the token is echoed verbatim by the instance that performed it, so the " +
+                             "flow that asked is parked on an answer nothing can deliver");
+    const _t2 = line.indexOf("\t", line.indexOf("\t") + 1);
+    DCHECK(_t2 > 0, "a remoteop.answer notice carried no completion record — an empty answer is not " +
+                    "`undefined`, it is a relay that lost the peer's completion, and the engine's own decoder " +
+                    "says so at the other end");
+    if (!to || _t2 < 0) return;
+    to.asker.M.ccall("qjs_host_answer_remote", "void", ["number", "string"], [to.req, line.slice(_t2 + 1)]);
+    return;
+  }
   DFAIL("an engine emitted a notice with an op this zone does not act on — the engine's half is built, so the " +
         "host's half is the unbuilt one: `" + f[0] + "`");
 }
@@ -752,6 +799,41 @@ async function engineServiceHostRequests(eng) {
        flow is gone", which would be a lie). */
     DCHECK(Number.isInteger(id) && id > 0,
            "an owed host request carries no usable id — an answer is routed by that number alone");
+    /* A CROSS-AGENT OPERATION IS NOT ANSWERED BY THIS ZONE AT ALL — it is ASKED OF A PEER, which is the one
+       shape neither of the two branches below has. §7.2.5.1's `otherW.length` is the child-navigable count of
+       the PEER's active document and the four internal methods a lent object performs ([[Get]], [[Set]],
+       [[Delete]], [[Call]]) run the peer's own code, so an answer computed here would be this document's frames
+       reported as the other's, or a write that never happened. This zone does the one thing only it can:
+       SECURITY.md makes the offscreen the only zone that knows which instance holds which document, so it
+       carries the record there and carries the completion back.
+       A PREFIX AND NOT A LIST, so an operation added to remote_object.c reaches its instance with nothing here
+       to remember: every one of them names its target document in the same field and differs only in what the
+       peer resolves, never in who resolves it.
+       NOTHING IS ANSWERED INSIDE THE ASK. The peer answers BY RUNNING A PROGRAM as a flow on its own frontier,
+       so the completion arrives later through that instance's notices (hostNotice above) — which is also what
+       lets the answer suspend, park and resume like every other flow instead of blocking this zone. */
+    if (op.startsWith("windowproxy.get\t") || op.startsWith("object.")) {
+      /* AN UNANSWERED REQUEST IS RE-REPORTED EVERY STEP (engine_host_requests deliberately does not dedupe:
+         two identical questions from two flows are two questions), so asking on every sighting would perform
+         the peer's operation once per step forever — each one a program with the page's own side effects. */
+      if (eng._remoteAsked.has(id)) continue;
+      const holder = hostHolderOf(op.split("\t")[1]);
+      /* NOT A SLOW ANSWER, A MISSING INSTANCE: the navigable.create notice naming that document was dropped,
+         or the instance holding it was finalized while a peer still held a reference into it. Left alone the
+         asking flow parks forever with its snapshot intact, which is correct and invisible — so it is said. */
+      DCHECK(holder !== null, "a cross-agent operation named a document no instance in this pool holds — the " +
+                              "create notice for it was dropped, or that instance was finalized while a peer " +
+                              "still held a WindowProxy or a lent object of it");
+      if (!holder) continue;
+      DCHECK(holder !== eng, "a cross-agent operation was routed back to the instance whose flow asked it — an " +
+                             "operation on this agent's own object is performed in this heap and never leaves, " +
+                             "so this zone and the engine have answered one identity question two ways");
+      const token = "op" + (_nextRemoteToken++);
+      _remoteOps.set(token, { asker: eng, req: id });
+      eng._remoteAsked.add(id);
+      holder.M.ccall("qjs_perform", "void", ["string", "string"], [token, op]);
+      continue;
+    }
     // XHR §3.5.6's fetch is the SECOND thing this zone can genuinely answer, and for the identical reason: it
     // is a network fetch, and safeFetch is the one chokepoint SECURITY.md allows it through. The record carries
     // the whole request — method, headers and body — because the chokepoint decides SOP, CORS, method and
@@ -794,6 +876,11 @@ function engineFinalize(eng) {
       if (json) eng.lines.push("@RESULT " + json);
     }
   }
+  /* THE OUTSTANDING RENDEZVOUS GO WITH THE INSTANCE THAT ASKED, and this is the line that makes the map's
+     never-delete-on-answer rule safe: a completion relayed into a torn-down instance is a ccall into freed
+     memory. Dropping them here is not dropping the ANSWER — the engine's own engine_host_answer already treats
+     a request whose flow is gone as an answer nobody is waiting on. */
+  for (const [token, to] of _remoteOps) if (to.asker === eng) _remoteOps.delete(token);
   try { eng.M.ccall("qjs_teardown", "void", [], []); }
   catch (e) { engineCrash(eng, "teardown", e); }
   for (const p of eng.ptrs) { try { eng.M._free(p); } catch (_) {} }
@@ -1171,6 +1258,10 @@ async function hostClear() {
   const dropped = _pool.splice(0);
   for (const job of waiting) job.reject(new Error("cleared"));
   for (const eng of dropped) { for (const w of eng._resolvers) w.reject(new Error("cleared")); eng._resolvers.length = 0; }
+  /* EVERY OUTSTANDING RENDEZVOUS BELONGED TO AN INSTANCE THAT IS NOW DROPPED — the whole pool went. Left
+     behind, each entry holds its asking engine's wasm Module alive for the life of the offscreen, which is the
+     one shape a map keyed on a live instance fails in. */
+  _remoteOps.clear();
   await frontierClear();
   return dropped.length;
 }

@@ -311,19 +311,36 @@ int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int com
             /* A SECOND ANSWER TO ONE QUESTION IS NOT A DUPLICATE — it is a SECOND PEER TIMELINE, and this is
                where the asking side's half of that is missing. A peer's document state IS its flows, so a
                cross-agent operation is performed by every live timeline it has and each one completes with its
-               own answer; `otherW.length` has N answers for N peer timelines and they are all true. Taking the
-               first and asserting on the rest picks a timeline; overwriting picks the last, after the machine
-               may already have read the first. What belongs here is a FORK of the asking flow at the point it
-               parked — a sibling per additional answer, resuming the same suspended frame with that answer's
-               value — which is the same snapshot fork a concolic branch takes, asked for from the outside
-               rather than at a branch. Build that; until it exists this crashes rather than choosing.
+               own answer; `otherW.length` has N answers for N peer timelines and they are all true. It is not
+               hypothetical and it is not the peer host's oversight: engine_fork_finalize COPIES `answer_token`
+               onto a sibling on purpose, because a branch inside the answering program is a real peer timeline
+               in which the answer differs — so N answers under one token is what that fork was built to
+               produce. Taking the first and asserting on the rest picks a timeline; overwriting picks the last,
+               after the machine may already have read the first.
+               WHAT BELONGS IS A FORK OF THE ASKING FLOW AT ITS PARK — a sibling per additional answer, resuming
+               the same suspended frame with that answer's value — and THE ONE THING THAT MUST NOT BE DONE IS TO
+               TAKE IT HERE. This entry runs BETWEEN scheduler steps: `flow_running()` still names whichever flow
+               was last switched in, `cow_delta_fork` freezes the delta CURRENTLY APPLIED and `dom_cow_fork`
+               forks the LIVE DOM head, so a fork on this line would clone a stranger's timeline and call it the
+               asker's — the exact "two timelines wearing one name" the world registry exists to prevent, with
+               nothing to say so. So the three named things to build are:
+                 (1) RECORD the extra completion ON THE ENTRY, as a JS value (an Array slot beside PEND_VALUE) —
+                     never a malloc'd C list, because a queued platform value must park to the cold tier and fork
+                     per flow, which the COW delta gives a property write for free and gives a pointer never;
+                 (2) TAKE THE FORK IN flow_step, with that flow switched in and before it resumes its frame,
+                     which is the only moment the delta, the DOM head and the running flow all agree — one
+                     sibling per recorded answer, each carrying that answer alone on its own forked register;
+                 (3) SPLIT engine_fork_finalize: its body assembles a sibling from a BRANCH's decision and pin
+                     blobs and DCHECKs that one is prepared, and a parked fork has no decision — the sibling
+                     assembly is what the two share, the decision is what only the branch has.
                (A host-COMPUTED answer — a fetch this zone performed — genuinely has one answer, and answering
                one of those twice is the host bug this assert used to be about. Both readings end here.) */
             DCHECK(!pending_get_int(p, PEND_HAVE_VALUE),
                    "one request was answered twice. If the answers came from a PEER, that is two of its "
-                   "timelines answering and both are true: fork the asking flow at its park — a sibling per "
-                   "additional answer, resuming the same suspended frame with that answer — instead of letting "
-                   "one of them overwrite a value the asking machine may already have read");
+                   "timelines answering and both are true: record the extra completion on this entry as a JS "
+                   "value and fork the asking flow in flow_step, with that flow switched in — never on this "
+                   "line, which runs between steps where flow_running(), the applied delta and the live DOM "
+                   "head all still belong to a different flow");
             pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
             pending_set(p, PEND_COMPLETION, JS_NewInt32(ctx, completion));
             pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
