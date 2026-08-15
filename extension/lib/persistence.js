@@ -128,7 +128,6 @@ function _serializeGlobalStore() {
     probeResults: Object.fromEntries(globalStore.probeResults),
     scopes: Object.fromEntries(globalStore.scopes),
     securityFindings: Object.fromEntries(globalStore.securityFindings),
-    scriptCache: Object.fromEntries(globalStore.scriptCache),
     discoveryChanges: Object.fromEntries(globalStore.discoveryChanges),
     savedAt: Date.now(),
   };
@@ -171,20 +170,10 @@ function _deserializeIntoGlobalStore(s) {
     for (const [k, v] of Object.entries(s.securityFindings))
       globalStore.securityFindings.set(k, v);
   }
-  if (s.scriptCache) {
-    var TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
-    var now = Date.now();
-    var entries = Object.entries(s.scriptCache);
-    // Evict expired entries
-    entries = entries.filter(function([_, v]) { return now - v.timestamp < TTL; });
-    // Cap at 500 entries (LRU by timestamp)
-    if (entries.length > 500) {
-      entries.sort(function(a, b) { return b[1].timestamp - a[1].timestamp; });
-      entries = entries.slice(0, 500);
-    }
-    for (const [k, v] of entries)
-      globalStore.scriptCache.set(k, v);
-  }
+  /* NO scriptCache REHYDRATION. The replay cache it restored is deleted (see globalStore): it was a
+     document-identity seen-set whose hit skipped the engine entirely, and its TTL + 500-entry LRU trim here
+     are what a cache needs and a frontier must never have — the frontier drops nothing and is aged only by
+     value. A persisted store written before this change simply carries a key nothing reads. */
   if (s.discoveryChanges) {
     for (const [k, v] of Object.entries(s.discoveryChanges))
       globalStore.discoveryChanges.set(k, v);

@@ -500,7 +500,7 @@ async function cmdDumpBundle(args) {
 // review starts (or while it's running — the brain side stays responsive
 // even when the worker is wedged on a synchronous wasm schedule). Writes
 // <out> (the code, in execution order: order-sorted, concatenated with
-// "\n;\n" separators — same as _analyzeCombinedScriptsInner) and a sibling
+// "\n;\n" separators — same as _analyzeCombinedScripts) and a sibling
 // <out>.scripts.json describing the per-script urls/offsets/lengths so a
 // native profiler can attribute time back to a specific source script. Used
 // to obtain a representative real-site fixture without depending on
@@ -701,8 +701,8 @@ async function cmdProfile(args) {
 // Resolve an engine-reported combined-bundle location (file:line[:col]) back to
 // a readable source snippet. The forced-exec engine line-numbers stack frames
 // (@DSTART, @WHY spin loopFile/loopLine) against the COMBINED bundle (slices
-// joined with per-slice start-line offsets), but scriptCache holds each chunk as
-// one minified line and combined line numbers shift between dumps — so a raw
+// joined with per-slice start-line offsets), but a chunk is one minified line
+// and combined line numbers shift between dumps — so a raw
 // `devsite...:4944:158` is otherwise unreadable. This reads the SAME
 // feDeepDB.code store the grind booted from and prints the line (windowed around
 // the column) so a fixpoint/keying bug can be read in the real source. The
@@ -1156,47 +1156,13 @@ async function cmdNetDiff(args) {
       // whose URL/method didn't resolve to a concrete string (an opaque
       // component reached the sink). On a 0-endpoint page this is THE deciding
       // signal — "reached but went opaque" (a driving/resolver gap to CLOSE) vs
-      // "never reached" (a coverage gap). From scriptCache[].result.resolverErrors.
+      // "never reached" (a coverage gap). From each document's live _resolverErrors.
       const _reachedSet = new Set();
       const _moduleLinkSet = new Set();   // ESM "could not load module '/x'" — a DISCOVERY/LINK gap, not endpoint opacity
-      if (typeof globalStore !== "undefined" && globalStore.scriptCache) {
-        // Use only the LATEST scriptCache entry per page. The analysis re-runs as
-        // ESM modules arrive across rounds (each round is a new bundle-hash entry);
-        // an early round's resolverErrors are STALE — they name modules not yet
-        // fetched THEN. Reporting the union shows phantom link-failures the final
-        // round already resolved (esm.sh: 7 "could not load module" surfaced while
-        // its converged 18-script round had 0). Group by tabUrl, keep max-timestamp.
-        const _latestPerTab = new Map();
-        for (const sc of globalStore.scriptCache.values()) {
-          const _tab = (sc && sc.tabUrl) || "";
-          const _ts = (sc && sc.timestamp) || 0;
-          const _prev = _latestPerTab.get(_tab);
-          if (!_prev || _ts >= (_prev.timestamp || 0)) _latestPerTab.set(_tab, sc);
-        }
-        for (const sc of _latestPerTab.values()) {
-          const re = sc && sc.result && sc.result.resolverErrors;
-          if (Array.isArray(re)) for (const r of re) {
-            const msg = String((r && r.message) || JSON.stringify(r));
-            if (msg.indexOf("could not load module") >= 0) {
-              // A failed ESM import link, NOT a host edge that went opaque. Separating
-              // it keeps reachedButOpaque a clean driving-gap signal and surfaces the
-              // distinct "module didn't link" gap (e.g. esm.sh transitive deps).
-              const mm = msg.match(/could not load module filename '([^']+)'/);
-              _moduleLinkSet.add(mm ? mm[1] : msg.slice(0, 120));
-            } else {
-              _reachedSet.add(
-                (r && r.loc ? "@" + (r.loc.file ? r.loc.file + ":" : "") + r.loc.line + ":" + r.loc.column + " " : "") +
-                msg.slice(0, 200));
-            }
-          }
-        }
-      }
-      // ALSO harvest the DEEP-grind resolverErrors merged onto each tab's live
-      // state (tab._resolverErrors). The residue/deep grind surfaces opacity the
-      // initial combined analysis didn't (e.g. firebase's auth-instance config goes
-      // opaque only once the init chain is force-driven) — and it lands on the
-      // per-tab state, NOT scriptCache, so reading scriptCache alone hides the very
-      // driving gaps netdiff exists to NAME (0 reachedButOpaque while the tab held 26).
+      // The per-document live state is the ONLY source now. It always was the richer one — the deep
+      // orphan-residue drive surfaces opacity the first pass didn't (firebase's auth-instance config goes
+      // opaque only once the init chain is force-driven) and lands here — and the replay cache that used to
+      // be read alongside it is deleted, so there is no second, staler copy to reconcile against.
       if (typeof state !== "undefined" && state.docs) {
         for (const t of state.docs.values()) {
           const re = t && t._resolverErrors;
@@ -1225,7 +1191,7 @@ async function cmdNetDiff(args) {
         const liveMatchesTemplate = (k) => { const re = tmplRe(k); if (!re) return false; for (const lk of seen) if (re.test(lk)) return true; return false; };
         // globalStore.endpoints carries only method+host+path; the per-param
         // KEYS+VALUES — including BODY keys (the {email,password} login shape,
-        // THE MOAT here) — live in scriptCache[].result.fetchCallSites[].params
+        // THE MOAT here) — live in each document's _astResults[].fetchCallSites[].params
         // ({name, location:"path"|"query"|"body", validValues}). Without this
         // cross-ref the unused list shows bare URLs and the diagnostic hides the
         // very thing it measures (forced exec's recovered body shape). Build a
@@ -1239,29 +1205,31 @@ async function cmdNetDiff(args) {
           return (method || "GET") + " " + path;
         };
         const _fcsParams = new Map();   // paramKey -> Map(name -> {loc, vals:Set})
-        if (typeof globalStore !== "undefined" && globalStore.scriptCache) {
-          for (const sc of globalStore.scriptCache.values()) {
-            const fcs = sc && sc.result && sc.result.fetchCallSites;
-            if (!Array.isArray(fcs)) continue;
-            for (const cs of fcs) {
-              if (!cs || !Array.isArray(cs.params) || !cs.params.length) continue;
-              const pk = _paramKey(cs.method, cs.url);
-              let pm = _fcsParams.get(pk); if (!pm) { pm = new Map(); _fcsParams.set(pk, pm); }
-              for (const p of cs.params) {
-                if (!p || !p.name) continue;
-                let pe = pm.get(p.name); if (!pe) { pe = { loc: p.location || "query", vals: new Set() }; pm.set(p.name, pe); }
-                if (Array.isArray(p.validValues)) for (const v of p.validValues) if (v != null && v !== "") pe.vals.add(v);
+        if (typeof state !== "undefined" && state.docs) {
+          for (const t of state.docs.values()) {
+            for (const an of (t && t._astResults) || []) {
+              const fcs = an && an.fetchCallSites;
+              if (!Array.isArray(fcs)) continue;
+              for (const cs of fcs) {
+                if (!cs || !Array.isArray(cs.params) || !cs.params.length) continue;
+                const pk = _paramKey(cs.method, cs.url);
+                let pm = _fcsParams.get(pk); if (!pm) { pm = new Map(); _fcsParams.set(pk, pm); }
+                for (const p of cs.params) {
+                  if (!p || !p.name) continue;
+                  let pe = pm.get(p.name); if (!pe) { pe = { loc: p.location || "query", vals: new Set() }; pm.set(p.name, pe); }
+                  if (Array.isArray(p.validValues)) for (const v of p.validValues) if (v != null && v !== "") pe.vals.add(v);
+                }
               }
             }
           }
         }
         // ALSO harvest per-field keys+values from the VDD (discoveryDocs). A
-        // deep-grind-driven endpoint (an un-fired SDK method) leaves scriptCache
-        // EMPTY (no eager analysis), so its learned keys+values live ONLY in the VDD
+        // deep-grind-driven endpoint (an un-fired SDK method) has no fetchCallSite
+        // at all, so its learned keys+values live ONLY in the VDD
         // (resources.learned.methods[].parameters + request $ref -> schemas) — e.g.
         // supabase's whole logged-out admin surface. Without this, --unused shows
         // bare URLs for exactly the moat's deep-grind wins though the values WERE
-        // computed. The _fcsParams Map dedups, so scriptCache + VDD merge cleanly.
+        // computed. The _fcsParams Map dedups, so the call sites + VDD merge cleanly.
         const _harvestVdd = (ddMap) => {
           if (!ddMap || typeof ddMap.values !== "function") return;
           for (const dd of ddMap.values()) {

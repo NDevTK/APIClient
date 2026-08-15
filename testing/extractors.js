@@ -174,18 +174,7 @@ const DUMP_GLOBAL = `
     for (const [k, v] of globalStore.probeResults) probeResults[k] = v;
   }
 
-  // Script cache — metadata only (full results are huge).
-  const scriptCacheMeta = [];
-  if (globalStore.scriptCache) {
-    for (const [hash, entry] of globalStore.scriptCache) {
-      scriptCacheMeta.push({
-        hash: hash,
-        version: entry.version || null,
-        timestamp: entry.timestamp || null,
-        hasResult: !!entry.result,
-      });
-    }
-  }
+  // No script cache to report: the replay cache was a document-identity seen-set and is deleted.
 
   const tabIds = [...state.tabs.keys()];
 
@@ -197,15 +186,12 @@ const DUMP_GLOBAL = `
     apiKeys: apiKeys,
     endpoints: endpoints,
     probeResults: probeResults,
-    scriptCacheMeta: scriptCacheMeta,
   };
 `;
 
-// Fetch the script source that a security finding refers to.
-// The SW caches recently-analyzed scripts by sourceUrl in _scriptBuffers, but
-// the authoritative cached source is keyed by SHA-256 in globalStore.scriptCache.
-// For reviewer triage we just refetch via fetch(); offline-fidelity would
-// require wiring into the cache.
+// Fetch the script source that a security finding refers to. There is no cached
+// copy to read: the analysis holds the document's own HTML per document and the
+// replay cache is deleted, so reviewer triage refetches the URL.
 const FETCH_SCRIPT_SOURCE = `
   const sourceUrl = arg;
   try {

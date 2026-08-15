@@ -11,51 +11,21 @@
 // shrinks toward nothing and is deleted; what remains is only the untrusted WASM cannot
 // do (chrome messaging + popup render), which stays trusted per SECURITY.md.
 
-// ─── AST Cache Fingerprint ──────────────────────────────────────────────────
-// The fingerprint hashes the analyzer worker files at first use — any
-// change to ast-thread.js, hostedge.gen.js, or qjs_worker.js auto-
-// invalidates cached results because the cache key shifts. Replaces
-// the prior manual AST_ANALYSIS_VERSION constant that had to be bumped
-// by hand whenever the analyzer output shape changed (smell:
-// non-additive shape changes leaked across versions; never bumping
-// meant stale cached results deserialized into new consumer code wrong).
-var _analyzerFingerprint = null;
-var _analyzerFingerprintP = null;
-async function getAnalyzerFingerprint() {
-  if (_analyzerFingerprint) return _analyzerFingerprint;
-  if (_analyzerFingerprintP) return _analyzerFingerprintP;
-  _analyzerFingerprintP = (async () => {
-    var files = ["offscreen-brain.js", "bridge.js", "lib/qjs/qjs.mjs"];   // brain logic + host bridge + engine module (wasm rebuild that changes behavior bumps qjs.mjs's embedded fingerprint)
-    var hashes = [];
-    for (var i = 0; i < files.length; i++) {
-      try {
-        var resp = await fetch(chrome.runtime.getURL(files[i]));
-        var txt = await resp.text();
-        hashes.push(await _hashScriptSHA256(txt));
-      } catch (e) {
-        // A file missing during a partial build/stage cycle would
-        // produce a wrong fingerprint; treat as not-yet-cacheable.
-        hashes.push(null);
-      }
-    }
-    if (hashes.indexOf(null) >= 0) {
-      _analyzerFingerprintP = null;       // retry on next call
-      return null;
-    }
-    _analyzerFingerprint = hashes.join(".").slice(0, 32);
-    return _analyzerFingerprint;
-  })();
-  return _analyzerFingerprintP;
-}
-
 // ─── Engine dispatch ──────────────────────────────────────────────────────────
 // self.astDispatch(msg) → Promise<response> is installed by the merged v2 host
 // bridge at the bottom of THIS file (it drives the engine WASM). AST_* messages go
 // straight to it — a direct call, not chrome.runtime.sendMessage (which would NOT
 // reach a same-document listener; the sender's own context is excluded).
 function sendToOffscreen(msg) {
-  if (typeof self.astDispatch === "function") return self.astDispatch(msg);
-  return Promise.resolve({ success: false, error: "analysis worker dispatch unavailable" });
+  /* THE OTHER HALF OF THE EDGE bridge.js ALREADY ASSERTS FROM ITS SIDE (onFrontierAdvance). bridge.js is the
+     last script ast-worker.html loads, so by the time any document delivers its CONTENT_HTML the dispatch is
+     installed — its absence is a broken load order, not an optional feature. Returning a failure response
+     instead reported "analysis worker dispatch unavailable" as this document's `_astError` and moved on,
+     which is a page that silently never reached the frontier at all. */
+  DCHECK(typeof self.astDispatch === "function",
+         "the trusted zone has no astDispatch to hand this document to — it is the ONE entry to the host " +
+         "WFQ pool, so without it the document never becomes work on the frontier and reports as unanalysed");
+  return self.astDispatch(msg);
 }
 // The offscreen document's lifecycle + the cross-session resume kick are owned by
 // the thin service worker (background.js). Nothing to create from inside it.
@@ -134,9 +104,13 @@ function _scheduleEvictSweep() {
 function _evictReviewedDocs() {
   var gone = [];
   state.docs.forEach(function (doc, documentId) {
-    // Reviewed = its forced-exec run produced results (merged to globalStore) AND it is not
-    // currently being (re-)analysed. The parked frontier (IDB recipes) carries any residue.
-    var reviewed = doc && (doc._astResults || doc._astError) && !_analysisInflight.has(documentId);
+    /* Reviewed = its forced-exec run produced results (merged to globalStore). The parked frontier (IDB
+       recipes) carries any residue. There is no second condition: `_astResults`/`_astError` are written by
+       the ONE analysis when its engine finalizes, so a document holding either is a document whose dispatch
+       has already returned. The `!_analysisInflight.has(documentId)` that stood beside this asked a
+       per-document in-flight REGISTER the same question its own result slots already answer, and that
+       register was half of the second scheduler this file no longer has. */
+    var reviewed = doc && (doc._astResults || doc._astError);
     if (reviewed) gone.push(documentId);
   });
   for (var i = 0; i < gone.length; i++) _evictReviewedDoc(gone[i]);
@@ -225,7 +199,11 @@ const globalStore = {
   probeResults: new Map(), // endpointKey → probe result
   scopes: new Map(), // service → string[]
   securityFindings: new Map(), // sourceUrl → { sourceUrl, securitySinks[], dangerousPatterns[] }
-  scriptCache: new Map(), // SHA-256 hash → { version, result, timestamp }
+  /* NO scriptCache. It was a (analyzer fingerprint + origin + SHA-256 of the page HTML) → stored result map
+     that analyze.js consulted BEFORE dispatching, and a hit replayed the stored result and returned without
+     ever creating an engine — so a revisited page never resumed the flows it had parked. §NO BOUNDS bans a
+     seen-set outright, and this one was keyed on document IDENTITY, which is exactly what may never stand in
+     for emitted output as proof that a flow is finished. */
   discoveryChanges: new Map(), // service → [{ timestamp, fetchUrl, changes }]
 };
 
@@ -390,16 +368,12 @@ async function clearGlobalStore() {
   globalStore.probeResults.clear();
   globalStore.scopes.clear();
   globalStore.securityFindings.clear();
-  // Drop any SW-side analyses still queued so a pending review can't repopulate
-  // the store right after we wipe it (the offscreen worker's running/queued
-  // grind is stopped separately via AST_CLEAR before this runs).
-  _reviewQueue.length = 0;
-  // The AST replay cache is keyed by analyzer-fingerprint + script hashes,
-  // so it normally self-invalidates across builds — but an explicit Clear
-  // is the tester's "re-analyze from scratch" action, and leaving the cache
-  // means the next navigation replays a stale derived result instead of
-  // re-running the worker. Clearing it here makes Clear actually clear.
-  globalStore.scriptCache.clear();
+  /* THE WORK ITSELF IS STOPPED BY AST_CLEAR, WHICH RUNS FIRST (popup-handlers.js CLEAR_TAB): it tears down
+     every live engine in the host pool, drops the documents waiting for a slot, and empties the cross-session
+     frontier's IndexedDB. There is nothing left on this side to empty — the queue that used to be drained
+     here was the second scheduler, and the replay cache that used to be cleared here was the seen-set. What
+     survives is `_dataEpoch`, which is not a register of work: it invalidates the RESULT of any analysis that
+     was already in the engine when the wipe happened, so it cannot repopulate what we just cleared. */
   try {
     await _idbClear();
   } catch (_) {
@@ -419,21 +393,12 @@ const _globalStoreReady = loadGlobalStore();
 // reload) just errors; the catch makes it a no-op. We don't re-broadcast on
 // later inits beyond the brain's birth because there's no state for it to
 // catch up to past this moment.
-// Apply persisted analysis opts (cooling + worker pool size) on brain boot
-// so the pool spawns at the user's chosen size BEFORE the first analysis
-// arrives. Missing record (first run) is fine — astDispatch keeps its
-// default pool of 1.
-_globalStoreReady.then(async function () {
-  try {
-    const opts = await _idbGet("analysisOpts");
-    if (opts && typeof opts === "object" && typeof self.astDispatch === "function") {
-      self.astDispatch({ type: "SET_ANALYSIS_OPTS", opts: opts });
-    }
-  } catch (e) {
-    console.warn("[brain] applying persisted analysisOpts at boot failed:", e && e.message || e);
-  }
-});
-
+/* NO analysisOpts RE-APPLY AT BOOT. The record held two knobs — a yield throttle in milliseconds and an
+   "analyzer workers" count — that this dispatch answered "unknown type" to and both senders swallowed, so
+   neither had ever taken effect. Neither may be BUILT, either: the hot working set is bounded by ACTUAL
+   RESIDENT WASM MEMORY (bridge.js's HOT_RAM_BUDGET), and a user-set instance count is precisely the fixed
+   count that comment refuses ("a count would ignore that"); a wall-clock throttle on top of the cooperative
+   quantum is a step cap wearing a settings label. The controls, the message types and the record are gone. */
 _globalStoreReady.then(async function () {
   try {
     const tabs = await swRpc("tabs.query", { url: ["http://*/*", "https://*/*"] });
@@ -522,8 +487,8 @@ function collectKeysForService(tab, service, hostname) {
 
 // (Response-body protocol decoding -- handleResponseBody -- extracted to lib/response-decode.js, first.)
 
-// (Analysis orchestration -- script hashing/caching, _replayCachedAST, _analyzeCombinedScripts(Inner),
-// _drainReviewQueue, source-map recovery -- extracted to lib/analyze.js, loaded first.)
+// (Analysis handoff -- _analyzeCombinedScripts, the ONE call that appends a delivered document to the ONE
+// frontier, plus its per-script finding attribution -- lives in lib/analyze.js, loaded first.)
 
 // (Engine-result -> doc merge -- mergeASTResultsIntoVDD -- extracted to lib/merge.js, loaded first.)
 
@@ -728,13 +693,13 @@ function handleContentMessage(msg, sender) {
     _buf.scripts = [];   // engine-sourced: Lexbor parses the HTML, qjs_run_doc_scripts runs inline + external scripts — one system
     _buf.pending = 0;
     _buf.loadFired = true;
-    // Prioritization is driven by THIS message: a document just delivered its one
-    // CONTENT_HTML, so it is the live "analyze me now" signal — no webNavigation or
-    // tab-activation guess about which frame is the main one. Stamp THIS document's
-    // load recency on its own buffer (the review-queue picker orders by it),
-    // keyed by documentId (NEVER url — same url != same content).
-    _buf.lastActivatedTs = Date.now();
-    _analyzeCombinedScripts(_dk);   // through the review queue: per-document in-flight guard + recency priority (focused doc first), bounded CPU
+    /* THIS DOCUMENT NOW BECOMES WORK ON THE ONE FRONTIER — it APPENDS its flows (boot fork + orphans) and
+       does not start a run, a scheduler or an attention of its own. `lastActivatedTs` went with the queue
+       that read it: it ordered documents by RECENCY, and recency is not value. The only order is the level-1
+       WFQ in bridge.js, which ranks live engines by their best flow's weight (qjs_top_weight) and admits
+       against the RAM working-set floor — a policy this zone cannot hold, because no instance can rank the
+       others. */
+    _analyzeCombinedScripts(_dk);   // straight to astDispatch -> the ONE host WFQ pool. No queue, no cache, no in-flight register.
     notifyPopup(tabId);
     return;
   }

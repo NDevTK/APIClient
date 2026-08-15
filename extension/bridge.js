@@ -270,7 +270,15 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
   // SCOPE, stated rather than assumed: this counter is unique across the instances ALIVE in this offscreen,
   // which is exactly the set that can message each other today. It is not yet persisted, because a parked
   // foreign segment does not yet outlive a session; when segments park, this becomes a persisted allocator.
-  const _docId = docName || String(++nextDocumentId);
+  /* A LIVE ROOT DOCUMENT IS NAMED BY THE NAME THE BROWSER ALREADY GAVE IT. The counter answered "which
+     document is this?" with a fresh number every time it was asked, so the pool could not tell one document
+     delivered twice (content.js re-ships its CONTENT_HTML when the offscreen brain broadcasts RESHIP) from
+     two documents, and built a second WASM instance for it — two instances behind one principal, which is
+     the one thing SECURITY.md's "one instance per ORIGIN-KEYED AGENT CLUSTER" forbids. `hostHolderOf` was
+     already the answer to that question for a document a peer engine CREATED ("already provisioned: the
+     engine announces a document once"); naming the root by its own documentId is what lets it be asked for
+     a root too. A rehydrated cold recipe has no browser document to name it, and takes the counter. */
+  const _docId = docName || (msg && msg.documentId ? String(msg.documentId) : String(++nextDocumentId));
   // HTML §8.1.3.1's TOP-LEVEL CREATION URL. THREE PROVENANCES AND ALL THREE ARE BROWSER-STATED, never
   // derived here: a document a PEER engine created carries its creator's §7.4 decision on the navigable.create
   // notice (hostNotice below, which passes it as the argument); a document a content script reported carries
@@ -471,8 +479,11 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
      A document this zone provisioned itself carries the origin of the URL THIS zone fetched (hostNotice sets
      it); "" belongs to a rehydrated recipe that predates the field, and the stamp site refuses it rather than
      inventing one. */
+  /* `_resolvers` IS A LIST BECAUSE ONE DOCUMENT MAY BE ASKED FOR MORE THAN ONCE while a single instance holds
+     it (the RESHIP re-delivery). Every caller waiting on this document is answered by the ONE engine's
+     finalize; a second engine is never built to give a second caller its own copy. */
   return { M, ptrs, lines, fkey, prior, msg, persist, fetched, fetchedDocument, fetchedXhr, code, html, state: "hot",
-           docId: _docId, origin: (msg && msg.origin) || "", _forceparkSteps };
+           docId: _docId, origin: (msg && msg.origin) || "", _resolvers: [], _forceparkSteps };
 }
 /* THE LEVEL-1 WFQ'S ONE INPUT. A NaN would order this engine against every other by a comparison that is
    false in both directions, so the pool's pick would depend on array order — a fairness invariant silently
@@ -888,7 +899,14 @@ const _hostOps = {
     // 1) seat waiting LIVE documents (the user's open tabs) first
     while (_waiting.length && (_pool.length === 0 || _residentBytes() < HOT_RAM_BUDGET)) {
       const job = _waiting.shift();
-      try { const eng = await _engineFactory(job.code, job.html, job.msg, job.persist); eng._resolve = job.resolve; _pool.push(eng); }
+      /* ONE INSTANCE PER DOCUMENT, ASKED OF THE POOL — which IS the register of who holds what, so nothing
+         here remembers a document it no longer holds. A document already seated takes the waiting caller
+         onto its OWN finalize instead of getting a second WASM instance built for the same principal; a
+         document that already finished and left the pool is simply run again, which is a re-visit and is
+         supposed to append to the frontier, not be skipped. */
+      const held = job.msg && job.msg.documentId ? hostHolderOf(String(job.msg.documentId)) : null;
+      if (held) { held._resolvers.push(job); continue; }
+      try { const eng = await _engineFactory(job.code, job.html, job.msg, job.persist); eng._resolvers.push(job); _pool.push(eng); }
       // boot/creation abort: LOUD failure, not a quiet degenerate result. An invariant abort from the creation
       // path (the init return code, the bundle id, the frontier key's origin) is NOT a boot abort and must not
       // be reported as one — it is this zone's own contract with the engine breaking.
@@ -945,7 +963,11 @@ const _hostOps = {
              "document's and a resumed frontier's entire output has nowhere to go");
       self.onFrontierAdvance(eng.msg.sourceUrl, result);
     }
-    if (eng._resolve) eng._resolve(result);
+    /* EVERY CALLER WAITING ON THIS DOCUMENT IS ANSWERED, not just the first. A cold/child engine has no
+       caller at all, which is why the list is allowed to be empty and the merge above is what its findings
+       travel on instead. */
+    for (const w of eng._resolvers) w.resolve(result);
+    eng._resolvers.length = 0;
   },
 };
 function _hostKick() {
@@ -971,16 +993,47 @@ self.kickHostPool = _hostKick;
    examples) is the ENGINE's job now — it emits an already-deduped fetchCallSites in @RESULT. The host
    mergeCallsites/dedupShapeConcrete/pathSegs were DELETED. */
 
+/* WIPE EVERYTHING THIS ZONE IS HOLDING OR WILL RESUME. The Clear button's contract is "stop ALL work and
+   delete ALL data", and it ran through an AST_CLEAR that this entry answered "unknown type" to while the
+   sender swallowed the refusal — so every live engine kept running straight through the wipe and merged its
+   findings back into the store the user had just emptied, and the parked frontier in `apiclient-frontier` was
+   never touched at all, so the next idle kick rehydrated the cleared origins from IDB. Both halves are the
+   operation: the HOT engines leave the pool (hostSchedule breaks the moment it is empty, and an engine no
+   longer in the pool is never stepped, never finalized and so never persists its residue), and the COLD tier
+   is emptied. A document still waiting for a slot is REJECTED with "cleared", which is the exact error
+   analyze.js reads to abandon its tail without recording a page-level failure. */
+async function frontierClear() {
+  try {
+    const db = await idbOpen();
+    await new Promise((res, rej) => { const t = db.transaction("frontier", "readwrite").objectStore("frontier").clear(); t.onsuccess = () => res(); t.onerror = () => rej(t.error); });
+  } catch (e) { RETHROW_FATAL(e); frontierFail("clear", e); }
+}
+async function hostClear() {
+  const waiting = _waiting.splice(0);
+  const dropped = _pool.splice(0);
+  for (const job of waiting) job.reject(new Error("cleared"));
+  for (const eng of dropped) { for (const w of eng._resolvers) w.reject(new Error("cleared")); eng._resolvers.length = 0; }
+  await frontierClear();
+  return dropped.length;
+}
+
 self.astDispatch = async function astDispatch(msg) {
   try {
-    /* FINDING, LEFT AT THE SITE RATHER THAN ASSERTED: the trusted zone still SENDS types this entry answers
-       "unknown type" to — offscreen-brain.js dispatches SET_ANALYSIS_OPTS at brain boot and popup-handlers.js
-       sends it when the user changes an option, and both land here and are refused. That is a real unbuilt
-       edge (an option the user sets reaches nothing), but it is not one an assert can be put on from this
-       side: the senders wrap the call in their own catch, so a DFAIL here would abort the dev extension at
-       boot into a swallow rather than at the missing capability. It belongs with whoever owns the analysis
-       options — either the bridge answers the type or the senders go. */
-    if (!msg || msg.type !== "AST_ANALYZE") return { success: false, error: "unknown type " + (msg && msg.type) };
+    /* TWO TYPES, AND A THIRD IS AN UNBUILT CAPABILITY THAT SAYS SO. This entry used to answer every type but
+       one with `{success:false, error:"unknown type"}`, and the senders wrapped their calls in catches — so
+       AST_CLEAR (the Clear button's "stop all work") and SET_ANALYSIS_OPTS (the popup's Settings panel) were
+       both refused in silence for as long as they existed. AST_CLEAR is now BUILT below; SET_ANALYSIS_OPTS,
+       its two controls and its persisted record are DELETED, because neither knob may exist: the working set
+       is bounded by resident WASM memory and not by a user-set instance count, and a wall-clock throttle over
+       the cooperative quantum is a step cap. What is left is a real refusal, so it aborts rather than
+       reporting a false success to a caller that will not look. */
+    DCHECK(!!msg && (msg.type === "AST_ANALYZE" || msg.type === "AST_CLEAR"),
+           "the trusted zone dispatched a type this bridge does not answer: `" + (msg && msg.type) + "` — " +
+           "every edge into the engine is built here, so an unanswered type is a capability that was asked " +
+           "for and never made, not an option the caller may proceed without");
+    if (!msg) return { success: false, error: "dispatch with no message" };   // release path under the assert
+    if (msg.type === "AST_CLEAR") return { success: true, result: { cleared: await hostClear() } };
+    if (msg.type !== "AST_ANALYZE") return { success: false, error: "unknown type " + msg.type };
     const html = msg.pageHtml || "";
     const code = msg.code || "";           // any brain-assembled scripts (usually empty); the DOM carries the page
     // NOTHING TO RUN, so no engine runs and there is no result document to expect — this is the one analysis
@@ -991,8 +1044,22 @@ self.astDispatch = async function astDispatch(msg) {
        other open document by value-of-information — no run-to-completion, no recency monopoly. The per-doc
        promise resolves when THIS engine finalizes (fully explored or host-evicted); the pool persists its
        residue to the GLOBAL frontier (cross-session cold tier). msg.persist enables that IDB persistence. */
+    /* AND IT ARRIVES CARRYING THE BROWSER'S NAME FOR IT. `admit` asks the pool whether an instance already
+       holds this document before it builds one, which is what keeps the RESHIP re-delivery from putting two
+       instances behind one principal — and a job with no documentId skips that question SILENTLY, seating a
+       second engine with nothing to say so. Every live document comes from analyze.js, which reads the id off
+       the browser-provided sender; the two callers that legitimately have no browser document (a child
+       navigable a peer engine announced, a rehydrated cold recipe) build their engine directly and never
+       reach this line. */
+    DCHECK(!!msg.documentId,
+           "an AST_ANALYZE for a live document carried no documentId — it is the name the pool answers " +
+           "\"which instance holds this document?\" by, so without it a re-delivered document is seated twice");
     const persist = !!msg.persist;
-    const result = await new Promise((resolve) => { _waiting.push({ code, html, msg, persist, resolve }); _hostKick(); });
+    /* THE WAITER CARRIES BOTH SETTLERS. A Clear must be able to tell a document that was never seated that its
+       analysis is not coming, and "cleared" is the exact error analyze.js reads to abandon its tail without
+       recording a page-level failure — resolving it with a plausible empty result instead would report the
+       wiped page as analysed and clean. */
+    const result = await new Promise((resolve, reject) => { _waiting.push({ code, html, msg, persist, resolve, reject }); _hostKick(); });
     return { success: true, result };   // result.fetchCallSites is already deduped by the engine
   } catch (e) {
     /* AN INVARIANT ABORT IS NOT AN ANALYSIS FAILURE. This catch reports a failed dispatch to the brain, which

@@ -105,10 +105,16 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     case "CLEAR_TAB": {
       // The main Clear button: delete ALL extension data and stop ALL work.
       (async function () {
-        // 1. Stop the offscreen worker FIRST — terminate it (kills the running
-        //    wasm grind outright) and delete its resumable-grind DB — so no
-        //    in-flight analysis or resume can repopulate what we wipe next.
-        try { await sendToOffscreen({ type: "AST_CLEAR" }); } catch (e) {}
+        /* 1. STOP ALL WORK FIRST — drop every live engine out of the host pool, reject the documents still
+              waiting for a slot, and empty the cross-session frontier's IndexedDB, so nothing in flight and
+              nothing parked can repopulate what step 2 wipes. The `try {} catch (e) {}` around this is gone
+              with the reason it existed: the bridge answered AST_CLEAR "unknown type" and this swallowed the
+              refusal, so for as long as it shipped the Clear button stopped nothing at all and the engines
+              merged their findings straight back into the store the user had just emptied. */
+        const _cleared = await sendToOffscreen({ type: "AST_CLEAR" });
+        DCHECK(!!(_cleared && _cleared.success),
+               "AST_CLEAR did not succeed — the Clear button's whole contract is that no work survives it, " +
+               "and continuing to the wipe with engines still running repopulates the store as it is emptied");
         // 2. Global findings + the persisted gapiStore (cleared inside clearGlobalStore).
         await clearGlobalStore();
         // 3. All in-memory request logs + per-tab working state, so the next
@@ -121,46 +127,11 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       return true;   // async sendResponse
     }
 
-    case "GET_ANALYSIS_OPTS": {
-      // IDB-backed analysis options (cooling + workers UI knobs). On first
-      // read, the record may not exist yet — return an empty object so
-      // the popup falls back to its HTML defaults. The brain's single
-      // "global" object store uses key "analysisOpts" for this record.
-      let opts = null;
-      try { opts = await _idbGet("analysisOpts"); }
-      catch (e) {
-        /* Reading the IDB opts record failed — surface so a corrupt/locked
-           IDB is diagnosable. Return an empty object so the popup still
-           renders with HTML defaults. */
-        console.warn("[brain] GET_ANALYSIS_OPTS idb read failed:", e && e.message || e);
-      }
-      sendResponse(opts || {});
-      return;
-    }
-
-    case "SET_ANALYSIS_OPTS": {
-      // Merge the incoming partial opts into the persisted record, then
-      // broadcast via astDispatch so the worker pool (dispatcher) updates
-      // its size + forwards yieldThrottleMs to each pool worker.
-      let cur = null;
-      try { cur = await _idbGet("analysisOpts"); } catch (e) {
-        console.warn("[brain] SET_ANALYSIS_OPTS idb read failed:", e && e.message || e);
-      }
-      const next = Object.assign({}, cur || {}, msg.opts || {});
-      try { await _idbSet("analysisOpts", next); }
-      catch (e) {
-        /* Persist failed — the in-memory propagation below still happens
-           so the user's setting takes effect this session, but it won't
-           survive a restart. Surface so quota/lock is visible. */
-        console.warn("[brain] SET_ANALYSIS_OPTS idb put failed:", e && e.message || e);
-      }
-      try { self.astDispatch({ type: "SET_ANALYSIS_OPTS", opts: next }); }
-      catch (e) {
-        console.warn("[brain] SET_ANALYSIS_OPTS dispatch failed:", e && e.message || e);
-      }
-      sendResponse({ ok: true });
-      return;
-    }
+    /* NO GET_ANALYSIS_OPTS / SET_ANALYSIS_OPTS. They read and wrote an `analysisOpts` IDB record for two
+       popup controls whose value was then dispatched to a bridge that answered "unknown type" — refused
+       inside a catch, so the user's setting reached nothing and said nothing. The controls are deleted (see
+       popup.html): the hot working set is bounded by resident WASM memory rather than a user-set instance
+       count, and a wall-clock throttle over the cooperative quantum is a step cap. */
 
     case "CLEAR_LOG": {
       // Request logs live in-memory only now (session storage layer removed

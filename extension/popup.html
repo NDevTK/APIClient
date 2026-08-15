@@ -9,28 +9,18 @@
     <header>
       <h1>API Security Researcher</h1>
       <div class="toolbar">
-        <button id="btn-settings" title="Analysis settings">⚙</button>
         <button id="btn-clear" title="Clear All Data">🗑️</button>
       </div>
     </header>
 
-    <!-- Settings panel — cooling/concurrency knobs. Hidden by default; the
-         ⚙ toolbar button toggles it. Values persist in the offscreen
-         brain's IDB store and propagate to the worker on change. -->
-    <section id="panel-settings" class="panel" style="display:none">
-      <h2>Analysis settings</h2>
-      <label>
-        Yield throttle (ms)
-        <input type="range" id="opt-yield-throttle-ms" min="0" max="10000" step="100" value="0" />
-        <output id="opt-yield-throttle-ms-val">0</output>
-        <p class="hint">Default 0 = fast (use the core fully — this is a research tool, you're waiting on results). Raise it only to cool the CPU for background tabs; the page you're viewing stays fast regardless.</p>
-      </label>
-      <label>
-        Analyzer workers
-        <input type="number" id="opt-max-workers" min="1" value="1" />
-        <p class="hint" id="opt-max-workers-hint">Web Workers running the QuickJS analyzer. Each page's analysis is pinned to ONE worker (one core), so raise this to analyze MULTIPLE tabs in parallel. Each worker holds its own wasm memory (~hundreds of MB).</p>
-      </label>
-    </section>
+    <!-- NO ANALYSIS-SETTINGS PANEL. It carried two controls — "Yield throttle (ms)" and "Analyzer
+         workers" — whose SET_ANALYSIS_OPTS message the bridge answered "unknown type" to while both senders
+         swallowed the refusal, so moving either changed nothing for as long as they shipped: a control that
+         silently does nothing, at the product surface. Neither may be built rather than deleted. The hot
+         working set is bounded by ACTUAL resident WASM memory (bridge.js's HOT_RAM_BUDGET), so a user-set
+         instance count is the fixed count that bound exists to refuse — and its hint described "Web Workers
+         running the QuickJS analyzer", a pool that no longer exists at all. A wall-clock throttle layered
+         over the cooperative quantum is a step cap under a settings label. -->
 
     <div id="deep-status" class="deep-status" style="display:none"></div>
 

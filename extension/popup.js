@@ -271,69 +271,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   document.getElementById("btn-clear").addEventListener("click", clearState);
 
-  // ⚙ Settings panel — toggles visibility; values flow to the offscreen brain
-  // (IDB-persisted) and propagate to the worker via SET_ANALYSIS_OPTS.
-  const settingsPanel = document.getElementById("panel-settings");
-  document.getElementById("btn-settings").addEventListener("click", () => {
-    const showing = settingsPanel.style.display !== "none";
-    settingsPanel.style.display = showing ? "none" : "block";
-  });
-  const yieldInput = document.getElementById("opt-yield-throttle-ms");
-  const yieldOut = document.getElementById("opt-yield-throttle-ms-val");
-  const workersInput = document.getElementById("opt-max-workers");
-  // Bound the worker count by this machine's logical cores — more workers than
-  // cores adds only memory, not parallelism — and surface the count so the
-  // control is informative, not a blind number box.
-  const _cores = (navigator.hardwareConcurrency | 0) || 4;
-  workersInput.max = String(_cores);
-  const _whint = document.getElementById("opt-max-workers-hint");
-  if (_whint) _whint.textContent += " This machine has " + _cores + " logical cores.";
-  // Load current values from the brain (IDB-backed).
-  try {
-    const opts = await chrome.runtime.sendMessage({ type: "GET_ANALYSIS_OPTS" });
-    if (opts && typeof opts === "object") {
-      if (typeof opts.yieldThrottleMs === "number") {
-        yieldInput.value = String(opts.yieldThrottleMs);
-        yieldOut.value = String(opts.yieldThrottleMs);
-      }
-      if (typeof opts.maxWorkers === "number") {
-        workersInput.value = String(opts.maxWorkers);
-      }
-    }
-  } catch (e) {
-    /* GET_ANALYSIS_OPTS failed — surface so a brain handler gap isn't hidden.
-       The inputs stay at their HTML defaults so the panel is still usable. */
-    console.warn("[popup] GET_ANALYSIS_OPTS failed:", e && e.message || e);
-  }
-  yieldInput.addEventListener("input", () => {
-    yieldOut.value = yieldInput.value;
-  });
-  yieldInput.addEventListener("change", async () => {
-    try {
-      await chrome.runtime.sendMessage({
-        type: "SET_ANALYSIS_OPTS",
-        opts: { yieldThrottleMs: parseInt(yieldInput.value, 10) },
-      });
-    } catch (e) {
-      console.warn("[popup] SET_ANALYSIS_OPTS yieldThrottleMs failed:", e && e.message || e);
-    }
-  });
-  workersInput.addEventListener("change", async () => {
-    let v = parseInt(workersInput.value, 10);
-    if (!(v > 0)) return;
-    // Clamp to [1, cores] — a typed value can exceed the input's max, and more
-    // workers than cores only burns memory. Reflect the clamp back to the UI.
-    v = Math.min(v, _cores);
-    if (String(v) !== workersInput.value) workersInput.value = String(v);
-    try {
-      await chrome.runtime.sendMessage({
-        type: "SET_ANALYSIS_OPTS",
-        opts: { maxWorkers: v },
-      });
-    } catch (e) {
-      console.warn("[popup] SET_ANALYSIS_OPTS maxWorkers failed:", e && e.message || e);
-    }
-  });
+  /* NO SETTINGS PANEL WIRING. Its two controls (yield throttle, analyzer workers) reached
+     SET_ANALYSIS_OPTS, which the bridge answered "unknown type" to while every sender on the path wrapped
+     the call in a catch — so the sliders moved, the value was persisted to IDB, and nothing whatsoever
+     changed about how the engine ran. The panel, the message types and the record are deleted rather than
+     built: the working set is bounded by resident WASM memory and never by a user-set instance count, and a
+     wall-clock throttle over the cooperative quantum is a step cap. */
 
   // Data panel
   document
