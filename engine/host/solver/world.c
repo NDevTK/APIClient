@@ -184,7 +184,11 @@ WorldId world_mint_child(WorldId parent)
     return mint(parent);
 }
 
-int world_ancestry(WorldId w, WorldId *out, int cap)
+/* THE ANCESTRY OF A LOCALLY-MINTED WORLD, nearest first, written into `out` (at most `cap`); returns how many
+   were written. Asserts the world was minted here — a world minted elsewhere has an ancestry only its own
+   instance can answer for. INTERNAL: world_serialize is the one writer of the wire form (world.h), so this is
+   its input and never a second way to produce one. */
+static int world_ancestry(WorldId w, WorldId *out, int cap)
 {
     int n = 0;
 

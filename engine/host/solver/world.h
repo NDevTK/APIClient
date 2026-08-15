@@ -98,16 +98,16 @@ WorldId world_mint(void);
    materialize the child. Called at the one place a sibling flow is created from a parent. */
 WorldId world_mint_child(WorldId parent);
 
-/* THE ANCESTRY OF A LOCALLY-MINTED WORLD, nearest first, written into `out` (at most `cap`); returns how many
-   were written. This is what travels with a cross-document request. Asserts the world was minted here — a
-   world minted elsewhere has an ancestry only its own instance can answer for. */
-int world_ancestry(WorldId w, WorldId *out, int cap);
-
-/* THE WIRE FORM OF A WORLD AND ITS ANCESTRY — `doc:serial,anc:serial,...`, nearest ancestor first, exactly as
-   world_ancestry writes it. Every request or notice that crosses to another instance carries this, and it is
-   ONE function because two spellings of it would be two peers materializing different segments for the same
-   flow. Writes at most `cap` bytes including the NUL and returns the length written; a truncation is a
-   corrupted vector, so it crashes rather than sending a prefix. */
+/* THE WIRE FORM OF A WORLD AND ITS ANCESTRY — `doc:serial,anc:serial,...`, nearest ancestor first. Every
+   request or notice that crosses to another instance carries this, and it is ONE function because two
+   spellings of it would be two peers materializing different segments for the same flow. Writes at most `cap`
+   bytes including the NUL and returns the length written; a truncation is a corrupted vector, so it crashes
+   rather than sending a prefix.
+   THE ANCESTRY WALK IS NOT EXPORTED, and that is what makes the sentence above enforceable rather than
+   advisory. It was, and `core/html/html_iframe.c` used it to write the vector a second way — head by hand,
+   then its own loop — which had both failure modes this function's CHECK exists for: a `size_t` underflow past
+   the end of the record's buffer, and a silently TRUNCATED chain that makes the peer fork a more distant
+   ancestor and lose every write in between. With the walk internal there is no second way to spell it. */
 int world_serialize(WorldId w, char *dst, size_t cap);
 
 /* READ that wire form back: the world into `*out` and its ancestry (nearest first) into `ancestry`, returning

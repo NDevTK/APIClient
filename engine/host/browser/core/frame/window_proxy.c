@@ -1164,8 +1164,19 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
            first, because the scan stops at the first hit and a further ancestor silently drops the nearer
            one's writes. */
         n = snprintf(op, sizeof op, "windowproxy.get\t%s\t", world_doc_name(p->doc));
+        /* EVERY FIELD'S FIT IS ASSERTED, not just the world vector's. world_serialize crashes on its own
+           truncation (a prefix makes the peer fork a more distant ancestor and lose the nearer writes), and the
+           two fields AROUND it had no such check — a truncated document name reaches no instance and parks this
+           flow forever, and a truncated member makes the peer run a program for a DIFFERENT question and answer
+           it as if it were this one. Both are silent, and both are the same sentence as world_serialize's. */
+        CHECK(n > 0 && (size_t)n < sizeof op,
+              "a cross-document read's target document name did not fit its record — a truncated name reaches "
+              "no instance, and the asking flow parks on a question nothing will ever be asked");
         n += world_serialize(f->world, op + n, sizeof op - (size_t)n);
-        snprintf(op + n, sizeof op - (size_t)n, "\t%s", PROXY_MEMBER[magic]);
+        n += snprintf(op + n, sizeof op - (size_t)n, "\t%s", PROXY_MEMBER[magic]);
+        CHECK((size_t)n < sizeof op,
+              "a cross-document read's member name did not fit its record — the peer would run a program for a "
+              "TRUNCATED member, answering a different question as if it were this one");
         s->req = engine_host_request(ctx, op);
         return JS_STEP_YIELD;   /* park; siblings run until the peer answers */
     }

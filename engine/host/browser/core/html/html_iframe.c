@@ -236,9 +236,8 @@ static int iframe_content_document_step(JSContext *ctx, JSStepHdr *hdr, void *st
     if (hdr->stage == CONTENTDOC_RESOLVE) {
         JSValue nav = iframe_navigable(ctx, hdr->this_val);
         Flow *f = flow_running();
-        WorldId anc[16];
         char op[1024];
-        int n_anc, k, n;
+        int n;
 
         /* §4.8.5: no navigable, no document. */
         if (JS_IsUndefined(nav)) { *presult = JS_NULL; return JS_STEP_DONE; }
@@ -262,13 +261,25 @@ static int iframe_content_document_step(JSContext *ctx, JSStepHdr *hdr, void *st
             return JS_STEP_DONE;
         }
         DCHECK(f != NULL, "a cross-document read was issued outside a flow — there would be nothing to suspend");
-        n_anc = world_ancestry(f->world, anc, (int)(sizeof anc / sizeof anc[0]));
-        n = snprintf(op, sizeof op, "windowproxy.get\t%s\t%s:%u",
-                     world_doc_name(window_proxy_doc(nav)), world_doc_name(f->world.doc), f->world.serial);
-        for (k = 0; k < n_anc && n < (int)sizeof op; k++)
-            n += snprintf(op + n, sizeof op - (size_t)n, ",%s:%u",
-                          world_doc_name(anc[k].doc), anc[k].serial);
-        snprintf(op + n, sizeof op - (size_t)n, "\tdocument");
+        /* THE WORLD VECTOR IS world_serialize'S AND NOBODY ELSE'S (solver/world.h), and this site was the
+           second spelling of it — the head written by hand, then a hand-rolled loop over world_ancestry. Two
+           spellings are two peers materializing different segments for one flow, which is the reason that
+           function exists; and this one ALSO had the exact failure its CHECK is there to prevent, twice over.
+           `snprintf` returns the length it WOULD have written, so once the record filled `op` the accumulated
+           `n` ran PAST `sizeof op` and `sizeof op - (size_t)n` UNDERFLOWED to a huge size_t — a write past the
+           end of a stack buffer, reached by nothing louder than a deep enough frame tree or a long enough fork
+           chain. The quiet half is the loop guard `n < (int)sizeof op`, which permitted a truncated ancestry
+           to be SENT: a prefix makes the peer fork a more distant ancestor than the sender named and silently
+           lose every write in between, which is world.h's stated reason for crashing rather than sending one. */
+        n = snprintf(op, sizeof op, "windowproxy.get\t%s\t", world_doc_name(window_proxy_doc(nav)));
+        CHECK(n > 0 && (size_t)n < sizeof op,
+              "a cross-document read's target document name did not fit its record — a truncated name reaches "
+              "no instance, and the asking flow parks on a question nothing will ever be asked");
+        n += world_serialize(f->world, op + n, sizeof op - (size_t)n);
+        n += snprintf(op + n, sizeof op - (size_t)n, "\tdocument");
+        CHECK((size_t)n < sizeof op,
+              "a cross-document read's member name did not fit its record — the peer would run a program for a "
+              "TRUNCATED member, answering a different question as if it were this one");
         JS_FreeValue(ctx, nav);
         s->req = engine_host_request(ctx, op);
         hdr->stage = CONTENTDOC_ANSWER;

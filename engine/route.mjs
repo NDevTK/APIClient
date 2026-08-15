@@ -20,11 +20,25 @@
    FORKING the segment record 1 created. That fork is world_segment's nearest-first materialization, and until
    this fixture drove it, nothing outside a self-test had ever called it.
 
-   WHAT IT DOES NOT EXERCISE, said plainly: the forked segment is EMPTY, because no operation exists by which a
-   foreign world writes in a peer instance. The production ABI's only cross-instance ops are `navigable.create`
-   and `windowproxy.post`; a delivery runs under the RECEIVING flow's delta, so nothing accumulates in the
-   sender's segment. The producer of a non-empty one is the peer answering a cross-document READ by running a
-   program under the asking world — which this ABI has no entry for. */
+   AND IT ASKS THE READ, which is the half the ABI has no entry for and which nothing had ever asked. §7.2.5.1's
+   cross-origin allowlist is a fixed twelve, and of them exactly ONE cannot be answered by the navigable's own
+   record: `length` is the child-navigable count of the peer's ACTIVE DOCUMENT (window_proxy.c answers every
+   other one in the asking turn). So `w.length` is the whole of this engine's synchronous cross-instance read
+   surface, and until this fixture wrote it the request record `windowproxy.get` had never been emitted by the
+   production entry at all — the sender's half was written, reviewed, and unexercised in exactly the way the
+   world registry was.
+
+   IT IS PLACED LAST AND ITS RESULT IS POSTED, so the read is a load-bearing part of the measurement rather
+   than a statement whose value is discarded: the fourth and fifth records cannot be emitted until the read is
+   ANSWERED, and the `/got` they produce carries `typeof e.data.n` — which is what distinguishes the number 0
+   from the string "0", the sentence SECURITY.md states about this seam.
+
+   SO THIS DRIVER IS RED, AND THAT IS THE MEASUREMENT. The peer has no entry by which it can be ASKED: the
+   trusted zone can relay the record (`qjs_route` carries a one-way delivery and returns void), but nothing in
+   the ABI performs a cross-agent operation and hands back its COMPLETION. The asking flow parks with its
+   snapshot intact, the request keeps being reported by `qjs_host_requests`, and the fail line below names the
+   entry to build. The forked segment stays EMPTY for the same reason — the producer of a non-empty one is the
+   peer answering this read by running a program under the asking world. */
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -32,17 +46,26 @@ const ENGINE = dirname(fileURLToPath(import.meta.url));
 const factory = await import(join(ENGINE, '..', 'extension', 'lib', 'qjs', 'qjs.mjs'));
 const boot = factory.default ?? factory;
 
+/* THE READ IS LAST AND BOTH ARMS MAKE IT, so two DIFFERENT worlds ask the same question of one peer — which is
+   the case a single-timeline peer cannot answer with one number, and the reason the entry that performs it has
+   to install the asking world's segment rather than read a property from C. */
 const HTML_A = `<!doctype html><script>
   var w = window.open("https://b.test/child", "child");
   w.postMessage({hello:"root"}, "*");
   if (__FLAGS.admin) { w.postMessage({hello:"admin"}, "*"); } else { w.postMessage({hello:"public"}, "*"); }
+  w.postMessage({hello:"length", n: w.length}, "*");
 </script>`;
 /* `/hold` is NEVER answered, and that is the point: `b`'s boot flow stays live and owed, so the second and
    third arrivals have a timeline to arrive in. A document whose every flow has finished cannot receive, and
    the engine says so rather than delivering into nothing. */
+/* `typeof e.data.n` RIDES THE DELIVERY because `otherW.length === 0` distinguishes a number from the string
+   "0", and an answer that arrived as text and stayed text would satisfy every loose check in this file while
+   proving only that bytes moved. */
 const HTML_B = `<!doctype html><script>
   fetch("/hold");
-  window.addEventListener("message", function (e) { fetch("/got?origin=" + e.origin + "&hello=" + e.data.hello); });
+  window.addEventListener("message", function (e) {
+    fetch("/got?origin=" + e.origin + "&hello=" + e.data.hello + "&n=" + (typeof e.data.n) + ":" + e.data.n);
+  });
 </script>`;
 
 /* `topLevelUrl` is HTML §8.1.3.1's TOP-LEVEL CREATION URL — this zone's to state, because one instance is
@@ -65,6 +88,11 @@ const holderOf = (doc) => engines.find((e) => e.docId === doc) ?? null;
 
 const posts = [];   /* routed records, in emission order, held until their target is free to receive one */
 const got = [];     /* every /got the receiving page fetched — one per message its listener actually saw */
+/* EVERY CROSS-AGENT OPERATION THIS ZONE WAS ASKED TO PERFORM, keyed by the asking engine's request id, and
+   whether it was ever answered. Keyed rather than counted because `qjs_host_requests` deliberately does NOT
+   dedupe — an unanswered request is re-reported on every single step, so a count would be a step count, and
+   the log line below would be one line per step for the rest of the run. */
+const reads = new Map();
 
 /* ONE STEP of `e`, then everything the host owes it. Returns false once the engine reports its frontier done. */
 async function service(e) {
@@ -87,6 +115,17 @@ async function service(e) {
      visible in a way a wrong answer is not. */
   for (const l of e.str('qjs_host_requests').split('\n').filter(Boolean)) {
     const id = +l.slice(0, l.indexOf('\t')), op = l.slice(l.indexOf('\t') + 1);
+    /* A CROSS-AGENT OPERATION IS RECORDED THE FIRST TIME IT IS ASKED and never answered here, because there is
+       nothing in the ABI to ask the peer WITH. It is not skipped silently: leaving it out of the accounting is
+       how a seam whose read half has never run reports OK. */
+    if (op.startsWith('windowproxy.get\t') || op.startsWith('object.')) {
+      const key = `${e.docId}#${id}`;
+      if (!reads.has(key)) {
+        reads.set(key, { asker: e.docId, op, answered: false });
+        console.log(`  [${e.docId}] cross-agent read asked: ${op}`);
+      }
+      continue;
+    }
     console.log(`  [${e.docId}] request: ${op.slice(0, 90)}`);
     if (!op.startsWith('document.fetch\t')) continue;
     /* THE TRAILING 0 IS THE NORMAL COMPLETION — an answer is a completion record, and this zone fetched bytes
@@ -130,6 +169,9 @@ for (const p of posts) {
 
 console.log(`\nposts routed: ${posts.length}   messages the receiving page saw: ${got.length}`);
 for (const u of got) console.log('  ' + u);
+const readsAnswered = [...reads.values()].filter((r) => r.answered).length;
+console.log(`cross-agent reads asked: ${reads.size}   answered: ${readsAnswered}`);
+for (const r of reads.values()) console.log(`  [${r.asker}] ${r.answered ? 'ANSWERED' : 'UNANSWERED'} ${r.op}`);
 /* THE SEAM'S OWN COUNT, from the receiving instance. `_worldSegments` is how many foreign worlds hold a segment
    here; `_worldSegmentsForked` is how many of those were built by FORKING an ancestor the ancestry named, which
    is the number this driver exists to move off zero. */
@@ -141,11 +183,12 @@ for (const e of engines) {
               `flows=${r._flows} switches=${r._switches}`);
 }
 
-/* WHAT MAKES THIS A SMOKE TEST RATHER THAN A PRINTOUT. Three things have to have happened, and each of them is
+/* WHAT MAKES THIS A SMOKE TEST RATHER THAN A PRINTOUT. Four things have to have happened, and each of them is
    a whole mechanism failing silently if it did not: a second instance was provisioned (the create notice was
-   acted on), every routed record reached the receiving page's listener (the inbound half), and at least one
-   segment was materialized by FORKING an ancestor (the world vector's ancestry was READ and used, which is the
-   part that was written, reviewed and never run). */
+   acted on), every routed record reached the receiving page's listener (the inbound half), at least one
+   segment was materialized by FORKING an ancestor (the world vector's ancestry was READ and used), and the one
+   synchronous cross-instance READ this engine has was asked AND answered by the instance that holds the
+   document — which is the half that has never run. */
 const fail = (why) => { console.error('[route] FAILED: ' + why); process.exit(1); };
 if (engines.length < 2) fail('no second instance was provisioned — the navigable.create notice went unanswered');
 if (!posts.length) fail('the sender emitted no cross-instance post');
@@ -153,4 +196,28 @@ if (got.length !== posts.length)
   fail(`${posts.length} posts routed but the receiving page's listener saw ${got.length}`);
 if (!forked) fail("no segment was materialized by forking an ancestor — the world vector's ancestry was carried " +
                   'and never used, which is the state this driver exists to detect');
-console.log('[route] OK — two instances, every routed record delivered, ancestry-forked segments: ' + forked);
+/* ASKED IS THE FIRST HALF AND IT IS NOW TRUE. A zero here would mean `w.length` resolved WITHOUT reaching the
+   peer, which is a §7.2.5.1 fidelity bug and not a transport gap: `length` is the child-navigable count of the
+   OTHER document, so an answer produced in the asking instance counted this document's frames and called them
+   the other's. */
+if (!reads.size)
+  fail('`w.length` on a cross-origin WindowProxy asked the peer nothing — §7.2.5.1 answers it from the child-' +
+       "navigable count of the PEER's active document, so an answer that never left this instance counted the " +
+       "asking document's own frames");
+/* AND ANSWERED IS THE SECOND, AND IT IS THE ENTRY THAT DOES NOT EXIST. Every mechanism above this line is the
+   ASKING half — the world vector, its ancestry, the segment the peer materializes from it, the origin stamp.
+   They are exercised end to end and they still describe a design that has never carried a value back, because
+   nothing can ASK the peer: `qjs_route` hands an instance a one-way delivery and returns void, and
+   `qjs_host_answer` is how the TRUSTED ZONE answers a request it computed itself. Neither of them is a peer
+   PERFORMING an operation. */
+if (readsAnswered !== reads.size)
+  fail(`${reads.size} cross-agent read(s) asked and ${readsAnswered} answered — build the ABI entry by which ` +
+       'an instance is ASKED to perform a cross-agent operation and hands back its COMPLETION. It is not ' +
+       '`qjs_route` (one-way, void) and not `qjs_host_answer` (the zone answering a request it computed ' +
+       'itself). The peer must install the asking world\'s segment and answer BY RUNNING A PROGRAM — a flow ' +
+       'on the one frontier, parkable at any depth — and the completion must cross in remote_object.c\'s ' +
+       'grammar, not as JSON, because a member whose value is an OBJECT crosses as a NAME and JSON cannot ' +
+       'express one. engine/host/wpt_runner.c performs exactly this over a pipe to a child PROCESS and is the ' +
+       'only implementation of it; hoist it so there is one, rather than writing a second here');
+console.log('[route] OK — two instances, every routed record delivered, ancestry-forked segments: ' + forked +
+            `, cross-agent reads answered: ${readsAnswered}`);
