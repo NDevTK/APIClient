@@ -594,7 +594,6 @@ static JSAtom  g_atom_rq_head = JS_ATOM_NULL;
 /* §4.13.6's "processing the backup element queue" flag, on the backup queue itself for the same reason. */
 static JSAtom  g_atom_backup_flag = JS_ATOM_NULL;
 static int     g_backup_stepid = -1;
-static JSValue g_backup_fn = JS_UNDEFINED;
 
 static uint32_t ce_array_len(JSContext *ctx, JSValueConst arr)
 {
@@ -750,9 +749,21 @@ static void ce_enqueue_element(JSContext *ctx, JSValueConst wrap)
         if (set) return;
         JS_SetProperty(ctx, g_ce_backup, g_atom_backup_flag, JS_TRUE);
     }
-    DCHECK(JS_IsObject(g_backup_fn),
-           "a reaction reached the backup element queue before custom_elements_init built its microtask driver");
-    JS_EnqueueCallJob(ctx, g_backup_fn, 0, NULL);
+    /* THE DRIVER IS MINTED IN THE REALM THAT ENQUEUES IT, and that is not a tidy-up. A C function object
+       CARRIES the realm it was defined in — js_call_c_function does `ctx = p->u.cfunc.realm` — so one built
+       once at init and held in a module static drains every document's reactions with the AGENT'S FIRST
+       realm's ctx, whichever document happened to run init. The backup queue itself is agent-wide and so is
+       the step id (an int the runtime registered, with no realm in it); the FUNCTION OBJECT is the only part
+       with a realm, which makes it the only part that must not be shared. CLAUDE.md §per-realm-fact names
+       exactly this: mint it in the realm that uses it, per call, rather than holding one in a static. */
+    DCHECK(g_backup_stepid >= 0,
+           "a reaction reached the backup element queue before custom_elements_init registered its driver");
+    {
+        JSValue fn = JS_NewCFunction2(ctx, NULL, "backupElementQueue", 0, JS_CFUNC_step, g_backup_stepid);
+        CHECK(!JS_IsException(fn), "the backup element queue's driver could not be allocated");
+        JS_EnqueueCallJob(ctx, fn, 0, NULL);
+        JS_FreeValue(ctx, fn);
+    }
 }
 
 void custom_elements_reactions_push(CustomElementQueue *q)
@@ -2802,8 +2813,6 @@ void custom_elements_init(JSContext *ctx)
     g_backup_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_ce_backup_def);
     /* The backup drain is a step function object nobody installs, so a page can neither see it nor replace
        it — the same reason the internal event dispatcher is not on any prototype. */
-    g_backup_fn = JS_NewCFunction2(ctx, NULL, "backupElementQueue", 0, JS_CFUNC_step, g_backup_stepid);
-    CHECK(!JS_IsException(g_backup_fn), "the backup element queue's driver could not be allocated");
     /* §4.13.4's SIX members, DECLARED once per agent and installed on the per-realm PROTOTYPE: a declaration
        made where they are installed would mint them again for every realm — and now also for every scoped
        registry a page constructs, which is what makes the prototype the only place they can live. */
@@ -2925,13 +2934,12 @@ void custom_elements_free(JSContext *ctx)
 
     if (!g_ready) return;
     /* the registries are the REALMS' — released with their contexts */
-    JS_FreeValue(ctx, g_backup_fn);
     JS_FreeValue(ctx, g_ce_backup);
     JS_FreeValue(ctx, g_rq_key);
     JS_FreeValue(ctx, g_active_ctor_map);
     JS_FreeValue(ctx, g_reg_key);
     JS_FreeValue(ctx, g_node_reg_key);
-    g_backup_fn = g_ce_backup = g_rq_key = JS_UNDEFINED;
+    g_ce_backup = g_rq_key = JS_UNDEFINED;
     g_active_ctor_map = g_reg_key = g_node_reg_key = JS_UNDEFINED;
     JS_FreeAtom(ctx, g_atom_reg);
     JS_FreeAtom(ctx, g_atom_node_reg);
