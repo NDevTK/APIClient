@@ -405,12 +405,25 @@ bool    idl_dict_bool(JSContext *ctx, JSValueConst dict, const char *name);
    same shape as a dispatch predicate at each call site. A member that mutates the tree WITHOUT being declared
    leaves a record nobody consumes, which the machine asserts on rather than letting it rot.
    The DOM layer registers these because this file must not know what a Node is; it knows only that something
-   was recorded and that it takes N steps to consume. */
+   was recorded and that it takes N steps to consume.
+   A STEP RETURNS A STEP CODE AND IS HANDED THE DRIVING MACHINE'S HEADER, because a per-node effect ASKS
+   QUESTIONS: HTML §6.6.7's insertion steps run §6.6.6's allow focus steps, whose second clause is §6.4.1's
+   TRANSIENT ACTIVATION — unknown external state, so the answer is a FORK and not a `bool`. A walk that could
+   only say "more remains" had nowhere to put that, which is why it stood at a DFAIL naming this signature.
+   JS_STEP_YIELD = more remains, JS_STEP_FORK = the caller returns it and the walk is RE-ENTERED at the same
+   node (its own phase is what stops the effects it already performed from running twice), 0 = the walk is
+   done and the buffer has been released. */
 typedef struct {
     void *(*take)(JSContext *ctx);                 /* everything recorded so far, or NULL; leaves none behind */
-    bool  (*step)(JSContext *ctx, void *buf);      /* ONE node; true while more remains */
+    int   (*step)(JSContext *ctx, void *buf, JSStepHdr *h);   /* ONE node; a step code */
     void  (*release)(JSContext *ctx, void *buf);
     bool  (*recorded)(void);                       /* is anything waiting to be taken */
+    /* THE BUFFER ACROSS A FORK. A fork inside the walk snapshots the driving machine, which byte-copies its
+       state and re-takes only what a `visit` names — so a buffer left unvisited would be ONE allocation two
+       flows both walk and both free, and the two arms would share a cursor. It is visited exactly as a step
+       machine visits its own owned storage, and the DOM layer performs it because only that layer knows how
+       the buffer is laid out. */
+    void  (*visit)(JSContext *ctx, void **buf, JSStepVisit *v);
 } IdlTreeSteps;
 void idl_set_tree_steps(const IdlTreeSteps *ops);
 

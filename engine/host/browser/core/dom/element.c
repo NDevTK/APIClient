@@ -1484,19 +1484,45 @@ static const JSCFunctionListEntry js_element_readonly[] = {
  * THE CONNECTEDNESS TEST STAYS HERE, at record time, and that is load-bearing: a REMOVAL fires the hook BEFORE
  * the detach, because "was it connected" has no answer afterwards. The record carries the decision the spec
  * made at mutation time, and the drain never re-derives it.
- * EVERY PER-NODE EFFECT IS AN ENQUEUE — a script queued as a flow, an endpoint recorded, a custom-element
- * reaction enqueued — so nothing the drain does reaches back into the chokepoint and no entry can appear while
- * the walk that would consume it is running. */
+ * NO PER-NODE EFFECT REACHES BACK INTO THE CHOKEPOINT — a script is queued as a flow, an endpoint recorded, a
+ * custom-element reaction enqueued, a child navigable minted locally — so no entry can appear while the walk
+ * that would consume it is running. But one of them ASKS: HTML §6.6.7's insertion steps run §6.6.6's allow
+ * focus steps, whose second clause is §6.4.1's TRANSIENT ACTIVATION — unknown external state, so the answer is
+ * a FORK, and the walk is re-entered at the same node with the arm this flow took. That is what the per-node
+ * phase below is for. */
 typedef struct {
     lxb_dom_node_t *root;     /* the subtree the steps run over */
     lxb_dom_node_t *cursor;   /* how far the walk has got — the resume point */
     uint8_t         inserted;
 } TreeStepEntry;
 
+/* WHERE THE WALK IS INSIDE THE NODE IT IS STANDING ON — the resume point a fork needs, one level finer than the
+   cursor. Everything a node has already had done to it must be BEHIND the phase, because a re-entry without one
+   re-runs it: the <iframe> gets a SECOND child navigable, the inserted <script> is prepared and its program
+   queued twice, and the custom element is enqueued for upgrade twice. Each of those is a real effect on a real
+   document with nothing to say it happened twice, which is exactly the shape §7.4's double load had. */
+enum {
+    /* §4.8.5's create-a-child-navigable, HTML §4.12.1's prepare-a-script and §4.13.3's upgrade — and the
+       removing steps' pair of them. None can ask anything, so they all run in one step and the phase is past
+       them before the step that can is reached. */
+    TS_NODE_EFFECTS = 0,
+    TS_NODE_AUTOFOCUS         /* HTML §6.6.7's insertion steps, whose step 5 can FORK */
+};
+
 /* The buffer a machine takes ownership of. Per-machine and not global, because the drain YIELDS: a global list
    would be appended to by whichever flow ran during the suspension, and the resuming one would then run another
-   flow's insertion steps over another flow's nodes. */
-typedef struct { TreeStepEntry *e; int n, i; } TreeStepBuf;
+   flow's insertion steps over another flow's nodes.
+   ONE ALLOCATION, ENTRIES INCLUDED, because a fork mid-walk CLONES it: a header pointing at a separate array
+   would need two visits in OPPOSITE orders for the clone and the teardown, which is the mistake JSStepVisit's
+   `array` operation exists to make impossible. One block is one v->buf and cannot be got wrong. */
+typedef struct {
+    int      n, i;
+    uint8_t  nphase;     /* TS_NODE_* — where the walk is inside e[i].cursor */
+    /* §6.4.1's two CHAINED questions (sticky, then "and recently"), each of which forks: the byte says which
+       one an answer is owed to, so it belongs to the walk and not to a C local that a park would forget. */
+    uint8_t  ua_phase;
+    TreeStepEntry e[];
+} TreeStepBuf;
 
 static TreeStepEntry *g_ts;
 static int g_ts_n, g_ts_cap;
@@ -1550,21 +1576,32 @@ static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, lxb_dom_n
 }
 
 /* Hand the running member everything recorded so far, and leave the global empty. Called at every boundary a
-   body can return through, so nothing recorded outlives the member that caused it. */
+   body can return through, so nothing recorded outlives the member that caused it.
+   The entries are COPIED into the member's own block rather than the global's storage being handed over: the
+   block is the thing a fork clones, so it is js-allocated like every other piece of a step machine's state,
+   while the global stays the plain scratch list the chokepoint refills (element_free releases it). */
 static void *element_tree_steps_take(JSContext *ctx)
 {
     TreeStepBuf *b;
-    (void)ctx;
+
     if (!g_ts_n) return NULL;
-    b = malloc(sizeof *b);
-    CHECK(b != NULL, "the tree-steps buffer could not be allocated");
-    b->e = g_ts; b->n = g_ts_n; b->i = 0;
-    g_ts = NULL; g_ts_n = g_ts_cap = 0;
+    b = js_malloc(ctx, sizeof(TreeStepBuf) + sizeof(TreeStepEntry) * (size_t)g_ts_n);
+    CHECK(b != NULL, "the tree-steps buffer could not be allocated — dropping it means an inserted <script> "
+                     "never runs and a custom element never upgrades, silently");
+    b->n = g_ts_n;
+    b->i = 0;
+    b->nphase = TS_NODE_EFFECTS;
+    b->ua_phase = 0;
+    memcpy(b->e, g_ts, sizeof *b->e * (size_t)g_ts_n);
+    g_ts_n = 0;
     return b;
 }
 
-/* ONE NODE. Returns true while there is more to do, which is what makes the caller's loop a yield per node. */
-static bool element_tree_steps_step(JSContext *ctx, void *vb)
+/* ONE NODE. JS_STEP_YIELD while there is more to do — which is what makes the caller's drain a yield per node —
+   JS_STEP_FORK when a per-node effect's answer depends on unknown external state, and 0 when the walk is over.
+   `h` is the DRIVING machine's header: a fork is snapshotted at that machine, and the arm is delivered back to
+   the same call site inside the same node's phase. */
+static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h)
 {
     TreeStepBuf *b = vb;
     TreeStepEntry *e;
@@ -1585,35 +1622,67 @@ static bool element_tree_steps_step(JSContext *ctx, void *vb)
     if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
         lxb_dom_element_t *el = lxb_dom_interface_element(n);
         if (e->inserted) {
-            /* §4.8.5: an inserted <iframe> CREATES A CHILD NAVIGABLE, right here, which is where the spec puts
-               it — `frame.contentWindow` answers on the line after the append. It does not suspend (the child's
-               name is minted locally), so it does not need the enqueue this walk's buffer would otherwise
-               demand; it joins <script> preparation and custom-element upgrades as one more per-node effect. */
-            {
-                size_t qn = 0;
-                const lxb_char_t *q = lxb_dom_element_qualified_name(el, &qn);
-                /* ASCII-case-insensitive: a parsed `<iframe>` and a `createElement('iframe')` are the same
-                   element and must not be told apart by how their name happened to be stored. */
-                if (q && qn == 6 && !strncasecmp((const char *)q, "iframe", 6)) {
-                    JSValue w = node_wrap(ctx, n);
-                    iframe_create_navigable(ctx, w);
-                    JS_FreeValue(ctx, w);
+            if (b->nphase == TS_NODE_EFFECTS) {
+                /* §4.8.5: an inserted <iframe> CREATES A CHILD NAVIGABLE, right here, which is where the spec
+                   puts it — `frame.contentWindow` answers on the line after the append. It does not suspend
+                   (the child's name is minted locally), so it does not need the enqueue this walk's buffer
+                   would otherwise demand; it joins <script> preparation and custom-element upgrades as one
+                   more per-node effect. */
+                {
+                    size_t qn = 0;
+                    const lxb_char_t *q = lxb_dom_element_qualified_name(el, &qn);
+                    /* ASCII-case-insensitive: a parsed `<iframe>` and a `createElement('iframe')` are the same
+                       element and must not be told apart by how their name happened to be stored. */
+                    if (q && qn == 6 && !strncasecmp((const char *)q, "iframe", 6)) {
+                        JSValue w = node_wrap(ctx, n);
+                        iframe_create_navigable(ctx, w);
+                        JS_FreeValue(ctx, w);
+                    }
                 }
+                element_prepare_script(ctx, el);   /* HTML 4.12.1: an inserted <script> is PREPARED */
+                /* DOM §4.2.3's insertion steps: an element that ENTERS a document gets its connectedCallback if
+                   it is already custom, and is otherwise tried for upgrade — the other half of "learned by
+                   execution", beside the <script> preparation right above it. The upgrade is ENQUEUED, never
+                   run: it constructs the page's class, and this walk is C that cannot park. */
+                custom_elements_element_connected(ctx, el);
+                /* THE PHASE MOVES BEFORE THE STEP THAT CAN ASK, and that placement is the whole mechanism:
+                   everything above is DONE for this node, and a re-entry that ran it again would mint a second
+                   child navigable for one <iframe>, queue one <script>'s program twice and enqueue one custom
+                   element's upgrade twice — three real effects with nothing to say they happened twice. */
+                b->nphase = TS_NODE_AUTOFOCUS;
             }
-            element_prepare_script(ctx, el);   /* HTML 4.12.1: an inserted <script> is PREPARED */
-            /* DOM §4.2.3's insertion steps: an element that ENTERS a document gets its connectedCallback if it
-               is already custom, and is otherwise tried for upgrade — the other half of "learned by
-               execution", beside the <script> preparation right above it. The upgrade is ENQUEUED, never run:
-               it constructs the page's class, and this walk is C that cannot park. */
-            custom_elements_element_connected(ctx, el);
+            DCHECK(b->nphase == TS_NODE_AUTOFOCUS,
+                   "§4.2.3's insertion steps resumed in a phase this walk never parks in — the only rest point "
+                   "inside a node is §6.6.7's step 5, and a resume anywhere else means a phase was set by "
+                   "something that does not park there");
             /* HTML §6.6.7's insertion steps: an element carrying the `autofocus` content attribute becomes a
                CANDIDATE on the top-level traversable's active document, to be flushed at the next rendering
                opportunity (§8.1.7.3 step 7). It does NOT focus anything here — the standard's whole point is
                that the decision is deferred and then taken once, over the whole queue. Last of the per-node
                effects because an `<iframe autofocus>` is a candidate whose focusable area is the content
-               navigable created three lines above. */
-            autofocus_element_inserted(el);
+               navigable created above.
+               IT IS THE ONE THAT ASKS: its step 5 runs §6.6.6's allow focus steps, whose second clause is
+               §6.4.1's transient activation — unknown external state, so this flow takes one arm and a sibling
+               is snapshotted holding the other. */
+            {
+                int r = autofocus_element_inserted(el, h, &b->ua_phase);
+
+                if (r) {
+                    DCHECK(r == JS_STEP_FORK,
+                           "§6.6.7's insertion steps answered with a step code that is not a fork — the only "
+                           "question they ask is §6.4.1's activation state, and nothing in them calls the "
+                           "page's code, which §4.2.3 forbids between two nodes' insertion steps");
+                    return r;
+                }
+                DCHECK(b->ua_phase == 0,
+                       "§6.4.1's chained questions answered §6.6.7's step 5 with the phase byte left "
+                       "mid-chain — the next node would then ask the second conjunct of a question nobody "
+                       "asked the first half of");
+            }
         } else {
+            DCHECK(b->nphase == TS_NODE_EFFECTS && b->ua_phase == 0,
+                   "§4.2.3's REMOVING steps resumed mid-node — nothing in them asks anything, so there is no "
+                   "point inside one for a walk to park at");
             /* §4.8.5's removing steps, the pair of the insertion steps above: an <iframe> that LEAVES a
                document destroys its child navigable. Without it a removed frame kept answering as a live one —
                `contentWindow` stayed non-null and `closed` stayed false, which is precisely what the spec files
@@ -1627,28 +1696,44 @@ static bool element_tree_steps_step(JSContext *ctx, void *vb)
             }
             custom_elements_disconnected(ctx, el);
         }
+    } else {
+        DCHECK(b->nphase == TS_NODE_EFFECTS && b->ua_phase == 0,
+               "§4.2.3's steps resumed mid-node on a node that is not an element — every step that can rest "
+               "inside a node is an element's, so this walk has no way to have parked here");
     }
-    if (n->first_child) { e->cursor = n->first_child; return true; }
+    /* THE NODE IS FINISHED, so the phase belongs to the next one — reset BEFORE the cursor moves, since the
+       two together are the resume point and a phase left behind would be read against a different node. */
+    b->nphase = TS_NODE_EFFECTS;
+    b->ua_phase = 0;
+    if (n->first_child) { e->cursor = n->first_child; return JS_STEP_YIELD; }
     while (n && !n->next) n = (n == e->root) ? NULL : n->parent;
     n = n ? n->next : NULL;
     e->cursor = n;
-    if (n) return true;
-    return ++b->i < b->n;
+    if (n) return JS_STEP_YIELD;
+    return ++b->i < b->n ? JS_STEP_YIELD : 0;
 }
 
 static void element_tree_steps_free(JSContext *ctx, void *vb)
 {
-    TreeStepBuf *b = vb;
-    (void)ctx;
+    js_free(ctx, vb);   /* ONE allocation, entries included */
+}
+
+/* THE BUFFER ACROSS A FORK. Nothing in it holds a reference — an entry names two Lexbor nodes, and the tree
+   those name is the flow's own through the DOM COW delta — so the plain buffer copy IS the whole contract, and
+   each arm walks on with its own cursor, its own `i` and its own per-node phase. */
+static void element_tree_steps_visit(JSContext *ctx, void **slot, JSStepVisit *v)
+{
+    TreeStepBuf *b = *slot;
+
     if (!b) return;
-    free(b->e);
-    free(b);
+    v->buf(ctx, slot, sizeof *b + sizeof *b->e * (size_t)b->n);
 }
 
 static bool element_tree_steps_recorded(void) { return g_ts_n != 0; }
 
 static const IdlTreeSteps ELEMENT_TREE_STEPS = {
-    element_tree_steps_take, element_tree_steps_step, element_tree_steps_free, element_tree_steps_recorded
+    element_tree_steps_take, element_tree_steps_step, element_tree_steps_free, element_tree_steps_recorded,
+    element_tree_steps_visit
 };
 
 /* §4.9 `[SameObject] readonly attribute NamedNodeMap attributes`. [SameObject] is an identity the IDL states,
@@ -1966,6 +2051,16 @@ void element_free(JSContext *ctx)
        2200 retained objects and a JSContext at refcount 2212 on the shipped entry, reported by the runtime's
        leak walk as anonymous Functions with nothing naming the owner. */
     node_free(ctx);
+    /* THE TREE-STEPS RECORDER'S SCRATCH LIST. It is the chokepoint's own storage, refilled between members and
+       emptied by every take, so anything still counted here is a mutation whose insertion steps no member ever
+       drained — which the args machine already asserts at its own end and this states again at the teardown,
+       where the answer is the whole agent's and not one member's. */
+    DCHECK(g_ts_n == 0, "the agent is being torn down with tree steps still recorded — an inserted <script> "
+                        "never ran and a custom element never upgraded, and the mutation that recorded them "
+                        "was not inside a declared member");
+    free(g_ts);
+    g_ts = NULL;
+    g_ts_n = g_ts_cap = 0;
     html_element_free(ctx);
     cssom_free(ctx);
     custom_elements_free(ctx);

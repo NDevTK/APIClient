@@ -814,10 +814,17 @@ static void js_idl_args_visit(JSContext *ctx, void *st, JSStepVisit *v)
        declaration allocated are the same number read from the same place. */
     for (i = 0; i < m->nargs; i++)
         v->val(ctx, &idl_args_vec(st)[i]);
-    /* A FORK CANNOT HAPPEN MID-DRAIN, and that is why this buffer needs no clone contract. A fork is a concolic
-       branch, which is bytecode; the drain runs none — every per-node effect is an enqueue. If this ever fires,
-       the drain grew a call into the page and the buffer needs a real ownership declaration. */
-    DCHECK(s->tree == NULL, "an IDL member was forked while draining its tree steps");
+    /* A FORK CAN HAPPEN MID-DRAIN, and this is the buffer's clone contract. It used to assert the opposite —
+       "a fork is a concolic branch, which is bytecode; the drain runs none" — and that was true only while
+       every per-node effect was an enqueue. HTML §6.6.7's insertion steps are not: their step 5 asks §6.6.6's
+       allow focus steps, whose second clause is §6.4.1's transient activation, which is unknown external state
+       and therefore a FORK inside the walk. So the walk's buffer is visited like any other owned storage —
+       each arm gets its own cursor and its own per-node phase, and neither frees the other's. */
+    if (s->tree) {
+        DCHECK(g_tree != NULL, "an IDL member holds a tree-steps buffer with no DOM layer registered — the "
+                               "buffer can only have come from that layer's own take");
+        g_tree->visit(ctx, &s->tree, v);
+    }
     custom_elements_queue_visit(ctx, &s->ce, v);
     /* EVERY declared frame, not only the live ones. A popped frame holds JS_UNDEFINED and a never-used one the
        zeroed state's non-refcounted integer, so visiting all of them takes no reference it should not — where a
@@ -864,11 +871,24 @@ static void idl_tree_take(JSContext *ctx, JSIdlArgsState *s)
     s->tree = g_tree->take(ctx);
 }
 
-/* THE DRAIN, one node per entry. Returns JS_STEP_YIELD while it has work, or 0 when there is none left. */
+/* THE DRAIN, one node per entry. It FORWARDS whatever the walk answers with — JS_STEP_YIELD when it has more
+   work, and JS_STEP_FORK the same way, because a per-node effect can ask a question whose answer is unknown
+   external state (HTML §6.6.7's insertion steps run §6.6.6's allow focus steps, whose second clause is §6.4.1's
+   transient activation). Both codes mean the same thing to this machine: return it, and the re-entry above
+   comes straight back here. 0 is the walk finished, and the buffer is released on that edge and nowhere else. */
 static int idl_tree_drain(JSContext *ctx, JSIdlArgsState *s)
 {
+    int r;
+
     if (!s->tree) return 0;
-    if (g_tree->step(ctx, s->tree)) return JS_STEP_YIELD;
+    r = g_tree->step(ctx, s->tree, &s->hdr);
+    if (r) {
+        DCHECK(r == JS_STEP_YIELD || r == JS_STEP_FORK,
+               "§4.2.3's tree-steps walk answered with a step code this drain cannot forward — it may rest "
+               "(JS_STEP_YIELD) or fork (JS_STEP_FORK), and a request that parks on the PAGE's code would run "
+               "that code between two nodes' insertion steps, which is not the order §4.2.3 states");
+        return r;
+    }
     g_tree->release(ctx, s->tree);
     s->tree = NULL;
     return 0;

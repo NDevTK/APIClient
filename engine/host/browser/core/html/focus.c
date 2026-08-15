@@ -921,9 +921,10 @@ static bool focus_state_init(JSContext *ctx, FocusState *s)
      THE FIRST CLAUSE STILL SHORT-CIRCUITS, and it does the work: a same-origin-with-top document is allowed to
    use the feature outright, so nothing is asked and nothing forks — which is every document in an ordinary
    page. The question is reached only where the feature's default allowlist does not already answer it.
-     IT IS EXPORTED because §6.6.7's insertion steps run it too (their step 5), by that name, over the same
-   Document — see focus.h. */
-bool focus_allow_without_user_activation(JSContext *target)
+     IT IS NOT EXPORTED. It was, so that §6.6.7's insertion steps could answer this clause from inside DOM
+   §4.2.3's plain-C walk and crash on the other; that walk now carries the driving machine's header and forks
+   like anything else, so the whole algorithm has one door and this clause has no caller of its own. */
+static bool focus_allow_without_user_activation(JSContext *target)
 {
     JSValue top = window_proxy_top_navigable(target, document_window_proxy(target));
     bool same = JS_IsObject(top) && window_proxy_same_origin_of(top);
@@ -938,6 +939,23 @@ int focus_allow_focus_steps_run(JSContext *target, JSStepHdr *h, uint8_t *phase,
         *out = true;
         return 0;
     }
+    /* THE SECOND CLAUSE IS A FORK, so from here on there must be a machine to fork AT — and the one caller
+       that has none is §6.6.7's walk over the tree the PARSER built, which runs inside document install, at
+       the pre-boot COW baseline, where no flow exists to snapshot and nothing would receive the JS_STEP_FORK.
+       Asserted at the question rather than at that caller, because the caller cannot know whether the
+       question will be reached without re-deciding the clause above — and a second copy of that decision is
+       exactly the one-fact-two-answers defect this file exists to avoid.
+       BUILD: §6.6.7's insertion steps for the parsed tree belong to the FIRST FLOW rather than to the
+       baseline install — give document install's parsed-tree walks (§4.8.5's child navigables, §13.2.6.4.4's
+       declarative shadow roots and autofocus_document_parsed) a step machine that boot drives, and hand its
+       header down here. Only a CROSS-ORIGIN-embedded document's parsed tree reaches this line: every document
+       that is same origin with its top-level document is answered by the clause above. */
+    DCHECK(h != NULL,
+           "§6.6.6's ALLOW FOCUS STEPS reached their second clause — §6.4.1's TRANSIENT ACTIVATION, which is "
+           "unknown external state and therefore a FORK — with no driving step machine to fork at. That is "
+           "§6.6.7's walk over the tree the parser built, which runs inside document install at the pre-boot "
+           "COW baseline: make those parsed-tree walks a step machine the first flow drives, and pass its "
+           "header here");
     return user_activation_transient_run(target, h, phase, out);
 }
 

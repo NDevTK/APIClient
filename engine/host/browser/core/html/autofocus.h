@@ -13,6 +13,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "quickjs.h"
+#include "quickjs-step.h"
 
 /* THE AGENT'S HALF: the realm slot §6.6.7's two pieces of state live in. Reached from document_init, beside
    §6.6's focused area and for the reason stated there — the list belongs to a DOCUMENT, and document.c is the
@@ -28,13 +29,21 @@ void autofocus_install_document(JSContext *ctx);
 /* §6.6.7's INSERTION STEPS, "when an element with the autofocus attribute specified is inserted into a
    document". `el` is that element; the algorithm's own step 1 tests the attribute, so a caller hands over every
    inserted element rather than filtering first. Reached from DOM §4.2.3's insertion steps in
-   core/dom/element.c, which is where every scripted insertion converges. */
-void autofocus_element_inserted(lxb_dom_element_t *el);
+   core/dom/element.c, which is where every scripted insertion converges.
+   THEY ARE A REQUEST, because their step 5 runs §6.6.6's ALLOW FOCUS STEPS, whose second clause is §6.4.1's
+   transient activation — unknown external state, so the answer FORKS. `h` is the driving step machine's header
+   and `ua_phase` a byte that machine owns on its own state, exactly as user_activation.h's questions take one;
+   both belong to the CALLER because the fork's snapshot is taken there and the re-entry comes back to this
+   call site. Returns JS_STEP_FORK (the caller returns it) or 0 when the steps have finished. */
+int autofocus_element_inserted(lxb_dom_element_t *el, JSStepHdr *h, uint8_t *ua_phase);
 
 /* THE SAME STEPS FOR THE ELEMENTS THE PARSER INSERTED. A browser runs the insertion steps during tree
    construction, so `<input autofocus>` in the page's own markup is a candidate before the first script runs;
    this engine's tree comes from a Lexbor parse that does not pass through the DOM chokepoint, so the parsed
-   tree gets its steps here, once, when the document is installed — exactly as §4.8.5's child navigables do. */
+   tree gets its steps here, once, when the document is installed — exactly as §4.8.5's child navigables do.
+   It is NOT a request: document install runs at the pre-boot COW baseline, where there is no flow to snapshot,
+   so it hands the steps no header and the allow focus steps assert against the one document whose parsed tree
+   would need the fork (a cross-origin-embedded one) rather than picking an arm for it. */
 void autofocus_document_parsed(JSContext *ctx);
 
 /* HTML §8.1.7.3 update the rendering STEP 7 — "For each doc of docs, flush autofocus candidates for doc if its

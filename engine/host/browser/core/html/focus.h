@@ -78,16 +78,14 @@ int  focus_viewport_run(JSContext *docctx, uint8_t *phase, JSValue *cb, int cb_c
    holding the other. `h` is the calling step machine's header and `phase` a byte that machine owns on its own
    state, exactly as user_activation.h's own questions take one. Returns JS_STEP_FORK (the caller returns it
    and is re-entered at the same call site) or 0 with *out set. The first clause short-circuits, so a document
-   that is same origin with its top-level document is answered without asking anything. */
+   that is same origin with its top-level document is answered without asking anything.
+   THERE IS NO SECOND ENTRY POINT FOR THE FIRST CLAUSE ALONE. There was one — the half that decides without
+   asking, exported so §6.6.7's insertion steps could answer it and CRASH on the other from inside DOM
+   §4.2.3's plain-C walk — and it is gone with the walk's conversion: the tree steps carry a header and fork
+   like anything else, so this is the whole algorithm's only door. A caller with no machine to fork at (the
+   parsed tree's walk, which runs at the pre-boot baseline) passes a NULL header and is asserted against HERE,
+   at the question, rather than by re-deciding one of the clauses at its own site. */
 int focus_allow_focus_steps_run(JSContext *docctx, JSStepHdr *h, uint8_t *phase, bool *out);
-
-/* THE FIRST OF THE ALLOW FOCUS STEPS' TWO CLAUSES ON ITS OWN — "if target is allowed to use the
-   `focus-without-user-activation` feature, return true". It is exported separately because it is the half that
-   DECIDES WITHOUT ASKING, and a caller that cannot ask needs to know which half it is standing on: §6.6.7's
-   insertion steps run inside DOM §4.2.3's tree-steps walk, which has no flow base to fork at, so they answer
-   this clause and CRASH on the other rather than picking one of its two arms silently. Nothing may use this as
-   a cheaper spelling of the whole algorithm — the second clause is the one that reaches the activated world. */
-bool focus_allow_without_user_activation(JSContext *docctx);
 
 /* §6.6.7 flush step 4's first disjunct, negated — "topDocument's focused area is topDocument itself". §6.6.2's
    focused area is either an element or the VIEWPORT, whose DOM anchor IS the Document, so the spec's sentence

@@ -227,13 +227,15 @@ static bool has_script_blocking_style_sheets(JSContext *docctx)
  * The standard's own note is why the list is not filtered here: "we do not check if an element is a focusable
  * area before storing it in the autofocus candidates list, because even if it is not a focusable area when it is
  * inserted, it could become one by the time flush autofocus candidates sees it." */
-void autofocus_element_inserted(lxb_dom_element_t *el)
+int autofocus_element_inserted(lxb_dom_element_t *el, JSStepHdr *h, uint8_t *ua_phase)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el);
     JSContext *target, *topctx;
     JSValue wrap, list;
     int64_t at;
     size_t len = 0;
+    bool allowed = false;
+    int r;
 
     DCHECK(g_ready, "an element was inserted before autofocus_init declared §6.6.7's state");
     DCHECK(n->type == LXB_DOM_NODE_TYPE_ELEMENT, "§6.6.7's insertion steps ran for a node that is not an "
@@ -241,7 +243,7 @@ void autofocus_element_inserted(lxb_dom_element_t *el)
     /* The algorithm is stated over "an element with the AUTOFOCUS ATTRIBUTE SPECIFIED", so the attribute is the
        first question — asked here rather than at the caller, because the caller is DOM §4.2.3's per-node walk
        and every condition an insertion step has belongs to the step. */
-    if (!lxb_dom_element_get_attribute(el, (const lxb_char_t *)"autofocus", 9, &len)) return;
+    if (!lxb_dom_element_get_attribute(el, (const lxb_char_t *)"autofocus", 9, &len)) return 0;
     /* STEP 1 is the standard's own OPTIONAL return: "if the user has indicated (for example, by starting to
        type in a form control) that they do not wish focus to be changed, then optionally return." It is
        conditioned on an indication that arrives through an input device, and this user agent dispatches no
@@ -249,34 +251,33 @@ void autofocus_element_inserted(lxb_dom_element_t *el)
        optional one the standard permits either way. */
     /* STEPS 2-3: "let target be the element's node document"; "if target is not fully active, then return". */
     target = n->owner_document ? document_active_realm_of(lxb_dom_interface_node(n->owner_document)) : NULL;
-    if (!target || !document_fully_active(target)) return;
-    if (sandboxes_automatic_features(target)) return;                                       /* step 4 */
-    /* STEP 5's ALLOW FOCUS STEPS, and only their FIRST clause can be answered here. The second is §6.4.1's
-       TRANSIENT ACTIVATION, which is UNKNOWN EXTERNAL STATE (core/html/user_activation.h): asking it FORKS,
-       and a fork is a request the step driver answers by SNAPSHOTTING the flow. These steps do not run in a
-       step machine — they run inside DOM §4.2.3's tree-steps walk, which is plain C with no flow base, so a
-       JS_STEP_FORK returned into it would be dropped or driven to completion, and both are what §scheduler
-       forbids. So the clause that decides without asking is answered, and the one that cannot be asked from
-       here CRASHES at its origin naming the mechanism, rather than quietly picking one of its two arms.
-       A document that is same origin with its top-level document is allowed to use the feature outright, so
-       this is reached only by an `autofocus` element inserted into a CROSS-ORIGIN-embedded document. */
-    if (!focus_allow_without_user_activation(target)) {
-        DFAIL("§6.6.7's insertion steps reached the ALLOW FOCUS STEPS' second clause — §6.4.1's TRANSIENT "
-              "ACTIVATION, which is unknown external state and therefore a FORK, inside DOM §4.2.3's "
-              "tree-steps walk, which is plain C and cannot park. BUILD the request: IdlTreeSteps.step takes "
-              "the driving machine's JSStepHdr and returns a step code instead of a bool, idl_tree_drain "
-              "forwards JS_STEP_FORK the way it already forwards JS_STEP_YIELD, element.c's per-node body "
-              "gains a phase of its own so a re-entry does not re-run the <script> preparation and the "
-              "navigable creation it already performed for that node, and this line becomes "
-              "focus_allow_focus_steps_run — which is what §6.6.6's own two members already call");
+    if (!target || !document_fully_active(target)) return 0;
+    if (sandboxes_automatic_features(target)) return 0;                                     /* step 4 */
+    /* STEP 5's ALLOW FOCUS STEPS, as the REQUEST they are. Their second clause is §6.4.1's TRANSIENT
+       ACTIVATION, which is UNKNOWN EXTERNAL STATE (core/html/user_activation.h), so the answer FORKS: this
+       flow takes one arm and a sibling is snapshotted holding the other, and both reach code worth running —
+       one returns here with the element never becoming a candidate, the other queues it for §8.1.7.3 step 7's
+       flush and the four focus events that fire at the page's own listeners.
+       THE FORK IS RETURNED to DOM §4.2.3's walk and forwarded by idl_tree_drain to the driving machine, which
+       is what snapshots the flow; the re-entry lands back on this line inside the same node's phase, so
+       nothing this node already had done to it happens twice.
+       The first clause short-circuits, so a document that is same origin with its top-level document is
+       answered without asking anything — which is every document in an ordinary page. Only an `autofocus`
+       element inserted into a CROSS-ORIGIN-embedded document reaches the question. */
+    r = focus_allow_focus_steps_run(target, h, ua_phase, &allowed);                         /* step 5 */
+    if (r) {
+        DCHECK(r == JS_STEP_FORK, "§6.6.6's allow focus steps answered §6.6.7's insertion steps with something "
+                                  "other than a fork — the only thing they ask is §6.4.1's activation state");
+        return r;
     }
+    if (!allowed) return 0;
     topctx = top_document_realm(target);                                                    /* step 6 */
-    if (!topctx) return;
+    if (!topctx) return 0;
     /* STEP 7: "if topDocument's autofocus processed flag is false, then REMOVE the element from topDocument's
        autofocus candidates, and APPEND the element to topDocument's autofocus candidates." Remove-then-append
        rather than append-if-absent: re-inserting an element MOVES it to the back of the queue, which is what
        makes the last-inserted `autofocus` element the one a page that re-parents its dialog gets. */
-    if (af_processed(topctx)) return;
+    if (af_processed(topctx)) return 0;
     /* The wrapper is minted in the ELEMENT's own realm — the DOM's identity table gives a node one wrapper
        whatever realm asks, and its prototype comes from the realm that first wrapped it, which for an element
        of `target`'s tree is `target`. */
@@ -286,16 +287,29 @@ void autofocus_element_inserted(lxb_dom_element_t *el)
     if (at >= 0) list_remove_at(topctx, list, (uint32_t)at);
     JS_SetPropertyUint32(topctx, list, list_len(topctx, list), wrap);   /* CONSUMES wrap */
     JS_FreeValue(topctx, list);
+    return 0;
 }
 
+/* THE SAME STEPS FOR THE TREE THE PARSER BUILT, and the one caller with NO DRIVING MACHINE: this runs inside
+   document install, at the pre-boot COW baseline, where no flow exists to snapshot. The header is therefore
+   NULL — and that is not a shape the steps tolerate, it is one focus_allow_focus_steps_run ASSERTS against at
+   the moment the question is reached, so a parsed tree that needs the fork names the mechanism to build rather
+   than silently taking an arm. Every step before that question is decided without asking, which is why this
+   walk is correct for every document whose parsed tree does not reach it. */
 void autofocus_document_parsed(JSContext *ctx)
 {
     lxb_dom_node_t *root = document_root_node(ctx), *n = root;
+    uint8_t ua_phase = 0;
 
     DCHECK(g_ready, "a parsed document reached §6.6.7 before autofocus_init declared its state");
     while (n) {
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT)
-            autofocus_element_inserted(lxb_dom_interface_element(n));
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+            int r = autofocus_element_inserted(lxb_dom_interface_element(n), NULL, &ua_phase);
+
+            DCHECK(r == 0, "§6.6.7's insertion steps parked while walking the tree the PARSER built — that walk "
+                           "runs inside document install, which has no flow and no machine to park at");
+            (void)r;
+        }
         if (n->first_child) { n = n->first_child; continue; }
         while (n && !n->next) n = (n == root) ? NULL : n->parent;
         n = n ? n->next : NULL;
