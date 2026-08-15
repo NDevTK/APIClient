@@ -74,6 +74,7 @@ enum { FA_NONE = 0, FA_ELEMENT, FA_VIEWPORT, FA_DOCUMENT, FA_NAVIGABLE };
 
 static int g_focus_slot = -1;
 static int g_id_el_focus = -1, g_id_el_blur = -1, g_id_win_focus = -1, g_id_has_focus = -1;
+static int g_id_viewport = -1;
 static int g_ready;
 
 /* ---- §6.6.2's data model: the focused area of the document -------------------------------------------------
@@ -829,8 +830,12 @@ static JSValue js_has_focus(JSContext *ctx, JSValueConst this_val, int argc, JSV
 enum { IDL_STEP_STAGE_BASE(FOCUS_STAGES) FOCUS_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const FOCUS_STEPS[] = { FOCUS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-/* The four entry points, as the magic each declaration carries. */
-enum { FOCUS_EL_FOCUS = 0, FOCUS_EL_BLUR, FOCUS_WIN_FOCUS };
+/* The entry points, as the magic each declaration carries. FOCUS_VIEWPORT is not a §6.6.6 member and is on no
+   prototype: it is HTML §8.1.7.3 step 17's "run the focusing steps for doc's viewport", reached through the
+   internal door at the foot of this file. It is an ENTRY POINT rather than a second machine for the reason the
+   other three are — the focusing steps it needs are these, and a copy of them would be a copy of the chains,
+   the pops and the four events. */
+enum { FOCUS_EL_FOCUS = 0, FOCUS_EL_BLUR, FOCUS_WIN_FOCUS, FOCUS_VIEWPORT };
 
 typedef struct {
     uint8_t  fphase;                 /* the fire request's own phase */
@@ -961,6 +966,22 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                 hdr->stage = FOC_AREA;
                 continue;
             }
+            if (magic == FOCUS_VIEWPORT) {
+                /* HTML §8.1.7.3 step 17. The step names the ALGORITHM and its new focus target and nothing
+                   else: there are no allow focus steps here (those are §6.6.6's members' own step 1, and this
+                   is not a member — the user agent is repairing its own designation, not honouring a page's
+                   request) and no options.
+                   THE VIEWPORT IS THIS REALM'S, not a receiver's. The door mints this function in the realm
+                   whose Document is being fixed up, so the machine's own ctx IS doc — which is what makes a
+                   child navigable's `blur` fire at the child's Window (§3.7) with no operand to get wrong. */
+                DCHECK(node_of(document_object(ctx)) != NULL,
+                       "§8.1.7.3 step 17's focus fixup ran in a realm with no Document, so there is no viewport "
+                       "for §6.6.4's focusing steps to be given");
+                s->kind = FA_VIEWPORT;
+                s->target = JS_DupValue(ctx, document_object(ctx));
+                hdr->stage = FOC_AREA;
+                continue;
+            }
             /* WEB IDL §3.7.5's brand check — a TypeError, not an assert, because
                `HTMLElement.prototype.focus.call(null)` is a thing the corpus does deliberately. */
             n = node_of(hdr->this_val);
@@ -974,7 +995,10 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                 hdr->stage = FOC_UNFOCUS;
                 continue;
             }
-            DCHECK(magic == FOCUS_EL_FOCUS, "the focus machine was declared with a magic §6.6.6 does not name");
+            DCHECK(magic == FOCUS_EL_FOCUS,
+                   "the focus machine was declared with a magic that is none of its entry points — every "
+                   "algorithm that enters §6.6.4 declares one here, and a new one arrives with the branch that "
+                   "sets up its focus target");
             /* §6.6.6's focus(options) step 1. Steps 3 and 4 are decided here, where the OPTIONS are, and both
                are answered rather than deferred:
                  step 3's "indicate focus" is the focus ring — a user-agent presentation with no scriptable
@@ -1284,6 +1308,87 @@ static const IdlStepDecl WIN_FOCUS_STEP = {
     "HTML §6.6.6 Window.focus(), over §6.6.4's focusing and focus update steps",
     FOCUS_STEPS
 };
+static const IdlStepDecl VIEWPORT_STEP = {
+    focus_step, sizeof(FocusState), focus_state_visit, focus_state_release,
+    "HTML §8.1.7.3 update the rendering step 17, over §6.6.4's focusing and focus update steps",
+    FOCUS_STEPS
+};
+
+/* ---- HTML §8.1.7.3 step 17's focus fixup rule -------------------------------------------------------------- */
+
+/* The step's CONDITION — "if the focused area of doc is not a focusable area". See focus.h for why it is asked
+   here rather than restated at the step. */
+bool focus_focused_area_is_focusable(JSContext *ctx)
+{
+    JSValue area;
+    int kind;
+    bool ok;
+
+    DCHECK(g_ready, "§8.1.7.3 step 17 asked its condition before focus_init declared §6.6's members");
+    area = focused_area_of(ctx, &kind);
+    DCHECK(kind == FA_ELEMENT || kind == FA_VIEWPORT,
+           "§8.1.7.3 step 17 read a focused area that is neither an element nor a viewport — those are the two "
+           "§6.6.2 designations this engine models, and the record holds nothing else");
+    /* §6.6.2's table makes the VIEWPORT of a Document with a non-null browsing context a focusable area, and a
+       realm holding a §6.6.2 record IS such a Document — so the viewport answers true and this step's whole
+       subject is the ELEMENT the tree stopped rendering, disabled, or disconnected under it. */
+    ok = kind != FA_ELEMENT || el_is_focusable_area(ctx, area);
+    JS_FreeValue(ctx, area);
+    return ok;
+}
+
+/* THE INTERNAL DOOR, MINTED IN THE DOCUMENT'S OWN REALM — event_target.c's dispatcher, for its reason: a step
+   function carries its DEFINING realm, and this machine reads the viewport, the focus chain and the events'
+   globals off that ctx, so the one a child document is fixed up through has to be the child's. It costs one
+   function object per fixup, which is a cold path (a focused area only stops being focusable when the page
+   changed the tree under it) and buys the absence of a runtime-lifetime object that would have to be per-realm
+   and freed. It is minted through idl_step_function like every other declared member, which is what keeps the
+   pool's name for it — a hand-written JS_NewCFunction2 leaves the member anonymous in every diagnostic.
+   OWNED by the caller. */
+static JSValue viewport_fixup_fn_new(JSContext *ctx)
+{
+    JSValue fn;
+
+    DCHECK(g_id_viewport >= 0,
+           "the rendering algorithm reached §6.6.4's focusing steps before focus_init declared them — this is "
+           "the only way a C caller reaches them, and there is one focus machine");
+    fn = idl_step_function(ctx, "focusingStepsForViewport", 0, g_id_viewport);
+    CHECK(!JS_IsException(fn), "focus: §8.1.7.3 step 17's focusing-steps door could not be allocated");
+    return fn;
+}
+
+/* The step's ACTION — §6.6.4's focusing steps given doc's viewport, as a request the calling machine parks on.
+   Same two-leg shape as event_target_fire_run, and for the same reason: the algorithm runs the page's `blur`,
+   `focusout`, `focus` and `focusin` listeners, so it cannot be a call from C. */
+int focus_viewport_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, JSValue in,
+                       JSValue **out_cb, int *out_argc)
+{
+    JSValue out = JS_UNDEFINED;
+    int r;
+
+    /* ASKED ON BOTH LEGS, because the resume leg forwards the same capacity and a caller that got the first
+       one right by accident must not get the second one wrong in silence. */
+    DCHECK(cb_cap >= FOCUS_VIEWPORT_CB_SLOTS,
+           "§8.1.7.3 step 17's focusing-steps request was handed a buffer narrower than step_call_run's "
+           "[this, func] shape");
+    if (*phase == 0) {
+        JSValue fn = viewport_fixup_fn_new(ctx);
+
+        /* step_call_run DUPS the callee into the request buffer, which is what holds it across the suspension —
+           so this realm's door is released here and the parked call still owns one. */
+        r = step_call_run(ctx, phase, cb, cb_cap, fn, JS_UNDEFINED, 0, NULL, in, &out, out_cb, out_argc);
+        JS_FreeValue(ctx, fn);
+        DCHECK(r == JS_STEP_CALL, "§8.1.7.3 step 17's focusing-steps request answered without parking");
+        return r;
+    }
+    r = step_call_run(ctx, phase, cb, cb_cap, JS_UNDEFINED, JS_UNDEFINED, 0, NULL, in, &out, out_cb, out_argc);
+    DCHECK(r == 0, "§6.6.4's focusing steps resumed into something other than their answer");
+    DCHECK(JS_IsUndefined(out),
+           "§6.6.4's focusing steps answered with a value — the algorithm has no result, so a value here is a "
+           "member's return leaking through the door");
+    JS_FreeValue(ctx, out);
+    return 0;
+}
 
 /* ---- declaration and install -------------------------------------------------------------------------------- */
 
@@ -1309,6 +1414,10 @@ void focus_init(JSContext *ctx)
     idl_optional_from(0);
     g_id_el_blur = idl_method_id_step(ctx, NULL, 0, NULL, 0, &EL_BLUR_STEP, FOCUS_EL_BLUR);
     g_id_win_focus = idl_method_id_step(ctx, NULL, 0, NULL, 0, &WIN_FOCUS_STEP, FOCUS_WIN_FOCUS);
+    /* HTML §8.1.7.3 step 17's entry. Declared with the members although it is installed on nothing, because
+       what a declaration buys — the stage labels, the pool's name, the one mint — is what makes a parked fixup
+       say where it is parked, and that has nothing to do with a page being able to see it. */
+    g_id_viewport = idl_method_id_step(ctx, NULL, 0, NULL, 0, &VIEWPORT_STEP, FOCUS_VIEWPORT);
     g_id_has_focus = idl_method_id(ctx, NULL, 0, js_has_focus, 0);
     g_ready = 1;
 }

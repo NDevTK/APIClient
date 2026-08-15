@@ -12,6 +12,7 @@
 #include "core/events/report_exception.h"
 #include "core/frame/window_proxy.h"
 #include "core/frame/navigable.h"
+#include "core/html/focus.h"
 #include "core/css/media_query_list.h"
 #include "core/dom/page_visibility.h"
 #include "core/rendering/animation_frame.h"
@@ -171,9 +172,13 @@ static JSValue rendering_collect_docs(JSContext *ctx)
     X(UR_FRAMES, "HTML §8.1.7.3 update the rendering step 14 (for each doc: run the animation frame callbacks " \
                  "with the relative high resolution time of frameTimestamp — HTML §8.9), one callback per "     \
                  "rest")                                                                                       \
-    X(UR_PAINT,  "HTML §8.1.7.3 update the rendering steps 15 and 19-23 (record the style-and-layout start "    \
-                 "time; run the update intersection observations steps; record rendering time; mark paint "     \
-                 "timing; update the rendering or user interface; process top layer removals)")
+    X(UR_FOCUS,  "HTML §8.1.7.3 update the rendering step 17, the FOCUS FIXUP RULE (for each doc: if doc's "    \
+                 "focused area is no longer a focusable area, run HTML §6.6.4's focusing steps for doc's "      \
+                 "viewport — which fires `blur` and `focusout` down the old focus chain and `focus` and "       \
+                 "`focusin` up the new one), one document per rest")                                           \
+    X(UR_PAINT,  "HTML §8.1.7.3 update the rendering steps 19-23 (run the update intersection observations "    \
+                 "steps; record rendering time; mark paint timing; update the rendering or user interface; "    \
+                 "process top layer removals)")
 enum { UPDATE_RENDERING_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const UPDATE_RENDERING_STEPS[] = { UPDATE_RENDERING_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -189,8 +194,11 @@ typedef struct JSUpdateRendering {
     uint32_t  ndocs, i;     /* the cursor every "for each doc of docs" step shares */
     uint32_t  nframe, k;    /* §8.9 step 2's key snapshot for the current doc, and step 3's cursor */
     uint32_t  nmedia, m;    /* §4.2's collection snapshot for the current doc, and its cursor */
-    uint8_t   fphase;       /* step 6's fire request */
-    uint8_t   cphase;       /* step 14's call request */
+    uint8_t   fphase;       /* the fire request steps 6 and 10 park on */
+    /* The CALL request steps 14 and 17 park on. One byte for both because one call is ever in flight — a stage
+       leaves its loop only with the request finished, which is what makes it also the flag that says whether a
+       resume is landing inside the step's call or at the top of its walk. */
+    uint8_t   cphase;
     uint8_t   snapped;      /* §8.9 step 2 has been taken for docs[i] */
     uint8_t   msnapped;     /* §4.2's collection snapshot has been taken for docs[i] */
     bool      not_canceled;
@@ -293,8 +301,8 @@ static void steps_11_to_13(JSContext *docctx)
                 "context, so step 13 must be written");
 }
 
-/* Steps 16 to 18, likewise. */
-static void steps_16_to_18(JSContext *docctx)
+/* Step 16, likewise. */
+static void step_16(JSContext *docctx)
 {
     step_awaits(docctx, "ResizeObserver",
                 "update the rendering step 16 is a `while (true)` around recalculate-styles-and-update-layout "
@@ -302,10 +310,16 @@ static void steps_16_to_18(JSContext *docctx)
                 "OBSERVER §3.4.1/§3.4.5), re-entering style and layout after every author callback, then "
                 "delivers the resize loop error (§3.4.6) for any skipped observation — this build now has "
                 "ResizeObserver, so step 16 must be written, and its loop cannot be one stage");
-    step_awaits(docctx, "Document.prototype.activeElement",
-                "update the rendering step 17 runs the FOCUSING STEPS for doc's viewport when doc's focused "
-                "area is no longer focusable — the spec's own note is that this usually fires `blur` and "
-                "possibly `change` — this build now tracks a focused area, so step 17 must be written");
+}
+
+/* STEP 17 IS WRITTEN — it is UR_FOCUS, below, and its assert is GONE rather than relaxed. §6.6's focus model
+   landed, the producer the probe named existed, the DCHECK fired at this exact place in the order, and the step
+   it asked for was built. A probe that outlived the work it demanded would go on describing an absence that is
+   no longer there, which is the one way this mechanism can lie.
+
+   Step 18, still asserted at the place the algorithm runs it. */
+static void step_18(JSContext *docctx)
+{
     step_awaits(docctx, "ViewTransition",
                 "update the rendering step 18 PERFORMS PENDING TRANSITION OPERATIONS (CSS VIEW TRANSITIONS "
                 "§7.2): setup view transition calls the author's ViewTransitionUpdateCallback and settles "
@@ -386,6 +400,20 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
             JS_FreeValue(ctx, s->fn);
             s->fn = JS_UNDEFINED;
             s->k++;                      /* §8.9 removed the callback before invoking it: on to the next */
+        } else if (s->hdr.stage == UR_FOCUS) {
+            /* AN ABRUPT COMPLETION HERE IS THIS ENGINE'S, NOT THE PAGE'S — which is what makes it a crash and
+               not a report. §6.6.4 states no step that throws, and a `blur` listener that throws is REPORTED
+               inside §2.9's dispatch (that machine declares catches_abrupt and reports there), so a listener's
+               exception never reaches this far. What is left is an allocation failure or a capability of the
+               focus machine that is not built, and the fixup then did NOT happen: the focused area is still
+               designating something that is not a focusable area, so the next frame runs the same repair and
+               fails the same way. A release build cannot build the missing capability, so there the exception
+               takes §8.1.4.6's path above with every other one that escapes a task. */
+            DFAIL("update the rendering step 17's FOCUSING STEPS completed abruptly — §6.6.4 states no step "
+                  "that throws and §2.9 reports a listener's own exception inside the dispatch, so this is "
+                  "the engine's own failure and doc's focused area was left unrepaired");
+            s->cphase = 0;
+            s->i++;
         }
     }
 
@@ -510,10 +538,24 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
            resolution time of frameTimestamp." HTML §8.9's own three steps are the inner loop. */
         for (;;) {
             if (s->i >= s->ndocs) {
+                /* STEP 15: unsafeStyleAndLayoutStartTime. It is the moment step 20's "record rendering time"
+                   measures from, so it is READ here from the one clock rather than invented at the step that
+                   consumes it — and the two are asserted against each other, which is the only thing that
+                   makes reading it worth anything while the consumer is absent.
+                   IT IS READ HERE BECAUSE STEP 15 IS HERE. It used to be read at UR_PAINT, after steps 16-18,
+                   which was invisible while every one of those was an assertion and stopped being invisible
+                   the moment step 17 became an algorithm that runs the page's `blur` listeners: the interval
+                   step 20 reports would then have excluded the style and layout it is named after and included
+                   none of it. */
+                s->layout_start = timer_now();
+                DCHECK(s->layout_start >= s->frame_ts,
+                       "update the rendering step 15 recorded a style-and-layout start time BEFORE the "
+                       "frameTimestamp its task was queued with — both come from the ONE virtual clock, and "
+                       "step 20 records the interval between them");
                 for (s->i = 0; s->i < s->ndocs; s->i++)
-                    steps_16_to_18(doc_realm(ctx, s));
+                    step_16(doc_realm(ctx, s));
                 s->i = 0;
-                s->hdr.stage = UR_PAINT;
+                s->hdr.stage = UR_FOCUS;
                 break;
             }
             docctx = doc_realm(ctx, s);
@@ -556,17 +598,49 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
         }
     }
 
+    if (s->hdr.stage == UR_FOCUS) {
+        /* STEP 17, THE FOCUS FIXUP RULE: "For each doc of docs, if the focused area of doc is not a focusable
+           area, then run the focusing steps for doc's viewport, and set doc's relevant global object's
+           navigation API's focus changed during ongoing navigation to false."
+           THE CONDITION IS ASKED AT EACH DOCUMENT'S TURN and never snapshotted for the walk, because repairing
+           docs[0] can move the focus through docs[1]: the focusing steps designate a focused area in every
+           document of the new focus chain, so a later document's answer is decided by an earlier one's repair.
+           A snapshot taken up front would fix up a document the walk had already fixed.
+           IT IS ITS OWN STAGE, AND ONE DOCUMENT PER REST, because the focusing steps fire `blur`, `focusout`,
+           `focus` and `focusin` at the page's listeners — a stage that spanned two documents would be a stage
+           the scheduler cannot preempt between. */
+        for (;;) {
+            if (s->i >= s->ndocs) {
+                for (s->i = 0; s->i < s->ndocs; s->i++)
+                    step_18(doc_realm(ctx, s));
+                s->i = 0;
+                s->hdr.stage = UR_PAINT;
+                break;
+            }
+            docctx = doc_realm(ctx, s);
+            if (s->cphase == 0) {
+                /* THE STEP'S SECOND HALF, asserted where the algorithm performs it. It is asked of every doc
+                   rather than only of the ones being repaired, because the obligation is the STEP's: the day
+                   this build has a Navigation API, every document that reaches step 17 has a flag to clear
+                   when the branch is taken, and a probe that only ran on the branch could stay silent for a
+                   whole session after its producer arrived. */
+                step_awaits(docctx, "navigation",
+                            "update the rendering step 17 also sets doc's relevant global object's NAVIGATION "
+                            "API's `focus changed during ongoing navigation` to false when it repairs a "
+                            "focused area (HTML §7.2.6.8) — this build now has a Navigation API, so that flag "
+                            "exists and step 17 must clear it here, and §6.6.4's focus update steps step "
+                            "4.1.1 must SET it where core/html/focus.c names the same absence");
+                if (focus_focused_area_is_focusable(docctx)) { s->i++; continue; }
+            }
+            r = focus_viewport_run(docctx, &s->cphase, STEP_CB(s->cb), cb_result, out_cb, out_argc);
+            if (r > 0) return r;                     /* parked on the page's focus listeners */
+            cb_result = JS_UNDEFINED;
+            s->i++;
+        }
+    }
+
     DCHECK(s->hdr.stage == UR_PAINT,
            "update the rendering resumed into a stage §8.1.7.3 does not have");
-    /* STEP 15: unsafeStyleAndLayoutStartTime. It is the moment step 20's "record rendering time" measures
-       from, so it is READ here from the one clock rather than invented at the step that consumes it — and the
-       two are asserted against each other, which is the only thing that makes reading it worth anything while
-       the consumer is absent. */
-    s->layout_start = timer_now();
-    DCHECK(s->layout_start >= s->frame_ts,
-           "update the rendering step 15 recorded a style-and-layout start time BEFORE the frameTimestamp its "
-           "task was queued with — both come from the ONE virtual clock, and step 20 records the interval "
-           "between them");
     /* STEPS 19-23 */
     for (s->i = 0; s->i < s->ndocs; s->i++)
         steps_19_to_23(doc_realm(ctx, s));
