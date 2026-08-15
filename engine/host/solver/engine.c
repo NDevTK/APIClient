@@ -819,12 +819,26 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
         CHECK(sib->jobs, "engine: OOM inheriting the queued jobs at a fork");
         for (int i = 0; i < parent->njob; i++) {
             FlowJob *sj = &parent->jobs[i], *dj = &sib->jobs[i];
+            /* THE REALM THAT ENQUEUED IT COMES WITH IT. This was the one field of the five the copy did not
+               name, and `sib->jobs` is a bare malloc, so every job a fork inherited carried a WILD realm
+               pointer. Nothing reads it until §7.5.10 step 7 destroys a document — and then the comparison is
+               against garbage, so the inherited reactions of the destroyed document are not removed (they run
+               later against a Document whose browsing context is null) or an unrelated job matches by accident
+               and a work item the WFQ may never drop is freed instead. Borrowed, exactly as it is at the
+               enqueue: the agent owns its realms. */
+            dj->ctx = sj->ctx;
             dj->fn = sj->fn;
             dj->argc = sj->argc;
             dj->task = sj->task;
             dj->argv = sj->argc ? malloc((size_t)sj->argc * sizeof(JSValue)) : NULL;
             CHECK(!sj->argc || dj->argv, "engine: OOM inheriting a queued job's arguments at a fork");
             for (int a = 0; a < sj->argc; a++) dj->argv[a] = JS_DupValue(ctx, sj->argv[a]);
+            /* A FIELD ADDED TO FlowJob IS AN OBLIGATION HERE, and nothing but this says so — the struct copy is
+               written out field by field precisely so a new one is visible, which is exactly how the omission
+               above survived. The realm is the one field with an answer that can be checked. */
+            DCHECK(dj->ctx != NULL, "a queued job was inherited at a fork with no realm — §7.5.10 step 7 keys on "
+                                    "it, so a job without one can neither be dropped with its document nor "
+                                    "safely left queued");
         }
         sib->njob = sib->jobcap = parent->njob;
     }
@@ -1016,6 +1030,8 @@ static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueCo
         CHECK(f->jobs, "engine: OOM flow job queue — a dropped reaction corrupts async exploration");
     }
     FlowJob *j = &f->jobs[f->njob++];
+    DCHECK(ctx != NULL, "a job was enqueued with no realm — §7.5.10 step 7 removes a destroyed document's tasks "
+                        "by comparing this, so a job without one outlives its document");
     j->ctx = ctx; j->fn = fn; j->argc = argc; j->task = is_task;
     j->argv = argc ? malloc((size_t)argc * sizeof(JSValue)) : NULL;
     if (argc) CHECK(j->argv, "engine: OOM job argv");
